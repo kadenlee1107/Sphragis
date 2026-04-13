@@ -1,0 +1,587 @@
+// Bat_OS — BatBrowser: Text-Mode Web Browser
+// Downloads HTML over TCP, strips tags, renders text content.
+// Supports link navigation, URL bar, page history.
+//
+// Features:
+//   - URL bar with keyboard input
+//   - HTTP GET over our TCP stack
+//   - HTML tag stripping → readable text
+//   - Link extraction (clickable with number keys)
+//   - Page history (back/forward)
+//   - Status bar (loading, connected, bytes)
+
+use crate::ui::wm;
+use crate::ui::font;
+use crate::drivers::virtio::gpu;
+use crate::drivers::uart;
+
+const BG: u32 = 0xFF0A0A0A;
+const FG: u32 = 0xFFA0A0A0;
+const FG_HI: u32 = 0xFFFFFFFF;
+const DIM: u32 = 0xFF5A5A5A;
+const GREEN: u32 = 0xFF00FF00;
+const CYAN: u32 = 0xFFFFFF00;
+const RED: u32 = 0xFF0000FF;
+const BORDER: u32 = 0xFF1E1E1E;
+const URL_BG: u32 = 0xFF141414;
+const LINK_COLOR: u32 = 0xFFFF8800; // orange for links
+
+// Browser state
+#[derive(Clone, Copy, PartialEq)]
+enum BrowserState {
+    Idle,
+    Loading,
+    Loaded,
+    Error,
+}
+
+// URL bar
+const MAX_URL: usize = 128;
+static mut URL_BUF: [u8; MAX_URL] = [0; MAX_URL];
+static mut URL_LEN: usize = 0;
+
+// Page content (stripped HTML)
+const MAX_PAGE: usize = 8192;
+static mut PAGE_BUF: [u8; MAX_PAGE] = [0; MAX_PAGE];
+static mut PAGE_LEN: usize = 0;
+
+// Extracted links
+const MAX_LINKS: usize = 32;
+const MAX_LINK_URL: usize = 128;
+static mut LINKS: [[u8; MAX_LINK_URL]; MAX_LINKS] = [[0; MAX_LINK_URL]; MAX_LINKS];
+static mut LINK_LENS: [usize; MAX_LINKS] = [0; MAX_LINKS];
+static mut LINK_COUNT: usize = 0;
+
+// Scroll position
+static mut SCROLL_Y: usize = 0;
+
+// State
+static mut STATE: BrowserState = BrowserState::Idle;
+static mut STATUS_MSG: [u8; 64] = [0; 64];
+static mut STATUS_LEN: usize = 0;
+static mut BYTES_LOADED: usize = 0;
+
+// History
+const MAX_HISTORY: usize = 16;
+static mut HISTORY: [[u8; MAX_URL]; MAX_HISTORY] = [[0; MAX_URL]; MAX_HISTORY];
+static mut HISTORY_LENS: [usize; MAX_HISTORY] = [0; MAX_HISTORY];
+static mut HISTORY_POS: usize = 0;
+static mut HISTORY_COUNT: usize = 0;
+
+/// Navigate to a URL.
+pub fn navigate(url: &[u8]) {
+    unsafe {
+        // Save to URL bar
+        URL_LEN = url.len().min(MAX_URL);
+        URL_BUF[..URL_LEN].copy_from_slice(&url[..URL_LEN]);
+
+        // Push to history
+        if HISTORY_COUNT < MAX_HISTORY {
+            HISTORY_LENS[HISTORY_COUNT] = URL_LEN;
+            HISTORY[HISTORY_COUNT][..URL_LEN].copy_from_slice(&url[..URL_LEN]);
+            HISTORY_POS = HISTORY_COUNT;
+            HISTORY_COUNT += 1;
+        }
+
+        STATE = BrowserState::Loading;
+        set_status(b"Connecting...");
+        SCROLL_Y = 0;
+        LINK_COUNT = 0;
+        PAGE_LEN = 0;
+    }
+
+    // Parse host and path from URL
+    let url_str = unsafe { core::str::from_utf8_unchecked(&URL_BUF[..URL_LEN]) };
+
+    let (host, path, port) = parse_url(url_str);
+
+    // Resolve DNS
+    let ip = match crate::net::dns::resolve(host) {
+        Ok(ip) => ip,
+        Err(_) => {
+            unsafe { STATE = BrowserState::Error; }
+            set_status(b"DNS failed");
+            return;
+        }
+    };
+
+    set_status(b"TCP connecting...");
+
+    // TCP connect
+    if crate::net::tcp::connect(ip, port).is_err() {
+        unsafe { STATE = BrowserState::Error; }
+        set_status(b"Connection failed");
+        return;
+    }
+
+    set_status(b"Sending request...");
+
+    // Build HTTP GET
+    let mut req = [0u8; 512];
+    let mut rlen = 0;
+    let get = b"GET ";
+    req[rlen..rlen + get.len()].copy_from_slice(get); rlen += get.len();
+    req[rlen..rlen + path.len()].copy_from_slice(path.as_bytes()); rlen += path.len();
+    let http = b" HTTP/1.0\r\nHost: ";
+    req[rlen..rlen + http.len()].copy_from_slice(http); rlen += http.len();
+    req[rlen..rlen + host.len()].copy_from_slice(host.as_bytes()); rlen += host.len();
+    let trail = b"\r\nUser-Agent: BatBrowser/1.0\r\nAccept: text/html\r\nConnection: close\r\n\r\n";
+    req[rlen..rlen + trail.len()].copy_from_slice(trail); rlen += trail.len();
+
+    if crate::net::tcp::send_data(&req[..rlen]).is_err() {
+        unsafe { STATE = BrowserState::Error; }
+        set_status(b"Send failed");
+        crate::net::tcp::close();
+        return;
+    }
+
+    set_status(b"Receiving...");
+
+    // Receive response
+    let mut raw = [0u8; 16384];
+    let mut total = 0;
+
+    // Read chunks until connection closes
+    for _ in 0..10 {
+        let mut chunk = [0u8; 4096];
+        match crate::net::tcp::recv_data(&mut chunk) {
+            Ok(n) if n > 0 => {
+                let copy = n.min(raw.len() - total);
+                raw[total..total + copy].copy_from_slice(&chunk[..copy]);
+                total += copy;
+                unsafe { BYTES_LOADED = total; }
+            }
+            _ => break,
+        }
+    }
+
+    crate::net::tcp::close();
+
+    if total == 0 {
+        unsafe { STATE = BrowserState::Error; }
+        set_status(b"No response");
+        return;
+    }
+
+    // Skip HTTP headers (find \r\n\r\n)
+    let mut body_start = 0;
+    for i in 0..total.saturating_sub(3) {
+        if raw[i] == b'\r' && raw[i+1] == b'\n' && raw[i+2] == b'\r' && raw[i+3] == b'\n' {
+            body_start = i + 4;
+            break;
+        }
+    }
+
+    let body = &raw[body_start..total];
+
+    // Strip HTML tags and extract text + links
+    strip_html(body, host);
+
+    unsafe {
+        STATE = BrowserState::Loaded;
+        BYTES_LOADED = total;
+    }
+    let mut status = [0u8; 64];
+    let mut slen = 0;
+    let prefix = b"Loaded ";
+    status[..prefix.len()].copy_from_slice(prefix);
+    slen += prefix.len();
+    slen += write_num(&mut status[slen..], total);
+    let suffix = b" bytes";
+    status[slen..slen + suffix.len()].copy_from_slice(suffix);
+    slen += suffix.len();
+    set_status(&status[..slen]);
+}
+
+/// Strip HTML tags from body, extract text and links.
+fn strip_html(html: &[u8], base_host: &str) {
+    unsafe {
+        PAGE_LEN = 0;
+        LINK_COUNT = 0;
+    }
+
+    let mut i = 0;
+    let mut in_tag = false;
+    let mut in_script = false;
+    let mut in_style = false;
+    let mut last_was_space = false;
+
+    while i < html.len() {
+        if html[i] == b'<' {
+            // Check for <script>, <style>, </script>, </style>
+            let remaining = &html[i..];
+            if starts_with_ci(remaining, b"<script") { in_script = true; }
+            if starts_with_ci(remaining, b"</script") { in_script = false; }
+            if starts_with_ci(remaining, b"<style") { in_style = true; }
+            if starts_with_ci(remaining, b"</style") { in_style = false; }
+
+            // Extract links from <a href="...">
+            if starts_with_ci(remaining, b"<a ") || starts_with_ci(remaining, b"<a\t") {
+                if let Some(href) = extract_href(remaining) {
+                    unsafe {
+                        if LINK_COUNT < MAX_LINKS {
+                            let len = href.len().min(MAX_LINK_URL);
+                            LINKS[LINK_COUNT][..len].copy_from_slice(&href[..len]);
+                            LINK_LENS[LINK_COUNT] = len;
+                            LINK_COUNT += 1;
+
+                            // Add link marker to page text
+                            let marker_start = b"[";
+                            let marker_end = b"] ";
+                            if PAGE_LEN + 5 < MAX_PAGE {
+                                PAGE_BUF[PAGE_LEN] = b'['; PAGE_LEN += 1;
+                                PAGE_LEN += write_num(&mut PAGE_BUF[PAGE_LEN..], LINK_COUNT);
+                                PAGE_BUF[PAGE_LEN] = b']'; PAGE_LEN += 1;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Block-level tags → newline
+            if starts_with_ci(remaining, b"<p") || starts_with_ci(remaining, b"<div")
+                || starts_with_ci(remaining, b"<br") || starts_with_ci(remaining, b"<h")
+                || starts_with_ci(remaining, b"<li") || starts_with_ci(remaining, b"<tr")
+            {
+                push_page(b'\n');
+                last_was_space = true;
+            }
+
+            in_tag = true;
+            i += 1;
+            continue;
+        }
+
+        if html[i] == b'>' {
+            in_tag = false;
+            i += 1;
+            continue;
+        }
+
+        if in_tag || in_script || in_style {
+            i += 1;
+            continue;
+        }
+
+        // Decode HTML entities
+        if html[i] == b'&' {
+            if starts_with_ci(&html[i..], b"&amp;") { push_page(b'&'); i += 5; continue; }
+            if starts_with_ci(&html[i..], b"&lt;") { push_page(b'<'); i += 4; continue; }
+            if starts_with_ci(&html[i..], b"&gt;") { push_page(b'>'); i += 4; continue; }
+            if starts_with_ci(&html[i..], b"&nbsp;") { push_page(b' '); i += 6; continue; }
+            if starts_with_ci(&html[i..], b"&quot;") { push_page(b'"'); i += 6; continue; }
+            // Skip unknown entities
+            while i < html.len() && html[i] != b';' { i += 1; }
+            i += 1;
+            continue;
+        }
+
+        // Collapse whitespace
+        let ch = html[i];
+        if ch == b' ' || ch == b'\t' || ch == b'\n' || ch == b'\r' {
+            if !last_was_space {
+                push_page(b' ');
+                last_was_space = true;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Regular character
+        if ch >= 0x20 && ch <= 0x7E {
+            push_page(ch);
+            last_was_space = false;
+        }
+        i += 1;
+    }
+}
+
+fn push_page(ch: u8) {
+    unsafe {
+        if PAGE_LEN < MAX_PAGE {
+            PAGE_BUF[PAGE_LEN] = ch;
+            PAGE_LEN += 1;
+        }
+    }
+}
+
+fn starts_with_ci(haystack: &[u8], needle: &[u8]) -> bool {
+    if haystack.len() < needle.len() { return false; }
+    for i in 0..needle.len() {
+        let a = haystack[i].to_ascii_lowercase();
+        let b = needle[i].to_ascii_lowercase();
+        if a != b { return false; }
+    }
+    true
+}
+
+fn extract_href(tag: &[u8]) -> Option<&[u8]> {
+    // Find href=" or href='
+    let mut i = 0;
+    while i + 6 < tag.len() {
+        if starts_with_ci(&tag[i..], b"href=") {
+            i += 5;
+            let quote = tag[i];
+            if quote == b'"' || quote == b'\'' {
+                i += 1;
+                let start = i;
+                while i < tag.len() && tag[i] != quote { i += 1; }
+                return Some(&tag[start..i]);
+            }
+        }
+        if tag[i] == b'>' { break; }
+        i += 1;
+    }
+    None
+}
+
+fn parse_url(url: &str) -> (&str, &str, u16) {
+    let without_scheme = if url.starts_with("http://") {
+        &url[7..]
+    } else if url.starts_with("https://") {
+        &url[8..]
+    } else {
+        url
+    };
+
+    let (host_port, path) = match without_scheme.find('/') {
+        Some(pos) => (&without_scheme[..pos], &without_scheme[pos..]),
+        None => (without_scheme, "/"),
+    };
+
+    let (host, port) = match host_port.find(':') {
+        Some(pos) => {
+            let p = host_port[pos+1..].parse::<u16>().unwrap_or(80);
+            (&host_port[..pos], p)
+        }
+        None => (host_port, 80),
+    };
+
+    (host, path, port)
+}
+
+fn set_status(msg: &[u8]) {
+    unsafe {
+        STATUS_LEN = msg.len().min(64);
+        STATUS_MSG[..STATUS_LEN].copy_from_slice(&msg[..STATUS_LEN]);
+    }
+}
+
+fn write_num(buf: &mut [u8], n: usize) -> usize {
+    if n == 0 && !buf.is_empty() { buf[0] = b'0'; return 1; }
+    let mut digits = [0u8; 10];
+    let mut dlen = 0;
+    let mut v = n;
+    while v > 0 && dlen < 10 { digits[dlen] = b'0' + (v % 10) as u8; dlen += 1; v /= 10; }
+    for i in 0..dlen { if i < buf.len() { buf[i] = digits[dlen - 1 - i]; } }
+    dlen
+}
+
+// ─── Rendering ───
+
+pub fn render() {
+    let r = wm::content_rect();
+    let fb = gpu::framebuffer();
+    let w = gpu::width();
+    let ymax = r.y + r.h;
+    let ln = 16u32;
+
+    gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
+
+    let x = r.x + 4;
+    let mut y = r.y + 2;
+
+    // ─── URL Bar ───
+    if y + 20 < ymax {
+        gpu::fill_rect(x, y, r.w - 8, 18, URL_BG);
+        gpu::fill_rect(x, y, 1, 18, BORDER);
+        gpu::fill_rect(x + r.w - 9, y, 1, 18, BORDER);
+        gpu::fill_rect(x, y, r.w - 8, 1, BORDER);
+        gpu::fill_rect(x, y + 17, r.w - 8, 1, BORDER);
+
+        font::draw_str(fb, w, x + 4, y + 1, ">", GREEN, URL_BG);
+        unsafe {
+            let url = core::str::from_utf8_unchecked(&URL_BUF[..URL_LEN]);
+            font::draw_str(fb, w, x + 16, y + 1, url, FG_HI, URL_BG);
+            // Cursor
+            let cx = x + 16 + (URL_LEN as u32) * 8;
+            if cx < x + r.w - 16 {
+                font::draw_str(fb, w, cx, y + 1, "_", FG_HI, URL_BG);
+            }
+        }
+        y += 20;
+    }
+
+    // ─── Page Content ───
+    unsafe {
+        if STATE == BrowserState::Idle {
+            if y + ln < ymax {
+                font::draw_str(fb, w, x + 8, y + 40, "BatBrowser v1.0", FG_HI, BG);
+                font::draw_str(fb, w, x + 8, y + 60, "Type a URL and press Enter", DIM, BG);
+                font::draw_str(fb, w, x + 8, y + 80, "e.g. http://example.com/", DIM, BG);
+            }
+        } else if STATE == BrowserState::Loading {
+            if y + ln < ymax {
+                font::draw_str(fb, w, x + 8, y + 40, "Loading...", FG_HI, BG);
+            }
+        } else if STATE == BrowserState::Error {
+            if y + ln < ymax {
+                let msg = core::str::from_utf8_unchecked(&STATUS_MSG[..STATUS_LEN]);
+                font::draw_str(fb, w, x + 8, y + 40, msg, RED, BG);
+            }
+        } else {
+            // Render page text with word wrap
+            let chars_per_line = ((r.w - 16) / 8) as usize;
+            let max_lines = ((ymax - y - 24) / ln) as usize;
+
+            let text = &PAGE_BUF[..PAGE_LEN];
+            let mut line_num = 0usize;
+            let mut ti = 0;
+
+            while ti < text.len() && line_num < SCROLL_Y + max_lines {
+                // Find end of line (newline or wrap at chars_per_line)
+                let line_start = ti;
+                let mut line_end = ti;
+                let mut chars = 0;
+
+                while line_end < text.len() && text[line_end] != b'\n' && chars < chars_per_line {
+                    line_end += 1;
+                    chars += 1;
+                }
+
+                if line_num >= SCROLL_Y {
+                    let draw_y = y + ((line_num - SCROLL_Y) as u32) * ln;
+                    if draw_y + ln < ymax {
+                        let line_text = core::str::from_utf8_unchecked(&text[line_start..line_end]);
+                        // Check for link markers [N]
+                        if line_text.contains('[') {
+                            font::draw_str(fb, w, x + 4, draw_y, line_text, LINK_COLOR, BG);
+                        } else {
+                            font::draw_str(fb, w, x + 4, draw_y, line_text, FG, BG);
+                        }
+                    }
+                }
+
+                // Advance past newline
+                if line_end < text.len() && text[line_end] == b'\n' {
+                    line_end += 1;
+                }
+                ti = line_end;
+                line_num += 1;
+            }
+
+            // Show links at bottom if space
+            if LINK_COUNT > 0 {
+                let links_y = ymax - 20 - (LINK_COUNT.min(3) as u32 * ln);
+                if links_y > y + 40 {
+                    gpu::fill_rect(x, links_y - 2, r.w - 8, 1, BORDER);
+                    let mut ly = links_y;
+                    for i in 0..LINK_COUNT.min(3) {
+                        if ly + ln < ymax {
+                            let link = core::str::from_utf8_unchecked(&LINKS[i][..LINK_LENS[i]]);
+                            let mut label = [0u8; 4];
+                            label[0] = b'[';
+                            label[1] = b'1' + i as u8;
+                            label[2] = b']';
+                            label[3] = b' ';
+                            font::draw_str(fb, w, x + 4, ly,
+                                core::str::from_utf8_unchecked(&label[..4]), LINK_COLOR, BG);
+                            font::draw_str(fb, w, x + 36, ly, link, CYAN, BG);
+                            ly += ln;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ─── Status Bar ───
+    let status_y = ymax - 18;
+    if status_y > r.y + 20 {
+        gpu::fill_rect(x, status_y, r.w - 8, 18, URL_BG);
+        unsafe {
+            let state_text = match STATE {
+                BrowserState::Idle => "Ready",
+                BrowserState::Loading => "Loading",
+                BrowserState::Loaded => "Done",
+                BrowserState::Error => "Error",
+            };
+            let state_color = match STATE {
+                BrowserState::Loaded => GREEN,
+                BrowserState::Error => RED,
+                BrowserState::Loading => CYAN,
+                _ => DIM,
+            };
+            font::draw_str(fb, w, x + 4, status_y + 1, state_text, state_color, URL_BG);
+
+            let msg = core::str::from_utf8_unchecked(&STATUS_MSG[..STATUS_LEN]);
+            font::draw_str(fb, w, x + 80, status_y + 1, msg, DIM, URL_BG);
+
+            if LINK_COUNT > 0 {
+                font::draw_str(fb, w, r.x + r.w - 80, status_y + 1, "Links:", DIM, URL_BG);
+                let mut nbuf = [0u8; 4];
+                let nlen = write_num(&mut nbuf, LINK_COUNT);
+                font::draw_str(fb, w, r.x + r.w - 32, status_y + 1,
+                    core::str::from_utf8_unchecked(&nbuf[..nlen]), LINK_COLOR, URL_BG);
+            }
+        }
+    }
+}
+
+/// Handle keyboard input for the browser.
+pub fn handle_key(ch: u8) {
+    unsafe {
+        match ch {
+            b'\r' | b'\n' => {
+                // Navigate to URL
+                if URL_LEN > 0 {
+                    let url_copy: [u8; MAX_URL] = URL_BUF;
+                    let len = URL_LEN;
+                    navigate(&url_copy[..len]);
+                }
+            }
+            0x08 | 0x7F => {
+                if URL_LEN > 0 { URL_LEN -= 1; }
+            }
+            // Number keys 1-9: follow link
+            b'1'..=b'9' if STATE == BrowserState::Loaded => {
+                let link_idx = (ch - b'1') as usize;
+                if link_idx < LINK_COUNT {
+                    let url = &LINKS[link_idx][..LINK_LENS[link_idx]];
+                    let mut url_copy = [0u8; MAX_URL];
+                    let len = url.len().min(MAX_URL);
+                    url_copy[..len].copy_from_slice(&url[..len]);
+                    navigate(&url_copy[..len]);
+                }
+            }
+            // Page up/down (using - and = keys when page loaded)
+            b'-' if STATE == BrowserState::Loaded => {
+                if SCROLL_Y > 0 { SCROLL_Y -= 5; }
+            }
+            b'=' if STATE == BrowserState::Loaded => {
+                SCROLL_Y += 5;
+            }
+            // Regular character → URL bar
+            c if c >= 0x20 && c <= 0x7E => {
+                if URL_LEN < MAX_URL - 1 {
+                    URL_BUF[URL_LEN] = c;
+                    URL_LEN += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Go back in history.
+pub fn go_back() {
+    unsafe {
+        if HISTORY_POS > 0 {
+            HISTORY_POS -= 1;
+            let len = HISTORY_LENS[HISTORY_POS];
+            let mut url = [0u8; MAX_URL];
+            url[..len].copy_from_slice(&HISTORY[HISTORY_POS][..len]);
+            navigate(&url[..len]);
+        }
+    }
+}
