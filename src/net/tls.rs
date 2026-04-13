@@ -125,8 +125,12 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
     buf[pos..pos+32].copy_from_slice(&sess.client_random);
     pos += 32;
 
-    // Session ID (empty for TLS 1.3)
-    buf[pos] = 0; pos += 1;
+    // Session ID (32 random bytes — required by many TLS 1.3 servers for compat)
+    buf[pos] = 32; pos += 1;
+    for i in 0..32 {
+        buf[pos + i] = sess.client_random[i] ^ (i as u8 + 0xAA);
+    }
+    pos += 32;
 
     // Cipher suites
     buf[pos] = 0; buf[pos+1] = 4; pos += 2; // length = 4 (2 suites)
@@ -155,20 +159,35 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
     buf[pos..pos+sni_len].copy_from_slice(sni_bytes);
     pos += sni_len;
 
-    // Supported versions extension (TLS 1.3)
+    // Supported versions extension (TLS 1.3 + 1.2 fallback)
     buf[pos] = 0; buf[pos+1] = 43; pos += 2; // type = supported_versions
-    buf[pos] = 0; buf[pos+1] = 3; pos += 2; // length
-    buf[pos] = 2; pos += 1; // list length
+    buf[pos] = 0; buf[pos+1] = 5; pos += 2; // length
+    buf[pos] = 4; pos += 1; // list length (2 versions × 2 bytes)
     buf[pos] = 0x03; buf[pos+1] = 0x04; pos += 2; // TLS 1.3
+    buf[pos] = 0x03; buf[pos+1] = 0x03; pos += 2; // TLS 1.2
+
+    // Supported groups extension (required)
+    buf[pos] = 0; buf[pos+1] = 10; pos += 2; // type = supported_groups
+    buf[pos] = 0; buf[pos+1] = 4; pos += 2; // length
+    buf[pos] = 0; buf[pos+1] = 2; pos += 2; // list length
+    buf[pos] = 0; buf[pos+1] = 29; pos += 2; // X25519
 
     // Signature algorithms extension
     buf[pos] = 0; buf[pos+1] = 13; pos += 2; // type = signature_algorithms
-    buf[pos] = 0; buf[pos+1] = 8; pos += 2; // length
-    buf[pos] = 0; buf[pos+1] = 6; pos += 2; // list length
-    // rsa_pss_rsae_sha256, ecdsa_secp256r1_sha256, rsa_pkcs1_sha256
-    buf[pos] = 0x08; buf[pos+1] = 0x04; pos += 2;
+    buf[pos] = 0; buf[pos+1] = 14; pos += 2; // length
+    buf[pos] = 0; buf[pos+1] = 12; pos += 2; // list length
+    // ecdsa_secp256r1_sha256
     buf[pos] = 0x04; buf[pos+1] = 0x03; pos += 2;
+    // rsa_pss_rsae_sha256
+    buf[pos] = 0x08; buf[pos+1] = 0x04; pos += 2;
+    // rsa_pkcs1_sha256
     buf[pos] = 0x04; buf[pos+1] = 0x01; pos += 2;
+    // ecdsa_secp384r1_sha384
+    buf[pos] = 0x05; buf[pos+1] = 0x03; pos += 2;
+    // rsa_pss_rsae_sha384
+    buf[pos] = 0x08; buf[pos+1] = 0x05; pos += 2;
+    // rsa_pkcs1_sha384
+    buf[pos] = 0x05; buf[pos+1] = 0x01; pos += 2;
 
     // Key share extension (X25519 public key)
     buf[pos] = 0; buf[pos+1] = 51; pos += 2; // type = key_share
