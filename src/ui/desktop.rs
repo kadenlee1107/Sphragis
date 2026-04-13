@@ -147,36 +147,51 @@ pub fn run() -> ! {
                 _ => {}
             }
 
-            // If in shell mode, handle shell input
-            if in_shell {
-                match c {
-                    b'\r' | b'\n' => {
-                        console::putc(b'\n');
-                        uart::puts("\r\n");
-                        if cmd_len > 0 {
-                            let cmd = unsafe { core::str::from_utf8_unchecked(&cmd_buf[..cmd_len]) };
-                            super::shell::execute_cmd(cmd);
-                            cmd_len = 0;
+            // Route keyboard input to the active app
+            let active = wm::active_app();
+            match active {
+                wm::APP_SHELL => {
+                    // Shell input
+                    match c {
+                        b'\r' | b'\n' => {
+                            console::putc(b'\n');
+                            uart::puts("\r\n");
+                            if cmd_len > 0 {
+                                let cmd = unsafe { core::str::from_utf8_unchecked(&cmd_buf[..cmd_len]) };
+                                super::shell::execute_cmd(cmd);
+                                cmd_len = 0;
+                            }
+                            console::prompt();
+                            wm::flush_all();
                         }
-                        console::prompt();
-                        wm::flush_all();
-                    }
-                    0x08 | 0x7F => {
-                        if cmd_len > 0 {
-                            cmd_len -= 1;
-                            console::putc(0x08);
-                            uart::putc(0x08);
-                            uart::putc(b' ');
-                            uart::putc(0x08);
+                        0x08 | 0x7F => {
+                            if cmd_len > 0 {
+                                cmd_len -= 1;
+                                console::putc(0x08);
+                                uart::putc(0x08);
+                                uart::putc(b' ');
+                                uart::putc(0x08);
+                            }
                         }
+                        _ if c >= 0x20 && c <= 0x7E && cmd_len < 255 => {
+                            cmd_buf[cmd_len] = c;
+                            cmd_len += 1;
+                            console::putc(c);
+                            uart::putc(c);
+                        }
+                        _ => {}
                     }
-                    _ if c >= 0x20 && c <= 0x7E && cmd_len < 255 => {
-                        cmd_buf[cmd_len] = c;
-                        cmd_len += 1;
-                        console::putc(c);
-                        uart::putc(c);
-                    }
-                    _ => {}
+                }
+                wm::APP_BROWSER => {
+                    apps::browser::handle_key(c);
+                    render_current();
+                }
+                wm::APP_COMMS => {
+                    apps::comms::handle_key(c);
+                    render_current();
+                }
+                _ => {
+                    // Other apps: no keyboard input handling yet
                 }
             }
         }
