@@ -96,9 +96,26 @@ pub fn navigate(url: &[u8]) {
     let (host, path, port) = parse_url(url_str);
 
     // Resolve DNS
+    uart::puts("[browser] resolving: ");
+    uart::puts(host);
+    uart::puts("\n");
     let ip = match crate::net::dns::resolve(host) {
-        Ok(ip) => ip,
-        Err(_) => {
+        Ok(ip) => {
+            uart::puts("[browser] resolved to ");
+            crate::kernel::mm::print_num(((ip >> 24) & 0xFF) as usize);
+            uart::putc(b'.');
+            crate::kernel::mm::print_num(((ip >> 16) & 0xFF) as usize);
+            uart::putc(b'.');
+            crate::kernel::mm::print_num(((ip >> 8) & 0xFF) as usize);
+            uart::putc(b'.');
+            crate::kernel::mm::print_num((ip & 0xFF) as usize);
+            uart::puts("\n");
+            ip
+        }
+        Err(e) => {
+            uart::puts("[browser] DNS failed: ");
+            uart::puts(e);
+            uart::puts("\n");
             unsafe { STATE = BrowserState::Error; }
             set_status(b"DNS failed");
             return;

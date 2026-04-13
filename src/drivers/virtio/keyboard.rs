@@ -142,13 +142,20 @@ pub fn poll() {
                     let mut ch = KEYMAP[code_idx];
                     if ch != 0 {
                         unsafe {
-                            // Apply Ctrl modifier: Ctrl+A=0x01, Ctrl+L=0x0C, etc.
                             if CTRL_HELD && ch >= b'a' && ch <= b'z' {
                                 ch = ch - b'a' + 1;
-                            }
-                            // Apply Shift for uppercase
-                            else if SHIFT_HELD && ch >= b'a' && ch <= b'z' {
-                                ch = ch - 32;
+                            } else if SHIFT_HELD {
+                                ch = match ch {
+                                    b'a'..=b'z' => ch - 32, // uppercase
+                                    b'1' => b'!', b'2' => b'@', b'3' => b'#',
+                                    b'4' => b'$', b'5' => b'%', b'6' => b'^',
+                                    b'7' => b'&', b'8' => b'*', b'9' => b'(',
+                                    b'0' => b')', b'-' => b'_', b'=' => b'+',
+                                    b'[' => b'{', b']' => b'}', b'\\' => b'|',
+                                    b';' => b':', b'\'' => b'"', b'`' => b'~',
+                                    b',' => b'<', b'.' => b'>', b'/' => b'?',
+                                    _ => ch,
+                                };
                             }
                         }
                         push_key(ch);
