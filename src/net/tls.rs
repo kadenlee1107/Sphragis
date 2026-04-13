@@ -294,6 +294,7 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     let derived_secret = crate::crypto::sha256::hkdf_expand_label(&early_secret, b"derived", &empty_hash, 32);
     let handshake_secret = crate::crypto::sha256::hkdf_extract(&derived_secret, &sess.shared_secret);
 
+    // Clone transcript for handshake key derivation (original continues for app keys)
     let transcript_hash = transcript.clone().finalize();
 
     let client_hs_secret = crate::crypto::sha256::hkdf_expand_label(&handshake_secret, b"c hs traffic", &transcript_hash, 32);
@@ -321,16 +322,46 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
 
     uart::puts("[tls] Handshake keys derived\n");
 
-    // Step 4: Receive and skip encrypted handshake messages
+    // Step 4: Receive encrypted handshake messages and add to transcript
     // (EncryptedExtensions, Certificate, CertificateVerify, Finished)
-    // We accept them without full verification for now (no CA cert store)
+    // We decrypt them with handshake keys and add plaintext to transcript
+    let server_hs_cipher = {
+        let mut k = [0u8; 16];
+        k.copy_from_slice(&sess.server_key[..16]);
+        crate::crypto::aes::Aes128::new(&k)
+    };
+
     for _ in 0..5 {
         let mut enc_buf = [0u8; 4096];
         match crate::net::tcp::recv_data(&mut enc_buf) {
-            Ok(n) if n > 0 => {
-                // Record type should be 0x17 (application data — encrypted handshake)
-                // We skip decryption verification for now and just consume the records
-                sess.server_seq += 1;
+            Ok(n) if n > 5 => {
+                let rec_type = enc_buf[0];
+                if rec_type == 0x14 {
+                    // ChangeCipherSpec — skip, don't hash
+                    continue;
+                }
+                if rec_type == 0x17 {
+                    // Encrypted handshake record — decrypt and add to transcript
+                    let rec_len = ((enc_buf[3] as usize) << 8) | enc_buf[4] as usize;
+                    let payload_len = rec_len.min(n - 5);
+
+                    // Decrypt
+                    let mut nonce = sess.server_iv;
+                    let seq_bytes = sess.server_seq.to_be_bytes();
+                    for i in 0..8 { nonce[4 + i] ^= seq_bytes[i]; }
+                    sess.server_seq += 1;
+
+                    let mut decrypted = [0u8; 4096];
+                    decrypted[..payload_len].copy_from_slice(&enc_buf[5..5 + payload_len]);
+                    server_hs_cipher.ctr_crypt(&nonce, &mut decrypted[..payload_len]);
+
+                    // Strip GCM tag (16 bytes) and content type (1 byte)
+                    let inner_len = if payload_len > 17 { payload_len - 17 } else { 0 };
+                    if inner_len > 0 {
+                        // Add decrypted handshake message to transcript
+                        transcript.update(&decrypted[..inner_len]);
+                    }
+                }
             }
             _ => break,
         }
@@ -341,7 +372,10 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     crate::net::tcp::send_data(&ccs).ok();
 
     // Step 6: Derive application traffic keys
+    // Include encrypted handshake messages in transcript
+    // (we consumed them in step 4, hash their raw bytes)
     let hs_transcript = transcript.finalize();
+
     let master_derived = crate::crypto::sha256::hkdf_expand_label(&handshake_secret, b"derived", &empty_hash, 32);
     let master_secret = crate::crypto::sha256::hkdf_extract(&master_derived, &[0u8; 32]);
 
