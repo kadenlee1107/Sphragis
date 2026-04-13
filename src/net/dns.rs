@@ -17,7 +17,7 @@ const DOH_SERVER: u32 = 0x01010101; // 1.1.1.1
 const DOH_PORT: u16 = 80; // Use HTTP (port 80) since TLS handshake needs more work
 // When TLS is fully wired, switch to port 443
 
-static DOH_ENABLED: AtomicBool = AtomicBool::new(true);
+static DOH_ENABLED: AtomicBool = AtomicBool::new(false); // disabled until TLS handshake is complete
 
 /// Enable or disable DNS-over-HTTPS.
 pub fn set_doh(enabled: bool) {
