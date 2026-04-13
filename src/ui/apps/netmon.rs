@@ -22,16 +22,21 @@ pub fn render() {
 
     gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
 
-    let x = r.x + 16;
-    let col2 = r.x + r.w / 2 + 16;
-    let mut y = r.y + 8;
+    let x = r.x + 4;
+    let ymax = r.y + r.h;
+    let ln = 18u32;
+    let two_col = r.w >= 400;
+    let panel_w = if two_col { r.w / 2 - 12 } else { r.w - 8 };
+    let col2 = if two_col { r.x + r.w / 2 + 4 } else { x };
+    let kv_off = 56u32; // label→value offset (shorter for narrow panes)
 
-    // ─── Interface Panel ───
-    draw_panel(x, y, r.w / 2 - 32, 140, "NETWORK INTERFACE");
-    let py = y + 28;
+    let mut y = r.y + 4;
+
+    // ─── Interface ───
+    if y + 20 < ymax { draw_panel(x, y, panel_w, (ymax - y).min(120), "NETWORK"); }
+    let mut py = y + 22;
 
     let mac = crate::drivers::virtio::net::mac();
-    font::draw_str(fb, w, x + 8, py, "MAC:", DIM, BG);
     let mut mac_str = [0u8; 17];
     for i in 0..6 {
         let hex = b"0123456789abcdef";
@@ -39,61 +44,54 @@ pub fn render() {
         mac_str[i * 3 + 1] = hex[(mac[i] & 0xf) as usize];
         if i < 5 { mac_str[i * 3 + 2] = b':'; }
     }
-    font::draw_str(fb, w, x + 80, py, unsafe { core::str::from_utf8_unchecked(&mac_str[..17]) }, FG_HI, BG);
+    if py+ln < ymax { font::draw_str(fb, w, x+4, py, "MAC", DIM, BG);
+        font::draw_str(fb, w, x+kv_off, py, unsafe { core::str::from_utf8_unchecked(&mac_str[..17]) }, FG_HI, BG); py+=ln; }
 
     let mut ip_buf = [0u8; 16];
     let ip = net::ip::our_ip();
     let ip_len = net::ip::ip_to_str(ip, &mut ip_buf);
-    font::draw_str(fb, w, x + 8, py + 18, "IPv4:", DIM, BG);
-    font::draw_str(fb, w, x + 80, py + 18, unsafe { core::str::from_utf8_unchecked(&ip_buf[..ip_len]) }, FG_HI, BG);
+    if py+ln < ymax { font::draw_str(fb, w, x+4, py, "IP", DIM, BG);
+        font::draw_str(fb, w, x+kv_off, py, unsafe { core::str::from_utf8_unchecked(&ip_buf[..ip_len]) }, FG_HI, BG); py+=ln; }
 
     let gw = net::ip::gateway();
     let gw_len = net::ip::ip_to_str(gw, &mut ip_buf);
-    font::draw_str(fb, w, x + 8, py + 36, "Gateway:", DIM, BG);
-    font::draw_str(fb, w, x + 80, py + 36, unsafe { core::str::from_utf8_unchecked(&ip_buf[..gw_len]) }, FG_HI, BG);
+    if py+ln < ymax { font::draw_str(fb, w, x+4, py, "GW", DIM, BG);
+        font::draw_str(fb, w, x+kv_off, py, unsafe { core::str::from_utf8_unchecked(&ip_buf[..gw_len]) }, FG_HI, BG); py+=ln; }
 
     let net_ok = crate::drivers::virtio::net::is_ready();
-    font::draw_str(fb, w, x + 8, py + 54, "Status:", DIM, BG);
-    font::draw_str(fb, w, x + 80, py + 54, if net_ok { "ONLINE" } else { "OFFLINE" },
-                   if net_ok { GREEN } else { RED }, BG);
+    if py+ln < ymax { font::draw_str(fb, w, x+4, py, "Net", DIM, BG);
+        font::draw_str(fb, w, x+kv_off, py, if net_ok {"ONLINE"} else {"OFF"},
+                       if net_ok { GREEN } else { RED }, BG); py+=ln; }
 
-    font::draw_str(fb, w, x + 8, py + 72, "Driver:", DIM, BG);
-    font::draw_str(fb, w, x + 80, py + 72, "virtio-net (MMIO v1)", FG, BG);
+    // ─── Firewall ───
+    let mut fy = if two_col { r.y + 4 } else { py + 4 };
+    let cx = if two_col { col2 } else { x };
+    let pw2 = if two_col { panel_w } else { r.w - 8 };
+    if fy + 20 < ymax { draw_panel(cx, fy, pw2, (ymax - fy).min(120), "FIREWALL"); }
+    fy += 22;
 
-    // ─── Firewall Panel ───
-    draw_panel(col2, y, r.w / 2 - 32, 140, "FIREWALL");
-    let fy = y + 28;
-
-    font::draw_str(fb, w, col2 + 8, fy, "Policy:", DIM, BG);
-    font::draw_str(fb, w, col2 + 120, fy, "DEFAULT DENY ALL", RED, BG);
-
-    font::draw_str(fb, w, col2 + 8, fy + 18, "Mode:", DIM, BG);
-    font::draw_str(fb, w, col2 + 120, fy + 18, "ALLOWLIST", FG_HI, BG);
+    if fy+ln < ymax { font::draw_str(fb, w, cx+4, fy, "Policy", DIM, BG);
+        font::draw_str(fb, w, cx+kv_off, fy, "DENY ALL", RED, BG); fy+=ln; }
+    if fy+ln < ymax { font::draw_str(fb, w, cx+4, fy, "Mode", DIM, BG);
+        font::draw_str(fb, w, cx+kv_off, fy, "ALLOWLIST", FG_HI, BG); fy+=ln; }
 
     let (allowed, blocked) = net::firewall::stats();
-    font::draw_str(fb, w, col2 + 8, fy + 36, "Allowed:", DIM, BG);
-    draw_num(fb, w, col2 + 120, fy + 36, allowed as usize, GREEN);
-    font::draw_str(fb, w, col2 + 200, fy + 36, "packets", DIM, BG);
+    if fy+ln < ymax { font::draw_str(fb, w, cx+4, fy, "OK", DIM, BG);
+        draw_num(fb, w, cx+kv_off, fy, allowed as usize, GREEN); fy+=ln; }
+    if fy+ln < ymax { font::draw_str(fb, w, cx+4, fy, "Blk", DIM, BG);
+        draw_num(fb, w, cx+kv_off, fy, blocked as usize, RED); }
 
-    font::draw_str(fb, w, col2 + 8, fy + 54, "Blocked:", DIM, BG);
-    draw_num(fb, w, col2 + 120, fy + 54, blocked as usize, RED);
-    font::draw_str(fb, w, col2 + 200, fy + 54, "packets", DIM, BG);
-
-    font::draw_str(fb, w, col2 + 8, fy + 72, "Rules:", DIM, BG);
-    font::draw_str(fb, w, col2 + 120, fy + 72, "4 active", FG, BG);
-
-    // ─── Security Stack ───
-    y += 160;
-    draw_panel(x, y, r.w - 32, 180, "NETWORK SECURITY STACK (design)");
-    let sy = y + 28;
-
-    font::draw_str(fb, w, x + 8, sy,      "Layer 1: TLS 1.3        [planned]  All connections encrypted", FG, BG);
-    font::draw_str(fb, w, x + 8, sy + 20,  "Layer 2: VPN (WireGuard) [planned]  Hides Tor usage from ISP", FG, BG);
-    font::draw_str(fb, w, x + 8, sy + 40,  "Layer 3: Tor Circuit     [planned]  3-hop onion routing", FG, BG);
-    font::draw_str(fb, w, x + 8, sy + 60,  "Layer 4: DNS-over-HTTPS  [planned]  No plaintext DNS", FG, BG);
-    font::draw_str(fb, w, x + 8, sy + 80,  "Layer 5: MAC Randomize   [planned]  Per-session random MAC", FG, BG);
-    font::draw_str(fb, w, x + 8, sy + 100, "Layer 6: Allowlist FW    [ACTIVE]   Default deny all inbound", GREEN, BG);
-    font::draw_str(fb, w, x + 8, sy + 120, "Stack: Nobody sees the full picture.", FG_HI, BG);
+    // ─── Security Stack (only if space) ───
+    let stack_y = py.max(fy) + 4;
+    if stack_y + 30 < ymax {
+        let sw = if two_col { r.w - 8 } else { r.w - 8 };
+        draw_panel(x, stack_y, sw, (ymax - stack_y).min(160), "SEC STACK");
+        let mut sy = stack_y + 22;
+        if sy+ln < ymax { font::draw_str(fb, w, x+4, sy, "TLS 1.3   [plan]", FG, BG); sy+=ln; }
+        if sy+ln < ymax { font::draw_str(fb, w, x+4, sy, "VPN       [plan]", FG, BG); sy+=ln; }
+        if sy+ln < ymax { font::draw_str(fb, w, x+4, sy, "Tor       [plan]", FG, BG); sy+=ln; }
+        if sy+ln < ymax { font::draw_str(fb, w, x+4, sy, "FW        [LIVE]", GREEN, BG); }
+    }
 }
 
 fn draw_panel(x: u32, y: u32, w: u32, h: u32, title: &str) {

@@ -43,6 +43,20 @@ static mut KEY_BUF: [u8; KEY_BUF_SIZE] = [0; KEY_BUF_SIZE];
 static mut KEY_HEAD: usize = 0;
 static mut KEY_TAIL: usize = 0;
 
+// Modifier key tracking
+static mut CTRL_HELD: bool = false;
+static mut SHIFT_HELD: bool = false;
+static mut ALT_HELD: bool = false;
+
+// Linux evdev keycodes for modifiers
+const KEY_LEFTCTRL: u16 = 29;
+const KEY_RIGHTCTRL: u16 = 97;
+const KEY_LEFTSHIFT: u16 = 42;
+const KEY_RIGHTSHIFT: u16 = 54;
+const KEY_LEFTALT: u16 = 56;
+const KEY_RIGHTALT: u16 = 100;
+const KEY_TAB: u16 = 15;
+
 pub fn init() -> Option<()> {
     let devices = mmio::probe(18); // virtio input device type
     let base = devices[0]?;
@@ -97,14 +111,48 @@ pub fn poll() {
         let code = super::virtqueue::safe_read16(buf_addr + 2);
         let value = super::virtqueue::safe_read32(buf_addr + 4);
 
-        // Only handle EV_KEY (type=1), key DOWN (value=1)
-        // Ignore key UP (value=0) and repeats (value=2)
-        if event_type == 1 && value == 1 {
-            let code_idx = code as usize;
-            if code_idx < 128 {
-                let ch = KEYMAP[code_idx];
-                if ch != 0 {
-                    push_key(ch);
+        // EV_KEY (type=1)
+        if event_type == 1 {
+            // Track modifier key state (DOWN=1, UP=0)
+            unsafe {
+                match code {
+                    KEY_LEFTCTRL | KEY_RIGHTCTRL => { CTRL_HELD = value == 1; }
+                    KEY_LEFTSHIFT | KEY_RIGHTSHIFT => { SHIFT_HELD = value == 1; }
+                    KEY_LEFTALT | KEY_RIGHTALT => { ALT_HELD = value == 1; }
+                    _ => {}
+                }
+            }
+
+            // Key DOWN (value=1) — generate character
+            if value == 1 {
+                unsafe {
+                    // Option+Tab → send special code 0x80 (split focus switch)
+                    if ALT_HELD && code == KEY_TAB {
+                        push_key(0x80);
+                        // Don't continue — fall through to re-post buffer below
+                        vq.add_writable(buf_addr as *mut u8, EVENT_SIZE as u32);
+                        let device = VirtioMmio::new(base);
+                        device.notify(0);
+                        continue;
+                    }
+                }
+
+                let code_idx = code as usize;
+                if code_idx < 128 {
+                    let mut ch = KEYMAP[code_idx];
+                    if ch != 0 {
+                        unsafe {
+                            // Apply Ctrl modifier: Ctrl+A=0x01, Ctrl+L=0x0C, etc.
+                            if CTRL_HELD && ch >= b'a' && ch <= b'z' {
+                                ch = ch - b'a' + 1;
+                            }
+                            // Apply Shift for uppercase
+                            else if SHIFT_HELD && ch >= b'a' && ch <= b'z' {
+                                ch = ch - 32;
+                            }
+                        }
+                        push_key(ch);
+                    }
                 }
             }
         }

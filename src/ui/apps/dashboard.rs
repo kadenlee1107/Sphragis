@@ -22,64 +22,60 @@ pub fn render() {
     // Clear content area
     gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
 
-    let mut y = r.y + 8;
-    let x = r.x + 16;
-    let col2 = r.x + r.w / 2 + 16;
+    let x = r.x + 4;
+    let ymax = r.y + r.h;
+    let xmax = r.x + r.w;
+    let ln = 18u32;
 
-    // ─── LEFT COLUMN: Security Status ───
-    draw_panel(x, y, r.w / 2 - 32, 200, "SECURITY STATUS");
-    y += 28;
-    draw_kv(fb, w, x + 8, y, "Encryption", "AES-256-CTR ACTIVE", GREEN); y += 18;
-    draw_kv(fb, w, x + 8, y, "Integrity", "SHA-256 VERIFIED", GREEN); y += 18;
-    draw_kv(fb, w, x + 8, y, "Secure Enclave", "SIMULATED (QEMU)", DIM); y += 18;
-    draw_kv(fb, w, x + 8, y, "Firewall", "DEFAULT DENY ALL", GREEN); y += 18;
-    draw_kv(fb, w, x + 8, y, "Dead Man Switch", "NOT ARMED (dev)", DIM); y += 18;
-    draw_kv(fb, w, x + 8, y, "Auth Method", "passphrase + YubiKey", FG); y += 18;
-    draw_kv(fb, w, x + 8, y, "Kernel Mode", "EL1 (privileged)", FG); y += 18;
-    draw_kv(fb, w, x + 8, y, "Capabilities", "ENFORCED", GREEN);
+    // Use single-column if pane is narrow (< 400px), two columns if wide
+    let two_col = r.w >= 400;
+    let panel_w = if two_col { r.w / 2 - 12 } else { r.w - 8 };
+    let col2 = if two_col { r.x + r.w / 2 + 4 } else { x };
 
-    // ─── RIGHT COLUMN: System Info ───
-    let mut y2 = r.y + 8;
-    draw_panel(col2, y2, r.w / 2 - 32, 200, "SYSTEM INFO");
-    y2 += 28;
+    // Helper: max chars that fit in panel width
+    let max_chars = (panel_w / 8) as usize;
 
-    // Uptime
-    let (mins, secs) = get_uptime();
-    draw_kv_num(fb, w, col2 + 8, y2, "Uptime", mins as usize, "m"); y2 += 18;
+    let mut y = r.y + 4;
 
-    // Memory
+    // ─── Security Status ───
+    if y + 20 < ymax { draw_panel(x, y, panel_w, (ymax - y).min(200), "SECURITY"); }
+    y += 22;
+    if y+ln < ymax { draw_kv(fb, w, x+4, y, "Encrypt", "AES-CTR", GREEN); y+=ln; }
+    if y+ln < ymax { draw_kv(fb, w, x+4, y, "Hash", "SHA-256", GREEN); y+=ln; }
+    if y+ln < ymax { draw_kv(fb, w, x+4, y, "Firewall", "DENY ALL", GREEN); y+=ln; }
+    if y+ln < ymax { draw_kv(fb, w, x+4, y, "Auth", "pass+Yubi", FG); y+=ln; }
+    if y+ln < ymax { draw_kv(fb, w, x+4, y, "Caps", "ENFORCED", GREEN); y+=ln; }
+
+    // ─── System Info (right col or below) ───
+    let mut y2 = if two_col { r.y + 4 } else { y + 4 };
+    let cx = if two_col { col2 } else { x };
+    let pw2 = if two_col { panel_w } else { r.w - 8 };
+    if y2 + 20 < ymax { draw_panel(cx, y2, pw2, (ymax - y2).min(180), "SYSTEM"); }
+    y2 += 22;
+
+    let (mins, _) = get_uptime();
+    if y2+ln < ymax { draw_kv_num(fb, w, cx+4, y2, "Up", mins as usize, "m"); y2+=ln; }
     let (used, total) = crate::kernel::mm::frame::stats();
-    let free_kb = (total - used) * 4;
-    draw_kv_num(fb, w, col2 + 8, y2, "Free Memory", free_kb, "KB"); y2 += 18;
-    draw_kv_num(fb, w, col2 + 8, y2, "Used Frames", used, ""); y2 += 18;
-    draw_kv_num(fb, w, col2 + 8, y2, "Total Frames", total, ""); y2 += 18;
-
-    // Files
-    let (file_count, file_max) = crate::fs::batfs::stats();
-    draw_kv_num(fb, w, col2 + 8, y2, "Vault Files", file_count, ""); y2 += 18;
-
-    // Network
+    if y2+ln < ymax { draw_kv_num(fb, w, cx+4, y2, "Free", (total-used)*4, "KB"); y2+=ln; }
+    if y2+ln < ymax { draw_kv_num(fb, w, cx+4, y2, "Frames", total, ""); y2+=ln; }
     let net_ok = crate::drivers::virtio::net::is_ready();
-    draw_kv(fb, w, col2 + 8, y2, "Network", if net_ok { "ONLINE" } else { "OFFLINE" },
-            if net_ok { GREEN } else { RED }); y2 += 18;
-
-    // Firewall stats
+    if y2+ln < ymax { draw_kv(fb, w, cx+4, y2, "Net", if net_ok {"ON"} else {"OFF"},
+            if net_ok { GREEN } else { RED }); y2+=ln; }
     let (allowed, blocked) = crate::net::firewall::stats();
-    draw_kv_num(fb, w, col2 + 8, y2, "FW Allowed", allowed as usize, "pkts"); y2 += 18;
-    draw_kv_num(fb, w, col2 + 8, y2, "FW Blocked", blocked as usize, "pkts");
+    if y2+ln < ymax { draw_kv_num(fb, w, cx+4, y2, "FW OK", allowed as usize, ""); y2+=ln; }
+    if y2+ln < ymax { draw_kv_num(fb, w, cx+4, y2, "FW Blk", blocked as usize, ""); }
 
-    // ─── BOTTOM: Architecture ───
-    let arch_y = r.y + 224;
-    draw_panel(x, arch_y, r.w - 32, 160, "ARCHITECTURE");
-    let ay = arch_y + 28;
-
-    font::draw_str(fb, w, x + 8, ay, "Bat_OS v0.3.0 — Custom Microkernel", FG_HI, BG);
-    font::draw_str(fb, w, x + 8, ay + 18, "Target: Apple Silicon M4 (QEMU virt)", FG, BG);
-    font::draw_str(fb, w, x + 8, ay + 36, "Kernel: Rust + ARM64 Assembly", FG, BG);
-    font::draw_str(fb, w, x + 8, ay + 54, "Security: seL4-inspired capabilities", FG, BG);
-    font::draw_str(fb, w, x + 8, ay + 72, "Crypto: AES-256 + SHA-256 (zero deps)", FG, BG);
-    font::draw_str(fb, w, x + 8, ay + 90, "Display: 1280x800 virtio-gpu framebuffer", FG, BG);
-    font::draw_str(fb, w, x + 8, ay + 108, "Philosophy: Zero dependencies. Zero trust.", FG_HI, BG);
+    // ─── Architecture (only if space) ───
+    let arch_y = y.max(y2) + 4;
+    if arch_y + 40 < ymax {
+        let arch_w = if two_col { r.w - 8 } else { r.w - 8 };
+        draw_panel(x, arch_y, arch_w, (ymax - arch_y).min(140), "ARCH");
+        let mut ay = arch_y + 22;
+        if ay+ln < ymax { font::draw_str(fb, w, x+4, ay, "Bat_OS v0.3.0 Microkernel", FG_HI, BG); ay+=ln; }
+        if ay+ln < ymax { font::draw_str(fb, w, x+4, ay, "ARM64 Rust + ASM", FG, BG); ay+=ln; }
+        if ay+ln < ymax { font::draw_str(fb, w, x+4, ay, "seL4 caps, AES+SHA", FG, BG); ay+=ln; }
+        if ay+ln < ymax { font::draw_str(fb, w, x+4, ay, "Zero deps. Zero trust.", FG_HI, BG); }
+    }
 }
 
 fn draw_panel(x: u32, y: u32, w: u32, h: u32, title: &str) {

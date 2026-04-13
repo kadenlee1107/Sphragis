@@ -60,6 +60,64 @@ static mut MASTER_KEY: [u8; 32] = [0u8; 32];
 static mut NONCE_COUNTER: u64 = 0;
 static mut INITIALIZED: bool = false;
 
+// ─── Merkle Tree ───
+// Binary hash tree over all file hashes.
+// Leaf[i] = SHA-256(file[i].hash). Internal nodes = SHA-256(left || right).
+// Tree has MAX_FILES leaves → 2*MAX_FILES nodes total.
+const MERKLE_NODES: usize = MAX_FILES * 2;
+static mut MERKLE_TREE: [[u8; 32]; MERKLE_NODES] = [[0u8; 32]; MERKLE_NODES];
+
+/// Rebuild the Merkle tree from all file hashes.
+pub fn rebuild_merkle() {
+    unsafe {
+        // Leaves: nodes[MAX_FILES..2*MAX_FILES] = hash of each file's hash
+        for i in 0..MAX_FILES {
+            if FILES[i].state == FileState::Active {
+                MERKLE_TREE[MAX_FILES + i] = sha256::hash(&FILES[i].hash);
+            } else {
+                MERKLE_TREE[MAX_FILES + i] = [0u8; 32];
+            }
+        }
+        // Internal nodes: bottom-up
+        let mut level = MAX_FILES;
+        while level > 1 {
+            let parent_start = level / 2;
+            for i in parent_start..level {
+                let left = &MERKLE_TREE[i * 2];
+                let right = &MERKLE_TREE[i * 2 + 1];
+                let mut combined = [0u8; 64];
+                combined[..32].copy_from_slice(left);
+                combined[32..].copy_from_slice(right);
+                MERKLE_TREE[i] = sha256::hash(&combined);
+            }
+            level /= 2;
+        }
+    }
+}
+
+/// Get the Merkle root hash (integrity fingerprint of entire filesystem).
+pub fn merkle_root() -> [u8; 32] {
+    unsafe { MERKLE_TREE[1] }
+}
+
+/// Verify a specific file's integrity against the Merkle tree.
+pub fn verify_file_integrity(idx: usize) -> bool {
+    if idx >= MAX_FILES { return false; }
+    unsafe {
+        if FILES[idx].state != FileState::Active { return false; }
+        // Recompute this leaf
+        let expected = sha256::hash(&FILES[idx].hash);
+        MERKLE_TREE[MAX_FILES + idx] == expected
+    }
+}
+
+/// Verify the entire filesystem integrity.
+pub fn verify_all_integrity() -> bool {
+    let saved_root = merkle_root();
+    rebuild_merkle();
+    merkle_root() == saved_root
+}
+
 /// Initialize the filesystem with a master encryption key.
 pub fn init(master_key: &[u8; 32]) {
     unsafe {
@@ -152,6 +210,9 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         FILE_COUNT += 1;
     }
 
+    // Update Merkle tree
+    rebuild_merkle();
+
     Ok(())
 }
 
@@ -203,6 +264,8 @@ pub fn delete(name: &str) -> Result<(), &'static str> {
         entry.state = FileState::Deleted;
         FILE_COUNT -= 1;
     }
+    // Update Merkle tree
+    rebuild_merkle();
     Ok(())
 }
 

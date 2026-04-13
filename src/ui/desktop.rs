@@ -73,7 +73,8 @@ pub fn resume() -> ! {
 
 /// Main desktop loop — runs forever.
 pub fn run() -> ! {
-    // Initial render: shell
+    // Initialize pane system + render shell
+    wm::init_panes_pub();
     wm::switch_app(wm::APP_SHELL);
     render_current();
 
@@ -123,13 +124,25 @@ pub fn run() -> ! {
                 0x04 => { switch_to(wm::APP_NETMON); in_shell = false; continue; }
                 0x05 => { switch_to(wm::APP_EDITOR); in_shell = false; continue; }
 
-                // Tab key — cycle through apps
+                // Tab key — cycle app in focused pane
                 0x09 => {
                     let next = (wm::active_app() + 1) % 6;
-                    switch_to(next);
+                    wm::switch_app(next);
                     in_shell = next == wm::APP_SHELL;
+                    render_current();
                     continue;
                 }
+
+                // Ctrl+L — vertical split (left | right)
+                0x0C => { wm::split_vertical(); render_current(); continue; }
+                // Ctrl+K — horizontal split (top / bottom)
+                0x0B => { wm::split_horizontal(); render_current(); continue; }
+                // Ctrl+W — switch focus between split panels
+                0x17 => { wm::split_toggle_focus(); render_current(); continue; }
+                // Option+Tab (0x80) — cycle focus between panes
+                0x80 => { wm::split_toggle_focus(); render_current(); continue; }
+                // Ctrl+Q — close focused pane
+                0x11 => { wm::close_pane(); render_current(); in_shell = wm::active_app() == wm::APP_SHELL; continue; }
 
                 _ => {}
             }
@@ -179,12 +192,26 @@ fn switch_to(app: u8) {
 }
 
 fn render_current() {
-    let app = wm::active_app();
+    // Clear clip for frame drawing
+    super::font::clear_clip();
     wm::draw_frame();
 
+    // Render each pane with clipping to its bounds
+    for i in 0..wm::pane_count() {
+        wm::set_render_target(i);
+        let r = wm::content_rect();
+        super::font::set_clip(r.x, r.y, r.w, r.h);
+        render_app(wm::pane_app(i));
+    }
+
+    super::font::clear_clip();
+    wm::set_render_target(0);
+    wm::flush_all();
+}
+
+fn render_app(app: u8) {
     match app {
         wm::APP_SHELL => {
-            // Console already manages its own content
             console::redraw_content();
         }
         wm::APP_DASHBOARD => apps::dashboard::render(),

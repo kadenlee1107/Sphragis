@@ -6,6 +6,27 @@
 pub const CHAR_W: u32 = 8;
 pub const CHAR_H: u32 = 16;
 
+// Global clip rectangle — pixels outside this area are not drawn
+static mut CLIP_X: u32 = 0;
+static mut CLIP_Y: u32 = 0;
+static mut CLIP_W: u32 = 0xFFFF; // default: no clipping
+static mut CLIP_H: u32 = 0xFFFF;
+
+/// Set the clip rectangle. All drawing will be clipped to this area.
+pub fn set_clip(x: u32, y: u32, w: u32, h: u32) {
+    unsafe { CLIP_X = x; CLIP_Y = y; CLIP_W = w; CLIP_H = h; }
+}
+
+/// Clear the clip rectangle (allow full-screen drawing).
+pub fn clear_clip() {
+    unsafe { CLIP_X = 0; CLIP_Y = 0; CLIP_W = 0xFFFF; CLIP_H = 0xFFFF; }
+}
+
+#[inline]
+fn in_clip(px: u32, py: u32) -> bool {
+    unsafe { px >= CLIP_X && px < CLIP_X + CLIP_W && py >= CLIP_Y && py < CLIP_Y + CLIP_H }
+}
+
 /// Minimal ASCII font covering printable characters (32-126).
 /// Each char = 16 bytes, one byte per row, MSB = leftmost pixel.
 static FONT_DATA: [u8; 95 * 16] = [
@@ -216,7 +237,7 @@ pub fn draw_char(fb: *mut u32, screen_w: u32, x: u32, y: u32, ch: u8, fg: u32, b
         for col in 0..8u32 {
             let px = x + col;
             let py = y + row;
-            if px < screen_w {
+            if px < screen_w && in_clip(px, py) {
                 let color = if bits & (0x80 >> col) != 0 { fg } else { bg };
                 unsafe {
                     let offset = (py * screen_w + px) as usize;

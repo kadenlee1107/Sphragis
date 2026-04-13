@@ -106,11 +106,36 @@ impl BatCave {
 
     pub fn has_cap(&self, cap_name: &str) -> bool {
         for i in 0..self.cap_count {
-            if self.caps[i].active && self.caps[i].name_str() == cap_name {
-                return true;
+            if !self.caps[i].active { continue; }
+            let cap = self.caps[i].name_str();
+            // Exact match (net, raw, display)
+            if cap == cap_name { return true; }
+            // Path-scoped fs capability: "fs:/tmp" grants access to /tmp/*
+            if cap.starts_with("fs:") && cap_name.starts_with("fs:") {
+                let granted_path = &cap[3..];
+                let requested_path = &cap_name[3..];
+                if requested_path.starts_with(granted_path) { return true; }
+            }
+            // IPC capability: "ipc:recon" grants IPC to cave named "recon"
+            if cap.starts_with("ipc:") && cap_name.starts_with("ipc:") {
+                if cap == cap_name { return true; }
             }
         }
         false
+    }
+
+    /// Check if this cave has fs access to a specific path.
+    pub fn can_access_path(&self, path: &str) -> bool {
+        // "fs" (no path) = full access
+        if self.has_cap("fs") { return true; }
+        // Check scoped fs caps
+        let mut check = [0u8; 64];
+        let prefix = b"fs:";
+        check[..3].copy_from_slice(prefix);
+        let plen = path.len().min(61);
+        check[3..3+plen].copy_from_slice(&path.as_bytes()[..plen]);
+        let check_str = unsafe { core::str::from_utf8_unchecked(&check[..3+plen]) };
+        self.has_cap(check_str)
     }
 }
 
@@ -134,6 +159,13 @@ pub fn set_active(id: usize) {
 /// Get the active cave ID (usize::MAX = none active).
 pub fn get_active() -> usize {
     ACTIVE_CAVE_ID.load(Ordering::Relaxed)
+}
+
+/// Check if the active cave can access a filesystem path.
+pub fn active_can_access_path(path: &str) -> bool {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return false; }
+    unsafe { CAVES[id].can_access_path(path) }
 }
 
 /// Check if the active cave has a specific capability.
@@ -254,6 +286,65 @@ pub fn revoke_cap(name: &str, cap: &str) -> Result<(), &'static str> {
     }
 
     Err("capability not found")
+}
+
+// ─── Inter-BatCave IPC ───
+
+/// IPC channel mapping between caves
+const MAX_CAVE_IPC: usize = 16;
+static mut CAVE_IPC: [(usize, usize, u64); MAX_CAVE_IPC] = [(usize::MAX, usize::MAX, 0); MAX_CAVE_IPC];
+
+/// Create an IPC channel between two BatCaves.
+/// Both caves must have `ipc:<other_name>` capability.
+pub fn create_ipc(cave_a: &str, cave_b: &str) -> Result<u64, &'static str> {
+    let id_a = find_id(cave_a).ok_or("cave A not found")?;
+    let id_b = find_id(cave_b).ok_or("cave B not found")?;
+
+    // Check capabilities
+    unsafe {
+        let mut cap_check = [0u8; 48];
+        // A needs ipc:<B>
+        let b_len = cave_b.len().min(44);
+        cap_check[..4].copy_from_slice(b"ipc:");
+        cap_check[4..4+b_len].copy_from_slice(&cave_b.as_bytes()[..b_len]);
+        let cap_b = core::str::from_utf8_unchecked(&cap_check[..4+b_len]);
+        if !CAVES[id_a].has_cap(cap_b) { return Err("A lacks ipc cap"); }
+
+        // B needs ipc:<A>
+        let a_len = cave_a.len().min(44);
+        cap_check[4..4+a_len].copy_from_slice(&cave_a.as_bytes()[..a_len]);
+        let cap_a = core::str::from_utf8_unchecked(&cap_check[..4+a_len]);
+        if !CAVES[id_b].has_cap(cap_a) { return Err("B lacks ipc cap"); }
+    }
+
+    // Create kernel IPC channel
+    let channel = crate::kernel::ipc::create_channel().ok_or("no free channels")?;
+
+    // Store mapping
+    unsafe {
+        for i in 0..MAX_CAVE_IPC {
+            if CAVE_IPC[i].0 == usize::MAX {
+                CAVE_IPC[i] = (id_a, id_b, channel);
+                return Ok(channel);
+            }
+        }
+    }
+    Err("max IPC channels")
+}
+
+/// Get the IPC channel between the active cave and another cave.
+pub fn get_ipc_channel(other_name: &str) -> Option<u64> {
+    let active = get_active();
+    let other = find_id(other_name)?;
+    unsafe {
+        for i in 0..MAX_CAVE_IPC {
+            let (a, b, ch) = CAVE_IPC[i];
+            if (a == active && b == other) || (a == other && b == active) {
+                return Some(ch);
+            }
+        }
+    }
+    None
 }
 
 /// Allocate a display sandbox region for a cave.

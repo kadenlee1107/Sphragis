@@ -9,7 +9,7 @@ use crate::drivers::uart;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 const SCREEN_WIDTH: u32 = 1280;
-const SCREEN_HEIGHT: u32 = 800;
+const SCREEN_HEIGHT: u32 = 1024;
 const BPP: u32 = 4;
 
 // GPU command types

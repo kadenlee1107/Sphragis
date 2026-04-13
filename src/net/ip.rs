@@ -58,6 +58,24 @@ impl<'a> IpPacket<'a> {
 
 /// Send an IP packet.
 pub fn send(dst_ip: u32, protocol: u8, payload: &[u8]) -> Result<(), &'static str> {
+    // Secure pipeline: if VPN or Tor is active, wrap the payload
+    let mut secured = [0u8; 1400];
+    let (final_payload, final_len) = if super::tor::is_ready() {
+        // Full pipeline: Tor(VPN(payload))
+        let mut vpn_buf = [0u8; 1400];
+        let vpn_len = super::vpn::encrypt_packet(payload, &mut vpn_buf);
+        let tor_len = super::tor::onion_encrypt(&vpn_buf[..vpn_len], &mut secured);
+        (&secured[..], tor_len)
+    } else if super::vpn::is_active() {
+        // VPN only
+        let vpn_len = super::vpn::encrypt_packet(payload, &mut secured);
+        (&secured[..], vpn_len)
+    } else {
+        // Direct — no encryption (or TLS handles it at TCP level)
+        (payload, payload.len())
+    };
+    let payload = &final_payload[..final_len];
+
     let src_ip = our_ip();
     let id = IP_ID.load(Ordering::Relaxed); IP_ID.store(id.wrapping_add(1), Ordering::Relaxed);
 
@@ -125,10 +143,32 @@ pub fn handle(data: &[u8]) {
             return;
         }
 
-        match pkt.protocol {
-            PROTO_ICMP => super::icmp::handle(&pkt),
-            PROTO_UDP => super::udp::handle(&pkt),
-            PROTO_TCP => super::tcp::handle_incoming(&pkt),
+        // Secure pipeline: decrypt inbound if VPN/Tor active
+        let mut decrypted_payload = [0u8; 1400];
+        let decrypted_pkt = if super::tor::is_ready() {
+            // Peel Tor, then VPN
+            let mut tor_out = [0u8; 1400];
+            let tor_len = super::tor::onion_decrypt(pkt.payload, &mut tor_out);
+            let vpn_len = super::vpn::decrypt_packet(&tor_out[..tor_len], &mut decrypted_payload);
+            Some(IpPacket {
+                src: pkt.src, dst: pkt.dst, protocol: pkt.protocol, ttl: pkt.ttl,
+                payload: &decrypted_payload[..vpn_len],
+            })
+        } else if super::vpn::is_active() {
+            let vpn_len = super::vpn::decrypt_packet(pkt.payload, &mut decrypted_payload);
+            Some(IpPacket {
+                src: pkt.src, dst: pkt.dst, protocol: pkt.protocol, ttl: pkt.ttl,
+                payload: &decrypted_payload[..vpn_len],
+            })
+        } else {
+            None
+        };
+        let pkt_ref = decrypted_pkt.as_ref().unwrap_or(&pkt);
+
+        match pkt_ref.protocol {
+            PROTO_ICMP => super::icmp::handle(pkt_ref),
+            PROTO_UDP => super::udp::handle(pkt_ref),
+            PROTO_TCP => super::tcp::handle_incoming(pkt_ref),
             _ => {}
         }
     }
