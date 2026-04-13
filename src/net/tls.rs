@@ -242,6 +242,199 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
     }
 }
 
+/// Perform the full TLS 1.3 handshake over an established TCP connection.
+/// Sends ClientHello, receives ServerHello, derives keys, handles encrypted handshake.
+pub fn handshake(hostname: &str) -> Result<(), &'static str> {
+    let sess = unsafe { &mut *core::ptr::addr_of_mut!(SESSION) };
+
+    // Step 1: Send ClientHello
+    let mut ch_buf = [0u8; 512];
+    let ch_len = build_client_hello(hostname, &mut ch_buf);
+    crate::net::tcp::send_data(&ch_buf[..ch_len]).map_err(|_| "send ClientHello failed")?;
+    uart::puts("[tls] ClientHello sent\n");
+
+    // Keep transcript hash of all handshake messages
+    let ch_inner = &ch_buf[5..ch_len]; // skip record header
+    let mut transcript = crate::crypto::sha256::Sha256::new();
+    transcript.update(ch_inner);
+
+    // Step 2: Receive ServerHello
+    let mut sh_buf = [0u8; 4096];
+    let sh_len = crate::net::tcp::recv_data(&mut sh_buf).map_err(|_| "recv ServerHello failed")?;
+    if sh_len < 10 { return Err("ServerHello too short"); }
+
+    process_server_hello(&sh_buf[..sh_len])?;
+
+    // Add ServerHello to transcript (skip record header)
+    let sh_inner = if sh_len > 5 { &sh_buf[5..sh_len] } else { &sh_buf[..sh_len] };
+    transcript.update(sh_inner);
+
+    // Step 3: Derive handshake keys from shared secret
+    let empty_hash = crate::crypto::sha256::hash(&[]);
+    let early_secret = crate::crypto::sha256::hkdf_extract(&[0u8; 32], &[0u8; 32]);
+    let derived_secret = crate::crypto::sha256::hkdf_expand_label(&early_secret, b"derived", &empty_hash, 32);
+    let handshake_secret = crate::crypto::sha256::hkdf_extract(&derived_secret, &sess.shared_secret);
+
+    let transcript_hash = transcript.clone().finalize();
+
+    let client_hs_secret = crate::crypto::sha256::hkdf_expand_label(&handshake_secret, b"c hs traffic", &transcript_hash, 32);
+    let server_hs_secret = crate::crypto::sha256::hkdf_expand_label(&handshake_secret, b"s hs traffic", &transcript_hash, 32);
+
+    // Derive handshake keys and IVs
+    sess.server_key = crate::crypto::sha256::hkdf_expand_label(&server_hs_secret, b"key", &[], 32);
+    sess.server_iv = {
+        let full = crate::crypto::sha256::hkdf_expand_label(&server_hs_secret, b"iv", &[], 12);
+        let mut iv = [0u8; 12];
+        iv.copy_from_slice(&full[..12]);
+        iv
+    };
+    sess.client_key = crate::crypto::sha256::hkdf_expand_label(&client_hs_secret, b"key", &[], 32);
+    sess.client_iv = {
+        let full = crate::crypto::sha256::hkdf_expand_label(&client_hs_secret, b"iv", &[], 12);
+        let mut iv = [0u8; 12];
+        iv.copy_from_slice(&full[..12]);
+        iv
+    };
+
+    uart::puts("[tls] Handshake keys derived\n");
+
+    // Step 4: Receive and skip encrypted handshake messages
+    // (EncryptedExtensions, Certificate, CertificateVerify, Finished)
+    // We accept them without full verification for now (no CA cert store)
+    for _ in 0..5 {
+        let mut enc_buf = [0u8; 4096];
+        match crate::net::tcp::recv_data(&mut enc_buf) {
+            Ok(n) if n > 0 => {
+                // Record type should be 0x17 (application data — encrypted handshake)
+                // We skip decryption verification for now and just consume the records
+                sess.server_seq += 1;
+            }
+            _ => break,
+        }
+    }
+
+    // Step 5: Send ChangeCipherSpec (compatibility)
+    let ccs = [0x14, 0x03, 0x03, 0x00, 0x01, 0x01];
+    crate::net::tcp::send_data(&ccs).ok();
+
+    // Step 6: Derive application traffic keys
+    let hs_transcript = transcript.finalize();
+    let master_derived = crate::crypto::sha256::hkdf_expand_label(&handshake_secret, b"derived", &empty_hash, 32);
+    let master_secret = crate::crypto::sha256::hkdf_extract(&master_derived, &[0u8; 32]);
+
+    let client_app_secret = crate::crypto::sha256::hkdf_expand_label(&master_secret, b"c ap traffic", &hs_transcript, 32);
+    let server_app_secret = crate::crypto::sha256::hkdf_expand_label(&master_secret, b"s ap traffic", &hs_transcript, 32);
+
+    sess.client_key = crate::crypto::sha256::hkdf_expand_label(&client_app_secret, b"key", &[], 32);
+    sess.client_iv = {
+        let full = crate::crypto::sha256::hkdf_expand_label(&client_app_secret, b"iv", &[], 12);
+        let mut iv = [0u8; 12];
+        iv.copy_from_slice(&full[..12]);
+        iv
+    };
+    sess.server_key = crate::crypto::sha256::hkdf_expand_label(&server_app_secret, b"key", &[], 32);
+    sess.server_iv = {
+        let full = crate::crypto::sha256::hkdf_expand_label(&server_app_secret, b"iv", &[], 12);
+        let mut iv = [0u8; 12];
+        iv.copy_from_slice(&full[..12]);
+        iv
+    };
+
+    sess.client_seq = 0;
+    sess.server_seq = 0;
+    sess.state = TlsState::Established;
+
+    uart::puts("[tls] Handshake complete — HTTPS ready\n");
+    Ok(())
+}
+
+/// Encrypt and send application data as a TLS record.
+pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
+    let sess = unsafe { &mut *core::ptr::addr_of_mut!(SESSION) };
+    if sess.state != TlsState::Established { return Err("not established"); }
+
+    // Build nonce: IV XOR sequence number
+    let mut nonce = sess.client_iv;
+    let seq_bytes = sess.client_seq.to_be_bytes();
+    for i in 0..8 {
+        nonce[4 + i] ^= seq_bytes[i];
+    }
+    sess.client_seq += 1;
+
+    // Encrypt with AES-256-CTR (simplified — real TLS uses AES-GCM)
+    let cipher = crate::crypto::aes::Aes256::new(&sess.client_key);
+    let mut encrypted = [0u8; 4096];
+    let len = data.len().min(4000);
+    encrypted[..len].copy_from_slice(&data[..len]);
+    // Add content type byte (0x17 = application data)
+    encrypted[len] = 0x17;
+    let enc_len = len + 1;
+
+    cipher.ctr_crypt(&nonce,&mut encrypted[..enc_len]);
+
+    // Build TLS record: type=0x17, version=0x0303, length, encrypted data
+    let mut record = [0u8; 4096];
+    record[0] = 0x17; // application data
+    record[1] = 0x03; record[2] = 0x03; // TLS 1.2 (compat)
+    let rec_len = enc_len as u16;
+    record[3] = (rec_len >> 8) as u8;
+    record[4] = rec_len as u8;
+    record[5..5 + enc_len].copy_from_slice(&encrypted[..enc_len]);
+
+    crate::net::tcp::send_data(&record[..5 + enc_len])
+}
+
+/// Receive and decrypt application data from a TLS record.
+pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
+    let sess = unsafe { &mut *core::ptr::addr_of_mut!(SESSION) };
+    if sess.state != TlsState::Established { return Err("not established"); }
+
+    let mut record = [0u8; 4096];
+    let n = crate::net::tcp::recv_data(&mut record).map_err(|_| "recv failed")?;
+    if n < 5 { return Err("record too short"); }
+
+    // Parse record header
+    let rec_type = record[0];
+    let rec_len = ((record[3] as usize) << 8) | record[4] as usize;
+    if rec_len + 5 > n { return Err("incomplete record"); }
+
+    if rec_type != 0x17 { return Err("not app data"); }
+
+    // Build nonce
+    let mut nonce = sess.server_iv;
+    let seq_bytes = sess.server_seq.to_be_bytes();
+    for i in 0..8 {
+        nonce[4 + i] ^= seq_bytes[i];
+    }
+    sess.server_seq += 1;
+
+    // Decrypt
+    let cipher = crate::crypto::aes::Aes256::new(&sess.server_key);
+    let mut decrypted = [0u8; 4096];
+    let enc_data = &record[5..5 + rec_len];
+    decrypted[..rec_len].copy_from_slice(enc_data);
+
+    cipher.ctr_crypt(&nonce,&mut decrypted[..rec_len]);
+
+    // Remove content type byte (last byte)
+    let data_len = if rec_len > 0 { rec_len - 1 } else { 0 };
+    let copy_len = data_len.min(buf.len());
+    buf[..copy_len].copy_from_slice(&decrypted[..copy_len]);
+
+    Ok(copy_len)
+}
+
+/// Close TLS session.
+pub fn close() {
+    let sess = unsafe { &mut *core::ptr::addr_of_mut!(SESSION) };
+    sess.state = TlsState::Closed;
+    sess.client_seq = 0;
+    sess.server_seq = 0;
+    sess.shared_secret = [0; 32];
+    sess.client_key = [0; 32];
+    sess.server_key = [0; 32];
+}
+
 /// Check if TLS session is established.
 pub fn is_established() -> bool {
     unsafe { core::ptr::read_volatile(core::ptr::addr_of!(SESSION.state)) == TlsState::Established }

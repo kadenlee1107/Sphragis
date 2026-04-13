@@ -12,6 +12,7 @@ const K: [u32; 64] = [
     0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
 ];
 
+#[derive(Clone)]
 pub struct Sha256 {
     state: [u32; 8],
     buffer: [u8; 64],
@@ -156,26 +157,86 @@ pub fn hash(data: &[u8]) -> [u8; 32] {
 }
 
 /// Simple key derivation: HMAC-like construction.
-/// derive_key(master_key, context) → 32-byte derived key
 pub fn derive_key(master: &[u8; 32], context: &[u8]) -> [u8; 32] {
-    // HMAC-SHA256(key, message)
-    let mut ipad = [0x36u8; 64];
-    let mut opad = [0x5cu8; 64];
+    hmac(master, context)
+}
 
-    for i in 0..32 {
-        ipad[i] ^= master[i];
-        opad[i] ^= master[i];
+/// HMAC-SHA256(key, message) → 32 bytes
+pub fn hmac(key: &[u8], message: &[u8]) -> [u8; 32] {
+    let mut padded_key = [0u8; 64];
+    if key.len() > 64 {
+        let h = hash(key);
+        padded_key[..32].copy_from_slice(&h);
+    } else {
+        padded_key[..key.len()].copy_from_slice(key);
     }
 
-    // Inner hash: H(ipad || message)
+    let mut ipad = [0x36u8; 64];
+    let mut opad = [0x5cu8; 64];
+    for i in 0..64 {
+        ipad[i] ^= padded_key[i];
+        opad[i] ^= padded_key[i];
+    }
+
     let mut inner = Sha256::new();
     inner.update(&ipad);
-    inner.update(context);
+    inner.update(message);
     let inner_hash = inner.finalize();
 
-    // Outer hash: H(opad || inner_hash)
     let mut outer = Sha256::new();
     outer.update(&opad);
     outer.update(&inner_hash);
     outer.finalize()
+}
+
+/// HKDF-Extract(salt, ikm) → PRK (32 bytes)
+pub fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; 32] {
+    let s = if salt.is_empty() { &[0u8; 32] as &[u8] } else { salt };
+    hmac(s, ikm)
+}
+
+/// HKDF-Expand(prk, info, length) → OKM
+/// Only supports length <= 32 (one block for SHA-256)
+pub fn hkdf_expand(prk: &[u8; 32], info: &[u8], length: usize) -> [u8; 32] {
+    // T(1) = HMAC-Hash(PRK, info || 0x01)
+    let mut input = [0u8; 256];
+    let ilen = info.len().min(254);
+    input[..ilen].copy_from_slice(&info[..ilen]);
+    input[ilen] = 0x01;
+    let result = hmac(prk, &input[..ilen + 1]);
+
+    if length <= 32 {
+        return result;
+    }
+    // For length > 32, would need T(2) etc. Not needed for TLS 1.3 key derivation
+    result
+}
+
+/// HKDF-Expand-Label for TLS 1.3
+/// Derives keys per RFC 8446 Section 7.1
+pub fn hkdf_expand_label(secret: &[u8; 32], label: &[u8], context: &[u8], length: usize) -> [u8; 32] {
+    // HkdfLabel = length(2) || "tls13 " || label || context
+    let mut info = [0u8; 128];
+    let mut pos = 0;
+
+    // length (2 bytes, big-endian)
+    info[pos] = (length >> 8) as u8; pos += 1;
+    info[pos] = length as u8; pos += 1;
+
+    // label with "tls13 " prefix
+    let prefix = b"tls13 ";
+    let label_len = prefix.len() + label.len();
+    info[pos] = label_len as u8; pos += 1;
+    info[pos..pos + prefix.len()].copy_from_slice(prefix); pos += prefix.len();
+    let ll = label.len().min(64);
+    info[pos..pos + ll].copy_from_slice(&label[..ll]); pos += ll;
+
+    // context
+    let cl = context.len().min(32);
+    info[pos] = cl as u8; pos += 1;
+    if cl > 0 {
+        info[pos..pos + cl].copy_from_slice(&context[..cl]); pos += cl;
+    }
+
+    hkdf_expand(secret, &info[..pos], length)
 }

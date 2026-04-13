@@ -92,8 +92,10 @@ pub fn navigate(url: &[u8]) {
 
     // Parse host and path from URL
     let url_str = unsafe { core::str::from_utf8_unchecked(&URL_BUF[..URL_LEN]) };
+    let is_https = url_str.starts_with("https://");
 
     let (host, path, port) = parse_url(url_str);
+    let port = if is_https && port == 80 { 443 } else { port };
 
     // Resolve DNS
     uart::puts("[browser] resolving: ");
@@ -131,6 +133,20 @@ pub fn navigate(url: &[u8]) {
         return;
     }
 
+    // TLS handshake for HTTPS
+    if is_https {
+        set_status(b"TLS handshake...");
+        uart::puts("[browser] TLS handshake with ");
+        uart::puts(host);
+        uart::puts("\n");
+        if crate::net::tls::handshake(host).is_err() {
+            unsafe { STATE = BrowserState::Error; }
+            set_status(b"TLS handshake failed");
+            crate::net::tcp::close();
+            return;
+        }
+    }
+
     set_status(b"Sending request...");
 
     // Build HTTP GET
@@ -145,7 +161,13 @@ pub fn navigate(url: &[u8]) {
     let trail = b"\r\nUser-Agent: BatBrowser/1.0\r\nAccept: text/html\r\nConnection: close\r\n\r\n";
     req[rlen..rlen + trail.len()].copy_from_slice(trail); rlen += trail.len();
 
-    if crate::net::tcp::send_data(&req[..rlen]).is_err() {
+    // Send via TLS or plain TCP
+    let send_ok = if is_https {
+        crate::net::tls::send_app_data(&req[..rlen]).is_ok()
+    } else {
+        crate::net::tcp::send_data(&req[..rlen]).is_ok()
+    };
+    if !send_ok {
         unsafe { STATE = BrowserState::Error; }
         set_status(b"Send failed");
         crate::net::tcp::close();
@@ -158,10 +180,14 @@ pub fn navigate(url: &[u8]) {
     let mut raw = [0u8; 16384];
     let mut total = 0;
 
-    // Read chunks until connection closes
     for _ in 0..10 {
         let mut chunk = [0u8; 4096];
-        match crate::net::tcp::recv_data(&mut chunk) {
+        let recv_result = if is_https {
+            crate::net::tls::recv_app_data(&mut chunk)
+        } else {
+            crate::net::tcp::recv_data(&mut chunk)
+        };
+        match recv_result {
             Ok(n) if n > 0 => {
                 let copy = n.min(raw.len() - total);
                 raw[total..total + copy].copy_from_slice(&chunk[..copy]);
@@ -172,6 +198,7 @@ pub fn navigate(url: &[u8]) {
         }
     }
 
+    if is_https { crate::net::tls::close(); }
     crate::net::tcp::close();
 
     if total == 0 {
