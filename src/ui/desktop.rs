@@ -29,7 +29,7 @@ pub fn resume() -> ! {
                 0x04 => { switch_to(wm::APP_NETMON); in_shell = false; continue; }
                 0x05 => { switch_to(wm::APP_EDITOR); in_shell = false; continue; }
                 0x09 => {
-                    let next = (wm::active_app() + 1) % 7;
+                    let next = (wm::active_app() + 1) % 8;
                     switch_to(next);
                     in_shell = next == wm::APP_SHELL;
                     continue;
@@ -126,7 +126,7 @@ pub fn run() -> ! {
 
                 // Tab key — cycle app in focused pane
                 0x09 => {
-                    let next = (wm::active_app() + 1) % 7;
+                    let next = (wm::active_app() + 1) % 8;
                     wm::switch_app(next);
                     in_shell = next == wm::APP_SHELL;
                     render_current();
@@ -219,6 +219,7 @@ fn render_app(app: u8) {
         wm::APP_NETMON => apps::netmon::render(),
         wm::APP_EDITOR => apps::editor::render(),
         wm::APP_SECURITY => apps::security::render(),
+        wm::APP_COMMS => apps::comms::render(),
         wm::APP_BATCAVE => apps::batcave_mgr::render(),
         _ => {}
     }

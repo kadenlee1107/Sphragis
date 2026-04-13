@@ -28,10 +28,11 @@ pub const APP_FILES: u8 = 2;
 pub const APP_NETMON: u8 = 3;
 pub const APP_EDITOR: u8 = 4;
 pub const APP_SECURITY: u8 = 5;
-pub const APP_BATCAVE: u8 = 6;
+pub const APP_COMMS: u8 = 6;
+pub const APP_BATCAVE: u8 = 7;
 
-const NUM_APPS: u8 = 7;
-const APP_NAMES: [&str; 7] = ["Terminal", "Dashboard", "Files", "NetMon", "Editor", "SecKit", "BatCaves"];
+const NUM_APPS: u8 = 8;
+const APP_NAMES: [&str; 8] = ["Term", "Dash", "Files", "Net", "Edit", "Sec", "Comms", "Cave"];
 
 static NEEDS_REDRAW: AtomicBool = AtomicBool::new(true);
 
@@ -289,7 +290,8 @@ pub fn draw_frame() {
             3 => "4:NM",
             4 => "5:ED",
             5 => "6:SK",
-            6 => "7:BC",
+            6 => "7:CM",
+            7 => "8:BC",
             _ => "",
         };
         // Highlight: active app in primary panel

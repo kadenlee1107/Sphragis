@@ -606,12 +606,45 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str) {
             }
         }
         "install" => {
-            match cave::install_tool(arg1, arg2) {
-                Ok(()) => {
-                    console::puts("  Installed "); console::puts(arg2);
-                    console::puts(" in "); console::puts(arg1); console::puts("\n");
+            if arg1.is_empty() || arg2.is_empty() {
+                console::puts("  usage: batcave install <cave> <tool>\n");
+            } else {
+                // Enter the cave first
+                cave::enter(arg1).ok();
+
+                // Register the tool
+                match cave::install_tool(arg1, arg2) {
+                    Ok(()) => {
+                        console::puts("  Installing "); console::puts(arg2);
+                        console::puts(" in "); console::puts(arg1); console::puts("...\n");
+
+                        // Create tool directory in VFS
+                        ensure_default_cave();
+                        let argv_mkdir: [&str; 4] = ["busybox", "mkdir", "-p", ""];
+                        let mut path_buf = [0u8; 64];
+                        let prefix = b"/usr/local/bin";
+                        path_buf[..prefix.len()].copy_from_slice(prefix);
+                        crate::batcave::linux::runner::run_busybox_cmd(&argv_mkdir[..3]).ok();
+
+                        // Create a symlink for the tool → busybox
+                        // This makes the tool available as a busybox applet
+                        if crate::batcave::linux::vfs::is_ready() {
+                            if let Ok(bin) = crate::batcave::linux::vfs::resolve_path(b"/bin") {
+                                // Check if not already a symlink
+                                if crate::batcave::linux::vfs::find_child(bin, arg2.as_bytes()).is_none() {
+                                    crate::batcave::linux::vfs::create_symlink(
+                                        bin, arg2.as_bytes(), b"/bin/busybox"
+                                    ).ok();
+                                }
+                            }
+                        }
+
+                        console::puts("  "); console::puts(arg2);
+                        console::puts(" installed (busybox applet)\n");
+                        console::puts("  Run with: batcave run "); console::puts(arg2); console::puts("\n");
+                    }
+                    Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
                 }
-                Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
             }
         }
         "grant" => {
