@@ -103,6 +103,69 @@ impl Aes256 {
     }
 }
 
+// ─── AES-128 (10 rounds, 16-byte key) for TLS 1.3 ───
+
+const NK128: usize = 4;
+const NR128: usize = 10;
+
+pub struct Aes128 {
+    round_keys: [u32; 4 * (NR128 + 1)],
+}
+
+impl Aes128 {
+    pub fn new(key: &[u8; 16]) -> Self {
+        let mut rk = [0u32; 4 * (NR128 + 1)];
+        // Key expansion for AES-128
+        for i in 0..NK128 {
+            rk[i] = u32::from_be_bytes([key[4*i], key[4*i+1], key[4*i+2], key[4*i+3]]);
+        }
+        for i in NK128..(4 * (NR128 + 1)) {
+            let mut temp = rk[i - 1];
+            if i % NK128 == 0 {
+                temp = sub_word(rot_word(temp)) ^ ((RCON[i / NK128] as u32) << 24);
+            }
+            rk[i] = rk[i - NK128] ^ temp;
+        }
+        Self { round_keys: rk }
+    }
+
+    pub fn encrypt_block(&self, block: &mut [u8; 16]) {
+        let mut state = [[0u8; 4]; 4];
+        for i in 0..4 { for j in 0..4 { state[j][i] = block[i * 4 + j]; } }
+        add_round_key(&mut state, &self.round_keys, 0);
+        for round in 1..NR128 {
+            sub_bytes(&mut state);
+            shift_rows(&mut state);
+            mix_columns(&mut state);
+            add_round_key(&mut state, &self.round_keys, round);
+        }
+        sub_bytes(&mut state);
+        shift_rows(&mut state);
+        add_round_key(&mut state, &self.round_keys, NR128);
+        for i in 0..4 { for j in 0..4 { block[i * 4 + j] = state[j][i]; } }
+    }
+
+    pub fn ctr_crypt(&self, nonce: &[u8; 12], data: &mut [u8]) {
+        let mut counter = [0u8; 16];
+        counter[..12].copy_from_slice(nonce);
+        let mut block_num: u32 = 0;
+        let mut offset = 0;
+        while offset < data.len() {
+            counter[12] = (block_num >> 24) as u8;
+            counter[13] = (block_num >> 16) as u8;
+            counter[14] = (block_num >> 8) as u8;
+            counter[15] = block_num as u8;
+            let mut keystream = counter;
+            self.encrypt_block(&mut keystream);
+            let remaining = data.len() - offset;
+            let chunk = if remaining < 16 { remaining } else { 16 };
+            for i in 0..chunk { data[offset + i] ^= keystream[i]; }
+            offset += 16;
+            block_num += 1;
+        }
+    }
+}
+
 fn key_expansion(key: &[u8; 32], rk: &mut [u32; 4 * (NR + 1)]) {
     for i in 0..NK {
         rk[i] = u32::from_be_bytes([

@@ -299,15 +299,19 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     let client_hs_secret = crate::crypto::sha256::hkdf_expand_label(&handshake_secret, b"c hs traffic", &transcript_hash, 32);
     let server_hs_secret = crate::crypto::sha256::hkdf_expand_label(&handshake_secret, b"s hs traffic", &transcript_hash, 32);
 
-    // Derive handshake keys and IVs
-    sess.server_key = crate::crypto::sha256::hkdf_expand_label(&server_hs_secret, b"key", &[], 32);
+    // Derive handshake keys and IVs (AES-128-GCM = 16-byte key, 12-byte IV)
+    let server_key_full = crate::crypto::sha256::hkdf_expand_label(&server_hs_secret, b"key", &[], 16);
+    sess.server_key = [0; 32];
+    sess.server_key[..16].copy_from_slice(&server_key_full[..16]);
     sess.server_iv = {
         let full = crate::crypto::sha256::hkdf_expand_label(&server_hs_secret, b"iv", &[], 12);
         let mut iv = [0u8; 12];
         iv.copy_from_slice(&full[..12]);
         iv
     };
-    sess.client_key = crate::crypto::sha256::hkdf_expand_label(&client_hs_secret, b"key", &[], 32);
+    let client_key_full = crate::crypto::sha256::hkdf_expand_label(&client_hs_secret, b"key", &[], 16);
+    sess.client_key = [0; 32];
+    sess.client_key[..16].copy_from_slice(&client_key_full[..16]);
     sess.client_iv = {
         let full = crate::crypto::sha256::hkdf_expand_label(&client_hs_secret, b"iv", &[], 12);
         let mut iv = [0u8; 12];
@@ -344,14 +348,19 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     let client_app_secret = crate::crypto::sha256::hkdf_expand_label(&master_secret, b"c ap traffic", &hs_transcript, 32);
     let server_app_secret = crate::crypto::sha256::hkdf_expand_label(&master_secret, b"s ap traffic", &hs_transcript, 32);
 
-    sess.client_key = crate::crypto::sha256::hkdf_expand_label(&client_app_secret, b"key", &[], 32);
+    // Application keys (AES-128-GCM)
+    let ck = crate::crypto::sha256::hkdf_expand_label(&client_app_secret, b"key", &[], 16);
+    sess.client_key = [0; 32];
+    sess.client_key[..16].copy_from_slice(&ck[..16]);
     sess.client_iv = {
         let full = crate::crypto::sha256::hkdf_expand_label(&client_app_secret, b"iv", &[], 12);
         let mut iv = [0u8; 12];
         iv.copy_from_slice(&full[..12]);
         iv
     };
-    sess.server_key = crate::crypto::sha256::hkdf_expand_label(&server_app_secret, b"key", &[], 32);
+    let sk = crate::crypto::sha256::hkdf_expand_label(&server_app_secret, b"key", &[], 16);
+    sess.server_key = [0; 32];
+    sess.server_key[..16].copy_from_slice(&sk[..16]);
     sess.server_iv = {
         let full = crate::crypto::sha256::hkdf_expand_label(&server_app_secret, b"iv", &[], 12);
         let mut iv = [0u8; 12];
@@ -381,13 +390,15 @@ pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
     sess.client_seq += 1;
 
     // Encrypt with AES-256-CTR (simplified — real TLS uses AES-GCM)
-    let cipher = crate::crypto::aes::Aes256::new(&sess.client_key);
+    let cipher = {let mut k=[0u8;16]; k.copy_from_slice(&sess.client_key[..16]); crate::crypto::aes::Aes128::new(&k)};
     let mut encrypted = [0u8; 4096];
     let len = data.len().min(4000);
     encrypted[..len].copy_from_slice(&data[..len]);
-    // Add content type byte (0x17 = application data)
+    // Add content type byte (0x17 = application data) + 16-byte GCM tag
     encrypted[len] = 0x17;
-    let enc_len = len + 1;
+    // GCM auth tag (placeholder — real GHASH computation needed for full compliance)
+    for i in 0..16 { encrypted[len + 1 + i] = 0; }
+    let enc_len = len + 1 + 16;
 
     cipher.ctr_crypt(&nonce,&mut encrypted[..enc_len]);
 
@@ -428,15 +439,15 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     sess.server_seq += 1;
 
     // Decrypt
-    let cipher = crate::crypto::aes::Aes256::new(&sess.server_key);
+    let cipher = {let mut k=[0u8;16]; k.copy_from_slice(&sess.server_key[..16]); crate::crypto::aes::Aes128::new(&k)};
     let mut decrypted = [0u8; 4096];
     let enc_data = &record[5..5 + rec_len];
     decrypted[..rec_len].copy_from_slice(enc_data);
 
     cipher.ctr_crypt(&nonce,&mut decrypted[..rec_len]);
 
-    // Remove content type byte (last byte)
-    let data_len = if rec_len > 0 { rec_len - 1 } else { 0 };
+    // Remove GCM auth tag (16 bytes) and content type byte (1 byte)
+    let data_len = if rec_len > 17 { rec_len - 17 } else { 0 };
     let copy_len = data_len.min(buf.len());
     buf[..copy_len].copy_from_slice(&decrypted[..copy_len]);
 
