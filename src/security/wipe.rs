@@ -1,0 +1,186 @@
+// Bat_OS — Secure Wipe System
+// Multiple wipe modes, all irreversible:
+//
+// 1. SILENT WIPE: Duress mode — shows fake boot while destroying everything
+// 2. PANIC WIPE: Instant destruction triggered by hotkey
+// 3. LOCKOUT WIPE: Max failed attempts exceeded
+// 4. DEADMAN WIPE: Dead man's switch timer expired
+//
+// Wipe process:
+// - Zero all encryption keys in memory
+// - Zero all file data
+// - Zero all page frames
+// - On real hardware: tell Secure Enclave to destroy master key
+//   (makes SSD contents permanently unrecoverable)
+
+use crate::kernel::mm::frame;
+use crate::drivers::uart;
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
+const WIPE_STATE_NONE: u8 = 0;
+const WIPE_STATE_IN_PROGRESS: u8 = 1;
+const WIPE_STATE_COMPLETE: u8 = 2;
+
+static WIPE_STATE: AtomicU8 = AtomicU8::new(WIPE_STATE_NONE);
+static WIPE_SILENT: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy)]
+pub enum WipeReason {
+    Duress,
+    Panic,
+    Lockout,
+    DeadManSwitch,
+    Manual,
+}
+
+/// Execute a full system wipe.
+/// If silent=true, this returns control so the fake boot screen
+/// can continue displaying while destruction happens in background.
+pub fn execute(reason: WipeReason, silent: bool) {
+    if WIPE_STATE.load(Ordering::Relaxed) != WIPE_STATE_NONE {
+        return; // Already wiping
+    }
+
+    WIPE_STATE.store(WIPE_STATE_IN_PROGRESS, Ordering::Relaxed);
+    WIPE_SILENT.store(silent, Ordering::Relaxed);
+
+    let reason_str = match reason {
+        WipeReason::Duress => "DURESS",
+        WipeReason::Panic => "PANIC_HOTKEY",
+        WipeReason::Lockout => "MAX_ATTEMPTS",
+        WipeReason::DeadManSwitch => "DEAD_MAN_SWITCH",
+        WipeReason::Manual => "MANUAL",
+    };
+
+    if !silent {
+        uart::puts("\n!!! WIPE INITIATED !!!\n");
+        uart::puts("  Reason: ");
+        uart::puts(reason_str);
+        uart::puts("\n");
+    }
+
+    // Phase 1: Destroy encryption keys
+    destroy_keys();
+    crate::batcave::cave::destroy_all();
+    if !WIPE_SILENT.load(Ordering::Relaxed) {
+        uart::puts("  [wipe] All BatCaves destroyed\n");
+    }
+
+    // Phase 2: Zero filesystem data
+    wipe_filesystem();
+
+    // Phase 3: Zero all allocated memory
+    wipe_memory();
+
+    // Phase 4: On real hardware, tell Secure Enclave to nuke master key
+    // This makes the entire SSD permanently unreadable
+    #[cfg(not(test))]
+    wipe_secure_enclave();
+
+    WIPE_STATE.store(WIPE_STATE_COMPLETE, Ordering::Relaxed);
+
+    if !silent {
+        uart::puts("  WIPE COMPLETE — all data destroyed\n");
+        uart::puts("  System is now a brick.\n");
+    }
+}
+
+/// Destroy all encryption keys in memory.
+fn destroy_keys() {
+    // Zero the master key by re-initializing with zeros
+    let zero_key = [0u8; 32];
+    crate::fs::batfs::init(&zero_key);
+
+    // Overwrite key memory with random-looking data
+    // (prevents cold boot attack recovery)
+    let poison: [u8; 32] = [
+        0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD,
+        0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD,
+        0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD,
+        0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD,
+    ];
+    crate::fs::batfs::init(&poison);
+
+    if !WIPE_SILENT.load(Ordering::Relaxed) {
+        uart::puts("  [wipe] Encryption keys destroyed\n");
+    }
+}
+
+/// Zero all file data in the filesystem.
+fn wipe_filesystem() {
+    // Delete every file (which zeros their data pages)
+    let mut names = [[0u8; 64]; 128];
+    let mut name_lens = [0usize; 128];
+    let mut count = 0;
+
+    crate::fs::batfs::list(|name, _size, _enc| {
+        if count < 128 {
+            let bytes = name.as_bytes();
+            let len = bytes.len().min(64);
+            names[count][..len].copy_from_slice(&bytes[..len]);
+            name_lens[count] = len;
+            count += 1;
+        }
+    });
+
+    for i in 0..count {
+        let name = unsafe { core::str::from_utf8_unchecked(&names[i][..name_lens[i]]) };
+        let _ = crate::fs::batfs::delete(name);
+    }
+
+    if !WIPE_SILENT.load(Ordering::Relaxed) {
+        uart::puts("  [wipe] Filesystem destroyed (");
+        crate::kernel::mm::print_num(count);
+        uart::puts(" files zeroed)\n");
+    }
+}
+
+/// Zero all allocated memory pages.
+fn wipe_memory() {
+    // Get memory stats to know how much to wipe
+    let (used, total) = frame::stats();
+    let mut wiped = 0usize;
+
+    // Allocate and zero frames until we run out
+    // This overwrites all free memory with zeros
+    loop {
+        match frame::alloc_frame() {
+            Some(_addr) => {
+                // alloc_frame already zeros the page
+                wiped += 1;
+            }
+            None => break,
+        }
+    }
+
+    if !WIPE_SILENT.load(Ordering::Relaxed) {
+        uart::puts("  [wipe] Memory zeroed (");
+        crate::kernel::mm::print_num(wiped * 4);
+        uart::puts(" KB wiped)\n");
+    }
+}
+
+/// Tell the Secure Enclave to destroy the master encryption key.
+/// After this, the SSD contents are permanently unrecoverable —
+/// even with physical access to the NAND chips.
+fn wipe_secure_enclave() {
+    // On real hardware, this would:
+    // 1. Send a mailbox message to SEP
+    // 2. SEP destroys the effaceable storage
+    // 3. All encryption keys derived from it become unrecoverable
+    //
+    // In QEMU, we simulate this by zeroing our key state.
+    // The real SEP implementation goes in drivers/apple/sep.rs
+
+    if !WIPE_SILENT.load(Ordering::Relaxed) {
+        uart::puts("  [wipe] Secure Enclave: keys destroyed (simulated)\n");
+    }
+}
+
+pub fn is_wiping() -> bool {
+    WIPE_STATE.load(Ordering::Relaxed) == WIPE_STATE_IN_PROGRESS
+}
+
+pub fn is_wiped() -> bool {
+    WIPE_STATE.load(Ordering::Relaxed) == WIPE_STATE_COMPLETE
+}

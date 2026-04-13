@@ -1,0 +1,700 @@
+// Bat_OS — In-Memory Virtual Filesystem for BatCave Containers
+// Provides a Linux-like directory tree so busybox sees /bin, /etc, /tmp, etc.
+// All data lives in RAM (frame allocator pages). No disk.
+
+use crate::kernel::mm::frame;
+use crate::drivers::uart;
+
+const MAX_NODES: usize = 512;
+const NAME_LEN: usize = 64;
+const LINK_LEN: usize = 128;
+const PAGE_SIZE: usize = 4096;
+// Max pages per file (4KB each → 256KB max file)
+const MAX_FILE_PAGES: usize = 64;
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum NodeType {
+    Free,
+    Directory,
+    File,
+    Symlink,
+    DevNull,
+    DevZero,
+    DevConsole,
+    Socket,     // network socket (TCP/UDP)
+}
+
+#[derive(Clone, Copy)]
+pub struct VfsNode {
+    pub node_type: NodeType,
+    pub name: [u8; NAME_LEN],
+    pub name_len: usize,
+    pub parent: u16,
+    pub mode: u32,
+    pub size: usize,
+    pub data_addr: usize,       // physical address of file data pages
+    pub link_target: [u8; LINK_LEN],
+    pub link_len: usize,
+    pub uid: u32,
+    pub gid: u32,
+    pub nlink: u32,
+}
+
+impl VfsNode {
+    const fn empty() -> Self {
+        VfsNode {
+            node_type: NodeType::Free,
+            name: [0; NAME_LEN],
+            name_len: 0,
+            parent: 0,
+            mode: 0,
+            size: 0,
+            data_addr: 0,
+            link_target: [0; LINK_LEN],
+            link_len: 0,
+            uid: 0,
+            gid: 0,
+            nlink: 1,
+        }
+    }
+
+    pub fn name_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.name[..self.name_len]) }
+    }
+
+    pub fn link_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.link_target[..self.link_len]) }
+    }
+}
+
+// Support up to 8 concurrent VFS instances (one per active BatCave)
+const MAX_VFS_INSTANCES: usize = 8;
+
+/// A complete VFS instance for one BatCave.
+struct VfsInstance {
+    nodes: [VfsNode; MAX_NODES],
+    cwd: u16,
+    ready: bool,
+    cave_id: usize, // which BatCave owns this instance
+}
+
+impl VfsInstance {
+    const fn empty() -> Self {
+        VfsInstance {
+            nodes: [VfsNode::empty(); MAX_NODES],
+            cwd: 0,
+            ready: false,
+            cave_id: usize::MAX,
+        }
+    }
+}
+
+static mut INSTANCES: [VfsInstance; MAX_VFS_INSTANCES] = {
+    const EMPTY: VfsInstance = VfsInstance::empty();
+    [EMPTY; MAX_VFS_INSTANCES]
+};
+static mut ACTIVE_INSTANCE: usize = 0;
+
+// Helper: get the active VFS instance
+fn active() -> &'static VfsInstance {
+    unsafe {
+        let idx = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        &(*core::ptr::addr_of!(INSTANCES))[idx]
+    }
+}
+fn active_mut() -> &'static mut VfsInstance {
+    unsafe {
+        let idx = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        &mut (*core::ptr::addr_of_mut!(INSTANCES))[idx]
+    }
+}
+
+// Compatibility: access nodes through active instance
+macro_rules! NODES {
+    () => { unsafe {
+        let idx = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        &(*core::ptr::addr_of!(INSTANCES))[idx].nodes
+    } };
+}
+macro_rules! NODES_MUT {
+    () => { unsafe {
+        let idx = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        &mut (*core::ptr::addr_of_mut!(INSTANCES))[idx].nodes
+    } };
+}
+
+// Legacy compatibility statics — redirect to active instance
+static mut VFS_READY: bool = false;
+
+/// Initialize a VFS instance for a specific BatCave.
+/// If cave_id == usize::MAX, initializes the default (slot 0).
+pub fn init() {
+    init_for_cave(usize::MAX);
+}
+
+/// Initialize VFS for a specific cave. Allocates a VFS slot.
+pub fn init_for_cave(cave_id: usize) {
+    // Find a free slot (or reuse existing for this cave)
+    let slot = unsafe {
+        let instances = &*core::ptr::addr_of!(INSTANCES);
+        let mut found = usize::MAX;
+        for i in 0..MAX_VFS_INSTANCES {
+            if instances[i].cave_id == cave_id && instances[i].ready {
+                found = i; break; // reuse existing
+            }
+        }
+        if found == usize::MAX {
+            for i in 0..MAX_VFS_INSTANCES {
+                if !instances[i].ready {
+                    found = i; break;
+                }
+            }
+        }
+        if found == usize::MAX { found = 0; } // fallback to slot 0
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(ACTIVE_INSTANCE), found);
+        found
+    };
+
+    unsafe {
+        let inst = &mut (*core::ptr::addr_of_mut!(INSTANCES))[slot];
+        inst.cave_id = cave_id;
+        for i in 0..MAX_NODES {
+            inst.nodes[i] = VfsNode::empty();
+        }
+
+        // Node 0 = root directory "/"
+        inst.nodes[0].node_type = NodeType::Directory;
+        inst.nodes[0].name[0] = b'/';
+        inst.nodes[0].name_len = 1;
+        inst.nodes[0].parent = 0;
+        inst.nodes[0].mode = 0o40755;
+        inst.nodes[0].nlink = 2;
+
+        inst.cwd = 0;
+        inst.ready = true;
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(VFS_READY), true);
+    }
+
+    populate_rootfs();
+    uart::puts("  [vfs] Filesystem ready (cave ");
+    if cave_id == usize::MAX {
+        uart::puts("default");
+    } else {
+        crate::kernel::mm::print_num(cave_id);
+    }
+    uart::puts(")\n");
+}
+
+/// Switch to a specific cave's VFS instance.
+pub fn switch_to_cave(cave_id: usize) {
+    unsafe {
+        let instances = &*core::ptr::addr_of!(INSTANCES);
+        for i in 0..MAX_VFS_INSTANCES {
+            if instances[i].cave_id == cave_id && instances[i].ready {
+                core::ptr::write_volatile(core::ptr::addr_of_mut!(ACTIVE_INSTANCE), i);
+                return;
+            }
+        }
+    }
+}
+
+/// Destroy a cave's VFS instance (wipe all data).
+pub fn destroy_cave_vfs(cave_id: usize) {
+    unsafe {
+        let instances = &mut *core::ptr::addr_of_mut!(INSTANCES);
+        for i in 0..MAX_VFS_INSTANCES {
+            if instances[i].cave_id == cave_id {
+                // Zero all node data
+                for j in 0..MAX_NODES {
+                    instances[i].nodes[j] = VfsNode::empty();
+                }
+                instances[i].ready = false;
+                instances[i].cave_id = usize::MAX;
+                return;
+            }
+        }
+    }
+}
+
+/// Check if VFS is initialized.
+pub fn is_ready() -> bool {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(VFS_READY)) }
+}
+
+// ─── Node Operations ───
+
+/// Find a child node by name within a parent directory.
+pub fn find_child(parent_idx: u16, name: &[u8]) -> Option<u16> {
+    unsafe {
+        let idx = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        let nodes = &(*core::ptr::addr_of!(INSTANCES))[idx].nodes;
+        for i in 0..MAX_NODES {
+            let n = &nodes[i];
+            if n.node_type == NodeType::Free { continue; }
+            if n.parent != parent_idx { continue; }
+            if i as u16 == parent_idx && parent_idx == 0 { continue; } // skip root self-ref
+            if n.name_len == name.len() {
+                let mut eq = true;
+                for j in 0..name.len() {
+                    if n.name[j] != name[j] { eq = false; break; }
+                }
+                if eq { return Some(i as u16); }
+            }
+        }
+    }
+    None
+}
+
+/// Allocate a free node slot.
+fn alloc_node() -> Option<u16> {
+    unsafe {
+        let idx = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        let nodes = &(*core::ptr::addr_of!(INSTANCES))[idx].nodes;
+        for i in 1..MAX_NODES { // skip 0 (root)
+            if nodes[i].node_type == NodeType::Free {
+                return Some(i as u16);
+            }
+        }
+    }
+    None
+}
+
+/// Create a new node under a parent directory.
+pub fn create_node(parent: u16, name: &[u8], ntype: NodeType, mode: u32) -> Result<u16, i64> {
+    if name.len() > NAME_LEN { return Err(-36); } // ENAMETOOLONG
+    let idx = alloc_node().ok_or(-28i64)?; // ENOSPC
+
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        let nodes = &mut (*core::ptr::addr_of_mut!(INSTANCES))[ai].nodes;
+        let n = &mut nodes[idx as usize];
+        n.node_type = ntype;
+        n.name_len = name.len();
+        for i in 0..name.len() {
+            n.name[i] = name[i];
+        }
+        n.parent = parent;
+        n.mode = mode;
+        n.size = 0;
+        n.data_addr = 0;
+        n.link_target = [0; LINK_LEN];
+        n.link_len = 0;
+        n.uid = 0;
+        n.gid = 0;
+        n.nlink = if ntype == NodeType::Directory { 2 } else { 1 };
+
+        // Update parent nlink for directories
+        if ntype == NodeType::Directory {
+            nodes[parent as usize].nlink += 1;
+        }
+    }
+    Ok(idx)
+}
+
+/// Create a symlink node.
+pub fn create_symlink(parent: u16, name: &[u8], target: &[u8]) -> Result<u16, i64> {
+    let idx = create_node(parent, name, NodeType::Symlink, 0o120777)?;
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        let n = &mut (*core::ptr::addr_of_mut!(INSTANCES))[ai].nodes[idx as usize];
+        n.link_len = target.len().min(LINK_LEN);
+        for i in 0..n.link_len {
+            n.link_target[i] = target[i];
+        }
+    }
+    Ok(idx)
+}
+
+/// Write data to a file node (allocates pages as needed).
+pub fn write_file_data(idx: u16, data: &[u8]) -> Result<(), i64> {
+    let pages_needed = (data.len() + PAGE_SIZE - 1) / PAGE_SIZE;
+    if pages_needed > MAX_FILE_PAGES { return Err(-27); } // EFBIG
+
+    // Allocate contiguous pages
+    let base = frame::alloc_frame().ok_or(-12i64)?; // ENOMEM
+    for _ in 1..pages_needed {
+        frame::alloc_frame().ok_or(-12i64)?;
+    }
+
+    // Copy data using inline asm (HVF-safe)
+    for i in 0..data.len() {
+        unsafe {
+            core::arch::asm!("strb {v:w}, [{a}]",
+                a = in(reg) base + i,
+                v = in(reg) data[i] as u32);
+        }
+    }
+
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        let n = &mut (*core::ptr::addr_of_mut!(INSTANCES))[ai].nodes[idx as usize];
+        n.data_addr = base;
+        n.size = data.len();
+    }
+    Ok(())
+}
+
+/// Read file data into a userspace buffer. Returns bytes read.
+pub fn read_file_data(idx: u16, offset: usize, buf_addr: usize, count: usize) -> Result<usize, i64> {
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        let n = &(*core::ptr::addr_of!(INSTANCES))[ai].nodes[idx as usize];
+        if n.data_addr == 0 || offset >= n.size { return Ok(0); } // EOF
+
+        let available = n.size - offset;
+        let to_read = available.min(count);
+        let src = n.data_addr + offset;
+
+        for i in 0..to_read {
+            let byte: u32;
+            core::arch::asm!("ldrb {v:w}, [{a}]",
+                a = in(reg) src + i, v = out(reg) byte);
+            core::arch::asm!("strb {v:w}, [{a}]",
+                a = in(reg) buf_addr + i, v = in(reg) byte);
+        }
+        Ok(to_read)
+    }
+}
+
+/// Write data from userspace buffer to a file. Returns bytes written.
+pub fn write_to_file(idx: u16, offset: usize, buf_addr: usize, count: usize) -> Result<usize, i64> {
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        let n = &mut (*core::ptr::addr_of_mut!(INSTANCES))[ai].nodes[idx as usize];
+        let new_size = offset + count;
+
+        // Allocate data page if needed
+        if n.data_addr == 0 {
+            let pages = (new_size + PAGE_SIZE - 1) / PAGE_SIZE;
+            let base = frame::alloc_frame().ok_or(-12i64)?;
+            for _ in 1..pages {
+                frame::alloc_frame().ok_or(-12i64)?;
+            }
+            n.data_addr = base;
+            // Zero the allocated pages
+            for i in 0..(pages * PAGE_SIZE) {
+                core::arch::asm!("strb wzr, [{a}]", a = in(reg) base + i);
+            }
+        }
+
+        let dst = n.data_addr + offset;
+        for i in 0..count {
+            let byte: u32;
+            core::arch::asm!("ldrb {v:w}, [{a}]",
+                a = in(reg) buf_addr + i, v = out(reg) byte);
+            core::arch::asm!("strb {v:w}, [{a}]",
+                a = in(reg) dst + i, v = in(reg) byte);
+        }
+
+        if new_size > n.size {
+            n.size = new_size;
+        }
+        Ok(count)
+    }
+}
+
+// ─── Path Resolution ───
+
+/// Resolve a path string to a node index.
+/// Handles absolute ("/bin/sh") and relative ("../etc") paths.
+/// Follows symlinks up to 8 levels deep.
+pub fn resolve_path(path: &[u8]) -> Result<u16, i64> {
+    resolve_path_depth(path, 0)
+}
+
+fn resolve_path_depth(path: &[u8], depth: usize) -> Result<u16, i64> {
+    if depth > 8 { return Err(-40); } // ELOOP
+    if path.is_empty() { return Err(-2); } // ENOENT
+
+    let mut current: u16 = if path[0] == b'/' {
+        0 // absolute path → start at root
+    } else {
+        unsafe {
+            let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+            (*core::ptr::addr_of!(INSTANCES))[ai].cwd
+        } // relative → start at cwd
+    };
+
+    let mut i = 0;
+    let len = path.len();
+
+    while i < len {
+        // Skip leading slashes
+        while i < len && path[i] == b'/' { i += 1; }
+        if i >= len { break; }
+
+        // Extract component
+        let start = i;
+        while i < len && path[i] != b'/' { i += 1; }
+        let component = &path[start..i];
+
+        if component.is_empty() { continue; }
+
+        // Handle "." and ".."
+        if component == b"." { continue; }
+        if component == b".." {
+            current = unsafe {
+                let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+                (*core::ptr::addr_of!(INSTANCES))[ai].nodes[current as usize].parent
+            };
+            continue;
+        }
+
+        // Look up child
+        match find_child(current, component) {
+            Some(child) => {
+                // Follow symlinks
+                unsafe {
+                    let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+                    let nodes = &(*core::ptr::addr_of!(INSTANCES))[ai].nodes;
+                    if nodes[child as usize].node_type == NodeType::Symlink {
+                        let target = &nodes[child as usize].link_target[..nodes[child as usize].link_len];
+                        // If more path remains, resolve symlink then continue
+                        if i < len {
+                            // Build: symlink_target + "/" + remaining_path
+                            let mut combined = [0u8; 256];
+                            let mut clen = 0;
+                            for &b in target { if clen < 255 { combined[clen] = b; clen += 1; } }
+                            if clen < 255 { combined[clen] = b'/'; clen += 1; }
+                            for j in i..len { if clen < 255 { combined[clen] = path[j]; clen += 1; } }
+                            return resolve_path_depth(&combined[..clen], depth + 1);
+                        } else {
+                            // Terminal symlink — resolve the target
+                            let resolved = resolve_path_depth(target, depth + 1)?;
+                            current = resolved;
+                            continue;
+                        }
+                    }
+                }
+                current = child;
+            }
+            None => return Err(-2), // ENOENT
+        }
+    }
+
+    Ok(current)
+}
+
+/// Resolve path but return the parent directory and the final component name.
+/// Used for creating new files/dirs.
+pub fn resolve_parent(path: &[u8]) -> Result<(u16, &[u8]), i64> {
+    if path.is_empty() { return Err(-2); }
+
+    // Find the last '/' to split parent path and basename
+    let mut last_slash = None;
+    for i in (0..path.len()).rev() {
+        if path[i] == b'/' { last_slash = Some(i); break; }
+    }
+
+    match last_slash {
+        Some(pos) => {
+            let parent_path = if pos == 0 { &path[..1] } else { &path[..pos] };
+            let name = &path[pos + 1..];
+            let parent = resolve_path(parent_path)?;
+            Ok((parent, name))
+        }
+        None => {
+            // No slash → relative to CWD
+            let parent = unsafe {
+                let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+                (*core::ptr::addr_of!(INSTANCES))[ai].cwd
+            };
+            Ok((parent, path))
+        }
+    }
+}
+
+/// Get the full path of a node (by walking parent pointers).
+pub fn node_path(idx: u16, buf: &mut [u8]) -> usize {
+    let mut stack = [0u16; 32];
+    let mut depth = 0;
+
+    // Walk up to root
+    let mut cur = idx;
+    while cur != 0 && depth < 32 {
+        stack[depth] = cur;
+        depth += 1;
+        cur = unsafe {
+            let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+            (*core::ptr::addr_of!(INSTANCES))[ai].nodes[cur as usize].parent
+        };
+    }
+
+    if idx == 0 {
+        // Root
+        if !buf.is_empty() { buf[0] = b'/'; }
+        return 1;
+    }
+
+    let mut pos = 0;
+    // Build path from root down
+    for d in (0..depth).rev() {
+        let n = unsafe {
+            let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+            &(*core::ptr::addr_of!(INSTANCES))[ai].nodes[stack[d] as usize]
+        };
+        if pos < buf.len() { buf[pos] = b'/'; pos += 1; }
+        for i in 0..n.name_len {
+            if pos < buf.len() { buf[pos] = n.name[i]; pos += 1; }
+        }
+    }
+
+    pos
+}
+
+/// Get a node reference by index.
+pub fn get_node(idx: u16) -> &'static VfsNode {
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        &(*core::ptr::addr_of!(INSTANCES))[ai].nodes[idx as usize]
+    }
+}
+
+/// Get current working directory index.
+pub fn get_cwd() -> u16 {
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        (*core::ptr::addr_of!(INSTANCES))[ai].cwd
+    }
+}
+
+/// Set current working directory.
+pub fn set_cwd(idx: u16) {
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        (*core::ptr::addr_of_mut!(INSTANCES))[ai].cwd = idx;
+    }
+}
+
+/// List children of a directory. Calls `f` for each child (index, node).
+pub fn list_children<F: FnMut(u16, &VfsNode)>(parent_idx: u16, mut f: F) {
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        let nodes = &(*core::ptr::addr_of!(INSTANCES))[ai].nodes;
+        for i in 1..MAX_NODES {
+            let n = &nodes[i];
+            if n.node_type == NodeType::Free { continue; }
+            if n.parent == parent_idx {
+                f(i as u16, n);
+            }
+        }
+    }
+}
+
+/// Delete a node (mark as Free). Does not free data pages (no free_frame yet).
+pub fn remove_node(idx: u16) -> Result<(), i64> {
+    if idx == 0 { return Err(-16); } // EBUSY — can't remove root
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        let nodes = &mut (*core::ptr::addr_of_mut!(INSTANCES))[ai].nodes;
+        let ntype = nodes[idx as usize].node_type;
+        // Check directory is empty
+        if ntype == NodeType::Directory {
+            let mut has_children = false;
+            for i in 1..MAX_NODES {
+                if nodes[i].node_type != NodeType::Free && nodes[i].parent == idx {
+                    has_children = true;
+                    break;
+                }
+            }
+            if has_children { return Err(-39); } // ENOTEMPTY
+        }
+        nodes[idx as usize].node_type = NodeType::Free;
+    }
+    Ok(())
+}
+
+// ─── Rootfs Population ───
+
+fn populate_rootfs() {
+    // Create standard directories
+    let dirs: &[&[u8]] = &[
+        b"bin", b"etc", b"usr", b"tmp", b"dev", b"proc", b"root", b"var", b"sbin",
+    ];
+    for &name in dirs {
+        let mode = if name == b"tmp" { 0o41777 } else { 0o40755 };
+        create_node(0, name, NodeType::Directory, mode).ok();
+    }
+
+    // /usr/bin
+    if let Some(usr) = find_child(0, b"usr") {
+        create_node(usr, b"bin", NodeType::Directory, 0o40755).ok();
+        create_node(usr, b"sbin", NodeType::Directory, 0o40755).ok();
+    }
+
+    // /var/tmp
+    if let Some(var) = find_child(0, b"var") {
+        create_node(var, b"tmp", NodeType::Directory, 0o41777).ok();
+    }
+
+    // /etc files
+    if let Some(etc) = find_child(0, b"etc") {
+        if let Ok(passwd) = create_node(etc, b"passwd", NodeType::File, 0o100644) {
+            write_file_data(passwd, b"root:x:0:0:root:/root:/bin/sh\n").ok();
+        }
+        if let Ok(group) = create_node(etc, b"group", NodeType::File, 0o100644) {
+            write_file_data(group, b"root:x:0:\n").ok();
+        }
+        if let Ok(hostname) = create_node(etc, b"hostname", NodeType::File, 0o100644) {
+            write_file_data(hostname, b"batcave\n").ok();
+        }
+        if let Ok(profile) = create_node(etc, b"profile", NodeType::File, 0o100644) {
+            write_file_data(profile, b"export PATH=/bin:/usr/bin:/sbin\nexport HOME=/root\n").ok();
+        }
+        if let Ok(shells) = create_node(etc, b"shells", NodeType::File, 0o100644) {
+            write_file_data(shells, b"/bin/sh\n/bin/ash\n").ok();
+        }
+        // DNS resolver config — QEMU user-net DNS at 10.0.2.3
+        if let Ok(resolv) = create_node(etc, b"resolv.conf", NodeType::File, 0o100644) {
+            write_file_data(resolv, b"nameserver 10.0.2.3\n").ok();
+        }
+        // Hosts file
+        if let Ok(hosts) = create_node(etc, b"hosts", NodeType::File, 0o100644) {
+            write_file_data(hosts, b"127.0.0.1 localhost\n10.0.2.15 batcave\n10.0.2.2 host\n").ok();
+        }
+        // nsswitch for musl
+        if let Ok(nss) = create_node(etc, b"nsswitch.conf", NodeType::File, 0o100644) {
+            write_file_data(nss, b"hosts: files dns\n").ok();
+        }
+    }
+
+    // /dev special files
+    if let Some(dev) = find_child(0, b"dev") {
+        create_node(dev, b"null", NodeType::DevNull, 0o20666).ok();
+        create_node(dev, b"zero", NodeType::DevZero, 0o20666).ok();
+        create_node(dev, b"console", NodeType::DevConsole, 0o20600).ok();
+    }
+
+    // /bin/busybox (the actual binary marker — code is already in memory)
+    let bin = find_child(0, b"bin").unwrap();
+    create_node(bin, b"busybox", NodeType::File, 0o100755).ok();
+
+    // Busybox applet symlinks → /bin/busybox
+    let applets: &[&[u8]] = &[
+        b"sh", b"ash", b"ls", b"cat", b"echo", b"pwd", b"cd", b"mkdir", b"rmdir",
+        b"rm", b"cp", b"mv", b"ln", b"chmod", b"chown", b"touch", b"head", b"tail",
+        b"wc", b"sort", b"uniq", b"tr", b"cut", b"grep", b"egrep", b"fgrep",
+        b"sed", b"awk", b"find", b"xargs", b"env", b"expr", b"test", b"[",
+        b"printf", b"date", b"sleep", b"true", b"false", b"yes",
+        b"uname", b"id", b"whoami", b"hostname", b"arch", b"logname",
+        b"ps", b"kill", b"killall", b"top", b"free", b"uptime", b"df", b"du",
+        b"mount", b"umount", b"dmesg",
+        b"ifconfig", b"ip", b"ping", b"netstat", b"wget", b"nc", b"nslookup",
+        b"tar", b"gzip", b"gunzip", b"bzip2", b"bunzip2", b"unzip", b"zcat",
+        b"vi", b"less", b"more", b"diff", b"patch", b"strings", b"hexdump",
+        b"md5sum", b"sha1sum", b"sha256sum", b"sha512sum",
+        b"adduser", b"addgroup", b"passwd", b"su", b"login",
+        b"clear", b"reset", b"tty", b"stty", b"nproc",
+    ];
+
+    for &applet in applets {
+        create_symlink(bin, applet, b"/bin/busybox").ok();
+    }
+
+    // Also populate /usr/bin with symlinks
+    if let Some(usr_bin) = find_child(find_child(0, b"usr").unwrap_or(0), b"bin") {
+        for &applet in applets {
+            create_symlink(usr_bin, applet, b"/bin/busybox").ok();
+        }
+    }
+}
