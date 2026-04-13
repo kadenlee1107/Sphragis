@@ -594,6 +594,8 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str) {
     match subcmd {
         "create" => {
             let ephemeral = arg2 == "--ephemeral";
+            // Check for --kit flag
+            let is_kit = arg2.starts_with("--kit");
             match cave::create(arg1, ephemeral) {
                 Ok(_) => {
                     console::puts("  BatCave created: ");
@@ -601,6 +603,21 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str) {
                     if ephemeral { console::puts(" (ephemeral)"); }
                     else { console::puts(" (persistent)"); }
                     console::puts("\n");
+
+                    // Apply kit if specified: batcave create mylab --kit:recon
+                    if is_kit && arg2.len() > 6 {
+                        let kit_name = &arg2[6..]; // skip "--kit:"
+                        match crate::batcave::batkits::apply_kit(arg1, kit_name) {
+                            Ok(()) => {
+                                console::puts("  Kit '"); console::puts(kit_name);
+                                console::puts("' applied!\n");
+                            }
+                            Err(e) => {
+                                console::puts("  Kit error: "); console::puts(e);
+                                console::puts("\n");
+                            }
+                        }
+                    }
                 }
                 Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
             }
@@ -793,8 +810,60 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str) {
                 }
             }
         }
+        "kits" => {
+            console::puts_hi("  AVAILABLE KITS\n");
+            console::puts("  ──────────────\n");
+            crate::batcave::batkits::list_kits(|name, desc, tools| {
+                console::puts("  ");
+                console::puts(name);
+                // Pad to 14 chars
+                for _ in name.len()..14 { console::puts(" "); }
+                console::puts(desc);
+                console::puts(" (");
+                print_num(tools);
+                console::puts(" tools)\n");
+            });
+            console::puts("\n  Usage: batcave create <name> --kit:<kit>\n");
+        }
+        "pipe" => {
+            // Show pipe buffer contents
+            let count = crate::batcave::batpipe::count();
+            if count == 0 {
+                console::puts("  Pipe is empty. Run a tool first.\n");
+            } else {
+                console::puts_hi("  BATPIPE DATA\n");
+                console::puts("  ────────────\n");
+                crate::batcave::batpipe::each(|e| {
+                    match e.dtype {
+                        crate::batcave::batpipe::DataType::Host => {
+                            console::puts("  HOST  "); console::puts(e.f1_str()); console::puts("\n");
+                        }
+                        crate::batcave::batpipe::DataType::Port => {
+                            console::puts("  PORT  "); console::puts(e.f1_str());
+                            console::puts(":"); console::puts(e.f2_str());
+                            console::puts("  "); console::puts(e.f3_str()); console::puts("\n");
+                        }
+                        crate::batcave::batpipe::DataType::Url => {
+                            console::puts("  URL   "); console::puts(e.f1_str()); console::puts("\n");
+                        }
+                        crate::batcave::batpipe::DataType::Credential => {
+                            console::puts("  CRED  "); console::puts(e.f1_str());
+                            console::puts(":"); console::puts(e.f2_str()); console::puts("\n");
+                        }
+                        crate::batcave::batpipe::DataType::Vuln => {
+                            console::puts("  VULN  "); console::puts(e.f1_str());
+                            console::puts("  "); console::puts(e.f2_str()); console::puts("\n");
+                        }
+                        _ => {}
+                    }
+                });
+                console::puts("  ────────────\n  ");
+                print_num(count);
+                console::puts(" entries\n");
+            }
+        }
         "" => {
-            console::puts("  usage: batcave <create|install|grant|revoke|enter|stop|seal|destroy|list|test>\n");
+            console::puts("  usage: batcave <create|install|grant|enter|list|kits|pipe|gui|run>\n");
         }
         _ => {
             console::puts("  unknown: batcave "); console::puts(subcmd); console::puts("\n");
