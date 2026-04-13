@@ -180,16 +180,38 @@ pub fn navigate(url: &[u8]) {
         return;
     }
 
-    // Skip HTTP headers (find \r\n\r\n)
-    let mut body_start = 0;
-    for i in 0..total.saturating_sub(3) {
-        if raw[i] == b'\r' && raw[i+1] == b'\n' && raw[i+2] == b'\r' && raw[i+3] == b'\n' {
-            body_start = i + 4;
-            break;
+    // Check for redirect (301, 302, 303, 307, 308)
+    // HTTP/1.x 3xx → find Location: header and follow it
+    let headers_end = find_header_end(&raw[..total]);
+    let status_code = parse_status_code(&raw[..total.min(20)]);
+
+    if status_code >= 300 && status_code < 400 {
+        // Extract Location: header
+        if let Some(location) = find_header(&raw[..headers_end], b"Location:") {
+            uart::puts("[browser] redirect → ");
+            uart::puts(unsafe { core::str::from_utf8_unchecked(location) });
+            uart::puts("\n");
+            // Follow redirect (up to 5 hops)
+            static mut REDIRECT_COUNT: u8 = 0;
+            unsafe {
+                REDIRECT_COUNT += 1;
+                if REDIRECT_COUNT < 5 {
+                    let mut redir_url = [0u8; MAX_URL];
+                    let rlen = location.len().min(MAX_URL);
+                    redir_url[..rlen].copy_from_slice(&location[..rlen]);
+                    navigate(&redir_url[..rlen]);
+                    return;
+                }
+                REDIRECT_COUNT = 0;
+            }
+            set_status(b"Too many redirects");
+            unsafe { STATE = BrowserState::Error; }
+            return;
         }
     }
 
-    let body = &raw[body_start..total];
+    // Skip HTTP headers (find \r\n\r\n)
+    let body = &raw[headers_end..total];
 
     // Strip HTML tags and extract text + links
     strip_html(body, host);
@@ -375,6 +397,52 @@ fn parse_url(url: &str) -> (&str, &str, u16) {
     };
 
     (host, path, port)
+}
+
+fn find_header_end(data: &[u8]) -> usize {
+    for i in 0..data.len().saturating_sub(3) {
+        if data[i] == b'\r' && data[i+1] == b'\n' && data[i+2] == b'\r' && data[i+3] == b'\n' {
+            return i + 4;
+        }
+    }
+    0
+}
+
+fn parse_status_code(data: &[u8]) -> u16 {
+    // "HTTP/1.x NNN ..."
+    // Find first space, then parse 3 digits
+    let mut i = 0;
+    while i < data.len() && data[i] != b' ' { i += 1; }
+    i += 1; // skip space
+    if i + 3 <= data.len() {
+        let h = (data[i] as u16 - b'0' as u16) * 100;
+        let t = (data[i+1] as u16 - b'0' as u16) * 10;
+        let o = data[i+2] as u16 - b'0' as u16;
+        h + t + o
+    } else {
+        0
+    }
+}
+
+fn find_header<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+    // Case-insensitive search for "Name: value\r\n"
+    let mut i = 0;
+    while i + name.len() < headers.len() {
+        if starts_with_ci(&headers[i..], name) {
+            // Found header name, skip to value
+            let mut vi = i + name.len();
+            // Skip whitespace after colon
+            while vi < headers.len() && (headers[vi] == b' ' || headers[vi] == b'\t') { vi += 1; }
+            // Value ends at \r\n
+            let val_start = vi;
+            while vi < headers.len() && headers[vi] != b'\r' && headers[vi] != b'\n' { vi += 1; }
+            return Some(&headers[val_start..vi]);
+        }
+        // Skip to next line
+        while i < headers.len() && headers[i] != b'\n' { i += 1; }
+        i += 1;
+    }
+    None
 }
 
 fn set_status(msg: &[u8]) {
