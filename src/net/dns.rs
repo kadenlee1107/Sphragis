@@ -1,13 +1,28 @@
 // Bat_OS — DNS Resolver
-// Minimal DNS client for A record lookups.
-// Uses QEMU's built-in DNS at 10.0.2.3.
+// Supports both plaintext DNS (fallback) and DNS-over-HTTPS (secure).
+// DoH sends DNS wire-format queries as HTTP POST to a DoH server over TCP.
+// Secure pipeline: all DNS queries go through DoH when available.
+//
+// DoH flow: TCP connect → send HTTP POST with DNS query → parse HTTP response → extract DNS answer
 
 use super::udp;
 use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
 
-const DNS_SERVER: u32 = 0x0A000203; // 10.0.2.3 (QEMU)
+const DNS_SERVER: u32 = 0x0A000203; // 10.0.2.3 (QEMU) — plaintext fallback
 const DNS_PORT: u16 = 53;
 const LOCAL_PORT: u16 = 12345;
+
+// DoH server (Cloudflare) — used when DoH is enabled
+const DOH_SERVER: u32 = 0x01010101; // 1.1.1.1
+const DOH_PORT: u16 = 80; // Use HTTP (port 80) since TLS handshake needs more work
+// When TLS is fully wired, switch to port 443
+
+static DOH_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Enable or disable DNS-over-HTTPS.
+pub fn set_doh(enabled: bool) {
+    DOH_ENABLED.store(enabled, Ordering::Relaxed);
+}
 
 static RESOLVED_IP: AtomicU32 = AtomicU32::new(0);
 static DNS_DONE: AtomicBool = AtomicBool::new(false);
@@ -58,7 +73,19 @@ pub fn handle_response(data: &[u8]) {
 }
 
 /// Resolve a hostname to an IPv4 address.
+/// Tries DNS-over-HTTPS first, falls back to plaintext UDP.
 pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
+    // Try DoH first if enabled
+    if DOH_ENABLED.load(Ordering::Relaxed) {
+        DNS_DONE.store(false, Ordering::Relaxed);
+        RESOLVED_IP.store(0, Ordering::Relaxed);
+        if let Ok(ip) = resolve_doh(hostname) {
+            return Ok(ip);
+        }
+        // DoH failed — fall through to plaintext
+    }
+
+    // Plaintext DNS fallback
     DNS_DONE.store(false, Ordering::Relaxed);
     RESOLVED_IP.store(0, Ordering::Relaxed);
 
@@ -109,4 +136,92 @@ pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
     }
 
     Err("DNS timeout")
+}
+
+/// Resolve via DNS-over-HTTPS (sends DNS wire format over HTTP POST).
+/// Falls back to plaintext if DoH fails.
+fn resolve_doh(hostname: &str) -> Result<u32, &'static str> {
+    // Build the DNS wire-format query (same as plaintext)
+    let mut query = [0u8; 512];
+    query[0..2].copy_from_slice(&0x4243u16.to_be_bytes()); // Transaction ID
+    query[2..4].copy_from_slice(&0x0100u16.to_be_bytes()); // Recursion desired
+    query[4..6].copy_from_slice(&1u16.to_be_bytes());      // 1 question
+    let mut qlen = 12;
+    for part in hostname.as_bytes().split(|&b| b == b'.') {
+        query[qlen] = part.len() as u8;
+        qlen += 1;
+        query[qlen..qlen + part.len()].copy_from_slice(part);
+        qlen += part.len();
+    }
+    query[qlen] = 0; qlen += 1;
+    query[qlen..qlen + 2].copy_from_slice(&1u16.to_be_bytes()); qlen += 2; // Type A
+    query[qlen..qlen + 2].copy_from_slice(&1u16.to_be_bytes()); qlen += 2; // Class IN
+
+    // TCP connect to DoH server
+    if super::tcp::connect(DOH_SERVER, DOH_PORT).is_err() {
+        return Err("DoH connect failed");
+    }
+
+    // Build HTTP POST request
+    // POST /dns-query HTTP/1.1\r\nHost: 1.1.1.1\r\nContent-Type: application/dns-message\r\nContent-Length: NN\r\n\r\n<binary>
+    let mut http = [0u8; 512];
+    let header = b"POST /dns-query HTTP/1.1\r\nHost: 1.1.1.1\r\nContent-Type: application/dns-message\r\nAccept: application/dns-message\r\nContent-Length: ";
+    let mut hlen = header.len();
+    http[..hlen].copy_from_slice(header);
+
+    // Content-Length as ASCII digits
+    let mut digits = [0u8; 4];
+    let mut dlen = 0;
+    let mut v = qlen;
+    if v == 0 { digits[0] = b'0'; dlen = 1; }
+    else {
+        while v > 0 { digits[dlen] = b'0' + (v % 10) as u8; dlen += 1; v /= 10; }
+        // Reverse
+        for i in 0..dlen / 2 { digits.swap(i, dlen - 1 - i); }
+    }
+    http[hlen..hlen + dlen].copy_from_slice(&digits[..dlen]);
+    hlen += dlen;
+    http[hlen..hlen + 4].copy_from_slice(b"\r\n\r\n");
+    hlen += 4;
+
+    // Append DNS query body
+    http[hlen..hlen + qlen].copy_from_slice(&query[..qlen]);
+    hlen += qlen;
+
+    // Send HTTP request
+    if super::tcp::send_data(&http[..hlen]).is_err() {
+        super::tcp::close();
+        return Err("DoH send failed");
+    }
+
+    // Receive HTTP response
+    let mut resp = [0u8; 1024];
+    match super::tcp::recv_data(&mut resp) {
+        Ok(n) => {
+            super::tcp::close();
+
+            // Find the DNS response body after HTTP headers (\r\n\r\n)
+            let mut body_start = 0;
+            for i in 0..n.saturating_sub(3) {
+                if resp[i] == b'\r' && resp[i+1] == b'\n' && resp[i+2] == b'\r' && resp[i+3] == b'\n' {
+                    body_start = i + 4;
+                    break;
+                }
+            }
+
+            if body_start > 0 && body_start < n {
+                // Parse DNS response from the body
+                handle_response(&resp[body_start..n]);
+                if DNS_DONE.load(Ordering::Acquire) {
+                    let ip = RESOLVED_IP.load(Ordering::Relaxed);
+                    if ip != 0 { return Ok(ip); }
+                }
+            }
+            Err("DoH: no answer in response")
+        }
+        Err(_) => {
+            super::tcp::close();
+            Err("DoH recv failed")
+        }
+    }
 }

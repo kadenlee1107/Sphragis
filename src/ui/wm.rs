@@ -27,9 +27,11 @@ pub const APP_DASHBOARD: u8 = 1;
 pub const APP_FILES: u8 = 2;
 pub const APP_NETMON: u8 = 3;
 pub const APP_EDITOR: u8 = 4;
-pub const APP_BATCAVE: u8 = 5;
+pub const APP_SECURITY: u8 = 5;
+pub const APP_BATCAVE: u8 = 6;
 
-const APP_NAMES: [&str; 6] = ["Terminal", "Dashboard", "Files", "NetMonitor", "Editor", "BatCaves"];
+const NUM_APPS: u8 = 7;
+const APP_NAMES: [&str; 7] = ["Terminal", "Dashboard", "Files", "NetMon", "Editor", "SecKit", "BatCaves"];
 
 static NEEDS_REDRAW: AtomicBool = AtomicBool::new(true);
 
@@ -96,7 +98,7 @@ pub fn active_app() -> u8 {
 }
 
 pub fn switch_app(app: u8) {
-    if app < 6 {
+    if app < NUM_APPS {
         unsafe { PANES[FOCUSED_PANE as usize].app = app; }
         ACTIVE_APP.store(app, Ordering::Relaxed);
         NEEDS_REDRAW.store(true, Ordering::Relaxed);
@@ -121,7 +123,7 @@ fn add_pane() {
     unsafe {
         if PANE_COUNT >= 4 { return; }
         let idx = PANE_COUNT as usize;
-        let next_app = (PANES[FOCUSED_PANE as usize].app + 1) % 6;
+        let next_app = (PANES[FOCUSED_PANE as usize].app + 1) % NUM_APPS;
         PANES[idx] = Pane { active: true, app: next_app, row: 0, col: 0, row_span: 1, col_span: 1 };
         PANE_COUNT += 1;
         rebuild_grid();
@@ -274,11 +276,11 @@ pub fn draw_frame() {
     let focus = unsafe { FOCUSED_PANE };
     let split_app_id = unsafe { if PANE_COUNT > 1 { PANES[1].app as usize } else { 0 } };
 
-    // Center the 6 tabs in the title bar
-    let tab_spacing = 56u32;
-    let total_tabs_w = 6 * tab_spacing;
+    // Center the tabs in the title bar
+    let tab_spacing = 48u32;
+    let total_tabs_w = NUM_APPS as u32 * tab_spacing;
     let tab_start = (w - total_tabs_w) / 2;
-    for i in 0..6 {
+    for i in 0..NUM_APPS as usize {
         let tx = tab_start + (i as u32) * tab_spacing;
         let label = match i {
             0 => "1:SH",
@@ -286,7 +288,8 @@ pub fn draw_frame() {
             2 => "3:FS",
             3 => "4:NM",
             4 => "5:ED",
-            5 => "6:BC",
+            5 => "6:SK",
+            6 => "7:BC",
             _ => "",
         };
         // Highlight: active app in primary panel
@@ -310,7 +313,7 @@ pub fn draw_frame() {
     // Pane count indicator
     let n_panes = unsafe { PANE_COUNT };
     if n_panes > 1 {
-        let mut px = tab_start + 6 * tab_spacing + 8;
+        let mut px = tab_start + NUM_APPS as u32 * tab_spacing + 8;
         font::draw_str(fb, w, px, 4, "[", FG_DIM, TITLE_BG);
         px += 8;
         for i in 0..n_panes as usize {

@@ -693,6 +693,40 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str) {
             print_num(count);
             console::puts(" BatCave(s)\n");
         }
+        "gui" => {
+            // batcave gui <cave> <tool> — launch a GUI tool in a BatCave
+            if arg1.is_empty() || arg2.is_empty() {
+                console::puts("  usage: batcave gui <cave> <tool>\n");
+                console::puts("  e.g.: batcave gui pentest wireshark\n");
+            } else {
+                // Check display capability
+                if let Some(id) = cave::find_id(arg1) {
+                    if !cave::active_has_cap("display") && cave::get_active() != id {
+                        // Grant display cap and enter
+                        cave::grant_cap(arg1, "display").ok();
+                    }
+                    // Allocate display region (quarter of screen)
+                    let w = crate::drivers::virtio::gpu::width();
+                    let h = crate::drivers::virtio::gpu::height();
+                    cave::alloc_display(arg1, w / 4, 30, w / 2, h / 2).ok();
+                    cave::enter(arg1).ok();
+
+                    console::puts("  Launching "); console::puts(arg2);
+                    console::puts(" in BatCave '"); console::puts(arg1);
+                    console::puts("' (display sandbox: ");
+                    print_num(w as usize / 2); console::puts("x");
+                    print_num(h as usize / 2); console::puts(")\n");
+
+                    // Run the tool via busybox
+                    let argv: [&str; 4] = ["busybox", arg2, "", ""];
+                    crate::batcave::linux::runner::run_busybox_cmd(&argv[..2]).ok();
+                    console::puts("  GUI tool exited.\n");
+                } else {
+                    console::puts("  Error: cave '"); console::puts(arg1);
+                    console::puts("' not found. Create it first.\n");
+                }
+            }
+        }
         "test" => {
             console::puts("  Running Linux hello binary...\n");
             crate::batcave::linux::runner::run_test().ok();
