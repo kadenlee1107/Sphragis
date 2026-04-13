@@ -145,10 +145,20 @@ impl Aes128 {
         for i in 0..4 { for j in 0..4 { block[i * 4 + j] = state[j][i]; } }
     }
 
+    /// CTR mode encryption/decryption (counter starts at 0).
     pub fn ctr_crypt(&self, nonce: &[u8; 12], data: &mut [u8]) {
+        self.ctr_crypt_with_counter(nonce, 0, data);
+    }
+
+    /// GCM mode encryption/decryption (counter starts at 2 per RFC 5116).
+    pub fn gcm_crypt(&self, nonce: &[u8; 12], data: &mut [u8]) {
+        self.ctr_crypt_with_counter(nonce, 2, data);
+    }
+
+    fn ctr_crypt_with_counter(&self, nonce: &[u8; 12], start_counter: u32, data: &mut [u8]) {
         let mut counter = [0u8; 16];
         counter[..12].copy_from_slice(nonce);
-        let mut block_num: u32 = 0;
+        let mut block_num: u32 = start_counter;
         let mut offset = 0;
         while offset < data.len() {
             counter[12] = (block_num >> 24) as u8;
