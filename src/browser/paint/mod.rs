@@ -4,8 +4,40 @@
 
 use super::layout::LayoutTree;
 use super::css::style::*;
+use super::media::png::PngImage;
 use crate::ui::font;
 use crate::drivers::virtio::gpu;
+
+// Image rendering support
+/// Draw a PngImage directly at screen position, scaled to fit.
+pub fn draw_png(img: &PngImage, sx: i32, sy: i32, w: i32, h: i32) {
+    if !img.valid || img.width == 0 || img.height == 0 { return; }
+
+    let fb = gpu::framebuffer();
+    let sw = gpu::width();
+    let sh = gpu::height();
+
+    for dy in 0..h {
+        let screen_y = sy + dy;
+        if screen_y < 0 || screen_y >= sh as i32 { continue; }
+        let src_y = (dy as u32 * img.height) / h as u32;
+
+        for dx in 0..w {
+            let screen_x = sx + dx;
+            if screen_x < 0 || screen_x >= sw as i32 { continue; }
+            let src_x = (dx as u32 * img.width) / w as u32;
+
+            let pixel = img.get_pixel(src_x, src_y);
+            let alpha = (pixel >> 24) & 0xFF;
+            if alpha > 128 {
+                unsafe {
+                    let offset = (screen_y as u32 * sw + screen_x as u32) as usize;
+                    core::ptr::write_volatile(fb.add(offset), pixel);
+                }
+            }
+        }
+    }
+}
 
 /// Paint the layout tree into the framebuffer.
 /// `offset_x/y` = position of the browser content area on screen.
