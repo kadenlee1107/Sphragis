@@ -268,7 +268,7 @@ pub fn navigate(url: &[u8]) {
     let mut raw = [0u8; 16384];
     let mut total = 0;
 
-    for _ in 0..10 {
+    for _ in 0..5 {
         let mut chunk = [0u8; 4096];
         let recv_result = if is_https {
             crate::net::tls::recv_app_data(&mut chunk)

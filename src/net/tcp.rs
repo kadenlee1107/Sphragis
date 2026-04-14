@@ -241,7 +241,7 @@ pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
         core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
     }
-    let timeout = freq * 10; // 10 seconds
+    let timeout = freq * 3; // 3 seconds (snappier browsing)
     loop {
         super::poll_once();
         if DATA_READY.load(Ordering::Acquire) {
