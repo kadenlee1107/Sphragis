@@ -96,6 +96,42 @@ impl LayoutTree {
 
 /// Build a layout tree from a DOM tree.
 /// `viewport_w` = available width for layout.
+/// Apply common CSS class name hints (for pages without <style> blocks)
+fn apply_class_hints(class: &str, style: &mut ComputedStyle) {
+    // Common Bootstrap/Tailwind/framework class patterns
+    if class.contains("hidden") || class.contains("d-none") || class.contains("invisible") {
+        style.display = Display::None;
+    }
+    if class.contains("bold") || class.contains("fw-bold") || class.contains("font-bold") {
+        style.font_weight = FontWeight::Bold;
+    }
+    if class.contains("text-center") || class.contains("center") {
+        style.text_align = TextAlign::Center;
+    }
+    if class.contains("container") || class.contains("wrapper") {
+        style.margin_left = 16;
+        style.margin_right = 16;
+    }
+    if class.contains("btn") || class.contains("button") {
+        style.padding_left = 8;
+        style.padding_right = 8;
+        style.padding_top = 4;
+        style.padding_bottom = 4;
+        style.background_color = Color::from_rgb(40, 40, 40);
+        style.border_width = 1;
+        style.border_color = Color::from_rgb(80, 80, 80);
+    }
+    if class.contains("header") || class.contains("navbar") || class.contains("nav") {
+        style.background_color = Color::from_rgb(20, 20, 20);
+        style.padding_top = 8;
+        style.padding_bottom = 8;
+    }
+    if class.contains("footer") {
+        style.color = Color::from_rgb(120, 120, 120);
+        style.margin_top = 16;
+    }
+}
+
 pub fn build(doc: &Document, tree: &mut LayoutTree, viewport_w: i32) {
     tree.box_count = 0;
     tree.text_len = 0;
@@ -188,15 +224,148 @@ fn layout_children(
                 }
             }
             NodeType::Element => {
-                let style = ComputedStyle::for_tag(node.tag_str());
+                let mut style = ComputedStyle::for_tag(node.tag_str());
 
-                // Apply inline style attribute
+                // Apply inline style="" attribute from HTML
                 if let Some(style_attr) = node.get_attr("style") {
-                    let mut s = style;
-                    super::css::parser::apply_inline_style(style_attr, &mut s);
+                    super::css::parser::apply_inline_style(style_attr, &mut style);
+                }
+
+                // Apply class-based color hints from common CSS patterns
+                if let Some(class) = node.get_attr("class") {
+                    apply_class_hints(class, &mut style);
                 }
 
                 if style.display == Display::None { continue; }
+
+                // <input> — render as a text box
+                if node.tag_str() == "input" {
+                    let input_type = node.get_attr("type").unwrap_or("text");
+                    if input_type == "hidden" { continue; }
+
+                    let ibox = match tree.alloc() {
+                        Some(idx) => idx,
+                        None => return,
+                    };
+
+                    let placeholder = node.get_attr("placeholder").unwrap_or(
+                        node.get_attr("value").unwrap_or("")
+                    );
+                    let (ts, tl) = tree.store_text(placeholder.as_bytes());
+
+                    let input_w = if input_type == "submit" || input_type == "button" {
+                        ((tl as i32) + 4) * 8
+                    } else {
+                        200.min(avail_width)
+                    };
+
+                    tree.boxes[ibox].dom_node = child_idx as u16;
+                    tree.boxes[ibox].style = style;
+                    tree.boxes[ibox].style.background_color = Color::from_rgb(25, 25, 25);
+                    tree.boxes[ibox].style.border_width = 1;
+                    tree.boxes[ibox].style.border_color = Color::from_rgb(80, 80, 80);
+                    tree.boxes[ibox].style.padding_left = 4;
+                    tree.boxes[ibox].style.padding_top = 3;
+                    tree.boxes[ibox].style.color = Color::from_rgb(150, 150, 150);
+                    tree.boxes[ibox].parent = parent_box as u16;
+                    tree.boxes[ibox].x = inline_x;
+                    tree.boxes[ibox].y = *cursor_y;
+                    tree.boxes[ibox].width = input_w;
+                    tree.boxes[ibox].height = 22;
+                    tree.boxes[ibox].content_x = inline_x + 4;
+                    tree.boxes[ibox].content_y = *cursor_y + 3;
+                    tree.boxes[ibox].content_w = input_w - 8;
+                    tree.boxes[ibox].content_h = 16;
+                    tree.boxes[ibox].text_start = ts;
+                    tree.boxes[ibox].text_len = tl;
+
+                    if input_type == "submit" || input_type == "button" {
+                        tree.boxes[ibox].style.background_color = Color::from_rgb(50, 50, 50);
+                        tree.boxes[ibox].style.color = Color::WHITE;
+                    }
+
+                    inline_x += input_w + 4;
+                    if inline_x > x_offset + avail_width {
+                        inline_x = x_offset;
+                        *cursor_y += 26;
+                    }
+                    continue;
+                }
+
+                // <button> — render as a styled button
+                if node.tag_str() == "button" {
+                    style.background_color = Color::from_rgb(50, 50, 50);
+                    style.border_width = 1;
+                    style.border_color = Color::from_rgb(100, 100, 100);
+                    style.padding_left = 12;
+                    style.padding_right = 12;
+                    style.padding_top = 4;
+                    style.padding_bottom = 4;
+                    style.color = Color::WHITE;
+                }
+
+                // <textarea> — render as a larger input box
+                if node.tag_str() == "textarea" {
+                    style.background_color = Color::from_rgb(25, 25, 25);
+                    style.border_width = 1;
+                    style.border_color = Color::from_rgb(80, 80, 80);
+                    style.padding_left = 4;
+                    style.padding_top = 4;
+                    style.display = Display::Block;
+                    if style.height == Length::Auto {
+                        style.height = Length::Px(80);
+                    }
+                }
+
+                // <img> tags — allocate space for image
+                if node.tag_str() == "img" {
+                    let img_w = node.get_attr("width")
+                        .and_then(|v| v.parse::<i32>().ok())
+                        .unwrap_or(200);
+                    let img_h = node.get_attr("height")
+                        .and_then(|v| v.parse::<i32>().ok())
+                        .unwrap_or(150);
+
+                    if inline_x > x_offset {
+                        *cursor_y += line_h;
+                        inline_x = x_offset;
+                    }
+
+                    let ibox = match tree.alloc() {
+                        Some(idx) => idx,
+                        None => return,
+                    };
+                    tree.boxes[ibox].dom_node = child_idx as u16;
+                    tree.boxes[ibox].style = style;
+                    tree.boxes[ibox].parent = parent_box as u16;
+                    tree.boxes[ibox].x = x_offset;
+                    tree.boxes[ibox].y = *cursor_y;
+                    tree.boxes[ibox].width = img_w.min(avail_width);
+                    tree.boxes[ibox].height = img_h;
+                    tree.boxes[ibox].content_x = x_offset;
+                    tree.boxes[ibox].content_y = *cursor_y;
+                    tree.boxes[ibox].content_w = img_w.min(avail_width);
+                    tree.boxes[ibox].content_h = img_h;
+
+                    // Store alt text as fallback
+                    if let Some(alt) = node.get_attr("alt") {
+                        let (ts, tl) = tree.store_text(alt.as_bytes());
+                        tree.boxes[ibox].text_start = ts;
+                        tree.boxes[ibox].text_len = tl;
+                    } else {
+                        let (ts, tl) = tree.store_text(b"[image]");
+                        tree.boxes[ibox].text_start = ts;
+                        tree.boxes[ibox].text_len = tl;
+                    }
+
+                    // Draw image border
+                    tree.boxes[ibox].style.border_width = 1;
+                    tree.boxes[ibox].style.border_color = Color::from_rgb(60, 60, 60);
+
+                    *cursor_y += img_h + 4;
+                    inline_x = x_offset;
+                    continue;
+                }
 
                 let ebox = match tree.alloc() {
                     Some(idx) => idx,

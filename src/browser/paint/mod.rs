@@ -79,16 +79,29 @@ pub fn paint(
             }
         }
 
-        // ─── Left border (for blockquote) ───
+        // ─── Borders ───
         if b.style.border_width > 0 && b.style.border_color != Color::TRANSPARENT {
-            let bx = sx as u32;
+            let bx = sx.max(offset_x) as u32;
             let by = sy.max(offset_y) as u32;
+            let bw = b.width.min(clip_w) as u32;
             let bh = b.height.min(clip_h) as u32;
-            gpu::fill_rect(bx, by, b.style.border_width as u32, bh, b.style.border_color.raw());
+            let border_w = b.style.border_width as u32;
+            let bc = b.style.border_color.raw();
 
-            // HR: draw horizontal line
-            if b.style.display == Display::Block && b.height == 0 {
-                gpu::fill_rect(bx, by, b.width as u32, 1, b.style.border_color.raw());
+            if bw > 0 && bh > 0 {
+                // Top border
+                gpu::fill_rect(bx, by, bw, border_w, bc);
+                // Bottom border
+                gpu::fill_rect(bx, by + bh - border_w, bw, border_w, bc);
+                // Left border
+                gpu::fill_rect(bx, by, border_w, bh, bc);
+                // Right border
+                gpu::fill_rect(bx + bw - border_w, by, border_w, bh, bc);
+            }
+
+            // HR: full-width horizontal line
+            if b.height <= 2 {
+                gpu::fill_rect(bx, by, bw, border_w, bc);
             }
         }
 

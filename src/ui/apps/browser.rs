@@ -328,10 +328,16 @@ pub fn navigate(url: &[u8]) {
     // Skip HTTP headers
     let body = &raw[headers_end..total];
 
-    // Parse HTML → DOM → Layout (Level 2 engine)
+    // Full rendering pipeline: HTML → DOM → CSS → Layout → JS → Paint
     unsafe {
         if USE_ENGINE {
+            // Step 1: Parse HTML → DOM tree
             crate::browser::html::parser::parse(body, &mut *core::ptr::addr_of_mut!(DOM_DOC));
+
+            // Step 2: Execute inline <script> tags
+            execute_scripts(&*core::ptr::addr_of!(DOM_DOC));
+
+            // Step 3: Compute layout
             let viewport_w = wm::content_rect().w as i32 - 16;
             crate::browser::layout::build(
                 &*core::ptr::addr_of!(DOM_DOC),
@@ -582,6 +588,54 @@ fn strip_html(html: &[u8], base_host: &str) {
         }
         i += 1;
     }
+}
+
+// ─── JavaScript Execution ───
+
+static mut JS_ENGINE: crate::browser::js::interpreter::Engine = crate::browser::js::interpreter::Engine::new();
+
+/// Find and execute all inline <script> tags in the DOM
+fn execute_scripts(doc: &crate::browser::dom::Document) {
+    // Find all script elements
+    doc.find_all_tags("script", |script_idx| {
+        // Get the text content of the script (first text child)
+        for child_idx in doc.children(script_idx) {
+            let child = doc.get(child_idx);
+            if child.node_type == crate::browser::dom::NodeType::Text && child.text_len > 0 {
+                let source = &child.text[..child.text_len];
+
+                uart::puts("[js] executing script (");
+                crate::kernel::mm::print_num(source.len());
+                uart::puts(" bytes)\n");
+
+                // Tokenize
+                let mut tokens = [crate::browser::js::lexer::Token::empty(); crate::browser::js::lexer::MAX_TOKENS];
+                let token_count = crate::browser::js::lexer::tokenize(source, &mut tokens);
+
+                // Parse
+                let mut ast = crate::browser::js::ast::Ast::new();
+                crate::browser::js::parser::parse(&tokens[..token_count], &mut ast);
+
+                // Execute
+                unsafe {
+                    (*core::ptr::addr_of_mut!(JS_ENGINE)).execute(&ast);
+
+                    // Check for console.log output
+                    let cl = core::ptr::read_volatile(core::ptr::addr_of!(crate::browser::js::interpreter::CONSOLE_LEN));
+                    if cl > 0 {
+                        uart::puts("[js console] ");
+                        for i in 0..cl.min(200) {
+                            let b = core::ptr::read_volatile(
+                                core::ptr::addr_of!(crate::browser::js::interpreter::CONSOLE_OUTPUT)
+                                    .cast::<u8>().add(i)
+                            );
+                            uart::putc(b);
+                        }
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn push_page(ch: u8) {
