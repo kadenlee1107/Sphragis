@@ -498,39 +498,8 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     sess.server_seq = 0;
     sess.state = TlsState::Established;
 
-    // Quick poll for post-handshake messages (NewSessionTicket etc.)
-    // Servers typically send 1-2 NewSessionTickets right after handshake
-    {
-        let start: u64;
-        let freq: u64;
-        unsafe {
-            core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
-            core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
-        }
-        let timeout = freq * 3; // 3 seconds total for all post-hs records
-        let mut count = 0u32;
-        loop {
-            crate::net::poll_once();
-            if crate::net::tcp::data_ready() {
-                let mut nst_buf = [0u8; 4096];
-                match crate::net::tcp::recv_data(&mut nst_buf) {
-                    Ok(n) if n > 5 => {
-                        count += 1;
-                        sess.server_seq += 1;
-                        uart::puts("[tls] post-hs #");
-                        crate::kernel::mm::print_num(count as usize);
-                        uart::puts("\n");
-                    }
-                    _ => {}
-                }
-                continue; // check for more immediately
-            }
-            let now: u64;
-            unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
-            if now - start > timeout { break; }
-            core::hint::spin_loop();
-        }
-    }
+    // Post-handshake records (NewSessionTickets) are handled inline
+    // by recv_app_data — it skips inner_type 0x16 and recurses.
 
     uart::puts("[tls] Handshake complete\n");
     Ok(())
