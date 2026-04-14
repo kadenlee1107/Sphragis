@@ -102,7 +102,8 @@ static css_error resolve_url(void *pw, const char *base, lwc_string *rel, lwc_st
 }
 
 void _start(void) {
-    printf("=== CSS Style Computation Test ===\n\n");
+    printf("=== CSS Style Computation Test ===\n");
+    printf("Starting...\n");
 
     // Create stylesheet
     css_stylesheet_params params;
