@@ -72,6 +72,10 @@ pub struct TlsSession {
     // Random values
     client_random: [u8; 32],
     server_random: [u8; 32],
+    // Leftover buffer: when TCP coalesces multiple TLS records into one read,
+    // extra bytes after the first record are saved here for the next recv call.
+    leftover: [u8; 17408],
+    leftover_len: usize,
 }
 
 static mut SESSION: TlsSession = TlsSession {
@@ -88,6 +92,8 @@ static mut SESSION: TlsSession = TlsSession {
     server_seq: 0,
     client_random: [0; 32],
     server_random: [0; 32],
+    leftover: [0; 17408],
+    leftover_len: 0,
 };
 
 /// Build a TLS 1.3 ClientHello message.
@@ -188,6 +194,14 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
     buf[pos] = 0x08; buf[pos+1] = 0x05; pos += 2;
     // rsa_pkcs1_sha384
     buf[pos] = 0x05; buf[pos+1] = 0x01; pos += 2;
+
+    // ALPN extension — advertise http/1.1 to prevent HTTP/2 negotiation
+    buf[pos] = 0; buf[pos+1] = 16; pos += 2;  // type = ALPN (0x0010)
+    buf[pos] = 0; buf[pos+1] = 11; pos += 2;  // extension length = 11
+    buf[pos] = 0; buf[pos+1] = 9;  pos += 2;  // protocol list length = 9
+    buf[pos] = 8; pos += 1;                    // protocol name length = 8
+    let alpn = b"http/1.1";
+    buf[pos..pos+8].copy_from_slice(alpn); pos += 8;
 
     // Key share extension (X25519 public key)
     buf[pos] = 0; buf[pos+1] = 51; pos += 2; // type = key_share
@@ -293,6 +307,7 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
 /// Sends ClientHello, receives ServerHello, derives keys, handles encrypted handshake.
 pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     let sess = unsafe { &mut *core::ptr::addr_of_mut!(SESSION) };
+    sess.leftover_len = 0; // Reset leftover buffer for new session
 
     // Step 1: Send ClientHello
     let mut ch_buf = [0u8; 512];
@@ -595,22 +610,88 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     let sess = unsafe { &mut *core::ptr::addr_of_mut!(SESSION) };
     if sess.state != TlsState::Established { return Err("not established"); }
 
-    let mut record = [0u8; 4096];
-    uart::puts("[tls] waiting for record...\n");
-    let n = crate::net::tcp::recv_data(&mut record).map_err(|e| {
-        uart::puts("[tls] recv error: ");
-        uart::puts(e);
-        uart::puts("\n");
-        e
-    })?;
+    let mut record = [0u8; 17408]; // 16KB max TLS record + 1KB header/overhead
+    let mut n;
+
+    // Use leftover data from previous recv if available
+    if sess.leftover_len > 0 {
+        let copy = sess.leftover_len.min(record.len());
+        record[..copy].copy_from_slice(&sess.leftover[..copy]);
+        n = copy;
+        sess.leftover_len = 0;
+    } else {
+        uart::puts("[tls] waiting for record...\n");
+        n = crate::net::tcp::recv_data(&mut record).map_err(|e| {
+            uart::puts("[tls] recv error: ");
+            uart::puts(e);
+            uart::puts("\n");
+            e
+        })?;
+    }
     if n < 5 { return Err("record too short"); }
 
     // Parse record header
     let rec_type = record[0];
     let rec_len = ((record[3] as usize) << 8) | record[4] as usize;
-    if rec_len + 5 > n { return Err("incomplete record"); }
 
-    uart::puts("[tls] recv record\n");
+    // If record is incomplete, read more TCP data directly into the record buffer.
+    // IMPORTANT: read into record[n..] (not a small tmp buffer) to capture ALL
+    // available TCP data. recv_data discards excess beyond buf.len()!
+    if rec_len + 5 > n {
+        uart::puts("[tls] incomplete: need ");
+        crate::kernel::mm::print_num(rec_len + 5);
+        uart::puts(" have ");
+        crate::kernel::mm::print_num(n);
+        uart::puts(", reading more TCP...\n");
+        for attempt in 0..8 {
+            if rec_len + 5 <= n { break; }
+            let space = record.len() - n;
+            if space == 0 { break; }
+            match crate::net::tcp::recv_data(&mut record[n..n + space]) {
+                Ok(got) if got > 0 => {
+                    uart::puts("[tls] got ");
+                    crate::kernel::mm::print_num(got);
+                    uart::puts("b more, total=");
+                    crate::kernel::mm::print_num(n + got);
+                    uart::puts("\n");
+                    n += got;
+                }
+                Err(e) => {
+                    uart::puts("[tls] recovery recv failed: ");
+                    uart::puts(e);
+                    uart::puts("\n");
+                    break;
+                }
+                _ => { break; }
+            }
+        }
+        if rec_len + 5 > n {
+            uart::puts("[tls] record still incomplete after recovery\n");
+            return Err("incomplete record");
+        }
+    }
+
+    // Save any leftover bytes after this record for the next call
+    let consumed = rec_len + 5;
+    if n > consumed {
+        let extra = n - consumed;
+        let save = extra.min(sess.leftover.len());
+        sess.leftover[..save].copy_from_slice(&record[consumed..consumed + save]);
+        sess.leftover_len = save;
+    }
+
+    // Debug: log record details
+    uart::puts("[tls] record: outer_type=0x");
+    let hex = b"0123456789abcdef";
+    uart::putc(hex[(rec_type >> 4) as usize]);
+    uart::putc(hex[(rec_type & 0xf) as usize]);
+    uart::puts(" rec_len=");
+    crate::kernel::mm::print_num(rec_len);
+    uart::puts(" n=");
+    crate::kernel::mm::print_num(n);
+    uart::puts(" seq=");
+    crate::kernel::mm::print_num(sess.server_seq as usize);
+    uart::puts("\n");
 
     if rec_type == 0x14 {
         // ChangeCipherSpec — skip
@@ -629,11 +710,12 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
 
     // Decrypt
     let cipher = {let mut k=[0u8;16]; k.copy_from_slice(&sess.server_key[..16]); crate::crypto::aes::Aes128::new(&k)};
-    let mut decrypted = [0u8; 4096];
-    let enc_data = &record[5..5 + rec_len];
-    decrypted[..rec_len].copy_from_slice(enc_data);
+    let mut decrypted = [0u8; 16896]; // 16KB max TLS record payload
+    let crypt_len = rec_len.min(decrypted.len());
+    let enc_data = &record[5..5 + crypt_len];
+    decrypted[..crypt_len].copy_from_slice(enc_data);
 
-    cipher.gcm_crypt(&nonce,&mut decrypted[..rec_len]);
+    cipher.gcm_crypt(&nonce,&mut decrypted[..crypt_len]);
 
     // Decrypted data: [plaintext...][content_type(1)][GCM_tag(16)]
     // The content type is at position rec_len - 17
@@ -661,10 +743,39 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     }
     uart::puts("\n");
 
-    // If inner type is 0x16 (handshake) or 0x15 (alert), skip and read next
-    if inner_type == 0x16 || inner_type == 0x15 {
-        // NewSessionTicket or alert — skip, get next record
-        return recv_app_data(buf);
+    // Debug: show bytes around inner_type position
+    if rec_len > 20 {
+        uart::puts("[tls] bytes at inner_type pos: ");
+        let start = if rec_len > 22 { rec_len - 22 } else { 0 };
+        for i in start..rec_len.min(start + 25) {
+            uart::putc(hex[(decrypted[i] >> 4) as usize]);
+            uart::putc(hex[(decrypted[i] & 0xf) as usize]);
+            if i == rec_len - 17 { uart::puts("[<-IT]"); }
+            uart::putc(b' ');
+        }
+        uart::puts("\n");
+    }
+
+    // Validate inner content type — if invalid, decryption probably failed
+    // (wrong nonce/key producing garbage). Valid types: 0x14=CCS, 0x15=alert,
+    // 0x16=handshake, 0x17=application data.
+    if inner_type != 0x17 && inner_type != 0x16 && inner_type != 0x15 && inner_type != 0x14 {
+        uart::puts("[tls] bad inner_type after decrypt — decryption failed\n");
+        return Err("decryption failed");
+    }
+
+    // If inner type is 0x16 (handshake = NewSessionTicket), skip it.
+    // Don't recurse — return 0 so the caller can retry. This prevents
+    // consuming all leftover data (including our response) during a
+    // recursive call that then times out waiting for more data.
+    if inner_type == 0x16 {
+        uart::puts("[tls] skipping NewSessionTicket\n");
+        return Ok(0); // caller will retry and get actual app data
+    }
+    if inner_type == 0x15 {
+        // Alert
+        uart::puts("[tls] alert received\n");
+        return Err("TLS alert");
     }
 
     let copy_len = data_len.min(buf.len());

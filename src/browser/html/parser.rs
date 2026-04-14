@@ -105,6 +105,64 @@ pub fn parse(html: &[u8], doc: &mut Document) {
             while i < html.len() && html[i] != b'>' { i += 1; }
             if i < html.len() { i += 1; }
 
+            // --- Skip hidden elements ---
+            // Check for `hidden` attribute
+            {
+                let n = doc.get(elem_idx);
+                let mut skip = false;
+                for a in 0..n.attr_count {
+                    let aname = n.attrs[a].name_str();
+                    let aval  = n.attrs[a].value_str();
+                    // hidden attribute (boolean)
+                    if aname == "hidden" { skip = true; break; }
+                    // aria-hidden="true"
+                    if aname == "aria-hidden" && aval == "true" { skip = true; break; }
+                    // style="display:none" or style="...display: none..."
+                    if aname == "style" && contains_display_none(aval) { skip = true; break; }
+                    // Wikipedia-specific hidden classes
+                    if aname == "class" {
+                        if str_contains(aval, "mw-jump-link")
+                            || str_contains(aval, "noprint")
+                            || str_contains(aval, "mw-editsection")
+                            || str_contains(aval, "mw-indicators")
+                            || str_contains(aval, "mw-hidden-catlinks")
+                            || str_contains(aval, "sistersitebox")
+                            || str_contains(aval, "mw-empty-elt")
+                        {
+                            skip = true;
+                            break;
+                        }
+                    }
+                }
+                if skip {
+                    // Skip to matching closing tag (consume all nested content)
+                    let _t_tag = doc.get(elem_idx).tag_str();
+                    if !doc.get(elem_idx).is_void() {
+                        let mut depth = 1u32;
+                        while i < html.len() && depth > 0 {
+                            if html[i] == b'<' {
+                                if i + 1 < html.len() && html[i+1] == b'/' {
+                                    // closing tag — check if it matches
+                                    depth -= 1;
+                                } else if i + 1 < html.len() && html[i+1] != b'!' {
+                                    // opening tag (not comment/doctype)
+                                    // We approximate: just track depth
+                                    depth += 1;
+                                }
+                                // skip to end of tag
+                                while i < html.len() && html[i] != b'>' { i += 1; }
+                                if i < html.len() { i += 1; }
+                            } else {
+                                i += 1;
+                            }
+                        }
+                    }
+                    // Reclaim the node slot
+                    doc.node_count -= 1;
+                    continue;
+                }
+            }
+
             // Append to current parent
             let parent = stack[stack_depth - 1];
             doc.append_child(parent, elem_idx);
@@ -247,4 +305,216 @@ fn starts_with_ci(haystack: &[u8], needle: &[u8]) -> bool {
         }
     }
     true
+}
+
+/// Check if a style attribute value contains "display:none" or "display: none"
+fn contains_display_none(style: &str) -> bool {
+    let s = style.as_bytes();
+    let pat = b"display";
+    let none = b"none";
+    let mut i = 0;
+    while i + pat.len() < s.len() {
+        if starts_with_ci(&s[i..], pat) {
+            // Found "display", look for : then "none"
+            let mut j = i + pat.len();
+            // skip whitespace
+            while j < s.len() && (s[j] == b' ' || s[j] == b'\t') { j += 1; }
+            if j < s.len() && s[j] == b':' {
+                j += 1;
+                while j < s.len() && (s[j] == b' ' || s[j] == b'\t') { j += 1; }
+                if j + none.len() <= s.len() && starts_with_ci(&s[j..], none) {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Simple substring search: does `haystack` contain `needle`?
+fn str_contains(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.len() > h.len() { return false; }
+    let end = h.len() - n.len() + 1;
+    for i in 0..end {
+        if &h[i..i + n.len()] == n { return true; }
+    }
+    false
+}
+
+// ─── Reader Mode: Content Extraction ───
+//
+// After parsing the full HTML into a DOM tree, this function identifies the
+// "main content" node and hides everything outside it — navigation, sidebars,
+// footers, forms, ads, etc. The result is a clean article-only view.
+
+/// Extract the main article content from a parsed DOM tree.
+/// Hides non-content elements by setting their node_type to Comment
+/// (which the layout engine already skips).
+pub fn extract_content(doc: &mut Document) {
+    // Phase 1: Find the main content root node.
+    let content_root = find_content_root(doc);
+
+    crate::drivers::uart::puts("[reader] content_root=");
+    crate::kernel::mm::print_num(content_root);
+    if content_root < doc.node_count {
+        let node = &doc.nodes[content_root];
+        crate::drivers::uart::puts(" tag=");
+        crate::drivers::uart::puts(node.tag_str());
+        // Print id if present
+        for a in 0..node.attr_count {
+            let attr = &node.attrs[a];
+            if &attr.name[..attr.name_len] == b"id" {
+                crate::drivers::uart::puts(" id=");
+                crate::drivers::uart::puts(unsafe { core::str::from_utf8_unchecked(&attr.value[..attr.value_len]) });
+            }
+        }
+    }
+    crate::drivers::uart::puts("\n");
+
+    // Phase 2: Hide non-content elements
+    hide_non_content(doc, content_root);
+
+    // Count how many visible nodes remain
+    let mut visible = 0;
+    for i in 0..doc.node_count {
+        if doc.nodes[i].node_type != crate::browser::dom::NodeType::Comment { visible += 1; }
+    }
+    crate::drivers::uart::puts("[reader] visible nodes after extraction: ");
+    crate::kernel::mm::print_num(visible);
+    crate::drivers::uart::puts("\n");
+}
+
+/// Find the best candidate for the main content container.
+/// Returns the node index of the content root.
+fn find_content_root(doc: &Document) -> usize {
+    // 1. <main> element
+    if let Some(idx) = doc.find_tag("main") {
+        return idx;
+    }
+
+    // 2. <article> element
+    if let Some(idx) = doc.find_tag("article") {
+        return idx;
+    }
+
+    // 3. id="mw-content-text" (Wikipedia article body)
+    if let Some(idx) = doc.find_by_id("mw-content-text") {
+        return idx;
+    }
+
+    // 4. id="bodyContent" (Wikipedia)
+    if let Some(idx) = doc.find_by_id("bodyContent") {
+        return idx;
+    }
+
+    // 5. id="content" (common pattern)
+    if let Some(idx) = doc.find_by_id("content") {
+        return idx;
+    }
+
+    // 6. class="post-content" or class="entry-content" (blogs)
+    for i in 0..doc.node_count {
+        if doc.has_class(i, "post-content") || doc.has_class(i, "entry-content") {
+            return i;
+        }
+    }
+
+    // 7. class="article-body" (news sites)
+    for i in 0..doc.node_count {
+        if doc.has_class(i, "article-body") {
+            return i;
+        }
+    }
+
+    // 8. role="main"
+    for i in 0..doc.node_count {
+        if doc.has_role(i, "main") {
+            return i;
+        }
+    }
+
+    // 9. Fallback: <body>
+    doc.body()
+}
+
+/// Hide non-content elements by reparenting the content root under body.
+/// Instead of hiding individual nodes (which breaks tree traversal),
+/// we simply make body's first_child point to the content root.
+/// All siblings of the content root's ancestor chain become unreachable.
+fn hide_non_content(doc: &mut Document, content_root: usize) {
+    let body = doc.body();
+
+    if content_root == body {
+        // Content root is body itself — just strip noise elements inside
+        for i in 1..doc.node_count {
+            if doc.nodes[i].node_type != NodeType::Element { continue; }
+            if should_strip_inside(doc, i) {
+                doc.nodes[i].node_type = NodeType::Comment;
+            }
+        }
+        return;
+    }
+
+    // Content root is NOT body — reparent it as body's direct child.
+    // This makes the layout walker go body → content_root → article content,
+    // skipping all the navigation/sidebar that's between body and content_root.
+    doc.nodes[body].first_child = content_root as u16;
+    doc.nodes[content_root].parent = body as u16;
+    doc.nodes[content_root].next_sibling = 0xFFFF; // no siblings
+
+    // Also strip noise inside the content root
+    for i in 1..doc.node_count {
+        if doc.nodes[i].node_type != NodeType::Element { continue; }
+        if doc.is_descendant_of(i, content_root) {
+            if should_strip_inside(doc, i) {
+                doc.nodes[i].node_type = NodeType::Comment;
+            }
+        }
+    }
+}
+
+/// Check if a node inside the content area should be stripped.
+/// These are noise elements that appear even within article content.
+fn should_strip_inside(doc: &Document, idx: usize) -> bool {
+    let node = &doc.nodes[idx];
+    let tag = node.tag_str();
+
+    // Strip by tag name
+    match tag {
+        "nav" | "aside" | "form" => return true,
+        "script" | "style" | "link" | "meta" | "noscript" => return true,
+        _ => {}
+    }
+
+    // Strip by role attribute
+    if doc.has_role(idx, "navigation") || doc.has_role(idx, "banner")
+        || doc.has_role(idx, "complementary")
+    {
+        return true;
+    }
+
+    // Strip by specific class names (conservative — only clear noise patterns)
+    // NOTE: Do NOT match substrings like "nav" or "menu" — too broad!
+    // Wikipedia has classes like "mw-parser-output" containing "put" etc.
+    if doc.has_class(idx, "sidebar")
+        || doc.has_class(idx, "widget")
+        || doc.has_class(idx, "ad-container")
+        || doc.has_class(idx, "popup")
+        || doc.has_class(idx, "mw-panel")
+        || doc.has_class(idx, "catlinks")
+        || doc.has_class(idx, "noprint")
+        || doc.has_class(idx, "mw-editsection")
+    {
+        return true;
+    }
+
+    // Strip header/footer tags (they are structural noise)
+    if tag == "header" || tag == "footer" {
+        return true;
+    }
+
+    false
 }

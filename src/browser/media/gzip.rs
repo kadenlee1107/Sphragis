@@ -1,226 +1,101 @@
-// Bat_OS — PNG Decoder
-// Decodes PNG images into raw RGBA pixel buffers.
-// Implements: PNG chunk parsing, DEFLATE decompression, pixel unfiltering.
+// Bat_OS — Gzip Decompressor (RFC 1952)
+// Parses gzip headers and decompresses the DEFLATE payload.
+// Implements full DEFLATE (RFC 1951): stored, fixed Huffman, dynamic Huffman.
 //
-// PNG format:
-//   [8-byte signature] [IHDR chunk] [IDAT chunks...] [IEND chunk]
-//   IHDR: width, height, bit_depth, color_type
-//   IDAT: DEFLATE-compressed pixel data
-//   After decompression: rows of [filter_byte] [pixel_data...]
+// Gzip format:
+//   [10-byte header: ID1(0x1f) ID2(0x8b) CM(8) FLG MTIME(4) XFL OS]
+//   [optional extras based on FLG bits]
+//   [DEFLATE compressed data]
+//   [CRC32(4) ISIZE(4)]
 
-const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-
-// Maximum image dimensions (memory constrained)
-pub const MAX_WIDTH: usize = 512;
-pub const MAX_HEIGHT: usize = 512;
-pub const MAX_PIXELS: usize = MAX_WIDTH * MAX_HEIGHT;
-
-/// Decoded PNG image
-pub struct PngImage {
-    pub width: u32,
-    pub height: u32,
-    pub pixels: [u32; MAX_PIXELS], // ARGB packed
-    pub valid: bool,
-}
-
-impl PngImage {
-    pub const fn empty() -> Self {
-        PngImage {
-            width: 0,
-            height: 0,
-            pixels: [0; MAX_PIXELS],
-            valid: false,
-        }
+/// Decompress a gzip-compressed buffer.
+/// Returns the number of decompressed bytes written to `output`.
+/// Returns 0 on error (bad header, decompression failure, etc.).
+pub fn decompress(input: &[u8], output: &mut [u8]) -> usize {
+    // Minimum gzip: 10-byte header + 8-byte trailer = 18 bytes
+    if input.len() < 18 {
+        return 0;
     }
 
-    /// Get pixel at (x, y) as ARGB
-    pub fn get_pixel(&self, x: u32, y: u32) -> u32 {
-        if x < self.width && y < self.height {
-            self.pixels[(y * self.width + x) as usize]
-        } else {
+    // Verify gzip magic bytes and compression method
+    if input[0] != 0x1f || input[1] != 0x8b {
+        return 0; // not gzip
+    }
+    if input[2] != 8 {
+        return 0; // only DEFLATE (method 8) supported
+    }
+
+    let flg = input[3];
+    let mut pos: usize = 10; // skip fixed header
+
+    // FLG bit 2 (FEXTRA): skip extra field
+    if flg & 0x04 != 0 {
+        if pos + 2 > input.len() { return 0; }
+        let xlen = (input[pos] as usize) | ((input[pos + 1] as usize) << 8);
+        pos += 2 + xlen;
+    }
+
+    // FLG bit 3 (FNAME): skip null-terminated original file name
+    if flg & 0x08 != 0 {
+        while pos < input.len() && input[pos] != 0 {
+            pos += 1;
+        }
+        pos += 1; // skip the null terminator
+    }
+
+    // FLG bit 4 (FCOMMENT): skip null-terminated comment
+    if flg & 0x10 != 0 {
+        while pos < input.len() && input[pos] != 0 {
+            pos += 1;
+        }
+        pos += 1; // skip the null terminator
+    }
+
+    // FLG bit 1 (FHCRC): skip 2-byte header CRC16
+    if flg & 0x02 != 0 {
+        pos += 2;
+    }
+
+    if pos >= input.len() { return 0; }
+
+    // The remaining data (minus the 8-byte trailer) is the DEFLATE stream
+    let deflate_end = if input.len() > 8 { input.len() - 8 } else { input.len() };
+    let deflate_data = &input[pos..deflate_end];
+
+    crate::drivers::uart::puts("[gzip] deflate data at offset ");
+    crate::kernel::mm::print_num(pos);
+    crate::drivers::uart::puts(", ");
+    crate::kernel::mm::print_num(deflate_data.len());
+    crate::drivers::uart::puts(" bytes, first bytes: ");
+    for i in 0..deflate_data.len().min(8) {
+        let hex = b"0123456789abcdef";
+        crate::drivers::uart::putc(hex[(deflate_data[i] >> 4) as usize]);
+        crate::drivers::uart::putc(hex[(deflate_data[i] & 0xf) as usize]);
+        crate::drivers::uart::putc(b' ');
+    }
+    crate::drivers::uart::puts("\n");
+
+    // Use the PROVEN inflate implementation from the PNG decoder
+    match super::png::inflate(deflate_data, output) {
+        Ok(n) => {
+            crate::drivers::uart::puts("[gzip] decompressed ");
+            crate::kernel::mm::print_num(n);
+            crate::drivers::uart::puts(" bytes\n");
+            n
+        }
+        Err(e) => {
+            crate::drivers::uart::puts("[gzip] inflate error: ");
+            crate::drivers::uart::puts(e);
+            crate::drivers::uart::puts("\n");
             0
         }
     }
 }
 
-/// Decode a PNG from raw bytes.
-pub fn decode(data: &[u8], image: &mut PngImage) -> Result<(), &'static str> {
-    image.valid = false;
-
-    // Check PNG signature
-    if data.len() < 8 || data[..8] != PNG_SIGNATURE {
-        return Err("not PNG");
-    }
-
-    let mut pos = 8;
-    let mut width: u32 = 0;
-    let mut height: u32 = 0;
-    let mut bit_depth: u8 = 0;
-    let mut color_type: u8 = 0;
-
-    // Collect all IDAT data
-    let mut idat_buf = [0u8; 65536]; // compressed data buffer
-    let mut idat_len = 0usize;
-
-    // Parse chunks
-    while pos + 12 <= data.len() {
-        let chunk_len = u32::from_be_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]) as usize;
-        let chunk_type = &data[pos+4..pos+8];
-        let chunk_data = &data[pos+8..pos+8+chunk_len.min(data.len()-pos-8)];
-        pos += 12 + chunk_len; // skip length(4) + type(4) + data + CRC(4)
-
-        match chunk_type {
-            b"IHDR" => {
-                if chunk_data.len() >= 13 {
-                    width = u32::from_be_bytes([chunk_data[0], chunk_data[1], chunk_data[2], chunk_data[3]]);
-                    height = u32::from_be_bytes([chunk_data[4], chunk_data[5], chunk_data[6], chunk_data[7]]);
-                    bit_depth = chunk_data[8];
-                    color_type = chunk_data[9];
-                }
-            }
-            b"IDAT" => {
-                // Accumulate compressed data
-                let copy = chunk_data.len().min(idat_buf.len() - idat_len);
-                idat_buf[idat_len..idat_len+copy].copy_from_slice(&chunk_data[..copy]);
-                idat_len += copy;
-            }
-            b"IEND" => break,
-            _ => {} // skip unknown chunks
-        }
-    }
-
-    if width == 0 || height == 0 || idat_len == 0 {
-        return Err("invalid PNG");
-    }
-    if width > MAX_WIDTH as u32 || height > MAX_HEIGHT as u32 {
-        return Err("PNG too large");
-    }
-
-    // Bytes per pixel
-    let bpp = match color_type {
-        0 => 1,                          // Grayscale
-        2 => 3,                          // RGB
-        3 => 1,                          // Palette (indexed)
-        4 => 2,                          // Grayscale + Alpha
-        6 => 4,                          // RGBA
-        _ => return Err("unsupported color type"),
-    };
-
-    let stride = (width as usize) * bpp + 1; // +1 for filter byte per row
-    let decompressed_size = stride * (height as usize);
-
-    // Decompress DEFLATE (skip 2-byte zlib header)
-    let zlib_start = if idat_len >= 2 { 2 } else { 0 };
-    let mut decompressed = [0u8; 131072]; // max decompressed size
-    let decomp_len = inflate(&idat_buf[zlib_start..idat_len], &mut decompressed)?;
-
-    if decomp_len < decompressed_size {
-        return Err("incomplete decompression");
-    }
-
-    // Unfilter and convert to ARGB pixels
-    image.width = width;
-    image.height = height;
-
-    let w = width as usize;
-    for row in 0..height as usize {
-        let row_start = row * stride;
-        let filter = decompressed[row_start];
-        let pixels_start = row_start + 1;
-
-        // Apply PNG filter
-        match filter {
-            0 => {} // None — raw bytes
-            1 => {  // Sub — difference from left pixel
-                for x in bpp..w*bpp {
-                    decompressed[pixels_start + x] =
-                        decompressed[pixels_start + x].wrapping_add(decompressed[pixels_start + x - bpp]);
-                }
-            }
-            2 => {  // Up — difference from above pixel
-                if row > 0 {
-                    let prev_start = (row - 1) * stride + 1;
-                    for x in 0..w*bpp {
-                        decompressed[pixels_start + x] =
-                            decompressed[pixels_start + x].wrapping_add(decompressed[prev_start + x]);
-                    }
-                }
-            }
-            3 => {  // Average — average of left and above
-                let prev_start = if row > 0 { (row - 1) * stride + 1 } else { 0 };
-                for x in 0..w*bpp {
-                    let left = if x >= bpp { decompressed[pixels_start + x - bpp] as u16 } else { 0 };
-                    let above = if row > 0 { decompressed[prev_start + x] as u16 } else { 0 };
-                    decompressed[pixels_start + x] =
-                        decompressed[pixels_start + x].wrapping_add(((left + above) / 2) as u8);
-                }
-            }
-            4 => {  // Paeth predictor
-                let prev_start = if row > 0 { (row - 1) * stride + 1 } else { 0 };
-                for x in 0..w*bpp {
-                    let left = if x >= bpp { decompressed[pixels_start + x - bpp] as i32 } else { 0 };
-                    let above = if row > 0 { decompressed[prev_start + x] as i32 } else { 0 };
-                    let upper_left = if row > 0 && x >= bpp { decompressed[prev_start + x - bpp] as i32 } else { 0 };
-                    decompressed[pixels_start + x] =
-                        decompressed[pixels_start + x].wrapping_add(paeth(left, above, upper_left) as u8);
-                }
-            }
-            _ => {} // Unknown filter — leave as is
-        }
-
-        // Convert to ARGB
-        for x in 0..w {
-            let px = pixels_start + x * bpp;
-            let argb = match color_type {
-                0 => { // Grayscale
-                    let g = decompressed[px];
-                    0xFF000000 | (g as u32) << 16 | (g as u32) << 8 | g as u32
-                }
-                2 => { // RGB
-                    let r = decompressed[px];
-                    let g = decompressed[px+1];
-                    let b = decompressed[px+2];
-                    0xFF000000 | (b as u32) << 16 | (g as u32) << 8 | r as u32
-                }
-                4 => { // Grayscale + Alpha
-                    let g = decompressed[px];
-                    let a = decompressed[px+1];
-                    (a as u32) << 24 | (g as u32) << 16 | (g as u32) << 8 | g as u32
-                }
-                6 => { // RGBA
-                    let r = decompressed[px];
-                    let g = decompressed[px+1];
-                    let b = decompressed[px+2];
-                    let a = decompressed[px+3];
-                    (a as u32) << 24 | (b as u32) << 16 | (g as u32) << 8 | r as u32
-                }
-                _ => 0xFF000000,
-            };
-            if row * w + x < MAX_PIXELS {
-                image.pixels[row * w + x] = argb;
-            }
-        }
-    }
-
-    image.valid = true;
-    Ok(())
-}
-
-/// Paeth predictor function
-fn paeth(a: i32, b: i32, c: i32) -> i32 {
-    let p = a + b - c;
-    let pa = (p - a).abs();
-    let pb = (p - b).abs();
-    let pc = (p - c).abs();
-    if pa <= pb && pa <= pc { a }
-    else if pb <= pc { b }
-    else { c }
-}
-
 // ─── DEFLATE Decompression (RFC 1951) ───
+// Standalone implementation — same algorithm as in png.rs but self-contained.
 
-/// Decompress DEFLATE-compressed data.
-pub fn inflate(input: &[u8], output: &mut [u8]) -> Result<usize, &'static str> {
+fn inflate(input: &[u8], output: &mut [u8]) -> Result<usize, &'static str> {
     let mut reader = BitReader::new(input);
     let mut out_pos = 0usize;
 
@@ -260,25 +135,20 @@ pub fn inflate(input: &[u8], output: &mut [u8]) -> Result<usize, &'static str> {
 /// Inflate a block with fixed Huffman codes
 fn inflate_block_fixed(reader: &mut BitReader, output: &mut [u8], out_pos: &mut usize) -> Result<(), &'static str> {
     loop {
-        // Read literal/length code (7-9 bits)
         let code = decode_fixed_literal(reader)?;
 
         if code < 256 {
-            // Literal byte
             if *out_pos < output.len() {
                 output[*out_pos] = code as u8;
                 *out_pos += 1;
             }
         } else if code == 256 {
-            // End of block
             return Ok(());
         } else {
-            // Length + distance
             let length = decode_length(code, reader)?;
             let dist_code = read_reversed_bits(reader, 5)?;
             let distance = decode_distance(dist_code, reader)?;
 
-            // Copy from back-reference
             for _ in 0..length {
                 if *out_pos < output.len() && *out_pos >= distance {
                     output[*out_pos] = output[*out_pos - distance];
@@ -317,18 +187,15 @@ fn inflate_block_dynamic(reader: &mut BitReader, output: &mut [u8], out_pos: &mu
                 i += 1;
             }
             16 => {
-                // Repeat previous length 3-6 times
                 let repeat = reader.read_bits(2)? as usize + 3;
-                let prev = if i > 0 { all_lens[i-1] } else { 0 };
+                let prev = if i > 0 { all_lens[i - 1] } else { 0 };
                 for _ in 0..repeat { if i < total { all_lens[i] = prev; i += 1; } }
             }
             17 => {
-                // Repeat 0 for 3-10 times
                 let repeat = reader.read_bits(3)? as usize + 3;
                 for _ in 0..repeat { if i < total { all_lens[i] = 0; i += 1; } }
             }
             18 => {
-                // Repeat 0 for 11-138 times
                 let repeat = reader.read_bits(7)? as usize + 11;
                 for _ in 0..repeat { if i < total { all_lens[i] = 0; i += 1; } }
             }
@@ -338,7 +205,7 @@ fn inflate_block_dynamic(reader: &mut BitReader, output: &mut [u8], out_pos: &mu
 
     // Build literal/length and distance Huffman tables
     let lit_table = build_huffman_table(&all_lens[..hlit], hlit);
-    let dist_table = build_huffman_table(&all_lens[hlit..hlit+hdist], hdist);
+    let dist_table = build_huffman_table(&all_lens[hlit..hlit + hdist], hdist);
 
     // Decode data
     loop {
@@ -384,21 +251,18 @@ fn build_huffman_table(lens: &[u8], count: usize) -> HuffmanTable {
         offsets: [0; MAX_BITS + 1],
     };
 
-    // Count occurrences of each code length
     for i in 0..count.min(MAX_HUFFMAN) {
         let l = lens[i] as usize;
         if l <= MAX_BITS { table.counts[l] += 1; }
     }
     table.counts[0] = 0;
 
-    // Compute offsets
     let mut offset = 0u16;
     for i in 1..=MAX_BITS {
         table.offsets[i] = offset;
         offset += table.counts[i];
     }
 
-    // Build sorted symbol table
     for i in 0..count.min(MAX_HUFFMAN) {
         let l = lens[i] as usize;
         if l > 0 && l <= MAX_BITS {
@@ -423,7 +287,6 @@ fn build_huffman_table(lens: &[u8], count: usize) -> HuffmanTable {
 fn decode_huffman(reader: &mut BitReader, table: &HuffmanTable) -> Result<u32, &'static str> {
     let mut code = 0u32;
     let mut first = 0u32;
-    let mut index = 0u32;
 
     for len in 1..=MAX_BITS {
         code = (code << 1) | reader.read_bits(1)?;
@@ -435,7 +298,6 @@ fn decode_huffman(reader: &mut BitReader, table: &HuffmanTable) -> Result<u32, &
             }
         }
         first = (first + count) << 1;
-        index += count;
     }
 
     Err("invalid huffman code")
@@ -444,12 +306,10 @@ fn decode_huffman(reader: &mut BitReader, table: &HuffmanTable) -> Result<u32, &
 // ─── DEFLATE fixed code decoding ───
 
 fn decode_fixed_literal(reader: &mut BitReader) -> Result<u32, &'static str> {
-    // Fixed Huffman: 0-143 = 7-8 bits, 144-255 = 9 bits, 256-279 = 7 bits, 280-287 = 8 bits
     let mut code = read_reversed_bits(reader, 7)?;
 
     if code <= 23 {
-        // 256-279 (7-bit codes starting at 0b0000000)
-        return Ok(code + 256);
+        return Ok(code + 256); // 256-279 (7-bit)
     }
     code = (code << 1) | reader.read_bits(1)?;
     if code >= 48 && code <= 191 {
@@ -503,8 +363,8 @@ fn read_reversed_bits(reader: &mut BitReader, n: u8) -> Result<u32, &'static str
 
 struct BitReader<'a> {
     data: &'a [u8],
-    pos: usize,   // byte position
-    bit: u8,      // bit position within current byte (0-7)
+    pos: usize,
+    bit: u8,
 }
 
 impl<'a> BitReader<'a> {

@@ -43,6 +43,10 @@ fn parse_statement(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u
         TokenType::LeftBrace => parse_block(tokens, pos, ast),
         TokenType::Break => { *pos += 1; skip_semi(tokens, pos); let n = ast.alloc()?; ast.nodes[n as usize].kind = NodeKind::BreakStatement; Some(n) }
         TokenType::Continue => { *pos += 1; skip_semi(tokens, pos); let n = ast.alloc()?; ast.nodes[n as usize].kind = NodeKind::ContinueStatement; Some(n) }
+        TokenType::Throw => parse_throw(tokens, pos, ast),
+        TokenType::Try => parse_try(tokens, pos, ast),
+        TokenType::Switch => parse_switch(tokens, pos, ast),
+        TokenType::Class => parse_class(tokens, pos, ast),
         _ => {
             let expr = parse_expression(tokens, pos, ast, 0)?;
             skip_semi(tokens, pos);
@@ -155,11 +159,68 @@ fn parse_while(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16> 
 }
 
 fn parse_for(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16> {
-    *pos += 1;
+    *pos += 1; // skip 'for'
+
+    expect(tokens, pos, TokenType::LeftParen);
+
+    // Check for for...of or for...in
+    // Pattern: for (var/let/const ident of/in expr)
+    let saved_pos = *pos;
+    let mut is_for_of = false;
+    let mut is_for_in = false;
+
+    // Try to detect for...of / for...in
+    if *pos < tokens.len() && (tokens[*pos].token_type == TokenType::Var
+        || tokens[*pos].token_type == TokenType::Let
+        || tokens[*pos].token_type == TokenType::Const)
+    {
+        let decl_pos = *pos + 1;
+        if decl_pos < tokens.len() && tokens[decl_pos].token_type == TokenType::Identifier {
+            let after_ident = decl_pos + 1;
+            if after_ident < tokens.len() {
+                if tokens[after_ident].token_type == TokenType::Of {
+                    is_for_of = true;
+                } else if tokens[after_ident].token_type == TokenType::In {
+                    is_for_in = true;
+                }
+            }
+        }
+    }
+
+    if is_for_of || is_for_in {
+        let node = ast.alloc()?;
+        ast.nodes[node as usize].kind = if is_for_of { NodeKind::ForOfStatement } else { NodeKind::ForStatement };
+        // Skip var/let/const
+        *pos += 1;
+        // Parse variable name
+        let var_node = ast.alloc()?;
+        ast.nodes[var_node as usize].kind = NodeKind::VarDecl;
+        if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Identifier {
+            ast.nodes[var_node as usize].set_name(&tokens[*pos].text[..tokens[*pos].text_len]);
+            *pos += 1;
+        }
+        ast.nodes[node as usize].left = var_node;
+
+        // Skip 'of' or 'in'
+        *pos += 1;
+
+        // Parse iterable expression
+        if let Some(iterable) = parse_expression(tokens, pos, ast, 0) {
+            ast.nodes[node as usize].right = iterable;
+        }
+        expect(tokens, pos, TokenType::RightParen);
+
+        // Parse body
+        if let Some(body) = parse_statement(tokens, pos, ast) {
+            ast.nodes[node as usize].body = body;
+        }
+        return Some(node);
+    }
+
+    // Standard for loop
     let node = ast.alloc()?;
     ast.nodes[node as usize].kind = NodeKind::ForStatement;
 
-    expect(tokens, pos, TokenType::LeftParen);
     // Init
     if *pos < tokens.len() && tokens[*pos].token_type != TokenType::Semicolon {
         if let Some(init) = parse_statement(tokens, pos, ast) {
@@ -230,6 +291,21 @@ fn parse_expression(tokens: &[Token], pos: &mut usize, ast: &mut Ast, min_prec: 
     let mut left = parse_unary(tokens, pos, ast)?;
 
     while *pos < tokens.len() {
+        // Ternary conditional: a ? b : c
+        if tokens[*pos].token_type == TokenType::Question {
+            *pos += 1;
+            let then_expr = parse_expression(tokens, pos, ast, 0)?;
+            expect(tokens, pos, TokenType::Colon);
+            let else_expr = parse_expression(tokens, pos, ast, 0)?;
+            let node = ast.alloc()?;
+            ast.nodes[node as usize].kind = NodeKind::ConditionalExpr;
+            ast.nodes[node as usize].left = left;
+            ast.nodes[node as usize].right = then_expr;
+            ast.nodes[node as usize].extra = else_expr;
+            left = node;
+            continue;
+        }
+
         let (op, prec) = get_binary_op(&tokens[*pos]);
         if prec == 0 || prec < min_prec { break; }
 
@@ -297,12 +373,12 @@ fn parse_postfix(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16
                 ast.nodes[call as usize].kind = NodeKind::CallExpr;
                 ast.nodes[call as usize].left = expr;
 
-                // Parse arguments
+                // Parse arguments — linked via right → next chain
                 let mut last_arg: u16 = 0xFFFF;
                 while *pos < tokens.len() && tokens[*pos].token_type != TokenType::RightParen {
                     if let Some(arg) = parse_expression(tokens, pos, ast, 0) {
                         if last_arg == 0xFFFF {
-                            ast.nodes[call as usize].extra = arg;
+                            ast.nodes[call as usize].right = arg;
                         } else {
                             ast.nodes[last_arg as usize].next = arg;
                         }
@@ -316,10 +392,13 @@ fn parse_postfix(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16
             TokenType::Dot => {
                 *pos += 1;
                 if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Identifier {
+                    let prop_node = ast.alloc()?;
+                    ast.nodes[prop_node as usize].kind = NodeKind::Identifier;
+                    ast.nodes[prop_node as usize].set_name(&tokens[*pos].text[..tokens[*pos].text_len]);
                     let member = ast.alloc()?;
                     ast.nodes[member as usize].kind = NodeKind::MemberExpr;
                     ast.nodes[member as usize].left = expr;
-                    ast.nodes[member as usize].set_name(&tokens[*pos].text[..tokens[*pos].text_len]);
+                    ast.nodes[member as usize].right = prop_node;
                     *pos += 1;
                     expr = member;
                 }
@@ -333,6 +412,43 @@ fn parse_postfix(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16
                 ast.nodes[member as usize].left = expr;
                 ast.nodes[member as usize].right = idx_expr;
                 expr = member;
+            }
+            TokenType::OptionalChain => {
+                // obj?.prop — desugar to: obj == null ? undefined : obj.prop
+                *pos += 1;
+                if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Identifier {
+                    let prop_node = ast.alloc()?;
+                    ast.nodes[prop_node as usize].kind = NodeKind::Identifier;
+                    ast.nodes[prop_node as usize].set_name(&tokens[*pos].text[..tokens[*pos].text_len]);
+                    *pos += 1;
+
+                    // Build: expr == null ? undefined : expr.prop
+                    // For simplicity, we emit as ConditionalExpr
+                    let null_check = ast.alloc()?;
+                    ast.nodes[null_check as usize].kind = NodeKind::BinaryExpr;
+                    ast.nodes[null_check as usize].op = Operator::Equal;
+                    ast.nodes[null_check as usize].left = expr;
+                    let null_node = ast.alloc()?;
+                    ast.nodes[null_node as usize].kind = NodeKind::NullLiteral;
+                    ast.nodes[null_check as usize].right = null_node;
+
+                    let member = ast.alloc()?;
+                    ast.nodes[member as usize].kind = NodeKind::MemberExpr;
+                    ast.nodes[member as usize].left = expr;
+                    ast.nodes[member as usize].right = prop_node;
+
+                    let undef = ast.alloc()?;
+                    ast.nodes[undef as usize].kind = NodeKind::Identifier;
+                    ast.nodes[undef as usize].set_name(b"undefined");
+
+                    let cond = ast.alloc()?;
+                    ast.nodes[cond as usize].kind = NodeKind::ConditionalExpr;
+                    ast.nodes[cond as usize].left = null_check;
+                    ast.nodes[cond as usize].right = undef; // if null -> undefined
+                    ast.nodes[cond as usize].extra = member; // else -> member access
+
+                    expr = cond;
+                }
             }
             _ => break,
         }
@@ -378,6 +494,26 @@ fn parse_primary(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16
             ast.nodes[node as usize].kind = NodeKind::Identifier;
             ast.nodes[node as usize].set_name(&tok.text[..tok.text_len]);
             *pos += 1;
+            // Check for arrow function: x => body
+            if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Arrow {
+                *pos += 1; // skip =>
+                let arrow = ast.alloc()?;
+                ast.nodes[arrow as usize].kind = NodeKind::ArrowFunc;
+                // Single parameter
+                ast.nodes[arrow as usize].params[0] = node;
+                ast.nodes[arrow as usize].param_count = 1;
+                // Parse body
+                if *pos < tokens.len() && tokens[*pos].token_type == TokenType::LeftBrace {
+                    if let Some(body) = parse_block(tokens, pos, ast) {
+                        ast.nodes[arrow as usize].body = body;
+                    }
+                } else {
+                    if let Some(body) = parse_expression(tokens, pos, ast, 0) {
+                        ast.nodes[arrow as usize].body = body;
+                    }
+                }
+                return Some(arrow);
+            }
             Some(node)
         }
         TokenType::This => {
@@ -388,17 +524,450 @@ fn parse_primary(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16
             Some(node)
         }
         TokenType::LeftParen => {
+            // Could be (expr) or (params) => body (arrow function)
+            // Look ahead to detect arrow function
+            if is_arrow_function(tokens, *pos) {
+                return parse_arrow_function(tokens, pos, ast);
+            }
             *pos += 1;
             let expr = parse_expression(tokens, pos, ast, 0)?;
             expect(tokens, pos, TokenType::RightParen);
             Some(expr)
         }
-        TokenType::Function => parse_function_decl(tokens, pos, ast),
+        TokenType::Function => {
+            // Function expression (anonymous or named)
+            parse_function_decl(tokens, pos, ast)
+        }
+        TokenType::LeftBracket => {
+            // Array literal [el0, el1, ...]
+            *pos += 1;
+            let node = ast.alloc()?;
+            ast.nodes[node as usize].kind = NodeKind::ArrayLiteral;
+            let mut last_elem: u16 = 0xFFFF;
+            while *pos < tokens.len() && tokens[*pos].token_type != TokenType::RightBracket {
+                if let Some(elem) = parse_expression(tokens, pos, ast, 0) {
+                    if last_elem == 0xFFFF {
+                        ast.nodes[node as usize].left = elem;
+                    } else {
+                        ast.nodes[last_elem as usize].next = elem;
+                    }
+                    last_elem = elem;
+                }
+                if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Comma { *pos += 1; }
+            }
+            expect(tokens, pos, TokenType::RightBracket);
+            Some(node)
+        }
+        TokenType::LeftBrace => {
+            // Object literal { key: value, ... }
+            // Note: this is in expression position, so it's an object, not a block
+            *pos += 1;
+            let node = ast.alloc()?;
+            ast.nodes[node as usize].kind = NodeKind::ObjectLiteral;
+            let mut last_prop: u16 = 0xFFFF;
+            while *pos < tokens.len() && tokens[*pos].token_type != TokenType::RightBrace {
+                // Parse key: value
+                if *pos < tokens.len() && (tokens[*pos].token_type == TokenType::Identifier
+                    || tokens[*pos].token_type == TokenType::String
+                    || tokens[*pos].token_type == TokenType::Number) {
+                    let prop = ast.alloc()?;
+                    ast.nodes[prop as usize].kind = NodeKind::Identifier; // property entry
+                    ast.nodes[prop as usize].set_name(&tokens[*pos].text[..tokens[*pos].text_len]);
+                    *pos += 1;
+
+                    if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Colon {
+                        *pos += 1; // skip ':'
+                        if let Some(val) = parse_expression(tokens, pos, ast, 0) {
+                            ast.nodes[prop as usize].left = val;
+                        }
+                    } else {
+                        // Shorthand: { foo } means { foo: foo }
+                        let ident = ast.alloc()?;
+                        ast.nodes[ident as usize].kind = NodeKind::Identifier;
+                        let nlen = ast.nodes[prop as usize].name_len;
+                        let mut nbuf = [0u8; MAX_IDENT];
+                        nbuf[..nlen].copy_from_slice(&ast.nodes[prop as usize].name[..nlen]);
+                        ast.nodes[ident as usize].set_name(&nbuf[..nlen]);
+                        ast.nodes[prop as usize].left = ident;
+                    }
+
+                    if last_prop == 0xFFFF {
+                        ast.nodes[node as usize].left = prop;
+                    } else {
+                        ast.nodes[last_prop as usize].next = prop;
+                    }
+                    last_prop = prop;
+                } else {
+                    *pos += 1; // skip unknown
+                }
+                if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Comma { *pos += 1; }
+            }
+            expect(tokens, pos, TokenType::RightBrace);
+            Some(node)
+        }
+        TokenType::New => {
+            *pos += 1;
+            let node = ast.alloc()?;
+            ast.nodes[node as usize].kind = NodeKind::NewExpr;
+            // Parse the constructor expression
+            if let Some(callee) = parse_primary(tokens, pos, ast) {
+                ast.nodes[node as usize].left = callee;
+            }
+            // Parse arguments if present
+            if *pos < tokens.len() && tokens[*pos].token_type == TokenType::LeftParen {
+                *pos += 1;
+                let mut last_arg: u16 = 0xFFFF;
+                while *pos < tokens.len() && tokens[*pos].token_type != TokenType::RightParen {
+                    if let Some(arg) = parse_expression(tokens, pos, ast, 0) {
+                        if last_arg == 0xFFFF {
+                            ast.nodes[node as usize].right = arg;
+                        } else {
+                            ast.nodes[last_arg as usize].next = arg;
+                        }
+                        last_arg = arg;
+                    }
+                    if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Comma { *pos += 1; }
+                }
+                expect(tokens, pos, TokenType::RightParen);
+            }
+            Some(node)
+        }
+        TokenType::TemplateNoSub => {
+            // Simple template literal with no substitutions — treat as string
+            let node = ast.alloc()?;
+            ast.nodes[node as usize].kind = NodeKind::StringLiteral;
+            ast.nodes[node as usize].set_name(&tok.text[..tok.text_len]);
+            *pos += 1;
+            Some(node)
+        }
+        TokenType::TemplateStart => {
+            // Template literal with substitutions: `text${expr}text...`
+            // Build as concatenation of string parts and expressions
+            let str_node = ast.alloc()?;
+            ast.nodes[str_node as usize].kind = NodeKind::StringLiteral;
+            ast.nodes[str_node as usize].set_name(&tok.text[..tok.text_len]);
+            *pos += 1;
+
+            let mut result = str_node;
+
+            // Parse expression
+            if let Some(expr) = parse_expression(tokens, pos, ast, 0) {
+                // Concatenate string + expr
+                let concat = ast.alloc()?;
+                ast.nodes[concat as usize].kind = NodeKind::BinaryExpr;
+                ast.nodes[concat as usize].op = Operator::Add;
+                ast.nodes[concat as usize].left = result;
+                ast.nodes[concat as usize].right = expr;
+                result = concat;
+            }
+
+            // Handle TemplateMid and TemplateEnd
+            while *pos < tokens.len() {
+                let tt = tokens[*pos].token_type;
+                if tt == TokenType::TemplateEnd {
+                    let end_str = ast.alloc()?;
+                    ast.nodes[end_str as usize].kind = NodeKind::StringLiteral;
+                    ast.nodes[end_str as usize].set_name(&tokens[*pos].text[..tokens[*pos].text_len]);
+                    *pos += 1;
+                    if tokens[*pos - 1].text_len > 0 {
+                        let concat = ast.alloc()?;
+                        ast.nodes[concat as usize].kind = NodeKind::BinaryExpr;
+                        ast.nodes[concat as usize].op = Operator::Add;
+                        ast.nodes[concat as usize].left = result;
+                        ast.nodes[concat as usize].right = end_str;
+                        result = concat;
+                    }
+                    break;
+                } else if tt == TokenType::TemplateMid {
+                    let mid_str = ast.alloc()?;
+                    ast.nodes[mid_str as usize].kind = NodeKind::StringLiteral;
+                    ast.nodes[mid_str as usize].set_name(&tokens[*pos].text[..tokens[*pos].text_len]);
+                    *pos += 1;
+                    if tokens[*pos - 1].text_len > 0 {
+                        let concat = ast.alloc()?;
+                        ast.nodes[concat as usize].kind = NodeKind::BinaryExpr;
+                        ast.nodes[concat as usize].op = Operator::Add;
+                        ast.nodes[concat as usize].left = result;
+                        ast.nodes[concat as usize].right = mid_str;
+                        result = concat;
+                    }
+                    // Parse next expression
+                    if let Some(expr) = parse_expression(tokens, pos, ast, 0) {
+                        let concat = ast.alloc()?;
+                        ast.nodes[concat as usize].kind = NodeKind::BinaryExpr;
+                        ast.nodes[concat as usize].op = Operator::Add;
+                        ast.nodes[concat as usize].left = result;
+                        ast.nodes[concat as usize].right = expr;
+                        result = concat;
+                    }
+                } else {
+                    break;
+                }
+            }
+            Some(result)
+        }
+        TokenType::Undefined => {
+            let node = ast.alloc()?;
+            ast.nodes[node as usize].kind = NodeKind::Identifier;
+            ast.nodes[node as usize].set_name(b"undefined");
+            *pos += 1;
+            Some(node)
+        }
         _ => {
             *pos += 1;
             None
         }
     }
+}
+
+/// Detect if (tokens starting at pos) is an arrow function: (params) => ...
+fn is_arrow_function(tokens: &[Token], pos: usize) -> bool {
+    // Must start with (
+    if pos >= tokens.len() || tokens[pos].token_type != TokenType::LeftParen {
+        return false;
+    }
+    // Find matching )
+    let mut depth = 1;
+    let mut i = pos + 1;
+    while i < tokens.len() && depth > 0 {
+        match tokens[i].token_type {
+            TokenType::LeftParen => depth += 1,
+            TokenType::RightParen => depth -= 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    // Check if => follows
+    i < tokens.len() && tokens[i].token_type == TokenType::Arrow
+}
+
+/// Parse arrow function: (params) => body  or  () => body
+fn parse_arrow_function(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16> {
+    let node = ast.alloc()?;
+    ast.nodes[node as usize].kind = NodeKind::ArrowFunc;
+
+    // Parse parameters
+    expect(tokens, pos, TokenType::LeftParen);
+    let mut pcount = 0u8;
+    while *pos < tokens.len() && tokens[*pos].token_type != TokenType::RightParen {
+        if tokens[*pos].token_type == TokenType::Identifier {
+            let param = ast.alloc()?;
+            ast.nodes[param as usize].kind = NodeKind::Identifier;
+            ast.nodes[param as usize].set_name(&tokens[*pos].text[..tokens[*pos].text_len]);
+            if (pcount as usize) < 8 {
+                ast.nodes[node as usize].params[pcount as usize] = param;
+                pcount += 1;
+            }
+            *pos += 1;
+        }
+        if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Comma { *pos += 1; }
+    }
+    ast.nodes[node as usize].param_count = pcount;
+    expect(tokens, pos, TokenType::RightParen);
+
+    // Skip =>
+    expect(tokens, pos, TokenType::Arrow);
+
+    // Parse body
+    if *pos < tokens.len() && tokens[*pos].token_type == TokenType::LeftBrace {
+        if let Some(body) = parse_block(tokens, pos, ast) {
+            ast.nodes[node as usize].body = body;
+        }
+    } else {
+        if let Some(body) = parse_expression(tokens, pos, ast, 0) {
+            ast.nodes[node as usize].body = body;
+        }
+    }
+
+    Some(node)
+}
+
+fn parse_throw(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16> {
+    *pos += 1; // skip 'throw'
+    let node = ast.alloc()?;
+    ast.nodes[node as usize].kind = NodeKind::ThrowStatement;
+    if let Some(expr) = parse_expression(tokens, pos, ast, 0) {
+        ast.nodes[node as usize].left = expr;
+    }
+    skip_semi(tokens, pos);
+    Some(node)
+}
+
+fn parse_try(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16> {
+    *pos += 1; // skip 'try'
+    let node = ast.alloc()?;
+    ast.nodes[node as usize].kind = NodeKind::TryStatement;
+
+    // Try body
+    if let Some(body) = parse_block(tokens, pos, ast) {
+        ast.nodes[node as usize].left = body;
+    }
+
+    // Catch clause
+    if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Catch {
+        *pos += 1;
+        let catch_node = ast.alloc()?;
+        // Parse catch parameter
+        if *pos < tokens.len() && tokens[*pos].token_type == TokenType::LeftParen {
+            *pos += 1;
+            if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Identifier {
+                ast.nodes[catch_node as usize].set_name(&tokens[*pos].text[..tokens[*pos].text_len]);
+                *pos += 1;
+            }
+            expect(tokens, pos, TokenType::RightParen);
+        }
+        // Catch body
+        if let Some(catch_body) = parse_block(tokens, pos, ast) {
+            ast.nodes[catch_node as usize].left = catch_body;
+        }
+        ast.nodes[node as usize].right = catch_node;
+    }
+
+    // Finally clause
+    if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Finally {
+        *pos += 1;
+        if let Some(finally_body) = parse_block(tokens, pos, ast) {
+            ast.nodes[node as usize].extra = finally_body;
+        }
+    }
+
+    Some(node)
+}
+
+fn parse_switch(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16> {
+    *pos += 1; // skip 'switch'
+    let node = ast.alloc()?;
+    ast.nodes[node as usize].kind = NodeKind::SwitchStatement;
+
+    expect(tokens, pos, TokenType::LeftParen);
+    if let Some(disc) = parse_expression(tokens, pos, ast, 0) {
+        ast.nodes[node as usize].left = disc;
+    }
+    expect(tokens, pos, TokenType::RightParen);
+    expect(tokens, pos, TokenType::LeftBrace);
+
+    // Parse case clauses — linked via next chain
+    let mut last_case: u16 = 0xFFFF;
+    while *pos < tokens.len() && tokens[*pos].token_type != TokenType::RightBrace {
+        if tokens[*pos].token_type == TokenType::Case || tokens[*pos].token_type == TokenType::Default {
+            let is_default = tokens[*pos].token_type == TokenType::Default;
+            *pos += 1;
+            let case_node = ast.alloc()?;
+            ast.nodes[case_node as usize].kind = NodeKind::ExprStatement; // reuse for case
+
+            if !is_default {
+                if let Some(test) = parse_expression(tokens, pos, ast, 0) {
+                    ast.nodes[case_node as usize].left = test;
+                }
+            }
+            expect(tokens, pos, TokenType::Colon);
+
+            // Parse case body statements
+            let mut last_stmt: u16 = 0xFFFF;
+            while *pos < tokens.len()
+                && tokens[*pos].token_type != TokenType::Case
+                && tokens[*pos].token_type != TokenType::Default
+                && tokens[*pos].token_type != TokenType::RightBrace
+            {
+                if let Some(stmt) = parse_statement(tokens, pos, ast) {
+                    if last_stmt == 0xFFFF {
+                        ast.nodes[case_node as usize].right = stmt;
+                    } else {
+                        ast.nodes[last_stmt as usize].next = stmt;
+                    }
+                    last_stmt = stmt;
+                } else {
+                    *pos += 1;
+                }
+            }
+
+            if last_case == 0xFFFF {
+                ast.nodes[node as usize].right = case_node;
+            } else {
+                ast.nodes[last_case as usize].next = case_node;
+            }
+            last_case = case_node;
+        } else {
+            *pos += 1;
+        }
+    }
+    expect(tokens, pos, TokenType::RightBrace);
+    Some(node)
+}
+
+/// Parse class declaration — desugar to function + prototype
+fn parse_class(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16> {
+    *pos += 1; // skip 'class'
+    let node = ast.alloc()?;
+    ast.nodes[node as usize].kind = NodeKind::ClassDecl;
+
+    // Class name
+    if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Identifier {
+        ast.nodes[node as usize].set_name(&tokens[*pos].text[..tokens[*pos].text_len]);
+        *pos += 1;
+    }
+
+    // Optional extends
+    if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Extends {
+        *pos += 1;
+        if let Some(parent) = parse_expression(tokens, pos, ast, 0) {
+            ast.nodes[node as usize].extra = parent;
+        }
+    }
+
+    // Class body { ... }
+    expect(tokens, pos, TokenType::LeftBrace);
+    let mut last_method: u16 = 0xFFFF;
+
+    while *pos < tokens.len() && tokens[*pos].token_type != TokenType::RightBrace {
+        // Parse method: name(...) { ... }
+        if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Identifier {
+            let method = ast.alloc()?;
+            ast.nodes[method as usize].kind = NodeKind::FunctionDecl;
+            ast.nodes[method as usize].set_name(&tokens[*pos].text[..tokens[*pos].text_len]);
+            *pos += 1;
+
+            // Parameters
+            expect(tokens, pos, TokenType::LeftParen);
+            let mut pcount = 0u8;
+            while *pos < tokens.len() && tokens[*pos].token_type != TokenType::RightParen {
+                if tokens[*pos].token_type == TokenType::Identifier {
+                    let param = ast.alloc()?;
+                    ast.nodes[param as usize].kind = NodeKind::Identifier;
+                    ast.nodes[param as usize].set_name(&tokens[*pos].text[..tokens[*pos].text_len]);
+                    if (pcount as usize) < 8 {
+                        ast.nodes[method as usize].params[pcount as usize] = param;
+                        pcount += 1;
+                    }
+                    *pos += 1;
+                }
+                if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Comma { *pos += 1; }
+            }
+            ast.nodes[method as usize].param_count = pcount;
+            expect(tokens, pos, TokenType::RightParen);
+
+            // Body
+            if let Some(body) = parse_block(tokens, pos, ast) {
+                ast.nodes[method as usize].body = body;
+            }
+
+            if last_method == 0xFFFF {
+                ast.nodes[node as usize].left = method;
+            } else {
+                ast.nodes[last_method as usize].next = method;
+            }
+            last_method = method;
+        } else {
+            *pos += 1; // skip unknown
+        }
+        // Skip optional semicolons between methods
+        if *pos < tokens.len() && tokens[*pos].token_type == TokenType::Semicolon {
+            *pos += 1;
+        }
+    }
+    expect(tokens, pos, TokenType::RightBrace);
+
+    Some(node)
 }
 
 fn get_binary_op(tok: &Token) -> (Operator, u8) {

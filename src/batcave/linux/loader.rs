@@ -18,6 +18,11 @@ pub static WORKER_ENTRY: AtomicUsize = AtomicUsize::new(0);
 pub static WORKER_PHYS_BASE: AtomicUsize = AtomicUsize::new(0);
 pub static WORKER_ORIG_ENTRY: AtomicUsize = AtomicUsize::new(0);
 
+// Hello binary instance (standalone ELF, loaded on demand)
+pub static HELLO_ENTRY: AtomicUsize = AtomicUsize::new(0);
+pub static HELLO_PHYS_BASE: AtomicUsize = AtomicUsize::new(0);
+pub static HELLO_ORIG_ENTRY: AtomicUsize = AtomicUsize::new(0);
+
 /// Re-initialize a previously loaded ELF at the given phys_base.
 /// Re-copies all PT_LOAD segments and re-applies relocations.
 /// Does NOT allocate new pages — reuses existing allocation.
@@ -219,6 +224,12 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
         }
     }
 
+    // Flush caches to ensure loaded code/data is visible
+    unsafe {
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("isb");
+    }
+
     LOADED_ENTRY.store(phys_entry as usize, Ordering::Relaxed);
     LOADED_ORIG_ENTRY.store(entry as usize, Ordering::Relaxed);
     LOADED_PHYS_BASE.store(phys_base, Ordering::Relaxed);
@@ -350,6 +361,31 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
 
     uart::puts("[loader] --- done ---\n");
     Ok(())
+}
+
+/// Load a standalone (non-busybox) ELF binary and store its metadata
+/// in the HELLO_* atomics. Returns (phys_entry, phys_base, orig_entry).
+pub fn load_hello_elf(data: &[u8]) -> Result<(u64, usize, u64), &'static str> {
+    // Save current loader state (so we don't clobber busybox metadata)
+    let saved_entry = LOADED_ENTRY.load(Ordering::Relaxed);
+    let saved_phys = LOADED_PHYS_BASE.load(Ordering::Relaxed);
+    let saved_orig = LOADED_ORIG_ENTRY.load(Ordering::Relaxed);
+
+    let phys_entry = load_elf(data)?;
+    let phys_base = LOADED_PHYS_BASE.load(Ordering::Relaxed);
+    let orig_entry = LOADED_ORIG_ENTRY.load(Ordering::Relaxed) as u64;
+
+    // Store in HELLO_* atomics
+    HELLO_ENTRY.store(phys_entry as usize, Ordering::Relaxed);
+    HELLO_PHYS_BASE.store(phys_base, Ordering::Relaxed);
+    HELLO_ORIG_ENTRY.store(orig_entry as usize, Ordering::Relaxed);
+
+    // Restore busybox loader state
+    LOADED_ENTRY.store(saved_entry, Ordering::Relaxed);
+    LOADED_PHYS_BASE.store(saved_phys, Ordering::Relaxed);
+    LOADED_ORIG_ENTRY.store(saved_orig, Ordering::Relaxed);
+
+    Ok((phys_entry, phys_base, orig_entry))
 }
 
 fn u64_at(data: &[u8], off: usize) -> u64 {

@@ -42,6 +42,14 @@ pub enum NodeKind {
     ThrowStatement,   // throw expr;
     SwitchStatement,  // switch (expr) { case ... }
 
+    // ES6+ extensions
+    TemplateLiteral,  // `hello ${name}`
+    SpreadExpr,       // ...expr
+    ClassDecl,        // class Foo { ... }
+    ForOfStatement,   // for (const x of iterable) { ... }
+    DestructureObj,   // const {a, b} = obj
+    DestructureArr,   // const [x, y] = arr
+
     // Program
     Program,          // top-level list of statements
 }

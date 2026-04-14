@@ -111,6 +111,8 @@ fn execute(cmd: &str) {
         "fetch" => cmd_fetch(parts[1]),
         "batcave" => cmd_batcave(parts[1], parts[2], parts[3]),
         "panic" => cmd_panic(),
+        "hello" => cmd_run_elf("hello"),
+        "hello_libc" | "libc" => cmd_run_elf("libc"),
         "" => {}
         _ => {
             console::puts("  unknown command: ");
@@ -894,4 +896,120 @@ fn split_cmd(cmd: &str) -> [&str; 4] {
         parts[idx] = unsafe { core::str::from_utf8_unchecked(&bytes[start..]) };
     }
     parts
+}
+
+/// Run an embedded ELF binary (hello or hello_libc)
+fn cmd_run_elf(name: &str) {
+    console::puts("  Loading ELF binary: ");
+    console::puts(name);
+    console::puts("\n");
+    uart::puts("[shell] loading ELF: ");
+    uart::puts(name);
+    uart::puts("\n");
+
+    // For "libc" test, use the BatCave execution path (EL0 + proper page tables)
+    // which already works for busybox
+    if name == "libc" {
+        let data = crate::batcave::linux::runner::hello_libc_elf();
+        uart::puts("[shell] using BatCave runner for libc test\n");
+        match crate::batcave::linux::loader::load_elf(data) {
+            Ok(entry) => {
+                uart::puts("[shell] loaded, running via BatCave...\n");
+                if let Err(e) = crate::batcave::linux::loader::execute_with_args(entry, &["hello_mini"]) {
+                    console::puts("  Error: ");
+                    console::puts(e);
+                    console::puts("\n");
+                }
+            }
+            Err(e) => {
+                console::puts("  Load error: ");
+                console::puts(e);
+                console::puts("\n");
+            }
+        }
+        return;
+    }
+
+    let hello_data = crate::batcave::linux::runner::hello_elf();
+    uart::puts("[shell] ELF data: ");
+    crate::kernel::mm::print_num(hello_data.len());
+    uart::puts(" bytes\n");
+
+    match crate::batcave::linux::loader::load_hello_elf(hello_data) {
+        Ok((phys_entry, _phys_base, _orig_entry)) => {
+            uart::puts("[shell] ELF loaded, entry=0x");
+            let hex = b"0123456789abcdef";
+            for i in (0..16).rev() {
+                uart::putc(hex[((phys_entry >> (i * 4)) & 0xf) as usize]);
+            }
+            uart::puts("\n");
+
+            console::puts("  Executing...\n");
+
+            // Allocate stack — use a fixed high address to avoid overlap with ELF
+            // Allocate 16 contiguous pages for a 64KB stack
+            let mut stack_pages = [0usize; 16];
+            let mut stack_ok = true;
+            for i in 0..16 {
+                match crate::kernel::mm::frame::alloc_frame() {
+                    Some(p) => stack_pages[i] = p,
+                    None => { stack_ok = false; break; }
+                }
+            }
+            let stack_base = if stack_ok { Some(stack_pages[0]) } else { None };
+            if let Some(sb) = stack_base {
+                let sp = sb + 16 * 4096;
+                // Verify stack is accessible by writing a test value
+                unsafe { core::ptr::write_volatile(sb as *mut u64, 0xDEADBEEF); }
+
+                // Set up minimal stack: argc=0, argv=NULL, envp=NULL, auxv=AT_NULL
+                unsafe {
+                    let sp_ptr = sp as *mut u64;
+                    // auxv AT_NULL
+                    core::ptr::write_volatile(sp_ptr.sub(1), 0u64); // AT_NULL value
+                    core::ptr::write_volatile(sp_ptr.sub(2), 0u64); // AT_NULL key
+                    // envp NULL
+                    core::ptr::write_volatile(sp_ptr.sub(3), 0u64);
+                    // argv NULL
+                    core::ptr::write_volatile(sp_ptr.sub(4), 0u64);
+                    // argc = 0
+                    core::ptr::write_volatile(sp_ptr.sub(5), 0u64);
+
+                    let final_sp = sp - 40; // 5 * 8 bytes
+
+                    uart::puts("[shell] jumping to ELF entry, sp=0x");
+                    for i in (0..16).rev() {
+                        uart::putc(hex[((final_sp >> (i * 4)) & 0xf) as usize]);
+                    }
+                    uart::puts("\n");
+
+                    // Ensure cache coherency: flush data caches and invalidate
+                    // instruction caches so the loaded code is visible
+                    core::arch::asm!(
+                        "dsb ish",   // data synchronization barrier
+                        "isb",       // instruction synchronization barrier
+                    );
+
+                    // Jump to the binary — it will use syscalls which our handler catches
+                    core::arch::asm!(
+                        "mov sp, {sp_val}",
+                        "br {entry}",
+                        sp_val = in(reg) final_sp as u64,
+                        entry = in(reg) phys_entry as u64,
+                        options(noreturn),
+                    );
+                }
+            } else {
+                console::puts("  ERROR: could not allocate stack\n");
+            }
+        }
+        Err(e) => {
+            console::puts("  ERROR: ");
+            console::puts(e);
+            console::puts("\n");
+            uart::puts("[shell] ELF load failed: ");
+            uart::puts(e);
+            uart::puts("\n");
+        }
+    }
 }

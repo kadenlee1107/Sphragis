@@ -80,6 +80,7 @@ pub enum TokenType {
     Dot,           // .
     Spread,        // ...
     Question,      // ?
+    OptionalChain, // ?.
     Colon,         // :
 
     // Punctuation
@@ -91,6 +92,12 @@ pub enum TokenType {
     RightBracket,  // ]
     Semicolon,     // ;
     Comma,         // ,
+
+    // Template literals
+    TemplateStart,     // `hello ${
+    TemplateMid,       // } middle ${
+    TemplateEnd,       // } end`
+    TemplateNoSub,     // `no substitutions`
 
     // Special
     Eof,
@@ -181,7 +188,7 @@ pub fn tokenize(source: &[u8], tokens: &mut [Token; MAX_TOKENS]) -> usize {
         }
 
         // Strings
-        if ch == b'"' || ch == b'\'' || ch == b'`' {
+        if ch == b'"' || ch == b'\'' {
             let quote = ch;
             pos += 1;
             let start = pos;
@@ -195,6 +202,96 @@ pub fn tokenize(source: &[u8], tokens: &mut [Token; MAX_TOKENS]) -> usize {
             if pos < source.len() { pos += 1; } // skip closing quote
             count += 1;
             continue;
+        }
+
+        // Template literals
+        if ch == b'`' {
+            pos += 1;
+            let start = pos;
+            // Scan for ${ or closing backtick
+            let mut has_sub = false;
+            while pos < source.len() && source[pos] != b'`' {
+                if source[pos] == b'$' && pos + 1 < source.len() && source[pos + 1] == b'{' {
+                    has_sub = true;
+                    break;
+                }
+                if source[pos] == b'\\' { pos += 1; }
+                if pos < source.len() && source[pos] == b'\n' { line += 1; }
+                pos += 1;
+            }
+            if has_sub {
+                // Template with substitutions: emit TemplateStart
+                tok.token_type = TokenType::TemplateStart;
+                tok.set_text(&source[start..pos]);
+                pos += 2; // skip ${
+                count += 1;
+
+                // Now lex the expression inside ${ ... } and subsequent template parts
+                // The rest of template handling happens via the parser re-entering the lexer
+                // For simplicity, we'll handle the rest as normal tokens until we hit }
+                // then continue template
+                let mut brace_depth = 1;
+                while pos < source.len() && count < MAX_TOKENS - 2 {
+                    // Skip whitespace
+                    while pos < source.len() && is_whitespace(source[pos]) {
+                        if source[pos] == b'\n' { line += 1; }
+                        pos += 1;
+                    }
+                    if pos >= source.len() { break; }
+
+                    if source[pos] == b'}' {
+                        brace_depth -= 1;
+                        if brace_depth == 0 {
+                            pos += 1; // skip closing }
+                            // Continue scanning template
+                            let mid_start = pos;
+                            let mut more_sub = false;
+                            while pos < source.len() && source[pos] != b'`' {
+                                if source[pos] == b'$' && pos + 1 < source.len() && source[pos + 1] == b'{' {
+                                    more_sub = true;
+                                    break;
+                                }
+                                if source[pos] == b'\\' { pos += 1; }
+                                if pos < source.len() && source[pos] == b'\n' { line += 1; }
+                                pos += 1;
+                            }
+                            let template_tok = &mut tokens[count];
+                            template_tok.line = line;
+                            if more_sub {
+                                template_tok.token_type = TokenType::TemplateMid;
+                                template_tok.set_text(&source[mid_start..pos]);
+                                pos += 2; // skip ${
+                                count += 1;
+                                brace_depth = 1;
+                                continue;
+                            } else {
+                                template_tok.token_type = TokenType::TemplateEnd;
+                                template_tok.set_text(&source[mid_start..pos]);
+                                if pos < source.len() { pos += 1; } // skip `
+                                count += 1;
+                                break;
+                            }
+                        }
+                    }
+                    if source[pos] == b'{' { brace_depth += 1; }
+
+                    // Lex a normal token for the expression inside ${}
+                    // Recursively handle by continuing the outer loop
+                    // We break out and let the outer loop handle these tokens
+                    break;
+                }
+
+                // Re-enter the outer loop for expression tokens
+                // The TemplateEnd/TemplateMid tokens mark where template continues
+                continue;
+            } else {
+                // No substitutions — simple template string
+                tok.token_type = TokenType::TemplateNoSub;
+                tok.set_text(&source[start..pos]);
+                if pos < source.len() { pos += 1; } // skip `
+                count += 1;
+                continue;
+            }
         }
 
         // Identifiers and keywords
@@ -302,7 +399,13 @@ pub fn tokenize(source: &[u8], tokens: &mut [Token; MAX_TOKENS]) -> usize {
                 if pos + 2 < source.len() && source[pos+1] == b'.' && source[pos+2] == b'.' { tok.token_type = TokenType::Spread; pos += 3; }
                 else { tok.token_type = TokenType::Dot; pos += 1; }
             }
-            b'?' => { tok.token_type = TokenType::Question; pos += 1; }
+            b'?' => {
+                if pos + 1 < source.len() && source[pos+1] == b'.' {
+                    tok.token_type = TokenType::OptionalChain; pos += 2; tok.set_text(b"?.");
+                } else {
+                    tok.token_type = TokenType::Question; pos += 1;
+                }
+            }
             b':' => { tok.token_type = TokenType::Colon; pos += 1; }
             b'(' => { tok.token_type = TokenType::LeftParen; pos += 1; }
             b')' => { tok.token_type = TokenType::RightParen; pos += 1; }

@@ -45,30 +45,41 @@ pub fn handle_response(data: &[u8]) {
     }
     offset += 4; // Skip QTYPE + QCLASS
 
-    // Parse first answer
-    if offset + 12 > data.len() { return; }
+    // Parse answer records — scan through all answers to find an A record.
+    // DNS responses may contain CNAME chains (e.g. www.wikipedia.org → CNAME → dyna.wikimedia.org → A record).
+    let max_answers = (answers as usize).min(16); // cap to avoid infinite loops
+    for _ in 0..max_answers {
+        if offset + 2 > data.len() { return; }
 
-    // Skip name (might be compressed pointer)
-    if data[offset] & 0xC0 == 0xC0 {
-        offset += 2; // Compressed pointer
-    } else {
-        while offset < data.len() && data[offset] != 0 {
-            offset += data[offset] as usize + 1;
+        // Skip name (might be compressed pointer: first two bits = 11)
+        if data[offset] & 0xC0 == 0xC0 {
+            offset += 2; // Compressed pointer (2 bytes)
+        } else {
+            while offset < data.len() && data[offset] != 0 {
+                let label_len = data[offset] as usize;
+                offset += label_len + 1;
+            }
+            if offset < data.len() { offset += 1; } // skip null terminator
         }
-        offset += 1;
-    }
 
-    if offset + 10 > data.len() { return; }
+        if offset + 10 > data.len() { return; }
 
-    let rtype = u16::from_be_bytes([data[offset], data[offset + 1]]);
-    let rdlen = u16::from_be_bytes([data[offset + 8], data[offset + 9]]) as usize;
-    offset += 10;
+        let rtype = u16::from_be_bytes([data[offset], data[offset + 1]]);
+        // offset+2..+4 = class, offset+4..+8 = TTL
+        let rdlen = u16::from_be_bytes([data[offset + 8], data[offset + 9]]) as usize;
+        offset += 10;
 
-    if rtype == 1 && rdlen == 4 && offset + 4 <= data.len() {
-        // A record
-        let ip = u32::from_be_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]);
-        RESOLVED_IP.store(ip, Ordering::Relaxed);
-        DNS_DONE.store(true, Ordering::Release);
+        if rtype == 1 && rdlen == 4 && offset + 4 <= data.len() {
+            // A record — extract IPv4 address
+            let ip = u32::from_be_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]);
+            RESOLVED_IP.store(ip, Ordering::Relaxed);
+            DNS_DONE.store(true, Ordering::Release);
+            return;
+        }
+
+        // CNAME (type 5) or AAAA (type 28) or other — skip rdata and continue
+        if offset + rdlen > data.len() { return; }
+        offset += rdlen;
     }
 }
 
@@ -117,13 +128,14 @@ pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
     // Send query
     udp::send(DNS_SERVER, LOCAL_PORT, DNS_PORT, &query[..offset])?;
 
-    // Wait for response — retry multiple times
-    for attempt in 0..3 {
+    // Wait for response — retry with increasing timeouts
+    for attempt in 0..5 {
         if attempt > 0 {
-            // Re-send query
+            // Re-send query on each retry
             let _ = udp::send(DNS_SERVER, LOCAL_PORT, DNS_PORT, &query[..offset]);
         }
-        for _ in 0..10_000_000 {
+        // Poll for response (50M iterations ≈ several seconds on fast CPUs)
+        for _ in 0..50_000_000u64 {
             super::poll_once();
             if DNS_DONE.load(Ordering::Acquire) {
                 let ip = RESOLVED_IP.load(Ordering::Relaxed);

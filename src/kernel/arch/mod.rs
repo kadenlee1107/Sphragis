@@ -231,6 +231,100 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                                 plen += 1;
                             }
 
+                            // Debug: log what path execve is trying
+                            crate::drivers::uart::puts("[execve] path='");
+                            for i in 0..plen.min(60) {
+                                crate::drivers::uart::putc(path_buf[i]);
+                            }
+                            crate::drivers::uart::puts("' len=");
+                            crate::kernel::mm::print_num(plen);
+                            crate::drivers::uart::puts("\n");
+
+                            // Check for standalone binaries (not busybox applets)
+                            let is_hello = (plen == 10 && &path_buf[..10] == b"/bin/hello")
+                                || (plen == 5 && &path_buf[..5] == b"hello");
+
+                            if is_hello {
+                                // Load the hello ELF binary
+                                let hello_data = crate::batcave::linux::runner::hello_elf();
+                                match crate::batcave::linux::loader::load_hello_elf(hello_data) {
+                                    Ok((phys_entry, phys_base, _orig_entry)) => {
+                                        // Build a minimal stack for the hello binary
+                                        let stack_page = crate::kernel::mm::frame::alloc_frame();
+                                        if let Some(stack_base) = stack_page {
+                                            for _ in 0..15 {
+                                                crate::kernel::mm::frame::alloc_frame();
+                                            }
+                                            let mut sp = stack_base + 16 * 4096;
+
+                                            // Write argv[0] = "hello"
+                                            sp -= 6; // "hello\0"
+                                            let arg0_addr = sp;
+                                            for (j, &b) in b"hello".iter().enumerate() {
+                                                core::arch::asm!("strb {v:w}, [{a}]",
+                                                    a = in(reg) sp + j,
+                                                    v = in(reg) b as u32);
+                                            }
+                                            core::arch::asm!("strb wzr, [{a}]",
+                                                a = in(reg) sp + 5);
+
+                                            // envp string
+                                            sp -= 10;
+                                            let env0 = sp;
+                                            for (j, &b) in b"PATH=/bin\0".iter().enumerate() {
+                                                core::arch::asm!("strb {v:w}, [{a}]",
+                                                    a = in(reg) sp + j, v = in(reg) b as u32);
+                                            }
+
+                                            sp = (sp - 64) & !0xF;
+
+                                            // auxv: AT_NULL
+                                            sp -= 16;
+                                            core::arch::asm!("str xzr, [{a}]", a = in(reg) sp);
+                                            core::arch::asm!("str xzr, [{a}]", a = in(reg) sp + 8);
+                                            // AT_PAGESZ
+                                            sp -= 16;
+                                            let k6: u64 = 6; let v4096: u64 = 4096;
+                                            core::arch::asm!("str {v}, [{a}]", a = in(reg) sp, v = in(reg) k6);
+                                            core::arch::asm!("str {v}, [{a}]", a = in(reg) sp + 8, v = in(reg) v4096);
+
+                                            // envp NULL + pointer
+                                            sp -= 8;
+                                            core::arch::asm!("str xzr, [{a}]", a = in(reg) sp);
+                                            sp -= 8;
+                                            core::arch::asm!("str {v}, [{a}]",
+                                                a = in(reg) sp, v = in(reg) env0 as u64);
+
+                                            // argv NULL + pointer
+                                            sp -= 8;
+                                            core::arch::asm!("str xzr, [{a}]", a = in(reg) sp);
+                                            sp -= 8;
+                                            core::arch::asm!("str {v}, [{a}]",
+                                                a = in(reg) sp, v = in(reg) arg0_addr as u64);
+
+                                            // argc = 1
+                                            sp -= 8;
+                                            let one: u64 = 1;
+                                            core::arch::asm!("str {v}, [{a}]",
+                                                a = in(reg) sp, v = in(reg) one);
+
+                                            // Jump to hello binary entry (identity-mapped)
+                                            let entry = phys_entry;
+                                            core::arch::asm!(
+                                                "mov sp, {sp_val}",
+                                                "br {entry}",
+                                                sp_val = in(reg) sp as u64,
+                                                entry = in(reg) entry,
+                                                options(noreturn),
+                                            );
+                                        }
+                                    }
+                                    Err(_) => {
+                                        // Load failed — fall through to ENOENT
+                                    }
+                                }
+                            }
+
                             // Check if it's in /bin or /usr/bin (busybox applet)
                             let is_bb = plen > 5 && (&path_buf[..5] == b"/bin/"
                                 || (plen > 9 && &path_buf[..9] == b"/usr/bin/"));

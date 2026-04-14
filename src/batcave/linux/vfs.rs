@@ -669,6 +669,9 @@ fn populate_rootfs() {
     let bin = find_child(0, b"bin").unwrap();
     create_node(bin, b"busybox", NodeType::File, 0o100755).ok();
 
+    // /bin/hello — standalone test binary (not a busybox applet)
+    create_node(bin, b"hello", NodeType::File, 0o100755).ok();
+
     // Busybox applet symlinks → /bin/busybox
     let applets: &[&[u8]] = &[
         b"sh", b"ash", b"ls", b"cat", b"echo", b"pwd", b"cd", b"mkdir", b"rmdir",

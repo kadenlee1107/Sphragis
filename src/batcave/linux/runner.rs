@@ -10,9 +10,13 @@ static TEST_HELLO: &[u8] = include_bytes!("../../../test_binaries/hello_batcave.
 static TEST_UNAME: &[u8] = include_bytes!("../../../test_binaries/uname_test.elf");
 // Real busybox — static PIE, 1.2MB, 300+ tools
 static BUSYBOX: &[u8] = include_bytes!("../../../test_binaries/busybox-musl-aarch64");
+// Standalone test binaries
+static HELLO_ELF: &[u8] = include_bytes!("../../../tests/hello");
+static HELLO_LIBC_ELF: &[u8] = include_bytes!("../../../tests/hello_mini");
 
-/// Get reference to the embedded busybox binary (for worker reinit).
 pub fn busybox_elf() -> &'static [u8] { BUSYBOX }
+pub fn hello_elf() -> &'static [u8] { HELLO_ELF }
+pub fn hello_libc_elf() -> &'static [u8] { HELLO_LIBC_ELF }
 
 /// Run the "hello" test binary.
 pub fn run_test() -> Result<(), &'static str> {

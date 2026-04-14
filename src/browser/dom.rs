@@ -7,7 +7,7 @@
 // traverse the tree without Vec or Box.
 
 /// Maximum nodes in one document
-pub const MAX_NODES: usize = 1024;
+pub const MAX_NODES: usize = 2048;
 /// Maximum attributes per element
 pub const MAX_ATTRS: usize = 8;
 /// Maximum tag/attr name length
@@ -294,6 +294,109 @@ impl Document {
     pub fn len(&self) -> usize {
         self.node_count
     }
+
+    /// Find first element with a given attribute value (e.g. id="foo")
+    pub fn find_by_attr(&self, attr_name: &str, attr_val: &str) -> Option<usize> {
+        for i in 0..self.node_count {
+            if self.nodes[i].node_type != NodeType::Element { continue; }
+            for a in 0..self.nodes[i].attr_count {
+                if self.nodes[i].attrs[a].name_str() == attr_name
+                    && self.nodes[i].attrs[a].value_str() == attr_val
+                {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    /// Find first element by id attribute
+    pub fn find_by_id(&self, id: &str) -> Option<usize> {
+        self.find_by_attr("id", id)
+    }
+
+    /// Check if a node has a given class (substring match in class attribute)
+    pub fn has_class(&self, node_idx: usize, class: &str) -> bool {
+        if node_idx >= self.node_count { return false; }
+        let node = &self.nodes[node_idx];
+        for a in 0..node.attr_count {
+            if node.attrs[a].name_str() == "class" {
+                let cls = node.attrs[a].value_str();
+                return str_contains_word(cls, class);
+            }
+        }
+        false
+    }
+
+    /// Check if a node has a class containing a substring (partial match)
+    pub fn class_contains(&self, node_idx: usize, substr: &str) -> bool {
+        if node_idx >= self.node_count { return false; }
+        let node = &self.nodes[node_idx];
+        for a in 0..node.attr_count {
+            if node.attrs[a].name_str() == "class" {
+                let cls = node.attrs[a].value_str();
+                return str_contains_sub(cls, substr);
+            }
+        }
+        false
+    }
+
+    /// Check if a node has a given role attribute value
+    pub fn has_role(&self, node_idx: usize, role: &str) -> bool {
+        if node_idx >= self.node_count { return false; }
+        let node = &self.nodes[node_idx];
+        for a in 0..node.attr_count {
+            if node.attrs[a].name_str() == "role" {
+                return node.attrs[a].value_str() == role;
+            }
+        }
+        false
+    }
+
+    /// Check if node_idx is a descendant of ancestor_idx
+    pub fn is_descendant_of(&self, node_idx: usize, ancestor_idx: usize) -> bool {
+        let mut current = node_idx;
+        let mut depth = 0;
+        while depth < 100 {
+            let parent = self.nodes[current].parent;
+            if parent == NULL_IDX { return false; }
+            if parent as usize == ancestor_idx { return true; }
+            current = parent as usize;
+            depth += 1;
+        }
+        false
+    }
+}
+
+/// Check if `haystack` contains `needle` as a whole word in a space-separated list
+fn str_contains_word(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.len() > h.len() { return false; }
+    if n.is_empty() { return false; }
+    let end = h.len() - n.len() + 1;
+    for i in 0..end {
+        if &h[i..i + n.len()] == n {
+            // Check word boundaries (start of string or preceded by space)
+            let at_start = i == 0 || h[i - 1] == b' ';
+            let at_end = i + n.len() == h.len() || h[i + n.len()] == b' ';
+            if at_start && at_end { return true; }
+        }
+    }
+    false
+}
+
+/// Check if `haystack` contains `needle` as a substring
+fn str_contains_sub(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.len() > h.len() { return false; }
+    if n.is_empty() { return false; }
+    let end = h.len() - n.len() + 1;
+    for i in 0..end {
+        if &h[i..i + n.len()] == n { return true; }
+    }
+    false
 }
 
 /// Iterator over children of a node

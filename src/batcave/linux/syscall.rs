@@ -96,9 +96,10 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::GETUID | nr::GETEUID => (SyscallCat::Always, sys_getuid),
         nr::GETGID | nr::GETEGID => (SyscallCat::Always, sys_getgid),
         nr::UNAME => (SyscallCat::Always, sys_uname),
-        nr::EXIT | nr::EXIT_GROUP => (SyscallCat::Always, sys_exit),
+        nr::EXIT => (SyscallCat::Always, sys_exit),
+        nr::EXIT_GROUP => (SyscallCat::Always, sys_exit_group),
         nr::SET_TID_ADDRESS => (SyscallCat::Always, sys_stub_zero),
-        nr::PRLIMIT64 => (SyscallCat::Always, sys_stub_zero),
+        nr::PRLIMIT64 => (SyscallCat::Always, sys_prlimit64),
         nr::CLOCK_GETTIME => (SyscallCat::Always, sys_clock_gettime),
         nr::GETRANDOM => (SyscallCat::Always, sys_getrandom),
         73 => (SyscallCat::Always, sys_ppoll),        // ppoll — block on stdin
@@ -108,7 +109,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         99 => (SyscallCat::Always, sys_stub_zero),   // set_robust_list
         100 => (SyscallCat::Always, sys_stub_zero),  // get_robust_list
         71 => (SyscallCat::FileIO, sys_sendfile),     // sendfile (used by cat)
-        101 => (SyscallCat::Always, sys_stub_zero),  // nanosleep
+        101 => (SyscallCat::Always, sys_nanosleep),  // nanosleep
         102 => (SyscallCat::Always, sys_stub_zero),  // getitimer
         103 => (SyscallCat::Always, sys_stub_zero),  // setitimer
         131 => (SyscallCat::Always, sys_stub_zero),  // tgkill
@@ -120,8 +121,8 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         169 => (SyscallCat::Always, sys_stub_zero),  // gettimeofday
         178 => (SyscallCat::Always, sys_stub_zero),  // gettid
         233 => (SyscallCat::Always, sys_stub_zero),  // madvise
-        261 => (SyscallCat::Always, sys_stub_zero),  // prlimit64 (dup)
-        25 => (SyscallCat::FileIO, sys_stub_zero),   // fcntl
+        261 => (SyscallCat::Always, sys_prlimit64),  // prlimit64
+        25 => (SyscallCat::FileIO, sys_fcntl),        // fcntl
         17 => (SyscallCat::FileIO, sys_getcwd),      // getcwd (remap)
         46 => (SyscallCat::Always, sys_stub_zero),   // ftruncate
         34 => (SyscallCat::FileIO, sys_mkdirat),      // mkdirat
@@ -161,8 +162,8 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         // Memory — always allowed within cave
         nr::BRK => (SyscallCat::Memory, sys_brk),
         nr::MMAP => (SyscallCat::Memory, sys_mmap),
-        nr::MUNMAP => (SyscallCat::Memory, sys_stub_zero),
-        nr::MPROTECT => (SyscallCat::Memory, sys_stub_zero),
+        nr::MUNMAP => (SyscallCat::Memory, sys_munmap),
+        nr::MPROTECT => (SyscallCat::Memory, sys_mprotect),
 
         // File I/O — needs fs capability
         nr::OPENAT => (SyscallCat::FileIO, sys_openat),
@@ -175,7 +176,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::FACCESSAT => (SyscallCat::FileIO, sys_stub_zero),
         nr::GETCWD => (SyscallCat::FileIO, sys_getcwd),
         nr::CHDIR => (SyscallCat::FileIO, sys_stub_zero),
-        nr::READLINKAT => (SyscallCat::FileIO, sys_stub_enoent),
+        nr::READLINKAT => (SyscallCat::FileIO, sys_readlinkat),
         nr::IOCTL => (SyscallCat::FileIO, sys_ioctl),
 
         // Process
@@ -235,6 +236,94 @@ fn sys_getuid(_args: [u64; 6]) -> i64 { 0 } // root
 fn sys_getgid(_args: [u64; 6]) -> i64 { 0 }
 fn sys_stub_zero(_args: [u64; 6]) -> i64 { 0 }
 fn sys_stub_enoent(_args: [u64; 6]) -> i64 { ENOENT }
+
+// ─── nanosleep (101) — real sleep using ARM64 generic timer ───
+fn sys_nanosleep(args: [u64; 6]) -> i64 {
+    let req_ptr = args[0] as usize;
+    if req_ptr == 0 { return EINVAL; }
+
+    // Read struct timespec { tv_sec: i64, tv_nsec: i64 }
+    let tv_sec: u64;
+    let tv_nsec: u64;
+    unsafe {
+        core::arch::asm!("ldr {v}, [{a}]", a = in(reg) req_ptr, v = out(reg) tv_sec);
+        core::arch::asm!("ldr {v}, [{a}]", a = in(reg) req_ptr + 8, v = out(reg) tv_nsec);
+    }
+
+    // Read current cycle count and frequency
+    let start: u64;
+    let freq: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+    }
+
+    let target_ticks = tv_sec * freq + tv_nsec * freq / 1_000_000_000;
+
+    // Spin-wait
+    loop {
+        let now: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+        if now.wrapping_sub(start) >= target_ticks { break; }
+        core::hint::spin_loop();
+    }
+    0
+}
+
+// ─── munmap (215) — free mapped memory ───
+fn sys_munmap(args: [u64; 6]) -> i64 {
+    let _addr = args[0] as usize;
+    let _length = args[1] as usize;
+    // TODO: actually free frames — for now accept and leak
+    0
+}
+
+// ─── mprotect (226) — change memory protection ───
+fn sys_mprotect(args: [u64; 6]) -> i64 {
+    let _addr = args[0] as usize;
+    let _len = args[1] as usize;
+    let _prot = args[2] as u32;
+    // Accept any protection change (stack guard pages, etc.)
+    0
+}
+
+// ─── fcntl (25) — file descriptor control ───
+fn sys_fcntl(args: [u64; 6]) -> i64 {
+    let _fd = args[0] as i32;
+    let cmd = args[1] as i32;
+    match cmd {
+        1 => 0,   // F_GETFD — return 0 (no FD_CLOEXEC)
+        2 => 0,   // F_SETFD — accept and ignore
+        3 => 0,   // F_GETFL — return 0 (O_RDONLY)
+        4 => 0,   // F_SETFL — accept and ignore
+        _ => 0,   // Unknown: return 0
+    }
+}
+
+// ─── prlimit64 (261) — get/set resource limits ───
+fn sys_prlimit64(args: [u64; 6]) -> i64 {
+    let _pid = args[0] as i32;
+    let _resource = args[1] as u32;
+    // args[2] = new_limit (ignored)
+    let old_limit = args[3] as usize;
+
+    // If old_limit is non-null, write generous defaults
+    if old_limit != 0 {
+        let unlimited: u64 = 0x7FFFFFFFFFFFFFFF;
+        unsafe {
+            // struct rlimit { rlim_cur: u64, rlim_max: u64 }
+            core::arch::asm!("str {v}, [{a}]", a = in(reg) old_limit, v = in(reg) unlimited);
+            core::arch::asm!("str {v}, [{a}]", a = in(reg) old_limit + 8, v = in(reg) unlimited);
+        }
+    }
+    0
+}
+
+// ─── exit_group (94) — exit all threads ───
+fn sys_exit_group(args: [u64; 6]) -> i64 {
+    // For single-threaded processes, same as exit
+    sys_exit(args)
+}
 
 fn sys_exit(args: [u64; 6]) -> i64 {
     let code = args[0] as usize;
@@ -1639,6 +1728,12 @@ fn sys_execve(args: [u64; 6]) -> i64 {
             "tty" => { write_str("/dev/console\n"); true }
             "logname" => { write_str("root\n"); true }
             "groups" => { write_str("root\n"); true }
+            "hello" => {
+                // Standalone binary — handled by the exception handler's execve path.
+                // If we reach here, execution was already handled via br to the ELF entry.
+                // Return false so the real binary execution takes over.
+                false
+            }
             _ => false,
         };
 
@@ -1763,6 +1858,29 @@ fn sys_readlinkat(args: [u64; 6]) -> i64 {
 
     let mut path_buf = [0u8; 128];
     let path_len = read_user_str(path_ptr, &mut path_buf);
+
+    // Handle /proc/self/exe — return path to our binary
+    if path_len >= 14 {
+        let proc_self_exe = b"/proc/self/exe";
+        let mut is_match = true;
+        for i in 0..14 {
+            if path_buf[i] != proc_self_exe[i] {
+                is_match = false;
+                break;
+            }
+        }
+        if is_match {
+            let exe_path = b"/bin/init";
+            let len = exe_path.len().min(bufsiz);
+            for i in 0..len {
+                unsafe {
+                    core::arch::asm!("strb {v:w}, [{a}]",
+                        a = in(reg) buf + i, v = in(reg) exe_path[i] as u32);
+                }
+            }
+            return len as i64;
+        }
+    }
 
     if vfs::is_ready() {
         // Don't follow symlinks — resolve parent then find the final component

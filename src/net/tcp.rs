@@ -26,7 +26,7 @@ static ACK_NUM: AtomicU32 = AtomicU32::new(0);
 static DATA_READY: AtomicBool = AtomicBool::new(false);
 
 // Receive buffer
-const RX_BUF_SIZE: usize = 16384;
+const RX_BUF_SIZE: usize = 65536; // 64KB — must hold full TLS burst
 static mut RX_BUF: [u8; RX_BUF_SIZE] = [0; RX_BUF_SIZE];
 static RX_LEN: AtomicU32 = AtomicU32::new(0);
 
@@ -241,7 +241,7 @@ pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
         core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
     }
-    let timeout = freq * 3; // 3 seconds (snappier browsing)
+    let timeout = freq * 5; // 5 seconds (allow slow servers to respond)
     loop {
         super::poll_once();
         if DATA_READY.load(Ordering::Acquire) {
@@ -257,12 +257,22 @@ pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
                 core::hint::spin_loop();
             }
 
-            DATA_READY.store(false, Ordering::Relaxed);
             unsafe {
                 let len = RX_LEN.load(Ordering::Relaxed) as usize;
                 let copy = len.min(buf.len());
                 buf[..copy].copy_from_slice(&RX_BUF[..copy]);
-                RX_LEN.store(0, Ordering::Relaxed);
+                let remaining = len - copy;
+                if remaining > 0 {
+                    // Shift unread bytes to front — DON'T discard them!
+                    for i in 0..remaining {
+                        RX_BUF[i] = RX_BUF[copy + i];
+                    }
+                    RX_LEN.store(remaining as u32, Ordering::Relaxed);
+                    // Keep DATA_READY true since there's still data
+                } else {
+                    RX_LEN.store(0, Ordering::Relaxed);
+                    DATA_READY.store(false, Ordering::Relaxed);
+                }
                 return Ok(copy);
             }
         }

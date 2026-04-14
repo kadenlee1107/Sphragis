@@ -202,52 +202,88 @@ impl ComputedStyle {
         }
     }
 
-    /// Default style for a given HTML tag
+    /// Default style for a given HTML tag — clean reader mode typography
     pub fn for_tag(tag: &str) -> Self {
         let mut s = Self::default();
+        // Default body text: white on dark background
+        s.color = Color::from_rgb(200, 200, 200);
         match tag {
             "html" | "body" => {
                 s.display = Display::Block;
-                s.color = Color::from_rgb(180, 180, 180); // light gray
+                s.color = Color::from_rgb(200, 200, 200);
+                s.padding_left = 8;
+                s.padding_right = 8;
             }
-            "div" | "section" | "article" | "aside" | "header" | "footer"
-            | "nav" | "main" | "form" | "figure" | "figcaption" => {
+            "div" | "main" | "figure" | "figcaption" => {
                 s.display = Display::Block;
+                s.margin_top = 4;
+                s.margin_bottom = 2;
+            }
+            "form" => {
+                // Forms are hidden by reader mode, but keep display for fallback
+                s.display = Display::Block;
+                s.margin_top = 4;
+                s.margin_bottom = 2;
+            }
+            "section" | "article" => {
+                s.display = Display::Block;
+                s.margin_top = 8;
+                s.margin_bottom = 4;
+                s.padding_top = 4;
+                s.padding_bottom = 4;
+            }
+            "aside" | "nav" => {
+                // Typically hidden by reader mode extract_content
+                s.display = Display::Block;
+                s.margin_top = 4;
+                s.margin_bottom = 4;
+            }
+            "header" | "footer" => {
+                // Typically hidden by reader mode
+                s.display = Display::Block;
+                s.margin_top = 4;
+                s.margin_bottom = 4;
+                s.padding_top = 4;
+                s.padding_bottom = 4;
             }
             "h1" => {
                 s.display = Display::Block;
                 s.font_size = 32;
                 s.font_weight = FontWeight::Bold;
                 s.color = Color::WHITE;
-                s.margin_top = 16; s.margin_bottom = 12;
+                s.margin_top = 24; s.margin_bottom = 12;
             }
             "h2" => {
                 s.display = Display::Block;
                 s.font_size = 24;
                 s.font_weight = FontWeight::Bold;
                 s.color = Color::WHITE;
-                s.margin_top = 14; s.margin_bottom = 10;
+                s.margin_top = 20; s.margin_bottom = 10;
+                // Subtle separator line
+                s.border_width = 1;
+                s.border_color = Color::from_rgb(40, 40, 40);
+                s.padding_bottom = 6;
             }
             "h3" => {
                 s.display = Display::Block;
                 s.font_size = 20;
                 s.font_weight = FontWeight::Bold;
-                s.color = Color::from_rgb(220, 220, 220);
-                s.margin_top = 12; s.margin_bottom = 8;
+                s.color = Color::from_rgb(230, 230, 230);
+                s.margin_top = 16; s.margin_bottom = 8;
             }
             "h4" | "h5" | "h6" => {
                 s.display = Display::Block;
                 s.font_size = 16;
                 s.font_weight = FontWeight::Bold;
-                s.color = Color::from_rgb(200, 200, 200);
-                s.margin_top = 8; s.margin_bottom = 6;
+                s.color = Color::from_rgb(210, 210, 210);
+                s.margin_top = 12; s.margin_bottom = 6;
             }
             "p" => {
                 s.display = Display::Block;
-                s.margin_top = 8; s.margin_bottom = 8;
+                s.margin_top = 12; s.margin_bottom = 12;
             }
             "a" => {
-                s.color = Color::from_rgb(68, 153, 255); // blue
+                s.color = Color::from_rgb(80, 180, 255); // bright cyan-blue
                 s.text_decoration.underline = true;
             }
             "b" | "strong" => {
@@ -255,8 +291,7 @@ impl ComputedStyle {
                 s.color = Color::WHITE;
             }
             "i" | "em" => {
-                s.color = Color::from_rgb(200, 200, 200);
-                // Note: italic rendering requires font support
+                s.color = Color::from_rgb(210, 210, 210);
             }
             "code" => {
                 s.color = Color::from_rgb(68, 221, 68); // green
@@ -273,20 +308,37 @@ impl ComputedStyle {
             }
             "blockquote" => {
                 s.display = Display::Block;
-                s.color = Color::from_rgb(140, 140, 140);
+                s.color = Color::from_rgb(150, 150, 150); // dimmer text
                 s.border_width = 3;
                 s.border_color = Color::from_rgb(60, 60, 60);
-                s.padding_left = 16;
+                s.padding_left = 16; // 16px left indent
                 s.margin_top = 8; s.margin_bottom = 8;
                 s.margin_left = 8;
             }
             "ul" | "ol" => {
                 s.display = Display::Block;
                 s.margin_top = 4; s.margin_bottom = 4;
-                s.padding_left = 20;
+                s.margin_left = 16;
+                s.padding_left = 20; // 20px left indent for lists
             }
             "li" => {
                 s.display = Display::ListItem;
+                s.margin_top = 2; s.margin_bottom = 2;
+                s.margin_left = 20;
+            }
+            "dl" => {
+                s.display = Display::Block;
+                s.margin_top = 4; s.margin_bottom = 4;
+            }
+            "dt" => {
+                s.display = Display::Block;
+                s.font_weight = FontWeight::Bold;
+                s.color = Color::WHITE;
+                s.margin_top = 4;
+            }
+            "dd" => {
+                s.display = Display::Block;
+                s.margin_left = 20;
                 s.margin_top = 2; s.margin_bottom = 2;
             }
             "hr" => {
@@ -300,18 +352,31 @@ impl ComputedStyle {
             }
             "table" => {
                 s.display = Display::Block;
-                s.margin_top = 4; s.margin_bottom = 4;
+                s.margin_top = 8; s.margin_bottom = 8;
+                s.border_width = 1;
+                s.border_color = Color::from_rgb(50, 50, 50);
             }
             "tr" => { s.display = Display::Block; }
             "td" | "th" => {
                 s.display = Display::Inline;
                 s.padding_right = 16;
-                if tag == "th" { s.font_weight = FontWeight::Bold; }
+                if tag == "th" {
+                    s.font_weight = FontWeight::Bold;
+                    s.color = Color::WHITE;
+                }
             }
             "img" => {
                 s.display = Display::InlineBlock;
             }
-            "script" | "style" | "head" | "meta" | "link" | "title" => {
+            "sup" | "sub" => {
+                // Superscript/subscript — render inline, dimmer
+                s.display = Display::Inline;
+                s.color = Color::from_rgb(140, 140, 140);
+            }
+            "span" => {
+                s.display = Display::Inline;
+            }
+            "script" | "style" | "head" | "meta" | "link" | "title" | "noscript" => {
                 s.display = Display::None;
             }
             _ => {

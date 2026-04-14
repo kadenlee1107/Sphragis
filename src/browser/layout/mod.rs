@@ -162,6 +162,56 @@ pub fn build(doc: &Document, tree: &mut LayoutTree, viewport_w: i32) {
     tree.page_height = cursor_y + 16;
 }
 
+/// Check if a DOM node should be hidden (hidden attr, aria-hidden, etc.)
+fn should_hide(node: &super::dom::DomNode) -> bool {
+    for i in 0..node.attr_count {
+        let aname = node.attrs[i].name_str();
+        let aval  = node.attrs[i].value_str();
+        if aname == "hidden" { return true; }
+        if aname == "aria-hidden" && aval == "true" { return true; }
+        if aname == "style" {
+            // Check for display:none in inline style
+            let s = aval.as_bytes();
+            let mut j = 0;
+            while j + 12 < s.len() {
+                if s[j] == b'd' && s[j+1] == b'i' && s[j+2] == b's' && s[j+3] == b'p'
+                    && s[j+4] == b'l' && s[j+5] == b'a' && s[j+6] == b'y' {
+                    let mut k = j + 7;
+                    while k < s.len() && (s[k] == b' ' || s[k] == b':') { k += 1; }
+                    if k + 4 <= s.len() && s[k] == b'n' && s[k+1] == b'o' && s[k+2] == b'n' && s[k+3] == b'e' {
+                        return true;
+                    }
+                }
+                j += 1;
+            }
+        }
+        if aname == "class" {
+            // Wikipedia-specific hidden classes
+            let cls = aval;
+            if str_has(cls, "mw-jump-link") || str_has(cls, "noprint")
+                || str_has(cls, "mw-editsection") || str_has(cls, "mw-indicators")
+                || str_has(cls, "mw-hidden-catlinks") || str_has(cls, "mw-empty-elt")
+                || str_has(cls, "sistersitebox")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Simple substring check
+fn str_has(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.len() > h.len() { return false; }
+    let end = h.len() - n.len() + 1;
+    for i in 0..end {
+        if &h[i..i + n.len()] == n { return true; }
+    }
+    false
+}
+
 /// Lay out children of a DOM node into a layout box
 fn layout_children(
     doc: &Document,
@@ -181,9 +231,19 @@ fn layout_children(
 
         match node.node_type {
             NodeType::Text => {
-                // Inline text — word wrap
+                // Inline text with proper word wrapping
                 let text = &node.text[..node.text_len];
                 if text.is_empty() { continue; }
+
+                // Skip whitespace-only text nodes
+                let mut all_ws = true;
+                for &b in text.iter() {
+                    if b != b' ' && b != b'\t' && b != b'\n' && b != b'\r' {
+                        all_ws = false;
+                        break;
+                    }
+                }
+                if all_ws { continue; }
 
                 let parent_style = tree.boxes[parent_box].style;
 
@@ -200,27 +260,61 @@ fn layout_children(
                 tree.boxes[tbox].text_len = tl;
                 tree.boxes[tbox].parent = parent_box as u16;
 
-                // Simple inline layout: characters flow left-to-right
-                let text_w = (tl as i32) * char_w;
-                if inline_x + text_w > x_offset + avail_width && inline_x > x_offset {
-                    // Wrap to next line
-                    inline_x = x_offset;
-                    *cursor_y += line_h;
-                }
+                // Word-wrap layout: break text at word boundaries to fit avail_width
+                let max_chars_per_line = if avail_width > 0 { (avail_width / char_w).max(1) } else { 80 };
+                let chars_in_text = tl as i32;
 
-                tree.boxes[tbox].x = inline_x;
-                tree.boxes[tbox].y = *cursor_y;
-                tree.boxes[tbox].width = text_w.min(avail_width);
-                tree.boxes[tbox].height = line_h;
-                tree.boxes[tbox].content_x = inline_x;
-                tree.boxes[tbox].content_y = *cursor_y;
-                tree.boxes[tbox].content_w = text_w;
-                tree.boxes[tbox].content_h = line_h;
+                // How many characters fit on the current line from inline_x?
+                let remaining_on_line = ((x_offset + avail_width - inline_x) / char_w).max(0);
 
-                inline_x += text_w;
-                if inline_x > x_offset + avail_width {
-                    inline_x = x_offset;
-                    *cursor_y += line_h;
+                if chars_in_text <= remaining_on_line {
+                    // Fits on current line
+                    let text_w = chars_in_text * char_w;
+                    tree.boxes[tbox].x = inline_x;
+                    tree.boxes[tbox].y = *cursor_y;
+                    tree.boxes[tbox].width = text_w;
+                    tree.boxes[tbox].height = line_h;
+                    tree.boxes[tbox].content_x = inline_x;
+                    tree.boxes[tbox].content_y = *cursor_y;
+                    tree.boxes[tbox].content_w = text_w;
+                    tree.boxes[tbox].content_h = line_h;
+                    inline_x += text_w;
+                } else {
+                    // Text needs to wrap across multiple lines.
+                    // Position the box at the start, compute its total height.
+                    let start_y = *cursor_y;
+
+                    // First line: fill remaining space
+                    let mut lines = 1i32;
+                    let chars_placed = remaining_on_line;
+
+                    // Subsequent full lines
+                    let remaining_chars = chars_in_text - chars_placed;
+                    if remaining_chars > 0 {
+                        lines += (remaining_chars + max_chars_per_line - 1) / max_chars_per_line;
+                    }
+
+                    let total_h = lines * line_h;
+
+                    tree.boxes[tbox].x = inline_x;
+                    tree.boxes[tbox].y = start_y;
+                    tree.boxes[tbox].width = avail_width;
+                    tree.boxes[tbox].height = total_h;
+                    tree.boxes[tbox].content_x = inline_x;
+                    tree.boxes[tbox].content_y = start_y;
+                    tree.boxes[tbox].content_w = avail_width;
+                    tree.boxes[tbox].content_h = total_h;
+
+                    // After wrapping, cursor moves down
+                    *cursor_y += total_h - line_h; // (lines-1) extra lines
+                    // inline_x for the last line
+                    let last_line_chars = if remaining_chars > 0 {
+                        let rem = remaining_chars % max_chars_per_line;
+                        if rem == 0 { max_chars_per_line } else { rem }
+                    } else {
+                        chars_placed
+                    };
+                    inline_x = x_offset + last_line_chars * char_w;
                 }
             }
             NodeType::Element => {
@@ -238,7 +332,10 @@ fn layout_children(
 
                 if style.display == Display::None { continue; }
 
-                // <input> — render as a text box
+                // Skip hidden elements
+                if should_hide(node) { continue; }
+
+                // <input> -- render as a text box
                 if node.tag_str() == "input" {
                     let input_type = node.get_attr("type").unwrap_or("text");
                     if input_type == "hidden" { continue; }
@@ -258,6 +355,12 @@ fn layout_children(
                     } else {
                         200.min(avail_width)
                     };
+
+                    // Force block-like stacking for inputs
+                    if inline_x > x_offset {
+                        *cursor_y += line_h;
+                        inline_x = x_offset;
+                    }
 
                     tree.boxes[ibox].dom_node = child_idx as u16;
                     tree.boxes[ibox].style = style;
@@ -292,7 +395,7 @@ fn layout_children(
                     continue;
                 }
 
-                // <button> — render as a styled button
+                // <button> -- render as a styled button
                 if node.tag_str() == "button" {
                     style.background_color = Color::from_rgb(50, 50, 50);
                     style.border_width = 1;
@@ -304,7 +407,7 @@ fn layout_children(
                     style.color = Color::WHITE;
                 }
 
-                // <textarea> — render as a larger input box
+                // <textarea> -- render as a larger input box
                 if node.tag_str() == "textarea" {
                     style.background_color = Color::from_rgb(25, 25, 25);
                     style.border_width = 1;
@@ -317,7 +420,7 @@ fn layout_children(
                     }
                 }
 
-                // <img> tags — allocate space for image
+                // <img> tags -- allocate space for image
                 if node.tag_str() == "img" {
                     let img_w = node.get_attr("width")
                         .and_then(|v| v.parse::<i32>().ok())
@@ -376,7 +479,8 @@ fn layout_children(
                 tree.boxes[ebox].style = style;
                 tree.boxes[ebox].parent = parent_box as u16;
 
-                if style.display == Display::Block || style.display == Display::ListItem {
+                if style.display == Display::Block || style.display == Display::ListItem
+                    || style.display == Display::Flex {
                     // Block element: new line, full width
                     if inline_x > x_offset {
                         // End current inline run
@@ -387,8 +491,8 @@ fn layout_children(
                     *cursor_y += style.margin_top;
 
                     let block_x = x_offset + style.margin_left + style.padding_left;
-                    let block_w = avail_width - style.margin_left - style.margin_right
-                        - style.padding_left - style.padding_right;
+                    let block_w = (avail_width - style.margin_left - style.margin_right
+                        - style.padding_left - style.padding_right).max(0);
 
                     tree.boxes[ebox].x = x_offset + style.margin_left;
                     tree.boxes[ebox].y = *cursor_y;
@@ -421,28 +525,46 @@ fn layout_children(
                     // Recurse into children
                     layout_children(doc, tree, ebox, child_idx, block_x, &mut child_y, block_w);
 
-                    let content_h = child_y - child_y_start;
-                    tree.boxes[ebox].width = avail_width - style.margin_left - style.margin_right;
-                    tree.boxes[ebox].height = content_h + style.padding_top + style.padding_bottom;
-                    tree.boxes[ebox].content_w = block_w;
-                    tree.boxes[ebox].content_h = content_h;
+                    let content_h = (child_y - child_y_start).max(0);
 
-                    *cursor_y = child_y + style.padding_bottom + style.margin_bottom;
+                    // For fixed-height elements (e.g. textarea)
+                    let final_h = match style.height {
+                        Length::Px(h) => h.max(content_h),
+                        _ => content_h,
+                    };
+
+                    tree.boxes[ebox].width = avail_width - style.margin_left - style.margin_right;
+                    tree.boxes[ebox].height = final_h + style.padding_top + style.padding_bottom;
+                    tree.boxes[ebox].content_w = block_w;
+                    tree.boxes[ebox].content_h = final_h;
+
+                    *cursor_y = tree.boxes[ebox].y + tree.boxes[ebox].height + style.margin_bottom;
                     inline_x = x_offset;
                 } else {
-                    // Inline element — flow with text
-                    tree.boxes[ebox].x = inline_x;
-                    tree.boxes[ebox].y = *cursor_y;
+                    // Inline element -- flow with text
+                    let start_x = inline_x;
+                    let start_y = *cursor_y;
 
-                    let child_y_start = *cursor_y;
-                    let mut child_y = child_y_start;
+                    let _saved_inline_x = inline_x;
+                    layout_children(doc, tree, ebox, child_idx, inline_x, cursor_y,
+                        avail_width - (inline_x - x_offset));
 
-                    layout_children(doc, tree, ebox, child_idx, inline_x, &mut child_y, avail_width - (inline_x - x_offset));
+                    // After inline children, inline_x may have advanced via text nodes.
+                    // Approximate: width = amount of text laid out inline.
+                    let inline_h = if *cursor_y > start_y {
+                        (*cursor_y - start_y) + line_h
+                    } else {
+                        line_h
+                    };
 
-                    tree.boxes[ebox].width = inline_x - tree.boxes[ebox].x;
-                    tree.boxes[ebox].height = line_h;
-                    tree.boxes[ebox].content_w = tree.boxes[ebox].width;
-                    tree.boxes[ebox].content_h = line_h;
+                    tree.boxes[ebox].x = start_x;
+                    tree.boxes[ebox].y = start_y;
+                    tree.boxes[ebox].width = (inline_x - start_x).max(0);
+                    tree.boxes[ebox].height = inline_h;
+                    tree.boxes[ebox].content_x = start_x;
+                    tree.boxes[ebox].content_y = start_y;
+                    tree.boxes[ebox].content_w = (inline_x - start_x).max(0);
+                    tree.boxes[ebox].content_h = inline_h;
                 }
             }
             _ => {}

@@ -243,10 +243,10 @@ pub fn navigate(url: &[u8]) {
     let get = b"GET ";
     req[rlen..rlen + get.len()].copy_from_slice(get); rlen += get.len();
     req[rlen..rlen + path.len()].copy_from_slice(path.as_bytes()); rlen += path.len();
-    let http = b" HTTP/1.0\r\nHost: ";
+    let http = b" HTTP/1.1\r\nHost: ";
     req[rlen..rlen + http.len()].copy_from_slice(http); rlen += http.len();
     req[rlen..rlen + host.len()].copy_from_slice(host.as_bytes()); rlen += host.len();
-    let trail = b"\r\nUser-Agent: BatBrowser/1.0\r\nAccept: text/html\r\nConnection: close\r\n\r\n";
+    let trail = b"\r\nUser-Agent: BatBrowser/1.0\r\nAccept: text/html,*/*\r\nAccept-Encoding: gzip, identity\r\nConnection: close\r\n\r\n";
     req[rlen..rlen + trail.len()].copy_from_slice(trail); rlen += trail.len();
 
     // Send via TLS or plain TCP
@@ -264,25 +264,61 @@ pub fn navigate(url: &[u8]) {
 
     set_status(b"Receiving...");
 
-    // Receive response
-    let mut raw = [0u8; 16384];
+    // Receive response — keep reading until we have headers + body
+    // NOTE: These buffers are static because they're too large for the stack (512KB total)
+    static mut RAW_BUF: [u8; 131072] = [0u8; 131072];
+    let raw = unsafe { &mut *core::ptr::addr_of_mut!(RAW_BUF) };
     let mut total = 0;
+    let mut timeouts = 0u8;
 
-    for _ in 0..5 {
-        let mut chunk = [0u8; 4096];
+    for _ in 0..500 {
+        if total >= raw.len() { break; } // buffer full (128KB)
+        let mut chunk = [0u8; 16384]; // 16KB to handle full TLS records
         let recv_result = if is_https {
             crate::net::tls::recv_app_data(&mut chunk)
         } else {
             crate::net::tcp::recv_data(&mut chunk)
         };
         match recv_result {
+            Ok(0) => {
+                // NewSessionTicket was skipped — don't count as timeout, just continue
+                continue;
+            }
             Ok(n) if n > 0 => {
                 let copy = n.min(raw.len() - total);
                 raw[total..total + copy].copy_from_slice(&chunk[..copy]);
                 total += copy;
+                timeouts = 0; // reset on any successful recv
                 unsafe { BYTES_LOADED = total; }
+
+                // Check if we've received the full page (look for </html>)
+                // Only check uncompressed responses — gzip data won't have this
+                if total > 7 {
+                    let check_start = if total > 20 { total - 20 } else { 0 };
+                    let mut found_end = false;
+                    for k in check_start..total.saturating_sub(6) {
+                        if starts_with_ci(&raw[k..total], b"</html>") {
+                            found_end = true;
+                            break;
+                        }
+                    }
+                    if found_end { break; }
+                }
             }
-            _ => break,
+            _ => {
+                timeouts += 1;
+                // For HTTPS, aggressively keep trying — stop after 8 consecutive real timeouts
+                // (Wikipedia sends data in bursts with gaps, need patience for multi-record responses)
+                if is_https {
+                    if timeouts < 8 { continue; }
+                }
+                // If we have headers but no body yet, keep trying
+                let hdr_end = find_header_end(&raw[..total]);
+                if hdr_end > 0 && hdr_end >= total && timeouts < 3 {
+                    continue; // body hasn't arrived yet, retry
+                }
+                break;
+            }
         }
     }
 
@@ -299,6 +335,21 @@ pub fn navigate(url: &[u8]) {
     // HTTP/1.x 3xx → find Location: header and follow it
     let headers_end = find_header_end(&raw[..total]);
     let status_code = parse_status_code(&raw[..total.min(20)]);
+
+    // Debug: log header parsing
+    uart::puts("[browser] total=");
+    crate::kernel::mm::print_num(total);
+    uart::puts(" headers_end=");
+    crate::kernel::mm::print_num(headers_end);
+    uart::puts(" status=");
+    crate::kernel::mm::print_num(status_code as usize);
+    uart::puts("\n");
+    // Log content-encoding if present
+    if let Some(enc) = find_header(&raw[..headers_end.max(1).min(total)], b"Content-Encoding:") {
+        uart::puts("[browser] Content-Encoding: ");
+        uart::puts(unsafe { core::str::from_utf8_unchecked(enc) });
+        uart::puts("\n");
+    }
 
     if status_code >= 300 && status_code < 400 {
         // Extract Location: header
@@ -325,30 +376,169 @@ pub fn navigate(url: &[u8]) {
         }
     }
 
-    // Skip HTTP headers
-    let body = &raw[headers_end..total];
+    // Decode body: handle chunked transfer encoding or Content-Length
+    static mut DECODED_BUF: [u8; 131072] = [0u8; 131072];
+    let decoded = unsafe { &mut *core::ptr::addr_of_mut!(DECODED_BUF) };
+    let mut decoded_len: usize;
+    let is_chunked = {
+        let hdr_slice = &raw[..headers_end];
+        find_header(hdr_slice, b"Transfer-Encoding:").map_or(false, |v| {
+            // Check if value contains "chunked"
+            let mut found = false;
+            if v.len() >= 7 {
+                for i in 0..=v.len() - 7 {
+                    if starts_with_ci(&v[i..], b"chunked") { found = true; break; }
+                }
+            }
+            found
+        })
+    };
 
-    // Full rendering pipeline: HTML → DOM → CSS → Layout → JS → Paint
+    if is_chunked {
+        // Decode chunked transfer encoding
+        // Format: hex_size\r\n data \r\n ... 0\r\n\r\n
+        let chunk_data = &raw[headers_end..total];
+        let mut ri = 0; // read index into chunk_data
+        let mut wi = 0; // write index into decoded
+        loop {
+            // Skip leading \r\n if any
+            while ri < chunk_data.len() && (chunk_data[ri] == b'\r' || chunk_data[ri] == b'\n') {
+                ri += 1;
+            }
+            if ri >= chunk_data.len() { break; }
+
+            // Parse hex chunk size
+            let mut chunk_size: usize = 0;
+            let hex_start = ri;
+            while ri < chunk_data.len() && chunk_data[ri] != b'\r' && chunk_data[ri] != b'\n' {
+                let c = chunk_data[ri];
+                let digit = match c {
+                    b'0'..=b'9' => (c - b'0') as usize,
+                    b'a'..=b'f' => (c - b'a' + 10) as usize,
+                    b'A'..=b'F' => (c - b'A' + 10) as usize,
+                    b';' => break, // chunk extensions — ignore
+                    _ => break,
+                };
+                chunk_size = chunk_size * 16 + digit;
+                ri += 1;
+            }
+            // If we didn't parse any hex digits, stop
+            if ri == hex_start { break; }
+
+            // Skip to end of chunk size line (\r\n)
+            while ri < chunk_data.len() && chunk_data[ri] != b'\n' { ri += 1; }
+            if ri < chunk_data.len() { ri += 1; } // skip \n
+
+            // Last chunk (size 0) — done
+            if chunk_size == 0 { break; }
+
+            // Copy chunk data
+            let copy_len = chunk_size.min(chunk_data.len() - ri).min(decoded.len() - wi);
+            decoded[wi..wi + copy_len].copy_from_slice(&chunk_data[ri..ri + copy_len]);
+            wi += copy_len;
+            ri += chunk_size; // advance past the chunk data
+        }
+        decoded_len = wi;
+        uart::puts("[browser] decoded chunked body: ");
+        crate::kernel::mm::print_num(decoded_len);
+        uart::puts(" bytes\n");
+    } else {
+        // Non-chunked: use body directly (Content-Length or connection close)
+        let raw_body = &raw[headers_end..total];
+        let copy_len = raw_body.len().min(decoded.len());
+        decoded[..copy_len].copy_from_slice(&raw_body[..copy_len]);
+        decoded_len = copy_len;
+    }
+
+    // Check for gzip Content-Encoding and decompress if needed
+    if let Some(enc) = find_header(&raw[..headers_end.max(1).min(total)], b"Content-Encoding:") {
+        if starts_with_ci(enc, b"gzip") {
+            uart::puts("[browser] gzip detected, decompressing...\n");
+            static mut DECOMP_BUF: [u8; 262144] = [0u8; 262144];
+            let decompressed = unsafe { &mut *core::ptr::addr_of_mut!(DECOMP_BUF) };
+            let dec_len = crate::browser::media::gzip::decompress(&decoded[..decoded_len], decompressed);
+            if dec_len > 0 {
+                // Cap decompressed to 32KB to avoid parser hang on huge pages
+                let copy = dec_len.min(32768);
+                uart::puts("[browser] copying ");
+                crate::kernel::mm::print_num(copy);
+                uart::puts(" bytes to decoded buffer\n");
+                decoded[..copy].copy_from_slice(&decompressed[..copy]);
+                decoded_len = copy;
+                uart::puts("[browser] gzip decompressed: ");
+                crate::kernel::mm::print_num(decoded_len);
+                uart::puts(" bytes\n");
+            } else {
+                uart::puts("[browser] gzip decompression failed, using raw data\n");
+            }
+        }
+    }
+
+    // Cap body size to prevent parser from hanging on huge pages
+    // (Wikipedia decompresses to 108KB+ — parser gets stuck on complex HTML)
+    let body_cap = decoded_len.min(32768); // 32KB max for parsing
+    let body = &decoded[..body_cap];
+
+    uart::puts("[browser] body_len=");
+    crate::kernel::mm::print_num(body_cap);
+    uart::puts("\n");
+
+    // Full rendering pipeline: HTML → DOM → Reader Mode → CSS → Layout → JS → Paint
     unsafe {
         if USE_ENGINE {
             // Step 1: Parse HTML → DOM tree
             crate::browser::html::parser::parse(body, &mut *core::ptr::addr_of_mut!(DOM_DOC));
 
-            // Step 2: Execute inline <script> tags
+            // Reader mode disabled — Level 1 text renderer handles content well
+
+            // Step 3: Execute inline <script> tags
+            // Wire up the DOM pointer so JS DOM APIs operate on the real tree
+            crate::browser::js::dom_api::set_document(&mut *core::ptr::addr_of_mut!(DOM_DOC));
             execute_scripts(&*core::ptr::addr_of!(DOM_DOC));
 
-            // Step 3: Compute layout
+            // Step 4: Check if scripts mutated the DOM
+            let dom_was_dirty = crate::browser::js::dom_api::take_dirty();
+            if dom_was_dirty {
+                crate::drivers::uart::puts("[browser] DOM mutated by JS — rebuilding layout\n");
+            }
+
+            // Step 5: Compute layout (always, or re-layout if DOM dirty)
             let viewport_w = wm::content_rect().w as i32 - 16;
             crate::browser::layout::build(
                 &*core::ptr::addr_of!(DOM_DOC),
                 &mut *core::ptr::addr_of_mut!(LAYOUT_TREE),
                 viewport_w,
             );
+
+            // Debug: log DOM and layout stats
+            let dom = &*core::ptr::addr_of!(DOM_DOC);
+            let lt = &*core::ptr::addr_of!(LAYOUT_TREE);
+            crate::drivers::uart::puts("[browser] DOM nodes=");
+            crate::kernel::mm::print_num(dom.node_count);
+            crate::drivers::uart::puts(" layout boxes=");
+            crate::kernel::mm::print_num(lt.box_count);
+            crate::drivers::uart::puts(" body_len=");
+            crate::kernel::mm::print_num(body.len());
+            crate::drivers::uart::puts("\n");
         }
     }
 
-    // Also do Level 1 strip for link extraction + fallback
-    strip_html(body, host);
+    // Level 1 text: extract from cleaned DOM tree (reader mode applied)
+    // or fall back to raw HTML stripping if engine is off
+    unsafe {
+        if USE_ENGINE {
+            extract_text_from_dom(
+                &*core::ptr::addr_of!(DOM_DOC), host
+            );
+        } else {
+            strip_html(body, host);
+        }
+        crate::drivers::uart::puts("[browser] Level1 text_len=");
+        crate::kernel::mm::print_num(PAGE_LEN);
+        crate::drivers::uart::puts(" links=");
+        crate::kernel::mm::print_num(LINK_COUNT);
+        crate::drivers::uart::puts("\n");
+    }
 
     unsafe {
         STATE = BrowserState::Loaded;
@@ -558,6 +748,40 @@ fn strip_html(html: &[u8], base_host: &str) {
 
         // Decode HTML entities
         if html[i] == b'&' {
+            // Numeric entities: &#NNN; or &#xHHH;
+            if i + 1 < html.len() && html[i + 1] == b'#' {
+                let mut val: u32 = 0;
+                let mut j = i + 2;
+                if j < html.len() && (html[j] == b'x' || html[j] == b'X') {
+                    // Hex: &#xHHHH;
+                    j += 1;
+                    while j < html.len() && html[j] != b';' {
+                        let d = html[j];
+                        val = val * 16 + match d {
+                            b'0'..=b'9' => (d - b'0') as u32,
+                            b'a'..=b'f' => (d - b'a' + 10) as u32,
+                            b'A'..=b'F' => (d - b'A' + 10) as u32,
+                            _ => break,
+                        };
+                        j += 1;
+                    }
+                } else {
+                    // Decimal: &#NNN;
+                    while j < html.len() && html[j] != b';' {
+                        if html[j] >= b'0' && html[j] <= b'9' {
+                            val = val * 10 + (html[j] - b'0') as u32;
+                        } else { break; }
+                        j += 1;
+                    }
+                }
+                if j < html.len() && html[j] == b';' { j += 1; }
+                // Convert to ASCII (or space for non-ASCII)
+                let ch = if val < 128 { val as u8 } else { b' ' };
+                push_styled(ch, current_style);
+                i = j;
+                continue;
+            }
+            // Named entities
             if starts_with_ci(&html[i..], b"&amp;") { push_styled(b'&', current_style); i += 5; continue; }
             if starts_with_ci(&html[i..], b"&lt;") { push_styled(b'<', current_style); i += 4; continue; }
             if starts_with_ci(&html[i..], b"&gt;") { push_styled(b'>', current_style); i += 4; continue; }
@@ -590,12 +814,194 @@ fn strip_html(html: &[u8], base_host: &str) {
     }
 }
 
-// ─── JavaScript Execution ───
+/// Extract styled text from the cleaned DOM tree (post-reader-mode).
+/// This replaces strip_html when the rendering engine is active, ensuring
+/// the Level 1 fallback text only contains article content (no nav/sidebar).
+fn extract_text_from_dom(doc: &crate::browser::dom::Document, base_host: &str) {
+    unsafe {
+        PAGE_LEN = 0;
+        for i in 0..MAX_PAGE { PAGE_STYLE[i] = STYLE_BODY; }
+        LINK_COUNT = 0;
+    }
 
-static mut JS_ENGINE: crate::browser::js::interpreter::Engine = crate::browser::js::interpreter::Engine::new();
+    let body = doc.body();
+    dom_text_walk(doc, body, STYLE_BODY, base_host);
+}
+
+/// Recursively walk the DOM tree and extract styled text for Level 1 rendering.
+fn dom_text_walk(
+    doc: &crate::browser::dom::Document,
+    node_idx: usize,
+    parent_style: u8,
+    base_host: &str,
+) {
+    use crate::browser::dom::NodeType;
+
+    let node = doc.get(node_idx);
+
+    match node.node_type {
+        NodeType::Comment | NodeType::Empty => return,
+        NodeType::Text => {
+            // Render text content with parent's style
+            let text = &node.text[..node.text_len];
+            for &b in text {
+                if b >= 0x20 && b <= 0x7E {
+                    push_styled(b, parent_style);
+                } else if b == b'\n' || b == b'\r' {
+                    // Whitespace — collapse
+                }
+            }
+            return;
+        }
+        NodeType::Document => {
+            // Walk children
+            for child_idx in doc.children(node_idx) {
+                dom_text_walk(doc, child_idx, parent_style, base_host);
+            }
+            return;
+        }
+        NodeType::Element => {
+            // Determine style for this element's content
+            let tag = node.tag_str();
+
+            // Skip hidden display:none tags
+            match tag {
+                "script" | "style" | "head" | "meta" | "link" | "title" | "noscript" => return,
+                _ => {}
+            }
+
+            let mut style = parent_style;
+
+            // Set style based on tag
+            match tag {
+                "h1" => {
+                    push_styled(b'\n', style); push_styled(b'\n', style);
+                    style = STYLE_H1;
+                }
+                "h2" => {
+                    push_styled(b'\n', style); push_styled(b'\n', style);
+                    style = STYLE_H2;
+                }
+                "h3" | "h4" | "h5" | "h6" => {
+                    push_styled(b'\n', style);
+                    style = STYLE_H3;
+                }
+                "p" | "div" | "section" | "article" | "main" => {
+                    push_styled(b'\n', style);
+                }
+                "br" => {
+                    push_styled(b'\n', style);
+                }
+                "a" => {
+                    style = STYLE_LINK;
+                    // Extract href for link list
+                    if let Some(href) = node.get_attr("href") {
+                        unsafe {
+                            if LINK_COUNT < MAX_LINKS {
+                                let hb = href.as_bytes();
+                                let len = hb.len().min(MAX_LINK_URL);
+                                LINKS[LINK_COUNT][..len].copy_from_slice(&hb[..len]);
+                                LINK_LENS[LINK_COUNT] = len;
+                                LINK_COUNT += 1;
+                                // Link marker
+                                if PAGE_LEN + 5 < MAX_PAGE {
+                                    push_styled(b'[', STYLE_BULLET);
+                                    let mut nbuf = [0u8; 4];
+                                    let nlen = write_num(&mut nbuf, LINK_COUNT);
+                                    for n in 0..nlen { push_styled(nbuf[n], STYLE_BULLET); }
+                                    push_styled(b']', STYLE_BULLET);
+                                }
+                            }
+                        }
+                    }
+                }
+                "b" | "strong" => { style = STYLE_BOLD; }
+                "i" | "em" => { style = STYLE_ITALIC; }
+                "code" | "pre" => { style = STYLE_CODE; }
+                "blockquote" => {
+                    push_styled(b'\n', style);
+                    push_styled(b'|', STYLE_QUOTE);
+                    push_styled(b' ', STYLE_QUOTE);
+                    style = STYLE_QUOTE;
+                }
+                "li" => {
+                    push_styled(b'\n', style);
+                    push_styled(b' ', STYLE_BULLET);
+                    push_styled(0xB7, STYLE_BULLET);
+                    push_styled(b' ', style);
+                }
+                "hr" => {
+                    push_styled(b'\n', style);
+                    for _ in 0..40 { push_styled(b'-', STYLE_HR); }
+                    push_styled(b'\n', style);
+                }
+                "td" | "th" => {
+                    push_styled(b'\t', style);
+                }
+                "tr" => {
+                    push_styled(b'\n', style);
+                }
+                "img" => {
+                    // Show [Image: alt] placeholder
+                    if let Some(alt) = node.get_attr("alt") {
+                        if !alt.is_empty() {
+                            push_styled(b'[', STYLE_QUOTE);
+                            let prefix = b"Image: ";
+                            for &b in prefix { push_styled(b, STYLE_QUOTE); }
+                            for &b in alt.as_bytes() {
+                                if b >= 0x20 && b <= 0x7E {
+                                    push_styled(b, STYLE_QUOTE);
+                                }
+                            }
+                            push_styled(b']', STYLE_QUOTE);
+                        }
+                    }
+                    return; // img is void, no children
+                }
+                _ => {}
+            }
+
+            // Walk children
+            for child_idx in doc.children(node_idx) {
+                dom_text_walk(doc, child_idx, style, base_host);
+            }
+
+            // Post-tag actions
+            match tag {
+                "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                    push_styled(b'\n', parent_style);
+                }
+                "p" => {
+                    push_styled(b'\n', parent_style);
+                }
+                "blockquote" => {
+                    push_styled(b'\n', parent_style);
+                }
+                "a" => {
+                    // Restore parent style after link
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+// ─── JavaScript Execution (Bytecode VM) ───
+
+static mut JS_VM: crate::browser::js::vm::Vm = crate::browser::js::vm::Vm::new();
+static mut JS_VM_INITIALIZED: bool = false;
 
 /// Find and execute all inline <script> tags in the DOM
 fn execute_scripts(doc: &crate::browser::dom::Document) {
+    unsafe {
+        // Initialize VM on first use
+        if !core::ptr::read_volatile(core::ptr::addr_of!(JS_VM_INITIALIZED)) {
+            (*core::ptr::addr_of_mut!(JS_VM)).init();
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(JS_VM_INITIALIZED), true);
+            uart::puts("[js] bytecode VM initialized\n");
+        }
+    }
+
     // Find all script elements
     doc.find_all_tags("script", |script_idx| {
         // Get the text content of the script (first text child)
@@ -608,29 +1014,26 @@ fn execute_scripts(doc: &crate::browser::dom::Document) {
                 crate::kernel::mm::print_num(source.len());
                 uart::puts(" bytes)\n");
 
-                // Tokenize
-                let mut tokens = [crate::browser::js::lexer::Token::empty(); crate::browser::js::lexer::MAX_TOKENS];
-                let token_count = crate::browser::js::lexer::tokenize(source, &mut tokens);
-
-                // Parse
-                let mut ast = crate::browser::js::ast::Ast::new();
-                crate::browser::js::parser::parse(&tokens[..token_count], &mut ast);
-
-                // Execute
+                // Execute using the new bytecode VM
                 unsafe {
-                    (*core::ptr::addr_of_mut!(JS_ENGINE)).execute(&ast);
+                    let vm = &mut *core::ptr::addr_of_mut!(JS_VM);
+                    match vm.execute(source) {
+                        Ok(_val) => {
+                            uart::puts("[js] script completed\n");
+                        }
+                        Err(_) => {
+                            uart::puts("[js] script error\n");
+                        }
+                    }
 
-                    // Check for console.log output
-                    let cl = core::ptr::read_volatile(core::ptr::addr_of!(crate::browser::js::interpreter::CONSOLE_LEN));
+                    // Check for console output from the VM
+                    let cl = vm.console_len;
                     if cl > 0 {
                         uart::puts("[js console] ");
                         for i in 0..cl.min(200) {
-                            let b = core::ptr::read_volatile(
-                                core::ptr::addr_of!(crate::browser::js::interpreter::CONSOLE_OUTPUT)
-                                    .cast::<u8>().add(i)
-                            );
-                            uart::putc(b);
+                            uart::putc(vm.console_buf[i]);
                         }
+                        vm.console_len = 0; // reset
                     }
                 }
             }
@@ -962,8 +1365,16 @@ pub fn render() {
                 let msg = core::str::from_utf8_unchecked(&STATUS_MSG[..STATUS_LEN]);
                 font::draw_str(fb, w, x + 8, y + 40, msg, RED, BG);
             }
-        } else if USE_ENGINE && (*core::ptr::addr_of!(LAYOUT_TREE)).box_count > 0 {
-            // ═══ Level 2: DOM-based rendering ═══
+        } else if USE_ENGINE && (*core::ptr::addr_of!(LAYOUT_TREE)).box_count > 0
+            && PAGE_LEN < 200 // Use Level 2 only for simple pages; Level 1 is better for complex ones
+            && {
+                let lt = &*core::ptr::addr_of!(LAYOUT_TREE);
+                let mut ht = false;
+                for i in 0..lt.box_count { if lt.boxes[i].active && lt.boxes[i].text_len > 0 { ht = true; break; } }
+                ht
+            }
+        {
+            // ═══ Level 2: DOM-based rendering (simple pages only) ═══
             crate::browser::paint::paint(
                 &*core::ptr::addr_of!(LAYOUT_TREE),
                 x as i32,          // offset_x
