@@ -1404,8 +1404,15 @@ pub fn render() {
                 }
             }
         } else {
-            // ═══ Level 1 fallback: styled text rendering ═══
-            let chars_per_line = ((content_w - 16) / 8) as usize;
+            // ═══ Level 1: styled text rendering ═══
+            // Try TrueType first (proportional, anti-aliased)
+            let use_tt = crate::ui::truetype::is_available();
+            let tt_size: u16 = 14; // 14px font size for body text
+            let chars_per_line = if use_tt {
+                ((content_w - 16) / 7) as usize // ~7px avg char width for 14px Verdana
+            } else {
+                ((content_w - 16) / 8) as usize // 8px monospace
+            };
             let max_lines = ((ymax - y - 24) / ln) as usize;
 
             let text = &PAGE_BUF[..PAGE_LEN];
@@ -1430,7 +1437,25 @@ pub fn render() {
                 if line_num >= SCROLL_Y {
                     let draw_y = y + ((line_num - SCROLL_Y) as u32) * ln;
                     if draw_y + ln < ymax {
-                        // Draw each character with its own style
+                        if use_tt {
+                            // TrueType rendering: draw the entire line as a string
+                            let line_text = &text[line_start..line_end];
+                            let line_str = core::str::from_utf8_unchecked(line_text);
+                            // Use first char's style for the whole line color
+                            let color = if line_start < styles.len() {
+                                style_to_color(styles[line_start])
+                            } else { FG };
+                            let sz = if line_is_big { 22 } else { tt_size };
+                            // Get the framebuffer as a byte slice for TrueType rendering
+                            let fb_bytes = core::slice::from_raw_parts_mut(
+                                fb as *mut u8,
+                                (w * gpu::height() * 4) as usize
+                            );
+                            crate::ui::truetype::draw_truetype(
+                                fb_bytes, w, x + 8, draw_y, line_str, sz, color
+                            );
+                        } else {
+                        // Bitmap font rendering: draw each character
                         let mut cx = x + 8;
                         for ci in line_start..line_end {
                             let ch = text[ci];
@@ -1438,21 +1463,18 @@ pub fn render() {
                             let color = style_to_color(st);
 
                             if line_is_big {
-                                // H1: draw 2x wide characters
                                 let ch_buf = [ch];
                                 let s = core::str::from_utf8_unchecked(&ch_buf);
                                 font::draw_str(fb, w, cx, draw_y, s, color, BG);
-                                font::draw_str(fb, w, cx + 1, draw_y, s, color, BG); // fake bold
-                                cx += 16; // double width
+                                font::draw_str(fb, w, cx + 1, draw_y, s, color, BG);
+                                cx += 16;
                             } else {
                                 let ch_buf = [ch];
                                 let s = core::str::from_utf8_unchecked(&ch_buf);
                                 font::draw_str(fb, w, cx, draw_y, s, color, BG);
-                                // Fake bold: draw again offset by 1px
                                 if style_is_bold(st) {
                                     font::draw_str(fb, w, cx + 1, draw_y, s, color, BG);
                                 }
-                                // Underline for links
                                 if style_is_underline(st) && ch != b' ' {
                                     gpu::fill_rect(cx, draw_y + 14, 8, 1, color);
                                 }
@@ -1461,6 +1483,7 @@ pub fn render() {
 
                             if cx > x + content_w - 8 { break; }
                         }
+                        } // close else (bitmap font)
                     }
                 }
 
