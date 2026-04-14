@@ -305,11 +305,12 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     let mut transcript = crate::crypto::sha256::Sha256::new();
     transcript.update(ch_inner);
 
-    // Step 2: Receive ServerHello + possibly more records in same TCP segment
-    let mut all_buf = [0u8; 8192];
+    // Step 2: Receive ServerHello + all encrypted handshake records
+    // Google's certificate is large — need a big buffer
+    let mut all_buf = [0u8; 16384];
     let mut all_len = 0;
-    // Read multiple chunks — server may send SH + CCS + encrypted in one burst
-    for _ in 0..5 {
+    // Read multiple chunks until we have all handshake data
+    for _ in 0..10 {
         let mut chunk = [0u8; 4096];
         match crate::net::tcp::recv_data(&mut chunk) {
             Ok(n) if n > 0 => {
@@ -332,6 +333,41 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
 
     // Remaining bytes after ServerHello contain more records
     let mut remaining_start = sh_end;
+
+    // Check if we have the complete encrypted handshake record
+    // If not, keep reading until we do
+    let mut need_more = true;
+    while need_more && all_len < all_buf.len() - 4096 {
+        need_more = false;
+        let mut scan = sh_end;
+        while scan + 5 < all_len {
+            let rt = all_buf[scan];
+            let rl = ((all_buf[scan + 3] as usize) << 8) | all_buf[scan + 4] as usize;
+            if scan + 5 + rl > all_len {
+                // Record extends beyond buffer — need more data
+                need_more = true;
+                break;
+            }
+            scan = scan + 5 + rl;
+        }
+        if need_more {
+            let mut chunk = [0u8; 4096];
+            match crate::net::tcp::recv_data(&mut chunk) {
+                Ok(n) if n > 0 => {
+                    let copy = n.min(all_buf.len() - all_len);
+                    all_buf[all_len..all_len + copy].copy_from_slice(&chunk[..copy]);
+                    all_len += copy;
+                }
+                _ => break,
+            }
+        }
+    }
+
+    uart::puts("[tls] buf=");
+    crate::kernel::mm::print_num(all_len);
+    uart::puts(" SH=");
+    crate::kernel::mm::print_num(sh_end);
+    uart::puts("\n");
 
     // Step 3: Derive handshake keys from shared secret
     let empty_hash = crate::crypto::sha256::hash(&[]);
@@ -402,6 +438,14 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
             // Inner: plaintext(N) + content_type(1) + GCM_tag(16)
             let inner_len = payload_len - 17;
             let inner_type = decrypted[inner_len]; // content type byte
+
+            uart::puts("[tls] hs inner=0x");
+            let hx = b"0123456789abcdef";
+            uart::putc(hx[(inner_type >> 4) as usize]);
+            uart::putc(hx[(inner_type & 0xf) as usize]);
+            uart::puts(" len=");
+            crate::kernel::mm::print_num(inner_len);
+            uart::puts("\n");
 
             // Add decrypted handshake to transcript (only type 0x16 = handshake)
             if inner_type == 0x16 && inner_len > 0 {
@@ -552,7 +596,13 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     if sess.state != TlsState::Established { return Err("not established"); }
 
     let mut record = [0u8; 4096];
-    let n = crate::net::tcp::recv_data(&mut record).map_err(|_| "recv failed")?;
+    uart::puts("[tls] waiting for record...\n");
+    let n = crate::net::tcp::recv_data(&mut record).map_err(|e| {
+        uart::puts("[tls] recv error: ");
+        uart::puts(e);
+        uart::puts("\n");
+        e
+    })?;
     if n < 5 { return Err("record too short"); }
 
     // Parse record header
@@ -593,7 +643,9 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     // Check the inner content type (last byte before GCM tag)
     let inner_type = if rec_len > 16 { decrypted[rec_len - 17] } else { 0 };
 
-    uart::puts("[tls] decrypted ");
+    uart::puts("[tls] decrypted seq=");
+    crate::kernel::mm::print_num((sess.server_seq - 1) as usize);
+    uart::puts(" ");
     crate::kernel::mm::print_num(data_len);
     uart::puts("b type=0x");
     let hex2 = b"0123456789abcdef";

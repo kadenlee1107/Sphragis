@@ -26,7 +26,7 @@ static ACK_NUM: AtomicU32 = AtomicU32::new(0);
 static DATA_READY: AtomicBool = AtomicBool::new(false);
 
 // Receive buffer
-const RX_BUF_SIZE: usize = 8192;
+const RX_BUF_SIZE: usize = 16384;
 static mut RX_BUF: [u8; RX_BUF_SIZE] = [0; RX_BUF_SIZE];
 static RX_LEN: AtomicU32 = AtomicU32::new(0);
 
@@ -245,6 +245,18 @@ pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     loop {
         super::poll_once();
         if DATA_READY.load(Ordering::Acquire) {
+            // Coalesce: poll briefly for more segments arriving back-to-back
+            let coalesce_start: u64;
+            unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) coalesce_start); }
+            let coalesce_timeout = freq / 10; // 100ms
+            loop {
+                super::poll_once();
+                let cn: u64;
+                unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) cn); }
+                if cn - coalesce_start > coalesce_timeout { break; }
+                core::hint::spin_loop();
+            }
+
             DATA_READY.store(false, Ordering::Relaxed);
             unsafe {
                 let len = RX_LEN.load(Ordering::Relaxed) as usize;
