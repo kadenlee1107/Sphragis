@@ -114,6 +114,7 @@ fn execute(cmd: &str) {
         "hello" => cmd_run_elf("hello"),
         "hello_libc" | "libc" => cmd_run_elf("libc"),
         "threads" => cmd_run_elf("threads"),
+        "netsurf" => cmd_run_elf("netsurf"),
         "" => {}
         _ => {
             console::puts("  unknown command: ");
@@ -932,6 +933,8 @@ fn cmd_run_elf(name: &str) {
 
     let hello_data = if name == "libc" {
         crate::batcave::linux::runner::hello_libc_elf()
+    } else if name == "netsurf" {
+        crate::batcave::linux::runner::netsurf_test_elf()
     } else if name == "threads" {
         crate::batcave::linux::runner::hello_threads_elf()
     } else {

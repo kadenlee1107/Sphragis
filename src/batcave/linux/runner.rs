@@ -18,6 +18,9 @@ static HELLO_THREADS_ELF: &[u8] = include_bytes!("../../../tests/hello_threads")
 pub fn busybox_elf() -> &'static [u8] { BUSYBOX }
 pub fn hello_elf() -> &'static [u8] { HELLO_ELF }
 pub fn hello_libc_elf() -> &'static [u8] { HELLO_LIBC_ELF }
+static NETSURF_TEST_ELF: &[u8] = include_bytes!("../../../tests/netsurf_test");
+pub fn netsurf_test_elf() -> &'static [u8] { NETSURF_TEST_ELF }
+
 pub fn hello_threads_elf() -> &'static [u8] { HELLO_THREADS_ELF }
 
 /// Run the "hello" test binary.
