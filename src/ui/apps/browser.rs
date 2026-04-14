@@ -101,6 +101,11 @@ static mut LINK_COUNT: usize = 0;
 // Scroll position
 static mut SCROLL_Y: usize = 0;
 
+// Level 2 rendering engine (DOM + Layout)
+static mut USE_ENGINE: bool = true; // use Level 2 engine vs Level 1 fallback
+static mut DOM_DOC: crate::browser::dom::Document = crate::browser::dom::Document::new();
+static mut LAYOUT_TREE: crate::browser::layout::LayoutTree = crate::browser::layout::LayoutTree::new();
+
 // State
 static mut STATE: BrowserState = BrowserState::Idle;
 static mut STATUS_MSG: [u8; 64] = [0; 64];
@@ -320,10 +325,23 @@ pub fn navigate(url: &[u8]) {
         }
     }
 
-    // Skip HTTP headers (find \r\n\r\n)
+    // Skip HTTP headers
     let body = &raw[headers_end..total];
 
-    // Strip HTML tags and extract text + links
+    // Parse HTML → DOM → Layout (Level 2 engine)
+    unsafe {
+        if USE_ENGINE {
+            crate::browser::html::parser::parse(body, &mut *core::ptr::addr_of_mut!(DOM_DOC));
+            let viewport_w = wm::content_rect().w as i32 - 16;
+            crate::browser::layout::build(
+                &*core::ptr::addr_of!(DOM_DOC),
+                &mut *core::ptr::addr_of_mut!(LAYOUT_TREE),
+                viewport_w,
+            );
+        }
+    }
+
+    // Also do Level 1 strip for link extraction + fallback
     strip_html(body, host);
 
     unsafe {
@@ -890,8 +908,38 @@ pub fn render() {
                 let msg = core::str::from_utf8_unchecked(&STATUS_MSG[..STATUS_LEN]);
                 font::draw_str(fb, w, x + 8, y + 40, msg, RED, BG);
             }
+        } else if USE_ENGINE && (*core::ptr::addr_of!(LAYOUT_TREE)).box_count > 0 {
+            // ═══ Level 2: DOM-based rendering ═══
+            crate::browser::paint::paint(
+                &*core::ptr::addr_of!(LAYOUT_TREE),
+                x as i32,          // offset_x
+                y as i32,          // offset_y
+                (SCROLL_Y * 18) as i32,  // scroll_y (convert line scroll to pixels)
+                content_w as i32,  // clip_w
+                (ymax - y - 24) as i32, // clip_h
+            );
+
+            // Also show links at bottom (from Level 1 extraction)
+            if LINK_COUNT > 0 {
+                let links_y = ymax - 40;
+                if links_y > y + 40 {
+                    gpu::fill_rect(x, links_y - 2, content_w, 1, BORDER);
+                    let mut ly = links_y;
+                    for li in 0..LINK_COUNT.min(3) {
+                        if ly + ln < ymax - 20 {
+                            let link = core::str::from_utf8_unchecked(&LINKS[li][..LINK_LENS[li]]);
+                            let mut label = [0u8; 4];
+                            label[0] = b'['; label[1] = b'1' + li as u8; label[2] = b']'; label[3] = b' ';
+                            font::draw_str(fb, w, x + 4, ly,
+                                core::str::from_utf8_unchecked(&label[..4]), LINK_COLOR, BG);
+                            font::draw_str(fb, w, x + 36, ly, link, CYAN, BG);
+                            ly += ln;
+                        }
+                    }
+                }
+            }
         } else {
-            // Render styled page text with word wrap
+            // ═══ Level 1 fallback: styled text rendering ═══
             let chars_per_line = ((content_w - 16) / 8) as usize;
             let max_lines = ((ymax - y - 24) / ln) as usize;
 
