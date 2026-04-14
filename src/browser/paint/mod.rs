@@ -66,8 +66,8 @@ pub fn paint(
             let color = b.style.color.raw();
             let is_bold = b.style.font_weight == FontWeight::Bold;
             let is_underline = b.style.text_decoration.underline;
-            let font_scale = if b.style.font_size >= 28 { 2 } else { 1 };
-            let char_w = 8 * font_scale;
+            let is_big = b.style.font_size >= 28;
+            let char_w: i32 = if is_big { 10 } else { 8 }; // h1 slightly wider
 
             let mut tx = sx;
             let ty = sy;
@@ -90,22 +90,17 @@ pub fn paint(
                         let ch_buf = [ch];
                         let s = unsafe { core::str::from_utf8_unchecked(&ch_buf) };
 
-                        if font_scale == 2 {
-                            // Big text (h1): draw each char double-width
-                            font::draw_str(fb, sw, tx as u32, ty as u32, s, color, 0xFF0A0A0A);
-                            font::draw_str(fb, sw, (tx + 1) as u32, ty as u32, s, color, 0xFF0A0A0A);
-                        } else {
-                            font::draw_str(fb, sw, tx as u32, ty as u32, s, color, 0xFF0A0A0A);
-                        }
+                        // Draw character
+                        font::draw_str(fb, sw, tx as u32, ty as u32, s, color, 0xFF0A0A0A);
 
-                        // Bold: draw again offset
-                        if is_bold && font_scale == 1 {
+                        // Bold or big: draw again offset by 1px
+                        if is_bold || is_big {
                             font::draw_str(fb, sw, (tx + 1) as u32, ty as u32, s, color, 0xFF0A0A0A);
                         }
 
                         // Underline
                         if is_underline && ch != b' ' {
-                            gpu::fill_rect(tx as u32, (ty + 14) as u32, char_w as u32, 1, color);
+                            gpu::fill_rect(tx as u32, (ty + 14) as u32, 8, 1, color);
                         }
                     }
 
