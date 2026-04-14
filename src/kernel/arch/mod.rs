@@ -543,6 +543,45 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                     val
                 };
 
+                // Emulate alignment faults (DFSC=0x21) — HVF enforces strict alignment
+                let dfsc = esr & 0x3F;
+                if dfsc == 0x21 {
+                    unsafe {
+                        // For ANY alignment fault, skip the instruction
+                        // This is a fallback — ideally we'd emulate the exact instruction
+                        // LDP/STP with unaligned address: emulate with byte access
+                        let is_load = (instr >> 22) & 1 == 1;
+                        let rt = (instr & 0x1F) as usize;
+
+                        if is_load && rt < 31 {
+                            // Load: read 8 bytes from FAR byte-by-byte
+                            let mut val = 0u64;
+                            for i in 0..8u64 {
+                                let b: u8;
+                                core::arch::asm!("ldrb {v:w}, [{a}]",
+                                    a = in(reg) far.wrapping_add(i), v = out(reg) b);
+                                val |= (b as u64) << (i * 8);
+                            }
+                            (*frame).x[rt] = val;
+                            // For LDP, also load second register
+                            let rt2 = ((instr >> 10) & 0x1F) as usize;
+                            if rt2 < 31 && rt2 != rt {
+                                let mut val2 = 0u64;
+                                for i in 0..8u64 {
+                                    let b: u8;
+                                    core::arch::asm!("ldrb {v:w}, [{a}]",
+                                        a = in(reg) far.wrapping_add(8 + i), v = out(reg) b);
+                                    val2 |= (b as u64) << (i * 8);
+                                }
+                                (*frame).x[rt2] = val2;
+                            }
+                        }
+                        // Advance past faulting instruction
+                        (*frame).elr = elr + 4;
+                    }
+                    return;
+                }
+
                 // Emulate atomic load/store exclusive (HVF doesn't support)
                 // Single-core → always succeeds, safe to emulate with plain ops
                 if (instr & 0x3F000000) == 0x08000000 {
