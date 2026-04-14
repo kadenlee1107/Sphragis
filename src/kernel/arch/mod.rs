@@ -631,9 +631,17 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                                 let imm7 = ((instr >> 15) & 0x7F) as i32;
                                 let simm = if imm7 & 0x40 != 0 { imm7 | !0x7F } else { imm7 };
                                 let offset = simm as i64 * scale as i64;
-                                let base = if rn < 31 { (*frame).x[rn] as i64 } else { addr as i64 };
-                                let new_base = if wb == 0b01 { base + offset } else { addr as i64 };
-                                if rn < 31 { (*frame).x[rn] = new_base as u64; }
+                                // For pre-index: FAR = base + offset, so base = FAR - offset
+                                // For post-index: FAR = base, new_base = base + offset
+                                if wb == 0b11 {
+                                    // Pre-index: writeback = FAR (which is base+offset already)
+                                    if rn < 31 { (*frame).x[rn] = addr; }
+                                    // rn=31 = SP: can't update SP from trap frame, skip
+                                } else {
+                                    // Post-index: writeback = base + offset = FAR + offset
+                                    let new_val = (addr as i64 + offset) as u64;
+                                    if rn < 31 { (*frame).x[rn] = new_val; }
+                                }
                             }
                             (*frame).elr = elr + 4;
                             return;

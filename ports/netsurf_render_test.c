@@ -187,6 +187,10 @@ void _start(void) {
 
     // Compute style for body
     printf("\n[3] Computing styles...\n");
+    printf("    handler_version=%d\n", handler.handler_version);
+    printf("    node_name ptr=%p\n", (void*)handler.node_name);
+    printf("    body_node tag=%s\n", body_node.tag);
+    printf("    Calling css_select_style...\n");
     css_select_results *results = NULL;
     css_error err = css_select_style(ctx, &body_node, &unit_ctx, &media, NULL,
                                       &handler, NULL, &results);
