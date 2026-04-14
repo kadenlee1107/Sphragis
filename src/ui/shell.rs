@@ -909,14 +909,14 @@ fn cmd_run_elf(name: &str) {
     uart::puts(name);
     uart::puts("\n");
 
-    // BatCave path disabled — address space mismatch with non-busybox binaries
-    if false && name == "libc_disabled" {
-        let data = crate::batcave::linux::runner::hello_libc_elf();
-        uart::puts("[shell] using BatCave runner for libc test\n");
+    // BatCave path for NetSurf — uses EL0 with proper MMU
+    if name == "netsurf" {
+        let data = crate::batcave::linux::runner::netsurf_test_elf();
+        uart::puts("[shell] using BatCave EL0 runner for NetSurf\n");
         match crate::batcave::linux::loader::load_elf(data) {
             Ok(entry) => {
                 uart::puts("[shell] loaded, running via BatCave...\n");
-                if let Err(e) = crate::batcave::linux::loader::execute_with_args(entry, &["hello_mini"]) {
+                if let Err(e) = crate::batcave::linux::loader::execute_with_args(entry, &["netsurf_css_test"]) {
                     console::puts("  Error: ");
                     console::puts(e);
                     console::puts("\n");
