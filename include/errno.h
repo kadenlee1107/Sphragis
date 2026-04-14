@@ -51,4 +51,5 @@ extern int errno;
 #define EAFNOSUPPORT 97
 #define EOVERFLOW 75
 
+#define EILSEQ 84
 #endif
