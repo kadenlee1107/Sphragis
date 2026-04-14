@@ -50,10 +50,46 @@ const MAX_URL: usize = 128;
 static mut URL_BUF: [u8; MAX_URL] = [0; MAX_URL];
 static mut URL_LEN: usize = 0;
 
-// Page content (stripped HTML)
+// Page content with per-character styling
 const MAX_PAGE: usize = 8192;
 static mut PAGE_BUF: [u8; MAX_PAGE] = [0; MAX_PAGE];
 static mut PAGE_LEN: usize = 0;
+
+// Style per character: encodes color + attributes
+// Bits: [7:4]=color_index, [3]=bold, [2]=italic, [1]=underline, [0]=big (h1)
+static mut PAGE_STYLE: [u8; MAX_PAGE] = [0; MAX_PAGE];
+
+// Color palette for styled rendering
+const STYLE_BODY: u8     = 0x00; // gray text
+const STYLE_H1: u8       = 0x11; // white + bold + big
+const STYLE_H2: u8       = 0x18; // white + bold
+const STYLE_H3: u8       = 0x28; // bright gray + bold
+const STYLE_LINK: u8     = 0x32; // blue + underline
+const STYLE_BOLD: u8     = 0x08; // bold
+const STYLE_ITALIC: u8   = 0x04; // italic
+const STYLE_CODE: u8     = 0x40; // code (green)
+const STYLE_QUOTE: u8    = 0x50; // blockquote (dim)
+const STYLE_BULLET: u8   = 0x60; // list bullet (accent)
+const STYLE_HR: u8       = 0x70; // horizontal rule
+
+fn style_to_color(style: u8) -> u32 {
+    let color_idx = (style >> 4) & 0xF;
+    match color_idx {
+        0 => 0xFFA0A0A0, // body gray
+        1 => 0xFFFFFFFF, // headings white
+        2 => 0xFFCCCCCC, // h3 bright gray
+        3 => 0xFF4499FF, // links blue
+        4 => 0xFF44DD44, // code green
+        5 => 0xFF666666, // blockquote dim
+        6 => 0xFFFF8800, // bullet/accent orange
+        7 => 0xFF3A3A3A, // hr dark
+        _ => 0xFFA0A0A0, // default
+    }
+}
+
+fn style_is_bold(style: u8) -> bool { style & 0x08 != 0 }
+fn style_is_underline(style: u8) -> bool { style & 0x02 != 0 }
+fn style_is_big(style: u8) -> bool { style & 0x01 != 0 }
 
 // Extracted links
 const MAX_LINKS: usize = 32;
@@ -312,10 +348,11 @@ pub fn navigate(url: &[u8]) {
     set_status(&status[..slen]);
 }
 
-/// Strip HTML tags from body, extract text and links.
+/// Strip HTML tags, extract styled text and links.
 fn strip_html(html: &[u8], base_host: &str) {
     unsafe {
         PAGE_LEN = 0;
+        for i in 0..MAX_PAGE { PAGE_STYLE[i] = STYLE_BODY; }
         LINK_COUNT = 0;
     }
 
@@ -324,18 +361,50 @@ fn strip_html(html: &[u8], base_host: &str) {
     let mut in_script = false;
     let mut in_style = false;
     let mut last_was_space = false;
+    let mut current_style: u8 = STYLE_BODY;
+    let mut in_link = false;
+    let mut in_bold = false;
+    let mut in_italic = false;
+    let mut in_code = false;
+    let mut in_pre = false;
+    let mut in_blockquote = false;
+    let mut list_depth: u8 = 0;
 
     while i < html.len() {
         if html[i] == b'<' {
-            // Check for <script>, <style>, </script>, </style>
             let remaining = &html[i..];
+
+            // Script/style exclusion
             if starts_with_ci(remaining, b"<script") { in_script = true; }
             if starts_with_ci(remaining, b"</script") { in_script = false; }
             if starts_with_ci(remaining, b"<style") { in_style = true; }
             if starts_with_ci(remaining, b"</style") { in_style = false; }
 
-            // Extract links from <a href="...">
+            // ─── Style-changing tags ───
+
+            // Headings
+            if starts_with_ci(remaining, b"<h1") {
+                push_styled(b'\n', current_style); push_styled(b'\n', current_style);
+                current_style = STYLE_H1; last_was_space = true;
+            } else if starts_with_ci(remaining, b"</h1") {
+                push_styled(b'\n', current_style); current_style = STYLE_BODY;
+            } else if starts_with_ci(remaining, b"<h2") {
+                push_styled(b'\n', current_style); push_styled(b'\n', current_style);
+                current_style = STYLE_H2; last_was_space = true;
+            } else if starts_with_ci(remaining, b"</h2") {
+                push_styled(b'\n', current_style); current_style = STYLE_BODY;
+            } else if starts_with_ci(remaining, b"<h3") || starts_with_ci(remaining, b"<h4")
+                   || starts_with_ci(remaining, b"<h5") || starts_with_ci(remaining, b"<h6") {
+                push_styled(b'\n', current_style);
+                current_style = STYLE_H3; last_was_space = true;
+            } else if starts_with_ci(remaining, b"</h") {
+                push_styled(b'\n', current_style); current_style = STYLE_BODY;
+            }
+
+            // Links
             if starts_with_ci(remaining, b"<a ") || starts_with_ci(remaining, b"<a\t") {
+                in_link = true;
+                current_style = STYLE_LINK;
                 if let Some(href) = extract_href(remaining) {
                     unsafe {
                         if LINK_COUNT < MAX_LINKS {
@@ -343,27 +412,108 @@ fn strip_html(html: &[u8], base_host: &str) {
                             LINKS[LINK_COUNT][..len].copy_from_slice(&href[..len]);
                             LINK_LENS[LINK_COUNT] = len;
                             LINK_COUNT += 1;
-
-                            // Add link marker to page text
-                            let marker_start = b"[";
-                            let marker_end = b"] ";
+                            // Link marker
                             if PAGE_LEN + 5 < MAX_PAGE {
-                                PAGE_BUF[PAGE_LEN] = b'['; PAGE_LEN += 1;
-                                PAGE_LEN += write_num(&mut PAGE_BUF[PAGE_LEN..], LINK_COUNT);
-                                PAGE_BUF[PAGE_LEN] = b']'; PAGE_LEN += 1;
+                                push_styled(b'[', STYLE_BULLET);
+                                let mut nbuf = [0u8; 4];
+                                let nlen = write_num(&mut nbuf, LINK_COUNT);
+                                for n in 0..nlen { push_styled(nbuf[n], STYLE_BULLET); }
+                                push_styled(b']', STYLE_BULLET);
                             }
                         }
                     }
                 }
             }
+            if starts_with_ci(remaining, b"</a") {
+                in_link = false;
+                current_style = STYLE_BODY;
+            }
+
+            // Bold / Strong
+            if starts_with_ci(remaining, b"<b>") || starts_with_ci(remaining, b"<b ")
+                || starts_with_ci(remaining, b"<strong") {
+                in_bold = true; current_style = STYLE_BOLD;
+            }
+            if starts_with_ci(remaining, b"</b>") || starts_with_ci(remaining, b"</strong") {
+                in_bold = false; current_style = STYLE_BODY;
+            }
+
+            // Italic / Em
+            if starts_with_ci(remaining, b"<i>") || starts_with_ci(remaining, b"<i ")
+                || starts_with_ci(remaining, b"<em") {
+                in_italic = true; current_style = STYLE_ITALIC;
+            }
+            if starts_with_ci(remaining, b"</i>") || starts_with_ci(remaining, b"</em") {
+                in_italic = false; current_style = STYLE_BODY;
+            }
+
+            // Code / Pre
+            if starts_with_ci(remaining, b"<code") || starts_with_ci(remaining, b"<pre") {
+                in_code = true; current_style = STYLE_CODE;
+            }
+            if starts_with_ci(remaining, b"</code") || starts_with_ci(remaining, b"</pre") {
+                in_code = false; current_style = STYLE_BODY;
+            }
+
+            // Blockquote
+            if starts_with_ci(remaining, b"<blockquote") {
+                in_blockquote = true; current_style = STYLE_QUOTE;
+                push_styled(b'\n', current_style);
+                // Indent marker
+                push_styled(b'|', STYLE_QUOTE);
+                push_styled(b' ', STYLE_QUOTE);
+            }
+            if starts_with_ci(remaining, b"</blockquote") {
+                in_blockquote = false; current_style = STYLE_BODY;
+                push_styled(b'\n', current_style);
+            }
+
+            // Lists
+            if starts_with_ci(remaining, b"<ul") || starts_with_ci(remaining, b"<ol") {
+                list_depth += 1;
+            }
+            if starts_with_ci(remaining, b"</ul") || starts_with_ci(remaining, b"</ol") {
+                if list_depth > 0 { list_depth -= 1; }
+            }
+            if starts_with_ci(remaining, b"<li") {
+                push_styled(b'\n', current_style);
+                // Indent based on list depth
+                for _ in 0..list_depth.saturating_sub(1) {
+                    push_styled(b' ', current_style);
+                    push_styled(b' ', current_style);
+                }
+                push_styled(b' ', STYLE_BULLET);
+                push_styled(0xB7, STYLE_BULLET); // bullet character (·)
+                push_styled(b' ', current_style);
+                last_was_space = true;
+            }
+
+            // Horizontal rule
+            if starts_with_ci(remaining, b"<hr") {
+                push_styled(b'\n', current_style);
+                for _ in 0..40 { push_styled(b'-', STYLE_HR); }
+                push_styled(b'\n', current_style);
+                last_was_space = true;
+            }
 
             // Block-level tags → newline
             if starts_with_ci(remaining, b"<p") || starts_with_ci(remaining, b"<div")
-                || starts_with_ci(remaining, b"<br") || starts_with_ci(remaining, b"<h")
-                || starts_with_ci(remaining, b"<li") || starts_with_ci(remaining, b"<tr")
+                || starts_with_ci(remaining, b"<br") || starts_with_ci(remaining, b"<tr")
+                || starts_with_ci(remaining, b"<section") || starts_with_ci(remaining, b"<article")
+                || starts_with_ci(remaining, b"<header") || starts_with_ci(remaining, b"<footer")
+                || starts_with_ci(remaining, b"<nav") || starts_with_ci(remaining, b"<main")
             {
-                push_page(b'\n');
+                push_styled(b'\n', current_style);
                 last_was_space = true;
+            }
+            // Double newline for paragraph spacing
+            if starts_with_ci(remaining, b"<p") || starts_with_ci(remaining, b"</p") {
+                push_styled(b'\n', current_style);
+            }
+
+            // Table cells
+            if starts_with_ci(remaining, b"<td") || starts_with_ci(remaining, b"<th") {
+                push_styled(b'\t', current_style);
             }
 
             in_tag = true;
@@ -384,22 +534,23 @@ fn strip_html(html: &[u8], base_host: &str) {
 
         // Decode HTML entities
         if html[i] == b'&' {
-            if starts_with_ci(&html[i..], b"&amp;") { push_page(b'&'); i += 5; continue; }
-            if starts_with_ci(&html[i..], b"&lt;") { push_page(b'<'); i += 4; continue; }
-            if starts_with_ci(&html[i..], b"&gt;") { push_page(b'>'); i += 4; continue; }
-            if starts_with_ci(&html[i..], b"&nbsp;") { push_page(b' '); i += 6; continue; }
-            if starts_with_ci(&html[i..], b"&quot;") { push_page(b'"'); i += 6; continue; }
-            // Skip unknown entities
+            if starts_with_ci(&html[i..], b"&amp;") { push_styled(b'&', current_style); i += 5; continue; }
+            if starts_with_ci(&html[i..], b"&lt;") { push_styled(b'<', current_style); i += 4; continue; }
+            if starts_with_ci(&html[i..], b"&gt;") { push_styled(b'>', current_style); i += 4; continue; }
+            if starts_with_ci(&html[i..], b"&nbsp;") { push_styled(b' ', current_style); i += 6; continue; }
+            if starts_with_ci(&html[i..], b"&quot;") { push_styled(b'"', current_style); i += 6; continue; }
             while i < html.len() && html[i] != b';' { i += 1; }
             i += 1;
             continue;
         }
 
-        // Collapse whitespace
+        // Collapse whitespace (but not in <pre>)
         let ch = html[i];
         if ch == b' ' || ch == b'\t' || ch == b'\n' || ch == b'\r' {
-            if !last_was_space {
-                push_page(b' ');
+            if in_pre {
+                push_styled(ch, current_style);
+            } else if !last_was_space {
+                push_styled(b' ', current_style);
                 last_was_space = true;
             }
             i += 1;
@@ -408,7 +559,7 @@ fn strip_html(html: &[u8], base_host: &str) {
 
         // Regular character
         if ch >= 0x20 && ch <= 0x7E {
-            push_page(ch);
+            push_styled(ch, current_style);
             last_was_space = false;
         }
         i += 1;
@@ -416,9 +567,14 @@ fn strip_html(html: &[u8], base_host: &str) {
 }
 
 fn push_page(ch: u8) {
+    push_styled(ch, STYLE_BODY);
+}
+
+fn push_styled(ch: u8, style: u8) {
     unsafe {
         if PAGE_LEN < MAX_PAGE {
             PAGE_BUF[PAGE_LEN] = ch;
+            PAGE_STYLE[PAGE_LEN] = style;
             PAGE_LEN += 1;
         }
     }
@@ -735,21 +891,25 @@ pub fn render() {
                 font::draw_str(fb, w, x + 8, y + 40, msg, RED, BG);
             }
         } else {
-            // Render page text with word wrap
-            let chars_per_line = ((r.w - 16) / 8) as usize;
+            // Render styled page text with word wrap
+            let chars_per_line = ((content_w - 16) / 8) as usize;
             let max_lines = ((ymax - y - 24) / ln) as usize;
 
             let text = &PAGE_BUF[..PAGE_LEN];
+            let styles = &PAGE_STYLE[..PAGE_LEN];
             let mut line_num = 0usize;
             let mut ti = 0;
 
             while ti < text.len() && line_num < SCROLL_Y + max_lines {
-                // Find end of line (newline or wrap at chars_per_line)
                 let line_start = ti;
                 let mut line_end = ti;
                 let mut chars = 0;
 
-                while line_end < text.len() && text[line_end] != b'\n' && chars < chars_per_line {
+                // Check if this line starts with a big (h1) style
+                let line_is_big = if ti < styles.len() { style_is_big(styles[ti]) } else { false };
+                let effective_cpl = if line_is_big { chars_per_line / 2 } else { chars_per_line };
+
+                while line_end < text.len() && text[line_end] != b'\n' && chars < effective_cpl {
                     line_end += 1;
                     chars += 1;
                 }
@@ -757,17 +917,40 @@ pub fn render() {
                 if line_num >= SCROLL_Y {
                     let draw_y = y + ((line_num - SCROLL_Y) as u32) * ln;
                     if draw_y + ln < ymax {
-                        let line_text = core::str::from_utf8_unchecked(&text[line_start..line_end]);
-                        // Check for link markers [N]
-                        if line_text.contains('[') {
-                            font::draw_str(fb, w, x + 4, draw_y, line_text, LINK_COLOR, BG);
-                        } else {
-                            font::draw_str(fb, w, x + 4, draw_y, line_text, FG, BG);
+                        // Draw each character with its own style
+                        let mut cx = x + 8;
+                        for ci in line_start..line_end {
+                            let ch = text[ci];
+                            let st = styles[ci];
+                            let color = style_to_color(st);
+
+                            if line_is_big {
+                                // H1: draw 2x wide characters
+                                let ch_buf = [ch];
+                                let s = core::str::from_utf8_unchecked(&ch_buf);
+                                font::draw_str(fb, w, cx, draw_y, s, color, BG);
+                                font::draw_str(fb, w, cx + 1, draw_y, s, color, BG); // fake bold
+                                cx += 16; // double width
+                            } else {
+                                let ch_buf = [ch];
+                                let s = core::str::from_utf8_unchecked(&ch_buf);
+                                font::draw_str(fb, w, cx, draw_y, s, color, BG);
+                                // Fake bold: draw again offset by 1px
+                                if style_is_bold(st) {
+                                    font::draw_str(fb, w, cx + 1, draw_y, s, color, BG);
+                                }
+                                // Underline for links
+                                if style_is_underline(st) && ch != b' ' {
+                                    gpu::fill_rect(cx, draw_y + 14, 8, 1, color);
+                                }
+                                cx += 8;
+                            }
+
+                            if cx > x + content_w - 8 { break; }
                         }
                     }
                 }
 
-                // Advance past newline
                 if line_end < text.len() && text[line_end] == b'\n' {
                     line_end += 1;
                 }
