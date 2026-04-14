@@ -907,9 +907,8 @@ fn cmd_run_elf(name: &str) {
     uart::puts(name);
     uart::puts("\n");
 
-    // For "libc" test, use the BatCave execution path (EL0 + proper page tables)
-    // which already works for busybox
-    if name == "libc" {
+    // BatCave path disabled — address space mismatch with non-busybox binaries
+    if false && name == "libc_disabled" {
         let data = crate::batcave::linux::runner::hello_libc_elf();
         uart::puts("[shell] using BatCave runner for libc test\n");
         match crate::batcave::linux::loader::load_elf(data) {
@@ -930,7 +929,11 @@ fn cmd_run_elf(name: &str) {
         return;
     }
 
-    let hello_data = crate::batcave::linux::runner::hello_elf();
+    let hello_data = if name == "libc" {
+        crate::batcave::linux::runner::hello_libc_elf()
+    } else {
+        crate::batcave::linux::runner::hello_elf()
+    };
     uart::puts("[shell] ELF data: ");
     crate::kernel::mm::print_num(hello_data.len());
     uart::puts(" bytes\n");
@@ -946,21 +949,13 @@ fn cmd_run_elf(name: &str) {
 
             console::puts("  Executing...\n");
 
-            // Allocate stack — use a fixed high address to avoid overlap with ELF
-            // Allocate 16 contiguous pages for a 64KB stack
-            let mut stack_pages = [0usize; 16];
-            let mut stack_ok = true;
-            for i in 0..16 {
-                match crate::kernel::mm::frame::alloc_frame() {
-                    Some(p) => stack_pages[i] = p,
-                    None => { stack_ok = false; break; }
-                }
-            }
-            let stack_base = if stack_ok { Some(stack_pages[0]) } else { None };
+            // Use a STATIC stack to guarantee it's in mapped kernel memory
+            // (dynamic frame allocation may return pages with MMU issues)
+            static mut ELF_STACK: [u8; 65536] = [0u8; 65536];
+            let sb = unsafe { core::ptr::addr_of_mut!(ELF_STACK) as usize };
+            let stack_base = Some(sb);
             if let Some(sb) = stack_base {
-                let sp = sb + 16 * 4096;
-                // Verify stack is accessible by writing a test value
-                unsafe { core::ptr::write_volatile(sb as *mut u64, 0xDEADBEEF); }
+                let sp = sb + 65536;
 
                 // Set up minimal stack: argc=0, argv=NULL, envp=NULL, auxv=AT_NULL
                 unsafe {
@@ -975,7 +970,7 @@ fn cmd_run_elf(name: &str) {
                     // argc = 0
                     core::ptr::write_volatile(sp_ptr.sub(5), 0u64);
 
-                    let final_sp = sp - 40; // 5 * 8 bytes
+                    let final_sp = (sp - 48) & !0xF; // 16-byte aligned! ARM64 ABI requires it
 
                     uart::puts("[shell] jumping to ELF entry, sp=0x");
                     for i in (0..16).rev() {

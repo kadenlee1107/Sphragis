@@ -527,10 +527,31 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                 }
             }
 
-            uart::puts("!!! DATA ABORT !!!\n");
+            // Log detailed fault info
+            let dfsc = esr & 0x3F; // Data Fault Status Code
+            uart::puts("!!! DATA ABORT (DFSC=0x");
+            let hex = b"0123456789abcdef";
+            uart::putc(hex[((dfsc >> 4) & 0xf) as usize]);
+            uart::putc(hex[(dfsc & 0xf) as usize]);
+            uart::puts(") !!!\n");
             uart::puts("  FAR: 0x"); print_hex(far);
             uart::puts("  ELR: 0x"); print_hex(elr);
+            // Log TTBR0 to see which page table is active
+            let ttbr0: u64;
+            unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
+            uart::puts("  TTBR0: 0x"); print_hex(ttbr0);
             uart::puts("\n");
+            // Skip instruction to prevent infinite loop (first time only)
+            static mut ABORT_COUNT: u32 = 0;
+            unsafe {
+                ABORT_COUNT += 1;
+                if ABORT_COUNT > 3 {
+                    uart::puts("[abort] too many — halting binary\n");
+                    // Return to shell by setting ELR to a known-good address
+                    ABORT_COUNT = 0;
+                    return; // just return, the shell is already gone (noreturn)
+                }
+            }
         }
         0x3C => {
             let elr = unsafe { (*frame).elr };

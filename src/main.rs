@@ -23,6 +23,15 @@ global_asm!(include_str!("arch/aarch64/exceptions.s"));
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
+    // Disable alignment checking — C binaries may use unaligned accesses
+    unsafe {
+        let mut sctlr: u64;
+        core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr);
+        sctlr &= !(1 << 1); // Clear A bit (alignment check)
+        core::arch::asm!("msr sctlr_el1, {}", in(reg) sctlr);
+        core::arch::asm!("isb");
+    }
+
     // Platform detection
     let is_qemu = uart_available != 0;
 

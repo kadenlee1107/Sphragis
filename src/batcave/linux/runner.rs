@@ -12,7 +12,7 @@ static TEST_UNAME: &[u8] = include_bytes!("../../../test_binaries/uname_test.elf
 static BUSYBOX: &[u8] = include_bytes!("../../../test_binaries/busybox-musl-aarch64");
 // Standalone test binaries
 static HELLO_ELF: &[u8] = include_bytes!("../../../tests/hello");
-static HELLO_LIBC_ELF: &[u8] = include_bytes!("../../../tests/hello_mini");
+static HELLO_LIBC_ELF: &[u8] = include_bytes!("../../../tests/hello_libc");
 
 pub fn busybox_elf() -> &'static [u8] { BUSYBOX }
 pub fn hello_elf() -> &'static [u8] { HELLO_ELF }

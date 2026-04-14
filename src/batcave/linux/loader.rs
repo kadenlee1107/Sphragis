@@ -224,8 +224,17 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
         }
     }
 
-    // Flush caches to ensure loaded code/data is visible
+    // Flush ALL loaded pages: clean data cache + invalidate instruction cache
+    // Critical for HVF cache coherency
     unsafe {
+        let start = phys_base & !63;
+        let end = phys_base + total_size;
+        let mut addr = start;
+        while addr < end {
+            core::arch::asm!("dc cvac, {a}", a = in(reg) addr);
+            core::arch::asm!("ic ivau, {a}", a = in(reg) addr);
+            addr += 64;
+        }
         core::arch::asm!("dsb ish");
         core::arch::asm!("isb");
     }

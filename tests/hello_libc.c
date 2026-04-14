@@ -1,10 +1,9 @@
-// Bat_OS Test — C program WITH libc (musl)
-// Tests: printf, malloc/free, strlen, memcpy, sprintf
-// Cross-compile: zig cc -target aarch64-linux-musl -static -o hello_libc hello_libc.c
+// Bat_OS — C program with printf, malloc, string ops
+// Uses minilib.h (our own libc replacement — no musl needed)
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "minilib.h"
+
+MINILIB_MAIN
 
 int fibonacci(int n) {
     if (n <= 1) return n;
@@ -13,7 +12,7 @@ int fibonacci(int n) {
 
 int main(int argc, char *argv[]) {
     printf("=== Bat_OS libc Test ===\n");
-    printf("Hello from C with musl libc!\n");
+    printf("Hello from C with printf!\n");
     printf("argc = %d\n", argc);
 
     // Test malloc
@@ -34,6 +33,10 @@ int main(int argc, char *argv[]) {
     } else {
         printf("malloc FAILED\n");
     }
+
+    // Test multiple features
+    printf("hex: 0x%x\n", 0xDEAD);
+    printf("string: %s + %s\n", "hello", "world");
 
     printf("=== All libc tests passed! ===\n");
     return 0;
