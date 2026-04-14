@@ -5,6 +5,8 @@
 // Block layout: elements stack vertically
 // Inline layout: elements flow left-to-right, wrap at edges
 
+pub mod flex;
+
 use super::dom::{Document, NodeType, MAX_NODES};
 use super::css::style::*;
 
