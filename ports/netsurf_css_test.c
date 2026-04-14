@@ -66,7 +66,8 @@ void _start(void) {
     }
 
     // Test 2: Parse CSS
-    printf("[2] Parsing CSS: 'body { color: red; }' ... ");
+    printf("[2] Parsing CSS: 'body { color: red; }'\n");
+    printf("    Calling css_stylesheet_append_data...\n");
     const char *css_text = "body { color: red; font-size: 16px; margin: 10px; }";
     err = css_stylesheet_append_data(sheet,
         (const uint8_t *)css_text, strlen(css_text));
