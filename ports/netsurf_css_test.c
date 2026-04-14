@@ -4,9 +4,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 // libcss types
 #include <libcss/libcss.h>
+#include <parserutils/charset/mibenum.h>
 #include <libwapcaplet/libwapcaplet.h>
 
 // Memory allocator for libcss
@@ -42,6 +44,19 @@ void _start(void) {
     params.resolve_pw = NULL;
 
     css_stylesheet *sheet = NULL;
+
+    // Test charset lookup directly
+    printf("  Testing charset lookup:\n");
+    // Try the exact alias name as stored in the table: "utf8" (no hyphen)
+    uint16_t mib = parserutils_charset_mibenum_from_name("utf8", 4);
+    printf("    utf8 (len=4) = MIBenum %d\n", mib);
+    mib = parserutils_charset_mibenum_from_name("UTF-8", 5);
+    printf("    UTF-8 (len=5) = MIBenum %d\n", mib);
+    mib = parserutils_charset_mibenum_from_name("437", 3);
+    printf("    437 (len=3) = MIBenum %d (should be non-zero)\n", mib);
+    // Test our toupper
+    printf("    toupper test: 'a'=%c 'z'=%c '0'=%c\n", toupper('a'), toupper('z'), toupper('0'));
+
     css_error err = css_stylesheet_create(&params, &sheet);
     if (err == CSS_OK && sheet) {
         printf("OK!\n");
