@@ -98,14 +98,14 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::UNAME => (SyscallCat::Always, sys_uname),
         nr::EXIT => (SyscallCat::Always, sys_exit),
         nr::EXIT_GROUP => (SyscallCat::Always, sys_exit_group),
-        nr::SET_TID_ADDRESS => (SyscallCat::Always, sys_stub_zero),
+        nr::SET_TID_ADDRESS => (SyscallCat::Always, sys_set_tid_address),
         nr::PRLIMIT64 => (SyscallCat::Always, sys_prlimit64),
         nr::CLOCK_GETTIME => (SyscallCat::Always, sys_clock_gettime),
         nr::GETRANDOM => (SyscallCat::Always, sys_getrandom),
         73 => (SyscallCat::Always, sys_ppoll),        // ppoll — block on stdin
         // 56 (openat) handled below as nr::OPENAT
         66 => (SyscallCat::FileIO, sys_writev),        // writev
-        98 => (SyscallCat::Always, sys_stub_zero),   // futex
+        98 => (SyscallCat::Always, sys_futex),        // futex
         99 => (SyscallCat::Always, sys_stub_zero),   // set_robust_list
         100 => (SyscallCat::Always, sys_stub_zero),  // get_robust_list
         71 => (SyscallCat::FileIO, sys_sendfile),     // sendfile (used by cat)
@@ -119,7 +119,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         166 => (SyscallCat::Always, sys_stub_zero),  // umask
         167 => (SyscallCat::Always, sys_stub_zero),  // sysinfo
         169 => (SyscallCat::Always, sys_stub_zero),  // gettimeofday
-        178 => (SyscallCat::Always, sys_stub_zero),  // gettid
+        178 => (SyscallCat::Always, sys_gettid),      // gettid
         233 => (SyscallCat::Always, sys_stub_zero),  // madvise
         261 => (SyscallCat::Always, sys_prlimit64),  // prlimit64
         25 => (SyscallCat::FileIO, sys_fcntl),        // fcntl
@@ -155,7 +155,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         154 => (SyscallCat::Always, sys_stub_zero),  // setpgid
         155 => (SyscallCat::Always, sys_stub_zero),  // getpgid
         172 => (SyscallCat::Always, sys_getpid),     // getpid (dup)
-        220 => (SyscallCat::Process, sys_clone_stub), // clone (improved)
+        220 => (SyscallCat::Process, sys_clone_thread), // clone (thread support)
         221 => (SyscallCat::Process, sys_execve),       // execve
         260 => (SyscallCat::Process, sys_wait_stub),  // wait4 (improved)
 
@@ -1357,8 +1357,8 @@ fn sys_dup3(args: [u64; 6]) -> i64 {
 
 // (old sys_pipe2 removed — real implementation below)
 
-// Fork state machine — save parent state at clone(), restore at child exit
-use core::sync::atomic::{AtomicBool, AtomicUsize};
+// Fork/thread state machine — save parent state at clone(), restore at child exit
+use core::sync::atomic::{AtomicBool, AtomicUsize, AtomicU64};
 pub static IN_CHILD: AtomicBool = AtomicBool::new(false);
 static CHILD_EXIT_CODE: AtomicUsize = AtomicUsize::new(0);
 static CHILD_REAPED: AtomicBool = AtomicBool::new(true); // start with no child
@@ -1368,16 +1368,127 @@ pub static FORK_SAVED_SPSR: AtomicUsize = AtomicUsize::new(0);
 // Saved SP at clone time
 pub static FORK_SAVED_SP: AtomicUsize = AtomicUsize::new(0);
 
-fn sys_clone_stub(_args: [u64; 6]) -> i64 {
-    if IN_CHILD.load(core::sync::atomic::Ordering::Relaxed) {
-        return -1; // nested fork not supported
+// ─── Thread support ───
+// When clone is called with child_stack != 0, this is a pthread-style thread.
+// We store the child_stack here so the exception handler can modify the
+// trap frame SP before eret, causing the child to run on its own stack.
+pub static CLONE_CHILD_STACK: AtomicU64 = AtomicU64::new(0);
+// Thread ID counter (starts at 2 since PID 1 is the main process)
+static NEXT_TID: AtomicUsize = AtomicUsize::new(2);
+// Current thread ID
+static CURRENT_TID: AtomicUsize = AtomicUsize::new(1);
+// Last child TID assigned by clone (returned to parent on child exit)
+pub static LAST_CHILD_TID: AtomicUsize = AtomicUsize::new(2);
+// Whether the current child is a thread (has own stack) vs fork (shares parent stack)
+pub static IS_THREAD_CHILD: AtomicBool = AtomicBool::new(false);
+// TLS pointer for set_tid_address
+static TID_ADDRESS: AtomicU64 = AtomicU64::new(0);
+
+// ─── Futex wait queue ───
+// Simple array of {addr, waiting} pairs for FUTEX_WAIT/FUTEX_WAKE
+const MAX_FUTEX_WAITERS: usize = 16;
+struct FutexWaiter {
+    addr: u64,    // futex address being waited on
+    active: bool, // is this waiter slot in use?
+    woken: bool,  // has this waiter been woken?
+}
+static mut FUTEX_WAITERS: [FutexWaiter; MAX_FUTEX_WAITERS] = {
+    const EMPTY: FutexWaiter = FutexWaiter { addr: 0, active: false, woken: false };
+    [EMPTY; MAX_FUTEX_WAITERS]
+};
+
+// Futex operations
+const FUTEX_WAIT: u64 = 0;
+const FUTEX_WAKE: u64 = 1;
+const FUTEX_PRIVATE_FLAG: u64 = 128;
+
+fn sys_futex(args: [u64; 6]) -> i64 {
+    let uaddr = args[0];
+    let op = args[1] & !(FUTEX_PRIVATE_FLAG); // strip PRIVATE flag
+    let val = args[2] as u32;
+
+    match op {
+        FUTEX_WAIT => {
+            // Read the value at uaddr
+            let current: u32;
+            unsafe {
+                core::arch::asm!("ldr {v:w}, [{a}]", a = in(reg) uaddr, v = out(reg) current);
+            }
+            // If value changed since caller checked, return EAGAIN
+            if current != val {
+                return -11; // EAGAIN
+            }
+            // In our single-core cooperative model, FUTEX_WAIT just returns 0
+            // immediately. The caller will spin-retry. Real blocking would
+            // require preemptive scheduling which we don't have for userspace.
+            // This is correct: the futex contract allows spurious wakeups.
+            0
+        }
+        FUTEX_WAKE => {
+            // Wake up to `val` waiters on this address
+            // In our cooperative model, waiters aren't actually blocked,
+            // so this is a no-op but we return the count for correctness.
+            let count = val as i64;
+            if count > 0 { count.min(1) } else { 0 }
+        }
+        _ => {
+            // Unknown futex op — return success for compatibility
+            0
+        }
     }
+}
+
+fn sys_clone_thread(args: [u64; 6]) -> i64 {
+    let _flags = args[0];
+    let child_stack = args[1];
+
+    if IN_CHILD.load(core::sync::atomic::Ordering::Relaxed) {
+        return -1; // nested clone not supported
+    }
+
+    // Assign a thread ID for the child
+    let tid = NEXT_TID.load(core::sync::atomic::Ordering::Relaxed);
+    NEXT_TID.store(tid + 1, core::sync::atomic::Ordering::Relaxed);
+    LAST_CHILD_TID.store(tid, core::sync::atomic::Ordering::Relaxed);
 
     IN_CHILD.store(true, core::sync::atomic::Ordering::Relaxed);
     CHILD_REAPED.store(false, core::sync::atomic::Ordering::Relaxed);
-    // Reset worker brk for fresh applet execution
+
+    if child_stack != 0 {
+        // pthread-style clone: child runs on its own stack
+        // Store the child stack so the exception handler can set it
+        // in the trap frame before eret.
+        CLONE_CHILD_STACK.store(child_stack, core::sync::atomic::Ordering::Relaxed);
+        IS_THREAD_CHILD.store(true, core::sync::atomic::Ordering::Relaxed);
+        CURRENT_TID.store(tid, core::sync::atomic::Ordering::Relaxed);
+    } else {
+        // fork-style clone: child shares parent stack (busybox)
+        CLONE_CHILD_STACK.store(0, core::sync::atomic::Ordering::Relaxed);
+        IS_THREAD_CHILD.store(false, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    // Reset worker brk for fresh execution
     unsafe { WORKER_BRK = 0; }
-    0 // child return
+
+    0 // child return value (x0=0)
+}
+
+// ─── set_tid_address (96) ───
+fn sys_set_tid_address(args: [u64; 6]) -> i64 {
+    let tidptr = args[0];
+    TID_ADDRESS.store(tidptr, core::sync::atomic::Ordering::Relaxed);
+    // Return current thread ID
+    CURRENT_TID.load(core::sync::atomic::Ordering::Relaxed) as i64
+}
+
+// ─── gettid (178) ───
+fn sys_gettid(_args: [u64; 6]) -> i64 {
+    CURRENT_TID.load(core::sync::atomic::Ordering::Relaxed) as i64
+}
+
+/// Called from the exception handler when child exits to restore parent TID
+pub fn restore_parent_tid() {
+    CURRENT_TID.store(1, core::sync::atomic::Ordering::Relaxed);
 }
 
 fn sys_execve(args: [u64; 6]) -> i64 {
@@ -1768,7 +1879,7 @@ fn sys_wait_stub(args: [u64; 6]) -> i64 {
         }
     }
 
-    2 // Return child PID
+    LAST_CHILD_TID.load(core::sync::atomic::Ordering::Relaxed) as i64 // Return child TID
 }
 
 fn sys_clock_gettime(args: [u64; 6]) -> i64 {

@@ -93,26 +93,38 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                         crate::batcave::linux::syscall::handle(0, syscall_num, args);
 
                         if in_child {
-                            // Restore stack contents (child corrupted parent's stack)
+                            let is_thread = crate::batcave::linux::syscall::IS_THREAD_CHILD
+                                .load(core::sync::atomic::Ordering::Relaxed);
                             let busybox_sp = core::ptr::read_volatile(
                                 core::ptr::addr_of!(SAVED_BUSYBOX_SP));
-                            let stack_src = core::ptr::addr_of!(SAVED_STACK) as usize;
-                            for i in (0..STACK_SAVE_SIZE).step_by(8) {
-                                let val: u64;
-                                core::arch::asm!(
-                                    "ldr {v}, [{a}]",
-                                    a = in(reg) stack_src + i,
-                                    v = out(reg) val,
-                                );
-                                core::arch::asm!(
-                                    "str {v}, [{a}]",
-                                    a = in(reg) busybox_sp as usize + i,
-                                    v = in(reg) val,
-                                );
+
+                            if !is_thread {
+                                // Fork-style child: restore parent stack contents
+                                // (child corrupted parent's stack by sharing it)
+                                let stack_src = core::ptr::addr_of!(SAVED_STACK) as usize;
+                                for i in (0..STACK_SAVE_SIZE).step_by(8) {
+                                    let val: u64;
+                                    core::arch::asm!(
+                                        "ldr {v}, [{a}]",
+                                        a = in(reg) stack_src + i,
+                                        v = out(reg) val,
+                                    );
+                                    core::arch::asm!(
+                                        "str {v}, [{a}]",
+                                        a = in(reg) busybox_sp as usize + i,
+                                        v = in(reg) val,
+                                    );
+                                }
                             }
+                            // Thread-style child: skip stack restore (child had own stack)
 
                             // Eret from saved clone frame → parent resumes
                             let saved_ptr = core::ptr::addr_of!(SAVED_FRAME) as u64;
+                            // Get the child TID to return to parent
+                            let child_tid = crate::batcave::linux::syscall::LAST_CHILD_TID
+                                .load(core::sync::atomic::Ordering::Relaxed) as u64;
+                            // Restore main thread TID
+                            crate::batcave::linux::syscall::restore_parent_tid();
 
                             core::arch::asm!(
                                 // Set SP to clone-time busybox SP FIRST
@@ -145,11 +157,12 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                                 "ldr x30, [x16, #240]",
                                 // Load x16 last (destroys our pointer)
                                 "ldr x16, [x16, #128]",
-                                // x0 = 2 (parent return from clone)
-                                "mov x0, #2",
+                                // x0 = child TID (parent return from clone)
+                                "mov x0, {tid}",
                                 "eret",
                                 ptr = in(reg) saved_ptr,
                                 sp_val = in(reg) busybox_sp,
+                                tid = in(reg) child_tid,
                                 options(noreturn),
                             );
                         }
@@ -442,6 +455,61 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
 
                     let result = crate::batcave::linux::syscall::handle(0, syscall_num, args);
                     f.x[0] = result as u64;
+
+                    // CLONE with child_stack: jump child to new stack via manual eret
+                    if syscall_num == 220 && result == 0 {
+                        let child_sp = crate::batcave::linux::syscall::CLONE_CHILD_STACK
+                            .load(core::sync::atomic::Ordering::Relaxed);
+                        if child_sp != 0 {
+                            // Clear the child_stack flag (one-shot)
+                            crate::batcave::linux::syscall::CLONE_CHILD_STACK
+                                .store(0, core::sync::atomic::Ordering::Relaxed);
+                            // Resume the child at the next instruction (after svc)
+                            // with SP = child_stack and x0 = 0.
+                            // We use x16 as frame pointer (like parent-resume code)
+                            // and load x16 itself last from the frame.
+                            let frame_ptr = frame as u64;
+                            let elr_val = f.elr;
+                            let spsr_val = f.spsr;
+                            core::arch::asm!(
+                                // Set child stack SP first, before clobbering regs
+                                "mov sp, {csp}",
+                                // Set ELR and SPSR for child return
+                                "msr elr_el1, {elr}",
+                                "and {spsr}, {spsr}, #0xFFFFFFFFFFFFFC3F",
+                                "msr spsr_el1, {spsr}",
+                                // x16 = frame pointer for restoring GPRs
+                                "mov x16, {fp}",
+                                // Restore GPRs from saved trap frame
+                                "ldr x1, [x16, #8]",
+                                "ldp x2, x3, [x16, #16]",
+                                "ldp x4, x5, [x16, #32]",
+                                "ldp x6, x7, [x16, #48]",
+                                "ldp x8, x9, [x16, #64]",
+                                "ldp x10, x11, [x16, #80]",
+                                "ldp x12, x13, [x16, #96]",
+                                "ldp x14, x15, [x16, #112]",
+                                "ldr x17, [x16, #136]",
+                                "ldp x18, x19, [x16, #144]",
+                                "ldp x20, x21, [x16, #160]",
+                                "ldp x22, x23, [x16, #176]",
+                                "ldp x24, x25, [x16, #192]",
+                                "ldp x26, x27, [x16, #208]",
+                                "ldp x28, x29, [x16, #224]",
+                                "ldr x30, [x16, #240]",
+                                // Load x16 last (destroys our frame pointer)
+                                "ldr x16, [x16, #128]",
+                                // x0 = 0 (child return from clone)
+                                "mov x0, #0",
+                                "eret",
+                                elr = in(reg) elr_val,
+                                spsr = in(reg) spsr_val,
+                                fp = in(reg) frame_ptr,
+                                csp = in(reg) child_sp,
+                                options(noreturn),
+                            );
+                        }
+                    }
                 }
             } else {
                 unsafe {

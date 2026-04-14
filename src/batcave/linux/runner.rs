@@ -13,10 +13,12 @@ static BUSYBOX: &[u8] = include_bytes!("../../../test_binaries/busybox-musl-aarc
 // Standalone test binaries
 static HELLO_ELF: &[u8] = include_bytes!("../../../tests/hello");
 static HELLO_LIBC_ELF: &[u8] = include_bytes!("../../../tests/hello_libc");
+static HELLO_THREADS_ELF: &[u8] = include_bytes!("../../../tests/hello_threads");
 
 pub fn busybox_elf() -> &'static [u8] { BUSYBOX }
 pub fn hello_elf() -> &'static [u8] { HELLO_ELF }
 pub fn hello_libc_elf() -> &'static [u8] { HELLO_LIBC_ELF }
+pub fn hello_threads_elf() -> &'static [u8] { HELLO_THREADS_ELF }
 
 /// Run the "hello" test binary.
 pub fn run_test() -> Result<(), &'static str> {
