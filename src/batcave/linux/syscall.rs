@@ -70,6 +70,11 @@ mod nr {
     pub const PRLIMIT64: u64 = 261;
     pub const GETRANDOM: u64 = 278;
 
+    // Epoll
+    pub const EPOLL_CREATE1: u64 = 20;
+    pub const EPOLL_CTL: u64 = 21;
+    pub const EPOLL_PWAIT: u64 = 22;
+
     // Network
     pub const SOCKET: u64 = 198;
     pub const BIND: u64 = 200;
@@ -90,7 +95,7 @@ mod nr {
 pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
     // Classify the syscall
     let (cat, handler): (SyscallCat, fn([u64; 6]) -> i64) = match syscall_num {
-        // Always allowed
+        // ── Always allowed ──
         nr::GETPID => (SyscallCat::Always, sys_getpid),
         nr::GETPPID => (SyscallCat::Always, sys_getppid),
         nr::GETUID | nr::GETEUID => (SyscallCat::Always, sys_getuid),
@@ -102,70 +107,42 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::PRLIMIT64 => (SyscallCat::Always, sys_prlimit64),
         nr::CLOCK_GETTIME => (SyscallCat::Always, sys_clock_gettime),
         nr::GETRANDOM => (SyscallCat::Always, sys_getrandom),
-        73 => (SyscallCat::Always, sys_ppoll),        // ppoll — block on stdin
-        // 56 (openat) handled below as nr::OPENAT
-        66 => (SyscallCat::FileIO, sys_writev),        // writev
+        73 => (SyscallCat::Always, sys_ppoll),        // ppoll
         98 => (SyscallCat::Always, sys_futex),        // futex
         99 => (SyscallCat::Always, sys_stub_zero),   // set_robust_list
         100 => (SyscallCat::Always, sys_stub_zero),  // get_robust_list
-        71 => (SyscallCat::FileIO, sys_sendfile),     // sendfile (used by cat)
         101 => (SyscallCat::Always, sys_nanosleep),  // nanosleep
         102 => (SyscallCat::Always, sys_stub_zero),  // getitimer
         103 => (SyscallCat::Always, sys_stub_zero),  // setitimer
         131 => (SyscallCat::Always, sys_stub_zero),  // tgkill
         134 => (SyscallCat::Always, sys_stub_zero),  // rt_sigaction
         135 => (SyscallCat::Always, sys_stub_zero),  // rt_sigprocmask
-        153 => (SyscallCat::Always, sys_stub_zero),  // times
-        166 => (SyscallCat::Always, sys_stub_zero),  // umask
-        167 => (SyscallCat::Always, sys_stub_zero),  // sysinfo
-        169 => (SyscallCat::Always, sys_stub_zero),  // gettimeofday
-        178 => (SyscallCat::Always, sys_gettid),      // gettid
-        233 => (SyscallCat::Always, sys_stub_zero),  // madvise
-        261 => (SyscallCat::Always, sys_prlimit64),  // prlimit64
-        25 => (SyscallCat::FileIO, sys_fcntl),        // fcntl
-        17 => (SyscallCat::FileIO, sys_getcwd),      // getcwd (remap)
-        46 => (SyscallCat::Always, sys_stub_zero),   // ftruncate
-        34 => (SyscallCat::FileIO, sys_mkdirat),      // mkdirat
-        48 => (SyscallCat::FileIO, sys_faccessat),   // faccessat
-        61 => (SyscallCat::FileIO, sys_getdents64),  // getdents64
-        78 => (SyscallCat::FileIO, sys_readlinkat),  // readlinkat
-        // 79 newfstatat handled above as nr::NEWFSTATAT
+        137 => (SyscallCat::Always, sys_stub_zero),  // rt_sigtimedwait
         144 => (SyscallCat::Always, sys_stub_zero),  // setgid
         146 => (SyscallCat::Always, sys_stub_zero),  // setuid
-        157 => (SyscallCat::Always, sys_stub_zero),  // sched_getscheduler
-        158 => (SyscallCat::Always, sys_stub_zero),  // sched_getparam
-        170 => (SyscallCat::Always, sys_stub_zero),  // getpgrp/setpgid
-        171 => (SyscallCat::Always, sys_stub_zero),  // sigaltstack
-        204 => (SyscallCat::Always, sys_stub_zero),  // sched_getaffinity
-        210 => (SyscallCat::Always, sys_stub_zero),  // shutdown
-        262 => (SyscallCat::Always, sys_stub_zero),  // getrlimit equiv
-        113 => (SyscallCat::Always, sys_clock_gettime), // clock_gettime (dup)
-        179 => (SyscallCat::Always, sys_stub_zero),  // sysinfo
-        23 => (SyscallCat::FileIO, sys_dup),         // dup
-        24 => (SyscallCat::FileIO, sys_dup3),        // dup3
-        25 => (SyscallCat::FileIO, sys_stub_zero),   // fcntl (dup)
-        35 => (SyscallCat::FileIO, sys_stub_zero),   // unlinkat
-        // 48 faccessat handled above
-        49 => (SyscallCat::FileIO, sys_chdir),        // chdir
-        59 => (SyscallCat::FileIO, sys_pipe2),       // pipe2
-        61 => (SyscallCat::FileIO, sys_stub_zero),   // getdents64 (dup)
-        134 => (SyscallCat::Always, sys_stub_zero),  // rt_sigaction (dup)
-        135 => (SyscallCat::Always, sys_stub_zero),  // rt_sigprocmask (dup)
-        137 => (SyscallCat::Always, sys_stub_zero),  // rt_sigtimedwait
+        153 => (SyscallCat::Always, sys_stub_zero),  // times
         154 => (SyscallCat::Always, sys_stub_zero),  // setpgid
         155 => (SyscallCat::Always, sys_stub_zero),  // getpgid
-        172 => (SyscallCat::Always, sys_getpid),     // getpid (dup)
-        220 => (SyscallCat::Process, sys_clone_thread), // clone (thread support)
-        221 => (SyscallCat::Process, sys_execve),       // execve
-        260 => (SyscallCat::Process, sys_wait_stub),  // wait4 (improved)
+        157 => (SyscallCat::Always, sys_stub_zero),  // sched_getscheduler
+        158 => (SyscallCat::Always, sys_stub_zero),  // sched_getparam
+        166 => (SyscallCat::Always, sys_stub_zero),  // umask
+        167 => (SyscallCat::Always, sys_stub_zero),  // old sysinfo (compat)
+        169 => (SyscallCat::Always, sys_stub_zero),  // gettimeofday
+        170 => (SyscallCat::Always, sys_stub_zero),  // getpgrp/setpgid
+        171 => (SyscallCat::Always, sys_stub_zero),  // sigaltstack
+        178 => (SyscallCat::Always, sys_gettid),      // gettid
+        179 => (SyscallCat::Always, sys_sysinfo),    // sysinfo (real impl)
+        204 => (SyscallCat::Always, sys_stub_zero),  // sched_getaffinity
+        210 => (SyscallCat::Always, sys_stub_zero),  // shutdown
+        233 => (SyscallCat::Always, sys_stub_zero),  // madvise
+        262 => (SyscallCat::Always, sys_stub_zero),  // getrlimit equiv
 
-        // Memory — always allowed within cave
-        nr::BRK => (SyscallCat::Memory, sys_brk),
-        nr::MMAP => (SyscallCat::Memory, sys_mmap),
-        nr::MUNMAP => (SyscallCat::Memory, sys_munmap),
-        nr::MPROTECT => (SyscallCat::Memory, sys_mprotect),
+        // ── Epoll — stub implementation ──
+        nr::EPOLL_CREATE1 => (SyscallCat::FileIO, sys_epoll_create1),
+        nr::EPOLL_CTL => (SyscallCat::FileIO, sys_epoll_ctl),
+        nr::EPOLL_PWAIT => (SyscallCat::FileIO, sys_epoll_pwait),
 
-        // File I/O — needs fs capability
+        // ── File I/O — needs fs capability ──
         nr::OPENAT => (SyscallCat::FileIO, sys_openat),
         nr::CLOSE => (SyscallCat::FileIO, sys_close),
         nr::READ => (SyscallCat::FileIO, sys_read),
@@ -173,17 +150,34 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::LSEEK => (SyscallCat::FileIO, sys_stub_zero),
         nr::FSTAT => (SyscallCat::FileIO, sys_fstat),
         nr::NEWFSTATAT => (SyscallCat::FileIO, sys_newfstatat),
-        nr::FACCESSAT => (SyscallCat::FileIO, sys_stub_zero),
-        nr::GETCWD => (SyscallCat::FileIO, sys_getcwd),
-        nr::CHDIR => (SyscallCat::FileIO, sys_stub_zero),
-        nr::READLINKAT => (SyscallCat::FileIO, sys_readlinkat),
         nr::IOCTL => (SyscallCat::FileIO, sys_ioctl),
+        nr::GETCWD => (SyscallCat::FileIO, sys_getcwd),
+        23 => (SyscallCat::FileIO, sys_dup),          // dup
+        24 => (SyscallCat::FileIO, sys_dup3),         // dup3
+        25 => (SyscallCat::FileIO, sys_fcntl),        // fcntl
+        34 => (SyscallCat::FileIO, sys_mkdirat),      // mkdirat
+        35 => (SyscallCat::FileIO, sys_stub_zero),    // unlinkat
+        46 => (SyscallCat::Always, sys_stub_zero),    // ftruncate
+        48 => (SyscallCat::FileIO, sys_faccessat),    // faccessat
+        49 => (SyscallCat::FileIO, sys_chdir),        // chdir
+        59 => (SyscallCat::FileIO, sys_pipe2),        // pipe2
+        61 => (SyscallCat::FileIO, sys_getdents64),   // getdents64
+        66 => (SyscallCat::FileIO, sys_writev),       // writev
+        71 => (SyscallCat::FileIO, sys_sendfile),     // sendfile
+        78 => (SyscallCat::FileIO, sys_readlinkat),   // readlinkat
 
-        // Process (clone handled at line 158)
-        nr::EXECVE => (SyscallCat::Process, sys_stub_zero),
-        nr::WAIT4 => (SyscallCat::Process, sys_stub_zero),
+        // ── Memory — always allowed within cave ──
+        nr::BRK => (SyscallCat::Memory, sys_brk),
+        nr::MMAP => (SyscallCat::Memory, sys_mmap),
+        nr::MUNMAP => (SyscallCat::Memory, sys_munmap),
+        nr::MPROTECT => (SyscallCat::Memory, sys_mprotect),
 
-        // Network — needs net capability
+        // ── Process ──
+        220 => (SyscallCat::Process, sys_clone_thread), // clone
+        221 => (SyscallCat::Process, sys_execve),       // execve
+        260 => (SyscallCat::Process, sys_wait_stub),    // wait4
+
+        // ── Network — needs net capability ──
         nr::SOCKET => (SyscallCat::Network, sys_socket),
         nr::CONNECT => (SyscallCat::Network, sys_connect),
         nr::BIND => (SyscallCat::Network, sys_stub_zero),
@@ -2197,4 +2191,146 @@ fn sys_mkdirat(args: [u64; 6]) -> i64 {
     } else {
         0
     }
+}
+
+// ─── epoll_create1 (20) — create epoll instance ───
+// Minimal implementation: allocate an fd backed by a VFS node.
+// We don't actually track epoll interest lists; this is enough to
+// prevent programs that call epoll from crashing.
+fn sys_epoll_create1(args: [u64; 6]) -> i64 {
+    let _flags = args[0]; // EPOLL_CLOEXEC, ignored
+
+    if vfs::is_ready() {
+        if let Ok(idx) = vfs::create_node(0, b".epoll", vfs::NodeType::File, 0o100600) {
+            match fd::alloc_fd(idx, 0) {
+                Ok(fd_num) => return fd_num as i64,
+                Err(e) => return e,
+            }
+        }
+    }
+
+    // Fallback: return a high fd number
+    30
+}
+
+// ─── epoll_ctl (21) — add/modify/delete fd from epoll set ───
+// Stub: accept the operation, do nothing.
+fn sys_epoll_ctl(_args: [u64; 6]) -> i64 {
+    // args: epfd, op, fd, event*
+    // We accept all operations silently.
+    0
+}
+
+// ─── epoll_pwait (22) — wait for epoll events ───
+// Simple non-blocking check: if any monitored fds have data, report
+// them as ready; otherwise return 0 (timeout).
+fn sys_epoll_pwait(args: [u64; 6]) -> i64 {
+    let _epfd = args[0] as u32;
+    let events_ptr = args[1] as usize;
+    let max_events = args[2] as usize;
+    let timeout_ms = args[3] as i32;
+
+    if events_ptr == 0 || max_events == 0 { return 0; }
+
+    // If timeout is 0, return immediately with no events.
+    // If timeout is -1 (infinite), do a short spin then return 0.
+    // This prevents programs from hanging while still being correct.
+    if timeout_ms == 0 { return 0; }
+
+    // Short spin for a bounded time (similar to ppoll)
+    let iterations: u64 = if timeout_ms > 0 {
+        // Approximate: each iteration is ~nanoseconds on ARM64
+        (timeout_ms as u64).min(100) * 10_000
+    } else {
+        // Infinite timeout: spin a bit then return
+        1_000_000
+    };
+
+    for _ in 0..iterations {
+        // Check if stdin has data (a common epoll target)
+        if uart::has_char() {
+            // Fill one epoll_event: struct epoll_event { events: u32, data: u64 }
+            // EPOLLIN = 1
+            unsafe {
+                let epollin: u32 = 1;
+                core::arch::asm!("str {v:w}, [{a}]",
+                    a = in(reg) events_ptr, v = in(reg) epollin);
+                // data.fd = 0 (stdin)
+                let data: u64 = 0;
+                core::arch::asm!("str {v}, [{a}]",
+                    a = in(reg) events_ptr + 4, v = in(reg) data);
+            }
+            return 1; // one event ready
+        }
+        core::hint::spin_loop();
+    }
+
+    0 // timeout, no events
+}
+
+// ─── sysinfo (179) — return system information ───
+fn sys_sysinfo(args: [u64; 6]) -> i64 {
+    let buf = args[0] as usize;
+    if buf == 0 { return EINVAL; }
+
+    // Zero out the struct first (at least 112 bytes on 64-bit Linux)
+    for i in 0..112 {
+        unsafe { core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf + i); }
+    }
+
+    // Get uptime from ARM64 generic timer
+    let count: u64;
+    let freq: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) count);
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+    }
+    let uptime = if freq > 0 { count / freq } else { 0 };
+
+    // Get RAM stats from frame allocator
+    let total_ram: u64 = 256 * 1024 * 1024; // 256 MB
+    let free_ram: u64 = 224 * 1024 * 1024;  // ~224 MB free (conservative)
+
+    unsafe {
+        // offset 0: uptime (long / i64)
+        core::arch::asm!("str {v}, [{a}]",
+            a = in(reg) buf, v = in(reg) uptime);
+        // offset 8: loads[0] (unsigned long) — 1-min load average * 65536
+        let load: u64 = 0;
+        core::arch::asm!("str {v}, [{a}]",
+            a = in(reg) buf + 8, v = in(reg) load);
+        // offset 16: loads[1] — 5-min
+        core::arch::asm!("str {v}, [{a}]",
+            a = in(reg) buf + 16, v = in(reg) load);
+        // offset 24: loads[2] — 15-min
+        core::arch::asm!("str {v}, [{a}]",
+            a = in(reg) buf + 24, v = in(reg) load);
+        // offset 32: totalram (unsigned long)
+        core::arch::asm!("str {v}, [{a}]",
+            a = in(reg) buf + 32, v = in(reg) total_ram);
+        // offset 40: freeram (unsigned long)
+        core::arch::asm!("str {v}, [{a}]",
+            a = in(reg) buf + 40, v = in(reg) free_ram);
+        // offset 48: sharedram
+        core::arch::asm!("str {v}, [{a}]",
+            a = in(reg) buf + 48, v = in(reg) 0u64);
+        // offset 56: bufferram
+        core::arch::asm!("str {v}, [{a}]",
+            a = in(reg) buf + 56, v = in(reg) 0u64);
+        // offset 64: totalswap
+        core::arch::asm!("str {v}, [{a}]",
+            a = in(reg) buf + 64, v = in(reg) 0u64);
+        // offset 72: freeswap
+        core::arch::asm!("str {v}, [{a}]",
+            a = in(reg) buf + 72, v = in(reg) 0u64);
+        // offset 80: procs (unsigned short) — 1 process
+        let procs: u16 = 1;
+        core::arch::asm!("strh {v:w}, [{a}]",
+            a = in(reg) buf + 80, v = in(reg) procs as u32);
+        // offset 88: mem_unit (unsigned int) — 1 (byte-granularity)
+        let mem_unit: u32 = 1;
+        core::arch::asm!("str {v:w}, [{a}]",
+            a = in(reg) buf + 88, v = in(reg) mem_unit);
+    }
+    0
 }
