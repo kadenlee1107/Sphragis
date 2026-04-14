@@ -179,8 +179,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::READLINKAT => (SyscallCat::FileIO, sys_readlinkat),
         nr::IOCTL => (SyscallCat::FileIO, sys_ioctl),
 
-        // Process
-        nr::CLONE => (SyscallCat::Process, sys_stub_zero),
+        // Process (clone handled at line 158)
         nr::EXECVE => (SyscallCat::Process, sys_stub_zero),
         nr::WAIT4 => (SyscallCat::Process, sys_stub_zero),
 

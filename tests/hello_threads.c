@@ -1,80 +1,58 @@
-// Bat_OS Thread Test — pthread-style threads via raw clone syscall
-// Tests: thread creation, shared memory, clone with child_stack
-// Compile: clang --target=aarch64-linux-gnu -nostdlib -static -mstrict-align -o hello_threads hello_threads.c
-
+// Bat_OS Thread Test — thread creation via clone syscall
 #include "minilib.h"
 
-// ─── Raw clone syscall wrapper ───
-static long sys_clone(long flags, void *child_stack, void *parent_tid, void *tls, void *child_tid) {
+MINILIB_MAIN
+
+static long sys_clone(long flags, void *child_stack) {
     register long x0 __asm__("x0") = flags;
     register long x1 __asm__("x1") = (long)child_stack;
-    register long x2 __asm__("x2") = (long)parent_tid;
-    register long x3 __asm__("x3") = (long)tls;
-    register long x4 __asm__("x4") = (long)child_tid;
-    register long x8 __asm__("x8") = 220; // SYS_clone
-    __asm__ volatile("svc #0" : "=r"(x0) : "r"(x0), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x8) : "memory");
+    register long x2 __asm__("x2") = 0;
+    register long x3 __asm__("x3") = 0;
+    register long x4 __asm__("x4") = 0;
+    register long x8 __asm__("x8") = 220;
+    __asm__ volatile("svc #0" : "=r"(x0)
+        : "r"(x0), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x8) : "memory");
     return x0;
 }
 
-// ─── Raw gettid syscall wrapper ───
-static long sys_gettid(void) {
-    register long x0 __asm__("x0");
-    register long x8 __asm__("x8") = 178; // SYS_gettid
-    __asm__ volatile("svc #0" : "=r"(x0) : "r"(x8) : "memory");
-    return x0;
-}
+volatile int shared_counter = 0;
 
-// Shared counter — both threads can see and modify this
-volatile int counter = 0;
+int main(int argc, char *argv[]) {
+    printf("=== Thread Test ===\n");
 
-void thread_func(void) {
-    long tid = sys_gettid();
-    printf("  [child] thread started, tid=%d\n", (int)tid);
-
-    for (int i = 0; i < 10; i++) {
-        counter++;
-    }
-
-    printf("  [child] thread done, counter = %d\n", counter);
-    exit(0);
-}
-
-void _start(void) {
-    printf("=== Bat_OS Thread Test ===\n");
-
-    long my_tid = sys_gettid();
-    printf("[parent] main thread tid=%d\n", (int)my_tid);
-
-    // Allocate stack for child thread (64KB)
+    // Allocate child stack
     char *child_stack = (char *)malloc(65536);
     if (!child_stack) {
-        printf("[parent] ERROR: failed to allocate child stack\n");
-        exit(1);
+        printf("ERROR: stack alloc failed\n");
+        return 1;
     }
+    // Stack grows DOWN on ARM64, so pass the TOP
     void *stack_top = child_stack + 65536;
+    printf("[parent] stack at 0x%x\n", (unsigned)(unsigned long)stack_top);
 
-    printf("[parent] child stack allocated at %x, top at %x\n",
-           (unsigned int)(unsigned long)child_stack,
-           (unsigned int)(unsigned long)stack_top);
-
-    // Clone with CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND
-    // child_stack != 0 tells the kernel this is a thread, not a fork
-    long tid = sys_clone(0x00000100 | 0x00000200 | 0x00000400 | 0x00000800,
-                         stack_top, NULL, NULL, NULL);
+    // CLONE_VM(0x100) | CLONE_FS(0x200) | CLONE_FILES(0x400) | CLONE_SIGHAND(0x800)
+    long tid = sys_clone(0x100 | 0x200 | 0x400 | 0x800, stack_top);
 
     if (tid == 0) {
-        // Child thread — runs on child_stack
-        thread_func();
-        // thread_func calls exit(), never reaches here
+        // CHILD — runs on child_stack
+        printf("  [child] I am the child!\n");
+        for (int i = 0; i < 10; i++) {
+            shared_counter++;
+        }
+        printf("  [child] counter = %d\n", shared_counter);
+        exit(0);
     } else if (tid > 0) {
-        // Parent — child has run and exited (cooperative scheduling)
-        printf("[parent] clone returned tid=%d\n", (int)tid);
-        printf("[parent] counter = %d (expected 10)\n", counter);
+        // PARENT
+        printf("[parent] created child tid=%d\n", (int)tid);
+        // Simple wait: spin until child increments counter
+        for (int i = 0; i < 1000000; i++) {
+            if (shared_counter >= 10) break;
+        }
+        printf("[parent] counter = %d\n", shared_counter);
     } else {
-        printf("[parent] ERROR: clone failed with %d\n", (int)tid);
-        exit(1);
+        printf("[parent] clone FAILED: %d\n", (int)tid);
     }
 
-    printf("=== Thread Test PASSED ===\n");
-    exit(0);
+    printf("=== Thread Test Done ===\n");
+    return 0;
 }

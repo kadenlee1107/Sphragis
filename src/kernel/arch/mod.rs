@@ -472,32 +472,43 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                             let elr_val = f.elr;
                             let spsr_val = f.spsr;
                             core::arch::asm!(
-                                // Set child stack SP first, before clobbering regs
+                                // Set child stack SP (16-byte aligned)
                                 "mov sp, {csp}",
                                 // Set ELR and SPSR for child return
                                 "msr elr_el1, {elr}",
-                                "and {spsr}, {spsr}, #0xFFFFFFFFFFFFFC3F",
                                 "msr spsr_el1, {spsr}",
-                                // x16 = frame pointer for restoring GPRs
+                                // Use only LDR (not LDP) to avoid alignment faults
+                                // — trap frame may not be 16-byte aligned
                                 "mov x16, {fp}",
-                                // Restore GPRs from saved trap frame
                                 "ldr x1, [x16, #8]",
-                                "ldp x2, x3, [x16, #16]",
-                                "ldp x4, x5, [x16, #32]",
-                                "ldp x6, x7, [x16, #48]",
-                                "ldp x8, x9, [x16, #64]",
-                                "ldp x10, x11, [x16, #80]",
-                                "ldp x12, x13, [x16, #96]",
-                                "ldp x14, x15, [x16, #112]",
+                                "ldr x2, [x16, #16]",
+                                "ldr x3, [x16, #24]",
+                                "ldr x4, [x16, #32]",
+                                "ldr x5, [x16, #40]",
+                                "ldr x6, [x16, #48]",
+                                "ldr x7, [x16, #56]",
+                                "ldr x8, [x16, #64]",
+                                "ldr x9, [x16, #72]",
+                                "ldr x10, [x16, #80]",
+                                "ldr x11, [x16, #88]",
+                                "ldr x12, [x16, #96]",
+                                "ldr x13, [x16, #104]",
+                                "ldr x14, [x16, #112]",
+                                "ldr x15, [x16, #120]",
                                 "ldr x17, [x16, #136]",
-                                "ldp x18, x19, [x16, #144]",
-                                "ldp x20, x21, [x16, #160]",
-                                "ldp x22, x23, [x16, #176]",
-                                "ldp x24, x25, [x16, #192]",
-                                "ldp x26, x27, [x16, #208]",
-                                "ldp x28, x29, [x16, #224]",
+                                "ldr x18, [x16, #144]",
+                                "ldr x19, [x16, #152]",
+                                "ldr x20, [x16, #160]",
+                                "ldr x21, [x16, #168]",
+                                "ldr x22, [x16, #176]",
+                                "ldr x23, [x16, #184]",
+                                "ldr x24, [x16, #192]",
+                                "ldr x25, [x16, #200]",
+                                "ldr x26, [x16, #208]",
+                                "ldr x27, [x16, #216]",
+                                "ldr x28, [x16, #224]",
+                                "ldr x29, [x16, #232]",
                                 "ldr x30, [x16, #240]",
-                                // Load x16 last (destroys our frame pointer)
                                 "ldr x16, [x16, #128]",
                                 // x0 = 0 (child return from clone)
                                 "mov x0, #0",

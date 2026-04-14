@@ -954,8 +954,10 @@ fn cmd_run_elf(name: &str) {
 
             // Use a STATIC stack to guarantee it's in mapped kernel memory
             // (dynamic frame allocation may return pages with MMU issues)
-            static mut ELF_STACK: [u8; 65536] = [0u8; 65536];
-            let sb = unsafe { core::ptr::addr_of_mut!(ELF_STACK) as usize };
+            #[repr(align(16))]
+            struct AlignedStack([u8; 65536]);
+            static mut ELF_STACK: AlignedStack = AlignedStack([0u8; 65536]);
+            let sb = unsafe { core::ptr::addr_of_mut!(ELF_STACK) as usize }; // 16-byte aligned
             let stack_base = Some(sb);
             if let Some(sb) = stack_base {
                 let sp = sb + 65536;
