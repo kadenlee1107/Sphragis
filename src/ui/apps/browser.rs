@@ -15,16 +15,26 @@ use crate::ui::font;
 use crate::drivers::virtio::gpu;
 use crate::drivers::uart;
 
-const BG: u32 = 0xFF0A0A0A;
-const FG: u32 = 0xFFA0A0A0;
-const FG_HI: u32 = 0xFFFFFFFF;
-const DIM: u32 = 0xFF5A5A5A;
-const GREEN: u32 = 0xFF00FF00;
-const CYAN: u32 = 0xFFFFFF00;
-const RED: u32 = 0xFF0000FF;
-const BORDER: u32 = 0xFF1E1E1E;
-const URL_BG: u32 = 0xFF141414;
+const BG: u32 = 0xFF0A0A0A;         // page background
+const FG: u32 = 0xFFA0A0A0;         // body text
+const FG_HI: u32 = 0xFFFFFFFF;      // bright text
+const DIM: u32 = 0xFF5A5A5A;        // muted text
+const GREEN: u32 = 0xFF00FF00;      // secure indicator
+const CYAN: u32 = 0xFFFFFF00;       // links in page
+const RED: u32 = 0xFF0000FF;        // error
+const BORDER: u32 = 0xFF1E1E1E;     // dividers
+const TOOLBAR_BG: u32 = 0xFF1A1A1A; // navigation bar bg
+const TAB_BG: u32 = 0xFF141414;     // inactive tab bg
+const TAB_ACTIVE: u32 = 0xFF1A1A1A; // active tab bg
+const URL_BG: u32 = 0xFF0E0E0E;     // URL bar input bg
+const URL_BORDER: u32 = 0xFF2A2A2A; // URL bar border
+const BTN_BG: u32 = 0xFF222222;     // button background
+const BTN_FG: u32 = 0xFF888888;     // button text
 const LINK_COLOR: u32 = 0xFFFF8800; // orange for links
+const PROGRESS_BG: u32 = 0xFF1A1A1A;
+const PROGRESS_FG: u32 = 0xFF44AA44; // loading bar green
+const LOCK_COLOR: u32 = 0xFF00CC00; // HTTPS lock icon color
+const BOOKMARK_BG: u32 = 0xFF121212; // bookmarks bar bg
 
 // Browser state
 #[derive(Clone, Copy, PartialEq)]
@@ -60,6 +70,42 @@ static mut STATE: BrowserState = BrowserState::Idle;
 static mut STATUS_MSG: [u8; 64] = [0; 64];
 static mut STATUS_LEN: usize = 0;
 static mut BYTES_LOADED: usize = 0;
+static mut LOADING_PROGRESS: u8 = 0; // 0-100
+
+// Browser tabs
+const MAX_TABS: usize = 4;
+static mut TAB_TITLES: [[u8; 20]; MAX_TABS] = [[0; 20]; MAX_TABS];
+static mut TAB_TITLE_LENS: [usize; MAX_TABS] = [0; MAX_TABS];
+static mut TAB_COUNT: usize = 1;
+static mut ACTIVE_TAB: usize = 0;
+static mut TABS_INITIALIZED: bool = false;
+
+// Bookmarks
+static mut BOOKMARKS: [[u8; 48]; 6] = [[0; 48]; 6];
+static mut BM_LENS: [usize; 6] = [0; 6];
+static mut BM_COUNT: usize = 0;
+
+fn init_browser() {
+    unsafe {
+        if !TABS_INITIALIZED {
+            TAB_TITLES[0][..7].copy_from_slice(b"New Tab");
+            TAB_TITLE_LENS[0] = 7;
+            let bms: [&[u8]; 4] = [
+                b"https://example.com/",
+                b"https://www.google.com/",
+                b"http://info.cern.ch/",
+                b"https://httpbin.org/ip",
+            ];
+            for (i, &bm) in bms.iter().enumerate() {
+                let l = bm.len().min(48);
+                BOOKMARKS[i][..l].copy_from_slice(&bm[..l]);
+                BM_LENS[i] = l;
+            }
+            BM_COUNT = 4;
+            TABS_INITIALIZED = true;
+        }
+    }
+}
 
 // History
 const MAX_HISTORY: usize = 16;
@@ -74,6 +120,7 @@ pub fn navigate(url: &[u8]) {
         // Save to URL bar
         URL_LEN = url.len().min(MAX_URL);
         URL_BUF[..URL_LEN].copy_from_slice(&url[..URL_LEN]);
+        LOADING_PROGRESS = 10;
 
         // Push to history
         if HISTORY_COUNT < MAX_HISTORY {
@@ -246,6 +293,12 @@ pub fn navigate(url: &[u8]) {
     unsafe {
         STATE = BrowserState::Loaded;
         BYTES_LOADED = total;
+        LOADING_PROGRESS = 100;
+
+        // Update tab title from hostname
+        let hl = host.len().min(20);
+        TAB_TITLES[ACTIVE_TAB][..hl].copy_from_slice(&host.as_bytes()[..hl]);
+        TAB_TITLE_LENS[ACTIVE_TAB] = hl;
     }
     let mut status = [0u8; 64];
     let mut slen = 0;
@@ -498,30 +551,170 @@ pub fn render() {
     let ymax = r.y + r.h;
     let ln = 16u32;
 
+    init_browser();
     gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
 
-    let x = r.x + 4;
-    let mut y = r.y + 2;
+    let x = r.x;
+    let content_w = r.w;
+    let mut y = r.y;
 
-    // ─── URL Bar ───
-    if y + 20 < ymax {
-        gpu::fill_rect(x, y, r.w - 8, 18, URL_BG);
-        gpu::fill_rect(x, y, 1, 18, BORDER);
-        gpu::fill_rect(x + r.w - 9, y, 1, 18, BORDER);
-        gpu::fill_rect(x, y, r.w - 8, 1, BORDER);
-        gpu::fill_rect(x, y + 17, r.w - 8, 1, BORDER);
+    // ═══════════════════════════════════════════
+    // TAB BAR
+    // ═══════════════════════════════════════════
+    if y + 22 < ymax {
+        gpu::fill_rect(x, y, content_w, 22, TAB_BG);
 
-        font::draw_str(fb, w, x + 4, y + 1, ">", GREEN, URL_BG);
         unsafe {
-            let url = core::str::from_utf8_unchecked(&URL_BUF[..URL_LEN]);
-            font::draw_str(fb, w, x + 16, y + 1, url, FG_HI, URL_BG);
-            // Cursor
-            let cx = x + 16 + (URL_LEN as u32) * 8;
-            if cx < x + r.w - 16 {
-                font::draw_str(fb, w, cx, y + 1, "_", FG_HI, URL_BG);
+            let tab_w = content_w / (TAB_COUNT.max(1) as u32).min(4);
+            for i in 0..TAB_COUNT.min(MAX_TABS) {
+                let tx = x + (i as u32) * tab_w;
+                let is_active = i == ACTIVE_TAB;
+                let bg = if is_active { TAB_ACTIVE } else { TAB_BG };
+
+                // Tab background
+                gpu::fill_rect(tx, y, tab_w - 1, 22, bg);
+                // Tab bottom border (only inactive)
+                if !is_active {
+                    gpu::fill_rect(tx, y + 21, tab_w - 1, 1, BORDER);
+                }
+                // Tab separator
+                gpu::fill_rect(tx + tab_w - 1, y + 4, 1, 14, BORDER);
+
+                // Tab title
+                let title = core::str::from_utf8_unchecked(&TAB_TITLES[i][..TAB_TITLE_LENS[i]]);
+                let max_chars = ((tab_w - 24) / 8) as usize;
+                let display_len = title.len().min(max_chars);
+                let display = &title[..display_len];
+                let color = if is_active { FG_HI } else { DIM };
+                font::draw_str(fb, w, tx + 8, y + 3, display, color, bg);
+
+                // Close button on active tab
+                if is_active && TAB_COUNT > 1 {
+                    font::draw_str(fb, w, tx + tab_w - 18, y + 3, "x", DIM, bg);
+                }
+            }
+
+            // New tab [+] button
+            if TAB_COUNT < MAX_TABS {
+                let plus_x = x + (TAB_COUNT as u32) * tab_w + 4;
+                font::draw_str(fb, w, plus_x, y + 3, "+", DIM, TAB_BG);
             }
         }
-        y += 20;
+        y += 22;
+    }
+
+    // ═══════════════════════════════════════════
+    // NAVIGATION TOOLBAR
+    // ═══════════════════════════════════════════
+    if y + 24 < ymax {
+        gpu::fill_rect(x, y, content_w, 24, TOOLBAR_BG);
+
+        let mut bx = x + 4;
+
+        // [<] Back button
+        gpu::fill_rect(bx, y + 3, 20, 18, BTN_BG);
+        font::draw_str(fb, w, bx + 6, y + 4, "<", BTN_FG, BTN_BG);
+        bx += 24;
+
+        // [>] Forward button
+        gpu::fill_rect(bx, y + 3, 20, 18, BTN_BG);
+        font::draw_str(fb, w, bx + 6, y + 4, ">", BTN_FG, BTN_BG);
+        bx += 24;
+
+        // [R] Refresh button
+        gpu::fill_rect(bx, y + 3, 20, 18, BTN_BG);
+        let refresh_char = unsafe { if STATE == BrowserState::Loading { "X" } else { "R" } };
+        font::draw_str(fb, w, bx + 6, y + 4, refresh_char, BTN_FG, BTN_BG);
+        bx += 28;
+
+        // URL Bar (the main input area)
+        let url_x = bx;
+        let url_w = content_w - bx + x - 8;
+        gpu::fill_rect(url_x, y + 3, url_w, 18, URL_BG);
+        // Rounded-ish border
+        gpu::fill_rect(url_x, y + 3, url_w, 1, URL_BORDER);
+        gpu::fill_rect(url_x, y + 20, url_w, 1, URL_BORDER);
+        gpu::fill_rect(url_x, y + 3, 1, 18, URL_BORDER);
+        gpu::fill_rect(url_x + url_w - 1, y + 3, 1, 18, URL_BORDER);
+
+        unsafe {
+            let url_str = core::str::from_utf8_unchecked(&URL_BUF[..URL_LEN]);
+            let is_https = url_str.starts_with("https");
+
+            // Lock icon for HTTPS
+            let text_start = if is_https {
+                font::draw_str(fb, w, url_x + 6, y + 4, "##", LOCK_COLOR, URL_BG);
+                url_x + 24
+            } else if URL_LEN > 0 {
+                font::draw_str(fb, w, url_x + 6, y + 4, "i", DIM, URL_BG);
+                url_x + 18
+            } else {
+                url_x + 6
+            };
+
+            // URL text
+            let max_url_chars = ((url_w - (text_start - url_x) - 16) / 8) as usize;
+            let display_len = URL_LEN.min(max_url_chars);
+            let url_display = core::str::from_utf8_unchecked(&URL_BUF[..display_len]);
+            font::draw_str(fb, w, text_start, y + 4, url_display, FG_HI, URL_BG);
+
+            // Cursor
+            if STATE == BrowserState::Idle || STATE == BrowserState::Loaded {
+                let cx = text_start + (display_len as u32) * 8;
+                if cx < url_x + url_w - 8 {
+                    font::draw_str(fb, w, cx, y + 4, "|", FG_HI, URL_BG);
+                }
+            }
+        }
+        y += 24;
+    }
+
+    // ═══════════════════════════════════════════
+    // BOOKMARKS BAR
+    // ═══════════════════════════════════════════
+    if y + 18 < ymax {
+        gpu::fill_rect(x, y, content_w, 18, BOOKMARK_BG);
+        gpu::fill_rect(x, y + 17, content_w, 1, BORDER);
+
+        unsafe {
+            let mut bmx = x + 4;
+            for i in 0..BM_COUNT.min(6) {
+                let bm = core::str::from_utf8_unchecked(&BOOKMARKS[i][..BM_LENS[i]]);
+                // Extract short domain name for display
+                let display = if let Some(start) = bm.find("://") {
+                    let after = &bm[start + 3..];
+                    let end = after.find('/').unwrap_or(after.len());
+                    &after[..end]
+                } else {
+                    bm
+                };
+                let short = if display.len() > 14 { &display[..14] } else { display };
+
+                font::draw_str(fb, w, bmx, y + 1, short, DIM, BOOKMARK_BG);
+                bmx += (short.len() as u32) * 8 + 16;
+
+                if bmx > x + content_w - 40 { break; }
+            }
+        }
+        y += 18;
+    }
+
+    // ═══════════════════════════════════════════
+    // LOADING PROGRESS BAR (only when loading)
+    // ═══════════════════════════════════════════
+    unsafe {
+        if STATE == BrowserState::Loading && y + 3 < ymax {
+            gpu::fill_rect(x, y, content_w, 3, PROGRESS_BG);
+            let progress_w = (content_w as u64 * LOADING_PROGRESS as u64 / 100) as u32;
+            gpu::fill_rect(x, y, progress_w, 3, PROGRESS_FG);
+            y += 3;
+        }
+    }
+
+    // Divider before content
+    if y < ymax {
+        gpu::fill_rect(x, y, content_w, 1, BORDER);
+        y += 1;
     }
 
     // ─── Page Content ───
@@ -607,34 +800,51 @@ pub fn render() {
         }
     }
 
-    // ─── Status Bar ───
-    let status_y = ymax - 18;
-    if status_y > r.y + 20 {
-        gpu::fill_rect(x, status_y, r.w - 8, 18, URL_BG);
-        unsafe {
-            let state_text = match STATE {
-                BrowserState::Idle => "Ready",
-                BrowserState::Loading => "Loading",
-                BrowserState::Loaded => "Done",
-                BrowserState::Error => "Error",
-            };
-            let state_color = match STATE {
-                BrowserState::Loaded => GREEN,
-                BrowserState::Error => RED,
-                BrowserState::Loading => CYAN,
-                _ => DIM,
-            };
-            font::draw_str(fb, w, x + 4, status_y + 1, state_text, state_color, URL_BG);
+    // ═══════════════════════════════════════════
+    // STATUS BAR (Chrome-style bottom bar)
+    // ═══════════════════════════════════════════
+    let status_y = ymax - 20;
+    if status_y > r.y + 40 {
+        gpu::fill_rect(x, status_y, content_w, 20, TOOLBAR_BG);
+        gpu::fill_rect(x, status_y, content_w, 1, BORDER);
 
+        unsafe {
+            // Left: status message
+            let (state_text, state_color) = match STATE {
+                BrowserState::Idle => ("Ready", DIM),
+                BrowserState::Loading => ("Loading...", CYAN),
+                BrowserState::Loaded => ("Secure", GREEN),
+                BrowserState::Error => ("Error", RED),
+            };
+
+            if STATE == BrowserState::Loaded {
+                font::draw_str(fb, w, x + 4, status_y + 2, "##", LOCK_COLOR, TOOLBAR_BG);
+                font::draw_str(fb, w, x + 22, status_y + 2, state_text, state_color, TOOLBAR_BG);
+            } else {
+                font::draw_str(fb, w, x + 4, status_y + 2, state_text, state_color, TOOLBAR_BG);
+            }
+
+            // Center: status message detail
             let msg = core::str::from_utf8_unchecked(&STATUS_MSG[..STATUS_LEN]);
-            font::draw_str(fb, w, x + 80, status_y + 1, msg, DIM, URL_BG);
+            font::draw_str(fb, w, x + 100, status_y + 2, msg, DIM, TOOLBAR_BG);
+
+            // Right: link count + bytes
+            if BYTES_LOADED > 0 {
+                let mut nbuf = [0u8; 10];
+                let nlen = write_num(&mut nbuf, BYTES_LOADED);
+                let bx = x + content_w - 80;
+                font::draw_str(fb, w, bx, status_y + 2,
+                    core::str::from_utf8_unchecked(&nbuf[..nlen]), DIM, TOOLBAR_BG);
+                font::draw_str(fb, w, bx + (nlen as u32) * 8, status_y + 2, " B", DIM, TOOLBAR_BG);
+            }
 
             if LINK_COUNT > 0 {
-                font::draw_str(fb, w, r.x + r.w - 80, status_y + 1, "Links:", DIM, URL_BG);
                 let mut nbuf = [0u8; 4];
                 let nlen = write_num(&mut nbuf, LINK_COUNT);
-                font::draw_str(fb, w, r.x + r.w - 32, status_y + 1,
-                    core::str::from_utf8_unchecked(&nbuf[..nlen]), LINK_COLOR, URL_BG);
+                let lx = x + content_w - 140;
+                font::draw_str(fb, w, lx, status_y + 2, "Links:", DIM, TOOLBAR_BG);
+                font::draw_str(fb, w, lx + 52, status_y + 2,
+                    core::str::from_utf8_unchecked(&nbuf[..nlen]), LINK_COLOR, TOOLBAR_BG);
             }
         }
     }
