@@ -544,39 +544,102 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                 };
 
                 // Emulate alignment faults (DFSC=0x21) — HVF enforces strict alignment
+                // Use FAR as the exact faulting address, decode instruction for size/direction
                 let dfsc = esr & 0x3F;
                 if dfsc == 0x21 {
                     unsafe {
-                        // For ANY alignment fault, skip the instruction
-                        // This is a fallback — ideally we'd emulate the exact instruction
-                        // LDP/STP with unaligned address: emulate with byte access
-                        let is_load = (instr >> 22) & 1 == 1;
-                        let rt = (instr & 0x1F) as usize;
+                        // ESR ISS fields for data abort tell us load vs store and size
+                        let iss = esr & 0x1FFFFFF;
+                        let wnr = (iss >> 6) & 1; // 0=read, 1=write
+                        let sas = (iss >> 22) & 3; // access size: 0=byte,1=half,2=word,3=dword
+                        let srt = (iss >> 16) & 0x1F; // transfer register
+                        let isv = (iss >> 24) & 1; // ISV bit — if 1, SAS/SRT are valid
 
-                        if is_load && rt < 31 {
-                            // Load: read 8 bytes from FAR byte-by-byte
-                            let mut val = 0u64;
-                            for i in 0..8u64 {
-                                let b: u8;
-                                core::arch::asm!("ldrb {v:w}, [{a}]",
-                                    a = in(reg) far.wrapping_add(i), v = out(reg) b);
-                                val |= (b as u64) << (i * 8);
-                            }
-                            (*frame).x[rt] = val;
-                            // For LDP, also load second register
-                            let rt2 = ((instr >> 10) & 0x1F) as usize;
-                            if rt2 < 31 && rt2 != rt {
-                                let mut val2 = 0u64;
-                                for i in 0..8u64 {
+                        if isv == 1 {
+                            // ISV valid: use ESR fields (more reliable than decoding instruction)
+                            let nbytes = 1u64 << sas;
+                            let rt = srt as usize;
+
+                            if wnr == 0 {
+                                // Load: read bytes from FAR
+                                let mut val = 0u64;
+                                for i in 0..nbytes {
                                     let b: u8;
                                     core::arch::asm!("ldrb {v:w}, [{a}]",
-                                        a = in(reg) far.wrapping_add(8 + i), v = out(reg) b);
-                                    val2 |= (b as u64) << (i * 8);
+                                        a = in(reg) far.wrapping_add(i), v = out(reg) b);
+                                    val |= (b as u64) << (i * 8);
                                 }
-                                (*frame).x[rt2] = val2;
+                                if rt < 31 { (*frame).x[rt] = val; }
+                            } else {
+                                // Store: write bytes to FAR
+                                let val = if rt < 31 { (*frame).x[rt] } else { 0 };
+                                for i in 0..nbytes {
+                                    let b = ((val >> (i * 8)) & 0xFF) as u32;
+                                    core::arch::asm!("strb {v:w}, [{a}]",
+                                        a = in(reg) far.wrapping_add(i), v = in(reg) b);
+                                }
                             }
+                            (*frame).elr = elr + 4;
+                            return;
                         }
-                        // Advance past faulting instruction
+
+                        // ISV=0: LDP/STP (pair instructions don't set ISV)
+                        // Decode instruction manually
+                        if (instr & 0x3A000000) == 0x28000000 {
+                            let is_64 = (instr >> 31) & 1 == 1;
+                            let is_load = (instr >> 22) & 1 == 1;
+                            let rt = (instr & 0x1F) as usize;
+                            let rt2 = ((instr >> 10) & 0x1F) as usize;
+                            let rn = ((instr >> 5) & 0x1F) as usize;
+                            let scale: u64 = if is_64 { 8 } else { 4 };
+                            // FAR is the exact address the CPU tried to access
+                            let addr = far;
+
+                            if is_load {
+                                let mut v1 = 0u64; let mut v2 = 0u64;
+                                for i in 0..scale {
+                                    let b: u8;
+                                    core::arch::asm!("ldrb {v:w}, [{a}]",
+                                        a = in(reg) addr.wrapping_add(i), v = out(reg) b);
+                                    v1 |= (b as u64) << (i * 8);
+                                }
+                                for i in 0..scale {
+                                    let b: u8;
+                                    core::arch::asm!("ldrb {v:w}, [{a}]",
+                                        a = in(reg) addr.wrapping_add(scale + i), v = out(reg) b);
+                                    v2 |= (b as u64) << (i * 8);
+                                }
+                                if rt < 31 { (*frame).x[rt] = v1; }
+                                if rt2 < 31 { (*frame).x[rt2] = v2; }
+                            } else {
+                                let v1 = if rt < 31 { (*frame).x[rt] } else { 0 };
+                                let v2 = if rt2 < 31 { (*frame).x[rt2] } else { 0 };
+                                for i in 0..scale {
+                                    let b = ((v1 >> (i*8)) & 0xFF) as u32;
+                                    core::arch::asm!("strb {v:w}, [{a}]",
+                                        a = in(reg) addr.wrapping_add(i), v = in(reg) b);
+                                }
+                                for i in 0..scale {
+                                    let b = ((v2 >> (i*8)) & 0xFF) as u32;
+                                    core::arch::asm!("strb {v:w}, [{a}]",
+                                        a = in(reg) addr.wrapping_add(scale + i), v = in(reg) b);
+                                }
+                            }
+                            // Handle pre/post index writeback
+                            let wb = (instr >> 23) & 3;
+                            if wb == 0b01 || wb == 0b11 {
+                                let imm7 = ((instr >> 15) & 0x7F) as i32;
+                                let simm = if imm7 & 0x40 != 0 { imm7 | !0x7F } else { imm7 };
+                                let offset = simm as i64 * scale as i64;
+                                let base = if rn < 31 { (*frame).x[rn] as i64 } else { addr as i64 };
+                                let new_base = if wb == 0b01 { base + offset } else { addr as i64 };
+                                if rn < 31 { (*frame).x[rn] = new_base as u64; }
+                            }
+                            (*frame).elr = elr + 4;
+                            return;
+                        }
+
+                        // Fallback: skip instruction
                         (*frame).elr = elr + 4;
                     }
                     return;
