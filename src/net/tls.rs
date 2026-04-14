@@ -214,10 +214,6 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
 
     sess.state = TlsState::ClientHelloSent;
 
-    uart::puts("[tls] ClientHello built (");
-    crate::kernel::mm::print_num(pos);
-    uart::puts(" bytes)\n");
-
     pos
 }
 
@@ -274,9 +270,7 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
                     let key_len = ((content[pos + 2] as usize) << 8) | content[pos + 3] as usize;
                     if group == 29 && key_len == 32 && pos + 4 + 32 <= content.len() {
                         sess.peer_public.copy_from_slice(&content[pos + 4..pos + 36]);
-                        uart::puts("[tls] found X25519 key_share at ext offset ");
-                        crate::kernel::mm::print_num(pos);
-                        uart::puts("\n");
+                        uart::puts("[tls] found X25519 key_share\n");
                     }
                 }
             }
@@ -336,12 +330,6 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     // Add ServerHello handshake to transcript (skip 5-byte record header)
     transcript.update(&all_buf[5..sh_end]);
 
-    uart::puts("[tls] received ");
-    crate::kernel::mm::print_num(all_len);
-    uart::puts("b total, SH=");
-    crate::kernel::mm::print_num(sh_end);
-    uart::puts("b\n");
-
     // Remaining bytes after ServerHello contain more records
     let mut remaining_start = sh_end;
 
@@ -350,254 +338,6 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     let early_secret = crate::crypto::sha256::hkdf_extract(&[0u8; 32], &[0u8; 32]);
     let derived_secret = crate::crypto::sha256::hkdf_expand_label(&early_secret, b"derived", &empty_hash, 32);
     let handshake_secret = crate::crypto::sha256::hkdf_extract(&derived_secret, &sess.shared_secret);
-
-    // Field arithmetic self-test
-    {
-        // Test: 5 * 7 = 35 in GF(p)
-        let five: Fe = [5, 0, 0, 0, 0];
-        let seven: Fe = [7, 0, 0, 0, 0];
-        let result = field_mul(&five, &seven);
-        uart::puts("[tls] field 5*7 raw=");
-        crate::kernel::mm::print_num(result[0] as usize);
-        uart::puts("/");
-        crate::kernel::mm::print_num(result[1] as usize);
-        let mut reduced = result;
-        field_reduce(&mut reduced);
-        uart::puts(" reduced=");
-        crate::kernel::mm::print_num(reduced[0] as usize);
-        uart::puts(" (expected 35)\n");
-
-        // Test: field_sq of small number
-        let three: Fe = [3, 0, 0, 0, 0];
-        let sq = field_sq(&three);
-        let mut sq_r = sq;
-        field_reduce(&mut sq_r);
-        uart::puts("[tls] field 3^2=");
-        crate::kernel::mm::print_num(sq_r[0] as usize);
-        uart::puts(" (expected 9)\n");
-    }
-
-    // Test field_mul_a24 (a24 = 121665 for Curve25519)
-    {
-        let a: Fe = [1, 0, 0, 0, 0];
-        let result = field_mul_a24(&a);
-        let mut r = result;
-        field_reduce(&mut r);
-        uart::puts("[tls] mul_a24(1)=");
-        crate::kernel::mm::print_num(r[0] as usize);
-        uart::puts(if r[0] == 121665 { " PASS" } else { " FAIL" });
-        uart::puts("\n");
-
-        // Test with a large value near 2^51
-        let b: Fe = [MASK51, 0, 0, 0, 0];
-        let result2 = field_mul_a24(&b);
-        let mut r2 = result2;
-        field_reduce(&mut r2);
-        uart::puts("[tls] mul_a24(2^51-1)=[");
-        crate::kernel::mm::print_num(r2[0] as usize);
-        uart::puts(",");
-        crate::kernel::mm::print_num(r2[1] as usize);
-        uart::puts("]\n");
-    }
-
-    // Test field_sub: a - b where a > b and where a < b
-    {
-        let a: Fe = [100, 0, 0, 0, 0];
-        let b: Fe = [30, 0, 0, 0, 0];
-        let result = field_sub(&a, &b);
-        let mut r = result;
-        field_reduce(&mut r);
-        let pass = r[0] == 70;
-        uart::puts("[tls] sub 100-30=");
-        crate::kernel::mm::print_num(r[0] as usize);
-        uart::puts(if pass { " PASS" } else { " FAIL" });
-        uart::puts("\n");
-
-        // a - b where b > a (should wrap mod p)
-        let c: Fe = [10, 0, 0, 0, 0];
-        let d: Fe = [30, 0, 0, 0, 0];
-        let result2 = field_sub(&c, &d);
-        let mut r2 = result2;
-        field_reduce(&mut r2);
-        // 10 - 30 mod p = p - 20
-        // p[0] = 0x7FFFFFFFFFFED, so result should be p - 20 = 0x7FFFFFFFFFFD9
-        let expected = 0x7FFFFFFFFFFEDu64 - 20;
-        let pass2 = r2[0] == expected && r2[1] == 0x7FFFFFFFFFFFF && r2[2] == 0x7FFFFFFFFFFFF;
-        uart::puts("[tls] sub 10-30=");
-        crate::kernel::mm::print_num(r2[0] as usize);
-        uart::puts(if pass2 { " PASS" } else { " FAIL" });
-        uart::puts("\n");
-    }
-
-    // Test encode/decode roundtrip
-    {
-        let input: [u8; 32] = [
-            9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        ];
-        let fe = decode_u_coordinate(&input);
-        let mut output = [0u8; 32];
-        encode_u_coordinate(&fe, &mut output);
-        uart::puts("[tls] encode/decode 9: ");
-        uart::puts(if output == input { "PASS" } else { "FAIL" });
-        uart::puts(" got[0]=");
-        crate::kernel::mm::print_num(output[0] as usize);
-        uart::puts("\n");
-
-        // Test with a more complex value
-        let input2: [u8; 32] = [
-            0xe6, 0xdb, 0x68, 0x67, 0x58, 0x30, 0x30, 0xdb,
-            0x35, 0x94, 0xc1, 0xa4, 0x24, 0xb1, 0x5f, 0x7c,
-            0x72, 0x66, 0x24, 0xec, 0x26, 0xb3, 0x35, 0x3b,
-            0x10, 0xa9, 0x03, 0xa6, 0xd0, 0xab, 0x1c, 0x4c,
-        ];
-        let fe2 = decode_u_coordinate(&input2);
-        let mut output2 = [0u8; 32];
-        encode_u_coordinate(&fe2, &mut output2);
-        uart::puts("[tls] encode/decode complex: ");
-        uart::puts(if output2 == input2 { "PASS" } else { "FAIL" });
-        if output2 != input2 {
-            uart::puts(" got=");
-            for i in 0..4 {
-                let hex = b"0123456789abcdef";
-                uart::putc(hex[(output2[i] >> 4) as usize]);
-                uart::putc(hex[(output2[i] & 0xf) as usize]);
-            }
-            uart::puts(" exp=");
-            for i in 0..4 {
-                let hex = b"0123456789abcdef";
-                uart::putc(hex[(input2[i] >> 4) as usize]);
-                uart::putc(hex[(input2[i] & 0xf) as usize]);
-            }
-        }
-        uart::puts("\n");
-    }
-
-    // Test field_invert: a * a^(-1) should equal 1
-    {
-        let a: Fe = [12345, 67890, 11111, 22222, 33333];
-        let a_inv = field_invert(&a);
-        let product = field_mul(&a, &a_inv);
-        let mut reduced = product;
-        field_reduce(&mut reduced);
-        let is_one = reduced[0] == 1 && reduced[1] == 0 && reduced[2] == 0 && reduced[3] == 0 && reduced[4] == 0;
-        uart::puts("[tls] invert test: a*a^-1 = [");
-        crate::kernel::mm::print_num(reduced[0] as usize);
-        uart::puts(",");
-        crate::kernel::mm::print_num(reduced[1] as usize);
-        uart::puts("] ");
-        uart::puts(if is_one { "PASS" } else { "FAIL" });
-        uart::puts("\n");
-    }
-
-    // Test field_mul with larger numbers
-    {
-        // (2^51 - 20) * 1 should be (2^51 - 20)
-        let a: Fe = [MASK51 - 19, 0, 0, 0, 0]; // p[0] - 1
-        let one: Fe = [1, 0, 0, 0, 0];
-        let result = field_mul(&a, &one);
-        let mut r = result;
-        field_reduce(&mut r);
-        uart::puts("[tls] (2^51-20)*1 = ");
-        crate::kernel::mm::print_num(r[0] as usize);
-        uart::puts(" expected ");
-        crate::kernel::mm::print_num((MASK51 - 19) as usize);
-        uart::puts("\n");
-    }
-
-    // Simple X25519 test: basepoint * 1 should give basepoint
-    {
-        let mut one = [0u8; 32];
-        one[0] = 1;
-        one[0] &= 248; one[31] &= 127; one[31] |= 64; // clamp: becomes 64 in high byte
-        let mut bp = [0u8; 32];
-        bp[0] = 9;
-        let mut result = [0u8; 32];
-        x25519_scalar_mult(&one, &bp, &mut result);
-        // scalar "1" clamped = has bit 254 set, bit 0 clear
-        // This won't give basepoint back but should give a deterministic result
-        uart::puts("[tls] X25519(clamped_1, 9)[0..4]: ");
-        for i in 0..4 {
-            let hex = b"0123456789abcdef";
-            uart::putc(hex[(result[i] >> 4) as usize]);
-            uart::putc(hex[(result[i] & 0xf) as usize]);
-        }
-        uart::puts("\n");
-    }
-
-    // X25519 self-test with RFC 7748 test vector
-    {
-        // Pre-clamped scalar (a546... with bits clamped per RFC 7748)
-        let mut test_scalar: [u8; 32] = [
-            0xa5, 0x46, 0xe3, 0x6b, 0xf0, 0x52, 0x7c, 0x9d,
-            0x3b, 0x16, 0x15, 0x4b, 0x82, 0x46, 0x5e, 0xdd,
-            0x62, 0x14, 0x4c, 0x0a, 0xc1, 0xfc, 0x5a, 0x18,
-            0x50, 0x6a, 0x22, 0x44, 0xba, 0x44, 0x9a, 0xc4,
-        ];
-        // Clamp (same as what x25519_scalar_mult will do)
-        test_scalar[0] &= 248;
-        test_scalar[31] &= 127;
-        test_scalar[31] |= 64;
-        let test_u: [u8; 32] = [
-            0xe6, 0xdb, 0x68, 0x67, 0x58, 0x30, 0x30, 0xdb,
-            0x35, 0x94, 0xc1, 0xa4, 0x24, 0xb1, 0x5f, 0x7c,
-            0x72, 0x66, 0x24, 0xec, 0x26, 0xb3, 0x35, 0x3b,
-            0x10, 0xa9, 0x03, 0xa6, 0xd0, 0xab, 0x1c, 0x4c,
-        ];
-        let expected: [u8; 32] = [
-            0xc3, 0xda, 0x55, 0x37, 0x9d, 0xe9, 0xc6, 0x90,
-            0x8e, 0x94, 0xea, 0x4d, 0xf2, 0x8d, 0x08, 0x4f,
-            0x32, 0xec, 0xcf, 0x03, 0x49, 0x1c, 0x71, 0xf7,
-            0x54, 0xb4, 0x07, 0x55, 0x77, 0xa2, 0x85, 0x52,
-        ];
-        let mut result = [0u8; 32];
-        x25519_scalar_mult(&test_scalar, &test_u, &mut result);
-        let pass = result == expected;
-        uart::puts("[tls] X25519 self-test: ");
-        if pass {
-            uart::puts("PASS\n");
-        } else {
-            uart::puts("FAIL got=");
-            for i in 0..4 {
-                let hex = b"0123456789abcdef";
-                uart::putc(hex[(result[i] >> 4) as usize]);
-                uart::putc(hex[(result[i] & 0xf) as usize]);
-            }
-            uart::puts(" expected=c3da5537\n");
-        }
-    }
-
-    // Debug: show empty hash and early secret
-    let empty_hash_check = crate::crypto::sha256::hash(&[]);
-    uart::puts("[tls] empty_hash[0..4]: ");
-    for i in 0..4 {
-        let hex = b"0123456789abcdef";
-        uart::putc(hex[(empty_hash_check[i] >> 4) as usize]);
-        uart::putc(hex[(empty_hash_check[i] & 0xf) as usize]);
-    }
-    uart::puts("\n[tls] transcript[0..4]: ");
-    let th = transcript.clone().finalize();
-    for i in 0..4 {
-        let hex = b"0123456789abcdef";
-        uart::putc(hex[(th[i] >> 4) as usize]);
-        uart::putc(hex[(th[i] & 0xf) as usize]);
-    }
-    uart::puts("\n");
-
-    // Debug: show shared secret
-    uart::puts("[tls] shared_secret[0..4]: ");
-    for i in 0..4 {
-        let hex = b"0123456789abcdef";
-        uart::putc(hex[(sess.shared_secret[i] >> 4) as usize]);
-        uart::putc(hex[(sess.shared_secret[i] & 0xf) as usize]);
-    }
-    uart::puts("\n[tls] peer_public[0..4]: ");
-    for i in 0..4 {
-        let hex = b"0123456789abcdef";
-        uart::putc(hex[(sess.peer_public[i] >> 4) as usize]);
-        uart::putc(hex[(sess.peer_public[i] & 0xf) as usize]);
-    }
-    uart::puts("\n");
 
     // Clone transcript for handshake key derivation (original continues for app keys)
     let transcript_hash = transcript.clone().finalize();
@@ -628,7 +368,6 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     uart::puts("[tls] Handshake keys derived\n");
 
     // Step 4: Parse encrypted handshake records from the buffered data
-    let mut hs_records = 0u8;
     let mut pos = remaining_start;
 
     while pos + 5 < all_len {
@@ -636,16 +375,6 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
         let rec_len = ((all_buf[pos + 3] as usize) << 8) | all_buf[pos + 4] as usize;
         let rec_end = (pos + 5 + rec_len).min(all_len);
         let payload_len = rec_end - pos - 5;
-
-        uart::puts("[tls] record at ");
-        crate::kernel::mm::print_num(pos);
-        uart::puts(": type=0x");
-        let hex = b"0123456789abcdef";
-        uart::putc(hex[(rec_type >> 4) as usize]);
-        uart::putc(hex[(rec_type & 0xf) as usize]);
-        uart::puts(" len=");
-        crate::kernel::mm::print_num(rec_len);
-        uart::puts("\n");
 
         if rec_type == 0x14 {
             // ChangeCipherSpec — skip
@@ -674,31 +403,14 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
             let inner_len = payload_len - 17;
             let inner_type = decrypted[inner_len]; // content type byte
 
-            uart::puts("[tls]   decrypted ");
-            crate::kernel::mm::print_num(inner_len);
-            uart::puts("b inner=0x");
-            uart::putc(hex[(inner_type >> 4) as usize]);
-            uart::putc(hex[(inner_type & 0xf) as usize]);
-            uart::puts(" first=0x");
-            if inner_len > 0 {
-                uart::putc(hex[(decrypted[0] >> 4) as usize]);
-                uart::putc(hex[(decrypted[0] & 0xf) as usize]);
-            }
-            uart::puts("\n");
-
             // Add decrypted handshake to transcript (only type 0x16 = handshake)
             if inner_type == 0x16 && inner_len > 0 {
                 transcript.update(&decrypted[..inner_len]);
             }
-            hs_records += 1;
         }
 
         pos = rec_end;
     }
-
-    uart::puts("[tls] parsed ");
-    crate::kernel::mm::print_num(hs_records as usize);
-    uart::puts(" encrypted hs records\n");
 
     // Step 5: Send ChangeCipherSpec (compatibility) + client Finished
     let ccs = [0x14, 0x03, 0x03, 0x00, 0x01, 0x01];
@@ -717,7 +429,11 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     finished_msg[3] = 32; // length
     finished_msg[4..36].copy_from_slice(&verify_data);
 
-    // Add to transcript
+    // IMPORTANT: derive app keys from transcript BEFORE adding client Finished
+    // RFC 8446 Section 7.1: app secrets use Transcript-Hash(CH..server Finished)
+    let hs_transcript = transcript.clone().finalize();
+
+    // NOW add client Finished to transcript (for resumption, not for app keys)
     transcript.update(&finished_msg);
 
     // Encrypt with client handshake key
@@ -726,27 +442,31 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
         k.copy_from_slice(&sess.client_key[..16]);
         crate::crypto::aes::Aes128::new(&k)
     };
-    let mut nonce = sess.client_iv;
-    // client_seq is 0 at this point
-    let mut enc_finished = [0u8; 64];
-    enc_finished[..36].copy_from_slice(&finished_msg);
-    enc_finished[36] = 0x16; // inner content type = handshake
-    let enc_len = 37 + 16; // data + content_type + GCM tag (16 zeros for now)
-    client_hs_cipher.gcm_crypt(&nonce, &mut enc_finished[..37]);
+    let nonce = sess.client_iv;
+    // Inner plaintext: finished_msg(36) + content_type(1) = 37 bytes
+    let mut fin_plain = [0u8; 64];
+    fin_plain[..36].copy_from_slice(&finished_msg);
+    fin_plain[36] = 0x16; // inner content type = handshake
+    let inner_len = 37;
+    let enc_len = inner_len + 16; // + GCM tag
+
+    // AAD = record header
+    let fin_aad = [0x17u8, 0x03, 0x03, (enc_len >> 8) as u8, enc_len as u8];
+    let fin_tag = client_hs_cipher.gcm_encrypt(&nonce, &fin_aad, &mut fin_plain[..inner_len]);
 
     // Build TLS record
-    let mut fin_record = [0u8; 64];
-    fin_record[0] = 0x17; // application data (encrypted)
+    let mut fin_record = [0u8; 80];
+    fin_record[0] = 0x17;
     fin_record[1] = 0x03; fin_record[2] = 0x03;
     fin_record[3] = (enc_len >> 8) as u8;
     fin_record[4] = enc_len as u8;
-    fin_record[5..5 + enc_len].copy_from_slice(&enc_finished[..enc_len]);
+    fin_record[5..5 + inner_len].copy_from_slice(&fin_plain[..inner_len]);
+    fin_record[5 + inner_len..5 + enc_len].copy_from_slice(&fin_tag);
     crate::net::tcp::send_data(&fin_record[..5 + enc_len]).ok();
 
     uart::puts("[tls] Client Finished sent\n");
 
-    // Step 6: Derive application traffic keys
-    let hs_transcript = transcript.finalize();
+    // Step 6: Derive application traffic keys (using hs_transcript from above)
 
     let master_derived = crate::crypto::sha256::hkdf_expand_label(&handshake_secret, b"derived", &empty_hash, 32);
     let master_secret = crate::crypto::sha256::hkdf_extract(&master_derived, &[0u8; 32]);
@@ -778,20 +498,41 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     sess.server_seq = 0;
     sess.state = TlsState::Established;
 
-    // Debug: print first bytes of derived keys
-    uart::puts("[tls] client_key[0..4]: ");
-    for i in 0..4 {
-        let hex = b"0123456789abcdef";
-        uart::putc(hex[(sess.client_key[i] >> 4) as usize]);
-        uart::putc(hex[(sess.client_key[i] & 0xf) as usize]);
+    // Quick poll for post-handshake messages (NewSessionTicket etc.)
+    // Servers typically send 1-2 NewSessionTickets right after handshake
+    {
+        let start: u64;
+        let freq: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
+            core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+        }
+        let timeout = freq * 3; // 3 seconds total for all post-hs records
+        let mut count = 0u32;
+        loop {
+            crate::net::poll_once();
+            if crate::net::tcp::data_ready() {
+                let mut nst_buf = [0u8; 4096];
+                match crate::net::tcp::recv_data(&mut nst_buf) {
+                    Ok(n) if n > 5 => {
+                        count += 1;
+                        sess.server_seq += 1;
+                        uart::puts("[tls] post-hs #");
+                        crate::kernel::mm::print_num(count as usize);
+                        uart::puts("\n");
+                    }
+                    _ => {}
+                }
+                continue; // check for more immediately
+            }
+            let now: u64;
+            unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+            if now - start > timeout { break; }
+            core::hint::spin_loop();
+        }
     }
-    uart::puts("\n[tls] server_key[0..4]: ");
-    for i in 0..4 {
-        let hex = b"0123456789abcdef";
-        uart::putc(hex[(sess.server_key[i] >> 4) as usize]);
-        uart::putc(hex[(sess.server_key[i] & 0xf) as usize]);
-    }
-    uart::puts("\n[tls] Handshake complete — HTTPS ready\n");
+
+    uart::puts("[tls] Handshake complete\n");
     Ok(())
 }
 
@@ -808,31 +549,31 @@ pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
     }
     sess.client_seq += 1;
 
-    // Encrypt with AES-256-CTR (simplified — real TLS uses AES-GCM)
+    // Encrypt with AES-128-GCM (with real GHASH auth tag)
     let cipher = {let mut k=[0u8;16]; k.copy_from_slice(&sess.client_key[..16]); crate::crypto::aes::Aes128::new(&k)};
-    let mut encrypted = [0u8; 4096];
+    let mut plaintext = [0u8; 4096];
     let len = data.len().min(4000);
-    encrypted[..len].copy_from_slice(&data[..len]);
-    // Add content type byte (0x17 = application data) + 16-byte GCM tag
-    encrypted[len] = 0x17;
-    // GCM auth tag (placeholder — real GHASH computation needed for full compliance)
-    for i in 0..16 { encrypted[len + 1 + i] = 0; }
-    let enc_len = len + 1 + 16;
+    plaintext[..len].copy_from_slice(&data[..len]);
+    plaintext[len] = 0x17; // inner content type = application data
+    let inner_len = len + 1;
+    let enc_len = inner_len + 16; // ciphertext + GCM tag
 
-    cipher.gcm_crypt(&nonce,&mut encrypted[..enc_len]);
+    // AAD = TLS record header
+    let aad = [0x17u8, 0x03, 0x03, (enc_len >> 8) as u8, enc_len as u8];
 
-    // Build TLS record: type=0x17, version=0x0303, length, encrypted data
+    // Encrypt and get real auth tag
+    let tag = cipher.gcm_encrypt(&nonce, &aad, &mut plaintext[..inner_len]);
+
+    // Build TLS record
     let mut record = [0u8; 4096];
-    record[0] = 0x17; // application data
-    record[1] = 0x03; record[2] = 0x03; // TLS 1.2 (compat)
-    let rec_len = enc_len as u16;
-    record[3] = (rec_len >> 8) as u8;
-    record[4] = rec_len as u8;
-    record[5..5 + enc_len].copy_from_slice(&encrypted[..enc_len]);
+    record[0] = 0x17;
+    record[1] = 0x03; record[2] = 0x03;
+    record[3] = (enc_len >> 8) as u8;
+    record[4] = enc_len as u8;
+    record[5..5 + inner_len].copy_from_slice(&plaintext[..inner_len]);
+    record[5 + inner_len..5 + enc_len].copy_from_slice(&tag);
 
-    uart::puts("[tls] send_app_data: ");
-    crate::kernel::mm::print_num(enc_len);
-    uart::puts(" bytes encrypted\n");
+    uart::puts("[tls] send_app_data\n");
     crate::net::tcp::send_data(&record[..5 + enc_len])
 }
 
@@ -850,15 +591,7 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     let rec_len = ((record[3] as usize) << 8) | record[4] as usize;
     if rec_len + 5 > n { return Err("incomplete record"); }
 
-    uart::puts("[tls] recv record type=0x");
-    let hex = b"0123456789abcdef";
-    uart::putc(hex[(rec_type >> 4) as usize]);
-    uart::putc(hex[(rec_type & 0xf) as usize]);
-    uart::puts(" len=");
-    crate::kernel::mm::print_num(rec_len);
-    uart::puts(" total=");
-    crate::kernel::mm::print_num(n);
-    uart::puts("\n");
+    uart::puts("[tls] recv record\n");
 
     if rec_type == 0x14 {
         // ChangeCipherSpec — skip
@@ -891,15 +624,14 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     // Check the inner content type (last byte before GCM tag)
     let inner_type = if rec_len > 16 { decrypted[rec_len - 17] } else { 0 };
 
-    // Debug
     uart::puts("[tls] decrypted ");
     crate::kernel::mm::print_num(data_len);
-    uart::puts("b inner_type=0x");
-    let hex = b"0123456789abcdef";
-    uart::putc(hex[(inner_type >> 4) as usize]);
-    uart::putc(hex[(inner_type & 0xf) as usize]);
+    uart::puts("b type=0x");
+    let hex2 = b"0123456789abcdef";
+    uart::putc(hex2[(inner_type >> 4) as usize]);
+    uart::putc(hex2[(inner_type & 0xf) as usize]);
     uart::puts(": ");
-    for i in 0..data_len.min(60) {
+    for i in 0..data_len.min(80) {
         if decrypted[i] >= 0x20 && decrypted[i] <= 0x7e {
             uart::putc(decrypted[i]);
         } else {
@@ -1010,30 +742,8 @@ fn x25519_scalar_mult(scalar: &[u8; 32], point: &[u8; 32], result: &mut [u8; 32]
     field_cswap(&mut x_2, &mut x_3, swap);
     field_cswap(&mut z_2, &mut z_3, swap);
 
-    // Debug: check x_2 and z_2
-    {
-        let mut xr = x_2; field_reduce(&mut xr);
-        let mut zr = z_2; field_reduce(&mut zr);
-        crate::drivers::uart::puts("[x25519] x2[0]=");
-        crate::kernel::mm::print_num(xr[0] as usize);
-        crate::drivers::uart::puts(" z2[0]=");
-        crate::kernel::mm::print_num(zr[0] as usize);
-        crate::drivers::uart::puts("\n");
-    }
-
     // result = x_2 * z_2^(p-2) (modular inverse via Fermat)
     let z_inv = field_invert(&z_2);
-
-    // Verify: z_2 * z_inv should be 1
-    {
-        let check = field_mul(&z_2, &z_inv);
-        let mut cr = check; field_reduce(&mut cr);
-        crate::drivers::uart::puts("[x25519] z*zinv=[");
-        crate::kernel::mm::print_num(cr[0] as usize);
-        crate::drivers::uart::puts(",");
-        crate::kernel::mm::print_num(cr[1] as usize);
-        crate::drivers::uart::puts("]\n");
-    }
 
     let result_field = field_mul(&x_2, &z_inv);
 

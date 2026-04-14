@@ -155,6 +155,65 @@ impl Aes128 {
         self.ctr_crypt_with_counter(nonce, 2, data);
     }
 
+    /// Full AES-128-GCM encrypt: encrypts data in place AND computes 16-byte auth tag.
+    /// aad = additional authenticated data (not encrypted, but authenticated)
+    /// Returns the 16-byte authentication tag.
+    pub fn gcm_encrypt(&self, nonce: &[u8; 12], aad: &[u8], data: &mut [u8]) -> [u8; 16] {
+        // Compute hash subkey H = AES(K, 0^128)
+        let mut h_block = [0u8; 16];
+        self.encrypt_block(&mut h_block);
+
+        // Encrypt data with CTR starting at counter=2
+        self.ctr_crypt_with_counter(nonce, 2, data);
+
+        // Compute GHASH over AAD and ciphertext
+        let ghash = ghash_compute(&h_block, aad, data);
+
+        // Compute tag: GHASH XOR AES(K, nonce||0x00000001)
+        let mut j0 = [0u8; 16];
+        j0[..12].copy_from_slice(nonce);
+        j0[15] = 1; // counter = 1
+        self.encrypt_block(&mut j0);
+
+        let mut tag = [0u8; 16];
+        for i in 0..16 {
+            tag[i] = ghash[i] ^ j0[i];
+        }
+        tag
+    }
+
+    /// Full AES-128-GCM decrypt: decrypts data in place AND verifies auth tag.
+    /// Returns true if tag is valid.
+    pub fn gcm_decrypt(&self, nonce: &[u8; 12], aad: &[u8], data: &mut [u8], tag: &[u8; 16]) -> bool {
+        // Compute hash subkey H
+        let mut h_block = [0u8; 16];
+        self.encrypt_block(&mut h_block);
+
+        // GHASH over AAD and ciphertext (before decryption)
+        let ghash = ghash_compute(&h_block, aad, data);
+
+        // Compute expected tag
+        let mut j0 = [0u8; 16];
+        j0[..12].copy_from_slice(nonce);
+        j0[15] = 1;
+        self.encrypt_block(&mut j0);
+
+        let mut expected_tag = [0u8; 16];
+        for i in 0..16 {
+            expected_tag[i] = ghash[i] ^ j0[i];
+        }
+
+        // Decrypt data with CTR starting at counter=2
+        self.ctr_crypt_with_counter(nonce, 2, data);
+
+        // Constant-time tag comparison
+        let mut diff = 0u8;
+        for i in 0..16 {
+            diff |= expected_tag[i] ^ tag[i];
+        }
+        diff == 0
+    }
+
     fn ctr_crypt_with_counter(&self, nonce: &[u8; 12], start_counter: u32, data: &mut [u8]) {
         let mut counter = [0u8; 16];
         counter[..12].copy_from_slice(nonce);
@@ -174,6 +233,81 @@ impl Aes128 {
             block_num += 1;
         }
     }
+}
+
+// ─── GHASH: GF(2^128) multiplication for GCM ───
+
+/// Compute GHASH over AAD and ciphertext.
+/// GHASH(H, A, C) = X_m+n+1 where:
+///   X_0 = 0
+///   X_i = (X_{i-1} XOR A_i) * H  for AAD blocks
+///   X_j = (X_{j-1} XOR C_j) * H  for ciphertext blocks
+///   X_final = (X XOR len_block) * H
+fn ghash_compute(h: &[u8; 16], aad: &[u8], ciphertext: &[u8]) -> [u8; 16] {
+    let mut x = [0u8; 16];
+
+    // Process AAD blocks
+    let mut i = 0;
+    while i < aad.len() {
+        let mut block = [0u8; 16];
+        let chunk = (aad.len() - i).min(16);
+        block[..chunk].copy_from_slice(&aad[i..i + chunk]);
+        for j in 0..16 { x[j] ^= block[j]; }
+        x = gf128_mul(&x, h);
+        i += 16;
+    }
+
+    // Process ciphertext blocks
+    i = 0;
+    while i < ciphertext.len() {
+        let mut block = [0u8; 16];
+        let chunk = (ciphertext.len() - i).min(16);
+        block[..chunk].copy_from_slice(&ciphertext[i..i + chunk]);
+        for j in 0..16 { x[j] ^= block[j]; }
+        x = gf128_mul(&x, h);
+        i += 16;
+    }
+
+    // Length block: [AAD_bits(64) || CT_bits(64)] in big-endian
+    let mut len_block = [0u8; 16];
+    let aad_bits = (aad.len() as u64) * 8;
+    let ct_bits = (ciphertext.len() as u64) * 8;
+    len_block[0..8].copy_from_slice(&aad_bits.to_be_bytes());
+    len_block[8..16].copy_from_slice(&ct_bits.to_be_bytes());
+    for j in 0..16 { x[j] ^= len_block[j]; }
+    x = gf128_mul(&x, h);
+
+    x
+}
+
+/// GF(2^128) multiplication with reduction polynomial x^128 + x^7 + x^2 + x + 1.
+/// Uses the standard bit-by-bit shift-and-reduce algorithm.
+fn gf128_mul(x: &[u8; 16], y: &[u8; 16]) -> [u8; 16] {
+    let mut z = [0u8; 16]; // result
+    let mut v = *y;        // working copy of y
+
+    for i in 0..128 {
+        // If bit i of x is set, XOR v into z
+        let byte_idx = i / 8;
+        let bit_idx = 7 - (i % 8); // MSB first (GCM convention)
+        if (x[byte_idx] >> bit_idx) & 1 == 1 {
+            for j in 0..16 { z[j] ^= v[j]; }
+        }
+
+        // Shift v right by 1 in GF(2^128)
+        let lsb = v[15] & 1;
+        for j in (1..16).rev() {
+            v[j] = (v[j] >> 1) | (v[j - 1] << 7);
+        }
+        v[0] >>= 1;
+
+        // If LSB was 1, XOR with reduction polynomial R = 0xE1000000...
+        if lsb == 1 {
+            v[0] ^= 0xE1;
+        }
+    }
+
+    z
 }
 
 fn key_expansion(key: &[u8; 32], rk: &mut [u32; 4 * (NR + 1)]) {

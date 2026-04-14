@@ -263,6 +263,11 @@ pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
 }
 
 /// Close the connection.
+/// Check if data is waiting to be read.
+pub fn data_ready() -> bool {
+    DATA_READY.load(Ordering::Relaxed)
+}
+
 pub fn close() {
     if CONN_STATE.load(Ordering::Relaxed) == STATE_ESTABLISHED {
         send_tcp(TCP_FIN | TCP_ACK, &[]);
