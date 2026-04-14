@@ -377,6 +377,134 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
         uart::puts(" (expected 9)\n");
     }
 
+    // Test field_mul_a24 (a24 = 121665 for Curve25519)
+    {
+        let a: Fe = [1, 0, 0, 0, 0];
+        let result = field_mul_a24(&a);
+        let mut r = result;
+        field_reduce(&mut r);
+        uart::puts("[tls] mul_a24(1)=");
+        crate::kernel::mm::print_num(r[0] as usize);
+        uart::puts(if r[0] == 121665 { " PASS" } else { " FAIL" });
+        uart::puts("\n");
+
+        // Test with a large value near 2^51
+        let b: Fe = [MASK51, 0, 0, 0, 0];
+        let result2 = field_mul_a24(&b);
+        let mut r2 = result2;
+        field_reduce(&mut r2);
+        uart::puts("[tls] mul_a24(2^51-1)=[");
+        crate::kernel::mm::print_num(r2[0] as usize);
+        uart::puts(",");
+        crate::kernel::mm::print_num(r2[1] as usize);
+        uart::puts("]\n");
+    }
+
+    // Test field_sub: a - b where a > b and where a < b
+    {
+        let a: Fe = [100, 0, 0, 0, 0];
+        let b: Fe = [30, 0, 0, 0, 0];
+        let result = field_sub(&a, &b);
+        let mut r = result;
+        field_reduce(&mut r);
+        let pass = r[0] == 70;
+        uart::puts("[tls] sub 100-30=");
+        crate::kernel::mm::print_num(r[0] as usize);
+        uart::puts(if pass { " PASS" } else { " FAIL" });
+        uart::puts("\n");
+
+        // a - b where b > a (should wrap mod p)
+        let c: Fe = [10, 0, 0, 0, 0];
+        let d: Fe = [30, 0, 0, 0, 0];
+        let result2 = field_sub(&c, &d);
+        let mut r2 = result2;
+        field_reduce(&mut r2);
+        // 10 - 30 mod p = p - 20
+        // p[0] = 0x7FFFFFFFFFFED, so result should be p - 20 = 0x7FFFFFFFFFFD9
+        let expected = 0x7FFFFFFFFFFEDu64 - 20;
+        let pass2 = r2[0] == expected && r2[1] == 0x7FFFFFFFFFFFF && r2[2] == 0x7FFFFFFFFFFFF;
+        uart::puts("[tls] sub 10-30=");
+        crate::kernel::mm::print_num(r2[0] as usize);
+        uart::puts(if pass2 { " PASS" } else { " FAIL" });
+        uart::puts("\n");
+    }
+
+    // Test encode/decode roundtrip
+    {
+        let input: [u8; 32] = [
+            9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let fe = decode_u_coordinate(&input);
+        let mut output = [0u8; 32];
+        encode_u_coordinate(&fe, &mut output);
+        uart::puts("[tls] encode/decode 9: ");
+        uart::puts(if output == input { "PASS" } else { "FAIL" });
+        uart::puts(" got[0]=");
+        crate::kernel::mm::print_num(output[0] as usize);
+        uart::puts("\n");
+
+        // Test with a more complex value
+        let input2: [u8; 32] = [
+            0xe6, 0xdb, 0x68, 0x67, 0x58, 0x30, 0x30, 0xdb,
+            0x35, 0x94, 0xc1, 0xa4, 0x24, 0xb1, 0x5f, 0x7c,
+            0x72, 0x66, 0x24, 0xec, 0x26, 0xb3, 0x35, 0x3b,
+            0x10, 0xa9, 0x03, 0xa6, 0xd0, 0xab, 0x1c, 0x4c,
+        ];
+        let fe2 = decode_u_coordinate(&input2);
+        let mut output2 = [0u8; 32];
+        encode_u_coordinate(&fe2, &mut output2);
+        uart::puts("[tls] encode/decode complex: ");
+        uart::puts(if output2 == input2 { "PASS" } else { "FAIL" });
+        if output2 != input2 {
+            uart::puts(" got=");
+            for i in 0..4 {
+                let hex = b"0123456789abcdef";
+                uart::putc(hex[(output2[i] >> 4) as usize]);
+                uart::putc(hex[(output2[i] & 0xf) as usize]);
+            }
+            uart::puts(" exp=");
+            for i in 0..4 {
+                let hex = b"0123456789abcdef";
+                uart::putc(hex[(input2[i] >> 4) as usize]);
+                uart::putc(hex[(input2[i] & 0xf) as usize]);
+            }
+        }
+        uart::puts("\n");
+    }
+
+    // Test field_invert: a * a^(-1) should equal 1
+    {
+        let a: Fe = [12345, 67890, 11111, 22222, 33333];
+        let a_inv = field_invert(&a);
+        let product = field_mul(&a, &a_inv);
+        let mut reduced = product;
+        field_reduce(&mut reduced);
+        let is_one = reduced[0] == 1 && reduced[1] == 0 && reduced[2] == 0 && reduced[3] == 0 && reduced[4] == 0;
+        uart::puts("[tls] invert test: a*a^-1 = [");
+        crate::kernel::mm::print_num(reduced[0] as usize);
+        uart::puts(",");
+        crate::kernel::mm::print_num(reduced[1] as usize);
+        uart::puts("] ");
+        uart::puts(if is_one { "PASS" } else { "FAIL" });
+        uart::puts("\n");
+    }
+
+    // Test field_mul with larger numbers
+    {
+        // (2^51 - 20) * 1 should be (2^51 - 20)
+        let a: Fe = [MASK51 - 19, 0, 0, 0, 0]; // p[0] - 1
+        let one: Fe = [1, 0, 0, 0, 0];
+        let result = field_mul(&a, &one);
+        let mut r = result;
+        field_reduce(&mut r);
+        uart::puts("[tls] (2^51-20)*1 = ");
+        crate::kernel::mm::print_num(r[0] as usize);
+        uart::puts(" expected ");
+        crate::kernel::mm::print_num((MASK51 - 19) as usize);
+        uart::puts("\n");
+    }
+
     // Simple X25519 test: basepoint * 1 should give basepoint
     {
         let mut one = [0u8; 32];
@@ -572,9 +700,50 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     crate::kernel::mm::print_num(hs_records as usize);
     uart::puts(" encrypted hs records\n");
 
-    // Step 5: Send ChangeCipherSpec (compatibility)
+    // Step 5: Send ChangeCipherSpec (compatibility) + client Finished
     let ccs = [0x14, 0x03, 0x03, 0x00, 0x01, 0x01];
     crate::net::tcp::send_data(&ccs).ok();
+
+    // Compute and send client Finished
+    let finished_transcript = transcript.clone().finalize();
+    let finished_key = crate::crypto::sha256::hkdf_expand_label(&client_hs_secret, b"finished", &[], 32);
+    let verify_data = crate::crypto::sha256::hmac(&finished_key, &finished_transcript);
+
+    // Build Finished handshake message: type=0x14, length=32, verify_data
+    let mut finished_msg = [0u8; 36];
+    finished_msg[0] = 0x14; // Finished
+    finished_msg[1] = 0;
+    finished_msg[2] = 0;
+    finished_msg[3] = 32; // length
+    finished_msg[4..36].copy_from_slice(&verify_data);
+
+    // Add to transcript
+    transcript.update(&finished_msg);
+
+    // Encrypt with client handshake key
+    let client_hs_cipher = {
+        let mut k = [0u8; 16];
+        k.copy_from_slice(&sess.client_key[..16]);
+        crate::crypto::aes::Aes128::new(&k)
+    };
+    let mut nonce = sess.client_iv;
+    // client_seq is 0 at this point
+    let mut enc_finished = [0u8; 64];
+    enc_finished[..36].copy_from_slice(&finished_msg);
+    enc_finished[36] = 0x16; // inner content type = handshake
+    let enc_len = 37 + 16; // data + content_type + GCM tag (16 zeros for now)
+    client_hs_cipher.gcm_crypt(&nonce, &mut enc_finished[..37]);
+
+    // Build TLS record
+    let mut fin_record = [0u8; 64];
+    fin_record[0] = 0x17; // application data (encrypted)
+    fin_record[1] = 0x03; fin_record[2] = 0x03;
+    fin_record[3] = (enc_len >> 8) as u8;
+    fin_record[4] = enc_len as u8;
+    fin_record[5..5 + enc_len].copy_from_slice(&enc_finished[..enc_len]);
+    crate::net::tcp::send_data(&fin_record[..5 + enc_len]).ok();
+
+    uart::puts("[tls] Client Finished sent\n");
 
     // Step 6: Derive application traffic keys
     let hs_transcript = transcript.finalize();
@@ -835,14 +1004,37 @@ fn x25519_scalar_mult(scalar: &[u8; 32], point: &[u8; 32], result: &mut [u8; 32]
         x_3 = field_sq(&field_add(&da, &cb));
         z_3 = field_mul(&x_1, &field_sq(&field_sub(&da, &cb)));
         x_2 = field_mul(&aa, &bb);
-        z_2 = field_mul(&e, &field_add(&aa, &field_mul_121666(&e)));
+        z_2 = field_mul(&e, &field_add(&aa, &field_mul_a24(&e)));
     }
 
     field_cswap(&mut x_2, &mut x_3, swap);
     field_cswap(&mut z_2, &mut z_3, swap);
 
+    // Debug: check x_2 and z_2
+    {
+        let mut xr = x_2; field_reduce(&mut xr);
+        let mut zr = z_2; field_reduce(&mut zr);
+        crate::drivers::uart::puts("[x25519] x2[0]=");
+        crate::kernel::mm::print_num(xr[0] as usize);
+        crate::drivers::uart::puts(" z2[0]=");
+        crate::kernel::mm::print_num(zr[0] as usize);
+        crate::drivers::uart::puts("\n");
+    }
+
     // result = x_2 * z_2^(p-2) (modular inverse via Fermat)
     let z_inv = field_invert(&z_2);
+
+    // Verify: z_2 * z_inv should be 1
+    {
+        let check = field_mul(&z_2, &z_inv);
+        let mut cr = check; field_reduce(&mut cr);
+        crate::drivers::uart::puts("[x25519] z*zinv=[");
+        crate::kernel::mm::print_num(cr[0] as usize);
+        crate::drivers::uart::puts(",");
+        crate::kernel::mm::print_num(cr[1] as usize);
+        crate::drivers::uart::puts("]\n");
+    }
+
     let result_field = field_mul(&x_2, &z_inv);
 
     encode_u_coordinate(&result_field, result);
@@ -945,11 +1137,12 @@ fn field_mul(a: &Fe, b: &Fe) -> Fe {
 
 fn field_sq(a: &Fe) -> Fe { field_mul(a, a) }
 
-fn field_mul_121666(a: &Fe) -> Fe {
+/// Multiply field element by a24 = (A-2)/4 = 121665 for Curve25519.
+fn field_mul_a24(a: &Fe) -> Fe {
     let mut r = [0u64; 5];
     let mut carry = 0u128;
     for i in 0..5 {
-        let v = (a[i] as u128) * 121666 + carry;
+        let v = (a[i] as u128) * 121665 + carry;
         r[i] = (v as u64) & MASK51;
         carry = v >> 51;
     }
