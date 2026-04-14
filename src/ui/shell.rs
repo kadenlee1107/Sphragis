@@ -993,7 +993,16 @@ fn cmd_run_elf(name: &str) {
                         "isb",       // instruction synchronization barrier
                     );
 
-                    // Jump to the binary — it will use syscalls which our handler catches
+                    // Disable alignment checking RIGHT before jump
+                    // (BatCave init may have re-enabled it)
+                    core::arch::asm!(
+                        "mrs x16, sctlr_el1",
+                        "bic x16, x16, #2",  // clear bit 1 (A = alignment check)
+                        "msr sctlr_el1, x16",
+                        "isb",
+                    );
+
+                    // Jump to the binary
                     core::arch::asm!(
                         "mov sp, {sp_val}",
                         "br {entry}",
