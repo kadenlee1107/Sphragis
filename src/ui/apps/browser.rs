@@ -1590,9 +1590,33 @@ pub fn handle_key(ch: u8) {
                 if link_idx < LINK_COUNT {
                     let url = &LINKS[link_idx][..LINK_LENS[link_idx]];
                     let mut url_copy = [0u8; MAX_URL];
-                    let len = url.len().min(MAX_URL);
-                    url_copy[..len].copy_from_slice(&url[..len]);
-                    navigate(&url_copy[..len]);
+
+                    if url.len() > 0 && url[0] == b'/' {
+                        // Relative URL — prepend current origin (scheme + host)
+                        // Extract scheme+host from current URL_BUF
+                        let cur = &URL_BUF[..URL_LEN];
+                        // Find end of "https://host" (third /)
+                        let mut slash_count = 0;
+                        let mut origin_end = 0;
+                        for i in 0..cur.len() {
+                            if cur[i] == b'/' {
+                                slash_count += 1;
+                                if slash_count == 3 { origin_end = i; break; }
+                            }
+                        }
+                        if origin_end == 0 { origin_end = cur.len(); }
+                        let total = origin_end + url.len();
+                        if total <= MAX_URL {
+                            url_copy[..origin_end].copy_from_slice(&cur[..origin_end]);
+                            url_copy[origin_end..total].copy_from_slice(url);
+                            navigate(&url_copy[..total]);
+                        }
+                    } else if url.starts_with(b"http") {
+                        // Absolute URL
+                        let len = url.len().min(MAX_URL);
+                        url_copy[..len].copy_from_slice(&url[..len]);
+                        navigate(&url_copy[..len]);
+                    }
                 }
             }
             // Page up/down (using - and = keys when page loaded)
