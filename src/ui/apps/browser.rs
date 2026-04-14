@@ -458,8 +458,8 @@ pub fn navigate(url: &[u8]) {
             let decompressed = unsafe { &mut *core::ptr::addr_of_mut!(DECOMP_BUF) };
             let dec_len = crate::browser::media::gzip::decompress(&decoded[..decoded_len], decompressed);
             if dec_len > 0 {
-                // Cap decompressed to 32KB to avoid parser hang on huge pages
-                let copy = dec_len.min(32768);
+                // Copy all decompressed data (up to decoded buffer size)
+                let copy = dec_len.min(decoded.len());
                 uart::puts("[browser] copying ");
                 crate::kernel::mm::print_num(copy);
                 uart::puts(" bytes to decoded buffer\n");
@@ -476,7 +476,7 @@ pub fn navigate(url: &[u8]) {
 
     // Cap body size to prevent parser from hanging on huge pages
     // (Wikipedia decompresses to 108KB+ — parser gets stuck on complex HTML)
-    let body_cap = decoded_len.min(32768); // 32KB max for parsing
+    let body_cap = decoded_len.min(131072); // Use all available decompressed data
     let body = &decoded[..body_cap];
 
     uart::puts("[browser] body_len=");
