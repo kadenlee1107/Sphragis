@@ -9,6 +9,7 @@ int mkdir(const char *path, mode_t mode);
 #define S_ISREG(m) (((m) & 0170000) == 0100000)
 #define S_IRUSR 0400
 #define S_IWUSR 0200
+#define S_IRWXU 0700
 #define S_IXUSR 0100
 #define S_IRGRP 040
 #define S_IROTH 004

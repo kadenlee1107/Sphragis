@@ -55,4 +55,5 @@ long sysconf(int name);
 #define _SC_PAGE_SIZE 30
 #define _SC_PAGESIZE _SC_PAGE_SIZE
 
+char *realpath(const char *path, char *resolved);
 #endif

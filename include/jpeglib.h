@@ -19,5 +19,9 @@ void jpeg_mem_src(j_decompress_ptr cinfo, const unsigned char *buf, unsigned lon
 #define JPEG_LIB_VERSION 80
 #define jpeg_create_decompress(cinfo) jpeg_CreateDecompress((cinfo), JPEG_LIB_VERSION, sizeof(struct jpeg_decompress_struct))
 #define JMSG_LENGTH_MAX 200
+#define JPEG_EOI 0xD9
+#define JPEG_SUSPENDED 0
+#define JPEG_REACHED_SOS 1
+#define JPEG_REACHED_EOI 2
 #define JPEG_HEADER_OK 1
 #endif

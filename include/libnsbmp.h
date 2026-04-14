@@ -52,5 +52,6 @@ bmp_result ico_analyse(ico_collection *ico, size_t size, const uint8_t *data);
 bmp_image *ico_find(ico_collection *ico, uint16_t width, uint16_t height);
 void       ico_finalise(ico_collection *ico);
 
+#define BMP_CLEAR_MEMORY 2
 #define BMP_OPAQUE 1
 #endif /* _BATOS_LIBNSBMP_H */
