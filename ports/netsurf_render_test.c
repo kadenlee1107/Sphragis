@@ -204,10 +204,10 @@ void _start(void) {
     }
     printf("    Calling css_select_style...\n");
     css_select_results *results = NULL;
-    css_error err = css_select_style(ctx, &body_node, &unit_ctx, &media, NULL,
+    css_error err2 = css_select_style(ctx, &body_node, &unit_ctx, &media, NULL,
                                       &handler, NULL, &results);
-    printf("    css_select_style returned %d\n", err);
-    if (err == CSS_OK && results) {
+    printf("    css_select_style returned %d\n", err2);
+    if (err2 == CSS_OK && results) {
         css_computed_style *style = results->styles[CSS_PSEUDO_ELEMENT_NONE];
         if (style) {
             css_color color;
@@ -221,14 +221,14 @@ void _start(void) {
         }
         css_select_results_destroy(results);
     } else {
-        printf("  body: FAILED (err=%d)\n", err);
+        printf("  body: FAILED (err=%d)\n", err2);
     }
 
     // Compute style for h1
     results = NULL;
-    err = css_select_style(ctx, &h1_node, &unit_ctx, &media, NULL,
+    err2 = css_select_style(ctx, &h1_node, &unit_ctx, &media, NULL,
                             &handler, NULL, &results);
-    if (err == CSS_OK && results) {
+    if (err2 == CSS_OK && results) {
         css_computed_style *style = results->styles[CSS_PSEUDO_ELEMENT_NONE];
         if (style) {
             css_color color;
@@ -242,14 +242,14 @@ void _start(void) {
         }
         css_select_results_destroy(results);
     } else {
-        printf("  h1: FAILED (err=%d)\n", err);
+        printf("  h1: FAILED (err=%d)\n", err2);
     }
 
     // Compute style for p
     results = NULL;
-    err = css_select_style(ctx, &p_node, &unit_ctx, &media, NULL,
+    err2 = css_select_style(ctx, &p_node, &unit_ctx, &media, NULL,
                             &handler, NULL, &results);
-    if (err == CSS_OK && results) {
+    if (err2 == CSS_OK && results) {
         css_computed_style *style = results->styles[CSS_PSEUDO_ELEMENT_NONE];
         if (style) {
             css_fixed mt = 0, mr = 0, mb = 0, ml = 0;
@@ -263,7 +263,7 @@ void _start(void) {
         }
         css_select_results_destroy(results);
     } else {
-        printf("  p: FAILED (err=%d)\n", err);
+        printf("  p: FAILED (err=%d)\n", err2);
     }
 
     css_select_ctx_destroy(ctx);
