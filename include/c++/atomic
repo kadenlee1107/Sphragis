@@ -41,6 +41,7 @@ template<class T>
 struct atomic {
     static_assert(is_trivially_copyable<T>::value, "atomic<T> requires trivially copyable T");
 
+    static constexpr bool is_always_lock_free = sizeof(T) <= 8;
     T val_;
 
     constexpr atomic() noexcept : val_{} {}
