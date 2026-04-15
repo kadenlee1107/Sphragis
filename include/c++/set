@@ -67,9 +67,12 @@ public:
         if (pos < size_) return {data_ + pos, false};
         if (size_ >= MAX_ENTRIES) abort();
         size_type ip = insert_pos(k);
-        for (size_type i = size_; i > ip; --i)
-            data_[i] = static_cast<Key&&>(data_[i-1]);
-        data_[ip] = k;
+        // Shift using placement new (works for non-assignable types)
+        for (size_type i = size_; i > ip; --i) {
+            ::new(&data_[i]) Key(static_cast<Key&&>(data_[i-1]));
+            data_[i-1].~Key();
+        }
+        ::new(&data_[ip]) Key(k);
         ++size_;
         return {data_ + ip, true};
     }
@@ -97,8 +100,11 @@ public:
     size_type erase(const Key& k) {
         size_type pos = find_pos(k);
         if (pos >= size_) return 0;
-        for (size_type i = pos; i + 1 < size_; ++i)
-            data_[i] = static_cast<Key&&>(data_[i+1]);
+        data_[pos].~Key();
+        for (size_type i = pos; i + 1 < size_; ++i) {
+            ::new(&data_[i]) Key(static_cast<Key&&>(data_[i+1]));
+            data_[i+1].~Key();
+        }
         --size_;
         return 1;
     }
@@ -106,8 +112,11 @@ public:
     iterator erase(iterator pos) {
         size_type idx = static_cast<size_type>(pos - data_);
         if (idx >= size_) return end();
-        for (size_type i = idx; i + 1 < size_; ++i)
-            data_[i] = static_cast<Key&&>(data_[i+1]);
+        data_[idx].~Key();
+        for (size_type i = idx; i + 1 < size_; ++i) {
+            ::new(&data_[i]) Key(static_cast<Key&&>(data_[i+1]));
+            data_[i+1].~Key();
+        }
         --size_;
         return data_ + idx;
     }

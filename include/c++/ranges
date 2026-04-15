@@ -45,16 +45,38 @@ struct view_base {};
 #ifndef _BAT_RANGES_LOWER_BOUND
 #define _BAT_RANGES_LOWER_BOUND
 namespace std::ranges {
-template<class ForwardIt, class T, class Proj = void*>
-ForwardIt lower_bound(ForwardIt first, ForwardIt last, const T& value, auto comp = {}, Proj = {}) {
+// Range-based lower_bound with comparator + projection
+template<class Range, class T, class Comp, class Proj>
+auto lower_bound(Range&& r, const T& value, Comp comp, Proj proj) {
+    auto first = r.begin();
+    auto last = r.end();
     while (first != last) {
         auto mid = first;
         auto dist = last - first;
-        mid += dist / 2;
+        mid = first + dist / 2;
+        if (comp(proj(*mid), value)) { first = mid; ++first; }
+        else { last = mid; }
+    }
+    return first;
+}
+
+// 3-arg version (comp only, no proj)
+template<class Range, class T, class Comp>
+auto lower_bound(Range&& r, const T& value, Comp comp) {
+    auto first = r.begin();
+    auto last = r.end();
+    while (first != last) {
+        auto mid = first + (last - first) / 2;
         if (comp(*mid, value)) { first = mid; ++first; }
         else { last = mid; }
     }
     return first;
+}
+
+// 2-arg (default less)
+template<class Range, class T>
+auto lower_bound(Range&& r, const T& value) {
+    return lower_bound(static_cast<Range&&>(r), value, less<>{});
 }
 }
 namespace std::views {

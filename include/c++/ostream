@@ -54,7 +54,8 @@ public:
     fmtflags flags(fmtflags f) { auto old = flags_; flags_ = f; return old; }
     char fill() const { return fill_; }
     char fill(char c) { auto old = fill_; fill_ = c; return old; }
-    void copyfmt(const basic_ostream&) {} // stub
+    void copyfmt(const basic_ostream&) {}
+    template<class C2, class T2> void copyfmt(const basic_ios<C2,T2>&) {}
     int width() const { return 0; }
     int width(int) { return 0; }
 };

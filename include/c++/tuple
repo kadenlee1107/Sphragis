@@ -61,6 +61,11 @@ public:
     tuple& operator=(tuple<U0, U1>&& o) { v0_ = static_cast<U0&&>(o.v0_); v1_ = static_cast<U1&&>(o.v1_); return *this; }
     tuple& operator=(const tuple& o) { v0_ = o.v0_; v1_ = o.v1_; return *this; }
     tuple& operator=(tuple&& o) noexcept { v0_ = static_cast<T0&&>(o.v0_); v1_ = static_cast<T1&&>(o.v1_); return *this; }
+    // Assign from pair
+    template<class U0, class U1>
+    tuple& operator=(const pair<U0, U1>& p) { v0_ = p.first; v1_ = p.second; return *this; }
+    template<class U0, class U1>
+    tuple& operator=(pair<U0, U1>&& p) { v0_ = static_cast<U0&&>(p.first); v1_ = static_cast<U1&&>(p.second); return *this; }
 };
 
 // tuple<T0, T1, T2>

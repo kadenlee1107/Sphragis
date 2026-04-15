@@ -34,9 +34,13 @@ private:
     static constexpr size_type NUM_BUCKETS = 64;
 
     struct Entry {
-        Key  key;
-        T    val;
+        alignas(Key) unsigned char key_buf[sizeof(Key)];
+        alignas(T) unsigned char val_buf[sizeof(T)];
         bool occupied;
+        Key& key() { return *reinterpret_cast<Key*>(key_buf); }
+        const Key& key() const { return *reinterpret_cast<const Key*>(key_buf); }
+        T& val() { return *reinterpret_cast<T*>(val_buf); }
+        const T& val() const { return *reinterpret_cast<const T*>(val_buf); }
     };
 
     Entry    entries_[MAX_ENTRIES];
@@ -46,7 +50,7 @@ private:
 
     size_type find_slot(const Key& k) const {
         for (size_type i = 0; i < size_; ++i) {
-            if (entries_[i].occupied && eq_(entries_[i].key, k))
+            if (entries_[i].occupied && eq_(entries_[i].key(), k))
                 return i;
         }
         return MAX_ENTRIES;
@@ -115,8 +119,8 @@ public:
         for (size_type i = 0; i < MAX_ENTRIES; ++i) {
             entries_[i].occupied = o.entries_[i].occupied;
             if (o.entries_[i].occupied) {
-                entries_[i].key = o.entries_[i].key;
-                entries_[i].val = o.entries_[i].val;
+                entries_[i].key() = o.entries_[i].key();
+                entries_[i].val() = o.entries_[i].val();
             }
         }
     }
@@ -127,8 +131,8 @@ public:
             for (size_type i = 0; i < MAX_ENTRIES; ++i) {
                 entries_[i].occupied = o.entries_[i].occupied;
                 if (o.entries_[i].occupied) {
-                    entries_[i].key = o.entries_[i].key;
-                    entries_[i].val = o.entries_[i].val;
+                    entries_[i].key() = o.entries_[i].key();
+                    entries_[i].val() = o.entries_[i].val();
                 }
             }
         }
@@ -141,35 +145,35 @@ public:
 
     T& operator[](const Key& k) {
         size_type slot = find_slot(k);
-        if (slot < MAX_ENTRIES) return entries_[slot].val;
+        if (slot < MAX_ENTRIES) return entries_[slot].val();
         // Find first unoccupied slot
         for (size_type i = 0; i < MAX_ENTRIES; ++i) {
             if (!entries_[i].occupied) {
-                entries_[i].key = k;
-                entries_[i].val = T{};
+                entries_[i].key() = k;
+                entries_[i].val() = T{};
                 entries_[i].occupied = true;
                 ++size_;
-                return entries_[i].val;
+                return entries_[i].val();
             }
         }
         abort();
-        return entries_[0].val; // unreachable
+        return entries_[0].val(); // unreachable
     }
 
     T& operator[](Key&& k) {
         size_type slot = find_slot(k);
-        if (slot < MAX_ENTRIES) return entries_[slot].val;
+        if (slot < MAX_ENTRIES) return entries_[slot].val();
         for (size_type i = 0; i < MAX_ENTRIES; ++i) {
             if (!entries_[i].occupied) {
-                entries_[i].key = static_cast<Key&&>(k);
-                entries_[i].val = T{};
+                entries_[i].key() = static_cast<Key&&>(k);
+                entries_[i].val() = T{};
                 entries_[i].occupied = true;
                 ++size_;
-                return entries_[i].val;
+                return entries_[i].val();
             }
         }
         abort();
-        return entries_[0].val;
+        return entries_[0].val();
     }
 
     iterator find(const Key& k) {
@@ -202,8 +206,8 @@ public:
             return {iterator{&entries_[slot], &entries_[MAX_ENTRIES]}, false};
         for (size_type i = 0; i < MAX_ENTRIES; ++i) {
             if (!entries_[i].occupied) {
-                entries_[i].key = v.first;
-                entries_[i].val = v.second;
+                entries_[i].key() = v.first;
+                entries_[i].val() = v.second;
                 entries_[i].occupied = true;
                 ++size_;
                 return {iterator{&entries_[i], &entries_[MAX_ENTRIES]}, true};

@@ -123,6 +123,10 @@ template<> struct hash<unsigned long>      { size_t operator()(unsigned long v) 
 template<> struct hash<long long>          { size_t operator()(long long v) const noexcept { return static_cast<size_t>(v); } };
 template<> struct hash<unsigned long long> { size_t operator()(unsigned long long v) const noexcept { return static_cast<size_t>(v); } };
 
+// Generic enum hash (C++14+)
+template<class T> requires(is_enum_v<T>)
+struct hash<T> { size_t operator()(T v) const noexcept { return static_cast<size_t>(static_cast<underlying_type_t<T>>(v)); } };
+
 template<> struct hash<float> {
     size_t operator()(float v) const noexcept {
         if (v == 0.0f) v = 0.0f; // normalize -0
