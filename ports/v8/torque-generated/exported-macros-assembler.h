@@ -223,8 +223,6 @@ class V8_EXPORT_PRIVATE TorqueGeneratedExportedMacrosAssembler {
   TNode<Context> CreatePromiseResolvingFunctionsContext(TNode<Context> p_context, TNode<JSPromise> p_promise, TNode<Boolean> p_debugEvent, TNode<NativeContext> p_nativeContext);
   // https://crsrc.org/c/v8/src/builtins/math.tq?l=118&c=1
   TNode<Number> MathPowImpl(TNode<Context> p_context, TNode<JSAny> p_base, TNode<JSAny> p_exponent);
-  // https://crsrc.org/c/v8/src/builtins/wasm-to-js.tq?l=50&c=1
-  TorqueStructWasmToJSResult WasmToJSWrapper(TNode<WasmImportData> p_data);
   // https://crsrc.org/c/v8/src/builtins/promise-misc.tq?l=42&c=1
   TNode<BoolT> PromiseHasHandler(TNode<JSPromise> p_promise);
   // https://crsrc.org/c/v8/src/builtins/promise-misc.tq?l=47&c=1
@@ -459,22 +457,6 @@ class V8_EXPORT_PRIVATE TorqueGeneratedExportedMacrosAssembler {
   void TestCellAccessors(TNode<Context> p_context, TNode<Cell> p_cell);
   // https://crsrc.org/c/v8/src/objects/heap-object.tq?l=10&c=9
   TNode<Map> LoadHeapObjectMap(TNode<HeapObject> p_o);
-  // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=8&c=9
-  TNode<Smi> LoadFixedArrayBaseLength(TNode<FixedArrayBase> p_o);
-  // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-  TorqueStructSlice_uint8_MutableReference_uint8_0 FieldSliceByteArrayValues(TNode<ByteArray> p_o);
-  // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-  TNode<Uint8T> LoadByteArrayValues(TNode<ByteArray> p_o, TNode<IntPtrT> p_i);
-  // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-  void StoreByteArrayValues(TNode<ByteArray> p_o, TNode<IntPtrT> p_i, TNode<Uint8T> p_v);
-  // https://crsrc.org/c/v8/src/objects/foreign.tq?l=8&c=3
-  TNode<ExternalPointerT> LoadForeignForeignAddress(TNode<Foreign> p_o);
-  // https://crsrc.org/c/v8/src/objects/foreign.tq?l=8&c=3
-  void StoreForeignForeignAddress(TNode<Foreign> p_o, TNode<ExternalPointerT> p_v);
-  // https://crsrc.org/c/v8/src/objects/foreign.tq?l=12&c=3
-  TNode<RawPtrT> LoadTrustedForeignForeignAddress(TNode<TrustedForeign> p_o);
-  // https://crsrc.org/c/v8/src/objects/foreign.tq?l=12&c=3
-  void StoreTrustedForeignForeignAddress(TNode<TrustedForeign> p_o, TNode<RawPtrT> p_v);
   // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=9&c=3
   TNode<Union<FixedArrayBase, PropertyArray, Smi, SwissNameDictionary>> LoadJSReceiverPropertiesOrHash(TNode<JSReceiver> p_o);
   // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=9&c=3
@@ -483,342 +465,6 @@ class V8_EXPORT_PRIVATE TorqueGeneratedExportedMacrosAssembler {
   TNode<FixedArrayBase> LoadJSObjectElements(TNode<JSObject> p_o);
   // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=33&c=3
   void StoreJSObjectElements(TNode<JSObject> p_o, TNode<FixedArrayBase> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=40&c=3
-  TNode<TrustedPointerT> LoadWasmInstanceObjectTrustedData(TNode<WasmInstanceObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=40&c=3
-  void StoreWasmInstanceObjectTrustedData(TNode<WasmInstanceObject> p_o, TNode<TrustedPointerT> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=41&c=3
-  TNode<WasmModuleObject> LoadWasmInstanceObjectModuleObject(TNode<WasmInstanceObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=41&c=3
-  void StoreWasmInstanceObjectModuleObject(TNode<WasmInstanceObject> p_o, TNode<WasmModuleObject> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=42&c=3
-  TNode<JSObject> LoadWasmInstanceObjectExportsObject(TNode<WasmInstanceObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=42&c=3
-  void StoreWasmInstanceObjectExportsObject(TNode<WasmInstanceObject> p_o, TNode<JSObject> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=53&c=3
-  TNode<MaybeObject> LoadWasmImportDataProtectedInstanceData(TNode<WasmImportData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=53&c=3
-  void StoreWasmImportDataProtectedInstanceData(TNode<WasmImportData> p_o, TNode<MaybeObject> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=57&c=3
-  TNode<MaybeObject> LoadWasmImportDataProtectedCallOrigin(TNode<WasmImportData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=57&c=3
-  void StoreWasmImportDataProtectedCallOrigin(TNode<WasmImportData> p_o, TNode<MaybeObject> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=59&c=3
-  TNode<NativeContext> LoadWasmImportDataNativeContext(TNode<WasmImportData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=59&c=3
-  void StoreWasmImportDataNativeContext(TNode<WasmImportData> p_o, TNode<NativeContext> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=60&c=3
-  TNode<Union<JSReceiver, Undefined>> LoadWasmImportDataCallable(TNode<WasmImportData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=60&c=3
-  void StoreWasmImportDataCallable(TNode<WasmImportData> p_o, TNode<Union<JSReceiver, Undefined>> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=62&c=3
-  TNode<Cell> LoadWasmImportDataWrapperBudget(TNode<WasmImportData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=62&c=3
-  void StoreWasmImportDataWrapperBudget(TNode<WasmImportData> p_o, TNode<Cell> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=64&c=3
-  TNode<RawPtrT> LoadWasmImportDataSig(TNode<WasmImportData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=64&c=3
-  void StoreWasmImportDataSig(TNode<WasmImportData> p_o, TNode<RawPtrT> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=66&c=3
-  TNode<Uint32T> LoadWasmImportDataBitField(TNode<WasmImportData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=66&c=3
-  void StoreWasmImportDataBitField(TNode<WasmImportData> p_o, TNode<Uint32T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=74&c=3
-  TNode<HeapObject> LoadWasmFastApiCallDataSignature(TNode<WasmFastApiCallData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=74&c=3
-  void StoreWasmFastApiCallDataSignature(TNode<WasmFastApiCallData> p_o, TNode<HeapObject> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=75&c=3
-  TNode<Object> LoadWasmFastApiCallDataCallbackData(TNode<WasmFastApiCallData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=75&c=3
-  void StoreWasmFastApiCallDataCallbackData(TNode<WasmFastApiCallData> p_o, TNode<Object> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=76&c=3
-  TNode<Union<Null, Weak<HeapObject>>> LoadWasmFastApiCallDataCachedMap(TNode<WasmFastApiCallData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=76&c=3
-  void StoreWasmFastApiCallDataCachedMap(TNode<WasmFastApiCallData> p_o, TNode<Union<Null, Weak<HeapObject>>> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=88&c=3
-  TNode<MaybeObject> LoadWasmInternalFunctionProtectedImplicitArg(TNode<WasmInternalFunction> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=88&c=3
-  void StoreWasmInternalFunctionProtectedImplicitArg(TNode<WasmInternalFunction> p_o, TNode<MaybeObject> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=91&c=3
-  TNode<Union<JSFunction, Undefined>> LoadWasmInternalFunctionExternal(TNode<WasmInternalFunction> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=91&c=3
-  void StoreWasmInternalFunctionExternal(TNode<WasmInternalFunction> p_o, TNode<Union<JSFunction, Undefined>> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=98&c=3
-  TNode<Smi> LoadWasmInternalFunctionFunctionIndex(TNode<WasmInternalFunction> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=98&c=3
-  void StoreWasmInternalFunctionFunctionIndex(TNode<WasmInternalFunction> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=100&c=3
-  TNode<Uint32T> LoadWasmInternalFunctionRawCallTarget(TNode<WasmInternalFunction> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=100&c=3
-  void StoreWasmInternalFunctionRawCallTarget(TNode<WasmInternalFunction> p_o, TNode<Uint32T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=103&c=3
-  TNode<RawPtrT> LoadWasmInternalFunctionSig(TNode<WasmInternalFunction> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=103&c=3
-  void StoreWasmInternalFunctionSig(TNode<WasmInternalFunction> p_o, TNode<RawPtrT> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=113&c=3
-  TNode<TrustedPointerT> LoadWasmFuncRefTrustedInternal(TNode<WasmFuncRef> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=113&c=3
-  void StoreWasmFuncRefTrustedInternal(TNode<WasmFuncRef> p_o, TNode<TrustedPointerT> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=122&c=3
-  TNode<TrustedPointerT> LoadWasmFunctionDataWrapperCode(TNode<WasmFunctionData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=122&c=3
-  void StoreWasmFunctionDataWrapperCode(TNode<WasmFunctionData> p_o, TNode<TrustedPointerT> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=125&c=3
-  TNode<WasmFuncRef> LoadWasmFunctionDataFuncRef(TNode<WasmFunctionData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=125&c=3
-  void StoreWasmFunctionDataFuncRef(TNode<WasmFunctionData> p_o, TNode<WasmFuncRef> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=127&c=3
-  TNode<Smi> LoadWasmFunctionDataJsPromiseFlags(TNode<WasmFunctionData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=127&c=3
-  void StoreWasmFunctionDataJsPromiseFlags(TNode<WasmFunctionData> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=130&c=3
-  TNode<MaybeObject> LoadWasmFunctionDataProtectedInternal(TNode<WasmFunctionData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=130&c=3
-  void StoreWasmFunctionDataProtectedInternal(TNode<WasmFunctionData> p_o, TNode<MaybeObject> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=140&c=3
-  TNode<MaybeObject> LoadWasmExportedFunctionDataProtectedInstanceData(TNode<WasmExportedFunctionData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=140&c=3
-  void StoreWasmExportedFunctionDataProtectedInstanceData(TNode<WasmExportedFunctionData> p_o, TNode<MaybeObject> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=141&c=3
-  TNode<Smi> LoadWasmExportedFunctionDataFunctionIndex(TNode<WasmExportedFunctionData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=141&c=3
-  void StoreWasmExportedFunctionDataFunctionIndex(TNode<WasmExportedFunctionData> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=143&c=3
-  TNode<Cell> LoadWasmExportedFunctionDataWrapperBudget(TNode<WasmExportedFunctionData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=143&c=3
-  void StoreWasmExportedFunctionDataWrapperBudget(TNode<WasmExportedFunctionData> p_o, TNode<Cell> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=148&c=3
-  TNode<Smi> LoadWasmExportedFunctionDataPackedArgsSize(TNode<WasmExportedFunctionData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=148&c=3
-  void StoreWasmExportedFunctionDataPackedArgsSize(TNode<WasmExportedFunctionData> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=149&c=3
-  TNode<TrustedPointerT> LoadWasmExportedFunctionDataCWrapperCode(TNode<WasmExportedFunctionData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=149&c=3
-  void StoreWasmExportedFunctionDataCWrapperCode(TNode<WasmExportedFunctionData> p_o, TNode<TrustedPointerT> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=157&c=3
-  TNode<MaybeObject> LoadWasmJSFunctionDataProtectedOffheapData(TNode<WasmJSFunctionData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=157&c=3
-  void StoreWasmJSFunctionDataProtectedOffheapData(TNode<WasmJSFunctionData> p_o, TNode<MaybeObject> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=162&c=3
-  TNode<Foreign> LoadWasmCapiFunctionDataEmbedderData(TNode<WasmCapiFunctionData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=162&c=3
-  void StoreWasmCapiFunctionDataEmbedderData(TNode<WasmCapiFunctionData> p_o, TNode<Foreign> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=166&c=3
-  TNode<TrustedPointerT> LoadWasmResumeDataTrustedSuspender(TNode<WasmResumeData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=166&c=3
-  void StoreWasmResumeDataTrustedSuspender(TNode<WasmResumeData> p_o, TNode<TrustedPointerT> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=167&c=3
-  TNode<Smi> LoadWasmResumeDataOnResume(TNode<WasmResumeData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=167&c=3
-  void StoreWasmResumeDataOnResume(TNode<WasmResumeData> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=171&c=3
-  TNode<ExternalPointerT> LoadWasmSuspenderObjectStack(TNode<WasmSuspenderObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=171&c=3
-  void StoreWasmSuspenderObjectStack(TNode<WasmSuspenderObject> p_o, TNode<ExternalPointerT> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=172&c=3
-  TNode<MaybeObject> LoadWasmSuspenderObjectParent(TNode<WasmSuspenderObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=172&c=3
-  void StoreWasmSuspenderObjectParent(TNode<WasmSuspenderObject> p_o, TNode<MaybeObject> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=173&c=3
-  TNode<Union<JSPromise, Undefined>> LoadWasmSuspenderObjectPromise(TNode<WasmSuspenderObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=173&c=3
-  void StoreWasmSuspenderObjectPromise(TNode<WasmSuspenderObject> p_o, TNode<Union<JSPromise, Undefined>> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=174&c=3
-  TNode<Union<JSObject, Undefined>> LoadWasmSuspenderObjectResume(TNode<WasmSuspenderObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=174&c=3
-  void StoreWasmSuspenderObjectResume(TNode<WasmSuspenderObject> p_o, TNode<Union<JSObject, Undefined>> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=175&c=3
-  TNode<Union<JSObject, Undefined>> LoadWasmSuspenderObjectReject(TNode<WasmSuspenderObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=175&c=3
-  void StoreWasmSuspenderObjectReject(TNode<WasmSuspenderObject> p_o, TNode<Union<JSObject, Undefined>> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=179&c=3
-  TNode<WasmStackObject> LoadWasmContinuationObjectStackObj(TNode<WasmContinuationObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=179&c=3
-  void StoreWasmContinuationObjectStackObj(TNode<WasmContinuationObject> p_o, TNode<WasmStackObject> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=185&c=3
-  TNode<ExternalPointerT> LoadWasmStackObjectStack(TNode<WasmStackObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=185&c=3
-  void StoreWasmStackObjectStack(TNode<WasmStackObject> p_o, TNode<ExternalPointerT> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=192&c=3
-  TNode<Smi> LoadWasmExceptionTagIndex(TNode<WasmExceptionTag> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=192&c=3
-  void StoreWasmExceptionTagIndex(TNode<WasmExceptionTag> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=198&c=3
-  TNode<Foreign> LoadWasmModuleObjectManagedNativeModule(TNode<WasmModuleObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=198&c=3
-  void StoreWasmModuleObjectManagedNativeModule(TNode<WasmModuleObject> p_o, TNode<Foreign> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=199&c=3
-  TNode<Script> LoadWasmModuleObjectScript(TNode<WasmModuleObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=199&c=3
-  void StoreWasmModuleObjectScript(TNode<WasmModuleObject> p_o, TNode<Script> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=214&c=3
-  TNode<FixedArray> LoadWasmTableObjectEntries(TNode<WasmTableObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=214&c=3
-  void StoreWasmTableObjectEntries(TNode<WasmTableObject> p_o, TNode<FixedArray> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=215&c=3
-  TNode<Smi> LoadWasmTableObjectCurrentLength(TNode<WasmTableObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=215&c=3
-  void StoreWasmTableObjectCurrentLength(TNode<WasmTableObject> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=220&c=3
-  TNode<Union<BigInt, HeapNumber, Smi, Undefined>> LoadWasmTableObjectMaximumLength(TNode<WasmTableObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=220&c=3
-  void StoreWasmTableObjectMaximumLength(TNode<WasmTableObject> p_o, TNode<Union<BigInt, HeapNumber, Smi, Undefined>> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=224&c=3
-  TNode<Smi> LoadWasmTableObjectRawType(TNode<WasmTableObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=224&c=3
-  void StoreWasmTableObjectRawType(TNode<WasmTableObject> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=226&c=3
-  TNode<TrustedPointerT> LoadWasmTableObjectTrustedDispatchTable(TNode<WasmTableObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=226&c=3
-  void StoreWasmTableObjectTrustedDispatchTable(TNode<WasmTableObject> p_o, TNode<TrustedPointerT> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=230&c=3
-  TNode<TrustedPointerT> LoadWasmTableObjectTrustedData(TNode<WasmTableObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=230&c=3
-  void StoreWasmTableObjectTrustedData(TNode<WasmTableObject> p_o, TNode<TrustedPointerT> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=231&c=3
-  TNode<Uint8T> LoadWasmTableObjectAddressType(TNode<WasmTableObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=231&c=3
-  void StoreWasmTableObjectAddressType(TNode<WasmTableObject> p_o, TNode<Uint8T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=233&c=3
-  TNode<Uint8T> LoadWasmTableObjectPaddingForAddressType0(TNode<WasmTableObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=233&c=3
-  void StoreWasmTableObjectPaddingForAddressType0(TNode<WasmTableObject> p_o, TNode<Uint8T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=234&c=3
-  TNode<Uint16T> LoadWasmTableObjectPaddingForAddressType1(TNode<WasmTableObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=234&c=3
-  void StoreWasmTableObjectPaddingForAddressType1(TNode<WasmTableObject> p_o, TNode<Uint16T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=241&c=3
-  TNode<Union<JSArrayBuffer, Undefined>> LoadWasmMemoryObjectArrayBuffer(TNode<WasmMemoryObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=241&c=3
-  void StoreWasmMemoryObjectArrayBuffer(TNode<WasmMemoryObject> p_o, TNode<Union<JSArrayBuffer, Undefined>> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=246&c=3
-  TNode<Foreign> LoadWasmMemoryObjectManagedBackingStore(TNode<WasmMemoryObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=246&c=3
-  void StoreWasmMemoryObjectManagedBackingStore(TNode<WasmMemoryObject> p_o, TNode<Foreign> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=248&c=3
-  TNode<Smi> LoadWasmMemoryObjectMaximumPages(TNode<WasmMemoryObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=248&c=3
-  void StoreWasmMemoryObjectMaximumPages(TNode<WasmMemoryObject> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=249&c=3
-  TNode<WeakArrayList> LoadWasmMemoryObjectInstances(TNode<WasmMemoryObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=249&c=3
-  void StoreWasmMemoryObjectInstances(TNode<WasmMemoryObject> p_o, TNode<WeakArrayList> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=250&c=3
-  TNode<Uint8T> LoadWasmMemoryObjectAddressType(TNode<WasmMemoryObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=250&c=3
-  void StoreWasmMemoryObjectAddressType(TNode<WasmMemoryObject> p_o, TNode<Uint8T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=252&c=3
-  TNode<Uint8T> LoadWasmMemoryObjectPaddingForFlags0(TNode<WasmMemoryObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=252&c=3
-  void StoreWasmMemoryObjectPaddingForFlags0(TNode<WasmMemoryObject> p_o, TNode<Uint8T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=253&c=3
-  TNode<Uint16T> LoadWasmMemoryObjectPaddingForFlags1(TNode<WasmMemoryObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=253&c=3
-  void StoreWasmMemoryObjectPaddingForFlags1(TNode<WasmMemoryObject> p_o, TNode<Uint16T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=262&c=3
-  TNode<Weak<HeapObject>> LoadWasmMemoryMapDescriptorMemory(TNode<WasmMemoryMapDescriptor> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=262&c=3
-  void StoreWasmMemoryMapDescriptorMemory(TNode<WasmMemoryMapDescriptor> p_o, TNode<Weak<HeapObject>> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=263&c=3
-  TNode<Int32T> LoadWasmMemoryMapDescriptorFileDescriptor(TNode<WasmMemoryMapDescriptor> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=263&c=3
-  void StoreWasmMemoryMapDescriptorFileDescriptor(TNode<WasmMemoryMapDescriptor> p_o, TNode<Int32T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=265&c=3
-  TNode<Uint32T> LoadWasmMemoryMapDescriptorOffset(TNode<WasmMemoryMapDescriptor> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=265&c=3
-  void StoreWasmMemoryMapDescriptorOffset(TNode<WasmMemoryMapDescriptor> p_o, TNode<Uint32T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=266&c=3
-  TNode<Uint32T> LoadWasmMemoryMapDescriptorSize(TNode<WasmMemoryMapDescriptor> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=266&c=3
-  void StoreWasmMemoryMapDescriptorSize(TNode<WasmMemoryMapDescriptor> p_o, TNode<Uint32T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=274&c=3
-  TNode<TrustedPointerT> LoadWasmGlobalObjectTrustedData(TNode<WasmGlobalObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=274&c=3
-  void StoreWasmGlobalObjectTrustedData(TNode<WasmGlobalObject> p_o, TNode<TrustedPointerT> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=279&c=3
-  TNode<Union<ByteArray, FixedArray>> LoadWasmGlobalObjectBuffer(TNode<WasmGlobalObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=279&c=3
-  void StoreWasmGlobalObjectBuffer(TNode<WasmGlobalObject> p_o, TNode<Union<ByteArray, FixedArray>> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=283&c=3
-  TNode<Smi> LoadWasmGlobalObjectOffset(TNode<WasmGlobalObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=283&c=3
-  void StoreWasmGlobalObjectOffset(TNode<WasmGlobalObject> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=284&c=3
-  TNode<Smi> LoadWasmGlobalObjectRawType(TNode<WasmGlobalObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=284&c=3
-  void StoreWasmGlobalObjectRawType(TNode<WasmGlobalObject> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=287&c=3
-  TNode<Smi> LoadWasmGlobalObjectIsMutable(TNode<WasmGlobalObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=287&c=3
-  void StoreWasmGlobalObjectIsMutable(TNode<WasmGlobalObject> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=291&c=3
-  TNode<HeapObject> LoadWasmTagObjectTag(TNode<WasmTagObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=291&c=3
-  void StoreWasmTagObjectTag(TNode<WasmTagObject> p_o, TNode<HeapObject> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=292&c=3
-  TNode<Smi> LoadWasmTagObjectCanonicalTypeIndex(TNode<WasmTagObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=292&c=3
-  void StoreWasmTagObjectCanonicalTypeIndex(TNode<WasmTagObject> p_o, TNode<Smi> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=293&c=3
-  TNode<TrustedPointerT> LoadWasmTagObjectTrustedData(TNode<WasmTagObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=293&c=3
-  void StoreWasmTagObjectTrustedData(TNode<WasmTagObject> p_o, TNode<TrustedPointerT> p_v);
-  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=34&c=3
-  TNode<Int32T> LoadJSFunctionDispatchHandle(TNode<JSFunction> p_o);
-  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=34&c=3
-  void StoreJSFunctionDispatchHandle(TNode<JSFunction> p_o, TNode<Int32T> p_v);
-  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=36&c=3
-  TNode<SharedFunctionInfo> LoadJSFunctionSharedFunctionInfo(TNode<JSFunction> p_o);
-  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=36&c=3
-  void StoreJSFunctionSharedFunctionInfo(TNode<JSFunction> p_o, TNode<SharedFunctionInfo> p_v);
-  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=37&c=3
-  TNode<Context> LoadJSFunctionContext(TNode<JSFunction> p_o);
-  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=37&c=3
-  void StoreJSFunctionContext(TNode<JSFunction> p_o, TNode<Context> p_v);
-  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=38&c=3
-  TNode<FeedbackCell> LoadJSFunctionFeedbackCell(TNode<JSFunction> p_o);
-  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=38&c=3
-  void StoreJSFunctionFeedbackCell(TNode<JSFunction> p_o, TNode<FeedbackCell> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=299&c=3
-  TNode<Foreign> LoadAsmWasmDataManagedNativeModule(TNode<AsmWasmData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=299&c=3
-  void StoreAsmWasmDataManagedNativeModule(TNode<AsmWasmData> p_o, TNode<Foreign> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=300&c=3
-  TNode<HeapNumber> LoadAsmWasmDataUsesBitset(TNode<AsmWasmData> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=300&c=3
-  void StoreAsmWasmDataUsesBitset(TNode<AsmWasmData> p_o, TNode<HeapNumber> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=304&c=3
-  TNode<Uint32T> LoadWasmTypeInfoCanonicalType(TNode<WasmTypeInfo> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=304&c=3
-  void StoreWasmTypeInfoCanonicalType(TNode<WasmTypeInfo> p_o, TNode<Uint32T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=305&c=3
-  TNode<Uint32T> LoadWasmTypeInfoCanonicalElementType(TNode<WasmTypeInfo> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=305&c=3
-  void StoreWasmTypeInfoCanonicalElementType(TNode<WasmTypeInfo> p_o, TNode<Uint32T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=306&c=9
-  TNode<Smi> LoadWasmTypeInfoSupertypesLength(TNode<WasmTypeInfo> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
-  TorqueStructSlice_Object_MutableReference_Object_0 FieldSliceWasmTypeInfoSupertypes(TNode<WasmTypeInfo> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
-  TNode<Object> LoadWasmTypeInfoSupertypes(TNode<WasmTypeInfo> p_o, TNode<IntPtrT> p_i);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
-  void StoreWasmTypeInfoSupertypes(TNode<WasmTypeInfo> p_o, TNode<IntPtrT> p_i, TNode<Object> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=319&c=3
-  TNode<Uint32T> LoadWasmArrayLength(TNode<WasmArray> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=319&c=3
-  void StoreWasmArrayLength(TNode<WasmArray> p_o, TNode<Uint32T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=326&c=3
-  TNode<String> LoadWasmStringViewIterString(TNode<WasmStringViewIter> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=326&c=3
-  void StoreWasmStringViewIterString(TNode<WasmStringViewIter> p_o, TNode<String> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=327&c=3
-  TNode<Uint32T> LoadWasmStringViewIterOffset(TNode<WasmStringViewIter> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=327&c=3
-  void StoreWasmStringViewIterOffset(TNode<WasmStringViewIter> p_o, TNode<Uint32T> p_v);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=339&c=3
-  TNode<JSReceiver> LoadWasmSuspendingObjectCallable(TNode<WasmSuspendingObject> p_o);
-  // https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=339&c=3
-  void StoreWasmSuspendingObjectCallable(TNode<WasmSuspendingObject> p_o, TNode<JSReceiver> p_v);
   // https://crsrc.org/c/v8/src/objects/js-generator.tq?l=6&c=3
   TNode<JSFunction> LoadJSGeneratorObjectFunction(TNode<JSGeneratorObject> p_o);
   // https://crsrc.org/c/v8/src/objects/js-generator.tq?l=6&c=3
@@ -979,6 +625,22 @@ class V8_EXPORT_PRIVATE TorqueGeneratedExportedMacrosAssembler {
   TNode<Union<Smi, Undefined>> LoadJSRegExpFlags(TNode<JSRegExp> p_o);
   // https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=61&c=3
   void StoreJSRegExpFlags(TNode<JSRegExp> p_o, TNode<Union<Smi, Undefined>> p_v);
+  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=34&c=3
+  TNode<Int32T> LoadJSFunctionDispatchHandle(TNode<JSFunction> p_o);
+  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=34&c=3
+  void StoreJSFunctionDispatchHandle(TNode<JSFunction> p_o, TNode<Int32T> p_v);
+  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=36&c=3
+  TNode<SharedFunctionInfo> LoadJSFunctionSharedFunctionInfo(TNode<JSFunction> p_o);
+  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=36&c=3
+  void StoreJSFunctionSharedFunctionInfo(TNode<JSFunction> p_o, TNode<SharedFunctionInfo> p_v);
+  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=37&c=3
+  TNode<Context> LoadJSFunctionContext(TNode<JSFunction> p_o);
+  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=37&c=3
+  void StoreJSFunctionContext(TNode<JSFunction> p_o, TNode<Context> p_v);
+  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=38&c=3
+  TNode<FeedbackCell> LoadJSFunctionFeedbackCell(TNode<JSFunction> p_o);
+  // https://crsrc.org/c/v8/src/objects/js-function.tq?l=38&c=3
+  void StoreJSFunctionFeedbackCell(TNode<JSFunction> p_o, TNode<FeedbackCell> p_v);
   // https://crsrc.org/c/v8/src/objects/js-function.tq?l=57&c=3
   TNode<Union<JSReceiver, Map, TheHole>> LoadJSFunctionWithPrototypePrototypeOrInitialMap(TNode<JSFunctionWithPrototype> p_o);
   // https://crsrc.org/c/v8/src/objects/js-function.tq?l=57&c=3
@@ -1060,7 +722,7 @@ class V8_EXPORT_PRIVATE TorqueGeneratedExportedMacrosAssembler {
   // https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=11&c=3
   void StoreSwissNameDictionaryMetaTable(TNode<SwissNameDictionary> p_o, TNode<ByteArray> p_v);
   // https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=12&c=3
-  TorqueStructSlice_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_MutableReference_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0 FieldSliceSwissNameDictionaryDataTable(TNode<SwissNameDictionary> p_o);
+  TorqueStructSlice_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_MutableReference_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0 FieldSliceSwissNameDictionaryDataTable(TNode<SwissNameDictionary> p_o);
   // https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=12&c=3
   TNode<Union<BigInt, Boolean, HeapNumber, JSReceiver, Null, Smi, String, Symbol, TheHole, Undefined>> LoadSwissNameDictionaryDataTable(TNode<SwissNameDictionary> p_o, TNode<IntPtrT> p_i);
   // https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=12&c=3
@@ -1195,14 +857,14 @@ class V8_EXPORT_PRIVATE TorqueGeneratedExportedMacrosAssembler {
   TNode<Object> LoadMapConstructorOrBackPointerOrNativeContext(TNode<Map> p_o);
   // https://crsrc.org/c/v8/src/objects/map.tq?l=84&c=3
   void StoreMapConstructorOrBackPointerOrNativeContext(TNode<Map> p_o, TNode<Object> p_v);
-  // https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
-  TNode<Union<DescriptorArray, WasmStruct>> LoadMapInstanceDescriptors(TNode<Map> p_o);
-  // https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
-  void StoreMapInstanceDescriptors(TNode<Map> p_o, TNode<Union<DescriptorArray, WasmStruct>> p_v);
-  // https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
-  TNode<Union<Map, WeakArrayList>> LoadMapDependentCode(TNode<Map> p_o);
-  // https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
-  void StoreMapDependentCode(TNode<Map> p_o, TNode<Union<Map, WeakArrayList>> p_v);
+  // https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
+  TNode<DescriptorArray> LoadMapInstanceDescriptors(TNode<Map> p_o);
+  // https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
+  void StoreMapInstanceDescriptors(TNode<Map> p_o, TNode<DescriptorArray> p_v);
+  // https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
+  TNode<WeakArrayList> LoadMapDependentCode(TNode<Map> p_o);
+  // https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
+  void StoreMapDependentCode(TNode<Map> p_o, TNode<WeakArrayList> p_v);
   // https://crsrc.org/c/v8/src/objects/map.tq?l=95&c=3
   TNode<Union<Cell, Smi>> LoadMapPrototypeValidityCell(TNode<Map> p_o);
   // https://crsrc.org/c/v8/src/objects/map.tq?l=95&c=3
@@ -1231,6 +893,8 @@ class V8_EXPORT_PRIVATE TorqueGeneratedExportedMacrosAssembler {
   TNode<Uint32T> LoadAccessorInfoFlags(TNode<AccessorInfo> p_o);
   // https://crsrc.org/c/v8/src/objects/api-callbacks.tq?l=63&c=3
   void StoreAccessorInfoFlags(TNode<AccessorInfo> p_o, TNode<Uint32T> p_v);
+  // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=8&c=9
+  TNode<Smi> LoadFixedArrayBaseLength(TNode<FixedArrayBase> p_o);
   // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=14&c=3
   TorqueStructSlice_Object_MutableReference_Object_0 FieldSliceFixedArrayObjects(TNode<FixedArray> p_o);
   // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=14&c=3
@@ -1693,6 +1357,12 @@ class V8_EXPORT_PRIVATE TorqueGeneratedExportedMacrosAssembler {
   TNode<Union<Smi, TrustedObject>> LoadProtectedWeakFixedArrayObjects(TNode<ProtectedWeakFixedArray> p_o, TNode<IntPtrT> p_i);
   // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=59&c=3
   void StoreProtectedWeakFixedArrayObjects(TNode<ProtectedWeakFixedArray> p_o, TNode<IntPtrT> p_i, TNode<Union<Smi, TrustedObject>> p_v);
+  // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+  TorqueStructSlice_uint8_MutableReference_uint8_0 FieldSliceByteArrayValues(TNode<ByteArray> p_o);
+  // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+  TNode<Uint8T> LoadByteArrayValues(TNode<ByteArray> p_o, TNode<IntPtrT> p_i);
+  // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+  void StoreByteArrayValues(TNode<ByteArray> p_o, TNode<IntPtrT> p_i, TNode<Uint8T> p_v);
   // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=69&c=9
   TNode<Smi> LoadTrustedByteArrayLength(TNode<TrustedByteArray> p_o);
   // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=70&c=3
@@ -1778,7 +1448,7 @@ class V8_EXPORT_PRIVATE TorqueGeneratedExportedMacrosAssembler {
   // https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=31&c=31
   void StoreSmallOrderedHashSetPadding(TNode<SmallOrderedHashSet> p_o, TNode<IntPtrT> p_i, TNode<Uint8T> p_v);
   // https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=32&c=3
-  TorqueStructSlice_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_MutableReference_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0 FieldSliceSmallOrderedHashSetDataTable(TNode<SmallOrderedHashSet> p_o);
+  TorqueStructSlice_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_MutableReference_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0 FieldSliceSmallOrderedHashSetDataTable(TNode<SmallOrderedHashSet> p_o);
   // https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=32&c=3
   TNode<Union<BigInt, Boolean, HeapNumber, JSReceiver, Null, Smi, String, Symbol, TheHole, Undefined>> LoadSmallOrderedHashSetDataTable(TNode<SmallOrderedHashSet> p_o, TNode<IntPtrT> p_i);
   // https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=32&c=3
@@ -2115,6 +1785,14 @@ class V8_EXPORT_PRIVATE TorqueGeneratedExportedMacrosAssembler {
   TNode<Foreign> LoadSyntheticModuleEvaluationSteps(TNode<SyntheticModule> p_o);
   // https://crsrc.org/c/v8/src/objects/synthetic-module.tq?l=9&c=3
   void StoreSyntheticModuleEvaluationSteps(TNode<SyntheticModule> p_o, TNode<Foreign> p_v);
+  // https://crsrc.org/c/v8/src/objects/foreign.tq?l=8&c=3
+  TNode<ExternalPointerT> LoadForeignForeignAddress(TNode<Foreign> p_o);
+  // https://crsrc.org/c/v8/src/objects/foreign.tq?l=8&c=3
+  void StoreForeignForeignAddress(TNode<Foreign> p_o, TNode<ExternalPointerT> p_v);
+  // https://crsrc.org/c/v8/src/objects/foreign.tq?l=12&c=3
+  TNode<RawPtrT> LoadTrustedForeignForeignAddress(TNode<TrustedForeign> p_o);
+  // https://crsrc.org/c/v8/src/objects/foreign.tq?l=12&c=3
+  void StoreTrustedForeignForeignAddress(TNode<TrustedForeign> p_o, TNode<RawPtrT> p_v);
   // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=56&c=3
   TNode<CppHeapPointerT> LoadJSAPIObjectWithEmbedderSlotsCppHeapWrappable(TNode<JSAPIObjectWithEmbedderSlots> p_o);
   // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=56&c=3

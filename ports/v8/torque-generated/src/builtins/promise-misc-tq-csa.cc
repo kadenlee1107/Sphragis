@@ -1,7 +1,6 @@
 #include "src/ast/ast.h"
 #include "src/builtins/builtins-array-gen.h"
 #include "src/builtins/builtins-bigint-gen.h"
-#include "src/builtins/builtins-call-gen.h"
 #include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-data-view-gen.h"
@@ -15,10 +14,8 @@
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-typed-array-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins-wasm-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/code-factory.h"
-#include "src/debug/debug-wasm-objects.h"
 #include "src/heap/factory-inl.h"
 #include "src/ic/binary-op-assembler.h"
 #include "src/ic/handler-configuration-inl.h"
@@ -68,9 +65,6 @@
 #include "src/objects/turbofan-types.h"
 #include "src/objects/turboshaft-types.h"
 #include "src/torque/runtime-support.h"
-#include "src/wasm/value-type.h"
-#include "src/wasm/wasm-linkage.h"
-#include "src/wasm/wasm-module.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 // Required Builtins:
 #include "torque-generated/src/builtins/promise-misc-tq-csa.h"
@@ -904,7 +898,7 @@ void BranchIfAccessCheckFailed_0(compiler::CodeAssemblerState* state_, TNode<Con
     tmp5 = FromConstexpr_intptr_constexpr_int31_0(state_, 20);
     tmp6 = CodeStubAssembler(state_).LoadReference<Context>(CodeStubAssembler::Reference{tmp1, tmp5});
     tmp7 = CodeStubAssembler(state_).LoadNativeContext(TNode<Context>{tmp6});
-    tmp8 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{p_nativeContext}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp7});
+    tmp8 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{p_nativeContext}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp7});
     ca_.Branch(tmp8, &block14, std::vector<compiler::Node*>{phi_bb12_4, phi_bb12_5}, &block15, std::vector<compiler::Node*>{phi_bb12_4, phi_bb12_5});
   }
 
@@ -953,7 +947,7 @@ void BranchIfAccessCheckFailed_0(compiler::CodeAssemblerState* state_, TNode<Con
     ca_.Bind(&block6);
     tmp11 = TORQUE_CAST(CodeStubAssembler(state_).CallRuntime(Runtime::kAllowDynamicFunction, p_context, p_promiseConstructor)); 
     tmp12 = True_0(state_);
-    tmp13 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp11}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp12});
+    tmp13 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp11}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp12});
     ca_.Branch(tmp13, &block21, std::vector<compiler::Node*>{}, &block22, std::vector<compiler::Node*>{});
   }
 

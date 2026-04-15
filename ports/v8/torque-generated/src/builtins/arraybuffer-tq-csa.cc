@@ -1,7 +1,6 @@
 #include "src/ast/ast.h"
 #include "src/builtins/builtins-array-gen.h"
 #include "src/builtins/builtins-bigint-gen.h"
-#include "src/builtins/builtins-call-gen.h"
 #include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-data-view-gen.h"
@@ -15,10 +14,8 @@
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-typed-array-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins-wasm-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/code-factory.h"
-#include "src/debug/debug-wasm-objects.h"
 #include "src/heap/factory-inl.h"
 #include "src/ic/binary-op-assembler.h"
 #include "src/ic/handler-configuration-inl.h"
@@ -68,13 +65,9 @@
 #include "src/objects/turbofan-types.h"
 #include "src/objects/turboshaft-types.h"
 #include "src/torque/runtime-support.h"
-#include "src/wasm/value-type.h"
-#include "src/wasm/wasm-linkage.h"
-#include "src/wasm/wasm-module.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 // Required Builtins:
 #include "torque-generated/src/builtins/arraybuffer-tq-csa.h"
-#include "torque-generated/src/wasm/wasm-objects-tq-csa.h"
 #include "torque-generated/src/objects/js-array-buffer-tq-csa.h"
 #include "torque-generated/src/builtins/arraybuffer-tq-csa.h"
 #include "torque-generated/src/builtins/convert-tq-csa.h"
@@ -154,10 +147,6 @@ TF_BUILTIN(ArrayBufferPrototypeGetMaxByteLength, CodeStubAssembler) {
   compiler::CodeAssemblerParameterizedLabel<> block7(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
   compiler::CodeAssemblerParameterizedLabel<> block8(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
   compiler::CodeAssemblerParameterizedLabel<> block9(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block11(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block16(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block15(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block12(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
   compiler::CodeAssemblerParameterizedLabel<> block10(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
     ca_.Goto(&block0);
 
@@ -215,69 +204,22 @@ TF_BUILTIN(ArrayBufferPrototypeGetMaxByteLength, CodeStubAssembler) {
     ca_.Branch(tmp7, &block9, std::vector<compiler::Node*>{}, &block10, std::vector<compiler::Node*>{});
   }
 
-  TNode<Symbol> tmp8;
-  TNode<Boolean> tmp9;
-  TNode<True> tmp10;
-  TNode<BoolT> tmp11;
+  TNode<UintPtrT> tmp8;
+  TNode<Number> tmp9;
   if (block9.is_used()) {
     ca_.Bind(&block9);
-    tmp8 = CodeStubAssembler(state_).ArrayBufferWasmMemorySymbol();
-    tmp9 = ca_.CallBuiltin<Boolean>(Builtin::kHasProperty, parameter0, tmp0, tmp8);
-    tmp10 = True_0(state_);
-    tmp11 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp9}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp10});
-    ca_.Branch(tmp11, &block11, std::vector<compiler::Node*>{}, &block12, std::vector<compiler::Node*>{});
+    tmp8 = CodeStubAssembler(state_).LoadJSArrayBufferMaxByteLength(TNode<JSArrayBuffer>{tmp0});
+    tmp9 = Convert_Number_uintptr_0(state_, TNode<UintPtrT>{tmp8});
+    CodeStubAssembler(state_).Return(tmp9);
   }
 
-  TNode<Symbol> tmp12;
-  TNode<JSAny> tmp13;
-  TNode<WasmMemoryObject> tmp14;
-  if (block11.is_used()) {
-    ca_.Bind(&block11);
-    tmp12 = CodeStubAssembler(state_).ArrayBufferWasmMemorySymbol();
-    tmp13 = CodeStubAssembler(state_).GetProperty(TNode<Context>{parameter0}, TNode<JSAny>{tmp0}, TNode<JSAny>{tmp12});
-    compiler::CodeAssemblerLabel label15(&ca_);
-    tmp14 = Cast_WasmMemoryObject_1(state_, TNode<Context>{parameter0}, TNode<Object>{tmp13}, &label15);
-    ca_.Goto(&block15);
-    if (label15.is_used()) {
-      ca_.Bind(&label15);
-      ca_.Goto(&block16);
-    }
-  }
-
-  if (block16.is_used()) {
-    ca_.Bind(&block16);
-    CodeStubAssembler(state_).Unreachable();
-  }
-
-  TNode<IntPtrT> tmp16;
-  TNode<Smi> tmp17;
-  TNode<Smi> tmp18;
-  TNode<Number> tmp19;
-  if (block15.is_used()) {
-    ca_.Bind(&block15);
-    tmp16 = FromConstexpr_intptr_constexpr_int31_0(state_, 20);
-    tmp17 = CodeStubAssembler(state_).LoadReference<Smi>(CodeStubAssembler::Reference{tmp14, tmp16});
-    tmp18 = SmiConstant_0(state_, IntegerLiteral(false, 0x10000ull));
-    tmp19 = CodeStubAssembler(state_).SmiMul(TNode<Smi>{tmp17}, TNode<Smi>{tmp18});
-    CodeStubAssembler(state_).Return(tmp19);
-  }
-
-  TNode<UintPtrT> tmp20;
-  TNode<Number> tmp21;
-  if (block12.is_used()) {
-    ca_.Bind(&block12);
-    tmp20 = CodeStubAssembler(state_).LoadJSArrayBufferMaxByteLength(TNode<JSArrayBuffer>{tmp0});
-    tmp21 = Convert_Number_uintptr_0(state_, TNode<UintPtrT>{tmp20});
-    CodeStubAssembler(state_).Return(tmp21);
-  }
-
-  TNode<UintPtrT> tmp22;
-  TNode<Number> tmp23;
+  TNode<UintPtrT> tmp10;
+  TNode<Number> tmp11;
   if (block10.is_used()) {
     ca_.Bind(&block10);
-    tmp22 = CodeStubAssembler(state_).LoadJSArrayBufferByteLength(TNode<JSArrayBuffer>{tmp0});
-    tmp23 = Convert_Number_uintptr_0(state_, TNode<UintPtrT>{tmp22});
-    CodeStubAssembler(state_).Return(tmp23);
+    tmp10 = CodeStubAssembler(state_).LoadJSArrayBufferByteLength(TNode<JSArrayBuffer>{tmp0});
+    tmp11 = Convert_Number_uintptr_0(state_, TNode<UintPtrT>{tmp10});
+    CodeStubAssembler(state_).Return(tmp11);
   }
 }
 
@@ -506,13 +448,6 @@ TF_BUILTIN(SharedArrayBufferPrototypeGetMaxByteLength, CodeStubAssembler) {
   compiler::CodeAssemblerParameterizedLabel<> block3(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
   compiler::CodeAssemblerParameterizedLabel<> block5(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
   compiler::CodeAssemblerParameterizedLabel<> block6(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block16(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block17(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<BoolT> block18(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block14(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block22(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block21(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block15(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
     ca_.Goto(&block0);
 
   TNode<JSArrayBuffer> tmp0;
@@ -550,80 +485,13 @@ TF_BUILTIN(SharedArrayBufferPrototypeGetMaxByteLength, CodeStubAssembler) {
     CodeStubAssembler(state_).ThrowTypeError(TNode<Context>{parameter0}, CastIfEnumClass<MessageTemplate>(MessageTemplate::kIncompatibleMethodReceiver), TNode<Object>{tmp5}, TNode<Object>{parameter1});
   }
 
-  TNode<BoolT> tmp6;
+  TNode<UintPtrT> tmp6;
+  TNode<Number> tmp7;
   if (block6.is_used()) {
     ca_.Bind(&block6);
-    tmp6 = IsResizableArrayBuffer_0(state_, TNode<JSArrayBuffer>{tmp0});
-    ca_.Branch(tmp6, &block16, std::vector<compiler::Node*>{}, &block17, std::vector<compiler::Node*>{});
-  }
-
-  TNode<Symbol> tmp7;
-  TNode<Boolean> tmp8;
-  TNode<True> tmp9;
-  TNode<BoolT> tmp10;
-  if (block16.is_used()) {
-    ca_.Bind(&block16);
-    tmp7 = CodeStubAssembler(state_).ArrayBufferWasmMemorySymbol();
-    tmp8 = ca_.CallBuiltin<Boolean>(Builtin::kHasProperty, parameter0, tmp0, tmp7);
-    tmp9 = True_0(state_);
-    tmp10 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp8}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp9});
-    ca_.Goto(&block18, tmp10);
-  }
-
-  TNode<BoolT> tmp11;
-  if (block17.is_used()) {
-    ca_.Bind(&block17);
-    tmp11 = FromConstexpr_bool_constexpr_bool_0(state_, false);
-    ca_.Goto(&block18, tmp11);
-  }
-
-  TNode<BoolT> phi_bb18_4;
-  if (block18.is_used()) {
-    ca_.Bind(&block18, &phi_bb18_4);
-    ca_.Branch(phi_bb18_4, &block14, std::vector<compiler::Node*>{}, &block15, std::vector<compiler::Node*>{});
-  }
-
-  TNode<Symbol> tmp12;
-  TNode<JSAny> tmp13;
-  TNode<WasmMemoryObject> tmp14;
-  if (block14.is_used()) {
-    ca_.Bind(&block14);
-    tmp12 = CodeStubAssembler(state_).ArrayBufferWasmMemorySymbol();
-    tmp13 = CodeStubAssembler(state_).GetProperty(TNode<Context>{parameter0}, TNode<JSAny>{tmp0}, TNode<JSAny>{tmp12});
-    compiler::CodeAssemblerLabel label15(&ca_);
-    tmp14 = Cast_WasmMemoryObject_1(state_, TNode<Context>{parameter0}, TNode<Object>{tmp13}, &label15);
-    ca_.Goto(&block21);
-    if (label15.is_used()) {
-      ca_.Bind(&label15);
-      ca_.Goto(&block22);
-    }
-  }
-
-  if (block22.is_used()) {
-    ca_.Bind(&block22);
-    CodeStubAssembler(state_).Unreachable();
-  }
-
-  TNode<IntPtrT> tmp16;
-  TNode<Smi> tmp17;
-  TNode<Smi> tmp18;
-  TNode<Number> tmp19;
-  if (block21.is_used()) {
-    ca_.Bind(&block21);
-    tmp16 = FromConstexpr_intptr_constexpr_int31_0(state_, 20);
-    tmp17 = CodeStubAssembler(state_).LoadReference<Smi>(CodeStubAssembler::Reference{tmp14, tmp16});
-    tmp18 = SmiConstant_0(state_, IntegerLiteral(false, 0x10000ull));
-    tmp19 = CodeStubAssembler(state_).SmiMul(TNode<Smi>{tmp17}, TNode<Smi>{tmp18});
-    CodeStubAssembler(state_).Return(tmp19);
-  }
-
-  TNode<UintPtrT> tmp20;
-  TNode<Number> tmp21;
-  if (block15.is_used()) {
-    ca_.Bind(&block15);
-    tmp20 = CodeStubAssembler(state_).LoadJSArrayBufferMaxByteLength(TNode<JSArrayBuffer>{tmp0});
-    tmp21 = Convert_Number_uintptr_0(state_, TNode<UintPtrT>{tmp20});
-    CodeStubAssembler(state_).Return(tmp21);
+    tmp6 = CodeStubAssembler(state_).LoadJSArrayBufferMaxByteLength(TNode<JSArrayBuffer>{tmp0});
+    tmp7 = Convert_Number_uintptr_0(state_, TNode<UintPtrT>{tmp6});
+    CodeStubAssembler(state_).Return(tmp7);
   }
 }
 
@@ -819,67 +687,6 @@ TNode<JSArrayBuffer> Cast_JSArrayBuffer_1(compiler::CodeAssemblerState* state_, 
 
     ca_.Bind(&block7);
   return TNode<JSArrayBuffer>{tmp2};
-}
-
-// https://crsrc.org/c/v8/src/builtins/arraybuffer.tq?l=59&c=28
-TNode<WasmMemoryObject> Cast_WasmMemoryObject_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError) {
-  compiler::CodeAssembler ca_(state_);
-  compiler::CodeAssembler::SourcePositionScope pos_scope(&ca_);
-  compiler::CodeAssemblerParameterizedLabel<> block0(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block4(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block3(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block6(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block5(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block1(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block7(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-    ca_.Goto(&block0);
-
-  TNode<HeapObject> tmp0;
-  if (block0.is_used()) {
-    ca_.Bind(&block0);
-    compiler::CodeAssemblerLabel label1(&ca_);
-    tmp0 = CodeStubAssembler(state_).TaggedToHeapObject(TNode<Object>{p_o}, &label1);
-    ca_.Goto(&block3);
-    if (label1.is_used()) {
-      ca_.Bind(&label1);
-      ca_.Goto(&block4);
-    }
-  }
-
-  if (block4.is_used()) {
-    ca_.Bind(&block4);
-    ca_.Goto(&block1);
-  }
-
-  TNode<WasmMemoryObject> tmp2;
-  if (block3.is_used()) {
-    ca_.Bind(&block3);
-    compiler::CodeAssemblerLabel label3(&ca_);
-    tmp2 = Cast_WasmMemoryObject_0(state_, TNode<HeapObject>{tmp0}, &label3);
-    ca_.Goto(&block5);
-    if (label3.is_used()) {
-      ca_.Bind(&label3);
-      ca_.Goto(&block6);
-    }
-  }
-
-  if (block6.is_used()) {
-    ca_.Bind(&block6);
-    ca_.Goto(&block1);
-  }
-
-  if (block5.is_used()) {
-    ca_.Bind(&block5);
-    ca_.Goto(&block7);
-  }
-
-  if (block1.is_used()) {
-    ca_.Bind(&block1);
-    ca_.Goto(label_CastError);
-  }
-
-    ca_.Bind(&block7);
-  return TNode<WasmMemoryObject>{tmp2};
 }
 
 // https://crsrc.org/c/v8/src/builtins/arraybuffer.tq?l=201&c=5

@@ -636,7 +636,9 @@
   V_WIDE(IllegalHandlerWide, interpreter::OperandScale::kDouble, interpreter::Bytecode::kIllegal) \
   V_WIDE(IllegalHandlerExtraWide, interpreter::OperandScale::kQuadruple, interpreter::Bytecode::kIllegal) \
 
+
+constexpr int kNumberOfBytecodeHandlers = 211;
+constexpr int kNumberOfWideBytecodeHandlers = 211;
+
 #endif
 
-constexpr int kNumberOfBytecodeHandlers =      211;
-constexpr int kNumberOfWideBytecodeHandlers =      211;

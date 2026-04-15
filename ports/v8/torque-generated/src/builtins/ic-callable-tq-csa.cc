@@ -1,7 +1,6 @@
 #include "src/ast/ast.h"
 #include "src/builtins/builtins-array-gen.h"
 #include "src/builtins/builtins-bigint-gen.h"
-#include "src/builtins/builtins-call-gen.h"
 #include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-data-view-gen.h"
@@ -15,10 +14,8 @@
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-typed-array-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins-wasm-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/code-factory.h"
-#include "src/debug/debug-wasm-objects.h"
 #include "src/heap/factory-inl.h"
 #include "src/ic/binary-op-assembler.h"
 #include "src/ic/handler-configuration-inl.h"
@@ -68,9 +65,6 @@
 #include "src/objects/turbofan-types.h"
 #include "src/objects/turboshaft-types.h"
 #include "src/torque/runtime-support.h"
-#include "src/wasm/value-type.h"
-#include "src/wasm/wasm-linkage.h"
-#include "src/wasm/wasm-module.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 // Required Builtins:
 #include "torque-generated/src/builtins/ic-callable-tq-csa.h"
@@ -119,7 +113,7 @@ TNode<BoolT> InSameNativeContext_0(compiler::CodeAssemblerState* state_, TNode<C
     ca_.Bind(&block0);
     tmp0 = CodeStubAssembler(state_).LoadNativeContext(TNode<Context>{p_lhs});
     tmp1 = CodeStubAssembler(state_).LoadNativeContext(TNode<Context>{p_rhs});
-    tmp2 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp0}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp1});
+    tmp2 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp0}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp1});
     ca_.Goto(&block2);
   }
 
@@ -278,7 +272,7 @@ TNode<BoolT> TaggedEqualPrototypeApplyFunction_0(compiler::CodeAssemblerState* s
   if (block0.is_used()) {
     ca_.Bind(&block0);
     tmp0 = GetPrototypeApplyFunction_0(state_, TNode<Context>{p_context});
-    tmp1 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{p_target}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp0});
+    tmp1 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{p_target}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp0});
     ca_.Goto(&block2);
   }
 
@@ -898,7 +892,7 @@ TNode<BoolT> BothTaggedEqualArrayFunction_0(compiler::CodeAssemblerState* state_
   if (block2.is_used()) {
     ca_.Bind(&block2);
     tmp1 = GetArrayFunction_0(state_, TNode<Context>{p_context});
-    tmp2 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{p_second}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp1});
+    tmp2 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{p_second}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp1});
     ca_.Goto(&block4, tmp2);
   }
 

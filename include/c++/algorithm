@@ -136,9 +136,8 @@ InputIt find_if_not(InputIt first, InputIt last, Pred pred) {
 
 // count
 template<class InputIt, class T>
-typename InputIt::difference_type count(InputIt first, InputIt last, const T& value) {
-    // Use ptrdiff_t for pointer iterators
-    long long n = 0;
+ptrdiff_t count(InputIt first, InputIt last, const T& value) {
+    ptrdiff_t n = 0;
     for (; first != last; ++first)
         if (*first == value) ++n;
     return n;

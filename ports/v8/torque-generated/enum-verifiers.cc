@@ -2,7 +2,6 @@
 #include "src/ast/ast.h"
 #include "src/builtins/builtins-array-gen.h"
 #include "src/builtins/builtins-bigint-gen.h"
-#include "src/builtins/builtins-call-gen.h"
 #include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-data-view-gen.h"
@@ -16,10 +15,8 @@
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-typed-array-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins-wasm-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/code-factory.h"
-#include "src/debug/debug-wasm-objects.h"
 #include "src/heap/factory-inl.h"
 #include "src/ic/binary-op-assembler.h"
 #include "src/ic/handler-configuration-inl.h"
@@ -69,22 +66,11 @@
 #include "src/objects/turbofan-types.h"
 #include "src/objects/turboshaft-types.h"
 #include "src/torque/runtime-support.h"
-#include "src/wasm/value-type.h"
-#include "src/wasm/wasm-linkage.h"
-#include "src/wasm/wasm-module.h"
 
 namespace v8 {
 namespace internal {
 namespace  {
 class EnumVerifier {
-  // AddressType (https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=25&c=1)
-  void VerifyEnum_AddressType(wasm::AddressType x) {
-    switch(x) {
-      case wasm::AddressType::kI32: break;
-      case wasm::AddressType::kI64: break;
-    }
-  }
-
   // IterationKind (https://crsrc.org/c/v8/src/objects/js-array.tq?l=5&c=1)
   void VerifyEnum_IterationKind(IterationKind x) {
     switch(x) {
@@ -781,38 +767,6 @@ class EnumVerifier {
     switch(x) {
       case PromiseBuiltins::FunctionContextSlot::kCapabilitySlot: break;
       case PromiseBuiltins::FunctionContextSlot::kCapabilitiesContextLength: break;
-    }
-  }
-
-  // Promise (https://crsrc.org/c/v8/src/builtins/js-to-wasm.tq?l=68&c=1)
-  void VerifyEnum_Promise(wasm::Promise x) {
-    switch(x) {
-      case wasm::Promise::kPromise: break;
-      case wasm::Promise::kNoPromise: break;
-      case wasm::Promise::kStressSwitch: break;
-    }
-  }
-
-  // StandardType (https://crsrc.org/c/v8/src/builtins/js-to-wasm.tq?l=74&c=1)
-  void VerifyEnum_StandardType(wasm::StandardType x) {
-    switch(x) {
-      case wasm::StandardType::kExtern: break;
-      case wasm::StandardType::kNoExtern: break;
-      case wasm::StandardType::kString: break;
-      case wasm::StandardType::kEq: break;
-      case wasm::StandardType::kI31: break;
-      case wasm::StandardType::kAny: break;
-      default: break;
-    }
-  }
-
-  // RefTypeKind (https://crsrc.org/c/v8/src/builtins/js-to-wasm.tq?l=84&c=1)
-  void VerifyEnum_RefTypeKind(wasm::RefTypeKind x) {
-    switch(x) {
-      case wasm::RefTypeKind::kStruct: break;
-      case wasm::RefTypeKind::kArray: break;
-      case wasm::RefTypeKind::kFunction: break;
-      default: break;
     }
   }
 

@@ -8,34 +8,6 @@
 namespace v8 {
 namespace internal {
 
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=73&c=1
-bool IsWasmFastApiCallData_NonInline(Tagged<HeapObject> o) {
-  return IsWasmFastApiCallData(o);
-}
-
-#ifdef VERIFY_HEAP
-
-template <>
-void TorqueGeneratedWasmFastApiCallData<WasmFastApiCallData, HeapObject>::WasmFastApiCallDataVerify(Isolate* isolate) {
-  TorqueGeneratedClassVerifiers::WasmFastApiCallDataVerify(TrustedCast<WasmFastApiCallData>(*this), isolate);
-}
-
-
-#endif  // VERIFY_HEAP
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=325&c=1
-bool IsWasmStringViewIter_NonInline(Tagged<HeapObject> o) {
-  return IsWasmStringViewIter(o);
-}
-
-#ifdef VERIFY_HEAP
-
-template <>
-void TorqueGeneratedWasmStringViewIter<WasmStringViewIter, HeapObject>::WasmStringViewIterVerify(Isolate* isolate) {
-  TorqueGeneratedClassVerifiers::WasmStringViewIterVerify(TrustedCast<WasmStringViewIter>(*this), isolate);
-}
-
-
-#endif  // VERIFY_HEAP
 // https://crsrc.org/c/v8/src/objects/descriptor-array.tq?l=44&c=1
 bool IsStrongDescriptorArray_NonInline(Tagged<HeapObject> o) {
   return IsStrongDescriptorArray(o);

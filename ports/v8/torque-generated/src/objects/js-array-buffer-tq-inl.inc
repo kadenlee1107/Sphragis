@@ -172,14 +172,14 @@ Tagged<Union<ByteArray, Smi>> TorqueGeneratedJSTypedArray<D, P>::base_pointer() 
 template<class D, class P>
 Tagged<Union<ByteArray, Smi>> TorqueGeneratedJSTypedArray<D, P>::base_pointer(PtrComprCageBase cage_base) const {
   Tagged<Union<ByteArray, Smi>> value = TaggedField<Tagged<Union<ByteArray, Smi>>>::load(cage_base, *this, kBasePointerOffset);
-  DCHECK(IsByteArray(value) || IsSmi(value));
+  DCHECK(IsSmi(value) || IsByteArray(value));
   return value;
 }
 
 // https://crsrc.org/c/v8/src/objects/js-array-buffer.tq?l=123&c=3
 template<class D, class P>
 void TorqueGeneratedJSTypedArray<D, P>::set_base_pointer(Tagged<Union<ByteArray, Smi>> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsByteArray(value) || IsSmi(value)));
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsSmi(value) || IsByteArray(value)));
   WRITE_FIELD(*this, kBasePointerOffset, value);
   CONDITIONAL_WRITE_BARRIER(*this, kBasePointerOffset, value, mode);
 }

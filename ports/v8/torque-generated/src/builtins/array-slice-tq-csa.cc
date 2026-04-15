@@ -1,7 +1,6 @@
 #include "src/ast/ast.h"
 #include "src/builtins/builtins-array-gen.h"
 #include "src/builtins/builtins-bigint-gen.h"
-#include "src/builtins/builtins-call-gen.h"
 #include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-data-view-gen.h"
@@ -15,10 +14,8 @@
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-typed-array-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins-wasm-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/code-factory.h"
-#include "src/debug/debug-wasm-objects.h"
 #include "src/heap/factory-inl.h"
 #include "src/ic/binary-op-assembler.h"
 #include "src/ic/handler-configuration-inl.h"
@@ -68,9 +65,6 @@
 #include "src/objects/turbofan-types.h"
 #include "src/objects/turboshaft-types.h"
 #include "src/torque/runtime-support.h"
-#include "src/wasm/value-type.h"
-#include "src/wasm/wasm-linkage.h"
-#include "src/wasm/wasm-module.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 // Required Builtins:
 #include "torque-generated/src/builtins/array-slice-tq-csa.h"
@@ -381,7 +375,7 @@ TNode<JSArray> HandleFastAliasedSloppyArgumentsSlice_0(compiler::CodeAssemblerSt
     std::tie(tmp35, tmp36) = NewReference_Smi_OR_TheHole_0(state_, TNode<Union<HeapObject, TaggedIndex>>{tmp26}, TNode<IntPtrT>{tmp34}).Flatten();
     tmp37 = CodeStubAssembler(state_).LoadReference<Union<Smi, TheHole>>(CodeStubAssembler::Reference{tmp35, tmp36});
     tmp38 = TheHole_0(state_);
-    tmp39 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp37}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp38});
+    tmp39 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp37}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp38});
     ca_.Branch(tmp39, &block23, std::vector<compiler::Node*>{phi_bb19_12, phi_bb19_15}, &block24, std::vector<compiler::Node*>{phi_bb19_12, phi_bb19_15});
   }
 
@@ -494,7 +488,7 @@ TNode<JSArray> HandleFastAliasedSloppyArgumentsSlice_0(compiler::CodeAssemblerSt
   TNode<Smi> tmp69;
   if (block25.is_used()) {
     ca_.Bind(&block25, &phi_bb25_12, &phi_bb25_15, &phi_bb25_17);
-    tmp65 = UnsafeCast_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(state_, TNode<Context>{p_context}, TNode<Object>{phi_bb25_17});
+    tmp65 = UnsafeCast_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(state_, TNode<Context>{p_context}, TNode<Object>{phi_bb25_17});
     tmp66 = FromConstexpr_Smi_constexpr_int31_0(state_, 1);
     tmp67 = CodeStubAssembler(state_).SmiAdd(TNode<Smi>{phi_bb25_12}, TNode<Smi>{tmp66});
     CodeStubAssembler(state_).StoreFixedArrayElement(TNode<FixedArray>{tmp23}, TNode<Smi>{phi_bb25_12}, TNode<Object>{tmp65}, UNSAFE_SKIP_WRITE_BARRIER);
@@ -846,7 +840,7 @@ TF_BUILTIN(ArrayPrototypeSlice, CodeStubAssembler) {
     tmp11 = FromConstexpr_intptr_constexpr_IntegerLiteral_0(state_, IntegerLiteral(false, 0x1ull));
     tmp12 = CodeStubAssembler(state_).GetArgumentValue(TorqueStructArguments{TNode<RawPtrT>{torque_arguments.frame}, TNode<RawPtrT>{torque_arguments.base}, TNode<IntPtrT>{torque_arguments.length}, TNode<IntPtrT>{torque_arguments.actual_count}}, TNode<IntPtrT>{tmp11});
     tmp13 = Undefined_0(state_);
-    tmp14 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{tmp12}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp13});
+    tmp14 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{tmp12}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp13});
     ca_.Branch(tmp14, &block5, std::vector<compiler::Node*>{}, &block6, std::vector<compiler::Node*>{});
   }
 
@@ -868,7 +862,7 @@ TF_BUILTIN(ArrayPrototypeSlice, CodeStubAssembler) {
   if (block7.is_used()) {
     ca_.Bind(&block7, &phi_bb7_12);
     tmp16 = Undefined_0(state_);
-    tmp17 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{tmp3}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp16});
+    tmp17 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{tmp3}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp16});
     ca_.Branch(tmp17, &block11, std::vector<compiler::Node*>{}, &block12, std::vector<compiler::Node*>{});
   }
 
@@ -899,7 +893,7 @@ TF_BUILTIN(ArrayPrototypeSlice, CodeStubAssembler) {
   if (block14.is_used()) {
     ca_.Bind(&block14);
     tmp21 = Undefined_0(state_);
-    tmp22 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{tmp12}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp21});
+    tmp22 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{tmp12}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp21});
     ca_.Goto(&block16, tmp22);
   }
 
@@ -1018,7 +1012,7 @@ TF_BUILTIN(ArrayPrototypeSlice, CodeStubAssembler) {
     ca_.Bind(&block53, &phi_bb53_10, &phi_bb53_16);
     tmp41 = ca_.CallBuiltin<Boolean>(Builtin::kHasProperty, parameter0, tmp0, phi_bb53_10);
     tmp42 = True_0(state_);
-    tmp43 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp41}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp42});
+    tmp43 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp41}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp42});
     ca_.Branch(tmp43, &block56, std::vector<compiler::Node*>{phi_bb53_10, phi_bb53_16, phi_bb53_10}, &block57, std::vector<compiler::Node*>{phi_bb53_10, phi_bb53_16, phi_bb53_10});
   }
 

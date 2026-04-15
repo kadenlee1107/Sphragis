@@ -1,7 +1,6 @@
 #include "src/ast/ast.h"
 #include "src/builtins/builtins-array-gen.h"
 #include "src/builtins/builtins-bigint-gen.h"
-#include "src/builtins/builtins-call-gen.h"
 #include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-data-view-gen.h"
@@ -15,10 +14,8 @@
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-typed-array-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins-wasm-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/code-factory.h"
-#include "src/debug/debug-wasm-objects.h"
 #include "src/heap/factory-inl.h"
 #include "src/ic/binary-op-assembler.h"
 #include "src/ic/handler-configuration-inl.h"
@@ -68,13 +65,9 @@
 #include "src/objects/turbofan-types.h"
 #include "src/objects/turboshaft-types.h"
 #include "src/torque/runtime-support.h"
-#include "src/wasm/value-type.h"
-#include "src/wasm/wasm-linkage.h"
-#include "src/wasm/wasm-module.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 // Required Builtins:
 #include "torque-generated/src/builtins/reflect-tq-csa.h"
-#include "torque-generated/src/wasm/wasm-objects-tq-csa.h"
 #include "torque-generated/src/builtins/array-find-tq-csa.h"
 #include "torque-generated/src/builtins/convert-tq-csa.h"
 #include "torque-generated/src/builtins/frame-arguments-tq-csa.h"
@@ -204,10 +197,8 @@ TF_BUILTIN(ReflectSetPrototypeOf, CodeStubAssembler) {
   compiler::CodeAssemblerParameterizedLabel<> block0(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
   compiler::CodeAssemblerParameterizedLabel<> block4(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
   compiler::CodeAssemblerParameterizedLabel<> block3(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block5(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block6(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block10(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block9(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
+  compiler::CodeAssemblerParameterizedLabel<> block8(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
+  compiler::CodeAssemblerParameterizedLabel<> block7(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
     ca_.Goto(&block0);
 
   TNode<JSReceiver> tmp0;
@@ -227,42 +218,28 @@ TF_BUILTIN(ReflectSetPrototypeOf, CodeStubAssembler) {
     CodeStubAssembler(state_).ThrowTypeError(TNode<Context>{parameter0}, CastIfEnumClass<MessageTemplate>(MessageTemplate::kCalledOnNonObject), "Reflect.setPrototypeOf");
   }
 
-  TNode<BoolT> tmp2;
+  TNode<Union<JSReceiver, Null>> tmp2;
   if (block3.is_used()) {
     ca_.Bind(&block3);
-    tmp2 = Is_WasmObject_JSReceiver_0(state_, TNode<Context>{parameter0}, TNode<JSReceiver>{tmp0});
-    ca_.Branch(tmp2, &block5, std::vector<compiler::Node*>{}, &block6, std::vector<compiler::Node*>{});
-  }
-
-  TNode<False> tmp3;
-  if (block5.is_used()) {
-    ca_.Bind(&block5);
-    tmp3 = False_0(state_);
-    CodeStubAssembler(state_).Return(tmp3);
-  }
-
-  TNode<Union<JSReceiver, Null>> tmp4;
-  if (block6.is_used()) {
-    ca_.Bind(&block6);
-    compiler::CodeAssemblerLabel label5(&ca_);
-    tmp4 = Cast_JSReceiver_OR_Null_1(state_, TNode<Context>{parameter0}, TNode<Object>{parameter2}, &label5);
-    ca_.Goto(&block9);
-    if (label5.is_used()) {
-      ca_.Bind(&label5);
-      ca_.Goto(&block10);
+    compiler::CodeAssemblerLabel label3(&ca_);
+    tmp2 = Cast_JSReceiver_OR_Null_1(state_, TNode<Context>{parameter0}, TNode<Object>{parameter2}, &label3);
+    ca_.Goto(&block7);
+    if (label3.is_used()) {
+      ca_.Bind(&label3);
+      ca_.Goto(&block8);
     }
   }
 
-  if (block10.is_used()) {
-    ca_.Bind(&block10);
+  if (block8.is_used()) {
+    ca_.Bind(&block8);
     CodeStubAssembler(state_).ThrowTypeError(TNode<Context>{parameter0}, CastIfEnumClass<MessageTemplate>(MessageTemplate::kProtoObjectOrNull), TNode<Object>{parameter2});
   }
 
-  TNode<JSAny> tmp6;
-  if (block9.is_used()) {
-    ca_.Bind(&block9);
-    tmp6 = ObjectSetPrototypeOfDontThrow_0(state_, TNode<Context>{parameter0}, TNode<JSAny>{tmp0}, TNode<Union<JSReceiver, Null>>{tmp4});
-    CodeStubAssembler(state_).Return(tmp6);
+  TNode<JSAny> tmp4;
+  if (block7.is_used()) {
+    ca_.Bind(&block7);
+    tmp4 = ObjectSetPrototypeOfDontThrow_0(state_, TNode<Context>{parameter0}, TNode<JSAny>{tmp0}, TNode<Union<JSReceiver, Null>>{tmp2});
+    CodeStubAssembler(state_).Return(tmp4);
   }
 }
 
@@ -462,53 +439,6 @@ TF_BUILTIN(ReflectGetOwnPropertyDescriptor, CodeStubAssembler) {
     tmp4 = FromPropertyDescriptor_0(state_, TNode<Context>{parameter0}, TNode<JSAny>{tmp3});
     CodeStubAssembler(state_).Return(tmp4);
   }
-}
-
-// https://crsrc.org/c/v8/src/builtins/reflect.tq?l=41&c=9
-TNode<BoolT> Is_WasmObject_JSReceiver_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<JSReceiver> p_o) {
-  compiler::CodeAssembler ca_(state_);
-  compiler::CodeAssembler::SourcePositionScope pos_scope(&ca_);
-  compiler::CodeAssemblerParameterizedLabel<> block0(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block5(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block4(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<BoolT> block1(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-  compiler::CodeAssemblerParameterizedLabel<> block6(&ca_, compiler::CodeAssemblerLabel::kNonDeferred);
-    ca_.Goto(&block0);
-
-  TNode<WasmObject> tmp0;
-  if (block0.is_used()) {
-    ca_.Bind(&block0);
-    compiler::CodeAssemblerLabel label1(&ca_);
-    tmp0 = Cast_WasmObject_0(state_, TNode<HeapObject>{p_o}, &label1);
-    ca_.Goto(&block4);
-    if (label1.is_used()) {
-      ca_.Bind(&label1);
-      ca_.Goto(&block5);
-    }
-  }
-
-  TNode<BoolT> tmp2;
-  if (block5.is_used()) {
-    ca_.Bind(&block5);
-    tmp2 = FromConstexpr_bool_constexpr_bool_0(state_, false);
-    ca_.Goto(&block1, tmp2);
-  }
-
-  TNode<BoolT> tmp3;
-  if (block4.is_used()) {
-    ca_.Bind(&block4);
-    tmp3 = FromConstexpr_bool_constexpr_bool_0(state_, true);
-    ca_.Goto(&block1, tmp3);
-  }
-
-  TNode<BoolT> phi_bb1_2;
-  if (block1.is_used()) {
-    ca_.Bind(&block1, &phi_bb1_2);
-    ca_.Goto(&block6);
-  }
-
-    ca_.Bind(&block6);
-  return TNode<BoolT>{phi_bb1_2};
 }
 
 } // namespace internal

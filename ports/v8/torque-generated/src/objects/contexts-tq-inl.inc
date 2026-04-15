@@ -10,7 +10,7 @@ inline intptr_t TqRuntimeConvert_intptr_Smi_0(Tagged<Smi> p_s);
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=8&c=1
 inline intptr_t TqRuntimeFromConstexpr_intptr_constexpr_IntegerLiteral_0(IntegerLiteral p_i);
 
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=14&c=3
 inline std::tuple<Tagged<Union<HeapObject, TaggedIndex>>, intptr_t, intptr_t> TqRuntimeNewMutableSlice_Object_0(Tagged<Union<HeapObject, TaggedIndex>> p_object, intptr_t p_offset, intptr_t p_length);
 
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=79&c=1
@@ -101,7 +101,7 @@ intptr_t TqRuntimeFromConstexpr_intptr_constexpr_IntegerLiteral_0(IntegerLiteral
 #ifndef V8_INTERNAL_DEFINED_TqRuntimeNewMutableSlice_Object_0
 #define V8_INTERNAL_DEFINED_TqRuntimeNewMutableSlice_Object_0
 
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=14&c=3
 std::tuple<Tagged<Union<HeapObject, TaggedIndex>>, intptr_t, intptr_t> TqRuntimeNewMutableSlice_Object_0(Tagged<Union<HeapObject, TaggedIndex>> p_object, intptr_t p_offset, intptr_t p_length) {
   DisallowGarbageCollection no_gc;
   Tagged<Union<HeapObject, TaggedIndex>> tmp0{}; USE(tmp0);

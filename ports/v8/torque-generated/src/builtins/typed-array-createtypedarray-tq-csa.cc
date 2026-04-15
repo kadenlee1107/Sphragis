@@ -1,7 +1,6 @@
 #include "src/ast/ast.h"
 #include "src/builtins/builtins-array-gen.h"
 #include "src/builtins/builtins-bigint-gen.h"
-#include "src/builtins/builtins-call-gen.h"
 #include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-data-view-gen.h"
@@ -15,10 +14,8 @@
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-typed-array-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins-wasm-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/code-factory.h"
-#include "src/debug/debug-wasm-objects.h"
 #include "src/heap/factory-inl.h"
 #include "src/ic/binary-op-assembler.h"
 #include "src/ic/handler-configuration-inl.h"
@@ -68,9 +65,6 @@
 #include "src/objects/turbofan-types.h"
 #include "src/objects/turboshaft-types.h"
 #include "src/torque/runtime-support.h"
-#include "src/wasm/value-type.h"
-#include "src/wasm/wasm-linkage.h"
-#include "src/wasm/wasm-module.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 // Required Builtins:
 #include "torque-generated/src/builtins/typed-array-createtypedarray-tq-csa.h"
@@ -1145,7 +1139,7 @@ TNode<JSTypedArray> ConstructByArrayBuffer_0(compiler::CodeAssemblerState* state
   if (block2.is_used()) {
     ca_.Bind(&block2);
     tmp1 = Undefined_0(state_);
-    tmp2 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{p_length}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp1});
+    tmp2 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{p_length}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp1});
     ca_.Goto(&block4, tmp2);
   }
 
@@ -1407,7 +1401,7 @@ TNode<JSTypedArray> ConstructByArrayBuffer_0(compiler::CodeAssemblerState* state
   if (block40.is_used()) {
     ca_.Bind(&block40, &phi_bb40_8);
     tmp36 = Undefined_0(state_);
-    tmp37 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{p_length}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp36});
+    tmp37 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{p_length}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp36});
     ca_.Branch(tmp37, &block44, std::vector<compiler::Node*>{phi_bb40_8}, &block45, std::vector<compiler::Node*>{phi_bb40_8});
   }
 

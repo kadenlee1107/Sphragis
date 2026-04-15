@@ -1,17 +1,3 @@
-class WasmFastApiCallData::BodyDescriptor final : public SuffixRangeWeakBodyDescriptor<4> {
- public:
-  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
-    return 16;
-  }
-
-};
-class WasmStringViewIter::BodyDescriptor final : public FixedRangeBodyDescriptor<4, 8> {
- public:
-  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
-    return 12;
-  }
-
-};
 class DescriptorArray::BodyDescriptor final : public SuffixRangeWeakBodyDescriptor<16> {
  public:
   static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {

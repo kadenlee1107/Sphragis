@@ -210,7 +210,7 @@ class TorqueGeneratedJSBoundFunction : public P {
   // https://crsrc.org/c/v8/src/objects/js-function.tq?l=11&c=3
   inline void set_bound_target_function(Tagged<Union<JSBoundFunction, JSFunction, JSObject, JSProxy, JSWrappedFunction>> value, WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
-  // Torque type: (class JSReceiver | BigInt | class Undefined | Smi | class HeapNumber | class String | class Symbol | class Boolean | class Null | class SourceTextModule)
+  // Torque type: (BigInt | class JSReceiver | class Undefined | Smi | class HeapNumber | class String | class Symbol | class Boolean | class Null | class SourceTextModule)
   // https://crsrc.org/c/v8/src/objects/js-function.tq?l=14&c=3
   inline Tagged<Union<BigInt, Boolean, HeapNumber, JSReceiver, Null, Smi, SourceTextModule, String, Symbol, Undefined>> bound_this() const;
   // https://crsrc.org/c/v8/src/objects/js-function.tq?l=14&c=3

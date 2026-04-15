@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstddef>
+#include <memory>
 
 namespace std {
 
@@ -47,6 +48,15 @@ using ostream = basic_ostream<char, char_traits<char>>;
 
 template<class CharT, class Traits>
 basic_ostream<CharT, Traits>& endl(basic_ostream<CharT, Traits>& os) { os.put('\n'); return os; }
+
+// I/O manipulators
+inline ostream& hex(ostream& os) { return os; }
+inline ostream& dec(ostream& os) { return os; }
+inline ostream& oct(ostream& os) { return os; }
+inline ostream& left(ostream& os) { return os; }
+inline ostream& right(ostream& os) { return os; }
+inline ostream& fixed(ostream& os) { return os; }
+inline ostream& scientific(ostream& os) { return os; }
 
 inline ostream cout;
 inline ostream cerr;

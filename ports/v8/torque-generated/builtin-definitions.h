@@ -75,31 +75,6 @@ TFJ(PromiseThrowerFinally, JSParameterCount(0), kReceiver) \
 TFJ(PromiseCatchFinally, JSParameterCount(1), kReceiver, kReason) \
 TFJ(PromiseThenFinally, JSParameterCount(1), kReceiver, kValue) \
 TFJ(PromisePrototypeFinally, JSParameterCount(1), kReceiver, kOnFinally) \
-TFJ(WebAssemblyStringCast, JSParameterCount(1), kReceiver, kArg) \
-TFJ(WebAssemblyStringTest, JSParameterCount(1), kReceiver, kArg) \
-TFJ(WebAssemblyStringFromWtf16Array, JSParameterCount(3), kReceiver, kArrayArg, kStartArg, kEndArg) \
-TFJ(WebAssemblyStringFromWtf16ArrayShared, JSParameterCount(3), kReceiver, kArrayArg, kStartArg, kEndArg) \
-TFJ(WebAssemblyStringFromUtf8Array, JSParameterCount(3), kReceiver, kArrayArg, kStartArg, kEndArg) \
-TFJ(WebAssemblyStringFromUtf8ArrayShared, JSParameterCount(3), kReceiver, kArrayArg, kStartArg, kEndArg) \
-TFJ(WebAssemblyStringIntoUtf8Array, JSParameterCount(3), kReceiver, kStringArg, kArrayArg, kStartArg) \
-TFJ(WebAssemblyStringIntoUtf8ArrayShared, JSParameterCount(3), kReceiver, kStringArg, kArrayArg, kStartArg) \
-TFJ(WebAssemblyStringToUtf8Array, JSParameterCount(1), kReceiver, kStringArg) \
-TFJ(WebAssemblyStringToUtf8ArrayShared, JSParameterCount(1), kReceiver, kStringArg) \
-TFJ(WebAssemblyStringToWtf16Array, JSParameterCount(3), kReceiver, kStringArg, kArrayArg, kStartArg) \
-TFJ(WebAssemblyStringToWtf16ArrayShared, JSParameterCount(3), kReceiver, kStringArg, kArrayArg, kStartArg) \
-TFJ(WebAssemblyStringFromCharCode, JSParameterCount(1), kReceiver, kCodeArg) \
-TFJ(WebAssemblyStringFromCharCodeShared, JSParameterCount(1), kReceiver, kCodeArg) \
-TFJ(WebAssemblyStringFromCodePoint, JSParameterCount(1), kReceiver, kCodeArg) \
-TFJ(WebAssemblyStringFromCodePointShared, JSParameterCount(1), kReceiver, kCodeArg) \
-TFJ(WebAssemblyStringCodePointAt, JSParameterCount(2), kReceiver, kStringArg, kIndexArg) \
-TFJ(WebAssemblyStringCharCodeAt, JSParameterCount(2), kReceiver, kStringArg, kIndexArg) \
-TFJ(WebAssemblyStringLength, JSParameterCount(1), kReceiver, kStringArg) \
-TFJ(WebAssemblyStringMeasureUtf8, JSParameterCount(1), kReceiver, kStringArg) \
-TFJ(WebAssemblyStringConcat, JSParameterCount(2), kReceiver, kFirstArg, kSecondArg) \
-TFJ(WebAssemblyStringSubstring, JSParameterCount(3), kReceiver, kStringArg, kStartArg, kEndArg) \
-TFJ(WebAssemblyStringEquals, JSParameterCount(2), kReceiver, kA, kB) \
-TFJ(WebAssemblyStringCompare, JSParameterCount(2), kReceiver, kFirstArg, kSecondArg) \
-TFJ(WebAssemblyConfigureAllPrototypes, JSParameterCount(4), kReceiver, kPrototypes, kFunctions, kData, kConstructors) \
 TFC(ProxyIsExtensible, ProxyIsExtensible) \
 TFJ(PromiseAnyRejectElementClosure, JSParameterCount(1), kReceiver, kValue) \
 TFJ(PromiseAny, JSParameterCount(1), kReceiver, kIterable) \
@@ -480,10 +455,6 @@ TFJ(TypedArrayPrototypeReduce, kDontAdaptArgumentsSentinel) \
 TFJ(TypedArrayOf, kDontAdaptArgumentsSentinel) \
 TFJ(TypedArrayPrototypeSubArray, kDontAdaptArgumentsSentinel) \
 TFJ(PromiseWithResolvers, JSParameterCount(0), kReceiver) \
-TFJ(JSToWasmWrapper, kDontAdaptArgumentsSentinel) \
-TFJ(WasmPromising, kDontAdaptArgumentsSentinel) \
-TFJ(WasmStressSwitch, kDontAdaptArgumentsSentinel) \
-TFC(JSToWasmHandleReturns, JSToWasmHandleReturns) \
 TFJ(IteratorFrom, JSParameterCount(1), kReceiver, kObjArg) \
 TFJ(WrapForValidIteratorPrototypeNext, JSParameterCount(0), kReceiver) \
 TFJ(WrapForValidIteratorPrototypeReturn, JSParameterCount(0), kReceiver) \
@@ -518,136 +489,6 @@ TFJ(RegExpPrototypeFlagsGetter, JSParameterCount(0), kReceiver) \
 TFJ(StringPrototypeAt, JSParameterCount(1), kReceiver, kIndex) \
 TFJ(PromiseRace, JSParameterCount(1), kReceiver, kIterable) \
 TFJ(TypedArrayPrototypeToReversed, kDontAdaptArgumentsSentinel) \
-TFC(WasmInt32ToHeapNumber, WasmInt32ToHeapNumber) \
-TFC(WasmInt32ToSharedHeapNumber, WasmInt32ToSharedHeapNumber) \
-TFC(WasmFuncRefToJS, WasmFuncRefToJS) \
-TFC(WasmTaggedNonSmiToInt32, WasmTaggedNonSmiToInt32) \
-TFC(WasmTaggedToFloat64, WasmTaggedToFloat64) \
-TFC(WasmTaggedToFloat32, WasmTaggedToFloat32) \
-TFC(WasmMemoryGrow, WasmMemoryGrow) \
-TFC(WasmTableInit, WasmTableInit) \
-TFC(WasmTableCopy, WasmTableCopy) \
-TFC(WasmTableFill, WasmTableFill) \
-TFC(WasmTableGrow, WasmTableGrow) \
-TFC(WasmTableGet, WasmTableGet) \
-TFC(WasmTableSet, WasmTableSet) \
-TFC(WasmTableGetFuncRef, WasmTableGetFuncRef) \
-TFC(WasmFunctionTableGet, WasmFunctionTableGet) \
-TFC(WasmTableSetFuncRef, WasmTableSetFuncRef) \
-TFC(WasmRefFunc, WasmRefFunc) \
-TFC(WasmInternalFunctionCreateExternal, WasmInternalFunctionCreateExternal) \
-TFC(WasmAllocateZeroedFixedArray, WasmAllocateZeroedFixedArray) \
-TFC(WasmAllocateFixedArray, WasmAllocateFixedArray) \
-TFC(WasmLiftoffDeoptFinish, WasmLiftoffDeoptFinish) \
-TFC(WasmThrow, WasmThrow) \
-TFC(WasmRethrow, WasmRethrow) \
-TFC(WasmThrowRef, WasmThrowRef) \
-TFC(WasmRethrowExplicitContext, WasmRethrowExplicitContext) \
-TFC(WasmTriggerTierUp, WasmTriggerTierUp) \
-TFC(WasmGrowableStackGuard, WasmGrowableStackGuard) \
-TFC(WasmStackGuard, WasmStackGuard) \
-TFC(WasmStackGuardLoop, WasmStackGuardLoop) \
-TFC(WasmStackOverflow, WasmStackOverflow) \
-TFC(WasmTraceGlobal, WasmTraceGlobal) \
-TFC(WasmTraceMemory, WasmTraceMemory) \
-TFC(WasmTraceEnter, WasmTraceEnter) \
-TFC(WasmTraceExit, WasmTraceExit) \
-TFC(WasmConfigureAllPrototypesOpt, WasmConfigureAllPrototypesOpt) \
-TFC(WasmAllocateJSArray, WasmAllocateJSArray) \
-TFC(WasmAllocateStructWithRtt, WasmAllocateStructWithRtt) \
-TFC(WasmAllocateDescriptorStruct, WasmAllocateDescriptorStruct) \
-TFC(WasmAllocateSharedStructWithRtt, WasmAllocateSharedStructWithRtt) \
-TFC(WasmAllocateArray_Uninitialized, WasmAllocateArray_Uninitialized) \
-TFC(WasmAllocateSharedArray_Uninitialized, WasmAllocateSharedArray_Uninitialized) \
-TFC(WasmArrayNewSegment, WasmArrayNewSegment) \
-TFC(WasmArrayInitSegment, WasmArrayInitSegment) \
-TFC(WasmArrayCopy, WasmArrayCopy) \
-TFC(WasmUint32ToNumber, WasmUint32ToNumber) \
-TFC(UintPtr53ToNumber, UintPtr53ToNumber) \
-TFC(WasmI32AtomicWait, WasmI32AtomicWait) \
-TFC(WasmI64AtomicWait, WasmI64AtomicWait) \
-TFC(WasmManagedObjectWait, WasmManagedObjectWait) \
-TFC(WasmAllocateWaitQueue, WasmAllocateWaitQueue) \
-TFC(CallRefIC, CallRefIC) \
-TFC(CallIndirectIC, CallIndirectIC) \
-TFC(WasmGetOwnProperty, WasmGetOwnProperty) \
-TFC(WasmTrap, WasmTrap) \
-TFC(ThrowWasmTrapUnreachable, ThrowWasmTrapUnreachable) \
-TFC(WasmTrapHandlerThrowTrap, WasmTrapHandlerThrowTrap) \
-TFC(WasmPropagateException, WasmPropagateException) \
-TFC(ThrowWasmTrapMemOutOfBounds, ThrowWasmTrapMemOutOfBounds) \
-TFC(ThrowWasmTrapUnalignedAccess, ThrowWasmTrapUnalignedAccess) \
-TFC(ThrowWasmTrapDivByZero, ThrowWasmTrapDivByZero) \
-TFC(ThrowWasmTrapDivUnrepresentable, ThrowWasmTrapDivUnrepresentable) \
-TFC(ThrowWasmTrapRemByZero, ThrowWasmTrapRemByZero) \
-TFC(ThrowWasmTrapFloatUnrepresentable, ThrowWasmTrapFloatUnrepresentable) \
-TFC(ThrowWasmTrapFuncSigMismatch, ThrowWasmTrapFuncSigMismatch) \
-TFC(ThrowWasmTrapNullFunc, ThrowWasmTrapNullFunc) \
-TFC(ThrowWasmTrapDataSegmentOutOfBounds, ThrowWasmTrapDataSegmentOutOfBounds) \
-TFC(ThrowWasmTrapElementSegmentOutOfBounds, ThrowWasmTrapElementSegmentOutOfBounds) \
-TFC(ThrowWasmTrapTableOutOfBounds, ThrowWasmTrapTableOutOfBounds) \
-TFC(ThrowWasmTrapRethrowNull, ThrowWasmTrapRethrowNull) \
-TFC(ThrowWasmTrapNullDereference, ThrowWasmTrapNullDereference) \
-TFC(ThrowWasmTrapIllegalCast, ThrowWasmTrapIllegalCast) \
-TFC(ThrowWasmTrapArrayOutOfBounds, ThrowWasmTrapArrayOutOfBounds) \
-TFC(ThrowWasmTrapArrayTooLarge, ThrowWasmTrapArrayTooLarge) \
-TFC(ThrowWasmTrapStringOffsetOutOfBounds, ThrowWasmTrapStringOffsetOutOfBounds) \
-TFC(WasmTypeAssertionFailed, WasmTypeAssertionFailed) \
-TFC(ThrowWasmTrapResume, ThrowWasmTrapResume) \
-TFC(ThrowWasmTrapSuspend, ThrowWasmTrapSuspend) \
-TFC(ThrowWasmTrapSwitch, ThrowWasmTrapSwitch) \
-TFC(WasmStringNewWtf8, WasmStringNewWtf8) \
-TFC(WasmStringNewWtf8Array, WasmStringNewWtf8Array) \
-TFC(WasmStringNewWtf16, WasmStringNewWtf16) \
-TFC(WasmStringNewWtf16Array, WasmStringNewWtf16Array) \
-TFC(WasmStringNewWtf16ArrayShared, WasmStringNewWtf16ArrayShared) \
-TFC(WasmStringFromDataSegment, WasmStringFromDataSegment) \
-TFC(WasmStringAsWtf16, WasmStringAsWtf16) \
-TFC(WasmStringConst, WasmStringConst) \
-TFC(WasmStringMeasureUtf8, WasmStringMeasureUtf8) \
-TFC(WasmStringMeasureWtf8, WasmStringMeasureWtf8) \
-TFC(WasmStringEncodeWtf8, WasmStringEncodeWtf8) \
-TFC(WasmStringEncodeWtf8Array, WasmStringEncodeWtf8Array) \
-TFC(WasmStringToUtf8Array, WasmStringToUtf8Array) \
-TFC(WasmStringEncodeWtf16, WasmStringEncodeWtf16) \
-TFC(WasmStringEncodeWtf16Array, WasmStringEncodeWtf16Array) \
-TFC(ThrowToLowerCaseCalledOnNull, ThrowToLowerCaseCalledOnNull) \
-TFC(ThrowIndexOfCalledOnNull, ThrowIndexOfCalledOnNull) \
-TFC(ThrowDataViewTypeError, ThrowDataViewTypeError) \
-TFC(ThrowDataViewDetachedError, ThrowDataViewDetachedError) \
-TFC(ThrowDataViewOutOfBounds, ThrowDataViewOutOfBounds) \
-TFC(WasmStringConcat, WasmStringConcat) \
-TFC(WasmStringAdd_CheckNone_Shared, WasmStringAdd_CheckNone_Shared) \
-TFC(WasmStringEqual, WasmStringEqual) \
-TFC(WasmStringIsUSVSequence, WasmStringIsUSVSequence) \
-TFC(WasmStringAsWtf8, WasmStringAsWtf8) \
-TFC(WasmStringViewWtf8Advance, WasmStringViewWtf8Advance) \
-TFC(WasmStringViewWtf8Encode, WasmStringViewWtf8Encode) \
-TFC(WasmStringViewWtf8Slice, WasmStringViewWtf8Slice) \
-TFC(WasmStringViewWtf16GetCodeUnit, WasmStringViewWtf16GetCodeUnit) \
-TFC(WasmStringViewWtf16Encode, WasmStringViewWtf16Encode) \
-TFC(WasmStringViewWtf16Slice, WasmStringViewWtf16Slice) \
-TFC(WasmStringSliceShared, WasmStringSliceShared) \
-TFC(WasmStringAsIter, WasmStringAsIter) \
-TFC(WasmStringCodePointAt, WasmStringCodePointAt) \
-TFC(WasmStringViewIterNext, WasmStringViewIterNext) \
-TFC(WasmStringViewIterAdvance, WasmStringViewIterAdvance) \
-TFC(WasmStringViewIterRewind, WasmStringViewIterRewind) \
-TFC(WasmStringViewIterSlice, WasmStringViewIterSlice) \
-TFC(WasmIntToString, WasmIntToString) \
-TFC(WasmStringToDouble, WasmStringToDouble) \
-TFC(WasmStringFromCodePoint, WasmStringFromCodePoint) \
-TFC(WasmStringHash, WasmStringHash) \
-TFC(WasmAnyConvertExtern, WasmAnyConvertExtern) \
-TFC(WasmAnyConvertExternShared, WasmAnyConvertExternShared) \
-TFC(WasmFastApiCallTypeCheckAndUpdateIC, WasmFastApiCallTypeCheckAndUpdateIC) \
-TFC(WasmStringIndexOf, WasmStringIndexOf) \
-TFC(WasmLiftoffIsEqRefUnshared, WasmLiftoffIsEqRefUnshared) \
-TFC(WasmLiftoffIsArrayRefUnshared, WasmLiftoffIsArrayRefUnshared) \
-TFC(WasmLiftoffIsStructRefUnshared, WasmLiftoffIsStructRefUnshared) \
-TFC(WasmLiftoffCastEqRefUnshared, WasmLiftoffCastEqRefUnshared) \
-TFC(WasmLiftoffCastArrayRefUnshared, WasmLiftoffCastArrayRefUnshared) \
-TFC(WasmLiftoffCastStructRefUnshared, WasmLiftoffCastStructRefUnshared) \
 TFC(ProxySetPrototypeOf, ProxySetPrototypeOf) \
 TFJ(PromiseAllResolveElementClosure, JSParameterCount(1), kReceiver, kValue) \
 TFJ(PromiseAllSettledResolveElementClosure, JSParameterCount(1), kReceiver, kValue) \
@@ -761,7 +602,7 @@ TFC(StoreTypedElementJSAny_Uint32Elements_0, StoreTypedElementJSAny_Uint32Elemen
   V(6,Store_FastSmiElements_0)\
   V(7,Delete_FastSmiElements_0)\
   V(8,TestHelperPlus1)\
-  V(9,WasmTraceGlobal)\
-  V(10,ThrowDataViewTypeError)\
+  V(9,GenericBuiltinTest_Smi_0)\
+  V(10,CreateAsyncFromSyncIteratorBaseline)\
 
 #endif  // V8_GEN_TORQUE_GENERATED_BUILTIN_DEFINITIONS_H_

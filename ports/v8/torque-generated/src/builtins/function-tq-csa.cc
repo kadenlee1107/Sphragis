@@ -1,7 +1,6 @@
 #include "src/ast/ast.h"
 #include "src/builtins/builtins-array-gen.h"
 #include "src/builtins/builtins-bigint-gen.h"
-#include "src/builtins/builtins-call-gen.h"
 #include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-data-view-gen.h"
@@ -15,10 +14,8 @@
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-typed-array-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins-wasm-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/code-factory.h"
-#include "src/debug/debug-wasm-objects.h"
 #include "src/heap/factory-inl.h"
 #include "src/ic/binary-op-assembler.h"
 #include "src/ic/handler-configuration-inl.h"
@@ -68,9 +65,6 @@
 #include "src/objects/turbofan-types.h"
 #include "src/objects/turboshaft-types.h"
 #include "src/torque/runtime-support.h"
-#include "src/wasm/value-type.h"
-#include "src/wasm/wasm-linkage.h"
-#include "src/wasm/wasm-module.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 // Required Builtins:
 #include "torque-generated/src/builtins/function-tq-csa.h"
@@ -324,7 +318,7 @@ TF_BUILTIN(FastFunctionPrototypeBind, CodeStubAssembler) {
   TNode<IntPtrT> tmp14;
   TNode<Map> tmp15;
   TNode<IntPtrT> tmp16;
-  TNode<Union<DescriptorArray, WasmStruct>> tmp17;
+  TNode<DescriptorArray> tmp17;
   TNode<DescriptorArray> tmp18;
   TNode<String> tmp19;
   if (block12.is_used()) {
@@ -332,7 +326,7 @@ TF_BUILTIN(FastFunctionPrototypeBind, CodeStubAssembler) {
     tmp14 = FromConstexpr_intptr_constexpr_int31_0(state_, 0);
     tmp15 = CodeStubAssembler(state_).LoadReference<Map>(CodeStubAssembler::Reference{tmp0, tmp14});
     tmp16 = FromConstexpr_intptr_constexpr_int31_0(state_, 24);
-    tmp17 = CodeStubAssembler(state_).LoadReference<Union<DescriptorArray, WasmStruct>>(CodeStubAssembler::Reference{tmp15, tmp16});
+    tmp17 = CodeStubAssembler(state_).LoadReference<DescriptorArray>(CodeStubAssembler::Reference{tmp15, tmp16});
     tmp18 = UnsafeCast_DescriptorArray_0(state_, TNode<Context>{parameter0}, TNode<Object>{tmp17});
     tmp19 = CodeStubAssembler(state_).LengthStringConstant();
     compiler::CodeAssemblerLabel label20(&ca_);
@@ -414,7 +408,7 @@ TF_BUILTIN(FastFunctionPrototypeBind, CodeStubAssembler) {
     tmp35 = CodeStubAssembler(state_).LoadReference<Union<JSReceiver, Null>>(CodeStubAssembler::Reference{tmp33, tmp34});
     tmp36 = FromConstexpr_intptr_constexpr_int31_0(state_, 16);
     tmp37 = CodeStubAssembler(state_).LoadReference<Union<JSReceiver, Null>>(CodeStubAssembler::Reference{phi_bb19_12, tmp36});
-    tmp38 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp35}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp37});
+    tmp38 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp35}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp37});
     ca_.Branch(tmp38, &block21, std::vector<compiler::Node*>{}, &block22, std::vector<compiler::Node*>{});
   }
 

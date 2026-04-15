@@ -1,7 +1,6 @@
 #include "src/ast/ast.h"
 #include "src/builtins/builtins-array-gen.h"
 #include "src/builtins/builtins-bigint-gen.h"
-#include "src/builtins/builtins-call-gen.h"
 #include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-data-view-gen.h"
@@ -15,10 +14,8 @@
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-typed-array-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins-wasm-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/code-factory.h"
-#include "src/debug/debug-wasm-objects.h"
 #include "src/heap/factory-inl.h"
 #include "src/ic/binary-op-assembler.h"
 #include "src/ic/handler-configuration-inl.h"
@@ -68,11 +65,7 @@
 #include "src/objects/turbofan-types.h"
 #include "src/objects/turboshaft-types.h"
 #include "src/torque/runtime-support.h"
-#include "src/wasm/value-type.h"
-#include "src/wasm/wasm-linkage.h"
-#include "src/wasm/wasm-module.h"
 #include "torque-generated/exported-macros-assembler.h"
-#include "torque-generated/src/wasm/wasm-objects-tq-csa.h"
 #include "torque-generated/src/objects/bigint-tq-csa.h"
 #include "torque-generated/src/objects/js-generator-tq-csa.h"
 #include "torque-generated/src/objects/feedback-cell-tq-csa.h"
@@ -178,7 +171,6 @@
 #include "torque-generated/src/builtins/array-every-tq-csa.h"
 #include "torque-generated/src/builtins/object-groupby-tq-csa.h"
 #include "torque-generated/src/builtins/promise-finally-tq-csa.h"
-#include "torque-generated/src/builtins/wasm-strings-tq-csa.h"
 #include "torque-generated/src/builtins/proxy-tq-csa.h"
 #include "torque-generated/src/builtins/proxy-is-extensible-tq-csa.h"
 #include "torque-generated/src/builtins/convert-tq-csa.h"
@@ -257,7 +249,6 @@
 #include "torque-generated/src/builtins/math-tq-csa.h"
 #include "torque-generated/src/builtins/proxy-revoke-tq-csa.h"
 #include "torque-generated/src/builtins/array-with-tq-csa.h"
-#include "torque-generated/src/builtins/wasm-to-js-tq-csa.h"
 #include "torque-generated/src/builtins/promise-misc-tq-csa.h"
 #include "torque-generated/src/builtins/weak-ref-tq-csa.h"
 #include "torque-generated/src/builtins/proxy-prevent-extensions-tq-csa.h"
@@ -298,7 +289,6 @@
 #include "torque-generated/src/builtins/typed-array-of-tq-csa.h"
 #include "torque-generated/src/builtins/typed-array-subarray-tq-csa.h"
 #include "torque-generated/src/builtins/promise-withresolvers-tq-csa.h"
-#include "torque-generated/src/builtins/js-to-wasm-tq-csa.h"
 #include "torque-generated/src/builtins/iterator-from-tq-csa.h"
 #include "torque-generated/src/builtins/js-to-js-tq-csa.h"
 #include "torque-generated/src/builtins/regexp-test-tq-csa.h"
@@ -307,7 +297,6 @@
 #include "torque-generated/src/builtins/string-at-tq-csa.h"
 #include "torque-generated/src/builtins/promise-race-tq-csa.h"
 #include "torque-generated/src/builtins/typed-array-to-reversed-tq-csa.h"
-#include "torque-generated/src/builtins/wasm-tq-csa.h"
 #include "torque-generated/src/builtins/proxy-set-prototype-of-tq-csa.h"
 #include "torque-generated/src/builtins/promise-all-element-closure-tq-csa.h"
 #include "torque-generated/src/builtins/collections-tq-csa.h"
@@ -315,7 +304,6 @@
 #include "torque-generated/src/builtins/frames-tq-csa.h"
 #include "torque-generated/src/builtins/typed-array-values-tq-csa.h"
 #include "torque-generated/src/ic/handler-configuration-tq-csa.h"
-#include "torque-generated/src/debug/debug-wasm-objects-tq-csa.h"
 #include "torque-generated/third_party/v8/builtins/array-sort-tq-csa.h"
 #include "torque-generated/test/torque/test-torque-tq-csa.h"
 namespace v8 {
@@ -743,10 +731,6 @@ return CreatePromiseResolvingFunctionsContext_0(state_, p_context, p_promise, p_
 // https://crsrc.org/c/v8/src/builtins/math.tq?l=118&c=1
 TNode<Number> TorqueGeneratedExportedMacrosAssembler::MathPowImpl(TNode<Context> p_context, TNode<JSAny> p_base, TNode<JSAny> p_exponent) {
 return MathPowImpl_0(state_, p_context, p_base, p_exponent);}
-
-// https://crsrc.org/c/v8/src/builtins/wasm-to-js.tq?l=50&c=1
-TorqueStructWasmToJSResult TorqueGeneratedExportedMacrosAssembler::WasmToJSWrapper(TNode<WasmImportData> p_data) {
-return WasmToJSWrapper_0(state_, p_data);}
 
 // https://crsrc.org/c/v8/src/builtins/promise-misc.tq?l=42&c=1
 TNode<BoolT> TorqueGeneratedExportedMacrosAssembler::PromiseHasHandler(TNode<JSPromise> p_promise) {
@@ -1216,38 +1200,6 @@ return TestCellAccessors_0(state_, p_context, p_cell);}
 TNode<Map> TorqueGeneratedExportedMacrosAssembler::LoadHeapObjectMap(TNode<HeapObject> p_o) {
 return LoadHeapObjectMap_0(state_, p_o);}
 
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=8&c=9
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadFixedArrayBaseLength(TNode<FixedArrayBase> p_o) {
-return LoadFixedArrayBaseLength_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-TorqueStructSlice_uint8_MutableReference_uint8_0 TorqueGeneratedExportedMacrosAssembler::FieldSliceByteArrayValues(TNode<ByteArray> p_o) {
-return FieldSliceByteArrayValues_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-TNode<Uint8T> TorqueGeneratedExportedMacrosAssembler::LoadByteArrayValues(TNode<ByteArray> p_o, TNode<IntPtrT> p_i) {
-return LoadByteArrayValues_0(state_, p_o, p_i);}
-
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreByteArrayValues(TNode<ByteArray> p_o, TNode<IntPtrT> p_i, TNode<Uint8T> p_v) {
-return StoreByteArrayValues_0(state_, p_o, p_i, p_v);}
-
-// https://crsrc.org/c/v8/src/objects/foreign.tq?l=8&c=3
-TNode<ExternalPointerT> TorqueGeneratedExportedMacrosAssembler::LoadForeignForeignAddress(TNode<Foreign> p_o) {
-return LoadForeignForeignAddress_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/objects/foreign.tq?l=8&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreForeignForeignAddress(TNode<Foreign> p_o, TNode<ExternalPointerT> p_v) {
-return StoreForeignForeignAddress_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/objects/foreign.tq?l=12&c=3
-TNode<RawPtrT> TorqueGeneratedExportedMacrosAssembler::LoadTrustedForeignForeignAddress(TNode<TrustedForeign> p_o) {
-return LoadTrustedForeignForeignAddress_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/objects/foreign.tq?l=12&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreTrustedForeignForeignAddress(TNode<TrustedForeign> p_o, TNode<RawPtrT> p_v) {
-return StoreTrustedForeignForeignAddress_0(state_, p_o, p_v);}
-
 // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=9&c=3
 TNode<Union<FixedArrayBase, PropertyArray, Smi, SwissNameDictionary>> TorqueGeneratedExportedMacrosAssembler::LoadJSReceiverPropertiesOrHash(TNode<JSReceiver> p_o) {
 return LoadJSReceiverPropertiesOrHash_0(state_, p_o);}
@@ -1263,678 +1215,6 @@ return LoadJSObjectElements_0(state_, p_o);}
 // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=33&c=3
 void TorqueGeneratedExportedMacrosAssembler::StoreJSObjectElements(TNode<JSObject> p_o, TNode<FixedArrayBase> p_v) {
 return StoreJSObjectElements_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=40&c=3
-TNode<TrustedPointerT> TorqueGeneratedExportedMacrosAssembler::LoadWasmInstanceObjectTrustedData(TNode<WasmInstanceObject> p_o) {
-return LoadWasmInstanceObjectTrustedData_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=40&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmInstanceObjectTrustedData(TNode<WasmInstanceObject> p_o, TNode<TrustedPointerT> p_v) {
-return StoreWasmInstanceObjectTrustedData_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=41&c=3
-TNode<WasmModuleObject> TorqueGeneratedExportedMacrosAssembler::LoadWasmInstanceObjectModuleObject(TNode<WasmInstanceObject> p_o) {
-return LoadWasmInstanceObjectModuleObject_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=41&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmInstanceObjectModuleObject(TNode<WasmInstanceObject> p_o, TNode<WasmModuleObject> p_v) {
-return StoreWasmInstanceObjectModuleObject_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=42&c=3
-TNode<JSObject> TorqueGeneratedExportedMacrosAssembler::LoadWasmInstanceObjectExportsObject(TNode<WasmInstanceObject> p_o) {
-return LoadWasmInstanceObjectExportsObject_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=42&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmInstanceObjectExportsObject(TNode<WasmInstanceObject> p_o, TNode<JSObject> p_v) {
-return StoreWasmInstanceObjectExportsObject_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=53&c=3
-TNode<MaybeObject> TorqueGeneratedExportedMacrosAssembler::LoadWasmImportDataProtectedInstanceData(TNode<WasmImportData> p_o) {
-return LoadWasmImportDataProtectedInstanceData_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=53&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmImportDataProtectedInstanceData(TNode<WasmImportData> p_o, TNode<MaybeObject> p_v) {
-return StoreWasmImportDataProtectedInstanceData_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=57&c=3
-TNode<MaybeObject> TorqueGeneratedExportedMacrosAssembler::LoadWasmImportDataProtectedCallOrigin(TNode<WasmImportData> p_o) {
-return LoadWasmImportDataProtectedCallOrigin_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=57&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmImportDataProtectedCallOrigin(TNode<WasmImportData> p_o, TNode<MaybeObject> p_v) {
-return StoreWasmImportDataProtectedCallOrigin_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=59&c=3
-TNode<NativeContext> TorqueGeneratedExportedMacrosAssembler::LoadWasmImportDataNativeContext(TNode<WasmImportData> p_o) {
-return LoadWasmImportDataNativeContext_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=59&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmImportDataNativeContext(TNode<WasmImportData> p_o, TNode<NativeContext> p_v) {
-return StoreWasmImportDataNativeContext_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=60&c=3
-TNode<Union<JSReceiver, Undefined>> TorqueGeneratedExportedMacrosAssembler::LoadWasmImportDataCallable(TNode<WasmImportData> p_o) {
-return LoadWasmImportDataCallable_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=60&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmImportDataCallable(TNode<WasmImportData> p_o, TNode<Union<JSReceiver, Undefined>> p_v) {
-return StoreWasmImportDataCallable_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=62&c=3
-TNode<Cell> TorqueGeneratedExportedMacrosAssembler::LoadWasmImportDataWrapperBudget(TNode<WasmImportData> p_o) {
-return LoadWasmImportDataWrapperBudget_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=62&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmImportDataWrapperBudget(TNode<WasmImportData> p_o, TNode<Cell> p_v) {
-return StoreWasmImportDataWrapperBudget_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=64&c=3
-TNode<RawPtrT> TorqueGeneratedExportedMacrosAssembler::LoadWasmImportDataSig(TNode<WasmImportData> p_o) {
-return LoadWasmImportDataSig_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=64&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmImportDataSig(TNode<WasmImportData> p_o, TNode<RawPtrT> p_v) {
-return StoreWasmImportDataSig_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=66&c=3
-TNode<Uint32T> TorqueGeneratedExportedMacrosAssembler::LoadWasmImportDataBitField(TNode<WasmImportData> p_o) {
-return LoadWasmImportDataBitField_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=66&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmImportDataBitField(TNode<WasmImportData> p_o, TNode<Uint32T> p_v) {
-return StoreWasmImportDataBitField_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=74&c=3
-TNode<HeapObject> TorqueGeneratedExportedMacrosAssembler::LoadWasmFastApiCallDataSignature(TNode<WasmFastApiCallData> p_o) {
-return LoadWasmFastApiCallDataSignature_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=74&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmFastApiCallDataSignature(TNode<WasmFastApiCallData> p_o, TNode<HeapObject> p_v) {
-return StoreWasmFastApiCallDataSignature_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=75&c=3
-TNode<Object> TorqueGeneratedExportedMacrosAssembler::LoadWasmFastApiCallDataCallbackData(TNode<WasmFastApiCallData> p_o) {
-return LoadWasmFastApiCallDataCallbackData_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=75&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmFastApiCallDataCallbackData(TNode<WasmFastApiCallData> p_o, TNode<Object> p_v) {
-return StoreWasmFastApiCallDataCallbackData_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=76&c=3
-TNode<Union<Null, Weak<HeapObject>>> TorqueGeneratedExportedMacrosAssembler::LoadWasmFastApiCallDataCachedMap(TNode<WasmFastApiCallData> p_o) {
-return LoadWasmFastApiCallDataCachedMap_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=76&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmFastApiCallDataCachedMap(TNode<WasmFastApiCallData> p_o, TNode<Union<Null, Weak<HeapObject>>> p_v) {
-return StoreWasmFastApiCallDataCachedMap_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=88&c=3
-TNode<MaybeObject> TorqueGeneratedExportedMacrosAssembler::LoadWasmInternalFunctionProtectedImplicitArg(TNode<WasmInternalFunction> p_o) {
-return LoadWasmInternalFunctionProtectedImplicitArg_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=88&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmInternalFunctionProtectedImplicitArg(TNode<WasmInternalFunction> p_o, TNode<MaybeObject> p_v) {
-return StoreWasmInternalFunctionProtectedImplicitArg_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=91&c=3
-TNode<Union<JSFunction, Undefined>> TorqueGeneratedExportedMacrosAssembler::LoadWasmInternalFunctionExternal(TNode<WasmInternalFunction> p_o) {
-return LoadWasmInternalFunctionExternal_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=91&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmInternalFunctionExternal(TNode<WasmInternalFunction> p_o, TNode<Union<JSFunction, Undefined>> p_v) {
-return StoreWasmInternalFunctionExternal_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=98&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmInternalFunctionFunctionIndex(TNode<WasmInternalFunction> p_o) {
-return LoadWasmInternalFunctionFunctionIndex_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=98&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmInternalFunctionFunctionIndex(TNode<WasmInternalFunction> p_o, TNode<Smi> p_v) {
-return StoreWasmInternalFunctionFunctionIndex_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=100&c=3
-TNode<Uint32T> TorqueGeneratedExportedMacrosAssembler::LoadWasmInternalFunctionRawCallTarget(TNode<WasmInternalFunction> p_o) {
-return LoadWasmInternalFunctionRawCallTarget_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=100&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmInternalFunctionRawCallTarget(TNode<WasmInternalFunction> p_o, TNode<Uint32T> p_v) {
-return StoreWasmInternalFunctionRawCallTarget_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=103&c=3
-TNode<RawPtrT> TorqueGeneratedExportedMacrosAssembler::LoadWasmInternalFunctionSig(TNode<WasmInternalFunction> p_o) {
-return LoadWasmInternalFunctionSig_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=103&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmInternalFunctionSig(TNode<WasmInternalFunction> p_o, TNode<RawPtrT> p_v) {
-return StoreWasmInternalFunctionSig_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=113&c=3
-TNode<TrustedPointerT> TorqueGeneratedExportedMacrosAssembler::LoadWasmFuncRefTrustedInternal(TNode<WasmFuncRef> p_o) {
-return LoadWasmFuncRefTrustedInternal_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=113&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmFuncRefTrustedInternal(TNode<WasmFuncRef> p_o, TNode<TrustedPointerT> p_v) {
-return StoreWasmFuncRefTrustedInternal_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=122&c=3
-TNode<TrustedPointerT> TorqueGeneratedExportedMacrosAssembler::LoadWasmFunctionDataWrapperCode(TNode<WasmFunctionData> p_o) {
-return LoadWasmFunctionDataWrapperCode_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=122&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmFunctionDataWrapperCode(TNode<WasmFunctionData> p_o, TNode<TrustedPointerT> p_v) {
-return StoreWasmFunctionDataWrapperCode_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=125&c=3
-TNode<WasmFuncRef> TorqueGeneratedExportedMacrosAssembler::LoadWasmFunctionDataFuncRef(TNode<WasmFunctionData> p_o) {
-return LoadWasmFunctionDataFuncRef_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=125&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmFunctionDataFuncRef(TNode<WasmFunctionData> p_o, TNode<WasmFuncRef> p_v) {
-return StoreWasmFunctionDataFuncRef_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=127&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmFunctionDataJsPromiseFlags(TNode<WasmFunctionData> p_o) {
-return LoadWasmFunctionDataJsPromiseFlags_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=127&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmFunctionDataJsPromiseFlags(TNode<WasmFunctionData> p_o, TNode<Smi> p_v) {
-return StoreWasmFunctionDataJsPromiseFlags_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=130&c=3
-TNode<MaybeObject> TorqueGeneratedExportedMacrosAssembler::LoadWasmFunctionDataProtectedInternal(TNode<WasmFunctionData> p_o) {
-return LoadWasmFunctionDataProtectedInternal_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=130&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmFunctionDataProtectedInternal(TNode<WasmFunctionData> p_o, TNode<MaybeObject> p_v) {
-return StoreWasmFunctionDataProtectedInternal_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=140&c=3
-TNode<MaybeObject> TorqueGeneratedExportedMacrosAssembler::LoadWasmExportedFunctionDataProtectedInstanceData(TNode<WasmExportedFunctionData> p_o) {
-return LoadWasmExportedFunctionDataProtectedInstanceData_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=140&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmExportedFunctionDataProtectedInstanceData(TNode<WasmExportedFunctionData> p_o, TNode<MaybeObject> p_v) {
-return StoreWasmExportedFunctionDataProtectedInstanceData_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=141&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmExportedFunctionDataFunctionIndex(TNode<WasmExportedFunctionData> p_o) {
-return LoadWasmExportedFunctionDataFunctionIndex_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=141&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmExportedFunctionDataFunctionIndex(TNode<WasmExportedFunctionData> p_o, TNode<Smi> p_v) {
-return StoreWasmExportedFunctionDataFunctionIndex_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=143&c=3
-TNode<Cell> TorqueGeneratedExportedMacrosAssembler::LoadWasmExportedFunctionDataWrapperBudget(TNode<WasmExportedFunctionData> p_o) {
-return LoadWasmExportedFunctionDataWrapperBudget_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=143&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmExportedFunctionDataWrapperBudget(TNode<WasmExportedFunctionData> p_o, TNode<Cell> p_v) {
-return StoreWasmExportedFunctionDataWrapperBudget_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=148&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmExportedFunctionDataPackedArgsSize(TNode<WasmExportedFunctionData> p_o) {
-return LoadWasmExportedFunctionDataPackedArgsSize_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=148&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmExportedFunctionDataPackedArgsSize(TNode<WasmExportedFunctionData> p_o, TNode<Smi> p_v) {
-return StoreWasmExportedFunctionDataPackedArgsSize_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=149&c=3
-TNode<TrustedPointerT> TorqueGeneratedExportedMacrosAssembler::LoadWasmExportedFunctionDataCWrapperCode(TNode<WasmExportedFunctionData> p_o) {
-return LoadWasmExportedFunctionDataCWrapperCode_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=149&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmExportedFunctionDataCWrapperCode(TNode<WasmExportedFunctionData> p_o, TNode<TrustedPointerT> p_v) {
-return StoreWasmExportedFunctionDataCWrapperCode_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=157&c=3
-TNode<MaybeObject> TorqueGeneratedExportedMacrosAssembler::LoadWasmJSFunctionDataProtectedOffheapData(TNode<WasmJSFunctionData> p_o) {
-return LoadWasmJSFunctionDataProtectedOffheapData_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=157&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmJSFunctionDataProtectedOffheapData(TNode<WasmJSFunctionData> p_o, TNode<MaybeObject> p_v) {
-return StoreWasmJSFunctionDataProtectedOffheapData_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=162&c=3
-TNode<Foreign> TorqueGeneratedExportedMacrosAssembler::LoadWasmCapiFunctionDataEmbedderData(TNode<WasmCapiFunctionData> p_o) {
-return LoadWasmCapiFunctionDataEmbedderData_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=162&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmCapiFunctionDataEmbedderData(TNode<WasmCapiFunctionData> p_o, TNode<Foreign> p_v) {
-return StoreWasmCapiFunctionDataEmbedderData_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=166&c=3
-TNode<TrustedPointerT> TorqueGeneratedExportedMacrosAssembler::LoadWasmResumeDataTrustedSuspender(TNode<WasmResumeData> p_o) {
-return LoadWasmResumeDataTrustedSuspender_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=166&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmResumeDataTrustedSuspender(TNode<WasmResumeData> p_o, TNode<TrustedPointerT> p_v) {
-return StoreWasmResumeDataTrustedSuspender_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=167&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmResumeDataOnResume(TNode<WasmResumeData> p_o) {
-return LoadWasmResumeDataOnResume_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=167&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmResumeDataOnResume(TNode<WasmResumeData> p_o, TNode<Smi> p_v) {
-return StoreWasmResumeDataOnResume_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=171&c=3
-TNode<ExternalPointerT> TorqueGeneratedExportedMacrosAssembler::LoadWasmSuspenderObjectStack(TNode<WasmSuspenderObject> p_o) {
-return LoadWasmSuspenderObjectStack_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=171&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmSuspenderObjectStack(TNode<WasmSuspenderObject> p_o, TNode<ExternalPointerT> p_v) {
-return StoreWasmSuspenderObjectStack_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=172&c=3
-TNode<MaybeObject> TorqueGeneratedExportedMacrosAssembler::LoadWasmSuspenderObjectParent(TNode<WasmSuspenderObject> p_o) {
-return LoadWasmSuspenderObjectParent_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=172&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmSuspenderObjectParent(TNode<WasmSuspenderObject> p_o, TNode<MaybeObject> p_v) {
-return StoreWasmSuspenderObjectParent_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=173&c=3
-TNode<Union<JSPromise, Undefined>> TorqueGeneratedExportedMacrosAssembler::LoadWasmSuspenderObjectPromise(TNode<WasmSuspenderObject> p_o) {
-return LoadWasmSuspenderObjectPromise_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=173&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmSuspenderObjectPromise(TNode<WasmSuspenderObject> p_o, TNode<Union<JSPromise, Undefined>> p_v) {
-return StoreWasmSuspenderObjectPromise_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=174&c=3
-TNode<Union<JSObject, Undefined>> TorqueGeneratedExportedMacrosAssembler::LoadWasmSuspenderObjectResume(TNode<WasmSuspenderObject> p_o) {
-return LoadWasmSuspenderObjectResume_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=174&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmSuspenderObjectResume(TNode<WasmSuspenderObject> p_o, TNode<Union<JSObject, Undefined>> p_v) {
-return StoreWasmSuspenderObjectResume_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=175&c=3
-TNode<Union<JSObject, Undefined>> TorqueGeneratedExportedMacrosAssembler::LoadWasmSuspenderObjectReject(TNode<WasmSuspenderObject> p_o) {
-return LoadWasmSuspenderObjectReject_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=175&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmSuspenderObjectReject(TNode<WasmSuspenderObject> p_o, TNode<Union<JSObject, Undefined>> p_v) {
-return StoreWasmSuspenderObjectReject_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=179&c=3
-TNode<WasmStackObject> TorqueGeneratedExportedMacrosAssembler::LoadWasmContinuationObjectStackObj(TNode<WasmContinuationObject> p_o) {
-return LoadWasmContinuationObjectStackObj_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=179&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmContinuationObjectStackObj(TNode<WasmContinuationObject> p_o, TNode<WasmStackObject> p_v) {
-return StoreWasmContinuationObjectStackObj_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=185&c=3
-TNode<ExternalPointerT> TorqueGeneratedExportedMacrosAssembler::LoadWasmStackObjectStack(TNode<WasmStackObject> p_o) {
-return LoadWasmStackObjectStack_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=185&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmStackObjectStack(TNode<WasmStackObject> p_o, TNode<ExternalPointerT> p_v) {
-return StoreWasmStackObjectStack_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=192&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmExceptionTagIndex(TNode<WasmExceptionTag> p_o) {
-return LoadWasmExceptionTagIndex_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=192&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmExceptionTagIndex(TNode<WasmExceptionTag> p_o, TNode<Smi> p_v) {
-return StoreWasmExceptionTagIndex_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=198&c=3
-TNode<Foreign> TorqueGeneratedExportedMacrosAssembler::LoadWasmModuleObjectManagedNativeModule(TNode<WasmModuleObject> p_o) {
-return LoadWasmModuleObjectManagedNativeModule_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=198&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmModuleObjectManagedNativeModule(TNode<WasmModuleObject> p_o, TNode<Foreign> p_v) {
-return StoreWasmModuleObjectManagedNativeModule_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=199&c=3
-TNode<Script> TorqueGeneratedExportedMacrosAssembler::LoadWasmModuleObjectScript(TNode<WasmModuleObject> p_o) {
-return LoadWasmModuleObjectScript_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=199&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmModuleObjectScript(TNode<WasmModuleObject> p_o, TNode<Script> p_v) {
-return StoreWasmModuleObjectScript_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=214&c=3
-TNode<FixedArray> TorqueGeneratedExportedMacrosAssembler::LoadWasmTableObjectEntries(TNode<WasmTableObject> p_o) {
-return LoadWasmTableObjectEntries_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=214&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTableObjectEntries(TNode<WasmTableObject> p_o, TNode<FixedArray> p_v) {
-return StoreWasmTableObjectEntries_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=215&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmTableObjectCurrentLength(TNode<WasmTableObject> p_o) {
-return LoadWasmTableObjectCurrentLength_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=215&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTableObjectCurrentLength(TNode<WasmTableObject> p_o, TNode<Smi> p_v) {
-return StoreWasmTableObjectCurrentLength_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=220&c=3
-TNode<Union<BigInt, HeapNumber, Smi, Undefined>> TorqueGeneratedExportedMacrosAssembler::LoadWasmTableObjectMaximumLength(TNode<WasmTableObject> p_o) {
-return LoadWasmTableObjectMaximumLength_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=220&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTableObjectMaximumLength(TNode<WasmTableObject> p_o, TNode<Union<BigInt, HeapNumber, Smi, Undefined>> p_v) {
-return StoreWasmTableObjectMaximumLength_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=224&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmTableObjectRawType(TNode<WasmTableObject> p_o) {
-return LoadWasmTableObjectRawType_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=224&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTableObjectRawType(TNode<WasmTableObject> p_o, TNode<Smi> p_v) {
-return StoreWasmTableObjectRawType_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=226&c=3
-TNode<TrustedPointerT> TorqueGeneratedExportedMacrosAssembler::LoadWasmTableObjectTrustedDispatchTable(TNode<WasmTableObject> p_o) {
-return LoadWasmTableObjectTrustedDispatchTable_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=226&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTableObjectTrustedDispatchTable(TNode<WasmTableObject> p_o, TNode<TrustedPointerT> p_v) {
-return StoreWasmTableObjectTrustedDispatchTable_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=230&c=3
-TNode<TrustedPointerT> TorqueGeneratedExportedMacrosAssembler::LoadWasmTableObjectTrustedData(TNode<WasmTableObject> p_o) {
-return LoadWasmTableObjectTrustedData_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=230&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTableObjectTrustedData(TNode<WasmTableObject> p_o, TNode<TrustedPointerT> p_v) {
-return StoreWasmTableObjectTrustedData_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=231&c=3
-TNode<Uint8T> TorqueGeneratedExportedMacrosAssembler::LoadWasmTableObjectAddressType(TNode<WasmTableObject> p_o) {
-return LoadWasmTableObjectAddressType_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=231&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTableObjectAddressType(TNode<WasmTableObject> p_o, TNode<Uint8T> p_v) {
-return StoreWasmTableObjectAddressType_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=233&c=3
-TNode<Uint8T> TorqueGeneratedExportedMacrosAssembler::LoadWasmTableObjectPaddingForAddressType0(TNode<WasmTableObject> p_o) {
-return LoadWasmTableObjectPaddingForAddressType0_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=233&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTableObjectPaddingForAddressType0(TNode<WasmTableObject> p_o, TNode<Uint8T> p_v) {
-return StoreWasmTableObjectPaddingForAddressType0_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=234&c=3
-TNode<Uint16T> TorqueGeneratedExportedMacrosAssembler::LoadWasmTableObjectPaddingForAddressType1(TNode<WasmTableObject> p_o) {
-return LoadWasmTableObjectPaddingForAddressType1_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=234&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTableObjectPaddingForAddressType1(TNode<WasmTableObject> p_o, TNode<Uint16T> p_v) {
-return StoreWasmTableObjectPaddingForAddressType1_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=241&c=3
-TNode<Union<JSArrayBuffer, Undefined>> TorqueGeneratedExportedMacrosAssembler::LoadWasmMemoryObjectArrayBuffer(TNode<WasmMemoryObject> p_o) {
-return LoadWasmMemoryObjectArrayBuffer_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=241&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmMemoryObjectArrayBuffer(TNode<WasmMemoryObject> p_o, TNode<Union<JSArrayBuffer, Undefined>> p_v) {
-return StoreWasmMemoryObjectArrayBuffer_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=246&c=3
-TNode<Foreign> TorqueGeneratedExportedMacrosAssembler::LoadWasmMemoryObjectManagedBackingStore(TNode<WasmMemoryObject> p_o) {
-return LoadWasmMemoryObjectManagedBackingStore_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=246&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmMemoryObjectManagedBackingStore(TNode<WasmMemoryObject> p_o, TNode<Foreign> p_v) {
-return StoreWasmMemoryObjectManagedBackingStore_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=248&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmMemoryObjectMaximumPages(TNode<WasmMemoryObject> p_o) {
-return LoadWasmMemoryObjectMaximumPages_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=248&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmMemoryObjectMaximumPages(TNode<WasmMemoryObject> p_o, TNode<Smi> p_v) {
-return StoreWasmMemoryObjectMaximumPages_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=249&c=3
-TNode<WeakArrayList> TorqueGeneratedExportedMacrosAssembler::LoadWasmMemoryObjectInstances(TNode<WasmMemoryObject> p_o) {
-return LoadWasmMemoryObjectInstances_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=249&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmMemoryObjectInstances(TNode<WasmMemoryObject> p_o, TNode<WeakArrayList> p_v) {
-return StoreWasmMemoryObjectInstances_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=250&c=3
-TNode<Uint8T> TorqueGeneratedExportedMacrosAssembler::LoadWasmMemoryObjectAddressType(TNode<WasmMemoryObject> p_o) {
-return LoadWasmMemoryObjectAddressType_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=250&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmMemoryObjectAddressType(TNode<WasmMemoryObject> p_o, TNode<Uint8T> p_v) {
-return StoreWasmMemoryObjectAddressType_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=252&c=3
-TNode<Uint8T> TorqueGeneratedExportedMacrosAssembler::LoadWasmMemoryObjectPaddingForFlags0(TNode<WasmMemoryObject> p_o) {
-return LoadWasmMemoryObjectPaddingForFlags0_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=252&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmMemoryObjectPaddingForFlags0(TNode<WasmMemoryObject> p_o, TNode<Uint8T> p_v) {
-return StoreWasmMemoryObjectPaddingForFlags0_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=253&c=3
-TNode<Uint16T> TorqueGeneratedExportedMacrosAssembler::LoadWasmMemoryObjectPaddingForFlags1(TNode<WasmMemoryObject> p_o) {
-return LoadWasmMemoryObjectPaddingForFlags1_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=253&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmMemoryObjectPaddingForFlags1(TNode<WasmMemoryObject> p_o, TNode<Uint16T> p_v) {
-return StoreWasmMemoryObjectPaddingForFlags1_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=262&c=3
-TNode<Weak<HeapObject>> TorqueGeneratedExportedMacrosAssembler::LoadWasmMemoryMapDescriptorMemory(TNode<WasmMemoryMapDescriptor> p_o) {
-return LoadWasmMemoryMapDescriptorMemory_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=262&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmMemoryMapDescriptorMemory(TNode<WasmMemoryMapDescriptor> p_o, TNode<Weak<HeapObject>> p_v) {
-return StoreWasmMemoryMapDescriptorMemory_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=263&c=3
-TNode<Int32T> TorqueGeneratedExportedMacrosAssembler::LoadWasmMemoryMapDescriptorFileDescriptor(TNode<WasmMemoryMapDescriptor> p_o) {
-return LoadWasmMemoryMapDescriptorFileDescriptor_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=263&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmMemoryMapDescriptorFileDescriptor(TNode<WasmMemoryMapDescriptor> p_o, TNode<Int32T> p_v) {
-return StoreWasmMemoryMapDescriptorFileDescriptor_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=265&c=3
-TNode<Uint32T> TorqueGeneratedExportedMacrosAssembler::LoadWasmMemoryMapDescriptorOffset(TNode<WasmMemoryMapDescriptor> p_o) {
-return LoadWasmMemoryMapDescriptorOffset_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=265&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmMemoryMapDescriptorOffset(TNode<WasmMemoryMapDescriptor> p_o, TNode<Uint32T> p_v) {
-return StoreWasmMemoryMapDescriptorOffset_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=266&c=3
-TNode<Uint32T> TorqueGeneratedExportedMacrosAssembler::LoadWasmMemoryMapDescriptorSize(TNode<WasmMemoryMapDescriptor> p_o) {
-return LoadWasmMemoryMapDescriptorSize_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=266&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmMemoryMapDescriptorSize(TNode<WasmMemoryMapDescriptor> p_o, TNode<Uint32T> p_v) {
-return StoreWasmMemoryMapDescriptorSize_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=274&c=3
-TNode<TrustedPointerT> TorqueGeneratedExportedMacrosAssembler::LoadWasmGlobalObjectTrustedData(TNode<WasmGlobalObject> p_o) {
-return LoadWasmGlobalObjectTrustedData_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=274&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmGlobalObjectTrustedData(TNode<WasmGlobalObject> p_o, TNode<TrustedPointerT> p_v) {
-return StoreWasmGlobalObjectTrustedData_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=279&c=3
-TNode<Union<ByteArray, FixedArray>> TorqueGeneratedExportedMacrosAssembler::LoadWasmGlobalObjectBuffer(TNode<WasmGlobalObject> p_o) {
-return LoadWasmGlobalObjectBuffer_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=279&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmGlobalObjectBuffer(TNode<WasmGlobalObject> p_o, TNode<Union<ByteArray, FixedArray>> p_v) {
-return StoreWasmGlobalObjectBuffer_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=283&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmGlobalObjectOffset(TNode<WasmGlobalObject> p_o) {
-return LoadWasmGlobalObjectOffset_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=283&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmGlobalObjectOffset(TNode<WasmGlobalObject> p_o, TNode<Smi> p_v) {
-return StoreWasmGlobalObjectOffset_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=284&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmGlobalObjectRawType(TNode<WasmGlobalObject> p_o) {
-return LoadWasmGlobalObjectRawType_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=284&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmGlobalObjectRawType(TNode<WasmGlobalObject> p_o, TNode<Smi> p_v) {
-return StoreWasmGlobalObjectRawType_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=287&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmGlobalObjectIsMutable(TNode<WasmGlobalObject> p_o) {
-return LoadWasmGlobalObjectIsMutable_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=287&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmGlobalObjectIsMutable(TNode<WasmGlobalObject> p_o, TNode<Smi> p_v) {
-return StoreWasmGlobalObjectIsMutable_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=291&c=3
-TNode<HeapObject> TorqueGeneratedExportedMacrosAssembler::LoadWasmTagObjectTag(TNode<WasmTagObject> p_o) {
-return LoadWasmTagObjectTag_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=291&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTagObjectTag(TNode<WasmTagObject> p_o, TNode<HeapObject> p_v) {
-return StoreWasmTagObjectTag_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=292&c=3
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmTagObjectCanonicalTypeIndex(TNode<WasmTagObject> p_o) {
-return LoadWasmTagObjectCanonicalTypeIndex_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=292&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTagObjectCanonicalTypeIndex(TNode<WasmTagObject> p_o, TNode<Smi> p_v) {
-return StoreWasmTagObjectCanonicalTypeIndex_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=293&c=3
-TNode<TrustedPointerT> TorqueGeneratedExportedMacrosAssembler::LoadWasmTagObjectTrustedData(TNode<WasmTagObject> p_o) {
-return LoadWasmTagObjectTrustedData_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=293&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTagObjectTrustedData(TNode<WasmTagObject> p_o, TNode<TrustedPointerT> p_v) {
-return StoreWasmTagObjectTrustedData_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/objects/js-function.tq?l=34&c=3
-TNode<Int32T> TorqueGeneratedExportedMacrosAssembler::LoadJSFunctionDispatchHandle(TNode<JSFunction> p_o) {
-return LoadJSFunctionDispatchHandle_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/objects/js-function.tq?l=34&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreJSFunctionDispatchHandle(TNode<JSFunction> p_o, TNode<Int32T> p_v) {
-return StoreJSFunctionDispatchHandle_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/objects/js-function.tq?l=36&c=3
-TNode<SharedFunctionInfo> TorqueGeneratedExportedMacrosAssembler::LoadJSFunctionSharedFunctionInfo(TNode<JSFunction> p_o) {
-return LoadJSFunctionSharedFunctionInfo_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/objects/js-function.tq?l=36&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreJSFunctionSharedFunctionInfo(TNode<JSFunction> p_o, TNode<SharedFunctionInfo> p_v) {
-return StoreJSFunctionSharedFunctionInfo_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/objects/js-function.tq?l=37&c=3
-TNode<Context> TorqueGeneratedExportedMacrosAssembler::LoadJSFunctionContext(TNode<JSFunction> p_o) {
-return LoadJSFunctionContext_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/objects/js-function.tq?l=37&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreJSFunctionContext(TNode<JSFunction> p_o, TNode<Context> p_v) {
-return StoreJSFunctionContext_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/objects/js-function.tq?l=38&c=3
-TNode<FeedbackCell> TorqueGeneratedExportedMacrosAssembler::LoadJSFunctionFeedbackCell(TNode<JSFunction> p_o) {
-return LoadJSFunctionFeedbackCell_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/objects/js-function.tq?l=38&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreJSFunctionFeedbackCell(TNode<JSFunction> p_o, TNode<FeedbackCell> p_v) {
-return StoreJSFunctionFeedbackCell_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=299&c=3
-TNode<Foreign> TorqueGeneratedExportedMacrosAssembler::LoadAsmWasmDataManagedNativeModule(TNode<AsmWasmData> p_o) {
-return LoadAsmWasmDataManagedNativeModule_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=299&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreAsmWasmDataManagedNativeModule(TNode<AsmWasmData> p_o, TNode<Foreign> p_v) {
-return StoreAsmWasmDataManagedNativeModule_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=300&c=3
-TNode<HeapNumber> TorqueGeneratedExportedMacrosAssembler::LoadAsmWasmDataUsesBitset(TNode<AsmWasmData> p_o) {
-return LoadAsmWasmDataUsesBitset_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=300&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreAsmWasmDataUsesBitset(TNode<AsmWasmData> p_o, TNode<HeapNumber> p_v) {
-return StoreAsmWasmDataUsesBitset_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=304&c=3
-TNode<Uint32T> TorqueGeneratedExportedMacrosAssembler::LoadWasmTypeInfoCanonicalType(TNode<WasmTypeInfo> p_o) {
-return LoadWasmTypeInfoCanonicalType_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=304&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTypeInfoCanonicalType(TNode<WasmTypeInfo> p_o, TNode<Uint32T> p_v) {
-return StoreWasmTypeInfoCanonicalType_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=305&c=3
-TNode<Uint32T> TorqueGeneratedExportedMacrosAssembler::LoadWasmTypeInfoCanonicalElementType(TNode<WasmTypeInfo> p_o) {
-return LoadWasmTypeInfoCanonicalElementType_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=305&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTypeInfoCanonicalElementType(TNode<WasmTypeInfo> p_o, TNode<Uint32T> p_v) {
-return StoreWasmTypeInfoCanonicalElementType_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=306&c=9
-TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadWasmTypeInfoSupertypesLength(TNode<WasmTypeInfo> p_o) {
-return LoadWasmTypeInfoSupertypesLength_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
-TorqueStructSlice_Object_MutableReference_Object_0 TorqueGeneratedExportedMacrosAssembler::FieldSliceWasmTypeInfoSupertypes(TNode<WasmTypeInfo> p_o) {
-return FieldSliceWasmTypeInfoSupertypes_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
-TNode<Object> TorqueGeneratedExportedMacrosAssembler::LoadWasmTypeInfoSupertypes(TNode<WasmTypeInfo> p_o, TNode<IntPtrT> p_i) {
-return LoadWasmTypeInfoSupertypes_0(state_, p_o, p_i);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmTypeInfoSupertypes(TNode<WasmTypeInfo> p_o, TNode<IntPtrT> p_i, TNode<Object> p_v) {
-return StoreWasmTypeInfoSupertypes_0(state_, p_o, p_i, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=319&c=3
-TNode<Uint32T> TorqueGeneratedExportedMacrosAssembler::LoadWasmArrayLength(TNode<WasmArray> p_o) {
-return LoadWasmArrayLength_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=319&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmArrayLength(TNode<WasmArray> p_o, TNode<Uint32T> p_v) {
-return StoreWasmArrayLength_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=326&c=3
-TNode<String> TorqueGeneratedExportedMacrosAssembler::LoadWasmStringViewIterString(TNode<WasmStringViewIter> p_o) {
-return LoadWasmStringViewIterString_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=326&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmStringViewIterString(TNode<WasmStringViewIter> p_o, TNode<String> p_v) {
-return StoreWasmStringViewIterString_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=327&c=3
-TNode<Uint32T> TorqueGeneratedExportedMacrosAssembler::LoadWasmStringViewIterOffset(TNode<WasmStringViewIter> p_o) {
-return LoadWasmStringViewIterOffset_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=327&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmStringViewIterOffset(TNode<WasmStringViewIter> p_o, TNode<Uint32T> p_v) {
-return StoreWasmStringViewIterOffset_0(state_, p_o, p_v);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=339&c=3
-TNode<JSReceiver> TorqueGeneratedExportedMacrosAssembler::LoadWasmSuspendingObjectCallable(TNode<WasmSuspendingObject> p_o) {
-return LoadWasmSuspendingObjectCallable_0(state_, p_o);}
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=339&c=3
-void TorqueGeneratedExportedMacrosAssembler::StoreWasmSuspendingObjectCallable(TNode<WasmSuspendingObject> p_o, TNode<JSReceiver> p_v) {
-return StoreWasmSuspendingObjectCallable_0(state_, p_o, p_v);}
 
 // https://crsrc.org/c/v8/src/objects/js-generator.tq?l=6&c=3
 TNode<JSFunction> TorqueGeneratedExportedMacrosAssembler::LoadJSGeneratorObjectFunction(TNode<JSGeneratorObject> p_o) {
@@ -2256,6 +1536,38 @@ return LoadJSRegExpFlags_0(state_, p_o);}
 void TorqueGeneratedExportedMacrosAssembler::StoreJSRegExpFlags(TNode<JSRegExp> p_o, TNode<Union<Smi, Undefined>> p_v) {
 return StoreJSRegExpFlags_0(state_, p_o, p_v);}
 
+// https://crsrc.org/c/v8/src/objects/js-function.tq?l=34&c=3
+TNode<Int32T> TorqueGeneratedExportedMacrosAssembler::LoadJSFunctionDispatchHandle(TNode<JSFunction> p_o) {
+return LoadJSFunctionDispatchHandle_0(state_, p_o);}
+
+// https://crsrc.org/c/v8/src/objects/js-function.tq?l=34&c=3
+void TorqueGeneratedExportedMacrosAssembler::StoreJSFunctionDispatchHandle(TNode<JSFunction> p_o, TNode<Int32T> p_v) {
+return StoreJSFunctionDispatchHandle_0(state_, p_o, p_v);}
+
+// https://crsrc.org/c/v8/src/objects/js-function.tq?l=36&c=3
+TNode<SharedFunctionInfo> TorqueGeneratedExportedMacrosAssembler::LoadJSFunctionSharedFunctionInfo(TNode<JSFunction> p_o) {
+return LoadJSFunctionSharedFunctionInfo_0(state_, p_o);}
+
+// https://crsrc.org/c/v8/src/objects/js-function.tq?l=36&c=3
+void TorqueGeneratedExportedMacrosAssembler::StoreJSFunctionSharedFunctionInfo(TNode<JSFunction> p_o, TNode<SharedFunctionInfo> p_v) {
+return StoreJSFunctionSharedFunctionInfo_0(state_, p_o, p_v);}
+
+// https://crsrc.org/c/v8/src/objects/js-function.tq?l=37&c=3
+TNode<Context> TorqueGeneratedExportedMacrosAssembler::LoadJSFunctionContext(TNode<JSFunction> p_o) {
+return LoadJSFunctionContext_0(state_, p_o);}
+
+// https://crsrc.org/c/v8/src/objects/js-function.tq?l=37&c=3
+void TorqueGeneratedExportedMacrosAssembler::StoreJSFunctionContext(TNode<JSFunction> p_o, TNode<Context> p_v) {
+return StoreJSFunctionContext_0(state_, p_o, p_v);}
+
+// https://crsrc.org/c/v8/src/objects/js-function.tq?l=38&c=3
+TNode<FeedbackCell> TorqueGeneratedExportedMacrosAssembler::LoadJSFunctionFeedbackCell(TNode<JSFunction> p_o) {
+return LoadJSFunctionFeedbackCell_0(state_, p_o);}
+
+// https://crsrc.org/c/v8/src/objects/js-function.tq?l=38&c=3
+void TorqueGeneratedExportedMacrosAssembler::StoreJSFunctionFeedbackCell(TNode<JSFunction> p_o, TNode<FeedbackCell> p_v) {
+return StoreJSFunctionFeedbackCell_0(state_, p_o, p_v);}
+
 // https://crsrc.org/c/v8/src/objects/js-function.tq?l=57&c=3
 TNode<Union<JSReceiver, Map, TheHole>> TorqueGeneratedExportedMacrosAssembler::LoadJSFunctionWithPrototypePrototypeOrInitialMap(TNode<JSFunctionWithPrototype> p_o) {
 return LoadJSFunctionWithPrototypePrototypeOrInitialMap_0(state_, p_o);}
@@ -2417,7 +1729,7 @@ void TorqueGeneratedExportedMacrosAssembler::StoreSwissNameDictionaryMetaTable(T
 return StoreSwissNameDictionaryMetaTable_0(state_, p_o, p_v);}
 
 // https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=12&c=3
-TorqueStructSlice_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_MutableReference_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0 TorqueGeneratedExportedMacrosAssembler::FieldSliceSwissNameDictionaryDataTable(TNode<SwissNameDictionary> p_o) {
+TorqueStructSlice_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_MutableReference_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0 TorqueGeneratedExportedMacrosAssembler::FieldSliceSwissNameDictionaryDataTable(TNode<SwissNameDictionary> p_o) {
 return FieldSliceSwissNameDictionaryDataTable_0(state_, p_o);}
 
 // https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=12&c=3
@@ -2688,20 +2000,20 @@ return LoadMapConstructorOrBackPointerOrNativeContext_0(state_, p_o);}
 void TorqueGeneratedExportedMacrosAssembler::StoreMapConstructorOrBackPointerOrNativeContext(TNode<Map> p_o, TNode<Object> p_v) {
 return StoreMapConstructorOrBackPointerOrNativeContext_0(state_, p_o, p_v);}
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
-TNode<Union<DescriptorArray, WasmStruct>> TorqueGeneratedExportedMacrosAssembler::LoadMapInstanceDescriptors(TNode<Map> p_o) {
+// https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
+TNode<DescriptorArray> TorqueGeneratedExportedMacrosAssembler::LoadMapInstanceDescriptors(TNode<Map> p_o) {
 return LoadMapInstanceDescriptors_0(state_, p_o);}
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
-void TorqueGeneratedExportedMacrosAssembler::StoreMapInstanceDescriptors(TNode<Map> p_o, TNode<Union<DescriptorArray, WasmStruct>> p_v) {
+// https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
+void TorqueGeneratedExportedMacrosAssembler::StoreMapInstanceDescriptors(TNode<Map> p_o, TNode<DescriptorArray> p_v) {
 return StoreMapInstanceDescriptors_0(state_, p_o, p_v);}
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
-TNode<Union<Map, WeakArrayList>> TorqueGeneratedExportedMacrosAssembler::LoadMapDependentCode(TNode<Map> p_o) {
+// https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
+TNode<WeakArrayList> TorqueGeneratedExportedMacrosAssembler::LoadMapDependentCode(TNode<Map> p_o) {
 return LoadMapDependentCode_0(state_, p_o);}
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
-void TorqueGeneratedExportedMacrosAssembler::StoreMapDependentCode(TNode<Map> p_o, TNode<Union<Map, WeakArrayList>> p_v) {
+// https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
+void TorqueGeneratedExportedMacrosAssembler::StoreMapDependentCode(TNode<Map> p_o, TNode<WeakArrayList> p_v) {
 return StoreMapDependentCode_0(state_, p_o, p_v);}
 
 // https://crsrc.org/c/v8/src/objects/map.tq?l=95&c=3
@@ -2759,6 +2071,10 @@ return LoadAccessorInfoFlags_0(state_, p_o);}
 // https://crsrc.org/c/v8/src/objects/api-callbacks.tq?l=63&c=3
 void TorqueGeneratedExportedMacrosAssembler::StoreAccessorInfoFlags(TNode<AccessorInfo> p_o, TNode<Uint32T> p_v) {
 return StoreAccessorInfoFlags_0(state_, p_o, p_v);}
+
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=8&c=9
+TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadFixedArrayBaseLength(TNode<FixedArrayBase> p_o) {
+return LoadFixedArrayBaseLength_0(state_, p_o);}
 
 // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=14&c=3
 TorqueStructSlice_Object_MutableReference_Object_0 TorqueGeneratedExportedMacrosAssembler::FieldSliceFixedArrayObjects(TNode<FixedArray> p_o) {
@@ -3684,6 +3000,18 @@ return LoadProtectedWeakFixedArrayObjects_0(state_, p_o, p_i);}
 void TorqueGeneratedExportedMacrosAssembler::StoreProtectedWeakFixedArrayObjects(TNode<ProtectedWeakFixedArray> p_o, TNode<IntPtrT> p_i, TNode<Union<Smi, TrustedObject>> p_v) {
 return StoreProtectedWeakFixedArrayObjects_0(state_, p_o, p_i, p_v);}
 
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+TorqueStructSlice_uint8_MutableReference_uint8_0 TorqueGeneratedExportedMacrosAssembler::FieldSliceByteArrayValues(TNode<ByteArray> p_o) {
+return FieldSliceByteArrayValues_0(state_, p_o);}
+
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+TNode<Uint8T> TorqueGeneratedExportedMacrosAssembler::LoadByteArrayValues(TNode<ByteArray> p_o, TNode<IntPtrT> p_i) {
+return LoadByteArrayValues_0(state_, p_o, p_i);}
+
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+void TorqueGeneratedExportedMacrosAssembler::StoreByteArrayValues(TNode<ByteArray> p_o, TNode<IntPtrT> p_i, TNode<Uint8T> p_v) {
+return StoreByteArrayValues_0(state_, p_o, p_i, p_v);}
+
 // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=69&c=9
 TNode<Smi> TorqueGeneratedExportedMacrosAssembler::LoadTrustedByteArrayLength(TNode<TrustedByteArray> p_o) {
 return LoadTrustedByteArrayLength_0(state_, p_o);}
@@ -3853,7 +3181,7 @@ void TorqueGeneratedExportedMacrosAssembler::StoreSmallOrderedHashSetPadding(TNo
 return StoreSmallOrderedHashSetPadding_0(state_, p_o, p_i, p_v);}
 
 // https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=32&c=3
-TorqueStructSlice_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_MutableReference_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0 TorqueGeneratedExportedMacrosAssembler::FieldSliceSmallOrderedHashSetDataTable(TNode<SmallOrderedHashSet> p_o) {
+TorqueStructSlice_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_MutableReference_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0 TorqueGeneratedExportedMacrosAssembler::FieldSliceSmallOrderedHashSetDataTable(TNode<SmallOrderedHashSet> p_o) {
 return FieldSliceSmallOrderedHashSetDataTable_0(state_, p_o);}
 
 // https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=32&c=3
@@ -4527,6 +3855,22 @@ return LoadSyntheticModuleEvaluationSteps_0(state_, p_o);}
 // https://crsrc.org/c/v8/src/objects/synthetic-module.tq?l=9&c=3
 void TorqueGeneratedExportedMacrosAssembler::StoreSyntheticModuleEvaluationSteps(TNode<SyntheticModule> p_o, TNode<Foreign> p_v) {
 return StoreSyntheticModuleEvaluationSteps_0(state_, p_o, p_v);}
+
+// https://crsrc.org/c/v8/src/objects/foreign.tq?l=8&c=3
+TNode<ExternalPointerT> TorqueGeneratedExportedMacrosAssembler::LoadForeignForeignAddress(TNode<Foreign> p_o) {
+return LoadForeignForeignAddress_0(state_, p_o);}
+
+// https://crsrc.org/c/v8/src/objects/foreign.tq?l=8&c=3
+void TorqueGeneratedExportedMacrosAssembler::StoreForeignForeignAddress(TNode<Foreign> p_o, TNode<ExternalPointerT> p_v) {
+return StoreForeignForeignAddress_0(state_, p_o, p_v);}
+
+// https://crsrc.org/c/v8/src/objects/foreign.tq?l=12&c=3
+TNode<RawPtrT> TorqueGeneratedExportedMacrosAssembler::LoadTrustedForeignForeignAddress(TNode<TrustedForeign> p_o) {
+return LoadTrustedForeignForeignAddress_0(state_, p_o);}
+
+// https://crsrc.org/c/v8/src/objects/foreign.tq?l=12&c=3
+void TorqueGeneratedExportedMacrosAssembler::StoreTrustedForeignForeignAddress(TNode<TrustedForeign> p_o, TNode<RawPtrT> p_v) {
+return StoreTrustedForeignForeignAddress_0(state_, p_o, p_v);}
 
 // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=56&c=3
 TNode<CppHeapPointerT> TorqueGeneratedExportedMacrosAssembler::LoadJSAPIObjectWithEmbedderSlotsCppHeapWrappable(TNode<JSAPIObjectWithEmbedderSlots> p_o) {

@@ -33,80 +33,82 @@
       V(ALIASED_ARGUMENTS_ENTRY_TYPE, 142) /* https://crsrc.org/c/v8/src/objects/arguments.tq?l=41&c=1 */\
       V(ALLOCATION_MEMENTO_TYPE, 143) /* https://crsrc.org/c/v8/src/objects/allocation-site.tq?l=7&c=1 */\
       V(ARRAY_BOILERPLATE_DESCRIPTION_TYPE, 144) /* https://crsrc.org/c/v8/src/objects/literal-objects.tq?l=13&c=1 */\
-      V(ASM_WASM_DATA_TYPE, 145) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=298&c=1 */\
-      V(ASYNC_GENERATOR_REQUEST_TYPE, 146) /* https://crsrc.org/c/v8/src/objects/js-generator.tq?l=44&c=1 */\
-      V(BREAK_POINT_TYPE, 147) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=5&c=1 */\
-      V(BREAK_POINT_INFO_TYPE, 148) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=11&c=1 */\
-      V(BYTECODE_WRAPPER_TYPE, 149) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=26&c=1 */\
-      V(CALL_SITE_INFO_TYPE, 150) /* https://crsrc.org/c/v8/src/objects/call-site-info.tq?l=24&c=1 */\
-      V(CLASS_BOILERPLATE_TYPE, 151) /* https://crsrc.org/c/v8/src/objects/literal-objects.tq?l=25&c=1 */\
-      V(CLASS_POSITIONS_TYPE, 152) /* https://crsrc.org/c/v8/src/objects/struct.tq?l=10&c=1 */\
-      V(CODE_WRAPPER_TYPE, 153) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=33&c=1 */\
-      V(DEBUG_INFO_TYPE, 154) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=35&c=1 */\
-      V(ENUM_CACHE_TYPE, 155) /* https://crsrc.org/c/v8/src/objects/descriptor-array.tq?l=5&c=1 */\
-      V(ERROR_STACK_DATA_TYPE, 156) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=109&c=1 */\
-      V(FEEDBACK_CELL_TYPE, 157) /* https://crsrc.org/c/v8/src/objects/feedback-cell.tq?l=5&c=1 */\
-      V(FUNCTION_TEMPLATE_RARE_DATA_TYPE, 158) /* https://crsrc.org/c/v8/src/objects/templates.tq?l=23&c=1 */\
-      V(MODULE_REQUEST_TYPE, 159) /* https://crsrc.org/c/v8/src/objects/source-text-module.tq?l=59&c=1 */\
-      V(PROMISE_CAPABILITY_TYPE, 160) /* https://crsrc.org/c/v8/src/objects/promise.tq?l=5&c=1 */\
-      V(PROMISE_REACTION_TYPE, 161) /* https://crsrc.org/c/v8/src/objects/promise.tq?l=34&c=1 */\
-      V(PROPERTY_DESCRIPTOR_OBJECT_TYPE, 162) /* https://crsrc.org/c/v8/src/objects/property-descriptor-object.tq?l=19&c=1 */\
-      V(PROTOTYPE_INFO_TYPE, 163) /* https://crsrc.org/c/v8/src/objects/prototype-info.tq?l=12&c=1 */\
-      V(PROTOTYPE_SHARED_CLOSURE_INFO_TYPE, 164) /* https://crsrc.org/c/v8/src/objects/literal-objects.tq?l=36&c=1 */\
-      V(REG_EXP_BOILERPLATE_DESCRIPTION_TYPE, 165) /* https://crsrc.org/c/v8/src/objects/literal-objects.tq?l=19&c=1 */\
-      V(REG_EXP_DATA_WRAPPER_TYPE, 166) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=54&c=1 */\
-      V(SCRIPT_TYPE, 167) /* https://crsrc.org/c/v8/src/objects/script.tq?l=19&c=1 */\
-      V(SCRIPT_OR_MODULE_TYPE, 168) /* https://crsrc.org/c/v8/src/objects/module.tq?l=28&c=1 */\
-      V(SOURCE_TEXT_MODULE_INFO_ENTRY_TYPE, 169) /* https://crsrc.org/c/v8/src/objects/source-text-module.tq?l=70&c=1 */\
-      V(STACK_FRAME_INFO_TYPE, 170) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=75&c=1 */\
-      V(STACK_TRACE_INFO_TYPE, 171) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=88&c=1 */\
-      V(TEMPLATE_OBJECT_DESCRIPTION_TYPE, 172) /* https://crsrc.org/c/v8/src/objects/template-objects.tq?l=5&c=1 */\
-      V(TUPLE2_TYPE, 173) /* https://crsrc.org/c/v8/src/objects/struct.tq?l=8&c=1 */\
-      V(WASM_EXCEPTION_TAG_TYPE, 174) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=188&c=1 */\
-    V(LAST_STRUCT_TYPE, 174) \
-    V(FIRST_TRUSTED_OBJECT_TYPE, 175) \
-      V(FIRST_EXPOSED_TRUSTED_OBJECT_TYPE, 175) \
-        V(FIRST_UNCOMPILED_DATA_TYPE, 175) \
-          V(FIRST_UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE, 175) \
-            V(UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE, 175) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=172&c=1 */\
-            V(UNCOMPILED_DATA_WITH_PREPARSE_DATA_AND_JOB_TYPE, 176) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=183&c=1 */\
-          V(LAST_UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE, 176) \
-          V(FIRST_UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE, 177) \
-            V(UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE, 177) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=169&c=1 */\
-            V(UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_WITH_JOB_TYPE, 178) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=177&c=1 */\
-          V(LAST_UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE, 178) \
-        V(LAST_UNCOMPILED_DATA_TYPE, 178) \
-        V(FIRST_WASM_FUNCTION_DATA_TYPE, 179) \
-          V(WASM_FUNCTION_DATA_TYPE, 179) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=120&c=1 */\
-          V(WASM_CAPI_FUNCTION_DATA_TYPE, 180) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=161&c=1 */\
-          V(WASM_EXPORTED_FUNCTION_DATA_TYPE, 181) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=136&c=1 */\
-          V(WASM_JS_FUNCTION_DATA_TYPE, 182) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=156&c=1 */\
-        V(LAST_WASM_FUNCTION_DATA_TYPE, 182) \
-        V(FIRST_REG_EXP_DATA_TYPE, 183) \
-          V(REG_EXP_DATA_TYPE, 183) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=17&c=1 */\
-          V(ATOM_REG_EXP_DATA_TYPE, 184) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=28&c=1 */\
-          V(IR_REG_EXP_DATA_TYPE, 185) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=38&c=1 */\
-        V(LAST_REG_EXP_DATA_TYPE, 185) \
-        V(BYTECODE_ARRAY_TYPE, 186) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=7&c=1 */\
-        V(CODE_TYPE, 187) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=31&c=1 */\
-        V(INTERPRETER_DATA_TYPE, 188) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=14&c=1 */\
-        V(WASM_DISPATCH_TABLE_TYPE, 189) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=202&c=1 */\
-        V(WASM_INTERNAL_FUNCTION_TYPE, 190) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=81&c=1 */\
-        V(WASM_SUSPENDER_OBJECT_TYPE, 191) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=170&c=1 */\
-        V(WASM_TRUSTED_INSTANCE_DATA_TYPE, 192) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=37&c=1 */\
-      V(LAST_EXPOSED_TRUSTED_OBJECT_TYPE, 192) \
-      V(INSTRUCTION_STREAM_TYPE, 193) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=293&c=1 */\
-      V(PROTECTED_FIXED_ARRAY_TYPE, 194) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=25&c=1 */\
-      V(PROTECTED_WEAK_FIXED_ARRAY_TYPE, 195) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=54&c=1 */\
-      V(SHARED_FUNCTION_INFO_WRAPPER_TYPE, 196) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=130&c=1 */\
-      V(TRUSTED_BYTE_ARRAY_TYPE, 197) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=67&c=1 */\
-      V(TRUSTED_FIXED_ARRAY_TYPE, 198) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=19&c=1 */\
-      V(TRUSTED_FOREIGN_TYPE, 199) /* https://crsrc.org/c/v8/src/objects/foreign.tq?l=11&c=1 */\
-      V(TRUSTED_WEAK_FIXED_ARRAY_TYPE, 200) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=48&c=1 */\
-      V(WASM_DISPATCH_TABLE_FOR_IMPORTS_TYPE, 201) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=203&c=1 */\
-      V(WASM_IMPORT_DATA_TYPE, 202) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=49&c=1 */\
-    V(LAST_TRUSTED_OBJECT_TYPE, 202) \
-    V(ACCESSOR_INFO_TYPE, 203) /* https://crsrc.org/c/v8/src/objects/api-callbacks.tq?l=47&c=1 */\
+      V(ASYNC_GENERATOR_REQUEST_TYPE, 145) /* https://crsrc.org/c/v8/src/objects/js-generator.tq?l=44&c=1 */\
+      V(BREAK_POINT_TYPE, 146) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=5&c=1 */\
+      V(BREAK_POINT_INFO_TYPE, 147) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=11&c=1 */\
+      V(BYTECODE_WRAPPER_TYPE, 148) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=26&c=1 */\
+      V(CALL_SITE_INFO_TYPE, 149) /* https://crsrc.org/c/v8/src/objects/call-site-info.tq?l=24&c=1 */\
+      V(CLASS_BOILERPLATE_TYPE, 150) /* https://crsrc.org/c/v8/src/objects/literal-objects.tq?l=25&c=1 */\
+      V(CLASS_POSITIONS_TYPE, 151) /* https://crsrc.org/c/v8/src/objects/struct.tq?l=10&c=1 */\
+      V(CODE_WRAPPER_TYPE, 152) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=33&c=1 */\
+      V(DEBUG_INFO_TYPE, 153) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=35&c=1 */\
+      V(ENUM_CACHE_TYPE, 154) /* https://crsrc.org/c/v8/src/objects/descriptor-array.tq?l=5&c=1 */\
+      V(ERROR_STACK_DATA_TYPE, 155) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=109&c=1 */\
+      V(FEEDBACK_CELL_TYPE, 156) /* https://crsrc.org/c/v8/src/objects/feedback-cell.tq?l=5&c=1 */\
+      V(FUNCTION_TEMPLATE_RARE_DATA_TYPE, 157) /* https://crsrc.org/c/v8/src/objects/templates.tq?l=23&c=1 */\
+      V(MODULE_REQUEST_TYPE, 158) /* https://crsrc.org/c/v8/src/objects/source-text-module.tq?l=59&c=1 */\
+      V(PROMISE_CAPABILITY_TYPE, 159) /* https://crsrc.org/c/v8/src/objects/promise.tq?l=5&c=1 */\
+      V(PROMISE_REACTION_TYPE, 160) /* https://crsrc.org/c/v8/src/objects/promise.tq?l=34&c=1 */\
+      V(PROPERTY_DESCRIPTOR_OBJECT_TYPE, 161) /* https://crsrc.org/c/v8/src/objects/property-descriptor-object.tq?l=19&c=1 */\
+      V(PROTOTYPE_INFO_TYPE, 162) /* https://crsrc.org/c/v8/src/objects/prototype-info.tq?l=12&c=1 */\
+      V(PROTOTYPE_SHARED_CLOSURE_INFO_TYPE, 163) /* https://crsrc.org/c/v8/src/objects/literal-objects.tq?l=36&c=1 */\
+      V(REG_EXP_BOILERPLATE_DESCRIPTION_TYPE, 164) /* https://crsrc.org/c/v8/src/objects/literal-objects.tq?l=19&c=1 */\
+      V(REG_EXP_DATA_WRAPPER_TYPE, 165) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=54&c=1 */\
+      V(SCRIPT_TYPE, 166) /* https://crsrc.org/c/v8/src/objects/script.tq?l=19&c=1 */\
+      V(SCRIPT_OR_MODULE_TYPE, 167) /* https://crsrc.org/c/v8/src/objects/module.tq?l=28&c=1 */\
+      V(SOURCE_TEXT_MODULE_INFO_ENTRY_TYPE, 168) /* https://crsrc.org/c/v8/src/objects/source-text-module.tq?l=70&c=1 */\
+      V(STACK_FRAME_INFO_TYPE, 169) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=75&c=1 */\
+      V(STACK_TRACE_INFO_TYPE, 170) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=88&c=1 */\
+      V(TEMPLATE_OBJECT_DESCRIPTION_TYPE, 171) /* https://crsrc.org/c/v8/src/objects/template-objects.tq?l=5&c=1 */\
+      V(TUPLE2_TYPE, 172) /* https://crsrc.org/c/v8/src/objects/struct.tq?l=8&c=1 */\
+    V(LAST_STRUCT_TYPE, 172) \
+    V(FIRST_TRUSTED_OBJECT_TYPE, 173) \
+      V(FIRST_EXPOSED_TRUSTED_OBJECT_TYPE, 173) \
+        V(FIRST_UNCOMPILED_DATA_TYPE, 173) \
+          V(FIRST_UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE, 173) \
+            V(UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE, 173) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=172&c=1 */\
+            V(UNCOMPILED_DATA_WITH_PREPARSE_DATA_AND_JOB_TYPE, 174) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=183&c=1 */\
+          V(LAST_UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE, 174) \
+          V(FIRST_UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE, 175) \
+            V(UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE, 175) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=169&c=1 */\
+            V(UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_WITH_JOB_TYPE, 176) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=177&c=1 */\
+          V(LAST_UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE, 176) \
+        V(LAST_UNCOMPILED_DATA_TYPE, 176) \
+        V(FIRST_REG_EXP_DATA_TYPE, 177) \
+          V(REG_EXP_DATA_TYPE, 177) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=17&c=1 */\
+          V(ATOM_REG_EXP_DATA_TYPE, 178) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=28&c=1 */\
+          V(IR_REG_EXP_DATA_TYPE, 179) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=38&c=1 */\
+        V(LAST_REG_EXP_DATA_TYPE, 179) \
+        V(BYTECODE_ARRAY_TYPE, 180) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=7&c=1 */\
+        V(CODE_TYPE, 181) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=31&c=1 */\
+        V(INTERPRETER_DATA_TYPE, 182) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=14&c=1 */\
+      V(LAST_EXPOSED_TRUSTED_OBJECT_TYPE, 182) \
+      V(INSTRUCTION_STREAM_TYPE, 183) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=293&c=1 */\
+      V(PROTECTED_FIXED_ARRAY_TYPE, 184) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=25&c=1 */\
+      V(PROTECTED_WEAK_FIXED_ARRAY_TYPE, 185) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=54&c=1 */\
+      V(SHARED_FUNCTION_INFO_WRAPPER_TYPE, 186) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=130&c=1 */\
+      V(TRUSTED_BYTE_ARRAY_TYPE, 187) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=67&c=1 */\
+      V(TRUSTED_FIXED_ARRAY_TYPE, 188) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=19&c=1 */\
+      V(TRUSTED_FOREIGN_TYPE, 189) /* https://crsrc.org/c/v8/src/objects/foreign.tq?l=11&c=1 */\
+      V(TRUSTED_WEAK_FIXED_ARRAY_TYPE, 190) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=48&c=1 */\
+    V(LAST_TRUSTED_OBJECT_TYPE, 190) \
+    V(FIRST_CONTEXT_TYPE, 191) \
+      V(AWAIT_CONTEXT_TYPE, 191) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=49&c=1 */\
+      V(BLOCK_CONTEXT_TYPE, 192) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=50&c=1 */\
+      V(CATCH_CONTEXT_TYPE, 193) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=51&c=1 */\
+      V(DEBUG_EVALUATE_CONTEXT_TYPE, 194) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=52&c=1 */\
+      V(EVAL_CONTEXT_TYPE, 195) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=54&c=1 */\
+      V(FUNCTION_CONTEXT_TYPE, 196) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=59&c=1 */\
+      V(MODULE_CONTEXT_TYPE, 197) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=55&c=1 */\
+      V(NATIVE_CONTEXT_TYPE, 198) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=92&c=1 */\
+      V(SCRIPT_CONTEXT_TYPE, 199) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=56&c=1 */\
+      V(WITH_CONTEXT_TYPE, 200) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=57&c=1 */\
+    V(LAST_CONTEXT_TYPE, 200) \
+    V(FIRST_EXPORTED_SUB_CLASS_BASE_TYPE, 201) \
+      V(EXPORTED_SUB_CLASS_BASE_TYPE, 201) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1181&c=1 */\
+      V(EXPORTED_SUB_CLASS_TYPE, 202) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1174&c=1 */\
+      V(EXPORTED_SUB_CLASS2_TYPE, 203) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1216&c=1 */\
+    V(LAST_EXPORTED_SUB_CLASS_BASE_TYPE, 203) \
     V(FOREIGN_TYPE, 204) /* https://crsrc.org/c/v8/src/objects/foreign.tq?l=5&c=1 */\
     V(FIRST_FIXED_ARRAY_BASE_TYPE, 205) \
       V(FIRST_FIXED_ARRAY_TYPE, 205) \
@@ -130,134 +132,106 @@
       V(FIXED_DOUBLE_ARRAY_TYPE, 219) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=31&c=1 */\
       V(SLOPPY_ARGUMENTS_ELEMENTS_TYPE, 220) /* https://crsrc.org/c/v8/src/objects/arguments.tq?l=27&c=1 */\
     V(LAST_FIXED_ARRAY_BASE_TYPE, 220) \
-    V(FIRST_CONTEXT_TYPE, 221) \
-      V(AWAIT_CONTEXT_TYPE, 221) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=49&c=1 */\
-      V(BLOCK_CONTEXT_TYPE, 222) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=50&c=1 */\
-      V(CATCH_CONTEXT_TYPE, 223) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=51&c=1 */\
-      V(DEBUG_EVALUATE_CONTEXT_TYPE, 224) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=52&c=1 */\
-      V(EVAL_CONTEXT_TYPE, 225) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=54&c=1 */\
-      V(FUNCTION_CONTEXT_TYPE, 226) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=59&c=1 */\
-      V(MODULE_CONTEXT_TYPE, 227) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=55&c=1 */\
-      V(NATIVE_CONTEXT_TYPE, 228) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=92&c=1 */\
-      V(SCRIPT_CONTEXT_TYPE, 229) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=56&c=1 */\
-      V(WITH_CONTEXT_TYPE, 230) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=57&c=1 */\
-    V(LAST_CONTEXT_TYPE, 230) \
-    V(FIRST_TURBOSHAFT_TYPE_TYPE, 231) \
-      V(FIRST_TURBOSHAFT_FLOAT64_TYPE_TYPE, 231) \
-        V(TURBOSHAFT_FLOAT64_TYPE_TYPE, 231) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=65&c=1 */\
-        V(TURBOSHAFT_FLOAT64_RANGE_TYPE_TYPE, 232) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=72&c=1 */\
-        V(TURBOSHAFT_FLOAT64_SET_TYPE_TYPE, 233) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=81&c=1 */\
-      V(LAST_TURBOSHAFT_FLOAT64_TYPE_TYPE, 233) \
-      V(FIRST_TURBOSHAFT_WORD32_TYPE_TYPE, 234) \
-        V(TURBOSHAFT_WORD32_TYPE_TYPE, 234) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=20&c=1 */\
-        V(TURBOSHAFT_WORD32_RANGE_TYPE_TYPE, 235) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=25&c=1 */\
-        V(TURBOSHAFT_WORD32_SET_TYPE_TYPE, 236) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=33&c=1 */\
-      V(LAST_TURBOSHAFT_WORD32_TYPE_TYPE, 236) \
-      V(FIRST_TURBOSHAFT_WORD64_TYPE_TYPE, 237) \
-        V(TURBOSHAFT_WORD64_TYPE_TYPE, 237) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=41&c=1 */\
-        V(TURBOSHAFT_WORD64_RANGE_TYPE_TYPE, 238) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=46&c=1 */\
-        V(TURBOSHAFT_WORD64_SET_TYPE_TYPE, 239) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=56&c=1 */\
-      V(LAST_TURBOSHAFT_WORD64_TYPE_TYPE, 239) \
-    V(LAST_TURBOSHAFT_TYPE_TYPE, 239) \
-    V(FIRST_TURBOFAN_TYPE_TYPE, 240) \
-      V(TURBOFAN_BITSET_TYPE_TYPE, 240) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=61&c=1 */\
-      V(TURBOFAN_HEAP_CONSTANT_TYPE_TYPE, 241) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=79&c=1 */\
-      V(TURBOFAN_OTHER_NUMBER_CONSTANT_TYPE_TYPE, 242) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=84&c=1 */\
-      V(TURBOFAN_RANGE_TYPE_TYPE, 243) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=73&c=1 */\
-      V(TURBOFAN_UNION_TYPE_TYPE, 244) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=67&c=1 */\
-    V(LAST_TURBOFAN_TYPE_TYPE, 244) \
-    V(FIRST_EXPORTED_SUB_CLASS_BASE_TYPE, 245) \
-      V(EXPORTED_SUB_CLASS_BASE_TYPE, 245) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1181&c=1 */\
-      V(EXPORTED_SUB_CLASS_TYPE, 246) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1174&c=1 */\
-      V(EXPORTED_SUB_CLASS2_TYPE, 247) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1216&c=1 */\
-    V(LAST_EXPORTED_SUB_CLASS_BASE_TYPE, 247) \
-    V(FIRST_SMALL_ORDERED_HASH_TABLE_TYPE, 248) \
-      V(SMALL_ORDERED_HASH_MAP_TYPE, 248) /* https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=64&c=1 */\
-      V(SMALL_ORDERED_HASH_SET_TYPE, 249) /* https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=25&c=1 */\
-      V(SMALL_ORDERED_NAME_DICTIONARY_TYPE, 250) /* https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=101&c=1 */\
-    V(LAST_SMALL_ORDERED_HASH_TABLE_TYPE, 250) \
-    V(FIRST_TEMPLATE_INFO_TYPE, 251) \
-      V(FIRST_TEMPLATE_INFO_WITH_PROPERTIES_TYPE, 251) \
-        V(FUNCTION_TEMPLATE_INFO_TYPE, 251) /* https://crsrc.org/c/v8/src/objects/templates.tq?l=55&c=1 */\
-        V(OBJECT_TEMPLATE_INFO_TYPE, 252) /* https://crsrc.org/c/v8/src/objects/templates.tq?l=115&c=1 */\
-      V(LAST_TEMPLATE_INFO_WITH_PROPERTIES_TYPE, 252) \
-      V(DICTIONARY_TEMPLATE_INFO_TYPE, 253) /* https://crsrc.org/c/v8/src/objects/templates.tq?l=121&c=1 */\
-    V(LAST_TEMPLATE_INFO_TYPE, 253) \
-    V(FIRST_ABSTRACT_INTERNAL_CLASS_TYPE, 254) \
-      V(ABSTRACT_INTERNAL_CLASS_SUBCLASS1_TYPE, 254) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1190&c=1 */\
-      V(ABSTRACT_INTERNAL_CLASS_SUBCLASS2_TYPE, 255) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1192&c=1 */\
-    V(LAST_ABSTRACT_INTERNAL_CLASS_TYPE, 255) \
-    V(FIRST_DESCRIPTOR_ARRAY_TYPE, 256) \
-      V(DESCRIPTOR_ARRAY_TYPE, 256) /* https://crsrc.org/c/v8/src/objects/descriptor-array.tq?l=26&c=1 */\
-      V(STRONG_DESCRIPTOR_ARRAY_TYPE, 257) /* https://crsrc.org/c/v8/src/objects/descriptor-array.tq?l=44&c=1 */\
-    V(LAST_DESCRIPTOR_ARRAY_TYPE, 257) \
-    V(FIRST_MODULE_TYPE, 258) \
-      V(SOURCE_TEXT_MODULE_TYPE, 258) /* https://crsrc.org/c/v8/src/objects/source-text-module.tq?l=12&c=1 */\
-      V(SYNTHETIC_MODULE_TYPE, 259) /* https://crsrc.org/c/v8/src/objects/synthetic-module.tq?l=5&c=1 */\
-    V(LAST_MODULE_TYPE, 259) \
-    V(FIRST_WEAK_FIXED_ARRAY_TYPE, 260) \
-      V(WEAK_FIXED_ARRAY_TYPE, 260) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=36&c=1 */\
-      V(TRANSITION_ARRAY_TYPE, 261) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=299&c=1 */\
-    V(LAST_WEAK_FIXED_ARRAY_TYPE, 261) \
-    V(ALLOCATION_SITE_TYPE, 262) /* https://crsrc.org/c/v8/src/objects/allocation-site.tq?l=5&c=1 */\
-    V(ARRAY_LIST_TYPE, 263) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=75&c=1 */\
-    V(CELL_TYPE, 264) /* https://crsrc.org/c/v8/src/objects/cell.tq?l=5&c=1 */\
-    V(CLOSURE_FEEDBACK_CELL_ARRAY_TYPE, 265) /* https://crsrc.org/c/v8/src/objects/feedback-vector.tq?l=27&c=1 */\
-    V(CONTEXT_CELL_TYPE, 266) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=25&c=1 */\
-    V(COVERAGE_INFO_TYPE, 267) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=65&c=1 */\
-    V(CPP_HEAP_EXTERNAL_OBJECT_TYPE, 268) /* https://crsrc.org/c/v8/src/objects/cpp-heap-external-object.tq?l=5&c=1 */\
-    V(DOUBLE_STRING_CACHE_TYPE, 269) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=279&c=1 */\
-    V(EMBEDDER_DATA_ARRAY_TYPE, 270) /* https://crsrc.org/c/v8/src/objects/embedder-data-array.tq?l=5&c=1 */\
-    V(FEEDBACK_METADATA_TYPE, 271) /* https://crsrc.org/c/v8/src/objects/feedback-vector.tq?l=47&c=1 */\
-    V(FEEDBACK_VECTOR_TYPE, 272) /* https://crsrc.org/c/v8/src/objects/feedback-vector.tq?l=33&c=1 */\
-    V(FILLER_TYPE, 273) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=690&c=1 */\
-    V(FREE_SPACE_TYPE, 274) /* https://crsrc.org/c/v8/src/objects/free-space.tq?l=5&c=1 */\
-    V(HOLE_TYPE, 275) /* https://crsrc.org/c/v8/src/objects/hole.tq?l=5&c=1 */\
-    V(INTERCEPTOR_INFO_TYPE, 276) /* https://crsrc.org/c/v8/src/objects/api-callbacks.tq?l=13&c=1 */\
-    V(INTERNAL_CLASS_TYPE, 277) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=763&c=1 */\
-    V(INTERNAL_CLASS_WITH_STRUCT_ELEMENTS_TYPE, 278) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1199&c=1 */\
-    V(MAP_TYPE, 279) /* https://crsrc.org/c/v8/src/objects/map.tq?l=37&c=1 */\
-    V(MEGA_DOM_HANDLER_TYPE, 280) /* https://crsrc.org/c/v8/src/objects/megadom-handler.tq?l=5&c=1 */\
-    V(OBJECT_BOILERPLATE_DESCRIPTION_TYPE, 281) /* https://crsrc.org/c/v8/src/objects/literal-objects.tq?l=5&c=1 */\
-    V(ON_HEAP_BASIC_BLOCK_PROFILER_DATA_TYPE, 282) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=199&c=1 */\
-    V(PREPARSE_DATA_TYPE, 283) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=7&c=1 */\
-    V(PROPERTY_ARRAY_TYPE, 284) /* https://crsrc.org/c/v8/src/objects/property-array.tq?l=5&c=1 */\
-    V(PROPERTY_CELL_TYPE, 285) /* https://crsrc.org/c/v8/src/objects/property-cell.tq?l=6&c=1 */\
-    V(REG_EXP_MATCH_INFO_TYPE, 286) /* https://crsrc.org/c/v8/src/objects/regexp-match-info.tq?l=5&c=1 */\
-    V(SCOPE_INFO_TYPE, 287) /* https://crsrc.org/c/v8/src/objects/scope-info.tq?l=122&c=1 */\
-    V(SCRIPT_CONTEXT_TABLE_TYPE, 288) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=17&c=1 */\
-    V(SHARED_FUNCTION_INFO_TYPE, 289) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=63&c=1 */\
-    V(SMI_BOX_TYPE, 290) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=930&c=1 */\
-    V(SMI_PAIR_TYPE, 291) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=829&c=1 */\
-    V(SORT_STATE_TYPE, 292) /* https://crsrc.org/c/v8/third_party/v8/builtins/array-sort.tq?l=19&c=1 */\
-    V(SWISS_NAME_DICTIONARY_TYPE, 293) /* https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=7&c=1 */\
-    V(WASM_CONTINUATION_OBJECT_TYPE, 294) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=178&c=1 */\
-    V(WASM_FAST_API_CALL_DATA_TYPE, 295) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=73&c=1 */\
-    V(WASM_FUNC_REF_TYPE, 296) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=111&c=1 */\
-    V(WASM_NULL_TYPE, 297) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=333&c=1 */\
-    V(WASM_RESUME_DATA_TYPE, 298) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=165&c=1 */\
-    V(WASM_STACK_OBJECT_TYPE, 299) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=184&c=1 */\
-    V(WASM_STRING_VIEW_ITER_TYPE, 300) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=325&c=1 */\
-    V(WASM_TYPE_INFO_TYPE, 301) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=303&c=1 */\
-    V(WEAK_ARRAY_LIST_TYPE, 302) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=82&c=1 */\
-    V(WEAK_CELL_TYPE, 303) /* https://crsrc.org/c/v8/src/objects/js-weak-refs.tq?l=21&c=1 */\
-    V(WEAK_HOMOMORPHIC_FIXED_ARRAY_TYPE, 304) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=42&c=1 */\
-    V(FIRST_JS_RECEIVER_TYPE, 305) \
-      V(FIRST_WASM_OBJECT_TYPE, 305) \
-        V(WASM_ARRAY_TYPE, 305) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=317&c=1 */\
-        V(WASM_STRUCT_TYPE, 306) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=314&c=1 */\
-      V(LAST_WASM_OBJECT_TYPE, 306) \
-      V(JS_PROXY_TYPE, 307) /* https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=5&c=1 */\
-      V(FIRST_JS_OBJECT_TYPE, 308) \
+    V(FIRST_TURBOSHAFT_TYPE_TYPE, 221) \
+      V(FIRST_TURBOSHAFT_FLOAT64_TYPE_TYPE, 221) \
+        V(TURBOSHAFT_FLOAT64_TYPE_TYPE, 221) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=65&c=1 */\
+        V(TURBOSHAFT_FLOAT64_RANGE_TYPE_TYPE, 222) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=72&c=1 */\
+        V(TURBOSHAFT_FLOAT64_SET_TYPE_TYPE, 223) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=81&c=1 */\
+      V(LAST_TURBOSHAFT_FLOAT64_TYPE_TYPE, 223) \
+      V(FIRST_TURBOSHAFT_WORD32_TYPE_TYPE, 224) \
+        V(TURBOSHAFT_WORD32_TYPE_TYPE, 224) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=20&c=1 */\
+        V(TURBOSHAFT_WORD32_RANGE_TYPE_TYPE, 225) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=25&c=1 */\
+        V(TURBOSHAFT_WORD32_SET_TYPE_TYPE, 226) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=33&c=1 */\
+      V(LAST_TURBOSHAFT_WORD32_TYPE_TYPE, 226) \
+      V(FIRST_TURBOSHAFT_WORD64_TYPE_TYPE, 227) \
+        V(TURBOSHAFT_WORD64_TYPE_TYPE, 227) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=41&c=1 */\
+        V(TURBOSHAFT_WORD64_RANGE_TYPE_TYPE, 228) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=46&c=1 */\
+        V(TURBOSHAFT_WORD64_SET_TYPE_TYPE, 229) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=56&c=1 */\
+      V(LAST_TURBOSHAFT_WORD64_TYPE_TYPE, 229) \
+    V(LAST_TURBOSHAFT_TYPE_TYPE, 229) \
+    V(FIRST_TURBOFAN_TYPE_TYPE, 230) \
+      V(TURBOFAN_BITSET_TYPE_TYPE, 230) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=61&c=1 */\
+      V(TURBOFAN_HEAP_CONSTANT_TYPE_TYPE, 231) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=79&c=1 */\
+      V(TURBOFAN_OTHER_NUMBER_CONSTANT_TYPE_TYPE, 232) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=84&c=1 */\
+      V(TURBOFAN_RANGE_TYPE_TYPE, 233) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=73&c=1 */\
+      V(TURBOFAN_UNION_TYPE_TYPE, 234) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=67&c=1 */\
+    V(LAST_TURBOFAN_TYPE_TYPE, 234) \
+    V(FIRST_SMALL_ORDERED_HASH_TABLE_TYPE, 235) \
+      V(SMALL_ORDERED_HASH_MAP_TYPE, 235) /* https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=64&c=1 */\
+      V(SMALL_ORDERED_HASH_SET_TYPE, 236) /* https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=25&c=1 */\
+      V(SMALL_ORDERED_NAME_DICTIONARY_TYPE, 237) /* https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=101&c=1 */\
+    V(LAST_SMALL_ORDERED_HASH_TABLE_TYPE, 237) \
+    V(FIRST_TEMPLATE_INFO_TYPE, 238) \
+      V(FIRST_TEMPLATE_INFO_WITH_PROPERTIES_TYPE, 238) \
+        V(FUNCTION_TEMPLATE_INFO_TYPE, 238) /* https://crsrc.org/c/v8/src/objects/templates.tq?l=55&c=1 */\
+        V(OBJECT_TEMPLATE_INFO_TYPE, 239) /* https://crsrc.org/c/v8/src/objects/templates.tq?l=115&c=1 */\
+      V(LAST_TEMPLATE_INFO_WITH_PROPERTIES_TYPE, 239) \
+      V(DICTIONARY_TEMPLATE_INFO_TYPE, 240) /* https://crsrc.org/c/v8/src/objects/templates.tq?l=121&c=1 */\
+    V(LAST_TEMPLATE_INFO_TYPE, 240) \
+    V(FIRST_ABSTRACT_INTERNAL_CLASS_TYPE, 241) \
+      V(ABSTRACT_INTERNAL_CLASS_SUBCLASS1_TYPE, 241) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1190&c=1 */\
+      V(ABSTRACT_INTERNAL_CLASS_SUBCLASS2_TYPE, 242) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1192&c=1 */\
+    V(LAST_ABSTRACT_INTERNAL_CLASS_TYPE, 242) \
+    V(FIRST_DESCRIPTOR_ARRAY_TYPE, 243) \
+      V(DESCRIPTOR_ARRAY_TYPE, 243) /* https://crsrc.org/c/v8/src/objects/descriptor-array.tq?l=26&c=1 */\
+      V(STRONG_DESCRIPTOR_ARRAY_TYPE, 244) /* https://crsrc.org/c/v8/src/objects/descriptor-array.tq?l=44&c=1 */\
+    V(LAST_DESCRIPTOR_ARRAY_TYPE, 244) \
+    V(FIRST_MODULE_TYPE, 245) \
+      V(SOURCE_TEXT_MODULE_TYPE, 245) /* https://crsrc.org/c/v8/src/objects/source-text-module.tq?l=12&c=1 */\
+      V(SYNTHETIC_MODULE_TYPE, 246) /* https://crsrc.org/c/v8/src/objects/synthetic-module.tq?l=5&c=1 */\
+    V(LAST_MODULE_TYPE, 246) \
+    V(FIRST_WEAK_FIXED_ARRAY_TYPE, 247) \
+      V(WEAK_FIXED_ARRAY_TYPE, 247) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=36&c=1 */\
+      V(TRANSITION_ARRAY_TYPE, 248) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=299&c=1 */\
+    V(LAST_WEAK_FIXED_ARRAY_TYPE, 248) \
+    V(ACCESSOR_INFO_TYPE, 249) /* https://crsrc.org/c/v8/src/objects/api-callbacks.tq?l=47&c=1 */\
+    V(ALLOCATION_SITE_TYPE, 250) /* https://crsrc.org/c/v8/src/objects/allocation-site.tq?l=5&c=1 */\
+    V(ARRAY_LIST_TYPE, 251) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=75&c=1 */\
+    V(CELL_TYPE, 252) /* https://crsrc.org/c/v8/src/objects/cell.tq?l=5&c=1 */\
+    V(CLOSURE_FEEDBACK_CELL_ARRAY_TYPE, 253) /* https://crsrc.org/c/v8/src/objects/feedback-vector.tq?l=27&c=1 */\
+    V(CONTEXT_CELL_TYPE, 254) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=25&c=1 */\
+    V(COVERAGE_INFO_TYPE, 255) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=65&c=1 */\
+    V(CPP_HEAP_EXTERNAL_OBJECT_TYPE, 256) /* https://crsrc.org/c/v8/src/objects/cpp-heap-external-object.tq?l=5&c=1 */\
+    V(DOUBLE_STRING_CACHE_TYPE, 257) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=279&c=1 */\
+    V(EMBEDDER_DATA_ARRAY_TYPE, 258) /* https://crsrc.org/c/v8/src/objects/embedder-data-array.tq?l=5&c=1 */\
+    V(FEEDBACK_METADATA_TYPE, 259) /* https://crsrc.org/c/v8/src/objects/feedback-vector.tq?l=47&c=1 */\
+    V(FEEDBACK_VECTOR_TYPE, 260) /* https://crsrc.org/c/v8/src/objects/feedback-vector.tq?l=33&c=1 */\
+    V(FILLER_TYPE, 261) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=690&c=1 */\
+    V(FREE_SPACE_TYPE, 262) /* https://crsrc.org/c/v8/src/objects/free-space.tq?l=5&c=1 */\
+    V(HOLE_TYPE, 263) /* https://crsrc.org/c/v8/src/objects/hole.tq?l=5&c=1 */\
+    V(INTERCEPTOR_INFO_TYPE, 264) /* https://crsrc.org/c/v8/src/objects/api-callbacks.tq?l=13&c=1 */\
+    V(INTERNAL_CLASS_TYPE, 265) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=763&c=1 */\
+    V(INTERNAL_CLASS_WITH_STRUCT_ELEMENTS_TYPE, 266) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1199&c=1 */\
+    V(MAP_TYPE, 267) /* https://crsrc.org/c/v8/src/objects/map.tq?l=37&c=1 */\
+    V(MEGA_DOM_HANDLER_TYPE, 268) /* https://crsrc.org/c/v8/src/objects/megadom-handler.tq?l=5&c=1 */\
+    V(OBJECT_BOILERPLATE_DESCRIPTION_TYPE, 269) /* https://crsrc.org/c/v8/src/objects/literal-objects.tq?l=5&c=1 */\
+    V(ON_HEAP_BASIC_BLOCK_PROFILER_DATA_TYPE, 270) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=199&c=1 */\
+    V(PREPARSE_DATA_TYPE, 271) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=7&c=1 */\
+    V(PROPERTY_ARRAY_TYPE, 272) /* https://crsrc.org/c/v8/src/objects/property-array.tq?l=5&c=1 */\
+    V(PROPERTY_CELL_TYPE, 273) /* https://crsrc.org/c/v8/src/objects/property-cell.tq?l=6&c=1 */\
+    V(REG_EXP_MATCH_INFO_TYPE, 274) /* https://crsrc.org/c/v8/src/objects/regexp-match-info.tq?l=5&c=1 */\
+    V(SCOPE_INFO_TYPE, 275) /* https://crsrc.org/c/v8/src/objects/scope-info.tq?l=122&c=1 */\
+    V(SCRIPT_CONTEXT_TABLE_TYPE, 276) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=17&c=1 */\
+    V(SHARED_FUNCTION_INFO_TYPE, 277) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=63&c=1 */\
+    V(SMI_BOX_TYPE, 278) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=930&c=1 */\
+    V(SMI_PAIR_TYPE, 279) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=829&c=1 */\
+    V(SORT_STATE_TYPE, 280) /* https://crsrc.org/c/v8/third_party/v8/builtins/array-sort.tq?l=19&c=1 */\
+    V(SWISS_NAME_DICTIONARY_TYPE, 281) /* https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=7&c=1 */\
+    V(WEAK_ARRAY_LIST_TYPE, 282) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=82&c=1 */\
+    V(WEAK_CELL_TYPE, 283) /* https://crsrc.org/c/v8/src/objects/js-weak-refs.tq?l=21&c=1 */\
+    V(WEAK_HOMOMORPHIC_FIXED_ARRAY_TYPE, 284) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=42&c=1 */\
+    V(FIRST_JS_RECEIVER_TYPE, 285) \
+      V(JS_PROXY_TYPE, 285) /* https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=5&c=1 */\
+      V(FIRST_JS_OBJECT_TYPE, 286) \
         V(JS_OBJECT_TYPE, 1057) /* https://crsrc.org/c/v8/src/objects/js-objects.tq?l=14&c=1 */\
-        V(FIRST_JS_CUSTOM_ELEMENTS_OBJECT_TYPE, 308) \
-          V(FIRST_JS_SPECIAL_OBJECT_TYPE, 308) \
-            V(FIRST_JS_MODULE_NAMESPACE_TYPE, 308) \
-              V(JS_MODULE_NAMESPACE_TYPE, 308) /* https://crsrc.org/c/v8/src/objects/module.tq?l=22&c=1 */\
-              V(JS_DEFERRED_MODULE_NAMESPACE_TYPE, 309) /* https://crsrc.org/c/v8/src/objects/module.tq?l=26&c=1 */\
-            V(LAST_JS_MODULE_NAMESPACE_TYPE, 309) \
-            V(JS_GLOBAL_OBJECT_TYPE, 310) /* https://crsrc.org/c/v8/src/objects/js-objects.tq?l=119&c=1 */\
-            V(JS_GLOBAL_PROXY_TYPE, 311) /* https://crsrc.org/c/v8/src/objects/js-objects.tq?l=117&c=1 */\
+        V(FIRST_JS_CUSTOM_ELEMENTS_OBJECT_TYPE, 286) \
+          V(FIRST_JS_SPECIAL_OBJECT_TYPE, 286) \
+            V(FIRST_JS_MODULE_NAMESPACE_TYPE, 286) \
+              V(JS_MODULE_NAMESPACE_TYPE, 286) /* https://crsrc.org/c/v8/src/objects/module.tq?l=22&c=1 */\
+              V(JS_DEFERRED_MODULE_NAMESPACE_TYPE, 287) /* https://crsrc.org/c/v8/src/objects/module.tq?l=26&c=1 */\
+            V(LAST_JS_MODULE_NAMESPACE_TYPE, 287) \
+            V(JS_GLOBAL_OBJECT_TYPE, 288) /* https://crsrc.org/c/v8/src/objects/js-objects.tq?l=119&c=1 */\
+            V(JS_GLOBAL_PROXY_TYPE, 289) /* https://crsrc.org/c/v8/src/objects/js-objects.tq?l=117&c=1 */\
             V(JS_SPECIAL_API_OBJECT_TYPE, 1040) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=710&c=1 */\
           V(LAST_JS_SPECIAL_OBJECT_TYPE, 1040) \
           V(JS_PRIMITIVE_WRAPPER_TYPE, 1041) /* https://crsrc.org/c/v8/src/objects/js-objects.tq?l=145&c=1 */\
@@ -409,19 +383,9 @@
         V(JS_V8_BREAK_ITERATOR_TYPE, 2157) /* https://crsrc.org/c/v8/src/objects/js-break-iterator.tq?l=7&c=1 */\
         V(JS_VALID_ITERATOR_WRAPPER_TYPE, 2158) /* https://crsrc.org/c/v8/src/objects/js-objects.tq?l=204&c=1 */\
         V(JS_WEAK_REF_TYPE, 2159) /* https://crsrc.org/c/v8/src/objects/js-weak-refs.tq?l=43&c=1 */\
-        V(WASM_EXCEPTION_PACKAGE_TYPE, 2160) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=195&c=1 */\
-        V(WASM_GLOBAL_OBJECT_TYPE, 2161) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=270&c=1 */\
-        V(WASM_INSTANCE_OBJECT_TYPE, 2162) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=39&c=1 */\
-        V(WASM_MEMORY_MAP_DESCRIPTOR_TYPE, 2163) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=257&c=1 */\
-        V(WASM_MEMORY_OBJECT_TYPE, 2164) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=238&c=1 */\
-        V(WASM_MODULE_OBJECT_TYPE, 2165) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=197&c=1 */\
-        V(WASM_SUSPENDING_OBJECT_TYPE, 2166) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=338&c=1 */\
-        V(WASM_TABLE_OBJECT_TYPE, 2167) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=205&c=1 */\
-        V(WASM_TAG_OBJECT_TYPE, 2168) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=290&c=1 */\
-        V(WASM_VALUE_OBJECT_TYPE, 2169) /* https://crsrc.org/c/v8/src/debug/debug-wasm-objects.tq?l=7&c=1 */\
-      V(LAST_JS_OBJECT_TYPE, 2169) \
-    V(LAST_JS_RECEIVER_TYPE, 2169) \
-  V(LAST_HEAP_OBJECT_TYPE, 2169) \
+      V(LAST_JS_OBJECT_TYPE, 2159) \
+    V(LAST_JS_RECEIVER_TYPE, 2159) \
+  V(LAST_HEAP_OBJECT_TYPE, 2159) \
 
 // Instance types for all classes except for those that use
 // InstanceType as flags.
@@ -443,7 +407,6 @@
   V(ALIASED_ARGUMENTS_ENTRY_TYPE) /* https://crsrc.org/c/v8/src/objects/arguments.tq?l=41&c=1 */\
   V(ALLOCATION_MEMENTO_TYPE) /* https://crsrc.org/c/v8/src/objects/allocation-site.tq?l=7&c=1 */\
   V(ARRAY_BOILERPLATE_DESCRIPTION_TYPE) /* https://crsrc.org/c/v8/src/objects/literal-objects.tq?l=13&c=1 */\
-  V(ASM_WASM_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=298&c=1 */\
   V(ASYNC_GENERATOR_REQUEST_TYPE) /* https://crsrc.org/c/v8/src/objects/js-generator.tq?l=44&c=1 */\
   V(BREAK_POINT_TYPE) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=5&c=1 */\
   V(BREAK_POINT_INFO_TYPE) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=11&c=1 */\
@@ -472,25 +435,16 @@
   V(STACK_TRACE_INFO_TYPE) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=88&c=1 */\
   V(TEMPLATE_OBJECT_DESCRIPTION_TYPE) /* https://crsrc.org/c/v8/src/objects/template-objects.tq?l=5&c=1 */\
   V(TUPLE2_TYPE) /* https://crsrc.org/c/v8/src/objects/struct.tq?l=8&c=1 */\
-  V(WASM_EXCEPTION_TAG_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=188&c=1 */\
   V(UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=172&c=1 */\
   V(UNCOMPILED_DATA_WITH_PREPARSE_DATA_AND_JOB_TYPE) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=183&c=1 */\
   V(UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=169&c=1 */\
   V(UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_WITH_JOB_TYPE) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=177&c=1 */\
-  V(WASM_FUNCTION_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=120&c=1 */\
-  V(WASM_CAPI_FUNCTION_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=161&c=1 */\
-  V(WASM_EXPORTED_FUNCTION_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=136&c=1 */\
-  V(WASM_JS_FUNCTION_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=156&c=1 */\
   V(REG_EXP_DATA_TYPE) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=17&c=1 */\
   V(ATOM_REG_EXP_DATA_TYPE) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=28&c=1 */\
   V(IR_REG_EXP_DATA_TYPE) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=38&c=1 */\
   V(BYTECODE_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=7&c=1 */\
   V(CODE_TYPE) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=31&c=1 */\
   V(INTERPRETER_DATA_TYPE) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=14&c=1 */\
-  V(WASM_DISPATCH_TABLE_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=202&c=1 */\
-  V(WASM_INTERNAL_FUNCTION_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=81&c=1 */\
-  V(WASM_SUSPENDER_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=170&c=1 */\
-  V(WASM_TRUSTED_INSTANCE_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=37&c=1 */\
   V(INSTRUCTION_STREAM_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=293&c=1 */\
   V(PROTECTED_FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=25&c=1 */\
   V(PROTECTED_WEAK_FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=54&c=1 */\
@@ -499,9 +453,19 @@
   V(TRUSTED_FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=19&c=1 */\
   V(TRUSTED_FOREIGN_TYPE) /* https://crsrc.org/c/v8/src/objects/foreign.tq?l=11&c=1 */\
   V(TRUSTED_WEAK_FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=48&c=1 */\
-  V(WASM_DISPATCH_TABLE_FOR_IMPORTS_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=203&c=1 */\
-  V(WASM_IMPORT_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=49&c=1 */\
-  V(ACCESSOR_INFO_TYPE) /* https://crsrc.org/c/v8/src/objects/api-callbacks.tq?l=47&c=1 */\
+  V(AWAIT_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=49&c=1 */\
+  V(BLOCK_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=50&c=1 */\
+  V(CATCH_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=51&c=1 */\
+  V(DEBUG_EVALUATE_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=52&c=1 */\
+  V(EVAL_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=54&c=1 */\
+  V(FUNCTION_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=59&c=1 */\
+  V(MODULE_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=55&c=1 */\
+  V(NATIVE_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=92&c=1 */\
+  V(SCRIPT_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=56&c=1 */\
+  V(WITH_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=57&c=1 */\
+  V(EXPORTED_SUB_CLASS_BASE_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1181&c=1 */\
+  V(EXPORTED_SUB_CLASS_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1174&c=1 */\
+  V(EXPORTED_SUB_CLASS2_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1216&c=1 */\
   V(FOREIGN_TYPE) /* https://crsrc.org/c/v8/src/objects/foreign.tq?l=5&c=1 */\
   V(FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=11&c=1 */\
   V(HASH_TABLE_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=264&c=1 */\
@@ -519,16 +483,6 @@
   V(BYTE_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=62&c=1 */\
   V(FIXED_DOUBLE_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=31&c=1 */\
   V(SLOPPY_ARGUMENTS_ELEMENTS_TYPE) /* https://crsrc.org/c/v8/src/objects/arguments.tq?l=27&c=1 */\
-  V(AWAIT_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=49&c=1 */\
-  V(BLOCK_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=50&c=1 */\
-  V(CATCH_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=51&c=1 */\
-  V(DEBUG_EVALUATE_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=52&c=1 */\
-  V(EVAL_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=54&c=1 */\
-  V(FUNCTION_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=59&c=1 */\
-  V(MODULE_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=55&c=1 */\
-  V(NATIVE_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=92&c=1 */\
-  V(SCRIPT_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=56&c=1 */\
-  V(WITH_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=57&c=1 */\
   V(TURBOSHAFT_FLOAT64_TYPE_TYPE) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=65&c=1 */\
   V(TURBOSHAFT_FLOAT64_RANGE_TYPE_TYPE) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=72&c=1 */\
   V(TURBOSHAFT_FLOAT64_SET_TYPE_TYPE) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=81&c=1 */\
@@ -543,9 +497,6 @@
   V(TURBOFAN_OTHER_NUMBER_CONSTANT_TYPE_TYPE) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=84&c=1 */\
   V(TURBOFAN_RANGE_TYPE_TYPE) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=73&c=1 */\
   V(TURBOFAN_UNION_TYPE_TYPE) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=67&c=1 */\
-  V(EXPORTED_SUB_CLASS_BASE_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1181&c=1 */\
-  V(EXPORTED_SUB_CLASS_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1174&c=1 */\
-  V(EXPORTED_SUB_CLASS2_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1216&c=1 */\
   V(SMALL_ORDERED_HASH_MAP_TYPE) /* https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=64&c=1 */\
   V(SMALL_ORDERED_HASH_SET_TYPE) /* https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=25&c=1 */\
   V(SMALL_ORDERED_NAME_DICTIONARY_TYPE) /* https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=101&c=1 */\
@@ -560,6 +511,7 @@
   V(SYNTHETIC_MODULE_TYPE) /* https://crsrc.org/c/v8/src/objects/synthetic-module.tq?l=5&c=1 */\
   V(WEAK_FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=36&c=1 */\
   V(TRANSITION_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=299&c=1 */\
+  V(ACCESSOR_INFO_TYPE) /* https://crsrc.org/c/v8/src/objects/api-callbacks.tq?l=47&c=1 */\
   V(ALLOCATION_SITE_TYPE) /* https://crsrc.org/c/v8/src/objects/allocation-site.tq?l=5&c=1 */\
   V(ARRAY_LIST_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=75&c=1 */\
   V(CELL_TYPE) /* https://crsrc.org/c/v8/src/objects/cell.tq?l=5&c=1 */\
@@ -592,19 +544,9 @@
   V(SMI_PAIR_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=829&c=1 */\
   V(SORT_STATE_TYPE) /* https://crsrc.org/c/v8/third_party/v8/builtins/array-sort.tq?l=19&c=1 */\
   V(SWISS_NAME_DICTIONARY_TYPE) /* https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=7&c=1 */\
-  V(WASM_CONTINUATION_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=178&c=1 */\
-  V(WASM_FAST_API_CALL_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=73&c=1 */\
-  V(WASM_FUNC_REF_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=111&c=1 */\
-  V(WASM_NULL_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=333&c=1 */\
-  V(WASM_RESUME_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=165&c=1 */\
-  V(WASM_STACK_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=184&c=1 */\
-  V(WASM_STRING_VIEW_ITER_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=325&c=1 */\
-  V(WASM_TYPE_INFO_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=303&c=1 */\
   V(WEAK_ARRAY_LIST_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=82&c=1 */\
   V(WEAK_CELL_TYPE) /* https://crsrc.org/c/v8/src/objects/js-weak-refs.tq?l=21&c=1 */\
   V(WEAK_HOMOMORPHIC_FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=42&c=1 */\
-  V(WASM_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=317&c=1 */\
-  V(WASM_STRUCT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=314&c=1 */\
   V(JS_PROXY_TYPE) /* https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=5&c=1 */\
   V(JS_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/objects/js-objects.tq?l=14&c=1 */\
   V(JS_MODULE_NAMESPACE_TYPE) /* https://crsrc.org/c/v8/src/objects/module.tq?l=22&c=1 */\
@@ -716,16 +658,6 @@
   V(JS_V8_BREAK_ITERATOR_TYPE) /* https://crsrc.org/c/v8/src/objects/js-break-iterator.tq?l=7&c=1 */\
   V(JS_VALID_ITERATOR_WRAPPER_TYPE) /* https://crsrc.org/c/v8/src/objects/js-objects.tq?l=204&c=1 */\
   V(JS_WEAK_REF_TYPE) /* https://crsrc.org/c/v8/src/objects/js-weak-refs.tq?l=43&c=1 */\
-  V(WASM_EXCEPTION_PACKAGE_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=195&c=1 */\
-  V(WASM_GLOBAL_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=270&c=1 */\
-  V(WASM_INSTANCE_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=39&c=1 */\
-  V(WASM_MEMORY_MAP_DESCRIPTOR_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=257&c=1 */\
-  V(WASM_MEMORY_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=238&c=1 */\
-  V(WASM_MODULE_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=197&c=1 */\
-  V(WASM_SUSPENDING_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=338&c=1 */\
-  V(WASM_TABLE_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=205&c=1 */\
-  V(WASM_TAG_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=290&c=1 */\
-  V(WASM_VALUE_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/debug/debug-wasm-objects.tq?l=7&c=1 */\
 
 // Pairs of (ClassName, INSTANCE_TYPE) for classes that have
 // full Torque definitions.
@@ -743,7 +675,6 @@
   V(AliasedArgumentsEntry, ALIASED_ARGUMENTS_ENTRY_TYPE) /* https://crsrc.org/c/v8/src/objects/arguments.tq?l=41&c=1 */ \
   V(AllocationMemento, ALLOCATION_MEMENTO_TYPE) /* https://crsrc.org/c/v8/src/objects/allocation-site.tq?l=7&c=1 */ \
   V(ArrayBoilerplateDescription, ARRAY_BOILERPLATE_DESCRIPTION_TYPE) /* https://crsrc.org/c/v8/src/objects/literal-objects.tq?l=13&c=1 */ \
-  V(AsmWasmData, ASM_WASM_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=298&c=1 */ \
   V(AsyncGeneratorRequest, ASYNC_GENERATOR_REQUEST_TYPE) /* https://crsrc.org/c/v8/src/objects/js-generator.tq?l=44&c=1 */ \
   V(BreakPoint, BREAK_POINT_TYPE) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=5&c=1 */ \
   V(BreakPointInfo, BREAK_POINT_INFO_TYPE) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=11&c=1 */ \
@@ -769,18 +700,12 @@
   V(StackFrameInfo, STACK_FRAME_INFO_TYPE) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=75&c=1 */ \
   V(StackTraceInfo, STACK_TRACE_INFO_TYPE) /* https://crsrc.org/c/v8/src/objects/debug-objects.tq?l=88&c=1 */ \
   V(TemplateObjectDescription, TEMPLATE_OBJECT_DESCRIPTION_TYPE) /* https://crsrc.org/c/v8/src/objects/template-objects.tq?l=5&c=1 */ \
-  V(WasmExceptionTag, WASM_EXCEPTION_TAG_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=188&c=1 */ \
   V(UncompiledDataWithPreparseDataAndJob, UNCOMPILED_DATA_WITH_PREPARSE_DATA_AND_JOB_TYPE) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=183&c=1 */ \
   V(UncompiledDataWithoutPreparseDataWithJob, UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_WITH_JOB_TYPE) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=177&c=1 */ \
-  V(WasmCapiFunctionData, WASM_CAPI_FUNCTION_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=161&c=1 */ \
-  V(WasmExportedFunctionData, WASM_EXPORTED_FUNCTION_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=136&c=1 */ \
-  V(WasmJSFunctionData, WASM_JS_FUNCTION_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=156&c=1 */ \
   V(AtomRegExpData, ATOM_REG_EXP_DATA_TYPE) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=28&c=1 */ \
   V(IrRegExpData, IR_REG_EXP_DATA_TYPE) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=38&c=1 */ \
   V(BytecodeArray, BYTECODE_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=7&c=1 */ \
   V(InterpreterData, INTERPRETER_DATA_TYPE) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=14&c=1 */ \
-  V(WasmInternalFunction, WASM_INTERNAL_FUNCTION_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=81&c=1 */ \
-  V(WasmSuspenderObject, WASM_SUSPENDER_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=170&c=1 */ \
   V(ProtectedFixedArray, PROTECTED_FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=25&c=1 */ \
   V(ProtectedWeakFixedArray, PROTECTED_WEAK_FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=54&c=1 */ \
   V(SharedFunctionInfoWrapper, SHARED_FUNCTION_INFO_WRAPPER_TYPE) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=130&c=1 */ \
@@ -788,8 +713,8 @@
   V(TrustedFixedArray, TRUSTED_FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=19&c=1 */ \
   V(TrustedForeign, TRUSTED_FOREIGN_TYPE) /* https://crsrc.org/c/v8/src/objects/foreign.tq?l=11&c=1 */ \
   V(TrustedWeakFixedArray, TRUSTED_WEAK_FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=48&c=1 */ \
-  V(WasmImportData, WASM_IMPORT_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=49&c=1 */ \
-  V(AccessorInfo, ACCESSOR_INFO_TYPE) /* https://crsrc.org/c/v8/src/objects/api-callbacks.tq?l=47&c=1 */ \
+  V(ExportedSubClass, EXPORTED_SUB_CLASS_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1174&c=1 */ \
+  V(ExportedSubClass2, EXPORTED_SUB_CLASS2_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1216&c=1 */ \
   V(Foreign, FOREIGN_TYPE) /* https://crsrc.org/c/v8/src/objects/foreign.tq?l=5&c=1 */ \
   V(ByteArray, BYTE_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=62&c=1 */ \
   V(FixedDoubleArray, FIXED_DOUBLE_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=31&c=1 */ \
@@ -805,8 +730,6 @@
   V(TurbofanOtherNumberConstantType, TURBOFAN_OTHER_NUMBER_CONSTANT_TYPE_TYPE) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=84&c=1 */ \
   V(TurbofanRangeType, TURBOFAN_RANGE_TYPE_TYPE) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=73&c=1 */ \
   V(TurbofanUnionType, TURBOFAN_UNION_TYPE_TYPE) /* https://crsrc.org/c/v8/src/objects/turbofan-types.tq?l=67&c=1 */ \
-  V(ExportedSubClass, EXPORTED_SUB_CLASS_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1174&c=1 */ \
-  V(ExportedSubClass2, EXPORTED_SUB_CLASS2_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1216&c=1 */ \
   V(SmallOrderedHashMap, SMALL_ORDERED_HASH_MAP_TYPE) /* https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=64&c=1 */ \
   V(SmallOrderedHashSet, SMALL_ORDERED_HASH_SET_TYPE) /* https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=25&c=1 */ \
   V(SmallOrderedNameDictionary, SMALL_ORDERED_NAME_DICTIONARY_TYPE) /* https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=101&c=1 */ \
@@ -818,6 +741,7 @@
   V(StrongDescriptorArray, STRONG_DESCRIPTOR_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/descriptor-array.tq?l=44&c=1 */ \
   V(SourceTextModule, SOURCE_TEXT_MODULE_TYPE) /* https://crsrc.org/c/v8/src/objects/source-text-module.tq?l=12&c=1 */ \
   V(SyntheticModule, SYNTHETIC_MODULE_TYPE) /* https://crsrc.org/c/v8/src/objects/synthetic-module.tq?l=5&c=1 */ \
+  V(AccessorInfo, ACCESSOR_INFO_TYPE) /* https://crsrc.org/c/v8/src/objects/api-callbacks.tq?l=47&c=1 */ \
   V(ArrayList, ARRAY_LIST_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=75&c=1 */ \
   V(Cell, CELL_TYPE) /* https://crsrc.org/c/v8/src/objects/cell.tq?l=5&c=1 */ \
   V(ClosureFeedbackCellArray, CLOSURE_FEEDBACK_CELL_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/feedback-vector.tq?l=27&c=1 */ \
@@ -844,19 +768,9 @@
   V(SmiPair, SMI_PAIR_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=829&c=1 */ \
   V(SortState, SORT_STATE_TYPE) /* https://crsrc.org/c/v8/third_party/v8/builtins/array-sort.tq?l=19&c=1 */ \
   V(SwissNameDictionary, SWISS_NAME_DICTIONARY_TYPE) /* https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=7&c=1 */ \
-  V(WasmContinuationObject, WASM_CONTINUATION_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=178&c=1 */ \
-  V(WasmFastApiCallData, WASM_FAST_API_CALL_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=73&c=1 */ \
-  V(WasmFuncRef, WASM_FUNC_REF_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=111&c=1 */ \
-  V(WasmNull, WASM_NULL_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=333&c=1 */ \
-  V(WasmResumeData, WASM_RESUME_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=165&c=1 */ \
-  V(WasmStackObject, WASM_STACK_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=184&c=1 */ \
-  V(WasmStringViewIter, WASM_STRING_VIEW_ITER_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=325&c=1 */ \
-  V(WasmTypeInfo, WASM_TYPE_INFO_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=303&c=1 */ \
   V(WeakArrayList, WEAK_ARRAY_LIST_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=82&c=1 */ \
   V(WeakCell, WEAK_CELL_TYPE) /* https://crsrc.org/c/v8/src/objects/js-weak-refs.tq?l=21&c=1 */ \
   V(WeakHomomorphicFixedArray, WEAK_HOMOMORPHIC_FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=42&c=1 */ \
-  V(WasmArray, WASM_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=317&c=1 */ \
-  V(WasmStruct, WASM_STRUCT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=314&c=1 */ \
   V(JSProxy, JS_PROXY_TYPE) /* https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=5&c=1 */ \
   V(JSDeferredModuleNamespace, JS_DEFERRED_MODULE_NAMESPACE_TYPE) /* https://crsrc.org/c/v8/src/objects/module.tq?l=26&c=1 */ \
   V(JSGlobalObject, JS_GLOBAL_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/objects/js-objects.tq?l=119&c=1 */ \
@@ -925,27 +839,18 @@
   V(JSV8BreakIterator, JS_V8_BREAK_ITERATOR_TYPE) /* https://crsrc.org/c/v8/src/objects/js-break-iterator.tq?l=7&c=1 */ \
   V(JSValidIteratorWrapper, JS_VALID_ITERATOR_WRAPPER_TYPE) /* https://crsrc.org/c/v8/src/objects/js-objects.tq?l=204&c=1 */ \
   V(JSWeakRef, JS_WEAK_REF_TYPE) /* https://crsrc.org/c/v8/src/objects/js-weak-refs.tq?l=43&c=1 */ \
-  V(WasmGlobalObject, WASM_GLOBAL_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=270&c=1 */ \
-  V(WasmInstanceObject, WASM_INSTANCE_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=39&c=1 */ \
-  V(WasmMemoryMapDescriptor, WASM_MEMORY_MAP_DESCRIPTOR_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=257&c=1 */ \
-  V(WasmMemoryObject, WASM_MEMORY_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=238&c=1 */ \
-  V(WasmModuleObject, WASM_MODULE_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=197&c=1 */ \
-  V(WasmSuspendingObject, WASM_SUSPENDING_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=338&c=1 */ \
-  V(WasmTableObject, WASM_TABLE_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=205&c=1 */ \
-  V(WasmTagObject, WASM_TAG_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=290&c=1 */ \
 
 // Pairs of (ClassName, INSTANCE_TYPE) for classes that have
 // full Torque definitions and subclasses.
 #define TORQUE_INSTANCE_CHECKERS_MULTIPLE_FULLY_DEFINED(V) \
   V(UncompiledDataWithPreparseData, UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=172&c=1 */ \
   V(UncompiledDataWithoutPreparseData, UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE) /* https://crsrc.org/c/v8/src/objects/shared-function-info.tq?l=169&c=1 */ \
-  V(WasmFunctionData, WASM_FUNCTION_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=120&c=1 */ \
   V(RegExpData, REG_EXP_DATA_TYPE) /* https://crsrc.org/c/v8/src/objects/js-regexp.tq?l=17&c=1 */ \
+  V(ExportedSubClassBase, EXPORTED_SUB_CLASS_BASE_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1181&c=1 */ \
   V(FixedArray, FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=11&c=1 */ \
   V(TurboshaftFloat64Type, TURBOSHAFT_FLOAT64_TYPE_TYPE) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=65&c=1 */ \
   V(TurboshaftWord32Type, TURBOSHAFT_WORD32_TYPE_TYPE) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=20&c=1 */ \
   V(TurboshaftWord64Type, TURBOSHAFT_WORD64_TYPE_TYPE) /* https://crsrc.org/c/v8/src/objects/turboshaft-types.tq?l=41&c=1 */ \
-  V(ExportedSubClassBase, EXPORTED_SUB_CLASS_BASE_TYPE) /* https://crsrc.org/c/v8/test/torque/test-torque.tq?l=1181&c=1 */ \
   V(DescriptorArray, DESCRIPTOR_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/descriptor-array.tq?l=26&c=1 */ \
   V(WeakFixedArray, WEAK_FIXED_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=36&c=1 */ \
   V(JSObject, JS_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/objects/js-objects.tq?l=14&c=1 */ \
@@ -969,10 +874,17 @@
   V(CodeWrapper, CODE_WRAPPER_TYPE) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=33&c=1 */ \
   V(Tuple2, TUPLE2_TYPE) /* https://crsrc.org/c/v8/src/objects/struct.tq?l=8&c=1 */ \
   V(Code, CODE_TYPE) /* https://crsrc.org/c/v8/src/objects/bytecode-array.tq?l=31&c=1 */ \
-  V(WasmDispatchTable, WASM_DISPATCH_TABLE_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=202&c=1 */ \
-  V(WasmTrustedInstanceData, WASM_TRUSTED_INSTANCE_DATA_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=37&c=1 */ \
   V(InstructionStream, INSTRUCTION_STREAM_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=293&c=1 */ \
-  V(WasmDispatchTableForImports, WASM_DISPATCH_TABLE_FOR_IMPORTS_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=203&c=1 */ \
+  V(AwaitContext, AWAIT_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=49&c=1 */ \
+  V(BlockContext, BLOCK_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=50&c=1 */ \
+  V(CatchContext, CATCH_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=51&c=1 */ \
+  V(DebugEvaluateContext, DEBUG_EVALUATE_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=52&c=1 */ \
+  V(EvalContext, EVAL_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=54&c=1 */ \
+  V(FunctionContext, FUNCTION_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=59&c=1 */ \
+  V(ModuleContext, MODULE_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=55&c=1 */ \
+  V(NativeContext, NATIVE_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=92&c=1 */ \
+  V(ScriptContext, SCRIPT_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=56&c=1 */ \
+  V(WithContext, WITH_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=57&c=1 */ \
   V(EphemeronHashTable, EPHEMERON_HASH_TABLE_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=275&c=1 */ \
   V(GlobalDictionary, GLOBAL_DICTIONARY_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=272&c=1 */ \
   V(NameDictionary, NAME_DICTIONARY_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=271&c=1 */ \
@@ -984,16 +896,6 @@
   V(RegisteredSymbolTable, REGISTERED_SYMBOL_TABLE_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=270&c=1 */ \
   V(SimpleNameDictionary, SIMPLE_NAME_DICTIONARY_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=273&c=1 */ \
   V(SimpleNumberDictionary, SIMPLE_NUMBER_DICTIONARY_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=274&c=1 */ \
-  V(AwaitContext, AWAIT_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=49&c=1 */ \
-  V(BlockContext, BLOCK_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=50&c=1 */ \
-  V(CatchContext, CATCH_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=51&c=1 */ \
-  V(DebugEvaluateContext, DEBUG_EVALUATE_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=52&c=1 */ \
-  V(EvalContext, EVAL_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=54&c=1 */ \
-  V(FunctionContext, FUNCTION_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=59&c=1 */ \
-  V(ModuleContext, MODULE_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=55&c=1 */ \
-  V(NativeContext, NATIVE_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=92&c=1 */ \
-  V(ScriptContext, SCRIPT_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=56&c=1 */ \
-  V(WithContext, WITH_CONTEXT_TYPE) /* https://crsrc.org/c/v8/src/objects/contexts.tq?l=57&c=1 */ \
   V(TransitionArray, TRANSITION_ARRAY_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=299&c=1 */ \
   V(AllocationSite, ALLOCATION_SITE_TYPE) /* https://crsrc.org/c/v8/src/objects/allocation-site.tq?l=5&c=1 */ \
   V(DoubleStringCache, DOUBLE_STRING_CACHE_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=279&c=1 */ \
@@ -1035,8 +937,6 @@
   V(JSSetValueIterator, JS_SET_VALUE_ITERATOR_TYPE) /* https://crsrc.org/c/v8/src/objects/js-collection.tq?l=34&c=1 */ \
   V(JSContextExtensionObject, JS_CONTEXT_EXTENSION_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=713&c=1 */ \
   V(JSError, JS_ERROR_TYPE) /* https://crsrc.org/c/v8/src/builtins/base.tq?l=715&c=1 */ \
-  V(WasmExceptionPackage, WASM_EXCEPTION_PACKAGE_TYPE) /* https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=195&c=1 */ \
-  V(WasmValueObject, WASM_VALUE_OBJECT_TYPE) /* https://crsrc.org/c/v8/src/debug/debug-wasm-objects.tq?l=7&c=1 */ \
 
 // Pairs of (ClassName, INSTANCE_TYPE) for classes that are
 // declared but not defined in Torque, and have subclasses.
@@ -1059,19 +959,18 @@
   V(UncompiledDataWithPreparseData, FIRST_UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE, LAST_UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE) \
   V(UncompiledDataWithoutPreparseData, FIRST_UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE, LAST_UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE) \
   V(UncompiledData, FIRST_UNCOMPILED_DATA_TYPE, LAST_UNCOMPILED_DATA_TYPE) \
-  V(WasmFunctionData, FIRST_WASM_FUNCTION_DATA_TYPE, LAST_WASM_FUNCTION_DATA_TYPE) \
   V(RegExpData, FIRST_REG_EXP_DATA_TYPE, LAST_REG_EXP_DATA_TYPE) \
   V(ExposedTrustedObject, FIRST_EXPOSED_TRUSTED_OBJECT_TYPE, LAST_EXPOSED_TRUSTED_OBJECT_TYPE) \
   V(TrustedObject, FIRST_TRUSTED_OBJECT_TYPE, LAST_TRUSTED_OBJECT_TYPE) \
+  V(Context, FIRST_CONTEXT_TYPE, LAST_CONTEXT_TYPE) \
+  V(ExportedSubClassBase, FIRST_EXPORTED_SUB_CLASS_BASE_TYPE, LAST_EXPORTED_SUB_CLASS_BASE_TYPE) \
   V(FixedArray, FIRST_FIXED_ARRAY_TYPE, LAST_FIXED_ARRAY_TYPE) \
   V(FixedArrayBase, FIRST_FIXED_ARRAY_BASE_TYPE, LAST_FIXED_ARRAY_BASE_TYPE) \
-  V(Context, FIRST_CONTEXT_TYPE, LAST_CONTEXT_TYPE) \
   V(TurboshaftFloat64Type, FIRST_TURBOSHAFT_FLOAT64_TYPE_TYPE, LAST_TURBOSHAFT_FLOAT64_TYPE_TYPE) \
   V(TurboshaftWord32Type, FIRST_TURBOSHAFT_WORD32_TYPE_TYPE, LAST_TURBOSHAFT_WORD32_TYPE_TYPE) \
   V(TurboshaftWord64Type, FIRST_TURBOSHAFT_WORD64_TYPE_TYPE, LAST_TURBOSHAFT_WORD64_TYPE_TYPE) \
   V(TurboshaftType, FIRST_TURBOSHAFT_TYPE_TYPE, LAST_TURBOSHAFT_TYPE_TYPE) \
   V(TurbofanType, FIRST_TURBOFAN_TYPE_TYPE, LAST_TURBOFAN_TYPE_TYPE) \
-  V(ExportedSubClassBase, FIRST_EXPORTED_SUB_CLASS_BASE_TYPE, LAST_EXPORTED_SUB_CLASS_BASE_TYPE) \
   V(SmallOrderedHashTable, FIRST_SMALL_ORDERED_HASH_TABLE_TYPE, LAST_SMALL_ORDERED_HASH_TABLE_TYPE) \
   V(TemplateInfoWithProperties, FIRST_TEMPLATE_INFO_WITH_PROPERTIES_TYPE, LAST_TEMPLATE_INFO_WITH_PROPERTIES_TYPE) \
   V(TemplateInfo, FIRST_TEMPLATE_INFO_TYPE, LAST_TEMPLATE_INFO_TYPE) \
@@ -1079,7 +978,6 @@
   V(DescriptorArray, FIRST_DESCRIPTOR_ARRAY_TYPE, LAST_DESCRIPTOR_ARRAY_TYPE) \
   V(Module, FIRST_MODULE_TYPE, LAST_MODULE_TYPE) \
   V(WeakFixedArray, FIRST_WEAK_FIXED_ARRAY_TYPE, LAST_WEAK_FIXED_ARRAY_TYPE) \
-  V(WasmObject, FIRST_WASM_OBJECT_TYPE, LAST_WASM_OBJECT_TYPE) \
   V(JSModuleNamespace, FIRST_JS_MODULE_NAMESPACE_TYPE, LAST_JS_MODULE_NAMESPACE_TYPE) \
   V(JSSpecialObject, FIRST_JS_SPECIAL_OBJECT_TYPE, LAST_JS_SPECIAL_OBJECT_TYPE) \
   V(JSCustomElementsObject, FIRST_JS_CUSTOM_ELEMENTS_OBJECT_TYPE, LAST_JS_CUSTOM_ELEMENTS_OBJECT_TYPE) \
@@ -1117,8 +1015,6 @@
 
 // Fully Torque-defined classes (both internal and exported).
 #define TORQUE_DEFINED_CLASS_LIST(V) \
-  V(WasmFastApiCallData) \
-  V(WasmStringViewIter) \
   V(StrongDescriptorArray) \
   V(SloppyArgumentsElements) \
   V(OnHeapBasicBlockProfilerData) \
@@ -1150,8 +1046,6 @@
   V(INTERNAL_CLASS_WITH_STRUCT_ELEMENTS_TYPE, InternalClassWithStructElements, internal_class_with_struct_elements) \
 
 #define TORQUE_DEFINED_FIXED_INSTANCE_TYPE_LIST(V) \
-  V(WASM_FAST_API_CALL_DATA_TYPE, WasmFastApiCallData, wasm_fast_api_call_data) \
-  V(WASM_STRING_VIEW_ITER_TYPE, WasmStringViewIter, wasm_string_view_iter) \
   V(ON_HEAP_BASIC_BLOCK_PROFILER_DATA_TYPE, OnHeapBasicBlockProfilerData, on_heap_basic_block_profiler_data) \
   V(TURBOSHAFT_WORD32_TYPE_TYPE, TurboshaftWord32Type, turboshaft_word32type) \
   V(TURBOSHAFT_WORD32_RANGE_TYPE_TYPE, TurboshaftWord32RangeType, turboshaft_word32range_type) \
@@ -1181,8 +1075,6 @@
   TORQUE_DEFINED_FIXED_INSTANCE_TYPE_LIST(V) \
 
 #define TORQUE_DEFINED_MAP_CSA_LIST_GENERATOR(V, _) \
-  V(_, WasmFastApiCallDataMap, wasm_fast_api_call_data_map, WasmFastApiCallData) \
-  V(_, WasmStringViewIterMap, wasm_string_view_iter_map, WasmStringViewIter) \
   V(_, DescriptorArrayMap, descriptor_array_map, DescriptorArray) \
   V(_, StrongDescriptorArrayMap, strong_descriptor_array_map, StrongDescriptorArray) \
   V(_, SloppyArgumentsElementsMap, sloppy_arguments_elements_map, SloppyArgumentsElements) \
@@ -1215,8 +1107,6 @@
   V(_, ExportedSubClass2Map, exported_sub_class2_map, ExportedSubClass2) \
 
 #define TORQUE_DEFINED_MAP_ROOT_LIST(V) \
-  V(Map, wasm_fast_api_call_data_map, WasmFastApiCallDataMap) \
-  V(Map, wasm_string_view_iter_map, WasmStringViewIterMap) \
   V(Map, descriptor_array_map, DescriptorArrayMap) \
   V(Map, strong_descriptor_array_map, StrongDescriptorArrayMap) \
   V(Map, sloppy_arguments_elements_map, SloppyArgumentsElementsMap) \

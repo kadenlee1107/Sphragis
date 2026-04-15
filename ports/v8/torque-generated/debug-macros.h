@@ -8,12 +8,6 @@ namespace v8 {
 namespace internal {
 namespace debug_helper_internal {
 
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugFieldSliceByteArrayValues(d::MemoryAccessor accessor, uintptr_t p_o);
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
-Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugFieldSliceWasmTypeInfoSupertypes(d::MemoryAccessor accessor, uintptr_t p_o);
-
 // https://crsrc.org/c/v8/src/objects/prototype-info.tq?l=43&c=3
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugFieldSlicePrototypeInfoCachedHandler(d::MemoryAccessor accessor, uintptr_t p_o);
 
@@ -67,6 +61,9 @@ Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugFieldSliceTrustedWeakFix
 
 // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=59&c=3
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugFieldSliceProtectedWeakFixedArrayObjects(d::MemoryAccessor accessor, uintptr_t p_o);
+
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugFieldSliceByteArrayValues(d::MemoryAccessor accessor, uintptr_t p_o);
 
 // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=70&c=3
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugFieldSliceTrustedByteArrayValues(d::MemoryAccessor accessor, uintptr_t p_o);
@@ -188,18 +185,6 @@ Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugFieldSliceInternalClassW
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=73&c=1
 Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_int31_0(d::MemoryAccessor accessor, int31_t p_i);
 
-// https://crsrc.org/c/v8/src/builtins/convert.tq?l=298&c=1
-Value<intptr_t> TqDebugConvert_intptr_Smi_0(d::MemoryAccessor accessor, uintptr_t p_s);
-
-// https://crsrc.org/c/v8/src/builtins/convert.tq?l=8&c=1
-Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_IntegerLiteral_0(d::MemoryAccessor accessor, IntegerLiteral p_i);
-
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
-Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_Object_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
-
-// https://crsrc.org/c/v8/src/builtins/convert.tq?l=73&c=1
-Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_int31_0(d::MemoryAccessor accessor, int31_t p_i);
-
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=212&c=1
 Value<intptr_t> TqDebugConvert_intptr_int32_0(d::MemoryAccessor accessor, int32_t p_i);
 
@@ -210,12 +195,12 @@ Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_IntegerLiteral_0(d::Memory
 Value<intptr_t> TqDebugConvert_intptr_intptr_0(d::MemoryAccessor accessor, intptr_t p_i);
 
 // https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=12&c=3
-Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
+Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
 
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=76&c=1
 Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_int32_0(d::MemoryAccessor accessor, int32_t p_i);
 
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+// https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=13&c=3
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_uint8_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
 
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=73&c=1
@@ -263,7 +248,7 @@ Value<intptr_t> TqDebugConvert_intptr_Smi_0(d::MemoryAccessor accessor, uintptr_
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=8&c=1
 Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_IntegerLiteral_0(d::MemoryAccessor accessor, IntegerLiteral p_i);
 
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+// https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=13&c=3
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_uint8_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
 
 // https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=31&c=39
@@ -272,7 +257,7 @@ Value<intptr_t> TqDebugConvert_intptr_constexpr_IntegerLiteral_0(d::MemoryAccess
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=8&c=1
 Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_IntegerLiteral_0(d::MemoryAccessor accessor, IntegerLiteral p_i);
 
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+// https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=13&c=3
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_uint8_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
 
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=73&c=1
@@ -285,7 +270,7 @@ Value<intptr_t> TqDebugConvert_intptr_uint8_0(d::MemoryAccessor accessor, uint8_
 Value<intptr_t> TqDebugConvert_intptr_intptr_0(d::MemoryAccessor accessor, intptr_t p_i);
 
 // https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=12&c=3
-Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
+Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
 
 // https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=71&c=3
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_HashMapEntry_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
@@ -302,7 +287,7 @@ Value<intptr_t> TqDebugConvert_intptr_Smi_0(d::MemoryAccessor accessor, uintptr_
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=8&c=1
 Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_IntegerLiteral_0(d::MemoryAccessor accessor, IntegerLiteral p_i);
 
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=14&c=3
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_Object_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
 
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=73&c=1
@@ -440,9 +425,6 @@ Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_intptr_0(d::MemoryAccessor
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=79&c=1
 Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_intptr_0(d::MemoryAccessor accessor, intptr_t p_i);
 
-// https://crsrc.org/c/v8/src/builtins/convert.tq?l=79&c=1
-Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_intptr_0(d::MemoryAccessor accessor, intptr_t p_i);
-
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=57&c=10
 Value<uintptr_t> TqDebugConvert_Smi_constexpr_int31_0(d::MemoryAccessor accessor, int31_t p_i);
 
@@ -458,18 +440,6 @@ Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_intptr_0(d::MemoryAccessor
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=85&c=1
 Value<uintptr_t> TqDebugFromConstexpr_Smi_constexpr_int31_0(d::MemoryAccessor accessor, int31_t p_i);
 
-// https://crsrc.org/c/v8/src/builtins/convert.tq?l=73&c=1
-Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_int31_0(d::MemoryAccessor accessor, int31_t p_i);
-
-// https://crsrc.org/c/v8/src/builtins/convert.tq?l=298&c=1
-Value<intptr_t> TqDebugConvert_intptr_Smi_0(d::MemoryAccessor accessor, uintptr_t p_s);
-
-// https://crsrc.org/c/v8/src/builtins/convert.tq?l=8&c=1
-Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_IntegerLiteral_0(d::MemoryAccessor accessor, IntegerLiteral p_i);
-
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_uint8_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
-
 // https://crsrc.org/c/v8/src/objects/contexts.tq?l=70&c=22
 Value<intptr_t> TqDebugConvert_intptr_constexpr_int31_0(d::MemoryAccessor accessor, int31_t p_i);
 
@@ -479,7 +449,16 @@ Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_IntegerLiteral_0(d::Memory
 // https://crsrc.org/c/v8/src/objects/prototype-info.tq?l=43&c=3
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_Zero_OR_LoadHandler_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
 
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
+// https://crsrc.org/c/v8/src/builtins/convert.tq?l=73&c=1
+Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_int31_0(d::MemoryAccessor accessor, int31_t p_i);
+
+// https://crsrc.org/c/v8/src/builtins/convert.tq?l=298&c=1
+Value<intptr_t> TqDebugConvert_intptr_Smi_0(d::MemoryAccessor accessor, uintptr_t p_s);
+
+// https://crsrc.org/c/v8/src/builtins/convert.tq?l=8&c=1
+Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_IntegerLiteral_0(d::MemoryAccessor accessor, IntegerLiteral p_i);
+
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=14&c=3
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_Object_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
 
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=298&c=1
@@ -496,6 +475,9 @@ Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_TrustedO
 
 // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=33&c=3
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_float64_or_undefined_or_hole_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
+
+// https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=13&c=3
+Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_uint8_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
 
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=73&c=1
 Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_int31_0(d::MemoryAccessor accessor, int31_t p_i);
@@ -524,7 +506,7 @@ Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_IntegerLiteral_0(d::Memory
 // https://crsrc.org/c/v8/src/objects/string.tq?l=141&c=9
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewConstSlice_char8_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
 
-// https://crsrc.org/c/v8/src/builtins/wasm.tq?l=1158&c=26
+// https://crsrc.org/c/v8/src/objects/string.tq?l=147&c=9
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewConstSlice_char16_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
 
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=73&c=1
@@ -536,14 +518,14 @@ Value<intptr_t> TqDebugConvert_intptr_Smi_0(d::MemoryAccessor accessor, uintptr_
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=8&c=1
 Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_IntegerLiteral_0(d::MemoryAccessor accessor, IntegerLiteral p_i);
 
-// https://crsrc.org/c/v8/src/wasm/wasm-objects.tq?l=307&c=3
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=14&c=3
 Value<std::tuple<uintptr_t, intptr_t, intptr_t>> TqDebugNewMutableSlice_Object_0(d::MemoryAccessor accessor, uintptr_t p_object, intptr_t p_offset, intptr_t p_length);
-
-// https://crsrc.org/c/v8/src/builtins/convert.tq?l=79&c=1
-Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_intptr_0(d::MemoryAccessor accessor, intptr_t p_i);
 
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=73&c=1
 Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_int31_0(d::MemoryAccessor accessor, int31_t p_i);
+
+// https://crsrc.org/c/v8/src/builtins/convert.tq?l=79&c=1
+Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_intptr_0(d::MemoryAccessor accessor, intptr_t p_i);
 
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=79&c=1
 Value<intptr_t> TqDebugFromConstexpr_intptr_constexpr_intptr_0(d::MemoryAccessor accessor, intptr_t p_i);

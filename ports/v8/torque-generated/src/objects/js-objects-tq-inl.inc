@@ -9,14 +9,14 @@ Tagged<Union<FixedArrayBase, PropertyArray, Smi, SwissNameDictionary>> TorqueGen
 template<class D, class P>
 Tagged<Union<FixedArrayBase, PropertyArray, Smi, SwissNameDictionary>> TorqueGeneratedJSReceiver<D, P>::properties_or_hash(PtrComprCageBase cage_base) const {
   Tagged<Union<FixedArrayBase, PropertyArray, Smi, SwissNameDictionary>> value = TaggedField<Tagged<Union<FixedArrayBase, PropertyArray, Smi, SwissNameDictionary>>>::load(cage_base, *this, kPropertiesOrHashOffset);
-  DCHECK(IsFixedArrayBase(value) || IsSwissNameDictionary(value) || IsSmi(value) || IsPropertyArray(value));
+  DCHECK(IsSwissNameDictionary(value) || IsSmi(value) || IsFixedArrayBase(value) || IsPropertyArray(value));
   return value;
 }
 
 // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=9&c=3
 template<class D, class P>
 void TorqueGeneratedJSReceiver<D, P>::set_properties_or_hash(Tagged<Union<FixedArrayBase, PropertyArray, Smi, SwissNameDictionary>> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsFixedArrayBase(value) || IsSwissNameDictionary(value) || IsSmi(value) || IsPropertyArray(value)));
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsSwissNameDictionary(value) || IsSmi(value) || IsFixedArrayBase(value) || IsPropertyArray(value)));
   WRITE_FIELD(*this, kPropertiesOrHashOffset, value);
   CONDITIONAL_WRITE_BARRIER(*this, kPropertiesOrHashOffset, value, mode);
 }
@@ -127,14 +127,14 @@ Tagged<JSAny> TorqueGeneratedJSPrimitiveWrapper<D, P>::value() const {
 template<class D, class P>
 Tagged<JSAny> TorqueGeneratedJSPrimitiveWrapper<D, P>::value(PtrComprCageBase cage_base) const {
   Tagged<JSAny> value = TaggedField<Tagged<JSAny>>::load(cage_base, *this, kValueOffset);
-  DCHECK(IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
+  DCHECK(IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
   return value;
 }
 
 // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=146&c=3
 template<class D, class P>
 void TorqueGeneratedJSPrimitiveWrapper<D, P>::set_value(Tagged<JSAny> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
   WRITE_FIELD(*this, kValueOffset, value);
   CONDITIONAL_WRITE_BARRIER(*this, kValueOffset, value, mode);
 }
@@ -609,14 +609,14 @@ Tagged<JSAny> TorqueGeneratedJSValidIteratorWrapper<D, P>::underlying_next() con
 template<class D, class P>
 Tagged<JSAny> TorqueGeneratedJSValidIteratorWrapper<D, P>::underlying_next(PtrComprCageBase cage_base) const {
   Tagged<JSAny> value = TaggedField<Tagged<JSAny>>::load(cage_base, *this, kUnderlyingOffset + 4);
-  DCHECK(IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
+  DCHECK(IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
   return value;
 }
 
 // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=206&c=3
 template<class D, class P>
 void TorqueGeneratedJSValidIteratorWrapper<D, P>::set_underlying_next(Tagged<JSAny> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
   WRITE_FIELD(*this, kUnderlyingOffset + 4, value);
   CONDITIONAL_WRITE_BARRIER(*this, kUnderlyingOffset + 4, value, mode);
 }

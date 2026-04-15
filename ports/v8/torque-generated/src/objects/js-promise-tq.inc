@@ -17,7 +17,7 @@ class TorqueGeneratedJSPromise : public P {
   using Super = P;
   using TorqueGeneratedClass = TorqueGeneratedJSPromise<D,P>;
 
-  // Torque type: (class JSReceiver | BigInt | class Undefined | Smi | class HeapNumber | class String | class Symbol | class Boolean | class Null | class PromiseReaction)
+  // Torque type: (BigInt | class JSReceiver | class Undefined | Smi | class HeapNumber | class String | class Symbol | class Boolean | class Null | class PromiseReaction)
   // https://crsrc.org/c/v8/src/objects/js-promise.tq?l=34&c=3
   inline Tagged<Union<BigInt, Boolean, HeapNumber, JSReceiver, Null, PromiseReaction, Smi, String, Symbol, Undefined>> reactions_or_result() const;
   // https://crsrc.org/c/v8/src/objects/js-promise.tq?l=34&c=3

@@ -40,7 +40,7 @@ inline intptr_t TqRuntimeConvert_intptr_constexpr_IntegerLiteral_0(IntegerLitera
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=8&c=1
 inline intptr_t TqRuntimeFromConstexpr_intptr_constexpr_IntegerLiteral_0(IntegerLiteral p_i);
 
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+// https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=13&c=3
 inline std::tuple<Tagged<Union<HeapObject, TaggedIndex>>, intptr_t, intptr_t> TqRuntimeNewMutableSlice_uint8_0(Tagged<Union<HeapObject, TaggedIndex>> p_object, intptr_t p_offset, intptr_t p_length);
 
 // https://crsrc.org/c/v8/src/builtins/convert.tq?l=73&c=1
@@ -53,7 +53,7 @@ inline intptr_t TqRuntimeConvert_intptr_uint8_0(uint8_t p_ui);
 inline intptr_t TqRuntimeConvert_intptr_intptr_0(intptr_t p_i);
 
 // https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=12&c=3
-inline std::tuple<Tagged<Union<HeapObject, TaggedIndex>>, intptr_t, intptr_t> TqRuntimeNewMutableSlice_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(Tagged<Union<HeapObject, TaggedIndex>> p_object, intptr_t p_offset, intptr_t p_length);
+inline std::tuple<Tagged<Union<HeapObject, TaggedIndex>>, intptr_t, intptr_t> TqRuntimeNewMutableSlice_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(Tagged<Union<HeapObject, TaggedIndex>> p_object, intptr_t p_offset, intptr_t p_length);
 
 // https://crsrc.org/c/v8/src/objects/ordered-hash-table.tq?l=71&c=3
 inline std::tuple<Tagged<Union<HeapObject, TaggedIndex>>, intptr_t, intptr_t> TqRuntimeNewMutableSlice_HashMapEntry_0(Tagged<Union<HeapObject, TaggedIndex>> p_object, intptr_t p_offset, intptr_t p_length);
@@ -114,7 +114,7 @@ std::tuple<Tagged<Union<HeapObject, TaggedIndex>>, intptr_t, intptr_t> TqRuntime
   tmp4 = TorqueRuntimeMacroShims::CodeStubAssembler::IntPtrMul(tmp2, tmp3);
   tmp5 = TqRuntimeConvert_intptr_intptr_0(tmp4);
   tmp6 = TqRuntimeFromConstexpr_intptr_constexpr_IntegerLiteral_0(IntegerLiteral(false, 0x8ull));
-  std::tie(tmp7, tmp8, tmp9) = TqRuntimeNewMutableSlice_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(p_o, tmp6, tmp5);
+  std::tie(tmp7, tmp8, tmp9) = TqRuntimeNewMutableSlice_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(p_o, tmp6, tmp5);
   goto block2;
 
   block2:
@@ -505,7 +505,7 @@ intptr_t TqRuntimeFromConstexpr_intptr_constexpr_IntegerLiteral_0(IntegerLiteral
 #ifndef V8_INTERNAL_DEFINED_TqRuntimeNewMutableSlice_uint8_0
 #define V8_INTERNAL_DEFINED_TqRuntimeNewMutableSlice_uint8_0
 
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+// https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=13&c=3
 std::tuple<Tagged<Union<HeapObject, TaggedIndex>>, intptr_t, intptr_t> TqRuntimeNewMutableSlice_uint8_0(Tagged<Union<HeapObject, TaggedIndex>> p_object, intptr_t p_offset, intptr_t p_length) {
   DisallowGarbageCollection no_gc;
   Tagged<Union<HeapObject, TaggedIndex>> tmp0{}; USE(tmp0);
@@ -576,11 +576,11 @@ intptr_t TqRuntimeConvert_intptr_intptr_0(intptr_t p_i) {
 }
 
 #endif // V8_INTERNAL_DEFINED_TqRuntimeConvert_intptr_intptr_0
-#ifndef V8_INTERNAL_DEFINED_TqRuntimeNewMutableSlice_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0
-#define V8_INTERNAL_DEFINED_TqRuntimeNewMutableSlice_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0
+#ifndef V8_INTERNAL_DEFINED_TqRuntimeNewMutableSlice_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0
+#define V8_INTERNAL_DEFINED_TqRuntimeNewMutableSlice_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0
 
 // https://crsrc.org/c/v8/src/objects/swiss-name-dictionary.tq?l=12&c=3
-std::tuple<Tagged<Union<HeapObject, TaggedIndex>>, intptr_t, intptr_t> TqRuntimeNewMutableSlice_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(Tagged<Union<HeapObject, TaggedIndex>> p_object, intptr_t p_offset, intptr_t p_length) {
+std::tuple<Tagged<Union<HeapObject, TaggedIndex>>, intptr_t, intptr_t> TqRuntimeNewMutableSlice_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(Tagged<Union<HeapObject, TaggedIndex>> p_object, intptr_t p_offset, intptr_t p_length) {
   DisallowGarbageCollection no_gc;
   Tagged<Union<HeapObject, TaggedIndex>> tmp0{}; USE(tmp0);
   intptr_t tmp1{}; USE(tmp1);
@@ -595,7 +595,7 @@ std::tuple<Tagged<Union<HeapObject, TaggedIndex>>, intptr_t, intptr_t> TqRuntime
   return std::make_tuple(tmp0, tmp1, tmp2);
 }
 
-#endif // V8_INTERNAL_DEFINED_TqRuntimeNewMutableSlice_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0
+#endif // V8_INTERNAL_DEFINED_TqRuntimeNewMutableSlice_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0
 #ifndef V8_INTERNAL_DEFINED_TqRuntimeNewMutableSlice_HashMapEntry_0
 #define V8_INTERNAL_DEFINED_TqRuntimeNewMutableSlice_HashMapEntry_0
 

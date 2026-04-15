@@ -68,14 +68,14 @@ Tagged<JSAny> TorqueGeneratedJSProxyRevocableResult<D, P>::proxy() const {
 template<class D, class P>
 Tagged<JSAny> TorqueGeneratedJSProxyRevocableResult<D, P>::proxy(PtrComprCageBase cage_base) const {
   Tagged<JSAny> value = TaggedField<Tagged<JSAny>>::load(cage_base, *this, kProxyOffset);
-  DCHECK(IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
+  DCHECK(IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
   return value;
 }
 
 // https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=14&c=3
 template<class D, class P>
 void TorqueGeneratedJSProxyRevocableResult<D, P>::set_proxy(Tagged<JSAny> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
   WRITE_FIELD(*this, kProxyOffset, value);
   CONDITIONAL_WRITE_BARRIER(*this, kProxyOffset, value, mode);
 }
@@ -91,14 +91,14 @@ Tagged<JSAny> TorqueGeneratedJSProxyRevocableResult<D, P>::revoke() const {
 template<class D, class P>
 Tagged<JSAny> TorqueGeneratedJSProxyRevocableResult<D, P>::revoke(PtrComprCageBase cage_base) const {
   Tagged<JSAny> value = TaggedField<Tagged<JSAny>>::load(cage_base, *this, kRevokeOffset);
-  DCHECK(IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
+  DCHECK(IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
   return value;
 }
 
 // https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=15&c=3
 template<class D, class P>
 void TorqueGeneratedJSProxyRevocableResult<D, P>::set_revoke(Tagged<JSAny> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
   WRITE_FIELD(*this, kRevokeOffset, value);
   CONDITIONAL_WRITE_BARRIER(*this, kRevokeOffset, value, mode);
 }

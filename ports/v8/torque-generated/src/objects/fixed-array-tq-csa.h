@@ -60,15 +60,6 @@ TNode<Union<FixedArray, FixedDoubleArray>> ExtractFixedDoubleArray_0(compiler::C
 // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=8&c=9
 TNode<Smi> LoadFixedArrayBaseLength_0(compiler::CodeAssemblerState* state_, TNode<FixedArrayBase> p_o);
 
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-TorqueStructSlice_uint8_MutableReference_uint8_0 FieldSliceByteArrayValues_0(compiler::CodeAssemblerState* state_, TNode<ByteArray> p_o);
-
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-TNode<Uint8T> LoadByteArrayValues_0(compiler::CodeAssemblerState* state_, TNode<ByteArray> p_o, TNode<IntPtrT> p_i);
-
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-void StoreByteArrayValues_0(compiler::CodeAssemblerState* state_, TNode<ByteArray> p_o, TNode<IntPtrT> p_i, TNode<Uint8T> p_v);
-
 // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=14&c=3
 TorqueStructSlice_Object_MutableReference_Object_0 FieldSliceFixedArrayObjects_0(compiler::CodeAssemblerState* state_, TNode<FixedArray> p_o);
 
@@ -171,6 +162,15 @@ TNode<Union<Smi, TrustedObject>> LoadProtectedWeakFixedArrayObjects_0(compiler::
 // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=59&c=3
 void StoreProtectedWeakFixedArrayObjects_0(compiler::CodeAssemblerState* state_, TNode<ProtectedWeakFixedArray> p_o, TNode<IntPtrT> p_i, TNode<Union<Smi, TrustedObject>> p_v);
 
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+TorqueStructSlice_uint8_MutableReference_uint8_0 FieldSliceByteArrayValues_0(compiler::CodeAssemblerState* state_, TNode<ByteArray> p_o);
+
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+TNode<Uint8T> LoadByteArrayValues_0(compiler::CodeAssemblerState* state_, TNode<ByteArray> p_o, TNode<IntPtrT> p_i);
+
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+void StoreByteArrayValues_0(compiler::CodeAssemblerState* state_, TNode<ByteArray> p_o, TNode<IntPtrT> p_i, TNode<Uint8T> p_v);
+
 // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=69&c=9
 TNode<Smi> LoadTrustedByteArrayLength_0(compiler::CodeAssemblerState* state_, TNode<TrustedByteArray> p_o);
 
@@ -258,8 +258,8 @@ TorqueStructIteratorSequence_float64_or_undefined_or_hole_SliceIterator_float64_
 // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=185&c=10
 TNode<Union<FixedArray, FixedDoubleArray>> NewFixedDoubleArray_IteratorSequence_float64_or_undefined_or_hole_SliceIterator_float64_or_undefined_or_hole_MutableReference_float64_or_undefined_or_hole_ConstantIterator_float64_or_undefined_or_hole_0(compiler::CodeAssemblerState* state_, TNode<IntPtrT> p_length, TorqueStructIteratorSequence_float64_or_undefined_or_hole_SliceIterator_float64_or_undefined_or_hole_MutableReference_float64_or_undefined_or_hole_ConstantIterator_float64_or_undefined_or_hole_0 p_it);
 
-// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-TorqueStructSlice_uint8_MutableReference_uint8_0 NewMutableSlice_uint8_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset, TNode<IntPtrT> p_length);
+// https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=14&c=3
+TorqueStructSlice_Object_MutableReference_Object_0 NewMutableSlice_Object_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset, TNode<IntPtrT> p_length);
 
 // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=28&c=3
 TorqueStructSlice_TrustedObject_OR_Smi_MutableReference_TrustedObject_OR_Smi_0 NewMutableSlice_TrustedObject_OR_Smi_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset, TNode<IntPtrT> p_length);

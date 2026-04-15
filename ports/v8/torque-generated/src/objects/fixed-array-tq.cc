@@ -18,21 +18,6 @@ class TorqueGeneratedFixedArrayBaseAsserts {
                 "Value of FixedArrayBase::kLengthOffset defined in Torque and offset of field FixedArrayBase::length in C++ do not match");
 };
 
-// Definition https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=62&c=1
-class TorqueGeneratedByteArrayAsserts {
-  static constexpr int kHeaderSize = sizeof(FixedArrayBase);
-  // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
-  static constexpr int kValuesOffset = sizeof(FixedArrayBase);
-  static constexpr int kValuesOffsetEnd = kValuesOffset + 0 - 1;
-  static constexpr int kStartOfWeakFieldsOffset = kValuesOffsetEnd + 1;
-  static constexpr int kEndOfWeakFieldsOffset = kValuesOffsetEnd + 1;
-  static constexpr int kStartOfStrongFieldsOffset = kValuesOffsetEnd + 1;
-  static constexpr int kEndOfStrongFieldsOffset = kValuesOffsetEnd + 1;
-
-  static_assert(kValuesOffset == OFFSET_OF_DATA_START(ByteArray),
-                "Value of ByteArray::kValuesOffset defined in Torque and offset of field ByteArray::values in C++ do not match");
-};
-
 // Definition https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=11&c=1
 class TorqueGeneratedFixedArrayAsserts {
   static constexpr int kStartOfStrongFieldsOffset = sizeof(FixedArrayBase);
@@ -206,6 +191,21 @@ class TorqueGeneratedProtectedWeakFixedArrayAsserts {
                 "Value of ProtectedWeakFixedArray::kLengthOffset defined in Torque and offset of field ProtectedWeakFixedArray::length in C++ do not match");
   static_assert(kObjectsOffset == OFFSET_OF_DATA_START(ProtectedWeakFixedArray),
                 "Value of ProtectedWeakFixedArray::kObjectsOffset defined in Torque and offset of field ProtectedWeakFixedArray::objects in C++ do not match");
+};
+
+// Definition https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=62&c=1
+class TorqueGeneratedByteArrayAsserts {
+  static constexpr int kHeaderSize = sizeof(FixedArrayBase);
+  // https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=64&c=3
+  static constexpr int kValuesOffset = sizeof(FixedArrayBase);
+  static constexpr int kValuesOffsetEnd = kValuesOffset + 0 - 1;
+  static constexpr int kStartOfWeakFieldsOffset = kValuesOffsetEnd + 1;
+  static constexpr int kEndOfWeakFieldsOffset = kValuesOffsetEnd + 1;
+  static constexpr int kStartOfStrongFieldsOffset = kValuesOffsetEnd + 1;
+  static constexpr int kEndOfStrongFieldsOffset = kValuesOffsetEnd + 1;
+
+  static_assert(kValuesOffset == OFFSET_OF_DATA_START(ByteArray),
+                "Value of ByteArray::kValuesOffset defined in Torque and offset of field ByteArray::values in C++ do not match");
 };
 
 // Definition https://crsrc.org/c/v8/src/objects/fixed-array.tq?l=67&c=1

@@ -78,17 +78,17 @@ TNode<Object> LoadMapConstructorOrBackPointerOrNativeContext_0(compiler::CodeAss
 // https://crsrc.org/c/v8/src/objects/map.tq?l=84&c=3
 void StoreMapConstructorOrBackPointerOrNativeContext_0(compiler::CodeAssemblerState* state_, TNode<Map> p_o, TNode<Object> p_v);
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
-TNode<Union<DescriptorArray, WasmStruct>> LoadMapInstanceDescriptors_0(compiler::CodeAssemblerState* state_, TNode<Map> p_o);
+// https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
+TNode<DescriptorArray> LoadMapInstanceDescriptors_0(compiler::CodeAssemblerState* state_, TNode<Map> p_o);
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
-void StoreMapInstanceDescriptors_0(compiler::CodeAssemblerState* state_, TNode<Map> p_o, TNode<Union<DescriptorArray, WasmStruct>> p_v);
+// https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
+void StoreMapInstanceDescriptors_0(compiler::CodeAssemblerState* state_, TNode<Map> p_o, TNode<DescriptorArray> p_v);
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
-TNode<Union<Map, WeakArrayList>> LoadMapDependentCode_0(compiler::CodeAssemblerState* state_, TNode<Map> p_o);
+// https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
+TNode<WeakArrayList> LoadMapDependentCode_0(compiler::CodeAssemblerState* state_, TNode<Map> p_o);
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
-void StoreMapDependentCode_0(compiler::CodeAssemblerState* state_, TNode<Map> p_o, TNode<Union<Map, WeakArrayList>> p_v);
+// https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
+void StoreMapDependentCode_0(compiler::CodeAssemblerState* state_, TNode<Map> p_o, TNode<WeakArrayList> p_v);
 
 // https://crsrc.org/c/v8/src/objects/map.tq?l=95&c=3
 TNode<Union<Cell, Smi>> LoadMapPrototypeValidityCell_0(compiler::CodeAssemblerState* state_, TNode<Map> p_o);

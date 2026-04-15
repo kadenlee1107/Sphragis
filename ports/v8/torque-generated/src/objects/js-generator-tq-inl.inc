@@ -55,14 +55,14 @@ Tagged<JSAny> TorqueGeneratedJSGeneratorObject<D, P>::receiver() const {
 template<class D, class P>
 Tagged<JSAny> TorqueGeneratedJSGeneratorObject<D, P>::receiver(PtrComprCageBase cage_base) const {
   Tagged<JSAny> value = TaggedField<Tagged<JSAny>>::load(cage_base, *this, kReceiverOffset);
-  DCHECK(IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
+  DCHECK(IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
   return value;
 }
 
 // https://crsrc.org/c/v8/src/objects/js-generator.tq?l=8&c=3
 template<class D, class P>
 void TorqueGeneratedJSGeneratorObject<D, P>::set_receiver(Tagged<JSAny> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
   WRITE_FIELD(*this, kReceiverOffset, value);
   CONDITIONAL_WRITE_BARRIER(*this, kReceiverOffset, value, mode);
 }

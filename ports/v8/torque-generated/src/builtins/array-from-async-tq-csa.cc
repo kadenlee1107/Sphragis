@@ -1,7 +1,6 @@
 #include "src/ast/ast.h"
 #include "src/builtins/builtins-array-gen.h"
 #include "src/builtins/builtins-bigint-gen.h"
-#include "src/builtins/builtins-call-gen.h"
 #include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-data-view-gen.h"
@@ -15,10 +14,8 @@
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-typed-array-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins-wasm-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/code-factory.h"
-#include "src/debug/debug-wasm-objects.h"
 #include "src/heap/factory-inl.h"
 #include "src/ic/binary-op-assembler.h"
 #include "src/ic/handler-configuration-inl.h"
@@ -68,9 +65,6 @@
 #include "src/objects/turbofan-types.h"
 #include "src/objects/turboshaft-types.h"
 #include "src/torque/runtime-support.h"
-#include "src/wasm/value-type.h"
-#include "src/wasm/wasm-linkage.h"
-#include "src/wasm/wasm-module.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 // Required Builtins:
 #include "torque-generated/src/builtins/array-from-async-tq-csa.h"
@@ -1618,7 +1612,7 @@ TNode<JSAny> CreateArrayFromIterableAsynchronously_0(compiler::CodeAssemblerStat
     tmp108 = Undefined_0(state_);
     compiler::CodeAssemblerExceptionHandlerLabel catch110__label(&ca_, compiler::CodeAssemblerLabel::kDeferred);
     { compiler::ScopedExceptionHandler s(&ca_, &catch110__label);
-    tmp109 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp8}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp108});
+    tmp109 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp8}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp108});
     }
     if (catch110__label.is_used()) {
       compiler::CodeAssemblerLabel catch110_skip(&ca_);
@@ -2853,7 +2847,7 @@ void ArrayFromAsyncAsyncIteratorCloseOnException_0(compiler::CodeAssemblerState*
     tmp5 = Undefined_0(state_);
     compiler::CodeAssemblerExceptionHandlerLabel catch7__label(&ca_, compiler::CodeAssemblerLabel::kDeferred);
     { compiler::ScopedExceptionHandler s(&ca_, &catch7__label);
-    tmp6 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{tmp2}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp5});
+    tmp6 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{tmp2}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp5});
     }
     if (catch7__label.is_used()) {
       compiler::CodeAssemblerLabel catch7_skip(&ca_);
@@ -2912,7 +2906,7 @@ void ArrayFromAsyncAsyncIteratorCloseOnException_0(compiler::CodeAssemblerState*
     tmp15 = Null_0(state_);
     compiler::CodeAssemblerExceptionHandlerLabel catch17__label(&ca_, compiler::CodeAssemblerLabel::kDeferred);
     { compiler::ScopedExceptionHandler s(&ca_, &catch17__label);
-    tmp16 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{tmp2}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp15});
+    tmp16 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{tmp2}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp15});
     }
     if (catch17__label.is_used()) {
       compiler::CodeAssemblerLabel catch17_skip(&ca_);
@@ -4158,7 +4152,7 @@ TNode<JSAny> CreateArrayFromArrayLikeAsynchronously_0(compiler::CodeAssemblerSta
     tmp102 = Undefined_0(state_);
     compiler::CodeAssemblerExceptionHandlerLabel catch104__label(&ca_, compiler::CodeAssemblerLabel::kDeferred);
     { compiler::ScopedExceptionHandler s(&ca_, &catch104__label);
-    tmp103 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp5}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp102});
+    tmp103 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp5}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp102});
     }
     if (catch104__label.is_used()) {
       compiler::CodeAssemblerLabel catch104_skip(&ca_);
@@ -5111,7 +5105,7 @@ TF_BUILTIN(ArrayFromAsync, CodeStubAssembler) {
     tmp15 = Undefined_0(state_);
     compiler::CodeAssemblerExceptionHandlerLabel catch17__label(&ca_, compiler::CodeAssemblerLabel::kDeferred);
     { compiler::ScopedExceptionHandler s(&ca_, &catch17__label);
-    tmp16 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp5}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp15});
+    tmp16 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp5}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp15});
     }
     if (catch17__label.is_used()) {
       compiler::CodeAssemblerLabel catch17_skip(&ca_);
@@ -5410,7 +5404,7 @@ TF_BUILTIN(ArrayFromAsync, CodeStubAssembler) {
     tmp67 = Undefined_0(state_);
     compiler::CodeAssemblerExceptionHandlerLabel catch69__label(&ca_, compiler::CodeAssemblerLabel::kDeferred);
     { compiler::ScopedExceptionHandler s(&ca_, &catch69__label);
-    tmp68 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{phi_bb21_12}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp67});
+    tmp68 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{phi_bb21_12}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp67});
     }
     if (catch69__label.is_used()) {
       compiler::CodeAssemblerLabel catch69_skip(&ca_);

@@ -60,7 +60,7 @@ class TorqueGeneratedDescriptorArray : public P {
   // https://crsrc.org/c/v8/src/objects/descriptor-array.tq?l=40&c=3
   inline void set_descriptors_details(int i, Tagged<Union<Smi, Undefined>> value, WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
-  // Torque type: (class JSReceiver | BigInt | class Undefined | Smi | class HeapNumber | class String | class Symbol | class Boolean | class Null | Weak<class Map> | class AccessorInfo | class AccessorPair | class ClassPositions | class NumberDictionary)
+  // Torque type: (BigInt | class JSReceiver | class Undefined | Smi | class HeapNumber | class String | class Symbol | class Boolean | class Null | Weak<class Map> | class AccessorInfo | class AccessorPair | class ClassPositions | class NumberDictionary)
   // https://crsrc.org/c/v8/src/objects/descriptor-array.tq?l=40&c=3
   inline Tagged<Union<AccessorInfo, AccessorPair, BigInt, Boolean, ClassPositions, HeapNumber, JSReceiver, Null, NumberDictionary, Smi, String, Symbol, Undefined, Weak<HeapObject>>> descriptors_value(int i) const;
   // https://crsrc.org/c/v8/src/objects/descriptor-array.tq?l=40&c=3

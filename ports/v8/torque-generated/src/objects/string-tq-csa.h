@@ -177,6 +177,9 @@ TNode<Uint16T> Convert_uint16_InstanceType_0(compiler::CodeAssemblerState* state
 // https://crsrc.org/c/v8/src/objects/string.tq?l=141&c=9
 TorqueStructSlice_char8_ConstReference_char8_0 NewConstSlice_char8_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset, TNode<IntPtrT> p_length);
 
+// https://crsrc.org/c/v8/src/objects/string.tq?l=147&c=9
+TorqueStructSlice_char16_ConstReference_char16_0 NewConstSlice_char16_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset, TNode<IntPtrT> p_length);
+
 // https://crsrc.org/c/v8/src/objects/string.tq?l=334&c=14
 TNode<Smi> Call_char8_char8_0(compiler::CodeAssemblerState* state_, TorqueStructAbstractStringIndexOfFunctor_0 p_self, TorqueStructSlice_char8_ConstReference_char8_0 p_string, TorqueStructSlice_char8_ConstReference_char8_0 p_searchStr);
 
@@ -200,18 +203,6 @@ TNode<BoolT> Call_char16_char8_1(compiler::CodeAssemblerState* state_, TorqueStr
 
 // https://crsrc.org/c/v8/src/objects/string.tq?l=344&c=14
 TNode<BoolT> Call_char16_char16_1(compiler::CodeAssemblerState* state_, TorqueStructIsSubstringAtFunctor_0 p_self, TorqueStructSlice_char16_ConstReference_char16_0 p_string, TorqueStructSlice_char16_ConstReference_char16_0 p_searchStr);
-
-// https://crsrc.org/c/v8/src/objects/string.tq?l=210&c=10
-TNode<SeqTwoByteString> AllocateNonEmptySeqTwoByteString_SliceIterator_char16_ConstReference_char16_0(compiler::CodeAssemblerState* state_, TNode<Uint32T> p_length, TorqueStructSliceIterator_char16_ConstReference_char16_0 p_content);
-
-// https://crsrc.org/c/v8/src/objects/string.tq?l=170&c=10
-void InitializeFieldsFromIterator_char8_TwoByteToOneByteIterator_0(compiler::CodeAssemblerState* state_, TorqueStructSlice_char8_MutableReference_char8_0 p_target, TorqueStructTwoByteToOneByteIterator_0 p_originIterator);
-
-// https://crsrc.org/c/v8/src/objects/string.tq?l=170&c=10
-void InitializeFieldsFromIterator_char8_SliceIterator_char8_ConstReference_char8_0(compiler::CodeAssemblerState* state_, TorqueStructSlice_char8_MutableReference_char8_0 p_target, TorqueStructSliceIterator_char8_ConstReference_char8_0 p_originIterator);
-
-// https://crsrc.org/c/v8/src/objects/string.tq?l=181&c=10
-void InitializeFieldsFromIterator_char16_SliceIterator_char16_ConstReference_char16_0(compiler::CodeAssemblerState* state_, TorqueStructSlice_char16_MutableReference_char16_0 p_target, TorqueStructSliceIterator_char16_ConstReference_char16_0 p_originIterator);
 
 } // namespace internal
 } // namespace v8

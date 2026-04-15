@@ -9,9 +9,6 @@ namespace internal {
 // https://crsrc.org/c/v8/src/builtins/js-to-js.tq?l=18&c=1
 TNode<JSAny> ConvertToAndFromWasm_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Uint32T> p_wasmType, TNode<JSAny> p_value);
 
-// https://crsrc.org/c/v8/src/builtins/js-to-js.tq?l=84&c=7
-TNode<WasmImportData> UnsafeCast_WasmImportData_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
-
 } // namespace internal
 } // namespace v8
 

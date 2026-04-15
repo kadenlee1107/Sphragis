@@ -204,7 +204,7 @@ class TorqueGeneratedJSTypedArray : public P {
   // https://crsrc.org/c/v8/src/objects/js-array-buffer.tq?l=122&c=3
   inline void set_external_pointer(Address value);
 
-  // Torque type: (class ByteArray | Smi)
+  // Torque type: (Smi | class ByteArray)
   // https://crsrc.org/c/v8/src/objects/js-array-buffer.tq?l=123&c=3
   inline Tagged<Union<ByteArray, Smi>> base_pointer() const;
   // https://crsrc.org/c/v8/src/objects/js-array-buffer.tq?l=123&c=3

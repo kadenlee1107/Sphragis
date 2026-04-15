@@ -147,14 +147,14 @@ Tagged<JSAny> TorqueGeneratedJSSloppyArgumentsObject<D, P>::length() const {
 template<class D, class P>
 Tagged<JSAny> TorqueGeneratedJSSloppyArgumentsObject<D, P>::length(PtrComprCageBase cage_base) const {
   Tagged<JSAny> value = TaggedField<Tagged<JSAny>>::load(cage_base, *this, kLengthOffset);
-  DCHECK(IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
+  DCHECK(IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
   return value;
 }
 
 // https://crsrc.org/c/v8/src/objects/arguments.tq?l=18&c=3
 template<class D, class P>
 void TorqueGeneratedJSSloppyArgumentsObject<D, P>::set_length(Tagged<JSAny> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
   WRITE_FIELD(*this, kLengthOffset, value);
   CONDITIONAL_WRITE_BARRIER(*this, kLengthOffset, value, mode);
 }
@@ -170,14 +170,14 @@ Tagged<JSAny> TorqueGeneratedJSSloppyArgumentsObject<D, P>::callee() const {
 template<class D, class P>
 Tagged<JSAny> TorqueGeneratedJSSloppyArgumentsObject<D, P>::callee(PtrComprCageBase cage_base) const {
   Tagged<JSAny> value = TaggedField<Tagged<JSAny>>::load(cage_base, *this, kCalleeOffset);
-  DCHECK(IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
+  DCHECK(IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
   return value;
 }
 
 // https://crsrc.org/c/v8/src/objects/arguments.tq?l=19&c=3
 template<class D, class P>
 void TorqueGeneratedJSSloppyArgumentsObject<D, P>::set_callee(Tagged<JSAny> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
   WRITE_FIELD(*this, kCalleeOffset, value);
   CONDITIONAL_WRITE_BARRIER(*this, kCalleeOffset, value, mode);
 }
@@ -193,14 +193,14 @@ Tagged<JSAny> TorqueGeneratedJSStrictArgumentsObject<D, P>::length() const {
 template<class D, class P>
 Tagged<JSAny> TorqueGeneratedJSStrictArgumentsObject<D, P>::length(PtrComprCageBase cage_base) const {
   Tagged<JSAny> value = TaggedField<Tagged<JSAny>>::load(cage_base, *this, kLengthOffset);
-  DCHECK(IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
+  DCHECK(IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
   return value;
 }
 
 // https://crsrc.org/c/v8/src/objects/arguments.tq?l=24&c=3
 template<class D, class P>
 void TorqueGeneratedJSStrictArgumentsObject<D, P>::set_length(Tagged<JSAny> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
   WRITE_FIELD(*this, kLengthOffset, value);
   CONDITIONAL_WRITE_BARRIER(*this, kLengthOffset, value, mode);
 }

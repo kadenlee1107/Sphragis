@@ -118,22 +118,22 @@ TNode<IntPtrT> TimesSizeOf_CoverageInfoSlot_0(compiler::CodeAssemblerState* stat
 TorqueStructReference_CoverageInfoSlot_0 NewReference_CoverageInfoSlot_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset);
 
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=109&c=36
-TNode<IntPtrT> TimesSizeOf_uint8_0(compiler::CodeAssemblerState* state_, TNode<IntPtrT> p_i);
-
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=108&c=12
-TorqueStructReference_uint8_0 NewReference_uint8_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset);
-
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=109&c=36
 TNode<IntPtrT> TimesSizeOf_Zero_OR_LoadHandler_0(compiler::CodeAssemblerState* state_, TNode<IntPtrT> p_i);
 
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=108&c=12
 TorqueStructReference_Zero_OR_LoadHandler_0 NewReference_Zero_OR_LoadHandler_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset);
 
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=109&c=36
-TNode<IntPtrT> TimesSizeOf_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(compiler::CodeAssemblerState* state_, TNode<IntPtrT> p_i);
+TNode<IntPtrT> TimesSizeOf_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(compiler::CodeAssemblerState* state_, TNode<IntPtrT> p_i);
 
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=108&c=12
-TorqueStructReference_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0 NewReference_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset);
+TorqueStructReference_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0 NewReference_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset);
+
+// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=109&c=36
+TNode<IntPtrT> TimesSizeOf_uint8_0(compiler::CodeAssemblerState* state_, TNode<IntPtrT> p_i);
+
+// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=108&c=12
+TorqueStructReference_uint8_0 NewReference_uint8_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset);
 
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=109&c=36
 TNode<IntPtrT> TimesSizeOf_FeedbackCell_0(compiler::CodeAssemblerState* state_, TNode<IntPtrT> p_i);
@@ -225,18 +225,6 @@ TNode<RawPtrT> Convert_RawPtr_RawPtr_char8_0(compiler::CodeAssemblerState* state
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=213&c=29
 TNode<RawPtrT> Convert_RawPtr_RawPtr_char16_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
 
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=84&c=29
-TNode<RawPtrT> Convert_RawPtr_RawPtr_intptr_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
-
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=84&c=29
-TNode<RawPtrT> Convert_RawPtr_RawPtr_RawPtr_uint32_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
-
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=213&c=29
-TNode<RawPtrT> Convert_RawPtr_RawPtr_uint32_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
-
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=16&c=10
-TorqueStructSlice_uint32_ConstReference_uint32_0 NewConstSlice_uint32_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset, TNode<IntPtrT> p_length);
-
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=89&c=15
 TorqueStructReference_Map_0 NewReference_Map_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset);
 
@@ -267,12 +255,6 @@ TorqueStructReference_Null_OR_JSProxy_0 NewReference_Null_OR_JSProxy_0(compiler:
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=90&c=3
 TNode<Union<JSProxy, Null>> UnsafeCast_Null_OR_JSProxy_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
 
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=84&c=29
-TNode<RawPtrT> Convert_RawPtr_RawPtr_RawPtr_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
-
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=84&c=29
-TNode<RawPtrT> Convert_RawPtr_RawPtr_float64_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
-
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=89&c=15
 TorqueStructReference_JSReceiver_0 NewReference_JSReceiver_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset);
 
@@ -282,32 +264,14 @@ TorqueStructReference_JSPromise_0 NewReference_JSPromise_0(compiler::CodeAssembl
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=89&c=15
 TorqueStructReference_Number_0 NewReference_Number_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset);
 
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=84&c=29
-TNode<RawPtrT> Convert_RawPtr_RawPtr_int32_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
-
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=84&c=29
-TNode<RawPtrT> Convert_RawPtr_RawPtr_bool_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
-
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=84&c=29
-TNode<RawPtrT> Convert_RawPtr_RawPtr_WasmCodePointer_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
-
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=84&c=29
-TNode<RawPtrT> Convert_RawPtr_RawPtr_RawPtr_intptr_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
-
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=84&c=29
-TNode<RawPtrT> Convert_RawPtr_RawPtr_int64_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
-
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=84&c=29
-TNode<RawPtrT> Convert_RawPtr_RawPtr_float32_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
-
-// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=84&c=29
-TNode<RawPtrT> Convert_RawPtr_RawPtr_uintptr_0(compiler::CodeAssemblerState* state_, TNode<RawPtrT> p_i);
-
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=90&c=3
 TNode<ScopeInfo> UnsafeCast_ScopeInfo_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
 
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=89&c=15
 TorqueStructReference_JSFunction_0 NewReference_JSFunction_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset);
+
+// https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=90&c=3
+TNode<JSFunction> UnsafeCast_JSFunction_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
 
 // https://crsrc.org/c/v8/src/builtins/torque-internal.tq?l=89&c=15
 TorqueStructReference_JSObject_0 NewReference_JSObject_0(compiler::CodeAssemblerState* state_, TNode<Union<HeapObject, TaggedIndex>> p_object, TNode<IntPtrT> p_offset);

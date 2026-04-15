@@ -127,7 +127,7 @@ TNode<JSPrimitive> Cast_JSPrimitive_0(compiler::CodeAssemblerState* state_, TNod
 TNode<JSAny> Cast_JSAny_0(compiler::CodeAssemblerState* state_, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=312&c=1
-TNode<Union<BigInt, Boolean, HeapNumber, JSReceiver, Null, Smi, String, Symbol, TheHole, Undefined>> Cast_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(compiler::CodeAssemblerState* state_, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
+TNode<Union<BigInt, Boolean, HeapNumber, JSReceiver, Null, Smi, String, Symbol, TheHole, Undefined>> Cast_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_0(compiler::CodeAssemblerState* state_, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=326&c=1
 TNode<Union<HeapNumber, Smi, TheHole>> Cast_Smi_OR_HeapNumber_OR_TheHole_0(compiler::CodeAssemblerState* state_, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
@@ -439,24 +439,6 @@ TNode<JSWrappedFunction> Cast_JSWrappedFunction_1(compiler::CodeAssemblerState* 
 TNode<BoolT> Is_Smi_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
-TNode<BoolT> Is_FixedArray_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
-
-// https://crsrc.org/c/v8/src/builtins/cast.tq?l=951&c=3
-TNode<FixedArray> Cast_FixedArray_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
-
-// https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
-TNode<BoolT> Is_HeapObject_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
-
-// https://crsrc.org/c/v8/src/builtins/cast.tq?l=951&c=3
-TNode<WasmFuncRef> Cast_WasmFuncRef_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
-
-// https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
-TNode<BoolT> Is_WasmArray_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
-
-// https://crsrc.org/c/v8/src/builtins/cast.tq?l=951&c=3
-TNode<WasmArray> Cast_WasmArray_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
-
-// https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
 TNode<BoolT> Is_SeqOneByteString_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=951&c=3
@@ -469,13 +451,19 @@ TNode<PrototypeSharedClosureInfo> Cast_PrototypeSharedClosureInfo_2(compiler::Co
 TNode<Union<JSArgumentsObject>> Cast_JSArgumentsObjectWithLength_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
-TNode<BoolT> Is_JSReceiver_OR_BigInt_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
+TNode<BoolT> Is_FixedArray_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
+
+// https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
+TNode<BoolT> Is_BigInt_OR_JSReceiver_OR_Undefined_OR_Smi_OR_HeapNumber_OR_String_OR_Symbol_OR_Boolean_OR_Null_OR_TheHole_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
 TNode<BoolT> Is_JSReceiver_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
 TNode<BoolT> Is_Symbol_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
+
+// https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
+TNode<BoolT> Is_HeapObject_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
 TNode<BoolT> Is_FixedDoubleArray_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
@@ -500,6 +488,9 @@ TNode<BoolT> Is_Constructor_Object_0(compiler::CodeAssemblerState* state_, TNode
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
 TNode<BoolT> Is_Map_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
+
+// https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
+TNode<BoolT> Is_String_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
 TNode<BoolT> Is_FastJSRegExp_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
@@ -565,12 +556,6 @@ TNode<BoolT> Is_PromiseReaction_OR_Zero_Object_0(compiler::CodeAssemblerState* s
 TNode<BoolT> Is_JSFinalizationRegistry_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
-TNode<BoolT> Is_JSFunction_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
-
-// https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
-TNode<BoolT> Is_WasmImportData_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
-
-// https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
 TNode<BoolT> Is_PositiveSmi_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
@@ -628,9 +613,6 @@ TNode<PromiseFulfillReactionJobTask> Cast_PromiseFulfillReactionJobTask_1(compil
 TNode<PromiseRejectReactionJobTask> Cast_PromiseRejectReactionJobTask_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=951&c=3
-TNode<WasmImportData> Cast_WasmImportData_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
-
-// https://crsrc.org/c/v8/src/builtins/cast.tq?l=951&c=3
 TNode<JSObject> Cast_JSObject_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
@@ -638,6 +620,9 @@ TNode<BoolT> Is_ScopeInfo_Object_0(compiler::CodeAssemblerState* state_, TNode<C
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=951&c=3
 TNode<ScopeInfo> Cast_ScopeInfo_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
+
+// https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
+TNode<BoolT> Is_JSFunction_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
 
 // https://crsrc.org/c/v8/src/builtins/cast.tq?l=963&c=10
 TNode<BoolT> Is_JSArrayBuffer_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);

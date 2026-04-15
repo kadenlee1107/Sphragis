@@ -148,48 +148,48 @@ void TorqueGeneratedMap<D, P>::set_constructor_or_back_pointer_or_native_context
   CONDITIONAL_WRITE_BARRIER(*this, kConstructorOrBackPointerOrNativeContextOffset, value, mode);
 }
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
+// https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
 template<class D, class P>
-Tagged<Union<DescriptorArray, WasmStruct>> TorqueGeneratedMap<D, P>::instance_descriptors() const {
+Tagged<DescriptorArray> TorqueGeneratedMap<D, P>::instance_descriptors() const {
   PtrComprCageBase cage_base = GetPtrComprCageBase(*this);
   return TorqueGeneratedMap::instance_descriptors(cage_base);
 }
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
+// https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
 template<class D, class P>
-Tagged<Union<DescriptorArray, WasmStruct>> TorqueGeneratedMap<D, P>::instance_descriptors(PtrComprCageBase cage_base) const {
-  Tagged<Union<DescriptorArray, WasmStruct>> value = TaggedField<Tagged<Union<DescriptorArray, WasmStruct>>>::load(cage_base, *this, kInstanceDescriptorsOffset);
-  DCHECK(IsWasmStruct(value) || IsDescriptorArray(value));
+Tagged<DescriptorArray> TorqueGeneratedMap<D, P>::instance_descriptors(PtrComprCageBase cage_base) const {
+  Tagged<DescriptorArray> value = TaggedField<Tagged<DescriptorArray>>::load(cage_base, *this, kInstanceDescriptorsOffset);
+  DCHECK(IsDescriptorArray(value));
   return value;
 }
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
+// https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
 template<class D, class P>
-void TorqueGeneratedMap<D, P>::set_instance_descriptors(Tagged<Union<DescriptorArray, WasmStruct>> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsWasmStruct(value) || IsDescriptorArray(value)));
+void TorqueGeneratedMap<D, P>::set_instance_descriptors(Tagged<DescriptorArray> value, WriteBarrierMode mode) {
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsDescriptorArray(value)));
   WRITE_FIELD(*this, kInstanceDescriptorsOffset, value);
   CONDITIONAL_WRITE_BARRIER(*this, kInstanceDescriptorsOffset, value, mode);
 }
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
+// https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
 template<class D, class P>
-Tagged<Union<Map, WeakArrayList>> TorqueGeneratedMap<D, P>::dependent_code() const {
+Tagged<WeakArrayList> TorqueGeneratedMap<D, P>::dependent_code() const {
   PtrComprCageBase cage_base = GetPtrComprCageBase(*this);
   return TorqueGeneratedMap::dependent_code(cage_base);
 }
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
+// https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
 template<class D, class P>
-Tagged<Union<Map, WeakArrayList>> TorqueGeneratedMap<D, P>::dependent_code(PtrComprCageBase cage_base) const {
-  Tagged<Union<Map, WeakArrayList>> value = TaggedField<Tagged<Union<Map, WeakArrayList>>>::load(cage_base, *this, kDependentCodeOffset);
-  DCHECK(IsMap(value) || IsDependentCode(value));
+Tagged<WeakArrayList> TorqueGeneratedMap<D, P>::dependent_code(PtrComprCageBase cage_base) const {
+  Tagged<WeakArrayList> value = TaggedField<Tagged<WeakArrayList>>::load(cage_base, *this, kDependentCodeOffset);
+  DCHECK(IsDependentCode(value));
   return value;
 }
 
-// https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
+// https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
 template<class D, class P>
-void TorqueGeneratedMap<D, P>::set_dependent_code(Tagged<Union<Map, WeakArrayList>> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsMap(value) || IsDependentCode(value)));
+void TorqueGeneratedMap<D, P>::set_dependent_code(Tagged<WeakArrayList> value, WriteBarrierMode mode) {
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsDependentCode(value)));
   WRITE_FIELD(*this, kDependentCodeOffset, value);
   CONDITIONAL_WRITE_BARRIER(*this, kDependentCodeOffset, value, mode);
 }

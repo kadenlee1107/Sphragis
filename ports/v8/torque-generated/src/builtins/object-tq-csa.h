@@ -36,6 +36,9 @@ TNode<Union<PropertyDescriptorObject, Undefined>> ToPropertyDescriptor_1(compile
 // https://crsrc.org/c/v8/src/builtins/object.tq?l=341&c=1
 TNode<JSAny> FromPropertyDescriptor_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<JSAny> p_object);
 
+// https://crsrc.org/c/v8/src/builtins/object.tq?l=95&c=7
+TNode<Null> Cast_Null_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
+
 // https://crsrc.org/c/v8/src/builtins/object.tq?l=96&c=16
 TorqueStructReference_Map_0 NativeContextSlot_Context_Map_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<IntPtrT> p_index);
 

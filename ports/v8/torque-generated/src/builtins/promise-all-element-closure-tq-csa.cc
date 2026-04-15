@@ -1,7 +1,6 @@
 #include "src/ast/ast.h"
 #include "src/builtins/builtins-array-gen.h"
 #include "src/builtins/builtins-bigint-gen.h"
-#include "src/builtins/builtins-call-gen.h"
 #include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-data-view-gen.h"
@@ -15,10 +14,8 @@
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-typed-array-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins-wasm-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/code-factory.h"
-#include "src/debug/debug-wasm-objects.h"
 #include "src/heap/factory-inl.h"
 #include "src/ic/binary-op-assembler.h"
 #include "src/ic/handler-configuration-inl.h"
@@ -68,9 +65,6 @@
 #include "src/objects/turbofan-types.h"
 #include "src/objects/turboshaft-types.h"
 #include "src/torque/runtime-support.h"
-#include "src/wasm/value-type.h"
-#include "src/wasm/wasm-linkage.h"
-#include "src/wasm/wasm-module.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 // Required Builtins:
 #include "torque-generated/src/builtins/promise-all-element-closure-tq-csa.h"
@@ -426,7 +420,7 @@ TNode<JSAny> PromiseAllResolveElementClosure_PromiseAllWrapResultAsFulfilledFunc
     std::tie(tmp36, tmp37) = NewReference_Object_0(state_, TNode<Union<HeapObject, TaggedIndex>>{tmp28}, TNode<IntPtrT>{tmp35}).Flatten();
     tmp38 = CodeStubAssembler(state_).LoadReference<Object>(CodeStubAssembler::Reference{tmp36, tmp37});
     tmp39 = PromiseHole_0(state_);
-    tmp40 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp38}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp39});
+    tmp40 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp38}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp39});
     ca_.Branch(tmp40, &block18, std::vector<compiler::Node*>{}, &block19, std::vector<compiler::Node*>{});
   }
 
@@ -449,7 +443,7 @@ TNode<JSAny> PromiseAllResolveElementClosure_PromiseAllWrapResultAsFulfilledFunc
     ca_.Bind(&block19);
     tmp42 = CodeStubAssembler(state_).LoadNativeContext(TNode<Context>{p_context});
     tmp43 = PromiseHole_0(state_);
-    tmp44 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{p_value}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp43});
+    tmp44 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{p_value}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp43});
     ca_.Branch(tmp44, &block29, std::vector<compiler::Node*>{}, &block30, std::vector<compiler::Node*>{});
   }
 
@@ -726,7 +720,7 @@ TNode<JSAny> PromiseAllResolveElementClosure_PromiseAllSettledWrapResultAsFulfil
     std::tie(tmp36, tmp37) = NewReference_Object_0(state_, TNode<Union<HeapObject, TaggedIndex>>{tmp28}, TNode<IntPtrT>{tmp35}).Flatten();
     tmp38 = CodeStubAssembler(state_).LoadReference<Object>(CodeStubAssembler::Reference{tmp36, tmp37});
     tmp39 = PromiseHole_0(state_);
-    tmp40 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp38}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp39});
+    tmp40 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp38}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp39});
     ca_.Branch(tmp40, &block18, std::vector<compiler::Node*>{}, &block19, std::vector<compiler::Node*>{});
   }
 
@@ -1031,7 +1025,7 @@ TNode<JSAny> PromiseAllResolveElementClosure_PromiseAllSettledWrapResultAsReject
     std::tie(tmp36, tmp37) = NewReference_Object_0(state_, TNode<Union<HeapObject, TaggedIndex>>{tmp28}, TNode<IntPtrT>{tmp35}).Flatten();
     tmp38 = CodeStubAssembler(state_).LoadReference<Object>(CodeStubAssembler::Reference{tmp36, tmp37});
     tmp39 = PromiseHole_0(state_);
-    tmp40 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp38}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp39});
+    tmp40 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp38}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp39});
     ca_.Branch(tmp40, &block18, std::vector<compiler::Node*>{}, &block19, std::vector<compiler::Node*>{});
   }
 

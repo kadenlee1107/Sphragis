@@ -46,14 +46,14 @@ Tagged<JSAny> TorqueGeneratedJSIteratorHelperSimple<D, P>::underlying_iterator_n
 template<class D, class P>
 Tagged<JSAny> TorqueGeneratedJSIteratorHelperSimple<D, P>::underlying_iterator_next(PtrComprCageBase cage_base) const {
   Tagged<JSAny> value = TaggedField<Tagged<JSAny>>::load(cage_base, *this, kUnderlyingIteratorOffset + 4);
-  DCHECK(IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
+  DCHECK(IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
   return value;
 }
 
 // https://crsrc.org/c/v8/src/objects/js-iterator-helpers.tq?l=21&c=3
 template<class D, class P>
 void TorqueGeneratedJSIteratorHelperSimple<D, P>::set_underlying_iterator_next(Tagged<JSAny> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
   WRITE_FIELD(*this, kUnderlyingIteratorOffset + 4, value);
   CONDITIONAL_WRITE_BARRIER(*this, kUnderlyingIteratorOffset + 4, value, mode);
 }
@@ -276,14 +276,14 @@ Tagged<JSAny> TorqueGeneratedJSIteratorFlatMapHelper<D, P>::inner_iterator_next(
 template<class D, class P>
 Tagged<JSAny> TorqueGeneratedJSIteratorFlatMapHelper<D, P>::inner_iterator_next(PtrComprCageBase cage_base) const {
   Tagged<JSAny> value = TaggedField<Tagged<JSAny>>::load(cage_base, *this, kInnerIteratorOffset + 4);
-  DCHECK(IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
+  DCHECK(IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
   return value;
 }
 
 // https://crsrc.org/c/v8/src/objects/js-iterator-helpers.tq?l=45&c=3
 template<class D, class P>
 void TorqueGeneratedJSIteratorFlatMapHelper<D, P>::set_inner_iterator_next(Tagged<JSAny> value, WriteBarrierMode mode) {
-  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsBigInt(value) || IsJSReceiver(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
   WRITE_FIELD(*this, kInnerIteratorOffset + 4, value);
   CONDITIONAL_WRITE_BARRIER(*this, kInnerIteratorOffset + 4, value, mode);
 }

@@ -8,15 +8,12 @@
 namespace v8 {
 namespace internal {
 #include "torque-generated/test/torque/test-torque-tq-inl.inc"
-void TorqueGeneratedClassVerifiers::TrustedForeignVerify(Tagged<TrustedForeign> o, Isolate* isolate) {
-  CHECK(IsTrustedForeign(o, isolate));
-}
 void TorqueGeneratedClassVerifiers::JSReceiverVerify(Tagged<JSReceiver> o, Isolate* isolate) {
   CHECK(IsJSReceiver(o, isolate));
   {
     Tagged<Object> properties_or_hash__value = TaggedField<Object>::load(o, 4);
     Object::VerifyPointer(isolate, properties_or_hash__value);
-    CHECK(IsFixedArrayBase(properties_or_hash__value) || IsSwissNameDictionary(properties_or_hash__value) || IsSmi(properties_or_hash__value) || IsPropertyArray(properties_or_hash__value));
+    CHECK(IsSwissNameDictionary(properties_or_hash__value) || IsSmi(properties_or_hash__value) || IsFixedArrayBase(properties_or_hash__value) || IsPropertyArray(properties_or_hash__value));
   }
 }
 void TorqueGeneratedClassVerifiers::JSObjectVerify(Tagged<JSObject> o, Isolate* isolate) {
@@ -26,359 +23,6 @@ void TorqueGeneratedClassVerifiers::JSObjectVerify(Tagged<JSObject> o, Isolate* 
     Tagged<Object> elements__value = TaggedField<Object>::load(o, 8);
     Object::VerifyPointer(isolate, elements__value);
     CHECK(IsFixedArrayBase(elements__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmInstanceObjectVerify(Tagged<WasmInstanceObject> o, Isolate* isolate) {
-  o->JSObjectVerify(isolate);
-  CHECK(IsWasmInstanceObject(o, isolate));
-  {
-    Tagged<Object> module_object__value = TaggedField<Object>::load(o, 16);
-    Object::VerifyPointer(isolate, module_object__value);
-    CHECK(IsWasmModuleObject(module_object__value));
-  }
-  {
-    Tagged<Object> exports_object__value = TaggedField<Object>::load(o, 20);
-    Object::VerifyPointer(isolate, exports_object__value);
-    CHECK(IsJSObject(exports_object__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmImportDataVerify(Tagged<WasmImportData> o, Isolate* isolate) {
-  CHECK(IsWasmImportData(o, isolate));
-  {
-    Tagged<Object> native_context__value = TaggedField<Object>::load(o, 12);
-    Object::VerifyPointer(isolate, native_context__value);
-    CHECK(IsNativeContext(native_context__value));
-  }
-  {
-    Tagged<Object> callable__value = TaggedField<Object>::load(o, 16);
-    Object::VerifyPointer(isolate, callable__value);
-    CHECK(IsJSReceiver(callable__value) || IsUndefined(callable__value));
-  }
-  {
-    Tagged<Object> wrapper_budget__value = TaggedField<Object>::load(o, 20);
-    Object::VerifyPointer(isolate, wrapper_budget__value);
-    CHECK(IsCell(wrapper_budget__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmFastApiCallDataVerify(Tagged<WasmFastApiCallData> o, Isolate* isolate) {
-  CHECK(IsWasmFastApiCallData(o, isolate));
-  {
-    Tagged<Object> signature__value = TaggedField<Object>::load(o, 4);
-    Object::VerifyPointer(isolate, signature__value);
-    CHECK(IsHeapObject(signature__value));
-  }
-  {
-    Tagged<Object> callback_data__value = TaggedField<Object>::load(o, 8);
-    Object::VerifyPointer(isolate, callback_data__value);
-  }
-  {
-    Tagged<MaybeObject> cached_map__value = TaggedField<MaybeObject>::load(o, 12);
-    Object::VerifyMaybeObjectPointer(isolate, cached_map__value);
-    CHECK(cached_map__value.IsCleared() || (!cached_map__value.IsWeak() && IsNull(cached_map__value.GetHeapObjectOrSmi())) || (cached_map__value.IsWeak() && IsMap(cached_map__value.GetHeapObjectOrSmi())));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmInternalFunctionVerify(Tagged<WasmInternalFunction> o, Isolate* isolate) {
-  CHECK(IsWasmInternalFunction(o, isolate));
-  {
-    Tagged<Object> external__value = TaggedField<Object>::load(o, 8);
-    Object::VerifyPointer(isolate, external__value);
-    CHECK(IsJSFunction(external__value) || IsUndefined(external__value));
-  }
-  {
-    Tagged<Object> function_index__value = TaggedField<Object>::load(o, 12);
-    Object::VerifyPointer(isolate, function_index__value);
-    CHECK(IsSmi(function_index__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmFuncRefVerify(Tagged<WasmFuncRef> o, Isolate* isolate) {
-  CHECK(IsWasmFuncRef(o, isolate));
-}
-void TorqueGeneratedClassVerifiers::WasmFunctionDataVerify(Tagged<WasmFunctionData> o, Isolate* isolate) {
-  CHECK(IsWasmFunctionData(o, isolate));
-  {
-    Tagged<Object> func_ref__value = TaggedField<Object>::load(o, 8);
-    Object::VerifyPointer(isolate, func_ref__value);
-    CHECK(IsWasmFuncRef(func_ref__value));
-  }
-  {
-    Tagged<Object> js_promise_flags__value = TaggedField<Object>::load(o, 12);
-    Object::VerifyPointer(isolate, js_promise_flags__value);
-    CHECK(IsSmi(js_promise_flags__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmExportedFunctionDataVerify(Tagged<WasmExportedFunctionData> o, Isolate* isolate) {
-  o->WasmFunctionDataVerify(isolate);
-  CHECK(IsWasmExportedFunctionData(o, isolate));
-  {
-    Tagged<Object> function_index__value = TaggedField<Object>::load(o, 24);
-    Object::VerifyPointer(isolate, function_index__value);
-    CHECK(IsSmi(function_index__value));
-  }
-  {
-    Tagged<Object> wrapper_budget__value = TaggedField<Object>::load(o, 28);
-    Object::VerifyPointer(isolate, wrapper_budget__value);
-    CHECK(IsCell(wrapper_budget__value));
-  }
-  {
-    Tagged<Object> packed_args_size__value = TaggedField<Object>::load(o, 32);
-    Object::VerifyPointer(isolate, packed_args_size__value);
-    CHECK(IsSmi(packed_args_size__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmJSFunctionDataVerify(Tagged<WasmJSFunctionData> o, Isolate* isolate) {
-  o->WasmFunctionDataVerify(isolate);
-  CHECK(IsWasmJSFunctionData(o, isolate));
-}
-void TorqueGeneratedClassVerifiers::WasmCapiFunctionDataVerify(Tagged<WasmCapiFunctionData> o, Isolate* isolate) {
-  o->WasmFunctionDataVerify(isolate);
-  CHECK(IsWasmCapiFunctionData(o, isolate));
-  {
-    Tagged<Object> embedder_data__value = TaggedField<Object>::load(o, 20);
-    Object::VerifyPointer(isolate, embedder_data__value);
-    CHECK(IsForeign(embedder_data__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmResumeDataVerify(Tagged<WasmResumeData> o, Isolate* isolate) {
-  CHECK(IsWasmResumeData(o, isolate));
-  {
-    Tagged<Object> on_resume__value = TaggedField<Object>::load(o, 8);
-    Object::VerifyPointer(isolate, on_resume__value);
-    CHECK(IsSmi(on_resume__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmSuspenderObjectVerify(Tagged<WasmSuspenderObject> o, Isolate* isolate) {
-  CHECK(IsWasmSuspenderObject(o, isolate));
-  {
-    Tagged<Object> promise__value = TaggedField<Object>::load(o, 16);
-    Object::VerifyPointer(isolate, promise__value);
-    CHECK(IsUndefined(promise__value) || IsJSPromise(promise__value));
-  }
-  {
-    Tagged<Object> resume__value = TaggedField<Object>::load(o, 20);
-    Object::VerifyPointer(isolate, resume__value);
-    CHECK(IsJSObject(resume__value) || IsUndefined(resume__value));
-  }
-  {
-    Tagged<Object> reject__value = TaggedField<Object>::load(o, 24);
-    Object::VerifyPointer(isolate, reject__value);
-    CHECK(IsJSObject(reject__value) || IsUndefined(reject__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmContinuationObjectVerify(Tagged<WasmContinuationObject> o, Isolate* isolate) {
-  CHECK(IsWasmContinuationObject(o, isolate));
-  {
-    Tagged<Object> stack_obj__value = TaggedField<Object>::load(o, 4);
-    Object::VerifyPointer(isolate, stack_obj__value);
-    CHECK(IsWasmStackObject(stack_obj__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmStackObjectVerify(Tagged<WasmStackObject> o, Isolate* isolate) {
-  CHECK(IsWasmStackObject(o, isolate));
-}
-void TorqueGeneratedClassVerifiers::StructVerify(Tagged<Struct> o, Isolate* isolate) {
-  CHECK(IsStruct(o, isolate));
-}
-void TorqueGeneratedClassVerifiers::WasmExceptionTagVerify(Tagged<WasmExceptionTag> o, Isolate* isolate) {
-  o->StructVerify(isolate);
-  CHECK(IsWasmExceptionTag(o, isolate));
-  {
-    Tagged<Object> index__value = TaggedField<Object>::load(o, 4);
-    Object::VerifyPointer(isolate, index__value);
-    CHECK(IsSmi(index__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmModuleObjectVerify(Tagged<WasmModuleObject> o, Isolate* isolate) {
-  o->JSObjectVerify(isolate);
-  CHECK(IsWasmModuleObject(o, isolate));
-  {
-    Tagged<Object> managed_native_module__value = TaggedField<Object>::load(o, 12);
-    Object::VerifyPointer(isolate, managed_native_module__value);
-    CHECK(IsForeign(managed_native_module__value));
-  }
-  {
-    Tagged<Object> script__value = TaggedField<Object>::load(o, 16);
-    Object::VerifyPointer(isolate, script__value);
-    CHECK(IsScript(script__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmTableObjectVerify(Tagged<WasmTableObject> o, Isolate* isolate) {
-  o->JSObjectVerify(isolate);
-  CHECK(IsWasmTableObject(o, isolate));
-  {
-    Tagged<Object> entries__value = TaggedField<Object>::load(o, 12);
-    Object::VerifyPointer(isolate, entries__value);
-    CHECK(IsFixedArray(entries__value));
-  }
-  {
-    Tagged<Object> current_length__value = TaggedField<Object>::load(o, 16);
-    Object::VerifyPointer(isolate, current_length__value);
-    CHECK(IsSmi(current_length__value));
-  }
-  {
-    Tagged<Object> maximum_length__value = TaggedField<Object>::load(o, 20);
-    Object::VerifyPointer(isolate, maximum_length__value);
-    CHECK(IsBigInt(maximum_length__value) || IsUndefined(maximum_length__value) || IsSmi(maximum_length__value) || IsHeapNumber(maximum_length__value));
-  }
-  {
-    Tagged<Object> raw_type__value = TaggedField<Object>::load(o, 24);
-    Object::VerifyPointer(isolate, raw_type__value);
-    CHECK(IsSmi(raw_type__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmMemoryObjectVerify(Tagged<WasmMemoryObject> o, Isolate* isolate) {
-  o->JSObjectVerify(isolate);
-  CHECK(IsWasmMemoryObject(o, isolate));
-  {
-    Tagged<Object> array_buffer__value = TaggedField<Object>::load(o, 12);
-    Object::VerifyPointer(isolate, array_buffer__value);
-    CHECK(IsUndefined(array_buffer__value) || IsJSArrayBuffer(array_buffer__value));
-  }
-  {
-    Tagged<Object> managed_backing_store__value = TaggedField<Object>::load(o, 16);
-    Object::VerifyPointer(isolate, managed_backing_store__value);
-    CHECK(IsForeign(managed_backing_store__value));
-  }
-  {
-    Tagged<Object> maximum_pages__value = TaggedField<Object>::load(o, 20);
-    Object::VerifyPointer(isolate, maximum_pages__value);
-    CHECK(IsSmi(maximum_pages__value));
-  }
-  {
-    Tagged<Object> instances__value = TaggedField<Object>::load(o, 24);
-    Object::VerifyPointer(isolate, instances__value);
-    CHECK(IsWeakArrayList(instances__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmMemoryMapDescriptorVerify(Tagged<WasmMemoryMapDescriptor> o, Isolate* isolate) {
-  o->JSObjectVerify(isolate);
-  CHECK(IsWasmMemoryMapDescriptor(o, isolate));
-  {
-    Tagged<MaybeObject> memory__value = TaggedField<MaybeObject>::load(o, 12);
-    Object::VerifyMaybeObjectPointer(isolate, memory__value);
-    CHECK(memory__value.IsCleared() || (memory__value.IsWeak() && IsWasmMemoryObject(memory__value.GetHeapObjectOrSmi())));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmGlobalObjectVerify(Tagged<WasmGlobalObject> o, Isolate* isolate) {
-  o->JSObjectVerify(isolate);
-  CHECK(IsWasmGlobalObject(o, isolate));
-  {
-    Tagged<Object> buffer__value = TaggedField<Object>::load(o, 16);
-    Object::VerifyPointer(isolate, buffer__value);
-    CHECK(IsByteArray(buffer__value) || IsFixedArray(buffer__value));
-  }
-  {
-    Tagged<Object> offset__value = TaggedField<Object>::load(o, 20);
-    Object::VerifyPointer(isolate, offset__value);
-    CHECK(IsSmi(offset__value));
-  }
-  {
-    Tagged<Object> raw_type__value = TaggedField<Object>::load(o, 24);
-    Object::VerifyPointer(isolate, raw_type__value);
-    CHECK(IsSmi(raw_type__value));
-  }
-  {
-    Tagged<Object> is_mutable__value = TaggedField<Object>::load(o, 28);
-    Object::VerifyPointer(isolate, is_mutable__value);
-    CHECK(IsSmi(is_mutable__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmTagObjectVerify(Tagged<WasmTagObject> o, Isolate* isolate) {
-  o->JSObjectVerify(isolate);
-  CHECK(IsWasmTagObject(o, isolate));
-  {
-    Tagged<Object> tag__value = TaggedField<Object>::load(o, 12);
-    Object::VerifyPointer(isolate, tag__value);
-    CHECK(IsHeapObject(tag__value));
-  }
-  {
-    Tagged<Object> canonical_type_index__value = TaggedField<Object>::load(o, 16);
-    Object::VerifyPointer(isolate, canonical_type_index__value);
-    CHECK(IsSmi(canonical_type_index__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::JSFunctionOrBoundFunctionOrWrappedFunctionVerify(Tagged<JSFunctionOrBoundFunctionOrWrappedFunction> o, Isolate* isolate) {
-  o->JSObjectVerify(isolate);
-  CHECK(IsJSFunctionOrBoundFunctionOrWrappedFunction(o, isolate));
-}
-void TorqueGeneratedClassVerifiers::JSFunctionVerify(Tagged<JSFunction> o, Isolate* isolate) {
-  o->JSFunctionOrBoundFunctionOrWrappedFunctionVerify(isolate);
-  CHECK(IsJSFunction(o, isolate));
-  {
-    Tagged<Object> shared_function_info__value = TaggedField<Object>::load(o, 16);
-    Object::VerifyPointer(isolate, shared_function_info__value);
-    CHECK(IsSharedFunctionInfo(shared_function_info__value));
-  }
-  {
-    Tagged<Object> context__value = TaggedField<Object>::load(o, 20);
-    Object::VerifyPointer(isolate, context__value);
-    CHECK(IsContext(context__value));
-  }
-  {
-    Tagged<Object> feedback_cell__value = TaggedField<Object>::load(o, 24);
-    Object::VerifyPointer(isolate, feedback_cell__value);
-    CHECK(IsFeedbackCell(feedback_cell__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::AsmWasmDataVerify(Tagged<AsmWasmData> o, Isolate* isolate) {
-  o->StructVerify(isolate);
-  CHECK(IsAsmWasmData(o, isolate));
-  {
-    Tagged<Object> managed_native_module__value = TaggedField<Object>::load(o, 4);
-    Object::VerifyPointer(isolate, managed_native_module__value);
-    CHECK(IsForeign(managed_native_module__value));
-  }
-  {
-    Tagged<Object> uses_bitset__value = TaggedField<Object>::load(o, 8);
-    Object::VerifyPointer(isolate, uses_bitset__value);
-    CHECK(IsHeapNumber(uses_bitset__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmTypeInfoVerify(Tagged<WasmTypeInfo> o, Isolate* isolate) {
-  CHECK(IsWasmTypeInfo(o, isolate));
-  {
-    Tagged<Object> supertypes_length__value = TaggedField<Object>::load(o, 12);
-    Object::VerifyPointer(isolate, supertypes_length__value);
-    CHECK(IsSmi(supertypes_length__value));
-  }
-  intptr_t supertypes__offset, supertypes__length;
-  std::tie(std::ignore, supertypes__offset, supertypes__length) = TqRuntimeFieldSliceWasmTypeInfoSupertypes(o);
-  CHECK_EQ(supertypes__offset, static_cast<int>(supertypes__offset));
-  CHECK_EQ(supertypes__length, static_cast<int>(supertypes__length));
-  for (int i = 0; i < static_cast<int>(supertypes__length); ++i) {
-    Tagged<Object> supertypes__value = TaggedField<Object>::load(o, static_cast<int>(supertypes__offset) + i * kTaggedSize);
-    Object::VerifyPointer(isolate, supertypes__value);
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmObjectVerify(Tagged<WasmObject> o, Isolate* isolate) {
-  o->JSReceiverVerify(isolate);
-  CHECK(IsWasmObject(o, isolate));
-}
-void TorqueGeneratedClassVerifiers::WasmStructVerify(Tagged<WasmStruct> o, Isolate* isolate) {
-  o->WasmObjectVerify(isolate);
-  CHECK(IsWasmStruct(o, isolate));
-}
-void TorqueGeneratedClassVerifiers::WasmArrayVerify(Tagged<WasmArray> o, Isolate* isolate) {
-  o->WasmObjectVerify(isolate);
-  CHECK(IsWasmArray(o, isolate));
-}
-void TorqueGeneratedClassVerifiers::WasmStringViewIterVerify(Tagged<WasmStringViewIter> o, Isolate* isolate) {
-  CHECK(IsWasmStringViewIter(o, isolate));
-  {
-    Tagged<Object> string__value = TaggedField<Object>::load(o, 4);
-    Object::VerifyPointer(isolate, string__value);
-    CHECK(IsString(string__value));
-  }
-}
-void TorqueGeneratedClassVerifiers::WasmNullVerify(Tagged<WasmNull> o, Isolate* isolate) {
-  CHECK(IsWasmNull(o, isolate));
-}
-void TorqueGeneratedClassVerifiers::WasmSuspendingObjectVerify(Tagged<WasmSuspendingObject> o, Isolate* isolate) {
-  o->JSObjectVerify(isolate);
-  CHECK(IsWasmSuspendingObject(o, isolate));
-  {
-    Tagged<Object> callable__value = TaggedField<Object>::load(o, 12);
-    Object::VerifyPointer(isolate, callable__value);
-    CHECK(IsJSReceiver(callable__value));
   }
 }
 void TorqueGeneratedClassVerifiers::JSGeneratorObjectVerify(Tagged<JSGeneratorObject> o, Isolate* isolate) {
@@ -397,7 +41,7 @@ void TorqueGeneratedClassVerifiers::JSGeneratorObjectVerify(Tagged<JSGeneratorOb
   {
     Tagged<Object> receiver__value = TaggedField<Object>::load(o, 20);
     Object::VerifyPointer(isolate, receiver__value);
-    CHECK(IsJSReceiver(receiver__value) || IsBigInt(receiver__value) || IsUndefined(receiver__value) || IsSmi(receiver__value) || IsHeapNumber(receiver__value) || IsString(receiver__value) || IsSymbol(receiver__value) || IsBoolean(receiver__value) || IsNull(receiver__value));
+    CHECK(IsBigInt(receiver__value) || IsJSReceiver(receiver__value) || IsUndefined(receiver__value) || IsSmi(receiver__value) || IsHeapNumber(receiver__value) || IsString(receiver__value) || IsSymbol(receiver__value) || IsBoolean(receiver__value) || IsNull(receiver__value));
   }
   {
     Tagged<Object> input_or_debug_pos__value = TaggedField<Object>::load(o, 24);
@@ -452,6 +96,9 @@ void TorqueGeneratedClassVerifiers::JSAsyncGeneratorObjectVerify(Tagged<JSAsyncG
     CHECK(IsSmi(is_awaiting__value));
   }
 }
+void TorqueGeneratedClassVerifiers::StructVerify(Tagged<Struct> o, Isolate* isolate) {
+  CHECK(IsStruct(o, isolate));
+}
 void TorqueGeneratedClassVerifiers::JSRegExpVerify(Tagged<JSRegExp> o, Isolate* isolate) {
   o->JSObjectVerify(isolate);
   CHECK(IsJSRegExp(o, isolate));
@@ -459,6 +106,29 @@ void TorqueGeneratedClassVerifiers::JSRegExpVerify(Tagged<JSRegExp> o, Isolate* 
     Tagged<Object> flags__value = TaggedField<Object>::load(o, 16);
     Object::VerifyPointer(isolate, flags__value);
     CHECK(IsUndefined(flags__value) || IsSmi(flags__value));
+  }
+}
+void TorqueGeneratedClassVerifiers::JSFunctionOrBoundFunctionOrWrappedFunctionVerify(Tagged<JSFunctionOrBoundFunctionOrWrappedFunction> o, Isolate* isolate) {
+  o->JSObjectVerify(isolate);
+  CHECK(IsJSFunctionOrBoundFunctionOrWrappedFunction(o, isolate));
+}
+void TorqueGeneratedClassVerifiers::JSFunctionVerify(Tagged<JSFunction> o, Isolate* isolate) {
+  o->JSFunctionOrBoundFunctionOrWrappedFunctionVerify(isolate);
+  CHECK(IsJSFunction(o, isolate));
+  {
+    Tagged<Object> shared_function_info__value = TaggedField<Object>::load(o, 16);
+    Object::VerifyPointer(isolate, shared_function_info__value);
+    CHECK(IsSharedFunctionInfo(shared_function_info__value));
+  }
+  {
+    Tagged<Object> context__value = TaggedField<Object>::load(o, 20);
+    Object::VerifyPointer(isolate, context__value);
+    CHECK(IsContext(context__value));
+  }
+  {
+    Tagged<Object> feedback_cell__value = TaggedField<Object>::load(o, 24);
+    Object::VerifyPointer(isolate, feedback_cell__value);
+    CHECK(IsFeedbackCell(feedback_cell__value));
   }
 }
 void TorqueGeneratedClassVerifiers::JSFunctionWithPrototypeVerify(Tagged<JSFunctionWithPrototype> o, Isolate* isolate) {
@@ -531,12 +201,12 @@ void TorqueGeneratedClassVerifiers::MapVerify(Tagged<Map> o, Isolate* isolate) {
   {
     Tagged<Object> instance_descriptors__value = TaggedField<Object>::load(o, 24);
     Object::VerifyPointer(isolate, instance_descriptors__value);
-    CHECK(IsWasmStruct(instance_descriptors__value) || IsDescriptorArray(instance_descriptors__value));
+    CHECK(IsDescriptorArray(instance_descriptors__value));
   }
   {
     Tagged<Object> dependent_code__value = TaggedField<Object>::load(o, 28);
     Object::VerifyPointer(isolate, dependent_code__value);
-    CHECK(IsMap(dependent_code__value) || IsDependentCode(dependent_code__value));
+    CHECK(IsDependentCode(dependent_code__value));
   }
   {
     Tagged<Object> prototype_validity_cell__value = TaggedField<Object>::load(o, 32);
@@ -581,7 +251,7 @@ void TorqueGeneratedClassVerifiers::DescriptorArrayVerify(Tagged<DescriptorArray
     CHECK(IsUndefined(details__value) || IsSmi(details__value));
     Tagged<MaybeObject> value__value = TaggedField<MaybeObject>::load(o, static_cast<int>(descriptors__offset) + 8 + i * 12);
     Object::VerifyMaybeObjectPointer(isolate, value__value);
-    CHECK(value__value.IsCleared() || (!value__value.IsWeak() && IsJSReceiver(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsBigInt(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsUndefined(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsSmi(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsHeapNumber(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsString(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsSymbol(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsBoolean(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsNull(value__value.GetHeapObjectOrSmi())) || (value__value.IsWeak() && IsMap(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsAccessorInfo(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsAccessorPair(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsClassPositions(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsNumberDictionary(value__value.GetHeapObjectOrSmi())));
+    CHECK(value__value.IsCleared() || (!value__value.IsWeak() && IsBigInt(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsJSReceiver(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsUndefined(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsSmi(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsHeapNumber(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsString(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsSymbol(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsBoolean(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsNull(value__value.GetHeapObjectOrSmi())) || (value__value.IsWeak() && IsMap(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsAccessorInfo(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsAccessorPair(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsClassPositions(value__value.GetHeapObjectOrSmi())) || (!value__value.IsWeak() && IsNumberDictionary(value__value.GetHeapObjectOrSmi())));
   }
 }
 void TorqueGeneratedClassVerifiers::StrongDescriptorArrayVerify(Tagged<StrongDescriptorArray> o, Isolate* isolate) {
@@ -609,7 +279,7 @@ void TorqueGeneratedClassVerifiers::JSPromiseVerify(Tagged<JSPromise> o, Isolate
   {
     Tagged<Object> reactions_or_result__value = TaggedField<Object>::load(o, 12);
     Object::VerifyPointer(isolate, reactions_or_result__value);
-    CHECK(IsJSReceiver(reactions_or_result__value) || IsBigInt(reactions_or_result__value) || IsUndefined(reactions_or_result__value) || IsSmi(reactions_or_result__value) || IsHeapNumber(reactions_or_result__value) || IsString(reactions_or_result__value) || IsSymbol(reactions_or_result__value) || IsBoolean(reactions_or_result__value) || IsNull(reactions_or_result__value) || IsPromiseReaction(reactions_or_result__value));
+    CHECK(IsBigInt(reactions_or_result__value) || IsJSReceiver(reactions_or_result__value) || IsUndefined(reactions_or_result__value) || IsSmi(reactions_or_result__value) || IsHeapNumber(reactions_or_result__value) || IsString(reactions_or_result__value) || IsSymbol(reactions_or_result__value) || IsBoolean(reactions_or_result__value) || IsNull(reactions_or_result__value) || IsPromiseReaction(reactions_or_result__value));
   }
   {
     Tagged<Object> flags__value = TaggedField<Object>::load(o, 16);
@@ -664,7 +334,7 @@ void TorqueGeneratedClassVerifiers::JSBoundFunctionVerify(Tagged<JSBoundFunction
   {
     Tagged<Object> bound_this__value = TaggedField<Object>::load(o, 16);
     Object::VerifyPointer(isolate, bound_this__value);
-    CHECK(IsJSReceiver(bound_this__value) || IsBigInt(bound_this__value) || IsUndefined(bound_this__value) || IsSmi(bound_this__value) || IsHeapNumber(bound_this__value) || IsString(bound_this__value) || IsSymbol(bound_this__value) || IsBoolean(bound_this__value) || IsNull(bound_this__value) || IsSourceTextModule(bound_this__value));
+    CHECK(IsBigInt(bound_this__value) || IsJSReceiver(bound_this__value) || IsUndefined(bound_this__value) || IsSmi(bound_this__value) || IsHeapNumber(bound_this__value) || IsString(bound_this__value) || IsSymbol(bound_this__value) || IsBoolean(bound_this__value) || IsNull(bound_this__value) || IsSourceTextModule(bound_this__value));
   }
   {
     Tagged<Object> bound_arguments__value = TaggedField<Object>::load(o, 20);
@@ -793,7 +463,7 @@ void TorqueGeneratedClassVerifiers::JSIteratorHelperSimpleVerify(Tagged<JSIterat
     CHECK(IsJSReceiver(object__value));
     Tagged<Object> next__value = TaggedField<Object>::load(o, 16 + 4);
     Object::VerifyPointer(isolate, next__value);
-    CHECK(IsJSReceiver(next__value) || IsBigInt(next__value) || IsUndefined(next__value) || IsSmi(next__value) || IsHeapNumber(next__value) || IsString(next__value) || IsSymbol(next__value) || IsBoolean(next__value) || IsNull(next__value));
+    CHECK(IsBigInt(next__value) || IsJSReceiver(next__value) || IsUndefined(next__value) || IsSmi(next__value) || IsHeapNumber(next__value) || IsString(next__value) || IsSymbol(next__value) || IsBoolean(next__value) || IsNull(next__value));
   }
 }
 void TorqueGeneratedClassVerifiers::JSIteratorMapHelperVerify(Tagged<JSIteratorMapHelper> o, Isolate* isolate) {
@@ -861,7 +531,7 @@ void TorqueGeneratedClassVerifiers::JSIteratorFlatMapHelperVerify(Tagged<JSItera
     CHECK(IsJSReceiver(object__value));
     Tagged<Object> next__value = TaggedField<Object>::load(o, 32 + 4);
     Object::VerifyPointer(isolate, next__value);
-    CHECK(IsJSReceiver(next__value) || IsBigInt(next__value) || IsUndefined(next__value) || IsSmi(next__value) || IsHeapNumber(next__value) || IsString(next__value) || IsSymbol(next__value) || IsBoolean(next__value) || IsNull(next__value));
+    CHECK(IsBigInt(next__value) || IsJSReceiver(next__value) || IsUndefined(next__value) || IsSmi(next__value) || IsHeapNumber(next__value) || IsString(next__value) || IsSymbol(next__value) || IsBoolean(next__value) || IsNull(next__value));
   }
 }
 void TorqueGeneratedClassVerifiers::JSIteratorConcatHelperVerify(Tagged<JSIteratorConcatHelper> o, Isolate* isolate) {
@@ -1078,6 +748,9 @@ void TorqueGeneratedClassVerifiers::JSAsyncDisposableStackVerify(Tagged<JSAsyncD
   o->JSDisposableStackBaseVerify(isolate);
   CHECK(IsJSAsyncDisposableStack(o, isolate));
 }
+void TorqueGeneratedClassVerifiers::TrustedForeignVerify(Tagged<TrustedForeign> o, Isolate* isolate) {
+  CHECK(IsTrustedForeign(o, isolate));
+}
 void TorqueGeneratedClassVerifiers::JSAPIObjectWithEmbedderSlotsVerify(Tagged<JSAPIObjectWithEmbedderSlots> o, Isolate* isolate) {
   o->JSObjectVerify(isolate);
   CHECK(IsJSAPIObjectWithEmbedderSlots(o, isolate));
@@ -1106,7 +779,7 @@ void TorqueGeneratedClassVerifiers::JSTypedArrayVerify(Tagged<JSTypedArray> o, I
   {
     Tagged<Object> base_pointer__value = TaggedField<Object>::load(o, 56);
     Object::VerifyPointer(isolate, base_pointer__value);
-    CHECK(IsByteArray(base_pointer__value) || IsSmi(base_pointer__value));
+    CHECK(IsSmi(base_pointer__value) || IsByteArray(base_pointer__value));
   }
 }
 void TorqueGeneratedClassVerifiers::JSDetachedTypedArrayVerify(Tagged<JSDetachedTypedArray> o, Isolate* isolate) {
@@ -1732,7 +1405,7 @@ void TorqueGeneratedClassVerifiers::JSPrimitiveWrapperVerify(Tagged<JSPrimitiveW
   {
     Tagged<Object> value__value = TaggedField<Object>::load(o, 12);
     Object::VerifyPointer(isolate, value__value);
-    CHECK(IsJSReceiver(value__value) || IsBigInt(value__value) || IsUndefined(value__value) || IsSmi(value__value) || IsHeapNumber(value__value) || IsString(value__value) || IsSymbol(value__value) || IsBoolean(value__value) || IsNull(value__value));
+    CHECK(IsBigInt(value__value) || IsJSReceiver(value__value) || IsUndefined(value__value) || IsSmi(value__value) || IsHeapNumber(value__value) || IsString(value__value) || IsSymbol(value__value) || IsBoolean(value__value) || IsNull(value__value));
   }
 }
 void TorqueGeneratedClassVerifiers::JSMessageObjectVerify(Tagged<JSMessageObject> o, Isolate* isolate) {
@@ -1863,7 +1536,7 @@ void TorqueGeneratedClassVerifiers::JSValidIteratorWrapperVerify(Tagged<JSValidI
     CHECK(IsJSReceiver(object__value));
     Tagged<Object> next__value = TaggedField<Object>::load(o, 12 + 4);
     Object::VerifyPointer(isolate, next__value);
-    CHECK(IsJSReceiver(next__value) || IsBigInt(next__value) || IsUndefined(next__value) || IsSmi(next__value) || IsHeapNumber(next__value) || IsString(next__value) || IsSymbol(next__value) || IsBoolean(next__value) || IsNull(next__value));
+    CHECK(IsBigInt(next__value) || IsJSReceiver(next__value) || IsUndefined(next__value) || IsSmi(next__value) || IsHeapNumber(next__value) || IsString(next__value) || IsSymbol(next__value) || IsBoolean(next__value) || IsNull(next__value));
   }
 }
 void TorqueGeneratedClassVerifiers::TurboshaftTypeVerify(Tagged<TurboshaftType> o, Isolate* isolate) {

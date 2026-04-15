@@ -31,7 +31,7 @@ class TorqueGeneratedJSReceiver : public P {
   using Super = P;
   using TorqueGeneratedClass = TorqueGeneratedJSReceiver<D,P>;
 
-  // Torque type: (class FixedArrayBase | class SwissNameDictionary | Smi | class PropertyArray)
+  // Torque type: (class SwissNameDictionary | Smi | class FixedArrayBase | class PropertyArray)
   // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=9&c=3
   inline Tagged<Union<FixedArrayBase, PropertyArray, Smi, SwissNameDictionary>> properties_or_hash() const;
   // https://crsrc.org/c/v8/src/objects/js-objects.tq?l=9&c=3

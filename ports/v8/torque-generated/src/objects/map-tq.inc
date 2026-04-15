@@ -72,21 +72,20 @@ class TorqueGeneratedMap : public P {
   // https://crsrc.org/c/v8/src/objects/map.tq?l=84&c=3
   inline void set_constructor_or_back_pointer_or_native_context(Tagged<Object> value, WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
-  // Torque type: (class WasmStruct | class DescriptorArray)
-  // https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
-  inline Tagged<Union<DescriptorArray, WasmStruct>> instance_descriptors() const;
-  // https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
-  inline Tagged<Union<DescriptorArray, WasmStruct>> instance_descriptors(PtrComprCageBase cage_base) const;
-  // https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
-  inline void set_instance_descriptors(Tagged<Union<DescriptorArray, WasmStruct>> value, WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
+  // https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
+  inline Tagged<DescriptorArray> instance_descriptors() const;
+  // https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
+  inline Tagged<DescriptorArray> instance_descriptors(PtrComprCageBase cage_base) const;
+  // https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
+  inline void set_instance_descriptors(Tagged<DescriptorArray> value, WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
-  // Torque type: (class Map | DependentCode)
-  // https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
-  inline Tagged<Union<Map, WeakArrayList>> dependent_code() const;
-  // https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
-  inline Tagged<Union<Map, WeakArrayList>> dependent_code(PtrComprCageBase cage_base) const;
-  // https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
-  inline void set_dependent_code(Tagged<Union<Map, WeakArrayList>> value, WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
+  // Torque type: DependentCode
+  // https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
+  inline Tagged<WeakArrayList> dependent_code() const;
+  // https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
+  inline Tagged<WeakArrayList> dependent_code(PtrComprCageBase cage_base) const;
+  // https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
+  inline void set_dependent_code(Tagged<WeakArrayList> value, WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
   // Torque type: (class Cell | Zero)
   // https://crsrc.org/c/v8/src/objects/map.tq?l=95&c=3
@@ -145,10 +144,10 @@ class TorqueGeneratedMap : public P {
   // https://crsrc.org/c/v8/src/objects/map.tq?l=84&c=3
   static constexpr int kConstructorOrBackPointerOrNativeContextOffset = kPrototypeOffsetEnd + 1;
   static constexpr int kConstructorOrBackPointerOrNativeContextOffsetEnd = kConstructorOrBackPointerOrNativeContextOffset + kTaggedSize - 1;
-  // https://crsrc.org/c/v8/src/objects/map.tq?l=86&c=30
+  // https://crsrc.org/c/v8/src/objects/map.tq?l=88&c=33
   static constexpr int kInstanceDescriptorsOffset = kConstructorOrBackPointerOrNativeContextOffsetEnd + 1;
   static constexpr int kInstanceDescriptorsOffsetEnd = kInstanceDescriptorsOffset + kTaggedSize - 1;
-  // https://crsrc.org/c/v8/src/objects/map.tq?l=92&c=30
+  // https://crsrc.org/c/v8/src/objects/map.tq?l=93&c=33
   static constexpr int kDependentCodeOffset = kInstanceDescriptorsOffsetEnd + 1;
   static constexpr int kDependentCodeOffsetEnd = kDependentCodeOffset + kTaggedSize - 1;
   // https://crsrc.org/c/v8/src/objects/map.tq?l=95&c=3

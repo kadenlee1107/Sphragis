@@ -1,7 +1,6 @@
 #include "src/ast/ast.h"
 #include "src/builtins/builtins-array-gen.h"
 #include "src/builtins/builtins-bigint-gen.h"
-#include "src/builtins/builtins-call-gen.h"
 #include "src/builtins/builtins-collections-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-data-view-gen.h"
@@ -15,10 +14,8 @@
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-typed-array-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins-wasm-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/code-factory.h"
-#include "src/debug/debug-wasm-objects.h"
 #include "src/heap/factory-inl.h"
 #include "src/ic/binary-op-assembler.h"
 #include "src/ic/handler-configuration-inl.h"
@@ -68,9 +65,6 @@
 #include "src/objects/turbofan-types.h"
 #include "src/objects/turboshaft-types.h"
 #include "src/torque/runtime-support.h"
-#include "src/wasm/value-type.h"
-#include "src/wasm/wasm-linkage.h"
-#include "src/wasm/wasm-module.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 // Required Builtins:
 #include "torque-generated/src/builtins/iterator-helpers-tq-csa.h"
@@ -7716,7 +7710,7 @@ TF_BUILTIN(IteratorPrototypeJoin, CodeStubAssembler) {
   if (block3.is_used()) {
     ca_.Bind(&block3);
     tmp2 = Undefined_0(state_);
-    tmp3 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{parameter2}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp2});
+    tmp3 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{parameter2}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp2});
     ca_.Branch(tmp3, &block5, std::vector<compiler::Node*>{}, &block6, std::vector<compiler::Node*>{});
   }
 
@@ -7846,7 +7840,7 @@ TF_BUILTIN(IteratorPrototypeJoin, CodeStubAssembler) {
   if (block23.is_used()) {
     ca_.Bind(&block23, &phi_bb23_7, &phi_bb23_8);
     tmp22 = Undefined_0(state_);
-    tmp23 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp15}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp22});
+    tmp23 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp15}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp22});
     ca_.Branch(tmp23, &block26, std::vector<compiler::Node*>{}, &block27, std::vector<compiler::Node*>{});
   }
 
@@ -7855,7 +7849,7 @@ TF_BUILTIN(IteratorPrototypeJoin, CodeStubAssembler) {
   if (block26.is_used()) {
     ca_.Bind(&block26);
     tmp24 = Null_0(state_);
-    tmp25 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp15}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp24});
+    tmp25 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp15}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp24});
     ca_.Goto(&block28, tmp25);
   }
 
@@ -8025,7 +8019,7 @@ void IteratorZipCloseAll_0(compiler::CodeAssemblerState* state_, TNode<Context> 
     std::tie(tmp17, tmp18) = NewReference_Object_0(state_, TNode<Union<HeapObject, TaggedIndex>>{tmp9}, TNode<IntPtrT>{tmp16}).Flatten();
     tmp19 = CodeStubAssembler(state_).LoadReference<Object>(CodeStubAssembler::Reference{tmp17, tmp18});
     tmp20 = TheHole_0(state_);
-    tmp21 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp19}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp20});
+    tmp21 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp19}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp20});
     ca_.Branch(tmp21, &block18, std::vector<compiler::Node*>{phi_bb14_2, phi_bb14_3, phi_bb14_4}, &block19, std::vector<compiler::Node*>{phi_bb14_2, phi_bb14_3, phi_bb14_4});
   }
 
@@ -8309,7 +8303,7 @@ void IteratorZipCloseAll_0(compiler::CodeAssemblerState* state_, TNode<Context> 
   if (block36.is_used()) {
     ca_.Bind(&block36, &phi_bb36_2, &phi_bb36_3, &phi_bb36_4, &phi_bb36_7, &phi_bb36_8);
     tmp65 = Undefined_0(state_);
-    tmp66 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{phi_bb36_2}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp65});
+    tmp66 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{phi_bb36_2}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp65});
     ca_.Branch(tmp66, &block54, std::vector<compiler::Node*>{phi_bb36_2, phi_bb36_3, phi_bb36_4}, &block55, std::vector<compiler::Node*>{phi_bb36_2, phi_bb36_3, phi_bb36_4});
   }
 
@@ -8385,7 +8379,7 @@ void IteratorZipCloseAll_0(compiler::CodeAssemblerState* state_, TNode<Context> 
   if (block56.is_used()) {
     ca_.Bind(&block56, &phi_bb56_2, &phi_bb56_3);
     tmp69 = Undefined_0(state_);
-    tmp70 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{phi_bb56_2}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp69});
+    tmp70 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{phi_bb56_2}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp69});
     ca_.Branch(tmp70, &block59, std::vector<compiler::Node*>{phi_bb56_2, phi_bb56_3}, &block60, std::vector<compiler::Node*>{phi_bb56_2, phi_bb56_3});
   }
 
@@ -8611,7 +8605,7 @@ TF_BUILTIN(IteratorZip, CodeStubAssembler) {
     tmp8 = FromConstexpr_JSAny_constexpr_string_0(state_, "mode");
     tmp9 = CodeStubAssembler(state_).GetProperty(TNode<Context>{parameter0}, TNode<JSAny>{tmp6}, TNode<JSAny>{tmp8});
     tmp10 = Undefined_0(state_);
-    tmp11 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp9}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp10});
+    tmp11 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp9}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp10});
     ca_.Branch(tmp11, &block3, std::vector<compiler::Node*>{}, &block4, std::vector<compiler::Node*>{tmp7});
   }
 
@@ -8641,7 +8635,7 @@ TF_BUILTIN(IteratorZip, CodeStubAssembler) {
     tmp14 = CodeStubAssembler(state_).StringConstant("shortest");
     tmp15 = TORQUE_CAST(CodeStubAssembler(state_).CallRuntime(Runtime::kStringEqual, parameter0, tmp12, tmp14)); 
     tmp16 = True_0(state_);
-    tmp17 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp15}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp16});
+    tmp17 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp15}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp16});
     ca_.Branch(tmp17, &block9, std::vector<compiler::Node*>{}, &block10, std::vector<compiler::Node*>{});
   }
 
@@ -8661,7 +8655,7 @@ TF_BUILTIN(IteratorZip, CodeStubAssembler) {
     tmp19 = CodeStubAssembler(state_).StringConstant("longest");
     tmp20 = TORQUE_CAST(CodeStubAssembler(state_).CallRuntime(Runtime::kStringEqual, parameter0, tmp12, tmp19)); 
     tmp21 = True_0(state_);
-    tmp22 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp20}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp21});
+    tmp22 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp20}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp21});
     ca_.Branch(tmp22, &block12, std::vector<compiler::Node*>{}, &block13, std::vector<compiler::Node*>{});
   }
 
@@ -8681,7 +8675,7 @@ TF_BUILTIN(IteratorZip, CodeStubAssembler) {
     tmp24 = CodeStubAssembler(state_).StringConstant("strict");
     tmp25 = TORQUE_CAST(CodeStubAssembler(state_).CallRuntime(Runtime::kStringEqual, parameter0, tmp12, tmp24)); 
     tmp26 = True_0(state_);
-    tmp27 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp25}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp26});
+    tmp27 = CodeStubAssembler(state_).TaggedEqual(TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp25}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp26});
     ca_.Branch(tmp27, &block15, std::vector<compiler::Node*>{}, &block16, std::vector<compiler::Node*>{});
   }
 
@@ -8731,7 +8725,7 @@ TF_BUILTIN(IteratorZip, CodeStubAssembler) {
     tmp32 = FromConstexpr_JSAny_constexpr_string_0(state_, "padding");
     tmp33 = CodeStubAssembler(state_).GetProperty(TNode<Context>{parameter0}, TNode<JSAny>{tmp6}, TNode<JSAny>{tmp32});
     tmp34 = Undefined_0(state_);
-    tmp35 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp33}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp34});
+    tmp35 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{tmp33}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp34});
     ca_.Branch(tmp35, &block22, std::vector<compiler::Node*>{phi_bb18_8}, &block23, std::vector<compiler::Node*>{phi_bb18_8});
   }
 
@@ -9178,7 +9172,7 @@ TF_BUILTIN(IteratorZip, CodeStubAssembler) {
     std::tie(tmp118) = ConstantIterator_Undefined_0(state_, TNode<Undefined>{tmp117}).Flatten();
     tmp119 = NewFixedArray_ConstantIterator_Undefined_0(state_, TNode<IntPtrT>{tmp114}, TorqueStructConstantIterator_Undefined_0{TNode<Undefined>{tmp118}});
     tmp120 = Undefined_0(state_);
-    tmp121 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{phi_bb128_10}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp120});
+    tmp121 = CodeStubAssembler(state_).TaggedNotEqual(TNode<Object>{phi_bb128_10}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp120});
     ca_.Branch(tmp121, &block130, std::vector<compiler::Node*>{phi_bb128_8, phi_bb128_10, phi_bb128_11, phi_bb128_12, phi_bb128_13}, &block131, std::vector<compiler::Node*>{phi_bb128_8, phi_bb128_10, phi_bb128_11, phi_bb128_12, phi_bb128_13});
   }
 
@@ -10093,7 +10087,7 @@ TF_BUILTIN(IteratorZipHelperNext, CodeStubAssembler) {
     tmp95 = TheHole_0(state_);
     compiler::CodeAssemblerExceptionHandlerLabel catch97__label(&ca_, compiler::CodeAssemblerLabel::kDeferred);
     { compiler::ScopedExceptionHandler s(&ca_, &catch97__label);
-    tmp96 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{tmp59}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WasmFuncRef, WasmNull, WeakCell>>{tmp95});
+    tmp96 = CodeStubAssembler(state_).TaggedEqual(TNode<Object>{tmp59}, TNode<Union<Context, FixedArrayBase, FunctionTemplateInfo, Hole, JSReceiver, Map, Oddball, String, Symbol, WeakCell>>{tmp95});
     }
     if (catch97__label.is_used()) {
       compiler::CodeAssemblerLabel catch97_skip(&ca_);

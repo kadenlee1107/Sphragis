@@ -2,8 +2,6 @@
 #define V8_GEN_TORQUE_GENERATED_VISITOR_LISTS_H_
 
 #define TORQUE_INSTANCE_TYPE_TO_BODY_DESCRIPTOR_LIST(V)\
-V(WASM_FAST_API_CALL_DATA_TYPE,WasmFastApiCallData)\
-V(WASM_STRING_VIEW_ITER_TYPE,WasmStringViewIter)\
 V(DESCRIPTOR_ARRAY_TYPE,DescriptorArray)\
 V(STRONG_DESCRIPTOR_ARRAY_TYPE,StrongDescriptorArray)\
 V(FEEDBACK_VECTOR_TYPE,FeedbackVector)\
@@ -54,8 +52,6 @@ V(AbstractInternalClassSubclass1)\
 V(AbstractInternalClassSubclass2)\
 
 #define TORQUE_POINTER_VISITOR_ID_LIST(V)\
-V(WasmFastApiCallData)\
-V(WasmStringViewIter)\
 V(DescriptorArray)\
 V(StrongDescriptorArray)\
 V(FeedbackVector)\
