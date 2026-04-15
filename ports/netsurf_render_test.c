@@ -191,8 +191,18 @@ void _start(void) {
     printf("    handler_version=%d\n", handler.handler_version);
     printf("    node_name ptr=%p\n", (void*)handler.node_name);
     printf("    body_node tag=%s\n", body_node.tag);
+    // DEBUG: verify prop_dispatch has valid pointers
+    {
+        extern struct { void *a; void *b; void *c; void *d; void *e; int f; } prop_dispatch[];
+        printf("    prop_dispatch[0].cascade = %p\n", prop_dispatch[0].a);
+        printf("    prop_dispatch[0].set_from_hint = %p\n", prop_dispatch[0].b);
+        printf("    prop_dispatch[0].initial = %p\n", prop_dispatch[0].c);
+        // Try calling the first initial handler directly
+        if (prop_dispatch[0].c) {
+            printf("    Calling initial handler...\n");
+        }
+    }
     printf("    Calling css_select_style...\n");
-    // Pre-allocate and zero the results to prevent garbage from stubs
     css_select_results *results = NULL;
     css_error err = css_select_style(ctx, &body_node, &unit_ctx, &media, NULL,
                                       &handler, NULL, &results);
