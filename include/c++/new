@@ -1,0 +1,40 @@
+#ifndef _BAT_NEW
+#define _BAT_NEW
+
+#include <cstddef>
+
+namespace std {
+    struct nothrow_t { explicit constexpr nothrow_t() = default; };
+    inline constexpr nothrow_t nothrow{};
+
+    using new_handler = void(*)();
+    new_handler set_new_handler(new_handler) noexcept;
+
+    // launder
+    template<class T>
+    [[nodiscard]] constexpr T* launder(T* p) noexcept {
+        return __builtin_launder(p);
+    }
+
+    enum class align_val_t : std::size_t {};
+}
+
+// Placement new/delete — these are NOT in namespace std
+[[nodiscard]] inline void* operator new(std::size_t, void* ptr) noexcept { return ptr; }
+[[nodiscard]] inline void* operator new[](std::size_t, void* ptr) noexcept { return ptr; }
+inline void operator delete(void*, void*) noexcept {}
+inline void operator delete[](void*, void*) noexcept {}
+
+// Nothrow variants (call the real operator new, return nullptr on failure)
+// The real operator new/delete are provided separately by the OS
+[[nodiscard]] inline void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    extern void* operator new(std::size_t);
+    // In a no-exceptions environment, operator new already can't throw
+    return operator new(size);
+}
+[[nodiscard]] inline void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+    extern void* operator new[](std::size_t);
+    return operator new[](size);
+}
+
+#endif

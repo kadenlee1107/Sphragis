@@ -471,6 +471,8 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                             let frame_ptr = frame as u64;
                             let elr_val = f.elr;
                             let spsr_val = f.spsr;
+                            // Ensure 16-byte SP alignment (ARM64 ABI requirement)
+                            let child_sp_aligned = child_sp & !0xF;
                             core::arch::asm!(
                                 // Set child stack SP (16-byte aligned)
                                 "mov sp, {csp}",
@@ -516,7 +518,7 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                                 elr = in(reg) elr_val,
                                 spsr = in(reg) spsr_val,
                                 fp = in(reg) frame_ptr,
-                                csp = in(reg) child_sp,
+                                csp = in(reg) child_sp_aligned,
                                 options(noreturn),
                             );
                         }

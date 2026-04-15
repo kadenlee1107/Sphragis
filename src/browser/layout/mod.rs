@@ -132,10 +132,18 @@ fn apply_class_hints(class: &str, style: &mut ComputedStyle) {
     }
 }
 
+use super::css::sheet::Stylesheet;
+
 pub fn build(doc: &Document, tree: &mut LayoutTree, viewport_w: i32) {
     tree.box_count = 0;
     tree.text_len = 0;
     tree.page_height = 0;
+
+    // Parse any <style> block CSS into a stylesheet
+    let mut sheet = Stylesheet::new();
+    if doc.css_len > 0 {
+        sheet.parse(&doc.css_text[..doc.css_len]);
+    }
 
     let body = doc.body();
 
@@ -145,7 +153,14 @@ pub fn build(doc: &Document, tree: &mut LayoutTree, viewport_w: i32) {
         None => return,
     };
     tree.boxes[root].dom_node = body as u16;
-    tree.boxes[root].style = ComputedStyle::for_tag("body");
+    let mut body_style = ComputedStyle::for_tag("body");
+    if sheet.has_rules() {
+        let body_node = doc.get(body);
+        let id = body_node.get_attr("id").unwrap_or("");
+        let cls = body_node.get_attr("class").unwrap_or("");
+        sheet.apply("body", id, cls, &[], &mut body_style);
+    }
+    tree.boxes[root].style = body_style;
     tree.boxes[root].x = 0;
     tree.boxes[root].y = 0;
     tree.boxes[root].width = viewport_w;
@@ -155,7 +170,7 @@ pub fn build(doc: &Document, tree: &mut LayoutTree, viewport_w: i32) {
 
     // Recursively lay out children
     let mut cursor_y = 8i32;
-    layout_children(doc, tree, root, body, 8, &mut cursor_y, viewport_w - 16);
+    layout_children(doc, tree, &sheet, root, body, 8, &mut cursor_y, viewport_w - 16);
 
     tree.boxes[root].height = cursor_y + 8;
     tree.boxes[root].content_h = cursor_y;
@@ -216,6 +231,7 @@ fn str_has(haystack: &str, needle: &str) -> bool {
 fn layout_children(
     doc: &Document,
     tree: &mut LayoutTree,
+    sheet: &Stylesheet,
     parent_box: usize,
     dom_parent: usize,
     x_offset: i32,
@@ -320,7 +336,34 @@ fn layout_children(
             NodeType::Element => {
                 let mut style = ComputedStyle::for_tag(node.tag_str());
 
-                // Apply inline style="" attribute from HTML
+                // Apply CSS stylesheet rules (from <style> blocks)
+                if sheet.has_rules() {
+                    let tag = node.tag_str();
+                    let id = node.get_attr("id").unwrap_or("");
+                    let cls = node.get_attr("class").unwrap_or("");
+
+                    // Build ancestor chain for descendant selectors
+                    let mut ancestors: [(&str, &str, &str); 8] =
+                        [("", "", ""); 8];
+                    let mut anc_count = 0;
+                    let mut pidx = dom_parent;
+                    while anc_count < 8 {
+                        let pnode = doc.get(pidx);
+                        if pnode.node_type != NodeType::Element { break; }
+                        ancestors[anc_count] = (
+                            pnode.tag_str(),
+                            pnode.get_attr("id").unwrap_or(""),
+                            pnode.get_attr("class").unwrap_or(""),
+                        );
+                        anc_count += 1;
+                        if pnode.parent == 0xFFFF { break; }
+                        pidx = pnode.parent as usize;
+                    }
+
+                    sheet.apply(tag, id, cls, &ancestors[..anc_count], &mut style);
+                }
+
+                // Apply inline style="" attribute from HTML (highest priority)
                 if let Some(style_attr) = node.get_attr("style") {
                     super::css::parser::apply_inline_style(style_attr, &mut style);
                 }
@@ -523,7 +566,7 @@ fn layout_children(
                     let mut child_y = child_y_start;
 
                     // Recurse into children
-                    layout_children(doc, tree, ebox, child_idx, block_x, &mut child_y, block_w);
+                    layout_children(doc, tree, sheet, ebox, child_idx, block_x, &mut child_y, block_w);
 
                     let content_h = (child_y - child_y_start).max(0);
 
@@ -546,7 +589,7 @@ fn layout_children(
                     let start_y = *cursor_y;
 
                     let _saved_inline_x = inline_x;
-                    layout_children(doc, tree, ebox, child_idx, inline_x, cursor_y,
+                    layout_children(doc, tree, sheet, ebox, child_idx, inline_x, cursor_y,
                         avail_width - (inline_x - x_offset));
 
                     // After inline children, inline_x may have advanced via text nodes.

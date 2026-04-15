@@ -20,6 +20,14 @@ pub fn hello_elf() -> &'static [u8] { HELLO_ELF }
 pub fn hello_libc_elf() -> &'static [u8] { HELLO_LIBC_ELF }
 static NETSURF_TEST_ELF: &[u8] = include_bytes!("../../../tests/netsurf_css_test");
 pub fn netsurf_test_elf() -> &'static [u8] { NETSURF_TEST_ELF }
+static FREETYPE_TEST_ELF: &[u8] = include_bytes!("../../../tests/freetype_test");
+pub fn freetype_test_elf() -> &'static [u8] { FREETYPE_TEST_ELF }
+static PNG_TEST_ELF: &[u8] = include_bytes!("../../../tests/png_test");
+pub fn png_test_elf() -> &'static [u8] { PNG_TEST_ELF }
+static POSIX_TEST_ELF: &[u8] = include_bytes!("../../../tests/posix_test");
+pub fn posix_test_elf() -> &'static [u8] { POSIX_TEST_ELF }
+static CXX_TEST_ELF: &[u8] = include_bytes!("../../../tests/cxx_test");
+pub fn cxx_test_elf() -> &'static [u8] { CXX_TEST_ELF }
 
 pub fn hello_threads_elf() -> &'static [u8] { HELLO_THREADS_ELF }
 

@@ -1,0 +1,137 @@
+#ifndef _BAT_SET
+#define _BAT_SET
+
+#include <cstddef>
+#include <utility>
+#include <functional>
+#include <initializer_list>
+
+extern "C" void abort();
+
+namespace std {
+
+template<class Key, class Compare = less<Key>, class Allocator = allocator<Key>>
+class set {
+public:
+    using key_type   = Key;
+    using value_type = Key;
+    using key_compare   = Compare;
+    using value_compare = Compare;
+    using size_type       = size_t;
+    using difference_type = ptrdiff_t;
+    using reference       = const Key&;
+    using const_reference = const Key&;
+    using pointer         = const Key*;
+    using const_pointer   = const Key*;
+    using iterator        = const Key*;
+    using const_iterator  = const Key*;
+
+private:
+    static constexpr size_type MAX_ENTRIES = 128;
+    Key      data_[MAX_ENTRIES];
+    size_type size_;
+    Compare  comp_;
+
+    size_type find_pos(const Key& k) const {
+        for (size_type i = 0; i < size_; ++i) {
+            if (!comp_(data_[i], k) && !comp_(k, data_[i]))
+                return i;
+        }
+        return size_;
+    }
+
+    size_type insert_pos(const Key& k) const {
+        size_type i = 0;
+        while (i < size_ && comp_(data_[i], k)) ++i;
+        return i;
+    }
+
+public:
+    set() : size_(0) {}
+
+    set(std::initializer_list<Key> init) : size_(0) {
+        for (auto& k : init) insert(k);
+    }
+
+    template<class InputIt>
+    set(InputIt first, InputIt last) : size_(0) {
+        while (first != last) { insert(*first); ++first; }
+    }
+
+    set(const set&) = default;
+    set& operator=(const set&) = default;
+    ~set() = default;
+
+    pair<iterator, bool> insert(const Key& k) {
+        size_type pos = find_pos(k);
+        if (pos < size_) return {data_ + pos, false};
+        if (size_ >= MAX_ENTRIES) abort();
+        size_type ip = insert_pos(k);
+        for (size_type i = size_; i > ip; --i)
+            data_[i] = static_cast<Key&&>(data_[i-1]);
+        data_[ip] = k;
+        ++size_;
+        return {data_ + ip, true};
+    }
+
+    template<class... Args>
+    pair<iterator, bool> emplace(Args&&... args) {
+        Key k(static_cast<Args&&>(args)...);
+        return insert(k);
+    }
+
+    iterator find(const Key& k) const {
+        size_type pos = find_pos(k);
+        if (pos < size_) return data_ + pos;
+        return end();
+    }
+
+    size_type count(const Key& k) const {
+        return find_pos(k) < size_ ? 1 : 0;
+    }
+
+    bool contains(const Key& k) const {
+        return find_pos(k) < size_;
+    }
+
+    size_type erase(const Key& k) {
+        size_type pos = find_pos(k);
+        if (pos >= size_) return 0;
+        for (size_type i = pos; i + 1 < size_; ++i)
+            data_[i] = static_cast<Key&&>(data_[i+1]);
+        --size_;
+        return 1;
+    }
+
+    iterator erase(iterator pos) {
+        size_type idx = static_cast<size_type>(pos - data_);
+        if (idx >= size_) return end();
+        for (size_type i = idx; i + 1 < size_; ++i)
+            data_[i] = static_cast<Key&&>(data_[i+1]);
+        --size_;
+        return data_ + idx;
+    }
+
+    void clear() { size_ = 0; }
+    size_type size() const noexcept { return size_; }
+    bool empty() const noexcept { return size_ == 0; }
+
+    iterator begin() const noexcept { return data_; }
+    iterator end() const noexcept { return data_ + size_; }
+    const_iterator cbegin() const noexcept { return data_; }
+    const_iterator cend() const noexcept { return data_ + size_; }
+
+    iterator lower_bound(const Key& k) const {
+        return data_ + insert_pos(k);
+    }
+    iterator upper_bound(const Key& k) const {
+        size_type ip = insert_pos(k);
+        if (ip < size_ && !comp_(k, data_[ip]) && !comp_(data_[ip], k))
+            ++ip;
+        return data_ + ip;
+    }
+};
+
+} // namespace std
+
+#endif

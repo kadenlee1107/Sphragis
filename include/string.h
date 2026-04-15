@@ -3,6 +3,10 @@
 
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Copying */
 void *memcpy(void *dest, const void *src, size_t n);
 void *memmove(void *dest, const void *src, size_t n);
@@ -38,5 +42,9 @@ char *strndup(const char *s, size_t n);
 char *strerror(int errnum);
 char *strtok(char *s, const char *delim);
 char *strtok_r(char *s, const char *delim, char **saveptr);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

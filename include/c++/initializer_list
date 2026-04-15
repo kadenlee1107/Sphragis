@@ -1,0 +1,46 @@
+#ifndef _BAT_INITIALIZER_LIST
+#define _BAT_INITIALIZER_LIST
+
+#include <cstddef>
+
+namespace std {
+
+template<class T>
+class initializer_list {
+public:
+    using value_type      = T;
+    using reference       = const T&;
+    using const_reference = const T&;
+    using size_type       = size_t;
+    using iterator        = const T*;
+    using const_iterator  = const T*;
+
+private:
+    const T* _data;
+    size_t   _size;
+
+    // The compiler calls this constructor
+    constexpr initializer_list(const T* d, size_t s) noexcept : _data(d), _size(s) {}
+
+public:
+    constexpr initializer_list() noexcept : _data(nullptr), _size(0) {}
+
+    constexpr size_t size() const noexcept { return _size; }
+    constexpr const T* begin() const noexcept { return _data; }
+    constexpr const T* end() const noexcept { return _data + _size; }
+};
+
+template<class T>
+constexpr const T* begin(initializer_list<T> il) noexcept { return il.begin(); }
+template<class T>
+constexpr const T* end(initializer_list<T> il) noexcept { return il.end(); }
+
+// data() and size() for initializer_list
+template<class T>
+constexpr const T* data(initializer_list<T> il) noexcept { return il.begin(); }
+template<class T>
+constexpr size_t size(initializer_list<T> il) noexcept { return il.size(); }
+
+} // namespace std
+
+#endif

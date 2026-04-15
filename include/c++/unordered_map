@@ -1,0 +1,276 @@
+#ifndef _BAT_UNORDERED_MAP
+#define _BAT_UNORDERED_MAP
+
+#include <cstddef>
+#include <utility>
+#include <functional>
+#include <initializer_list>
+
+extern "C" void abort();
+
+namespace std {
+
+template<class Key, class T,
+         class Hash = hash<Key>,
+         class KeyEqual = equal_to<Key>,
+         class Allocator = allocator<pair<const Key, T>>>
+class unordered_map {
+public:
+    using key_type    = Key;
+    using mapped_type = T;
+    using value_type  = pair<const Key, T>;
+    using hasher      = Hash;
+    using key_equal   = KeyEqual;
+    using size_type       = size_t;
+    using difference_type = ptrdiff_t;
+    using reference       = value_type&;
+    using const_reference = const value_type&;
+    using pointer         = value_type*;
+    using const_pointer   = const value_type*;
+
+private:
+    static constexpr size_type MAX_ENTRIES = 128;
+    static constexpr size_type NUM_BUCKETS = 64;
+
+    struct Entry {
+        Key  key;
+        T    val;
+        bool occupied;
+    };
+
+    Entry    entries_[MAX_ENTRIES];
+    size_type size_;
+    Hash     hash_;
+    KeyEqual eq_;
+
+    size_type find_slot(const Key& k) const {
+        for (size_type i = 0; i < size_; ++i) {
+            if (entries_[i].occupied && eq_(entries_[i].key, k))
+                return i;
+        }
+        return MAX_ENTRIES;
+    }
+
+public:
+    // iterator over linear storage
+    struct iterator {
+        Entry* ptr_;
+        Entry* end_;
+
+        using value_type = pair<const Key, T>;
+        using difference_type = ptrdiff_t;
+        using pointer = value_type*;
+        using reference = value_type&;
+
+        reference operator*() const { return *reinterpret_cast<value_type*>(ptr_); }
+        pointer operator->() const { return reinterpret_cast<value_type*>(ptr_); }
+        iterator& operator++() {
+            ++ptr_;
+            while (ptr_ < end_ && !ptr_->occupied) ++ptr_;
+            return *this;
+        }
+        iterator operator++(int) { auto tmp = *this; ++(*this); return tmp; }
+        bool operator==(const iterator& o) const { return ptr_ == o.ptr_; }
+        bool operator!=(const iterator& o) const { return ptr_ != o.ptr_; }
+    };
+
+    struct const_iterator {
+        const Entry* ptr_;
+        const Entry* end_;
+
+        using value_type = const pair<const Key, T>;
+        using difference_type = ptrdiff_t;
+        using pointer = const value_type*;
+        using reference = const value_type&;
+
+        reference operator*() const { return *reinterpret_cast<const value_type*>(ptr_); }
+        pointer operator->() const { return reinterpret_cast<const value_type*>(ptr_); }
+        const_iterator& operator++() {
+            ++ptr_;
+            while (ptr_ < end_ && !ptr_->occupied) ++ptr_;
+            return *this;
+        }
+        const_iterator operator++(int) { auto tmp = *this; ++(*this); return tmp; }
+        bool operator==(const const_iterator& o) const { return ptr_ == o.ptr_; }
+        bool operator!=(const const_iterator& o) const { return ptr_ != o.ptr_; }
+
+        const_iterator(const iterator& it) : ptr_(it.ptr_), end_(it.end_) {}
+        const_iterator() : ptr_(nullptr), end_(nullptr) {}
+        const_iterator(const Entry* p, const Entry* e) : ptr_(p), end_(e) {}
+    };
+
+    unordered_map() : size_(0) {
+        for (size_type i = 0; i < MAX_ENTRIES; ++i)
+            entries_[i].occupied = false;
+    }
+
+    unordered_map(std::initializer_list<value_type> init) : unordered_map() {
+        for (auto& p : init) {
+            (*this)[p.first] = p.second;
+        }
+    }
+
+    unordered_map(const unordered_map& o) : size_(o.size_), hash_(o.hash_), eq_(o.eq_) {
+        for (size_type i = 0; i < MAX_ENTRIES; ++i) {
+            entries_[i].occupied = o.entries_[i].occupied;
+            if (o.entries_[i].occupied) {
+                entries_[i].key = o.entries_[i].key;
+                entries_[i].val = o.entries_[i].val;
+            }
+        }
+    }
+
+    unordered_map& operator=(const unordered_map& o) {
+        if (this != &o) {
+            size_ = o.size_;
+            for (size_type i = 0; i < MAX_ENTRIES; ++i) {
+                entries_[i].occupied = o.entries_[i].occupied;
+                if (o.entries_[i].occupied) {
+                    entries_[i].key = o.entries_[i].key;
+                    entries_[i].val = o.entries_[i].val;
+                }
+            }
+        }
+        return *this;
+    }
+
+    unordered_map(unordered_map&&) = default;
+    unordered_map& operator=(unordered_map&&) = default;
+    ~unordered_map() = default;
+
+    T& operator[](const Key& k) {
+        size_type slot = find_slot(k);
+        if (slot < MAX_ENTRIES) return entries_[slot].val;
+        // Find first unoccupied slot
+        for (size_type i = 0; i < MAX_ENTRIES; ++i) {
+            if (!entries_[i].occupied) {
+                entries_[i].key = k;
+                entries_[i].val = T{};
+                entries_[i].occupied = true;
+                ++size_;
+                return entries_[i].val;
+            }
+        }
+        abort();
+        return entries_[0].val; // unreachable
+    }
+
+    T& operator[](Key&& k) {
+        size_type slot = find_slot(k);
+        if (slot < MAX_ENTRIES) return entries_[slot].val;
+        for (size_type i = 0; i < MAX_ENTRIES; ++i) {
+            if (!entries_[i].occupied) {
+                entries_[i].key = static_cast<Key&&>(k);
+                entries_[i].val = T{};
+                entries_[i].occupied = true;
+                ++size_;
+                return entries_[i].val;
+            }
+        }
+        abort();
+        return entries_[0].val;
+    }
+
+    iterator find(const Key& k) {
+        size_type slot = find_slot(k);
+        if (slot < MAX_ENTRIES) {
+            return iterator{&entries_[slot], &entries_[MAX_ENTRIES]};
+        }
+        return end();
+    }
+
+    const_iterator find(const Key& k) const {
+        size_type slot = find_slot(k);
+        if (slot < MAX_ENTRIES) {
+            return const_iterator{&entries_[slot], &entries_[MAX_ENTRIES]};
+        }
+        return end();
+    }
+
+    size_type count(const Key& k) const {
+        return find_slot(k) < MAX_ENTRIES ? 1 : 0;
+    }
+
+    bool contains(const Key& k) const {
+        return find_slot(k) < MAX_ENTRIES;
+    }
+
+    pair<iterator, bool> insert(const value_type& v) {
+        size_type slot = find_slot(v.first);
+        if (slot < MAX_ENTRIES)
+            return {iterator{&entries_[slot], &entries_[MAX_ENTRIES]}, false};
+        for (size_type i = 0; i < MAX_ENTRIES; ++i) {
+            if (!entries_[i].occupied) {
+                entries_[i].key = v.first;
+                entries_[i].val = v.second;
+                entries_[i].occupied = true;
+                ++size_;
+                return {iterator{&entries_[i], &entries_[MAX_ENTRIES]}, true};
+            }
+        }
+        abort();
+        return {end(), false};
+    }
+
+    template<class... Args>
+    pair<iterator, bool> emplace(Args&&... args) {
+        value_type v(static_cast<Args&&>(args)...);
+        return insert(v);
+    }
+
+    size_type erase(const Key& k) {
+        size_type slot = find_slot(k);
+        if (slot >= MAX_ENTRIES) return 0;
+        entries_[slot].occupied = false;
+        --size_;
+        return 1;
+    }
+
+    iterator erase(iterator pos) {
+        if (pos.ptr_ >= entries_ && pos.ptr_ < entries_ + MAX_ENTRIES && pos.ptr_->occupied) {
+            pos.ptr_->occupied = false;
+            --size_;
+            auto next = pos;
+            ++next;
+            return next;
+        }
+        return end();
+    }
+
+    void clear() {
+        for (size_type i = 0; i < MAX_ENTRIES; ++i)
+            entries_[i].occupied = false;
+        size_ = 0;
+    }
+
+    size_type size() const noexcept { return size_; }
+    bool empty() const noexcept { return size_ == 0; }
+    size_type max_size() const noexcept { return MAX_ENTRIES; }
+
+    iterator begin() noexcept {
+        Entry* p = entries_;
+        while (p < entries_ + MAX_ENTRIES && !p->occupied) ++p;
+        return iterator{p, entries_ + MAX_ENTRIES};
+    }
+    iterator end() noexcept {
+        return iterator{entries_ + MAX_ENTRIES, entries_ + MAX_ENTRIES};
+    }
+    const_iterator begin() const noexcept {
+        const Entry* p = entries_;
+        while (p < entries_ + MAX_ENTRIES && !p->occupied) ++p;
+        return const_iterator{p, entries_ + MAX_ENTRIES};
+    }
+    const_iterator end() const noexcept {
+        return const_iterator{entries_ + MAX_ENTRIES, entries_ + MAX_ENTRIES};
+    }
+    const_iterator cbegin() const noexcept { return begin(); }
+    const_iterator cend() const noexcept { return end(); }
+
+    void reserve(size_type) {} // no-op
+    float load_factor() const noexcept { return static_cast<float>(size_) / NUM_BUCKETS; }
+    size_type bucket_count() const noexcept { return NUM_BUCKETS; }
+};
+
+} // namespace std
+
+#endif

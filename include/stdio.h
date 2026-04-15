@@ -4,6 +4,10 @@
 #include <stddef.h>
 #include <stdarg.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct _FILE FILE;
 
 extern FILE *stdin;
@@ -76,5 +80,9 @@ void perror(const char *s);
 /* Temporary files */
 FILE *tmpfile(void);
 char *tmpnam(char *s);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

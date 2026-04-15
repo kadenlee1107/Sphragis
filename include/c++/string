@@ -1,0 +1,479 @@
+#ifndef _BAT_STRING
+#define _BAT_STRING
+
+#include <cstddef>
+#include <cstdlib>
+#include <cstdio>
+#include <cstring>
+#include <algorithm>
+#include <utility>
+#include <initializer_list>
+#include <string_view>
+
+// operator new/delete provided by the OS
+extern void* operator new(unsigned long);
+extern void  operator delete(void*) noexcept;
+extern void  operator delete(void*, unsigned long) noexcept;
+
+namespace std {
+
+class string {
+public:
+    using value_type      = char;
+    using size_type       = size_t;
+    using difference_type = ptrdiff_t;
+    using reference       = char&;
+    using const_reference = const char&;
+    using pointer         = char*;
+    using const_pointer   = const char*;
+    using iterator        = char*;
+    using const_iterator  = const char*;
+
+    static constexpr size_type npos = static_cast<size_type>(-1);
+
+private:
+    static constexpr size_t SSO_CAP = 255; // SSO buffer capacity (bytes available for chars)
+    char*  _data;
+    size_t _size;
+    size_t _cap;
+    char   _sso[SSO_CAP + 1]; // +1 for null terminator
+
+    bool _is_sso() const { return _data == _sso; }
+
+    void _grow(size_t new_cap) {
+        if (new_cap <= _cap) return;
+        // Round up
+        size_t alloc = new_cap + 1;
+        if (alloc < _cap * 2) alloc = _cap * 2;
+        char* buf = static_cast<char*>(::operator new(alloc));
+        if (_size > 0) memcpy(buf, _data, _size);
+        buf[_size] = '\0';
+        if (!_is_sso()) ::operator delete(_data);
+        _data = buf;
+        _cap = alloc - 1;
+    }
+
+public:
+    // Constructors
+    string() noexcept : _data(_sso), _size(0), _cap(SSO_CAP) {
+        _sso[0] = '\0';
+    }
+
+    string(const char* s) : string() {
+        if (s) {
+            _size = strlen(s);
+            if (_size > SSO_CAP) _grow(_size);
+            memcpy(_data, s, _size);
+            _data[_size] = '\0';
+        }
+    }
+
+    string(const char* s, size_t len) : string() {
+        if (s && len > 0) {
+            _size = len;
+            if (_size > SSO_CAP) _grow(_size);
+            memcpy(_data, s, _size);
+            _data[_size] = '\0';
+        }
+    }
+
+    string(size_t count, char c) : string() {
+        _size = count;
+        if (_size > SSO_CAP) _grow(_size);
+        memset(_data, c, _size);
+        _data[_size] = '\0';
+    }
+
+    string(const string& o) : string() {
+        _size = o._size;
+        if (_size > SSO_CAP) _grow(_size);
+        memcpy(_data, o._data, _size);
+        _data[_size] = '\0';
+    }
+
+    string(string&& o) noexcept : _size(o._size), _cap(o._cap) {
+        if (o._is_sso()) {
+            _data = _sso;
+            memcpy(_sso, o._sso, _size + 1);
+        } else {
+            _data = o._data;
+            o._data = o._sso;
+        }
+        o._size = 0;
+        o._cap = SSO_CAP;
+        o._sso[0] = '\0';
+    }
+
+    string(string_view sv) : string(sv.data(), sv.size()) {}
+
+    string(initializer_list<char> il) : string() {
+        _size = il.size();
+        if (_size > SSO_CAP) _grow(_size);
+        memcpy(_data, il.begin(), _size);
+        _data[_size] = '\0';
+    }
+
+    ~string() {
+        if (!_is_sso()) ::operator delete(_data);
+    }
+
+    // Assignment
+    string& operator=(const string& o) {
+        if (this != &o) {
+            clear();
+            append(o._data, o._size);
+        }
+        return *this;
+    }
+
+    string& operator=(string&& o) noexcept {
+        if (this != &o) {
+            if (!_is_sso()) ::operator delete(_data);
+            _size = o._size;
+            _cap = o._cap;
+            if (o._is_sso()) {
+                _data = _sso;
+                memcpy(_sso, o._sso, _size + 1);
+            } else {
+                _data = o._data;
+                o._data = o._sso;
+            }
+            o._size = 0;
+            o._cap = SSO_CAP;
+            o._sso[0] = '\0';
+        }
+        return *this;
+    }
+
+    string& operator=(const char* s) {
+        clear();
+        if (s) append(s, strlen(s));
+        return *this;
+    }
+
+    string& operator=(char c) {
+        clear();
+        push_back(c);
+        return *this;
+    }
+
+    string& operator=(string_view sv) {
+        clear();
+        append(sv.data(), sv.size());
+        return *this;
+    }
+
+    // Element access
+    char& operator[](size_t i) { return _data[i]; }
+    const char& operator[](size_t i) const { return _data[i]; }
+    char& at(size_t i) { if (i >= _size) abort(); return _data[i]; }
+    const char& at(size_t i) const { if (i >= _size) abort(); return _data[i]; }
+    char& front() { return _data[0]; }
+    const char& front() const { return _data[0]; }
+    char& back() { return _data[_size - 1]; }
+    const char& back() const { return _data[_size - 1]; }
+    char* data() noexcept { return _data; }
+    const char* data() const noexcept { return _data; }
+    const char* c_str() const noexcept { return _data; }
+
+    // Iterators
+    iterator begin() noexcept { return _data; }
+    const_iterator begin() const noexcept { return _data; }
+    const_iterator cbegin() const noexcept { return _data; }
+    iterator end() noexcept { return _data + _size; }
+    const_iterator end() const noexcept { return _data + _size; }
+    const_iterator cend() const noexcept { return _data + _size; }
+
+    // Capacity
+    size_t size() const noexcept { return _size; }
+    size_t length() const noexcept { return _size; }
+    size_t capacity() const noexcept { return _cap; }
+    bool empty() const noexcept { return _size == 0; }
+    size_t max_size() const noexcept { return static_cast<size_t>(-1) / 2; }
+
+    void reserve(size_t new_cap) { if (new_cap > _cap) _grow(new_cap); }
+
+    void resize(size_t count, char c = '\0') {
+        if (count > _cap) _grow(count);
+        if (count > _size) memset(_data + _size, c, count - _size);
+        _size = count;
+        _data[_size] = '\0';
+    }
+
+    void shrink_to_fit() {} // no-op
+
+    // Modifiers
+    void clear() noexcept {
+        _size = 0;
+        _data[0] = '\0';
+    }
+
+    void push_back(char c) {
+        if (_size >= _cap) _grow(_size + 1);
+        _data[_size++] = c;
+        _data[_size] = '\0';
+    }
+
+    void pop_back() {
+        if (_size > 0) { --_size; _data[_size] = '\0'; }
+    }
+
+    string& append(const char* s, size_t len) {
+        if (len == 0) return *this;
+        if (_size + len > _cap) _grow(_size + len);
+        memcpy(_data + _size, s, len);
+        _size += len;
+        _data[_size] = '\0';
+        return *this;
+    }
+
+    string& append(const string& s) { return append(s._data, s._size); }
+    string& append(const char* s) { return append(s, strlen(s)); }
+    string& append(size_t count, char c) {
+        if (_size + count > _cap) _grow(_size + count);
+        memset(_data + _size, c, count);
+        _size += count;
+        _data[_size] = '\0';
+        return *this;
+    }
+
+    string& operator+=(const string& s) { return append(s); }
+    string& operator+=(const char* s) { return append(s); }
+    string& operator+=(char c) { push_back(c); return *this; }
+    string& operator+=(string_view sv) { return append(sv.data(), sv.size()); }
+
+    string& insert(size_t pos, const char* s, size_t len) {
+        if (pos > _size) pos = _size;
+        if (_size + len > _cap) _grow(_size + len);
+        memmove(_data + pos + len, _data + pos, _size - pos);
+        memcpy(_data + pos, s, len);
+        _size += len;
+        _data[_size] = '\0';
+        return *this;
+    }
+
+    string& insert(size_t pos, const string& s) { return insert(pos, s._data, s._size); }
+    string& insert(size_t pos, const char* s) { return insert(pos, s, strlen(s)); }
+    string& insert(size_t pos, size_t count, char c) {
+        if (pos > _size) pos = _size;
+        if (_size + count > _cap) _grow(_size + count);
+        memmove(_data + pos + count, _data + pos, _size - pos);
+        memset(_data + pos, c, count);
+        _size += count;
+        _data[_size] = '\0';
+        return *this;
+    }
+
+    string& erase(size_t pos = 0, size_t count = npos) {
+        if (pos > _size) return *this;
+        if (count > _size - pos) count = _size - pos;
+        memmove(_data + pos, _data + pos + count, _size - pos - count);
+        _size -= count;
+        _data[_size] = '\0';
+        return *this;
+    }
+
+    iterator erase(const_iterator it) {
+        size_t pos = it - _data;
+        erase(pos, 1);
+        return _data + pos;
+    }
+
+    string& replace(size_t pos, size_t count, const char* s, size_t len) {
+        erase(pos, count);
+        insert(pos, s, len);
+        return *this;
+    }
+
+    string& replace(size_t pos, size_t count, const string& s) {
+        return replace(pos, count, s._data, s._size);
+    }
+
+    string& assign(const char* s, size_t len) {
+        clear();
+        return append(s, len);
+    }
+    string& assign(const string& s) { return *this = s; }
+
+    // Operations
+    string substr(size_t pos = 0, size_t count = npos) const {
+        if (pos > _size) pos = _size;
+        if (count > _size - pos) count = _size - pos;
+        return string(_data + pos, count);
+    }
+
+    int compare(const string& o) const {
+        size_t len = _size < o._size ? _size : o._size;
+        int r = memcmp(_data, o._data, len);
+        if (r != 0) return r;
+        if (_size < o._size) return -1;
+        if (_size > o._size) return 1;
+        return 0;
+    }
+
+    int compare(const char* s) const {
+        return compare(string_view(s));
+    }
+
+    int compare(string_view sv) const {
+        size_t len = _size < sv.size() ? _size : sv.size();
+        int r = memcmp(_data, sv.data(), len);
+        if (r != 0) return r;
+        if (_size < sv.size()) return -1;
+        if (_size > sv.size()) return 1;
+        return 0;
+    }
+
+    size_t find(char c, size_t pos = 0) const {
+        for (size_t i = pos; i < _size; ++i)
+            if (_data[i] == c) return i;
+        return npos;
+    }
+
+    size_t find(const char* s, size_t pos = 0) const {
+        return find(string_view(s), pos);
+    }
+
+    size_t find(string_view sv, size_t pos = 0) const {
+        if (sv.size() == 0) return pos <= _size ? pos : npos;
+        if (sv.size() > _size) return npos;
+        for (size_t i = pos; i <= _size - sv.size(); ++i)
+            if (memcmp(_data + i, sv.data(), sv.size()) == 0) return i;
+        return npos;
+    }
+
+    size_t find(const string& s, size_t pos = 0) const {
+        return find(string_view(s.data(), s.size()), pos);
+    }
+
+    size_t rfind(char c, size_t pos = npos) const {
+        if (_size == 0) return npos;
+        size_t start = pos < _size ? pos : _size - 1;
+        for (size_t i = start + 1; i > 0; --i)
+            if (_data[i - 1] == c) return i - 1;
+        return npos;
+    }
+
+    size_t find_first_of(const char* s, size_t pos = 0) const {
+        return string_view(_data, _size).find_first_of(string_view(s), pos);
+    }
+
+    size_t find_last_of(const char* s, size_t pos = npos) const {
+        return string_view(_data, _size).find_last_of(string_view(s), pos);
+    }
+
+    bool starts_with(string_view sv) const {
+        return string_view(_data, _size).starts_with(sv);
+    }
+
+    bool ends_with(string_view sv) const {
+        return string_view(_data, _size).ends_with(sv);
+    }
+
+    // Conversion
+    operator string_view() const noexcept { return string_view(_data, _size); }
+
+    void swap(string& o) noexcept {
+        string tmp(std::move(o));
+        o = std::move(*this);
+        *this = std::move(tmp);
+    }
+};
+
+// Concatenation
+inline string operator+(const string& a, const string& b) {
+    string r;
+    r.reserve(a.size() + b.size());
+    r.append(a);
+    r.append(b);
+    return r;
+}
+inline string operator+(const string& a, const char* b) {
+    string r(a);
+    r.append(b);
+    return r;
+}
+inline string operator+(const char* a, const string& b) {
+    string r(a);
+    r.append(b);
+    return r;
+}
+inline string operator+(const string& a, char c) {
+    string r(a);
+    r.push_back(c);
+    return r;
+}
+inline string operator+(char c, const string& b) {
+    string r(1, c);
+    r.append(b);
+    return r;
+}
+
+// Comparison
+inline bool operator==(const string& a, const string& b) { return a.compare(b) == 0; }
+inline bool operator!=(const string& a, const string& b) { return a.compare(b) != 0; }
+inline bool operator<(const string& a, const string& b)  { return a.compare(b) < 0; }
+inline bool operator<=(const string& a, const string& b) { return a.compare(b) <= 0; }
+inline bool operator>(const string& a, const string& b)  { return a.compare(b) > 0; }
+inline bool operator>=(const string& a, const string& b) { return a.compare(b) >= 0; }
+
+inline bool operator==(const string& a, const char* b)   { return a.compare(b) == 0; }
+inline bool operator!=(const string& a, const char* b)   { return a.compare(b) != 0; }
+inline bool operator==(const char* a, const string& b)   { return b.compare(a) == 0; }
+inline bool operator!=(const char* a, const string& b)   { return b.compare(a) != 0; }
+
+// to_string
+inline string to_string(int val) {
+    char buf[32]; std::snprintf(buf, sizeof(buf), "%d", val); return string(buf);
+}
+inline string to_string(long val) {
+    char buf[32]; std::snprintf(buf, sizeof(buf), "%ld", val); return string(buf);
+}
+inline string to_string(long long val) {
+    char buf[32]; std::snprintf(buf, sizeof(buf), "%lld", val); return string(buf);
+}
+inline string to_string(unsigned val) {
+    char buf[32]; std::snprintf(buf, sizeof(buf), "%u", val); return string(buf);
+}
+inline string to_string(unsigned long val) {
+    char buf[32]; std::snprintf(buf, sizeof(buf), "%lu", val); return string(buf);
+}
+inline string to_string(unsigned long long val) {
+    char buf[32]; std::snprintf(buf, sizeof(buf), "%llu", val); return string(buf);
+}
+inline string to_string(float val) {
+    char buf[64]; std::snprintf(buf, sizeof(buf), "%f", (double)val); return string(buf);
+}
+inline string to_string(double val) {
+    char buf[64]; std::snprintf(buf, sizeof(buf), "%f", val); return string(buf);
+}
+
+// stoi / stol / stof / stod
+inline int stoi(const string& s, size_t* pos = nullptr, int base = 10) {
+    char* end = nullptr;
+    long r = std::strtol(s.c_str(), &end, base);
+    if (pos) *pos = static_cast<size_t>(end - s.c_str());
+    return static_cast<int>(r);
+}
+inline long stol(const string& s, size_t* pos = nullptr, int base = 10) {
+    char* end = nullptr;
+    long r = std::strtol(s.c_str(), &end, base);
+    if (pos) *pos = static_cast<size_t>(end - s.c_str());
+    return r;
+}
+inline float stof(const string& s) { return std::strtof(s.c_str(), nullptr); }
+inline double stod(const string& s) { return std::strtod(s.c_str(), nullptr); }
+
+// hash specialization
+template<> struct hash<string> {
+    size_t operator()(const string& s) const noexcept {
+        return hash<string_view>{}(string_view(s.data(), s.size()));
+    }
+};
+
+// getline stub (Skia doesn't use IO but might need the symbol)
+// inline string& getline(...) — not provided
+
+} // namespace std
+
+#endif

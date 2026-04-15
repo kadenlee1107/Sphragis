@@ -1,0 +1,10 @@
+#ifndef _BAT_CSTDARG
+#define _BAT_CSTDARG
+
+#include <stdarg.h>
+
+namespace std {
+    using ::va_list;
+}
+
+#endif

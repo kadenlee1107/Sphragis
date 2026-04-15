@@ -1,0 +1,223 @@
+#ifndef _BAT_CHRONO
+#define _BAT_CHRONO
+
+#include <cstdint>
+#include <ratio>
+#include <type_traits>
+
+namespace std {
+namespace chrono {
+
+// duration
+template<class Rep, class Period = ratio<1>>
+class duration {
+public:
+    using rep    = Rep;
+    using period = Period;
+
+    constexpr duration() : count_(0) {}
+    constexpr explicit duration(const Rep& r) : count_(r) {}
+
+    template<class Rep2, class Period2>
+    constexpr duration(const duration<Rep2, Period2>& d)
+        : count_(static_cast<Rep>(d.count() * (static_cast<long long>(Period2::num) * Period::den)
+                                             / (static_cast<long long>(Period2::den) * Period::num))) {}
+
+    constexpr Rep count() const { return count_; }
+
+    constexpr duration operator+() const { return *this; }
+    constexpr duration operator-() const { return duration(-count_); }
+
+    duration& operator++() { ++count_; return *this; }
+    duration  operator++(int) { auto tmp = *this; ++count_; return tmp; }
+    duration& operator--() { --count_; return *this; }
+    duration  operator--(int) { auto tmp = *this; --count_; return tmp; }
+
+    duration& operator+=(const duration& d) { count_ += d.count_; return *this; }
+    duration& operator-=(const duration& d) { count_ -= d.count_; return *this; }
+    duration& operator*=(const Rep& r) { count_ *= r; return *this; }
+    duration& operator/=(const Rep& r) { count_ /= r; return *this; }
+    duration& operator%=(const Rep& r) { count_ %= r; return *this; }
+    duration& operator%=(const duration& d) { count_ %= d.count_; return *this; }
+
+    static constexpr duration zero() { return duration(0); }
+    static constexpr duration min() { return duration(Rep(-1) < Rep(0) ? Rep(-1) : Rep(0)); }
+    static constexpr duration max() { return duration(Rep(-1) < Rep(0) ? Rep(0x7FFFFFFFFFFFFFFFLL) : Rep(-1)); }
+
+private:
+    Rep count_;
+};
+
+// duration arithmetic
+template<class R1, class P1, class R2, class P2>
+constexpr auto operator+(const duration<R1, P1>& a, const duration<R2, P2>& b) {
+    using CD = duration<long long, ratio<1>>;
+    return CD(CD(a).count() + CD(b).count());
+}
+
+template<class R1, class P1, class R2, class P2>
+constexpr auto operator-(const duration<R1, P1>& a, const duration<R2, P2>& b) {
+    using CD = duration<long long, ratio<1>>;
+    return CD(CD(a).count() - CD(b).count());
+}
+
+template<class R1, class P1, class Rep2>
+constexpr duration<R1, P1> operator*(const duration<R1, P1>& d, const Rep2& s) {
+    return duration<R1, P1>(d.count() * s);
+}
+
+template<class Rep1, class R2, class P2>
+constexpr duration<R2, P2> operator*(const Rep1& s, const duration<R2, P2>& d) {
+    return duration<R2, P2>(s * d.count());
+}
+
+template<class R1, class P1, class Rep2>
+constexpr duration<R1, P1> operator/(const duration<R1, P1>& d, const Rep2& s) {
+    return duration<R1, P1>(d.count() / s);
+}
+
+// duration comparisons
+template<class R1, class P1, class R2, class P2>
+constexpr bool operator==(const duration<R1, P1>& a, const duration<R2, P2>& b) {
+    using CD = duration<long long, ratio<1>>;
+    return CD(a).count() == CD(b).count();
+}
+
+template<class R1, class P1, class R2, class P2>
+constexpr bool operator!=(const duration<R1, P1>& a, const duration<R2, P2>& b) { return !(a == b); }
+
+template<class R1, class P1, class R2, class P2>
+constexpr bool operator<(const duration<R1, P1>& a, const duration<R2, P2>& b) {
+    using CD = duration<long long, ratio<1>>;
+    return CD(a).count() < CD(b).count();
+}
+
+template<class R1, class P1, class R2, class P2>
+constexpr bool operator<=(const duration<R1, P1>& a, const duration<R2, P2>& b) { return !(b < a); }
+
+template<class R1, class P1, class R2, class P2>
+constexpr bool operator>(const duration<R1, P1>& a, const duration<R2, P2>& b) { return b < a; }
+
+template<class R1, class P1, class R2, class P2>
+constexpr bool operator>=(const duration<R1, P1>& a, const duration<R2, P2>& b) { return !(a < b); }
+
+// duration_cast
+template<class ToDuration, class Rep, class Period>
+constexpr ToDuration duration_cast(const duration<Rep, Period>& d) {
+    using ToRep = typename ToDuration::rep;
+    using ToPeriod = typename ToDuration::period;
+    return ToDuration(static_cast<ToRep>(
+        d.count() * static_cast<long long>(Period::num) * ToPeriod::den
+                   / (static_cast<long long>(Period::den) * ToPeriod::num)
+    ));
+}
+
+// Common duration types
+using nanoseconds  = duration<long long, nano>;
+using microseconds = duration<long long, micro>;
+using milliseconds = duration<long long, milli>;
+using seconds      = duration<long long>;
+using minutes      = duration<long long, ratio<60>>;
+using hours        = duration<long long, ratio<3600>>;
+
+// time_point
+template<class Clock, class Duration = typename Clock::duration>
+class time_point {
+public:
+    using clock    = Clock;
+    using duration_t = Duration;
+    using rep      = typename Duration::rep;
+    using period   = typename Duration::period;
+
+    constexpr time_point() : d_(Duration::zero()) {}
+    constexpr explicit time_point(const Duration& d) : d_(d) {}
+
+    template<class Duration2>
+    constexpr time_point(const time_point<Clock, Duration2>& t)
+        : d_(t.time_since_epoch()) {}
+
+    constexpr Duration time_since_epoch() const { return d_; }
+
+    time_point& operator+=(const Duration& d) { d_ += d; return *this; }
+    time_point& operator-=(const Duration& d) { d_ -= d; return *this; }
+
+    static constexpr time_point min() { return time_point(Duration::min()); }
+    static constexpr time_point max() { return time_point(Duration::max()); }
+
+private:
+    Duration d_;
+};
+
+template<class C, class D1, class D2>
+constexpr auto operator-(const time_point<C, D1>& a, const time_point<C, D2>& b) {
+    return a.time_since_epoch() - b.time_since_epoch();
+}
+
+template<class C, class D1, class R2, class P2>
+constexpr auto operator+(const time_point<C, D1>& t, const duration<R2, P2>& d) {
+    return time_point<C, D1>(t.time_since_epoch() + d);
+}
+
+template<class C, class D1, class R2, class P2>
+constexpr auto operator-(const time_point<C, D1>& t, const duration<R2, P2>& d) {
+    return time_point<C, D1>(t.time_since_epoch() - d);
+}
+
+template<class C, class D1, class D2>
+constexpr bool operator==(const time_point<C, D1>& a, const time_point<C, D2>& b) {
+    return a.time_since_epoch() == b.time_since_epoch();
+}
+template<class C, class D1, class D2>
+constexpr bool operator!=(const time_point<C, D1>& a, const time_point<C, D2>& b) { return !(a == b); }
+template<class C, class D1, class D2>
+constexpr bool operator<(const time_point<C, D1>& a, const time_point<C, D2>& b) {
+    return a.time_since_epoch() < b.time_since_epoch();
+}
+template<class C, class D1, class D2>
+constexpr bool operator<=(const time_point<C, D1>& a, const time_point<C, D2>& b) { return !(b < a); }
+template<class C, class D1, class D2>
+constexpr bool operator>(const time_point<C, D1>& a, const time_point<C, D2>& b) { return b < a; }
+template<class C, class D1, class D2>
+constexpr bool operator>=(const time_point<C, D1>& a, const time_point<C, D2>& b) { return !(a < b); }
+
+// Clocks — minimal stubs
+struct steady_clock {
+    using rep        = long long;
+    using period     = nano;
+    using duration   = chrono::nanoseconds;
+    using time_point = chrono::time_point<steady_clock>;
+    static constexpr bool is_steady = true;
+
+    static time_point now() noexcept {
+        // Stub — returns epoch. Real impl would use __builtin_readcyclecounter or similar
+        return time_point(duration(0));
+    }
+};
+
+struct system_clock {
+    using rep        = long long;
+    using period     = nano;
+    using duration   = chrono::nanoseconds;
+    using time_point = chrono::time_point<system_clock>;
+    static constexpr bool is_steady = false;
+
+    static time_point now() noexcept {
+        return time_point(duration(0));
+    }
+};
+
+using high_resolution_clock = steady_clock;
+
+} // namespace chrono
+
+// Bring duration types into std for convenience
+using chrono::nanoseconds;
+using chrono::microseconds;
+using chrono::milliseconds;
+using chrono::seconds;
+using chrono::minutes;
+using chrono::hours;
+
+} // namespace std
+
+#endif

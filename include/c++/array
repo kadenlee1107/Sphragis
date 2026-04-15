@@ -1,0 +1,93 @@
+#ifndef _BAT_ARRAY
+#define _BAT_ARRAY
+
+#include <cstddef>
+#include <cstdlib>
+#include <type_traits>
+#include <utility>
+#include <iterator>
+
+namespace std {
+
+template<class T, size_t N>
+struct array {
+    using value_type      = T;
+    using size_type       = size_t;
+    using difference_type = ptrdiff_t;
+    using reference       = T&;
+    using const_reference = const T&;
+    using pointer         = T*;
+    using const_pointer   = const T*;
+    using iterator        = T*;
+    using const_iterator  = const T*;
+
+    T _data[N > 0 ? N : 1];
+
+    constexpr reference       at(size_type i)       { if (i >= N) abort(); return _data[i]; }
+    constexpr const_reference at(size_type i) const { if (i >= N) abort(); return _data[i]; }
+
+    constexpr reference       operator[](size_type i)       { return _data[i]; }
+    constexpr const_reference operator[](size_type i) const { return _data[i]; }
+
+    constexpr reference       front()       { return _data[0]; }
+    constexpr const_reference front() const { return _data[0]; }
+    constexpr reference       back()        { return _data[N - 1]; }
+    constexpr const_reference back()  const { return _data[N - 1]; }
+
+    constexpr pointer       data()       noexcept { return _data; }
+    constexpr const_pointer data() const noexcept { return _data; }
+
+    constexpr iterator       begin()        noexcept { return _data; }
+    constexpr const_iterator begin()  const noexcept { return _data; }
+    constexpr const_iterator cbegin() const noexcept { return _data; }
+    constexpr iterator       end()          noexcept { return _data + N; }
+    constexpr const_iterator end()    const noexcept { return _data + N; }
+    constexpr const_iterator cend()   const noexcept { return _data + N; }
+
+    constexpr bool      empty()    const noexcept { return N == 0; }
+    constexpr size_type size()     const noexcept { return N; }
+    constexpr size_type max_size() const noexcept { return N; }
+
+    void fill(const T& value) {
+        for (size_t i = 0; i < N; ++i) _data[i] = value;
+    }
+
+    void swap(array& other) noexcept {
+        for (size_t i = 0; i < N; ++i)
+            std::swap(_data[i], other._data[i]);
+    }
+};
+
+template<class T, size_t N>
+bool operator==(const array<T,N>& a, const array<T,N>& b) {
+    for (size_t i = 0; i < N; ++i)
+        if (!(a[i] == b[i])) return false;
+    return true;
+}
+
+template<class T, size_t N>
+bool operator!=(const array<T,N>& a, const array<T,N>& b) { return !(a == b); }
+
+// Forward declare tuple_size / tuple_element primary templates
+template<class T> struct tuple_size;
+template<size_t I, class T> struct tuple_element;
+
+// tuple_size / tuple_element for array (for structured bindings)
+template<class T, size_t N>
+struct tuple_size<array<T, N>> : integral_constant<size_t, N> {};
+
+template<size_t I, class T, size_t N>
+struct tuple_element<I, array<T, N>> { using type = T; };
+
+template<size_t I, class T, size_t N>
+constexpr T& get(array<T, N>& a) noexcept { return a[I]; }
+
+template<size_t I, class T, size_t N>
+constexpr const T& get(const array<T, N>& a) noexcept { return a[I]; }
+
+template<size_t I, class T, size_t N>
+constexpr T&& get(array<T, N>&& a) noexcept { return std::move(a[I]); }
+
+} // namespace std
+
+#endif

@@ -115,6 +115,10 @@ fn execute(cmd: &str) {
         "hello_libc" | "libc" => cmd_run_elf("libc"),
         "threads" => cmd_run_elf("threads"),
         "netsurf" => cmd_run_elf("netsurf"),
+        "freetype" | "ft" => cmd_run_elf("freetype"),
+        "png" => cmd_run_elf("png"),
+        "posix" => cmd_run_elf("posix"),
+        "cxx" | "c++" => cmd_run_elf("cxx"),
         "" => {}
         _ => {
             console::puts("  unknown command: ");
@@ -909,14 +913,24 @@ fn cmd_run_elf(name: &str) {
     uart::puts(name);
     uart::puts("\n");
 
-    // BatCave path for NetSurf — uses EL0 with proper MMU
-    if name == "netsurf" {
-        let data = crate::batcave::linux::runner::netsurf_test_elf();
-        uart::puts("[shell] using BatCave EL0 runner for NetSurf\n");
+    // BatCave EL0 runner — all static-PIE binaries go through here
+    let batcave_names = ["netsurf", "freetype", "png", "posix", "cxx"];
+    let use_batcave = batcave_names.iter().any(|&n| n == name);
+
+    if use_batcave {
+        let data = match name {
+            "netsurf" => crate::batcave::linux::runner::netsurf_test_elf(),
+            "freetype" => crate::batcave::linux::runner::freetype_test_elf(),
+            "png" => crate::batcave::linux::runner::png_test_elf(),
+            "posix" => crate::batcave::linux::runner::posix_test_elf(),
+            "cxx" => crate::batcave::linux::runner::cxx_test_elf(),
+            _ => crate::batcave::linux::runner::netsurf_test_elf(),
+        };
+        uart::puts("[shell] using BatCave EL0 runner\n");
         match crate::batcave::linux::loader::load_elf(data) {
             Ok(entry) => {
                 uart::puts("[shell] loaded, running via BatCave...\n");
-                if let Err(e) = crate::batcave::linux::loader::execute_with_args(entry, &["netsurf_css_test"]) {
+                if let Err(e) = crate::batcave::linux::loader::execute_with_args(entry, &[name]) {
                     console::puts("  Error: ");
                     console::puts(e);
                     console::puts("\n");
@@ -937,6 +951,14 @@ fn cmd_run_elf(name: &str) {
         crate::batcave::linux::runner::netsurf_test_elf()
     } else if name == "threads" {
         crate::batcave::linux::runner::hello_threads_elf()
+    } else if name == "freetype" {
+        crate::batcave::linux::runner::freetype_test_elf()
+    } else if name == "png" {
+        crate::batcave::linux::runner::png_test_elf()
+    } else if name == "posix" {
+        crate::batcave::linux::runner::posix_test_elf()
+    } else if name == "cxx" {
+        crate::batcave::linux::runner::cxx_test_elf()
     } else {
         crate::batcave::linux::runner::hello_elf()
     };

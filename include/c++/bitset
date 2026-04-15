@@ -1,0 +1,167 @@
+#ifndef _BAT_BITSET
+#define _BAT_BITSET
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
+namespace std {
+
+template<size_t N>
+class bitset {
+    static constexpr size_t BITS_PER_WORD = 64;
+    static constexpr size_t NUM_WORDS = (N + BITS_PER_WORD - 1) / BITS_PER_WORD;
+
+    uint64_t words_[NUM_WORDS > 0 ? NUM_WORDS : 1];
+
+    static constexpr size_t word_index(size_t pos) { return pos / BITS_PER_WORD; }
+    static constexpr uint64_t bit_mask(size_t pos) { return uint64_t(1) << (pos % BITS_PER_WORD); }
+
+    // Mask off unused bits in the highest word
+    void trim() {
+        constexpr size_t extra = N % BITS_PER_WORD;
+        if constexpr (extra != 0) {
+            words_[NUM_WORDS - 1] &= (uint64_t(1) << extra) - 1;
+        }
+    }
+
+public:
+    // Reference proxy
+    class reference {
+        uint64_t& word_;
+        uint64_t  mask_;
+    public:
+        reference(uint64_t& w, uint64_t m) : word_(w), mask_(m) {}
+        reference& operator=(bool val) { if (val) word_ |= mask_; else word_ &= ~mask_; return *this; }
+        reference& operator=(const reference& r) { return *this = bool(r); }
+        operator bool() const { return (word_ & mask_) != 0; }
+        bool operator~() const { return !bool(*this); }
+        reference& flip() { word_ ^= mask_; return *this; }
+    };
+
+    // Constructors
+    constexpr bitset() : words_{} {}
+    constexpr bitset(unsigned long long val) : words_{} {
+        words_[0] = val;
+        trim();
+    }
+
+    // Element access
+    bool operator[](size_t pos) const { return test(pos); }
+    reference operator[](size_t pos) { return reference(words_[word_index(pos)], bit_mask(pos)); }
+
+    bool test(size_t pos) const { return (words_[word_index(pos)] & bit_mask(pos)) != 0; }
+
+    // Modifiers
+    bitset& set() {
+        for (size_t i = 0; i < NUM_WORDS; ++i) words_[i] = ~uint64_t(0);
+        trim();
+        return *this;
+    }
+    bitset& set(size_t pos, bool val = true) {
+        if (val) words_[word_index(pos)] |= bit_mask(pos);
+        else words_[word_index(pos)] &= ~bit_mask(pos);
+        return *this;
+    }
+    bitset& reset() {
+        for (size_t i = 0; i < NUM_WORDS; ++i) words_[i] = 0;
+        return *this;
+    }
+    bitset& reset(size_t pos) {
+        words_[word_index(pos)] &= ~bit_mask(pos);
+        return *this;
+    }
+    bitset& flip() {
+        for (size_t i = 0; i < NUM_WORDS; ++i) words_[i] = ~words_[i];
+        trim();
+        return *this;
+    }
+    bitset& flip(size_t pos) {
+        words_[word_index(pos)] ^= bit_mask(pos);
+        return *this;
+    }
+
+    // Observers
+    constexpr size_t size() const noexcept { return N; }
+
+    size_t count() const noexcept {
+        size_t c = 0;
+        for (size_t i = 0; i < NUM_WORDS; ++i)
+            c += static_cast<size_t>(__builtin_popcountll(words_[i]));
+        return c;
+    }
+
+    bool all() const noexcept { return count() == N; }
+    bool any() const noexcept { return count() > 0; }
+    bool none() const noexcept { return count() == 0; }
+
+    unsigned long to_ulong() const { return static_cast<unsigned long>(words_[0]); }
+    unsigned long long to_ullong() const { return words_[0]; }
+
+    // Bitwise operators
+    bitset operator~() const { bitset r = *this; r.flip(); return r; }
+
+    bitset& operator&=(const bitset& o) {
+        for (size_t i = 0; i < NUM_WORDS; ++i) words_[i] &= o.words_[i];
+        return *this;
+    }
+    bitset& operator|=(const bitset& o) {
+        for (size_t i = 0; i < NUM_WORDS; ++i) words_[i] |= o.words_[i];
+        return *this;
+    }
+    bitset& operator^=(const bitset& o) {
+        for (size_t i = 0; i < NUM_WORDS; ++i) words_[i] ^= o.words_[i];
+        return *this;
+    }
+
+    bitset operator&(const bitset& o) const { bitset r = *this; r &= o; return r; }
+    bitset operator|(const bitset& o) const { bitset r = *this; r |= o; return r; }
+    bitset operator^(const bitset& o) const { bitset r = *this; r ^= o; return r; }
+
+    bitset& operator<<=(size_t shift) {
+        if (shift >= N) { reset(); return *this; }
+        size_t word_shift = shift / BITS_PER_WORD;
+        size_t bit_shift  = shift % BITS_PER_WORD;
+        for (size_t i = NUM_WORDS; i-- > 0;) {
+            if (i >= word_shift) {
+                words_[i] = words_[i - word_shift] << bit_shift;
+                if (bit_shift && i > word_shift)
+                    words_[i] |= words_[i - word_shift - 1] >> (BITS_PER_WORD - bit_shift);
+            } else {
+                words_[i] = 0;
+            }
+        }
+        trim();
+        return *this;
+    }
+
+    bitset& operator>>=(size_t shift) {
+        if (shift >= N) { reset(); return *this; }
+        size_t word_shift = shift / BITS_PER_WORD;
+        size_t bit_shift  = shift % BITS_PER_WORD;
+        for (size_t i = 0; i < NUM_WORDS; ++i) {
+            if (i + word_shift < NUM_WORDS) {
+                words_[i] = words_[i + word_shift] >> bit_shift;
+                if (bit_shift && i + word_shift + 1 < NUM_WORDS)
+                    words_[i] |= words_[i + word_shift + 1] << (BITS_PER_WORD - bit_shift);
+            } else {
+                words_[i] = 0;
+            }
+        }
+        return *this;
+    }
+
+    bitset operator<<(size_t shift) const { bitset r = *this; r <<= shift; return r; }
+    bitset operator>>(size_t shift) const { bitset r = *this; r >>= shift; return r; }
+
+    bool operator==(const bitset& o) const {
+        for (size_t i = 0; i < NUM_WORDS; ++i)
+            if (words_[i] != o.words_[i]) return false;
+        return true;
+    }
+    bool operator!=(const bitset& o) const { return !(*this == o); }
+};
+
+} // namespace std
+
+#endif

@@ -1,0 +1,125 @@
+#ifndef _BAT_CMATH
+#define _BAT_CMATH
+
+#include <math.h>
+
+namespace std {
+    using ::sin;
+    using ::cos;
+    using ::tan;
+    using ::asin;
+    using ::acos;
+    using ::atan;
+    using ::atan2;
+    using ::sinh;
+    using ::cosh;
+    using ::tanh;
+    using ::sqrt;
+    using ::cbrt;
+    using ::pow;
+    using ::exp;
+    using ::exp2;
+    using ::log;
+    using ::log2;
+    using ::log10;
+    using ::fabs;
+    using ::floor;
+    using ::ceil;
+    using ::round;
+    using ::trunc;
+    using ::fmod;
+    using ::remainder;
+    using ::copysign;
+    using ::nextafter;
+    using ::fmin;
+    using ::fmax;
+    using ::ldexp;
+    using ::frexp;
+    using ::modf;
+    using ::hypot;
+    using ::scalbn;
+    using ::fma;
+    using ::fmaf;
+    using ::lrint;
+    using ::lrintf;
+    using ::fminf;
+    using ::fmaxf;
+    using ::rint;
+    using ::copysignf;
+
+    // nan() function — not the NAN macro
+    using ::nan;
+    using ::nanf;
+
+    // Classification — undefine C macros and provide C++ function overloads
+} // close namespace std temporarily
+
+#undef isnan
+#undef isinf
+#undef isfinite
+#undef signbit
+#undef isnormal
+#undef fpclassify
+
+namespace std {
+    inline bool isnan(float x)       { return __builtin_isnan(x); }
+    inline bool isnan(double x)      { return __builtin_isnan(x); }
+    inline bool isnan(long double x) { return __builtin_isnan(x); }
+    inline bool isinf(float x)       { return __builtin_isinf(x); }
+    inline bool isinf(double x)      { return __builtin_isinf(x); }
+    inline bool isinf(long double x) { return __builtin_isinf(x); }
+    inline bool isfinite(float x)    { return __builtin_isfinite(x); }
+    inline bool isfinite(double x)   { return __builtin_isfinite(x); }
+    inline bool isfinite(long double x){ return __builtin_isfinite(x); }
+    inline bool signbit(float x)     { return __builtin_signbit(x); }
+    inline bool signbit(double x)    { return __builtin_signbit(x); }
+    inline bool signbit(long double x){ return __builtin_signbit(x); }
+    inline bool isnormal(float x)    { return __builtin_isnormal(x); }
+    inline bool isnormal(double x)   { return __builtin_isnormal(x); }
+
+    inline float       abs(float x)       { return ::fabsf(x); }
+    inline double      abs(double x)      { return ::fabs(x); }
+    inline long double abs(long double x)  { return ::fabs((double)x); }
+
+    // C++ float overloads (return float for float input)
+    inline float sqrt(float x)  { return ::sqrtf(x); }
+    inline float sin(float x)   { return ::sinf(x); }
+    inline float cos(float x)   { return ::cosf(x); }
+    inline float tan(float x)   { return ::tanf(x); }
+    inline float asin(float x)  { return ::asinf(x); }
+    inline float acos(float x)  { return ::acosf(x); }
+    inline float atan(float x)  { return ::atanf(x); }
+    inline float atan2(float y, float x) { return ::atan2f(y, x); }
+    inline float log(float x)   { return ::logf(x); }
+    inline float log2(float x)  { return ::log2f(x); }
+    inline float log10(float x) { return ::log10f(x); }
+    inline float exp(float x)   { return ::expf(x); }
+    inline float exp2(float x)  { return ::exp2f(x); }
+    inline float pow(float x, float y) { return ::powf(x, y); }
+    inline float floor(float x) { return ::floorf(x); }
+    inline float ceil(float x)  { return ::ceilf(x); }
+    inline float round(float x) { return ::roundf(x); }
+    inline float trunc(float x) { return ::truncf(x); }
+    inline float fabs(float x)  { return ::fabsf(x); }
+    inline float fmod(float x, float y) { return ::fmodf(x, y); }
+    inline float copysign(float x, float y) { return ::copysignf(x, y); }
+    inline float fmin(float x, float y) { return ::fminf(x, y); }
+    inline float fmax(float x, float y) { return ::fmaxf(x, y); }
+    inline float hypot(float x, float y) { return ::hypotf(x, y); }
+
+    inline float       sinf(float x)      { return ::sinf(x); }
+    inline float       cosf(float x)      { return ::cosf(x); }
+    inline float       sqrtf(float x)     { return ::sqrtf(x); }
+    inline float       floorf(float x)    { return ::floorf(x); }
+    inline float       ceilf(float x)     { return ::ceilf(x); }
+    inline float       roundf(float x)    { return ::roundf(x); }
+    inline float       truncf(float x)    { return ::truncf(x); }
+    inline float       fabsf(float x)     { return ::fabsf(x); }
+    inline float       powf(float b, float e) { return ::powf(b, e); }
+    inline float       logf(float x)      { return ::logf(x); }
+    inline float       log2f(float x)     { return ::log2f(x); }
+    inline float       expf(float x)      { return ::expf(x); }
+    inline float       fmodf(float x, float y) { return ::fmodf(x, y); }
+}
+
+#endif

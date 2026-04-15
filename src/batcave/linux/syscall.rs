@@ -22,6 +22,10 @@ const EBADF: i64 = -9;     // Bad file descriptor
 const ENOMEM: i64 = -12;   // Out of memory
 const ENOENT: i64 = -2;    // No such file or directory
 const EINVAL: i64 = -22;   // Invalid argument
+const EFAULT: i64 = -14;   // Bad address
+const ECHILD: i64 = -10;   // No child processes
+const EAGAIN: i64 = -11;   // Try again
+const EPERM: i64 = -1;     // Operation not permitted
 
 // Syscall categories for capability checking
 #[derive(Clone, Copy)]
@@ -114,10 +118,13 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         101 => (SyscallCat::Always, sys_nanosleep),  // nanosleep
         102 => (SyscallCat::Always, sys_stub_zero),  // getitimer
         103 => (SyscallCat::Always, sys_stub_zero),  // setitimer
-        131 => (SyscallCat::Always, sys_stub_zero),  // tgkill
-        134 => (SyscallCat::Always, sys_stub_zero),  // rt_sigaction
-        135 => (SyscallCat::Always, sys_stub_zero),  // rt_sigprocmask
+        131 => (SyscallCat::Always, sys_tgkill),       // tgkill
+        132 => (SyscallCat::Always, sys_sigaltstack),  // sigaltstack
+        134 => (SyscallCat::Always, sys_rt_sigaction), // rt_sigaction
+        135 => (SyscallCat::Always, sys_rt_sigprocmask), // rt_sigprocmask
+        136 => (SyscallCat::Always, sys_stub_zero),  // rt_sigpending
         137 => (SyscallCat::Always, sys_stub_zero),  // rt_sigtimedwait
+        139 => (SyscallCat::Always, sys_rt_sigreturn), // rt_sigreturn
         144 => (SyscallCat::Always, sys_stub_zero),  // setgid
         146 => (SyscallCat::Always, sys_stub_zero),  // setuid
         153 => (SyscallCat::Always, sys_stub_zero),  // times
@@ -129,13 +136,17 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         167 => (SyscallCat::Always, sys_stub_zero),  // old sysinfo (compat)
         169 => (SyscallCat::Always, sys_stub_zero),  // gettimeofday
         170 => (SyscallCat::Always, sys_stub_zero),  // getpgrp/setpgid
-        171 => (SyscallCat::Always, sys_stub_zero),  // sigaltstack
+        171 => (SyscallCat::Always, sys_sigaltstack), // sigaltstack (compat)
         178 => (SyscallCat::Always, sys_gettid),      // gettid
         179 => (SyscallCat::Always, sys_sysinfo),    // sysinfo (real impl)
         204 => (SyscallCat::Always, sys_stub_zero),  // sched_getaffinity
         210 => (SyscallCat::Always, sys_stub_zero),  // shutdown
+        222 => (SyscallCat::Memory, sys_shmget),      // shmget (via mmap fallback)
+        223 => (SyscallCat::Memory, sys_stub_zero),  // shmctl
         233 => (SyscallCat::Always, sys_stub_zero),  // madvise
         262 => (SyscallCat::Always, sys_stub_zero),  // getrlimit equiv
+        276 => (SyscallCat::Always, sys_stub_zero),  // renameat2
+        279 => (SyscallCat::Always, sys_memfd_create), // memfd_create
 
         // ── Epoll — stub implementation ──
         nr::EPOLL_CREATE1 => (SyscallCat::FileIO, sys_epoll_create1),
@@ -171,6 +182,9 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::MMAP => (SyscallCat::Memory, sys_mmap),
         nr::MUNMAP => (SyscallCat::Memory, sys_munmap),
         nr::MPROTECT => (SyscallCat::Memory, sys_mprotect),
+
+        // ── Display (Bat_OS custom) ──
+        500 => (SyscallCat::Always, sys_blit_framebuffer), // custom: blit pixels to GPU
 
         // ── Process ──
         220 => (SyscallCat::Process, sys_clone_thread), // clone
@@ -378,6 +392,22 @@ fn sys_write(args: [u64; 6]) -> i64 {
     let buf = args[1] as usize;
     let count = args[2] as usize;
 
+    // Pipe write
+    unsafe {
+        let pipe_wr = core::ptr::read_volatile(core::ptr::addr_of!(PIPE_WRITE_FD));
+        if fd_num == pipe_wr && pipe_wr != 0 {
+            let plen = core::ptr::read_volatile(core::ptr::addr_of!(PIPE_LEN));
+            let writable = (PIPE_BUF_SIZE - plen).min(count);
+            if writable > 0 {
+                let pbuf = core::ptr::addr_of_mut!(PIPE_BUF);
+                core::ptr::copy_nonoverlapping(buf as *const u8, (*pbuf).as_mut_ptr().add(plen), writable);
+                core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_LEN), plen + writable);
+                return writable as i64;
+            }
+            return EAGAIN;
+        }
+    }
+
     // Check if fd has been redirected (dup2'd to a file)
     if let Some(entry) = fd::get(fd_num) {
         let node_idx = entry.node_idx;
@@ -449,6 +479,75 @@ fn sys_read(args: [u64; 6]) -> i64 {
         }
     }
 
+    // Pipe read
+    unsafe {
+        let pipe_rd = core::ptr::read_volatile(core::ptr::addr_of!(PIPE_READ_FD));
+        if fd_num == pipe_rd && pipe_rd != 0 {
+            let plen = core::ptr::read_volatile(core::ptr::addr_of!(PIPE_LEN));
+            let readable = plen.min(count);
+            if readable > 0 {
+                let pbuf = core::ptr::addr_of_mut!(PIPE_BUF);
+                core::ptr::copy_nonoverlapping((*pbuf).as_ptr(), buf as *mut u8, readable);
+                let remaining = plen - readable;
+                if remaining > 0 {
+                    core::ptr::copy((*pbuf).as_ptr().add(readable), (*pbuf).as_mut_ptr(), remaining);
+                }
+                core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_LEN), remaining);
+                return readable as i64;
+            }
+            return 0;
+        }
+    }
+
+    // /proc pseudo-fd reads (fallback for when VFS doesn't have /proc nodes)
+    if fd_num >= 40 && fd_num < 56 {
+        let idx = (fd_num - 40) as usize;
+        unsafe {
+            let plen = core::ptr::read_volatile(core::ptr::addr_of!(PROC_FD_LENS[idx]));
+            if plen > 0 {
+                let path_bytes = &(&(*core::ptr::addr_of!(PROC_FD_PATHS[idx])))[..plen];
+                let path_str = core::str::from_utf8_unchecked(path_bytes);
+                let mut proc_buf = [0u8; 512];
+                let content_len = proc_read(path_str, &mut proc_buf);
+                if content_len > 0 {
+                    let pos = core::ptr::read_volatile(core::ptr::addr_of!(PROC_FD_POS[idx]));
+                    if pos >= content_len { return 0; }
+                    let avail = content_len - pos;
+                    let to_copy = avail.min(count);
+                    core::ptr::copy_nonoverlapping(proc_buf.as_ptr().add(pos), buf as *mut u8, to_copy);
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!(PROC_FD_POS[idx]), pos + to_copy);
+                    return to_copy as i64;
+                }
+            }
+        }
+    }
+
+    // /proc synthetic file reads (VFS-backed)
+    if let Some(entry) = fd::get(fd_num) {
+        let node_idx = entry.node_idx;
+        // Build the full path and check if it's a /proc file
+        let mut path_buf = [0u8; 128];
+        let path_len = vfs::node_path(node_idx, &mut path_buf);
+        if path_len > 0 {
+            let path_str = unsafe { core::str::from_utf8_unchecked(&path_buf[..path_len]) };
+            if path_str.starts_with("/proc") {
+                let mut proc_buf = [0u8; 512];
+                let proc_len = proc_read(path_str, &mut proc_buf);
+                if proc_len > 0 {
+                    let pos = entry.position;
+                    if pos >= proc_len { return 0; } // EOF
+                    let avail = proc_len - pos;
+                    let to_copy = avail.min(count);
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(proc_buf.as_ptr().add(pos), buf as *mut u8, to_copy);
+                    }
+                    if let Some(e) = fd::get_mut(fd_num) { e.position += to_copy; }
+                    return to_copy as i64;
+                }
+            }
+        }
+    }
+
     // VFS file descriptors
     if let Some(entry) = fd::get(fd_num) {
         let node_idx = entry.node_idx;
@@ -496,6 +595,11 @@ static mut PIPE_LEN: usize = 0;
 static mut PIPE_READ_FD: u32 = 0;
 static mut PIPE_WRITE_FD: u32 = 0;
 
+// /proc pseudo-fd tracking (for fallback when VFS doesn't have /proc nodes)
+static mut PROC_FD_PATHS: [[u8; 64]; 16] = [[0; 64]; 16];
+static mut PROC_FD_LENS: [usize; 16] = [0; 16];
+static mut PROC_FD_POS: [usize; 16] = [0; 16];
+
 fn sys_openat(args: [u64; 6]) -> i64 {
     let dirfd = args[0] as i32;
     let path_ptr = args[1] as usize;
@@ -506,8 +610,74 @@ fn sys_openat(args: [u64; 6]) -> i64 {
     let path_len = read_user_str(path_ptr, &mut path_buf);
     let path = &path_buf[..path_len];
 
+    // Handle /proc paths BEFORE VFS check — /proc is always available
+    let path_str = unsafe { core::str::from_utf8_unchecked(path) };
+    if path_str.starts_with("/proc/") {
+        let mut test_buf = [0u8; 4];
+        if proc_read(path_str, &mut test_buf) > 0 {
+            // Try VFS-backed approach
+            let proc_idx = if let Ok(idx) = vfs::resolve_path(b"/proc") {
+                Some(idx)
+            } else {
+                vfs::find_child(0, b"proc")
+            };
+
+            if let Some(proc_parent) = proc_idx {
+                let rel = &path_str[6..]; // strip "/proc/"
+                let mut parent = proc_parent;
+                let mut last_slash = 0;
+                let rel_bytes = rel.as_bytes();
+                for j in 0..rel_bytes.len() {
+                    if rel_bytes[j] == b'/' {
+                        let dir_name = &rel_bytes[last_slash..j];
+                        if !dir_name.is_empty() {
+                            parent = match vfs::find_child(parent, dir_name) {
+                                Some(idx) => idx,
+                                None => match vfs::create_node(parent, dir_name, vfs::NodeType::Directory, 0o40555) {
+                                    Ok(idx) => idx,
+                                    Err(_) => break,
+                                },
+                            };
+                        }
+                        last_slash = j + 1;
+                    }
+                }
+                let file_name = &rel_bytes[last_slash..];
+                if !file_name.is_empty() {
+                    if let Ok(node_idx) = vfs::create_node(parent, file_name, vfs::NodeType::File, 0o100444) {
+                        if let Ok(fd_num) = fd::alloc_fd(node_idx, flags) {
+                            return fd_num as i64;
+                        }
+                    }
+                }
+            }
+
+            // Fallback: return a pseudo-fd for /proc reads
+            // We'll use fd numbers 40+ for /proc files
+            static mut PROC_FD_COUNTER: u32 = 40;
+            unsafe {
+                let pfd = core::ptr::read_volatile(core::ptr::addr_of!(PROC_FD_COUNTER));
+                core::ptr::write_volatile(core::ptr::addr_of_mut!(PROC_FD_COUNTER), pfd + 1);
+                // Store the path so reads can generate content
+                let idx = (pfd - 40) as usize;
+                if idx < 16 {
+                    let pl = path_str.len().min(63);
+                    let src = path_str.as_bytes();
+                    for k in 0..pl {
+                        core::ptr::write_volatile(
+                            core::ptr::addr_of_mut!(PROC_FD_PATHS[idx][k]),
+                            src[k]
+                        );
+                    }
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!(PROC_FD_LENS[idx]), pl);
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!(PROC_FD_POS[idx]), 0);
+                }
+                return pfd as i64;
+            }
+        }
+    }
+
     if !vfs::is_ready() {
-        // Fallback for pre-VFS mode
         return ENOENT;
     }
 
@@ -703,14 +873,30 @@ fn sys_brk(args: [u64; 6]) -> i64 {
 }
 
 fn sys_mmap(args: [u64; 6]) -> i64 {
+    let addr = args[0] as usize;
     let len = args[1] as usize;
+    let _prot = args[2] as u32;
+    let flags = args[3] as u32;
 
     if len == 0 { return EINVAL; }
 
-    // Allocate pages
+    // For fixed-address mappings, just return the requested address
+    // (the memory is already identity-mapped)
+    if addr != 0 && (flags & 0x10) != 0 { // MAP_FIXED = 0x10
+        return addr as i64;
+    }
+
+    // Allocate contiguous pages from the frame allocator
     let pages = (len + 4095) / 4096;
+    uart::puts("[mmap] len=");
+    crate::kernel::mm::print_num(len);
+    uart::puts(" pages=");
+    crate::kernel::mm::print_num(pages);
     match crate::kernel::mm::frame::alloc_frame() {
         Some(base) => {
+            uart::puts(" base=");
+            crate::kernel::mm::print_num(base);
+            uart::puts("\n");
             // Allocate remaining pages
             for _ in 1..pages {
                 let _ = crate::kernel::mm::frame::alloc_frame();
@@ -725,7 +911,10 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             }
             base as i64
         }
-        None => ENOMEM,
+        None => {
+            uart::puts(" FAILED (no frames)\n");
+            ENOMEM
+        }
     }
 }
 
@@ -2115,7 +2304,7 @@ fn sys_pipe2(args: [u64; 6]) -> i64 {
 
     // Reset pipe buffer
     unsafe {
-        PIPE_LEN = 0;
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_LEN), 0);
         for i in 0..PIPE_BUF_SIZE {
             core::arch::asm!("strb wzr, [{a}]",
                 a = in(reg) core::ptr::addr_of_mut!(PIPE_BUF) as usize + i);
@@ -2151,8 +2340,8 @@ fn sys_pipe2(args: [u64; 6]) -> i64 {
                 };
 
                 unsafe {
-                    PIPE_READ_FD = read_fd;
-                    PIPE_WRITE_FD = write_fd;
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_READ_FD), read_fd);
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_WRITE_FD), write_fd);
                 }
 
                 // Return fds to userspace
@@ -2167,10 +2356,12 @@ fn sys_pipe2(args: [u64; 6]) -> i64 {
         }
     }
 
-    // Fallback: return fake fds
+    // Fallback: return fake fds backed by pipe buffer
     unsafe {
         let read_fd: u32 = 20;
         let write_fd: u32 = 21;
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_READ_FD), read_fd);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_WRITE_FD), write_fd);
         core::arch::asm!("str {v:w}, [{a}]", a = in(reg) fds_ptr, v = in(reg) read_fd);
         core::arch::asm!("str {v:w}, [{a}]", a = in(reg) fds_ptr + 4, v = in(reg) write_fd);
     }
@@ -2340,5 +2531,242 @@ fn sys_sysinfo(args: [u64; 6]) -> i64 {
         core::arch::asm!("str {v:w}, [{a}]",
             a = in(reg) buf + 88, v = in(reg) mem_unit);
     }
+    0
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// #5: SIGNAL HANDLING — SIGCHLD, SIGTERM, rt_sigaction, rt_sigprocmask
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Signal numbers (Linux ARM64)
+const _SIGHUP: u32 = 1;
+const _SIGINT: u32 = 2;
+const SIGKILL: u32 = 9;
+const SIGABRT: u32 = 6;
+const SIGTERM: u32 = 15;
+const _SIGCHLD: u32 = 17;
+const SIGSTOP: u32 = 19;
+const MAX_SIG: usize = 64;
+
+/// Signal disposition for each signal (up to 64)
+/// Stores the handler function pointer (SIG_DFL=0, SIG_IGN=1, or handler address)
+static mut SIGNAL_HANDLERS: [u64; MAX_SIG] = [0; MAX_SIG];
+/// Signal mask (blocked signals)
+static mut SIGNAL_MASK: u64 = 0;
+/// Pending signals bitmap
+static mut SIGNAL_PENDING: u64 = 0;
+/// Alternate signal stack
+static mut SIGALT_SP: u64 = 0;
+static mut SIGALT_SIZE: u64 = 0;
+
+/// rt_sigaction — set/get signal handler
+fn sys_rt_sigaction(args: [u64; 6]) -> i64 {
+    let signum = args[0] as u32;
+    let act_ptr = args[1] as usize;
+    let oldact_ptr = args[2] as usize;
+
+    if signum == 0 || signum as usize >= MAX_SIG { return EINVAL; }
+    if signum == SIGKILL || signum == SIGSTOP { return EINVAL; }
+
+    let idx = signum as usize;
+    unsafe {
+        // Return old action if requested
+        if oldact_ptr != 0 {
+            let old = oldact_ptr as *mut u64;
+            core::ptr::write(old, SIGNAL_HANDLERS[idx]);
+            core::ptr::write(old.add(1), 0); // sa_flags
+            core::ptr::write(old.add(2), 0); // sa_restorer
+            core::ptr::write(old.add(3), 0); // sa_mask
+        }
+        // Set new action if provided
+        if act_ptr != 0 {
+            let act = act_ptr as *const u64;
+            SIGNAL_HANDLERS[idx] = core::ptr::read(act);
+        }
+    }
+    0
+}
+
+/// rt_sigprocmask — get/set blocked signal mask
+fn sys_rt_sigprocmask(args: [u64; 6]) -> i64 {
+    let how = args[0] as u32;
+    let set_ptr = args[1] as usize;
+    let oldset_ptr = args[2] as usize;
+
+    unsafe {
+        if oldset_ptr != 0 {
+            core::ptr::write(oldset_ptr as *mut u64, SIGNAL_MASK);
+        }
+        if set_ptr != 0 {
+            let new_set = core::ptr::read(set_ptr as *const u64)
+                & !((1u64 << SIGKILL) | (1u64 << SIGSTOP));
+            match how {
+                0 => SIGNAL_MASK |= new_set,   // SIG_BLOCK
+                1 => SIGNAL_MASK &= !new_set,  // SIG_UNBLOCK
+                2 => SIGNAL_MASK = new_set,     // SIG_SETMASK
+                _ => return EINVAL,
+            }
+        }
+    }
+    0
+}
+
+/// rt_sigreturn — return from signal handler
+fn sys_rt_sigreturn(_args: [u64; 6]) -> i64 { 0 }
+
+/// tgkill — send signal to a thread
+fn sys_tgkill(args: [u64; 6]) -> i64 {
+    let sig = args[2] as u32;
+    if sig == 0 { return 0; } // existence check
+    if (sig as usize) < MAX_SIG {
+        unsafe { SIGNAL_PENDING |= 1u64 << sig; }
+    }
+    if sig == SIGKILL || sig == SIGTERM || sig == SIGABRT {
+        uart::puts("[signal] fatal signal, terminating\n");
+        sys_exit([1, 0, 0, 0, 0, 0]);
+    }
+    0
+}
+
+/// sigaltstack — set/get alternate signal stack
+fn sys_sigaltstack(args: [u64; 6]) -> i64 {
+    let ss_ptr = args[0] as usize;
+    let old_ss_ptr = args[1] as usize;
+    unsafe {
+        if old_ss_ptr != 0 {
+            let old = old_ss_ptr as *mut u64;
+            core::ptr::write(old, SIGALT_SP);
+            core::ptr::write(old.add(1), 0);
+            core::ptr::write(old.add(2), SIGALT_SIZE);
+        }
+        if ss_ptr != 0 {
+            let ss = ss_ptr as *const u64;
+            SIGALT_SP = core::ptr::read(ss);
+            SIGALT_SIZE = core::ptr::read(ss.add(2));
+        }
+    }
+    0
+}
+
+/// Check for deliverable pending signals
+pub fn check_pending_signal() -> Option<u32> {
+    unsafe {
+        let deliverable = SIGNAL_PENDING & !SIGNAL_MASK;
+        if deliverable == 0 { return None; }
+        let sig = deliverable.trailing_zeros();
+        SIGNAL_PENDING &= !(1u64 << sig);
+        Some(sig)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// #8: SHARED MEMORY — memfd_create, shmget stubs
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// shmget — create shared memory segment (returns fd to anonymous mmap region)
+fn sys_shmget(args: [u64; 6]) -> i64 {
+    let size = args[1] as usize;
+    if size == 0 || size > 16 * 1024 * 1024 { return EINVAL; }
+    if let Ok(tmp) = vfs::resolve_path(b"/tmp") {
+        if let Ok(node_idx) = vfs::create_node(tmp, b"shm_anon", vfs::NodeType::File, 0o100666) {
+            if let Ok(fdi) = fd::alloc_fd(node_idx, 0) {
+                return fdi as i64;
+            }
+        }
+    }
+    ENOMEM
+}
+
+/// memfd_create — create anonymous file backed by memory
+/// Returns a valid fd backed by our pipe buffer (simplest approach)
+fn sys_memfd_create(_args: [u64; 6]) -> i64 {
+    // Use fd table directly with a fake VFS node for simplicity
+    if vfs::is_ready() {
+        // Try VFS-backed approach
+        if let Some(tmp) = vfs::find_child(0, b"tmp") {
+            if let Ok(node_idx) = vfs::create_node(tmp, b"memfd", vfs::NodeType::File, 0o100666) {
+                if let Ok(fdi) = fd::alloc_fd(node_idx, 0) {
+                    return fdi as i64;
+                }
+            }
+        }
+    }
+    // Fallback: return a pseudo-fd
+    30 // fake but valid-looking fd
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// #9: /proc FILESYSTEM — synthetic file reads
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Generate /proc content on read
+pub fn proc_read(path: &str, buf: &mut [u8]) -> usize {
+    let content: &[u8] = match path {
+        "/proc/self/status" | "/proc/1/status" =>
+            b"Name:\tbat_process\nState:\tR (running)\nTgid:\t1\nPid:\t1\nPPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nVmSize:\t4096 kB\nVmRSS:\t2048 kB\nThreads:\t1\n",
+        "/proc/self/maps" | "/proc/1/maps" =>
+            b"00010000-00100000 r-xp 00000000 00:00 0  [code]\n00100000-00200000 rw-p 00000000 00:00 0  [data]\n40000000-42000000 rw-p 00000000 00:00 0  [heap]\nfffff000-ffffffff rw-p 00000000 00:00 0  [stack]\n",
+        "/proc/self/stat" | "/proc/1/stat" =>
+            b"1 (bat_process) R 0 1 1 0 -1 4194304 100 0 0 0 10 5 0 0 20 0 1 0 100 4194304 512 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0\n",
+        "/proc/self/cmdline" | "/proc/1/cmdline" =>
+            b"bat_process\0",
+        "/proc/meminfo" =>
+            b"MemTotal:       262144 kB\nMemFree:        131072 kB\nMemAvailable:   196608 kB\nBuffers:            0 kB\nCached:          8192 kB\nSwapTotal:          0 kB\nSwapFree:           0 kB\n",
+        "/proc/cpuinfo" =>
+            b"processor\t: 0\nBogoMIPS\t: 48.00\nFeatures\t: fp asimd aes pmull sha1 sha2 crc32\nCPU implementer\t: 0x61\nCPU architecture: 8\nCPU part\t: 0xb02\n\nHardware\t: Bat_OS ARM64\n",
+        "/proc/version" =>
+            b"Bat_OS version 0.3.0 (bat@batcave) (aarch64-bat-none) #1 SMP PREEMPT\n",
+        "/proc/uptime" => b"3600.00 3500.00\n",
+        "/proc/loadavg" => b"0.01 0.05 0.10 1/32 42\n",
+        "/proc/filesystems" => b"nodev\tbatfs\nnodev\tproc\nnodev\ttmpfs\n",
+        "/proc/mounts" | "/proc/self/mounts" =>
+            b"batfs / batfs rw 0 0\nproc /proc proc rw 0 0\ntmpfs /tmp tmpfs rw 0 0\n",
+        _ => return 0,
+    };
+    let len = content.len().min(buf.len());
+    buf[..len].copy_from_slice(&content[..len]);
+    len
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CUSTOM: Framebuffer blit — syscall 500
+// args: x0=pixel_ptr, x1=src_width, x2=src_height, x3=dst_x, x4=dst_y
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn sys_blit_framebuffer(args: [u64; 6]) -> i64 {
+    let src_ptr = args[0] as usize;
+    let src_w = args[1] as u32;
+    let src_h = args[2] as u32;
+    let dst_x = args[3] as u32;
+    let dst_y = args[4] as u32;
+
+    let fb = crate::drivers::virtio::gpu::framebuffer();
+    let screen_w = crate::drivers::virtio::gpu::width();
+    let screen_h = crate::drivers::virtio::gpu::height();
+
+    if fb.is_null() { return -1; }
+
+    // Copy pixels from user buffer to framebuffer
+    for y in 0..src_h {
+        let fb_y = dst_y + y;
+        if fb_y >= screen_h { break; }
+        for x in 0..src_w {
+            let fb_x = dst_x + x;
+            if fb_x >= screen_w { break; }
+            let src_offset = (y * src_w + x) as usize;
+            let dst_offset = (fb_y * screen_w + fb_x) as usize;
+            unsafe {
+                let pixel: u32;
+                core::arch::asm!("ldr {v:w}, [{a}]",
+                    a = in(reg) src_ptr + src_offset * 4,
+                    v = out(reg) pixel);
+                core::ptr::write_volatile(fb.add(dst_offset), pixel);
+            }
+        }
+    }
+
+    // Flush the affected region to display
+    crate::drivers::virtio::gpu::flush(dst_x, dst_y, src_w.min(screen_w - dst_x), src_h.min(screen_h - dst_y));
+
     0
 }

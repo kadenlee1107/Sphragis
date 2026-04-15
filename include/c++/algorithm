@@ -1,0 +1,494 @@
+#ifndef _BAT_ALGORITHM
+#define _BAT_ALGORITHM
+
+#include <cstddef>
+#include <cstdlib>
+#include <limits>
+#include <utility>
+#include <cstring>
+#include <utility>
+#include <initializer_list>
+
+namespace std {
+
+// min / max
+template<class T>
+constexpr const T& min(const T& a, const T& b) { return (b < a) ? b : a; }
+
+template<class T, class Compare>
+constexpr const T& min(const T& a, const T& b, Compare comp) { return comp(b, a) ? b : a; }
+
+template<class T>
+constexpr T min(initializer_list<T> il) {
+    const T* best = il.begin();
+    for (auto it = il.begin() + 1; it != il.end(); ++it)
+        if (*it < *best) best = it;
+    return *best;
+}
+
+template<class T>
+constexpr const T& max(const T& a, const T& b) { return (a < b) ? b : a; }
+
+template<class T, class Compare>
+constexpr const T& max(const T& a, const T& b, Compare comp) { return comp(a, b) ? b : a; }
+
+template<class T>
+constexpr T max(initializer_list<T> il) {
+    const T* best = il.begin();
+    for (auto it = il.begin() + 1; it != il.end(); ++it)
+        if (*best < *it) best = it;
+    return *best;
+}
+
+// clamp
+template<class T>
+constexpr const T& clamp(const T& v, const T& lo, const T& hi) {
+    return (v < lo) ? lo : (hi < v) ? hi : v;
+}
+
+template<class T, class Compare>
+constexpr const T& clamp(const T& v, const T& lo, const T& hi, Compare comp) {
+    return comp(v, lo) ? lo : comp(hi, v) ? hi : v;
+}
+
+// swap (forwarded from utility)
+template<class T>
+inline void swap(T& a, T& b) noexcept;
+
+// fill
+template<class ForwardIt, class T>
+void fill(ForwardIt first, ForwardIt last, const T& value) {
+    for (; first != last; ++first)
+        *first = value;
+}
+
+// fill_n
+template<class OutputIt, class Size, class T>
+OutputIt fill_n(OutputIt first, Size count, const T& value) {
+    for (Size i = 0; i < count; ++i, ++first)
+        *first = value;
+    return first;
+}
+
+// copy
+template<class InputIt, class OutputIt>
+OutputIt copy(InputIt first, InputIt last, OutputIt d_first) {
+    while (first != last)
+        *d_first++ = *first++;
+    return d_first;
+}
+
+// copy_n
+template<class InputIt, class Size, class OutputIt>
+OutputIt copy_n(InputIt first, Size count, OutputIt result) {
+    for (Size i = 0; i < count; ++i)
+        *result++ = *first++;
+    return result;
+}
+
+// copy_backward
+template<class BidirIt1, class BidirIt2>
+BidirIt2 copy_backward(BidirIt1 first, BidirIt1 last, BidirIt2 d_last) {
+    while (first != last)
+        *(--d_last) = *(--last);
+    return d_last;
+}
+
+// move (range)
+template<class InputIt, class OutputIt>
+OutputIt move(InputIt first, InputIt last, OutputIt d_first) {
+    while (first != last)
+        *d_first++ = std::move(*first++);
+    return d_first;
+}
+
+// move_backward
+template<class BidirIt1, class BidirIt2>
+BidirIt2 move_backward(BidirIt1 first, BidirIt1 last, BidirIt2 d_last) {
+    while (first != last)
+        *(--d_last) = std::move(*(--last));
+    return d_last;
+}
+
+// find
+template<class InputIt, class T>
+InputIt find(InputIt first, InputIt last, const T& value) {
+    for (; first != last; ++first)
+        if (*first == value) return first;
+    return last;
+}
+
+// find_if
+template<class InputIt, class Pred>
+InputIt find_if(InputIt first, InputIt last, Pred pred) {
+    for (; first != last; ++first)
+        if (pred(*first)) return first;
+    return last;
+}
+
+// find_if_not
+template<class InputIt, class Pred>
+InputIt find_if_not(InputIt first, InputIt last, Pred pred) {
+    for (; first != last; ++first)
+        if (!pred(*first)) return first;
+    return last;
+}
+
+// count
+template<class InputIt, class T>
+typename InputIt::difference_type count(InputIt first, InputIt last, const T& value) {
+    // Use ptrdiff_t for pointer iterators
+    long long n = 0;
+    for (; first != last; ++first)
+        if (*first == value) ++n;
+    return n;
+}
+
+// count_if
+template<class InputIt, class Pred>
+long long count_if(InputIt first, InputIt last, Pred pred) {
+    long long n = 0;
+    for (; first != last; ++first)
+        if (pred(*first)) ++n;
+    return n;
+}
+
+// all_of / any_of / none_of
+template<class InputIt, class Pred>
+bool all_of(InputIt first, InputIt last, Pred pred) {
+    for (; first != last; ++first)
+        if (!pred(*first)) return false;
+    return true;
+}
+
+template<class InputIt, class Pred>
+bool any_of(InputIt first, InputIt last, Pred pred) {
+    for (; first != last; ++first)
+        if (pred(*first)) return true;
+    return false;
+}
+
+template<class InputIt, class Pred>
+bool none_of(InputIt first, InputIt last, Pred pred) {
+    for (; first != last; ++first)
+        if (pred(*first)) return false;
+    return true;
+}
+
+// for_each
+template<class InputIt, class UnaryFunc>
+UnaryFunc for_each(InputIt first, InputIt last, UnaryFunc f) {
+    for (; first != last; ++first) f(*first);
+    return f;
+}
+
+// is_sorted
+template<class ForwardIt>
+bool is_sorted(ForwardIt first, ForwardIt last) {
+    if (first == last) return true;
+    ForwardIt prev = first;
+    for (++first; first != last; ++first) {
+        if (*first < *prev) return false;
+        prev = first;
+    }
+    return true;
+}
+
+template<class ForwardIt, class Compare>
+bool is_sorted(ForwardIt first, ForwardIt last, Compare comp) {
+    if (first == last) return true;
+    ForwardIt prev = first;
+    for (++first; first != last; ++first) {
+        if (comp(*first, *prev)) return false;
+        prev = first;
+    }
+    return true;
+}
+
+// equal
+template<class It1, class It2>
+bool equal(It1 first1, It1 last1, It2 first2) {
+    for (; first1 != last1; ++first1, ++first2)
+        if (!(*first1 == *first2)) return false;
+    return true;
+}
+
+// reverse
+template<class BidirIt>
+void reverse(BidirIt first, BidirIt last) {
+    while (first != last && first != --last) {
+        std::swap(*first, *last);
+        ++first;
+    }
+}
+
+// remove_if
+template<class ForwardIt, class Pred>
+ForwardIt remove_if(ForwardIt first, ForwardIt last, Pred pred) {
+    first = find_if(first, last, pred);
+    if (first != last) {
+        for (ForwardIt i = first; ++i != last;) {
+            if (!pred(*i))
+                *first++ = std::move(*i);
+        }
+    }
+    return first;
+}
+
+// remove
+template<class ForwardIt, class T>
+ForwardIt remove(ForwardIt first, ForwardIt last, const T& value) {
+    first = find(first, last, value);
+    if (first != last) {
+        for (ForwardIt i = first; ++i != last;) {
+            if (!(*i == value))
+                *first++ = std::move(*i);
+        }
+    }
+    return first;
+}
+
+// lower_bound
+template<class ForwardIt, class T>
+ForwardIt lower_bound(ForwardIt first, ForwardIt last, const T& value) {
+    while (first != last) {
+        ForwardIt mid = first;
+        auto dist = last - first;
+        mid += dist / 2;
+        if (*mid < value) {
+            first = mid;
+            ++first;
+        } else {
+            last = mid;
+        }
+    }
+    return first;
+}
+
+template<class ForwardIt, class T, class Compare>
+ForwardIt lower_bound(ForwardIt first, ForwardIt last, const T& value, Compare comp) {
+    while (first != last) {
+        ForwardIt mid = first;
+        auto dist = last - first;
+        mid += dist / 2;
+        if (comp(*mid, value)) {
+            first = mid;
+            ++first;
+        } else {
+            last = mid;
+        }
+    }
+    return first;
+}
+
+// equal_range
+template<class ForwardIt, class T>
+pair<ForwardIt, ForwardIt> equal_range(ForwardIt first, ForwardIt last, const T& value) {
+    return {lower_bound(first, last, value), upper_bound(first, last, value)};
+}
+
+// upper_bound
+template<class ForwardIt, class T>
+ForwardIt upper_bound(ForwardIt first, ForwardIt last, const T& value) {
+    while (first != last) {
+        ForwardIt mid = first;
+        auto dist = last - first;
+        mid += dist / 2;
+        if (!(value < *mid)) {
+            first = mid;
+            ++first;
+        } else {
+            last = mid;
+        }
+    }
+    return first;
+}
+
+template<class ForwardIt, class T, class Compare>
+ForwardIt upper_bound(ForwardIt first, ForwardIt last, const T& value, Compare comp) {
+    while (first != last) {
+        ForwardIt mid = first;
+        auto dist = last - first;
+        mid += dist / 2;
+        if (!comp(value, *mid)) {
+            first = mid;
+            ++first;
+        } else {
+            last = mid;
+        }
+    }
+    return first;
+}
+
+// binary_search
+template<class ForwardIt, class T>
+bool binary_search(ForwardIt first, ForwardIt last, const T& value) {
+    first = lower_bound(first, last, value);
+    return (first != last && !(value < *first));
+}
+
+// sort — insertion sort for small, simple quicksort-ish for larger
+namespace detail {
+    template<class RandomIt, class Compare>
+    void insertion_sort(RandomIt first, RandomIt last, Compare comp) {
+        for (auto i = first + 1; i < last; ++i) {
+            auto key = std::move(*i);
+            auto j = i;
+            while (j > first && comp(key, *(j - 1))) {
+                *j = std::move(*(j - 1));
+                --j;
+            }
+            *j = std::move(key);
+        }
+    }
+
+    template<class RandomIt, class Compare>
+    void sort_impl(RandomIt first, RandomIt last, Compare comp, int depth) {
+        while (last - first > 16) {
+            if (depth == 0) {
+                // fallback to insertion sort on remaining
+                insertion_sort(first, last, comp);
+                return;
+            }
+            --depth;
+            // median-of-three pivot
+            auto mid = first + (last - first) / 2;
+            if (comp(*mid, *first)) std::swap(*first, *mid);
+            if (comp(*(last-1), *first)) std::swap(*first, *(last-1));
+            if (comp(*(last-1), *mid)) std::swap(*mid, *(last-1));
+            std::swap(*mid, *(last - 2));
+            auto& pivot = *(last - 2);
+            auto i = first;
+            auto j = last - 2;
+            for (;;) {
+                while (comp(*++i, pivot));
+                while (comp(pivot, *--j));
+                if (i >= j) break;
+                std::swap(*i, *j);
+            }
+            std::swap(*i, *(last - 2));
+            sort_impl(first, i, comp, depth);
+            first = i + 1;
+        }
+        insertion_sort(first, last, comp);
+    }
+}
+
+template<class RandomIt>
+void sort(RandomIt first, RandomIt last) {
+    if (first >= last) return;
+    int depth = 0;
+    for (auto n = last - first; n > 1; n >>= 1) ++depth;
+    depth *= 2;
+    detail::sort_impl(first, last, [](const auto& a, const auto& b){ return a < b; }, depth);
+}
+
+template<class RandomIt, class Compare>
+void sort(RandomIt first, RandomIt last, Compare comp) {
+    if (first >= last) return;
+    int depth = 0;
+    for (auto n = last - first; n > 1; n >>= 1) ++depth;
+    depth *= 2;
+    detail::sort_impl(first, last, comp, depth);
+}
+
+// stable_sort (just uses sort — not truly stable but enough for Skia)
+template<class RandomIt>
+void stable_sort(RandomIt first, RandomIt last) { sort(first, last); }
+
+template<class RandomIt, class Compare>
+void stable_sort(RandomIt first, RandomIt last, Compare comp) { sort(first, last, comp); }
+
+// nth_element (partition-based, simplified)
+template<class RandomIt>
+void nth_element(RandomIt first, RandomIt nth, RandomIt last) {
+    sort(first, last);
+}
+
+// unique
+template<class ForwardIt>
+ForwardIt unique(ForwardIt first, ForwardIt last) {
+    if (first == last) return last;
+    ForwardIt result = first;
+    while (++first != last) {
+        if (!(*result == *first))
+            *(++result) = std::move(*first);
+    }
+    return ++result;
+}
+
+// transform
+template<class InputIt, class OutputIt, class UnaryOp>
+OutputIt transform(InputIt first, InputIt last, OutputIt d_first, UnaryOp op) {
+    while (first != last)
+        *d_first++ = op(*first++);
+    return d_first;
+}
+
+// accumulate (normally in <numeric> but Skia may need it)
+template<class InputIt, class T>
+T accumulate(InputIt first, InputIt last, T init) {
+    for (; first != last; ++first)
+        init = init + *first;
+    return init;
+}
+
+// minmax
+template<class T>
+pair<const T&, const T&> minmax(const T& a, const T& b) {
+    return (b < a) ? pair<const T&, const T&>(b, a) : pair<const T&, const T&>(a, b);
+}
+
+// min_element / max_element
+template<class ForwardIt>
+ForwardIt min_element(ForwardIt first, ForwardIt last) {
+    if (first == last) return last;
+    ForwardIt smallest = first;
+    while (++first != last)
+        if (*first < *smallest) smallest = first;
+    return smallest;
+}
+
+template<class ForwardIt>
+ForwardIt max_element(ForwardIt first, ForwardIt last) {
+    if (first == last) return last;
+    ForwardIt largest = first;
+    while (++first != last)
+        if (*largest < *first) largest = first;
+    return largest;
+}
+
+// iter_swap
+template<class ForwardIt1, class ForwardIt2>
+void iter_swap(ForwardIt1 a, ForwardIt2 b) {
+    std::swap(*a, *b);
+}
+
+// rotate
+template<class ForwardIt>
+ForwardIt rotate(ForwardIt first, ForwardIt n_first, ForwardIt last) {
+    if (first == n_first) return last;
+    if (n_first == last) return first;
+    reverse(first, n_first);
+    reverse(n_first, last);
+    reverse(first, last);
+    return first + (last - n_first);
+}
+
+// partition
+template<class ForwardIt, class Pred>
+ForwardIt partition(ForwardIt first, ForwardIt last, Pred pred) {
+    first = find_if_not(first, last, pred);
+    if (first == last) return first;
+    for (auto i = first; ++i != last;) {
+        if (pred(*i)) {
+            std::swap(*i, *first);
+            ++first;
+        }
+    }
+    return first;
+}
+
+} // namespace std
+
+#endif

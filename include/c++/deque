@@ -1,0 +1,207 @@
+#ifndef _BAT_DEQUE
+#define _BAT_DEQUE
+
+#include <cstddef>
+#include <cstring>
+#include <type_traits>
+#include <utility>
+#include <new>
+#include <initializer_list>
+#include <iterator>
+
+extern "C" void abort();
+
+// operator new/delete provided by the OS
+extern void* operator new(unsigned long);
+extern void  operator delete(void*) noexcept;
+extern void  operator delete(void*, unsigned long) noexcept;
+
+namespace std {
+
+template<class T, class Allocator = allocator<T>>
+class deque {
+public:
+    using value_type      = T;
+    using allocator_type  = Allocator;
+    using size_type       = size_t;
+    using difference_type = ptrdiff_t;
+    using reference       = T&;
+    using const_reference = const T&;
+    using pointer         = T*;
+    using const_pointer   = const T*;
+    using iterator        = T*;
+    using const_iterator  = const T*;
+
+private:
+    T*        data_;
+    size_type cap_;
+    size_type size_;
+    size_type front_; // index of first element in circular buffer
+
+    void grow() {
+        size_type new_cap = cap_ == 0 ? 8 : cap_ * 2;
+        T* new_data = static_cast<T*>(operator new(new_cap * sizeof(T)));
+        // Copy elements in order
+        for (size_type i = 0; i < size_; ++i) {
+            ::new (new_data + i) T(static_cast<T&&>(data_[(front_ + i) % cap_]));
+            data_[(front_ + i) % cap_].~T();
+        }
+        if (data_) operator delete(data_);
+        data_ = new_data;
+        cap_ = new_cap;
+        front_ = 0;
+    }
+
+public:
+    deque() : data_(nullptr), cap_(0), size_(0), front_(0) {}
+
+    explicit deque(size_type count) : deque() {
+        resize(count);
+    }
+
+    deque(size_type count, const T& val) : deque() {
+        for (size_type i = 0; i < count; ++i) push_back(val);
+    }
+
+    deque(std::initializer_list<T> init) : deque() {
+        for (auto& v : init) push_back(v);
+    }
+
+    deque(const deque& o) : deque() {
+        for (size_type i = 0; i < o.size_; ++i)
+            push_back(o[i]);
+    }
+
+    deque(deque&& o) noexcept
+        : data_(o.data_), cap_(o.cap_), size_(o.size_), front_(o.front_) {
+        o.data_ = nullptr; o.cap_ = 0; o.size_ = 0; o.front_ = 0;
+    }
+
+    ~deque() {
+        for (size_type i = 0; i < size_; ++i)
+            data_[(front_ + i) % cap_].~T();
+        if (data_) operator delete(data_);
+    }
+
+    deque& operator=(const deque& o) {
+        if (this != &o) {
+            clear();
+            for (size_type i = 0; i < o.size_; ++i)
+                push_back(o[i]);
+        }
+        return *this;
+    }
+
+    deque& operator=(deque&& o) noexcept {
+        if (this != &o) {
+            clear();
+            if (data_) operator delete(data_);
+            data_ = o.data_; cap_ = o.cap_; size_ = o.size_; front_ = o.front_;
+            o.data_ = nullptr; o.cap_ = 0; o.size_ = 0; o.front_ = 0;
+        }
+        return *this;
+    }
+
+    void push_back(const T& val) {
+        if (size_ == cap_) grow();
+        ::new (&data_[(front_ + size_) % cap_]) T(val);
+        ++size_;
+    }
+
+    void push_back(T&& val) {
+        if (size_ == cap_) grow();
+        ::new (&data_[(front_ + size_) % cap_]) T(static_cast<T&&>(val));
+        ++size_;
+    }
+
+    template<class... Args>
+    T& emplace_back(Args&&... args) {
+        if (size_ == cap_) grow();
+        T* p = &data_[(front_ + size_) % cap_];
+        ::new (p) T(static_cast<Args&&>(args)...);
+        ++size_;
+        return *p;
+    }
+
+    void push_front(const T& val) {
+        if (size_ == cap_) grow();
+        front_ = (front_ == 0 ? cap_ : front_) - 1;
+        ::new (&data_[front_]) T(val);
+        ++size_;
+    }
+
+    void push_front(T&& val) {
+        if (size_ == cap_) grow();
+        front_ = (front_ == 0 ? cap_ : front_) - 1;
+        ::new (&data_[front_]) T(static_cast<T&&>(val));
+        ++size_;
+    }
+
+    void pop_back() {
+        if (size_ == 0) abort();
+        --size_;
+        data_[(front_ + size_) % cap_].~T();
+    }
+
+    void pop_front() {
+        if (size_ == 0) abort();
+        data_[front_].~T();
+        front_ = (front_ + 1) % cap_;
+        --size_;
+    }
+
+    reference operator[](size_type i) { return data_[(front_ + i) % cap_]; }
+    const_reference operator[](size_type i) const { return data_[(front_ + i) % cap_]; }
+
+    reference at(size_type i) {
+        if (i >= size_) abort();
+        return (*this)[i];
+    }
+
+    reference front() { return data_[front_]; }
+    const_reference front() const { return data_[front_]; }
+    reference back() { return data_[(front_ + size_ - 1) % cap_]; }
+    const_reference back() const { return data_[(front_ + size_ - 1) % cap_]; }
+
+    size_type size() const noexcept { return size_; }
+    bool empty() const noexcept { return size_ == 0; }
+
+    void clear() {
+        for (size_type i = 0; i < size_; ++i)
+            data_[(front_ + i) % cap_].~T();
+        size_ = 0;
+        front_ = 0;
+    }
+
+    void resize(size_type count) {
+        while (size_ > count) pop_back();
+        while (size_ < count) push_back(T{});
+    }
+
+    void resize(size_type count, const T& val) {
+        while (size_ > count) pop_back();
+        while (size_ < count) push_back(val);
+    }
+
+    // Note: these iterators are simplified — they linearize on access
+    // For a circular buffer a true random-access iterator is complex;
+    // this gives enough for range-for and basic use
+    // We just expose direct pointer access (linearized when needed)
+    iterator begin() noexcept { return data_ + front_; }
+    iterator end() noexcept { return data_ + front_ + size_; }
+    const_iterator begin() const noexcept { return data_ + front_; }
+    const_iterator end() const noexcept { return data_ + front_ + size_; }
+    const_iterator cbegin() const noexcept { return begin(); }
+    const_iterator cend() const noexcept { return end(); }
+
+    void swap(deque& o) noexcept {
+        T* td = data_; data_ = o.data_; o.data_ = td;
+        size_type ts = size_; size_ = o.size_; o.size_ = ts;
+        size_type tc = cap_; cap_ = o.cap_; o.cap_ = tc;
+        size_type tf = front_; front_ = o.front_; o.front_ = tf;
+    }
+};
+
+} // namespace std
+
+#endif

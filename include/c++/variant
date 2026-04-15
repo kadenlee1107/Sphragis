@@ -1,0 +1,245 @@
+#ifndef _BAT_VARIANT
+#define _BAT_VARIANT
+
+#include <cstddef>
+#include <type_traits>
+#include <utility>
+#include <new>
+
+extern "C" void abort();
+
+namespace std {
+
+inline constexpr size_t variant_npos = static_cast<size_t>(-1);
+
+struct monostate {};
+constexpr bool operator==(monostate, monostate) noexcept { return true; }
+constexpr bool operator!=(monostate, monostate) noexcept { return false; }
+constexpr bool operator<(monostate, monostate) noexcept { return false; }
+
+class bad_variant_access {
+public:
+    const char* what() const noexcept { return "bad variant access"; }
+};
+
+namespace detail {
+
+template<class... Ts> struct max_size;
+template<class T> struct max_size<T> : integral_constant<size_t, sizeof(T)> {};
+template<class T, class... Ts> struct max_size<T, Ts...>
+    : integral_constant<size_t, (sizeof(T) > max_size<Ts...>::value ? sizeof(T) : max_size<Ts...>::value)> {};
+
+template<class... Ts> struct max_align;
+template<class T> struct max_align<T> : integral_constant<size_t, alignof(T)> {};
+template<class T, class... Ts> struct max_align<T, Ts...>
+    : integral_constant<size_t, (alignof(T) > max_align<Ts...>::value ? alignof(T) : max_align<Ts...>::value)> {};
+
+template<size_t I, class... Ts> struct type_at;
+template<class T, class... Ts> struct type_at<0, T, Ts...> { using type = T; };
+template<size_t I, class T, class... Ts> struct type_at<I, T, Ts...> { using type = typename type_at<I-1, Ts...>::type; };
+
+template<class T, class... Ts> struct index_of;
+template<class T, class... Ts> struct index_of<T, T, Ts...> : integral_constant<size_t, 0> {};
+template<class T, class U, class... Ts> struct index_of<T, U, Ts...> : integral_constant<size_t, 1 + index_of<T, Ts...>::value> {};
+
+} // namespace detail
+
+template<class... Ts>
+class variant {
+    static constexpr size_t storage_size  = detail::max_size<Ts...>::value;
+    static constexpr size_t storage_align = detail::max_align<Ts...>::value;
+
+    alignas(storage_align) unsigned char storage_[storage_size];
+    size_t index_;
+
+    template<size_t I>
+    using type_at_t = typename detail::type_at<I, Ts...>::type;
+
+    template<size_t I>
+    void destroy_impl() {
+        if constexpr (!is_trivially_destructible<type_at_t<I>>::value) {
+            reinterpret_cast<type_at_t<I>*>(storage_)->~type_at_t<I>();
+        }
+    }
+
+    void destroy_current() {
+        if (index_ == variant_npos) return;
+        if constexpr (sizeof...(Ts) > 0) { if (index_ == 0) { destroy_impl<0>(); return; } }
+        if constexpr (sizeof...(Ts) > 1) { if (index_ == 1) { destroy_impl<1>(); return; } }
+        if constexpr (sizeof...(Ts) > 2) { if (index_ == 2) { destroy_impl<2>(); return; } }
+        if constexpr (sizeof...(Ts) > 3) { if (index_ == 3) { destroy_impl<3>(); return; } }
+    }
+
+public:
+    constexpr variant() : index_(0) {
+        ::new (storage_) type_at_t<0>();
+    }
+
+    template<class T, class = typename enable_if<!is_same<typename decay<T>::type, variant>::value>::type>
+    variant(T&& val) : index_(detail::index_of<typename decay<T>::type, Ts...>::value) {
+        using D = typename decay<T>::type;
+        ::new (storage_) D(static_cast<T&&>(val));
+    }
+
+    variant(const variant& o) : index_(o.index_) {
+        if constexpr (sizeof...(Ts) > 0) { if (index_ == 0) { ::new (storage_) type_at_t<0>(*reinterpret_cast<const type_at_t<0>*>(o.storage_)); return; } }
+        if constexpr (sizeof...(Ts) > 1) { if (index_ == 1) { ::new (storage_) type_at_t<1>(*reinterpret_cast<const type_at_t<1>*>(o.storage_)); return; } }
+        if constexpr (sizeof...(Ts) > 2) { if (index_ == 2) { ::new (storage_) type_at_t<2>(*reinterpret_cast<const type_at_t<2>*>(o.storage_)); return; } }
+        if constexpr (sizeof...(Ts) > 3) { if (index_ == 3) { ::new (storage_) type_at_t<3>(*reinterpret_cast<const type_at_t<3>*>(o.storage_)); return; } }
+    }
+
+    variant(variant&& o) noexcept : index_(o.index_) {
+        if constexpr (sizeof...(Ts) > 0) { if (index_ == 0) { ::new (storage_) type_at_t<0>(static_cast<type_at_t<0>&&>(*reinterpret_cast<type_at_t<0>*>(o.storage_))); return; } }
+        if constexpr (sizeof...(Ts) > 1) { if (index_ == 1) { ::new (storage_) type_at_t<1>(static_cast<type_at_t<1>&&>(*reinterpret_cast<type_at_t<1>*>(o.storage_))); return; } }
+        if constexpr (sizeof...(Ts) > 2) { if (index_ == 2) { ::new (storage_) type_at_t<2>(static_cast<type_at_t<2>&&>(*reinterpret_cast<type_at_t<2>*>(o.storage_))); return; } }
+        if constexpr (sizeof...(Ts) > 3) { if (index_ == 3) { ::new (storage_) type_at_t<3>(static_cast<type_at_t<3>&&>(*reinterpret_cast<type_at_t<3>*>(o.storage_))); return; } }
+    }
+
+    ~variant() { destroy_current(); }
+
+    variant& operator=(const variant& o) {
+        if (this != &o) {
+            destroy_current();
+            index_ = o.index_;
+            if constexpr (sizeof...(Ts) > 0) { if (index_ == 0) { ::new (storage_) type_at_t<0>(*reinterpret_cast<const type_at_t<0>*>(o.storage_)); return *this; } }
+            if constexpr (sizeof...(Ts) > 1) { if (index_ == 1) { ::new (storage_) type_at_t<1>(*reinterpret_cast<const type_at_t<1>*>(o.storage_)); return *this; } }
+            if constexpr (sizeof...(Ts) > 2) { if (index_ == 2) { ::new (storage_) type_at_t<2>(*reinterpret_cast<const type_at_t<2>*>(o.storage_)); return *this; } }
+            if constexpr (sizeof...(Ts) > 3) { if (index_ == 3) { ::new (storage_) type_at_t<3>(*reinterpret_cast<const type_at_t<3>*>(o.storage_)); return *this; } }
+        }
+        return *this;
+    }
+
+    variant& operator=(variant&& o) noexcept {
+        if (this != &o) {
+            destroy_current();
+            index_ = o.index_;
+            if constexpr (sizeof...(Ts) > 0) { if (index_ == 0) { ::new (storage_) type_at_t<0>(static_cast<type_at_t<0>&&>(*reinterpret_cast<type_at_t<0>*>(o.storage_))); return *this; } }
+            if constexpr (sizeof...(Ts) > 1) { if (index_ == 1) { ::new (storage_) type_at_t<1>(static_cast<type_at_t<1>&&>(*reinterpret_cast<type_at_t<1>*>(o.storage_))); return *this; } }
+            if constexpr (sizeof...(Ts) > 2) { if (index_ == 2) { ::new (storage_) type_at_t<2>(static_cast<type_at_t<2>&&>(*reinterpret_cast<type_at_t<2>*>(o.storage_))); return *this; } }
+            if constexpr (sizeof...(Ts) > 3) { if (index_ == 3) { ::new (storage_) type_at_t<3>(static_cast<type_at_t<3>&&>(*reinterpret_cast<type_at_t<3>*>(o.storage_))); return *this; } }
+        }
+        return *this;
+    }
+
+    template<class T, class = typename enable_if<!is_same<typename decay<T>::type, variant>::value>::type>
+    variant& operator=(T&& val) {
+        using D = typename decay<T>::type;
+        destroy_current();
+        index_ = detail::index_of<D, Ts...>::value;
+        ::new (storage_) D(static_cast<T&&>(val));
+        return *this;
+    }
+
+    constexpr size_t index() const noexcept { return index_; }
+    constexpr bool valueless_by_exception() const noexcept { return index_ == variant_npos; }
+
+    template<size_t I>
+    type_at_t<I>& get_by_index() {
+        if (index_ != I) abort();
+        return *reinterpret_cast<type_at_t<I>*>(storage_);
+    }
+
+    template<size_t I>
+    const type_at_t<I>& get_by_index() const {
+        if (index_ != I) abort();
+        return *reinterpret_cast<const type_at_t<I>*>(storage_);
+    }
+
+    template<size_t I>
+    type_at_t<I>* get_if_index() noexcept {
+        if (index_ != I) return nullptr;
+        return reinterpret_cast<type_at_t<I>*>(storage_);
+    }
+
+    template<size_t I>
+    const type_at_t<I>* get_if_index() const noexcept {
+        if (index_ != I) return nullptr;
+        return reinterpret_cast<const type_at_t<I>*>(storage_);
+    }
+
+    template<class T>
+    T& get_by_type() { return get_by_index<detail::index_of<T, Ts...>::value>(); }
+
+    template<class T>
+    const T& get_by_type() const { return get_by_index<detail::index_of<T, Ts...>::value>(); }
+
+    template<size_t I, class... Args>
+    type_at_t<I>& emplace(Args&&... args) {
+        destroy_current();
+        ::new (storage_) type_at_t<I>(static_cast<Args&&>(args)...);
+        index_ = I;
+        return *reinterpret_cast<type_at_t<I>*>(storage_);
+    }
+
+    friend constexpr bool operator==(const variant& a, const variant& b) {
+        if (a.index_ != b.index_) return false;
+        if constexpr (sizeof...(Ts) > 0) { if (a.index_ == 0) return *reinterpret_cast<const type_at_t<0>*>(a.storage_) == *reinterpret_cast<const type_at_t<0>*>(b.storage_); }
+        if constexpr (sizeof...(Ts) > 1) { if (a.index_ == 1) return *reinterpret_cast<const type_at_t<1>*>(a.storage_) == *reinterpret_cast<const type_at_t<1>*>(b.storage_); }
+        if constexpr (sizeof...(Ts) > 2) { if (a.index_ == 2) return *reinterpret_cast<const type_at_t<2>*>(a.storage_) == *reinterpret_cast<const type_at_t<2>*>(b.storage_); }
+        if constexpr (sizeof...(Ts) > 3) { if (a.index_ == 3) return *reinterpret_cast<const type_at_t<3>*>(a.storage_) == *reinterpret_cast<const type_at_t<3>*>(b.storage_); }
+        return false;
+    }
+
+    friend constexpr bool operator!=(const variant& a, const variant& b) { return !(a == b); }
+};
+
+// Free-function get
+template<size_t I, class... Ts>
+constexpr auto& get(variant<Ts...>& v) { return v.template get_by_index<I>(); }
+
+template<size_t I, class... Ts>
+constexpr const auto& get(const variant<Ts...>& v) { return v.template get_by_index<I>(); }
+
+template<class T, class... Ts>
+constexpr T& get(variant<Ts...>& v) { return v.template get_by_type<T>(); }
+
+template<class T, class... Ts>
+constexpr const T& get(const variant<Ts...>& v) { return v.template get_by_type<T>(); }
+
+// get_if
+template<size_t I, class... Ts>
+constexpr auto* get_if(variant<Ts...>* v) noexcept { return v ? v->template get_if_index<I>() : nullptr; }
+
+template<size_t I, class... Ts>
+constexpr const auto* get_if(const variant<Ts...>* v) noexcept { return v ? v->template get_if_index<I>() : nullptr; }
+
+// holds_alternative
+template<class T, class... Ts>
+constexpr bool holds_alternative(const variant<Ts...>& v) noexcept {
+    return v.index() == detail::index_of<T, Ts...>::value;
+}
+
+// visit (up to 4 types)
+template<class Visitor, class... Ts>
+constexpr decltype(auto) visit(Visitor&& vis, variant<Ts...>& v) {
+    if constexpr (sizeof...(Ts) > 0) { if (v.index() == 0) return vis(get<0>(v)); }
+    if constexpr (sizeof...(Ts) > 1) { if (v.index() == 1) return vis(get<1>(v)); }
+    if constexpr (sizeof...(Ts) > 2) { if (v.index() == 2) return vis(get<2>(v)); }
+    if constexpr (sizeof...(Ts) > 3) { if (v.index() == 3) return vis(get<3>(v)); }
+    abort();
+    return vis(get<0>(v));
+}
+
+template<class Visitor, class... Ts>
+constexpr decltype(auto) visit(Visitor&& vis, const variant<Ts...>& v) {
+    if constexpr (sizeof...(Ts) > 0) { if (v.index() == 0) return vis(get<0>(v)); }
+    if constexpr (sizeof...(Ts) > 1) { if (v.index() == 1) return vis(get<1>(v)); }
+    if constexpr (sizeof...(Ts) > 2) { if (v.index() == 2) return vis(get<2>(v)); }
+    if constexpr (sizeof...(Ts) > 3) { if (v.index() == 3) return vis(get<3>(v)); }
+    abort();
+    return vis(get<0>(v));
+}
+
+// variant_size
+template<class T> struct variant_size;
+template<class... Ts> struct variant_size<variant<Ts...>> : integral_constant<size_t, sizeof...(Ts)> {};
+template<class T> inline constexpr size_t variant_size_v = variant_size<T>::value;
+
+// variant_alternative
+template<size_t I, class T> struct variant_alternative;
+template<size_t I, class... Ts> struct variant_alternative<I, variant<Ts...>> { using type = typename detail::type_at<I, Ts...>::type; };
+template<size_t I, class T> using variant_alternative_t = typename variant_alternative<I, T>::type;
+
+} // namespace std
+
+#endif

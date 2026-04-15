@@ -1,0 +1,224 @@
+#ifndef _BAT_MAP
+#define _BAT_MAP
+
+#include <cstddef>
+#include <utility>
+#include <functional>
+#include <initializer_list>
+#include <new>
+
+extern "C" void abort();
+
+namespace std {
+
+template<class Key, class T, class Compare = less<Key>, class Allocator = allocator<pair<const Key, T>>>
+class map {
+public:
+    using key_type    = Key;
+    using mapped_type = T;
+    using value_type  = pair<const Key, T>;
+    using key_compare = Compare;
+    using size_type   = size_t;
+    using difference_type = ptrdiff_t;
+    using reference       = value_type&;
+    using const_reference = const value_type&;
+    using pointer         = value_type*;
+    using const_pointer   = const value_type*;
+    using iterator        = pointer;
+    using const_iterator  = const_pointer;
+
+private:
+    // Simple sorted array storage — max 64 entries
+    static constexpr size_type MAX_ENTRIES = 64;
+
+    // Store key and value separately to avoid const key issues
+    struct Entry {
+        Key   key;
+        T     val;
+    };
+
+    Entry    entries_[MAX_ENTRIES];
+    size_type size_;
+    Compare  comp_;
+
+    size_type find_pos(const Key& k) const {
+        for (size_type i = 0; i < size_; ++i) {
+            if (!comp_(entries_[i].key, k) && !comp_(k, entries_[i].key))
+                return i;
+        }
+        return size_;
+    }
+
+    size_type insert_pos(const Key& k) const {
+        size_type i = 0;
+        while (i < size_ && comp_(entries_[i].key, k)) ++i;
+        return i;
+    }
+
+    // Reinterpret entry as value_type for iteration
+    value_type* as_value(size_type i) {
+        return reinterpret_cast<value_type*>(&entries_[i]);
+    }
+    const value_type* as_value(size_type i) const {
+        return reinterpret_cast<const value_type*>(&entries_[i]);
+    }
+
+public:
+    map() : size_(0) {}
+
+    map(std::initializer_list<value_type> init) : size_(0) {
+        for (auto& p : init) {
+            (*this)[p.first] = p.second;
+        }
+    }
+
+    map(const map& o) : size_(o.size_), comp_(o.comp_) {
+        for (size_type i = 0; i < size_; ++i) {
+            entries_[i].key = o.entries_[i].key;
+            entries_[i].val = o.entries_[i].val;
+        }
+    }
+
+    map& operator=(const map& o) {
+        if (this != &o) {
+            size_ = o.size_;
+            comp_ = o.comp_;
+            for (size_type i = 0; i < size_; ++i) {
+                entries_[i].key = o.entries_[i].key;
+                entries_[i].val = o.entries_[i].val;
+            }
+        }
+        return *this;
+    }
+
+    map(map&& o) noexcept : size_(o.size_), comp_(o.comp_) {
+        for (size_type i = 0; i < size_; ++i) {
+            entries_[i].key = static_cast<Key&&>(o.entries_[i].key);
+            entries_[i].val = static_cast<T&&>(o.entries_[i].val);
+        }
+        o.size_ = 0;
+    }
+
+    ~map() = default;
+
+    T& operator[](const Key& k) {
+        size_type pos = find_pos(k);
+        if (pos < size_) return entries_[pos].val;
+        if (size_ >= MAX_ENTRIES) abort();
+        // Insert in sorted order
+        size_type ip = insert_pos(k);
+        for (size_type i = size_; i > ip; --i) {
+            entries_[i].key = static_cast<Key&&>(entries_[i-1].key);
+            entries_[i].val = static_cast<T&&>(entries_[i-1].val);
+        }
+        entries_[ip].key = k;
+        entries_[ip].val = T{};
+        ++size_;
+        return entries_[ip].val;
+    }
+
+    T& operator[](Key&& k) {
+        size_type pos = find_pos(k);
+        if (pos < size_) return entries_[pos].val;
+        if (size_ >= MAX_ENTRIES) abort();
+        size_type ip = insert_pos(k);
+        for (size_type i = size_; i > ip; --i) {
+            entries_[i].key = static_cast<Key&&>(entries_[i-1].key);
+            entries_[i].val = static_cast<T&&>(entries_[i-1].val);
+        }
+        entries_[ip].key = static_cast<Key&&>(k);
+        entries_[ip].val = T{};
+        ++size_;
+        return entries_[ip].val;
+    }
+
+    iterator find(const Key& k) {
+        size_type pos = find_pos(k);
+        if (pos < size_) return as_value(pos);
+        return end();
+    }
+
+    const_iterator find(const Key& k) const {
+        size_type pos = find_pos(k);
+        if (pos < size_) return as_value(pos);
+        return end();
+    }
+
+    size_type count(const Key& k) const {
+        return find_pos(k) < size_ ? 1 : 0;
+    }
+
+    pair<iterator, bool> insert(const value_type& v) {
+        size_type pos = find_pos(v.first);
+        if (pos < size_) return {as_value(pos), false};
+        if (size_ >= MAX_ENTRIES) abort();
+        size_type ip = insert_pos(v.first);
+        for (size_type i = size_; i > ip; --i) {
+            entries_[i].key = static_cast<Key&&>(entries_[i-1].key);
+            entries_[i].val = static_cast<T&&>(entries_[i-1].val);
+        }
+        entries_[ip].key = v.first;
+        entries_[ip].val = v.second;
+        ++size_;
+        return {as_value(ip), true};
+    }
+
+    template<class... Args>
+    pair<iterator, bool> emplace(Args&&... args) {
+        value_type v(static_cast<Args&&>(args)...);
+        return insert(v);
+    }
+
+    size_type erase(const Key& k) {
+        size_type pos = find_pos(k);
+        if (pos >= size_) return 0;
+        for (size_type i = pos; i + 1 < size_; ++i) {
+            entries_[i].key = static_cast<Key&&>(entries_[i+1].key);
+            entries_[i].val = static_cast<T&&>(entries_[i+1].val);
+        }
+        --size_;
+        return 1;
+    }
+
+    iterator erase(iterator pos) {
+        size_type idx = static_cast<size_type>(reinterpret_cast<Entry*>(pos) - entries_);
+        if (idx >= size_) return end();
+        for (size_type i = idx; i + 1 < size_; ++i) {
+            entries_[i].key = static_cast<Key&&>(entries_[i+1].key);
+            entries_[i].val = static_cast<T&&>(entries_[i+1].val);
+        }
+        --size_;
+        return as_value(idx);
+    }
+
+    void clear() { size_ = 0; }
+    size_type size() const noexcept { return size_; }
+    bool empty() const noexcept { return size_ == 0; }
+
+    iterator begin() noexcept { return as_value(0); }
+    iterator end() noexcept { return as_value(size_); }
+    const_iterator begin() const noexcept { return as_value(0); }
+    const_iterator end() const noexcept { return as_value(size_); }
+    const_iterator cbegin() const noexcept { return as_value(0); }
+    const_iterator cend() const noexcept { return as_value(size_); }
+
+    iterator lower_bound(const Key& k) {
+        size_type ip = insert_pos(k);
+        return as_value(ip);
+    }
+    const_iterator lower_bound(const Key& k) const {
+        size_type ip = insert_pos(k);
+        return as_value(ip);
+    }
+};
+
+// multimap — minimal stub
+template<class Key, class T, class Compare = less<Key>, class Allocator = allocator<pair<const Key, T>>>
+class multimap : public map<Key, T, Compare, Allocator> {
+public:
+    using map<Key, T, Compare, Allocator>::map;
+};
+
+} // namespace std
+
+#endif

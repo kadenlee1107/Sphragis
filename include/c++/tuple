@@ -1,0 +1,167 @@
+#ifndef _BAT_TUPLE
+#define _BAT_TUPLE
+
+#include <cstddef>
+#include <type_traits>
+#include <utility>
+
+namespace std {
+
+// Forward declarations
+template<class... Ts> class tuple;
+#ifndef _BAT_TUPLE_SIZE_DECLARED
+#define _BAT_TUPLE_SIZE_DECLARED
+template<class T> struct tuple_size;
+template<size_t I, class T> struct tuple_element;
+#endif
+
+// tuple<> — empty
+template<>
+class tuple<> {
+public:
+    constexpr tuple() = default;
+    void swap(tuple&) noexcept {}
+    friend constexpr bool operator==(const tuple&, const tuple&) { return true; }
+    friend constexpr bool operator!=(const tuple&, const tuple&) { return false; }
+};
+
+// tuple<T0>
+template<class T0>
+class tuple<T0> {
+public:
+    T0 v0_;
+    constexpr tuple() : v0_() {}
+    constexpr explicit tuple(const T0& a0) : v0_(a0) {}
+    template<class U0>
+    constexpr explicit tuple(U0&& a0) : v0_(static_cast<U0&&>(a0)) {}
+    template<class U0>
+    constexpr tuple(const tuple<U0>& o) : v0_(o.v0_) {}
+    void swap(tuple& o) noexcept { T0 tmp = static_cast<T0&&>(v0_); v0_ = static_cast<T0&&>(o.v0_); o.v0_ = static_cast<T0&&>(tmp); }
+};
+
+// tuple<T0, T1>
+template<class T0, class T1>
+class tuple<T0, T1> {
+public:
+    T0 v0_; T1 v1_;
+    constexpr tuple() : v0_(), v1_() {}
+    constexpr tuple(const T0& a0, const T1& a1) : v0_(a0), v1_(a1) {}
+    template<class U0, class U1>
+    constexpr tuple(U0&& a0, U1&& a1) : v0_(static_cast<U0&&>(a0)), v1_(static_cast<U1&&>(a1)) {}
+    template<class U0, class U1>
+    constexpr tuple(const tuple<U0, U1>& o) : v0_(o.v0_), v1_(o.v1_) {}
+    template<class U0, class U1>
+    constexpr tuple(const pair<U0, U1>& p) : v0_(p.first), v1_(p.second) {}
+    tuple(const tuple&) = default;
+    tuple(tuple&&) = default;
+    tuple& operator=(const tuple&) = default;
+    tuple& operator=(tuple&&) = default;
+};
+
+// tuple<T0, T1, T2>
+template<class T0, class T1, class T2>
+class tuple<T0, T1, T2> {
+public:
+    T0 v0_; T1 v1_; T2 v2_;
+    constexpr tuple() : v0_(), v1_(), v2_() {}
+    constexpr tuple(const T0& a0, const T1& a1, const T2& a2) : v0_(a0), v1_(a1), v2_(a2) {}
+    template<class U0, class U1, class U2>
+    constexpr tuple(U0&& a0, U1&& a1, U2&& a2) : v0_(static_cast<U0&&>(a0)), v1_(static_cast<U1&&>(a1)), v2_(static_cast<U2&&>(a2)) {}
+    tuple& operator=(const tuple& o) { v0_ = o.v0_; v1_ = o.v1_; v2_ = o.v2_; return *this; }
+};
+
+// tuple<T0, T1, T2, T3>
+template<class T0, class T1, class T2, class T3>
+class tuple<T0, T1, T2, T3> {
+public:
+    T0 v0_; T1 v1_; T2 v2_; T3 v3_;
+    constexpr tuple() : v0_(), v1_(), v2_(), v3_() {}
+    constexpr tuple(const T0& a0, const T1& a1, const T2& a2, const T3& a3) : v0_(a0), v1_(a1), v2_(a2), v3_(a3) {}
+    template<class U0, class U1, class U2, class U3>
+    constexpr tuple(U0&& a0, U1&& a1, U2&& a2, U3&& a3)
+        : v0_(static_cast<U0&&>(a0)), v1_(static_cast<U1&&>(a1)),
+          v2_(static_cast<U2&&>(a2)), v3_(static_cast<U3&&>(a3)) {}
+};
+
+// tuple_size
+template<class... Ts>
+struct tuple_size<tuple<Ts...>> : integral_constant<size_t, sizeof...(Ts)> {};
+
+// pair specializations are in <utility>
+
+// tuple_element (redeclaration OK via guard)
+
+template<class T0, class... Ts>
+struct tuple_element<0, tuple<T0, Ts...>> { using type = T0; };
+
+template<size_t I, class T0, class... Ts>
+struct tuple_element<I, tuple<T0, Ts...>> { using type = typename tuple_element<I - 1, tuple<Ts...>>::type; };
+
+template<size_t I, class T>
+using tuple_element_t = typename tuple_element<I, T>::type;
+
+// get<N> via helper
+namespace detail {
+    template<size_t I> struct tuple_get_helper;
+
+    template<> struct tuple_get_helper<0> {
+        template<class Tup> static constexpr auto& get(Tup& t) noexcept { return t.v0_; }
+        template<class Tup> static constexpr const auto& get(const Tup& t) noexcept { return t.v0_; }
+    };
+    template<> struct tuple_get_helper<1> {
+        template<class Tup> static constexpr auto& get(Tup& t) noexcept { return t.v1_; }
+        template<class Tup> static constexpr const auto& get(const Tup& t) noexcept { return t.v1_; }
+    };
+    template<> struct tuple_get_helper<2> {
+        template<class Tup> static constexpr auto& get(Tup& t) noexcept { return t.v2_; }
+        template<class Tup> static constexpr const auto& get(const Tup& t) noexcept { return t.v2_; }
+    };
+    template<> struct tuple_get_helper<3> {
+        template<class Tup> static constexpr auto& get(Tup& t) noexcept { return t.v3_; }
+        template<class Tup> static constexpr const auto& get(const Tup& t) noexcept { return t.v3_; }
+    };
+} // namespace detail
+
+template<size_t I, class... Ts>
+constexpr auto& get(tuple<Ts...>& t) noexcept { return detail::tuple_get_helper<I>::get(t); }
+
+template<size_t I, class... Ts>
+constexpr const auto& get(const tuple<Ts...>& t) noexcept { return detail::tuple_get_helper<I>::get(t); }
+
+template<size_t I, class... Ts>
+constexpr auto&& get(tuple<Ts...>&& t) noexcept {
+    return static_cast<tuple_element_t<I, tuple<Ts...>>&&>(detail::tuple_get_helper<I>::get(t));
+}
+
+// get for pair — defined in <utility>, not here
+
+// make_tuple
+template<class... Ts>
+constexpr tuple<typename decay<Ts>::type...> make_tuple(Ts&&... args) {
+    return tuple<typename decay<Ts>::type...>(static_cast<Ts&&>(args)...);
+}
+
+// tie
+template<class... Ts>
+constexpr tuple<Ts&...> tie(Ts&... args) noexcept {
+    return tuple<Ts&...>(args...);
+}
+
+// forward_as_tuple
+template<class... Ts>
+constexpr tuple<Ts&&...> forward_as_tuple(Ts&&... args) noexcept {
+    return tuple<Ts&&...>(static_cast<Ts&&>(args)...);
+}
+
+// ignore
+namespace detail {
+    struct ignore_t {
+        template<class T>
+        constexpr const ignore_t& operator=(const T&) const noexcept { return *this; }
+    };
+}
+inline constexpr detail::ignore_t ignore{};
+
+} // namespace std
+
+#endif

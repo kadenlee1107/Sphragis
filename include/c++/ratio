@@ -1,0 +1,80 @@
+#ifndef _BAT_RATIO
+#define _BAT_RATIO
+
+#include <cstdint>
+#include <type_traits>
+
+namespace std {
+
+namespace detail {
+    constexpr intmax_t gcd_impl(intmax_t a, intmax_t b) {
+        return b == 0 ? a : gcd_impl(b, a % b);
+    }
+    constexpr intmax_t abs_impl(intmax_t x) { return x < 0 ? -x : x; }
+    constexpr intmax_t sign_impl(intmax_t x) { return x < 0 ? -1 : 1; }
+}
+
+template<intmax_t Num, intmax_t Den = 1>
+struct ratio {
+    static_assert(Den != 0, "ratio denominator cannot be zero");
+    static constexpr intmax_t num = detail::sign_impl(Den) * Num / detail::gcd_impl(detail::abs_impl(Num), detail::abs_impl(Den));
+    static constexpr intmax_t den = detail::abs_impl(Den) / detail::gcd_impl(detail::abs_impl(Num), detail::abs_impl(Den));
+    using type = ratio<num, den>;
+};
+
+// Arithmetic
+template<class R1, class R2>
+using ratio_add = typename ratio<
+    R1::num * R2::den + R2::num * R1::den,
+    R1::den * R2::den
+>::type;
+
+template<class R1, class R2>
+using ratio_subtract = typename ratio<
+    R1::num * R2::den - R2::num * R1::den,
+    R1::den * R2::den
+>::type;
+
+template<class R1, class R2>
+using ratio_multiply = typename ratio<
+    R1::num * R2::num,
+    R1::den * R2::den
+>::type;
+
+template<class R1, class R2>
+using ratio_divide = typename ratio<
+    R1::num * R2::den,
+    R1::den * R2::num
+>::type;
+
+// Comparisons
+template<class R1, class R2>
+struct ratio_equal : integral_constant<bool, R1::num == R2::num && R1::den == R2::den> {};
+
+template<class R1, class R2>
+struct ratio_not_equal : integral_constant<bool, !ratio_equal<R1, R2>::value> {};
+
+template<class R1, class R2>
+struct ratio_less : integral_constant<bool, (R1::num * R2::den < R2::num * R1::den)> {};
+
+// Common SI ratios
+using atto  = ratio<1, 1000000000000000000LL>;
+using femto = ratio<1, 1000000000000000LL>;
+using pico  = ratio<1, 1000000000000LL>;
+using nano  = ratio<1, 1000000000>;
+using micro = ratio<1, 1000000>;
+using milli = ratio<1, 1000>;
+using centi = ratio<1, 100>;
+using deci  = ratio<1, 10>;
+using deca  = ratio<10, 1>;
+using hecto = ratio<100, 1>;
+using kilo  = ratio<1000, 1>;
+using mega  = ratio<1000000, 1>;
+using giga  = ratio<1000000000, 1>;
+using tera  = ratio<1000000000000LL, 1>;
+using peta  = ratio<1000000000000000LL, 1>;
+using exa   = ratio<1000000000000000000LL, 1>;
+
+} // namespace std
+
+#endif

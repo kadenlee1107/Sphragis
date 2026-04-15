@@ -1,0 +1,37 @@
+#ifndef _BAT_IOSFWD
+#define _BAT_IOSFWD
+
+#include <cstddef>
+
+namespace std {
+
+template<class T> class allocator;
+template<class CharT> struct char_traits;
+
+// Basic string forward declaration
+template<class CharT, class Traits = char_traits<CharT>, class Allocator = allocator<CharT>>
+class basic_string;
+
+// Stream forward declarations (stubs)
+template<class CharT, class Traits = char_traits<CharT>> class basic_ios;
+template<class CharT, class Traits = char_traits<CharT>> class basic_istream;
+template<class CharT, class Traits = char_traits<CharT>> class basic_ostream;
+template<class CharT, class Traits = char_traits<CharT>> class basic_iostream;
+template<class CharT, class Traits = char_traits<CharT>> class basic_streambuf;
+
+// Type aliases
+using ios       = basic_ios<char>;
+using istream   = basic_istream<char>;
+using ostream   = basic_ostream<char>;
+using iostream  = basic_iostream<char>;
+using streambuf = basic_streambuf<char>;
+
+using streamsize = long long;
+using streamoff  = long long;
+
+template<class State> class fpos;
+using streampos  = fpos<char>;
+
+} // namespace std
+
+#endif

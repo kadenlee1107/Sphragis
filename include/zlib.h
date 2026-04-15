@@ -6,8 +6,20 @@
 #define _BATOS_ZLIB_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #define ZLIB_VERSION "1.2.13-batos-stub"
+#define ZLIB_VERNUM  0x12d0
+
+/* zlib basic types */
+typedef unsigned char  Byte;
+typedef Byte           Bytef;
+typedef unsigned int   uInt;
+typedef unsigned long  uLong;
+typedef void          *voidp;
+typedef void          *voidpf;
+typedef uLong          uLongf;
+typedef Byte          *charf;
 
 /* Flush values */
 #define Z_NO_FLUSH      0
@@ -120,6 +132,9 @@ int inflateInit2_(z_streamp strm, int windowBits,
 
 int deflateReset(z_streamp strm);
 int inflateReset(z_streamp strm);
+int inflateReset2(z_streamp strm, int windowBits);
+unsigned long crc32(unsigned long crc, const unsigned char *buf, unsigned int len);
+unsigned long adler32(unsigned long adler, const unsigned char *buf, unsigned int len);
 
 /* Convenience macros */
 #define deflateInit(strm, level) \

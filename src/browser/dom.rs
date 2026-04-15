@@ -184,10 +184,16 @@ impl DomNode {
     }
 }
 
+/// Maximum CSS text from <style> blocks
+pub const MAX_CSS: usize = 4096;
+
 /// The DOM tree — flat arena of nodes
 pub struct Document {
     pub nodes: [DomNode; MAX_NODES],
     pub node_count: usize,
+    /// Extracted CSS text from <style> blocks
+    pub css_text: [u8; MAX_CSS],
+    pub css_len: usize,
 }
 
 impl Document {
@@ -195,12 +201,15 @@ impl Document {
         Document {
             nodes: [DomNode::empty(); MAX_NODES],
             node_count: 0,
+            css_text: [0; MAX_CSS],
+            css_len: 0,
         }
     }
 
     /// Initialize with a document root node
     pub fn init(&mut self) {
         self.node_count = 0;
+        self.css_len = 0;
         let root = self.alloc_node();
         if let Some(idx) = root {
             self.nodes[idx].node_type = NodeType::Document;

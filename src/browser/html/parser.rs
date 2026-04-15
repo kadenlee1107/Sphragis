@@ -167,11 +167,10 @@ pub fn parse(html: &[u8], doc: &mut Document) {
             let parent = stack[stack_depth - 1];
             doc.append_child(parent, elem_idx);
 
-            // Skip <script> and <style> content
+            // Skip <script>, extract <style> content
             let tag_str = doc.get(elem_idx).tag_str();
-            if tag_str == "script" || tag_str == "style" {
-                // Find the closing tag
-                let close = if tag_str == "script" { b"</script>" as &[u8] } else { b"</style>" };
+            if tag_str == "script" {
+                let close = b"</script>" as &[u8];
                 while i + close.len() <= html.len() {
                     if starts_with_ci(&html[i..], close) {
                         i += close.len();
@@ -179,6 +178,29 @@ pub fn parse(html: &[u8], doc: &mut Document) {
                     }
                     i += 1;
                 }
+                continue;
+            }
+            if tag_str == "style" {
+                // Extract CSS text into document's css_text buffer
+                let css_start = i;
+                let close = b"</style>" as &[u8];
+                while i + close.len() <= html.len() {
+                    if starts_with_ci(&html[i..], close) {
+                        break;
+                    }
+                    i += 1;
+                }
+                // Copy CSS content
+                let css_end = i;
+                let css_bytes = &html[css_start..css_end];
+                let avail = super::super::dom::MAX_CSS - doc.css_len;
+                let copy_len = css_bytes.len().min(avail);
+                if copy_len > 0 {
+                    doc.css_text[doc.css_len..doc.css_len + copy_len]
+                        .copy_from_slice(&css_bytes[..copy_len]);
+                    doc.css_len += copy_len;
+                }
+                i += close.len();
                 continue;
             }
 

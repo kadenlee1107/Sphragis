@@ -16,10 +16,12 @@
 #define HUGE_VAL   __builtin_huge_val()
 #define HUGE_VALF  __builtin_huge_valf()
 
+#ifndef __cplusplus
 #define isnan(x)   __builtin_isnan(x)
 #define isinf(x)   __builtin_isinf(x)
 #define isfinite(x) __builtin_isfinite(x)
 #define signbit(x) __builtin_signbit(x)
+#endif
 #define fpclassify(x) __builtin_fpclassify(0, 1, 4, 3, 2, (x))
 
 /* Trigonometric */
@@ -110,7 +112,46 @@ float copysignf(float x, float y);
 
 /* Scaling */
 double scalbn(double x, int n);
+float scalbnf(float x, int n);
 int ilogb(double x);
 double logb(double x);
+
+/* Next representable value */
+double nextafter(double x, double y);
+float nextafterf(float x, float y);
+double nexttoward(double x, long double y);
+
+/* NaN generation */
+double nan(const char *tagp);
+float nanf(const char *tagp);
+
+/* Classification functions (C99 — also available as macros above) */
+#ifdef __cplusplus
+extern "C" {
+#endif
+static inline int __isnan_fn(double x) { return __builtin_isnan(x); }
+static inline int __isinf_fn(double x) { return __builtin_isinf(x); }
+static inline int __isfinite_fn(double x) { return __builtin_isfinite(x); }
+static inline int __isnanf_fn(float x) { return __builtin_isnan(x); }
+static inline int __isinff_fn(float x) { return __builtin_isinf(x); }
+static inline int __isfinitef_fn(float x) { return __builtin_isfinite(x); }
+#ifdef __cplusplus
+}
+#endif
+
+/* FMA (fused multiply-add) */
+double fma(double x, double y, double z);
+float fmaf(float x, float y, float z);
+long lrint(double x);
+long lrintf(float x);
+long long llrint(double x);
+
+/* Error function */
+double erf(double x);
+double erfc(double x);
+
+/* Gamma */
+double lgamma(double x);
+double tgamma(double x);
 
 #endif

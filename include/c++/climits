@@ -1,0 +1,6 @@
+#ifndef _BAT_CLIMITS
+#define _BAT_CLIMITS
+
+#include <limits.h>
+
+#endif

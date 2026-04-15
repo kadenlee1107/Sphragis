@@ -1,0 +1,6 @@
+#ifndef _BAT_CASSERT
+#define _BAT_CASSERT
+
+#include <assert.h>
+
+#endif

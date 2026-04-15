@@ -8,6 +8,11 @@
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 
+#define _SC_NPROCESSORS_ONLN 84
+#define _SC_PAGE_SIZE        30
+
+long sysconf(int name);
+
 /* Access mode flags for access() */
 #define F_OK 0
 #define R_OK 4

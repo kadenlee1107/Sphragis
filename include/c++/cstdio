@@ -1,0 +1,42 @@
+#ifndef _BAT_CSTDIO
+#define _BAT_CSTDIO
+
+#include <stdio.h>
+
+namespace std {
+    using ::FILE;
+    using ::fopen;
+    using ::fclose;
+    using ::fread;
+    using ::fwrite;
+    using ::fseek;
+    using ::ftell;
+    using ::rewind;
+    using ::feof;
+    using ::ferror;
+    using ::fflush;
+    using ::fprintf;
+    using ::printf;
+    using ::sprintf;
+    using ::snprintf;
+    using ::vprintf;
+    using ::vfprintf;
+    using ::vsprintf;
+    using ::vsnprintf;
+    using ::sscanf;
+    using ::fscanf;
+    using ::fgets;
+    using ::fputs;
+    using ::puts;
+    using ::fputc;
+    using ::fgetc;
+    using ::remove;
+    using ::rename;
+    using ::tmpfile;
+    using ::tmpnam;
+    using ::stdin;
+    using ::stdout;
+    using ::stderr;
+}
+
+#endif

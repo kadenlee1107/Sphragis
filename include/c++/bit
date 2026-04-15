@@ -1,0 +1,116 @@
+#ifndef _BAT_BIT
+#define _BAT_BIT
+
+#include <cstddef>
+#include <cstdint>
+#include <type_traits>
+
+namespace std {
+
+// bit_cast
+template<class To, class From>
+constexpr To bit_cast(const From& src) noexcept {
+    static_assert(sizeof(To) == sizeof(From), "bit_cast requires same size types");
+    static_assert(is_trivially_copyable<From>::value, "bit_cast From must be trivially copyable");
+    static_assert(is_trivially_copyable<To>::value, "bit_cast To must be trivially copyable");
+    return __builtin_bit_cast(To, src);
+}
+
+// popcount
+template<class T>
+constexpr int popcount(T x) noexcept {
+    if constexpr (sizeof(T) <= sizeof(unsigned int))
+        return __builtin_popcount(static_cast<unsigned int>(x));
+    else if constexpr (sizeof(T) <= sizeof(unsigned long))
+        return __builtin_popcountl(static_cast<unsigned long>(x));
+    else
+        return __builtin_popcountll(static_cast<unsigned long long>(x));
+}
+
+// countl_zero — template version (C++20 style)
+namespace detail {
+    constexpr int clz_impl(unsigned int x)       { return x == 0 ? 32 : __builtin_clz(x); }
+    constexpr int clz_impl(unsigned long x)      { return x == 0 ? 64 : __builtin_clzl(x); }
+    constexpr int clz_impl(unsigned long long x)  { return x == 0 ? 64 : __builtin_clzll(x); }
+    constexpr int ctz_impl(unsigned int x)       { return x == 0 ? 32 : __builtin_ctz(x); }
+    constexpr int ctz_impl(unsigned long x)      { return x == 0 ? 64 : __builtin_ctzl(x); }
+    constexpr int ctz_impl(unsigned long long x)  { return x == 0 ? 64 : __builtin_ctzll(x); }
+}
+
+template<class T>
+constexpr int countl_zero(T x) noexcept {
+    if constexpr (sizeof(T) <= sizeof(unsigned int))
+        return detail::clz_impl(static_cast<unsigned int>(x)) - (sizeof(unsigned int) - sizeof(T)) * 8;
+    else if constexpr (sizeof(T) <= sizeof(unsigned long))
+        return detail::clz_impl(static_cast<unsigned long>(x));
+    else
+        return detail::clz_impl(static_cast<unsigned long long>(x));
+}
+
+template<class T>
+constexpr int countr_zero(T x) noexcept {
+    if constexpr (sizeof(T) <= sizeof(unsigned int))
+        return x == 0 ? static_cast<int>(sizeof(T) * 8) : detail::ctz_impl(static_cast<unsigned int>(x));
+    else if constexpr (sizeof(T) <= sizeof(unsigned long))
+        return detail::ctz_impl(static_cast<unsigned long>(x));
+    else
+        return detail::ctz_impl(static_cast<unsigned long long>(x));
+}
+
+template<class T>
+constexpr int countl_one(T x) noexcept { return countl_zero(static_cast<T>(~x)); }
+
+template<class T>
+constexpr int countr_one(T x) noexcept { return countr_zero(static_cast<T>(~x)); }
+
+// has_single_bit
+constexpr bool has_single_bit(unsigned int x) noexcept { return x != 0 && (x & (x - 1)) == 0; }
+constexpr bool has_single_bit(unsigned long x) noexcept { return x != 0 && (x & (x - 1)) == 0; }
+constexpr bool has_single_bit(unsigned long long x) noexcept { return x != 0 && (x & (x - 1)) == 0; }
+
+// bit_width
+constexpr int bit_width(unsigned int x) noexcept { return x == 0 ? 0 : 32 - countl_zero(x); }
+constexpr int bit_width(unsigned long x) noexcept { return x == 0 ? 0 : 64 - countl_zero(x); }
+constexpr int bit_width(unsigned long long x) noexcept { return x == 0 ? 0 : 64 - countl_zero(x); }
+
+// bit_ceil
+constexpr unsigned int bit_ceil(unsigned int x) noexcept {
+    if (x <= 1) return 1;
+    return 1u << bit_width(x - 1);
+}
+
+// bit_floor
+constexpr unsigned int bit_floor(unsigned int x) noexcept {
+    if (x == 0) return 0;
+    return 1u << (bit_width(x) - 1);
+}
+
+// rotr / rotl
+constexpr unsigned int rotr(unsigned int x, int s) noexcept {
+    constexpr int N = 32;
+    int r = s % N;
+    if (r == 0) return x;
+    if (r < 0) r += N;
+    return (x >> r) | (x << (N - r));
+}
+
+constexpr unsigned int rotl(unsigned int x, int s) noexcept {
+    return rotr(x, -s);
+}
+
+// endian
+enum class endian {
+#if defined(__ORDER_LITTLE_ENDIAN__)
+    little = __ORDER_LITTLE_ENDIAN__,
+    big    = __ORDER_BIG_ENDIAN__,
+    native = __BYTE_ORDER__
+#else
+    little = 1234,
+    big    = 4321,
+    native = 1234 // Assume little-endian for Apple Silicon
+#endif
+};
+
+} // namespace std
+
+#endif
