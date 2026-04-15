@@ -28,6 +28,22 @@ public:
     list() : _head(nullptr), _tail(nullptr), _size(0) {}
     explicit list(const Allocator&) : _head(nullptr), _tail(nullptr), _size(0) {}
     ~list() { clear(); }
+    template<class... Args>
+    T& emplace_back(Args&&... args) {
+        Node* n = new Node(static_cast<Args&&>(args)...);
+        n->prev = _tail;
+        if (_tail) _tail->next = n; else _head = n;
+        _tail = n; _size++;
+        return n->data;
+    }
+    template<class... Args>
+    T& emplace_front(Args&&... args) {
+        Node* n = new Node(static_cast<Args&&>(args)...);
+        n->next = _head;
+        if (_head) _head->prev = n; else _tail = n;
+        _head = n; _size++;
+        return n->data;
+    }
     void push_back(const T& v) {
         Node* n = new Node(v); n->prev = _tail;
         if (_tail) _tail->next = n; else _head = n;

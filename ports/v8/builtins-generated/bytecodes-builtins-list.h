@@ -679,4 +679,6 @@ constexpr uint8_t kExtraWideBytecodeToBuiltinsMapping[256] = {
   211,211,211,211,211,211,211,211,211,211,211,211,211,211,211,211
 };
 
+constexpr uint8_t kIllegalBytecodeHandlerEncoding = 255;
+
 #endif

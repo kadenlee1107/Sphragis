@@ -343,9 +343,14 @@ template<class T> struct is_unbounded_array : false_type {};
 template<class T> struct is_unbounded_array<T[]> : true_type {};
 template<class T> inline constexpr bool is_unbounded_array_v = is_unbounded_array<T>::value;
 
-// is_invocable (C++17) — simplified: always true for callable + args
-template<class Fn, class... Args> struct is_invocable : true_type {};
-template<class Fn, class... Args> inline constexpr bool is_invocable_v = true;
+// is_invocable (C++17) — uses SFINAE to check
+namespace detail {
+    template<class, class, class...> struct is_invocable_impl : false_type {};
+    template<class Fn, class... Args>
+    struct is_invocable_impl<void_t<decltype(declval<Fn>()(declval<Args>()...))>, Fn, Args...> : true_type {};
+}
+template<class Fn, class... Args> struct is_invocable : detail::is_invocable_impl<void, Fn, Args...> {};
+template<class Fn, class... Args> inline constexpr bool is_invocable_v = is_invocable<Fn, Args...>::value;
 template<class R, class Fn, class... Args> struct is_invocable_r : true_type {};
 template<class R, class Fn, class... Args> inline constexpr bool is_invocable_r_v = true;
 template<class Fn, class... Args> struct is_nothrow_invocable : false_type {};

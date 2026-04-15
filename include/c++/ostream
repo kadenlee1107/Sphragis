@@ -96,6 +96,7 @@ inline ostream& left(ostream& os) { return os; }
 inline ostream& right(ostream& os) { return os; }
 inline ostream& fixed(ostream& os) { return os; }
 inline ostream& scientific(ostream& os) { return os; }
+inline ostream& flush(ostream& os) { return os.flush(); }
 
 inline ostream cout;
 inline ostream cerr;
