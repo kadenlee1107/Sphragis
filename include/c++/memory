@@ -453,6 +453,18 @@ struct allocator_traits {
     static void destroy(Alloc&, T* p) { p->~T(); }
 };
 
+// enable_shared_from_this
+template<class T>
+class enable_shared_from_this {
+protected:
+    constexpr enable_shared_from_this() noexcept {}
+    enable_shared_from_this(const enable_shared_from_this&) noexcept {}
+    enable_shared_from_this& operator=(const enable_shared_from_this&) noexcept { return *this; }
+    ~enable_shared_from_this() {}
+public:
+    shared_ptr<T> shared_from_this() { return shared_ptr<T>(); }
+};
+
 } // namespace std
 
 #endif

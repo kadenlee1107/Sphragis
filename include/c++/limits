@@ -69,6 +69,10 @@ struct numeric_limits<bool> {
     static constexpr bool is_modulo = false;
     static constexpr bool has_infinity = false;
     static constexpr bool has_quiet_NaN = false;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
     static constexpr bool min() noexcept { return false; }
     static constexpr bool max() noexcept { return true; }
     static constexpr bool lowest() noexcept { return false; }
@@ -88,6 +92,10 @@ struct numeric_limits<signed char> {
     static constexpr bool is_modulo = false;
     static constexpr bool has_infinity = false;
     static constexpr bool has_quiet_NaN = false;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
     static constexpr signed char min() noexcept { return SCHAR_MIN; }
     static constexpr signed char max() noexcept { return SCHAR_MAX; }
     static constexpr signed char lowest() noexcept { return SCHAR_MIN; }
@@ -107,6 +115,10 @@ struct numeric_limits<unsigned char> {
     static constexpr bool is_modulo = true;
     static constexpr bool has_infinity = false;
     static constexpr bool has_quiet_NaN = false;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
     static constexpr unsigned char min() noexcept { return 0; }
     static constexpr unsigned char max() noexcept { return UCHAR_MAX; }
     static constexpr unsigned char lowest() noexcept { return 0; }
@@ -125,6 +137,10 @@ struct numeric_limits<char> {
     static constexpr bool is_bounded = true;
     static constexpr bool has_infinity = false;
     static constexpr bool has_quiet_NaN = false;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
     static constexpr char min() noexcept { return CHAR_MIN; }
     static constexpr char max() noexcept { return CHAR_MAX; }
     static constexpr char lowest() noexcept { return CHAR_MIN; }
@@ -143,6 +159,10 @@ struct numeric_limits<short> {
     static constexpr bool is_bounded = true;
     static constexpr bool has_infinity = false;
     static constexpr bool has_quiet_NaN = false;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
     static constexpr short min() noexcept { return SHRT_MIN; }
     static constexpr short max() noexcept { return SHRT_MAX; }
     static constexpr short lowest() noexcept { return SHRT_MIN; }
@@ -162,6 +182,10 @@ struct numeric_limits<unsigned short> {
     static constexpr bool is_modulo = true;
     static constexpr bool has_infinity = false;
     static constexpr bool has_quiet_NaN = false;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
     static constexpr unsigned short min() noexcept { return 0; }
     static constexpr unsigned short max() noexcept { return USHRT_MAX; }
     static constexpr unsigned short lowest() noexcept { return 0; }
@@ -182,6 +206,10 @@ struct numeric_limits<int> {
     static constexpr bool is_modulo = false;
     static constexpr bool has_infinity = false;
     static constexpr bool has_quiet_NaN = false;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
     static constexpr int min() noexcept { return INT_MIN; }
     static constexpr int max() noexcept { return INT_MAX; }
     static constexpr int lowest() noexcept { return INT_MIN; }
@@ -202,6 +230,10 @@ struct numeric_limits<unsigned int> {
     static constexpr bool is_modulo = true;
     static constexpr bool has_infinity = false;
     static constexpr bool has_quiet_NaN = false;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
     static constexpr unsigned int min() noexcept { return 0; }
     static constexpr unsigned int max() noexcept { return UINT_MAX; }
     static constexpr unsigned int lowest() noexcept { return 0; }
@@ -221,6 +253,10 @@ struct numeric_limits<long> {
     static constexpr bool is_bounded = true;
     static constexpr bool has_infinity = false;
     static constexpr bool has_quiet_NaN = false;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
     static constexpr long min() noexcept { return LONG_MIN; }
     static constexpr long max() noexcept { return LONG_MAX; }
     static constexpr long lowest() noexcept { return LONG_MIN; }
@@ -241,6 +277,10 @@ struct numeric_limits<unsigned long> {
     static constexpr bool is_modulo = true;
     static constexpr bool has_infinity = false;
     static constexpr bool has_quiet_NaN = false;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
     static constexpr unsigned long min() noexcept { return 0; }
     static constexpr unsigned long max() noexcept { return ULONG_MAX; }
     static constexpr unsigned long lowest() noexcept { return 0; }
@@ -260,6 +300,10 @@ struct numeric_limits<long long> {
     static constexpr bool is_bounded = true;
     static constexpr bool has_infinity = false;
     static constexpr bool has_quiet_NaN = false;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
     static constexpr long long min() noexcept { return LLONG_MIN; }
     static constexpr long long max() noexcept { return LLONG_MAX; }
     static constexpr long long lowest() noexcept { return LLONG_MIN; }
@@ -280,6 +324,10 @@ struct numeric_limits<unsigned long long> {
     static constexpr bool is_modulo = true;
     static constexpr bool has_infinity = false;
     static constexpr bool has_quiet_NaN = false;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
     static constexpr unsigned long long min() noexcept { return 0; }
     static constexpr unsigned long long max() noexcept { return ULLONG_MAX; }
     static constexpr unsigned long long lowest() noexcept { return 0; }
