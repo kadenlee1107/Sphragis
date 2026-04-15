@@ -6,6 +6,7 @@ use super::layout::LayoutTree;
 use super::css::style::*;
 use super::media::png::PngImage;
 use crate::ui::font;
+use crate::ui::truetype;
 use crate::drivers::virtio::gpu;
 
 // Image rendering support
@@ -173,24 +174,44 @@ pub fn paint(
                 }
 
                 if tx >= clip_left && tx < clip_right {
-                    let ch_buf = [ch];
-                    let s = unsafe { core::str::from_utf8_unchecked(&ch_buf) };
+                    if truetype::is_available() {
+                        // Anti-aliased TrueType rendering
+                        let font_px = if is_big { 24u16 } else if is_bold { 16 } else { 14 };
+                        let ch_buf = [ch];
+                        let advance = truetype::draw_text_fb(
+                            fb, sw, tx, ty, &ch_buf, font_px, color,
+                            clip_left, clip_right, clip_top, clip_bottom,
+                        );
 
-                    // Draw character
-                    font::draw_str(fb, sw, tx as u32, ty as u32, s, color, 0xFF0A0A0A);
+                        // Bold: draw again offset by 1px
+                        if is_bold {
+                            truetype::draw_text_fb(
+                                fb, sw, tx + 1, ty, &ch_buf, font_px, color,
+                                clip_left, clip_right, clip_top, clip_bottom,
+                            );
+                        }
 
-                    // Bold or big: draw again offset by 1px
-                    if is_bold || is_big {
-                        font::draw_str(fb, sw, (tx + 1) as u32, ty as u32, s, color, 0xFF0A0A0A);
-                    }
+                        // Underline
+                        if is_underline && ch != b' ' {
+                            gpu::fill_rect(tx as u32, (ty + font_px as i32 + 1) as u32,
+                                advance.max(6) as u32, 1, color);
+                        }
 
-                    // Underline
-                    if is_underline && ch != b' ' {
-                        gpu::fill_rect(tx as u32, (ty + 14) as u32, 8, 1, color);
+                        tx += if advance > 0 { advance } else { char_w };
+                    } else {
+                        // Fallback: monospace bitmap font
+                        let ch_buf = [ch];
+                        let s = unsafe { core::str::from_utf8_unchecked(&ch_buf) };
+                        font::draw_str(fb, sw, tx as u32, ty as u32, s, color, 0xFF0A0A0A);
+                        if is_bold || is_big {
+                            font::draw_str(fb, sw, (tx + 1) as u32, ty as u32, s, color, 0xFF0A0A0A);
+                        }
+                        if is_underline && ch != b' ' {
+                            gpu::fill_rect(tx as u32, (ty + 14) as u32, 8, 1, color);
+                        }
+                        tx += char_w;
                     }
                 }
-
-                tx += char_w;
                 col += 1;
             }
         }

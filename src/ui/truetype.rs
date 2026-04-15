@@ -992,3 +992,89 @@ pub fn init_with_data(data: &'static [u8]) {
 pub fn is_available() -> bool {
     get_font().is_some()
 }
+
+/// Draw anti-aliased text directly to the GPU framebuffer.
+/// Uses the embedded TrueType font with alpha blending.
+/// Returns the width of the rendered text in pixels.
+pub fn draw_text_fb(
+    fb: *mut u32,
+    screen_w: u32,
+    x: i32,
+    y: i32,
+    text: &[u8],
+    size_px: u16,
+    color: u32,
+    clip_left: i32,
+    clip_right: i32,
+    clip_top: i32,
+    clip_bottom: i32,
+) -> i32 {
+    let font = match get_font() {
+        Some(f) => f,
+        None => return 0,
+    };
+
+    let cr = ((color >> 16) & 0xFF) as u32;
+    let cg = ((color >> 8) & 0xFF) as u32;
+    let cb = (color & 0xFF) as u32;
+
+    let mut cursor_x = x;
+    let mut bitmap = [0u8; MAX_GLYPH_SIZE * MAX_GLYPH_SIZE];
+
+    for &ch in text {
+        if ch < 0x20 || ch > 0x7E { continue; }
+
+        let (gw, gh, advance) = font.render_char(ch as char, size_px, &mut bitmap);
+
+        // Blit glyph with alpha blending and clipping
+        for row in 0..gh as i32 {
+            let sy = y + row;
+            if sy < clip_top || sy >= clip_bottom { continue; }
+
+            for col in 0..gw as i32 {
+                let sx = cursor_x + col;
+                if sx < clip_left || sx >= clip_right { continue; }
+
+                let coverage = bitmap[(row as usize) * (gw as usize) + (col as usize)] as u32;
+                if coverage == 0 { continue; }
+
+                let fb_idx = (sy as u32 * screen_w + sx as u32) as usize;
+                unsafe {
+                    let dst = core::ptr::read_volatile(fb.add(fb_idx));
+                    let dr = (dst >> 16) & 0xFF;
+                    let dg = (dst >> 8) & 0xFF;
+                    let db = dst & 0xFF;
+
+                    let r = dr + ((cr - dr) * coverage) / 255;
+                    let g = dg + ((cg - dg) * coverage) / 255;
+                    let b = db + ((cb - db) * coverage) / 255;
+
+                    core::ptr::write_volatile(
+                        fb.add(fb_idx),
+                        0xFF000000 | (r << 16) | (g << 8) | b,
+                    );
+                }
+            }
+        }
+        cursor_x += advance as i32;
+    }
+
+    cursor_x - x // return total width
+}
+
+/// Measure the width of text at a given pixel size without rendering.
+pub fn text_width(text: &[u8], size_px: u16) -> i32 {
+    let font = match get_font() {
+        Some(f) => f,
+        None => return text.len() as i32 * 8, // fallback: 8px per char
+    };
+
+    let mut width = 0i32;
+    for &ch in text {
+        if ch < 0x20 || ch > 0x7E { continue; }
+        let mut dummy = [0u8; 4]; // tiny buffer, we only need advance
+        let (_, _, advance) = font.render_char(ch as char, size_px, &mut dummy);
+        width += advance as i32;
+    }
+    width
+}
