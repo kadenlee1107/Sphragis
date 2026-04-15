@@ -160,4 +160,7 @@ double erfc(double x);
 double lgamma(double x);
 double tgamma(double x);
 
+float nearbyintf(float x);
+double nearbyint(double x);
+
 #endif

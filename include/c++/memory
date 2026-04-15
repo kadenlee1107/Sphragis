@@ -9,10 +9,13 @@
 namespace std {
 
 // addressof
+#ifndef _BAT_ADDRESSOF_DEFINED
+#define _BAT_ADDRESSOF_DEFINED
 template<class T>
 constexpr T* addressof(T& ref) noexcept {
     return __builtin_addressof(ref);
 }
+#endif
 
 // default_delete
 template<class T>

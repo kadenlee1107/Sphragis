@@ -9,6 +9,7 @@ namespace std {
 
 template<class CharT> struct char_traits;
 template<class CharT, class Traits> class basic_ostream;
+template<class CharT, class Traits> class basic_ios;
 
 using streamsize = long long;
 

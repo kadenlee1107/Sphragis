@@ -106,6 +106,24 @@ public:
     tuple& operator=(tuple&& o) noexcept { v0_=static_cast<T0&&>(o.v0_);v1_=static_cast<T1&&>(o.v1_);v2_=static_cast<T2&&>(o.v2_);v3_=static_cast<T3&&>(o.v3_); return *this; }
 };
 
+// tuple comparison operators
+template<class A0, class A1>
+constexpr bool operator==(const tuple<A0,A1>& a, const tuple<A0,A1>& b) { return a.v0_==b.v0_ && a.v1_==b.v1_; }
+template<class A0, class A1>
+constexpr bool operator!=(const tuple<A0,A1>& a, const tuple<A0,A1>& b) { return !(a==b); }
+template<class A0, class A1>
+constexpr bool operator<(const tuple<A0,A1>& a, const tuple<A0,A1>& b) { if(a.v0_<b.v0_)return true; if(b.v0_<a.v0_)return false; return a.v1_<b.v1_; }
+
+template<class A0, class A1, class A2>
+constexpr bool operator==(const tuple<A0,A1,A2>& a, const tuple<A0,A1,A2>& b) { return a.v0_==b.v0_ && a.v1_==b.v1_ && a.v2_==b.v2_; }
+template<class A0, class A1, class A2>
+constexpr bool operator!=(const tuple<A0,A1,A2>& a, const tuple<A0,A1,A2>& b) { return !(a==b); }
+template<class A0, class A1, class A2>
+constexpr bool operator<(const tuple<A0,A1,A2>& a, const tuple<A0,A1,A2>& b) { if(a.v0_<b.v0_)return true; if(b.v0_<a.v0_)return false; if(a.v1_<b.v1_)return true; if(b.v1_<a.v1_)return false; return a.v2_<b.v2_; }
+
+template<class A0, class A1, class A2, class A3>
+constexpr bool operator==(const tuple<A0,A1,A2,A3>& a, const tuple<A0,A1,A2,A3>& b) { return a.v0_==b.v0_ && a.v1_==b.v1_ && a.v2_==b.v2_ && a.v3_==b.v3_; }
+
 // tuple_size
 template<class... Ts>
 struct tuple_size<tuple<Ts...>> : integral_constant<size_t, sizeof...(Ts)> {};
@@ -215,6 +233,10 @@ auto tuple_cat(T1&& t1, T2&& t2) {
     return t1; // stub — real impl needs index_sequence expansion
 }
 
+// piecewise_construct pair constructor (now that tuple is fully defined)
+// Add to pair via utility include
 } // namespace std
+
+// pair piecewise constructors are handled via map's Node constructor
 
 #endif

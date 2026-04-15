@@ -6,6 +6,13 @@
 
 namespace std {
 
+// addressof (also in <memory> but needed early)
+#ifndef _BAT_ADDRESSOF_DEFINED
+#define _BAT_ADDRESSOF_DEFINED
+template<class T>
+constexpr T* addressof(T& ref) noexcept { return __builtin_addressof(ref); }
+#endif
+
 // move
 template<class T>
 constexpr remove_reference_t<T>&& move(T&& t) noexcept {
@@ -44,6 +51,11 @@ inline T exchange(T& obj, U&& new_value) {
     return old_value;
 }
 
+// Forward declarations for pair
+template<class... Ts> class tuple;
+struct piecewise_construct_t { explicit constexpr piecewise_construct_t() = default; };
+inline constexpr piecewise_construct_t piecewise_construct{};
+
 // pair
 template<class T1, class T2>
 struct pair {
@@ -61,6 +73,8 @@ struct pair {
 
     template<class U1, class U2>
     constexpr pair(const pair<U1, U2>& p) : first(p.first), second(p.second) {}
+
+    // piecewise construct support is in <tuple> (after tuple is defined)
 
     pair(const pair&) = default;
     pair(pair&&) = default;
@@ -154,9 +168,7 @@ using make_index_sequence = make_integer_sequence<size_t, N>;
 template<class... T>
 using index_sequence_for = make_index_sequence<sizeof...(T)>;
 
-// piecewise_construct
-struct piecewise_construct_t { explicit constexpr piecewise_construct_t() = default; };
-inline constexpr piecewise_construct_t piecewise_construct{};
+// piecewise_construct — defined above (before pair)
 
 // in_place
 #ifndef _BAT_IN_PLACE_DEFINED

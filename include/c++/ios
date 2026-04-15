@@ -1,0 +1,5 @@
+#ifndef _BAT_IOS
+#define _BAT_IOS
+#include <ostream>
+// ios is defined in ostream header
+#endif

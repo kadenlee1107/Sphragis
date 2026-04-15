@@ -26,6 +26,7 @@ public:
         bool operator!=(const iterator& o) const { return _n != o._n; }
     };
     list() : _head(nullptr), _tail(nullptr), _size(0) {}
+    explicit list(const Allocator&) : _head(nullptr), _tail(nullptr), _size(0) {}
     ~list() { clear(); }
     void push_back(const T& v) {
         Node* n = new Node(v); n->prev = _tail;

@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <new>
+#include <tuple>
 
 namespace std {
 
@@ -100,6 +101,7 @@ public:
         pointer operator->() const { return &(*p)->data; }
         const_iterator& operator++() { ++p; return *this; }
         const_iterator operator++(int) { auto t=*this; ++p; return t; }
+        const_iterator& operator--() { --p; return *this; }
         bool operator==(const const_iterator& o) const { return p==o.p; }
         bool operator!=(const const_iterator& o) const { return p!=o.p; }
     };
@@ -123,7 +125,7 @@ public:
         if (sz_>=cap_) grow();
         size_type ip = ipos(k); shift_right(ip);
         arr_[ip] = static_cast<Node*>(::operator new(sizeof(Node)));
-        ::new(arr_[ip]) Node(piecewise_construct, forward_as_tuple(k), forward_as_tuple());
+        ::new(arr_[ip]) Node(value_type(k, T{}));
         sz_++; return arr_[ip]->data.second;
     }
     T& operator[](Key&& k) {
@@ -131,7 +133,7 @@ public:
         if (sz_>=cap_) grow();
         size_type ip = ipos(k); shift_right(ip);
         arr_[ip] = static_cast<Node*>(::operator new(sizeof(Node)));
-        ::new(arr_[ip]) Node(piecewise_construct, forward_as_tuple(static_cast<Key&&>(k)), forward_as_tuple());
+        ::new(arr_[ip]) Node(value_type(static_cast<Key&&>(k), T{}));
         sz_++; return arr_[ip]->data.second;
     }
 
@@ -143,6 +145,8 @@ public:
     const_iterator cend() const { return end(); }
     reverse_iterator rbegin() { return reverse_iterator(end()); }
     reverse_iterator rend() { return reverse_iterator(begin()); }
+    auto rbegin() const { return std::reverse_iterator<const_iterator>(end()); }
+    auto rend() const { return std::reverse_iterator<const_iterator>(begin()); }
 
     size_type size() const { return sz_; }
     bool empty() const { return sz_==0; }

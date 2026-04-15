@@ -48,6 +48,8 @@ private:
 
 public:
     set() : size_(0) {}
+    explicit set(const Compare&, const Allocator& = Allocator()) : size_(0) {}
+    explicit set(const Allocator&) : size_(0) {}
 
     set(std::initializer_list<Key> init) : size_(0) {
         for (auto& k : init) insert(k);
