@@ -209,6 +209,8 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
         if rela_off > 0 && rela_sz > 0 {
             let num = rela_sz / 24;
             uart::puts("[loader] Applying "); crate::kernel::mm::print_num(num); uart::puts(" relocations\n");
+            uart::puts("[loader] reloc_offset=0x"); print_hex(reloc_offset as u64); uart::puts("\n");
+            let mut applied = 0usize;
             for r in 0..num {
                 let re = rela_off + r * 24;
                 if re + 24 > data.len() { break; }
@@ -219,8 +221,17 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
                     let patch_addr = (r_offset as i64 + reloc_offset) as usize;
                     let value = (r_addend as i64 + reloc_offset) as u64;
                     unsafe { core::arch::asm!("str {v}, [{a}]", a = in(reg) patch_addr, v = in(reg) value); }
+                    applied += 1;
+                    // Debug first and prop_dispatch relocation
+                    if applied <= 2 || r_offset == 0x7b4e8 {
+                        uart::puts("[reloc] vaddr=0x"); print_hex(r_offset);
+                        uart::puts(" → phys=0x"); print_hex(patch_addr as u64);
+                        uart::puts(" val=0x"); print_hex(value);
+                        uart::puts("\n");
+                    }
                 }
             }
+            uart::puts("[loader] Applied "); crate::kernel::mm::print_num(applied); uart::puts(" R_RELATIVE\n");
         }
     }
 
