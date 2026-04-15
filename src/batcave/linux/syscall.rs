@@ -715,6 +715,14 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             for _ in 1..pages {
                 let _ = crate::kernel::mm::frame::alloc_frame();
             }
+            // CRITICAL: zero the allocated memory (Linux MAP_ANONYMOUS guarantee)
+            // Without this, malloc returns garbage and libcss crashes
+            unsafe {
+                let ptr = base as *mut u8;
+                for i in 0..(pages * 4096) {
+                    core::ptr::write_volatile(ptr.add(i), 0);
+                }
+            }
             base as i64
         }
         None => ENOMEM,
