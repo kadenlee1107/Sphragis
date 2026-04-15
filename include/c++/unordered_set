@@ -75,6 +75,9 @@ public:
         for (size_type i = 0; i < MAX_ENTRIES; ++i)
             entries_[i].occupied = false;
     }
+    explicit unordered_set(size_type, const Hash& = Hash(), const KeyEqual& = KeyEqual(),
+                           const Allocator& = Allocator()) : unordered_set() {}
+    explicit unordered_set(const Allocator&) : unordered_set() {}
 
     unordered_set(std::initializer_list<Key> init) : unordered_set() {
         for (auto& k : init) insert(k);

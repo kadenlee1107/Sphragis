@@ -50,7 +50,7 @@ public:
     constexpr tuple(U0&& a0, U1&& a1) : v0_(static_cast<U0&&>(a0)), v1_(static_cast<U1&&>(a1)) {}
     template<class U0, class U1>
     constexpr tuple(const tuple<U0, U1>& o) : v0_(o.v0_), v1_(o.v1_) {}
-    template<class U0, class U1>
+    template<class U0, class U1, typename enable_if<is_constructible<T0, const U0&>::value && is_constructible<T1, const U1&>::value, int>::type = 0>
     constexpr tuple(const pair<U0, U1>& p) : v0_(p.first), v1_(p.second) {}
     tuple(const tuple&) = default;
     tuple(tuple&&) = default;

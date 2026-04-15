@@ -40,3 +40,44 @@ struct view_base {};
 } // namespace std::ranges
 
 #endif
+
+// Append to existing ranges header
+#ifndef _BAT_RANGES_LOWER_BOUND
+#define _BAT_RANGES_LOWER_BOUND
+namespace std::ranges {
+template<class ForwardIt, class T, class Proj = void*>
+ForwardIt lower_bound(ForwardIt first, ForwardIt last, const T& value, auto comp = {}, Proj = {}) {
+    while (first != last) {
+        auto mid = first;
+        auto dist = last - first;
+        mid += dist / 2;
+        if (comp(*mid, value)) { first = mid; ++first; }
+        else { last = mid; }
+    }
+    return first;
+}
+}
+namespace std::views {
+struct iota_view {
+    struct iterator {
+        int val;
+        using value_type = int;
+        using difference_type = int;
+        int operator*() const { return val; }
+        iterator& operator++() { ++val; return *this; }
+        iterator operator++(int) { auto t=*this; ++val; return t; }
+        bool operator==(const iterator& o) const { return val==o.val; }
+        bool operator!=(const iterator& o) const { return val!=o.val; }
+        int operator-(const iterator& o) const { return val-o.val; }
+        iterator operator+(int n) const { return {val+n}; }
+    };
+    int start_, end_;
+    iota_view(int s, int e) : start_(s), end_(e) {}
+    iterator begin() const { return {start_}; }
+    iterator end() const { return {end_}; }
+    int size() const { return end_-start_; }
+    int operator[](int i) const { return start_+i; }
+};
+inline iota_view iota(int start, int end) { return {start, end}; }
+}
+#endif

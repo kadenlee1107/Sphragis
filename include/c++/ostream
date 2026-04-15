@@ -42,7 +42,44 @@ public:
     explicit operator bool() const { return true; }
     bool good() const { return true; }
     bool fail() const { return false; }
+
+    // Formatting state (for V8's bytecode decoder)
+    using fmtflags = unsigned int;
+    static constexpr fmtflags hex = 1;
+    static constexpr fmtflags dec = 0;
+    fmtflags flags_ = 0;
+    char fill_ = ' ';
+
+    fmtflags flags() const { return flags_; }
+    fmtflags flags(fmtflags f) { auto old = flags_; flags_ = f; return old; }
+    char fill() const { return fill_; }
+    char fill(char c) { auto old = fill_; fill_ = c; return old; }
+    void copyfmt(const basic_ostream&) {} // stub
+    int width() const { return 0; }
+    int width(int) { return 0; }
 };
+
+// basic_ios — minimal standalone stub for format save/restore
+template<class CharT, class Traits>
+class basic_ios {
+public:
+    using fmtflags = unsigned int;
+    static constexpr fmtflags hex = 1;
+    static constexpr fmtflags dec = 0;
+
+    basic_ios() {}
+    explicit basic_ios(void*) {}
+    void copyfmt(const basic_ios&) {}
+    fmtflags flags() const { return 0; }
+    fmtflags flags(fmtflags) { return 0; }
+    char fill() const { return ' '; }
+    char fill(char) { return ' '; }
+    bool good() const { return true; }
+    bool fail() const { return false; }
+    explicit operator bool() const { return true; }
+};
+
+using ios = basic_ios<char, char_traits<char>>;
 
 using ostream = basic_ostream<char, char_traits<char>>;
 
