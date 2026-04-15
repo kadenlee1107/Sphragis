@@ -115,7 +115,8 @@ void _start(void) {
 
     css_stylesheet *sheet = NULL;
     css_stylesheet_create(&params, &sheet);
-    const char *css = "body { color: red; font-size: 16px; } h1 { color: blue; font-size: 24px; } p { margin: 10px; }";
+    // Start with empty CSS — test if selection works without any rules
+    const char *css = "";
     css_stylesheet_append_data(sheet, (const uint8_t *)css, strlen(css));
     css_stylesheet_data_done(sheet);
     printf("[1] Stylesheet ready (3 rules)\n");
@@ -191,9 +192,11 @@ void _start(void) {
     printf("    node_name ptr=%p\n", (void*)handler.node_name);
     printf("    body_node tag=%s\n", body_node.tag);
     printf("    Calling css_select_style...\n");
+    // Pre-allocate and zero the results to prevent garbage from stubs
     css_select_results *results = NULL;
     css_error err = css_select_style(ctx, &body_node, &unit_ctx, &media, NULL,
                                       &handler, NULL, &results);
+    printf("    css_select_style returned %d\n", err);
     if (err == CSS_OK && results) {
         css_computed_style *style = results->styles[CSS_PSEUDO_ELEMENT_NONE];
         if (style) {
