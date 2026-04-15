@@ -1,0 +1,33 @@
+#ifndef V8_GEN_TORQUE_GENERATED_SRC_BUILTINS_REGEXP_REPLACE_TQ_CSA_H_
+#define V8_GEN_TORQUE_GENERATED_SRC_BUILTINS_REGEXP_REPLACE_TQ_CSA_H_
+
+#include "src/builtins/torque-csa-header-includes.h"
+
+namespace v8 {
+namespace internal {
+
+// https://crsrc.org/c/v8/src/builtins/regexp-replace.tq?l=27&c=1
+TNode<IntPtrT> RegExpReplaceCallableNoExplicitCaptures_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<FixedArray> p_matchesElements, TNode<IntPtrT> p_matchesCapacity, TNode<String> p_string, TNode<Union<JSBoundFunction, JSFunction, JSObject, JSProxy, JSWrappedFunction>> p_replaceFn);
+
+// https://crsrc.org/c/v8/src/builtins/regexp-replace.tq?l=75&c=1
+TNode<IntPtrT> RegExpReplaceCallableWithExplicitCaptures_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<FixedArray> p_matchesElements, TNode<IntPtrT> p_matchesCapacity, TNode<Union<JSBoundFunction, JSFunction, JSObject, JSProxy, JSWrappedFunction>> p_replaceFn);
+
+// https://crsrc.org/c/v8/src/builtins/regexp-replace.tq?l=98&c=1
+TNode<String> RegExpReplaceFastGlobalCallable_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<JSRegExp> p_regexp, TNode<String> p_string, TNode<Union<JSBoundFunction, JSFunction, JSObject, JSProxy, JSWrappedFunction>> p_replaceFn);
+
+// https://crsrc.org/c/v8/src/builtins/regexp-replace.tq?l=136&c=1
+TNode<String> RegExpReplaceFastString_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<JSRegExp> p_regexp, TNode<String> p_string, TNode<String> p_replaceString);
+
+// https://crsrc.org/c/v8/src/builtins/regexp-replace.tq?l=48&c=31
+TNode<Smi> UnsafeCast_Smi_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
+
+// https://crsrc.org/c/v8/src/builtins/regexp-replace.tq?l=145&c=22
+TNode<JSRegExp> UnsafeCast_FastJSRegExp_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o);
+
+// https://crsrc.org/c/v8/src/builtins/regexp-replace.tq?l=179&c=10
+TNode<BoolT> Is_FastJSRegExp_FastJSRegExp_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<JSRegExp> p_o);
+
+} // namespace internal
+} // namespace v8
+
+#endif // V8_GEN_TORQUE_GENERATED_SRC_BUILTINS_REGEXP_REPLACE_TQ_CSA_H_

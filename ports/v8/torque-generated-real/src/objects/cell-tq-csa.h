@@ -1,0 +1,33 @@
+#ifndef V8_GEN_TORQUE_GENERATED_SRC_OBJECTS_CELL_TQ_CSA_H_
+#define V8_GEN_TORQUE_GENERATED_SRC_OBJECTS_CELL_TQ_CSA_H_
+
+#include "src/builtins/torque-csa-header-includes.h"
+
+namespace v8 {
+namespace internal {
+
+// https://crsrc.org/c/v8/src/objects/cell.tq?l=5&c=1
+TNode<Cell> Cast_Cell_0(compiler::CodeAssemblerState* state_, TNode<HeapObject> p_obj, compiler::CodeAssemblerLabel* label_CastError);
+
+// https://crsrc.org/c/v8/src/objects/cell.tq?l=12&c=1
+TNode<Object> LoadCellValue_0(compiler::CodeAssemblerState* state_, TNode<Cell> p_cell);
+
+// https://crsrc.org/c/v8/src/objects/cell.tq?l=18&c=1
+void StoreCellValue_0(compiler::CodeAssemblerState* state_, TNode<Cell> p_cell, TNode<Object> p_value);
+
+// https://crsrc.org/c/v8/src/objects/cell.tq?l=7&c=3
+TNode<Union<HeapObject, Smi, Weak<HeapObject>>> LoadCellMaybeValue_0(compiler::CodeAssemblerState* state_, TNode<Cell> p_o);
+
+// https://crsrc.org/c/v8/src/objects/cell.tq?l=7&c=3
+void StoreCellMaybeValue_0(compiler::CodeAssemblerState* state_, TNode<Cell> p_o, TNode<Union<HeapObject, Smi, Weak<HeapObject>>> p_v);
+
+// https://crsrc.org/c/v8/src/objects/cell.tq?l=5&c=1
+TNode<Cell> DownCastForTorqueClass_Cell_0(compiler::CodeAssemblerState* state_, TNode<HeapObject> p_o, compiler::CodeAssemblerLabel* label_CastError);
+
+// https://crsrc.org/c/v8/src/objects/cell.tq?l=15&c=10
+TNode<Object> UnsafeCast_Object_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Union<HeapObject, Smi, Weak<HeapObject>>> p_o);
+
+} // namespace internal
+} // namespace v8
+
+#endif // V8_GEN_TORQUE_GENERATED_SRC_OBJECTS_CELL_TQ_CSA_H_

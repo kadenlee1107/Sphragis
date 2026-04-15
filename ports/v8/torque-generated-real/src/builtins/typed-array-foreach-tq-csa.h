@@ -1,0 +1,20 @@
+#ifndef V8_GEN_TORQUE_GENERATED_SRC_BUILTINS_TYPED_ARRAY_FOREACH_TQ_CSA_H_
+#define V8_GEN_TORQUE_GENERATED_SRC_BUILTINS_TYPED_ARRAY_FOREACH_TQ_CSA_H_
+
+#include "src/builtins/torque-csa-header-includes.h"
+
+namespace v8 {
+namespace internal {
+
+// https://crsrc.org/c/v8/src/builtins/typed-array-foreach.tq?l=8&c=1
+const char* kBuiltinNameForEach_0(compiler::CodeAssemblerState* state_);
+// https://crsrc.org/c/v8/src/builtins/typed-array-foreach.tq?l=10&c=1
+TNode<Undefined> ForEachAllElements_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TorqueStructValidJSTypedArrayAndLength_0 p_attachedArrayAndLength, TNode<Union<JSBoundFunction, JSFunction, JSObject, JSProxy, JSWrappedFunction>> p_callbackfn, TNode<JSAny> p_thisArg);
+
+// https://crsrc.org/c/v8/src/builtins/typed-array-foreach.tq?l=58&c=33
+TNode<JSTypedArray> Cast_JSTypedArray_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
+
+} // namespace internal
+} // namespace v8
+
+#endif // V8_GEN_TORQUE_GENERATED_SRC_BUILTINS_TYPED_ARRAY_FOREACH_TQ_CSA_H_
