@@ -68,8 +68,8 @@ public:
     constexpr optional(const T& v) : _base(v) {}
     constexpr optional(T&& v) : _base(std::move(v)) {}
 
-    template<class U, typename enable_if<is_convertible<U, T>::value && !is_same<decay_t<U>, optional>::value, int>::type = 0>
-    constexpr optional(U&& v) : _base(T(std::forward<U>(v))) {}
+    template<class U, typename enable_if<is_constructible<T, U>::value && !is_same<decay_t<U>, optional>::value && !is_same<decay_t<U>, in_place_t>::value, int>::type = 0>
+    constexpr optional(U&& v) : _base(in_place, std::forward<U>(v)) {}
 
     template<class... Args>
     constexpr explicit optional(in_place_t, Args&&... args) : _base(in_place, std::forward<Args>(args)...) {}
