@@ -1,0 +1,64 @@
+#ifndef _BAT_COMPARE
+#define _BAT_COMPARE
+
+namespace std {
+
+// Three-way comparison result types (C++20 <=>)
+struct strong_ordering {
+    int _v;
+    constexpr explicit strong_ordering(int v) : _v(v) {}
+    static const strong_ordering less;
+    static const strong_ordering equal;
+    static const strong_ordering equivalent;
+    static const strong_ordering greater;
+    constexpr bool operator==(strong_ordering o) const { return _v == o._v; }
+    constexpr bool operator!=(strong_ordering o) const { return _v != o._v; }
+    friend constexpr bool operator==(strong_ordering o, int) { return o._v == 0; }
+    friend constexpr bool operator<(strong_ordering o, int) { return o._v < 0; }
+    friend constexpr bool operator>(strong_ordering o, int) { return o._v > 0; }
+    friend constexpr bool operator<=(strong_ordering o, int) { return o._v <= 0; }
+    friend constexpr bool operator>=(strong_ordering o, int) { return o._v >= 0; }
+};
+inline constexpr strong_ordering strong_ordering::less{-1};
+inline constexpr strong_ordering strong_ordering::equal{0};
+inline constexpr strong_ordering strong_ordering::equivalent{0};
+inline constexpr strong_ordering strong_ordering::greater{1};
+
+struct weak_ordering {
+    int _v;
+    constexpr explicit weak_ordering(int v) : _v(v) {}
+    static const weak_ordering less;
+    static const weak_ordering equivalent;
+    static const weak_ordering greater;
+    friend constexpr bool operator==(weak_ordering o, int) { return o._v == 0; }
+    friend constexpr bool operator<(weak_ordering o, int) { return o._v < 0; }
+    friend constexpr bool operator>(weak_ordering o, int) { return o._v > 0; }
+};
+inline constexpr weak_ordering weak_ordering::less{-1};
+inline constexpr weak_ordering weak_ordering::equivalent{0};
+inline constexpr weak_ordering weak_ordering::greater{1};
+
+struct partial_ordering {
+    int _v;
+    bool _unordered;
+    constexpr partial_ordering(int v, bool u = false) : _v(v), _unordered(u) {}
+    static const partial_ordering less;
+    static const partial_ordering equivalent;
+    static const partial_ordering greater;
+    static const partial_ordering unordered;
+    friend constexpr bool operator==(partial_ordering o, int) { return !o._unordered && o._v == 0; }
+    friend constexpr bool operator<(partial_ordering o, int) { return !o._unordered && o._v < 0; }
+    friend constexpr bool operator>(partial_ordering o, int) { return !o._unordered && o._v > 0; }
+};
+inline constexpr partial_ordering partial_ordering::less{-1};
+inline constexpr partial_ordering partial_ordering::equivalent{0};
+inline constexpr partial_ordering partial_ordering::greater{1};
+inline constexpr partial_ordering partial_ordering::unordered{0, true};
+
+// common_comparison_category
+template<class... Ts> struct common_comparison_category { using type = strong_ordering; };
+template<class... Ts> using common_comparison_category_t = typename common_comparison_category<Ts...>::type;
+
+} // namespace std
+
+#endif

@@ -1,0 +1,50 @@
+#ifndef _BAT_LIST
+#define _BAT_LIST
+#include <cstddef>
+#include <memory>
+#include <iterator>
+
+namespace std {
+
+template<class T, class Allocator = allocator<T>>
+class list {
+    struct Node { T data; Node *prev, *next;
+        template<class... A> Node(A&&... a) : data(static_cast<A&&>(a)...), prev(nullptr), next(nullptr) {} };
+    Node *_head, *_tail;
+    size_t _size;
+public:
+    struct iterator {
+        Node* _n;
+        using value_type = T; using difference_type = ptrdiff_t;
+        using pointer = T*; using reference = T&;
+        using iterator_category = bidirectional_iterator_tag;
+        iterator(Node* n = nullptr) : _n(n) {}
+        T& operator*() { return _n->data; } T* operator->() { return &_n->data; }
+        iterator& operator++() { _n = _n->next; return *this; }
+        iterator& operator--() { _n = _n->prev; return *this; }
+        bool operator==(const iterator& o) const { return _n == o._n; }
+        bool operator!=(const iterator& o) const { return _n != o._n; }
+    };
+    list() : _head(nullptr), _tail(nullptr), _size(0) {}
+    ~list() { clear(); }
+    void push_back(const T& v) {
+        Node* n = new Node(v); n->prev = _tail;
+        if (_tail) _tail->next = n; else _head = n;
+        _tail = n; _size++;
+    }
+    void push_front(const T& v) {
+        Node* n = new Node(v); n->next = _head;
+        if (_head) _head->prev = n; else _tail = n;
+        _head = n; _size++;
+    }
+    void pop_back() { if (_tail) { Node* n=_tail; _tail=_tail->prev; if(_tail)_tail->next=nullptr; else _head=nullptr; delete n; _size--; } }
+    void pop_front() { if (_head) { Node* n=_head; _head=_head->next; if(_head)_head->prev=nullptr; else _tail=nullptr; delete n; _size--; } }
+    T& front() { return _head->data; } T& back() { return _tail->data; }
+    size_t size() const { return _size; }
+    bool empty() const { return _size == 0; }
+    iterator begin() { return {_head}; } iterator end() { return {nullptr}; }
+    void clear() { while (_head) pop_front(); }
+    iterator erase(iterator it) { Node*n=it._n; iterator nx{n->next}; if(n->prev)n->prev->next=n->next; else _head=n->next; if(n->next)n->next->prev=n->prev; else _tail=n->prev; delete n; _size--; return nx; }
+};
+}
+#endif

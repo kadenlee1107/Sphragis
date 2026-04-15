@@ -1,0 +1,16 @@
+#ifndef _BAT_TYPEINDEX
+#define _BAT_TYPEINDEX
+#include <cstddef>
+namespace std {
+class type_index {
+    const char* _name;
+public:
+    type_index(const char* n = "") : _name(n) {}
+    bool operator==(const type_index& o) const { return _name == o._name; }
+    bool operator!=(const type_index& o) const { return _name != o._name; }
+    bool operator<(const type_index& o) const { return _name < o._name; }
+    size_t hash_code() const { return (size_t)_name; }
+    const char* name() const { return _name; }
+};
+}
+#endif

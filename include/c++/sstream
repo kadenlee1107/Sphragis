@@ -1,0 +1,69 @@
+#ifndef _BAT_SSTREAM
+#define _BAT_SSTREAM
+
+#include <string>
+#include <iosfwd>
+
+namespace std {
+
+class ostringstream {
+    string _buf;
+public:
+    ostringstream() {}
+    explicit ostringstream(const string& s) : _buf(s) {}
+
+    template<class T>
+    ostringstream& operator<<(const T& v) {
+        // Minimal: just append string representation
+        return *this;
+    }
+
+    ostringstream& operator<<(const char* s) {
+        if (s) _buf.append(s);
+        return *this;
+    }
+
+    ostringstream& operator<<(const string& s) {
+        _buf.append(s.c_str());
+        return *this;
+    }
+
+    ostringstream& operator<<(int v) {
+        char buf[32];
+        int i = 0;
+        if (v < 0) { _buf.push_back('-'); v = -v; }
+        if (v == 0) { _buf.push_back('0'); return *this; }
+        while (v > 0 && i < 31) { buf[i++] = '0' + (v % 10); v /= 10; }
+        while (i > 0) _buf.push_back(buf[--i]);
+        return *this;
+    }
+
+    ostringstream& operator<<(unsigned int v) { return *this << (int)v; }
+    ostringstream& operator<<(long v) { return *this << (int)v; }
+    ostringstream& operator<<(unsigned long v) { return *this << (int)v; }
+    ostringstream& operator<<(long long v) { return *this << (int)(v & 0x7FFFFFFF); }
+    ostringstream& operator<<(char c) { _buf.push_back(c); return *this; }
+    ostringstream& operator<<(void* p) { return *this << (unsigned long)p; }
+
+    string str() const { return _buf; }
+    void str(const string& s) { _buf = s; }
+};
+
+class istringstream {
+public:
+    istringstream() {}
+    explicit istringstream(const string&) {}
+    template<class T> istringstream& operator>>(T&) { return *this; }
+    bool eof() const { return true; }
+    bool good() const { return false; }
+};
+
+class stringstream : public ostringstream {
+public:
+    stringstream() {}
+    explicit stringstream(const string& s) : ostringstream(s) {}
+};
+
+} // namespace std
+
+#endif

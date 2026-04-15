@@ -1,0 +1,17 @@
+#ifndef _BAT_STACK
+#define _BAT_STACK
+#include <deque>
+namespace std {
+template<class T, class Container = deque<T>>
+class stack {
+    Container _c;
+public:
+    void push(const T& v) { _c.push_back(v); }
+    void pop() { _c.pop_back(); }
+    T& top() { return _c.back(); }
+    const T& top() const { return _c.back(); }
+    bool empty() const { return _c.empty(); }
+    size_t size() const { return _c.size(); }
+};
+}
+#endif

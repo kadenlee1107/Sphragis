@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <type_traits>
+#include <concepts>
 
 namespace std {
 
@@ -257,6 +258,21 @@ template<class Container>
 constexpr back_insert_iterator<Container> back_inserter(Container& c) {
     return back_insert_iterator<Container>(c);
 }
+
+// rbegin / rend
+template<class C>
+auto rbegin(C& c) -> decltype(c.rbegin()) { return c.rbegin(); }
+template<class C>
+auto rbegin(const C& c) -> decltype(c.rbegin()) { return c.rbegin(); }
+template<class C>
+auto rend(C& c) -> decltype(c.rend()) { return c.rend(); }
+template<class C>
+auto rend(const C& c) -> decltype(c.rend()) { return c.rend(); }
+
+template<class T, size_t N>
+reverse_iterator<T*> rbegin(T (&arr)[N]) { return reverse_iterator<T*>(arr + N); }
+template<class T, size_t N>
+reverse_iterator<T*> rend(T (&arr)[N]) { return reverse_iterator<T*>(arr); }
 
 } // namespace std
 

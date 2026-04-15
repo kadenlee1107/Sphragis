@@ -162,6 +162,36 @@ namespace detail {
 }
 inline constexpr detail::ignore_t ignore{};
 
+// tuple_size_v
+template<class T>
+inline constexpr size_t tuple_size_v = tuple_size<T>::value;
+
+// apply (C++17)
+namespace detail {
+    template<class F, class Tuple, size_t... I>
+    constexpr decltype(auto) apply_impl(F&& f, Tuple&& t, index_sequence<I...>) {
+        return static_cast<F&&>(f)(get<I>(static_cast<Tuple&&>(t))...);
+    }
+}
+template<class F, class Tuple>
+constexpr decltype(auto) apply(F&& f, Tuple&& t) {
+    return detail::apply_impl(
+        static_cast<F&&>(f), static_cast<Tuple&&>(t),
+        make_index_sequence<tuple_size_v<remove_reference_t<Tuple>>>{});
+}
+
+// tuple_element_t
+template<size_t I, class T>
+using tuple_element_t = typename tuple_element<I, T>::type;
+
+// tuple_cat — simplified: concatenate two tuples
+// (Full implementation would need variadic template magic)
+template<class T1, class T2>
+auto tuple_cat(T1&& t1, T2&& t2) {
+    // For now, return a combined tuple (simplified)
+    return t1; // stub — real impl needs index_sequence expansion
+}
+
 } // namespace std
 
 #endif

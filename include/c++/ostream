@@ -1,0 +1,57 @@
+#ifndef _BAT_OSTREAM
+#define _BAT_OSTREAM
+
+#include <cstdio>
+#include <cstddef>
+
+namespace std {
+
+template<class CharT> struct char_traits;
+template<class CharT, class Traits> class basic_ostream;
+
+using streamsize = long long;
+
+template<class CharT, class Traits>
+class basic_ostream {
+public:
+    basic_ostream() {}
+    virtual ~basic_ostream() {}
+
+    basic_ostream& operator<<(const char* s) { if (s) printf("%s", s); return *this; }
+    basic_ostream& operator<<(char c) { printf("%c", c); return *this; }
+    basic_ostream& operator<<(int v) { printf("%d", v); return *this; }
+    basic_ostream& operator<<(unsigned int v) { printf("%u", v); return *this; }
+    basic_ostream& operator<<(long v) { printf("%ld", v); return *this; }
+    basic_ostream& operator<<(unsigned long v) { printf("%lu", v); return *this; }
+    basic_ostream& operator<<(long long v) { printf("%lld", v); return *this; }
+    basic_ostream& operator<<(unsigned long long v) { printf("%llu", v); return *this; }
+    basic_ostream& operator<<(double v) { printf("%f", v); return *this; }
+    basic_ostream& operator<<(float v) { printf("%f", (double)v); return *this; }
+    basic_ostream& operator<<(const void* p) { printf("%p", p); return *this; }
+    basic_ostream& operator<<(bool b) { printf("%s", b ? "true" : "false"); return *this; }
+    basic_ostream& operator<<(basic_ostream& (*manip)(basic_ostream&)) { return manip(*this); }
+
+    basic_ostream& write(const char* s, streamsize n) {
+        for (streamsize i = 0; i < n; i++) printf("%c", s[i]);
+        return *this;
+    }
+    basic_ostream& put(char c) { printf("%c", c); return *this; }
+    basic_ostream& flush() { return *this; }
+
+    explicit operator bool() const { return true; }
+    bool good() const { return true; }
+    bool fail() const { return false; }
+};
+
+using ostream = basic_ostream<char, char_traits<char>>;
+
+template<class CharT, class Traits>
+basic_ostream<CharT, Traits>& endl(basic_ostream<CharT, Traits>& os) { os.put('\n'); return os; }
+
+inline ostream cout;
+inline ostream cerr;
+inline ostream clog;
+
+} // namespace std
+
+#endif

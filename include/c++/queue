@@ -1,0 +1,27 @@
+#ifndef _BAT_QUEUE
+#define _BAT_QUEUE
+#include <deque>
+namespace std {
+template<class T, class Container = deque<T>>
+class queue {
+    Container _c;
+public:
+    void push(const T& v) { _c.push_back(v); }
+    void pop() { _c.pop_front(); }
+    T& front() { return _c.front(); }
+    T& back() { return _c.back(); }
+    bool empty() const { return _c.empty(); }
+    size_t size() const { return _c.size(); }
+};
+template<class T, class Container = deque<T>, class Compare = less<typename Container::value_type>>
+class priority_queue {
+    Container _c;
+public:
+    void push(const T& v) { _c.push_back(v); }
+    void pop() { _c.pop_front(); }
+    const T& top() const { return _c.front(); }
+    bool empty() const { return _c.empty(); }
+    size_t size() const { return _c.size(); }
+};
+}
+#endif

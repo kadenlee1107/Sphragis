@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <cctype>
 #include <algorithm>
 #include <utility>
 #include <initializer_list>

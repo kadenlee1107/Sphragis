@@ -489,6 +489,18 @@ ForwardIt partition(ForwardIt first, ForwardIt last, Pred pred) {
     return first;
 }
 
+// lexicographical_compare
+template<class It1, class It2>
+bool lexicographical_compare(It1 f1, It1 l1, It2 f2, It2 l2) {
+    for (; f1 != l1 && f2 != l2; ++f1, ++f2) {
+        if (*f1 < *f2) return true;
+        if (*f2 < *f1) return false;
+    }
+    return f1 == l1 && f2 != l2;
+}
+
+// (transform, accumulate, unique, rotate defined elsewhere in this file)
+
 } // namespace std
 
 #endif

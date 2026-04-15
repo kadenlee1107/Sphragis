@@ -4,18 +4,18 @@
 #include <ctype.h>
 
 namespace std {
-    using ::isalpha;
-    using ::isdigit;
-    using ::isalnum;
-    using ::isspace;
-    using ::isupper;
-    using ::islower;
-    using ::isprint;
-    using ::ispunct;
-    using ::iscntrl;
-    using ::isxdigit;
-    using ::toupper;
-    using ::tolower;
+    inline int isalpha(int c) { return ::isalpha(c); }
+    inline int isdigit(int c) { return ::isdigit(c); }
+    inline int isalnum(int c) { return ::isalnum(c); }
+    inline int isspace(int c) { return ::isspace(c); }
+    inline int isupper(int c) { return ::isupper(c); }
+    inline int islower(int c) { return ::islower(c); }
+    inline int isprint(int c) { return ::isprint(c); }
+    inline int ispunct(int c) { return ::ispunct(c); }
+    inline int iscntrl(int c) { return ::iscntrl(c); }
+    inline int isxdigit(int c) { return ::isxdigit(c); }
+    inline int toupper(int c) { return ::toupper(c); }
+    inline int tolower(int c) { return ::tolower(c); }
 }
 
 #endif

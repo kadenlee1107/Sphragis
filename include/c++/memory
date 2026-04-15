@@ -173,6 +173,28 @@ make_unique(size_t n) {
     return unique_ptr<T>(new remove_extent_t<T>[n]());
 }
 
+// make_unique_for_overwrite (C++20)
+template<class T>
+enable_if_t<!is_array_v<T>, unique_ptr<T>>
+make_unique_for_overwrite() {
+    return unique_ptr<T>(new T);
+}
+
+template<class T>
+enable_if_t<is_array_v<T> && extent<T>::value == 0, unique_ptr<T>>
+make_unique_for_overwrite(size_t n) {
+    return unique_ptr<T>(new remove_extent_t<T>[n]);
+}
+
+// to_address (C++20)
+template<class T>
+constexpr T* to_address(T* p) noexcept { return p; }
+
+template<class Ptr>
+constexpr auto to_address(const Ptr& p) noexcept {
+    return to_address(p.operator->());
+}
+
 // Comparison operators
 template<class T1, class D1, class T2, class D2>
 bool operator==(const unique_ptr<T1,D1>& a, const unique_ptr<T2,D2>& b) { return a.get() == b.get(); }
@@ -225,6 +247,36 @@ template<class ForwardIt>
 void destroy(ForwardIt first, ForwardIt last) {
     for (; first != last; ++first)
         destroy_at(addressof(*first));
+}
+
+template<class ForwardIt, class Size>
+ForwardIt destroy_n(ForwardIt first, Size n) {
+    for (Size i = 0; i < n; ++i, ++first)
+        destroy_at(addressof(*first));
+    return first;
+}
+
+template<class ForwardIt, class Size>
+ForwardIt uninitialized_value_construct_n(ForwardIt first, Size n) {
+    for (Size i = 0; i < n; ++i, ++first)
+        ::new (static_cast<void*>(addressof(*first)))
+            typename remove_reference<decltype(*first)>::type();
+    return first;
+}
+
+template<class ForwardIt, class Size, class T>
+ForwardIt uninitialized_fill_n(ForwardIt first, Size n, const T& value) {
+    for (Size i = 0; i < n; ++i, ++first)
+        ::new (static_cast<void*>(addressof(*first))) T(value);
+    return first;
+}
+
+template<class ForwardIt, class Size>
+ForwardIt uninitialized_default_construct_n(ForwardIt first, Size n) {
+    for (Size i = 0; i < n; ++i, ++first)
+        ::new (static_cast<void*>(addressof(*first)))
+            typename remove_reference<decltype(*first)>::type;
+    return first;
 }
 
 // shared_ptr (very minimal stub — Skia barely uses it)

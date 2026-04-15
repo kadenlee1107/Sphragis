@@ -53,6 +53,8 @@ typedef struct {
 
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
+int posix_memalign(void **memptr, size_t alignment, size_t size);
+
 #define RAND_MAX     0x7FFFFFFF
 
 #ifdef __cplusplus

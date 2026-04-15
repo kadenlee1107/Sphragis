@@ -1,0 +1,9 @@
+#ifndef _BAT_IOSTREAM
+#define _BAT_IOSTREAM
+
+#include <ostream>
+#include <sstream>
+
+// iostream just pulls in ostream (we don't have istream)
+
+#endif

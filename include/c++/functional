@@ -63,6 +63,28 @@ struct not_equal_to {
 };
 
 template<class T = void>
+struct logical_not {
+    constexpr bool operator()(const T& a) const { return !a; }
+};
+template<>
+struct logical_not<void> {
+    template<class T>
+    constexpr bool operator()(const T& a) const { return !a; }
+};
+
+template<class T = void>
+struct logical_and {
+    constexpr bool operator()(const T& a, const T& b) const { return a && b; }
+};
+
+template<class T = void>
+struct logical_or {
+    constexpr bool operator()(const T& a, const T& b) const { return a || b; }
+};
+
+// plus, minus, multiplies defined elsewhere in this file
+
+template<class T = void>
 struct plus {
     constexpr T operator()(const T& a, const T& b) const { return a + b; }
 };

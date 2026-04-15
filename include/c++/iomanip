@@ -1,0 +1,31 @@
+#ifndef _BAT_IOMANIP
+#define _BAT_IOMANIP
+
+#include <ostream>
+
+namespace std {
+
+// Manipulator stubs
+struct _Setw { int _n; };
+inline _Setw setw(int n) { return {n}; }
+template<class C, class T>
+basic_ostream<C,T>& operator<<(basic_ostream<C,T>& os, _Setw) { return os; }
+
+struct _Setfill { char _c; };
+inline _Setfill setfill(char c) { return {c}; }
+template<class C, class T>
+basic_ostream<C,T>& operator<<(basic_ostream<C,T>& os, _Setfill) { return os; }
+
+struct _Setprecision { int _n; };
+inline _Setprecision setprecision(int n) { return {n}; }
+template<class C, class T>
+basic_ostream<C,T>& operator<<(basic_ostream<C,T>& os, _Setprecision) { return os; }
+
+template<class C, class T>
+basic_ostream<C,T>& hex(basic_ostream<C,T>& os) { return os; }
+template<class C, class T>
+basic_ostream<C,T>& dec(basic_ostream<C,T>& os) { return os; }
+
+} // namespace std
+
+#endif

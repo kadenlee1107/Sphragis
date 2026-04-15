@@ -1,0 +1,42 @@
+#ifndef _BAT_RANGES
+#define _BAT_RANGES
+
+#include <iterator>
+#include <type_traits>
+#include <concepts>
+
+namespace std::ranges {
+
+template<class T>
+concept range = requires(T& t) { begin(t); end(t); };
+
+template<class T>
+concept contiguous_range = range<T>;
+
+template<class T>
+using iterator_t = decltype(begin(declval<T&>()));
+
+template<class R>
+using range_value_t = remove_reference_t<decltype(*begin(declval<R&>()))>;
+
+template<class R>
+constexpr auto size(R&& r) { return end(r) - begin(r); }
+
+template<class R>
+constexpr auto data(R&& r) { return &*begin(r); }
+
+template<class R>
+constexpr auto ssize(R&& r) { return static_cast<ptrdiff_t>(size(r)); }
+
+// Range adaptors / concepts customization points
+template<class T>
+inline constexpr bool enable_view = false;
+
+template<class T>
+inline constexpr bool enable_borrowed_range = false;
+
+struct view_base {};
+
+} // namespace std::ranges
+
+#endif

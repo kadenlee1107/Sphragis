@@ -1,0 +1,38 @@
+#ifndef _BAT_SOURCE_LOCATION
+#define _BAT_SOURCE_LOCATION
+
+#include <cstdint>
+
+namespace std {
+
+struct source_location {
+    static constexpr source_location current(
+        const char* file = __builtin_FILE(),
+        const char* func = __builtin_FUNCTION(),
+        unsigned int line = __builtin_LINE(),
+        unsigned int col = 0) noexcept {
+        source_location sl;
+        sl._file = file;
+        sl._func = func;
+        sl._line = line;
+        sl._col = col;
+        return sl;
+    }
+
+    constexpr source_location() noexcept : _file(""), _func(""), _line(0), _col(0) {}
+
+    constexpr const char* file_name() const noexcept { return _file; }
+    constexpr const char* function_name() const noexcept { return _func; }
+    constexpr unsigned int line() const noexcept { return _line; }
+    constexpr unsigned int column() const noexcept { return _col; }
+
+private:
+    const char* _file;
+    const char* _func;
+    unsigned int _line;
+    unsigned int _col;
+};
+
+} // namespace std
+
+#endif

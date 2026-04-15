@@ -1,0 +1,61 @@
+#ifndef _BAT_FORWARD_LIST
+#define _BAT_FORWARD_LIST
+
+#include <cstddef>
+#include <memory>
+#include <iterator>
+
+namespace std {
+
+// Minimal forward_list — singly-linked list
+template<class T, class Allocator = allocator<T>>
+class forward_list {
+    struct Node {
+        T data;
+        Node* next;
+        template<class... Args>
+        Node(Node* n, Args&&... args) : data(static_cast<Args&&>(args)...), next(n) {}
+    };
+    Node* _head;
+
+public:
+    using value_type = T;
+
+    struct iterator {
+        Node* _node;
+        using value_type = T;
+        using difference_type = ptrdiff_t;
+        using pointer = T*;
+        using reference = T&;
+        using iterator_category = forward_iterator_tag;
+
+        iterator(Node* n = nullptr) : _node(n) {}
+        T& operator*() { return _node->data; }
+        T* operator->() { return &_node->data; }
+        iterator& operator++() { _node = _node->next; return *this; }
+        iterator operator++(int) { auto tmp = *this; ++*this; return tmp; }
+        bool operator==(const iterator& o) const { return _node == o._node; }
+        bool operator!=(const iterator& o) const { return _node != o._node; }
+    };
+
+    forward_list() : _head(nullptr) {}
+    ~forward_list() { clear(); }
+
+    void push_front(const T& v) { _head = new Node(_head, v); }
+    void pop_front() {
+        if (_head) { Node* n = _head; _head = _head->next; delete n; }
+    }
+
+    T& front() { return _head->data; }
+    bool empty() const { return _head == nullptr; }
+
+    iterator begin() { return iterator(_head); }
+    iterator end() { return iterator(nullptr); }
+    iterator before_begin() { return iterator(nullptr); } // stub
+
+    void clear() { while (_head) pop_front(); }
+};
+
+} // namespace std
+
+#endif

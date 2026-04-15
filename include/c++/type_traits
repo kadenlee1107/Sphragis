@@ -17,6 +17,7 @@ struct integral_constant {
 
 using true_type  = integral_constant<bool, true>;
 using false_type = integral_constant<bool, false>;
+template<bool B> using bool_constant = integral_constant<bool, B>;
 
 // void_t
 template<class...> using void_t = void;
@@ -256,6 +257,16 @@ template<class Base, class Derived> inline constexpr bool is_base_of_v = is_base
 template<class T, class U> struct is_assignable : integral_constant<bool, __is_assignable(T, U)> {};
 template<class T, class U> inline constexpr bool is_assignable_v = is_assignable<T, U>::value;
 
+// is_copy/move_assignable
+template<class T> struct is_copy_assignable : is_assignable<T&, const T&> {};
+template<class T> inline constexpr bool is_copy_assignable_v = is_copy_assignable<T>::value;
+template<class T> struct is_move_assignable : is_assignable<T&, T&&> {};
+template<class T> inline constexpr bool is_move_assignable_v = is_move_assignable<T>::value;
+template<class T> struct is_nothrow_move_assignable : integral_constant<bool, __is_nothrow_assignable(T&, T&&)> {};
+template<class T> inline constexpr bool is_nothrow_move_assignable_v = is_nothrow_move_assignable<T>::value;
+template<class T> struct is_nothrow_copy_assignable : integral_constant<bool, __is_nothrow_assignable(T&, const T&)> {};
+template<class T> inline constexpr bool is_nothrow_copy_assignable_v = is_nothrow_copy_assignable<T>::value;
+
 // is_trivially_assignable
 template<class T, class U> struct is_trivially_assignable : integral_constant<bool, __is_trivially_assignable(T, U)> {};
 template<class T, class U> inline constexpr bool is_trivially_assignable_v = is_trivially_assignable<T, U>::value;
@@ -301,6 +312,24 @@ template<class T> inline constexpr bool has_unique_object_representations_v
 // is_aggregate (C++17)
 template<class T> struct is_aggregate : integral_constant<bool, __is_aggregate(T)> {};
 template<class T> inline constexpr bool is_aggregate_v = is_aggregate<T>::value;
+
+// is_constant_evaluated (C++20)
+constexpr bool is_constant_evaluated() noexcept { return __builtin_is_constant_evaluated(); }
+
+// type_identity (C++20)
+template<class T> struct type_identity { using type = T; };
+template<class T> using type_identity_t = typename type_identity<T>::type;
+
+// is_nothrow_convertible
+template<class From, class To> struct is_nothrow_convertible : false_type {};
+template<class T> struct is_nothrow_convertible<T, T> : true_type {};
+template<class From, class To> inline constexpr bool is_nothrow_convertible_v = is_nothrow_convertible<From, To>::value;
+
+// is_bounded_array / is_unbounded_array
+template<class T> struct is_bounded_array : false_type {};
+template<class T, size_t N> struct is_bounded_array<T[N]> : true_type {};
+template<class T> struct is_unbounded_array : false_type {};
+template<class T> struct is_unbounded_array<T[]> : true_type {};
 
 // is_invocable (C++17) — simplified: always true for callable + args
 template<class Fn, class... Args> struct is_invocable : true_type {};
@@ -381,6 +410,9 @@ template<> struct make_unsigned<long> { using type = unsigned long; };
 template<> struct make_unsigned<unsigned long> { using type = unsigned long; };
 template<> struct make_unsigned<long long> { using type = unsigned long long; };
 template<> struct make_unsigned<unsigned long long> { using type = unsigned long long; };
+// Enum support: make_unsigned for enum types uses underlying_type
+template<class T> requires(is_enum_v<T>)
+struct make_unsigned<T> { using type = typename make_unsigned<typename underlying_type<T>::type>::type; };
 template<class T> using make_unsigned_t = typename make_unsigned<T>::type;
 
 // aligned_storage

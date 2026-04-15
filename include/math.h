@@ -24,6 +24,12 @@
 #endif
 #define fpclassify(x) __builtin_fpclassify(0, 1, 4, 3, 2, (x))
 
+#define FP_NAN       0
+#define FP_INFINITE  1
+#define FP_ZERO      2
+#define FP_SUBNORMAL 3
+#define FP_NORMAL    4
+
 /* Trigonometric */
 double sin(double x);
 double cos(double x);
