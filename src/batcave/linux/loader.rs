@@ -266,14 +266,13 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     let phys_base = LOADED_PHYS_BASE.load(Ordering::Relaxed);
 
     let stack_base = frame::alloc_frame().ok_or("oom")?;
-    for _ in 0..15 { frame::alloc_frame(); }
-    let stack_top = stack_base + 16 * PAGE_SIZE;
+    for _ in 0..255 { frame::alloc_frame(); } // 256 pages = 1MB stack
+    let stack_top = stack_base + 256 * PAGE_SIZE;
 
-    // CRITICAL: Zero the entire stack to prevent garbage from being
-    // read as pointers by C code (local variable initialization)
+    // CRITICAL: Zero the entire stack
     unsafe {
         let ptr = stack_base as *mut u8;
-        for i in 0..(16 * PAGE_SIZE) {
+        for i in 0..(256 * PAGE_SIZE) {
             core::ptr::write_volatile(ptr.add(i), 0);
         }
     }
