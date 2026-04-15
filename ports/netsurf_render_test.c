@@ -87,6 +87,9 @@ static css_error h_pres_hint(void *pw, void *n, uint32_t *nh, css_hint **h) {
 }
 static css_error h_ua_default(void *pw, uint32_t prop, css_hint *hint) {
     (void)pw; (void)prop;
+    // CRITICAL: zero the ENTIRE hint — font_family reads hint->data.strings
+    // If left as garbage, css__set_font_family_from_hint crashes
+    memset(hint, 0, sizeof(*hint));
     hint->status = 0;
     return CSS_OK;
 }
@@ -191,16 +194,12 @@ void _start(void) {
     printf("    handler_version=%d\n", handler.handler_version);
     printf("    node_name ptr=%p\n", (void*)handler.node_name);
     printf("    body_node tag=%s\n", body_node.tag);
-    // DEBUG: verify prop_dispatch has valid pointers
+    // DEBUG: verify prop_dispatch stride
     {
-        extern struct { void *a; void *b; void *c; void *d; void *e; int f; } prop_dispatch[];
-        printf("    prop_dispatch[0].cascade = %p\n", prop_dispatch[0].a);
-        printf("    prop_dispatch[0].set_from_hint = %p\n", prop_dispatch[0].b);
-        printf("    prop_dispatch[0].initial = %p\n", prop_dispatch[0].c);
-        // Try calling the first initial handler directly
-        if (prop_dispatch[0].c) {
-            printf("    Calling initial handler...\n");
-        }
+        extern struct { void *a; void *b; void *c; void *d; void *e; unsigned int f; } prop_dispatch[];
+        unsigned long stride = (unsigned long)((char*)&prop_dispatch[1] - (char*)&prop_dispatch[0]);
+        printf("    sizeof(entry)=%zu stride=%lu\n", sizeof(prop_dispatch[0]), stride);
+        printf("    [0].initial=%p [36].initial=%p\n", prop_dispatch[0].c, prop_dispatch[36].c);
     }
     printf("    Calling css_select_style...\n");
     css_select_results *results = NULL;
