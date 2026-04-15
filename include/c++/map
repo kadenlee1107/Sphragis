@@ -31,19 +31,25 @@ private:
     // Simple sorted array storage — max 64 entries
     static constexpr size_type MAX_ENTRIES = 64;
 
-    // Store key and value separately to avoid const key issues
     struct Entry {
-        Key   key;
-        T     val;
+        alignas(Key) unsigned char key_storage[sizeof(Key)];
+        alignas(T) unsigned char val_storage[sizeof(T)];
+        Key& key() { return *reinterpret_cast<Key*>(key_storage); }
+        const Key& key() const { return *reinterpret_cast<const Key*>(key_storage); }
+        T& val() { return *reinterpret_cast<T*>(val_storage); }
+        const T& val() const { return *reinterpret_cast<const T*>(val_storage); }
     };
 
-    Entry    entries_[MAX_ENTRIES];
+    Entry    storage_arr_[MAX_ENTRIES];
     size_type size_;
     Compare  comp_;
 
+    Entry* entries_() { return storage_arr_; }
+    const Entry* entries_() const { return storage_arr_; }
+
     size_type find_pos(const Key& k) const {
         for (size_type i = 0; i < size_; ++i) {
-            if (!comp_(entries_[i].key, k) && !comp_(k, entries_[i].key))
+            if (!comp_(entries_()[i].key(), k) && !comp_(k, entries_()[i].key()))
                 return i;
         }
         return size_;
@@ -51,16 +57,16 @@ private:
 
     size_type insert_pos(const Key& k) const {
         size_type i = 0;
-        while (i < size_ && comp_(entries_[i].key, k)) ++i;
+        while (i < size_ && comp_(entries_()[i].key(), k)) ++i;
         return i;
     }
 
     // Reinterpret entry as value_type for iteration
     value_type* as_value(size_type i) {
-        return reinterpret_cast<value_type*>(&entries_[i]);
+        return reinterpret_cast<value_type*>(&entries_()[i]);
     }
     const value_type* as_value(size_type i) const {
-        return reinterpret_cast<const value_type*>(&entries_[i]);
+        return reinterpret_cast<const value_type*>(&entries_()[i]);
     }
 
 public:
@@ -74,8 +80,8 @@ public:
 
     map(const map& o) : size_(o.size_), comp_(o.comp_) {
         for (size_type i = 0; i < size_; ++i) {
-            entries_[i].key = o.entries_[i].key;
-            entries_[i].val = o.entries_[i].val;
+            entries_()[i].key() = o.entries_()[i].key();
+            entries_()[i].val() = o.entries_()[i].val();
         }
     }
 
@@ -84,8 +90,8 @@ public:
             size_ = o.size_;
             comp_ = o.comp_;
             for (size_type i = 0; i < size_; ++i) {
-                entries_[i].key = o.entries_[i].key;
-                entries_[i].val = o.entries_[i].val;
+                entries_()[i].key() = o.entries_()[i].key();
+                entries_()[i].val() = o.entries_()[i].val();
             }
         }
         return *this;
@@ -93,8 +99,8 @@ public:
 
     map(map&& o) noexcept : size_(o.size_), comp_(o.comp_) {
         for (size_type i = 0; i < size_; ++i) {
-            entries_[i].key = static_cast<Key&&>(o.entries_[i].key);
-            entries_[i].val = static_cast<T&&>(o.entries_[i].val);
+            entries_()[i].key() = static_cast<Key&&>(o.entries_()[i].key());
+            entries_()[i].val() = static_cast<T&&>(o.entries_()[i].val());
         }
         o.size_ = 0;
     }
@@ -103,33 +109,33 @@ public:
 
     T& operator[](const Key& k) {
         size_type pos = find_pos(k);
-        if (pos < size_) return entries_[pos].val;
+        if (pos < size_) return entries_()[pos].val();
         if (size_ >= MAX_ENTRIES) abort();
         // Insert in sorted order
         size_type ip = insert_pos(k);
         for (size_type i = size_; i > ip; --i) {
-            entries_[i].key = static_cast<Key&&>(entries_[i-1].key);
-            entries_[i].val = static_cast<T&&>(entries_[i-1].val);
+            entries_()[i].key() = static_cast<Key&&>(entries_()[i-1].key());
+            entries_()[i].val() = static_cast<T&&>(entries_()[i-1].val());
         }
-        entries_[ip].key = k;
-        entries_[ip].val = T{};
+        entries_()[ip].key() = k;
+        entries_()[ip].val() = T{};
         ++size_;
-        return entries_[ip].val;
+        return entries_()[ip].val();
     }
 
     T& operator[](Key&& k) {
         size_type pos = find_pos(k);
-        if (pos < size_) return entries_[pos].val;
+        if (pos < size_) return entries_()[pos].val();
         if (size_ >= MAX_ENTRIES) abort();
         size_type ip = insert_pos(k);
         for (size_type i = size_; i > ip; --i) {
-            entries_[i].key = static_cast<Key&&>(entries_[i-1].key);
-            entries_[i].val = static_cast<T&&>(entries_[i-1].val);
+            entries_()[i].key() = static_cast<Key&&>(entries_()[i-1].key());
+            entries_()[i].val() = static_cast<T&&>(entries_()[i-1].val());
         }
-        entries_[ip].key = static_cast<Key&&>(k);
-        entries_[ip].val = T{};
+        entries_()[ip].key() = static_cast<Key&&>(k);
+        entries_()[ip].val() = T{};
         ++size_;
-        return entries_[ip].val;
+        return entries_()[ip].val();
     }
 
     iterator find(const Key& k) {
@@ -154,11 +160,11 @@ public:
         if (size_ >= MAX_ENTRIES) abort();
         size_type ip = insert_pos(v.first);
         for (size_type i = size_; i > ip; --i) {
-            entries_[i].key = static_cast<Key&&>(entries_[i-1].key);
-            entries_[i].val = static_cast<T&&>(entries_[i-1].val);
+            entries_()[i].key() = static_cast<Key&&>(entries_()[i-1].key());
+            entries_()[i].val() = static_cast<T&&>(entries_()[i-1].val());
         }
-        entries_[ip].key = v.first;
-        entries_[ip].val = v.second;
+        entries_()[ip].key() = v.first;
+        entries_()[ip].val() = v.second;
         ++size_;
         return {as_value(ip), true};
     }
@@ -173,19 +179,19 @@ public:
         size_type pos = find_pos(k);
         if (pos >= size_) return 0;
         for (size_type i = pos; i + 1 < size_; ++i) {
-            entries_[i].key = static_cast<Key&&>(entries_[i+1].key);
-            entries_[i].val = static_cast<T&&>(entries_[i+1].val);
+            entries_()[i].key() = static_cast<Key&&>(entries_()[i+1].key());
+            entries_()[i].val() = static_cast<T&&>(entries_()[i+1].val());
         }
         --size_;
         return 1;
     }
 
     iterator erase(iterator pos) {
-        size_type idx = static_cast<size_type>(reinterpret_cast<Entry*>(pos) - entries_);
+        size_type idx = static_cast<size_type>(reinterpret_cast<Entry*>(pos) - entries_());
         if (idx >= size_) return end();
         for (size_type i = idx; i + 1 < size_; ++i) {
-            entries_[i].key = static_cast<Key&&>(entries_[i+1].key);
-            entries_[i].val = static_cast<T&&>(entries_[i+1].val);
+            entries_()[i].key() = static_cast<Key&&>(entries_()[i+1].key());
+            entries_()[i].val() = static_cast<T&&>(entries_()[i+1].val());
         }
         --size_;
         return as_value(idx);

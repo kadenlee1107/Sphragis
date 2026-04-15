@@ -33,7 +33,7 @@ INSTANCE_TYPE_CHECKERS(TYPE_CHECKER)
 #undef TYPE_CHECKER
 
 // Bat_OS: Include auto-generated checkers for Torque MULTIPLE types
-#include "torque-generated/instance-type-checkers-gen.h"
+
 
 }  // namespace internal
 }  // namespace v8
