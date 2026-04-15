@@ -54,8 +54,13 @@ public:
     constexpr tuple(const pair<U0, U1>& p) : v0_(p.first), v1_(p.second) {}
     tuple(const tuple&) = default;
     tuple(tuple&&) = default;
-    tuple& operator=(const tuple&) = default;
-    tuple& operator=(tuple&&) = default;
+    // Custom assignment that works for reference types (std::tie support)
+    template<class U0, class U1>
+    tuple& operator=(const tuple<U0, U1>& o) { v0_ = o.v0_; v1_ = o.v1_; return *this; }
+    template<class U0, class U1>
+    tuple& operator=(tuple<U0, U1>&& o) { v0_ = static_cast<U0&&>(o.v0_); v1_ = static_cast<U1&&>(o.v1_); return *this; }
+    tuple& operator=(const tuple& o) { v0_ = o.v0_; v1_ = o.v1_; return *this; }
+    tuple& operator=(tuple&& o) noexcept { v0_ = static_cast<T0&&>(o.v0_); v1_ = static_cast<T1&&>(o.v1_); return *this; }
 };
 
 // tuple<T0, T1, T2>
@@ -67,7 +72,14 @@ public:
     constexpr tuple(const T0& a0, const T1& a1, const T2& a2) : v0_(a0), v1_(a1), v2_(a2) {}
     template<class U0, class U1, class U2>
     constexpr tuple(U0&& a0, U1&& a1, U2&& a2) : v0_(static_cast<U0&&>(a0)), v1_(static_cast<U1&&>(a1)), v2_(static_cast<U2&&>(a2)) {}
-    tuple& operator=(const tuple& o) { v0_ = o.v0_; v1_ = o.v1_; v2_ = o.v2_; return *this; }
+    tuple(const tuple&) = default;
+    tuple(tuple&&) = default;
+    template<class U0, class U1, class U2>
+    tuple& operator=(const tuple<U0,U1,U2>& o) { v0_=o.v0_; v1_=o.v1_; v2_=o.v2_; return *this; }
+    template<class U0, class U1, class U2>
+    tuple& operator=(tuple<U0,U1,U2>&& o) { v0_=static_cast<U0&&>(o.v0_); v1_=static_cast<U1&&>(o.v1_); v2_=static_cast<U2&&>(o.v2_); return *this; }
+    tuple& operator=(const tuple& o) { v0_=o.v0_; v1_=o.v1_; v2_=o.v2_; return *this; }
+    tuple& operator=(tuple&& o) noexcept { v0_=static_cast<T0&&>(o.v0_); v1_=static_cast<T1&&>(o.v1_); v2_=static_cast<T2&&>(o.v2_); return *this; }
 };
 
 // tuple<T0, T1, T2, T3>
@@ -81,6 +93,12 @@ public:
     constexpr tuple(U0&& a0, U1&& a1, U2&& a2, U3&& a3)
         : v0_(static_cast<U0&&>(a0)), v1_(static_cast<U1&&>(a1)),
           v2_(static_cast<U2&&>(a2)), v3_(static_cast<U3&&>(a3)) {}
+    tuple(const tuple&) = default;
+    tuple(tuple&&) = default;
+    template<class U0,class U1,class U2,class U3>
+    tuple& operator=(const tuple<U0,U1,U2,U3>& o) { v0_=o.v0_;v1_=o.v1_;v2_=o.v2_;v3_=o.v3_; return *this; }
+    tuple& operator=(const tuple& o) { v0_=o.v0_;v1_=o.v1_;v2_=o.v2_;v3_=o.v3_; return *this; }
+    tuple& operator=(tuple&& o) noexcept { v0_=static_cast<T0&&>(o.v0_);v1_=static_cast<T1&&>(o.v1_);v2_=static_cast<T2&&>(o.v2_);v3_=static_cast<T3&&>(o.v3_); return *this; }
 };
 
 // tuple_size

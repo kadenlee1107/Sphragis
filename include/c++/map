@@ -4,227 +4,206 @@
 #include <cstddef>
 #include <utility>
 #include <functional>
+#include <memory>
 #include <initializer_list>
+#include <iterator>
 #include <new>
-
-extern "C" void abort();
 
 namespace std {
 
-template<class Key, class T, class Compare = less<Key>, class Allocator = allocator<pair<const Key, T>>>
+template<class Key, class T, class Compare = less<Key>,
+         class Allocator = allocator<pair<const Key, T>>>
 class map {
 public:
-    using key_type    = Key;
+    using key_type = Key;
     using mapped_type = T;
-    using value_type  = pair<const Key, T>;
-    using key_compare = Compare;
-    using size_type   = size_t;
+    using value_type = pair<const Key, T>;
+    using size_type = size_t;
     using difference_type = ptrdiff_t;
-    using reference       = value_type&;
+    using key_compare = Compare;
+    using allocator_type = Allocator;
+    using reference = value_type&;
     using const_reference = const value_type&;
-    using pointer         = value_type*;
-    using const_pointer   = const value_type*;
-    using iterator        = pointer;
-    using const_iterator  = const_pointer;
 
 private:
-    // Simple sorted array storage — max 64 entries
-    static constexpr size_type MAX_ENTRIES = 64;
-
-    struct Entry {
-        alignas(Key) unsigned char key_storage[sizeof(Key)];
-        alignas(T) unsigned char val_storage[sizeof(T)];
-        Key& key() { return *reinterpret_cast<Key*>(key_storage); }
-        const Key& key() const { return *reinterpret_cast<const Key*>(key_storage); }
-        T& val() { return *reinterpret_cast<T*>(val_storage); }
-        const T& val() const { return *reinterpret_cast<const T*>(val_storage); }
+    struct Node {
+        value_type data;
+        template<class... Args>
+        Node(Args&&... args) : data(static_cast<Args&&>(args)...) {}
     };
 
-    Entry    storage_arr_[MAX_ENTRIES];
-    size_type size_;
-    Compare  comp_;
+    Node** arr_;
+    size_type sz_;
+    size_type cap_;
+    Compare comp_;
 
-    Entry* entries_() { return storage_arr_; }
-    const Entry* entries_() const { return storage_arr_; }
-
-    size_type find_pos(const Key& k) const {
-        for (size_type i = 0; i < size_; ++i) {
-            if (!comp_(entries_()[i].key(), k) && !comp_(k, entries_()[i].key()))
-                return i;
-        }
-        return size_;
+    void grow() {
+        size_type nc = cap_ == 0 ? 8 : cap_ * 2;
+        Node** na = static_cast<Node**>(::operator new(nc * sizeof(Node*)));
+        for (size_type i = 0; i < sz_; i++) na[i] = arr_[i];
+        if (arr_) ::operator delete(arr_);
+        arr_ = na;
+        cap_ = nc;
     }
 
-    size_type insert_pos(const Key& k) const {
+    size_type fpos(const Key& k) const {
+        for (size_type i = 0; i < sz_; i++)
+            if (!comp_(arr_[i]->data.first, k) && !comp_(k, arr_[i]->data.first)) return i;
+        return sz_;
+    }
+
+    size_type ipos(const Key& k) const {
         size_type i = 0;
-        while (i < size_ && comp_(entries_()[i].key(), k)) ++i;
+        while (i < sz_ && comp_(arr_[i]->data.first, k)) i++;
         return i;
     }
 
-    // Reinterpret entry as value_type for iteration
-    value_type* as_value(size_type i) {
-        return reinterpret_cast<value_type*>(&entries_()[i]);
+    Node* make_node(const value_type& v) {
+        Node* n = static_cast<Node*>(::operator new(sizeof(Node)));
+        ::new(n) Node(v);
+        return n;
     }
-    const value_type* as_value(size_type i) const {
-        return reinterpret_cast<const value_type*>(&entries_()[i]);
+
+    void free_node(Node* n) { n->~Node(); ::operator delete(n); }
+
+    void shift_right(size_type pos) {
+        for (size_type i = sz_; i > pos; i--) arr_[i] = arr_[i-1];
     }
 
 public:
-    map() : size_(0) {}
+    struct iterator {
+        Node** p;
+        using value_type = pair<const Key, T>;
+        using difference_type = ptrdiff_t;
+        using pointer = value_type*;
+        using reference = value_type&;
+        using iterator_category = bidirectional_iterator_tag;
+        iterator(Node** x = nullptr) : p(x) {}
+        reference operator*() const { return (*p)->data; }
+        pointer operator->() const { return &(*p)->data; }
+        iterator& operator++() { ++p; return *this; }
+        iterator operator++(int) { auto t=*this; ++p; return t; }
+        iterator& operator--() { --p; return *this; }
+        bool operator==(const iterator& o) const { return p==o.p; }
+        bool operator!=(const iterator& o) const { return p!=o.p; }
+    };
+    struct const_iterator {
+        Node*const* p;
+        using value_type = const pair<const Key, T>;
+        using difference_type = ptrdiff_t;
+        using pointer = const value_type*;
+        using reference = const value_type&;
+        using iterator_category = bidirectional_iterator_tag;
+        const_iterator(Node*const* x = nullptr) : p(x) {}
+        const_iterator(iterator i) : p(i.p) {}
+        reference operator*() const { return (*p)->data; }
+        pointer operator->() const { return &(*p)->data; }
+        const_iterator& operator++() { ++p; return *this; }
+        const_iterator operator++(int) { auto t=*this; ++p; return t; }
+        bool operator==(const const_iterator& o) const { return p==o.p; }
+        bool operator!=(const const_iterator& o) const { return p!=o.p; }
+    };
+    using reverse_iterator = std::reverse_iterator<iterator>;
 
-    map(std::initializer_list<value_type> init) : size_(0) {
-        for (auto& p : init) {
-            (*this)[p.first] = p.second;
-        }
+    map() : arr_(nullptr), sz_(0), cap_(0), comp_() {}
+    explicit map(const Compare& c, const Allocator& = Allocator()) : arr_(nullptr), sz_(0), cap_(0), comp_(c) {}
+    explicit map(const Allocator&) : arr_(nullptr), sz_(0), cap_(0), comp_() {}
+    map(const map& o) : arr_(nullptr), sz_(0), cap_(0), comp_(o.comp_) {
+        for (size_type i = 0; i < o.sz_; i++) insert(o.arr_[i]->data);
     }
-
-    map(const map& o) : size_(o.size_), comp_(o.comp_) {
-        for (size_type i = 0; i < size_; ++i) {
-            entries_()[i].key() = o.entries_()[i].key();
-            entries_()[i].val() = o.entries_()[i].val();
-        }
+    map(map&& o) noexcept : arr_(o.arr_), sz_(o.sz_), cap_(o.cap_), comp_(o.comp_) {
+        o.arr_=nullptr; o.sz_=0; o.cap_=0;
     }
-
-    map& operator=(const map& o) {
-        if (this != &o) {
-            size_ = o.size_;
-            comp_ = o.comp_;
-            for (size_type i = 0; i < size_; ++i) {
-                entries_()[i].key() = o.entries_()[i].key();
-                entries_()[i].val() = o.entries_()[i].val();
-            }
-        }
-        return *this;
-    }
-
-    map(map&& o) noexcept : size_(o.size_), comp_(o.comp_) {
-        for (size_type i = 0; i < size_; ++i) {
-            entries_()[i].key() = static_cast<Key&&>(o.entries_()[i].key());
-            entries_()[i].val() = static_cast<T&&>(o.entries_()[i].val());
-        }
-        o.size_ = 0;
-    }
-
-    ~map() = default;
+    map& operator=(const map& o) { if(this!=&o){clear();for(size_type i=0;i<o.sz_;i++)insert(o.arr_[i]->data);} return *this; }
+    map& operator=(map&& o) noexcept { if(this!=&o){clear();arr_=o.arr_;sz_=o.sz_;cap_=o.cap_;o.arr_=nullptr;o.sz_=0;o.cap_=0;} return *this; }
+    ~map() { clear(); if(arr_) ::operator delete(arr_); }
 
     T& operator[](const Key& k) {
-        size_type pos = find_pos(k);
-        if (pos < size_) return entries_()[pos].val();
-        if (size_ >= MAX_ENTRIES) abort();
-        // Insert in sorted order
-        size_type ip = insert_pos(k);
-        for (size_type i = size_; i > ip; --i) {
-            entries_()[i].key() = static_cast<Key&&>(entries_()[i-1].key());
-            entries_()[i].val() = static_cast<T&&>(entries_()[i-1].val());
-        }
-        entries_()[ip].key() = k;
-        entries_()[ip].val() = T{};
-        ++size_;
-        return entries_()[ip].val();
+        size_type p = fpos(k); if (p<sz_) return arr_[p]->data.second;
+        if (sz_>=cap_) grow();
+        size_type ip = ipos(k); shift_right(ip);
+        arr_[ip] = static_cast<Node*>(::operator new(sizeof(Node)));
+        ::new(arr_[ip]) Node(piecewise_construct, forward_as_tuple(k), forward_as_tuple());
+        sz_++; return arr_[ip]->data.second;
     }
-
     T& operator[](Key&& k) {
-        size_type pos = find_pos(k);
-        if (pos < size_) return entries_()[pos].val();
-        if (size_ >= MAX_ENTRIES) abort();
-        size_type ip = insert_pos(k);
-        for (size_type i = size_; i > ip; --i) {
-            entries_()[i].key() = static_cast<Key&&>(entries_()[i-1].key());
-            entries_()[i].val() = static_cast<T&&>(entries_()[i-1].val());
-        }
-        entries_()[ip].key() = static_cast<Key&&>(k);
-        entries_()[ip].val() = T{};
-        ++size_;
-        return entries_()[ip].val();
+        size_type p = fpos(k); if (p<sz_) return arr_[p]->data.second;
+        if (sz_>=cap_) grow();
+        size_type ip = ipos(k); shift_right(ip);
+        arr_[ip] = static_cast<Node*>(::operator new(sizeof(Node)));
+        ::new(arr_[ip]) Node(piecewise_construct, forward_as_tuple(static_cast<Key&&>(k)), forward_as_tuple());
+        sz_++; return arr_[ip]->data.second;
     }
 
-    iterator find(const Key& k) {
-        size_type pos = find_pos(k);
-        if (pos < size_) return as_value(pos);
-        return end();
-    }
+    iterator begin() { return {arr_}; }
+    iterator end() { return {arr_+sz_}; }
+    const_iterator begin() const { return {arr_}; }
+    const_iterator end() const { return {arr_+sz_}; }
+    const_iterator cbegin() const { return begin(); }
+    const_iterator cend() const { return end(); }
+    reverse_iterator rbegin() { return reverse_iterator(end()); }
+    reverse_iterator rend() { return reverse_iterator(begin()); }
 
-    const_iterator find(const Key& k) const {
-        size_type pos = find_pos(k);
-        if (pos < size_) return as_value(pos);
-        return end();
-    }
+    size_type size() const { return sz_; }
+    bool empty() const { return sz_==0; }
 
-    size_type count(const Key& k) const {
-        return find_pos(k) < size_ ? 1 : 0;
+    pair<iterator,bool> insert(const value_type& v) {
+        size_type p=fpos(v.first); if(p<sz_) return {iterator(arr_+p),false};
+        if(sz_>=cap_) grow();
+        size_type ip=ipos(v.first); shift_right(ip);
+        arr_[ip]=make_node(v); sz_++;
+        return {iterator(arr_+ip),true};
     }
-
-    pair<iterator, bool> insert(const value_type& v) {
-        size_type pos = find_pos(v.first);
-        if (pos < size_) return {as_value(pos), false};
-        if (size_ >= MAX_ENTRIES) abort();
-        size_type ip = insert_pos(v.first);
-        for (size_type i = size_; i > ip; --i) {
-            entries_()[i].key() = static_cast<Key&&>(entries_()[i-1].key());
-            entries_()[i].val() = static_cast<T&&>(entries_()[i-1].val());
-        }
-        entries_()[ip].key() = v.first;
-        entries_()[ip].val() = v.second;
-        ++size_;
-        return {as_value(ip), true};
-    }
-
     template<class... Args>
-    pair<iterator, bool> emplace(Args&&... args) {
-        value_type v(static_cast<Args&&>(args)...);
-        return insert(v);
+    pair<iterator,bool> emplace(Args&&... args) {
+        Node* n=static_cast<Node*>(::operator new(sizeof(Node)));
+        ::new(n) Node(static_cast<Args&&>(args)...);
+        size_type p=fpos(n->data.first);
+        if(p<sz_){free_node(n);return{iterator(arr_+p),false};}
+        if(sz_>=cap_) grow();
+        size_type ip=ipos(n->data.first); shift_right(ip);
+        arr_[ip]=n; sz_++;
+        return {iterator(arr_+ip),true};
     }
+
+    iterator find(const Key& k) { size_type p=fpos(k); return p<sz_?iterator(arr_+p):end(); }
+    const_iterator find(const Key& k) const { size_type p=fpos(k); return p<sz_?const_iterator(arr_+p):end(); }
+    size_type count(const Key& k) const { return fpos(k)<sz_?1:0; }
+    bool contains(const Key& k) const { return fpos(k)<sz_; }
 
     size_type erase(const Key& k) {
-        size_type pos = find_pos(k);
-        if (pos >= size_) return 0;
-        for (size_type i = pos; i + 1 < size_; ++i) {
-            entries_()[i].key() = static_cast<Key&&>(entries_()[i+1].key());
-            entries_()[i].val() = static_cast<T&&>(entries_()[i+1].val());
-        }
-        --size_;
-        return 1;
+        size_type p=fpos(k); if(p>=sz_) return 0;
+        free_node(arr_[p]);
+        for(size_type i=p;i<sz_-1;i++) arr_[i]=arr_[i+1];
+        sz_--; return 1;
     }
-
-    iterator erase(iterator pos) {
-        size_type idx = static_cast<size_type>(reinterpret_cast<Entry*>(pos) - entries_());
-        if (idx >= size_) return end();
-        for (size_type i = idx; i + 1 < size_; ++i) {
-            entries_()[i].key() = static_cast<Key&&>(entries_()[i+1].key());
-            entries_()[i].val() = static_cast<T&&>(entries_()[i+1].val());
-        }
-        --size_;
-        return as_value(idx);
+    iterator erase(iterator it) {
+        size_type p=it.p-arr_; if(p>=sz_) return end();
+        free_node(arr_[p]);
+        for(size_type i=p;i<sz_-1;i++) arr_[i]=arr_[i+1];
+        sz_--; return iterator(arr_+p);
     }
-
-    void clear() { size_ = 0; }
-    size_type size() const noexcept { return size_; }
-    bool empty() const noexcept { return size_ == 0; }
-
-    iterator begin() noexcept { return as_value(0); }
-    iterator end() noexcept { return as_value(size_); }
-    const_iterator begin() const noexcept { return as_value(0); }
-    const_iterator end() const noexcept { return as_value(size_); }
-    const_iterator cbegin() const noexcept { return as_value(0); }
-    const_iterator cend() const noexcept { return as_value(size_); }
-
-    iterator lower_bound(const Key& k) {
-        size_type ip = insert_pos(k);
-        return as_value(ip);
+    iterator erase(const_iterator it) {
+        size_type p=it.p-arr_; if(p>=sz_) return end();
+        free_node(arr_[p]);
+        for(size_type i=p;i<sz_-1;i++) arr_[i]=arr_[i+1];
+        sz_--; return iterator(arr_+p);
     }
-    const_iterator lower_bound(const Key& k) const {
-        size_type ip = insert_pos(k);
-        return as_value(ip);
+    void clear() { for(size_type i=0;i<sz_;i++) free_node(arr_[i]); sz_=0; }
+
+    iterator lower_bound(const Key& k) { return iterator(arr_+ipos(k)); }
+    const_iterator lower_bound(const Key& k) const { return const_iterator(arr_+ipos(k)); }
+    iterator upper_bound(const Key& k) {
+        size_type i=ipos(k); while(i<sz_&&!comp_(k,arr_[i]->data.first))i++; return iterator(arr_+i);
     }
+    pair<iterator,iterator> equal_range(const Key& k) { return {lower_bound(k),upper_bound(k)}; }
+
+    allocator_type get_allocator() const { return Allocator(); }
+    key_compare key_comp() const { return comp_; }
 };
 
-// multimap — minimal stub
-template<class Key, class T, class Compare = less<Key>, class Allocator = allocator<pair<const Key, T>>>
-class multimap : public map<Key, T, Compare, Allocator> {
-public:
-    using map<Key, T, Compare, Allocator>::map;
-};
+template<class K, class T, class C = less<K>, class A = allocator<pair<const K,T>>>
+using multimap = map<K,T,C,A>;
 
 } // namespace std
-
 #endif
