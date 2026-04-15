@@ -1,0 +1,5 @@
+#ifndef _BAT_CTIME
+#define _BAT_CTIME
+#include <time.h>
+namespace std { using ::time_t; using ::time; using ::clock; using ::difftime; }
+#endif

@@ -1,1 +1,105 @@
-// torque stub
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=7&c=3
+template<class D, class P>
+Tagged<Union<JSReceiver, Null>> TorqueGeneratedJSProxy<D, P>::target() const {
+  PtrComprCageBase cage_base = GetPtrComprCageBase(*this);
+  return TorqueGeneratedJSProxy::target(cage_base);
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=7&c=3
+template<class D, class P>
+Tagged<Union<JSReceiver, Null>> TorqueGeneratedJSProxy<D, P>::target(PtrComprCageBase cage_base) const {
+  Tagged<Union<JSReceiver, Null>> value = TaggedField<Tagged<Union<JSReceiver, Null>>>::load(cage_base, *this, kTargetOffset);
+  DCHECK(IsJSReceiver(value) || IsNull(value));
+  return value;
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=7&c=3
+template<class D, class P>
+void TorqueGeneratedJSProxy<D, P>::set_target(Tagged<Union<JSReceiver, Null>> value, WriteBarrierMode mode) {
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsNull(value)));
+  WRITE_FIELD(*this, kTargetOffset, value);
+  CONDITIONAL_WRITE_BARRIER(*this, kTargetOffset, value, mode);
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=8&c=3
+template<class D, class P>
+Tagged<Union<JSReceiver, Null>> TorqueGeneratedJSProxy<D, P>::handler() const {
+  PtrComprCageBase cage_base = GetPtrComprCageBase(*this);
+  return TorqueGeneratedJSProxy::handler(cage_base);
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=8&c=3
+template<class D, class P>
+Tagged<Union<JSReceiver, Null>> TorqueGeneratedJSProxy<D, P>::handler(PtrComprCageBase cage_base) const {
+  Tagged<Union<JSReceiver, Null>> value = TaggedField<Tagged<Union<JSReceiver, Null>>>::load(cage_base, *this, kHandlerOffset);
+  DCHECK(IsJSReceiver(value) || IsNull(value));
+  return value;
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=8&c=3
+template<class D, class P>
+void TorqueGeneratedJSProxy<D, P>::set_handler(Tagged<Union<JSReceiver, Null>> value, WriteBarrierMode mode) {
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsNull(value)));
+  WRITE_FIELD(*this, kHandlerOffset, value);
+  CONDITIONAL_WRITE_BARRIER(*this, kHandlerOffset, value, mode);
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=9&c=3
+template<class D, class P>
+int32_t TorqueGeneratedJSProxy<D, P>::flags() const {
+  int32_t value = this->template ReadField<int32_t>(kFlagsOffset);
+  return value;
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=9&c=3
+template<class D, class P>
+void TorqueGeneratedJSProxy<D, P>::set_flags(int32_t value) {
+  this->template WriteField<int32_t>(kFlagsOffset, value);
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=14&c=3
+template<class D, class P>
+Tagged<JSAny> TorqueGeneratedJSProxyRevocableResult<D, P>::proxy() const {
+  PtrComprCageBase cage_base = GetPtrComprCageBase(*this);
+  return TorqueGeneratedJSProxyRevocableResult::proxy(cage_base);
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=14&c=3
+template<class D, class P>
+Tagged<JSAny> TorqueGeneratedJSProxyRevocableResult<D, P>::proxy(PtrComprCageBase cage_base) const {
+  Tagged<JSAny> value = TaggedField<Tagged<JSAny>>::load(cage_base, *this, kProxyOffset);
+  DCHECK(IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
+  return value;
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=14&c=3
+template<class D, class P>
+void TorqueGeneratedJSProxyRevocableResult<D, P>::set_proxy(Tagged<JSAny> value, WriteBarrierMode mode) {
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
+  WRITE_FIELD(*this, kProxyOffset, value);
+  CONDITIONAL_WRITE_BARRIER(*this, kProxyOffset, value, mode);
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=15&c=3
+template<class D, class P>
+Tagged<JSAny> TorqueGeneratedJSProxyRevocableResult<D, P>::revoke() const {
+  PtrComprCageBase cage_base = GetPtrComprCageBase(*this);
+  return TorqueGeneratedJSProxyRevocableResult::revoke(cage_base);
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=15&c=3
+template<class D, class P>
+Tagged<JSAny> TorqueGeneratedJSProxyRevocableResult<D, P>::revoke(PtrComprCageBase cage_base) const {
+  Tagged<JSAny> value = TaggedField<Tagged<JSAny>>::load(cage_base, *this, kRevokeOffset);
+  DCHECK(IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value));
+  return value;
+}
+
+// https://crsrc.org/c/v8/src/objects/js-proxy.tq?l=15&c=3
+template<class D, class P>
+void TorqueGeneratedJSProxyRevocableResult<D, P>::set_revoke(Tagged<JSAny> value, WriteBarrierMode mode) {
+  SLOW_DCHECK(!IsolateGroup::current()->shared_read_only_heap()->roots_init_complete() || (IsJSReceiver(value) || IsBigInt(value) || IsUndefined(value) || IsSmi(value) || IsHeapNumber(value) || IsString(value) || IsSymbol(value) || IsBoolean(value) || IsNull(value)));
+  WRITE_FIELD(*this, kRevokeOffset, value);
+  CONDITIONAL_WRITE_BARRIER(*this, kRevokeOffset, value, mode);
+}
+

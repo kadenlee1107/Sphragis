@@ -1,0 +1,8 @@
+#ifndef _BAT_FSTREAM
+#define _BAT_FSTREAM
+#include <iosfwd>
+#include <ostream>
+namespace std {
+// Minimal fstream stub for V8
+}
+#endif

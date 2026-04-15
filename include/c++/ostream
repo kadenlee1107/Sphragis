@@ -52,6 +52,19 @@ inline ostream cout;
 inline ostream cerr;
 inline ostream clog;
 
+// String support — defined after string is included
+// This is a non-member operator so it doesn't need the full string type here
 } // namespace std
+
+// Include string to get operator<< for it
+#include <string>
+
+namespace std {
+inline basic_ostream<char, char_traits<char>>& operator<<(
+    basic_ostream<char, char_traits<char>>& os, const string& s) {
+    os.write(s.c_str(), s.size());
+    return os;
+}
+} // namespace std (reopened)
 
 #endif

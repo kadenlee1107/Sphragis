@@ -1,0 +1,21 @@
+#ifndef V8_GEN_TORQUE_GENERATED_SRC_BUILTINS_ARRAY_FIND_TQ_CSA_H_
+#define V8_GEN_TORQUE_GENERATED_SRC_BUILTINS_ARRAY_FIND_TQ_CSA_H_
+
+#include "src/builtins/torque-csa-header-includes.h"
+
+namespace v8 {
+namespace internal {
+
+// https://crsrc.org/c/v8/src/builtins/array-find.tq?l=90&c=1
+TNode<JSAny> FastArrayFind_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<JSReceiver> p_o, TNode<Number> p_len, TNode<Union<JSBoundFunction, JSFunction, JSObject, JSProxy, JSWrappedFunction>> p_callbackfn, TNode<JSAny> p_thisArg, compiler::CodeAssemblerLabel* label_Bailout, compiler::TypedCodeAssemblerVariable<Smi>* label_Bailout_parameter_0);
+
+// https://crsrc.org/c/v8/src/builtins/array-find.tq?l=16&c=22
+TNode<JSReceiver> Cast_JSReceiver_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
+
+// https://crsrc.org/c/v8/src/builtins/array-find.tq?l=17&c=22
+TNode<Union<JSBoundFunction, JSFunction, JSObject, JSProxy, JSWrappedFunction>> Cast_Callable_1(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Object> p_o, compiler::CodeAssemblerLabel* label_CastError);
+
+} // namespace internal
+} // namespace v8
+
+#endif // V8_GEN_TORQUE_GENERATED_SRC_BUILTINS_ARRAY_FIND_TQ_CSA_H_

@@ -1,0 +1,8 @@
+#ifndef _BAT_NUMERIC
+#define _BAT_NUMERIC
+#include <iosfwd>
+#include <ostream>
+namespace std {
+// Minimal numeric stub for V8
+}
+#endif

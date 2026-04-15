@@ -1117,8 +1117,10 @@
 
 // Fully Torque-defined classes (both internal and exported).
 #define TORQUE_DEFINED_CLASS_LIST(V) \
-  V(SloppyArgumentsElements) \
+  V(WasmFastApiCallData) \
+  V(WasmStringViewIter) \
   V(StrongDescriptorArray) \
+  V(SloppyArgumentsElements) \
   V(OnHeapBasicBlockProfilerData) \
   V(TurbofanType) \
   V(TurbofanBitsetType) \
@@ -1126,8 +1128,7 @@
   V(TurbofanRangeType) \
   V(TurbofanHeapConstantType) \
   V(TurbofanOtherNumberConstantType) \
-  V(WasmFastApiCallData) \
-  V(WasmStringViewIter) \
+  V(SortState) \
   V(InternalClass) \
   V(SmiPair) \
   V(SmiBox) \
@@ -1138,34 +1139,34 @@
   V(AbstractInternalClassSubclass2) \
   V(InternalClassWithStructElements) \
   V(ExportedSubClass2) \
-  V(SortState) \
 
 #define TORQUE_DEFINED_VARSIZE_INSTANCE_TYPE_LIST(V) \
-  V(SLOPPY_ARGUMENTS_ELEMENTS_TYPE, SloppyArgumentsElements, sloppy_arguments_elements) \
   V(DESCRIPTOR_ARRAY_TYPE, DescriptorArray, descriptor_array) \
   V(STRONG_DESCRIPTOR_ARRAY_TYPE, StrongDescriptorArray, strong_descriptor_array) \
+  V(SLOPPY_ARGUMENTS_ELEMENTS_TYPE, SloppyArgumentsElements, sloppy_arguments_elements) \
   V(TURBOSHAFT_WORD32_SET_TYPE_TYPE, TurboshaftWord32SetType, turboshaft_word32set_type) \
   V(TURBOSHAFT_WORD64_SET_TYPE_TYPE, TurboshaftWord64SetType, turboshaft_word64set_type) \
   V(TURBOSHAFT_FLOAT64_SET_TYPE_TYPE, TurboshaftFloat64SetType, turboshaft_float64set_type) \
   V(INTERNAL_CLASS_WITH_STRUCT_ELEMENTS_TYPE, InternalClassWithStructElements, internal_class_with_struct_elements) \
 
 #define TORQUE_DEFINED_FIXED_INSTANCE_TYPE_LIST(V) \
-  V(FUNCTION_TEMPLATE_INFO_TYPE, FunctionTemplateInfo, function_template_info) \
+  V(WASM_FAST_API_CALL_DATA_TYPE, WasmFastApiCallData, wasm_fast_api_call_data) \
+  V(WASM_STRING_VIEW_ITER_TYPE, WasmStringViewIter, wasm_string_view_iter) \
   V(ON_HEAP_BASIC_BLOCK_PROFILER_DATA_TYPE, OnHeapBasicBlockProfilerData, on_heap_basic_block_profiler_data) \
-  V(OBJECT_TEMPLATE_INFO_TYPE, ObjectTemplateInfo, object_template_info) \
-  V(TURBOFAN_BITSET_TYPE_TYPE, TurbofanBitsetType, turbofan_bitset_type) \
-  V(TURBOFAN_UNION_TYPE_TYPE, TurbofanUnionType, turbofan_union_type) \
-  V(TURBOFAN_RANGE_TYPE_TYPE, TurbofanRangeType, turbofan_range_type) \
-  V(TURBOFAN_HEAP_CONSTANT_TYPE_TYPE, TurbofanHeapConstantType, turbofan_heap_constant_type) \
-  V(TURBOFAN_OTHER_NUMBER_CONSTANT_TYPE_TYPE, TurbofanOtherNumberConstantType, turbofan_other_number_constant_type) \
   V(TURBOSHAFT_WORD32_TYPE_TYPE, TurboshaftWord32Type, turboshaft_word32type) \
   V(TURBOSHAFT_WORD32_RANGE_TYPE_TYPE, TurboshaftWord32RangeType, turboshaft_word32range_type) \
   V(TURBOSHAFT_WORD64_TYPE_TYPE, TurboshaftWord64Type, turboshaft_word64type) \
   V(TURBOSHAFT_WORD64_RANGE_TYPE_TYPE, TurboshaftWord64RangeType, turboshaft_word64range_type) \
   V(TURBOSHAFT_FLOAT64_TYPE_TYPE, TurboshaftFloat64Type, turboshaft_float64type) \
   V(TURBOSHAFT_FLOAT64_RANGE_TYPE_TYPE, TurboshaftFloat64RangeType, turboshaft_float64range_type) \
-  V(WASM_FAST_API_CALL_DATA_TYPE, WasmFastApiCallData, wasm_fast_api_call_data) \
-  V(WASM_STRING_VIEW_ITER_TYPE, WasmStringViewIter, wasm_string_view_iter) \
+  V(FUNCTION_TEMPLATE_INFO_TYPE, FunctionTemplateInfo, function_template_info) \
+  V(OBJECT_TEMPLATE_INFO_TYPE, ObjectTemplateInfo, object_template_info) \
+  V(TURBOFAN_BITSET_TYPE_TYPE, TurbofanBitsetType, turbofan_bitset_type) \
+  V(TURBOFAN_UNION_TYPE_TYPE, TurbofanUnionType, turbofan_union_type) \
+  V(TURBOFAN_RANGE_TYPE_TYPE, TurbofanRangeType, turbofan_range_type) \
+  V(TURBOFAN_HEAP_CONSTANT_TYPE_TYPE, TurbofanHeapConstantType, turbofan_heap_constant_type) \
+  V(TURBOFAN_OTHER_NUMBER_CONSTANT_TYPE_TYPE, TurbofanOtherNumberConstantType, turbofan_other_number_constant_type) \
+  V(SORT_STATE_TYPE, SortState, sort_state) \
   V(INTERNAL_CLASS_TYPE, InternalClass, internal_class) \
   V(SMI_PAIR_TYPE, SmiPair, smi_pair) \
   V(SMI_BOX_TYPE, SmiBox, smi_box) \
@@ -1174,24 +1175,18 @@
   V(ABSTRACT_INTERNAL_CLASS_SUBCLASS1_TYPE, AbstractInternalClassSubclass1, abstract_internal_class_subclass1) \
   V(ABSTRACT_INTERNAL_CLASS_SUBCLASS2_TYPE, AbstractInternalClassSubclass2, abstract_internal_class_subclass2) \
   V(EXPORTED_SUB_CLASS2_TYPE, ExportedSubClass2, exported_sub_class2) \
-  V(SORT_STATE_TYPE, SortState, sort_state) \
 
 #define TORQUE_DEFINED_INSTANCE_TYPE_LIST(V) \
   TORQUE_DEFINED_VARSIZE_INSTANCE_TYPE_LIST(V) \
   TORQUE_DEFINED_FIXED_INSTANCE_TYPE_LIST(V) \
 
 #define TORQUE_DEFINED_MAP_CSA_LIST_GENERATOR(V, _) \
-  V(_, FunctionTemplateInfoMap, function_template_info_map, FunctionTemplateInfo) \
-  V(_, SloppyArgumentsElementsMap, sloppy_arguments_elements_map, SloppyArgumentsElements) \
+  V(_, WasmFastApiCallDataMap, wasm_fast_api_call_data_map, WasmFastApiCallData) \
+  V(_, WasmStringViewIterMap, wasm_string_view_iter_map, WasmStringViewIter) \
   V(_, DescriptorArrayMap, descriptor_array_map, DescriptorArray) \
   V(_, StrongDescriptorArrayMap, strong_descriptor_array_map, StrongDescriptorArray) \
+  V(_, SloppyArgumentsElementsMap, sloppy_arguments_elements_map, SloppyArgumentsElements) \
   V(_, OnHeapBasicBlockProfilerDataMap, on_heap_basic_block_profiler_data_map, OnHeapBasicBlockProfilerData) \
-  V(_, ObjectTemplateInfoMap, object_template_info_map, ObjectTemplateInfo) \
-  V(_, TurbofanBitsetTypeMap, turbofan_bitset_type_map, TurbofanBitsetType) \
-  V(_, TurbofanUnionTypeMap, turbofan_union_type_map, TurbofanUnionType) \
-  V(_, TurbofanRangeTypeMap, turbofan_range_type_map, TurbofanRangeType) \
-  V(_, TurbofanHeapConstantTypeMap, turbofan_heap_constant_type_map, TurbofanHeapConstantType) \
-  V(_, TurbofanOtherNumberConstantTypeMap, turbofan_other_number_constant_type_map, TurbofanOtherNumberConstantType) \
   V(_, TurboshaftWord32TypeMap, turboshaft_word32type_map, TurboshaftWord32Type) \
   V(_, TurboshaftWord32RangeTypeMap, turboshaft_word32range_type_map, TurboshaftWord32RangeType) \
   V(_, TurboshaftWord32SetTypeMap, turboshaft_word32set_type_map, TurboshaftWord32SetType) \
@@ -1201,8 +1196,14 @@
   V(_, TurboshaftFloat64TypeMap, turboshaft_float64type_map, TurboshaftFloat64Type) \
   V(_, TurboshaftFloat64RangeTypeMap, turboshaft_float64range_type_map, TurboshaftFloat64RangeType) \
   V(_, TurboshaftFloat64SetTypeMap, turboshaft_float64set_type_map, TurboshaftFloat64SetType) \
-  V(_, WasmFastApiCallDataMap, wasm_fast_api_call_data_map, WasmFastApiCallData) \
-  V(_, WasmStringViewIterMap, wasm_string_view_iter_map, WasmStringViewIter) \
+  V(_, FunctionTemplateInfoMap, function_template_info_map, FunctionTemplateInfo) \
+  V(_, ObjectTemplateInfoMap, object_template_info_map, ObjectTemplateInfo) \
+  V(_, TurbofanBitsetTypeMap, turbofan_bitset_type_map, TurbofanBitsetType) \
+  V(_, TurbofanUnionTypeMap, turbofan_union_type_map, TurbofanUnionType) \
+  V(_, TurbofanRangeTypeMap, turbofan_range_type_map, TurbofanRangeType) \
+  V(_, TurbofanHeapConstantTypeMap, turbofan_heap_constant_type_map, TurbofanHeapConstantType) \
+  V(_, TurbofanOtherNumberConstantTypeMap, turbofan_other_number_constant_type_map, TurbofanOtherNumberConstantType) \
+  V(_, SortStateMap, sort_state_map, SortState) \
   V(_, InternalClassMap, internal_class_map, InternalClass) \
   V(_, SmiPairMap, smi_pair_map, SmiPair) \
   V(_, SmiBoxMap, smi_box_map, SmiBox) \
@@ -1212,20 +1213,14 @@
   V(_, AbstractInternalClassSubclass2Map, abstract_internal_class_subclass2_map, AbstractInternalClassSubclass2) \
   V(_, InternalClassWithStructElementsMap, internal_class_with_struct_elements_map, InternalClassWithStructElements) \
   V(_, ExportedSubClass2Map, exported_sub_class2_map, ExportedSubClass2) \
-  V(_, SortStateMap, sort_state_map, SortState) \
 
 #define TORQUE_DEFINED_MAP_ROOT_LIST(V) \
-  V(Map, function_template_info_map, FunctionTemplateInfoMap) \
-  V(Map, sloppy_arguments_elements_map, SloppyArgumentsElementsMap) \
+  V(Map, wasm_fast_api_call_data_map, WasmFastApiCallDataMap) \
+  V(Map, wasm_string_view_iter_map, WasmStringViewIterMap) \
   V(Map, descriptor_array_map, DescriptorArrayMap) \
   V(Map, strong_descriptor_array_map, StrongDescriptorArrayMap) \
+  V(Map, sloppy_arguments_elements_map, SloppyArgumentsElementsMap) \
   V(Map, on_heap_basic_block_profiler_data_map, OnHeapBasicBlockProfilerDataMap) \
-  V(Map, object_template_info_map, ObjectTemplateInfoMap) \
-  V(Map, turbofan_bitset_type_map, TurbofanBitsetTypeMap) \
-  V(Map, turbofan_union_type_map, TurbofanUnionTypeMap) \
-  V(Map, turbofan_range_type_map, TurbofanRangeTypeMap) \
-  V(Map, turbofan_heap_constant_type_map, TurbofanHeapConstantTypeMap) \
-  V(Map, turbofan_other_number_constant_type_map, TurbofanOtherNumberConstantTypeMap) \
   V(Map, turboshaft_word32type_map, TurboshaftWord32TypeMap) \
   V(Map, turboshaft_word32range_type_map, TurboshaftWord32RangeTypeMap) \
   V(Map, turboshaft_word32set_type_map, TurboshaftWord32SetTypeMap) \
@@ -1235,8 +1230,14 @@
   V(Map, turboshaft_float64type_map, TurboshaftFloat64TypeMap) \
   V(Map, turboshaft_float64range_type_map, TurboshaftFloat64RangeTypeMap) \
   V(Map, turboshaft_float64set_type_map, TurboshaftFloat64SetTypeMap) \
-  V(Map, wasm_fast_api_call_data_map, WasmFastApiCallDataMap) \
-  V(Map, wasm_string_view_iter_map, WasmStringViewIterMap) \
+  V(Map, function_template_info_map, FunctionTemplateInfoMap) \
+  V(Map, object_template_info_map, ObjectTemplateInfoMap) \
+  V(Map, turbofan_bitset_type_map, TurbofanBitsetTypeMap) \
+  V(Map, turbofan_union_type_map, TurbofanUnionTypeMap) \
+  V(Map, turbofan_range_type_map, TurbofanRangeTypeMap) \
+  V(Map, turbofan_heap_constant_type_map, TurbofanHeapConstantTypeMap) \
+  V(Map, turbofan_other_number_constant_type_map, TurbofanOtherNumberConstantTypeMap) \
+  V(Map, sort_state_map, SortStateMap) \
   V(Map, internal_class_map, InternalClassMap) \
   V(Map, smi_pair_map, SmiPairMap) \
   V(Map, smi_box_map, SmiBoxMap) \
@@ -1246,6 +1247,5 @@
   V(Map, abstract_internal_class_subclass2_map, AbstractInternalClassSubclass2Map) \
   V(Map, internal_class_with_struct_elements_map, InternalClassWithStructElementsMap) \
   V(Map, exported_sub_class2_map, ExportedSubClass2Map) \
-  V(Map, sort_state_map, SortStateMap) \
 
 #endif  // V8_GEN_TORQUE_GENERATED_INSTANCE_TYPES_H_

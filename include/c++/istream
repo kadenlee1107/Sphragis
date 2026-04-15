@@ -1,0 +1,8 @@
+#ifndef _BAT_ISTREAM
+#define _BAT_ISTREAM
+#include <iosfwd>
+#include <ostream>
+namespace std {
+// Minimal istream stub for V8
+}
+#endif

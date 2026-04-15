@@ -1,0 +1,8 @@
+#ifndef _BAT_REGEX
+#define _BAT_REGEX
+#include <iosfwd>
+#include <ostream>
+namespace std {
+// Minimal regex stub for V8
+}
+#endif

@@ -1,0 +1,54 @@
+#ifndef V8_GEN_TORQUE_GENERATED_SRC_BUILTINS_PROMISE_ALL_TQ_CSA_H_
+#define V8_GEN_TORQUE_GENERATED_SRC_BUILTINS_PROMISE_ALL_TQ_CSA_H_
+
+#include "src/builtins/torque-csa-header-includes.h"
+
+namespace v8 {
+namespace internal {
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=17&c=1
+TNode<Context> CreatePromiseAllResolveElementContext_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<PromiseCapability> p_capability, TNode<NativeContext> p_nativeContext);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=41&c=1
+TNode<JSFunction> CreatePromiseAllResolveElementFunction_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<Context> p_resolveElementContext, TNode<Smi> p_index, intptr_t p_resolveFunction);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=57&c=1
+TNode<Context> CreatePromiseResolvingFunctionsContext_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<JSPromise> p_promise, TNode<Boolean> p_debugEvent, TNode<NativeContext> p_nativeContext);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=80&c=1
+TNode<BoolT> IsPromiseThenLookupChainIntact_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<NativeContext> p_nativeContext, TNode<Map> p_receiverMap);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=24&c=3
+void InitContextSlot_PromiseAllResolveElementContext_PromiseAllResolveElementContext_Smi_constexpr_IntegerLiteral_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<IntPtrT> p_index, IntegerLiteral p_value);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=29&c=3
+void InitContextSlot_PromiseAllResolveElementContext_PromiseAllResolveElementContext_PromiseCapability_PromiseCapability_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<IntPtrT> p_index, TNode<PromiseCapability> p_value);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=34&c=3
+void InitContextSlot_PromiseAllResolveElementContext_PromiseAllResolveElementContext_FixedArray_EmptyFixedArray_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<IntPtrT> p_index, TNode<FixedArray> p_value);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=65&c=3
+void InitContextSlot_PromiseResolvingFunctionContext_PromiseResolvingFunctionContext_JSPromise_JSPromise_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<IntPtrT> p_index, TNode<JSPromise> p_value);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=68&c=3
+void InitContextSlot_PromiseResolvingFunctionContext_PromiseResolvingFunctionContext_Boolean_False_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<IntPtrT> p_index, TNode<False> p_value);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=71&c=3
+void InitContextSlot_PromiseResolvingFunctionContext_PromiseResolvingFunctionContext_Boolean_Boolean_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<IntPtrT> p_index, TNode<Boolean> p_value);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=381&c=10
+TNode<JSAny> GeneratePromiseAll_PromiseAllResolveElementFunctor_PromiseAllRejectElementFunctor_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<JSAny> p_receiver, TNode<JSAny> p_iterable, TorqueStructPromiseAllResolveElementFunctor_0 p_createResolveElementFunctor, TorqueStructPromiseAllRejectElementFunctor_0 p_createRejectElementFunctor, const char* p_message);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=390&c=10
+TNode<JSAny> GeneratePromiseAll_PromiseAllSettledResolveElementFunctor_PromiseAllSettledRejectElementFunctor_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<JSAny> p_receiver, TNode<JSAny> p_iterable, TorqueStructPromiseAllSettledResolveElementFunctor_0 p_createResolveElementFunctor, TorqueStructPromiseAllSettledRejectElementFunctor_0 p_createRejectElementFunctor, const char* p_message);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=365&c=12
+TNode<JSAny> PerformPromiseAll_PromiseAllResolveElementFunctor_PromiseAllRejectElementFunctor_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<NativeContext> p_nativeContext, TorqueStructIteratorRecord p_iter, TNode<JSReceiver> p_constructor, TNode<PromiseCapability> p_capability, TNode<JSAny> p_promiseResolveFunction, TorqueStructPromiseAllResolveElementFunctor_0 p_createResolveElementFunctor, TorqueStructPromiseAllRejectElementFunctor_0 p_createRejectElementFunctor, compiler::CodeAssemblerLabel* label_Reject, compiler::TypedCodeAssemblerVariable<JSAny>* label_Reject_parameter_0);
+
+// https://crsrc.org/c/v8/src/builtins/promise-all.tq?l=365&c=12
+TNode<JSAny> PerformPromiseAll_PromiseAllSettledResolveElementFunctor_PromiseAllSettledRejectElementFunctor_0(compiler::CodeAssemblerState* state_, TNode<Context> p_context, TNode<NativeContext> p_nativeContext, TorqueStructIteratorRecord p_iter, TNode<JSReceiver> p_constructor, TNode<PromiseCapability> p_capability, TNode<JSAny> p_promiseResolveFunction, TorqueStructPromiseAllSettledResolveElementFunctor_0 p_createResolveElementFunctor, TorqueStructPromiseAllSettledRejectElementFunctor_0 p_createRejectElementFunctor, compiler::CodeAssemblerLabel* label_Reject, compiler::TypedCodeAssemblerVariable<JSAny>* label_Reject_parameter_0);
+
+} // namespace internal
+} // namespace v8
+
+#endif // V8_GEN_TORQUE_GENERATED_SRC_BUILTINS_PROMISE_ALL_TQ_CSA_H_

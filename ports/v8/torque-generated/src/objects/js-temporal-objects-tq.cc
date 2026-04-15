@@ -1,0 +1,124 @@
+#include "src/objects/js-temporal-objects-inl.h"
+
+#include "torque-generated/class-verifiers.h"
+#include "src/objects/objects-inl.h"
+
+#include "src/objects/instance-type-inl.h"
+
+namespace v8 {
+namespace internal {
+
+// https://crsrc.org/c/v8/src/objects/js-temporal-objects.tq?l=7&c=1
+bool IsJSTemporalDuration_NonInline(Tagged<HeapObject> o) {
+  return IsJSTemporalDuration(o);
+}
+
+#ifdef VERIFY_HEAP
+
+template <>
+void TorqueGeneratedJSTemporalDuration<JSTemporalDuration, JSObject>::JSTemporalDurationVerify(Isolate* isolate) {
+  TorqueGeneratedClassVerifiers::JSTemporalDurationVerify(TrustedCast<JSTemporalDuration>(*this), isolate);
+}
+
+
+#endif  // VERIFY_HEAP
+// https://crsrc.org/c/v8/src/objects/js-temporal-objects.tq?l=11&c=1
+bool IsJSTemporalInstant_NonInline(Tagged<HeapObject> o) {
+  return IsJSTemporalInstant(o);
+}
+
+#ifdef VERIFY_HEAP
+
+template <>
+void TorqueGeneratedJSTemporalInstant<JSTemporalInstant, JSObject>::JSTemporalInstantVerify(Isolate* isolate) {
+  TorqueGeneratedClassVerifiers::JSTemporalInstantVerify(TrustedCast<JSTemporalInstant>(*this), isolate);
+}
+
+
+#endif  // VERIFY_HEAP
+// https://crsrc.org/c/v8/src/objects/js-temporal-objects.tq?l=15&c=1
+bool IsJSTemporalPlainDateTime_NonInline(Tagged<HeapObject> o) {
+  return IsJSTemporalPlainDateTime(o);
+}
+
+#ifdef VERIFY_HEAP
+
+template <>
+void TorqueGeneratedJSTemporalPlainDateTime<JSTemporalPlainDateTime, JSObject>::JSTemporalPlainDateTimeVerify(Isolate* isolate) {
+  TorqueGeneratedClassVerifiers::JSTemporalPlainDateTimeVerify(TrustedCast<JSTemporalPlainDateTime>(*this), isolate);
+}
+
+
+#endif  // VERIFY_HEAP
+// https://crsrc.org/c/v8/src/objects/js-temporal-objects.tq?l=19&c=1
+bool IsJSTemporalPlainDate_NonInline(Tagged<HeapObject> o) {
+  return IsJSTemporalPlainDate(o);
+}
+
+#ifdef VERIFY_HEAP
+
+template <>
+void TorqueGeneratedJSTemporalPlainDate<JSTemporalPlainDate, JSObject>::JSTemporalPlainDateVerify(Isolate* isolate) {
+  TorqueGeneratedClassVerifiers::JSTemporalPlainDateVerify(TrustedCast<JSTemporalPlainDate>(*this), isolate);
+}
+
+
+#endif  // VERIFY_HEAP
+// https://crsrc.org/c/v8/src/objects/js-temporal-objects.tq?l=23&c=1
+bool IsJSTemporalPlainMonthDay_NonInline(Tagged<HeapObject> o) {
+  return IsJSTemporalPlainMonthDay(o);
+}
+
+#ifdef VERIFY_HEAP
+
+template <>
+void TorqueGeneratedJSTemporalPlainMonthDay<JSTemporalPlainMonthDay, JSObject>::JSTemporalPlainMonthDayVerify(Isolate* isolate) {
+  TorqueGeneratedClassVerifiers::JSTemporalPlainMonthDayVerify(TrustedCast<JSTemporalPlainMonthDay>(*this), isolate);
+}
+
+
+#endif  // VERIFY_HEAP
+// https://crsrc.org/c/v8/src/objects/js-temporal-objects.tq?l=27&c=1
+bool IsJSTemporalPlainTime_NonInline(Tagged<HeapObject> o) {
+  return IsJSTemporalPlainTime(o);
+}
+
+#ifdef VERIFY_HEAP
+
+template <>
+void TorqueGeneratedJSTemporalPlainTime<JSTemporalPlainTime, JSObject>::JSTemporalPlainTimeVerify(Isolate* isolate) {
+  TorqueGeneratedClassVerifiers::JSTemporalPlainTimeVerify(TrustedCast<JSTemporalPlainTime>(*this), isolate);
+}
+
+
+#endif  // VERIFY_HEAP
+// https://crsrc.org/c/v8/src/objects/js-temporal-objects.tq?l=31&c=1
+bool IsJSTemporalPlainYearMonth_NonInline(Tagged<HeapObject> o) {
+  return IsJSTemporalPlainYearMonth(o);
+}
+
+#ifdef VERIFY_HEAP
+
+template <>
+void TorqueGeneratedJSTemporalPlainYearMonth<JSTemporalPlainYearMonth, JSObject>::JSTemporalPlainYearMonthVerify(Isolate* isolate) {
+  TorqueGeneratedClassVerifiers::JSTemporalPlainYearMonthVerify(TrustedCast<JSTemporalPlainYearMonth>(*this), isolate);
+}
+
+
+#endif  // VERIFY_HEAP
+// https://crsrc.org/c/v8/src/objects/js-temporal-objects.tq?l=35&c=1
+bool IsJSTemporalZonedDateTime_NonInline(Tagged<HeapObject> o) {
+  return IsJSTemporalZonedDateTime(o);
+}
+
+#ifdef VERIFY_HEAP
+
+template <>
+void TorqueGeneratedJSTemporalZonedDateTime<JSTemporalZonedDateTime, JSObject>::JSTemporalZonedDateTimeVerify(Isolate* isolate) {
+  TorqueGeneratedClassVerifiers::JSTemporalZonedDateTimeVerify(TrustedCast<JSTemporalZonedDateTime>(*this), isolate);
+}
+
+
+#endif  // VERIFY_HEAP
+} // namespace internal
+} // namespace v8

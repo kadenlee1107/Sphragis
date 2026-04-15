@@ -1,21 +1,14 @@
-class Context::BodyDescriptor final : public SuffixRangeBodyDescriptor<4> {
+class WasmFastApiCallData::BodyDescriptor final : public SuffixRangeWeakBodyDescriptor<4> {
  public:
   static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
-    return UncheckedCast<Context>(raw_object)->AllocatedSize();
+    return 16;
   }
 
 };
-class JSProxy::BodyDescriptor final : public FixedRangeBodyDescriptor<4, 16> {
+class WasmStringViewIter::BodyDescriptor final : public FixedRangeBodyDescriptor<4, 8> {
  public:
   static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
-    return 20;
-  }
-
-};
-class ScopeInfo::BodyDescriptor final : public SuffixRangeBodyDescriptor<8> {
- public:
-  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
-    return UncheckedCast<ScopeInfo>(raw_object)->AllocatedSize();
+    return 12;
   }
 
 };
@@ -40,13 +33,6 @@ class FeedbackVector::BodyDescriptor final : public SuffixRangeWeakBodyDescripto
   }
 
 };
-class MegaDomHandler::BodyDescriptor final : public SuffixRangeWeakBodyDescriptor<4> {
- public:
-  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
-    return 12;
-  }
-
-};
 class OnHeapBasicBlockProfilerData::BodyDescriptor final : public SuffixRangeBodyDescriptor<4> {
  public:
   static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
@@ -54,42 +40,28 @@ class OnHeapBasicBlockProfilerData::BodyDescriptor final : public SuffixRangeBod
   }
 
 };
-class DictionaryTemplateInfo::BodyDescriptor final : public SuffixRangeBodyDescriptor<4> {
+class Context::BodyDescriptor final : public SuffixRangeBodyDescriptor<4> {
  public:
   static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
-    return 12;
+    return UncheckedCast<Context>(raw_object)->AllocatedSize();
   }
 
 };
-class TurbofanBitsetType::BodyDescriptor final : public DataOnlyBodyDescriptor {
+class ScopeInfo::BodyDescriptor final : public SuffixRangeBodyDescriptor<8> {
  public:
   static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
-    return 12;
+    return UncheckedCast<ScopeInfo>(raw_object)->AllocatedSize();
   }
 
 };
-class TurbofanUnionType::BodyDescriptor final : public SuffixRangeBodyDescriptor<4> {
- public:
-  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
-    return 12;
-  }
-
-};
-class TurbofanRangeType::BodyDescriptor final : public DataOnlyBodyDescriptor {
+class JSProxy::BodyDescriptor final : public FixedRangeBodyDescriptor<4, 16> {
  public:
   static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
     return 20;
   }
 
 };
-class TurbofanHeapConstantType::BodyDescriptor final : public SuffixRangeBodyDescriptor<4> {
- public:
-  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
-    return 8;
-  }
-
-};
-class TurbofanOtherNumberConstantType::BodyDescriptor final : public DataOnlyBodyDescriptor {
+class MegaDomHandler::BodyDescriptor final : public SuffixRangeWeakBodyDescriptor<4> {
  public:
   static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
     return 12;
@@ -159,17 +131,52 @@ class TurboshaftFloat64SetType::BodyDescriptor final : public DataOnlyBodyDescri
   }
 
 };
-class WasmFastApiCallData::BodyDescriptor final : public SuffixRangeWeakBodyDescriptor<4> {
- public:
-  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
-    return 16;
-  }
-
-};
-class WasmStringViewIter::BodyDescriptor final : public FixedRangeBodyDescriptor<4, 8> {
+class DictionaryTemplateInfo::BodyDescriptor final : public SuffixRangeBodyDescriptor<4> {
  public:
   static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
     return 12;
+  }
+
+};
+class TurbofanBitsetType::BodyDescriptor final : public DataOnlyBodyDescriptor {
+ public:
+  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
+    return 12;
+  }
+
+};
+class TurbofanUnionType::BodyDescriptor final : public SuffixRangeBodyDescriptor<4> {
+ public:
+  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
+    return 12;
+  }
+
+};
+class TurbofanRangeType::BodyDescriptor final : public DataOnlyBodyDescriptor {
+ public:
+  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
+    return 20;
+  }
+
+};
+class TurbofanHeapConstantType::BodyDescriptor final : public SuffixRangeBodyDescriptor<4> {
+ public:
+  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
+    return 8;
+  }
+
+};
+class TurbofanOtherNumberConstantType::BodyDescriptor final : public DataOnlyBodyDescriptor {
+ public:
+  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
+    return 12;
+  }
+
+};
+class SortState::BodyDescriptor final : public SuffixRangeBodyDescriptor<4> {
+ public:
+  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
+    return 52;
   }
 
 };
@@ -245,13 +252,6 @@ class ExportedSubClass2::BodyDescriptor final : public BodyDescriptorBase {
 
   static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
     return 24;
-  }
-
-};
-class SortState::BodyDescriptor final : public SuffixRangeBodyDescriptor<4> {
- public:
-  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
-    return 52;
   }
 
 };

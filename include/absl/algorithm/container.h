@@ -1,0 +1,4 @@
+#ifndef ABSL_ALGORITHM_CONTAINER_H_
+#define ABSL_ALGORITHM_CONTAINER_H_
+// Auto-stub
+#endif
