@@ -235,11 +235,12 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
         }
     }
 
-    // Flush ALL loaded pages: clean data cache + invalidate instruction cache
-    // Critical for HVF cache coherency
+    // Flush ALL loaded pages INCLUDING relocated data: clean data cache + invalidate icache
+    // Must cover the FULL memory range (max_addr - min_addr) not just file data,
+    // because relocations patch addresses in BSS and data sections
     unsafe {
         let start = phys_base & !63;
-        let end = phys_base + total_size;
+        let end = phys_base + total_size + 0x20000; // extra 128KB to cover BSS + relocations
         let mut addr = start;
         while addr < end {
             core::arch::asm!("dc cvac, {a}", a = in(reg) addr);
