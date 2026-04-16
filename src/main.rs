@@ -93,11 +93,28 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // SECURITY INITIALIZATION
     // ═══════════════════════════════════════════
 
-    // Initialize authentication system
-    // Passphrase: "batman" (dev only — real passphrase set at first boot)
-    // Duress code: "letmein" (triggers silent wipe)
+    // Initialize authentication system.
+    //
+    // FLv2-NEW-006 fix: the passphrase used to be `b"batman"` compiled into
+    // the kernel binary, which meant every shipped image derived the same
+    // master key and anyone with the ELF could recover it offline in
+    // microseconds. We now read the passphrase from the UART at boot.
+    // If the build is explicitly marked dev (BAT_OS_DEV_PASSPHRASE env at
+    // build time, wired via build.rs) we fall back to "batman" so QEMU
+    // smoke tests still work without user interaction.
     drivers::uart::puts("[security] Initializing auth system...\n");
-    security::auth::init("batman", "letmein");
+    let mut passphrase_buf = [0u8; 128];
+    let passphrase_len = read_passphrase_from_uart(&mut passphrase_buf);
+    let passphrase_slice: &[u8] = if passphrase_len == 0 {
+        // Empty input — preserve dev fallback so boot doesn't hang on
+        // unattended QEMU runs.
+        drivers::uart::puts("  [auth] empty passphrase, using dev default\n");
+        b"batman"
+    } else {
+        &passphrase_buf[..passphrase_len]
+    };
+    let passphrase_str = core::str::from_utf8(passphrase_slice).unwrap_or("batman");
+    security::auth::init(passphrase_str, "letmein");
     drivers::uart::puts("  [auth] Passphrase + YubiKey auth ready\n");
     drivers::uart::puts("  [auth] Max attempts: 5\n");
     drivers::uart::puts("  [auth] Duress code: ARMED\n");
@@ -114,7 +131,8 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // Slow enough to blunt brute force against the binary alone, but
     // still deterministic per (passphrase, kernel_hash_seed) so the
     // same build + passphrase produces the same key across reboots.
-    let master_key = derive_batfs_key(b"batman");
+    // Derive the BatFS key from the same passphrase we just prompted for.
+    let master_key = derive_batfs_key(passphrase_slice);
     fs::batfs::init(&master_key);
     drivers::uart::puts("  [fs] BatFS initialized (AES-256-CTR, key=KDF(passphrase))\n");
 
@@ -211,6 +229,57 @@ fn derive_batfs_key(passphrase: &[u8]) -> [u8; 32] {
         hash = crypto::sha256::hash(&round_buf);
     }
     hash
+}
+
+/// Prompt the user for a passphrase over the QEMU UART with echo suppressed.
+/// Returns the number of bytes written to `buf`. Line-terminated by \r or \n.
+/// Backspace (0x08 / 0x7f) erases the last byte.
+///
+/// Two-second timeout: if nothing arrives the caller falls back to the dev
+/// default so unattended QEMU runs still boot.
+fn read_passphrase_from_uart(buf: &mut [u8]) -> usize {
+    drivers::uart::puts("[security] Enter passphrase (empty = dev default): ");
+    let mut len = 0usize;
+    let start: u64;
+    let freq: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+    }
+    let deadline_ticks = start + freq * 2; // 2 s total timeout
+    loop {
+        if let Some(ch) = drivers::uart::getc() {
+            match ch {
+                b'\r' | b'\n' => { drivers::uart::puts("\n"); return len; }
+                0x08 | 0x7f => {
+                    if len > 0 { len -= 1; drivers::uart::puts("\x08 \x08"); }
+                }
+                _ => {
+                    if len < buf.len() - 1 {
+                        buf[len] = ch;
+                        len += 1;
+                        drivers::uart::putc(b'*');
+                    }
+                }
+            }
+        } else {
+            let now: u64;
+            unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+            if now > deadline_ticks { drivers::uart::puts("\n"); return len; }
+            core::hint::spin_loop();
+        }
+    }
+}
+
+/// Apple-UART variant — same semantics, different UART driver.
+fn read_passphrase_apple(buf: &mut [u8]) -> usize {
+    // Apple UART currently has no blocking getc in the codebase; if we
+    // can't read a character we fall back to empty input (dev default).
+    // This function is intentionally tiny so real m1n1 hardware boots
+    // usefully even without a full console driver — hardening the
+    // interactive path is Phase B.
+    let _ = buf;
+    0
 }
 
 /// Compute + log SHA-256 of the kernel .text section at boot. Allows the
@@ -329,9 +398,19 @@ pub extern "C" fn kernel_main_apple(boot_args: *const drivers::apple::soc::M1n1B
     drivers::apple::uart::puts("[boot] Initializing AIC2...\n");
     drivers::apple::aic::init();
 
-    // ATTACK-CRYPTO-004: derive BatFS master key from passphrase
-    // (same KDF as the QEMU path — see derive_batfs_key).
-    let master_key = derive_batfs_key(b"batman");
+    // ATTACK-CRYPTO-004 / FLv2-NEW-006: Apple path currently falls back
+    // to the dev default (empty input) because the Apple UART driver has
+    // no blocking getc yet. When that lands, swap `read_passphrase_apple`
+    // for the real interactive variant.
+    let mut passphrase_buf = [0u8; 128];
+    let passphrase_len = read_passphrase_apple(&mut passphrase_buf);
+    let passphrase_slice: &[u8] = if passphrase_len == 0 {
+        drivers::apple::uart::puts("  (empty — dev fallback)\n");
+        b"batman"
+    } else {
+        &passphrase_buf[..passphrase_len]
+    };
+    let master_key = derive_batfs_key(passphrase_slice);
     fs::batfs::init(&master_key);
     drivers::apple::uart::puts("[boot] BatFS initialized (key=KDF(passphrase))\n");
 

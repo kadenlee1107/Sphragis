@@ -59,6 +59,12 @@ static mut FILES: [FileEntry; MAX_FILES] = {
 static mut FILE_COUNT: usize = 0;
 static mut MASTER_KEY: [u8; 32] = [0u8; 32];
 static mut NONCE_COUNTER: u64 = 0;
+// FL-027 / NEW-CRYPTO-007 fix: per-boot random 4-byte prefix mixed into
+// every CTR nonce. Without this, re-encrypting the same filename across
+// boots gave the same (key, IV) — a crib-drag on recurring files. The
+// persistent-across-reboot fix requires NVMe (Phase 7); for in-memory
+// use, fresh random at boot is enough to ensure no cross-boot reuse.
+static mut BOOT_NONCE_PREFIX: [u8; 4] = [0u8; 4];
 static mut INITIALIZED: bool = false;
 
 // ─── Merkle Tree ───
@@ -120,11 +126,20 @@ pub fn verify_all_integrity() -> bool {
 }
 
 /// Initialize the filesystem with a master encryption key.
+///
+/// FL-027 / NEW-CRYPTO-007: each boot gets a fresh 4-byte random nonce
+/// prefix so re-encrypting the same filename under the same derived key
+/// produces a different CTR stream than the previous boot did. The
+/// counter itself still restarts at 1; prefix + counter is the full
+/// unique value.
 pub fn init(master_key: &[u8; 32]) {
     unsafe {
         MASTER_KEY = *master_key;
         FILE_COUNT = 0;
         NONCE_COUNTER = 1;
+        let mut rnd = [0u8; 4];
+        crate::crypto::rng::fill_bytes(&mut rnd);
+        BOOT_NONCE_PREFIX = rnd;
         INITIALIZED = true;
     }
 }
@@ -134,6 +149,8 @@ fn next_nonce() -> [u8; 12] {
         let n = NONCE_COUNTER;
         NONCE_COUNTER += 1;
         let mut nonce = [0u8; 12];
+        let prefix = core::ptr::read_volatile(core::ptr::addr_of!(BOOT_NONCE_PREFIX));
+        nonce[..4].copy_from_slice(&prefix);
         nonce[4..12].copy_from_slice(&n.to_be_bytes());
         nonce
     }
@@ -144,6 +161,36 @@ fn derive_file_key(filename: &str) -> [u8; 32] {
         let key = core::ptr::read_volatile(core::ptr::addr_of!(MASTER_KEY));
         sha256::derive_key(&key, filename.as_bytes())
     }
+}
+
+/// FL-028 fix: HMAC-SHA256 over (filename || nonce || ciphertext) keyed by
+/// the master key. Previously the integrity check was a plain SHA-256 of
+/// the plaintext stored beside the ciphertext in the same static — any
+/// kernel write primitive could update both and pass verification.
+/// HMAC under the master key means the tag is only forgeable by someone
+/// who holds the master key (i.e. the user with the passphrase).
+///
+/// Computed incrementally so we don't need a 64 KB stack buffer.
+fn compute_file_mac(name: &str, nonce: &[u8; 12], ciphertext: &[u8]) -> [u8; 32] {
+    let key = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(MASTER_KEY)) };
+    // Build i_key_pad / o_key_pad.
+    let mut i_pad = [0x36u8; 64];
+    let mut o_pad = [0x5cu8; 64];
+    for i in 0..32 { i_pad[i] ^= key[i]; o_pad[i] ^= key[i]; }
+
+    // Inner hash: SHA-256(i_pad || "batfs-integrity-v1" || name || nonce || ciphertext)
+    let mut inner = sha256::Sha256::new();
+    inner.update(&i_pad);
+    inner.update(b"batfs-integrity-v1");
+    inner.update(name.as_bytes());
+    inner.update(nonce);
+    inner.update(ciphertext);
+    let inner_digest = inner.finalize();
+
+    let mut outer = sha256::Sha256::new();
+    outer.update(&o_pad);
+    outer.update(&inner_digest);
+    outer.finalize()
 }
 
 /// Create a new file with the given name and plaintext content.
@@ -181,9 +228,6 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
             frame::alloc_frame().ok_or("out of memory")?;
         }
 
-        // Hash plaintext for integrity verification
-        let hash = sha256::hash(data);
-
         // Derive per-file encryption key
         let file_key = derive_file_key(name);
         let cipher = Aes256::new(&file_key);
@@ -196,6 +240,11 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         // Encrypt
         let encrypted_slice = core::slice::from_raw_parts_mut(dest, data.len());
         cipher.ctr_crypt(&nonce, encrypted_slice);
+
+        // FL-028: HMAC-SHA256(master_key, name||nonce||ciphertext) as the
+        // integrity tag. An attacker with a kernel-write primitive can't
+        // forge this without the master key.
+        let hash = compute_file_mac(name, &nonce, encrypted_slice);
 
         // Store file entry
         let entry = &mut FILES[slot];
@@ -231,16 +280,19 @@ pub fn read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
         let src = entry.data_addr as *const u8;
         core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), entry.size);
 
-        // Decrypt
+        // FL-028: verify HMAC over the CIPHERTEXT + nonce + name BEFORE
+        // decrypting. Constant-time byte-compare against the stored tag.
+        let expected = compute_file_mac(name, &entry.nonce, &buf[..entry.size]);
+        let mut diff: u8 = 0;
+        for i in 0..32 { diff |= expected[i] ^ entry.hash[i]; }
+        if diff != 0 {
+            return Err("INTEGRITY VIOLATION — file tampered");
+        }
+
+        // Decrypt after MAC verification (Encrypt-then-MAC pattern).
         let file_key = derive_file_key(name);
         let cipher = Aes256::new(&file_key);
         cipher.ctr_crypt(&entry.nonce, &mut buf[..entry.size]);
-
-        // Verify integrity
-        let hash = sha256::hash(&buf[..entry.size]);
-        if hash != entry.hash {
-            return Err("INTEGRITY VIOLATION — file tampered");
-        }
 
         Ok(entry.size)
     }
