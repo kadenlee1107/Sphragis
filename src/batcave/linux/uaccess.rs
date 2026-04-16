@@ -27,14 +27,30 @@ const USER_MIN: usize = 0x1000;           // no NULL, no zero page
 const USER_MAX: usize = 0x4000_0000;      // below kernel RAM identity map
 
 /// True if `[p, p+size)` is entirely inside the user-space range and
-/// doesn't wrap. Coarse — see module doc.
+/// doesn't wrap.
+///
+/// V3 / NEW-SYS-001: when a cave is actively mounted (mmu published a
+/// non-zero window), we tighten the check to the cave's actual virtual
+/// window instead of the coarse legacy range. This makes cross-cave
+/// pointer abuse impossible from the syscall layer — a cave with
+/// virt_base=0x10000000 cannot pass pointer 0x05000000 (legacy window)
+/// because it falls outside its own L2_low mapping.
+///
+/// Caves with no published window (primary/ash path) fall back to the
+/// legacy [0x1000, 0x4000_0000) window; they have no per-cave isolation
+/// to enforce.
 #[inline]
 pub fn is_user_range(p: usize, size: usize) -> bool {
-    if size == 0 { return true; } // zero-sized access is trivially valid
+    if size == 0 { return true; }
     let end = match p.checked_add(size) {
         Some(e) => e,
         None => return false,
     };
+    let (active_start, active_end) =
+        crate::batcave::linux::mmu::active_user_window();
+    if active_start != 0 && active_end != 0 {
+        return p >= active_start && end <= active_end;
+    }
     p >= USER_MIN && end <= USER_MAX
 }
 

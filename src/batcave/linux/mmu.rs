@@ -112,6 +112,29 @@ static mut CAVE_L1: [usize; MAX_CAVE_PAGETABLES] = [0; MAX_CAVE_PAGETABLES]; // 
 static mut CAVE_PHYS_BASE: [usize; MAX_CAVE_PAGETABLES] = [0; MAX_CAVE_PAGETABLES]; // per-cave phys base
 static mut PRIMARY_L1: usize = 0; // the primary (ash) page table
 
+// V3 — per-cave user-window bounds, tracked so `is_user_range` can refuse
+// pointers outside the actively-mounted cave's window (NEW-SYS-001 +
+// related cross-cave pointer abuse).  Indexed by cave_slot.
+static mut CAVE_VIRT_BASE: [usize; MAX_CAVE_PAGETABLES] = [0; MAX_CAVE_PAGETABLES];
+static mut CAVE_VIRT_EXTENT: [usize; MAX_CAVE_PAGETABLES] = [0; MAX_CAVE_PAGETABLES];
+
+// Currently-mounted cave window (start, end). Updated on every
+// switch_to_cave / switch_to_primary. Sentinel (0, 0) means "no cave
+// mounted; fall back to legacy 0x1000..0x4000_0000".
+use core::sync::atomic::{AtomicUsize, Ordering as Ord2};
+static ACTIVE_WIN_START: AtomicUsize = AtomicUsize::new(0);
+static ACTIVE_WIN_END:   AtomicUsize = AtomicUsize::new(0);
+
+/// Returns the active cave's user-VA window as (start, end). When no cave
+/// is mounted this returns (0, 0); callers should treat that as "use the
+/// legacy default window" (0x1000..0x4000_0000).
+pub fn active_user_window() -> (usize, usize) {
+    (
+        ACTIVE_WIN_START.load(Ord2::Relaxed),
+        ACTIVE_WIN_END.load(Ord2::Relaxed),
+    )
+}
+
 // Cave-slot bitmap. Bit set = slot in use. CAS-free (we're single-core).
 use core::sync::atomic::{AtomicU8, Ordering as SlotOrder};
 static CAVE_SLOT_USED: AtomicU8 = AtomicU8::new(0);
@@ -280,6 +303,12 @@ pub fn setup_cave_pagetable_at(
     unsafe {
         CAVE_L1[cave_slot] = l1;
         CAVE_PHYS_BASE[cave_slot] = phys_base;
+        // V3 — record per-cave window so is_user_range can refuse pointers
+        // outside the cave that's actually mounted (vs. the legacy coarse
+        // 0x1000..0x4000_0000 window).
+        CAVE_VIRT_BASE[cave_slot] = virt_base as usize;
+        // Match the 100-block (200 MB) loop above.
+        CAVE_VIRT_EXTENT[cave_slot] = 100 * 0x200000;
     }
 
     Ok(l1)
@@ -296,6 +325,25 @@ pub fn switch_to_cave(l1_addr: usize) {
         core::arch::asm!("tlbi vmalle1");
         core::arch::asm!("dsb sy");
         core::arch::asm!("isb");
+
+        // V3: publish active user window for is_user_range. Look up by L1.
+        let mut start = 0usize;
+        let mut extent = 0usize;
+        for i in 0..MAX_CAVE_PAGETABLES {
+            if CAVE_L1[i] == l1_addr && l1_addr != 0 {
+                start = CAVE_VIRT_BASE[i];
+                extent = CAVE_VIRT_EXTENT[i];
+                break;
+            }
+        }
+        if start != 0 && extent != 0 {
+            ACTIVE_WIN_START.store(start, Ord2::Release);
+            ACTIVE_WIN_END.store(start.saturating_add(extent), Ord2::Release);
+        } else {
+            // Sentinel — no cave window known; uaccess falls back to legacy.
+            ACTIVE_WIN_START.store(0, Ord2::Release);
+            ACTIVE_WIN_END.store(0, Ord2::Release);
+        }
     }
 }
 
