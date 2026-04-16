@@ -136,6 +136,17 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
         Some(()) => {
             drivers::uart::puts("[boot] GPU ready\n\n");
 
+            // Bring up the default VFS so /batos/fb0 exists for the blit
+            // bridge. BatCave processes later swap to their own VFS slot;
+            // the fb0 region is a physical-memory handle, not tied to slot.
+            if !batcave::linux::vfs::is_ready() {
+                batcave::linux::vfs::init();
+            }
+
+            // Chromium → kernel blit bridge. Idempotent; logs and skips if
+            // /batos/fb0 isn't present (e.g. VFS allocation failed).
+            drivers::display::chromium_blit::start();
+
             // ═══════════════════════════════════════
             // AUTHENTICATION GATE — must pass to proceed
             // ═══════════════════════════════════════

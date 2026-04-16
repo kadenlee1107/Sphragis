@@ -493,6 +493,26 @@ fn sys_write(args: [u64; 6]) -> i64 {
         if node.node_type == vfs::NodeType::DevConsole {
             return write_to_uart(buf, count);
         }
+        // /batos/fb0 — ChromiumFb: write bytes into the shared region directly
+        // (bypasses the 256KB MAX_FILE_PAGES limit of regular files).
+        if node.node_type == vfs::NodeType::ChromiumFb {
+            let pos = entry.position;
+            if node.data_addr == 0 { return -5; } // EIO
+            if pos >= node.size { return 0; }
+            let to_write = (node.size - pos).min(count);
+            let dst = node.data_addr + pos;
+            for i in 0..to_write {
+                unsafe {
+                    let b: u32;
+                    core::arch::asm!("ldrb {v:w}, [{a}]",
+                        a = in(reg) buf + i, v = out(reg) b);
+                    core::arch::asm!("strb {v:w}, [{a}]",
+                        a = in(reg) dst + i, v = in(reg) b);
+                }
+            }
+            if let Some(e) = fd::get_mut(fd_num) { e.position += to_write; }
+            return to_write as i64;
+        }
 
         let pos = entry.position;
         match vfs::write_to_file(node_idx, pos, buf, count) {
@@ -636,6 +656,25 @@ fn sys_read(args: [u64; 6]) -> i64 {
         // /dev/console → read from UART
         if node.node_type == vfs::NodeType::DevConsole {
             return sys_read([0, args[1], args[2], 0, 0, 0]); // redirect to stdin
+        }
+        // /batos/fb0 — ChromiumFb: read raw bytes from the shared region.
+        // Useful for `hexdump /batos/fb0 | head` style debugging.
+        if node.node_type == vfs::NodeType::ChromiumFb {
+            if node.data_addr == 0 { return -5; } // EIO
+            if pos >= node.size { return 0; }
+            let to_read = (node.size - pos).min(count);
+            let src = node.data_addr + pos;
+            for i in 0..to_read {
+                unsafe {
+                    let b: u32;
+                    core::arch::asm!("ldrb {v:w}, [{a}]",
+                        a = in(reg) src + i, v = out(reg) b);
+                    core::arch::asm!("strb {v:w}, [{a}]",
+                        a = in(reg) buf + i, v = in(reg) b);
+                }
+            }
+            if let Some(e) = fd::get_mut(fd_num) { e.position += to_read; }
+            return to_read as i64;
         }
 
         // Regular file
@@ -942,8 +981,50 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
     let len = args[1] as usize;
     let _prot = args[2] as u32;
     let flags = args[3] as u32;
+    let fd_num = args[4] as i32;
+    let offset = args[5] as usize;
 
     if len == 0 { return EINVAL; }
+
+    // ─── /batos/fb0 ChromiumFb: MAP_SHARED of the pre-allocated region ───
+    //
+    // Chromium's patched Ozone backend opens /batos/fb0, ftruncates, then
+    // calls mmap(NULL, 5 MiB, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0).
+    // We return the physical base of the region — it's identity-mapped in
+    // the kernel's flat address space, so the returned VA is directly
+    // accessible from both EL1 (kernel blit kthread) and EL0 (Chromium).
+    //
+    // Limitations (see ports/chromium_port/PHASE5_DISPLAY.md Risk #4):
+    //   - No per-process MMU view: all BatCave processes see the same VA.
+    //     Good enough for single-process content_shell (--single-process).
+    //   - MAP_PRIVATE on the fb would silently give Chromium a shared view
+    //     here; we accept that for v1 because content_shell uses MAP_SHARED.
+    //   - Offsets other than 0 are allowed (stride math), but we clamp to
+    //     the region size.
+    const MAP_SHARED: u32 = 0x01;
+    const MAP_PRIVATE: u32 = 0x02;
+    if fd_num >= 0 && (flags & (MAP_SHARED | MAP_PRIVATE)) != 0 {
+        if let Some(entry) = fd::get(fd_num as u32) {
+            let node = vfs::get_node(entry.node_idx);
+            if node.node_type == vfs::NodeType::ChromiumFb && node.data_addr != 0 {
+                if offset >= node.size { return EINVAL; }
+                let avail = node.size - offset;
+                if len > avail {
+                    uart::puts("[mmap] /batos/fb0 len exceeds region\n");
+                    return EINVAL;
+                }
+                let base = node.data_addr + offset;
+                uart::puts("[mmap] /batos/fb0 → 0x");
+                let hex = b"0123456789abcdef";
+                for shift in (0..16).rev() {
+                    let nibble = ((base >> (shift * 4)) & 0xF) as usize;
+                    uart::putc(hex[nibble]);
+                }
+                uart::puts("\n");
+                return base as i64;
+            }
+        }
+    }
 
     // For fixed-address mappings, just return the requested address
     // (the memory is already identity-mapped)

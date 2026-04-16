@@ -22,6 +22,7 @@ pub enum NodeType {
     DevZero,
     DevConsole,
     Socket,     // network socket (TCP/UDP)
+    ChromiumFb, // /batos/fb0 — Chromium↔kernel display shared-memory region
 }
 
 #[derive(Clone, Copy)]
@@ -665,6 +666,15 @@ fn populate_rootfs() {
         create_node(dev, b"console", NodeType::DevConsole, 0o20600).ok();
     }
 
+    // /batos — Bat_OS-native namespace (Chromium display bridge, etc.)
+    // Created unconditionally; missing backing memory turns the node into
+    // an inert file (read/write/mmap will all return EIO / EINVAL).
+    if create_node(0, b"batos", NodeType::Directory, 0o40755).is_ok() {
+        if let Some(batos) = find_child(0, b"batos") {
+            create_chromium_fb(batos, b"fb0");
+        }
+    }
+
     // /bin/busybox (the actual binary marker — code is already in memory)
     let bin = find_child(0, b"bin").unwrap();
     create_node(bin, b"busybox", NodeType::File, 0o100755).ok();
@@ -700,4 +710,147 @@ fn populate_rootfs() {
             create_symlink(usr_bin, applet, b"/bin/busybox").ok();
         }
     }
+}
+
+// ───────────────────────── Chromium framebuffer bridge ─────────────────────────
+//
+// /batos/fb0 — a single well-known shared-memory region that Chromium's patched
+// Ozone headless backend maps via mmap(MAP_SHARED). Our chromium_blit kthread
+// reads from the same physical pages and blits to the virtio-gpu scanout.
+//
+// Layout:  [ 128-byte BatosFbHeader ] [ width * stride bytes of BGRA pixels ]
+// Size:    FB_REGION_SIZE = 128 + 1280*1024*4 = 5_242_880 + 128 bytes
+//
+// Contract: ports/chromium_port/PHASE5_DISPLAY.md §4.
+
+pub const FB_MAGIC: u32 = 0x4246_4231; // 'BFB1' — keep in sync with chromium_blit.rs
+pub const FB_HEADER_SIZE: usize = 128;
+pub const FB_WIDTH: u32 = 1280;
+pub const FB_HEIGHT: u32 = 1024;
+pub const FB_STRIDE: u32 = FB_WIDTH * 4;
+pub const FB_PIXEL_BYTES: usize = (FB_WIDTH * FB_HEIGHT * 4) as usize;
+pub const FB_REGION_SIZE: usize = FB_HEADER_SIZE + FB_PIXEL_BYTES;
+pub const FB_FORMAT_BGRA8888: u32 = 1;
+
+// Base physical address of the /batos/fb0 region (0 = not yet allocated).
+static mut FB_REGION_BASE: usize = 0;
+static mut FB_NODE_IDX: u16 = 0;
+
+/// Returns (base, size) of the /batos/fb0 shared region, or (0, 0) if absent.
+pub fn chromium_fb_region() -> (usize, usize) {
+    unsafe {
+        let base = core::ptr::read_volatile(core::ptr::addr_of!(FB_REGION_BASE));
+        if base == 0 {
+            (0, 0)
+        } else {
+            (base, FB_REGION_SIZE)
+        }
+    }
+}
+
+/// Returns the VFS node index of /batos/fb0, or None.
+pub fn chromium_fb_node() -> Option<u16> {
+    unsafe {
+        let idx = core::ptr::read_volatile(core::ptr::addr_of!(FB_NODE_IDX));
+        if idx == 0 { None } else { Some(idx) }
+    }
+}
+
+/// Returns true if `idx` is the /batos/fb0 ChromiumFb node.
+pub fn is_chromium_fb(idx: u16) -> bool {
+    match chromium_fb_node() {
+        Some(fb_idx) => fb_idx == idx,
+        None => false,
+    }
+}
+
+/// Allocate backing pages for /batos/fb0 and register it as a ChromiumFb node.
+fn create_chromium_fb(parent: u16, name: &[u8]) {
+    // Allocate FB_REGION_SIZE bytes of contiguous physical memory.
+    // The frame allocator hands out sequential pages on a fresh boot,
+    // so repeated alloc_frame() calls yield a contiguous run.
+    let pages = (FB_REGION_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
+    let base = match frame::alloc_frame() {
+        Some(b) => b,
+        None => {
+            uart::puts("  [vfs] /batos/fb0: no memory for 5 MiB region\n");
+            return;
+        }
+    };
+    let mut last = base;
+    let mut contiguous = true;
+    for _ in 1..pages {
+        match frame::alloc_frame() {
+            Some(addr) => {
+                if addr != last + PAGE_SIZE { contiguous = false; }
+                last = addr;
+            }
+            None => {
+                uart::puts("  [vfs] /batos/fb0: partial allocation, aborting\n");
+                return;
+            }
+        }
+    }
+    if !contiguous {
+        uart::puts("  [vfs] /batos/fb0: WARN region not contiguous\n");
+        // Fall through — best-effort; likely benign on fresh boot.
+    }
+
+    // Zero the whole region, then stamp the header.
+    unsafe {
+        for i in 0..FB_REGION_SIZE {
+            core::ptr::write_volatile((base + i) as *mut u8, 0);
+        }
+        // Header field layout (keep in sync with chromium_blit::FbHeader):
+        //   u32 magic         @ 0
+        //   u32 version       @ 4
+        //   u32 width         @ 8
+        //   u32 height        @ 12
+        //   u32 stride        @ 16
+        //   u32 format        @ 20
+        //   u32 seq           @ 24   (producer: Chromium, consumer: kernel)
+        //   u32 last_seen_seq @ 28   (kernel's ack for user-space diagnostics)
+        //   u32 damage_x      @ 32
+        //   u32 damage_y      @ 36
+        //   u32 damage_w      @ 40
+        //   u32 damage_h      @ 44
+        //   u64 pts_ns        @ 48
+        //   u32 reserved[8]   @ 56..88
+        core::ptr::write_volatile((base + 0) as *mut u32, FB_MAGIC);
+        core::ptr::write_volatile((base + 4) as *mut u32, 1); // version
+        core::ptr::write_volatile((base + 8) as *mut u32, FB_WIDTH);
+        core::ptr::write_volatile((base + 12) as *mut u32, FB_HEIGHT);
+        core::ptr::write_volatile((base + 16) as *mut u32, FB_STRIDE);
+        core::ptr::write_volatile((base + 20) as *mut u32, FB_FORMAT_BGRA8888);
+    }
+
+    // Create the VFS node. It's a ChromiumFb, not a File — so regular
+    // read/write/mmap paths must special-case the type and read from
+    // `data_addr` (= physical base of the region).
+    let idx = match create_node(parent, name, NodeType::ChromiumFb, 0o100666) {
+        Ok(i) => i,
+        Err(_) => {
+            uart::puts("  [vfs] /batos/fb0: node alloc failed\n");
+            return;
+        }
+    };
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        let n = &mut (*core::ptr::addr_of_mut!(INSTANCES))[ai].nodes[idx as usize];
+        n.data_addr = base;
+        n.size = FB_REGION_SIZE;
+    }
+
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(FB_REGION_BASE), base);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(FB_NODE_IDX), idx);
+    }
+
+    uart::puts("  [vfs] /batos/fb0: 5 MiB BGRA region @ 0x");
+    let hex = b"0123456789abcdef";
+    for shift in (0..16).rev() {
+        let nibble = ((base >> (shift * 4)) & 0xF) as usize;
+        uart::putc(hex[nibble]);
+    }
+    uart::puts("\n");
 }
