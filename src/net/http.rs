@@ -41,6 +41,7 @@ pub enum HttpError {
     InvalidHeaderValue, // CR/LF in a user-supplied header value
     RecvFailed,         // underlying transport error
     BufferFull,         // caller's buffer too small
+    DecodeTruncated,    // chunked body truncated (chunk header said more)
 }
 
 impl HttpError {
@@ -56,6 +57,7 @@ impl HttpError {
             HttpError::InvalidHeaderValue => "http: invalid header value (CR/LF)",
             HttpError::RecvFailed         => "http: recv failed",
             HttpError::BufferFull         => "http: response buffer full",
+            HttpError::DecodeTruncated    => "http: chunked body truncated",
         }
     }
 }
@@ -259,15 +261,20 @@ pub fn decode_chunked(chunked: &[u8], out: &mut [u8]) -> Result<usize, HttpError
         // Terminator chunk.
         if chunk_size == 0 { break; }
 
-        // Bound the copy by both source availability and output space.
+        // NET2-014 fix: treat source truncation as a hard error rather than
+        // silently copying partial chunk bytes. A truncated response could
+        // otherwise cause the caller to act on partial data believing the
+        // stream was complete.
         let src_avail = chunked.len().saturating_sub(ri);
-        let copy_len  = chunk_size.min(src_avail);
+        if chunk_size > src_avail {
+            return Err(HttpError::DecodeTruncated);
+        }
+        let copy_len = chunk_size;
         if wi + copy_len > MAX_BODY_BYTES { return Err(HttpError::BodyTooLarge); }
         if wi + copy_len > out.len() { return Err(HttpError::BufferFull); }
         out[wi..wi + copy_len].copy_from_slice(&chunked[ri..ri + copy_len]);
         wi += copy_len;
-        ri = ri.saturating_add(chunk_size); // advance past the (possibly
-                                             // truncated) chunk data
+        ri += chunk_size;
     }
     Ok(wi)
 }

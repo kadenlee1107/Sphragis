@@ -1065,16 +1065,24 @@ fn is_low_order_x25519(pk: &[u8; 32]) -> bool {
          0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff],
     ];
 
+    // NEW-CRYPTO-009 / NET2-017: RFC 7748 §5 says u-coordinate decoding
+    // MUST mask the high bit of byte 31 before comparing. Without this,
+    // an attacker could send any of the 12 points with the top bit set
+    // and the compare would miss. We compare against a normalized copy.
+    let mut pk_norm = *pk;
+    pk_norm[31] &= 0x7f;
+
     // Constant-time: OR equality bits so the attacker can't use timing
     // to learn which point matched.
     let mut matched: u8 = 0;
     for p in LOW_ORDER.iter() {
+        let mut pn = *p;
+        pn[31] &= 0x7f;
         let mut acc: u8 = 0;
         for i in 0..32 {
-            acc |= p[i] ^ pk[i];
+            acc |= pn[i] ^ pk_norm[i];
         }
         // acc == 0 iff pk == p. Turn into a 1-bit mask without branching.
-        // (acc.wrapping_sub(1) >> 7) & 1 == 1 iff acc == 0
         let eq = ((acc as u16).wrapping_sub(1) >> 8) as u8 & 1;
         matched |= eq;
     }
