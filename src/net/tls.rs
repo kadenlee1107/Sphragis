@@ -822,13 +822,25 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
 
 /// Close TLS session.
 pub fn close() {
+    use crate::security::zeroize::zeroize;
     let sess = session_mut(LEGACY_TLS_PCB);
     sess.state = TlsState::Closed;
     sess.client_seq = 0;
     sess.server_seq = 0;
-    sess.shared_secret = [0; 32];
-    sess.client_key = [0; 32];
-    sess.server_key = [0; 32];
+    // ATTACK-CRYPTO-010: volatile-wipe ALL secret-bearing fields, not
+    // just the three keys the old impl touched. Cold-boot / HVF
+    // snapshot / DMA can recover anything we leave behind.
+    zeroize(&mut sess.shared_secret);
+    zeroize(&mut sess.client_key);
+    zeroize(&mut sess.server_key);
+    zeroize(&mut sess.our_private);
+    zeroize(&mut sess.peer_public);
+    zeroize(&mut sess.client_iv);
+    zeroize(&mut sess.server_iv);
+    zeroize(&mut sess.client_random);
+    zeroize(&mut sess.server_random);
+    zeroize(&mut sess.leftover);
+    sess.leftover_len = 0;
 }
 
 /// Check if TLS session is established.
