@@ -342,6 +342,20 @@ pub fn clone(flags: u64,
         return EINVAL;
     }
 
+    // Quota check — reserve a thread slot + (if we're going to allocate one)
+    // the stack pages.  We charge mem FIRST so a cave that is already at its
+    // mem cap gets a clean -ENOMEM before we touch the frame allocator.
+    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Threads, 1) {
+        return e;
+    }
+    if child_stack == 0 {
+        let bytes = DEFAULT_STACK_PAGES * PAGE_SIZE;
+        if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Mem, bytes) {
+            super::quotas::refund_active(super::quotas::Resource::Threads, 1);
+            return e;
+        }
+    }
+
     let new_tid = NEXT_TID.fetch_add(1, Ordering::Relaxed);
 
     // Allocate or adopt a stack.
@@ -351,7 +365,13 @@ pub fn clone(flags: u64,
     } else {
         match alloc_stack(DEFAULT_STACK_PAGES) {
             Some((b, t)) => (b, t, DEFAULT_STACK_PAGES),
-            None => return ENOMEM,
+            None => {
+                // Refund the quota we speculatively charged above.
+                super::quotas::refund_active(super::quotas::Resource::Threads, 1);
+                super::quotas::refund_active(
+                    super::quotas::Resource::Mem, DEFAULT_STACK_PAGES * PAGE_SIZE);
+                return ENOMEM;
+            }
         }
     };
 
@@ -409,7 +429,17 @@ pub fn clone(flags: u64,
 
         0
     });
-    if result < 0 { return result; }
+    if result < 0 {
+        // Slot table full — refund what we charged at entry, and free the
+        // stack we allocated so it doesn't leak.
+        super::quotas::refund_active(super::quotas::Resource::Threads, 1);
+        if stack_pages > 0 && stack_base != 0 {
+            crate::kernel::mm::frame::free_contig(stack_base as usize, stack_pages);
+            super::quotas::refund_active(
+                super::quotas::Resource::Mem, stack_pages * PAGE_SIZE);
+        }
+        return result;
+    }
 
     new_tid as i64
 }
@@ -668,22 +698,36 @@ pub fn futex_wait_on(uaddr: u64, val: u32) -> i64 {
 /// Poll for Exited children of the current thread (for pthread_join).
 /// Returns Some(exit_code) if found & reaped.
 pub fn try_reap(tid: u32) -> Option<i32> {
-    with_table(|t| {
+    // Grab the slot fields while holding the lock, but do the actual
+    // frame::free_frame calls *outside* the locked region — the frame
+    // allocator takes its own internal state and we don't want to nest.
+    let reaped = with_table(|t| {
         if let Some(i) = slot_of(t, tid) {
             if let ThreadState::Exited(code) = t[i].state {
-                // Free the slot.
                 let pages = t[i].stack_pages;
-                let base = t[i].stack_base;
+                let base  = t[i].stack_base;
                 t[i] = Thread::empty();
-                // TODO: free stack pages via frame::free_frame once that API
-                // takes a count. For now we leak — 64KB * 64 threads worst
-                // case = 4 MiB, acceptable for Chromium startup.
-                let _ = (pages, base);
-                return Some(code);
+                return Some((code, base, pages));
             }
         }
         None
-    })
+    });
+
+    let (code, base, pages) = reaped?;
+
+    // Free the thread's stack pages. `stack_base == 0` means the caller
+    // supplied the stack (e.g. pthread_create with a user-allocated stack),
+    // so we leave it alone — not ours to free.
+    if base != 0 && pages > 0 {
+        crate::kernel::mm::frame::free_contig(base as usize, pages);
+        // Refund the memory quota we charged in clone().
+        super::quotas::refund_active(
+            super::quotas::Resource::Mem, pages * PAGE_SIZE);
+    }
+    // Always refund the thread slot itself (we charged it in clone()).
+    super::quotas::refund_active(super::quotas::Resource::Threads, 1);
+
+    Some(code)
 }
 
 // -----------------------------------------------------------------------------

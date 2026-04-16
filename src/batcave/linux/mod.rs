@@ -5,6 +5,7 @@ pub mod fd;
 pub mod futex;
 pub mod loader;
 pub mod mmu;
+pub mod quotas;
 pub mod runner;
 pub mod sockets;
 pub mod stdio_ring;

@@ -84,6 +84,19 @@ pub fn free_frame(addr: usize) {
     }
 }
 
+/// Free a run of `count` contiguous physical pages starting at `base`.
+/// Convenience wrapper over `free_frame`, used by the loader and munmap
+/// paths that allocated large contiguous regions (e.g. 38k pages for a
+/// Chromium-sized ELF). Silently ignores unaligned or out-of-range bases
+/// so callers can blindly free "whatever I got from alloc".
+pub fn free_contig(base: usize, count: usize) {
+    if count == 0 { return; }
+    let base = base & !(PAGE_SIZE - 1);
+    for i in 0..count {
+        free_frame(base + i * PAGE_SIZE);
+    }
+}
+
 pub fn stats() -> (usize, usize) {
     let total = TOTAL_FRAMES.load(Ordering::Relaxed);
     let mut used = 0usize;
