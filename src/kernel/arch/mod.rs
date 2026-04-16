@@ -4,6 +4,7 @@
 use crate::drivers::uart;
 
 core::arch::global_asm!(include_str!("../../batcave/linux/forkjmp.s"));
+core::arch::global_asm!(include_str!("../../batcave/linux/threads.s"));
 
 unsafe extern "C" {
     fn fork_save(buf: *mut u64) -> u64;

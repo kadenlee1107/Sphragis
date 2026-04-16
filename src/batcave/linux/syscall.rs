@@ -74,21 +74,37 @@ mod nr {
     pub const PRLIMIT64: u64 = 261;
     pub const GETRANDOM: u64 = 278;
 
-    // Epoll
+    // Epoll + eventfd + timerfd (event notification family)
     pub const EPOLL_CREATE1: u64 = 20;
     pub const EPOLL_CTL: u64 = 21;
     pub const EPOLL_PWAIT: u64 = 22;
+    pub const EVENTFD2: u64 = 19;
+    pub const TIMERFD_CREATE: u64 = 85;
+    pub const TIMERFD_SETTIME: u64 = 86;
+    pub const TIMERFD_GETTIME: u64 = 87;
 
     // Network
     pub const SOCKET: u64 = 198;
+    pub const SOCKETPAIR: u64 = 199;
     pub const BIND: u64 = 200;
     pub const LISTEN: u64 = 201;
     pub const ACCEPT: u64 = 202;
     pub const CONNECT: u64 = 203;
+    pub const GETSOCKNAME: u64 = 204;
+    pub const GETPEERNAME: u64 = 205;
     pub const SENDTO: u64 = 206;
     pub const RECVFROM: u64 = 207;
     pub const SETSOCKOPT: u64 = 208;
     pub const GETSOCKOPT: u64 = 209;
+    pub const SHUTDOWN: u64 = 210;
+    pub const SENDMSG: u64 = 211;
+    pub const RECVMSG: u64 = 212;
+    pub const ACCEPT4: u64 = 242;
+
+    // Threading (process family — AArch64 numbers)
+    pub const SCHED_GETAFFINITY: u64 = 123;
+    pub const SCHED_SETAFFINITY: u64 = 122;
+    pub const FADVISE64: u64 = 223;
 }
 
 /// Handle a Linux syscall from a BatCave process.
@@ -139,19 +155,28 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         171 => (SyscallCat::Always, sys_sigaltstack), // sigaltstack (compat)
         178 => (SyscallCat::Always, sys_gettid),      // gettid
         179 => (SyscallCat::Always, sys_sysinfo),    // sysinfo (real impl)
-        204 => (SyscallCat::Always, sys_stub_zero),  // sched_getaffinity
-        210 => (SyscallCat::Always, sys_stub_zero),  // shutdown
-        222 => (SyscallCat::Memory, sys_shmget),      // shmget (via mmap fallback)
-        223 => (SyscallCat::Memory, sys_stub_zero),  // shmctl
+        // NOTE: on AArch64, syscall 204 is getsockname (not sched_getaffinity).
+        // getsockname is routed below via nr::GETSOCKNAME in the network block.
+        // True sched_getaffinity is 123 (AArch64), sched_setaffinity is 122.
+        nr::SCHED_GETAFFINITY => (SyscallCat::Always, sys_stub_zero),
+        nr::SCHED_SETAFFINITY => (SyscallCat::Always, sys_stub_zero),
+        // NOTE: AArch64 syscall 222 is mmap (already routed via nr::MMAP),
+        // 223 is fadvise64. 210 is shutdown (moved to Network block below).
+        // Previously these were mislabeled as shmget/shmctl/shutdown-stub.
+        nr::FADVISE64 => (SyscallCat::Always, sys_stub_zero),
         233 => (SyscallCat::Always, sys_stub_zero),  // madvise
         262 => (SyscallCat::Always, sys_stub_zero),  // getrlimit equiv
         276 => (SyscallCat::Always, sys_stub_zero),  // renameat2
         279 => (SyscallCat::Always, sys_memfd_create), // memfd_create
 
-        // ── Epoll — stub implementation ──
+        // ── Epoll + eventfd + timerfd (real implementations) ──
         nr::EPOLL_CREATE1 => (SyscallCat::FileIO, sys_epoll_create1),
         nr::EPOLL_CTL => (SyscallCat::FileIO, sys_epoll_ctl),
         nr::EPOLL_PWAIT => (SyscallCat::FileIO, sys_epoll_pwait),
+        nr::EVENTFD2 => (SyscallCat::FileIO, sys_eventfd2),
+        nr::TIMERFD_CREATE => (SyscallCat::FileIO, sys_timerfd_create),
+        nr::TIMERFD_SETTIME => (SyscallCat::FileIO, sys_timerfd_settime),
+        nr::TIMERFD_GETTIME => (SyscallCat::FileIO, sys_timerfd_gettime),
 
         // ── File I/O — needs fs capability ──
         nr::OPENAT => (SyscallCat::FileIO, sys_openat),
@@ -193,14 +218,21 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
 
         // ── Network — needs net capability ──
         nr::SOCKET => (SyscallCat::Network, sys_socket),
+        nr::SOCKETPAIR => (SyscallCat::Network, sys_socketpair),
         nr::CONNECT => (SyscallCat::Network, sys_connect),
-        nr::BIND => (SyscallCat::Network, sys_stub_zero),
-        nr::LISTEN => (SyscallCat::Network, sys_stub_zero),
-        nr::ACCEPT => (SyscallCat::Network, sys_stub_zero),
+        nr::BIND => (SyscallCat::Network, sys_bind),
+        nr::LISTEN => (SyscallCat::Network, sys_listen),
+        nr::ACCEPT => (SyscallCat::Network, sys_accept),
+        nr::ACCEPT4 => (SyscallCat::Network, sys_accept4),
+        nr::GETSOCKNAME => (SyscallCat::Network, sys_getsockname),
+        nr::GETPEERNAME => (SyscallCat::Network, sys_getpeername),
         nr::SENDTO => (SyscallCat::Network, sys_sendto),
         nr::RECVFROM => (SyscallCat::Network, sys_recvfrom),
-        nr::SETSOCKOPT => (SyscallCat::Network, sys_stub_zero),
-        nr::GETSOCKOPT => (SyscallCat::Network, sys_stub_zero),
+        nr::SENDMSG => (SyscallCat::Network, sys_sendmsg),
+        nr::RECVMSG => (SyscallCat::Network, sys_recvmsg),
+        nr::SETSOCKOPT => (SyscallCat::Network, sys_setsockopt),
+        nr::GETSOCKOPT => (SyscallCat::Network, sys_getsockopt),
+        nr::SHUTDOWN => (SyscallCat::Network, sys_shutdown),
 
         _ => {
             // Unknown syscall — log and return ENOSYS
@@ -1574,64 +1606,59 @@ pub static IS_THREAD_CHILD: AtomicBool = AtomicBool::new(false);
 // TLS pointer for set_tid_address
 static TID_ADDRESS: AtomicU64 = AtomicU64::new(0);
 
-// ─── Futex wait queue ───
-// Simple array of {addr, waiting} pairs for FUTEX_WAIT/FUTEX_WAKE
-const MAX_FUTEX_WAITERS: usize = 16;
-struct FutexWaiter {
-    addr: u64,    // futex address being waited on
-    active: bool, // is this waiter slot in use?
-    woken: bool,  // has this waiter been woken?
-}
-static mut FUTEX_WAITERS: [FutexWaiter; MAX_FUTEX_WAITERS] = {
-    const EMPTY: FutexWaiter = FutexWaiter { addr: 0, active: false, woken: false };
-    [EMPTY; MAX_FUTEX_WAITERS]
-};
-
-// Futex operations
-const FUTEX_WAIT: u64 = 0;
-const FUTEX_WAKE: u64 = 1;
+// Old in-file futex wait queue removed — replaced by src/batcave/linux/futex.rs
+// which provides a 2048-waiter hash table with FUTEX_REQUEUE, bitset ops, and
+// real cntpct_el0 timeouts.
 const FUTEX_PRIVATE_FLAG: u64 = 128;
 
 fn sys_futex(args: [u64; 6]) -> i64 {
+    use super::futex;
     let uaddr = args[0];
-    let op = args[1] & !(FUTEX_PRIVATE_FLAG); // strip PRIVATE flag
+    let op = (args[1] & !(FUTEX_PRIVATE_FLAG)) as u32;
     let val = args[2] as u32;
+    let timeout_ptr = args[3] as usize;
+    let uaddr2 = args[4];
+    let val3 = args[5] as u32;
+
+    // Read optional timeout from *const timespec at args[3]
+    let timeout_ns = if timeout_ptr != 0 {
+        let tv_sec: u64; let tv_nsec: u64;
+        unsafe {
+            core::arch::asm!("ldr {v}, [{a}]", a = in(reg) timeout_ptr, v = out(reg) tv_sec);
+            core::arch::asm!("ldr {v}, [{a}]", a = in(reg) timeout_ptr + 8, v = out(reg) tv_nsec);
+        }
+        tv_sec.saturating_mul(1_000_000_000).saturating_add(tv_nsec)
+    } else { 0 };
 
     match op {
-        FUTEX_WAIT => {
-            // Read the value at uaddr
-            let current: u32;
-            unsafe {
-                core::arch::asm!("ldr {v:w}, [{a}]", a = in(reg) uaddr, v = out(reg) current);
-            }
-            // If value changed since caller checked, return EAGAIN
-            if current != val {
-                return -11; // EAGAIN
-            }
-            // In our single-core cooperative model, FUTEX_WAIT just returns 0
-            // immediately. The caller will spin-retry. Real blocking would
-            // require preemptive scheduling which we don't have for userspace.
-            // This is correct: the futex contract allows spurious wakeups.
-            0
-        }
-        FUTEX_WAKE => {
-            // Wake up to `val` waiters on this address
-            // In our cooperative model, waiters aren't actually blocked,
-            // so this is a no-op but we return the count for correctness.
-            let count = val as i64;
-            if count > 0 { count.min(1) } else { 0 }
-        }
-        _ => {
-            // Unknown futex op — return success for compatibility
-            0
-        }
+        futex::FUTEX_WAIT       => futex::futex_wait(uaddr, val, timeout_ns),
+        futex::FUTEX_WAKE       => futex::futex_wake(uaddr, val),
+        futex::FUTEX_REQUEUE    => futex::futex_requeue(uaddr, uaddr2, val, args[2] as u32),
+        futex::FUTEX_CMP_REQUEUE => futex::futex_cmp_requeue(uaddr, uaddr2, val3, val, args[2] as u32),
+        futex::FUTEX_WAIT_BITSET => futex::futex_wait_bitset(uaddr, val, timeout_ns, val3),
+        futex::FUTEX_WAKE_BITSET => futex::futex_wake_bitset(uaddr, val, val3),
+        _ => 0, // unknown op — return success for compatibility
     }
 }
 
 fn sys_clone_thread(args: [u64; 6]) -> i64 {
-    let _flags = args[0];
+    let flags = args[0];
     let child_stack = args[1];
 
+    // If the new threading model is active (Chromium launched via
+    // threads::init_main_thread), delegate to the real clone().
+    // ARM64 Linux clone ABI: (flags, child_stack, parent_tidptr, tls, child_tidptr)
+    if super::threads::is_enabled() {
+        return super::threads::clone(
+            flags,
+            child_stack,
+            args[2] as *mut i32, // parent_tidptr
+            args[4] as *mut i32, // child_tidptr
+            args[3],              // tls
+        );
+    }
+
+    // Legacy fork/thread path (busybox, v8_exec, etc.)
     if IN_CHILD.load(core::sync::atomic::Ordering::Relaxed) {
         return -1; // nested clone not supported
     }
@@ -2392,79 +2419,47 @@ fn sys_mkdirat(args: [u64; 6]) -> i64 {
     }
 }
 
-// ─── epoll_create1 (20) — create epoll instance ───
-// Minimal implementation: allocate an fd backed by a VFS node.
-// We don't actually track epoll interest lists; this is enough to
-// prevent programs that call epoll from crashing.
+// ─── epoll_create1 / epoll_ctl / epoll_pwait ───
+// Delegates to src/batcave/linux/epoll.rs (real wait-queue implementation
+// with interest lists, level-triggered delivery, and close-notification).
 fn sys_epoll_create1(args: [u64; 6]) -> i64 {
-    let _flags = args[0]; // EPOLL_CLOEXEC, ignored
-
-    if vfs::is_ready() {
-        if let Ok(idx) = vfs::create_node(0, b".epoll", vfs::NodeType::File, 0o100600) {
-            match fd::alloc_fd(idx, 0) {
-                Ok(fd_num) => return fd_num as i64,
-                Err(e) => return e,
-            }
-        }
-    }
-
-    // Fallback: return a high fd number
-    30
+    super::epoll::epoll_create1(args[0] as u32)
 }
-
-// ─── epoll_ctl (21) — add/modify/delete fd from epoll set ───
-// Stub: accept the operation, do nothing.
-fn sys_epoll_ctl(_args: [u64; 6]) -> i64 {
-    // args: epfd, op, fd, event*
-    // We accept all operations silently.
-    0
+fn sys_epoll_ctl(args: [u64; 6]) -> i64 {
+    super::epoll::epoll_ctl(
+        args[0] as i32, args[1] as i32, args[2] as i32,
+        args[3] as *const super::epoll::EpollEvent,
+    )
 }
-
-// ─── epoll_pwait (22) — wait for epoll events ───
-// Simple non-blocking check: if any monitored fds have data, report
-// them as ready; otherwise return 0 (timeout).
 fn sys_epoll_pwait(args: [u64; 6]) -> i64 {
-    let _epfd = args[0] as u32;
-    let events_ptr = args[1] as usize;
-    let max_events = args[2] as usize;
-    let timeout_ms = args[3] as i32;
+    super::epoll::epoll_pwait(
+        args[0] as i32,
+        args[1] as *mut super::epoll::EpollEvent,
+        args[2] as i32,
+        args[3] as i32,
+        args[4] as *const u64,
+    )
+}
 
-    if events_ptr == 0 || max_events == 0 { return 0; }
-
-    // If timeout is 0, return immediately with no events.
-    // If timeout is -1 (infinite), do a short spin then return 0.
-    // This prevents programs from hanging while still being correct.
-    if timeout_ms == 0 { return 0; }
-
-    // Short spin for a bounded time (similar to ppoll)
-    let iterations: u64 = if timeout_ms > 0 {
-        // Approximate: each iteration is ~nanoseconds on ARM64
-        (timeout_ms as u64).min(100) * 10_000
-    } else {
-        // Infinite timeout: spin a bit then return
-        1_000_000
-    };
-
-    for _ in 0..iterations {
-        // Check if stdin has data (a common epoll target)
-        if uart::has_char() {
-            // Fill one epoll_event: struct epoll_event { events: u32, data: u64 }
-            // EPOLLIN = 1
-            unsafe {
-                let epollin: u32 = 1;
-                core::arch::asm!("str {v:w}, [{a}]",
-                    a = in(reg) events_ptr, v = in(reg) epollin);
-                // data.fd = 0 (stdin)
-                let data: u64 = 0;
-                core::arch::asm!("str {v}, [{a}]",
-                    a = in(reg) events_ptr + 4, v = in(reg) data);
-            }
-            return 1; // one event ready
-        }
-        core::hint::spin_loop();
-    }
-
-    0 // timeout, no events
+// ─── eventfd2 (19) + timerfd_create/settime/gettime (85/86/87) ───
+fn sys_eventfd2(args: [u64; 6]) -> i64 {
+    super::async_fds::eventfd2(args[0] as u32, args[1] as i32)
+}
+fn sys_timerfd_create(args: [u64; 6]) -> i64 {
+    super::async_fds::timerfd_create(args[0] as i32, args[1] as i32)
+}
+fn sys_timerfd_settime(args: [u64; 6]) -> i64 {
+    super::async_fds::timerfd_settime(
+        args[0] as i32, args[1] as i32,
+        args[2] as *const super::async_fds::Itimerspec,
+        args[3] as *mut super::async_fds::Itimerspec,
+    )
+}
+fn sys_timerfd_gettime(args: [u64; 6]) -> i64 {
+    super::async_fds::timerfd_gettime(
+        args[0] as i32,
+        args[1] as *mut super::async_fds::Itimerspec,
+    )
 }
 
 // ─── sysinfo (179) — return system information ───
@@ -2770,3 +2765,87 @@ fn sys_blit_framebuffer(args: [u64; 6]) -> i64 {
 
     0
 }
+
+// ─── BSD socket syscall wrappers for Chromium ───
+// These route to src/batcave/linux/sockets.rs which provides the full
+// BSD API Chromium expects. The legacy sys_socket/sys_connect/sys_sendto/
+// sys_recvfrom above use a separate low-fd namespace (<64) for compat
+// with netsurf_test. The new wrappers below operate on the high-fd
+// namespace (>=1024) that sockets.rs manages.
+
+fn sys_socketpair(args: [u64; 6]) -> i64 {
+    // Chromium Mojo uses socketpair + SCM_RIGHTS. Not implemented yet.
+    let _ = args;
+    ENOSYS
+}
+
+fn sys_bind(args: [u64; 6]) -> i64 {
+    super::sockets::bind(
+        args[0] as i32,
+        args[1] as *const super::sockets::SockaddrIn,
+        args[2] as u32,
+    )
+}
+fn sys_listen(args: [u64; 6]) -> i64 {
+    super::sockets::listen(args[0] as i32, args[1] as i32)
+}
+fn sys_accept(args: [u64; 6]) -> i64 {
+    super::sockets::accept4(
+        args[0] as i32,
+        args[1] as *mut super::sockets::SockaddrIn,
+        args[2] as *mut u32,
+        0,
+    )
+}
+fn sys_accept4(args: [u64; 6]) -> i64 {
+    super::sockets::accept4(
+        args[0] as i32,
+        args[1] as *mut super::sockets::SockaddrIn,
+        args[2] as *mut u32,
+        args[3] as i32,
+    )
+}
+fn sys_getsockname(args: [u64; 6]) -> i64 {
+    super::sockets::getsockname(
+        args[0] as i32,
+        args[1] as *mut super::sockets::SockaddrIn,
+        args[2] as *mut u32,
+    )
+}
+fn sys_getpeername(args: [u64; 6]) -> i64 {
+    super::sockets::getpeername(
+        args[0] as i32,
+        args[1] as *mut super::sockets::SockaddrIn,
+        args[2] as *mut u32,
+    )
+}
+fn sys_sendmsg(args: [u64; 6]) -> i64 {
+    super::sockets::sendmsg(
+        args[0] as i32,
+        args[1] as *const super::sockets::Msghdr,
+        args[2] as i32,
+    )
+}
+fn sys_recvmsg(args: [u64; 6]) -> i64 {
+    super::sockets::recvmsg(
+        args[0] as i32,
+        args[1] as *mut super::sockets::Msghdr,
+        args[2] as i32,
+    )
+}
+fn sys_setsockopt(args: [u64; 6]) -> i64 {
+    super::sockets::setsockopt(
+        args[0] as i32, args[1] as i32, args[2] as i32,
+        args[3] as *const u8, args[4] as u32,
+    )
+}
+fn sys_getsockopt(args: [u64; 6]) -> i64 {
+    super::sockets::getsockopt(
+        args[0] as i32, args[1] as i32, args[2] as i32,
+        args[3] as *mut u8, args[4] as *mut u32,
+    )
+}
+fn sys_shutdown(args: [u64; 6]) -> i64 {
+    super::sockets::shutdown(args[0] as i32, args[1] as i32)
+}
+

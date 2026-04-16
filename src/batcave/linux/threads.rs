@@ -536,32 +536,25 @@ pub fn schedule() {
     if next_tid == me { return; }
     RUNNING_TID.store(next_tid, Ordering::Release);
 
-    // TODO: the actual assembly switch. Pseudocode:
-    //
-    //   let cur_regs = &mut t[slot(me)].saved_regs;
-    //   let new_regs = &t[slot(next_tid)].saved_regs;
-    //   cxt_switch_cooperative(cur_regs, new_regs);
-    //
-    // where cxt_switch_cooperative(old, new) is an extern "C" fn implemented
-    // in assembly that:
-    //     stp x19, x20, [x0, #...]    // save callee-saved into *old
-    //     ...
-    //     mov x2, sp; str x2, [x0, #...]
-    //     str x30, [x0, #...]
-    //     msr tpidr_el0, {new.tls_ptr}
-    //     ldp x19, x20, [x1, #...]    // restore from *new
-    //     ...
-    //     ldr x2, [x1, #...]; mov sp, x2
-    //     ldr x30, [x1, #...]
-    //     ret
-    //
-    // See src/kernel/process/mod.rs switch_context for the pattern.
-    // Until wired: we log and return (degrades to "single thread runs until
-    // it blocks"), which is enough to exercise the table + flag parsing.
-    //
-    // >>> HUMAN: implement cxt_switch_cooperative in forkjmp.s or a new
-    //            threads.s, then delete the log line below. <<<
-    uart::puts("[threads] schedule() TODO: cooperative context switch asm\n");
+    // Call into assembly to do the actual register swap.
+    // cxt_switch_cooperative saves x19-x30 + sp + tpidr_el0 of the current
+    // thread into *old, then restores the same from *new. It returns when
+    // the caller's thread is rescheduled later.
+    let (old_ptr, new_ptr) = with_table(|t| -> (*mut SavedRegs, *const SavedRegs) {
+        let old_idx = slot_of(t, me).unwrap_or(0);
+        let new_idx = slot_of(t, next_tid).unwrap_or(0);
+        let old = &mut t[old_idx].saved_regs as *mut SavedRegs;
+        let new = &t[new_idx].saved_regs as *const SavedRegs;
+        (old, new)
+    });
+
+    unsafe { cxt_switch_cooperative(old_ptr, new_ptr); }
+}
+
+// Implemented in src/batcave/linux/threads.s — saves callee-saved regs of
+// the current thread into *old, then loads them from *new and returns.
+unsafe extern "C" {
+    fn cxt_switch_cooperative(old: *mut SavedRegs, new: *const SavedRegs);
 }
 
 /// Timer IRQ hook. Called from the EL1 IRQ handler. Returns true if the
