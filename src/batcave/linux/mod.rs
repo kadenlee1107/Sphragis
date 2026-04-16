@@ -11,4 +11,5 @@ pub mod sockets;
 pub mod stdio_ring;
 pub mod syscall;
 pub mod threads;
+pub mod uaccess;
 pub mod vfs;
