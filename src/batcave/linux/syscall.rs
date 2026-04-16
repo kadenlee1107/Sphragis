@@ -1788,10 +1788,24 @@ fn write_str(s: &str) {
 }
 
 /// Read a null-terminated string from userspace memory.
+///
+/// NEW-SYS-028 / ATTACK-SYS-034/035 fix: before this patch the loop did a
+/// raw `ldrb` at `ptr + i` with no range check, giving every path-taking
+/// syscall (openat, faccessat, chdir, readlinkat, newfstatat, mkdirat,
+/// execve) a kernel-read primitive. We now refuse ptr == 0 or anything
+/// outside [0x1000, 0x4000_0000), and we truncate at the first byte that
+/// falls outside userspace (treated as a de-facto NUL).
 fn read_user_str(ptr: usize, buf: &mut [u8]) -> usize {
+    if ptr == 0 { return 0; }
     let max = buf.len().min(255);
+    // Fast-path: if the whole read window lives in userspace, skip per-byte
+    // checks. `is_user_range(ptr, max)` rejects overflow too.
+    let whole_ok = uaccess::is_user_range(ptr, max);
     let mut len = 0;
     for i in 0..max {
+        if !whole_ok && !uaccess::is_user_range(ptr + i, 1) {
+            break;
+        }
         let byte: u32;
         unsafe {
             core::arch::asm!("ldrb {v:w}, [{a}]", a = in(reg) ptr + i, v = out(reg) byte);
@@ -1913,18 +1927,37 @@ fn sys_ppoll(args: [u64; 6]) -> i64 {
 
 fn sys_dup(args: [u64; 6]) -> i64 {
     let old_fd = args[0] as u32;
+    // NEW-DOS-002: dup was previously free — it allocates a new fd entry
+    // but never touched the Fds counter, so a cave could spin dup() and
+    // blow past its cap. Charge one Fd up-front and refund on dup failure.
+    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 1) {
+        return e;
+    }
     match fd::dup(old_fd) {
         Ok(new_fd) => new_fd as i64,
-        Err(e) => e,
+        Err(e) => {
+            super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+            e
+        }
     }
 }
 
 fn sys_dup3(args: [u64; 6]) -> i64 {
     let old_fd = args[0] as u32;
     let new_fd = args[1] as u32;
+    // NEW-DOS-002: charge for the new fd slot (same reasoning as sys_dup).
+    // dup2/dup3 semantics close an existing new_fd first; if that close
+    // is what frees the slot the net charge is zero — we don't model that
+    // fine distinction here, we just make sure the cave stays within cap.
+    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 1) {
+        return e;
+    }
     match fd::dup2(old_fd, new_fd) {
         Ok(fd) => fd as i64,
-        Err(e) => e,
+        Err(e) => {
+            super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+            e
+        }
     }
 }
 
@@ -2753,6 +2786,22 @@ fn sys_pipe2(args: [u64; 6]) -> i64 {
     if fds_ptr == 0 { return EINVAL; }
     if !is_user_ptr(fds_ptr, 8) { return EFAULT; }
 
+    // NEW-DOS-002: charge 2 fds up front. A successful pipe2() consumes
+    // two new fd slots; without this charge a cave could drive pipe2 in
+    // a loop past its per-cave Fds cap. The close paths (sys_close) refund
+    // normally when those fds are released.
+    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 2) {
+        return e;
+    }
+    let ret = sys_pipe2_inner(fds_ptr);
+    if ret != 0 {
+        super::quotas::refund_active(super::quotas::Resource::Fds, 2);
+    }
+    ret
+}
+
+fn sys_pipe2_inner(fds_ptr: usize) -> i64 {
+
     // Reset pipe buffer
     unsafe {
         core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_LEN), 0);
@@ -3298,20 +3347,40 @@ fn sys_listen(args: [u64; 6]) -> i64 {
     super::sockets::listen(args[0] as i32, args[1] as i32)
 }
 fn sys_accept(args: [u64; 6]) -> i64 {
-    super::sockets::accept4(
-        args[0] as i32,
-        args[1] as *mut super::sockets::SockaddrIn,
-        args[2] as *mut u32,
-        0,
-    )
+    accept_charged(args[0] as i32,
+                   args[1] as *mut super::sockets::SockaddrIn,
+                   args[2] as *mut u32,
+                   0)
 }
 fn sys_accept4(args: [u64; 6]) -> i64 {
-    super::sockets::accept4(
-        args[0] as i32,
-        args[1] as *mut super::sockets::SockaddrIn,
-        args[2] as *mut u32,
-        args[3] as i32,
-    )
+    accept_charged(args[0] as i32,
+                   args[1] as *mut super::sockets::SockaddrIn,
+                   args[2] as *mut u32,
+                   args[3] as i32)
+}
+
+/// NEW-DOS-005: accept{,4} was never quota-charged. A remote SYN flood
+/// could drive the listening cave past its Sockets/Fds cap because the
+/// new fd was created from the kernel side without consulting the cave
+/// ledger. Charge both Sockets+Fds up front; refund on failure. sys_close
+/// refunds them on release via its existing node-type check.
+fn accept_charged(listen_fd: i32,
+                  addr: *mut super::sockets::SockaddrIn,
+                  addrlen: *mut u32,
+                  flags: i32) -> i64 {
+    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Sockets, 1) {
+        return e;
+    }
+    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 1) {
+        super::quotas::refund_active(super::quotas::Resource::Sockets, 1);
+        return e;
+    }
+    let r = super::sockets::accept4(listen_fd, addr, addrlen, flags);
+    if r < 0 {
+        super::quotas::refund_active(super::quotas::Resource::Sockets, 1);
+        super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+    }
+    r
 }
 fn sys_getsockname(args: [u64; 6]) -> i64 {
     super::sockets::getsockname(
