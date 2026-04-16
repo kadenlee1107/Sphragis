@@ -494,19 +494,36 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
             for i in 0..8 { nonce[4 + i] ^= seq_bytes[i]; }
             sess.server_seq += 1;
 
-            let hs_cipher = {
-                let mut k = [0u8; 16];
-                k.copy_from_slice(&sess.server_key[..16]);
-                crate::crypto::aes::Aes128::new(&k)
-            };
+            // ROOT-4: authenticated decryption for handshake records too.
+            // Same AAD format as recv_app_data (5-byte TLS record header).
+            let mut k16 = [0u8; 16];
+            k16.copy_from_slice(&sess.server_key[..16]);
+            let hs_gcm = crate::crypto::gcm_verified::Aes128Gcm::new(&k16);
+            let aad = [
+                all_buf[pos], all_buf[pos + 1], all_buf[pos + 2],
+                all_buf[pos + 3], all_buf[pos + 4],
+            ];
 
             let mut decrypted = [0u8; 4096];
             decrypted[..payload_len].copy_from_slice(&all_buf[pos + 5..rec_end]);
-            hs_cipher.gcm_crypt(&nonce, &mut decrypted[..payload_len]);
 
-            // Inner: plaintext(N) + content_type(1) + GCM_tag(16)
-            let inner_len = payload_len - 17;
-            let inner_type = decrypted[inner_len]; // content type byte
+            let plaintext_len = match hs_gcm.decrypt_inplace(
+                &nonce, &aad, &mut decrypted[..payload_len]
+            ) {
+                Ok(n) => n,
+                Err(e) => {
+                    uart::puts("[tls] HANDSHAKE record auth failed: ");
+                    uart::puts(e);
+                    uart::puts("\n");
+                    return Err("TLS handshake record authentication failed");
+                }
+            };
+
+            // After authentication, inner plaintext ends with a 1-byte
+            // content_type. The 16-byte tag has already been stripped
+            // and verified by decrypt_inplace.
+            let inner_len = if plaintext_len > 0 { plaintext_len - 1 } else { 0 };
+            let inner_type = if plaintext_len > 0 { decrypted[inner_len] } else { 0 };
 
             uart::puts("[tls] hs inner=0x");
             let hx = b"0123456789abcdef";
