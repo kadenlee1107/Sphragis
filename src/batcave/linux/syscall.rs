@@ -14,6 +14,7 @@ use crate::drivers::uart;
 use crate::batcave::cave;
 use super::vfs;
 use super::fd;
+use super::stdio_ring;
 
 // Linux errno values (returned as negative)
 const ENOSYS: i64 = -38;   // Function not implemented
@@ -419,6 +420,37 @@ fn write_to_uart(buf: usize, count: usize) -> i64 {
     count as i64
 }
 
+/// Route stdout/stderr writes through the async ring buffer when it is live.
+/// Falls back to synchronous UART if the ring is not yet initialised (early
+/// boot before stdio_ring::init() runs).  Chromium content_shell's verbose
+/// --enable-logging=stderr output would otherwise stall on UART back-pressure.
+fn write_stdio(buf: usize, count: usize) -> i64 {
+    if !stdio_ring::is_ready() {
+        return write_to_uart(buf, count);
+    }
+    // Copy the userspace buffer out a byte at a time (same ldrb trick as
+    // write_to_uart — these pointers come from guest x1 and are not
+    // guaranteed to be naturally aligned).  We chunk through a small stack
+    // scratch to amortise push_slice overhead.
+    const CHUNK: usize = 128;
+    let mut scratch = [0u8; CHUNK];
+    let mut done = 0usize;
+    while done < count {
+        let take = core::cmp::min(CHUNK, count - done);
+        for i in 0..take {
+            let byte: u32;
+            unsafe {
+                core::arch::asm!("ldrb {v:w}, [{a}]",
+                    a = in(reg) buf + done + i, v = out(reg) byte);
+            }
+            scratch[i] = byte as u8;
+        }
+        stdio_ring::push_slice(&scratch[..take]);
+        done += take;
+    }
+    count as i64
+}
+
 fn sys_write(args: [u64; 6]) -> i64 {
     let fd_num = args[0] as u32;
     let buf = args[1] as usize;
@@ -447,7 +479,8 @@ fn sys_write(args: [u64; 6]) -> i64 {
         // node_idx == 0 means original stdin/stdout/stderr (not redirected)
         if node_idx == 0 {
             if fd_num == 0 { return EBADF; }
-            return write_to_uart(buf, count);
+            // fd 1 (stdout) / fd 2 (stderr) → async ring buffer
+            return write_stdio(buf, count);
         }
 
         // Redirected or VFS file
@@ -470,9 +503,9 @@ fn sys_write(args: [u64; 6]) -> i64 {
             Err(e) => e,
         }
     } else {
-        // fd not in table — default stdout/stderr to UART
+        // fd not in table — default stdout/stderr to the async stdio ring
         if fd_num == 1 || fd_num == 2 {
-            return write_to_uart(buf, count);
+            return write_stdio(buf, count);
         }
         EBADF
     }

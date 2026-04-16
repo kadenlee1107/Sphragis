@@ -7,6 +7,7 @@ pub mod loader;
 pub mod mmu;
 pub mod runner;
 pub mod sockets;
+pub mod stdio_ring;
 pub mod syscall;
 pub mod threads;
 pub mod vfs;
