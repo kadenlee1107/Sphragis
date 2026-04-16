@@ -416,3 +416,21 @@ fn gmul(mut a: u8, mut b: u8) -> u8 {
     }
     p
 }
+
+// ─── Zeroization on drop ──────────────────────────────────────────────
+// Volatile-wipe round-key schedules when the struct goes out of scope so
+// AES keys don't survive in RAM for cold-boot / DMA / HVF snapshot
+// inspection. Uses security::zeroize::zeroize_u32_slice which places
+// compiler_fence after the writes to block dead-store elimination.
+
+impl Drop for Aes128 {
+    fn drop(&mut self) {
+        crate::security::zeroize::zeroize_u32_slice(&mut self.round_keys);
+    }
+}
+
+impl Drop for Aes256 {
+    fn drop(&mut self) {
+        crate::security::zeroize::zeroize_u32_slice(&mut self.round_keys);
+    }
+}

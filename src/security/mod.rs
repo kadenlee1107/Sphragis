@@ -2,6 +2,7 @@ pub mod auth;
 pub mod boot_screen;
 pub mod deadman;
 pub mod wipe;
+pub mod zeroize;
 
 /// Check for panic hotkey (Ctrl+Shift+W = wipe NOW).
 /// Called from the main input loop.
