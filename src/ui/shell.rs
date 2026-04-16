@@ -605,11 +605,17 @@ fn parse_ip(s: &str) -> u32 {
 fn ensure_default_cave() {
     use crate::batcave::cave;
     if cave::get_active() == usize::MAX {
-        // Create a default cave with basic capabilities
+        // Create a default cave with basic capabilities. ROOT-5: `proc` and
+        // `mem` are now real caps (no longer hard-allowed); default cave
+        // gets them along with `fs` and `net` so existing binaries work.
+        // Locked-down caves spawned explicitly by the user can be granted
+        // narrower sets.
         if cave::find_id("default").is_none() {
             cave::create("default", false).ok();
             cave::grant_cap("default", "net").ok();
             cave::grant_cap("default", "fs").ok();
+            cave::grant_cap("default", "proc").ok();
+            cave::grant_cap("default", "mem").ok();
         }
         cave::enter("default").ok();
     }

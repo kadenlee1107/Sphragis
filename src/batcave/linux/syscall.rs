@@ -267,12 +267,22 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         }
     };
 
-    // Capability check
+    // Capability check. ROOT-5 fix: FileIO / Process / Memory now actually
+    // consult the cave's cap set instead of hard-returning true. The default
+    // cave is created with `fs` granted at shell start (shell.rs:611), so the
+    // existing test binaries still work; caves without `fs` / `proc` / `mem`
+    // are now genuinely denied those syscalls.
+    //
+    // `Always` remains unconditionally allowed — it covers getpid, getuid,
+    // uname, exit, clock_gettime, etc. where denying would just break the
+    // program without adding meaningful protection.
     let allowed = match cat {
-        SyscallCat::Always | SyscallCat::Process | SyscallCat::Memory => true,
-        SyscallCat::FileIO => true, // BatCave always has access to its OWN rootfs
+        SyscallCat::Always  => true,
+        SyscallCat::Process => cave_has_cap(cave_id, "proc"),
+        SyscallCat::Memory  => cave_has_cap(cave_id, "mem"),
+        SyscallCat::FileIO  => cave_has_cap(cave_id, "fs"),
         SyscallCat::Network => cave_has_cap(cave_id, "net"),
-        SyscallCat::RawNet => cave_has_cap(cave_id, "raw"),
+        SyscallCat::RawNet  => cave_has_cap(cave_id, "raw"),
         SyscallCat::Display => cave_has_cap(cave_id, "display"),
     };
 
@@ -334,10 +344,45 @@ fn sys_nanosleep(args: [u64; 6]) -> i64 {
 }
 
 // ─── munmap (215) — free mapped memory ───
+//
+// Bat_OS maps user pages identity on the current TTBR0 (ROOT-1: per-cave
+// page tables aren't wired yet), so the "VA" we get is really a PA in the
+// frame allocator's bitmap. All we need to do is free each backing frame,
+// refund the cave's memory quota, and invalidate the TLB for the range.
+//
+// Return: 0 on success, -EINVAL on zero-length / mis-aligned inputs.
 fn sys_munmap(args: [u64; 6]) -> i64 {
-    let _addr = args[0] as usize;
-    let _length = args[1] as usize;
-    // TODO: actually free frames — for now accept and leak
+    let addr = args[0] as usize;
+    let length = args[1] as usize;
+    if length == 0 { return EINVAL; }
+    if addr & 0xFFF != 0 { return EINVAL; }
+
+    let page_size = 4096usize;
+    let pages = (length + page_size - 1) / page_size;
+
+    // Walk the range and free each backing frame. free_contig silently
+    // ignores bases outside the frame bitmap, so passing an address that
+    // was never mapped becomes a cheap no-op rather than a kernel panic.
+    crate::kernel::mm::frame::free_contig(addr, pages);
+
+    // Refund the memory quota. Saturating, so if the caller munmaps a
+    // region we never charged (ChromiumFb, etc.) the counter sticks at 0.
+    super::quotas::refund_active(
+        super::quotas::Resource::Mem, pages * page_size);
+
+    // Invalidate the TLB for this ASID. We don't yet have per-address
+    // tlbi vaae1 wired (see mmu.rs); a full `tlbi vmalle1` is coarse but
+    // correct. Cheap on single-core HVF.
+    unsafe {
+        core::arch::asm!(
+            "dsb ishst",
+            "tlbi vmalle1",
+            "dsb ish",
+            "isb",
+            options(nostack, preserves_flags),
+        );
+    }
+
     0
 }
 
@@ -738,6 +783,20 @@ static mut PROC_FD_LENS: [usize; 16] = [0; 16];
 static mut PROC_FD_POS: [usize; 16] = [0; 16];
 
 fn sys_openat(args: [u64; 6]) -> i64 {
+    // ROOT-6: per-cave fd quota. Charge up front; refund if we end up
+    // returning a negative errno (any path that doesn't hand back an fd).
+    if let Err(e) = super::quotas::charge_active(
+            super::quotas::Resource::Fds, 1) {
+        return e;
+    }
+    let result = sys_openat_inner(args);
+    if result < 0 {
+        super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+    }
+    result
+}
+
+fn sys_openat_inner(args: [u64; 6]) -> i64 {
     let dirfd = args[0] as i32;
     let path_ptr = args[1] as usize;
     let flags = args[2] as u32;
@@ -857,8 +916,32 @@ fn sys_openat(args: [u64; 6]) -> i64 {
 
 fn sys_close(args: [u64; 6]) -> i64 {
     let fd_num = args[0] as u32;
+
+    // ROOT-6: figure out which resource class this fd belongs to BEFORE we
+    // tear down the entry, so we refund the right counter. Sockets come
+    // back to the Sockets pool; everything else is a generic Fds refund.
+    // eventfd / timerfd / epoll slots are accounted at creation time but
+    // aren't refunded here — they live outside the fd table (slot indices
+    // are returned raw from sys_eventfd2 / sys_timerfd_create).
+    let refund_res = match fd::get(fd_num) {
+        Some(entry) => {
+            let node = vfs::get_node(entry.node_idx);
+            if node.node_type == vfs::NodeType::Socket {
+                Some(super::quotas::Resource::Sockets)
+            } else {
+                Some(super::quotas::Resource::Fds)
+            }
+        }
+        None => None,
+    };
+
     match fd::close(fd_num) {
-        Ok(()) => 0,
+        Ok(()) => {
+            if let Some(r) = refund_res {
+                super::quotas::refund_active(r, 1);
+            }
+            0
+        }
         Err(e) => e,
     }
 }
@@ -998,11 +1081,47 @@ fn sys_brk(args: [u64; 6]) -> i64 {
             if requested == 0 {
                 return WORKER_BRK as i64;
             }
-            if requested >= WORKER_BRK {
-                // Allocate pages to cover the gap
-                let pages = ((requested - WORKER_BRK) as usize + 4095) / 4096;
+            if requested > WORKER_BRK {
+                // Grow: allocate pages to cover the gap (page-aligned). We
+                // round the new break UP to a page so the freeable unit on
+                // shrink matches the granularity of allocation.
+                let gap = (requested - WORKER_BRK) as usize;
+                let pages = (gap + 4095) / 4096;
+                let bytes = pages * 4096;
+                // Enforce the cave's memory quota before we start alloc'ing.
+                if let Err(e) = super::quotas::charge_active(
+                        super::quotas::Resource::Mem, bytes) {
+                    return e;
+                }
                 for _ in 0..pages {
-                    crate::kernel::mm::frame::alloc_frame();
+                    if crate::kernel::mm::frame::alloc_frame().is_none() {
+                        super::quotas::refund_active(
+                            super::quotas::Resource::Mem, bytes);
+                        return ENOMEM;
+                    }
+                }
+                WORKER_BRK = requested;
+            } else if requested < WORKER_BRK {
+                // Shrink: free the released pages. ROOT-6 fix — previously
+                // a no-op that leaked the entire tail of the heap.
+                // We free only fully-released page-aligned frames; if the
+                // new break ends mid-page we keep that page.
+                let new_aligned = (requested + 4095) & !4095;
+                let old_aligned = (WORKER_BRK + 4095) & !4095;
+                if new_aligned < old_aligned {
+                    let freed_pages = ((old_aligned - new_aligned) / 4096) as usize;
+                    crate::kernel::mm::frame::free_contig(
+                        new_aligned as usize, freed_pages);
+                    super::quotas::refund_active(
+                        super::quotas::Resource::Mem, freed_pages * 4096);
+                    // Flush TLB for the released range.
+                    core::arch::asm!(
+                        "dsb ishst",
+                        "tlbi vmalle1",
+                        "dsb ish",
+                        "isb",
+                        options(nostack, preserves_flags),
+                    );
                 }
                 WORKER_BRK = requested;
             }
@@ -1075,6 +1194,16 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
 
     // Allocate contiguous pages from the frame allocator
     let pages = (len + 4095) / 4096;
+    let charge_bytes = pages * 4096;
+
+    // ROOT-6 quota check — before we touch the frame allocator, make sure
+    // this cave isn't already at its per-cave memory cap. -ENOMEM matches
+    // what Linux returns when RLIMIT_AS is hit.
+    if let Err(e) = super::quotas::charge_active(
+            super::quotas::Resource::Mem, charge_bytes) {
+        return e;
+    }
+
     uart::puts("[mmap] len=");
     crate::kernel::mm::print_num(len);
     uart::puts(" pages=");
@@ -1100,6 +1229,8 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         }
         None => {
             uart::puts(" FAILED (no frames)\n");
+            super::quotas::refund_active(
+                super::quotas::Resource::Mem, charge_bytes);
             ENOMEM
         }
     }
@@ -1130,6 +1261,13 @@ fn sys_socket(args: [u64; 6]) -> i64 {
 
     if domain != AF_INET { return -97; } // EAFNOSUPPORT
 
+    // ROOT-6: per-cave socket quota. On overflow we return -EMFILE, matching
+    // what Linux returns when RLIMIT_NOFILE is hit.
+    if let Err(e) = super::quotas::charge_active(
+            super::quotas::Resource::Sockets, 1) {
+        return e;
+    }
+
     // Create a VFS socket node
     if vfs::is_ready() {
         if let Ok(idx) = vfs::create_node(0, b".sock", vfs::NodeType::Socket, 0o140755) {
@@ -1141,12 +1279,19 @@ fn sys_socket(args: [u64; 6]) -> i64 {
                     uart::puts("\n");
                     return fd_num as i64;
                 }
-                Err(e) => return e,
+                Err(e) => {
+                    super::quotas::refund_active(
+                        super::quotas::Resource::Sockets, 1);
+                    return e;
+                }
             }
         }
+        // VFS accepted ready, but create_node failed — refund.
+        super::quotas::refund_active(super::quotas::Resource::Sockets, 1);
     }
 
-    // Fallback
+    // Fallback — no VFS. Still a live socket from the cave's POV, so keep
+    // the charge.
     10
 }
 
@@ -2578,7 +2723,17 @@ fn sys_mkdirat(args: [u64; 6]) -> i64 {
 // Delegates to src/batcave/linux/epoll.rs (real wait-queue implementation
 // with interest lists, level-triggered delivery, and close-notification).
 fn sys_epoll_create1(args: [u64; 6]) -> i64 {
-    super::epoll::epoll_create1(args[0] as u32)
+    // ROOT-6: per-cave epoll-instance quota (default 16). Refund if the
+    // underlying epoll module rejects the request.
+    if let Err(e) = super::quotas::charge_active(
+            super::quotas::Resource::Epolls, 1) {
+        return e;
+    }
+    let r = super::epoll::epoll_create1(args[0] as u32);
+    if r < 0 {
+        super::quotas::refund_active(super::quotas::Resource::Epolls, 1);
+    }
+    r
 }
 fn sys_epoll_ctl(args: [u64; 6]) -> i64 {
     super::epoll::epoll_ctl(
@@ -2598,10 +2753,28 @@ fn sys_epoll_pwait(args: [u64; 6]) -> i64 {
 
 // ─── eventfd2 (19) + timerfd_create/settime/gettime (85/86/87) ───
 fn sys_eventfd2(args: [u64; 6]) -> i64 {
-    super::async_fds::eventfd2(args[0] as u32, args[1] as i32)
+    // ROOT-6: per-cave eventfd quota (default 16).
+    if let Err(e) = super::quotas::charge_active(
+            super::quotas::Resource::Eventfds, 1) {
+        return e;
+    }
+    let r = super::async_fds::eventfd2(args[0] as u32, args[1] as i32);
+    if r < 0 {
+        super::quotas::refund_active(super::quotas::Resource::Eventfds, 1);
+    }
+    r
 }
 fn sys_timerfd_create(args: [u64; 6]) -> i64 {
-    super::async_fds::timerfd_create(args[0] as i32, args[1] as i32)
+    // ROOT-6: per-cave timerfd quota (default 16).
+    if let Err(e) = super::quotas::charge_active(
+            super::quotas::Resource::Timerfds, 1) {
+        return e;
+    }
+    let r = super::async_fds::timerfd_create(args[0] as i32, args[1] as i32);
+    if r < 0 {
+        super::quotas::refund_active(super::quotas::Resource::Timerfds, 1);
+    }
+    r
 }
 fn sys_timerfd_settime(args: [u64; 6]) -> i64 {
     super::async_fds::timerfd_settime(
