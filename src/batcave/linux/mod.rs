@@ -1,7 +1,12 @@
+pub mod async_fds;
 pub mod elf;
+pub mod epoll;
 pub mod fd;
+pub mod futex;
 pub mod loader;
 pub mod mmu;
 pub mod runner;
+pub mod sockets;
 pub mod syscall;
+pub mod threads;
 pub mod vfs;

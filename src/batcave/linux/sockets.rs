@@ -1,0 +1,891 @@
+// Bat_OS — BSD Socket Bridge Layer
+// Routes BSD-socket API calls into our native TCP stack (src/net/tcp.rs)
+// and a stub UDP layer. This layer is intended to be called from the Linux
+// syscall dispatcher once wiring is done. No heap; no std; fixed-size static
+// table of 128 socket slots.
+//
+// IMPORTANT: Chromium (BoringSSL in-binary) does TLS in userspace. This layer
+// intentionally provides RAW TCP only.
+
+#![allow(dead_code)]
+#![allow(non_camel_case_types)]
+#![allow(non_upper_case_globals)]
+
+use core::sync::atomic::{AtomicBool, Ordering};
+
+// ============================================================================
+// Constants: address families, types, protocols, errno
+// ============================================================================
+
+pub const AF_UNIX:  i32 = 1;
+pub const AF_INET:  i32 = 2;
+pub const AF_INET6: i32 = 10;
+
+pub const SOCK_STREAM: i32 = 1;
+pub const SOCK_DGRAM:  i32 = 2;
+
+// Linux-style flag bits OR'd into sock_type
+pub const SOCK_NONBLOCK: i32 = 0o4000;
+pub const SOCK_CLOEXEC:  i32 = 0o2000000;
+pub const SOCK_TYPE_MASK: i32 = 0xFF;
+
+pub const IPPROTO_IP:  i32 = 0;
+pub const IPPROTO_TCP: i32 = 6;
+pub const IPPROTO_UDP: i32 = 17;
+
+// Sockopt levels
+pub const SOL_SOCKET: i32 = 1;
+// IPPROTO_IP reused (0), IPPROTO_TCP reused (6)
+
+// SOL_SOCKET optnames (Linux)
+pub const SO_REUSEADDR: i32 = 2;
+pub const SO_TYPE:      i32 = 3;
+pub const SO_ERROR:     i32 = 4;
+pub const SO_BROADCAST: i32 = 6;
+pub const SO_SNDBUF:    i32 = 7;
+pub const SO_RCVBUF:    i32 = 8;
+pub const SO_KEEPALIVE: i32 = 9;
+pub const SO_LINGER:    i32 = 13;
+pub const SO_REUSEPORT: i32 = 15;
+pub const SO_RCVTIMEO:  i32 = 20;
+pub const SO_SNDTIMEO:  i32 = 21;
+
+// IPPROTO_TCP optnames
+pub const TCP_NODELAY:  i32 = 1;
+
+// IPPROTO_IP optnames
+pub const IP_TOS:       i32 = 1;
+pub const IP_TTL:       i32 = 2;
+
+// shutdown(how)
+pub const SHUT_RD:   i32 = 0;
+pub const SHUT_WR:   i32 = 1;
+pub const SHUT_RDWR: i32 = 2;
+
+// errno (negated for return values per Linux syscall ABI)
+pub const EPERM:        i64 = -1;
+pub const EBADF:        i64 = -9;
+pub const EAGAIN:       i64 = -11;
+pub const EWOULDBLOCK:  i64 = -11;
+pub const ENOMEM:       i64 = -12;
+pub const EFAULT:       i64 = -14;
+pub const EINVAL:       i64 = -22;
+pub const EMFILE:       i64 = -24;
+pub const ENOTSOCK:     i64 = -88;
+pub const EMSGSIZE:     i64 = -90;
+pub const EPROTONOSUPPORT: i64 = -93;
+pub const EAFNOSUPPORT: i64 = -97;
+pub const EADDRINUSE:   i64 = -98;
+pub const EADDRNOTAVAIL:i64 = -99;
+pub const ENETUNREACH:  i64 = -101;
+pub const ECONNABORTED: i64 = -103;
+pub const ECONNRESET:   i64 = -104;
+pub const ENOBUFS:      i64 = -105;
+pub const EISCONN:      i64 = -106;
+pub const ENOTCONN:     i64 = -107;
+pub const ETIMEDOUT:    i64 = -110;
+pub const ECONNREFUSED: i64 = -111;
+pub const EINPROGRESS:  i64 = -115;
+pub const EOPNOTSUPP:   i64 = -95;
+
+// ============================================================================
+// C-ABI structs
+// ============================================================================
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SockaddrIn {
+    pub sin_family: u16,
+    pub sin_port:   u16, // big-endian
+    pub sin_addr:   u32, // big-endian
+    pub sin_zero:   [u8; 8],
+}
+
+impl SockaddrIn {
+    pub const fn zeroed() -> Self {
+        SockaddrIn { sin_family: 0, sin_port: 0, sin_addr: 0, sin_zero: [0; 8] }
+    }
+    pub const SIZE: u32 = 16;
+}
+
+/// iovec (scatter/gather I/O)
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Iovec {
+    pub iov_base: *mut u8,
+    pub iov_len:  usize,
+}
+
+/// msghdr (sendmsg/recvmsg)
+#[repr(C)]
+pub struct Msghdr {
+    pub msg_name:       *mut u8,   // SockaddrIn* or null
+    pub msg_namelen:    u32,
+    pub msg_iov:        *mut Iovec,
+    pub msg_iovlen:     usize,
+    pub msg_control:    *mut u8,
+    pub msg_controllen: usize,
+    pub msg_flags:      i32,
+}
+
+// ============================================================================
+// Byte-order helpers (inline, per constraints)
+// ============================================================================
+
+#[inline(always)] pub const fn htons(x: u16) -> u16 { x.to_be() }
+#[inline(always)] pub const fn ntohs(x: u16) -> u16 { u16::from_be(x) }
+#[inline(always)] pub const fn htonl(x: u32) -> u32 { x.to_be() }
+#[inline(always)] pub const fn ntohl(x: u32) -> u32 { u32::from_be(x) }
+
+// ============================================================================
+// Socket state machine
+// ============================================================================
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SockKind {
+    Tcp,
+    Udp,
+    Unknown,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SockStatus {
+    Unbound,      // just created
+    Bound,        // bind() done
+    Listening,    // listen() done
+    Connecting,   // connect() in progress (non-blocking)
+    Connected,    // established
+    Closed,       // shutdown or peer closed
+    Error,        // terminal failure
+}
+
+/// Per-socket state; stored in the static SOCKET_TABLE.
+#[derive(Clone, Copy)]
+pub struct SocketState {
+    pub in_use:     bool,
+    pub kind:       SockKind,
+    pub status:     SockStatus,
+    pub nonblock:   bool,
+    pub cloexec:    bool,
+
+    // Local endpoint (host byte order)
+    pub local_addr: u32,
+    pub local_port: u16,
+
+    // Peer endpoint (host byte order)
+    pub peer_addr:  u32,
+    pub peer_port:  u16,
+
+    // Options Chromium frequently sets. Stored but largely advisory — our TCP
+    // stack doesn't honor most yet (see gaps list in task report).
+    pub opt_reuseaddr:  bool,
+    pub opt_reuseport:  bool,
+    pub opt_keepalive:  bool,
+    pub opt_tcp_nodelay:bool,
+    pub opt_broadcast:  bool,
+    pub opt_sndbuf:     i32,
+    pub opt_rcvbuf:     i32,
+    pub opt_ip_tos:     i32,
+    pub opt_ip_ttl:     i32,
+    pub opt_linger_on:  bool,
+    pub opt_linger_sec: i32,
+
+    // Pending asynchronous error surface (for SO_ERROR).
+    pub so_error:   i32,
+
+    // listen() backlog (stubbed — we can't actually accept inbound yet).
+    pub backlog:    i32,
+
+    // True once connect() has driven the global TCP stack into an
+    // established state (we only support one at a time today; see gaps).
+    pub owns_global_tcp: bool,
+}
+
+impl SocketState {
+    const fn empty() -> Self {
+        SocketState {
+            in_use: false,
+            kind: SockKind::Unknown,
+            status: SockStatus::Unbound,
+            nonblock: false,
+            cloexec: false,
+            local_addr: 0,
+            local_port: 0,
+            peer_addr: 0,
+            peer_port: 0,
+            opt_reuseaddr: false,
+            opt_reuseport: false,
+            opt_keepalive: false,
+            opt_tcp_nodelay: false,
+            opt_broadcast: false,
+            opt_sndbuf: 65536,
+            opt_rcvbuf: 65536,
+            opt_ip_tos: 0,
+            opt_ip_ttl: 64,
+            opt_linger_on: false,
+            opt_linger_sec: 0,
+            so_error: 0,
+            backlog: 0,
+            owns_global_tcp: false,
+        }
+    }
+}
+
+// ============================================================================
+// Static socket table (128 slots, no heap)
+// ============================================================================
+
+pub const MAX_SOCKETS: usize = 128;
+
+/// Socket slot array. `SOCKET_FD_BASE + slot_index` is the fd number we hand
+/// back to userspace. We deliberately use a high base so it never collides
+/// with the regular VFS fd table in `fd.rs` (which uses 0..MAX_FDS=64).
+pub const SOCKET_FD_BASE: i32 = 1024;
+
+static mut SOCKET_TABLE: [SocketState; MAX_SOCKETS] =
+    [SocketState::empty(); MAX_SOCKETS];
+
+// Serializes allocation/free. Not a real lock — we're single-core right now
+// and syscall entries are non-reentrant, but the flag catches logic bugs.
+static SOCK_LOCK: AtomicBool = AtomicBool::new(false);
+
+fn lock() {
+    while SOCK_LOCK.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+    }
+}
+fn unlock() { SOCK_LOCK.store(false, Ordering::Release); }
+
+/// True if the given fd is in the socket-fd range.
+pub fn is_socket_fd(fd: i32) -> bool {
+    fd >= SOCKET_FD_BASE && (fd as usize) < (SOCKET_FD_BASE as usize + MAX_SOCKETS)
+}
+
+fn slot_of(fd: i32) -> Option<usize> {
+    if !is_socket_fd(fd) { return None; }
+    Some((fd - SOCKET_FD_BASE) as usize)
+}
+
+fn alloc_slot() -> Option<usize> {
+    lock();
+    let mut out = None;
+    unsafe {
+        for i in 0..MAX_SOCKETS {
+            if !SOCKET_TABLE[i].in_use {
+                SOCKET_TABLE[i] = SocketState::empty();
+                SOCKET_TABLE[i].in_use = true;
+                out = Some(i);
+                break;
+            }
+        }
+    }
+    unlock();
+    out
+}
+
+fn free_slot(i: usize) {
+    lock();
+    unsafe {
+        if i < MAX_SOCKETS {
+            SOCKET_TABLE[i] = SocketState::empty();
+        }
+    }
+    unlock();
+}
+
+/// Borrow a socket slot by fd. Returns EBADF/ENOTSOCK if not ours.
+fn with_slot<F, R>(fd: i32, f: F) -> Result<R, i64>
+where F: FnOnce(&mut SocketState) -> Result<R, i64>,
+{
+    let idx = slot_of(fd).ok_or(ENOTSOCK)?;
+    unsafe {
+        if !SOCKET_TABLE[idx].in_use { return Err(EBADF); }
+        f(&mut SOCKET_TABLE[idx])
+    }
+}
+
+/// Public read-only view of a socket — used by future epoll wiring.
+pub fn peek(fd: i32) -> Option<SocketState> {
+    let idx = slot_of(fd)?;
+    unsafe {
+        if !SOCKET_TABLE[idx].in_use { return None; }
+        Some(SOCKET_TABLE[idx])
+    }
+}
+
+// ============================================================================
+// Pointer-safety helpers
+// ============================================================================
+
+fn read_sockaddr(addr: *const SockaddrIn, len: u32) -> Result<(u32, u16, u16), i64> {
+    if addr.is_null() { return Err(EFAULT); }
+    if (len as usize) < core::mem::size_of::<SockaddrIn>() { return Err(EINVAL); }
+    // SAFETY: caller-provided pointer; we have no MMU guest-check yet. This
+    // is the same trust boundary every other syscall in batcave/linux uses.
+    // TODO: validate via syscall::verify_user_ptr() once that helper lands.
+    let sa = unsafe { core::ptr::read_unaligned(addr) };
+    Ok((ntohl(sa.sin_addr), ntohs(sa.sin_port), sa.sin_family))
+}
+
+fn write_sockaddr(addr: *mut SockaddrIn, len: *mut u32, ip_host: u32, port_host: u16) -> Result<(), i64> {
+    if addr.is_null() || len.is_null() { return Err(EFAULT); }
+    let available = unsafe { core::ptr::read_unaligned(len) };
+    if (available as usize) < core::mem::size_of::<SockaddrIn>() {
+        // Linux truncates; we mimic by writing what fits, but flag EINVAL for now.
+        return Err(EINVAL);
+    }
+    let sa = SockaddrIn {
+        sin_family: AF_INET as u16,
+        sin_port:   htons(port_host),
+        sin_addr:   htonl(ip_host),
+        sin_zero:   [0; 8],
+    };
+    unsafe {
+        core::ptr::write_unaligned(addr, sa);
+        core::ptr::write_unaligned(len, SockaddrIn::SIZE);
+    }
+    Ok(())
+}
+
+// ============================================================================
+// Public API — BSD socket functions
+// ============================================================================
+
+/// socket(2)
+pub fn socket(domain: i32, sock_type: i32, protocol: i32) -> i64 {
+    // Only IPv4 for now. IPv6 and UNIX return EAFNOSUPPORT; Chromium falls back.
+    if domain != AF_INET {
+        return EAFNOSUPPORT;
+    }
+
+    let flags = sock_type & !SOCK_TYPE_MASK;
+    let base_type = sock_type & SOCK_TYPE_MASK;
+
+    let kind = match base_type {
+        SOCK_STREAM => {
+            if protocol != 0 && protocol != IPPROTO_TCP { return EPROTONOSUPPORT; }
+            SockKind::Tcp
+        }
+        SOCK_DGRAM => {
+            if protocol != 0 && protocol != IPPROTO_UDP { return EPROTONOSUPPORT; }
+            SockKind::Udp
+        }
+        _ => return EPROTONOSUPPORT,
+    };
+
+    let idx = match alloc_slot() {
+        Some(i) => i,
+        None => return EMFILE,
+    };
+
+    unsafe {
+        let s = &mut SOCKET_TABLE[idx];
+        s.kind = kind;
+        s.status = SockStatus::Unbound;
+        s.nonblock = (flags & SOCK_NONBLOCK) != 0;
+        s.cloexec  = (flags & SOCK_CLOEXEC)  != 0;
+    }
+
+    (SOCKET_FD_BASE + idx as i32) as i64
+}
+
+/// bind(2) — record local address/port. Our TCP stack picks ephemeral ports
+/// itself on connect(), so binding is advisory for outbound sockets.
+pub fn bind(fd: i32, addr: *const SockaddrIn, len: u32) -> i64 {
+    let (ip, port, family) = match read_sockaddr(addr, len) {
+        Ok(v) => v, Err(e) => return e,
+    };
+    if family != AF_INET as u16 { return EAFNOSUPPORT; }
+
+    match with_slot(fd, |s| {
+        if s.status != SockStatus::Unbound && s.status != SockStatus::Bound {
+            return Err(EINVAL);
+        }
+        s.local_addr = ip;
+        s.local_port = port;
+        s.status = SockStatus::Bound;
+        Ok(0i64)
+    }) {
+        Ok(r) => r, Err(e) => e,
+    }
+}
+
+/// listen(2) — inbound connections are NOT YET SUPPORTED by our TCP stack
+/// (it is client-only). We record the backlog and return success so that
+/// programs that listen-then-never-accept don't crash. accept4() will return
+/// EAGAIN forever.
+///
+/// TODO(tcp): add server-side listen queue in src/net/tcp.rs
+pub fn listen(fd: i32, backlog: i32) -> i64 {
+    match with_slot(fd, |s| {
+        if s.kind != SockKind::Tcp { return Err(EOPNOTSUPP); }
+        if s.status != SockStatus::Bound && s.status != SockStatus::Unbound {
+            return Err(EINVAL);
+        }
+        s.backlog = backlog.max(1);
+        s.status = SockStatus::Listening;
+        Ok(0i64)
+    }) {
+        Ok(r) => r, Err(e) => e,
+    }
+}
+
+/// accept4(2) — stubbed: we always return EAGAIN because our TCP stack
+/// cannot accept. Non-blocking epoll users will park; blocking users would
+/// spin forever (we avoid blocking by returning EAGAIN regardless).
+///
+/// TODO(tcp): real server-side accept.
+pub fn accept4(fd: i32, _addr: *mut SockaddrIn, _len: *mut u32, _flags: i32) -> i64 {
+    match with_slot(fd, |s| {
+        if s.kind != SockKind::Tcp { return Err(EOPNOTSUPP); }
+        if s.status != SockStatus::Listening { return Err(EINVAL); }
+        Ok(EAGAIN)
+    }) {
+        Ok(r) => r, Err(e) => e,
+    }
+}
+
+/// connect(2)
+///
+/// Blocking semantics: drives our global TCP stack through a SYN handshake
+/// (which internally polls with a timeout) and returns 0 on success.
+///
+/// Non-blocking semantics: we mark the socket Connecting and return
+/// EINPROGRESS, but currently tcp::connect() is synchronous so we *do*
+/// actually block for the handshake in both cases. This is a GAP.
+///
+/// TODO(tcp): non-blocking SYN — expose a tcp::connect_start() that returns
+/// immediately and a tcp::connect_poll() that returns Pending/Ok/Err.
+///
+/// CRITICAL GAP: src/net/tcp.rs holds a single global connection. Opening a
+/// second socket and connect()ing will clobber the first. This layer guards
+/// against that by refusing a second concurrent TCP connect.
+pub fn connect(fd: i32, addr: *const SockaddrIn, len: u32) -> i64 {
+    let (ip, port, family) = match read_sockaddr(addr, len) {
+        Ok(v) => v, Err(e) => return e,
+    };
+    if family != AF_INET as u16 { return EAFNOSUPPORT; }
+
+    // Snapshot & validate.
+    let (kind, status, nonblock) = match with_slot(fd, |s| {
+        Ok((s.kind, s.status, s.nonblock))
+    }) {
+        Ok(v) => v, Err(e) => return e,
+    };
+
+    match kind {
+        SockKind::Udp => {
+            // UDP connect just records the peer.
+            return match with_slot(fd, |s| {
+                s.peer_addr = ip;
+                s.peer_port = port;
+                s.status = SockStatus::Connected;
+                Ok(0i64)
+            }) { Ok(r) => r, Err(e) => e };
+        }
+        SockKind::Tcp => {}
+        _ => return EOPNOTSUPP,
+    }
+
+    if status == SockStatus::Connected { return EISCONN; }
+
+    // Refuse a second concurrent TCP connect — single global state today.
+    if global_tcp_in_use() {
+        return EADDRINUSE; // nearest errno; indicates "can't have two"
+    }
+
+    // Mark the socket as owning the global TCP slot.
+    let _ = with_slot(fd, |s| {
+        s.peer_addr = ip;
+        s.peer_port = port;
+        s.status = SockStatus::Connecting;
+        s.owns_global_tcp = true;
+        Ok(())
+    });
+
+    // Non-blocking caller: ideally we'd kick off SYN and return EINPROGRESS.
+    // Our tcp stack blocks — document the gap and fall through.
+    // TODO(tcp): true async connect.
+    if nonblock {
+        // Best-effort: synchronous handshake, report via so_error.
+        let r = crate::net::tcp::connect(ip, port);
+        return match r {
+            Ok(()) => {
+                let _ = with_slot(fd, |s| {
+                    s.status = SockStatus::Connected;
+                    Ok(())
+                });
+                // POSIX: nonblocking connect returns EINPROGRESS on the first
+                // call. Since we actually completed synchronously, return 0.
+                0
+            }
+            Err(_) => {
+                let _ = with_slot(fd, |s| {
+                    s.status = SockStatus::Error;
+                    s.so_error = -(ECONNREFUSED as i32);
+                    s.owns_global_tcp = false;
+                    Ok(())
+                });
+                ECONNREFUSED
+            }
+        };
+    }
+
+    // Blocking path.
+    match crate::net::tcp::connect(ip, port) {
+        Ok(()) => {
+            let _ = with_slot(fd, |s| {
+                s.status = SockStatus::Connected;
+                Ok(())
+            });
+            0
+        }
+        Err(_) => {
+            let _ = with_slot(fd, |s| {
+                s.status = SockStatus::Error;
+                s.so_error = -(ETIMEDOUT as i32);
+                s.owns_global_tcp = false;
+                Ok(())
+            });
+            ETIMEDOUT
+        }
+    }
+}
+
+/// Returns true if any socket currently owns the single global TCP connection
+/// inside src/net/tcp.rs.
+fn global_tcp_in_use() -> bool {
+    unsafe {
+        for i in 0..MAX_SOCKETS {
+            if SOCKET_TABLE[i].in_use && SOCKET_TABLE[i].owns_global_tcp {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// sendto(2) — for connected TCP, dest_addr is ignored.
+pub fn sendto(fd: i32, buf: *const u8, len: usize, _flags: i32,
+              dest_addr: *const SockaddrIn, addrlen: u32) -> i64 {
+    if buf.is_null() && len > 0 { return EFAULT; }
+
+    let (kind, status, nonblock, peer_ip, peer_port) = match with_slot(fd, |s| {
+        Ok((s.kind, s.status, s.nonblock, s.peer_addr, s.peer_port))
+    }) { Ok(v) => v, Err(e) => return e };
+
+    // SAFETY: trust boundary as above.
+    let data = unsafe { core::slice::from_raw_parts(buf, len) };
+
+    match kind {
+        SockKind::Tcp => {
+            if status != SockStatus::Connected { return ENOTCONN; }
+            // TODO(tcp): tcp::send_data() blocks on the NIC queue. If the
+            // queue is full and we're nonblocking, we should return EAGAIN.
+            // The current API doesn't expose queue state — assume writable.
+            let _ = nonblock;
+            match crate::net::tcp::send_data(data) {
+                Ok(()) => len as i64,
+                Err(_) => ECONNRESET,
+            }
+        }
+        SockKind::Udp => {
+            // Use dest_addr if provided, else connected peer.
+            let (dst_ip, dst_port) = if !dest_addr.is_null() && addrlen >= SockaddrIn::SIZE {
+                match read_sockaddr(dest_addr, addrlen) {
+                    Ok((ip, p, fam)) => {
+                        if fam != AF_INET as u16 { return EAFNOSUPPORT; }
+                        (ip, p)
+                    }
+                    Err(e) => return e,
+                }
+            } else {
+                if peer_ip == 0 { return ENOTCONN; }
+                (peer_ip, peer_port)
+            };
+            // Ephemeral source port: reuse local_port or fabricate.
+            let src_port = {
+                let lp = with_slot(fd, |s| Ok(s.local_port)).unwrap_or(0);
+                if lp != 0 { lp } else { 49152 }
+            };
+            match crate::net::udp::send(dst_ip, src_port, dst_port, data) {
+                Ok(()) => len as i64,
+                Err(_) => ENETUNREACH,
+            }
+        }
+        _ => EOPNOTSUPP,
+    }
+}
+
+/// recvfrom(2)
+pub fn recvfrom(fd: i32, buf: *mut u8, len: usize, _flags: i32,
+                src_addr: *mut SockaddrIn, addrlen: *mut u32) -> i64 {
+    if buf.is_null() && len > 0 { return EFAULT; }
+
+    let (kind, status, nonblock, peer_ip, peer_port) = match with_slot(fd, |s| {
+        Ok((s.kind, s.status, s.nonblock, s.peer_addr, s.peer_port))
+    }) { Ok(v) => v, Err(e) => return e };
+
+    match kind {
+        SockKind::Tcp => {
+            if status != SockStatus::Connected { return ENOTCONN; }
+
+            // Nonblocking: use the peek-shaped data_ready() probe.
+            if nonblock && !crate::net::tcp::data_ready() {
+                return EAGAIN;
+            }
+
+            // SAFETY: trust boundary.
+            let out = unsafe { core::slice::from_raw_parts_mut(buf, len) };
+            match crate::net::tcp::recv_data(out) {
+                Ok(n) => {
+                    if !src_addr.is_null() && !addrlen.is_null() {
+                        let _ = write_sockaddr(src_addr, addrlen, peer_ip, peer_port);
+                    }
+                    n as i64
+                }
+                Err(_) => {
+                    // Timeout path in our tcp stack: surface as EAGAIN for
+                    // nonblocking callers and as 0 (EOF) for blocking, which
+                    // is an approximation of a dead connection.
+                    if nonblock { EAGAIN } else { 0 }
+                }
+            }
+        }
+        SockKind::Udp => {
+            // TODO(udp): no per-socket receive queue. src/net/udp.rs dumps
+            // inbound into a syscall-layer ring (UDP_RX_BUF). Wiring that
+            // here requires plumbing we don't have yet.
+            let _ = peer_ip; let _ = peer_port;
+            EAGAIN
+        }
+        _ => EOPNOTSUPP,
+    }
+}
+
+/// sendmsg(2) — iterates iovecs and calls sendto() per-vec.
+pub fn sendmsg(fd: i32, msg: *const Msghdr, flags: i32) -> i64 {
+    if msg.is_null() { return EFAULT; }
+    let m = unsafe { &*msg };
+    if m.msg_iov.is_null() && m.msg_iovlen > 0 { return EFAULT; }
+
+    let dest = m.msg_name as *const SockaddrIn;
+    let dlen = m.msg_namelen;
+
+    let iovs = unsafe { core::slice::from_raw_parts(m.msg_iov, m.msg_iovlen) };
+    let mut total: i64 = 0;
+    for iv in iovs {
+        if iv.iov_len == 0 { continue; }
+        if iv.iov_base.is_null() { return EFAULT; }
+        let r = sendto(fd, iv.iov_base, iv.iov_len, flags, dest, dlen);
+        if r < 0 {
+            return if total > 0 { total } else { r };
+        }
+        total += r;
+        if (r as usize) < iv.iov_len { break; } // short write
+    }
+    total
+}
+
+/// recvmsg(2) — fills iovecs sequentially from a single recvfrom() call.
+/// (True gather-recv would need peek+partition; TCP is a byte stream so
+/// sequential fill is fine.)
+pub fn recvmsg(fd: i32, msg: *mut Msghdr, flags: i32) -> i64 {
+    if msg.is_null() { return EFAULT; }
+    let m = unsafe { &mut *msg };
+    if m.msg_iov.is_null() && m.msg_iovlen > 0 { return EFAULT; }
+
+    let name = m.msg_name as *mut SockaddrIn;
+    let namelen_ptr: *mut u32 = &mut m.msg_namelen;
+
+    let iovs = unsafe { core::slice::from_raw_parts_mut(m.msg_iov, m.msg_iovlen) };
+    let mut total: i64 = 0;
+    for iv in iovs.iter_mut() {
+        if iv.iov_len == 0 { continue; }
+        if iv.iov_base.is_null() { return EFAULT; }
+        let r = recvfrom(fd, iv.iov_base, iv.iov_len, flags, name, namelen_ptr);
+        if r < 0 {
+            return if total > 0 { total } else { r };
+        }
+        if r == 0 { break; } // EOF
+        total += r;
+        if (r as usize) < iv.iov_len { break; }
+    }
+    m.msg_flags = 0;
+    m.msg_controllen = 0;
+    total
+}
+
+// ============================================================================
+// getsockopt / setsockopt
+// ============================================================================
+
+fn write_int_opt(optval: *mut u8, optlen: *mut u32, value: i32) -> i64 {
+    if optval.is_null() || optlen.is_null() { return EFAULT; }
+    let avail = unsafe { core::ptr::read_unaligned(optlen) };
+    if (avail as usize) < 4 { return EINVAL; }
+    unsafe {
+        core::ptr::write_unaligned(optval as *mut i32, value);
+        core::ptr::write_unaligned(optlen, 4);
+    }
+    0
+}
+
+fn read_int_opt(optval: *const u8, optlen: u32) -> Result<i32, i64> {
+    if optval.is_null() { return Err(EFAULT); }
+    if (optlen as usize) < 4 { return Err(EINVAL); }
+    Ok(unsafe { core::ptr::read_unaligned(optval as *const i32) })
+}
+
+pub fn getsockopt(fd: i32, level: i32, optname: i32,
+                  optval: *mut u8, optlen: *mut u32) -> i64 {
+    let s = match peek(fd) { Some(s) => s, None => return EBADF };
+
+    let value: i32 = match (level, optname) {
+        (SOL_SOCKET, SO_TYPE) => match s.kind {
+            SockKind::Tcp => SOCK_STREAM,
+            SockKind::Udp => SOCK_DGRAM,
+            _ => 0,
+        },
+        (SOL_SOCKET, SO_ERROR) => {
+            let e = s.so_error;
+            // Consume the error (POSIX: getsockopt SO_ERROR clears it).
+            let _ = with_slot(fd, |x| { x.so_error = 0; Ok(()) });
+            e
+        }
+        (SOL_SOCKET, SO_REUSEADDR) => s.opt_reuseaddr as i32,
+        (SOL_SOCKET, SO_REUSEPORT) => s.opt_reuseport as i32,
+        (SOL_SOCKET, SO_KEEPALIVE) => s.opt_keepalive as i32,
+        (SOL_SOCKET, SO_BROADCAST) => s.opt_broadcast as i32,
+        (SOL_SOCKET, SO_SNDBUF)    => s.opt_sndbuf,
+        (SOL_SOCKET, SO_RCVBUF)    => s.opt_rcvbuf,
+        (l, TCP_NODELAY) if l == IPPROTO_TCP => s.opt_tcp_nodelay as i32,
+        (l, IP_TOS) if l == IPPROTO_IP => s.opt_ip_tos,
+        (l, IP_TTL) if l == IPPROTO_IP => s.opt_ip_ttl,
+        _ => return EINVAL, // Chromium usually ignores return code; that's fine.
+    };
+
+    write_int_opt(optval, optlen, value)
+}
+
+pub fn setsockopt(fd: i32, level: i32, optname: i32,
+                  optval: *const u8, optlen: u32) -> i64 {
+    let v = match read_int_opt(optval, optlen) {
+        Ok(v) => v, Err(e) => return e,
+    };
+
+    match with_slot(fd, |s| {
+        match (level, optname) {
+            (SOL_SOCKET, SO_REUSEADDR) => s.opt_reuseaddr = v != 0,
+            (SOL_SOCKET, SO_REUSEPORT) => s.opt_reuseport = v != 0,
+            (SOL_SOCKET, SO_KEEPALIVE) => s.opt_keepalive = v != 0,
+            (SOL_SOCKET, SO_BROADCAST) => s.opt_broadcast = v != 0,
+            (SOL_SOCKET, SO_SNDBUF)    => s.opt_sndbuf = v.max(1024),
+            (SOL_SOCKET, SO_RCVBUF)    => s.opt_rcvbuf = v.max(1024),
+            (SOL_SOCKET, SO_RCVTIMEO)  |
+            (SOL_SOCKET, SO_SNDTIMEO)  => { /* stub: ignore */ }
+            (SOL_SOCKET, SO_LINGER)    => {
+                // struct linger = { on, sec }; we only read the first int.
+                s.opt_linger_on = v != 0;
+            }
+            (l, TCP_NODELAY) if l == IPPROTO_TCP => s.opt_tcp_nodelay = v != 0,
+            (l, IP_TOS) if l == IPPROTO_IP => s.opt_ip_tos = v,
+            (l, IP_TTL) if l == IPPROTO_IP => s.opt_ip_ttl = v,
+            _ => {
+                // Unknown options: tolerate silently — Chromium probes many.
+            }
+        }
+        Ok(0i64)
+    }) { Ok(r) => r, Err(e) => e }
+}
+
+// ============================================================================
+// getsockname / getpeername / shutdown / close
+// ============================================================================
+
+pub fn getsockname(fd: i32, addr: *mut SockaddrIn, len: *mut u32) -> i64 {
+    let s = match peek(fd) { Some(s) => s, None => return EBADF };
+    match write_sockaddr(addr, len, s.local_addr, s.local_port) {
+        Ok(()) => 0, Err(e) => e,
+    }
+}
+
+pub fn getpeername(fd: i32, addr: *mut SockaddrIn, len: *mut u32) -> i64 {
+    let s = match peek(fd) { Some(s) => s, None => return EBADF };
+    if s.status != SockStatus::Connected { return ENOTCONN; }
+    match write_sockaddr(addr, len, s.peer_addr, s.peer_port) {
+        Ok(()) => 0, Err(e) => e,
+    }
+}
+
+/// shutdown(2) — SHUT_RD is advisory (we can't half-close our TCP stack),
+/// SHUT_WR and SHUT_RDWR trigger a FIN via tcp::close() if this socket owns
+/// the global connection.
+///
+/// TODO(tcp): real half-close semantics in src/net/tcp.rs.
+pub fn shutdown(fd: i32, how: i32) -> i64 {
+    match with_slot(fd, |s| {
+        if s.kind != SockKind::Tcp { return Err(EOPNOTSUPP); }
+        if s.status != SockStatus::Connected { return Err(ENOTCONN); }
+        match how {
+            SHUT_RD => { /* advisory */ }
+            SHUT_WR | SHUT_RDWR => {
+                if s.owns_global_tcp {
+                    crate::net::tcp::close();
+                    s.owns_global_tcp = false;
+                }
+                s.status = SockStatus::Closed;
+            }
+            _ => return Err(EINVAL),
+        }
+        Ok(0i64)
+    }) { Ok(r) => r, Err(e) => e }
+}
+
+/// close(2) entry for socket fds — called by the syscall dispatcher once it
+/// detects a socket-range fd. Releases the slot and tears down TCP if owned.
+pub fn close(fd: i32) -> i64 {
+    let idx = match slot_of(fd) { Some(i) => i, None => return EBADF };
+    unsafe {
+        if !SOCKET_TABLE[idx].in_use { return EBADF; }
+        if SOCKET_TABLE[idx].kind == SockKind::Tcp
+            && SOCKET_TABLE[idx].owns_global_tcp
+            && SOCKET_TABLE[idx].status == SockStatus::Connected
+        {
+            crate::net::tcp::close();
+        }
+    }
+    free_slot(idx);
+    0
+}
+
+// ============================================================================
+// Helpers exposed for future epoll integration
+// ============================================================================
+
+/// Is there pending readable data? Used by epoll/poll.
+pub fn readable(fd: i32) -> bool {
+    let s = match peek(fd) { Some(s) => s, None => return false };
+    match s.kind {
+        SockKind::Tcp => s.status == SockStatus::Connected
+            && crate::net::tcp::data_ready(),
+        _ => false,
+    }
+}
+
+/// Is the socket writable? Our TCP stack is always "writable" today.
+pub fn writable(fd: i32) -> bool {
+    let s = match peek(fd) { Some(s) => s, None => return false };
+    s.status == SockStatus::Connected
+}
+
+/// Reset all socket slots — called from process teardown.
+pub fn reset() {
+    lock();
+    unsafe {
+        for i in 0..MAX_SOCKETS {
+            SOCKET_TABLE[i] = SocketState::empty();
+        }
+    }
+    unlock();
+}
