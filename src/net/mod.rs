@@ -8,6 +8,7 @@ pub mod ip;
 pub mod tcp;
 pub mod tls;
 pub mod tls_pinning;
+pub mod x509;
 pub mod tor;
 pub mod udp;
 pub mod vpn;

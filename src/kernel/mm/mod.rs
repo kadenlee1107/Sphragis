@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 pub mod frame;
+pub mod heap;
 pub mod initrd;
 pub mod page_table;
 
@@ -12,6 +13,11 @@ unsafe extern "C" {
 const MEMORY_END: usize = 0x4000_0000 + 2 * 1024 * 1024 * 1024; // RAM base + 2GB (Chromium host)
 
 pub fn init() {
+    // V4: init the kernel heap FIRST so subsequent subsystems can use
+    // Box/Vec/String. Heap lives at 0x48000000..+4MB in the kernel-data
+    // region which the page tables mark NX + EL1 RW.
+    heap::init();
+
     // Detect and record any baked Chromium blob BEFORE we hand the
     // region past `__kernel_end` to the frame allocator, so the
     // allocator can skip over the blob's footprint.

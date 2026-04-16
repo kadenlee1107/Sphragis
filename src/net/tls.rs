@@ -101,6 +101,11 @@ pub struct TlsSession {
     // against it without having to thread the hostname back through the API.
     expected_hostname: [u8; 256],
     expected_hostname_len: usize,
+    // V4: peer's cert SubjectPublicKeyInfo (DER) and its algorithm, used
+    // to verify the TLS 1.3 CertificateVerify signature.
+    peer_spki: [u8; 512],
+    peer_spki_len: usize,
+    peer_pubkey_alg: u8,
 }
 
 // ATTACK-NET-034: one TLS session per TCP PCB instead of a single global.
@@ -129,6 +134,9 @@ const EMPTY_TLS_SESSION: TlsSession = TlsSession {
     leftover_len: 0,
     expected_hostname: [0; 256],
     expected_hostname_len: 0,
+    peer_spki: [0; 512],
+    peer_spki_len: 0,
+    peer_pubkey_alg: 0,
 };
 
 static mut TLS_STATES: [TlsSession; TLS_MAX_PCBS] =
@@ -627,7 +635,6 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                         // Parse: 1-byte ctx length + ctx + 3-byte certs_len
                         // + entries. First entry = leaf cert (3-byte len +
                         // cert DER + 2-byte exts_len + exts).
-                        // Pin-check the leaf against tls_pinning::PINS.
                         let body = &decrypted[hp + 4 .. hp + 4 + msg_len];
                         if body.len() < 4 {
                             return Err("TLS: Certificate body too short");
@@ -641,28 +648,99 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                         if after_ctx + 3 + certs_len > body.len() {
                             return Err("TLS: bad certs_len");
                         }
-                        let entries_start = after_ctx + 3;
-                        if entries_start + 3 > body.len() { return Err("TLS: bad cert entry"); }
-                        let leaf_len = ((body[entries_start] as usize) << 16)
-                                     | ((body[entries_start + 1] as usize) << 8)
-                                     |  (body[entries_start + 2] as usize);
-                        let leaf_start = entries_start + 3;
-                        if leaf_start + leaf_len > body.len() {
-                            return Err("TLS: leaf cert truncated");
+
+                        // V4: collect every cert in the chain (leaf first)
+                        // into a Vec of DER slices, run full validation.
+                        use alloc::vec::Vec;
+                        let mut certs: Vec<&[u8]> = Vec::new();
+                        let mut p = after_ctx + 3;
+                        let end = after_ctx + 3 + certs_len;
+                        while p + 3 <= end {
+                            let clen = ((body[p] as usize) << 16)
+                                    | ((body[p + 1] as usize) << 8)
+                                    |  (body[p + 2] as usize);
+                            p += 3;
+                            if p + clen > end { return Err("TLS: cert entry truncated"); }
+                            certs.push(&body[p..p + clen]);
+                            p += clen;
+                            // Skip 2-byte extensions length + extensions.
+                            if p + 2 > end { break; }
+                            let ext_len = ((body[p] as usize) << 8) | body[p + 1] as usize;
+                            p += 2 + ext_len;
                         }
-                        let leaf = &body[leaf_start..leaf_start + leaf_len];
+                        if certs.is_empty() {
+                            return Err("TLS: no certs in Certificate message");
+                        }
+
                         let host = &sess.expected_hostname[..sess.expected_hostname_len];
-                        match crate::net::tls_pinning::check_cert(host, leaf) {
-                            crate::net::tls_pinning::PinDecision::Match => {}
-                            crate::net::tls_pinning::PinDecision::Mismatch => {
-                                return Err("TLS: cert pin mismatch (MITM?)");
+                        let leaf = certs[0];
+                        let intermediates: Vec<&[u8]> = certs[1..].iter().copied().collect();
+                        match crate::net::x509::verify_chain(leaf, &intermediates, host) {
+                            crate::net::x509::VerifyOutcome::Ok { pubkey_der, pubkey_algorithm } => {
+                                sess.peer_spki_len = pubkey_der.len().min(sess.peer_spki.len());
+                                sess.peer_spki[..sess.peer_spki_len]
+                                    .copy_from_slice(&pubkey_der[..sess.peer_spki_len]);
+                                sess.peer_pubkey_alg = pubkey_algorithm as u8;
+                                uart::puts("[tls] cert chain ok (x509)\n");
                             }
-                            crate::net::tls_pinning::PinDecision::NoPin => {
-                                if crate::net::tls_pinning::STRICT_MODE {
-                                    uart::puts("[tls] STRICT mode: no pin for host — aborting\n");
-                                    return Err("TLS: no pin for host (strict)");
-                                } else {
-                                    uart::puts("[tls] WARN: no cert pin for host\n");
+                            crate::net::x509::VerifyOutcome::Err(e) => {
+                                let _ = e;
+                                // Fall back to pin-only defence if chain
+                                // fails for a reason the operator might
+                                // intentionally accept (empty trust store
+                                // in dev is Ok'd by verify_chain itself).
+                                uart::puts("[tls] x509 verify failed — falling to pin check\n");
+                                match crate::net::tls_pinning::check_cert(host, leaf) {
+                                    crate::net::tls_pinning::PinDecision::Match => {}
+                                    crate::net::tls_pinning::PinDecision::Mismatch => {
+                                        return Err("TLS: cert pin mismatch (MITM?)");
+                                    }
+                                    crate::net::tls_pinning::PinDecision::NoPin => {
+                                        if crate::net::tls_pinning::STRICT_MODE {
+                                            return Err("TLS: no pin / bad chain (strict)");
+                                        } else {
+                                            uart::puts("[tls] WARN: cert unverified\n");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if msg_type == 0x0f {
+                        // CertificateVerify (RFC 8446 §4.4.3).
+                        // Body layout: 2B SignatureScheme + 2B length + sig.
+                        let body = &decrypted[hp + 4 .. hp + 4 + msg_len];
+                        if body.len() < 4 {
+                            return Err("TLS: CertificateVerify too short");
+                        }
+                        let scheme = ((body[0] as u16) << 8) | body[1] as u16;
+                        let sig_len = ((body[2] as usize) << 8) | body[3] as usize;
+                        if body.len() < 4 + sig_len {
+                            return Err("TLS: CertificateVerify truncated");
+                        }
+                        let sig_bytes = &body[4..4 + sig_len];
+                        // Transcript hash covers ClientHello..Certificate.
+                        let th = transcript.clone().finalize();
+                        if sess.peer_spki_len == 0 {
+                            uart::puts("[tls] CertificateVerify without SPKI — skipping\n");
+                        } else {
+                            use crate::net::x509::PubkeyAlg;
+                            let alg = match sess.peer_pubkey_alg {
+                                x if x == PubkeyAlg::EcdsaP256 as u8 => PubkeyAlg::EcdsaP256,
+                                x if x == PubkeyAlg::EcdsaP384 as u8 => PubkeyAlg::EcdsaP384,
+                                x if x == PubkeyAlg::Rsa as u8 => PubkeyAlg::Rsa,
+                                x if x == PubkeyAlg::Ed25519 as u8 => PubkeyAlg::Ed25519,
+                                _ => PubkeyAlg::Unknown,
+                            };
+                            let spki = &sess.peer_spki[..sess.peer_spki_len];
+                            match crate::net::x509::tls13_verify_cert_verify(
+                                alg, spki, sig_bytes, &th, scheme,
+                            ) {
+                                Ok(()) => uart::puts("[tls] CertificateVerify ok\n"),
+                                Err(_) => {
+                                    uart::puts("[tls] CertificateVerify FAILED — aborting\n");
+                                    return Err("TLS: CertificateVerify failed");
                                 }
                             }
                         }
