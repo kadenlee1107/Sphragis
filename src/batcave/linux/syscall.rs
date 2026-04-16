@@ -314,6 +314,8 @@ fn sys_stub_enoent(_args: [u64; 6]) -> i64 { ENOENT }
 fn sys_nanosleep(args: [u64; 6]) -> i64 {
     let req_ptr = args[0] as usize;
     if req_ptr == 0 { return EINVAL; }
+    // Pointer-to-kernel guard must come BEFORE the raw asm read below.
+    if !is_user_ptr(req_ptr, 16) { return EFAULT; }
 
     // Read struct timespec { tv_sec: i64, tv_nsec: i64 }
     let tv_sec: u64;
@@ -534,6 +536,9 @@ fn sys_write(args: [u64; 6]) -> i64 {
     let buf = args[1] as usize;
     let count = args[2] as usize;
 
+    // Reject pointer-to-kernel attacks before any dereference.
+    if count > 0 && !is_user_ptr(buf, count) { return EFAULT; }
+
     // Pipe write
     unsafe {
         let pipe_wr = core::ptr::read_volatile(core::ptr::addr_of!(PIPE_WRITE_FD));
@@ -613,6 +618,9 @@ fn sys_read(args: [u64; 6]) -> i64 {
     let fd_num = args[0] as u32;
     let buf = args[1] as usize;
     let count = args[2] as usize;
+
+    // Reject pointer-to-kernel attacks before any dereference.
+    if count > 0 && !is_user_ptr(buf, count) { return EFAULT; }
 
     // stdin (0) — read from UART, BLOCKING
     if fd_num == 0 {
@@ -1368,6 +1376,8 @@ fn sys_sendto(args: [u64; 6]) -> i64 {
     let _dest_len = args[5] as usize;
 
     if buf == 0 || len == 0 { return 0; }
+    if !is_user_ptr(buf, len) { return EFAULT; }
+    if dest_ptr != 0 && !is_user_ptr(dest_ptr, 16) { return EFAULT; }
 
     // Check if this is a socket fd
     if let Some(entry) = fd::get(fd_num) {
@@ -1435,6 +1445,7 @@ fn sys_recvfrom(args: [u64; 6]) -> i64 {
     let len = args[2] as usize;
 
     if buf == 0 || len == 0 { return 0; }
+    if !is_user_ptr(buf, len) { return EFAULT; }
 
     if let Some(entry) = fd::get(fd_num) {
         let node = vfs::get_node(entry.node_idx);
@@ -1654,6 +1665,14 @@ fn sys_writev(args: [u64; 6]) -> i64 {
     let fd_num = args[0] as u32;
     let iov_ptr = args[1] as usize;
     let iovcnt = args[2] as usize;
+
+    // Each iovec is 16 bytes (ptr + len). Cap iovcnt at a sane limit
+    // and verify the whole array is in user space before we read any
+    // iov_base / iov_len (TOCTOU still possible if sibling threads
+    // rewrite after check — tightened by R1/R2 eventually).
+    if iovcnt > 1024 { return EINVAL; }
+    let array_bytes = iovcnt.saturating_mul(16);
+    if iovcnt > 0 && !is_user_ptr(iov_ptr, array_bytes) { return EFAULT; }
 
     // Check if redirected
     let mut is_uart = fd_num == 1 || fd_num == 2;
@@ -2402,6 +2421,7 @@ fn sys_wait_stub(args: [u64; 6]) -> i64 {
 fn sys_clock_gettime(args: [u64; 6]) -> i64 {
     let buf = args[1] as usize;
     if buf == 0 { return EINVAL; }
+    if !is_user_ptr(buf, 16) { return EFAULT; }
 
     let count: u64;
     let freq: u64;
@@ -2422,6 +2442,8 @@ fn sys_clock_gettime(args: [u64; 6]) -> i64 {
 fn sys_getrandom(args: [u64; 6]) -> i64 {
     let buf = args[0] as usize;
     let len = args[1] as usize;
+
+    if len > 0 && !is_user_ptr(buf, len) { return EFAULT; }
 
     for i in 0..len {
         let val: u64;
@@ -2536,6 +2558,8 @@ fn sys_getdents64(args: [u64; 6]) -> i64 {
     let buf = args[1] as usize;
     let buf_size = args[2] as usize;
 
+    if buf_size > 0 && !is_user_ptr(buf, buf_size) { return EFAULT; }
+
     if !vfs::is_ready() { return 0; }
 
     let entry = match fd::get(fd_num) {
@@ -2628,6 +2652,7 @@ fn sys_chdir(args: [u64; 6]) -> i64 {
 fn sys_pipe2(args: [u64; 6]) -> i64 {
     let fds_ptr = args[0] as usize;
     if fds_ptr == 0 { return EINVAL; }
+    if !is_user_ptr(fds_ptr, 8) { return EFAULT; }
 
     // Reset pipe buffer
     unsafe {
@@ -2742,6 +2767,14 @@ fn sys_epoll_ctl(args: [u64; 6]) -> i64 {
     )
 }
 fn sys_epoll_pwait(args: [u64; 6]) -> i64 {
+    // maxevents × 16 bytes per epoll_event must fit in user memory.
+    let events = args[1] as usize;
+    let maxevents = args[2] as i32;
+    if maxevents > 0 {
+        let bytes = (maxevents as usize).saturating_mul(16);
+        if !is_user_ptr(events, bytes) { return EFAULT; }
+    }
+
     super::epoll::epoll_pwait(
         args[0] as i32,
         args[1] as *mut super::epoll::EpollEvent,
