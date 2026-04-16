@@ -75,6 +75,12 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     drivers::uart::puts("  Security: Zero dependencies. Zero trust.\n");
     drivers::uart::puts("================================================\n\n");
 
+    // ATTACK-CRYPTO-006 partial: log a SHA-256 of the kernel .text so the
+    // operator can verify the booted image out-of-band. Not a signature
+    // yet — evil-maid swap still succeeds cold — but at least a
+    // tampered kernel produces a different hash.
+    print_kernel_hash();
+
     // Initialize kernel
     drivers::uart::puts("[boot] Initializing kernel...\n");
     kernel::mm::init();
@@ -167,6 +173,32 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
             serial_shell();
         }
     }
+}
+
+/// Compute + log SHA-256 of the kernel .text section at boot. Allows the
+/// operator to verify out-of-band that the running image matches the
+/// one they built. No blocking — this is measurement, not enforcement.
+fn print_kernel_hash() {
+    unsafe extern "C" {
+        static __text_end: u8;
+    }
+    let text_start: usize = 0x40080000;
+    let text_end = core::ptr::addr_of!(__text_end) as usize;
+    if text_end <= text_start || text_end - text_start > 32 * 1024 * 1024 {
+        drivers::uart::puts("[boot] kernel hash: skipped (implausible range)\n");
+        return;
+    }
+    let bytes = unsafe {
+        core::slice::from_raw_parts(text_start as *const u8, text_end - text_start)
+    };
+    let h = crypto::sha256::hash(bytes);
+    drivers::uart::puts("[boot] kernel hash: ");
+    let hex = b"0123456789abcdef";
+    for b in h.iter() {
+        drivers::uart::putc(hex[(*b >> 4) as usize]);
+        drivers::uart::putc(hex[(*b & 0xf) as usize]);
+    }
+    drivers::uart::puts("\n");
 }
 
 /// Fallback shell for headless mode (serial only).
