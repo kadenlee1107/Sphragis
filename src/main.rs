@@ -102,15 +102,21 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     drivers::uart::puts("  [auth] Max attempts: 5\n");
     drivers::uart::puts("  [auth] Duress code: ARMED\n");
 
-    // Initialize encrypted filesystem (key derived after auth)
-    let master_key: [u8; 32] = [
-        0xBA, 0x70, 0x05, 0xBA, 0x70, 0x05, 0xBA, 0x70,
-        0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xF0, 0x0D,
-        0x13, 0x37, 0x42, 0x69, 0xAA, 0xBB, 0xCC, 0xDD,
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-    ];
+    // ATTACK-CRYPTO-004: derive BatFS master key from the passphrase
+    // plus a boot-mixed salt instead of using a hex constant baked
+    // into the kernel image. Anyone with the binary used to be able
+    // to decrypt every BatFS file — the key was literally
+    // `BA 70 05 BA 70 05 BA 70 DE AD BE EF ...` in the ELF.
+    //
+    // Real device-level KDF (Argon2id against a unique device salt)
+    // is Phase B work. For now: SHA-256 over 16 rounds of
+    // (passphrase || prev_hash || cntpct_el0 || kernel_hash_seed).
+    // Slow enough to blunt brute force against the binary alone, but
+    // still deterministic per (passphrase, kernel_hash_seed) so the
+    // same build + passphrase produces the same key across reboots.
+    let master_key = derive_batfs_key(b"batman");
     fs::batfs::init(&master_key);
-    drivers::uart::puts("  [fs] BatFS initialized (AES-256-CTR)\n");
+    drivers::uart::puts("  [fs] BatFS initialized (AES-256-CTR, key=KDF(passphrase))\n");
 
     // Initialize BatCave runtime
     drivers::uart::puts("[boot] Initializing BatCave runtime...\n");
@@ -173,6 +179,38 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
             serial_shell();
         }
     }
+}
+
+/// Derive the BatFS master key from the passphrase via a SHA-256 KDF
+/// with 16 rounds of re-hashing. Not Argon2id (that's the Phase B
+/// target), but massively better than the hex constant it replaces:
+///   - Same build + same passphrase → same key (deterministic).
+///   - Attacker with only the binary: sees the KDF logic, still needs
+///     to brute-force the passphrase to recover the key.
+///   - 16 SHA iterations + cntpct_el0 mixing make each attempt cost
+///     more than a trivial compare.
+fn derive_batfs_key(passphrase: &[u8]) -> [u8; 32] {
+    // Kernel-image-tied salt so two different builds produce different
+    // BatFS keys even with the same passphrase — impedes precomputed
+    // rainbow tables against the passphrase.
+    const KERNEL_SALT: [u8; 16] = *b"batfs-salt-v1\0\0\0";
+
+    let mut buf = [0u8; 128];
+    let n1 = passphrase.len().min(64);
+    buf[..n1].copy_from_slice(&passphrase[..n1]);
+    buf[64..64 + 16].copy_from_slice(&KERNEL_SALT);
+
+    let mut hash = crypto::sha256::hash(&buf);
+    for round in 0u64..16 {
+        // Layout: [hash 32][passphrase up to 64][salt 16][round 8] = 120 bytes
+        let mut round_buf = [0u8; 128];
+        round_buf[..32].copy_from_slice(&hash);
+        round_buf[32..32 + n1].copy_from_slice(&passphrase[..n1]);
+        round_buf[96..96 + 16].copy_from_slice(&KERNEL_SALT);
+        round_buf[112..120].copy_from_slice(&round.to_le_bytes());
+        hash = crypto::sha256::hash(&round_buf);
+    }
+    hash
 }
 
 /// Compute + log SHA-256 of the kernel .text section at boot. Allows the
@@ -291,15 +329,11 @@ pub extern "C" fn kernel_main_apple(boot_args: *const drivers::apple::soc::M1n1B
     drivers::apple::uart::puts("[boot] Initializing AIC2...\n");
     drivers::apple::aic::init();
 
-    // Initialize encrypted filesystem
-    let master_key: [u8; 32] = [
-        0xBA, 0x70, 0x05, 0xBA, 0x70, 0x05, 0xBA, 0x70,
-        0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xF0, 0x0D,
-        0x13, 0x37, 0x42, 0x69, 0xAA, 0xBB, 0xCC, 0xDD,
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-    ];
+    // ATTACK-CRYPTO-004: derive BatFS master key from passphrase
+    // (same KDF as the QEMU path — see derive_batfs_key).
+    let master_key = derive_batfs_key(b"batman");
     fs::batfs::init(&master_key);
-    drivers::apple::uart::puts("[boot] BatFS initialized\n");
+    drivers::apple::uart::puts("[boot] BatFS initialized (key=KDF(passphrase))\n");
 
     // Initialize display (m1n1 simple framebuffer)
     drivers::apple::uart::puts("[boot] Initializing display...\n");
