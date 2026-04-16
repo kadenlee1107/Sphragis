@@ -88,7 +88,7 @@ pub fn parse(dtb_addr: usize) -> DtbInfo {
     let mut pos = struct_base;
     let mut current_node = [0u8; 64];
     let mut node_len = 0usize;
-    let mut depth = 0u32;
+    let mut _depth = 0u32;
 
     loop {
         let token = be32(pos);
@@ -109,7 +109,7 @@ pub fn parse(dtb_addr: usize) -> DtbInfo {
                 }
                 pos += 1; // skip null
                 pos = (pos + 3) & !3; // align to 4
-                depth += 1;
+                _depth += 1;
 
                 // Check if this is a virtio-mmio node
                 let name = unsafe { core::str::from_utf8_unchecked(&current_node[..node_len]) };
@@ -149,7 +149,7 @@ pub fn parse(dtb_addr: usize) -> DtbInfo {
                 pos += (val_len + 3) & !3;
             }
             FDT_END_NODE => {
-                depth -= 1;
+                _depth -= 1;
                 node_len = 0;
             }
             FDT_NOP => {}

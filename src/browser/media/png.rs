@@ -57,7 +57,7 @@ pub fn decode(data: &[u8], image: &mut PngImage) -> Result<(), &'static str> {
     let mut pos = 8;
     let mut width: u32 = 0;
     let mut height: u32 = 0;
-    let mut bit_depth: u8 = 0;
+    let mut _bit_depth: u8 = 0;
     let mut color_type: u8 = 0;
 
     // Collect all IDAT data
@@ -76,7 +76,7 @@ pub fn decode(data: &[u8], image: &mut PngImage) -> Result<(), &'static str> {
                 if chunk_data.len() >= 13 {
                     width = u32::from_be_bytes([chunk_data[0], chunk_data[1], chunk_data[2], chunk_data[3]]);
                     height = u32::from_be_bytes([chunk_data[4], chunk_data[5], chunk_data[6], chunk_data[7]]);
-                    bit_depth = chunk_data[8];
+                    _bit_depth = chunk_data[8];
                     color_type = chunk_data[9];
                 }
             }
@@ -425,7 +425,7 @@ fn build_huffman_table(lens: &[u8], count: usize) -> HuffmanTable {
 fn decode_huffman(reader: &mut BitReader, table: &HuffmanTable) -> Result<u32, &'static str> {
     let mut code = 0u32;
     let mut first = 0u32;
-    let mut index = 0u32;
+    let mut _index = 0u32;
 
     for len in 1..=MAX_BITS {
         code = (code << 1) | reader.read_bits(1)?;
@@ -437,7 +437,7 @@ fn decode_huffman(reader: &mut BitReader, table: &HuffmanTable) -> Result<u32, &
             }
         }
         first = (first + count) << 1;
-        index += count;
+        _index += count;
     }
 
     Err("invalid huffman code")

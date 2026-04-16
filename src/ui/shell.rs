@@ -1008,7 +1008,7 @@ fn cmd_run_elf(name: &str) {
             #[repr(align(16))]
             struct AlignedStack([u8; 65536]);
             static mut ELF_STACK: AlignedStack = AlignedStack([0u8; 65536]);
-            let sb = unsafe { core::ptr::addr_of_mut!(ELF_STACK) as usize }; // 16-byte aligned
+            let sb = core::ptr::addr_of_mut!(ELF_STACK) as usize; // 16-byte aligned
             let stack_base = Some(sb);
             if let Some(sb) = stack_base {
                 let sp = sb + 65536;

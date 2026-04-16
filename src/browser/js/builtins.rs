@@ -151,7 +151,7 @@ pub fn array_concat(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsVal
         vm.heap.array_set(result, i, v);
     }
     // Concat arguments
-    let mut idx = len;
+    let mut _idx = len;
     for a in 0..argc {
         let arg = vm.stack[args_start + a];
         if arg.is_object() {
@@ -161,13 +161,13 @@ pub fn array_concat(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsVal
                 for j in 0..alen {
                     let v = vm.heap.array_get(arg.as_obj(), j);
                     vm.heap.array_push(result, v);
-                    idx += 1;
+                    _idx += 1;
                 }
                 continue;
             }
         }
         vm.heap.array_push(result, arg);
-        idx += 1;
+        _idx += 1;
     }
     Ok(JsValue::from_obj(result))
 }

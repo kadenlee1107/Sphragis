@@ -1520,12 +1520,12 @@ fn json_parse_object(vm: &mut Vm, s: &[u8], pos: &mut usize) -> JsValue {
 fn json_parse_array(vm: &mut Vm, s: &[u8], pos: &mut usize) -> JsValue {
     *pos += 1; // skip [
     let arr = vm.heap.alloc_array(0);
-    let mut idx = 0u32;
+    let mut _idx = 0u32;
     json_skip_ws(s, pos);
     while *pos < s.len() && s[*pos] != b']' {
         let val = json_parse_value(vm, s, pos);
         vm.heap.array_push(arr, val);
-        idx += 1;
+        _idx += 1;
         json_skip_ws(s, pos);
         if *pos < s.len() && s[*pos] == b',' { *pos += 1; }
     }
