@@ -68,6 +68,16 @@ pub extern "C" fn handle_irq(_frame: *mut TrapFrame) {
     if ctl & 0b100 != 0 {
         reset_timer();
         crate::kernel::scheduler::tick();
+
+        // V4 preemption request: set a flag the syscall layer checks on
+        // entry / exit. Full trap-frame preemption via on_tick() would
+        // require TrapFrame and SavedRegs to be layout-identical
+        // (they're not today — SavedRegs has sp_el0 which TrapFrame
+        // lacks). So we do deferred preemption: the running thread
+        // yields at the next syscall boundary. Combined with the
+        // V3 scheduler yields inside long syscalls, this gives
+        // effective time-sharing.
+        crate::batcave::linux::threads::request_preempt();
     }
 }
 

@@ -1,0 +1,122 @@
+// Bat_OS — SHA-256-chained cryptographic random byte generator.
+//
+// Not a formal CSPRNG — we don't have an interrupt-timing entropy
+// pool yet — but dramatically better than reading `cntpct_el0`
+// directly:
+//
+//   seed  = 8 × cntpct_el0 reads with ~100-cycle spin between,
+//           mixed against the prior state of the chain
+//   out_i = SHA-256( seed || call_counter || pos_offset )
+//   state += out_i   (feedback so subsequent calls chain forward)
+//
+// Callers fill any number of bytes via `fill_bytes(&mut buf)`.
+//
+// This is the same core the `sys_getrandom` syscall uses, extracted
+// so kernel-side crypto (TLS X25519 keypair generation, TLS client
+// random, BatFS nonce derivation) can also use it instead of
+// reading `cntpct_el0` directly.
+
+#![allow(dead_code)]
+
+use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use super::sha256;
+
+static STATE_LO: AtomicU64 = AtomicU64::new(0);
+static STATE_HI: AtomicU64 = AtomicU64::new(0);
+static CTR:      AtomicU64 = AtomicU64::new(0);
+
+/// V4: prefer ARMv8.5 RNDR when the CPU exposes it. Probed once at boot;
+/// `true` means every subsequent `fill_bytes` call reads from RNDR and
+/// XORs into the SHA-chain output. RNDR failure (hardware entropy source
+/// temporarily empty) returns the SHA-chain bytes unmodified.
+static HAVE_RNDR: AtomicBool = AtomicBool::new(false);
+
+/// Read ID_AA64ISAR0_EL1 to probe for the RNDR feature (bits 63:60 = 1
+/// means FEAT_RNG present). Call once at early boot.
+pub fn probe_hw_rng() {
+    let isar0: u64;
+    unsafe { core::arch::asm!("mrs {}, id_aa64isar0_el1", out(reg) isar0); }
+    let rndr_field = (isar0 >> 60) & 0xF;
+    HAVE_RNDR.store(rndr_field != 0, Ordering::Release);
+}
+
+/// Try to read 8 bytes from RNDR. Returns None if unsupported or if the
+/// hardware entropy source is transiently unavailable (NZCV.C set).
+#[inline]
+fn rndr_u64() -> Option<u64> {
+    if !HAVE_RNDR.load(Ordering::Acquire) { return None; }
+    let v: u64;
+    let ok: u64;
+    unsafe {
+        core::arch::asm!(
+            "mrs {v}, s3_3_c2_c4_0",    // RNDR (ARMv8.5)
+            "cset {ok}, ne",             // NZCV.Z clear ⇒ success
+            v = out(reg) v,
+            ok = out(reg) ok,
+            options(nostack, preserves_flags),
+        );
+    }
+    if ok != 0 { Some(v) } else { None }
+}
+
+fn gather_seed() -> [u8; 64] {
+    let mut seed = [0u8; 64];
+    for i in 0..8 {
+        let v: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v); }
+        seed[i * 8..(i + 1) * 8].copy_from_slice(&v.to_le_bytes());
+        for _ in 0..100 { core::hint::spin_loop(); }
+    }
+    let prev_lo = STATE_LO.load(Ordering::Relaxed);
+    let prev_hi = STATE_HI.load(Ordering::Relaxed);
+    for i in 0..8 { seed[i]     ^= prev_lo.to_le_bytes()[i]; }
+    for i in 0..8 { seed[i + 8] ^= prev_hi.to_le_bytes()[i]; }
+    seed
+}
+
+/// Fill `buf` with SHA-256-chained random bytes, XOR-mixed with RNDR
+/// hardware entropy when available.
+///
+/// V4: If the CPU exposes FEAT_RNG (ARMv8.5 RNDR), every 32-byte chunk
+/// is XORed with fresh RNDR reads so even a compromised SHA chain
+/// doesn't expose predictable output. If RNDR is unavailable or stalls
+/// we still produce SHA-chain output — never falls back to cntpct-only.
+pub fn fill_bytes(buf: &mut [u8]) {
+    let seed = gather_seed();
+    let mut pos = 0;
+    while pos < buf.len() {
+        let ctr = CTR.fetch_add(1, Ordering::Relaxed);
+        let mut stream = [0u8; 64 + 16];
+        stream[..64].copy_from_slice(&seed);
+        stream[64..72].copy_from_slice(&ctr.to_le_bytes());
+        stream[72..80].copy_from_slice(&(pos as u64).to_le_bytes());
+        let mut h = sha256::hash(&stream);
+
+        // XOR-mix RNDR bytes if hardware provides them. We draw 32 bytes
+        // (4 × u64) and XOR into h before emitting.
+        for slot in 0..4 {
+            if let Some(r) = rndr_u64() {
+                let rb = r.to_le_bytes();
+                for i in 0..8 { h[slot * 8 + i] ^= rb[i]; }
+            }
+        }
+
+        let take = core::cmp::min(32, buf.len() - pos);
+        buf[pos..pos + take].copy_from_slice(&h[..take]);
+
+        // Feed output back into the chain.
+        let new_lo = u64::from_le_bytes([h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7]]);
+        let new_hi = u64::from_le_bytes([h[8],h[9],h[10],h[11],h[12],h[13],h[14],h[15]]);
+        STATE_LO.store(new_lo, Ordering::Relaxed);
+        STATE_HI.store(new_hi, Ordering::Relaxed);
+
+        pos += take;
+    }
+}
+
+/// Convenience: 32 random bytes.
+pub fn random_32() -> [u8; 32] {
+    let mut out = [0u8; 32];
+    fill_bytes(&mut out);
+    out
+}

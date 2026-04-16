@@ -136,16 +136,27 @@ fn slot(cave_id: usize, r: Resource) -> (&'static AtomicUsize, usize, i64) {
 /// When `cave_id` is out of range we treat it as "kernel context" and
 /// allow the allocation unconditionally.  This keeps early boot, kthreads,
 /// and interrupt handlers from being blocked by the ledger.
+/// Charge `amount` of `r` to `cave_id`.
+///
+/// V4 TOCTOU fix (NEW-DOS-017 / NEW-SYS-038): previous implementation
+/// used fetch_add and then fetch_sub on overflow, creating a window
+/// where a concurrent reader saw the over-charged count. The CAS-loop
+/// below either atomically installs a within-limits value or fails —
+/// no intermediate over-limit state ever becomes visible.
 pub fn charge(cave_id: usize, r: Resource, amount: usize) -> Result<(), i64> {
     if !valid(cave_id) { return Ok(()); }
     let (ctr, limit, errno) = slot(cave_id, r);
-    let prev = ctr.fetch_add(amount, Ordering::Relaxed);
-    if prev.saturating_add(amount) > limit {
-        // Roll back — we never want the counter to stick above the cap.
-        ctr.fetch_sub(amount, Ordering::Relaxed);
-        return Err(errno);
+    loop {
+        let cur = ctr.load(Ordering::Acquire);
+        let new = cur.checked_add(amount).unwrap_or(usize::MAX);
+        if new > limit { return Err(errno); }
+        if ctr.compare_exchange(cur, new, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return Ok(());
+        }
+        // Lost the CAS race; retry with the fresh value.
     }
-    Ok(())
 }
 
 /// Refund `amount` of `r` to `cave_id`.  Saturating: we never wrap below

@@ -676,68 +676,28 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
         core::arch::asm!("str {v}, [{a}]", a = in(reg) SP_SAVE_ADDR, v = in(reg) ksp);
     }
 
-    // Save return address
-    let ret_addr: u64;
-    unsafe { core::arch::asm!("adr {ret}, 99f", ret = out(reg) ret_addr); }
-    SAVED_RETURN_ADDR.store(ret_addr as usize, Ordering::Relaxed);
-
-    // V2-NEW-017 / ESC-018: jump to user code at EL0 via eret instead
-    // of a raw `br` at EL1. The old `br` left busybox / hello running
-    // with kernel privilege — any stack corruption became kernel RCE.
+    // V4: jump to user code at EL0 via eret. The exception vector table
+    // already handles EL0-sourced SVC / IRQ by saving SP_EL1 via
+    // SAVE_REGS and restoring via RESTORE_REGS, so the transition is
+    // correct. User-code exit goes through handle_sync_exception (BRK /
+    // exit syscall) — the handler restores SP_EL1 from 0x40000100 and
+    // calls desktop::resume() directly, so this function never returns
+    // to its caller. The label-99 return-here gimmick is gone.
     //
-    // Sequence: SPSR_EL1 = 0 (EL0t, AIF unmasked), ELR_EL1 = entry,
-    // SP_EL0 = user_sp; eret. The CPU enters EL0 with user_sp active.
-    // Kernel SP is preserved in SP_EL1; the exception handler restores
-    // it on syscall entry as before.
-    //
-    // Feature-gated for safety: set ERET_TO_EL0 = true once verified
-    // on the hardware you boot. Default OFF preserves the legacy
-    // behaviour so this commit doesn't regress an in-flight build.
-    const ERET_TO_EL0: bool = false;
-
-    if ERET_TO_EL0 {
-        unsafe {
-            core::arch::asm!(
-                "msr sp_el0, {usp}",
-                "msr elr_el1, {ent}",
-                "msr spsr_el1, xzr",        // SPSR: EL0t, AIF clear
-                "isb",
-                "eret",
-                usp = in(reg) sp as u64,
-                ent = in(reg) virt_entry,
-                options(noreturn),
-            );
-        }
-    } else {
-        // Legacy EL1 jump (kept until eret path is hardware-tested).
-        unsafe {
-            core::arch::asm!(
-                "mov sp, {user_sp}",
-                "br {entry}",
-                user_sp = in(reg) sp,
-                entry = in(reg) virt_entry,
-            );
-        }
-    }
-
-    // Label 99: exit handler returns here after disabling MMU
-    // ALL registers are corrupt. Use hardcoded address to restore SP.
+    // V2-NEW-017 / ESC-018: previously a raw `br {entry}` at EL1 left
+    // busybox / hello running with kernel privilege.
     unsafe {
         core::arch::asm!(
-            "99:",
-            "movz {tmp}, #0x1000",
-            "movk {tmp}, #0x4000, lsl #16",
-            "ldr {tmp}, [{tmp}]",
-            "mov sp, {tmp}",
-            tmp = out(reg) _,
+            "msr sp_el0, {usp}",
+            "msr elr_el1, {ent}",
+            "msr spsr_el1, xzr",        // SPSR: EL0t, AIF clear
+            "isb",
+            "eret",
+            usp = in(reg) sp as u64,
+            ent = in(reg) virt_entry,
+            options(noreturn),
         );
     }
-
-    // If we get here, SP is restored and we can use the UART
-    uart::puts("[loader] BACK!\n");
-
-    uart::puts("[loader] --- done ---\n");
-    Ok(())
 }
 
 /// Load a standalone (non-busybox) ELF binary and store its metadata

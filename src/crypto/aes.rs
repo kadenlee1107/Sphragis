@@ -152,13 +152,23 @@ impl Aes128 {
     }
 
     /// GCM mode encryption/decryption (counter starts at 2 per RFC 5116).
+    ///
+    /// NEW-CRYPTO-001 / DEPRECATED: this is the pure-XOR-stream path with
+    /// no tag — callers that want real GCM must use
+    /// `crate::crypto::gcm_verified::Aes128Gcm` instead. Kept only for
+    /// non-authenticated keystream use cases (BatFS CTR mode, test code).
+    #[deprecated(note = "Use crypto::gcm_verified::Aes128Gcm for authenticated GCM")]
     pub fn gcm_crypt(&self, nonce: &[u8; 12], data: &mut [u8]) {
         self.ctr_crypt_with_counter(nonce, 2, data);
     }
 
     /// Full AES-128-GCM encrypt: encrypts data in place AND computes 16-byte auth tag.
-    /// aad = additional authenticated data (not encrypted, but authenticated)
-    /// Returns the 16-byte authentication tag.
+    ///
+    /// NEW-CRYPTO-002 / DEPRECATED: prefer `gcm_verified::Aes128Gcm::encrypt_inplace`
+    /// which writes ciphertext + tag contiguously and uses audited RustCrypto GHASH.
+    /// This implementation stays for callers pinned to the legacy split-tag
+    /// return API; new code must migrate.
+    #[deprecated(note = "Use crypto::gcm_verified::Aes128Gcm::encrypt_inplace")]
     pub fn gcm_encrypt(&self, nonce: &[u8; 12], aad: &[u8], data: &mut [u8]) -> [u8; 16] {
         // Compute hash subkey H = AES(K, 0^128)
         let mut h_block = [0u8; 16];
@@ -184,7 +194,8 @@ impl Aes128 {
     }
 
     /// Full AES-128-GCM decrypt: decrypts data in place AND verifies auth tag.
-    /// Returns true if tag is valid.
+    /// NEW-CRYPTO-001 / DEPRECATED: use gcm_verified::Aes128Gcm::decrypt_inplace.
+    #[deprecated(note = "Use crypto::gcm_verified::Aes128Gcm::decrypt_inplace")]
     pub fn gcm_decrypt(&self, nonce: &[u8; 12], aad: &[u8], data: &mut [u8], tag: &[u8; 16]) -> bool {
         // Compute hash subkey H
         let mut h_block = [0u8; 16];

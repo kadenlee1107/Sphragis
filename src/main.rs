@@ -91,6 +91,9 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     kernel::ipc::init();
     kernel::arch::init_exceptions();
 
+    // V4: probe ARMv8.5 RNDR hardware RNG and wire it into crypto::rng.
+    crypto::rng::probe_hw_rng();
+
     // ═══════════════════════════════════════════
     // SECURITY INITIALIZATION
     // ═══════════════════════════════════════════

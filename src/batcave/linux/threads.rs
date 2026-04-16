@@ -503,23 +503,41 @@ pub fn runnable_count() -> usize {
 
 /// Mark current thread Exited and schedule something else. Fires the
 /// CLONE_CHILD_CLEARTID futex wake so joiners can proceed.
+///
+/// V4 process-destroy: previously the thread slot was marked Exited but
+/// its backing stack + TLS frames were never freed. A cave that spawned
+/// 16 threads then waited for them to exit leaked 16 × stack_pages
+/// permanently until cave destroy. Now we free stack_base..+stack_pages
+/// back to the frame allocator (free_frame zeroes each page on return)
+/// before yielding. The thread slot itself becomes Free so future
+/// spawn_thread calls can reuse it.
 pub fn exit_current(code: i32) -> ! {
     let me = current_tid();
-    let clear_addr = with_table(|t| {
+    let (clear_addr, stack_base, stack_pages) = with_table(|t| {
         if let Some(i) = slot_of(t, me) {
             t[i].state = ThreadState::Exited(code);
-            t[i].tid_clear_on_exit
-        } else { None }
+            let sb = t[i].stack_base;
+            let sp = t[i].stack_pages;
+            let ca = t[i].tid_clear_on_exit;
+            (ca, sb, sp)
+        } else { (None, 0, 0) }
     });
     if let Some(addr) = clear_addr {
         unsafe { core::ptr::write_volatile(addr as *mut i32, 0); }
-        // Wake up to 1 joiner on that address. Uses our futex bridge.
         futex_wake_on(addr, 1);
     }
-    // Hand the CPU to someone else.
+    // Free the thread's stack. Kernel free_frame zeroes each page on
+    // return so residue from this thread can't leak via reuse.
+    if stack_pages > 0 && stack_base != 0 {
+        crate::kernel::mm::frame::free_contig(stack_base as usize, stack_pages);
+    }
+    // Drop the slot so the tid can be reused.
+    with_table(|t| {
+        if let Some(i) = slot_of(t, me) {
+            t[i] = Thread::empty();
+        }
+    });
     schedule();
-    // schedule() should never return here because the slot is Exited. But
-    // just in case:
     loop { unsafe { core::arch::asm!("wfi"); } }
 }
 
@@ -585,6 +603,26 @@ pub fn schedule() {
 // the current thread into *old, then loads them from *new and returns.
 unsafe extern "C" {
     fn cxt_switch_cooperative(old: *mut SavedRegs, new: *const SavedRegs);
+}
+
+/// V4 deferred-preemption flag. IRQ sets this on a tick; the syscall
+/// layer consumes it on entry / exit and voluntarily calls schedule()
+/// so the running thread yields at the next safe boundary.
+static PREEMPT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+pub fn request_preempt() {
+    PREEMPT_REQUESTED.store(true, Ordering::Release);
+}
+
+/// Consume the preempt flag. Returns true if one was pending.
+pub fn take_preempt() -> bool {
+    PREEMPT_REQUESTED.swap(false, Ordering::AcqRel)
+}
+
+/// Call from any safe yield point (top of a long syscall, return from
+/// long syscall) to check the preempt flag and yield if set.
+pub fn maybe_yield() {
+    if take_preempt() { schedule(); }
 }
 
 /// Timer IRQ hook. Called from the EL1 IRQ handler. Returns true if the

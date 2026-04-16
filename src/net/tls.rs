@@ -801,32 +801,34 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     // NOW add client Finished to transcript (for resumption, not for app keys)
     transcript.update(&finished_msg);
 
-    // Encrypt with client handshake key
-    let client_hs_cipher = {
-        let mut k = [0u8; 16];
-        k.copy_from_slice(&sess.client_key[..16]);
-        crate::crypto::aes::Aes128::new(&k)
-    };
+    // V4: migrate Client Finished encryption off the legacy
+    // Aes128::gcm_encrypt onto the audited gcm_verified implementation.
+    // Functionally equivalent; removes the footgun that the legacy path
+    // used pure-XOR gcm_crypt without tag verification if a caller ever
+    // reached that arm.
+    let mut k16 = [0u8; 16];
+    k16.copy_from_slice(&sess.client_key[..16]);
+    let hs_gcm = crate::crypto::gcm_verified::Aes128Gcm::new(&k16);
     let nonce = sess.client_iv;
     // Inner plaintext: finished_msg(36) + content_type(1) = 37 bytes
-    let mut fin_plain = [0u8; 64];
-    fin_plain[..36].copy_from_slice(&finished_msg);
-    fin_plain[36] = 0x16; // inner content type = handshake
     let inner_len = 37;
     let enc_len = inner_len + 16; // + GCM tag
-
-    // AAD = record header
     let fin_aad = [0x17u8, 0x03, 0x03, (enc_len >> 8) as u8, enc_len as u8];
-    let fin_tag = client_hs_cipher.gcm_encrypt(&nonce, &fin_aad, &mut fin_plain[..inner_len]);
 
-    // Build TLS record
+    // Buffer layout for encrypt_inplace: plaintext | 16-byte tag space.
+    let mut fin_buf = [0u8; 80];
+    fin_buf[..36].copy_from_slice(&finished_msg);
+    fin_buf[36] = 0x16; // inner content type = handshake
+    // encrypt_inplace encrypts fin_buf[..inner_len] and writes the tag
+    // immediately after at fin_buf[inner_len..inner_len+16].
+    hs_gcm.encrypt_inplace(&nonce, &fin_aad, &mut fin_buf[..enc_len], inner_len);
+
     let mut fin_record = [0u8; 80];
     fin_record[0] = 0x17;
     fin_record[1] = 0x03; fin_record[2] = 0x03;
     fin_record[3] = (enc_len >> 8) as u8;
     fin_record[4] = enc_len as u8;
-    fin_record[5..5 + inner_len].copy_from_slice(&fin_plain[..inner_len]);
-    fin_record[5 + inner_len..5 + enc_len].copy_from_slice(&fin_tag);
+    fin_record[5..5 + enc_len].copy_from_slice(&fin_buf[..enc_len]);
     crate::net::tcp::send_data(&fin_record[..5 + enc_len]).ok();
 
     tdbg("[tls] Client Finished sent\n");

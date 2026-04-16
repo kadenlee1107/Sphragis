@@ -138,6 +138,11 @@ mod nr {
 /// args: x0-x5 register values
 /// Returns: value to put in x0 (negative = error)
 pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
+    // V4 deferred preemption: timer tick may have requested we yield.
+    // Consume the flag at the syscall boundary (safe point — we have a
+    // stable stack and aren't mid-inline-asm).
+    super::threads::maybe_yield();
+
     // Classify the syscall
     let (cat, handler): (SyscallCat, fn([u64; 6]) -> i64) = match syscall_num {
         // ── Always allowed ──
