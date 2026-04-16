@@ -570,6 +570,21 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                             let nbytes = 1u64 << sas;
                             let rt = srt as usize;
 
+                            // V2-002 gate: refuse to proxy kernel-address
+                            // accesses for EL0. Before this check, a user
+                            // instruction faulting on an unaligned access
+                            // to any kernel VA would have us obediently
+                            // load/store on its behalf at EL1.
+                            let in_user = crate::batcave::linux::uaccess::is_user_range(
+                                far as usize, nbytes as usize);
+                            if !in_user {
+                                // Skip the faulting instruction and deliver
+                                // 0/NOP — avoids kernel R/W primitive.
+                                (*frame).elr = elr + 4;
+                                if wnr == 0 && rt < 31 { (*frame).x[rt] = 0; }
+                                return;
+                            }
+
                             if wnr == 0 {
                                 // Load: read bytes from FAR
                                 let mut val = 0u64;
@@ -908,7 +923,17 @@ pub extern "C" fn handle_unhandled_exception(_frame: *mut TrapFrame) {
 }
 
 // Emulate load for atomic instruction emulation (HVF workaround)
+// V2-002/003/004 gate: only emulate accesses that target user space.
+// Before this gate, a guest could craft an unaligned / LDXR / atomic
+// instruction with addr=<any kernel address> and the emulator would
+// faithfully load/store on its behalf — arbitrary EL1 R/W primitive.
+fn emul_addr_ok(addr: usize, nbytes: usize) -> bool {
+    crate::batcave::linux::uaccess::is_user_range(addr, nbytes)
+}
+
 unsafe fn emulate_load(addr: usize, size: u32) -> u64 {
+    let nbytes = 1usize << (size as usize);
+    if !emul_addr_ok(addr, nbytes) { return 0; } // safe-zero on bad addr
     unsafe {
         match size {
             0 => { let v: u32; core::arch::asm!("ldrb {v:w}, [{a}]", a = in(reg) addr, v = out(reg) v); v as u64 }
@@ -921,6 +946,8 @@ unsafe fn emulate_load(addr: usize, size: u32) -> u64 {
 
 // Emulate store for atomic instruction emulation (HVF workaround)
 unsafe fn emulate_store(addr: usize, size: u32, val: u64) {
+    let nbytes = 1usize << (size as usize);
+    if !emul_addr_ok(addr, nbytes) { return; } // silently drop kernel-target writes
     unsafe {
         match size {
             0 => core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) addr, v = in(reg) val as u32),
