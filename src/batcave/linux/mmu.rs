@@ -68,17 +68,18 @@ pub fn setup_cave_pagetable(cave_slot: usize, phys_base: usize) -> Result<usize,
     write_pte(l1, 0, l2_low as u64 | TABLE_DESC);
     write_pte(l1, 1, l2_high as u64 | TABLE_DESC);
 
-    // L2_low: map THIS cave's user-space binary (blocks 0-99 = 200 MB)
+    // L2_low: map THIS cave's user-space binary (blocks 0-99 = 200 MB).
     // Widened from 20 MB to 200 MB to host Chromium content_shell (~150 MB).
+    //
+    // NOTE: no MMIO mapping in cave page tables. Caves must go through
+    // syscalls for UART / virtio access — direct MMIO from user space
+    // was a legacy shortcut that punched 5 × 2 MB holes through this
+    // window at 0x08M/0x09M/0x0AM/0x0A2M/0x0A4M, corrupting any binary
+    // large enough to reach those addresses.
     for block in 0..100 {
         let virt_block = block * 0x200000;
         let phys_block = (phys_base & !0x1FFFFF) + virt_block;
         write_pte(l2_low, block, phys_block as u64 | BLOCK_NORMAL);
-    }
-
-    // L2_low: MMIO
-    for mmio in [0x08000000, 0x09000000, 0x0A000000, 0x0A200000, 0x0A400000] {
-        write_pte(l2_low, mmio / 0x200000, mmio as u64 | BLOCK_DEVICE);
     }
 
     // L2_high: identity map kernel RAM
@@ -163,10 +164,13 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
         write_pte(l2_low, mmio_block / 0x200000, mmio_block as u64 | BLOCK_DEVICE);
     }
 
-    // Map user-space virtual address range 0x00000000-0x0C7FFFFF (200 MB).
-    // Widened from 20 MB to 200 MB to host Chromium content_shell (~150 MB).
-    // Block 0 was already written above; fill in blocks 1-99 here.
-    for block in 1..100 {
+    // Primary page table: map 20 MB of user-space for legacy in-kernel
+    // tests (hello, busybox-running-on-primary). Caves get their own
+    // 200 MB window via setup_cave_pagetable. The primary path is NOT
+    // widened to 200 MB because it shares this L2 with the MMIO mapping
+    // above (blocks 64/72/80/81/82) — a big user window here would
+    // overlap MMIO. Chromium runs in a cave, so it doesn't need this.
+    for block in 1..10 {
         let virt_block = block * 0x200000;
         let phys_block = (phys_base & !0x1FFFFF) + virt_block;
         write_pte(l2_low, block, phys_block as u64 | BLOCK_NORMAL);
