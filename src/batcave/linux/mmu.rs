@@ -175,9 +175,13 @@ pub fn setup_cave_pagetable_at(
     if virt_base & 0x1FFFFF != 0 { return Err("virt_base not 2MB aligned"); }
     if virt_base >= 0x40000000 { return Err("virt_base outside L2_low"); }
 
-    let l1 = frame::alloc_frame().ok_or("oom for cave L1")?;
-    let l2_low = frame::alloc_frame().ok_or("oom for cave L2_low")?;
-    let l2_high = frame::alloc_frame().ok_or("oom for cave L2_high")?;
+    // V2-001/V2-040 fix: cave L1/L2 frames come from the kernel-only
+    // reserved pool. The old shared allocator could return a frame whose
+    // address fell inside the cave's user window, letting the cave
+    // self-remap to its own page table.
+    let l1 = frame::alloc_kernel_frame().ok_or("oom for cave L1 (kernel pool)")?;
+    let l2_low = frame::alloc_kernel_frame().ok_or("oom for cave L2_low (kernel pool)")?;
+    let l2_high = frame::alloc_kernel_frame().ok_or("oom for cave L2_high (kernel pool)")?;
 
     // Zero tables
     for table in [l1, l2_low, l2_high] {
@@ -300,13 +304,12 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
 
     uart::puts("[mmu] Setting up page tables...\n");
 
-    // Allocate L0 table (1 page)
-    let l0 = frame::alloc_frame().ok_or("out of memory for L0")?;
-    // Allocate L1 table for first 512GB
-    let l1 = frame::alloc_frame().ok_or("out of memory for L1")?;
-    // Allocate L2 tables
-    let l2_low = frame::alloc_frame().ok_or("out of memory for L2 low")?;   // 0x00000000-0x3FFFFFFF
-    let l2_high = frame::alloc_frame().ok_or("out of memory for L2 high")?;  // 0x40000000-0x7FFFFFFF
+    // V2-001: primary page-table frames also come from the kernel pool so
+    // no user-mappable allocation can alias into them.
+    let l0 = frame::alloc_kernel_frame().ok_or("oom for primary L0")?;
+    let l1 = frame::alloc_kernel_frame().ok_or("oom for primary L1")?;
+    let l2_low = frame::alloc_kernel_frame().ok_or("oom for primary L2 low")?;
+    let l2_high = frame::alloc_kernel_frame().ok_or("oom for primary L2 high")?;
 
     // Zero all tables
     for table in [l0, l1, l2_low, l2_high] {

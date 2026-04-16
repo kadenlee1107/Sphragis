@@ -30,6 +30,12 @@ pub fn alloc_frame() -> Option<usize> {
     let total = TOTAL_FRAMES.load(Ordering::Relaxed);
     let start = MEMORY_START.load(Ordering::Relaxed);
 
+    // V2-001/V2-040: reserve the top of memory for kernel-only allocations
+    // (specifically cave page-table frames). Regular alloc_frame stops
+    // before that pool so cave user-window mappings can never alias into
+    // a cave's own L1/L2 table.
+    let user_cap = total.saturating_sub(KERNEL_RESERVED_FRAMES);
+
     for i in 0..BITMAP_SIZE {
         let val = BITMAP[i].load(Ordering::Relaxed);
         if val == u64::MAX {
@@ -40,7 +46,7 @@ pub fn alloc_frame() -> Option<usize> {
         let bit = (!val).trailing_zeros() as usize;
         let frame_index = i * 64 + bit;
 
-        if frame_index >= total {
+        if frame_index >= user_cap {
             return None;
         }
 
@@ -64,6 +70,47 @@ pub fn alloc_frame() -> Option<usize> {
         }
     }
 
+    None
+}
+
+/// Kernel-reserved frames at the top of the memory range. Never returned
+/// by `alloc_frame`, so cave user-window mappings cannot alias into them.
+/// Sized for ~64 caves × 4 tables each (256) + slack.
+pub const KERNEL_RESERVED_FRAMES: usize = 512;
+
+/// V2-001/V2-040 fix: allocate a frame from the kernel-reserved pool.
+/// Used by `setup_cave_pagetable` / `setup_cave_pagetable_at` so a cave's
+/// own L1 / L2 tables can never be remapped into the cave's user window.
+///
+/// Returns None if the kernel pool is exhausted; callers should surface
+/// this as "too many caves" rather than falling back to alloc_frame.
+pub fn alloc_kernel_frame() -> Option<usize> {
+    let total = TOTAL_FRAMES.load(Ordering::Relaxed);
+    let start = MEMORY_START.load(Ordering::Relaxed);
+    if total < 1 { return None; }
+    let lower_bound = total.saturating_sub(KERNEL_RESERVED_FRAMES);
+
+    // Search top-down over the reserved range.
+    for rev in 0..KERNEL_RESERVED_FRAMES {
+        let frame_index = total.saturating_sub(1).saturating_sub(rev);
+        if frame_index < lower_bound { break; }
+        let bitmap_index = frame_index / 64;
+        let bit = frame_index % 64;
+        if bitmap_index >= BITMAP_SIZE { continue; }
+        let val = BITMAP[bitmap_index].load(Ordering::Relaxed);
+        if val & (1u64 << bit) != 0 { continue; } // in use
+
+        BITMAP[bitmap_index].store(val | (1u64 << bit), Ordering::Relaxed);
+        let addr = start + frame_index * PAGE_SIZE;
+        unsafe {
+            for i in 0..(PAGE_SIZE / 8) {
+                core::arch::asm!("str xzr, [{a}]",
+                    a = in(reg) addr + i * 8,
+                    options(nostack, preserves_flags));
+            }
+        }
+        return Some(addr);
+    }
     None
 }
 
