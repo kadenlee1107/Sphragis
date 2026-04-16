@@ -37,7 +37,23 @@ static TXID_VALID: AtomicBool = AtomicBool::new(false);
 
 const DNS_SERVER: u32 = 0x0A000203; // 10.0.2.3 (QEMU) — plaintext fallback
 const DNS_PORT: u16 = 53;
-const LOCAL_PORT: u16 = 12345;
+// ATTACK-NET-036: local port randomized per query. Forces an off-path
+// attacker to guess both the TXID (16 bits) AND the dst_port (~14
+// bits of ephemeral range), raising the per-packet spoof probability
+// from 1-in-65k to ~1-in-1e9.
+fn next_local_port() -> u16 {
+    static LAST: AtomicU16 = AtomicU16::new(0);
+    let mut v: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v); }
+    v ^= (LAST.load(Ordering::Relaxed) as u64).wrapping_mul(0xa076_1d64_78bd_642f);
+    // SplitMix finalizer — good distribution from one counter read.
+    v ^= v >> 33;
+    v = v.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    v ^= v >> 33;
+    let port = (1024 + ((v as u16 as u32) % (65535 - 1024))) as u16;
+    LAST.store(port, Ordering::Relaxed);
+    port
+}
 
 // DoH server (Cloudflare) — used when DoH is enabled
 const DOH_SERVER: u32 = 0x01010101; // 1.1.1.1
@@ -176,14 +192,17 @@ pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
     query[offset..offset + 2].copy_from_slice(&1u16.to_be_bytes()); // Class IN
     offset += 2;
 
+    // Randomize source port per query (NET-036).
+    let src_port = next_local_port();
+
     // Send query
-    udp::send(DNS_SERVER, LOCAL_PORT, DNS_PORT, &query[..offset])?;
+    udp::send(DNS_SERVER, src_port, DNS_PORT, &query[..offset])?;
 
     // Wait for response — retry with increasing timeouts
     for attempt in 0..5 {
         if attempt > 0 {
-            // Re-send query on each retry
-            let _ = udp::send(DNS_SERVER, LOCAL_PORT, DNS_PORT, &query[..offset]);
+            // Re-send query on each retry (same src_port for this attempt).
+            let _ = udp::send(DNS_SERVER, src_port, DNS_PORT, &query[..offset]);
         }
         // Poll for response (50M iterations ≈ several seconds on fast CPUs)
         for _ in 0..50_000_000u64 {
