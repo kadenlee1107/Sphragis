@@ -151,7 +151,11 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
     super::mmu::switch_to_cave(l1);
     let r = loader::execute_with_args(info.virt_entry, argv);
     super::mmu::switch_to_primary();
+    // FLv2-NEW-017/018: free both the cave page-table frames AND the
+    // ELF image frames. free_cave_slot frees the L1/L2_low/L2_high;
+    // free_loaded_elf returns the ~150 MB Chromium image to the pool.
     super::mmu::free_cave_slot(cave_slot);
+    loader::free_loaded_elf(&info);
     r
 }
 

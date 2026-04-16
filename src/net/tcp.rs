@@ -472,6 +472,14 @@ pub fn handle_incoming(pkt: &IpPacket) {
 
     let src_port = u16::from_be_bytes([pkt.payload[0], pkt.payload[1]]);
     let dst_port = u16::from_be_bytes([pkt.payload[2], pkt.payload[3]]);
+
+    // NET2-019: per-port firewall check now that we've parsed the header.
+    // The pre-parse `allow_inbound` check only matched on src_ip + protocol;
+    // a port-gated rule (e.g. "allow TCP from 10.0.0.1 port 443 only") would
+    // otherwise let in any TCP port.
+    if !crate::net::firewall::allow_inbound_tcp(pkt.src, src_port) {
+        return;
+    }
     let seq = u32::from_be_bytes([pkt.payload[4], pkt.payload[5], pkt.payload[6], pkt.payload[7]]);
     let ack = u32::from_be_bytes([pkt.payload[8], pkt.payload[9], pkt.payload[10], pkt.payload[11]]);
     let data_off = ((pkt.payload[12] >> 4) as usize) * 4;

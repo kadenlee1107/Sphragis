@@ -396,6 +396,22 @@ pub fn write_to_file(idx: u16, offset: usize, buf_addr: usize, count: usize) -> 
 
 // ─── Path Resolution ───
 
+/// Local copy of the syscall-layer `..` rejector so the VFS can refuse
+/// symlink targets that escape the sandbox. Kept here (not pulled from
+/// syscall::has_dotdot) to avoid a layering loop.
+fn has_dotdot_bytes(path: &[u8]) -> bool {
+    let mut i = 0usize;
+    while i < path.len() {
+        let start = if path[i] == b'/' { i + 1 } else { i };
+        let mut end = start;
+        while end < path.len() && path[end] != b'/' { end += 1; }
+        if end - start == 2 && &path[start..end] == b".." { return true; }
+        if end == path.len() { break; }
+        i = end + 1;
+    }
+    false
+}
+
 /// Resolve a path string to a node index.
 /// Handles absolute ("/bin/sh") and relative ("../etc") paths.
 /// Follows symlinks up to 8 levels deep.
@@ -450,6 +466,14 @@ fn resolve_path_depth(path: &[u8], depth: usize) -> Result<u16, i64> {
                     let nodes = &(*core::ptr::addr_of!(INSTANCES))[ai].nodes;
                     if nodes[child as usize].node_type == NodeType::Symlink {
                         let target = &nodes[child as usize].link_target[..nodes[child as usize].link_len];
+                        // FLv2-NEW-013: refuse to resolve a symlink whose
+                        // target contains a `..` component. Without this,
+                        // a cave that controls symlink creation could
+                        // escape its sandbox via /sandbox/link → "../etc"
+                        // even after the openat-time `..` guard cleared.
+                        if has_dotdot_bytes(target) {
+                            return Err(-13); // EACCES
+                        }
                         // If more path remains, resolve symlink then continue
                         if i < len {
                             // Build: symlink_target + "/" + remaining_path

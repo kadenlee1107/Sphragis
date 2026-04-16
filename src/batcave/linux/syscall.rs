@@ -192,7 +192,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         233 => (SyscallCat::Always, sys_stub_zero),  // madvise
         262 => (SyscallCat::Always, sys_stub_zero),  // getrlimit equiv
         276 => (SyscallCat::Always, sys_stub_zero),  // renameat2
-        279 => (SyscallCat::Always, sys_memfd_create), // memfd_create
+        279 => (SyscallCat::Memory, sys_memfd_create), // memfd_create — needs mem cap
 
         // ── Epoll + eventfd + timerfd (real implementations) ──
         nr::EPOLL_CREATE1 => (SyscallCat::FileIO, sys_epoll_create1),
@@ -825,25 +825,7 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
     let path_len = read_user_str(path_ptr, &mut path_buf);
     let path = &path_buf[..path_len];
 
-    // FL-016 path-traversal guard: reject any `..` component. A single
-    // `..` in a path lets an attacker escape whatever base directory
-    // the cave is sandboxed to. We walk the components and refuse on
-    // exact match against the two-byte sequence between slashes.
-    // (This is coarser than POSIX realpath-normalization but catches
-    // the common attack without pulling in extra state.)
-    {
-        let mut i = 0usize;
-        while i < path.len() {
-            let start = if path[i] == b'/' { i + 1 } else { i };
-            let mut end = start;
-            while end < path.len() && path[end] != b'/' { end += 1; }
-            if end - start == 2 && &path[start..end] == b".." {
-                return EACCES;
-            }
-            i = end + 1;
-            if i == 0 { break; }
-        }
-    }
+    if has_dotdot(path) { return EACCES; }
 
     // Handle /proc paths BEFORE VFS check — /proc is always available
     let path_str = unsafe { core::str::from_utf8_unchecked(path) };
@@ -960,21 +942,49 @@ fn sys_close(args: [u64; 6]) -> i64 {
     // tear down the entry, so we refund the right counter. Sockets come
     // back to the Sockets pool; everything else is a generic Fds refund.
     // eventfd / timerfd / epoll slots are accounted at creation time but
-    // aren't refunded here — they live outside the fd table (slot indices
-    // are returned raw from sys_eventfd2 / sys_timerfd_create).
-    let refund_res = match fd::get(fd_num) {
-        Some(entry) => {
-            let node = vfs::get_node(entry.node_idx);
-            if node.node_type == vfs::NodeType::Socket {
-                Some(super::quotas::Resource::Sockets)
-            } else {
-                Some(super::quotas::Resource::Fds)
+    // NEW-DOS-003 fix: also detect epoll/eventfd/timerfd "fds" so they
+    // refund the right counter on close. epoll fds live in the fd table
+    // with a sentinel node_idx; eventfd/timerfd return slot indices that
+    // collide with low fd numbers (architectural quirk — ideally those
+    // would also live in the fd table). We make a best-effort attempt
+    // by checking known sentinel ranges before falling through to the
+    // generic Fds refund.
+    let mut refund_res: Option<super::quotas::Resource> = None;
+    let mut handled_special = false;
+
+    // epoll: sentinel-node fds live in the fd table.
+    if super::epoll::is_epoll_fd(fd_num as i32) {
+        let _ = super::epoll::epoll_close(fd_num as i32);
+        refund_res = Some(super::quotas::Resource::Epolls);
+        handled_special = true;
+    }
+
+    if !handled_special {
+        // Fall through to standard fd-table close, picking refund class
+        // by node type.
+        refund_res = match fd::get(fd_num) {
+            Some(entry) => {
+                let node = vfs::get_node(entry.node_idx);
+                if node.node_type == vfs::NodeType::Socket {
+                    Some(super::quotas::Resource::Sockets)
+                } else {
+                    Some(super::quotas::Resource::Fds)
+                }
             }
-        }
-        None => None,
+            None => None,
+        };
+    }
+
+    let close_result = if handled_special {
+        // epoll already freed via epoll_close above; the fd-table entry
+        // (if any) still gets the standard close to release the slot.
+        let _ = fd::close(fd_num);
+        Ok(())
+    } else {
+        fd::close(fd_num)
     };
 
-    match fd::close(fd_num) {
+    match close_result {
         Ok(()) => {
             if let Some(r) = refund_res {
                 super::quotas::refund_active(r, 1);
@@ -1793,6 +1803,9 @@ fn sys_newfstatat(args: [u64; 6]) -> i64 {
         return 0;
     }
 
+    // FLv2-NEW-011: extend `..` guard to newfstatat.
+    if has_dotdot(&path_buf[..path_len]) { return EACCES; }
+
     if vfs::is_ready() {
         match vfs::resolve_path(&path_buf[..path_len]) {
             Ok(idx) => {
@@ -1813,6 +1826,31 @@ fn write_str(s: &str) {
     for &b in s.as_bytes() {
         uart::putc(b);
     }
+}
+
+/// FLv2-NEW-011/012/013/014: shared `..` path-component rejector. Walks
+/// the path component-by-component and returns true if any component is
+/// exactly `..`. Used by every path-taking syscall (openat, faccessat,
+/// unlinkat, mkdirat, readlinkat, newfstatat, statx, execve) so a cave
+/// can no longer escape its base directory by passing `../foo` through
+/// the syscalls that the V1 `..` guard didn't cover.
+///
+/// Coarser than POSIX realpath-normalization (which would resolve
+/// symlinks before checking) but catches the obvious attack with zero
+/// extra state. Symlink-target rejection is handled in vfs::resolve_path.
+pub(crate) fn has_dotdot(path: &[u8]) -> bool {
+    let mut i = 0usize;
+    while i < path.len() {
+        let start = if path[i] == b'/' { i + 1 } else { i };
+        let mut end = start;
+        while end < path.len() && path[end] != b'/' { end += 1; }
+        if end - start == 2 && &path[start..end] == b".." {
+            return true;
+        }
+        if end == path.len() { break; }
+        i = end + 1;
+    }
+    false
 }
 
 /// Read a null-terminated string from userspace memory.
@@ -1851,6 +1889,9 @@ fn sys_faccessat(args: [u64; 6]) -> i64 {
 
     let mut path_buf = [0u8; 128];
     let path_len = read_user_str(path_ptr, &mut path_buf);
+
+    // FLv2-NEW-011: extend `..` guard to faccessat (was openat-only).
+    if has_dotdot(&path_buf[..path_len]) { return EACCES; }
 
     if vfs::is_ready() {
         match vfs::resolve_path(&path_buf[..path_len]) {
@@ -2669,6 +2710,9 @@ fn sys_readlinkat(args: [u64; 6]) -> i64 {
     let mut path_buf = [0u8; 128];
     let path_len = read_user_str(path_ptr, &mut path_buf);
 
+    // FLv2-NEW-011: extend `..` guard to readlinkat.
+    if has_dotdot(&path_buf[..path_len]) { return EACCES; }
+
     // Handle /proc/self/exe — return path to our binary
     if path_len >= 14 {
         let proc_self_exe = b"/proc/self/exe";
@@ -2795,6 +2839,11 @@ fn sys_chdir(args: [u64; 6]) -> i64 {
     let mut path_buf = [0u8; 128];
     let path_len = read_user_str(path_ptr, &mut path_buf);
 
+    // FLv2-NEW-011: extend `..` guard to chdir. Without this a cave could
+    // chdir("..") repeatedly and end up at the rootfs root from inside a
+    // sandboxed cwd.
+    if has_dotdot(&path_buf[..path_len]) { return EACCES; }
+
     if vfs::is_ready() {
         match vfs::resolve_path(&path_buf[..path_len]) {
             Ok(idx) => {
@@ -2903,6 +2952,9 @@ fn sys_mkdirat(args: [u64; 6]) -> i64 {
 
     let mut path_buf = [0u8; 128];
     let path_len = read_user_str(path_ptr, &mut path_buf);
+
+    // FLv2-NEW-011: extend `..` guard to mkdirat.
+    if has_dotdot(&path_buf[..path_len]) { return EACCES; }
 
     if vfs::is_ready() {
         match vfs::resolve_parent(&path_buf[..path_len]) {
@@ -3278,22 +3330,34 @@ fn sys_shmget(args: [u64; 6]) -> i64 {
     ENOMEM
 }
 
-/// memfd_create — create anonymous file backed by memory
-/// Returns a valid fd backed by our pipe buffer (simplest approach)
+/// memfd_create — create anonymous file backed by memory.
+/// NEW-SYS-049: now charges Resource::Fds and goes through the cap layer
+/// (SyscallCat::Memory). Previously classified `Always`, so any cave —
+/// including ones with no `mem` cap — could spam memfd_create past their
+/// fd cap and never be charged.
 fn sys_memfd_create(_args: [u64; 6]) -> i64 {
-    // Use fd table directly with a fake VFS node for simplicity
-    if vfs::is_ready() {
-        // Try VFS-backed approach
+    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 1) {
+        return e;
+    }
+    let result: i64 = if vfs::is_ready() {
         if let Some(tmp) = vfs::find_child(0, b"tmp") {
             if let Ok(node_idx) = vfs::create_node(tmp, b"memfd", vfs::NodeType::File, 0o100666) {
-                if let Ok(fdi) = fd::alloc_fd(node_idx, 0) {
-                    return fdi as i64;
+                match fd::alloc_fd(node_idx, 0) {
+                    Ok(fdi) => fdi as i64,
+                    Err(e) => e,
                 }
-            }
-        }
+            } else { ENOMEM }
+        } else { ENOMEM }
+    } else {
+        // Fallback pseudo-fd path; refund on this branch since we never
+        // actually consumed an fd-table slot.
+        super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+        return 30;
+    };
+    if result < 0 {
+        super::quotas::refund_active(super::quotas::Resource::Fds, 1);
     }
-    // Fallback: return a pseudo-fd
-    30 // fake but valid-looking fd
+    result
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

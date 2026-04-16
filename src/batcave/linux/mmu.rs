@@ -132,10 +132,40 @@ pub fn alloc_cave_slot() -> Option<usize> {
 
 /// Release a cave slot. Also clears CAVE_L1[slot] so subsequent
 /// `get_cave_l1(slot)` returns the primary table.
+///
+/// FLv2-NEW-018 fix: also releases the cave's L1 + L2_low + L2_high
+/// kernel-pool frames back to `frame::alloc_kernel_frame`. Walks the L1
+/// to find the L2_low / L2_high pointers before clearing CAVE_L1[slot].
+/// Without this, every cave create→destroy cycle leaked 12 KB of
+/// kernel-pool memory and the 512-frame reserved pool would exhaust
+/// after ~40 caves.
 pub fn free_cave_slot(slot: usize) {
     if slot >= MAX_CAVE_PAGETABLES { return; }
     CAVE_SLOT_USED.fetch_and(!(1u8 << slot), SlotOrder::AcqRel);
     unsafe {
+        let l1 = CAVE_L1[slot];
+        if l1 != 0 {
+            // L1[0] -> L2_low ; L1[1] -> L2_high (see setup_cave_pagetable_at).
+            // Mask off the descriptor flags to recover the table address.
+            let table_mask: u64 = !0xFFFu64; // page-aligned address
+            let l2_low_pte: u64;
+            let l2_high_pte: u64;
+            core::arch::asm!("ldr {v}, [{a}]", a = in(reg) l1, v = out(reg) l2_low_pte);
+            core::arch::asm!("ldr {v}, [{a}]", a = in(reg) l1 + 8, v = out(reg) l2_high_pte);
+            let l2_low = (l2_low_pte & table_mask) as usize;
+            let l2_high = (l2_high_pte & table_mask) as usize;
+            // Zero the page-table memory before returning to the pool.
+            for p in [l1, l2_low, l2_high] {
+                if p != 0 {
+                    for i in 0..(PAGE_SIZE / 8) {
+                        core::arch::asm!("str xzr, [{a}]",
+                            a = in(reg) p + i * 8,
+                            options(nostack, preserves_flags));
+                    }
+                    crate::kernel::mm::frame::free_frame(p);
+                }
+            }
+        }
         CAVE_L1[slot] = 0;
         CAVE_PHYS_BASE[slot] = 0;
     }

@@ -833,8 +833,11 @@ pub fn recvmsg(fd: i32, msg: *mut Msghdr, flags: i32) -> i64 {
 
 fn write_int_opt(optval: *mut u8, optlen: *mut u32, value: i32) -> i64 {
     if optval.is_null() || optlen.is_null() { return EFAULT; }
+    // Gate optlen first (4-byte read+write).
+    if !is_user(optlen as usize, 4) { return EFAULT; }
     let avail = unsafe { core::ptr::read_unaligned(optlen) };
     if (avail as usize) < 4 { return EINVAL; }
+    if !is_user(optval as usize, 4) { return EFAULT; }
     unsafe {
         core::ptr::write_unaligned(optval as *mut i32, value);
         core::ptr::write_unaligned(optlen, 4);
@@ -845,6 +848,7 @@ fn write_int_opt(optval: *mut u8, optlen: *mut u32, value: i32) -> i64 {
 fn read_int_opt(optval: *const u8, optlen: u32) -> Result<i32, i64> {
     if optval.is_null() { return Err(EFAULT); }
     if (optlen as usize) < 4 { return Err(EINVAL); }
+    if !is_user(optval as usize, 4) { return Err(EFAULT); }
     Ok(unsafe { core::ptr::read_unaligned(optval as *const i32) })
 }
 

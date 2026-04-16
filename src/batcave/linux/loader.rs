@@ -177,6 +177,19 @@ pub struct LoadedElfInfo {
     pub virt_base: u64,
 }
 
+/// FLv2-NEW-017/018 fix: free every page that `load_elf_rebased` allocated.
+/// Without this, ~150 MB of Chromium pages leaked permanently per cave
+/// teardown — caves got destroyed, the `Cave` struct cleared, but the
+/// underlying frames were never returned to the bitmap.
+///
+/// `frame::free_contig` zeroes each page on free, so the residue from
+/// the previous tenant is wiped before the frames re-enter the pool.
+pub fn free_loaded_elf(info: &LoadedElfInfo) {
+    if info.phys_base == 0 || info.total_size == 0 { return; }
+    let pages = (info.total_size + 4095) / 4096;
+    crate::kernel::mm::frame::free_contig(info.phys_base, pages);
+}
+
 /// Load a PIE ELF with virtual addresses rebased to `virt_base`.
 ///
 /// Unlike `load_elf` (which treats phys = virt, identity-mapped), this

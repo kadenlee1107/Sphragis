@@ -46,8 +46,17 @@ impl FileEntry {
         }
     }
 
+    /// NEW-CRYPTO-029: validate UTF-8 instead of `from_utf8_unchecked`. A
+    /// non-UTF8 filename slipping in (via a future raw-bytes API) would
+    /// otherwise be UB. Returns "" on invalid UTF-8 — callers compare by
+    /// byte slice via `name_bytes`, not by &str, for filename matching.
     pub fn name_str(&self) -> &str {
-        unsafe { core::str::from_utf8_unchecked(&self.name[..self.name_len]) }
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("")
+    }
+
+    /// Raw bytes — preferred for byte-exact filename comparisons.
+    pub fn name_bytes(&self) -> &[u8] {
+        &self.name[..self.name_len]
     }
 }
 

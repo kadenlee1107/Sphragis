@@ -43,6 +43,26 @@ const EXT_SERVER_NAME: u16 = 0;
 // Named groups
 const X25519: u16 = 29;
 
+/// NET2-016 / NEW-CRYPTO-026 / debug-fingerprint scrub: TLS-internal debug
+/// prints are gated behind this flag. The default is `false` so production
+/// builds emit no per-record metadata over the UART (sequence numbers,
+/// record lengths, inner types, "waiting for record", etc.). Flip to `true`
+/// only when actively debugging TLS handshakes; do not ship `true`.
+const TLS_DEBUG: bool = false;
+
+#[inline(always)]
+fn tdbg(s: &str) {
+    if TLS_DEBUG { uart::puts(s); }
+}
+#[inline(always)]
+fn tdbg_num(n: usize) {
+    if TLS_DEBUG { crate::kernel::mm::print_num(n); }
+}
+#[inline(always)]
+fn tdbg_byte(b: u8) {
+    if TLS_DEBUG { uart::putc(b); }
+}
+
 /// TLS connection state
 #[derive(Clone, Copy, PartialEq)]
 enum TlsState {
@@ -76,6 +96,11 @@ pub struct TlsSession {
     // extra bytes after the first record are saved here for the next recv call.
     leftover: [u8; 17408],
     leftover_len: usize,
+    // ATTACK-CRYPTO-007: hostname the client expects to be talking to. Saved
+    // at handshake start so the (future) X.509 SAN/CN check can compare
+    // against it without having to thread the hostname back through the API.
+    expected_hostname: [u8; 256],
+    expected_hostname_len: usize,
 }
 
 // ATTACK-NET-034: one TLS session per TCP PCB instead of a single global.
@@ -102,6 +127,8 @@ const EMPTY_TLS_SESSION: TlsSession = TlsSession {
     server_random: [0; 32],
     leftover: [0; 17408],
     leftover_len: 0,
+    expected_hostname: [0; 256],
+    expected_hostname_len: 0,
 };
 
 static mut TLS_STATES: [TlsSession; TLS_MAX_PCBS] =
@@ -138,6 +165,11 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
     sess.state = TlsState::Initial;
     sess.client_seq = 0;
     sess.server_seq = 0;
+    // ATTACK-CRYPTO-007: stash the hostname for later cert SAN/CN check.
+    let hb = hostname.as_bytes();
+    let hl = hb.len().min(sess.expected_hostname.len());
+    sess.expected_hostname[..hl].copy_from_slice(&hb[..hl]);
+    sess.expected_hostname_len = hl;
 
     // NEW-CRYPTO-005: route all TLS randomness through the SHA-chained DRBG
     // in `crypto::rng` instead of reading `cntpct_el0` directly. An observer
@@ -200,12 +232,15 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
     buf[pos..pos+sni_len].copy_from_slice(sni_bytes);
     pos += sni_len;
 
-    // Supported versions extension (TLS 1.3 + 1.2 fallback)
+    // Supported versions extension — TLS 1.3 ONLY.
+    // ATTACK-CRYPTO-008 fix: do not advertise TLS 1.2. The server-side
+    // ServerHello parser already requires supported_versions=0x0304
+    // (NET2-003), so advertising 1.2 only widened the cipher attack
+    // surface and provided no useful fallback.
     buf[pos] = 0; buf[pos+1] = 43; pos += 2; // type = supported_versions
-    buf[pos] = 0; buf[pos+1] = 5; pos += 2; // length
-    buf[pos] = 4; pos += 1; // list length (2 versions × 2 bytes)
+    buf[pos] = 0; buf[pos+1] = 3; pos += 2; // length
+    buf[pos] = 2; pos += 1; // list length (1 version × 2 bytes)
     buf[pos] = 0x03; buf[pos+1] = 0x04; pos += 2; // TLS 1.3
-    buf[pos] = 0x03; buf[pos+1] = 0x03; pos += 2; // TLS 1.2
 
     // Supported groups extension (required)
     buf[pos] = 0; buf[pos+1] = 10; pos += 2; // type = supported_groups
@@ -338,7 +373,7 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
                     if group == 29 && key_len == 32 {
                         sess.peer_public.copy_from_slice(&content[pos + 4..pos + 36]);
                         saw_key_share = true;
-                        uart::puts("[tls] found X25519 key_share\n");
+                        tdbg("[tls] found X25519 key_share\n");
                     }
                 }
             }
@@ -376,7 +411,7 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
         }
 
         sess.state = TlsState::ServerHelloReceived;
-        uart::puts("[tls] ServerHello processed\n");
+        tdbg("[tls] ServerHello processed\n");
         Ok(())
     } else {
         Err("not ServerHello")
@@ -393,7 +428,7 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     let mut ch_buf = [0u8; 512];
     let ch_len = build_client_hello(hostname, &mut ch_buf);
     crate::net::tcp::send_data(&ch_buf[..ch_len]).map_err(|_| "send ClientHello failed")?;
-    uart::puts("[tls] ClientHello sent\n");
+    tdbg("[tls] ClientHello sent\n");
 
     // Keep transcript hash of all handshake messages
     let ch_inner = &ch_buf[5..ch_len]; // skip record header
@@ -458,11 +493,11 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
         }
     }
 
-    uart::puts("[tls] buf=");
-    crate::kernel::mm::print_num(all_len);
-    uart::puts(" SH=");
-    crate::kernel::mm::print_num(sh_end);
-    uart::puts("\n");
+    tdbg("[tls] buf=");
+    tdbg_num(all_len);
+    tdbg(" SH=");
+    tdbg_num(sh_end);
+    tdbg("\n");
 
     // Step 3: Derive handshake keys from shared secret
     let empty_hash = crate::crypto::sha256::hash(&[]);
@@ -496,7 +531,7 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
         iv
     };
 
-    uart::puts("[tls] Handshake keys derived\n");
+    tdbg("[tls] Handshake keys derived\n");
 
     // Step 4: Parse encrypted handshake records from the buffered data
     let mut pos = remaining_start;
@@ -560,13 +595,15 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
             let inner_len = if plaintext_len > 0 { plaintext_len - 1 } else { 0 };
             let inner_type = if plaintext_len > 0 { decrypted[inner_len] } else { 0 };
 
-            uart::puts("[tls] hs inner=0x");
-            let hx = b"0123456789abcdef";
-            uart::putc(hx[(inner_type >> 4) as usize]);
-            uart::putc(hx[(inner_type & 0xf) as usize]);
-            uart::puts(" len=");
-            crate::kernel::mm::print_num(inner_len);
-            uart::puts("\n");
+            if TLS_DEBUG {
+                let hx = b"0123456789abcdef";
+                uart::puts("[tls] hs inner=0x");
+                uart::putc(hx[(inner_type >> 4) as usize]);
+                uart::putc(hx[(inner_type & 0xf) as usize]);
+                uart::puts(" len=");
+                crate::kernel::mm::print_num(inner_len);
+                uart::puts("\n");
+            }
 
             // NEW-CRYPTO-011 / NET2-002: parse handshake messages inside the
             // decrypted record. For every msg_type != Finished(0x14) we add
@@ -602,7 +639,7 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                             uart::puts("[tls] server Finished HMAC mismatch — aborting\n");
                             return Err("TLS: server Finished HMAC mismatch (MITM?)");
                         }
-                        uart::puts("[tls] server Finished HMAC ok\n");
+                        tdbg("[tls] server Finished HMAC ok\n");
                     }
 
                     // Always feed the full handshake-message bytes into the
@@ -668,7 +705,7 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     fin_record[5 + inner_len..5 + enc_len].copy_from_slice(&fin_tag);
     crate::net::tcp::send_data(&fin_record[..5 + enc_len]).ok();
 
-    uart::puts("[tls] Client Finished sent\n");
+    tdbg("[tls] Client Finished sent\n");
 
     // Step 6: Derive application traffic keys (using hs_transcript from above)
 
@@ -705,7 +742,7 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     // Post-handshake records (NewSessionTickets) are handled inline
     // by recv_app_data — it skips inner_type 0x16 and recurses.
 
-    uart::puts("[tls] Handshake complete\n");
+    tdbg("[tls] Handshake complete\n");
     Ok(())
 }
 
@@ -753,7 +790,7 @@ pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
     record[4] = enc_len as u8;
     record[5..5 + enc_len].copy_from_slice(&ct_and_tag[..enc_len]);
 
-    uart::puts("[tls] send_app_data\n");
+    tdbg("[tls] send_app_data\n");
     crate::net::tcp::send_data(&record[..5 + enc_len])
 }
 
@@ -783,11 +820,10 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
         n = copy;
         sess.leftover_len = 0;
     } else {
-        uart::puts("[tls] waiting for record...\n");
+        tdbg("[tls] waiting for record...\n");
         n = crate::net::tcp::recv_data(&mut record).map_err(|e| {
-            uart::puts("[tls] recv error: ");
-            uart::puts(e);
-            uart::puts("\n");
+            tdbg("[tls] recv error\n");
+            let _ = e; // do not echo transport error string
             e
         })?;
     }
@@ -801,35 +837,19 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     // IMPORTANT: read into record[n..] (not a small tmp buffer) to capture ALL
     // available TCP data. recv_data discards excess beyond buf.len()!
     if rec_len + 5 > n {
-        uart::puts("[tls] incomplete: need ");
-        crate::kernel::mm::print_num(rec_len + 5);
-        uart::puts(" have ");
-        crate::kernel::mm::print_num(n);
-        uart::puts(", reading more TCP...\n");
-        for attempt in 0..8 {
+        tdbg("[tls] incomplete record, reading more TCP\n");
+        for _attempt in 0..8 {
             if rec_len + 5 <= n { break; }
             let space = record.len() - n;
             if space == 0 { break; }
             match crate::net::tcp::recv_data(&mut record[n..n + space]) {
-                Ok(got) if got > 0 => {
-                    uart::puts("[tls] got ");
-                    crate::kernel::mm::print_num(got);
-                    uart::puts("b more, total=");
-                    crate::kernel::mm::print_num(n + got);
-                    uart::puts("\n");
-                    n += got;
-                }
-                Err(e) => {
-                    uart::puts("[tls] recovery recv failed: ");
-                    uart::puts(e);
-                    uart::puts("\n");
-                    break;
-                }
+                Ok(got) if got > 0 => { n += got; }
+                Err(_e) => { break; }
                 _ => { break; }
             }
         }
         if rec_len + 5 > n {
-            uart::puts("[tls] record still incomplete after recovery\n");
+            tdbg("[tls] record still incomplete after recovery\n");
             return Err("incomplete record");
         }
     }
@@ -843,18 +863,15 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
         sess.leftover_len = save;
     }
 
-    // Debug: log record details
-    uart::puts("[tls] record: outer_type=0x");
-    let hex = b"0123456789abcdef";
-    uart::putc(hex[(rec_type >> 4) as usize]);
-    uart::putc(hex[(rec_type & 0xf) as usize]);
-    uart::puts(" rec_len=");
-    crate::kernel::mm::print_num(rec_len);
-    uart::puts(" n=");
-    crate::kernel::mm::print_num(n);
-    uart::puts(" seq=");
-    crate::kernel::mm::print_num(sess.server_seq as usize);
-    uart::puts("\n");
+    if TLS_DEBUG {
+        let hex = b"0123456789abcdef";
+        uart::puts("[tls] record outer=0x");
+        uart::putc(hex[(rec_type >> 4) as usize]);
+        uart::putc(hex[(rec_type & 0xf) as usize]);
+        uart::puts(" len=");
+        crate::kernel::mm::print_num(rec_len);
+        uart::puts("\n");
+    }
 
     if rec_type == 0x14 {
         // ChangeCipherSpec — skip. Loop instead of recursing so a server
@@ -919,24 +936,24 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     let data_len = if plaintext_len > 0 { plaintext_len - 1 } else { 0 };
     let inner_type = if plaintext_len > 0 { decrypted[plaintext_len - 1] } else { 0 };
 
-    // NET2-016: no longer print plaintext bytes over the UART. The hex
-    // diagnostic dump below also leaked inner_type-adjacent bytes; both
-    // removed. Only the safe length/type metadata is emitted.
-    uart::puts("[tls] decrypted seq=");
-    crate::kernel::mm::print_num((sess.server_seq - 1) as usize);
-    uart::puts(" ");
-    crate::kernel::mm::print_num(data_len);
-    uart::puts("b type=0x");
-    let hex2 = b"0123456789abcdef";
-    uart::putc(hex2[(inner_type >> 4) as usize]);
-    uart::putc(hex2[(inner_type & 0xf) as usize]);
-    uart::puts("\n");
+    if TLS_DEBUG {
+        let hex2 = b"0123456789abcdef";
+        uart::puts("[tls] decrypted seq=");
+        crate::kernel::mm::print_num((sess.server_seq - 1) as usize);
+        uart::puts(" ");
+        crate::kernel::mm::print_num(data_len);
+        uart::puts("b type=0x");
+        uart::putc(hex2[(inner_type >> 4) as usize]);
+        uart::putc(hex2[(inner_type & 0xf) as usize]);
+        uart::puts("\n");
+    }
 
     // Validate inner content type — if invalid, decryption probably failed
     // (wrong nonce/key producing garbage). Valid types: 0x14=CCS, 0x15=alert,
     // 0x16=handshake, 0x17=application data.
     if inner_type != 0x17 && inner_type != 0x16 && inner_type != 0x15 && inner_type != 0x14 {
-        uart::puts("[tls] bad inner_type after decrypt — decryption failed\n");
+        // Generic decryption-failed message; do not echo any inner state.
+        uart::puts("[tls] decryption failed\n");
         return Err("decryption failed");
     }
 
@@ -945,7 +962,7 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     // consuming all leftover data (including our response) during a
     // recursive call that then times out waiting for more data.
     if inner_type == 0x16 {
-        uart::puts("[tls] skipping NewSessionTicket\n");
+        tdbg("[tls] skipping NewSessionTicket\n");
         return Ok(0); // caller will retry and get actual app data
     }
     if inner_type == 0x15 {
