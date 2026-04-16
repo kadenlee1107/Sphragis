@@ -11,7 +11,7 @@
 
 use crate::drivers::uart;
 use crate::crypto::aes;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// VPN tunnel state
 #[derive(Clone, Copy, PartialEq)]

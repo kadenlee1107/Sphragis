@@ -80,7 +80,7 @@ impl JsValue {
             JsType::Number => self.num,
             JsType::Boolean => if self.boolean { 1.0 } else { 0.0 },
             JsType::String => {
-                let s = unsafe { core::str::from_utf8_unchecked(&self.str_buf[..self.str_len]) };
+                let _s = unsafe { core::str::from_utf8_unchecked(&self.str_buf[..self.str_len]) };
                 // Simple integer parsing
                 let mut n: f64 = 0.0;
                 let mut neg = false;

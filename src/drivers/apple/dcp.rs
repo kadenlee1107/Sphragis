@@ -13,7 +13,7 @@
 // Reference: Asahi Linux drivers/gpu/drm/apple/
 
 use super::soc;
-use core::sync::atomic::{AtomicUsize, AtomicU32, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 

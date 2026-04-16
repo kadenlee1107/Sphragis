@@ -48,7 +48,7 @@ pub fn parse(adt_addr: usize) -> DeviceInfo {
     info
 }
 
-fn parse_node(addr: usize, path: &str, info: &mut DeviceInfo, depth: usize) -> usize {
+fn parse_node(addr: usize, _path: &str, info: &mut DeviceInfo, depth: usize) -> usize {
     let header = unsafe { &*(addr as *const AdtNodeHeader) };
     let n_props = header.n_properties as usize;
     let n_children = header.n_children as usize;

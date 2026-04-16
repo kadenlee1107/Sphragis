@@ -33,7 +33,7 @@ static RX_LEN: AtomicU32 = AtomicU32::new(0);
 pub fn handle_incoming(pkt: &IpPacket) {
     if pkt.payload.len() < TCP_HDR_SIZE { return; }
 
-    let src_port = u16::from_be_bytes([pkt.payload[0], pkt.payload[1]]);
+    let _src_port = u16::from_be_bytes([pkt.payload[0], pkt.payload[1]]);
     let dst_port = u16::from_be_bytes([pkt.payload[2], pkt.payload[3]]);
     let flags = pkt.payload[13];
 

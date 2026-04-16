@@ -3,7 +3,6 @@
 // Ctrl+1-5 switches between apps.
 
 use crate::drivers::uart;
-use crate::drivers::virtio::gpu;
 use crate::security;
 use super::{wm, console, apps};
 

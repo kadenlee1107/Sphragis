@@ -167,7 +167,7 @@ impl Canvas2D {
         let tx = x + self.translate_x;
         let ty = y + self.translate_y;
         // For now, just mark the position (real text rendering needs font integration)
-        for (i, ch) in text.bytes().enumerate() {
+        for (i, _ch) in text.bytes().enumerate() {
             let cx = tx + (i as i32) * 8;
             // Simple 1-pixel character placeholder
             for dy in 0..12 {

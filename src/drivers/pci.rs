@@ -5,7 +5,6 @@
 // ARM64 VMs typically map PCI ECAM at 0x40000000
 // and PCI MMIO windows at 0x50000000+
 
-use crate::drivers::uart;
 use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 
 // PCI ECAM base — standard for ARM64 VMs

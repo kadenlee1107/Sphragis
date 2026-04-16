@@ -24,7 +24,7 @@ pub fn render() {
 
     let x = r.x + 4;
     let ymax = r.y + r.h;
-    let xmax = r.x + r.w;
+    let _xmax = r.x + r.w;
     let ln = 18u32;
 
     // Use single-column if pane is narrow (< 400px), two columns if wide
@@ -33,7 +33,7 @@ pub fn render() {
     let col2 = if two_col { r.x + r.w / 2 + 4 } else { x };
 
     // Helper: max chars that fit in panel width
-    let max_chars = (panel_w / 8) as usize;
+    let _max_chars = (panel_w / 8) as usize;
 
     let mut y = r.y + 4;
 

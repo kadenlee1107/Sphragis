@@ -17,7 +17,6 @@
 //   - Credentials (username:password pairs)
 //   - Vulnerabilities (CVE + description + severity)
 
-use crate::drivers::uart;
 
 // ─── Standard Intermediate Format ───
 

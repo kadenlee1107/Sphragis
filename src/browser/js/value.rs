@@ -201,7 +201,7 @@ impl JsValue {
         let n = self.to_number();
         if n.is_nan() || n.is_infinite() || n == 0.0 { return 0; }
         // Truncate and wrap to i32
-        (n as i64 as i32)
+        n as i64 as i32
     }
 
     /// ToUint32: used for array indices, unsigned shifts.

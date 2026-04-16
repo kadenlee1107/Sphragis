@@ -134,7 +134,7 @@ impl<'a> Compiler<'a> {
             upvalue_count: 0,
             output_protos: {
                 // Initialize with const fn
-                let mut arr: [FunctionProto; MAX_PROTOS] = [FunctionProto::UNINIT; MAX_PROTOS];
+                let arr: [FunctionProto; MAX_PROTOS] = [FunctionProto::UNINIT; MAX_PROTOS];
                 arr
             },
             output_proto_count: 0,

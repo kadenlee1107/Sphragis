@@ -138,7 +138,7 @@ fn wipe_filesystem() {
 /// Zero all allocated memory pages.
 fn wipe_memory() {
     // Get memory stats to know how much to wipe
-    let (used, total) = frame::stats();
+    let (_used, _total) = frame::stats();
     let mut wiped = 0usize;
 
     // Allocate and zero frames until we run out

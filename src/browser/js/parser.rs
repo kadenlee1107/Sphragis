@@ -2,7 +2,7 @@
 // Converts token stream into an AST (Abstract Syntax Tree).
 // Recursive descent parser with operator precedence climbing.
 
-use super::lexer::{Token, TokenType, MAX_TOKENS};
+use super::lexer::{Token, TokenType};
 use super::ast::*;
 
 /// Parse tokens into an AST.
@@ -165,7 +165,7 @@ fn parse_for(tokens: &[Token], pos: &mut usize, ast: &mut Ast) -> Option<u16> {
 
     // Check for for...of or for...in
     // Pattern: for (var/let/const ident of/in expr)
-    let saved_pos = *pos;
+    let _saved_pos = *pos;
     let mut is_for_of = false;
     let mut is_for_in = false;
 

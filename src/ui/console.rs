@@ -159,7 +159,7 @@ pub fn puts_hi(s: &str) {
 pub fn prompt() {
     let fb = gpu::framebuffer();
     let w = gpu::width();
-    let cx = CURSOR_X.load(Ordering::Relaxed);
+    let _cx = CURSOR_X.load(Ordering::Relaxed);
     let cy = CURSOR_Y.load(Ordering::Relaxed);
     let py = MARGIN_Y + cy * CHAR_H;
 

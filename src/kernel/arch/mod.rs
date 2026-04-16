@@ -261,7 +261,7 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                                 // Load the hello ELF binary
                                 let hello_data = crate::batcave::linux::runner::hello_elf();
                                 match crate::batcave::linux::loader::load_hello_elf(hello_data) {
-                                    Ok((phys_entry, phys_base, _orig_entry)) => {
+                                    Ok((phys_entry, _phys_base, _orig_entry)) => {
                                         // Build a minimal stack for the hello binary
                                         let stack_page = crate::kernel::mm::frame::alloc_frame();
                                         if let Some(stack_base) = stack_page {
@@ -353,7 +353,7 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                                 );
 
                                 // Read argv from userspace (up to 8 args)
-                                let mut arg_ptrs = [0usize; 8];
+                                let _arg_ptrs = [0usize; 8];
                                 let mut arg_bufs = [[0u8; 64]; 8];
                                 let mut arg_lens = [0usize; 8];
                                 let mut argc = 0usize;
@@ -844,8 +844,8 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                 {
                     // Atomic memory operation — emulate
                     let size = (instr >> 30) & 3;
-                    let a_bit = (instr >> 23) & 1;
-                    let r_bit = (instr >> 22) & 1;
+                    let _a_bit = (instr >> 23) & 1;
+                    let _r_bit = (instr >> 22) & 1;
                     let rs = ((instr >> 16) & 0x1F) as usize;
                     let opc = (instr >> 12) & 7;
                     let rn = ((instr >> 5) & 0x1F) as usize;

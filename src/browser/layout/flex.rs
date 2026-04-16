@@ -104,7 +104,7 @@ pub fn layout_flex(
         remaining / (count as i32 - 1)
     } else { 0 };
 
-    for (i, &ci) in child_indices.iter().enumerate() {
+    for (_i, &ci) in child_indices.iter().enumerate() {
         let child_main = if is_row { boxes[ci].width } else { boxes[ci].height };
         let grow_extra = (flex.flex_grow * grow_unit) as i32;
 

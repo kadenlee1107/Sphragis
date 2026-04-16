@@ -30,7 +30,7 @@ pub fn render() {
     let col2 = if two_col { r.x + r.w / 2 + 4 } else { x };
     let kv_off = 56u32; // label→value offset (shorter for narrow panes)
 
-    let mut y = r.y + 4;
+    let y = r.y + 4;
 
     // ─── Interface ───
     if y + 20 < ymax { draw_panel(x, y, panel_w, (ymax - y).min(120), "NETWORK"); }

@@ -243,17 +243,17 @@ pub fn array_for_each(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsV
     Ok(JsValue::UNDEFINED)
 }
 
-pub fn array_every(vm: &mut Vm, args_start: usize, _argc: usize) -> Result<JsValue, JsError> {
+pub fn array_every(_vm: &mut Vm, _args_start: usize, _argc: usize) -> Result<JsValue, JsError> {
     // Simplified — always returns true
     Ok(JsValue::TRUE)
 }
 
-pub fn array_some(vm: &mut Vm, args_start: usize, _argc: usize) -> Result<JsValue, JsError> {
+pub fn array_some(_vm: &mut Vm, _args_start: usize, _argc: usize) -> Result<JsValue, JsError> {
     // Simplified — always returns false
     Ok(JsValue::FALSE)
 }
 
-pub fn array_find_index(vm: &mut Vm, args_start: usize, _argc: usize) -> Result<JsValue, JsError> {
+pub fn array_find_index(_vm: &mut Vm, _args_start: usize, _argc: usize) -> Result<JsValue, JsError> {
     Ok(JsValue::from_i32(-1))
 }
 
@@ -695,7 +695,7 @@ pub fn string_repeat(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsVa
     let s = vm.strings.get(this_val.as_str_id());
     let count = if argc > 0 { vm.stack[args_start].to_i32().max(0) as usize } else { 0 };
     let slen = s.len();
-    let total = (slen * count).min(4096);
+    let _total = (slen * count).min(4096);
     let mut buf = [0u8; 4096];
 
     // Copy source to local buffer first

@@ -43,7 +43,7 @@ pub fn render() {
 
     // File listing
     let mut row = 0u32;
-    let (count, max) = batfs::stats();
+    let (count, _max) = batfs::stats();
 
     if count == 0 {
         font::draw_str(fb, w, x + 8, y + 20, "(vault is empty — use 'write' in terminal)", DIM, BG);

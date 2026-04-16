@@ -217,7 +217,7 @@ fn fake_boot_and_wipe(fb: *mut u32, w: u32, h: u32) {
     }
 }
 
-fn draw_bat(fb: *mut u32, w: u32, cx: u32, cy: u32) {
+fn draw_bat(_fb: *mut u32, _w: u32, cx: u32, cy: u32) {
     // Small bat silhouette
     gpu::fill_rect(cx - 8, cy - 5, 16, 20, WHITE);
     gpu::fill_rect(cx - 6, cy - 12, 12, 8, WHITE);

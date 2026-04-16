@@ -4,7 +4,6 @@
 
 use crate::drivers::uart;
 use crate::ui::console;
-use crate::kernel::mm;
 use crate::fs::batfs;
 use crate::net;
 

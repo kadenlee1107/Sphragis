@@ -2,7 +2,6 @@
 // Handles ICMP echo requests (replies to pings) and sends pings.
 
 use super::ip::{self, IpPacket};
-use crate::drivers::uart;
 use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 const ICMP_ECHO_REPLY: u8 = 0;

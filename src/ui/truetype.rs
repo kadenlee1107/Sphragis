@@ -471,8 +471,8 @@ impl TrueTypeFont {
             pos += 4;
 
             // Read translation offsets
-            let mut dx: i32;
-            let mut dy: i32;
+            let dx: i32;
+            let dy: i32;
             if (flags & 0x0001) != 0 {
                 // ARG_1_AND_2_ARE_WORDS
                 if pos + 4 > data.len() { break; }
@@ -697,8 +697,8 @@ impl TrueTypeFont {
                     // off -> off: implicit on-curve midpoint between them
                     let sx1 = p1.x as f32 * scale + offset_x;
                     let sy1 = offset_y - p1.y as f32 * scale;
-                    let mid0_x = (sx0 + offset_x) * 0.5; // midpoint before p0
-                    let mid0_y = (sy0 + offset_y) * 0.5;
+                    let _mid0_x = (sx0 + offset_x) * 0.5; // midpoint before p0
+                    let _mid0_y = (sy0 + offset_y) * 0.5;
                     let mid1_x = (sx0 + sx1) * 0.5;
                     let mid1_y = (sy0 + sy1) * 0.5;
                     edge_count = Self::flatten_bezier(mid1_x, mid1_y, sx0, sy0, mid1_x, mid1_y, edges, edge_count, 0);

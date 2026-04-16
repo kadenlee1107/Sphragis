@@ -415,7 +415,7 @@ impl Vm {
                     // Get upvalue from closure object
                     let closure = self.frames[self.frame_count - 1].closure_obj;
                     if !closure.is_null() {
-                        let uv_name = self.strings.intern(b"__upv__");
+                        let _uv_name = self.strings.intern(b"__upv__");
                         // Upvalues stored as properties on closure: __uv0, __uv1, etc.
                         let mut name_buf = [0u8; 8];
                         name_buf[0] = b'_'; name_buf[1] = b'_'; name_buf[2] = b'u';

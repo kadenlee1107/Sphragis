@@ -408,7 +408,7 @@ fn draw_status_bar(fb: *mut u32, w: u32, sy: u32) {
     font::draw_str(fb, w, 300, ty, "|", FG_DIM, STATUS_BG);
 
     // Uptime
-    let (mins, secs) = get_uptime();
+    let (mins, _secs) = get_uptime();
     font::draw_str(fb, w, 312, ty, "UP:", FG_DIM, STATUS_BG);
     draw_num_at(fb, w, 336, ty, mins as usize, FG_DIM, STATUS_BG);
     font::draw_str(fb, w, 352, ty, "m", FG_DIM, STATUS_BG);

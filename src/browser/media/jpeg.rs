@@ -336,8 +336,8 @@ fn decode_huff(reader: &mut JpegBitReader, table: &HuffTable) -> Result<u8, &'st
     }
 
     // Fallback: use sequential search
-    let mut code = 0u32;
-    let mut sym_offset = 0usize;
+    let _code = 0u32;
+    let _sym_offset = 0usize;
     // Reset reader position... this is tricky with a streaming reader
 
     // Simplified: return 0 for unmatched
@@ -446,7 +446,7 @@ impl<'a> JpegBitReader<'a> {
 
     fn fill_bits(&mut self) -> Result<(), &'static str> {
         while self.num_bits <= 24 && self.pos < self.data.len() {
-            let mut byte = self.data[self.pos];
+            let byte = self.data[self.pos];
             self.pos += 1;
             // Handle byte stuffing: FF 00 → FF
             if byte == 0xFF {

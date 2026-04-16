@@ -4,7 +4,6 @@
 
 use super::value::{JsValue, ObjId, StringId};
 use super::vm::{Vm, JsError};
-use super::object::ObjFlags;
 use crate::browser::dom::{Document, NodeType, MAX_TEXT, MAX_NAME};
 
 /// Global pointer to the active DOM document (set before script execution).
@@ -241,12 +240,12 @@ pub fn dom_get_element_by_id(vm: &mut Vm, args_start: usize, argc: usize) -> Res
     Ok(JsValue::NULL)
 }
 
-pub fn dom_query_selector(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsValue, JsError> {
+pub fn dom_query_selector(_vm: &mut Vm, _args_start: usize, argc: usize) -> Result<JsValue, JsError> {
     if argc == 0 { return Ok(JsValue::NULL); }
     Ok(JsValue::NULL)
 }
 
-pub fn dom_query_selector_all(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsValue, JsError> {
+pub fn dom_query_selector_all(vm: &mut Vm, _args_start: usize, argc: usize) -> Result<JsValue, JsError> {
     if argc == 0 { return Ok(JsValue::NULL); }
     let arr = vm.heap.alloc_array(0);
     Ok(JsValue::from_obj(arr))

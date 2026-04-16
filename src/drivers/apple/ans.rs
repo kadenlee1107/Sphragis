@@ -126,7 +126,7 @@ pub fn init() -> Result<(), &'static str> {
 /// sector: LBA (512-byte sectors)
 /// count: number of sectors
 /// buf: destination buffer
-pub fn read_sectors(sector: u64, count: u32, buf: &mut [u8]) -> Result<(), &'static str> {
+pub fn read_sectors(_sector: u64, _count: u32, _buf: &mut [u8]) -> Result<(), &'static str> {
     if !INITIALIZED.load(Ordering::Relaxed) {
         return Err("ANS not initialized");
     }
@@ -141,7 +141,7 @@ pub fn read_sectors(sector: u64, count: u32, buf: &mut [u8]) -> Result<(), &'sta
 }
 
 /// Write sectors to the SSD.
-pub fn write_sectors(sector: u64, count: u32, buf: &[u8]) -> Result<(), &'static str> {
+pub fn write_sectors(_sector: u64, _count: u32, _buf: &[u8]) -> Result<(), &'static str> {
     if !INITIALIZED.load(Ordering::Relaxed) {
         return Err("ANS not initialized");
     }

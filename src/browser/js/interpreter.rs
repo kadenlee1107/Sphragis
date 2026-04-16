@@ -375,7 +375,7 @@ impl Engine {
 
         // Built-in: alert
         if callee_node.kind == NodeKind::Identifier && callee_node.name_str() == "alert" {
-            let mut arg_idx = call.extra;
+            let arg_idx = call.extra;
             if !AstNode::is_null(arg_idx) {
                 let val = self.eval_expr(ast, arg_idx);
                 let mut buf = [0u8; 128];

@@ -9,7 +9,6 @@
 // - Max attempts: exceed = permanent destruction
 
 use crate::crypto::sha256;
-use crate::drivers::uart;
 use core::sync::atomic::{AtomicU8, AtomicBool, Ordering};
 
 const MAX_ATTEMPTS: u8 = 5;

@@ -11,7 +11,6 @@
 
 use crate::drivers::uart;
 use crate::crypto::aes;
-use crate::crypto::sha256;
 
 /// Tor circuit state
 #[derive(Clone, Copy, PartialEq)]
@@ -79,7 +78,7 @@ pub fn onion_encrypt(plaintext: &[u8], output: &mut [u8]) -> usize {
         if c.state != CircuitState::Ready { return 0; }
 
         let mut buf = [0u8; 1400];
-        let mut len = plaintext.len().min(1300);
+        let len = plaintext.len().min(1300);
         buf[..len].copy_from_slice(&plaintext[..len]);
 
         // Layer 3: encrypt with exit key
