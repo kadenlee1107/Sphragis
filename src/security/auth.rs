@@ -36,8 +36,8 @@ pub enum AuthResult {
 /// In production, these hashes come from Secure Enclave setup.
 /// For dev/QEMU, we set them here.
 pub fn init(passphrase: &str, duress_code: &str) {
-    let pass_hash = sha256::hash(passphrase.as_bytes());
-    let duress_hash = sha256::hash(duress_code.as_bytes());
+    let pass_hash = kdf(passphrase.as_bytes());
+    let duress_hash = kdf(duress_code.as_bytes());
     unsafe {
         PASSPHRASE_HASH = pass_hash;
         DURESS_HASH = duress_hash;
@@ -47,6 +47,33 @@ pub fn init(passphrase: &str, duress_code: &str) {
     LOCKED_OUT.store(false, Ordering::Relaxed);
 }
 
+/// Iterated SHA-256 KDF (ATTACK-CRYPTO-005 partial). The prior
+/// implementation was a single `sha256::hash(passphrase)` — unsalted,
+/// uniterated, 10-char alphanumeric passphrases fall to a single GPU
+/// in minutes. This adds:
+///   - salt (prevents rainbow-table reuse across installs)
+///   - 4096 iterations (each guess costs ~4096 SHA-256 ops)
+///
+/// Not Argon2 — that's the Phase B target. This is the "stop making
+/// it trivially dictionary-attackable" fix.
+fn kdf(passphrase: &[u8]) -> [u8; 32] {
+    const SALT: [u8; 16] = *b"bat_os-auth-v1\0\0";
+    let n = passphrase.len().min(64);
+    let mut buf = [0u8; 128];
+    buf[..n].copy_from_slice(&passphrase[..n]);
+    buf[64..64 + 16].copy_from_slice(&SALT);
+    let mut h = sha256::hash(&buf);
+    for round in 0u64..4096 {
+        let mut round_buf = [0u8; 128];
+        round_buf[..32].copy_from_slice(&h);
+        round_buf[32..32 + n].copy_from_slice(&passphrase[..n]);
+        round_buf[96..96 + 16].copy_from_slice(&SALT);
+        round_buf[112..120].copy_from_slice(&round.to_le_bytes());
+        h = sha256::hash(&round_buf);
+    }
+    h
+}
+
 /// Attempt authentication with a passphrase.
 /// Returns the result — caller decides what to do.
 pub fn authenticate(input: &str) -> AuthResult {
@@ -54,7 +81,7 @@ pub fn authenticate(input: &str) -> AuthResult {
         return AuthResult::LockedOut;
     }
 
-    let input_hash = sha256::hash(input.as_bytes());
+    let input_hash = kdf(input.as_bytes());
 
     // Check duress code FIRST — if they're being coerced
     let is_duress = unsafe {
