@@ -762,22 +762,43 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     }
     sess.server_seq += 1;
 
-    // Decrypt
-    let cipher = {let mut k=[0u8;16]; k.copy_from_slice(&sess.server_key[..16]); crate::crypto::aes::Aes128::new(&k)};
-    let mut decrypted = [0u8; 16896]; // 16KB max TLS record payload
+    // Decrypt with AUTHENTICATION (ROOT-4).
+    //
+    // TLS 1.3 AEAD additional_data is the 5-byte record header:
+    // type(1) || legacy_version(2) || length(2)  (RFC 8446 §5.2).
+    // The wire format for the ciphertext payload is
+    //   [ciphertext || 16-byte tag]
+    // where the LAST inner byte of the plaintext is the content type
+    // (inner record type), optionally preceded by zero padding.
+    //
+    // The old code called gcm_crypt (pure XOR stream, no tag) and
+    // relied on inner-content-type heuristics for integrity — that
+    // was broken. Now we compute GHASH over AAD||ciphertext and
+    // verify the tag in constant time BEFORE touching the plaintext.
+    let mut key16 = [0u8; 16];
+    key16.copy_from_slice(&sess.server_key[..16]);
+    let gcm = crate::crypto::gcm_verified::Aes128Gcm::new(&key16);
+
+    let aad = [record[0], record[1], record[2], record[3], record[4]];
+    let mut decrypted = [0u8; 16896];
     let crypt_len = rec_len.min(decrypted.len());
-    let enc_data = &record[5..5 + crypt_len];
-    decrypted[..crypt_len].copy_from_slice(enc_data);
+    decrypted[..crypt_len].copy_from_slice(&record[5..5 + crypt_len]);
 
-    cipher.gcm_crypt(&nonce,&mut decrypted[..crypt_len]);
+    let plaintext_len = match gcm.decrypt_inplace(&nonce, &aad, &mut decrypted[..crypt_len]) {
+        Ok(n) => n,
+        Err(e) => {
+            uart::puts("[tls] record auth FAILED: ");
+            uart::puts(e);
+            uart::puts(" — closing session\n");
+            // Don't touch the secrets; let caller close() wipe them.
+            return Err("TLS record authentication failed");
+        }
+    };
 
-    // Decrypted data: [plaintext...][content_type(1)][GCM_tag(16)]
-    // The content type is at position rec_len - 17
-    // The actual plaintext is bytes 0..(rec_len - 17)
-    let data_len = if rec_len > 17 { rec_len - 17 } else { 0 };
-
-    // Check the inner content type (last byte before GCM tag)
-    let inner_type = if rec_len > 16 { decrypted[rec_len - 17] } else { 0 };
+    // Authenticated plaintext is [data...][inner_content_type].
+    // data_len = plaintext_len - 1 (strip the content type byte).
+    let data_len = if plaintext_len > 0 { plaintext_len - 1 } else { 0 };
+    let inner_type = if plaintext_len > 0 { decrypted[plaintext_len - 1] } else { 0 };
 
     uart::puts("[tls] decrypted seq=");
     crate::kernel::mm::print_num((sess.server_seq - 1) as usize);
