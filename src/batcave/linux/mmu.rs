@@ -279,7 +279,25 @@ pub fn switch_to_primary() {
 ///   0x00000000 - 0x001FFFFF → phys_base (busybox code, 2MB block)
 ///   0x08000000 - 0x0BFFFFFF → identity (MMIO: UART, virtio)
 ///   0x40000000 - 0x4FFFFFFF → identity (kernel RAM, 256MB)
+///
+/// **Idempotent** (V2-NEW-026 fix): if the MMU is already enabled (SCTLR.M==1),
+/// this function is a no-op. The previous behavior re-allocated all tables and
+/// reset `TTBR0_EL1 = PRIMARY_L1` unconditionally; when called from the cave
+/// path (after `switch_to_cave` had already loaded the cave's L1), it silently
+/// reverted TTBR0 to the primary table, dissolving the sandbox mid-startup.
 pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
+    // V2-NEW-026: bail out if MMU is already enabled. The cave path calls
+    // `switch_to_cave(cave_l1)` before `execute_with_args`, which used to
+    // re-invoke setup_and_enable and clobber TTBR0 back to PRIMARY_L1.
+    unsafe {
+        let sctlr: u64;
+        core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr);
+        if sctlr & 1 != 0 {
+            uart::puts("[mmu] already enabled, skipping setup (preserving TTBR0)\n");
+            return Ok(());
+        }
+    }
+
     uart::puts("[mmu] Setting up page tables...\n");
 
     // Allocate L0 table (1 page)

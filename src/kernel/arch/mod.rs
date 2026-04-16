@@ -169,8 +169,13 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                             );
                         }
 
-                        // Real exit (not a child — leave BatCave entirely)
-                        crate::batcave::linux::mmu::disable();
+                        // Real exit (not a child — leave BatCave entirely).
+                        // V2-NEW-024: DO NOT call mmu::disable here — it
+                        // clears SCTLR.M which the next switch_to_cave does
+                        // not re-enable, leaving subsequent caves running
+                        // with no AP/UXN/PXN enforcement at all. Switch to
+                        // primary TTBR0 instead; MMU stays on.
+                        crate::batcave::linux::mmu::switch_to_primary();
                         core::arch::asm!(
                             "movz x0, #0x1000",
                             "movk x0, #0x4000, lsl #16",
@@ -830,10 +835,12 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                 }
             }
 
-            // Only reach here for non-busybox BRK (real shell exit)
+            // Only reach here for non-busybox BRK (real shell exit).
+            // V2-NEW-024: switch TTBR0 back to primary instead of disabling
+            // the MMU so subsequent caves keep W^X / UXN / PXN protection.
             uart::puts("[linux] exit — returning to desktop\n");
             unsafe {
-                crate::batcave::linux::mmu::disable();
+                crate::batcave::linux::mmu::switch_to_primary();
                 core::arch::asm!(
                     "movz x0, #0x1000",
                     "movk x0, #0x4000, lsl #16",

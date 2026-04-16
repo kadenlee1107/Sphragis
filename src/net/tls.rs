@@ -139,12 +139,10 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
     sess.client_seq = 0;
     sess.server_seq = 0;
 
-    // Generate random values using timer entropy
-    for i in 0..32 {
-        let val: u64;
-        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) val); }
-        sess.client_random[i] = ((val >> ((i % 8) * 8)) ^ (val >> 3)) as u8;
-    }
+    // NEW-CRYPTO-005: route all TLS randomness through the SHA-chained DRBG
+    // in `crypto::rng` instead of reading `cntpct_el0` directly. An observer
+    // who can estimate boot time could otherwise narrow scalars to ~2^20.
+    crate::crypto::rng::fill_bytes(&mut sess.client_random);
 
     // Generate X25519 keypair
     generate_x25519_keypair(&mut sess.our_private, &mut sess.our_public);
@@ -168,10 +166,11 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
     pos += 32;
 
     // Session ID (32 random bytes — required by many TLS 1.3 servers for compat)
+    // NEW-CRYPTO-005: independent DRBG draw, not a derivable XOR of client_random.
     buf[pos] = 32; pos += 1;
-    for i in 0..32 {
-        buf[pos + i] = sess.client_random[i] ^ (i as u8 + 0xAA);
-    }
+    let mut sid = [0u8; 32];
+    crate::crypto::rng::fill_bytes(&mut sid);
+    buf[pos..pos+32].copy_from_slice(&sid);
     pos += 32;
 
     // Cipher suites
@@ -307,25 +306,52 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
         pos += 2;
         let ext_end = (pos + ext_len).min(content.len());
 
-        // Parse extensions to find key_share (type 0x0033 = 51)
-        while pos + 4 < ext_end {
+        // Parse extensions: must find key_share (51) AND supported_versions
+        // (43) reporting TLS 1.3. NET2-003: without the supported_versions
+        // check, an active MITM can strip the extension and downgrade us —
+        // the negotiated TLS 1.3 keys still derive, so the GCM tag check
+        // won't notice a protocol downgrade.
+        let mut saw_tls13 = false;
+        let mut saw_key_share = false;
+        let ext_walk_end = ext_end.saturating_sub(4);
+        while pos + 4 <= ext_walk_end + 4 && pos + 4 <= ext_end {
+            if pos + 4 > content.len() { break; }
             let ext_type = ((content[pos] as u16) << 8) | content[pos + 1] as u16;
             let ext_data_len = ((content[pos + 2] as usize) << 8) | content[pos + 3] as usize;
             pos += 4;
+            if pos + ext_data_len > ext_end { break; }
+
+            if ext_type == 43 && ext_data_len >= 2 {
+                // supported_versions in ServerHello carries exactly one
+                // selected_version (2 bytes). TLS 1.3 = 0x0304.
+                let v = ((content[pos] as u16) << 8) | content[pos + 1] as u16;
+                if v == 0x0304 {
+                    saw_tls13 = true;
+                }
+            }
 
             if ext_type == 51 {
                 // key_share: named_group (2) + key_exchange_length (2) + key_exchange
-                if pos + 4 + 32 <= content.len() {
+                if ext_data_len >= 4 + 32 && pos + 4 + 32 <= content.len() {
                     let group = ((content[pos] as u16) << 8) | content[pos + 1] as u16;
                     let key_len = ((content[pos + 2] as usize) << 8) | content[pos + 3] as usize;
-                    if group == 29 && key_len == 32 && pos + 4 + 32 <= content.len() {
+                    if group == 29 && key_len == 32 {
                         sess.peer_public.copy_from_slice(&content[pos + 4..pos + 36]);
+                        saw_key_share = true;
                         uart::puts("[tls] found X25519 key_share\n");
                     }
                 }
             }
 
             pos += ext_data_len;
+        }
+
+        if !saw_tls13 {
+            uart::puts("[tls] ServerHello missing supported_versions=TLS1.3 — abort\n");
+            return Err("TLS: ServerHello did not select TLS 1.3 (downgrade?)");
+        }
+        if !saw_key_share {
+            return Err("TLS: ServerHello missing X25519 key_share");
         }
 
         // ATTACK-CRYPTO-008: reject small-order / identity X25519 peer
@@ -533,9 +559,48 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
             crate::kernel::mm::print_num(inner_len);
             uart::puts("\n");
 
-            // Add decrypted handshake to transcript (only type 0x16 = handshake)
+            // NEW-CRYPTO-011 / NET2-002: parse handshake messages inside the
+            // decrypted record. For every msg_type != Finished(0x14) we add
+            // it to the transcript as before; when we see Finished, we
+            // compute the expected HMAC over the transcript-up-to-that-point
+            // and constant-time-compare against the 32 bytes of verify_data.
+            // Mismatch aborts the connection — this is the MITM defense
+            // that was missing previously.
             if inner_type == 0x16 && inner_len > 0 {
-                transcript.update(&decrypted[..inner_len]);
+                let mut hp = 0usize;
+                while hp + 4 <= inner_len {
+                    let msg_type = decrypted[hp];
+                    let msg_len = ((decrypted[hp + 1] as usize) << 16)
+                                | ((decrypted[hp + 2] as usize) << 8)
+                                | (decrypted[hp + 3] as usize);
+                    let msg_end = hp + 4 + msg_len;
+                    if msg_end > inner_len { break; }
+
+                    if msg_type == 0x14 {
+                        // Finished — verify BEFORE hashing it.
+                        if msg_len != 32 {
+                            return Err("TLS: server Finished length != 32");
+                        }
+                        let finished_key = crate::crypto::sha256::hkdf_expand_label(
+                            &server_hs_secret, b"finished", &[], 32);
+                        let th = transcript.clone().finalize();
+                        let expected = crate::crypto::sha256::hmac(&finished_key, &th);
+                        let mut diff: u8 = 0;
+                        for i in 0..32 {
+                            diff |= expected[i] ^ decrypted[hp + 4 + i];
+                        }
+                        if diff != 0 {
+                            uart::puts("[tls] server Finished HMAC mismatch — aborting\n");
+                            return Err("TLS: server Finished HMAC mismatch (MITM?)");
+                        }
+                        uart::puts("[tls] server Finished HMAC ok\n");
+                    }
+
+                    // Always feed the full handshake-message bytes into the
+                    // transcript (matches RFC 8446 §4.4.1 Transcript-Hash).
+                    transcript.update(&decrypted[hp..msg_end]);
+                    hp = msg_end;
+                }
             }
         }
 
@@ -684,11 +749,22 @@ pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
 }
 
 /// Receive and decrypt application data from a TLS record.
+///
+/// NET2-006 / NEW-CRYPTO-023 fix: the previous implementation called
+/// `recv_app_data(buf)` recursively on ChangeCipherSpec records (and the
+/// 16 KB `record` / `decrypted` stack frames compounded with every call).
+/// A server that streamed CCS records could overflow the kernel stack.
+/// We now loop up to 8 times for CCS skipping instead of recursing.
 pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     let sess = session_mut(LEGACY_TLS_PCB);
     if sess.state != TlsState::Established { return Err("not established"); }
 
     let mut record = [0u8; 17408]; // 16KB max TLS record + 1KB header/overhead
+
+    // Loop at most a small fixed number of times so CCS / dummy records do
+    // not become a stack-exhaustion vector.
+    let mut ccs_skips = 0u32;
+    loop {
     let mut n;
 
     // Use leftover data from previous recv if available
@@ -772,8 +848,13 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     uart::puts("\n");
 
     if rec_type == 0x14 {
-        // ChangeCipherSpec — skip
-        return recv_app_data(buf); // recurse to get next record
+        // ChangeCipherSpec — skip. Loop instead of recursing so a server
+        // sending many CCS records cannot exhaust the kernel stack.
+        ccs_skips += 1;
+        if ccs_skips > 8 {
+            return Err("TLS: too many ChangeCipherSpec records");
+        }
+        continue;
     }
 
     if rec_type != 0x17 { return Err("not app data"); }
@@ -880,7 +961,8 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     let copy_len = data_len.min(buf.len());
     buf[..copy_len].copy_from_slice(&decrypted[..copy_len]);
 
-    Ok(copy_len)
+    return Ok(copy_len);
+    } // end loop
 }
 
 /// Close TLS session.
@@ -913,17 +995,15 @@ pub fn is_established() -> bool {
 
 // ─── X25519 Key Exchange (Curve25519) ───
 
-/// Generate X25519 keypair using timer entropy.
+/// Generate X25519 keypair via the SHA-chained DRBG.
+///
+/// NEW-CRYPTO-005: the previous implementation read `cntpct_el0` directly,
+/// giving a passive observer who could estimate boot time ~2^20 candidate
+/// scalars. The DRBG in `crate::crypto::rng` chains SHA-256 over 8 spaced
+/// timer reads plus prior state, so a single observed output cannot recover
+/// the scalar even with boot-time knowledge.
 fn generate_x25519_keypair(private: &mut [u8; 32], public: &mut [u8; 32]) {
-    // Generate private key from timer entropy
-    for i in 0..32 {
-        let val: u64;
-        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) val); }
-        // Mix multiple reads for better entropy
-        let val2: u64;
-        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) val2); }
-        private[i] = (val ^ val2 ^ (val >> (i as u64 + 1))) as u8;
-    }
+    crate::crypto::rng::fill_bytes(private);
 
     // Clamp private key per RFC 7748
     private[0] &= 248;
