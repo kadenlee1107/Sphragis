@@ -631,8 +631,13 @@ pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
     }
     sess.client_seq += 1;
 
-    // Encrypt with AES-128-GCM (with real GHASH auth tag)
-    let cipher = {let mut k=[0u8;16]; k.copy_from_slice(&sess.client_key[..16]); crate::crypto::aes::Aes128::new(&k)};
+    // Encrypt with AES-128-GCM using the audited RustCrypto-backed impl.
+    // Matches the recv-side migration: same primitives, same AAD format,
+    // constant-time GHASH + tag construction.
+    let mut key16 = [0u8; 16];
+    key16.copy_from_slice(&sess.client_key[..16]);
+    let gcm = crate::crypto::gcm_verified::Aes128Gcm::new(&key16);
+
     let mut plaintext = [0u8; 4096];
     let len = data.len().min(4000);
     plaintext[..len].copy_from_slice(&data[..len]);
@@ -643,8 +648,11 @@ pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
     // AAD = TLS record header
     let aad = [0x17u8, 0x03, 0x03, (enc_len >> 8) as u8, enc_len as u8];
 
-    // Encrypt and get real auth tag
-    let tag = cipher.gcm_encrypt(&nonce, &aad, &mut plaintext[..inner_len]);
+    // Buffer that will hold ciphertext + tag in place.
+    let mut ct_and_tag = [0u8; 4096];
+    ct_and_tag[..inner_len].copy_from_slice(&plaintext[..inner_len]);
+    let written = gcm.encrypt_inplace(&nonce, &aad, &mut ct_and_tag, inner_len);
+    debug_assert_eq!(written, enc_len);
 
     // Build TLS record
     let mut record = [0u8; 4096];
@@ -652,8 +660,7 @@ pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
     record[1] = 0x03; record[2] = 0x03;
     record[3] = (enc_len >> 8) as u8;
     record[4] = enc_len as u8;
-    record[5..5 + inner_len].copy_from_slice(&plaintext[..inner_len]);
-    record[5 + inner_len..5 + enc_len].copy_from_slice(&tag);
+    record[5..5 + enc_len].copy_from_slice(&ct_and_tag[..enc_len]);
 
     uart::puts("[tls] send_app_data\n");
     crate::net::tcp::send_data(&record[..5 + enc_len])
