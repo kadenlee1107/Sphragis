@@ -17,7 +17,7 @@ qemu-system-aarch64 \
   -accel hvf \
   -machine virt \
   -cpu max \
-  -m 256M \
+  -m 2G \
   -display cocoa \
   -device virtio-gpu-device \
   -device virtio-keyboard-device \

@@ -5,8 +5,8 @@
 use core::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 
 pub const PAGE_SIZE: usize = 4096;
-const MAX_FRAMES: usize = 32768; // 128MB / 4KB = 32768 frames
-const BITMAP_SIZE: usize = MAX_FRAMES / 64; // 512 u64s = 512 bitmap entries
+const MAX_FRAMES: usize = 524288; // 2GB / 4KB = 524288 frames
+const BITMAP_SIZE: usize = MAX_FRAMES / 64; // 8192 u64s = 8192 bitmap entries
 
 static BITMAP: [AtomicU64; BITMAP_SIZE] = {
     const INIT: AtomicU64 = AtomicU64::new(0);
