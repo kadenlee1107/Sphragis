@@ -1,0 +1,60 @@
+# Bat_OS — pinned GN arguments for content_shell ARM64 build
+# See CHROMIUM_PORT_PLAN.md Phase 1 for the rationale on each flag.
+
+# === Target ===
+target_os                      = "linux"
+target_cpu                     = "arm64"
+
+# === Optimization ===
+is_official_build              = true
+is_debug                       = false
+symbol_level                   = 0
+blink_symbol_level             = 0
+v8_symbol_level                = 0
+
+# === Linking ===
+is_component_build             = false
+treat_warnings_as_errors       = false
+
+# === Use Chromium's bundled toolchain + sysroot ===
+use_sysroot                    = true
+use_lld                        = true
+clang_use_chrome_plugins       = false
+
+# === Disable everything we don't need ===
+enable_nacl                    = false
+enable_widevine                = false
+enable_pdf                     = false
+enable_print_preview           = false
+enable_remoting                = false
+enable_extensions              = false
+enable_plugins                 = false
+enable_hangout_services_extension = false
+proprietary_codecs             = false
+ffmpeg_branding                = "Chromium"
+safe_browsing_mode             = 0
+chrome_pgo_phase               = 0
+
+# === No host integrations (we don't have these on Bat_OS) ===
+use_alsa                       = false
+use_pulseaudio                 = false
+use_cups                       = false
+use_dbus                       = false
+use_kerberos                   = false
+use_gnome_keyring              = false
+use_glib                       = false
+use_gio                        = false
+use_udev                       = false
+
+# === Ozone (display backend abstraction) ===
+use_ozone                      = true
+ozone_auto_platforms           = false
+ozone_platform_headless        = true
+ozone_platform                 = "headless"
+
+# Phase 5 will switch to: ozone_platform = "batos"
+# and add: ozone_extra_path = "//ui/ozone/platform/batos/ozone_extra.gni"
+
+# === Force headless single-process for Phase 1 sanity ===
+headless_use_embedded_resources = true
+v8_use_external_startup_data    = true
