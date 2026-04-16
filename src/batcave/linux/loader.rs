@@ -162,6 +162,205 @@ pub fn set_phys_base(v: usize) { LOADED_PHYS_BASE.store(v, Ordering::Relaxed); }
 pub fn set_orig_entry(v: usize) { LOADED_ORIG_ENTRY.store(v, Ordering::Relaxed); }
 pub fn set_entry(v: usize) { LOADED_ENTRY.store(v, Ordering::Relaxed); }
 
+/// ELF loaded into a rebased virtual window. Returned by `load_elf_rebased`
+/// so the runner can call `setup_cave_pagetable_at(slot, phys_base, virt_base)`
+/// and then `switch_to_cave` / `execute_with_args(virt_entry, ...)`.
+#[derive(Clone, Copy, Debug)]
+pub struct LoadedElfInfo {
+    /// Virtual entry point (virt_base + entry - min_addr).
+    pub virt_entry: u64,
+    /// Physical base the frames were allocated at.
+    pub phys_base: usize,
+    /// Total bytes reserved (max_addr - min_addr, rounded up).
+    pub total_size: usize,
+    /// Virtual base passed by the caller (for reference).
+    pub virt_base: u64,
+}
+
+/// Load a PIE ELF with virtual addresses rebased to `virt_base`.
+///
+/// Unlike `load_elf` (which treats phys = virt, identity-mapped), this
+/// function applies relocations so the binary's internal addresses
+/// reference the cave's VA window rather than raw physical addresses.
+/// Pair with `setup_cave_pagetable_at(slot, info.phys_base, virt_base)`
+/// and `switch_to_cave(l1)` to actually mount the cave before
+/// `execute_with_args(info.virt_entry, argv)`.
+pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'static str> {
+    if data.len() < 64 { return Err("too small"); }
+    if &data[0..4] != b"\x7fELF" { return Err("not ELF"); }
+    if virt_base & 0x1FFFFF != 0 { return Err("virt_base not 2MB aligned"); }
+
+    let entry = u64_at(data, 24);
+    let phoff = u64_at(data, 32) as usize;
+    let phnum = u16_at(data, 56) as usize;
+    let phentsz = u16_at(data, 54) as usize;
+
+    uart::puts("[loader] Rebased Entry: 0x"); print_hex(entry);
+    uart::puts(" virt_base: 0x"); print_hex(virt_base); uart::puts("\n");
+
+    // Scan program headers for min/max vaddr.
+    let mut min_addr: u64 = u64::MAX;
+    let mut max_addr: u64 = 0;
+    for i in 0..phnum {
+        let ph = phoff + i * phentsz;
+        if ph + phentsz > data.len() { break; }
+        if u32_at(data, ph) != 1 { continue; }
+        let vaddr = u64_at(data, ph + 16);
+        let memsz = u64_at(data, ph + 40);
+        if vaddr < min_addr { min_addr = vaddr; }
+        let seg_end = vaddr.checked_add(memsz).ok_or("PT_LOAD vaddr+memsz overflow")?;
+        if seg_end > max_addr { max_addr = seg_end; }
+    }
+    if min_addr == u64::MAX { return Err("no PT_LOAD segments"); }
+
+    let total_size = (max_addr - min_addr) as usize;
+    let total_pages = (total_size + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    // Same 2MB-aligned contiguous-alloc pattern as load_elf.
+    let mut phys_base = frame::alloc_frame().ok_or("oom")?;
+    while phys_base & 0x1FFFFF != 0 {
+        phys_base = frame::alloc_frame().ok_or("oom")?;
+    }
+    for i in 1..total_pages {
+        let expected = phys_base + i * PAGE_SIZE;
+        let got = frame::alloc_frame().ok_or("oom")?;
+        if got != expected {
+            return Err("non-contiguous alloc (memory fragmented)");
+        }
+    }
+
+    uart::puts("[loader] Rebased phys_base: 0x"); print_hex(phys_base as u64); uart::puts("\n");
+
+    // Two offsets:
+    //   patch_offset — where we WRITE during load (physical, identity-mapped)
+    //   value_offset — what VALUE we write in relocations (the VA the binary
+    //                  will see at runtime, once switch_to_cave installs the
+    //                  cave's TTBR0 mapping virt_base..virt_base+total_size
+    //                  to phys_base..phys_base+total_size)
+    let patch_offset: i64 = phys_base as i64 - min_addr as i64;
+    let value_offset: i64 = virt_base as i64 - min_addr as i64;
+
+    // Copy PT_LOAD segments to physical memory (using patch_offset).
+    for i in 0..phnum {
+        let ph = phoff + i * phentsz;
+        if ph + phentsz > data.len() { break; }
+        if u32_at(data, ph) != 1 { continue; }
+
+        let p_offset = u64_at(data, ph + 8) as usize;
+        let vaddr = u64_at(data, ph + 16) as usize;
+        let filesz = u64_at(data, ph + 32) as usize;
+        let memsz = u64_at(data, ph + 40) as usize;
+        let phys_addr = (vaddr as i64 + patch_offset) as usize;
+
+        if filesz > 0 {
+            match p_offset.checked_add(filesz) {
+                Some(end) if end <= data.len() => {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            data.as_ptr().add(p_offset),
+                            phys_addr as *mut u8,
+                            filesz,
+                        );
+                    }
+                }
+                _ => return Err("PT_LOAD past data end or overflow"),
+            }
+        }
+        if memsz > filesz {
+            unsafe {
+                core::ptr::write_bytes(
+                    (phys_addr + filesz) as *mut u8,
+                    0,
+                    memsz - filesz,
+                );
+            }
+        }
+    }
+
+    // Apply PT_DYNAMIC R_AARCH64_RELATIVE relocations.
+    // Patches go to physical (patch_offset); values use virt_base (value_offset).
+    let phys_range_end = phys_base.saturating_add(total_size);
+    for i in 0..phnum {
+        let ph = phoff + i * phentsz;
+        if ph + phentsz > data.len() { break; }
+        if u32_at(data, ph) != 2 { continue; }
+
+        let dyn_offset = u64_at(data, ph + 8) as usize;
+        let dyn_size = u64_at(data, ph + 32) as usize;
+        let mut rela_off: usize = 0;
+        let mut rela_sz: usize = 0;
+
+        let mut pos = dyn_offset;
+        while pos + 16 <= data.len() && pos < dyn_offset + dyn_size {
+            let tag = u64_at(data, pos);
+            let val = u64_at(data, pos + 8);
+            match tag { 0 => break, 7 => rela_off = val as usize, 8 => rela_sz = val as usize, _ => {} }
+            pos += 16;
+        }
+
+        if rela_off > 0 && rela_sz > 0 {
+            let num = (rela_sz / 24).min(50_000_000);
+            uart::puts("[loader] Applying "); crate::kernel::mm::print_num(num);
+            uart::puts(" relocations (rebased)\n");
+            let mut applied = 0usize;
+            for r in 0..num {
+                let re = match rela_off.checked_add(r.checked_mul(24).unwrap_or(usize::MAX)) {
+                    Some(v) => v,
+                    None => break,
+                };
+                match re.checked_add(24) {
+                    Some(end) if end <= data.len() => {}
+                    _ => break,
+                }
+                let r_offset = u64_at(data, re);
+                let r_info = u64_at(data, re + 8);
+                let r_addend = u64_at(data, re + 16);
+                if (r_info & 0xFFFFFFFF) as u32 == 0x403 {
+                    let patch_addr = (r_offset as i64 + patch_offset) as usize;
+                    let value      = (r_addend as i64 + value_offset) as u64;
+                    let patch_end = match patch_addr.checked_add(8) {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    if patch_addr < phys_base || patch_end > phys_range_end {
+                        continue; // hostile / stray — silent skip
+                    }
+                    unsafe {
+                        core::arch::asm!("str {v}, [{a}]",
+                            a = in(reg) patch_addr, v = in(reg) value);
+                    }
+                    applied += 1;
+                }
+            }
+            uart::puts("[loader] Applied "); crate::kernel::mm::print_num(applied);
+            uart::puts(" R_RELATIVE (rebased)\n");
+        }
+    }
+
+    // Flush dcache + icache.
+    unsafe {
+        let start = phys_base & !63;
+        let end = phys_base + total_size + 0x20000;
+        let mut addr = start;
+        while addr < end {
+            core::arch::asm!("dc cvac, {a}", a = in(reg) addr);
+            core::arch::asm!("ic ivau, {a}", a = in(reg) addr);
+            addr += 64;
+        }
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("isb");
+    }
+
+    let virt_entry = (entry as i64 + value_offset) as u64;
+
+    Ok(LoadedElfInfo {
+        virt_entry,
+        phys_base,
+        total_size,
+        virt_base,
+    })
+}
+
 pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
     if data.len() < 64 { return Err("too small"); }
     if &data[0..4] != b"\x7fELF" { return Err("not ELF"); }
