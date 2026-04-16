@@ -121,6 +121,38 @@ pub fn allow_inbound(src_ip: u32, _dst_ip: u32, protocol: u8) -> bool {
     false
 }
 
+/// Transport-layer port check for TCP (called after parsing the header).
+///
+/// NET2-019 fix: the pre-parse `allow_inbound` only matches src_ip + protocol
+/// for TCP, so port-gated rules (e.g. "allow TCP from 10.0.0.1 port 443 only")
+/// would have let in any TCP port. TCP handler now re-checks via this helper.
+pub fn allow_inbound_tcp(src_ip: u32, src_port: u16) -> bool {
+    if !FIREWALL_ENABLED.load(Ordering::Relaxed) {
+        return true;
+    }
+    unsafe {
+        let ptr = core::ptr::addr_of!(RULES);
+        // Two-pass scan: first look for port-specific rules, then fall back
+        // to port==0 (any) rules. Without this, a rule specifying port 443
+        // could be shadowed by an earlier port==0 rule.
+        for want_port_specific in [true, false] {
+            for i in 0..MAX_RULES {
+                let rule = &(*ptr)[i];
+                if !rule.active { continue; }
+                if rule.direction != 0 || rule.protocol != 6 { continue; }
+                let ip_ok = rule.ip == 0 || rule.ip == src_ip;
+                if !ip_ok { continue; }
+                if want_port_specific {
+                    if rule.port != 0 && rule.port == src_port { return true; }
+                } else {
+                    if rule.port == 0 { return true; }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Transport-layer port check for UDP (called after parsing the header).
 /// Returns true iff an inbound UDP rule permits traffic from `src_port`.
 pub fn allow_inbound_udp(src_ip: u32, src_port: u16) -> bool {
