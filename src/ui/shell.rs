@@ -119,6 +119,24 @@ fn execute(cmd: &str) {
         "png" => cmd_run_elf("png"),
         "posix" => cmd_run_elf("posix"),
         "cxx" | "c++" => cmd_run_elf("cxx"),
+        "v8" | "js" | "javascript" => cmd_run_elf("v8"),
+        "blink" | "chromium" | "chrome" => cmd_run_elf("blink"),
+        "browse" | "open" => {
+            if !parts[1].is_empty() {
+                console::puts("  Opening in BatBrowser: ");
+                console::puts(parts[1]);
+                console::puts("\n");
+                // Navigate in browser (runs full pipeline including fetch + render)
+                crate::ui::apps::browser::navigate(parts[1].as_bytes());
+                // Switch to browser, render, then switch back to shell
+                crate::ui::wm::switch_app(crate::ui::wm::APP_BROWSER);
+                crate::ui::apps::browser::render();
+                crate::drivers::virtio::gpu::flush(0, 0, 1280, 1024);
+                crate::ui::wm::switch_app(crate::ui::wm::APP_SHELL);
+            } else {
+                console::puts("  usage: browse <url>\n");
+            }
+        }
         "" => {}
         _ => {
             console::puts("  unknown command: ");
@@ -914,7 +932,7 @@ fn cmd_run_elf(name: &str) {
     uart::puts("\n");
 
     // BatCave EL0 runner — all static-PIE binaries go through here
-    let batcave_names = ["netsurf", "freetype", "png", "posix", "cxx"];
+    let batcave_names = ["netsurf", "freetype", "png", "posix", "cxx", "v8", "blink"];
     let use_batcave = batcave_names.iter().any(|&n| n == name);
 
     if use_batcave {
@@ -924,6 +942,9 @@ fn cmd_run_elf(name: &str) {
             "png" => crate::batcave::linux::runner::png_test_elf(),
             "posix" => crate::batcave::linux::runner::posix_test_elf(),
             "cxx" => crate::batcave::linux::runner::cxx_test_elf(),
+            "v8" => crate::batcave::linux::runner::v8_exec_elf(),
+            "blink" => crate::batcave::linux::runner::blink_test_elf(),
+            "csstok" => crate::batcave::linux::runner::css_tokenizer_test_elf(),
             _ => crate::batcave::linux::runner::netsurf_test_elf(),
         };
         uart::puts("[shell] using BatCave EL0 runner\n");
@@ -959,6 +980,12 @@ fn cmd_run_elf(name: &str) {
         crate::batcave::linux::runner::posix_test_elf()
     } else if name == "cxx" {
         crate::batcave::linux::runner::cxx_test_elf()
+    } else if name == "v8" {
+        crate::batcave::linux::runner::v8_exec_elf()
+    } else if name == "blink" {
+        crate::batcave::linux::runner::blink_test_elf()
+    } else if name == "csstok" {
+        crate::batcave::linux::runner::css_tokenizer_test_elf()
     } else {
         crate::batcave::linux::runner::hello_elf()
     };

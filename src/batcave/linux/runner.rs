@@ -28,6 +28,14 @@ static POSIX_TEST_ELF: &[u8] = include_bytes!("../../../tests/posix_test");
 pub fn posix_test_elf() -> &'static [u8] { POSIX_TEST_ELF }
 static CXX_TEST_ELF: &[u8] = include_bytes!("../../../tests/cxx_test");
 pub fn cxx_test_elf() -> &'static [u8] { CXX_TEST_ELF }
+static V8_EXEC_ELF: &[u8] = include_bytes!("../../../tests/v8_exec");
+pub fn v8_exec_elf() -> &'static [u8] { V8_EXEC_ELF }
+static V8_TEST_ELF: &[u8] = include_bytes!("../../../tests/v8_test");
+pub fn v8_test_elf() -> &'static [u8] { V8_TEST_ELF }
+static BLINK_TEST_ELF: &[u8] = include_bytes!("../../../tests/blink_tokenizer_test");
+pub fn blink_test_elf() -> &'static [u8] { BLINK_TEST_ELF }
+static CSS_TOKENIZER_TEST_ELF: &[u8] = include_bytes!("../../../tests/css_tokenizer_test");
+pub fn css_tokenizer_test_elf() -> &'static [u8] { CSS_TOKENIZER_TEST_ELF }
 
 pub fn hello_threads_elf() -> &'static [u8] { HELLO_THREADS_ELF }
 
