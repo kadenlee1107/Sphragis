@@ -68,8 +68,9 @@ pub fn setup_cave_pagetable(cave_slot: usize, phys_base: usize) -> Result<usize,
     write_pte(l1, 0, l2_low as u64 | TABLE_DESC);
     write_pte(l1, 1, l2_high as u64 | TABLE_DESC);
 
-    // L2_low: map THIS cave's busybox (blocks 0-9)
-    for block in 0..10 {
+    // L2_low: map THIS cave's user-space binary (blocks 0-99 = 200 MB)
+    // Widened from 20 MB to 200 MB to host Chromium content_shell (~150 MB).
+    for block in 0..100 {
         let virt_block = block * 0x200000;
         let phys_block = (phys_base & !0x1FFFFF) + virt_block;
         write_pte(l2_low, block, phys_block as u64 | BLOCK_NORMAL);
@@ -162,9 +163,10 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
         write_pte(l2_low, mmio_block / 0x200000, mmio_block as u64 | BLOCK_DEVICE);
     }
 
-    // Also map 0x00200000-0x013FFFFF for busybox data section
-    // The data section is at virtual 0x13A968, so we need blocks 0-9 (0x0-0x13FFFFF)
-    for block in 1..10 {
+    // Map user-space virtual address range 0x00000000-0x0C7FFFFF (200 MB).
+    // Widened from 20 MB to 200 MB to host Chromium content_shell (~150 MB).
+    // Block 0 was already written above; fill in blocks 1-99 here.
+    for block in 1..100 {
         let virt_block = block * 0x200000;
         let phys_block = (phys_base & !0x1FFFFF) + virt_block;
         write_pte(l2_low, block, phys_block as u64 | BLOCK_NORMAL);
