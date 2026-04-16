@@ -622,6 +622,52 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                     let msg_end = hp + 4 + msg_len;
                     if msg_end > inner_len { break; }
 
+                    if msg_type == 0x0b {
+                        // NEW-CRYPTO-010 / NET2-001: Certificate message.
+                        // Parse: 1-byte ctx length + ctx + 3-byte certs_len
+                        // + entries. First entry = leaf cert (3-byte len +
+                        // cert DER + 2-byte exts_len + exts).
+                        // Pin-check the leaf against tls_pinning::PINS.
+                        let body = &decrypted[hp + 4 .. hp + 4 + msg_len];
+                        if body.len() < 4 {
+                            return Err("TLS: Certificate body too short");
+                        }
+                        let ctx_len = body[0] as usize;
+                        if ctx_len + 4 > body.len() { return Err("TLS: bad ctx_len"); }
+                        let after_ctx = 1 + ctx_len;
+                        let certs_len = ((body[after_ctx] as usize) << 16)
+                                      | ((body[after_ctx + 1] as usize) << 8)
+                                      |  (body[after_ctx + 2] as usize);
+                        if after_ctx + 3 + certs_len > body.len() {
+                            return Err("TLS: bad certs_len");
+                        }
+                        let entries_start = after_ctx + 3;
+                        if entries_start + 3 > body.len() { return Err("TLS: bad cert entry"); }
+                        let leaf_len = ((body[entries_start] as usize) << 16)
+                                     | ((body[entries_start + 1] as usize) << 8)
+                                     |  (body[entries_start + 2] as usize);
+                        let leaf_start = entries_start + 3;
+                        if leaf_start + leaf_len > body.len() {
+                            return Err("TLS: leaf cert truncated");
+                        }
+                        let leaf = &body[leaf_start..leaf_start + leaf_len];
+                        let host = &sess.expected_hostname[..sess.expected_hostname_len];
+                        match crate::net::tls_pinning::check_cert(host, leaf) {
+                            crate::net::tls_pinning::PinDecision::Match => {}
+                            crate::net::tls_pinning::PinDecision::Mismatch => {
+                                return Err("TLS: cert pin mismatch (MITM?)");
+                            }
+                            crate::net::tls_pinning::PinDecision::NoPin => {
+                                if crate::net::tls_pinning::STRICT_MODE {
+                                    uart::puts("[tls] STRICT mode: no pin for host — aborting\n");
+                                    return Err("TLS: no pin for host (strict)");
+                                } else {
+                                    uart::puts("[tls] WARN: no cert pin for host\n");
+                                }
+                            }
+                        }
+                    }
+
                     if msg_type == 0x14 {
                         // Finished — verify BEFORE hashing it.
                         if msg_len != 32 {

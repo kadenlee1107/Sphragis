@@ -41,7 +41,30 @@ const SEARCH_CEILING: usize = 0x4000_0000 + 2 * 1024 * 1024 * 1024;
 pub struct BlobInfo {
     pub size: usize,
     pub crc_valid: bool,
+    /// FLv2-NEW-010: Ed25519 signature verification result. The blob now
+    /// carries a 64-byte signature appended after CHROMEND, and the kernel
+    /// embeds the signing public key in `.rodata` (INITRD_PUBKEY).
+    /// `false` either means the signature didn't verify or the blob was
+    /// built without the signature trailer (legacy / dev images).
+    pub sig_valid: bool,
 }
+
+/// Ed25519 public key the kernel trusts for signed initrd blobs.
+///
+/// **Dev placeholder** — currently all-zero so unsigned dev builds get
+/// `sig_valid = false` cleanly without panicking. Replace with the real
+/// production signing key (32 bytes, generated offline) before shipping.
+/// Update flow: `tools/bake_chromium.sh` should be extended to sign the
+/// blob with the matching private key and append `INITRD_SIG_HEAD ||
+/// 64-byte signature || INITRD_SIG_TAIL` after the CHROMEND marker.
+pub const INITRD_PUBKEY: [u8; 32] = [0u8; 32];
+
+/// Optional signature trailer markers. The locator looks for
+///   [CHROMEND][INITRD_SIG_HEAD][64 sig bytes][INITRD_SIG_TAIL]
+/// and verifies sig over (size_le || blob_bytes). Absence ⇒ sig_valid=false.
+const INITRD_SIG_HEAD: [u8; 8] = *b"BATSIGv1";
+const INITRD_SIG_TAIL: [u8; 8] = *b"ENDSIGv1";
+
 
 // One-shot cache. We compute once at boot and reuse thereafter so the
 // CRC32 over ~150 MB runs exactly once.
@@ -161,14 +184,47 @@ fn probe() -> Option<BlobInfo> {
         let actual = crc32(blob_start, size);
         let crc_valid = declared == actual;
 
+        // FLv2-NEW-010: optional Ed25519 signature trailer immediately
+        // after the CHROMEND marker:
+        //   [INITRD_SIG_HEAD 8B][64-byte sig][INITRD_SIG_TAIL 8B]
+        // We collect the 64 bytes if both markers match, then verify
+        // against the kernel-embedded INITRD_PUBKEY over the blob bytes.
+        let sig_valid = verify_initrd_signature(blob_start, size, tail_off + 8);
+
         unsafe {
             core::ptr::write(core::ptr::addr_of_mut!(CACHED_BASE), blob_start);
             core::ptr::write(core::ptr::addr_of_mut!(CACHED_SIZE), size);
         }
-        return Some(BlobInfo { size, crc_valid });
+        return Some(BlobInfo { size, crc_valid, sig_valid });
     }
 
     None
+}
+
+/// Look for the Ed25519 signature trailer right after CHROMEND and verify
+/// it. Returns false on any failure (no trailer, bad markers, signature
+/// mismatch, all-zero pubkey i.e. dev image).
+fn verify_initrd_signature(blob_start: usize, size: usize, after_chromend: usize) -> bool {
+    // Pubkey all-zero ⇒ dev image with no production trust anchor.
+    let pk_all_zero = INITRD_PUBKEY.iter().all(|&b| b == 0);
+    if pk_all_zero { return false; }
+
+    // Bounds: head(8) + sig(64) + tail(8) = 80 bytes.
+    if after_chromend + 80 > SEARCH_CEILING { return false; }
+    if !magic_matches(after_chromend, &INITRD_SIG_HEAD) { return false; }
+    if !magic_matches(after_chromend + 8 + 64, &INITRD_SIG_TAIL) { return false; }
+
+    let mut sig = [0u8; 64];
+    for i in 0..64 {
+        sig[i] = unsafe {
+            core::ptr::read_volatile((after_chromend + 8 + i) as *const u8)
+        };
+    }
+    // Build the signed message: blob bytes (size). For boot speed we
+    // sign the blob bytes directly. Production may switch to signing
+    // the SHA-256 digest if blob copies become a bottleneck.
+    let blob = unsafe { core::slice::from_raw_parts(blob_start as *const u8, size) };
+    crate::crypto::sig::ed25519_verify(&INITRD_PUBKEY, &sig, blob).is_ok()
 }
 
 fn magic_matches(addr: usize, expected: &[u8; 8]) -> bool {

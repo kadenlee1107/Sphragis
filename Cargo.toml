@@ -8,6 +8,12 @@ edition = "2024"
 # All no_std-compatible, no heap needed with default-features=false.
 aes   = { version = "0.8", default-features = false }
 ghash = { version = "0.5", default-features = false }
+# V3 hardening: ed25519 verify for the initrd signature (FLv2-NEW-010)
+# and p256 ECDSA verify for the X.509 chain (NEW-CRYPTO-010 / NET2-001).
+# Both no_std with alloc-free verify paths.
+ed25519-compact = { version = "2", default-features = false }
+p256  = { version = "0.13", default-features = false, features = ["ecdsa"] }
+sha2  = { version = "0.10", default-features = false }
 
 [profile.dev]
 panic = "abort"

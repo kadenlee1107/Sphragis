@@ -104,6 +104,18 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
         uart::puts("[runner] WARNING: Chromium blob CRC mismatch; refusing to load\n");
         return Err("chromium blob CRC mismatch");
     }
+    // FLv2-NEW-010: enforce signature when the kernel was built with a
+    // real INITRD_PUBKEY (non-zero). Dev images keep INITRD_PUBKEY=0 so
+    // sig_valid is false and we only warn — set the production key in
+    // src/kernel/mm/initrd.rs::INITRD_PUBKEY to harden.
+    let pk_nonzero = initrd::INITRD_PUBKEY.iter().any(|&b| b != 0);
+    if pk_nonzero && !bi.sig_valid {
+        uart::puts("[runner] FATAL: Chromium blob signature INVALID — refusing to load\n");
+        return Err("chromium blob signature invalid");
+    }
+    if !bi.sig_valid {
+        uart::puts("[runner] WARNING: dev build (no INITRD_PUBKEY); blob unsigned\n");
+    }
 
     if !super::vfs::is_ready() {
         super::vfs::init();
