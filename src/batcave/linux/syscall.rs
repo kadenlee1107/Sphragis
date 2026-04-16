@@ -28,6 +28,29 @@ const ECHILD: i64 = -10;   // No child processes
 const EAGAIN: i64 = -11;   // Try again
 const EPERM: i64 = -1;     // Operation not permitted
 
+/// Returns true if `p` + `size` is plausibly inside the cave's user-space.
+///
+/// After ROOT-1 (per-cave page tables) lands this becomes an exact check
+/// against the caller's page-table VA range. Today the cave and the
+/// kernel share one identity-mapped VA, so the best we can do is reject
+/// obvious kernel addresses: NULL, low-page nulls, and anywhere inside
+/// the kernel RAM identity map (0x4000_0000..0x8000_0000 on QEMU virt).
+///
+/// Returns `false` on overflow, NULL, low pages, or kernel-range pointers.
+fn is_user_ptr(p: usize, size: usize) -> bool {
+    let end = match p.checked_add(size) {
+        Some(e) => e,
+        None => return false,
+    };
+    // Reject NULL, the first page, and anywhere in the kernel RAM
+    // identity-map window. `p < end` is implied by the checked_add above
+    // but keeps the predicate readable.
+    p != 0
+        && p >= 0x1000
+        && end < 0x4000_0000
+        && p < end
+}
+
 // Syscall categories for capability checking
 #[derive(Clone, Copy)]
 enum SyscallCat {
@@ -344,8 +367,15 @@ fn sys_fcntl(args: [u64; 6]) -> i64 {
 fn sys_prlimit64(args: [u64; 6]) -> i64 {
     let _pid = args[0] as i32;
     let _resource = args[1] as u32;
-    // args[2] = new_limit (ignored)
+    let new_limit = args[2] as usize;
     let old_limit = args[3] as usize;
+
+    // Bounds-check both rlimit pointers before we deref them. A struct
+    // rlimit64 is 16 bytes (two u64).  Reject any pointer into the
+    // kernel identity map.  NULL is legal for both args ("don't write"
+    // / "no new limits"), so skip those.
+    if new_limit != 0 && !is_user_ptr(new_limit, 16) { return EFAULT; }
+    if old_limit != 0 && !is_user_ptr(old_limit, 16) { return EFAULT; }
 
     // If old_limit is non-null, write generous defaults
     if old_limit != 0 {
@@ -384,9 +414,12 @@ fn sys_exit(args: [u64; 6]) -> i64 {
 }
 
 fn sys_uname(args: [u64; 6]) -> i64 {
-    // struct utsname: 5 fields of 65 bytes each
+    // struct utsname: 5 fields of 65 bytes each = 325 bytes (+padding
+    // rounds to 390 on Linux).  Validate the full span to block writes
+    // into kernel memory.
     let buf = args[0] as usize;
     if buf == 0 { return EINVAL; }
+    if !is_user_ptr(buf, 390) { return EFAULT; }
 
     let fields: [&[u8]; 5] = [
         b"BatOS\0",                    // sysname
@@ -857,6 +890,10 @@ fn sys_fstat(args: [u64; 6]) -> i64 {
     let fd_num = args[0] as u32;
     let buf = args[1] as usize;
     if buf == 0 { return EINVAL; }
+    // struct stat on aarch64 is 144 bytes.  fill_stat writes up to
+    // offset 56 + 8; the caller ABI reads the whole struct, so
+    // validate the full width.
+    if !is_user_ptr(buf, 144) { return EFAULT; }
 
     // stdout/stderr/stdin
     if fd_num <= 2 {
@@ -885,6 +922,10 @@ fn sys_getcwd(args: [u64; 6]) -> i64 {
     let buf = args[0] as usize;
     let size = args[1] as usize;
     if buf == 0 || size < 2 { return EINVAL; }
+    // We may write up to `size` bytes into buf; bounds-check the full
+    // range.  A huge size is also what the attacker uses to flip one
+    // kernel byte, so catching this check here kills that primitive.
+    if !is_user_ptr(buf, size) { return EFAULT; }
 
     if vfs::is_ready() {
         let mut path = [0u8; 128];
@@ -2580,6 +2621,10 @@ fn sys_timerfd_gettime(args: [u64; 6]) -> i64 {
 fn sys_sysinfo(args: [u64; 6]) -> i64 {
     let buf = args[0] as usize;
     if buf == 0 { return EINVAL; }
+    // struct sysinfo is 112 bytes on 64-bit Linux.  Validate before we
+    // fill it — otherwise any attacker-supplied pointer would receive
+    // 112 zero-fill strb's + structured kernel-chosen values.
+    if !is_user_ptr(buf, 112) { return EFAULT; }
 
     // Zero out the struct first (at least 112 bytes on 64-bit Linux)
     for i in 0..112 {
@@ -2676,6 +2721,14 @@ fn sys_rt_sigaction(args: [u64; 6]) -> i64 {
 
     if signum == 0 || signum as usize >= MAX_SIG { return EINVAL; }
     if signum == SIGKILL || signum == SIGSTOP { return EINVAL; }
+
+    // sigaction struct is 32 bytes (4 × u64).  ATTACK-SYS-037: the
+    // `oldact` write is an arbitrary 8-byte kernel-write primitive if
+    // the attacker points it at kernel state and can pre-arm
+    // SIGNAL_HANDLERS[idx] via the `act` path.  Validate both before
+    // any deref.
+    if act_ptr != 0 && !is_user_ptr(act_ptr, 32) { return EFAULT; }
+    if oldact_ptr != 0 && !is_user_ptr(oldact_ptr, 32) { return EFAULT; }
 
     let idx = signum as usize;
     unsafe {

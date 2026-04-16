@@ -56,7 +56,12 @@ pub fn reinit_elf(data: &[u8], phys_base: usize) {
         let memsz = u64_at(data, ph + 40) as usize;
         let phys_addr = (vaddr as i64 + reloc_offset) as usize;
 
-        if filesz > 0 && p_offset + filesz <= data.len() {
+        // FL-001: guard p_offset + filesz against usize wrap before the copy.
+        let copy_ok = filesz > 0 && match p_offset.checked_add(filesz) {
+            Some(end) => end <= data.len(),
+            None => false,
+        };
+        if copy_ok {
             // Bulk copy — a byte-by-byte strb loop would take minutes on
             // a 150 MB Chromium binary (≈157 M inline-asm round-trips).
             // copy_nonoverlapping lowers to a tuned memcpy that coalesces
@@ -100,16 +105,49 @@ pub fn reinit_elf(data: &[u8], phys_base: usize) {
         }
 
         if rela_off > 0 && rela_sz > 0 {
-            let num = rela_sz / 24;
+            // FL-003: cap num_relas at 50M — anything more is hostile.
+            let num = (rela_sz / 24).min(50_000_000);
+            // reinit path reuses the original allocation; recompute the
+            // authoritative range from phys_base + total loaded size.
+            // Since we don't track total_size here, derive from phdrs.
+            let mut lo: u64 = u64::MAX;
+            let mut hi: u64 = 0;
+            for j in 0..phnum {
+                let ph2 = phoff + j * phentsz;
+                if ph2 + phentsz > data.len() { break; }
+                if u32_at(data, ph2) != 1 { continue; }
+                let va = u64_at(data, ph2 + 16);
+                let ms = u64_at(data, ph2 + 40);
+                if va < lo { lo = va; }
+                if let Some(end) = va.checked_add(ms) {
+                    if end > hi { hi = end; }
+                }
+            }
+            let phys_range_size = (hi.saturating_sub(lo)) as usize;
+            let phys_range_end = phys_base.saturating_add(phys_range_size);
             for r in 0..num {
-                let re = rela_off + r * 24;
-                if re + 24 > data.len() { break; }
+                let re = match rela_off.checked_add(r.checked_mul(24).unwrap_or(usize::MAX)) {
+                    Some(v) => v,
+                    None => break,
+                };
+                match re.checked_add(24) {
+                    Some(end) if end <= data.len() => {}
+                    _ => break,
+                }
                 let r_offset = u64_at(data, re);
                 let r_info = u64_at(data, re + 8);
                 let r_addend = u64_at(data, re + 16);
                 if (r_info & 0xFFFFFFFF) as u32 == 0x403 {
                     let patch_addr = (r_offset as i64 + reloc_offset) as usize;
                     let value = (r_addend as i64 + reloc_offset) as u64;
+                    // FL-004: reject writes outside the ELF's allocated range.
+                    let patch_end = match patch_addr.checked_add(8) {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    if patch_addr < phys_base || patch_end > phys_range_end {
+                        continue;
+                    }
                     unsafe { core::arch::asm!("str {v}, [{a}]", a = in(reg) patch_addr, v = in(reg) value); }
                 }
             }
@@ -146,7 +184,12 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
         let vaddr = u64_at(data, ph + 16);
         let memsz = u64_at(data, ph + 40);
         if vaddr < min_addr { min_addr = vaddr; }
-        if vaddr + memsz > max_addr { max_addr = vaddr + memsz; }
+        // FL-002: reject PT_LOAD entries whose vaddr + memsz wraps.
+        let seg_end = match vaddr.checked_add(memsz) {
+            Some(v) => v,
+            None => return Err("PT_LOAD vaddr+memsz overflow"),
+        };
+        if seg_end > max_addr { max_addr = seg_end; }
     }
 
     let total_size = (max_addr - min_addr) as usize;
@@ -189,17 +232,21 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
         let memsz = u64_at(data, ph + 40) as usize;
         let phys_addr = (vaddr as i64 + reloc_offset) as usize;
 
-        if filesz > 0 && p_offset + filesz <= data.len() {
-            // Bulk copy — a byte-by-byte strb loop would take minutes on
-            // a 150 MB Chromium binary (≈157 M inline-asm round-trips).
-            // copy_nonoverlapping lowers to a tuned memcpy that coalesces
-            // stores and runs 30×+ faster.
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    data.as_ptr().add(p_offset),
-                    phys_addr as *mut u8,
-                    filesz,
-                );
+        // FL-001: reject PT_LOAD where p_offset + filesz overflows or
+        // extends past data end. A naked `p_offset + filesz <= data.len()`
+        // silently wraps for near-SIZE_MAX p_offset and passes bogusly.
+        if filesz > 0 {
+            match p_offset.checked_add(filesz) {
+                Some(end) if end <= data.len() => {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            data.as_ptr().add(p_offset),
+                            phys_addr as *mut u8,
+                            filesz,
+                        );
+                    }
+                }
+                _ => return Err("PT_LOAD past data end or overflow"),
             }
         }
         if memsz > filesz {
@@ -235,19 +282,48 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
         }
 
         if rela_off > 0 && rela_sz > 0 {
-            let num = rela_sz / 24;
+            // FL-003: cap rela count at 50M. A crafted DT_RELASZ of
+            // 0xFFFF…F yields ~7.6e17 iterations; later u64_at() reads
+            // panic on out-of-bounds. 50M covers even monster binaries.
+            let num = (rela_sz / 24).min(50_000_000);
             uart::puts("[loader] Applying "); crate::kernel::mm::print_num(num); uart::puts(" relocations\n");
             uart::puts("[loader] reloc_offset=0x"); print_hex(reloc_offset as u64); uart::puts("\n");
+            // FL-004: precompute the ELF's allocated physical range. Any
+            // relocation whose target lies outside [phys_base, phys_base+total_size)
+            // is hostile (write-what-where primitive) — skip it.
+            let phys_range_end = phys_base.saturating_add(total_size);
             let mut applied = 0usize;
             for r in 0..num {
-                let re = rela_off + r * 24;
-                if re + 24 > data.len() { break; }
+                // FL-003 (tail): use checked arithmetic so a hostile
+                // rela_off/num combo can't wrap past data.len().
+                let re = match rela_off.checked_add(r.checked_mul(24).unwrap_or(usize::MAX)) {
+                    Some(v) => v,
+                    None => break,
+                };
+                match re.checked_add(24) {
+                    Some(end) if end <= data.len() => {}
+                    _ => break,
+                }
                 let r_offset = u64_at(data, re);
                 let r_info = u64_at(data, re + 8);
                 let r_addend = u64_at(data, re + 16);
                 if (r_info & 0xFFFFFFFF) as u32 == 0x403 {
                     let patch_addr = (r_offset as i64 + reloc_offset) as usize;
                     let value = (r_addend as i64 + reloc_offset) as u64;
+                    // FL-004: bounds-check the 8-byte write target. Also
+                    // guard r_addend + reloc_offset for arithmetic wrap
+                    // (`value` is already computed via `as i64` cast —
+                    // but check patch_addr + 8 doesn't overflow).
+                    let patch_end = match patch_addr.checked_add(8) {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    if patch_addr < phys_base || patch_end > phys_range_end {
+                        // Silent skip: hostile or stray reloc. Don't
+                        // abort the whole load — BSS-only relocations
+                        // past max_addr would otherwise kill legit ELFs.
+                        continue;
+                    }
                     unsafe { core::arch::asm!("str {v}, [{a}]", a = in(reg) patch_addr, v = in(reg) value); }
                     applied += 1;
                     // Log only the first two relocations — anything more
