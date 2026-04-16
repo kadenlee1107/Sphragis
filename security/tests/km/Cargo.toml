@@ -1,0 +1,40 @@
+[package]
+name = "km-attacks"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone test crate — runs on the host, no_std code paths are
+# re-implemented here for unit testing. Each test corresponds to an
+# ATTACK-KM-### in ../../PENTEST_KERNEL_MEMORY.md.
+
+[lib]
+path = "lib.rs"
+
+[[test]]
+name = "frame_alloc_race"
+path = "frame_alloc_race.rs"
+
+[[test]]
+name = "frame_double_free"
+path = "frame_double_free.rs"
+
+[[test]]
+name = "heap_start_overflow"
+path = "heap_start_overflow.rs"
+
+[[test]]
+name = "futex_hash_collisions"
+path = "futex_hash_collisions.rs"
+
+[[test]]
+name = "futex_uaddr_overflow"
+path = "futex_uaddr_overflow.rs"
+
+[[test]]
+name = "savedframe_size_mismatch"
+path = "savedframe_size_mismatch.rs"
+
+[[test]]
+name = "ptflags_missing_uxn"
+path = "ptflags_missing_uxn.rs"

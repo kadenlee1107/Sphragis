@@ -1,0 +1,8 @@
+# Override the parent .cargo/config.toml (which targets aarch64-unknown-none
+# for the kernel) so these host-run unit tests build for the host triple.
+[build]
+target = "aarch64-apple-darwin"
+
+[unstable]
+# Clear the parent's build-std; stable std is fine for host tests.
+build-std = []
