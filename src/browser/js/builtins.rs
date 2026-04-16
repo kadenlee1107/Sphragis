@@ -1,3 +1,4 @@
+#![allow(unused_assignments)]
 // Bat_OS — JavaScript Built-in Methods
 // Native implementations of Array, String, Object, Number, Date, Error
 // prototype methods and static functions. All no_std compatible.

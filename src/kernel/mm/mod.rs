@@ -11,7 +11,7 @@ unsafe extern "C" {
 const MEMORY_END: usize = 0x4000_0000 + 128 * 1024 * 1024; // RAM base + 128MB
 
 pub fn init() {
-    let heap_start = unsafe { core::ptr::addr_of!(__kernel_end) as usize };
+    let heap_start = core::ptr::addr_of!(__kernel_end) as usize;
     frame::init(heap_start, MEMORY_END);
 
     let (used, total) = frame::stats();

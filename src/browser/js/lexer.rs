@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(unused_assignments)]
 // Bat_OS — JavaScript Lexer (Tokenizer)
 // Converts JavaScript source code into a stream of tokens.
 // Handles: keywords, identifiers, numbers, strings, operators, punctuation.

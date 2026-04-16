@@ -41,13 +41,13 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
 
     // Parse DTB if available (VZ VMs always pass one)
     let mut vz_virtio_bases: [usize; 16] = [0; 16];
-    let mut vz_virtio_count = 0usize;
+    let mut _vz_virtio_count = 0usize;
 
     if dtb_ptr != 0 {
         let dtb_info = boot::dtb::parse(dtb_ptr as usize);
         if dtb_info.valid {
             drivers::uart::puts("[boot] DTB parsed — VZ VM detected\n");
-            vz_virtio_count = dtb_info.virtio_count;
+            _vz_virtio_count = dtb_info.virtio_count;
             for i in 0..dtb_info.virtio_count {
                 vz_virtio_bases[i] = dtb_info.virtio_mmio[i];
                 drivers::uart::puts("  [dtb] virtio @ 0x");
