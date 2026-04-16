@@ -2,6 +2,7 @@ pub mod arp;
 pub mod dns;
 pub mod ethernet;
 pub mod firewall;
+pub mod http;
 pub mod icmp;
 pub mod ip;
 pub mod tcp;

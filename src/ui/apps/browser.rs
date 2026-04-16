@@ -237,6 +237,18 @@ pub fn navigate(url: &[u8]) {
 
     set_status(b"Sending request...");
 
+    // Response-splitting guard (pentest NET-045 cascade): the Host and path
+    // segments come from the URL bar which is user-controlled. Reject any
+    // CR/LF/NUL before we paste them into the request.
+    if crate::net::http::validate_header_value(host.as_bytes()).is_err()
+        || crate::net::http::validate_header_value(path.as_bytes()).is_err()
+    {
+        unsafe { STATE = BrowserState::Error; }
+        set_status(b"Invalid URL (CR/LF)");
+        crate::net::tcp::close();
+        return;
+    }
+
     // Build HTTP GET
     let mut req = [0u8; 512];
     let mut rlen = 0;
@@ -264,63 +276,61 @@ pub fn navigate(url: &[u8]) {
 
     set_status(b"Receiving...");
 
-    // Receive response — keep reading until we have headers + body
-    // NOTE: These buffers are static because they're too large for the stack (512KB total)
+    // Receive response — hardened read loop (pentest ATTACK-NET-045 / 046).
+    // The old loop spun up to 500 × 5 s = 2500 s on a slow-loris server,
+    // wedging the cooperative kernel. Now bounded by:
+    //   * 30 s total deadline
+    //   * 5 s no-progress idle deadline
+    //   * 64 KB header cap, 8 KB per line, 128 header lines
+    // See src/net/http.rs for the state machine.
     static mut RAW_BUF: [u8; 131072] = [0u8; 131072];
     let raw = unsafe { &mut *core::ptr::addr_of_mut!(RAW_BUF) };
-    let mut total = 0;
-    let mut timeouts = 0u8;
+    // Zero the scratch on each navigation so leftover bytes from the
+    // previous request can't poison header scanning.
+    for b in raw.iter_mut() { *b = 0; }
 
-    for _ in 0..500 {
-        if total >= raw.len() { break; } // buffer full (128KB)
-        let mut chunk = [0u8; 16384]; // 16KB to handle full TLS records
-        let recv_result = if is_https {
-            crate::net::tls::recv_app_data(&mut chunk)
-        } else {
-            crate::net::tcp::recv_data(&mut chunk)
-        };
-        match recv_result {
-            Ok(0) => {
-                // NewSessionTicket was skipped — don't count as timeout, just continue
-                continue;
-            }
-            Ok(n) if n > 0 => {
-                let copy = n.min(raw.len() - total);
-                raw[total..total + copy].copy_from_slice(&chunk[..copy]);
-                total += copy;
-                timeouts = 0; // reset on any successful recv
-                unsafe { BYTES_LOADED = total; }
-
-                // Check if we've received the full page (look for </html>)
-                // Only check uncompressed responses — gzip data won't have this
-                if total > 7 {
-                    let check_start = if total > 20 { total - 20 } else { 0 };
-                    let mut found_end = false;
-                    for k in check_start..total.saturating_sub(6) {
-                        if starts_with_ci(&raw[k..total], b"</html>") {
-                            found_end = true;
-                            break;
-                        }
-                    }
-                    if found_end { break; }
-                }
-            }
-            _ => {
-                timeouts += 1;
-                // For HTTPS, aggressively keep trying — stop after 8 consecutive real timeouts
-                // (Wikipedia sends data in bursts with gaps, need patience for multi-record responses)
-                if is_https {
-                    if timeouts < 8 { continue; }
-                }
-                // If we have headers but no body yet, keep trying
-                let hdr_end = find_header_end(&raw[..total]);
-                if hdr_end > 0 && hdr_end >= total && timeouts < 3 {
-                    continue; // body hasn't arrived yet, retry
-                }
-                break;
-            }
-        }
+    fn recv_https(buf: &mut [u8]) -> Result<usize, &'static str> {
+        crate::net::tls::recv_app_data(buf)
     }
+    fn recv_plain(buf: &mut [u8]) -> Result<usize, &'static str> {
+        crate::net::tcp::recv_data(buf)
+    }
+    let recv_fn: crate::net::http::RecvFn =
+        if is_https { recv_https } else { recv_plain };
+
+    let total = match crate::net::http::read_response(recv_fn, raw) {
+        Ok(n) => n,
+        Err(crate::net::http::HttpError::DeadlineExceeded)
+        | Err(crate::net::http::HttpError::IdleTimeout) => {
+            unsafe { STATE = BrowserState::Error; }
+            set_status(b"Read timeout (slow-loris?)");
+            if is_https { crate::net::tls::close(); }
+            crate::net::tcp::close();
+            return;
+        }
+        Err(crate::net::http::HttpError::HeadersTooLarge) => {
+            unsafe { STATE = BrowserState::Error; }
+            set_status(b"Headers too large");
+            if is_https { crate::net::tls::close(); }
+            crate::net::tcp::close();
+            return;
+        }
+        Err(crate::net::http::HttpError::BufferFull) => {
+            // Partial fetch — we got *something* before the static buffer
+            // filled. Use it; the renderer already clamps to the buffer.
+            // Recover "total" from the buffer scan. Worst case we render
+            // a truncated page, which is existing behaviour.
+            raw.len()
+        }
+        Err(e) => {
+            unsafe { STATE = BrowserState::Error; }
+            set_status(e.as_str().as_bytes());
+            if is_https { crate::net::tls::close(); }
+            crate::net::tcp::close();
+            return;
+        }
+    };
+    unsafe { BYTES_LOADED = total; }
 
     if is_https { crate::net::tls::close(); }
     crate::net::tcp::close();
@@ -395,53 +405,25 @@ pub fn navigate(url: &[u8]) {
     };
 
     if is_chunked {
-        // Decode chunked transfer encoding
-        // Format: hex_size\r\n data \r\n ... 0\r\n\r\n
+        // Hardened chunked decoder (ATTACK-DOS-026 cascade): caps each chunk
+        // at 4 MiB and the total decoded body at 16 MiB. See src/net/http.rs.
         let chunk_data = &raw[headers_end..total];
-        let mut ri = 0; // read index into chunk_data
-        let mut wi = 0; // write index into decoded
-        loop {
-            // Skip leading \r\n if any
-            while ri < chunk_data.len() && (chunk_data[ri] == b'\r' || chunk_data[ri] == b'\n') {
-                ri += 1;
+        match crate::net::http::decode_chunked(chunk_data, decoded) {
+            Ok(n) => {
+                decoded_len = n;
+                uart::puts("[browser] decoded chunked body: ");
+                crate::kernel::mm::print_num(decoded_len);
+                uart::puts(" bytes\n");
             }
-            if ri >= chunk_data.len() { break; }
-
-            // Parse hex chunk size
-            let mut chunk_size: usize = 0;
-            let hex_start = ri;
-            while ri < chunk_data.len() && chunk_data[ri] != b'\r' && chunk_data[ri] != b'\n' {
-                let c = chunk_data[ri];
-                let digit = match c {
-                    b'0'..=b'9' => (c - b'0') as usize,
-                    b'a'..=b'f' => (c - b'a' + 10) as usize,
-                    b'A'..=b'F' => (c - b'A' + 10) as usize,
-                    b';' => break, // chunk extensions — ignore
-                    _ => break,
-                };
-                chunk_size = chunk_size * 16 + digit;
-                ri += 1;
+            Err(e) => {
+                uart::puts("[browser] chunked decode rejected: ");
+                uart::puts(e.as_str());
+                uart::puts("\n");
+                unsafe { STATE = BrowserState::Error; }
+                set_status(e.as_str().as_bytes());
+                return;
             }
-            // If we didn't parse any hex digits, stop
-            if ri == hex_start { break; }
-
-            // Skip to end of chunk size line (\r\n)
-            while ri < chunk_data.len() && chunk_data[ri] != b'\n' { ri += 1; }
-            if ri < chunk_data.len() { ri += 1; } // skip \n
-
-            // Last chunk (size 0) — done
-            if chunk_size == 0 { break; }
-
-            // Copy chunk data
-            let copy_len = chunk_size.min(chunk_data.len() - ri).min(decoded.len() - wi);
-            decoded[wi..wi + copy_len].copy_from_slice(&chunk_data[ri..ri + copy_len]);
-            wi += copy_len;
-            ri += chunk_size; // advance past the chunk data
         }
-        decoded_len = wi;
-        uart::puts("[browser] decoded chunked body: ");
-        crate::kernel::mm::print_num(decoded_len);
-        uart::puts(" bytes\n");
     } else {
         // Non-chunked: use body directly (Content-Length or connection close)
         let raw_body = &raw[headers_end..total];
