@@ -22,17 +22,22 @@ use_lld                        = true
 clang_use_chrome_plugins       = false
 
 # === Disable everything we don't need ===
-enable_nacl                    = false
-enable_widevine                = false
-enable_pdf                     = false
-enable_print_preview           = false
+# NOTE: gn parses every BUILD.gn file in the tree (assertions fire at parse time)
+# even when we --root-target=content_shell. Many chrome/* targets assert features
+# we don't actually need to BUILD — but we need them ENABLED for parsing to succeed.
+# The actual content_shell binary won't include any of this code.
+# enable_nacl removed in M132+ (NaCl deprecated)
+enable_widevine                = true
+enable_pdf                     = true
+enable_print_preview           = true
 enable_remoting                = false
-enable_extensions              = false
-enable_plugins                 = false
+enable_extensions              = true
+enable_extensions_core         = true
+enable_plugins                 = true
 enable_hangout_services_extension = false
 proprietary_codecs             = false
 ffmpeg_branding                = "Chromium"
-safe_browsing_mode             = 0
+safe_browsing_mode             = 1   # 0=disabled, 1=full, 2=android-only
 chrome_pgo_phase               = 0
 
 # === No host integrations (we don't have these on Bat_OS) ===
@@ -45,6 +50,7 @@ use_gnome_keyring              = false
 use_glib                       = false
 use_gio                        = false
 use_udev                       = false
+use_gtk                        = false   # we don't have GTK, no Linux UI
 
 # === Ozone (display backend abstraction) ===
 use_ozone                      = true
@@ -55,6 +61,5 @@ ozone_platform                 = "headless"
 # Phase 5 will switch to: ozone_platform = "batos"
 # and add: ozone_extra_path = "//ui/ozone/platform/batos/ozone_extra.gni"
 
-# === Force headless single-process for Phase 1 sanity ===
-headless_use_embedded_resources = true
+# === Headless / startup ===
 v8_use_external_startup_data    = true
