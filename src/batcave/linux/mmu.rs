@@ -124,7 +124,27 @@ pub fn get_cave_l1(cave_slot: usize) -> usize {
 ///   - Kernel RAM (identity, needed for syscall handling)
 /// It does NOT map the primary busybox or other caves.
 pub fn setup_cave_pagetable(cave_slot: usize, phys_base: usize) -> Result<usize, &'static str> {
+    setup_cave_pagetable_at(cave_slot, phys_base, 0)
+}
+
+/// Same as `setup_cave_pagetable` but maps the cave's user window starting
+/// at a configurable virtual address `virt_base`. ROOT-1 Option B: pass
+/// `virt_base = 0x10000000` to place cave user code ABOVE MMIO so a
+/// Chromium-sized (150 MB) binary doesn't collide with UART/virtio at
+/// physical/virtual blocks 64/72/80/81/82.
+///
+/// Legacy callers pass `virt_base = 0` — MMIO overlap remains their
+/// problem, but test binaries that never grow past 128 MB of VA don't
+/// actually hit the hole.
+pub fn setup_cave_pagetable_at(
+    cave_slot: usize,
+    phys_base: usize,
+    virt_base: u64,
+) -> Result<usize, &'static str> {
     if cave_slot >= MAX_CAVE_PAGETABLES { return Err("too many cave page tables"); }
+    // virt_base must be 2 MB-aligned and below 1 GB (L2_low covers 0..0x3FFFFFFF).
+    if virt_base & 0x1FFFFF != 0 { return Err("virt_base not 2MB aligned"); }
+    if virt_base >= 0x40000000 { return Err("virt_base outside L2_low"); }
 
     let l1 = frame::alloc_frame().ok_or("oom for cave L1")?;
     let l2_low = frame::alloc_frame().ok_or("oom for cave L2_low")?;
@@ -141,29 +161,34 @@ pub fn setup_cave_pagetable(cave_slot: usize, phys_base: usize) -> Result<usize,
     write_pte(l1, 0, l2_low as u64 | TABLE_DESC);
     write_pte(l1, 1, l2_high as u64 | TABLE_DESC);
 
-    // L2_low: map THIS cave's user-space binary (blocks 0-99 = 200 MB).
-    // Widened from 20 MB to 200 MB to host Chromium content_shell (~150 MB).
+    // L2_low: map THIS cave's user-space binary (200 MB window starting
+    // at `virt_base`).  With `virt_base = 0x10000000` the user blocks
+    // live at L2 indices 128..227 — above MMIO (indices 64/72/80/81/82),
+    // so 150 MB Chromium and future bigger binaries no longer collide.
     //
-    // NOTE: no MMIO mapping in cave page tables. Caves must go through
-    // syscalls for UART / virtio access — direct MMIO from user space
-    // was a legacy shortcut that punched 5 × 2 MB holes through this
-    // window at 0x08M/0x09M/0x0AM/0x0A2M/0x0A4M, corrupting any binary
-    // large enough to reach those addresses.
+    // W^X CAVEAT (ROOT-3): we still use BLOCK_USER_RW_EXEC because
+    // Chromium/V8 JIT needs W+X pages. Per-PT_LOAD PF_X/PF_W permissions
+    // are future work; kernel-side W^X is unaffected.
+    let virt_base_block = (virt_base / 0x200000) as usize;
+    for i in 0..100 {
+        let block_idx = virt_base_block + i;
+        if block_idx >= 512 { break; }
+        let phys_block = (phys_base & !0x1FFFFF) + i * 0x200000;
+        write_pte(l2_low, block_idx, phys_block as u64 | BLOCK_USER_RW_EXEC);
+    }
+
+    // MMIO identity mappings — EL1 can read/write MMIO during syscall
+    // handling while the cave's TTBR0 is active; EL0 gets a fault (AP
+    // forbids EL0 on BLOCK_DEVICE).  Required so the exception handler
+    // can still reach UART / virtio while a cave is mounted.
     //
-    // W^X CAVEAT (ROOT-3): we use BLOCK_USER_RW_EXEC here — a single
-    // window that is EL0-writable AND EL0-executable. A proper fix
-    // requires the ELF loader to read PT_LOAD PF_X/PF_W per segment
-    // and call this with BLOCK_USER_TEXT / BLOCK_USER_DATA separately.
-    // Chromium/V8 JIT requires W+X pages somewhere, so removing the W
-    // here without adding a separate RWX region for JIT would break it.
-    // EL1 can never execute from these blocks (PXN is set), which
-    // preserves the kernel side of W^X even though the user side is
-    // not yet enforced. TODO: wire per-PT_LOAD perms from the ELF
-    // loader.
-    for block in 0..100 {
-        let virt_block = block * 0x200000;
-        let phys_block = (phys_base & !0x1FFFFF) + virt_block;
-        write_pte(l2_low, block, phys_block as u64 | BLOCK_USER_RW_EXEC);
+    // If the cave's user window and MMIO addresses overlap (legacy
+    // virt_base=0 case with user blocks 0..99 and MMIO at 64/72/80/
+    // 81/82) the MMIO mapping wins — a binary larger than 128 MB
+    // would see device memory where code was expected. Callers with
+    // large binaries must pass virt_base=0x10000000 (block 128+).
+    for mmio in [0x08000000, 0x09000000, 0x0A000000, 0x0A200000, 0x0A400000] {
+        write_pte(l2_low, mmio / 0x200000, mmio as u64 | BLOCK_DEVICE);
     }
 
     // L2_high: identity map kernel RAM with W^X.
