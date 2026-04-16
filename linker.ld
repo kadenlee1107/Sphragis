@@ -12,7 +12,9 @@ SECTIONS
         *(.text .text.*)
     }
 
-    . = ALIGN(4096);
+    . = ALIGN(0x200000);    /* 2 MB align so MMU 2 MB blocks can split here */
+    __text_end = .;         /* end of executable kernel code (W^X boundary) */
+
     .rodata : {
         *(.rodata .rodata.*)
     }

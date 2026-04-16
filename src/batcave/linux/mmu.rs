@@ -12,23 +12,96 @@
 use crate::kernel::mm::frame;
 use crate::drivers::uart;
 
+// Linker-provided boundary between kernel .text and everything-else. Defined
+// in `linker.ld` / `linker_apple.ld` as `__text_end`, 2 MB-aligned so a 2 MB
+// block mapping can split here. Below this VA the kernel is executable+RO;
+// above it, NX+RW.
+unsafe extern "C" {
+    static __text_end: u8;
+}
+
+#[inline]
+fn text_end_addr() -> u64 {
+    // SAFETY: `__text_end` is a symbol defined by the linker; we only take its
+    // address, never dereference.
+    (unsafe { core::ptr::addr_of!(__text_end) }) as u64
+}
+
 const PAGE_SIZE: usize = 4096;
 const ENTRIES_PER_TABLE: usize = 512;
 
 // Page table entry flags
 const PTE_VALID: u64 = 1;
 const PTE_TABLE: u64 = 1 << 1;  // Points to next-level table
-const PTE_BLOCK: u64 = 0;       // 2MB block (at L2)
+#[allow(dead_code)]
+const PTE_BLOCK: u64 = 0;       // 2MB block (at L2) — implied by !PTE_TABLE
 const PTE_AF: u64 = 1 << 10;    // Access flag
 const PTE_SH_INNER: u64 = 3 << 8; // Inner shareable
 const PTE_ATTR_NORMAL: u64 = 0 << 2; // MAIR index 0: normal memory
 const PTE_ATTR_DEVICE: u64 = 1 << 2; // MAIR index 1: device memory
-const PTE_AP_RW: u64 = 0 << 6;  // Read-write
 
-// 2MB block entry flags for normal memory
-const BLOCK_NORMAL: u64 = PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL | PTE_AP_RW;
-// 2MB block entry flags for device memory (MMIO)
-const BLOCK_DEVICE: u64 = PTE_VALID | PTE_AF | PTE_ATTR_DEVICE | PTE_AP_RW;
+// Access-permission encodings (AP[2:1] at bits 7:6 of the block/page desc).
+// AP[2] is bit 7 (0 = RW, 1 = RO); AP[1] is bit 6 (0 = EL1 only, 1 = EL0+EL1).
+const PTE_AP_EL1_RW: u64 = 0 << 6;  // kernel-only, read-write
+const PTE_AP_EL1_RO: u64 = 2 << 6;  // kernel-only, read-only
+const PTE_AP_EL0_RW: u64 = 1 << 6;  // EL0+EL1, read-write
+const PTE_AP_EL0_RO: u64 = 3 << 6;  // EL0+EL1, read-only
+// Legacy alias so we don't break anywhere still reading it (none should remain).
+#[allow(dead_code)]
+const PTE_AP_RW: u64 = PTE_AP_EL1_RW;
+
+// Execute-never bits (ARMv8 VMSA block/page descriptor).
+// Both default to 0 (permissive) — that was ROOT-3 of the pentest summary.
+const PTE_PXN: u64 = 1 << 53; // Privileged (EL1) execute-never
+const PTE_UXN: u64 = 1 << 54; // Unprivileged (EL0) execute-never
+
+// === W^X-aware block variants ===
+//
+// ROOT-3 fix: the previous single `BLOCK_NORMAL` had neither UXN nor PXN and
+// used AP=RW, so every kernel page was writable AND executable from both EL1
+// and EL0. Any arbitrary-write bug became trivial code-injection RCE.
+//
+// We now split by purpose. Each caller picks the variant matching the page's
+// role; the MMU enforces W^X per-block from that point on.
+
+/// Kernel .text: executable from EL1, never from EL0, read-only everywhere.
+const BLOCK_KERNEL_TEXT: u64 =
+    PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL | PTE_AP_EL1_RO | PTE_UXN;
+
+/// Kernel .data/.bss/heap: no-exec anywhere, read-write from EL1 only.
+const BLOCK_KERNEL_DATA: u64 =
+    PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL | PTE_AP_EL1_RW | PTE_UXN | PTE_PXN;
+
+/// User .text: executable from EL0, never from EL1, read-only.
+#[allow(dead_code)]
+const BLOCK_USER_TEXT: u64 =
+    PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL | PTE_AP_EL0_RO | PTE_PXN;
+
+/// User .data/.bss/stack: no-exec anywhere, read-write from EL0.
+#[allow(dead_code)]
+const BLOCK_USER_DATA: u64 =
+    PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL | PTE_AP_EL0_RW | PTE_UXN | PTE_PXN;
+
+/// Transitional: user page that is writable AND executable from EL0, no-exec
+/// from EL1. TODO: remove once the ELF loader parses PT_LOAD PF_X/PF_W flags
+/// and maps cave .text vs .data/.bss separately. Chromium/V8 needs JIT pages
+/// (W+X) to run, so until we have per-segment perms this is the only workable
+/// mapping for the whole cave window. W^X inside a cave is therefore NOT
+/// enforced yet; kernel W^X (via BLOCK_KERNEL_TEXT/DATA above) IS enforced.
+const BLOCK_USER_RW_EXEC: u64 =
+    PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL | PTE_AP_EL0_RW | PTE_PXN;
+
+// Back-compat: anything still referring to BLOCK_NORMAL should migrate to one
+// of the specific variants above. Kept only so external debug tooling that
+// pattern-matches the old constant name still compiles; intentionally gated
+// to avoid any new uses being introduced silently.
+#[allow(dead_code)]
+const BLOCK_NORMAL: u64 = BLOCK_KERNEL_DATA;
+
+// 2MB block entry flags for device memory (MMIO). PXN+UXN so an attacker who
+// reaches MMIO via a bug can't execute from it.
+const BLOCK_DEVICE: u64 =
+    PTE_VALID | PTE_AF | PTE_ATTR_DEVICE | PTE_AP_EL1_RW | PTE_UXN | PTE_PXN;
 // Table descriptor flags
 const TABLE_DESC: u64 = PTE_VALID | PTE_TABLE;
 
@@ -76,16 +149,44 @@ pub fn setup_cave_pagetable(cave_slot: usize, phys_base: usize) -> Result<usize,
     // was a legacy shortcut that punched 5 × 2 MB holes through this
     // window at 0x08M/0x09M/0x0AM/0x0A2M/0x0A4M, corrupting any binary
     // large enough to reach those addresses.
+    //
+    // W^X CAVEAT (ROOT-3): we use BLOCK_USER_RW_EXEC here — a single
+    // window that is EL0-writable AND EL0-executable. A proper fix
+    // requires the ELF loader to read PT_LOAD PF_X/PF_W per segment
+    // and call this with BLOCK_USER_TEXT / BLOCK_USER_DATA separately.
+    // Chromium/V8 JIT requires W+X pages somewhere, so removing the W
+    // here without adding a separate RWX region for JIT would break it.
+    // EL1 can never execute from these blocks (PXN is set), which
+    // preserves the kernel side of W^X even though the user side is
+    // not yet enforced. TODO: wire per-PT_LOAD perms from the ELF
+    // loader.
     for block in 0..100 {
         let virt_block = block * 0x200000;
         let phys_block = (phys_base & !0x1FFFFF) + virt_block;
-        write_pte(l2_low, block, phys_block as u64 | BLOCK_NORMAL);
+        write_pte(l2_low, block, phys_block as u64 | BLOCK_USER_RW_EXEC);
     }
 
-    // L2_high: identity map kernel RAM
+    // L2_high: identity map kernel RAM with W^X.
+    //
+    // Below `__text_end`: kernel .text — RO + executable-from-EL1 (UXN
+    //   stops EL0 from executing it even if ATTACK-KM-007 aliases it
+    //   into a user window).
+    // At/above `__text_end`: kernel .rodata/.data/.bss/heap — NX (UXN
+    //   and PXN both set) + EL1 RW. Any arbitrary-write exploit against
+    //   kernel data can no longer redirect execution there.
+    let text_end = text_end_addr();
     for block in 0..128 {
         let addr = 0x40000000u64 + (block as u64) * 0x200000;
-        write_pte(l2_high, block, addr | BLOCK_NORMAL);
+        // The block covers [addr, addr + 2 MB). Treat it as kernel text
+        // only if it lies ENTIRELY below __text_end; once any byte of
+        // the block is past __text_end we must mark it data (NX+RW) so
+        // that writes to .data/.bss don't fault.
+        let flags = if addr + 0x200000 <= text_end {
+            BLOCK_KERNEL_TEXT
+        } else {
+            BLOCK_KERNEL_DATA
+        };
+        write_pte(l2_high, block, addr | flags);
     }
 
     unsafe {
@@ -153,9 +254,13 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     // L1[1] → L2_high (covers 0x40000000 - 0x7FFFFFFF)
     write_pte(l1, 1, l2_high as u64 | TABLE_DESC);
 
-    // L2_low: Map busybox virtual addresses to physical
-    // Block 0: 0x00000000-0x001FFFFF → phys_base (busybox code segment 1)
-    write_pte(l2_low, 0, (phys_base as u64 & !0x1FFFFF) | BLOCK_NORMAL);
+    // L2_low: Map busybox virtual addresses to physical.
+    // Block 0: 0x00000000-0x001FFFFF → phys_base (busybox code segment 1).
+    // BLOCK_USER_RW_EXEC per the ROOT-3 transitional note in
+    // setup_cave_pagetable — until the ELF loader emits per-segment perms,
+    // we give the primary cave a single EL0-RW+X window. EL1 cannot
+    // execute here (PXN is set).
+    write_pte(l2_low, 0, (phys_base as u64 & !0x1FFFFF) | BLOCK_USER_RW_EXEC);
 
     // Map MMIO regions (identity mapped, 2MB blocks)
     // UART at 0x09000000 → index 0x09000000/0x200000 = 72
@@ -173,14 +278,21 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     for block in 1..10 {
         let virt_block = block * 0x200000;
         let phys_block = (phys_base & !0x1FFFFF) + virt_block;
-        write_pte(l2_low, block, phys_block as u64 | BLOCK_NORMAL);
+        write_pte(l2_low, block, phys_block as u64 | BLOCK_USER_RW_EXEC);
     }
 
-    // L2_high: Identity map kernel RAM (0x40000000 - 0x4FFFFFFF)
-    // 256MB = 128 × 2MB blocks
+    // L2_high: Identity map kernel RAM (0x40000000 - 0x4FFFFFFF), 256MB =
+    // 128 × 2MB blocks, with W^X split at __text_end. See the matching
+    // comment in setup_cave_pagetable above.
+    let text_end = text_end_addr();
     for block in 0..128 {
         let addr = 0x40000000u64 + (block as u64) * 0x200000;
-        write_pte(l2_high, block, addr | BLOCK_NORMAL);
+        let flags = if addr + 0x200000 <= text_end {
+            BLOCK_KERNEL_TEXT
+        } else {
+            BLOCK_KERNEL_DATA
+        };
+        write_pte(l2_high, block, addr | flags);
     }
 
     uart::puts("[mmu] Page tables built\n");
