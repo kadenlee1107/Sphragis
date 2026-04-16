@@ -40,6 +40,41 @@ use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsiz
 // future ISNs" primitive.
 static BOOT_COOKIE: AtomicU64 = AtomicU64::new(0);
 
+// RFC 5961 challenge-ACK rate limit. System-wide cap of 100 per second to
+// prevent an attacker from using us as a reflection source.
+static CHAL_ACK_WINDOW_START: AtomicU64 = AtomicU64::new(0);
+static CHAL_ACK_COUNT: AtomicU32 = AtomicU32::new(0);
+const CHAL_ACK_LIMIT_PER_SEC: u32 = 100;
+
+/// Returns true iff we should emit a challenge ACK right now. Uses the
+/// ARM generic timer for wall-clock timing and resets the window on
+/// every second boundary.
+fn try_challenge_ack() -> bool {
+    let now: u64;
+    let freq: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) now);
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+    }
+    let window_start = CHAL_ACK_WINDOW_START.load(Ordering::Relaxed);
+    if now.saturating_sub(window_start) > freq {
+        // New 1-second window.
+        CHAL_ACK_WINDOW_START.store(now, Ordering::Relaxed);
+        CHAL_ACK_COUNT.store(1, Ordering::Relaxed);
+        return true;
+    }
+    let n = CHAL_ACK_COUNT.fetch_add(1, Ordering::Relaxed);
+    n < CHAL_ACK_LIMIT_PER_SEC
+}
+
+/// Is `seq` within the inclusive-start, exclusive-end window
+/// [rcv_nxt, rcv_nxt + wnd)? Handles u32 wraparound.
+fn seq_in_window(seq: u32, rcv_nxt: u32, wnd: u32) -> bool {
+    if wnd == 0 { return seq == rcv_nxt; }
+    let offset = seq.wrapping_sub(rcv_nxt);
+    offset < wnd
+}
+
 fn boot_cookie() -> u64 {
     let existing = BOOT_COOKIE.load(Ordering::Relaxed);
     if existing != 0 { return existing; }
@@ -184,6 +219,11 @@ pub struct TcpPcb {
     pub rx_shut: AtomicBool,
     /// TX side shut by shutdown_write(): FIN already queued, reject sends.
     pub tx_shut: AtomicBool,
+
+    /// cntpct_el0 tick count when we entered TIME_WAIT. Zero otherwise.
+    /// `poll_once` scans all PCBs and transitions TIME_WAIT -> CLOSED
+    /// once 30 s (2×MSL shortened) have elapsed.
+    pub time_wait_entered: AtomicU64,
 }
 
 impl TcpPcb {
@@ -210,6 +250,7 @@ impl TcpPcb {
             fd:     AtomicI32::new(-1),
             rx_shut: AtomicBool::new(false),
             tx_shut: AtomicBool::new(false),
+            time_wait_entered: AtomicU64::new(0),
         }
     }
 
@@ -333,6 +374,33 @@ fn notify_epoll(id: usize, events: u32) {
 }
 
 // ---------------------------------------------------------------------------
+// TIME_WAIT drain: any PCB that entered TIME_WAIT > 30 s ago -> CLOSED.
+// Called opportunistically at the top of handle_incoming so long-lived
+// zombies eventually release their slot.
+// ---------------------------------------------------------------------------
+const TIME_WAIT_NS_2MSL: u64 = 30_000_000_000; // 30 seconds
+
+fn drain_time_wait() {
+    let now: u64; let freq: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) now);
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+    }
+    if freq == 0 { return; }
+    let deadline_ticks = TIME_WAIT_NS_2MSL / (1_000_000_000 / freq.max(1));
+    for i in 0..MAX_PCBS {
+        let p = pcb(i);
+        if p.state.load(Ordering::Relaxed) != STATE_TIME_WAIT { continue; }
+        let entered = p.time_wait_entered.load(Ordering::Relaxed);
+        if entered != 0 && now.saturating_sub(entered) > deadline_ticks {
+            p.state.store(STATE_CLOSED, Ordering::Release);
+            p.in_use.store(false, Ordering::Release);
+            p.time_wait_entered.store(0, Ordering::Relaxed);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Incoming packet dispatch
 // ---------------------------------------------------------------------------
 
@@ -360,6 +428,10 @@ fn pcb_lookup(remote_ip: u32, remote_port: u16, local_port: u16) -> Option<usize
 
 /// Called by `super::ip` when a TCP segment arrives.
 pub fn handle_incoming(pkt: &IpPacket) {
+    // Opportunistically drain expired TIME_WAIT PCBs so their slots
+    // become reusable. Cheap (~64 loads on the hot path).
+    drain_time_wait();
+
     if pkt.payload.len() < TCP_HDR_SIZE { return; }
 
     // ATTACK-NET-011: verify the TCP checksum before trusting any field.
@@ -388,11 +460,23 @@ pub fn handle_incoming(pkt: &IpPacket) {
     let state = p.state.load(Ordering::Acquire);
     p.snd_wnd = wnd;
 
-    // Handle RST universally — peer reset.
+    // RFC 5961 §3.2: only accept RST that matches rcv_nxt exactly.
+    // In-window-but-not-exact RSTs get a challenge ACK (which forces
+    // the real peer — if this is a spoof — to drop the injection or
+    // reveal itself). Out-of-window RSTs are silently dropped.
+    // This defeats blind RST injection against a guessed sequence.
     if flags & TCP_RST != 0 {
-        p.error.store(E_CONNRESET, Ordering::Release);
-        p.state.store(STATE_CLOSED, Ordering::Release);
-        notify_epoll(id, EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP);
+        if seq == p.rcv_nxt {
+            p.error.store(E_CONNRESET, Ordering::Release);
+            p.state.store(STATE_CLOSED, Ordering::Release);
+            notify_epoll(id, EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP);
+            return;
+        }
+        let wnd = p.rcv_wnd as u32;
+        let in_window = seq_in_window(seq, p.rcv_nxt, wnd);
+        if in_window && try_challenge_ack() {
+            send_tcp_pcb(id, TCP_ACK, &[]);
+        }
         return;
     }
 
@@ -426,6 +510,18 @@ pub fn handle_incoming(pkt: &IpPacket) {
         }
 
         STATE_ESTABLISHED | STATE_FIN_WAIT_1 | STATE_FIN_WAIT_2 => {
+            // RFC 5961 §4: a bare SYN arriving on an already-established
+            // connection is a potential blind-SYN injection. Respond with
+            // a challenge ACK carrying our current state; the real peer's
+            // stack will see the ACK is for a sequence past the injection
+            // and do the right thing, while an attacker is forced to
+            // burn a round-trip to learn our sequence number.
+            if flags & TCP_SYN != 0 {
+                if try_challenge_ack() {
+                    send_tcp_pcb(id, TCP_ACK, &[]);
+                }
+                return;
+            }
             // ACK updates snd_una.
             if flags & TCP_ACK != 0 {
                 // Only move forward; guard against old ACKs.
@@ -476,14 +572,14 @@ pub fn handle_incoming(pkt: &IpPacket) {
                     STATE_FIN_WAIT_1 => {
                         // Our FIN was acked simultaneously with theirs?
                         if flags & TCP_ACK != 0 && p.snd_una == p.snd_nxt {
-                            p.state.store(STATE_TIME_WAIT, Ordering::Release);
+                            { let now: u64; unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); } p.time_wait_entered.store(now, Ordering::Relaxed); p.state.store(STATE_TIME_WAIT, Ordering::Release); }
                         } else {
                             p.state.store(STATE_CLOSING, Ordering::Release);
                         }
                         notify_epoll(id, EPOLLIN | EPOLLHUP);
                     }
                     STATE_FIN_WAIT_2 => {
-                        p.state.store(STATE_TIME_WAIT, Ordering::Release);
+                        { let now: u64; unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); } p.time_wait_entered.store(now, Ordering::Relaxed); p.state.store(STATE_TIME_WAIT, Ordering::Release); }
                         notify_epoll(id, EPOLLIN | EPOLLHUP);
                     }
                     _ => {}
@@ -513,7 +609,7 @@ pub fn handle_incoming(pkt: &IpPacket) {
 
         STATE_CLOSING => {
             if flags & TCP_ACK != 0 && ack == p.snd_nxt {
-                p.state.store(STATE_TIME_WAIT, Ordering::Release);
+                { let now: u64; unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); } p.time_wait_entered.store(now, Ordering::Relaxed); p.state.store(STATE_TIME_WAIT, Ordering::Release); }
             }
         }
 
