@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Web Storage API (localStorage / sessionStorage)
 // Simple key-value store backed by in-memory arrays.
 

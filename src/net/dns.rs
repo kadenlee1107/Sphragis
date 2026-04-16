@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — DNS Resolver
 // Supports both plaintext DNS (fallback) and DNS-over-HTTPS (secure).
 // DoH sends DNS wire-format queries as HTTP POST to a DoH server over TCP.

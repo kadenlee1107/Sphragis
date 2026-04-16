@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — TCP Layer (Minimal)
 // Basic TCP: connect, send, receive, close.
 // Not a full TCP stack — enough for HTTP requests.

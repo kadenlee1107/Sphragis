@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Apple Silicon UART Driver
 // Samsung S5L-derived UART found on all Apple Silicon SoCs.
 // m1n1 exposes serial over USB-C, this driver talks directly to the UART block.

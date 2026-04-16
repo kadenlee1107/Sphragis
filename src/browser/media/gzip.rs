@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Gzip Decompressor (RFC 1952)
 // Parses gzip headers and decompresses the DEFLATE payload.
 // Implements full DEFLATE (RFC 1951): stored, fixed Huffman, dynamic Huffman.

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Bytecode Instruction Set
 // Stack-based VM with ~80 opcodes. Variable-length encoding:
 //   1-byte opcode + 0-4 bytes operand.

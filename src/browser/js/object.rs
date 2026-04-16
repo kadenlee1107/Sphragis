@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — JavaScript Object Heap
 // Arena-allocated objects with property storage.
 // No hash maps — uses linear property arrays (fast for objects with < 32 props).

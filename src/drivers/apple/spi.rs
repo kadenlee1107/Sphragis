@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Apple SPI Keyboard/Trackpad Driver
 // MacBook keyboard and trackpad connect over SPI.
 // The keyboard sends HID reports via SPI packets.

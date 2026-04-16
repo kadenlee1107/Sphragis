@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Authentication Gate
 // Runs BEFORE anything else. No passphrase + YubiKey = no access.
 // Three paths: SUCCESS, FAIL (count), DURESS (fake boot + wipe).

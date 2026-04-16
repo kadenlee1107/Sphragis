@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Apple ANS (Apple NVMe Storage) Driver
 // Custom NVMe controller for Apple Silicon internal SSDs.
 // Uses standard NVMe protocol with Apple-specific initialization.

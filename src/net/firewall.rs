@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Allowlist Firewall
 // DEFAULT DENY ALL. Only explicitly allowed traffic passes.
 // Every connection must be whitelisted.

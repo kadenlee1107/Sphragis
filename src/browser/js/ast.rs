@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — JavaScript AST (Abstract Syntax Tree)
 // Defines the node types produced by the parser.
 // The interpreter walks this tree to execute JavaScript.

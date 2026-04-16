@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Platform Abstraction Layer
 // Same kernel/UI code runs on QEMU (virtio) or Apple Silicon (real HW).
 // This module provides a unified interface that dispatches to the right driver.

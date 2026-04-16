@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Bytecode Compiler
 // Walks the AST and emits stack-based bytecode for the VM.
 // Resolves variables to local slots at compile time for fast access.

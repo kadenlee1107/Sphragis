@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Tor-style Onion Routing
 // Provides anonymous network access for BatCave traffic.
 // Builds 3-hop circuits through Tor relay nodes.

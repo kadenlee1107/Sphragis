@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — String Intern Table
 // All JS strings are stored once and referenced by StringId.
 // Fast comparison (just compare ids), no duplication, compact NaN-box storage.

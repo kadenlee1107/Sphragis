@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — VirtIO MMIO Transport Layer
 // All virtio devices on QEMU virt use Memory-Mapped I/O.
 // This implements the common registers and device negotiation.

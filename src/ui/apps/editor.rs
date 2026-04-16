@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Code Editor App
 // Minimal text editor with syntax-aware display.
 // Phase 6 scaffold — full editing comes later.

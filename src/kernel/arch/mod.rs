@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Architecture-specific kernel code (ARM64)
 
 use crate::drivers::uart;

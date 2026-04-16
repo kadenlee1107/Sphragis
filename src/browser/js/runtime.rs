@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — JavaScript Runtime Values
 // Defines the value types that exist during JS execution.
 

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — CSS Flexbox Layout Engine
 // Implements CSS Flexible Box Layout (Level 1).
 // Handles: flex-direction, justify-content, align-items, flex-grow/shrink.

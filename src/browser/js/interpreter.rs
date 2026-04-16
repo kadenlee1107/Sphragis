@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — JavaScript Interpreter
 // Tree-walking interpreter that executes the AST.
 // Evaluates expressions, executes statements, manages scopes.

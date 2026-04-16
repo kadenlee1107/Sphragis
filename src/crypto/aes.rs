@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — AES-256 Implementation
 // Pure Rust, zero dependencies. Full AES-256 in ECB/CTR modes.
 // Every constant is defined here — no imports, no trust.

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — System Call Handler
 // Tasks use SVC instruction to request kernel services.
 // Each syscall is capability-checked before execution.

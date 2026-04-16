@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — HTML Canvas 2D API
 // Implements the CanvasRenderingContext2D interface.
 // Allows JavaScript to draw directly to a pixel buffer.

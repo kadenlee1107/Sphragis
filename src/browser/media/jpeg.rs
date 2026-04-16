@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — JPEG Decoder (Baseline DCT)
 // Decodes JPEG/JFIF images into raw RGBA pixel buffers.
 // Implements: Huffman decoding, inverse DCT, YCbCr→RGB, dequantization.

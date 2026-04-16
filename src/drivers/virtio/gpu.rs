@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — VirtIO GPU Driver
 // Creates a 2D framebuffer via virtio-gpu protocol.
 // Reference: VirtIO Spec v1.2, Section 5.7

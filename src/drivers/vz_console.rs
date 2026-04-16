@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Virtualization.framework Console Output
 // VZ VMs use virtio-console over PCI, but we don't know where.
 //

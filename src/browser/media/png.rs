@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — PNG Decoder
 // Decodes PNG images into raw RGBA pixel buffers.
 // Implements: PNG chunk parsing, DEFLATE decompression, pixel unfiltering.

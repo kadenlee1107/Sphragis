@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Inter-Process Communication
 // Synchronous message passing between tasks.
 // Capability-checked: you can only send/receive on channels you hold caps for.

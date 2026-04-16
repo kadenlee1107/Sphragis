@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — PL011 UART Driver
 // Bidirectional serial I/O. Safe on platforms without UART.
 

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Tiling Window Manager
 // Keyboard-driven, no floating windows.
 // Ctrl+1-5 switches apps. Ctrl+H/L splits horizontal/vertical.

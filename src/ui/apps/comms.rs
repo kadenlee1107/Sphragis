@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Comms Client (8th Desktop App)
 // Encrypted peer-to-peer messaging over TCP.
 // All messages AES-256 encrypted end-to-end.

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Apple Device Tree Parser
 // When iBoot loads us, it passes a device tree (ADT) in x0.
 // The ADT contains the ACTUAL hardware addresses for this specific

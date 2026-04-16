@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — BatFS: Custom Encrypted Filesystem
 // In-memory filesystem with per-file AES-256-CTR encryption.
 // Each file gets a unique derived key. Merkle tree integrity.

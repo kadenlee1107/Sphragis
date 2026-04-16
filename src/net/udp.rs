@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — UDP Layer
 // Minimal UDP for DNS queries.
 

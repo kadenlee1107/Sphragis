@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Apple Interrupt Controller (AIC2)
 // Custom interrupt controller used on all Apple Silicon.
 // NOT a standard GIC — Apple uses their own design.

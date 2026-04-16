@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — BatCave Core
 // Isolated container runtime for running Kali Linux tools.
 // Each BatCave has its own encrypted filesystem, capabilities, and process space.

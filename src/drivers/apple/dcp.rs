@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Apple Display Controller (DCP) Driver
 // On Apple Silicon, the display is managed by a coprocessor (DCP).
 // Communication happens via mailbox messages.

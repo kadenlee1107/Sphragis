@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Bytecode Virtual Machine
 // Stack-based VM that executes compiled bytecode.
 // Handles call frames, variable scoping, closures, upvalues, and object operations.

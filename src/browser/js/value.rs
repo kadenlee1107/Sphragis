@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — NaN-Boxed JavaScript Value
 // Every JS value fits in a single u64. No heap allocation for primitives.
 //

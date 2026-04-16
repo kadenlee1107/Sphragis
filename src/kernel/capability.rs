@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Capability System (seL4-inspired)
 // Capabilities are unforgeable tokens granting specific access.
 // Grant / Delegate / Revoke model.

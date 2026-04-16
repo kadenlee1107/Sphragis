@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Dead Man's Switch
 // If you don't re-authenticate within the configured interval,
 // the system assumes you're compromised and auto-wipes on next boot.

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Flattened Device Tree (FDT/DTB) Parser
 // VZLinuxBootLoader passes a standard DTB in x0 at boot.
 // This tells us where EVERY device is in the VM.

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — GPU Console
 // Terminal emulator rendered to the framebuffer.
 // Handles text output and cursor management.

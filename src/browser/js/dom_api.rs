@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — JavaScript DOM API Integration
 // Bridges JavaScript to the DOM tree, providing document/Element/Window objects.
 // All no_std compatible with fixed-size arrays.

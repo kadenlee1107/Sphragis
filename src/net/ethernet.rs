@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Ethernet Frame Handler
 
 pub const ETH_HDR_SIZE: usize = 14;

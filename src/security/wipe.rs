@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — Secure Wipe System
 // Multiple wipe modes, all irreversible:
 //

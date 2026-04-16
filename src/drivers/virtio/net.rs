@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — VirtIO Network Driver
 // Sends and receives raw Ethernet frames via virtio-net.
 // Uses two queues: RX (receive) and TX (transmit).

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Bat_OS — VPN Tunnel (WireGuard-inspired)
 // Encrypts all BatCave network traffic through a secure tunnel.
 // Uses X25519 for key exchange and AES-256-CTR for packet encryption.
