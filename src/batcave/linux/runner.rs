@@ -105,7 +105,6 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
         return Err("chromium blob CRC mismatch");
     }
 
-    // Make sure VFS + fd table are live; Chromium opens many files.
     if !super::vfs::is_ready() {
         super::vfs::init();
     }
@@ -113,25 +112,47 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
 
     uart::puts("[runner] Loading content_shell (");
     crate::kernel::mm::print_num(blob.len() / (1024 * 1024));
-    uart::puts(" MB)...\n");
+    uart::puts(" MB) into sandboxed cave...\n");
 
-    let entry = loader::load_elf(blob)?;
+    // ROOT-1: Chromium runs in a per-cave page table with its user VA
+    // window at 0x10000000 — above MMIO (0x08M-0x0AM). The 200 MB cave
+    // window fits 150 MB of content_shell without hitting MMIO holes.
+    const CHROMIUM_VIRT_BASE: u64 = 0x10000000;
+
+    let cave_slot = super::mmu::alloc_cave_slot().ok_or("no free cave slots")?;
+    uart::puts("[runner] Cave slot "); crate::kernel::mm::print_num(cave_slot);
+    uart::puts(" allocated\n");
+
+    let info = match loader::load_elf_rebased(blob, CHROMIUM_VIRT_BASE) {
+        Ok(i) => i,
+        Err(e) => { super::mmu::free_cave_slot(cave_slot); return Err(e); }
+    };
+
+    let l1 = match super::mmu::setup_cave_pagetable_at(
+        cave_slot, info.phys_base, CHROMIUM_VIRT_BASE) {
+        Ok(l) => l,
+        Err(e) => { super::mmu::free_cave_slot(cave_slot); return Err(e); }
+    };
+
+    uart::puts("[cave] chromium now on its own page table (L1=0x");
+    let hex = b"0123456789abcdef";
+    for i in (0..16).rev() {
+        let nibble = ((l1 as u64 >> (i * 4)) & 0xF) as usize;
+        uart::putc(hex[nibble]);
+    }
+    uart::puts(")\n");
 
     uart::puts("[runner] Launching on ");
     uart::puts(url);
     uart::puts("\n");
 
-    // Opt into the real threading scheduler before hand-off: content_shell
-    // spawns compositor / IO / threadpool threads during startup and needs
-    // `clone`/`futex` to resolve against a live main-thread entry.
-    //
-    // The SP for the initial thread gets set by `execute_with_args` when
-    // it builds argv/envp on the user stack. We register with a stub SP
-    // here; `init_main_thread` only remembers the *main* TID so the real
-    // SP stored by the loader on entry is what the scheduler observes.
-    super::threads::init_main_thread(entry, 0);
+    super::threads::init_main_thread(info.virt_entry, 0);
 
-    loader::execute_with_args(entry, argv)
+    super::mmu::switch_to_cave(l1);
+    let r = loader::execute_with_args(info.virt_entry, argv);
+    super::mmu::switch_to_primary();
+    super::mmu::free_cave_slot(cave_slot);
+    r
 }
 
 /// Run a small test ELF (single-segment, simple format).

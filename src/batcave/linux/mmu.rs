@@ -112,6 +112,35 @@ static mut CAVE_L1: [usize; MAX_CAVE_PAGETABLES] = [0; MAX_CAVE_PAGETABLES]; // 
 static mut CAVE_PHYS_BASE: [usize; MAX_CAVE_PAGETABLES] = [0; MAX_CAVE_PAGETABLES]; // per-cave phys base
 static mut PRIMARY_L1: usize = 0; // the primary (ash) page table
 
+// Cave-slot bitmap. Bit set = slot in use. CAS-free (we're single-core).
+use core::sync::atomic::{AtomicU8, Ordering as SlotOrder};
+static CAVE_SLOT_USED: AtomicU8 = AtomicU8::new(0);
+
+/// Allocate a free cave page-table slot. Returns Some(index) or None if
+/// all MAX_CAVE_PAGETABLES are in use.
+pub fn alloc_cave_slot() -> Option<usize> {
+    let used = CAVE_SLOT_USED.load(SlotOrder::Acquire);
+    for i in 0..MAX_CAVE_PAGETABLES {
+        let bit = 1u8 << i;
+        if used & bit == 0 {
+            CAVE_SLOT_USED.fetch_or(bit, SlotOrder::AcqRel);
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Release a cave slot. Also clears CAVE_L1[slot] so subsequent
+/// `get_cave_l1(slot)` returns the primary table.
+pub fn free_cave_slot(slot: usize) {
+    if slot >= MAX_CAVE_PAGETABLES { return; }
+    CAVE_SLOT_USED.fetch_and(!(1u8 << slot), SlotOrder::AcqRel);
+    unsafe {
+        CAVE_L1[slot] = 0;
+        CAVE_PHYS_BASE[slot] = 0;
+    }
+}
+
 /// Get the L1 table address for a specific cave.
 pub fn get_cave_l1(cave_slot: usize) -> usize {
     unsafe { if cave_slot < MAX_CAVE_PAGETABLES { CAVE_L1[cave_slot] } else { PRIMARY_L1 } }
