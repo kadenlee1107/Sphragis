@@ -710,13 +710,44 @@ pub fn recvfrom(fd: i32, buf: *mut u8, len: usize, _flags: i32,
     }
 }
 
+// ATTACK-SYS-014/015/016 fix: msghdr, iovec array, and each iov_base must
+// all live in userspace. Previously these were dereferenced raw, which gave
+// renderers a full kernel-read (sendmsg) and kernel-write (recvmsg) primitive
+// via attacker-chosen iovec bases. We cap the iovec count at IOV_MAX to bound
+// the kernel work per call.
+const IOV_MAX: usize = 32;
+
+fn is_user(p: usize, n: usize) -> bool {
+    if n == 0 { return p != 0; }
+    crate::batcave::linux::uaccess::is_user_range(p, n)
+}
+
 /// sendmsg(2) — iterates iovecs and calls sendto() per-vec.
 pub fn sendmsg(fd: i32, msg: *const Msghdr, flags: i32) -> i64 {
     if msg.is_null() { return EFAULT; }
-    let m = unsafe { &*msg };
+    if !is_user(msg as usize, core::mem::size_of::<Msghdr>()) { return EFAULT; }
+    // Copy the msghdr out of user memory before using it, so concurrent
+    // writes from another cave-thread can't race us (TOCTOU).
+    let m: Msghdr = unsafe { core::ptr::read(msg) };
+    if m.msg_iovlen > IOV_MAX { return EINVAL; }
     if m.msg_iov.is_null() && m.msg_iovlen > 0 { return EFAULT; }
 
-    let dest = m.msg_name as *const SockaddrIn;
+    let iov_bytes = m.msg_iovlen.checked_mul(core::mem::size_of::<Iovec>())
+        .unwrap_or(usize::MAX);
+    if m.msg_iovlen > 0
+        && !is_user(m.msg_iov as usize, iov_bytes)
+    {
+        return EFAULT;
+    }
+
+    let dest = if !m.msg_name.is_null() {
+        if !is_user(m.msg_name as usize, m.msg_namelen as usize) {
+            return EFAULT;
+        }
+        m.msg_name as *const SockaddrIn
+    } else {
+        core::ptr::null()
+    };
     let dlen = m.msg_namelen;
 
     let iovs = unsafe { core::slice::from_raw_parts(m.msg_iov, m.msg_iovlen) };
@@ -724,6 +755,7 @@ pub fn sendmsg(fd: i32, msg: *const Msghdr, flags: i32) -> i64 {
     for iv in iovs {
         if iv.iov_len == 0 { continue; }
         if iv.iov_base.is_null() { return EFAULT; }
+        if !is_user(iv.iov_base as usize, iv.iov_len) { return EFAULT; }
         let r = sendto(fd, iv.iov_base, iv.iov_len, flags, dest, dlen);
         if r < 0 {
             return if total > 0 { total } else { r };
@@ -739,10 +771,30 @@ pub fn sendmsg(fd: i32, msg: *const Msghdr, flags: i32) -> i64 {
 /// sequential fill is fine.)
 pub fn recvmsg(fd: i32, msg: *mut Msghdr, flags: i32) -> i64 {
     if msg.is_null() { return EFAULT; }
+    if !is_user(msg as usize, core::mem::size_of::<Msghdr>()) { return EFAULT; }
+
+    // Read out the fields first; we still need to write msg_flags and
+    // msg_controllen back to userspace at the end, so keep msg as *mut.
     let m = unsafe { &mut *msg };
+    if m.msg_iovlen > IOV_MAX { return EINVAL; }
     if m.msg_iov.is_null() && m.msg_iovlen > 0 { return EFAULT; }
 
-    let name = m.msg_name as *mut SockaddrIn;
+    let iov_bytes = m.msg_iovlen.checked_mul(core::mem::size_of::<Iovec>())
+        .unwrap_or(usize::MAX);
+    if m.msg_iovlen > 0
+        && !is_user(m.msg_iov as usize, iov_bytes)
+    {
+        return EFAULT;
+    }
+
+    let name = if !m.msg_name.is_null() {
+        if !is_user(m.msg_name as usize, m.msg_namelen as usize) {
+            return EFAULT;
+        }
+        m.msg_name as *mut SockaddrIn
+    } else {
+        core::ptr::null_mut()
+    };
     let namelen_ptr: *mut u32 = &mut m.msg_namelen;
 
     let iovs = unsafe { core::slice::from_raw_parts_mut(m.msg_iov, m.msg_iovlen) };
@@ -750,6 +802,7 @@ pub fn recvmsg(fd: i32, msg: *mut Msghdr, flags: i32) -> i64 {
     for iv in iovs.iter_mut() {
         if iv.iov_len == 0 { continue; }
         if iv.iov_base.is_null() { return EFAULT; }
+        if !is_user(iv.iov_base as usize, iv.iov_len) { return EFAULT; }
         let r = recvfrom(fd, iv.iov_base, iv.iov_len, flags, name, namelen_ptr);
         if r < 0 {
             return if total > 0 { total } else { r };

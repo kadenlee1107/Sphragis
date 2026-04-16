@@ -196,15 +196,30 @@ fn ns_to_ticks(ns: u64) -> u64 {
 }
 
 // ─── User memory load ────────────────────────────────────────────────────
-// Futex values are 32-bit, loaded with relaxed semantics from the caller's
-// perspective. We use a plain load here because user and kernel share the
-// same address space in the current Bat_OS Linux compat runner.
+// Futex values are 32-bit loads of a userspace pointer.
+//
+// ATTACK-SYS-006 fix: the previous implementation dereferenced any address
+// the cave passed, giving a 32-bit kernel-memory oracle (and blocking on
+// kernel state when used with FUTEX_WAIT). We now gate every load through
+// `uaccess::is_user_range` and return 0 on rejection; the caller treats a
+// mismatch against the expected value as EWOULDBLOCK, so rejection surfaces
+// to the cave as a normal futex failure rather than a kernel read.
 fn load_u32(uaddr: u64) -> u32 {
+    if !crate::batcave::linux::uaccess::is_user_range(uaddr as usize, 4) {
+        return 0;
+    }
     let v: u32;
     unsafe {
         core::arch::asm!("ldr {v:w}, [{a}]", a = in(reg) uaddr, v = out(reg) v);
     }
     v
+}
+
+/// Separate gate exposed for futex entry points that need to distinguish
+/// "bad pointer" from "value mismatch". Returns true if `uaddr` is safe to
+/// touch as a 4-byte userspace value.
+pub(crate) fn is_valid_uaddr(uaddr: u64) -> bool {
+    crate::batcave::linux::uaccess::is_user_range(uaddr as usize, 4)
 }
 
 // ─── Current thread id stub ──────────────────────────────────────────────
@@ -314,6 +329,11 @@ pub fn futex_wait(uaddr: u64, val: u32, timeout_ns: u64) -> i64 {
     if uaddr == 0 || (uaddr & 0x3) != 0 {
         return EINVAL;
     }
+    // ATTACK-SYS-006: reject non-user addresses. Without this the cave
+    // could set uaddr to point at kernel state and probe it.
+    if !is_valid_uaddr(uaddr) {
+        return EINVAL;
+    }
 
     // Compute absolute deadline in cntpct ticks (0 == none).
     let deadline = if timeout_ns == 0 {
@@ -359,6 +379,10 @@ pub fn futex_wait_bitset(uaddr: u64, val: u32, timeout_ns: u64, bitset: u32) -> 
     if uaddr == 0 || (uaddr & 0x3) != 0 {
         return EINVAL;
     }
+    // ATTACK-SYS-006: reject non-user addresses.
+    if !is_valid_uaddr(uaddr) {
+        return EINVAL;
+    }
 
     let deadline = if timeout_ns == 0 {
         0
@@ -391,6 +415,11 @@ pub fn futex_wait_bitset(uaddr: u64, val: u32, timeout_ns: u64, bitset: u32) -> 
 /// Returns the number woken.
 pub fn futex_wake(uaddr: u64, max_wakers: u32) -> i64 {
     if uaddr == 0 {
+        return EINVAL;
+    }
+    // ATTACK-SYS-006: reject non-user addresses. Wake doesn't deref but
+    // a cave using kernel-addr bucketing would still poison shared buckets.
+    if !is_valid_uaddr(uaddr) {
         return EINVAL;
     }
     let bi = bucket_index(uaddr);

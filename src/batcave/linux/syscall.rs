@@ -15,6 +15,7 @@ use crate::batcave::cave;
 use super::vfs;
 use super::fd;
 use super::stdio_ring;
+use super::uaccess;
 
 // Linux errno values (returned as negative)
 const ENOSYS: i64 = -38;   // Function not implemented
@@ -233,7 +234,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::MPROTECT => (SyscallCat::Memory, sys_mprotect),
 
         // ── Display (Bat_OS custom) ──
-        500 => (SyscallCat::Always, sys_blit_framebuffer), // custom: blit pixels to GPU
+        500 => (SyscallCat::Display, sys_blit_framebuffer), // custom: blit pixels to GPU
 
         // ── Process ──
         220 => (SyscallCat::Process, sys_clone_thread), // clone
@@ -1061,13 +1062,15 @@ fn sys_getcwd(args: [u64; 6]) -> i64 {
 }
 
 fn sys_ioctl(args: [u64; 6]) -> i64 {
-    let fd = args[0];
+    let _fd = args[0];
     let cmd = args[1];
     match cmd {
         0x5401 => { // TCGETS — get terminal attributes
+            // NEW-SYS-025: gate the arg pointer so a cave can't use ioctl
+            // as a "60-byte kernel zeroing" primitive.
             let buf = args[2] as usize;
             if buf != 0 {
-                // Zero out termios struct (60 bytes on aarch64)
+                if !uaccess::is_user_range(buf, 60) { return -(14i64); }
                 for i in 0..60 {
                     unsafe { core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf + i); }
                 }
@@ -1076,8 +1079,10 @@ fn sys_ioctl(args: [u64; 6]) -> i64 {
         }
         0x5402 | 0x5403 => 0, // TCSETS, TCSETSW — set terminal attributes (ignore)
         0x5413 => { // TIOCGWINSZ — terminal window size
+            // NEW-SYS-025: gate the 4-byte winsize write.
             let buf = args[2] as usize;
             if buf != 0 {
+                if !uaccess::is_user_range(buf, 4) { return -(14i64); }
                 unsafe {
                     core::arch::asm!("strh {v:w}, [{a}]", a = in(reg) buf, v = in(reg) 24u32);
                     core::arch::asm!("strh {v:w}, [{a}]", a = in(reg) buf + 2, v = in(reg) 80u32);
@@ -1820,11 +1825,18 @@ fn sys_faccessat(args: [u64; 6]) -> i64 {
 
 fn sys_ppoll(args: [u64; 6]) -> i64 {
     // ppoll(fds, nfds, timeout, sigmask)
-    // struct pollfd { fd: i32, events: i16, revents: i16 }
+    // struct pollfd { fd: i32, events: i16, revents: i16 } — 8 bytes
     let fds_ptr = args[0] as usize;
     let nfds = args[1] as usize;
 
     if nfds == 0 || fds_ptr == 0 { return 0; }
+
+    // ATTACK-SYS-049 / NEW-SYS-024: gate the full fds array. The loop below
+    // only reads the first 8 entries but also scatters revents writes —
+    // both arms need the fds[] buffer to live entirely in userspace.
+    let n = nfds.min(8);
+    let bytes = match n.checked_mul(8) { Some(b) => b, None => return -(22i64) };
+    if !uaccess::is_user_range(fds_ptr, bytes) { return -(14i64); }
 
     // Read all polled fds
     let mut poll_fds = [0i32; 8];
@@ -2441,6 +2453,10 @@ fn sys_wait_stub(args: [u64; 6]) -> i64 {
     let status_ptr = args[1] as usize;
     let code = CHILD_EXIT_CODE.load(core::sync::atomic::Ordering::Relaxed);
     if status_ptr != 0 {
+        // NEW-SYS-026: status_ptr must be user memory. Without this, wait4
+        // was a 4-byte controlled kernel-write primitive (attacker-controlled
+        // status value limited to 8 bits but attacker-chosen location).
+        if !uaccess::is_user_range(status_ptr, 4) { return -(14i64); }
         // Linux wait status: exit code in bits 15:8
         let status: u32 = (code as u32 & 0xFF) << 8;
         unsafe {
@@ -3044,6 +3060,17 @@ fn sys_rt_sigprocmask(args: [u64; 6]) -> i64 {
     let set_ptr = args[1] as usize;
     let oldset_ptr = args[2] as usize;
 
+    // ATTACK-SYS-039 fix: gate both pointers. Without these a cave could
+    // use rt_sigprocmask as a 64-bit kernel read oracle (via oldset) and
+    // as a gadget-friendly controlled read (of SIGNAL_MASK) / unchecked
+    // 64-bit read (of set_ptr).
+    if oldset_ptr != 0 && !uaccess::is_user_range(oldset_ptr, 8) {
+        return -(14i64);
+    }
+    if set_ptr != 0 && !uaccess::is_user_range(set_ptr, 8) {
+        return -(14i64);
+    }
+
     unsafe {
         if oldset_ptr != 0 {
             core::ptr::write(oldset_ptr as *mut u64, SIGNAL_MASK);
@@ -3083,6 +3110,17 @@ fn sys_tgkill(args: [u64; 6]) -> i64 {
 fn sys_sigaltstack(args: [u64; 6]) -> i64 {
     let ss_ptr = args[0] as usize;
     let old_ss_ptr = args[1] as usize;
+
+    // NEW-SYS-027 / ATTACK-SYS-038: the struct is 24 bytes (ss_sp, ss_flags,
+    // _pad, ss_size). Without gating this was a 24-byte EL1 write primitive
+    // via old_ss_ptr and a 16-byte controlled read via ss_ptr.
+    if old_ss_ptr != 0 && !uaccess::is_user_range(old_ss_ptr, 24) {
+        return -(14i64);
+    }
+    if ss_ptr != 0 && !uaccess::is_user_range(ss_ptr, 24) {
+        return -(14i64);
+    }
+
     unsafe {
         if old_ss_ptr != 0 {
             let old = old_ss_ptr as *mut u64;
@@ -3196,6 +3234,20 @@ fn sys_blit_framebuffer(args: [u64; 6]) -> i64 {
     let screen_h = crate::drivers::virtio::gpu::height();
 
     if fb.is_null() { return -1; }
+
+    // V2-NEW-035 / NEW-SYS-030 / ESC-007: cap check already gates us via
+    // SyscallCat::Display; also reject unbounded / kernel source pointers.
+    // Without this, any cave could pass src_ptr = 0x40000000 and
+    // render kernel RAM to the screen.
+    let pixels = match (src_w as usize).checked_mul(src_h as usize)
+        .and_then(|p| p.checked_mul(4))
+    {
+        Some(b) if b > 0 => b,
+        _ => return -(22i64), // EINVAL: zero or overflow
+    };
+    if !uaccess::is_user_range(src_ptr, pixels) {
+        return -(14i64); // EFAULT
+    }
 
     // Copy pixels from user buffer to framebuffer
     for y in 0..src_h {
