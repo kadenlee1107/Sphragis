@@ -57,6 +57,7 @@ static DNS_DONE: AtomicBool = AtomicBool::new(false);
 /// Handle a DNS response.
 pub fn handle_response(data: &[u8]) {
     if data.len() < 12 { return; }
+    if data.len() > 4096 { return; } // RFC 1035 soft cap + sanity
 
     // ATTACK-NET-035: verify the transaction ID matches the query we sent.
     // An off-path attacker now has to guess a 16-bit TXID plus land within
@@ -67,10 +68,18 @@ pub fn handle_response(data: &[u8]) {
         if txid != EXPECTED_TXID.load(Ordering::Relaxed) {
             return;
         }
+    } else {
+        // No outstanding query — drop unsolicited response.
+        return;
     }
 
+    // Response bounds sanity (hardens against spoofed giant payloads
+    // that would otherwise drag us through thousands of RR iterations).
+    let qdcount = u16::from_be_bytes([data[4], data[5]]);
     let answers = u16::from_be_bytes([data[6], data[7]]);
+    if qdcount != 1 { return; }   // we always send exactly one question
     if answers == 0 { return; }
+    if answers > 32 { return; }   // RFC-valid but suspicious
 
     // Skip header (12 bytes) and question section
     let mut offset = 12;
@@ -105,6 +114,7 @@ pub fn handle_response(data: &[u8]) {
         let rtype = u16::from_be_bytes([data[offset], data[offset + 1]]);
         // offset+2..+4 = class, offset+4..+8 = TTL
         let rdlen = u16::from_be_bytes([data[offset + 8], data[offset + 9]]) as usize;
+        if rdlen > 512 { return; } // reject oversized rdata (spoof defense)
         offset += 10;
 
         if rtype == 1 && rdlen == 4 && offset + 4 <= data.len() {
