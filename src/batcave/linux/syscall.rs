@@ -814,6 +814,26 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
     let path_len = read_user_str(path_ptr, &mut path_buf);
     let path = &path_buf[..path_len];
 
+    // FL-016 path-traversal guard: reject any `..` component. A single
+    // `..` in a path lets an attacker escape whatever base directory
+    // the cave is sandboxed to. We walk the components and refuse on
+    // exact match against the two-byte sequence between slashes.
+    // (This is coarser than POSIX realpath-normalization but catches
+    // the common attack without pulling in extra state.)
+    {
+        let mut i = 0usize;
+        while i < path.len() {
+            let start = if path[i] == b'/' { i + 1 } else { i };
+            let mut end = start;
+            while end < path.len() && path[end] != b'/' { end += 1; }
+            if end - start == 2 && &path[start..end] == b".." {
+                return EACCES;
+            }
+            i = end + 1;
+            if i == 0 { break; }
+        }
+    }
+
     // Handle /proc paths BEFORE VFS check — /proc is always available
     let path_str = unsafe { core::str::from_utf8_unchecked(path) };
     if path_str.starts_with("/proc/") {
@@ -1963,6 +1983,19 @@ fn sys_futex(args: [u64; 6]) -> i64 {
 fn sys_clone_thread(args: [u64; 6]) -> i64 {
     let flags = args[0];
     let child_stack = args[1];
+
+    // ATTACK-SYS-010/011/012: validate pointer-shaped arguments against
+    // the user range BEFORE handing to the threading scheduler. A kernel
+    // address here becomes a stack-pivot / kernel-write primitive.
+    let parent_tid = args[2] as usize;
+    let tls        = args[3] as usize;
+    let child_tid  = args[4] as usize;
+    if child_stack != 0 && !is_user_ptr(child_stack as usize, 16) {
+        return EFAULT;
+    }
+    if parent_tid != 0 && !is_user_ptr(parent_tid, 4) { return EFAULT; }
+    if child_tid  != 0 && !is_user_ptr(child_tid,  4) { return EFAULT; }
+    if tls        != 0 && !is_user_ptr(tls,        16) { return EFAULT; }
 
     // If the new threading model is active (Chromium launched via
     // threads::init_main_thread), delegate to the real clone().

@@ -187,7 +187,13 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                     {
                         let frame_addr = frame as usize;
                         let save_dst = core::ptr::addr_of_mut!(SAVED_FRAME) as usize;
-                        for i in (0..272).step_by(8) {
+                        // TrapFrame is exactly 33 * 8 = 264 bytes (31 x regs +
+                        // ELR + SPSR). The old loop ran for 272 bytes — an
+                        // 8-byte overread of the kernel stack into SAVED_FRAME
+                        // that got restored to the parent's registers on
+                        // child exit. Cap at sizeof(TrapFrame).
+                        let tf_size = core::mem::size_of::<TrapFrame>();
+                        for i in (0..tf_size).step_by(8) {
                             let val: u64;
                             core::arch::asm!(
                                 "ldr {v}, [{a}]",
