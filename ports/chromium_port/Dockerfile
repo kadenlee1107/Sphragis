@@ -97,8 +97,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libfontconfig1-dev \
         libharfbuzz-dev \
         libicu-dev \
-        nodejs \
-        npm \
+        qemu-user-static \
+        qemu-user \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 22 (Chromium needs this version, not Debian's bundled 18)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Enable x86_64 multi-arch so Chromium's bundled x86_64 prebuilts (clang,
+# tsc, etc.) can run under emulation. Required for ARM64 host builds.
+RUN dpkg --add-architecture amd64 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libc6:amd64 \
+        libstdc++6:amd64 \
+        zlib1g:amd64 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root build user (matches host uid for volume sanity)
