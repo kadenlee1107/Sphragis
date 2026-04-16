@@ -3086,6 +3086,41 @@ static mut SIGNAL_PENDING: u64 = 0;
 static mut SIGALT_SP: u64 = 0;
 static mut SIGALT_SIZE: u64 = 0;
 
+/// Clear every `static mut` the Linux compat layer carries across cave
+/// lifetimes so a freshly-created cave cannot inherit signal handlers,
+/// child/thread bookkeeping, pipe contents, or UDP RX queue state from
+/// the previous tenant. V2-NEW-009/019/031/032/033 + ESC-029/033.
+pub fn reset_cave_statics() {
+    unsafe {
+        // Signal state.
+        for i in 0..MAX_SIG { SIGNAL_HANDLERS[i] = 0; }
+        SIGNAL_MASK = 0;
+        SIGNAL_PENDING = 0;
+        SIGALT_SP = 0;
+        SIGALT_SIZE = 0;
+        // Pipe buffer.
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_LEN), 0);
+        for i in 0..PIPE_BUF_SIZE {
+            core::arch::asm!("strb wzr, [{a}]",
+                a = in(reg) core::ptr::addr_of_mut!(PIPE_BUF) as usize + i);
+        }
+        // UDP RX queue (the syscall-layer ring; sockets have their own).
+        for slot in 0..UDP_RX_SLOTS {
+            UDP_RX_LEN[slot] = 0;
+            for b in 0..UDP_RX_BUF[slot].len() { UDP_RX_BUF[slot][b] = 0; }
+        }
+        UDP_RX_HEAD = 0;
+        UDP_RX_TAIL = 0;
+        UDP_RX_READY = false;
+    }
+    // Child/thread bookkeeping.
+    IN_CHILD.store(false, core::sync::atomic::Ordering::Relaxed);
+    IS_THREAD_CHILD.store(false, core::sync::atomic::Ordering::Relaxed);
+    LAST_CHILD_TID.store(2, core::sync::atomic::Ordering::Relaxed);
+    CHILD_EXIT_CODE.store(0, core::sync::atomic::Ordering::Relaxed);
+    CHILD_REAPED.store(true, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// rt_sigaction — set/get signal handler
 fn sys_rt_sigaction(args: [u64; 6]) -> i64 {
     let signum = args[0] as u32;

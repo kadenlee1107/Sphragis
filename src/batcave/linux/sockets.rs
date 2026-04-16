@@ -326,15 +326,26 @@ pub fn peek(fd: i32) -> Option<SocketState> {
 fn read_sockaddr(addr: *const SockaddrIn, len: u32) -> Result<(u32, u16, u16), i64> {
     if addr.is_null() { return Err(EFAULT); }
     if (len as usize) < core::mem::size_of::<SockaddrIn>() { return Err(EINVAL); }
-    // SAFETY: caller-provided pointer; we have no MMU guest-check yet. This
-    // is the same trust boundary every other syscall in batcave/linux uses.
-    // TODO: validate via syscall::verify_user_ptr() once that helper lands.
+    // NEW-SYS-040: validate the pointer lives in userspace. Previously this
+    // was a read oracle — an attacker passing `&kernel_state` could recover
+    // the bytes via whatever the syscall did with (ip, port, family).
+    if !is_user(addr as usize, core::mem::size_of::<SockaddrIn>()) {
+        return Err(EFAULT);
+    }
     let sa = unsafe { core::ptr::read_unaligned(addr) };
     Ok((ntohl(sa.sin_addr), ntohs(sa.sin_port), sa.sin_family))
 }
 
 fn write_sockaddr(addr: *mut SockaddrIn, len: *mut u32, ip_host: u32, port_host: u16) -> Result<(), i64> {
     if addr.is_null() || len.is_null() { return Err(EFAULT); }
+    // NEW-SYS-041: gate both writes. The SockaddrIn struct is 16 bytes;
+    // the length word is 4 bytes.
+    if !is_user(addr as usize, core::mem::size_of::<SockaddrIn>()) {
+        return Err(EFAULT);
+    }
+    if !is_user(len as usize, 4) {
+        return Err(EFAULT);
+    }
     let available = unsafe { core::ptr::read_unaligned(len) };
     if (available as usize) < core::mem::size_of::<SockaddrIn>() {
         // Linux truncates; we mimic by writing what fits, but flag EINVAL for now.

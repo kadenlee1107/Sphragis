@@ -425,6 +425,13 @@ pub fn seal(name: &str) -> Result<(), &'static str> {
 }
 
 /// Destroy a BatCave — secure wipe.
+///
+/// V2-NEW-009/019/031/032/033 + ESC-029/033: clear every `static mut`
+/// piece of per-cave state that survived into the next cave. Previously
+/// SIGNAL_HANDLERS (128 × u64 of attacker-controllable handler addresses),
+/// CLONE_CHILD_STACK, IN_CHILD, IS_THREAD_CHILD, LAST_CHILD_TID, PIPE_BUF,
+/// UDP RX queue, SAVED_FRAME, SAVED_STACK all carried over to the next
+/// cave — a cheap cross-cave info-leak and gadget-plant primitive.
 pub fn destroy(name: &str) -> Result<(), &'static str> {
     // Wipe the cave's VFS instance (filesystem data)
     if let Some(id) = find_id(name) {
@@ -457,6 +464,10 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
 
     let count = CAVE_COUNT.load(Ordering::Relaxed);
     if count > 0 { CAVE_COUNT.store(count - 1, Ordering::Relaxed); }
+
+    // V2-NEW-009+: clear the cross-cave static globals in the Linux
+    // compat layer so the next cave starts with a clean state.
+    crate::batcave::linux::syscall::reset_cave_statics();
 
     Ok(())
 }
