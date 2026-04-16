@@ -46,7 +46,16 @@ impl<'a> IpPacket<'a> {
         let src = u32::from_be_bytes([data[12], data[13], data[14], data[15]]);
         let dst = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
 
-        if data.len() < total_len { return None; }
+        // ATTACK-NET-004/005/006: validate IHL against the buffer and total_len
+        // *before* indexing. A crafted packet with ihl < 20 feeds a garbage
+        // header, and ihl > total_len causes a slice panic (remote kernel DoS).
+        if ihl < IP_HDR_SIZE { return None; }
+        if total_len < ihl { return None; }
+        if total_len > data.len() { return None; }
+
+        // ATTACK-NET-008: verify the IPv4 header checksum. Over a valid header
+        // the one's-complement sum is 0xFFFF (!=0 after the final complement).
+        if checksum(&data[..ihl]) != 0 { return None; }
 
         Some(Self {
             src, dst, protocol,

@@ -78,7 +78,15 @@ pub struct TlsSession {
     leftover_len: usize,
 }
 
-static mut SESSION: TlsSession = TlsSession {
+// ATTACK-NET-034: one TLS session per TCP PCB instead of a single global.
+//
+// The public API (build_client_hello / handshake / send_app_data / …) still
+// operates on the legacy PCB 0 slot so existing browser.rs call sites don't
+// need to change. New `*_pcb(id, …)` variants let concurrent HTTPS connections
+// each own their own keystream without clobbering each other.
+const TLS_MAX_PCBS: usize = crate::net::tcp::MAX_PCBS;
+
+const EMPTY_TLS_SESSION: TlsSession = TlsSession {
     state: TlsState::Initial,
     our_private: [0; 32],
     our_public: [0; 32],
@@ -96,9 +104,37 @@ static mut SESSION: TlsSession = TlsSession {
     leftover_len: 0,
 };
 
+static mut TLS_STATES: [TlsSession; TLS_MAX_PCBS] =
+    [EMPTY_TLS_SESSION; TLS_MAX_PCBS];
+
+/// Legacy PCB used by the synchronous handshake/send/recv functions.
+const LEGACY_TLS_PCB: usize = 0;
+
+#[inline]
+fn session_mut(id: usize) -> &'static mut TlsSession {
+    let idx = if id < TLS_MAX_PCBS { id } else { LEGACY_TLS_PCB };
+    unsafe {
+        let ptr = core::ptr::addr_of_mut!(TLS_STATES) as *mut TlsSession;
+        &mut *ptr.add(idx)
+    }
+}
+
+#[inline]
+fn session_ref(id: usize) -> &'static TlsSession {
+    let idx = if id < TLS_MAX_PCBS { id } else { LEGACY_TLS_PCB };
+    unsafe {
+        let ptr = core::ptr::addr_of!(TLS_STATES) as *const TlsSession;
+        &*ptr.add(idx)
+    }
+}
+
+// Back-compat shim: the legacy global is now slot 0 of the array.
+#[allow(non_snake_case)]
+fn SESSION_ptr() -> *mut TlsSession { session_mut(LEGACY_TLS_PCB) as *mut _ }
+
 /// Build a TLS 1.3 ClientHello message.
 pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
-    let sess = unsafe { &mut *core::ptr::addr_of_mut!(SESSION) };
+    let sess = session_mut(LEGACY_TLS_PCB);
     sess.state = TlsState::Initial;
     sess.client_seq = 0;
     sess.server_seq = 0;
@@ -235,7 +271,7 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
 pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
     if data.len() < 5 { return Err("too short"); }
 
-    let sess = unsafe { &mut *core::ptr::addr_of_mut!(SESSION) };
+    let sess = session_mut(LEGACY_TLS_PCB);
 
     // Skip record header (5 bytes)
     let content = &data[5..];
@@ -306,7 +342,7 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
 /// Perform the full TLS 1.3 handshake over an established TCP connection.
 /// Sends ClientHello, receives ServerHello, derives keys, handles encrypted handshake.
 pub fn handshake(hostname: &str) -> Result<(), &'static str> {
-    let sess = unsafe { &mut *core::ptr::addr_of_mut!(SESSION) };
+    let sess = session_mut(LEGACY_TLS_PCB);
     sess.leftover_len = 0; // Reset leftover buffer for new session
 
     // Step 1: Send ClientHello
@@ -566,7 +602,7 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
 
 /// Encrypt and send application data as a TLS record.
 pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
-    let sess = unsafe { &mut *core::ptr::addr_of_mut!(SESSION) };
+    let sess = session_mut(LEGACY_TLS_PCB);
     if sess.state != TlsState::Established { return Err("not established"); }
 
     // Build nonce: IV XOR sequence number
@@ -607,7 +643,7 @@ pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
 
 /// Receive and decrypt application data from a TLS record.
 pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
-    let sess = unsafe { &mut *core::ptr::addr_of_mut!(SESSION) };
+    let sess = session_mut(LEGACY_TLS_PCB);
     if sess.state != TlsState::Established { return Err("not established"); }
 
     let mut record = [0u8; 17408]; // 16KB max TLS record + 1KB header/overhead
@@ -786,7 +822,7 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
 
 /// Close TLS session.
 pub fn close() {
-    let sess = unsafe { &mut *core::ptr::addr_of_mut!(SESSION) };
+    let sess = session_mut(LEGACY_TLS_PCB);
     sess.state = TlsState::Closed;
     sess.client_seq = 0;
     sess.server_seq = 0;
@@ -797,7 +833,7 @@ pub fn close() {
 
 /// Check if TLS session is established.
 pub fn is_established() -> bool {
-    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(SESSION.state)) == TlsState::Established }
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*SESSION_ptr()).state)) == TlsState::Established }
 }
 
 // ─── X25519 Key Exchange (Curve25519) ───

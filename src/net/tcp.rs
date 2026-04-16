@@ -24,7 +24,59 @@
 //     task. TIME_WAIT 2MSL timeout is a best-effort counter, not wall-clock.
 
 use super::ip::{self, IpPacket};
-use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+
+// ---------------------------------------------------------------------------
+// ISN randomization (ATTACK-NET-009)
+// ---------------------------------------------------------------------------
+//
+// The previous scheme was `1000 + pcb_id * 997`, which is deterministic and
+// allows blind RST / data injection as soon as the attacker observes a single
+// handshake. We now derive the ISN from
+//     hash(cntpct_el0 ^ remote_ip ^ remote_port ^ pcb_id ^ boot_cookie)
+// where boot_cookie is a one-shot 64-bit value seeded from the timer the
+// first time it is read. This is still not RFC 6528 (needs a real CSPRNG
+// and per-4-tuple hash key) but it defeats the "read one ISN, predict all
+// future ISNs" primitive.
+static BOOT_COOKIE: AtomicU64 = AtomicU64::new(0);
+
+fn boot_cookie() -> u64 {
+    let existing = BOOT_COOKIE.load(Ordering::Relaxed);
+    if existing != 0 { return existing; }
+    let t1: u64;
+    let t2: u64;
+    let freq: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) t1);
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) t2);
+    }
+    let mixed = t1 ^ t2.rotate_left(17) ^ freq.rotate_left(31) ^ 0xA5A5_5A5A_C3C3_3C3C;
+    // Make sure we never return 0 (else we'd re-seed every call).
+    let v = if mixed == 0 { 0xDEAD_BEEF_CAFE_BABE } else { mixed };
+    // Race is benign — whichever writer wins, the result is still unique
+    // per boot and unpredictable to an off-path attacker.
+    BOOT_COOKIE.store(v, Ordering::Relaxed);
+    v
+}
+
+fn compute_isn(pcb_id: usize, remote_ip: u32, remote_port: u16) -> u32 {
+    let ticks: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) ticks); }
+    let cookie = boot_cookie();
+    let mut h: u64 = cookie
+        ^ ticks
+        ^ (remote_ip as u64).wrapping_mul(0x9E3779B97F4A7C15)
+        ^ (remote_port as u64).wrapping_mul(0xBF58476D1CE4E5B9)
+        ^ (pcb_id as u64).wrapping_mul(0x94D049BB133111EB);
+    // Splittable-random-style mixing (SplitMix64 finalizer).
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xBF58476D1CE4E5B9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94D049BB133111EB);
+    h ^= h >> 31;
+    h as u32
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -216,7 +268,10 @@ pub fn pcb_alloc() -> Option<usize> {
             p.local_port = 0;
             p.remote_ip = 0;
             p.remote_port = 0;
-            p.snd_nxt = 1000 + (i as u32) * 997; // weak randomization
+            // Seed with a provisional ISN (the real one is re-derived in
+            // connect_start() once we know the 4-tuple). This keeps the PCB
+            // useful even if the caller inspects snd_nxt before connecting.
+            p.snd_nxt = compute_isn(i, 0, 0);
             p.snd_una = p.snd_nxt;
             p.snd_wnd = 8192;
             p.rcv_nxt = 0;
@@ -306,6 +361,13 @@ fn pcb_lookup(remote_ip: u32, remote_port: u16, local_port: u16) -> Option<usize
 /// Called by `super::ip` when a TCP segment arrives.
 pub fn handle_incoming(pkt: &IpPacket) {
     if pkt.payload.len() < TCP_HDR_SIZE { return; }
+
+    // ATTACK-NET-011: verify the TCP checksum before trusting any field.
+    // An L2-adjacent attacker who can inject segments but not intercept the
+    // real peer's traffic will typically get the checksum wrong; requiring
+    // a valid checksum forces the attacker into the same position as a
+    // real MITM (much harder).
+    if !verify_tcp_checksum(pkt) { return; }
 
     let src_port = u16::from_be_bytes([pkt.payload[0], pkt.payload[1]]);
     let dst_port = u16::from_be_bytes([pkt.payload[2], pkt.payload[3]]);
@@ -543,6 +605,104 @@ fn tcp_checksum(pseudo: &[u8], tcp: &[u8]) -> u16 {
     !(sum as u16)
 }
 
+/// Validate the inbound pseudo-header + TCP-segment checksum. Returns true
+/// when the segment's checksum is valid (RFC 793 one's-complement sum over
+/// the pseudo-header and segment == 0xFFFF, i.e. !sum == 0).
+fn verify_tcp_checksum(pkt: &IpPacket) -> bool {
+    let tcp = pkt.payload;
+    if tcp.len() < TCP_HDR_SIZE { return false; }
+
+    // Pseudo-header: src_ip(4) | dst_ip(4) | 0 | proto(1) | tcp_len(2)
+    let mut pseudo = [0u8; 12];
+    pseudo[0..4].copy_from_slice(&pkt.src.to_be_bytes());
+    pseudo[4..8].copy_from_slice(&pkt.dst.to_be_bytes());
+    pseudo[9] = 6;
+    pseudo[10..12].copy_from_slice(&(tcp.len() as u16).to_be_bytes());
+
+    // Sum pseudo-header and segment (segment includes the checksum field,
+    // so a correct packet sums to 0xFFFF).
+    let mut sum: u32 = 0;
+    let mut i = 0;
+    while i + 1 < pseudo.len() {
+        sum += u16::from_be_bytes([pseudo[i], pseudo[i + 1]]) as u32;
+        i += 2;
+    }
+    i = 0;
+    while i + 1 < tcp.len() {
+        sum += u16::from_be_bytes([tcp[i], tcp[i + 1]]) as u32;
+        i += 2;
+    }
+    if i < tcp.len() {
+        sum += (tcp[i] as u32) << 8;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    (!(sum as u16)) == 0
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests (run on the host, not the kernel target)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod checksum_tests {
+    use super::*;
+
+    fn build_segment(src: u32, dst: u32, data: &[u8]) -> ([u8; 1500], usize) {
+        let mut buf = [0u8; 1500];
+        let total = TCP_HDR_SIZE + data.len();
+        buf[0..2].copy_from_slice(&1234u16.to_be_bytes());
+        buf[2..4].copy_from_slice(&80u16.to_be_bytes());
+        buf[4..8].copy_from_slice(&1u32.to_be_bytes());
+        buf[8..12].copy_from_slice(&2u32.to_be_bytes());
+        buf[12] = 0x50;
+        buf[13] = TCP_ACK;
+        buf[14..16].copy_from_slice(&8192u16.to_be_bytes());
+        if !data.is_empty() {
+            buf[TCP_HDR_SIZE..TCP_HDR_SIZE + data.len()].copy_from_slice(data);
+        }
+        let mut pseudo = [0u8; 12];
+        pseudo[0..4].copy_from_slice(&src.to_be_bytes());
+        pseudo[4..8].copy_from_slice(&dst.to_be_bytes());
+        pseudo[9] = 6;
+        pseudo[10..12].copy_from_slice(&(total as u16).to_be_bytes());
+        let cksum = tcp_checksum(&pseudo, &buf[..total]);
+        buf[16..18].copy_from_slice(&cksum.to_be_bytes());
+        (buf, total)
+    }
+
+    #[test]
+    fn accepts_valid_checksum() {
+        let src = 0x0A000203;
+        let dst = 0x0A00020F;
+        let (buf, total) = build_segment(src, dst, b"hello");
+        let pkt = IpPacket { src, dst, protocol: 6, payload: &buf[..total], ttl: 64 };
+        assert!(verify_tcp_checksum(&pkt));
+    }
+
+    #[test]
+    fn rejects_flipped_bit() {
+        let src = 0x0A000203;
+        let dst = 0x0A00020F;
+        let (mut buf, total) = build_segment(src, dst, b"hello");
+        buf[TCP_HDR_SIZE] ^= 0x01; // flip one bit in the payload
+        let pkt = IpPacket { src, dst, protocol: 6, payload: &buf[..total], ttl: 64 };
+        assert!(!verify_tcp_checksum(&pkt));
+    }
+
+    #[test]
+    fn rejects_wrong_src_ip() {
+        let src = 0x0A000203;
+        let dst = 0x0A00020F;
+        let (buf, total) = build_segment(src, dst, b"hello");
+        // Pretend the packet arrived claiming a different src_ip — the
+        // pseudo-header no longer matches, so verification must fail.
+        let pkt = IpPacket { src: 0xC0A80001, dst, protocol: 6, payload: &buf[..total], ttl: 64 };
+        assert!(!verify_tcp_checksum(&pkt));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Non-blocking connect
 // ---------------------------------------------------------------------------
@@ -570,6 +730,10 @@ pub fn connect_start(id: usize, ip_be: u32, port: u16) -> i32 {
     p.tx_head.store(0, Ordering::Relaxed);
     p.tx_tail.store(0, Ordering::Relaxed);
     p.rcv_nxt = 0;
+    // ATTACK-NET-009: compute the ISN now that we know remote_ip and
+    // remote_port. This binds the ISN to the 4-tuple + boot cookie so an
+    // off-path observer of one connection's ISN cannot predict another's.
+    p.snd_nxt = compute_isn(id, ip_be, port);
     p.snd_una = p.snd_nxt; // mark ISS
     p.state.store(STATE_SYN_SENT, Ordering::Release);
 
@@ -725,8 +889,9 @@ fn ensure_legacy_pcb() {
         alloc_lock();
         let p0 = pcb_mut(LEGACY_PCB);
         p0.state.store(STATE_CLOSED, Ordering::Relaxed);
-        p0.snd_nxt = 1000;
-        p0.snd_una = 1000;
+        let isn = compute_isn(LEGACY_PCB, 0, 0);
+        p0.snd_nxt = isn;
+        p0.snd_una = isn;
         p0.rcv_nxt = 0;
         p0.rx_head.store(0, Ordering::Relaxed);
         p0.rx_tail.store(0, Ordering::Relaxed);

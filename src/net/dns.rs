@@ -8,7 +8,32 @@
 // DoH flow: TCP connect → send HTTP POST with DNS query → parse HTTP response → extract DNS answer
 
 use super::udp;
-use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU16, AtomicBool, Ordering};
+
+/// Rolling counter mixed with cntpct_el0 to produce a 16-bit TXID. This is
+/// not cryptographic (we have no CSPRNG here) but it replaces the previous
+/// hardcoded 0x4242 and defeats the single-packet Kaminsky-style spoof
+/// described in ATTACK-NET-035.
+static TXID_COUNTER: AtomicU16 = AtomicU16::new(0);
+
+fn next_txid() -> u16 {
+    let c = TXID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let ticks: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) ticks); }
+    // Fold high and low halves of the timer into the counter.
+    let mix = (ticks as u16)
+        ^ ((ticks >> 16) as u16)
+        ^ ((ticks >> 32) as u16)
+        ^ ((ticks >> 48) as u16);
+    // XOR (not add) so the counter still contributes all 16 bits of entropy
+    // and we never collide for two queries issued within one tick.
+    c.wrapping_mul(0x9E37) ^ mix
+}
+
+/// TXID of the currently in-flight plaintext DNS query. `handle_response`
+/// drops anything whose TXID doesn't match.
+static EXPECTED_TXID: AtomicU16 = AtomicU16::new(0);
+static TXID_VALID: AtomicBool = AtomicBool::new(false);
 
 const DNS_SERVER: u32 = 0x0A000203; // 10.0.2.3 (QEMU) — plaintext fallback
 const DNS_PORT: u16 = 53;
@@ -32,6 +57,17 @@ static DNS_DONE: AtomicBool = AtomicBool::new(false);
 /// Handle a DNS response.
 pub fn handle_response(data: &[u8]) {
     if data.len() < 12 { return; }
+
+    // ATTACK-NET-035: verify the transaction ID matches the query we sent.
+    // An off-path attacker now has to guess a 16-bit TXID plus land within
+    // the query window; still weak by modern standards but defeats the
+    // trivial single-packet spoof.
+    if TXID_VALID.load(Ordering::Acquire) {
+        let txid = u16::from_be_bytes([data[0], data[1]]);
+        if txid != EXPECTED_TXID.load(Ordering::Relaxed) {
+            return;
+        }
+    }
 
     let answers = u16::from_be_bytes([data[6], data[7]]);
     if answers == 0 { return; }
@@ -107,7 +143,10 @@ pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
     let mut offset = 0;
 
     // Header
-    query[0..2].copy_from_slice(&0x4242u16.to_be_bytes()); // Transaction ID
+    let txid = next_txid();
+    EXPECTED_TXID.store(txid, Ordering::Relaxed);
+    TXID_VALID.store(true, Ordering::Release);
+    query[0..2].copy_from_slice(&txid.to_be_bytes());      // Transaction ID (randomized)
     query[2..4].copy_from_slice(&0x0100u16.to_be_bytes()); // Standard query, recursion desired
     query[4..6].copy_from_slice(&1u16.to_be_bytes());      // 1 question
     offset = 12;
@@ -142,6 +181,7 @@ pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
             if DNS_DONE.load(Ordering::Acquire) {
                 let ip = RESOLVED_IP.load(Ordering::Relaxed);
                 if ip != 0 {
+                    TXID_VALID.store(false, Ordering::Release);
                     return Ok(ip);
                 }
             }
@@ -149,15 +189,21 @@ pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
         }
     }
 
+    TXID_VALID.store(false, Ordering::Release);
     Err("DNS timeout")
 }
 
 /// Resolve via DNS-over-HTTPS (sends DNS wire format over HTTP POST).
 /// Falls back to plaintext if DoH fails.
 fn resolve_doh(hostname: &str) -> Result<u32, &'static str> {
-    // Build the DNS wire-format query (same as plaintext)
+    // Build the DNS wire-format query (same as plaintext).
+    // DoH runs over TCP so TXID spoofing is not the same threat, but we
+    // still randomize it (no reason not to) and verify the response.
     let mut query = [0u8; 512];
-    query[0..2].copy_from_slice(&0x4243u16.to_be_bytes()); // Transaction ID
+    let txid = next_txid();
+    EXPECTED_TXID.store(txid, Ordering::Relaxed);
+    TXID_VALID.store(true, Ordering::Release);
+    query[0..2].copy_from_slice(&txid.to_be_bytes());      // Transaction ID (randomized)
     query[2..4].copy_from_slice(&0x0100u16.to_be_bytes()); // Recursion desired
     query[4..6].copy_from_slice(&1u16.to_be_bytes());      // 1 question
     let mut qlen = 12;
@@ -228,13 +274,18 @@ fn resolve_doh(hostname: &str) -> Result<u32, &'static str> {
                 handle_response(&resp[body_start..n]);
                 if DNS_DONE.load(Ordering::Acquire) {
                     let ip = RESOLVED_IP.load(Ordering::Relaxed);
-                    if ip != 0 { return Ok(ip); }
+                    if ip != 0 {
+                        TXID_VALID.store(false, Ordering::Release);
+                        return Ok(ip);
+                    }
                 }
             }
+            TXID_VALID.store(false, Ordering::Release);
             Err("DoH: no answer in response")
         }
         Err(_) => {
             super::tcp::close();
+            TXID_VALID.store(false, Ordering::Release);
             Err("DoH recv failed")
         }
     }
