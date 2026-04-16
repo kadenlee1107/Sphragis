@@ -73,6 +73,20 @@ pub fn free_frame(addr: usize) {
         return;
     }
 
+    // Defense-in-depth: wipe the page contents before returning it to the
+    // free pool. alloc_frame already zeroes on allocation, so this is
+    // belt-and-suspenders against the window between free and the next
+    // alloc where the page might be read by a DMA-capable peripheral or
+    // a snapshot-based introspection tool. Uses str xzr to mirror the
+    // existing HVF-safe pattern in alloc_frame rather than write_bytes.
+    unsafe {
+        for i in 0..(PAGE_SIZE / 8) {
+            core::arch::asm!("str xzr, [{a}]",
+                a = in(reg) addr + i * 8,
+                options(nostack, preserves_flags));
+        }
+    }
+
     let frame_index = (addr - start) / PAGE_SIZE;
     let bitmap_index = frame_index / 64;
     let bit = frame_index % 64;
