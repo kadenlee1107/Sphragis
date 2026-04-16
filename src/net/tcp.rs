@@ -1,136 +1,522 @@
 #![allow(dead_code)]
-// Bat_OS — TCP Layer (Minimal)
-// Basic TCP: connect, send, receive, close.
-// Not a full TCP stack — enough for HTTP requests.
+// Bat_OS — TCP Layer (Multi-PCB)
+// Supports up to 64 concurrent TCP connections via a static TCB (PCB) table.
+// Designed to unblock Chromium's subresource fetch parallelism.
+//
+// Design summary
+// --------------
+//   * Replace the single `CONN_STATE` / `REMOTE_IP` / ... globals with a
+//     fixed-size [TcpPcb; MAX_PCBS] table. No heap.
+//   * PCB fields are plain non-atomic where they are only mutated under the
+//     single-threaded packet-dispatch & connect path. Shared-visibility flags
+//     (state, in_use, error, nonblocking, ring head/tail) use atomics so that
+//     epoll/poll callers and the RX dispatch path can coordinate.
+//   * Non-blocking connect: `connect_start()` + `connect_poll()`. The legacy
+//     synchronous `connect()` wraps these using PCB 0 so the existing
+//     netsurf_test keeps working.
+//   * Per-PCB rx/tx rings (8 KiB each) — enough for one in-flight TCP segment
+//     with window room; Chromium's HTTP/1.1 pipelines fit.
+//   * epoll integration: when rx_buf gains data, the PCB transitions to
+//     ESTABLISHED, or tx_buf drains, we call `epoll::mark_ready(fd, ...)`.
+//   * Half-close: `shutdown_write` sends a FIN but keeps RX open;
+//     `shutdown_read` drops further incoming data.
+//   * State machine: full 11-state table with the transitions noted in the
+//     task. TIME_WAIT 2MSL timeout is a best-effort counter, not wall-clock.
 
 use super::ip::{self, IpPacket};
-use core::sync::atomic::{AtomicU32, AtomicU8, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering};
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 const TCP_HDR_SIZE: usize = 20;
-const TCP_FIN: u8 = 0x01;
-const TCP_SYN: u8 = 0x02;
-const TCP_RST: u8 = 0x04;
-const TCP_PSH: u8 = 0x08;
-const TCP_ACK: u8 = 0x10;
+pub const TCP_FIN: u8 = 0x01;
+pub const TCP_SYN: u8 = 0x02;
+pub const TCP_RST: u8 = 0x04;
+pub const TCP_PSH: u8 = 0x08;
+pub const TCP_ACK: u8 = 0x10;
 
-const STATE_CLOSED: u8 = 0;
-const STATE_SYN_SENT: u8 = 1;
-const STATE_ESTABLISHED: u8 = 2;
-const STATE_FIN_WAIT: u8 = 3;
+// TCP states — matches RFC 793 naming, encoded in AtomicU32.
+pub const STATE_CLOSED:      u32 = 0;
+pub const STATE_LISTEN:      u32 = 1;
+pub const STATE_SYN_SENT:    u32 = 2;
+pub const STATE_SYN_RECEIVED:u32 = 3;
+pub const STATE_ESTABLISHED: u32 = 4;
+pub const STATE_FIN_WAIT_1:  u32 = 5;
+pub const STATE_FIN_WAIT_2:  u32 = 6;
+pub const STATE_CLOSE_WAIT:  u32 = 7;
+pub const STATE_CLOSING:     u32 = 8;
+pub const STATE_LAST_ACK:    u32 = 9;
+pub const STATE_TIME_WAIT:   u32 = 10;
 
-static CONN_STATE: AtomicU8 = AtomicU8::new(STATE_CLOSED);
-static LOCAL_PORT: AtomicU32 = AtomicU32::new(49152);
-static REMOTE_IP: AtomicU32 = AtomicU32::new(0);
-static REMOTE_PORT: AtomicU32 = AtomicU32::new(0);
-static SEQ_NUM: AtomicU32 = AtomicU32::new(1000);
-static ACK_NUM: AtomicU32 = AtomicU32::new(0);
-static DATA_READY: AtomicBool = AtomicBool::new(false);
+// epoll event bits (copy here to avoid pulling the whole module on no_std path).
+const EPOLLIN:  u32 = 0x001;
+const EPOLLOUT: u32 = 0x004;
+const EPOLLERR: u32 = 0x008;
+const EPOLLHUP: u32 = 0x010;
 
-// Receive buffer
-const RX_BUF_SIZE: usize = 65536; // 64KB — must hold full TLS burst
-static mut RX_BUF: [u8; RX_BUF_SIZE] = [0; RX_BUF_SIZE];
-static RX_LEN: AtomicU32 = AtomicU32::new(0);
+// errno (positive; socket bridge negates).
+pub const E_OK:          i32 = 0;
+pub const E_INPROGRESS:  i32 = 115;
+pub const E_AGAIN:       i32 = 11;
+pub const E_CONNRESET:   i32 = 104;
+pub const E_CONNREFUSED: i32 = 111;
+pub const E_TIMEDOUT:    i32 = 110;
+pub const E_NOTCONN:     i32 = 107;
+pub const E_PIPE:        i32 = 32;
 
+pub const MAX_PCBS: usize = 64;
+pub const RX_BUF_SIZE: usize = 8192;
+pub const TX_BUF_SIZE: usize = 8192;
+
+// Legacy synchronous API uses slot 0.
+const LEGACY_PCB: usize = 0;
+
+/// Ephemeral local-port allocator. Starts at 49152 and wraps around 65535.
+static NEXT_LOCAL_PORT: AtomicU32 = AtomicU32::new(49152);
+
+fn alloc_local_port() -> u16 {
+    loop {
+        let p = NEXT_LOCAL_PORT.fetch_add(1, Ordering::Relaxed);
+        let port = (p & 0xFFFF) as u16;
+        if port < 49152 {
+            // Reset into ephemeral range.
+            NEXT_LOCAL_PORT.store(49152, Ordering::Relaxed);
+            continue;
+        }
+        return port;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PCB (TCB)
+// ---------------------------------------------------------------------------
+
+/// Per-connection TCP control block.
+pub struct TcpPcb {
+    pub state: AtomicU32,
+
+    // Endpoint tuple. `remote_ip` is big-endian; `local_port`/`remote_port`
+    // are host byte order on the wire they are swapped into network order
+    // inside `send_tcp_pcb`.
+    pub local_port:  u16,
+    pub remote_ip:   u32,
+    pub remote_port: u16,
+
+    // Send sequence variables (RFC 793).
+    pub snd_nxt: u32,
+    pub snd_una: u32,
+    pub snd_wnd: u16,
+    // Receive sequence variables.
+    pub rcv_nxt: u32,
+    pub rcv_wnd: u16,
+
+    pub rx_buf:  [u8; RX_BUF_SIZE],
+    pub rx_head: AtomicUsize,  // write index (producer = RX dispatch)
+    pub rx_tail: AtomicUsize,  // read  index (consumer = userspace)
+
+    pub tx_buf:  [u8; TX_BUF_SIZE],
+    pub tx_head: AtomicUsize,
+    pub tx_tail: AtomicUsize,
+
+    pub is_nonblocking: AtomicBool,
+    pub error:  AtomicI32,     // most recent async errno
+    pub in_use: AtomicBool,
+
+    /// Associated userspace fd (from sockets.rs). -1 when not bound to a
+    /// socket (e.g. the legacy direct-API user).
+    pub fd: AtomicI32,
+
+    /// RX side shut by shutdown_read(): drop incoming data payload.
+    pub rx_shut: AtomicBool,
+    /// TX side shut by shutdown_write(): FIN already queued, reject sends.
+    pub tx_shut: AtomicBool,
+}
+
+impl TcpPcb {
+    const fn empty() -> Self {
+        TcpPcb {
+            state: AtomicU32::new(STATE_CLOSED),
+            local_port: 0,
+            remote_ip: 0,
+            remote_port: 0,
+            snd_nxt: 0,
+            snd_una: 0,
+            snd_wnd: 8192,
+            rcv_nxt: 0,
+            rcv_wnd: RX_BUF_SIZE as u16,
+            rx_buf: [0u8; RX_BUF_SIZE],
+            rx_head: AtomicUsize::new(0),
+            rx_tail: AtomicUsize::new(0),
+            tx_buf: [0u8; TX_BUF_SIZE],
+            tx_head: AtomicUsize::new(0),
+            tx_tail: AtomicUsize::new(0),
+            is_nonblocking: AtomicBool::new(false),
+            error:  AtomicI32::new(0),
+            in_use: AtomicBool::new(false),
+            fd:     AtomicI32::new(-1),
+            rx_shut: AtomicBool::new(false),
+            tx_shut: AtomicBool::new(false),
+        }
+    }
+
+    #[inline]
+    fn rx_available(&self) -> usize {
+        let head = self.rx_head.load(Ordering::Acquire);
+        let tail = self.rx_tail.load(Ordering::Acquire);
+        head.wrapping_sub(tail)
+    }
+
+    #[inline]
+    fn rx_free(&self) -> usize {
+        RX_BUF_SIZE - self.rx_available()
+    }
+}
+
+static mut TCP_PCBS: [TcpPcb; MAX_PCBS] = [const { TcpPcb::empty() }; MAX_PCBS];
+
+// We're single-core and the dispatch path is non-reentrant, but a tiny
+// spin-flag catches reentrancy bugs in PCB allocation.
+static ALLOC_LOCK: AtomicBool = AtomicBool::new(false);
+
+fn alloc_lock()  { while ALLOC_LOCK.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { core::hint::spin_loop(); } }
+fn alloc_unlock(){ ALLOC_LOCK.store(false, Ordering::Release); }
+
+/// Safe accessor — used by both driver dispatch and user-level code.
+#[inline]
+fn pcb_mut(id: usize) -> &'static mut TcpPcb {
+    unsafe {
+        let ptr = core::ptr::addr_of_mut!(TCP_PCBS) as *mut TcpPcb;
+        &mut *ptr.add(id)
+    }
+}
+
+#[inline]
+pub fn pcb(id: usize) -> &'static TcpPcb {
+    unsafe {
+        let ptr = core::ptr::addr_of!(TCP_PCBS) as *const TcpPcb;
+        &*ptr.add(id)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PCB allocation / free
+// ---------------------------------------------------------------------------
+
+/// Allocate a free PCB slot. Returns the pcb_id or None if the table is full.
+pub fn pcb_alloc() -> Option<usize> {
+    alloc_lock();
+    let mut out = None;
+    for i in 0..MAX_PCBS {
+        let p = pcb_mut(i);
+        if !p.in_use.load(Ordering::Acquire) {
+            // Reset fields.
+            p.state.store(STATE_CLOSED, Ordering::Relaxed);
+            p.local_port = 0;
+            p.remote_ip = 0;
+            p.remote_port = 0;
+            p.snd_nxt = 1000 + (i as u32) * 997; // weak randomization
+            p.snd_una = p.snd_nxt;
+            p.snd_wnd = 8192;
+            p.rcv_nxt = 0;
+            p.rcv_wnd = RX_BUF_SIZE as u16;
+            p.rx_head.store(0, Ordering::Relaxed);
+            p.rx_tail.store(0, Ordering::Relaxed);
+            p.tx_head.store(0, Ordering::Relaxed);
+            p.tx_tail.store(0, Ordering::Relaxed);
+            p.is_nonblocking.store(false, Ordering::Relaxed);
+            p.error.store(0, Ordering::Relaxed);
+            p.fd.store(-1, Ordering::Relaxed);
+            p.rx_shut.store(false, Ordering::Relaxed);
+            p.tx_shut.store(false, Ordering::Relaxed);
+            p.in_use.store(true, Ordering::Release);
+            out = Some(i);
+            break;
+        }
+    }
+    alloc_unlock();
+    out
+}
+
+/// Free a PCB slot. Caller must have already closed or reset the connection.
+pub fn pcb_free(id: usize) {
+    if id >= MAX_PCBS { return; }
+    alloc_lock();
+    let p = pcb_mut(id);
+    p.state.store(STATE_CLOSED, Ordering::Release);
+    p.in_use.store(false, Ordering::Release);
+    p.fd.store(-1, Ordering::Release);
+    alloc_unlock();
+}
+
+/// Attach a userspace fd so we can call `epoll::mark_ready(fd, ...)`.
+pub fn pcb_bind_fd(id: usize, fd: i32) {
+    if id >= MAX_PCBS { return; }
+    pcb(id).fd.store(fd, Ordering::Release);
+}
+
+pub fn pcb_set_nonblocking(id: usize, nb: bool) {
+    if id >= MAX_PCBS { return; }
+    pcb(id).is_nonblocking.store(nb, Ordering::Release);
+}
+
+pub fn pcb_state(id: usize) -> u32 {
+    if id >= MAX_PCBS { return STATE_CLOSED; }
+    pcb(id).state.load(Ordering::Acquire)
+}
+
+// ---------------------------------------------------------------------------
+// epoll notify helper
+// ---------------------------------------------------------------------------
+
+fn notify_epoll(id: usize, events: u32) {
+    let fd = pcb(id).fd.load(Ordering::Acquire);
+    if fd >= 0 {
+        crate::batcave::linux::epoll::mark_ready(fd, events);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Incoming packet dispatch
+// ---------------------------------------------------------------------------
+
+/// Find the PCB owning (remote_ip, remote_port, local_port).
+fn pcb_lookup(remote_ip: u32, remote_port: u16, local_port: u16) -> Option<usize> {
+    for i in 0..MAX_PCBS {
+        let p = pcb(i);
+        if !p.in_use.load(Ordering::Acquire) { continue; }
+        if p.local_port != local_port { continue; }
+        // Half-opened sockets don't have the remote set yet — match on
+        // local_port only when state is SYN_SENT (we just sent SYN).
+        let st = p.state.load(Ordering::Acquire);
+        if st == STATE_SYN_SENT {
+            if p.remote_ip == remote_ip && p.remote_port == remote_port {
+                return Some(i);
+            }
+            continue;
+        }
+        if p.remote_ip == remote_ip && p.remote_port == remote_port {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Called by `super::ip` when a TCP segment arrives.
 pub fn handle_incoming(pkt: &IpPacket) {
     if pkt.payload.len() < TCP_HDR_SIZE { return; }
 
-    let _src_port = u16::from_be_bytes([pkt.payload[0], pkt.payload[1]]);
+    let src_port = u16::from_be_bytes([pkt.payload[0], pkt.payload[1]]);
     let dst_port = u16::from_be_bytes([pkt.payload[2], pkt.payload[3]]);
-    let flags = pkt.payload[13];
-
-    // Debug: log incoming TCP
-    if CONN_STATE.load(Ordering::Relaxed) == STATE_SYN_SENT {
-        crate::drivers::uart::puts("[tcp] rx flags=0x");
-        crate::drivers::uart::putc(b"0123456789abcdef"[((flags >> 4) & 0xF) as usize]);
-        crate::drivers::uart::putc(b"0123456789abcdef"[(flags & 0xF) as usize]);
-        crate::drivers::uart::puts(" dst=");
-        crate::kernel::mm::print_num(dst_port as usize);
-        crate::drivers::uart::puts("\n");
-    }
     let seq = u32::from_be_bytes([pkt.payload[4], pkt.payload[5], pkt.payload[6], pkt.payload[7]]);
     let ack = u32::from_be_bytes([pkt.payload[8], pkt.payload[9], pkt.payload[10], pkt.payload[11]]);
-    let data_offset = ((pkt.payload[12] >> 4) as usize) * 4;
+    let data_off = ((pkt.payload[12] >> 4) as usize) * 4;
     let flags = pkt.payload[13];
+    let wnd = u16::from_be_bytes([pkt.payload[14], pkt.payload[15]]);
 
-    let local_port = LOCAL_PORT.load(Ordering::Relaxed) as u16;
-    if dst_port != local_port { return; }
+    if data_off < TCP_HDR_SIZE || data_off > pkt.payload.len() { return; }
 
-    let state = CONN_STATE.load(Ordering::Relaxed);
+    let id = match pcb_lookup(pkt.src, src_port, dst_port) {
+        Some(i) => i,
+        None => return, // unmatched segment — ignore (no RST to keep it simple)
+    };
+
+    let p = pcb_mut(id);
+    let state = p.state.load(Ordering::Acquire);
+    p.snd_wnd = wnd;
+
+    // Handle RST universally — peer reset.
+    if flags & TCP_RST != 0 {
+        p.error.store(E_CONNRESET, Ordering::Release);
+        p.state.store(STATE_CLOSED, Ordering::Release);
+        notify_epoll(id, EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP);
+        return;
+    }
 
     match state {
         STATE_SYN_SENT => {
             if flags & TCP_SYN != 0 && flags & TCP_ACK != 0 {
-                // SYN-ACK received — complete handshake
-                ACK_NUM.store(seq.wrapping_add(1), Ordering::Relaxed);
-                SEQ_NUM.store(ack, Ordering::Relaxed);
-                CONN_STATE.store(STATE_ESTABLISHED, Ordering::Release);
-
-                // Send ACK
-                send_tcp(TCP_ACK, &[]);
-            }
-        }
-        STATE_ESTABLISHED => {
-            let payload_len = pkt.payload.len() - data_offset;
-
-            if payload_len > 0 {
-                // Data received
-                unsafe {
-                    let rx_len = RX_LEN.load(Ordering::Relaxed) as usize;
-                    let copy = payload_len.min(RX_BUF_SIZE - rx_len);
-                    RX_BUF[rx_len..rx_len + copy].copy_from_slice(&pkt.payload[data_offset..data_offset + copy]);
-                    RX_LEN.store((rx_len + copy) as u32, Ordering::Relaxed);
+                // Validate ACK covers our SYN.
+                if ack != p.snd_nxt {
+                    // Unexpected ACK — drop.
+                    return;
                 }
-                ACK_NUM.store(seq.wrapping_add(payload_len as u32), Ordering::Relaxed);
-                DATA_READY.store(true, Ordering::Release);
-                send_tcp(TCP_ACK, &[]);
-            }
-
-            if flags & TCP_FIN != 0 {
-                ACK_NUM.store(ACK_NUM.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
-                send_tcp(TCP_ACK | TCP_FIN, &[]);
-                CONN_STATE.store(STATE_CLOSED, Ordering::Relaxed);
+                p.snd_una = ack;
+                p.rcv_nxt = seq.wrapping_add(1);
+                p.state.store(STATE_ESTABLISHED, Ordering::Release);
+                send_tcp_pcb(id, TCP_ACK, &[]);
+                notify_epoll(id, EPOLLOUT); // connect completed → writable
+            } else if flags & TCP_SYN != 0 {
+                // Simultaneous open — SYN only → move to SYN_RECEIVED.
+                p.rcv_nxt = seq.wrapping_add(1);
+                p.state.store(STATE_SYN_RECEIVED, Ordering::Release);
+                send_tcp_pcb(id, TCP_SYN | TCP_ACK, &[]);
             }
         }
+
+        STATE_SYN_RECEIVED => {
+            if flags & TCP_ACK != 0 && ack == p.snd_nxt {
+                p.snd_una = ack;
+                p.state.store(STATE_ESTABLISHED, Ordering::Release);
+                notify_epoll(id, EPOLLOUT);
+            }
+        }
+
+        STATE_ESTABLISHED | STATE_FIN_WAIT_1 | STATE_FIN_WAIT_2 => {
+            // ACK updates snd_una.
+            if flags & TCP_ACK != 0 {
+                // Only move forward; guard against old ACKs.
+                if seq_leq(p.snd_una, ack) && seq_leq(ack, p.snd_nxt) {
+                    p.snd_una = ack;
+                    notify_epoll(id, EPOLLOUT); // space freed
+                }
+            }
+
+            // Data payload.
+            let payload_len = pkt.payload.len() - data_off;
+            if payload_len > 0 && state != STATE_FIN_WAIT_2 {
+                // FIN_WAIT_2 still accepts data per RFC but simplify:
+                // accept in ESTABLISHED & FIN_WAIT_1 only.
+                let rx_shut = p.rx_shut.load(Ordering::Acquire);
+                if !rx_shut && seq == p.rcv_nxt {
+                    // In-order segment. Copy into rx ring.
+                    let free = p.rx_free();
+                    let copy = payload_len.min(free);
+                    if copy > 0 {
+                        let head = p.rx_head.load(Ordering::Acquire);
+                        for i in 0..copy {
+                            let idx = (head + i) & (RX_BUF_SIZE - 1);
+                            p.rx_buf[idx] = pkt.payload[data_off + i];
+                        }
+                        p.rx_head.store(head.wrapping_add(copy), Ordering::Release);
+                        p.rcv_nxt = p.rcv_nxt.wrapping_add(copy as u32);
+                    }
+                    // ACK what we accepted (even if copy<payload — peer will retransmit).
+                    send_tcp_pcb(id, TCP_ACK, &[]);
+                    if copy > 0 { notify_epoll(id, EPOLLIN); }
+                } else {
+                    // Out-of-order: just ACK current rcv_nxt to prompt retransmit.
+                    send_tcp_pcb(id, TCP_ACK, &[]);
+                }
+            }
+
+            // FIN handling.
+            if flags & TCP_FIN != 0 {
+                // Consume the FIN's sequence space.
+                p.rcv_nxt = p.rcv_nxt.wrapping_add(1);
+                send_tcp_pcb(id, TCP_ACK, &[]);
+                match state {
+                    STATE_ESTABLISHED => {
+                        p.state.store(STATE_CLOSE_WAIT, Ordering::Release);
+                        notify_epoll(id, EPOLLIN | EPOLLRDHUP);
+                    }
+                    STATE_FIN_WAIT_1 => {
+                        // Our FIN was acked simultaneously with theirs?
+                        if flags & TCP_ACK != 0 && p.snd_una == p.snd_nxt {
+                            p.state.store(STATE_TIME_WAIT, Ordering::Release);
+                        } else {
+                            p.state.store(STATE_CLOSING, Ordering::Release);
+                        }
+                        notify_epoll(id, EPOLLIN | EPOLLHUP);
+                    }
+                    STATE_FIN_WAIT_2 => {
+                        p.state.store(STATE_TIME_WAIT, Ordering::Release);
+                        notify_epoll(id, EPOLLIN | EPOLLHUP);
+                    }
+                    _ => {}
+                }
+            } else if state == STATE_FIN_WAIT_1
+                && flags & TCP_ACK != 0
+                && p.snd_una == p.snd_nxt
+            {
+                // Our FIN has been ACKed — move to FIN_WAIT_2.
+                p.state.store(STATE_FIN_WAIT_2, Ordering::Release);
+            }
+        }
+
+        STATE_CLOSE_WAIT => {
+            // Peer already sent FIN; mostly just track their ACKs.
+            if flags & TCP_ACK != 0 && seq_leq(p.snd_una, ack) && seq_leq(ack, p.snd_nxt) {
+                p.snd_una = ack;
+            }
+        }
+
+        STATE_LAST_ACK => {
+            if flags & TCP_ACK != 0 && ack == p.snd_nxt {
+                p.state.store(STATE_CLOSED, Ordering::Release);
+                notify_epoll(id, EPOLLHUP);
+            }
+        }
+
+        STATE_CLOSING => {
+            if flags & TCP_ACK != 0 && ack == p.snd_nxt {
+                p.state.store(STATE_TIME_WAIT, Ordering::Release);
+            }
+        }
+
+        STATE_TIME_WAIT | STATE_CLOSED | STATE_LISTEN => {
+            // Late segments: drop quietly (real stack would RST here).
+        }
+
         _ => {}
     }
 }
 
-fn send_tcp(flags: u8, payload: &[u8]) {
-    let local_port = LOCAL_PORT.load(Ordering::Relaxed) as u16;
-    let remote_port = REMOTE_PORT.load(Ordering::Relaxed) as u16;
-    let remote_ip = REMOTE_IP.load(Ordering::Relaxed);
-    let seq = SEQ_NUM.load(Ordering::Relaxed);
-    let ack = ACK_NUM.load(Ordering::Relaxed);
+// RDHUP bit — we don't pull from epoll module to avoid tight coupling
+// but must match its value (0x2000).
+const EPOLLRDHUP: u32 = 0x2000;
+
+/// sequence arithmetic (RFC 1323): `a <= b` in modulo-2^32 arithmetic.
+#[inline]
+fn seq_leq(a: u32, b: u32) -> bool {
+    (b.wrapping_sub(a) as i32) >= 0
+}
+
+// ---------------------------------------------------------------------------
+// Segment transmit
+// ---------------------------------------------------------------------------
+
+fn send_tcp_pcb(id: usize, flags: u8, payload: &[u8]) {
+    let p = pcb_mut(id);
+    let local_port  = p.local_port;
+    let remote_port = p.remote_port;
+    let remote_ip   = p.remote_ip;
+    let seq = p.snd_nxt;
+    let ack = p.rcv_nxt;
 
     let total = TCP_HDR_SIZE + payload.len();
+    if total > 1400 { return; } // we don't fragment
     let mut tcp = [0u8; 1400];
 
     tcp[0..2].copy_from_slice(&local_port.to_be_bytes());
     tcp[2..4].copy_from_slice(&remote_port.to_be_bytes());
     tcp[4..8].copy_from_slice(&seq.to_be_bytes());
     tcp[8..12].copy_from_slice(&ack.to_be_bytes());
-    tcp[12] = 0x50; // Data offset: 5 words (20 bytes)
+    tcp[12] = 0x50; // data offset 5 words
     tcp[13] = flags;
-    tcp[14..16].copy_from_slice(&8192u16.to_be_bytes()); // Window size
+    tcp[14..16].copy_from_slice(&p.rcv_wnd.to_be_bytes());
 
     if !payload.is_empty() {
         tcp[TCP_HDR_SIZE..TCP_HDR_SIZE + payload.len()].copy_from_slice(payload);
     }
 
-    // TCP checksum (with pseudo-header)
+    // Pseudo-header checksum.
     let src_ip = ip::our_ip();
     let mut pseudo = [0u8; 12];
     pseudo[0..4].copy_from_slice(&src_ip.to_be_bytes());
     pseudo[4..8].copy_from_slice(&remote_ip.to_be_bytes());
-    pseudo[8] = 0;
-    pseudo[9] = 6; // TCP protocol
+    pseudo[9] = 6;
     pseudo[10..12].copy_from_slice(&(total as u16).to_be_bytes());
-
     let cksum = tcp_checksum(&pseudo, &tcp[..total]);
     tcp[16..18].copy_from_slice(&cksum.to_be_bytes());
 
-    if flags & TCP_SYN != 0 || !payload.is_empty() {
-        { let v = SEQ_NUM.load(Ordering::Relaxed); SEQ_NUM.store(v + if payload.is_empty() { 1 } else { payload.len() as u32 }, Ordering::Relaxed); }
+    // Advance snd_nxt by payload len (SYN/FIN also consume one seq).
+    let mut consume = payload.len() as u32;
+    if flags & TCP_SYN != 0 { consume = consume.wrapping_add(1); }
+    if flags & TCP_FIN != 0 { consume = consume.wrapping_add(1); }
+    if consume > 0 {
+        p.snd_nxt = p.snd_nxt.wrapping_add(consume);
     }
 
     let _ = ip::send(remote_ip, 6, &tcp[..total]);
@@ -138,13 +524,11 @@ fn send_tcp(flags: u8, payload: &[u8]) {
 
 fn tcp_checksum(pseudo: &[u8], tcp: &[u8]) -> u16 {
     let mut sum: u32 = 0;
-    // Add pseudo-header
     let mut i = 0;
     while i + 1 < pseudo.len() {
         sum += u16::from_be_bytes([pseudo[i], pseudo[i+1]]) as u32;
         i += 2;
     }
-    // Add TCP segment
     i = 0;
     while i + 1 < tcp.len() {
         sum += u16::from_be_bytes([tcp[i], tcp[i+1]]) as u32;
@@ -159,18 +543,215 @@ fn tcp_checksum(pseudo: &[u8], tcp: &[u8]) -> u16 {
     !(sum as u16)
 }
 
-/// Connect to a remote TCP server.
-pub fn connect(dst_ip: u32, dst_port: u16) -> Result<(), &'static str> {
-    let port = LOCAL_PORT.load(Ordering::Relaxed); LOCAL_PORT.store(port + 1, Ordering::Relaxed); let port = port as u16;
-    REMOTE_IP.store(dst_ip, Ordering::Relaxed);
-    REMOTE_PORT.store(dst_port as u32, Ordering::Relaxed);
-    LOCAL_PORT.store(port as u32, Ordering::Relaxed);
-    ACK_NUM.store(0, Ordering::Relaxed);
-    RX_LEN.store(0, Ordering::Relaxed);
-    DATA_READY.store(false, Ordering::Relaxed);
-    CONN_STATE.store(STATE_SYN_SENT, Ordering::Relaxed);
+// ---------------------------------------------------------------------------
+// Non-blocking connect
+// ---------------------------------------------------------------------------
 
-    // Send SYN
+pub enum ConnectStatus {
+    InProgress,
+    Established,
+    Failed(i32),
+}
+
+/// Kick off a SYN. Returns 0 (success queued) or E_INPROGRESS for nonblocking.
+/// On transport-level failure returns a positive errno.
+pub fn connect_start(id: usize, ip_be: u32, port: u16) -> i32 {
+    if id >= MAX_PCBS { return E_NOTCONN; }
+    let p = pcb_mut(id);
+    if !p.in_use.load(Ordering::Acquire) { return E_NOTCONN; }
+
+    let lport = alloc_local_port();
+    p.local_port  = lport;
+    p.remote_ip   = ip_be;
+    p.remote_port = port;
+    p.error.store(0, Ordering::Relaxed);
+    p.rx_head.store(0, Ordering::Relaxed);
+    p.rx_tail.store(0, Ordering::Relaxed);
+    p.tx_head.store(0, Ordering::Relaxed);
+    p.tx_tail.store(0, Ordering::Relaxed);
+    p.rcv_nxt = 0;
+    p.snd_una = p.snd_nxt; // mark ISS
+    p.state.store(STATE_SYN_SENT, Ordering::Release);
+
+    send_tcp_pcb(id, TCP_SYN, &[]);
+
+    if p.is_nonblocking.load(Ordering::Acquire) {
+        E_INPROGRESS
+    } else {
+        0
+    }
+}
+
+/// Polls an in-progress connection. Callers that want to block must drive
+/// `super::poll_once()` themselves between calls.
+pub fn connect_poll(id: usize) -> ConnectStatus {
+    if id >= MAX_PCBS { return ConnectStatus::Failed(E_NOTCONN); }
+    let p = pcb(id);
+    match p.state.load(Ordering::Acquire) {
+        STATE_ESTABLISHED => ConnectStatus::Established,
+        STATE_SYN_SENT | STATE_SYN_RECEIVED => ConnectStatus::InProgress,
+        _ => {
+            let e = p.error.load(Ordering::Acquire);
+            ConnectStatus::Failed(if e != 0 { e } else { E_CONNREFUSED })
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-PCB I/O
+// ---------------------------------------------------------------------------
+
+/// Send data on an established PCB. Returns bytes accepted or errno (positive).
+pub fn send_data_pcb(id: usize, data: &[u8]) -> Result<usize, i32> {
+    if id >= MAX_PCBS { return Err(E_NOTCONN); }
+    let p = pcb_mut(id);
+    if !p.in_use.load(Ordering::Acquire) { return Err(E_NOTCONN); }
+    if p.tx_shut.load(Ordering::Acquire) { return Err(E_PIPE); }
+    let st = p.state.load(Ordering::Acquire);
+    if st != STATE_ESTABLISHED && st != STATE_CLOSE_WAIT {
+        return Err(E_NOTCONN);
+    }
+    if data.is_empty() { return Ok(0); }
+
+    // MSS ceiling — one segment per call keeps things simple.
+    let chunk = data.len().min(1360);
+    send_tcp_pcb(id, TCP_PSH | TCP_ACK, &data[..chunk]);
+    Ok(chunk)
+}
+
+/// Receive from an established PCB's rx ring. Returns bytes read; 0 means EOF
+/// (peer FIN received and ring drained); errno for error.
+pub fn recv_data_pcb(id: usize, buf: &mut [u8]) -> Result<usize, i32> {
+    if id >= MAX_PCBS { return Err(E_NOTCONN); }
+    let p = pcb_mut(id);
+    if !p.in_use.load(Ordering::Acquire) { return Err(E_NOTCONN); }
+
+    let avail = p.rx_available();
+    if avail == 0 {
+        let st = p.state.load(Ordering::Acquire);
+        if st == STATE_CLOSE_WAIT
+            || st == STATE_CLOSED
+            || st == STATE_LAST_ACK
+            || st == STATE_TIME_WAIT
+        {
+            return Ok(0); // EOF
+        }
+        if p.is_nonblocking.load(Ordering::Acquire) {
+            return Err(E_AGAIN);
+        }
+        return Err(E_AGAIN); // caller blocks externally
+    }
+
+    let tail = p.rx_tail.load(Ordering::Acquire);
+    let n = avail.min(buf.len());
+    for i in 0..n {
+        buf[i] = p.rx_buf[(tail + i) & (RX_BUF_SIZE - 1)];
+    }
+    p.rx_tail.store(tail.wrapping_add(n), Ordering::Release);
+    Ok(n)
+}
+
+/// Is there buffered data ready to read?
+pub fn data_ready(id: usize) -> bool {
+    if id >= MAX_PCBS { return false; }
+    pcb(id).rx_available() > 0
+}
+
+/// Is there room in the TX path? Today we always have room (we flush
+/// immediately), so this is true iff state permits sending.
+pub fn can_write(id: usize) -> bool {
+    if id >= MAX_PCBS { return false; }
+    let p = pcb(id);
+    if p.tx_shut.load(Ordering::Acquire) { return false; }
+    let s = p.state.load(Ordering::Acquire);
+    s == STATE_ESTABLISHED || s == STATE_CLOSE_WAIT
+}
+
+// ---------------------------------------------------------------------------
+// Half-close
+// ---------------------------------------------------------------------------
+
+pub fn shutdown_write(id: usize) {
+    if id >= MAX_PCBS { return; }
+    let p = pcb_mut(id);
+    if !p.in_use.load(Ordering::Acquire) { return; }
+    if p.tx_shut.swap(true, Ordering::AcqRel) { return; } // already done
+
+    let st = p.state.load(Ordering::Acquire);
+    match st {
+        STATE_ESTABLISHED => {
+            p.state.store(STATE_FIN_WAIT_1, Ordering::Release);
+            send_tcp_pcb(id, TCP_FIN | TCP_ACK, &[]);
+        }
+        STATE_CLOSE_WAIT => {
+            p.state.store(STATE_LAST_ACK, Ordering::Release);
+            send_tcp_pcb(id, TCP_FIN | TCP_ACK, &[]);
+        }
+        _ => {}
+    }
+}
+
+pub fn shutdown_read(id: usize) {
+    if id >= MAX_PCBS { return; }
+    let p = pcb(id);
+    if !p.in_use.load(Ordering::Acquire) { return; }
+    p.rx_shut.store(true, Ordering::Release);
+}
+
+/// Full teardown — FIN + wait briefly + mark CLOSED.
+pub fn close_pcb(id: usize) {
+    if id >= MAX_PCBS { return; }
+    shutdown_write(id);
+    // Brief drain — poll loop gives RX/ACKs a chance.
+    for _ in 0..50_000 {
+        super::poll_once();
+        let s = pcb(id).state.load(Ordering::Acquire);
+        if s == STATE_CLOSED || s == STATE_TIME_WAIT { break; }
+        core::hint::spin_loop();
+    }
+    pcb(id).state.store(STATE_CLOSED, Ordering::Release);
+}
+
+// ===========================================================================
+// Legacy synchronous API (PCB 0) — used by netsurf_test and other callers
+// that predate the multi-PCB refactor.
+// ===========================================================================
+
+fn ensure_legacy_pcb() {
+    let p = pcb(LEGACY_PCB);
+    if !p.in_use.load(Ordering::Acquire) {
+        // Manually claim slot 0 rather than calling pcb_alloc(), so we always
+        // get the same slot across reconnects.
+        alloc_lock();
+        let p0 = pcb_mut(LEGACY_PCB);
+        p0.state.store(STATE_CLOSED, Ordering::Relaxed);
+        p0.snd_nxt = 1000;
+        p0.snd_una = 1000;
+        p0.rcv_nxt = 0;
+        p0.rx_head.store(0, Ordering::Relaxed);
+        p0.rx_tail.store(0, Ordering::Relaxed);
+        p0.tx_head.store(0, Ordering::Relaxed);
+        p0.tx_tail.store(0, Ordering::Relaxed);
+        p0.is_nonblocking.store(false, Ordering::Relaxed);
+        p0.rx_shut.store(false, Ordering::Relaxed);
+        p0.tx_shut.store(false, Ordering::Relaxed);
+        p0.error.store(0, Ordering::Relaxed);
+        p0.fd.store(-1, Ordering::Relaxed);
+        p0.in_use.store(true, Ordering::Release);
+        alloc_unlock();
+    }
+}
+
+/// Legacy blocking connect (netsurf_test path). Uses PCB 0.
+pub fn connect(dst_ip: u32, dst_port: u16) -> Result<(), &'static str> {
+    ensure_legacy_pcb();
+    // Force blocking.
+    pcb(LEGACY_PCB).is_nonblocking.store(false, Ordering::Relaxed);
+    let rc = connect_start(LEGACY_PCB, dst_ip, dst_port);
+    if rc != 0 && rc != E_INPROGRESS {
+        return Err("connect_start failed");
+    }
+
     crate::drivers::uart::puts("[tcp] sending SYN to ");
     crate::kernel::mm::print_num(((dst_ip >> 24) & 0xFF) as usize);
     crate::drivers::uart::putc(b'.');
@@ -180,61 +761,53 @@ pub fn connect(dst_ip: u32, dst_port: u16) -> Result<(), &'static str> {
     crate::drivers::uart::putc(b'.');
     crate::kernel::mm::print_num((dst_ip & 0xFF) as usize);
     crate::drivers::uart::puts("\n");
-    send_tcp(TCP_SYN, &[]);
 
-    // Wait for SYN-ACK with real time-based timeout (30 seconds)
     let start: u64;
     let freq: u64;
     unsafe {
         core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
     }
-    let timeout_ticks = freq * 30; // 30 seconds
+    let timeout_ticks = freq * 30;
+    let mut last_print = start;
 
-    let mut poll_count: u64 = 0;
-    let mut last_print: u64 = start;
     loop {
         super::poll_once();
-        poll_count += 1;
-        if CONN_STATE.load(Ordering::Acquire) == STATE_ESTABLISHED {
-            return Ok(());
+        match connect_poll(LEGACY_PCB) {
+            ConnectStatus::Established => return Ok(()),
+            ConnectStatus::Failed(_)   => return Err("connect failed"),
+            ConnectStatus::InProgress  => {}
         }
         let now: u64;
         unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
-
-        // Print status every 5 seconds
         if now - last_print > freq * 5 {
-            crate::drivers::uart::puts("[tcp] waiting... ");
+            crate::drivers::uart::puts("[tcp] waiting ");
             crate::kernel::mm::print_num(((now - start) / freq) as usize);
-            crate::drivers::uart::puts("s polls=");
-            crate::kernel::mm::print_num(poll_count as usize);
-            crate::drivers::uart::puts("\n");
+            crate::drivers::uart::puts("s\n");
             last_print = now;
         }
-
-        if now - start > timeout_ticks {
-            break;
-        }
+        if now - start > timeout_ticks { break; }
         core::hint::spin_loop();
     }
 
-    crate::drivers::uart::puts("[tcp] TIMEOUT after ");
-    crate::kernel::mm::print_num(poll_count as usize);
-    crate::drivers::uart::puts(" polls\n");
-    CONN_STATE.store(STATE_CLOSED, Ordering::Relaxed);
+    pcb(LEGACY_PCB).state.store(STATE_CLOSED, Ordering::Release);
     Err("connection timed out")
 }
 
-/// Send data on established connection.
+/// Legacy synchronous send (PCB 0).
 pub fn send_data(data: &[u8]) -> Result<(), &'static str> {
-    if CONN_STATE.load(Ordering::Relaxed) != STATE_ESTABLISHED {
-        return Err("not connected");
+    let mut off = 0;
+    while off < data.len() {
+        match send_data_pcb(LEGACY_PCB, &data[off..]) {
+            Ok(0) => return Err("send: no progress"),
+            Ok(n) => off += n,
+            Err(_) => return Err("send failed"),
+        }
     }
-    send_tcp(TCP_PSH | TCP_ACK, data);
     Ok(())
 }
 
-/// Receive data (blocks until data available or 10s timeout).
+/// Legacy synchronous recv (PCB 0) — blocks up to 5 seconds.
 pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     let start: u64;
     let freq: u64;
@@ -242,14 +815,14 @@ pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
         core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
     }
-    let timeout = freq * 5; // 5 seconds (allow slow servers to respond)
+    let timeout = freq * 5;
     loop {
         super::poll_once();
-        if DATA_READY.load(Ordering::Acquire) {
-            // Coalesce: poll briefly for more segments arriving back-to-back
+        if data_ready(LEGACY_PCB) {
+            // Coalesce briefly.
             let coalesce_start: u64;
             unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) coalesce_start); }
-            let coalesce_timeout = freq / 10; // 100ms
+            let coalesce_timeout = freq / 10;
             loop {
                 super::poll_once();
                 let cn: u64;
@@ -257,25 +830,10 @@ pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
                 if cn - coalesce_start > coalesce_timeout { break; }
                 core::hint::spin_loop();
             }
-
-            unsafe {
-                let len = RX_LEN.load(Ordering::Relaxed) as usize;
-                let copy = len.min(buf.len());
-                buf[..copy].copy_from_slice(&RX_BUF[..copy]);
-                let remaining = len - copy;
-                if remaining > 0 {
-                    // Shift unread bytes to front — DON'T discard them!
-                    for i in 0..remaining {
-                        RX_BUF[i] = RX_BUF[copy + i];
-                    }
-                    RX_LEN.store(remaining as u32, Ordering::Relaxed);
-                    // Keep DATA_READY true since there's still data
-                } else {
-                    RX_LEN.store(0, Ordering::Relaxed);
-                    DATA_READY.store(false, Ordering::Relaxed);
-                }
-                return Ok(copy);
-            }
+            return match recv_data_pcb(LEGACY_PCB, buf) {
+                Ok(n) => Ok(n),
+                Err(_) => Err("recv failed"),
+            };
         }
         let now: u64;
         unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
@@ -285,21 +843,12 @@ pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     Err("receive timeout")
 }
 
-/// Close the connection.
-/// Check if data is waiting to be read.
-pub fn data_ready() -> bool {
-    DATA_READY.load(Ordering::Relaxed)
+/// Legacy zero-arg data_ready() — PCB 0.
+pub fn data_ready_legacy() -> bool {
+    data_ready(LEGACY_PCB)
 }
 
+/// Legacy close (PCB 0).
 pub fn close() {
-    if CONN_STATE.load(Ordering::Relaxed) == STATE_ESTABLISHED {
-        send_tcp(TCP_FIN | TCP_ACK, &[]);
-        CONN_STATE.store(STATE_FIN_WAIT, Ordering::Relaxed);
-    }
-    // Wait briefly for FIN-ACK
-    for _ in 0..500_000 {
-        super::poll_once();
-        core::hint::spin_loop();
-    }
-    CONN_STATE.store(STATE_CLOSED, Ordering::Relaxed);
+    close_pcb(LEGACY_PCB);
 }

@@ -197,8 +197,13 @@ pub struct SocketState {
     pub backlog:    i32,
 
     // True once connect() has driven the global TCP stack into an
-    // established state (we only support one at a time today; see gaps).
+    // established state (kept for API/ABI compatibility; not used in the
+    // multi-PCB stack — each socket has its own `pcb_id` below).
     pub owns_global_tcp: bool,
+
+    /// TCP-only: slot in the per-connection PCB table (src/net/tcp.rs).
+    /// `-1` means no PCB allocated yet (e.g. unbound UDP socket).
+    pub pcb_id: i32,
 }
 
 impl SocketState {
@@ -227,6 +232,7 @@ impl SocketState {
             so_error: 0,
             backlog: 0,
             owns_global_tcp: false,
+            pcb_id: -1,
         }
     }
 }
@@ -489,80 +495,84 @@ pub fn connect(fd: i32, addr: *const SockaddrIn, len: u32) -> i64 {
 
     if status == SockStatus::Connected { return EISCONN; }
 
-    // Refuse a second concurrent TCP connect — single global state today.
-    if global_tcp_in_use() {
-        return EADDRINUSE; // nearest errno; indicates "can't have two"
-    }
+    // Allocate a PCB for this socket (multi-PCB stack — up to 64 concurrent).
+    let pcb_id = match crate::net::tcp::pcb_alloc() {
+        Some(i) => i,
+        None => return EMFILE, // out of PCB slots
+    };
+    crate::net::tcp::pcb_bind_fd(pcb_id, fd);
+    crate::net::tcp::pcb_set_nonblocking(pcb_id, nonblock);
 
-    // Mark the socket as owning the global TCP slot.
     let _ = with_slot(fd, |s| {
         s.peer_addr = ip;
         s.peer_port = port;
         s.status = SockStatus::Connecting;
-        s.owns_global_tcp = true;
+        s.owns_global_tcp = true; // legacy field; harmless here
+        s.pcb_id = pcb_id as i32;
         Ok(())
     });
 
-    // Non-blocking caller: ideally we'd kick off SYN and return EINPROGRESS.
-    // Our tcp stack blocks — document the gap and fall through.
-    // TODO(tcp): true async connect.
+    // Kick off the SYN.
+    let rc = crate::net::tcp::connect_start(pcb_id, ip, port);
+
     if nonblock {
-        // Best-effort: synchronous handshake, report via so_error.
-        let r = crate::net::tcp::connect(ip, port);
-        return match r {
-            Ok(()) => {
+        // Report EINPROGRESS to userspace; epoll on this fd will deliver
+        // EPOLLOUT when the handshake completes (or EPOLLERR on failure).
+        if rc != 0 && rc != crate::net::tcp::E_INPROGRESS as i32 {
+            let _ = with_slot(fd, |s| {
+                s.status = SockStatus::Error;
+                s.so_error = rc;
+                Ok(())
+            });
+            return -(rc as i64);
+        }
+        return EINPROGRESS;
+    }
+
+    // Blocking: spin until established, failed, or 30s timeout.
+    let start: u64;
+    let freq: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+    }
+    let deadline = start + freq * 30;
+    loop {
+        crate::net::poll_once();
+        match crate::net::tcp::connect_poll(pcb_id) {
+            crate::net::tcp::ConnectStatus::Established => {
                 let _ = with_slot(fd, |s| {
                     s.status = SockStatus::Connected;
                     Ok(())
                 });
-                // POSIX: nonblocking connect returns EINPROGRESS on the first
-                // call. Since we actually completed synchronously, return 0.
-                0
+                return 0;
             }
-            Err(_) => {
+            crate::net::tcp::ConnectStatus::Failed(e) => {
                 let _ = with_slot(fd, |s| {
                     s.status = SockStatus::Error;
-                    s.so_error = -(ECONNREFUSED as i32);
+                    s.so_error = e;
                     s.owns_global_tcp = false;
                     Ok(())
                 });
-                ECONNREFUSED
+                crate::net::tcp::pcb_free(pcb_id);
+                return ECONNREFUSED;
             }
-        };
+            crate::net::tcp::ConnectStatus::InProgress => {}
+        }
+        let now: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+        if now > deadline { break; }
+        core::hint::spin_loop();
     }
 
-    // Blocking path.
-    match crate::net::tcp::connect(ip, port) {
-        Ok(()) => {
-            let _ = with_slot(fd, |s| {
-                s.status = SockStatus::Connected;
-                Ok(())
-            });
-            0
-        }
-        Err(_) => {
-            let _ = with_slot(fd, |s| {
-                s.status = SockStatus::Error;
-                s.so_error = -(ETIMEDOUT as i32);
-                s.owns_global_tcp = false;
-                Ok(())
-            });
-            ETIMEDOUT
-        }
-    }
-}
-
-/// Returns true if any socket currently owns the single global TCP connection
-/// inside src/net/tcp.rs.
-fn global_tcp_in_use() -> bool {
-    unsafe {
-        for i in 0..MAX_SOCKETS {
-            if SOCKET_TABLE[i].in_use && SOCKET_TABLE[i].owns_global_tcp {
-                return true;
-            }
-        }
-    }
-    false
+    let _ = with_slot(fd, |s| {
+        s.status = SockStatus::Error;
+        s.so_error = -(ETIMEDOUT as i32);
+        s.owns_global_tcp = false;
+        Ok(())
+    });
+    crate::net::tcp::pcb_free(pcb_id);
+    ETIMEDOUT
 }
 
 /// sendto(2) — for connected TCP, dest_addr is ignored.
@@ -570,8 +580,8 @@ pub fn sendto(fd: i32, buf: *const u8, len: usize, _flags: i32,
               dest_addr: *const SockaddrIn, addrlen: u32) -> i64 {
     if buf.is_null() && len > 0 { return EFAULT; }
 
-    let (kind, status, nonblock, peer_ip, peer_port) = match with_slot(fd, |s| {
-        Ok((s.kind, s.status, s.nonblock, s.peer_addr, s.peer_port))
+    let (kind, status, nonblock, peer_ip, peer_port, pcb_id) = match with_slot(fd, |s| {
+        Ok((s.kind, s.status, s.nonblock, s.peer_addr, s.peer_port, s.pcb_id))
     }) { Ok(v) => v, Err(e) => return e };
 
     // SAFETY: trust boundary as above.
@@ -580,14 +590,21 @@ pub fn sendto(fd: i32, buf: *const u8, len: usize, _flags: i32,
     match kind {
         SockKind::Tcp => {
             if status != SockStatus::Connected { return ENOTCONN; }
-            // TODO(tcp): tcp::send_data() blocks on the NIC queue. If the
-            // queue is full and we're nonblocking, we should return EAGAIN.
-            // The current API doesn't expose queue state — assume writable.
+            if pcb_id < 0 { return ENOTCONN; }
             let _ = nonblock;
-            match crate::net::tcp::send_data(data) {
-                Ok(()) => len as i64,
-                Err(_) => ECONNRESET,
+            // Drain in chunks: send_data_pcb caps at one MSS per call.
+            let mut off = 0;
+            while off < data.len() {
+                match crate::net::tcp::send_data_pcb(pcb_id as usize, &data[off..]) {
+                    Ok(0) => break,
+                    Ok(n) => off += n,
+                    Err(_) => {
+                        if off > 0 { return off as i64; }
+                        return ECONNRESET;
+                    }
+                }
             }
+            off as i64
         }
         SockKind::Udp => {
             // Use dest_addr if provided, else connected peer.
@@ -622,22 +639,55 @@ pub fn recvfrom(fd: i32, buf: *mut u8, len: usize, _flags: i32,
                 src_addr: *mut SockaddrIn, addrlen: *mut u32) -> i64 {
     if buf.is_null() && len > 0 { return EFAULT; }
 
-    let (kind, status, nonblock, peer_ip, peer_port) = match with_slot(fd, |s| {
-        Ok((s.kind, s.status, s.nonblock, s.peer_addr, s.peer_port))
+    let (kind, status, nonblock, peer_ip, peer_port, pcb_id) = match with_slot(fd, |s| {
+        Ok((s.kind, s.status, s.nonblock, s.peer_addr, s.peer_port, s.pcb_id))
     }) { Ok(v) => v, Err(e) => return e };
 
     match kind {
         SockKind::Tcp => {
             if status != SockStatus::Connected { return ENOTCONN; }
+            if pcb_id < 0 { return ENOTCONN; }
+            let id = pcb_id as usize;
 
-            // Nonblocking: use the peek-shaped data_ready() probe.
-            if nonblock && !crate::net::tcp::data_ready() {
+            // Nonblocking: return EAGAIN if nothing buffered (and not EOF).
+            if nonblock && !crate::net::tcp::data_ready(id) {
+                let st = crate::net::tcp::pcb_state(id);
+                if st == crate::net::tcp::STATE_CLOSE_WAIT
+                   || st == crate::net::tcp::STATE_CLOSED
+                {
+                    return 0; // EOF
+                }
                 return EAGAIN;
+            }
+
+            // Blocking: spin with poll_once() until data arrives or EOF.
+            if !nonblock {
+                let start: u64;
+                let freq: u64;
+                unsafe {
+                    core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
+                    core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+                }
+                let deadline = start + freq * 5;
+                loop {
+                    crate::net::poll_once();
+                    if crate::net::tcp::data_ready(id) { break; }
+                    let st = crate::net::tcp::pcb_state(id);
+                    if st == crate::net::tcp::STATE_CLOSE_WAIT
+                       || st == crate::net::tcp::STATE_CLOSED
+                    {
+                        return 0;
+                    }
+                    let now: u64;
+                    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+                    if now > deadline { return 0; }
+                    core::hint::spin_loop();
+                }
             }
 
             // SAFETY: trust boundary.
             let out = unsafe { core::slice::from_raw_parts_mut(buf, len) };
-            match crate::net::tcp::recv_data(out) {
+            match crate::net::tcp::recv_data_pcb(id, out) {
                 Ok(n) => {
                     if !src_addr.is_null() && !addrlen.is_null() {
                         let _ = write_sockaddr(src_addr, addrlen, peer_ip, peer_port);
@@ -645,9 +695,6 @@ pub fn recvfrom(fd: i32, buf: *mut u8, len: usize, _flags: i32,
                     n as i64
                 }
                 Err(_) => {
-                    // Timeout path in our tcp stack: surface as EAGAIN for
-                    // nonblocking callers and as 0 (EOF) for blocking, which
-                    // is an approximation of a dead connection.
                     if nonblock { EAGAIN } else { 0 }
                 }
             }
@@ -827,12 +874,22 @@ pub fn shutdown(fd: i32, how: i32) -> i64 {
     match with_slot(fd, |s| {
         if s.kind != SockKind::Tcp { return Err(EOPNOTSUPP); }
         if s.status != SockStatus::Connected { return Err(ENOTCONN); }
+        let id = s.pcb_id;
         match how {
-            SHUT_RD => { /* advisory */ }
-            SHUT_WR | SHUT_RDWR => {
-                if s.owns_global_tcp {
-                    crate::net::tcp::close();
-                    s.owns_global_tcp = false;
+            SHUT_RD => {
+                if id >= 0 {
+                    crate::net::tcp::shutdown_read(id as usize);
+                }
+            }
+            SHUT_WR => {
+                if id >= 0 {
+                    crate::net::tcp::shutdown_write(id as usize);
+                }
+            }
+            SHUT_RDWR => {
+                if id >= 0 {
+                    crate::net::tcp::shutdown_read(id as usize);
+                    crate::net::tcp::shutdown_write(id as usize);
                 }
                 s.status = SockStatus::Closed;
             }
@@ -848,11 +905,13 @@ pub fn close(fd: i32) -> i64 {
     let idx = match slot_of(fd) { Some(i) => i, None => return EBADF };
     unsafe {
         if !SOCKET_TABLE[idx].in_use { return EBADF; }
-        if SOCKET_TABLE[idx].kind == SockKind::Tcp
-            && SOCKET_TABLE[idx].owns_global_tcp
-            && SOCKET_TABLE[idx].status == SockStatus::Connected
-        {
-            crate::net::tcp::close();
+        let s = &SOCKET_TABLE[idx];
+        if s.kind == SockKind::Tcp && s.pcb_id >= 0 {
+            let id = s.pcb_id as usize;
+            if s.status == SockStatus::Connected {
+                crate::net::tcp::close_pcb(id);
+            }
+            crate::net::tcp::pcb_free(id);
         }
     }
     free_slot(idx);
@@ -867,16 +926,20 @@ pub fn close(fd: i32) -> i64 {
 pub fn readable(fd: i32) -> bool {
     let s = match peek(fd) { Some(s) => s, None => return false };
     match s.kind {
-        SockKind::Tcp => s.status == SockStatus::Connected
-            && crate::net::tcp::data_ready(),
+        SockKind::Tcp => {
+            if s.status != SockStatus::Connected || s.pcb_id < 0 { return false; }
+            crate::net::tcp::data_ready(s.pcb_id as usize)
+        }
         _ => false,
     }
 }
 
-/// Is the socket writable? Our TCP stack is always "writable" today.
+/// Is the socket writable? True when connected and PCB has TX room.
 pub fn writable(fd: i32) -> bool {
     let s = match peek(fd) { Some(s) => s, None => return false };
-    s.status == SockStatus::Connected
+    if s.status != SockStatus::Connected { return false; }
+    if s.pcb_id < 0 { return false; }
+    crate::net::tcp::can_write(s.pcb_id as usize)
 }
 
 /// Reset all socket slots — called from process teardown.

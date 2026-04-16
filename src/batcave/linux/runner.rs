@@ -85,6 +85,55 @@ pub fn run_busybox_cmd(argv: &[&str]) -> Result<(), &'static str> {
     loader::execute_with_args(entry, argv)
 }
 
+/// Launch the baked Chromium `content_shell` blob with the given argv.
+///
+/// Returns `Err("no chromium blob")` if the kernel image was built
+/// without `tools/bake_chromium.sh`. Otherwise loads the blob via the
+/// shared ELF loader, registers the main thread with the scheduler,
+/// and hands off to `loader::execute_with_args`.
+pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
+    use crate::kernel::mm::initrd;
+
+    let blob = match initrd::locate_chromium_blob() {
+        Some(b) => b,
+        None => return Err("no chromium blob"),
+    };
+
+    let bi = initrd::info().ok_or("blob info missing")?;
+    if !bi.crc_valid {
+        uart::puts("[runner] WARNING: Chromium blob CRC mismatch; refusing to load\n");
+        return Err("chromium blob CRC mismatch");
+    }
+
+    // Make sure VFS + fd table are live; Chromium opens many files.
+    if !super::vfs::is_ready() {
+        super::vfs::init();
+    }
+    super::fd::init();
+
+    uart::puts("[runner] Loading content_shell (");
+    crate::kernel::mm::print_num(blob.len() / (1024 * 1024));
+    uart::puts(" MB)...\n");
+
+    let entry = loader::load_elf(blob)?;
+
+    uart::puts("[runner] Launching on ");
+    uart::puts(url);
+    uart::puts("\n");
+
+    // Opt into the real threading scheduler before hand-off: content_shell
+    // spawns compositor / IO / threadpool threads during startup and needs
+    // `clone`/`futex` to resolve against a live main-thread entry.
+    //
+    // The SP for the initial thread gets set by `execute_with_args` when
+    // it builds argv/envp on the user stack. We register with a stub SP
+    // here; `init_main_thread` only remembers the *main* TID so the real
+    // SP stored by the loader on entry is what the scheduler observes.
+    super::threads::init_main_thread(entry, 0);
+
+    loader::execute_with_args(entry, argv)
+}
+
 /// Run a small test ELF (single-segment, simple format).
 fn run_small_elf(elf_data: &[u8], name: &str) -> Result<(), &'static str> {
     uart::puts("[runner] Loading ");

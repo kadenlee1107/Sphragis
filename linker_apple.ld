@@ -39,6 +39,7 @@ SECTIONS
     . += 0x100000; /* 1MB kernel stack for Apple Silicon */
     __stack_start = .;
 
+    . = ALIGN(4096);
     __kernel_end = .;
 
     /DISCARD/ : {

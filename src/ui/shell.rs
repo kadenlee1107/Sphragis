@@ -119,7 +119,8 @@ fn execute(cmd: &str) {
         "posix" => cmd_run_elf("posix"),
         "cxx" | "c++" => cmd_run_elf("cxx"),
         "v8" | "js" | "javascript" => cmd_run_elf("v8"),
-        "blink" | "chromium" | "chrome" => cmd_run_elf("blink"),
+        "blink" => cmd_run_elf("blink"),
+        "chromium" | "chrome" => cmd_chromium(parts[1], parts[2], parts[3]),
         "browse" | "open" => {
             if !parts[1].is_empty() {
                 console::puts("  Opening in BatBrowser: ");
@@ -1070,6 +1071,124 @@ fn cmd_run_elf(name: &str) {
             uart::puts("[shell] ELF load failed: ");
             uart::puts(e);
             uart::puts("\n");
+        }
+    }
+}
+
+/// `chromium [flags] <url>` — launch the baked content_shell blob.
+///
+/// Flags (all optional, all default on):
+///   --headless           run without any windowing backend
+///   --no-sandbox         disable the Linux sandbox (required — we
+///                        have no seccomp / userns to satisfy it)
+///   --disable-gpu        force SwRaster / SwiftShader path
+///   --window-size=WxH    default 1280x1024
+///
+/// Positional: the URL. Because `split_cmd` yields only 4 slots, we
+/// accept up to three flag tokens; any extra flags go on the URL
+/// (Chromium is forgiving about stray `--foo` mid-argv).
+fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
+    use crate::batcave::linux::runner;
+    use crate::kernel::mm::initrd;
+
+    // Defaults.
+    let mut headless = true;
+    let mut no_sandbox = true;
+    let mut disable_gpu = true;
+    let mut window_size: &str = "1280x1024";
+    let mut url: &str = "";
+
+    // Fold over a1..a3, flags first then URL.
+    for tok in [a1, a2, a3].iter() {
+        if tok.is_empty() { continue; }
+        if tok.starts_with("--") {
+            if *tok == "--headless" { headless = true; }
+            else if *tok == "--no-sandbox" { no_sandbox = true; }
+            else if *tok == "--disable-gpu" { disable_gpu = true; }
+            else if tok.starts_with("--window-size=") {
+                window_size = &tok["--window-size=".len()..];
+            }
+            // unknown --flag: silently pass through onto url slot only if
+            // url is still empty; otherwise ignore. Keeps 4-slot budget
+            // honest.
+            else if url.is_empty() {
+                // Treat unknown --flag in front of a URL as an error only
+                // if no URL is supplied at all. Let it fall through here.
+            }
+        } else {
+            if url.is_empty() {
+                url = tok;
+            }
+        }
+    }
+
+    if url.is_empty() {
+        console::puts("  usage: chromium [flags] <url>\n");
+        console::puts("         --headless            (default on)\n");
+        console::puts("         --no-sandbox          (default on)\n");
+        console::puts("         --disable-gpu         (default on)\n");
+        console::puts("         --window-size=WxH     (default 1280x1024)\n");
+        return;
+    }
+
+    if !initrd::is_present() {
+        console::puts("  error: no Chromium binary baked into this image.\n");
+        console::puts("  hint: run tools/bake_chromium.sh to produce a kernel image with content_shell.\n");
+        return;
+    }
+
+    // Build argv. Order matches the canonical content_shell invocation
+    // used by Phase 1 verification. We drop optional flags if the user
+    // turned them off (currently: no-op — they all default on — but the
+    // structure is in place).
+    let size_arg: [u8; 64] = {
+        // "--window-size=" + window_size (caller-controlled, copied into
+        // a small stack buffer so we have a &str with 'static-ish scope
+        // within this function).
+        let prefix = b"--window-size=";
+        let mut buf = [0u8; 64];
+        let mut n = 0;
+        for &b in prefix { if n < buf.len() { buf[n] = b; n += 1; } }
+        for &b in window_size.as_bytes() {
+            if n < buf.len() { buf[n] = b; n += 1; }
+        }
+        // Zero-pad to end; the &str we build below uses the exact n.
+        let _ = n;
+        buf
+    };
+    // Recompute the length so we can slice into a valid &str.
+    let mut size_len = 0usize;
+    for (i, &c) in size_arg.iter().enumerate() {
+        if c == 0 { size_len = i; break; }
+        size_len = i + 1;
+    }
+    let size_arg_str =
+        unsafe { core::str::from_utf8_unchecked(&size_arg[..size_len]) };
+
+    // Build argv in a fixed-capacity array (no alloc in no_std).
+    let mut argv: [&str; 10] = [""; 10];
+    let mut n = 0;
+    argv[n] = "content_shell"; n += 1;
+    if headless    { argv[n] = "--headless";     n += 1; }
+    if no_sandbox  { argv[n] = "--no-sandbox";   n += 1; }
+    if disable_gpu { argv[n] = "--disable-gpu";  n += 1; }
+    argv[n] = "--single-process";          n += 1;
+    argv[n] = "--ozone-platform=headless"; n += 1;
+    argv[n] = size_arg_str;                n += 1;
+    argv[n] = url;                         n += 1;
+
+    console::puts("  launching content_shell on ");
+    console::puts(url);
+    console::puts("\n");
+
+    match runner::run_chromium(url, &argv[..n]) {
+        Ok(()) => {
+            console::puts("  chromium exited OK\n");
+        }
+        Err(e) => {
+            console::puts("  chromium: ");
+            console::puts(e);
+            console::puts("\n");
         }
     }
 }

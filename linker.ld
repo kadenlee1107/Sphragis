@@ -35,6 +35,7 @@ SECTIONS
     . += 0x80000; /* 512KB kernel stack */
     __stack_start = .;
 
+    . = ALIGN(4096);
     __kernel_end = .;
 
     /DISCARD/ : {
