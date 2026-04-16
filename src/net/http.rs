@@ -138,7 +138,11 @@ pub fn read_response(recv: RecvFn, out: &mut [u8]) -> Result<usize, HttpError> {
 
         match recv(&mut chunk[..bound]) {
             Ok(0) => {
-                // Transport signalled "nothing yet" — let deadlines decide.
+                // NEW-DOS-010 fix: yield on "no data yet" so slow-loris
+                // peers can't pin the core for the full READ_IDLE window.
+                // Scheduler access is platform-specific; this call is a
+                // no-op on cores without co-scheduled caves.
+                crate::batcave::linux::threads::schedule();
                 continue;
             }
             Ok(n) => {

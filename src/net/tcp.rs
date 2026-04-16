@@ -374,11 +374,32 @@ fn notify_epoll(id: usize, events: u32) {
 }
 
 // ---------------------------------------------------------------------------
-// TIME_WAIT drain: any PCB that entered TIME_WAIT > 30 s ago -> CLOSED.
-// Called opportunistically at the top of handle_incoming so long-lived
-// zombies eventually release their slot.
+// Drain zombie PCBs: any non-ESTABLISHED, non-LISTEN PCB that has been in
+// its current transient state longer than the per-state limit transitions
+// to CLOSED and releases its slot.
+//
+// NEW-DOS-008: previously this only covered TIME_WAIT. A remote peer
+// that dropped our SYN silently (or sent FIN and then vanished) would
+// pin the PCB in SYN_SENT / FIN_WAIT_* until reboot — 64 such hangs
+// drained the whole TCP table.
 // ---------------------------------------------------------------------------
-const TIME_WAIT_NS_2MSL: u64 = 30_000_000_000; // 30 seconds
+const TIME_WAIT_NS_2MSL:  u64 = 30_000_000_000;  // 30 s (2×MSL shortened)
+const SYN_SENT_NS:        u64 = 60_000_000_000;  // 60 s connect deadline
+const FIN_WAIT_NS:        u64 = 60_000_000_000;  // 60 s for peer FIN/ACK
+const LAST_ACK_NS:        u64 = 60_000_000_000;
+const CLOSING_NS:         u64 =  60_000_000_000;
+
+fn state_limit_ns(state: u32) -> u64 {
+    match state {
+        STATE_TIME_WAIT  => TIME_WAIT_NS_2MSL,
+        STATE_SYN_SENT   => SYN_SENT_NS,
+        STATE_FIN_WAIT_1 => FIN_WAIT_NS,
+        STATE_FIN_WAIT_2 => FIN_WAIT_NS,
+        STATE_LAST_ACK   => LAST_ACK_NS,
+        STATE_CLOSING    => CLOSING_NS,
+        _ => 0,
+    }
+}
 
 fn drain_time_wait() {
     let now: u64; let freq: u64;
@@ -387,15 +408,23 @@ fn drain_time_wait() {
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
     }
     if freq == 0 { return; }
-    let deadline_ticks = TIME_WAIT_NS_2MSL / (1_000_000_000 / freq.max(1));
     for i in 0..MAX_PCBS {
         let p = pcb(i);
-        if p.state.load(Ordering::Relaxed) != STATE_TIME_WAIT { continue; }
+        let state = p.state.load(Ordering::Relaxed);
+        let limit_ns = state_limit_ns(state);
+        if limit_ns == 0 { continue; }
+        let deadline_ticks = limit_ns / (1_000_000_000 / freq.max(1));
         let entered = p.time_wait_entered.load(Ordering::Relaxed);
         if entered != 0 && now.saturating_sub(entered) > deadline_ticks {
             p.state.store(STATE_CLOSED, Ordering::Release);
             p.in_use.store(false, Ordering::Release);
             p.time_wait_entered.store(0, Ordering::Relaxed);
+            // Refund the owning cave's socket/fd quota.
+            let fd = p.fd.load(Ordering::Relaxed);
+            if fd >= 0 {
+                crate::batcave::linux::quotas::refund_active(
+                    crate::batcave::linux::quotas::Resource::Sockets, 1);
+            }
         }
     }
 }
@@ -589,6 +618,10 @@ pub fn handle_incoming(pkt: &IpPacket) {
                 && p.snd_una == p.snd_nxt
             {
                 // Our FIN has been ACKed — move to FIN_WAIT_2.
+                // NEW-DOS-008: restamp state-entered for the new state.
+                let now: u64;
+                unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+                p.time_wait_entered.store(now, Ordering::Relaxed);
                 p.state.store(STATE_FIN_WAIT_2, Ordering::Release);
             }
         }
@@ -831,6 +864,13 @@ pub fn connect_start(id: usize, ip_be: u32, port: u16) -> i32 {
     // off-path observer of one connection's ISN cannot predict another's.
     p.snd_nxt = compute_isn(id, ip_be, port);
     p.snd_una = p.snd_nxt; // mark ISS
+    // NEW-DOS-008: stamp state-entered so drain_time_wait can expire a
+    // stuck SYN_SENT PCB after SYN_SENT_NS (60 s).
+    {
+        let now: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+        p.time_wait_entered.store(now, Ordering::Relaxed);
+    }
     p.state.store(STATE_SYN_SENT, Ordering::Release);
 
     send_tcp_pcb(id, TCP_SYN, &[]);
@@ -938,12 +978,18 @@ pub fn shutdown_write(id: usize) {
     if p.tx_shut.swap(true, Ordering::AcqRel) { return; } // already done
 
     let st = p.state.load(Ordering::Acquire);
+    // NEW-DOS-008: stamp state-entered so FIN_WAIT_* / LAST_ACK get drained
+    // if the peer never sends the expected ACK/FIN.
+    let now: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
     match st {
         STATE_ESTABLISHED => {
+            p.time_wait_entered.store(now, Ordering::Relaxed);
             p.state.store(STATE_FIN_WAIT_1, Ordering::Release);
             send_tcp_pcb(id, TCP_FIN | TCP_ACK, &[]);
         }
         STATE_CLOSE_WAIT => {
+            p.time_wait_entered.store(now, Ordering::Relaxed);
             p.state.store(STATE_LAST_ACK, Ordering::Release);
             send_tcp_pcb(id, TCP_FIN | TCP_ACK, &[]);
         }

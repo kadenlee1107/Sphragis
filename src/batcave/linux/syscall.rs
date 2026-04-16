@@ -336,12 +336,22 @@ fn sys_nanosleep(args: [u64; 6]) -> i64 {
 
     let target_ticks = tv_sec * freq + tv_nsec * freq / 1_000_000_000;
 
-    // Spin-wait
+    // NEW-DOS-010/014/016/019 fix: yield to the scheduler instead of burning
+    // CPU in a spin-loop. A cave that nanosleep()s for 30 s used to pin the
+    // core; now co-scheduled caves get a slice via threads::schedule().
+    // We still check the timer every ~100 iterations so wakeup latency stays
+    // sub-ms on a lightly loaded system.
+    let mut it = 0u32;
     loop {
         let now: u64;
         unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
         if now.wrapping_sub(start) >= target_ticks { break; }
-        core::hint::spin_loop();
+        it = it.wrapping_add(1);
+        if it % 256 == 0 {
+            super::threads::schedule();
+        } else {
+            core::hint::spin_loop();
+        }
     }
     0
 }
@@ -1251,11 +1261,20 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                 let _ = crate::kernel::mm::frame::alloc_frame();
             }
             // CRITICAL: zero the allocated memory (Linux MAP_ANONYMOUS guarantee)
-            // Without this, malloc returns garbage and libcss crashes
+            // Without this, malloc returns garbage and libcss crashes.
+            //
+            // NEW-DOS-014 fix: yield to the scheduler every 64 pages so a
+            // cave that mmap's 1 GiB doesn't pin the core for seconds.
             unsafe {
                 let ptr = base as *mut u8;
-                for i in 0..(pages * 4096) {
-                    core::ptr::write_volatile(ptr.add(i), 0);
+                for p in 0..pages {
+                    let off = p * 4096;
+                    for i in 0..4096 {
+                        core::ptr::write_volatile(ptr.add(off + i), 0);
+                    }
+                    if p % 64 == 63 {
+                        super::threads::schedule();
+                    }
                 }
             }
             base as i64
