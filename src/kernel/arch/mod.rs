@@ -243,12 +243,18 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                         let worker_entry = crate::batcave::linux::loader::WORKER_ENTRY
                             .load(core::sync::atomic::Ordering::Relaxed);
                         if worker_entry != 0 {
-                            // Read the path to check if it's a busybox applet
+                            // Read the path to check if it's a busybox applet.
+                            // V2-007: gate path_ptr to userspace before ldrb.
                             let path_ptr = f.x[0] as usize;
                             let argv_ptr = f.x[1] as usize;
+                            if !crate::batcave::linux::uaccess::is_user_range(path_ptr, 1) {
+                                f.x[0] = (-14i64) as u64; // EFAULT
+                                return;
+                            }
                             let mut path_buf = [0u8; 128];
                             let mut plen = 0usize;
                             for i in 0..127 {
+                                if !crate::batcave::linux::uaccess::is_user_range(path_ptr + i, 1) { break; }
                                 let b: u32;
                                 core::arch::asm!("ldrb {v:w}, [{a}]",
                                     a = in(reg) path_ptr + i, v = out(reg) b);
@@ -365,18 +371,27 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                                     wbase,
                                 );
 
-                                // Read argv from userspace (up to 8 args)
+                                // Read argv from userspace (up to 8 args).
+                                // V2-008: gate argv_ptr (8 × 8-byte pointers)
+                                // and each argv[i] string range. Without these,
+                                // a cave could pass argv_ptr = 0x40400000 and
+                                // have the worker emit 63-byte chunks of
+                                // kernel RAM via busybox echo → UART.
                                 let _arg_ptrs = [0usize; 8];
                                 let mut arg_bufs = [[0u8; 64]; 8];
                                 let mut arg_lens = [0usize; 8];
                                 let mut argc = 0usize;
-                                if argv_ptr != 0 {
+                                if argv_ptr != 0
+                                    && crate::batcave::linux::uaccess::is_user_range(argv_ptr, 8 * 8)
+                                {
                                     for i in 0..8 {
                                         let ap: u64;
                                         core::arch::asm!("ldr {v}, [{a}]",
                                             a = in(reg) argv_ptr + i * 8, v = out(reg) ap);
                                         if ap == 0 { break; }
+                                        if !crate::batcave::linux::uaccess::is_user_range(ap as usize, 1) { break; }
                                         for j in 0..63 {
+                                            if !crate::batcave::linux::uaccess::is_user_range(ap as usize + j, 1) { break; }
                                             let b: u32;
                                             core::arch::asm!("ldrb {v:w}, [{a}]",
                                                 a = in(reg) ap as usize + j, v = out(reg) b);

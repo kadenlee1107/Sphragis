@@ -1731,6 +1731,11 @@ fn sys_writev(args: [u64; 6]) -> i64 {
                     core::arch::asm!("ldr {v}, [{a}]", a = in(reg) iov_ptr + i * 16, v = out(reg) iov_base);
                     core::arch::asm!("ldr {v}, [{a}]", a = in(reg) iov_ptr + i * 16 + 8, v = out(reg) iov_len);
                 }
+                // NEW-SYS-046: even the file-redirect path needs the gate
+                // — sys_write doesn't re-check the buffer.
+                if iov_len > 0 && !uaccess::is_user_range(iov_base as usize, iov_len as usize) {
+                    return -(14i64);
+                }
                 let r = sys_write([fd_num as u64, iov_base, iov_len, 0, 0, 0]);
                 if r < 0 { return r; }
                 total += r;
@@ -1751,6 +1756,10 @@ fn sys_writev(args: [u64; 6]) -> i64 {
         }
         let base = iov_base as usize;
         let len = iov_len as usize;
+        // NEW-SYS-046: gate iov_base lives in userspace. Previously writev
+        // dumped arbitrary kernel bytes over the UART when the fd was
+        // stdout/stderr — a trivial kernel-read primitive per renderer.
+        if len > 0 && !uaccess::is_user_range(base, len) { return -(14i64); }
         for j in 0..len {
             let byte: u32;
             unsafe {

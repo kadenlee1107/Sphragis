@@ -537,10 +537,19 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                 &nonce, &aad, &mut decrypted[..payload_len]
             ) {
                 Ok(n) => n,
-                Err(e) => {
-                    uart::puts("[tls] HANDSHAKE record auth failed: ");
-                    uart::puts(e);
-                    uart::puts("\n");
+                Err(_e) => {
+                    // NET2-008 / NEW-CRYPTO-026: wipe derived handshake
+                    // keys on auth failure and emit only a generic
+                    // "handshake auth failed" line. The old message
+                    // forwarded the inner error string which could vary
+                    // with cipher-state and leak protocol fingerprint.
+                    uart::puts("[tls] handshake record auth failed\n");
+                    sess.client_key = [0u8; 32];
+                    sess.server_key = [0u8; 32];
+                    sess.client_iv  = [0u8; 12];
+                    sess.server_iv  = [0u8; 12];
+                    sess.shared_secret = [0u8; 32];
+                    sess.our_private   = [0u8; 32];
                     return Err("TLS handshake record authentication failed");
                 }
             };
@@ -891,11 +900,16 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
 
     let plaintext_len = match gcm.decrypt_inplace(&nonce, &aad, &mut decrypted[..crypt_len]) {
         Ok(n) => n,
-        Err(e) => {
-            uart::puts("[tls] record auth FAILED: ");
-            uart::puts(e);
-            uart::puts(" — closing session\n");
-            // Don't touch the secrets; let caller close() wipe them.
+        Err(_e) => {
+            // NET2-008 / NEW-CRYPTO-026: wipe session-level keys on app
+            // record auth failure. The caller's close() path does run, but
+            // not every caller unwinds cleanly — zeroing here closes the
+            // window where a follow-on bug could exfil the keys.
+            uart::puts("[tls] record auth FAILED — closing session\n");
+            sess.client_key = [0u8; 32];
+            sess.server_key = [0u8; 32];
+            sess.client_iv  = [0u8; 12];
+            sess.server_iv  = [0u8; 12];
             return Err("TLS record authentication failed");
         }
     };
@@ -905,6 +919,9 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     let data_len = if plaintext_len > 0 { plaintext_len - 1 } else { 0 };
     let inner_type = if plaintext_len > 0 { decrypted[plaintext_len - 1] } else { 0 };
 
+    // NET2-016: no longer print plaintext bytes over the UART. The hex
+    // diagnostic dump below also leaked inner_type-adjacent bytes; both
+    // removed. Only the safe length/type metadata is emitted.
     uart::puts("[tls] decrypted seq=");
     crate::kernel::mm::print_num((sess.server_seq - 1) as usize);
     uart::puts(" ");
@@ -913,28 +930,7 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     let hex2 = b"0123456789abcdef";
     uart::putc(hex2[(inner_type >> 4) as usize]);
     uart::putc(hex2[(inner_type & 0xf) as usize]);
-    uart::puts(": ");
-    for i in 0..data_len.min(80) {
-        if decrypted[i] >= 0x20 && decrypted[i] <= 0x7e {
-            uart::putc(decrypted[i]);
-        } else {
-            uart::putc(b'.');
-        }
-    }
     uart::puts("\n");
-
-    // Debug: show bytes around inner_type position
-    if rec_len > 20 {
-        uart::puts("[tls] bytes at inner_type pos: ");
-        let start = if rec_len > 22 { rec_len - 22 } else { 0 };
-        for i in start..rec_len.min(start + 25) {
-            uart::putc(hex[(decrypted[i] >> 4) as usize]);
-            uart::putc(hex[(decrypted[i] & 0xf) as usize]);
-            if i == rec_len - 17 { uart::puts("[<-IT]"); }
-            uart::putc(b' ');
-        }
-        uart::puts("\n");
-    }
 
     // Validate inner content type — if invalid, decryption probably failed
     // (wrong nonce/key producing garbage). Valid types: 0x14=CCS, 0x15=alert,
@@ -953,8 +949,21 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
         return Ok(0); // caller will retry and get actual app data
     }
     if inner_type == 0x15 {
-        // Alert
-        uart::puts("[tls] alert received\n");
+        // NET2-031: parse the alert. RFC 8446 §6: { level: u8, description: u8 }
+        // level 1=warning, 2=fatal; treat fatal (or close_notify=0) as hard close.
+        let (level, desc) = if data_len >= 2 {
+            (decrypted[0], decrypted[1])
+        } else {
+            (0, 0)
+        };
+        uart::puts("[tls] alert lvl=");
+        crate::kernel::mm::print_num(level as usize);
+        uart::puts(" desc=");
+        crate::kernel::mm::print_num(desc as usize);
+        uart::puts("\n");
+        // Wipe session keys before returning — peer signalled termination.
+        sess.client_key = [0u8; 32];
+        sess.server_key = [0u8; 32];
         return Err("TLS alert");
     }
 
