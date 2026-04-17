@@ -24,6 +24,39 @@ pub fn init(start: usize, end: usize) {
     MEMORY_START.store(start_aligned, Ordering::Relaxed);
     MEMORY_END_ADDR.store(end_aligned, Ordering::Relaxed);
     TOTAL_FRAMES.store((end_aligned - start_aligned) / PAGE_SIZE, Ordering::Relaxed);
+
+    // V5-KMEM-001 fix: reserve the kernel heap region in the bitmap so
+    // alloc_frame can NEVER hand out a page inside the heap extent. The
+    // heap lives at [KERNEL_HEAP_BASE, KERNEL_HEAP_BASE + KERNEL_HEAP_SIZE)
+    // and is owned exclusively by linked_list_allocator. Without this,
+    // a cave mmap could receive heap metadata pages and corrupt/read
+    // anything the kernel allocator is holding.
+    let heap_start = super::heap::KERNEL_HEAP_BASE;
+    let heap_end = heap_start + super::heap::KERNEL_HEAP_SIZE;
+    reserve_range(heap_start, heap_end);
+}
+
+/// Mark every frame in [start, end) as in-use so alloc_frame skips them.
+/// Used to carve out fixed kernel-owned regions (kernel heap, MMIO, etc.)
+/// from the general page pool.
+pub fn reserve_range(start: usize, end: usize) {
+    let mem_start = MEMORY_START.load(Ordering::Relaxed);
+    let mem_end = MEMORY_END_ADDR.load(Ordering::Relaxed);
+    // Only reserve frames that actually fall in the pool.
+    let s = start.max(mem_start) & !(PAGE_SIZE - 1);
+    let e = end.min(mem_end) & !(PAGE_SIZE - 1);
+    if e <= s { return; }
+    let mut addr = s;
+    while addr < e {
+        let frame_index = (addr - mem_start) / PAGE_SIZE;
+        let bitmap_index = frame_index / 64;
+        let bit = frame_index % 64;
+        if bitmap_index < BITMAP_SIZE {
+            let val = BITMAP[bitmap_index].load(Ordering::Relaxed);
+            BITMAP[bitmap_index].store(val | (1u64 << bit), Ordering::Relaxed);
+        }
+        addr += PAGE_SIZE;
+    }
 }
 
 pub fn alloc_frame() -> Option<usize> {

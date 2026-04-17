@@ -389,10 +389,20 @@ pub fn stop(name: &str) -> Result<(), &'static str> {
 }
 
 /// Enter a BatCave (start + set up isolated VFS + mark active).
+///
+/// V5-XLAYER-001/002/003 fix: wipe all per-cave static state on every
+/// cave switch (not only on destroy). Previously the signal handler
+/// table, TLS key state, and fd table persisted across caves — one
+/// cave could install a handler, exit, and a later cave would inherit
+/// it. Same for TLS session keys on PCBs the previous tenant opened.
 pub fn enter(name: &str) -> Result<(), &'static str> {
     start(name)?;
     // Find cave index and set as active
     if let Some(id) = find_id(name) {
+        // V5-XLAYER: reset per-cave statics BEFORE activating so the
+        // new tenant sees a clean slate from the first syscall.
+        crate::batcave::linux::syscall::reset_cave_statics();
+        crate::net::tls::reset_all_sessions();
         set_active(id);
         // Initialize an isolated VFS for this cave (if not already done)
         crate::batcave::linux::vfs::init_for_cave(id);

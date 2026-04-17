@@ -84,6 +84,17 @@ pub fn parse_cert(der: &[u8]) -> Result<Certificate, VerifyError> {
     Certificate::from_der(der).map_err(|_| VerifyError::Parse)
 }
 
+/// V5-CHAIN-001 / V5-CRYPTO-001 fix: extract leaf SPKI + algorithm for
+/// the CertificateVerify check **regardless** of whether chain validation
+/// succeeded. Without this, a fallback-to-pinning path left peer_spki
+/// empty and CertificateVerify was silently skipped, giving a full MITM
+/// bypass.
+pub fn leaf_info(leaf_der: &[u8]) -> Result<(alloc::vec::Vec<u8>, PubkeyAlg), VerifyError> {
+    let leaf = parse_cert(leaf_der)?;
+    let spki = subject_spki_der(&leaf)?;
+    Ok((spki, pubkey_alg(&leaf)))
+}
+
 /// Extract the SubjectPublicKeyInfo encoded as DER from a certificate.
 /// Used by the TLS CertificateVerify path to obtain the peer's pubkey.
 pub fn subject_spki_der(cert: &Certificate) -> Result<Vec<u8>, VerifyError> {
@@ -247,19 +258,14 @@ pub fn verify_chain(
     }
 
     if TRUST_STORE.is_empty() {
-        // Dev mode — record that we skipped root validation but still
-        // return success so the operator can observe behaviour. In prod
-        // the empty store means "no anchors configured, any chain fails".
-        // We pick the former because cert pinning is the actual defence
-        // until operators populate TRUST_STORE.
-        let leaf_spki = match subject_spki_der(&leaf) {
-            Ok(v) => v,
-            Err(e) => return VerifyOutcome::Err(e),
-        };
-        return VerifyOutcome::Ok {
-            pubkey_der: leaf_spki,
-            pubkey_algorithm: pubkey_alg(&leaf),
-        };
+        // V5-CRYPTO-004 / V5-CHAIN-001 fix: empty trust store now returns
+        // UntrustedRoot — the previous "Ok if empty" behaviour made all
+        // of V4's chain validation a no-op on shipped builds because
+        // TRUST_STORE ships empty. The tls.rs caller has a pin-check
+        // fallback that runs on any Err return, preserving the interim
+        // defence. Populate TRUST_STORE with real roots for full chain
+        // enforcement.
+        return VerifyOutcome::Err(VerifyError::UntrustedRoot);
     }
 
     if !trusted {

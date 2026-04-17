@@ -32,6 +32,15 @@ unsafe impl GlobalAlloc for KernelAllocator {
         }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // V5-KMEM-002 fix: zero the chunk before returning it to the
+        // free list so residue (X.509 cert DER, SPKI bytes, TLS
+        // transcript hashes) doesn't linger for the next allocator
+        // client to read. Uses write_volatile so LLVM can't elide.
+        if !ptr.is_null() {
+            for i in 0..layout.size() {
+                core::ptr::write_volatile(ptr.add(i), 0);
+            }
+        }
         if let Some(nn) = core::ptr::NonNull::new(ptr) {
             self.inner.lock().deallocate(nn, layout);
         }

@@ -685,13 +685,31 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                             }
                             crate::net::x509::VerifyOutcome::Err(e) => {
                                 let _ = e;
-                                // Fall back to pin-only defence if chain
-                                // fails for a reason the operator might
-                                // intentionally accept (empty trust store
-                                // in dev is Ok'd by verify_chain itself).
-                                uart::puts("[tls] x509 verify failed — falling to pin check\n");
+                                // V5-CHAIN-001 / V5-CRYPTO-001: even on
+                                // chain failure, ALWAYS extract the leaf
+                                // SPKI so the CertificateVerify step can
+                                // check the peer actually holds the key.
+                                // Before this, fallback paths left
+                                // peer_spki_len=0 and CertificateVerify
+                                // was silently skipped = full MITM bypass.
+                                match crate::net::x509::leaf_info(leaf) {
+                                    Ok((spki, alg)) => {
+                                        sess.peer_spki_len = spki.len().min(sess.peer_spki.len());
+                                        sess.peer_spki[..sess.peer_spki_len]
+                                            .copy_from_slice(&spki[..sess.peer_spki_len]);
+                                        sess.peer_pubkey_alg = alg as u8;
+                                    }
+                                    Err(_) => {
+                                        return Err("TLS: leaf cert unparseable");
+                                    }
+                                }
+                                // V5-WEIRD uart-leak fix: do not distinguish
+                                // x509-fail vs pin-ok via log timing. Same
+                                // single log line for both outcomes.
                                 match crate::net::tls_pinning::check_cert(host, leaf) {
-                                    crate::net::tls_pinning::PinDecision::Match => {}
+                                    crate::net::tls_pinning::PinDecision::Match => {
+                                        tdbg("[tls] leaf accepted (pin)\n");
+                                    }
                                     crate::net::tls_pinning::PinDecision::Mismatch => {
                                         return Err("TLS: cert pin mismatch (MITM?)");
                                     }
@@ -699,7 +717,7 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                                         if crate::net::tls_pinning::STRICT_MODE {
                                             return Err("TLS: no pin / bad chain (strict)");
                                         } else {
-                                            uart::puts("[tls] WARN: cert unverified\n");
+                                            tdbg("[tls] leaf accepted (no pin, non-strict)\n");
                                         }
                                     }
                                 }
@@ -723,7 +741,12 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                         // Transcript hash covers ClientHello..Certificate.
                         let th = transcript.clone().finalize();
                         if sess.peer_spki_len == 0 {
-                            uart::puts("[tls] CertificateVerify without SPKI — skipping\n");
+                            // V5-CRYPTO-001 hardening: fail closed instead
+                            // of silently skipping. If we got here without
+                            // extracting SPKI at the Certificate step,
+                            // something is very wrong (missing Certificate
+                            // message, MITM with crafted ordering).
+                            return Err("TLS: CertificateVerify without peer SPKI");
                         } else {
                             use crate::net::x509::PubkeyAlg;
                             let alg = match sess.peer_pubkey_alg {
@@ -1115,6 +1138,38 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
 
     return Ok(copy_len);
     } // end loop
+}
+
+/// V5-XLAYER-001 fix: reset every TLS_STATES entry (not just the legacy
+/// slot 0) so a cave switch wipes session keys, SPKI, expected_hostname,
+/// and cert-pinning state inherited from a prior tenant. Called from
+/// cave::enter on every switch.
+pub fn reset_all_sessions() {
+    use crate::security::zeroize::zeroize;
+    unsafe {
+        for i in 0..TLS_MAX_PCBS {
+            let s = &mut (*core::ptr::addr_of_mut!(TLS_STATES))[i];
+            s.state = TlsState::Initial;
+            s.client_seq = 0;
+            s.server_seq = 0;
+            s.leftover_len = 0;
+            s.peer_spki_len = 0;
+            s.peer_pubkey_alg = 0;
+            s.expected_hostname_len = 0;
+            zeroize(&mut s.shared_secret);
+            zeroize(&mut s.client_key);
+            zeroize(&mut s.server_key);
+            zeroize(&mut s.our_private);
+            zeroize(&mut s.our_public);
+            zeroize(&mut s.peer_public);
+            zeroize(&mut s.client_iv);
+            zeroize(&mut s.server_iv);
+            zeroize(&mut s.client_random);
+            zeroize(&mut s.server_random);
+            zeroize(&mut s.peer_spki);
+            zeroize(&mut s.expected_hostname);
+        }
+    }
 }
 
 /// Close TLS session.

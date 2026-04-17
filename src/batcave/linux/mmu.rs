@@ -128,11 +128,35 @@ static ACTIVE_WIN_END:   AtomicUsize = AtomicUsize::new(0);
 /// Returns the active cave's user-VA window as (start, end). When no cave
 /// is mounted this returns (0, 0); callers should treat that as "use the
 /// legacy default window" (0x1000..0x4000_0000).
+///
+/// V5-TOCTOU-001 fix: reads a single packed u64 atomic so readers never
+/// see an inconsistent (start, end) pair split across two stores.
 pub fn active_user_window() -> (usize, usize) {
-    (
-        ACTIVE_WIN_START.load(Ord2::Relaxed),
-        ACTIVE_WIN_END.load(Ord2::Relaxed),
-    )
+    let packed = ACTIVE_WIN_PACKED.load(Ord2::Acquire);
+    let start = (packed & 0xFFFF_FFFF) as usize;
+    let end   = ((packed >> 32) & 0xFFFF_FFFF) as usize;
+    (start << 12, end << 12)
+}
+
+// V5-TOCTOU-001: pack start/end (each page-aligned, so fits in 20 bits
+// within a 4 GB address space) into a single 64-bit atomic. Shift-by-12
+// drops the 12 low zero bits so we get ~32 bits of address range each.
+// ACTIVE_WIN_START / ACTIVE_WIN_END kept for backwards-compat callers.
+static ACTIVE_WIN_PACKED: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// V5-WEIRD-008: primary-path flag. Set by the primary busybox/ash
+/// runner so is_user_range can use the legacy [0x1000, 0x4000_0000)
+/// window. When no cave and no primary flag are set, is_user_range
+/// fails closed.
+static ACTIVE_IS_PRIMARY: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+pub fn set_active_primary(v: bool) {
+    ACTIVE_IS_PRIMARY.store(v, core::sync::atomic::Ordering::Release);
+}
+pub fn active_is_primary() -> bool {
+    ACTIVE_IS_PRIMARY.load(core::sync::atomic::Ordering::Acquire)
 }
 
 // Cave-slot bitmap. Bit set = slot in use. CAS-free (we're single-core).
@@ -337,12 +361,21 @@ pub fn switch_to_cave(l1_addr: usize) {
             }
         }
         if start != 0 && extent != 0 {
+            // V5-TOCTOU-001: single-store of the packed (start, end).
+            let end = start.saturating_add(extent);
+            let packed = ((end as u64 >> 12) << 32) | ((start as u64 >> 12) & 0xFFFF_FFFF);
+            ACTIVE_WIN_PACKED.store(packed, Ord2::Release);
+            // Legacy split atomics kept so any stray reader also sees the new value.
             ACTIVE_WIN_START.store(start, Ord2::Release);
-            ACTIVE_WIN_END.store(start.saturating_add(extent), Ord2::Release);
+            ACTIVE_WIN_END.store(end, Ord2::Release);
+            ACTIVE_IS_PRIMARY.store(false, Ord2::Release);
         } else {
-            // Sentinel — no cave window known; uaccess falls back to legacy.
+            ACTIVE_WIN_PACKED.store(0, Ord2::Release);
             ACTIVE_WIN_START.store(0, Ord2::Release);
             ACTIVE_WIN_END.store(0, Ord2::Release);
+            // This switch targeted the primary L1 (no cave slot match).
+            // Let is_user_range use the legacy window in that case.
+            ACTIVE_IS_PRIMARY.store(l1_addr == PRIMARY_L1 && PRIMARY_L1 != 0, Ord2::Release);
         }
     }
 }

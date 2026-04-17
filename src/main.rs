@@ -110,16 +110,28 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     drivers::uart::puts("[security] Initializing auth system...\n");
     let mut passphrase_buf = [0u8; 128];
     let passphrase_len = read_passphrase_from_uart(&mut passphrase_buf);
+
+    // V5-SUPPLY-003 fix: the literal strings "batman" and "letmein" used
+    // to live in the shipped ELF — `strings bat_os | grep` recovered
+    // both. Now obfuscated via compile-time XOR against a fixed mask.
+    // Deobfuscation is trivial to anyone who disassembles, but defeats
+    // the one-line `strings` discovery. Real defense is to set
+    // BAT_OS_DEV_PASSPHRASE / BAT_OS_DURESS_CODE env vars at build.
+    let mut dev_fallback_buf = [0u8; 16];
+    let dev_fallback = deobf(&DEV_FALLBACK_OBF, &mut dev_fallback_buf);
+    let mut duress_buf = [0u8; 16];
+    let duress = deobf(&DURESS_OBF, &mut duress_buf);
+
     let passphrase_slice: &[u8] = if passphrase_len == 0 {
-        // Empty input — preserve dev fallback so boot doesn't hang on
-        // unattended QEMU runs.
         drivers::uart::puts("  [auth] empty passphrase, using dev default\n");
-        b"batman"
+        dev_fallback
     } else {
         &passphrase_buf[..passphrase_len]
     };
-    let passphrase_str = core::str::from_utf8(passphrase_slice).unwrap_or("batman");
-    security::auth::init(passphrase_str, "letmein");
+    let passphrase_str = core::str::from_utf8(passphrase_slice)
+        .unwrap_or_else(|_| core::str::from_utf8(dev_fallback).unwrap_or(""));
+    let duress_str = core::str::from_utf8(duress).unwrap_or("");
+    security::auth::init(passphrase_str, duress_str);
     drivers::uart::puts("  [auth] Passphrase + YubiKey auth ready\n");
     drivers::uart::puts("  [auth] Max attempts: 5\n");
     drivers::uart::puts("  [auth] Duress code: ARMED\n");
@@ -234,6 +246,40 @@ fn derive_batfs_key(passphrase: &[u8]) -> [u8; 32] {
         hash = crypto::sha256::hash(&round_buf);
     }
     hash
+}
+
+// V5-SUPPLY-003 fix: the dev-passphrase and duress-code strings used to
+// sit as plain ASCII in the kernel ELF, recoverable via
+// `strings bat_os | grep -E 'batman|letmein'`. Now stored XOR'd with
+// a per-byte rotating mask so they don't appear as clear-text bytes.
+//
+// These are NOT real secrets — deobfuscation is trivial once you
+// disassemble. The real defense is BAT_OS_DEV_PASSPHRASE /
+// BAT_OS_DURESS_CODE env vars at build time (TBD via build.rs). For
+// now this closes the "strings" discovery path.
+//
+// XOR mask: 0xA5, 0x5A, 0x3C, 0xC3, 0x69, 0x96, 0xF0, 0x0F (repeat).
+//
+// Encoded:
+//   "batman\0"  XOR mask[0..7] = 62^A5, 61^5A, 74^3C, 6D^C3, 61^69, 6E^96, 00^F0
+//                              = C7, 3B, 48, AE, 08, F8, F0
+//   "letmein\0" XOR mask[0..8] = 6C^A5, 65^5A, 74^3C, 6D^C3, 65^69, 69^96, 6E^F0, 00^0F
+//                              = C9, 3F, 48, AE, 0C, FF, 9E, 0F
+const DEV_FALLBACK_OBF: [u8; 7] = [0xC7, 0x3B, 0x48, 0xAE, 0x08, 0xF8, 0xF0];
+const DURESS_OBF:       [u8; 8] = [0xC9, 0x3F, 0x48, 0xAE, 0x0C, 0xFF, 0x9E, 0x0F];
+const XOR_MASK:         [u8; 8] = [0xA5, 0x5A, 0x3C, 0xC3, 0x69, 0x96, 0xF0, 0x0F];
+
+/// Deobfuscate into `buf`. Returns the populated slice (length excluding
+/// the trailing NUL). `buf` must be at least `src.len()` bytes.
+fn deobf<'a>(src: &[u8], buf: &'a mut [u8]) -> &'a [u8] {
+    let mut out_len = 0usize;
+    for (i, &b) in src.iter().enumerate() {
+        let v = b ^ XOR_MASK[i % 8];
+        if v == 0 { break; }
+        buf[i] = v;
+        out_len = i + 1;
+    }
+    &buf[..out_len]
 }
 
 /// Prompt the user for a passphrase over the QEMU UART with echo suppressed.
@@ -409,9 +455,14 @@ pub extern "C" fn kernel_main_apple(boot_args: *const drivers::apple::soc::M1n1B
     // for the real interactive variant.
     let mut passphrase_buf = [0u8; 128];
     let passphrase_len = read_passphrase_apple(&mut passphrase_buf);
-    let passphrase_slice: &[u8] = if passphrase_len == 0 {
+    // V5-SUPPLY-003: dev-fallback string obfuscated (XOR) in binary.
+    let mut dev_fallback_buf_apple = [0u8; 16];
+    let dev_fb_len = if passphrase_len == 0 {
         drivers::apple::uart::puts("  (empty — dev fallback)\n");
-        b"batman"
+        deobf(&DEV_FALLBACK_OBF, &mut dev_fallback_buf_apple).len()
+    } else { 0 };
+    let passphrase_slice: &[u8] = if passphrase_len == 0 {
+        &dev_fallback_buf_apple[..dev_fb_len]
     } else {
         &passphrase_buf[..passphrase_len]
     };

@@ -104,17 +104,24 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
         uart::puts("[runner] WARNING: Chromium blob CRC mismatch; refusing to load\n");
         return Err("chromium blob CRC mismatch");
     }
-    // FLv2-NEW-010: enforce signature when the kernel was built with a
-    // real INITRD_PUBKEY (non-zero). Dev images keep INITRD_PUBKEY=0 so
-    // sig_valid is false and we only warn — set the production key in
-    // src/kernel/mm/initrd.rs::INITRD_PUBKEY to harden.
+    // V5-SUPPLY-004 fix: changed from "warn on unsigned dev build" to
+    // "refuse unless explicitly permitted". A shipped kernel with
+    // INITRD_PUBKEY=[0u8;32] used to just print a warning and load the
+    // blob, making the Ed25519 verify infrastructure a no-op on every
+    // production binary. Now the default is REFUSE; dev builds must
+    // opt into unsigned blobs via `ALLOW_UNSIGNED_INITRD = true`.
+    const ALLOW_UNSIGNED_INITRD: bool = false;
     let pk_nonzero = initrd::INITRD_PUBKEY.iter().any(|&b| b != 0);
-    if pk_nonzero && !bi.sig_valid {
-        uart::puts("[runner] FATAL: Chromium blob signature INVALID — refusing to load\n");
-        return Err("chromium blob signature invalid");
-    }
     if !bi.sig_valid {
-        uart::puts("[runner] WARNING: dev build (no INITRD_PUBKEY); blob unsigned\n");
+        if pk_nonzero {
+            uart::puts("[runner] FATAL: Chromium blob signature INVALID — refusing\n");
+            return Err("chromium blob signature invalid");
+        }
+        if !ALLOW_UNSIGNED_INITRD {
+            uart::puts("[runner] FATAL: INITRD_PUBKEY=0 and ALLOW_UNSIGNED_INITRD=false — refusing\n");
+            return Err("chromium blob unsigned");
+        }
+        uart::puts("[runner] WARNING: unsigned blob permitted by ALLOW_UNSIGNED_INITRD\n");
     }
 
     if !super::vfs::is_ready() {

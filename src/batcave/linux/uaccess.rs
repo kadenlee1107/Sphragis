@@ -41,7 +41,9 @@ const USER_MAX: usize = 0x4000_0000;      // below kernel RAM identity map
 /// to enforce.
 #[inline]
 pub fn is_user_range(p: usize, size: usize) -> bool {
-    if size == 0 { return true; }
+    // V5-WEIRD-008 hardening: zero-sized must still require a non-null
+    // pointer (callers rely on "valid user ptr" for non-zero-byte uses).
+    if size == 0 { return p >= USER_MIN && p < USER_MAX; }
     let end = match p.checked_add(size) {
         Some(e) => e,
         None => return false,
@@ -49,9 +51,19 @@ pub fn is_user_range(p: usize, size: usize) -> bool {
     let (active_start, active_end) =
         crate::batcave::linux::mmu::active_user_window();
     if active_start != 0 && active_end != 0 {
+        // Active cave window — the tight check wins.
         return p >= active_start && end <= active_end;
     }
-    p >= USER_MIN && end <= USER_MAX
+    // V5-WEIRD-008: no active cave means we're either in kernel context
+    // (early boot, IRQ handler) or in the primary/ash path. In kernel
+    // context there are no user pointers — safest is to reject. But
+    // sys_write + ash path legitimately pass primary-side pointers in
+    // [0x0, 0x14000000). We distinguish via a new ACTIVE_PRIMARY flag
+    // that the primary runner sets; otherwise fail closed.
+    if crate::batcave::linux::mmu::active_is_primary() {
+        return p >= USER_MIN && end <= USER_MAX;
+    }
+    false
 }
 
 /// Copy a single `T` from user space, byte-wise via volatile reads.
