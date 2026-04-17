@@ -177,7 +177,14 @@ fn session_ref(id: usize) -> &'static TlsSession {
 fn SESSION_ptr() -> *mut TlsSession { session_mut(LEGACY_TLS_PCB) as *mut _ }
 
 /// Build a TLS 1.3 ClientHello message.
+///
+/// V8-ROOT-1 / V8-IRQ-#12: random + X25519 keypair + ClientHello write
+/// + session-state init are one critical section. Without IRQ mask, a
+/// timer preempt mid-init lets a concurrent recv_app_data observe a
+/// half-initialized session (state=Initial but client_random already
+/// fresh) and could make decisions on it.
 pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
+    let _g = crate::kernel::sync::IrqGuard::new();
     let sess = session_mut(LEGACY_TLS_PCB);
     sess.state = TlsState::Initial;
     sess.client_seq = 0;

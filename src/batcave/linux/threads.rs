@@ -356,17 +356,20 @@ pub fn clone(flags: u64,
         return EINVAL;
     }
 
-    // Quota check — reserve a thread slot + (if we're going to allocate one)
-    // the stack pages.  We charge mem FIRST so a cave that is already at its
-    // mem cap gets a clean -ENOMEM before we touch the frame allocator.
-    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Threads, 1) {
-        return e;
-    }
-    if child_stack == 0 {
-        let bytes = DEFAULT_STACK_PAGES * PAGE_SIZE;
-        if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Mem, bytes) {
-            super::quotas::refund_active(super::quotas::Resource::Threads, 1);
+    // V8-ROOT-1 / V8-IRQ-#3: charge-Threads + charge-Mem must be atomic
+    // w.r.t. preempt — otherwise a racing syscall could see Threads
+    // charged but Mem not (or vice versa) and the refund-on-error
+    // path could leave one ledger drifted.
+    crate::critical_section! {
+        if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Threads, 1) {
             return e;
+        }
+        if child_stack == 0 {
+            let bytes = DEFAULT_STACK_PAGES * PAGE_SIZE;
+            if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Mem, bytes) {
+                super::quotas::refund_active(super::quotas::Resource::Threads, 1);
+                return e;
+            }
         }
     }
 
@@ -389,7 +392,13 @@ pub fn clone(flags: u64,
         }
     };
 
-    // Write PARENT_SETTID before child could possibly observe it.
+    // V8-ROOT-1 / V8-IRQ-#3: PARENT_SETTID write + slot allocation +
+    // slot population is one critical section. A timer IRQ between any
+    // of these could schedule the child before its slot is fully set
+    // up (state=Runnable while stack_top still 0 → cxt_switch into a
+    // null-pointer SP).
+    let _g = crate::kernel::sync::IrqGuard::new();
+
     if flags & CLONE_PARENT_SETTID != 0 && !parent_tid.is_null() {
         unsafe { core::ptr::write_volatile(parent_tid, new_tid as i32); }
     }
@@ -579,43 +588,48 @@ pub fn schedule() {
     if !is_enabled() { return; }
     let me = current_tid();
 
-    let next_tid_opt = with_table(|t| -> Option<u32> {
-        let cur_idx = slot_of(t, me)?;
-        // Demote current: Running -> Runnable (unless already Blocked/Exited).
-        if t[cur_idx].state == ThreadState::Running {
-            t[cur_idx].state = ThreadState::Runnable;
-        }
-        // Round-robin from cur_idx+1.
-        for step in 1..=MAX_THREADS {
-            let i = (cur_idx + step) % MAX_THREADS;
-            if t[i].state == ThreadState::Runnable {
-                t[i].state = ThreadState::Running;
-                return Some(t[i].tid);
+    // V8-ROOT-1 / V8-IRQ-#10: pick-next + RUNNING_TID-store + obtain
+    // SavedRegs pointers must be one critical section. Two separate
+    // with_table calls let an IRQ between them retire the picked
+    // thread (e.g. exit_current → state=Exited), and the second
+    // with_table reads stale SavedRegs.
+    //
+    // The ASM `cxt_switch_cooperative` itself does NOT need IRQs masked
+    // — it's a save-restore that must be allowed to be preempted (the
+    // newly-restored thread can take an interrupt at any instruction).
+    // So we drop the guard immediately before the call.
+    let (next_tid, old_ptr, new_ptr) = {
+        let _g = crate::kernel::sync::IrqGuard::new();
+        let next_tid_opt = with_table(|t| -> Option<u32> {
+            let cur_idx = slot_of(t, me)?;
+            if t[cur_idx].state == ThreadState::Running {
+                t[cur_idx].state = ThreadState::Runnable;
             }
-        }
-        // Nothing else runnable — keep running if we were, else idle.
-        if t[cur_idx].state == ThreadState::Runnable {
-            t[cur_idx].state = ThreadState::Running;
-        }
-        None
-    });
-
-    let Some(next_tid) = next_tid_opt else { return; };
-    if next_tid == me { return; }
-    RUNNING_TID.store(next_tid, Ordering::Release);
-
-    // Call into assembly to do the actual register swap.
-    // cxt_switch_cooperative saves x19-x30 + sp + tpidr_el0 of the current
-    // thread into *old, then restores the same from *new. It returns when
-    // the caller's thread is rescheduled later.
-    let (old_ptr, new_ptr) = with_table(|t| -> (*mut SavedRegs, *const SavedRegs) {
-        let old_idx = slot_of(t, me).unwrap_or(0);
-        let new_idx = slot_of(t, next_tid).unwrap_or(0);
-        let old = &mut t[old_idx].saved_regs as *mut SavedRegs;
-        let new = &t[new_idx].saved_regs as *const SavedRegs;
-        (old, new)
-    });
-
+            for step in 1..=MAX_THREADS {
+                let i = (cur_idx + step) % MAX_THREADS;
+                if t[i].state == ThreadState::Runnable {
+                    t[i].state = ThreadState::Running;
+                    return Some(t[i].tid);
+                }
+            }
+            if t[cur_idx].state == ThreadState::Runnable {
+                t[cur_idx].state = ThreadState::Running;
+            }
+            None
+        });
+        let Some(next_tid) = next_tid_opt else { return; };
+        if next_tid == me { return; }
+        RUNNING_TID.store(next_tid, Ordering::Release);
+        let (op, np) = with_table(|t| -> (*mut SavedRegs, *const SavedRegs) {
+            let old_idx = slot_of(t, me).unwrap_or(0);
+            let new_idx = slot_of(t, next_tid).unwrap_or(0);
+            let old = &mut t[old_idx].saved_regs as *mut SavedRegs;
+            let new = &t[new_idx].saved_regs as *const SavedRegs;
+            (old, new)
+        });
+        (next_tid, op, np)
+    };
+    let _ = next_tid;
     unsafe { cxt_switch_cooperative(old_ptr, new_ptr); }
 }
 

@@ -23,8 +23,13 @@ linked_list_allocator = { version = "0.10", default-features = false, features =
 
 [profile.dev]
 panic = "abort"
+overflow-checks = true        # V8-ROOT-3 / V8-SUPPLY-2: catch unchecked arithmetic
 
 [profile.release]
 panic = "abort"
 opt-level = 2
 lto = true
+codegen-units = 1             # V8-SUPPLY-2: deterministic builds
+overflow-checks = true        # V8-ROOT-3: keep the panic-on-wrap in release
+debug = false                 # V8-SUPPLY-7: do not ship debug info
+strip = true                  # V8-SUPPLY-7: do not ship symbols

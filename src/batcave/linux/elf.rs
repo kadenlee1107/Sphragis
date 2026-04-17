@@ -134,26 +134,44 @@ pub fn load(data: &[u8]) -> Result<LoadedElf, &'static str> {
     let ph_size = header.e_phentsize as usize;
     let ph_num = header.e_phnum as usize;
 
+    // V8-ROOT-3 / V8-PARSER-ROOT-2 / V8-ARITH-A3: backport the loader.rs
+    // bounds discipline to this alt loader. phoff + i*ph_size wraps for
+    // hostile inputs; we enforce checked arithmetic.
+    if ph_size == 0 || ph_size > 4096 || ph_num > 1024 {
+        return Err("ELF program-header table implausible");
+    }
+    let ph_table_bytes = match ph_num.checked_mul(ph_size) {
+        Some(b) => b,
+        None => return Err("ELF ph_num * ph_size overflow"),
+    };
+    let ph_table_end = match ph_offset.checked_add(ph_table_bytes) {
+        Some(e) => e,
+        None => return Err("ELF phoff overflow"),
+    };
+    if ph_table_end > data.len() {
+        return Err("ELF phdr table past file end");
+    }
+
     let mut interp: Option<InterpPath> = None;
     let mut brk_end: u64 = 0;
     let mut phdr_addr: u64 = 0;
 
     // First pass: find interpreter and calculate memory needs
     for i in 0..ph_num {
-        let ph_start = ph_offset + i * ph_size;
-        if ph_start + ph_size > data.len() { break; }
+        let ph_start = ph_offset + i * ph_size; // bounded above
 
         let phdr = unsafe { &*(data[ph_start..].as_ptr() as *const Elf64Phdr) };
 
         match phdr.p_type {
             PT_INTERP => {
-                // Read dynamic linker path
                 let path_start = phdr.p_offset as usize;
                 let path_len = (phdr.p_filesz as usize).min(255);
-                if path_start + path_len <= data.len() {
+                let path_end = match path_start.checked_add(path_len) {
+                    Some(e) => e, None => continue,
+                };
+                if path_end <= data.len() {
                     let mut ip = InterpPath { path: [0; 256], len: path_len };
-                    ip.path[..path_len].copy_from_slice(&data[path_start..path_start + path_len]);
-                    // Remove null terminator
+                    ip.path[..path_len].copy_from_slice(&data[path_start..path_end]);
                     if path_len > 0 && ip.path[path_len - 1] == 0 {
                         ip.len = path_len - 1;
                     }
@@ -161,13 +179,17 @@ pub fn load(data: &[u8]) -> Result<LoadedElf, &'static str> {
                 }
             }
             PT_LOAD => {
-                let seg_end = phdr.p_vaddr + phdr.p_memsz;
+                let seg_end = match phdr.p_vaddr.checked_add(phdr.p_memsz) {
+                    Some(e) => e, None => return Err("PT_LOAD vaddr+memsz overflow"),
+                };
                 if seg_end > brk_end {
                     brk_end = seg_end;
                 }
             }
             PT_PHDR => {
-                phdr_addr = base + phdr.p_vaddr;
+                phdr_addr = match base.checked_add(phdr.p_vaddr) {
+                    Some(a) => a, None => return Err("PT_PHDR base+vaddr overflow"),
+                };
             }
             _ => {}
         }
@@ -176,20 +198,27 @@ pub fn load(data: &[u8]) -> Result<LoadedElf, &'static str> {
     // Second pass: load PT_LOAD segments into memory
     for i in 0..ph_num {
         let ph_start = ph_offset + i * ph_size;
-        if ph_start + ph_size > data.len() { break; }
 
         let phdr = unsafe { &*(data[ph_start..].as_ptr() as *const Elf64Phdr) };
 
         if phdr.p_type != PT_LOAD { continue; }
 
-        let vaddr = (base + phdr.p_vaddr) as usize;
+        let vaddr_full = match base.checked_add(phdr.p_vaddr) {
+            Some(v) => v, None => return Err("PT_LOAD base+vaddr overflow"),
+        };
+        let vaddr = vaddr_full as usize;
         let memsz = phdr.p_memsz as usize;
         let filesz = phdr.p_filesz as usize;
         let file_offset = phdr.p_offset as usize;
 
         // Allocate pages for this segment
         let page_start = vaddr & !(PAGE_SIZE - 1);
-        let page_end = (vaddr + memsz + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+        let mem_top = match vaddr.checked_add(memsz)
+            .and_then(|s| s.checked_add(PAGE_SIZE - 1))
+        {
+            Some(t) => t, None => return Err("PT_LOAD page-end overflow"),
+        };
+        let page_end = mem_top & !(PAGE_SIZE - 1);
         let num_pages = (page_end - page_start) / PAGE_SIZE;
 
         for p in 0..num_pages {
@@ -199,8 +228,14 @@ pub fn load(data: &[u8]) -> Result<LoadedElf, &'static str> {
             let _frame = frame::alloc_frame().ok_or("out of memory loading ELF")?;
         }
 
-        // Copy file data to memory
-        if filesz > 0 && file_offset + filesz <= data.len() {
+        // V8-ROOT-3: file_offset + filesz unchecked add wraps for hostile
+        // inputs. Use checked add and require both that it fits in usize
+        // AND that the resulting end is in-bounds.
+        let file_end_ok = match file_offset.checked_add(filesz) {
+            Some(e) => e <= data.len(),
+            None => false,
+        };
+        if filesz > 0 && file_end_ok {
             unsafe {
                 let src = data[file_offset..].as_ptr();
                 let dst = vaddr as *mut u8;

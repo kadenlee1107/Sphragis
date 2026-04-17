@@ -339,7 +339,14 @@ fn sys_nanosleep(args: [u64; 6]) -> i64 {
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
     }
 
-    let target_ticks = tv_sec * freq + tv_nsec * freq / 1_000_000_000;
+    // V8-ROOT-3 / V8-ARITH-A1: tv_sec * freq overflows for tv_sec > ~2^28
+    // on a typical 50MHz timer. Cap the requested sleep to 1 hour worth
+    // of ticks so an attacker can't trigger panic-on-overflow (now that
+    // overflow-checks=true) or a wraparound that returns immediately.
+    let secs_capped  = tv_sec.min(3600);
+    let nsecs_capped = tv_nsec.min(999_999_999);
+    let target_ticks = secs_capped.saturating_mul(freq)
+        .saturating_add(nsecs_capped.saturating_mul(freq) / 1_000_000_000);
 
     // NEW-DOS-010/014/016/019 fix: yield to the scheduler instead of burning
     // CPU in a spin-loop. A cave that nanosleep()s for 30 s used to pin the
@@ -827,17 +834,20 @@ static mut PROC_FD_LENS: [usize; 16] = [0; 16];
 static mut PROC_FD_POS: [usize; 16] = [0; 16];
 
 fn sys_openat(args: [u64; 6]) -> i64 {
-    // ROOT-6: per-cave fd quota. Charge up front; refund if we end up
-    // returning a negative errno (any path that doesn't hand back an fd).
-    if let Err(e) = super::quotas::charge_active(
-            super::quotas::Resource::Fds, 1) {
-        return e;
+    // V8-ROOT-1 (re-audit follow-up): wrap charge+inner+refund in CS so
+    // a preempt between charge and inner can't race a concurrent fd op.
+    // sys_openat_inner is mostly local + VFS lookups, no schedule().
+    crate::critical_section! {
+        if let Err(e) = super::quotas::charge_active(
+                super::quotas::Resource::Fds, 1) {
+            return e;
+        }
+        let result = sys_openat_inner(args);
+        if result < 0 {
+            super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+        }
+        result
     }
-    let result = sys_openat_inner(args);
-    if result < 0 {
-        super::quotas::refund_active(super::quotas::Resource::Fds, 1);
-    }
-    result
 }
 
 fn sys_openat_inner(args: [u64; 6]) -> i64 {
@@ -1285,9 +1295,18 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         return addr as i64;
     }
 
-    // Allocate contiguous pages from the frame allocator
-    let pages = (len + 4095) / 4096;
-    let charge_bytes = pages * 4096;
+    // V8-ROOT-3 / V8-ARITH-A2: `len + 4095` wraps for len > usize::MAX-4094,
+    // landing pages = 0 and charge_bytes = 0 → cave gets a 1-frame
+    // allocation whose VA range claims to cover ~16 EB of user memory.
+    // Use checked_add so any overflow returns -ENOMEM cleanly.
+    let pages = match len.checked_add(4095) {
+        Some(s) => s / 4096,
+        None => return ENOMEM,
+    };
+    let charge_bytes = match pages.checked_mul(4096) {
+        Some(b) => b,
+        None => return ENOMEM,
+    };
 
     // ROOT-6 quota check — before we touch the frame allocator, make sure
     // this cave isn't already at its per-cave memory cap. -ENOMEM matches
@@ -3405,28 +3424,29 @@ fn sys_shmget(args: [u64; 6]) -> i64 {
 /// including ones with no `mem` cap — could spam memfd_create past their
 /// fd cap and never be charged.
 fn sys_memfd_create(_args: [u64; 6]) -> i64 {
-    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 1) {
-        return e;
-    }
-    let result: i64 = if vfs::is_ready() {
-        if let Some(tmp) = vfs::find_child(0, b"tmp") {
-            if let Ok(node_idx) = vfs::create_node(tmp, b"memfd", vfs::NodeType::File, 0o100666) {
-                match fd::alloc_fd(node_idx, 0) {
-                    Ok(fdi) => fdi as i64,
-                    Err(e) => e,
-                }
+    // V8-ROOT-1: charge → alloc → refund-on-err is one CS.
+    crate::critical_section! {
+        if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 1) {
+            return e;
+        }
+        let result: i64 = if vfs::is_ready() {
+            if let Some(tmp) = vfs::find_child(0, b"tmp") {
+                if let Ok(node_idx) = vfs::create_node(tmp, b"memfd", vfs::NodeType::File, 0o100666) {
+                    match fd::alloc_fd(node_idx, 0) {
+                        Ok(fdi) => fdi as i64,
+                        Err(e) => e,
+                    }
+                } else { ENOMEM }
             } else { ENOMEM }
-        } else { ENOMEM }
-    } else {
-        // Fallback pseudo-fd path; refund on this branch since we never
-        // actually consumed an fd-table slot.
-        super::quotas::refund_active(super::quotas::Resource::Fds, 1);
-        return 30;
-    };
-    if result < 0 {
-        super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+        } else {
+            super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+            return 30;
+        };
+        if result < 0 {
+            super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+        }
+        result
     }
-    result
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

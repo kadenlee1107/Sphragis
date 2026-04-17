@@ -460,35 +460,43 @@ fn resolve_path_depth(path: &[u8], depth: usize) -> Result<u16, i64> {
         // Look up child
         match find_child(current, component) {
             Some(child) => {
-                // Follow symlinks
-                unsafe {
-                    let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
-                    let nodes = &(*core::ptr::addr_of!(INSTANCES))[ai].nodes;
-                    if nodes[child as usize].node_type == NodeType::Symlink {
-                        let target = &nodes[child as usize].link_target[..nodes[child as usize].link_len];
-                        // FLv2-NEW-013: refuse to resolve a symlink whose
-                        // target contains a `..` component. Without this,
-                        // a cave that controls symlink creation could
-                        // escape its sandbox via /sandbox/link → "../etc"
-                        // even after the openat-time `..` guard cleared.
-                        if has_dotdot_bytes(target) {
-                            return Err(-13); // EACCES
-                        }
-                        // If more path remains, resolve symlink then continue
-                        if i < len {
-                            // Build: symlink_target + "/" + remaining_path
-                            let mut combined = [0u8; 256];
-                            let mut clen = 0;
-                            for &b in target { if clen < 255 { combined[clen] = b; clen += 1; } }
-                            if clen < 255 { combined[clen] = b'/'; clen += 1; }
-                            for j in i..len { if clen < 255 { combined[clen] = path[j]; clen += 1; } }
-                            return resolve_path_depth(&combined[..clen], depth + 1);
+                // V8-ROOT-1 / V8-IRQ-#11 / V8-WEIRD: copy the symlink
+                // target into a stack buffer under IRQ-mask so a
+                // concurrent unlink+recreate can't swap the target
+                // between has_dotdot_bytes() and the recursive resolve.
+                let (is_symlink, target_buf, target_len) = {
+                    let _g = crate::kernel::sync::IrqGuard::new();
+                    unsafe {
+                        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+                        let nodes = &(*core::ptr::addr_of!(INSTANCES))[ai].nodes;
+                        let n = &nodes[child as usize];
+                        if n.node_type == NodeType::Symlink {
+                            let mut buf = [0u8; 256];
+                            let len = n.link_len.min(256);
+                            buf[..len].copy_from_slice(&n.link_target[..len]);
+                            (true, buf, len)
                         } else {
-                            // Terminal symlink — resolve the target
-                            let resolved = resolve_path_depth(target, depth + 1)?;
-                            current = resolved;
-                            continue;
+                            (false, [0u8; 256], 0)
                         }
+                    }
+                };
+                if is_symlink {
+                    let target = &target_buf[..target_len];
+                    // FLv2-NEW-013: refuse `..` in symlink target.
+                    if has_dotdot_bytes(target) {
+                        return Err(-13); // EACCES
+                    }
+                    if i < len {
+                        let mut combined = [0u8; 256];
+                        let mut clen = 0;
+                        for &b in target { if clen < 255 { combined[clen] = b; clen += 1; } }
+                        if clen < 255 { combined[clen] = b'/'; clen += 1; }
+                        for j in i..len { if clen < 255 { combined[clen] = path[j]; clen += 1; } }
+                        return resolve_path_depth(&combined[..clen], depth + 1);
+                    } else {
+                        let resolved = resolve_path_depth(target, depth + 1)?;
+                        current = resolved;
+                        continue;
                     }
                 }
                 current = child;
