@@ -397,32 +397,30 @@ pub fn stop(name: &str) -> Result<(), &'static str> {
 /// it. Same for TLS session keys on PCBs the previous tenant opened.
 pub fn enter(name: &str) -> Result<(), &'static str> {
     start(name)?;
-    // Find cave index and set as active
     if let Some(id) = find_id(name) {
-        // V6-TOCTOU-005 fix: ORDER MATTERS. The V5 code did
-        //   reset_cave_statics(); reset_all_sessions(); set_active(id);
-        // which meant during the resets, get_active() still returned
-        // the OUTGOING cave id, and any concurrent syscall in the old
-        // cave (a thread mid-syscall when enter() fired) read its own
-        // state being zeroed underneath it.
+        // V8-ROOT-1 fix: the entire park→reset→activate sequence is a
+        // single critical section. V6's deferred-preempt scheduler could
+        // fire a timer IRQ between any two steps here, letting another
+        // thread observe partially-reset tables (xlayer-D: pointer
+        // validated against dying cave's VA) or a sentinel `active==MAX`
+        // state where quota charges silently no-op.
         //
-        // New ordering: stop the old cave first by parking active to
-        // sentinel, then reset, then activate new. Between sentinel
-        // and activate any racing syscall sees no active cave (which
-        // capability checks will deny).
+        // vfs::init_for_cave is the ONLY call inside the CS that might
+        // allocate (heap). That's fine because the heap allocator itself
+        // masks DAIF.I (V6-TOCTOU-007) and IrqGuard is nestable.
         let prev_active = get_active();
-        if prev_active != usize::MAX {
-            set_active(usize::MAX);
+        crate::critical_section! {
+            if prev_active != usize::MAX {
+                set_active(usize::MAX);
+            }
+            crate::batcave::linux::syscall::reset_cave_statics();
+            crate::net::tls::reset_all_sessions();
+            crate::batcave::linux::fd::reset_for_cave_switch();
+            crate::batcave::linux::sockets::reset_for_cave_switch();
+            crate::net::tcp::reset_for_cave_switch();
+            set_active(id);
+            crate::batcave::linux::vfs::init_for_cave(id);
         }
-        crate::batcave::linux::syscall::reset_cave_statics();
-        crate::net::tls::reset_all_sessions();
-        // V6-XLAYER-005/006: also reset the global tables that V5 missed.
-        crate::batcave::linux::fd::reset_for_cave_switch();
-        crate::batcave::linux::sockets::reset_for_cave_switch();
-        crate::net::tcp::reset_for_cave_switch();
-        set_active(id);
-        // Initialize an isolated VFS for this cave (if not already done)
-        crate::batcave::linux::vfs::init_for_cave(id);
         let _ = prev_active;
     }
     Ok(())
@@ -465,6 +463,15 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
     // find_id() filters out Free caves and the original V5 code did
     // the lookup AFTER setting state=Free → quotas::reset was dead.
     let cave_id_for_reset = find_id(name);
+
+    // V8-ROOT-1 fix: the entire destroy sequence — active-deactivate,
+    // VFS tear-down, fs_key zero, tool/cap clear, state=Free, stats
+    // decrement, static-mut reset, quota reset — is one critical
+    // section. IRQ audit #2: if a thread in the destroyed cave resumes
+    // mid-destroy it sees `fs_key=[0;32]` and encrypts/decrypts with
+    // a zero key (AES-GCM keystream = AES(0, counter) — deterministic,
+    // recoverable).
+    let _irq_guard = crate::kernel::sync::IrqGuard::new();
 
     // Wipe the cave's VFS instance (filesystem data)
     if let Some(id) = cave_id_for_reset {

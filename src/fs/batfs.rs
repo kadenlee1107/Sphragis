@@ -149,31 +149,34 @@ pub fn verify_all_integrity() -> bool {
 /// counter itself still restarts at 1; prefix + counter is the full
 /// unique value.
 pub fn init(master_key: &[u8; 32]) {
-    // V6-TOCTOU-010 fix: the old init sequence set BOOT_NONCE_PREFIX
-    // then released NONCE_COUNTER. A racing call to init() from a
-    // different code path (cave-switch re-init path) could observe
-    // a torn state: new prefix paired with stale counter, leading to
-    // (key, nonce) reuse across boots. We now order the writes with
-    // explicit fences and guard against re-init with INITIALIZED.
-    use core::sync::atomic::{Ordering, compiler_fence};
+    // V8-ROOT-1: atomic check-then-set of INITIALIZED + publishing of
+    // MASTER_KEY + BOOT_NONCE_PREFIX + NONCE_COUNTER is one critical
+    // section. V6's fence-only approach still allowed two concurrent
+    // init() calls to pass the INITIALIZED check and clobber each
+    // other's prefix+counter → (key, nonce) reuse across boots →
+    // keystream recovery on recurring filenames.
+    use core::sync::atomic::Ordering;
 
-    unsafe {
-        if INITIALIZED {
-            // Safety: re-init without wipe would cause keystream reuse
-            // against existing file nonces. Refuse.
-            return;
+    crate::critical_section! {
+        unsafe {
+            if INITIALIZED {
+                // Re-init without wipe would cause keystream reuse
+                // against existing file nonces. Refuse.
+                return;
+            }
+            MASTER_KEY = *master_key;
+            FILE_COUNT = 0;
+            let mut rnd = [0u8; 4];
+            crate::crypto::rng::fill_bytes(&mut rnd);
+            BOOT_NONCE_PREFIX = rnd;
+            // V8 fix: publish counter BEFORE flipping INITIALIZED so any
+            // reader that sees INITIALIZED=true (with Acquire) observes a
+            // consistent (prefix, counter). Readers on the Relaxed side
+            // are now also safe because IRQ is masked.
+            NONCE_COUNTER.store(1, Ordering::Release);
+            INITIALIZED = true;
         }
-        MASTER_KEY = *master_key;
-        FILE_COUNT = 0;
-        let mut rnd = [0u8; 4];
-        crate::crypto::rng::fill_bytes(&mut rnd);
-        BOOT_NONCE_PREFIX = rnd;
     }
-    // Publish the counter BEFORE flipping INITIALIZED — any reader that
-    // sees INITIALIZED=true then observes a consistent (prefix, counter).
-    NONCE_COUNTER.store(1, Ordering::Release);
-    compiler_fence(Ordering::SeqCst);
-    unsafe { INITIALIZED = true; }
 }
 
 fn next_nonce() -> [u8; 12] {

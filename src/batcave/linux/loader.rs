@@ -762,6 +762,15 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     //
     // V2-NEW-017 / ESC-018: previously a raw `br {entry}` at EL1 left
     // busybox / hello running with kernel privilege.
+    //
+    // V8-ROOT-1 (IRQ audit #5): IRQ-mask the prologue. Without this,
+    // a timer IRQ between the msr sp_el0 / elr_el1 / spsr_el1 sequence
+    // can take the exception, run handle_irq (which may call schedule),
+    // and on return restore EL1 SAVED_REGS which clobbers our half-
+    // written SPSR — eret then delivers to EL1 instead of EL0. SPSR
+    // = xzr means PSTATE.I = 0 on the new EL0 thread (interrupts
+    // unmasked), which is correct.
+    let _g = crate::kernel::sync::IrqGuard::new();
     unsafe {
         core::arch::asm!(
             "msr sp_el0, {usp}",

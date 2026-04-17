@@ -2036,17 +2036,20 @@ fn sys_ppoll(args: [u64; 6]) -> i64 {
 
 fn sys_dup(args: [u64; 6]) -> i64 {
     let old_fd = args[0] as u32;
-    // NEW-DOS-002: dup was previously free — it allocates a new fd entry
-    // but never touched the Fds counter, so a cave could spin dup() and
-    // blow past its cap. Charge one Fd up-front and refund on dup failure.
-    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 1) {
-        return e;
-    }
-    match fd::dup(old_fd) {
-        Ok(new_fd) => new_fd as i64,
-        Err(e) => {
-            super::quotas::refund_active(super::quotas::Resource::Fds, 1);
-            e
+    // V8-ROOT-1: charge → alloc → (refund on error) is atomic w.r.t.
+    // IRQ. Previously a timer IRQ between charge and alloc (or between
+    // alloc failure and refund) could race a concurrent fd op and
+    // observe an inflated-but-uncommitted quota.
+    crate::critical_section! {
+        if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 1) {
+            return e;
+        }
+        match fd::dup(old_fd) {
+            Ok(new_fd) => new_fd as i64,
+            Err(e) => {
+                super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+                e
+            }
         }
     }
 }
@@ -2054,18 +2057,16 @@ fn sys_dup(args: [u64; 6]) -> i64 {
 fn sys_dup3(args: [u64; 6]) -> i64 {
     let old_fd = args[0] as u32;
     let new_fd = args[1] as u32;
-    // NEW-DOS-002: charge for the new fd slot (same reasoning as sys_dup).
-    // dup2/dup3 semantics close an existing new_fd first; if that close
-    // is what frees the slot the net charge is zero — we don't model that
-    // fine distinction here, we just make sure the cave stays within cap.
-    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 1) {
-        return e;
-    }
-    match fd::dup2(old_fd, new_fd) {
-        Ok(fd) => fd as i64,
-        Err(e) => {
-            super::quotas::refund_active(super::quotas::Resource::Fds, 1);
-            e
+    crate::critical_section! {
+        if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 1) {
+            return e;
+        }
+        match fd::dup2(old_fd, new_fd) {
+            Ok(fd) => fd as i64,
+            Err(e) => {
+                super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+                e
+            }
         }
     }
 }
@@ -2910,18 +2911,17 @@ fn sys_pipe2(args: [u64; 6]) -> i64 {
     if fds_ptr == 0 { return EINVAL; }
     if !is_user_ptr(fds_ptr, 8) { return EFAULT; }
 
-    // NEW-DOS-002: charge 2 fds up front. A successful pipe2() consumes
-    // two new fd slots; without this charge a cave could drive pipe2 in
-    // a loop past its per-cave Fds cap. The close paths (sys_close) refund
-    // normally when those fds are released.
-    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 2) {
-        return e;
+    // V8-ROOT-1: charge → inner → (refund on error) atomic.
+    crate::critical_section! {
+        if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 2) {
+            return e;
+        }
+        let ret = sys_pipe2_inner(fds_ptr);
+        if ret != 0 {
+            super::quotas::refund_active(super::quotas::Resource::Fds, 2);
+        }
+        ret
     }
-    let ret = sys_pipe2_inner(fds_ptr);
-    if ret != 0 {
-        super::quotas::refund_active(super::quotas::Resource::Fds, 2);
-    }
-    ret
 }
 
 fn sys_pipe2_inner(fds_ptr: usize) -> i64 {
@@ -3564,17 +3564,26 @@ fn accept_charged(listen_fd: i32,
                   addr: *mut super::sockets::SockaddrIn,
                   addrlen: *mut u32,
                   flags: i32) -> i64 {
-    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Sockets, 1) {
-        return e;
-    }
-    if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 1) {
-        super::quotas::refund_active(super::quotas::Resource::Sockets, 1);
-        return e;
+    // V8-ROOT-1: charge-Sockets + charge-Fds + accept + refund-on-err atomic.
+    // NOTE: accept4 internally may block / take locks. We do NOT hold the
+    // IrqGuard across the accept4 call itself — only the quota bookkeeping.
+    // This still closes the window between charges where a racing syscall
+    // could observe partial accounting.
+    crate::critical_section! {
+        if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Sockets, 1) {
+            return e;
+        }
+        if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Fds, 1) {
+            super::quotas::refund_active(super::quotas::Resource::Sockets, 1);
+            return e;
+        }
     }
     let r = super::sockets::accept4(listen_fd, addr, addrlen, flags);
     if r < 0 {
-        super::quotas::refund_active(super::quotas::Resource::Sockets, 1);
-        super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+        crate::critical_section! {
+            super::quotas::refund_active(super::quotas::Resource::Sockets, 1);
+            super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+        }
     }
     r
 }

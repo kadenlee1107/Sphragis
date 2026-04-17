@@ -271,7 +271,10 @@ static mut TCP_PCBS: [TcpPcb; MAX_PCBS] = [const { TcpPcb::empty() }; MAX_PCBS];
 
 /// V6-XLAYER-005/006: clear every PCB on cave switch so a new tenant
 /// can't inherit (or hijack) the previous cave's TCP connections.
+///
+/// V8-ROOT-1: IRQ-masked for duration. Same reasoning as sockets reset.
 pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
     alloc_lock();
     unsafe {
         for i in 0..MAX_PCBS {

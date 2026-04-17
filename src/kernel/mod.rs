@@ -4,4 +4,5 @@ pub mod ipc;
 pub mod mm;
 pub mod process;
 pub mod scheduler;
+pub mod sync;
 pub mod syscall;

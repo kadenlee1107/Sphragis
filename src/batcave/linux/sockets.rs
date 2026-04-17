@@ -252,9 +252,13 @@ static mut SOCKET_TABLE: [SocketState; MAX_SOCKETS] =
     [SocketState::empty(); MAX_SOCKETS];
 
 /// V6-XLAYER-005/006: clear every socket slot on cave switch so the
-/// new tenant doesn't inherit socket bindings or live TCP PCB ids
-/// from the previous cave.
+/// new tenant doesn't inherit socket bindings or live TCP PCB ids.
+///
+/// V8-ROOT-1: IRQ-masked for the duration. lock()/unlock() alone wasn't
+/// enough — an IRQ between lock and unlock could schedule another thread
+/// that observed the half-wiped table.
 pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
     lock();
     unsafe {
         for i in 0..MAX_SOCKETS {

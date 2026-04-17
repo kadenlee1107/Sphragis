@@ -1195,8 +1195,13 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
 /// slot 0) so a cave switch wipes session keys, SPKI, expected_hostname,
 /// and cert-pinning state inherited from a prior tenant. Called from
 /// cave::enter on every switch.
+///
+/// V8-ROOT-1: wrap the 64-session wipe in a critical section. A timer
+/// IRQ mid-loop would leave sessions 0..N cleared and N..64 live. The
+/// caller (cave::enter) already holds an IrqGuard, so this is nestable.
 pub fn reset_all_sessions() {
     use crate::security::zeroize::zeroize;
+    let _g = crate::kernel::sync::IrqGuard::new();
     unsafe {
         for i in 0..TLS_MAX_PCBS {
             let s = &mut (*core::ptr::addr_of_mut!(TLS_STATES))[i];

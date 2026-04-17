@@ -61,22 +61,23 @@ pub fn reserve_range(start: usize, end: usize) {
 }
 
 pub fn alloc_frame() -> Option<usize> {
+    // V8-ROOT-1 + V8-KMEM-ROOT-1: the entire scan-find-claim sequence is
+    // one critical section. Previously the load-then-store on BITMAP[i]
+    // could race with a timer IRQ that itself allocates (via log → heap →
+    // alloc_frame), yielding the same bit to two callers. Heap got this
+    // fix in V6-TOCTOU-007; frame allocator did not.
+    let _g = crate::kernel::sync::IrqGuard::new();
+
     let total = TOTAL_FRAMES.load(Ordering::Relaxed);
     let start = MEMORY_START.load(Ordering::Relaxed);
-
-    // V2-001/V2-040: reserve the top of memory for kernel-only allocations
-    // (specifically cave page-table frames). Regular alloc_frame stops
-    // before that pool so cave user-window mappings can never alias into
-    // a cave's own L1/L2 table.
     let user_cap = total.saturating_sub(KERNEL_RESERVED_FRAMES);
 
     for i in 0..BITMAP_SIZE {
         let val = BITMAP[i].load(Ordering::Relaxed);
         if val == u64::MAX {
-            continue; // All 64 bits used
+            continue;
         }
 
-        // Find first free bit
         let bit = (!val).trailing_zeros() as usize;
         let frame_index = i * 64 + bit;
 
@@ -84,7 +85,6 @@ pub fn alloc_frame() -> Option<usize> {
             return None;
         }
 
-        // Claim this frame (single-core, no CAS needed)
         let new_val = val | (1u64 << bit);
         BITMAP[i].store(new_val, Ordering::Relaxed);
         {
@@ -119,12 +119,14 @@ pub const KERNEL_RESERVED_FRAMES: usize = 512;
 /// Returns None if the kernel pool is exhausted; callers should surface
 /// this as "too many caves" rather than falling back to alloc_frame.
 pub fn alloc_kernel_frame() -> Option<usize> {
+    // V8-ROOT-1: same CS discipline as alloc_frame.
+    let _g = crate::kernel::sync::IrqGuard::new();
+
     let total = TOTAL_FRAMES.load(Ordering::Relaxed);
     let start = MEMORY_START.load(Ordering::Relaxed);
     if total < 1 { return None; }
     let lower_bound = total.saturating_sub(KERNEL_RESERVED_FRAMES);
 
-    // Search top-down over the reserved range.
     for rev in 0..KERNEL_RESERVED_FRAMES {
         let frame_index = total.saturating_sub(1).saturating_sub(rev);
         if frame_index < lower_bound { break; }
@@ -132,7 +134,7 @@ pub fn alloc_kernel_frame() -> Option<usize> {
         let bit = frame_index % 64;
         if bitmap_index >= BITMAP_SIZE { continue; }
         let val = BITMAP[bitmap_index].load(Ordering::Relaxed);
-        if val & (1u64 << bit) != 0 { continue; } // in use
+        if val & (1u64 << bit) != 0 { continue; }
 
         BITMAP[bitmap_index].store(val | (1u64 << bit), Ordering::Relaxed);
         let addr = start + frame_index * PAGE_SIZE;
@@ -149,6 +151,12 @@ pub fn alloc_kernel_frame() -> Option<usize> {
 }
 
 pub fn free_frame(addr: usize) {
+    // V8-ROOT-1: zero-then-clear-bit must be atomic w.r.t. IRQ. Previously
+    // a racing alloc_frame could see the bit still set, not return this
+    // page, but an OTHER reader sees freshly-zeroed memory (UAF holders
+    // see zeros mid-loop). Nestable — heap dealloc already holds this.
+    let _g = crate::kernel::sync::IrqGuard::new();
+
     let start = MEMORY_START.load(Ordering::Relaxed);
     let end   = MEMORY_END_ADDR.load(Ordering::Relaxed);
     let total = TOTAL_FRAMES.load(Ordering::Relaxed);
