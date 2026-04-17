@@ -106,6 +106,14 @@ pub struct TlsSession {
     peer_spki: [u8; 512],
     peer_spki_len: usize,
     peer_pubkey_alg: u8,
+    // V6-PARSER-105 fix: V5's `finished_seen` was a local inside the
+    // record loop, so once that record returned, a NEW encrypted
+    // record could carry a second Certificate that overwrote
+    // peer_spki. Moving this onto TlsSession makes it persistent
+    // across records — once Finished is observed, no further
+    // Certificate / CertificateVerify / EncryptedExtensions will
+    // be accepted within the same handshake.
+    pub finished_seen: bool,
 }
 
 // ATTACK-NET-034: one TLS session per TCP PCB instead of a single global.
@@ -137,6 +145,7 @@ const EMPTY_TLS_SESSION: TlsSession = TlsSession {
     peer_spki: [0; 512],
     peer_spki_len: 0,
     peer_pubkey_alg: 0,
+    finished_seen: false,
 };
 
 static mut TLS_STATES: [TlsSession; TLS_MAX_PCBS] =
@@ -178,6 +187,11 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
     let hl = hb.len().min(sess.expected_hostname.len());
     sess.expected_hostname[..hl].copy_from_slice(&hb[..hl]);
     sess.expected_hostname_len = hl;
+    // V6-PARSER-105: fresh handshake starts with finished_seen=false.
+    sess.finished_seen = false;
+    // Fresh handshake also clears any stale peer SPKI from a prior one.
+    sess.peer_spki_len = 0;
+    sess.peer_pubkey_alg = 0;
 
     // NEW-CRYPTO-005: route all TLS randomness through the SHA-chained DRBG
     // in `crypto::rng` instead of reading `cntpct_el0` directly. An observer
@@ -636,15 +650,12 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
             // that was missing previously.
             if inner_type == 0x16 && inner_len > 0 {
                 let mut hp = 0usize;
-                let mut finished_seen = false;
+                // V6-PARSER-105 fix: read the persistent flag from
+                // session state so subsequent RECORDS also refuse
+                // post-Finished Certificate / CertificateVerify. The
+                // V5 local-flag only covered the current record.
                 while hp + 4 <= inner_len {
-                    // V5-PARSER-042 fix: stop processing messages after
-                    // Finished verified, so a crafted record trailing
-                    // with a second Certificate can't overwrite
-                    // peer_spki (which would let a follow-up
-                    // CertificateVerify validate against the attacker's
-                    // pubkey).
-                    if finished_seen { break; }
+                    if sess.finished_seen { break; }
                     let msg_type = decrypted[hp];
                     let msg_len = ((decrypted[hp + 1] as usize) << 16)
                                 | ((decrypted[hp + 2] as usize) << 8)
@@ -673,15 +684,32 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
 
                         // V4: collect every cert in the chain (leaf first)
                         // into a Vec of DER slices, run full validation.
+                        //
+                        // V6-KMEM-005 fix: cap chain depth at 8 (more than
+                        // any real-world cert chain) and per-cert DER at
+                        // 32 KB (RFC 8446 ServerCertificate limit). These
+                        // bound the recursion depth in x509-cert's DER
+                        // parser and the heap-alloc total. Without them, a
+                        // malicious chain with 100 deeply-nested SEQUENCEs
+                        // could overflow the kernel stack into TLS_STATES
+                        // (which sits in .bss right past the stack).
+                        const MAX_CHAIN_DEPTH: usize = 8;
+                        const MAX_CERT_DER:    usize = 32 * 1024;
                         use alloc::vec::Vec;
                         let mut certs: Vec<&[u8]> = Vec::new();
                         let mut p = after_ctx + 3;
                         let end = after_ctx + 3 + certs_len;
                         while p + 3 <= end {
+                            if certs.len() >= MAX_CHAIN_DEPTH {
+                                return Err("TLS: cert chain too deep");
+                            }
                             let clen = ((body[p] as usize) << 16)
                                     | ((body[p + 1] as usize) << 8)
                                     |  (body[p + 2] as usize);
                             p += 3;
+                            if clen > MAX_CERT_DER {
+                                return Err("TLS: cert entry too large");
+                            }
                             if p + clen > end { return Err("TLS: cert entry truncated"); }
                             certs.push(&body[p..p + clen]);
                             p += clen;
@@ -809,7 +837,7 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                             return Err("TLS: server Finished HMAC mismatch (MITM?)");
                         }
                         tdbg("[tls] server Finished HMAC ok\n");
-                        finished_seen = true;
+                        sess.finished_seen = true;
                     }
 
                     // Always feed the full handshake-message bytes into the
@@ -1179,6 +1207,7 @@ pub fn reset_all_sessions() {
             s.peer_spki_len = 0;
             s.peer_pubkey_alg = 0;
             s.expected_hostname_len = 0;
+            s.finished_seen = false;
             zeroize(&mut s.shared_secret);
             zeroize(&mut s.client_key);
             zeroize(&mut s.server_key);

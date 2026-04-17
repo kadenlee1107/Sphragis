@@ -160,9 +160,16 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                             crate::batcave::linux::syscall::restore_parent_tid();
 
                             core::arch::asm!(
-                                // Set SP to clone-time busybox SP FIRST
-                                // (before we clobber any input regs)
-                                "mov sp, {sp_val}",
+                                // V6-CHAIN-002 fix: write the saved
+                                // busybox (user) SP to SP_EL0, not the
+                                // current SP_EL1. The eret below uses
+                                // SPSR.M to pick which SP becomes
+                                // active for EL0; SP_EL1 must NOT be
+                                // overwritten with a user-derived
+                                // value or every subsequent exception
+                                // pushes its trap frame to that
+                                // attacker-influenced address.
+                                "msr sp_el0, {sp_val}",
                                 // x16 = pointer to saved frame data
                                 "mov x16, {ptr}",
                                 // Restore ELR and SPSR from saved frame
@@ -371,11 +378,17 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                                             core::arch::asm!("str {v}, [{a}]",
                                                 a = in(reg) sp, v = in(reg) one);
 
-                                            // Jump to hello binary entry (identity-mapped)
+                                            // V6-CHAIN-002: enter hello binary at EL0 via
+                                            // eret. Writing to SP_EL1 then `br {entry}`
+                                            // ran the binary at EL1 with attacker SP —
+                                            // every IRQ corrupted the kernel stack.
                                             let entry = phys_entry;
                                             core::arch::asm!(
-                                                "mov sp, {sp_val}",
-                                                "br {entry}",
+                                                "msr sp_el0, {sp_val}",
+                                                "msr elr_el1, {entry}",
+                                                "msr spsr_el1, xzr",  // EL0t, AIF clear
+                                                "isb",
+                                                "eret",
                                                 sp_val = in(reg) sp as u64,
                                                 entry = in(reg) entry,
                                                 options(noreturn),
@@ -498,11 +511,14 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                                     core::arch::asm!("str {v}, [{a}]",
                                         a = in(reg) sp, v = in(reg) argc as u64);
 
-                                    // Jump to worker busybox entry (via identity mapping)
+                                    // V6-CHAIN-002: enter worker busybox at EL0 via eret.
                                     let entry = worker_entry as u64;
                                     core::arch::asm!(
-                                        "mov sp, {sp_val}",
-                                        "br {entry}",
+                                        "msr sp_el0, {sp_val}",
+                                        "msr elr_el1, {entry}",
+                                        "msr spsr_el1, xzr",
+                                        "isb",
+                                        "eret",
                                         sp_val = in(reg) sp as u64,
                                         entry = in(reg) entry,
                                         options(noreturn),
@@ -533,8 +549,18 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                             // Ensure 16-byte SP alignment (ARM64 ABI requirement)
                             let child_sp_aligned = child_sp & !0xF;
                             core::arch::asm!(
-                                // Set child stack SP (16-byte aligned)
-                                "mov sp, {csp}",
+                                // V6-CHAIN-002 FIX: write the attacker-supplied
+                                // child SP into SP_EL0 (the user stack pointer
+                                // that eret activates), NOT SP_EL1 (the kernel
+                                // SP we're currently using). The previous
+                                // `mov sp, {csp}` clobbered the kernel stack
+                                // pointer with a value chosen entirely by the
+                                // calling cave — every subsequent IRQ/SVC then
+                                // pushed its 272-byte trap frame at that
+                                // attacker-chosen address. Direct kernel write
+                                // primitive on every exception. We use SPSR
+                                // configured for EL0t and let eret restore.
+                                "msr sp_el0, {csp}",
                                 // Set ELR and SPSR for child return
                                 "msr elr_el1, {elr}",
                                 "msr spsr_el1, {spsr}",
@@ -849,7 +875,8 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
 
                     let saved_ptr = core::ptr::addr_of!(SAVED_FRAME) as u64;
                     core::arch::asm!(
-                        "mov sp, {sp_val}",
+                        // V6-CHAIN-002: SP_EL0 not SP_EL1.
+                        "msr sp_el0, {sp_val}",
                         "mov x16, {ptr}",
                         "ldp x0, x1, [x16, #248]",
                         "msr elr_el1, x0",

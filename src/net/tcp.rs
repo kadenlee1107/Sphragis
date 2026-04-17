@@ -269,6 +269,18 @@ impl TcpPcb {
 
 static mut TCP_PCBS: [TcpPcb; MAX_PCBS] = [const { TcpPcb::empty() }; MAX_PCBS];
 
+/// V6-XLAYER-005/006: clear every PCB on cave switch so a new tenant
+/// can't inherit (or hijack) the previous cave's TCP connections.
+pub fn reset_for_cave_switch() {
+    alloc_lock();
+    unsafe {
+        for i in 0..MAX_PCBS {
+            TCP_PCBS[i] = TcpPcb::empty();
+        }
+    }
+    alloc_unlock();
+}
+
 // We're single-core and the dispatch path is non-reentrant, but a tiny
 // spin-flag catches reentrancy bugs in PCB allocation.
 static ALLOC_LOCK: AtomicBool = AtomicBool::new(false);

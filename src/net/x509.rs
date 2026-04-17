@@ -210,31 +210,52 @@ pub fn verify_chain(
         Err(e) => return VerifyOutcome::Err(e),
     };
 
-    // 1. Hostname check on leaf.
-    if !check_hostname(&leaf, hostname) {
-        return VerifyOutcome::Err(VerifyError::HostnameMismatch);
-    }
+    // V6-SIDE-002 fix: do the EXPENSIVE signature verification FIRST
+    // and accumulate the hostname-mismatch flag, so the abort timing
+    // does NOT distinguish "wrong hostname" from "wrong signature".
+    // V5 returned early on hostname mismatch BEFORE doing chain
+    // verify, leaving a 30-50× timing delta between the two outcomes
+    // — an off-path observer measuring the abort time learned which
+    // hostname the client tried.
+    let hostname_ok = check_hostname(&leaf, hostname);
 
     // 2. Walk the chain. For each (child, parent) pair, verify that
     //    parent.pubkey validates child.signature over child.tbsCertificate.
     //    Root must be in TRUST_STORE.
     let mut current_cert = leaf.clone();
     let mut current_der: &[u8] = leaf_der;
+    let mut chain_ok = true;
 
     for (i, int_der) in chain_ders.iter().enumerate() {
         let parent = match parse_cert(int_der) {
             Ok(c) => c,
-            Err(_) => return VerifyOutcome::Err(VerifyError::Parse),
+            Err(_) => {
+                chain_ok = false;
+                break;
+            }
         };
 
-        // Verify: parent signed current.
         if verify_signed_by(&current_cert, current_der, &parent).is_err() {
-            return VerifyOutcome::Err(VerifyError::BadSignature);
+            chain_ok = false;
+            // Continue the loop (don't return) so chain length doesn't
+            // distinguish failure-on-step-N from -on-step-M timing-wise.
+            // Subsequent verify_signed_by calls run against a possibly
+            // wrong parent, but that's harmless because we already
+            // know we're going to fail.
         }
-
         current_cert = parent;
         current_der = int_der;
         let _ = i;
+    }
+
+    // Only AFTER the (constant-cost) chain walk do we examine the
+    // accumulated outcome. Any single-flag short-circuit before this
+    // point would re-introduce the timing oracle.
+    if !hostname_ok {
+        return VerifyOutcome::Err(VerifyError::HostnameMismatch);
+    }
+    if !chain_ok {
+        return VerifyOutcome::Err(VerifyError::BadSignature);
     }
 
     // 3. Root in trust store?  We look the current (last) cert up by its

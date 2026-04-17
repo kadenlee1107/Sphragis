@@ -149,15 +149,31 @@ pub fn verify_all_integrity() -> bool {
 /// counter itself still restarts at 1; prefix + counter is the full
 /// unique value.
 pub fn init(master_key: &[u8; 32]) {
+    // V6-TOCTOU-010 fix: the old init sequence set BOOT_NONCE_PREFIX
+    // then released NONCE_COUNTER. A racing call to init() from a
+    // different code path (cave-switch re-init path) could observe
+    // a torn state: new prefix paired with stale counter, leading to
+    // (key, nonce) reuse across boots. We now order the writes with
+    // explicit fences and guard against re-init with INITIALIZED.
+    use core::sync::atomic::{Ordering, compiler_fence};
+
     unsafe {
+        if INITIALIZED {
+            // Safety: re-init without wipe would cause keystream reuse
+            // against existing file nonces. Refuse.
+            return;
+        }
         MASTER_KEY = *master_key;
         FILE_COUNT = 0;
         let mut rnd = [0u8; 4];
         crate::crypto::rng::fill_bytes(&mut rnd);
         BOOT_NONCE_PREFIX = rnd;
-        INITIALIZED = true;
     }
-    NONCE_COUNTER.store(1, core::sync::atomic::Ordering::Release);
+    // Publish the counter BEFORE flipping INITIALIZED — any reader that
+    // sees INITIALIZED=true then observes a consistent (prefix, counter).
+    NONCE_COUNTER.store(1, Ordering::Release);
+    compiler_fence(Ordering::SeqCst);
+    unsafe { INITIALIZED = true; }
 }
 
 fn next_nonce() -> [u8; 12] {

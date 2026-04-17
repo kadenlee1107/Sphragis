@@ -58,6 +58,15 @@ pub fn reinit_elf(data: &[u8], phys_base: usize) {
     }
     if min_addr == u64::MAX { return; } // no PT_LOAD
     let total_size = (max_addr - min_addr) as usize;
+    // V6-PARSER-102 hardening: cap reinit_elf to a sane max so a swapped
+    // ELF blob with crafted memsz can't cause us to zero or copy past
+    // the originally-allocated region. The original load_elf reserves
+    // up to ~256 MB for content_shell; anything larger is suspicious.
+    const REINIT_ELF_MAX: usize = 256 * 1024 * 1024;
+    if total_size > REINIT_ELF_MAX {
+        crate::drivers::uart::puts("[loader] reinit_elf: total_size > 256MB — refusing\n");
+        return;
+    }
     let phys_range_end = phys_base.saturating_add(total_size);
 
     let reloc_offset = phys_base as i64 - min_addr as i64;

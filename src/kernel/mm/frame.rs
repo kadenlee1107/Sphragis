@@ -25,15 +25,16 @@ pub fn init(start: usize, end: usize) {
     MEMORY_END_ADDR.store(end_aligned, Ordering::Relaxed);
     TOTAL_FRAMES.store((end_aligned - start_aligned) / PAGE_SIZE, Ordering::Relaxed);
 
-    // V5-KMEM-001 fix: reserve the kernel heap region in the bitmap so
-    // alloc_frame can NEVER hand out a page inside the heap extent. The
-    // heap lives at [KERNEL_HEAP_BASE, KERNEL_HEAP_BASE + KERNEL_HEAP_SIZE)
-    // and is owned exclusively by linked_list_allocator. Without this,
-    // a cave mmap could receive heap metadata pages and corrupt/read
-    // anything the kernel allocator is holding.
-    let heap_start = super::heap::KERNEL_HEAP_BASE;
-    let heap_end = heap_start + super::heap::KERNEL_HEAP_SIZE;
-    reserve_range(heap_start, heap_end);
+    // V6-KMEM-001: heap now lives BELOW `start` (mm::init places it
+    // immediately past the initrd blob and starts the frame range past
+    // the heap), so we don't need a frame-bitmap reservation. Defense
+    // in depth: if the heap is somehow inside our range (caller bug),
+    // reserve_range still marks it as in-use.
+    let heap_start = super::heap::kernel_heap_base();
+    let heap_end = heap_start + super::heap::kernel_heap_size();
+    if heap_start != 0 && heap_start >= start_aligned && heap_end <= end_aligned {
+        reserve_range(heap_start, heap_end);
+    }
 }
 
 /// Mark every frame in [start, end) as in-use so alloc_frame skips them.
@@ -149,16 +150,27 @@ pub fn alloc_kernel_frame() -> Option<usize> {
 
 pub fn free_frame(addr: usize) {
     let start = MEMORY_START.load(Ordering::Relaxed);
-    if addr < start {
+    let end   = MEMORY_END_ADDR.load(Ordering::Relaxed);
+    let total = TOTAL_FRAMES.load(Ordering::Relaxed);
+
+    // V6-WEIRD-007 defense-in-depth: validate the frame index FIRST,
+    // BEFORE zeroing. The previous order (zero → bitmap-index check)
+    // let any caller that supplied an address in the kernel-RAM range
+    // wipe 4 KB of kernel memory (heap, BSS, bitmap itself). Now we
+    // refuse to touch the page unless its frame index is in-range.
+    if addr < start || addr >= end || (addr & (PAGE_SIZE - 1)) != 0 {
+        return;
+    }
+    let frame_index = (addr - start) / PAGE_SIZE;
+    if frame_index >= total {
+        return;
+    }
+    let bitmap_index = frame_index / 64;
+    if bitmap_index >= BITMAP_SIZE {
         return;
     }
 
-    // Defense-in-depth: wipe the page contents before returning it to the
-    // free pool. alloc_frame already zeroes on allocation, so this is
-    // belt-and-suspenders against the window between free and the next
-    // alloc where the page might be read by a DMA-capable peripheral or
-    // a snapshot-based introspection tool. Uses str xzr to mirror the
-    // existing HVF-safe pattern in alloc_frame rather than write_bytes.
+    // Now safe to wipe the page contents.
     unsafe {
         for i in 0..(PAGE_SIZE / 8) {
             core::arch::asm!("str xzr, [{a}]",
@@ -167,28 +179,50 @@ pub fn free_frame(addr: usize) {
         }
     }
 
-    let frame_index = (addr - start) / PAGE_SIZE;
-    let bitmap_index = frame_index / 64;
     let bit = frame_index % 64;
-
-    if bitmap_index < BITMAP_SIZE {
-        // Simple store instead of fetch_and (no exclusive monitors — HVF safe)
-        let val = BITMAP[bitmap_index].load(Ordering::Relaxed);
-        BITMAP[bitmap_index].store(val & !(1u64 << bit), Ordering::Relaxed);
-    }
+    // Simple store instead of fetch_and (no exclusive monitors — HVF safe)
+    let val = BITMAP[bitmap_index].load(Ordering::Relaxed);
+    BITMAP[bitmap_index].store(val & !(1u64 << bit), Ordering::Relaxed);
 }
 
+/// V6-XLAYER-003 fix: free_contig now RETURNS the number of pages it
+/// actually freed (those that were in-use in the bitmap). Callers
+/// (sys_munmap) refund quota based on this real count instead of the
+/// user-supplied length. Without this, a cave could munmap a tiny
+/// real region with a huge `length` and saturating-sub its memory
+/// quota to zero.
+///
 /// Free a run of `count` contiguous physical pages starting at `base`.
 /// Convenience wrapper over `free_frame`, used by the loader and munmap
 /// paths that allocated large contiguous regions (e.g. 38k pages for a
 /// Chromium-sized ELF). Silently ignores unaligned or out-of-range bases
 /// so callers can blindly free "whatever I got from alloc".
-pub fn free_contig(base: usize, count: usize) {
-    if count == 0 { return; }
+pub fn free_contig(base: usize, count: usize) -> usize {
+    if count == 0 { return 0; }
     let base = base & !(PAGE_SIZE - 1);
+    let start = MEMORY_START.load(Ordering::Relaxed);
+    let total = TOTAL_FRAMES.load(Ordering::Relaxed);
+    let mut actually_freed = 0usize;
     for i in 0..count {
-        free_frame(base + i * PAGE_SIZE);
+        let addr = base + i * PAGE_SIZE;
+        // Was this frame actually in-use? Only count it if so, so the
+        // caller's quota refund matches reality (V6-XLAYER-003).
+        if addr >= start {
+            let frame_index = (addr - start) / PAGE_SIZE;
+            if frame_index < total {
+                let bi = frame_index / 64;
+                let bit = frame_index % 64;
+                if bi < BITMAP_SIZE {
+                    let val = BITMAP[bi].load(Ordering::Relaxed);
+                    if val & (1u64 << bit) != 0 {
+                        actually_freed += 1;
+                    }
+                }
+            }
+        }
+        free_frame(addr);
     }
+    actually_freed
 }
 
 pub fn stats() -> (usize, usize) {

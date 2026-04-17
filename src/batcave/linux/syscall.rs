@@ -375,18 +375,31 @@ fn sys_munmap(args: [u64; 6]) -> i64 {
     if length == 0 { return EINVAL; }
     if addr & 0xFFF != 0 { return EINVAL; }
 
+    // V6-WEIRD-007 fix: WITHOUT this gate, a cave could call
+    // munmap(addr=0x40100000, 4KB) and `free_contig` → `free_frame`
+    // would zero 4 KB of kernel memory (heap, auth BSS, frame bitmap,
+    // anything >= MEMORY_START). The old comment claiming "free_contig
+    // silently ignores bases outside the frame bitmap" was WRONG —
+    // free_frame zeroed the page BEFORE checking the bitmap index.
+    // The fix here gates at syscall entry; frame::free_frame also
+    // got a defensive extent-check so this can't be bypassed by any
+    // other caller.
+    if !uaccess::is_user_range(addr, length) {
+        return -(14i64); // EFAULT
+    }
+
     let page_size = 4096usize;
     let pages = (length + page_size - 1) / page_size;
 
-    // Walk the range and free each backing frame. free_contig silently
-    // ignores bases outside the frame bitmap, so passing an address that
-    // was never mapped becomes a cheap no-op rather than a kernel panic.
-    crate::kernel::mm::frame::free_contig(addr, pages);
-
-    // Refund the memory quota. Saturating, so if the caller munmaps a
-    // region we never charged (ChromiumFb, etc.) the counter sticks at 0.
+    // V6-XLAYER-003: refund based on the number of pages actually
+    // freed (frames that were in-use in the bitmap), NOT the user-
+    // supplied length. Without this, a cave can call
+    //   munmap(real_4kb_alloc, 1GB)
+    // and saturating-sub its memory quota to zero, then mmap fresh
+    // pages past its real cap.
+    let freed_pages = crate::kernel::mm::frame::free_contig(addr, pages);
     super::quotas::refund_active(
-        super::quotas::Resource::Mem, pages * page_size);
+        super::quotas::Resource::Mem, freed_pages * page_size);
 
     // Invalidate the TLB for this ASID. We don't yet have per-address
     // tlbi vaae1 wired (see mmu.rs); a full `tlbi vmalle1` is coarse but
@@ -1251,26 +1264,23 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         }
     }
 
-    // For fixed-address mappings, just return the requested address
-    // (the memory is already identity-mapped).
+    // For fixed-address mappings, return the requested address.
     //
-    // V5-XLAYER-008/010 fix: the previous early-return bypassed every
-    // guard: no quota charge, no is_user_range check, no page alignment
-    // check. A cave could call mmap(addr=0x40000000, len=..., MAP_FIXED)
-    // and get back a kernel-RAM pointer it could then write to via
-    // sys_write/sys_writev (which only validate the buffer, not the
-    // target). Now we require addr to live in userspace and charge
-    // against the memory quota.
+    // V6-XLAYER-003 / V6-WEIRD-012 / V6-TOCTOU-006 fix: MAP_FIXED in
+    // our impl does NOT allocate any new frames — it just hands back
+    // the requested address (the cave is already mapped identity for
+    // its window). So MAP_FIXED must NOT charge the Mem quota: V5
+    // added a charge here, but munmap later refunded `len` bytes via
+    // saturating_sub — net effect was a quota AMPLIFIER (cave inflates
+    // quota usage with MAP_FIXED, munmap drains it to zero, cave then
+    // mmaps real frames past its actual limit). Reverting to "MAP_FIXED
+    // is a no-op for the quota ledger" closes that primitive.
+    //
+    // The V5 is_user_range check is preserved — MAP_FIXED with a
+    // kernel-range addr is still rejected.
     if addr != 0 && (flags & 0x10) != 0 { // MAP_FIXED = 0x10
         if !uaccess::is_user_range(addr, len) {
             return -(14i64); // EFAULT
-        }
-        // Charge the same as a regular allocation — MAP_FIXED still
-        // commits memory that should count against the cave quota.
-        let charge_bytes = (len + 4095) & !4095;
-        if let Err(e) = super::quotas::charge_active(
-                super::quotas::Resource::Mem, charge_bytes) {
-            return e;
         }
         return addr as i64;
     }
@@ -3300,10 +3310,25 @@ fn sys_rt_sigprocmask(args: [u64; 6]) -> i64 {
 /// rt_sigreturn — return from signal handler
 fn sys_rt_sigreturn(_args: [u64; 6]) -> i64 { 0 }
 
-/// tgkill — send signal to a thread
+/// tgkill — send signal to a thread (tgkill(tgid, tid, sig)).
+///
+/// V6-XLAYER-009 fix: previously the tgid/tid args were ignored entirely
+/// — any cave could call `tgkill(other_cave_tgid, *, SIGKILL)` and the
+/// signal got OR'd into the GLOBAL SIGNAL_PENDING bitmap, killing
+/// whoever was active when the signal next checked. Now we restrict
+/// tgkill to "self" (the calling cave/process); cross-process signals
+/// would need a real signal-routing layer (Phase B). tgid=0 / tgid=1
+/// (self) is permitted; everything else returns ESRCH.
 fn sys_tgkill(args: [u64; 6]) -> i64 {
+    let tgid = args[0] as i32;
+    let _tid = args[1] as i32;
     let sig = args[2] as u32;
     if sig == 0 { return 0; } // existence check
+    // Permit only self-targeted signals. Our process always reports
+    // pid=1 (see sys_getpid), so tgid in {0, 1} is "self".
+    if tgid != 0 && tgid != 1 {
+        return -(3i64); // ESRCH
+    }
     if (sig as usize) < MAX_SIG {
         unsafe { SIGNAL_PENDING |= 1u64 << sig; }
     }

@@ -527,23 +527,36 @@ pub fn runnable_count() -> usize {
 /// spawn_thread calls can reuse it.
 pub fn exit_current(code: i32) -> ! {
     let me = current_tid();
-    // V5-TOCTOU-002 fix: mark the slot Exited AND free its stack AND
-    // clear the slot all inside a single `with_table` critical section.
-    // Previously there was a window between "mark Exited" and
-    // "free stack" where a racing try_reap or a second exit_current
-    // could see the stack_base/stack_pages and issue a double-free.
+    // V6-TOCTOU-004 fix: V5's "wipe slot inside lock" was wrong because
+    // try_reap (waitpid) needs to find state=Exited to refund quota
+    // and report exit code. Wiping the slot to Thread::empty made try_reap
+    // miss it permanently, leaking Threads and Mem quota.
+    //
+    // Correct ordering (single critical section):
+    //   1. Mark state=Exited(code), KEEP stack_base/pages/clear-addr
+    //   2. Free the stack pages (no other thread can race because we
+    //      hold the table lock and they can't see exit-then-recycle
+    //      without going through try_reap).
+    //   3. Zero stack_base / stack_pages to prevent double-free if
+    //      try_reap or another exit_current tries again.
+    //   4. Leave the slot in state=Exited so try_reap can find it,
+    //      refund the cave's Threads quota, and complete the reap by
+    //      setting Free.
     let clear_addr = with_table(|t| {
         if let Some(i) = slot_of(t, me) {
             t[i].state = ThreadState::Exited(code);
             let sb = t[i].stack_base;
             let sp = t[i].stack_pages;
             let ca = t[i].tid_clear_on_exit;
-            // Zero the slot FIRST so no reader can see stack_base/pages
-            // after we decide to free them.
-            t[i] = Thread::empty();
+            // Free the stack while still holding the lock — no racer
+            // can observe stack_base/pages because we clear them
+            // immediately after.
             if sp > 0 && sb != 0 {
                 crate::kernel::mm::frame::free_contig(sb as usize, sp);
             }
+            t[i].stack_base = 0;
+            t[i].stack_pages = 0;
+            t[i].tid_clear_on_exit = None;
             ca
         } else { None }
     });

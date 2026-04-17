@@ -399,13 +399,31 @@ pub fn enter(name: &str) -> Result<(), &'static str> {
     start(name)?;
     // Find cave index and set as active
     if let Some(id) = find_id(name) {
-        // V5-XLAYER: reset per-cave statics BEFORE activating so the
-        // new tenant sees a clean slate from the first syscall.
+        // V6-TOCTOU-005 fix: ORDER MATTERS. The V5 code did
+        //   reset_cave_statics(); reset_all_sessions(); set_active(id);
+        // which meant during the resets, get_active() still returned
+        // the OUTGOING cave id, and any concurrent syscall in the old
+        // cave (a thread mid-syscall when enter() fired) read its own
+        // state being zeroed underneath it.
+        //
+        // New ordering: stop the old cave first by parking active to
+        // sentinel, then reset, then activate new. Between sentinel
+        // and activate any racing syscall sees no active cave (which
+        // capability checks will deny).
+        let prev_active = get_active();
+        if prev_active != usize::MAX {
+            set_active(usize::MAX);
+        }
         crate::batcave::linux::syscall::reset_cave_statics();
         crate::net::tls::reset_all_sessions();
+        // V6-XLAYER-005/006: also reset the global tables that V5 missed.
+        crate::batcave::linux::fd::reset_for_cave_switch();
+        crate::batcave::linux::sockets::reset_for_cave_switch();
+        crate::net::tcp::reset_for_cave_switch();
         set_active(id);
         // Initialize an isolated VFS for this cave (if not already done)
         crate::batcave::linux::vfs::init_for_cave(id);
+        let _ = prev_active;
     }
     Ok(())
 }
@@ -443,8 +461,13 @@ pub fn seal(name: &str) -> Result<(), &'static str> {
 /// UDP RX queue, SAVED_FRAME, SAVED_STACK all carried over to the next
 /// cave — a cheap cross-cave info-leak and gadget-plant primitive.
 pub fn destroy(name: &str) -> Result<(), &'static str> {
+    // V6-CHAIN-001 fix: capture the cave id BEFORE wiping state, since
+    // find_id() filters out Free caves and the original V5 code did
+    // the lookup AFTER setting state=Free → quotas::reset was dead.
+    let cave_id_for_reset = find_id(name);
+
     // Wipe the cave's VFS instance (filesystem data)
-    if let Some(id) = find_id(name) {
+    if let Some(id) = cave_id_for_reset {
         crate::batcave::linux::vfs::destroy_cave_vfs(id);
         // If this was the active cave, clear active
         if get_active() == id {
@@ -479,12 +502,10 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
     // compat layer so the next cave starts with a clean state.
     crate::batcave::linux::syscall::reset_cave_statics();
 
-    // V5-CHAIN-004 fix: reset the quota ledger so a reused cave slot
-    // does NOT start life with the previous tenant's accumulated
-    // counters (which might already be at the limit). Without this,
-    // destroying+recreating a cave could leave it stuck unable to
-    // allocate anything.
-    if let Some(id) = find_id(name) {
+    // V5-CHAIN-004 + V6-CHAIN-001 fix: use the id we captured at the
+    // top, not a fresh find_id (which now returns None because we
+    // just set state=Free above).
+    if let Some(id) = cave_id_for_reset {
         crate::batcave::linux::quotas::reset(id);
     }
 

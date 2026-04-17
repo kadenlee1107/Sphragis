@@ -28,9 +28,15 @@
 
 use crate::drivers::uart;
 
-/// Refuse handshakes to hostnames that don't have a pin entry. Default
-/// `false` so dev builds still work; flip to `true` for production.
-pub const STRICT_MODE: bool = false;
+/// Refuse handshakes when peer authentication is unsuccessful — i.e.
+/// `verify_chain` failed AND no pin matched. Defaults to **true**
+/// (V6-CRYPTO-001 fix). Operator can flip to false ONLY for active
+/// development against unpinned/uncertified hosts; production must
+/// keep this true. The previous default of `false` allowed any cert
+/// to pass when both TRUST_STORE and PINS were empty (the shipped
+/// state), making all of V4's X.509 work and V5's pin-fallback a
+/// no-op against a real MITM.
+pub const STRICT_MODE: bool = true;
 
 /// One pin entry. Hostname is matched literally (no wildcards).
 pub struct Pin {

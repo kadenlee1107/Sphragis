@@ -251,6 +251,19 @@ pub const SOCKET_FD_BASE: i32 = 1024;
 static mut SOCKET_TABLE: [SocketState; MAX_SOCKETS] =
     [SocketState::empty(); MAX_SOCKETS];
 
+/// V6-XLAYER-005/006: clear every socket slot on cave switch so the
+/// new tenant doesn't inherit socket bindings or live TCP PCB ids
+/// from the previous cave.
+pub fn reset_for_cave_switch() {
+    lock();
+    unsafe {
+        for i in 0..MAX_SOCKETS {
+            SOCKET_TABLE[i] = SocketState::empty();
+        }
+    }
+    unlock();
+}
+
 // Serializes allocation/free. Not a real lock — we're single-core right now
 // and syscall entries are non-reentrant, but the flag catches logic bugs.
 static SOCK_LOCK: AtomicBool = AtomicBool::new(false);

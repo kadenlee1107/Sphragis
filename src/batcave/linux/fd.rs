@@ -38,6 +38,14 @@ pub const AT_FDCWD: i32 = -100;
 
 static mut FD_TABLE: [FdEntry; MAX_FDS] = [FdEntry::empty(); MAX_FDS];
 
+/// V6-XLAYER-005/006 fix: clear every fd on cave switch. Without this
+/// a new cave inherited the previous cave's open fds — including
+/// sockets pointing at established TCP streams. Re-establishes
+/// stdin/stdout/stderr at 0/1/2 like fresh boot.
+pub fn reset_for_cave_switch() {
+    init();
+}
+
 /// Initialize the fd table. Fds 0/1/2 are reserved (UART).
 pub fn init() {
     unsafe {

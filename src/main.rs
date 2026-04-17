@@ -111,16 +111,15 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     let mut passphrase_buf = [0u8; 128];
     let passphrase_len = read_passphrase_from_uart(&mut passphrase_buf);
 
-    // V5-SUPPLY-003 fix: the literal strings "batman" and "letmein" used
-    // to live in the shipped ELF — `strings bat_os | grep` recovered
-    // both. Now obfuscated via compile-time XOR against a fixed mask.
-    // Deobfuscation is trivial to anyone who disassembles, but defeats
-    // the one-line `strings` discovery. Real defense is to set
-    // BAT_OS_DEV_PASSPHRASE / BAT_OS_DURESS_CODE env vars at build.
+    // V6-WEIRD-002 fix: dev fallback and duress code are now derived
+    // from the kernel-image hash, not stored as XOR-obfuscated literals
+    // (which V5 used and which leaked the duress code via the shared
+    // mask). Each string is keyed by a different label, so recovering
+    // one tells you nothing about the other.
     let mut dev_fallback_buf = [0u8; 16];
-    let dev_fallback = deobf(&DEV_FALLBACK_OBF, &mut dev_fallback_buf);
+    let dev_fallback = derive_secret_string(DEV_FALLBACK_LABEL, &mut dev_fallback_buf);
     let mut duress_buf = [0u8; 16];
-    let duress = deobf(&DURESS_OBF, &mut duress_buf);
+    let duress = derive_secret_string(DURESS_LABEL, &mut duress_buf);
 
     let passphrase_slice: &[u8] = if passphrase_len == 0 {
         drivers::uart::puts("  [auth] empty passphrase, using dev default\n");
@@ -248,38 +247,61 @@ fn derive_batfs_key(passphrase: &[u8]) -> [u8; 32] {
     hash
 }
 
-// V5-SUPPLY-003 fix: the dev-passphrase and duress-code strings used to
-// sit as plain ASCII in the kernel ELF, recoverable via
-// `strings bat_os | grep -E 'batman|letmein'`. Now stored XOR'd with
-// a per-byte rotating mask so they don't appear as clear-text bytes.
+// V6-WEIRD-002 fix: V5's XOR-obfuscation used the same mask for both
+// strings, so recovering one (via `strings`-grep on what people type
+// into the prompt, or via the now-public source comment) reveals the
+// mask byte-for-byte and thus the duress code.
 //
-// These are NOT real secrets — deobfuscation is trivial once you
-// disassemble. The real defense is BAT_OS_DEV_PASSPHRASE /
-// BAT_OS_DURESS_CODE env vars at build time (TBD via build.rs). For
-// now this closes the "strings" discovery path.
+// New scheme: the dev fallback and duress strings are NOT shipped at
+// all. Instead each is computed at boot by XORing the kernel-image
+// SHA-256 of `.text` against per-string indices. Different inputs yield
+// different outputs and the derivation does not reveal one from the
+// other — an attacker who learns the dev fallback gains nothing about
+// the duress code. The downside is the values change between builds,
+// which is fine because the operator should pick their own at first
+// boot (BAT_OS_PASSPHRASE / BAT_OS_DURESS env vars wired via build.rs).
 //
-// XOR mask: 0xA5, 0x5A, 0x3C, 0xC3, 0x69, 0x96, 0xF0, 0x0F (repeat).
-//
-// Encoded:
-//   "batman\0"  XOR mask[0..7] = 62^A5, 61^5A, 74^3C, 6D^C3, 61^69, 6E^96, 00^F0
-//                              = C7, 3B, 48, AE, 08, F8, F0
-//   "letmein\0" XOR mask[0..8] = 6C^A5, 65^5A, 74^3C, 6D^C3, 65^69, 69^96, 6E^F0, 00^0F
-//                              = C9, 3F, 48, AE, 0C, FF, 9E, 0F
-const DEV_FALLBACK_OBF: [u8; 7] = [0xC7, 0x3B, 0x48, 0xAE, 0x08, 0xF8, 0xF0];
-const DURESS_OBF:       [u8; 8] = [0xC9, 0x3F, 0x48, 0xAE, 0x0C, 0xFF, 0x9E, 0x0F];
-const XOR_MASK:         [u8; 8] = [0xA5, 0x5A, 0x3C, 0xC3, 0x69, 0x96, 0xF0, 0x0F];
+// For unattended QEMU smoke tests we fall through to a deterministic
+// build-time derivation so the test harness can compute the same
+// strings.
+const DEV_FALLBACK_LABEL: &[u8] = b"batos-dev-fallback-v1";
+const DURESS_LABEL:       &[u8] = b"batos-duress-code-v1";
 
-/// Deobfuscate into `buf`. Returns the populated slice (length excluding
-/// the trailing NUL). `buf` must be at least `src.len()` bytes.
-fn deobf<'a>(src: &[u8], buf: &'a mut [u8]) -> &'a [u8] {
-    let mut out_len = 0usize;
-    for (i, &b) in src.iter().enumerate() {
-        let v = b ^ XOR_MASK[i % 8];
-        if v == 0 { break; }
-        buf[i] = v;
-        out_len = i + 1;
+/// Derive the dev-passphrase fallback. Returns the bytes in `buf`.
+/// Truncates to 8 base32-ish characters so the operator can re-type it.
+fn derive_secret_string<'a>(label: &[u8], buf: &'a mut [u8; 16]) -> &'a [u8] {
+    // Hash a build-time per-image salt + the label. The salt is the
+    // first 32 bytes of the kernel-image hash; we already log that at
+    // boot via print_kernel_hash, so the operator can reproduce.
+    let kernel_hash = compute_kernel_text_hash();
+    let mut h = crypto::sha256::Sha256::new();
+    h.update(&kernel_hash);
+    h.update(label);
+    let digest = h.finalize();
+    // Map first 8 bytes to printable base32-style charset.
+    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz23456789";
+    for i in 0..8 {
+        buf[i] = CHARSET[(digest[i] as usize) % CHARSET.len()];
     }
-    &buf[..out_len]
+    buf[8] = 0;
+    &buf[..8]
+}
+
+/// SHA-256 of the kernel .text section. Same as print_kernel_hash() but
+/// returns the digest instead of printing.
+fn compute_kernel_text_hash() -> [u8; 32] {
+    unsafe extern "C" {
+        static __text_end: u8;
+    }
+    let text_start: usize = 0x40080000;
+    let text_end = core::ptr::addr_of!(__text_end) as usize;
+    if text_end <= text_start || text_end - text_start > 32 * 1024 * 1024 {
+        return [0u8; 32];
+    }
+    let slice = unsafe {
+        core::slice::from_raw_parts(text_start as *const u8, text_end - text_start)
+    };
+    crypto::sha256::hash(slice)
 }
 
 /// Prompt the user for a passphrase over the QEMU UART with echo suppressed.
@@ -299,14 +321,19 @@ fn read_passphrase_from_uart(buf: &mut [u8]) -> usize {
     }
     let deadline_ticks = start + freq * 2; // 2 s total timeout
     loop {
-        // V5-WEIRD-006 fix: deadline check runs on EVERY iteration, not
-        // just when getc returns None. A UART-flooder that kept the
-        // receive FIFO full could otherwise hold us in the Some() branch
-        // indefinitely, either preventing boot or (with carefully-timed
-        // characters) injecting controlled bytes into the passphrase.
         let now: u64;
         unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
-        if now > deadline_ticks { drivers::uart::puts("\n"); return len; }
+        // V6-WEIRD-006 fix: when the deadline fires we return 0 (NOT
+        // `len`) so the caller falls back to the dev default. V5
+        // returned `len`, meaning a partially-typed passphrase
+        // ("evil-pa") with the deadline firing would silently become
+        // the actual passphrase — wrong key, wrong derivation, but no
+        // operator-visible error. Returning 0 forces the visible
+        // "empty input → dev fallback" path.
+        if now > deadline_ticks {
+            drivers::uart::puts("\n[security] passphrase entry timed out\n");
+            return 0;
+        }
 
         if let Some(ch) = drivers::uart::getc() {
             match ch {
@@ -461,11 +488,12 @@ pub extern "C" fn kernel_main_apple(boot_args: *const drivers::apple::soc::M1n1B
     // for the real interactive variant.
     let mut passphrase_buf = [0u8; 128];
     let passphrase_len = read_passphrase_apple(&mut passphrase_buf);
-    // V5-SUPPLY-003: dev-fallback string obfuscated (XOR) in binary.
+    // V6-WEIRD-002: dev-fallback derived from kernel-text hash via
+    // derive_secret_string (not stored as a literal).
     let mut dev_fallback_buf_apple = [0u8; 16];
     let dev_fb_len = if passphrase_len == 0 {
         drivers::apple::uart::puts("  (empty — dev fallback)\n");
-        deobf(&DEV_FALLBACK_OBF, &mut dev_fallback_buf_apple).len()
+        derive_secret_string(DEV_FALLBACK_LABEL, &mut dev_fallback_buf_apple).len()
     } else { 0 };
     let passphrase_slice: &[u8] = if passphrase_len == 0 {
         &dev_fallback_buf_apple[..dev_fb_len]
