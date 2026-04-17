@@ -1836,7 +1836,12 @@ fn sys_writev(args: [u64; 6]) -> i64 {
             }
             uart::putc(byte as u8);
         }
-        total += len as i64;
+        // V8-ROOT-3 / V8-ARITH-A5: len came in as u64 → cast to i64 can
+        // wrap to negative, making total (also i64) negative on overflow.
+        // Use saturating_add so short-write semantics hold (caller sees
+        // the correct count up to i64::MAX).
+        let add = if len > i64::MAX as usize { i64::MAX } else { len as i64 };
+        total = total.saturating_add(add);
     }
     total
 }

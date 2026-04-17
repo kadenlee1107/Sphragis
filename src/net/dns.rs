@@ -97,53 +97,67 @@ pub fn handle_response(data: &[u8]) {
     if answers == 0 { return; }
     if answers > 32 { return; }   // RFC-valid but suspicious
 
+    // V8-ROOT-3 / V8-ARITH-A4 / V8-PARSER-1: every offset += external_len
+    // arithmetic uses checked_add and aborts the parse on overflow OR
+    // out-of-bounds. The previous code used plain `+=` and `+` against
+    // unchecked attacker-supplied lengths.
+    //
     // Skip header (12 bytes) and question section
-    let mut offset = 12;
+    let mut offset: usize = 12;
 
-    // Skip question name
+    // Skip question name with bounded label-length cap (255 per RFC 1035).
+    let mut name_steps = 0usize;
     while offset < data.len() {
         let len = data[offset] as usize;
-        if len == 0 { offset += 1; break; }
-        offset += len + 1;
+        if len == 0 {
+            offset = match offset.checked_add(1) { Some(o) => o, None => return };
+            break;
+        }
+        if len > 63 { return; } // RFC 1035 §2.3.4: label max 63 octets
+        offset = match offset.checked_add(len + 1) { Some(o) => o, None => return };
+        name_steps += 1;
+        if name_steps > 128 { return; } // walk-too-long guard
     }
-    offset += 4; // Skip QTYPE + QCLASS
+    offset = match offset.checked_add(4) { Some(o) => o, None => return };
 
-    // Parse answer records — scan through all answers to find an A record.
-    // DNS responses may contain CNAME chains (e.g. www.wikipedia.org → CNAME → dyna.wikimedia.org → A record).
-    let max_answers = (answers as usize).min(16); // cap to avoid infinite loops
+    let max_answers = (answers as usize).min(16);
     for _ in 0..max_answers {
-        if offset + 2 > data.len() { return; }
+        if offset.checked_add(2).map_or(true, |e| e > data.len()) { return; }
 
-        // Skip name (might be compressed pointer: first two bits = 11)
         if data[offset] & 0xC0 == 0xC0 {
-            offset += 2; // Compressed pointer (2 bytes)
+            offset = match offset.checked_add(2) { Some(o) => o, None => return };
         } else {
+            let mut label_steps = 0usize;
             while offset < data.len() && data[offset] != 0 {
                 let label_len = data[offset] as usize;
-                offset += label_len + 1;
+                if label_len > 63 { return; }
+                offset = match offset.checked_add(label_len + 1) { Some(o) => o, None => return };
+                label_steps += 1;
+                if label_steps > 128 { return; }
             }
-            if offset < data.len() { offset += 1; } // skip null terminator
+            if offset < data.len() {
+                offset = match offset.checked_add(1) { Some(o) => o, None => return };
+            }
         }
 
-        if offset + 10 > data.len() { return; }
+        if offset.checked_add(10).map_or(true, |e| e > data.len()) { return; }
 
         let rtype = u16::from_be_bytes([data[offset], data[offset + 1]]);
-        // offset+2..+4 = class, offset+4..+8 = TTL
         let rdlen = u16::from_be_bytes([data[offset + 8], data[offset + 9]]) as usize;
-        if rdlen > 512 { return; } // reject oversized rdata (spoof defense)
-        offset += 10;
+        if rdlen > 512 { return; }
+        offset = match offset.checked_add(10) { Some(o) => o, None => return };
 
-        if rtype == 1 && rdlen == 4 && offset + 4 <= data.len() {
-            // A record — extract IPv4 address
+        if rtype == 1 && rdlen == 4
+            && offset.checked_add(4).map_or(false, |e| e <= data.len())
+        {
             let ip = u32::from_be_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]);
             RESOLVED_IP.store(ip, Ordering::Relaxed);
             DNS_DONE.store(true, Ordering::Release);
             return;
         }
 
-        // CNAME (type 5) or AAAA (type 28) or other — skip rdata and continue
-        if offset + rdlen > data.len() { return; }
-        offset += rdlen;
+        if offset.checked_add(rdlen).map_or(true, |e| e > data.len()) { return; }
+        offset = match offset.checked_add(rdlen) { Some(o) => o, None => return };
     }
 }
 
