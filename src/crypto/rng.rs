@@ -33,11 +33,32 @@ static HAVE_RNDR: AtomicBool = AtomicBool::new(false);
 
 /// Read ID_AA64ISAR0_EL1 to probe for the RNDR feature (bits 63:60 = 1
 /// means FEAT_RNG present). Call once at early boot.
+///
+/// V5-WEIRD-010 fix: previously this silently set HAVE_RNDR=false when
+/// the CPU lacked FEAT_RNG. That's true on QEMU without `-cpu max`, on
+/// many containers, and on older hardware. On those platforms every
+/// TLS ClientHello random came purely from the SHA-chain DRBG seeded
+/// only by cntpct_el0 — predictable to an attacker who could estimate
+/// boot time. Now we emit a loud warning so the operator knows their
+/// RNG is weakened, and surface the status via `have_rndr()`.
 pub fn probe_hw_rng() {
     let isar0: u64;
     unsafe { core::arch::asm!("mrs {}, id_aa64isar0_el1", out(reg) isar0); }
     let rndr_field = (isar0 >> 60) & 0xF;
-    HAVE_RNDR.store(rndr_field != 0, Ordering::Release);
+    let present = rndr_field != 0;
+    HAVE_RNDR.store(present, Ordering::Release);
+    if present {
+        crate::drivers::uart::puts("  [rng] ARMv8.5 RNDR available — mixing HW entropy\n");
+    } else {
+        crate::drivers::uart::puts("  [rng] WARN: RNDR unavailable — TLS randomness relies on SHA-chain DRBG\n");
+        crate::drivers::uart::puts("  [rng] WARN: deploy on ARMv8.5+ hardware or enable virtio-rng for production\n");
+    }
+}
+
+/// True iff the CPU exposes FEAT_RNG. Consulted by callers that want
+/// to refuse sensitive operations without real hardware entropy.
+pub fn have_rndr() -> bool {
+    HAVE_RNDR.load(Ordering::Acquire)
 }
 
 /// Try to read 8 bytes from RNDR. Returns None if unsupported or if the

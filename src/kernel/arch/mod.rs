@@ -36,8 +36,29 @@ pub fn init_exceptions() {
             "isb",
             out("x0") _,
         );
+
+        // V5-SIDE-005 fix: clear CNTKCTL_EL1 so EL0 cannot read the
+        // physical/virtual timer registers directly. Without this,
+        // `mrs xN, cntpct_el0` from user space returns a 40ns-resolution
+        // clock — the universal enabler for every timing side-channel
+        // attack (AES S-box cache timing, scalar-mult branch timing,
+        // etc.). sys_clock_gettime still provides timing to EL0 via
+        // the syscall boundary where we can add noise/resolution caps.
+        //
+        // Bits in CNTKCTL_EL1:
+        //   EL0PCTEN (bit 0) = 1 enables EL0 access to cntpct_el0
+        //   EL0VCTEN (bit 1) = 1 enables EL0 access to cntvct_el0
+        //   EVNTEN   (bit 2)
+        //   EVNTDIR  (bit 3)
+        //   EVNTI    (bits 7:4)
+        //   EL0VTEN  (bit 8)
+        //   EL0PTEN  (bit 9)
+        // Setting to 0 denies all EL0 timer register access.
+        core::arch::asm!("msr cntkctl_el1, xzr");
+        core::arch::asm!("isb");
     }
     uart::puts("  [arch] Exception vectors installed\n");
+    uart::puts("  [arch] CNTKCTL_EL1 cleared — EL0 timer access denied\n");
 }
 
 pub fn init_timer() {

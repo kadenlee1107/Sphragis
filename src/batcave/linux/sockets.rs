@@ -591,6 +591,14 @@ pub fn sendto(fd: i32, buf: *const u8, len: usize, _flags: i32,
               dest_addr: *const SockaddrIn, addrlen: u32) -> i64 {
     if buf.is_null() && len > 0 { return EFAULT; }
 
+    // V5-XLAYER-013 fix: refuse non-user `buf` before constructing a
+    // slice over it. Previously `from_raw_parts(buf=0x40000000, len)`
+    // would read kernel BSS and TLS-encrypt it over the wire, giving
+    // a net-capped cave an exfil-any-kernel-state primitive.
+    if len > 0 && !is_user(buf as usize, len) {
+        return EFAULT;
+    }
+
     let (kind, status, nonblock, peer_ip, peer_port, pcb_id) = match with_slot(fd, |s| {
         Ok((s.kind, s.status, s.nonblock, s.peer_addr, s.peer_port, s.pcb_id))
     }) { Ok(v) => v, Err(e) => return e };
@@ -649,6 +657,11 @@ pub fn sendto(fd: i32, buf: *const u8, len: usize, _flags: i32,
 pub fn recvfrom(fd: i32, buf: *mut u8, len: usize, _flags: i32,
                 src_addr: *mut SockaddrIn, addrlen: *mut u32) -> i64 {
     if buf.is_null() && len > 0 { return EFAULT; }
+    // V5-XLAYER-013 companion: recvfrom writes to `buf`. Without this
+    // check, a cave could pass buf=0x40000000 and have the kernel TLS-
+    // decrypt incoming bytes into kernel BSS — arbitrary write via
+    // attacker-controlled TCP payload.
+    if len > 0 && !is_user(buf as usize, len) { return EFAULT; }
 
     let (kind, status, nonblock, peer_ip, peer_port, pcb_id) = match with_slot(fd, |s| {
         Ok((s.kind, s.status, s.nonblock, s.peer_addr, s.peer_port, s.pcb_id))

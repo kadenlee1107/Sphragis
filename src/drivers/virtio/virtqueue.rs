@@ -232,9 +232,21 @@ impl Virtqueue {
         let entry_len = safe_read32(used + 4 + entry_off + 4);
         self.last_used_idx = self.last_used_idx.wrapping_add(1);
 
-        // Return descriptors to free list (follow chain)
+        // V5-WEIRD-003 fix: the descriptor chain has a `next` pointer
+        // the hypervisor controls. Previously we followed it without
+        // bounds-checking against QUEUE_SIZE — a malicious host could
+        // (a) point `next` past the descriptor ring (OOB read ~1 MB), or
+        // (b) form a cycle causing an infinite loop.
+        //
+        // We now reject `next >= QUEUE_SIZE` and cap the chain length
+        // at QUEUE_SIZE (so a cycle terminates deterministically).
         let mut idx = entry_id as u16;
+        let mut steps = 0usize;
         loop {
+            if idx >= QUEUE_SIZE as u16 { break; }          // OOB guard
+            if steps >= QUEUE_SIZE as usize { break; }      // cycle guard
+            steps += 1;
+
             let desc = self.desc_base() + (idx as usize) * 16;
             let flags = safe_read16(desc + 12);
             let next = safe_read16(desc + 14);

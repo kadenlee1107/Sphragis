@@ -586,6 +586,13 @@ fn sys_write(args: [u64; 6]) -> i64 {
         let node = vfs::get_node(node_idx);
         // Socket → TCP send
         if node.node_type == vfs::NodeType::Socket {
+            // V5-XLAYER-004 fix: sys_write arrived here classified as
+            // FileIO (needs `fs` cap), but we're about to send data to
+            // the network. Re-check the `net` cap so a cave with only
+            // `fs` can't exfil via a socket fd it inherited.
+            if !cave::active_has_cap("net") {
+                return -(13i64); // EACCES
+            }
             return sys_sendto([fd_num as u64, args[1], args[2], 0, 0, 0]);
         }
         if node.node_type == vfs::NodeType::DevNull { return count as i64; }
@@ -2212,7 +2219,12 @@ fn sys_execve(args: [u64; 6]) -> i64 {
         let mut argv_lens = [0usize; 4];
         let mut argc = 0;
 
-        if argv_ptr != 0 {
+        // V5-PARSER-011 fix: gate argv_ptr (4 × 8 byte pointer array) and
+        // each arg_ptr string before dereference. Previously a cave could
+        // pass argv_ptr=0x40400000 and have the kernel read 4 × 63 bytes
+        // of kernel RAM into argv_strs, which busybox then emitted to
+        // stdout — a cheap kernel-memory disclosure.
+        if argv_ptr != 0 && uaccess::is_user_range(argv_ptr, 4 * 8) {
             for i in 0..4 {
                 let arg_ptr: u64;
                 unsafe {
@@ -2220,8 +2232,10 @@ fn sys_execve(args: [u64; 6]) -> i64 {
                         a = in(reg) argv_ptr + i * 8, v = out(reg) arg_ptr);
                 }
                 if arg_ptr == 0 { break; }
+                if !uaccess::is_user_range(arg_ptr as usize, 1) { break; }
                 // Read string
                 for j in 0..63 {
+                    if !uaccess::is_user_range(arg_ptr as usize + j, 1) { break; }
                     let b: u32;
                     unsafe {
                         core::arch::asm!("ldrb {v:w}, [{a}]",

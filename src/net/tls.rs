@@ -340,8 +340,22 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
         let sid_len = content[38] as usize;
         let mut pos = 39 + sid_len;
 
-        // Skip cipher suite (2) + compression (1)
-        pos += 3;
+        // V5-WEIRD-001 fix: the ServerHello-selected cipher suite used
+        // to be unconditionally skipped — the handshake was hard-wired
+        // to AES-128-GCM-SHA256 regardless of what the server picked.
+        // If the server picked TLS_AES_256_GCM_SHA384 (0x1302) or
+        // TLS_CHACHA20_POLY1305_SHA256 (0x1303) our decrypt used the
+        // wrong cipher / hash, producing record-auth failures that
+        // looked like MITM when they weren't, and (worse) an MITM
+        // could exploit the silent inconsistency. Now we require
+        // AES-128-GCM-SHA256 or abort.
+        if pos + 3 > content.len() { return Err("SH truncated before cipher"); }
+        let selected_cs = ((content[pos] as u16) << 8) | content[pos + 1] as u16;
+        if selected_cs != TLS_AES_128_GCM_SHA256 {
+            uart::puts("[tls] server selected unsupported cipher suite — abort\n");
+            return Err("TLS: unsupported cipher suite");
+        }
+        pos += 3; // cipher (2) + compression (1)
 
         // Extensions length
         if pos + 2 > content.len() { return Err("SH no extensions"); }
@@ -622,7 +636,15 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
             // that was missing previously.
             if inner_type == 0x16 && inner_len > 0 {
                 let mut hp = 0usize;
+                let mut finished_seen = false;
                 while hp + 4 <= inner_len {
+                    // V5-PARSER-042 fix: stop processing messages after
+                    // Finished verified, so a crafted record trailing
+                    // with a second Certificate can't overwrite
+                    // peer_spki (which would let a follow-up
+                    // CertificateVerify validate against the attacker's
+                    // pubkey).
+                    if finished_seen { break; }
                     let msg_type = decrypted[hp];
                     let msg_len = ((decrypted[hp + 1] as usize) << 16)
                                 | ((decrypted[hp + 2] as usize) << 8)
@@ -787,6 +809,7 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                             return Err("TLS: server Finished HMAC mismatch (MITM?)");
                         }
                         tdbg("[tls] server Finished HMAC ok\n");
+                        finished_seen = true;
                     }
 
                     // Always feed the full handshake-message bytes into the

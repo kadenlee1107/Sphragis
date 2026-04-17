@@ -263,7 +263,27 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
         let vaddr = u64_at(data, ph + 16) as usize;
         let filesz = u64_at(data, ph + 32) as usize;
         let memsz = u64_at(data, ph + 40) as usize;
-        let phys_addr = (vaddr as i64 + patch_offset) as usize;
+
+        // V5-PARSER-001 fix: reject PT_LOAD with vaddr < min_addr (the
+        // scan at line 215 found min_addr, but an adversarial ELF could
+        // include PT_LOAD with vaddr BELOW min_addr, producing a
+        // negative patch_offset result and phys_addr < phys_base —
+        // write-what-where primitive before our bounds check. Also
+        // bound the full segment fits in [phys_base, phys_base+total).
+        if (vaddr as u64) < min_addr {
+            return Err("PT_LOAD vaddr below min_addr (crafted?)");
+        }
+        let phys_addr_i = (vaddr as i64).checked_add(patch_offset)
+            .ok_or("PT_LOAD phys_addr overflow")?;
+        if phys_addr_i < phys_base as i64 {
+            return Err("PT_LOAD phys_addr below phys_base");
+        }
+        let phys_addr = phys_addr_i as usize;
+        let seg_end_phys = phys_addr.checked_add(memsz.max(filesz))
+            .ok_or("PT_LOAD segment end overflow")?;
+        if seg_end_phys > phys_base.saturating_add(total_size) {
+            return Err("PT_LOAD segment end past reserved range");
+        }
 
         if filesz > 0 {
             match p_offset.checked_add(filesz) {
@@ -655,11 +675,20 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     unsafe { core::arch::asm!("str {v}, [{a}]", a = in(reg) sp, v = in(reg) argc as u64); }
 
     // TLS
+    //
+    // V5-CHAIN-005 / V5-KMEM-007 fix: previously we wrote the raw
+    // kernel-physical address of the TLS page into tpidr_el0, which
+    // EL0 could read back via `mrs xN, tpidr_el0` (no trap). That
+    // leaked kernel RAM layout and gave a ROP chain a starting point.
+    // We now zero tpidr_el0 for EL0 entry. Binaries that rely on TLS
+    // (pthread) will fault on access; busybox static / hello / content_shell
+    // at launch do not. A proper per-cave-VA TLS mapping is Phase B.
     let tls_page = frame::alloc_frame().ok_or("oom")?;
     for i in 0..PAGE_SIZE {
         unsafe { core::arch::asm!("strb wzr, [{a}]", a = in(reg) tls_page + i); }
     }
-    unsafe { core::arch::asm!("msr tpidr_el0, {}", in(reg) (tls_page + PAGE_SIZE - 256) as u64); }
+    unsafe { core::arch::asm!("msr tpidr_el0, xzr"); }
+    let _ = tls_page; // still allocated; not leaked via tpidr_el0 any more
 
     // Enable MMU
     super::mmu::setup_and_enable(phys_base)?;
@@ -668,11 +697,22 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     uart::puts("[loader] --- executing ---\n");
 
     // Save kernel SP to a FIXED memory location (0x40000100)
-    // This address is in the first page of RAM, always accessible
+    // This address is in the first page of RAM, always accessible.
+    //
+    // V5-KMEM-006 fix: validate that SP_EL1 looks plausible — inside
+    // kernel RAM (0x40000000..0x50000000) and 16-byte aligned — before
+    // we save it. A bogus SP here would mean deep Rust call-chain
+    // corruption; saving it would just make the bug louder. We panic
+    // instead so operator sees it immediately.
     const SP_SAVE_ADDR: usize = 0x40000100;
     unsafe {
         let ksp: u64;
         core::arch::asm!("mov {}, sp", out(reg) ksp);
+        let ksp_usize = ksp as usize;
+        if ksp_usize < 0x4000_0000 || ksp_usize >= 0x5000_0000 || (ksp_usize & 0xF) != 0 {
+            uart::puts("[loader] FATAL: SP_EL1 out of kernel RAM or unaligned\n");
+            loop { core::arch::asm!("wfi"); }
+        }
         core::arch::asm!("str {v}, [{a}]", a = in(reg) SP_SAVE_ADDR, v = in(reg) ksp);
     }
 

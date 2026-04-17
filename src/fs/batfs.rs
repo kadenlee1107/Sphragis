@@ -67,7 +67,14 @@ static mut FILES: [FileEntry; MAX_FILES] = {
 
 static mut FILE_COUNT: usize = 0;
 static mut MASTER_KEY: [u8; 32] = [0u8; 32];
-static mut NONCE_COUNTER: u64 = 0;
+// V5-CRYPTO-002 fix: NONCE_COUNTER is now atomic. The old `static mut
+// NONCE_COUNTER: u64` with non-atomic `n = NONCE_COUNTER; NONCE_COUNTER
+// += 1` could race between concurrent `create()` calls (even on a
+// single-core kernel, the new V4 deferred-preemption scheduler can
+// interleave them). Two creates racing on the same filename would
+// produce the same derived key and the same nonce, meaning the two
+// plaintexts xor to the same CTR keystream — recoverable.
+static NONCE_COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 // FL-027 / NEW-CRYPTO-007 fix: per-boot random 4-byte prefix mixed into
 // every CTR nonce. Without this, re-encrypting the same filename across
 // boots gave the same (key, IV) — a crib-drag on recurring files. The
@@ -145,24 +152,25 @@ pub fn init(master_key: &[u8; 32]) {
     unsafe {
         MASTER_KEY = *master_key;
         FILE_COUNT = 0;
-        NONCE_COUNTER = 1;
         let mut rnd = [0u8; 4];
         crate::crypto::rng::fill_bytes(&mut rnd);
         BOOT_NONCE_PREFIX = rnd;
         INITIALIZED = true;
     }
+    NONCE_COUNTER.store(1, core::sync::atomic::Ordering::Release);
 }
 
 fn next_nonce() -> [u8; 12] {
-    unsafe {
-        let n = NONCE_COUNTER;
-        NONCE_COUNTER += 1;
-        let mut nonce = [0u8; 12];
-        let prefix = core::ptr::read_volatile(core::ptr::addr_of!(BOOT_NONCE_PREFIX));
-        nonce[..4].copy_from_slice(&prefix);
-        nonce[4..12].copy_from_slice(&n.to_be_bytes());
-        nonce
-    }
+    // V5-CRYPTO-002: atomic fetch_add — two concurrent create() calls
+    // now get distinct counter values even without a lock.
+    let n = NONCE_COUNTER.fetch_add(1, core::sync::atomic::Ordering::AcqRel);
+    let mut nonce = [0u8; 12];
+    let prefix = unsafe {
+        core::ptr::read_volatile(core::ptr::addr_of!(BOOT_NONCE_PREFIX))
+    };
+    nonce[..4].copy_from_slice(&prefix);
+    nonce[4..12].copy_from_slice(&n.to_be_bytes());
+    nonce
 }
 
 fn derive_file_key(filename: &str) -> [u8; 32] {

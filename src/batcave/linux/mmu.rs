@@ -165,13 +165,25 @@ static CAVE_SLOT_USED: AtomicU8 = AtomicU8::new(0);
 
 /// Allocate a free cave page-table slot. Returns Some(index) or None if
 /// all MAX_CAVE_PAGETABLES are in use.
+///
+/// V5-TOCTOU-011 fix: CAS-per-bit instead of load-then-fetch_or. The
+/// old path could race: thread A loads used, sees bit i is 0; thread B
+/// also loads used and sees bit i is 0; both fetch_or(bit i) and both
+/// get Some(i), so two threads think they own cave slot i.
 pub fn alloc_cave_slot() -> Option<usize> {
-    let used = CAVE_SLOT_USED.load(SlotOrder::Acquire);
     for i in 0..MAX_CAVE_PAGETABLES {
         let bit = 1u8 << i;
-        if used & bit == 0 {
-            CAVE_SLOT_USED.fetch_or(bit, SlotOrder::AcqRel);
-            return Some(i);
+        loop {
+            let cur = CAVE_SLOT_USED.load(SlotOrder::Acquire);
+            if cur & bit != 0 { break; } // slot taken, try next
+            let new = cur | bit;
+            if CAVE_SLOT_USED
+                .compare_exchange(cur, new, SlotOrder::AcqRel, SlotOrder::Acquire)
+                .is_ok()
+            {
+                return Some(i);
+            }
+            // CAS lost the race — re-read and retry on same slot.
         }
     }
     None
@@ -188,7 +200,12 @@ pub fn alloc_cave_slot() -> Option<usize> {
 /// after ~40 caves.
 pub fn free_cave_slot(slot: usize) {
     if slot >= MAX_CAVE_PAGETABLES { return; }
-    CAVE_SLOT_USED.fetch_and(!(1u8 << slot), SlotOrder::AcqRel);
+    // V5-CHAIN-002 fix: zero the per-slot state BEFORE releasing the
+    // slot-used bit. Previously we cleared the used bit first, which
+    // let a racing alloc_cave_slot grab the slot while CAVE_L1[slot]
+    // still held the old tenant's L1. When this function then
+    // zero-and-freed the L1 pages it clobbered the new tenant's page
+    // tables, collapsing the sandbox to PRIMARY_L1.
     unsafe {
         let l1 = CAVE_L1[slot];
         if l1 != 0 {
@@ -215,7 +232,13 @@ pub fn free_cave_slot(slot: usize) {
         }
         CAVE_L1[slot] = 0;
         CAVE_PHYS_BASE[slot] = 0;
+        CAVE_VIRT_BASE[slot] = 0;
+        CAVE_VIRT_EXTENT[slot] = 0;
     }
+    // Release the slot-used bit LAST so a concurrent alloc_cave_slot
+    // cannot claim this slot while the per-slot state is still being
+    // reset. This is the V5-CHAIN-002 ordering fix.
+    CAVE_SLOT_USED.fetch_and(!(1u8 << slot), SlotOrder::AcqRel);
 }
 
 /// Get the L1 table address for a specific cave.
