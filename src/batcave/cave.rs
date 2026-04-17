@@ -479,6 +479,15 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
     // compat layer so the next cave starts with a clean state.
     crate::batcave::linux::syscall::reset_cave_statics();
 
+    // V5-CHAIN-004 fix: reset the quota ledger so a reused cave slot
+    // does NOT start life with the previous tenant's accumulated
+    // counters (which might already be at the limit). Without this,
+    // destroying+recreating a cave could leave it stuck unable to
+    // allocate anything.
+    if let Some(id) = find_id(name) {
+        crate::batcave::linux::quotas::reset(id);
+    }
+
     Ok(())
 }
 

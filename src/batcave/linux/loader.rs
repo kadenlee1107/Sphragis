@@ -26,21 +26,39 @@ pub static HELLO_ORIG_ENTRY: AtomicUsize = AtomicUsize::new(0);
 /// Re-initialize a previously loaded ELF at the given phys_base.
 /// Re-copies all PT_LOAD segments and re-applies relocations.
 /// Does NOT allocate new pages — reuses existing allocation.
+///
+/// V5-PARSER-002 fix: match `load_elf_rebased` bounds discipline
+/// exactly. Previously this function lacked:
+///   * ELF magic check
+///   * vaddr + memsz overflow guard (→ write_bytes(ptr, 0, ~0) wiped RAM)
+///   * phys_addr >= phys_base guard (crafted vaddr<min_addr caused
+///     underflow, writing somewhere below phys_base)
 pub fn reinit_elf(data: &[u8], phys_base: usize) {
     if data.len() < 64 { return; }
+    if &data[0..4] != b"\x7fELF" { return; }
 
     let phoff = u64_at(data, 32) as usize;
     let phnum = u16_at(data, 56) as usize;
     let phentsz = u16_at(data, 54) as usize;
 
     let mut min_addr: u64 = u64::MAX;
+    let mut max_addr: u64 = 0;
     for i in 0..phnum {
         let ph = phoff + i * phentsz;
         if ph + phentsz > data.len() { break; }
         if u32_at(data, ph) != 1 { continue; }
         let vaddr = u64_at(data, ph + 16);
+        let memsz = u64_at(data, ph + 40);
         if vaddr < min_addr { min_addr = vaddr; }
+        let seg_end = match vaddr.checked_add(memsz) {
+            Some(e) => e,
+            None => return, // overflow — refuse
+        };
+        if seg_end > max_addr { max_addr = seg_end; }
     }
+    if min_addr == u64::MAX { return; } // no PT_LOAD
+    let total_size = (max_addr - min_addr) as usize;
+    let phys_range_end = phys_base.saturating_add(total_size);
 
     let reloc_offset = phys_base as i64 - min_addr as i64;
 
@@ -54,7 +72,16 @@ pub fn reinit_elf(data: &[u8], phys_base: usize) {
         let vaddr = u64_at(data, ph + 16) as usize;
         let filesz = u64_at(data, ph + 32) as usize;
         let memsz = u64_at(data, ph + 40) as usize;
-        let phys_addr = (vaddr as i64 + reloc_offset) as usize;
+        // V5-PARSER-002: refuse crafted vaddr<min_addr and segments
+        // that don't fit in [phys_base, phys_base+total_size).
+        if (vaddr as u64) < min_addr { return; }
+        let phys_addr_i = (vaddr as i64).checked_add(reloc_offset);
+        let phys_addr = match phys_addr_i {
+            Some(a) if a as usize >= phys_base => a as usize,
+            _ => return,
+        };
+        let seg_top = phys_addr.checked_add(memsz.max(filesz));
+        if seg_top.map_or(true, |t| t > phys_range_end) { return; }
 
         // FL-001: guard p_offset + filesz against usize wrap before the copy.
         let copy_ok = filesz > 0 && match p_offset.checked_add(filesz) {

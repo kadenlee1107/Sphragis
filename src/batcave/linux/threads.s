@@ -42,17 +42,35 @@ cxt_switch_cooperative:
         stp     x29, x30, [x0, #232]
 
         // Save current SP into old.sp_el0 (offset 248).
-        // (We treat SP_EL1 as the save target because we're in kernel mode
-        // running this on behalf of the user thread.)
         mov     x2, sp
         str     x2, [x0, #248]
 
-        // Save tpidr_el0 (user TLS base) into old.x[18] slot — we don't
-        // have a dedicated field so reuse the otherwise-unused x18 slot.
-        // x18 is the ARM64 "platform register" / shadow stack reg; we
-        // don't use it. Offset = 18*8 = 144.
+        // Save tpidr_el0 into old.x[18] slot (offset 144).
         mrs     x2, tpidr_el0
         str     x2, [x0, #144]
+
+        // V5-SIDE-003: save Q0..Q31 + FPSR + FPCR.
+        // SavedRegs.q @ 272 (after sp_el0/elr_el1/spsr_el1 = 272/16=17 pair slots).
+        stp     q0,  q1,  [x0, #272]
+        stp     q2,  q3,  [x0, #272+32]
+        stp     q4,  q5,  [x0, #272+64]
+        stp     q6,  q7,  [x0, #272+96]
+        stp     q8,  q9,  [x0, #272+128]
+        stp     q10, q11, [x0, #272+160]
+        stp     q12, q13, [x0, #272+192]
+        stp     q14, q15, [x0, #272+224]
+        stp     q16, q17, [x0, #272+256]
+        stp     q18, q19, [x0, #272+288]
+        stp     q20, q21, [x0, #272+320]
+        stp     q22, q23, [x0, #272+352]
+        stp     q24, q25, [x0, #272+384]
+        stp     q26, q27, [x0, #272+416]
+        stp     q28, q29, [x0, #272+448]
+        stp     q30, q31, [x0, #272+480]
+        mrs     x2, fpsr
+        str     x2, [x0, #784]
+        mrs     x2, fpcr
+        str     x2, [x0, #792]
 
         // ─── Restore callee-saved regs of NEW thread from *x1 ───
         ldp     x19, x20, [x1, #152]
@@ -62,19 +80,35 @@ cxt_switch_cooperative:
         ldp     x27, x28, [x1, #216]
         ldp     x29, x30, [x1, #232]
 
-        // Restore SP
         ldr     x2, [x1, #248]
         mov     sp, x2
 
-        // Restore tpidr_el0 (TLS base) for the new thread
         ldr     x2, [x1, #144]
         msr     tpidr_el0, x2
 
-        // Synchronize: make sure the TLS change is visible before we return
-        // to code that may read tpidr_el0.
+        // V5-SIDE-003: restore Q0..Q31 + FPSR + FPCR.
+        ldp     q0,  q1,  [x1, #272]
+        ldp     q2,  q3,  [x1, #272+32]
+        ldp     q4,  q5,  [x1, #272+64]
+        ldp     q6,  q7,  [x1, #272+96]
+        ldp     q8,  q9,  [x1, #272+128]
+        ldp     q10, q11, [x1, #272+160]
+        ldp     q12, q13, [x1, #272+192]
+        ldp     q14, q15, [x1, #272+224]
+        ldp     q16, q17, [x1, #272+256]
+        ldp     q18, q19, [x1, #272+288]
+        ldp     q20, q21, [x1, #272+320]
+        ldp     q22, q23, [x1, #272+352]
+        ldp     q24, q25, [x1, #272+384]
+        ldp     q26, q27, [x1, #272+416]
+        ldp     q28, q29, [x1, #272+448]
+        ldp     q30, q31, [x1, #272+480]
+        ldr     x2, [x1, #784]
+        msr     fpsr, x2
+        ldr     x2, [x1, #792]
+        msr     fpcr, x2
+
         isb
 
-        // Return — x30 was just restored to the new thread's LR, so ret
-        // jumps to wherever that thread was about to resume from.
         ret
         .size   cxt_switch_cooperative, . - cxt_switch_cooperative

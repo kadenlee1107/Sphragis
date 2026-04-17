@@ -299,6 +299,15 @@ fn read_passphrase_from_uart(buf: &mut [u8]) -> usize {
     }
     let deadline_ticks = start + freq * 2; // 2 s total timeout
     loop {
+        // V5-WEIRD-006 fix: deadline check runs on EVERY iteration, not
+        // just when getc returns None. A UART-flooder that kept the
+        // receive FIFO full could otherwise hold us in the Some() branch
+        // indefinitely, either preventing boot or (with carefully-timed
+        // characters) injecting controlled bytes into the passphrase.
+        let now: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+        if now > deadline_ticks { drivers::uart::puts("\n"); return len; }
+
         if let Some(ch) = drivers::uart::getc() {
             match ch {
                 b'\r' | b'\n' => { drivers::uart::puts("\n"); return len; }
@@ -314,9 +323,6 @@ fn read_passphrase_from_uart(buf: &mut [u8]) -> usize {
                 }
             }
         } else {
-            let now: u64;
-            unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
-            if now > deadline_ticks { drivers::uart::puts("\n"); return len; }
             core::hint::spin_loop();
         }
     }

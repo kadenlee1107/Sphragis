@@ -159,22 +159,36 @@ const DEFAULT_STACK_PAGES: usize = 16; // 64 KiB fallback
 const PAGE_SIZE: usize = 4096;
 
 /// Full GPR snapshot + special registers. Large, but we have 64 slots so
-/// 64 * ~280 bytes ≈ 18 KiB total — well within budget.
+/// 64 * ~800 bytes ≈ 50 KiB total — still within budget.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SavedRegs {
-    pub x: [u64; 31],    // x0..x30
-    pub sp_el0: u64,     // user stack pointer
-    pub elr_el1: u64,    // user PC to resume at
-    pub spsr_el1: u64,   // processor state (EL0t, interrupts enabled, etc.)
-    // TODO: NEON/FP state (q0-q31, fpsr, fpcr) — Chromium uses FP heavily;
-    //       without saving it, threads will corrupt each other's FP regs.
-    //       Needed for real multi-threaded Chromium.
+    pub x: [u64; 31],    // x0..x30    @ 0..248
+    pub sp_el0: u64,     //            @ 248
+    pub elr_el1: u64,    //            @ 256
+    pub spsr_el1: u64,   //            @ 264
+    // V5-SIDE-003 fix: save/restore Q0-Q31 + FPSR + FPCR across
+    // context switch. Without this, thread B running an AES round
+    // reads thread A's post-handshake FP residue directly from its
+    // own q-regs — a trivial cross-thread side channel. Chromium's
+    // V8 + Blink use FP/NEON heavily so this is required even for
+    // correctness.
+    pub q: [u128; 32],   // q0..q31    @ 272..784
+    pub fpsr: u64,       //            @ 784
+    pub fpcr: u64,       //            @ 792
 }
 
 impl SavedRegs {
     pub const fn zero() -> Self {
-        Self { x: [0; 31], sp_el0: 0, elr_el1: 0, spsr_el1: 0 }
+        Self {
+            x: [0; 31],
+            sp_el0: 0,
+            elr_el1: 0,
+            spsr_el1: 0,
+            q: [0; 32],
+            fpsr: 0,
+            fpcr: 0,
+        }
     }
 }
 
@@ -513,30 +527,30 @@ pub fn runnable_count() -> usize {
 /// spawn_thread calls can reuse it.
 pub fn exit_current(code: i32) -> ! {
     let me = current_tid();
-    let (clear_addr, stack_base, stack_pages) = with_table(|t| {
+    // V5-TOCTOU-002 fix: mark the slot Exited AND free its stack AND
+    // clear the slot all inside a single `with_table` critical section.
+    // Previously there was a window between "mark Exited" and
+    // "free stack" where a racing try_reap or a second exit_current
+    // could see the stack_base/stack_pages and issue a double-free.
+    let clear_addr = with_table(|t| {
         if let Some(i) = slot_of(t, me) {
             t[i].state = ThreadState::Exited(code);
             let sb = t[i].stack_base;
             let sp = t[i].stack_pages;
             let ca = t[i].tid_clear_on_exit;
-            (ca, sb, sp)
-        } else { (None, 0, 0) }
+            // Zero the slot FIRST so no reader can see stack_base/pages
+            // after we decide to free them.
+            t[i] = Thread::empty();
+            if sp > 0 && sb != 0 {
+                crate::kernel::mm::frame::free_contig(sb as usize, sp);
+            }
+            ca
+        } else { None }
     });
     if let Some(addr) = clear_addr {
         unsafe { core::ptr::write_volatile(addr as *mut i32, 0); }
         futex_wake_on(addr, 1);
     }
-    // Free the thread's stack. Kernel free_frame zeroes each page on
-    // return so residue from this thread can't leak via reuse.
-    if stack_pages > 0 && stack_base != 0 {
-        crate::kernel::mm::frame::free_contig(stack_base as usize, stack_pages);
-    }
-    // Drop the slot so the tid can be reused.
-    with_table(|t| {
-        if let Some(i) = slot_of(t, me) {
-            t[i] = Thread::empty();
-        }
-    });
     schedule();
     loop { unsafe { core::arch::asm!("wfi"); } }
 }

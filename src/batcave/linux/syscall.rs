@@ -1252,8 +1252,26 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
     }
 
     // For fixed-address mappings, just return the requested address
-    // (the memory is already identity-mapped)
+    // (the memory is already identity-mapped).
+    //
+    // V5-XLAYER-008/010 fix: the previous early-return bypassed every
+    // guard: no quota charge, no is_user_range check, no page alignment
+    // check. A cave could call mmap(addr=0x40000000, len=..., MAP_FIXED)
+    // and get back a kernel-RAM pointer it could then write to via
+    // sys_write/sys_writev (which only validate the buffer, not the
+    // target). Now we require addr to live in userspace and charge
+    // against the memory quota.
     if addr != 0 && (flags & 0x10) != 0 { // MAP_FIXED = 0x10
+        if !uaccess::is_user_range(addr, len) {
+            return -(14i64); // EFAULT
+        }
+        // Charge the same as a regular allocation — MAP_FIXED still
+        // commits memory that should count against the cave quota.
+        let charge_bytes = (len + 4095) & !4095;
+        if let Err(e) = super::quotas::charge_active(
+                super::quotas::Resource::Mem, charge_bytes) {
+            return e;
+        }
         return addr as i64;
     }
 
@@ -2924,15 +2942,22 @@ fn sys_pipe2_inner(fds_ptr: usize) -> i64 {
             let name_len = 7;
 
             if let Ok(node_idx) = vfs::create_node(tmp, &name[..name_len], vfs::NodeType::File, 0o100600) {
-                // Read end (fd pointing to the file, position starts at 0)
+                // V5-CHAIN-003 fix: if the SECOND alloc_fd fails, release
+                // the FIRST fd so it doesn't leak. sys_pipe2 (caller)
+                // already charged 2 fds up front; if only one ended up
+                // in the fd table we must release it too.
                 let read_fd = match fd::alloc_fd(node_idx, fd::O_RDONLY) {
                     Ok(f) => f,
                     Err(e) => return e,
                 };
-                // Write end (same file, position starts at 0)
                 let write_fd = match fd::alloc_fd(node_idx, fd::O_WRONLY) {
                     Ok(f) => f,
-                    Err(e) => return e,
+                    Err(e) => {
+                        // Release the already-allocated read_fd so it
+                        // doesn't stay as an orphan in the fd table.
+                        let _ = fd::close(read_fd);
+                        return e;
+                    }
                 };
 
                 unsafe {
