@@ -38,18 +38,14 @@ const EPERM: i64 = -1;     // Operation not permitted
 /// the kernel RAM identity map (0x4000_0000..0x8000_0000 on QEMU virt).
 ///
 /// Returns `false` on overflow, NULL, low pages, or kernel-range pointers.
+///
+/// V8-ROOT-8 (regression fix): delegate to `uaccess::is_user_range` so the
+/// cave's own user-window bounds (set at `enter()` time) are consulted,
+/// not just the static legacy window. Any cave with virt_base != 0
+/// previously could read/write the legacy 0x1000..0x4000_0000 range and
+/// pivot into another cave's state.
 fn is_user_ptr(p: usize, size: usize) -> bool {
-    let end = match p.checked_add(size) {
-        Some(e) => e,
-        None => return false,
-    };
-    // Reject NULL, the first page, and anywhere in the kernel RAM
-    // identity-map window. `p < end` is implied by the checked_add above
-    // but keeps the predicate readable.
-    p != 0
-        && p >= 0x1000
-        && end < 0x4000_0000
-        && p < end
+    uaccess::is_user_range(p, size)
 }
 
 // Syscall categories for capability checking
@@ -575,16 +571,25 @@ fn sys_write(args: [u64; 6]) -> i64 {
     // Reject pointer-to-kernel attacks before any dereference.
     if count > 0 && !is_user_ptr(buf, count) { return EFAULT; }
 
-    // Pipe write
+    // Pipe write — V8-ROOT-1 + V8-ROOT-3 (regression fix): the whole read-
+    // modify-write of PIPE_LEN must be atomic against a racing second
+    // writer (a timer IRQ that schedules another thread which also pipes).
+    // Also plen+writable is checked_add to survive overflow-checks=true
+    // if any state drifts.
     unsafe {
         let pipe_wr = core::ptr::read_volatile(core::ptr::addr_of!(PIPE_WRITE_FD));
         if fd_num == pipe_wr && pipe_wr != 0 {
+            let _g = crate::kernel::sync::IrqGuard::new();
             let plen = core::ptr::read_volatile(core::ptr::addr_of!(PIPE_LEN));
-            let writable = (PIPE_BUF_SIZE - plen).min(count);
+            let writable = PIPE_BUF_SIZE.saturating_sub(plen).min(count);
             if writable > 0 {
                 let pbuf = core::ptr::addr_of_mut!(PIPE_BUF);
                 core::ptr::copy_nonoverlapping(buf as *const u8, (*pbuf).as_mut_ptr().add(plen), writable);
-                core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_LEN), plen + writable);
+                let new_len = match plen.checked_add(writable) {
+                    Some(n) if n <= PIPE_BUF_SIZE => n,
+                    _ => return EAGAIN,
+                };
+                core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_LEN), new_len);
                 return writable as i64;
             }
             return EAGAIN;
@@ -693,16 +698,19 @@ fn sys_read(args: [u64; 6]) -> i64 {
         }
     }
 
-    // Pipe read
+    // Pipe read — V8-ROOT-1 (regression fix): same CS discipline as the
+    // write path, otherwise a timer-IRQ-scheduled writer can extend
+    // PIPE_LEN while we hold a stale `plen` and we read past the buffer.
     unsafe {
         let pipe_rd = core::ptr::read_volatile(core::ptr::addr_of!(PIPE_READ_FD));
         if fd_num == pipe_rd && pipe_rd != 0 {
+            let _g = crate::kernel::sync::IrqGuard::new();
             let plen = core::ptr::read_volatile(core::ptr::addr_of!(PIPE_LEN));
             let readable = plen.min(count);
             if readable > 0 {
                 let pbuf = core::ptr::addr_of_mut!(PIPE_BUF);
                 core::ptr::copy_nonoverlapping((*pbuf).as_ptr(), buf as *mut u8, readable);
-                let remaining = plen - readable;
+                let remaining = plen.saturating_sub(readable);
                 if remaining > 0 {
                     core::ptr::copy((*pbuf).as_ptr().add(readable), (*pbuf).as_mut_ptr(), remaining);
                 }
@@ -1422,6 +1430,12 @@ fn sys_connect(args: [u64; 6]) -> i64 {
     let addr_len = args[2] as usize;
 
     if addr_ptr == 0 || addr_len < 8 { return EINVAL; }
+    // V8-ROOT-8: gate addr_ptr before any raw asm load. Without this, an
+    // attacker passes addr_ptr in the kernel range and gets a controlled
+    // 8-byte kernel-read oracle via the IP/port we later log.
+    if !uaccess::is_user_range(addr_ptr, addr_len.min(16)) {
+        return EFAULT;
+    }
 
     // Parse struct sockaddr_in { sa_family(2), sin_port(2), sin_addr(4) }
     let family: u16;
@@ -1568,6 +1582,17 @@ fn sys_recvfrom(args: [u64; 6]) -> i64 {
             if sock_type == SOCK_DGRAM {
                 let src_addr_ptr = args[4] as usize;
                 let addrlen_ptr = args[5] as usize;
+
+                // V8-ROOT-8: gate all EL0 pointers BEFORE any raw-asm store.
+                // Without this, a hostile user could pass a kernel-range
+                // src_addr_ptr / addrlen_ptr and we would faithfully clobber
+                // 16 + 4 bytes of kernel memory.
+                if src_addr_ptr != 0 && !uaccess::is_user_range(src_addr_ptr, 16) {
+                    return EFAULT;
+                }
+                if addrlen_ptr != 0 && !uaccess::is_user_range(addrlen_ptr, 4) {
+                    return EFAULT;
+                }
 
                 // UDP receive — read from circular queue
                 for _iteration in 0..50_000_000u64 {
@@ -2139,6 +2164,12 @@ fn sys_futex(args: [u64; 6]) -> i64 {
     let val3 = args[5] as u32;
 
     // Read optional timeout from *const timespec at args[3]
+    // V8-ROOT-8: gate timeout_ptr (16 bytes — 2× u64) before raw asm reads.
+    // Without this, attacker timeout_ptr=kernel_addr is a 16-byte kernel-read
+    // oracle for any cave with FUTEX cap.
+    if timeout_ptr != 0 && !is_user_ptr(timeout_ptr, 16) {
+        return EFAULT;
+    }
     let timeout_ns = if timeout_ptr != 0 {
         let tv_sec: u64; let tv_nsec: u64;
         unsafe {
@@ -2224,6 +2255,13 @@ fn sys_clone_thread(args: [u64; 6]) -> i64 {
 // ─── set_tid_address (96) ───
 fn sys_set_tid_address(args: [u64; 6]) -> i64 {
     let tidptr = args[0];
+    // V8-ROOT-8: tidptr is later written to at thread exit (write_volatile of
+    // a 4-byte zero). If unvalidated, an attacker passes a kernel address and
+    // gets an arbitrary 4-byte kernel write at thread death. Reject any
+    // non-zero pointer that does not lie in the user range.
+    if tidptr != 0 && !uaccess::is_user_range(tidptr as usize, 4) {
+        return EFAULT;
+    }
     TID_ADDRESS.store(tidptr, core::sync::atomic::Ordering::Relaxed);
     // Return current thread ID
     CURRENT_TID.load(core::sync::atomic::Ordering::Relaxed) as i64
@@ -2242,20 +2280,17 @@ pub fn restore_parent_tid() {
 fn sys_execve(args: [u64; 6]) -> i64 {
     let path_ptr = args[0] as usize;
 
-    // Read the path
+    // V8-ROOT-3 / V8-ROOT-8 / V8-PARSER-3 / V8-LENGTH-E: route path read
+    // through read_user_str (which gates via is_user_range). Previously
+    // this raw-ldrb loop was a kernel-read primitive — pass path_ptr =
+    // kernel addr, this would copy 127 bytes of kernel RAM into
+    // path_buf, then from_utf8_unchecked.
     let mut path_buf = [0u8; 128];
-    let mut path_len = 0;
-    for i in 0..127 {
-        let byte: u32;
-        unsafe {
-            core::arch::asm!("ldrb {v:w}, [{a}]", a = in(reg) path_ptr + i, v = out(reg) byte);
-        }
-        if byte == 0 { break; }
-        path_buf[i] = byte as u8;
-        path_len += 1;
-    }
-
-    let path = unsafe { core::str::from_utf8_unchecked(&path_buf[..path_len]) };
+    let path_len = read_user_str(path_ptr, &mut path_buf);
+    let path = match core::str::from_utf8(&path_buf[..path_len]) {
+        Ok(s) => s,
+        Err(_) => return -(14i64), // EFAULT
+    };
 
     // Check if it's a /bin/* command — these are busybox applets
     if path.starts_with("/bin/") || path.starts_with("/usr/bin/") {
@@ -2652,8 +2687,28 @@ fn sys_clock_gettime(args: [u64; 6]) -> i64 {
         core::arch::asm!("mrs {}, cntpct_el0", out(reg) count);
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
     }
-    let secs = count / freq;
-    let nsecs = ((count % freq) * 1_000_000_000) / freq;
+    let secs = if freq == 0 { 0 } else { count / freq };
+    // V8-ROOT-3 (regression fix): (count % freq) * 1e9 can overflow u64 when
+    // freq > 2^34 (unlikely on current ARMv8 but possible on some SoCs).
+    // Use u128 for the intermediate.
+    let nsecs_raw: u64 = if freq == 0 {
+        0
+    } else {
+        let num = (count as u128 % freq as u128).saturating_mul(1_000_000_000u128);
+        let q = num / (freq as u128);
+        // Result fits in u64 because q < 1e9.
+        q as u64
+    };
+
+    // V8-ROOT-7: quantize nanoseconds to 100-µs resolution BEFORE handing
+    // the value to EL0. A browser-class attacker uses cycle-level time to
+    // mount cache-timing / Spectre side-channels; 100 µs is ~100000×
+    // coarser than the underlying hardware counter and far coarser than
+    // the single cache-miss / AES-round events they're trying to observe.
+    // Legitimate workloads (timers, timeouts, Date.now()) need only ms
+    // granularity, so 100 µs is comfortably over-accurate for them.
+    const QUANTUM_NS: u64 = 100_000; // 100 µs
+    let nsecs = (nsecs_raw / QUANTUM_NS) * QUANTUM_NS;
 
     unsafe {
         core::arch::asm!("str {v}, [{a}]", a = in(reg) buf, v = in(reg) secs);
@@ -3237,12 +3292,17 @@ pub fn reset_cave_statics() {
         SIGNAL_PENDING = 0;
         SIGALT_SP = 0;
         SIGALT_SIZE = 0;
-        // Pipe buffer.
+        // Pipe buffer + bookkeeping. V11-state-sweep: prior fd IDs AND
+        // the fn-local PIPE_NUM counter (reset via write_volatile below)
+        // were leaking across caves so a read() on an inherited fd could
+        // race the old pipe.
         core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_LEN), 0);
         for i in 0..PIPE_BUF_SIZE {
             core::arch::asm!("strb wzr, [{a}]",
                 a = in(reg) core::ptr::addr_of_mut!(PIPE_BUF) as usize + i);
         }
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_READ_FD), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_WRITE_FD), 0);
         // UDP RX queue (the syscall-layer ring; sockets have their own).
         for slot in 0..UDP_RX_SLOTS {
             UDP_RX_LEN[slot] = 0;
@@ -3251,6 +3311,32 @@ pub fn reset_cave_statics() {
         UDP_RX_HEAD = 0;
         UDP_RX_TAIL = 0;
         UDP_RX_READY = false;
+
+        // V11-state-sweep: per-socket last-connection metadata. Next cave's
+        // first socket() would otherwise inherit destination IP/port +
+        // start from the previous cave's local-port cursor (fingerprint
+        // leak + peer-identity leak).
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SOCKET_TYPE), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SOCK_DEST_IP), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SOCK_DEST_PORT), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SOCK_LOCAL_PORT), 30000);
+
+        // V11-state-sweep: /proc pseudo-fd table — prior cave's /proc
+        // paths would otherwise be readable by the next tenant.
+        {
+            let paths = &mut *core::ptr::addr_of_mut!(PROC_FD_PATHS);
+            for row in paths.iter_mut() {
+                for b in row.iter_mut() { *b = 0; }
+            }
+            let lens = &mut *core::ptr::addr_of_mut!(PROC_FD_LENS);
+            for l in lens.iter_mut() { *l = 0; }
+            let pos = &mut *core::ptr::addr_of_mut!(PROC_FD_POS);
+            for p in pos.iter_mut() { *p = 0; }
+        }
+
+        // V11-state-sweep: worker-ELF heap end. brk() in the next cave
+        // would otherwise start at a stale value.
+        WORKER_BRK = 0;
     }
     // Child/thread bookkeeping.
     IN_CHILD.store(false, core::sync::atomic::Ordering::Relaxed);
@@ -3258,6 +3344,23 @@ pub fn reset_cave_statics() {
     LAST_CHILD_TID.store(2, core::sync::atomic::Ordering::Relaxed);
     CHILD_EXIT_CODE.store(0, core::sync::atomic::Ordering::Relaxed);
     CHILD_REAPED.store(true, core::sync::atomic::Ordering::Relaxed);
+
+    // V11-state-sweep: TID counters and set_tid_address pointer. The
+    // TID_ADDRESS pointer in particular is CRITICAL — it's a user-VA
+    // that the kernel writes `0` into at thread exit. Without reset it
+    // becomes an arbitrary-kernel-write gadget into the NEW cave's
+    // address space via the old cave's dangling tidptr.
+    NEXT_TID.store(2, core::sync::atomic::Ordering::Release);
+    CURRENT_TID.store(1, core::sync::atomic::Ordering::Release);
+    TID_ADDRESS.store(0, core::sync::atomic::Ordering::Release);
+
+    // V11-state-sweep: fork-resume registers. These are a CROSS-CAVE
+    // CONTROL-FLOW PIVOT — the new cave could resume into the prior
+    // cave's saved EL0 context via a leftover ELR/SPSR/SP.
+    FORK_SAVED_ELR.store(0, core::sync::atomic::Ordering::Release);
+    FORK_SAVED_SPSR.store(0, core::sync::atomic::Ordering::Release);
+    FORK_SAVED_SP.store(0, core::sync::atomic::Ordering::Release);
+    CLONE_CHILD_STACK.store(0, core::sync::atomic::Ordering::Release);
 }
 
 /// rt_sigaction — set/get signal handler

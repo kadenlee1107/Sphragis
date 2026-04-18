@@ -22,6 +22,13 @@ pub fn clear_clip() {
     unsafe { CLIP_X = 0; CLIP_Y = 0; CLIP_W = 0xFFFF; CLIP_H = 0xFFFF; }
 }
 
+/// V11-state-sweep: alias for `clear_clip` used by the cave-switch hub so
+/// a cave that narrowed the clip and exited doesn't leave the next cave
+/// with a restricted draw region (visual cross-cave draw-ordering leak).
+pub fn reset_for_cave_switch() {
+    clear_clip();
+}
+
 #[inline]
 fn in_clip(px: u32, py: u32) -> bool {
     unsafe { px >= CLIP_X && px < CLIP_X + CLIP_W && py >= CLIP_Y && py < CLIP_Y + CLIP_H }

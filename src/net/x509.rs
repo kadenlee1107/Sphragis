@@ -95,6 +95,20 @@ pub fn leaf_info(leaf_der: &[u8]) -> Result<(alloc::vec::Vec<u8>, PubkeyAlg), Ve
     Ok((spki, pubkey_alg(&leaf)))
 }
 
+/// V11-FRESH-EYES: like `leaf_info`, but additionally enforces that the
+/// leaf cert's SAN (or CN as a last resort) actually covers `hostname`.
+/// Used by the TLS fallback-to-pinning path so a cert legitimately issued
+/// for host A cannot be used against host B — which was possible before
+/// because the pin-only path never re-checked hostname against the leaf.
+pub fn leaf_info_with_host(leaf_der: &[u8], hostname: &[u8]) -> Result<(alloc::vec::Vec<u8>, PubkeyAlg), VerifyError> {
+    let leaf = parse_cert(leaf_der)?;
+    if !check_hostname(&leaf, hostname) {
+        return Err(VerifyError::HostnameMismatch);
+    }
+    let spki = subject_spki_der(&leaf)?;
+    Ok((spki, pubkey_alg(&leaf)))
+}
+
 /// Extract the SubjectPublicKeyInfo encoded as DER from a certificate.
 /// Used by the TLS CertificateVerify path to obtain the peer's pubkey.
 pub fn subject_spki_der(cert: &Certificate) -> Result<Vec<u8>, VerifyError> {

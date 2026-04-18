@@ -103,6 +103,8 @@ NOINLINE double asin(double x) { return atan2(x, sqrt(1 - x*x)); }
 NOINLINE float asinf(float x) { return (float)asin((double)x); }
 NOINLINE double acos(double x) { return atan2(sqrt(1 - x*x), x); }
 NOINLINE float acosf(float x) { return (float)acos((double)x); }
+NOINLINE void sincos(double x, double *s, double *c) { *s = sin(x); *c = cos(x); }
+NOINLINE void sincosf(float x, float *s, float *c) { *s = sinf(x); *c = cosf(x); }
 NOINLINE double copysign(double x, double y) { return fabs(x) * (y < 0 ? -1.0 : 1.0); }
 NOINLINE float copysignf(float x, float y) { return fabsf(x) * (y < 0 ? -1.0f : 1.0f); }
 NOINLINE double hypot(double x, double y) { return sqrt(x*x + y*y); }

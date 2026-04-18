@@ -351,6 +351,12 @@ pub fn pcb_alloc() -> Option<usize> {
 }
 
 /// Free a PCB slot. Caller must have already closed or reset the connection.
+///
+/// V11-state-sweep: previously only state/in_use/fd were updated, leaving
+/// the 16 KiB rx/tx buffers full of the prior connection's plaintext
+/// (HTTP bodies, mail, whatever) for the next `pcb_alloc` tenant to
+/// observe. Also leaked the 4-tuple (local_port, remote_ip, remote_port)
+/// — a fingerprint of the prior peer. Now we scrub everything.
 pub fn pcb_free(id: usize) {
     if id >= MAX_PCBS { return; }
     alloc_lock();
@@ -358,6 +364,27 @@ pub fn pcb_free(id: usize) {
     p.state.store(STATE_CLOSED, Ordering::Release);
     p.in_use.store(false, Ordering::Release);
     p.fd.store(-1, Ordering::Release);
+    // Scrub tuple + sequence state.
+    p.local_port = 0;
+    p.remote_ip = 0;
+    p.remote_port = 0;
+    p.snd_nxt = 0;
+    p.snd_una = 0;
+    p.snd_wnd = 8192;
+    p.rcv_nxt = 0;
+    p.rcv_wnd = RX_BUF_SIZE as u16;
+    // Scrub the data buffers — this is the plaintext-leak fix.
+    for b in p.rx_buf.iter_mut() { *b = 0; }
+    for b in p.tx_buf.iter_mut() { *b = 0; }
+    p.rx_head.store(0, Ordering::Release);
+    p.rx_tail.store(0, Ordering::Release);
+    p.tx_head.store(0, Ordering::Release);
+    p.tx_tail.store(0, Ordering::Release);
+    p.rx_shut.store(false, Ordering::Release);
+    p.tx_shut.store(false, Ordering::Release);
+    p.error.store(0, Ordering::Release);
+    p.is_nonblocking.store(false, Ordering::Release);
+    p.time_wait_entered.store(0, Ordering::Release);
     alloc_unlock();
 }
 

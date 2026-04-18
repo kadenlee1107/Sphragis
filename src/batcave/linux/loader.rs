@@ -41,9 +41,19 @@ pub fn reinit_elf(data: &[u8], phys_base: usize) {
     let phnum = u16_at(data, 56) as usize;
     let phentsz = u16_at(data, 54) as usize;
 
+    // V8-ROOT-3 / V8-LENGTH-AUDIT: plausibility caps on phoff/phnum/phentsz
+    // BEFORE the arithmetic that might wrap. Backport from V5 `load_elf_rebased`.
+    // V8-ROOT-10: phentsz must be at least 56 (the fixed Elf64 phdr size),
+    // otherwise each iteration below reads 56+ bytes starting at offsets
+    // bounded only by phnum*phentsz — we can read past the nominal table.
+    if phentsz < 56 || phentsz > 4096 || phnum > 1024 { return; }
+    let pht_bytes = match phnum.checked_mul(phentsz) { Some(b) => b, None => return };
+    if phoff.checked_add(pht_bytes).map_or(true, |e| e > data.len()) { return; }
+
     let mut min_addr: u64 = u64::MAX;
     let mut max_addr: u64 = 0;
     for i in 0..phnum {
+        // Bounded by pht_bytes above; no wrap possible.
         let ph = phoff + i * phentsz;
         if ph + phentsz > data.len() { break; }
         if u32_at(data, ph) != 1 { continue; }
@@ -132,8 +142,15 @@ pub fn reinit_elf(data: &[u8], phys_base: usize) {
         let mut rela_off: usize = 0;
         let mut rela_sz: usize = 0;
 
+        // V8-ROOT-10: checked_add so an attacker PT_DYNAMIC with
+        // p_offset=usize::MAX-16, p_filesz=0x20 can't wrap and fool the
+        // `pos < dyn_offset + dyn_size` walk bound.
+        let dyn_end = match dyn_offset.checked_add(dyn_size) {
+            Some(e) if e <= data.len() => e,
+            _ => continue,
+        };
         let mut pos = dyn_offset;
-        while pos + 16 <= data.len() && pos < dyn_offset + dyn_size {
+        while pos + 16 <= dyn_end {
             let tag = u64_at(data, pos);
             let val = u64_at(data, pos + 8);
             match tag { 0 => break, 7 => rela_off = val as usize, 8 => rela_sz = val as usize, _ => {} }
@@ -189,6 +206,26 @@ pub fn reinit_elf(data: &[u8], phys_base: usize) {
             }
         }
     }
+}
+
+/// V8-ROOT-2 (V10 regression fix): drop every per-image loader state on
+/// cave switch. SAVED_RETURN_ADDR + SAVED_KERNEL_SP in particular are a
+/// cross-cave CONTROL-FLOW PIVOT — a resumed ELF from a previous cave
+/// would trampoline through the next cave's EL0 context. The other
+/// *_ENTRY / *_PHYS_BASE atomics leak address-space layout and would let
+/// a fresh cave invoke the prior cave's loaded binary entrypoint.
+pub fn reset_for_cave_switch() {
+    LOADED_ENTRY.store(0, Ordering::Release);
+    LOADED_ORIG_ENTRY.store(0, Ordering::Release);
+    LOADED_PHYS_BASE.store(0, Ordering::Release);
+    SAVED_RETURN_ADDR.store(0, Ordering::Release);
+    SAVED_KERNEL_SP.store(0, Ordering::Release);
+    WORKER_ENTRY.store(0, Ordering::Release);
+    WORKER_PHYS_BASE.store(0, Ordering::Release);
+    WORKER_ORIG_ENTRY.store(0, Ordering::Release);
+    HELLO_ENTRY.store(0, Ordering::Release);
+    HELLO_PHYS_BASE.store(0, Ordering::Release);
+    HELLO_ORIG_ENTRY.store(0, Ordering::Release);
 }
 
 pub fn get_phys_base() -> usize { LOADED_PHYS_BASE.load(Ordering::Relaxed) }
@@ -359,8 +396,13 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
         let mut rela_off: usize = 0;
         let mut rela_sz: usize = 0;
 
+        // V8-ROOT-10: dyn_offset + dyn_size could wrap — bound dyn_end first.
+        let dyn_end = match dyn_offset.checked_add(dyn_size) {
+            Some(e) if e <= data.len() => e,
+            _ => continue,
+        };
         let mut pos = dyn_offset;
-        while pos + 16 <= data.len() && pos < dyn_offset + dyn_size {
+        while pos + 16 <= dyn_end {
             let tag = u64_at(data, pos);
             let val = u64_at(data, pos + 8);
             match tag { 0 => break, 7 => rela_off = val as usize, 8 => rela_sz = val as usize, _ => {} }
@@ -438,6 +480,19 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
     let phoff = u64_at(data, 32) as usize;
     let phnum = u16_at(data, 56) as usize;
     let phentsz = u16_at(data, 54) as usize;
+
+    // V8-ROOT-3 / V8-LENGTH-AUDIT / V8-ROOT-10: plausibility caps on each
+    // field + checked_mul before the `phoff + i * phentsz` arithmetic.
+    // phentsz MUST be >= size_of::<Elf64Phdr>() (=56) or each iteration
+    // reads past the nominal phdr table.
+    if phentsz < 56 || phentsz > 4096 || phnum > 1024 {
+        return Err("ELF program-header table implausible");
+    }
+    let pht_bytes = phnum.checked_mul(phentsz).ok_or("phnum*phentsz overflow")?;
+    let pht_end = phoff.checked_add(pht_bytes).ok_or("phoff overflow")?;
+    if pht_end > data.len() {
+        return Err("ELF phdr table past file end");
+    }
 
     uart::puts("[loader] Entry: 0x"); print_hex(entry); uart::puts("\n");
 
@@ -541,8 +596,13 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
         let mut rela_off: usize = 0;
         let mut rela_sz: usize = 0;
 
+        // V8-ROOT-10: dyn_offset + dyn_size could wrap — bound dyn_end first.
+        let dyn_end = match dyn_offset.checked_add(dyn_size) {
+            Some(e) if e <= data.len() => e,
+            _ => continue,
+        };
         let mut pos = dyn_offset;
-        while pos + 16 <= data.len() && pos < dyn_offset + dyn_size {
+        while pos + 16 <= dyn_end {
             let tag = u64_at(data, pos);
             let val = u64_at(data, pos + 8);
             match tag { 0 => break, 7 => rela_off = val as usize, 8 => rela_sz = val as usize, _ => {} }

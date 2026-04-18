@@ -101,10 +101,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         qemu-user \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 22 (Chromium needs this version, not Debian's bundled 18)
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Install Node.js v24.12.0 EXACTLY — Chromium M132 has a strict version check
+# (NodeSource's setup_24.x ships latest 24.x which won't match). Download from
+# the official Node.js distribution mirror.
+RUN cd /tmp \
+    && curl -fsSLO https://nodejs.org/dist/v24.12.0/node-v24.12.0-linux-arm64.tar.xz \
+    && tar -xJf node-v24.12.0-linux-arm64.tar.xz -C /opt \
+    && ln -sf /opt/node-v24.12.0-linux-arm64/bin/node /usr/local/bin/node \
+    && ln -sf /opt/node-v24.12.0-linux-arm64/bin/npm  /usr/local/bin/npm \
+    && ln -sf /opt/node-v24.12.0-linux-arm64/bin/npx  /usr/local/bin/npx \
+    && rm -f /tmp/node-v24.12.0-linux-arm64.tar.xz \
+    && node --version
 
 # Enable x86_64 multi-arch so Chromium's bundled x86_64 prebuilts (clang,
 # tsc, etc.) can run under emulation. Required for ARM64 host builds.
@@ -126,11 +133,18 @@ RUN groupadd -g $USER_GID build \
 USER build
 WORKDIR /home/build
 
+# Install Rust via rustup (ARM64 native; Chromium's bundled Rust is x86_64-only)
+ENV RUSTUP_HOME=/home/build/.rustup \
+    CARGO_HOME=/home/build/.cargo
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+        sh -s -- -y --default-toolchain nightly --profile minimal \
+    && /home/build/.cargo/bin/rustc --version
+
 # Fetch depot_tools — Google's Chromium build/sync wrapper
 RUN git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git \
         /home/build/depot_tools
 
-ENV PATH="/home/build/depot_tools:${PATH}"
+ENV PATH="/home/build/.cargo/bin:/home/build/depot_tools:${PATH}"
 ENV DEPOT_TOOLS_UPDATE=1
 ENV GCLIENT_PY3=1
 

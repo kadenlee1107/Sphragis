@@ -126,6 +126,65 @@ static mut BOOKMARKS: [[u8; 48]; 6] = [[0; 48]; 6];
 static mut BM_LENS: [usize; 6] = [0; 6];
 static mut BM_COUNT: usize = 0;
 
+/// V11-state-sweep: scrub the browser's in-memory state on cave switch.
+/// URL, page body, styled render buffer, links, scroll, DOM document,
+/// layout tree, tab titles, bookmarks — all of it identifies the
+/// previous cave's browsing session. Leaving any of it readable is a
+/// direct history / DOM leak into the new cave.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        // URL + page buffers
+        for b in (&mut *core::ptr::addr_of_mut!(URL_BUF)).iter_mut() { *b = 0; }
+        URL_LEN = 0;
+        for b in (&mut *core::ptr::addr_of_mut!(PAGE_BUF)).iter_mut() { *b = 0; }
+        PAGE_LEN = 0;
+        for b in (&mut *core::ptr::addr_of_mut!(PAGE_STYLE)).iter_mut() { *b = 0; }
+        // Links
+        for entry in (&mut *core::ptr::addr_of_mut!(LINKS)).iter_mut() {
+            for b in entry.iter_mut() { *b = 0; }
+        }
+        for l in (&mut *core::ptr::addr_of_mut!(LINK_LENS)).iter_mut() { *l = 0; }
+        LINK_COUNT = 0;
+        SCROLL_Y = 0;
+        // Status
+        for b in (&mut *core::ptr::addr_of_mut!(STATUS_MSG)).iter_mut() { *b = 0; }
+        STATUS_LEN = 0;
+        BYTES_LOADED = 0;
+        LOADING_PROGRESS = 0;
+        STATE = BrowserState::Idle;
+        // Tabs + bookmarks
+        for entry in (&mut *core::ptr::addr_of_mut!(TAB_TITLES)).iter_mut() {
+            for b in entry.iter_mut() { *b = 0; }
+        }
+        for l in (&mut *core::ptr::addr_of_mut!(TAB_TITLE_LENS)).iter_mut() { *l = 0; }
+        TAB_COUNT = 1;
+        ACTIVE_TAB = 0;
+        TABS_INITIALIZED = false;
+        for entry in (&mut *core::ptr::addr_of_mut!(BOOKMARKS)).iter_mut() {
+            for b in entry.iter_mut() { *b = 0; }
+        }
+        for l in (&mut *core::ptr::addr_of_mut!(BM_LENS)).iter_mut() { *l = 0; }
+        BM_COUNT = 0;
+        // DOM + layout (fresh Document + LayoutTree)
+        DOM_DOC = crate::browser::dom::Document::new();
+        LAYOUT_TREE = crate::browser::layout::LayoutTree::new();
+        // V12 additions: browser HISTORY, the JS VM state (SEED is
+        // reachable via Math.random and was acting as a cross-cave
+        // timing oracle), and the engine-selector toggle.
+        for entry in (&mut *core::ptr::addr_of_mut!(HISTORY)).iter_mut() {
+            for b in entry.iter_mut() { *b = 0; }
+        }
+        for l in (&mut *core::ptr::addr_of_mut!(HISTORY_LENS)).iter_mut() { *l = 0; }
+        HISTORY_POS = 0;
+        HISTORY_COUNT = 0;
+        USE_ENGINE = true;
+        // Fresh JS VM — wipes heap, string table, and builtin-PRNG state.
+        JS_VM = crate::browser::js::vm::Vm::new();
+        JS_VM_INITIALIZED = false;
+    }
+}
+
 fn init_browser() {
     unsafe {
         if !TABS_INITIALIZED {
@@ -389,6 +448,9 @@ pub fn navigate(url: &[u8]) {
     // Decode body: handle chunked transfer encoding or Content-Length
     static mut DECODED_BUF: [u8; 131072] = [0u8; 131072];
     let decoded = unsafe { &mut *core::ptr::addr_of_mut!(DECODED_BUF) };
+    // V12: zero before reuse so a truncated response can't leak the
+    // tail of a previous page's body below the truncation boundary.
+    for b in decoded.iter_mut() { *b = 0; }
     let mut decoded_len: usize;
     let is_chunked = {
         let hdr_slice = &raw[..headers_end];
@@ -438,6 +500,9 @@ pub fn navigate(url: &[u8]) {
             uart::puts("[browser] gzip detected, decompressing...\n");
             static mut DECOMP_BUF: [u8; 262144] = [0u8; 262144];
             let decompressed = unsafe { &mut *core::ptr::addr_of_mut!(DECOMP_BUF) };
+            // V12: zero before use so a short decompress output can't
+            // leak a prior response's tail.
+            for b in decompressed.iter_mut() { *b = 0; }
             let dec_len = crate::browser::media::gzip::decompress(&decoded[..decoded_len], decompressed);
             if dec_len > 0 {
                 // Copy all decompressed data (up to decoded buffer size)

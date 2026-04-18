@@ -294,6 +294,24 @@ pub fn init_main_thread(main_entry_pc: u64, main_sp_el0: u64) {
 pub fn is_enabled() -> bool { THREADING_ENABLED.load(Ordering::Acquire) }
 pub fn current_tid() -> u32 { RUNNING_TID.load(Ordering::Acquire) }
 
+/// V8-ROOT-2: drop the entire thread table on cave switch. Without this,
+/// a zombie thread from the outgoing cave can be resumed (scheduler picks
+/// it from the table) inside the new cave's address space — breaks
+/// isolation completely.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        let table = &mut *core::ptr::addr_of_mut!(THREADS);
+        for t in table.iter_mut() {
+            *t = Thread::empty();
+        }
+    }
+    RUNNING_TID.store(1, Ordering::Release);
+    NEXT_TID.store(2, Ordering::Release);
+    THREADING_ENABLED.store(false, Ordering::Release);
+    PREEMPT_REQUESTED.store(false, Ordering::Release);
+}
+
 // -----------------------------------------------------------------------------
 // Table-locking helper. Disables IRQs while the closure runs so the timer
 // can't preempt us mid-mutation. Single-core assumption.
@@ -399,14 +417,45 @@ pub fn clone(flags: u64,
     // null-pointer SP).
     let _g = crate::kernel::sync::IrqGuard::new();
 
+    // V8-ROOT-8 / V8-PTR-001/002: clone parent_tid and child_tid came
+    // from EL0 without any uaccess gate. `write_volatile(parent_tid,
+    // new_tid)` at a kernel address = 4-byte arbitrary kernel write.
+    // Check both pointers through the uaccess bounds check; refuse the
+    // clone if either is out-of-range.
+    use crate::batcave::linux::uaccess;
     if flags & CLONE_PARENT_SETTID != 0 && !parent_tid.is_null() {
+        if !uaccess::is_user_range(parent_tid as usize, 4) {
+            // Refund quotas charged above.
+            super::quotas::refund_active(super::quotas::Resource::Threads, 1);
+            if child_stack == 0 {
+                super::quotas::refund_active(
+                    super::quotas::Resource::Mem, DEFAULT_STACK_PAGES * PAGE_SIZE);
+            }
+            return -(14i64); // EFAULT
+        }
         unsafe { core::ptr::write_volatile(parent_tid, new_tid as i32); }
     }
 
     let tid_set_child = if flags & CLONE_CHILD_SETTID != 0 && !child_tid.is_null() {
+        if !uaccess::is_user_range(child_tid as usize, 4) {
+            super::quotas::refund_active(super::quotas::Resource::Threads, 1);
+            if child_stack == 0 {
+                super::quotas::refund_active(
+                    super::quotas::Resource::Mem, DEFAULT_STACK_PAGES * PAGE_SIZE);
+            }
+            return -(14i64);
+        }
         Some(child_tid as u64)
     } else { None };
     let tid_clear_on_exit = if flags & CLONE_CHILD_CLEARTID != 0 && !child_tid.is_null() {
+        if !uaccess::is_user_range(child_tid as usize, 4) {
+            super::quotas::refund_active(super::quotas::Resource::Threads, 1);
+            if child_stack == 0 {
+                super::quotas::refund_active(
+                    super::quotas::Resource::Mem, DEFAULT_STACK_PAGES * PAGE_SIZE);
+            }
+            return -(14i64);
+        }
         Some(child_tid as u64)
     } else { None };
 
@@ -760,6 +809,13 @@ pub fn futex_wake_on(uaddr: u64, n: u32) -> u32 {
 /// Park current thread on `uaddr` if *uaddr still equals `val`. This is the
 /// kernel half of FUTEX_WAIT; the user-space half does the atomic compare.
 pub fn futex_wait_on(uaddr: u64, val: u32) -> i64 {
+    // V8-ROOT-8: gate uaddr through the futex helper (which checks
+    // is_user_range under the hood). Today this path is unreachable from
+    // EL0, but the moment a future scheduler wires it up an unvalidated
+    // uaddr would be a kernel-read oracle.
+    if !crate::batcave::linux::futex::is_valid_uaddr(uaddr) {
+        return EAGAIN;
+    }
     // Re-check under IRQ-masked lock to close the wait/wake race.
     let current: u32 = unsafe { core::ptr::read_volatile(uaddr as *const u32) };
     if current != val { return EAGAIN; }

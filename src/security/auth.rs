@@ -42,9 +42,11 @@ pub fn init(passphrase: &str, duress_code: &str) {
         PASSPHRASE_HASH = pass_hash;
         DURESS_HASH = duress_hash;
     }
-    ATTEMPT_COUNT.store(0, Ordering::Relaxed);
-    AUTHENTICATED.store(false, Ordering::Relaxed);
-    LOCKED_OUT.store(false, Ordering::Relaxed);
+    // V8-ROOT-4: Release-store so the hash writes above are visible to any
+    // CPU that subsequently calls authenticate() (which now Acquire-loads).
+    ATTEMPT_COUNT.store(0, Ordering::Release);
+    AUTHENTICATED.store(false, Ordering::Release);
+    LOCKED_OUT.store(false, Ordering::Release);
 }
 
 /// Iterated SHA-256 KDF (ATTACK-CRYPTO-005 partial). The prior
@@ -77,7 +79,11 @@ fn kdf(passphrase: &[u8]) -> [u8; 32] {
 /// Attempt authentication with a passphrase.
 /// Returns the result — caller decides what to do.
 pub fn authenticate(input: &str) -> AuthResult {
-    if LOCKED_OUT.load(Ordering::Relaxed) {
+    // V8-ROOT-4: Acquire-load LOCKED_OUT so that the Release-store in the
+    // lockout branch (line ~117) is observed by other CPUs that hit this
+    // path concurrently. Without Acquire, a CPU could see LOCKED_OUT=true
+    // but stale memory writes that preceded the store.
+    if LOCKED_OUT.load(Ordering::Acquire) {
         return AuthResult::LockedOut;
     }
 
@@ -99,13 +105,17 @@ pub fn authenticate(input: &str) -> AuthResult {
     };
 
     if is_correct {
-        ATTEMPT_COUNT.store(0, Ordering::Relaxed);
+        ATTEMPT_COUNT.store(0, Ordering::Release);
         AUTHENTICATED.store(true, Ordering::Release);
         return AuthResult::Success;
     }
 
-    // Failed attempt
-    let attempts = ATTEMPT_COUNT.load(Ordering::Relaxed) + 1; ATTEMPT_COUNT.store(attempts, Ordering::Relaxed);
+    // V8-ROOT-4: Failed attempt — use atomic fetch_add. Previously this was
+    // load+1+store, which is a non-atomic RMW: two concurrent failed
+    // attempts could both load 0 and both store 1, costing one count of
+    // brute-force protection per race window.
+    let prev = ATTEMPT_COUNT.fetch_add(1, Ordering::AcqRel);
+    let attempts = prev.saturating_add(1);
 
     if attempts >= MAX_ATTEMPTS {
         LOCKED_OUT.store(true, Ordering::Release);
@@ -116,21 +126,40 @@ pub fn authenticate(input: &str) -> AuthResult {
 }
 
 pub fn is_authenticated() -> bool {
-    AUTHENTICATED.load(Ordering::Relaxed)
+    AUTHENTICATED.load(Ordering::Acquire)
 }
 
 pub fn attempts_remaining() -> u8 {
-    let used = ATTEMPT_COUNT.load(Ordering::Relaxed);
+    let used = ATTEMPT_COUNT.load(Ordering::Acquire);
     if used >= MAX_ATTEMPTS { 0 } else { MAX_ATTEMPTS - used }
 }
 
 pub fn is_locked_out() -> bool {
-    LOCKED_OUT.load(Ordering::Relaxed)
+    LOCKED_OUT.load(Ordering::Acquire)
 }
 
 /// Lock the session (require re-authentication).
 pub fn lock() {
-    AUTHENTICATED.store(false, Ordering::Relaxed);
+    // V8-ROOT-4: Release so a follow-up is_authenticated() call from another
+    // CPU sees the lock immediately (paired with Acquire-load).
+    AUTHENTICATED.store(false, Ordering::Release);
+}
+
+/// V8-ROOT-6: panic-handler-only secret wipe. Uses volatile writes so the
+/// compiler cannot DCE them, and takes no locks so it can run in any
+/// kernel state. Best-effort only — if we panic after a partial write the
+/// first N bytes may already be zero.
+///
+/// # Safety
+/// May only be called from the panic handler or from wipe::emergency_wipe.
+/// Writing to these statics without the init path is otherwise a data race.
+pub unsafe fn panic_wipe() {
+    let pass_ptr = core::ptr::addr_of_mut!(PASSPHRASE_HASH) as *mut u8;
+    let duress_ptr = core::ptr::addr_of_mut!(DURESS_HASH) as *mut u8;
+    for i in 0..32 {
+        core::ptr::write_volatile(pass_ptr.add(i), 0);
+        core::ptr::write_volatile(duress_ptr.add(i), 0);
+    }
 }
 
 /// Constant-time comparison to prevent timing attacks.

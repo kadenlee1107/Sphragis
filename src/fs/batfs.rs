@@ -194,8 +194,13 @@ fn next_nonce() -> [u8; 12] {
 
 fn derive_file_key(filename: &str) -> [u8; 32] {
     unsafe {
-        let key = core::ptr::read_volatile(core::ptr::addr_of!(MASTER_KEY));
-        sha256::derive_key(&key, filename.as_bytes())
+        let mut key = core::ptr::read_volatile(core::ptr::addr_of!(MASTER_KEY));
+        let derived = sha256::derive_key(&key, filename.as_bytes());
+        // V8-ROOT-6: zero the stack-local master-key copy so it doesn't
+        // linger in the stack frame after return — a subsequent kernel
+        // heap-walk / stack-unwind could recover it otherwise.
+        crate::security::zeroize::zeroize(&mut key);
+        derived
     }
 }
 
@@ -208,11 +213,14 @@ fn derive_file_key(filename: &str) -> [u8; 32] {
 ///
 /// Computed incrementally so we don't need a 64 KB stack buffer.
 fn compute_file_mac(name: &str, nonce: &[u8; 12], ciphertext: &[u8]) -> [u8; 32] {
-    let key = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(MASTER_KEY)) };
+    let mut key = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(MASTER_KEY)) };
     // Build i_key_pad / o_key_pad.
     let mut i_pad = [0x36u8; 64];
     let mut o_pad = [0x5cu8; 64];
     for i in 0..32 { i_pad[i] ^= key[i]; o_pad[i] ^= key[i]; }
+    // V8-ROOT-6: zero the stack-local master-key copy ASAP now that we've
+    // mixed it into the pads.
+    crate::security::zeroize::zeroize(&mut key);
 
     // Inner hash: SHA-256(i_pad || "batfs-integrity-v1" || name || nonce || ciphertext)
     let mut inner = sha256::Sha256::new();
@@ -372,6 +380,21 @@ pub fn list<F: FnMut(&str, usize, bool)>(mut callback: F) {
 /// Get filesystem stats.
 pub fn stats() -> (usize, usize) {
     unsafe { (FILE_COUNT, MAX_FILES) }
+}
+
+/// V8-ROOT-6: panic-handler-only master-key wipe. Uses volatile writes so
+/// the compiler cannot DCE. No locks. Best-effort: if we panic mid-write
+/// the first N bytes are still zeroed, which already degrades an
+/// attacker's recovered key.
+///
+/// # Safety
+/// May only be called from the panic handler (via wipe::emergency_wipe).
+/// After this runs BatFS read/write WILL fail; the kernel is halting.
+pub unsafe fn panic_wipe() {
+    let key_ptr = core::ptr::addr_of_mut!(MASTER_KEY) as *mut u8;
+    for i in 0..32 {
+        core::ptr::write_volatile(key_ptr.add(i), 0);
+    }
 }
 
 fn find_file(name: &str) -> Result<&'static FileEntry, &'static str> {

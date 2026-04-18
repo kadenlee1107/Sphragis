@@ -184,14 +184,17 @@ pub fn handle(data: &[u8]) {
 }
 
 pub fn checksum(data: &[u8]) -> u16 {
+    // V8-ROOT-3: one's-complement summation tolerates wrap-around by
+    // construction (the carry is folded back below). Use wrapping_add so
+    // overflow-checks=true does not panic on long buffers.
     let mut sum: u32 = 0;
     let mut i = 0;
     while i + 1 < data.len() {
-        sum += u16::from_be_bytes([data[i], data[i + 1]]) as u32;
+        sum = sum.wrapping_add(u16::from_be_bytes([data[i], data[i + 1]]) as u32);
         i += 2;
     }
     if i < data.len() {
-        sum += (data[i] as u32) << 8;
+        sum = sum.wrapping_add((data[i] as u32) << 8);
     }
     while sum >> 16 != 0 {
         sum = (sum & 0xFFFF) + (sum >> 16);

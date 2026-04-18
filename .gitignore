@@ -1,1 +1,15 @@
+# Bat_OS .gitignore
+
+# Cargo build artifacts — reproducible via `cargo build`.
 /target
+
+# Vendored Chromium source tree (~1.9 GB, contains a pack file over
+# GitHub's 100 MB limit). Re-clone upstream if you need it.
+/ports/chromium
+
+# Docker volumes / build artifacts from the Chromium container work.
+/chromium-build
+.DS_Store
+
+# Compressed logs from past sessions (regenerable).
+*.log

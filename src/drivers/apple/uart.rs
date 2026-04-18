@@ -19,11 +19,11 @@ const UTRSTAT_TXBE: u32 = 1 << 1;  // TX buffer empty
 const UTRSTAT_RXDA: u32 = 1 << 0;  // RX data available
 
 fn read32(offset: usize) -> u32 {
-    unsafe { core::ptr::read_volatile((soc::UART0_BASE + offset) as *const u32) }
+    unsafe { core::ptr::read_volatile((soc::uart0_base() + offset) as *const u32) }
 }
 
 fn write32(offset: usize, val: u32) {
-    unsafe { core::ptr::write_volatile((soc::UART0_BASE + offset) as *mut u32, val) }
+    unsafe { core::ptr::write_volatile((soc::uart0_base() + offset) as *mut u32, val) }
 }
 
 /// Initialize the UART (assumes m1n1 already configured baud rate).
@@ -51,6 +51,21 @@ pub fn puts(s: &str) {
         }
         putc(byte);
     }
+}
+
+/// Print `val` as 8 hex digits (upper case, no prefix).
+pub fn puthex32(val: u32) {
+    const HX: &[u8; 16] = b"0123456789abcdef";
+    for i in (0..8).rev() {
+        let nib = ((val >> (i * 4)) & 0xF) as usize;
+        putc(HX[nib]);
+    }
+}
+
+/// Print `val` as 16 hex digits.
+pub fn puthex64(val: u64) {
+    puthex32((val >> 32) as u32);
+    puthex32(val as u32);
 }
 
 /// Check if a character is available.

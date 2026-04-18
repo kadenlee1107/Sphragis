@@ -17,6 +17,17 @@ pub fn set_document(doc: &mut Document) {
     unsafe { DOM_DOC_PTR = doc as *mut Document; }
 }
 
+/// V8-ROOT-2: clear the cached DOM document pointer on cave switch. If we
+/// don't, DOM_DOC_PTR still references cave A's Document (now invalid
+/// kernel memory after destroy) when cave B's JS tries to access the DOM
+/// — use-after-free into the old cave's heap.
+pub fn reset_for_cave_switch() {
+    unsafe {
+        DOM_DOC_PTR = core::ptr::null_mut();
+        DOM_DIRTY = false;
+    }
+}
+
 /// Check and clear the dirty flag. Called after script execution.
 pub fn take_dirty() -> bool {
     unsafe {

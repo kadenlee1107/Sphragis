@@ -145,6 +145,21 @@ pub fn handle_arp(data: &[u8]) {
     }
 }
 
+/// V8-ROOT-2: clear the ARP cache, pending list, and rate-limit ticks on
+/// cave switch. Without this, a new cave inherits the previous cave's
+/// MAC-IP mapping cache — a cross-cave network-topology leak.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        let cache = &mut *core::ptr::addr_of_mut!(ARP_CACHE);
+        for slot in cache.iter_mut() { *slot = (0, [0; 6], false); }
+        let pending = &mut *core::ptr::addr_of_mut!(PENDING);
+        for slot in pending.iter_mut() { *slot = 0; }
+        let ticks = &mut *core::ptr::addr_of_mut!(LAST_UPDATE_TICK);
+        for slot in ticks.iter_mut() { *slot = 0; }
+    }
+}
+
 pub fn resolve(ip: u32) -> Option<[u8; 6]> {
     // Check cache first
     if let Some(mac) = cache_get(ip) {

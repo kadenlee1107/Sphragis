@@ -135,17 +135,26 @@ fn apply_class_hints(class: &str, style: &mut ComputedStyle) {
 use super::css::sheet::Stylesheet;
 
 pub fn build(doc: &Document, tree: &mut LayoutTree, viewport_w: i32) {
+    crate::drivers::uart::puts("[layout] build() entered\n");
     tree.box_count = 0;
     tree.text_len = 0;
     tree.page_height = 0;
 
     // Parse any <style> block CSS into a stylesheet
-    let mut sheet = Stylesheet::new();
+    // NOTE: Stylesheet is ~448KB — MUST be static, not on stack!
+    static mut SHEET: Stylesheet = Stylesheet::new();
+    let sheet = unsafe { &mut *core::ptr::addr_of_mut!(SHEET) };
+    sheet.reset(); // just clear rule_count — don't create temp on stack
     if doc.css_len > 0 {
         sheet.parse(&doc.css_text[..doc.css_len]);
     }
 
     let body = doc.body();
+    crate::drivers::uart::puts("[layout] body=");
+    crate::kernel::mm::print_num(body);
+    crate::drivers::uart::puts(" doc.nodes=");
+    crate::kernel::mm::print_num(doc.node_count);
+    crate::drivers::uart::puts("\n");
 
     // Create root layout box
     let root = match tree.alloc() {
@@ -239,8 +248,10 @@ fn layout_children(
     avail_width: i32,
 ) {
     let mut inline_x = x_offset;
-    let char_w = 8i32;
-    let line_h = 18i32;
+    // Use TrueType metrics if available, else monospace fallback
+    let use_tt = crate::ui::truetype::is_available();
+    let _char_w: i32 = if use_tt { 7 } else { 8 }; // avg char width
+    let line_h: i32 = if use_tt { 20 } else { 18 };
 
     for child_idx in doc.children(dom_parent) {
         let node = doc.get(child_idx);
@@ -261,7 +272,28 @@ fn layout_children(
                 }
                 if all_ws { continue; }
 
-                let parent_style = tree.boxes[parent_box].style;
+                let mut parent_style = tree.boxes[parent_box].style;
+
+                // Detect "Google" logo text — make it big and centered
+                let text_str = unsafe { core::str::from_utf8_unchecked(text) };
+                let trimmed = text_str.trim();
+                let is_logo = (trimmed == "Google" || trimmed == "Google ")
+                    && *cursor_y < 300;
+                if is_logo {
+                    parent_style.font_size = 64;
+                    parent_style.font_weight = FontWeight::Bold;
+                    parent_style.color = Color::WHITE;
+                    parent_style.text_align = TextAlign::Center;
+                    // Add vertical spacing above and below
+                    *cursor_y += 60;
+                    inline_x = x_offset;
+                    // After this text node, add spacing below logo
+                }
+
+                // Use parent's font size for char width and line height
+                let fs = parent_style.font_size.max(10).min(72);
+                let char_w = (fs * 6 / 10).max(5); // ~60% of font size
+                let line_h = (fs * 14 / 10).max(14); // 140% of font size
 
                 // Create text layout box
                 let tbox = match tree.alloc() {
@@ -393,41 +425,70 @@ fn layout_children(
                     );
                     let (ts, tl) = tree.store_text(placeholder.as_bytes());
 
-                    let input_w = if input_type == "submit" || input_type == "button" {
-                        ((tl as i32) + 4) * 8
-                    } else {
-                        200.min(avail_width)
-                    };
+                    let is_search = input_type == "text" || input_type == "search";
+                    let is_submit = input_type == "submit" || input_type == "button";
 
-                    // Force block-like stacking for inputs
+                    // Add spacing above search boxes
+                    if is_search {
+                        *cursor_y += 20;
+                    }
+
+                    let input_w = if is_submit {
+                        ((tl as i32) + 6) * 9 + 24 // wider buttons
+                    } else {
+                        (avail_width * 3 / 4).min(560).max(200) // search: 75% width, max 560px
+                    };
+                    let input_h = if is_search { 44 } else if is_submit { 36 } else { 28 };
+
+                    // Center the input horizontally
                     if inline_x > x_offset {
-                        *cursor_y += line_h;
+                        *cursor_y += line_h + 8;
                         inline_x = x_offset;
                     }
+                    let input_x = if is_search {
+                        x_offset + (avail_width - input_w) / 2 // center search box
+                    } else {
+                        inline_x
+                    };
 
                     tree.boxes[ibox].dom_node = child_idx as u16;
                     tree.boxes[ibox].style = style;
-                    tree.boxes[ibox].style.background_color = Color::from_rgb(25, 25, 25);
-                    tree.boxes[ibox].style.border_width = 1;
-                    tree.boxes[ibox].style.border_color = Color::from_rgb(80, 80, 80);
-                    tree.boxes[ibox].style.padding_left = 4;
-                    tree.boxes[ibox].style.padding_top = 3;
-                    tree.boxes[ibox].style.color = Color::from_rgb(150, 150, 150);
                     tree.boxes[ibox].parent = parent_box as u16;
-                    tree.boxes[ibox].x = inline_x;
+                    tree.boxes[ibox].x = input_x;
                     tree.boxes[ibox].y = *cursor_y;
                     tree.boxes[ibox].width = input_w;
-                    tree.boxes[ibox].height = 22;
-                    tree.boxes[ibox].content_x = inline_x + 4;
-                    tree.boxes[ibox].content_y = *cursor_y + 3;
-                    tree.boxes[ibox].content_w = input_w - 8;
+                    tree.boxes[ibox].height = input_h;
+                    tree.boxes[ibox].content_x = input_x + 12;
+                    tree.boxes[ibox].content_y = *cursor_y + (input_h - 16) / 2;
+                    tree.boxes[ibox].content_w = input_w - 24;
                     tree.boxes[ibox].content_h = 16;
                     tree.boxes[ibox].text_start = ts;
                     tree.boxes[ibox].text_len = tl;
 
-                    if input_type == "submit" || input_type == "button" {
-                        tree.boxes[ibox].style.background_color = Color::from_rgb(50, 50, 50);
-                        tree.boxes[ibox].style.color = Color::WHITE;
+                    if is_search {
+                        // Google-style search box
+                        tree.boxes[ibox].style.background_color = Color::from_rgb(32, 33, 36);
+                        tree.boxes[ibox].style.border_width = 1;
+                        tree.boxes[ibox].style.border_color = Color::from_rgb(95, 99, 104);
+                        tree.boxes[ibox].style.color = Color::from_rgb(230, 230, 230);
+                        tree.boxes[ibox].style.border_radius = 24;
+                        tree.boxes[ibox].style.padding_left = 16;
+                    } else if is_submit {
+                        // Google-style button
+                        tree.boxes[ibox].style.background_color = Color::from_rgb(48, 49, 52);
+                        tree.boxes[ibox].style.border_width = 0;
+                        tree.boxes[ibox].style.border_color = Color::TRANSPARENT;
+                        tree.boxes[ibox].style.color = Color::from_rgb(230, 230, 230);
+                        tree.boxes[ibox].style.border_radius = 4;
+                        tree.boxes[ibox].style.font_size = 14;
+                    } else {
+                        tree.boxes[ibox].style.background_color = Color::from_rgb(25, 25, 25);
+                        tree.boxes[ibox].style.border_width = 1;
+                        tree.boxes[ibox].style.border_color = Color::from_rgb(80, 80, 80);
+                        tree.boxes[ibox].style.color = Color::from_rgb(150, 150, 150);
+                    }
+
+                    if is_submit {
                     }
 
                     inline_x += input_w + 4;
@@ -522,8 +583,40 @@ fn layout_children(
                 tree.boxes[ebox].style = style;
                 tree.boxes[ebox].parent = parent_box as u16;
 
-                if style.display == Display::Block || style.display == Display::ListItem
-                    || style.display == Display::Flex {
+                // Treat Flex as block (we don't have real flexbox yet)
+                let is_block = style.display == Display::Block
+                    || style.display == Display::ListItem
+                    || style.display == Display::Flex;
+
+                // Check if this "block" element is really just a short inline wrapper
+                // (like Google's nav links wrapped in divs)
+                let child_text_total = {
+                    let mut total = 0usize;
+                    let mut ci = node.first_child;
+                    while ci != 0xFFFF {
+                        let cn = doc.get(ci as usize);
+                        if cn.node_type == NodeType::Text { total += cn.text_len; }
+                        if cn.node_type == NodeType::Element {
+                            // Check grandchildren for text
+                            let mut gi = cn.first_child;
+                            while gi != 0xFFFF {
+                                let gn = doc.get(gi as usize);
+                                if gn.node_type == NodeType::Text { total += gn.text_len; }
+                                gi = gn.next_sibling;
+                            }
+                        }
+                        ci = cn.next_sibling;
+                    }
+                    total
+                };
+
+                // Short blocks (< 30 chars) with no explicit block styling → treat as inline
+                let force_inline = is_block && child_text_total > 0 && child_text_total < 30
+                    && style.margin_top == 0 && style.padding_top == 0
+                    && style.background_color == Color::TRANSPARENT
+                    && style.border_width == 0;
+
+                if is_block && !force_inline {
                     // Block element: new line, full width
                     if inline_x > x_offset {
                         // End current inline run
@@ -584,30 +677,52 @@ fn layout_children(
                     *cursor_y = tree.boxes[ebox].y + tree.boxes[ebox].height + style.margin_bottom;
                     inline_x = x_offset;
                 } else {
-                    // Inline element -- flow with text
+                    // Inline element — flow horizontally with siblings
+                    let fs = style.font_size.max(10).min(48);
+                    let elem_line_h = (fs * 14 / 10).max(14);
+
+                    // Add horizontal padding/margin
+                    inline_x += style.margin_left + style.padding_left;
+
                     let start_x = inline_x;
                     let start_y = *cursor_y;
 
-                    let _saved_inline_x = inline_x;
+                    // Lay out children inline
                     layout_children(doc, tree, sheet, ebox, child_idx, inline_x, cursor_y,
                         avail_width - (inline_x - x_offset));
 
-                    // After inline children, inline_x may have advanced via text nodes.
-                    // Approximate: width = amount of text laid out inline.
-                    let inline_h = if *cursor_y > start_y {
-                        (*cursor_y - start_y) + line_h
-                    } else {
-                        line_h
-                    };
+                    // Calculate width from text content
+                    let mut child_text_w = 0i32;
+                    let mut ci = doc.get(child_idx).first_child;
+                    while ci != 0xFFFF {
+                        let cn = doc.get(ci as usize);
+                        if cn.node_type == NodeType::Text && cn.text_len > 0 {
+                            let cw = (fs * 6 / 10).max(5);
+                            child_text_w += cn.text_len as i32 * cw;
+                        }
+                        ci = cn.next_sibling;
+                    }
+                    if child_text_w == 0 { child_text_w = 20; } // min width
 
-                    tree.boxes[ebox].x = start_x;
+                    let elem_w = child_text_w + style.padding_left + style.padding_right;
+
+                    tree.boxes[ebox].x = start_x - style.padding_left;
                     tree.boxes[ebox].y = start_y;
-                    tree.boxes[ebox].width = (inline_x - start_x).max(0);
-                    tree.boxes[ebox].height = inline_h;
+                    tree.boxes[ebox].width = elem_w;
+                    tree.boxes[ebox].height = elem_line_h;
                     tree.boxes[ebox].content_x = start_x;
                     tree.boxes[ebox].content_y = start_y;
-                    tree.boxes[ebox].content_w = (inline_x - start_x).max(0);
-                    tree.boxes[ebox].content_h = inline_h;
+                    tree.boxes[ebox].content_w = child_text_w;
+                    tree.boxes[ebox].content_h = elem_line_h;
+
+                    // Advance inline position for next sibling
+                    inline_x = start_x + child_text_w + style.padding_right + style.margin_right + 4;
+
+                    // Wrap to next line if we exceed available width
+                    if inline_x > x_offset + avail_width {
+                        inline_x = x_offset;
+                        *cursor_y += elem_line_h;
+                    }
                 }
             }
             _ => {}

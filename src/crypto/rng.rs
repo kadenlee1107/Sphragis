@@ -25,6 +25,23 @@ static STATE_LO: AtomicU64 = AtomicU64::new(0);
 static STATE_HI: AtomicU64 = AtomicU64::new(0);
 static CTR:      AtomicU64 = AtomicU64::new(0);
 
+// V8-ROOT-4: spinlock that serializes the feedback-chain update. Previously
+// STATE_LO / STATE_HI were read as two independent Relaxed loads and written
+// as two independent Relaxed stores — two concurrent fill_bytes() calls
+// could both read the same (LO, HI) seed, produce correlated outputs, and
+// race-overwrite each other's feedback. Serializing with a CAS-lock
+// guarantees the (load-seed, hash, store-feedback) transaction is atomic.
+static CHAIN_LOCK: AtomicBool = AtomicBool::new(false);
+
+/// V11-FRESH-EYES: `panic_wipe` zeroes the chain state, which is the
+/// correct thing for cold-boot residue — but if ANY post-panic code path
+/// (recovery, watchdog, kthread drain) then calls `fill_bytes` before
+/// the kernel actually halts, the very first output would be
+/// `SHA256(cntpct_seed || 0 || 0)` with ~20 bits of boot-time entropy.
+/// The new `POISONED` flag turns `fill_bytes` into a hard fault after
+/// panic so we can never silently produce low-entropy output.
+static POISONED: AtomicBool = AtomicBool::new(false);
+
 /// V4: prefer ARMv8.5 RNDR when the CPU exposes it. Probed once at boot;
 /// `true` means every subsequent `fill_bytes` call reads from RNDR and
 /// XORs into the SHA-chain output. RNDR failure (hardware entropy source
@@ -88,8 +105,11 @@ fn gather_seed() -> [u8; 64] {
         seed[i * 8..(i + 1) * 8].copy_from_slice(&v.to_le_bytes());
         for _ in 0..100 { core::hint::spin_loop(); }
     }
-    let prev_lo = STATE_LO.load(Ordering::Relaxed);
-    let prev_hi = STATE_HI.load(Ordering::Relaxed);
+    // V8-ROOT-4: Acquire pairs with Release in fill_bytes feedback stores.
+    // gather_seed is only called under CHAIN_LOCK now, but keep Acquire in
+    // case other paths (e.g. init) ever load.
+    let prev_lo = STATE_LO.load(Ordering::Acquire);
+    let prev_hi = STATE_HI.load(Ordering::Acquire);
     for i in 0..8 { seed[i]     ^= prev_lo.to_le_bytes()[i]; }
     for i in 0..8 { seed[i + 8] ^= prev_hi.to_le_bytes()[i]; }
     seed
@@ -102,7 +122,53 @@ fn gather_seed() -> [u8; 64] {
 /// is XORed with fresh RNDR reads so even a compromised SHA chain
 /// doesn't expose predictable output. If RNDR is unavailable or stalls
 /// we still produce SHA-chain output — never falls back to cntpct-only.
+/// V8-ROOT-6: panic-handler-only wipe of the DRBG chain state. Uses
+/// volatile stores so the compiler cannot DCE. No locks — panic handler
+/// may be holding arbitrary state.
+///
+/// # Safety
+/// Call only from the panic handler (via wipe::emergency_wipe). Leaves
+/// the RNG unusable until `gather_seed` is called again.
+pub unsafe fn panic_wipe() {
+    STATE_LO.store(0, Ordering::Release);
+    STATE_HI.store(0, Ordering::Release);
+    CTR.store(0, Ordering::Release);
+    CHAIN_LOCK.store(false, Ordering::Release);
+    // V11-FRESH-EYES: flag the RNG as unusable post-panic. `fill_bytes`
+    // checks this first and halts rather than producing a low-entropy
+    // derivation from the now-zeroed chain state.
+    POISONED.store(true, Ordering::Release);
+}
+
 pub fn fill_bytes(buf: &mut [u8]) {
+    // V11-FRESH-EYES: if we've been poisoned by a previous panic_wipe,
+    // refuse to produce output. The chain state is zero so any output
+    // would be ~20-bit boot-time entropy derivations (cntpct-only).
+    // Halt loudly rather than silently fall through to weak keys.
+    if POISONED.load(Ordering::Acquire) {
+        crate::drivers::uart::puts("[rng] FATAL: fill_bytes called after panic_wipe (poisoned)\n");
+        loop { unsafe { core::arch::asm!("wfe"); } }
+    }
+
+    // V8-ROOT-4: acquire CHAIN_LOCK before any state-chain access. IRQs are
+    // masked for the duration so the lock cannot deadlock with an interrupt
+    // handler that itself calls rng::fill_bytes (e.g. TLS record sequence).
+    // RAII-release via `ChainGuard` so a mid-function panic can't strand
+    // the lock — future fill_bytes callers would spin forever otherwise.
+    struct ChainGuard;
+    impl Drop for ChainGuard {
+        fn drop(&mut self) { CHAIN_LOCK.store(false, Ordering::Release); }
+    }
+
+    let _irq = crate::kernel::sync::IrqGuard::new();
+    while CHAIN_LOCK
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+    let _lock = ChainGuard; // released on drop, even on panic
+
     let seed = gather_seed();
     let mut pos = 0;
     while pos < buf.len() {
@@ -128,11 +194,15 @@ pub fn fill_bytes(buf: &mut [u8]) {
         // Feed output back into the chain.
         let new_lo = u64::from_le_bytes([h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7]]);
         let new_hi = u64::from_le_bytes([h[8],h[9],h[10],h[11],h[12],h[13],h[14],h[15]]);
-        STATE_LO.store(new_lo, Ordering::Relaxed);
-        STATE_HI.store(new_hi, Ordering::Relaxed);
+        STATE_LO.store(new_lo, Ordering::Release);
+        STATE_HI.store(new_hi, Ordering::Release);
 
         pos += take;
     }
+
+    // _lock and _irq drop at end of scope, releasing CHAIN_LOCK then DAIF.
+    drop(_lock);
+    drop(_irq);
 }
 
 /// Convenience: 32 random bytes.

@@ -3,6 +3,13 @@ name = "bat_os"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Layer-B synthetic test: QEMU kernel entry builds a fake m1n1 BootArgsRaw
+# + minimal ADT in static memory, then runs the Apple-path parser code
+# against it. Validates boot_args::parse, soc::discover_from_adt, and
+# the ADT parser on real M4 silicon without needing m1n1 installed.
+layer-b-test = []
+
 [dependencies]
 # ROOT-4 crypto replacement — RustCrypto audited primitives.
 # All no_std-compatible, no heap needed with default-features=false.

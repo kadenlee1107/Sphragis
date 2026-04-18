@@ -143,6 +143,22 @@ pub fn destroy_circuit() {
     uart::puts("[tor] Circuit destroyed\n");
 }
 
+/// V8-ROOT-2 (V10 regression fix): drop the full Tor circuit on cave
+/// switch. Without this, a new cave inherits the prior cave's guard/
+/// middle/exit relay keys — a cross-cave identity/anonymity leak that
+/// would let the new cave impersonate the outgoing cave's Tor session.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        let c = &mut *core::ptr::addr_of_mut!(CIRCUIT);
+        c.guard = TorRelay::empty();
+        c.middle = TorRelay::empty();
+        c.exit = TorRelay::empty();
+        c.circuit_id = 0;
+        c.state = CircuitState::Idle;
+    }
+}
+
 /// AES-256-CTR encrypt/decrypt in-place.
 fn ctr_encrypt(key: &[u8; 32], nonce: &[u8; 16], data: &mut [u8]) {
     let cipher = aes::Aes256::new(key);

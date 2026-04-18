@@ -1,6 +1,10 @@
 #ifndef V8_BUILTINS_GENERATED_BYTECODES_BUILTINS_LIST_H_
 #define V8_BUILTINS_GENERATED_BYTECODES_BUILTINS_LIST_H_
 
+// Handler counts for builtins.h
+static constexpr int kNumberOfBytecodeHandlers = 211;
+static constexpr int kNumberOfWideBytecodeHandlers = 422;
+
 #define BUILTIN_LIST_BYTECODE_HANDLERS(V, V_WIDE) \
   V(Star15Handler, interpreter::OperandScale::kSingle, interpreter::Bytecode::kStar15) \
   V_WIDE(Star15HandlerWide, interpreter::OperandScale::kDouble, interpreter::Bytecode::kStar15) \

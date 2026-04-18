@@ -178,6 +178,10 @@ pub fn eventfd2(initval: u32, flags: i32) -> i64 {
 pub fn eventfd_read_slot(slot: usize, out_value: *mut u64) -> i64 {
     let s = match eventfd_slot(slot) { Ok(s) => s, Err(e) => return e };
     if out_value.is_null() { return EFAULT; }
+    // V8-ROOT-8 / V8-PTR-003: gate out_value (8-byte kernel write otherwise).
+    if !crate::batcave::linux::uaccess::is_user_range(out_value as usize, 8) {
+        return EFAULT;
+    }
 
     let flags = s.flags.load(Ordering::Acquire);
     let semaphore = (flags & EFD_SEMAPHORE) != 0;
@@ -383,6 +387,19 @@ pub fn timerfd_settime(
     let s = match timerfd_slot(fd as usize) { Ok(s) => s, Err(e) => return e };
     if new_value.is_null() { return EFAULT; }
 
+    // V8-ROOT-8 / V8-PTR-003: gate both pointers before any deref. Itimerspec
+    // is 32 bytes. Without this, a cave passing `new_value=kptr` got a
+    // 32-byte kernel read; `old_value=kptr` got a 32-byte kernel write.
+    let itspec_size = core::mem::size_of::<Itimerspec>();
+    if !crate::batcave::linux::uaccess::is_user_range(new_value as usize, itspec_size) {
+        return EFAULT;
+    }
+    if !old_value.is_null()
+        && !crate::batcave::linux::uaccess::is_user_range(old_value as usize, itspec_size)
+    {
+        return EFAULT;
+    }
+
     // Sweep first so the "old_value" we report is consistent.
     sweep(s);
 
@@ -440,6 +457,12 @@ pub fn timerfd_gettime(fd: i32, curr_value: *mut Itimerspec) -> i64 {
     if fd < 0 { return EBADF; }
     let s = match timerfd_slot(fd as usize) { Ok(s) => s, Err(e) => return e };
     if curr_value.is_null() { return EFAULT; }
+    // V8-ROOT-8 / V8-PTR-003: gate curr_value (32-byte write to attacker ptr).
+    if !crate::batcave::linux::uaccess::is_user_range(
+        curr_value as usize, core::mem::size_of::<Itimerspec>())
+    {
+        return EFAULT;
+    }
 
     sweep(s);
 
@@ -504,6 +527,26 @@ pub fn timerfd_next_expiry(slot: usize) -> Option<i64> {
     let s = timerfd_slot(slot).ok()?;
     let e = s.expires_at.load(Ordering::Acquire);
     if e == 0 { None } else { Some(e) }
+}
+
+/// V8-ROOT-2: drop every async-fd slot on cave switch. Without this, a new
+/// cave's fd table reuse can inherit a previous cave's pending eventfd
+/// count or timerfd expiration — event-smuggling across the isolation
+/// boundary.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    for s in EVENTFDS.iter() {
+        s.in_use.store(false, Ordering::Release);
+        s.counter.store(0, Ordering::Relaxed);
+        s.flags.store(0, Ordering::Relaxed);
+    }
+    for s in TIMERFDS.iter() {
+        s.in_use.store(false, Ordering::Release);
+        s.counter.store(0, Ordering::Relaxed);
+        s.flags.store(0, Ordering::Relaxed);
+        s.expires_at.store(0, Ordering::Relaxed);
+        s.interval_ns.store(0, Ordering::Relaxed);
+    }
 }
 
 // ─── Silence unused-field warnings for types the integrator will consume ───

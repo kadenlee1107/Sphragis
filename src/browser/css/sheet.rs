@@ -188,6 +188,10 @@ impl Stylesheet {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.rule_count = 0;
+    }
+
     pub fn has_rules(&self) -> bool {
         self.rule_count > 0
     }

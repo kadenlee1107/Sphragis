@@ -116,6 +116,27 @@ pub struct TlsSession {
     pub finished_seen: bool,
 }
 
+impl TlsSession {
+    /// V8-ROOT-6: zero every secret in the session struct. Call this on any
+    /// handshake-error exit path so partial key derivation can't leak via a
+    /// later reader of the static session-pool memory (e.g. a reallocated
+    /// slot for a new connection). Public buffers (expected_hostname,
+    /// leftover, random nonces) are not secrets and are left alone — the
+    /// caller resets them separately.
+    pub fn zeroize_secrets(&mut self) {
+        self.our_private   = [0; 32];
+        self.shared_secret = [0; 32];
+        self.client_key    = [0; 32];
+        self.server_key    = [0; 32];
+        self.client_iv     = [0; 12];
+        self.server_iv     = [0; 12];
+        self.peer_spki       = [0; 512];
+        self.peer_spki_len   = 0;
+        self.peer_pubkey_alg = 0;
+        self.state = TlsState::Initial;
+    }
+}
+
 // ATTACK-NET-034: one TLS session per TCP PCB instead of a single global.
 //
 // The public API (build_client_hello / handshake / send_app_data / …) still
@@ -382,7 +403,12 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
         if pos + 2 > content.len() { return Err("SH no extensions"); }
         let ext_len = ((content[pos] as usize) << 8) | content[pos + 1] as usize;
         pos += 2;
-        let ext_end = (pos + ext_len).min(content.len());
+        // V8-ROOT-3 / V8-ARITH-B1: pos + ext_len wraps under overflow-checks
+        // and panics the kernel. Use checked_add.
+        let ext_end = match pos.checked_add(ext_len) {
+            Some(e) => e.min(content.len()),
+            None => return Err("SH: ext_len+pos overflow"),
+        };
 
         // Parse extensions: must find key_share (51) AND supported_versions
         // (43) reporting TLS 1.3. NET2-003: without the supported_versions
@@ -391,13 +417,17 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
         // won't notice a protocol downgrade.
         let mut saw_tls13 = false;
         let mut saw_key_share = false;
-        let ext_walk_end = ext_end.saturating_sub(4);
-        while pos + 4 <= ext_walk_end + 4 && pos + 4 <= ext_end {
-            if pos + 4 > content.len() { break; }
+        // V8-ROOT-3: all pos arithmetic uses checked_add to prevent
+        // panic-DoS under overflow-checks=true on attacker-controlled lengths.
+        while let Some(after_hdr) = pos.checked_add(4) {
+            if after_hdr > ext_end || after_hdr > content.len() { break; }
             let ext_type = ((content[pos] as u16) << 8) | content[pos + 1] as u16;
             let ext_data_len = ((content[pos + 2] as usize) << 8) | content[pos + 3] as usize;
-            pos += 4;
-            if pos + ext_data_len > ext_end { break; }
+            let data_end = match after_hdr.checked_add(ext_data_len) {
+                Some(e) if e <= ext_end && e <= content.len() => e,
+                _ => break,
+            };
+            pos = after_hdr;
 
             if ext_type == 43 && ext_data_len >= 2 {
                 // supported_versions in ServerHello carries exactly one
@@ -410,18 +440,22 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
 
             if ext_type == 51 {
                 // key_share: named_group (2) + key_exchange_length (2) + key_exchange
-                if ext_data_len >= 4 + 32 && pos + 4 + 32 <= content.len() {
-                    let group = ((content[pos] as u16) << 8) | content[pos + 1] as u16;
-                    let key_len = ((content[pos + 2] as usize) << 8) | content[pos + 3] as usize;
-                    if group == 29 && key_len == 32 {
-                        sess.peer_public.copy_from_slice(&content[pos + 4..pos + 36]);
-                        saw_key_share = true;
-                        tdbg("[tls] found X25519 key_share\n");
+                if ext_data_len >= 4 + 32 {
+                    if let Some(key_end) = pos.checked_add(36) {
+                        if key_end <= content.len() {
+                            let group = ((content[pos] as u16) << 8) | content[pos + 1] as u16;
+                            let key_len = ((content[pos + 2] as usize) << 8) | content[pos + 3] as usize;
+                            if group == 29 && key_len == 32 {
+                                sess.peer_public.copy_from_slice(&content[pos + 4..pos + 36]);
+                                saw_key_share = true;
+                                tdbg("[tls] found X25519 key_share\n");
+                            }
+                        }
                     }
                 }
             }
 
-            pos += ext_data_len;
+            pos = data_end;
         }
 
         if !saw_tls13 {
@@ -464,6 +498,17 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
 /// Perform the full TLS 1.3 handshake over an established TCP connection.
 /// Sends ClientHello, receives ServerHello, derives keys, handles encrypted handshake.
 pub fn handshake(hostname: &str) -> Result<(), &'static str> {
+    let result = handshake_inner(hostname);
+    if result.is_err() {
+        // V8-ROOT-6: zero every derived secret on any handshake failure so
+        // the static session-pool slot doesn't leak partial key material to
+        // the next caller who reuses this PCB.
+        session_mut(LEGACY_TLS_PCB).zeroize_secrets();
+    }
+    result
+}
+
+fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
     let sess = session_mut(LEGACY_TLS_PCB);
     sess.leftover_len = 0; // Reset leftover buffer for new session
 
@@ -513,15 +558,25 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     while need_more && all_len < all_buf.len() - 4096 {
         need_more = false;
         let mut scan = sh_end;
-        while scan + 5 < all_len {
-            let rt = all_buf[scan];
+        // V8-ROOT-3: scan-walk uses checked arithmetic; all peer-controlled
+        // record-length deltas could otherwise wrap usize and panic.
+        loop {
+            let after_hdr = match scan.checked_add(5) {
+                Some(n) if n <= all_len => n,
+                _ => break,
+            };
+            let _rt = all_buf[scan];
             let rl = ((all_buf[scan + 3] as usize) << 8) | all_buf[scan + 4] as usize;
-            if scan + 5 + rl > all_len {
+            let next = match after_hdr.checked_add(rl) {
+                Some(n) => n,
+                None => { need_more = true; break; }
+            };
+            if next > all_len {
                 // Record extends beyond buffer — need more data
                 need_more = true;
                 break;
             }
-            scan = scan + 5 + rl;
+            scan = next;
         }
         if need_more {
             let mut chunk = [0u8; 4096];
@@ -579,11 +634,20 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
     // Step 4: Parse encrypted handshake records from the buffered data
     let mut pos = remaining_start;
 
-    while pos + 5 < all_len {
+    // V8-ROOT-3: encrypted-handshake outer loop uses checked arithmetic on
+    // peer-controlled rec_len.
+    loop {
+        let after_hdr = match pos.checked_add(5) {
+            Some(n) if n < all_len => n,
+            _ => break,
+        };
         let rec_type = all_buf[pos];
         let rec_len = ((all_buf[pos + 3] as usize) << 8) | all_buf[pos + 4] as usize;
-        let rec_end = (pos + 5 + rec_len).min(all_len);
-        let payload_len = rec_end - pos - 5;
+        let rec_end = match after_hdr.checked_add(rec_len) {
+            Some(n) => n.min(all_len),
+            None => break,
+        };
+        let payload_len = rec_end.saturating_sub(after_hdr);
 
         if rec_type == 0x14 {
             // ChangeCipherSpec — skip
@@ -596,7 +660,13 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
             let mut nonce = sess.server_iv;
             let seq_bytes = sess.server_seq.to_be_bytes();
             for i in 0..8 { nonce[4 + i] ^= seq_bytes[i]; }
-            sess.server_seq += 1;
+            // V8-ROOT-3 (regression fix): checked_add so a 2^64-record session
+            // doesn't panic the kernel. RFC 8446 §5.5 mandates rekey or
+            // session-close long before this — we abort here as a safety net.
+            sess.server_seq = match sess.server_seq.checked_add(1) {
+                Some(n) => n,
+                None => return Err("TLS: server record-sequence exhausted, close session"),
+            };
 
             // ROOT-4: authenticated decryption for handshake records too.
             // Same AAD format as recv_app_data (5-byte TLS record header).
@@ -667,7 +737,12 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                     let msg_len = ((decrypted[hp + 1] as usize) << 16)
                                 | ((decrypted[hp + 2] as usize) << 8)
                                 | (decrypted[hp + 3] as usize);
-                    let msg_end = hp + 4 + msg_len;
+                    // V8-ROOT-3: msg_len is a 24-bit peer-controlled field;
+                    // hp + 4 + msg_len could wrap usize on hostile inputs.
+                    let msg_end = match hp.checked_add(4).and_then(|h| h.checked_add(msg_len)) {
+                        Some(n) => n,
+                        None => break,
+                    };
                     if msg_end > inner_len { break; }
 
                     if msg_type == 0x0b {
@@ -675,17 +750,36 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                         // Parse: 1-byte ctx length + ctx + 3-byte certs_len
                         // + entries. First entry = leaf cert (3-byte len +
                         // cert DER + 2-byte exts_len + exts).
-                        let body = &decrypted[hp + 4 .. hp + 4 + msg_len];
+                        let body_start = hp + 4;
+                        let body_end = match body_start.checked_add(msg_len) {
+                            Some(n) if n <= decrypted.len() => n,
+                            _ => return Err("TLS: Certificate body OOB"),
+                        };
+                        let body = &decrypted[body_start..body_end];
                         if body.len() < 4 {
                             return Err("TLS: Certificate body too short");
                         }
                         let ctx_len = body[0] as usize;
-                        if ctx_len + 4 > body.len() { return Err("TLS: bad ctx_len"); }
+                        // V8-ROOT-3: ctx_len + 4 could wrap; use checked_add.
+                        let ctx_check = match ctx_len.checked_add(4) {
+                            Some(n) => n,
+                            None => return Err("TLS: bad ctx_len"),
+                        };
+                        if ctx_check > body.len() { return Err("TLS: bad ctx_len"); }
                         let after_ctx = 1 + ctx_len;
                         let certs_len = ((body[after_ctx] as usize) << 16)
                                       | ((body[after_ctx + 1] as usize) << 8)
                                       |  (body[after_ctx + 2] as usize);
-                        if after_ctx + 3 + certs_len > body.len() {
+                        // V8-ROOT-3: certs_len is 24-bit peer-controlled;
+                        // after_ctx + 3 + certs_len could wrap.
+                        let certs_end = match after_ctx
+                            .checked_add(3)
+                            .and_then(|x| x.checked_add(certs_len))
+                        {
+                            Some(n) => n,
+                            None => return Err("TLS: bad certs_len"),
+                        };
+                        if certs_end > body.len() {
                             return Err("TLS: bad certs_len");
                         }
 
@@ -717,13 +811,22 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                             if clen > MAX_CERT_DER {
                                 return Err("TLS: cert entry too large");
                             }
-                            if p + clen > end { return Err("TLS: cert entry truncated"); }
-                            certs.push(&body[p..p + clen]);
-                            p += clen;
+                            let cert_end = match p.checked_add(clen) {
+                                Some(n) if n <= end => n,
+                                _ => return Err("TLS: cert entry truncated"),
+                            };
+                            certs.push(&body[p..cert_end]);
+                            p = cert_end;
                             // Skip 2-byte extensions length + extensions.
-                            if p + 2 > end { break; }
+                            let ext_len_start = match p.checked_add(2) {
+                                Some(n) if n <= end => n,
+                                _ => break,
+                            };
                             let ext_len = ((body[p] as usize) << 8) | body[p + 1] as usize;
-                            p += 2 + ext_len;
+                            p = match ext_len_start.checked_add(ext_len) {
+                                Some(n) if n <= end => n,
+                                _ => return Err("TLS: Certificate extensions length overflow"),
+                            };
                         }
                         if certs.is_empty() {
                             return Err("TLS: no certs in Certificate message");
@@ -749,7 +852,14 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                                 // Before this, fallback paths left
                                 // peer_spki_len=0 and CertificateVerify
                                 // was silently skipped = full MITM bypass.
-                                match crate::net::x509::leaf_info(leaf) {
+                                // V11-FRESH-EYES: use leaf_info_with_host so a
+                                // cert validly issued for host A cannot be
+                                // used against host B via the pin-only
+                                // fallback path. Previously the fallback
+                                // path didn't re-check hostname at all —
+                                // latent MITM risk if STRICT_MODE ever
+                                // flipped to false (e.g. dev builds).
+                                match crate::net::x509::leaf_info_with_host(leaf, host) {
                                     Ok((spki, alg)) => {
                                         sess.peer_spki_len = spki.len().min(sess.peer_spki.len());
                                         sess.peer_spki[..sess.peer_spki_len]
@@ -757,7 +867,7 @@ pub fn handshake(hostname: &str) -> Result<(), &'static str> {
                                         sess.peer_pubkey_alg = alg as u8;
                                     }
                                     Err(_) => {
-                                        return Err("TLS: leaf cert unparseable");
+                                        return Err("TLS: leaf cert unparseable or hostname mismatch");
                                     }
                                 }
                                 // V5-WEIRD uart-leak fix: do not distinguish
@@ -964,7 +1074,12 @@ pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
     for i in 0..8 {
         nonce[4 + i] ^= seq_bytes[i];
     }
-    sess.client_seq += 1;
+    // V8-ROOT-3 (regression fix): checked_add. See comment at server_seq
+    // increment in handshake_inner.
+    sess.client_seq = match sess.client_seq.checked_add(1) {
+        Some(n) => n,
+        None => return Err("TLS: client record-sequence exhausted, close session"),
+    };
 
     // Encrypt with AES-128-GCM using the audited RustCrypto-backed impl.
     // Matches the recv-side migration: same primitives, same AAD format,
@@ -1098,7 +1213,11 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     for i in 0..8 {
         nonce[4 + i] ^= seq_bytes[i];
     }
-    sess.server_seq += 1;
+    // V8-ROOT-3 (regression fix): checked_add. See comment at handshake path.
+    sess.server_seq = match sess.server_seq.checked_add(1) {
+        Some(n) => n,
+        None => return Err("TLS: server record-sequence exhausted, close session"),
+    };
 
     // Decrypt with AUTHENTICATION (ROOT-4).
     //
@@ -1236,6 +1355,36 @@ pub fn reset_all_sessions() {
     }
 }
 
+/// V8-ROOT-6: panic-handler-only secret wipe. Uses volatile writes so the
+/// compiler cannot DCE, no locks (panic handler may be holding them).
+/// Best-effort. Zeroes the derived secrets in every PCB session slot.
+///
+/// # Safety
+/// May only be called from the panic handler (via wipe::emergency_wipe).
+pub unsafe fn panic_wipe() {
+    let base = core::ptr::addr_of_mut!(TLS_STATES) as *mut TlsSession;
+    for i in 0..TLS_MAX_PCBS {
+        let s = base.add(i);
+        // Write each secret byte volatile so the compiler preserves it.
+        let pv = core::ptr::addr_of_mut!((*s).our_private) as *mut u8;
+        let ss = core::ptr::addr_of_mut!((*s).shared_secret) as *mut u8;
+        let ck = core::ptr::addr_of_mut!((*s).client_key) as *mut u8;
+        let sk = core::ptr::addr_of_mut!((*s).server_key) as *mut u8;
+        let ci = core::ptr::addr_of_mut!((*s).client_iv) as *mut u8;
+        let si = core::ptr::addr_of_mut!((*s).server_iv) as *mut u8;
+        for j in 0..32 {
+            core::ptr::write_volatile(pv.add(j), 0);
+            core::ptr::write_volatile(ss.add(j), 0);
+            core::ptr::write_volatile(ck.add(j), 0);
+            core::ptr::write_volatile(sk.add(j), 0);
+        }
+        for j in 0..12 {
+            core::ptr::write_volatile(ci.add(j), 0);
+            core::ptr::write_volatile(si.add(j), 0);
+        }
+    }
+}
+
 /// Close TLS session.
 pub fn close() {
     use crate::security::zeroize::zeroize;
@@ -1257,6 +1406,16 @@ pub fn close() {
     zeroize(&mut sess.server_random);
     zeroize(&mut sess.leftover);
     sess.leftover_len = 0;
+    // V8-ROOT-6: peer_spki (server public key) and expected_hostname
+    // aren't "secrets" in the key sense but they identify what we were
+    // talking to. Zero them too so a later snapshot can't prove the
+    // session's counterparty.
+    zeroize(&mut sess.peer_spki);
+    sess.peer_spki_len = 0;
+    sess.peer_pubkey_alg = 0;
+    zeroize(&mut sess.expected_hostname);
+    sess.expected_hostname_len = 0;
+    sess.finished_seen = false;
 }
 
 /// Check if TLS session is established.
@@ -1524,8 +1683,16 @@ fn field_cswap(a: &mut Fe, b: &mut Fe, swap: u64) {
     }
 }
 
+/// V8-ROOT-12: constant-time field reduction modulo p = 2^255 - 19.
+///
+/// The previous implementation had TWO timing leaks that directly expose
+/// private-scalar bits to a co-resident attacker (browser JS reading
+/// cntpct_el0): (1) nested if/else early-exit over the limb-by-limb
+/// compare to p, and (2) a data-dependent `if ge { subtract }` branch.
+/// Both are now replaced with constant-time mask arithmetic — every
+/// call executes the same sequence of ops regardless of the input.
 fn field_reduce(f: &mut Fe) {
-    // Carry propagation
+    // Carry propagation (data-independent loop counts — unchanged).
     for _ in 0..3 {
         let mut carry = 0u64;
         for i in 0..5 {
@@ -1540,38 +1707,27 @@ fn field_reduce(f: &mut Fe) {
     f[0] &= MASK51;
     f[1] += carry;
 
-    // Conditional subtraction of p if f >= p
-    // p = [0x7FFFFFFFFFFED, 0x7FFFFFFFFFFFF, 0x7FFFFFFFFFFFF, 0x7FFFFFFFFFFFF, 0x7FFFFFFFFFFFF]
-    // Check: is f >= p?
-    let mut ge = true;
-    if f[4] < 0x7FFFFFFFFFFFF { ge = false; }
-    else if f[4] == 0x7FFFFFFFFFFFF {
-        if f[3] < 0x7FFFFFFFFFFFF { ge = false; }
-        else if f[3] == 0x7FFFFFFFFFFFF {
-            if f[2] < 0x7FFFFFFFFFFFF { ge = false; }
-            else if f[2] == 0x7FFFFFFFFFFFF {
-                if f[1] < 0x7FFFFFFFFFFFF { ge = false; }
-                else if f[1] == 0x7FFFFFFFFFFFF {
-                    if f[0] < 0x7FFFFFFFFFFED { ge = false; }
-                }
-            }
-        }
+    // Constant-time compute `f - p` into a scratch array. If f >= p then
+    // the top borrow is 0 (answer is positive); if f < p then the top
+    // borrow is 1 (answer wrapped). We use that borrow as the mask for
+    // selecting between the original f and the reduced value.
+    let p: Fe = [0x7FFFFFFFFFFED, 0x7FFFFFFFFFFFF, 0x7FFFFFFFFFFFF, 0x7FFFFFFFFFFFF, 0x7FFFFFFFFFFFF];
+    let mut t: [u64; 5] = [0; 5];
+    // Use i128 for limb arithmetic so the borrow is captured cleanly.
+    let mut borrow: i128 = 0;
+    for i in 0..5 {
+        let v = f[i] as i128 - p[i] as i128 + borrow;
+        // v is either in [-(2^52)..2^51) or has wrapped; mask off low 51 bits.
+        t[i] = (v as u64) & MASK51;
+        borrow = v >> 63; // arithmetic shift: 0 if v>=0, -1 if v<0
     }
-
-    if ge {
-        // Subtract p
-        let mut borrow = 0i64;
-        let p: Fe = [0x7FFFFFFFFFFED, 0x7FFFFFFFFFFFF, 0x7FFFFFFFFFFFF, 0x7FFFFFFFFFFFF, 0x7FFFFFFFFFFFF];
-        for i in 0..5 {
-            let val = f[i] as i64 - p[i] as i64 + borrow;
-            if val < 0 {
-                f[i] = (val + (1i64 << 51)) as u64;
-                borrow = -1;
-            } else {
-                f[i] = val as u64;
-                borrow = 0;
-            }
-        }
+    // `borrow == -1` ⇔ f < p (keep original); `borrow == 0` ⇔ use t.
+    // Build an all-ones-on-keep-original mask. On aarch64 this compiles
+    // to a single `sbfx`/`asr` — no branch.
+    let keep_orig_mask: u64 = borrow as u64; // 0 if borrow==0, !0 if borrow==-1
+    let use_t_mask: u64 = !keep_orig_mask;
+    for i in 0..5 {
+        f[i] = (f[i] & keep_orig_mask) | (t[i] & use_t_mask);
     }
 }
 

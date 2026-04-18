@@ -190,6 +190,12 @@ optional<decay_t<T>> make_optional(T&& v) {
     return optional<decay_t<T>>(std::forward<T>(v));
 }
 
+// Zero-arg make_optional<T>() — default constructs T
+template<class T, class... Args>
+optional<T> make_optional(Args&&... args) {
+    return optional<T>(T(std::forward<Args>(args)...));
+}
+
 } // namespace std
 
 #endif

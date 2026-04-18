@@ -186,6 +186,28 @@ pub fn disconnect() {
     add_system_msg("Disconnected.");
 }
 
+/// V11-state-sweep: tear down the chat session on cave switch. Without
+/// this, a new cave inherits the outgoing cave's AES session key, peer
+/// tuple, AND the entire decrypted message history + compose buffer.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        STATE = CommState::Disconnected;
+        SESSION_KEY = [0; 32];
+        PEER_IP = 0;
+        PEER_PORT = 0;
+        MSG_COUNT = 0;
+        for m in (&mut *core::ptr::addr_of_mut!(MESSAGES)).iter_mut() {
+            *m = ChatMsg::empty();
+        }
+        let cb = core::ptr::addr_of_mut!(COMPOSE_BUF) as *mut u8;
+        for i in 0..MAX_MSG_LEN {
+            core::ptr::write_volatile(cb.add(i), 0);
+        }
+        COMPOSE_LEN = 0;
+    }
+}
+
 /// Render the comms client UI.
 pub fn render() {
     let r = wm::content_rect();

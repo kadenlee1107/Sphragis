@@ -65,11 +65,11 @@ static mut KEY_HEAD: usize = 0;
 static mut KEY_TAIL: usize = 0;
 
 fn read32(offset: usize) -> u32 {
-    unsafe { core::ptr::read_volatile((soc::SPI0_BASE + offset) as *const u32) }
+    unsafe { core::ptr::read_volatile((soc::spi0_base() + offset) as *const u32) }
 }
 
 fn write32(offset: usize, val: u32) {
-    unsafe { core::ptr::write_volatile((soc::SPI0_BASE + offset) as *mut u32, val) }
+    unsafe { core::ptr::write_volatile((soc::spi0_base() + offset) as *mut u32, val) }
 }
 
 /// Initialize the SPI controller for keyboard communication.
@@ -159,4 +159,18 @@ pub fn getc() -> Option<u8> {
 
 pub fn is_ready() -> bool {
     INITIALIZED.load(Ordering::Relaxed)
+}
+
+/// V11-state-sweep: wipe keystroke ring on cave switch. See keyboard.rs —
+/// typed passphrase from outgoing cave would otherwise leak.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        let p = core::ptr::addr_of_mut!(KEY_BUF) as *mut u8;
+        for i in 0..KEY_BUF_SIZE {
+            core::ptr::write_volatile(p.add(i), 0);
+        }
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(KEY_HEAD), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(KEY_TAIL), 0);
+    }
 }

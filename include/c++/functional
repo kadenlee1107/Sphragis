@@ -18,8 +18,8 @@ struct less {
 template<>
 struct less<void> {
     template<class T, class U>
-    constexpr auto operator()(T&& a, U&& b) const -> decltype(std::forward<T>(a) < std::forward<U>(b)) {
-        return std::forward<T>(a) < std::forward<U>(b);
+    constexpr auto operator()(T&& a, U&& b) const -> decltype(::std::forward<T>(a) < ::std::forward<U>(b)) {
+        return ::std::forward<T>(a) < ::std::forward<U>(b);
     }
 };
 
@@ -30,8 +30,8 @@ struct greater {
 template<>
 struct greater<void> {
     template<class T, class U>
-    constexpr auto operator()(T&& a, U&& b) const -> decltype(std::forward<T>(a) > std::forward<U>(b)) {
-        return std::forward<T>(a) > std::forward<U>(b);
+    constexpr auto operator()(T&& a, U&& b) const -> decltype(::std::forward<T>(a) > ::std::forward<U>(b)) {
+        return ::std::forward<T>(a) > ::std::forward<U>(b);
     }
 };
 
@@ -42,8 +42,8 @@ struct equal_to {
 template<>
 struct equal_to<void> {
     template<class T, class U>
-    constexpr auto operator()(T&& a, U&& b) const -> decltype(std::forward<T>(a) == std::forward<U>(b)) {
-        return std::forward<T>(a) == std::forward<U>(b);
+    constexpr auto operator()(T&& a, U&& b) const -> decltype(::std::forward<T>(a) == ::std::forward<U>(b)) {
+        return ::std::forward<T>(a) == ::std::forward<U>(b);
     }
 };
 
@@ -124,8 +124,8 @@ template<> struct hash<long long>          { size_t operator()(long long v) cons
 template<> struct hash<unsigned long long> { size_t operator()(unsigned long long v) const noexcept { return static_cast<size_t>(v); } };
 
 // Generic enum hash (C++14+)
-template<class T> requires(is_enum_v<T>)
-struct hash<T> { size_t operator()(T v) const noexcept { return static_cast<size_t>(static_cast<underlying_type_t<T>>(v)); } };
+template<class T> requires(::std::is_enum_v<T>)
+struct hash<T> { size_t operator()(T v) const noexcept { return static_cast<size_t>(static_cast<::std::underlying_type_t<T>>(v)); } };
 
 template<> struct hash<float> {
     size_t operator()(float v) const noexcept {
@@ -163,7 +163,7 @@ class function<R(Args...)> {
 
     template<class F>
     static R invoke_impl(void* buf, Args&&... args) {
-        return (*static_cast<F*>(buf))(std::forward<Args>(args)...);
+        return (*static_cast<F*>(buf))(::std::forward<Args>(args)...);
     }
     template<class F>
     static void destroy_impl(void* buf) {
@@ -179,14 +179,14 @@ public:
         __builtin_memset(_buf, 0, BUF_SIZE);
     }
 
-    function(nullptr_t) noexcept : function() {}
+    function(decltype(nullptr)) noexcept : function() {}
 
-    template<class F, class = enable_if_t<!is_same_v<decay_t<F>, function>>>
+    template<class F, class = ::std::enable_if_t<!::std::is_same_v<::std::decay_t<F>, function>>>
     function(F&& f) : function() {
-        using Decay = decay_t<F>;
+        using Decay = ::std::decay_t<F>;
         static_assert(sizeof(Decay) <= BUF_SIZE, "Callable too large for std::function buffer");
         static_assert(alignof(Decay) <= 16, "Callable alignment too large");
-        ::new(_buf) Decay(std::forward<F>(f));
+        ::new(_buf) Decay(::std::forward<F>(f));
         _invoke  = &invoke_impl<Decay>;
         _destroy = &destroy_impl<Decay>;
         _copy    = &copy_impl<Decay>;
@@ -237,7 +237,7 @@ public:
         return *this;
     }
 
-    function& operator=(nullptr_t) noexcept {
+    function& operator=(decltype(nullptr)) noexcept {
         if (_destroy) _destroy(_buf);
         _invoke = nullptr;
         _destroy = nullptr;
@@ -250,7 +250,7 @@ public:
     R operator()(Args... args) const {
         if (!_invoke) abort();
         return _invoke(const_cast<void*>(static_cast<const void*>(_buf)),
-                       std::forward<Args>(args)...);
+                       ::std::forward<Args>(args)...);
     }
 };
 
@@ -276,13 +276,16 @@ namespace detail {
     struct not_fn_t {
         F f;
         template<class... Args>
-        auto operator()(Args&&... args) -> decltype(!f(std::forward<Args>(args)...)) {
-            return !f(std::forward<Args>(args)...);
+        auto operator()(Args&&... args) -> decltype(!f(::std::forward<Args>(args)...)) {
+            return !f(::std::forward<Args>(args)...);
         }
     };
 }
 template<class F>
-auto not_fn(F&& f) { return detail::not_fn_t<decay_t<F>>{std::forward<F>(f)}; }
+auto not_fn(F&& f) { return detail::not_fn_t<::std::decay_t<F>>{::std::forward<F>(f)}; }
+
+
+struct identity { template <typename T> constexpr T&& operator()(T&& t) const noexcept { return static_cast<T&&>(t); } };
 
 } // namespace std
 

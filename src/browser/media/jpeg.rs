@@ -94,16 +94,32 @@ pub fn decode(data: &[u8], image: &mut JpegImage) -> Result<(), &'static str> {
         let marker = ((data[pos] as u16) << 8) | data[pos+1] as u16;
         pos += 2;
 
+        // V8-ROOT-10: helper to read and validate a segment length. Returns
+        // (seg_end, ok). A malformed seg_len < 2 or one that extends past
+        // data.len() now aborts parsing rather than OOB-reading.
+        let parse_seg = |pos: usize, data: &[u8]| -> Option<usize> {
+            if pos + 2 > data.len() { return None; }
+            let seg_len = read16(&data[pos..]) as usize;
+            if seg_len < 2 { return None; }
+            let seg_end = pos.checked_add(seg_len)?;
+            if seg_end > data.len() { return None; }
+            Some(seg_end)
+        };
+
         match marker {
             DQT => {
-                let seg_len = read16(&data[pos..]) as usize;
+                let seg_end = match parse_seg(pos, data) { Some(e) => e, None => break };
                 let mut p = pos + 2;
-                while p < pos + seg_len {
+                while p < seg_end {
+                    if p >= data.len() { break; }
                     let info = data[p]; p += 1;
                     let table_id = (info & 0x0F) as usize;
                     let precision = info >> 4; // 0=8bit, 1=16bit
                     if table_id < 4 {
                         for i in 0..64 {
+                            // V8-ROOT-10: gate each read against seg_end AND data.len().
+                            let need = if precision == 0 { 1 } else { 2 };
+                            if p + need > seg_end || p + need > data.len() { break; }
                             if precision == 0 {
                                 quant[table_id].values[i] = data[p] as u16; p += 1;
                             } else {
@@ -112,22 +128,28 @@ pub fn decode(data: &[u8], image: &mut JpegImage) -> Result<(), &'static str> {
                         }
                     }
                 }
-                pos += seg_len;
+                pos = seg_end;
             }
             DHT => {
-                let seg_len = read16(&data[pos..]) as usize;
+                let seg_end = match parse_seg(pos, data) { Some(e) => e, None => break };
                 let mut p = pos + 2;
-                while p < pos + seg_len {
+                while p < seg_end {
+                    if p >= data.len() { break; }
                     let info = data[p]; p += 1;
                     let table_class = (info >> 4) & 1; // 0=DC, 1=AC
                     let table_id = (info & 0x0F) as usize;
 
+                    // V8-ROOT-10: need 16 count bytes + sum(counts) symbol
+                    // bytes, all within seg_end.
+                    if p + 16 > seg_end { break; }
                     let mut counts = [0u8; 16];
                     let mut total = 0usize;
                     for i in 0..16 {
                         counts[i] = data[p]; p += 1;
-                        total += counts[i] as usize;
+                        total = total.saturating_add(counts[i] as usize);
                     }
+                    total = total.min(256);
+                    if p + total > seg_end { break; }
 
                     let table = if table_class == 0 {
                         &mut huff_dc[table_id.min(1)]
@@ -135,39 +157,49 @@ pub fn decode(data: &[u8], image: &mut JpegImage) -> Result<(), &'static str> {
                         &mut huff_ac[table_id.min(1)]
                     };
                     table.counts = counts;
-                    table.num_symbols = total.min(256);
+                    table.num_symbols = total;
                     for i in 0..table.num_symbols {
                         table.symbols[i] = data[p]; p += 1;
                     }
                 }
-                pos += seg_len;
+                pos = seg_end;
             }
             SOF0 => {
-                let seg_len = read16(&data[pos..]) as usize;
+                let seg_end = match parse_seg(pos, data) { Some(e) => e, None => break };
+                // V8-ROOT-10: SOF0 needs 8 fixed bytes + 3 per component.
+                if pos + 8 > seg_end { break; }
                 let _precision = data[pos + 2];
                 height = read16(&data[pos + 3..]) as u32;
                 width = read16(&data[pos + 5..]) as u32;
                 num_components = data[pos + 7] as usize;
 
-                for i in 0..num_components.min(MAX_COMPONENTS) {
+                let ncomp = num_components.min(MAX_COMPONENTS);
+                let need = pos.checked_add(8).and_then(|n| n.checked_add(ncomp.saturating_mul(3)));
+                let need_ok = matches!(need, Some(n) if n <= seg_end);
+                if !need_ok { break; }
+                for i in 0..ncomp {
                     components[i].id = data[pos + 8 + i * 3];
                     let sampling = data[pos + 9 + i * 3];
                     components[i].h_sample = sampling >> 4;
                     components[i].v_sample = sampling & 0x0F;
                     components[i].quant_table = data[pos + 10 + i * 3] as usize;
                 }
-                pos += seg_len;
+                pos = seg_end;
             }
             SOS => {
-                let seg_len = read16(&data[pos..]) as usize;
+                let seg_end = match parse_seg(pos, data) { Some(e) => e, None => break };
+                if pos + 3 > seg_end { break; }
                 let ns = data[pos + 2] as usize;
-                for i in 0..ns.min(MAX_COMPONENTS) {
+                let ncomp = ns.min(MAX_COMPONENTS);
+                let need = pos.checked_add(3).and_then(|n| n.checked_add(ncomp.saturating_mul(2)));
+                if !matches!(need, Some(n) if n <= seg_end) { break; }
+                for i in 0..ncomp {
                     let _cs = data[pos + 3 + i * 2];
                     let td_ta = data[pos + 4 + i * 2];
                     components[i].dc_table = (td_ta >> 4) as usize;
                     components[i].ac_table = (td_ta & 0x0F) as usize;
                 }
-                pos += seg_len;
+                pos = seg_end;
 
                 // Decode scan data
                 if width > MAX_WIDTH as u32 || height > MAX_HEIGHT as u32 {
@@ -188,10 +220,11 @@ pub fn decode(data: &[u8], image: &mut JpegImage) -> Result<(), &'static str> {
             }
             0xFFFF => { pos -= 1; } // padding
             _ => {
-                // Skip unknown marker segment
-                if pos + 2 <= data.len() {
-                    let seg_len = read16(&data[pos..]) as usize;
-                    pos += seg_len;
+                // Skip unknown marker segment — reject seg_len < 2 to prevent
+                // the infinite-loop / wrap-to-large-number trick.
+                match parse_seg(pos, data) {
+                    Some(seg_end) => pos = seg_end,
+                    None => break,
                 }
             }
         }
@@ -287,23 +320,25 @@ fn decode_block(
     let dc_len = decode_huff(reader, dc_table)?;
     let dc_val = if dc_len > 0 { reader.read_signed(dc_len)? } else { 0 };
     *dc_pred += dc_val;
-    block[0] = *dc_pred * qt.values[0] as i32;
+    // V8-ROOT-3: quantization values come from the JPEG file; saturating_mul
+    // prevents panic-DoS on attacker-crafted quant tables.
+    block[0] = (*dc_pred).saturating_mul(qt.values[0] as i32);
 
     // AC coefficients
-    let mut k = 1;
+    let mut k: usize = 1;
     while k < 64 {
         let ac_code = decode_huff(reader, ac_table)?;
         if ac_code == 0 { break; } // EOB
-        if ac_code == 0xF0 { k += 16; continue; } // ZRL (16 zeros)
+        if ac_code == 0xF0 { k = k.saturating_add(16); continue; } // ZRL (16 zeros)
 
         let run = (ac_code >> 4) as usize;
         let size = (ac_code & 0x0F) as u8;
-        k += run;
+        k = k.saturating_add(run);
         if k >= 64 { break; }
 
         let val = reader.read_signed(size)?;
         let zigzag_idx = ZIGZAG[k];
-        block[zigzag_idx] = val * qt.values[k] as i32;
+        block[zigzag_idx] = val.saturating_mul(qt.values[k] as i32);
         k += 1;
     }
 
@@ -371,23 +406,26 @@ fn idct_row(input: &[i32], output: &mut [i32]) {
     let s0 = input[0]; let s1 = input[1]; let s2 = input[2]; let s3 = input[3];
     let s4 = input[4]; let s5 = input[5]; let s6 = input[6]; let s7 = input[7];
 
+    // V8-ROOT-3: IDCT intermediates can exceed i32 with attacker-crafted
+    // quantization tables. Wrap semantics match the integer-DCT convention
+    // and are bounded by the final clamp in decode_block level-shift.
     let p2 = s2; let p3 = s6;
-    let p1 = (p2 + p3) * 362 >> 10; // cos(pi/4) * 1024 ≈ 362... simplified
-    let t2 = p1 - p3 * 669 >> 10;
-    let t3 = p1 + p2 * 277 >> 10;
+    let p1 = p2.wrapping_add(p3).wrapping_mul(362) >> 10; // cos(pi/4) * 1024 ≈ 362
+    let t2 = p1.wrapping_sub(p3.wrapping_mul(669)) >> 10;
+    let t3 = p1.wrapping_add(p2.wrapping_mul(277)) >> 10;
 
     let p2 = s0; let p3 = s4;
-    let t0 = p2 + p3;
-    let t1 = p2 - p3;
+    let t0 = p2.wrapping_add(p3);
+    let t1 = p2.wrapping_sub(p3);
 
-    output[0] = t0 + t3 + s1 + s5;
-    output[1] = t1 + t2 + s3 + s7;
-    output[2] = t1 - t2;
-    output[3] = t0 - t3;
-    output[4] = t0 - t3;
-    output[5] = t1 - t2;
-    output[6] = t1 + t2;
-    output[7] = t0 + t3;
+    output[0] = t0.wrapping_add(t3).wrapping_add(s1).wrapping_add(s5);
+    output[1] = t1.wrapping_add(t2).wrapping_add(s3).wrapping_add(s7);
+    output[2] = t1.wrapping_sub(t2);
+    output[3] = t0.wrapping_sub(t3);
+    output[4] = t0.wrapping_sub(t3);
+    output[5] = t1.wrapping_sub(t2);
+    output[6] = t1.wrapping_add(t2);
+    output[7] = t0.wrapping_add(t3);
 }
 
 /// YCbCr → RGB conversion
@@ -434,6 +472,10 @@ impl<'a> JpegBitReader<'a> {
 
     fn read_signed(&mut self, len: u8) -> Result<i32, &'static str> {
         if len == 0 { return Ok(0); }
+        // V8-ROOT-3: JPEG magnitudes are 1..15 bits; anything larger is either
+        // a malformed file or attacker-crafted. Reject before it can panic
+        // the arithmetic (1 << len would panic for len >= 31 under debug).
+        if len > 15 { return Err("jpeg: magnitude length out of range"); }
         let mut val = 0i32;
         for _ in 0..len {
             val = (val << 1) | self.read_bit()? as i32;

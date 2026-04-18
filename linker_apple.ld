@@ -12,6 +12,13 @@ SECTIONS
     . = 0x810000000;
 
     .text : {
+        /* V-HANDOFF-2: _apple_start must land at offset 0 of the raw
+         * binary so m1n1's chainload `--entry-point 0` jumps straight
+         * into it. .text.apple_boot holds only src/arch/aarch64/apple/
+         * boot.s; it MUST come before .text.boot (which also contains
+         * the Linux Image header from linux_header.s — needed for
+         * QEMU/VZ builds but harmful here). */
+        KEEP(*(.text.apple_boot))
         KEEP(*(.text.boot))
         *(.text .text.*)
     }

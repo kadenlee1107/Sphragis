@@ -136,3 +136,19 @@ pub fn disconnect() {
     }
     uart::puts("[vpn] Tunnel disconnected\n");
 }
+
+/// V8-ROOT-2: tear down the tunnel and zero every key/nonce on cave switch.
+/// Each cave must establish its own VPN session — leftover keys from the
+/// previous cave would let it impersonate the new cave on an existing
+/// (still-open) tunnel.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(STATE), TunnelState::Disconnected);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SEND_KEY), [0; 32]);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(RECV_KEY), [0; 32]);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SERVER_IP), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SERVER_PORT), 51820);
+        (*core::ptr::addr_of_mut!(NONCE)).store(0, Ordering::Release);
+    }
+}

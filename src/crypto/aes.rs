@@ -30,44 +30,31 @@ static SBOX: [u8; 256] = [
 // Round constants
 static RCON: [u8; 11] = [0x00,0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36];
 
+/// V8-ROOT-11: AES-256 backed by the RustCrypto `aes` crate, which uses
+/// fixslicing on aarch64 (constant-time, cache-immune). The prior impl
+/// did a byte-indexed SBOX[] lookup and leaked key bits through L1d
+/// cache-line access patterns to any attacker with a timing side-channel
+/// (browser JS → hardware cntpct_el0 was that channel, post-ATTACK-CT-001).
+///
+/// The struct keeps the same API surface — `new`, `encrypt_block`,
+/// `ctr_crypt` — so every call site (batfs::create/read, test code)
+/// continues to compile unchanged.
 pub struct Aes256 {
-    round_keys: [u32; 4 * (NR + 1)],
+    inner: aes::Aes256,
 }
 
 impl Aes256 {
     pub fn new(key: &[u8; 32]) -> Self {
-        let mut rk = [0u32; 4 * (NR + 1)];
-        key_expansion(key, &mut rk);
-        Self { round_keys: rk }
+        use aes::cipher::KeyInit;
+        let ga = aes::cipher::generic_array::GenericArray::from_slice(key);
+        Self { inner: aes::Aes256::new(ga) }
     }
 
-    /// Encrypt a single 16-byte block in place.
+    /// Encrypt a single 16-byte block in place using constant-time AES.
     pub fn encrypt_block(&self, block: &mut [u8; 16]) {
-        let mut state = [[0u8; 4]; 4];
-        for i in 0..4 {
-            for j in 0..4 {
-                state[j][i] = block[i * 4 + j];
-            }
-        }
-
-        add_round_key(&mut state, &self.round_keys, 0);
-
-        for round in 1..NR {
-            sub_bytes(&mut state);
-            shift_rows(&mut state);
-            mix_columns(&mut state);
-            add_round_key(&mut state, &self.round_keys, round);
-        }
-
-        sub_bytes(&mut state);
-        shift_rows(&mut state);
-        add_round_key(&mut state, &self.round_keys, NR);
-
-        for i in 0..4 {
-            for j in 0..4 {
-                block[i * 4 + j] = state[j][i];
-            }
-        }
+        use aes::cipher::BlockEncrypt;
+        let ga = aes::cipher::generic_array::GenericArray::from_mut_slice(block);
+        self.inner.encrypt_block(ga);
     }
 
     /// Encrypt data using CTR mode (supports arbitrary length).
@@ -87,7 +74,7 @@ impl Aes256 {
             counter[14] = (block_num >> 8) as u8;
             counter[15] = block_num as u8;
 
-            // Encrypt counter to get keystream
+            // Encrypt counter to get keystream (constant-time path).
             let mut keystream = counter;
             self.encrypt_block(&mut keystream);
 
@@ -442,6 +429,15 @@ impl Drop for Aes128 {
 
 impl Drop for Aes256 {
     fn drop(&mut self) {
-        crate::security::zeroize::zeroize_u32_slice(&mut self.round_keys);
+        // V8-ROOT-11: aes::Aes256 holds expanded round keys internally.
+        // RustCrypto zeroizes them on Drop when built with `zeroize`
+        // features enabled (which our root Cargo.toml does). We also
+        // overwrite the inner struct's bytes best-effort here so a
+        // cold-boot can't recover them even if zeroize is elided.
+        let p = &self.inner as *const _ as *mut u8;
+        let sz = core::mem::size_of::<aes::Aes256>();
+        for i in 0..sz {
+            unsafe { core::ptr::write_volatile(p.add(i), 0); }
+        }
     }
 }

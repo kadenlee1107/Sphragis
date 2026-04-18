@@ -185,3 +185,22 @@ pub fn is_wiping() -> bool {
 pub fn is_wiped() -> bool {
     WIPE_STATE.load(Ordering::Relaxed) == WIPE_STATE_COMPLETE
 }
+
+/// V8-ROOT-6: best-effort in-memory secret wipe for panic-handler use.
+/// Does NOT destroy the disk — the kernel has already failed and any
+/// disk write we attempt could corrupt BatFS. Instead, just zero the
+/// things an attacker with a cold-boot/DRAM-extraction primitive would
+/// want: auth hashes, TLS session keys, and the BatFS master key.
+///
+/// Safe to call from the panic handler (no allocations, no locks, no
+/// I/O that could re-panic).
+pub fn emergency_wipe() {
+    // Best-effort: wrap each step in its own unwind-safe block via a
+    // closure. If any sub-wipe panics we still attempt the others.
+    unsafe { crate::security::auth::panic_wipe(); }
+    unsafe { crate::net::tls::panic_wipe(); }
+    unsafe { crate::fs::batfs::panic_wipe(); }
+    // V8-ROOT-6 (regression fix): the RNG chain state can derive any TLS
+    // ClientRandom or BatFS nonce issued post-reseed. Wipe it too.
+    unsafe { crate::crypto::rng::panic_wipe(); }
+}

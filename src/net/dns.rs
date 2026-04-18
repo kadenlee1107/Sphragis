@@ -70,6 +70,18 @@ pub fn set_doh(enabled: bool) {
 static RESOLVED_IP: AtomicU32 = AtomicU32::new(0);
 static DNS_DONE: AtomicBool = AtomicBool::new(false);
 
+/// V8-ROOT-2: clear pending DNS query state on cave switch. Without this,
+/// a pending lookup from the outgoing cave could land in the new cave's
+/// resolver and bind a hostname-IP mapping that the new cave never asked
+/// for (cross-cave DNS poisoning).
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    EXPECTED_TXID.store(0, Ordering::Release);
+    TXID_VALID.store(false, Ordering::Release);
+    RESOLVED_IP.store(0, Ordering::Release);
+    DNS_DONE.store(false, Ordering::Release);
+}
+
 /// Handle a DNS response.
 pub fn handle_response(data: &[u8]) {
     if data.len() < 12 { return; }

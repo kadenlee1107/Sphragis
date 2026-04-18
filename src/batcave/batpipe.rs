@@ -132,6 +132,18 @@ pub fn clear() {
     }
 }
 
+/// V8-ROOT-2 (V10 regression fix): clear the inter-tool batpipe (nmap/etc.
+/// output) AND its name on cave switch. clear() alone leaves PIPE_NAME
+/// intact, which discloses the previous cave's last running tool.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    clear();
+    unsafe {
+        PIPE_NAME = [0; 32];
+        PIPE_NAME_LEN = 0;
+    }
+}
+
 /// Set a name for this pipe (e.g., "nmap-scan-1").
 pub fn set_name(name: &str) {
     unsafe {

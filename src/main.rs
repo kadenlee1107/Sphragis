@@ -25,6 +25,17 @@ global_asm!(include_str!("arch/aarch64/exceptions.s"));
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
+    // Layer-B synthetic test: when the `layer-b-test` cargo feature is
+    // enabled, run the Apple boot-path parser against a synthetic
+    // BootArgsRaw + ADT instead of doing normal QEMU-virt boot. Prints
+    // results over the QEMU UART then halts.
+    #[cfg(feature = "layer-b-test")]
+    {
+        // Minimal UART init so we can print (QEMU virt PL011).
+        drivers::uart::enable();
+        crate::drivers::apple::layer_b_test::run();
+    }
+
     // Disable alignment checking — C binaries may use unaligned accesses
     unsafe {
         let mut sctlr: u64;
@@ -121,7 +132,17 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     let mut duress_buf = [0u8; 16];
     let duress = derive_secret_string(DURESS_LABEL, &mut duress_buf);
 
-    let passphrase_slice: &[u8] = if passphrase_len == 0 {
+    // V8-ROOT-5: prefer the build-time BAT_OS_PASSPHRASE / BAT_OS_DURESS
+    // env vars when set. Wired via build.rs so cargo re-runs the compile
+    // on env change. If unset we fall back to the UART prompt + derived
+    // dev/duress strings — same behavior as before.
+    const BUILD_PASSPHRASE: Option<&str> = option_env!("BAT_OS_PASSPHRASE");
+    const BUILD_DURESS: Option<&str> = option_env!("BAT_OS_DURESS");
+
+    let passphrase_slice: &[u8] = if let Some(s) = BUILD_PASSPHRASE {
+        drivers::uart::puts("  [auth] using BAT_OS_PASSPHRASE (build-time)\n");
+        s.as_bytes()
+    } else if passphrase_len == 0 {
         drivers::uart::puts("  [auth] empty passphrase, using dev default\n");
         dev_fallback
     } else {
@@ -129,7 +150,10 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     };
     let passphrase_str = core::str::from_utf8(passphrase_slice)
         .unwrap_or_else(|_| core::str::from_utf8(dev_fallback).unwrap_or(""));
-    let duress_str = core::str::from_utf8(duress).unwrap_or("");
+    let duress_str = match BUILD_DURESS {
+        Some(s) => s,
+        None => core::str::from_utf8(duress).unwrap_or(""),
+    };
     security::auth::init(passphrase_str, duress_str);
     drivers::uart::puts("  [auth] Passphrase + YubiKey auth ready\n");
     drivers::uart::puts("  [auth] Max attempts: 5\n");
@@ -454,21 +478,67 @@ fn serial_shell() -> ! {
 global_asm!(include_str!("arch/aarch64/apple/boot.s"));
 
 #[unsafe(no_mangle)]
-pub extern "C" fn kernel_main_apple(boot_args: *const drivers::apple::soc::M1n1BootArgs) -> ! {
+pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_args::BootArgsRaw) -> ! {
     // Set platform to Apple Silicon
     platform::set_platform(platform::Platform::AppleSilicon);
 
-    // Parse boot args from m1n1
-    let args = unsafe { &*boot_args };
-    drivers::apple::soc::init_from_boot_args(args);
+    // V-ASAHI-1: parse m1n1 boot args with full validation (revision
+    // check, devtree-bounds check, plausibility caps). On any failure
+    // we halt immediately — trying to run with a corrupt boot-args is
+    // how you silently brick the machine.
+    let parsed = unsafe { drivers::apple::boot_args::parse(boot_args_ptr) };
+    let args = match parsed {
+        Ok(a) => a,
+        Err(_) => {
+            // Can't print yet (UART address is inside the boot args we
+            // just rejected). WFE forever.
+            loop { unsafe { core::arch::asm!("wfe"); } }
+        }
+    };
+    // Stash the pointer for later ADT queries from the rest of the
+    // kernel (no longer needs to thread `&BootArgs` through everything).
+    unsafe { drivers::apple::boot_args::stash(boot_args_ptr); }
+    // Back-compat: the existing soc::init_from_boot_args still wants
+    // the legacy struct shape, so populate FB/mem info from the parsed
+    // view. TODO: retire the legacy soc statics in a follow-up commit.
+    let video = args.video();
+    drivers::apple::soc::set_fb_info(video.base as usize, video.width, video.height, video.stride as u32);
+    drivers::apple::soc::set_mem_info(args.phys_base() as usize, args.mem_size() as usize);
 
-    // Initialize Apple UART for serial output
+    // V-ASAHI-1.3: resolve MMIO addresses from the ADT BEFORE touching
+    // any MMIO. On M4 hardware, the fallback addresses in soc.rs are
+    // from M1 and point at the wrong peripherals — uart::init() against
+    // those would silently scribble random MMIO.
+    let discovered = match args.adt() {
+        Ok(adt) => drivers::apple::soc::discover_from_adt(&adt),
+        Err(_) => {
+            // Can't proceed — halt.
+            loop { unsafe { core::arch::asm!("wfe"); } }
+        }
+    };
+
+    // Initialize Apple UART for serial output (now uses the address
+    // resolved from the ADT).
     drivers::apple::uart::init();
     drivers::apple::uart::puts("\n");
     drivers::apple::uart::puts("================================================\n");
     drivers::apple::uart::puts("  BAT_OS — BARE METAL APPLE SILICON\n");
     drivers::apple::uart::puts("  Running on REAL M4 hardware.\n");
     drivers::apple::uart::puts("================================================\n\n");
+
+    // Print boot-args summary so we can verify the handoff worked.
+    drivers::apple::uart::puts("[boot] m1n1 handoff OK\n");
+    drivers::apple::uart::puts("  revision: ");
+    crate::kernel::mm::print_num(args.revision() as usize);
+    drivers::apple::uart::puts("\n  machine_type: 0x");
+    drivers::apple::uart::puthex32(args.machine_type());
+    drivers::apple::uart::puts("\n  mem_size: ");
+    crate::kernel::mm::print_num((args.mem_size() / (1024 * 1024)) as usize);
+    drivers::apple::uart::puts(" MiB\n  devtree: ");
+    crate::kernel::mm::print_num(args.devtree_bytes().len());
+    drivers::apple::uart::puts(" bytes\n  ADT-resolved peripherals: ");
+    crate::kernel::mm::print_num(discovered);
+    drivers::apple::uart::puts(" / 9\n");
 
     // Initialize kernel core
     drivers::apple::uart::puts("[boot] Initializing microkernel...\n");
@@ -481,6 +551,14 @@ pub extern "C" fn kernel_main_apple(boot_args: *const drivers::apple::soc::M1n1B
     // Initialize Apple Interrupt Controller
     drivers::apple::uart::puts("[boot] Initializing AIC2...\n");
     drivers::apple::aic::init();
+
+    // V-ASAHI-3.5: bring up every peripheral module that has a
+    // hardware-access entry point. Prints a compact status line so we
+    // can see at boot which peripherals responded vs which stubbed out.
+    // Failures here are NOT fatal — missing peripherals are legitimate
+    // on some boards.
+    let bu = drivers::apple::bring_up_all();
+    drivers::apple::print_bring_up_report(&bu);
 
     // ATTACK-CRYPTO-004 / FLv2-NEW-006: Apple path currently falls back
     // to the dev default (empty input) because the Apple UART driver has
@@ -507,12 +585,12 @@ pub extern "C" fn kernel_main_apple(boot_args: *const drivers::apple::soc::M1n1B
     // Initialize display (m1n1 simple framebuffer)
     drivers::apple::uart::puts("[boot] Initializing display...\n");
     if drivers::apple::dcp::init_simple_fb() {
-        drivers::apple::uart::puts("[boot] Display ready — launching desktop\n\n");
-        // Fill screen black to prove we own it
-        drivers::apple::dcp::fill_screen(0xFF000000);
-        drivers::apple::dcp::flush(0, 0,
-            drivers::apple::dcp::width(),
-            drivers::apple::dcp::height());
+        drivers::apple::uart::puts("[boot] Display ready — drawing splash\n");
+        // V-ASAHI-2.1: render the boot splash so the operator sees on
+        // the actual display (not just over USB serial) that Bat_OS
+        // owns the M4. Fills the framebuffer m1n1 set up.
+        drivers::apple::dcp::boot_splash();
+        drivers::apple::uart::puts("[boot] Splash rendered — launching desktop\n\n");
 
         // Initialize SPI keyboard
         let _ = drivers::apple::spi::init();
@@ -540,6 +618,12 @@ fn panic(info: &PanicInfo) -> ! {
         drivers::uart::puts(location.file());
         drivers::uart::puts("\n");
     }
+    // V8-ROOT-6: best-effort wipe of sensitive globals before halting.
+    // If we panic while holding auth secrets, TLS keys, or BatFS keys,
+    // an attacker with physical access could cold-boot the DRAM and
+    // extract them. wipe::emergency_wipe() zeroes PASSPHRASE_HASH,
+    // DURESS_HASH, per-PCB TLS session keys, and the BatFS key.
+    crate::security::wipe::emergency_wipe();
     loop {
         unsafe { core::arch::asm!("wfe") };
     }

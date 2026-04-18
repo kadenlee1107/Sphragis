@@ -44,6 +44,12 @@ pub fn init_in_window() {
     CURSOR_Y.store(0, Ordering::Relaxed);
 }
 
+/// V12: reset console cursor on cave switch (minor UX / read-pointer leak).
+pub fn reset_for_cave_switch() {
+    CURSOR_X.store(0, Ordering::Release);
+    CURSOR_Y.store(0, Ordering::Release);
+}
+
 /// Redraw existing console content (placeholder — clears area).
 pub fn redraw_content() {
     // In a full implementation, we'd store a scrollback buffer.

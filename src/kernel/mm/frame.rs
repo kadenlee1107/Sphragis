@@ -73,34 +73,45 @@ pub fn alloc_frame() -> Option<usize> {
     let user_cap = total.saturating_sub(KERNEL_RESERVED_FRAMES);
 
     for i in 0..BITMAP_SIZE {
-        let val = BITMAP[i].load(Ordering::Relaxed);
-        if val == u64::MAX {
-            continue;
-        }
+        // V8-ROOT-4: compare_exchange the claim so this works correctly on
+        // SMP (and documents the intent even on UP). Loop on Weak so the
+        // CPU can retry on spurious CAS failure; break out of the inner
+        // loop on "word is full", resume outer scan.
+        loop {
+            let val = BITMAP[i].load(Ordering::Acquire);
+            if val == u64::MAX { break; } // full word, try next
 
-        let bit = (!val).trailing_zeros() as usize;
-        let frame_index = i * 64 + bit;
+            let bit = (!val).trailing_zeros() as usize;
+            let frame_index = i * 64 + bit;
 
-        if frame_index >= user_cap {
-            return None;
-        }
-
-        let new_val = val | (1u64 << bit);
-        BITMAP[i].store(new_val, Ordering::Relaxed);
-        {
-            let addr = start + frame_index * PAGE_SIZE;
-            // Zero the page using inline asm str (HVF-safe)
-            unsafe {
-                let ptr = addr;
-                for i in 0..(PAGE_SIZE / 8) {
-                    let target = ptr + i * 8;
-                    core::arch::asm!(
-                        "str xzr, [{addr}]",
-                        addr = in(reg) target,
-                    );
-                }
+            if frame_index >= user_cap {
+                return None;
             }
-            return Some(addr);
+
+            let new_val = val | (1u64 << bit);
+            match BITMAP[i].compare_exchange_weak(
+                val,
+                new_val,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    let addr = start + frame_index * PAGE_SIZE;
+                    // Zero the page using inline asm str (HVF-safe)
+                    unsafe {
+                        let ptr = addr;
+                        for i in 0..(PAGE_SIZE / 8) {
+                            let target = ptr + i * 8;
+                            core::arch::asm!(
+                                "str xzr, [{addr}]",
+                                addr = in(reg) target,
+                            );
+                        }
+                    }
+                    return Some(addr);
+                }
+                Err(_) => continue, // another cpu won; retry this word
+            }
         }
     }
 
@@ -133,10 +144,16 @@ pub fn alloc_kernel_frame() -> Option<usize> {
         let bitmap_index = frame_index / 64;
         let bit = frame_index % 64;
         if bitmap_index >= BITMAP_SIZE { continue; }
-        let val = BITMAP[bitmap_index].load(Ordering::Relaxed);
+        // V8-ROOT-4: CAS-claim the bit (SMP-correct, UP-cheap).
+        let val = BITMAP[bitmap_index].load(Ordering::Acquire);
         if val & (1u64 << bit) != 0 { continue; }
+        if BITMAP[bitmap_index]
+            .compare_exchange(val, val | (1u64 << bit), Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            continue; // raced — try next index
+        }
 
-        BITMAP[bitmap_index].store(val | (1u64 << bit), Ordering::Relaxed);
         let addr = start + frame_index * PAGE_SIZE;
         unsafe {
             for i in 0..(PAGE_SIZE / 8) {
@@ -146,6 +163,71 @@ pub fn alloc_kernel_frame() -> Option<usize> {
             }
         }
         return Some(addr);
+    }
+    None
+}
+
+/// Allocate `n_pages` physically-contiguous, zero-filled 4 KiB frames.
+/// Returns the base address of the first frame, or None if no such
+/// run exists.
+///
+/// V-ASAHI-3.2: needed by DART TRANSLATE to allocate 16 KiB (4-page)
+/// page-table root blocks that must be contiguous in physical RAM.
+pub fn alloc_contig(n_pages: usize) -> Option<usize> {
+    if n_pages == 0 { return None; }
+    if n_pages == 1 { return alloc_frame(); }
+
+    let _g = crate::kernel::sync::IrqGuard::new();
+    let total = TOTAL_FRAMES.load(Ordering::Relaxed);
+    let start = MEMORY_START.load(Ordering::Relaxed);
+    let user_cap = total.saturating_sub(KERNEL_RESERVED_FRAMES);
+    if user_cap < n_pages { return None; }
+
+    // Scan bitmap for `n_pages` consecutive zero bits.
+    let mut frame_idx: usize = 0;
+    'outer: while frame_idx + n_pages <= user_cap {
+        // Check each of the next n_pages bits — all must be clear.
+        for j in 0..n_pages {
+            let fi = frame_idx + j;
+            let wi = fi / 64;
+            let bit = fi % 64;
+            if wi >= BITMAP_SIZE { return None; }
+            if BITMAP[wi].load(Ordering::Acquire) & (1u64 << bit) != 0 {
+                frame_idx = fi + 1;
+                continue 'outer;
+            }
+        }
+        // Claim them all. Use per-bit CAS — not batch-perfect on SMP
+        // (a concurrent racer could snatch one mid-claim), but under
+        // IrqGuard + current UP kernel we're safe.
+        for j in 0..n_pages {
+            let fi = frame_idx + j;
+            let wi = fi / 64;
+            let bit = fi % 64;
+            let cur = BITMAP[wi].load(Ordering::Acquire);
+            if cur & (1u64 << bit) != 0 {
+                // Someone raced us; roll back the bits we claimed.
+                for k in 0..j {
+                    let fk = frame_idx + k;
+                    let wk = fk / 64;
+                    let bk = fk % 64;
+                    BITMAP[wk].fetch_and(!(1u64 << bk), Ordering::AcqRel);
+                }
+                frame_idx += 1;
+                continue 'outer;
+            }
+            BITMAP[wi].fetch_or(1u64 << bit, Ordering::AcqRel);
+        }
+        // Zero all frames.
+        let base = start + frame_idx * PAGE_SIZE;
+        unsafe {
+            for i in 0..(n_pages * PAGE_SIZE / 8) {
+                core::arch::asm!("str xzr, [{a}]",
+                    a = in(reg) base + i * 8,
+                    options(nostack, preserves_flags));
+            }
+        }
+        return Some(base);
     }
     None
 }

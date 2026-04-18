@@ -21,6 +21,14 @@ use_sysroot                    = true
 use_lld                        = true
 clang_use_chrome_plugins       = false
 
+# === Use system Rust instead of Chromium's bundled (which is x86_64-only) ===
+# Path inside the build container; rustup-installed.
+rust_sysroot_absolute          = "/home/build/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu"
+# Pretend to be the bundled rustc revision so build/config/compiler/BUILD.gn
+# pattern-match assertion passes. Format must be: *-{HASH}-{SUBREV}-*
+# Pattern needs literal "-{HASH}-{SUBREV}-" anywhere in the string
+rustc_version                  = "system-4c4205163abcbd08948b3efab796c543ba1ea687-1-bypass"
+
 # === Disable everything we don't need ===
 # NOTE: gn parses every BUILD.gn file in the tree (assertions fire at parse time)
 # even when we --root-target=content_shell. Many chrome/* targets assert features

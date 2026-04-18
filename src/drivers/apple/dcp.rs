@@ -94,3 +94,75 @@ pub fn flush(_x: u32, _y: u32, _w: u32, _h: u32) {
         core::arch::asm!("dsb sy");
     }
 }
+
+// V-ASAHI-2.1: boot splash. Renders a centered "BAT_OS / Apple Silicon"
+// banner so the very first thing the operator sees on the M4's display
+// is unambiguous proof that our kernel — not macOS, not Asahi, not the
+// m1n1 splash — owns the screen. Uses ONLY the framebuffer m1n1 set up
+// for us (no DCP mailbox traffic, no DART), so this works the moment
+// we have a valid fb_base + width + height.
+
+/// Draw `s` at pixel (x, y) using the kernel's 8x16 bitmap font.
+pub fn draw_text(x: u32, y: u32, s: &str, fg: u32, bg: u32) {
+    if !is_ready() { return; }
+    let stride_pixels = stride() / 4;
+    crate::ui::font::draw_str(framebuffer(), stride_pixels, x, y, s, fg, bg);
+}
+
+/// Render the boot splash. Safe to call multiple times; will redraw
+/// the centered banner over a black background.
+pub fn boot_splash() {
+    if !is_ready() { return; }
+    let w = width();
+    let h = height();
+    if w == 0 || h == 0 { return; }
+
+    // Solid-black background.
+    fill_screen(0xFF00_0000);
+
+    // Yellow/amber "Bat_OS" — Bat-signal vibe.
+    const C_TITLE: u32 = 0xFFFF_C000;
+    // Cool blue subtitle.
+    const C_SUB:   u32 = 0xFF40_C0FF;
+    const C_DIM:   u32 = 0xFF80_8080;
+    const BG:      u32 = 0xFF00_0000;
+
+    // Title sized 4x normal (32x64 per char). We do this by drawing
+    // the same glyph 4 times offset (cheap "scaling").
+    let title = "BAT_OS";
+    let title_w_px = title.len() as u32 * crate::ui::font::CHAR_W * 4;
+    let tx = w.saturating_sub(title_w_px) / 2;
+    let ty = h / 3;
+    for sy in 0..4 {
+        for sx in 0..4 {
+            for (i, b) in title.bytes().enumerate() {
+                let cx = tx + (i as u32) * crate::ui::font::CHAR_W * 4 + sx;
+                let cy = ty + sy;
+                let mut buf = [0u8; 1];
+                buf[0] = b;
+                let s = unsafe { core::str::from_utf8_unchecked(&buf) };
+                let stride_pixels = stride() / 4;
+                crate::ui::font::draw_str(
+                    framebuffer(), stride_pixels,
+                    cx, cy, s, C_TITLE, BG
+                );
+            }
+        }
+    }
+
+    // Subtitle (normal size).
+    let sub = "Bare Metal // Apple Silicon (M4 / T8132)";
+    let sub_w_px = sub.len() as u32 * crate::ui::font::CHAR_W;
+    let sx = w.saturating_sub(sub_w_px) / 2;
+    let sy = ty + crate::ui::font::CHAR_H * 4 + 16;
+    draw_text(sx, sy, sub, C_SUB, BG);
+
+    // Footer.
+    let foot = "[booted via m1n1 chainload]";
+    let foot_w = foot.len() as u32 * crate::ui::font::CHAR_W;
+    let fx = w.saturating_sub(foot_w) / 2;
+    let fy = sy + crate::ui::font::CHAR_H * 2;
+    draw_text(fx, fy, foot, C_DIM, BG);
+
+    flush(0, 0, w, h);
+}

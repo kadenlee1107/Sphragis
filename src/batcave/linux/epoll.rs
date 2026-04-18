@@ -261,6 +261,24 @@ pub fn epoll_close(fd: i32) -> i64 {
     }
 }
 
+/// V8-ROOT-2: drop every epoll instance when switching caves. Without this,
+/// a new cave could observe the previous cave's pending events (kernel-level
+/// information leak across the isolation boundary), or its interests could
+/// be satisfied by fd-slot reuse.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        let table = &mut *core::ptr::addr_of_mut!(INSTANCES);
+        for inst in table.iter_mut() {
+            inst.in_use.store(false, Ordering::Release);
+            inst.flags.store(0, Ordering::Relaxed);
+            for slot in inst.interests.iter_mut() {
+                *slot = Interest::empty();
+            }
+        }
+    }
+}
+
 // ─────────────────────── Syscall entry points ───────────────────────
 
 /// epoll_create1(2). Returns a new fd or -errno.
@@ -309,6 +327,15 @@ pub fn epoll_ctl(epfd: i32, op: i32, fd: i32, event: *const EpollEvent) -> i64 {
     // stale fds; Linux itself returns ENOENT here, so we do too).
     if super::fd::get(fd as u32).is_none() {
         return EBADF;
+    }
+
+    // V8-ROOT-8 / V8-PTR-004: the `event` pointer came from EL0 and was
+    // dereferenced with only a null-check. Gate the 12-byte struct via
+    // is_user_range before any deref. EpollEvent layout: {u32 events, u64 data}.
+    if !event.is_null() {
+        if !super::uaccess::is_user_range(event as usize, core::mem::size_of::<EpollEvent>()) {
+            return EFAULT;
+        }
     }
 
     let inst = match get_instance_mut(slot) {
@@ -407,6 +434,18 @@ pub fn epoll_pwait(
         return EINVAL;
     }
     if events.is_null() {
+        return EFAULT;
+    }
+    // V8-ROOT-8: gate the events buffer up front. drain_ready writes 12
+    // bytes per delivered event via raw write_unaligned; without a bounds
+    // gate, an attacker passes events=kernel_addr and gets a controlled
+    // multi-entry kernel write whenever any interest fires.
+    let max = maxevents as usize;
+    let bytes = match max.checked_mul(core::mem::size_of::<EpollEvent>()) {
+        Some(n) => n,
+        None => return EFAULT,
+    };
+    if !crate::batcave::linux::uaccess::is_user_range(events as usize, bytes) {
         return EFAULT;
     }
 

@@ -200,13 +200,45 @@ pub fn switch_to_cave(cave_id: usize) {
 }
 
 /// Destroy a cave's VFS instance (wipe all data).
+///
+/// V11-FRESH-EYES: previously this only zeroed the node-metadata structs,
+/// leaking **physical frames** that each node's `data_addr` referenced.
+/// Two compounding bugs:
+///   (1) plaintext file contents persisted in those frames forever
+///   (because they were never returned to the frame allocator), and
+///   (2) the frame bitmap bits stayed set, yielding an unprivileged
+///   OOM-DoS primitive — any cave with the `mem` cap could exhaust
+///   physical memory by cycling create-write-destroy.
+/// Now we scrub and free each file-data frame before clearing the node.
 pub fn destroy_cave_vfs(cave_id: usize) {
     unsafe {
         let instances = &mut *core::ptr::addr_of_mut!(INSTANCES);
         for i in 0..MAX_VFS_INSTANCES {
             if instances[i].cave_id == cave_id {
-                // Zero all node data
+                // V11 fix: walk every live node, zero its backing frame,
+                // then return it to the allocator.
+                //
+                // V12 REGRESSION-FIX: skip `ChromiumFb` nodes here.
+                // `/batos/fb0` is a special shared 5 MiB contiguous
+                // allocation whose lifetime is managed by the
+                // chromium_blit subsystem (reset_for_cave_switch zeros
+                // the region). Blindly calling `free_frame` on it would
+                // only free page 0 (leaking the other 1280 pages and
+                // desynchronizing the bitmap), AND the 4 KiB zero-loop
+                // below would leak ~5238 KiB of the region.
                 for j in 0..MAX_NODES {
+                    let n = &mut instances[i].nodes[j];
+                    if n.data_addr != 0 && n.node_type != NodeType::ChromiumFb {
+                        // Volatile-zero the 4 KiB frame so a later
+                        // `alloc_frame` tenant cannot observe the old
+                        // file content even before alloc's str-xzr pass.
+                        let base = n.data_addr as *mut u8;
+                        for b in 0..4096usize {
+                            core::ptr::write_volatile(base.add(b), 0);
+                        }
+                        crate::kernel::mm::frame::free_frame(n.data_addr);
+                        n.data_addr = 0;
+                    }
                     instances[i].nodes[j] = VfsNode::empty();
                 }
                 instances[i].ready = false;

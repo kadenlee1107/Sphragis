@@ -84,6 +84,18 @@ fn reset_timer() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn handle_irq(_frame: *mut TrapFrame) {
+    // V-ASAHI-2.2: on Apple Silicon, IRQs come through AIC2 instead of
+    // a per-CPU GIC. We MUST drain the AIC event queue every entry,
+    // otherwise level-triggered IRQs (timer, UART, SPI, etc.) re-fire
+    // immediately and we livelock in the exception handler.
+    if crate::platform::is_apple_silicon() {
+        // Drain every pending event (AIC may have queued more than one).
+        while crate::drivers::apple::aic::dispatch_one() {}
+        return;
+    }
+
+    // QEMU virt path: ARM Generic Timer wired directly via the GIC,
+    // no indirection. Just check the timer-fired flag.
     let ctl: u64;
     unsafe { core::arch::asm!("mrs {}, cntp_ctl_el0", out(reg) ctl); }
     if ctl & 0b100 != 0 {

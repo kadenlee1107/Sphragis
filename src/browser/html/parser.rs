@@ -2,7 +2,12 @@
 // Converts raw HTML bytes into a DOM tree.
 // Handles malformed HTML gracefully (like real browsers).
 
-use super::super::dom::{Document, NodeType, Attribute, MAX_NAME, MAX_VALUE};
+use super::super::dom::{Document, NodeType, MAX_NAME, MAX_VALUE};
+
+fn starts_with_bytes(hay: &[u8], needle: &[u8]) -> bool {
+    if hay.len() < needle.len() { return false; }
+    &hay[..needle.len()] == needle
+}
 
 /// Parse HTML bytes into a DOM tree.
 pub fn parse(html: &[u8], doc: &mut Document) {
@@ -221,11 +226,43 @@ pub fn parse(html: &[u8], doc: &mut Document) {
             let raw_text = &html[text_start..i];
             if raw_text.iter().any(|&b| b != b' ' && b != b'\t' && b != b'\n' && b != b'\r') {
                 // Non-whitespace text — create text node
+                // First: decode HTML entities
+                let mut decoded = [0u8; 512];
+                let mut dlen = 0;
+                let mut j = 0;
+                while j < raw_text.len() && dlen < 510 {
+                    if raw_text[j] == b'&' {
+                        // Try to decode entity
+                        let rest = &raw_text[j..];
+                        if starts_with_bytes(rest, b"&nbsp;") { decoded[dlen] = b' '; dlen += 1; j += 6; }
+                        else if starts_with_bytes(rest, b"&amp;") { decoded[dlen] = b'&'; dlen += 1; j += 5; }
+                        else if starts_with_bytes(rest, b"&lt;") { decoded[dlen] = b'<'; dlen += 1; j += 4; }
+                        else if starts_with_bytes(rest, b"&gt;") { decoded[dlen] = b'>'; dlen += 1; j += 4; }
+                        else if starts_with_bytes(rest, b"&quot;") { decoded[dlen] = b'"'; dlen += 1; j += 6; }
+                        else if starts_with_bytes(rest, b"&#39;") || starts_with_bytes(rest, b"&apos;") {
+                            decoded[dlen] = b'\''; dlen += 1;
+                            j += if rest[1] == b'#' { 5 } else { 6 };
+                        }
+                        else if starts_with_bytes(rest, b"&copy;") { decoded[dlen] = b'c'; dlen += 1; j += 6; }
+                        else if starts_with_bytes(rest, b"&mdash;") || starts_with_bytes(rest, b"&#8212;") {
+                            decoded[dlen] = b'-'; dlen += 1;
+                            j += if rest[1] == b'#' { 7 } else { 7 };
+                        }
+                        else {
+                            // Unknown entity — skip to ; or just output &
+                            decoded[dlen] = b'&'; dlen += 1; j += 1;
+                        }
+                    } else {
+                        decoded[dlen] = raw_text[j]; dlen += 1; j += 1;
+                    }
+                }
+
                 // Collapse whitespace
                 let mut collapsed = [0u8; 256];
                 let mut clen = 0;
                 let mut last_space = true;
-                for &b in raw_text {
+                for idx in 0..dlen {
+                    let b = decoded[idx];
                     if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
                         if !last_space && clen < 255 {
                             collapsed[clen] = b' ';
@@ -233,7 +270,6 @@ pub fn parse(html: &[u8], doc: &mut Document) {
                             last_space = true;
                         }
                     } else if clen < 255 {
-                        // Decode common entities inline
                         collapsed[clen] = b;
                         clen += 1;
                         last_space = false;

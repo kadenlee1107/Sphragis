@@ -257,6 +257,20 @@ impl Document {
         self.nodes[parent].last_child = child as u16;
     }
 
+    /// Add element as child of parent, return index
+    pub fn add_element(&mut self, parent: usize, tag: &str) -> Option<usize> {
+        let idx = self.create_element(tag.as_bytes())?;
+        self.append_child(parent, idx);
+        Some(idx)
+    }
+
+    /// Add text node as child of parent
+    pub fn add_text(&mut self, parent: usize, text: &[u8]) {
+        if let Some(idx) = self.create_text(text) {
+            self.append_child(parent, idx);
+        }
+    }
+
     /// Get node by index
     pub fn get(&self, idx: usize) -> &DomNode {
         &self.nodes[idx]

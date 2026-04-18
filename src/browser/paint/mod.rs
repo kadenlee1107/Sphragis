@@ -68,6 +68,10 @@ pub fn paint(
         // Skip zero-dimension boxes
         if b.width <= 0 || b.height <= 0 { continue; }
 
+        // Skip invisible elements
+        if b.style.visibility != super::css::style::Visibility::Visible { continue; }
+        if b.style.opacity == 0 { continue; }
+
         // Transform coordinates: layout space -> screen space
         let sx = b.x + offset_x;
         let sy = b.y + offset_y - scroll_y;
@@ -87,9 +91,36 @@ pub fn paint(
         let bg_h = (bg_y2 - bg_y1).max(0) as u32;
 
         // --- Background ---
+        let radius = b.style.border_radius.max(0) as u32;
         if b.style.background_color != Color::TRANSPARENT && bg_w > 0 && bg_h > 0 {
-            gpu::fill_rect(bg_x1 as u32, bg_y1 as u32, bg_w, bg_h,
-                b.style.background_color.raw());
+            let bgc = b.style.background_color.raw();
+            if radius > 0 && bg_w > radius * 2 && bg_h > radius * 2 {
+                // Rounded rectangle background
+                let bx = bg_x1 as u32;
+                let by = bg_y1 as u32;
+                // Center fill (full width, minus top/bottom radius rows)
+                gpu::fill_rect(bx, by + radius, bg_w, bg_h - radius * 2, bgc);
+                // Top strip (inset by radius)
+                gpu::fill_rect(bx + radius, by, bg_w - radius * 2, radius, bgc);
+                // Bottom strip (inset by radius)
+                gpu::fill_rect(bx + radius, by + bg_h - radius, bg_w - radius * 2, radius, bgc);
+                // Corner fills (approximate rounded corners with smaller rects)
+                let r2 = radius / 2;
+                // Top-left corner
+                gpu::fill_rect(bx + r2, by, radius - r2, radius, bgc);
+                gpu::fill_rect(bx, by + r2, radius, radius - r2, bgc);
+                // Top-right corner
+                gpu::fill_rect(bx + bg_w - radius, by, radius - r2, radius, bgc);
+                gpu::fill_rect(bx + bg_w - radius, by + r2, radius, radius - r2, bgc);
+                // Bottom-left corner
+                gpu::fill_rect(bx + r2, by + bg_h - radius, radius - r2, radius, bgc);
+                gpu::fill_rect(bx, by + bg_h - radius, radius, radius - r2, bgc);
+                // Bottom-right corner
+                gpu::fill_rect(bx + bg_w - radius, by + bg_h - radius, radius - r2, radius, bgc);
+                gpu::fill_rect(bx + bg_w - radius, by + bg_h - radius, radius, radius - r2, bgc);
+            } else {
+                gpu::fill_rect(bg_x1 as u32, bg_y1 as u32, bg_w, bg_h, bgc);
+            }
         }
 
         // --- Borders ---
@@ -101,17 +132,22 @@ pub fn paint(
             let border_w = b.style.border_width as u32;
             let bc = b.style.border_color.raw();
 
-            // Top border
-            gpu::fill_rect(bx, by, bg_w, border_w.min(bg_h), bc);
-            // Bottom border
-            if bg_h > border_w {
-                gpu::fill_rect(bx, by + bg_h - border_w, bg_w, border_w, bc);
-            }
-            // Left border
-            gpu::fill_rect(bx, by, border_w.min(bg_w), bg_h, bc);
-            // Right border
-            if bg_w > border_w {
-                gpu::fill_rect(bx + bg_w - border_w, by, border_w, bg_h, bc);
+            if radius > 0 && bg_w > radius * 2 {
+                // Rounded border
+                gpu::fill_rect(bx + radius, by, bg_w - radius * 2, border_w, bc); // top
+                gpu::fill_rect(bx + radius, by + bg_h - border_w, bg_w - radius * 2, border_w, bc); // bottom
+                gpu::fill_rect(bx, by + radius, border_w, bg_h - radius * 2, bc); // left
+                gpu::fill_rect(bx + bg_w - border_w, by + radius, border_w, bg_h - radius * 2, bc); // right
+            } else {
+                // Square border
+                gpu::fill_rect(bx, by, bg_w, border_w.min(bg_h), bc);
+                if bg_h > border_w {
+                    gpu::fill_rect(bx, by + bg_h - border_w, bg_w, border_w, bc);
+                }
+                gpu::fill_rect(bx, by, border_w.min(bg_w), bg_h, bc);
+                if bg_w > border_w {
+                    gpu::fill_rect(bx + bg_w - border_w, by, border_w, bg_h, bc);
+                }
             }
 
             // HR: full-width horizontal line
@@ -126,19 +162,34 @@ pub fn paint(
             let color = b.style.color.raw();
             let is_bold = b.style.font_weight == FontWeight::Bold;
             let is_underline = b.style.text_decoration.underline;
-            let is_big = b.style.font_size >= 28;
-            let char_w: i32 = if is_big { 10 } else { 8 };
-            let line_h: i32 = 18;
+
+            // Use actual font size from CSS (clamped to reasonable range)
+            let font_px = (b.style.font_size as u16).max(10).min(72);
+            // Approximate char width based on font size (proportional)
+            let char_w: i32 = if truetype::is_available() {
+                (font_px as i32 * 55 / 100).max(5) // TrueType: ~55% of font size
+            } else {
+                (font_px as i32 * 6 / 10).max(5) // Bitmap: ~60%
+            };
+            let line_h: i32 = (font_px as i32 * 14 / 10).max(14); // 140% of font size
 
             // Content area start (inside padding)
             let content_sx = b.content_x + offset_x;
             let content_sy = b.content_y + offset_y - scroll_y;
             let content_w = b.content_w.max(b.width); // use wider of the two
 
+            // Text centering support
+            let text_total_w = text.len() as i32 * char_w;
+            let centered_offset = if b.style.text_align == TextAlign::Center && text_total_w < content_w {
+                (content_w - text_total_w) / 2
+            } else {
+                0
+            };
+
             // Compute how many chars fit per line
             let max_chars_per_line = if content_w > 0 { (content_w / char_w).max(1) } else { 80 };
 
-            let mut tx = content_sx;
+            let mut tx = content_sx + centered_offset;
             let mut ty = content_sy;
             let mut col = 0i32; // character column on current line
 
@@ -175,8 +226,7 @@ pub fn paint(
 
                 if tx >= clip_left && tx < clip_right {
                     if truetype::is_available() {
-                        // Anti-aliased TrueType rendering
-                        let font_px = if is_big { 24u16 } else if is_bold { 16 } else { 14 };
+                        // Anti-aliased TrueType rendering at actual CSS font size
                         let ch_buf = [ch];
                         let advance = truetype::draw_text_fb(
                             fb, sw, tx, ty, &ch_buf, font_px, color,
@@ -203,7 +253,7 @@ pub fn paint(
                         let ch_buf = [ch];
                         let s = unsafe { core::str::from_utf8_unchecked(&ch_buf) };
                         font::draw_str(fb, sw, tx as u32, ty as u32, s, color, 0xFF0A0A0A);
-                        if is_bold || is_big {
+                        if is_bold || font_px >= 24 {
                             font::draw_str(fb, sw, (tx + 1) as u32, ty as u32, s, color, 0xFF0A0A0A);
                         }
                         if is_underline && ch != b' ' {

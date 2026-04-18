@@ -413,11 +413,11 @@ pub fn enter(name: &str) -> Result<(), &'static str> {
             if prev_active != usize::MAX {
                 set_active(usize::MAX);
             }
-            crate::batcave::linux::syscall::reset_cave_statics();
-            crate::net::tls::reset_all_sessions();
-            crate::batcave::linux::fd::reset_for_cave_switch();
-            crate::batcave::linux::sockets::reset_for_cave_switch();
-            crate::net::tcp::reset_for_cave_switch();
+            // V8-ROOT-2: route every per-cave reset through the central hub
+            // so adding a new subsystem requires updating ONE place. Missing
+            // one of these previously was the root of half a dozen
+            // cross-cave information-leak bugs.
+            reset_all_globals_for_cave_switch();
             set_active(id);
             crate::batcave::linux::vfs::init_for_cave(id);
         }
@@ -575,4 +575,59 @@ fn find_mut(name: &str) -> Result<&'static mut BatCave, &'static str> {
         }
     }
     Err("BatCave not found")
+}
+
+/// V8-ROOT-2: single hub that resets EVERY subsystem holding cross-cave
+/// state. Call this from cave::enter (and only from cave::enter) when
+/// switching the active cave. Adding a new subsystem with cave-local
+/// state requires updating exactly one place — here.
+///
+/// Caller must already hold a critical_section! / IrqGuard. Each callee
+/// also acquires its own IrqGuard, which is safe (IrqGuard is nestable).
+fn reset_all_globals_for_cave_switch() {
+    crate::batcave::linux::syscall::reset_cave_statics();
+    crate::net::tls::reset_all_sessions();
+    crate::batcave::linux::fd::reset_for_cave_switch();
+    crate::batcave::linux::sockets::reset_for_cave_switch();
+    crate::net::tcp::reset_for_cave_switch();
+
+    // ROOT 2 additions — previously missing, each one was a cross-cave
+    // information-leak surface.
+    crate::batcave::linux::epoll::reset_for_cave_switch();
+    crate::batcave::linux::futex::reset_for_cave_switch();
+    crate::batcave::linux::async_fds::reset_for_cave_switch();
+    crate::batcave::linux::stdio_ring::reset_for_cave_switch();
+    crate::net::vpn::reset_for_cave_switch();
+    crate::net::dns::reset_for_cave_switch();
+    crate::drivers::display::chromium_blit::reset_for_cave_switch();
+
+    // ROOT 2 V9-re-audit additions — threads table, ARP cache, JS
+    // console/DOM. Each was a cross-cave leak the first pass missed.
+    crate::batcave::linux::threads::reset_for_cave_switch();
+    crate::net::arp::reset_for_cave_switch();
+    crate::browser::js::interpreter::reset_for_cave_switch();
+    crate::browser::js::dom_api::reset_for_cave_switch();
+
+    // ROOT 2 V10-re-audit additions — Tor circuit keys, batpipe inter-tool
+    // buffer, and the loader's saved RA/SP (which were a cross-cave
+    // control-flow PIVOT — most severe item from the V10 sweep).
+    crate::net::tor::reset_for_cave_switch();
+    crate::batcave::batpipe::reset_for_cave_switch();
+    crate::batcave::linux::loader::reset_for_cave_switch();
+
+    // ROOT 2 V11-re-audit additions — keyboard-input leak (typed pass-
+    // phrases), comms session key + chat history, browser state (URL,
+    // page buffer, DOM, tabs, bookmarks), Blink heap (HTML residue),
+    // UI surface state (font clip + wm panes), and the Apple-SPI
+    // keyboard mirror. Last mechanical gaps from the V11 sweep.
+    crate::drivers::virtio::keyboard::reset_for_cave_switch();
+    crate::drivers::apple::spi::reset_for_cave_switch();
+    crate::ui::apps::comms::reset_for_cave_switch();
+    crate::ui::apps::browser::reset_for_cave_switch();
+    // NOTE: `blink_libc` currently lives outside the crate module tree
+    // (see comment in src/browser/html/mod.rs). When the Chromium build
+    // lands and blink_libc is re-enabled, chain its reset here.
+    crate::ui::font::reset_for_cave_switch();
+    crate::ui::wm::reset_for_cave_switch();
+    crate::ui::console::reset_for_cave_switch();
 }

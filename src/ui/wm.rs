@@ -78,6 +78,27 @@ static ACTIVE_APP: AtomicU8 = AtomicU8::new(APP_SHELL);
 
 pub fn init_panes_pub() { init_panes(); }
 
+/// V11-state-sweep: reset pane layout + rendered-target tracking on cave
+/// switch. Without this, cave A's rendered pane contents (text drawn
+/// into the framebuffer backing the pane) and pane topology survive
+/// into cave B's first render pass.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        for p in (&mut *core::ptr::addr_of_mut!(PANES)).iter_mut() {
+            *p = Pane::empty();
+        }
+        PANE_COUNT = 0;
+        FOCUSED_PANE = 0;
+        LAYOUT_ROWS = 1;
+        LAYOUT_COLS = 1;
+        RENDER_TARGET = 0;
+    }
+    NEEDS_REDRAW.store(true, Ordering::Release);
+    ACTIVE_APP.store(APP_SHELL, Ordering::Release);
+    init_panes();
+}
+
 fn init_panes() {
     unsafe {
         PANES[0] = Pane { active: true, app: APP_SHELL, row: 0, col: 0, row_span: 1, col_span: 1 };

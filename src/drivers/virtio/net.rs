@@ -212,17 +212,22 @@ pub fn recv(buf: &mut [u8]) -> Option<usize> {
 
     if let Some((_id, len)) = rx_q.poll_used() {
         let rx_buf = RX_BUF_BASE.load(Ordering::Relaxed);
-        let total_len = len as usize;
+        // V8-ROOT-3 / V8-ARITH: clamp attacker-reported `len` to the size we
+        // actually posted. A hostile virtio backend could report a value
+        // larger than `MTU + NET_HDR_SIZE`; without this clamp we would read
+        // past the posted region into adjacent kernel memory when copying.
+        let posted_cap = MTU + NET_HDR_SIZE;
+        let total_len = (len as usize).min(posted_cap);
 
         if total_len <= NET_HDR_SIZE {
-            rx_q.add_writable(rx_buf as *mut u8, (MTU + NET_HDR_SIZE) as u32);
+            rx_q.add_writable(rx_buf as *mut u8, posted_cap as u32);
             let device = VirtioMmio::new(NET_BASE.load(Ordering::Relaxed));
             device.notify(0);
             return None;
         }
 
         let frame_len = total_len - NET_HDR_SIZE;
-        let copy_len = frame_len.min(buf.len());
+        let copy_len = frame_len.min(buf.len()).min(MTU);
 
         // Copy from the single RX buffer (byte by byte, HVF-safe)
         for i in 0..copy_len {
@@ -233,8 +238,18 @@ pub fn recv(buf: &mut [u8]) -> Option<usize> {
             buf[i] = val as u8;
         }
 
+        // V11-state-sweep: zero the RX buffer before re-posting. The
+        // next inbound packet overwrites only the first `len` bytes, so
+        // an attacker who short-packets can leak residue from a previous
+        // longer packet's tail below byte `len`. Cheap (1526 bytes).
+        unsafe {
+            let p = rx_buf as *mut u8;
+            for i in 0..posted_cap {
+                core::ptr::write_volatile(p.add(i), 0);
+            }
+        }
         // Re-post the buffer immediately
-        rx_q.add_writable(rx_buf as *mut u8, (MTU + NET_HDR_SIZE) as u32);
+        rx_q.add_writable(rx_buf as *mut u8, posted_cap as u32);
         let device = VirtioMmio::new(NET_BASE.load(Ordering::Relaxed));
         device.notify(0);
 

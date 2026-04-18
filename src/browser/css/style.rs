@@ -19,8 +19,9 @@ impl Color {
         Color(0xFF000000 | (b as u32) << 16 | (g as u32) << 8 | r as u32)
     }
 
-    /// Parse CSS color: #RGB, #RRGGBB, or named color
+    /// Parse CSS color: #RGB, #RRGGBB, rgb(r,g,b), rgba(r,g,b,a), or named
     pub fn parse(s: &str) -> Color {
+        let s = s.trim();
         if s.starts_with('#') {
             let hex = &s[1..];
             if hex.len() == 3 {
@@ -35,14 +36,36 @@ impl Color {
                 return Color::from_rgb(r, g, b);
             }
         }
+        // rgb(r, g, b) and rgba(r, g, b, a)
+        if (s.starts_with("rgb(") || s.starts_with("rgba(")) && s.ends_with(')') {
+            let inner_start = if s.starts_with("rgba(") { 5 } else { 4 };
+            let inner = &s[inner_start..s.len()-1];
+            let mut vals = [0u8; 4];
+            vals[3] = 255; // default alpha
+            let mut vi = 0;
+            let mut num: i32 = 0;
+            let mut has_num = false;
+            for &b in inner.as_bytes() {
+                if b >= b'0' && b <= b'9' {
+                    num = num * 10 + (b - b'0') as i32;
+                    has_num = true;
+                } else if (b == b',' || b == b' ') && has_num {
+                    if vi < 4 { vals[vi] = num.min(255) as u8; vi += 1; }
+                    num = 0;
+                    has_num = false;
+                }
+            }
+            if has_num && vi < 4 { vals[vi] = num.min(255) as u8; }
+            return Color::from_rgb(vals[0], vals[1], vals[2]);
+        }
         match s {
             "black" => Color::BLACK,
             "white" => Color::WHITE,
             "red" => Color::RED,
-            "green" => Color::GREEN,
+            "green" | "lime" => Color::GREEN,
             "blue" => Color::BLUE,
             "gray" | "grey" => Color::GRAY,
-            "transparent" => Color::TRANSPARENT,
+            "transparent" | "inherit" | "initial" => Color::TRANSPARENT,
             "orange" => Color::from_rgb(255, 165, 0),
             "yellow" => Color::from_rgb(255, 255, 0),
             "purple" => Color::from_rgb(128, 0, 128),
@@ -51,6 +74,51 @@ impl Color {
             "teal" => Color::from_rgb(0, 128, 128),
             "silver" => Color::from_rgb(192, 192, 192),
             "maroon" => Color::from_rgb(128, 0, 0),
+            "cyan" | "aqua" => Color::from_rgb(0, 255, 255),
+            "magenta" | "fuchsia" => Color::from_rgb(255, 0, 255),
+            "olive" => Color::from_rgb(128, 128, 0),
+            "indigo" => Color::from_rgb(75, 0, 130),
+            "coral" => Color::from_rgb(255, 127, 80),
+            "salmon" => Color::from_rgb(250, 128, 114),
+            "tomato" => Color::from_rgb(255, 99, 71),
+            "crimson" => Color::from_rgb(220, 20, 60),
+            "gold" => Color::from_rgb(255, 215, 0),
+            "khaki" => Color::from_rgb(240, 230, 140),
+            "plum" => Color::from_rgb(221, 160, 221),
+            "orchid" => Color::from_rgb(218, 112, 214),
+            "violet" => Color::from_rgb(238, 130, 238),
+            "tan" => Color::from_rgb(210, 180, 140),
+            "beige" => Color::from_rgb(245, 245, 220),
+            "ivory" => Color::from_rgb(255, 255, 240),
+            "linen" => Color::from_rgb(250, 240, 230),
+            "snow" => Color::from_rgb(255, 250, 250),
+            "darkgray" | "darkgrey" => Color::from_rgb(169, 169, 169),
+            "lightgray" | "lightgrey" => Color::from_rgb(211, 211, 211),
+            "dimgray" | "dimgrey" => Color::from_rgb(105, 105, 105),
+            "darkblue" => Color::from_rgb(0, 0, 139),
+            "darkgreen" => Color::from_rgb(0, 100, 0),
+            "darkred" => Color::from_rgb(139, 0, 0),
+            "darkcyan" => Color::from_rgb(0, 139, 139),
+            "darkmagenta" => Color::from_rgb(139, 0, 139),
+            "darkorange" => Color::from_rgb(255, 140, 0),
+            "lightblue" => Color::from_rgb(173, 216, 230),
+            "lightgreen" => Color::from_rgb(144, 238, 144),
+            "lightyellow" => Color::from_rgb(255, 255, 224),
+            "lightpink" => Color::from_rgb(255, 182, 193),
+            "steelblue" => Color::from_rgb(70, 130, 180),
+            "royalblue" => Color::from_rgb(65, 105, 225),
+            "dodgerblue" => Color::from_rgb(30, 144, 255),
+            "skyblue" => Color::from_rgb(135, 206, 235),
+            "slategray" | "slategrey" => Color::from_rgb(112, 128, 144),
+            "whitesmoke" => Color::from_rgb(245, 245, 245),
+            "limegreen" => Color::from_rgb(50, 205, 50),
+            "seagreen" => Color::from_rgb(46, 139, 87),
+            "forestgreen" => Color::from_rgb(34, 139, 34),
+            "firebrick" => Color::from_rgb(178, 34, 34),
+            "chocolate" => Color::from_rgb(210, 105, 30),
+            "sienna" => Color::from_rgb(160, 82, 45),
+            "peru" => Color::from_rgb(205, 133, 63),
+            "wheat" => Color::from_rgb(245, 222, 179),
             _ => Color::BLACK,
         }
     }
@@ -157,6 +225,50 @@ pub struct TextDecoration {
     pub line_through: bool,
 }
 
+/// CSS overflow
+#[derive(Clone, Copy, PartialEq)]
+pub enum Overflow {
+    Visible,
+    Hidden,
+    Scroll,
+    Auto,
+}
+
+/// CSS visibility
+#[derive(Clone, Copy, PartialEq)]
+pub enum Visibility {
+    Visible,
+    Hidden,
+    Collapse,
+}
+
+/// CSS white-space
+#[derive(Clone, Copy, PartialEq)]
+pub enum WhiteSpace {
+    Normal,
+    NoWrap,
+    Pre,
+    PreWrap,
+}
+
+/// CSS text-transform
+#[derive(Clone, Copy, PartialEq)]
+pub enum TextTransform {
+    None,
+    Uppercase,
+    Lowercase,
+    Capitalize,
+}
+
+/// CSS vertical-align
+#[derive(Clone, Copy, PartialEq)]
+pub enum VerticalAlign {
+    Baseline,
+    Top,
+    Middle,
+    Bottom,
+}
+
 /// Computed style for a DOM element — determines rendering
 #[derive(Clone, Copy)]
 pub struct ComputedStyle {
@@ -179,6 +291,17 @@ pub struct ComputedStyle {
     pub border_color: Color,
     pub width: Length,
     pub height: Length,
+    // Extended properties
+    pub max_width: Length,
+    pub min_height: Length,
+    pub line_height: i32,     // in pixels (0 = auto/normal)
+    pub overflow: Overflow,
+    pub visibility: Visibility,
+    pub opacity: u8,          // 0–255 (255 = fully opaque)
+    pub border_radius: i32,   // pixels
+    pub text_transform: TextTransform,
+    pub white_space: WhiteSpace,
+    pub vertical_align: VerticalAlign,
 }
 
 impl ComputedStyle {
@@ -199,6 +322,16 @@ impl ComputedStyle {
             border_color: Color::TRANSPARENT,
             width: Length::Auto,
             height: Length::Auto,
+            max_width: Length::Auto,
+            min_height: Length::Auto,
+            line_height: 0,
+            overflow: Overflow::Visible,
+            visibility: Visibility::Visible,
+            opacity: 255,
+            border_radius: 0,
+            text_transform: TextTransform::None,
+            white_space: WhiteSpace::Normal,
+            vertical_align: VerticalAlign::Baseline,
         }
     }
 
@@ -210,14 +343,16 @@ impl ComputedStyle {
         match tag {
             "html" | "body" => {
                 s.display = Display::Block;
-                s.color = Color::from_rgb(200, 200, 200);
-                s.padding_left = 8;
-                s.padding_right = 8;
+                s.color = Color::from_rgb(232, 234, 237); // Google's text color
+                s.background_color = Color::from_rgb(32, 33, 36); // Google dark mode bg
+                s.padding_left = 16;
+                s.padding_right = 16;
+                s.padding_top = 8;
             }
             "div" | "main" | "figure" | "figcaption" => {
                 s.display = Display::Block;
-                s.margin_top = 4;
-                s.margin_bottom = 2;
+                s.margin_top = 6;
+                s.margin_bottom = 4;
             }
             "form" => {
                 // Forms are hidden by reader mode, but keep display for fallback
@@ -248,10 +383,10 @@ impl ComputedStyle {
             }
             "h1" => {
                 s.display = Display::Block;
-                s.font_size = 32;
+                s.font_size = 36;
                 s.font_weight = FontWeight::Bold;
                 s.color = Color::WHITE;
-                s.margin_top = 24; s.margin_bottom = 12;
+                s.margin_top = 32; s.margin_bottom = 16;
             }
             "h2" => {
                 s.display = Display::Block;
@@ -283,8 +418,8 @@ impl ComputedStyle {
                 s.margin_top = 12; s.margin_bottom = 12;
             }
             "a" => {
-                s.color = Color::from_rgb(80, 180, 255); // bright cyan-blue
-                s.text_decoration.underline = true;
+                s.color = Color::from_rgb(138, 180, 248); // Google blue link color
+                s.text_decoration.underline = false; // Google links don't underline by default
             }
             "b" | "strong" => {
                 s.font_weight = FontWeight::Bold;

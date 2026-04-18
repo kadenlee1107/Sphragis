@@ -9,8 +9,17 @@
 #include "src/common/segmented-table.h"
 
 #if !V8_ENABLE_WEBASSEMBLY
-#error This header should only be included if WebAssembly is enabled.
-#endif  // !V8_ENABLE_WEBASSEMBLY
+// Bat_OS: provide minimal stubs when WASM is disabled
+namespace v8::internal::wasm {
+using WasmCodePointer = uintptr_t;
+class WasmCodePointerTable {
+public:
+    using Handle = uint32_t;
+    static constexpr Handle kInvalidHandle = 0;
+};
+V8_EXPORT_PRIVATE inline WasmCodePointerTable* GetProcessWideWasmCodePointerTable() { return nullptr; }
+}  // namespace v8::internal::wasm
+#else  // V8_ENABLE_WEBASSEMBLY
 
 namespace v8::internal::wasm {
 
@@ -176,4 +185,5 @@ V8_EXPORT_PRIVATE WasmCodePointerTable* GetProcessWideWasmCodePointerTable();
 
 }  // namespace v8::internal::wasm
 
+#endif  // V8_ENABLE_WEBASSEMBLY
 #endif  // V8_WASM_WASM_CODE_POINTER_TABLE_H_

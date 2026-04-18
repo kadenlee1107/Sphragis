@@ -14,6 +14,18 @@ const MAX_CALL_DEPTH: usize = 32;
 pub static mut CONSOLE_OUTPUT: [u8; 4096] = [0; 4096];
 pub static mut CONSOLE_LEN: usize = 0;
 
+/// V8-ROOT-2: clear JS console state on cave switch. console.log content
+/// from cave A's renderer would otherwise survive into cave B's process.
+pub fn reset_for_cave_switch() {
+    unsafe {
+        let buf = core::ptr::addr_of_mut!(CONSOLE_OUTPUT) as *mut u8;
+        for i in 0..4096 {
+            core::ptr::write_volatile(buf.add(i), 0);
+        }
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CONSOLE_LEN), 0);
+    }
+}
+
 /// Execution result
 pub enum ExecResult {
     Value(JsValue),
@@ -278,8 +290,11 @@ impl Engine {
             Operator::BitAnd => JsValue::number((l as i64 & r as i64) as f64),
             Operator::BitOr => JsValue::number((l as i64 | r as i64) as f64),
             Operator::BitXor => JsValue::number((l as i64 ^ r as i64) as f64),
-            Operator::ShiftLeft => JsValue::number(((l as i64) << (r as u32)) as f64),
-            Operator::ShiftRight => JsValue::number(((l as i64) >> (r as u32)) as f64),
+            // V8-ROOT-3: ECMA-262 §13.10 specifies shift count modulo 32 for
+            // i32 operations. Without `& 31`, an attacker JS string of
+            // `r >= 64` panics the kernel under overflow-checks.
+            Operator::ShiftLeft => JsValue::number(((l as i32).wrapping_shl((r as u32) & 31)) as f64),
+            Operator::ShiftRight => JsValue::number(((l as i32).wrapping_shr((r as u32) & 31)) as f64),
             _ => JsValue::undefined(),
         }
     }

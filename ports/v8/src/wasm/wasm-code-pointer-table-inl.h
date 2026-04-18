@@ -12,8 +12,8 @@
 #include "src/common/segmented-table-inl.h"
 
 #if !V8_ENABLE_WEBASSEMBLY
-#error This header should only be included if WebAssembly is enabled.
-#endif  // !V8_ENABLE_WEBASSEMBLY
+// Bat_OS: WASM disabled, nothing to inline
+#else  // V8_ENABLE_WEBASSEMBLY
 
 namespace v8::internal::wasm {
 
@@ -203,4 +203,5 @@ WasmCodePointerTable::FreelistHead WasmCodePointerTable::LinkFreelist(
 
 }  // namespace v8::internal::wasm
 
+#endif  // V8_ENABLE_WEBASSEMBLY
 #endif  // V8_WASM_WASM_CODE_POINTER_TABLE_INL_H_

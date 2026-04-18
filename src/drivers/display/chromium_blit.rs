@@ -73,6 +73,32 @@ pub fn stop() {
     STOP_FLAG.store(true, Ordering::Release);
 }
 
+/// V8-ROOT-2: stop the chromium blit on cave switch and clear sequence
+/// counters so the next cave's framebuffer doesn't observe stale frame
+/// numbers (which would let it leak frame-rate / activity timing of the
+/// previous cave).
+pub fn reset_for_cave_switch() {
+    STOP_FLAG.store(true, Ordering::Release);
+    RUNNING.store(false, Ordering::Release);
+    LAST_SEQ.store(0, Ordering::Release);
+    FRAMES_BLITTED.store(0, Ordering::Release);
+    FRAMES_DROPPED.store(0, Ordering::Release);
+    TICKS.store(0, Ordering::Release);
+    // V11-FRESH-EYES: the /batos/fb0 region is a physical shared frame
+    // wired into every cave's VFS. Without zeroing it, cave A can write
+    // secrets to the framebuffer, destroy, and cave B can mmap /batos/fb0
+    // to read them back — a 5 MiB residual-plaintext cross-cave leak.
+    let (base, size) = vfs::chromium_fb_region();
+    if base != 0 && size > 0 {
+        unsafe {
+            let p = base as *mut u8;
+            for i in 0..size {
+                core::ptr::write_volatile(p.add(i), 0);
+            }
+        }
+    }
+}
+
 /// Spawn the 60-Hz blit kthread. Returns true if newly started.
 ///
 /// Safe to call multiple times — subsequent calls are no-ops once the

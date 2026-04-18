@@ -89,7 +89,7 @@ fn write64(base: usize, offset: usize, val: u64) {
 /// Initialize the Apple ANS NVMe controller.
 /// This requires DART setup (IOMMU) before it can do DMA.
 pub fn init() -> Result<(), &'static str> {
-    let base = soc::ANS_BASE;
+    let base = soc::ans_base();
     NVME_BASE.store(base, Ordering::Relaxed);
 
     // Check ANS boot status

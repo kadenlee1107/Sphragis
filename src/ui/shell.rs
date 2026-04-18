@@ -1011,11 +1011,21 @@ fn cmd_run_elf(name: &str) {
             console::puts("  Executing...\n");
 
             // Use a STATIC stack to guarantee it's in mapped kernel memory
-            // (dynamic frame allocation may return pages with MMU issues)
+            // (dynamic frame allocation may return pages with MMU issues).
+            //
+            // V11-state-sweep: the static stack is reused for every ELF
+            // launch. argc/argv/envp/auxv plus any user-stack contents
+            // from the prior execution linger here. Zero before reuse.
             #[repr(align(16))]
             struct AlignedStack([u8; 65536]);
             static mut ELF_STACK: AlignedStack = AlignedStack([0u8; 65536]);
             let sb = core::ptr::addr_of_mut!(ELF_STACK) as usize; // 16-byte aligned
+            unsafe {
+                let p = sb as *mut u8;
+                for i in 0..65536 {
+                    core::ptr::write_volatile(p.add(i), 0);
+                }
+            }
             let stack_base = Some(sb);
             if let Some(sb) = stack_base {
                 let sp = sb + 65536;

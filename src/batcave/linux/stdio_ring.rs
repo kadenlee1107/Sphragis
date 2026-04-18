@@ -191,3 +191,21 @@ pub fn clear() {
     let h = HEAD.load(Ordering::Acquire);
     TAIL.store(h, Ordering::Release);
 }
+
+/// V8-ROOT-2: drop any un-drained bytes from the previous cave. Without
+/// this, a print from the outgoing cave could still be in the ring when
+/// the next cave boots, leaking that cave's last stdout content out via
+/// the serial console of the new cave's boot.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    clear();
+    DRAINING.store(false, Ordering::Release);
+    // Zero the backing ring so snapshots (e.g. crash dumps from a later
+    // cave) don't recover stale bytes from a previous cave.
+    unsafe {
+        let ptr = core::ptr::addr_of_mut!(RING) as *mut u8;
+        for i in 0..RING_SIZE {
+            core::ptr::write_volatile(ptr.add(i), 0);
+        }
+    }
+}

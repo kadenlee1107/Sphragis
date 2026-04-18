@@ -84,6 +84,95 @@ pub fn apply_property(prop: &str, val: &str, style: &mut ComputedStyle) {
         }
         "width" => { style.width = Length::parse(val); }
         "height" => { style.height = Length::parse(val); }
+        "max-width" => { style.max_width = Length::parse(val); }
+        "min-height" => { style.min_height = Length::parse(val); }
+        "line-height" => {
+            style.line_height = Length::parse(val).to_px(16, style.font_size);
+        }
+        "border-width" => {
+            style.border_width = Length::parse(val).to_px(0, 16);
+        }
+        "border-color" => {
+            style.border_color = Color::parse(val);
+        }
+        "border-radius" => {
+            style.border_radius = Length::parse(val).to_px(0, 16);
+        }
+        "border-bottom" | "border-top" | "border-left" | "border-right" => {
+            let parts: [&str; 3] = split3(val);
+            if !parts[0].is_empty() {
+                style.border_width = Length::parse(parts[0]).to_px(0, 16);
+            }
+            if !parts[2].is_empty() {
+                style.border_color = Color::parse(parts[2]);
+            }
+        }
+        "overflow" | "overflow-x" | "overflow-y" => {
+            style.overflow = match val {
+                "hidden" => Overflow::Hidden,
+                "scroll" => Overflow::Scroll,
+                "auto" => Overflow::Auto,
+                _ => Overflow::Visible,
+            };
+        }
+        "visibility" => {
+            style.visibility = match val {
+                "hidden" => Visibility::Hidden,
+                "collapse" => Visibility::Collapse,
+                _ => Visibility::Visible,
+            };
+        }
+        "opacity" => {
+            // Parse 0.0–1.0 or 0–100
+            let bytes = val.as_bytes();
+            if bytes.len() > 0 && bytes[0] == b'0' && bytes.len() > 1 && bytes[1] == b'.' {
+                // Decimal: 0.5 → 128
+                let frac = if bytes.len() > 2 { (bytes[2] - b'0') as u8 } else { 0 };
+                style.opacity = (frac as u16 * 255 / 10) as u8;
+            } else if val == "1" {
+                style.opacity = 255;
+            } else if val == "0" {
+                style.opacity = 0;
+            }
+        }
+        "text-transform" => {
+            style.text_transform = match val {
+                "uppercase" => TextTransform::Uppercase,
+                "lowercase" => TextTransform::Lowercase,
+                "capitalize" => TextTransform::Capitalize,
+                _ => TextTransform::None,
+            };
+        }
+        "white-space" => {
+            style.white_space = match val {
+                "nowrap" => WhiteSpace::NoWrap,
+                "pre" => WhiteSpace::Pre,
+                "pre-wrap" => WhiteSpace::PreWrap,
+                _ => WhiteSpace::Normal,
+            };
+        }
+        "vertical-align" => {
+            style.vertical_align = match val {
+                "top" => VerticalAlign::Top,
+                "middle" => VerticalAlign::Middle,
+                "bottom" => VerticalAlign::Bottom,
+                _ => VerticalAlign::Baseline,
+            };
+        }
+        "list-style" | "list-style-type" => {
+            if val == "none" {
+                // Remove list marker
+            }
+        }
+        // Flex properties (store but layout handles separately)
+        "flex-direction" | "justify-content" | "align-items" | "flex-wrap"
+        | "flex" | "flex-grow" | "flex-shrink" | "flex-basis"
+        | "gap" | "row-gap" | "column-gap" => {}
+        // Transitions/animations — ignore for now
+        "transition" | "animation" | "transform" | "cursor" | "user-select"
+        | "outline" | "outline-width" | "outline-color" | "outline-style"
+        | "box-shadow" | "text-shadow" | "position" | "top" | "left"
+        | "right" | "bottom" | "z-index" | "float" | "clear" => {}
         _ => {} // unknown property — ignore
     }
 }

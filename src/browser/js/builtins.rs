@@ -696,7 +696,9 @@ pub fn string_repeat(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsVa
     let s = vm.strings.get(this_val.as_str_id());
     let count = if argc > 0 { vm.stack[args_start].to_i32().max(0) as usize } else { 0 };
     let slen = s.len();
-    let _total = (slen * count).min(4096);
+    // V8-ROOT-3: clamp BEFORE multiply. attacker String.repeat(2_000_000_000)
+    // would otherwise wrap usize and panic the kernel under overflow-checks.
+    let _total = slen.saturating_mul(count).min(4096);
     let mut buf = [0u8; 4096];
 
     // Copy source to local buffer first

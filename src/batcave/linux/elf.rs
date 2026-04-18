@@ -137,7 +137,14 @@ pub fn load(data: &[u8]) -> Result<LoadedElf, &'static str> {
     // V8-ROOT-3 / V8-PARSER-ROOT-2 / V8-ARITH-A3: backport the loader.rs
     // bounds discipline to this alt loader. phoff + i*ph_size wraps for
     // hostile inputs; we enforce checked arithmetic.
-    if ph_size == 0 || ph_size > 4096 || ph_num > 1024 {
+    // V8-ROOT-10: ph_size MUST also be at least size_of::<Elf64Phdr>() (56).
+    // Without this, an attacker sets e_phentsize=1 / e_phnum=1024 and each
+    // iteration reads 56 bytes starting at ph_offset + i*1 — so the last
+    // iterations read past the "table" as sized by phnum*phentsize and
+    // into whatever follows in the file mapping.
+    if ph_size < core::mem::size_of::<Elf64Phdr>()
+        || ph_size > 4096 || ph_num > 1024
+    {
         return Err("ELF program-header table implausible");
     }
     let ph_table_bytes = match ph_num.checked_mul(ph_size) {

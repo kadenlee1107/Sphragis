@@ -64,12 +64,23 @@ pub fn decode(data: &[u8], image: &mut PngImage) -> Result<(), &'static str> {
     let mut idat_buf = [0u8; 65536]; // compressed data buffer
     let mut idat_len = 0usize;
 
-    // Parse chunks
+    // Parse chunks. V8-ROOT-3: chunk_len is full u32 from attacker file;
+    // unchecked `pos + 12 + chunk_len` and `pos+8+chunk_len.min(...)` panic
+    // under overflow-checks for crafted files.
     while pos + 12 <= data.len() {
         let chunk_len = u32::from_be_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]) as usize;
         let chunk_type = &data[pos+4..pos+8];
-        let chunk_data = &data[pos+8..pos+8+chunk_len.min(data.len()-pos-8)];
-        pos += 12 + chunk_len; // skip length(4) + type(4) + data + CRC(4)
+        let chunk_data_start = match pos.checked_add(8) {
+            Some(n) if n <= data.len() => n,
+            _ => break,
+        };
+        let chunk_data_max = data.len().saturating_sub(chunk_data_start);
+        let chunk_data_take = chunk_len.min(chunk_data_max);
+        let chunk_data = &data[chunk_data_start .. chunk_data_start + chunk_data_take];
+        pos = match pos.checked_add(12).and_then(|p| p.checked_add(chunk_len)) {
+            Some(n) => n,
+            None => break,
+        }; // skip length(4) + type(4) + data + CRC(4)
 
         match chunk_type {
             b"IHDR" => {

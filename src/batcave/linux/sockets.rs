@@ -791,9 +791,16 @@ pub fn sendmsg(fd: i32, msg: *const Msghdr, flags: i32) -> i64 {
     };
     let dlen = m.msg_namelen;
 
-    let iovs = unsafe { core::slice::from_raw_parts(m.msg_iov, m.msg_iovlen) };
+    // V8-ROOT-8: snapshot the iovec array into a kernel stack buffer to
+    // defeat TOCTOU. Without this, a sibling cave-thread can mutate the
+    // user-space iov entries between our bounds check and the actual
+    // sendto() — turning the gate into a no-op.
+    let mut iov_snap: [Iovec; IOV_MAX] = [Iovec { iov_base: core::ptr::null_mut(), iov_len: 0 }; IOV_MAX];
+    for i in 0..m.msg_iovlen {
+        iov_snap[i] = unsafe { core::ptr::read(m.msg_iov.add(i)) };
+    }
     let mut total: i64 = 0;
-    for iv in iovs {
+    for iv in iov_snap[..m.msg_iovlen].iter() {
         if iv.iov_len == 0 { continue; }
         if iv.iov_base.is_null() { return EFAULT; }
         if !is_user(iv.iov_base as usize, iv.iov_len) { return EFAULT; }
@@ -814,9 +821,11 @@ pub fn recvmsg(fd: i32, msg: *mut Msghdr, flags: i32) -> i64 {
     if msg.is_null() { return EFAULT; }
     if !is_user(msg as usize, core::mem::size_of::<Msghdr>()) { return EFAULT; }
 
-    // Read out the fields first; we still need to write msg_flags and
-    // msg_controllen back to userspace at the end, so keep msg as *mut.
-    let m = unsafe { &mut *msg };
+    // V8-ROOT-8: snapshot the entire msghdr — we previously held a `&mut`
+    // pointing into user memory across recvfrom() calls, which let a sibling
+    // thread mutate iov_base / iov_len after our bounds check (TOCTOU →
+    // arbitrary kernel write).
+    let m: Msghdr = unsafe { core::ptr::read(msg) };
     if m.msg_iovlen > IOV_MAX { return EINVAL; }
     if m.msg_iov.is_null() && m.msg_iovlen > 0 { return EFAULT; }
 
@@ -836,11 +845,20 @@ pub fn recvmsg(fd: i32, msg: *mut Msghdr, flags: i32) -> i64 {
     } else {
         core::ptr::null_mut()
     };
-    let namelen_ptr: *mut u32 = &mut m.msg_namelen;
+    // namelen lives in user space — recvfrom validates it again before write.
+    let namelen_offset = core::mem::offset_of!(Msghdr, msg_namelen);
+    let namelen_ptr: *mut u32 = unsafe {
+        (msg as *mut u8).add(namelen_offset) as *mut u32
+    };
 
-    let iovs = unsafe { core::slice::from_raw_parts_mut(m.msg_iov, m.msg_iovlen) };
+    // Snapshot the iovec array into a kernel stack buffer.
+    let mut iov_snap: [Iovec; IOV_MAX] = [Iovec { iov_base: core::ptr::null_mut(), iov_len: 0 }; IOV_MAX];
+    for i in 0..m.msg_iovlen {
+        iov_snap[i] = unsafe { core::ptr::read(m.msg_iov.add(i)) };
+    }
+
     let mut total: i64 = 0;
-    for iv in iovs.iter_mut() {
+    for iv in iov_snap[..m.msg_iovlen].iter() {
         if iv.iov_len == 0 { continue; }
         if iv.iov_base.is_null() { return EFAULT; }
         if !is_user(iv.iov_base as usize, iv.iov_len) { return EFAULT; }
@@ -852,8 +870,19 @@ pub fn recvmsg(fd: i32, msg: *mut Msghdr, flags: i32) -> i64 {
         total += r;
         if (r as usize) < iv.iov_len { break; }
     }
-    m.msg_flags = 0;
-    m.msg_controllen = 0;
+    // Write back the trailing fields with explicit bounds checks.
+    let flags_offset = core::mem::offset_of!(Msghdr, msg_flags);
+    let ctrllen_offset = core::mem::offset_of!(Msghdr, msg_controllen);
+    unsafe {
+        let flags_ptr = (msg as *mut u8).add(flags_offset) as *mut i32;
+        let ctrllen_ptr = (msg as *mut u8).add(ctrllen_offset) as *mut usize;
+        if is_user(flags_ptr as usize, 4) {
+            core::ptr::write(flags_ptr, 0);
+        }
+        if is_user(ctrllen_ptr as usize, core::mem::size_of::<usize>()) {
+            core::ptr::write(ctrllen_ptr, 0);
+        }
+    }
     total
 }
 

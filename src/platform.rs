@@ -23,6 +23,11 @@ pub fn current() -> Platform {
     }
 }
 
+#[inline]
+pub fn is_apple_silicon() -> bool {
+    matches!(current(), Platform::AppleSilicon)
+}
+
 // ─── Unified Serial I/O ───
 
 pub fn serial_putc(c: u8) {

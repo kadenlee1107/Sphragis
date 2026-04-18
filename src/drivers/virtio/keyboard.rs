@@ -194,3 +194,22 @@ pub fn getc() -> Option<u8> {
 pub fn is_ready() -> bool {
     KBD_READY.load(Ordering::Relaxed)
 }
+
+/// V11-state-sweep: wipe the keystroke ring buffer + modifier flags on
+/// cave switch. THIS IS CRITICAL — without this, any typed passphrase,
+/// SSH key passphrase, or plaintext message in the outgoing cave remains
+/// readable by the new cave's first `getc()` loop.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        let p = core::ptr::addr_of_mut!(KEY_BUF) as *mut u8;
+        for i in 0..KEY_BUF_SIZE {
+            core::ptr::write_volatile(p.add(i), 0);
+        }
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(KEY_HEAD), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(KEY_TAIL), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CTRL_HELD), false);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SHIFT_HELD), false);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(ALT_HELD), false);
+    }
+}

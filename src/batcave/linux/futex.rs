@@ -658,3 +658,22 @@ pub fn waiters_on(uaddr: u64) -> usize {
     }
     n
 }
+
+/// V8-ROOT-2: drop every waiter when switching caves. Without this, a new
+/// cave's userspace could accidentally satisfy (or be woken by) a previous
+/// cave's parked thread on an overlapping address — breaks isolation.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    for bi in 0..NUM_BUCKETS {
+        let b = bucket(bi);
+        // Take the bucket lock so any in-flight op completes first.
+        bucket_lock(b);
+        for s in b.slots.iter() {
+            s.in_use.store(false, Ordering::Release);
+            s.uaddr.store(0, Ordering::Relaxed);
+            s.bitset.store(0, Ordering::Relaxed);
+            s.woken.store(false, Ordering::Relaxed);
+        }
+        bucket_unlock(b);
+    }
+}
