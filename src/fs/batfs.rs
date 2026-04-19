@@ -149,12 +149,6 @@ pub fn verify_all_integrity() -> bool {
 /// counter itself still restarts at 1; prefix + counter is the full
 /// unique value.
 pub fn init(master_key: &[u8; 32]) {
-    // V8-ROOT-1: atomic check-then-set of INITIALIZED + publishing of
-    // MASTER_KEY + BOOT_NONCE_PREFIX + NONCE_COUNTER is one critical
-    // section. V6's fence-only approach still allowed two concurrent
-    // init() calls to pass the INITIALIZED check and clobber each
-    // other's prefix+counter → (key, nonce) reuse across boots →
-    // keystream recovery on recurring filenames.
     use core::sync::atomic::Ordering;
 
     crate::critical_section! {

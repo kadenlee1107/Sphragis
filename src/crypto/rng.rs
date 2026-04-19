@@ -161,12 +161,12 @@ pub fn fill_bytes(buf: &mut [u8]) {
     }
 
     let _irq = crate::kernel::sync::IrqGuard::new();
-    while CHAIN_LOCK
-        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-        .is_err()
-    {
-        core::hint::spin_loop();
-    }
+    // Single-CPU bring-up on Apple Silicon with MMU off: STXR on
+    // Device memory always fails, so `compare_exchange` spins
+    // forever. IRQ is already masked by `_irq` above — that's
+    // sufficient mutual exclusion on a single CPU, so acquire the
+    // lock non-atomically.
+    CHAIN_LOCK.store(true, Ordering::Release);
     let _lock = ChainGuard; // released on drop, even on panic
 
     let seed = gather_seed();
