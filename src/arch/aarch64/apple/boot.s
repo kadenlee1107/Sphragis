@@ -55,8 +55,9 @@ _apple_start:
     movk    w10, #0xc00f, lsl #16
     FB_FILL fb3
 
-    // Set up stack
-    ldr     x1, =__stack_start
+    // Set up stack — PC-relative for the same reason as BSS zero.
+    adrp    x1, __stack_start
+    add     x1, x1, #:lo12:__stack_start
     mov     sp, x1
 
     // ─── Stage 4: stack set ─── MAGENTA (0xFFF003FF)
@@ -64,9 +65,19 @@ _apple_start:
     movk    w10, #0xfff0, lsl #16
     FB_FILL fb4
 
-    // Zero BSS
-    ldr     x1, =__bss_start
-    ldr     x2, =__bss_end
+    // Zero BSS — use PC-relative (adrp + :lo12:) so it resolves to
+    // the LOADED binary's BSS, not the linker's link-time absolute
+    // address. `ldr =label` emits the link-time address via the
+    // literal pool, which on M4 under m1n1 chainload points at
+    // unmapped memory (the binary is loaded at ~0x1000xxxxxx but
+    // the link script uses 0x8_1000_0000). Writing zeros to link-time
+    // addresses silently faults the moment Rust later tries to write
+    // a static that actually lives at the correct loaded-BSS
+    // location.
+    adrp    x1, __bss_start
+    add     x1, x1, #:lo12:__bss_start
+    adrp    x2, __bss_end
+    add     x2, x2, #:lo12:__bss_end
 apple_bss_clear:
     cmp     x1, x2
     b.ge    apple_bss_done

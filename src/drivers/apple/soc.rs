@@ -121,26 +121,29 @@ pub fn discover_from_adt(adt: &super::adt::Adt) -> usize {
     // Each entry carries a pre-lookup paint so the camera capture can
     // tell us which path is in flight if we halt — see the bringup
     // exception vectors installed in main.rs.
-    // Path names corrected per M4 ADT inspection (via m1n1 source):
-    //   dart-usb → dart-usb0 (M4 numbers its USB DARTs)
-    //   dart-ans → sart-ans  (ANS uses SART, not DART, on M4)
-    // Each color is a specific shade we don't use elsewhere, so whatever
-    // ends up on the top of the framebuffer when the fault handler
-    // paints its red bottom-stripe tells us exactly which path was
-    // in flight when the walker tripped.
+    // Positional-stripe scheme: each path paints a 100px-tall stripe
+    // at Y = idx * 100 BEFORE attempting its lookup. Prior paths'
+    // stripes are not overwritten, so the final screen shows an
+    // ordered "progress bar" — N stripes visible ⇒ we started N
+    // paths, blue fault-stripe ⇒ the last visible stripe is where
+    // we faulted. Colors cycle through the hue wheel so adjacent
+    // stripes are always distinguishable, but identity is conveyed
+    // by POSITION rather than hue (more reliable on camera).
     let table: &[(&str, &AtomicUsize, u32)] = &[
-        ("/arm-io/uart0",      &UART0_BASE_RT, 0xE6000000), // maroon (R=0x180)
-        ("/arm-io/aic",        &AIC_BASE_RT,   0xFD800000), // burnt-orange (R=0x3F6, G=0x80)
-        ("/arm-io/disp0",      &DCP_BASE_RT,   0xFFE00000), // mustard (R=0x3FE, G=0x200)  [disp0 known OK]
-        ("/arm-io/dart-disp0", &DCP_DART_RT,   0xD0080800), // forest-green (R=0x100, G=0x202, B=0x200?) see decode
-        ("/arm-io/ans",        &ANS_BASE_RT,   0xC008C300), // teal-dark (R=0, G=0x230, B=0x300)
-        ("/arm-io/spi0",       &SPI0_BASE_RT,  0xC000020F), // navy (R=0, G=0, B=0x20F)
-        ("/arm-io/sep",        &SEP_BASE_RT,   0xE80001FF), // indigo (R=0x280, G=0, B=0x1FF)
-        ("/arm-io/dart-usb0",  &DART_USB_RT,   0xFE8001F0), // rose (R=0x3A0, G=0, B=0x1F0)
-        ("/arm-io/sart-ans",   &DART_ANS_RT,   0xFFF400C0), // hot-magenta (R=0x3FF, G=0x100, B=0x0C0)
+        ("/arm-io/uart0",      &UART0_BASE_RT, 0xFFF00000), // red      — row 0..99
+        ("/arm-io/aic",        &AIC_BASE_RT,   0xFFF80000), // orange   — row 100..199
+        ("/arm-io/disp0",      &DCP_BASE_RT,   0xFFFFC000), // yellow   — row 200..299
+        ("/arm-io/dart-disp0", &DCP_DART_RT,   0xC00FFC00), // green    — row 300..399
+        ("/arm-io/ans",        &ANS_BASE_RT,   0xC00FFFFF), // cyan     — row 400..499
+        ("/arm-io/spi0",       &SPI0_BASE_RT,  0xC00003FF), // blue     — row 500..599
+        ("/arm-io/sep",        &SEP_BASE_RT,   0xE00003FF), // violet   — row 600..699
+        ("/arm-io/dart-usb0",  &DART_USB_RT,   0xFFF003FF), // magenta  — row 700..799
+        ("/arm-io/sart-ans",   &DART_ANS_RT,   0xFFFFFFFF), // white    — row 800..899
     ];
-    for (path, atomic, mark) in table {
-        unsafe { crate::fb_mark(*mark); }
+    const STRIPE_H: usize = 100;
+    for (idx, (path, atomic, mark)) in table.iter().enumerate() {
+        let y = idx * STRIPE_H;
+        unsafe { crate::fb_stripe(y, STRIPE_H, *mark); }
         if let Some(addr) = lookup_reg0(adt, path) {
             atomic.store(addr, Ordering::Release);
             n += 1;

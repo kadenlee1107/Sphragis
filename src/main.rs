@@ -523,6 +523,24 @@ bringup_fault:
 //   0xFFFFFFFF  white
 //   0xFFF80000  orange         R=max, G=0x200
 //   0xE00C0000  dark-orange    R=0x200, G=0x300
+/// Paint a horizontal stripe on the M4 FB.
+/// `y_start` / `y_count` are in pixels; `pixel` is 32-bit ARGB2101010.
+/// FB layout: 3024x1964 @ stride 0x2f40 bytes = 12096 = 3024 * 4.
+/// Safe to call from the bring-up sequence; doesn't allocate.
+#[inline(never)]
+pub(crate) unsafe fn fb_stripe(y_start: usize, y_count: usize, pixel: u32) {
+    const FB_BASE: usize = 0x103e0050000;
+    const FB_STRIDE_BYTES: usize = 0x2f40;       // 12096
+    const FB_WIDTH_PX: usize    = 3024;
+    for y in y_start..(y_start + y_count) {
+        let row = (FB_BASE + y * FB_STRIDE_BYTES) as *mut u32;
+        for x in 0..FB_WIDTH_PX {
+            core::ptr::write_volatile(row.add(x), pixel);
+        }
+    }
+    core::arch::asm!("dsb sy");
+}
+
 #[inline(never)]
 pub(crate) unsafe fn fb_mark(pixel: u32) {
     let fb = 0x103e0050000usize as *mut u32;
@@ -559,26 +577,39 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         // Keep SError masked (DAIF.A=1 from boot.s) — clearing it was
         // delivering a pending SError left over from m1n1 and firing the
         // bringup_fault handler before any Rust code ran.
+        // Use `adrp + add` for the vector-table address — `adr` has
+        // only ±1 MiB range and `bringup_vectors` sits near the top of
+        // the binary (in .text.apple_boot) while `kernel_main_apple`
+        // is megabytes deeper, so `adr` was silently wrapping and
+        // installing a bogus VBAR. `adrp` is ±4 GiB, always works.
         core::arch::asm!(
-            "mrs  x1, CurrentEL",
-            "adr  x0, bringup_vectors",
-            "cmp  x1, #0x8",              // EL2 encoded as 2 << 2 = 0x8
-            "b.ne 1f",
-            "msr  vbar_el2, x0",
-            "b    2f",
-            "1:   msr  vbar_el1, x0",
-            "2:   isb",
+            "mrs   x1, CurrentEL",
+            "adrp  x0, bringup_vectors",
+            "add   x0, x0, #:lo12:bringup_vectors",
+            "cmp   x1, #0x8",             // EL2 encoded as 2 << 2 = 0x8
+            "b.ne  1f",
+            "msr   vbar_el2, x0",
+            "b     2f",
+            "1:    msr  vbar_el1, x0",
+            "2:    isb",
             out("x0") _,
             out("x1") _,
         );
     }
 
-    // R1: Rust entered. ORANGE. If we see orange, the asm→Rust handoff
-    // worked and we cleared the function prologue.
+    // R1: Rust entered. ORANGE.
     unsafe { fb_hold(0xFFF80000); }
 
-    // Set platform to Apple Silicon
+    // Set platform to Apple Silicon. Previously this faulted because
+    // boot.s was zeroing BSS at link-time absolute addresses
+    // (0x81xxxxxxx) rather than the loaded binary's BSS — so any
+    // subsequent static write via PC-relative adrp went to memory
+    // that might have been partially corrupt. Now fixed in boot.s
+    // (BSS zero + stack setup both use adrp + :lo12:).
     platform::set_platform(platform::Platform::AppleSilicon);
+
+    // R2: post-set_platform. DARK-ORANGE.
+    unsafe { fb_hold(0xE00C0000); }
 
     // R2: post-set_platform. DARK-ORANGE.
     unsafe { fb_hold(0xE00C0000); }
@@ -727,7 +758,7 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
             core::hint::spin_loop();
         }
     }
-    }  // close the allow(unreachable_code) block
+    }  // close the allow(unreachable_code) block (post-R5 uart init)
 }
 
 #[panic_handler]

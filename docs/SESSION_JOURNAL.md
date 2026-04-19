@@ -11,6 +11,135 @@ end of a session.
 
 ---
 
+## 2026-04-19 10:03 — Ubuntu — BREAKTHROUGH: BSS-zero bug fixed, R5 reproducible
+
+**This is the biggest single commit of the M4 bring-up so far.** The
+"intermittent static-write fault" we've been chasing for hours was a
+single bug in `src/arch/aarch64/apple/boot.s`:
+
+```asm
+// OLD — broken under m1n1 chainload:
+ldr  x1, =__bss_start       // loads link-time absolute (0x81xxxxxxx)
+ldr  x2, =__bss_end         // loads link-time absolute (0x81xxxxxxx)
+```
+
+`ldr =label` emits the linker's absolute value through the literal
+pool. Under chainload m1n1 relocates the binary to somewhere in
+`0x1000xxxxxxx` — so the BSS-zero loop was writing zeros to
+unmapped/arbitrary physical memory (at 0x81xxxxxxx) while our
+**actual** BSS (containing every `AtomicU8`, `AtomicPtr`,
+`AtomicUsize` in the kernel) remained whatever random bytes m1n1
+had left there. The first Rust static write — `platform::set_platform`
+doing `CURRENT_PLATFORM.store(1)` — hit that tainted memory and
+faulted.
+
+**Fix.** Rewrite boot.s BSS zero AND stack setup to use PC-relative
+addressing:
+
+```asm
+adrp  x1, __bss_start
+add   x1, x1, #:lo12:__bss_start
+adrp  x2, __bss_end
+add   x2, x2, #:lo12:__bss_end
+```
+
+`adrp` resolves relative to the **loaded** PC, so it produces the
+actual-runtime BSS addresses. Same change applied to `__stack_start`.
+
+**Result.** Bat_OS now reproducibly runs end-to-end through every
+Rust checkpoint — `set_platform`, `boot_args::parse`, `stash`,
+`args.video()`, `set_fb_info`, `set_mem_info`, `args.adt()`, the
+full 9-entry `discover_from_adt` (with positional stripes), `R5
+hot-pink` halt — with NO fault stripe and no Mac reset during the
+observable window. The entire Rust kernel-setup prologue through
+`discover_from_adt` is now reliable bring-up infrastructure.
+
+**What this unblocks.** Everything downstream of `discover_from_adt`
+is now testable one checkpoint at a time:
+- `uart::init` (dockchannel driver)
+- `kernel::mm::init`, `kernel::process::init`, etc.
+- `kernel::arch::init_exceptions` (replaces our bringup_vectors
+  with the real Rust-handler ones)
+- `drivers::apple::aic::init`, `bring_up_all`, `dcp::init_simple_fb`
+- The boot splash + desktop
+
+Each of those will likely need its own M4-specific tuning but now
+they run against a solid foundation instead of a tainted-BSS
+foundation.
+
+**Files touched:**
+- `src/arch/aarch64/apple/boot.s`: PC-relative `adrp + :lo12:` for
+  `__bss_start`, `__bss_end`, `__stack_start`.
+- `src/main.rs`: reverted the `set_platform` bypass; R2 dark-orange
+  checkpoint reinstated. VBAR install already using adrp.
+
+---
+
+## 2026-04-19 10:00 — Ubuntu — Positional stripes + adrp VBAR + static-write fault
+
+**More infra landed, one new root cause localized (not yet fixed).**
+
+**1. Positional-stripe discovery markers.** Added a `crate::fb_stripe(y,
+h, pixel)` helper that paints a horizontal band rather than the full
+framebuffer. `discover_from_adt` now uses it: path `idx` paints a
+100-pixel stripe at Y = `idx * 100`, then attempts its lookup. Earlier
+stripes aren't overwritten, so the final camera frame is a visual
+"progress bar" of which paths we started. Unambiguous position-based
+decoding, no reliance on camera hue fidelity.
+
+**2. adrp-based VBAR install.** The previous `adr x0, bringup_vectors`
+in `kernel_main_apple` could have been silently wrapping — `adr` is
+only ±1 MiB and the vectors live in `.text.apple_boot` near the top
+of the 15 MiB binary while the function sits deeper. Replaced with
+`adrp + add :lo12:` which is ±4 GiB and unconditionally correct.
+
+**3. `platform::set_platform` faults on M4 — static-write issue.**
+Halting immediately after R1 orange paint = clean halt, no fault
+stripe. Halting immediately after skipping `set_platform` and painting
+R2 yellow-green = clean halt, no fault stripe. Running past R1 with
+`set_platform` CALLED = fault stripe on top of whatever checkpoint
+painted last.
+
+`set_platform` is nothing but `CURRENT_PLATFORM.store(1, Relaxed)`
+against a static `AtomicU8`. The fault fires on the `strb` that backs
+it. Most likely cause: BSS zeroing in `boot.s` uses the link-script
+symbols `__bss_start`/`__bss_end` which are LINK-TIME absolute
+addresses (around `0x810???????`), but m1n1 relocates our kernel to
+a physical address around `0x1000xxxxxxx`. So the BSS-zero loop is
+writing zeros to unrelated phys memory while our real BSS
+(containing `CURRENT_PLATFORM`) is at a different address. When Rust
+later accesses `CURRENT_PLATFORM` through its PC-relative `adrp + add`,
+it IS hitting the loaded-binary location correctly — so the store
+itself should be to valid RAM. But something about that specific
+address (maybe a sub-4K page not actually backed by RAM because our
+linker reserved more BSS space than the m1n1 relocation pasted in?)
+is tripping the fault handler.
+
+**Where this leaves us.** Running past R1 with ALL subsequent calls
+(set_platform, parse, stash, ...) still faults somewhere — confirmed
+that even with `set_platform` skipped the run still hits a fault
+before R5. Next session should:
+
+1. Verify the BSS-zero loop in `boot.s` actually writes to the LOADED
+   binary's BSS, not the link-time address. A quick `objdump -t
+   bat_os | grep bss` against the final binary will show the link
+   addresses; the runtime loaded addresses come from the m1n1
+   chainload entry point. If they differ, rewrite the BSS loop to
+   use PC-relative addressing (e.g. `adrp x1, __bss_start; add x1,
+   x1, :lo12:__bss_start`).
+2. OR: zero the statics we actually use in Rust manually at the top
+   of `kernel_main_apple` before any static access.
+3. The positional-stripe infra is ready to be useful the moment we
+   get past `set_platform`. Currently it's never invoked because we
+   fault before reaching `discover_from_adt`.
+
+**Files touched:**
+- `src/main.rs`: `fb_stripe` helper, `adrp` VBAR install.
+- `src/drivers/apple/soc.rs`: `discover_from_adt` uses positional
+  stripes.
+
+---
+
 ## 2026-04-19 09:40 — Ubuntu — Bounded ADT walker + agent-assisted fixes
 
 **Landed two parallel research tracks** via sub-agent dispatch:
