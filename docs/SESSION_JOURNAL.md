@@ -11,6 +11,28 @@ end of a session.
 
 ---
 
+## 2026-04-18 (later still) — Mac — SSH bridge working
+
+**What:** Verified the Tailscale + SSH bridge from Mac → Ubuntu works.
+Username on Ubuntu is `kaden-lee` (NOT `kaden` as I'd assumed). Mac's
+`id_ed25519.pub` is in Ubuntu's `~/.ssh/authorized_keys`. From Mac
+side I can now run e.g.:
+
+```bash
+ssh kaden-lee@100.70.246.39 'cd ~/code/Bat_OS && git pull && ./scripts/chainload.sh'
+```
+
+This was a one-shot proof; no Bat_OS changes. INFRA.md updated with
+correct username + the verified SSH-works status.
+
+**Note for future Claudes:** when Mac side wants to drive Ubuntu,
+prefer `ssh kaden-lee@100.70.246.39 'CMD'` over asking the user to
+manually run things. Use scp for binary transfer. Do still keep the
+SESSION_JOURNAL convention so Ubuntu Claude (when it runs locally)
+also sees what happened.
+
+---
+
 ## 2026-04-18 (later) — Mac — Ubuntu host online
 
 **Goal:** Get the user's Windows PC repurposed as the persistent

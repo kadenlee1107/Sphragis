@@ -18,11 +18,19 @@ Claude should read this before any cross-machine command.
 ### Ubuntu dev box (the proxy host)
 - **Hostname:** `kaden-lee-AMD-Ryzen-7-8700F-8-Core-Processor`
 - **Tailscale IP:** `100.70.246.39`
-- **Linux user:** `kaden` (assumed; verify with `whoami`)
-- **Repo path:** `~/code/Bat_OS/` (assumed; user can `pwd` to confirm)
+- **Linux user:** `kaden-lee` (verified via SSH 2026-04-18)
+- **Repo path:** `/home/kaden-lee/code/Bat_OS/`
+- **Kernel:** Linux 6.17.0-20-generic x86_64
 - **Hardware:** AMD Ryzen 7 8700F 8-Core
 - **Role:** Persistent dev host. Drives m1n1 chainload via /dev/m1n1
   (or /dev/ttyACM0). Ubuntu Claude runs here.
+- **SSH from Mac works:** `ssh kaden-lee@100.70.246.39 ...`
+  Mac's `~/.ssh/id_ed25519.pub` is in
+  `/home/kaden-lee/.ssh/authorized_keys`.
+- **Note:** `/dev/ttyACM0` exists even when Mac is NOT in m1n1 — some
+  other USB CDC device is plugged in. When Mac IS in m1n1, m1n1 will
+  appear as `/dev/m1n1` (via the udev rule) or as a second ACM
+  number. Auto-detection in `scripts/chainload.sh` handles this.
 
 ## Tailscale
 
