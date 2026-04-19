@@ -820,56 +820,73 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         core::arch::asm!("dsb sy");
     }
 
-    // Live tick counter at the bottom — proof that Bat_OS is actively
-    // running, not frozen. Each iteration: paint the counter in yellow,
-    // spin a bit, increment.
+    // Live uptime + tick counter at the bottom. The ARM Generic Timer
+    // on Apple Silicon runs at 24 MHz (CNTFRQ_EL0 reports this); we
+    // read CNTPCT_EL0 each iteration to get real wall-clock uptime.
     let fb = 0x103e0050000usize as *mut u32;
     let stride_pixels: u32 = 0x2f40 / 4;
-    const TICK_BG: u32 = 0xC0000000;    // opaque black
-    const TICK_FG: u32 = 0xFFFFF800;    // bright yellow
-    let tick_scale: u32 = 3;
-    let tick_y: u32 = 1700;
+    const LINE_BG: u32 = 0xC0000000;    // opaque black
+    const LINE_FG: u32 = 0xFFFFF800;    // bright yellow
+    const LINE_FG2: u32 = 0xFF00FFFF;   // bright cyan
+    let scale: u32 = 3;
+    let y0: u32 = 1620;
+    let y1: u32 = 1720;
+
+    // Read CNTFRQ_EL0 once — documented as 24 MHz on Apple Silicon,
+    // verify at runtime.
+    let cntfrq: u64;
+    unsafe { core::arch::asm!("mrs {x}, cntfrq_el0", x = out(reg) cntfrq); }
+    let start: u64;
+    unsafe { core::arch::asm!("mrs {x}, cntpct_el0", x = out(reg) start); }
+
     let mut tick: u64 = 0;
     loop {
-        // Format "tick: <n>" into a stack buffer.
-        let mut buf = [0u8; 40];
-        let mut pos = 0usize;
-        for &b in b"tick: " {
-            if pos < buf.len() { buf[pos] = b; pos += 1; }
-        }
-        // Decimal tick.
-        let mut nbuf = [0u8; 20]; let mut np = 0usize;
-        let mut v = tick;
-        if v == 0 { nbuf[np] = b'0'; np += 1; }
-        while v > 0 && np < nbuf.len() {
-            nbuf[np] = b'0' + (v % 10) as u8;
-            np += 1;
-            v /= 10;
-        }
-        while np > 0 && pos < buf.len() {
-            np -= 1;
-            buf[pos] = nbuf[np]; pos += 1;
-        }
-        // Pad trailing chars with spaces so we overwrite the previous tick's
-        // tail (printed number may shrink e.g. 100 → 99). 20 trailing spaces
-        // is plenty for a u64.
-        while pos < buf.len() && pos < 26 {
-            buf[pos] = b' ';
-            pos += 1;
-        }
+        // Read current physical counter.
+        let now: u64;
+        unsafe { core::arch::asm!("mrs {x}, cntpct_el0", x = out(reg) now); }
+        let elapsed_ticks = now.wrapping_sub(start);
+        let elapsed_secs = if cntfrq > 0 { elapsed_ticks / cntfrq } else { 0 };
+        let mm = elapsed_secs / 60;
+        let ss = elapsed_secs % 60;
 
-        // Center it; draw_str_scaled writes background in its non-set bits
-        // so previous digits get naturally erased.
-        let s = unsafe { core::str::from_utf8_unchecked(&buf[..pos]) };
-        let w = (s.len() as u32) * ui::font::CHAR_W * tick_scale;
+        // Line 1: "uptime: MM:SS"
+        let mut buf = [b' '; 48];
+        let mut p = 0usize;
+        for &b in b"uptime: " { buf[p] = b; p += 1; }
+        // Zero-pad MM to at least 2 digits for visual stability.
+        if mm < 10 { buf[p] = b'0'; p += 1; }
+        let mut nb = [0u8; 16]; let mut np = 0usize; let mut v = mm;
+        if v == 0 { nb[np] = b'0'; np += 1; }
+        while v > 0 { nb[np] = b'0' + (v % 10) as u8; v /= 10; np += 1; }
+        while np > 0 { np -= 1; buf[p] = nb[np]; p += 1; }
+        buf[p] = b':'; p += 1;
+        buf[p] = b'0' + ((ss / 10) as u8); p += 1;
+        buf[p] = b'0' + ((ss % 10) as u8); p += 1;
+        // Pad so erasure on shrink works.
+        while p < 32 { buf[p] = b' '; p += 1; }
+        let s = unsafe { core::str::from_utf8_unchecked(&buf[..p]) };
+        let w = (s.len() as u32) * ui::font::CHAR_W * scale;
         let x = (3024u32.saturating_sub(w)) / 2;
-        ui::font::draw_str_scaled(fb, stride_pixels, x, tick_y, s,
-                                  TICK_FG, TICK_BG, tick_scale);
+        ui::font::draw_str_scaled(fb, stride_pixels, x, y0, s,
+                                  LINE_FG, LINE_BG, scale);
 
-        // Spin delay so adjacent ticks are visible. The M4 boot clock
-        // runs slow without cpufreq; ~20M iterations of empty asm is
-        // roughly a second at the observed rate.
-        for _ in 0..20_000_000u32 {
+        // Line 2: "tick: N"
+        let mut buf2 = [b' '; 48];
+        let mut q = 0usize;
+        for &b in b"tick: " { buf2[q] = b; q += 1; }
+        let mut nb2 = [0u8; 20]; let mut nq = 0usize; let mut vv = tick;
+        if vv == 0 { nb2[nq] = b'0'; nq += 1; }
+        while vv > 0 { nb2[nq] = b'0' + (vv % 10) as u8; vv /= 10; nq += 1; }
+        while nq > 0 { nq -= 1; buf2[q] = nb2[nq]; q += 1; }
+        while q < 32 { buf2[q] = b' '; q += 1; }
+        let s2 = unsafe { core::str::from_utf8_unchecked(&buf2[..q]) };
+        let w2 = (s2.len() as u32) * ui::font::CHAR_W * scale;
+        let x2 = (3024u32.saturating_sub(w2)) / 2;
+        ui::font::draw_str_scaled(fb, stride_pixels, x2, y1, s2,
+                                  LINE_FG2, LINE_BG, scale);
+
+        // Small spin so ticks aren't too fast to visually track.
+        for _ in 0..10_000_000u32 {
             unsafe { core::arch::asm!("", options(nomem, nostack, preserves_flags)); }
         }
         tick = tick.wrapping_add(1);
