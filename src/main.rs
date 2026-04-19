@@ -819,8 +819,61 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
 
         core::arch::asm!("dsb sy");
     }
-    // Halt. If we see "BAT_OS" on the Mac screen, we've arrived.
-    loop { unsafe { core::arch::asm!("wfe"); } }
+
+    // Live tick counter at the bottom — proof that Bat_OS is actively
+    // running, not frozen. Each iteration: paint the counter in yellow,
+    // spin a bit, increment.
+    let fb = 0x103e0050000usize as *mut u32;
+    let stride_pixels: u32 = 0x2f40 / 4;
+    const TICK_BG: u32 = 0xC0000000;    // opaque black
+    const TICK_FG: u32 = 0xFFFFF800;    // bright yellow
+    let tick_scale: u32 = 3;
+    let tick_y: u32 = 1700;
+    let mut tick: u64 = 0;
+    loop {
+        // Format "tick: <n>" into a stack buffer.
+        let mut buf = [0u8; 40];
+        let mut pos = 0usize;
+        for &b in b"tick: " {
+            if pos < buf.len() { buf[pos] = b; pos += 1; }
+        }
+        // Decimal tick.
+        let mut nbuf = [0u8; 20]; let mut np = 0usize;
+        let mut v = tick;
+        if v == 0 { nbuf[np] = b'0'; np += 1; }
+        while v > 0 && np < nbuf.len() {
+            nbuf[np] = b'0' + (v % 10) as u8;
+            np += 1;
+            v /= 10;
+        }
+        while np > 0 && pos < buf.len() {
+            np -= 1;
+            buf[pos] = nbuf[np]; pos += 1;
+        }
+        // Pad trailing chars with spaces so we overwrite the previous tick's
+        // tail (printed number may shrink e.g. 100 → 99). 20 trailing spaces
+        // is plenty for a u64.
+        while pos < buf.len() && pos < 26 {
+            buf[pos] = b' ';
+            pos += 1;
+        }
+
+        // Center it; draw_str_scaled writes background in its non-set bits
+        // so previous digits get naturally erased.
+        let s = unsafe { core::str::from_utf8_unchecked(&buf[..pos]) };
+        let w = (s.len() as u32) * ui::font::CHAR_W * tick_scale;
+        let x = (3024u32.saturating_sub(w)) / 2;
+        ui::font::draw_str_scaled(fb, stride_pixels, x, tick_y, s,
+                                  TICK_FG, TICK_BG, tick_scale);
+
+        // Spin delay so adjacent ticks are visible. The M4 boot clock
+        // runs slow without cpufreq; ~20M iterations of empty asm is
+        // roughly a second at the observed rate.
+        for _ in 0..20_000_000u32 {
+            unsafe { core::arch::asm!("", options(nomem, nostack, preserves_flags)); }
+        }
+        tick = tick.wrapping_add(1);
+    }
     #[allow(unreachable_code)]
     if false {
 
