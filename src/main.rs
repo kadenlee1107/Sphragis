@@ -676,10 +676,16 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     // Colors chosen to be progressively distinctive; the LAST one
     // painted before a halt / fault stripe tells us how far we got.
     //
-    // K1: about to call mm::init — SKY BLUE (0xC006A3FF)
+    // K1: about to init heap — SKY BLUE (0xC006A3FF)
     unsafe { fb_hold(0xC006A3FF); }
-    // kernel::mm::init();   // M4 bring-up: skip, faults — revisit heap setup
-    // K2: mm skipped — LIME YELLOW (0xFBFFC000)
+    // TEMP: skip heap::init — it hangs (not faults) on M4, probably
+    // because linked_list_allocator internally expects the memory
+    // region to be a specific alignment/type. Leave heap uninitialized;
+    // downstream code that uses `alloc` will panic, but the splash
+    // path below doesn't need it.
+    let _heap_base = ((args.top_of_kernel_data() as usize) + 0xFFFF) & !0xFFFF;
+    // kernel::mm::heap::init(heap_base);
+    // K2: heap init skipped — LIME YELLOW (0xFBFFC000)
     unsafe { fb_hold(0xFBFFC000); }
     kernel::process::init();
     // K3: process ok — SPRING GREEN (0xC007FC28)
@@ -718,6 +724,22 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         const FG_SUB:   u32 = 0xFF40C0FF;   // cool blue
         const FG_DIM:   u32 = 0xFF808080;   // gray
         const BG:       u32 = 0xC0000000;   // opaque black
+
+        // ASCII bat logo (3 rows, 2x scale). Yellow on black.
+        let logo = [
+            "  /|.______________.|\\  ",
+            "     /__.--.  .--.__\\     ",
+            "        \\/    \\/        ",
+        ];
+        let logo_scale: u32 = 4;
+        let logo_w = (logo[0].len() as u32) * ui::font::CHAR_W * logo_scale;
+        let logo_x = (3024u32.saturating_sub(logo_w)) / 2;
+        let logo_y: u32 = 200;
+        for (i, line) in logo.iter().enumerate() {
+            let y = logo_y + (i as u32) * ui::font::CHAR_H * logo_scale;
+            ui::font::draw_str_scaled(fb, stride_pixels, logo_x, y,
+                                      line, FG_TITLE, BG, logo_scale);
+        }
 
         let title = "BAT_OS";
         let ts: u32 = 8;   // title scale
