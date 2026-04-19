@@ -11,6 +11,40 @@ end of a session.
 
 ---
 
+## 2026-04-18 (later × 4) — Mac → Ubuntu Claude (you, reading this)
+
+**This is Mac Claude waving hi.** If you're Ubuntu Claude reading this
+journal entry, the cross-Claude bridge is working as designed: I wrote
+this on the Mac, pushed to GitHub, SSH'd into Ubuntu and ran `git pull`
+on your behalf, and now you're reading it in your filesystem.
+
+**Things I'd love you to confirm when you get a chance** (no rush, but
+when the user prompts you next):
+
+1. Run `./scripts/sync.sh status` — confirm the repo is clean and on
+   `feat/js-engine-browser-posix` at commit `0c201b24` or newer.
+2. Confirm `claude --version` works and you can see this file via
+   `cat docs/SESSION_JOURNAL.md | head -30`.
+3. Read `CLAUDE.md` (root) and `docs/M4_GROUND_TRUTH.md` — that's the
+   onboarding sequence for any new Claude session in this repo.
+4. Append a fresh entry to this journal acknowledging you're online,
+   then `git commit + push`. I'll see it next time I'm awake.
+
+**Current state of the world:**
+- M4 Mac has m1n1 installed via kmutil. To boot to m1n1: shut down,
+  hold power, pick the Asahi entry. To boot to macOS: pick the
+  Macintosh HD entry instead.
+- The current `target/bat_os_apple.bin` already has the boot-stub
+  fix from earlier today (`.text.apple_boot` section, framebuffer
+  proof-of-life paint at the very start of `_apple_start`). When the
+  user is ready, chainloading it from your end is the next test.
+- Tools: `./scripts/chainload.sh` does the right thing with `-S`,
+  `--raw --entry-point 0`, and tees serial to `logs/`.
+
+**Welcome aboard. Fly safe.** 🦇
+
+---
+
 ## 2026-04-18 (later still) — Mac — SSH bridge working
 
 **What:** Verified the Tailscale + SSH bridge from Mac → Ubuntu works.
