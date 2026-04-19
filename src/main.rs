@@ -477,8 +477,53 @@ fn serial_shell() -> ! {
 
 global_asm!(include_str!("arch/aarch64/apple/boot.s"));
 
+// (apple_diag_band helper was removed — diagnostic bands from the
+// bring-up bisection are all commented out below and will be deleted
+// in a follow-up now that mm/heap/process/scheduler/ipc/arch/aic all
+// reach cleanly on M4.)
+
+// Early-boot exception vectors. m1n1 clears VBAR during chainload,
+// so until `kernel::arch::init_exceptions()` installs the real
+// handlers we have no handler for synchronous/SError faults — any
+// fault cascades into an exception loop the iBoot watchdog then
+// resets. This minimal 16-entry vector table silently WFEs on any
+// exception so the CPU parks cleanly instead of resetting the Mac.
+global_asm!(r#"
+.section .text.apple_boot
+.balign 2048
+.global _bat_os_early_vbar
+_bat_os_early_vbar:
+.rept 16
+    b   _bat_os_early_fault
+    .balign 128
+.endr
+_bat_os_early_fault:
+1:  wfe
+    b   1b
+"#);
+
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_args::BootArgsRaw) -> ! {
+    // Install the early VBAR at whichever EL we're at. m1n1 hands
+    // off at EL2 on M4, but paths that enter at EL1 exist; cover
+    // both. `adrp + :lo12:` is required because `adr` has only
+    // ±1 MiB range and the vectors live at the top of the binary.
+    unsafe {
+        core::arch::asm!(
+            "mrs   x1, CurrentEL",
+            "adrp  x0, _bat_os_early_vbar",
+            "add   x0, x0, #:lo12:_bat_os_early_vbar",
+            "cmp   x1, #0x8",
+            "b.ne  1f",
+            "msr   vbar_el2, x0",
+            "b     2f",
+            "1:    msr  vbar_el1, x0",
+            "2:    isb",
+            out("x0") _,
+            out("x1") _,
+        );
+    }
+
     // Set platform to Apple Silicon
     platform::set_platform(platform::Platform::AppleSilicon);
 
@@ -518,7 +563,7 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     };
 
     // Initialize Apple UART for serial output (now uses the address
-    // resolved from the ADT).
+    // resolved from the ADT). On M4 this is the dockchannel UART.
     drivers::apple::uart::init();
     drivers::apple::uart::puts("\n");
     drivers::apple::uart::puts("================================================\n");
@@ -543,14 +588,22 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     // Initialize kernel core
     drivers::apple::uart::puts("[boot] Initializing microkernel...\n");
     kernel::mm::init();
+    // DIAG bands post subsequent init stages so we can pinpoint where
+    // we hang. Removed once all stages pass.
+    // apple_diag_band(1750, 1770, 0xC00FFC00); // bright green — post mm::init
     kernel::process::init();
+    // apple_diag_band(1770, 1790, 0xFFFFC000); // yellow — post process::init
     kernel::scheduler::init();
+    // apple_diag_band(1790, 1810, 0xFFF80000); // orange — post scheduler::init
     kernel::ipc::init();
+    // apple_diag_band(1810, 1830, 0xFFF003FF); // magenta — post ipc::init
     kernel::arch::init_exceptions();
+    // apple_diag_band(1830, 1850, 0xC00003FF); // blue — post arch::init_exceptions
 
     // Initialize Apple Interrupt Controller
     drivers::apple::uart::puts("[boot] Initializing AIC2...\n");
     drivers::apple::aic::init();
+    // apple_diag_band(1850, 1870, 0xC00FFFFF); // cyan — post aic::init
 
     // V-ASAHI-3.5: bring up every peripheral module that has a
     // hardware-access entry point. Prints a compact status line so we
@@ -558,7 +611,9 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     // Failures here are NOT fatal — missing peripherals are legitimate
     // on some boards.
     let bu = drivers::apple::bring_up_all();
+    // apple_diag_band(1870, 1890, 0xE00003FF);  // violet — post bring_up_all
     drivers::apple::print_bring_up_report(&bu);
+    // apple_diag_band(1890, 1910, 0xFFF80000);  // orange — post print_bring_up_report
 
     // ATTACK-CRYPTO-004 / FLv2-NEW-006: Apple path currently falls back
     // to the dev default (empty input) because the Apple UART driver has
@@ -579,17 +634,22 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         &passphrase_buf[..passphrase_len]
     };
     let master_key = derive_batfs_key(passphrase_slice);
+    // apple_diag_band(1910, 1925, 0xFFFFC000);  // yellow — post derive_batfs_key
     fs::batfs::init(&master_key);
+    // apple_diag_band(1925, 1940, 0xC00FFC00);  // green — post batfs::init
     drivers::apple::uart::puts("[boot] BatFS initialized (key=KDF(passphrase))\n");
 
     // Initialize display (m1n1 simple framebuffer)
     drivers::apple::uart::puts("[boot] Initializing display...\n");
     if drivers::apple::dcp::init_simple_fb() {
+        // apple_diag_band(1940, 1955, 0xC00FFFFF);  // cyan — post dcp::init_simple_fb
         drivers::apple::uart::puts("[boot] Display ready — drawing splash\n");
         // V-ASAHI-2.1: render the boot splash so the operator sees on
         // the actual display (not just over USB serial) that Bat_OS
         // owns the M4. Fills the framebuffer m1n1 set up.
         drivers::apple::dcp::boot_splash();
+        // At this point boot_splash has overwritten the FB with the
+        // real Bat_OS splash; no more diag bands make sense.
         drivers::apple::uart::puts("[boot] Splash rendered — launching desktop\n\n");
 
         // Initialize SPI keyboard

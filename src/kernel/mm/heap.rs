@@ -11,9 +11,10 @@
 // reserved in the frame bitmap via frame::reserve_range.
 
 use core::alloc::{GlobalAlloc, Layout};
+use core::cell::UnsafeCell;
 use core::ptr;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use linked_list_allocator::LockedHeap;
+use linked_list_allocator::Heap;
 
 pub const KERNEL_HEAP_SIZE: usize = 4 * 1024 * 1024; // 4 MB
 
@@ -26,18 +27,30 @@ pub fn kernel_heap_base() -> usize { HEAP_BASE.load(Ordering::Acquire) }
 pub fn kernel_heap_size() -> usize { KERNEL_HEAP_SIZE }
 
 #[global_allocator]
-static ALLOCATOR: KernelAllocator = KernelAllocator { inner: LockedHeap::empty() };
+static ALLOCATOR: KernelAllocator = KernelAllocator {
+    inner: UnsafeCell::new(Heap::empty()),
+};
 
+/// Single-CPU allocator — we hold IRQs off during the allocation
+/// critical section instead of using a mutex.
+///
+/// Previously this was `spin::Mutex<Heap>` (via `LockedHeap`). On
+/// Apple Silicon with the MMU disabled (which is how m1n1 hands off
+/// on M4), every memory access is Device-nGnRnE, and LDXR/STXR on
+/// Device memory have unpredictable behavior — specifically, STXR
+/// always fails. `spin::Mutex::lock()` uses `AtomicBool::
+/// compare_exchange_weak`, so the lock spin never makes progress and
+/// `heap::init` hangs forever. Since Bat_OS is single-CPU during
+/// bring-up (we chainload with `-S`), the mutex was just a nicety;
+/// masking IRQs is enough mutual exclusion.
 pub struct KernelAllocator {
-    inner: LockedHeap,
+    inner: UnsafeCell<Heap>,
 }
 
-/// V6-TOCTOU-007 fix: mask IRQs while holding the allocator spinlock.
-/// `linked_list_allocator::LockedHeap` uses `spin::Mutex` which is NOT
-/// reentrant. If a timer IRQ fires while EL1 holds the lock and the
-/// IRQ handler itself tries to allocate (e.g. logs that touch heap-
-/// backed strings), we spin forever waiting for ourselves. Mask DAIF.I
-/// during the critical section to prevent IRQ re-entry.
+/// SAFETY: single-CPU, and every allocation masks IRQs before touching
+/// the inner heap.
+unsafe impl Sync for KernelAllocator {}
+
 #[inline(always)]
 unsafe fn irq_save() -> u64 {
     let prev: u64;
@@ -59,39 +72,37 @@ unsafe fn irq_restore(prev: u64) {
 unsafe impl GlobalAlloc for KernelAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let saved = irq_save();
-        let result = match self.inner.lock().allocate_first_fit(layout) {
+        let heap = &mut *self.inner.get();
+        let result = match heap.allocate_first_fit(layout) {
             Ok(p) => p.as_ptr(),
             Err(_) => ptr::null_mut(),
         };
         irq_restore(saved);
         result
     }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // V5-KMEM-002 fix: zero the chunk before returning it to the
-        // free list so residue (X.509 cert DER, SPKI bytes, TLS
-        // transcript hashes) doesn't linger for the next allocator
-        // client to read. Uses write_volatile so LLVM can't elide.
-        if !ptr.is_null() {
+    unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
+        if !p.is_null() {
+            // V5-KMEM-002: scrub before returning memory to the free list.
             for i in 0..layout.size() {
-                core::ptr::write_volatile(ptr.add(i), 0);
+                core::ptr::write_volatile(p.add(i), 0);
             }
         }
         let saved = irq_save();
-        if let Some(nn) = core::ptr::NonNull::new(ptr) {
-            self.inner.lock().deallocate(nn, layout);
+        if let Some(nn) = core::ptr::NonNull::new(p) {
+            let heap = &mut *self.inner.get();
+            heap.deallocate(nn, layout);
         }
         irq_restore(saved);
     }
 }
 
 /// Initialize the kernel heap. Call once from early boot, before any
-/// `Box`/`Vec`/`String` is used. `base` MUST be page-aligned and live
-/// inside kernel-RAM (L2_high mapping) but NOT inside the baked
-/// content_shell blob — caller (mm::init) computes blob_end + 1 page.
+/// `Box`/`Vec`/`String` is used. `base` MUST be page-aligned.
 pub fn init(base: usize) {
     HEAP_BASE.store(base, Ordering::Release);
     unsafe {
-        ALLOCATOR.inner.lock().init(base as *mut u8, KERNEL_HEAP_SIZE);
+        let heap = &mut *ALLOCATOR.inner.get();
+        heap.init(base as *mut u8, KERNEL_HEAP_SIZE);
     }
 }
 

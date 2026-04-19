@@ -1,49 +1,63 @@
 #![allow(dead_code)]
-// Bat_OS — Apple Silicon UART Driver
-// Samsung S5L-derived UART found on all Apple Silicon SoCs.
-// m1n1 exposes serial over USB-C, this driver talks directly to the UART block.
-// Reference: Asahi Linux drivers/tty/serial/samsung_s5l.c
+// Bat_OS — Apple Silicon Dockchannel UART driver.
+//
+// On M4 (and M2+ generally) the serial console is the "dockchannel"
+// UART — a small FIFO-based block at 0x3_8812_8000 on T8132 with
+// u32-register width. It is NOT a Samsung S5L UART (that's the
+// M1-era block at a different address with different semantics).
+//
+// Register offsets and protocol ported from
+// `external/m1n1/src/dockchannel_uart.c`:
+//
+//   DATA_TX8       = 0x4004  (write byte to TX FIFO)
+//   DATA_TX_FREE   = 0x4014  (u32: bytes free in TX FIFO — wait for >0)
+//   DATA_RX8       = 0x401c  (u32: RX byte in bits [15:8])
+//   DATA_RX_COUNT  = 0x402c  (u32: bytes available in RX FIFO)
+//
+// m1n1 guarantees the block is already clocked and configured when
+// it hands off, so we don't need an explicit `init()` — just respect
+// TX_FREE before writing.
 
 use super::soc;
 
-// S5L UART Register Offsets
-const ULCON: usize = 0x000;    // Line control
-const UCON: usize = 0x004;     // Control
-const UFCON: usize = 0x008;    // FIFO control
-const UTRSTAT: usize = 0x010;  // TX/RX status
-const UTXH: usize = 0x020;     // TX buffer
-const URXH: usize = 0x024;     // RX buffer
+const DATA_TX8:       usize = 0x4004;
+const DATA_TX_FREE:   usize = 0x4014;
+const DATA_RX8:       usize = 0x401c;
+const DATA_RX_COUNT:  usize = 0x402c;
 
-// Status bits
-const UTRSTAT_TXBE: u32 = 1 << 1;  // TX buffer empty
-const UTRSTAT_RXDA: u32 = 1 << 0;  // RX data available
-
+#[inline(always)]
 fn read32(offset: usize) -> u32 {
     unsafe { core::ptr::read_volatile((soc::uart0_base() + offset) as *const u32) }
 }
 
+#[inline(always)]
 fn write32(offset: usize, val: u32) {
     unsafe { core::ptr::write_volatile((soc::uart0_base() + offset) as *mut u32, val) }
 }
 
-/// Initialize the UART (assumes m1n1 already configured baud rate).
-pub fn init() {
-    // UART is typically already initialized by m1n1.
-    // We just ensure FIFO is enabled and TX/RX are active.
-    write32(UFCON, 0x1); // Enable FIFO
-    write32(UCON, 0x5);  // Enable TX and RX, polling mode
-}
+/// Initialize the dockchannel UART. Nothing to do — m1n1 already
+/// configured the baud rate and enabled it. Kept as a function so
+/// existing `drivers::apple::uart::init()` callers still compile.
+pub fn init() {}
 
-/// Wait for TX buffer space and send a byte.
+/// Send one byte. Waits for TX FIFO space but bails after a bounded
+/// number of spins so a misconfigured UART doesn't hang the whole
+/// kernel. The upper cap is generous — ~a million iterations is
+/// microseconds on real hardware but a hundred ms or so at M4's slow
+/// pre-cpufreq boot clock.
 pub fn putc(c: u8) {
-    // Wait for TX buffer empty
-    while read32(UTRSTAT) & UTRSTAT_TXBE == 0 {
+    let mut guard: u32 = 1_000_000;
+    while read32(DATA_TX_FREE) == 0 {
+        guard = guard.saturating_sub(1);
+        if guard == 0 {
+            return;                    // give up rather than hang
+        }
         core::hint::spin_loop();
     }
-    write32(UTXH, c as u32);
+    write32(DATA_TX8, c as u32);
 }
 
-/// Print a string.
+/// Print a string. Translates `\n` to CRLF for serial.
 pub fn puts(s: &str) {
     for byte in s.bytes() {
         if byte == b'\n' {
@@ -53,7 +67,7 @@ pub fn puts(s: &str) {
     }
 }
 
-/// Print `val` as 8 hex digits (upper case, no prefix).
+/// Print `val` as 8 hex digits (lower case, no prefix).
 pub fn puthex32(val: u32) {
     const HX: &[u8; 16] = b"0123456789abcdef";
     for i in (0..8).rev() {
@@ -68,15 +82,18 @@ pub fn puthex64(val: u64) {
     puthex32(val as u32);
 }
 
-/// Check if a character is available.
+/// True if a byte is available in the RX FIFO.
 pub fn has_char() -> bool {
-    read32(UTRSTAT) & UTRSTAT_RXDA != 0
+    read32(DATA_RX_COUNT) != 0
 }
 
-/// Read a character (non-blocking).
+/// Non-blocking read — returns `Some(b)` when a byte is ready,
+/// `None` otherwise.
 pub fn getc() -> Option<u8> {
     if has_char() {
-        Some((read32(URXH) & 0xFF) as u8)
+        // m1n1 extracts the byte from bits [15:8]; match their
+        // protocol.
+        Some(((read32(DATA_RX8) >> 8) & 0xFF) as u8)
     } else {
         None
     }

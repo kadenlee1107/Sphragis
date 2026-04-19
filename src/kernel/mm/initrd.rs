@@ -18,7 +18,7 @@
 
 #![allow(dead_code)]
 
-use crate::drivers::uart;
+use crate::platform;
 
 unsafe extern "C" {
     static __kernel_end: u8;
@@ -109,15 +109,15 @@ pub fn init() {
     ensure_cached();
     match info() {
         Some(bi) => {
-            uart::puts("[initrd] Chromium blob: ");
+            platform::serial_puts("[initrd] Chromium blob: ");
             let mb = bi.size / (1024 * 1024);
             crate::kernel::mm::print_num(mb);
-            uart::puts(" MB, CRC ");
-            uart::puts(if bi.crc_valid { "OK" } else { "MISMATCH" });
-            uart::puts("\n");
+            platform::serial_puts(" MB, CRC ");
+            platform::serial_puts(if bi.crc_valid { "OK" } else { "MISMATCH" });
+            platform::serial_puts("\n");
         }
         None => {
-            uart::puts("[initrd] no blob\n");
+            platform::serial_puts("[initrd] no blob\n");
         }
     }
 }

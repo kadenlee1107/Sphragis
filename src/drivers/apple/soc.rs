@@ -123,7 +123,7 @@ pub fn discover_from_adt(adt: &super::adt::Adt) -> usize {
     //   dart-usb → dart-usb0  (M4 numbers its USB DARTs: 0, 1, 3)
     //   dart-ans → sart-ans   (ANS uses SART, not DART, on M4)
     let table: &[(&str, &AtomicUsize)] = &[
-        ("/arm-io/uart0",      &UART0_BASE_RT),
+        ("/arm-io/dockchannel-uart", &UART0_BASE_RT),
         ("/arm-io/aic",        &AIC_BASE_RT),
         ("/arm-io/disp0",      &DCP_BASE_RT),
         ("/arm-io/dart-disp0", &DCP_DART_RT),
