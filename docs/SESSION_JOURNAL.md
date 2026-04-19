@@ -11,6 +11,94 @@ end of a session.
 
 ---
 
+## 2026-04-19 01:55 — Ubuntu — Rust-side bring-up past `args.adt()`
+
+**Big session.** Started with a cold repo on Ubuntu and drove Bat_OS
+up the stack from "chainload dies silent" to "Rust reaches
+`discover_from_adt`". Three root causes fixed, one more localized.
+
+**Workflow that finally paid off:** camera (Lumix S1 II) → Cam Link 4K
+→ Ubuntu `/dev/video0`. Bat_OS's own dockchannel UART is invisible to
+us (m1n1's USB gadget is gone after handoff), so I used full-FB
+color paints as "printf with pixels" — each Rust checkpoint repaints
+the whole screen a distinct ARGB2101010 color, and a 5 fps ffmpeg
+burst catches whichever one we halt at. Bisected forward through
+`kernel_main_apple` by moving an explicit `wfe`-halt past one Rust
+statement at a time.
+
+**Root causes fixed:**
+
+1. `.cargo/config.toml` — `build-std = ["core"]` became
+   `["core", "alloc"]`. Current deps (`der`, `spki`, `x509-cert`,
+   `linked_list_allocator`) all `extern crate alloc`; with just
+   `core` in build-std every release build failed with `can't find
+   crate for alloc`. Mac side was masked by an old `target/` cache
+   from before those crypto deps landed.
+2. `src/arch/aarch64/apple/boot.s` — three fixes:
+   - Documented ARGB2101010 FB format (see M4_GROUND_TRUTH §3.1b).
+     Our old "opaque red" pixel `0xFFFF0000` was actually bright
+     yellow on hardware.
+   - Dropped the MPIDR `Aff0==0` primary-core gate. M4's boot P-core
+     has nonzero Aff0 (`smp_id=0x6` observed), so the gate silently
+     WFE-halted every chainload. m1n1 `-S` already hands us one core.
+   - Added five asm stage markers (yellow / blue / green / magenta /
+     white) so we could see how far the asm bootstrap got.
+3. `src/drivers/apple/boot_args.rs::parse` — the `.devtree` pointer
+   from m1n1 is a **virtual** address, not phys. Translate with
+   `phys = virt - virt_base + phys_base` (matches m1n1's own
+   `src/startup.c:172`). Also relaxed the over-tight
+   `devtree_addr >= phys_base` sanity check that was rejecting every
+   valid value m1n1 sends on M4.
+
+**Rust checkpoint status (color-coded, see `src/main.rs:482+`):**
+
+| Checkpoint | Color | Status |
+|---|---|---|
+| R1 entry | orange | ✅ reached |
+| R2 post-set_platform | dark orange | ✅ reached |
+| R3 post `boot_args::parse` | teal | ✅ reached |
+| R3a post `stash` | navy | ✅ reached |
+| R3b post `args.video()` | pink | ✅ reached |
+| R3c post `set_fb_info` | lime | ✅ reached |
+| R3d post `set_mem_info` | salmon | ✅ reached |
+| R4a pre `args.adt()` | purple | ✅ reached |
+| R4b post `args.adt()` OK | cyan | ✅ reached |
+| R5 post `discover_from_adt` | brown | ❌ **hangs** — bypassed with `return 0` to keep moving |
+
+**Next hunt.** `drivers::apple::soc::discover_from_adt` iterates 9
+ADT paths via `lookup_reg0`. One of them hangs (probably in
+traversal reading a malformed offset). Plan: add a pre-lookup paint
+per path so the last color identifies which path blew up.
+
+**Operational notes for next Claude:**
+- Ubuntu `chainload.sh` now auto-uses the right interface thanks to
+  `scripts/fix-udev.sh` (installed in /etc/udev/rules.d/99-m1n1.rules
+  to match `bInterfaceNumber==00`, PIPE_0 = proxy). /dev/m1n1 now
+  symlinks the proxy side (previously silently pointed at the
+  one-way virtual-UART).
+- `scripts/install-sudoers.sh` drops a scoped NOPASSWD sudoers for
+  `python3 chainload.py *` so chainload runs without prompting.
+- Camera feed is flaky if the Lumix auto-sleeps; kick the camera
+  before each capture run. Cam Link's solid-white LED means "USB
+  powered", NOT "HDMI signal locked" — check `v4l2-ctl -d
+  /dev/video0 --query-dv-timings` to confirm signal.
+- M4 Mac resets itself every ~20-60 s even when Bat_OS is halted
+  cleanly (iBoot watchdog we can't reach). Every chainload is
+  therefore against a FRESH m1n1 session — virt_base etc vary per
+  run. `M1N1WAIT=1` env var makes chainload.py wait for the device
+  to reappear if we race a reset.
+
+**Files touched this session:**
+- `src/arch/aarch64/apple/boot.s` (heavy rewrite)
+- `src/main.rs` (fb_mark helper + Rust stage markers in `kernel_main_apple`)
+- `src/drivers/apple/boot_args.rs` (devtree virt→phys, looser bounds)
+- `.cargo/config.toml` (add alloc to build-std)
+- `scripts/install-sudoers.sh` (NEW)
+- `scripts/fix-udev.sh` (NEW)
+- `docs/M4_GROUND_TRUTH.md` (FB format §3.1b + §2 new facts)
+
+---
+
 ## 2026-04-18 23:43 — Ubuntu — Ubuntu Claude online
 
 **Who/where/when.**

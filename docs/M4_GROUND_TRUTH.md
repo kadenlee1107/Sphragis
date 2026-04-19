@@ -54,6 +54,26 @@ are written. When transcribed to C `#define` form, drop the underscores.
   with `--skip-secondary-cpus` / `-S` (applied in
   `external/m1n1/proxyclient/tools/chainload.py`). Single-core boot is
   fine for bring-up.
+- **MPIDR Aff0 is NOT 0 on the boot CPU.** The classic "primary core"
+  gate `and x1, mpidr, #0xff; cbnz x1, halt` silently WFE-halts on M4.
+  Observed: boot `smp_id=0x6` (a P-core). Since chainload uses `-S`,
+  exactly one CPU enters our payload, so no primary-core gate is
+  needed — just drop it. Src: `src/arch/aarch64/apple/boot.s` now
+  omits the gate.
+- **m1n1 disables MMU before handoff.** After `p.reload()`, the payload
+  runs with MMU off, flat physical addressing. Boot-args fields that
+  m1n1 stored as **virtual** pointers (notably `.devtree`) must be
+  translated before we can dereference them:
+  `phys = virt - virt_base + phys_base` (per m1n1's own
+  `src/startup.c:172`). Observed `virt_base` varies across boots —
+  sometimes kernel-high (`0xffffffffff...`), sometimes low
+  (`0x14798000`-ish) depending on m1n1's relocation seed — but the
+  formula holds in every case. Src: `src/drivers/apple/boot_args.rs::parse`.
+- **WDT is disabled by m1n1.** Our Bat_OS can sit at `wfe` forever
+  post-chainload without triggering reset (m1n1 prints `WDT disabled`
+  during init). Mac does still spontaneously reset on its own timer
+  though — probably iBoot watchdog outside m1n1's reach. Expect
+  unpredictable reboots every ~20–60 s of m1n1-idle.
 - **MCC and cpufreq are unknown versions.** m1n1 logs
   `MCC: Unsupported version:mcc,t8132` and
   `cpufreq: Chip 0x8132 is unsupported`. Non-fatal — m1n1 uses safe
@@ -73,8 +93,40 @@ All addresses below confirmed from ADT walks on live M4 hardware.
 | Block | Base | Size | Notes |
 |---|---|---|---|
 | **PMGR (Power Manager)** | `0x0000_0003_8070_0000` | per-device | device regs at `pmgr_base + 0x00_04a8+` etc., see §6 |
-| **Framebuffer** | `0x0000_0103_e005_0000` | 3024×1964×4B stride `0x2f40` | m1n1 leaves this active; 30bpp |
+| **Framebuffer** | `0x0000_0103_e005_0000` | 3024×1964×4B stride `0x2f40` | m1n1 leaves this active; 30bpp — see §3.1b for pixel format |
 | **Dockchannel UART** | `0x0000_0003_8812_8000` | — | This is what m1n1 actually uses; NOT the classic PL011 at 0x9000000 (that's QEMU virt). Our Apple UART driver needs to target this. |
+
+### 3.1b Framebuffer pixel format — observed 2026-04-19
+
+The FB at `0x103e0050000` is **30bpp packed ARGB2101010** (alpha first, 10
+bits per channel), little-endian 32-bit words:
+
+```
+bits [31:30] = A  (2 bits)
+bits [29:20] = R  (10 bits, 0..0x3FF)
+bits [19:10] = G  (10 bits, 0..0x3FF)
+bits [ 9: 0] = B  (10 bits, 0..0x3FF)
+```
+
+This is NOT ARGB8888. A naive paint of `0xFFFF0000` (trying for full red
+in 32-bit ARGB) decodes in this format as:
+`A=3, R=0x3FF, G=0x3C0 (high), B=0` → bright yellow/gold. We verified by
+paint experiment: writing that pixel lights up the M4 screen yellow, not
+red. Pure-channel encodings we use for bring-up stage markers:
+
+| Color | Pixel value | A | R | G | B |
+|---|---|---|---|---|---|
+| Red | `0xFFF00000` | 3 | 0x3FF | 0 | 0 |
+| Green | `0xC00FFC00` | 3 | 0 | 0x3FF | 0 |
+| Blue | `0xC00003FF` | 3 | 0 | 0 | 0x3FF |
+| White | `0xFFFFFFFF` | 3 | max | max | max |
+| Cyan | `0xC00FFFFF` | 3 | 0 | max | max |
+| Magenta | `0xFFF003FF` | 3 | max | 0 | max |
+
+Row stride is `0x2f40` = `3024 * 4` — exactly packed, no padding. Full
+FB size = `3024 * 1964 * 4 ≈ 22.66 MiB`. Our bring-up `fb_mark` writes
+16 MiB which covers ~69% of rows; the bottom ~30% stays with whatever
+m1n1 had rendered. That's fine for visual debug, still hugely visible.
 
 ### 3.2 USB (DWC3 + XHCI + ATC PHY)
 

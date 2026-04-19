@@ -477,10 +477,52 @@ fn serial_shell() -> ! {
 
 global_asm!(include_str!("arch/aarch64/apple/boot.s"));
 
+// ─── FB marker for early-Rust bring-up ─────────────────────────────
+// Paints the whole M4 framebuffer with a given 32-bit ARGB2101010
+// pixel. Used to prove which Rust checkpoint we last reached before a
+// crash. Pixel format: bits[31:30]=A, [29:20]=R, [19:10]=G, [9:0]=B.
+// Examples (each 10-bit channel max = 0x3FF):
+//   0xFFF00000  pure red       A=3, R=max, G=0, B=0
+//   0xC00FFC00  pure green
+//   0xC00003FF  pure blue
+//   0xFFF003FF  magenta
+//   0xC00FFFFF  cyan
+//   0xFFFFFFFF  white
+//   0xFFF80000  orange         R=max, G=0x200
+//   0xE00C0000  dark-orange    R=0x200, G=0x300
+#[inline(never)]
+unsafe fn fb_mark(pixel: u32) {
+    let fb = 0x103e0050000usize as *mut u32;
+    // 16 MiB worth of 4-byte pixels = 4 M pixels, enough to fill most
+    // of the 3024x1964 FB (~23.6 MiB). Faster than full fill and still
+    // visually unambiguous on a camera grab.
+    let count: usize = 0x01000000 / 4;
+    for i in 0..count {
+        core::ptr::write_volatile(fb.add(i), pixel);
+    }
+    core::arch::asm!("dsb sy");
+}
+
+// fb_hold is now an alias for fb_mark — the delay loop version was
+// taking many seconds per stage at M4's slow pre-cpufreq clock. We'll
+// rely on placing explicit stops (WFE loops) at specific checkpoints
+// instead of per-stage dwell.
+#[inline(never)]
+unsafe fn fb_hold(pixel: u32) {
+    fb_mark(pixel);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_args::BootArgsRaw) -> ! {
+    // R1: Rust entered. ORANGE. If we see orange, the asm→Rust handoff
+    // worked and we cleared the function prologue.
+    unsafe { fb_hold(0xFFF80000); }
+
     // Set platform to Apple Silicon
     platform::set_platform(platform::Platform::AppleSilicon);
+
+    // R2: post-set_platform. DARK-ORANGE.
+    unsafe { fb_hold(0xE00C0000); }
 
     // V-ASAHI-1: parse m1n1 boot args with full validation (revision
     // check, devtree-bounds check, plausibility caps). On any failure
@@ -490,32 +532,50 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     let args = match parsed {
         Ok(a) => a,
         Err(_) => {
-            // Can't print yet (UART address is inside the boot args we
-            // just rejected). WFE forever.
+            // R-fail-parse: RED. Can't print yet (UART inside boot args).
+            unsafe { fb_hold(0xFFF00000); }
             loop { unsafe { core::arch::asm!("wfe"); } }
         }
     };
-    // Stash the pointer for later ADT queries from the rest of the
-    // kernel (no longer needs to thread `&BootArgs` through everything).
+    // R3: boot_args parsed OK. GREEN-CYAN (teal).
+    unsafe { fb_hold(0xC00C0300); }
     unsafe { drivers::apple::boot_args::stash(boot_args_ptr); }
-    // Back-compat: the existing soc::init_from_boot_args still wants
-    // the legacy struct shape, so populate FB/mem info from the parsed
-    // view. TODO: retire the legacy soc statics in a follow-up commit.
+    // R3a: post-stash. NAVY (0xC0000200).
+    unsafe { fb_hold(0xC0000200); }
     let video = args.video();
+    // R3b: post args.video(). PINK (0xFFF80200).
+    unsafe { fb_hold(0xFFF80200); }
     drivers::apple::soc::set_fb_info(video.base as usize, video.width, video.height, video.stride as u32);
+    // R3c: post set_fb_info. LIME (0xD00FFC00).
+    unsafe { fb_hold(0xD00FFC00); }
     drivers::apple::soc::set_mem_info(args.phys_base() as usize, args.mem_size() as usize);
+    // R3d: post set_mem_info. SALMON (0xFFF40100).
+    unsafe { fb_hold(0xFFF40100); }
 
     // V-ASAHI-1.3: resolve MMIO addresses from the ADT BEFORE touching
     // any MMIO. On M4 hardware, the fallback addresses in soc.rs are
     // from M1 and point at the wrong peripherals — uart::init() against
     // those would silently scribble random MMIO.
+    // R4a: about to call args.adt(). PURPLE.
+    unsafe { fb_hold(0xE00003FF); }
     let discovered = match args.adt() {
-        Ok(adt) => drivers::apple::soc::discover_from_adt(&adt),
+        Ok(_adt) => {
+            // R4b: args.adt() returned Ok. CYAN.
+            // TEMP: bypass discover_from_adt — it hangs somewhere in
+            // lookup_reg0 traversal. Returning 0 discovered peripherals
+            // so we can move past this in bring-up and debug later.
+            unsafe { fb_hold(0xC00FFFFF); }
+            0usize
+        },
         Err(_) => {
-            // Can't proceed — halt.
+            // R-fail-adt: RED-ORANGE.
+            unsafe { fb_hold(0xFFF40000); }
             loop { unsafe { core::arch::asm!("wfe"); } }
         }
     };
+    // R5: discover_from_adt returned. BROWN. HALT.
+    unsafe { fb_hold(0xE0020000); }
+    loop { unsafe { core::arch::asm!("wfe"); } }
 
     // Initialize Apple UART for serial output (now uses the address
     // resolved from the ADT).

@@ -188,15 +188,13 @@ pub unsafe fn parse<'a>(ptr: *const BootArgsRaw) -> Result<BootArgs<'a>, BootArg
 
     let devtree_addr = raw.devtree as u64;
     let devtree_size = raw.devtree_size as usize;
-    // Plausibility: non-null, within the physical-RAM window declared
-    // by phys_base/mem_size, and not insanely large.
-    if devtree_addr == 0
-        || devtree_size == 0
-        || devtree_size > MAX_DEVTREE_SIZE
-        || devtree_addr < raw.phys_base
-        || devtree_addr.saturating_add(devtree_size as u64)
-            > raw.phys_base.saturating_add(raw.mem_size)
-    {
+    // Plausibility: non-null, size in (0, 16 MiB]. The stricter
+    // "within [phys_base, phys_base+mem_size)" check used to fire here,
+    // but m1n1 on M4 hands us the devtree pointer in its own virtual /
+    // chainload-relocated address space (observed: 0xdf4000 when
+    // phys_base is 0x10002798000). Trust the pointer; the ADT parser
+    // will still bounds-check every internal offset.
+    if devtree_addr == 0 || devtree_size == 0 || devtree_size > MAX_DEVTREE_SIZE {
         return Err(BootArgsError::ImplausibleDevtree {
             addr: devtree_addr,
             size: raw.devtree_size,
@@ -209,11 +207,16 @@ pub unsafe fn parse<'a>(ptr: *const BootArgsRaw) -> Result<BootArgs<'a>, BootArg
         // Non-fatal; some boot paths hand us a deferred FB.
     }
 
-    // SAFETY: we just checked devtree_addr + devtree_size fits in
-    // [phys_base, phys_base+mem_size). m1n1 guarantees the kernel-text
-    // identity map covers that region.
+    // Translate the devtree pointer from m1n1's virtual address space
+    // to physical. m1n1 stores `devtree` as a virtual address (per
+    // m1n1/src/startup.c:172) relative to its own virt_base/phys_base
+    // mapping; by the time we run, m1n1 has disabled its MMU, so we
+    // must deref by physical address. Formula matches m1n1's own:
+    //   phys = virt - virt_base + phys_base
+    let v2p_offset = raw.phys_base.wrapping_sub(raw.virt_base);
+    let devtree_phys = (raw.devtree as u64).wrapping_add(v2p_offset);
     let devtree = unsafe {
-        core::slice::from_raw_parts(raw.devtree, devtree_size)
+        core::slice::from_raw_parts(devtree_phys as *const u8, devtree_size)
     };
 
     Ok(BootArgs { raw, devtree })

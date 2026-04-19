@@ -13,3 +13,11 @@
 
 # Compressed logs from past sessions (regenerable).
 *.log
+
+# Claude Code / harness local state (not project state).
+/.claude
+/.claude-flow
+/.mcp.json
+
+# Bring-up camera captures — huge binary blobs, regenerable on live M4.
+/captures
