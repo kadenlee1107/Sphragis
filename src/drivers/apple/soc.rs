@@ -121,16 +121,23 @@ pub fn discover_from_adt(adt: &super::adt::Adt) -> usize {
     // Each entry carries a pre-lookup paint so the camera capture can
     // tell us which path is in flight if we halt — see the bringup
     // exception vectors installed in main.rs.
+    // Path names corrected per M4 ADT inspection (via m1n1 source):
+    //   dart-usb → dart-usb0 (M4 numbers its USB DARTs)
+    //   dart-ans → sart-ans  (ANS uses SART, not DART, on M4)
+    // Each color is a specific shade we don't use elsewhere, so whatever
+    // ends up on the top of the framebuffer when the fault handler
+    // paints its red bottom-stripe tells us exactly which path was
+    // in flight when the walker tripped.
     let table: &[(&str, &AtomicUsize, u32)] = &[
-        ("/arm-io/uart0",      &UART0_BASE_RT, 0xFFF00000), // red
-        ("/arm-io/aic",        &AIC_BASE_RT,   0xFFF80000), // orange
-        ("/arm-io/disp0",      &DCP_BASE_RT,   0xFFFFC000), // yellow
-        ("/arm-io/dart-disp0", &DCP_DART_RT,   0xC00FFC00), // green
-        ("/arm-io/ans",        &ANS_BASE_RT,   0xC00FFFFF), // cyan
-        ("/arm-io/spi0",       &SPI0_BASE_RT,  0xC00003FF), // blue
-        ("/arm-io/sep",        &SEP_BASE_RT,   0xE00003FF), // violet
-        ("/arm-io/dart-usb",   &DART_USB_RT,   0xFFF003FF), // magenta
-        ("/arm-io/dart-ans",   &DART_ANS_RT,   0xFFFFFFFF), // white
+        ("/arm-io/uart0",      &UART0_BASE_RT, 0xE6000000), // maroon (R=0x180)
+        ("/arm-io/aic",        &AIC_BASE_RT,   0xFD800000), // burnt-orange (R=0x3F6, G=0x80)
+        ("/arm-io/disp0",      &DCP_BASE_RT,   0xFFE00000), // mustard (R=0x3FE, G=0x200)  [disp0 known OK]
+        ("/arm-io/dart-disp0", &DCP_DART_RT,   0xD0080800), // forest-green (R=0x100, G=0x202, B=0x200?) see decode
+        ("/arm-io/ans",        &ANS_BASE_RT,   0xC008C300), // teal-dark (R=0, G=0x230, B=0x300)
+        ("/arm-io/spi0",       &SPI0_BASE_RT,  0xC000020F), // navy (R=0, G=0, B=0x20F)
+        ("/arm-io/sep",        &SEP_BASE_RT,   0xE80001FF), // indigo (R=0x280, G=0, B=0x1FF)
+        ("/arm-io/dart-usb0",  &DART_USB_RT,   0xFE8001F0), // rose (R=0x3A0, G=0, B=0x1F0)
+        ("/arm-io/sart-ans",   &DART_ANS_RT,   0xFFF400C0), // hot-magenta (R=0x3FF, G=0x100, B=0x0C0)
     ];
     for (path, atomic, mark) in table {
         unsafe { crate::fb_mark(*mark); }

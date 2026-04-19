@@ -11,6 +11,53 @@ end of a session.
 
 ---
 
+## 2026-04-19 09:40 — Ubuntu — Bounded ADT walker + agent-assisted fixes
+
+**Landed two parallel research tracks** via sub-agent dispatch:
+
+1. **M4 ADT path corrections.** An Explore agent grep'd the vendored
+   `external/m1n1/src/` and cross-referenced Asahi conventions.
+   Result: `/arm-io/dart-usb` is actually `/arm-io/dart-usb0` on M4
+   (m1n1 numbers its DARTs) and `/arm-io/dart-ans` is `/arm-io/sart-ans`
+   (ANS uses SART, not DART). Both renamed in
+   `src/drivers/apple/soc.rs::discover_from_adt`. Seven of the nine
+   paths are confirmed to exist on M4 per m1n1 code references; `sep`
+   remains unconfirmed.
+
+2. **Bounded `adt::Node::total_size`.** An Analyst agent proposed a
+   minimal patch adding (a) a recursion-depth cap of 16 levels and
+   (b) a total-visit budget of 4096 nodes across any `total_size`
+   call chain. Applied to `src/drivers/apple/adt.rs`. Happy-path
+   lookups are unaffected (real `/arm-io/uart0` finds in tens of
+   visits). Pathological walks (corrupt `child_count`, missing-node
+   sibling iteration) now return `AdtError::BadOffset` instantly,
+   which `ChildIter::next` turns into `None`, which `subnode`
+   surfaces as `NotFound`. No more watchdog-reset races.
+
+**Fault-paint change.** `bringup_fault` in the early exception table
+now paints the bottom 1 MiB of the paint region BLUE instead of red
+— blue doesn't collide with any of the warm-hue per-path markers
+(maroon/burnt-orange/mustard/etc), so the camera capture cleanly
+separates "last-checkpoint color" from "fault stripe".
+
+**Current observed behavior:** top of FB shows a warm red-orange
+(one of the per-path markers in the first few entries of the
+table), bottom 1 MiB stripe is blue. That means we're faulting in
+`lookup_reg0` for one of the first couple paths — likely
+`/arm-io/aic`. Still not fixed: the color-to-path decoding is
+ambiguous on camera because the warm-hue palette is too similar.
+Next session: space the colors across the hue wheel more (mix warm
+and cool), or switch to a positional-stripe scheme (path N paints
+band at Y = N * K) for unambiguous decoding.
+
+**Files touched:**
+- `src/drivers/apple/adt.rs`: bounded `total_size` with helper
+  `total_size_bounded(depth_remaining, budget)`.
+- `src/drivers/apple/soc.rs`: path rename + unique per-path palette.
+- `src/main.rs`: blue fault stripe, distinctive R4b marker.
+
+---
+
 ## 2026-04-19 09:28 — Ubuntu — Bring-up exception vectors catch ADT faults
 
 **Big infra win.** The "Mac spontaneously resets" behavior while

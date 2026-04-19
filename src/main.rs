@@ -494,14 +494,14 @@ bringup_vectors:
 .endr
 
 bringup_fault:
-    // Paint only the BOTTOM 1 MiB of the paint region red. That leaves
-    // the upper 15 MiB showing whatever checkpoint color the main
-    // thread painted last, so we can still tell WHERE the fault fired
-    // while also seeing the red "fault caught" stripe at the bottom.
+    // Paint BLUE (0xC00003FF) in the bottom 1 MiB of the 16 MiB paint
+    // region — chosen to be visually unmistakable against our warm-hue
+    // per-path markers. Leaves the upper 15 MiB showing whatever
+    // checkpoint color was painted last so we can read where we were.
     ldr     x9,  =0x103e0f50000        // fb_base + 15 MiB offset
-    mov     w10, #0x0000
-    movk    w10, #0xfff0, lsl #16
-    mov     x11, #0x00100000           // 1 MiB
+    mov     w10, #0x03ff                // low 16: B=max (10 bits)
+    movk    w10, #0xc000, lsl #16       // high 16: A=3, R=0, G=0
+    mov     x11, #0x00100000            // 1 MiB
 1:  str     w10, [x9], #4
     subs    x11, x11, #4
     b.ne    1b
@@ -619,8 +619,10 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     unsafe { fb_hold(0xE00003FF); }
     let discovered = match args.adt() {
         Ok(adt) => {
-            // R4b: args.adt() returned Ok. CYAN.
-            unsafe { fb_hold(0xC00FFFFF); }
+            // R4b: args.adt() returned Ok. PURPLE-GRAY (0xE804C800) —
+            // picked unique so if we see this in the top region the
+            // fault fired before the per-path loop even started.
+            unsafe { fb_hold(0xE804C800); }
             drivers::apple::soc::discover_from_adt(&adt)
         },
         Err(_) => {

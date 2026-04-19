@@ -249,12 +249,32 @@ impl<'a> Node<'a> {
 
     /// Size of this node (header + all properties + all descendant
     /// subtrees), in bytes. Used to skip to a sibling.
+    ///
+    /// Bounded: caps recursion at 16 levels (real ADTs peak ~10-12)
+    /// and total node visits at 4096 across the whole call. Prevents
+    /// adversarial or locally-corrupt ADTs from locking us up at the
+    /// slow pre-cpufreq M4 boot clock — observed symptom was
+    /// `/arm-io/dart-disp0` lookup hanging until iBoot watchdog reset
+    /// the Mac.
     fn total_size(self) -> Result<usize, AdtError> {
+        let mut budget: u32 = 4096;
+        self.total_size_bounded(16, &mut budget)
+    }
+
+    fn total_size_bounded(
+        self,
+        depth_remaining: u32,
+        budget: &mut u32,
+    ) -> Result<usize, AdtError> {
+        if depth_remaining == 0 || *budget == 0 {
+            return Err(AdtError::BadOffset);
+        }
+        *budget -= 1;
         let mut off = self.children_start_offset()?;
         let hdr = self.hdr()?;
         for _ in 0..hdr.child_count {
             let child = Node { adt: self.adt, offset: off };
-            off += child.total_size()?;
+            off += child.total_size_bounded(depth_remaining - 1, budget)?;
         }
         Ok(off - self.offset)
     }
