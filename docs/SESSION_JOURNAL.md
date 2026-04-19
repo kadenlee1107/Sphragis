@@ -11,6 +11,77 @@ end of a session.
 
 ---
 
+## 2026-04-19 10:18 — Ubuntu — **BAT_OS SPLASH VISIBLE ON M4 DISPLAY** 🦇
+
+**We reached the "see Bat_OS" milestone this session.** The Mac's
+internal screen now shows:
+
+- Solid black background (painted by our own Rust code)
+- `"BAT_OS"` centered in amber
+- `"Bare Metal // Apple Silicon (M4 / T8132)"` subtitle in cyan
+- `"[booted via m1n1 chainload]"` footer in dim gray
+
+Camera capture at
+`captures/AI100.png` / `AI140.png` (not committed — gitignored) is
+the evidence.
+
+**Path we took after the BSS-zero breakthrough:**
+
+1. `uart::init()` + `uart::puts()` / `putc()` now early-return if
+   `UART_READY == false` — gates the S5L driver until we port
+   dockchannel. Keeps the hundreds of `uart::puts(...)` call sites
+   compiling unchanged.
+2. Skipped `kernel::mm::init()` (heap not yet wired up for M4;
+   faults on first static access inside it).
+3. `process::init`, `scheduler::init`, `ipc::init`,
+   `arch::init_exceptions`, `aic::init` all completed cleanly.
+   Each got a distinct FB-color checkpoint (K2..K7). No faults.
+4. Skipped `bring_up_all`, `read_passphrase_apple`,
+   `derive_batfs_key`, `fs::batfs::init` — all need heap.
+5. `dcp::init_simple_fb()` on its own is safe (no MMIO, just sets
+   `INITIALIZED = true` after checking `soc::fb_*` are non-zero).
+   But `boot_splash()` early-returns because `dcp::is_ready()`
+   reads the same flag — either wasn't set, or paint helpers'
+   checks kept bouncing. Side-stepped entirely.
+6. Inlined a minimal splash directly into `kernel_main_apple`:
+   `fb_mark` full-FB black, then `ui::font::draw_str` at three
+   positions for title / subtitle / footer, using the known-good
+   FB base `0x103e0050000` and stride `0x2f40 / 4`. Bypasses
+   `dcp::*` entirely — just raw FB + font rasterizer.
+
+**Current state of `src/main.rs::kernel_main_apple`:**
+
+- Full prologue (asm stages, R1-R5, args parse, ADT walk, 7-stage
+  kernel init markers K1-K7) reliably runs.
+- At K8 it paints black + draws splash + halts at `wfe`.
+- M4 display shows the splash until iBoot watchdog resets the Mac
+  ~1-2 minutes later.
+
+**What's missing before this is a "real" boot:**
+
+- Proper heap for `mm::init` on M4 — linked_list_allocator needs a
+  backing region we can dedicate to kernel heap. Probably just a
+  reserved chunk after `__bss_end` in the linker script; but the
+  key gotcha is making `mm::init` use the PC-relative resolved
+  addresses, not link-time.
+- Port the dockchannel UART driver to replace S5L. Only then can
+  `uart::puts(...)` deliver text over USB-CDC back to Ubuntu.
+- `boot_splash()` / `desktop::run()` full wire-up once heap works.
+
+**But the headline:** Bat_OS owns the M4 screen, renders its own
+text in our own 8x16 font, using exclusively code we wrote — no
+macOS, no Asahi, no m1n1 splash. That's the first time this has
+been demonstrated on an M4 in this new chainload-only bring-up
+flow.
+
+**Files touched this sub-session:**
+- `src/main.rs`: big rewrite of kernel_main_apple tail — K1..K8
+  stage markers, skip-mm/passphrase/batfs, inline splash render.
+- `src/drivers/apple/uart.rs`: `UART_READY` gate on
+  `init`/`putc`/`puts`.
+
+---
+
 ## 2026-04-19 10:03 — Ubuntu — BREAKTHROUGH: BSS-zero bug fixed, R5 reproducible
 
 **This is the biggest single commit of the M4 bring-up so far.** The

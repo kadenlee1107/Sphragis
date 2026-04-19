@@ -662,86 +662,93 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
             loop { unsafe { core::arch::asm!("wfe"); } }
         }
     };
-    // R5: discover_from_adt returned. HOT PINK. HALT — this is the
-    // furthest reliably-reached point in bring-up. Next up: fix the
-    // ADT subnode iterator + install early exception handlers before
-    // we can safely walk more peripherals.
+    // R5: discover_from_adt returned. HOT PINK.
     unsafe { fb_hold(0xFFF00200); }
-    loop { unsafe { core::arch::asm!("wfe"); } }
+    let _ = discovered; // silence unused warning while UART puts are gated
+
+    // UART stays disabled via the UART_READY flag in drivers/apple/uart.rs
+    // — the existing S5L driver writes wrong-layout config bytes to
+    // M4's dockchannel UART. All `uart::puts(...)` / `putc(...)` calls
+    // below become silent no-ops until we port a dockchannel driver.
     drivers::apple::uart::init();
-    #[allow(unreachable_code)]
-    {
-    drivers::apple::uart::puts("\n");
-    drivers::apple::uart::puts("================================================\n");
-    drivers::apple::uart::puts("  BAT_OS — BARE METAL APPLE SILICON\n");
-    drivers::apple::uart::puts("  Running on REAL M4 hardware.\n");
-    drivers::apple::uart::puts("================================================\n\n");
 
-    // Print boot-args summary so we can verify the handoff worked.
-    drivers::apple::uart::puts("[boot] m1n1 handoff OK\n");
-    drivers::apple::uart::puts("  revision: ");
-    crate::kernel::mm::print_num(args.revision() as usize);
-    drivers::apple::uart::puts("\n  machine_type: 0x");
-    drivers::apple::uart::puthex32(args.machine_type());
-    drivers::apple::uart::puts("\n  mem_size: ");
-    crate::kernel::mm::print_num((args.mem_size() / (1024 * 1024)) as usize);
-    drivers::apple::uart::puts(" MiB\n  devtree: ");
-    crate::kernel::mm::print_num(args.devtree_bytes().len());
-    drivers::apple::uart::puts(" bytes\n  ADT-resolved peripherals: ");
-    crate::kernel::mm::print_num(discovered);
-    drivers::apple::uart::puts(" / 9\n");
-
-    // Initialize kernel core
-    drivers::apple::uart::puts("[boot] Initializing microkernel...\n");
-    kernel::mm::init();
+    // ─── Rust kernel init: one FB marker per stage ──────────────────
+    // Colors chosen to be progressively distinctive; the LAST one
+    // painted before a halt / fault stripe tells us how far we got.
+    //
+    // K1: about to call mm::init — SKY BLUE (0xC006A3FF)
+    unsafe { fb_hold(0xC006A3FF); }
+    // kernel::mm::init();   // M4 bring-up: skip, faults — revisit heap setup
+    // K2: mm skipped — LIME YELLOW (0xFBFFC000)
+    unsafe { fb_hold(0xFBFFC000); }
     kernel::process::init();
+    // K3: process ok — SPRING GREEN (0xC007FC28)
+    unsafe { fb_hold(0xC007FC28); }
     kernel::scheduler::init();
+    // K4: scheduler ok — TURQUOISE (0xC00DFEFF)
+    unsafe { fb_hold(0xC00DFEFF); }
     kernel::ipc::init();
+    // K5: ipc ok — LILAC (0xFB83C3FF)
+    unsafe { fb_hold(0xFB83C3FF); }
     kernel::arch::init_exceptions();
-
-    // Initialize Apple Interrupt Controller
-    drivers::apple::uart::puts("[boot] Initializing AIC2...\n");
+    // K6: arch ok — PEACH (0xFFF6E200)
+    unsafe { fb_hold(0xFFF6E200); }
     drivers::apple::aic::init();
+    // K7: aic ok — GOLD (0xFFFC0000)
+    unsafe { fb_hold(0xFFFC0000); }
 
-    // V-ASAHI-3.5: bring up every peripheral module that has a
-    // hardware-access entry point. Prints a compact status line so we
-    // can see at boot which peripherals responded vs which stubbed out.
-    // Failures here are NOT fatal — missing peripherals are legitimate
-    // on some boards.
-    let bu = drivers::apple::bring_up_all();
-    drivers::apple::print_bring_up_report(&bu);
+    // SKIP bring_up_all, passphrase read, BatFS init — those all need
+    // heap (mm::init was skipped) or UART. Jump straight to display.
 
-    // ATTACK-CRYPTO-004 / FLv2-NEW-006: Apple path currently falls back
-    // to the dev default (empty input) because the Apple UART driver has
-    // no blocking getc yet. When that lands, swap `read_passphrase_apple`
-    // for the real interactive variant.
-    let mut passphrase_buf = [0u8; 128];
-    let passphrase_len = read_passphrase_apple(&mut passphrase_buf);
-    // V6-WEIRD-002: dev-fallback derived from kernel-text hash via
-    // derive_secret_string (not stored as a literal).
-    let mut dev_fallback_buf_apple = [0u8; 16];
-    let dev_fb_len = if passphrase_len == 0 {
-        drivers::apple::uart::puts("  (empty — dev fallback)\n");
-        derive_secret_string(DEV_FALLBACK_LABEL, &mut dev_fallback_buf_apple).len()
-    } else { 0 };
-    let passphrase_slice: &[u8] = if passphrase_len == 0 {
-        &dev_fallback_buf_apple[..dev_fb_len]
-    } else {
-        &passphrase_buf[..passphrase_len]
-    };
-    let master_key = derive_batfs_key(passphrase_slice);
-    fs::batfs::init(&master_key);
-    drivers::apple::uart::puts("[boot] BatFS initialized (key=KDF(passphrase))\n");
+    // K8: about to paint minimal splash. HOT MAGENTA (0xFFF40100).
+    unsafe { fb_hold(0xFFF40100); }
 
-    // Initialize display (m1n1 simple framebuffer)
-    drivers::apple::uart::puts("[boot] Initializing display...\n");
-    if drivers::apple::dcp::init_simple_fb() {
-        drivers::apple::uart::puts("[boot] Display ready — drawing splash\n");
-        // V-ASAHI-2.1: render the boot splash so the operator sees on
-        // the actual display (not just over USB serial) that Bat_OS
-        // owns the M4. Fills the framebuffer m1n1 set up.
-        drivers::apple::dcp::boot_splash();
-        drivers::apple::uart::puts("[boot] Splash rendered — launching desktop\n\n");
+    // Bypass dcp entirely — paint a BAT_OS splash directly via the
+    // font module with known-good FB parameters. This proves Bat_OS
+    // can render text on M4 without needing mm::init / DCP mailbox.
+    unsafe {
+        // Black out the full 16 MiB paint region.
+        fb_mark(0xC0000000);  // opaque black in ARGB2101010
+
+        let fb = 0x103e0050000usize as *mut u32;
+        let stride_pixels: u32 = 0x2f40 / 4;   // exactly 3024 on M4
+
+        // Draw "BAT_OS" at 4x scale via offset re-draws, yellow-on-black.
+        const FG: u32 = 0xFFFFC000;  // amber
+        const BG: u32 = 0xC0000000;  // opaque black
+        let title = "BAT_OS";
+        let title_w = (title.len() as u32) * ui::font::CHAR_W * 4;
+        let tx = (3024u32.saturating_sub(title_w)) / 2;
+        let ty: u32 = 700;
+        for sy in 0..4 {
+            for sx in 0..4 {
+                for (i, b) in title.bytes().enumerate() {
+                    let cx = tx + (i as u32) * ui::font::CHAR_W * 4 + sx;
+                    let cy = ty + sy;
+                    let buf = [b];
+                    let s = core::str::from_utf8_unchecked(&buf);
+                    ui::font::draw_str(fb, stride_pixels, cx, cy, s, FG, BG);
+                }
+            }
+        }
+        // Subtitle.
+        let sub = "Bare Metal // Apple Silicon (M4 / T8132)";
+        let sub_w = (sub.len() as u32) * ui::font::CHAR_W;
+        let sx = (3024u32.saturating_sub(sub_w)) / 2;
+        ui::font::draw_str(fb, stride_pixels, sx, ty + ui::font::CHAR_H*4 + 20,
+                           sub, 0xFF40C0FF, BG);
+        let foot = "[booted via m1n1 chainload]";
+        let foot_w = (foot.len() as u32) * ui::font::CHAR_W;
+        let fx = (3024u32.saturating_sub(foot_w)) / 2;
+        ui::font::draw_str(fb, stride_pixels, fx, ty + ui::font::CHAR_H*6 + 40,
+                           foot, 0xFF808080, BG);
+
+        core::arch::asm!("dsb sy");
+    }
+    // Halt. If we see "BAT_OS" on the Mac screen, we've arrived.
+    loop { unsafe { core::arch::asm!("wfe"); } }
+    #[allow(unreachable_code)]
+    if false {
 
         // Initialize SPI keyboard
         let _ = drivers::apple::spi::init();
@@ -758,7 +765,6 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
             core::hint::spin_loop();
         }
     }
-    }  // close the allow(unreachable_code) block (post-R5 uart init)
 }
 
 #[panic_handler]
