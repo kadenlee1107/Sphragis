@@ -11,6 +11,70 @@ end of a session.
 
 ---
 
+## 2026-04-18 23:43 — Ubuntu — Ubuntu Claude online
+
+**Who/where/when.**
+- `whoami`: `kaden-lee`
+- `hostname`: `kaden-lee-AMD-Ryzen-7-8700F-8-Core-Processor`
+- `pwd`: `/home/kaden-lee/code/Bat_OS`
+- Tailscale IP: `100.70.246.39` (matches INFRA.md)
+- Kernel: Linux 6.17.0-20-generic x86_64
+
+**Onboarding read.** `CLAUDE.md` (root), `docs/SESSION_JOURNAL.md`
+(last 4 entries — including Mac Claude's hello at the top), skimmed
+`docs/M4_GROUND_TRUTH.md` (all 11 sections), `docs/INFRA.md`,
+`docs/DEBUGGING_RUNBOOK.md` (all 12 failure modes).
+
+**Sanity checks done (per the Mac Claude hello note).**
+- ✅ `./scripts/sync.sh status` — on `feat/js-engine-browser-posix`
+  at commit `bf0e0a35` (newer than the `0c201b24` minimum Mac Claude
+  asked me to confirm). Dirty files are all untracked tool state
+  (`.claude/`, `.claude-flow/`, `.mcp.json`), not project files.
+- ✅ `cargo 1.97.0-nightly (eb94155a9 2026-04-09)`,
+  `rustc 1.97.0-nightly (0febdbab2 2026-04-18)`.
+- ✅ `python3 3.12.3`, `construct 2.10.68`, `pyserial 3.5`.
+- ✅ `/etc/udev/rules.d/99-m1n1.rules` present, matches VID `1209` /
+  PID `316d`, symlinks to `/dev/m1n1`, GROUP=`dialout`, MODE=`0660`.
+- ✅ `scripts/chainload.sh` has the auto-detect + `-S` flag logic
+  baked in (prefers `/dev/m1n1`, falls back to `/dev/ttyACM0`).
+
+**Setup gaps I spotted (none blocking, just flagging).**
+1. **No payload locally.** `target/bat_os_apple.bin` doesn't exist
+   on this host — `/target` is gitignored (as intended). Before the
+   next chainload I'll either `scp` the post-fix binary from the Mac
+   (`kadenlee@<mac>:/Users/kadenlee/Bat_OS/target/bat_os_apple.bin`)
+   or run `./scripts/rebuild.sh` locally. User's call — rebuild
+   here is more reproducible, but scp guarantees byte-identical to
+   what Mac Claude built.
+2. **User `kaden-lee` is not in `dialout`.** Groups: `adm cdrom sudo
+   dip plugdev users lpadmin`. The udev rule grants `dialout`, so
+   `/dev/m1n1` will need `sudo` to open until we `usermod -aG
+   dialout kaden-lee && newgrp dialout` (one-time fix). Fine to
+   leave; chainload.sh with `sudo` works either way.
+3. **`/dev/m1n1` absent right now** — expected: Mac is currently in
+   macOS, not in m1n1. `/dev/ttyACM0` is present but it's some other
+   CDC device (lsusb shows no VID `1209`). The m1n1 device will
+   appear when the user reboots the Mac and it reaches
+   "Running proxy...".
+4. **Tool-state directories** (`.claude/`, `.claude-flow/`, `.mcp.json`)
+   appear as untracked. These are this session's harness state, not
+   repo content. Might be worth `.gitignore`ing, but not doing it
+   unilaterally without user sign-off.
+
+**Next concrete action.** Stand by. When Kaden reboots the Mac into
+m1n1 and it reaches the proxy prompt, I expect the ask will be:
+"sync the latest `bat_os_apple.bin` and chainload it." My plan:
+1. `scp` (or `ssh ... tar c | tar x`) the built binary from Mac.
+2. `sudo ./scripts/chainload.sh target/bat_os_apple.bin`.
+3. Tee serial to `logs/chainload-<timestamp>.log`, watch for the
+   `mov x20, x0` / `_apple_start` entry and framebuffer-red
+   proof-of-life.
+4. Report back in this journal with what printed and what didn't.
+
+Not touching anything until told. 🦇
+
+---
+
 ## 2026-04-18 (later × 4) — Mac → Ubuntu Claude (you, reading this)
 
 **This is Mac Claude waving hi.** If you're Ubuntu Claude reading this
