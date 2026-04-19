@@ -59,15 +59,16 @@ impl BringUpReport {
 pub fn bring_up_all() -> BringUpReport {
     let mut r = BringUpReport::new();
 
-    // 1. DART bypass on the three DARTs we know about.
+    // 1. DART bypass on the three DARTs we know about. Each returns
+    //    quickly even if the target DART is wrong-addressed on M4
+    //    (writes to Device-nGnRnE that nobody reads just go into
+    //    the void).
     r.dart_usb  = if dart::Dart::usb().set_bypass(0).is_ok()  { 1 } else { 2 };
     r.dart_ans  = if dart::Dart::ans().set_bypass(0).is_ok()  { 1 } else { 2 };
     r.dart_disp = if dart::Dart::disp0().set_bypass(0).is_ok(){ 1 } else { 2 };
 
-    // 2. ANS firmware check. Only run if the ADT actually gave us a
-    //    resolved base; on M4 the ADT path for ANS isn't populated
-    //    yet (see M4_GROUND_TRUTH §3.1 "unknown") and the fallback
-    //    MMIO address is from M1-era, so reading it silently faults.
+    // 2. ANS firmware check — M4 ADT doesn't expose /arm-io/ans, so
+    //    `ans_base_resolved()` is false and we skip cleanly.
     if soc::ans_base_resolved() {
         let ans = ans_nvme::AnsNvme::new(
             soc::ans_base(),
@@ -77,20 +78,18 @@ pub fn bring_up_all() -> BringUpReport {
         r.ans_firmware = if ans.check_boot_status().is_ok() { 1 } else { 2 };
     }
 
-    // 3. DWC3 USB. Same guard — only attempt if base is ADT-resolved.
-    if soc::dart_usb_resolved() {
-        let mut usb = dwc3::Dwc3::new(soc::dart_usb(), dart::Dart::usb());
-        r.dwc3_reset = if usb.bring_up(dwc3::Mode::Device).is_ok() { 1 } else { 2 };
-    }
+    // 3. DWC3 USB — SKIP on M4. The existing `Dwc3::new` takes the
+    //    DART base as the USB controller MMIO, but per
+    //    M4_GROUND_TRUTH §3.2 those are separate peripherals on M4
+    //    (drd0 ctl = 0x4_0228_0000 vs DART = 0x4_02f0_0000). Needs a
+    //    `/arm-io/usb-drd0` discovery path + dedicated
+    //    `soc::usb_drd0_base()` before it can safely run. Leaves
+    //    r.dwc3_reset at 0 (not-run).
 
-    // 4. BCM Wi-Fi chip-ID probe. Same guard.
-    if soc::ans_base_resolved() {
-        let mut wifi = bcm_wifi::BcmWifi::new(
-            soc::ans_base(),
-            dart::Dart::usb(),
-        );
-        r.bcm_probe = if wifi.probe_chip_id().is_ok() { 1 } else { 2 };
-    }
+    // 4. BCM Wi-Fi chip-ID probe — SKIP on M4. The existing code
+    //    passes `soc::ans_base()` as the BCM base (wrong peripheral
+    //    entirely — BCM is Wi-Fi over APCIe, not NVMe). Needs a
+    //    real `soc::bcm_base()` wired from `/arm-io/apcie0`.
 
     r
 }

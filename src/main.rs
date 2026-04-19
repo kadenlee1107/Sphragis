@@ -477,9 +477,9 @@ fn serial_shell() -> ! {
 
 global_asm!(include_str!("arch/aarch64/apple/boot.s"));
 
-// (bring-up diag-band helper removed — bisection complete through
-// bring_up_all; next stages (batfs::init / dcp / desktop) are blocked
-// behind the iBoot watchdog making camera-based bisection flaky.)
+// (diag band helper removed — bisection confirmed mm / process /
+//  scheduler / ipc / arch_exceptions / aic / bring_up_all all reach
+//  cleanly on M4 after the WDT-disable + DWC3/BCM skips landed.)
 
 // Early-boot exception vectors. m1n1 clears VBAR during chainload,
 // so until `kernel::arch::init_exceptions()` installs the real
@@ -528,8 +528,6 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
 
     // Disable the Apple hardware watchdog ASAP so it can't reset the
     // Mac out from under us while we bring up the rest of the kernel.
-    // The WDT base is hard-coded to the M4-observed address (0x3_882b_0000)
-    // so this runs cleanly even before ADT discovery.
     drivers::apple::wdt::disable();
 
     // V-ASAHI-1: parse m1n1 boot args with full validation (revision
