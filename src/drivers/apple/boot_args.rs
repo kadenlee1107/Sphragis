@@ -115,7 +115,6 @@ impl<'a> BootArgs<'a> {
     pub fn phys_base(&self) -> u64 { self.raw.phys_base }
     pub fn virt_base(&self) -> u64 { self.raw.virt_base }
     pub fn mem_size(&self) -> u64 { self.raw.mem_size }
-    pub fn top_of_kernel_data(&self) -> u64 { self.raw.top_of_kernel_data }
     pub fn mem_size_actual(&self) -> u64 {
         // Only valid on rev >= 2; rev-1 doesn't have this field at
         // this offset. We declared the struct as rev-3 layout, so

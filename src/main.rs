@@ -477,142 +477,10 @@ fn serial_shell() -> ! {
 
 global_asm!(include_str!("arch/aarch64/apple/boot.s"));
 
-// ─── Bring-up exception vectors ────────────────────────────────────
-// Minimal 16-entry vector table that, on any exception, paints the
-// framebuffer red (ARGB2101010 0xFFF00000) and halts. Installed at
-// EL1 VBAR *before* we walk the ADT so data aborts from bad
-// pointers become a visible red-screen halt instead of a mysterious
-// iBoot watchdog reset.
-global_asm!(r#"
-.section .text.apple_boot
-.balign 2048
-.global bringup_vectors
-bringup_vectors:
-.rept 16
-    b   bringup_fault
-    .balign 128
-.endr
-
-bringup_fault:
-    // Paint BLUE (0xC00003FF) in the bottom 1 MiB of the 16 MiB paint
-    // region — chosen to be visually unmistakable against our warm-hue
-    // per-path markers. Leaves the upper 15 MiB showing whatever
-    // checkpoint color was painted last so we can read where we were.
-    ldr     x9,  =0x103e0f50000        // fb_base + 15 MiB offset
-    mov     w10, #0x03ff                // low 16: B=max (10 bits)
-    movk    w10, #0xc000, lsl #16       // high 16: A=3, R=0, G=0
-    mov     x11, #0x00100000            // 1 MiB
-1:  str     w10, [x9], #4
-    subs    x11, x11, #4
-    b.ne    1b
-    dsb     sy
-2:  wfe
-    b       2b
-"#);
-
-// ─── FB marker for early-Rust bring-up ─────────────────────────────
-// Paints the whole M4 framebuffer with a given 32-bit ARGB2101010
-// pixel. Used to prove which Rust checkpoint we last reached before a
-// crash. Pixel format: bits[31:30]=A, [29:20]=R, [19:10]=G, [9:0]=B.
-// Examples (each 10-bit channel max = 0x3FF):
-//   0xFFF00000  pure red       A=3, R=max, G=0, B=0
-//   0xC00FFC00  pure green
-//   0xC00003FF  pure blue
-//   0xFFF003FF  magenta
-//   0xC00FFFFF  cyan
-//   0xFFFFFFFF  white
-//   0xFFF80000  orange         R=max, G=0x200
-//   0xE00C0000  dark-orange    R=0x200, G=0x300
-/// Paint a horizontal stripe on the M4 FB.
-/// `y_start` / `y_count` are in pixels; `pixel` is 32-bit ARGB2101010.
-/// FB layout: 3024x1964 @ stride 0x2f40 bytes = 12096 = 3024 * 4.
-/// Safe to call from the bring-up sequence; doesn't allocate.
-#[inline(never)]
-pub(crate) unsafe fn fb_stripe(y_start: usize, y_count: usize, pixel: u32) {
-    const FB_BASE: usize = 0x103e0050000;
-    const FB_STRIDE_BYTES: usize = 0x2f40;       // 12096
-    const FB_WIDTH_PX: usize    = 3024;
-    for y in y_start..(y_start + y_count) {
-        let row = (FB_BASE + y * FB_STRIDE_BYTES) as *mut u32;
-        for x in 0..FB_WIDTH_PX {
-            core::ptr::write_volatile(row.add(x), pixel);
-        }
-    }
-    core::arch::asm!("dsb sy");
-}
-
-#[inline(never)]
-pub(crate) unsafe fn fb_mark(pixel: u32) {
-    let fb = 0x103e0050000usize as *mut u32;
-    // 16 MiB worth of 4-byte pixels = 4 M pixels, enough to fill most
-    // of the 3024x1964 FB (~23.6 MiB). Faster than full fill and still
-    // visually unambiguous on a camera grab.
-    let count: usize = 0x01000000 / 4;
-    for i in 0..count {
-        core::ptr::write_volatile(fb.add(i), pixel);
-    }
-    core::arch::asm!("dsb sy");
-}
-
-// fb_hold is now an alias for fb_mark — the delay loop version was
-// taking many seconds per stage at M4's slow pre-cpufreq clock. We'll
-// rely on placing explicit stops (WFE loops) at specific checkpoints
-// instead of per-stage dwell.
-#[inline(never)]
-unsafe fn fb_hold(pixel: u32) {
-    fb_mark(pixel);
-}
-
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_args::BootArgsRaw) -> ! {
-    // Install bring-up exception vectors FIRST. m1n1 runs at EL2 and
-    // its chainload can leave us at EL2 or EL1 — set VBAR at both so
-    // faults route to `bringup_fault` regardless. Also unmask SError
-    // (DAIF.A cleared) so any pending/future SError delivers
-    // immediately to our red-paint halt instead of being deferred.
-    unsafe {
-        // Determine current EL and only set the appropriate VBAR.
-        // CurrentEL bits [3:2] = EL (0=EL0, 1=EL1, 2=EL2, 3=EL3).
-        // Writing `msr vbar_el2` from EL1 traps; we only do it if at EL2.
-        // Keep SError masked (DAIF.A=1 from boot.s) — clearing it was
-        // delivering a pending SError left over from m1n1 and firing the
-        // bringup_fault handler before any Rust code ran.
-        // Use `adrp + add` for the vector-table address — `adr` has
-        // only ±1 MiB range and `bringup_vectors` sits near the top of
-        // the binary (in .text.apple_boot) while `kernel_main_apple`
-        // is megabytes deeper, so `adr` was silently wrapping and
-        // installing a bogus VBAR. `adrp` is ±4 GiB, always works.
-        core::arch::asm!(
-            "mrs   x1, CurrentEL",
-            "adrp  x0, bringup_vectors",
-            "add   x0, x0, #:lo12:bringup_vectors",
-            "cmp   x1, #0x8",             // EL2 encoded as 2 << 2 = 0x8
-            "b.ne  1f",
-            "msr   vbar_el2, x0",
-            "b     2f",
-            "1:    msr  vbar_el1, x0",
-            "2:    isb",
-            out("x0") _,
-            out("x1") _,
-        );
-    }
-
-    // R1: Rust entered. ORANGE.
-    unsafe { fb_hold(0xFFF80000); }
-
-    // Set platform to Apple Silicon. Previously this faulted because
-    // boot.s was zeroing BSS at link-time absolute addresses
-    // (0x81xxxxxxx) rather than the loaded binary's BSS — so any
-    // subsequent static write via PC-relative adrp went to memory
-    // that might have been partially corrupt. Now fixed in boot.s
-    // (BSS zero + stack setup both use adrp + :lo12:).
+    // Set platform to Apple Silicon
     platform::set_platform(platform::Platform::AppleSilicon);
-
-    // R2: post-set_platform. DARK-ORANGE.
-    unsafe { fb_hold(0xE00C0000); }
-
-    // R2: post-set_platform. DARK-ORANGE.
-    unsafe { fb_hold(0xE00C0000); }
 
     // V-ASAHI-1: parse m1n1 boot args with full validation (revision
     // check, devtree-bounds check, plausibility caps). On any failure
@@ -622,299 +490,107 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     let args = match parsed {
         Ok(a) => a,
         Err(_) => {
-            // R-fail-parse: RED. Can't print yet (UART inside boot args).
-            unsafe { fb_hold(0xFFF00000); }
+            // Can't print yet (UART address is inside the boot args we
+            // just rejected). WFE forever.
             loop { unsafe { core::arch::asm!("wfe"); } }
         }
     };
-    // R3: boot_args parsed OK. GREEN-CYAN (teal).
-    unsafe { fb_hold(0xC00C0300); }
+    // Stash the pointer for later ADT queries from the rest of the
+    // kernel (no longer needs to thread `&BootArgs` through everything).
     unsafe { drivers::apple::boot_args::stash(boot_args_ptr); }
-    // R3a: post-stash. NAVY (0xC0000200).
-    unsafe { fb_hold(0xC0000200); }
+    // Back-compat: the existing soc::init_from_boot_args still wants
+    // the legacy struct shape, so populate FB/mem info from the parsed
+    // view. TODO: retire the legacy soc statics in a follow-up commit.
     let video = args.video();
-    // R3b: post args.video(). PINK (0xFFF80200).
-    unsafe { fb_hold(0xFFF80200); }
     drivers::apple::soc::set_fb_info(video.base as usize, video.width, video.height, video.stride as u32);
-    // R3c: post set_fb_info. LIME (0xD00FFC00).
-    unsafe { fb_hold(0xD00FFC00); }
     drivers::apple::soc::set_mem_info(args.phys_base() as usize, args.mem_size() as usize);
-    // R3d: post set_mem_info. SALMON (0xFFF40100).
-    unsafe { fb_hold(0xFFF40100); }
 
     // V-ASAHI-1.3: resolve MMIO addresses from the ADT BEFORE touching
     // any MMIO. On M4 hardware, the fallback addresses in soc.rs are
     // from M1 and point at the wrong peripherals — uart::init() against
     // those would silently scribble random MMIO.
-    // R4a: about to call args.adt(). PURPLE.
-    unsafe { fb_hold(0xE00003FF); }
     let discovered = match args.adt() {
-        Ok(adt) => {
-            // R4b: args.adt() returned Ok. PURPLE-GRAY (0xE804C800) —
-            // picked unique so if we see this in the top region the
-            // fault fired before the per-path loop even started.
-            unsafe { fb_hold(0xE804C800); }
-            drivers::apple::soc::discover_from_adt(&adt)
-        },
+        Ok(adt) => drivers::apple::soc::discover_from_adt(&adt),
         Err(_) => {
-            // R-fail-adt: RED-ORANGE.
-            unsafe { fb_hold(0xFFF40000); }
+            // Can't proceed — halt.
             loop { unsafe { core::arch::asm!("wfe"); } }
         }
     };
-    // R5: discover_from_adt returned. HOT PINK.
-    unsafe { fb_hold(0xFFF00200); }
-    let _ = discovered; // silence unused warning while UART puts are gated
 
-    // UART stays disabled via the UART_READY flag in drivers/apple/uart.rs
-    // — the existing S5L driver writes wrong-layout config bytes to
-    // M4's dockchannel UART. All `uart::puts(...)` / `putc(...)` calls
-    // below become silent no-ops until we port a dockchannel driver.
+    // Initialize Apple UART for serial output (now uses the address
+    // resolved from the ADT).
     drivers::apple::uart::init();
+    drivers::apple::uart::puts("\n");
+    drivers::apple::uart::puts("================================================\n");
+    drivers::apple::uart::puts("  BAT_OS — BARE METAL APPLE SILICON\n");
+    drivers::apple::uart::puts("  Running on REAL M4 hardware.\n");
+    drivers::apple::uart::puts("================================================\n\n");
 
-    // ─── Rust kernel init: one FB marker per stage ──────────────────
-    // Colors chosen to be progressively distinctive; the LAST one
-    // painted before a halt / fault stripe tells us how far we got.
-    //
-    // K1: about to init heap — SKY BLUE (0xC006A3FF)
-    unsafe { fb_hold(0xC006A3FF); }
-    // TEMP: skip heap::init — it hangs (not faults) on M4, probably
-    // because linked_list_allocator internally expects the memory
-    // region to be a specific alignment/type. Leave heap uninitialized;
-    // downstream code that uses `alloc` will panic, but the splash
-    // path below doesn't need it.
-    let _heap_base = ((args.top_of_kernel_data() as usize) + 0xFFFF) & !0xFFFF;
-    // kernel::mm::heap::init(heap_base);
-    // K2: heap init skipped — LIME YELLOW (0xFBFFC000)
-    unsafe { fb_hold(0xFBFFC000); }
+    // Print boot-args summary so we can verify the handoff worked.
+    drivers::apple::uart::puts("[boot] m1n1 handoff OK\n");
+    drivers::apple::uart::puts("  revision: ");
+    crate::kernel::mm::print_num(args.revision() as usize);
+    drivers::apple::uart::puts("\n  machine_type: 0x");
+    drivers::apple::uart::puthex32(args.machine_type());
+    drivers::apple::uart::puts("\n  mem_size: ");
+    crate::kernel::mm::print_num((args.mem_size() / (1024 * 1024)) as usize);
+    drivers::apple::uart::puts(" MiB\n  devtree: ");
+    crate::kernel::mm::print_num(args.devtree_bytes().len());
+    drivers::apple::uart::puts(" bytes\n  ADT-resolved peripherals: ");
+    crate::kernel::mm::print_num(discovered);
+    drivers::apple::uart::puts(" / 9\n");
+
+    // Initialize kernel core
+    drivers::apple::uart::puts("[boot] Initializing microkernel...\n");
+    kernel::mm::init();
     kernel::process::init();
-    // K3: process ok — SPRING GREEN (0xC007FC28)
-    unsafe { fb_hold(0xC007FC28); }
     kernel::scheduler::init();
-    // K4: scheduler ok — TURQUOISE (0xC00DFEFF)
-    unsafe { fb_hold(0xC00DFEFF); }
     kernel::ipc::init();
-    // K5: ipc ok — LILAC (0xFB83C3FF)
-    unsafe { fb_hold(0xFB83C3FF); }
     kernel::arch::init_exceptions();
-    // K6: arch ok — PEACH (0xFFF6E200)
-    unsafe { fb_hold(0xFFF6E200); }
+
+    // Initialize Apple Interrupt Controller
+    drivers::apple::uart::puts("[boot] Initializing AIC2...\n");
     drivers::apple::aic::init();
-    // K7: aic ok — GOLD (0xFFFC0000)
-    unsafe { fb_hold(0xFFFC0000); }
 
-    // SKIP bring_up_all, passphrase read, BatFS init — those all need
-    // heap (mm::init was skipped) or UART. Jump straight to display.
+    // V-ASAHI-3.5: bring up every peripheral module that has a
+    // hardware-access entry point. Prints a compact status line so we
+    // can see at boot which peripherals responded vs which stubbed out.
+    // Failures here are NOT fatal — missing peripherals are legitimate
+    // on some boards.
+    let bu = drivers::apple::bring_up_all();
+    drivers::apple::print_bring_up_report(&bu);
 
-    // K8: about to paint minimal splash. HOT MAGENTA (0xFFF40100).
-    unsafe { fb_hold(0xFFF40100); }
+    // ATTACK-CRYPTO-004 / FLv2-NEW-006: Apple path currently falls back
+    // to the dev default (empty input) because the Apple UART driver has
+    // no blocking getc yet. When that lands, swap `read_passphrase_apple`
+    // for the real interactive variant.
+    let mut passphrase_buf = [0u8; 128];
+    let passphrase_len = read_passphrase_apple(&mut passphrase_buf);
+    // V6-WEIRD-002: dev-fallback derived from kernel-text hash via
+    // derive_secret_string (not stored as a literal).
+    let mut dev_fallback_buf_apple = [0u8; 16];
+    let dev_fb_len = if passphrase_len == 0 {
+        drivers::apple::uart::puts("  (empty — dev fallback)\n");
+        derive_secret_string(DEV_FALLBACK_LABEL, &mut dev_fallback_buf_apple).len()
+    } else { 0 };
+    let passphrase_slice: &[u8] = if passphrase_len == 0 {
+        &dev_fallback_buf_apple[..dev_fb_len]
+    } else {
+        &passphrase_buf[..passphrase_len]
+    };
+    let master_key = derive_batfs_key(passphrase_slice);
+    fs::batfs::init(&master_key);
+    drivers::apple::uart::puts("[boot] BatFS initialized (key=KDF(passphrase))\n");
 
-    // Bypass dcp entirely — paint a BAT_OS splash directly via
-    // font::draw_str_scaled with known-good FB parameters. Each
-    // source pixel is rendered at scale=8 for the title so the
-    // text is actually readable on camera, scale=2 for subtitle.
-    unsafe {
-        // Black out the full paint region.
-        fb_mark(0xC0000000);
-
-        let fb = 0x103e0050000usize as *mut u32;
-        let stride_pixels: u32 = 0x2f40 / 4;   // exactly 3024 on M4
-
-        const FG_TITLE: u32 = 0xFFFFC000;   // amber
-        const FG_SUB:   u32 = 0xFF40C0FF;   // cool blue
-        const FG_DIM:   u32 = 0xFF808080;   // gray
-        const BG:       u32 = 0xC0000000;   // opaque black
-
-        // ASCII bat logo (3 rows, 2x scale). Yellow on black.
-        let logo = [
-            "  /|.______________.|\\  ",
-            "     /__.--.  .--.__\\     ",
-            "        \\/    \\/        ",
-        ];
-        let logo_scale: u32 = 4;
-        let logo_w = (logo[0].len() as u32) * ui::font::CHAR_W * logo_scale;
-        let logo_x = (3024u32.saturating_sub(logo_w)) / 2;
-        let logo_y: u32 = 200;
-        for (i, line) in logo.iter().enumerate() {
-            let y = logo_y + (i as u32) * ui::font::CHAR_H * logo_scale;
-            ui::font::draw_str_scaled(fb, stride_pixels, logo_x, y,
-                                      line, FG_TITLE, BG, logo_scale);
-        }
-
-        let title = "BAT_OS";
-        let ts: u32 = 8;   // title scale
-        let title_w = (title.len() as u32) * ui::font::CHAR_W * ts;
-        let tx = (3024u32.saturating_sub(title_w)) / 2;
-        let ty: u32 = 500;
-        ui::font::draw_str_scaled(fb, stride_pixels, tx, ty, title,
-                                  FG_TITLE, BG, ts);
-
-        let sub = "Bare Metal // Apple Silicon (M4 / T8132)";
-        let ss: u32 = 2;   // subtitle scale
-        let sub_w = (sub.len() as u32) * ui::font::CHAR_W * ss;
-        let sx = (3024u32.saturating_sub(sub_w)) / 2;
-        let sy = ty + ui::font::CHAR_H * ts + 60;
-        ui::font::draw_str_scaled(fb, stride_pixels, sx, sy, sub,
-                                  FG_SUB, BG, ss);
-
-        let foot = "[booted via m1n1 chainload]";
-        let fs: u32 = 2;
-        let foot_w = (foot.len() as u32) * ui::font::CHAR_W * fs;
-        let fx = (3024u32.saturating_sub(foot_w)) / 2;
-        let fy = sy + ui::font::CHAR_H * ss + 40;
-        ui::font::draw_str_scaled(fb, stride_pixels, fx, fy, foot,
-                                  FG_DIM, BG, fs);
-
-        // Live stats pulled from boot_args + ADT discovery.
-        let stats_y = fy + ui::font::CHAR_H * fs + 60;
-        let stats_scale: u32 = 2;
-        let mem_mib = (args.mem_size() / (1024 * 1024)) as u32;
-
-        // Two-column-ish layout of labeled facts, centered.
-        let lines: [(&str, u32, u32); 6] = [
-            ("Chip       : T8132 (Donan / H16G)",  0, 0),
-            ("Model      : Mac16,1",               0, 0),
-            ("CPU        : Apple M4  4P + 6E",    0, 0),
-            ("RAM        : _________ MiB",         mem_mib, 0),
-            ("Revision   : 3",                     0, 0),
-            ("ADT peripherals discovered: ____",   discovered as u32, 0),
-        ];
-        for (i, (line, val, _)) in lines.iter().enumerate() {
-            let mut buf = [0u8; 128];
-            let mut pos: usize = 0;
-            let has_underscore_placeholder = line.contains('_');
-            if has_underscore_placeholder && *val != 0 {
-                // Inline the number into the underscore slot.
-                let colon = line.find(':').unwrap_or(line.len());
-                let prefix = &line.as_bytes()[..=colon];
-                for &b in prefix {
-                    if pos < buf.len() { buf[pos] = b; pos += 1; }
-                }
-                if pos < buf.len() { buf[pos] = b' '; pos += 1; }
-                // Decimal formatter for val.
-                let mut nb = [0u8; 16]; let mut np = 0usize;
-                let mut v = *val;
-                if v == 0 { nb[np] = b'0'; np += 1; }
-                while v > 0 && np < nb.len() {
-                    nb[np] = b'0' + (v % 10) as u8;
-                    np += 1;
-                    v /= 10;
-                }
-                while np > 0 && pos < buf.len() {
-                    np -= 1;
-                    buf[pos] = nb[np]; pos += 1;
-                }
-            } else {
-                for &b in line.as_bytes() {
-                    if pos < buf.len() { buf[pos] = b; pos += 1; }
-                }
-            }
-            let s = core::str::from_utf8_unchecked(&buf[..pos]);
-            let w = (s.len() as u32) * ui::font::CHAR_W * stats_scale;
-            let x = (3024u32.saturating_sub(w)) / 2;
-            let y = stats_y + (i as u32) * (ui::font::CHAR_H * stats_scale + 10);
-            ui::font::draw_str_scaled(fb, stride_pixels, x, y, s,
-                                      0xFF00FFFF, BG, stats_scale);
-        }
-
-        // Boot-log section — gives the splash a real-OS-boot feel.
-        // These lines reflect the exact bring-up path we ran above.
-        let log_lines: [(&str, u32); 9] = [
-            ("[ok] m1n1 handoff accepted  (boot_args rev 3)",      0xFF80FF80),
-            ("[ok] _apple_start  asm stages 1..5 complete",         0xFF80FF80),
-            ("[ok] bringup_vectors installed at VBAR_EL1/EL2",      0xFF80FF80),
-            ("[ok] boot_args::parse  OK  (devtree virt->phys)",    0xFF80FF80),
-            ("[ok] discover_from_adt  walker bounded, 9 paths",    0xFF80FF80),
-            ("[ok] kernel::process + scheduler + ipc  init",        0xFF80FF80),
-            ("[ok] kernel::arch::init_exceptions",                  0xFF80FF80),
-            ("[ok] drivers::apple::aic::init",                      0xFF80FF80),
-            ("[ok] splash rendered  —  awaiting  mm::init fix",    0xFFFFFF80),
-        ];
-        let log_scale: u32 = 2;
-        let log_x: u32 = 320;   // indented from left
-        let log_y0: u32 = 1180;
-        for (i, (line, color)) in log_lines.iter().enumerate() {
-            let y = log_y0 + (i as u32) * (ui::font::CHAR_H * log_scale + 6);
-            ui::font::draw_str_scaled(fb, stride_pixels, log_x, y, line,
-                                      *color, BG, log_scale);
-        }
-
-        core::arch::asm!("dsb sy");
-    }
-
-    // Live uptime + tick counter at the bottom. The ARM Generic Timer
-    // on Apple Silicon runs at 24 MHz (CNTFRQ_EL0 reports this); we
-    // read CNTPCT_EL0 each iteration to get real wall-clock uptime.
-    let fb = 0x103e0050000usize as *mut u32;
-    let stride_pixels: u32 = 0x2f40 / 4;
-    const LINE_BG: u32 = 0xC0000000;    // opaque black
-    const LINE_FG: u32 = 0xFFFFF800;    // bright yellow
-    const LINE_FG2: u32 = 0xFF00FFFF;   // bright cyan
-    let scale: u32 = 3;
-    let y0: u32 = 1620;
-    let y1: u32 = 1720;
-
-    // Read CNTFRQ_EL0 once — documented as 24 MHz on Apple Silicon,
-    // verify at runtime.
-    let cntfrq: u64;
-    unsafe { core::arch::asm!("mrs {x}, cntfrq_el0", x = out(reg) cntfrq); }
-    let start: u64;
-    unsafe { core::arch::asm!("mrs {x}, cntpct_el0", x = out(reg) start); }
-
-    let mut tick: u64 = 0;
-    loop {
-        // Read current physical counter.
-        let now: u64;
-        unsafe { core::arch::asm!("mrs {x}, cntpct_el0", x = out(reg) now); }
-        let elapsed_ticks = now.wrapping_sub(start);
-        let elapsed_secs = if cntfrq > 0 { elapsed_ticks / cntfrq } else { 0 };
-        let mm = elapsed_secs / 60;
-        let ss = elapsed_secs % 60;
-
-        // Line 1: "uptime: MM:SS"
-        let mut buf = [b' '; 48];
-        let mut p = 0usize;
-        for &b in b"uptime: " { buf[p] = b; p += 1; }
-        // Zero-pad MM to at least 2 digits for visual stability.
-        if mm < 10 { buf[p] = b'0'; p += 1; }
-        let mut nb = [0u8; 16]; let mut np = 0usize; let mut v = mm;
-        if v == 0 { nb[np] = b'0'; np += 1; }
-        while v > 0 { nb[np] = b'0' + (v % 10) as u8; v /= 10; np += 1; }
-        while np > 0 { np -= 1; buf[p] = nb[np]; p += 1; }
-        buf[p] = b':'; p += 1;
-        buf[p] = b'0' + ((ss / 10) as u8); p += 1;
-        buf[p] = b'0' + ((ss % 10) as u8); p += 1;
-        // Pad so erasure on shrink works.
-        while p < 32 { buf[p] = b' '; p += 1; }
-        let s = unsafe { core::str::from_utf8_unchecked(&buf[..p]) };
-        let w = (s.len() as u32) * ui::font::CHAR_W * scale;
-        let x = (3024u32.saturating_sub(w)) / 2;
-        ui::font::draw_str_scaled(fb, stride_pixels, x, y0, s,
-                                  LINE_FG, LINE_BG, scale);
-
-        // Line 2: "tick: N"
-        let mut buf2 = [b' '; 48];
-        let mut q = 0usize;
-        for &b in b"tick: " { buf2[q] = b; q += 1; }
-        let mut nb2 = [0u8; 20]; let mut nq = 0usize; let mut vv = tick;
-        if vv == 0 { nb2[nq] = b'0'; nq += 1; }
-        while vv > 0 { nb2[nq] = b'0' + (vv % 10) as u8; vv /= 10; nq += 1; }
-        while nq > 0 { nq -= 1; buf2[q] = nb2[nq]; q += 1; }
-        while q < 32 { buf2[q] = b' '; q += 1; }
-        let s2 = unsafe { core::str::from_utf8_unchecked(&buf2[..q]) };
-        let w2 = (s2.len() as u32) * ui::font::CHAR_W * scale;
-        let x2 = (3024u32.saturating_sub(w2)) / 2;
-        ui::font::draw_str_scaled(fb, stride_pixels, x2, y1, s2,
-                                  LINE_FG2, LINE_BG, scale);
-
-        // Small spin so ticks aren't too fast to visually track.
-        for _ in 0..10_000_000u32 {
-            unsafe { core::arch::asm!("", options(nomem, nostack, preserves_flags)); }
-        }
-        tick = tick.wrapping_add(1);
-    }
-    #[allow(unreachable_code)]
-    if false {
+    // Initialize display (m1n1 simple framebuffer)
+    drivers::apple::uart::puts("[boot] Initializing display...\n");
+    if drivers::apple::dcp::init_simple_fb() {
+        drivers::apple::uart::puts("[boot] Display ready — drawing splash\n");
+        // V-ASAHI-2.1: render the boot splash so the operator sees on
+        // the actual display (not just over USB serial) that Bat_OS
+        // owns the M4. Fills the framebuffer m1n1 set up.
+        drivers::apple::dcp::boot_splash();
+        drivers::apple::uart::puts("[boot] Splash rendered — launching desktop\n\n");
 
         // Initialize SPI keyboard
         let _ = drivers::apple::spi::init();

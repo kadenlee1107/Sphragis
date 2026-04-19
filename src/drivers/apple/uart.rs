@@ -26,32 +26,17 @@ fn write32(offset: usize, val: u32) {
     unsafe { core::ptr::write_volatile((soc::uart0_base() + offset) as *mut u32, val) }
 }
 
-/// M4 bring-up: this driver targets the Samsung S5L UART layout
-/// used on M1/M2. M4 uses the dockchannel UART at 0x3_8812_8000 with
-/// a different register layout. Until we port a dockchannel driver,
-/// `init()` and `putc()` are no-ops gated by `UART_READY`; callers
-/// (many `uart::puts(...)` lines in kernel_main_apple) stay in the
-/// code but silently do nothing, which is better than writing
-/// S5L-layout config bytes to dockchannel MMIO.
-use core::sync::atomic::{AtomicBool, Ordering};
-static UART_READY: AtomicBool = AtomicBool::new(false);
-
+/// Initialize the UART (assumes m1n1 already configured baud rate).
 pub fn init() {
-    // UART disabled for M4 bring-up — see note above. Leaving this
-    // function intact so existing `drivers::apple::uart::init()`
-    // call sites don't need to change.
-    if !UART_READY.load(Ordering::Relaxed) {
-        return;
-    }
+    // UART is typically already initialized by m1n1.
+    // We just ensure FIFO is enabled and TX/RX are active.
     write32(UFCON, 0x1); // Enable FIFO
     write32(UCON, 0x5);  // Enable TX and RX, polling mode
 }
 
 /// Wait for TX buffer space and send a byte.
 pub fn putc(c: u8) {
-    if !UART_READY.load(Ordering::Relaxed) {
-        return;
-    }
+    // Wait for TX buffer empty
     while read32(UTRSTAT) & UTRSTAT_TXBE == 0 {
         core::hint::spin_loop();
     }

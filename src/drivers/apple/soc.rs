@@ -118,32 +118,22 @@ fn lookup_reg0(adt: &super::adt::Adt, path: &str) -> Option<usize> {
 /// "resolved N/10 peripherals from ADT" for sanity.
 pub fn discover_from_adt(adt: &super::adt::Adt) -> usize {
     let mut n = 0;
-    // Each entry carries a pre-lookup paint so the camera capture can
-    // tell us which path is in flight if we halt — see the bringup
-    // exception vectors installed in main.rs.
-    // Positional-stripe scheme: each path paints a 100px-tall stripe
-    // at Y = idx * 100 BEFORE attempting its lookup. Prior paths'
-    // stripes are not overwritten, so the final screen shows an
-    // ordered "progress bar" — N stripes visible ⇒ we started N
-    // paths, blue fault-stripe ⇒ the last visible stripe is where
-    // we faulted. Colors cycle through the hue wheel so adjacent
-    // stripes are always distinguishable, but identity is conveyed
-    // by POSITION rather than hue (more reliable on camera).
-    let table: &[(&str, &AtomicUsize, u32)] = &[
-        ("/arm-io/uart0",      &UART0_BASE_RT, 0xFFF00000), // red      — row 0..99
-        ("/arm-io/aic",        &AIC_BASE_RT,   0xFFF80000), // orange   — row 100..199
-        ("/arm-io/disp0",      &DCP_BASE_RT,   0xFFFFC000), // yellow   — row 200..299
-        ("/arm-io/dart-disp0", &DCP_DART_RT,   0xC00FFC00), // green    — row 300..399
-        ("/arm-io/ans",        &ANS_BASE_RT,   0xC00FFFFF), // cyan     — row 400..499
-        ("/arm-io/spi0",       &SPI0_BASE_RT,  0xC00003FF), // blue     — row 500..599
-        ("/arm-io/sep",        &SEP_BASE_RT,   0xE00003FF), // violet   — row 600..699
-        ("/arm-io/dart-usb0",  &DART_USB_RT,   0xFFF003FF), // magenta  — row 700..799
-        ("/arm-io/sart-ans",   &DART_ANS_RT,   0xFFFFFFFF), // white    — row 800..899
+    // Paths corrected per M4 ADT inspection (cross-checked against
+    // `external/m1n1/src/` node references):
+    //   dart-usb → dart-usb0  (M4 numbers its USB DARTs: 0, 1, 3)
+    //   dart-ans → sart-ans   (ANS uses SART, not DART, on M4)
+    let table: &[(&str, &AtomicUsize)] = &[
+        ("/arm-io/uart0",      &UART0_BASE_RT),
+        ("/arm-io/aic",        &AIC_BASE_RT),
+        ("/arm-io/disp0",      &DCP_BASE_RT),
+        ("/arm-io/dart-disp0", &DCP_DART_RT),
+        ("/arm-io/ans",        &ANS_BASE_RT),
+        ("/arm-io/spi0",       &SPI0_BASE_RT),
+        ("/arm-io/sep",        &SEP_BASE_RT),
+        ("/arm-io/dart-usb0",  &DART_USB_RT),
+        ("/arm-io/sart-ans",   &DART_ANS_RT),
     ];
-    const STRIPE_H: usize = 100;
-    for (idx, (path, atomic, mark)) in table.iter().enumerate() {
-        let y = idx * STRIPE_H;
-        unsafe { crate::fb_stripe(y, STRIPE_H, *mark); }
+    for (path, atomic) in table {
         if let Some(addr) = lookup_reg0(adt, path) {
             atomic.store(addr, Ordering::Release);
             n += 1;
