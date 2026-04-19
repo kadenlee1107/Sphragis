@@ -743,6 +743,58 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         ui::font::draw_str_scaled(fb, stride_pixels, fx, fy, foot,
                                   FG_DIM, BG, fs);
 
+        // Live stats pulled from boot_args + ADT discovery.
+        let stats_y = fy + ui::font::CHAR_H * fs + 60;
+        let stats_scale: u32 = 2;
+        let mem_mib = (args.mem_size() / (1024 * 1024)) as u32;
+
+        // Two-column-ish layout of labeled facts, centered.
+        let lines: [(&str, u32, u32); 6] = [
+            ("Chip       : T8132 (Donan / H16G)",  0, 0),
+            ("Model      : Mac16,1",               0, 0),
+            ("CPU        : Apple M4  4P + 6E",    0, 0),
+            ("RAM        : _________ MiB",         mem_mib, 0),
+            ("Revision   : 3",                     0, 0),
+            ("ADT peripherals discovered: ____",   discovered as u32, 0),
+        ];
+        for (i, (line, val, _)) in lines.iter().enumerate() {
+            let mut buf = [0u8; 128];
+            let mut pos: usize = 0;
+            let has_underscore_placeholder = line.contains('_');
+            if has_underscore_placeholder && *val != 0 {
+                // Inline the number into the underscore slot.
+                let colon = line.find(':').unwrap_or(line.len());
+                let prefix = &line.as_bytes()[..=colon];
+                for &b in prefix {
+                    if pos < buf.len() { buf[pos] = b; pos += 1; }
+                }
+                if pos < buf.len() { buf[pos] = b' '; pos += 1; }
+                // Decimal formatter for val.
+                let mut nb = [0u8; 16]; let mut np = 0usize;
+                let mut v = *val;
+                if v == 0 { nb[np] = b'0'; np += 1; }
+                while v > 0 && np < nb.len() {
+                    nb[np] = b'0' + (v % 10) as u8;
+                    np += 1;
+                    v /= 10;
+                }
+                while np > 0 && pos < buf.len() {
+                    np -= 1;
+                    buf[pos] = nb[np]; pos += 1;
+                }
+            } else {
+                for &b in line.as_bytes() {
+                    if pos < buf.len() { buf[pos] = b; pos += 1; }
+                }
+            }
+            let s = core::str::from_utf8_unchecked(&buf[..pos]);
+            let w = (s.len() as u32) * ui::font::CHAR_W * stats_scale;
+            let x = (3024u32.saturating_sub(w)) / 2;
+            let y = stats_y + (i as u32) * (ui::font::CHAR_H * stats_scale + 10);
+            ui::font::draw_str_scaled(fb, stride_pixels, x, y, s,
+                                      0xFF00FFFF, BG, stats_scale);
+        }
+
         core::arch::asm!("dsb sy");
     }
     // Halt. If we see "BAT_OS" on the Mac screen, we've arrived.
