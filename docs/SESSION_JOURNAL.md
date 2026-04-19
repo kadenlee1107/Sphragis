@@ -11,6 +11,63 @@ end of a session.
 
 ---
 
+## 2026-04-19 09:28 — Ubuntu — Bring-up exception vectors catch ADT faults
+
+**Big infra win.** The "Mac spontaneously resets" behavior while
+Bat_OS was walking the ADT is not a hardware quirk — it was a
+silent exception loop with no handler installed. Now fixed.
+
+**What landed:**
+
+1. `src/main.rs`: added a minimal 16-entry bring-up exception vector
+   table via `global_asm!` (label `bringup_vectors`). Every vector
+   branches to `bringup_fault`, which paints a RED 1 MiB stripe at
+   the bottom of the framebuffer (leaving the top showing whatever
+   checkpoint color was painted last) and infinite-WFEs.
+2. `kernel_main_apple` now installs this table FIRST thing — before
+   any ADT read. Uses a `CurrentEL` check to pick `VBAR_EL1` vs
+   `VBAR_EL2` (m1n1 hands us off at EL2, but the check keeps the
+   code EL-agnostic for future payload modes).
+3. SError stays masked (DAIF.A=1 from boot.s). An earlier attempt
+   to unmask it immediately painted the red stripe — there's a
+   pending SError left over from m1n1's init that we don't want to
+   deliver into our bring-up code. Leave it masked until we can
+   afford to handle it properly.
+
+**Observed behavior with handler installed:**
+
+- Screen comes up with the TOP showing the last checkpoint color
+  (teal = R3 `parse` OK, or one of the per-path markers from the
+  9-entry discovery table) and a RED stripe at the bottom. This is
+  the expected halt pattern.
+- The Mac no longer resets — Bat_OS stays parked at the fault
+  WFE indefinitely, which means we can read the camera feed at
+  leisure instead of racing the iBoot watchdog.
+- Full 9-path discovery is re-enabled; the stripe-top color
+  identifies approximately which ADT path triggered the fault. A
+  few per-path colors collide with main-checkpoint colors (cyan
+  appears both as R4b and as the ans path's marker), which is the
+  next small cleanup — make those palette distinct so we can
+  identify the specific path unambiguously.
+
+**What this unblocks:**
+
+- Next bisection is trivial now: change each per-path color to
+  something unique, re-run, read the color off the top of the
+  screen, and you know exactly which `/arm-io/...` lookup blew up.
+- Bounded `total_size` inside `adt.rs` is still worth doing, but
+  it's now a robustness improvement rather than a gating bug — we
+  can see the faults clearly.
+
+**Files touched this subsession:**
+
+- `src/main.rs`: bringup_vectors + early VBAR install in
+  `kernel_main_apple`.
+- `src/drivers/apple/soc.rs`: re-enabled full 9-path discovery
+  table with per-path fb_mark colors.
+
+---
+
 ## 2026-04-19 09:20 — Ubuntu — `discover_from_adt` partial, non-deterministic
 
 **Pushed `discover_from_adt` after commit `a37af844`.** Mixed results:

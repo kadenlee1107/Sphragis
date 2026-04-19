@@ -477,6 +477,39 @@ fn serial_shell() -> ! {
 
 global_asm!(include_str!("arch/aarch64/apple/boot.s"));
 
+// ─── Bring-up exception vectors ────────────────────────────────────
+// Minimal 16-entry vector table that, on any exception, paints the
+// framebuffer red (ARGB2101010 0xFFF00000) and halts. Installed at
+// EL1 VBAR *before* we walk the ADT so data aborts from bad
+// pointers become a visible red-screen halt instead of a mysterious
+// iBoot watchdog reset.
+global_asm!(r#"
+.section .text.apple_boot
+.balign 2048
+.global bringup_vectors
+bringup_vectors:
+.rept 16
+    b   bringup_fault
+    .balign 128
+.endr
+
+bringup_fault:
+    // Paint only the BOTTOM 1 MiB of the paint region red. That leaves
+    // the upper 15 MiB showing whatever checkpoint color the main
+    // thread painted last, so we can still tell WHERE the fault fired
+    // while also seeing the red "fault caught" stripe at the bottom.
+    ldr     x9,  =0x103e0f50000        // fb_base + 15 MiB offset
+    mov     w10, #0x0000
+    movk    w10, #0xfff0, lsl #16
+    mov     x11, #0x00100000           // 1 MiB
+1:  str     w10, [x9], #4
+    subs    x11, x11, #4
+    b.ne    1b
+    dsb     sy
+2:  wfe
+    b       2b
+"#);
+
 // ─── FB marker for early-Rust bring-up ─────────────────────────────
 // Paints the whole M4 framebuffer with a given 32-bit ARGB2101010
 // pixel. Used to prove which Rust checkpoint we last reached before a
@@ -514,6 +547,32 @@ unsafe fn fb_hold(pixel: u32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_args::BootArgsRaw) -> ! {
+    // Install bring-up exception vectors FIRST. m1n1 runs at EL2 and
+    // its chainload can leave us at EL2 or EL1 — set VBAR at both so
+    // faults route to `bringup_fault` regardless. Also unmask SError
+    // (DAIF.A cleared) so any pending/future SError delivers
+    // immediately to our red-paint halt instead of being deferred.
+    unsafe {
+        // Determine current EL and only set the appropriate VBAR.
+        // CurrentEL bits [3:2] = EL (0=EL0, 1=EL1, 2=EL2, 3=EL3).
+        // Writing `msr vbar_el2` from EL1 traps; we only do it if at EL2.
+        // Keep SError masked (DAIF.A=1 from boot.s) — clearing it was
+        // delivering a pending SError left over from m1n1 and firing the
+        // bringup_fault handler before any Rust code ran.
+        core::arch::asm!(
+            "mrs  x1, CurrentEL",
+            "adr  x0, bringup_vectors",
+            "cmp  x1, #0x8",              // EL2 encoded as 2 << 2 = 0x8
+            "b.ne 1f",
+            "msr  vbar_el2, x0",
+            "b    2f",
+            "1:   msr  vbar_el1, x0",
+            "2:   isb",
+            out("x0") _,
+            out("x1") _,
+        );
+    }
+
     // R1: Rust entered. ORANGE. If we see orange, the asm→Rust handoff
     // worked and we cleared the function prologue.
     unsafe { fb_hold(0xFFF80000); }
