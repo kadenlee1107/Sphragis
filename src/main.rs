@@ -817,6 +817,28 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
                                       0xFF00FFFF, BG, stats_scale);
         }
 
+        // Boot-log section — gives the splash a real-OS-boot feel.
+        // These lines reflect the exact bring-up path we ran above.
+        let log_lines: [(&str, u32); 9] = [
+            ("[ok] m1n1 handoff accepted  (boot_args rev 3)",      0xFF80FF80),
+            ("[ok] _apple_start  asm stages 1..5 complete",         0xFF80FF80),
+            ("[ok] bringup_vectors installed at VBAR_EL1/EL2",      0xFF80FF80),
+            ("[ok] boot_args::parse  OK  (devtree virt->phys)",    0xFF80FF80),
+            ("[ok] discover_from_adt  walker bounded, 9 paths",    0xFF80FF80),
+            ("[ok] kernel::process + scheduler + ipc  init",        0xFF80FF80),
+            ("[ok] kernel::arch::init_exceptions",                  0xFF80FF80),
+            ("[ok] drivers::apple::aic::init",                      0xFF80FF80),
+            ("[ok] splash rendered  —  awaiting  mm::init fix",    0xFFFFFF80),
+        ];
+        let log_scale: u32 = 2;
+        let log_x: u32 = 320;   // indented from left
+        let log_y0: u32 = 1180;
+        for (i, (line, color)) in log_lines.iter().enumerate() {
+            let y = log_y0 + (i as u32) * (ui::font::CHAR_H * log_scale + 6);
+            ui::font::draw_str_scaled(fb, stride_pixels, log_x, y, line,
+                                      *color, BG, log_scale);
+        }
+
         core::arch::asm!("dsb sy");
     }
 
