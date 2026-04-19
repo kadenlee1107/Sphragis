@@ -17,6 +17,7 @@ pub mod bcm_wifi;
 pub mod boot_args;
 pub mod dart;
 pub mod dwc3;
+pub mod wdt;
 pub mod rtkit;
 pub mod sio;
 pub mod smc;

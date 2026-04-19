@@ -50,6 +50,9 @@ const MBOX_BASE_FALLBACK: usize  = 0x2_2bc0_0000;
 const SEP_BASE_FALLBACK: usize   = 0x2_4100_0000;
 const DART_USB_FALLBACK: usize   = 0x2_3920_0000;
 const DART_ANS_FALLBACK: usize   = 0x2_7bc8_0000;
+// M4 WDT base — observed by m1n1 at `WDT registers @ 0x3882b0000`.
+// Good fallback if /arm-io/wdt isn't in our discovery table.
+const WDT_BASE_FALLBACK: usize   = 0x3_882b_0000;
 
 pub const UART0_SIZE: usize = 0x4000;
 pub const AIC_SIZE:   usize = 0x10000;
@@ -66,6 +69,7 @@ static MBOX_BASE_RT:  AtomicUsize = AtomicUsize::new(0);
 static SEP_BASE_RT:   AtomicUsize = AtomicUsize::new(0);
 static DART_USB_RT:   AtomicUsize = AtomicUsize::new(0);
 static DART_ANS_RT:   AtomicUsize = AtomicUsize::new(0);
+static WDT_BASE_RT:   AtomicUsize = AtomicUsize::new(0);
 
 /// Pick the runtime value if set, otherwise the hardcoded fallback.
 #[inline]
@@ -79,6 +83,8 @@ pub fn aic_base()   -> usize { rt_or(&AIC_BASE_RT,   AIC_BASE_FALLBACK) }
 pub fn dcp_base()   -> usize { rt_or(&DCP_BASE_RT,   DCP_BASE_FALLBACK) }
 pub fn dcp_dart()   -> usize { rt_or(&DCP_DART_RT,   DCP_DART_FALLBACK) }
 pub fn ans_base()   -> usize { rt_or(&ANS_BASE_RT,   ANS_BASE_FALLBACK) }
+pub fn wdt_base()   -> usize { rt_or(&WDT_BASE_RT,   WDT_BASE_FALLBACK) }
+pub fn wdt_resolved() -> bool { WDT_BASE_RT.load(Ordering::Acquire) != 0 }
 
 /// Returns true only if the ADT actually populated the runtime base
 /// (i.e. not the M1-era fallback). Peripheral bring-up code should
@@ -142,6 +148,7 @@ pub fn discover_from_adt(adt: &super::adt::Adt) -> usize {
         ("/arm-io/sep",        &SEP_BASE_RT),
         ("/arm-io/dart-usb0",  &DART_USB_RT),
         ("/arm-io/sart-ans",   &DART_ANS_RT),
+        ("/arm-io/wdt",        &WDT_BASE_RT),
     ];
     for (path, atomic) in table {
         if let Some(addr) = lookup_reg0(adt, path) {
