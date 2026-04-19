@@ -11,6 +11,96 @@ end of a session.
 
 ---
 
+## 2026-04-19 11:01 — Ubuntu — Session end: live, animated boot screen
+
+**Iterated past the static splash into a full animated boot screen.**
+The Mac's internal display now shows, rendered entirely by our Rust
++ 8x16 font + direct-FB pipeline:
+
+```
+        ____________.   (ASCII bat silhouette, 4x scale, amber)
+       /__.--.  .--.__\
+          \/    \/
+
+                  BAT_OS                    (8x scale, amber)
+
+     Bare Metal // Apple Silicon (M4 / T8132)
+              [booted via m1n1 chainload]
+
+              Chip       : T8132 (Donan / H16G)
+              Model      : Mac16,1
+              CPU        : Apple M4  4P + 6E
+              RAM        : 15759 MiB
+              Revision   : 3
+              ADT peripherals discovered: 0
+
+  [ok] m1n1 handoff accepted  (boot_args rev 3)
+  [ok] _apple_start  asm stages 1..5 complete
+  [ok] bringup_vectors installed at VBAR_EL1/EL2
+  [ok] boot_args::parse  OK  (devtree virt->phys)
+  [ok] discover_from_adt  walker bounded, 9 paths
+  [ok] kernel::process + scheduler + ipc  init
+  [ok] kernel::arch::init_exceptions
+  [ok] drivers::apple::aic::init
+  [ok] splash rendered  —  awaiting  mm::init fix
+
+                  uptime: 00:29              (live, updates)
+                  tick: 4497                 (live, counts up)
+```
+
+**The uptime is actual wall-clock accurate** — read via
+`CNTPCT_EL0` / `CNTFRQ_EL0` = 24 MHz Apple Silicon Generic Timer.
+Verified by camera sync: 20 s of wall-clock between frames
+matches 00:09 → 00:29 on-screen.
+
+**12 commits this session, `a37af844` → `bab72f6a`.** The single
+biggest root cause nailed was the BSS-zero bug in `boot.s` using
+link-time symbols instead of PC-relative — once fixed everything
+else fell into place fast.
+
+**What still doesn't work (queued for next session):**
+
+- `heap::init` on M4 hangs somewhere inside
+  `linked_list_allocator::LockedHeap::lock()`. Theory: `spin::Mutex`
+  uses LDXR/STXR which may require MMU-enabled Inner-Shareable
+  memory attributes; with MMU off everything is Device-nGnRnE and
+  exclusive monitors silently fail. Fix options: (a) bring up the
+  MMU first with an identity map and proper attrs; (b) replace
+  `LockedHeap` with a non-atomic bump allocator for early boot;
+  (c) disable the mutex via `unsafe` + `&mut Heap`. Option (b) is
+  the cleanest.
+- `discover_from_adt` returns 0 for peripherals — all 9 paths under
+  `/arm-io/...` fail to resolve on this run. `uart0`, `aic`, `disp0`
+  etc. should exist on M4; the walker is bounded now so it doesn't
+  hang, it just doesn't find them. Might be a sibling-enumeration
+  bug surfaced by the bounded walker; needs inspection.
+- Dockchannel UART driver still not written. `uart::puts` is a
+  no-op; we have no out-of-band logging channel to Ubuntu.
+- `dcp::init_simple_fb` + `boot_splash` never got to run via their
+  real code paths — we inline-render instead.
+
+**Files touched this full session:**
+- `.cargo/config.toml`  (build-std + alloc)
+- `.gitignore`  (exclude harness artifacts)
+- `docs/M4_GROUND_TRUTH.md`  (ARGB2101010, MPIDR, devtree handoff)
+- `docs/SESSION_JOURNAL.md`  (this file)
+- `scripts/fix-udev.sh`  (NEW)
+- `scripts/install-sudoers.sh`  (NEW)
+- `src/arch/aarch64/apple/boot.s`  (BSS-zero PC-relative, stage paints)
+- `src/drivers/apple/adt.rs`  (bounded `total_size`)
+- `src/drivers/apple/boot_args.rs`  (devtree virt→phys, `top_of_kernel_data`)
+- `src/drivers/apple/soc.rs`  (renamed M4 paths + positional stripes)
+- `src/drivers/apple/uart.rs`  (`UART_READY` gate)
+- `src/main.rs`  (bringup_vectors + full splash/log/uptime pipeline)
+- `src/ui/font.rs`  (`draw_str_scaled` + `draw_char_scaled`)
+
+**Next-Claude starting point:** fix heap (option (b) bump allocator
+is fastest), then re-enable `bring_up_all` / `dcp::boot_splash` /
+eventually `ui::desktop::run`. After that, port dockchannel UART
+and we have true remote serial visibility.
+
+---
+
 ## 2026-04-19 10:18 — Ubuntu — **BAT_OS SPLASH VISIBLE ON M4 DISPLAY** 🦇
 
 **We reached the "see Bat_OS" milestone this session.** The Mac's
