@@ -11,6 +11,66 @@ end of a session.
 
 ---
 
+## 2026-04-19 09:20 — Ubuntu — `discover_from_adt` partial, non-deterministic
+
+**Pushed `discover_from_adt` after commit `a37af844`.** Mixed results:
+
+- With all 9 ADT paths in the discovery table, lookup for
+  `/arm-io/dart-disp0` reliably hangs. Dumped per-path FB markers
+  showed we reach the GREEN marker (dart-disp0) and then stall
+  there for ~20 s, after which the Mac's iBoot watchdog resets.
+- Trimming the table to three verified paths (`uart0`, `aic`,
+  `disp0`) sometimes works — we reach R5 hot-pink halt (confirmed
+  once) — and sometimes hangs at R3/R4b on an identical rebuild.
+  The variable is m1n1's per-session ADT relocation; different
+  sibling orderings expose different traversal depths.
+
+**Root cause (not yet fixed).** `Node::total_size` in
+`src/drivers/apple/adt.rs` recurses through every descendant to
+compute a sibling offset. When searching for a node that doesn't
+exist under `/arm-io` we iterate ALL siblings, which triggers a
+recursive walk over each sibling's full subtree. At M4's slow
+pre-cpufreq boot clock this can take tens of seconds per missing
+lookup, and the iBoot watchdog bites before we finish. Occasionally
+a sibling's header is read as garbage (we don't know why yet) and
+our bounds checks return Err too late — the read itself must have
+faulted, but with no exception vectors installed the CPU enters a
+silent exception loop instead of returning an error.
+
+**What to do next session:**
+
+1. Install a minimal exception vector VERY EARLY in
+   `kernel_main_apple` — before any ADT walk. Even a dumb handler
+   that just re-paints the FB in a distinct color + WFEs is enough
+   to turn "Mac resets mysteriously" into a debug signal. Currently
+   `kernel::arch::init_exceptions` is called much later; move just
+   the VBAR_EL1 assignment up-front.
+2. Harden `adt::Node::total_size`: cap recursion depth to something
+   like 16, cap the per-call iteration count to match the observed
+   ADT fan-out (< 512 children per node), and return `Err` if the
+   caps are exceeded. That turns "silent watchdog reset" into a
+   clean `AdtError::OutOfBounds` that propagates back through
+   `subnode` and `lookup_reg0`.
+3. Once both are in place, re-enable the full 9-path discovery
+   table. Missing paths should return `None` cleanly.
+
+**Current code state (committed at `a37af844` and again here):**
+
+- `main.rs` halts at R5 hot pink after `discover_from_adt(&adt)`,
+  which contains only 3 paths. Sometimes reaches R5, sometimes
+  doesn't. The intermediate fb_hold markers (R1..R5, R3a..R3d, R4a,
+  R4b) are still in place for future bisection.
+- `soc.rs::discover_from_adt` trimmed to 3 paths as a workaround,
+  with a comment pointing here.
+- `boot_args.rs::parse` does the virt→phys devtree translation.
+- `boot.s` is clean through all 5 asm stages.
+
+**Next-Claude starting point:** fix #1 and #2 above, then re-enable
+full discovery. Don't waste cycles on per-run reproducibility while
+`total_size` can hang — the infra is hiding the real bug.
+
+---
+
 ## 2026-04-19 01:55 — Ubuntu — Rust-side bring-up past `args.adt()`
 
 **Big session.** Started with a cold repo on Ubuntu and drove Bat_OS

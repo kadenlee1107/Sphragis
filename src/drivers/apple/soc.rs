@@ -118,16 +118,16 @@ fn lookup_reg0(adt: &super::adt::Adt, path: &str) -> Option<usize> {
 /// "resolved N/10 peripherals from ADT" for sanity.
 pub fn discover_from_adt(adt: &super::adt::Adt) -> usize {
     let mut n = 0;
+    // M4 bring-up: only walk paths we've verified don't trip the
+    // subnode iterator. Missing-node lookups currently end up walking
+    // far enough into /arm-io that the iBoot watchdog (or an SError
+    // on a mis-sized total_size step) resets the machine. Needs a
+    // fix inside adt.rs; keeping the list small for now so the boot
+    // flow progresses past this function.
     let table: &[(&str, &AtomicUsize)] = &[
-        ("/arm-io/uart0",   &UART0_BASE_RT),
-        ("/arm-io/aic",     &AIC_BASE_RT),
-        ("/arm-io/disp0",   &DCP_BASE_RT),    // M4 uses disp0 naming
-        ("/arm-io/dart-disp0", &DCP_DART_RT),
-        ("/arm-io/ans",     &ANS_BASE_RT),
-        ("/arm-io/spi0",    &SPI0_BASE_RT),
-        ("/arm-io/sep",     &SEP_BASE_RT),
-        ("/arm-io/dart-usb", &DART_USB_RT),
-        ("/arm-io/dart-ans", &DART_ANS_RT),
+        ("/arm-io/uart0", &UART0_BASE_RT),
+        ("/arm-io/aic",   &AIC_BASE_RT),
+        ("/arm-io/disp0", &DCP_BASE_RT),
     ];
     for (path, atomic) in table {
         if let Some(addr) = lookup_reg0(adt, path) {

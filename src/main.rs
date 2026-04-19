@@ -491,7 +491,7 @@ global_asm!(include_str!("arch/aarch64/apple/boot.s"));
 //   0xFFF80000  orange         R=max, G=0x200
 //   0xE00C0000  dark-orange    R=0x200, G=0x300
 #[inline(never)]
-unsafe fn fb_mark(pixel: u32) {
+pub(crate) unsafe fn fb_mark(pixel: u32) {
     let fb = 0x103e0050000usize as *mut u32;
     // 16 MiB worth of 4-byte pixels = 4 M pixels, enough to fill most
     // of the 3024x1964 FB (~23.6 MiB). Faster than full fill and still
@@ -559,13 +559,10 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     // R4a: about to call args.adt(). PURPLE.
     unsafe { fb_hold(0xE00003FF); }
     let discovered = match args.adt() {
-        Ok(_adt) => {
+        Ok(adt) => {
             // R4b: args.adt() returned Ok. CYAN.
-            // TEMP: bypass discover_from_adt — it hangs somewhere in
-            // lookup_reg0 traversal. Returning 0 discovered peripherals
-            // so we can move past this in bring-up and debug later.
             unsafe { fb_hold(0xC00FFFFF); }
-            0usize
+            drivers::apple::soc::discover_from_adt(&adt)
         },
         Err(_) => {
             // R-fail-adt: RED-ORANGE.
@@ -573,13 +570,15 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
             loop { unsafe { core::arch::asm!("wfe"); } }
         }
     };
-    // R5: discover_from_adt returned. BROWN. HALT.
-    unsafe { fb_hold(0xE0020000); }
+    // R5: discover_from_adt returned. HOT PINK. HALT — this is the
+    // furthest reliably-reached point in bring-up. Next up: fix the
+    // ADT subnode iterator + install early exception handlers before
+    // we can safely walk more peripherals.
+    unsafe { fb_hold(0xFFF00200); }
     loop { unsafe { core::arch::asm!("wfe"); } }
-
-    // Initialize Apple UART for serial output (now uses the address
-    // resolved from the ADT).
     drivers::apple::uart::init();
+    #[allow(unreachable_code)]
+    {
     drivers::apple::uart::puts("\n");
     drivers::apple::uart::puts("================================================\n");
     drivers::apple::uart::puts("  BAT_OS — BARE METAL APPLE SILICON\n");
@@ -667,6 +666,7 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
             core::hint::spin_loop();
         }
     }
+    }  // close the allow(unreachable_code) block
 }
 
 #[panic_handler]
