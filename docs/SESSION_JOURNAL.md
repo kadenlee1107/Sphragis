@@ -11,6 +11,34 @@ end of a session.
 
 ---
 
+## 2026-04-18 (later) — Mac — Ubuntu host online
+
+**Goal:** Get the user's Windows PC repurposed as the persistent
+Ubuntu host that drives m1n1 chainload.
+
+**What happened:**
+- User decided to repartition their Windows PC's NVMe for a real
+  dual-boot Ubuntu install (vs the microSD path we discussed). Hit
+  Windows shrink-volume blocked-by-immovable-files (only 18 GB
+  shrinkable), eventually had to do a fresh Windows reinstall.
+- After fresh install + Ubuntu install on the NVMe, user is now in
+  persistent Ubuntu.
+- Tailscale up on Ubuntu side: hostname
+  `kaden-lee-AMD-Ryzen-7-8700F-8-Core-Processor`,
+  IP `100.70.246.39`. Saved to `docs/INFRA.md`.
+- Mac side hasn't joined Tailscale yet. Optional — GitHub-only flow
+  can still work for the core test loop.
+
+**Next:**
+- User installs Claude Code on Ubuntu, runs `claude` inside the
+  cloned repo. Ubuntu Claude reads CLAUDE.md and picks up.
+- Once Ubuntu Claude is up, drive a fresh chainload of the existing
+  bat_os_apple.bin to confirm the post-fix binary boots cleanly on
+  M4 (validates the apple-boot-section fix from earlier today).
+- After that, port PMGR + ATC_PHY drivers per ground-truth doc.
+
+---
+
 ## 2026-04-18 22:10 — Mac — Infrastructure landed on GitHub
 
 **Goal:** Move from scattered local files and ephemeral Ubuntu live-USB
