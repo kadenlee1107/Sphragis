@@ -58,31 +58,38 @@ impl BringUpReport {
 pub fn bring_up_all() -> BringUpReport {
     let mut r = BringUpReport::new();
 
-    // 1. DART bypass on the three DARTs we know about, so subsequent
-    //    DMA-capable driver bring-up works.
+    // 1. DART bypass on the three DARTs we know about.
     r.dart_usb  = if dart::Dart::usb().set_bypass(0).is_ok()  { 1 } else { 2 };
     r.dart_ans  = if dart::Dart::ans().set_bypass(0).is_ok()  { 1 } else { 2 };
     r.dart_disp = if dart::Dart::disp0().set_bypass(0).is_ok(){ 1 } else { 2 };
 
-    // 2. ANS firmware check — just poll the magic register.
-    //    Full bring_up() is gated on DMA infra we've only stubbed.
-    let ans = ans_nvme::AnsNvme::new(
-        soc::ans_base(),
-        asc::Asc::new(soc::ans_base() + 0x4_0000, soc::ans_base() + 0x4_4000),
-        dart::Dart::ans(),
-    );
-    r.ans_firmware = if ans.check_boot_status().is_ok() { 1 } else { 2 };
+    // 2. ANS firmware check. Only run if the ADT actually gave us a
+    //    resolved base; on M4 the ADT path for ANS isn't populated
+    //    yet (see M4_GROUND_TRUTH §3.1 "unknown") and the fallback
+    //    MMIO address is from M1-era, so reading it silently faults.
+    if soc::ans_base_resolved() {
+        let ans = ans_nvme::AnsNvme::new(
+            soc::ans_base(),
+            asc::Asc::new(soc::ans_base() + 0x4_0000, soc::ans_base() + 0x4_4000),
+            dart::Dart::ans(),
+        );
+        r.ans_firmware = if ans.check_boot_status().is_ok() { 1 } else { 2 };
+    }
 
-    // 3. DWC3 USB: core reset + set device mode (safe default).
-    let mut usb = dwc3::Dwc3::new(soc::dart_usb(), dart::Dart::usb());
-    r.dwc3_reset = if usb.bring_up(dwc3::Mode::Device).is_ok() { 1 } else { 2 };
+    // 3. DWC3 USB. Same guard — only attempt if base is ADT-resolved.
+    if soc::dart_usb_resolved() {
+        let mut usb = dwc3::Dwc3::new(soc::dart_usb(), dart::Dart::usb());
+        r.dwc3_reset = if usb.bring_up(dwc3::Mode::Device).is_ok() { 1 } else { 2 };
+    }
 
-    // 4. BCM Wi-Fi chip-ID probe (does NOT load firmware).
-    let mut wifi = bcm_wifi::BcmWifi::new(
-        soc::ans_base(), // placeholder; real addr is via APCIE enum
-        dart::Dart::usb(),
-    );
-    r.bcm_probe = if wifi.probe_chip_id().is_ok() { 1 } else { 2 };
+    // 4. BCM Wi-Fi chip-ID probe. Same guard.
+    if soc::ans_base_resolved() {
+        let mut wifi = bcm_wifi::BcmWifi::new(
+            soc::ans_base(),
+            dart::Dart::usb(),
+        );
+        r.bcm_probe = if wifi.probe_chip_id().is_ok() { 1 } else { 2 };
+    }
 
     r
 }

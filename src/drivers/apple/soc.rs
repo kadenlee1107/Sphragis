@@ -79,6 +79,16 @@ pub fn aic_base()   -> usize { rt_or(&AIC_BASE_RT,   AIC_BASE_FALLBACK) }
 pub fn dcp_base()   -> usize { rt_or(&DCP_BASE_RT,   DCP_BASE_FALLBACK) }
 pub fn dcp_dart()   -> usize { rt_or(&DCP_DART_RT,   DCP_DART_FALLBACK) }
 pub fn ans_base()   -> usize { rt_or(&ANS_BASE_RT,   ANS_BASE_FALLBACK) }
+
+/// Returns true only if the ADT actually populated the runtime base
+/// (i.e. not the M1-era fallback). Peripheral bring-up code should
+/// guard MMIO reads behind this so accessing unmapped M4 addresses
+/// doesn't silently fault.
+pub fn ans_base_resolved()  -> bool { UART0_BASE_RT.load(Ordering::Acquire); ANS_BASE_RT.load(Ordering::Acquire) != 0 }
+pub fn dart_usb_resolved()  -> bool { DART_USB_RT.load(Ordering::Acquire) != 0 }
+pub fn dart_ans_resolved()  -> bool { DART_ANS_RT.load(Ordering::Acquire) != 0 }
+pub fn dcp_dart_resolved()  -> bool { DCP_DART_RT.load(Ordering::Acquire) != 0 }
+pub fn uart0_resolved()     -> bool { UART0_BASE_RT.load(Ordering::Acquire) != 0 }
 pub fn spi0_base()  -> usize { rt_or(&SPI0_BASE_RT,  SPI0_BASE_FALLBACK) }
 pub fn mbox_base()  -> usize { rt_or(&MBOX_BASE_RT,  MBOX_BASE_FALLBACK) }
 pub fn sep_base()   -> usize { rt_or(&SEP_BASE_RT,   SEP_BASE_FALLBACK) }
