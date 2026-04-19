@@ -703,45 +703,45 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     // K8: about to paint minimal splash. HOT MAGENTA (0xFFF40100).
     unsafe { fb_hold(0xFFF40100); }
 
-    // Bypass dcp entirely — paint a BAT_OS splash directly via the
-    // font module with known-good FB parameters. This proves Bat_OS
-    // can render text on M4 without needing mm::init / DCP mailbox.
+    // Bypass dcp entirely — paint a BAT_OS splash directly via
+    // font::draw_str_scaled with known-good FB parameters. Each
+    // source pixel is rendered at scale=8 for the title so the
+    // text is actually readable on camera, scale=2 for subtitle.
     unsafe {
-        // Black out the full 16 MiB paint region.
-        fb_mark(0xC0000000);  // opaque black in ARGB2101010
+        // Black out the full paint region.
+        fb_mark(0xC0000000);
 
         let fb = 0x103e0050000usize as *mut u32;
         let stride_pixels: u32 = 0x2f40 / 4;   // exactly 3024 on M4
 
-        // Draw "BAT_OS" at 4x scale via offset re-draws, yellow-on-black.
-        const FG: u32 = 0xFFFFC000;  // amber
-        const BG: u32 = 0xC0000000;  // opaque black
+        const FG_TITLE: u32 = 0xFFFFC000;   // amber
+        const FG_SUB:   u32 = 0xFF40C0FF;   // cool blue
+        const FG_DIM:   u32 = 0xFF808080;   // gray
+        const BG:       u32 = 0xC0000000;   // opaque black
+
         let title = "BAT_OS";
-        let title_w = (title.len() as u32) * ui::font::CHAR_W * 4;
+        let ts: u32 = 8;   // title scale
+        let title_w = (title.len() as u32) * ui::font::CHAR_W * ts;
         let tx = (3024u32.saturating_sub(title_w)) / 2;
-        let ty: u32 = 700;
-        for sy in 0..4 {
-            for sx in 0..4 {
-                for (i, b) in title.bytes().enumerate() {
-                    let cx = tx + (i as u32) * ui::font::CHAR_W * 4 + sx;
-                    let cy = ty + sy;
-                    let buf = [b];
-                    let s = core::str::from_utf8_unchecked(&buf);
-                    ui::font::draw_str(fb, stride_pixels, cx, cy, s, FG, BG);
-                }
-            }
-        }
-        // Subtitle.
+        let ty: u32 = 500;
+        ui::font::draw_str_scaled(fb, stride_pixels, tx, ty, title,
+                                  FG_TITLE, BG, ts);
+
         let sub = "Bare Metal // Apple Silicon (M4 / T8132)";
-        let sub_w = (sub.len() as u32) * ui::font::CHAR_W;
+        let ss: u32 = 2;   // subtitle scale
+        let sub_w = (sub.len() as u32) * ui::font::CHAR_W * ss;
         let sx = (3024u32.saturating_sub(sub_w)) / 2;
-        ui::font::draw_str(fb, stride_pixels, sx, ty + ui::font::CHAR_H*4 + 20,
-                           sub, 0xFF40C0FF, BG);
+        let sy = ty + ui::font::CHAR_H * ts + 60;
+        ui::font::draw_str_scaled(fb, stride_pixels, sx, sy, sub,
+                                  FG_SUB, BG, ss);
+
         let foot = "[booted via m1n1 chainload]";
-        let foot_w = (foot.len() as u32) * ui::font::CHAR_W;
+        let fs: u32 = 2;
+        let foot_w = (foot.len() as u32) * ui::font::CHAR_W * fs;
         let fx = (3024u32.saturating_sub(foot_w)) / 2;
-        ui::font::draw_str(fb, stride_pixels, fx, ty + ui::font::CHAR_H*6 + 40,
-                           foot, 0xFF808080, BG);
+        let fy = sy + ui::font::CHAR_H * ss + 40;
+        ui::font::draw_str_scaled(fb, stride_pixels, fx, fy, foot,
+                                  FG_DIM, BG, fs);
 
         core::arch::asm!("dsb sy");
     }

@@ -255,6 +255,53 @@ pub fn draw_char(fb: *mut u32, screen_w: u32, x: u32, y: u32, ch: u8, fg: u32, b
     }
 }
 
+/// Draw one character scaled NxN. `scale=1` is equivalent to
+/// `draw_char`. Each source bit becomes an `scale x scale` block.
+pub fn draw_char_scaled(
+    fb: *mut u32, screen_w: u32,
+    x: u32, y: u32, ch: u8,
+    fg: u32, bg: u32, scale: u32,
+) {
+    let idx = if (32..=126).contains(&ch) { (ch - 32) as usize } else { 0 };
+    let glyph = &FONT_DATA[idx * 16..(idx + 1) * 16];
+    for row in 0..16u32 {
+        let bits = glyph[row as usize];
+        for col in 0..8u32 {
+            let color = if bits & (0x80 >> col) != 0 { fg } else { bg };
+            let bx = x + col * scale;
+            let by = y + row * scale;
+            for dy in 0..scale {
+                for dx in 0..scale {
+                    let px = bx + dx;
+                    let py = by + dy;
+                    if px < screen_w {
+                        unsafe {
+                            let offset = (py * screen_w + px) as usize;
+                            core::ptr::write_volatile(fb.add(offset), color);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Draw a string scaled NxN.
+pub fn draw_str_scaled(
+    fb: *mut u32, screen_w: u32,
+    x: u32, y: u32, s: &str,
+    fg: u32, bg: u32, scale: u32,
+) {
+    let char_w_scaled = CHAR_W * scale;
+    let mut cx = x;
+    for byte in s.bytes() {
+        if cx + char_w_scaled <= screen_w {
+            draw_char_scaled(fb, screen_w, cx, y, byte, fg, bg, scale);
+            cx += char_w_scaled;
+        }
+    }
+}
+
 /// Draw a string at pixel position (x, y).
 pub fn draw_str(fb: *mut u32, screen_w: u32, x: u32, y: u32, s: &str, fg: u32, bg: u32) {
     let mut cx = x;
