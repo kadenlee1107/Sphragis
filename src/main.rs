@@ -1269,6 +1269,26 @@ fn apple_shell_dispatch(line: &str) {
             uart::puts("  halting (wfe)\n");
             loop { unsafe { core::arch::asm!("wfe"); } }
         }
+        "smc-probe" => {
+            // M4-HV 2026-04-20 15:30: does EL1 under HV reach the
+            // SMC ASC MMIO at 0x38c600000 through stage-2 passthrough?
+            // If this returns without SError, the guest has direct
+            // access to SMC and we can do a keepalive poke from the
+            // busy-poll loop (see smc_keepalive_pet in serial path).
+            uart::puts("  reading SMC ASC regs from EL1 ...\n");
+            unsafe {
+                let cpu_ctrl = 0x38c600044u64 as *const u32;
+                let a2i_ctrl = 0x38c608110u64 as *const u32;
+                let i2a_ctrl = 0x38c608114u64 as *const u32;
+                let c = core::ptr::read_volatile(cpu_ctrl);
+                let a = core::ptr::read_volatile(a2i_ctrl);
+                let i = core::ptr::read_volatile(i2a_ctrl);
+                uart::puts("  SMC CPU_CONTROL:  0x"); uart::puthex32(c); uart::puts("\n");
+                uart::puts("  SMC A2I_CONTROL:  0x"); uart::puthex32(a); uart::puts("\n");
+                uart::puts("  SMC I2A_CONTROL:  0x"); uart::puthex32(i); uart::puts("\n");
+            }
+            uart::puts("  [smc-probe OK — stage-2 passes through SMC]\n");
+        }
         "bench" => {
             let sub = parts.next().unwrap_or("").trim();
             match sub {

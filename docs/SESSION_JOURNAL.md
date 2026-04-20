@@ -11,6 +11,155 @@ end of a session.
 
 ---
 
+## 2026-04-20 15:30 — Ubuntu — AOP RTKit + guest-side SMC: both verified, neither extends session
+
+Kaden's ask was "do the real driver work, stop dancing". Did it.
+Three approaches tested against the 27–96 s wall-clock ceiling:
+
+### Approach 1: Full AOP RTKit driver (aop.c / aop.h)
+
+Mirrored smc.c's structure — asc_init + rtkit_init + rtkit_boot.
+Added pmgr_adt_power_enable for /arm-io/aop/iop-aop-nub + /arm-io/
+dart-aop on the theory that T8132's AOP might be power-gated.
+
+Result on live chainload:
+```
+TTY> rtkit(aop): did not receive HELLO
+TTY> AOP: failed to boot RTKit (coprocessor unresponsive)
+```
+
+AOP's mailbox state (probed via `scripts/hv/probe_aop_state.py`):
+```
+AOP CPU_CONTROL:  0x00000010   (CPU running — iBoot left it started)
+AOP A2I_CONTROL:  0x00100101   (bit 20 + bit 8 + bit 0 — "ready")
+AOP I2A_CONTROL:  0x00020001   (EMPTY)
+SMC CPU_CONTROL:  0x00000010
+SMC A2I_CONTROL:  0x00020001   (clean "EMPTY" + bit 0)
+SMC I2A_CONTROL:  0x00020001
+```
+
+AOP's A2I_CONTROL differs from SMC's by bit 20 + bit 8. Interpretation:
+AOP is in a post-HELLO state that iBoot put it in. Stock m1n1's
+rtkit_boot() expects a cold-boot negotiation (POWER_INIT → HELLO
+from peer → HELLO_ACK → EPMAP round) — AOP ignores the POWER_INIT
+and never sends HELLO because it already handshook with iBoot.
+Hence the timeout.
+
+Evidence: ADT /arm-io/aop/iop-aop-nub has `pre-loaded: 1` — iBoot
+has the firmware installed. `scripts/hv/probe_aop_firmware.py`
+dumps the full AOP subtree for next-time reference.
+
+### Approach 2: Minimal AOP driver (bypass HELLO)
+
+Rewrote aop.c to skip rtkit_boot entirely:
+  - rtkit_init (struct alloc, no I/O)
+  - asc_cpu_start (idempotent)
+  - send POWER_INIT once, don't wait for reply
+  - pump receive from the vuart dockchannel trap handler at 10 Hz
+
+Chainload log showed:
+```
+TTY> AOP: ASC running, rtkit_dev alive, POWER_INIT sent (no HELLO wait)
+```
+
+Endurance result: **33 s**, guest WEDGED at ~3.04 M traps (same
+signature as every previous "HV-context ASC MMIO" attempt this
+session). Trap counter plateaus and never recovers → Mac reset.
+
+Log: `docs/2026-04-20_hv_aop_minimal_wedged_33s.txt`. Same class
+of failure as the earlier SMC-pump, SMC-nudge, AIC-drain, SPMI-
+poke experiments. **Rule, now decisively confirmed:** any ASC
+MMIO access from HV-context (hv_exc_fiq OR handle_vuart_
+dockchannel — both EL2) wedges the guest on T8132. Whatever's
+going on with stage-2 translation + ASC fabric interaction,
+we've proven it's not safe and moved on.
+
+Reverted aop.c/aop.h/Makefile changes.
+
+### Approach 3: Guest-side SMC MMIO from EL1
+
+Completely different path. Kaden's "guest-side ASC" suggestion:
+have Bat_OS do the MMIO from EL1 where stage-2 passthrough
+already covers /arm-io and no HV-context hazards apply.
+
+Landed three Bat_OS shell commands (src/ui/shell.rs):
+  - `smc-probe`: dsb sy → read SMC CPU_CONTROL, A2I_CONTROL,
+    I2A_CONTROL → dsb sy. Confirms stage-2 passthrough works.
+  - `smc-pet`: enables a 10 Hz SMC I2A_CTRL read piggy-backed on
+    every platform::serial_putc / serial_puts call (rate-limited
+    by CNTPCT_EL0).
+  - `smc-stop`: disables the poke.
+
+A `static mut SMC_KEEPALIVE_ACTIVE` flag controls the poke. Exposed
+`smc_keepalive_tick()` is called from the shell busy-poll loop,
+platform::serial_putc, and platform::serial_puts.
+
+**Live-hardware finding 1 (positive):** `smc-probe` succeeds every
+time — EL1 under HV can reach SMC MMIO directly. Values match the
+proxy-side probe:
+```
+SMC CPU_CONTROL:  0x00000010
+SMC A2I_CONTROL:  0x00020001
+SMC I2A_CONTROL:  0x00020001
+[smc-probe OK — stage-2 passes SMC MMIO to EL1]
+```
+`docs/2026-04-20_hv_smcprobe_EL1_OK.txt`.
+
+**Live-hardware finding 2 (negative):** `smc-pet` enabled via user
+command: session ran to **95 s** (upper variance band — no clear
+improvement). `smc-pet` enabled at boot (default=true): session
+ran to **87 s** AND the output plateau *extended* from ~14 s to
+~29 s (every serial byte now triggers an extra SMC-MMIO in the
+guest's TX path). Reverted default to false.
+
+Evidence:
+`docs/2026-04-20_hv_smcpet_toggled_95s.txt`,
+`docs/2026-04-20_hv_smcpet_default_87s.txt`.
+
+### Conclusion now, with real data
+
+The ~60–96 s wall-clock ceiling survives:
+  - SMC coprocessor from HV context (pump, nudge, full init)
+  - SMC coprocessor from EL1 guest context
+  - AOP coprocessor attempts (rtkit_boot fails; minimal bypass
+    wedges the guest)
+  - AIC event drain, WDT kick, SPMI direct MMIO, hv_arm_tick,
+    per-byte TX batching
+
+That's the list exhausted of everything that doesn't need a full
+XNU-style OS boot. The ceiling is an iBoot-era timeout that fires
+unless the OS completes a real handoff (full ASC initialisation
+including AOP properly handshook). Getting past it requires
+actually booting a kernel that does what XNU does at handoff
+time — months of work, not a session sub-task.
+
+### What shipped this round (kept in tree)
+
+- `scripts/hv/probe_aop_firmware.py` — ADT walk proving
+  AOP `pre-loaded: 1` + region layout.
+- `scripts/hv/probe_aop_state.py` — live AOP vs SMC ASC
+  mailbox/CPU register comparison.
+- `src/ui/shell.rs` `smc-probe` / `smc-pet` / `smc-stop` +
+  `smc_keepalive_tick()` — user-toggleable EL1→SMC MMIO
+  keepalive, default off.
+- `src/main.rs` `smc-probe` in apple_run_cmd too.
+- `src/platform.rs` — smc_keepalive_tick call sites in
+  serial_putc / serial_puts (no-op when flag is false).
+
+### What got reverted
+
+- aop.c / aop.h / Makefile AOP wiring (both attempts wedged the
+  guest via HV-context MMIO).
+- SMC_KEEPALIVE_ACTIVE default back to false (extends plateau,
+  doesn't help ceiling).
+
+Evidence logs archived:
+`docs/2026-04-20_hv_smcprobe_EL1_OK.txt` — the one positive
+proof that EL1 can do direct MMIO into an Apple ASC on M4 under
+HV. Useful primitive for future work.
+
+---
+
 ## 2026-04-20 14:45 — Ubuntu — HV supervisor: controllable auto-recovery loop ✅
 
 Kaden's ask was "controllable — no more random resets and patchy

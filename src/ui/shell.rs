@@ -28,6 +28,7 @@ pub fn run() -> ! {
     console::prompt();
 
     loop {
+        smc_keepalive_tick();
         if let Some(c) = platform::serial_getc() {
             match c {
                 b'\r' | b'\n' => {
@@ -138,6 +139,9 @@ fn execute(cmd: &str) {
             }
         }
         "screen" => cmd_screen(parts[1]),
+        "smc-probe" => cmd_smc_probe(),
+        "smc-pet" => cmd_smc_pet_start(),
+        "smc-stop" => cmd_smc_pet_stop(),
         "" => {}
         _ => {
             console::puts("  unknown command: ");
@@ -326,6 +330,84 @@ fn cmd_uptime() {
 fn cmd_panic() {
     console::puts("  Triggering kernel panic...\n");
     panic!("user-triggered panic from shell");
+}
+
+/// SMC ASC base on M4 T8132 (confirmed via ADT walk 2026-04-20):
+/// 0x38c600000 with mailbox at +0x8000. We reach it from EL1 via
+/// stage-2 passthrough — m1n1's HV maps all non-traced /arm-io
+/// zones as TraceMode.OFF which expands to hv_map_hw.
+const SMC_CPU_CTRL: u64 = 0x38c600044;
+const SMC_A2I_CTRL: u64 = 0x38c608110;
+const SMC_I2A_CTRL: u64 = 0x38c608114;
+
+/// Flag read by every call site of smc_keepalive_tick (shell loop,
+/// platform::serial_putc, platform::serial_puts). Default OFF —
+/// live-hardware A/B on 2026-04-20 showed that periodic SMC MMIO
+/// reads from EL1 don't extend the ~60-96 s wall-clock session
+/// ceiling AND actually extend the output plateau from ~14 s to
+/// ~29 s (every serial_putc adds an SMC MMIO to the guest's TX
+/// path, which apparently isn't as cheap as we'd hoped). Keep
+/// the plumbing but default it off so the user can toggle with
+/// `smc-pet` / `smc-stop` if a future theory wants another A/B.
+pub static mut SMC_KEEPALIVE_ACTIVE: bool = false;
+
+fn cmd_smc_probe() {
+    platform::serial_puts("  reading SMC ASC regs from EL1 ...\n");
+    // Wrap the reads in a small synchronous fence so a bad stage-2
+    // mapping turns into a reproducible SError at the read site
+    // instead of later elsewhere.
+    unsafe {
+        core::arch::asm!("dsb sy", options(nomem, nostack));
+        let c = core::ptr::read_volatile(SMC_CPU_CTRL as *const u32);
+        let a = core::ptr::read_volatile(SMC_A2I_CTRL as *const u32);
+        let i = core::ptr::read_volatile(SMC_I2A_CTRL as *const u32);
+        core::arch::asm!("dsb sy", options(nomem, nostack));
+        platform::serial_puts("  SMC CPU_CONTROL:  0x");
+        crate::drivers::apple::uart::puthex32(c);
+        platform::serial_puts("\n");
+        platform::serial_puts("  SMC A2I_CONTROL:  0x");
+        crate::drivers::apple::uart::puthex32(a);
+        platform::serial_puts("\n");
+        platform::serial_puts("  SMC I2A_CONTROL:  0x");
+        crate::drivers::apple::uart::puthex32(i);
+        platform::serial_puts("\n");
+    }
+    platform::serial_puts("  [smc-probe OK — stage-2 passes SMC MMIO to EL1]\n");
+}
+
+fn cmd_smc_pet_start() {
+    unsafe { SMC_KEEPALIVE_ACTIVE = true; }
+    platform::serial_puts("  [smc-pet active — 10 Hz SMC MMIO poke from every output path]\n");
+}
+
+fn cmd_smc_pet_stop() {
+    unsafe { SMC_KEEPALIVE_ACTIVE = false; }
+    platform::serial_puts("  [smc-pet disabled — control run, no SMC MMIO from EL1]\n");
+}
+
+/// Called from the shell busy-poll loop at full poll rate — rate-
+/// limited internally to ~10 Hz so we don't flood the SoC fabric.
+/// When SMC_KEEPALIVE_ACTIVE is true we read SMC's I2A_CTRL
+/// register (harmless read, no side effects) to generate periodic
+/// bus traffic to the SMC ASC. Theory: the wall-clock SoC reset
+/// fires when SMC sees no AP activity for N seconds.
+#[inline(always)]
+pub fn smc_keepalive_tick() {
+    unsafe {
+        if !SMC_KEEPALIVE_ACTIVE { return; }
+        // CNTPCT-based rate limit — every ~100 ms.
+        static mut LAST_TICK: u64 = 0;
+        let now: u64;
+        let freq: u64;
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) now);
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+        if freq == 0 { return; }
+        let threshold = freq / 10;
+        if now.wrapping_sub(LAST_TICK) < threshold { return; }
+        LAST_TICK = now;
+        // One SMC read. Discard value.
+        let _ = core::ptr::read_volatile(SMC_I2A_CTRL as *const u32);
+    }
 }
 
 fn print_num(n: usize) {

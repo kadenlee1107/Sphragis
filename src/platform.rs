@@ -33,14 +33,23 @@ pub fn is_apple_silicon() -> bool {
 pub fn serial_putc(c: u8) {
     match current() {
         Platform::QemuVirt => crate::drivers::uart::putc(c),
-        Platform::AppleSilicon => crate::drivers::apple::uart::putc(c),
+        Platform::AppleSilicon => {
+            crate::drivers::apple::uart::putc(c);
+            // Piggy-back the SMC keepalive on every byte the guest
+            // emits. Rate-limited internally to ~10 Hz so heavy
+            // output doesn't flood the SoC fabric.
+            crate::ui::shell::smc_keepalive_tick();
+        }
     }
 }
 
 pub fn serial_puts(s: &str) {
     match current() {
         Platform::QemuVirt => crate::drivers::uart::puts(s),
-        Platform::AppleSilicon => crate::drivers::apple::uart::puts(s),
+        Platform::AppleSilicon => {
+            crate::drivers::apple::uart::puts(s);
+            crate::ui::shell::smc_keepalive_tick();
+        }
     }
 }
 
