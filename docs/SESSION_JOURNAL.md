@@ -11,6 +11,128 @@ end of a session.
 
 ---
 
+## 2026-04-20 10:45 — Ubuntu — FULL MICROKERNEL DESKTOP ON M4 UNDER HV ✅🖥️
+
+Session-end handoff. All of QEMU's boot UX is now reachable on M4
+under the HV:
+
+  splash → auth gate → **desktop with 9 tabs** → interactive shell
+  with `screen` capture → PNG on Ubuntu.
+
+Evidence: `docs/screens/2026-04-20_batos_hv_desktop_8x.png` (the
+faint tab bar across the top plus the shell pane below are from
+`ui::desktop::run()` — the same code QEMU runs, now living on
+3024×1964 M4 ARGB2101010 via the `ui::gpu` shim).
+
+### What landed this session (newest first)
+
+- `52a9ec5c` `ui::shell::cmd_screen` bypasses `apple::uart::putc`
+  (which mirrors to `fb_console`) on Apple and writes directly to
+  dockchannel TX8 — prevents the vuart ring from deadlocking on a
+  full FB dump.
+- `49c8b077` `security::deadman` + `security::wipe` now route
+  through `platform::serial_*`. They used to write to QEMU PL011
+  MMIO (0x09000000) which is unmapped on Apple → SError right
+  after auth passed.
+- `195948d2` skip the kernel self-test auto-run at boot; ate ~100 s
+  of budget. Still available via the `self-test` shell command.
+- `9c8f660f` Python HV installs a stage-2 alias
+  0x810000000→guest_base (32 MiB) AFTER `pt_update()` so the
+  ADT-driven identity passthrough for 0x800000000-0xae0000000
+  doesn't clobber it. Also adds a `screen` command to `ui::shell`.
+  This turned out NOT to be the primary SError cause — deadman was
+  — but the alias is still correct insurance against any stray
+  link-time absolutes from Rust codegen.
+- `36c21bda` (pre-fix) deferred desktop call, documented what we
+  saw for handoff.
+- `72bc6d78` bulk swap `drivers::uart` → `platform::serial_*` in
+  ui::desktop, ui::shell, ui::apps::browser.
+- `be7a1abb` + `4dded675` login screen renders + real auth flow
+  (`BAT_OS_PASSPHRASE=batman` works end to end).
+- `6b69d83c` `ui::gpu` shim + `font::draw_*` ARGB8888→native
+  colour conversion — the fundamental primitive that made
+  QEMU UI code run on Apple.
+
+### What still sucks (candidates for next session)
+
+1. **Session length is still ~45-100 s wall clock.** We work around
+   it by cramming the demo into the first sub-minute. Real fix
+   needs root-causing what's pinging an Apple watchdog. Known:
+   - It's wall-clock based, not CPU-load based (tested at 700 kHz
+     vs 1 kHz trap rates; same ~45 s with FB dead, ~100 s with
+     FB kept alive).
+   - `BATOS_KEEP_FB=1` extends to ~100 s because DCP scanning
+     generates bus activity that partially placates whatever's
+     watching.
+   - Heartbeats stop at the last moment before the USB drops;
+     trap counter climbs linearly right up to that point. So the
+     HV itself isn't crashing — m1n1 is alive when the Mac resets.
+   - Suspect: Apple SMC/AOP heartbeat over I2C/SPMI. Stock m1n1's
+     `uartproxy_run` loop does continuous DWC3 event polling that
+     apparently keeps SMC happy; under HV we only drain on guest
+     MMIO traps.
+   - Experiments to try:
+     (a) Deliberate background bus-master DMA from the HV every
+         few seconds (e.g. periodic memcpy through DART).
+     (b) Implement the real SMC heartbeat path: find the I2C/SPMI
+         mailbox m1n1 already knows about and fire a keepalive.
+     (c) Re-enable `hv_arm_tick` on M4 (currently gated) — earlier
+         attempts destabilised the Mac, but with today's cleanup
+         maybe the FIQ path is stable enough now. Worth one more
+         shot with proper heartbeat instrumentation.
+
+2. **Apple HV tick (task #6).** Gated off because an earlier run
+   destabilised the Mac in 17 ms. Now that the remaining Apple
+   IMPDEF MSRs in `hv_exc_*` paths are gated and the obvious
+   SError sources (PL011, desktop rodata pointers) are fixed,
+   it's worth another try. The tick would give us periodic
+   `hv_tick` → `iodev_handle_events` draining of BOTH the proxy
+   AND vuart endpoints without needing guest MMIO, which could
+   also help (1).
+
+3. **Desktop apps.** `ui::desktop::run()` renders the frame but
+   individual app renderers (`apps::dashboard::render()`, files,
+   netmon, editor, security, comms, browser, batcave) haven't
+   been exercised on M4 yet. Each has its own rendering path;
+   some may also hit ARGB8888 vs M4 conversion edges we haven't
+   caught (font::draw handles this, but direct set_pixel calls
+   or gradient routines might not).
+
+4. **Higher-res screen capture.** 1/8 scale is quick but blurry.
+   1/4 works but takes longer (490 rows × 756 × 8 chars ≈ 3 MiB
+   output). Beyond that we start fighting the session-length
+   budget. A smarter encoding (Base85 or compressed) would fit
+   full 3024x1964 in budget.
+
+### Repro recipe (proven on 2026-04-20)
+
+```bash
+# 1. Build with a known passphrase:
+BAT_OS_PASSPHRASE=batman bash build_apple.sh
+
+# 2. After Mac boots back to stock m1n1, chainload the patched
+#    m1n1 + proxy-client stack:
+sudo -n --preserve-env=M1N1DEVICE,M1N1WAIT \
+  M1N1DEVICE=/dev/ttyACM1 M1N1WAIT=1 \
+  /usr/bin/python3 \
+  /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py \
+  -S /home/kaden-lee/code/Bat_OS/external/m1n1/build/m1n1.macho
+
+# 3. Run the guest with FB kept + scripted auth + screen capture:
+sg dialout -c "BATOS_KEEP_FB=1 BATOS_HV_STIMULUS='batman;;screen 8' \
+  timeout 120 /usr/bin/python3 \
+  /home/kaden-lee/code/Bat_OS/scripts/hv/batos_hv_interactive.py" \
+  > /tmp/hv.log 2>&1
+
+# 4. Decode the captured FB dump into a PNG:
+python3 /tmp/capture_screen.py /tmp/hv.log /tmp/batos.png
+```
+
+Previous section has older entries — skim that timeline if you're
+onboarding cold.
+
+---
+
 ## 2026-04-20 09:30 — Ubuntu — BAT_OS SCREEN VISIBLE ON UBUNTU, CAMERA OBSOLETE ✅📸→🗑️
 
 You can now see Bat_OS's live M4 LCD from Ubuntu with no HDMI cable,
