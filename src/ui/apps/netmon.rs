@@ -1,7 +1,7 @@
 // Bat_OS — Network Monitor App
 // Live network status, firewall activity, connection info.
 
-use crate::drivers::virtio::gpu;
+use crate::ui::gpu;
 use crate::ui::font;
 use crate::ui::wm;
 use crate::net;

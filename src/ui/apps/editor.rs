@@ -3,7 +3,7 @@
 // Minimal text editor with syntax-aware display.
 // Phase 6 scaffold — full editing comes later.
 
-use crate::drivers::virtio::gpu;
+use crate::ui::gpu;
 use crate::ui::font;
 use crate::ui::wm;
 

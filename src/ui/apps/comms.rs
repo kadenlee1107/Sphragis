@@ -13,7 +13,7 @@
 
 use crate::ui::wm;
 use crate::ui::font;
-use crate::drivers::virtio::gpu;
+use crate::ui::gpu;
 use crate::crypto::{aes, sha256};
 
 const BG: u32 = 0xFF0A0A0A;

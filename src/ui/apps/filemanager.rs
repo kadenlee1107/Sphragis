@@ -1,7 +1,7 @@
 // Bat_OS — File Manager App
 // Browse the encrypted vault. View file listing with metadata.
 
-use crate::drivers::virtio::gpu;
+use crate::ui::gpu;
 use crate::ui::font;
 use crate::ui::wm;
 use crate::fs::batfs;

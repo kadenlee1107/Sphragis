@@ -1,7 +1,7 @@
 // Bat_OS — BatCave Manager App
 // 6th desktop app — visual overview of all BatCaves.
 
-use crate::drivers::virtio::gpu;
+use crate::ui::gpu;
 use crate::ui::font;
 use crate::ui::wm;
 use crate::batcave::cave;

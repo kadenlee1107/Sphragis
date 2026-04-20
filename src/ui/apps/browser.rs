@@ -12,7 +12,7 @@
 
 use crate::ui::wm;
 use crate::ui::font;
-use crate::drivers::virtio::gpu;
+use crate::ui::gpu;
 use crate::drivers::uart;
 
 const BG: u32 = 0xFF0A0A0A;         // page background

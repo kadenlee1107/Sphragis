@@ -817,10 +817,28 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
             let _ = drivers::apple::spi::init();
         }
 
-        // `ui::desktop::run()` is virtio-gpu + ARGB8888-native and
-        // dead-ends on M4 (no virtio device, PL011 getc returns None
-        // forever). Apple path gets its own minimal shell that drives
-        // real kernel ops via the dockchannel UART.
+        // V-APPLE-UX-1: paint the auth-gate login screen for preview.
+        // Uses the ui::gpu platform-neutral shim so the exact same
+        // rendering code QEMU uses lands on the M4 LCD. Full
+        // verify-loop boot_screen::run() is the next step — for now
+        // we paint once, hold for a few seconds so a `screen` dump
+        // can capture it, then proceed into the shell.
+        let mut duress_buf_apple = [0u8; 16];
+        let duress_apple = derive_secret_string(DURESS_LABEL, &mut duress_buf_apple);
+        let passphrase_str_apple = core::str::from_utf8(passphrase_slice)
+            .unwrap_or_else(|_| core::str::from_utf8(duress_apple).unwrap_or(""));
+        let duress_str_apple = core::str::from_utf8(duress_apple).unwrap_or("");
+        security::auth::init(passphrase_str_apple, duress_str_apple);
+        drivers::apple::uart::puts("[security] Painting auth gate (dev preview)...\n");
+        security::boot_screen::run_dev_preview(8_000);
+        drivers::apple::uart::puts("[security] Auth preview done — launching shell\n");
+
+        // V-APPLE-UX-2: arm dead-man's-switch (48 h) just like QEMU.
+        security::deadman::arm(48);
+
+        // Shell first — desktop tabs port is the next task. Operator
+        // can exit shell with `halt` and re-enter via Ctrl-L when the
+        // desktop is online.
         apple_serial_shell();
     } else {
         drivers::apple::uart::puts("[boot] No display — serial shell\n\n");

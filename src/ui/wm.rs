@@ -4,7 +4,7 @@
 // Ctrl+1-5 switches apps. Ctrl+H/L splits horizontal/vertical.
 // Sharp angular borders, bat aesthetic.
 
-use crate::drivers::virtio::gpu;
+use crate::ui::gpu;
 use super::font;
 use core::sync::atomic::{AtomicU8, AtomicBool, Ordering};
 

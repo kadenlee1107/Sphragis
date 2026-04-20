@@ -1,7 +1,7 @@
 // Bat_OS — System Dashboard App
 // Real-time system overview: CPU, memory, security, uptime.
 
-use crate::drivers::virtio::gpu;
+use crate::ui::gpu;
 use crate::ui::font;
 use crate::ui::wm;
 

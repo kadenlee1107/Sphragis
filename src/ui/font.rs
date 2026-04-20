@@ -6,6 +6,19 @@
 pub const CHAR_W: u32 = 8;
 pub const CHAR_H: u32 = 16;
 
+/// Convert an ARGB8888 colour word to the active platform's native
+/// framebuffer word. On QEMU that's a no-op; on Apple M4 it packs
+/// into ARGB2101010.
+#[inline(always)]
+fn to_native(color_argb8888: u32) -> u32 {
+    match crate::platform::current() {
+        crate::platform::Platform::AppleSilicon => {
+            crate::drivers::apple::dcp::argb8888_to_m4(color_argb8888)
+        }
+        crate::platform::Platform::QemuVirt => color_argb8888,
+    }
+}
+
 // Global clip rectangle — pixels outside this area are not drawn
 static mut CLIP_X: u32 = 0;
 static mut CLIP_Y: u32 = 0;
@@ -238,6 +251,8 @@ pub fn draw_char(fb: *mut u32, screen_w: u32, x: u32, y: u32, ch: u8, fg: u32, b
     };
 
     let glyph = &FONT_DATA[idx * 16..(idx + 1) * 16];
+    let fg_nat = to_native(fg);
+    let bg_nat = to_native(bg);
 
     for row in 0..16u32 {
         let bits = glyph[row as usize];
@@ -245,7 +260,7 @@ pub fn draw_char(fb: *mut u32, screen_w: u32, x: u32, y: u32, ch: u8, fg: u32, b
             let px = x + col;
             let py = y + row;
             if px < screen_w && in_clip(px, py) {
-                let color = if bits & (0x80 >> col) != 0 { fg } else { bg };
+                let color = if bits & (0x80 >> col) != 0 { fg_nat } else { bg_nat };
                 unsafe {
                     let offset = (py * screen_w + px) as usize;
                     core::ptr::write_volatile(fb.add(offset), color);
@@ -280,10 +295,12 @@ pub fn draw_char_scaled(fb: *mut u32, screen_w: u32, x: u32, y: u32,
     }
     let idx = if ch >= 32 && ch <= 126 { (ch - 32) as usize } else { 0 };
     let glyph = &FONT_DATA[idx * 16..(idx + 1) * 16];
+    let fg_nat = to_native(fg);
+    let bg_nat = to_native(bg);
     for row in 0..16u32 {
         let bits = glyph[row as usize];
         for col in 0..8u32 {
-            let color = if bits & (0x80 >> col) != 0 { fg } else { bg };
+            let color = if bits & (0x80 >> col) != 0 { fg_nat } else { bg_nat };
             // Fill a scale×scale block for this source pixel.
             for dy in 0..scale {
                 for dx in 0..scale {

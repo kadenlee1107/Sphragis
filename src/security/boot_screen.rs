@@ -8,9 +8,9 @@
 // - Wrong attempts show remaining count
 // - Duress code triggers fake boot animation + silent wipe
 
-use crate::drivers::virtio::gpu;
+use crate::ui::gpu;
 use crate::ui::font;
-use crate::drivers::uart;
+use crate::platform;
 use super::{auth, wipe, deadman};
 
 const BLACK: u32 = 0xFF000000;
@@ -18,6 +18,48 @@ const WHITE: u32 = 0xFFFFFFFF;
 const DIM: u32 = 0xFF3A3A3A;
 const RED: u32 = 0xFF0000FF;
 const GREEN: u32 = 0xFF00FF00;
+
+/// Dev helper: paint the login screen exactly once (same design as
+/// `run`), then return after a fixed delay. Lets the operator see /
+/// screenshot the auth UI without needing a real passphrase. Use on
+/// the Apple HV path during development where auth isn't the focus.
+pub fn run_dev_preview(hold_ms: u64) {
+    let w = gpu::width();
+    let h = gpu::height();
+    let fb = gpu::framebuffer();
+
+    gpu::fill_screen(BLACK);
+    let cx = w / 2;
+    let cy = h / 2 - 80;
+    draw_bat(fb, w, cx, cy - 40);
+    font::draw_str(fb, w, cx - 28, cy + 20, "BAT_OS", WHITE, BLACK);
+    font::draw_str(fb, w, cx - 80, cy + 80, "PASSPHRASE:", DIM, BLACK);
+    let field_x = cx - 120;
+    let field_y = cy + 100;
+    let field_w = 240u32;
+    let field_h = 24u32;
+    gpu::fill_rect(field_x, field_y, field_w, 1, DIM);
+    gpu::fill_rect(field_x, field_y + field_h, field_w, 1, DIM);
+    gpu::fill_rect(field_x, field_y, 1, field_h, DIM);
+    gpu::fill_rect(field_x + field_w, field_y, 1, field_h, DIM);
+    font::draw_str(fb, w, cx - 80, cy + 140, "YUBIKEY:", DIM, BLACK);
+    font::draw_str(fb, w, cx, cy + 140, "[DEV PREVIEW]", DIM, BLACK);
+    gpu::flush(0, 0, w, h);
+
+    // Busy-wait with CNTPCT so we hold the screen long enough to be
+    // captured via `screen` or a phone photo.
+    let freq: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq); }
+    let start: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) start); }
+    let target = (freq / 1000) * hold_ms;
+    loop {
+        let now: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+        if now.wrapping_sub(start) >= target { break; }
+        core::hint::spin_loop();
+    }
+}
 
 /// Run the boot authentication screen.
 /// Returns only on successful authentication.
@@ -73,7 +115,7 @@ pub fn run() {
         let mut cursor_x = field_x + 4;
 
         loop {
-            if let Some(c) = uart::getc() {
+            if let Some(c) = platform::serial_getc() {
                 match c {
                     b'\r' | b'\n' => break,
                     0x08 | 0x7F => {

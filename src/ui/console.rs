@@ -3,7 +3,7 @@
 // Terminal emulator rendered to the framebuffer.
 // Handles text output and cursor management.
 
-use crate::drivers::virtio::gpu;
+use crate::ui::gpu;
 use super::font::{self, CHAR_W, CHAR_H};
 use core::sync::atomic::{AtomicU32, Ordering};
 

@@ -1,6 +1,7 @@
 pub mod apps;
 pub mod console;
 pub mod font;
+pub mod gpu;
 pub mod shell;
 pub mod truetype;
 pub mod wm;

@@ -5,7 +5,7 @@
 
 use crate::ui::wm;
 use crate::ui::font;
-use crate::drivers::virtio::gpu;
+use crate::ui::gpu;
 use crate::batcave::cave;
 
 const BG: u32 = 0xFF0A0A0A;

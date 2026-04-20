@@ -131,7 +131,7 @@ fn execute(cmd: &str) {
                 // Switch to browser, render, then switch back to shell
                 crate::ui::wm::switch_app(crate::ui::wm::APP_BROWSER);
                 crate::ui::apps::browser::render();
-                crate::drivers::virtio::gpu::flush(0, 0, 1280, 1024);
+                crate::ui::gpu::flush(0, 0, crate::ui::gpu::width(), crate::ui::gpu::height());
                 crate::ui::wm::switch_app(crate::ui::wm::APP_SHELL);
             } else {
                 console::puts("  usage: browse <url>\n");
@@ -788,8 +788,8 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str) {
                         cave::grant_cap(arg1, "display").ok();
                     }
                     // Allocate display region (quarter of screen)
-                    let w = crate::drivers::virtio::gpu::width();
-                    let h = crate::drivers::virtio::gpu::height();
+                    let w = crate::ui::gpu::width();
+                    let h = crate::ui::gpu::height();
                     cave::alloc_display(arg1, w / 4, 30, w / 2, h / 2).ok();
                     cave::enter(arg1).ok();
 
