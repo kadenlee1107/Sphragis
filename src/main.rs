@@ -910,6 +910,7 @@ fn apple_shell_dispatch(line: &str) {
             uart::puts("  sha256 <text>  — SHA-256 hash of <text> (hex)\n");
             uart::puts("  bench sha256   — time 64 KiB of software SHA-256\n");
             uart::puts("  self-test      — frame alloc + BatFS encrypt/verify/Merkle round-trip\n");
+            uart::puts("  sha-hw         — probe ARMv8.2 SHA-256 crypto extension\n");
             uart::puts("  batfs ls       — list BatFS files\n");
             uart::puts("  batfs create <name> <plaintext>\n");
             uart::puts("  batfs read <name>\n");
@@ -986,6 +987,57 @@ fn apple_shell_dispatch(line: &str) {
                 uart::puts("FAIL\n");
             }
             uart::puts("[selftest] all PASS\n");
+        }
+        "sha-hw" => {
+            // Probe whether the ARMv8.2 SHA256 crypto instructions
+            // (SHA256H / H2 / SU0 / SU1) actually execute at EL1
+            // under HV. If HCR_EL2.TRND bit or CPTR_EL2 traps SIMD,
+            // these will UNDEF and the kernel exception handler will
+            // print something. A successful run prints the expected
+            // output vector, proving FP/NEON is live AND the SHA2
+            // crypto unit is accessible from the guest.
+            let isar0: u64;
+            unsafe { core::arch::asm!("mrs {}, id_aa64isar0_el1", out(reg) isar0); }
+            let sha2 = (isar0 >> 12) & 0xf;
+            uart::puts("  ISAR0.SHA2 nibble: 0x"); uart::puthex32(sha2 as u32); uart::puts("\n");
+            if sha2 == 0 {
+                uart::puts("  SHA256 crypto extension not advertised — skipping\n");
+                return;
+            }
+            // Test vector: run SHA256H once on zero input and print
+            // the resulting V0 low 64 bits. If the instruction faults
+            // the handle_sync_exception will take over; if it doesn't
+            // we should see a specific value back.
+            let mut out0: u64 = 0;
+            let mut out1: u64 = 0;
+            let ok = unsafe {
+                // Enable the +sha2 target feature for just this block
+                // via a .arch directive inside the inline asm. The
+                // default aarch64-unknown-none target doesn't advertise
+                // sha2, so the assembler refuses SHA256H* otherwise.
+                core::arch::asm!(
+                    ".arch armv8.2-a+sha2",
+                    "movi v0.16b, #0",
+                    "movi v1.16b, #0",
+                    "movi v2.16b, #0x42",
+                    "movi v3.16b, #0x42",
+                    "sha256h   q0, q1, v2.4s",
+                    "sha256h2  q1, q0, v2.4s",
+                    "sha256su0 v2.4s, v3.4s",
+                    "mov {0}, v0.d[0]",
+                    "mov {1}, v0.d[1]",
+                    out(reg) out0,
+                    out(reg) out1,
+                    options(nostack),
+                );
+                true
+            };
+            if ok {
+                uart::puts("  SHA256H/H2/SU0 executed (no UNDEF)\n");
+                uart::puts("  V0.d[0] = 0x"); uart::puthex64(out0); uart::puts("\n");
+                uart::puts("  V0.d[1] = 0x"); uart::puthex64(out1); uart::puts("\n");
+                uart::puts("  -> hardware SHA-256 accessible from EL1 guest\n");
+            }
         }
         "rng" => {
             // Report what entropy sources are in play. Verifies M4

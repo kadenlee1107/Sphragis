@@ -1,0 +1,15 @@
+bat_os> 
+[vuart] >>> b'sha-hw\r'
+sha-hw
+  ISAR0.SHA2 nibble: 0x00000002
+  SHA256H/H2/SU0 executed (no UNDEF)
+  V0.d[0] = 0x58302415a1fa6589
+  V0.d[1] = 0x424242422e2e2e2d
+  -> hardware SHA-256 accessible from EL1 guest
+bat_os> TTY> HV alive t=1s traps=696822
+TTY> HV alive t=2s traps=1396464
+TTY> HV alive t=3s traps=2096086
+TTY> HV alive t=4s traps=2795721
+TTY> HV alive t=5s traps=3495353
+TTY> HV alive t=6s traps=4194981
+TTY> HV alive t=7s traps=4894775
