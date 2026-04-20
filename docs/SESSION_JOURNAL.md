@@ -11,6 +11,69 @@ end of a session.
 
 ---
 
+## 2026-04-20 11:05 — Ubuntu — hv_arm_tick re-enabled on M4: +43% session length
+
+Task #6 revisited. The journal's 2026-04-19 22:30 entry concluded
+"the HV tick is NOT the destabiliser after all, but also isn't
+helping" and left the gate at `chip_id != T8132`. That conclusion
+predated the three SError fixes that landed later the same day
+(PL011 path → platform::serial_*, rodata absolute pointers →
+stage-2 alias, vuart-FB deadlock → direct-dockchannel cmd_screen).
+Re-testing with those fixes in place shows tick now helps:
+
+Back-to-back A/B on identical `bat_os_apple.bin`, identical
+stimulus (`batman` unlock then 14× `uptime` with 0.8 s spacing),
+`BATOS_KEEP_FB=1`, `-S` chainload:
+
+  - tick DISABLED (`chip_id != T8132` gate): last heartbeat
+    **t=60s traps=23712110** → USB drop.
+    log: `docs/2026-04-20_hv_control_notick_60s.txt`
+
+  - tick ENABLED (gate flipped): last heartbeat
+    **t=86s traps=34674568** → USB drop.
+    log: `docs/2026-04-20_hv_tick_endurance_86s.txt`
+
++26 s wall clock, +43% extra budget, no destabilisation — guest
+heartbeats are monotonic and the trap counter keeps climbing right
+up to the last tick before USB drops, same failure mode as before
+(external wall-clock trigger, not crash). Gate is now permanently
+open on T8132; see `external/m1n1/src/hv.c::hv_start`.
+
+Mechanistically the 1 kHz `hv_tick()` now drives
+`iodev_handle_events(IODEV_USB_VUART)` on M4 (see `hv.c::hv_tick`
+for the non-poll path), which apparently helps keep some USB/CDC
+background work flowing during stretches where the guest happens
+not to hit a dockchannel MMIO trap.
+
+**Session-length ceiling remains sub-2-min.** 86 s is still well
+short of the multi-minute target. The clean A/B confirms the
+wall-clock hypothesis from the earlier entry: the trigger is not
+CPU-bound, not trap-rate-bound, and no longer tick-bound. Next
+lever is the real SMC/AOP heartbeat — stock m1n1's `smc.c` +
+`i2c.c` are already in-tree; the job is finding the keepalive
+mailbox path and firing it periodically from `hv_tick` (or a
+second CNTP TVAL branch). That's the plan-B next session.
+
+Everything else in the 2026-04-20 10:45 entry below still stands:
+splash → auth gate → desktop → shell → `screen` capture all work;
+task #6 (re-enable HV tick) is now ✅.
+
+Repro (both runs captured with this exact pipeline):
+
+```bash
+BAT_OS_PASSPHRASE=batman bash build_apple.sh
+make -C external/m1n1 -j4
+sudo -n --preserve-env=M1N1DEVICE,M1N1WAIT \
+  M1N1DEVICE=/dev/ttyACM1 M1N1WAIT=1 \
+  /usr/bin/python3 external/m1n1/proxyclient/tools/chainload.py \
+  -S external/m1n1/build/m1n1.macho
+sg dialout -c "BATOS_KEEP_FB=1 \
+  BATOS_HV_STIMULUS='batman;;uptime;;uptime;;uptime;;uptime;;uptime;;uptime;;uptime;;uptime;;uptime;;uptime;;uptime;;uptime;;uptime' \
+  timeout 220 /usr/bin/python3 scripts/hv/batos_hv_interactive.py"
+```
+
+---
+
 ## 2026-04-20 10:45 — Ubuntu — FULL MICROKERNEL DESKTOP ON M4 UNDER HV ✅🖥️
 
 Session-end handoff. All of QEMU's boot UX is now reachable on M4

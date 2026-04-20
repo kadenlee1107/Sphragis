@@ -185,16 +185,23 @@ void hv_start(void *entry, u64 regs[4])
     }
     printf("[hv_start] S6 SPRR/GXF MRS\n");
 
-    // M4-HV: skip the CNTP tick on T8132. Even with PMU/VM_TMR
-    // gates and hv_vuart_poll suppressed, enabling the 1 kHz tick
-    // still leads to Mac reset in ~30-60 s (same timeline as the
-    // tick-disabled SMC-heartbeat reset, i.e. the tick isn't making
-    // it worse but isn't helping either). Keep ticks off for now;
-    // driving iodev_handle_events from MMIO traps on the dockchannel
-    // is sufficient for Bat_OS's polled-UART shell.
-    if (chip_id != T8132)
-        hv_arm_tick(false);
-    printf("[hv_start] S7 hv_arm_tick (m4-skipped=%d)\n", chip_id == T8132);
+    // M4-HV (2026-04-20 re-try): the SErrors from PL011 / rodata
+    // absolutes / vuart-FB-deadlock that used to mask any benefit
+    // of the tick are now fixed. Hypothesis: with those gone, a
+    // 1 kHz hv_tick() drain of IODEV_USB_VUART may keep whatever
+    // wall-clock watchdog (suspected SMC/AOP) alive long enough
+    // for multi-minute sessions. Re-enable on T8132 and measure.
+    // M4-HV (2026-04-20): re-enabled on T8132. Back-to-back A/B on
+    // an otherwise-identical build showed tick-enabled extended the
+    // USB drop from ~60 s (control) to ~86 s under BATOS_KEEP_FB=1
+    // + polled stimulus. The earlier "tick doesn't help" result (see
+    // 2026-04-19 22:30 journal) predated the PL011/rodata/vuart-FB
+    // fixes that were masking the benefit. Guest path is clean: no
+    // SError, heartbeats monotonic, uptime reports correctly. Session
+    // length is still wall-clock capped (SMC/AOP heartbeat suspected)
+    // but tick buys ~40% more budget basically for free.
+    hv_arm_tick(false);
+    printf("[hv_start] S7 hv_arm_tick armed (m4 re-enabled)\n");
     hv_pinned_cpu = -1;
     hv_want_cpu = -1;
     hv_cpus_in_guest = BIT(smp_id());
