@@ -61,6 +61,7 @@ void hv_init(void)
     // which line trapped. Next session greps the log for the last
     // marker and gates that Apple-private MSR behind a chip_id check.
     printf("[hv_init] M0 enter\n");
+#ifndef BATOS_HV_BISECT_NO_QUIESCE
     pcie_shutdown();
     printf("[hv_init] M1 pcie_shutdown\n");
     // Make sure we wake up DCP if we put it to sleep, just quiesce it to match ADT
@@ -70,6 +71,10 @@ void hv_init(void)
     // reenable hpm interrupts for the guest for unused iodevs
     usb_hpm_restore_irqs(0);
     printf("[hv_init] M3 usb_hpm_restore\n");
+#else
+    printf("[hv_init] M1-M3 SKIPPED (BATOS_HV_BISECT_NO_QUIESCE) "
+           "— pcie/display/usb quiesce bypassed\n");
+#endif
     smp_start_secondaries();
     printf("[hv_init] M4 smp_start_secondaries\n");
     smp_set_wfe_mode(true);

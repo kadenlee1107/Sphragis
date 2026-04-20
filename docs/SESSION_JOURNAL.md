@@ -201,10 +201,68 @@ watchdog, we've narrowed the trigger.
 
 ### Implementation note
 
-`scripts/hv/batos_hv_interactive.py` now supports
-`BATOS_HV_PRESTART_SLEEP=N` to sleep N seconds between
-`hv.init()` and `hv.start()`. Keep this; it's the cleanest way
-to probe what the watchdog counts from.
+`scripts/hv/batos_hv_interactive.py` now supports:
+  - `BATOS_HV_PRESTART_SLEEP=N` — sleep N seconds between
+    `hv.init()` and `hv.start()`. Probes whether the watchdog
+    counts from chainload vs. hv_start.
+  - `BATOS_HV_INIT_ONLY=1` — call `hv.init()` but never
+    `hv.start()`; sleep 200 s. Probes whether hv_init alone
+    arms the watchdog.
+
+### init-only refinement (hv.init() but no hv.start())
+
+Used `BATOS_HV_INIT_ONLY=1` to fire `hv.init()` but never
+`hv.start()`. The script loads the bat_os payload, then sleeps
+200 s while the Mac is left sitting post-hv_init. Two cycles:
+
+  cycle 1 (Mac carryover from prev bisect):
+    wall=201 s, full 200 s sleep completed, no drop, no Mac reset.
+
+  cycle 2 (fresh iBoot reset + new chainload):
+    wall=201 s, full 200 s sleep completed.
+    BUT — vuart (ACM2) dropped at t≈115 s into the sleep:
+      [host] init-only t=110s
+      [vuart] serial exception: device reports readiness to read…
+      [host] init-only t=120s
+    Proxy (ACM1) kept responding for the remaining ~85 s.
+
+Revised interpretation:
+  - The 118 s timer IS armed during `hv.init()` — the vuart drop
+    at t≈115 s in cycle 2 is that timer firing.
+  - With no HV running (guest never ERET'd into EL1), firing
+    manifests as a PARTIAL reset (vuart endpoint only). Mac stays
+    up on ACM1.
+  - With HV running, the same timer firing escalates into a FULL
+    Mac reset.
+  - The escalation requires the HV exception vectors to be
+    installed via `hv_start` AND/OR guest execution at EL1. One
+    of those changes what the firmware does when the timer fires.
+
+Net: we have **two failure modes of the same timer**. The timer
+is armed at hv.init(); its consequence depends on whether the
+HV+guest is live when it fires.
+
+### Earlier hv_init bisect attempts (this session)
+
+  - M1-M5 skip (pcie/display/usb/smp_start/smp_set_wfe_mode):
+    broke boot_cpu_idx detection → `hv_start` aborts. Too aggressive.
+  - M1-M3 skip (pcie/display/usb only): cycle 2 = HV 113 s
+    wall 118 s — same baseline. Trigger is NOT in M1-M3.
+
+Remaining hv_init suspects to bisect next (build with
+`EXTRA_CFLAGS=-D...` flag):
+  M4 smp_start_secondaries (can't skip — needed for boot_cpu_idx)
+  M5 smp_set_wfe_mode
+  M7 hv_pt_init (stage-2 page table build)
+  M8 hv_write_hcr (sets HCR_VM enabling stage-2)
+  M9 msr(VBAR_EL12, 0)
+  M12 CNTHCTL_EL2 write
+  M13 SYS_IMP_APL_CYC_OVRD write
+
+Most suspicious are M8 (HCR_VM enables stage-2 translation, a
+SoC-wide visible state change) and M13 (Apple IMP-DEF sysreg
+which might be watched by firmware). Next round: skip M12+M13
+and see if ceiling extends. If not, isolate M8 next.
 
 ### Pending cleanup
 

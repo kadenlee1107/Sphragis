@@ -189,6 +189,20 @@ def main():
         log(f"BATOS_HV_PRESTART_SLEEP={prestart_s}s — waiting before hv.start()")
         time.sleep(prestart_s)
 
+    # Optional "init only" — call hv.init() but never hv.start(). Used
+    # to test whether the M4 reset-watchdog is armed by hv_init itself
+    # or requires hv_start / live guest execution.
+    if os.environ.get("BATOS_HV_INIT_ONLY", "0") == "1":
+        log("BATOS_HV_INIT_ONLY=1 — not calling hv.start(); sleeping 200s")
+        for i in range(200):
+            if i % 10 == 0:
+                log(f"init-only t={i}s")
+            time.sleep(1)
+        log("init-only done")
+        stop.set()
+        vuart.close()
+        return
+
     log("calling hv.start() — Bat_OS takes over now. "
         f"Ctrl+] to detach.")
 
