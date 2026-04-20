@@ -281,6 +281,15 @@ void smp_start_secondaries(void)
         case T6034:
             cpu_start_off = CPU_START_OFF_T6031;
             break;
+        case T8132:
+            // T8132 = Apple M4 base "Donan". PMGR CPU_START offset
+            // hasn't been reverse-engineered yet, but Bat_OS runs
+            // single-core so we don't actually start secondaries.
+            // Use T8112 as a placeholder so the function populates
+            // `cpu_nodes[]` + sets `boot_cpu_idx`, which is the part
+            // the hypervisor init actually needs.
+            cpu_start_off = CPU_START_OFF_T8112;
+            break;
         default:
             printf("CPU start offset is unknown for this SoC!\n");
             return;

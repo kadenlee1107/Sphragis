@@ -1429,20 +1429,35 @@ class HV(Reloadable):
         self.u.msr(MDCR_EL2, mdcr.value)
         self.u.msr(MDSCR_EL1, MDSCR(MDE=1).value)
 
-        # Enable AMX
-        amx_ctl = AMX_CONFIG(self.u.mrs(AMX_CONFIG_EL1))
-        amx_ctl.EN_EL1 = 1
-        self.u.msr(AMX_CONFIG_EL1, amx_ctl.value)
+        # Cache the CPU part once so the feature gates below (AMX,
+        # SPRR, GXF, ACTLR variant) don't keep re-reading MIDR.
+        cpu_part = MIDR(self.u.mrs(MIDR_EL1)).PART
+        is_m4 = cpu_part in (MIDR_PART.T8132_DONAN_ECORE,
+                             MIDR_PART.T8132_DONAN_PCORE)
 
-        # Set guest AP keys
-        self.u.msr(VMKEYLO_EL2, 0x4E7672476F6E6147)
-        self.u.msr(VMKEYHI_EL2, 0x697665596F755570)
-        self.u.msr(APSTS_EL12, 1)
+        # Enable AMX — skip on M4 (no AMX; Apple moved to SME).
+        # `mrs AMX_CONFIG_EL1` traps with UNDEFINED on M4 and kills
+        # the proxy link, which is what the "Do NOT use run_guest.py
+        # on M4" warning in the repo CLAUDE.md is about.
+        if not is_m4:
+            amx_ctl = AMX_CONFIG(self.u.mrs(AMX_CONFIG_EL1))
+            amx_ctl.EN_EL1 = 1
+            self.u.msr(AMX_CONFIG_EL1, amx_ctl.value)
+
+        # Set guest AP keys — these are Apple-private PAuth key
+        # encodings for EL2's "VM key" slot. On M4 the encodings
+        # trap UNDEFINED (same pattern as AMX/SPRR/GXF). PAuth on M4
+        # uses the standard ARMv8.3 APIA/APIB/APDA/APDB key regs
+        # which don't need EL2-side seeding from the proxy.
+        if not is_m4:
+            self.u.msr(VMKEYLO_EL2, 0x4E7672476F6E6147)
+            self.u.msr(VMKEYHI_EL2, 0x697665596F755570)
+            self.u.msr(APSTS_EL12, 1)
 
         self.map_vuart()
 
-        # ACTLR depends on the CPU part
-        part = MIDR(self.u.mrs(MIDR_EL1)).PART
+        # ACTLR depends on the CPU part (reuse `cpu_part` from above).
+        part = cpu_part
         actlr_el12 = ACTLR_EL12 if part >= MIDR_PART.T8110_BLIZZARD else ACTLR_EL12_PRE
 
         actlr = ACTLR(self.u.mrs(actlr_el12))
@@ -1568,6 +1583,12 @@ class HV(Reloadable):
                 cpu_start = 0x28000 + die * 0x20_0000_0000
             elif chip_id in (0x6031,):
                 cpu_start = 0x88000 + die * 0x20_0000_0000
+            elif chip_id == 0x8132:
+                # M4 Donan — PMGR CPU_START offset not yet RE'd; we
+                # don't actually start secondaries, so the exact
+                # value doesn't matter as long as CPUSTART tracing
+                # gets armed. Reuse T8112's offset.
+                cpu_start = 0x34000 + die * 0x20_0000_0000
             else:
                 self.log("CPUSTART unknown for this SoC!")
                 break
@@ -1779,14 +1800,28 @@ class HV(Reloadable):
         elif self.tba.revision == 3:
             self.iface.writemem(guest_base + self.bootargs_off, BootArgs_r3.build(self.tba))
 
-        print("Setting secondary CPU RVBARs...")
-        rvbar = self.entry & ~0xfff
-        for cpu in self.adt["cpus"]:
-            if cpu.state == "running":
-                continue
-            addr, size = cpu.cpu_impl_reg
-            print(f"  {cpu.name}: [0x{addr:x}] = 0x{rvbar:x}")
-            self.p.write64(addr, rvbar)
+        # On M4 (T8132 Donan), writes to P-cluster cpu_impl_reg
+        # addresses (0x211xx range) SError and kill the serial link.
+        # E-cluster writes (0x210xx) succeed. We skip the whole
+        # secondary-CPU RVBAR setup on M4 and rely on single-core
+        # bring-up — our `bat_os_apple.bin` never kicks secondaries
+        # anyway. This is the HV-side equivalent of the
+        # --skip-secondary-cpus workaround our vendored chainload.py
+        # already applies.
+        _part = MIDR(self.u.mrs(MIDR_EL1)).PART
+        _is_m4_here = _part in (MIDR_PART.T8132_DONAN_ECORE,
+                                MIDR_PART.T8132_DONAN_PCORE)
+        if _is_m4_here:
+            print("Skipping secondary CPU RVBARs (M4 P-cluster SErrors)")
+        else:
+            print("Setting secondary CPU RVBARs...")
+            rvbar = self.entry & ~0xfff
+            for cpu in self.adt["cpus"]:
+                if cpu.state == "running":
+                    continue
+                addr, size = cpu.cpu_impl_reg
+                print(f"  {cpu.name}: [0x{addr:x}] = 0x{rvbar:x}")
+                self.p.write64(addr, rvbar)
 
     def _load_macho_symbols(self):
         self.symbol_dict = self.macho.symbols
@@ -1917,11 +1952,22 @@ class HV(Reloadable):
         print("Shutting down framebuffer...")
         self.p.fb_shutdown(True)
 
-        print("Enabling SPRR...")
-        self.u.msr(SPRR_CONFIG_EL1, 1)
+        # SPRR (Shared Privilege-based Register Restrictions) and GXF
+        # (Guarded Execution Framework) are M1/M2/M3 registers. On M4
+        # these EL1 encodings trap UNDEFINED and tear down the proxy.
+        # Determine the CPU part freshly here (start() runs long after
+        # setup_cpu set the cached cpu_part local).
+        _part = MIDR(self.u.mrs(MIDR_EL1)).PART
+        _is_m4 = _part in (MIDR_PART.T8132_DONAN_ECORE,
+                           MIDR_PART.T8132_DONAN_PCORE)
+        if _is_m4:
+            print("Skipping SPRR/GXF enable (not available on M4)")
+        else:
+            print("Enabling SPRR...")
+            self.u.msr(SPRR_CONFIG_EL1, 1)
 
-        print("Enabling GXF...")
-        self.u.msr(GXF_CONFIG_EL1, 1)
+            print("Enabling GXF...")
+            self.u.msr(GXF_CONFIG_EL1, 1)
 
         print(f"Jumping to entrypoint at 0x{self.entry:x}")
 

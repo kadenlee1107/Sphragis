@@ -383,6 +383,11 @@ class TLBI_RVA(Register64):
 
 class MIDR_PART(IntEnum):
     T8110_BLIZZARD = 0x30
+    # T8132 "Donan" = Apple M4 base; E-core 0x52, P-core 0x53.
+    # M4 has no AMX and none of the SPRR/GXF registers the older
+    # cores exposed — gate those writes in the Python HV init.
+    T8132_DONAN_ECORE = 0x52
+    T8132_DONAN_PCORE = 0x53
 
 class MIDR(Register64):
     REV_LOW = 3, 0
