@@ -851,6 +851,11 @@ fn apple_serial_shell() -> ! {
             if !under_hv {
                 unsafe { core::arch::asm!("wfe"); }
             } else {
+                // Under HV we can't WFE (no ticks/IRQs to wake us).
+                // Busy-poll. Experiment showed that slowing to 1 kHz
+                // didn't appreciably extend session length (35 s →
+                // 45 s), so the ~45 s reset is a wall-clock condition,
+                // not CPU-load-driven.
                 core::hint::spin_loop();
             }
             continue;
