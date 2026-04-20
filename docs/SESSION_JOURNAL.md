@@ -11,6 +11,97 @@ end of a session.
 
 ---
 
+## 2026-04-20 09:30 — Ubuntu — BAT_OS SCREEN VISIBLE ON UBUNTU, CAMERA OBSOLETE ✅📸→🗑️
+
+You can now see Bat_OS's live M4 LCD from Ubuntu with no HDMI cable,
+no adapter, no camera — just USB-CDC. Two resolutions captured:
+
+- `docs/screens/2026-04-20_batos_hv_live_8x.png` (378×245, quick)
+- `docs/screens/2026-04-20_batos_hv_live_4x.png` (756×491, readable
+  text — visibly shows BAT_OS splash shield, fb_console boot log,
+  self-test PASS, shell history)
+
+How it works:
+
+1. **`BATOS_KEEP_FB=1`** — Python-side `hv.start()` now honours this
+   env var. When set, we skip `fb_shutdown(True)` on HV entry and
+   the framebuffer stays live. Bat_OS paints to the physical FB; DCP
+   scans it out to the Mac's internal LCD; the bytes we later read
+   back are the same bytes a human would see on the panel. Side
+   benefit: DCP scanning keeps bus activity up, session length went
+   from ~45 s to ~100 s.
+
+2. **`screen [N]`** — new shell command in Bat_OS. Reads the FB at
+   1/N scale (default 4, 756×491; 8 gives 378×245 for fast capture),
+   hex-encodes each pixel, and writes the stream directly to
+   dockchannel UART DATA_TX8 — bypassing fb_console so we don't
+   paint over the exact pixels we're reading. Output format:
+   ```
+   SCREEN_BEGIN w=<W> h=<H> scale=<N> fmt=argb2101010
+   <hex row 0 — W*8 chars>
+   ...
+   <hex row H-1>
+   SCREEN_END
+   ```
+
+3. **m1n1 dockchannel-vuart hook** — from the earlier session's
+   work, every byte the guest writes to 0x3_8812_c004 is intercepted
+   and forwarded to IODEV_USB_VUART, which surfaces on
+   `/dev/ttyACM2`.
+
+4. **`/tmp/capture_screen.py`** (reusable) — parses SCREEN_BEGIN
+   … SCREEN_END out of any file, decodes ARGB2101010 → RGB888,
+   writes PNG via ffmpeg.
+
+5. **`scripts/hv/m4_screenshot.py`** (earlier session) — reads the
+   FB directly via m1n1 proxy `readmem()`. Works when no HV session
+   is holding the proxy; gives full 3024×1964 capture.
+
+### Repro workflow
+
+```bash
+cd /home/kaden-lee/code/Bat_OS
+
+# Wait for stock m1n1, then chainload the patched one.
+sudo -n --preserve-env=M1N1DEVICE,M1N1WAIT \
+    M1N1DEVICE=/dev/ttyACM1 M1N1WAIT=1 \
+    /usr/bin/python3 \
+    /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py \
+    -S /home/kaden-lee/code/Bat_OS/external/m1n1/build/m1n1.macho
+
+# Run Bat_OS under HV with FB kept + stimulate `screen 4`.
+sg dialout -c "BATOS_KEEP_FB=1 BATOS_HV_STIMULUS='screen 4' \
+    timeout 150 /usr/bin/python3 \
+    /home/kaden-lee/code/Bat_OS/scripts/hv/batos_hv_interactive.py" \
+    > /tmp/hv.log 2>&1
+
+# Decode the PNG.
+python3 /tmp/capture_screen.py /tmp/hv.log /tmp/batos.png
+xdg-open /tmp/batos.png
+```
+
+Expect ~150 s wall-clock: ~60 s for boot + self-test replay, ~5 s
+for the `screen 4` dump itself, then the Mac resets shortly after.
+
+### One extra gate that made it reliable
+
+`drivers::apple::spi::init()` was hanging Bat_OS under HV after the
+self-test replay completed (SPI controller MMIO is m1n1-owned under
+HV). Gated behind `!under_hv` in src/main.rs.
+
+### Camera retired for the default workflow
+
+- Camera WAS the only way to read the Mac's internal LCD before
+  USB-CDC worked.
+- Now both USB-CDC shell (interactive text) AND `screen`
+  (pixel-level capture) are live.
+- Keep the camera as a fallback for (a) direct bat_os_apple.bin
+  chainload without m1n1 as HV — there's no USB-CDC there — and
+  (b) early-HV-breakage debugging where the shell + `screen` both
+  go dark.
+
+---
+
 ## 2026-04-20 08:35 — Ubuntu — Crypto-ext probes + diagnostic heartbeat; reset is wall-clock
 
 This morning's adds on top of the interactive-shell infrastructure:
