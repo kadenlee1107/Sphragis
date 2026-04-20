@@ -169,17 +169,49 @@ fn cmd_screen(arg: &str) {
     let out_w = width / scale;
     let out_h = height / scale;
 
-    // Banner via whichever platform serial is active.
-    platform::serial_puts("SCREEN_BEGIN w=");
-    print_num_serial(out_w);
-    platform::serial_puts(" h=");
-    print_num_serial(out_h);
-    platform::serial_puts(" scale=");
-    print_num_serial(scale);
-    platform::serial_puts(" fmt=argb2101010\n");
+    // On Apple/M4 write directly to dockchannel DATA_TX8 without
+    // going through apple::uart::putc — that path mirrors each byte
+    // into fb_console (draws a font glyph) which quadruples FB write
+    // traffic and deadlocks the vuart ring. On other platforms fall
+    // back to platform::serial_putc (QEMU PL011 has no fb mirror).
+    let apple = matches!(crate::platform::current(),
+                         crate::platform::Platform::AppleSilicon);
+    let dc_base = if apple { soc::uart0_base() } else { 0 };
+    const DATA_TX_FREE: usize = 0x4014;
+    const DATA_TX8: usize = 0x4004;
+    let put = |b: u8| {
+        if apple && dc_base != 0 {
+            unsafe {
+                let mut guard: u32 = 1_000_000;
+                while core::ptr::read_volatile((dc_base + DATA_TX_FREE) as *const u32) == 0 {
+                    guard = guard.saturating_sub(1);
+                    if guard == 0 { return; }
+                    core::hint::spin_loop();
+                }
+                core::ptr::write_volatile((dc_base + DATA_TX8) as *mut u32, b as u32);
+            }
+        } else {
+            platform::serial_putc(b);
+        }
+    };
+    let puts = |s: &str| { for b in s.bytes() { put(b); } };
+    let put_num = |n: usize| {
+        let mut buf = [0u8; 20];
+        let mut i = 20;
+        let mut v = n;
+        if v == 0 { put(b'0'); return; }
+        while v > 0 { i -= 1; buf[i] = b'0' + (v % 10) as u8; v /= 10; }
+        for bb in &buf[i..] { put(*bb); }
+    };
 
-    // Write one byte per trap via the active platform serial.
-    // On M4 this is dockchannel TX8 → vuart → /dev/ttyACM2.
+    puts("SCREEN_BEGIN w=");
+    put_num(out_w);
+    puts(" h=");
+    put_num(out_h);
+    puts(" scale=");
+    put_num(scale);
+    puts(" fmt=argb2101010\n");
+
     const HX: &[u8; 16] = b"0123456789abcdef";
     for y in 0..out_h {
         let src_row = y * scale;
@@ -191,28 +223,12 @@ fn cmd_screen(arg: &str) {
             };
             for i in (0..8).rev() {
                 let nib = ((w >> (i * 4)) & 0xf) as usize;
-                platform::serial_putc(HX[nib]);
+                put(HX[nib]);
             }
         }
-        platform::serial_putc(b'\n');
+        put(b'\n');
     }
-    platform::serial_puts("SCREEN_END\n");
-}
-
-fn print_num_serial(n: usize) {
-    let mut buf = [0u8; 20];
-    let mut i = 20;
-    let mut v = n;
-    if v == 0 {
-        platform::serial_putc(b'0');
-        return;
-    }
-    while v > 0 {
-        i -= 1;
-        buf[i] = b'0' + (v % 10) as u8;
-        v /= 10;
-    }
-    for b in &buf[i..] { platform::serial_putc(*b); }
+    puts("SCREEN_END\n");
 }
 
 fn cmd_help() {
