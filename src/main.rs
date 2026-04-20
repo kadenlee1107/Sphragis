@@ -899,6 +899,8 @@ fn apple_shell_dispatch(line: &str) {
             uart::puts("  mem            — frame allocator stats\n");
             uart::puts("  fb             — framebuffer info\n");
             uart::puts("  uptime         — ticks since boot (CNTPCT_EL0 / CNTFRQ_EL0)\n");
+            uart::puts("  cpuid          — CPU identification regs (MIDR / CTR / CurrentEL)\n");
+            uart::puts("  sha256 <text>  — SHA-256 hash of <text> (hex)\n");
             uart::puts("  batfs ls       — list BatFS files\n");
             uart::puts("  batfs create <name> <plaintext>\n");
             uart::puts("  batfs read <name>\n");
@@ -906,6 +908,45 @@ fn apple_shell_dispatch(line: &str) {
         }
         "uname" => {
             uart::puts("Bat_OS aarch64 (Apple M4 / T8132 Donan)\n");
+        }
+        "cpuid" => {
+            let midr: u64; let ctr: u64; let cur_el: u64;
+            let mpidr: u64; let aidr: u64;
+            unsafe {
+                core::arch::asm!("mrs {}, midr_el1", out(reg) midr);
+                core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr);
+                core::arch::asm!("mrs {}, CurrentEL", out(reg) cur_el);
+                core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr);
+                core::arch::asm!("mrs {}, aidr_el1", out(reg) aidr);
+            }
+            uart::puts("  MIDR_EL1:   0x"); uart::puthex64(midr); uart::puts("\n");
+            uart::puts("  CTR_EL0:    0x"); uart::puthex64(ctr); uart::puts("\n");
+            uart::puts("  CurrentEL:  "); kernel::mm::print_num(((cur_el >> 2) & 3) as usize); uart::puts("\n");
+            uart::puts("  MPIDR_EL1:  0x"); uart::puthex64(mpidr); uart::puts("\n");
+            uart::puts("  AIDR_EL1:   0x"); uart::puthex64(aidr); uart::puts("\n");
+            let part = (midr >> 4) & 0xfff;
+            uart::puts("  MIDR.PART:  0x"); uart::puthex32(part as u32); uart::puts("\n");
+            match part {
+                0x52 => { uart::puts("  -> M4 Donan (E core)\n"); }
+                0x53 => { uart::puts("  -> M4 Donan (P core)\n"); }
+                _    => {}
+            }
+        }
+        "sha256" => {
+            let rest = match parts.next() {
+                Some(s) => s.trim_end_matches(|c: char| c == '\r' || c == '\n'),
+                None => { uart::puts("  usage: sha256 <text>\n"); return; }
+            };
+            let digest = crate::crypto::sha256::hash(rest.as_bytes());
+            uart::puts("  input: ");  uart::puts(rest);   uart::puts("\n");
+            uart::puts("  bytes: ");  kernel::mm::print_num(rest.len()); uart::puts("\n");
+            uart::puts("  sha256: ");
+            const HX: &[u8; 16] = b"0123456789abcdef";
+            for b in digest.iter() {
+                uart::putc(HX[(*b >> 4) as usize]);
+                uart::putc(HX[(*b & 0xf) as usize]);
+            }
+            uart::puts("\n");
         }
         "mem" => {
             let (used, total) = kernel::mm::frame::stats();

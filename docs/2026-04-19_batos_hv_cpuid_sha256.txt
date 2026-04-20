@@ -1,0 +1,37 @@
+bat_os> 
+[vuart] >>> b'help\r'
+help
+  help           — list commands
+  uname          — kernel identity
+  mem            — frame allocator stats
+  fb             — framebuffer info
+  uptime         — ticks since boot (CNTPCT_EL0 / CNTFRQ_EL0)
+  cpuid          — CPU identification regs (MIDR / CTR / CurrentEL)
+  sha256 <text>  — SHA-256 hash of <text> (hex)
+  batfs ls       — list BatFS files
+  batfs create <name> <plaintext>
+  batfs read <name>
+  halt           — WFE loop
+bat_os> 
+[vuart] >>> b'cpuid\r'
+cpuid
+  MIDR_EL1:   0x00000000611f0531
+  CTR_EL0:    0x000000009444c004
+  CurrentEL:  1
+  MPIDR_EL1:  0x0000000080010100
+  AIDR_EL1:   0x000000d168699696
+  MIDR.PART:  0x00000053
+  -> M4 Donan (P core)
+bat_os> 
+[vuart] >>> b'sha256 bat_os_m4_hypervisor\r'
+sha256 bat_os_m4_hypervisor
+  input: bat_os_m4_hypervisor
+  bytes: 20
+  sha256: 625342c6436aa8a9f96bd5d9667337df435bbc8c04afd4afa9e48ce11952cac0
+bat_os> 
+[vuart] >>> b'sha256 hello\r'
+sha256 hello
+  input: hello
+  bytes: 5
+  sha256: 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+bat_os> 
