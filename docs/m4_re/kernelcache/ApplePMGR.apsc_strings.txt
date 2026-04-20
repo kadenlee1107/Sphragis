@@ -1,0 +1,10 @@
+[2m0xfffffe0007588bfe[22m: [1m"apsc-snooze"[22m
+[2m0xfffffe000758d2fa[22m: [1m"virtual void ApplePMGR::enableCPUFixedFreqRelock(VoltageRail, bool)"[22m
+[2m0xfffffe0007588b42[22m: [1m"apsc-sleep-dcs"[22m
+[2m0xfffffe0007588b51[22m: [1m"apsc-sleep-soc"[22m
+[2m0xfffffe000758d0d1[22m: [1m"virtual void ApplePMGR::enableACG(bool)"[22m
+[2m0xfffffe0007596978[22m: [1m"tunableh_print_configuration"[22m
+[2m0xfffffe000758ce06[22m: [1m"virtual void ApplePMGR::enableCPUCluster(unsigned int)"[22m
+[2m0xfffffe000758895f[22m: [1m"soc-apsc"[22m
+[2m0xfffffe0007588956[22m: [1m"cpu-apsc"[22m
+[2m0xfffffe000758cda4[22m: [1m"virtual void ApplePMGR::enableCPUComplex(UInt32, bool)"[22m

@@ -1,0 +1,2 @@
+[2m0xfffffe0007692e9c[22m: [1m"virtual void AppleT8132PMGR::enableAPSC(VoltageRail, bool)"[22m
+[2m0xfffffe00076931c5[22m: [1m"void AppleT8132PMGR::_waitAPSCPending(PerfDomainID)"[22m

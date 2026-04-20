@@ -11,6 +11,101 @@ end of a session.
 
 ---
 
+## 2026-04-20 18:30 — Ubuntu — Path A setup: M4 kernelcache in hand, APSC symbols located, body not yet extracted
+
+Pivoted to Path A right after Path B was disconfirmed. Goal: find
+the M4-specific APSC-enable MMIO sequence (or SYS-reg sequence) in
+Apple's shipped kernelcache, since open-source XNU has the macro
+stripped.
+
+### What landed
+
+  - `blacktop/ipsw` v3.1.672 installed at `/tmp/ipsw`.
+  - iPad Pro M4 (iPad16,3) kernelcache downloaded, build 23E254
+    (iPadOS 26.4.1, `xnu-12377.102.10~3`, `RELEASE_ARM64_T8132`).
+    Size 75 MB; not committed — `docs/m4_re/kernelcache/README.md`
+    has the redownload command.
+  - `docs/m4_re/kernelcache/` — committed strings indexes +
+    README with ipsw + disass commands + handoff notes.
+
+### Key findings
+
+  1. `__TEXT_BOOT_EXEC.__bootcode` (32 KB, the entire kernel early-
+     boot trampoline segment) has only 12 `mrs`/`msr` instructions,
+     NONE to Apple IMP-DEF HID registers. Chicken init is not on
+     the early boot path on H16. Candidate real locations:
+       - SPTM (Secure Page Table Monitor — has its own
+         `__DATA_SPTM` segment in the kernelcache and is a
+         separately signed blob we haven't extracted).
+       - The kernel's IOKit driver graph, dispatched from the
+         per-SoC PMGR kext during IOService matching.
+  2. The M4-specific APSC entry exists as
+     `AppleT8132PMGR::enableAPSC(VoltageRail, bool)` in the
+     `com.apple.driver.AppleT8132PMGR` kext. Sibling method
+     `AppleT8132PMGR::_waitAPSCPending(PerfDomainID)` confirms
+     the enable is followed by a poll. These are the M4 APSC
+     implementation.
+  3. Generic base class `com.apple.driver.ApplePMGR` exposes
+     `enableCPUCluster(unsigned int)`, `enableCPUComplex(UInt32,
+     bool)`, the strings `cpu-apsc` / `soc-apsc` / `apsc-snooze` /
+     `apsc-sleep-soc`. `cpu-apsc` is the same Device-Tree property
+     stock m1n1 already matches on via `pmgr_get_feature()`, so
+     the feature flag machinery is shared across generations —
+     only the register layout behind it changes on M4.
+  4. Apple moved more cpu-init logic into kexts that depend on
+     IOKit vtable dispatch with PAC auth. Finding function bodies
+     requires tracing `__DATA_CONST.__auth_got` or the vtable in
+     `__DATA_CONST.__const`. That's a bigger RE task than one
+     session. Concrete handoff is in the `docs/m4_re/
+     kernelcache/README.md`.
+
+### Honest state (what did NOT land)
+
+  - The actual `ApplePMGR::enableCPUCluster` / `AppleT8132PMGR::
+    enableAPSC` function BODIES (MMIO register offsets, bit masks,
+    poll logic) are not yet recovered. The string / symbol
+    references we found are inside assertion stubs, not in the
+    method implementations themselves.
+  - No m1n1 source change. `cpufreq_init()` is still not invoked
+    for T8132 from `m1n1_main`, same as baseline.
+
+### Files committed
+
+  - `docs/m4_re/kernelcache/README.md` — redownload + disass
+    commands + what-to-do-next.
+  - `docs/m4_re/kernelcache/AppleT8132PMGR.strings.txt`
+  - `docs/m4_re/kernelcache/AppleT8132PMGR.apsc_strings.txt`
+  - `docs/m4_re/kernelcache/ApplePMGR.strings.txt`
+  - `docs/m4_re/kernelcache/ApplePMGR.apsc_strings.txt`
+
+### For next reader
+
+Three concrete strategies to get the APSC function body out:
+
+  (a) Load kernelcache into a disassembler with IOKit vtable
+      analysis (Ghidra's Kernelcache loader, Binary Ninja's iOS
+      kernelcache plugin, or IDA with the kernelcache loader). Jump
+      to `ApplePMGR::enableCPUCluster` / `AppleT8132PMGR::
+      enableAPSC` via symbol name — IDA/BN will resolve IOKit
+      vtables automatically. That recovers the function body in
+      minutes, vs. hours of hand-tracing from raw ipsw disass.
+
+  (b) Try the `ipsw class-dump` / `ipsw macho disass -s <sym>`
+      paths with a C++ symbol filter — `ipsw`'s `analyze` subcommand
+      may auto-resolve IOKit virtual methods.
+
+  (c) Extract and disassemble the SPTM blob directly. If chicken
+      init moved to SPTM (HAS_GUARDED_IO_FILTER is an SPTM feature),
+      then that's the authoritative source. SPTM is signed
+      separately; you may need to pull it from the IPSW root or
+      from live boot.
+
+The per-cycle session ceiling work is still blocked on getting a
+real APSC + chicken sequence for M4 P-cores. The supervisor
+(0f8da4d6) remains the user-facing mitigation.
+
+---
+
 ## 2026-04-20 18:00 — Ubuntu — Path B disconfirmed: PCPU MMIO filter is NOT PMGR-gated
 
 Picked up M4_CHICKEN_HUNT Path B ("PMGR cluster wake before APSC").
