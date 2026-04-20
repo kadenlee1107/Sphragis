@@ -101,17 +101,27 @@ are written. When transcribed to C `#define` form, drop the underscores.
   exercises. The `src/batcave/linux/*` and `src/net/tcp.rs` RMWs
   exist but are on syscall / networking paths we haven't brought up
   on M4 yet.
-- **iBoot watchdog tightens under repeated chainloads.** Within a
-  session, the first 2–3 chainloads give Bat_OS a generous window
-  (tens of seconds to minutes) before something Apple-level resets
-  the Mac. After ~5 cycles the window shrinks to ~2 s — Bat_OS barely
-  gets to `_apple_start` before iBoot forces a full ROM reboot. A
-  cold power-cycle (hold power → Options → reboot → back to m1n1)
-  resets whatever counter is involved. Hypothesis: iBoot tracks
-  non-signed-boot handoffs and gets increasingly defensive; m1n1's
-  WDT disable at `0x3882b0000 +0x1c` doesn't cover it. Unconfirmed
-  whether our own `drivers::apple::wdt::disable()` hits the right
-  register block for this second watchdog.
+- **~~iBoot watchdog tightens under repeated chainloads~~ [RETRACTED].**
+  This entry was posted in error — the 2-second reset pattern it
+  described was a linker-script mix-up (see below), not an Apple-
+  firmware behavior. Repeated chainloads are fine on M4 once the
+  binary is linked with `linker_apple.ld`.
+- **Build system foot-gun: wrong-linker binary looks valid but
+  chainload-faults instantly.** `.cargo/config.toml` defaults to
+  `-Tlinker.ld` (QEMU-virt layout), which places the 64-byte Linux
+  kernel Image header at offset 0 of the raw objcopy output
+  (`b +0x40`, magic `ARM\x64`, ...). m1n1's
+  `chainload.py --raw --entry-point 0` jumps to offset 0, which
+  means wrong-linker builds land inside the Linux header and fault
+  within microseconds. Always build for Apple via
+  `bash build_apple.sh`, which sets
+  `RUSTFLAGS="-C link-arg=-Tlinker_apple.ld"` (→ `_apple_start` at
+  offset 0, `mov x20, x0` = `0xf40300aa` LE as the first
+  instruction). `build_apple.sh` asserts this post-objcopy and
+  refuses to ship a Linux-header binary. A plain `cargo build
+  --release` will compile cleanly and produce a binary that
+  chainloads successfully but resets the Mac immediately — looks
+  like an Apple-firmware issue, isn't.
 
 ---
 

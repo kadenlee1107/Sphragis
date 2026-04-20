@@ -11,6 +11,70 @@ end of a session.
 
 ---
 
+## 2026-04-19 18:40 — Ubuntu — splash FULLY verified; linker-script foot-gun found
+
+**All of today's work now verified on real M4 hardware.** Camera at
+18:40 shows the Bat_OS boot splash rendering stably for 90+ seconds
+on the M4 display:
+
+- Solid black background (ARGB2101010 constants correct).
+- Amber `BAT_OS` title, cool-blue subtitle, dim-gray footer — all
+  rendered via `dcp::boot_splash()` → `fill_screen` + `font::draw_str`.
+- `ttyACM1/2` (m1n1 USB CDC) gone post-chainload → Bat_OS owns the
+  Mac, no iBoot reset.
+
+That means every LL/SC / ARGB / shell fix we landed today is on hot
+code paths that executed cleanly: `mm::init` (non-atomic heap +
+`reserve_range`), `batfs::init` (fixed `rng::CTR.fetch_add` and
+`NONCE_COUNTER` load+store), `dcp::init_simple_fb`, `dcp::boot_splash`,
+`apple_serial_shell` idling. All on commit `f7a77b62`.
+
+### The foot-gun that cost an hour of bisecting
+
+The "Mac-state iBoot reset loop" I documented earlier in this
+session (journal 17:35) was **not** an Apple-firmware issue. Cold-
+cycles and cable-cycles and clean macOS boots all failed to help
+because my code was never the regression: my **build** was.
+
+`.cargo/config.toml` sets
+`rustflags = ["-C", "link-arg=-Tlinker.ld", ...]`, so a plain
+`cargo build --release` links with the QEMU-virt linker script, which
+places the 64-byte Linux kernel Image header (`b +0x40`, magic
+`ARM\x64`, ...) at offset 0. `build_apple.sh` overrides with
+`RUSTFLAGS="-C link-arg=-Tlinker_apple.ld"`, which places the Apple
+stub `_apple_start` (`mov x20, x0`) at offset 0 instead. m1n1's
+`chainload.py --raw --entry-point 0` jumps to offset 0 unconditionally.
+
+I'd been running `cargo build --release` to iterate, which produced a
+"valid-looking" binary whose first instruction was `b +0x40` —
+chainload.py jumped into Linux-header code on the M4, faulted
+immediately, and the Mac reset within ~2 seconds every time. The
+same source tree built through `build_apple.sh` works; `cargo build
+--release` does not. Once I re-ran `build_apple.sh`, the splash
+rendered on the first chainload.
+
+**Fix landed:** `build_apple.sh` now asserts the first four bytes of
+`target/bat_os_apple.bin` decode to `mov x20, x0` (0xf40300aa LE),
+and refuses to emit the binary if it sees the Linux-header opcode
+(0x14000010 LE). It also picks up `rust-objcopy` from the rustup
+toolchain dir if `rust-objcopy` isn't on `PATH`. No more silent
+wrong-linker builds.
+
+**Updated `docs/M4_GROUND_TRUTH.md §2`:** the "iBoot tightens under
+repeated chainloads" entry is now redacted — that whole hypothesis
+came from the wrong-linker red herring. The M4 actually tolerates
+repeated chainloads fine.
+
+**Open for next session:** now that the kernel runs stably on M4,
+the real next work is teaching Bat_OS to own the USB-CDC endpoint
+(so Ubuntu can read/write the `apple_serial_shell`), or any other
+planned-OS direction. Pick whatever advances the roadmap.
+
+**Files touched:** `build_apple.sh`, `docs/SESSION_JOURNAL.md`,
+`docs/M4_GROUND_TRUTH.md`.
+
+---
+
 ## 2026-04-19 17:35 — Ubuntu — ARGB2101010 color fix + remaining LL/SC sites
 
 **Two follow-on fixes landed in one commit, and one observation about
