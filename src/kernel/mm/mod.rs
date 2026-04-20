@@ -2,6 +2,7 @@
 pub mod frame;
 pub mod heap;
 pub mod initrd;
+pub mod mmu_el2;
 pub mod page_table;
 
 // Use the platform-dispatched serial so this module works on both
