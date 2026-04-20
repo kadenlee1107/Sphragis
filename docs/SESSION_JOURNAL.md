@@ -11,6 +11,98 @@ end of a session.
 
 ---
 
+## 2026-04-20 13:55 — Ubuntu — Output plateau is guest-driven, vuart tuning didn't help
+
+Big insight from re-reading the AIC-drain wedge runs next to the
+clean-baseline 94 s run: **the "wedge" pattern is normal guest
+behavior, not a failure mode my additions caused.** The trap
+counter plateaus at ~3 M in every run — look at the 96 s
+wdt_probe log t=11-17s (stuck at 3.14 M), the 94 s verify log
+t=22-24s (stuck at 3.16 M), the 86 s tick endurance t=11-12s
+(stuck at 3.07 M). What makes a run "good" isn't avoiding the
+plateau, it's recovering from it within the wall-clock budget.
+
+Every HV addition I wired into hv_exc_fiq this afternoon (AIC
+ack drain, smc_pump, smc_nudge) pinned the guest INSIDE the
+plateau instead of letting it recover, so the Mac always reset
+before the trap counter could resume growing.
+
+### What the plateau actually is
+
+Grepping the guest log + shell source:
+
+```c
+/* hv_vuart.c UTXH handler */
+case UTXH: {
+    uint8_t b = *val;
+    if (iodev_can_write(IODEV_USB_VUART))
+        iodev_write(IODEV_USB_VUART, &b, 1);   // → ttyACM2
+    handle_vuart_passthrough(b);                // printf("%c") → ttyACM1
+    break;
+}
+```
+
+Every byte the guest prints to the Apple dockchannel UART hits
+this trap, and the host-side `printf("%c", b)` is one synchronous
+dockchannel-TX on the primary m1n1 console. That serial link
+can only push maybe a few hundred bytes/s unbuffered. So when
+the guest shell runs `[shell] uptime\n` (14 bytes) + whatever
+`uptime` prints (nothing on the shell path — all that is
+`console::puts` → FB, not dockchannel), we see a brief byte
+burst. When the guest's own fb_console mirror + serial
+mirror both fire per byte, throughput drops and the guest's RX
+busy-poll loop gets starved.
+
+The 64 traps/s we see on the plateau is actually the rate at
+which bytes drain through the host's dockchannel TX — the guest
+is TX-blocked on its own output via our iodev/printf path,
+while still handling scheduled command replays.
+
+### Tuning attempts (both regressed / wedged)
+
+1. **Line-buffered passthrough** — collect up to 96 chars in
+   `handle_vuart_passthrough` and flush `printf("%s\n", buf)`
+   on `\r`/`\n`/full. Reasoning: one `printf` call with a big
+   payload is easier for the underlying serial layer to
+   handle. Result: t=20 s. Same plateau pattern at ~3.03 M.
+   log: `docs/2026-04-20_hv_passthrough_buffered_20s.txt`.
+
+2. **Passthrough gated off on T8132** — the ttyACM2 copy
+   (`iodev_write(IODEV_USB_VUART)`) already exists for
+   debugging; skip the ttyACM1 duplicate. Result: chainload
+   succeeded but hv.init() hit `ProxyCommandError: Reply error:
+   Bad Command` on `hv_map_vuart_dockchannel` during one
+   attempt, then t=16 s in the retry. Variance or genuine
+   regression, either way worse than baseline.
+   log: `docs/2026-04-20_hv_passthrough_disabled_16s.txt`.
+
+Backed out both; `hv_vuart.c` is identical to its state at
+`514ab585` (the known-good 96 s baseline commit) via
+`git checkout`.
+
+### Why `printf`-reduction didn't help
+
+Two candidate reasons, one of them probably right:
+
+  - `printf` in m1n1 ultimately loops per-byte into the UART
+    driver regardless of how much you hand it at once, so
+    batching on my side doesn't reduce the per-byte stall.
+  - `iodev_write(IODEV_USB_VUART)` itself is the slow path
+    (both buffering and dropping passthrough went via this
+    path — one blocking, one alone, both wedged).
+
+Confirming either requires instrumenting the UART/iodev write
+path, which I didn't do this round.
+
+### Tree state
+
+Back at `514ab585`-equivalent. 96 s ceiling, 27-96 s variance.
+Two new evidence logs committed. `smc_pump`/`smc_nudge` still
+in `smc.c`, `hv_smc_keepalive` still declared, `wdt_kick` still
+called from `hv_tick` — all unchanged from `514ab585`.
+
+---
+
 ## 2026-04-20 13:20 — Ubuntu — AIC event drain in hv_exc_fiq wedges the guest
 
 Kaden said stop calling early, so tackled the theory that nudge-kill
