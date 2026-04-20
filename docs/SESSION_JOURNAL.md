@@ -11,6 +11,67 @@ end of a session.
 
 ---
 
+## 2026-04-20 11:55 — Ubuntu — Plan A (leak SMC ASC alive) disconfirmed
+
+Tested the cheapest of the three suspects from 11:45. Added
+`(void)smc_init();` at the end of `m1n1_main` (just after
+`sep_init`, before `run_actions`), did NOT call `smc_shutdown`.
+Result on chainload:
+
+```
+TTY> rtkit(smc): booting with version 12
+TTY> rtkit(smc): unknown oslog message 100ff800038de75
+... more oslog noise ...
+TTY> Initialization complete.
+TTY> Running proxy...
+```
+
+SMC ASC boots cleanly via RTKit v12, leaks, and sits alive
+through the proxy handoff + chainload into the patched m1n1.
+Endurance run with the identical stimulus as the 11:35 WDT-kick
+test:
+
+  - baseline (tick + wdt_kick, no SMC):  ~96 s
+  - Plan A  (tick + wdt_kick + SMC leak): **~79 s**
+
+Log: `docs/2026-04-20_hv_smc_init_leak_79s.txt`.
+
+So SMC liveness is **not** the watchdog — arguably a slight
+regression (within noise, but clearly no improvement). Removed
+the `smc_init()` call; left a pointer-comment in `main.c`
+explaining what was tried and why it's out so nobody re-tries
+it next week. SMC is still potentially relevant if paired with
+periodic `smc_write_u32`, but Plan A was the cheap version and
+it's disconfirmed.
+
+**Suspects reduced to two:**
+  1. **AOP ASC** (`/arm-io/aop`) — same rtkit pattern as SMC
+     but a different coprocessor. Could do the same "boot + leak"
+     experiment, needs a minimal AOP driver (not in-tree today)
+     or reuse rtkit.c against the AOP ASC base. Nontrivial.
+  2. **SPMI→PMU** traffic — periodic PMU register read/write
+     from `hv_tick`. Deep RE to identify a safe PMU keepalive
+     register.
+
+### Final state of this session
+
+Session ceiling: **96 s** (from 60 s, +60%), committed:
+  - `200b1522` hv_arm_tick re-enabled on M4 (+26 s)
+  - `2c0580a7` hv_tick WDT_COUNT kick (+10 s, mostly noise,
+    defensive)
+  - `50224b75` watchdog ADT/register probes + proof SoC WDT is
+    not the trigger
+  - `<this one>` Plan A revert + disconfirmation note
+
+No regressions; all changes gated behind T8132 or cheap/
+zero-impact on other SoCs. Two scripts in `scripts/hv/` for
+next-session WDT / ADT probing; one evidence log per A/B.
+
+Multi-minute sessions still want AOP or SPMI work — that's the
+real next lever.
+
+---
+
 ## 2026-04-20 11:45 — Ubuntu — SoC WDT is NOT our reset trigger (proven)
 
 Continuing the session-length hunt without spawning a new session.

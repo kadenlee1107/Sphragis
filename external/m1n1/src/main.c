@@ -179,6 +179,14 @@ void m1n1_main(void)
     sep_init();
 #endif
 
+    // M4-HV 2026-04-20 11:55: tested `smc_init()` here (leaked
+    // handle, ASC booted via rtkit with `booting with version 12`)
+    // to see if a live SMC coprocessor extends HV session length.
+    // Result: 79 s to USB drop vs 96 s WDT-kick baseline — no help
+    // and arguably slight regression (within noise). SMC liveness
+    // is not the watchdog. See docs/2026-04-20_hv_smc_init_leak_79s.txt
+    // and the journal entry for details.
+
     printf("Initialization complete.\n");
 
     run_actions();
