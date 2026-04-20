@@ -1,0 +1,30 @@
+bat_os> 
+[vuart] >>> b'self-test\r'
+self-test
+
+[selftest] starting kernel self-test
+[selftest] frame::alloc_frame ... OK (addr=0x000001001a7e0000)
+[selftest] batfs::create ... OK
+[selftest] batfs::read+verify ... OK (52 B matched)
+[selftest] batfs::merkle_root = 0x9df709e343530442f2480afc372e8f77fde25021da4c0580d6633404bb58bb04
+[selftest] batfs::verify_all_integrity ... OK
+[selftest] all PASS
+bat_os> TTY> HV alive t=1s
+TTY> HV alive t=2s
+TTY> HV alive t=3s
+TTY> HV alive t=4s
+TTY> HV alive t=5s
+TTY> HV alive t=6s
+TTY> HV alive t=7s
+TTY> HV alive t=8s
+TTY> HV alive t=9s
+TTY> HV alive t=10s
+TTY> HV alive t=11s
+TTY> HV alive t=12s
+TTY> HV alive t=13s
+TTY> HV alive t=14s
+TTY> HV alive t=15s
+TTY> HV alive t=16s
+TTY> HV alive t=17s
+TTY> HV alive t=18s
+TTY> HV alive t=19s

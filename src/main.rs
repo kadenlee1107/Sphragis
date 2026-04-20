@@ -904,6 +904,7 @@ fn apple_shell_dispatch(line: &str) {
             uart::puts("  rng            — show RNG / HW entropy availability\n");
             uart::puts("  sha256 <text>  — SHA-256 hash of <text> (hex)\n");
             uart::puts("  bench sha256   — time 64 KiB of software SHA-256\n");
+            uart::puts("  self-test      — frame alloc + BatFS encrypt/verify/Merkle round-trip\n");
             uart::puts("  batfs ls       — list BatFS files\n");
             uart::puts("  batfs create <name> <plaintext>\n");
             uart::puts("  batfs read <name>\n");
@@ -934,6 +935,52 @@ fn apple_shell_dispatch(line: &str) {
                 0x53 => { uart::puts("  -> M4 Donan (P core)\n"); }
                 _    => {}
             }
+        }
+        "self-test" => {
+            // Runs the frame-allocator / BatFS / Merkle-integrity
+            // chunks of `apple_kernel_self_test`. Fresh-boot only —
+            // re-running fails BatFS create() on "selftest.txt"
+            // already existing, which is correct behaviour.
+            uart::puts("\n[selftest] starting kernel self-test\n");
+            uart::puts("[selftest] frame::alloc_frame ... ");
+            match kernel::mm::frame::alloc_frame() {
+                Some(addr) => {
+                    uart::puts("OK (addr=0x"); uart::puthex64(addr as u64); uart::puts(")\n");
+                    kernel::mm::frame::free_frame(addr);
+                }
+                None => { uart::puts("FAIL (out of memory)\n"); return; }
+            }
+            const SELFT_NAME: &str = "selftest.txt";
+            const SELFT_PT: &[u8] = b"Hello from Bat_OS on real Apple M4 silicon under HV.";
+            uart::puts("[selftest] batfs::create ... ");
+            match fs::batfs::create(SELFT_NAME, SELFT_PT) {
+                Ok(()) => uart::puts("OK\n"),
+                Err(e) => { uart::puts("FAIL: "); uart::puts(e); uart::puts("\n"); return; }
+            }
+            uart::puts("[selftest] batfs::read+verify ... ");
+            let mut out = [0u8; 128];
+            match fs::batfs::read(SELFT_NAME, &mut out) {
+                Ok(n) => {
+                    if n == SELFT_PT.len() && &out[..n] == SELFT_PT {
+                        uart::puts("OK ("); kernel::mm::print_num(n); uart::puts(" B matched)\n");
+                    } else {
+                        uart::puts("FAIL: plaintext mismatch\n"); return;
+                    }
+                }
+                Err(e) => { uart::puts("FAIL: "); uart::puts(e); uart::puts("\n"); return; }
+            }
+            uart::puts("[selftest] batfs::merkle_root = 0x");
+            let root = fs::batfs::merkle_root();
+            for i in 0..8 {
+                uart::puthex32(u32::from_be_bytes([root[i*4], root[i*4+1], root[i*4+2], root[i*4+3]]));
+            }
+            uart::puts("\n[selftest] batfs::verify_all_integrity ... ");
+            if fs::batfs::verify_all_integrity() {
+                uart::puts("OK\n");
+            } else {
+                uart::puts("FAIL\n");
+            }
+            uart::puts("[selftest] all PASS\n");
         }
         "rng" => {
             // Report what entropy sources are in play. Verifies M4
