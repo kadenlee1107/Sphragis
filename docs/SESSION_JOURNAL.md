@@ -11,6 +11,95 @@ end of a session.
 
 ---
 
+## 2026-04-19 22:30 — Ubuntu — BAT_OS CPUID + SHA-256 LIVE OVER HV SHELL, ~2× LONGER SESSIONS
+
+**Session-length up to ~80-100 s**, more shell commands, and real
+crypto output over USB-CDC on M4:
+
+```
+bat_os> cpuid
+  MIDR_EL1:   0x00000000611f0531
+  CTR_EL0:    0x000000009444c004
+  CurrentEL:  1
+  MPIDR_EL1:  0x0000000080010100
+  AIDR_EL1:   0x000000d168699696
+  MIDR.PART:  0x00000053
+  -> M4 Donan (P core)
+bat_os> sha256 hello
+  input: hello
+  bytes: 5
+  sha256: 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+```
+
+The `hello` hash matches the canonical SHA-256 — Bat_OS's crypto
+stack is correct on live M4 hardware, under m1n1 HV, accessible
+via an interactive shell over USB-CDC.
+
+### What changed in this sub-session
+
+- **`external/m1n1/src/hv_vuart.c`**: dockchannel MMIO trap now
+  also calls `iodev_handle_events(uartproxy_iodev)` — since Bat_OS's
+  shell busy-polls `has_char()` via DATA_RX_COUNT, every shell tick
+  also pets the primary USB CDC endpoint. In practice doubles the
+  session length from ~30-60 s to ~80-100 s before the SMC-suspected
+  reset.
+- **`external/m1n1/src/hv_exc.c`**: removed per-exception printfs
+  ([hv_exc_sync / _fiq / _serr / _irq] enter). They served their
+  diagnostic purpose when bringing up the HV, but were flooding the
+  host-side console at 1000s of lines per second during normal
+  dockchannel-MMIO operation. Breadcrumb-to-memory instrumentation
+  stays.
+- **`external/m1n1/src/hv.c`**: tried re-enabling `hv_arm_tick`
+  after the printf removal, on the theory that the 1 kHz TX flood
+  from the prints was what actually killed the Mac in 17 ms (not
+  the FIQ handling path itself). Result: tick-enabled runs DO work
+  now (guest runs fine, uptime returns non-zero), but the Mac still
+  resets around 30-60 s regardless. Same timeline as tick-disabled
+  — the HV tick is NOT the destabiliser after all, but also isn't
+  helping. Reverted to tick-disabled for stability; left the gate
+  conditional on `chip_id != T8132` so the next session can flip it
+  once we find whatever IS causing the SMC reset.
+- **`src/main.rs`**: added `cpuid` and `sha256 <text>` shell
+  commands. Updated `help` listing.
+- **`scripts/hv/batos_hv_interactive.py`**: stimulus parser uses
+  `;;` instead of `|` as separator (dodges shell quoting weirdness),
+  auto-appends `\r` if missing, also splits on newlines.
+- **Docs**: added four evidence files:
+    - `docs/2026-04-19_batos_under_hv_ttyACM2_boot_log.txt` — first
+      clean boot log.
+    - `docs/2026-04-19_batos_hv_interactive_help_session_extracted.txt`
+      — first interactive `help` round-trip.
+    - `docs/2026-04-19_batos_hv_full_demo.txt` — help / uname / mem /
+      uptime / batfs full round-trip; `seconds: 52` uptime.
+    - `docs/2026-04-19_batos_hv_cpuid_sha256.txt` — cpuid + sha256.
+
+### Remaining for next session (priority order)
+
+1. **Multi-minute sessions**. Still resets ~100 s in (same symptom
+   with and without ticks). Suspect Apple SMC heartbeat. Concrete
+   next experiment: trace what stock m1n1 does between chainloads
+   — it clearly doesn't hit the reset, so something on its main
+   `uartproxy_run` loop (`iodev_handle_events` + `iodev_read`) keeps
+   SMC happy. Possibly the ON-BUS bus-master activity from DWC3 DMA
+   is what pings SMC; the HV path has less bus activity between
+   traps. Try a deliberate background bus-master from the HV (e.g.
+   periodic memcpy between HV-owned pages to keep the coherence
+   fabric active).
+2. **`pyserial` opens to /dev/ttyACM2 still risk killing the HV** —
+   the CDC SET_CTRL_LINE_STATE handler in DWC3 under HV may still
+   hit an ungated IMPDEF MSR. Our workaround: use the `scripts/hv/
+   batos_hv_interactive.py` path, which opens ttyACM2 ONCE and
+   holds it, so the control messages fire once cleanly.
+3. **AIC v3 Bat_OS driver** — we currently gate AIC init under HV,
+   which means Bat_OS has no interrupts and can only poll. Fixing
+   this unblocks Bat_OS's scheduler/timer work under HV.
+4. **Remove the m1n1.macho chainload step**. Right now each session
+   needs a fresh chainload. Ideally we persist the patched m1n1 via
+   kmutil (same way stock m1n1 is installed) so Mac boot → patched
+   m1n1 → automatic run_guest with Bat_OS payload.
+
+---
+
 ## 2026-04-19 22:00 — Ubuntu — END-TO-END INTERACTIVE BAT_OS SHELL OVER USB-CDC ON M4 UNDER HV ✅✅
 
 **Camera is now obsolete.** Typing `help\r` into the vuart CDC
