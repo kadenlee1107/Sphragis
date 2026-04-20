@@ -90,14 +90,28 @@ are written. When transcribed to C `#define` form, drop the underscores.
   STLR, which is a single non-exclusive instruction and does work on
   Device memory. **Rule during bring-up:** under
   `IrqGuard` + single-CPU, replace every RMW on the boot path with
-  plain `load` + `store`. Known fixes: `kernel::mm::heap::LockedHeap`
-  → `UnsafeCell<Heap>` (commit `351c37c8`), `rng::CHAIN_LOCK` CAS →
-  store (`d3537e74`), `rng::CTR.fetch_add` → load+store (session
-  2026-04-19 17:05). Still-live RMWs not yet on the critical path:
-  `batfs::NONCE_COUNTER.fetch_add` (`next_nonce`),
-  `mm::frame::BITMAP[_].compare_exchange_weak` (`alloc_frame`) and
-  `.fetch_and/or` (`free_frame` / alternate alloc). Will hang on
-  first exercise; rewrite the same way.
+  plain `load` + `store`. Cleared so far (all via the same pattern):
+  `kernel::mm::heap::LockedHeap` → `UnsafeCell<Heap>` (`351c37c8`),
+  `rng::CHAIN_LOCK` CAS → store (`d3537e74`),
+  `rng::CTR.fetch_add` → load+store (`ab0425e7`),
+  `mm::frame::{alloc_frame, alloc_kernel_frame, alloc_contig}` and
+  `batfs::next_nonce` (session 2026-04-19 17:35). To the best of our
+  grep at that point, no RMW site remains on the Apple boot path or
+  on the `frame::alloc`/`batfs::create` paths a kernel self-test
+  exercises. The `src/batcave/linux/*` and `src/net/tcp.rs` RMWs
+  exist but are on syscall / networking paths we haven't brought up
+  on M4 yet.
+- **iBoot watchdog tightens under repeated chainloads.** Within a
+  session, the first 2–3 chainloads give Bat_OS a generous window
+  (tens of seconds to minutes) before something Apple-level resets
+  the Mac. After ~5 cycles the window shrinks to ~2 s — Bat_OS barely
+  gets to `_apple_start` before iBoot forces a full ROM reboot. A
+  cold power-cycle (hold power → Options → reboot → back to m1n1)
+  resets whatever counter is involved. Hypothesis: iBoot tracks
+  non-signed-boot handoffs and gets increasingly defensive; m1n1's
+  WDT disable at `0x3882b0000 +0x1c` doesn't cover it. Unconfirmed
+  whether our own `drivers::apple::wdt::disable()` hits the right
+  register block for this second watchdog.
 
 ---
 

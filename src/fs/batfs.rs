@@ -174,9 +174,16 @@ pub fn init(master_key: &[u8; 32]) {
 }
 
 fn next_nonce() -> [u8; 12] {
-    // V5-CRYPTO-002: atomic fetch_add — two concurrent create() calls
-    // now get distinct counter values even without a lock.
-    let n = NONCE_COUNTER.fetch_add(1, core::sync::atomic::Ordering::AcqRel);
+    // M4 / MMU-off: `fetch_add` lowers to LDXR/STXR which hangs on
+    // Device-nGnRnE memory. Under IrqGuard on single-CPU bring-up the
+    // load + store is exclusive. When SMP lands this needs either a
+    // real lock or `+lse`. See docs/M4_GROUND_TRUTH.md §2.
+    let n = {
+        let _g = crate::kernel::sync::IrqGuard::new();
+        let cur = NONCE_COUNTER.load(core::sync::atomic::Ordering::Acquire);
+        NONCE_COUNTER.store(cur.wrapping_add(1), core::sync::atomic::Ordering::Release);
+        cur
+    };
     let mut nonce = [0u8; 12];
     let prefix = unsafe {
         core::ptr::read_volatile(core::ptr::addr_of!(BOOT_NONCE_PREFIX))

@@ -102,7 +102,31 @@ pub fn flush(_x: u32, _y: u32, _w: u32, _h: u32) {
 // for us (no DCP mailbox traffic, no DART), so this works the moment
 // we have a valid fb_base + width + height.
 
+/// Re-encode an ARGB8888 literal into the M4 framebuffer's native
+/// ARGB2101010 layout (see docs/M4_GROUND_TRUTH.md §3.1b). Writing an
+/// ARGB8888 value directly to the FB produces the wrong color: e.g.
+/// `0xFF00_0000` ("opaque black" in 8888) decodes on M4 as A=3,
+/// R=0x3F0, G=0, B=0 — bright red. Keep color literals authored in
+/// ARGB8888 for readability and run them through this at const-eval
+/// time.
+pub const fn argb8888_to_m4(argb8888: u32) -> u32 {
+    let a8 = (argb8888 >> 24) & 0xFF;
+    let r8 = (argb8888 >> 16) & 0xFF;
+    let g8 = (argb8888 >>  8) & 0xFF;
+    let b8 =  argb8888        & 0xFF;
+    // 8→10 bit expansion: replicate the top 2 bits into the low 2
+    // so saturated channels stay saturated (0xFF → 0x3FF, not 0x3FC).
+    let a2  = a8 >> 6;
+    let r10 = (r8 << 2) | (r8 >> 6);
+    let g10 = (g8 << 2) | (g8 >> 6);
+    let b10 = (b8 << 2) | (b8 >> 6);
+    (a2 << 30) | (r10 << 20) | (g10 << 10) | b10
+}
+
 /// Draw `s` at pixel (x, y) using the kernel's 8x16 bitmap font.
+/// `fg` / `bg` are passed through to the framebuffer as-is — callers
+/// are responsible for encoding in whatever pixel format the FB
+/// expects (ARGB2101010 on M4; see `argb8888_to_m4`).
 pub fn draw_text(x: u32, y: u32, s: &str, fg: u32, bg: u32) {
     if !is_ready() { return; }
     let stride_pixels = stride() / 4;
@@ -117,15 +141,17 @@ pub fn boot_splash() {
     let h = height();
     if w == 0 || h == 0 { return; }
 
-    // Solid-black background.
-    fill_screen(0xFF00_0000);
+    // Color literals authored as ARGB8888 for readability; re-encoded
+    // to the M4 FB's native ARGB2101010 at const-eval time. Writing
+    // ARGB8888 directly to this FB gives the wrong color (see
+    // argb8888_to_m4 above / docs/M4_GROUND_TRUTH.md §3.1b).
+    const BG:      u32 = argb8888_to_m4(0xFF00_0000); // black
+    const C_TITLE: u32 = argb8888_to_m4(0xFFFF_C000); // amber bat-signal
+    const C_SUB:   u32 = argb8888_to_m4(0xFF40_C0FF); // cool blue
+    const C_DIM:   u32 = argb8888_to_m4(0xFF80_8080); // dim gray
 
-    // Yellow/amber "Bat_OS" — Bat-signal vibe.
-    const C_TITLE: u32 = 0xFFFF_C000;
-    // Cool blue subtitle.
-    const C_SUB:   u32 = 0xFF40_C0FF;
-    const C_DIM:   u32 = 0xFF80_8080;
-    const BG:      u32 = 0xFF00_0000;
+    // Solid-black background.
+    fill_screen(BG);
 
     // Title sized 4x normal (32x64 per char). We do this by drawing
     // the same glyph 4 times offset (cheap "scaling").

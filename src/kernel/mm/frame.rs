@@ -73,46 +73,36 @@ pub fn alloc_frame() -> Option<usize> {
     let user_cap = total.saturating_sub(KERNEL_RESERVED_FRAMES);
 
     for i in 0..BITMAP_SIZE {
-        // V8-ROOT-4: compare_exchange the claim so this works correctly on
-        // SMP (and documents the intent even on UP). Loop on Weak so the
-        // CPU can retry on spurious CAS failure; break out of the inner
-        // loop on "word is full", resume outer scan.
-        loop {
-            let val = BITMAP[i].load(Ordering::Acquire);
-            if val == u64::MAX { break; } // full word, try next
+        // M4 / MMU-off: `compare_exchange*` lowers to LDXR/STXR which
+        // never succeeds on Device-nGnRnE memory. We already hold
+        // `IrqGuard` above and we're single-CPU during bring-up, so
+        // plain load + check + store is exclusive. When SMP lands the
+        // frame allocator will need a proper lock (or `+lse`) anyway.
+        let val = BITMAP[i].load(Ordering::Acquire);
+        if val == u64::MAX { continue; } // full word, try next
 
-            let bit = (!val).trailing_zeros() as usize;
-            let frame_index = i * 64 + bit;
+        let bit = (!val).trailing_zeros() as usize;
+        let frame_index = i * 64 + bit;
 
-            if frame_index >= user_cap {
-                return None;
-            }
+        if frame_index >= user_cap {
+            return None;
+        }
 
-            let new_val = val | (1u64 << bit);
-            match BITMAP[i].compare_exchange_weak(
-                val,
-                new_val,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    let addr = start + frame_index * PAGE_SIZE;
-                    // Zero the page using inline asm str (HVF-safe)
-                    unsafe {
-                        let ptr = addr;
-                        for i in 0..(PAGE_SIZE / 8) {
-                            let target = ptr + i * 8;
-                            core::arch::asm!(
-                                "str xzr, [{addr}]",
-                                addr = in(reg) target,
-                            );
-                        }
-                    }
-                    return Some(addr);
-                }
-                Err(_) => continue, // another cpu won; retry this word
+        BITMAP[i].store(val | (1u64 << bit), Ordering::Release);
+
+        let addr = start + frame_index * PAGE_SIZE;
+        // Zero the page using inline asm str (HVF-safe)
+        unsafe {
+            let ptr = addr;
+            for i in 0..(PAGE_SIZE / 8) {
+                let target = ptr + i * 8;
+                core::arch::asm!(
+                    "str xzr, [{addr}]",
+                    addr = in(reg) target,
+                );
             }
         }
+        return Some(addr);
     }
 
     None
@@ -144,15 +134,11 @@ pub fn alloc_kernel_frame() -> Option<usize> {
         let bitmap_index = frame_index / 64;
         let bit = frame_index % 64;
         if bitmap_index >= BITMAP_SIZE { continue; }
-        // V8-ROOT-4: CAS-claim the bit (SMP-correct, UP-cheap).
+        // M4 / MMU-off: plain load + store under the outer IrqGuard.
+        // See `alloc_frame` for why CAS doesn't work here.
         let val = BITMAP[bitmap_index].load(Ordering::Acquire);
         if val & (1u64 << bit) != 0 { continue; }
-        if BITMAP[bitmap_index]
-            .compare_exchange(val, val | (1u64 << bit), Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            continue; // raced — try next index
-        }
+        BITMAP[bitmap_index].store(val | (1u64 << bit), Ordering::Release);
 
         let addr = start + frame_index * PAGE_SIZE;
         unsafe {
@@ -197,9 +183,10 @@ pub fn alloc_contig(n_pages: usize) -> Option<usize> {
                 continue 'outer;
             }
         }
-        // Claim them all. Use per-bit CAS — not batch-perfect on SMP
-        // (a concurrent racer could snatch one mid-claim), but under
-        // IrqGuard + current UP kernel we're safe.
+        // M4 / MMU-off: plain load + store under IrqGuard. `fetch_and`
+        // / `fetch_or` lower to LDXR/STXR on Device memory and hang.
+        // The rollback path is preserved (dead on UP, correct on SMP
+        // once we add a real lock).
         for j in 0..n_pages {
             let fi = frame_idx + j;
             let wi = fi / 64;
@@ -211,12 +198,13 @@ pub fn alloc_contig(n_pages: usize) -> Option<usize> {
                     let fk = frame_idx + k;
                     let wk = fk / 64;
                     let bk = fk % 64;
-                    BITMAP[wk].fetch_and(!(1u64 << bk), Ordering::AcqRel);
+                    let v = BITMAP[wk].load(Ordering::Acquire);
+                    BITMAP[wk].store(v & !(1u64 << bk), Ordering::Release);
                 }
                 frame_idx += 1;
                 continue 'outer;
             }
-            BITMAP[wi].fetch_or(1u64 << bit, Ordering::AcqRel);
+            BITMAP[wi].store(cur | (1u64 << bit), Ordering::Release);
         }
         // Zero all frames.
         let base = start + frame_idx * PAGE_SIZE;

@@ -11,6 +11,97 @@ end of a session.
 
 ---
 
+## 2026-04-19 17:35 — Ubuntu — ARGB2101010 color fix + remaining LL/SC sites
+
+**Two follow-on fixes landed in one commit, and one observation about
+iBoot-watchdog stability that matters for future sessions.**
+
+### 1. `dcp::boot_splash` — ARGB2101010 color fix (VERIFIED on camera)
+
+Symptom from the previous session: the splash rendered with a
+bright-red wash instead of black. Root cause: color constants were
+authored as ARGB8888 (`0xFF00_0000` = opaque black) but written
+directly into the M4 framebuffer, which is 30-bpp ARGB2101010 per
+`M4_GROUND_TRUTH.md §3.1b`. In that packing, `0xFF00_0000` decodes
+as A=3, R≈max, G=0, B=0 — **red**.
+
+Fix: a new `pub const fn argb8888_to_m4(argb8888: u32) -> u32` in
+`src/drivers/apple/dcp.rs` re-encodes at const-eval time by scaling
+each 8-bit channel into 10 bits (top-2-bit replication so saturated
+values stay saturated). `boot_splash`'s constants now run through
+it. `fill_screen(BG)` and the inner `crate::ui::font::draw_str`
+calls see native ARGB2101010 values.
+
+**Verified on camera** at 17:18: the splash renders as black
+background with amber `BAT_OS` title, cool-blue subtitle, dim-gray
+footer — exactly as intended. Frames `/tmp/frames/f_{010,030,058}.png`
+from video `/tmp/batos_selftest.mp4` (gitignored).
+
+### 2. Remaining LL/SC-on-Device-memory RMW sites (mechanical)
+
+Applied the same rewrite pattern used for `heap` / `CHAIN_LOCK` /
+`CTR.fetch_add`:
+
+- `kernel::mm::frame::alloc_frame` — `compare_exchange_weak` loop →
+  plain load + check + store (already holds `IrqGuard`, single-CPU).
+- `kernel::mm::frame::alloc_kernel_frame` — `compare_exchange` → load
+  + store.
+- `kernel::mm::frame::alloc_contig` — the `fetch_or` (per-bit claim)
+  and `fetch_and` (rollback) loops → load + store.
+- `fs::batfs::next_nonce` — `NONCE_COUNTER.fetch_add` → load + store
+  under a fresh `IrqGuard` (callers don't hold one).
+
+These are the last atomic RMWs on any plausible Bat_OS boot path. A
+future `batfs::create` / `frame::alloc_frame` call now won't hang.
+
+### 3. Mac iBoot-watchdog degrades with repeated chainloads
+
+**Unverified caveat on the LL/SC fixes.** After 5–6 chainload cycles
+in this session the Mac entered a state where Bat_OS consistently
+hard-resets within ~2 s of jumping to `_apple_start`. Camera frames
+show the Apple-logo ROM splash across the full video; `ttyACM1/2`
+(m1n1 USB CDC) vanishes immediately post-reload and the Mac loops
+through ROM → iBoot → m1n1 without ever staying in Bat_OS long enough
+to render the fixed splash again.
+
+We confirmed this is **not** a regression from the frame/batfs/main
+changes: reverting those and rechaining the known-good ARGB-only
+binary still exhibited the 2-second reset. The Mac needs a cold power
+cycle (hold power → Options → reboot-to-macOS, or disconnect+hold
+power → back into m1n1) to reset the state before next verification.
+
+The frame + batfs rewrites are committed on the strength of the
+pattern (three prior applications verified: `heap`, `CHAIN_LOCK`,
+`CTR.fetch_add`) and code review. Next session should cold-boot the
+Mac and confirm the splash still renders, then exercise the
+now-unlocked paths (`frame::alloc_frame`, `batfs::create/read`) via
+a small self-test.
+
+### Open follow-ups
+
+- Verify LL/SC fixes on a freshly-booted Mac (camera capture of
+  black splash with amber `BAT_OS`).
+- Add the post-splash kernel self-test (scaffolding written and
+  reverted this session — see `apple_kernel_self_test` from commit
+  history if re-adding).
+- `ui::desktop::run()` on M4 is a no-op: it drives virtio-gpu via
+  `drivers::virtio::gpu::*` which isn't wired up on Apple Silicon,
+  and uses `drivers::uart::getc` (PL011) instead of
+  `drivers::apple::uart::getc`. Either add a platform dispatch in
+  `wm` / `console` / `ui::desktop::run`, or write an
+  Apple-native `desktop_apple::run` that targets `dcp::` + the
+  dockchannel UART.
+- Dockchannel-UART TX/RX already works from `drivers::apple::uart`
+  at the MMIO level — but we have no USB CDC on the Mac post-m1n1,
+  so Ubuntu can't read/write it until Bat_OS implements its own USB
+  CDC class driver (non-trivial).
+
+**Files touched:** `src/drivers/apple/dcp.rs`,
+`src/fs/batfs.rs`, `src/kernel/mm/frame.rs`,
+`docs/M4_GROUND_TRUTH.md`, `docs/SESSION_JOURNAL.md`.
+
+---
+
 ## 2026-04-19 17:05 — Ubuntu — batfs::init returns (CTR.fetch_add LL/SC fix)
 
 **Resolved the "batfs::init enters but never returns" hang.** The
