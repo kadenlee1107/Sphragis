@@ -7,7 +7,7 @@ Claude should read this before any cross-machine command.
 ## Machines
 
 ### Mac M4 (the target)
-- **Model:** Mac16,1 (Apple M4 MacBook Air)
+- **Model:** Mac16,1 / J604 (Apple M4 MacBook Pro 14")
 - **macOS user:** `kadenlee`
 - **Repo path:** `/Users/kadenlee/Bat_OS/`
 - **Role:** Bat_OS target hardware. Mac Claude runs here when in macOS.

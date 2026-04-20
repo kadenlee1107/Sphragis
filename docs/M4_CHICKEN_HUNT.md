@@ -52,7 +52,7 @@ curl -sL https://api.github.com/repos/blacktop/ipsw/releases/latest \
 tar -xzf /tmp/ipsw.tar.gz -C /tmp/ ipsw
 
 # 2. Pull a small M4 IPSW. iPad Pro M4 (iPad16,3 / iPad16,4) is
-#    smaller than the MacBook Air M4 IPSW and has the same H16
+#    smaller than the MacBook Pro M4 IPSW and has the same H16
 #    CPU and the same APPLY_TUNABLES sequence. Check what's
 #    current:
 /tmp/ipsw download ipsw --device iPad16,3 --latest --confirm

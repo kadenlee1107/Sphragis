@@ -143,7 +143,7 @@ If you have an Elgato capture card (HD60 S / HD60 X / Cam Link):
    ```bash
    ffmpeg -f v4l2 -i /dev/video0 -frames:v 1 /tmp/test.png
    ```
-4. For M4 HDMI out: Mac16,1 (M4 MacBook Air) has NO HDMI port; use a
+4. For M4 HDMI out: Mac16,1 (M4 MacBook Pro 14") has an HDMI port on the right side; plug it into the Elgato directly. (Earlier notes in this doc said MBA / no-HDMI — that was wrong, target machine is an MBP.)
    USB-C to HDMI adapter. Plug Mac USB-C → HDMI cable → Elgato HDMI in.
 5. Boot Mac into m1n1 and see if the bat logo appears on the captured
    video. If yes, Elgato can capture Bat_OS too. If no, bare-metal

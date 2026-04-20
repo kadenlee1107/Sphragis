@@ -10,7 +10,7 @@ WHERE to point a disassembler next session.
 ## Source IPSW
 
   - Device: `iPad16,3` (iPad Pro M4 11", same H16/T8132 CPU family
-    as MacBook Air M4)
+    as MacBook Pro M4; smaller IPSW → smaller kernelcache)
   - Build: `23E254`, Version `26.4.1`, kernel `xnu-12377.102.10~3`
   - Chip: `RELEASE_ARM64_T8132`
 

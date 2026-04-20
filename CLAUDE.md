@@ -8,9 +8,9 @@ start from scratch.
 ## What Bat_OS is
 
 A bare-metal Rust operating system for Apple Silicon. Target machine
-is an **Apple M4 MacBook Air (Mac16,1 / T8132 "Donan")**. We have
-**actually booted Bat_OS on real M4 hardware** — this is verified, not
-aspirational. Nobody else in the open-source world has booted a
+is an **Apple M4 MacBook Pro 14" (Mac16,1 / J604 / T8132 "Donan")**.
+We have **actually booted Bat_OS on real M4 hardware** — this is
+verified, not aspirational. Nobody else in the open-source world has booted a
 non-Apple OS on M4 yet (as of April 2026); Asahi Linux installer
 explicitly refuses to install on M4.
 
