@@ -11,6 +11,106 @@ end of a session.
 
 ---
 
+## 2026-04-20 18:00 — Ubuntu — Path B disconfirmed: PCPU MMIO filter is NOT PMGR-gated
+
+Picked up M4_CHICKEN_HUNT Path B ("PMGR cluster wake before APSC").
+End-to-end in one live-HW session. **Path B is a dead end.** Saving
+the evidence so nobody else spends another 30 min on it.
+
+### Live-HW evidence (all single-boot, same-session)
+
+  - `dump_pmgr.py` → `docs/m4_re/probes/pmgr_dump_2026-04-20_1715.txt`
+  - `scripts/hv/probe_pcpu_wake.py` — enumerate + wake candidate PMGR
+    devices for CPU/cluster.
+  - `scripts/hv/probe_pcpu_cluster_mmio.py` — PS reg dump + PCPU MMIO
+    read-sweep.
+  - `scripts/hv/probe_pcpu_200f8_smoking_gun.py` — two reads, same
+    boot: +0x20020 OK, then +0x200f8 SErrors.
+
+PMGR PS regs on cold stock-m1n1 boot (target/actual bits):
+
+```
+ECPU0..5  0x00000100  target=0x0 actual=0x0   (all E-cores pwrgated)
+PCPU0     0x000001f0  target=0x0 actual=0xf   (boot P-core active)
+PCPU1..3  0x00000100  target=0x0 actual=0x0   (pwrgated — -S)
+ECPM      0x00002100  target=0x0 actual=0x0   (E-cluster pwrgated)
+PCPM      0x000021f0  target=0x0 actual=0xf   (P-cluster ACTIVE)
+```
+
+So the P-cluster is NOT in retention — PCPM PMGR device actual=0xf
+and boot core PCPU0 actual=0xf. Cluster is fully powered.
+
+Smoking-gun sweep on the live boot CPU, one session:
+
+```
+PCPU +0x020020 = 0x0000000000400104   (readable — PSTATE reg)
+PCPU +0x0200f8 → SError (fatal)
+PCPU +0x000000 → SError (fatal)
+```
+
+**Same cluster, same boot, same instant.** +0x20020 comes through;
++0x0 and +0x200f8 don't. This is per-address, not cluster-wide.
+
+Earlier probe on ECPU (cluster pwrgated, actual=0x0) showed that
+cluster's +0x200f8 IS readable (=0x0) — so the filter is specifically
+on the P-cluster, not a universal cluster-MMIO rule.
+
+### What this tells us
+
+1. The original Path B premise — "PCPU MMIO SErrors because PMGR
+   hasn't woken the cluster" — is wrong. PMGR says cluster is on.
+2. The SError is a per-address filter, consistent with M4's
+   `HAS_GUARDED_IO_FILTER` (new on H16 per `docs/m4_re/H15_vs_H16.
+   diff.txt`): "a guarded runtime dedicated to the fine-grained IO
+   access filter". This filter is programmed by Apple's guarded
+   runtime during secure-world boot and is not an MMIO bit we can
+   flip from EL2.
+3. No PMGR write we can issue will make PCPU +0x200f8 accessible.
+   The existing `set64(cluster->base + 0x200f8, BIT(40))` in
+   `cpufreq_init_cluster` for T8132 is unreachable by design on M4.
+4. Note that this is a DIFFERENT finding than yesterday's read of
+   the same session: yesterday the probe concluded "PCPU MMIO
+   SErrors on first access" broadly. Today's finer probe shows
+   PCPU MMIO is selectively accessible — +0x20020 works cleanly —
+   so the gate is offset-granular, not cluster-granular.
+
+### E-only cpufreq_init idea — considered and discarded
+
+Could we skip PCPU in cpufreq_init and flip only ECPU APSC? Live
+evidence says no usefulness: all six E-cores are pwrgated at boot
+under `-S` (actual=0x0 across ECPU0..5 and ECPM), and the m1n1 HV
+runs single-core on PCPU0. Enabling APSC on a cluster with zero
+running cores buys us nothing the session-ceiling watchdog cares
+about.
+
+### Only remaining path: Path A (IPSW kernelcache disassembly)
+
+Confirmed with the live evidence above that there is no "just find
+the right PMGR device" shortcut. The M4 APSC enable + chickens both
+require values that are not recoverable from open source — they
+have to come out of Apple's shipped kernel binary. Starting Path A
+now: ipsw install → iPad Pro M4 IPSW → kernelcache extract/dec →
+disassemble _start_first_cpu + APPLY_TUNABLES expansion for MIDR
+0x52 (E) / 0x53 (P).
+
+### Files committed this sub-session
+
+  - `docs/m4_re/probes/pmgr_dump_2026-04-20_1715.txt` — full PMGR
+    device list (392 devices on die 0).
+  - `scripts/hv/probe_pcpu_wake.py`
+  - `scripts/hv/probe_pcpu_cluster_mmio.py`
+  - `scripts/hv/probe_pcpu_200f8_smoking_gun.py`
+
+### For next reader
+
+If you're tempted to try Path B variants (different PMGR device,
+different wake order, ACC/PMP devices instead of PCPM): don't. The
+live evidence is that PCPM is already reporting actual=0xf and the
+MMIO block at +0x200f8 is filtered per-offset, not per-cluster.
+PMGR is not the gate. Spend your cycles on Path A.
+
+---
+
 ## 2026-04-20 17:15 — Ubuntu — XNU open-source drop + live-HW probe answer WHY M4 chickens fail
 
 Kaden said "maybe you can download some asahi or something and see
