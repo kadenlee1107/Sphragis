@@ -911,6 +911,7 @@ fn apple_shell_dispatch(line: &str) {
             uart::puts("  bench sha256   — time 64 KiB of software SHA-256\n");
             uart::puts("  self-test      — frame alloc + BatFS encrypt/verify/Merkle round-trip\n");
             uart::puts("  sha-hw         — probe ARMv8.2 SHA-256 crypto extension\n");
+            uart::puts("  aes-hw         — probe ARMv8 AES crypto extension\n");
             uart::puts("  batfs ls       — list BatFS files\n");
             uart::puts("  batfs create <name> <plaintext>\n");
             uart::puts("  batfs read <name>\n");
@@ -987,6 +988,37 @@ fn apple_shell_dispatch(line: &str) {
                 uart::puts("FAIL\n");
             }
             uart::puts("[selftest] all PASS\n");
+        }
+        "aes-hw" => {
+            // Probe ARMv8 AES crypto extension. Runs one AES round
+            // (AESE + AESMC) and prints the result.
+            let isar0: u64;
+            unsafe { core::arch::asm!("mrs {}, id_aa64isar0_el1", out(reg) isar0); }
+            let aes = (isar0 >> 4) & 0xf;
+            uart::puts("  ISAR0.AES nibble: 0x"); uart::puthex32(aes as u32); uart::puts("\n");
+            if aes == 0 {
+                uart::puts("  AES crypto extension not advertised — skipping\n");
+                return;
+            }
+            // Test: AES-128 round on fixed state and key.
+            let mut out0: u64; let mut out1: u64;
+            unsafe {
+                core::arch::asm!(
+                    ".arch armv8-a+aes",
+                    "movi v0.16b, #0x20",   // state (plain-ish)
+                    "movi v1.16b, #0x55",   // round key
+                    "aese  v0.16b, v1.16b", // one SubBytes + ShiftRows XOR key
+                    "aesmc v0.16b, v0.16b", // MixColumns
+                    "mov {0}, v0.d[0]",
+                    "mov {1}, v0.d[1]",
+                    out(reg) out0, out(reg) out1,
+                    options(nostack),
+                );
+            }
+            uart::puts("  AESE + AESMC executed (no UNDEF)\n");
+            uart::puts("  V0.d[0] = 0x"); uart::puthex64(out0); uart::puts("\n");
+            uart::puts("  V0.d[1] = 0x"); uart::puthex64(out1); uart::puts("\n");
+            uart::puts("  -> hardware AES accessible from EL1 guest\n");
         }
         "sha-hw" => {
             // Probe whether the ARMv8.2 SHA256 crypto instructions

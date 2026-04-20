@@ -1,0 +1,40 @@
+bat_os> 
+[vuart] >>> b'aes-hw\r'
+aes-hw
+  ISAR0.AES nibble: 0x00000002
+  AESE + AESMC executed (no UNDEF)
+  V0.d[0] = 0x9d9d9d9d9d9d9d9d
+  V0.d[1] = 0x9d9d9d9d9d9d9d9d
+  -> hardware AES accessible from EL1 guest
+bat_os> TTY> HV alive t=1s traps=690467
+
+[vuart] >>> b'sha-hw\r'
+sha-hw
+  ISAR0.SHA2 nibble: 0x00000002
+  SHA256H/H2/SU0 executed (no UNDEF)
+  V0.d[0] = 0x58302415a1fa6589
+  V0.d[1] = 0x424242422e2e2e2d
+  -> hardware SHA-256 accessible from EL1 guest
+bat_os> 
+[vuart] >>> b'self-test\r'
+TTY> HV alive t=2s traps=1361540
+self-test
+
+[selftest] starting kernel self-test
+[selftest] frame::alloc_frame ... OK (addr=0x00000100196d0000)
+[selftest] batfs::create ... OK
+[selftest] batfs::read+verify ... OK (52 B matched)
+[selftest] batfs::merkle_root = 0x87cd0fbfc764be4dca3fc7f882b576fe3075791347d6ca4c6ee2f8e8b8add480
+[selftest] batfs::verify_all_integrity ... OK
+[selftest] all PASS
+bat_os> 
+[vuart] >>> b'bench sha256\r'
+bench sha256
+  rounds: 1024
+  bytes:  65536
+  dt_cntpct: 107457560
+  cntfrq: 1000000000 Hz
+  KiB/s:  595
+  last:   c422e7070cb1cb45…
+bat_os> TTY> HV alive t=3s traps=1981330
+TTY> HV alive t=4s traps=2675947
