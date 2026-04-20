@@ -185,17 +185,13 @@ void hv_start(void *entry, u64 regs[4])
     }
     printf("[hv_start] S6 SPRR/GXF MRS\n");
 
-    // M4-HV: skip hv_arm_tick on T8132. Even with the PMU/UPMC/
-    // IPI_SR/VM_TMR gates we already added, and with hv_vuart_poll's
-    // aic_set_sw also gated, the CNTP tick firing at 1 kHz still
-    // destabilises the Mac — empirically the USB CDC disconnects
-    // within seconds of the tick being armed. There's at least one
-    // more Apple IMPDEF MSR on the exc_fiq path we haven't tracked
-    // down. For now, drive iodev_handle_events from guest MMIO
-    // traps (which happen ~2 per UART byte) so host proxy input
-    // still flows. Multi-minute sessions will reset back to stock
-    // m1n1 after ~30-60 s from the SMC heartbeat watchdog — fixing
-    // that is the next session's work.
+    // M4-HV: skip the CNTP tick on T8132. Even with PMU/VM_TMR
+    // gates and hv_vuart_poll suppressed, enabling the 1 kHz tick
+    // still leads to Mac reset in ~30-60 s (same timeline as the
+    // tick-disabled SMC-heartbeat reset, i.e. the tick isn't making
+    // it worse but isn't helping either). Keep ticks off for now;
+    // driving iodev_handle_events from MMIO traps on the dockchannel
+    // is sufficient for Bat_OS's polled-UART shell.
     if (chip_id != T8132)
         hv_arm_tick(false);
     printf("[hv_start] S7 hv_arm_tick (m4-skipped=%d)\n", chip_id == T8132);

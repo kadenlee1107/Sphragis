@@ -19,11 +19,12 @@ Usage:
   sg dialout -c "/usr/bin/python3 scripts/hv/batos_hv_interactive.py"
 
   # Canned stimulus — just fire one command and print the response.
-  BATOS_HV_STIMULUS="help\\r" sg dialout -c \\
+  # CR is appended automatically if missing; ';;' separates commands.
+  BATOS_HV_STIMULUS="help" sg dialout -c \\
       "/usr/bin/python3 scripts/hv/batos_hv_interactive.py"
 
-  # Multiple stimuli (separated by '|') sent with 500 ms gaps:
-  BATOS_HV_STIMULUS="uname\\r|mem\\r|uptime\\r" sg dialout -c ...
+  # Multiple stimuli (separated by ';;' or newlines) with 500 ms gaps:
+  BATOS_HV_STIMULUS="uname;;mem;;uptime" sg dialout -c ...
 
 Output:
   * Bytes from the guest (ttyACM2 vuart) print to stdout live.
@@ -124,14 +125,20 @@ def stdin_forwarder(vuart, stop):
 
 
 def main():
+    # Split commands by ';;' (unlikely to occur in a real cmd line) or
+    # newlines. \r, \n, \xHH etc escape sequences are interpreted. A
+    # literal CR gets appended to each command if not already present.
     stim_env = os.environ.get("BATOS_HV_STIMULUS", "")
     stims = []
     if stim_env:
-        for part in stim_env.split("|"):
-            # Interpret \r, \n, etc. but keep the result as bytes.
-            stims.append(
-                part.encode("utf-8").decode("unicode_escape").encode("latin-1")
-            )
+        for raw in stim_env.replace("\n", ";;").split(";;"):
+            raw = raw.strip()
+            if not raw:
+                continue
+            decoded = raw.encode("utf-8").decode("unicode_escape").encode("latin-1")
+            if not decoded.endswith(b"\r") and not decoded.endswith(b"\n"):
+                decoded = decoded + b"\r"
+            stims.append(decoded)
 
     vuart = serial.Serial(
         "/dev/ttyACM2",

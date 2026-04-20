@@ -5,6 +5,7 @@
 #include "iodev.h"
 #include "uart.h"
 #include "uart_regs.h"
+#include "uartproxy.h"
 #include "usb.h"
 
 bool active = false;
@@ -194,6 +195,12 @@ static bool handle_vuart_dockchannel(struct exc_info *ctx, u64 addr, u64 *val,
                 break;
             case DC_DATA_RX8: {
                 iodev_handle_events(IODEV_USB_VUART);
+                // Also drain the proxy endpoint's DWC3 events. Without
+                // periodic service, the USB CDC stalls after ~30 s
+                // (suspected Apple SMC heartbeat watchdog). Guest
+                // polls this register in a tight loop via apple_serial_shell,
+                // so every has_char() call also pets the USB stack.
+                iodev_handle_events(uartproxy_iodev);
                 if (iodev_can_read(IODEV_USB_VUART) > 0) {
                     uint8_t c;
                     if (iodev_read(IODEV_USB_VUART, &c, 1) == 1) {
@@ -206,6 +213,7 @@ static bool handle_vuart_dockchannel(struct exc_info *ctx, u64 addr, u64 *val,
             }
             case DC_DATA_RX_COUNT: {
                 iodev_handle_events(IODEV_USB_VUART);
+                iodev_handle_events(uartproxy_iodev);
                 *val = iodev_can_read(IODEV_USB_VUART) > 0 ? 1 : 0;
                 break;
             }
