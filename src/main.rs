@@ -901,7 +901,9 @@ fn apple_shell_dispatch(line: &str) {
             uart::puts("  uptime         — ticks since boot (CNTPCT_EL0 / CNTFRQ_EL0)\n");
             uart::puts("  cpuid          — CPU identification regs (MIDR / CTR / CurrentEL)\n");
             uart::puts("  rand [N]       — N random bytes (hex, default 16, max 64)\n");
+            uart::puts("  rng            — show RNG / HW entropy availability\n");
             uart::puts("  sha256 <text>  — SHA-256 hash of <text> (hex)\n");
+            uart::puts("  bench sha256   — time 64 KiB of software SHA-256\n");
             uart::puts("  batfs ls       — list BatFS files\n");
             uart::puts("  batfs create <name> <plaintext>\n");
             uart::puts("  batfs read <name>\n");
@@ -932,6 +934,24 @@ fn apple_shell_dispatch(line: &str) {
                 0x53 => { uart::puts("  -> M4 Donan (P core)\n"); }
                 _    => {}
             }
+        }
+        "rng" => {
+            // Report what entropy sources are in play. Verifies M4
+            // exposes the ARMv8.5 RNDR feature (our RNG mixes it into
+            // the SHA-chain DRBG when present).
+            let isar0: u64;
+            unsafe { core::arch::asm!("mrs {}, id_aa64isar0_el1", out(reg) isar0); }
+            let rndr_nibble = (isar0 >> 60) & 0xf;
+            uart::puts("  ID_AA64ISAR0_EL1: 0x"); uart::puthex64(isar0); uart::puts("\n");
+            uart::puts("  RNDR nibble:      0x"); uart::puthex32(rndr_nibble as u32); uart::puts("\n");
+            uart::puts("  RNDR available:   ");
+            uart::puts(if rndr_nibble >= 1 { "yes\n" } else { "no\n" });
+            uart::puts("  Bat_OS HW RNG:    ");
+            uart::puts(if crypto::rng::have_rndr() { "enabled\n" } else { "disabled (SHA-chain only)\n" });
+            // Also report SHA2 crypto extension availability.
+            let sha2_nibble = (isar0 >> 12) & 0xf;
+            uart::puts("  SHA2 ext nibble:  0x"); uart::puthex32(sha2_nibble as u32); uart::puts("\n");
+            uart::puts("  AES ext nibble:   0x"); uart::puthex32(((isar0 >> 4) & 0xf) as u32); uart::puts("\n");
         }
         "rand" => {
             let n = match parts.next() {

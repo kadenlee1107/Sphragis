@@ -72,12 +72,13 @@ def configure_vuart_raw(vuart):
     termios.tcsetattr(fd, termios.TCSANOW, a)
 
 
-def stimulus_sender(vuart, items):
+def stimulus_sender(vuart, items, verbose):
     """Fire each byte-string in items after a short delay."""
     time.sleep(1.5)  # give the guest time to print the prompt
     for stim in items:
-        sys.stderr.write(f"\n[vuart] >>> {stim!r}\n")
-        sys.stderr.flush()
+        if verbose:
+            sys.stderr.write(f"\n[vuart] >>> {stim!r}\n")
+            sys.stderr.flush()
         vuart.write(stim)
         vuart.flush()
         time.sleep(0.8)
@@ -163,9 +164,10 @@ def main():
 
     stop = threading.Event()
     threading.Thread(target=vuart_reader, args=(vuart,), daemon=True).start()
+    verbose = os.environ.get("BATOS_HV_VERBOSE", "1") != "0"
     if stims:
         threading.Thread(target=stimulus_sender,
-                         args=(vuart, stims), daemon=True).start()
+                         args=(vuart, stims, verbose), daemon=True).start()
 
     os.environ.setdefault("M1N1DEVICE", "/dev/ttyACM1")
     iface = UartInterface()
