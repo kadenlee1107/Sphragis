@@ -501,6 +501,17 @@ _bat_os_early_fault:
     b   1b
 "#);
 
+/// Run one scripted shell command through `apple_shell_dispatch`
+/// with a `bat_os>` prompt echoed first — visually identical to
+/// what happens when a human types at the (future USB-CDC) shell.
+fn apple_run_cmd(line: &str) {
+    use drivers::apple::uart;
+    uart::puts("bat_os> ");
+    uart::puts(line);
+    uart::puts("\n");
+    apple_shell_dispatch(line);
+}
+
 /// Post-splash kernel self-test for the M4 path. Exercises the real
 /// live paths that were hardened this session: `mm::frame::alloc_frame`
 /// (load+store under IrqGuard instead of `compare_exchange_weak`),
@@ -508,6 +519,11 @@ _bat_os_early_fault:
 /// create+read round-trip (which also reaches `batfs::next_nonce`,
 /// the new `NONCE_COUNTER` load+store, and AES-CTR + HMAC-SHA256
 /// MAC verification).
+///
+/// Layered in two halves:
+///   1. a focused direct-API self-test (same as before)
+///   2. a replay of real shell commands via `apple_shell_dispatch`
+///      so every command registered in the shell gets exercised too
 ///
 /// All output goes through `drivers::apple::uart::puts`, which tees
 /// into `drivers::apple::fb_console::puts` — so each line is both
@@ -601,8 +617,24 @@ fn apple_kernel_self_test() {
     kernel::mm::print_num((total - used) * 4 / 1024);
     uart::puts(" MiB free)\n");
 
-    // Final report.
-    uart::puts("[selftest] all PASS\n");
+    // Final report for the direct-API half.
+    uart::puts("[selftest] all PASS\n\n");
+
+    // Second half: replay shell commands through the real
+    // dispatcher. Every line here uses the exact same parser +
+    // handler path that a human typing at the dockchannel UART
+    // would hit, so if the shell interface regresses we'll see it.
+    uart::puts("[selftest] shell-dispatch replay ------------------\n");
+    apple_run_cmd("help");
+    apple_run_cmd("uname");
+    apple_run_cmd("mem");
+    apple_run_cmd("fb");
+    apple_run_cmd("uptime");
+    apple_run_cmd("batfs ls");
+    apple_run_cmd("batfs create hello.txt Bat_OS shell dispatch");
+    apple_run_cmd("batfs read hello.txt");
+    apple_run_cmd("batfs ls");
+    uart::puts("[selftest] replay complete\n");
 }
 
 #[unsafe(no_mangle)]
