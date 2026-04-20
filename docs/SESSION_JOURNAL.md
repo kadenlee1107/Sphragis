@@ -103,16 +103,110 @@ but informs the next experiment (below).
 Three back-to-back cycles with default stimulus (batman + 40 ×
 uptime) died at **exactly 113 s** each (min=max=p50=113 s). Not
 a distribution; a deterministic watchdog. Rules out "chaotic
-thermal variance". The trigger fires on a fixed interval.
+thermal variance".
 
-### Immediate next experiment (in flight)
+Batman-only (no uptime polling, guest busy-polls RX at higher
+average rate): n=3 min=100 max=113 p50=113 avg=109 s. Slight
+shift toward shorter sessions but the dominant signal is still
+113 s. So the watchdog is **not** strongly CPU-busy-ness driven.
 
-Rerun supervisor with `BATOS_HV_STIMULUS="batman"` only — guest
-authenticates then idles at the `bat_os>` prompt with no uptime
-polling. This should drop the da rate from ~420 K/s (busy) to
-~50/s (idle shell). If session length stays at 113 s → wall-
-clock watchdog. If it extends significantly → CPU busy-ness /
-thermal is load-bearing.
+### THE BIG FINDING — wall-clock from chainload, not from hv.start
+
+Added `BATOS_HV_PRESTART_SLEEP` to `batos_hv_interactive.py` that
+sleeps N seconds between `hv.init()` and `hv.start()` (m1n1
+is sitting in its proxy waiting for the start command). Tested
+with N=30:
+
+  - Without delay: HV runtime = 113 s, wall-clock = 118 s
+  - With 30 s delay: HV runtime = **82 s**, wall-clock = **118 s**
+
+The wall-clock is **identical**. The HV runtime shrank by
+exactly the delay amount. The reset timer is counting from the
+moment iBoot handed off to m1n1 (chainload completion / stock
+m1n1 proxy up), not from when the HV actually started running.
+
+This tells us:
+  1. Whatever is firing the reset is NOT our guest's CPU usage
+     triggering a thermal/activity trip. (Guest isn't even
+     running for the first 30 s in the delayed test, yet the
+     reset still fires on the same wall clock.)
+  2. The watchdog was armed by iBoot (or the very first thing
+     that ran on the SoC after iBoot), and expects something to
+     happen by ~118 s.
+  3. It is M4-specific. Asahi Linux users on M1/M2/M3 don't
+     report this — stock-m1n1-chainload-kernel Just Works past
+     the two-minute mark on earlier chips.
+
+### Candidate causes, now narrowed
+
+We can rule out:
+  - HV-visible exception pile-up (from the EC instrumentation)
+  - CPU busy-ness / thermal (from the batman-only test)
+  - Guest behavior entirely (the delayed-start test proves the
+    timer runs even while the guest is not started)
+
+What's left:
+  (a) **iBoot handoff watchdog** — iBoot arms something at
+      kernel start that expects macOS-specific pet within 118 s.
+      Most likely candidate.
+  (b) **AOP / SMC / SEP liveness** — one of the coprocessors
+      expects traffic. Past attempts to drive SMC/AOP from HV
+      wedged the guest (see 2026-04-20 11:55 and 12:40).
+  (c) **PMP / SOC_RC / peripheral-level timer** — some PMGR
+      device has a 118 s non-renewable countdown.
+
+### Confirmation with 60 s delay
+
+| PRESTART_SLEEP | HV runtime | wall-clock |
+|----------------|-----------|-----------|
+| 0 s            | 113 s     | 118 s     |
+| 30 s           | 82 s      | 118 s     |
+| 60 s           | 53 s      | 118 s     |
+
+Three points, exact linear fit: HV = 113 − delay, wall = 118 s
+constant. Ceiling is a **deterministic wall-clock reset timer
+that fires 118 s after chainload (or shortly thereafter — most
+likely at `hv_init` given the Mac can sit in stock m1n1 for 5+
+minutes after the prior reset without re-firing).**
+
+Side observation: cycle 1 of the 60 s-delay run, which started
+with the Mac already up from the previous experiment (no
+reboot, "Mac back at m1n1 after 0 s"), only ran HV=13 s with
+wall=78 s — not 118 s. That run was chainloading patched m1n1
+onto a Mac that had been running stock m1n1 for 5+ minutes and
+didn't reset. So stock-m1n1 alone doesn't trigger the
+watchdog; **it arms during our chainload / hv_init sequence.**
+
+### Where to hunt next
+
+The armed watchdog is most likely in one of:
+  (a) An MMIO register we write during `hv_init` (pcie_shutdown,
+      display_shutdown, usb_hpm_restore_irqs, smp_start_secondaries,
+      hv_pt_init, or hv_write_hcr) that arms a latent
+      PMGR/AOP/SMC/PMP timer.
+  (b) A system register (`HCR_EL2` write in `hv_write_hcr`,
+      CYC_OVRD write, VBAR_EL12 init) that trips some Apple
+      firmware-side invariant check.
+  (c) A clock-enable / voltage change that the firmware watches
+      and expects to be followed up by an APSC/chicken write
+      within N seconds (this is consistent with the existing
+      Path A hypothesis — if APSC isn't configured, the firmware
+      resets after a grace period).
+
+If (c), Path A (kernelcache APSC disassembly) is still the
+long-term answer. If (a) or (b), we can isolate with one more
+diagnostic: bisect `hv_init` by commenting out sub-sections
+and running an endurance cycle. If any subset doesn't trip the
+watchdog, we've narrowed the trigger.
+
+### Implementation note
+
+`scripts/hv/batos_hv_interactive.py` now supports
+`BATOS_HV_PRESTART_SLEEP=N` to sleep N seconds between
+`hv.init()` and `hv.start()`. Keep this; it's the cleanest way
+to probe what the watchdog counts from.
+
+### Pending cleanup
 
 ### Pending cleanup
 

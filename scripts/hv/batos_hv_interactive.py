@@ -180,6 +180,15 @@ def main():
     log(f"loading {BAT_OS_BINARY}")
     hv.load_raw(BAT_OS_BINARY.read_bytes(), 0)
 
+    # Optional pre-start wall-clock delay for watchdog-source experiments.
+    # If the Mac's 113 s ceiling is measured from iBoot handoff, delaying
+    # hv.start() by N seconds will reduce HV runtime by N. If it's
+    # measured from hv.start(), the HV portion stays ~113 s regardless.
+    prestart_s = int(os.environ.get("BATOS_HV_PRESTART_SLEEP", "0"))
+    if prestart_s > 0:
+        log(f"BATOS_HV_PRESTART_SLEEP={prestart_s}s — waiting before hv.start()")
+        time.sleep(prestart_s)
+
     log("calling hv.start() — Bat_OS takes over now. "
         f"Ctrl+] to detach.")
 
