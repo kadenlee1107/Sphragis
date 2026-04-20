@@ -11,6 +11,123 @@ end of a session.
 
 ---
 
+## 2026-04-19 20:15 — Ubuntu — m1n1 HV M4 bring-up partial; hangs inside hv_init
+
+**Session-end handoff.** We pivoted from camera-pointed-at-screen
+to the bigger play: make m1n1's hypervisor mode (`run_guest.py`)
+work on M4 so m1n1 stays resident as hypervisor and forwards
+guest-UART over USB-CDC — bidirectional interactive shell, no more
+camera. The existing CLAUDE.md warning "Do NOT use run_guest.py on
+M4" was right about the first trap (AMX_CONFIG_EL1 UNDEF) — we've
+now gated all of those plus several more, and `run_guest.py`
+progresses MUCH further, but hangs somewhere inside m1n1's C-side
+`hv_init()`.
+
+### Gates landed this sub-session
+
+Four commits on top of 19:15's state:
+
+- `61631102` — Python-side gates in `hv/__init__.py`:
+  AMX_CONFIG_EL1 read+write, VMKEYLO/VMKEYHI/APSTS writes,
+  SPRR_CONFIG_EL1/GXF_CONFIG_EL1 enable writes, secondary-CPU RVBAR
+  loop, CPUSTART offset table — all skipped when MIDR PART is
+  0x52 (M4 E-core) or 0x53 (M4 P-core). Plus `sysreg.py` gets new
+  `MIDR_PART.T8132_DONAN_{ECORE,PCORE}` constants.
+- `6ebdb34f` — `smp.c::smp_start_secondaries` adds `case T8132:`
+  in the CPU_START_OFF switch (was falling through to "unknown"
+  and returning early without setting `boot_cpu_idx`), plus an
+  early `return` after `boot_cpu_idx` is set on M4 so the loop
+  below doesn't P-cluster-RVBAR-SError the boot CPU.
+- `79a30ff5` — `hv.c::hv_init` instrumented with `[hv_init] M0..M14`
+  printf markers between every substep. Next session greps the
+  serial log for the last marker to identify the trapping line.
+
+### Where `run_guest.py` stands right now
+
+`sg dialout -c "M1N1DEVICE=/dev/ttyACM1 /usr/bin/python3 external/m1n1/proxyclient/tools/run_guest.py --raw --entry-point 0 target/bat_os_apple.bin"`
+
+- ✓ AMX skip
+- ✓ VMKEY skip
+- ✓ SPRR/GXF skip
+- ✓ RVBAR skip (`Skipping secondary CPU RVBARs (M4 P-cluster SErrors)`)
+- ✓ CPUSTART known (was "CPUSTART unknown for this SoC!", now silent)
+- ✓ Page tables built, ADT uploaded, `Jumping to entrypoint at 0x…`
+- ✗ **Hangs on `self.p.hv_init()` C-side.** Next session after
+  chainloading the patched m1n1 will see the `[hv_init] Mx`
+  markers and the LAST one printed before timeout is the one
+  we need to gate.
+
+### Chainloading the patched m1n1 — workflow that works
+
+The patched m1n1 is at `external/m1n1/build/m1n1.macho` (built
+locally; the kmutil-installed one in NVRAM is still the stock
+`bcee7f2` build). To get the patched one running:
+
+```bash
+cd /home/kaden-lee/code/Bat_OS
+
+# 1. (Re)build if you change any m1n1 source
+cd external/m1n1 && make && cd -
+
+# 2. Wait for stock m1n1 to be up after the last crash cycle
+for i in $(seq 1 12); do
+  [ -e /dev/ttyACM1 ] && udevadm info /dev/ttyACM1 | grep -q m1n1 && break
+  sleep 5
+done
+
+# 3. Chainload the PATCHED m1n1 (no --raw — it's a Mach-O). The
+#    -S flag skips the P-cluster RVBAR write that SErrors on M4.
+sudo -n --preserve-env=M1N1DEVICE,M1N1WAIT \
+    M1N1DEVICE=/dev/ttyACM1 M1N1WAIT=1 \
+    /usr/bin/python3 external/m1n1/proxyclient/tools/chainload.py \
+    -S external/m1n1/build/m1n1.macho
+
+# Wait for "Proxy is alive again". udevadm should now show
+#   ID_MODEL=m1n1_uartproxy_unknown  (our BUILD_TAG = "unknown")
+# instead of `m1n1_uartproxy_bcee7f2` (stock).
+
+# 4. Run the guest. sg wraps so the dialout group is effective
+#    without needing sudo for /dev/ttyACM*. timeout keeps us
+#    from hanging forever if m1n1 or the guest wedges.
+sg dialout -c "M1N1DEVICE=/dev/ttyACM1 timeout 120 \
+    /usr/bin/python3 external/m1n1/proxyclient/tools/run_guest.py \
+    --raw --entry-point 0 target/bat_os_apple.bin" \
+  2>&1 | tee /tmp/hv.log
+
+# 5. Find the last hv_init marker:
+grep "\[hv_init\]" /tmp/hv.log | tail -1
+```
+
+Expected progression after the last marker we see: identify the
+trapping call, add a `chip_id == T8132` guard or skip the MSR,
+rebuild, rechainload, re-run. 3–5 iterations should clear the
+hv_init trap chain entirely.
+
+### If the Mac's Apple watchdog bites between chainloads
+
+Observed behavior: stock m1n1 hangs on the `m1n1_uartproxy_bcee7f2`
+ID for up to 60 s after a failed HV attempt before the Mac resets
+and comes back. Just poll `/dev/ttyACM1` until `udevadm info` shows
+`m1n1_uartproxy_*`. No cold-cycle needed unless multiple failed
+chainloads have put iBoot in a bad state (see earlier 17:35 entry —
+which we now know was a linker foot-gun, not actual iBoot escalation,
+so this note may never actually fire).
+
+### Why this matters
+
+Once hv_init clears and `run_guest.py` can actually boot Bat_OS as
+a guest:
+
+- m1n1 stays resident as hypervisor → USB-CDC endpoints stay alive
+- `/dev/ttyACM1` forwards bytes to the guest Bat_OS's UART and
+  vice versa
+- Interactive shell from Ubuntu → `apple_serial_shell` on Bat_OS,
+  zero work on the USB-CDC-in-Bat_OS front (which would otherwise
+  be weeks of DWC3/DART/descriptor work)
+- Camera goes away as a development bottleneck
+
+---
+
 ## 2026-04-19 19:15 — Ubuntu — kernel self-test PASSES on M4 with on-screen output
 
 **Milestone: Bat_OS is functionally operational along the post-splash
