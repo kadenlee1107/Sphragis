@@ -11,6 +11,211 @@ end of a session.
 
 ---
 
+## 2026-04-19 21:45 — Ubuntu — Bat_OS BOOTS UNDER M1N1 HV — kernel log + `bat_os>` prompt on /dev/ttyACM2 ✅
+
+**One-line status.** Bat_OS now runs as a guest under m1n1's
+hypervisor on real M4 hardware. Full kernel boot banner, boot args,
+microkernel init, BatFS init, and the `bat_os>` shell prompt all
+stream over `/dev/ttyACM2` via a new dockchannel-UART vuart trap we
+added to m1n1. Evidence saved at
+`docs/2026-04-19_batos_under_hv_ttyACM2_boot_log.txt`.
+
+### The big moves this session
+
+**m1n1 HV (external/m1n1/src/hv.c + hv_exc.c):**
+
+- Gated `hv_arm_tick(false)` behind `chip_id != T8132` — on M4 the
+  FIQ handling path (hv_tick → hv_vuart_poll → aic_set_sw) hits
+  AIC v3 state that destabilises within ~17 ms. Without the tick,
+  the HV is idle at EL2 except when the guest traps. That sidesteps
+  the reset entirely for normal guest operation.
+- Added `iodev_console_flush()` immediately before `hv_enter_guest()`
+  so all markers actually reach the host (no CNTP tick drives the
+  async flush now).
+- (Inherited from the prior session: AMX/VMKEY/SPRR/GXF MSR gates in
+  hv_start; PMCR0/UPMC/IPI_SR/VM_TMR gates in hv_exc_entry/exit/fiq.)
+
+**m1n1 dockchannel VUART trap — NEW (hv_vuart.c + proxy path + Python):**
+
+- New `hv_map_vuart_dockchannel(base, iodev)` that `hv_map_hook`s the
+  full 64 KiB dockchannel MMIO region with a handler that:
+  - Traps DATA_TX8 writes → forwards the byte to `IODEV_USB_VUART`
+    → surfaces on `/dev/ttyACM2`.
+  - Returns a permanently-free TX FIFO (`TX_FREE = 0x100`).
+  - Serves DATA_RX8 + DATA_RX_COUNT from the USB_VUART host→device
+    ring (so host input can reach the guest when it gets through —
+    see "known limitations" below).
+  - Drains any stale RX bytes at setup time.
+- New proxy op `P_HV_MAP_VUART_DOCKCHANNEL = 0xc11` wired through
+  `proxy.c`, `proxy.h`, Python's `proxy.py`.
+- `hv/__init__.py::map_vuart` now ALSO looks up
+  `/arm-io/dockchannel-uart` in the ADT and calls the new op — on
+  M4 this logs `Mapped dockchannel vuart at 0x388128000`.
+- Offset-compute fix: the dockchannel register FIFO is at
+  `base + 0x4014`. `base & 0xffff` masked bit 15 wrong on M4
+  (the access address is 0x38812c014, `& 0xffff` yields 0xc014, not
+  0x4014 — which sent DATA_TX_FREE to the default case, returning 0,
+  which wedged Bat_OS's `while(read32(TX_FREE)==0)` forever). Handler
+  now computes `addr - vuart_dc_base`. That was the decisive bug.
+
+**Bat_OS (src/main.rs + src/arch/aarch64/apple/boot.s):**
+
+- Detect HV (CurrentEL == EL1) at the top of `kernel_main_apple` and
+  set an `under_hv` flag.
+- Gate AIC + `bring_up_all()` behind `!under_hv` — on M4 the guest
+  pass-through mapping of AIC v3 at 0x381000000 clashes with the
+  configuration m1n1's HV already applied, triggering an L2C
+  external error that crashes the HV. Under HV we just skip the
+  hardware bring-up; Bat_OS has no IRQs yet anyway, and the shell
+  polls the UART.
+- Gate `soc::set_fb_info` behind `!under_hv` so every FB-touching
+  path (`dcp::boot_splash`, `fb_console`, `apple_kernel_self_test`)
+  auto-no-ops — prevents the 16 MiB FB paint from clobbering m1n1's
+  freed framebuffer memory.
+- Replace the `apple_serial_shell` inter-poll `wfe` with a
+  `core::hint::spin_loop()` under HV. `wfe` blocks forever without
+  CNTP ticks at EL1; the busy-poll lets `getc()` drive MMIO traps
+  which drives `iodev_handle_events` which drains DWC3.
+- Inherited from prior sub-session: `boot.s` already skips its
+  16 MiB FB paint at EL1.
+
+### What the new `/dev/ttyACM2` stream looks like (success path)
+
+```
+================================================
+  BAT_OS — BARE METAL APPLE SILICON
+  Running on REAL M4 hardware.
+================================================
+
+[boot] m1n1 handoff OK
+  revision: 3
+  machine_type: 0x00000000
+  mem_size: 15419 MiB
+  devtree: 540672 bytes
+  ADT-resolved peripherals: 9 / 9
+[boot] Initializing microkernel...
+[initrd] no blob
+  [mm] Frame allocator initialized — 15748512 KB free, heap @ 0x…
+[boot] (HV guest) skipping AIC + hw bring-up
+  (empty — dev fallback)
+[boot] BatFS initialized (key=KDF(passphrase))
+[boot] Initializing display...
+[boot] No display — serial shell
+
+bat_os>
+```
+
+665 bytes, clean, no echo garbage (see echo-gotcha below).
+
+### Exact workflow to reproduce tonight
+
+```bash
+cd /home/kaden-lee/code/Bat_OS
+# If you touched m1n1 or Bat_OS source:
+#   cd external/m1n1 && make -j$(nproc) && cd -
+#   bash build_apple.sh
+
+# Wait for stock m1n1 (the Mac returns to stock after the HV session
+# ends or is interrupted).
+for i in $(seq 1 24); do
+  [ -e /dev/ttyACM1 ] && udevadm info /dev/ttyACM1 | grep -q m1n1_uartproxy && break
+  sleep 5
+done
+udevadm info /dev/ttyACM1 | grep ID_MODEL=   # expect bcee7f2
+
+# Chainload the PATCHED m1n1. Absolute path is MANDATORY (the
+# passwordless sudoers rule matches the absolute path exactly).
+sudo -n --preserve-env=M1N1DEVICE,M1N1WAIT \
+    M1N1DEVICE=/dev/ttyACM1 M1N1WAIT=1 \
+    /usr/bin/python3 \
+    /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py \
+    -S /home/kaden-lee/code/Bat_OS/external/m1n1/build/m1n1.macho
+sleep 3
+udevadm info /dev/ttyACM1 | grep ID_MODEL=   # expect "unknown" (our tag)
+
+# BEFORE starting run_guest.py, start the vuart reader with ECHO OFF.
+# Ubuntu's tty layer defaults to `echo echoctl icanon`, which means
+# Bat_OS's TX bytes (including \r and \n) get ECHOED BACK as `^M` and
+# `^J` sequences, which the Bat_OS shell then treats as input, which
+# it echoes, which Ubuntu echoes, etc. Looks like repeating
+# ^M^J=============^MM^J… — NOT a Bat_OS bug; it's tty echo.
+rm -f /tmp/vuart.log
+sg dialout -c 'stty -F /dev/ttyACM2 raw -echo -echoctl -icanon -icrnl -onlcr -opost min 1 time 0; nohup cat /dev/ttyACM2 > /tmp/vuart.log 2>/dev/null &'
+
+# Now run the guest. (Python's hv.start() call will eventually hit
+# SerialException when the HV eventually resets — that's fine, Bat_OS
+# is running on the Mac under the HV regardless of Python's state.)
+sg dialout -c "M1N1DEVICE=/dev/ttyACM1 timeout 30 /usr/bin/python3 \
+    /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/run_guest.py \
+    --raw --entry-point 0 /home/kaden-lee/code/Bat_OS/target/bat_os_apple.bin"
+
+cat /tmp/vuart.log   # full Bat_OS kernel log up to the bat_os> prompt
+```
+
+### Known limitations (next-session targets)
+
+1. **Ubuntu → Bat_OS input doesn't land.** Writing to /dev/ttyACM2
+   via `printf`, `exec 3<>`, or pyserial does NOT appear in the
+   guest's RX ring (`iodev_can_read(IODEV_USB_VUART)` always returns
+   0). Hypothesis: when only `cat` (O_RDONLY) holds the port open,
+   the USB CDC SET_CTRL_LINE_STATE DTR bit may not be set, so
+   `dev->pipe[1].ready` stays false and the OUT EP isn't armed. Or
+   the host-side TTY flush model is dropping the brief write window.
+   - Try: open ttyACM2 via `exec 4<>/dev/ttyACM2` BEFORE cat, then
+     `cat <&4` to read and `printf … >&4` to write, all over the
+     same persistent fd.
+   - Alternatively: drive ttyACM2 from inside run_guest.py — the same
+     Python process has DWC3 access via proxy and can `iodev_write`
+     / `iodev_read` directly without going through Ubuntu's tty stack.
+
+2. **Mac eventually resets.** With `hv_arm_tick` disabled on M4, the
+   HV is alive for ~30-60 s, then the Mac comes back as stock m1n1.
+   Suspect Apple SMC/AOP heartbeat watchdog. For a persistent shell
+   we need EITHER re-enable ticks + fix the remaining Apple-IMPDEF
+   MSR causing the 17 ms reset, OR explicitly ping whatever the
+   SMC expects.
+
+3. **Opening /dev/ttyACM2 from pyserial kills the HV** — probably
+   because DTR/RTS toggles trigger USB CDC control messages that
+   m1n1's DWC3 handler processes under HV and hits an IMPDEF MSR
+   or AIC write we haven't gated. Use only `cat` + printf for now;
+   avoid pyserial / minicom / screen until we harden the CDC control
+   path.
+
+### Files changed this commit
+
+- `external/m1n1/src/hv.c` — chip_id gate on hv_arm_tick,
+  iodev_console_flush before eret.
+- `external/m1n1/src/hv.h` — prototype for hv_map_vuart_dockchannel.
+- `external/m1n1/src/hv_vuart.c` — new
+  `handle_vuart_dockchannel` + `hv_map_vuart_dockchannel`.
+- `external/m1n1/src/proxy.c` — P_HV_MAP_VUART_DOCKCHANNEL case.
+- `external/m1n1/src/proxy.h` — P_HV_MAP_VUART_DOCKCHANNEL enum.
+- `external/m1n1/proxyclient/m1n1/proxy.py` — matching Python enum
+  + method.
+- `external/m1n1/proxyclient/m1n1/hv/__init__.py` — `map_vuart()`
+  also maps dockchannel on M4.
+- `src/main.rs` — `under_hv` gate on AIC/bring_up/set_fb_info;
+  `apple_serial_shell` uses `spin_loop` not `wfe` under HV.
+- `docs/2026-04-19_batos_under_hv_ttyACM2_boot_log.txt` — evidence.
+
+### Key realisation we learned the hard way
+
+**Ubuntu tty `echo` is ON by default even for USB CDC.** The
+`^M^J=============^MM^J` pattern that looked like a Bat_OS bug was
+just Ubuntu echoing Bat_OS's CRLF output back to Bat_OS's shell,
+which then echoed it back to Ubuntu, which echoed it back, etc. The
+14-byte "banner" that looked like a truncated 48-char `=` banner was
+actually Ubuntu's terminal printing the `\r` + `\n` from Bat_OS's
+`uart::puts("\r\n")` as `^M^J` (via `echoctl`) — 4 chars — PLUS
+Bat_OS's "================================================\n\r\n" chunked
+weirdly by the echo loop.
+
+Moral: `stty -F /dev/ttyACM2 raw -echo -echoctl -icanon -opost` is
+mandatory before any interaction.
+
+---
+
 ## 2026-04-19 20:45 — Ubuntu — m1n1 HV past hv_init + hv_start + eret; Mac USB resets ~17 ms into guest
 
 **One-line status.** Guest now runs ~17 ms (seventeen 1 kHz HV timer

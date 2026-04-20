@@ -148,3 +148,91 @@ void hv_map_vuart(u64 base, int irq, iodev_id_t iodev)
     vuart_irq = irq;
     active = true;
 }
+
+// M4 dockchannel UART register layout (mirror of
+// external/m1n1/src/dockchannel_uart.c). Trap guest reads/writes in
+// the dockchannel region and forward byte traffic to the same
+// IODEV_USB_VUART that the Samsung-style uart0 vuart uses, so a
+// Bat_OS guest writing to 0x3_8812_8000 ends up on /dev/ttyACM2.
+#define DC_DATA_TX8       0x4004
+#define DC_DATA_TX_FREE   0x4014
+#define DC_DATA_RX8       0x401c
+#define DC_DATA_RX_COUNT  0x402c
+
+static u64 vuart_dc_base = 0;
+
+static bool handle_vuart_dockchannel(struct exc_info *ctx, u64 addr, u64 *val,
+                                     bool write, int width)
+{
+    UNUSED(ctx);
+    UNUSED(width);
+
+    u64 off = addr - vuart_dc_base;
+
+    if (write) {
+        switch (off) {
+            case DC_DATA_TX8: {
+                uint8_t b = *val;
+                if (iodev_can_write(IODEV_USB_VUART))
+                    iodev_write(IODEV_USB_VUART, &b, 1);
+                handle_vuart_passthrough(b);
+                break;
+            }
+            default:
+                // Silently drop writes we don't understand — the
+                // dockchannel register space also has clock / state
+                // control registers that we don't need to virtualise
+                // for a read-only stdout path.
+                break;
+        }
+    } else {
+        switch (off) {
+            case DC_DATA_TX_FREE:
+                // Claim an always-ready TX FIFO. iodev_write will
+                // buffer internally or drop on overflow.
+                *val = 0x100;
+                break;
+            case DC_DATA_RX8: {
+                iodev_handle_events(IODEV_USB_VUART);
+                if (iodev_can_read(IODEV_USB_VUART) > 0) {
+                    uint8_t c;
+                    if (iodev_read(IODEV_USB_VUART, &c, 1) == 1) {
+                        *val = ((u64)c) << 8;
+                        break;
+                    }
+                }
+                *val = 0;
+                break;
+            }
+            case DC_DATA_RX_COUNT: {
+                iodev_handle_events(IODEV_USB_VUART);
+                *val = iodev_can_read(IODEV_USB_VUART) > 0 ? 1 : 0;
+                break;
+            }
+            default:
+                *val = 0;
+                break;
+        }
+    }
+
+    return true;
+}
+
+void hv_map_vuart_dockchannel(u64 base, iodev_id_t iodev)
+{
+    vuart_dc_base = base;
+    // Dockchannel reg block on M4 is larger than 0x8000: the TX/RX
+    // FIFO pair sits at +0x4000 within a +0x10000 region. Map enough.
+    hv_map_hook(base, handle_vuart_dockchannel, 0x10000);
+    usb_iodev_vuart_setup(iodev);
+    // Drain any stale bytes from the host→device ring so the guest
+    // shell doesn't see leftover data from before the hook was armed.
+    iodev_handle_events(IODEV_USB_VUART);
+    while (iodev_can_read(IODEV_USB_VUART) > 0) {
+        uint8_t dump[64];
+        ssize_t n = iodev_read(IODEV_USB_VUART, dump, sizeof(dump));
+        if (n <= 0)
+            break;
+    }
+    active = true;
+}

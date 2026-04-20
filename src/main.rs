@@ -742,17 +742,27 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     kernel::ipc::init();
     kernel::arch::init_exceptions();
 
-    // Initialize Apple Interrupt Controller
-    drivers::apple::uart::puts("[boot] Initializing AIC2...\n");
-    drivers::apple::aic::init();
+    // V-HV-GUEST-3: Under m1n1's hypervisor (EL1), the AIC, DART, DWC3
+    // and other hardware blocks are already owned and initialised by
+    // m1n1. Re-initialising them from the guest provokes L2C external
+    // errors when m1n1's guest pass-through mapping meets Apple's
+    // access-control gate on shared MMIO (observed on M4 T8132 —
+    // writes to AIC +0x4100 triggered an SError back into m1n1's own
+    // handler and crashed the HV). Skip hardware bring-up at EL1.
+    if under_hv {
+        drivers::apple::uart::puts("[boot] (HV guest) skipping AIC + hw bring-up\n");
+    } else {
+        drivers::apple::uart::puts("[boot] Initializing AIC2...\n");
+        drivers::apple::aic::init();
 
-    // V-ASAHI-3.5: bring up every peripheral module that has a
-    // hardware-access entry point. Failures are NOT fatal —
-    // missing peripherals are legitimate on some boards. On M4
-    // the sub-calls now guard themselves against unresolved ADT
-    // addresses to avoid faulting on M1-era fallbacks.
-    let bu = drivers::apple::bring_up_all();
-    drivers::apple::print_bring_up_report(&bu);
+        // V-ASAHI-3.5: bring up every peripheral module that has a
+        // hardware-access entry point. Failures are NOT fatal —
+        // missing peripherals are legitimate on some boards. On M4
+        // the sub-calls now guard themselves against unresolved ADT
+        // addresses to avoid faulting on M1-era fallbacks.
+        let bu = drivers::apple::bring_up_all();
+        drivers::apple::print_bring_up_report(&bu);
+    }
 
     // ATTACK-CRYPTO-004 / FLv2-NEW-006: Apple path currently falls back
     // to the dev default (empty input) because the Apple UART driver has
@@ -830,9 +840,19 @@ fn apple_serial_shell() -> ! {
     let mut buf = [0u8; 128];
     let mut len: usize = 0;
 
+    // V-HV-GUEST-4: detect HV (EL1) at entry — under HV we don't have
+    // CNTP ticks, so WFE never wakes; busy-poll the UART instead.
+    let cur_el: u64;
+    unsafe { core::arch::asm!("mrs {0}, CurrentEL", out(reg) cur_el, options(nomem, nostack)); }
+    let under_hv = (cur_el & 0xC) == 0x4;
+
     loop {
         let Some(c) = uart::getc() else {
-            unsafe { core::arch::asm!("wfe"); }
+            if !under_hv {
+                unsafe { core::arch::asm!("wfe"); }
+            } else {
+                core::hint::spin_loop();
+            }
             continue;
         };
         match c {

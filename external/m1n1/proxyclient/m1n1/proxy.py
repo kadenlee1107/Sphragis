@@ -623,6 +623,7 @@ class M1N1Proxy(Reloadable):
     P_VIRTIO_PUT_BUFFER = 0xc0e
     P_HV_EXIT_CPU = 0xc0f
     P_HV_ADD_TIME = 0xc10
+    P_HV_MAP_VUART_DOCKCHANNEL = 0xc11
 
     P_FB_INIT = 0xd00
     P_FB_SHUTDOWN = 0xd01
@@ -1081,6 +1082,8 @@ class M1N1Proxy(Reloadable):
         return self.request(self.P_HV_PT_WALK, addr)
     def hv_map_vuart(self, base, irq, iodev):
         return self.request(self.P_HV_MAP_VUART, base, irq, iodev)
+    def hv_map_vuart_dockchannel(self, base, iodev):
+        return self.request(self.P_HV_MAP_VUART_DOCKCHANNEL, base, iodev)
     def hv_trace_irq(self, evt_type, num, count, flags):
         return self.request(self.P_HV_TRACE_IRQ, evt_type, num, count, flags)
     def hv_wdt_start(self, cpu):

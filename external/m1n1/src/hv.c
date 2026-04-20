@@ -8,6 +8,7 @@
 #include "memory.h"
 #include "pcie.h"
 #include "smp.h"
+#include "soc.h"
 #include "string.h"
 #include "usb.h"
 #include "utils.h"
@@ -184,12 +185,22 @@ void hv_start(void *entry, u64 regs[4])
     }
     printf("[hv_start] S6 SPRR/GXF MRS\n");
 
-    hv_arm_tick(false);
-    printf("[hv_start] S7 hv_arm_tick\n");
+    // M4-HV-DIAG: on T8132 skip arming the HV CNTP tick so we can
+    // tell whether the post-eret Mac reset is driven by something
+    // in the FIQ handling path (hv_tick / hv_vuart_poll / aic_set_sw)
+    // or by something external (USB stall, SMC watchdog). If the
+    // Mac stays up indefinitely with ticks disabled, it's the FIQ
+    // path. If it still resets, it's external.
+    if (chip_id != T8132)
+        hv_arm_tick(false);
+    printf("[hv_start] S7 hv_arm_tick (m4-skipped=%d)\n", chip_id == T8132);
     hv_pinned_cpu = -1;
     hv_want_cpu = -1;
     hv_cpus_in_guest = BIT(smp_id());
     printf("[hv_start] S8 entering guest @ %p x0=%lx\n", entry, regs[0]);
+    // Flush the serial console before eret so any buffered markers
+    // actually reach the host (no CNTP tick drives flush on M4 now).
+    iodev_console_flush();
 
     hv_enter_guest(regs[0], regs[1], regs[2], regs[3], entry);
 

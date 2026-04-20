@@ -71,6 +71,10 @@ bool hv_trace_irq(u32 type, u32 num, u32 count, u32 flags);
 /* Virtual peripherals */
 void hv_vuart_poll(void);
 void hv_map_vuart(u64 base, int irq, iodev_id_t iodev);
+// M4-specific: trap the Apple dockchannel-uart register block and
+// forward TX bytes to IODEV_USB_VUART. No AIC-injected IRQ line
+// (Bat_OS polls TX_FREE / RX_COUNT).
+void hv_map_vuart_dockchannel(u64 base, iodev_id_t iodev);
 struct virtio_conf;
 void hv_map_virtio(u64 base, struct virtio_conf *conf);
 void virtio_put_buffer(u64 base, int qu, u32 id, u32 len);

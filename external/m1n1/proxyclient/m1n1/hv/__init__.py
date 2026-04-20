@@ -1475,6 +1475,21 @@ class HV(Reloadable):
         self.p.hv_map_vuart(base, irq, self.iodev)
         self.add_tracer(zone, "VUART", TraceMode.RESERVED)
 
+        # M4: Bat_OS and XNU both write their kernel console to the
+        # dockchannel UART at 0x3_8812_8000, not the Samsung-style
+        # uart0 we just mapped. Hook that region too so guest TX bytes
+        # get forwarded to /dev/ttyACM2.
+        try:
+            dc = self.adt["/arm-io/dockchannel-uart"]
+            dc_base = dc.get_reg(0)[0]
+            dc_zone = irange(dc_base, 0x8000)
+            self.p.hv_map_vuart_dockchannel(dc_base, self.iodev)
+            self.add_tracer(dc_zone, "VUART-DC", TraceMode.RESERVED)
+            print(f"Mapped dockchannel vuart at 0x{dc_base:x}")
+        except (KeyError, IndexError):
+            # No dockchannel-uart node (pre-M1-pro, non-Apple) — silently skip.
+            pass
+
     def map_essential(self):
         # Things we always map/take over, for the hypervisor to work
         _pmgr = {}
