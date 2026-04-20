@@ -11,6 +11,53 @@ end of a session.
 
 ---
 
+## 2026-04-20 12:10 — Ubuntu — SPMI MMIO poke: EL2 SYNC fault, abandoned
+
+Attempted a raw `read32(0x3907a0000)` inside `hv_tick` to generate
+aop-spmi0 controller-level fabric activity. One-line change, no
+PMU transaction, no blocking.
+
+Result on chainload: guest took a synchronous EL2 exception on
+the very first tick (log shows `[hv_start] S8 entering guest` →
+`Exception: SYNC` → zero heartbeats → USB drop within seconds).
+
+Reason: m1n1's identity map covers `/arm-io/ranges` via
+`mmu_map_mmio`, but EL2 access to the SPMI controller at 0x3907a0000
+still faults — either the range is absent from this specific ADT
+or the SPMI block isn't clocked when m1n1 hasn't called
+`spmi_init()` for it. Reaching SPMI from `hv_tick` needs an
+`mmu_add_mapping` extension or a proper `spmi_init()`-then-pet
+pattern. Not a one-liner.
+
+Removed the read, left a breadcrumb comment in `hv.c::hv_tick`.
+
+### Actual honest ceiling after this session
+
+Shipped wins:
+  - `hv_arm_tick` re-enabled on M4 (gate flipped): +26 s
+    (60 s → 86 s).
+  - `wdt_kick()` in `hv_tick` (defensive, WDT layout insurance):
+    +~10 s, within noise (86 s → 96 s).
+
+Ruled out by live-hardware probes:
+  - SoC WDT at 0x3882b0000 as the reset trigger — all three
+    instance CTLs are 0.
+  - SMC ASC liveness — `smc_init()` leaked at m1n1 boot gave
+    79 s, no improvement.
+  - aop-spmi0 direct MMIO poke — SErrors out of EL2.
+
+Not tried this session (blocked on non-trivial code):
+  - Full AOP RTKit bring-up (needs a new driver analogous to
+    smc.c — ~200 LOC of rtkit wiring).
+  - Periodic async `smc_send()` from `hv_tick` that tolerates
+    `asc_send`'s 200ms worst-case blocking.
+  - MMU-mapping extension to make SPMI accessible from EL2
+    followed by controller-level pokes.
+
+Ceiling stays at **96 s**. +60% vs where the session started.
+
+---
+
 ## 2026-04-20 11:55 — Ubuntu — Plan A (leak SMC ASC alive) disconfirmed
 
 Tested the cheapest of the three suspects from 11:45. Added
