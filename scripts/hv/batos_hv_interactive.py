@@ -10,19 +10,29 @@ Bat_OS guest can receive bytes we type.
 Prerequisites:
   * Patched m1n1.macho already chainloaded on the Mac (see
     `docs/SESSION_JOURNAL.md` for the chainload command).
-  * udev rule in `/etc/udev/rules.d/99-m1n1.rules` granting dialout
-    group access to the m1n1 uartproxy device.
-  * User in group dialout (or wrap this with `sg dialout -c '...'`).
+  * udev rule granting dialout group access to m1n1 uartproxy.
+  * User in group dialout (or wrap with `sg dialout -c '...'`).
 
 Usage:
+  # Interactive REPL — stdin bytes go to the guest, guest TX goes
+  # to stdout. Ctrl+] to detach cleanly.
   sg dialout -c "/usr/bin/python3 scripts/hv/batos_hv_interactive.py"
-  # (in interactive mode, Ctrl+D to exit)
 
-Options via env var:
-  BATOS_HV_STIMULUS="help\\r"   # send this string after the prompt
-                                # appears; if unset, read stdin live.
+  # Canned stimulus — just fire one command and print the response.
+  BATOS_HV_STIMULUS="help\\r" sg dialout -c \\
+      "/usr/bin/python3 scripts/hv/batos_hv_interactive.py"
+
+  # Multiple stimuli (separated by '|') sent with 500 ms gaps:
+  BATOS_HV_STIMULUS="uname\\r|mem\\r|uptime\\r" sg dialout -c ...
+
+Output:
+  * Bytes from the guest (ttyACM2 vuart) print to stdout live.
+  * Bytes from the m1n1 proxy (ttyACM1) print prefixed with
+    `TTY>` — that's m1n1's own library formatting.
+  * Our host-side status lines are prefixed `[host]` / `[vuart]`
+    and go to stderr so they don't pollute captured logs.
 """
-import sys, os, time, termios, threading, pathlib
+import sys, os, time, termios, tty, threading, pathlib, select
 
 M1N1_ROOT = pathlib.Path(__file__).resolve().parents[2] / "external/m1n1"
 sys.path.insert(0, str(M1N1_ROOT / "proxyclient"))
@@ -36,12 +46,19 @@ from m1n1.hv import HV
 BAT_OS_BINARY = pathlib.Path(__file__).resolve().parents[2] / \
     "target/bat_os_apple.bin"
 
+ESCAPE_BYTE = 0x1d   # Ctrl+] — same as miniterm convention.
+
+
+def log(msg):
+    sys.stderr.write(f"[host] {msg}\n")
+    sys.stderr.flush()
+
+
 def configure_vuart_raw(vuart):
-    """Set raw termios on the vuart tty: no echo, no canonical, no
-    opost. Without this, Ubuntu's tty layer defaults echo CRLF from
-    the guest back as `^M^J` on the input side, creating an echo loop
-    that looks like Bat_OS is malfunctioning. It isn't."""
-    vuart.dtr = True   # m1n1 DWC3 needs DTR for pipe ready
+    """Raw termios + DTR asserted. Without this, Ubuntu's tty layer
+    echo+canonical settings create an infinite CRLF echo loop that
+    looks exactly like Bat_OS is broken."""
+    vuart.dtr = True
     vuart.rts = False
     fd = vuart.fileno()
     a = termios.tcgetattr(fd)
@@ -53,10 +70,68 @@ def configure_vuart_raw(vuart):
               | termios.ISIG | termios.IEXTEN)
     termios.tcsetattr(fd, termios.TCSANOW, a)
 
+
+def stimulus_sender(vuart, items):
+    """Fire each byte-string in items after a short delay."""
+    time.sleep(1.5)  # give the guest time to print the prompt
+    for stim in items:
+        sys.stderr.write(f"\n[vuart] >>> {stim!r}\n")
+        sys.stderr.flush()
+        vuart.write(stim)
+        vuart.flush()
+        time.sleep(0.8)
+
+
+def vuart_reader(vuart):
+    while True:
+        try:
+            d = vuart.read(1024)
+        except serial.SerialException as e:
+            sys.stderr.write(f"\n[vuart] serial exception: {e}\n")
+            sys.stderr.flush()
+            return
+        if d:
+            sys.stdout.buffer.write(d)
+            sys.stdout.buffer.flush()
+        time.sleep(0.005)
+
+
+def stdin_forwarder(vuart, stop):
+    """If stdin is a tty, put it in cbreak mode and forward each key
+    to the guest. Ctrl+] detaches."""
+    if not sys.stdin.isatty():
+        return
+    old = termios.tcgetattr(sys.stdin.fileno())
+    try:
+        tty.setcbreak(sys.stdin.fileno())
+        while not stop.is_set():
+            r, _, _ = select.select([sys.stdin], [], [], 0.1)
+            if sys.stdin in r:
+                b = os.read(sys.stdin.fileno(), 64)
+                if not b:
+                    break
+                if ESCAPE_BYTE in b:
+                    break
+                try:
+                    vuart.write(b)
+                    vuart.flush()
+                except Exception as e:
+                    sys.stderr.write(f"[vuart] write failed: {e}\n")
+                    break
+    finally:
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old)
+        stop.set()
+
+
 def main():
-    stimulus = os.environ.get("BATOS_HV_STIMULUS", "")
-    if stimulus:
-        stimulus = stimulus.encode().decode("unicode_escape").encode()
+    stim_env = os.environ.get("BATOS_HV_STIMULUS", "")
+    stims = []
+    if stim_env:
+        for part in stim_env.split("|"):
+            # Interpret \r, \n, etc. but keep the result as bytes.
+            stims.append(
+                part.encode("utf-8").decode("unicode_escape").encode("latin-1")
+            )
 
     vuart = serial.Serial(
         "/dev/ttyACM2",
@@ -66,52 +141,46 @@ def main():
     )
     configure_vuart_raw(vuart)
 
-    sent = [False]
-    def reader():
-        buf = b""
-        while True:
-            try:
-                d = vuart.read(1024)
-            except serial.SerialException as e:
-                print(f"\n[vuart] serial exception: {e}", flush=True)
-                return
-            if d:
-                sys.stdout.buffer.write(d)
-                sys.stdout.buffer.flush()
-                buf += d
-                if stimulus and not sent[0] and b"bat_os>" in buf:
-                    sent[0] = True
-                    time.sleep(0.3)
-                    print(f"\n[vuart] >>> sending {stimulus!r}",
-                          flush=True)
-                    vuart.write(stimulus)
-                    vuart.flush()
-            time.sleep(0.01)
-    threading.Thread(target=reader, daemon=True).start()
+    stop = threading.Event()
+    threading.Thread(target=vuart_reader, args=(vuart,), daemon=True).start()
+    if stims:
+        threading.Thread(target=stimulus_sender,
+                         args=(vuart, stims), daemon=True).start()
 
     os.environ.setdefault("M1N1DEVICE", "/dev/ttyACM1")
     iface = UartInterface()
     p = M1N1Proxy(iface, debug=False)
     bootstrap_port(iface, p)
-    u = ProxyUtils(p, heap_size = 128 * 1024 * 1024)
+    u = ProxyUtils(p, heap_size=128 * 1024 * 1024)
     hv = HV(iface, p, u)
     hv.init()
 
-    print(f"[host] loading {BAT_OS_BINARY}", flush=True)
+    log(f"loading {BAT_OS_BINARY}")
     hv.load_raw(BAT_OS_BINARY.read_bytes(), 0)
 
-    print("[host] calling hv.start() — Bat_OS takes over now. "
-          "Ctrl+C to stop.", flush=True)
+    log("calling hv.start() — Bat_OS takes over now. "
+        f"Ctrl+] to detach.")
+
+    # hv.start() must run on the main thread because m1n1 installs
+    # a SIGINT handler for the shell. For interactive input we run
+    # the stdin forwarder in a worker thread.
+    if not stims and sys.stdin.isatty():
+        threading.Thread(target=stdin_forwarder,
+                         args=(vuart, stop), daemon=True).start()
+
     try:
         hv.start()
     except KeyboardInterrupt:
         pass
     except Exception as e:
-        print(f"\n[host] hv.start() raised: {e}", flush=True)
+        sys.stderr.write(f"\n[host] hv.start() raised: {e}\n")
+        sys.stderr.flush()
 
-    print("\n[host] HV exited — draining vuart for 3s", flush=True)
-    time.sleep(3)
+    stop.set()
+    log("detaching — draining vuart for 2s")
+    time.sleep(2)
     vuart.close()
+
 
 if __name__ == "__main__":
     main()

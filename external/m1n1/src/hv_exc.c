@@ -447,7 +447,6 @@ static void hv_exc_exit(struct exc_info *ctx)
 
 void hv_exc_sync(struct exc_info *ctx)
 {
-    printf("[hv_exc_sync] enter esr=%lx elr=%lx\n", mrs(ESR_EL2), mrs(ELR_EL2));
     hv_wdt_breadcrumb('S');
     hv_get_context(ctx);
     bool handled = false;
@@ -516,7 +515,6 @@ void hv_exc_sync(struct exc_info *ctx)
 
 void hv_exc_irq(struct exc_info *ctx)
 {
-    printf("[hv_exc_irq] enter\n");
     hv_wdt_breadcrumb('I');
     hv_get_context(ctx);
     hv_exc_entry();
@@ -527,7 +525,6 @@ void hv_exc_irq(struct exc_info *ctx)
 
 void hv_exc_fiq(struct exc_info *ctx)
 {
-    printf("[hv_exc_fiq] enter\n");
     bool tick = false;
 
     hv_maybe_exit();
@@ -609,7 +606,6 @@ void hv_exc_fiq(struct exc_info *ctx)
 
 void hv_exc_serr(struct exc_info *ctx)
 {
-    printf("[hv_exc_serr] enter\n");
     hv_wdt_breadcrumb('E');
     hv_get_context(ctx);
     hv_exc_entry();

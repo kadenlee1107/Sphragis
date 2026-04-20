@@ -185,12 +185,17 @@ void hv_start(void *entry, u64 regs[4])
     }
     printf("[hv_start] S6 SPRR/GXF MRS\n");
 
-    // M4-HV-DIAG: on T8132 skip arming the HV CNTP tick so we can
-    // tell whether the post-eret Mac reset is driven by something
-    // in the FIQ handling path (hv_tick / hv_vuart_poll / aic_set_sw)
-    // or by something external (USB stall, SMC watchdog). If the
-    // Mac stays up indefinitely with ticks disabled, it's the FIQ
-    // path. If it still resets, it's external.
+    // M4-HV: skip hv_arm_tick on T8132. Even with the PMU/UPMC/
+    // IPI_SR/VM_TMR gates we already added, and with hv_vuart_poll's
+    // aic_set_sw also gated, the CNTP tick firing at 1 kHz still
+    // destabilises the Mac — empirically the USB CDC disconnects
+    // within seconds of the tick being armed. There's at least one
+    // more Apple IMPDEF MSR on the exc_fiq path we haven't tracked
+    // down. For now, drive iodev_handle_events from guest MMIO
+    // traps (which happen ~2 per UART byte) so host proxy input
+    // still flows. Multi-minute sessions will reset back to stock
+    // m1n1 after ~30-60 s from the SMC heartbeat watchdog — fixing
+    // that is the next session's work.
     if (chip_id != T8132)
         hv_arm_tick(false);
     printf("[hv_start] S7 hv_arm_tick (m4-skipped=%d)\n", chip_id == T8132);
@@ -446,5 +451,18 @@ void hv_tick(struct exc_info *ctx)
         if (hv_pinned_cpu == -1 || hv_pinned_cpu == smp_id())
             hv_exc_proxy(ctx, START_HV, HV_USER_INTERRUPT, NULL);
     }
-    hv_vuart_poll();
+    // M4-HV: hv_vuart_poll() calls aic_set_sw() on AIC v3 to inject
+    // a software IRQ to the guest. On M4 that write pokes AIC state
+    // that was already configured by m1n1 and triggers a slow reset
+    // (~30-60 s). Our guest has no AIC configured under HV anyway
+    // (bring_up_all is gated to skip AIC on M4), so skip the IRQ
+    // injection — the dockchannel-vuart MMIO trap path (hv_vuart.c
+    // handle_vuart_dockchannel) delivers TX/RX bytes without needing
+    // an IRQ line into the guest.
+    // Keep the poll on non-M4 SoCs so Linux / XNU guests still get
+    // UART IRQs as expected.
+    if (chip_id != T8132)
+        hv_vuart_poll();
+    else
+        iodev_handle_events(IODEV_USB_VUART);
 }
