@@ -11,6 +11,103 @@ end of a session.
 
 ---
 
+## 2026-04-20 12:40 — Ubuntu — SMC Plan B full attempt: pump neutral, nudge fatal
+
+Took another swing at SMC after Kaden said "keep going, just be
+careful to be able to jump back." Tagged the safe point
+`hv-96s-baseline` at d9a454f0 before touching anything.
+
+Wrote two FIQ-safe SMC primitives in `external/m1n1/src/smc.c`:
+
+```c
+int smc_pump(smc_dev_t *smc);   // non-blocking ASC→AP drain
+int smc_nudge(smc_dev_t *smc);  // non-blocking AP→ASC poke
+```
+
+Both avoid the 200ms asc_send poll and the `smc_cmd`-style
+`while (outstanding)` wait. `smc_nudge` uses reserved MSG_ID 0xF
+so it can't collide with dcp.c's dynamic msgid.
+
+Wired `smc_init()` into `m1n1_main` (a second pass at Plan A
+with pumping on top). Tried three configurations:
+
+  1. smc_init + `smc_pump` every 10th hv_tick (100 Hz):
+     63-93 s across runs — inside the 60-96 s baseline noise
+     band. Neutral at best. Log: `docs/2026-04-20_hv_smc_pump_*`
+     (not archived because pump-only was uninteresting).
+
+  2. Same + `smc_nudge` every 100th hv_tick (10 Hz):
+     **Guest died at t=1 s.** USB drop right after the first
+     nudge fired. No SError printed, no SYNC exception — looks
+     like the first unsolicited SMC_READ_KEY reply generated an
+     AIC IRQ on an endpoint the HV masks on T8132 (same class
+     of issue that killed `hv_vuart_poll → aic_set_sw` earlier).
+     Log: `docs/2026-04-20_hv_smc_nudge_died_1s.txt`.
+
+  3. Reverted: smc_init removed from m1n1_main, smc_pump call
+     removed from hv_tick. `smc_pump` / `smc_nudge` functions
+     stay in smc.c as FIQ-safe infrastructure for whichever
+     coprocessor we bring up next.
+
+### Hard lesson
+
+We cannot inject unsolicited messages into any Apple ASC from
+the HV tick path without first wiring up the AIC IRQ-forwarding
+for its endpoint. Pump-only (draining) is safe but a no-op when
+the ASC isn't saying anything to us. For an actual keepalive to
+work, we need either:
+
+  - AIC HV forwarding for SMC/AOP IRQ lines so replies don't
+    pile up on a masked line, or
+  - A driver-level "soft poll" approach: drive the ASC from
+    outside hv_tick (e.g. from the guest's own idle loop) where
+    interrupts aren't masked.
+
+Either is real work.
+
+### Final tally for 2026-04-20
+
+Session started: 60 s baseline (tick-off ceiling).
+Session landed: 96 s ceiling.
+
+Shipped + kept:
+  - `hv_arm_tick` re-enabled on T8132 (200b1522): +26 s.
+  - `wdt_kick()` from `hv_tick` (2c0580a7): +~10 s, mostly noise,
+    defensive.
+
+Ruled out conclusively:
+  - SoC WDT at 0x3882b0000 is not the trigger (live-HW register
+    probe, 50224b75).
+  - SMC ASC liveness alone is not the trigger (Plan A, 65619023).
+  - SMC ASC mailbox drain is not the trigger (Plan B pump,
+    this entry).
+  - `read32(0x3907a0000)` direct aop-spmi0 MMIO from hv_tick
+    SYNC-faults (d9a454f0).
+  - Unsolicited SMC cmds from hv_tick kill the guest in <1 s
+    (this entry).
+
+Infrastructure in tree for next time:
+  - `scripts/hv/probe_m4_watchdogs.py` + `probe_m4_wdt_rates.py`
+  - `smc_pump`, `smc_nudge`, `hv_smc_keepalive` in smc.{c,h}
+  - `wdt_kick` in wdt.{c,h}
+  - Tag `hv-96s-baseline` @ d9a454f0 for rollback
+
+### Run-to-run variance caveat (important)
+
+Verification A/B on the reverted build back-to-back:
+  - run 1: 27 s (outlier, log `_post_revert_27s_outlier.txt`)
+  - run 2: 94 s (at baseline, log `_post_revert_94s.txt`)
+
+Same build, same stimulus, same chainload pipeline, minutes apart.
+Variance is 27–96 s and seems to be SoC-state-dependent (thermal?
+cycling history? iBoot frame phase?). This is why the SMC-pump
+tests (63 / 93 / 92 s) couldn't reliably distinguish a real effect
+from noise: the signal we're looking for would need to be
+>2× baseline to be confident. Future instrumentation runs should
+average ≥5 samples to cut through this.
+
+---
+
 ## 2026-04-20 12:10 — Ubuntu — SPMI MMIO poke: EL2 SYNC fault, abandoned
 
 Attempted a raw `read32(0x3907a0000)` inside `hv_tick` to generate
