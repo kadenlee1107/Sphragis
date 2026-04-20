@@ -11,6 +11,200 @@ end of a session.
 
 ---
 
+## 2026-04-19 20:45 — Ubuntu — m1n1 HV past hv_init + hv_start + eret; Mac USB resets ~17 ms into guest
+
+**One-line status.** Guest now runs ~17 ms (seventeen 1 kHz HV timer
+ticks) under the patched m1n1 hypervisor on real M4 hardware before
+`/dev/ttyACM1` drops. HV itself is alive throughout — we see the new
+`[hv_exc_fiq] enter` printf fire on every CNTP tick.
+
+### What I gated this session
+
+**m1n1 side (external/m1n1/src/):**
+
+- `hv.c::hv_start` — gate the AMX/VMKEY/SPRR/GXF MRS reads that
+  UNDEF on M4. Use `cpu_features->amx` (false on M4) for AMX_CTL_EL2
+  / APVMKEYLO/HI_EL2 / APSTS_EL12, and `cpu_features->mmu_sprr`
+  (false on M4) for SPRR_CONFIG_EL1 / GXF_CONFIG_EL1. Added
+  `[hv_start] S0..S8` markers to match the `[hv_init] Mx` pattern.
+- `hv.c::hv_init_secondary` — mirror the same gates on the write
+  side (AMX/VMKEY/SPRR/GXF MSR writes).
+- `hv_exc.c::hv_exc_entry` — skip `mrs(SYS_IMP_APL_PMCR0)` +
+  `msr(...)` on M4 (`chip_id == T8132`). PMCR0 UNDEFs on M4, and
+  the call fires on EVERY HV exception entry — without this gate,
+  the very first CNTP tick post-eret triple-faults m1n1.
+- `hv_exc.c::hv_exc_exit` — skip the matching PMCR0 restore.
+- `hv_exc.c::hv_exc_fiq` — skip the PMCR0 / UPMCR0 / UPMSR /
+  IPI_SR_EL1 block (all Apple IMPDEF).
+- `hv_exc.c::hv_update_fiq` — skip the `SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2`
+  reg_set/reg_clr on M4 (IMPDEF timer-fiq virtualisation reg, UNDEFs).
+- Added early `printf` breadcrumbs at the top of `hv_exc_sync`,
+  `hv_exc_irq`, `hv_exc_fiq`, `hv_exc_serr` so we can see which
+  kind of exception is firing from the stream of serial output.
+
+**Bat_OS side (src/):**
+
+- `arch/aarch64/apple/boot.s` — skip the 16 MiB framebuffer proof-
+  of-life paint when `CurrentEL == EL1`. Under `run_guest.py`,
+  Python calls `fb_shutdown(True)` which `free()`s the FB backing
+  memory; stage-2 pass-through means writing the old FB physical
+  address clobbers m1n1's own heap and the Mac hard-resets in a
+  few ms. EL2 direct chainload still paints (camera verification).
+- `main.rs::kernel_main_apple` — at entry, read `CurrentEL`; if
+  EL1 (running under HV), skip `soc::set_fb_info(...)`. That makes
+  every FB-consumer (`dcp::init_simple_fb`, `dcp::boot_splash`,
+  `fb_console::init`, `fb_console::putc`) auto-no-op via their
+  existing `fb_base() == 0` guards. Mem info is still populated.
+
+### Where we are now
+
+`run_guest.py --raw --entry-point 0 <any_binary>` with the patched
+`external/m1n1/build/m1n1.macho` chainloaded:
+
+- ✓ m1n1 proxy chainload succeeds (`udevadm` shows
+  `m1n1_uartproxy_unknown`)
+- ✓ `hv.init()` / page-table build / ADT fixup all run to completion
+- ✓ `[hv_init] M0..M14` all print
+- ✓ `[hv_start] S0..S8` all print
+- ✓ `hv_enter_guest` eret's into the guest (no trap, no reset at
+  eret)
+- ✓ Guest executes (tested with a 2-instruction WFE-loop payload
+  at `/tmp/wfe_guest.bin` — `d503205f; 17ffffff`)
+- ✓ CNTP tick fires at 1 kHz, `[hv_exc_fiq] enter` prints on each
+  tick for ~17 ticks (~17 ms)
+- ✗ After ~17 ticks, `/dev/ttyACM1` drops (Python sees
+  `SerialException: device reports readiness to read but returned
+  no data`). `udevadm` post-crash shows the stock `bcee7f2` build
+  back, i.e. the Mac rebooted.
+
+Key fact: the HV is ALIVE during those 17 ms. The printfs demonstrate
+m1n1 is still running at EL2 servicing the CNTP FIQ. So whatever kills
+the machine happens AFTER the FIQ handler returns (ERET back to EL1
+guest), and some number of cycles later we either:
+
+(a) hit an Apple IMPDEF MSR in a code path I haven't gated yet
+    (possibly the USB iodev handling path in `hv_tick`, or in
+    `iodev_handle_events(uartproxy_iodev)` / `hv_vuart_poll()`),
+(b) or we hit an Apple SMC/AOP heartbeat-watchdog that bites
+    because m1n1 is spending all its cycles in FIQ and not pinging
+    whatever keeps SMC happy,
+(c) or the USB CDC TX ring in m1n1 stalls (IRQs masked during
+    hv_exc_entry, DMA completions not being acked), USB hub
+    decides device is dead, Mac USB host forcibly resets the
+    port which cascades.
+
+17 ms is suspicious — too short for a classic 30s Apple SMC watchdog,
+too long for an immediate exception at eret. It's more consistent with
+(a) or (c) — a USB-stall pattern fits the "TTY stream dies but no
+exception printf" symptom.
+
+### Exact workflow to reproduce tonight's state
+
+```bash
+cd /home/kaden-lee/code/Bat_OS
+
+# m1n1 is already built; Bat_OS is already built. If you touched
+# either, rebuild:
+#   cd external/m1n1 && make -j$(nproc) && cd -
+#   bash build_apple.sh
+
+# Wait for the stock (bcee7f2) m1n1 to be live after the last reset
+for i in $(seq 1 24); do
+  [ -e /dev/ttyACM1 ] && udevadm info /dev/ttyACM1 | grep -q m1n1_uartproxy && break
+  sleep 5
+done
+udevadm info /dev/ttyACM1 | grep ID_MODEL=   # expect bcee7f2
+
+# Chainload the PATCHED m1n1 (absolute path — passwordless sudo
+# rule in /etc/sudoers only matches the absolute path)
+sudo -n --preserve-env=M1N1DEVICE,M1N1WAIT \
+    M1N1DEVICE=/dev/ttyACM1 M1N1WAIT=1 \
+    /usr/bin/python3 \
+    /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py \
+    -S /home/kaden-lee/code/Bat_OS/external/m1n1/build/m1n1.macho
+sleep 3
+udevadm info /dev/ttyACM1 | grep ID_MODEL=   # expect unknown (our build tag)
+
+# Smoke-test with the WFE loop (this is the MINIMAL guest — zero
+# Bat_OS code in the path — isolates HV issues from Bat_OS issues):
+sg dialout -c "M1N1DEVICE=/dev/ttyACM1 timeout 60 /usr/bin/python3 \
+    /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/run_guest.py \
+    --raw --entry-point 0 /tmp/wfe_guest.bin" 2>&1 | tee /tmp/hv.log
+
+# Expect: [hv_init] M0..M14 (all), [hv_start] S0..S8 (all),
+# ~17 × [hv_exc_fiq] enter, then SerialException.
+
+# The same pattern reproduces with Bat_OS's bat_os_apple.bin payload —
+# the guest just doesn't make it far enough to print anything before
+# the USB dies, so to debug the HV itself use the WFE payload.
+```
+
+### Priority next moves (order of cheapest-experiments-first)
+
+1. **Test with `hv_arm_tick` disabled on M4.** If we don't arm the
+   CNTP tick, FIQ never fires. If the Mac stays alive indefinitely
+   with no HV tick, then the HV FIQ path itself is the destabiliser.
+   If the Mac STILL resets after ~17 ms even without FIQ, it's
+   something else (SMC watchdog, USB idle timeout, etc.).
+2. **If FIQ was the culprit** — audit everything `hv_tick`/
+   `hv_vuart_poll`/`iodev_handle_events` does for more Apple IMPDEF
+   MSRs. The chip_id-gate pattern is clear; just extend it.
+3. **Add a `reg_set_sync` / `iodev_console_flush` call AT THE TOP**
+   of `hv_exc_fiq` before the early printf. If the issue is TX
+   buffer stall, seeing flush behavior change will tell us.
+4. **Only once the Mac doesn't reset** — wire up a vuart for the
+   M4 dockchannel UART (0x3_8812_8000). m1n1's existing vuart maps
+   uart0 (0x3_ad20_0000, Samsung semantics). Bat_OS writes to
+   dockchannel — different register layout. Either (A) patch
+   `hv_vuart.c` to also recognise dockchannel register offsets and
+   add a `hv_map_vuart_dockchannel(base, irq, iodev)` in
+   `external/m1n1/src/` + Python `map_vuart_dockchannel` in
+   `hv/__init__.py`, or (B) on M4 under HV have Bat_OS write to
+   0x3_ad20_0000 with Samsung semantics (needs a new driver mode
+   in `drivers/apple/uart.rs`). Option (A) is cleaner but requires
+   knowing dockchannel reg semantics — we already have
+   `external/m1n1/src/dockchannel_uart.c` upstream to copy from.
+
+### Known gotchas I already hit so that next-Claude doesn't
+
+- **`sudo -n /usr/bin/python3 external/m1n1/.../chainload.py`
+  without absolute path** fails. The passwordless rule in
+  `/etc/sudoers` matches `/usr/bin/python3 /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py *`
+  — relative path = password prompt = fail.
+- **`/dev/ttyACM1` may disappear for 5-60 s** after a failed HV
+  attempt while iBoot re-loads stock m1n1. The polling loop
+  `for i in $(seq 1 24); do ... ; sleep 5; done` covers it.
+- **Don't add long `udelay(...)` loops inside hv_start before
+  `hv_enter_guest`.** I tried a 5 × 200 ms heartbeat diagnostic
+  and it broke boot entirely (back to crashing at `S0`). Either
+  `udelay` itself on M4 does something that destabilises the
+  hardware when called repeatedly at EL2, or the extra 1-s delay
+  trips an iBoot-side handoff timer. Short printfs are fine.
+- **ttyACM0 is a USB hub on this host (IBP_Mini_Hub), not m1n1.**
+  ttyACM1 is m1n1's proxy CDC endpoint (interface 00), ttyACM2 is
+  m1n1's secondary CDC endpoint (interface 02) — that's where the
+  vuart byte-stream will come out once dockchannel vuart is
+  hooked up. Do NOT use `/dev/m1n1` — the symlink is present in
+  `/etc/udev/rules.d/99-m1n1.rules` but the current kmutil-installed
+  stock m1n1 uses different USB IDs than the udev rule expects.
+- **`cd external/m1n1` persists across Bash calls.** This session's
+  shell kept drifting to the m1n1 subdir. Always use absolute paths
+  in commands (`/home/kaden-lee/code/Bat_OS/...`) rather than
+  relative ones to dodge that.
+
+### Files committed this session
+
+- `external/m1n1/src/hv.c` — hv_start + hv_init_secondary gates;
+  [hv_start] Sx markers; the diagnostic heartbeat loop was
+  REMOVED before commit (it destabilised boot).
+- `external/m1n1/src/hv_exc.c` — PMCR0 / UPMC / IPI_SR / VM_TMR
+  gates on T8132; early printfs at each hv_exc_* entry.
+- `src/arch/aarch64/apple/boot.s` — CurrentEL check, skip FB
+  paint at EL1.
+- `src/main.rs` — CurrentEL check, skip set_fb_info at EL1.
+
+---
+
 ## 2026-04-19 20:15 — Ubuntu — m1n1 HV M4 bring-up partial; hangs inside hv_init
 
 **Session-end handoff.** We pivoted from camera-pointed-at-screen

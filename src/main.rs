@@ -682,11 +682,21 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     // Stash the pointer for later ADT queries from the rest of the
     // kernel (no longer needs to thread `&BootArgs` through everything).
     unsafe { drivers::apple::boot_args::stash(boot_args_ptr); }
-    // Back-compat: the existing soc::init_from_boot_args still wants
-    // the legacy struct shape, so populate FB/mem info from the parsed
-    // view. TODO: retire the legacy soc statics in a follow-up commit.
+    // V-HV-GUEST-2: Under m1n1's hypervisor (run_guest.py) we enter at
+    // EL1. Python-side `hv.start()` calls `fb_shutdown(true)` which
+    // free()s the framebuffer memory. If Bat_OS then writes pixels to
+    // the old FB physical address, it clobbers m1n1's heap (stage-2
+    // pass-through covers RAM-HIGH) and the Mac hard-resets. Suppress
+    // FB bring-up entirely on EL1 so every `dcp::*`, `fb_console::*`,
+    // and `boot_splash` path short-circuits via `!is_ready()` /
+    // `fb_base()==0`. Mem info is still needed (page allocator etc).
+    let cur_el: u64;
+    unsafe { core::arch::asm!("mrs {0}, CurrentEL", out(reg) cur_el, options(nomem, nostack)); }
+    let under_hv = (cur_el & 0xC) == 0x4;
     let video = args.video();
-    drivers::apple::soc::set_fb_info(video.base as usize, video.width, video.height, video.stride as u32);
+    if !under_hv {
+        drivers::apple::soc::set_fb_info(video.base as usize, video.width, video.height, video.stride as u32);
+    }
     drivers::apple::soc::set_mem_info(args.phys_base() as usize, args.mem_size() as usize);
 
     // V-ASAHI-1.3: resolve MMIO addresses from the ADT BEFORE touching

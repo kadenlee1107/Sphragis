@@ -29,14 +29,23 @@ _apple_start:
     mov     x20, x0
 
     // ────────────────────────────────────────────────────────────
-    // V-HANDOFF-3: framebuffer proof-of-life.
+    // V-HV-GUEST-1: under m1n1's hypervisor (run_guest.py), m1n1
+    // drops the guest at EL1 after calling fb_shutdown(true), which
+    // free()s the framebuffer backing memory. Writing 16 MiB to the
+    // old FB physical address clobbers m1n1's heap (stage-2 pass
+    // through covers RAM-HIGH) and the Mac resets within seconds.
+    // Direct m1n1 chainload enters at EL2 and the FB is still live;
+    // paint for proof-of-life there. Skip the paint at EL1.
+    // ────────────────────────────────────────────────────────────
+    mrs     x19, CurrentEL            // x19[3:2] = CurrentEL
+    cmp     x19, #(2 << 2)
+    b.ne    fb_fill_skip
+
+    // V-HANDOFF-3: framebuffer proof-of-life (EL2 direct chainload only).
     // M4 FB pixel format is ARGB2101010 (30 bpp, not ARGB8888):
     //   bits [31:30] = A, [29:20] = R, [19:10] = G, [9:0] = B.
     // 0xFFFF0000 decoded in that format is A=3, R=0x3FF, G=0x3C0,
     // B=0 → yellow, which is what you'll see on the M4 screen.
-    // Good enough as a "we reached _apple_start" signal; real
-    // Bat_OS painting happens later from Rust.
-    // ────────────────────────────────────────────────────────────
     ldr     x9, =0x103e0050000       // framebuffer base (observed on M4)
     mov     w10, #0x0000
     movk    w10, #0xffff, lsl #16
@@ -46,6 +55,7 @@ fb_fill:
     subs    x11, x11, #4
     b.ne    fb_fill
     dsb     sy
+fb_fill_skip:
 
     // Disable interrupts
     msr     daifset, #0xf

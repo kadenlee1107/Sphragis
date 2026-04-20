@@ -5,9 +5,11 @@
 #include "cpu_regs.h"
 #include "exception.h"
 #include "smp.h"
+#include "soc.h"
 #include "string.h"
 #include "uart.h"
 #include "uartproxy.h"
+#include "utils.h"
 
 #define TIME_ACCOUNTING
 
@@ -155,18 +157,24 @@ static void hv_update_fiq(void)
 {
     u64 hcr = mrs(HCR_EL2);
     bool fiq_pending = false;
+    // M4 lacks SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2 — reads/writes UNDEF.
+    // Skip the timer-fiq virtualisation; timer traps reach the HV
+    // directly via the normal EL2 exception path.
+    bool have_apl_vm_tmr = (chip_id != T8132);
 
     if (mrs(CNTP_CTL_EL02) == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
         fiq_pending = true;
-        reg_clr(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2, VM_TMR_FIQ_ENA_ENA_P);
-    } else {
+        if (have_apl_vm_tmr)
+            reg_clr(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2, VM_TMR_FIQ_ENA_ENA_P);
+    } else if (have_apl_vm_tmr) {
         reg_set(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2, VM_TMR_FIQ_ENA_ENA_P);
     }
 
     if (mrs(CNTV_CTL_EL02) == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
         fiq_pending = true;
-        reg_clr(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2, VM_TMR_FIQ_ENA_ENA_V);
-    } else {
+        if (have_apl_vm_tmr)
+            reg_clr(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2, VM_TMR_FIQ_ENA_ENA_V);
+    } else if (have_apl_vm_tmr) {
         reg_set(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2, VM_TMR_FIQ_ENA_ENA_V);
     }
 
@@ -408,18 +416,24 @@ static void hv_exc_entry(void)
     spin_lock(&bhl);
     hv_wdt_breadcrumb('X');
     exc_entry_time = mrs(CNTPCT_EL0);
-    /* disable PMU counters in the hypervisor */
-    u64 pmcr0 = mrs(SYS_IMP_APL_PMCR0);
-    PERCPU(exc_entry_pmcr0_cnt) = pmcr0 & PMCR0_CNT_MASK;
-    msr(SYS_IMP_APL_PMCR0, pmcr0 & ~PMCR0_CNT_MASK);
+    /* disable PMU counters in the hypervisor (Apple IMPDEF PMCR0 —
+     * UNDEFs on M4 T8132, skip). */
+    if (chip_id != T8132) {
+        u64 pmcr0 = mrs(SYS_IMP_APL_PMCR0);
+        PERCPU(exc_entry_pmcr0_cnt) = pmcr0 & PMCR0_CNT_MASK;
+        msr(SYS_IMP_APL_PMCR0, pmcr0 & ~PMCR0_CNT_MASK);
+    } else {
+        PERCPU(exc_entry_pmcr0_cnt) = 0;
+    }
 }
 
 static void hv_exc_exit(struct exc_info *ctx)
 {
     hv_wdt_breadcrumb('x');
     hv_update_fiq();
-    /* reenable PMU counters */
-    reg_set(SYS_IMP_APL_PMCR0, PERCPU(exc_entry_pmcr0_cnt));
+    /* reenable PMU counters — Apple IMPDEF PMCR0, skip on M4. */
+    if (chip_id != T8132)
+        reg_set(SYS_IMP_APL_PMCR0, PERCPU(exc_entry_pmcr0_cnt));
     msr(CNTVOFF_EL2, stolen_time);
     spin_unlock(&bhl);
     hv_maybe_exit();
@@ -433,6 +447,7 @@ static void hv_exc_exit(struct exc_info *ctx)
 
 void hv_exc_sync(struct exc_info *ctx)
 {
+    printf("[hv_exc_sync] enter esr=%lx elr=%lx\n", mrs(ESR_EL2), mrs(ELR_EL2));
     hv_wdt_breadcrumb('S');
     hv_get_context(ctx);
     bool handled = false;
@@ -501,6 +516,7 @@ void hv_exc_sync(struct exc_info *ctx)
 
 void hv_exc_irq(struct exc_info *ctx)
 {
+    printf("[hv_exc_irq] enter\n");
     hv_wdt_breadcrumb('I');
     hv_get_context(ctx);
     hv_exc_entry();
@@ -511,6 +527,7 @@ void hv_exc_irq(struct exc_info *ctx)
 
 void hv_exc_fiq(struct exc_info *ctx)
 {
+    printf("[hv_exc_fiq] enter\n");
     bool tick = false;
 
     hv_maybe_exit();
@@ -551,30 +568,36 @@ void hv_exc_fiq(struct exc_info *ctx)
         hv_exc_proxy(ctx, START_HV, HV_VTIMER, NULL);
     }
 
-    u64 reg = mrs(SYS_IMP_APL_PMCR0);
-    if ((reg & (PMCR0_IMODE_MASK | PMCR0_IACT)) == (PMCR0_IMODE_FIQ | PMCR0_IACT)) {
+    // Apple IMPDEF PMU / UPMC / IPI_SR accesses UNDEF on M4 (T8132).
+    // Skip them — guest PMC and IPI plumbing are not yet supported
+    // for the M4 HV path; the timer-tick code path above is sufficient
+    // for forward progress.
+    if (chip_id != T8132) {
+        u64 reg = mrs(SYS_IMP_APL_PMCR0);
+        if ((reg & (PMCR0_IMODE_MASK | PMCR0_IACT)) == (PMCR0_IMODE_FIQ | PMCR0_IACT)) {
 #ifdef DEBUG_PMU_IRQ
-        printf("[FIQ] PMC IRQ, masking and delivering to the guest\n");
+            printf("[FIQ] PMC IRQ, masking and delivering to the guest\n");
 #endif
-        reg_clr(SYS_IMP_APL_PMCR0, PMCR0_IACT | PMCR0_IMODE_MASK);
-        PERCPU(pmc_pending) = true;
-    }
-
-    reg = mrs(SYS_IMP_APL_UPMCR0);
-    if (FIELD_GET(UPMCR0_IMODE_T8020, reg) == UPMCR0_IMODE_FIQ &&
-        (mrs(SYS_IMP_APL_UPMSR) & UPMSR_IACT)) {
-        printf("[FIQ] UPMC IRQ, masking");
-        reg_clr(SYS_IMP_APL_UPMCR0, UPMCR0_IMODE_T8020);
-        hv_exc_proxy(ctx, START_EXCEPTION_LOWER, EXC_FIQ, NULL);
-    }
-
-    if (mrs(SYS_IMP_APL_IPI_SR_EL1) & IPI_SR_PENDING) {
-        if (PERCPU(ipi_queued)) {
-            PERCPU(ipi_pending) = true;
-            PERCPU(ipi_queued) = false;
+            reg_clr(SYS_IMP_APL_PMCR0, PMCR0_IACT | PMCR0_IMODE_MASK);
+            PERCPU(pmc_pending) = true;
         }
-        msr(SYS_IMP_APL_IPI_SR_EL1, IPI_SR_PENDING);
-        sysop("isb");
+
+        reg = mrs(SYS_IMP_APL_UPMCR0);
+        if (FIELD_GET(UPMCR0_IMODE_T8020, reg) == UPMCR0_IMODE_FIQ &&
+            (mrs(SYS_IMP_APL_UPMSR) & UPMSR_IACT)) {
+            printf("[FIQ] UPMC IRQ, masking");
+            reg_clr(SYS_IMP_APL_UPMCR0, UPMCR0_IMODE_T8020);
+            hv_exc_proxy(ctx, START_EXCEPTION_LOWER, EXC_FIQ, NULL);
+        }
+
+        if (mrs(SYS_IMP_APL_IPI_SR_EL1) & IPI_SR_PENDING) {
+            if (PERCPU(ipi_queued)) {
+                PERCPU(ipi_pending) = true;
+                PERCPU(ipi_queued) = false;
+            }
+            msr(SYS_IMP_APL_IPI_SR_EL1, IPI_SR_PENDING);
+            sysop("isb");
+        }
     }
 
     hv_maybe_switch_cpu(ctx, START_HV, HV_CPU_SWITCH, NULL);
@@ -586,6 +609,7 @@ void hv_exc_fiq(struct exc_info *ctx)
 
 void hv_exc_serr(struct exc_info *ctx)
 {
+    printf("[hv_exc_serr] enter\n");
     hv_wdt_breadcrumb('E');
     hv_get_context(ctx);
     hv_exc_entry();

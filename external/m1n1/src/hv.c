@@ -136,15 +136,18 @@ void hv_start(void *entry, u64 regs[4])
         return;
     }
 
+    printf("[hv_start] S0 enter\n");
     memset(hv_should_exit, 0, sizeof(hv_should_exit));
     memset(hv_started_cpus, 0, sizeof(hv_started_cpus));
 
     hv_started_cpus[boot_cpu_idx] = true;
 
     msr(VBAR_EL1, _hv_vectors_start);
+    printf("[hv_start] S1 VBAR_EL1\n");
 
     if (gxf_enabled())
         gl2_call(hv_set_gxf_vbar, 0, 0, 0, 0);
+    printf("[hv_start] S2 gxf_vbar\n");
 
     hv_secondary_info.hcr = mrs(HCR_EL2);
     hv_secondary_info.hacr = mrs(HACR_EL2);
@@ -152,23 +155,41 @@ void hv_start(void *entry, u64 regs[4])
     hv_secondary_info.vttbr = mrs(VTTBR_EL2);
     hv_secondary_info.mdcr = mrs(MDCR_EL2);
     hv_secondary_info.mdscr = mrs(MDSCR_EL1);
-    hv_secondary_info.amx_ctl = mrs(SYS_IMP_APL_AMX_CTL_EL2);
-    hv_secondary_info.apvmkeylo = mrs(SYS_IMP_APL_APVMKEYLO_EL2);
-    hv_secondary_info.apvmkeyhi = mrs(SYS_IMP_APL_APVMKEYHI_EL2);
-    hv_secondary_info.apsts = mrs(SYS_IMP_APL_APSTS_EL12);
+    printf("[hv_start] S3 arch MRS\n");
+    if (cpu_features->amx) {
+        hv_secondary_info.amx_ctl = mrs(SYS_IMP_APL_AMX_CTL_EL2);
+        hv_secondary_info.apvmkeylo = mrs(SYS_IMP_APL_APVMKEYLO_EL2);
+        hv_secondary_info.apvmkeyhi = mrs(SYS_IMP_APL_APVMKEYHI_EL2);
+        hv_secondary_info.apsts = mrs(SYS_IMP_APL_APSTS_EL12);
+    } else {
+        hv_secondary_info.amx_ctl = 0;
+        hv_secondary_info.apvmkeylo = 0;
+        hv_secondary_info.apvmkeyhi = 0;
+        hv_secondary_info.apsts = 0;
+    }
+    printf("[hv_start] S4 AMX/VMKEY MRS\n");
     hv_secondary_info.actlr_el2 = mrs(ACTLR_EL2);
     if (cpu_features->actlr_el2)
         hv_secondary_info.actlr_el1 = mrs(SYS_ACTLR_EL12);
     else
         hv_secondary_info.actlr_el1 = mrs(SYS_IMP_APL_ACTLR_EL12);
     hv_secondary_info.cnthctl = mrs(CNTHCTL_EL2);
-    hv_secondary_info.sprr_config = mrs(SYS_IMP_APL_SPRR_CONFIG_EL1);
-    hv_secondary_info.gxf_config = mrs(SYS_IMP_APL_GXF_CONFIG_EL1);
+    printf("[hv_start] S5 ACTLR/CNTHCTL MRS\n");
+    if (cpu_features->mmu_sprr) {
+        hv_secondary_info.sprr_config = mrs(SYS_IMP_APL_SPRR_CONFIG_EL1);
+        hv_secondary_info.gxf_config = mrs(SYS_IMP_APL_GXF_CONFIG_EL1);
+    } else {
+        hv_secondary_info.sprr_config = 0;
+        hv_secondary_info.gxf_config = 0;
+    }
+    printf("[hv_start] S6 SPRR/GXF MRS\n");
 
     hv_arm_tick(false);
+    printf("[hv_start] S7 hv_arm_tick\n");
     hv_pinned_cpu = -1;
     hv_want_cpu = -1;
     hv_cpus_in_guest = BIT(smp_id());
+    printf("[hv_start] S8 entering guest @ %p x0=%lx\n", entry, regs[0]);
 
     hv_enter_guest(regs[0], regs[1], regs[2], regs[3], entry);
 
@@ -216,18 +237,22 @@ static void hv_init_secondary(struct hv_secondary_info_t *info)
     msr(VTTBR_EL2, info->vttbr);
     msr(MDCR_EL2, info->mdcr);
     msr(MDSCR_EL1, info->mdscr);
-    msr(SYS_IMP_APL_AMX_CTL_EL2, info->amx_ctl);
-    msr(SYS_IMP_APL_APVMKEYLO_EL2, info->apvmkeylo);
-    msr(SYS_IMP_APL_APVMKEYHI_EL2, info->apvmkeyhi);
-    msr(SYS_IMP_APL_APSTS_EL12, info->apsts);
+    if (cpu_features->amx) {
+        msr(SYS_IMP_APL_AMX_CTL_EL2, info->amx_ctl);
+        msr(SYS_IMP_APL_APVMKEYLO_EL2, info->apvmkeylo);
+        msr(SYS_IMP_APL_APVMKEYHI_EL2, info->apvmkeyhi);
+        msr(SYS_IMP_APL_APSTS_EL12, info->apsts);
+    }
     msr(ACTLR_EL2, info->actlr_el2);
     if (cpu_features->actlr_el2)
         msr(SYS_ACTLR_EL12, info->actlr_el1);
     else
         msr(SYS_IMP_APL_ACTLR_EL12, info->actlr_el1);
     msr(CNTHCTL_EL2, info->cnthctl);
-    msr(SYS_IMP_APL_SPRR_CONFIG_EL1, info->sprr_config);
-    msr(SYS_IMP_APL_GXF_CONFIG_EL1, info->gxf_config);
+    if (cpu_features->mmu_sprr) {
+        msr(SYS_IMP_APL_SPRR_CONFIG_EL1, info->sprr_config);
+        msr(SYS_IMP_APL_GXF_CONFIG_EL1, info->gxf_config);
+    }
 
     if (cpu_features->cyc_ovrd)
         reg_mask(SYS_IMP_APL_CYC_OVRD, CYC_OVRD_WFI_MODE_MASK, CYC_OVRD_WFI_MODE(0));
