@@ -811,11 +811,13 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         drivers::apple::uart::puts("[boot] Splash rendered -- launching apple shell\n");
         drivers::apple::uart::puts("[boot] FB console: uart mirror active\n");
 
-        // Keep the kernel self-test on boot — its constant FB/bus
-        // activity empirically extends HV session length, and Bat_OS
-        // still responds to queued shell input (including `screen`)
-        // after the replay completes.
-        apple_kernel_self_test();
+        // Skip the kernel self-test on boot — it eats ~100 s of the
+        // ~45-150 s HV session budget, leaving no time for the
+        // desktop to render before the Mac resets. The individual
+        // checks are still callable on demand via the `self-test`
+        // shell command (apple_shell_dispatch path).
+        // apple_kernel_self_test();
+        drivers::apple::uart::puts("[boot] (skipping self-test — use `self-test` shell cmd)\n");
 
         // Initialize SPI keyboard — but only if not under HV. On M4
         // under HV the SPI controller is owned by m1n1 and writing to
