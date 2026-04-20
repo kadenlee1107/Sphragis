@@ -189,13 +189,38 @@ static bool handle_vuart_dockchannel(struct exc_info *ctx, u64 addr, u64 *val,
 
     u64 off = addr - vuart_dc_base;
 
+    // M4-HV 2026-04-20 14:05: TX ring to eliminate per-byte
+    // iodev_write calls. Guest writes a byte → memcpy into ring
+    // (cheap). Ring is drained into IODEV_USB_VUART as a bulk
+    // iodev_write whenever it fills, on newline, or when the
+    // guest issues an RX read (i.e. just before the host expects
+    // to see output). Side benefit: handle_vuart_passthrough
+    // (printf('%c')) also consumes the ring one call at a time.
+    // Goal: shorten the ~5–10 s trap-counter plateau that shows
+    // up when the guest prints command output.
+    static uint8_t tx_ring[512];
+    static size_t tx_len = 0;
+
+    #define FLUSH_TX_RING() do {                                            \
+        if (tx_len > 0) {                                                   \
+            if (iodev_can_write(IODEV_USB_VUART))                           \
+                iodev_write(IODEV_USB_VUART, tx_ring, tx_len);              \
+            for (size_t i = 0; i < tx_len; i++)                             \
+                handle_vuart_passthrough(tx_ring[i]);                       \
+            tx_len = 0;                                                     \
+        }                                                                   \
+    } while (0)
+
     if (write) {
         switch (off) {
             case DC_DATA_TX8: {
                 uint8_t b = *val;
-                if (iodev_can_write(IODEV_USB_VUART))
-                    iodev_write(IODEV_USB_VUART, &b, 1);
-                handle_vuart_passthrough(b);
+                if (tx_len < sizeof(tx_ring))
+                    tx_ring[tx_len++] = b;
+                /* Flush on newline so host sees lines promptly,
+                 * on full ring to avoid drops. */
+                if (b == '\n' || tx_len >= sizeof(tx_ring))
+                    FLUSH_TX_RING();
                 break;
             }
             default:
@@ -208,11 +233,18 @@ static bool handle_vuart_dockchannel(struct exc_info *ctx, u64 addr, u64 *val,
     } else {
         switch (off) {
             case DC_DATA_TX_FREE:
+                // Flush any queued TX before telling the guest the
+                // FIFO is "free" — keeps the perceived latency short
+                // even if the guest waits on TX_FREE between writes.
+                FLUSH_TX_RING();
                 // Claim an always-ready TX FIFO. iodev_write will
                 // buffer internally or drop on overflow.
                 *val = 0x100;
                 break;
             case DC_DATA_RX8: {
+                // Flush any pending TX so host sees prompt output
+                // when the guest pauses TX to read RX.
+                FLUSH_TX_RING();
                 iodev_handle_events(IODEV_USB_VUART);
                 // Also drain the proxy endpoint's DWC3 events. Without
                 // periodic service, the USB CDC stalls after ~30 s
@@ -231,6 +263,11 @@ static bool handle_vuart_dockchannel(struct exc_info *ctx, u64 addr, u64 *val,
                 break;
             }
             case DC_DATA_RX_COUNT: {
+                // Same flush-on-RX-check pattern — the shell reads
+                // RX_COUNT very frequently in its busy-poll loop, so
+                // this gives us sub-100us output latency without
+                // needing hv_tick integration.
+                FLUSH_TX_RING();
                 iodev_handle_events(IODEV_USB_VUART);
                 iodev_handle_events(uartproxy_iodev);
                 *val = iodev_can_read(IODEV_USB_VUART) > 0 ? 1 : 0;
@@ -242,6 +279,7 @@ static bool handle_vuart_dockchannel(struct exc_info *ctx, u64 addr, u64 *val,
         }
     }
 
+    #undef FLUSH_TX_RING
     return true;
 }
 

@@ -11,6 +11,58 @@ end of a session.
 
 ---
 
+## 2026-04-20 14:20 — Ubuntu — hv_vuart TX ring batching landed
+
+Shipped a real batching improvement in
+`external/m1n1/src/hv_vuart.c::handle_vuart_dockchannel`:
+
+```c
+static uint8_t tx_ring[512];
+static size_t tx_len = 0;
+
+// On every UTXH trap: memcpy byte into the ring (no iodev work).
+// Flush the whole ring when the guest hits '\n', or when ring is
+// full, or when it issues an RX read (TX_FREE / RX8 / RX_COUNT).
+```
+
+Previously every guest-TX byte was one `iodev_write(…, &b, 1)` into
+the ttyACM2 CDC endpoint PLUS one `handle_vuart_passthrough(b)`
+(`printf("%c")` on ttyACM1). That's two USB-stack calls per byte.
+Now both of those happen once per flushed batch — typically a whole
+line at a time — so a 40-byte `[shell] uptime\n` line is 1 batched
+`iodev_write` plus 40 `handle_vuart_passthrough()` calls instead of
+40 of each. Latency stays small because the shell's tight RX-poll
+loop flushes the ring every iteration (`FLUSH_TX_RING()` on
+`DC_DATA_RX_COUNT` reads).
+
+Endurance: `t=83 s`, trap counter climbing steadily at ~427K/s at
+the end. Plateau is **still there** (same 14 s of ~64 traps/s
+from t=10 to t=24) so TX overhead alone wasn't the bottleneck —
+but the post-plateau guest activity recovered cleanly and we sat
+at the upper end of the 27-96 s variance band. No regressions.
+Log: `docs/2026-04-20_hv_txring_batched_83s.txt`.
+
+Side note on the plateau: 64 traps/s during the stall is exactly
+vsync rate (60 Hz). Working theory now is that fb_console's
+per-frame repaint at vsync generates ~1 dockchannel write per
+frame, which IS what we see. So during the plateau the guest is
+CPU-busy (not printing, not RX-polling) but the fb_console DMA
+keeps one MMIO op per frame firing.
+
+Things I can't easily fix without more invasive changes:
+  - What drives the 14 s stall — probably
+    `apple::ui::desktop::run()` doing one-time per-app layout work
+    or paint that doesn't touch dockchannel. Would need to
+    instrument Bat_OS to find out.
+  - The wall-clock ~100 s ceiling — unchanged. See other
+    entries — AIC drain, SMC bring-up, SPMI poke all dead.
+
+### Commits this sub-session
+- TX ring batching: `handle_vuart_dockchannel` now queues into
+  a 512-byte ring and flushes on `\n` / full / RX trap.
+
+---
+
 ## 2026-04-20 13:55 — Ubuntu — Output plateau is guest-driven, vuart tuning didn't help
 
 Big insight from re-reading the AIC-drain wedge runs next to the
