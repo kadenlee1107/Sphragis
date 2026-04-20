@@ -11,6 +11,117 @@ end of a session.
 
 ---
 
+## 2026-04-20 19:15 — Ubuntu — HV exception-counter instrumentation: reset trigger is NOT in exception path
+
+Pivoted from Path A (kernelcache RE, going to take Ghidra +
+hours) to the cheaper Option 3: instrument the HV's exception
+handlers and watch what fires in the run-up to the reset. Goal:
+before burning more time on APSC, empirically check whether the
+ceiling correlates with anything in the HV's visibility.
+
+### Instrumentation landed
+
+  - `external/m1n1/src/hv_exc.c` — independent debug counters
+    (volatile u64, outside the pcpu struct):
+      - `dbg_fiq_entries` / `dbg_fiq_slow` — FIQ handler entries
+      - `dbg_sync_entries` + decomposition (`dbg_sync_dabort`,
+        `dbg_sync_msr`, `dbg_sync_impdef`, `dbg_sync_other`)
+      - `dbg_sync_handled_un` (unlocked fast-path) /
+        `dbg_sync_handled_lk` (locked slow-path) /
+        `dbg_sync_proxied` (fell through to userspace)
+      - `dbg_irq_entries`, `dbg_serr_entries`, `dbg_vtimer_proxied`
+    Each handler increments its counter on entry; emit fires
+    every 2 s from hv_tick + once at panic/bark.
+
+  - (Also added a per-CPU stat struct with delta output —
+    `PERCPU(stat_*)++` + snapshot — but the delta path always
+    reports 0 despite the underlying counters incrementing.
+    Either the compiler-lowered `*pp = *p` copy is trampling
+    `p->x` before the subtraction reads it, or the struct
+    layout is being interpreted differently in the read vs
+    write paths. Left in as noise lines `[hv-stats …]` for
+    now; real signal is the `[hv-dbg …]` lines.)
+
+  - Wired `hv_exc_stats_init()` into `hv_init()` (after
+    `hv_wdt_init`) and `hv_exc_stats_dump_final(…)` into both
+    `hv_do_panic()` and `hv_wdt_bark()`.
+
+### What the data says (3-cycle run, cycles averaging 82–113 s)
+
+Cumulative counter trajectory across a full 113 s cycle:
+
+```
+t=  2s  fiq=1192   sync=1646      (da=1646   handled_lk=1646)
+t= 10s  fiq=9135   sync=2900518   (da=2900518  hl=2900518)   ← ~420K da/s
+t= 12s  fiq=11103  sync=3039186                               ← drops
+t= 12–42s idle — sync_rate ≈ 50 da/s
+t= 44s  fiq=42563  sync=3782784                               ← resumes
+t= 44–113s sync_rate ≈ 420K da/s again
+t=113s  fiq=112122 sync=33703811  → USB drops, Mac resets
+```
+
+Every cycle, across runs, the pattern is identical:
+  - **100 % of SYNC exceptions are data aborts** (EC = DABORT_LOWER).
+    Zero MSR, zero IMPDEF, zero Other. Guest doesn't trap any EL1
+    sysregs that we emulate.
+  - **100 % of those data aborts are handled locally** (hl
+    counter). Zero proxied (px=0), zero unlocked-fast (hu=0).
+    The vuart dockchannel MMIO emulation catches everything.
+  - **Zero IRQs** (irq=0 always). No AIC events reach the HV.
+  - **Zero SErrors** (serr=0 always). No async faults.
+  - **Zero vtimer FIQs** (vt=0 always). Guest doesn't program its
+    own vtimer under HV.
+  - **FIQ rate is constant 1 kHz** (matches `HV_TICK_RATE`),
+    right up until the moment USB drops.
+
+### The big conclusion
+
+The HV's exception handlers are perfectly quiescent in the
+seconds leading up to the reset. There is no pile-up, no async
+SError queue, no missed interrupt backlog. The timer is ticking
+at its programmed rate. Then the Mac resets, and USB drops.
+
+**Whatever is killing the M4 is completely invisible to the HV's
+exception paths.** It's not something we failed to service at
+EL2 — it's an out-of-band hardware-managed reset (PMP / AOP / SMC
+/ iBoot-era watchdog / thermal trip / some Apple PMU invariant
+we're violating). Chicken-bit init and APSC enable may still
+matter, but this rules out "we're dropping an interrupt the
+guest eventually trips on" as the cause.
+
+### What the data also reveals (side finding)
+
+The guest spends ~420 K data aborts per second on the dockchannel
+UART when interactive. That's 2.4 µs per trap. It's a busy-poll
+loop on `DC_DATA_RX_COUNT`. The 30 s quiet window between t=12 s
+and t=42 s is the DEFAULT_STIMULUS gap before the first
+"uptime" bytes arrive. Not a reset-relevant signal on its own,
+but informs the next experiment (below).
+
+### Deterministic-ceiling observation
+
+Three back-to-back cycles with default stimulus (batman + 40 ×
+uptime) died at **exactly 113 s** each (min=max=p50=113 s). Not
+a distribution; a deterministic watchdog. Rules out "chaotic
+thermal variance". The trigger fires on a fixed interval.
+
+### Immediate next experiment (in flight)
+
+Rerun supervisor with `BATOS_HV_STIMULUS="batman"` only — guest
+authenticates then idles at the `bat_os>` prompt with no uptime
+polling. This should drop the da rate from ~420 K/s (busy) to
+~50/s (idle shell). If session length stays at 113 s → wall-
+clock watchdog. If it extends significantly → CPU busy-ness /
+thermal is load-bearing.
+
+### Pending cleanup
+
+The per-CPU `stat_*` + `[hv-stats …]` emit path is broken (always
+0). Not urgent — the `dbg_*` path is giving us everything we
+need. Will either fix or remove the dead code in a follow-up.
+
+---
+
 ## 2026-04-20 18:30 — Ubuntu — Path A setup: M4 kernelcache in hand, APSC symbols located, body not yet extracted
 
 Pivoted to Path A right after Path B was disconfirmed. Goal: find

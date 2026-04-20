@@ -37,6 +37,9 @@ void hv_do_panic(void)
         printf("\n");
     }
 
+    /* M4-HV: final exc-counter snapshot before we bail out */
+    hv_exc_stats_dump_final("panic");
+
     printf("Attempting to enter proxy\n");
     iodev_console_flush();
 
@@ -67,6 +70,9 @@ void hv_wdt_bark(void)
         }
         uart_putchar('\n');
     }
+
+    /* M4-HV: final exc-counter snapshot before we bark/reboot */
+    hv_exc_stats_dump_final("bark");
 
     uart_puts("Attempting to enter proxy");
 

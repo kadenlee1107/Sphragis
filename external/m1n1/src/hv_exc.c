@@ -29,9 +29,121 @@ struct hv_pcpu_data {
     u32 pmc_pending;
     u64 pmc_irq_mode;
     u64 exc_entry_pmcr0_cnt;
+    /* M4-HV 2026-04-20 diagnostic counters. Per-CPU to avoid
+     * atomic contention — each CPU writes its own slot. Boot CPU
+     * reads all slots periodically in hv_tick() / at panic. */
+    u64 stat_fiq_fast;      /* FIQ fast-path (secondary CPU early return)    */
+    u64 stat_fiq_slow;      /* FIQ slow-path (full entry/exit)               */
+    u64 stat_fiq_ptimer;    /* physical-timer tick count (subset of slow)    */
+    u64 stat_fiq_vtimer;    /* guest vtimer proxied                          */
+    u64 stat_irq;           /* hv_exc_irq                                    */
+    u64 stat_sync_total;    /* hv_exc_sync entries                           */
+    u64 stat_sync_msr_un;   /* SYNC handled in unlocked pass (EC_MSR)        */
+    u64 stat_sync_impdef_un;/* SYNC handled in unlocked pass (EC_IMPDEF)     */
+    u64 stat_sync_dabort;   /* SYNC data abort (handled in locked pass)      */
+    u64 stat_sync_msr;      /* SYNC locked MSR                               */
+    u64 stat_sync_impdef;   /* SYNC locked impdef                            */
+    u64 stat_sync_proxied;  /* SYNC fell through to exc_proxy                */
+    u64 stat_serr;          /* hv_exc_serr                                   */
 } ALIGNED(64);
 
 struct hv_pcpu_data pcpu[MAX_CPUS];
+
+/* Snapshot-delta bookkeeping (boot CPU only).
+ * hv_exc_stats_snapshot() is called periodically from hv_tick;
+ * hv_exc_stats_dump() is called on panic/bark to emit a final
+ * record. Both print to the serial log in a grep-friendly format. */
+static u64 stat_start_cnt;
+static u64 stat_last_snap_cnt;
+static struct hv_pcpu_data stat_prev[MAX_CPUS];
+
+/* M4-HV: independent debug counters outside the pcpu struct, so we
+ * can tell the difference between "instrumentation plumbing broken"
+ * vs. "handler truly not firing". Volatile so compiler can't hoist.
+ *
+ * Decomposes SYNC by ESR_EC: dabort / msr / impdef / other, and by
+ * outcome: handled fast (unlocked MSR) vs. handled locked vs. proxied. */
+volatile u64 dbg_fiq_entries = 0;
+volatile u64 dbg_fiq_slow = 0;
+volatile u64 dbg_sync_entries = 0;
+volatile u64 dbg_sync_dabort = 0;
+volatile u64 dbg_sync_msr = 0;
+volatile u64 dbg_sync_impdef = 0;
+volatile u64 dbg_sync_other = 0;
+volatile u64 dbg_sync_handled_un = 0;
+volatile u64 dbg_sync_handled_lk = 0;
+volatile u64 dbg_sync_proxied = 0;
+volatile u64 dbg_irq_entries = 0;
+volatile u64 dbg_serr_entries = 0;
+volatile u64 dbg_vtimer_proxied = 0;
+
+void hv_exc_stats_init(void)
+{
+    stat_start_cnt = mrs(CNTPCT_EL0);
+    stat_last_snap_cnt = stat_start_cnt;
+    memset(&stat_prev, 0, sizeof(stat_prev));
+}
+
+static void _hv_exc_stats_emit(const char *tag, u64 now_cnt)
+{
+    u64 freq = mrs(CNTFRQ_EL0);
+    u64 t_ms = ((now_cnt - stat_start_cnt) * 1000) / freq;
+    u64 dt_ms = ((now_cnt - stat_last_snap_cnt) * 1000) / freq;
+    if (!dt_ms) dt_ms = 1;
+
+    /* Debug snapshot — cumulative, global. Easier to keep in one
+     * grep-friendly line so the supervisor log stays usable. */
+    printf("[hv-dbg %s t=%ldms] fiq=%lu/slow=%lu vt=%lu irq=%lu serr=%lu "
+           "sync=%lu(da=%lu msr=%lu imp=%lu oth=%lu hu=%lu hl=%lu px=%lu)\n",
+           tag, t_ms,
+           dbg_fiq_entries, dbg_fiq_slow,
+           dbg_vtimer_proxied, dbg_irq_entries, dbg_serr_entries,
+           dbg_sync_entries,
+           dbg_sync_dabort, dbg_sync_msr, dbg_sync_impdef, dbg_sync_other,
+           dbg_sync_handled_un, dbg_sync_handled_lk, dbg_sync_proxied);
+
+    for (int cpu = 0; cpu < MAX_CPUS; cpu++) {
+        if (cpu > 0 && !smp_is_alive(cpu))
+            continue;
+        struct hv_pcpu_data *p = &pcpu[cpu];
+        struct hv_pcpu_data *pp = &stat_prev[cpu];
+        /* Deltas since last snapshot */
+#define D(x) (p->x - pp->x)
+        printf("[hv-stats %s t=%ldms dt=%ldms cpu%d] "
+               "Ff=%lu Fs=%lu Tk=%lu Vt=%lu "
+               "I=%lu "
+               "S=%lu(mu=%lu iu=%lu da=%lu m=%lu i=%lu px=%lu) "
+               "E=%lu\n",
+               tag, t_ms, dt_ms, cpu,
+               D(stat_fiq_fast), D(stat_fiq_slow), D(stat_fiq_ptimer), D(stat_fiq_vtimer),
+               D(stat_irq),
+               D(stat_sync_total),
+               D(stat_sync_msr_un),
+               D(stat_sync_impdef_un),
+               D(stat_sync_dabort),
+               D(stat_sync_msr),
+               D(stat_sync_impdef),
+               D(stat_sync_proxied),
+               D(stat_serr));
+#undef D
+        *pp = *p;
+    }
+    stat_last_snap_cnt = now_cnt;
+}
+
+void hv_exc_stats_snapshot(void)
+{
+    u64 now = mrs(CNTPCT_EL0);
+    u64 freq = mrs(CNTFRQ_EL0);
+    if ((now - stat_last_snap_cnt) < (freq * 2)) /* every 2 s */
+        return;
+    _hv_exc_stats_emit("snap", now);
+}
+
+void hv_exc_stats_dump_final(const char *why)
+{
+    _hv_exc_stats_emit(why, mrs(CNTPCT_EL0));
+}
 
 void hv_exit_guest(void) __attribute__((noreturn));
 
@@ -448,20 +560,32 @@ static void hv_exc_exit(struct exc_info *ctx)
 void hv_exc_sync(struct exc_info *ctx)
 {
     hv_wdt_breadcrumb('S');
+    dbg_sync_entries++;
+    PERCPU(stat_sync_total)++;
     hv_get_context(ctx);
     bool handled = false;
     u32 ec = FIELD_GET(ESR_EC, ctx->esr);
+
+    /* Classify by EC (exception class in ESR) before dispatch */
+    switch (ec) {
+        case ESR_EC_DABORT_LOWER: dbg_sync_dabort++;  break;
+        case ESR_EC_MSR:          dbg_sync_msr++;     break;
+        case ESR_EC_IMPDEF:       dbg_sync_impdef++;  break;
+        default:                  dbg_sync_other++;   break;
+    }
 
     switch (ec) {
         case ESR_EC_MSR:
             hv_wdt_breadcrumb('m');
             handled = hv_handle_msr_unlocked(ctx, FIELD_GET(ESR_ISS, ctx->esr));
+            if (handled) PERCPU(stat_sync_msr_un)++;
             break;
         case ESR_EC_IMPDEF:
             hv_wdt_breadcrumb('a');
             switch (FIELD_GET(ESR_ISS, ctx->esr)) {
                 case ESR_ISS_IMPDEF_MSR:
                     handled = hv_handle_msr_unlocked(ctx, ctx->afsr1);
+                    if (handled) PERCPU(stat_sync_impdef_un)++;
                     break;
             }
             break;
@@ -469,6 +593,7 @@ void hv_exc_sync(struct exc_info *ctx)
 
     if (handled) {
         hv_wdt_breadcrumb('#');
+        dbg_sync_handled_un++;
         ctx->elr += 4;
         hv_set_elr(ctx->elr);
         hv_update_fiq();
@@ -482,16 +607,19 @@ void hv_exc_sync(struct exc_info *ctx)
         case ESR_EC_DABORT_LOWER:
             hv_wdt_breadcrumb('D');
             handled = hv_handle_dabort(ctx);
+            PERCPU(stat_sync_dabort)++;
             break;
         case ESR_EC_MSR:
             hv_wdt_breadcrumb('M');
             handled = hv_handle_msr(ctx, FIELD_GET(ESR_ISS, ctx->esr));
+            PERCPU(stat_sync_msr)++;
             break;
         case ESR_EC_IMPDEF:
             hv_wdt_breadcrumb('A');
             switch (FIELD_GET(ESR_ISS, ctx->esr)) {
                 case ESR_ISS_IMPDEF_MSR:
                     handled = hv_handle_msr(ctx, ctx->afsr1);
+                    PERCPU(stat_sync_impdef)++;
                     break;
             }
             break;
@@ -499,9 +627,12 @@ void hv_exc_sync(struct exc_info *ctx)
 
     if (handled) {
         hv_wdt_breadcrumb('+');
+        dbg_sync_handled_lk++;
         ctx->elr += 4;
     } else {
         hv_wdt_breadcrumb('-');
+        dbg_sync_proxied++;
+        PERCPU(stat_sync_proxied)++;
         // VM code can forward a nested SError exception here
         if (FIELD_GET(ESR_EC, ctx->esr) == ESR_EC_SERROR)
             hv_exc_proxy(ctx, START_EXCEPTION_LOWER, EXC_SERROR, NULL);
@@ -516,6 +647,8 @@ void hv_exc_sync(struct exc_info *ctx)
 void hv_exc_irq(struct exc_info *ctx)
 {
     hv_wdt_breadcrumb('I');
+    dbg_irq_entries++;
+    PERCPU(stat_irq)++;
     hv_get_context(ctx);
     hv_exc_entry();
     hv_exc_proxy(ctx, START_EXCEPTION_LOWER, EXC_IRQ, NULL);
@@ -527,6 +660,7 @@ void hv_exc_fiq(struct exc_info *ctx)
 {
     bool tick = false;
 
+    dbg_fiq_entries++;
     hv_maybe_exit();
 
     if (mrs(CNTP_CTL_EL0) == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
@@ -540,6 +674,8 @@ void hv_exc_fiq(struct exc_info *ctx)
 
     if (smp_id() != interruptible_cpu && !(mrs(ISR_EL1) & 0x40) && hv_want_cpu == -1) {
         // Non-interruptible CPU and it was just a timer tick (or spurious), so just update FIQs
+        PERCPU(stat_fiq_fast)++;
+        if (tick) PERCPU(stat_fiq_ptimer)++;
         hv_update_fiq();
         hv_arm_tick(true);
         return;
@@ -547,6 +683,9 @@ void hv_exc_fiq(struct exc_info *ctx)
 
     // Slow (single threaded) path
     hv_wdt_breadcrumb('F');
+    dbg_fiq_slow++;
+    PERCPU(stat_fiq_slow)++;
+    if (tick) PERCPU(stat_fiq_ptimer)++;
     hv_get_context(ctx);
     hv_exc_entry();
 
@@ -562,6 +701,8 @@ void hv_exc_fiq(struct exc_info *ctx)
 
     if (mrs(CNTV_CTL_EL0) == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
         msr(CNTV_CTL_EL0, CNTx_CTL_ISTATUS | CNTx_CTL_IMASK | CNTx_CTL_ENABLE);
+        PERCPU(stat_fiq_vtimer)++;
+        dbg_vtimer_proxied++;
         hv_exc_proxy(ctx, START_HV, HV_VTIMER, NULL);
     }
 
@@ -619,6 +760,8 @@ void hv_exc_fiq(struct exc_info *ctx)
 void hv_exc_serr(struct exc_info *ctx)
 {
     hv_wdt_breadcrumb('E');
+    dbg_serr_entries++;
+    PERCPU(stat_serr)++;
     hv_get_context(ctx);
     hv_exc_entry();
     hv_exc_proxy(ctx, START_EXCEPTION_LOWER, EXC_SERROR, NULL);

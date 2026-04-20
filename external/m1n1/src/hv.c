@@ -77,6 +77,9 @@ void hv_init(void)
     hv_wdt_init();
     printf("[hv_init] M6 hv_wdt_init\n");
 
+    hv_exc_stats_init();
+    printf("[hv_init] M6.5 hv_exc_stats_init\n");
+
     hv_pt_init();
     printf("[hv_init] M7 hv_pt_init\n");
 
@@ -449,6 +452,11 @@ void hv_maybe_exit(void)
 void hv_tick(struct exc_info *ctx)
 {
     hv_wdt_pet();
+    /* M4-HV diagnostic: per-CPU event stats every ~2 s. Only the
+     * interruptible (boot) CPU reaches hv_tick in the steady state,
+     * which is also the only CPU that has smp-consistent access to
+     * every other CPU's pcpu slot. */
+    hv_exc_stats_snapshot();
     iodev_handle_events(uartproxy_iodev);
     if (iodev_can_read(uartproxy_iodev)) {
         printf("HV: User interrupt\n");

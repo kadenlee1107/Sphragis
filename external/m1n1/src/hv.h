@@ -84,6 +84,16 @@ void hv_exc_proxy(struct exc_info *ctx, uartproxy_boot_reason_t reason, u32 type
 void hv_set_time_stealing(bool enabled, bool reset);
 void hv_add_time(s64 time);
 
+/* M4-HV 2026-04-20 diagnostic counters (hv_exc.c).
+ * hv_exc_stats_init() called once at hv_init.
+ * hv_exc_stats_snapshot() called periodically from hv_tick —
+ *   prints a delta line every ~2 s. No-op if less than 2 s elapsed.
+ * hv_exc_stats_dump_final(why) called from panic/bark paths —
+ *   prints a final "dt" row with counts since the last snapshot. */
+void hv_exc_stats_init(void);
+void hv_exc_stats_snapshot(void);
+void hv_exc_stats_dump_final(const char *why);
+
 /* WDT */
 void hv_wdt_pet(void);
 void hv_wdt_suspend(void);
