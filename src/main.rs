@@ -638,23 +638,183 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         // the actual display (not just over USB serial) that Bat_OS
         // owns the M4. Fills the framebuffer m1n1 set up.
         drivers::apple::dcp::boot_splash();
-        // At this point boot_splash has overwritten the FB with the
-        // real Bat_OS splash; no more diag bands make sense.
-        drivers::apple::uart::puts("[boot] Splash rendered — launching desktop\n\n");
+        drivers::apple::uart::puts("[boot] Splash rendered — launching apple shell\n\n");
 
         // Initialize SPI keyboard
         let _ = drivers::apple::spi::init();
 
-        // Launch desktop
-        ui::desktop::run();
+        // `ui::desktop::run()` is virtio-gpu + ARGB8888-native and
+        // dead-ends on M4 (no virtio device, PL011 getc returns None
+        // forever). Apple path gets its own minimal shell that drives
+        // real kernel ops via the dockchannel UART.
+        apple_serial_shell();
     } else {
         drivers::apple::uart::puts("[boot] No display — serial shell\n\n");
-        // Serial-only fallback
-        loop {
-            if let Some(c) = drivers::apple::uart::getc() {
-                drivers::apple::uart::putc(c); // Echo
+        apple_serial_shell();
+    }
+}
+
+/// Interactive shell for the M4 path: reads a command line from the
+/// dockchannel UART, dispatches into real kernel ops (memory stats,
+/// BatFS, ...), and prints results back over the same UART.
+///
+/// Note: with m1n1 replaced by our payload, the Mac's USB-CDC
+/// endpoint is gone — so Ubuntu can't read/write this serial until
+/// Bat_OS gets its own USB-CDC class driver. Until then this runs
+/// silently (getc() returns None), but the shell itself is fully
+/// functional: once a real byte stream arrives it will parse
+/// commands and execute against the live kernel.
+fn apple_serial_shell() -> ! {
+    use drivers::apple::uart;
+
+    uart::puts("\n");
+    uart::puts("bat_os> ");
+
+    let mut buf = [0u8; 128];
+    let mut len: usize = 0;
+
+    loop {
+        let Some(c) = uart::getc() else {
+            unsafe { core::arch::asm!("wfe"); }
+            continue;
+        };
+        match c {
+            b'\r' | b'\n' => {
+                uart::puts("\r\n");
+                if len > 0 {
+                    let cmd = unsafe { core::str::from_utf8_unchecked(&buf[..len]) };
+                    apple_shell_dispatch(cmd);
+                    len = 0;
+                }
+                uart::puts("bat_os> ");
             }
-            core::hint::spin_loop();
+            0x08 | 0x7F => {
+                if len > 0 {
+                    len -= 1;
+                    uart::putc(0x08); uart::putc(b' '); uart::putc(0x08);
+                }
+            }
+            _ if c >= 0x20 && c < 0x7F && len < buf.len() => {
+                buf[len] = c;
+                len += 1;
+                uart::putc(c);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Parse + execute a single shell command on the Apple path. All
+/// real kernel operations; no fake output. Unknown commands print
+/// an error and return.
+fn apple_shell_dispatch(line: &str) {
+    use drivers::apple::uart;
+
+    let line = line.trim_end_matches(|c: char| c == '\r' || c == '\n' || c == ' ');
+    let mut parts = line.splitn(3, ' ');
+    let cmd = parts.next().unwrap_or("");
+
+    match cmd {
+        "" => {}
+        "help" => {
+            uart::puts("  help           — list commands\n");
+            uart::puts("  uname          — kernel identity\n");
+            uart::puts("  mem            — frame allocator stats\n");
+            uart::puts("  fb             — framebuffer info\n");
+            uart::puts("  uptime         — ticks since boot (CNTPCT_EL0 / CNTFRQ_EL0)\n");
+            uart::puts("  batfs ls       — list BatFS files\n");
+            uart::puts("  batfs create <name> <plaintext>\n");
+            uart::puts("  batfs read <name>\n");
+            uart::puts("  halt           — WFE loop\n");
+        }
+        "uname" => {
+            uart::puts("Bat_OS aarch64 (Apple M4 / T8132 Donan)\n");
+        }
+        "mem" => {
+            let (used, total) = kernel::mm::frame::stats();
+            uart::puts("  frames used: "); kernel::mm::print_num(used); uart::puts("\n");
+            uart::puts("  frames total: "); kernel::mm::print_num(total); uart::puts("\n");
+            uart::puts("  free KiB: "); kernel::mm::print_num((total - used) * 4); uart::puts("\n");
+        }
+        "fb" => {
+            use drivers::apple::soc;
+            uart::puts("  base: 0x"); uart::puthex64(soc::fb_base() as u64); uart::puts("\n");
+            uart::puts("  width: "); kernel::mm::print_num(soc::fb_width() as usize); uart::puts("\n");
+            uart::puts("  height: "); kernel::mm::print_num(soc::fb_height() as usize); uart::puts("\n");
+            uart::puts("  stride: 0x"); uart::puthex32(soc::fb_stride()); uart::puts("\n");
+        }
+        "uptime" => {
+            let cnt: u64; let freq: u64;
+            unsafe {
+                core::arch::asm!("mrs {}, cntpct_el0", out(reg) cnt);
+                core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+            }
+            let secs = if freq > 0 { cnt / freq } else { 0 };
+            uart::puts("  cntpct: 0x"); uart::puthex64(cnt); uart::puts("\n");
+            uart::puts("  cntfrq: "); kernel::mm::print_num(freq as usize); uart::puts(" Hz\n");
+            uart::puts("  seconds: "); kernel::mm::print_num(secs as usize); uart::puts("\n");
+        }
+        "halt" => {
+            uart::puts("  halting (wfe)\n");
+            loop { unsafe { core::arch::asm!("wfe"); } }
+        }
+        "batfs" => {
+            let sub = parts.next().unwrap_or("");
+            match sub {
+                "ls" => {
+                    let (count, cap) = fs::batfs::stats();
+                    uart::puts("  files: "); kernel::mm::print_num(count);
+                    uart::puts(" / "); kernel::mm::print_num(cap); uart::puts("\n");
+                    fs::batfs::list(|name, size, enc| {
+                        uart::puts("  ");
+                        uart::puts(name);
+                        uart::puts(" (");
+                        kernel::mm::print_num(size);
+                        uart::puts(if enc { " B, enc)\n" } else { " B, plain)\n" });
+                    });
+                }
+                "create" => {
+                    let rest = parts.next().unwrap_or("");
+                    let mut name_body = rest.splitn(2, ' ');
+                    let name = name_body.next().unwrap_or("");
+                    let body = name_body.next().unwrap_or("");
+                    if name.is_empty() {
+                        uart::puts("  usage: batfs create <name> <plaintext>\n");
+                    } else {
+                        match fs::batfs::create(name, body.as_bytes()) {
+                            Ok(()) => uart::puts("  ok\n"),
+                            Err(e) => { uart::puts("  error: "); uart::puts(e); uart::puts("\n"); }
+                        }
+                    }
+                }
+                "read" => {
+                    let name = parts.next().unwrap_or("");
+                    if name.is_empty() {
+                        uart::puts("  usage: batfs read <name>\n");
+                    } else {
+                        let mut out = [0u8; 256];
+                        match fs::batfs::read(name, &mut out) {
+                            Ok(n) => {
+                                uart::puts("  (");
+                                kernel::mm::print_num(n);
+                                uart::puts(" B) ");
+                                let s = core::str::from_utf8(&out[..n]).unwrap_or("<non-utf8>");
+                                uart::puts(s);
+                                uart::puts("\n");
+                            }
+                            Err(e) => { uart::puts("  error: "); uart::puts(e); uart::puts("\n"); }
+                        }
+                    }
+                }
+                _ => {
+                    uart::puts("  batfs: unknown subcommand — try `help`\n");
+                }
+            }
+        }
+        _ => {
+            uart::puts("  unknown command: ");
+            uart::puts(cmd);
+            uart::puts("\n");
         }
     }
 }
