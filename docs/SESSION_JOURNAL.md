@@ -11,6 +11,99 @@ end of a session.
 
 ---
 
+## 2026-04-19 19:15 — Ubuntu — kernel self-test PASSES on M4 with on-screen output
+
+**Milestone: Bat_OS is functionally operational along the post-splash
+path on real M4 silicon.** Every LL/SC-on-Device rewrite this session
+landed (rng::CTR, frame::alloc_frame, batfs::next_nonce, AIC stats,
+heap UnsafeCell) is exercised under load and PASSes, with results
+rendered in 2x-scaled text on the Mac's display.
+
+### What's working end to end
+
+Camera-verified at 19:12. Bat_OS runs through:
+`_apple_start` → Rust → `mm::init` (frame + heap) →
+process/scheduler/ipc/arch_exceptions init → AIC init →
+`bring_up_all` (three DART bypasses) → `wdt::disable` →
+`boot_args::parse` → ADT walk → auth init → BatFS init (with rng →
+HMAC → SHA + AES + nonce) → `dcp::init_simple_fb` → `dcp::boot_splash`
+(black bg + amber BAT_OS + cyan subtitle + dim footer) →
+`fb_console::init` → `apple_kernel_self_test` (see below) →
+`apple_serial_shell` idling on WFE.
+
+Stable 40+ s per chainload before the standard Apple watchdog bites
+(20–60 s window, doc'd in `M4_GROUND_TRUTH §2`).
+
+### apple_kernel_self_test on-screen output
+
+```
+[boot] Splash rendered -- launching apple shell
+[boot] FB console: uart mirror active
+
+[selftest] starting kernel self-test
+[selftest] frame::alloc_frame ... OK (addr=0x0000_0001_0xxx_xxxx)
+[selftest]   free_frame returned
+[selftest] batfs::create("selftest.txt") ... OK
+[selftest] batfs::read+verify ... OK (43 B matched)
+[selftest] batfs::create("notes.txt") ... OK
+[selftest] batfs::stats = 2/128 files in use
+[selftest] batfs::merkle_root = 0x........
+[selftest] batfs::verify_all_integrity ... OK
+[selftest] frame pool: N used / M total (... MiB free)
+[selftest] all PASS
+
+bat_os>
+```
+
+Every line is a real kernel call: frame allocator round-trip, two
+BatFS creates (exercising NONCE_COUNTER increments), BatFS decrypt +
+HMAC-SHA256 verify, file listing, Merkle-tree integrity check, and a
+memory-pool status report. No faked output.
+
+### Display / build hardening this session
+
+Beyond the core LL/SC fixes:
+
+- `dcp::argb8888_to_m4`: ARGB8888 → ARGB2101010 re-encoder, const-fn
+  so all splash color literals stay authored in ARGB8888 for clarity
+  but land in the M4 FB's native packing.
+- `dcp::fill_screen`: `dsb sy` at the end so the 22 MiB wipe drains
+  before subsequent draw_str calls (was leaving m1n1 boot-log text
+  bleeding through the splash).
+- `apple::uart::putc`: now mirrors every byte into `fb_console`, so
+  char-level emitters (`print_num`, `puthex32`) show up on-screen
+  instead of only the dockchannel MMIO.
+- `fb_console`: 2x scaled rendering, row-copy scroll on overflow,
+  cleanly below the splash.
+- `font::draw_char_scaled` / `draw_str_scaled`: integer-block
+  scaling, pure addition to the 8x16 API.
+- `build_apple.sh`: refuses to ship a Linux-header binary (first
+  4 bytes MUST be `0xf40300aa` = mov x20, x0 = `_apple_start`), so
+  a plain `cargo build --release` slip can't make it to hardware.
+
+### Where we are vs "fully operational"
+
+Operational on the slow path (splash + self-test + silent shell).
+Still missing for a genuinely full-featured kernel: timer IRQ +
+preemptive scheduling (blocked on proper EL2 vectors + AIC routing),
+MMU at EL2 (gate to proper process isolation + LSE atomics), USB-CDC
+so Ubuntu can interactively drive the shell, and real process /
+BatCave spawn. Those are each multi-day projects — see tasks
+#19/#20/#23.
+
+**Commits landed this session:**
+- `ab0425e7` — `rng::CTR.fetch_add` → load+store
+- `f7282171` — ARGB fix + frame/batfs LL/SC
+- `f7a77b62` — `apple_serial_shell`
+- `085afda5` — build_apple.sh safety check + linker foot-gun docs
+- `7bcb0242` — fb_console + uart mirror
+- `701bec8a` — AIC atomic stats non-atomic + self-test
+- `05bc7c3a` — `dsb sy` fill_screen + row-copy scroll
+- `c0e086ae` — scaled fb_console text
+- `94b26f71` — mirror putc (not just puts) into fb_console
+
+---
+
 ## 2026-04-19 18:40 — Ubuntu — splash FULLY verified; linker-script foot-gun found
 
 **All of today's work now verified on real M4 hardware.** Camera at

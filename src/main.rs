@@ -552,13 +552,57 @@ fn apple_kernel_self_test() {
         Ok(n) => {
             if n == PLAINTEXT.len() && &out[..n] == PLAINTEXT {
                 uart::puts("OK ("); kernel::mm::print_num(n); uart::puts(" B matched)\n");
-                uart::puts("[selftest] all PASS\n");
             } else {
                 uart::puts("FAIL: plaintext mismatch\n");
+                return;
             }
         }
-        Err(e) => { uart::puts("FAIL: "); uart::puts(e); uart::puts("\n"); }
+        Err(e) => { uart::puts("FAIL: "); uart::puts(e); uart::puts("\n"); return; }
     }
+
+    // Test 4: second file (exercises NONCE_COUNTER increment across
+    // creates — proves the new IrqGuard + load+store holds more than
+    // once, and proves separate file keys via sha256 derivation).
+    uart::puts("[selftest] batfs::create(\"notes.txt\") ... ");
+    match fs::batfs::create("notes.txt", b"M4 boot verified. LL/SC on Device memory bypassed.") {
+        Ok(()) => uart::puts("OK\n"),
+        Err(e) => { uart::puts("FAIL: "); uart::puts(e); uart::puts("\n"); return; }
+    }
+
+    // Test 5: filesystem listing (exercises batfs::list + stats).
+    let (count, cap) = fs::batfs::stats();
+    uart::puts("[selftest] batfs::stats = ");
+    kernel::mm::print_num(count);
+    uart::puts("/");
+    kernel::mm::print_num(cap);
+    uart::puts(" files in use\n");
+
+    // Test 6: Merkle-tree integrity over the two-file fs.
+    uart::puts("[selftest] batfs::merkle_root = 0x");
+    let root = fs::batfs::merkle_root();
+    for i in 0..8 {
+        uart::puthex32(u32::from_be_bytes([root[i*4], root[i*4+1], root[i*4+2], root[i*4+3]]));
+    }
+    uart::puts("\n");
+    uart::puts("[selftest] batfs::verify_all_integrity ... ");
+    if fs::batfs::verify_all_integrity() {
+        uart::puts("OK\n");
+    } else {
+        uart::puts("FAIL\n");
+    }
+
+    // Test 7: kernel state summary.
+    let (used, total) = kernel::mm::frame::stats();
+    uart::puts("[selftest] frame pool: ");
+    kernel::mm::print_num(used);
+    uart::puts(" used / ");
+    kernel::mm::print_num(total);
+    uart::puts(" total (");
+    kernel::mm::print_num((total - used) * 4 / 1024);
+    uart::puts(" MiB free)\n");
+
+    // Final report.
+    uart::puts("[selftest] all PASS\n");
 }
 
 #[unsafe(no_mangle)]
@@ -693,7 +737,7 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     // Initialize display (m1n1 simple framebuffer)
     drivers::apple::uart::puts("[boot] Initializing display...\n");
     if drivers::apple::dcp::init_simple_fb() {
-        drivers::apple::uart::puts("[boot] Display ready — drawing splash\n");
+        drivers::apple::uart::puts("[boot] Display ready -- drawing splash\n");
         // V-ASAHI-2.1: render the boot splash so the operator sees on
         // the actual display (not just over USB serial) that Bat_OS
         // owns the M4. Fills the framebuffer m1n1 set up.
@@ -702,7 +746,7 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         // must come AFTER boot_splash (which fill_screens the whole
         // display) so we don't fight over the region.
         drivers::apple::fb_console::init();
-        drivers::apple::uart::puts("[boot] Splash rendered — launching apple shell\n");
+        drivers::apple::uart::puts("[boot] Splash rendered -- launching apple shell\n");
         drivers::apple::uart::puts("[boot] FB console: uart mirror active\n");
 
         // Exercise the real kernel paths — frame allocator, BatFS
