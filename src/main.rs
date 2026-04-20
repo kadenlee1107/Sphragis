@@ -767,20 +767,27 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         drivers::apple::print_bring_up_report(&bu);
     }
 
-    // ATTACK-CRYPTO-004 / FLv2-NEW-006: Apple path currently falls back
-    // to the dev default (empty input) because the Apple UART driver has
-    // no blocking getc yet. When that lands, swap `read_passphrase_apple`
-    // for the real interactive variant.
+    // V-APPLE-AUTH-1: passphrase resolution — same priority order as
+    // the QEMU path, so `BAT_OS_PASSPHRASE=<plaintext>` at build time
+    // works identically on both targets:
+    //   1. BAT_OS_PASSPHRASE (option_env!) — baked at build time
+    //   2. read_passphrase_apple (non-blocking UART prompt) if we
+    //      actually got bytes
+    //   3. dev_fallback (SHA-256 over kernel-image hash — same as QEMU)
+    const BUILD_PASSPHRASE_APPLE: Option<&str> = option_env!("BAT_OS_PASSPHRASE");
+    const BUILD_DURESS_APPLE: Option<&str> = option_env!("BAT_OS_DURESS");
     let mut passphrase_buf = [0u8; 128];
     let passphrase_len = read_passphrase_apple(&mut passphrase_buf);
-    // V6-WEIRD-002: dev-fallback derived from kernel-text hash via
-    // derive_secret_string (not stored as a literal).
     let mut dev_fallback_buf_apple = [0u8; 16];
-    let dev_fb_len = if passphrase_len == 0 {
+    let dev_fb_len = derive_secret_string(DEV_FALLBACK_LABEL,
+                                          &mut dev_fallback_buf_apple).len();
+    let mut duress_buf_apple = [0u8; 16];
+    let duress_apple_bytes = derive_secret_string(DURESS_LABEL, &mut duress_buf_apple);
+    let passphrase_slice: &[u8] = if let Some(s) = BUILD_PASSPHRASE_APPLE {
+        drivers::apple::uart::puts("  [auth] using BAT_OS_PASSPHRASE (build-time)\n");
+        s.as_bytes()
+    } else if passphrase_len == 0 {
         drivers::apple::uart::puts("  (empty — dev fallback)\n");
-        derive_secret_string(DEV_FALLBACK_LABEL, &mut dev_fallback_buf_apple).len()
-    } else { 0 };
-    let passphrase_slice: &[u8] = if passphrase_len == 0 {
         &dev_fallback_buf_apple[..dev_fb_len]
     } else {
         &passphrase_buf[..passphrase_len]
@@ -817,21 +824,29 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
             let _ = drivers::apple::spi::init();
         }
 
-        // V-APPLE-UX-1: paint the auth-gate login screen for preview.
-        // Uses the ui::gpu platform-neutral shim so the exact same
-        // rendering code QEMU uses lands on the M4 LCD. Full
-        // verify-loop boot_screen::run() is the next step — for now
-        // we paint once, hold for a few seconds so a `screen` dump
-        // can capture it, then proceed into the shell.
-        let mut duress_buf_apple = [0u8; 16];
-        let duress_apple = derive_secret_string(DURESS_LABEL, &mut duress_buf_apple);
+        // V-APPLE-AUTH-2: real auth gate. Same flow as QEMU:
+        //   1. auth::init with the resolved passphrase + duress code.
+        //   2. boot_screen::run() — renders login, blocks on input,
+        //      verifies. Returns only on SUCCESS (Duress triggers
+        //      silent wipe + noreturn; LockedOut halts).
+        //
+        // Input route: platform::serial_getc() on Apple returns SPI
+        // first (None under HV) then dockchannel UART. Under the
+        // batos_hv_interactive.py script, keystrokes from Ubuntu
+        // → /dev/ttyACM2 → m1n1 vuart hook → guest RX ring → getc.
+        //
+        // Override the compiled-in passphrase at build time:
+        //   BAT_OS_PASSPHRASE=mypass bash build_apple.sh
         let passphrase_str_apple = core::str::from_utf8(passphrase_slice)
-            .unwrap_or_else(|_| core::str::from_utf8(duress_apple).unwrap_or(""));
-        let duress_str_apple = core::str::from_utf8(duress_apple).unwrap_or("");
+            .unwrap_or("");
+        let duress_str_apple = match BUILD_DURESS_APPLE {
+            Some(s) => s,
+            None => core::str::from_utf8(duress_apple_bytes).unwrap_or(""),
+        };
         security::auth::init(passphrase_str_apple, duress_str_apple);
-        drivers::apple::uart::puts("[security] Painting auth gate (dev preview)...\n");
-        security::boot_screen::run_dev_preview(8_000);
-        drivers::apple::uart::puts("[security] Auth preview done — launching shell\n");
+        drivers::apple::uart::puts("[security] Launching auth gate — type passphrase to unlock\n");
+        security::boot_screen::run();
+        drivers::apple::uart::puts("[security] AUTH PASSED — launching shell\n");
 
         // V-APPLE-UX-2: arm dead-man's-switch (48 h) just like QEMU.
         security::deadman::arm(48);
