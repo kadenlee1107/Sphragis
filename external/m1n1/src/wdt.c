@@ -11,6 +11,13 @@
 
 static u64 wdt_base = 0;
 
+void wdt_kick(void)
+{
+    if (!wdt_base)
+        return;
+    write32(wdt_base + WDT_COUNT, 0);
+}
+
 void wdt_disable(void)
 {
     int path[8];

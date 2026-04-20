@@ -12,6 +12,7 @@
 #include "string.h"
 #include "usb.h"
 #include "utils.h"
+#include "wdt.h"
 
 #define HV_TICK_RATE      1000
 #define HV_SLOW_TICK_RATE 1
@@ -466,6 +467,14 @@ void hv_tick(struct exc_info *ctx)
     // UART IRQs as expected.
     if (chip_id != T8132)
         hv_vuart_poll();
-    else
+    else {
         iodev_handle_events(IODEV_USB_VUART);
+        // M4-HV probe (2026-04-20): kick the SoC WDT countdown register.
+        // Stock m1n1 writes WDT_CTL=0 during init and assumes that
+        // disables the WDT block — the M1/M2 layout. On M4/T8132 that
+        // write may only clear one enable and leave the freerunning
+        // countdown alive. If this extends session length beyond the
+        // tick-enabled ~86 s baseline, M4 WDT is the wall-clock source.
+        wdt_kick();
+    }
 }

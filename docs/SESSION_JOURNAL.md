@@ -11,6 +11,73 @@ end of a session.
 
 ---
 
+## 2026-04-20 11:35 — Ubuntu — WDT tickle probe: marginal (96 s) + what's next
+
+Added a `wdt_kick()` helper in m1n1 (`external/m1n1/src/wdt.c`) that
+writes 0 to `wdt_base + WDT_COUNT`, and called it from `hv_tick()`
+on T8132 right after the vuart drain. Hypothesis: stock m1n1's
+`wdt_disable()` writes `WDT_CTL = 0` assuming the M1/M2 layout,
+but on M4 that may leave the freerunning countdown alive — resetting
+the count every tick would starve the watchdog.
+
+Result, same pipeline as the 11:05 A/B: last heartbeat
+**t=96s traps=37508946** → USB drop.
+log: `docs/2026-04-20_hv_wdt_probe_96s.txt`
+
+That's +10 s over the tick-only 86 s baseline. Within run-to-run
+variance. So WDT_COUNT isn't the primary trigger — but the write
+is cheap, defensive against an M4 WDT-layout mismatch, and caused
+no new exceptions (heartbeats monotonic right up to USB drop),
+so the `wdt_kick` call stays in.
+
+### Where that leaves us
+
+  - tick off, no kick: ~60 s
+  - tick on,  no kick: ~86 s
+  - tick on,  +kick:   ~96 s
+
+Session-length ceiling is still **sub-2-min**. The two cheap wins
+are spent. Remaining theories, in rough order of effort:
+
+1. **Real SMC/AOP RTKit keepalive.** The SMC block has a boot path
+   in `external/m1n1/src/smc.c` (already called from `dcp.c` for
+   HDMI-GPIO power). Hypothesis: the SMC co-processor (or its
+   iBoot watchdog) expects periodic mailbox traffic. Stock m1n1
+   fires `SMC_WRITE_KEY` exactly once during DCP init and never
+   again, which is enough at boot but not for multi-minute idle.
+   Plan: stand up a long-lived `smc_dev_t` at m1n1 init, poll
+   `rtkit_recv` from `hv_tick`, and periodically write a harmless
+   key (e.g. re-write the HDMI GPIO key to the same value once per
+   second). Risk: rtkit is non-trivial under HV (ASC MMIO + DART
+   shmem + IRQs all live in the same region we're passthrough-
+   ing), so expect to iterate.
+
+2. **PMGR-level watchdog we haven't identified.** On M1/M2 only
+   `/arm-io/wdt` exists. M4's ADT may carry a second WDT node
+   (e.g. `/arm-io/wdt-aop`, `/arm-io/wdt-ans`). Worth a one-pass
+   ADT walk on a fresh chainload dumping every node whose name
+   matches `wdt`/`watchdog`/`keepalive`. If found, apply the same
+   CTL=0 pattern.
+
+3. **Thermal/cpufreq watchdog.** M4_GROUND_TRUTH notes
+   `cpufreq: Chip 0x8132 is unsupported` + spontaneous-reset
+   pattern under load. Bat_OS guest currently runs at whatever
+   default PMGR dialed in. If the OS fails to ack a thermal
+   request inside N seconds the chip may bounce. Hard to validate
+   without a thermal-request trace.
+
+My read is (1) is the highest-leverage next step and fits in a
+session once the RTKit-under-HV plumbing question is resolved.
+
+### Changes committed this increment
+
+- `external/m1n1/src/wdt.{c,h}` — new `wdt_kick()` public fn.
+- `external/m1n1/src/hv.c` — include `wdt.h`; call `wdt_kick()`
+  from the M4 branch of `hv_tick()`.
+- `docs/2026-04-20_hv_wdt_probe_96s.txt` — evidence log.
+
+---
+
 ## 2026-04-20 11:05 — Ubuntu — hv_arm_tick re-enabled on M4: +43% session length
 
 Task #6 revisited. The journal's 2026-04-19 22:30 entry concluded

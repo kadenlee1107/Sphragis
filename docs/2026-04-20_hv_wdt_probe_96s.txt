@@ -1,0 +1,363 @@
+Fetching ADT (0x00084000 bytes)...
+Disable iodev 4
+Disable iodev 6
+Disable iodev 7
+Disable iodev 8
+Disable iodev 9
+Disable iodev 10
+Disable iodev 11
+Initializing hypervisor over iodev 5
+TTY> [hv_init] M0 enter
+TTY> [hv_init] M1 pcie_shutdown
+TTY> [hv_init] M2 display_shutdown
+TTY> [hv_init] M3 usb_hpm_restore
+TTY> Starting secondary CPUs...
+TTY> [hv_init] M4 smp_start_secondaries
+TTY> [hv_init] M5 smp_set_wfe_mode
+TTY> [hv_init] M6 hv_wdt_init
+TTY> HV: Initializing for 42-bit PA range
+TTY> [hv_init] M7 hv_pt_init
+TTY> [hv_init] M8 hv_write_hcr
+TTY> [hv_init] M9 msr VBAR_EL12
+TTY> [hv_init] M10 tick_interval
+TTY> [hv_init] M11 has_ecv=1
+TTY> HV: ECV enabled
+TTY> [hv_init] M12 CNTHCTL set
+TTY> [hv_init] M13 cyc_ovrd
+TTY> [hv_init] M14 done
+[host] loading /home/kaden-lee/code/Bat_OS/target/bat_os_apple.bin
+Mapping MMIO range: 0x200000000 .. 0x5a0000000
+Mapping MMIO range: 0x400000000 .. 0x404074000
+Mapping MMIO range: 0x408000000 .. 0x40c074000
+Mapping MMIO range: 0x410000000 .. 0x414074000
+Mapping MMIO range: 0x418000000 .. 0x41c074000
+Mapping MMIO range: 0x800000000 .. 0xa00000000
+Mapping MMIO range: 0xc00000000 .. 0xe00000000
+Mapping MMIO range: 0x1000000000 .. 0x1200000000
+Mapping MMIO range: 0x1400000000 .. 0x1600000000
+Mapping MMIO range: 0xa00000000 .. 0xa80000000
+Mapping MMIO range: 0xe00000000 .. 0xe80000000
+Mapping MMIO range: 0x1200000000 .. 0x1280000000
+Mapping MMIO range: 0x1600000000 .. 0x1680000000
+Mapping MMIO range: 0x1c50000000 .. 0x1c60000000
+Mapping MMIO range: 0x1c60000000 .. 0x1c70000000
+Mapping MMIO range: 0x1c70000000 .. 0x1c80000000
+Mapping MMIO range: 0x1c80000000 .. 0x1c90000000
+Mapping MMIO range: 0x404000000 .. 0x404074000
+Mapping MMIO range: 0x40c000000 .. 0x40c074000
+Mapping MMIO range: 0x414000000 .. 0x414074000
+Mapping MMIO range: 0x41c000000 .. 0x41c074000
+Mapping MMIO range: 0x490000000 .. 0x497060000
+Mapping MMIO range: 0x1cb0000000 .. 0x1cc0000000
+Mapping MMIO range: 0xbc0000000 .. 0xbe0000000
+Mapping MMIO range: 0xb80000000 .. 0xbc0000000
+Mapping MMIO range: 0xac0000000 .. 0xae0000000
+Mapping MMIO range: 0xa80000000 .. 0xac0000000
+Mapped dockchannel vuart at 0x388128000
+Removing ADT node /arm-io/dart-usb1
+Removing ADT node /arm-io/atc-phy1
+Removing ADT node /arm-io/usb-drd1
+Removing ADT node /arm-io/acio1
+Removing ADT node /arm-io/acio-cpu1
+Removing ADT node /arm-io/dart-acio1
+Removing ADT node /arm-io/apciec1
+Removing ADT node /arm-io/dart-apciec1
+Removing ADT node /arm-io/apciec1-piodma
+Removing ADT node /arm-io/i2c0/hpmBusManager/hpm1
+Removing ADT node /arm-io/i2c0/hpmBusManager1/hpm1
+Removing ADT node /arm-io/i2c3/hpmBusManager0/hpm1
+Removing ADT node /arm-io/nub-spmi-a0/hpm1
+Removing ADT node /arm-io/atc1-dpxbar
+Removing ADT node /arm-io/atc1-dpphy
+Removing ADT node /arm-io/atc1-dpin0
+Removing ADT node /arm-io/atc1-dpin1
+Removing ADT node /arm-io/atc-phy1
+Total region size: 0x15ac000 bytes
+Physical memory: 0x1001830c000 .. 0x103db6c8000
+Guest region start: 0x100193f0000
+Mapping guest physical memory...
+Unmapping TZ carveouts...
+Loading kernel image (0xf942d8 bytes)...
+...................................................................................................................................................................................................................................................................................................................................................[host] calling hv.start() — Bat_OS takes over now. Ctrl+] to detach.
+
+Copying SEPFW (0x5d0000 bytes)...
+Copying TrustCache (0x60000 bytes)...
+Copying preoslog (0x40000 bytes)...
+Adjusting addresses in ADT...
+Removing __OS_LOG from aop
+Removing __OS_LOG from iop-aop-nub
+Removing __OS_LOG from mtp
+Removing __OS_LOG from iop-mtp-nub
+Removing __OS_LOG from dcp
+Removing __OS_LOG from iop-dcp-nub
+Removing __OS_LOG from dcpext0
+Removing __OS_LOG from iop-dcpext0-nub
+Removing __OS_LOG from dcpext1
+Removing __OS_LOG from iop-dcpext1-nub
+Setting up bootargs at 0x1001a998000...
+Skipping secondary CPU RVBARs (M4 P-cluster SErrors)
+Disabling other iodevs...
+ - 0
+ - 1
+ - 2
+ - 3
+ - 4
+ - 6
+ - 7
+ - 8
+ - 9
+ - 10
+ - 11
+Doing essential MMIO remaps...
+Updating page tables...
+PT[200000000:23d29c044] -> HW:HW
+PT[23d29c044:23d29c048] -> RESERVED PMGR HACK
+PT[23d29c048:23d29c05c] -> HW:HW
+PT[23d29c05c:23d29c060] -> RESERVED PMGR HACK
+PT[23d29c060:3807002d8] -> HW:HW
+PT[3807002d8:3807002dc] -> RESERVED PMGR HACK
+PT[3807002dc:3807003d8] -> HW:HW
+PT[3807003d8:3807003dc] -> RESERVED PMGR HACK
+PT[3807003dc:380700428] -> HW:HW
+PT[380700428:38070042c] -> RESERVED PMGR HACK
+PT[38070042c:380734000] -> HW:HW
+PT[380734000:380734020] -> RESERVED CPU_START
+PT[380734020:388128000] -> HW:HW
+PT[388128000:388130000] -> RESERVED VUART-DC
+PT[388130000:3882800b8] -> HW:HW
+PT[3882800b8:3882800bc] -> RESERVED PMGR HACK
+PT[3882800bc:3882800c8] -> HW:HW
+PT[3882800c8:3882800cc] -> RESERVED PMGR HACK
+PT[3882800cc:3ad200000] -> HW:HW
+PT[3ad200000:3ad204000] -> RESERVED VUART
+PT[3ad204000:5a0000000] -> HW:HW
+PT[800000000:ae0000000] -> HW:HW
+PT[b80000000:be0000000] -> HW:HW
+PT[c00000000:e80000000] -> HW:HW
+PT[1000000000:1280000000] -> HW:HW
+PT[1400000000:1680000000] -> HW:HW
+PT[1c50000000:1c90000000] -> HW:HW
+PT[1cb0000000:1cc0000000] -> HW:HW
+PT[10000000000:10002798000] -> HW:RAM-LOW
+PT[1001830c000:10400000000] -> HW:RAM-HIGH
+Aliasing Bat_OS link base 0x810000000 -> 0x100193f0000 (32 MiB)
+  probe 0x810202eab -> 0x100195f2eab (expect 0x100195f2eab)
+Uploading ADT (0x77c78 bytes)...
+Improving logo...
+Keeping framebuffer alive (BATOS_KEEP_FB=1)
+Skipping SPRR/GXF enable (not available on M4)
+Jumping to entrypoint at 0x100193f0000
+TTY> [hv_start] S0 enter
+TTY> [hv_start] S1 VBAR_EL1
+TTY> [hv_start] S2 gxf_vbar
+TTY> [hv_start] S3 arch MRS
+TTY> [hv_start] S4 AMX/VMKEY MRS
+TTY> [hv_start] S5 ACTLR/CNTHCTL MRS
+TTY> [hv_start] S6 SPRR/GXF MRS
+TTY> [hv_start] S7 hv_arm_tick armed (m4 re-enabled)
+TTY> [hv_start] S8 entering guest @ 0x100193f0000 x0=1001a998000
+TTY> HV alive t=0s traps=1
+
+================================================
+  BAT_OS — BARE METAL APPLE SILICON
+  Running on REAL M4 hardware.
+================================================
+
+[boot] m1n1 handoff OK
+  revision: 3
+  machine_type: 0x00000000
+  mem_size: 15411 MiB
+  devtree: 540672 bytes
+  ADT-resolved peripherals: 9 / 9
+[boot] Initializing microkernel...
+[initrd] no blob
+  [mm] Frame allocator initialized — 15740576 KB free, heap @ 0x000001001a720000
+[boot] (HV guest) skipping AIC + hw bring-up
+  [auth] using BAT_OS_PASSPHRASE (build-time)
+[boot] BatFS initialized (key=KDF(passphrase))
+[boot] Initializing display...
+[boot] Display ready -- drawing splash
+[boot] Splash rendered -- launching apple shell
+[boot] FB console: uart mirror active
+[boot] (skipping self-test — use `self-test` shell cmd)
+
+[vuart] >>> b'batman\r'
+
+[vuart] >>> b'uptime\r'
+TTY> HV alive t=1s traps=1647
+[security] Launching auth gate — type passphrase to unlock
+
+[vuart] >>> b'uptime\r'
+[security] AUTH PASSED — launching shell
+  [dms] Dead man's switch ARMED (48h)
+TTY> HV alive t=2s traps=34243
+uptime
+[shell] uptime
+uptime
+[shell] uptime
+
+[vuart] >>> b'uptime\r'
+uptime
+[shell] uptime
+TTY> HV alive t=3s traps=474582
+
+[vuart] >>> b'uptime\r'
+uptime
+[shell] uptime
+
+[vuart] >>> b'uptime\r'
+TTY> HV alive t=4s traps=914657
+uptime
+[shell] uptime
+
+[vuart] >>> b'uptime\r'
+uptime
+[shell] uptime
+TTY> HV alive t=5s traps=1355054
+
+[vuart] >>> b'uptime\r'
+uptime
+[shell] uptime
+TTY> HV alive t=6s traps=1795398
+
+[vuart] >>> b'uptime\r'
+uptime
+[shell] uptime
+TTY> HV alive t=7s traps=2235720
+
+[vuart] >>> b'uptime\r'
+uptime
+[shell] uptime
+
+[vuart] >>> b'uptime\r'
+TTY> HV alive t=8s traps=2675815
+uptime
+[shell] uptime
+
+[vuart] >>> b'uptime\r'
+uptime
+[shell] uptime
+TTY> HV alive t=9s traps=3026973
+
+[vuart] >>> b'uptime\r'
+uptime
+[shell] uptime
+
+[vuart] >>> b'uptime\r'
+TTY> HV alive t=11s traps=3141091
+uptime
+
+[vuart] >>> b'uptime\r'
+[shell] uptime
+TTY> HV alive t=12s traps=3141155
+uptime
+
+[vuart] >>> b'uptime\r'
+[shell] uptime
+
+[vuart] >>> b'uptime\r'
+TTY> HV alive t=13s traps=3141219
+uptime
+[shell] uptime
+
+[vuart] >>> b'uptime\r'
+TTY> HV alive t=14s traps=3141283
+uptime
+
+[vuart] >>> b'uptime\r'
+[shell] uptime
+TTY> HV alive t=15s traps=3141347
+uptime
+
+[vuart] >>> b'uptime\r'
+[shell] uptime
+TTY> HV alive t=16s traps=3141411
+uptime
+[shell] uptime
+TTY> HV alive t=17s traps=3141475
+uptime
+[shell] uptime
+TTY> HV alive t=18s traps=3141539
+TTY> HV alive t=19s traps=3582210
+TTY> HV alive t=20s traps=4022785
+TTY> HV alive t=21s traps=4463427
+TTY> HV alive t=22s traps=4904023
+TTY> HV alive t=23s traps=5344621
+TTY> HV alive t=24s traps=5785279
+TTY> HV alive t=25s traps=6225893
+TTY> HV alive t=26s traps=6666528
+TTY> HV alive t=27s traps=7107146
+TTY> HV alive t=28s traps=7547751
+TTY> HV alive t=29s traps=7988367
+TTY> HV alive t=30s traps=8429042
+TTY> HV alive t=31s traps=8869685
+TTY> HV alive t=32s traps=9310243
+TTY> HV alive t=33s traps=9750906
+TTY> HV alive t=34s traps=10191459
+TTY> HV alive t=35s traps=10631998
+TTY> HV alive t=36s traps=11072614
+TTY> HV alive t=37s traps=11513170
+TTY> HV alive t=38s traps=11953830
+TTY> HV alive t=39s traps=12394396
+TTY> HV alive t=40s traps=12834940
+TTY> HV alive t=41s traps=13275594
+TTY> HV alive t=42s traps=13716275
+TTY> HV alive t=43s traps=14156890
+TTY> HV alive t=44s traps=14597554
+TTY> HV alive t=45s traps=15038220
+TTY> HV alive t=46s traps=15478827
+TTY> HV alive t=47s traps=15919491
+TTY> HV alive t=48s traps=16360124
+TTY> HV alive t=49s traps=16800762
+TTY> HV alive t=50s traps=17241345
+TTY> HV alive t=51s traps=17681987
+TTY> HV alive t=52s traps=18122587
+TTY> HV alive t=53s traps=18563201
+TTY> HV alive t=54s traps=19003806
+TTY> HV alive t=55s traps=19444422
+TTY> HV alive t=56s traps=19885039
+TTY> HV alive t=57s traps=20325654
+TTY> HV alive t=58s traps=20766249
+TTY> HV alive t=59s traps=21206890
+TTY> HV alive t=60s traps=21647534
+TTY> HV alive t=61s traps=22088164
+TTY> HV alive t=62s traps=22528824
+TTY> HV alive t=63s traps=22969426
+TTY> HV alive t=64s traps=23410037
+TTY> HV alive t=65s traps=23850629
+TTY> HV alive t=66s traps=24291297
+TTY> HV alive t=67s traps=24731908
+TTY> HV alive t=68s traps=25172523
+TTY> HV alive t=69s traps=25613150
+TTY> HV alive t=70s traps=26053754
+TTY> HV alive t=71s traps=26494339
+TTY> HV alive t=72s traps=26934927
+TTY> HV alive t=73s traps=27375584
+TTY> HV alive t=74s traps=27816213
+TTY> HV alive t=75s traps=28256863
+TTY> HV alive t=76s traps=28697517
+TTY> HV alive t=77s traps=29138163
+TTY> HV alive t=78s traps=29578695
+TTY> HV alive t=79s traps=30019385
+TTY> HV alive t=80s traps=30459957
+TTY> HV alive t=81s traps=30900592
+TTY> HV alive t=82s traps=31341247
+TTY> HV alive t=83s traps=31781689
+TTY> HV alive t=84s traps=32222219
+TTY> HV alive t=85s traps=32662901
+TTY> HV alive t=86s traps=33103552
+TTY> HV alive t=87s traps=33544043
+TTY> HV alive t=88s traps=33984521
+TTY> HV alive t=89s traps=34425035
+TTY> HV alive t=90s traps=34865690
+TTY> HV alive t=91s traps=35306198
+TTY> HV alive t=92s traps=35746666
+TTY> HV alive t=93s traps=36187277
+TTY> HV alive t=94s traps=36627743
+TTY> HV alive t=95s traps=37068424
+TTY> HV alive t=96s traps=37508946
+
+[host] hv.start() raised: device reports readiness to read but returned no data (device disconnected or multiple access on port?)
+[host] detaching — draining vuart for 2s
+
+[vuart] serial exception: device reports readiness to read but returned no data (device disconnected or multiple access on port?)
