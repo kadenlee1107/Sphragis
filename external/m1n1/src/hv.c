@@ -53,17 +53,29 @@ static struct hv_secondary_info_t hv_secondary_info;
 
 void hv_init(void)
 {
+    // Bat_OS M4 instrumentation: markers between every hv_init step
+    // so a chainload + run_guest.py that hangs can tell us exactly
+    // which line trapped. Next session greps the log for the last
+    // marker and gates that Apple-private MSR behind a chip_id check.
+    printf("[hv_init] M0 enter\n");
     pcie_shutdown();
+    printf("[hv_init] M1 pcie_shutdown\n");
     // Make sure we wake up DCP if we put it to sleep, just quiesce it to match ADT
     if (display_is_external && display_start_dcp() >= 0)
         display_shutdown(DCP_QUIESCED);
+    printf("[hv_init] M2 display_shutdown\n");
     // reenable hpm interrupts for the guest for unused iodevs
     usb_hpm_restore_irqs(0);
+    printf("[hv_init] M3 usb_hpm_restore\n");
     smp_start_secondaries();
+    printf("[hv_init] M4 smp_start_secondaries\n");
     smp_set_wfe_mode(true);
+    printf("[hv_init] M5 smp_set_wfe_mode\n");
     hv_wdt_init();
+    printf("[hv_init] M6 hv_wdt_init\n");
 
     hv_pt_init();
+    printf("[hv_init] M7 hv_pt_init\n");
 
     // Configure hypervisor defaults
     hv_write_hcr(HCR_API | // Allow PAuth instructions
@@ -73,14 +85,18 @@ void hv_init(void)
                  HCR_RW |  // AArch64 guest
                  HCR_AMO | // Trap SError exceptions
                  HCR_VM);  // Enable stage 2 translation
+    printf("[hv_init] M8 hv_write_hcr\n");
 
     // No guest vectors initially
     msr(VBAR_EL12, 0);
+    printf("[hv_init] M9 msr VBAR_EL12\n");
 
     // Compute tick interval
     hv_tick_interval = mrs(CNTFRQ_EL0) / HV_TICK_RATE;
+    printf("[hv_init] M10 tick_interval\n");
 
     hv_has_ecv = mrs(ID_AA64MMFR0_EL1) & (0xfULL << 60);
+    printf("[hv_init] M11 has_ecv=%d\n", (int)hv_has_ecv);
 
     if (hv_has_ecv) {
         printf("HV: ECV enabled\n");
@@ -94,15 +110,18 @@ void hv_init(void)
 
         hv_secondary_tick_interval = hv_tick_interval;
     }
+    printf("[hv_init] M12 CNTHCTL set\n");
 
     // Set deep WFI back to defaults
     if (cpu_features->cyc_ovrd)
         reg_mask(SYS_IMP_APL_CYC_OVRD, CYC_OVRD_WFI_MODE_MASK, CYC_OVRD_WFI_MODE(0));
+    printf("[hv_init] M13 cyc_ovrd\n");
 
     sysop("dsb ishst");
     sysop("tlbi alle1is");
     sysop("dsb ish");
     sysop("isb");
+    printf("[hv_init] M14 done\n");
 }
 
 static void hv_set_gxf_vbar(void)
