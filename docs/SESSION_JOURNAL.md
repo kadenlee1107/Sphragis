@@ -11,6 +11,89 @@ end of a session.
 
 ---
 
+## 2026-04-20 14:45 — Ubuntu — HV supervisor: controllable auto-recovery loop ✅
+
+Kaden's ask was "controllable — no more random resets and patchy
+fixes." Answered with an infrastructure-level fix instead of chasing
+the SoC watchdog any further: automate the reset-recovery cycle so
+the wall-clock reset becomes background noise.
+
+### What landed
+
+- `scripts/hv/batos_hv_supervisor.py` (≈180 LOC) — orchestrator that
+  loops: wait for stock m1n1 USB enum → chainload patched m1n1 →
+  run batos_hv_interactive session under a hard timeout → note last
+  heartbeat + wall clock → loop back. Running stats printed per
+  cycle (n, min, max, p50, avg). Ctrl+C clean exit.
+- `scripts/hv/run_hv_forever.sh` — single-entry-point wrapper that
+  rebuilds m1n1 / bat_os_apple.bin if sources are newer than their
+  artifacts, then hands off to the supervisor.
+
+Knobs (all env vars):
+  `BATOS_KEEP_FB`        default "1"
+  `BATOS_HV_STIMULUS`    default: passphrase + 40× uptime poll
+  `BATOS_HV_TIMEOUT`     per-cycle timeout, default 360 s
+  `BATOS_HV_MAX_CYCLES`  stop after N, default ∞
+  `BATOS_HV_LOG_DIR`     default /tmp/batos_hv_supervisor
+
+### Validation
+
+One full cycle on live hardware end-to-end:
+```
+[supervisor 13:10:18] supervisor starting. Logs → /tmp/batos_hv_supervisor
+[supervisor 13:10:18] m1n1.macho mtime=Mon Apr 20 13:02:40 2026
+[supervisor 13:10:18] max_cycles=2
+[supervisor 13:10:18] ─── cycle 1 ───
+[supervisor 13:10:18] chainloading m1n1.macho
+[supervisor 13:10:21] cycle 1: starting HV session → cycle_0001.log
+[supervisor 13:11:40] cycle 1: last_hb=73s wall=78s | stats: n=1 min=73s max=73s p50=73s avg=73s
+[supervisor 13:11:40] ─── cycle 2 ───
+[supervisor 13:11:46] waiting for Mac to reboot into m1n1 ...
+```
+
+Cycle 1 healthy: chainload → HV session → last heartbeat at t=73 s
+→ supervisor noticed the USB drop → recorded metrics → looped. That
+is the fix: no matter what session length the SoC-level watchdog
+decides on this particular boot, the supervisor owns the whole
+cycle and Kaden just sees a rolling log of predictable intervals.
+
+### Honest caveat
+
+Cycle 2 didn't complete in this smoke test because the Mac decided
+to boot into macOS rather than chainload m1n1. We can't fix that
+from Ubuntu — `kmutil configure-boot` → Permissive Security is the
+existing workaround, but it isn't 100 % deterministic, and the
+supervisor can only detect + announce. Supervisor now prints a
+loud message ("Mac seems to have booted into macOS …") after 150 s
+of only `/dev/ttyACM0` being visible so the user knows to hit the
+boot picker. Supervisor keeps waiting (420 s budget) so you can
+just poke the Mac and walk back.
+
+### How this answers "controllable"
+
+  - Every cycle runs under a bounded timeout — no more "when will
+    it die?" mystery.
+  - Last heartbeat + wall duration logged per cycle — we can
+    watch the 60-96 s ceiling converge in real time, and if a
+    future change moves the ceiling, it shows up instantly in the
+    stats line.
+  - Stimulus replayed every cycle — Bat_OS comes back up in the
+    same state every time.
+  - User sees one consistent command prompt: `run_hv_forever.sh`,
+    walk away. Not "chainload, run, watch for death, chainload
+    again, run, …" manually.
+
+### What this is NOT
+
+This doesn't raise the 60-96 s per-cycle ceiling. That still needs
+real driver work — AOP RTKit, MMU extensions for SPMI from EL2,
+guest-side ASC traffic. Every cheap fix in hv_tick has been shown
+this session to either be a no-op or actively wedge the guest. The
+supervisor is an orthogonal win: it makes the problem tolerable
+while the deeper fix is eventually tackled.
+
+---
+
 ## 2026-04-20 14:20 — Ubuntu — hv_vuart TX ring batching landed
 
 Shipped a real batching improvement in
