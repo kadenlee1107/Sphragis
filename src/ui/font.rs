@@ -265,3 +265,53 @@ pub fn draw_str(fb: *mut u32, screen_w: u32, x: u32, y: u32, s: &str, fg: u32, b
         }
     }
 }
+
+/// Draw a character scaled up by integer `scale` factor (per-pixel
+/// block fill). `scale=1` is equivalent to `draw_char`; `scale=2`
+/// renders every source pixel as a 2x2 block, etc. Useful when the
+/// native 8x16 text is too small to read on a high-DPI M4 display
+/// captured over a 720p Elgato.
+pub fn draw_char_scaled(fb: *mut u32, screen_w: u32, x: u32, y: u32,
+                        ch: u8, fg: u32, bg: u32, scale: u32) {
+    if scale == 0 { return; }
+    if scale == 1 {
+        draw_char(fb, screen_w, x, y, ch, fg, bg);
+        return;
+    }
+    let idx = if ch >= 32 && ch <= 126 { (ch - 32) as usize } else { 0 };
+    let glyph = &FONT_DATA[idx * 16..(idx + 1) * 16];
+    for row in 0..16u32 {
+        let bits = glyph[row as usize];
+        for col in 0..8u32 {
+            let color = if bits & (0x80 >> col) != 0 { fg } else { bg };
+            // Fill a scale×scale block for this source pixel.
+            for dy in 0..scale {
+                for dx in 0..scale {
+                    let px = x + col * scale + dx;
+                    let py = y + row * scale + dy;
+                    if px < screen_w && in_clip(px, py) {
+                        unsafe {
+                            let offset = (py * screen_w + px) as usize;
+                            core::ptr::write_volatile(fb.add(offset), color);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Draw a string scaled up by integer `scale` factor. See
+/// `draw_char_scaled` for semantics.
+pub fn draw_str_scaled(fb: *mut u32, screen_w: u32, x: u32, y: u32,
+                       s: &str, fg: u32, bg: u32, scale: u32) {
+    if scale == 0 { return; }
+    let cw = CHAR_W * scale;
+    let mut cx = x;
+    for byte in s.bytes() {
+        if cx + cw <= screen_w {
+            draw_char_scaled(fb, screen_w, cx, y, byte, fg, bg, scale);
+            cx += cw;
+        }
+    }
+}

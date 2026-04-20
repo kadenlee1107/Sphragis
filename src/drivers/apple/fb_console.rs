@@ -34,6 +34,14 @@ const MARGIN_RIGHT: u32 = 48;
 const REGION_TOP: u32 = 1000;
 const REGION_BOTTOM: u32 = 1920;
 
+// Scale factor for rendering glyphs — the native 8x16 font at M4's
+// 3024x1964 resolution is unreadable through a 720p capture card.
+// 2x (16x32) is the sweet spot for camera legibility while still
+// fitting ~28 lines × 186 chars of log in the region.
+const SCALE: u32 = 2;
+const CELL_W: u32 = font::CHAR_W * SCALE;
+const CELL_H: u32 = font::CHAR_H * SCALE;
+
 const FG_TEXT: u32 = argb8888_to_m4(0xFFC0_C0C0);  // light gray
 const FG_DIM:  u32 = argb8888_to_m4(0xFF80_8080);  // dim gray
 const BG:      u32 = argb8888_to_m4(0xFF00_0000);  // black
@@ -85,14 +93,14 @@ pub fn puts(s: &str) {
                 let ch = if (0x20..=0x7E).contains(&b) { b } else { b'?' };
                 // Wrap before the right margin.
                 let mut cx = CURSOR_X.load(Ordering::Relaxed);
-                if cx + font::CHAR_W + MARGIN_RIGHT > screen_w {
+                if cx + CELL_W + MARGIN_RIGHT > screen_w {
                     CURSOR_X.store(MARGIN_LEFT, Ordering::Relaxed);
                     advance_line(stride_pixels);
                     cx = CURSOR_X.load(Ordering::Relaxed);
                 }
                 let cy = CURSOR_Y.load(Ordering::Relaxed);
-                font::draw_char(fb, stride_pixels, cx, cy, ch, FG_TEXT, BG);
-                CURSOR_X.store(cx + font::CHAR_W, Ordering::Relaxed);
+                font::draw_char_scaled(fb, stride_pixels, cx, cy, ch, FG_TEXT, BG, SCALE);
+                CURSOR_X.store(cx + CELL_W, Ordering::Relaxed);
             }
         }
     }
@@ -104,20 +112,20 @@ pub fn putc(c: u8) {
 }
 
 fn advance_line(stride_pixels: u32) {
-    let new_y = CURSOR_Y.load(Ordering::Relaxed) + font::CHAR_H;
-    if new_y + font::CHAR_H > REGION_BOTTOM {
+    let new_y = CURSOR_Y.load(Ordering::Relaxed) + CELL_H;
+    if new_y + CELL_H > REGION_BOTTOM {
         // Overrun — scroll the console region up by one row of text
-        // (CHAR_H scanlines), then clear the freshly-opened bottom
+        // (CELL_H scanlines), then clear the freshly-opened bottom
         // row. Cursor stays on the new last line.
         scroll_up_one_line(stride_pixels);
-        CURSOR_Y.store(new_y - font::CHAR_H, Ordering::Relaxed);
+        CURSOR_Y.store(new_y - CELL_H, Ordering::Relaxed);
     } else {
         CURSOR_Y.store(new_y, Ordering::Relaxed);
     }
 }
 
-/// Copy each scanline in `REGION_TOP..REGION_BOTTOM-CHAR_H` down
-/// from the next `CHAR_H` rows, then clear the `CHAR_H` rows at the
+/// Copy each scanline in `REGION_TOP..REGION_BOTTOM-CELL_H` down
+/// from the next `CELL_H` rows, then clear the `CELL_H` rows at the
 /// bottom. Preserves all historical text below the splash.
 fn scroll_up_one_line(stride_pixels: u32) {
     let base = soc::fb_base();
@@ -126,7 +134,7 @@ fn scroll_up_one_line(stride_pixels: u32) {
     if screen_w == 0 { return; }
 
     let fb = base as *mut u32;
-    let shift = font::CHAR_H;
+    let shift = CELL_H;
     // Move rows [top+shift, bottom) → [top, bottom-shift).
     for y in REGION_TOP..(REGION_BOTTOM - shift) {
         let src_off = ((y + shift) * stride_pixels) as usize;
