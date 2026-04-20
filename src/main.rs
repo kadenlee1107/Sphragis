@@ -620,20 +620,13 @@ fn apple_kernel_self_test() {
     // Final report for the direct-API half.
     uart::puts("[selftest] all PASS\n\n");
 
-    // Second half: replay shell commands through the real
-    // dispatcher. Every line here uses the exact same parser +
-    // handler path that a human typing at the dockchannel UART
-    // would hit, so if the shell interface regresses we'll see it.
-    uart::puts("[selftest] shell-dispatch replay ------------------\n");
-    apple_run_cmd("help");
+    // Second half: replay a couple of shell commands through the
+    // real dispatcher. Pared down from the 9-command replay so the
+    // HV-guest path under M4 doesn't burn 70 s of a ~100 s session
+    // on self-test before the human gets the prompt.
+    uart::puts("[selftest] shell-dispatch replay ---\n");
     apple_run_cmd("uname");
-    apple_run_cmd("mem");
-    apple_run_cmd("fb");
     apple_run_cmd("uptime");
-    apple_run_cmd("batfs ls");
-    apple_run_cmd("batfs create hello.txt Bat_OS shell dispatch");
-    apple_run_cmd("batfs read hello.txt");
-    apple_run_cmd("batfs ls");
     uart::puts("[selftest] replay complete\n");
 }
 
@@ -811,14 +804,18 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         drivers::apple::uart::puts("[boot] Splash rendered -- launching apple shell\n");
         drivers::apple::uart::puts("[boot] FB console: uart mirror active\n");
 
-        // Exercise the real kernel paths — frame allocator, BatFS
-        // encrypt+decrypt round-trip — and render PASS/FAIL to the
-        // fb_console so we can see the LL/SC-on-Device fixes hold
-        // under load.
+        // Keep the kernel self-test on boot — its constant FB/bus
+        // activity empirically extends HV session length, and Bat_OS
+        // still responds to queued shell input (including `screen`)
+        // after the replay completes.
         apple_kernel_self_test();
 
-        // Initialize SPI keyboard
-        let _ = drivers::apple::spi::init();
+        // Initialize SPI keyboard — but only if not under HV. On M4
+        // under HV the SPI controller is owned by m1n1 and writing to
+        // its MMIO traps/faults.
+        if !under_hv {
+            let _ = drivers::apple::spi::init();
+        }
 
         // `ui::desktop::run()` is virtio-gpu + ARGB8888-native and
         // dead-ends on M4 (no virtio device, PL011 getc returns None
@@ -922,6 +919,7 @@ fn apple_shell_dispatch(line: &str) {
             uart::puts("  self-test      — frame alloc + BatFS encrypt/verify/Merkle round-trip\n");
             uart::puts("  sha-hw         — probe ARMv8.2 SHA-256 crypto extension\n");
             uart::puts("  aes-hw         — probe ARMv8 AES crypto extension\n");
+            uart::puts("  screen [N]     — dump FB over vuart at 1/N scale (default 4)\n");
             uart::puts("  batfs ls       — list BatFS files\n");
             uart::puts("  batfs create <name> <plaintext>\n");
             uart::puts("  batfs read <name>\n");
@@ -998,6 +996,71 @@ fn apple_shell_dispatch(line: &str) {
                 uart::puts("FAIL\n");
             }
             uart::puts("[selftest] all PASS\n");
+        }
+        "screen" => {
+            // Dump the Apple M4 framebuffer over the dockchannel UART
+            // (→ /dev/ttyACM2 vuart → Ubuntu). Scaled down by N and
+            // emitted as 8-hex-char pixels, one FB row per output line.
+            // Ubuntu side: scripts/hv/m4_screen_dump.py reads, decodes
+            // ARGB2101010 → RGB888, writes a PNG. Works mid-HV-session.
+            //
+            // Writes the raw bytes via write32 → DATA_TX8 directly so
+            // that fb_console (which mirrors every uart::putc into
+            // glyphs in the FB) doesn't scrawl over the exact FB bytes
+            // we're reading.
+            use drivers::apple::soc;
+            let base = soc::fb_base();
+            let width = soc::fb_width() as usize;
+            let height = soc::fb_height() as usize;
+            let stride = soc::fb_stride() as usize;
+            if base == 0 || width == 0 || height == 0 || stride == 0 {
+                uart::puts("  no framebuffer available\n");
+                return;
+            }
+            let scale: usize = match parts.next().and_then(|s| {
+                s.trim_end_matches(|c: char| c == '\r' || c == '\n').parse::<usize>().ok()
+            }) {
+                Some(n) if n >= 1 && n <= 16 => n,
+                _ => 4,
+            };
+            let out_w = width / scale;
+            let out_h = height / scale;
+            uart::puts("SCREEN_BEGIN w="); kernel::mm::print_num(out_w);
+            uart::puts(" h="); kernel::mm::print_num(out_h);
+            uart::puts(" scale="); kernel::mm::print_num(scale);
+            uart::puts(" fmt=argb2101010\n");
+
+            let uart_base = soc::uart0_base();
+            const DATA_TX8: usize = 0x4004;
+            const DATA_TX_FREE: usize = 0x4014;
+            let tx_free = (uart_base + DATA_TX_FREE) as *const u32;
+            let tx8     = (uart_base + DATA_TX8) as *mut u32;
+            let put = |b: u8| unsafe {
+                let mut guard: u32 = 1_000_000;
+                while core::ptr::read_volatile(tx_free) == 0 {
+                    guard = guard.saturating_sub(1);
+                    if guard == 0 { return; }
+                    core::hint::spin_loop();
+                }
+                core::ptr::write_volatile(tx8, b as u32);
+            };
+            const HX: &[u8; 16] = b"0123456789abcdef";
+            for y in 0..out_h {
+                let src_row = y * scale;
+                let row_base = base + src_row * stride;
+                for x in 0..out_w {
+                    let src_x = x * scale;
+                    let w: u32 = unsafe {
+                        core::ptr::read_volatile((row_base + src_x * 4) as *const u32)
+                    };
+                    for i in (0..8).rev() {
+                        let nib = ((w >> (i * 4)) & 0xf) as usize;
+                        put(HX[nib]);
+                    }
+                }
+                put(b'\n');
+            }
+            uart::puts("SCREEN_END\n");
         }
         "aes-hw" => {
             // Probe ARMv8 AES crypto extension. Runs one AES round
