@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 
+#include "asc.h"
 #include "assert.h"
 #include "malloc.h"
 #include "smc.h"
@@ -40,6 +41,8 @@ struct smc_dev {
     bool outstanding[SMC_NUM_IDS];
     u64 ret[SMC_NUM_IDS];
 };
+
+smc_dev_t *hv_smc_keepalive = NULL;
 
 static void smc_handle_msg(smc_dev_t *smc, u64 msg)
 {
@@ -178,4 +181,78 @@ int smc_write_u32(smc_dev_t *smc, u32 key, u32 value)
     msg |= FIELD_PREP(SMC_WRITE_KEY_KEY, key);
 
     return smc_cmd(smc, msg);
+}
+
+#define SMC_NUDGE_ID   0xF
+#define SMC_NUDGE_KEY  0x234b4559 /* '#KEY' big-endian — fourcc */
+
+int smc_nudge(smc_dev_t *smc)
+{
+    if (!smc || !smc->rtkit || !smc->asc)
+        return -1;
+
+    /* Drain any replies waiting for us first. rtkit_recv is
+     * non-blocking. If the previous nudge has come back, its
+     * handler (smc_handle_msg) will clear outstanding[NUDGE_ID]. */
+    struct rtkit_message dmsg;
+    for (int guard = 0; guard < 8; guard++) {
+        int r = rtkit_recv(smc->rtkit, &dmsg);
+        if (r <= 0)
+            break;
+        if (dmsg.ep == SMC_ENDPOINT)
+            smc_handle_msg(smc, dmsg.msg);
+    }
+
+    /* If the previous nudge is still outstanding, don't pile up. */
+    if (smc->outstanding[SMC_NUDGE_ID])
+        return 0;
+
+    /* Don't block if the A2I mailbox is full. */
+    if (!asc_can_send(smc->asc))
+        return 0;
+
+    /* Build SMC_READ_KEY(#KEY). Harmless, read-only, always-exists. */
+    u64 msg = FIELD_PREP(SMC_MSG_TYPE, SMC_READ_KEY)
+            | FIELD_PREP(SMC_MSG_ID, SMC_NUDGE_ID)
+            | FIELD_PREP(SMC_WRITE_KEY_KEY, SMC_NUDGE_KEY);
+
+    smc->outstanding[SMC_NUDGE_ID] = true;
+
+    struct asc_message amsg;
+    amsg.msg0 = msg;
+    amsg.msg1 = SMC_ENDPOINT;
+    if (!asc_send(smc->asc, &amsg)) {
+        /* asc_send may have polled the FULL bit for up to 200ms
+         * before failing. Unlikely but possible. Roll back state. */
+        smc->outstanding[SMC_NUDGE_ID] = false;
+        return -1;
+    }
+    return 1;
+}
+
+int smc_pump(smc_dev_t *smc)
+{
+    if (!smc || !smc->rtkit)
+        return 0;
+
+    struct rtkit_message msg;
+    int drained = 0;
+    /* rtkit_recv() returns 1 when it handed us an app-level msg,
+     * 0 when it consumed an infra-level msg (syslog / ioreport /
+     * mgmt) on our behalf, and <0 on fatal error. Drain whichever
+     * are queued. Non-blocking: each call consumes at most one
+     * asc_recv or returns 0 if the I2A mailbox is empty. */
+    for (int guard = 0; guard < 16; guard++) {
+        int r = rtkit_recv(smc->rtkit, &msg);
+        if (r <= 0)
+            break;
+        /* If we ever start caring about app-level messages (ep
+         * 0x20 SMC NOTIFICATIONs etc) we'd demux here. For the
+         * keep-alive probe we just want rtkit to have touched
+         * the mailbox, so treat the message as drained. */
+        if (msg.ep == SMC_ENDPOINT)
+            smc_handle_msg(smc, msg.msg);
+        drained++;
+    }
+    return drained;
 }

@@ -21,6 +21,7 @@
 #include "pcie.h"
 #include "pmgr.h"
 #include "sep.h"
+#include "smc.h"
 #include "smp.h"
 #include "string.h"
 #include "uart.h"
@@ -179,13 +180,22 @@ void m1n1_main(void)
     sep_init();
 #endif
 
-    // M4-HV 2026-04-20 11:55: tested `smc_init()` here (leaked
-    // handle, ASC booted via rtkit with `booting with version 12`)
-    // to see if a live SMC coprocessor extends HV session length.
-    // Result: 79 s to USB drop vs 96 s WDT-kick baseline — no help
-    // and arguably slight regression (within noise). SMC liveness
-    // is not the watchdog. See docs/2026-04-20_hv_smc_init_leak_79s.txt
-    // and the journal entry for details.
+    // M4-HV 2026-04-20 12:20: tested a proper SMC keepalive —
+    // smc_init() here leaving the handle alive in
+    // hv_smc_keepalive, plus smc_pump() at 100 Hz from hv_tick
+    // draining any ASC→AP syslog / ioreport / mgmt messages and
+    // (separately) smc_nudge() firing unsolicited SMC_READ_KEY
+    // requests at 10 Hz.
+    // Results:
+    //   - smc_init + pump only: 63–93 s (inside 60–96 s baseline
+    //     noise band, so neutral at best; Plan A was 79 s).
+    //   - smc_init + pump + nudge: guest died at t=1 s. Firing
+    //     unsolicited commands from hv_tick almost certainly
+    //     triggers an AIC IRQ path the HV masks.
+    // Backed out both smc_init and the pump call. Left the
+    // smc_pump / smc_nudge functions in smc.c as useful
+    // non-blocking infrastructure for future experiments
+    // (AOP RTKit driver will want similar primitives).
 
     printf("Initialization complete.\n");
 
