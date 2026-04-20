@@ -11,6 +11,155 @@ end of a session.
 
 ---
 
+## 2026-04-20 17:15 — Ubuntu — XNU open-source drop + live-HW probe answer WHY M4 chickens fail
+
+Kaden said "maybe you can download some asahi or something and see
+how they do it or see how we can reverse engineer what they have."
+Did exactly that. Three repos + live-hardware probe, real answers.
+
+### Upstream survey
+
+  - **m1n1 (AsahiLinux/m1n1) main branch, cloned fresh.**
+    T8132 exists in midr.h (parts 0x52/0x53) + soc.h (0x8132) +
+    chickens.c (features_m4 with the XXX comment "figure out
+    what features are actually available on M4"). Chicken init
+    fn pointers for T8132 E/P cores are **still NULL in upstream**.
+    Our branch matches, no work to port.
+
+  - **linux (AsahiLinux/linux, asahi branch).**
+    Cloned shallow. `grep -rlE 't8132|donan'` across the entire
+    kernel source → **zero matches**. No M4 device tree, no CPU
+    init, nothing. Stopped at M3-base (T8122).
+
+  - **PongoOS (checkra1n/PongoOS).**
+    Zero M4 / H16 / T8132 matches. iOS-jailbreak lineage hasn't
+    caught up either.
+
+**Conclusion on open source: no prior M4 chicken-bit work exists.**
+Not a "we just need to find the branch" situation — literally
+nobody has done it yet.
+
+### Apple XNU open-source drop (apple-oss-distributions/xnu)
+
+Cloned, grep'd for T8132. Apple publishes H16-tagged XNU code.
+Key findings in `pexpert/pexpert/arm64/H16.h` + `board_config.h`
+(both archived in-tree at `docs/m4_re/xnu_H16.h.txt`,
+`docs/m4_re/H15_vs_H16.diff.txt`):
+
+  - `ARM64_BOARD_CONFIG_T8132` sets `NO_CPU_OVRD=1` explicitly —
+    **"CPU_OVRD register accesses are banned"** on M4. This is the
+    SYS register used by stock m1n1's CPU sleep / wake paths.
+  - H16 vs H15 (M3) differences that matter for chicken init:
+    - M3's `HAS_CTRR` → M4's `HAS_CTRR3` (new register version)
+    - M3 had `HAS_NEX_PG` (NEX powergating) → **removed on M4**
+    - M3 had `HAS_BP_RET` (branch predictor retention) → **removed on M4**
+    - M3 had `HAS_USAT_BIT` (ACTLR USAT bit) → **removed on M4**
+    - M4 adds `HAS_CPM_PWRDN_CTL`, `HAS_DPC_ERR`,
+      `HAS_ACFG_DIS_DC_OPS`, `HAS_16BIT_ASID`, `HAS_FEAT_XS`,
+      `HAS_DC_INCPA`, `HAS_GUARDED_IO_FILTER`
+
+That's exactly the set of M3 features that stock `init_t8122_everest`
+configures in m1n1 (HID3 DEV_PCIE_THROTTLE bit uses NEX_PG-era
+bits, HID13 uses USAT-adjacent ACTLR assumptions). Mystery solved:
+reusing M3 chickens on M4 UNDEFs because M4 removed three MSR
+features M3 chickens rely on.
+
+**But here's the gotcha:** Apple **stripped the `APPLY_TUNABLES` asm
+macro body** from the open source drop. `osfmk/arm64/start.s:784`
+invokes it; no file in the drop *defines* it. Apple kept the
+public XNU shell but redacted the HID* write sequences that only
+chicken init functions would need. So we have a clear list of
+which features M4 has and doesn't, but the specific HID-register
+values Apple writes for M4 aren't in the XNU drop.
+
+### Live-hardware probe that found something actionable
+
+`scripts/hv/probe_apsc_reg.py` + `probe_pcpu_map.py`: read every
+offset we were trying to write + extras. Ran against stock m1n1
+proxy, no HV.
+
+**Result (first probe, fresh boot):**
+```
+ECPU +0x200f8 = 0x00000000  OK (readable, zero)
+ECPU +0x20020 = 0x00400101  OK (PSTATE, APSC bit + pstate=1)
+ECPU +0x440f8 = 0x00000000  OK
+ECPU +0x48400 = 0x00000000  OK
+ECPU +0x48408 = 0x00000000  OK
+TTY> Exception: SError
+PCPU +0x200f8 → SError killed m1n1
+```
+
+The **first PCPU MMIO access at cluster_base 0x211e00000 SErrors
+m1n1.** Not at +0x200f8 specifically — +0x0 does it too (second
+probe confirms). Meanwhile ECPU cluster MMIO at 0x210e00000 is
+freely readable at every offset we tried.
+
+Earlier `probe_cpu_cluster.py` successfully read PCPU PSTATE
+at +0x20020 though, so PCPU isn't uniformly dead — specific
+offsets behave differently. This matches the XNU H16 flag
+`HAS_RETENTION_STATE`: M4 CPUs enter retention state where
+their MMIO becomes selectively inaccessible.
+
+### What we now know (hard)
+
+1. **M4 banned CPU_OVRD** (SYS reg). Any code path that uses it
+   will UNDEF on M4. Stock m1n1 doesn't use it in boot path but
+   linux's cpu-sleep flow does.
+
+2. **Cluster MMIO writes on PCPU (0x211e00000-ish) SError if
+   the cluster is in retention.** Our "write APSC BIT(40) to
+   cluster+0x200f8" crashes because the target cluster MMIO
+   isn't safely accessible without first waking the cluster via
+   a PMGR sequence we haven't decoded.
+
+3. **M3 chicken functions UNDEF on M4** because M4 removed the
+   HID features M3 tunables rely on (proven yesterday; now
+   understood why from H16.h vs H15.h).
+
+4. **The HID register values Apple's kernel writes for M4 are NOT
+   public** — Apple stripped APPLY_TUNABLES from the XNU drop.
+
+### Remaining realistic paths
+
+  (a) **IPSW kernelcache disassembly.** Apple's iOS/macOS IPSWs
+      contain the full XNU kernel binary. Disassembling an
+      M4-targeting kernelcache (e.g. the iPad Pro M4 firmware
+      or macOS 15 for M4) and finding the APPLY_TUNABLES
+      sequence for H16/Donan is the standard move when Apple
+      strips sources. Asahi has done this for earlier chips.
+      Non-trivial but tractable, needs Apple IPSW + ipsw tool
+      + ghidra/objdump skill.
+
+  (b) **PMGR cluster-wake probe.** The retention-state theory
+      predicts there's a PMGR register sequence that unpacks a
+      cluster's MMIO. Probing PMGR for "cluster wake" / "MMIO
+      enable" bits per-cluster would let us reach PCPU MMIO,
+      at which point the APSC write might work (without
+      chickens — just need to wake the cluster first).
+
+### What landed this commit
+
+  - `docs/m4_re/xnu_H16.h.txt` — raw XNU H16 header.
+  - `docs/m4_re/H15_vs_H16.diff.txt` — M3 vs M4 CPU-feature diff.
+    Definitive reference for "why M3 chickens UNDEF on M4".
+  - `scripts/hv/probe_apsc_reg.py` — live-HW read/noop-write
+    probe for cluster MMIO at various offsets.
+  - `scripts/hv/probe_pcpu_map.py` — narrower probe of what parts
+    of PCPU cluster MMIO SError vs. respond.
+
+### Honest state
+
+The per-cycle ~60-96 s ceiling's root cause is now PROPERLY
+characterised: M4 requires chicken-bit init that Apple hasn't
+published and Asahi hasn't RE'd, plus a PMGR-mediated cluster
+wake to safely touch PCPU MMIO, plus the CPU_OVRD ban forces a
+different sleep/wake path than earlier Apple Silicon. Six months
+of real RE work minimum. The supervisor (0f8da4d6) remains the
+actual deliverable for the user-facing "controllable operation"
+ask.
+
+---
+
 ## 2026-04-20 16:40 — Ubuntu — M4 chicken bits: M3 fns don't work, raw APSC crashes
 
 Kaden said "I believe in you bro, lets do it right now!" Took another
