@@ -5,6 +5,7 @@
 pub mod uart;
 pub mod aic;
 pub mod dcp;
+pub mod fb_console;
 pub mod ans;
 pub mod spi;
 pub mod soc;

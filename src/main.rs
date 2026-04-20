@@ -638,7 +638,12 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         // the actual display (not just over USB serial) that Bat_OS
         // owns the M4. Fills the framebuffer m1n1 set up.
         drivers::apple::dcp::boot_splash();
-        drivers::apple::uart::puts("[boot] Splash rendered — launching apple shell\n\n");
+        // Enable the on-screen mirror of `apple::uart::puts`. This
+        // must come AFTER boot_splash (which fill_screens the whole
+        // display) so we don't fight over the region.
+        drivers::apple::fb_console::init();
+        drivers::apple::uart::puts("[boot] Splash rendered — launching apple shell\n");
+        drivers::apple::uart::puts("[boot] FB console: uart mirror active\n\n");
 
         // Initialize SPI keyboard
         let _ = drivers::apple::spi::init();

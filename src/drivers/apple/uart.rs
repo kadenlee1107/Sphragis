@@ -57,7 +57,10 @@ pub fn putc(c: u8) {
     write32(DATA_TX8, c as u32);
 }
 
-/// Print a string. Translates `\n` to CRLF for serial.
+/// Print a string. Translates `\n` to CRLF for serial and also
+/// mirrors the same text to the on-screen framebuffer console so the
+/// operator can read kernel logs directly off the Mac's display until
+/// Bat_OS owns a USB-CDC endpoint back to Ubuntu.
 pub fn puts(s: &str) {
     for byte in s.bytes() {
         if byte == b'\n' {
@@ -65,6 +68,7 @@ pub fn puts(s: &str) {
         }
         putc(byte);
     }
+    super::fb_console::puts(s);
 }
 
 /// Print `val` as 8 hex digits (lower case, no prefix).
