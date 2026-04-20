@@ -45,22 +45,32 @@ pub fn init() {}
 /// kernel. The upper cap is generous — ~a million iterations is
 /// microseconds on real hardware but a hundred ms or so at M4's slow
 /// pre-cpufreq boot clock.
+///
+/// Mirrors every byte into the on-screen `fb_console` so char-level
+/// emitters like `kernel::mm::print_num` (which drives this via
+/// `platform::serial_putc`) also show up on the Mac's display, not
+/// just in the void of the dockchannel MMIO.
 pub fn putc(c: u8) {
     let mut guard: u32 = 1_000_000;
     while read32(DATA_TX_FREE) == 0 {
         guard = guard.saturating_sub(1);
         if guard == 0 {
-            return;                    // give up rather than hang
+            break; // give up writing to MMIO, but still mirror to FB
         }
         core::hint::spin_loop();
     }
-    write32(DATA_TX8, c as u32);
+    if guard > 0 {
+        write32(DATA_TX8, c as u32);
+    }
+    // CR from puts's \n→CRLF translation is a no-op on the on-screen
+    // console — fb_console already treats \r as "cursor to left
+    // margin" without advancing the line. Passthrough.
+    super::fb_console::putc(c);
 }
 
-/// Print a string. Translates `\n` to CRLF for serial and also
-/// mirrors the same text to the on-screen framebuffer console so the
-/// operator can read kernel logs directly off the Mac's display until
-/// Bat_OS owns a USB-CDC endpoint back to Ubuntu.
+/// Print a string. Translates `\n` to CRLF for the serial side.
+/// `putc` already mirrors each byte to `fb_console`, so no explicit
+/// fb_console::puts call is needed here (avoids double-rendering).
 pub fn puts(s: &str) {
     for byte in s.bytes() {
         if byte == b'\n' {
@@ -68,7 +78,6 @@ pub fn puts(s: &str) {
         }
         putc(byte);
     }
-    super::fb_console::puts(s);
 }
 
 /// Print `val` as 8 hex digits (lower case, no prefix).
