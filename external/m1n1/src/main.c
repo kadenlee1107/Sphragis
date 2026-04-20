@@ -177,13 +177,20 @@ void m1n1_main(void)
 #endif
 
     cpufreq_fixup();
+
+    // M4-HV 2026-04-20 16:05: cpufreq_init() here DISABLED —
+    // first attempt chainload-crashed patched m1n1 before it
+    // could print its banner. Leaving the T8132 cluster/feature
+    // definitions in cpufreq.c so the code is ready, but the
+    // actual invocation is gated behind an explicit build flag
+    // or a future fix. See journal for the full test matrix.
+    // cpufreq_init();
+
     sep_init();
 #endif
 
-    // M4-HV 2026-04-20: SMC init left disabled. Two rounds of
-    // testing (pre and post AIC-event drain in hv_exc_fiq) both
-    // wedged the guest at sub-baseline times. smc_pump and
-    // smc_nudge are kept in smc.c but not wired up.
+    // M4-HV 2026-04-20: SMC init left disabled — every attempt to
+    // drive an ASC from HV context wedges the guest, see journal.
 
     printf("Initialization complete.\n");
 

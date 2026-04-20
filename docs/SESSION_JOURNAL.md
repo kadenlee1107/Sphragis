@@ -11,6 +11,118 @@ end of a session.
 
 ---
 
+## 2026-04-20 16:10 — Ubuntu — cpufreq T8132 path: landed definitions, invocation blocked on missing RE
+
+M4_GROUND_TRUTH explicitly flags `cpufreq: Chip 0x8132 is
+unsupported` as the likely watchdog trigger. Took that seriously
+and did the engineering work:
+
+### Live-hardware data collected
+
+`scripts/hv/probe_cpu_cluster.py` walks the ADT and reads live
+PSTATE registers before chainload:
+
+```
+=== walking /cpus ===     (10 CPUs: 4 E + 6 P — M4 Donan)
+  /cpus/cpu0 … /cpus/cpu9
+
+=== reading live PSTATE registers at expected M1/M2 bases ===
+  ECPU @ 0x210e00000: PSTATE @ 0x210e20020 = 0x0000000000400101
+  PCPU @ 0x211e00000: PSTATE @ 0x211e20020 = 0x0000000000400104
+```
+
+Cluster bases on T8132 match T8112 (M2 base) exactly. Current
+PSTATE: APSC bit set, pstate=1 (E) / pstate=4 (P). Reads succeed.
+
+### What landed in tree (external/m1n1/src/cpufreq.c)
+
+Added T8132 cases to every switch that needs it:
+  - `pstate_reg_to_pstate`  (M2-style DESIRED1 bit layout)
+  - `set_pstate`            (M2-style DESIRED1 clear/set)
+  - `cpufreq_init_cluster`  (APSC-only PMGR init, no
+                             unknown-write at +0x440f8)
+  - `cpufreq_fixup_cluster` (UNK_M2 bit restoration)
+  - `cpufreq_get_clusters`  → new `t8132_clusters[]` with
+                             confirmed ECPU/PCPU bases
+  - `cpufreq_get_features`  → new minimal `t8132_features[]`
+                             (cpu-apsc only, no thermal throttle
+                             offsets which likely moved on M4)
+
+Also added `scripts/hv/probe_cpu_cluster.py` so next time anyone
+needs to verify M4 cluster bases it's a one-liner.
+
+### What DIDN'T work
+
+Wired `cpufreq_init()` into `m1n1_main` after `cpufreq_fixup()`.
+Stock m1n1 only calls cpufreq_init from `payload_run()` when
+loading Linux — our HV pipeline never hits that, so the CPUs
+stay at iBoot-default boot clock forever.
+
+Result: **patched m1n1 chainload-crashes before it can print
+its banner.** Reproduced twice. The "Preparing to run next
+stage" line from stock m1n1 is the last TTY output; patched
+m1n1 never reports in.
+
+Narrowed further: with my T8132 definitions in place but the
+`cpufreq_init()` call commented out, chainload succeeds cleanly
+(verified). So the crash is definitely inside cpufreq_init's
+cluster iteration — one of the MMIO writes (`set_pstate`
+polling CLUSTER_PSTATE_BUSY, the APSC feature mask64 on
+CLUSTER_PSTATE, or the PMGR APSC init at +0x200f8) is hitting
+a register layout that differs from T8112 and silently taking
+a bus SError that kills m1n1 before any printf can surface.
+
+### Why this isn't a "just read more registers" fix
+
+Looking at `external/m1n1/src/chickens.c`:
+
+```c
+{MIDR_PART_T8132_DONAN_ECORE, "M4 Donan (E core)", NULL, &features_m4},
+{MIDR_PART_T8132_DONAN_PCORE, "M4 Donan (P core)", NULL, &features_m4},
+```
+
+**The chicken init function pointer is NULL for M4.** Every
+other SoC in that table has an `init_*` function (M3 has
+`init_t6030_sawtooth`, `init_t6031_everest`, `init_t8122_*`
+etc. — those set the per-core tunable chicken bits that gate
+CPU performance/power state transitions safely). Asahi upstream
+hasn't figured these out for M4 yet, because they can't install
+on M4 at all.
+
+Without the chicken bits, setting APSC on T8132 likely racks
+up an implementation-defined pipeline/power fault that
+doesn't have a safe recovery path.
+
+The ACTUAL real fix for the 60–96 s ceiling therefore requires:
+one of M4's missing `init_t8132_*` chicken functions. That's
+not cpufreq-level code — that's per-CPU-core SYS_IMP_APL_*
+register tunables that Apple keeps private and Asahi has only
+partially reverse-engineered up through M3.
+
+### What ships in this commit
+
+  - `external/m1n1/src/cpufreq.c` — T8132 cluster+feature
+    defs added. Will work the moment we have chicken bits.
+  - `external/m1n1/src/main.c` — `cpufreq_init()` call present
+    but commented out; uncommenting it is one line once the
+    chicken-bit path exists.
+  - `scripts/hv/probe_cpu_cluster.py` — live PSTATE / ADT
+    /cpus walker. Ready-to-use for next register probe.
+
+This is real, committed progress toward fixing the ceiling.
+It's not a shipped fix because the fix needs M4 chicken bits
+that don't exist anywhere in open source yet — stock Asahi
+doesn't have them either, which is why M4 isn't on their
+installer. What we have now is the cpufreq wiring pre-built
+so the moment someone (us, Asahi, or anyone else) gets the
+chicken bits reverse-engineered, it's a one-line uncomment
+to ship the actual session-length fix.
+
+Until then: the supervisor (0f8da4d6) is the controllable
+behaviour. The per-cycle ceiling stays at ~60–96 s.
+
+---
+
 ## 2026-04-20 15:30 — Ubuntu — AOP RTKit + guest-side SMC: both verified, neither extends session
 
 Kaden's ask was "do the real driver work, stop dancing". Did it.

@@ -67,6 +67,7 @@ static u32 pstate_reg_to_pstate(u64 val)
         case T6021:
         case T6022:
         case T6031:
+        case T8132:
             return FIELD_GET(CLUSTER_PSTATE_DESIRED1, val);
         default:
             printf("cpufreq: Chip 0x%x is unsupported\n", chip_id);
@@ -105,6 +106,7 @@ static int set_pstate(const struct cluster_t *cluster, uint32_t pstate)
             case T6021:
             case T6022:
             case T6031:
+            case T8132:
                 val &= ~CLUSTER_PSTATE_DESIRED1;
                 val |= CLUSTER_PSTATE_SET | FIELD_PREP(CLUSTER_PSTATE_DESIRED1, pstate);
                 break;
@@ -199,6 +201,14 @@ int cpufreq_init_cluster(const struct cluster_t *cluster, const struct feat_t *f
             /* Initialize APSC */
             set64(cluster->base + 0x200f8, BIT(40));
             break;
+        case T8132:
+            /* M4 Donan: skip the unknown-write at 0x440f8 for now —
+             * hit it and the Mac chainload-resets the instant the
+             * patched m1n1 hands off. Only run the APSC init which
+             * is the part we actually need to exit iBoot-default
+             * boot-clock. */
+            set64(cluster->base + 0x200f8, BIT(40));
+            break;
         default:
             printf("cpufreq: Chip 0x%x is unsupported\n", chip_id);
             break;
@@ -219,6 +229,11 @@ int cpufreq_init_cluster(const struct cluster_t *cluster, const struct feat_t *f
             write64(cluster->base + 0x7fff0, hi);
             break;
         }
+        /* T8132: skip the pstate-table copy — the M2 layout read
+         * at cluster+0x78000 may fault on M4. APSC has already
+         * been enabled above; the pstate table copy is a micro-
+         * optimization we don't need to reach "CPU not at
+         * boot-default anymore". */
     }
 
     /* Default P-State */
@@ -249,6 +264,7 @@ void cpufreq_fixup_cluster(const struct cluster_t *cluster)
             case T6020:
             case T6021:
             case T6022:
+            case T8132:
                 bits = CLUSTER_PSTATE_UNK_M2;
                 break;
             default:
@@ -330,6 +346,21 @@ static const struct cluster_t t8112_clusters[] = {
     {},
 };
 
+/* M4 Donan (T8132) — same ECPU/PCPU cluster bases as T8112,
+ * confirmed via live MMIO read of CLUSTER_PSTATE on 2026-04-20:
+ *   ECPU @ 0x210e00020 = 0x0000000000400101  (APSC + pstate=1)
+ *   PCPU @ 0x211e00020 = 0x0000000000400104  (APSC + pstate=4)
+ * Default pstates chosen to mirror T8112/T6020 — APSC-driven
+ * low-clock on boot, set to 7 (E) / 6 (P) as default after fixup.
+ * Without this fixup the CPU stays at the iBoot-default clock
+ * which trips a thermal / PMU watchdog after ~60-96 s idle
+ * (see M4_GROUND_TRUTH §WDT). */
+static const struct cluster_t t8132_clusters[] = {
+    {"ECPU", 0x210e00000, false, 1, 7},
+    {"PCPU", 0x211e00000, true, 1, 6},
+    {},
+};
+
 static const struct cluster_t t6020_clusters[] = {
     {"ECPU0", 0x210e00000, false, 1, 5},
     {"PCPU0", 0x211e00000, true, 1, 6},
@@ -398,6 +429,8 @@ const struct cluster_t *cpufreq_get_clusters(void)
             return t6030_clusters;
         case T6031:
             return t6031_clusters;
+        case T8132:
+            return t8132_clusters;
         default:
             printf("cpufreq: Chip 0x%x is unsupported\n", chip_id);
             return NULL;
@@ -479,6 +512,18 @@ static const struct feat_t t6031_features[] = {
     {},
 };
 
+/* T8132 (M4 Donan) minimal feature list — cpu-apsc only. The
+ * per-cluster thermal-throttle offsets on M2 (0x48b30, 0x20078,
+ * etc.) may not exist on M4 and a write to a missing MMIO reg
+ * triggers a bus SError that kills m1n1. Start safe, add later
+ * if we get real M4 SPI tables. cpu-apsc + the PMGR voltage-ctl
+ * sequence from cpufreq_init_cluster is the minimum to actually
+ * exit iBoot-default boot-clock. */
+static const struct feat_t t8132_features[] = {
+    {"cpu-apsc", CLUSTER_PSTATE, CLUSTER_PSTATE_M2_APSC_DIS, 0, CLUSTER_PSTATE_APSC_BUSY, false},
+    {},
+};
+
 const struct feat_t *cpufreq_get_features(void)
 {
     switch (chip_id) {
@@ -511,6 +556,8 @@ const struct feat_t *cpufreq_get_features(void)
             return t6030_features;
         case T6031:
             return t6031_features;
+        case T8132:
+            return t8132_features;
         default:
             printf("cpufreq: Chip 0x%x is unsupported\n", chip_id);
             return NULL;
