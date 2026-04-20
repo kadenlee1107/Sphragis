@@ -11,6 +11,78 @@ end of a session.
 
 ---
 
+## 2026-04-20 13:20 — Ubuntu — AIC event drain in hv_exc_fiq wedges the guest
+
+Kaden said stop calling early, so tackled the theory that nudge-kill
+at t=1 s was an AIC FIQ storm: on T8132 `hv_exc_fiq` skips all the
+Apple-IMPDEF PMU / UPMC / IPI branches that in part handle AIC-side
+events on pre-M4 SoCs. An unACKed AIC event would stay pending,
+re-enter FIQ forever, trip the SoC.
+
+**Implemented** a bounded `aic_ack()` drain loop for T8132 in
+`hv_exc_fiq` (`external/m1n1/src/hv_exc.c`), after the timer/vtimer
+checks and before the skipped IMPDEF block. Added `#include "aic.h"`.
+
+**Then** re-enabled `smc_init()` in `main.c`, `smc_pump()` at 100 Hz
+and `smc_nudge()` at 10 Hz from `hv_tick`, and ran three endurance
+tests on live M4:
+
+| config | duration | notes |
+|---|---|---|
+| AIC drain alone (no SMC) | 60 s | clean, trap counter climbing normally |
+| AIC drain + smc_pump + smc_nudge | 26 s | guest wedged at ~t=10 s (traps froze at ~3.19 M); died at t=26 s. log: `docs/2026-04-20_hv_aic_drain_plus_nudge_died_26s.txt` |
+| AIC drain + smc_pump (no nudge) | 34 s | same wedge pattern — traps froze at ~3.04 M, died t=34 s |
+| AIC drain alone, round 2 | 21 s | **same wedge pattern** — traps froze at ~3.03 M, died t=21 s. log: `docs/2026-04-20_hv_aic_ack_drain_wedged_21s.txt` |
+
+The wedge is a new failure mode — previous "just USB drop" runs
+(e.g. the 94 s verify with no AIC/SMC code active) always kept the
+trap counter climbing linearly until the final drop. With AIC drain
+active the trap counter plateaus at ~3 M (= ~7 s of normal guest
+MMIO activity) and then only advances at ~64/s until the SoC finally
+resets.
+
+**Takeaway:** Something about reading `aic->base + aic->regs.event`
+from the `hv_exc_fiq` context on M4 is not safe. Possibilities:
+
+  - AIC v3 die-affinity: `aic_ack()` on the boot CPU may be
+    consuming events destined for a secondary CPU's queue.
+  - Stage-2 translation disagreement: EL2's AIC mapping may not
+    match what the guest expects (we never forward interrupts to
+    the guest on M4 anyway, but mapping disagreement could still
+    create cache/coherency weirdness).
+  - FIQ handler bloat: adding an MMIO loop to every FIQ delivery
+    extends time-in-FIQ enough that the dockchannel vuart in-flight
+    TX completes before the guest has polled for it, and the guest
+    enters a retry-loop that's almost idle (the 64/s residual).
+
+None of these are five-minute fixes.
+
+**Backed out** all three of: SMC nudge, SMC pump call, AIC drain.
+Left the `smc_pump` / `smc_nudge` functions, the `hv_smc_keepalive`
+global, and `wdt_kick` in the tree (all gated / dormant unless
+explicitly re-enabled).
+
+Verified post-revert with a clean run: t=43 s, trap counter at
+12 M — wedge gone, we are back on the same 27–96 s baseline band.
+Evidence: `docs/2026-04-20_hv_post_aic_revert_43s.txt`.
+
+### Where this actually leaves us
+
+Session ceiling stays at ~96 s. The reset trigger is still
+external and wall-clock-driven, but the set of hooks we can
+safely install in the FIQ path on M4 is more restricted than I
+thought — MMIO to AIC / SMC ASC from that context breaks the
+guest. Getting past 96 s almost certainly needs code that runs
+*outside* `hv_exc_fiq`: either from m1n1's main context (via a
+proxy-entry hook that fires when the HV takes a pause) or from
+the guest itself (Bat_OS-side code that talks to SMC / AOP over
+MMIO at EL1, with the HV forwarding the requisite DART / IRQ
+infrastructure).
+
+That's a real-driver-sized project. Not a session sub-task.
+
+---
+
 ## 2026-04-20 12:40 — Ubuntu — SMC Plan B full attempt: pump neutral, nudge fatal
 
 Took another swing at SMC after Kaden said "keep going, just be

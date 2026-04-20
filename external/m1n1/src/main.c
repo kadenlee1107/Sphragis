@@ -180,22 +180,10 @@ void m1n1_main(void)
     sep_init();
 #endif
 
-    // M4-HV 2026-04-20 12:20: tested a proper SMC keepalive —
-    // smc_init() here leaving the handle alive in
-    // hv_smc_keepalive, plus smc_pump() at 100 Hz from hv_tick
-    // draining any ASC→AP syslog / ioreport / mgmt messages and
-    // (separately) smc_nudge() firing unsolicited SMC_READ_KEY
-    // requests at 10 Hz.
-    // Results:
-    //   - smc_init + pump only: 63–93 s (inside 60–96 s baseline
-    //     noise band, so neutral at best; Plan A was 79 s).
-    //   - smc_init + pump + nudge: guest died at t=1 s. Firing
-    //     unsolicited commands from hv_tick almost certainly
-    //     triggers an AIC IRQ path the HV masks.
-    // Backed out both smc_init and the pump call. Left the
-    // smc_pump / smc_nudge functions in smc.c as useful
-    // non-blocking infrastructure for future experiments
-    // (AOP RTKit driver will want similar primitives).
+    // M4-HV 2026-04-20: SMC init left disabled. Two rounds of
+    // testing (pre and post AIC-event drain in hv_exc_fiq) both
+    // wedged the guest at sub-baseline times. smc_pump and
+    // smc_nudge are kept in smc.c but not wired up.
 
     printf("Initialization complete.\n");
 

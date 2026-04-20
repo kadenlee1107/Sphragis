@@ -565,6 +565,18 @@ void hv_exc_fiq(struct exc_info *ctx)
         hv_exc_proxy(ctx, START_HV, HV_VTIMER, NULL);
     }
 
+    // M4-HV (2026-04-20 12:55): tried draining AIC events here
+    // via aic_ack() in a bounded loop for T8132. Theory: FIQs
+    // from external IRQ sources (SMC/AOP mailbox, etc.) stay
+    // pending because the PMU/IPI branches below are skipped on
+    // M4 and nothing else consumes AIC events. Result: guest
+    // wedges (traps freeze at ~3M ticks, heartbeats continue
+    // but MMIO activity stalls) within 20-30 s. Reading the
+    // AIC event register from FIQ context on M4 corrupts some
+    // shared state we don't fully understand — stage-2 routing,
+    // die/CPU affinity, or similar. Backed out; left the
+    // breadcrumb so the next attempt doesn't re-walk the path.
+
     // Apple IMPDEF PMU / UPMC / IPI_SR accesses UNDEF on M4 (T8132).
     // Skip them — guest PMC and IPI plumbing are not yet supported
     // for the M4 HV path; the timer-tick code path above is sufficient

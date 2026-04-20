@@ -474,14 +474,8 @@ void hv_tick(struct exc_info *ctx)
         // 2026-04-20 11:35 journal — the ADT-declared WDT isn't the
         // reset trigger but the write is free).
         wdt_kick();
-        // M4-HV 2026-04-20 12:20: smc_init + smc_pump + smc_nudge
-        // from hv_tick tested — pump alone neutral (within the
-        // 60-96 s noise band), nudge killed the guest at t=1 s.
-        // hv_smc_keepalive is now always NULL (smc_init call removed
-        // from main.c). Leaving the include of smc.h so the
-        // infrastructure is still buildable for the AOP experiments.
-        // M4-HV 2026-04-20 12:05: tried a plain read32(0x3907a0000)
-        // here as an aop-spmi0 poke — SYNC-faulted at EL2. SPMI
-        // from hv_tick would need mmu_add_mapping first. Skipped.
+        // M4-HV 2026-04-20: SMC from HV context wedges guest even
+        // with AIC drain. Not called here. hv_exc_fiq still drains
+        // AIC events on T8132 defensively.
     }
 }
