@@ -177,15 +177,6 @@ void m1n1_main(void)
 #endif
 
     cpufreq_fixup();
-
-    // M4-HV 2026-04-20 16:05: cpufreq_init() here DISABLED —
-    // first attempt chainload-crashed patched m1n1 before it
-    // could print its banner. Leaving the T8132 cluster/feature
-    // definitions in cpufreq.c so the code is ready, but the
-    // actual invocation is gated behind an explicit build flag
-    // or a future fix. See journal for the full test matrix.
-    // cpufreq_init();
-
     sep_init();
 #endif
 

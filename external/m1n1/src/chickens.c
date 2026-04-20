@@ -151,6 +151,12 @@ const struct midr_part_info midr_parts[] = {
     {MIDR_PART_T6031_SAWTOOTH, "M3 Max Sawtooth", init_t6031_sawtooth, &features_m3},
     {MIDR_PART_T8122_EVEREST, "M3 Everest", init_t8122_everest, &features_m3},
     {MIDR_PART_T8122_SAWTOOTH, "M3 Sawtooth", init_t8122_sawtooth, &features_m3},
+    /* M4-HV 2026-04-20 16:30: tested init_t8122_{sawtooth,everest}
+     * as a starting-point chicken init for M4. Result: patched m1n1
+     * chainload-faults before banner prints. At least one HID* MSR
+     * UNDEFs on M4, which means the MSR encoding itself (not just
+     * values) is new. Back to NULL until Apple publishes or Asahi
+     * RE's M4 CPU-core tunables. */
     {MIDR_PART_T8132_DONAN_ECORE, "M4 Donan (E core)", NULL, &features_m4},
     {MIDR_PART_T8132_DONAN_PCORE, "M4 Donan (P core)", NULL, &features_m4},
 };

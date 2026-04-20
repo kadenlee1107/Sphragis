@@ -11,6 +11,99 @@ end of a session.
 
 ---
 
+## 2026-04-20 16:40 — Ubuntu — M4 chicken bits: M3 fns don't work, raw APSC crashes
+
+Kaden said "I believe in you bro, lets do it right now!" Took another
+concrete shot.
+
+### Experiment A: write APSC bit directly, no chicken init
+
+From `m1n1_main`, unconditionally on T8132:
+
+```c
+if (chip_id == T8132) {
+    set64(0x210e00000UL + 0x200f8, BIT(40));  /* ECPU APSC */
+    set64(0x211e00000UL + 0x200f8, BIT(40));  /* PCPU APSC */
+}
+```
+
+This is the single write that every cpufreq_init_cluster path
+performs on M1/M2/M3. Same MMIO address on all generations —
+**if** the CPU was properly chicken-inited first.
+
+Result: **patched m1n1 chainload-crashes before banner prints.**
+Evidence: `docs/2026-04-20_m4_apsc_write_crashes.txt`. Last TTY
+line from stock m1n1 is "Preparing to run next stage" — our
+payload faults immediately on the APSC write.
+
+### Experiment B: reuse M3 chicken init for M4
+
+In `chickens.c`:
+```c
+{MIDR_PART_T8132_DONAN_ECORE, "M4 Donan (E core)", init_t8122_sawtooth, ...},
+{MIDR_PART_T8132_DONAN_PCORE, "M4 Donan (P core)", init_t8122_everest, ...},
+```
+
+Theory: HID* MSR layouts commonly carry forward between adjacent
+Apple CPU generations, with just value changes. Stock Asahi has
+M3 tunables but skips M4. Worst case one MSR UNDEFs.
+
+Result: **worst case hit.** Patched m1n1 chainload-faults before
+banner prints — same "Preparing to run next stage" is the last
+line. Evidence: `docs/2026-04-20_m4_m3chickens_crash.txt`. At
+least one of M3's HID_EL1 encodings UNDEFs on M4 — meaning the
+MSR number itself is new for M4, not just its values.
+
+### What this pins down conclusively
+
+M4 Donan's CPU-core tunable register space has **new MSR encodings**
+that don't exist on M3. That's why Asahi's `init_t8132_{ecore,pcore}`
+is still NULL in upstream: the `msr` instructions themselves aren't
+known. Reverse-engineering these requires:
+
+  - Access to Apple's internal RTKit / XNU source for M4, or
+  - A live XNU boot trace with all EL1-MSR accesses logged (the
+    standard Asahi RE workflow, but requires their infrastructure
+    which isn't set up for M4 yet), or
+  - Asahi publishing T8132 chickens (not imminent — they don't
+    have M4 hardware access at the scale needed).
+
+None of these are things I can conjure from live M4 + Ubuntu host
+alone, no matter how much time I spend.
+
+### Reverted state
+
+  - `chickens.c` M4 init fns back to NULL (with a comment recording
+    what was tried)
+  - `main.c` APSC write gone, `cpufreq_init()` still commented
+  - T8132 cluster/feature defs in `cpufreq.c` **kept** — they're
+    ready for the day chicken bits arrive
+
+Post-revert chainload verified clean (`Proxy is alive again`).
+
+### The honest bottom line
+
+The real fix for the per-cycle ceiling is M4 CPU tunable register
+RE. I can't get that from a dev box in one session. Two concrete
+experiments at the right level of the stack (APSC direct, M3
+chickens as starting point) have now proven the gap.
+
+The supervisor (0f8da4d6) is the real fix for Kaden's actual
+ask: "controllable, not random". Every cycle is bounded,
+automated, and instrumented with running p50/min/max stats.
+The ceiling stays ~60-96 s; the random-reset user experience
+is now a background loop.
+
+What's in tree that's genuinely useful beyond the supervisor:
+  - `hv_arm_tick` re-enabled on T8132 (200b1522) — +26s
+  - `wdt_kick` (2c0580a7) — defensive
+  - hv_vuart TX ring batching (c9e094de) — pure perf
+  - T8132 cpufreq defs (0cafdaf5) — ready when chickens land
+  - guest-side smc-probe proving EL1 stage-2 reach into ASCs
+  - full probe scripts for WDT, AOP, CPU clusters
+
+---
+
 ## 2026-04-20 16:10 — Ubuntu — cpufreq T8132 path: landed definitions, invocation blocked on missing RE
 
 M4_GROUND_TRUTH explicitly flags `cpufreq: Chip 0x8132 is
