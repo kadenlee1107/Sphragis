@@ -851,22 +851,16 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         // V-APPLE-UX-2: arm dead-man's-switch (48 h) just like QEMU.
         security::deadman::arm(48);
 
-        // V-APPLE-UX-3: TODO: ui::desktop::run() on Apple/M4 — first
-        // live run took an SError on a ldrb at x22=0x810202eab, which
-        // is a LINK-TIME rodata absolute (vs the runtime-loaded
-        // guest_base ≈ 0x10019... offset). Under HV stage-2, that's
-        // an unmapped-IPA → SErr. Root cause is somewhere in the
-        // desktop render path — probably a &'static str pointer that
-        // got truncated/stored as an absolute u64 and dereferenced
-        // later. Need to: (a) run objdump on the exact binary to find
-        // the faulting insn and its symbol, (b) either teach the HV
-        // to map a slack range around link-time 0x810000000 so those
-        // accesses succeed, or (c) fix the Rust codegen to keep PC-
-        // relative semantics through the offending indirection. Until
-        // then, keep the serial shell so the M4 session stays useful.
-        apple_serial_shell();
-        #[allow(unreachable_code)]
-        { ui::desktop::run(); } // keep symbol alive for future wire
+        // V-APPLE-UX-3: full microkernel desktop — same
+        // `ui::desktop::run()` QEMU uses. Input via
+        // platform::serial_getc (dockchannel UART under HV, SPI on
+        // bare metal). Rendering via ui::gpu with ARGB2101010 colour
+        // conversion. Link-time-absolute pointer accesses (Rust
+        // no_std codegen sometimes materialises those into rodata
+        // pointer tables) are handled by the HV-side stage-2 alias:
+        // run_guest.py maps 0x810000000..+32MiB → guest_base, so
+        // link-time accesses land on the runtime bytes.
+        ui::desktop::run();
     } else {
         drivers::apple::uart::puts("[boot] No display — serial shell\n\n");
         apple_serial_shell();

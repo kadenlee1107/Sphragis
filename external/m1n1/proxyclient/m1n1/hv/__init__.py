@@ -1759,6 +1759,19 @@ class HV(Reloadable):
         self.p.dc_cvau(guest_base, len(image))
         self.p.ic_ivau(guest_base, len(image))
 
+        # V-BATOS-LINKALIAS: Bat_OS links at 0x810000000 (linker_apple.ld).
+        # Rust no_std codegen occasionally materialises absolute pointers
+        # (e.g. into the literal-string interning pool in rodata) rather
+        # than keeping a PC-relative chain. Under HV those link-time
+        # addresses land in unmapped IPA space and SError. Stash the
+        # mapping request now; it actually gets installed AFTER
+        # `pt_update()` in start() so the ADT-driven MMIO identity
+        # passthrough (which covers 0x800000000-0xae0000000) doesn't
+        # clobber it.
+        self._batos_alias_src = 0x810000000
+        self._batos_alias_dst = guest_base
+        self._batos_alias_size = 32 << 20
+
         print(f"Copying SEPFW (0x{sepfw_length:x} bytes)...")
         self.p.memcpy8(guest_base + sepfw_off, sepfw_start, sepfw_length)
 
@@ -1955,6 +1968,25 @@ class HV(Reloadable):
 
         print("Updating page tables...")
         self.pt_update()
+
+        # V-BATOS-LINKALIAS (commit phase): install the Bat_OS link-
+        # base alias AFTER pt_update so that ADT-driven identity
+        # passthrough for 0x800000000-0xae0000000 doesn't clobber us.
+        if os.environ.get("BATOS_LINKALIAS", "1") == "1" and \
+           hasattr(self, "_batos_alias_src"):
+            src = self._batos_alias_src
+            dst = self._batos_alias_dst
+            sz  = self._batos_alias_size
+            print(f"Aliasing Bat_OS link base 0x{src:x} -> 0x{dst:x} "
+                  f"({sz >> 20} MiB)")
+            self.map_hw(src, dst, sz)
+            probe_va = src + 0x202eab
+            try:
+                probe_pa = self.p.hv_pt_walk(probe_va)
+                print(f"  probe 0x{probe_va:x} -> 0x{probe_pa:x} "
+                      f"(expect 0x{dst + 0x202eab:x})")
+            except Exception as e:
+                print(f"  probe failed: {e}")
 
         adt_blob = self.adt.build()
         print(f"Uploading ADT (0x{len(adt_blob):x} bytes)...")

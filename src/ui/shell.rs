@@ -137,6 +137,7 @@ fn execute(cmd: &str) {
                 console::puts("  usage: browse <url>\n");
             }
         }
+        "screen" => cmd_screen(parts[1]),
         "" => {}
         _ => {
             console::puts("  unknown command: ");
@@ -144,6 +145,74 @@ fn execute(cmd: &str) {
             console::puts("\n  type 'help' for commands\n");
         }
     }
+}
+
+/// Dump the framebuffer over whatever serial is attached, at 1/N
+/// scale (default 4). Mirrors the `apple_shell_dispatch` version —
+/// callers on QEMU get the same output format, decodable by
+/// scripts/hv/capture_screen.py.
+fn cmd_screen(arg: &str) {
+    use crate::drivers::apple::soc;
+    let scale: usize = match arg.trim_end_matches(|c: char| c == '\r' || c == '\n')
+        .parse::<usize>() {
+        Ok(n) if (1..=16).contains(&n) => n,
+        _ => 4,
+    };
+    let base = crate::ui::gpu::framebuffer() as usize;
+    let width = crate::ui::gpu::width() as usize;
+    let height = crate::ui::gpu::height() as usize;
+    let stride = soc::fb_stride() as usize;
+    if base == 0 || width == 0 || height == 0 || stride == 0 {
+        console::puts("  no framebuffer\n");
+        return;
+    }
+    let out_w = width / scale;
+    let out_h = height / scale;
+
+    // Banner via whichever platform serial is active.
+    platform::serial_puts("SCREEN_BEGIN w=");
+    print_num_serial(out_w);
+    platform::serial_puts(" h=");
+    print_num_serial(out_h);
+    platform::serial_puts(" scale=");
+    print_num_serial(scale);
+    platform::serial_puts(" fmt=argb2101010\n");
+
+    // Write one byte per trap via the active platform serial.
+    // On M4 this is dockchannel TX8 → vuart → /dev/ttyACM2.
+    const HX: &[u8; 16] = b"0123456789abcdef";
+    for y in 0..out_h {
+        let src_row = y * scale;
+        let row_base = base + src_row * stride;
+        for x in 0..out_w {
+            let src_x = x * scale;
+            let w: u32 = unsafe {
+                core::ptr::read_volatile((row_base + src_x * 4) as *const u32)
+            };
+            for i in (0..8).rev() {
+                let nib = ((w >> (i * 4)) & 0xf) as usize;
+                platform::serial_putc(HX[nib]);
+            }
+        }
+        platform::serial_putc(b'\n');
+    }
+    platform::serial_puts("SCREEN_END\n");
+}
+
+fn print_num_serial(n: usize) {
+    let mut buf = [0u8; 20];
+    let mut i = 20;
+    let mut v = n;
+    if v == 0 {
+        platform::serial_putc(b'0');
+        return;
+    }
+    while v > 0 {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    for b in &buf[i..] { platform::serial_putc(*b); }
 }
 
 fn cmd_help() {
