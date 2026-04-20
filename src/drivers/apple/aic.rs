@@ -146,6 +146,15 @@ pub fn unregister(irq: u32) {
 ///
 /// This is the entry point called from the kernel's exception handler
 /// when an IRQ exception is taken on Apple Silicon.
+///
+/// M4 note: the stat counters (`IRQ_COUNT` / `SPURIOUS_COUNT`) used
+/// to be updated with `fetch_add`, but under the MMU-off bring-up
+/// regime every region is Device-nGnRnE and LDXR/STXR never succeeds
+/// — so a `fetch_add` would spin forever on the very first IRQ and
+/// wedge the kernel. We're running single-CPU with IRQ handlers
+/// effectively-serialized by the exception, so a plain load +
+/// wrapping_add + store is exclusive. Revisit once MMU is on and
+/// SMP lands. See `docs/M4_GROUND_TRUTH.md §2`.
 pub fn dispatch_one() -> bool {
     let raw = read32(AIC_EVENT);
     let event_type = raw & AIC_EVENT_TYPE_MASK;
@@ -155,7 +164,8 @@ pub fn dispatch_one() -> bool {
         return false;
     }
 
-    IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
+    let irq_n = IRQ_COUNT.load(Ordering::Relaxed);
+    IRQ_COUNT.store(irq_n.wrapping_add(1), Ordering::Relaxed);
 
     if event_type == AIC_EVENT_IRQ {
         if (event_num as usize) < MAX_IRQS {
@@ -169,11 +179,11 @@ pub fn dispatch_one() -> bool {
                 };
                 handler(event_num);
             } else {
-                SPURIOUS_COUNT.fetch_add(1, Ordering::Relaxed);
+                bump_spurious();
             }
             ack_irq(event_num);
         } else {
-            SPURIOUS_COUNT.fetch_add(1, Ordering::Relaxed);
+            bump_spurious();
         }
         return true;
     }
@@ -185,8 +195,14 @@ pub fn dispatch_one() -> bool {
     }
 
     // Unknown event type — count as spurious + drain.
-    SPURIOUS_COUNT.fetch_add(1, Ordering::Relaxed);
+    bump_spurious();
     true
+}
+
+#[inline(always)]
+fn bump_spurious() {
+    let n = SPURIOUS_COUNT.load(Ordering::Relaxed);
+    SPURIOUS_COUNT.store(n.wrapping_add(1), Ordering::Relaxed);
 }
 
 /// Diagnostic counters (for "is the IRQ wire alive?" debugging).

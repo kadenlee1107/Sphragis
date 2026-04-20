@@ -501,6 +501,66 @@ _bat_os_early_fault:
     b   1b
 "#);
 
+/// Post-splash kernel self-test for the M4 path. Exercises the real
+/// live paths that were hardened this session: `mm::frame::alloc_frame`
+/// (load+store under IrqGuard instead of `compare_exchange_weak`),
+/// `rng::fill_bytes` (non-atomic CTR), and the `fs::batfs` encrypted
+/// create+read round-trip (which also reaches `batfs::next_nonce`,
+/// the new `NONCE_COUNTER` load+store, and AES-CTR + HMAC-SHA256
+/// MAC verification).
+///
+/// All output goes through `drivers::apple::uart::puts`, which tees
+/// into `drivers::apple::fb_console::puts` — so each line is both
+/// shipped out the dockchannel UART and rendered to the M4 display
+/// for camera-visible verification. Doesn't loop; returns so the
+/// shell can still start afterwards.
+fn apple_kernel_self_test() {
+    use drivers::apple::uart;
+
+    uart::puts("\n[selftest] starting kernel self-test\n");
+
+    // Test 1: frame allocator round-trip.
+    uart::puts("[selftest] frame::alloc_frame ... ");
+    match kernel::mm::frame::alloc_frame() {
+        Some(addr) => {
+            uart::puts("OK (addr=0x");
+            uart::puthex64(addr as u64);
+            uart::puts(")\n");
+            kernel::mm::frame::free_frame(addr);
+            uart::puts("[selftest]   free_frame returned\n");
+        }
+        None => {
+            uart::puts("FAIL (out of memory)\n");
+            return;
+        }
+    }
+
+    // Test 2: BatFS create (exercises rng::fill_bytes → sha256 KDF
+    // → AES-CTR encrypt → HMAC-SHA256 tag → NONCE_COUNTER advance).
+    const NAME: &str = "selftest.txt";
+    const PLAINTEXT: &[u8] = b"Hello from Bat_OS on real Apple M4 silicon.";
+    uart::puts("[selftest] batfs::create(\""); uart::puts(NAME); uart::puts("\") ... ");
+    match fs::batfs::create(NAME, PLAINTEXT) {
+        Ok(()) => uart::puts("OK\n"),
+        Err(e) => { uart::puts("FAIL: "); uart::puts(e); uart::puts("\n"); return; }
+    }
+
+    // Test 3: BatFS read+verify round-trip (HMAC before decrypt).
+    uart::puts("[selftest] batfs::read+verify ... ");
+    let mut out = [0u8; 128];
+    match fs::batfs::read(NAME, &mut out) {
+        Ok(n) => {
+            if n == PLAINTEXT.len() && &out[..n] == PLAINTEXT {
+                uart::puts("OK ("); kernel::mm::print_num(n); uart::puts(" B matched)\n");
+                uart::puts("[selftest] all PASS\n");
+            } else {
+                uart::puts("FAIL: plaintext mismatch\n");
+            }
+        }
+        Err(e) => { uart::puts("FAIL: "); uart::puts(e); uart::puts("\n"); }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_args::BootArgsRaw) -> ! {
     // Install the early VBAR at whichever EL we're at. m1n1 hands
@@ -643,7 +703,13 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         // display) so we don't fight over the region.
         drivers::apple::fb_console::init();
         drivers::apple::uart::puts("[boot] Splash rendered — launching apple shell\n");
-        drivers::apple::uart::puts("[boot] FB console: uart mirror active\n\n");
+        drivers::apple::uart::puts("[boot] FB console: uart mirror active\n");
+
+        // Exercise the real kernel paths — frame allocator, BatFS
+        // encrypt+decrypt round-trip — and render PASS/FAIL to the
+        // fb_console so we can see the LL/SC-on-Device fixes hold
+        // under load.
+        apple_kernel_self_test();
 
         // Initialize SPI keyboard
         let _ = drivers::apple::spi::init();
