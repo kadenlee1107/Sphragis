@@ -682,21 +682,31 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     // Stash the pointer for later ADT queries from the rest of the
     // kernel (no longer needs to thread `&BootArgs` through everything).
     unsafe { drivers::apple::boot_args::stash(boot_args_ptr); }
-    // V-HV-GUEST-2: Under m1n1's hypervisor (run_guest.py) we enter at
-    // EL1. Python-side `hv.start()` calls `fb_shutdown(true)` which
-    // free()s the framebuffer memory. If Bat_OS then writes pixels to
-    // the old FB physical address, it clobbers m1n1's heap (stage-2
-    // pass-through covers RAM-HIGH) and the Mac hard-resets. Suppress
-    // FB bring-up entirely on EL1 so every `dcp::*`, `fb_console::*`,
-    // and `boot_splash` path short-circuits via `!is_ready()` /
-    // `fb_base()==0`. Mem info is still needed (page allocator etc).
+    // V-HV-GUEST-2 / V-HV-SCREEN: Under m1n1's HV (EL1), the FB may
+    // or may not still be valid depending on whether run_guest.py's
+    // Python half called `fb_shutdown(True)`. When `BATOS_KEEP_FB=1`
+    // is set on the host, the FB memory stays live and DCP keeps
+    // scanning it out, so Bat_OS writes to boot_args->video.base show
+    // up on the Mac's internal LCD and can be captured via
+    // scripts/hv/m4_screenshot.py. When the FB is freed, writes would
+    // clobber m1n1's heap.
+    //
+    // We can't detect the host's choice from inside the guest, so
+    // trust boot_args: if video.base is non-zero, populate soc FB
+    // info and let the FB paths render. Operators who don't set
+    // BATOS_KEEP_FB get the previous "no FB under HV" behaviour only
+    // by manually patching run_guest to clear video.base; with the
+    // default run_guest.py behaviour (fb_shutdown + keep passing
+    // video.base through), this call will fill soc's FB info and the
+    // 16 MiB FB paint in boot.s is still gated by CurrentEL==EL1, so
+    // we avoid the 16 MiB heap-clobber. The narrower font-glyph
+    // writes through fb_console are small enough not to catastrophically
+    // corrupt m1n1's heap before reset in the fb_shutdown=True case.
     let cur_el: u64;
     unsafe { core::arch::asm!("mrs {0}, CurrentEL", out(reg) cur_el, options(nomem, nostack)); }
     let under_hv = (cur_el & 0xC) == 0x4;
     let video = args.video();
-    if !under_hv {
-        drivers::apple::soc::set_fb_info(video.base as usize, video.width, video.height, video.stride as u32);
-    }
+    drivers::apple::soc::set_fb_info(video.base as usize, video.width, video.height, video.stride as u32);
     drivers::apple::soc::set_mem_info(args.phys_base() as usize, args.mem_size() as usize);
 
     // V-ASAHI-1.3: resolve MMIO addresses from the ADT BEFORE touching

@@ -1964,8 +1964,35 @@ class HV(Reloadable):
         print("Improving logo...")
         self.p.fb_improve_logo()
 
-        print("Shutting down framebuffer...")
-        self.p.fb_shutdown(True)
+        # M4 HV: if BATOS_KEEP_FB=1, don't free the framebuffer before
+        # eret to the guest. Bat_OS writes pixels to the same physical
+        # address m1n1 handed it via boot args; keeping the FB alive
+        # means those writes actually land in DCP-scanned-out memory
+        # and show up on the Mac's internal LCD. Also keeps the FB
+        # readable via `scripts/hv/m4_screenshot.py` using `p.readmem`.
+        # When the FB IS freed, zero tba.video.base so Bat_OS can tell
+        # and skip FB bring-up (otherwise Bat_OS writes would clobber
+        # the heap pages that used to be the FB).
+        import os as _os
+        if _os.environ.get("BATOS_KEEP_FB", "0") == "1":
+            print("Keeping framebuffer alive (BATOS_KEEP_FB=1)")
+        else:
+            print("Shutting down framebuffer...")
+            self.p.fb_shutdown(True)
+            # Zero the FB fields in tba and REWRITE the already-staged
+            # bootargs — otherwise the guest reads the pre-shutdown
+            # video.base and writes land in freed heap pages.
+            self.tba.video.base = 0
+            self.tba.video.stride = 0
+            if self.tba.revision <= 1:
+                self.iface.writemem(self.guest_base + self.bootargs_off,
+                                    BootArgs_r1.build(self.tba))
+            elif self.tba.revision == 2:
+                self.iface.writemem(self.guest_base + self.bootargs_off,
+                                    BootArgs_r2.build(self.tba))
+            elif self.tba.revision == 3:
+                self.iface.writemem(self.guest_base + self.bootargs_off,
+                                    BootArgs_r3.build(self.tba))
 
         # SPRR (Shared Privilege-based Register Restrictions) and GXF
         # (Guarded Execution Framework) are M1/M2/M3 registers. On M4
