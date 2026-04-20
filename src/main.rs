@@ -851,16 +851,22 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         // V-APPLE-UX-2: arm dead-man's-switch (48 h) just like QEMU.
         security::deadman::arm(48);
 
-        // V-APPLE-UX-3: drop into the full microkernel desktop — same
-        // `ui::desktop::run()` QEMU uses. Input comes via
-        // platform::serial_getc (dockchannel UART under HV, or SPI
-        // keyboard on bare-metal chainload). Rendering goes through
-        // the ui::gpu shim, so fills / rects / font glyphs all land
-        // in the M4 framebuffer with ARGB2101010 conversion.
-        //
-        // Ctrl-A..Ctrl-E = tab switch, Tab = cycle, Ctrl-L/K/W =
-        // splits, Ctrl-Q = close pane, Ctrl-W = panic wipe.
-        ui::desktop::run();
+        // V-APPLE-UX-3: TODO: ui::desktop::run() on Apple/M4 — first
+        // live run took an SError on a ldrb at x22=0x810202eab, which
+        // is a LINK-TIME rodata absolute (vs the runtime-loaded
+        // guest_base ≈ 0x10019... offset). Under HV stage-2, that's
+        // an unmapped-IPA → SErr. Root cause is somewhere in the
+        // desktop render path — probably a &'static str pointer that
+        // got truncated/stored as an absolute u64 and dereferenced
+        // later. Need to: (a) run objdump on the exact binary to find
+        // the faulting insn and its symbol, (b) either teach the HV
+        // to map a slack range around link-time 0x810000000 so those
+        // accesses succeed, or (c) fix the Rust codegen to keep PC-
+        // relative semantics through the offending indirection. Until
+        // then, keep the serial shell so the M4 session stays useful.
+        apple_serial_shell();
+        #[allow(unreachable_code)]
+        { ui::desktop::run(); } // keep symbol alive for future wire
     } else {
         drivers::apple::uart::puts("[boot] No display — serial shell\n\n");
         apple_serial_shell();
