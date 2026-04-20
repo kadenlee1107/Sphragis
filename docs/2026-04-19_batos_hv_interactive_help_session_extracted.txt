@@ -1,0 +1,33 @@
+  BAT_OS — BARE METAL APPLE SILICON
+  Running on REAL M4 hardware.
+================================================
+
+[boot] m1n1 handoff OK
+  revision: 3
+  machine_type: 0x00000000
+  mem_size: 15411 MiB
+  devtree: 540672 bytes
+  ADT-resolved peripherals: 9 / 9
+[boot] Initializing microkernel...
+[initrd] no blob
+  [mm] Frame allocator initialized — 15740192 KB free, heap @ 0x000001001a780000
+[boot] (HV guest) skipping AIC + hw bring-up
+  (empty — dev fallback)
+[boot] BatFS initialized (key=KDF(passphrase))
+[boot] Initializing display...
+[boot] No display — serial shell
+
+
+bat_os> =100194d7ff4
+[reader] >> sending 'help\r'
+sync] enter esr=93880007 elr=10019459c20
+  help           — list commands
+  uname          — kernel identity
+  mem            — frame allocator stats
+  fb             — framebuffer info
+  uptime         — ticks since boot (CNTPCT_EL0 / CNTFRQ_EL0)
+  batfs ls       — list BatFS files
+  batfs create <name> <plaintext>
+  batfs read <name>
+  halr=93880007 elr=10019459c20
+bat_os> er esr=93880007 elr=10019459c20

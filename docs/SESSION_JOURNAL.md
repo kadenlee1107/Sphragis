@@ -11,6 +11,86 @@ end of a session.
 
 ---
 
+## 2026-04-19 22:00 — Ubuntu — END-TO-END INTERACTIVE BAT_OS SHELL OVER USB-CDC ON M4 UNDER HV ✅✅
+
+**Camera is now obsolete.** Typing `help\r` into the vuart CDC
+endpoint from Ubuntu and receiving Bat_OS's actual kernel response
+on the same port:
+
+```
+bat_os>
+  help           — list commands
+  uname          — kernel identity
+  mem            — frame allocator stats
+  fb             — framebuffer info
+  uptime         — ticks since boot (CNTPCT_EL0 / CNTFRQ_EL0)
+  batfs ls       — list BatFS files
+  batfs create <name> <plaintext>
+  batfs read <name>
+  halt
+bat_os>
+```
+
+Evidence: `docs/2026-04-19_batos_hv_interactive_help_session_extracted.txt`.
+
+### The key delta from the 21:45 entry (which just had the prompt)
+
+Ubuntu's tty layer is the enemy when you're trying to drive a serial
+port transiently. `printf 'help\r' > /dev/ttyACM2` opens and closes
+the tty, and that close momentarily drops DTR. m1n1's DWC3 CDC ACM
+code only marks `dev->pipe[1].ready = true` when it sees
+`SET_CTRL_LINE_STATE` with DTR set — so the write window is too
+narrow for the OUT bulk endpoint to actually get armed and delivered.
+
+Fix: open /dev/ttyACM2 from a **single long-lived Python process
+that also drives the m1n1 HV proxy** (/dev/ttyACM1). One process
+keeps DTR asserted the whole session, configures raw termios before
+any I/O, and uses a reader/writer thread model that never closes
+the tty between operations. New script:
+
+- `scripts/hv/batos_hv_interactive.py` — drop-in replacement for
+  `external/m1n1/proxyclient/tools/run_guest.py` that opens ttyACM2
+  bidirectionally before starting the HV, spawns a reader thread,
+  and (optionally) injects a canned command via the
+  `BATOS_HV_STIMULUS` env var.
+
+### Reproduce
+
+```bash
+cd /home/kaden-lee/code/Bat_OS
+# Chainload patched m1n1 (same workflow as the 21:45 entry).
+
+# Run the interactive script — injects 'help\r' after it sees the
+# prompt. Merge ttyACM1 proxy traces + ttyACM2 vuart bytes in
+# stdout; m1n1 traces are prefixed `TTY>`.
+sg dialout -c "BATOS_HV_STIMULUS='help\\\\r' timeout 40 \
+    /usr/bin/python3 scripts/hv/batos_hv_interactive.py" \
+    | grep -v '^TTY> \[hv_exc'
+# Filter the hv_exc_sync breadcrumbs (one per dockchannel MMIO trap)
+# if you just want the Bat_OS output.
+
+# For a fully interactive prompt, run without STIMULUS set and use
+# a separate terminal pointed at /dev/ttyACM2 — but know that the
+# pyserial-based path in the script keeps DTR asserted, which is the
+# only way to get bytes to flow to m1n1 under HV.
+```
+
+### What's still hard for the next session
+
+- **Mac still resets after ~30-60 s of HV runtime.** Suspect Apple
+  SMC/AOP heartbeat. A persistent shell over multi-minute sessions
+  needs either ticks-on + more gating of Apple IMPDEF MSRs in the
+  FIQ path, or explicit pinging of whatever keeps SMC happy.
+- **Opening ttyACM2 from an already-running second process kills the
+  HV** (probably DTR-toggle-induced CDC control message handling
+  under HV hits an unhandled IMPDEF MSR). Use a single driver
+  process; don't try to `cat` the port while running the interactive
+  script.
+- **Echo loops appear if Ubuntu tty echo is on.** The script sets
+  raw termios explicitly; don't fight it.
+
+---
+
 ## 2026-04-19 21:45 — Ubuntu — Bat_OS BOOTS UNDER M1N1 HV — kernel log + `bat_os>` prompt on /dev/ttyACM2 ✅
 
 **One-line status.** Bat_OS now runs as a guest under m1n1's
