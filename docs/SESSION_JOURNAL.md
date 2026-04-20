@@ -264,6 +264,92 @@ SoC-wide visible state change) and M13 (Apple IMP-DEF sysreg
 which might be watched by firmware). Next round: skip M12+M13
 and see if ceiling extends. If not, isolate M8 next.
 
+### Bisect results this session
+
+  - M1-M3 skip (pcie/display/usb quiesce): HV=113 wall=118.
+    Trigger NOT in M1-M3.
+  - M12-M13 skip (CNTHCTL + CYC_OVRD writes): HV=112 wall=118.
+    Trigger NOT in M12-M13.
+  - M5/M7/M8/M9 skip (smp_wfe/pt/HCR/VBAR): SYNC'd in m1n1
+    itself at hv.start proxy — skip too aggressive, HV state
+    invariants broken before we can measure. Invalid test.
+
+### WFI-forever guest test — definitive activity-independence
+
+Added `BATOS_HV_PAYLOAD` env var to let us swap the guest binary.
+Wrote a 12-byte aarch64 stub (`wfi; b _start`), loaded as guest.
+Result on cycle 2 (fresh reset):
+
+```
+wall=119 s         (matches baseline 118 s)
+fiq=113 037        (steady 1 kHz timer, HV running normally)
+sync=0             (guest WFI forever, zero MMIO traps)
+irq=0, serr=0      (no async events)
+vtimer=0           (guest doesn't program its own timer)
+```
+
+**The Mac reset at 119 s despite the guest doing absolutely
+nothing.** The HV's timer kept firing, HV was healthy. Mac
+died at the same 118 s ceiling.
+
+Conclusive: **the 118 s watchdog fires regardless of guest
+activity.** Guest CPU work, polling intensity, MMIO pattern —
+none of it matters. The trigger is purely a wall-clock timer
+armed when `hv_init` + `hv_start` completes the AP-to-EL1-with-
+HV-vectors transition.
+
+### Net state-of-hypothesis now
+
+Three confirmed facts:
+  1. `hv_init` arms a timer that fires at ~118 s.
+  2. Without `hv_start`, firing causes only vuart endpoint drop;
+     ACM1 stays up, Mac doesn't full-reset.
+  3. With `hv_start` done (VBAR_EL1 installed + guest ERET'd to
+     EL1), firing escalates to full Mac reset, regardless of
+     what the guest is doing (proved by WFI-forever test).
+
+Best remaining hypothesis: an Apple coprocessor (AOP, SEP, PMP
+or SMC) has a firmware-level watchdog expecting the AP to
+perform a specific macOS-like handshake within 118 s of
+handoff. Stock m1n1 alone doesn't trip the expectation because
+the AP stays in a "waiting for kernel" state that's compatible
+with iBoot's handoff protocol. When our HV installs its own
+EL1 vectors + ERETs, the firmware sees the AP enter "I'm
+running a kernel now" state and starts the 118 s "do the
+handshake" timer. We never do the handshake → reset.
+
+### What to try next (concrete)
+
+  (a) **AOP mailbox probe**: read AOP RTKit status MMIO
+      at t=0, t=60, t=115 into a cycle. If a counter/state
+      changes across that window, we've found the watchdog.
+      (Prior AOP rtkit_boot attempts wedged the guest in 20-30 s
+      — be careful.)
+
+  (b) **SMC mailbox "KEY_SURV" / keepalive probe**: SMC
+      traditionally has a "kept alive" heartbeat. Same
+      read-at-timepoints approach.
+
+  (c) **SPMI controller read**: the M4_GROUND_TRUTH doc
+      explicitly calls out "PMU / USB-C PD. If PMU has its
+      own watchdog expecting AP SPMI traffic, 60 s idle could
+      trigger a reset." Probe aop-spmi0 state at timepoints
+      — though past direct MMIO poke SErrored.
+
+  (d) **Inject Apple-like handshake activity**: e.g., from
+      hv_tick write a benign read to the AOP mailbox, SMC
+      KEY reg, or SPMI status register. See if session length
+      extends.
+
+  (e) **Look at what real macOS kernel does in the first
+      118 s after iBoot handoff** — from the kernelcache we
+      already have in `docs/m4_re/kernelcache/`. Specifically
+      the AppleT8132, ApplePMGR, and early-boot platform
+      driver init. Any of AOP/SEP/SMC/PMP handshake done
+      within the first 60-120 s is what we need to mimic.
+
+### Implementation note
+
 ### Pending cleanup
 
 ### Pending cleanup

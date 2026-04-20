@@ -177,8 +177,11 @@ def main():
     hv = HV(iface, p, u)
     hv.init()
 
-    log(f"loading {BAT_OS_BINARY}")
-    hv.load_raw(BAT_OS_BINARY.read_bytes(), 0)
+    # Allow overriding payload for diagnostic experiments (e.g. a
+    # wfi-forever stub to isolate whether guest activity matters).
+    payload_path = os.environ.get("BATOS_HV_PAYLOAD", str(BAT_OS_BINARY))
+    log(f"loading {payload_path}")
+    hv.load_raw(pathlib.Path(payload_path).read_bytes(), 0)
 
     # Optional pre-start wall-clock delay for watchdog-source experiments.
     # If the Mac's 113 s ceiling is measured from iBoot handoff, delaying
