@@ -343,6 +343,17 @@ void smp_start_secondaries(void)
 
     spin_table[boot_cpu_idx].mpidr = mrs(MPIDR_EL1) & 0xFFFFFF;
 
+    /* T8132 / M4: the boot CPU is a P-core and writes to its
+     * cpu_impl_reg[0] (RVBAR) SError on the P-cluster. Starting
+     * secondaries would then walk every other CPU and SError those
+     * too. We only need boot_cpu_idx set for hv_start(); secondaries
+     * aren't used by our single-core bring-up. Return early here so
+     * the later P-cluster RVBAR + PMGR CPU_START writes are skipped.
+     */
+    if (chip_id == T8132) {
+        return;
+    }
+
     for (int i = 0; i < MAX_CPUS; i++) {
         int cpu_node = cpu_nodes[i];
 
