@@ -11,7 +11,7 @@
 // - You're incapacitated: timer expires, data destroyed
 // - You're fine: refresh the timer periodically
 
-use crate::drivers::uart;
+use crate::platform;
 use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 
 // Default: 48 hours (in seconds)
@@ -40,9 +40,9 @@ pub fn arm(interval_hours: u64) {
     ARMED.store(true, Ordering::Release);
     EXPIRED.store(false, Ordering::Relaxed);
 
-    uart::puts("  [dms] Dead man's switch ARMED (");
+    platform::serial_puts("  [dms] Dead man's switch ARMED (");
     crate::kernel::mm::print_num(interval_hours as usize);
-    uart::puts("h)\n");
+    platform::serial_puts("h)\n");
 }
 
 /// Refresh the timer — call this when the user re-authenticates.
@@ -55,7 +55,7 @@ pub fn refresh() {
 /// Disarm the switch (requires authentication first).
 pub fn disarm() {
     ARMED.store(false, Ordering::Relaxed);
-    uart::puts("  [dms] Dead man's switch DISARMED\n");
+    platform::serial_puts("  [dms] Dead man's switch DISARMED\n");
 }
 
 /// Check if the switch has expired. Called periodically.

@@ -15,7 +15,7 @@
 //   (makes SSD contents permanently unrecoverable)
 
 use crate::kernel::mm::frame;
-use crate::drivers::uart;
+use crate::platform;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 const WIPE_STATE_NONE: u8 = 0;
@@ -54,17 +54,17 @@ pub fn execute(reason: WipeReason, silent: bool) {
     };
 
     if !silent {
-        uart::puts("\n!!! WIPE INITIATED !!!\n");
-        uart::puts("  Reason: ");
-        uart::puts(reason_str);
-        uart::puts("\n");
+        platform::serial_puts("\n!!! WIPE INITIATED !!!\n");
+        platform::serial_puts("  Reason: ");
+        platform::serial_puts(reason_str);
+        platform::serial_puts("\n");
     }
 
     // Phase 1: Destroy encryption keys
     destroy_keys();
     crate::batcave::cave::destroy_all();
     if !WIPE_SILENT.load(Ordering::Relaxed) {
-        uart::puts("  [wipe] All BatCaves destroyed\n");
+        platform::serial_puts("  [wipe] All BatCaves destroyed\n");
     }
 
     // Phase 2: Zero filesystem data
@@ -81,8 +81,8 @@ pub fn execute(reason: WipeReason, silent: bool) {
     WIPE_STATE.store(WIPE_STATE_COMPLETE, Ordering::Relaxed);
 
     if !silent {
-        uart::puts("  WIPE COMPLETE — all data destroyed\n");
-        uart::puts("  System is now a brick.\n");
+        platform::serial_puts("  WIPE COMPLETE — all data destroyed\n");
+        platform::serial_puts("  System is now a brick.\n");
     }
 }
 
@@ -103,7 +103,7 @@ fn destroy_keys() {
     crate::fs::batfs::init(&poison);
 
     if !WIPE_SILENT.load(Ordering::Relaxed) {
-        uart::puts("  [wipe] Encryption keys destroyed\n");
+        platform::serial_puts("  [wipe] Encryption keys destroyed\n");
     }
 }
 
@@ -130,9 +130,9 @@ fn wipe_filesystem() {
     }
 
     if !WIPE_SILENT.load(Ordering::Relaxed) {
-        uart::puts("  [wipe] Filesystem destroyed (");
+        platform::serial_puts("  [wipe] Filesystem destroyed (");
         crate::kernel::mm::print_num(count);
-        uart::puts(" files zeroed)\n");
+        platform::serial_puts(" files zeroed)\n");
     }
 }
 
@@ -155,9 +155,9 @@ fn wipe_memory() {
     }
 
     if !WIPE_SILENT.load(Ordering::Relaxed) {
-        uart::puts("  [wipe] Memory zeroed (");
+        platform::serial_puts("  [wipe] Memory zeroed (");
         crate::kernel::mm::print_num(wiped * 4);
-        uart::puts(" KB wiped)\n");
+        platform::serial_puts(" KB wiped)\n");
     }
 }
 
@@ -174,7 +174,7 @@ fn wipe_secure_enclave() {
     // The real SEP implementation goes in drivers/apple/sep.rs
 
     if !WIPE_SILENT.load(Ordering::Relaxed) {
-        uart::puts("  [wipe] Secure Enclave: keys destroyed (simulated)\n");
+        platform::serial_puts("  [wipe] Secure Enclave: keys destroyed (simulated)\n");
     }
 }
 
