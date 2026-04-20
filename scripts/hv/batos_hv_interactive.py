@@ -140,12 +140,25 @@ def main():
                 decoded = decoded + b"\r"
             stims.append(decoded)
 
-    vuart = serial.Serial(
-        "/dev/ttyACM2",
-        baudrate=115200,
-        timeout=0.1,
-        rtscts=False, xonxoff=False, dsrdtr=False,
-    )
+    # ttyACM2 may lag a few seconds behind ttyACM1 after chainload.
+    # Retry up to 30 s before giving up.
+    vuart = None
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        try:
+            vuart = serial.Serial(
+                "/dev/ttyACM2",
+                baudrate=115200,
+                timeout=0.1,
+                rtscts=False, xonxoff=False, dsrdtr=False,
+            )
+            break
+        except (FileNotFoundError, serial.SerialException) as e:
+            last_err = e
+            time.sleep(1.0)
+    if vuart is None:
+        log(f"timed out waiting for /dev/ttyACM2: {last_err}")
+        sys.exit(1)
     configure_vuart_raw(vuart)
 
     stop = threading.Event()

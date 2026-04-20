@@ -168,6 +168,23 @@ static bool handle_vuart_dockchannel(struct exc_info *ctx, u64 addr, u64 *val,
     UNUSED(ctx);
     UNUSED(width);
 
+    // Heartbeat: print "HV alive t=Ns" once per second so we can
+    // distinguish m1n1 crashing vs USB CDC stalling vs external
+    // watchdog reset when a long session ends.
+    {
+        static u64 hv_start_ts = 0;
+        static u64 last_heartbeat = 0;
+        u64 now = mrs(CNTPCT_EL0);
+        if (hv_start_ts == 0)
+            hv_start_ts = now;
+        u64 freq = mrs(CNTFRQ_EL0);
+        if (freq > 0 && (now - last_heartbeat) > freq) {
+            u64 elapsed_sec = (now - hv_start_ts) / freq;
+            printf("HV alive t=%lus\n", elapsed_sec);
+            last_heartbeat = now;
+        }
+    }
+
     u64 off = addr - vuart_dc_base;
 
     if (write) {

@@ -900,6 +900,7 @@ fn apple_shell_dispatch(line: &str) {
             uart::puts("  fb             — framebuffer info\n");
             uart::puts("  uptime         — ticks since boot (CNTPCT_EL0 / CNTFRQ_EL0)\n");
             uart::puts("  cpuid          — CPU identification regs (MIDR / CTR / CurrentEL)\n");
+            uart::puts("  rand [N]       — N random bytes (hex, default 16, max 64)\n");
             uart::puts("  sha256 <text>  — SHA-256 hash of <text> (hex)\n");
             uart::puts("  batfs ls       — list BatFS files\n");
             uart::puts("  batfs create <name> <plaintext>\n");
@@ -931,6 +932,28 @@ fn apple_shell_dispatch(line: &str) {
                 0x53 => { uart::puts("  -> M4 Donan (P core)\n"); }
                 _    => {}
             }
+        }
+        "rand" => {
+            let n = match parts.next() {
+                Some(s) => {
+                    let trimmed = s.trim_end_matches(|c: char| c == '\r' || c == '\n');
+                    match trimmed.parse::<usize>() {
+                        Ok(v) => v.min(64),
+                        Err(_) => 16,
+                    }
+                }
+                None => 16,
+            };
+            let mut buf = [0u8; 64];
+            crypto::rng::fill_bytes(&mut buf[..n]);
+            uart::puts("  bytes: "); kernel::mm::print_num(n); uart::puts("\n");
+            uart::puts("  hex: ");
+            const HX: &[u8; 16] = b"0123456789abcdef";
+            for b in buf[..n].iter() {
+                uart::putc(HX[(*b >> 4) as usize]);
+                uart::putc(HX[(*b & 0xf) as usize]);
+            }
+            uart::puts("\n");
         }
         "sha256" => {
             let rest = match parts.next() {
@@ -975,6 +998,47 @@ fn apple_shell_dispatch(line: &str) {
         "halt" => {
             uart::puts("  halting (wfe)\n");
             loop { unsafe { core::arch::asm!("wfe"); } }
+        }
+        "bench" => {
+            let sub = parts.next().unwrap_or("").trim();
+            match sub {
+                "sha256" => {
+                    // Hash 64 KiB in 64 B chunks, time with CNTPCT.
+                    let buf = [0x42u8; 64];
+                    let rounds: usize = 1024; // 64 B × 1024 = 64 KiB
+                    let freq: u64;
+                    let t0: u64; let t1: u64;
+                    unsafe {
+                        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+                        core::arch::asm!("isb; mrs {}, cntpct_el0", out(reg) t0);
+                    }
+                    let mut acc: [u8; 32] = [0; 32];
+                    for _ in 0..rounds {
+                        acc = crate::crypto::sha256::hash(&buf);
+                    }
+                    unsafe { core::arch::asm!("isb; mrs {}, cntpct_el0", out(reg) t1); }
+                    let dt = t1 - t0;
+                    let bytes = (rounds * 64) as u64;
+                    // KiB/s ≈ bytes * freq / (dt * 1024)
+                    let kib_s = if dt > 0 { bytes * freq / (dt * 1024) } else { 0 };
+                    uart::puts("  rounds: "); kernel::mm::print_num(rounds); uart::puts("\n");
+                    uart::puts("  bytes:  "); kernel::mm::print_num(bytes as usize); uart::puts("\n");
+                    uart::puts("  dt_cntpct: "); kernel::mm::print_num(dt as usize); uart::puts("\n");
+                    uart::puts("  cntfrq: "); kernel::mm::print_num(freq as usize); uart::puts(" Hz\n");
+                    uart::puts("  KiB/s:  "); kernel::mm::print_num(kib_s as usize); uart::puts("\n");
+                    // Print last hash so the compiler can't optimise the loop away.
+                    uart::puts("  last:   ");
+                    const HX: &[u8; 16] = b"0123456789abcdef";
+                    for b in acc.iter().take(8) {
+                        uart::putc(HX[(*b >> 4) as usize]);
+                        uart::putc(HX[(*b & 0xf) as usize]);
+                    }
+                    uart::puts("…\n");
+                }
+                _ => {
+                    uart::puts("  usage: bench sha256\n");
+                }
+            }
         }
         "batfs" => {
             let sub = parts.next().unwrap_or("");
