@@ -69,11 +69,56 @@ are written. When transcribed to C `#define` form, drop the underscores.
   sometimes kernel-high (`0xffffffffff...`), sometimes low
   (`0x14798000`-ish) depending on m1n1's relocation seed — but the
   formula holds in every case. Src: `src/drivers/apple/boot_args.rs::parse`.
-- **WDT is disabled by m1n1.** Our Bat_OS can sit at `wfe` forever
-  post-chainload without triggering reset (m1n1 prints `WDT disabled`
-  during init). Mac does still spontaneously reset on its own timer
-  though — probably iBoot watchdog outside m1n1's reach. Expect
-  unpredictable reboots every ~20–60 s of m1n1-idle.
+- **WDT is disabled by m1n1 but spontaneous ~60–100 s reset still
+  happens.** m1n1 prints `WDT registers @ 0x3882b0000 / WDT disabled`
+  during init, and Bat_OS can `wfe` forever post-chainload without
+  firing that WDT. But the Mac still resets on its own timer (≈60 s
+  baseline, up to ≈96 s with hv_arm_tick + WDT_COUNT kick). Source
+  is NOT the ADT-declared watchdog — see below.
+
+  **WDT block at 0x3882b0000 on M4 has 3 instances, not 1**
+  (probed 2026-04-20, log `docs/2026-04-20_m4_wdt_register_rates.txt`):
+
+  | off | meaning | observed |
+  |---|---|---|
+  | 0x00 | chip-WDT counter    | live, 24 MHz |
+  | 0x04 | chip-WDT alarm      | `0x02dc6c00` = 48 M ticks = 2.00 s |
+  | 0x0c | chip-WDT control    | already 0 at m1n1 handoff |
+  | 0x10 | sys-WDT counter     | live, 24 MHz |
+  | 0x14 | sys-WDT alarm       | `0xd693a400` = 3.6 G ticks = 150 s |
+  | 0x1c | sys-WDT control     | set to 0 by `wdt_disable` (m1n1's only write) |
+  | 0x20 | bark-WDT counter    | live, 24 MHz |
+  | 0x24 | bark-WDT alarm      | `0xffffffff` (max) |
+  | 0x2c | bark-WDT control    | already 0 |
+
+  All three counters free-run (confirmed: read-twice-with-delay
+  shows +~36 M ticks over 1.5 s wall clock on each of 0x00 / 0x10
+  / 0x20). All three `*CTL` regs read 0 — standard s5l8960x
+  semantics says that's disabled. Writing `WDT_COUNT=0` (offset
+  0x10) from `hv_tick` at 1 kHz extends session length by +10 s at
+  most (within run-to-run noise, see journal 2026-04-20 11:35) —
+  consistent with "not actually disabled, but also not our reset
+  trigger." The actual culprit is another block entirely.
+
+  **Suspects (in ADT, un-probed yet):**
+  - `/arm-io/aop` (iop,ascwrap-v6 @ 0x38e1c0000) — Always-On
+    Processor, RTKit coproc. Expected to need periodic mailbox
+    traffic from the AP or it assumes the AP is wedged.
+  - `/arm-io/aop-spmi0` (aapl,spmi @ 0x3907a0000) — SPMI bus to
+    PMU / USB-C PD. If PMU has its own watchdog expecting AP
+    SPMI traffic, 60 s idle could trigger a reset.
+  - `/arm-io/ans` (iop,ascwrap-v6 @ 0x481400000) — NVMe
+    controller. Less likely (no storage traffic expected to
+    keep an NVMe controller happy), but in the RTKit family.
+  - `/arm-io/smc` (already has m1n1 driver, unused at runtime
+    except for HDMI-GPIO writes in `dcp.c` — and those don't
+    fire on MBA with internal-only display). `smc_init()` boots
+    the SMC ASC via rtkit; keeping that alive past hv_start
+    might passively stop whatever resets us.
+
+  **Ruled out:** MCHP/ADT watchdog (0x3882b0000 — see above);
+  our own HV code paths (A/B A/B confirms guest clean up to the
+  last tick before USB drops).
 - **MCC and cpufreq are unknown versions.** m1n1 logs
   `MCC: Unsupported version:mcc,t8132` and
   `cpufreq: Chip 0x8132 is unsupported`. Non-fatal — m1n1 uses safe

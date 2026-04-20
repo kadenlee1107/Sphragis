@@ -11,6 +11,107 @@ end of a session.
 
 ---
 
+## 2026-04-20 11:45 — Ubuntu — SoC WDT is NOT our reset trigger (proven)
+
+Continuing the session-length hunt without spawning a new session.
+Before chasing SMC/AOP, walked the ADT from the stock-m1n1 proxy
+and probed the WDT block directly to see whether our `wdt_kick`
+is even landing on a live watchdog. Answer: it isn't.
+
+**New tooling (committed):**
+- `scripts/hv/probe_m4_watchdogs.py` — walks `u.adt` for any node
+  whose name/compatible matches wdt / watchdog / aop / ans /
+  keepalive / heartbeat. One-shot, runs against stock m1n1.
+- `scripts/hv/probe_m4_wdt_rates.py` — reads the 16-word WDT MMIO
+  block at 0x3882b0000 twice with a 1.5 s gap so we can see
+  (a) which counters run, (b) at what clock rate, (c) what CTL
+  bits are actually set. Also one-shot.
+
+**Evidence captured:**
+- `docs/2026-04-20_m4_adt_watchdog_scan.txt` — every ADT node
+  matching a watchdog-ish hint. One `/arm-io/wdt` @ 0x3882b0000
+  (`wdt,t8132 / wdt,s5l8960x`). Plus a bunch of AOP / SPMI / ANS
+  nodes that are RTKit ASCs, not standard timer watchdogs.
+- `docs/2026-04-20_m4_wdt_register_rates.txt` — the register dump
+  before and after a 1.5 s wall delay.
+
+**Finding.** The WDT block at 0x3882b0000 contains **three**
+independent counter/alarm/ctl triplets, not one:
+
+```
+0x00 chip-WDT count,  0x04 alarm=0x02dc6c00 (2.00 s @ 24 MHz),
+0x0c CTL=0 (disabled)
+0x10 sys-WDT  count,  0x14 alarm=0xd693a400 (150 s @ 24 MHz),
+0x1c CTL=0 (disabled — m1n1's wdt_disable writes here)
+0x20 bark-WDT count,  0x24 alarm=0xffffffff (disabled via max),
+0x2c CTL=0 (disabled)
+```
+
+All three counters free-run at ~24 MHz (measured: 23.97–23.98 M/s).
+All three CTL registers read 0, which per s5l8960x-family semantics
+means "disabled" — so writing 0 elsewhere in the block shouldn't
+matter. That matches the marginal +10 s result from the 11:35
+`wdt_kick` experiment: the write isn't reaching an active watchdog.
+
+**Conclusion.** The 60–96 s reset does NOT come from the
+ADT-declared watchdog. The `wdt_kick` call I left in `hv_tick`
+is harmless but not the fix — leaving it in as defense-in-depth
+against an M4-specific layout bit we haven't decoded.
+
+**Remaining suspects (see M4_GROUND_TRUTH §2 "WDT" section for the
+full table of ADT nodes and their MMIO):**
+
+1. **AOP ASC** (`/arm-io/aop` @ 0x38e1c0000) — Always-On
+   Processor, runs its own firmware over RTKit. Strongest
+   suspect: if AP→AOP mailbox traffic is expected within ~1 min,
+   our idle HV session would trigger an AOP-side "AP wedged"
+   reset.
+2. **SPMI→PMU** (`/arm-io/aop-spmi0` @ 0x3907a0000) — PMU chips
+   frequently ship with their own on-die watchdog that expects
+   periodic SPMI traffic from the AP. 60 s idle would fit.
+3. **SMC ASC** (`/arm-io/smc`, already has an m1n1 driver) —
+   `smc_init()` boots the SMC coprocessor via RTKit. Currently
+   only called from `dcp.c` for HDMI-GPIO writes (doesn't fire
+   on MBA internal-display builds). Bringing SMC up at m1n1-init
+   and leaving it alive through the HV session is a
+   relatively cheap next experiment.
+
+### What to try next session
+
+**Plan A — cheapest, most reversible.** Add a `smc_init()` call
+near the end of `m1n1_main` (after `sep_init`, before `run_actions`),
+DO NOT call `smc_shutdown`. If the SMC coprocessor staying alive
+in the background is what keeps the AP from being declared dead,
+session length should jump noticeably. If SMC init itself fails
+under MBA's ADT (no HDMI GPIOs), fine — the call is side-effect-
+free on failure. If it succeeds but session length is unchanged,
+we've narrowed the suspect set.
+
+**Plan B.** If Plan A helps partially, add a periodic
+`smc_write_u32(smc, <harmless_key>, <same_value>)` from `hv_tick`
+to keep mailbox traffic flowing. The RTKit recv side would need
+to be pumped from hv_tick too (`rtkit_recv` on a dedicated poll
+call to prevent ring fill).
+
+**Plan C — only if Plans A/B don't help.** SPMI probing via
+`spmi_init("/arm-io/nub-spmi-a0")` to see if a periodic PMU
+register read changes anything. Risky because SPMI MMIO is in
+the HV passthrough region and our trap policy may SError on
+access. Save for last.
+
+Current session ceiling after the two cheap wins: **96 s**.
+Up from 60 s (pre-session). +60% budget, no regressions,
+fully documented.
+
+### Incremental commits this sub-session
+- `scripts/hv/probe_m4_watchdogs.py` — new
+- `scripts/hv/probe_m4_wdt_rates.py` — new
+- `docs/2026-04-20_m4_adt_watchdog_scan.txt` — evidence
+- `docs/2026-04-20_m4_wdt_register_rates.txt` — evidence
+- `docs/M4_GROUND_TRUTH.md` — WDT entry rewritten with the new data
+
+---
+
 ## 2026-04-20 11:35 — Ubuntu — WDT tickle probe: marginal (96 s) + what's next
 
 Added a `wdt_kick()` helper in m1n1 (`external/m1n1/src/wdt.c`) that
