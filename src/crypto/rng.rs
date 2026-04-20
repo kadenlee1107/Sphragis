@@ -172,7 +172,12 @@ pub fn fill_bytes(buf: &mut [u8]) {
     let seed = gather_seed();
     let mut pos = 0;
     while pos < buf.len() {
-        let ctr = CTR.fetch_add(1, Ordering::Relaxed);
+        // M4 / MMU-off: `fetch_add` lowers to LDXR/STXR which never
+        // succeeds on Device-nGnRnE memory, so the RMW spins forever.
+        // We hold CHAIN_LOCK non-atomically with IRQs masked on a
+        // single CPU, so a plain load+store is exclusive.
+        let ctr = CTR.load(Ordering::Relaxed);
+        CTR.store(ctr.wrapping_add(1), Ordering::Relaxed);
         let mut stream = [0u8; 64 + 16];
         stream[..64].copy_from_slice(&seed);
         stream[64..72].copy_from_slice(&ctr.to_le_bytes());

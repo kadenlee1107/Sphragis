@@ -11,6 +11,86 @@ end of a session.
 
 ---
 
+## 2026-04-19 17:05 — Ubuntu — batfs::init returns (CTR.fetch_add LL/SC fix)
+
+**Resolved the "batfs::init enters but never returns" hang.** The
+failure was the third instance of the same M4 LL/SC-on-Device-memory
+pattern we already fixed in `LockedHeap` and `CHAIN_LOCK`:
+
+- `crypto::rng::fill_bytes` (called from `fs::batfs::init` to seed
+  `BOOT_NONCE_PREFIX`) contains the loop
+  ```rust
+  while pos < buf.len() {
+      let ctr = CTR.fetch_add(1, Ordering::Relaxed);
+      ...
+  }
+  ```
+  `AtomicU64::fetch_add` on `aarch64-unknown-none` (no `+lse`) lowers
+  to an LDXR/STXR loop. With MMU off after m1n1 handoff, all memory
+  is Device-nGnRnE and STXR silently fails forever — so the RMW never
+  completes and `fill_bytes` wedges on its first iteration.
+
+**Fix.** `fill_bytes` is already inside an `IrqGuard` holding
+`CHAIN_LOCK` non-atomically. On a single-CPU bring-up with IRQs
+masked, plain load-then-store is exclusive. Replaced:
+
+```rust
+let ctr = CTR.fetch_add(1, Ordering::Relaxed);
+// ->
+let ctr = CTR.load(Ordering::Relaxed);
+CTR.store(ctr.wrapping_add(1), Ordering::Relaxed);
+```
+
+`STATE_LO.store(..)` / `STATE_HI.store(..)` further down in the same
+loop already use `Ordering::Release` which lowers to STLR (not an
+exclusive) and works fine on Device memory; they didn't need
+changing.
+
+**Verification.** Camera capture during chainload shows the M4
+display rendering `dcp::boot_splash()` — the amber "BAT OS" banner
+on its (unfortunately) bright-red `fill_screen(0xFF00_0000)`
+background. `boot_splash()` is **downstream** of `batfs::init`:
+```
+batfs::init(...)  →  dcp::init_simple_fb()  →  dcp::boot_splash()
+```
+So seeing the splash means batfs::init returned and control advanced
+past `dcp::init_simple_fb()` into the real splash renderer. First
+time we've gotten past that wall. Video captured to
+`/tmp/batos_run.mp4` (gitignored); sample frames in `/tmp/frames/`.
+
+**What's still broken (queued for next session):**
+
+- **ARGB2101010 color mismatch in `dcp::boot_splash`.** Constants are
+  authored as ARGB8888 (e.g. `0xFF00_0000` = "opaque black"), but the
+  M4 framebuffer is ARGB2101010 per `docs/M4_GROUND_TRUTH.md §3.1b`.
+  In that encoding, `0xFF00_0000` decodes to A=3, R=0x3F0 (~max), G=0,
+  B=0 — **bright red**, not black. The splash renders a red wash with
+  an amber title. Functional but ugly. Fix: port all color literals
+  in `src/drivers/apple/dcp.rs` (+ `ui::desktop` once we get there)
+  to ARGB2101010.
+- **No visible `ui::desktop::run()` output.** Video shows the splash
+  persisting unchanged for 30+ seconds — so either `desktop::run()`
+  hangs, or it renders using the same ARGB8888 constants and paints
+  everything in shades of red/black that look like "nothing changed".
+  Next bisection target after the color fix.
+- **Any `AtomicX::fetch_*` path still live elsewhere hangs.**
+  Remaining instances surveyed: `NONCE_COUNTER.fetch_add` in
+  `batfs::next_nonce` (first `batfs::create()` hangs),
+  `BITMAP[wi].fetch_and/fetch_or` in `kernel::mm::frame` (first
+  `frame::free_frame` hangs), `BITMAP[wi].compare_exchange_weak` in
+  `frame::alloc_frame` (first `frame::alloc_frame` hangs). None are
+  on the current boot path; will need the same load+store rewrite
+  when those paths are exercised.
+
+**Files touched:** `src/crypto/rng.rs` (the 5-line fix).
+
+**Next-Claude starting point:** fix the ARGB2101010 color constants
+in `dcp::boot_splash` / `fill_screen` so the splash renders black
+background + amber title as intended, then investigate why
+`ui::desktop::run()` doesn't advance past the splash.
+
+---
+
 ## 2026-04-19 11:01 — Ubuntu — Session end: live, animated boot screen
 
 **Iterated past the static splash into a full animated boot screen.**

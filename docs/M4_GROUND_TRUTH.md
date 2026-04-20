@@ -81,6 +81,23 @@ are written. When transcribed to C `#define` form, drop the underscores.
   which we suspect is the watchdog biting because cpufreq ramping
   isn't working. Avoid sustained full-tilt CPU until we port the
   tunables.
+- **LL/SC (LDXR/STXR) always fails with MMU off.** m1n1 hands off at
+  EL2 with MMU disabled, so every region is Device-nGnRnE. On Apple
+  cores, STXR against Device memory never succeeds — any Rust atomic
+  RMW (`fetch_add`, `fetch_or`, `compare_exchange`, `swap`, ...)
+  that lowers to an LDXR/STXR loop on `aarch64-unknown-none` (no
+  `+lse`) spins forever. Plain `store(Ordering::Release)` lowers to
+  STLR, which is a single non-exclusive instruction and does work on
+  Device memory. **Rule during bring-up:** under
+  `IrqGuard` + single-CPU, replace every RMW on the boot path with
+  plain `load` + `store`. Known fixes: `kernel::mm::heap::LockedHeap`
+  → `UnsafeCell<Heap>` (commit `351c37c8`), `rng::CHAIN_LOCK` CAS →
+  store (`d3537e74`), `rng::CTR.fetch_add` → load+store (session
+  2026-04-19 17:05). Still-live RMWs not yet on the critical path:
+  `batfs::NONCE_COUNTER.fetch_add` (`next_nonce`),
+  `mm::frame::BITMAP[_].compare_exchange_weak` (`alloc_frame`) and
+  `.fetch_and/or` (`free_frame` / alternate alloc). Will hang on
+  first exercise; rewrite the same way.
 
 ---
 
