@@ -851,10 +851,16 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         // V-APPLE-UX-2: arm dead-man's-switch (48 h) just like QEMU.
         security::deadman::arm(48);
 
-        // Shell first — desktop tabs port is the next task. Operator
-        // can exit shell with `halt` and re-enter via Ctrl-L when the
-        // desktop is online.
-        apple_serial_shell();
+        // V-APPLE-UX-3: drop into the full microkernel desktop — same
+        // `ui::desktop::run()` QEMU uses. Input comes via
+        // platform::serial_getc (dockchannel UART under HV, or SPI
+        // keyboard on bare-metal chainload). Rendering goes through
+        // the ui::gpu shim, so fills / rects / font glyphs all land
+        // in the M4 framebuffer with ARGB2101010 conversion.
+        //
+        // Ctrl-A..Ctrl-E = tab switch, Tab = cycle, Ctrl-L/K/W =
+        // splits, Ctrl-Q = close pane, Ctrl-W = panic wipe.
+        ui::desktop::run();
     } else {
         drivers::apple::uart::puts("[boot] No display — serial shell\n\n");
         apple_serial_shell();

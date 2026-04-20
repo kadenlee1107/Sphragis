@@ -2,7 +2,7 @@
 // Main event loop. Handles keyboard input, app switching, rendering.
 // Ctrl+1-5 switches between apps.
 
-use crate::drivers::uart;
+use crate::platform;
 use crate::security;
 use super::{wm, console, apps};
 
@@ -16,7 +16,7 @@ pub fn resume() -> ! {
     console::prompt();
 
     loop {
-        if let Some(c) = uart::getc() {
+        if let Some(c) = platform::serial_getc() {
             if security::check_panic_hotkey(c) {
                 loop { unsafe { core::arch::asm!("wfe") }; }
             }
@@ -40,7 +40,7 @@ pub fn resume() -> ! {
                 match c {
                     b'\r' | b'\n' => {
                         console::putc(b'\n');
-                        uart::puts("\r\n");
+                        platform::serial_puts("\r\n");
                         if cmd_len > 0 {
                             let cmd = unsafe { core::str::from_utf8_unchecked(&cmd_buf[..cmd_len]) };
                             super::shell::execute_cmd(cmd);
@@ -53,14 +53,14 @@ pub fn resume() -> ! {
                         if cmd_len > 0 {
                             cmd_len -= 1;
                             console::putc(0x08);
-                            uart::putc(0x08); uart::putc(b' '); uart::putc(0x08);
+                            platform::serial_putc(0x08); platform::serial_putc(b' '); platform::serial_putc(0x08);
                         }
                     }
                     _ if c >= 0x20 && c <= 0x7E && cmd_len < 255 => {
                         cmd_buf[cmd_len] = c;
                         cmd_len += 1;
                         console::putc(c);
-                        uart::putc(c);
+                        platform::serial_putc(c);
                     }
                     _ => {}
                 }
@@ -89,7 +89,7 @@ pub fn run() -> ! {
 
     loop {
         // Check for keyboard input
-        if let Some(c) = uart::getc() {
+        if let Some(c) = platform::serial_getc() {
             // Check for Ctrl+1-5 (switch apps)
             if c == 0x11 { // Ctrl+Q (or we use raw codes)
                 // Alternative: use Escape sequences
@@ -154,7 +154,7 @@ pub fn run() -> ! {
                     match c {
                         b'\r' | b'\n' => {
                             console::putc(b'\n');
-                            uart::puts("\r\n");
+                            platform::serial_puts("\r\n");
                             if cmd_len > 0 {
                                 let cmd = unsafe { core::str::from_utf8_unchecked(&cmd_buf[..cmd_len]) };
                                 super::shell::execute_cmd(cmd);
@@ -167,16 +167,16 @@ pub fn run() -> ! {
                             if cmd_len > 0 {
                                 cmd_len -= 1;
                                 console::putc(0x08);
-                                uart::putc(0x08);
-                                uart::putc(b' ');
-                                uart::putc(0x08);
+                                platform::serial_putc(0x08);
+                                platform::serial_putc(b' ');
+                                platform::serial_putc(0x08);
                             }
                         }
                         _ if c >= 0x20 && c <= 0x7E && cmd_len < 255 => {
                             cmd_buf[cmd_len] = c;
                             cmd_len += 1;
                             console::putc(c);
-                            uart::putc(c);
+                            platform::serial_putc(c);
                         }
                         _ => {}
                     }

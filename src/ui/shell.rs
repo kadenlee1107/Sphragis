@@ -2,7 +2,7 @@
 // Command-line interface rendered to the GPU console.
 // Reads from UART, displays on framebuffer.
 
-use crate::drivers::uart;
+use crate::platform;
 use crate::ui::console;
 use crate::fs::batfs;
 use crate::net;
@@ -28,12 +28,12 @@ pub fn run() -> ! {
     console::prompt();
 
     loop {
-        if let Some(c) = uart::getc() {
+        if let Some(c) = platform::serial_getc() {
             match c {
                 b'\r' | b'\n' => {
                     // Execute command
                     console::putc(b'\n');
-                    uart::puts("\n");
+                    platform::serial_puts("\n");
 
                     if cmd_len > 0 {
                         let cmd = unsafe {
@@ -50,15 +50,15 @@ pub fn run() -> ! {
                     if cmd_len > 0 {
                         cmd_len -= 1;
                         console::putc(0x08);
-                        uart::putc(0x08);
-                        uart::putc(b' ');
-                        uart::putc(0x08);
+                        platform::serial_putc(0x08);
+                        platform::serial_putc(b' ');
+                        platform::serial_putc(0x08);
                     }
                 }
                 0x03 => {
                     // Ctrl+C
                     console::puts("^C\n");
-                    uart::puts("^C\n");
+                    platform::serial_puts("^C\n");
                     cmd_len = 0;
                     console::prompt();
                 }
@@ -67,7 +67,7 @@ pub fn run() -> ! {
                         cmd_buf[cmd_len] = c;
                         cmd_len += 1;
                         console::putc(c);
-                        uart::putc(c);
+                        platform::serial_putc(c);
                     }
                 }
             }
@@ -86,9 +86,9 @@ fn execute(cmd: &str) {
     let command = parts[0];
 
     // Mirror to serial
-    uart::puts("[shell] ");
-    uart::puts(cmd);
-    uart::puts("\n");
+    platform::serial_puts("[shell] ");
+    platform::serial_puts(cmd);
+    platform::serial_puts("\n");
 
     match command {
         "help" => cmd_help(),
@@ -933,9 +933,9 @@ fn cmd_run_elf(name: &str) {
     console::puts("  Loading ELF binary: ");
     console::puts(name);
     console::puts("\n");
-    uart::puts("[shell] loading ELF: ");
-    uart::puts(name);
-    uart::puts("\n");
+    platform::serial_puts("[shell] loading ELF: ");
+    platform::serial_puts(name);
+    platform::serial_puts("\n");
 
     // BatCave EL0 runner — all static-PIE binaries go through here
     let batcave_names = ["netsurf", "freetype", "png", "posix", "cxx", "v8", "blink"];
@@ -953,10 +953,10 @@ fn cmd_run_elf(name: &str) {
             "csstok" => crate::batcave::linux::runner::css_tokenizer_test_elf(),
             _ => crate::batcave::linux::runner::netsurf_test_elf(),
         };
-        uart::puts("[shell] using BatCave EL0 runner\n");
+        platform::serial_puts("[shell] using BatCave EL0 runner\n");
         match crate::batcave::linux::loader::load_elf(data) {
             Ok(entry) => {
-                uart::puts("[shell] loaded, running via BatCave...\n");
+                platform::serial_puts("[shell] loaded, running via BatCave...\n");
                 if let Err(e) = crate::batcave::linux::loader::execute_with_args(entry, &[name]) {
                     console::puts("  Error: ");
                     console::puts(e);
@@ -995,18 +995,18 @@ fn cmd_run_elf(name: &str) {
     } else {
         crate::batcave::linux::runner::hello_elf()
     };
-    uart::puts("[shell] ELF data: ");
+    platform::serial_puts("[shell] ELF data: ");
     crate::kernel::mm::print_num(hello_data.len());
-    uart::puts(" bytes\n");
+    platform::serial_puts(" bytes\n");
 
     match crate::batcave::linux::loader::load_hello_elf(hello_data) {
         Ok((phys_entry, _phys_base, _orig_entry)) => {
-            uart::puts("[shell] ELF loaded, entry=0x");
+            platform::serial_puts("[shell] ELF loaded, entry=0x");
             let hex = b"0123456789abcdef";
             for i in (0..16).rev() {
-                uart::putc(hex[((phys_entry >> (i * 4)) & 0xf) as usize]);
+                platform::serial_putc(hex[((phys_entry >> (i * 4)) & 0xf) as usize]);
             }
-            uart::puts("\n");
+            platform::serial_puts("\n");
 
             console::puts("  Executing...\n");
 
@@ -1045,11 +1045,11 @@ fn cmd_run_elf(name: &str) {
 
                     let final_sp = (sp - 48) & !0xF; // 16-byte aligned! ARM64 ABI requires it
 
-                    uart::puts("[shell] jumping to ELF entry, sp=0x");
+                    platform::serial_puts("[shell] jumping to ELF entry, sp=0x");
                     for i in (0..16).rev() {
-                        uart::putc(hex[((final_sp >> (i * 4)) & 0xf) as usize]);
+                        platform::serial_putc(hex[((final_sp >> (i * 4)) & 0xf) as usize]);
                     }
-                    uart::puts("\n");
+                    platform::serial_puts("\n");
 
                     // Ensure cache coherency: flush data caches and invalidate
                     // instruction caches so the loaded code is visible
@@ -1084,9 +1084,9 @@ fn cmd_run_elf(name: &str) {
             console::puts("  ERROR: ");
             console::puts(e);
             console::puts("\n");
-            uart::puts("[shell] ELF load failed: ");
-            uart::puts(e);
-            uart::puts("\n");
+            platform::serial_puts("[shell] ELF load failed: ");
+            platform::serial_puts(e);
+            platform::serial_puts("\n");
         }
     }
 }

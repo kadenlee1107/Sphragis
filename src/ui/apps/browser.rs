@@ -13,7 +13,7 @@
 use crate::ui::wm;
 use crate::ui::font;
 use crate::ui::gpu;
-use crate::drivers::uart;
+use crate::platform;
 
 const BG: u32 = 0xFF0A0A0A;         // page background
 const FG: u32 = 0xFFA0A0A0;         // body text
@@ -245,26 +245,26 @@ pub fn navigate(url: &[u8]) {
     let port = if is_https && port == 80 { 443 } else { port };
 
     // Resolve DNS
-    uart::puts("[browser] resolving: ");
-    uart::puts(host);
-    uart::puts("\n");
+    platform::serial_puts("[browser] resolving: ");
+    platform::serial_puts(host);
+    platform::serial_puts("\n");
     let ip = match crate::net::dns::resolve(host) {
         Ok(ip) => {
-            uart::puts("[browser] resolved to ");
+            platform::serial_puts("[browser] resolved to ");
             crate::kernel::mm::print_num(((ip >> 24) & 0xFF) as usize);
-            uart::putc(b'.');
+            platform::serial_putc(b'.');
             crate::kernel::mm::print_num(((ip >> 16) & 0xFF) as usize);
-            uart::putc(b'.');
+            platform::serial_putc(b'.');
             crate::kernel::mm::print_num(((ip >> 8) & 0xFF) as usize);
-            uart::putc(b'.');
+            platform::serial_putc(b'.');
             crate::kernel::mm::print_num((ip & 0xFF) as usize);
-            uart::puts("\n");
+            platform::serial_puts("\n");
             ip
         }
         Err(e) => {
-            uart::puts("[browser] DNS failed: ");
-            uart::puts(e);
-            uart::puts("\n");
+            platform::serial_puts("[browser] DNS failed: ");
+            platform::serial_puts(e);
+            platform::serial_puts("\n");
             unsafe { STATE = BrowserState::Error; }
             set_status(b"DNS failed");
             return;
@@ -283,9 +283,9 @@ pub fn navigate(url: &[u8]) {
     // TLS handshake for HTTPS
     if is_https {
         set_status(b"TLS handshake...");
-        uart::puts("[browser] TLS handshake with ");
-        uart::puts(host);
-        uart::puts("\n");
+        platform::serial_puts("[browser] TLS handshake with ");
+        platform::serial_puts(host);
+        platform::serial_puts("\n");
         if crate::net::tls::handshake(host).is_err() {
             unsafe { STATE = BrowserState::Error; }
             set_status(b"TLS handshake failed");
@@ -406,26 +406,26 @@ pub fn navigate(url: &[u8]) {
     let status_code = parse_status_code(&raw[..total.min(20)]);
 
     // Debug: log header parsing
-    uart::puts("[browser] total=");
+    platform::serial_puts("[browser] total=");
     crate::kernel::mm::print_num(total);
-    uart::puts(" headers_end=");
+    platform::serial_puts(" headers_end=");
     crate::kernel::mm::print_num(headers_end);
-    uart::puts(" status=");
+    platform::serial_puts(" status=");
     crate::kernel::mm::print_num(status_code as usize);
-    uart::puts("\n");
+    platform::serial_puts("\n");
     // Log content-encoding if present
     if let Some(enc) = find_header(&raw[..headers_end.max(1).min(total)], b"Content-Encoding:") {
-        uart::puts("[browser] Content-Encoding: ");
-        uart::puts(unsafe { core::str::from_utf8_unchecked(enc) });
-        uart::puts("\n");
+        platform::serial_puts("[browser] Content-Encoding: ");
+        platform::serial_puts(unsafe { core::str::from_utf8_unchecked(enc) });
+        platform::serial_puts("\n");
     }
 
     if status_code >= 300 && status_code < 400 {
         // Extract Location: header
         if let Some(location) = find_header(&raw[..headers_end], b"Location:") {
-            uart::puts("[browser] redirect → ");
-            uart::puts(unsafe { core::str::from_utf8_unchecked(location) });
-            uart::puts("\n");
+            platform::serial_puts("[browser] redirect → ");
+            platform::serial_puts(unsafe { core::str::from_utf8_unchecked(location) });
+            platform::serial_puts("\n");
             // Follow redirect (up to 5 hops)
             static mut REDIRECT_COUNT: u8 = 0;
             unsafe {
@@ -473,14 +473,14 @@ pub fn navigate(url: &[u8]) {
         match crate::net::http::decode_chunked(chunk_data, decoded) {
             Ok(n) => {
                 decoded_len = n;
-                uart::puts("[browser] decoded chunked body: ");
+                platform::serial_puts("[browser] decoded chunked body: ");
                 crate::kernel::mm::print_num(decoded_len);
-                uart::puts(" bytes\n");
+                platform::serial_puts(" bytes\n");
             }
             Err(e) => {
-                uart::puts("[browser] chunked decode rejected: ");
-                uart::puts(e.as_str());
-                uart::puts("\n");
+                platform::serial_puts("[browser] chunked decode rejected: ");
+                platform::serial_puts(e.as_str());
+                platform::serial_puts("\n");
                 unsafe { STATE = BrowserState::Error; }
                 set_status(e.as_str().as_bytes());
                 return;
@@ -497,7 +497,7 @@ pub fn navigate(url: &[u8]) {
     // Check for gzip Content-Encoding and decompress if needed
     if let Some(enc) = find_header(&raw[..headers_end.max(1).min(total)], b"Content-Encoding:") {
         if starts_with_ci(enc, b"gzip") {
-            uart::puts("[browser] gzip detected, decompressing...\n");
+            platform::serial_puts("[browser] gzip detected, decompressing...\n");
             static mut DECOMP_BUF: [u8; 262144] = [0u8; 262144];
             let decompressed = unsafe { &mut *core::ptr::addr_of_mut!(DECOMP_BUF) };
             // V12: zero before use so a short decompress output can't
@@ -507,16 +507,16 @@ pub fn navigate(url: &[u8]) {
             if dec_len > 0 {
                 // Copy all decompressed data (up to decoded buffer size)
                 let copy = dec_len.min(decoded.len());
-                uart::puts("[browser] copying ");
+                platform::serial_puts("[browser] copying ");
                 crate::kernel::mm::print_num(copy);
-                uart::puts(" bytes to decoded buffer\n");
+                platform::serial_puts(" bytes to decoded buffer\n");
                 decoded[..copy].copy_from_slice(&decompressed[..copy]);
                 decoded_len = copy;
-                uart::puts("[browser] gzip decompressed: ");
+                platform::serial_puts("[browser] gzip decompressed: ");
                 crate::kernel::mm::print_num(decoded_len);
-                uart::puts(" bytes\n");
+                platform::serial_puts(" bytes\n");
             } else {
-                uart::puts("[browser] gzip decompression failed, using raw data\n");
+                platform::serial_puts("[browser] gzip decompression failed, using raw data\n");
             }
         }
     }
@@ -526,9 +526,9 @@ pub fn navigate(url: &[u8]) {
     let body_cap = decoded_len.min(131072); // Use all available decompressed data
     let body = &decoded[..body_cap];
 
-    uart::puts("[browser] body_len=");
+    platform::serial_puts("[browser] body_len=");
     crate::kernel::mm::print_num(body_cap);
-    uart::puts("\n");
+    platform::serial_puts("\n");
 
     // Full rendering pipeline: HTML → DOM → Reader Mode → CSS → Layout → JS → Paint
     unsafe {
@@ -546,7 +546,7 @@ pub fn navigate(url: &[u8]) {
             // Step 4: Check if scripts mutated the DOM
             let dom_was_dirty = crate::browser::js::dom_api::take_dirty();
             if dom_was_dirty {
-                crate::drivers::uart::puts("[browser] DOM mutated by JS — rebuilding layout\n");
+                crate::platform::serial_puts("[browser] DOM mutated by JS — rebuilding layout\n");
             }
 
             // Step 5: Compute layout (always, or re-layout if DOM dirty)
@@ -560,13 +560,13 @@ pub fn navigate(url: &[u8]) {
             // Debug: log DOM and layout stats
             let dom = &*core::ptr::addr_of!(DOM_DOC);
             let lt = &*core::ptr::addr_of!(LAYOUT_TREE);
-            crate::drivers::uart::puts("[browser] DOM nodes=");
+            crate::platform::serial_puts("[browser] DOM nodes=");
             crate::kernel::mm::print_num(dom.node_count);
-            crate::drivers::uart::puts(" layout boxes=");
+            crate::platform::serial_puts(" layout boxes=");
             crate::kernel::mm::print_num(lt.box_count);
-            crate::drivers::uart::puts(" body_len=");
+            crate::platform::serial_puts(" body_len=");
             crate::kernel::mm::print_num(body.len());
-            crate::drivers::uart::puts("\n");
+            crate::platform::serial_puts("\n");
         }
     }
 
@@ -580,11 +580,11 @@ pub fn navigate(url: &[u8]) {
         } else {
             strip_html(body, host);
         }
-        crate::drivers::uart::puts("[browser] Level1 text_len=");
+        crate::platform::serial_puts("[browser] Level1 text_len=");
         crate::kernel::mm::print_num(PAGE_LEN);
-        crate::drivers::uart::puts(" links=");
+        crate::platform::serial_puts(" links=");
         crate::kernel::mm::print_num(LINK_COUNT);
-        crate::drivers::uart::puts("\n");
+        crate::platform::serial_puts("\n");
     }
 
     unsafe {
@@ -1045,7 +1045,7 @@ fn execute_scripts(doc: &crate::browser::dom::Document) {
         if !core::ptr::read_volatile(core::ptr::addr_of!(JS_VM_INITIALIZED)) {
             (*core::ptr::addr_of_mut!(JS_VM)).init();
             core::ptr::write_volatile(core::ptr::addr_of_mut!(JS_VM_INITIALIZED), true);
-            uart::puts("[js] bytecode VM initialized\n");
+            platform::serial_puts("[js] bytecode VM initialized\n");
         }
     }
 
@@ -1057,28 +1057,28 @@ fn execute_scripts(doc: &crate::browser::dom::Document) {
             if child.node_type == crate::browser::dom::NodeType::Text && child.text_len > 0 {
                 let source = &child.text[..child.text_len];
 
-                uart::puts("[js] executing script (");
+                platform::serial_puts("[js] executing script (");
                 crate::kernel::mm::print_num(source.len());
-                uart::puts(" bytes)\n");
+                platform::serial_puts(" bytes)\n");
 
                 // Execute using the new bytecode VM
                 unsafe {
                     let vm = &mut *core::ptr::addr_of_mut!(JS_VM);
                     match vm.execute(source) {
                         Ok(_val) => {
-                            uart::puts("[js] script completed\n");
+                            platform::serial_puts("[js] script completed\n");
                         }
                         Err(_) => {
-                            uart::puts("[js] script error\n");
+                            platform::serial_puts("[js] script error\n");
                         }
                     }
 
                     // Check for console output from the VM
                     let cl = vm.console_len;
                     if cl > 0 {
-                        uart::puts("[js console] ");
+                        platform::serial_puts("[js console] ");
                         for i in 0..cl.min(200) {
-                            uart::putc(vm.console_buf[i]);
+                            platform::serial_putc(vm.console_buf[i]);
                         }
                         vm.console_len = 0; // reset
                     }
