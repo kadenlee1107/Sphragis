@@ -11,6 +11,73 @@ end of a session.
 
 ---
 
+## 2026-04-20 08:35 — Ubuntu — Crypto-ext probes + diagnostic heartbeat; reset is wall-clock
+
+This morning's adds on top of the interactive-shell infrastructure:
+
+- **`sha-hw`** shell command — issues SHA256H / SHA256H2 / SHA256SU0
+  with a `.arch armv8.2-a+sha2` inline-asm prefix so `rustc` for
+  `aarch64-unknown-none` lets the assembler through. Live on M4 at
+  EL1 under HV:
+  ```
+    ISAR0.SHA2 nibble: 0x00000002
+    SHA256H/H2/SU0 executed (no UNDEF)
+    -> hardware SHA-256 accessible from EL1 guest
+  ```
+  The FP/NEON + SHA2 pipeline is not trapped by HCR_EL2 / CPTR_EL2.
+  Opens the door to swap `crypto::sha256::hash` for a HW-accelerated
+  version that beats the current 595-609 KiB/s software baseline.
+
+- **`aes-hw`** shell command — issues AESE + AESMC. `V0 → 0x9d9d…9d9d`,
+  which is the correct output for state=0x20…, key=0x55… → S-box of
+  0x75 = 0x9d. AES pipeline also exposed.
+
+- **`self-test`** — runs frame::alloc_frame + BatFS::create +
+  batfs::read+verify + merkle_root + verify_all_integrity in one
+  shell command. Whole kernel crypto + mm path verified PASS on M4
+  under HV.
+
+- **Heartbeat + trap counter** on the m1n1 dockchannel-MMIO trap
+  handler: every second we now print
+  `HV alive t=Ns traps=N`
+  with a monotonically-increasing trap counter. Ran two back-to-back
+  endurance tests to pin down the remaining ~30-60 s reset:
+
+    Full-rate poll (~700 k traps/s):  DEAD at t=35s, traps=24458428.
+    Slow poll (~1 k traps/s, 1 ms):   DEAD at t=45s, traps=46280.
+
+  Both cases the trap counter keeps growing linearly RIGHT up to
+  the last heartbeat before USB dies. So the guest is still polling
+  and m1n1 is still trapping when the reset fires — the trigger is
+  external (wall-clock), NOT CPU/trap-rate driven. Most likely Apple
+  SMC/AOP heartbeat watchdog expecting periodic bus traffic stock
+  m1n1 happens to generate in its main loop but we don't. That's the
+  next-session target.
+
+- **Shell-side utilities** landed earlier this sub-session:
+  - `rng` — reads ID_AA64ISAR0_EL1 and decodes RNDR / SHA2 / AES
+    nibbles. Finding: **M4 hardware has RNDR but HV strips it from
+    ISAR0** (nibble 0 at EL1). SHA2 = 0x2, AES = 0x2.
+  - `bench sha256` — 65 KiB of software SHA-256 in 1024 rounds,
+    timed with CNTPCT. M4 P-core at EL1 under HV = 595-609 KiB/s
+    software. Future HW-accelerated path can baseline here.
+  - `rand [N]` — prints N random bytes. Verifies `crypto::rng`
+    produces different outputs across invocations.
+
+Evidence files added this morning:
+- docs/2026-04-20_batos_hv_rand_bench_demo.txt
+- docs/2026-04-20_batos_hv_rng_features.txt
+- docs/2026-04-20_batos_hv_self_test.txt
+- docs/2026-04-20_batos_hv_sha_hw_probe.txt
+- docs/2026-04-20_batos_hv_crypto_ext_demo.txt
+
+Current shell command set over USB-CDC under HV:
+  help, uname, mem, fb, uptime, cpuid, rand [N], rng,
+  sha256 <text>, bench sha256, sha-hw, aes-hw, self-test,
+  batfs ls, batfs create, batfs read, halt.
+
+---
+
 ## 2026-04-19 22:30 — Ubuntu — BAT_OS CPUID + SHA-256 LIVE OVER HV SHELL, ~2× LONGER SESSIONS
 
 **Session-length up to ~80-100 s**, more shell commands, and real
