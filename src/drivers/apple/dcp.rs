@@ -82,6 +82,12 @@ pub fn fill_screen(color: u32) {
             }
         }
     }
+    // M4 note: without this barrier, subsequent draw_str calls can
+    // interleave with the tail of the fill — observed as m1n1
+    // boot-log text bleeding through the boot_splash background.
+    // `dsb sy` drains the write queue so every pixel of the wipe
+    // lands before the first character of the title is written.
+    unsafe { core::arch::asm!("dsb sy", options(nostack, preserves_flags)); }
 }
 
 /// Flush — on the simple framebuffer, writes are immediately visible.

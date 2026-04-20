@@ -106,15 +106,45 @@ pub fn putc(c: u8) {
 fn advance_line(stride_pixels: u32) {
     let new_y = CURSOR_Y.load(Ordering::Relaxed) + font::CHAR_H;
     if new_y + font::CHAR_H > REGION_BOTTOM {
-        // Overrun — wipe region, reset cursor to top-left of console.
-        clear_region();
-        CURSOR_Y.store(REGION_TOP, Ordering::Relaxed);
+        // Overrun — scroll the console region up by one row of text
+        // (CHAR_H scanlines), then clear the freshly-opened bottom
+        // row. Cursor stays on the new last line.
+        scroll_up_one_line(stride_pixels);
+        CURSOR_Y.store(new_y - font::CHAR_H, Ordering::Relaxed);
     } else {
         CURSOR_Y.store(new_y, Ordering::Relaxed);
     }
-    // `stride_pixels` reserved for a future scroll implementation
-    // (row-copy). Suppress unused warning.
-    let _ = stride_pixels;
+}
+
+/// Copy each scanline in `REGION_TOP..REGION_BOTTOM-CHAR_H` down
+/// from the next `CHAR_H` rows, then clear the `CHAR_H` rows at the
+/// bottom. Preserves all historical text below the splash.
+fn scroll_up_one_line(stride_pixels: u32) {
+    let base = soc::fb_base();
+    if base == 0 || stride_pixels == 0 { return; }
+    let screen_w = soc::fb_width();
+    if screen_w == 0 { return; }
+
+    let fb = base as *mut u32;
+    let shift = font::CHAR_H;
+    // Move rows [top+shift, bottom) → [top, bottom-shift).
+    for y in REGION_TOP..(REGION_BOTTOM - shift) {
+        let src_off = ((y + shift) * stride_pixels) as usize;
+        let dst_off = (y * stride_pixels) as usize;
+        for x in 0..screen_w {
+            unsafe {
+                let v = core::ptr::read_volatile(fb.add(src_off + x as usize));
+                core::ptr::write_volatile(fb.add(dst_off + x as usize), v);
+            }
+        }
+    }
+    // Clear the last `shift` rows (freshly opened at the bottom).
+    for y in (REGION_BOTTOM - shift)..REGION_BOTTOM {
+        let off = (y * stride_pixels) as usize;
+        for x in 0..screen_w {
+            unsafe { core::ptr::write_volatile(fb.add(off + x as usize), BG); }
+        }
+    }
 }
 
 fn clear_region() {
