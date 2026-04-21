@@ -375,6 +375,64 @@ or in SPTM/PPL state. We can NOT directly probe it from EL2.
       SEP mailbox — the things our HAS_GUARDED_IO_FILTER aware
       firmware would expect activity on.
 
+### AP watchdog ADT regs found — but reg[1] is not a deadline value
+
+Probed `/arm-io/wdt` ADT properties. The node has **5 reg entries**:
+
+```
+reg[0] 0x3882B0000 size 0x4000 — main timers/WDT (chip/sys/bark)
+reg[1] 0x3882BC224 size 4      — "AP watchdog deadline" (per kc string)
+reg[2] 0x3882B8008 size 4      — "panicsave" (initial value 0x7c = 124)
+reg[3] 0x3882B802C size 4      — "panic scratch" (initial 0)
+reg[4] 0x3882B8020 size 4      — unidentified (initial 0)
+```
+
+Plus other interesting ADT props:
+  - `wdt-version: 2` — kernelcache says v3+ requires SMC. v2 still
+    supports legacy reconfig.
+  - `simple-reconfig-wdog-support: <empty>` — the flag is set.
+  - `simple-reconfig-wdog-icc-time: 5` — ICC interval = 5 s.
+  - `awl-scratch-supported: 0x100000001` — AWL (Always-on Watchdog
+    Log) version 1 supported.
+
+Live readback test: writing 0xffffffff to each, see what sticks:
+
+```
+reg[1] (BC224)  pre=0x00000000  post=0x00000001    ← ONLY BIT 0 WRITABLE
+reg[2] (B8008)  pre=0x0000007c  post=0xffffffff
+reg[3] (B802C)  pre=0x00000000  post=0xffffffff
+reg[4] (B8020)  pre=0x00000000  post=0xffffffff
+```
+
+reg[1] is one writable BIT, not a numeric deadline. Probably an
+arm/disarm or write-1-to-clear flag. Stock m1n1 has it at 0
+(disarmed) yet the watchdog still fires at 118 s — so bit 0
+isn't the gate by itself.
+
+### First in-m1n1 attempt — bit 0 = 1 changes nothing
+
+Wrote `write32(0x3882BC224, 0xffffffff)` (becomes bit 0 = 1) at
+end of `hv_init`. Endurance test:
+  cycle 1 (carryover): 17 s — useless
+  cycle 2 (fresh):     113 s — same baseline
+So setting reg[1] bit 0 doesn't disable the watchdog. Doesn't
+hurt either.
+
+### simple-reconfig-wdog: maybe the actual mechanism
+
+Per the ADT:
+  - `simple-reconfig-wdog-support` flag IS set
+  - `simple-reconfig-wdog-icc-time = 5` seconds
+  - kernelcache: "Reconfig Watchdog: ICC = %d", "Reconfig Watchdog
+    monitoring can't be enabled"
+
+**5 s ICC × 24 = 120 s ≈ our 118 s ceiling.** Not a coincidence —
+the AP watchdog very likely needs an ICC tickle every 5 s or
+fires after some tickless count.
+
+ICC = Inter-Cluster Communication. Probably a specific MMIO write
+or SMC mailbox tickle. Without knowing what it is, can't pet.
+
 ### Implementation note
 
 `scripts/hv/batos_hv_interactive.py` now supports:
@@ -384,6 +442,11 @@ or in SPTM/PPL state. We can NOT directly probe it from EL2.
   - `BATOS_HV_INIT_ONLY=1` — call `hv.init()` but never
     `hv.start()`; sleep 200 s. Probes whether hv_init alone
     arms the watchdog.
+  - `BATOS_HV_PAYLOAD=path` — override the bat_os payload (used
+    `wfi_guest.bin` to prove guest activity isn't the trigger).
+
+`hv.c` now has experimental writes to /arm-io/wdt reg[1..4] at
+end of `hv_init`. Currently a no-op for the ceiling (= 113 s).
 
 ### init-only refinement (hv.init() but no hv.start())
 

@@ -133,6 +133,40 @@ void hv_init(void)
     sysop("dsb ish");
     sysop("isb");
     printf("[hv_init] M14 done\n");
+
+    /* M4-HV 2026-04-20 21:30 — AP watchdog disable attempt.
+     * The /arm-io/wdt ADT node has 5 reg entries:
+     *   reg[0] 0x3882B0000 size 0x4000 — main WDT/timer block
+     *   reg[1] 0x3882BC224 size 4      — "AP watchdog deadline"
+     *   reg[2] 0x3882B8008 size 4      — "panicsave"
+     *   reg[3] 0x3882B802C size 4      — "panic scratch"
+     *   reg[4] 0x3882B8020 size 4      — (unidentified)
+     * Per kernelcache strings (AppleARMWatchdogTimer), reg[1] is the
+     * AP watchdog deadline.  Probing showed only bit 0 of that
+     * register is writable, suggesting it's an arm/disarm or
+     * write-1-to-clear bit, not a numeric deadline.
+     *
+     * Writing 0xffffffff to all 4 (which becomes bit-0=1 for reg[1]
+     * and full writes for reg[2..4]) at hv_init to disable / placate. */
+    if (chip_id == T8132) {
+        u32 r1_pre = read32(0x3882BC224UL);
+        u32 r2_pre = read32(0x3882B8008UL);
+        u32 r3_pre = read32(0x3882B802CUL);
+        u32 r4_pre = read32(0x3882B8020UL);
+        /* Try clearing the deadline-arm bit (write 0) */
+        write32(0x3882BC224UL, 0);
+        /* Try writing 0xffffffff (=far future deadline?) to others */
+        write32(0x3882B8008UL, 0xffffffff);
+        write32(0x3882B802CUL, 0xffffffff);
+        write32(0x3882B8020UL, 0xffffffff);
+        u32 r1_post = read32(0x3882BC224UL);
+        u32 r2_post = read32(0x3882B8008UL);
+        u32 r3_post = read32(0x3882B802CUL);
+        u32 r4_post = read32(0x3882B8020UL);
+        printf("[hv_init] M15 AP-WDT regs: "
+               "r1 %08x->%08x  r2 %08x->%08x  r3 %08x->%08x  r4 %08x->%08x\n",
+               r1_pre, r1_post, r2_pre, r2_post, r3_pre, r3_post, r4_pre, r4_post);
+    }
 }
 
 static void hv_set_gxf_vbar(void)
