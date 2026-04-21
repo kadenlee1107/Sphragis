@@ -123,13 +123,38 @@ pub fn run() -> ! {
                 0x04 => { switch_to(wm::APP_NETMON); in_shell = false; continue; }
                 0x05 => { switch_to(wm::APP_EDITOR); in_shell = false; continue; }
 
-                // Tab key — cycle app in focused pane
+                // Tab key — cycle app in focused pane.
+                // 2026-04-20 21:45: cycle goes 0..8 → close-button-X → 0
                 0x09 => {
-                    let next = (wm::active_app() + 1) % 9;
+                    if wm::is_close_focused() {
+                        // Currently on the X — wrap back to app 0
+                        wm::unfocus_close_button();
+                        wm::switch_app(wm::APP_SHELL);
+                        in_shell = true;
+                        render_current();
+                        continue;
+                    }
+                    let cur = wm::active_app();
+                    if cur == 8 {
+                        // Last app → tab onto the close button
+                        wm::focus_close_button();
+                        // Don't change active_app — keep it on 8 so the
+                        // pane content stays visible behind the X.
+                        in_shell = false;
+                        render_current();
+                        continue;
+                    }
+                    let next = cur + 1;
                     wm::switch_app(next);
                     in_shell = next == wm::APP_SHELL;
                     render_current();
                     continue;
+                }
+                // Enter key — if close button is focused, halt Bat_OS.
+                // CR (0x0D) and LF (0x0A) both treated as Enter here.
+                0x0D | 0x0A if wm::is_close_focused() => {
+                    halt_bat_os();
+                    // halt_bat_os never returns
                 }
 
                 // Ctrl+L — vertical split (left | right)
@@ -238,6 +263,41 @@ fn render_app(app: u8) {
         wm::APP_BATCAVE => apps::batcave_mgr::render(),
         _ => {}
     }
+}
+
+/// Clean Bat_OS shutdown — paint a "Shutdown" banner over the
+/// framebuffer, write a marker on the serial UART so the host
+/// supervisor knows the halt is intentional (not a watchdog
+/// reset), then WFE forever. m1n1's HV stays alive in EL2; the
+/// guest just stops doing anything.
+///
+/// Useful now that the M4 ~118 s AP-watchdog is disabled (see
+/// SESSION_JOURNAL 2026-04-20 21:30) — the Mac will keep running
+/// until externally rebooted.
+fn halt_bat_os() -> ! {
+    use crate::ui::{font, gpu};
+
+    // Banner — fill screen with a "shutdown" message
+    let w = gpu::width();
+    let h = gpu::height();
+    let fb = gpu::framebuffer();
+    font::clear_clip();
+    gpu::fill_screen(0xFF000000); // black
+    let cx = w / 2;
+    let cy = h / 2;
+    font::draw_str(fb, w, cx - 96, cy - 16, "BAT_OS HALTED", 0xFFFFFFFF, 0xFF000000);
+    font::draw_str(fb, w, cx - 144, cy + 8,  "(close pressed; m1n1 retains control)",
+                   0xFF707070, 0xFF000000);
+    font::draw_str(fb, w, cx - 80, cy + 32,  "Reboot the Mac to restart.",
+                   0xFF505050, 0xFF000000);
+    wm::flush_all();
+
+    // Serial marker — supervisor + interactive driver can grep for this
+    platform::serial_puts("\r\n[BATOS] halt requested via UI close button — entering wfe loop\r\n");
+
+    // Loop forever in WFE. m1n1's HV stays in EL2; we drop out of EL1
+    // execution. The Mac stays alive (no watchdog, see hv.c M15).
+    loop { unsafe { core::arch::asm!("wfe") } }
 }
 
 fn shell_banner() {

@@ -76,6 +76,24 @@ static mut RENDER_TARGET: u8 = 0;
 // Legacy compat
 static ACTIVE_APP: AtomicU8 = AtomicU8::new(APP_SHELL);
 
+// 2026-04-20 21:45 — Close-button focus. When the user has tabbed
+// past the last app onto the title-bar X, this is true. Tab cycles
+// app 0 → 1 → … → 8 → close-button → app 0 …
+// Enter while CLOSE_FOCUSED triggers shutdown.
+static CLOSE_FOCUSED: AtomicBool = AtomicBool::new(false);
+
+pub fn focus_close_button() {
+    CLOSE_FOCUSED.store(true, Ordering::Relaxed);
+    NEEDS_REDRAW.store(true, Ordering::Relaxed);
+}
+pub fn unfocus_close_button() {
+    CLOSE_FOCUSED.store(false, Ordering::Relaxed);
+    NEEDS_REDRAW.store(true, Ordering::Relaxed);
+}
+pub fn is_close_focused() -> bool {
+    CLOSE_FOCUSED.load(Ordering::Relaxed)
+}
+
 pub fn init_panes_pub() { init_panes(); }
 
 /// V11-state-sweep: reset pane layout + rendered-target tracking on cave
@@ -358,8 +376,14 @@ pub fn draw_frame() {
         font::draw_str(fb, w, px, 4, "]", FG_DIM, TITLE_BG);
     }
 
-    // Close/minimize (decorative)
-    font::draw_str(fb, w, w - 40, 4, "_ X", FG_DIM, TITLE_BG);
+    // Minimize indicator (decorative) + Close button (functional via Tab + Enter)
+    font::draw_str(fb, w, w - 40, 4, "_ ", FG_DIM, TITLE_BG);
+    if CLOSE_FOCUSED.load(Ordering::Relaxed) {
+        // Highlighted: black-on-white, signals focus
+        font::draw_str(fb, w, w - 24, 4, "X", BLACK, WHITE);
+    } else {
+        font::draw_str(fb, w, w - 24, 4, "X", FG_DIM, TITLE_BG);
+    }
 
     // Border below title
     gpu::fill_rect(0, TITLE_H, w, BORDER_W, BORDER);
