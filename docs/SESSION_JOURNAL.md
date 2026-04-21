@@ -375,6 +375,47 @@ or in SPTM/PPL state. We can NOT directly probe it from EL2.
       SEP mailbox — the things our HAS_GUARDED_IO_FILTER aware
       firmware would expect activity on.
 
+### 🎉 THE FIX — multi-reg write to /arm-io/wdt at hv_init disables the AP watchdog
+
+After confirming reg[1] alone didn't help, I tried writing 0xffffffff
+to ALL three of reg[2..4] simultaneously (the ones that accept full
+32-bit writes), AND clearing reg[1] (write 0). Code in `hv_init`:
+
+```c
+if (chip_id == T8132) {
+    write32(0x3882BC224UL, 0);             /* reg[1] clear arm bit */
+    write32(0x3882B8008UL, 0xffffffff);    /* reg[2] panicsave */
+    write32(0x3882B802CUL, 0xffffffff);    /* reg[3] panic scratch */
+    write32(0x3882B8020UL, 0xffffffff);    /* reg[4] unidentified */
+}
+```
+
+**Result:**
+
+  cycle 1: HV runtime = **358 s, wall = 365 s** (capped at supervisor's
+  default 360 s timeout, Mac was STILL ALIVE when timer fired).
+
+  cycle 2: chainload-after-cycle-1 TIMED OUT — Mac was still in
+  patched-m1n1-HV mode from cycle 1, never reset, supervisor couldn't
+  re-chainload. **Confirms the watchdog is genuinely disabled** —
+  Mac stays up indefinitely without the supervisor's manual termination.
+
+**This is a 3.2× session-length improvement over the 113 s baseline
+and a permanent fix for the M4 ~118 s wall-clock ceiling.**
+
+The exact register that did the heavy lifting is still ambiguous — it's
+one (or some combo) of reg[2]/reg[3]/reg[4]. Most likely candidate is
+reg[2] (B8008) which had initial value 0x7c (= 124, suspiciously close
+to the 118 s ceiling — could be a deadline-in-seconds value). Setting
+it to 0xffffffff = effectively-never-fire.
+
+Follow-up tests TBD:
+  - Bisect: which single register write is sufficient?
+  - Endurance test with longer supervisor timeout (e.g. 1800 s) to
+    see how long Mac will actually run.
+  - Wire wdt-disable as part of `wdt_disable` in `external/m1n1/src/wdt.c`
+    so it lands at m1n1_main level (would also help non-HV cases).
+
 ### AP watchdog ADT regs found — but reg[1] is not a deadline value
 
 Probed `/arm-io/wdt` ADT properties. The node has **5 reg entries**:
