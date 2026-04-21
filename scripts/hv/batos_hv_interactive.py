@@ -74,9 +74,20 @@ def configure_vuart_raw(vuart):
     "host disconnected" and wedges its USB stack — any subsequent
     pyserial.Serial() open against /dev/ttyACM* then blocks forever
     even though the device node still exists. Clearing HUPCL keeps
-    modem-control lines steady across our process lifetime."""
-    vuart.dtr = True
-    vuart.rts = False
+    modem-control lines steady across our process lifetime.
+
+    DTR/RTS ioctls are best-effort: some m1n1 USB CDC states return
+    EPROTO on TIOCMBIC (errno 71). That's non-fatal for us — we
+    only need the data pipe, and HUPCL clearing below is the real
+    DTR stabiliser."""
+    try:
+        vuart.dtr = True
+    except OSError as e:
+        log(f"vuart.dtr=True failed (non-fatal): {e!r}")
+    try:
+        vuart.rts = False
+    except OSError as e:
+        log(f"vuart.rts=False failed (non-fatal): {e!r}")
     _clear_hupcl_and_set_raw(vuart.fileno())
 
 
@@ -786,35 +797,70 @@ def main():
                     decoded = decoded + b"\r"
             stims.append(decoded)
 
-    # ttyACM2 may lag a few seconds behind ttyACM1 after chainload.
-    # Retry up to 30 s before giving up.
+    # Find the vuart device. Prefer BATOS_HV_VUART_DEVICE if set;
+    # otherwise use the -if02 symlink under /dev/serial/by-id/
+    # (stable across USB re-enumerations); fall back to /dev/ttyACM2
+    # for backwards compat. May lag a few seconds after chainload,
+    # so retry for up to 30 s.
+    def _resolve_vuart_path():
+        override = os.environ.get("BATOS_HV_VUART_DEVICE")
+        if override:
+            return override
+        import glob
+        by_id = glob.glob(
+            "/dev/serial/by-id/usb-Asahi_Linux_m1n1_uartproxy*if02")
+        if by_id:
+            # Dereference the symlink. Opening through /dev/serial/by-id
+            # triggers a different cdc-acm code path that returns EPROTO
+            # on modem-control ioctls — safer to use the real node.
+            return os.path.realpath(by_id[0])
+        return "/dev/ttyACM2"
+
     vuart = None
     deadline = time.time() + 30
     while time.time() < deadline:
+        path = _resolve_vuart_path()
         try:
             vuart = serial.Serial(
-                "/dev/ttyACM2",
+                path,
                 baudrate=115200,
                 timeout=0.1,
                 rtscts=False, xonxoff=False, dsrdtr=False,
             )
+            log(f"opened vuart at {path}")
             break
         except (FileNotFoundError, serial.SerialException) as e:
             last_err = e
             time.sleep(1.0)
     if vuart is None:
-        log(f"timed out waiting for /dev/ttyACM2: {last_err}")
+        log(f"timed out waiting for vuart: {last_err}")
         sys.exit(1)
     configure_vuart_raw(vuart)
 
     stop = threading.Event()
-    threading.Thread(target=vuart_reader, args=(vuart,), daemon=True).start()
     verbose = os.environ.get("BATOS_HV_VERBOSE", "1") != "0"
-    if stims:
-        threading.Thread(target=stimulus_sender,
-                         args=(vuart, stims, verbose), daemon=True).start()
+    # vuart_reader and stimulus_sender are spawned AFTER any bootstrap
+    # chainload (below), because the chainload briefly resets m1n1's
+    # USB CDC — a stim thread firing into the dead endpoint raises
+    # EIO, and vuart_reader's SerialException handler ends the thread
+    # permanently, killing halt detection. Safer to start them against
+    # the post-chainload (patched) m1n1 that will stay up.
 
-    os.environ.setdefault("M1N1DEVICE", "/dev/ttyACM1")
+    # M1N1DEVICE points at the uartproxy endpoint (-if00). Resolve
+    # through /dev/serial/by-id so we survive USB re-enumerations
+    # (device numbers shift; the by-id name is stable). We dereference
+    # the symlink to the real /dev/ttyACMN path because m1n1's
+    # UartInterface opens this directly via pyserial and some kernel
+    # cdc-acm paths hang when opening through the symlink.
+    if "M1N1DEVICE" not in os.environ:
+        import glob
+        proxy_symlinks = glob.glob(
+            "/dev/serial/by-id/usb-Asahi_Linux_m1n1_uartproxy*if00")
+        if proxy_symlinks:
+            os.environ["M1N1DEVICE"] = os.path.realpath(proxy_symlinks[0])
+        else:
+            os.environ["M1N1DEVICE"] = "/dev/ttyACM1"
+        log(f"M1N1DEVICE={os.environ['M1N1DEVICE']}")
     iface = UartInterface()
     # Clear HUPCL on the proxy fd too so DTR stays asserted across
     # our process lifetime. Same rationale as configure_vuart_raw.
@@ -825,9 +871,47 @@ def main():
         log(f"iface HUPCL clear failed (non-fatal): {e!r}")
     p = M1N1Proxy(iface, debug=False)
     bootstrap_port(iface, p)
-    u, hv = _build_hv(iface, p)
-    # Make iface available to vuart_reader so it can kick HV on halt marker.
+
+    # BATOS_HV_BOOTSTRAP_CHAINLOAD=1 — do one chainload_inline at
+    # startup so we're guaranteed to be talking to our patched m1n1
+    # (the one built from this tree, with P_HV_MAP_VUART_DOCKCHANNEL
+    # compiled in). Without this the Mac may still be running whatever
+    # m1n1 kmutil-configure-boot installed, which on some systems
+    # pre-dates the dockchannel-vuart opcode and makes hv.init() fail
+    # with `ProxyCommandError: Reply error: Bad Command`. Harmless if
+    # the running m1n1 already matches our build — just a 3 s reboot.
+    if os.environ.get("BATOS_HV_BOOTSTRAP_CHAINLOAD", "0") == "1":
+        boot_macho = os.environ.get(
+            "BATOS_HV_CHAINLOAD_MACHO",
+            str(pathlib.Path(__file__).resolve().parents[2] /
+                "external/m1n1/build/m1n1.macho"))
+        log(f"bootstrap: chainloading patched m1n1 from {boot_macho}")
+        # chainload_inline needs a ProxyUtils to read chosen/memory-map.
+        # Build a throwaway one against the current (possibly stale) m1n1;
+        # the real u/hv get built below once we know we're on our binary.
+        _tmp_u = ProxyUtils(p, heap_size=16 * 1024 * 1024)
+        chainload_inline(iface, p, _tmp_u, boot_macho)
+        try:
+            iface.nop()
+            log("bootstrap chainload ok — proxy talking to patched m1n1")
+        except Exception as e:
+            log(f"bootstrap chainload: post-reload nop failed: {e!r}")
+            raise
+
+    # Expose iface to vuart_reader before spawning it (so the reader's
+    # halt-detection kick-writer can reach the proxy).
     _iface_for_kick["iface"] = iface
+
+    # Deferred thread spawns (see rationale above the M1N1DEVICE setdefault).
+    # By this point bootstrap chainload is complete and the vuart is
+    # backed by a stable m1n1 that won't pull the rug on the readers.
+    threading.Thread(target=vuart_reader, args=(vuart,),
+                     daemon=True).start()
+    if stims:
+        threading.Thread(target=stimulus_sender,
+                         args=(vuart, stims, verbose), daemon=True).start()
+
+    u, hv = _build_hv(iface, p)
 
     # Fast-iteration mode: dump ADT + hold proxy alive without
     # starting the HV. Useful for M4 coprocessor topology probing

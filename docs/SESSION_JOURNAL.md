@@ -11,6 +11,97 @@ end of a session.
 
 ---
 
+## 2026-04-21 12:45 — Ubuntu — LOOP hardware pass: findings + follow-ups
+
+Tried to hardware-validate the 11:30 loop on Kaden's live Mac. Three
+findings worth codifying, one blocker for the next run.
+
+### Finding 1: kmutil-installed m1n1 is older than our tree
+
+On power-up the Mac boots whatever m1n1 `kmutil configure-boot`
+staged in the boot volume — in our case that build reports
+`uartproxy bcee7f2` in its USB product string and **does not
+implement `P_HV_MAP_VUART_DOCKCHANNEL`** (added in b46691f6,
+summer 2026). First iteration's `hv.init()` fails immediately:
+
+```
+File "m1n1/hv/__init__.py", line 1486, in map_vuart
+    self.p.hv_map_vuart_dockchannel(dc_base, self.iodev)
+m1n1.proxy.ProxyCommandError: Reply error: Bad Command
+```
+
+Symbol is in our built m1n1.elf (`hv_map_vuart_dockchannel` at
+0x1ac70), just not in what's running. Running m1n1's banner
+version ≠ our tree. To run Bat_OS we always need to first
+chainload the tree-built m1n1 over USB.
+
+### Fix: `BATOS_HV_BOOTSTRAP_CHAINLOAD=1`
+
+Added an opt-in env knob that calls `chainload_inline()` once at
+startup before `hv.init()`. Uses a throwaway ProxyUtils against the
+possibly-stale m1n1 just long enough to push the patched binary,
+then rebuilds u/hv against the fresh one. Harmless (3 s m1n1
+reboot) if the running m1n1 was already ours.
+
+### Finding 2: stim thread + vuart_reader must start POST-bootstrap
+
+First successful bootstrap run got Bat_OS booting cleanly but halt
+never fired because the stim thread was dead — it had fired into
+the vuart mid-chainload while USB CDC was resetting and raised
+`OSError: [Errno 5] Input/output error`. Moved both thread spawns
+from pre-iface setup to AFTER the optional bootstrap chainload.
+vuart_reader's own SerialException handler would have killed halt
+detection the same way, so same fix applies.
+
+### Finding 3: `/dev/ttyACMN` number is not stable
+
+Every time we drop pyserial's fds (or timeout-kill Python), m1n1's
+USB CDC re-enumerates and the Mac can come back as `ACM1+ACM3`
+instead of `ACM1+ACM2`. Replaced hardcoded `/dev/ttyACM2` lookup
+with a resolver that prefers
+`/dev/serial/by-id/usb-Asahi_Linux_m1n1_uartproxy_*_M4PK4NL6M9-if02`
+and `os.path.realpath`s it back to the real `/dev/ttyACMN` node
+(opening through the symlink hits a different cdc-acm code path
+that returns `EPROTO` on `TIOCMBIC`). Also made the DTR/RTS
+modem-control ioctls best-effort — they're non-fatal.
+
+### Blocker: Mac's proxy is currently wedged
+
+After the iteration chain of opens/closes the Mac's USB CDC got
+wedged in the state the 2026-04-20 21:00 entry describes — a
+fresh `iface.nop()` hangs forever, matching "fresh chainload.py
+blocks at pyserial.Serial open." Need a physical power-cycle
+before the next clean run.
+
+### Next-Claude hand-off
+
+The fixes in this commit are all static-verified (py_compile +
+import). The hardware pass is the only thing left. After a
+power-cycle back into m1n1, run:
+
+```bash
+BATOS_HV_LOOP=1 BATOS_HV_LOOP_MAX=2 BATOS_HV_BOOTSTRAP_CHAINLOAD=1 \
+  BATOS_KEEP_FB=1 BATOS_HV_STIMULUS=$'batman;;\t\t\t\t\t\t\t\t\t\r' \
+  BATOS_HV_STIM_GAP_S=25 \
+  sg dialout -c "/usr/bin/python3 scripts/hv/batos_hv_interactive.py"
+```
+
+Signals to watch:
+  - `bootstrap chainload ok — proxy talking to patched m1n1`
+  - `[iter 0] calling hv.start()` → Bat_OS banner on vuart → halt
+    stim fires → `[iter 0] hv.start() returned cleanly`
+  - `[iter 0 → 1] chainloading fresh m1n1` → `[iter 1] fresh m1n1 ready`
+  - Second Bat_OS cycle → halt → exit loop at LOOP_MAX=2
+
+If bootstrap chainload succeeds but Bat_OS never emits vuart output,
+look at the `Traceback` / stim-thread state — the deferred-spawn fix
+may have regressed. Full hv heartbeat with no vuart prints is the
+classic "stim thread died on USB-CDC reset" signature.
+
+### Net: primitive in place, final validation gated on power-cycle
+
+---
+
 ## 2026-04-21 11:30 — Ubuntu — Infinite demo reel: BATOS_HV_LOOP=1 ships
 
 Took the optional side-quest from the morning hand-off. The halt →
