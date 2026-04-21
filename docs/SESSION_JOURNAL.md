@@ -11,6 +11,97 @@ end of a session.
 
 ---
 
+## 2026-04-21 13:45 — Ubuntu — LOOP closes on M4 hardware: 2 Bat_OS cycles, one invocation ✅
+
+Full validation. `BATOS_HV_LOOP=1 BATOS_HV_LOOP_MAX=2` ran two
+complete Bat_OS cycles end-to-end — bootstrap chainload, iter 0
+boot/auth/tab-to-X/halt/HV-exit, in-session chainload to fresh
+m1n1, iter 1 same flow — and exited cleanly via `os._exit(0)`.
+
+### The closing trace (1035-line log, key events only)
+
+```
+ 90: bootstrap chainload (patched m1n1 installed)
+197: vuart opened at /dev/ttyACM2
+297: [iter 0] hv.start()
+400: AUTH PASSED (stim 'batman' landed)
+536: [BATOS] halt — 9 tabs → X → Enter triggered
+543: [iter 0] hv.start() returned cleanly
+547: [iter 0 → 1] chainloading fresh m1n1
+682: vuart re-opened at /dev/ttyACM3   ← USB re-enum, new fd via ref swap
+683: [iter 1] fresh m1n1 ready
+784: [iter 1] hv.start()
+887: AUTH PASSED (iter 1 stim landed on the swapped vuart)
+1023: [BATOS] halt (iter 1)
+1030: [iter 1] hv.start() returned cleanly
+1034: hit BATOS_HV_LOOP_MAX=2 — stopping loop
+1035: detaching via os._exit(0) — skipping pyserial close (loop=True)
+```
+
+### The fixes that made it converge (4 commits after 11:30's first cut)
+
+`7b60ebcd` (11:30) — initial loop + `_build_hv` helper + `vuart_reader`
+re-arm. Worked in theory, static-verified only.
+
+`5585725d` — hardware revealed the kmutil-installed m1n1 on this
+Mac is `bcee7f2`, older than our tree, rejects
+`P_HV_MAP_VUART_DOCKCHANNEL` with Bad Command. Added
+`BATOS_HV_BOOTSTRAP_CHAINLOAD=1` to push the patched m1n1 at iter 0.
+Also deferred thread spawns past bootstrap + by-id device
+resolution with realpath dereference (opening through the
+`/dev/serial/by-id/` symlink EPROTOs on `TIOCMBIC`).
+
+`71456859` — retry loop for `hv_map_vuart_dockchannel` remap window.
+m1n1's vuart briefly flips between console-iodev and dockchannel
+mapping during hv.start(); writes landing in that window EIO with
+errno 5. 20×250ms retry covers it.
+
+`cd9d0e46` — two more: (a) move vuart open AFTER bootstrap chainload
+because chainload re-enumerates USB and pre-bootstrap fds point at
+dead cdc-acm nodes; (b) SIGTERM handler that sends `!` before exit
+so timeout(1)-kills don't leave m1n1 HV-stuck-forever.
+
+`e45cd4ef` — the one that unlocked iter 1. Inter-iter chainload
+also re-enumerates USB (ACM2 → ACM3 was typical). Shared
+`_vuart_ref` dict that all vuart-touching threads (reader, stim,
+stdin) dereference on every read/write — main swaps
+`ref["vuart"]` after each chainload so the long-running reader
+picks up the new fd without needing to be stopped and respawned.
+Also: loop mode now `os._exit(0)`s on clean completion so
+pyserial's close-on-GC doesn't drop DTR.
+
+### Post-exit state of the Mac
+
+Device is our patched m1n1 (USB product: `m1n1 uartproxy unknown`,
+ACM1 + ACM3 after the final iter 1 chainload). A fresh
+`iface.nop()` from a brand-new pyserial process STILL hangs — but
+that's outside the loop's scope. The loop itself keeps pyserial
+open across all iterations; only external probes run into it.
+
+### Invocation (authoritative)
+
+```bash
+# After a power-cycle into m1n1:
+BATOS_HV_LOOP=1 BATOS_HV_BOOTSTRAP_CHAINLOAD=1 BATOS_KEEP_FB=1 \
+  BATOS_HV_STIMULUS=$'batman;;\t\t\t\t\t\t\t\t\t\r' \
+  BATOS_HV_STIM_GAP_S=25 \
+  sg dialout -c "/usr/bin/python3 scripts/hv/batos_hv_interactive.py"
+```
+
+Ctrl+C to stop. `BATOS_HV_LOOP_MAX=N` caps iterations for
+smoke-tests / CI. The bootstrap chainload means you can launch
+this directly from a cold m1n1 — no external `chainload.py`
+preamble needed.
+
+### What I did NOT do
+
+Keyboard (both paths still blocked on MTP firmware blob
+extraction from macOS). 10:00 entry covers that.
+
+### Net: ∞ Bat_OS cycles per Python invocation, zero power-cycles
+
+---
+
 ## 2026-04-21 12:45 — Ubuntu — LOOP hardware pass: findings + follow-ups
 
 Tried to hardware-validate the 11:30 loop on Kaden's live Mac. Three
