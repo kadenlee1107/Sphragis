@@ -109,6 +109,12 @@ def stimulus_sender(vuart, items, verbose):
     Useful when the next stim needs to arrive at a later phase (e.g.
     tab-to-X keystrokes must land AFTER boot_screen exits, which can
     take 15+ s).
+
+    Writes are retried on EIO / SerialException: m1n1's
+    hv_map_vuart_dockchannel briefly transitions USB_VUART between
+    console iodev and dockchannel mapping during hv.start(), and a
+    write landing in that window returns errno 5. The HV stabilises
+    in <1 s, so a short retry loop covers it.
     """
     time.sleep(1.5)  # give the guest time to print the prompt
     gap = float(os.environ.get("BATOS_HV_STIM_GAP_S", "0.8"))
@@ -116,9 +122,23 @@ def stimulus_sender(vuart, items, verbose):
         if verbose:
             sys.stderr.write(f"\n[vuart] >>> {stim!r}\n")
             sys.stderr.flush()
-        vuart.write(stim)
-        vuart.flush()
+        _vuart_write_with_retry(vuart, stim)
         time.sleep(gap)
+
+
+def _vuart_write_with_retry(vuart, data, attempts=20, delay=0.25):
+    for i in range(attempts):
+        try:
+            vuart.write(data)
+            vuart.flush()
+            return
+        except (OSError, serial.SerialException) as e:
+            if i == attempts - 1:
+                sys.stderr.write(
+                    f"[vuart] write gave up after {attempts} retries: {e!r}\n")
+                sys.stderr.flush()
+                return
+            time.sleep(delay)
 
 
 # Shared state populated by main() once the proxy iface exists.
@@ -141,14 +161,21 @@ def vuart_reader(vuart):
     # _halt_seen is the armed/disarmed gate. main() clears it between
     # iterations when BATOS_HV_LOOP=1 to re-arm halt detection for the
     # next Bat_OS session.
+    #
+    # Transient read errors (SerialException / OSError) happen during
+    # m1n1's hv_map_vuart_dockchannel remap — returning here would end
+    # the thread permanently and kill halt detection. Instead, sleep
+    # briefly and retry; real disconnects will keep failing and we
+    # effectively idle until the next Bat_OS session attaches.
     buf = b""
     while True:
         try:
             d = vuart.read(1024)
-        except serial.SerialException as e:
-            sys.stderr.write(f"\n[vuart] serial exception: {e}\n")
+        except (serial.SerialException, OSError) as e:
+            sys.stderr.write(f"\n[vuart] transient read error: {e!r}\n")
             sys.stderr.flush()
-            return
+            time.sleep(0.25)
+            continue
         if d:
             sys.stdout.buffer.write(d)
             sys.stdout.buffer.flush()
