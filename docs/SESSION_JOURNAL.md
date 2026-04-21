@@ -115,6 +115,65 @@ to pre-alloc buffers at specific iovas before CPU_CONTROL.RUN=1.
 
 ### Net: FW stable thanks to patched m1n1, but FW stuck in DMA-wait
 
+### Addendum 17:45 — DART is NOT the blocker; TCR offsets wrong on M4
+
+Checked dart-mtp error registers during the hung-FW state. All zero:
+```
+ERR_STATUS  = 0
+ERR_ADDR_LO = 0
+ERR_ADDR_HI = 0
+ERR_IRQ_MASK = 0
+```
+
+No translation faults latched. **DART is NOT the bottleneck.** FW
+isn't stuck on DMA-wait — at least not one that hits the DART.
+
+Surprising second finding: TCR[0] AND TCR[1] at +0x100/+0x104 BOTH
+read as 0, even though `boot_mtp_full.py` sets
+`dart.dart.regs.TCR[1].set(BYPASS_DAPF=1, ..., TRANSLATE_ENABLE=1)`.
+Either those aren't TCR offsets on t8132/ascwrap-v6 OR m1n1's DART
+write went somewhere else OR the DART device has different
+register layout here. Active config seems to be at lower offsets:
+```
+  [+0x0000] = 0x1e311020
+  [+0x0004] = 0x31111007
+  [+0x0008] = 0x2a2a0202
+  [+0x0010] = 0x003a003a
+  [+0x0014] = 0x10080100
+```
+
+So BYPASS_DAPF / TRANSLATE_ENABLE / etc may not be applied correctly
+by m1n1's M4 DART driver. Not necessarily the cause of the MTP FW
+hang (since there are no faults), but worth noting.
+
+### Remaining theories for FW hang
+
+1. **FW waiting on an IRQ that's never asserted** (not DMA). MTP
+   may expect an AIC-delivered IRQ for mailbox arrival, and m1n1's
+   host-side write to INBOX doesn't reach the AIC.
+2. **Shared-memory init ring**. FW may need a structure pre-populated
+   in DRAM at a specific iova (found via ADT or convention). No DMA
+   fault because FW just reads and gets zeros.
+3. **Additional CPU_CONTROL bits needed beyond RUN**. Our writes
+   only set bit 4 (RUN). ascwrap-v6 might require additional bits
+   (e.g., IRQ_UNMASK, WAKE) that m1n1's decoder doesn't expose.
+
+### On disk (added this pass)
+
+  - `scripts/hv/probe_dart_mtp.py` — dumps dart-mtp reg block +
+    error regs + MTP IRQ state + __DATA stack canary.
+
+### Summary of this session's 3 wins + remaining wall
+
+  - ✅ Wall 1: "SRAM write-protected" — actually __TEXT only (XOM)
+  - ✅ Wall 2: "No Hello" — missing mgmt.start() SetIOPPower kick
+  - ✅ Wall 3: "FW self-resets" — stock m1n1 bcee7f2. Patched m1n1
+              fixes it (keeps FW stable for 20+ seconds)
+  - ❌ Wall 4: FW reads first INBOX msg then hangs. Not DART-fault,
+              not self-reset, not IDLE. Stuck in an active loop.
+              Next wall for next session.
+
+
 ---
 
 ## 2026-04-21 16:45 — Ubuntu — MTP FW processes INBOX kicks; OUTBOX idle = ascwrap-v6 const; fw self-resets
