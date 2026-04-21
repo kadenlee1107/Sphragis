@@ -375,6 +375,42 @@ or in SPTM/PPL state. We can NOT directly probe it from EL2.
       SEP mailbox — the things our HAS_GUARDED_IO_FILTER aware
       firmware would expect activity on.
 
+### Tab-to-X shutdown UI added (code in place, demo blocked separately)
+
+Built the shutdown UI Kaden requested (commit 877502e4):
+  - `wm.rs`: `CLOSE_FOCUSED` atomic + helpers; X in title bar
+    renders inverted (black-on-white) when focused.
+  - `desktop.rs` Tab handler: cycles app 0..8 → close-button-X →
+    back to app 0. Enter on focused X → `halt_bat_os()` which
+    paints "BAT_OS HALTED" banner, prints `[BATOS] halt requested`
+    on serial, then enters wfe loop forever.
+
+Built clean, m1n1 chainloaded with the watchdog-disable fix. HV
+ran for 12+ minutes proving the disable is stable. **However: the
+demo couldn't be tested end-to-end** because Bat_OS's
+`security::boot_screen::run()` (the login passphrase screen) hangs
+under HV when `BATOS_KEEP_FB=1` is on:
+
+```
+[security] Launching auth gate — type passphrase to unlock
+…then silence. sync trap counter stuck at 1746 across 380 s.
+```
+
+Direct vuart writes from the host don't increment sync either,
+proving Bat_OS is NOT in the boot_screen input-poll loop. It's
+wedged somewhere between `auth::init` and the `serial_getc()`
+loop — most likely a draw call (`gpu::fill_screen`,
+`font::draw_str`, or `gpu::flush`) that takes forever or
+deadlocks under HV.
+
+Without `KEEP_FB` Bat_OS falls back to `apple_serial_shell()`
+and never reaches the desktop, so we can't test the X button there
+either.
+
+Next session: bisect what's hanging in boot_screen::run between
+the entry print and the input loop. Add temporary printf around
+each draw call, see which one never returns.
+
 ### 🎉 THE FIX — multi-reg write to /arm-io/wdt at hv_init disables the AP watchdog
 
 After confirming reg[1] alone didn't help, I tried writing 0xffffffff
