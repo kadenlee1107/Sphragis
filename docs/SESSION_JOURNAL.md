@@ -11,6 +11,90 @@ end of a session.
 
 ---
 
+## 2026-04-20 22:45 — Ubuntu — halt_bat_os → HV clean-exit path lands (partial)
+
+Follow-on from the tab-to-X success above. Goal was to remove the
+power-cycle requirement between demo runs by having halt_bat_os
+unwind the HV cleanly.
+
+### What works end-to-end (validated on hardware)
+
+Full chain from Bat_OS into Python exit:
+
+```
+[BATOS] halt requested via UI close button — entering wfe loop
+[host] Bat_OS halt marker — kicking HV for clean exit
+TTY> HV: User interrupt
+[host] run_shell intercepted — halt flag set, returning EXIT_GUEST
+TTY> HV: Exiting hypervisor (main CPU)
+TTY> HV: All CPUs exited
+[host] hv.start() returned cleanly — Mac is back in m1n1 proxy mode.
+[host] detaching — draining vuart for 2s
+```
+
+m1n1 unwinds its HV (hv_exit_guest asm + hv_start cleanup prints),
+Python's blocked hv.start() returns the reply and the main thread
+exits gracefully. No wedged state on the Python side.
+
+### Implementation
+
+`scripts/hv/batos_hv_interactive.py`:
+  - vuart_reader watches the guest serial output for the halt
+    marker. On match, it sets a `_halt_seen` event and writes `!`
+    to the proxy iface (the standard "kick" that triggers
+    HV_EVENT.USER_INTERRUPT on m1n1).
+  - hv.run_shell is monkey-patched: when called with `_halt_seen`
+    set, it returns `EXC_RET.EXIT_GUEST` DIRECTLY instead of
+    entering the interactive shell. (If we entered the shell,
+    stdin=/dev/null immediately EOFs → shell returns None →
+    handle_exception defaults to HANDLED → HV resumes. That was
+    the first-attempt bug.)
+  - Returning EXIT_GUEST from run_shell → handle_exception calls
+    p.exit(3) → m1n1's hv_exc sees EXC_EXIT_GUEST → hv_exit_guest
+    unwinds → hv_start prints its farewell and returns.
+
+`src/ui/desktop.rs`:
+  - halt_bat_os first tried `msr S3_5_C15_C5_0, x0` (Apple impdef
+    CYC_OVRD_EL1 bit 0 — the upstream-Linux "guest shutdown" path).
+    On M4 that MSR does NOT trap to EL2 (sync counter stays pinned
+    with `msr=0` traps), so upstream's trap handler never fires.
+    HACR.TRAP_ACC evidently doesn't cover CYC_OVRD on M4's SPRR-less
+    cluster. Left the write in place as a harmless no-op + trace
+    marker — if Apple ever routes it through EL2 we'll get the
+    effect for free. Bypass path (below) is the actual mechanism.
+
+### Unresolved gap (next session)
+
+After hv.start() returns and Python exits, m1n1 is technically in
+`uartproxy_run`'s outer request loop — but new `chainload.py`
+attempts time out (even a plain `p.nop()` probe blocks at
+pyserial.Serial open). Serial devices are still enumerated
+(`/dev/ttyACM1` + `/dev/ttyACM2`, `lsusb` still shows
+1209:316d), but the CDC endpoints don't drive traffic. Most
+likely m1n1 is wedged in a follow-on iodev state — BATOS_KEEP_FB=1
+keeps the framebuffer mapped, and FB-side state after the HV
+unwind may be dirty. So right now a full re-demo still requires
+a physical power-cycle between runs.
+
+When a future session picks this up:
+  - Check m1n1's post-hv_start path in main.c to see whether the
+    proxy returns to `uartproxy_run(NULL)` with all iodevs in a
+    writable state.
+  - Try BATOS_KEEP_FB=0 variant to rule in/out FB keep-alive as
+    the wedge cause.
+  - Try `p.reboot()` from Python after hv.start() returns —
+    may be enough to force a clean re-enumeration without
+    holding the power button.
+
+### Net: big progress, small gap
+
+We went from "every halt needs a physical power-cycle" to
+"halt_bat_os cleanly unwinds the HV, Python cleanly detaches,
+the guest's done-and-done". The last mile (USB CDC / proxy
+re-enter) is isolated and tractable.
+
+---
+
 ## 2026-04-20 22:15 — Ubuntu — 🦇 TAB-TO-X SHUTDOWN VALIDATED END-TO-END ON M4 ✅
 
 Handoff's checklist completed: Tab × 9 + Enter on the Bat_OS

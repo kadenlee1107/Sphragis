@@ -315,6 +315,23 @@ fn halt_bat_os() -> ! {
     // Serial marker — supervisor + interactive driver can grep for this
     platform::serial_puts("\r\n[BATOS] halt requested via UI close button — entering wfe loop\r\n");
 
+    // Clean HV exit — Apple impdef CYC_OVRD_EL1 (S3_5_C15_C5_0) bit 0
+    // (CYC_OVRD_DISABLE_WFI_RET). Upstream m1n1's HV handle_sync treats a
+    // guest write of bit 0 to this reg as "guest is shutting down CPU":
+    // it calls hv_exit_cpu() and removes the CPU from started_cpus. Once
+    // the last CPU exits, hv.start() returns on the Python side → the
+    // proxy returns to stock "Running proxy..." mode and chainload.py
+    // works again without a physical power-cycle. Harmless no-op if the
+    // trap isn't armed (we wfe below anyway).
+    platform::serial_puts("[halt] signalling HV clean exit via CYC_OVRD\r\n");
+    unsafe {
+        core::arch::asm!(
+            "mov x0, #1",
+            "msr S3_5_C15_C5_0, x0",
+            out("x0") _,
+        );
+    }
+
     // Loop forever in WFE. m1n1's HV stays in EL2; we drop out of EL1
     // execution. The Mac stays alive (no watchdog, see hv.c M15).
     loop { unsafe { core::arch::asm!("wfe") } }

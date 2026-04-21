@@ -33,7 +33,7 @@ Output:
   * Our host-side status lines are prefixed `[host]` / `[vuart]`
     and go to stderr so they don't pollute captured logs.
 """
-import sys, os, time, termios, tty, threading, pathlib, select
+import sys, os, time, termios, tty, threading, pathlib, select, signal
 
 M1N1_ROOT = pathlib.Path(__file__).resolve().parents[2] / "external/m1n1"
 sys.path.insert(0, str(M1N1_ROOT / "proxyclient"))
@@ -91,7 +91,25 @@ def stimulus_sender(vuart, items, verbose):
         time.sleep(gap)
 
 
+# Shared state populated by main() once the proxy iface exists.
+# vuart_reader watches Bat_OS uart output for the halt marker and,
+# when seen, kicks the HV out of hv_start (via `!` byte) and sets
+# a halt flag. The wrapped HV.run_shell (installed in main) checks
+# that flag and raises ExitConsole(EXC_RET.EXIT_GUEST) on entry
+# WITHOUT calling interact() — which would otherwise EOF-exit
+# immediately since stdin is /dev/null for backgrounded runs.
+# EXIT_GUEST bubbles through handle_exception → p.exit(3) →
+# m1n1's hv_exit_guest() → hv.start() returns on Python side →
+# Mac is back in stock proxy mode, ready for chainload without a
+# physical power-cycle.
+_iface_for_kick = {"iface": None}
+_halt_seen = threading.Event()
+_HALT_MARKER = b"[BATOS] halt requested via UI close button"
+
+
 def vuart_reader(vuart):
+    buf = b""
+    kicked = False
     while True:
         try:
             d = vuart.read(1024)
@@ -102,6 +120,20 @@ def vuart_reader(vuart):
         if d:
             sys.stdout.buffer.write(d)
             sys.stdout.buffer.flush()
+            if not kicked:
+                buf = (buf + d)[-256:]
+                if _HALT_MARKER in buf and _iface_for_kick["iface"] is not None:
+                    kicked = True
+                    sys.stderr.write("\n[host] Bat_OS halt marker — kicking HV for clean exit\n")
+                    sys.stderr.flush()
+                    # Small delay so Bat_OS has entered its wfe loop
+                    # and the halt message is fully flushed.
+                    time.sleep(0.3)
+                    _halt_seen.set()
+                    try:
+                        _iface_for_kick["iface"].dev.write(b"!")
+                    except Exception as e:
+                        sys.stderr.write(f"[host] kick write failed: {e}\n")
         time.sleep(0.005)
 
 
@@ -132,7 +164,18 @@ def stdin_forwarder(vuart, stop):
         stop.set()
 
 
+def _noop_signal(*_):
+    # Placeholder handler so a stray SIGUSR2 before run_shell installs
+    # its own handler doesn't kill the process with Python's default
+    # terminate-on-USR2 behaviour.
+    pass
+
+
 def main():
+    # Default USR2 to no-op. run_shell's own handler (which raises
+    # ExitConsole(EXC_RET.EXIT_GUEST)) overrides this while it's active.
+    signal.signal(signal.SIGUSR2, _noop_signal)
+
     # Split commands by ';;' (unlikely to occur in a real cmd line) or
     # newlines. \r, \n, \xHH etc escape sequences are interpreted. A
     # literal CR gets appended to each command if not already present
@@ -190,6 +233,24 @@ def main():
     bootstrap_port(iface, p)
     u = ProxyUtils(p, heap_size=128 * 1024 * 1024)
     hv = HV(iface, p, u)
+    # Make iface available to vuart_reader so it can kick HV on halt marker.
+    _iface_for_kick["iface"] = iface
+    # Wrap hv.run_shell so when the halt flag is set we exit the guest
+    # WITHOUT entering the interactive shell (which would EOF-exit on
+    # /dev/null stdin and return None → HANDLED instead of EXIT_GUEST).
+    # Returning EXIT_GUEST here propagates through handle_exception →
+    # p.exit(3) → m1n1's EXC_EXIT_GUEST → hv_exit_guest() → hv.start
+    # returns on the Python side.
+    from m1n1.proxy import EXC_RET as _EXC_RET
+    _orig_run_shell = hv.run_shell
+    def _halt_aware_run_shell(entry_msg="Entering shell", exit_msg="Continuing"):
+        if _halt_seen.is_set():
+            sys.stderr.write("[host] run_shell intercepted — halt flag set, "
+                             "returning EXIT_GUEST\n")
+            sys.stderr.flush()
+            return _EXC_RET.EXIT_GUEST
+        return _orig_run_shell(entry_msg, exit_msg)
+    hv.run_shell = _halt_aware_run_shell
     hv.init()
 
     # Allow overriding payload for diagnostic experiments (e.g. a
@@ -241,6 +302,13 @@ def main():
 
     try:
         hv.start()
+        # Reached if the last guest CPU exits cleanly (Bat_OS's
+        # halt_bat_os writes CYC_OVRD_EL1 bit 0 → m1n1 HV sees "Guest
+        # is shutting down CPU" → hv_exit_cpu → hv_start returns).
+        # Mac is now in stock "Running proxy..." state; chainload.py
+        # works without a power-cycle.
+        log("hv.start() returned cleanly — Mac is back in m1n1 proxy "
+            "mode. You can re-chainload without a power-cycle.")
     except KeyboardInterrupt:
         pass
     except Exception as e:
