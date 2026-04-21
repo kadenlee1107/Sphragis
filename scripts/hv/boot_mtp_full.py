@@ -37,8 +37,99 @@ from m1n1.proxy import M1N1Proxy, UartInterface
 from m1n1.proxyutils import ProxyUtils, bootstrap_port
 
 MTP_BLOB = ROOT / "firmware/mtp/J604_MtpFirmware.bin"
+M1N1_MACHO = ROOT / "external/m1n1/build/m1n1.macho"
 MH_MAGIC_64 = 0xfeedfacf
 LC_SEGMENT_64 = 0x19
+
+
+def chainload_patched_m1n1(iface, p, u):
+    """Chainload our patched m1n1.macho over the existing proxy session.
+    Mirrors batos_hv_interactive.chainload_inline. The patched m1n1 has
+    the 118s-watchdog-disable fix (commit 72c606f4) which may matter if
+    macOS's watchdog is triggering on MTP ASC boot attempts. After this,
+    the same iface/p are valid against the new m1n1.
+    """
+    from m1n1.macho import MachO
+    from m1n1.tgtypes import BootArgs_r1, BootArgs_r2, BootArgs_r3
+    from m1n1 import asm
+    from m1n1.utils import align
+
+    if not M1N1_MACHO.exists():
+        print(f"[chainload] ERROR: {M1N1_MACHO} missing — build it first")
+        return False
+
+    new_base = u.base
+    data = M1N1_MACHO.read_bytes()
+    macho = MachO(data)
+    image = macho.prepare_image() + b"\x00\x00\x00\x00"
+    entry = macho.entry - macho.vmin + new_base
+
+    sepfw_start, sepfw_length = u.adt["chosen"]["memory-map"].SEPFW
+    preoslog_start, preoslog_size = 0, 0
+    if hasattr(u.adt["chosen"]["memory-map"], "preoslog"):
+        preoslog_start, preoslog_size = u.adt["chosen"]["memory-map"].preoslog
+
+    image_size = align(len(image))
+    sepfw_off = image_size
+    image_size += align(sepfw_length)
+    preoslog_off = image_size
+    image_size += align(preoslog_size)
+    bootargs_off = image_size
+    bootargs_size = 0x4000
+    image_size += bootargs_size
+
+    print(f"[chainload] total region size 0x{image_size:x}")
+    image_addr = u.malloc(image_size)
+
+    print(f"[chainload] loading kernel image (0x{len(image):x} bytes)...")
+    u.compressed_writemem(image_addr, image, True)
+    p.dc_cvau(image_addr, len(image))
+
+    print(f"[chainload] copying SEPFW (0x{sepfw_length:x} bytes)...")
+    p.memcpy8(image_addr + sepfw_off, sepfw_start, sepfw_length)
+    u.adt["chosen"]["memory-map"].SEPFW = (new_base + sepfw_off, sepfw_length)
+    u.adt["chosen"]["memory-map"].BootArgs = (new_base + bootargs_off, bootargs_size)
+    if preoslog_size:
+        p.memcpy8(image_addr + preoslog_off, preoslog_start, preoslog_size)
+        u.adt["chosen"]["memory-map"].preoslog = (new_base + preoslog_off, preoslog_size)
+
+    print("[chainload] skipping secondary CPU RVBARs (M4 workaround)")
+    u.push_adt()
+
+    tba = u.ba.copy()
+    tba.top_of_kernel_data = new_base + image_size
+
+    if tba.revision <= 1:
+        iface.writemem(image_addr + bootargs_off, BootArgs_r1.build(tba))
+    elif tba.revision == 2:
+        iface.writemem(image_addr + bootargs_off, BootArgs_r2.build(tba))
+    else:
+        iface.writemem(image_addr + bootargs_off, BootArgs_r3.build(tba))
+
+    stub = asm.ARMAsm(f"""
+1:
+        ldp x4, x5, [x1], #16
+        stp x4, x5, [x2]
+        dc cvau, x2
+        ic ivau, x2
+        add x2, x2, #16
+        sub x3, x3, #16
+        cbnz x3, 1b
+
+        ldr x1, ={entry}
+        br x1
+""", image_addr + image_size)
+
+    iface.writemem(stub.addr, stub.data)
+    p.dc_cvau(stub.addr, stub.len)
+    p.ic_ivau(stub.addr, stub.len)
+
+    print(f"[chainload] entry=0x{entry:x}  reloading into stub at 0x{stub.addr:x}")
+    p.reload(stub.addr, new_base + bootargs_off, image_addr, new_base, image_size)
+
+    iface.nop()
+    print("[chainload] proxy is alive on new m1n1 (patched)")
+    return True
 
 
 def parse_rkosftab(data):
@@ -148,6 +239,19 @@ def main():
     p = M1N1Proxy(iface, debug=False)
     bootstrap_port(iface, p)
     u = ProxyUtils(p, heap_size=128 * 1024 * 1024)
+
+    # Chainload our patched m1n1 (has 118s watchdog disable + other fixes).
+    # The stock kmutil-installed bcee7f2 may have quirks that make MTP
+    # ASC init fail. On BATOS_SKIP_BOOTSTRAP=1 skip (e.g., when patched
+    # m1n1 is already running from a previous session in same power-cycle).
+    if os.environ.get("BATOS_SKIP_BOOTSTRAP", "0") != "1":
+        log("chainloading patched m1n1...")
+        if chainload_patched_m1n1(iface, p, u):
+            log("patched m1n1 running — rebuilding proxy utils")
+            # Rebuild ProxyUtils against new m1n1 (new heap base / adt)
+            u = ProxyUtils(p, heap_size=128 * 1024 * 1024)
+        else:
+            log("chainload skipped/failed — continuing on current m1n1")
 
     # Pre-boot CPU state
     mtp_node = u.adt["/arm-io/mtp"]

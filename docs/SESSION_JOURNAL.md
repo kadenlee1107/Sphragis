@@ -11,6 +11,112 @@ end of a session.
 
 ---
 
+## 2026-04-21 17:30 — Ubuntu — patched-m1n1 fixes self-reset; FW reads 1 INBOX msg then hangs (DMA?)
+
+Kaden pointed out we'd been running against the kmutil-installed stock
+`bcee7f2` m1n1 the whole session. Added `BATOS_SKIP_BOOTSTRAP=1` env
+toggle to `boot_mtp_full.py` / `boot_mtp_diff.py` — default is to
+chainload our patched m1n1 (build/m1n1.macho, "m1n1 unknown") via
+chainload_inline. With patched m1n1:
+
+### Self-reset is FIXED
+
+Previous (stock m1n1):
+  - t<5s: CC=0x10, CS=0x4c (FW running)
+  - next probe: CC=0, CS=0x4a (**crashed/reset**)
+
+Patched m1n1:
+  - t=0..20s: CC=0x10, CS=0x4c held STABLE through the full window.
+  - No crashes, no self-resets.
+
+The 72c606f4 AP watchdog disable (or some other patch in between)
+keeps the MTP ASC running cleanly.
+
+### New real wall: FW consumes exactly ONE INBOX message, then hangs
+
+Added `boot_mtp_diff.py` — snapshots reg[0] before and after each
+step (initial, staged, RUN=1, SetIOPPower, Ping, HelloAck) and
+diffs. Clean picture emerges:
+
+**B → C (after CPU_CONTROL.RUN=1):**
+  - +0x0040 (CPU_unk0):  `0x000a0000 → 0x00000001` — boot stage
+  - +0x0044 (CPU_CONTROL): `0 → 0x10` (RUN)
+  - +0x0048 (CPU_STATUS):  `0x6a → 0x6c` (STOPPED cleared, IDLE)
+  - +0x0400: `0 → 0x400`  ← latches (not hw-reset default as I thought)
+  - +0x080c: `0 → 0x60000001`
+  - +0x0818: `0x00040003 → 0` — FW consumed iBoot config
+  - +0x0a00..0x0abc: `0 → 0xffffffff` (FW populated 0x40 bytes)
+  - +0x0c88: `0 → 0x1`
+
+**C → D (after SetIOPPower):**
+  - CPU_STATUS `0x6c → 0x4c` — IDLE cleared, FW awake
+  - +0x0b14:  `0 → 0x100` ← **NEW FW-write**: suspected RPTR mirror
+  - INBOX_CTRL: `0x00020001 → 0x00100101` (FIFOCNT=1 WPTR=1)
+  - OUTBOX_CTRL: `0x00020001 → 0x000a0001` (bit 19 set)
+
+**D → E (Ping added):**
+  - INBOX_CTRL: `0x00100101 → 0x00200201` — FIFOCNT=2 WPTR=2
+  - +0x0b14 UNCHANGED at 0x100
+  - Everything else unchanged
+
+**E → F (HelloAck added):**
+  - INBOX_CTRL: `0x00200201 → 0x00300301` — FIFOCNT=3 WPTR=3
+  - +0x0b14 still 0x100
+  - Everything else unchanged
+
+### Diagnosis
+
+FW read **exactly one message** (SetIOPPower), advanced `+0x0b14`
+to 0x100 (bit 8 = "RPTR=1"), then **stopped consuming INBOX**.
+All subsequent host writes queue up (WPTR and FIFOCNT climb), but
+RPTR stays at 1. Also:
+  - OUTBOX never has a real message — FW never sent Hello or any
+    response.
+  - FW didn't self-reset (patched m1n1 keeps it alive).
+
+The FW is awake (CS=0x4c non-IDLE) but stuck. Almost certainly in
+a polling loop waiting for something that never comes — most
+likely a DMA completion (DART translation fault swallowed
+silently) during the "initialize iorep/syslog buffers before
+sending Hello" phase.
+
+### What I tried (didn't fix it)
+
+  - Write 0 / 0x100 to +0x0b14: ignored, read-only from host.
+  - Write 0 to +0x080c: lands but doesn't unstick FW.
+  - Multiple Mgmt types (StartEP, Ping, HelloAck): all queue but
+    none consumed.
+  - `dart.initialize()` before boot: doesn't help — page tables
+    are installed but no iova→phys mappings added, so any FW DMA
+    to iova 0x8000+ still faults.
+
+### On disk
+
+  - `scripts/hv/boot_mtp_full.py` — added patched-m1n1 chainload
+    at startup. `BATOS_SKIP_BOOTSTRAP=1` to skip.
+  - `scripts/hv/boot_mtp_diff.py` — new. Step-by-step reg diffs
+    and tries Mgmt_SetIOPPower / Ping / HelloAck.
+  - `scripts/hv/probe_mtp_kick.py` — poke +0x0b14 / +0x080c /
+    scan reg[0] post-hang.
+
+### Where to take it next
+
+**Theory**: FW is hung waiting on DMA that's faulting silently.
+Check dart-mtp IRQ regs during the hang window — Apple DARTs
+latch translation faults with offending iova in a dedicated reg.
+If we see faults at a specific iova, we know where FW expects a
+mapping.
+
+Alternative: the m1n1 Python MTP client at
+`external/m1n1/proxyclient/m1n1/fw/mtp.py` might have the
+answer — look at how it instantiates MTP, especially what iova
+range + mappings it sets up. It likely calls `dart.iomap(...)`
+to pre-alloc buffers at specific iovas before CPU_CONTROL.RUN=1.
+
+### Net: FW stable thanks to patched m1n1, but FW stuck in DMA-wait
+
+---
+
 ## 2026-04-21 16:45 — Ubuntu — MTP FW processes INBOX kicks; OUTBOX idle = ascwrap-v6 const; fw self-resets
 
 Continuation of 16:30. Added `mgmt.start()` (sends `Mgmt_SetIOPPower(0x220)`)
