@@ -271,6 +271,75 @@ isn't in CPM[0..0x100] (the only CPM range we can read without
 SErroring). It's likely behind the M4 HAS_GUARDED_IO_FILTER —
 SPTM / PPL territory we can't easily probe from EL2.
 
+### Kernelcache strings IDENTIFY THE WATCHDOG: SMC AP watchdog
+
+Searched the M4 kernelcache (already at `/tmp/m4_ipsw/.../kernelcache.
+release.iPad16,3_4_5_6`) for watchdog-related strings.
+`com.apple.driver.AppleARMWatchdogTimer` cstring section reveals:
+
+  - `_useSMCEnforcedWatchdog=%d`     ← the kext supports BOTH a HW
+    WDT and an SMC-enforced WDT. Two distinct mechanisms.
+  - `Reconfig watchdog cannot be supported without SMC AP watchdog support`
+  - `panic SMC watchdog cannot be supported without SMC AP watchdog support`
+  - `Simplified Reconfig watchdog cannot be supported without SMC AP watchdog support`
+  - `Need to add 'reg' entry in device tree for the AP watchdog deadline`
+  - `AppleARMWatchdogTimerFunctionExpireWatchdog`  ← function name
+    used to expire (= disable / pet) the watchdog.
+  - `Device panic triggered by an external agent (via SMC doorbell)`
+  - `wdt-version`  ← ADT property; XNU code says `wdt-versions >= 3`
+    don't support legacy reconfig watchdog (= must use SMC).
+
+`com.apple.driver.AppleSMC` cstrings include `ap_wdt_expiry`,
+`smc-panic-on-key-timeout`, `nmiing-on-key-timeout`,
+`panicking-on-key-timeout`, `kSMC_ASC`. These confirm SMC has a
+key-timeout mechanism that fires panics/resets.
+
+### So, the 118 s ceiling IS the SMC AP watchdog firing
+
+Picture:
+  - iBoot sets up SMC's ASC mailbox + arms an "AP must respond"
+    countdown.
+  - Stock m1n1 sits in proxy without taking over as a kernel —
+    SMC's expectation isn't yet "kernel is running", so countdown
+    doesn't trip.
+  - When `hv.init` enables stage-2 + `hv.start` ERETs to EL1,
+    SMC sees the AP enter "kernel mode" and its countdown starts
+    treating us as a misbehaving kernel.
+  - At ~118 s without the macOS-specific SMC mailbox handshake,
+    SMC fires `ap_wdt_expiry` and resets the AP.
+
+This explains EVERYTHING we observed today:
+  - Why the timer fires only after `hv.start` (=AP entered kernel
+    mode at EL1).
+  - Why guest activity is irrelevant (the test isn't about CPU,
+    it's about the SMC handshake).
+  - Why the SoC WDT (which we kick at 1 kHz) doesn't matter (it's
+    a different watchdog).
+  - Why init-only causes only a partial drop (vuart) — the kernel
+    "looks normal" enough that SMC fires only its NMI/key-timeout
+    sub-action, not full reset.
+
+### The fix is one of these
+
+  (1) Send the macOS-specific SMC heartbeat from `hv_tick`. Need
+      to find the SMC key macOS writes to keep the watchdog happy.
+      Stock m1n1 has `smc_nudge` that reads the `#KEY` key — that
+      was tried and CRASHED earlier (journal 12:40 "SMC Plan B:
+      pump neutral, nudge fatal"). May need to read a different
+      key or write a `WDOG/MSWD/ALRM` key.
+  (2) Send the "expire watchdog" SMC command at hv.init time —
+      AppleARMWatchdogTimerFunctionExpireWatchdog suggests the
+      kext exposes a way to disable. We need to identify the
+      SMC key/op it sends.
+  (3) Write the AP watchdog DEADLINE register to a far-future
+      value via direct MMIO — XNU said the deadline reg is in
+      ADT, so we can find its address and just write `0xffffffff`
+      to it from `hv_tick` or `hv_init`.
+
+Option (3) is most promising — direct MMIO write, no SMC mailbox
+risks. To find the deadline reg: dump `/arm-io/wdt` ADT properties
+(it should have `reg` and `reg-type` arrays naming each instance).
+
 ### Where this leaves the hunt
 
 We've ruled out:
