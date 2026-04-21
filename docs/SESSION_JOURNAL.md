@@ -244,6 +244,68 @@ macOS init sequence.
 Hunting next: snapshot CPM + ACC at a few offsets from `hv-dbg`
 and see what ticks.
 
+### CPM/ACC scan — config regs, not timers
+
+Wrote `scripts/hv/probe_cpm_acc_scan.py` for brute-force snapshot+
+diff of E-cluster CPM (0x210e40000) and ACC (0x210f00000) MMIO.
+Skipped P-cluster (HAS_GUARDED_IO_FILTER SErrors).
+
+Snap 1 vs snap 2 (15 s apart, just stock m1n1, no chainload):
+
+```
+ECPU_CPM+0x00008  0x00000000 -> 0x00000202   (~9/s — looks status bits)
+ECPU_CPM+0x00010  0x00000000 -> 0x10e400a8   (looks like an address)
+ECPU_CPM+0x00014  0x00000000 -> 0x1a815002   (looks like an address)
+ECPU_CPM+0x00018  0x00000000 -> 0x00100003   (status flag)
+ECPU_CPM+0x0001c  0x00000000 -> 0x00000014   (20)
+ECPU_CPM+0x00050…0x06f       SErrors on read (proxy dies).
+```
+
+These jumped from ALL ZEROS to specific Apple-firmware values
+once we read them — looks like the CPM block was in a low-power
+state and our access woke it. The +0x10 / +0x14 values look like
+self-referential addresses (0x210e400a8 etc. = CPM-base-relative).
+
+**These are config/status regs, not ticking timers.** The timer
+isn't in CPM[0..0x100] (the only CPM range we can read without
+SErroring). It's likely behind the M4 HAS_GUARDED_IO_FILTER —
+SPTM / PPL territory we can't easily probe from EL2.
+
+### Where this leaves the hunt
+
+We've ruled out:
+  - HV-visible exception pile-up (instrumentation)
+  - CPU busy-ness (batman-only test)
+  - Guest activity (WFI-forever test)
+  - Wall-clock from chainload (init-only proves it's not fully
+    armed by chainload alone)
+  - SoC WDT block at 0x3882b0000 (wdt_kick stays effective)
+  - CPM/ACC plain MMIO offsets (0..0x40, 0x70..0x100) — no
+    ticking counters there.
+
+The watchdog is firmware-private — sitting behind GUARDED_IO_FILTER
+or in SPTM/PPL state. We can NOT directly probe it from EL2.
+
+### Realistic next moves
+
+  (a) Get a normal macOS boot trace (e.g. from a known-good
+      iPad Pro M4) and look at MMIO writes in the first 120 s
+      to understand the handshake we need to mimic. Asahi has
+      some tools for this — `m1n1.hv` can record MMIO traces.
+      Run macOS under m1n1 hv on M4 (Mac Pro M4 first BOOT into
+      the regular kernelcache via m1n1 hv tracing) and capture.
+      The handshake we're missing should appear as MMIO writes
+      from XNU between iBoot handoff and ~118 s.
+  (b) Implement APSC / chicken init from the kernelcache RE
+      we already have (Path A, half-done in
+      `docs/m4_re/kernelcache/`). If the watchdog is "AP must
+      have CPU running at normal APSC pstate within 118 s",
+      doing the APSC enable is the fix.
+  (c) Try writing to candidate "I am a kernel, here's my
+      heartbeat" MMIO from `hv_tick`. AOP mailbox, SMC mailbox,
+      SEP mailbox — the things our HAS_GUARDED_IO_FILTER aware
+      firmware would expect activity on.
+
 ### Implementation note
 
 `scripts/hv/batos_hv_interactive.py` now supports:
