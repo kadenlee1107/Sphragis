@@ -181,6 +181,247 @@ def _noop_signal(*_):
     pass
 
 
+# HID usage ID → ASCII byte. From USB HID Usage Tables, Keyboard Page.
+# Shift column = what the key produces with Shift held.
+# 0-255 are raw integers; 'a' etc are strings (encoded later).
+_HID_TO_ASCII = {
+    # Letters
+    0x04: ('a', 'A'), 0x05: ('b', 'B'), 0x06: ('c', 'C'), 0x07: ('d', 'D'),
+    0x08: ('e', 'E'), 0x09: ('f', 'F'), 0x0a: ('g', 'G'), 0x0b: ('h', 'H'),
+    0x0c: ('i', 'I'), 0x0d: ('j', 'J'), 0x0e: ('k', 'K'), 0x0f: ('l', 'L'),
+    0x10: ('m', 'M'), 0x11: ('n', 'N'), 0x12: ('o', 'O'), 0x13: ('p', 'P'),
+    0x14: ('q', 'Q'), 0x15: ('r', 'R'), 0x16: ('s', 'S'), 0x17: ('t', 'T'),
+    0x18: ('u', 'U'), 0x19: ('v', 'V'), 0x1a: ('w', 'W'), 0x1b: ('x', 'X'),
+    0x1c: ('y', 'Y'), 0x1d: ('z', 'Z'),
+    # Numbers / top row
+    0x1e: ('1', '!'), 0x1f: ('2', '@'), 0x20: ('3', '#'), 0x21: ('4', '$'),
+    0x22: ('5', '%'), 0x23: ('6', '^'), 0x24: ('7', '&'), 0x25: ('8', '*'),
+    0x26: ('9', '('), 0x27: ('0', ')'),
+    # Named
+    0x28: ('\r', '\r'),   # Enter
+    0x29: ('\x1b', '\x1b'),  # Escape
+    0x2a: ('\x7f', '\x7f'),  # Backspace (DEL to be consistent with Linux)
+    0x2b: ('\t', '\t'),   # Tab
+    0x2c: (' ', ' '),     # Space
+    # Punctuation
+    0x2d: ('-', '_'), 0x2e: ('=', '+'),
+    0x2f: ('[', '{'), 0x30: (']', '}'), 0x31: ('\\', '|'),
+    0x33: (';', ':'), 0x34: ("'", '"'), 0x35: ('`', '~'),
+    0x36: (',', '<'), 0x37: ('.', '>'), 0x38: ('/', '?'),
+    # Arrows — emit ANSI escape sequences for shell compatibility
+    0x4f: ('\x1b[C', '\x1b[C'),   # Right
+    0x50: ('\x1b[D', '\x1b[D'),   # Left
+    0x51: ('\x1b[B', '\x1b[B'),   # Down
+    0x52: ('\x1b[A', '\x1b[A'),   # Up
+}
+
+
+def _hid_decode(mods, key):
+    """Return bytes for one HID key event, given modifier byte and key code.
+    Returns empty bytes for unmapped keys."""
+    entry = _HID_TO_ASCII.get(key)
+    if entry is None:
+        return b""
+    shift = bool(mods & 0x22)  # L Shift | R Shift
+    ctrl  = bool(mods & 0x11)  # L Ctrl | R Ctrl
+    c = entry[1 if shift else 0]
+    if ctrl and len(c) == 1 and 'a' <= c.lower() <= 'z':
+        # Ctrl+letter → ASCII 0x01..0x1A
+        return bytes([ord(c.lower()) - ord('a') + 1])
+    return c.encode("latin-1")
+
+
+def _mtp_kbd_probe(iface, p, u, vuart):
+    """Set up SMC + DART-MTP + dockchannel-mtp + MTP ASC, subscribe
+    to the keyboard MTP interface, poll forever. Each key event
+    prints to stderr and, if BATOS_HV_MTP_BRIDGE_TO_VUART=1, writes
+    the decoded byte(s) through the vuart so Bat_OS sees them via
+    platform::serial_getc same as the Linux typing path."""
+    log("MTP keyboard probe starting — importing m1n1 fw modules")
+    from m1n1.fw.asc import StandardASC
+    from m1n1.hw.dart import DART
+    from m1n1.hw.dockchannel import DockChannel
+    from m1n1.fw.smc import SMCClient
+    from m1n1.fw.mtp import (
+        MTPProtocol, MTPKeyboardInterface, RXMessage,
+    )
+
+    bridge = os.environ.get("BATOS_HV_MTP_BRIDGE_TO_VUART", "0") == "1"
+    log(f"bridge-to-vuart: {bridge}")
+
+    smc_addr = u.adt["arm-io/smc"].get_reg(0)[0]
+    log(f"SMC @ 0x{smc_addr:x}")
+    smc = SMCClient(u, smc_addr)
+    smc.start()
+    smc.start_ep(0x20)
+    smc.verbose = 0
+
+    # M4 experiment: dapf_init_all hangs partway through on M4 (dart-aop
+    # inits ok, dart-mtp write then never acks). Bypass DAPF entirely
+    # and set BYPASS_DAPF=1 in the DART TCR below — DAPF is a security
+    # filter; without it the DART accepts all transactions, which is
+    # fine for a bring-up keyboard probe.
+    skip_dapf = os.environ.get("BATOS_HV_MTP_SKIP_DAPF", "1") == "1"
+    if not skip_dapf:
+        _saved_timeout = iface.dev.timeout
+        iface.dev.timeout = 60
+        log("p.dapf_init_all() (timeout bumped to 60s)...")
+        try:
+            p.dapf_init_all()
+        finally:
+            iface.dev.timeout = _saved_timeout
+    else:
+        log("skipping dapf_init_all (BATOS_HV_MTP_SKIP_DAPF=1)")
+
+    log("DART /arm-io/dart-mtp...")
+    dart = DART.from_adt(u, "/arm-io/dart-mtp", iova_range=(0x8000, 0x100000))
+    dart.dart.regs.TCR[1].set(BYPASS_DAPF=int(skip_dapf), BYPASS_DART=0,
+                              TRANSLATE_ENABLE=1)
+
+    irq_base = u.adt["/arm-io/dockchannel-mtp"].get_reg(1)[0]
+    fifo_base = u.adt["/arm-io/dockchannel-mtp"].get_reg(2)[0]
+    log(f"dockchannel-mtp irq=0x{irq_base:x} fifo=0x{fifo_base:x}")
+    dc = DockChannel(u, irq_base, fifo_base, 1)
+
+    node = u.adt["/arm-io/dockchannel-mtp/mtp-transport"]
+
+    # Drain stale bytes
+    while dc.rx_count:
+        dc.read(dc.rx_count)
+
+    mtp_addr = u.adt["/arm-io/mtp"].get_reg(0)[0]
+    log(f"MTP ASC @ 0x{mtp_addr:x}")
+    mtp = StandardASC(u, mtp_addr, dart, stream=1)
+    mtp.verbose = 1
+    mtp.allow_phys = True
+
+    # Inspect ASC CPU_CONTROL state BEFORE trying anything — tells us
+    # whether macOS/iBoot left the coprocessor running.
+    try:
+        cpu_ctrl = p.read32(mtp_addr + 0x0044)
+        cpu_status = p.read32(mtp_addr + 0x0048)
+        log(f"MTP ASC pre-boot: CPU_CONTROL=0x{cpu_ctrl:08x} "
+            f"CPU_STATUS=0x{cpu_status:08x}")
+    except Exception as e:
+        log(f"couldn't read ASC regs: {e!r}")
+
+    from m1n1.fw.asc.base import ASCTimeout
+
+    mode = os.environ.get("BATOS_HV_MTP_BOOT_MODE", "boot")
+    # Valid modes:
+    #   "boot"        — call mtp.boot() with default timeout
+    #   "boot-long"   — boot with 10s wait
+    #   "stop-boot"   — stop() then boot()
+    #   "skip"        — assume already running, attach to mailbox
+    #   "cascade"     — try boot-long, then stop-boot, then skip
+    log(f"mtp boot mode: {mode}")
+
+    def try_boot_long():
+        # StandardASC.boot wraps mgmt.wait_boot(1); reach in with longer wait.
+        mtp.boot_long_ran = True
+        # Just run the parts of boot() with longer wait_boot
+        print("Booting ASC (long timeout)...")
+        mtp.asc.CPU_CONTROL.set(RUN=1)
+        mtp.mgmt.wait_boot(10)
+
+    def try_stop_boot():
+        log("stop+boot dance")
+        try:
+            mtp.stop()
+        except Exception as e:
+            log(f"  stop failed (expected if not yet booted): {e!r}")
+        mtp.boot()
+
+    if mode == "boot":
+        mtp.boot()
+    elif mode == "boot-long":
+        try_boot_long()
+    elif mode == "stop-boot":
+        try_stop_boot()
+    elif mode == "skip":
+        log("skipping mtp.boot() — assuming ASC already running")
+    elif mode == "cascade":
+        try:
+            log("attempt 1: boot-long")
+            try_boot_long()
+            log("  OK")
+        except ASCTimeout:
+            log("  timeout — attempt 2: stop+boot")
+            try:
+                try_stop_boot()
+                log("  OK")
+            except Exception as e:
+                log(f"  failed: {e!r} — attempt 3: skip")
+                # leave ASC alone; go straight to MTPProtocol setup
+    else:
+        raise RuntimeError(f"unknown BATOS_HV_MTP_BOOT_MODE={mode}")
+
+    # Subclass MTPKeyboardInterface to capture + decode HID reports.
+    class BridgeKeyboard(MTPKeyboardInterface):
+        NAME = "keyboard"
+
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.last_keys = set()
+
+        def report(self, msg):
+            # msg is the raw HID report payload (bytes-like).
+            data = bytes(msg)
+            sys.stderr.write(f"[mtp-kbd] HID report: {data.hex()}\n")
+            sys.stderr.flush()
+            if len(data) < 3:
+                return
+            mods = data[0]
+            # byte 1 is reserved; bytes 2..7 are simultaneously-pressed keys
+            keys = set(k for k in data[2:8] if k != 0)
+            newly_pressed = keys - self.last_keys
+            self.last_keys = keys
+            for k in newly_pressed:
+                out = _hid_decode(mods, k)
+                if out:
+                    sys.stderr.write(f"[mtp-kbd] key 0x{k:02x} mods=0x{mods:02x} -> {out!r}\n")
+                    sys.stderr.flush()
+                    if bridge:
+                        try:
+                            vuart.write(out)
+                            vuart.flush()
+                        except Exception as e:
+                            sys.stderr.write(f"[mtp-kbd] vuart write err: {e!r}\n")
+
+    # Patch the keyboard class used by the protocol.
+    # MTPProtocol looks up interfaces by NAME in its INTERFACES list
+    # when init messages arrive — swap in our subclass.
+    from m1n1.fw import mtp as _mtp_mod
+    for i, cls in enumerate(_mtp_mod.MTPProtocol.INTERFACES):
+        if cls.NAME == "keyboard":
+            _mtp_mod.MTPProtocol.INTERFACES[i] = BridgeKeyboard
+
+    log("creating MTPProtocol, waiting for keyboard init...")
+    mp = MTPProtocol(u, node, mtp, dc, smc)
+    try:
+        mp.wait_init("keyboard")
+    except Exception as e:
+        log(f"wait_init failed: {e!r}")
+        raise
+
+    mtp.stop()
+    mtp.start()
+    log("keyboard initialized — polling for key events. Type on the Mac keyboard!")
+    log("Ctrl+C / kill -9 to exit.")
+
+    try:
+        while True:
+            try:
+                mp.work_pending()
+                mtp.work()
+            except Exception as e:
+                log(f"work error: {e!r}")
+                time.sleep(0.1)
+            time.sleep(0.005)
+    except KeyboardInterrupt:
+        pass
+
+
 def _dump_keyboard_adt(adt):
     """Walk the ADT looking for keyboard/HID-transport nodes and
     their containing SPI controllers. Writes an annotated listing
@@ -271,11 +512,12 @@ def _dump_keyboard_adt(adt):
             pline(f"  <walk err: {e!r}>")
 
     # M4/M3 keyboard path goes through AOP (Always-On Processor) +
-    # MTP (MultiTouch Protocol). Find the AOP coprocessor, the MTP
-    # node, their DART, and anything with "mtp" or "aop" in the name
-    # or compat.
+    # MTP (MultiTouch Protocol). Dump every node whose name or
+    # compat contains mtp/aop/dart/dockchannel/smc so we can see
+    # M4's exact coprocessor topology.
     pline("")
-    pline("[adt-kbd] AOP / MTP coprocessor nodes (M4 keyboard path):")
+    pline("[adt-kbd] MTP/AOP/DART/Dockchannel/SMC topology (M4 keyboard path):")
+    wanted = ("mtp", "aop", "dart", "dockchannel", "smc", "asc", "rtkit")
     for node in adt.walk_tree():
         try:
             nm = getattr(node, "name", "")
@@ -286,18 +528,25 @@ def _dump_keyboard_adt(adt):
                 pass
             nm_l = nm.lower()
             c_join = " ".join(compat).lower()
-            if ("mtp" in nm_l or "aop" in nm_l or "mtp" in c_join or
-                "aop" in c_join or "rtkit" in c_join or
-                any("hid" in c.lower() for c in compat)):
+            if any(w in nm_l for w in wanted) or any(w in c_join for w in wanted):
                 try:
                     parent = getattr(node, "_parent", None)
                     ppath = parent.name if parent else "?"
                 except Exception:
                     ppath = "?"
                 pline(f"  {ppath}/{nm}  compatible={compat}")
+                # All reg ranges
                 try:
-                    reg = node.get_reg(0)
-                    pline(f"    reg[0] = (0x{reg[0]:x}, 0x{reg[1]:x})")
+                    # ADT Node objects don't have a uniform get_reg — try
+                    # the property accessors the fw/mtp path uses.
+                    for regi in range(6):
+                        try:
+                            r = node.get_reg(regi)
+                            if r is None:
+                                break
+                            pline(f"    reg[{regi}] = (0x{r[0]:x}, 0x{r[1]:x})")
+                        except Exception:
+                            break
                 except Exception:
                     pass
                 try:
@@ -306,16 +555,29 @@ def _dump_keyboard_adt(adt):
                         pline(f"    interrupts = {list(irqs)}")
                 except Exception:
                     pass
-                # Print some property keys
+                # Also list children
+                try:
+                    children = []
+                    for c in node:
+                        try:
+                            cc = list(getattr(c, "compatible", []))
+                        except Exception:
+                            cc = []
+                        children.append(f"{c.name}{cc}")
+                    if children:
+                        pline(f"    children: {children}")
+                except Exception:
+                    pass
+                # Interesting properties
                 try:
                     props = [k for k in dir(node) if not k.startswith("_")
                              and not callable(getattr(node, k, None))]
                     interesting = [k for k in props if any(
                         s in k.lower() for s in
-                        ["endpoint", "rtk", "mbox", "asc", "iommu", "dart",
-                         "function", "ep-", "ep_"])]
+                        ["endpoint", "rtk", "mbox", "asc", "iommu",
+                         "function", "ep-", "ep_", "mailbox"])]
                     if interesting:
-                        pline(f"    props-of-interest: {interesting[:12]}")
+                        pline(f"    props-of-interest: {interesting[:16]}")
                 except Exception:
                     pass
         except Exception:
@@ -508,6 +770,33 @@ def main():
             return _EXC_RET.EXIT_GUEST
         return _orig_run_shell(entry_msg, exit_msg)
     hv.run_shell = _halt_aware_run_shell
+    # Fast-iteration mode: dump ADT + hold proxy alive without
+    # starting the HV. Useful for M4 coprocessor topology probing
+    # where we don't need Bat_OS running at all.
+    if os.environ.get("BATOS_HV_ADT_ONLY", "0") == "1":
+        _dump_keyboard_adt(u.adt)
+        log("ADT_ONLY=1 — dumped ADT; holding proxy open. Ctrl+C / kill -9 to exit.")
+        try:
+            while True:
+                time.sleep(5)
+                try:
+                    p.nop()
+                except Exception as e:
+                    log(f"adt-only: nop failed: {e!r}")
+        except KeyboardInterrupt:
+            pass
+        return
+
+    # Mac-keyboard-via-MTP probe. Sets up SMC, DART-MTP, MTP
+    # dockchannel, and the MTP ASC coprocessor, then subscribes to
+    # keyboard events. Each keystroke you make on the Mac keyboard
+    # prints to stderr as the HID report + decoded ASCII. Also
+    # writes the decoded byte to the vuart if BATOS_HV_MTP_BRIDGE_TO_VUART=1.
+    # Does NOT start the HV — this is a pure keyboard probe.
+    if os.environ.get("BATOS_HV_MTP_KBD_PROBE", "0") == "1":
+        _mtp_kbd_probe(iface, p, u, vuart)
+        return
+
     hv.init()
 
     if os.environ.get("BATOS_HV_DUMP_KBD_ADT", "0") == "1":

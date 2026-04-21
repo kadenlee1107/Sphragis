@@ -11,6 +11,120 @@ end of a session.
 
 ---
 
+## 2026-04-21 10:00 — Ubuntu — MTP keyboard probe: blocker is missing firmware blob
+
+Followed 09:30's architecture finding with a real MTP bring-up
+attempt. Got a lot of the infrastructure working, hit a hard
+wall at the ASC boot step.
+
+### What works
+
+Under `BATOS_HV_MTP_KBD_PROBE=1` in
+`scripts/hv/batos_hv_interactive.py`:
+
+  - SMC client boots cleanly (`[mgmt] Startup complete`,
+    `[smcep] Starting up`).
+  - DAPF bypass (`BATOS_HV_MTP_SKIP_DAPF=1`, now default in this
+    mode) works around an M4-specific `dapf_init_all` hang — m1n1
+    inits dart-aop fine, but the dart-mtp DAPF writes never ACK
+    and the proxy times out. Setting `BYPASS_DAPF=1` in the DART
+    TCR is functionally equivalent for our purposes and sidesteps
+    the hang.
+  - DART /arm-io/dart-mtp is instantiated, TCR configured.
+  - Dockchannel-mtp IRQ + FIFO addresses come cleanly out of the
+    ADT (`reg[1]=0x394b14000`, `reg[2]=0x394b30000`).
+  - MTP ASC address (`/arm-io/mtp` @ 0x394600000) mapped and
+    register accessors work.
+
+### What's blocked
+
+The MTP ASC coprocessor itself. Pre-boot inspection shows:
+
+```
+CPU_CONTROL=0x00000000  CPU_STATUS=0x0000006a
+```
+
+i.e. the ASC is STOPPED + IDLE. Writing `CPU_CONTROL.RUN=1`
+(what `StandardASC.boot()` does) brings the CPU out of halt,
+but no Hello / Mgmt messages ever arrive. The `wait_boot()`
+timeout fires (both 1 s and 10 s). `stop()` also fails because
+the mgmt link isn't up.
+
+### Why: firmware isn't staged
+
+The asahi-docs call this out explicitly
+(`docs/platform/open-os-interop.md`):
+
+> "Apple MTP multitouch firmware (M2 machines)" — blobs not
+> yet packaged for Asahi Linux
+
+On macOS, iBoot loads the MTP firmware blob into the ASC's SRAM
+before handing off to the kernelcache. For a chainloaded m1n1
+(i.e., our path), iBoot still runs, but whether MTP firmware
+makes it in depends on what kmutil-configure-boot staged in the
+m1n1 kernelcache blob. In our case clearly it didn't — the ASC
+CPU starts but has no code to run, so it never sends its Hello.
+
+Full MTP bring-up on M4 needs:
+
+  1. Extract the MTP firmware blob from macOS
+     (`multitouch.d/FW.bin` style). Asahi's `asahi-fwextract`
+     does this; we'd need a port or a one-time manual extract.
+  2. Teach our chainload path (or m1n1 itself) to stage that
+     blob into the MTP ASC's SRAM via its mailbox loader
+     protocol before `mtp.boot()`.
+  3. Then the existing MTPProtocol / MTPKeyboardInterface flow
+     from `external/m1n1/proxyclient/m1n1/fw/mtp.py` should
+     Just Work.
+
+### What's in this commit
+
+`scripts/hv/batos_hv_interactive.py` additions:
+
+  - `_mtp_kbd_probe(iface, p, u, vuart)` — full MTP probe
+    scaffolding: SMC, DART, dockchannel-mtp, MTP ASC instantiation.
+  - `BATOS_HV_MTP_KBD_PROBE=1` — run the probe (skips HV start).
+  - `BATOS_HV_MTP_BOOT_MODE` — `boot` | `boot-long` | `stop-boot`
+    | `skip` | `cascade`. Cascade tries three strategies in order
+    and is useful for diagnosing boot-path issues.
+  - `BATOS_HV_MTP_SKIP_DAPF=1` (default) — bypass dapf_init_all;
+    M4's dart-mtp DAPF path hangs m1n1's proxy.
+  - `BATOS_HV_MTP_BRIDGE_TO_VUART=1` — route decoded keyboard
+    bytes to the vuart so Bat_OS (if running) sees them via
+    platform::serial_getc. Stubbed; activates once ASC boots.
+  - HID→ASCII decode table in `_HID_TO_ASCII` with shift/ctrl
+    modifier support.
+  - Pre-boot CPU_CONTROL / CPU_STATUS dump for diagnostics.
+  - Bumped M1N1TIMEOUT hint in the launch instructions (default
+    3 s is too short for multi-DART DAPF init — use 30).
+
+### Honest next-session checklist for keyboard
+
+If the next Claude picks up letter B:
+
+  1. Get a dumped MTP firmware blob from macOS. Kaden's laptop
+     should have it at
+     `/System/Library/Extensions/AppleMultitouchMTP.kext/Contents/Resources/` 
+     or similar — needs RE to find the exact path on M4.
+  2. Add an ASC firmware loader to `batos_hv_interactive.py` (or
+     m1n1 C-side) that uploads the blob to MTP ASC SRAM via the
+     mailbox loader protocol.
+  3. Call the loader before `mtp.boot()`.
+  4. Expect the existing MTPKeyboardInterface subclass to start
+     receiving HID reports on key press — and the vuart bridge
+     to forward ASCII bytes to Bat_OS.
+  5. Long-term: rewrite all of this in Rust inside Bat_OS so
+     keyboard works without host-side bridge.
+
+### Net: scoped cleanly, blocker documented
+
+Letter B's "just a few hours" scope was wrong — the real answer
+is firmware extraction tooling. Good architectural learning today.
+Commit has the entire probe infrastructure ready for the firmware
+blob to drop in.
+
+---
+
 ## 2026-04-21 09:30 — Ubuntu — M4 keyboard is AOP/MTP, not SPI — architecture finding
 
 Letter B from the morning plan (Mac keyboard) turned out to be a
