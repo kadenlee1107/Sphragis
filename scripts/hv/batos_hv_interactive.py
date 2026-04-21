@@ -801,6 +801,26 @@ def main():
     # ExitConsole(EXC_RET.EXIT_GUEST)) overrides this while it's active.
     signal.signal(signal.SIGUSR2, _noop_signal)
 
+    # SIGTERM handler — if timeout(1) or systemd kills us while hv.start()
+    # is blocking in the guest, we'd leave m1n1's HV stuck (no Python
+    # left to process USER_INTERRUPT, no clean exit → proxy dies →
+    # power-cycle needed). Send the halt kick before exiting so m1n1
+    # unwinds the HV cleanly and stays ready for the next launch.
+    def _graceful_term(signum, _frame):
+        sys.stderr.write(f"\n[host] received signal {signum} — kicking HV\n")
+        sys.stderr.flush()
+        try:
+            if _iface_for_kick["iface"] is not None:
+                _halt_seen.set()
+                _iface_for_kick["iface"].dev.write(b"!")
+        except Exception as e:
+            sys.stderr.write(f"[host] graceful kick failed: {e!r}\n")
+        # Give m1n1 a moment to unwind before the default SIGTERM lands.
+        time.sleep(0.5)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _graceful_term)
+
     # Split commands by ';;' (unlikely to occur in a real cmd line) or
     # newlines. \r, \n, \xHH etc escape sequences are interpreted. A
     # literal CR gets appended to each command if not already present
@@ -824,11 +844,14 @@ def main():
                     decoded = decoded + b"\r"
             stims.append(decoded)
 
-    # Find the vuart device. Prefer BATOS_HV_VUART_DEVICE if set;
-    # otherwise use the -if02 symlink under /dev/serial/by-id/
-    # (stable across USB re-enumerations); fall back to /dev/ttyACM2
-    # for backwards compat. May lag a few seconds after chainload,
-    # so retry for up to 30 s.
+    # Open-vuart is deferred until AFTER the optional bootstrap
+    # chainload. Chainload causes m1n1 to re-init USB, which makes
+    # cdc-acm renumber — an fd opened against the pre-chainload
+    # /dev/ttyACMN points at a dead device and every read/write
+    # returns EIO. See _open_vuart() below, called post-bootstrap.
+    stop = threading.Event()
+    verbose = os.environ.get("BATOS_HV_VERBOSE", "1") != "0"
+
     def _resolve_vuart_path():
         override = os.environ.get("BATOS_HV_VUART_DEVICE")
         if override:
@@ -843,35 +866,26 @@ def main():
             return os.path.realpath(by_id[0])
         return "/dev/ttyACM2"
 
-    vuart = None
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        path = _resolve_vuart_path()
-        try:
-            vuart = serial.Serial(
-                path,
-                baudrate=115200,
-                timeout=0.1,
-                rtscts=False, xonxoff=False, dsrdtr=False,
-            )
-            log(f"opened vuart at {path}")
-            break
-        except (FileNotFoundError, serial.SerialException) as e:
-            last_err = e
-            time.sleep(1.0)
-    if vuart is None:
+    def _open_vuart():
+        last_err = None
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            path = _resolve_vuart_path()
+            try:
+                v = serial.Serial(
+                    path,
+                    baudrate=115200,
+                    timeout=0.1,
+                    rtscts=False, xonxoff=False, dsrdtr=False,
+                )
+                log(f"opened vuart at {path}")
+                configure_vuart_raw(v)
+                return v
+            except (FileNotFoundError, serial.SerialException) as e:
+                last_err = e
+                time.sleep(1.0)
         log(f"timed out waiting for vuart: {last_err}")
         sys.exit(1)
-    configure_vuart_raw(vuart)
-
-    stop = threading.Event()
-    verbose = os.environ.get("BATOS_HV_VERBOSE", "1") != "0"
-    # vuart_reader and stimulus_sender are spawned AFTER any bootstrap
-    # chainload (below), because the chainload briefly resets m1n1's
-    # USB CDC — a stim thread firing into the dead endpoint raises
-    # EIO, and vuart_reader's SerialException handler ends the thread
-    # permanently, killing halt detection. Safer to start them against
-    # the post-chainload (patched) m1n1 that will stay up.
 
     # M1N1DEVICE points at the uartproxy endpoint (-if00). Resolve
     # through /dev/serial/by-id so we survive USB re-enumerations
@@ -924,14 +938,19 @@ def main():
         except Exception as e:
             log(f"bootstrap chainload: post-reload nop failed: {e!r}")
             raise
+        # Give Linux a moment to re-enumerate USB so the by-id symlink
+        # repopulates before we resolve it below.
+        time.sleep(1.5)
+
+    # NOW open the vuart (post-chainload, so we resolve against the
+    # live /dev/ttyACMN — may have shifted, e.g. ACM2 → ACM3).
+    vuart = _open_vuart()
 
     # Expose iface to vuart_reader before spawning it (so the reader's
     # halt-detection kick-writer can reach the proxy).
     _iface_for_kick["iface"] = iface
 
-    # Deferred thread spawns (see rationale above the M1N1DEVICE setdefault).
-    # By this point bootstrap chainload is complete and the vuart is
-    # backed by a stable m1n1 that won't pull the rug on the readers.
+    # Deferred thread spawns — vuart is live now.
     threading.Thread(target=vuart_reader, args=(vuart,),
                      daemon=True).start()
     if stims:
