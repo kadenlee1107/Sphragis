@@ -212,7 +212,15 @@ def main():
     # hv.start() must run on the main thread because m1n1 installs
     # a SIGINT handler for the shell. For interactive input we run
     # the stdin forwarder in a worker thread.
-    if not stims and sys.stdin.isatty():
+    #
+    # 2026-04-20 20:30: used to be gated `if not stims` — meaning when
+    # a canned stimulus was provided, stdin was ignored. That's wrong:
+    # we want the canned stimulus to fire ONCE at start (for auto-auth
+    # etc.) AND leave stdin active so the operator can type keys
+    # (Tab, Enter, etc.) after the guest is up. So always forward
+    # stdin when it's a tty — the stim thread fires its items then
+    # exits, stdin keeps flowing.
+    if sys.stdin.isatty():
         threading.Thread(target=stdin_forwarder,
                          args=(vuart, stop), daemon=True).start()
 
