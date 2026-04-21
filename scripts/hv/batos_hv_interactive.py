@@ -102,7 +102,7 @@ def _clear_hupcl_and_set_raw(fd):
     termios.tcsetattr(fd, termios.TCSANOW, a)
 
 
-def stimulus_sender(vuart, items, verbose):
+def stimulus_sender(ref, items, verbose):
     """Fire each byte-string in items after a delay.
 
     BATOS_HV_STIM_GAP_S overrides the between-item sleep (default 0.8 s).
@@ -110,11 +110,12 @@ def stimulus_sender(vuart, items, verbose):
     tab-to-X keystrokes must land AFTER boot_screen exits, which can
     take 15+ s).
 
+    Reads the vuart from ref each write so that after an in-loop
+    chainload swaps USB devices, the retry loop picks up the new fd.
     Writes are retried on EIO / SerialException: m1n1's
     hv_map_vuart_dockchannel briefly transitions USB_VUART between
     console iodev and dockchannel mapping during hv.start(), and a
-    write landing in that window returns errno 5. The HV stabilises
-    in <1 s, so a short retry loop covers it.
+    write landing in that window returns errno 5.
     """
     time.sleep(1.5)  # give the guest time to print the prompt
     gap = float(os.environ.get("BATOS_HV_STIM_GAP_S", "0.8"))
@@ -122,12 +123,16 @@ def stimulus_sender(vuart, items, verbose):
         if verbose:
             sys.stderr.write(f"\n[vuart] >>> {stim!r}\n")
             sys.stderr.flush()
-        _vuart_write_with_retry(vuart, stim)
+        _vuart_write_with_retry(ref, stim)
         time.sleep(gap)
 
 
-def _vuart_write_with_retry(vuart, data, attempts=20, delay=0.25):
+def _vuart_write_with_retry(ref, data, attempts=20, delay=0.25):
     for i in range(attempts):
+        vuart = ref["vuart"]
+        if vuart is None:
+            time.sleep(delay)
+            continue
         try:
             vuart.write(data)
             vuart.flush()
@@ -155,20 +160,28 @@ def _vuart_write_with_retry(vuart, data, attempts=20, delay=0.25):
 _iface_for_kick = {"iface": None}
 _halt_seen = threading.Event()
 _HALT_MARKER = b"[BATOS] halt requested via UI close button"
+# Mutable vuart reference so the long-running reader can pick up the
+# new fd after each in-loop chainload_inline re-enumerates USB. main()
+# writes here every time it (re)opens a vuart.
+_vuart_ref = {"vuart": None}
 
 
-def vuart_reader(vuart):
+def vuart_reader(ref):
     # _halt_seen is the armed/disarmed gate. main() clears it between
     # iterations when BATOS_HV_LOOP=1 to re-arm halt detection for the
     # next Bat_OS session.
     #
     # Transient read errors (SerialException / OSError) happen during
-    # m1n1's hv_map_vuart_dockchannel remap — returning here would end
-    # the thread permanently and kill halt detection. Instead, sleep
-    # briefly and retry; real disconnects will keep failing and we
-    # effectively idle until the next Bat_OS session attaches.
+    # m1n1's hv_map_vuart_dockchannel remap and after chainload_inline
+    # swaps the underlying USB device — returning here would end the
+    # thread permanently and kill halt detection. Instead, sleep
+    # briefly and retry against whatever vuart ref points at now.
     buf = b""
     while True:
+        vuart = ref["vuart"]
+        if vuart is None:
+            time.sleep(0.1)
+            continue
         try:
             d = vuart.read(1024)
         except (serial.SerialException, OSError) as e:
@@ -199,9 +212,10 @@ def vuart_reader(vuart):
         time.sleep(0.005)
 
 
-def stdin_forwarder(vuart, stop):
+def stdin_forwarder(ref, stop):
     """If stdin is a tty, put it in cbreak mode and forward each key
-    to the guest. Ctrl+] detaches."""
+    to the guest. Ctrl+] detaches. Reads the vuart from ref each
+    write so that inter-iteration chainloads don't kill typing."""
     if not sys.stdin.isatty():
         return
     old = termios.tcgetattr(sys.stdin.fileno())
@@ -215,12 +229,15 @@ def stdin_forwarder(vuart, stop):
                     break
                 if ESCAPE_BYTE in b:
                     break
+                vuart = ref["vuart"]
+                if vuart is None:
+                    continue
                 try:
                     vuart.write(b)
                     vuart.flush()
                 except Exception as e:
                     sys.stderr.write(f"[vuart] write failed: {e}\n")
-                    break
+                    # Don't break — ref may swap to a fresh vuart.
     finally:
         termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old)
         stop.set()
@@ -945,17 +962,20 @@ def main():
     # NOW open the vuart (post-chainload, so we resolve against the
     # live /dev/ttyACMN — may have shifted, e.g. ACM2 → ACM3).
     vuart = _open_vuart()
+    _vuart_ref["vuart"] = vuart
 
     # Expose iface to vuart_reader before spawning it (so the reader's
     # halt-detection kick-writer can reach the proxy).
     _iface_for_kick["iface"] = iface
 
-    # Deferred thread spawns — vuart is live now.
-    threading.Thread(target=vuart_reader, args=(vuart,),
+    # Deferred thread spawns — vuart is live now. Threads read vuart
+    # from the ref so main can swap it across chainload boundaries.
+    threading.Thread(target=vuart_reader, args=(_vuart_ref,),
                      daemon=True).start()
     if stims:
         threading.Thread(target=stimulus_sender,
-                         args=(vuart, stims, verbose), daemon=True).start()
+                         args=(_vuart_ref, stims, verbose),
+                         daemon=True).start()
 
     u, hv = _build_hv(iface, p)
 
@@ -1007,7 +1027,7 @@ def main():
     # live operator keeps typing to whichever session is current.
     if sys.stdin.isatty():
         threading.Thread(target=stdin_forwarder,
-                         args=(vuart, stop), daemon=True).start()
+                         args=(_vuart_ref, stop), daemon=True).start()
 
     iteration = 0
     user_interrupted = False
@@ -1026,7 +1046,7 @@ def main():
             # firing; in practice stim total time << boot+halt time.
             if stims:
                 threading.Thread(target=stimulus_sender,
-                                 args=(vuart, stims, verbose),
+                                 args=(_vuart_ref, stims, verbose),
                                  daemon=True).start()
 
         hv.init()
@@ -1105,6 +1125,19 @@ def main():
         except Exception as e:
             log(f"post-chainload iface.nop failed: {e!r} — exiting loop")
             break
+
+        # chainload_inline re-enumerates USB — the old vuart fd now
+        # points at a dead /dev/ttyACMN. Close it (best-effort) and
+        # open a fresh one. The ref update makes vuart_reader,
+        # stim thread, and stdin_forwarder all pick up the new fd.
+        try:
+            vuart.close()
+        except Exception:
+            pass
+        time.sleep(1.5)  # let /dev/serial/by-id repopulate
+        vuart = _open_vuart()
+        _vuart_ref["vuart"] = vuart
+
         # Re-arm halt detection so vuart_reader fires again for this iter.
         _halt_seen.clear()
         log(f"[iter {iteration}] fresh m1n1 ready, halt flag cleared, "
@@ -1112,13 +1145,16 @@ def main():
 
     stop.set()
 
-    # Diagnostic: if set, skip all pyserial cleanup (vuart.close() and
-    # Python's normal GC-driven iface.dev close). On exit the kernel
-    # drops the fds, but without DTR-toggle / flush sequences that
-    # pyserial invokes on close — which seem to put m1n1's USB CDC
-    # state into a mode where fresh pyserial opens time out.
-    if os.environ.get("BATOS_HV_NO_CLOSE", "0") == "1":
-        log("detaching via os._exit(0) — skipping pyserial close")
+    # Loop mode ends with the Mac in a clean m1n1 proxy state (last
+    # hv.start() returned cleanly, post-exit probes passed). If we
+    # let pyserial GC close the fds, DTR drops and wedges the USB CDC
+    # — the next cold launch then needs a physical power-cycle. Skip
+    # the close so the Mac stays warm for Ctrl+C→relaunch demos.
+    # Explicit BATOS_HV_NO_CLOSE=1 forces the same behaviour outside
+    # loop mode.
+    if loop or os.environ.get("BATOS_HV_NO_CLOSE", "0") == "1":
+        log("detaching via os._exit(0) — skipping pyserial close "
+            f"(loop={loop})")
         sys.stdout.flush()
         sys.stderr.flush()
         os._exit(0)
