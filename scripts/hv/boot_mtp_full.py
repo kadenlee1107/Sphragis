@@ -224,23 +224,55 @@ def main():
     cs = p.read32(mtp_base + 0x48)
     log(f"pre-boot: CPU_CONTROL={cc:#x} CPU_STATUS={cs:#x}")
 
-    log(f"calling mtp.boot() with {args.boot_timeout}s wait_boot...")
+    log(f"calling mtp.start()-equivalent sequence with {args.boot_timeout}s wait...")
     t0 = time.time()
     boot_err = None
     try:
+        # CRITICAL: StandardASC.start() does the full sequence —
+        # super().boot() (RUN=1) + mgmt.start() (sends SetIOPPower
+        # "host ready, please boot") + wait_boot. We've been calling
+        # bare .boot() which skips mgmt.start(), so the FW never gets
+        # the "please power on" kick. SMC "just works" because
+        # SMCClient.start() does the full sequence via inheritance.
         mtp.asc.CPU_CONTROL.set(RUN=1)
-        # Snapshot registers every 500ms during the wait window so we
-        # can see WHEN/IF anything changes. mgmt.wait_boot spins on
-        # asc.work() which returns fast if OUTBOX empty — piggyback.
+        mtp.mgmt.start()   # sends Mgmt_SetIOPPower(STATE=0x220)
+        # Now wait for Hello + EPMap + power-state-0x20 acks.
         deadline = time.time() + args.boot_timeout
         last_snap = time.time()
+        # Poll OUTBOX0/OUTBOX1 DIRECTLY — don't trust OUTBOX_CTRL.EMPTY
+        # on ascwrap-v6. Each read of OUTBOX1 advances the fifo pointer,
+        # so capture all distinct message values we see.
+        out_msgs = []
+        last_out0 = None
+        last_out1 = None
         while time.time() < deadline:
             if (mtp.mgmt.iop_power_state == 0x20 and
                     mtp.mgmt.ap_power_state == 0x20):
                 break
-            mtp.work()
-            # MTP may talk over dockchannel instead of / in addition
-            # to ASC mailbox. Drain any RX.
+            # Manually read OUTBOX — check OUTBOX_CTRL state first
+            # but ALSO do a direct read if bits other than bit17 suggest
+            # data is present.
+            oc = p.read32(mtp_base + 0x8114)
+            # On ascwrap-v6, "fifocnt != 0" or "bit 19" set may indicate
+            # data — try reading regardless of EMPTY.
+            o0 = p.read64(mtp_base + 0x8830)
+            o1 = p.read64(mtp_base + 0x8838)
+            if (o0 != 0 or (o1 != 0 and o1 != last_out1)) and (o0, o1) != (last_out0, last_out1):
+                out_msgs.append((o0, o1))
+                log(f"  OUTBOX READ: msg0={o0:#x}  msg1={o1:#x}  OB_CTRL={oc:#x}")
+                last_out0, last_out1 = o0, o1
+                # Also feed to mgmt for protocol processing
+                try:
+                    from m1n1.hw.asc import R_INBOX1
+                    msg1 = R_INBOX1(o1)
+                    ep = mtp.epmap.get(msg1.EP, None)
+                    if ep:
+                        ep.handle_msg(o0, msg1)
+                    else:
+                        log(f"    (no EP handler for EP={msg1.EP:#x})")
+                except Exception as e:
+                    log(f"    handle err: {e!r}")
+
             dc_rx = dc.rx_count
             if dc_rx:
                 data = dc.read(dc_rx)
@@ -248,10 +280,12 @@ def main():
             if time.time() - last_snap > 0.5:
                 cc_s = p.read32(mtp_base + 0x44)
                 cs_s = p.read32(mtp_base + 0x48)
-                ob_s = p.read32(mtp_base + 0x8114)
                 log(f"  t={int((time.time()-t0)*1000):4d}ms "
-                    f"CC={cc_s:#06x} CS={cs_s:#06x} OB={ob_s:#010x} "
-                    f"DC_RX={dc.rx_count}")
+                    f"CC={cc_s:#06x} CS={cs_s:#06x} OB={oc:#010x} "
+                    f"DC_RX={dc.rx_count} "
+                    f"iop={mtp.mgmt.iop_power_state:#x} "
+                    f"ap={mtp.mgmt.ap_power_state:#x} "
+                    f"out_msgs={len(out_msgs)}")
                 last_snap = time.time()
         else:
             boot_err = "timeout"
@@ -307,4 +341,10 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    rc = main()
+    # Skip pyserial cleanup — closing the CDC-ACM fd drops DTR and
+    # wedges m1n1's proxy loop (see 12:45 and 13:45 journal entries).
+    # Same pattern as batos_hv_interactive.py's loop mode.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(rc if rc is not None else 0)

@@ -11,6 +11,120 @@ end of a session.
 
 ---
 
+## 2026-04-21 16:45 — Ubuntu — MTP FW processes INBOX kicks; OUTBOX idle = ascwrap-v6 const; fw self-resets
+
+Continuation of 16:30. Added `mgmt.start()` (sends `Mgmt_SetIOPPower(0x220)`)
+to the boot sequence — this is the missing "host ready, please boot" message
+that SMC's `smc.start()` does via `StandardASC.start()` inheritance. Our
+`mtp.boot()` skipped it.
+
+### Progress observed
+
+With SetIOPPower kick:
+  - `CPU_STATUS` moved from `0x6c` (RUN+IDLE) → `0x4c` (RUN, NOT IDLE).
+    The FW woke from WFI and executes code.
+  - `INBOX_CTRL` correctly shows FIFOCNT=1 after a manual Ping write
+    (`0x00020001` → `0x00100101`) — so INBOX accepts host writes; FW
+    consumes them.
+  - `OUTBOX_CTRL` changes from `0x00020001` → `0x000a0001` after FW wakes
+    — bit 19 appears, which may be a response-pending indicator on
+    ascwrap-v6 (not in m1n1's R_MBOX_CTRL decode).
+
+### But still no Hello — root: OUTBOX data is a hw-version constant
+
+Read-and-reread of `OUTBOX0 / OUTBOX1`:
+  - `OUTBOX0 [+0x8830]` = `0x0`
+  - `OUTBOX1 [+0x8838]` = `0x000a_0000_0000_0000` (consistent across
+    reads; doesn't advance FIFO)
+
+Decoded through `R_OUTBOX1` the INCNT field would read 0xa, but this
+same pattern appears in `OUTBOX_CTRL[23:20]`, every empty OUTBOX msg
+frame, AND in `+0x80c=0x60000001` and related regs. Conclusion: on
+ascwrap-v6 (M3/M4), the "idle" OUTBOX state shows the hw version tag
+`0xa` embedded, not a real message. m1n1's `StandardASC.recv()`
+treats `OUTBOX_CTRL.EMPTY=1` as "no message" which is correct —
+when FW sends a real message, OB1 would have different values.
+
+So FW has NOT sent anything on the standard mailbox. And DockChannel
+RX is also empty throughout 15 s of polling.
+
+### FW self-resets on idle
+
+Between probe runs: FW in running state (CC=0x10, CS=0x4c). Next
+probe's opening read: CC=0, CS=0x4a. **FW crashed/self-reset**
+without us intervening. Consistent with a watchdog firing when the
+FW's mgmt handshake doesn't progress (no IOPPowerAck response from
+host = no full boot = timeout-reset).
+
+### Observed mirror: 0x4000 block ≡ 0x8000 block
+
+Full-scan revealed `+0x4100..+0x4300` has identical content to
+`+0x8100..+0x8300` (byte-for-byte). Not a separate mailbox — same
+physical regs at two offsets. 0x4000 isn't where the "real" mailbox
+lives; it's an alias.
+
+### What's new on disk
+
+  - `scripts/hv/probe_mtp_inbox.py` — targeted INBOX/OUTBOX probe +
+    manual Mgmt_Ping send + CPU state check. Re-runnable on any
+    m1n1 session (read-only apart from the Ping write).
+  - `scripts/hv/boot_mtp_full.py` updated with:
+    * `mtp.mgmt.start()` after `CPU_CONTROL.RUN=1` (the critical fix)
+    * Direct OUTBOX0/OUTBOX1 read loop (bypass the EMPTY-bit gate,
+      which we distrust on ascwrap-v6)
+    * Per-iter DockChannel RX drain
+    * `os._exit` on completion to avoid pyserial DTR-drop wedge.
+
+### What's NOT in m1n1 and needs to be reverse-engineered
+
+  1. **ascwrap-v6 OUTBOX message framing**. m1n1's `R_OUTBOX1` decode
+     was designed for ascwrap-v3/v4 (M1/M2). On M3/M4 the bit layout
+     likely differs — some bits we see (bit 19 of OUTBOX_CTRL, the
+     persistent 0xa in nibble 4) have no m1n1-side meaning.
+  2. **MTP-specific boot protocol**. MTP may expect Hello to come
+     THROUGH DockChannel rather than ASC mailbox — in which case
+     the FW's init path is: wake, init dockchannel client, send
+     Hello via DC. Our DockChannel polling saw nothing, but maybe
+     we need to drive INBOX differently (e.g., send SetIOPPower
+     and then IMMEDIATELY a version-nego packet).
+  3. **DART stream mappings**. We set BYPASS_DAPF=1 / TRANSLATE_ENABLE=1
+     but only install page tables (`dart.initialize()`). The FW may
+     try to DMA to a buffer at a specific iova that isn't mapped yet,
+     crash on translation fault. Confirming would require watching
+     DART IRQ registers for xlation faults during the wake window.
+
+### Candidates for next session
+
+  a. **Read asahi-docs / m1n1 PRs touching ascwrap-v6**. Might find
+     the updated OUTBOX/INBOX reg map without having to RE from
+     scratch.
+  b. **Examine ISP's (or AOP's) init path**. ISP runs on ascwrap-v4
+     on M1; AOP on v5; there's a progression. If M4 AOP is
+     accessible (ADT `/arm-io/aop` — always-on, already booted at
+     handoff), its reg state gives us a LIVE-RUNNING v6 ASC to
+     compare against our STOPPED MTP.
+  c. **Write traffic-capture**: install m1n1 watchpoint on MTP ASC
+     reg 0x8800..0x8840, log every access from the M4 P-core side
+     (macOS would trigger it). Then boot macOS normally, extract
+     the init sequence. Requires HV mode + writeback, higher effort.
+
+### Summary
+
+Two walls down this session:
+  1. "SRAM write-protected" (15:45) — actually __TEXT-only XOM,
+     __DATA/__OS_LOG writable.
+  2. "No Hello ever" (10:00 / 16:30) — actually FW runs on kick
+     but the mailbox protocol differs from what m1n1's M1-era
+     StandardASC expects.
+
+Third wall (decoding ascwrap-v6 OUTBOX semantics) is the next pass.
+We are NOT blocked on hardware access — the loop is tight and we
+can iterate fast once we know what to look for.
+
+### Net: FW runs, accepts INBOX, but m1n1's OUTBOX decoder disagrees with what it sends
+
+---
+
 ## 2026-04-21 16:30 — Ubuntu — MTP __TEXT is iBoot-staged; __DATA stages fine; FW runs but no Hello
 
 Followed 15:45's four-theory list. The real story was simpler and
