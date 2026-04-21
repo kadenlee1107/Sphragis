@@ -11,6 +11,125 @@ end of a session.
 
 ---
 
+## 2026-04-21 16:30 — Ubuntu — MTP __TEXT is iBoot-staged; __DATA stages fine; FW runs but no Hello
+
+Followed 15:45's four-theory list. The real story was simpler and
+the theories were looking in the wrong place.
+
+### Finding 1 — iBoot already stages __TEXT
+
+`probe_mtp_power_state.py` + a local Mach-O diff: the 3 bytes read
+at `__TEXT[+0x000]`, `[+0x100]`, `[+0x200]` (from live SRAM at
+`0x394c00000..0x394c00210`) match the A5PH Mach-O byte-for-byte.
+iBoot stages `__TEXT` into write-protected SRAM before handoff.
+The 15:45 session's `write32(0x394c00100, ...)` faulted because
+it was attempting to overwrite LIVE iBoot-staged code — classic
+XOM/RO behavior, not a general SRAM lock.
+
+### Finding 2 — __DATA and __OS_LOG DO accept host writes
+
+`test_mtp_data_write.py` on the live m1n1:
+  - `write32(0x394c5f000, 0xdeadbeef)` → OK, readback matches.
+  - `write32(0x394c5f100, 0xdeadbeef)` → OK.
+  - `write32(0x10005640000, 0xdeadbeef)` → OK (DRAM).
+
+So the write-protection is ONLY on the __TEXT region (makes sense:
+iBoot locks the staged code; leaves bss / logs writable for FW
+runtime). Theories A–D (PMGR gate / SPRR / DART-only / iBoot
+guard) were all wrong about scope.
+
+### Finding 3 — `power-gates: None`, `clock-gates: None` in ADT
+
+`/arm-io/mtp` has no PMGR gate references; `pmgr_adt_power_enable`
+is a no-op for this node. MTP's power is presumably managed via
+the IOP parent / iBoot directly, not the standard PMGR path.
+
+### Finding 4 — FW starts, writes RTKSTACK canary, but no Hello
+
+Refactored `stage_mtp_firmware.py`: verify __TEXT matches, skip it,
+stage __DATA + __OS_LOG via `iface.writemem`. Works:
+  - `__DATA[0..16] readback: 00…00` (matches Mach-O — mostly bss)
+  - `__OS_LOG[0..16] readback: 53542049… ('ST IF %d type...')`
+    (matches Mach-O format strings)
+
+Then `CPU_CONTROL.RUN=1`:
+  - `CPU_STATUS` flips `0x6a` (STOPPED+IDLE) → `0x6c` (running+IDLE)
+  - `IMPL[+0x400]` latches to `0x400` (suspected boot-stage post-code)
+  - `IMPL[+0x444]` latches to `0x10`
+  - `__DATA[+0x10000]` later shows `"RTKSTACKRTKSTACK"` — an RTKit
+    stack-base canary. FW ran far enough to init stacks.
+  - `OUTBOX_CTRL` stays `0x20001` (EMPTY) for the full 15 s wait.
+
+In one run (without SMC/DART set up beforehand), the FW self-reset
+(CPU_CONTROL → 0, STOPPED) — consistent with a crash-handler
+triggering internal reboot when DART/SMC deps aren't up.
+
+With SMC + DART + dockchannel init BEFORE `RUN=1` (path mirrors
+`_mtp_kbd_probe`), FW stays running but still never emits Hello
+on the ASC mailbox.
+
+### What's on disk (committed)
+
+  - `scripts/hv/probe_mtp_power_state.py` — ADT + PMGR + reg dump
+    (read-only, re-run friendly).
+  - `scripts/hv/test_mtp_data_write.py` — single-word write probe
+    that confirmed __DATA/__OS_LOG are writable.
+  - `scripts/hv/probe_mtp_running.py` — post-boot ASC/DART/IMPL/SRAM
+    inspector.
+  - `scripts/hv/boot_mtp_full.py` — combined stage + SMC + DART
+    (with `dart.initialize()`) + dockchannel + `mtp.boot()` +
+    dockchannel RX polling. Current wall.
+  - `scripts/hv/stage_mtp_firmware.py` — refactored: verify __TEXT
+    (iBoot owns), stage __DATA + __OS_LOG only. `--force-text` to
+    override.
+
+### Where to look next session
+
+**Leading theories for why no Hello**:
+1. **MTP's Hello comes over dockchannel, not the ASC mailbox.**
+   SMC works on ASC mailbox; MTP is designed for HID stream over
+   dockchannel. `boot_mtp_full.py` now polls `dc.rx_count` during
+   wait-boot but didn't get to run cleanly in a fresh session.
+   First thing to try on a clean power-cycle.
+2. **`compatible: ['iop,ascwrap-v6']`.** v6 may need a different
+   boot protocol than v4/v5 that m1n1's `StandardASC.mgmt`
+   implements. Compare m1n1's ISP/AOP (ascwrap-v4 / v5) init vs
+   what a v6 expects.
+3. **AOP must boot MTP.** The compatible for HID transport is
+   `/arm-io/mtp-aop-mux` (`hid-transport,mux`) — the keyboard
+   stack routes through AOP, not MTP directly. Maybe AOP is the
+   master that wakes MTP. AOP is always-on at macOS boot; in our
+   chainload path it may be unavailable. Try bringing up AOP first.
+4. **iBoot-staged config in SRAM we're overwriting?** We stage
+   __DATA from Mach-O; iBoot may have pre-populated bytes that
+   matter. Compare live __DATA before staging vs Mach-O __DATA to
+   see if iBoot wrote anything (probe showed __DATA = zeros
+   though, so probably not).
+5. **IMPL[+0x400] post-code decode.** 0x400 seems to match the
+   register offset which is suspicious (uninitialized MMIO?),
+   but IMPL[+0x444]=0x10 is consistent across runs. Look up
+   Apple's ascwrap-v6 IMPL reg semantics via asahi-docs /
+   m1n1 trace data.
+
+### Invocation (for next session after power-cycle)
+
+```bash
+timeout 60 sg dialout -c '/usr/bin/python3 scripts/hv/boot_mtp_full.py --boot-timeout 20'
+```
+
+Watch for `DOCKCHANNEL RX` logs — if MTP talks there, we've
+mischaracterized the transport for Hello and need to parse
+MTP-protocol packets directly.
+
+### Net: one wall down (write-protection), next wall is mailbox protocol
+
+Key pivot: we are no longer blocked on "how do I write firmware to
+SRAM". The firmware IS staged and RUNNING. The open question is
+now why m1n1's `StandardASC.mgmt.wait_boot` never receives a
+Hello — a protocol-level issue, not a hardware one.
+
+---
+
 ## 2026-04-21 15:45 — Ubuntu — MTP SRAM is write-protected from host CPU
 
 Minimal diagnostic after 15:15's gzdec hang. On a fresh m1n1 power-on:

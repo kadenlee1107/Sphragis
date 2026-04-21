@@ -9,23 +9,29 @@ segment-ranges attribute:
   __DATA   phys=0x394c5f000  iova=0x105f000   size=0x6c000
   __OS_LOG phys=0x10005640000 iova=0x10cb000  size=0x3000
 
-iBoot stages a 4-byte reset vector stub at __TEXT[0] and populates
-__OS_LOG with log format strings. It does NOT stage the code itself
-when handoff is to m1n1 — so ASC boot times out waiting for Hello.
+**Updated 2026-04-21 16:xx**: test_mtp_data_write.py confirmed
+iBoot stages __TEXT (`0x394c00000`) into write-protected SRAM —
+reads match Mach-O byte-for-byte, writes fault. __DATA and __OS_LOG
+are NOT staged (live reads zero) but ARE writable. So the loader
+only needs to stage __DATA + __OS_LOG; it must NOT try to rewrite
+__TEXT (that's what wedged the 15:15 session).
 
 This script parses the Mach-O inside J604_MtpFirmware.bin's "A5PH"
-rkosftab section and copies each segment into its matching phys
-region via the m1n1 proxy. After staging, set CPU_CONTROL.RUN=1
-and watch CPU_STATUS for RUN bit + mailbox messages.
+rkosftab section. For __TEXT it VERIFIES the first 16 bytes match
+what iBoot staged (sanity). For __DATA and __OS_LOG it copies the
+Mach-O content into the matching phys region via the m1n1 proxy's
+bulk writemem. After staging, --boot sets CPU_CONTROL.RUN=1 and
+watches OUTBOX for mailbox Hello.
 
 Usage:
-  # m1n1 already chainloaded (any version is fine — read-only ADT)
+  # m1n1 already chainloaded (any version is fine — writemem works)
   /usr/bin/python3 scripts/hv/stage_mtp_firmware.py [--boot]
 
 Flags:
-  --boot    After staging, write CPU_CONTROL.RUN=1 and poll for
-            mailbox Hello (10s timeout).
-  --dry-run Parse + print layout, don't touch memory.
+  --boot      After staging, write CPU_CONTROL.RUN=1 and poll for
+              mailbox Hello (10s timeout).
+  --dry-run   Parse + print layout, don't touch memory.
+  --force-text  Try to overwrite __TEXT anyway (wedges m1n1; debug).
 """
 import argparse
 import os
@@ -104,6 +110,8 @@ def main():
                     help="After staging, write CPU_CONTROL.RUN=1 and poll for mailbox")
     ap.add_argument("--dry-run", action="store_true",
                     help="Don't touch memory")
+    ap.add_argument("--force-text", action="store_true",
+                    help="Force __TEXT overwrite (expected to wedge m1n1 — debug only)")
     args = ap.parse_args()
 
     if not MTP_BLOB.exists():
@@ -180,16 +188,44 @@ def main():
         if name in adt_by_name:
             macho_by_name[name] = seg
 
+    # __TEXT is staged by iBoot into write-protected SRAM. We cannot
+    # write it (confirmed: wedges m1n1). Instead, verify iBoot's copy
+    # matches the Mach-O first 16 bytes. Skip during staging.
     print("\nStaging plan:")
     for nm in names:
-        if nm in macho_by_name:
-            seg = macho_by_name[nm]
-            target = adt_by_name[nm]
-            fit = "FITS" if seg[4] <= target["size"] else "OVERFLOW"
+        if nm not in macho_by_name:
+            print(f"  {nm}: no matching Mach-O segment — leaving as-is")
+            continue
+        seg = macho_by_name[nm]
+        target = adt_by_name[nm]
+        fit = "FITS" if seg[4] <= target["size"] else "OVERFLOW"
+        if nm == "__TEXT" and not args.force_text:
+            print(f"  {nm}: VERIFY-ONLY (iBoot owns write-protected SRAM)  "
+                  f"[{fit}]")
+        else:
             print(f"  {nm}: copy {seg[4]} bytes from Mach-O fileoff {seg[3]:#x} "
                   f"-> phys {target['phys']:#x}  [{fit}]")
-        else:
-            print(f"  {nm}: no matching Mach-O segment — leaving as-is")
+
+    # Pre-check __TEXT: does iBoot's staged copy match what we'd write?
+    # If not, something's wrong (wrong firmware variant / incomplete
+    # iBoot handoff / unsupported state) and we should abort before
+    # kicking the CPU.
+    if "__TEXT" in macho_by_name and "__TEXT" in adt_by_name:
+        text_seg = macho_by_name["__TEXT"]
+        text_tgt = adt_by_name["__TEXT"]
+        text_fo = text_seg[3]
+        # Compare 64 bytes at offset 0 AND at offset 0x100 (exception
+        # vector prologue — more distinctive than the reset stub).
+        for probe_off in (0x0, 0x100, 0x200):
+            expected = macho[text_fo + probe_off:text_fo + probe_off + 16]
+            actual = iface.readmem(text_tgt["phys"] + probe_off, 16)
+            status = "MATCH" if actual == expected else "MISMATCH"
+            print(f"  __TEXT[+{probe_off:#x}] iBoot={actual.hex()} "
+                  f"macho={expected.hex()} [{status}]")
+            if actual != expected and not args.force_text:
+                print(f"  ABORT: iBoot didn't stage the expected __TEXT. "
+                      f"Re-run with --force-text to try overwriting anyway.")
+                return 1
 
     print("\nStaging...")
     for nm in names:
@@ -204,9 +240,15 @@ def main():
         if fs > target["size"]:
             print(f"  {nm}: {fs} > {target['size']}, ABORT")
             return 1
+        if nm == "__TEXT" and not args.force_text:
+            print(f"  {nm}: skip (iBoot owns — verified above)")
+            continue
         payload = macho[fo:fo + fs]
-        # Use compressed_writemem for efficiency (mostly-zero sections compress).
-        u.compressed_writemem(target["phys"], payload, True)
+        # Direct bulk writemem — test_mtp_data_write.py confirmed
+        # __DATA and __OS_LOG accept host writes. writemem is simpler
+        # and more predictable than compressed_writemem+gzdec (which
+        # hangs the proxy when it tries to write __TEXT byte-wise).
+        iface.writemem(target["phys"], payload)
         print(f"  {nm}: {fs} bytes -> {target['phys']:#x} OK")
 
     # Verify first 16 bytes of each region matches
@@ -219,7 +261,8 @@ def main():
         readback = iface.readmem(target["phys"], 16)
         expected = macho[seg[3]:seg[3] + 16]
         ok = "OK" if readback == expected else "MISMATCH"
-        print(f"  {nm} @ {target['phys']:#x}: {readback.hex()} ({ok})")
+        tag = " (iBoot)" if (nm == "__TEXT" and not args.force_text) else ""
+        print(f"  {nm}{tag} @ {target['phys']:#x}: {readback.hex()} ({ok})")
 
     cc = p.read32(mtp_base + 0x44)
     cs = p.read32(mtp_base + 0x48)
