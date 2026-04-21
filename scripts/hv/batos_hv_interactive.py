@@ -181,6 +181,155 @@ def _noop_signal(*_):
     pass
 
 
+def _dump_keyboard_adt(adt):
+    """Walk the ADT looking for keyboard/HID-transport nodes and
+    their containing SPI controllers. Writes an annotated listing
+    to stderr + /tmp/adt_kbd.log so we can pick the right MMIO
+    base for Bat_OS's SPI keyboard driver.
+
+    Looks for:
+      - `spi-1,spimc` (M4-class SPI controller)
+      - any child with compatible containing `hid` or `keyboard`
+      - `hid-transport,spi` (older MBP SPI keyboard)
+      - `k1`-style HID keyboards (M1/M2)
+      - any direct `keyboard` / `kbd` node names
+    """
+    import io
+    out = io.StringIO()
+
+    def pline(s):
+        sys.stderr.write(s + "\n")
+        out.write(s + "\n")
+
+    pline("=" * 70)
+    pline("[adt-kbd] keyboard + HID-transport + SPI controller scan")
+    pline("=" * 70)
+
+    spi_controllers = []
+    hid_nodes = []
+    name_hits = []
+
+    for node in adt.walk_tree():
+        try:
+            compat = getattr(node, "compatible", None)
+            if isinstance(compat, (list, tuple)) and len(compat) > 0:
+                c0 = compat[0]
+                if "spimc" in c0 or c0.startswith("spi"):
+                    spi_controllers.append((node, compat))
+                if "hid" in c0.lower() or "keyboard" in c0.lower():
+                    hid_nodes.append((node, compat))
+        except Exception:
+            pass
+        try:
+            nm = getattr(node, "name", "")
+            if nm and ("kbd" in nm.lower() or "keyboard" in nm.lower() or
+                      "hid" in nm.lower()):
+                name_hits.append(node)
+        except Exception:
+            pass
+
+    pline(f"[adt-kbd] SPI controllers found ({len(spi_controllers)}):")
+    for node, compat in spi_controllers:
+        try:
+            pline(f"  {node.name}  compatible={list(compat)}")
+            # try to get reg / base address
+            try:
+                reg = node.get_reg(0)
+                pline(f"    reg[0] = {reg}")
+            except Exception as e:
+                pline(f"    reg[0]: <{e!r}>")
+            # list its children
+            for c in node:
+                try:
+                    cc = list(getattr(c, "compatible", []))
+                    pline(f"    child: {c.name}  compatible={cc}")
+                except Exception:
+                    pline(f"    child: {c.name}  (no compat)")
+        except Exception as e:
+            pline(f"  <walk err: {e!r}>")
+
+    pline(f"[adt-kbd] HID/keyboard compatibles ({len(hid_nodes)}):")
+    for node, compat in hid_nodes:
+        try:
+            parent = getattr(node, "_parent", None)
+            ppath = parent.name if parent else "?"
+            pline(f"  {ppath}/{node.name}  compatible={list(compat)}")
+        except Exception as e:
+            pline(f"  <walk err: {e!r}>")
+
+    pline(f"[adt-kbd] name-based hits ({len(name_hits)}):")
+    for node in name_hits:
+        try:
+            parent = getattr(node, "_parent", None)
+            ppath = parent.name if parent else "?"
+            try:
+                compat = list(getattr(node, "compatible", []))
+            except Exception:
+                compat = []
+            pline(f"  {ppath}/{node.name}  compatible={compat}")
+        except Exception as e:
+            pline(f"  <walk err: {e!r}>")
+
+    # M4/M3 keyboard path goes through AOP (Always-On Processor) +
+    # MTP (MultiTouch Protocol). Find the AOP coprocessor, the MTP
+    # node, their DART, and anything with "mtp" or "aop" in the name
+    # or compat.
+    pline("")
+    pline("[adt-kbd] AOP / MTP coprocessor nodes (M4 keyboard path):")
+    for node in adt.walk_tree():
+        try:
+            nm = getattr(node, "name", "")
+            compat = []
+            try:
+                compat = list(getattr(node, "compatible", []))
+            except Exception:
+                pass
+            nm_l = nm.lower()
+            c_join = " ".join(compat).lower()
+            if ("mtp" in nm_l or "aop" in nm_l or "mtp" in c_join or
+                "aop" in c_join or "rtkit" in c_join or
+                any("hid" in c.lower() for c in compat)):
+                try:
+                    parent = getattr(node, "_parent", None)
+                    ppath = parent.name if parent else "?"
+                except Exception:
+                    ppath = "?"
+                pline(f"  {ppath}/{nm}  compatible={compat}")
+                try:
+                    reg = node.get_reg(0)
+                    pline(f"    reg[0] = (0x{reg[0]:x}, 0x{reg[1]:x})")
+                except Exception:
+                    pass
+                try:
+                    irqs = getattr(node, "interrupts", None)
+                    if irqs:
+                        pline(f"    interrupts = {list(irqs)}")
+                except Exception:
+                    pass
+                # Print some property keys
+                try:
+                    props = [k for k in dir(node) if not k.startswith("_")
+                             and not callable(getattr(node, k, None))]
+                    interesting = [k for k in props if any(
+                        s in k.lower() for s in
+                        ["endpoint", "rtk", "mbox", "asc", "iommu", "dart",
+                         "function", "ep-", "ep_"])]
+                    if interesting:
+                        pline(f"    props-of-interest: {interesting[:12]}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    pline("=" * 70)
+    try:
+        with open("/tmp/adt_kbd.log", "w") as f:
+            f.write(out.getvalue())
+        sys.stderr.write("[adt-kbd] also written to /tmp/adt_kbd.log\n")
+    except Exception as e:
+        sys.stderr.write(f"[adt-kbd] write /tmp/adt_kbd.log failed: {e!r}\n")
+
+
 def chainload_inline(iface, p, u, macho_path):
     """Chainload a fresh m1n1 using the existing (iface, p, u) proxy
     session. Ports the logic of external/m1n1/proxyclient/tools/
@@ -360,6 +509,9 @@ def main():
         return _orig_run_shell(entry_msg, exit_msg)
     hv.run_shell = _halt_aware_run_shell
     hv.init()
+
+    if os.environ.get("BATOS_HV_DUMP_KBD_ADT", "0") == "1":
+        _dump_keyboard_adt(hv.adt)
 
     # Allow overriding payload for diagnostic experiments (e.g. a
     # wfi-forever stub to isolate whether guest activity matters).

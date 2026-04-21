@@ -250,12 +250,50 @@ ATC PHY instances (the things carrying USB-C signalling):
 
 ### 3.3 Other peripherals seen in ADT scan
 
-| Device | Compatible | Notes |
-|---|---|---|
-| spi2 | `spi-1,spimc` | Hosts `mesa` biosensor child |
-| spi4 | `spi-1,spimc` | Hosts `dp855 [parade,DP855]` display-bridge child |
+| Device | Compatible | Reg | Notes |
+|---|---|---|---|
+| spi2 | `spi-1,spimc` | 0x3ad204000 / 0x4000 | Hosts `mesa` biosensor child |
+| spi4 | `spi-1,spimc` | 0x3ad20c000 / 0x4000 | Hosts `parade,DP855` display-bridge child |
+| qspi | `qspi,qspimc` | 0x3ad214000 / 0x4000 | Hosts `nor-flash,spi` (SPI NOR flash) |
 
-### 3.4 What's still unknown (look up on next boot)
+**No other SPI controllers exist on M4.** Crucially, there is no
+SPI keyboard — see §3.5.
+
+### 3.4 Keyboard / HID input architecture (added 2026-04-21)
+
+**M4 does NOT have a host-accessible SPI keyboard** (unlike pre-
+2021 Intel MBPs with `applespi`). The only HID-transport node in
+the M4 ADT is:
+
+| Path | Compatible |
+|---|---|
+| `/arm-io/mtp-aop-mux` | `hid-transport,mux` |
+
+Keyboard + trackpad input flows through the **AOP (Always-On
+Processor) + MTP (MultiTouch Protocol)** coprocessor stack —
+not through any SPI bus exposed to the AP.
+
+Implications for Bat_OS:
+
+  - The existing `src/drivers/apple/spi.rs` stub (assumed raw
+    SPI-controller MMIO + HID report parsing) cannot drive the
+    M4 keyboard. Wrong architecture.
+  - A proper native driver requires: ASC coprocessor mailbox +
+    Apple's RTKit protocol + the MTP packet format. m1n1 already
+    has a Python MTP client at
+    `external/m1n1/proxyclient/m1n1/fw/mtp.py` (416 lines;
+    includes `MTPKeyboardInterface`) — a reference port target.
+  - Pragmatic first step (host-side bridge): have the HV Python
+    subscribe to MTP keyboard events via the AOP endpoint, and
+    forward the resulting bytes through the existing dockchannel
+    vuart. Bat_OS receives them via its normal `serial_getc`
+    path — no guest-side changes. Full MTP-in-Rust port is
+    follow-on work.
+
+Source: `/tmp/adt_kbd.log` from `scripts/hv/batos_hv_interactive.py`
+run with `BATOS_HV_DUMP_KBD_ADT=1`.
+
+### 3.5 What's still unknown (look up on next boot)
 
 We do NOT yet have the real address of:
 - AIC2 (current fallback in `soc.rs` is `0x2_8e10_0000` — almost certainly wrong, came from M1 docs)

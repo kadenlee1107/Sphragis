@@ -11,6 +11,88 @@ end of a session.
 
 ---
 
+## 2026-04-21 09:30 — Ubuntu — M4 keyboard is AOP/MTP, not SPI — architecture finding
+
+Letter B from the morning plan (Mac keyboard) turned out to be a
+much bigger fish than expected.
+
+### Finding
+
+Added `_dump_keyboard_adt()` to `batos_hv_interactive.py`
+(`BATOS_HV_DUMP_KBD_ADT=1`) to walk the ADT for
+keyboard/HID/SPI nodes. Output captured in `/tmp/adt_kbd.log`:
+
+```
+SPI controllers found (3):
+  spi2  compatible=['spi-1,spimc']
+    reg[0] = (0x3ad204000, 0x4000)
+    child: mesa  compatible=['biosensor,mesa']
+  spi4  compatible=['spi-1,spimc']
+    reg[0] = (0x3ad20c000, 0x4000)
+    child: dp855  compatible=['parade,DP855']
+  qspi  compatible=['qspi,qspimc']
+    reg[0] = (0x3ad214000, 0x4000)
+    child: spinor  compatible=['nor-flash,spi']
+
+HID/keyboard compatibles (1):
+  arm-io/mtp-aop-mux  compatible=['hid-transport,mux']
+```
+
+**M4 has no SPI keyboard.** The three SPI controllers on M4 host:
+biosensor, display-bridge, NOR flash. The only HID-transport node
+is `arm-io/mtp-aop-mux` with compatible `hid-transport,mux`.
+
+Keyboard + trackpad input on M4 flows through the **AOP
+(Always-On Processor) + MTP (MultiTouch Protocol)** stack. That's
+a full RTKit-mailboxed coprocessor, not an MMIO-banged SPI bus.
+
+### What this changes for letter B
+
+The existing `src/drivers/apple/spi.rs` stub (raw SPI-controller
+MMIO + HID report parsing) is the wrong architecture for M4.
+Cannot be salvaged. Two viable paths forward:
+
+  1. **Host-side bridge (quick win, next session).** m1n1's
+     Python already has a full MTP client in
+     `external/m1n1/proxyclient/m1n1/fw/mtp.py` (416 lines,
+     including `MTPKeyboardInterface`). Wire that into
+     `batos_hv_interactive.py` to subscribe to keyboard events
+     and forward the resulting bytes through the dockchannel
+     vuart. Bat_OS receives them via its existing
+     `platform::serial_getc` — no guest-side changes needed.
+
+  2. **Native MTP-in-Rust (real solution, multi-session).**
+     Port ASC coprocessor mailbox + RTKit protocol + MTP packet
+     format to Rust inside Bat_OS. This is the "correct" target
+     but it's weeks of work: ASC mailbox, RTKit STATE/PING
+     messages, DART iommu for AOP shared memory, MTP message
+     types, HID descriptor parsing, keycode mapping, repeat /
+     modifier handling.
+
+I recommend (1) first as a way to unblock keyboard-type demos,
+then (2) as a staged native port over multiple sessions.
+
+Updated `docs/M4_GROUND_TRUTH.md` §3.4 with this finding so the
+next Claude reading it doesn't start implementing the stub.
+
+### Also committed
+
+  - ADT dump helper in the interactive script
+    (`_dump_keyboard_adt`)
+  - Env hook `BATOS_HV_DUMP_KBD_ADT=1`
+  - M4_GROUND_TRUTH §3.3 now has actual MMIO bases for spi2,
+    spi4, qspi
+
+### Net: letter A shipped, letter B scoped
+
+Letter A (no-power-cycle loop via inline chainload) is fully
+closed and committed. Letter B was bigger than my morning
+estimate — the stub was based on a wrong assumption about M4's
+architecture. The right-next-step is the host-side MTP bridge;
+a proper native Rust MTP port is the long-term target.
+
+---
+
 ## 2026-04-21 09:00 — Ubuntu — No-power-cycle loop: halt → re-chainload, all within one proxy session ✅
 
 Closes yesterday's open item (letter A from the morning plan).
