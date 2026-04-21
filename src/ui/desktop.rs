@@ -126,33 +126,44 @@ pub fn run() -> ! {
                 // Tab key — cycle app in focused pane.
                 // 2026-04-20 21:45: cycle goes 0..8 → close-button-X → 0
                 0x09 => {
+                    platform::serial_puts("[tab] received\r\n");
                     if wm::is_close_focused() {
                         // Currently on the X — wrap back to app 0
+                        platform::serial_puts("[tab] unfocus+switch_app(0)\r\n");
                         wm::unfocus_close_button();
                         wm::switch_app(wm::APP_SHELL);
                         in_shell = true;
+                        platform::serial_puts("[tab] calling render_current\r\n");
                         render_current();
+                        platform::serial_puts("[tab] render_current done\r\n");
                         continue;
                     }
                     let cur = wm::active_app();
                     if cur == 8 {
                         // Last app → tab onto the close button
+                        platform::serial_puts("[tab] cur=8 → focus_close_button\r\n");
                         wm::focus_close_button();
                         // Don't change active_app — keep it on 8 so the
                         // pane content stays visible behind the X.
                         in_shell = false;
+                        platform::serial_puts("[tab] calling render_current (X)\r\n");
                         render_current();
+                        platform::serial_puts("[tab] render_current done (X)\r\n");
                         continue;
                     }
                     let next = cur + 1;
+                    platform::serial_puts("[tab] switching to next app\r\n");
                     wm::switch_app(next);
                     in_shell = next == wm::APP_SHELL;
+                    platform::serial_puts("[tab] calling render_current\r\n");
                     render_current();
+                    platform::serial_puts("[tab] render_current done\r\n");
                     continue;
                 }
                 // Enter key — if close button is focused, halt Bat_OS.
                 // CR (0x0D) and LF (0x0A) both treated as Enter here.
                 0x0D | 0x0A if wm::is_close_focused() => {
+                    platform::serial_puts("[enter] close focused — calling halt_bat_os\r\n");
                     halt_bat_os();
                     // halt_bat_os never returns
                 }
@@ -277,20 +288,29 @@ fn render_app(app: u8) {
 fn halt_bat_os() -> ! {
     use crate::ui::{font, gpu};
 
+    platform::serial_puts("[halt] enter\r\n");
+
     // Banner — fill screen with a "shutdown" message
     let w = gpu::width();
     let h = gpu::height();
     let fb = gpu::framebuffer();
+    platform::serial_puts("[halt] got fb\r\n");
     font::clear_clip();
+    platform::serial_puts("[halt] clear_clip\r\n");
     gpu::fill_screen(0xFF000000); // black
+    platform::serial_puts("[halt] fill_screen done\r\n");
     let cx = w / 2;
     let cy = h / 2;
     font::draw_str(fb, w, cx - 96, cy - 16, "BAT_OS HALTED", 0xFFFFFFFF, 0xFF000000);
+    platform::serial_puts("[halt] draw1 done\r\n");
     font::draw_str(fb, w, cx - 144, cy + 8,  "(close pressed; m1n1 retains control)",
                    0xFF707070, 0xFF000000);
+    platform::serial_puts("[halt] draw2 done\r\n");
     font::draw_str(fb, w, cx - 80, cy + 32,  "Reboot the Mac to restart.",
                    0xFF505050, 0xFF000000);
+    platform::serial_puts("[halt] draw3 done\r\n");
     wm::flush_all();
+    platform::serial_puts("[halt] flush_all done\r\n");
 
     // Serial marker — supervisor + interactive driver can grep for this
     platform::serial_puts("\r\n[BATOS] halt requested via UI close button — entering wfe loop\r\n");

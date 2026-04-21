@@ -73,15 +73,22 @@ def configure_vuart_raw(vuart):
 
 
 def stimulus_sender(vuart, items, verbose):
-    """Fire each byte-string in items after a short delay."""
+    """Fire each byte-string in items after a delay.
+
+    BATOS_HV_STIM_GAP_S overrides the between-item sleep (default 0.8 s).
+    Useful when the next stim needs to arrive at a later phase (e.g.
+    tab-to-X keystrokes must land AFTER boot_screen exits, which can
+    take 15+ s).
+    """
     time.sleep(1.5)  # give the guest time to print the prompt
+    gap = float(os.environ.get("BATOS_HV_STIM_GAP_S", "0.8"))
     for stim in items:
         if verbose:
             sys.stderr.write(f"\n[vuart] >>> {stim!r}\n")
             sys.stderr.flush()
         vuart.write(stim)
         vuart.flush()
-        time.sleep(0.8)
+        time.sleep(gap)
 
 
 def vuart_reader(vuart):
@@ -128,17 +135,25 @@ def stdin_forwarder(vuart, stop):
 def main():
     # Split commands by ';;' (unlikely to occur in a real cmd line) or
     # newlines. \r, \n, \xHH etc escape sequences are interpreted. A
-    # literal CR gets appended to each command if not already present.
+    # literal CR gets appended to each command if not already present
+    # UNLESS the stim already contains control characters (tabs,
+    # explicit CRs) — in that case treat it as a byte-level stim and
+    # leave it alone.
     stim_env = os.environ.get("BATOS_HV_STIMULUS", "")
     stims = []
     if stim_env:
         for raw in stim_env.replace("\n", ";;").split(";;"):
-            raw = raw.strip()
             if not raw:
                 continue
             decoded = raw.encode("utf-8").decode("unicode_escape").encode("latin-1")
-            if not decoded.endswith(b"\r") and not decoded.endswith(b"\n"):
-                decoded = decoded + b"\r"
+            # Byte-level stim — has tabs or explicit CRs → don't touch
+            has_control = any(b in (0x09, 0x0d, 0x1b) for b in decoded)
+            if not has_control:
+                decoded = decoded.strip()
+                if not decoded:
+                    continue
+                if not decoded.endswith(b"\r") and not decoded.endswith(b"\n"):
+                    decoded = decoded + b"\r"
             stims.append(decoded)
 
     # ttyACM2 may lag a few seconds behind ttyACM1 after chainload.

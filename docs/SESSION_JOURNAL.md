@@ -11,6 +11,113 @@ end of a session.
 
 ---
 
+## 2026-04-20 22:15 — Ubuntu — 🦇 TAB-TO-X SHUTDOWN VALIDATED END-TO-END ON M4 ✅
+
+Handoff's checklist completed: Tab × 9 + Enter on the Bat_OS
+desktop triggered the close-button-X halt path, and every step
+of `halt_bat_os()` ran in sequence, ending in the intended
+"BAT_OS HALTED" banner on the Mac's display while m1n1 retained
+EL2 control (no reset, watchdog still disabled).
+
+### Final marker trace from the successful run
+
+```
+[security] AUTH PASSED — launching shell
+[vuart] >>> b'batman\r'
+[vuart] >>> b'\t\t\t\t\t\t\t\t\t\r'
+[tab] received            ×9   (cycled 0→1→2→…→8→X)
+[tab] cur=8 → focus_close_button
+[tab] render_current done (X)
+[enter] close focused — calling halt_bat_os
+[halt] enter
+[halt] got fb
+[halt] clear_clip
+[halt] fill_screen done
+[halt] draw1 done      ("BAT_OS HALTED")
+[halt] draw2 done      ("(close pressed; m1n1 retains control)")
+[halt] draw3 done      ("Reboot the Mac to restart.")
+[halt] flush_all done
+[BATOS] halt requested via UI close button — entering wfe loop
+```
+
+Kaden confirmed visually: banner rendered on the Mac's display
+and the guest entered wfe (heartbeat stopped cleanly, m1n1 stayed
+alive at EL2, no reset because the AP watchdog is still disabled
+per commit 72c606f4).
+
+### The blocker, finally diagnosed
+
+The tab-to-X UI code itself (commit 877502e4) has been correct
+since it was written. What blocked the demo was a Python parser
+bug in `scripts/hv/batos_hv_interactive.py`:
+
+```python
+for raw in stim_env.replace("\n", ";;").split(";;"):
+    raw = raw.strip()                 # <-- ate all the tabs
+    if not raw: continue
+    decoded = raw.encode("utf-8").decode("unicode_escape").encode("latin-1")
+    if not decoded.endswith(b"\r") and not decoded.endswith(b"\n"):
+        decoded = decoded + b"\r"
+    stims.append(decoded)
+```
+
+Python's `str.strip()` default strips ALL whitespace including
+`\t \r \n`. So the env `BATOS_HV_STIMULUS=batman;;\t\t\t\t\t\t\t\t\t\r`
+was parsed as two items of which the second item stripped down
+to the empty string — silently dropped. Only `batman\r` was ever
+sent. That's why 10+ minutes of HV runtime produced zero `[tab]`
+events in previous attempts: the tabs never left the host.
+
+Fix: keep `strip()` only for plain text items; for items that
+contain control bytes (tab / CR / ESC), treat as a byte-level
+stim and leave bytes alone. Diff in `scripts/hv/batos_hv_interactive.py`.
+
+Also added `BATOS_HV_STIM_GAP_S` env (default 0.8 s) so the second
+stim item can be delayed long enough to land AFTER boot_screen
+exits and desktop::run is polling. Used 25 s for this run.
+
+### Diagnostic prints that helped the bisect
+
+Added `[tab] …` markers to each branch of the Tab handler in
+`src/ui/desktop.rs` (switch-to-next, cur=8 → close-focus, unfocus
+wraparound), plus `[halt] …` markers at each step of
+`halt_bat_os()` so we could prove the render / flush / serial
+chain landed without hang. Confirmed all three `font::draw_str`
+calls + `wm::flush_all()` + `serial_puts()` ran without issue.
+Not removing these — they're cheap, legible, and useful if the
+halt path ever regresses.
+
+### Infrastructure proven
+
+  - M4 AP-watchdog disable (commit 72c606f4) held for 180+ s
+    again in the successful run, including 30+ s of HV-alive
+    post-wfe where m1n1 at EL2 was still polling. No resets.
+  - `scripts/hv/batos_hv_interactive.py` with the parser fix is
+    now a clean one-shot path: chainload → set
+    `BATOS_HV_STIMULUS=batman;;<tabs>\r` + `BATOS_HV_STIM_GAP_S=25`
+    → full demo runs unattended.
+
+### Next session
+
+Tab-to-X is demonstrably the intended user flow. Possible
+follow-ups (none blocking):
+  - Implement Shift+Tab to cycle backwards off X
+  - Render a BATCAVE-style confirmation prompt before halting
+  - Clean-up: the `scripts/hv/inject_keys.py` added this morning
+    is a dead end — Linux-level concurrent opens of /dev/ttyACM2
+    while the main pyserial thread holds it caused the HV to
+    wedge mid-session. We never got injected keystrokes to land
+    that way. The stim-in-interactive-script path is the real
+    way in.
+
+### Power cycles
+
+Kaden power-cycled 4 times this session (the watchdog-disable
+fix has this intentional consequence: HV doesn't auto-recover,
+physical power cycle required between runs). Worth it.
+
+---
+
 ## 2026-04-20 19:15 — Ubuntu — HV exception-counter instrumentation: reset trigger is NOT in exception path
 
 Pivoted from Path A (kernelcache RE, going to take Ghidra +
