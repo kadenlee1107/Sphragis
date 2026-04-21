@@ -11,6 +11,97 @@ end of a session.
 
 ---
 
+## 2026-04-21 15:15 — Ubuntu — MTP loader attempt: SRAM write via gzdec hangs
+
+Continuing from 14:30. Tried staging the A5PH Mach-O into MTP SRAM
+via `u.compressed_writemem(dest=0x394c00000, …)`. Two ADT-level
+findings worth keeping, plus one blocker for the next pass.
+
+### Confirmed MTP fw layout on live M4 ADT (scripts/hv/probe_mtp_fw_layout.py)
+
+```
+MTP ASC reg[0]: phys=0x394600000 size=0x88000
+MTP.compatible: ['iop,ascwrap-v6']
+MTP.segment-ranges (96 bytes):
+  [0]     __TEXT  phys=0x000394c00000  iova=0x000001000000  size=0x5f000
+  [1]     __DATA  phys=0x000394c5f000  iova=0x00000105f000  size=0x6c000
+  [2]   __OS_LOG  phys=0x010005640000  iova=0x0000010cb000  size=0x3000
+```
+
+`0x394c00000` is NOT inside reg[0] (which ends at 0x394688000) —
+it's a separate SRAM aperture ~0x600 KB past the register block,
+probably a dedicated 0x1d0000-byte IOP SRAM region within the
+larger SoC map.
+
+### What iBoot already staged
+
+Read from the target addresses shows:
+
+  - `0x394c00000` (__TEXT[0..4]) = `91 00 00 14` — a single ARM64
+    `b #+0x244` reset-vector stub. Everything after is zero.
+  - `0x394c5f000` (__DATA) — zeros.
+  - `0x10005640000` (__OS_LOG) — populated with format strings
+    (`"ST IF %d type %#04x RID %#04x failed %#10x"` etc).
+
+So iBoot stages the reset stub + OS log strings but not the
+actual code. MTP ASC CPU_CONTROL=0, CPU_STATUS=0x6a (STOPPED+IDLE)
+— waiting for firmware + `CPU_CONTROL.RUN=1`.
+
+### Mach-O layout matches ADT exactly (scripts/hv/stage_mtp_firmware.py --dry-run)
+
+```
+A5PH Mach-O segments:
+  __TEXT       vm=0x1000000   size=0x5f000  fileoff=0x1000
+  __DATA       vm=0x105f000   size=0x6c000  fileoff=0x60000
+  __OS_LOG     vm=0x10cb000   size=0x3000   fileoff=0xcc000
+  __DATA_CONST vm=0x10ce000   size=0x0      (zero-size, skip)
+```
+
+Mach-O `vmaddr` for each segment matches the ADT `iova` by name
+1-to-1. Loader plan is simple: for each named segment, copy
+`filesize` bytes from Mach-O `fileoff` to ADT `phys`.
+
+### Where the loader fails
+
+`compressed_writemem(dest=0x394c00000, …)` sends the gzipped payload
+into m1n1 heap, then calls `p.gzdec(...)` to decompress into `dest`.
+gzdec writes byte-by-byte, which for MMIO SRAM needs word-aligned
+access. The call hangs; `UartTimeout` → `EIO` on subsequent
+pyserial reconfigure, proxy wedges.
+
+### Two paths forward — next session
+
+1. **`p.memcpy32(dest, src, size)` after uploading bytes to m1n1 heap.**
+   Word-aligned 32-bit copies should work on MMIO SRAM. Adjust
+   stage_mtp_firmware.py's staging loop:
+
+   ```python
+   tmp = u.malloc(align(fs, 16))
+   iface.writemem(tmp, payload)
+   p.memcpy32(target["phys"], tmp, fs)
+   u.free(tmp)
+   ```
+
+2. **Verify SRAM access via a minimal test first.**
+   `p.write32(0x394c00100, 0xdeadbeef); p.read32(0x394c00100)` —
+   hangs in current state so can't confirm. A fresh m1n1 would
+   need 5-second confirmation before investing in a larger stage.
+
+Every timeout-kill of Python mid-proxy-call wedges m1n1's USB CDC
+in the state the 09:00 journal describes, requiring a power-cycle
+to recover. That limits the number of attempts per session.
+
+### What's on disk (committed)
+
+  - `scripts/hv/probe_mtp_fw_layout.py` — dumps MTP ADT
+  - `scripts/hv/stage_mtp_firmware.py` — Mach-O + rkosftab parsers,
+    dry-run validator, `--boot` staging path (currently hangs on
+    gzdec-to-SRAM, see above).
+
+### Net: format fully decoded, memcpy32 is the next experiment
+
+---
+
 ## 2026-04-21 14:30 — Ubuntu — MTP firmware extracted from macOS (J604_MtpFirmware.bin, 902 KB)
 
 Unblocked Path 1/Path 2 for keyboard. Kaden enabled Remote Login on
