@@ -199,6 +199,51 @@ diagnostic: bisect `hv_init` by commenting out sub-sections
 and running an endurance cycle. If any subset doesn't trip the
 watchdog, we've narrowed the trigger.
 
+### Watchdog hunt continued — sys-WDT eliminated, 2026-04-20 20:00
+
+Wrote `scripts/hv/probe_118s_timer_hunt.py` — reads a curated set of
+MMIO once per 5 s for 130 s and diffs the values across time. First
+useful run (just PMGR + SoC WDT + dockchannel) found:
+
+  **wdt+0x10 (sys-WDT counter) ticks at exactly 24 MHz.**
+  Delta per 5 s ≈ 120 M counts = 24 MHz confirmed.
+
+Per `docs/M4_GROUND_TRUTH`, the SoC WDT block at 0x3882b0000 has
+three instances: chip-WDT (0x00, 2 s alarm), sys-WDT (0x10, 150 s
+alarm — the one m1n1 `wdt_kick`s) and bark-WDT (0x20, max alarm).
+
+Then added the counter values to `hv-dbg snap` output. Over two
+full 113 s cycles with the HV actually running:
+
+  `wdt_sys` stays at **~0x5e00–0x5f62 (≈ 24 000 counts = 1 ms)**
+  the entire cycle. `wdt_kick()` is perfectly kicking it every
+  tick. **sys-WDT is not the reset source.**
+
+  `wdt_chip` and `wdt_bark` both climb freely at 24 MHz (not
+  kicked, but their documented alarms don't match our reset
+  time — chip-WDT alarm at 2 s is already long past, bark-WDT
+  alarm at u32-max won't fire for 178 s).
+
+So the 118 s reset does NOT come from the SoC WDT block. Need to
+look at per-CPU / per-cluster Apple IMP-DEF regs next. ADT
+`/cpus/cpu0` exposes:
+
+  - `cpu-uttdbg-reg  = 0x210140000` (size 0xc8, trace/debug)
+  - `cpu-impl-reg    = 0x210150000` (size 0x9010)
+  - `acc-impl-reg    = 0x210f00000` (size 0x40088) — ACC = Apple CPU Complex
+  - `cpm-impl-reg    = 0x210e40000` (size 0xc010) — CPM = Cluster Performance Manager
+  - `coresight-reg   = 0x210110000` (size 0x300c8)
+
+The CPM (Cluster Performance Manager) is what the earlier Path A
+kernelcache RE pointed to — `ApplePMGR::enableCPUCluster` writes
+CPM regs. H16.h adds `HAS_CPM_PWRDN_CTL`. This is the strongest
+candidate for a firmware-level watchdog that fires when the AP
+enters EL1-with-HV-vectors and never completes the expected
+macOS init sequence.
+
+Hunting next: snapshot CPM + ACC at a few offsets from `hv-dbg`
+and see what ticks.
+
 ### Implementation note
 
 `scripts/hv/batos_hv_interactive.py` now supports:

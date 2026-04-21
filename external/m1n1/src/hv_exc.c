@@ -93,9 +93,23 @@ static void _hv_exc_stats_emit(const char *tag, u64 now_cnt)
 
     /* Debug snapshot — cumulative, global. Easier to keep in one
      * grep-friendly line so the supervisor log stays usable. */
-    printf("[hv-dbg %s t=%ldms] fiq=%lu/slow=%lu vt=%lu irq=%lu serr=%lu "
+    /* Read SoC WDT counters (known-safe) + Apple CPM/ACC regs
+     * (candidates for the actual 118 s reset trigger).
+     * cpm-impl-reg = 0x210e40000 (ECPU CPM), acc-impl-reg = 0x210f00000.
+     * Snapshot a handful of offsets to see what ticks. */
+    u32 wdt_chip = read32(0x3882b0000UL);
+    u32 wdt_sys  = read32(0x3882b0010UL);
+    u32 wdt_bark = read32(0x3882b0020UL);
+    u32 cpm_0    = read32(0x210e40000UL);
+    u32 cpm_20   = read32(0x210e40020UL);
+    u32 acc_0    = read32(0x210f00000UL);
+    u32 acc_40   = read32(0x210f00040UL);
+
+    printf("[hv-dbg %s t=%ldms wdt=%08x/%08x/%08x cpm=%08x/%08x acc=%08x/%08x] "
+           "fiq=%lu/slow=%lu vt=%lu irq=%lu serr=%lu "
            "sync=%lu(da=%lu msr=%lu imp=%lu oth=%lu hu=%lu hl=%lu px=%lu)\n",
-           tag, t_ms,
+           tag, t_ms, wdt_chip, wdt_sys, wdt_bark,
+           cpm_0, cpm_20, acc_0, acc_40,
            dbg_fiq_entries, dbg_fiq_slow,
            dbg_vtimer_proxied, dbg_irq_entries, dbg_serr_entries,
            dbg_sync_entries,
