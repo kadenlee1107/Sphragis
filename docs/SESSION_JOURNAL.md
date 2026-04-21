@@ -11,6 +11,112 @@ end of a session.
 
 ---
 
+## 2026-04-21 09:00 — Ubuntu — No-power-cycle loop: halt → re-chainload, all within one proxy session ✅
+
+Closes yesterday's open item (letter A from the morning plan).
+Bat_OS's halt UI → m1n1 HV clean-exit → re-chainload a fresh
+m1n1 → fresh m1n1 is alive and pingable, **no physical power
+button needed**.
+
+### Final marker trace of the closed loop
+
+```
+[BATOS] halt requested via UI close button — entering wfe loop
+TTY> HV: All CPUs exited
+[host] re-chainloading .../m1n1.macho within this session
+[chainload-inline] total region size 0x72c000
+[chainload-inline] loading kernel image (0x114008 bytes)...
+[chainload-inline] copying SEPFW (0x5d0000 bytes)...
+[chainload-inline] skipping secondary CPU RVBARs (M4 workaround)
+[chainload-inline] entry=0x100059fc800
+[chainload-inline] reloading into stub at 0x10010e84200
+TTY> Running proxy...
+[host] re-chainload OK — proxy is talking to a fresh m1n1.
+[host] post-chainload: p.nop() ok   (fires every 5 s)
+```
+
+### Why the obvious fixes didn't work
+
+Letter A's hypothesis yesterday was "maybe BATOS_KEEP_FB=1 leaves
+FB iodev in a bleed state". It's actually a different problem.
+Ruled out in this order:
+
+  1. **Post-HV m1n1 is healthy from INSIDE our Python.** Added
+     post-exit diagnostic probes: `p.nop()`, `p.get_base()`,
+     `iodev_set_usage(USB_VUART, CONSOLE|UARTPROXY)`. All three
+     succeed. m1n1 is in perfect shape after hv_exit_guest.
+
+  2. **Mac wedges when OUR Python exits / closes fds.** Testing
+     with `BATOS_HV_NO_CLOSE=1` (`os._exit(0)` instead of
+     `vuart.close()`) still wedges. So it's not pyserial's close()
+     that's the trigger.
+
+  3. **It's the kernel hang-up-on-close on CDC-ACM.** `stty -F
+     /dev/ttyACM1 -hupcl clocal` globally kept helping for a few
+     iterations, and clearing HUPCL in our termios patch
+     (`_clear_hupcl_and_set_raw`) inside the script too. Still
+     eventually wedges.
+
+  4. **A SECOND pyserial process can't open `/dev/ttyACM1` while
+     ours holds it.** Tested with `BATOS_HV_HOLD_OPEN=1` — our
+     Python stays alive pinging proxy every 5 s (`p.nop() ok`),
+     but a chainload from another shell TIMES OUT at pyserial
+     open. Kernel cdc-acm driver is serialising opens in a way
+     that wedges second openers.
+
+### The actual fix: do the chainload in the same Python session
+
+New function `chainload_inline(iface, p, u, macho_path)` in
+`scripts/hv/batos_hv_interactive.py` ports the body of
+`external/m1n1/proxyclient/tools/chainload.py -S` into a callable
+that reuses the existing iface/p/u — no second pyserial open,
+no DTR drop, no kernel cdc-acm ordering games. Called on
+`BATOS_HV_RECHAINLOAD=1` after `hv.start()` returns. The session
+then holds the new m1n1 with a periodic `p.nop()`. To start a
+new Bat_OS demo run: kill this session (accept one DTR drop)
+and re-attach — OR extend the loop to auto-`hv.init()` +
+`load_raw()` + `start()` the new m1n1 right there. Left the
+auto-restart loop as a follow-up — the primitive works.
+
+### What's in the commit
+
+`scripts/hv/batos_hv_interactive.py`:
+  - `chainload_inline()` — ~85-line port of chainload.py's body.
+    Always `-S` (M4 secondary-CPU RVBAR workaround). Reuses
+    iface/p/u; no second pyserial open.
+  - Parser split: byte-level stims (items containing tab / CR /
+    ESC) skip `.strip()` so 9 literal tabs survive to the guest.
+  - `BATOS_HV_STIM_GAP_S` (default 0.8 s) — stim-sender delay
+    between items. Use 25 s to land the tab burst after
+    boot_screen exits.
+  - `BATOS_HV_NO_CLOSE=1` — `os._exit(0)` instead of
+    `vuart.close()`. Kept for diagnostic.
+  - `BATOS_HV_HOLD_OPEN=1` — hold proxy + ping forever. Kept
+    for diagnostic.
+  - `BATOS_HV_RECHAINLOAD=1` — **the actual fix.** After
+    hv.start() returns, call chainload_inline on the same
+    iface/p/u, then ping-hold the new m1n1.
+  - `BATOS_HV_POST_EXIT_DIAG=1` (default) — print the three
+    post-exit probes (nop, get_base, iodev_set_usage).
+  - `_clear_hupcl_and_set_raw()` — clears HUPCL on both vuart
+    (ACM2) and iface.dev (ACM1). Necessary-but-not-sufficient
+    on its own; kept because it's the right hygiene.
+
+### Next session follow-ups
+
+  - Wrap the halt → chainload → hv.init/start cycle into an
+    actual loop so one `python3 batos_hv_interactive.py` =
+    infinite Bat_OS demo sessions. 
+  - Investigate why kernel cdc-acm serialises opens this way
+    (might not be serialising — might be that m1n1's CDC
+    endpoint stops ACKing URBs when its `Running proxy...`
+    read loop blocks waiting for our nop pings. A second
+    opener's initial ioctl round-trips then wait forever.)
+  - Letter B from the morning plan (Mac keyboard via SPI HID)
+    is the headline next-feature target.
+
+---
+
 ## 2026-04-20 22:45 — Ubuntu — halt_bat_os → HV clean-exit path lands (partial)
 
 Follow-on from the tab-to-X success above. Goal was to remove the

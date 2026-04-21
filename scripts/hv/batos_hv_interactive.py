@@ -58,15 +58,25 @@ def log(msg):
 def configure_vuart_raw(vuart):
     """Raw termios + DTR asserted. Without this, Ubuntu's tty layer
     echo+canonical settings create an infinite CRLF echo loop that
-    looks exactly like Bat_OS is broken."""
+    looks exactly like Bat_OS is broken.
+
+    Also clears HUPCL so the kernel DOESN'T drop DTR when the last
+    fd closes. On USB-CDC the Mac's m1n1 interprets DTR-toggle as
+    "host disconnected" and wedges its USB stack — any subsequent
+    pyserial.Serial() open against /dev/ttyACM* then blocks forever
+    even though the device node still exists. Clearing HUPCL keeps
+    modem-control lines steady across our process lifetime."""
     vuart.dtr = True
     vuart.rts = False
-    fd = vuart.fileno()
+    _clear_hupcl_and_set_raw(vuart.fileno())
+
+
+def _clear_hupcl_and_set_raw(fd):
     a = termios.tcgetattr(fd)
     a[0] &= ~(termios.BRKINT | termios.ICRNL | termios.INPCK
               | termios.ISTRIP | termios.IXON)
     a[1] &= ~termios.OPOST
-    a[2] = (a[2] & ~(termios.CSIZE | termios.PARENB)) | termios.CS8
+    a[2] = (a[2] & ~(termios.CSIZE | termios.PARENB | termios.HUPCL)) | termios.CS8
     a[3] &= ~(termios.ECHO | termios.ECHONL | termios.ICANON
               | termios.ISIG | termios.IEXTEN)
     termios.tcsetattr(fd, termios.TCSANOW, a)
@@ -171,6 +181,97 @@ def _noop_signal(*_):
     pass
 
 
+def chainload_inline(iface, p, u, macho_path):
+    """Chainload a fresh m1n1 using the existing (iface, p, u) proxy
+    session. Ports the logic of external/m1n1/proxyclient/tools/
+    chainload.py -S into a callable, so we don't have to open a
+    second pyserial fd on /dev/ttyACM1 — which blocks at the
+    CDC-ACM driver level while ours is alive, and wedges the Mac's
+    USB stack when ours closes (DTR drop, even with HUPCL cleared).
+
+    Always skips secondary CPU RVBAR writes (M4 / t8132 P-cluster
+    SErrors on the RVBAR writes, per vendored chainload.py -S).
+    """
+    from m1n1.macho import MachO
+    from m1n1.tgtypes import BootArgs_r1, BootArgs_r2, BootArgs_r3
+    from m1n1 import asm
+    from m1n1.proxy import IODEV
+    from m1n1.utils import align
+
+    new_base = u.base
+    data = pathlib.Path(macho_path).read_bytes()
+    macho = MachO(data)
+    image = macho.prepare_image() + b"\x00\x00\x00\x00"
+    entry = macho.entry - macho.vmin + new_base
+
+    sepfw_start, sepfw_length = u.adt["chosen"]["memory-map"].SEPFW
+    preoslog_start, preoslog_size = 0, 0
+    if hasattr(u.adt["chosen"]["memory-map"], "preoslog"):
+        preoslog_start, preoslog_size = u.adt["chosen"]["memory-map"].preoslog
+
+    image_size = align(len(image))
+    sepfw_off = image_size
+    image_size += align(sepfw_length)
+    preoslog_off = image_size
+    image_size += align(preoslog_size)
+    bootargs_off = image_size
+    bootargs_size = 0x4000
+    image_size += bootargs_size
+
+    print(f"[chainload-inline] total region size 0x{image_size:x}")
+    image_addr = u.malloc(image_size)
+
+    print(f"[chainload-inline] loading kernel image (0x{len(image):x} bytes)...")
+    u.compressed_writemem(image_addr, image, True)
+    p.dc_cvau(image_addr, len(image))
+
+    print(f"[chainload-inline] copying SEPFW (0x{sepfw_length:x} bytes)...")
+    p.memcpy8(image_addr + sepfw_off, sepfw_start, sepfw_length)
+    u.adt["chosen"]["memory-map"].SEPFW = (new_base + sepfw_off, sepfw_length)
+    u.adt["chosen"]["memory-map"].BootArgs = (new_base + bootargs_off, bootargs_size)
+    if preoslog_size:
+        p.memcpy8(image_addr + preoslog_off, preoslog_start, preoslog_size)
+        u.adt["chosen"]["memory-map"].preoslog = (new_base + preoslog_off, preoslog_size)
+
+    print("[chainload-inline] skipping secondary CPU RVBARs (M4 workaround)")
+    u.push_adt()
+
+    tba = u.ba.copy()
+    tba.top_of_kernel_data = new_base + image_size
+
+    if tba.revision <= 1:
+        iface.writemem(image_addr + bootargs_off, BootArgs_r1.build(tba))
+    elif tba.revision == 2:
+        iface.writemem(image_addr + bootargs_off, BootArgs_r2.build(tba))
+    else:
+        iface.writemem(image_addr + bootargs_off, BootArgs_r3.build(tba))
+
+    stub = asm.ARMAsm(f"""
+1:
+        ldp x4, x5, [x1], #16
+        stp x4, x5, [x2]
+        dc cvau, x2
+        ic ivau, x2
+        add x2, x2, #16
+        sub x3, x3, #16
+        cbnz x3, 1b
+
+        ldr x1, ={entry}
+        br x1
+""", image_addr + image_size)
+
+    iface.writemem(stub.addr, stub.data)
+    p.dc_cvau(stub.addr, stub.len)
+    p.ic_ivau(stub.addr, stub.len)
+
+    print(f"[chainload-inline] entry=0x{entry:x}")
+    print(f"[chainload-inline] reloading into stub at 0x{stub.addr:x}")
+    p.reload(stub.addr, new_base + bootargs_off, image_addr, new_base, image_size)
+
+    iface.nop()
+    print("[chainload-inline] proxy is alive on new m1n1")
+
+
 def main():
     # Default USR2 to no-op. run_shell's own handler (which raises
     # ExitConsole(EXC_RET.EXIT_GUEST)) overrides this while it's active.
@@ -229,6 +330,13 @@ def main():
 
     os.environ.setdefault("M1N1DEVICE", "/dev/ttyACM1")
     iface = UartInterface()
+    # Clear HUPCL on the proxy fd too so DTR stays asserted across
+    # our process lifetime. Same rationale as configure_vuart_raw.
+    try:
+        _clear_hupcl_and_set_raw(iface.dev.fileno())
+        log("cleared HUPCL on iface (ACM1) fd")
+    except Exception as e:
+        log(f"iface HUPCL clear failed (non-fatal): {e!r}")
     p = M1N1Proxy(iface, debug=False)
     bootstrap_port(iface, p)
     u = ProxyUtils(p, heap_size=128 * 1024 * 1024)
@@ -302,13 +410,50 @@ def main():
 
     try:
         hv.start()
-        # Reached if the last guest CPU exits cleanly (Bat_OS's
-        # halt_bat_os writes CYC_OVRD_EL1 bit 0 → m1n1 HV sees "Guest
-        # is shutting down CPU" → hv_exit_cpu → hv_start returns).
-        # Mac is now in stock "Running proxy..." state; chainload.py
-        # works without a power-cycle.
-        log("hv.start() returned cleanly — Mac is back in m1n1 proxy "
-            "mode. You can re-chainload without a power-cycle.")
+        # Reached if the last guest CPU exits cleanly (halt_bat_os
+        # emits the halt marker → vuart_reader kicks → run_shell
+        # intercepts → EXIT_GUEST → m1n1's hv_exit_guest unwinds →
+        # hv_start returns). Mac SHOULD now be back in stock
+        # proxy-serving state.
+        log("hv.start() returned cleanly — probing post-HV proxy state.")
+
+        # Post-HV diagnostic probes — narrows the "chainload fails
+        # after clean exit" wedge. Each probe reports alive/dead so
+        # we can tell which layer's stuck.
+        diag_mode = os.environ.get("BATOS_HV_POST_EXIT_DIAG", "1") != "0"
+        if diag_mode:
+            # 1. Most basic: can the proxy still process a NOP?
+            try:
+                p.nop()
+                log("post-exit probe: p.nop() OK")
+            except Exception as e:
+                log(f"post-exit probe: p.nop() FAIL: {e!r}")
+
+            try:
+                base = p.get_base()
+                log(f"post-exit probe: p.get_base()=0x{base:x}")
+            except Exception as e:
+                log(f"post-exit probe: p.get_base() FAIL: {e!r}")
+
+            # 2. Try resetting vuart iodev back to console mode.
+            # USB_VUART was reconfigured by hv_map_vuart_dockchannel;
+            # restoring USAGE_CONSOLE may let the outer proxy scan see it.
+            try:
+                from m1n1.proxy import IODEV, USAGE
+                # Re-enable console + uartproxy on the USB_VUART endpoint
+                p.iodev_set_usage(IODEV.USB_VUART,
+                                  USAGE.CONSOLE | USAGE.UARTPROXY)
+                log("post-exit probe: iodev_set_usage(USB_VUART, CONSOLE|UARTPROXY) OK")
+            except Exception as e:
+                log(f"post-exit probe: iodev_set_usage FAIL: {e!r}")
+
+            # 3. Optionally shut down FB (if BATOS_KEEP_FB left it live)
+            if os.environ.get("BATOS_HV_POST_EXIT_FB_SHUTDOWN", "0") == "1":
+                try:
+                    p.fb_shutdown(True)
+                    log("post-exit probe: p.fb_shutdown() OK")
+                except Exception as e:
+                    log(f"post-exit probe: p.fb_shutdown() FAIL: {e!r}")
     except KeyboardInterrupt:
         pass
     except Exception as e:
@@ -316,6 +461,62 @@ def main():
         sys.stderr.flush()
 
     stop.set()
+
+    # Diagnostic: if set, skip all pyserial cleanup (vuart.close() and
+    # Python's normal GC-driven iface.dev close). On exit the kernel
+    # drops the fds, but without DTR-toggle / flush sequences that
+    # pyserial invokes on close — which seem to put m1n1's USB CDC
+    # state into a mode where fresh pyserial opens time out.
+    if os.environ.get("BATOS_HV_NO_CLOSE", "0") == "1":
+        log("detaching via os._exit(0) — skipping pyserial close")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
+
+    # Diagnostic: keep the proxy connection held open indefinitely.
+    # Used to test whether it's the pyserial/kernel close that wedges
+    # the Mac vs. something we did earlier. Kill with SIGINT/kill -9.
+    if os.environ.get("BATOS_HV_HOLD_OPEN", "0") == "1":
+        log("HOLD_OPEN=1 — keeping proxy fds alive. Poke me with kill -9 to exit.")
+        # Ping m1n1 periodically so the Mac can verify we're alive.
+        try:
+            while True:
+                time.sleep(5)
+                try:
+                    p.nop()
+                    log("hold-open: p.nop() ok")
+                except Exception as e:
+                    log(f"hold-open: nop failed: {e!r}")
+        except KeyboardInterrupt:
+            pass
+
+    # Experimental: re-chainload a fresh m1n1 using the existing
+    # proxy session. Proven earlier: a SECOND pyserial process can't
+    # open /dev/ttyACM1 while ours holds it — so fresh chainload.py
+    # from a shell hangs. Doing chainload INSIDE this session reuses
+    # iface/p/u, no open conflict, no DTR drop.
+    if os.environ.get("BATOS_HV_RECHAINLOAD", "0") == "1":
+        macho_path = os.environ.get(
+            "BATOS_HV_CHAINLOAD_MACHO",
+            str(pathlib.Path(__file__).resolve().parents[2] /
+                "external/m1n1/build/m1n1.macho"))
+        log(f"re-chainloading {macho_path} within this session")
+        try:
+            chainload_inline(iface, p, u, macho_path)
+            log("re-chainload OK — proxy is talking to a fresh m1n1. "
+                "Holding session open; attach tools via proxy API.")
+            # Keep the session alive so the tty doesn't drop DTR.
+            while True:
+                time.sleep(5)
+                try:
+                    p.nop()
+                    log("post-chainload: p.nop() ok")
+                except Exception as e:
+                    log(f"post-chainload: nop failed: {e!r}")
+        except Exception as e:
+            log(f"re-chainload failed: {e!r}")
+            import traceback; traceback.print_exc()
+
     log("detaching — draining vuart for 2s")
     time.sleep(2)
     vuart.close()
