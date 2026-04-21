@@ -26,6 +26,15 @@ Usage:
   # Multiple stimuli (separated by ';;' or newlines) with 500 ms gaps:
   BATOS_HV_STIMULUS="uname;;mem;;uptime" sg dialout -c ...
 
+  # Infinite demo reel — one invocation, N back-to-back Bat_OS sessions
+  # with fresh m1n1 chainloaded in-process between each. Ctrl+C to stop.
+  BATOS_HV_LOOP=1 BATOS_HV_STIMULUS=$'batman;;\t\t\t\t\t\t\t\t\t\r' \\
+    BATOS_HV_STIM_GAP_S=25 sg dialout -c \\
+      "/usr/bin/python3 scripts/hv/batos_hv_interactive.py"
+
+  # Same, but stop after 3 iterations (smoke-test variant):
+  BATOS_HV_LOOP=1 BATOS_HV_LOOP_MAX=3 sg dialout -c ...
+
 Output:
   * Bytes from the guest (ttyACM2 vuart) print to stdout live.
   * Bytes from the m1n1 proxy (ttyACM1) print prefixed with
@@ -118,8 +127,10 @@ _HALT_MARKER = b"[BATOS] halt requested via UI close button"
 
 
 def vuart_reader(vuart):
+    # _halt_seen is the armed/disarmed gate. main() clears it between
+    # iterations when BATOS_HV_LOOP=1 to re-arm halt detection for the
+    # next Bat_OS session.
     buf = b""
-    kicked = False
     while True:
         try:
             d = vuart.read(1024)
@@ -130,20 +141,23 @@ def vuart_reader(vuart):
         if d:
             sys.stdout.buffer.write(d)
             sys.stdout.buffer.flush()
-            if not kicked:
-                buf = (buf + d)[-256:]
-                if _HALT_MARKER in buf and _iface_for_kick["iface"] is not None:
-                    kicked = True
-                    sys.stderr.write("\n[host] Bat_OS halt marker — kicking HV for clean exit\n")
-                    sys.stderr.flush()
-                    # Small delay so Bat_OS has entered its wfe loop
-                    # and the halt message is fully flushed.
-                    time.sleep(0.3)
-                    _halt_seen.set()
-                    try:
-                        _iface_for_kick["iface"].dev.write(b"!")
-                    except Exception as e:
-                        sys.stderr.write(f"[host] kick write failed: {e}\n")
+            buf = (buf + d)[-256:]
+            if (_HALT_MARKER in buf
+                    and not _halt_seen.is_set()
+                    and _iface_for_kick["iface"] is not None):
+                sys.stderr.write("\n[host] Bat_OS halt marker — kicking HV for clean exit\n")
+                sys.stderr.flush()
+                # Small delay so Bat_OS has entered its wfe loop
+                # and the halt message is fully flushed.
+                time.sleep(0.3)
+                _halt_seen.set()
+                try:
+                    _iface_for_kick["iface"].dev.write(b"!")
+                except Exception as e:
+                    sys.stderr.write(f"[host] kick write failed: {e}\n")
+                # Drop the marker so that when main clears _halt_seen
+                # for the next iteration, stale bytes don't re-fire.
+                buf = b""
         time.sleep(0.005)
 
 
@@ -592,6 +606,67 @@ def _dump_keyboard_adt(adt):
         sys.stderr.write(f"[adt-kbd] write /tmp/adt_kbd.log failed: {e!r}\n")
 
 
+def _build_hv(iface, p, heap_size=128 * 1024 * 1024):
+    """Build a fresh ProxyUtils + HV against the proxy's current m1n1
+    session, with run_shell wrapped to return EXIT_GUEST whenever
+    _halt_seen is set. Called once at startup and again after each
+    chainload_inline() when BATOS_HV_LOOP=1 re-arms for another
+    Bat_OS demo cycle."""
+    from m1n1.proxy import EXC_RET as _EXC_RET
+    u = ProxyUtils(p, heap_size=heap_size)
+    hv = HV(iface, p, u)
+    _orig_run_shell = hv.run_shell
+
+    def _halt_aware_run_shell(entry_msg="Entering shell",
+                              exit_msg="Continuing"):
+        if _halt_seen.is_set():
+            sys.stderr.write(
+                "[host] run_shell intercepted — halt flag set, "
+                "returning EXIT_GUEST\n")
+            sys.stderr.flush()
+            return _EXC_RET.EXIT_GUEST
+        return _orig_run_shell(entry_msg, exit_msg)
+
+    hv.run_shell = _halt_aware_run_shell
+    return u, hv
+
+
+def _post_exit_diag(p, iteration):
+    """Sanity-ping the proxy and rewire USB_VUART after hv.start()
+    returns cleanly. Same probes used to close out the no-power-cycle
+    investigation — kept here because they're cheap signal on whether
+    the fresh m1n1 is still talking before we re-chainload."""
+    try:
+        p.nop()
+        log(f"[iter {iteration}] post-exit probe: p.nop() OK")
+    except Exception as e:
+        log(f"[iter {iteration}] post-exit probe: p.nop() FAIL: {e!r}")
+
+    try:
+        base = p.get_base()
+        log(f"[iter {iteration}] post-exit probe: p.get_base()=0x{base:x}")
+    except Exception as e:
+        log(f"[iter {iteration}] post-exit probe: p.get_base() FAIL: {e!r}")
+
+    try:
+        from m1n1.proxy import IODEV, USAGE
+        p.iodev_set_usage(IODEV.USB_VUART,
+                          USAGE.CONSOLE | USAGE.UARTPROXY)
+        log(f"[iter {iteration}] post-exit probe: iodev_set_usage("
+            f"USB_VUART, CONSOLE|UARTPROXY) OK")
+    except Exception as e:
+        log(f"[iter {iteration}] post-exit probe: iodev_set_usage "
+            f"FAIL: {e!r}")
+
+    if os.environ.get("BATOS_HV_POST_EXIT_FB_SHUTDOWN", "0") == "1":
+        try:
+            p.fb_shutdown(True)
+            log(f"[iter {iteration}] post-exit probe: p.fb_shutdown() OK")
+        except Exception as e:
+            log(f"[iter {iteration}] post-exit probe: p.fb_shutdown() "
+                f"FAIL: {e!r}")
+
+
 def chainload_inline(iface, p, u, macho_path):
     """Chainload a fresh m1n1 using the existing (iface, p, u) proxy
     session. Ports the logic of external/m1n1/proxyclient/tools/
@@ -750,26 +825,10 @@ def main():
         log(f"iface HUPCL clear failed (non-fatal): {e!r}")
     p = M1N1Proxy(iface, debug=False)
     bootstrap_port(iface, p)
-    u = ProxyUtils(p, heap_size=128 * 1024 * 1024)
-    hv = HV(iface, p, u)
+    u, hv = _build_hv(iface, p)
     # Make iface available to vuart_reader so it can kick HV on halt marker.
     _iface_for_kick["iface"] = iface
-    # Wrap hv.run_shell so when the halt flag is set we exit the guest
-    # WITHOUT entering the interactive shell (which would EOF-exit on
-    # /dev/null stdin and return None → HANDLED instead of EXIT_GUEST).
-    # Returning EXIT_GUEST here propagates through handle_exception →
-    # p.exit(3) → m1n1's EXC_EXIT_GUEST → hv_exit_guest() → hv.start
-    # returns on the Python side.
-    from m1n1.proxy import EXC_RET as _EXC_RET
-    _orig_run_shell = hv.run_shell
-    def _halt_aware_run_shell(entry_msg="Entering shell", exit_msg="Continuing"):
-        if _halt_seen.is_set():
-            sys.stderr.write("[host] run_shell intercepted — halt flag set, "
-                             "returning EXIT_GUEST\n")
-            sys.stderr.flush()
-            return _EXC_RET.EXIT_GUEST
-        return _orig_run_shell(entry_msg, exit_msg)
-    hv.run_shell = _halt_aware_run_shell
+
     # Fast-iteration mode: dump ADT + hold proxy alive without
     # starting the HV. Useful for M4 coprocessor topology probing
     # where we don't need Bat_OS running at all.
@@ -797,109 +856,129 @@ def main():
         _mtp_kbd_probe(iface, p, u, vuart)
         return
 
-    hv.init()
+    # BATOS_HV_LOOP=1 turns the whole halt → chainload → relaunch cycle
+    # into an infinite Bat_OS demo reel. One Python invocation keeps the
+    # pyserial fds open across iterations (the wedge we spent a full
+    # session chasing on 2026-04-20), so there's no physical power-cycle
+    # between runs. Ctrl+C exits the loop cleanly; BATOS_HV_LOOP_MAX
+    # caps iterations for smoke-tests / CI.
+    loop = os.environ.get("BATOS_HV_LOOP", "0") == "1"
+    max_iter = int(os.environ.get("BATOS_HV_LOOP_MAX", "0"))
+    macho_path = os.environ.get(
+        "BATOS_HV_CHAINLOAD_MACHO",
+        str(pathlib.Path(__file__).resolve().parents[2] /
+            "external/m1n1/build/m1n1.macho"))
 
-    if os.environ.get("BATOS_HV_DUMP_KBD_ADT", "0") == "1":
-        _dump_keyboard_adt(hv.adt)
-
-    # Allow overriding payload for diagnostic experiments (e.g. a
-    # wfi-forever stub to isolate whether guest activity matters).
     payload_path = os.environ.get("BATOS_HV_PAYLOAD", str(BAT_OS_BINARY))
-    log(f"loading {payload_path}")
-    hv.load_raw(pathlib.Path(payload_path).read_bytes(), 0)
-
-    # Optional pre-start wall-clock delay for watchdog-source experiments.
-    # If the Mac's 113 s ceiling is measured from iBoot handoff, delaying
-    # hv.start() by N seconds will reduce HV runtime by N. If it's
-    # measured from hv.start(), the HV portion stays ~113 s regardless.
     prestart_s = int(os.environ.get("BATOS_HV_PRESTART_SLEEP", "0"))
-    if prestart_s > 0:
-        log(f"BATOS_HV_PRESTART_SLEEP={prestart_s}s — waiting before hv.start()")
-        time.sleep(prestart_s)
+    diag_mode = os.environ.get("BATOS_HV_POST_EXIT_DIAG", "1") != "0"
 
-    # Optional "init only" — call hv.init() but never hv.start(). Used
-    # to test whether the M4 reset-watchdog is armed by hv_init itself
-    # or requires hv_start / live guest execution.
-    if os.environ.get("BATOS_HV_INIT_ONLY", "0") == "1":
-        log("BATOS_HV_INIT_ONLY=1 — not calling hv.start(); sleeping 200s")
-        for i in range(200):
-            if i % 10 == 0:
-                log(f"init-only t={i}s")
-            time.sleep(1)
-        log("init-only done")
-        stop.set()
-        vuart.close()
-        return
-
-    log("calling hv.start() — Bat_OS takes over now. "
-        f"Ctrl+] to detach.")
-
-    # hv.start() must run on the main thread because m1n1 installs
-    # a SIGINT handler for the shell. For interactive input we run
-    # the stdin forwarder in a worker thread.
-    #
-    # 2026-04-20 20:30: used to be gated `if not stims` — meaning when
-    # a canned stimulus was provided, stdin was ignored. That's wrong:
-    # we want the canned stimulus to fire ONCE at start (for auto-auth
-    # etc.) AND leave stdin active so the operator can type keys
-    # (Tab, Enter, etc.) after the guest is up. So always forward
-    # stdin when it's a tty — the stim thread fires its items then
-    # exits, stdin keeps flowing.
+    # stdin_forwarder started once; it runs across all iterations so a
+    # live operator keeps typing to whichever session is current.
     if sys.stdin.isatty():
         threading.Thread(target=stdin_forwarder,
                          args=(vuart, stop), daemon=True).start()
 
-    try:
-        hv.start()
-        # Reached if the last guest CPU exits cleanly (halt_bat_os
-        # emits the halt marker → vuart_reader kicks → run_shell
-        # intercepts → EXIT_GUEST → m1n1's hv_exit_guest unwinds →
-        # hv_start returns). Mac SHOULD now be back in stock
-        # proxy-serving state.
-        log("hv.start() returned cleanly — probing post-HV proxy state.")
+    iteration = 0
+    user_interrupted = False
+    fatal_error = False
+    while True:
+        if iteration > 0:
+            # Rebuild ProxyUtils + HV against the fresh m1n1 booted by
+            # chainload_inline at end of previous iter. iface/p stay alive
+            # (no pyserial reopens); u/hv hold stale heap/adt/bootargs
+            # pointers into the PREVIOUS m1n1 image, so they must go.
+            log(f"[iter {iteration}] building fresh ProxyUtils + HV")
+            u, hv = _build_hv(iface, p)
+            # Re-spawn stim thread so canned demo input fires for this
+            # iteration too. Overlap with a previous iter's thread is
+            # theoretically possible if iter 0 halts before stims finish
+            # firing; in practice stim total time << boot+halt time.
+            if stims:
+                threading.Thread(target=stimulus_sender,
+                                 args=(vuart, stims, verbose),
+                                 daemon=True).start()
 
-        # Post-HV diagnostic probes — narrows the "chainload fails
-        # after clean exit" wedge. Each probe reports alive/dead so
-        # we can tell which layer's stuck.
-        diag_mode = os.environ.get("BATOS_HV_POST_EXIT_DIAG", "1") != "0"
-        if diag_mode:
-            # 1. Most basic: can the proxy still process a NOP?
-            try:
-                p.nop()
-                log("post-exit probe: p.nop() OK")
-            except Exception as e:
-                log(f"post-exit probe: p.nop() FAIL: {e!r}")
+        hv.init()
 
-            try:
-                base = p.get_base()
-                log(f"post-exit probe: p.get_base()=0x{base:x}")
-            except Exception as e:
-                log(f"post-exit probe: p.get_base() FAIL: {e!r}")
+        if iteration == 0 and os.environ.get(
+                "BATOS_HV_DUMP_KBD_ADT", "0") == "1":
+            _dump_keyboard_adt(hv.adt)
 
-            # 2. Try resetting vuart iodev back to console mode.
-            # USB_VUART was reconfigured by hv_map_vuart_dockchannel;
-            # restoring USAGE_CONSOLE may let the outer proxy scan see it.
-            try:
-                from m1n1.proxy import IODEV, USAGE
-                # Re-enable console + uartproxy on the USB_VUART endpoint
-                p.iodev_set_usage(IODEV.USB_VUART,
-                                  USAGE.CONSOLE | USAGE.UARTPROXY)
-                log("post-exit probe: iodev_set_usage(USB_VUART, CONSOLE|UARTPROXY) OK")
-            except Exception as e:
-                log(f"post-exit probe: iodev_set_usage FAIL: {e!r}")
+        # Allow overriding payload for diagnostic experiments (e.g. a
+        # wfi-forever stub to isolate whether guest activity matters).
+        log(f"[iter {iteration}] loading {payload_path}")
+        hv.load_raw(pathlib.Path(payload_path).read_bytes(), 0)
 
-            # 3. Optionally shut down FB (if BATOS_KEEP_FB left it live)
-            if os.environ.get("BATOS_HV_POST_EXIT_FB_SHUTDOWN", "0") == "1":
-                try:
-                    p.fb_shutdown(True)
-                    log("post-exit probe: p.fb_shutdown() OK")
-                except Exception as e:
-                    log(f"post-exit probe: p.fb_shutdown() FAIL: {e!r}")
-    except KeyboardInterrupt:
-        pass
-    except Exception as e:
-        sys.stderr.write(f"\n[host] hv.start() raised: {e}\n")
-        sys.stderr.flush()
+        # Optional pre-start wall-clock delay for watchdog-source
+        # experiments. First iteration only — loop iters start
+        # immediately after chainload.
+        if iteration == 0 and prestart_s > 0:
+            log(f"BATOS_HV_PRESTART_SLEEP={prestart_s}s — waiting "
+                f"before hv.start()")
+            time.sleep(prestart_s)
+
+        # Optional "init only" — call hv.init() but never hv.start().
+        # First iteration only; doesn't interact with loop semantics.
+        if iteration == 0 and os.environ.get(
+                "BATOS_HV_INIT_ONLY", "0") == "1":
+            log("BATOS_HV_INIT_ONLY=1 — not calling hv.start(); "
+                "sleeping 200s")
+            for i in range(200):
+                if i % 10 == 0:
+                    log(f"init-only t={i}s")
+                time.sleep(1)
+            log("init-only done")
+            stop.set()
+            vuart.close()
+            return
+
+        log(f"[iter {iteration}] calling hv.start() — Bat_OS takes "
+            f"over now. Ctrl+] to detach.")
+        try:
+            hv.start()
+            # Reached if the last guest CPU exits cleanly (halt_bat_os
+            # emits the halt marker → vuart_reader kicks → run_shell
+            # intercepts → EXIT_GUEST → m1n1's hv_exit_guest unwinds
+            # → hv_start returns). Mac SHOULD now be back in stock
+            # proxy-serving state.
+            log(f"[iter {iteration}] hv.start() returned cleanly "
+                f"— probing post-HV proxy state.")
+            if diag_mode:
+                _post_exit_diag(p, iteration)
+        except KeyboardInterrupt:
+            user_interrupted = True
+        except Exception as e:
+            sys.stderr.write(
+                f"\n[host] [iter {iteration}] hv.start() raised: {e}\n")
+            sys.stderr.flush()
+            fatal_error = True
+
+        if user_interrupted or fatal_error or not loop:
+            break
+        iteration += 1
+        if max_iter and iteration >= max_iter:
+            log(f"hit BATOS_HV_LOOP_MAX={max_iter} — stopping loop")
+            break
+
+        log(f"[iter {iteration - 1} → {iteration}] chainloading fresh "
+            f"m1n1 from {macho_path}")
+        try:
+            chainload_inline(iface, p, u, macho_path)
+        except Exception as e:
+            log(f"chainload failed: {e!r} — exiting loop")
+            import traceback
+            traceback.print_exc()
+            break
+        try:
+            iface.nop()
+        except Exception as e:
+            log(f"post-chainload iface.nop failed: {e!r} — exiting loop")
+            break
+        # Re-arm halt detection so vuart_reader fires again for this iter.
+        _halt_seen.clear()
+        log(f"[iter {iteration}] fresh m1n1 ready, halt flag cleared, "
+            f"relaunching Bat_OS")
 
     stop.set()
 
@@ -915,11 +994,9 @@ def main():
         os._exit(0)
 
     # Diagnostic: keep the proxy connection held open indefinitely.
-    # Used to test whether it's the pyserial/kernel close that wedges
-    # the Mac vs. something we did earlier. Kill with SIGINT/kill -9.
-    if os.environ.get("BATOS_HV_HOLD_OPEN", "0") == "1":
+    # Ignored in loop mode (the loop is itself a superset).
+    if not loop and os.environ.get("BATOS_HV_HOLD_OPEN", "0") == "1":
         log("HOLD_OPEN=1 — keeping proxy fds alive. Poke me with kill -9 to exit.")
-        # Ping m1n1 periodically so the Mac can verify we're alive.
         try:
             while True:
                 time.sleep(5)
@@ -931,22 +1008,14 @@ def main():
         except KeyboardInterrupt:
             pass
 
-    # Experimental: re-chainload a fresh m1n1 using the existing
-    # proxy session. Proven earlier: a SECOND pyserial process can't
-    # open /dev/ttyACM1 while ours holds it — so fresh chainload.py
-    # from a shell hangs. Doing chainload INSIDE this session reuses
-    # iface/p/u, no open conflict, no DTR drop.
-    if os.environ.get("BATOS_HV_RECHAINLOAD", "0") == "1":
-        macho_path = os.environ.get(
-            "BATOS_HV_CHAINLOAD_MACHO",
-            str(pathlib.Path(__file__).resolve().parents[2] /
-                "external/m1n1/build/m1n1.macho"))
+    # One-shot chainload + hold (pre-dates BATOS_HV_LOOP). Skipped in
+    # loop mode since the loop already did any chainloads it wanted.
+    if not loop and os.environ.get("BATOS_HV_RECHAINLOAD", "0") == "1":
         log(f"re-chainloading {macho_path} within this session")
         try:
             chainload_inline(iface, p, u, macho_path)
             log("re-chainload OK — proxy is talking to a fresh m1n1. "
                 "Holding session open; attach tools via proxy API.")
-            # Keep the session alive so the tty doesn't drop DTR.
             while True:
                 time.sleep(5)
                 try:
@@ -956,7 +1025,8 @@ def main():
                     log(f"post-chainload: nop failed: {e!r}")
         except Exception as e:
             log(f"re-chainload failed: {e!r}")
-            import traceback; traceback.print_exc()
+            import traceback
+            traceback.print_exc()
 
     log("detaching — draining vuart for 2s")
     time.sleep(2)

@@ -11,6 +11,102 @@ end of a session.
 
 ---
 
+## 2026-04-21 11:30 — Ubuntu — Infinite demo reel: BATOS_HV_LOOP=1 ships
+
+Took the optional side-quest from the morning hand-off. The halt →
+chainload loop is now self-sustaining: one `python3
+batos_hv_interactive.py` = N back-to-back Bat_OS sessions,
+chainloading a fresh m1n1 between each, never opening a second
+pyserial fd, never dropping DTR. Keyboard work deferred — both
+paths (host-side MTP bridge, native MTP-in-Rust) are blocked on
+extracting the MTP firmware blob from macOS, which needs Kaden
+in front of the Mac, not Ubuntu Claude.
+
+### What changed in `scripts/hv/batos_hv_interactive.py`
+
+1. **`_build_hv(iface, p, heap_size)` helper.** Builds a fresh
+   `ProxyUtils` + `HV` and wraps `hv.run_shell` with the halt-aware
+   `EXIT_GUEST` shortcut. Factored out so we can rebuild against a
+   fresh m1n1 mid-session (old u/hv hold stale heap/adt/bootargs
+   pointers into the PREVIOUS m1n1 image).
+
+2. **`_post_exit_diag(p, iteration)` helper.** The existing three
+   probes (`p.nop`, `p.get_base`, `iodev_set_usage`) plus the
+   optional `fb_shutdown`, extracted so they tag each log line
+   with an iteration index.
+
+3. **`vuart_reader` re-arm.** Dropped the local `kicked` latch.
+   Now gates on `not _halt_seen.is_set()` and clears its own buf
+   after kicking, so when main's loop clears `_halt_seen` for the
+   next iter, a stale marker in buf doesn't re-fire.
+
+4. **`BATOS_HV_LOOP=1` loop body.** Wraps the whole `hv.init()` →
+   `hv.load_raw()` → `hv.start()` → post-exit-diag → `chainload_inline()`
+   cycle in `while True`. First iteration reuses the initial u/hv;
+   every subsequent iter rebuilds them. Exits on: `KeyboardInterrupt`,
+   `hv.start()` raising, or `BATOS_HV_LOOP_MAX=N` iterations.
+
+5. **Stim re-fire.** Canned stim thread is re-spawned on every iter
+   ≥ 1 (the initial spawn pre-HV still covers iter 0). Means a
+   tab-to-X demo stim fires every cycle, not just the first.
+
+6. **`BATOS_HV_RECHAINLOAD=1` and `BATOS_HV_HOLD_OPEN=1` unchanged
+   for one-shot diagnostic use, but gated on `not loop`.** When
+   `LOOP=1` is set, the loop already owns chainload/hold semantics;
+   running RECHAINLOAD's one-shot chainload afterward would be a
+   double-chainload against a fresh m1n1 that just booted.
+
+### Invocation
+
+```bash
+# One-time after hardware power-cycle:
+sudo -n M1N1DEVICE=/dev/ttyACM1 M1N1WAIT=1 /usr/bin/python3 \
+  external/m1n1/proxyclient/tools/chainload.py -S \
+  external/m1n1/build/m1n1.macho
+
+# Infinite demo reel — Ctrl+C to stop:
+BATOS_HV_LOOP=1 BATOS_KEEP_FB=1 \
+  BATOS_HV_STIMULUS=$'batman;;\t\t\t\t\t\t\t\t\t\r' \
+  BATOS_HV_STIM_GAP_S=25 \
+  sg dialout -c "/usr/bin/python3 scripts/hv/batos_hv_interactive.py"
+
+# Smoke-test — run 3 cycles and exit:
+BATOS_HV_LOOP=1 BATOS_HV_LOOP_MAX=3 sg dialout -c \
+  "/usr/bin/python3 scripts/hv/batos_hv_interactive.py"
+```
+
+### Validation status — code-level only
+
+Not yet driven through on hardware. Static import and `py_compile`
+pass; `_build_hv` / `_post_exit_diag` / `chainload_inline` /
+`main` all resolve. What needs a hardware pass next session:
+
+  - Iter 0 runs exactly like today (no regression against the
+    09:00 BATOS_HV_RECHAINLOAD=1 demo).
+  - After iter 0 halts, iter 1 actually boots Bat_OS again (the
+    `_halt_seen.clear()` re-arms the reader correctly, and the
+    fresh `ProxyUtils(p)` doesn't trip on any stale heap state).
+  - `Ctrl+C` during iter N's `hv.start()` cleanly breaks the loop
+    without wedging the Mac USB stack.
+
+### What I did NOT do
+
+Keyboard. Both Path 1 (MTP firmware staging in Python) and Path 2
+(native MTP in Rust) are blocked on extracting the MTP firmware
+blob from macOS — Kaden needs to be logged into macOS and grab
+it from `/System/Library/Extensions/AppleMultitouch*.kext/Contents/Resources/`
+(or from the kernelcache). Without that blob, Path 1's
+`mtp.boot()` will keep timing out and Path 2 has nothing to embed.
+The 10:00 entry covers this blocker in detail.
+
+### Net: demo UX unblocked, keyboard still gated on Mac-side work
+
+Side-quest shipped. Makes every future keyboard / HV / boot
+experiment ~30 s faster per iteration (no power-button reach).
+Next Claude: pick up Path 1 as soon as the MTP blob is extracted.
+
+---
+
 ## 2026-04-21 10:00 — Ubuntu — MTP keyboard probe: blocker is missing firmware blob
 
 Followed 09:30's architecture finding with a real MTP bring-up
