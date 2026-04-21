@@ -123,6 +123,48 @@ can iterate fast once we know what to look for.
 
 ### Net: FW runs, accepts INBOX, but m1n1's OUTBOX decoder disagrees with what it sends
 
+### Addendum 17:00 — AOP comparison shows NO running v6 ASC on this m1n1
+
+Tried to use the always-on AOP as a reference for "live ascwrap-v6"
+state. `/tmp/aop_vs_mtp.py`:
+
+```
+                AOP           MTP   same?
+CPU_CONTROL      0x00000000    0x00000000   =
+CPU_STATUS       0x0000006a    0x0000006a   =
+CPU_unk0[+0x40]  0x000a0000    0x000a0000   =
+IMPL_0x400       0x00000000    0x00000000   =
+IMPL_0x444       0x00000010    0x00000010   =
+OUTBOX1          0x000a000000000000  0x000a000000000000
+```
+
+**AOP is STOPPED too.** iBoot hands off all ASCs in the stopped
+state; macOS boots them during kernel init. The `0x000a_0000_0000_0000`
+in OUTBOX1 is just the hw-initial-state value for ascwrap-v6's
+OUTBOX1 register (not a message — not even a "counter"; it's the
+reset-default).
+
+Small diffs between AOP and MTP reg[0] (config bytes at +0x0818,
++0x0b00, +0x0b10) — just different firmware configs per device,
+not state-dependent.
+
+**Consequence**: there is no running ascwrap-v6 on this M4 to use
+as a "correct behavior" reference. Our options are:
+  1. Get MTP boot to work so IT becomes the reference.
+  2. HV-trace macOS booting its own ASC — m1n1 has `trace_asc.py`
+     for exactly this. Higher effort (install hook before handoff)
+     but guaranteed reference.
+
+The `IMPL_0x444=0x10` we thought was post-run state is actually the
+**hw-initial-state default** for ascwrap-v6 IMPL_0x444. Same for
+the other "consistent across runs" values we were puzzled by.
+
+So our previous "FW starts, writes canary, resets" inference holds,
+but we've been misreading several reg values as "runtime" when
+they're hw defaults. Need to diff (pre-RUN state) vs (post-RUN
+state) explicitly next pass.
+
+
 ---
 
 ## 2026-04-21 16:30 — Ubuntu — MTP __TEXT is iBoot-staged; __DATA stages fine; FW runs but no Hello
