@@ -11,6 +11,74 @@ end of a session.
 
 ---
 
+## 2026-04-21 14:30 — Ubuntu — MTP firmware extracted from macOS (J604_MtpFirmware.bin, 902 KB)
+
+Unblocked Path 1/Path 2 for keyboard. Kaden enabled Remote Login on
+macOS, so I could SSH from Ubuntu and do the hunting directly —
+no more copy-paste loop. Found three J604-specific firmware blobs
+under `/System/Volumes/Preboot/*/restore/Firmware/`:
+
+  - `J604_MtpFirmware.im4p` (902 KB)  ← **the ASC firmware blob**
+  - `J604_InputDevice.im4p` (96 KB)   — keyboard HID config (plist)
+  - `J604_Multitouch.im4p` (110 KB)   — trackpad calibration (plist)
+
+All three are now scp'd onto the Ubuntu host at `firmware/mtp/`
+(gitignored). Extracted the `.im4p` → `.bin` payloads with a small
+Python ASN.1 parser.
+
+### Format: rkosftab (RTKit OS firmware table)
+
+`J604_MtpFirmware.bin` starts with the `rkosftab` magic at offset
+0x20 and contains two sections (see `scripts/fw/parse_rkosftab.py`):
+
+  - `A5PH` @ file 0x50, 847872 bytes — Mach-O (MH_MAGIC_64
+    `cffaedfe`) — the actual RTKit kernel + drivers for MTP ASC
+  - `iokt` @ file 0xcf050, 53735 bytes — IOKit personality plist
+    (`<dict><key>MTP_SYS</key>...`)
+
+The "A5PH" Mach-O is what needs to land in MTP ASC SRAM before
+we hit `CPU_CONTROL.RUN=1`. Its `__TEXT`/`__DATA`/`__const`/
+`__cstring`/`_rtk_mtab` segments all get staged at specific
+virtual addresses defined by the load commands.
+
+### Tools added
+
+  - `scripts/fw/extract_im4p.py` — unwraps Apple's Image4 Payload
+    (ASN.1 DER) → raw payload bytes.
+  - `scripts/fw/parse_rkosftab.py` — parses rkosftab container,
+    enumerates sections.
+
+### Remaining work for Path 1 (host-side bridge)
+
+Not tonight — deeper than a one-session task:
+
+  1. Walk the Mach-O load commands, resolve segment VM addresses
+     into IOP-physical via the ADT's `segment-ranges` triplets
+     (observed: `0x394c00000` base, 16 MB region, plus several
+     sub-regions).
+  2. `p.memcpy8` each segment into its target physical region.
+  3. Parse rest of A5PH's headers for any reset-vector / entry-point
+     info needed before `mtp.boot()`.
+  4. Call `mtp.boot()` — ASC CPU now has code and should send
+     `Mgmt_Hello`. Our existing `_mtp_kbd_probe` subscribes to
+     keyboard events and bridges to vuart.
+
+Path 2 (native MTP in Rust) — same firmware blob gets embedded at
+build time (`include_bytes!`) and staged by Bat_OS itself. Rust
+scaffolding is still to-do.
+
+### Remote-control workflow is now a first-class tool
+
+SSH from the Ubuntu host into `kadenlee@kadens-MacBook-Pro.local`
+works (my `~/.ssh/id_ed25519.pub` is in Mac's `authorized_keys`).
+Going forward I can run `ioreg`, `find`, and `scp` from macOS
+without Kaden copy-pasting. Useful for any future artifact the
+keyboard / display / battery work needs pulled from macOS.
+
+### Net: Path 1 unblocked in principle, Mach-O loader still to write
+
+---
+
 ## 2026-04-21 13:45 — Ubuntu — LOOP closes on M4 hardware: 2 Bat_OS cycles, one invocation ✅
 
 Full validation. `BATOS_HV_LOOP=1 BATOS_HV_LOOP_MAX=2` ran two
