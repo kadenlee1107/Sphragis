@@ -11,6 +11,68 @@ end of a session.
 
 ---
 
+## 2026-04-21 15:45 — Ubuntu — MTP SRAM is write-protected from host CPU
+
+Minimal diagnostic after 15:15's gzdec hang. On a fresh m1n1 power-on:
+
+```python
+p.write32(0x394c00100, 0xdeadbeef)
+# → UartTimeout; m1n1's proxy loop dies on exception
+```
+
+Writes to 0x394c00000..0x394cc0000 (the MTP SRAM aperture declared
+by segment-ranges) **fault inside m1n1's EL2 context**. Reads work
+fine — we already confirmed `0x394c00000[0..4] = 91 00 00 14` (ARM64
+`b #+0x244` reset stub). The asymmetry is the signal.
+
+### Why this matters
+
+This is exactly the reason Asahi Linux hasn't shipped MTP multitouch
+firmware on any Apple Silicon yet. `platform/open-os-interop.md`
+calls out "Apple MTP multitouch firmware (M2 machines) — blobs not
+yet packaged"; the blob-packaging isn't really the blocker, SRAM
+write-protection is.
+
+### What to try next session (RE work, multi-session)
+
+1. **PMGR power state.** MTP may be in a low-power state where its
+   SRAM is gated off. `p.pmgr_power_enable(MTP_DEVICE_ID)` before
+   any writes. Need to identify MTP's PMGR handle via ADT
+   `pmgr-device` reference.
+2. **DART IOMMU path.** Write via the iova (0x1000000..0x10ce000)
+   range after setting up a DART stream. Apple's kernel may only
+   permit writes through DART; the direct-phys CPU write is blocked
+   by a system-level MMU permission bit.
+3. **GXF / SPRR.** Apple's memory protection on M-series includes
+   SPRR labels per 16 KB page. MTP SRAM might have an SPRR label
+   that denies EL2 write access. `AppleSPRR` setup in m1n1 might
+   need an entry for this range.
+4. **Trace iBoot.** Extract iBoot itself (from the Preboot volume)
+   and disassemble its MTP firmware staging path. That tells us
+   exactly what sequence Apple uses.
+5. **Look at AGX / ANE / SMC firmware paths.** Other ASCs have
+   the same structure; if Asahi has them working on M1/M2, the
+   write-access mechanism is probably the same and we can copy it.
+
+### What IS working (committed, tested)
+
+  - Mach-O layout exactly matches ADT (3 named segments, sizes fit).
+  - A5PH extraction + rkosftab parsing are deterministic.
+  - `probe_mtp_fw_layout.py` gives a clean one-shot dump of the live
+    layout without needing m1n1 to do anything write-y.
+
+### What I'm NOT doing tonight
+
+Burning more power-cycles on one-shot experiments. Each failed
+SRAM write wedges m1n1's proxy loop and the CDC-ACM driver,
+forcing a hold-power boot-picker recovery. Better to land the
+write-protection theory with proper PMGR / DART / SPRR
+instrumentation next pass.
+
+### Net: loader is 80% there, final 20% is M4-specific RE
+
+---
+
 ## 2026-04-21 15:15 — Ubuntu — MTP loader attempt: SRAM write via gzdec hangs
 
 Continuing from 14:30. Tried staging the A5PH Mach-O into MTP SRAM
