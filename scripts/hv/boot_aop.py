@@ -1,25 +1,19 @@
 #!/usr/bin/env python3
-"""Stage + boot AOP ASC, as prereq for MTP boot.
+"""Stage + boot AOP ASC using m1n1's AOPClient.
 
-Theory: MTP hangs after reading one INBOX msg because it needs
-AOP running (mtp-aop-mux ADT compatible 'hid-transport,mux'). This
-script boots AOP first. If AOP Hellos cleanly, next step is MTP.
+Previous attempt used StandardASC and hung at FW-waits-for-something.
+Looking at reference experiments/aop_als.py reveals AOP needs:
+  1. pmgr_adt_power_enable for /arm-io/aop + /arm-io/dart-aop
+  2. DART with specific iova range from adt vm-base
+  3. dart.initialize()
+  4. AOPClient (subclass of StandardASC) + update_bootargs
+     — writes config keys (p0CE, laCn, tPOA, gila) into a DRAM
+     bootargs region that the FW reads during early init
+  5. aop.start() → mgmt.start + wait_boot (3s timeout default)
 
-AOP firmware at firmware/aop/aopfw-mac16gaop.RELEASE.bin is a raw
-Mach-O (no rkosftab wrapper like MTP has). 6 populated segments:
-  __TEXT   vm=0x01000000 fs=0xcd000  (87% non-zero)
-  __DATA   vm=0x010cd000 fs=0xf9000  (7.7%)
-  __ETEXT  vm=0x011c6000 fs=0x16000  (89%)
-  __OS_LOG vm=0xfd000000 fs=0x2a000  (98%)
-  __MISC   vm=0xfe000000 fs=0x1000   (0.3%)
-  __CMA    vm=0xff000000 fs=0x2000   (53%)
-
-Sequence (chainload patched m1n1 → WDT off → stage → boot):
-  1. probe /arm-io/aop ADT for segment-ranges
-  2. verify __TEXT iBoot-staged (same XOM pattern as MTP)
-  3. stage remaining segments via iface.writemem
-  4. SMC + DART-AOP setup
-  5. StandardASC + mgmt.start → wait_boot
+The bootargs blob is what our previous StandardASC attempt missed.
+FW wouldn't even consume our INBOX msg because it hadn't initialized
+past reading bootargs.
 """
 import os, pathlib, struct, sys, time
 
@@ -90,27 +84,26 @@ def chainload(iface, p, u):
     iface.nop()
 
 
-def macho_segs(macho_bytes):
-    ncmds = struct.unpack("<I", macho_bytes[16:20])[0]
-    cur = 32
-    segs = []
+def macho_segs_fn(mb):
+    ncmds = struct.unpack("<I", mb[16:20])[0]
+    cur, segs = 32, []
     for _ in range(ncmds):
-        cmd, sz = struct.unpack("<II", macho_bytes[cur:cur+8])
+        cmd, sz = struct.unpack("<II", mb[cur:cur+8])
         if cmd == 0x19:
-            name = macho_bytes[cur+8:cur+24].rstrip(b"\x00").decode()
-            vm, vmsz, fo, fs = struct.unpack("<QQQQ", macho_bytes[cur+24:cur+56])
+            name = mb[cur+8:cur+24].rstrip(b"\x00").decode()
+            vm, vmsz, fo, fs = struct.unpack("<QQQQ", mb[cur+24:cur+56])
             segs.append((name, vm, vmsz, fo, fs))
         cur += sz
     return segs
 
 
 def parse_adt_segments(raw):
-    segs = []
+    out = []
     for i in range(len(raw) // 32):
         s = raw[i*32:(i+1)*32]
         phys, iova, remap, size = struct.unpack("<QQQI4x", s)
-        segs.append({"phys": phys, "iova": iova, "size": size})
-    return segs
+        out.append({"phys": phys, "iova": iova, "size": size})
+    return out
 
 
 def log(m):
@@ -132,187 +125,182 @@ def main():
 
     # WDT disable
     log("disabling M4 AP watchdog...")
-    try:
-        p.write32(0x3882BC224, 0)
-        p.write32(0x3882B8008, 0xffffffff)
-        p.write32(0x3882B802C, 0xffffffff)
-        p.write32(0x3882B8020, 0xffffffff)
-    except Exception as e:
-        log(f"  wdt err: {e!r}")
+    for addr, val in [(0x3882BC224, 0), (0x3882B8008, 0xffffffff),
+                      (0x3882B802C, 0xffffffff), (0x3882B8020, 0xffffffff)]:
+        try:
+            p.write32(addr, val)
+        except Exception as e:
+            log(f"  wdt err {addr:#x}: {e!r}")
 
-    # Probe AOP ADT
+    # PMGR power enable (reference aop_als.py does this — NEW vs MTP)
+    log("pmgr_adt_power_enable for aop + dart-aop...")
+    for path in ("/arm-io/aop", "/arm-io/dart-aop"):
+        try:
+            rc = p.pmgr_adt_power_enable(path)
+            log(f"  {path}: rc={rc}")
+        except Exception as e:
+            log(f"  {path}: {type(e).__name__}: {e}")
+
+    # Stage firmware into __DATA / __OS_LOG (skip __TEXT + __ETEXT — iBoot)
     aop_node = u.adt["/arm-io/aop"]
     aop_base = aop_node.get_reg(0)[0]
-    log(f"AOP @ {aop_base:#x}  compat={list(getattr(aop_node, 'compatible', []))}")
+    log(f"AOP @ {aop_base:#x}")
 
     sr = getattr(aop_node, "segment-ranges", None)
     if sr is None:
-        log("ABORT: /arm-io/aop has no segment-ranges property")
-        # Try nub instead
-        try:
-            nub = u.adt["/arm-io/aop/iop-aop-nub"]
-            sr = getattr(nub, "segment-ranges", None)
-            names_raw = getattr(nub, "segment-names", b"")
-            log(f"  using nub's segment-ranges ({len(sr)}B)")
-        except Exception as e:
-            log(f"  no nub either: {e!r}")
-            os._exit(1)
-    else:
-        names_raw = getattr(aop_node, "segment-names", b"")
-
+        log("ABORT: /arm-io/aop lacks segment-ranges")
+        os._exit(1)
+    names_raw = getattr(aop_node, "segment-names", b"")
     if isinstance(names_raw, bytes):
         names_raw = names_raw.decode("ascii", errors="replace")
     names = names_raw.strip("\x00").split(";")
     adt_segs = parse_adt_segments(sr)
-    log(f"ADT segments ({len(adt_segs)}):")
-    adt_by = {}
-    for nm, s in zip(names, adt_segs):
-        log(f"  {nm:>12s}  phys={s['phys']:#014x}  iova={s['iova']:#014x}  size={s['size']:#x}")
-        adt_by[nm] = s
+    adt_by = dict(zip(names, adt_segs))
+    log(f"  ADT segs: {list(adt_by.keys())}")
+    for nm, s in adt_by.items():
+        log(f"    {nm:>10s}  phys={s['phys']:#014x}  iova={s['iova']:#014x}  size={s['size']:#x}")
 
-    # Parse Mach-O
-    if not AOP_BLOB.exists():
-        log(f"ABORT: {AOP_BLOB} missing")
-        os._exit(1)
     macho = AOP_BLOB.read_bytes()
-    mc_by = {}
-    for seg in macho_segs(macho):
-        mc_by[seg[0]] = seg
-        log(f"  mach-o {seg[0]:>12s} vm={seg[1]:#x} fs={seg[4]:#x}")
+    mc_by = {seg[0]: seg for seg in macho_segs_fn(macho)}
 
-    # CPU state
-    cc = p.read32(aop_base + 0x44)
-    cs = p.read32(aop_base + 0x48)
-    log(f"AOP pre-stage: CPU_CONTROL={cc:#x} CPU_STATUS={cs:#x}")
-
-    # Verify __TEXT and __ETEXT (both are code — iBoot may have staged
-    # both as write-protected. If __ETEXT also matches Mach-O, skip
-    # staging it to avoid SYNC exceptions).
-    skip_segs = set()
-    for seg_name in ("__TEXT", "__ETEXT"):
-        if seg_name not in mc_by or seg_name not in adt_by:
+    # Verify __TEXT + __ETEXT are iBoot-staged; skip write for both.
+    skip = set()
+    for nm in ("__TEXT", "__ETEXT"):
+        if nm not in mc_by or nm not in adt_by:
             continue
-        t_mc = mc_by[seg_name]
-        t_adt = adt_by[seg_name]
-        all_match = True
+        m = mc_by[nm]; a = adt_by[nm]
+        ok = True
         for off in (0x0, 0x100, 0x200):
-            if off >= t_mc[4]:
-                break
-            exp = macho[t_mc[3]+off:t_mc[3]+off+16]
-            got = iface.readmem(t_adt["phys"]+off, 16)
-            match = "MATCH" if got == exp else "MISMATCH"
-            log(f"  {seg_name}[+{off:#x}] iBoot={got.hex()} macho={exp.hex()} [{match}]")
+            if off >= m[4]: break
+            exp = macho[m[3]+off:m[3]+off+16]
+            got = iface.readmem(a["phys"]+off, 16)
             if got != exp:
-                all_match = False
-        if all_match:
-            skip_segs.add(seg_name)
-            log(f"  {seg_name}: iBoot-staged, skipping host write")
-        elif seg_name == "__TEXT" and os.environ.get("BATOS_AOP_FORCE_TEXT", "0") != "1":
-            log("ABORT: __TEXT mismatch (set BATOS_AOP_FORCE_TEXT=1 to override)")
-            os._exit(1)
+                ok = False
+                log(f"  {nm}[+{off:#x}] MISMATCH")
+                break
+        if ok:
+            skip.add(nm)
+            log(f"  {nm}: iBoot-staged (skip)")
 
-    # Stage all non-__TEXT segments present in both. Use
-    # compressed_writemem for big segments (~10x faster on AOP's
-    # 996KB __DATA + 168KB __OS_LOG).
-    staged = []
+    # Stage everything else
     for nm in names:
-        if nm in skip_segs:
+        if nm in skip:
             continue
         if nm not in mc_by or nm not in adt_by:
-            log(f"  {nm}: no match in both — skip")
             continue
-        mc = mc_by[nm]
-        ad = adt_by[nm]
-        fo, fs = mc[3], mc[4]
-        if fs == 0:
-            log(f"  {nm}: filesize=0 — skip")
+        m = mc_by[nm]; a = adt_by[nm]
+        if m[4] == 0:
             continue
-        if fs > ad["size"]:
-            log(f"  {nm}: OVERFLOW ({fs} > {ad['size']}) — skip")
-            continue
-        payload = macho[fo:fo+fs]
-        # compressed_writemem uses gzdec on m1n1 side — big segments
-        # ship 10x faster since zero-heavy content compresses well.
+        if m[4] > a["size"]:
+            log(f"  {nm}: OVERFLOW"); continue
         t = time.time()
-        if fs >= 64 * 1024:
-            u.compressed_writemem(ad["phys"], payload, True)
+        if m[4] >= 64 * 1024:
+            u.compressed_writemem(a["phys"], macho[m[3]:m[3]+m[4]], True)
         else:
-            iface.writemem(ad["phys"], payload)
-        log(f"  {nm}: {fs}B -> {ad['phys']:#x} OK ({(time.time()-t)*1000:.0f}ms)")
-        staged.append(nm)
+            iface.writemem(a["phys"], macho[m[3]:m[3]+m[4]])
+        log(f"  {nm}: {m[4]}B -> {a['phys']:#x}  ({(time.time()-t)*1000:.0f}ms)")
 
-    # SMC + DART-AOP
-    from m1n1.fw.smc import SMCClient
+    # DART with vm-base from ADT
     from m1n1.hw.dart import DART
-    try:
-        smc_addr = u.adt["arm-io/smc"].get_reg(0)[0]
-        smc = SMCClient(u, smc_addr)
-        smc.start(); smc.start_ep(0x20); smc.verbose = 0
-        log(f"SMC up @ {smc_addr:#x}")
-    except Exception as e:
-        log(f"SMC err (continuing): {e!r}")
-        smc = None
+    dart_node = u.adt["/arm-io/dart-aop"]
+    vm_base = getattr(dart_node, "vm-base", None)
+    if vm_base is None:
+        vm_base = 0x8000
+    log(f"DART vm_base={vm_base:#x}")
+    dart = DART.from_adt(u, "/arm-io/dart-aop",
+                         iova_range=(vm_base, 0x1000000000))
+    dart.initialize()
 
+    # Create AOPClient
+    from m1n1.fw.aop.client import AOPClient
+    aop = AOPClient(u, "/arm-io/aop", dart)
+    aop.verbose = 3
+
+    # Reset FW if running so bootargs changes get re-read on next boot.
+    # If RUN=1 already (from a previous invocation), the FW has already
+    # consumed bootargs; writing new values has no effect until we flip
+    # RUN=0 → update bootargs → RUN=1.
+    pre_cc = p.read32(aop_base + 0x44)
+    if pre_cc & 0x10:
+        log(f"AOP was running (CC={pre_cc:#x}) — clearing RUN for re-read")
+        p.write32(aop_base + 0x44, pre_cc & ~0x10)
+        time.sleep(0.1)
+        log(f"  CC after clear: {p.read32(aop_base + 0x44):#x}  "
+            f"CS: {p.read32(aop_base + 0x48):#x}")
+
+    # Read + dump current bootargs
     try:
-        dart = DART.from_adt(u, "/arm-io/dart-aop", iova_range=(0x8000, 0x100000))
-        dart.dart.regs.TCR[1].set(BYPASS_DAPF=1, BYPASS_DART=0, TRANSLATE_ENABLE=1)
+        args = aop.read_bootargs()
+        log("bootargs present — keys:")
+        for k in list(args.keys())[:20]:
+            log(f"    {k!r}")
+    except Exception as e:
+        log(f"read_bootargs failed: {type(e).__name__}: {e}")
+        log("FW may need initial CPU_CONTROL.RUN=1 before bootargs region is valid")
+        # Try anyway — some iBoot handoffs pre-populate
         try:
-            dart.initialize()
-        except Exception:
-            pass
-        log("DART-AOP set up")
-    except Exception as e:
-        log(f"DART-AOP err: {e!r}")
-        dart = None
+            aop.asc.CPU_CONTROL.set(RUN=1)
+            time.sleep(0.1)
+            args = aop.read_bootargs()
+            log(f"after RUN=1, bootargs keys: {list(args.keys())[:20]}")
+        except Exception as e2:
+            log(f"still failing: {e2!r}")
+            os._exit(1)
 
-    # StandardASC boot
-    from m1n1.fw.asc import StandardASC
-    from m1n1.fw.asc.base import ASCTimeout
-    aop = StandardASC(u, aop_base, dart, stream=1)
-    aop.verbose = 2
-    aop.allow_phys = True
-
-    log("kicking AOP: CPU_CONTROL.RUN=1 + mgmt.start(SetIOPPower=0x220)...")
+    # Update bootargs with reference values
+    log("update_bootargs({p0CE: 0x20000, laCn: 0, tPOA: 1, gila: 0x80})...")
     try:
-        aop.asc.CPU_CONTROL.set(RUN=1)
-        aop.mgmt.start()
+        aop.update_bootargs({
+            'p0CE': 0x20000,
+            'laCn': 0x0,
+            'tPOA': 0x1,
+            'gila': 0x80,
+        })
     except Exception as e:
-        log(f"kick err: {e!r}")
+        log(f"update_bootargs err: {type(e).__name__}: {e}")
 
-    # Watch for Hello / power-state progress
-    deadline = time.time() + 20
-    last_snap = time.time()
-    t0 = time.time()
-    while time.time() < deadline:
-        if (aop.mgmt.iop_power_state == 0x20 and
-                aop.mgmt.ap_power_state == 0x20):
-            log(f"AOP BOOT OK in {(time.time()-t0)*1000:.0f}ms!")
-            break
+    # Skip dapf (hangs on M4 dart-mtp but may be ok for dart-aop — try?)
+    skip_dapf = os.environ.get("BATOS_SKIP_DAPF", "1") == "1"
+    if not skip_dapf:
+        log("dapf_init_all (30s timeout)...")
+        saved = iface.dev.timeout
+        iface.dev.timeout = 30
         try:
-            aop.work()
+            p.dapf_init_all()
+            log("  dapf_init_all OK")
         except Exception as e:
-            log(f"work err: {e!r}")
-            break
-        if time.time() - last_snap > 1.0:
-            cc_s = p.read32(aop_base + 0x44)
-            cs_s = p.read32(aop_base + 0x48)
-            ob_s = p.read32(aop_base + 0x8114)
-            ic_s = p.read32(aop_base + 0x8110)
-            b14 = p.read32(aop_base + 0x0b14)
-            log(f"  t={int((time.time()-t0)*1000):4d}ms CC={cc_s:#x} CS={cs_s:#x} "
-                f"IB={ic_s:#x} OB={ob_s:#x} +b14={b14:#x} "
-                f"iop={aop.mgmt.iop_power_state:#x} ap={aop.mgmt.ap_power_state:#x}")
-            last_snap = time.time()
-    else:
-        log(f"AOP BOOT TIMEOUT after 20s")
-        log(f"  final CS={p.read32(aop_base+0x48):#x} +b14={p.read32(aop_base+0xb14):#x}")
+            log(f"  dapf_init_all fail: {type(e).__name__}: {e}")
+        iface.dev.timeout = saved
 
-    # Diagnostic dump regardless
-    log("post-boot IMPL reg non-zero in 0x100..0x800:")
-    for off in range(0x100, 0x800, 4):
-        v = p.read32(aop_base + off)
-        if v:
-            log(f"    [+{off:#x}] = {v:#x}")
+    # Reset OUTBOX_CTRL per reference
+    try:
+        p.write32(aop_base + 0x8114, 0x20001)
+        log(f"OUTBOX_CTRL reset: {p.read32(aop_base + 0x8114):#x}")
+    except Exception as e:
+        log(f"OB reset err: {e!r}")
+
+    # aop.start() = StandardASC.start() = boot + mgmt.start + wait_boot(3)
+    log("aop.start()...")
+    t0 = time.time()
+    try:
+        aop.start()
+        log(f"AOP START OK in {(time.time()-t0)*1000:.0f}ms")
+        # start endpoints
+        for epno in [0x20, 0x21, 0x22, 0x24, 0x25, 0x26, 0x27, 0x28]:
+            try:
+                aop.start_ep(epno)
+                log(f"  ep {epno:#x} started")
+            except Exception as e:
+                log(f"  ep {epno:#x}: {type(e).__name__}")
+    except Exception as e:
+        log(f"aop.start() FAILED: {type(e).__name__}: {e}")
+        cc = p.read32(aop_base + 0x44)
+        cs = p.read32(aop_base + 0x48)
+        ic = p.read32(aop_base + 0x8110)
+        ob = p.read32(aop_base + 0x8114)
+        b14 = p.read32(aop_base + 0xb14)
+        log(f"  CC={cc:#x} CS={cs:#x} IB={ic:#x} OB={ob:#x} +b14={b14:#x}")
+        log(f"  iop_power={aop.mgmt.iop_power_state:#x} ap_power={aop.mgmt.ap_power_state:#x}")
 
     os._exit(0)
 
