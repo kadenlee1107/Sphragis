@@ -360,6 +360,89 @@ enable` handles (AOP's clock-gates property is empty).
    location + what other config values live nearby (might be
    pointers to DRAM regions AOP expects populated).
 
+---
+
+## 2026-04-22 13:42 — Ubuntu — deep MMIO/DATA probe: FW is ALIVE and RESPONSIVE
+
+Kaden said "do as much as you can while you have m1n1." Ran 4 deep
+probes (mega, mega2, time, unstick) across multiple boot cycles.
+
+### Game-changing finding: FW is ACTIVELY RUNNING, not stalled
+
+- AOP reg[4] at 0x3_90C6_2000 (size 0x3c008) contains **executable
+  ARM64 code** — valid instruction stream decodes cleanly. This
+  is AOP's secondary __TEXT_EXEC or scratch code area.
+- `__DATA+0x498` goes from ALL ZEROS pre-RUN to a populated
+  **pointer table** post-RUN within 500 ms. 32+ entries of
+  `0x0000_0003_90c9_3483`-style signed pointers, stride 0x1000.
+  FW populated this table = FW ran init code.
+- `reg[0]+0x818` **increments with EVERY interaction** we make:
+    0x40000 → 0x40003 (INBOX rewrite)
+    → 0x40005 (0x818 toggle)
+    → 0x40007 (CC bit0 write)
+    → 0x40009 (CC bit8)
+    → 0x4000d (IB_CTRL rewrite)
+    → 0x4000f → 0x40011
+  FW is **COUNTING EVENTS AND RESPONDING** — just not to INBOX
+  msg contents.
+- reg[0]+0x1010 is a writable state reg (alt doorbell candidate)
+- reg[0]+0x1018 auto-clears on write (like trigger reg)
+- Writing IB_CTRL triggered CS bit 3 clear = FIQ taken
+- CPU_CONTROL bit 8 accepted (wrote 0x110, read back 0x110)
+
+### Implications
+
+AOP FW is NOT stuck. FW:
+1. Boots through entry at 0x1000000
+2. Does cache invalidation, MMU setup
+3. Transitions VBAR three times, reaching runtime table at 0x1001800
+4. Sets its own PAC keys from static seed
+5. Populates the __DATA+0x498 page-pointer table
+6. Reaches steady state waiting in WFI
+7. **Reacts to interrupts** (event counter at +0x818 increments)
+8. Does NOT recognize the INBOX message format or EP we send
+
+The stall isn't "FW is dead" — it's "FW doesn't know what to do
+with our SetIOPPower(0x220) msg to EP=0." FW might be in a
+pre-mgmt-handshake state where EP=0 isn't bound yet, or expects
+a different INIT sequence (not TYPE=6).
+
+### Artifacts added this round
+
+- scripts/hv/probe_aop_mega.py    — PMP/AOP/MMIO enum (PMP found,
+                                     also halted; we don't have FW)
+- scripts/hv/probe_aop_mega2.py   — deep __DATA + reg[4] dump
+- scripts/hv/probe_aop_time.py    — time-series FW progress (showed
+                                     FW completes init in <500 ms)
+- scripts/hv/probe_aop_unstick.py — unstick attempts (all 7 failed
+                                     but revealed event counter)
+- logs/aop-{mega,mega2,time,unstick}-*.log
+
+### Concrete next-session experiments
+
+1. **Try FW's secondary EPs before mgmt**. FW's dispatch table at
+   0x1117938 populates with a valid ptr post-boot. The runtime
+   EP handlers are at that table. Maybe EP 0x20..0x28 (AOP-
+   specific audio/sensor endpoints) need first-boot msgs to
+   open the mgmt channel.
+2. **Dump reg[4] POST-RUN**. Pre-RUN we saw static code bytes.
+   If FW wrote reg[4] during init, that'd reveal the "runtime
+   state" area worth watching.
+3. **Try alternate doorbell +0x1010**. Set up as a fresh write
+   with specific config (not just =1). Maybe it's the "mailbox
+   IRQ" doorbell separate from NMI-FIQ.
+4. **Extract PMP FW from macOS filesystem** (via scp or similar)
+   and try PMP boot as prereq to AOP.
+
+### Status
+
+Still the same observable state (INBOX stuck, OUTBOX empty),
+but we now KNOW FW is alive. Rationale shift from "figure out why
+FW crashed" → "figure out what handshake FW expects before it
+treats our messages as valid."
+
+External keyboard remains the ship path.
+
 ### Status
 
 **Mac is alive and in stock m1n1** (bcee7f2) — no power-cycle needed.
