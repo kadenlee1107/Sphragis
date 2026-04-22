@@ -173,6 +173,44 @@ hang (since there are no faults), but worth noting.
               not self-reset, not IDLE. Stuck in an active loop.
               Next wall for next session.
 
+### Addendum 18:00 — Reference mtp.py flow: ascwrap-v6 *requires* SetIOPPower kick
+
+boot_mtp_ref.py matches external/m1n1/proxyclient/experiments/mtp.py
+exactly (plain `mtp.boot()` — no mgmt.start() kick). Result without kick:
+  - CS stays 0x6c for full 15s (still IDLE)
+  - +0x0b14 stays 0 (FW didn't read anything)
+  - No OUTBOX activity
+
+So on ascwrap-v6 (M4), FW does NOT autonomously send Hello after RUN=1.
+It waits in WFI for a wake message on INBOX first. M1/M2's reference
+pattern (bare mtp.boot() → FW Hellos) doesn't port to M4.
+
+### dapf_init_all still broken on M4 even with patched m1n1
+
+  TTY> dapf: Initialized /arm-io/dart-aop
+  [hangs on dart-mtp for 37s, proxy dies via USB reset]
+
+Same symptom the 10:00 session documented on stock m1n1. Patched m1n1's
+other fixes don't cover this. Either a t8132-specific dapf quirk or the
+dart-mtp at reg[1] (0x394100000) is itself power-gated and the writes
+target a dead apertur. Either way: must stay BATOS_SKIP_DAPF=1 for now.
+
+### Leading theory for the hang: AOP-MUX dependency
+
+ADT: `/arm-io/mtp-aop-mux` compatible `hid-transport,mux`. MTP is a
+transport multiplexer that routes HID traffic through AOP. If MTP's
+FW early-init tries to handshake with AOP (via shared-memory ring or
+AIC IRQ), and AOP is stopped (confirmed: CS=0x6a matches MTP), MTP
+hangs waiting for an AOP that never responds.
+
+**Next move**: extract AOPFirmware from macOS (same rkosftab format
+as MTP), boot AOP first, THEN boot MTP. If that works, we get
+Hello and keyboard path lights up.
+
+Alternatively: the full boot loop works fine for demo UX (Bat_OS +
+loop + screenshots), and keyboard input via external USB keyboard
+is good enough. Shelving MTP until Phase-2.
+
 
 ---
 
