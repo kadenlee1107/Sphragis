@@ -11,6 +11,139 @@ end of a session.
 
 ---
 
+## 2026-04-21 22:00 — Ubuntu — 🎉 AOP BOOT BREAKTHROUGH: skip dart.initialize() → FW alive
+
+**Headline:** `DART.initialize()` was clobbering iBoot's AOP stream/TTBR
+config. Skipping it boots AOP FW to `CS=0x6c` (MTP's healthy state).
+FW now actively processes INBOX, echoes to slot ring at +0x8180,
+transitions through state machine. Remaining issue: no reply written
+to classical OUTBOX +0x8830.
+
+### The chain of evidence
+
+1. Fresh-boot scan (scripts/hv/aop_reg_scan.py — extended to cover
+   +0x4400..+0x4800 and +0x8000..+0x8200): both AOP and MTP have
+   CS=0x6a pre-RUN (STOPPED+IDLE). The `+0x4400..+0x47xx` "random +
+   0x20000 trailer" tables I'd theorized as attestation slots are
+   IDENTICAL structure on both AOP and MTP → not the blocker.
+
+2. After running boot_aop.py once, AOP was in trap-state (CS=0x48).
+   Scripts/hv/aop_dart_probe.py compared DART-AOP vs DART-MTP reg[0]:
+   - DART-AOP reg[0]+0x0..+0x200 all zero (wiped).
+   - DART-MTP (untouched) still had iBoot's dense config at +0x0..+0xb0.
+   The diff tracks dart8110.py:451 `DART.initialize()`: it sets
+   `TCR[0..14]` to blank `TRANSLATE_ENABLE=1`, invalidates all TTBRs,
+   disables all streams. iBoot's AOP DMA-stream setup is gone.
+
+3. Wrote scripts/hv/boot_aop_no_dart.py which does everything
+   previous boot_aop.py does **except** it constructs `DART.from_adt`
+   but doesn't call `initialize()`. On fresh power-cycle:
+   - Pre-RUN: CS=0x6a (as always)
+   - Post-RUN: **CS=0x68** (IDLE + IRQ_PEND — FW is in WFI waiting)
+   - Previously (with dart init): CS=0x48 (not IDLE, IRQ_PEND)
+
+4. Script aop_followup_start.py manually wrote `SetIOPPower(0x220)`
+   to INBOX. FW immediately transitioned:
+   - CS 0x68 → 0x48 → **0x6c** (the MTP working state — IDLE +
+     IRQ_NOT_PEND, stable after 0.6s).
+   - `+0x818` went through 0x4000d, 0x4000f, 0x40011, 0x40013, 0x40025,
+     0x40027, and finally **0x0** when CS stabilized at 0x6c.
+   - `+0x8180` slot 0 got OVERWRITTEN with our SetIOPPower content:
+     `0x00000000 0x00800000 0x00000024 0x00891900` — slot mirrors
+     msg0/msg1 from INBOX with FW-updated trailer.
+
+5. Ran scripts/hv/aop_continue_start.py which did `aop.start_ep()`
+   for EPs 0x20, 0x21, 0x22, 0x24 via AOPClient. Each sent:
+   - `Mgmt_StartEP(EP=0xNN, FLAG=2)` (msg0 = 0x5000NN00000002)
+   - Followed by TYPE=0x80 msg via the endpoint itself.
+   - Total 8 msgs sent + the original SetIOPPower = 9 writes.
+
+6. Post-run state scan shows all 8 INBOX slots at +0x8180..+0x81ff
+   contain our msgs in chronological order (with slot 0 wrapping
+   for msg 9). Structure per slot:
+   ```
+   +0:   msg0 (64b split over +0 and +4)
+   +8:   msg1.LOW  (EP)
+   +C:   trailer 0x00891900  (FW-updated state)
+   ```
+
+7. `IB_CTRL=0x891901`: FIFOCNT=8 (full), WPTR=9, RPTR=1. FW has
+   read exactly one msg (the original SetIOPPower). The 8 queued
+   start_ep/start msgs are UNREAD. FW's processing loop isn't
+   draining them, but CS stays healthy at 0x4c (running, not IDLE,
+   no IRQ pending).
+
+### What's working
+
+- AOP FW init passes the early-boot stage (no trap).
+- FW responds to writes at +0x818 (handshake register).
+- FW writes +0x8180 slot-ring (mirrors INBOX with state trailer).
+- CS transitions through expected boot states.
+
+### What's NOT working
+
+- FW never writes to classical OUTBOX (+0x8830 stays 0 forever).
+- FW only drains 1 INBOX msg total, not 9.
+- `OB_CTRL=0xa0001` — bit 19 is set by HW and we can't clear it.
+  Writing 0 to OB_CTRL only clears bit 0 (ENABLE); bits 17 (EMPTY)
+  and 19 (unknown) are HW-controlled.
+- AIC mask/unmask → no effect.
+- AIC_EVENT always reads 0 → AIC isn't queuing events for AP.
+
+### Hypotheses for the OUTBOX problem
+
+1. **DAPF-AOP needed.** We skip dapf_init_all because "hangs on M4
+   dart-mtp". Maybe it's fine for dart-aop specifically. FW may
+   need DAPF allowing the AP-to-AOP-MMIO route opened before it
+   writes OUTBOX. *Can't test: m1n1 wedged when calling
+   dapf_init_all this session.*
+2. **Mailbox protocol is different on ascwrap-v6.** The +0x8180
+   slot ring is 8 slots (INBOX side from FW's view). There may be
+   a parallel 8-slot ring elsewhere that's the real OUTBOX. The
+   classic +0x8830 mailbox might be deprecated on v6.
+3. **Mgmt_SetIOPPower needs different STATE on M4.** We send
+   0x220. Maybe on M4 AOP needs 0x20 or something else.
+
+### Next session
+
+**FIRST: power-cycle** (m1n1 wedged from failed dapf_init_all).
+
+Then try in order:
+1. Run scripts/hv/boot_aop_no_dart.py (now the canonical AOP boot).
+2. Call `p.dapf_init_all()` AFTER the boot but BEFORE any INBOX
+   writes. If it doesn't hang and opens up MMIO, FW may then write
+   OUTBOX.
+3. Scan +0x8100..+0x8900 for FW-written data in 8-slot rings
+   (+0x8180 we know, check +0x8200 again after FW processes
+   handshake — maybe it becomes live with FW's reply ring).
+4. If still stuck: switch to HV tracing macOS. Boot m1n1 into HV
+   with trace config covering 0x390600000..0x390688000 MMIO.
+   Replay macOS's AOP driver init sequence.
+
+### Also disproven this session
+
+- AIC UNMASK (MASK_CLR for AOP IRQs 433-436) → no effect. Definitively
+  AIC is not the blocker; AP has AOP's IRQs masked but FW doesn't
+  care at ASC-internal level.
+
+### Scripts shipped
+
+- scripts/hv/boot_aop_no_dart.py — **canonical AOP boot** going forward.
+- scripts/hv/aop_dart_probe.py — DART-AOP vs DART-MTP diff.
+- scripts/hv/aop_followup_start.py — manual SetIOPPower + poll.
+- scripts/hv/aop_post_send_scan.py — reg scan after sending INBOX.
+- scripts/hv/aop_continue_start.py — AOPClient-based start_ep flow.
+- scripts/hv/aic_unmask.py — verified AIC isn't the doorbell.
+
+### Net
+
+Major breakthrough on the ascwrap-v6 boot protocol. AOP FW is alive
+and executing. MTP probably needs the same treatment (skip
+dart.initialize()); if that's all it takes, keyboard end-to-end is
+within reach.
+
+---
+
 ## 2026-04-21 21:00 — Ubuntu — AIC theory disproven; AOP FW alive but trapped; +0x4400 crypto-like slots found
 
 Inherited Kaden's brief to "knock down Wall A (AIC IRQ masking)". Did
