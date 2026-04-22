@@ -1,48 +1,22 @@
 #!/usr/sbin/dtrace -s
 /*
- * MTP / AppleASCWrapV6 mailbox trace — live-macOS version.
+ * MTP / AppleA7IOP mailbox trace — live-macOS version.
  *
- * Captures the mailbox/doorbell/power-domain primitives that
- * AppleA7IOP + AppleASCWrapV6 invoke during MTP bring-up. Run on
- * M4 macOS 26.3 as:
+ * The ASCWrapV6-specific `_inbox`/`_outbox`/`_triggerFiqNmi`/etc. got
+ * inlined at build time and aren't in the live kernel's fbt provider
+ * (confirmed on macOS 26.3, M4 J604). Their AppleA7IOP-level wrappers
+ * ARE present, so we probe those instead — which gives us nicer
+ * semantic info anyway (which mailbox, read vs write, size, etc.).
  *
- *     sudo dtrace -q -s scripts/macos/trace_mtp_mailbox.d -o mtp.trace
+ * Run as:
+ *     sudo dtrace -q -s /tmp/trace_mtp_mailbox.d -o /tmp/mtp_init.trace
  *
- * Then trigger MTP re-init (sleep/wake usually re-runs AppleA7IOP
- * ::enablePower) to populate the trace, and kill dtrace when done.
+ * Trigger MTP activity (sleep/wake, or just type on the keyboard)
+ * during the run. Ctrl-C or use the exit-after-N-sec pattern to
+ * stop.
  *
- * The output is a time-ordered call log. Feed it to
- * scripts/macos/parse_dtrace_trace.py to emit a Python proxy replay
- * for scripts/hv/boot_mtp_dartmap.py.
- *
- * Probe set:
- *   AppleASCWrapV6::_inbox(void *)              — write 16B to INBOX
- *   AppleASCWrapV6::_outbox(void *)             — read 16B from OUTBOX
- *   AppleASCWrapV6::_triggerFiqNmi()            — doorbell
- *   AppleASCWrapV6::_triggerExtIrqNmi()         — ext doorbell variant
- *   AppleASCWrapV6::_runCPU(bool)               — CPU_CONTROL.RUN
- *   AppleASCWrapV6::_setIORVBAR(uint64_t)       — RVBAR program
- *   AppleASCWrapV6::_mapFirmware(...)           — firmware staging
- *   AppleASCWrapV6::_enableOutbox(bool)         — outbox enable
- *   AppleASCWrapV6::_enableInboxInterrupt(bool)
- *   AppleASCWrapV6::_enableOutboxInterrupt(bool)
- *   AppleASCWrapV6::_disableAllInterrupts()
- *   AppleASCWrapV6::_generateNMI()
- *   AppleASCWrapV6::_getInboxEmpty()            — polled
- *   AppleASCWrapV6::_getInboxFull()
- *   AppleASCWrapV6::_getOutboxEmpty()
- *   AppleASCWrapV6::_isIORVBARLocked()
- *   AppleASCWrapV6::_getKICInboxEnabled()
- *   AppleASCWrapV6::_isIdle(uint32_t *)
- *
- *   AppleA7IOP::start(IOService *)              — driver start (provider)
- *   AppleA7IOP::startCPUWithOptions(fw, opts)   — initial CPU bringup
- *   AppleA7IOP::stopCPU()
- *   AppleA7IOP::_dartMapiBootFirmware(mapper)   — DART init
- *   AppleA7IOP::_dartMapMemoryDescriptor(...)   — DART map
- *   AppleA7IOP::setDoorbellAction(...)          — doorbell handler setup
- *   AppleA7IOP::_inboxHandler(...)              — inbox IRQ handler
- *   AppleA7IOP::_outboxHandler(...)             — outbox IRQ handler
+ * Output: time-ordered mailbox op log. Feed to
+ * scripts/macos/parse_dtrace_trace.py to emit an m1n1-proxy replay.
  */
 
 #pragma D option quiet
@@ -51,218 +25,204 @@
 
 dtrace:::BEGIN
 {
-    printf("# MTP/AppleASCWrapV6 trace starting\n");
-    printf("# ts_ns event\n");
-}
-
-/* ---- AppleASCWrapV6 mailbox primitives ---- */
-
-/*
- * _inbox(this, const void *msg16)
- * Writes 16 bytes at arg1 to the HW inbox mailbox.
- */
-fbt::_ZN14AppleASCWrapV66_inboxEPv:entry
-{
-    printf("[%lld] ASCWrapV6::_inbox this=%p msg=[%016llx %016llx]\n",
-           timestamp, (void *)arg0,
-           *(uint64_t *)arg1, *((uint64_t *)arg1 + 1));
+    printf("# MTP/AppleA7IOP trace starting\n");
 }
 
 /*
- * _outbox(this, void *dst16)
- * Reads 16 bytes from HW outbox into arg1. Log at return so we see
- * the captured value.
+ * AppleA7IOP::postMailbox(mbox_id, data, size, wait) — write.
+ * Dump the first 16 bytes of the message since MTP mailbox
+ * messages are 8 or 16 bytes.
  */
-fbt::_ZN14AppleASCWrapV67_outboxEPv:entry
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP11postMailboxEjPvjb:entry
 {
-    self->outbox_dst = arg1;
-    self->outbox_this = arg0;
-}
-
-fbt::_ZN14AppleASCWrapV67_outboxEPv:return
-/self->outbox_dst != 0/
-{
-    printf("[%lld] ASCWrapV6::_outbox this=%p msg=[%016llx %016llx]\n",
-           timestamp, (void *)self->outbox_this,
-           *(uint64_t *)self->outbox_dst,
-           *((uint64_t *)self->outbox_dst + 1));
-    self->outbox_dst = 0;
-    self->outbox_this = 0;
+    printf("[%llu] A7IOP::postMailbox this=%p mbox=%u size=%u wait=%d\n",
+           timestamp, (void *)arg0, (unsigned)arg1, (unsigned)arg3, (int)arg4);
+    printf("    data=[%016llx %016llx]\n",
+           *(uint64_t *)arg2, *((uint64_t *)arg2 + 1));
 }
 
 /*
- * Doorbell variants.
+ * AppleA7IOP::getMailbox(mbox_id, buf, wait) — read. Dump on return
+ * so we see the captured value.
  */
-fbt::_ZN14AppleASCWrapV614_triggerFiqNmiEv:entry
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP10getMailboxEjPvb:entry
 {
-    printf("[%lld] ASCWrapV6::_triggerFiqNmi this=%p\n",
-           timestamp, (void *)arg0);
+    self->getm_this = arg0;
+    self->getm_mbox = arg1;
+    self->getm_buf  = arg2;
 }
 
-fbt::_ZN14AppleASCWrapV617_triggerExtIrqNmiEv:entry
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP10getMailboxEjPvb:return
+/self->getm_buf != 0/
 {
-    printf("[%lld] ASCWrapV6::_triggerExtIrqNmi this=%p\n",
-           timestamp, (void *)arg0);
-}
-
-fbt::_ZN14AppleASCWrapV612_generateNMIEv:entry
-{
-    printf("[%lld] ASCWrapV6::_generateNMI this=%p\n",
-           timestamp, (void *)arg0);
+    printf("[%llu] A7IOP::getMailbox this=%p mbox=%u -> [%016llx %016llx]\n",
+           timestamp, (void *)self->getm_this, (unsigned)self->getm_mbox,
+           *(uint64_t *)self->getm_buf,
+           *((uint64_t *)self->getm_buf + 1));
+    self->getm_this = 0;
+    self->getm_mbox = 0;
+    self->getm_buf  = 0;
 }
 
 /*
- * CPU control (RUN bit, RVBAR, firmware mapping).
+ * AppleA7IOP::getMailboxBulk(buf, &size) — bulk read.
  */
-fbt::_ZN14AppleASCWrapV67_runCPUEb:entry
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP14getMailboxBulkEPvPj:entry
 {
-    printf("[%lld] ASCWrapV6::_runCPU this=%p enable=%d\n",
+    self->gb_this = arg0;
+    self->gb_buf  = arg1;
+    self->gb_size = arg2;
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP14getMailboxBulkEPvPj:return
+/self->gb_buf != 0/
+{
+    printf("[%llu] A7IOP::getMailboxBulk this=%p size=%u [%016llx %016llx]\n",
+           timestamp, (void *)self->gb_this,
+           *(uint32_t *)self->gb_size,
+           *(uint64_t *)self->gb_buf,
+           *((uint64_t *)self->gb_buf + 1));
+    self->gb_this = 0;
+    self->gb_buf  = 0;
+    self->gb_size = 0;
+}
+
+/*
+ * Doorbell, polling wait, interrupt gating.
+ */
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP12ringDoorbellEj:entry
+{
+    printf("[%llu] A7IOP::ringDoorbell this=%p mbox=%u\n",
+           timestamp, (void *)arg0, (unsigned)arg1);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP14waitForMailboxEj:entry
+{
+    printf("[%llu] A7IOP::waitForMailbox this=%p mbox=%u\n",
+           timestamp, (void *)arg0, (unsigned)arg1);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP23enableMailboxInterruptsEb:entry
+{
+    printf("[%llu] A7IOP::enableMailboxInterrupts this=%p enable=%d\n",
            timestamp, (void *)arg0, (int)arg1);
 }
 
-fbt::_ZN14AppleASCWrapV611_setIORVBAREy:entry
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP17setDoorbellActionEPFvP8OSObjectPvjES1_S2_j:entry
 {
-    printf("[%lld] ASCWrapV6::_setIORVBAR this=%p rvbar=0x%llx\n",
-           timestamp, (void *)arg0, arg1);
-}
-
-fbt::_ZN14AppleASCWrapV612_mapFirmwareEyP18IOMemoryDescriptorj:entry
-{
-    printf("[%lld] ASCWrapV6::_mapFirmware this=%p addr=0x%llx md=%p flags=0x%x\n",
-           timestamp, (void *)arg0, arg1, (void *)arg2, (unsigned int)arg3);
-}
-
-fbt::_ZN14AppleASCWrapV614_unmapFirmwareEv:entry
-{
-    printf("[%lld] ASCWrapV6::_unmapFirmware this=%p\n",
-           timestamp, (void *)arg0);
-}
-
-/*
- * Interrupt plumbing.
- */
-fbt::_ZN14AppleASCWrapV613_enableOutboxEb:entry
-{
-    printf("[%lld] ASCWrapV6::_enableOutbox this=%p enable=%d\n",
-           timestamp, (void *)arg0, (int)arg1);
-}
-
-fbt::_ZN14AppleASCWrapV621_enableInboxInterruptEb:entry
-{
-    printf("[%lld] ASCWrapV6::_enableInboxInterrupt this=%p enable=%d\n",
-           timestamp, (void *)arg0, (int)arg1);
-}
-
-fbt::_ZN14AppleASCWrapV622_enableOutboxInterruptEb:entry
-{
-    printf("[%lld] ASCWrapV6::_enableOutboxInterrupt this=%p enable=%d\n",
-           timestamp, (void *)arg0, (int)arg1);
-}
-
-fbt::_ZN14AppleASCWrapV621_disableAllInterruptsEv:entry
-{
-    printf("[%lld] ASCWrapV6::_disableAllInterrupts this=%p\n",
-           timestamp, (void *)arg0);
-}
-
-/*
- * Status polls (noisy but tell us the polling pattern).
- */
-fbt::_ZN14AppleASCWrapV614_getInboxEmptyEv:return
-{
-    printf("[%lld] ASCWrapV6::_getInboxEmpty -> %d\n",
-           timestamp, (int)arg1);
-}
-
-fbt::_ZN14AppleASCWrapV613_getInboxFullEv:return
-{
-    printf("[%lld] ASCWrapV6::_getInboxFull -> %d\n",
-           timestamp, (int)arg1);
-}
-
-fbt::_ZN14AppleASCWrapV615_getOutboxEmptyEv:return
-{
-    printf("[%lld] ASCWrapV6::_getOutboxEmpty -> %d\n",
-           timestamp, (int)arg1);
-}
-
-fbt::_ZN14AppleASCWrapV616_isIORVBARLockedEv:return
-{
-    printf("[%lld] ASCWrapV6::_isIORVBARLocked -> %d\n",
-           timestamp, (int)arg1);
-}
-
-fbt::_ZN14AppleASCWrapV619_getKICInboxEnabledEv:return
-{
-    printf("[%lld] ASCWrapV6::_getKICInboxEnabled -> %d\n",
-           timestamp, (int)arg1);
-}
-
-fbt::_ZN14AppleASCWrapV67_isIdleEPj:return
-{
-    printf("[%lld] ASCWrapV6::_isIdle -> %d\n",
-           timestamp, (int)arg1);
-}
-
-/* ---- AppleA7IOP high-level flow ---- */
-
-fbt::_ZN10AppleA7IOP5startEP9IOService:entry
-{
-    printf("[%lld] AppleA7IOP::start this=%p provider=%p\n",
-           timestamp, (void *)arg0, (void *)arg1);
-}
-
-fbt::_ZN10AppleA7IOP5startEP9IOService:return
-{
-    printf("[%lld] AppleA7IOP::start -> %d\n", timestamp, (int)arg1);
-}
-
-fbt::_ZN10AppleA7IOP19startCPUWithOptionsEP15IOSlaveFirmwarej:entry
-{
-    printf("[%lld] AppleA7IOP::startCPUWithOptions this=%p fw=%p opts=0x%x\n",
-           timestamp, (void *)arg0, (void *)arg1, (unsigned int)arg2);
-}
-
-fbt::_ZN10AppleA7IOP7stopCPUEv:entry
-{
-    printf("[%lld] AppleA7IOP::stopCPU this=%p\n",
-           timestamp, (void *)arg0);
-}
-
-fbt::_ZN10AppleA7IOP21_dartMapiBootFirmwareEP8IOMapper:entry
-{
-    printf("[%lld] AppleA7IOP::_dartMapiBootFirmware this=%p mapper=%p\n",
-           timestamp, (void *)arg0, (void *)arg1);
-}
-
-fbt::_ZN10AppleA7IOP24_dartMapMemoryDescriptorEP8IOMapperP18IOMemoryDescriptorPy:entry
-{
-    printf("[%lld] AppleA7IOP::_dartMapMemoryDescriptor this=%p mapper=%p md=%p\n",
+    printf("[%llu] A7IOP::setDoorbellAction this=%p action=%p ctx=%p\n",
            timestamp, (void *)arg0, (void *)arg1, (void *)arg2);
 }
 
-fbt::_ZN10AppleA7IOP17setDoorbellActionEPFvP8OSObjectPvjES1_S2_j:entry
+/*
+ * Start / stop / power.
+ */
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP5startEP9IOService:entry
 {
-    printf("[%lld] AppleA7IOP::setDoorbellAction this=%p\n",
-           timestamp, (void *)arg0);
+    printf("[%llu] A7IOP::start this=%p provider=%p\n",
+           timestamp, (void *)arg0, (void *)arg1);
 }
 
-fbt::_ZN10AppleA7IOP13_inboxHandlerEP22IOInterruptEventSource:entry
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP5startEP9IOService:return
 {
-    printf("[%lld] AppleA7IOP::_inboxHandler this=%p\n",
-           timestamp, (void *)arg0);
+    printf("[%llu] A7IOP::start -> %d\n", timestamp, (int)arg1);
 }
 
-fbt::_ZN10AppleA7IOP14_outboxHandlerEP22IOInterruptEventSource:entry
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP11enablePowerEv:entry
 {
-    printf("[%lld] AppleA7IOP::_outboxHandler this=%p\n",
-           timestamp, (void *)arg0);
+    printf("[%llu] A7IOP::enablePower this=%p\n", timestamp, (void *)arg0);
 }
 
-fbt::_ZN10AppleA7IOP4_regEj:entry
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP11enablePowerEv:return
 {
-    printf("[%lld] AppleA7IOP::_reg this=%p off=0x%x\n",
-           timestamp, (void *)arg0, (unsigned int)arg1);
+    printf("[%llu] A7IOP::enablePower -> %d\n", timestamp, (int)arg1);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP13_disablePowerEv:entry
+{
+    printf("[%llu] A7IOP::_disablePower this=%p\n", timestamp, (void *)arg0);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP16disablePowerLateEv:entry
+{
+    printf("[%llu] A7IOP::disablePowerLate this=%p\n", timestamp, (void *)arg0);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP19startCPUWithOptionsEP15IOSlaveFirmwarej:entry
+{
+    printf("[%llu] A7IOP::startCPUWithOptions this=%p fw=%p opts=0x%x\n",
+           timestamp, (void *)arg0, (void *)arg1, (unsigned)arg2);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP7stopCPUEb:entry
+{
+    printf("[%llu] A7IOP::stopCPU this=%p force=%d\n",
+           timestamp, (void *)arg0, (int)arg1);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP7_runCPUEb:entry
+{
+    printf("[%llu] A7IOP::_runCPU this=%p enable=%d\n",
+           timestamp, (void *)arg0, (int)arg1);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP12_generateNMIEv:entry
+{
+    printf("[%llu] A7IOP::_generateNMI this=%p\n", timestamp, (void *)arg0);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP16_syncIOPTimebaseEv:entry
+{
+    printf("[%llu] A7IOP::_syncIOPTimebase this=%p\n", timestamp, (void *)arg0);
+}
+
+/*
+ * Firmware mapping.
+ */
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP12_mapFirmwareEyP18IOMemoryDescriptorj:entry
+{
+    printf("[%llu] A7IOP::_mapFirmware this=%p addr=0x%llx md=%p flags=0x%x\n",
+           timestamp, (void *)arg0, arg1, (void *)arg2, (unsigned)arg3);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP14_unmapFirmwareEv:entry
+{
+    printf("[%llu] A7IOP::_unmapFirmware this=%p\n", timestamp, (void *)arg0);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP21_dartMapiBootFirmwareEP8IOMapper:entry
+{
+    printf("[%llu] A7IOP::_dartMapiBootFirmware this=%p mapper=%p\n",
+           timestamp, (void *)arg0, (void *)arg1);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP24_dartMapMemoryDescriptorEP8IOMapperP18IOMemoryDescriptorPy:entry
+{
+    printf("[%llu] A7IOP::_dartMapMemoryDescriptor this=%p mapper=%p md=%p\n",
+           timestamp, (void *)arg0, (void *)arg1, (void *)arg2);
+}
+
+/*
+ * IRQ handlers.
+ */
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP13_inboxHandlerEP22IOInterruptEventSource:entry
+{
+    printf("[%llu] A7IOP::_inboxHandler this=%p\n", timestamp, (void *)arg0);
+}
+
+fbt:com.apple.driver.AppleA7IOP:_ZN10AppleA7IOP14_outboxHandlerEP22IOInterruptEventSource:entry
+{
+    printf("[%llu] A7IOP::_outboxHandler this=%p\n", timestamp, (void *)arg0);
+}
+
+/*
+ * ASCWrapV6-level probes that DID survive inlining. These give us
+ * the MTP-specific (vs SMC-specific) override points.
+ */
+fbt:com.apple.driver.AppleA7IOP-ASCWrap-v6:_ZN14AppleASCWrapV6*:entry
+{
+    printf("[%llu] ASCWrapV6 enter func=%s this=%p arg1=%llx\n",
+           timestamp, probefunc, (void *)arg0, arg1);
 }
 
 dtrace:::END

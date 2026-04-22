@@ -615,6 +615,163 @@ Kaden-on-macOS work** if nothing surprises us. The HV-trace path
 would have been **1-2 weeks of solo Ubuntu-Claude work** to clear
 the PAC/fixup wall with unclear payoff. Big win on cost.
 
+---
+
+## 2026-04-22 11:25 — Ubuntu — dtrace ran on live M4, found the AOP→MTP dependency
+
+Kaden booted macOS with SIP relaxed, gave SSH + sudo password, I ran
+dtrace remotely. First real signal.
+
+### DTrace probe set correction
+
+The `AppleASCWrapV6::_inbox`/`_outbox`/`_triggerFiqNmi`/etc. we listed
+in the original `.d` script got inlined at build time — `dtrace -ln
+'fbt::_ZN14AppleASCWrapV6*:entry'` on the live kernel doesn't show
+them. The AppleA7IOP-level wrappers are all there:
+
+- `AppleA7IOP::postMailbox(mbox, data, size, wait)`
+- `AppleA7IOP::getMailbox(mbox, buf, wait)`
+- `AppleA7IOP::getMailboxBulk(buf, &size)`
+- `AppleA7IOP::ringDoorbell(mbox)`
+- `AppleA7IOP::waitForMailbox(mbox)`
+- `AppleA7IOP::enablePower()` / `_disablePower()` / `disablePowerLate()`
+- `AppleA7IOP::start(provider)`
+- `AppleA7IOP::startCPUWithOptions(fw, opts)`
+- `AppleA7IOP::_runCPU(bool)` / `_generateNMI()`
+- `AppleA7IOP::_mapFirmware` / `_unmapFirmware` / `_dartMapi*`
+- `AppleA7IOP::_inboxHandler` / `_outboxHandler`
+
+Rewrote `scripts/macos/trace_mtp_mailbox.d` to probe those instead.
+
+### Steady-state trace: 137 MB, mostly GPU/DCP
+
+Captured 30 s of steady-state. 1.4 M events, 119 MB. Top callers
+identified via `stack(3)` in dtrace:
+
+- `fffffe1888086000` (300 k events)  → `AGXFirmwareKextG16GRTBuddy` — **GPU**
+- `fffffe188807e000` ( 52 k events) → `IOMobileGraphicsFamily-DCP` — **DCP**
+- `fffffe1888087200` ( 28 k events) → also `IOMobileGraphicsFamily-DCP` — **DCPEXT**
+- Others less trafficked
+
+**Zero events from MTP** in steady-state. That makes sense: MTP only
+uses its mgmt mailbox during the initial Hello handshake, then HID
+data flows through the separate DockChannel MMIO region. Capturing
+MTP's mailbox work requires re-init, not keyboard typing.
+
+### Boot log was what we needed
+
+`log show --last 2h` exposed the entire MTP boot trajectory. Key
+excerpt (abridged):
+
+```
+41.649 RTBuddy(AOP): start
+41.688 [com.apple.rtbuddy.AOP:RTBuddyFirmware] Resuming...
+41.696 AOP os log initialized              ← AOP FW is Helloing here
+41.697 AOP platform dram client initialized cadence=500000 us
+41.700 PDMDev<pdm0> LPClkCfg=Src:pll ,Freq:2400000
+41.700 PDMDev<pdm0> off ->xi0 , 0->2400000 AP state 1
+41.705 BMI286::probe -- Found device with ID: MfgID: 0xe4, ChipID: 0x10
+41.722 MA781::probe -- Found device with ID: 0x87
+41.726 RTBuddy(MTP): start                  ← MTP driver start BEGINS
+41.732 TMP118::probe -- Found device with ID: 0x1114
+41.737 [com.apple.rtbuddy.MTP:RTBuddyFirmware] Resuming... ← AP kicks MTP
+41.741 MTP Says Hello                       ← MTP FW responds (4 ms later)
+41.741 Version: AppleMTPFirmwareMac-5330.61.16~31
+41.741 Personality: MTP_SYS
+41.746 Initializing comm interface <2- "keyboard">
+```
+
+### The story
+
+AOP is up and fully running (`dram client initialized`, PDM clock
+config applied, sensor probes succeeding) **before** MTP's
+`RTBuddyFirmware Resuming...` fires. The Resuming step is the AP
+sending `SetIOPPower(0x220)` to MTP's mgmt mailbox, which is what
+tells the already-reset MTP firmware to start running. Four
+milliseconds later, MTP's firmware has done its own init and sends
+Hello.
+
+In our raw-proxy attempts, we sent that same `SetIOPPower(0x220)` to
+MTP — but without AOP running first. MTP firmware was reset by
+iBoot, observed our AP mailbox writes (CS counter advanced), but
+**never Hello'd**.
+
+The prior journal entries already ruled out: mailbox layout wrong
+(addresses confirmed via kext disasm), doorbell wrong, DART setup
+wrong. Those are all correct. The missing piece wasn't on the
+MTP-side at all — it was that **MTP firmware refuses to Hello until
+AOP firmware is actively running** (likely because MTP reads shared
+state from AOP's DRAM region, needs AOP's sensor data, or gets
+power-gated through AOP's PDM).
+
+### The test
+
+Update `scripts/hv/boot_mtp_dartmap.py` (or write a new wrapper) to
+boot AOP **first** via the same `mgmt.start()` + `SetIOPPower(0x220)`
+flow, wait for AOP to Hello, then try MTP. AOP is the same
+`iop,ascwrap-v6` driver as MTP, so the exact same boot primitives
+should work. We have all the pieces: extracted `AppleASCWrapV6`
+kext disasm, verified mailbox offsets, verified doorbell sequence.
+
+If this works, the MTP HID plumbing we already have in
+`batos_hv_interactive.py :: _mtp_kbd_probe` takes over and the
+internal keyboard comes alive.
+
+### Why we haven't tried this already
+
+Looking back at the prior session's "AOP: exhausted proxy-side
+avenues" commit, AOP itself was tried but never Hellos. Same
+symptoms as MTP. So AOP is also gated — possibly by PMP (Power
+Management Processor), which boots BEFORE AOP in the log:
+
+```
+41.657 RTBuddy(PMP): start
+41.708 [com.apple.rtbuddy.PMP:RTBuddyFirmware] Resuming...
+41.688 [com.apple.rtbuddy.AOP:RTBuddyFirmware] Resuming...   (BEFORE PMP finishes resume)
+```
+
+Actually AOP Resuming comes BEFORE PMP Resuming. So PMP isn't a
+prereq for AOP — they boot in parallel. The order SMC→AOP→MTP/GPU
+is what the log shows, and SMC Hellos first.
+
+So the real chain is probably:
+```
+SMC (standalone) → Hellos
+AOP (needs SMC? or iBoot-preconditions from a power rail)
+MTP (needs AOP)
+GFX, DCP, DCPEXT (need DCP)
+```
+
+Our raw-proxy has:
+- SMC ✓ Hellos
+- AOP ✗ never Hellos (even though SMC is running when we try)
+- MTP ✗ never Hellos
+
+So AOP's blocker is something neither SMC nor our proxy provides.
+Possible: iBoot writes a specific magic word into a PMGR register
+(voltage/clock rail) that AOP firmware checks before Hello. Or AOP
+FW reads from shared DRAM that macOS populates. Or SEP token
+needed.
+
+Archive: `macos_dump/dtrace_traces/mtp_boot_sequence_20260422.txt`
+and `macos_dump/dtrace_traces/mtp_init_only_20260422.txt`.
+
+### Next concrete step
+
+Need to find what AOP is missing. The dtrace approach can still help:
+trace `AppleA7IOP::start` on AOP specifically, along with `enablePower`,
+at **cold boot** (not warm). macOS 26.3 dtrace supports
+`dtrace -A -s script.d` to install probes that auto-start at next
+kernel boot — captures from the very first second.
+
+Cold-boot anonymous dtrace script is the next deliverable. Kaden
+will need to full-shutdown the Mac once more, let it cold-boot into
+macOS with tracing armed, then dump post-boot.
+
+Steady-state trace is archived at
+`macos_dump/dtrace_traces/mtp_steady_20260422.trace.gz` (8.1 MB gz,
+132 MB raw) in case future analysis needs it.
+
 ### Wrapper state
 
 `scripts/hv/boot_macos_mtp_trace.py` is solid — HV init, load, trace
