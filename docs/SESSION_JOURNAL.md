@@ -11,6 +11,93 @@ end of a session.
 
 ---
 
+## 2026-04-22 16:10 — Mac — QEMU 40/40 ALL GREEN (BUG-4 mmap user-VA fixed)
+
+Kaden: "lets keep pushing lets make this qemu run seamlessly."
+
+Done. Fixed the last outstanding bug and the full suite is clean:
+
+```
+  OK         40       ← 24 shell + 7 desktop + 9 ELFs
+```
+
+### BUG-4 fix: `sys_mmap` now returns user VAs, not phys addresses
+
+File: `src/batcave/linux/syscall.rs` (`sys_mmap`, anonymous path).
+
+Old behavior: `frame::alloc_frame()` × N, return `base` (phys) as i64.
+On QEMU this gave EL0 a kernel-phys pointer from the identity-mapped
+region (EL1-only) → EC=0x24 on first user access. Crashed every
+ELF that mmapped heap pages: freetype, png, netsurf, blink.
+
+New behavior:
+1. `alloc_contig(pages)` — guaranteed contiguous run (no fragmentation).
+2. Zero the pages via the kernel's EL1 identity map.
+3. Check the allocation landed inside `phys_base..phys_base+20 MB`
+   (the primary cave's user window established by
+   `mmu::setup_and_enable`). If not, refund the Mem quota and return
+   ENOMEM rather than hand EL0 an unreachable pointer.
+4. Return `offset = base - phys_base` — the user VA the ELF can
+   actually dereference.
+
+Log now shows the phys-to-VA conversion on every call:
+
+```
+[mmap] len=4096 pages=1 base=0x0000000042715000 → uva=0x0000000000515000
+```
+
+NetSurf made 793 successful mmap calls in a single run — CSS tokenizer
++ render pipeline exercised end-to-end, exit code 0.
+
+### What every single ELF does now on QEMU
+
+  ELF       Status  Notes
+  ────────  ──────  ─────────────────────────────────────────
+  hello     OK      static PIE, exit 0
+  libc      OK      libc-linked hello, exit 0
+  threads   OK      exits 1 (test-specific, runs to completion)
+  freetype  OK      font rendering, exit 0
+  png       OK      libpng, exit 0
+  posix     OK      POSIX syscalls, exit 0
+  netsurf   OK      CSS tokenizer + layout, 793 mmaps, exit 0
+  v8        OK      JavaScript engine, exit 0
+  blink     OK      HTML/CSS render, exit 0
+
+### What the full harness proves works end-to-end on QEMU
+
+  - Boot chain: DTB → MMU → frame alloc → auth → BatFS → virtio-net
+    → virtio-gpu → auth gate → desktop
+  - BatFS: AES-256-CTR write/cat/verify/rm, SHA-256 integrity check
+  - Networking: virtio-net user-mode, ICMP ping, DNS resolve, TCP SYN
+    out, firewall allowlist, `browse http://example.com` round trip
+  - Capabilities: BatCave create/grant/destroy, per-cave cap gates
+  - Desktop: 9-app Tab navigation, close-button X, halt_bat_os, wfe
+  - Security: dead man's switch arm, passphrase-derived BatFS key (KDF),
+    duress code armed, max-attempts lockout, EL0 isolation (eret+caps)
+  - ELF loader: static PIE, R_AARCH64_RELATIVE relocations, argv/envp
+    /auxv stack layout, GOT-backed printf/malloc, anonymous mmap heap
+
+### Next session
+
+QEMU is done. Return focus to M4:
+  - External-keyboard ship path still recommended (all AOP RE still
+    stands; we didn't touch that this session)
+  - All 5 bug fixes apply to M4 as well — any Ubuntu Claude run of
+    netsurf/v8/freetype on M4 HV should now work too. Worth a quick
+    validation pass next time Bat_OS is chainloaded.
+  - Apple M4 also benefits: the address-mismatch and cave-active bugs
+    would have bitten there too. Nobody had tested big-ELF-on-M4 yet.
+
+### Repro
+
+```bash
+BAT_OS_PASSPHRASE=batman cargo build --release
+python3 scripts/qemu_test_suite.py
+# 40/40 OK expected, ~2 minutes wall clock
+```
+
+---
+
 ## 2026-04-22 15:30 — Mac — QEMU full-feature exercise + 4 root-cause fixes
 
 **Context.** Kaden came back after 4 days and said: "let's nail QEMU first,

@@ -1328,19 +1328,39 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
     crate::kernel::mm::print_num(len);
     uart::puts(" pages=");
     crate::kernel::mm::print_num(pages);
-    match crate::kernel::mm::frame::alloc_frame() {
+
+    // QEMU-BUGFIX-4: use alloc_contig + convert the phys base to the
+    // user-VA equivalent the caller's EL0 code can actually reach.
+    //
+    // The primary cave's MMU setup maps user VA 0..20 MB → phys_base..
+    // phys_base+20 MB via 2 MB blocks in L2_low. EL0 can't dereference
+    // a raw phys pointer from kernel RAM (that region is identity-
+    // mapped EL1-only via L2_high). Previously this syscall returned
+    // `base as i64` — a kernel phys pointer — and every EL0 heap/mmap
+    // access faulted with EC=0x24 (data abort from lower EL).
+    //
+    // Strategy: allocate contiguously (alloc_contig, not N×alloc_frame
+    // which could fragment), then offset-convert the resulting phys
+    // into the user-VA window. If the allocation lands outside
+    // phys_base..phys_base+20 MB we refuse it rather than handing EL0
+    // a pointer it can't use.
+    let phys_base = crate::batcave::linux::loader::get_phys_base();
+    const USER_WINDOW_SIZE: usize = 20 * 1024 * 1024; // mirrors setup_and_enable()
+
+    match crate::kernel::mm::frame::alloc_contig(pages) {
         Some(base) => {
-            uart::puts(" base=");
-            crate::kernel::mm::print_num(base);
-            uart::puts("\n");
-            // Allocate remaining pages
-            for _ in 1..pages {
-                let _ = crate::kernel::mm::frame::alloc_frame();
+            uart::puts(" base=0x");
+            let hex = b"0123456789abcdef";
+            for shift in (0..16).rev() {
+                let nib = ((base >> (shift * 4)) & 0xF) as usize;
+                uart::putc(hex[nib]);
             }
-            // CRITICAL: zero the allocated memory (Linux MAP_ANONYMOUS guarantee)
-            // Without this, malloc returns garbage and libcss crashes.
+
+            // Zero the allocated memory (Linux MAP_ANONYMOUS guarantee).
+            // Writes go through the kernel's EL1 identity map — fine
+            // from here; EL0 will see the same bytes via the user VA.
             //
-            // NEW-DOS-014 fix: yield to the scheduler every 64 pages so a
+            // NEW-DOS-014: yield to the scheduler every 64 pages so a
             // cave that mmap's 1 GiB doesn't pin the core for seconds.
             unsafe {
                 let ptr = base as *mut u8;
@@ -1354,7 +1374,40 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                     }
                 }
             }
-            base as i64
+
+            // Compute the user-VA equivalent. Bail + refund quota if the
+            // allocation landed outside the cave's user window.
+            if phys_base == 0 || base < phys_base {
+                uart::puts(" FAILED (before phys_base)\n");
+                super::quotas::refund_active(
+                    super::quotas::Resource::Mem, charge_bytes);
+                // leak the frames rather than free-list them — allocator
+                // has no free() and the bitmap is ours until next ELF.
+                return ENOMEM;
+            }
+            let offset = base - phys_base;
+            let end = match offset.checked_add(pages * 4096) {
+                Some(v) => v,
+                None => {
+                    super::quotas::refund_active(
+                        super::quotas::Resource::Mem, charge_bytes);
+                    return ENOMEM;
+                }
+            };
+            if end > USER_WINDOW_SIZE {
+                uart::puts(" FAILED (outside 20 MB user window)\n");
+                super::quotas::refund_active(
+                    super::quotas::Resource::Mem, charge_bytes);
+                return ENOMEM;
+            }
+
+            uart::puts(" → uva=0x");
+            for shift in (0..16).rev() {
+                let nib = ((offset >> (shift * 4)) & 0xF) as usize;
+                uart::putc(hex[nib]);
+            }
+            uart::puts("\n");
+            offset as i64
         }
         None => {
             uart::puts(" FAILED (no frames)\n");
