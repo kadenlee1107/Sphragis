@@ -233,6 +233,133 @@ Neither is a path forward without a way past the PAC wall.
    when Asahi or someone else cracks M4 AOP, the answer slots
    in and we flip over quickly.
 
+---
+
+## 2026-04-22 13:00 — Ubuntu — AOP bring-up followup: PAC debunked, stall diagnosed
+
+### Kaden said "there has to be a way" — went 6 more rounds
+
+**Disasm corrections that flip the hypothesis landscape:**
+
+- Earlier session thought AOP used PAC keys iBoot set. WRONG.
+  Disasm at 0x109ad04-0x109ad54 shows FW reads a static seed from
+  `__DATA+0x498` and sets all 5 PAC keys (`msr apiakeylo_el1, ...`
+  etc.) during kernel init. FW does NOT depend on iBoot's keys.
+  The blob self-contains its PAC state.
+
+- FW has THREE VBAR values during boot:
+    0x1000274: VBAR=0x1000000 (boot entry, SP0 vectors trap/spin)
+    0x10005e4: VBAR=0x1001000 (post-setup, also mostly trap/spin)
+    0x109adc0: VBAR=0x1001800 ← RUNTIME table with REAL handlers
+  Real SP0 IRQ vector at 0x1001880: `b #0x1002008` (IRQ dispatcher
+  with full register save + PAC-GA + `blraaz` to EP handler table).
+  Real SP0 FIQ vector at 0x1001900: `b #0x1001da4` (PANIC handler).
+
+- **The doorbell (+0x1004=0x10, +0x1014=1) fires FIQ-NMI which
+  routes to the panic handler**. That's why FW "took" the FIQ but
+  never processed mailbox. Don't ring doorbell for normal flow.
+
+### Follow-up experiment matrix (v11-v16)
+
+ v#   config                                     outcome
+ ───  ─────────────────────────────────────────  ────────────────────
+ v11  stage+bootargs + write64 + no doorbell     same stall (CS=0x48
+                                                  IB=0x100101 held)
+ v12  stage+bootargs + RUN, no INBOX             Mac crash ~50 ms
+                                                  (FW watchdog)
+ v13  same as v11 + no pre-RUN OB_CTRL reset     same stall
+ v14  _l4 firmware variant                       SError on __TEXT
+                                                  write (wrong size)
+ v15  stage + NO bootargs update + write64       same stall
+ v16  m1n1 AOPClient.start() — exact SMC path    ASCTimeout, same
+                                                  stall state
+
+### The 64-bit vs 32-bit mailbox theory was wrong
+
+Pre-v11 I suspected our 4x write32 per message pair was malforming
+the FIFO push; should have been 2x write64 like m1n1's RegMap
+StandardASC uses. v11 confirmed: IB_CTRL = 0x100101 is identical
+with either width. HW accepts both, FW sees the same msg, stalls
+identically.
+
+### What we know for certain
+
+- Infrastructure is correct: v16 uses m1n1's AOPClient.start()
+  which is literally the exact Python code path that SMC Hellos
+  through in v8. Same INBOX writes, same mgmt.start() → send
+  SetIOPPower(0x220), same timing. **SMC responds; AOP does not.**
+- FW DOES receive the message: IDLE bit clears on INBOX write,
+  FIFOCNT increments correctly, WPTR advances.
+- FW does NOT drain the message: RPTR never advances; OUTBOX
+  stays EMPTY for 15+ seconds.
+- FW does NOT panic/reset in this state either — it stays in a
+  steady IDLE=0 loop, indefinitely.
+- Starting FW without an INBOX write within ~50 ms of RUN=1
+  (v10, v12) crashes the SoC — FW has an internal watchdog that
+  expects AP to send SetIOPPower promptly after RUN.
+
+### The genuine diagnosis
+
+AOP FW on M4 reaches its main loop after boot (proven by IDLE=1
+post-RUN = WFI state). When AP writes INBOX, HW notifies FW (IDLE
+clears = WFI wakes). FW's IRQ handler at 0x1002008 is architected
+correctly (full register save, PAC-GA auth check, dispatch via
+`blraaz` through a function pointer table). But the dispatch
+**does not reach the mailbox EP handler** — either the table
+isn't populated for EP=0 (mgmt), or FW's mailbox IRQ source isn't
+registered with the AIC correctly on this boot path.
+
+This is firmware-internal-state territory — we've verified every
+single external signal we can manipulate (CC, INBOX, OB_CTRL,
+bootargs, FW staging, DART preservation, DAPF init) does the same
+thing as SMC.
+
+### Why SMC works and AOP doesn't
+
+SMC was started by iBoot and has been running continuously. Its
+IRQ handler registration, AIC routing, DART streams, and internal
+state are all set up correctly because FW did its full init when
+iBoot let it.
+
+AOP was halted by iBoot. We wake it with RUN=1. FW boots from
+entry but something in its init PATH doesn't complete the same
+way it would have from iBoot. Specifically, the mailbox-IRQ
+registration that would normally be triggered by a specific
+sequence iBoot performs is missing.
+
+**The missing piece is whatever iBoot does to SMC that it doesn't
+do to AOP, or a specific boot-order dependency AOP has that SMC
+doesn't.** Candidates: PMP FW must be up first (but live boot log
+shows PMP Resumes AFTER AOP's OS log init, so maybe not), or AOP
+needs a specific ADT property / bootargs key we haven't set, or
+it needs a clock/power configuration beyond what `pmgr_adt_power_
+enable` handles (AOP's clock-gates property is empty).
+
+### Artifacts
+
+- scripts/hv/probe_aop_pmgr_v11.py  — 64-bit INBOX writes
+- scripts/hv/probe_aop_pmgr_v12.py  — RUN only (Mac crashes)
+- scripts/hv/probe_aop_pmgr_v13.py  — no OB_CTRL pre-reset
+- scripts/hv/probe_aop_pmgr_v14.py  — _l4 firmware (wrong size)
+- scripts/hv/probe_aop_pmgr_v15.py  — no bootargs update
+- scripts/hv/probe_aop_pmgr_v16.py  — m1n1 AOPClient.start()
+- logs/aop-v{11..16}-*.log          — observations
+
+### Next session — concrete leads
+
+1. **Anonymous-boot dtrace on macOS**: arm dtrace at very early
+   boot to capture the full sequence of postMailbox calls macOS
+   makes during AOP's first few ms after RUN=1. Compare to what
+   we're doing.
+2. **Boot PMP first, then AOP**: mirror of v8 but with PMP
+   instead of SMC. Might be a prereq we missed.
+3. **Try a non-Mgmt EP first msg**: EP=1 (crash log?), or any
+   non-zero EP. Maybe AOP's FW only enables EP=0 after receiving
+   a prerequisite msg on another EP.
+4. **Dump __DATA+0x498 region before/after** to confirm PAC seed
+   location + what other config values live nearby (might be
+   pointers to DRAM regions AOP expects populated).
+
 ### Status
 
 **Mac is alive and in stock m1n1** (bcee7f2) — no power-cycle needed.
