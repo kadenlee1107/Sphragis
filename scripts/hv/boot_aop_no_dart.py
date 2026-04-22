@@ -198,6 +198,18 @@ def main():
         log(f"bootargs err: {e!r}")
         os._exit(1)
 
+    # Targeted dapf_init for /arm-io/dart-aop ONLY (skip dart-mtp which
+    # hangs on M4). This must happen BEFORE RUN=1 per aop_als.py reference.
+    log("calling dapf_init('/arm-io/dart-aop')...")
+    saved = iface.dev.timeout
+    iface.dev.timeout = 10
+    try:
+        rc = p.dapf_init("/arm-io/dart-aop")
+        log(f"  dapf_init rc={rc}")
+    except Exception as e:
+        log(f"  dapf_init FAIL: {type(e).__name__}: {e}")
+    iface.dev.timeout = saved
+
     # Reset OUTBOX_CTRL (per aop_als.py reference)
     p.write32(AOP + 0x8114, 0x20001)
 
