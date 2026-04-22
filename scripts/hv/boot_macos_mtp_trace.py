@@ -118,18 +118,103 @@ def main() -> int:
     # else: self.tba.cmdline carries whatever iBoot passed to m1n1 — for a
     # Mac that boots macOS normally that's already the right thing.
 
+    # Dump EL1 sysregs automatically on guest fault. The HV's existing
+    # context dump (from handle_exception) shows us the FINAL state
+    # where XNU was running when it bounced to EL2 — but if XNU took an
+    # EL1-internal sync exception and then faulted again trying to
+    # vector through VBAR_EL1, that dump tells us nothing about the
+    # ORIGINAL fault. The EL12-aliased registers are still set to the
+    # values XNU wrote, so we can read them after the HV has caught
+    # control and know exactly what XNU was doing at the first failure.
+    #
+    # Encodings via (op0, op1, CRn, CRm, op2) tuples — u.mrs parses
+    # these directly. EL12 aliases = op1=5 (E2H-relative EL1 access).
+    EL1_REGS = [
+        ("SCTLR_EL12",  (3, 5, 1, 0, 0)),   # is MMU on? caches? WXN?
+        ("TTBR0_EL12",  (3, 5, 2, 0, 0)),   # user page table
+        ("TTBR1_EL12",  (3, 5, 2, 0, 1)),   # kernel page table
+        ("TCR_EL12",    (3, 5, 2, 0, 2)),   # translation control
+        ("MAIR_EL12",   (3, 5, 10, 2, 0)),
+        ("CPACR_EL12",  (3, 5, 1, 0, 2)),   # SIMD/FP enable
+        ("SPSR_EL12",   (3, 5, 4, 0, 0)),
+        ("ELR_EL12",    (3, 5, 4, 0, 1)),   # PC that took exception
+        ("ESR_EL12",    (3, 5, 5, 2, 0)),   # syndrome
+        ("FAR_EL12",    (3, 5, 6, 0, 0)),   # fault address
+        ("VBAR_EL12",   (3, 5, 12, 0, 0)),  # exception base
+        ("SP_EL1",      (3, 4, 4, 1, 0)),   # guest kernel stack
+        ("TPIDR_EL1",   (3, 5, 13, 0, 4)),  # per-CPU pointer
+        ("CNTKCTL_EL12", (3, 5, 14, 1, 0)),
+    ]
+
+    def _dump_el1_regs(tag: str = "post-fault"):
+        print(f"\n=== EL1 sysreg dump ({tag}) ===")
+        for name, enc in EL1_REGS:
+            try:
+                v = hv.u.mrs(enc, silent=True)
+                print(f"  {name:14s} = 0x{v:016x}")
+            except Exception as e:
+                print(f"  {name:14s} = <err: {type(e).__name__}: {e}>")
+        print("====================================\n", flush=True)
+
+    # Hook hv.handle_exception so the dump happens at the moment the
+    # exception is received, BEFORE print_context tries to disasm the
+    # faulting ELR (which can hang when guest VAs aren't translatable).
+    _orig_handle_exception = hv.handle_exception
+
+    def _handle_exception_with_dump(reason, code, info):
+        try:
+            # dump immediately so we get the data even if downstream
+            # print_context wedges on an unmappable ELR
+            _dump_el1_regs(f"at exception reason={reason} code={code}")
+        except Exception:
+            traceback.print_exc()
+        return _orig_handle_exception(reason, code, info)
+
+    hv.handle_exception = _handle_exception_with_dump
+    # Re-register with iface since set_handler captured the original
+    # bound method at hv.init() time.
+    from m1n1.proxy import START, EXC
+    iface.set_handler(START.EXCEPTION_LOWER, EXC.SYNC,   _handle_exception_with_dump)
+    iface.set_handler(START.EXCEPTION_LOWER, EXC.IRQ,    _handle_exception_with_dump)
+    iface.set_handler(START.EXCEPTION_LOWER, EXC.FIQ,    _handle_exception_with_dump)
+    iface.set_handler(START.EXCEPTION_LOWER, EXC.SERROR, _handle_exception_with_dump)
+
+    # Patch __TEXT_BOOT_EXEC entry prelude (offsets 0x10..0x1f) so the
+    # bootstrap CPU's first stack op doesn't data-abort on SP_EL1=0.
+    # Original prelude stashes a flag byte we can skip (only used as a
+    # secondary-CPU handshake signal; we don't start secondaries).
+    # Replacement:
+    #   0x10:  mov sp, x3       ; set EL1 stack from x3 (passed at ERET)
+    #   0x14:  mov x0, x1       ; preserve bootargs_ptr for handler
+    #   0x18:  b +0x3fe8        ; branch to real bootstrap at +0x4000
+    #   0x1c:  nop
+    # Everything else (entry check, cpu_table path for non-bootstrap
+    # CPUs) is left untouched.
+    PATCH_BYTES = bytes.fromhex("7f000091" "e00301aa" "fa0f0014" "1f2003d5")
+    PATCH_OFFSET = 0x10          # within __TEXT_BOOT_EXEC
+    entry_pa = hv.entry          # load_macho set hv.entry to guest PA
+    patch_pa = entry_pa + PATCH_OFFSET
+    print(f"Patching entry prelude at {patch_pa:#x} ({len(PATCH_BYTES)} bytes)")
+    iface.writemem(patch_pa, PATCH_BYTES)
+    p.dc_cvau(patch_pa, len(PATCH_BYTES))
+    p.ic_ivau(patch_pa, len(PATCH_BYTES))
+
+    # Pick a safe SP for bootstrap. Above top_of_kernel_data so the
+    # first `stp [sp, #-0x10]!` writes inside mapped RAM but outside
+    # anything XNU expects to already be populated.
+    bootstrap_sp = hv.tba.top_of_kernel_data + 0x20000   # 128 KiB pad
+    bootstrap_sp &= ~0xf                                   # 16-B align
+    # Zero-fill the top of the stack so PAC auth of LR on return doesn't
+    # read uninitialized data if XNU ever uses SP-relative loads.
+    iface.writemem(bootstrap_sp - 0x1000, bytes(0x1000))
+
     # Monkey-patch hv.start's proxy call so the guest enters with the
     # boot-CPU register convention observed in macOS 26.3 J604
     # kernelcache disasm (see docs/SESSION_JOURNAL.md):
-    #     x0 = 4              (bootstrap-CPU magic at
-    #                          __TEXT_BOOT_EXEC entry, offset 0x8)
+    #     x0 = 4              bootstrap-CPU magic
     #     x1 = bootargs_ptr
-    #     x2 = flag byte      (stored at adrp(...) + 0xf48 by
-    #                          the entry-code strb prelude)
-    # Without x0 == 4 XNU lands in its MPIDR-based CPU-lookup path and
-    # spins forever on an unpopulated cpu_table (cbz x21, self at
-    # 0xfffffe000c1bc0d4). m1n1's stock run_guest.py passes only
-    # x0=bootargs_ptr, which is the old (pre-Darwin 26?) convention.
+    #     x2 = flag byte
+    #     x3 = bootstrap_sp   ← new: valid EL1 SP for first stack push
     if os.environ.get("XNU_BOOT_CPU_ID") != "":  # default on; "" to disable
         orig_hv_start = hv.p.hv_start
         bootargs_ptr = hv.guest_base + hv.bootargs_off
@@ -138,8 +223,9 @@ def main() -> int:
             cpu_id = int(os.environ.get("XNU_BOOT_CPU_ID", "4"))
             flag   = int(os.environ.get("XNU_BOOT_FLAG",   "0"))
             print(f"hv_start override: x0={cpu_id} x1={bootargs_ptr:#x} "
-                  f"x2={flag} entry={entry:#x}")
-            return orig_hv_start(entry, cpu_id, bootargs_ptr, flag)
+                  f"x2={flag} x3={bootstrap_sp:#x} entry={entry:#x}")
+            return orig_hv_start(entry, cpu_id, bootargs_ptr, flag,
+                                 bootstrap_sp)
 
         hv.p.hv_start = patched_hv_start
 
@@ -163,8 +249,10 @@ def main() -> int:
         hv.start()  # does not return until guest halts / ^C
     except KeyboardInterrupt:
         print("KeyboardInterrupt; guest stopped.")
+        _dump_el1_regs("post-KeyboardInterrupt")
     except Exception:
         traceback.print_exc()
+        _dump_el1_regs("post-python-exception")
 
     # After hv.start() returns we're back at EL2 with the guest halted.
     # Drop to a shell so we can inspect state and re-issue MMIO reads

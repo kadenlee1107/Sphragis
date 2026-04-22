@@ -329,6 +329,72 @@ If the goal is just MTP keyboard support:
 3. **Dedicate a session** to completing the HV-trace path. Very
    possible but needs focus.
 
+### v6 EL1 sysreg dump: SP=0 → data abort
+
+Added `_handle_exception_with_dump` hook to the wrapper so EL1 sysregs
+get dumped the moment a guest exception fires (before `print_context`
+tries to disasm a possibly-unmapped ELR and hangs). Next run on real
+M4:
+
+```
+=== EL1 sysreg dump (at exception reason=2 code=0) ===
+  SCTLR_EL12     = 0x0000000030d50980   (MMU OFF, caches off)
+  TTBR0_EL12     = 0x0000000000000000   (no user PT)
+  TTBR1_EL12     = 0x0000000000000000   (no kernel PT)
+  TCR_EL12       = 0x0000000340008000
+  MAIR_EL12      = 0x0000000000000000
+  CPACR_EL12     = 0x0000000003300000
+  SPSR_EL12      = 0x0000000060000005
+  ELR_EL12       = 0x000001001d274004   <- instruction at entry+0x4004
+  ESR_EL12       = 0x0000000096000040   <- EC=0x25 DA cur-EL, WnR=1
+  FAR_EL12       = 0xfffffffffffffff0   <- SP-0x10 with SP=0 wraps
+  VBAR_EL12      = 0x0000000000000000   (vectors not set)
+  SP_EL1         = 0x0000000000000000
+```
+
+ELR_EL12 = entry + 0x4004 = the `stp x29, x30, [sp, #-0x10]!` right
+after `pacibsp` at the start of the bootstrap handler. With SP=0, the
+effective write address wraps to `0xFFFFFFFFFFFFFFF0` — an
+out-of-PA-range address — triggering a DFSC=0 "address size fault at
+level 0 of translation". Exact root cause.
+
+### Fix: patch entry prelude to set SP from x3
+
+m1n1's `hv_enter_guest` in `src/hv_asm.S` hardcodes `msr sp_el1, x5
+(=0)` before ERET. Rebuilding m1n1 needs clang/lld which aren't
+installed; patching the kernelcache is easier. Entry offsets 0x10..0x1f
+used to do a boot-progress `strb` (only relevant if we'd also start
+secondaries), so we can overwrite them. New wrapper writes these four
+insns into guest RAM right after `load_macho`:
+
+```
++0x10:  mov sp, x3            ; 7f 00 00 91  — SP from x3 at ERET
++0x14:  mov x0, x1            ; e0 03 01 aa  — preserve bootargs_ptr
++0x18:  b +0x3fe8             ; fa 0f 00 14  — branch to 0x4000
++0x1c:  nop                   ; 1f 20 03 d5
+```
+
+And the `patched_hv_start` now passes `x3 = top_of_kernel_data + 0x20000`
+(a 128 KiB pad above XNU's staged region, inside mapped RAM so the
+first `stp [sp, #-0x10]!` is in a safe place). The 0x1000 bytes below
+that are zero-filled before ERET so PAC auth doesn't read garbage.
+
+### Hypothesis for next fault
+
+Fix SP → the bootstrap handler at `__TEXT_BOOT_EXEC + 0x4000` is a
+trampoline (`pacibsp; stp; mov x29, sp; bl 0xfffffe00091c0f0c; b self`).
+The `bl` lands in `__TEXT_EXEC` where real kernel-init runs. Expected
+next wedges:
+
+- PAC auth failure (our HV skips `APVMKEY*_EL2` on M4, so EL2-side
+  keys are unseeded; but EL1 keys should be XNU-managed).
+- SEPFW state mismatch (we re-stage SEPFW; ticket in iBoot's memory
+  may reference the original location).
+- Missing ADT field XNU reads early.
+
+Each becomes visible once the SP fix lands. Waiting on next
+power-cycle to run.
+
 ### Wrapper state
 
 `scripts/hv/boot_macos_mtp_trace.py` is solid — HV init, load, trace
