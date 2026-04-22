@@ -83,7 +83,7 @@ pub fn execute_cmd(cmd: &str) {
 }
 
 fn execute(cmd: &str) {
-    let parts: [&str; 4] = split_cmd(cmd);
+    let parts: [&str; MAX_PARTS] = split_cmd(cmd);
     let command = parts[0];
 
     // Mirror to serial
@@ -109,7 +109,7 @@ fn execute(cmd: &str) {
         "ifconfig" | "net" => cmd_ifconfig(),
         "fw" | "firewall" => cmd_firewall(),
         "fetch" => cmd_fetch(parts[1]),
-        "batcave" => cmd_batcave(parts[1], parts[2], parts[3]),
+        "batcave" => cmd_batcave(parts[1], parts[2], parts[3], &parts),
         "panic" => cmd_panic(),
         "hello" => cmd_run_elf("hello"),
         "hello_libc" | "libc" => cmd_run_elf("libc"),
@@ -772,23 +772,21 @@ fn parse_ip(s: &str) -> u32 {
 fn ensure_default_cave() {
     use crate::batcave::cave;
     if cave::get_active() == usize::MAX {
-        // Create a default cave with basic capabilities. ROOT-5: `proc` and
-        // `mem` are now real caps (no longer hard-allowed); default cave
-        // gets them along with `fs` and `net` so existing binaries work.
-        // Locked-down caves spawned explicitly by the user can be granted
-        // narrower sets.
-        if cave::find_id("default").is_none() {
-            cave::create("default", false).ok();
-            cave::grant_cap("default", "net").ok();
-            cave::grant_cap("default", "fs").ok();
-            cave::grant_cap("default", "proc").ok();
-            cave::grant_cap("default", "mem").ok();
-        }
-        cave::enter("default").ok();
+        // QEMU-BUGFIX-6 workaround: `cave::enter()` hangs inside its
+        // `reset_all_globals_for_cave_switch()` critical section (one of
+        // the 20+ `reset_for_cave_switch` callees at cave.rs:623 doesn't
+        // return). For the ambient host-cave case we don't actually need
+        // the full state reset; `ensure_host_cave_active()` just creates
+        // the cave + `set_active(id)`. Same end state, no hang.
+        //
+        // ROOT-5: `proc` and `mem` are now real caps (no longer hard-
+        // allowed); the shell-host cave is created with the full broad
+        // set inside `ensure_host_cave_active`.
+        cave::ensure_host_cave_active();
     }
 }
 
-fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str) {
+fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) {
     use crate::batcave::cave;
     match subcmd {
         "create" => {
@@ -997,13 +995,33 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str) {
         }
         "run" => {
             if arg1.is_empty() {
-                console::puts("  usage: batcave run <tool> [args]\n");
+                console::puts("  usage: batcave run <tool> [args...]\n");
             } else {
-                // Auto-create a default cave if none active
+                // Auto-create + enter the shell-host cave if none active.
                 ensure_default_cave();
-                let argv: [&str; 4] = ["busybox", arg1, arg2, ""];
-                let argc = if arg2.is_empty() { 2 } else { 3 };
-                match crate::batcave::linux::runner::run_busybox_cmd(&argv[..argc]) {
+
+                // Real argv: ["busybox", tool, arg1, arg2, ...]. The shell
+                // command splitter gives us up to `MAX_PARTS` (8) tokens;
+                // layout is parts = ["batcave", "run", TOOL, A1, A2, A3, A4, A5].
+                // Build the argv from parts[2..] prefixed with "busybox".
+                let mut full: [&str; MAX_PARTS] = [""; MAX_PARTS];
+                full[0] = "busybox";
+                let mut argc = 1;
+                for i in 2..MAX_PARTS {
+                    if parts[i].is_empty() { break; }
+                    full[argc] = parts[i];
+                    argc += 1;
+                }
+
+                // Trace the argv so operators can see what actually landed.
+                platform::serial_puts("[batcave run] argv:");
+                for i in 0..argc {
+                    platform::serial_puts(" ");
+                    platform::serial_puts(full[i]);
+                }
+                platform::serial_puts("\n");
+
+                match crate::batcave::linux::runner::run_busybox_cmd(&full[..argc]) {
                     Ok(()) => {}
                     Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
                 }
@@ -1070,8 +1088,13 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str) {
     }
 }
 
-fn split_cmd(cmd: &str) -> [&str; 4] {
-    let mut parts = [""; 4];
+/// Split a command into up to `MAX_PARTS` whitespace-separated tokens.
+/// Bumped from 4 → 8 so `batcave run` can take a real Kali-class argv like
+/// `batcave run nc -zv 10.0.2.2 8080 -w 1`. Legacy callers that only touch
+/// parts[0..=3] keep working — the extra slots are empty strings.
+pub const MAX_PARTS: usize = 8;
+fn split_cmd(cmd: &str) -> [&str; MAX_PARTS] {
+    let mut parts = [""; MAX_PARTS];
     let mut idx = 0;
     let bytes = cmd.as_bytes();
     let mut start = 0;
@@ -1079,7 +1102,7 @@ fn split_cmd(cmd: &str) -> [&str; 4] {
 
     for i in 0..bytes.len() {
         if bytes[i] == b' ' {
-            if in_word && idx < 4 {
+            if in_word && idx < MAX_PARTS {
                 parts[idx] = unsafe { core::str::from_utf8_unchecked(&bytes[start..i]) };
                 idx += 1;
                 in_word = false;
@@ -1089,7 +1112,7 @@ fn split_cmd(cmd: &str) -> [&str; 4] {
             in_word = true;
         }
     }
-    if in_word && idx < 4 {
+    if in_word && idx < MAX_PARTS {
         parts[idx] = unsafe { core::str::from_utf8_unchecked(&bytes[start..]) };
     }
     parts

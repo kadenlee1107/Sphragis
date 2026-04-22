@@ -553,6 +553,15 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
         core::arch::asm!("isb");
     }
 
+    // QEMU-BUGFIX-7: flag that we're on the primary page table so
+    // `uaccess::is_user_range` accepts pointers in the legacy
+    // [0x1000, 0x4000_0000) window. Without this, every user-space
+    // pointer from a primary-cave ELF (busybox uname, hello, etc.) is
+    // rejected with EFAULT by the strict post-V5 path-check, and
+    // sys_writev silently drops all stdout traffic from the ELF —
+    // process runs to completion but produces no visible output.
+    set_active_primary(true);
+
     uart::puts("[mmu] MMU enabled!\n");
     Ok(())
 }
