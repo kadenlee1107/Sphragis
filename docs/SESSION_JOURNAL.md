@@ -11,6 +11,90 @@ end of a session.
 
 ---
 
+## 2026-04-22 00:15 — Ubuntu — M3 theory busted; classic mailbox alive; ascwrap-v6 is genuinely new
+
+Tested `scripts/hv/boot_aop_m3.py` on fresh boot. Disproved M3 theory:
+
+### PMGR reg[3] theory wrong
+
+AOP reg[3] = 0x3882a8000 is NOT a PMGR device register. Values
+change fast between consecutive reads: 0x7474de15 → 0x7478bdf0 →
+0x77706f10 → 0x7ecf05b5. It's a **fast counter/timestamp**, not
+power state.
+
+### M3 mailbox theory wrong
+
+Writes to reg[0]+0x60 (M3 A2I_SEND0) don't persist. Even with
+`p.write64(...)` (Asahi uses writeq_relaxed), readback is 0. The
+M3 mailbox layout at +0x50..+0xa8 simply isn't mapped on M4.
+
+### Classical mailbox IS alive
+
+reg[0]+0x8110 A2I_CTRL shows `0x20001` pre-send (ENABLE+EMPTY) and
+advances WPTR correctly when we write +0x8800 A2I_SEND0. So the
+classical ASC layout (at +0x8xxx offsets from reg[0] base) IS real
+and accepting our messages. FW's classical OUTBOX at +0x8830 just
+never gets written — that remains the real mystery.
+
+### What we actually know about ascwrap-v6
+
+- reg[0]+0x44: CPU_CONTROL (RUN bit 4) — writable, persists.
+- reg[0]+0x48: "CS" — reads reactive to FW state. 0x6a pre-boot,
+  0x68 post-RUN, 0x4c in steady-state. The m1n1 bit decode for
+  CS was guesses; actual semantic unclear.
+- reg[0]+0x818: FW-handshake register. FW actively flips bits 1-7
+  in response to CC changes and our events.
+- reg[0]+0x8110/+0x8114: CLASSICAL mailbox control, alive.
+- reg[0]+0x8800/+0x8808: A2I_SEND (classical INBOX), writable.
+- reg[0]+0x8830/+0x8838: I2A_RECV (classical OUTBOX), reads 0.
+- reg[0]+0x8180..+0x81ff: 8-slot ring (16B each) that mirrors
+  INBOX with FW-updated trailer 0x00891900 after processing.
+  Trailer format matches `A2I_CTRL` state value.
+- reg[0]+0x4000+: SIMD/random data (maybe SIMD register save area).
+
+### None of this opens OUTBOX
+
+FW processes our msgs (INBOX state machine advances, +0x818 flips,
+slot ring updates). But FW never sends anything on classical OUT.
+Either:
+1. FW is in an error state post-Hello and halts without sending.
+2. OUTBOX writes go somewhere we haven't found (despite exhaustive
+   scanning at safe offsets).
+3. FW's OUTBOX requires a specific ack/signal from AP first, that
+   we don't understand.
+
+### Conclusion
+
+**ascwrap-v6 mailbox protocol is genuinely new**. Asahi Linux has
+no code for it (searched their tree). We need **HV-trace of
+macOS's AOP driver init** to see the actual register sequence.
+
+### Next session: set up HV trace
+
+Path:
+1. Boot Mac into macOS normally.
+2. Build m1n1 with `HV=1` + tracer config for AOP reg range.
+3. Run `m1n1/proxyclient/hv.py` which boots macOS inside m1n1 HV.
+4. Let macOS's AppleH11BoardFoxtrot driver init AOP.
+5. Capture all MMIO accesses to 0x390600000..0x390688000.
+6. Diff against our script — the delta shows the missing init.
+
+### Scripts shipped this segment
+
+- `scripts/hv/boot_aop_m3.py` — tested, M3 path doesn't work on M4.
+  Kept in tree for future reference (useful PMGR-unlock template).
+
+### Net this session (total ALL cycles)
+
+- ✅ AOP boots to FW-alive state (skip dart.initialize).
+- ✅ dapf_init "/arm-io/dart-aop" is targeted (no hang).
+- ❌ M3 mailbox layout doesn't apply (writes don't persist at +0x60).
+- ❌ reg[3] isn't PMGR (it's a counter).
+- Classical mailbox IS real but FW never writes OUTBOX.
+- Next: HV-trace macOS. No shortcut left.
+
+---
+
 ## 2026-04-21 23:30 — Ubuntu — 🔥 AOP uses M3-mailbox, not classical ASC mailbox
 
 **Found via Asahi Linux** (`/tmp/asahi_linux/drivers/soc/apple/mailbox.c`):
