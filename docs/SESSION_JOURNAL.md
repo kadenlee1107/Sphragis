@@ -11,6 +11,113 @@ end of a session.
 
 ---
 
+## 2026-04-22 05:30 — Ubuntu — m1n1 WDT fix lands + SMC works cleanly; MTP hard wall
+
+### WDT fix IN C, less invasive
+
+m1n1 patch (external/m1n1/src/wdt.c) now disables t8132 AP watchdog
+in `wdt_disable()` itself — every m1n1 boot (HV or proxy). Initial
+version wrote 0xffffffff to ALL 4 regs (`deadline`, `panicsave`,
+`panicscratch`, `unk`). That broke SMC: SMC shares a register page
+with panic state, and 0xffffffff writes corrupted it — subsequent
+SMC boots refused to Hello.
+
+Fixed: only zero the deadline-arm bit at 0x3882BC224. Panic regs
+left alone. Logs show: `AP-WDT (t8132) deadline-arm: 00000000->00000000`.
+
+### SMC boot works reliably (MASSIVE data point)
+
+Running scripts/hv/batos_hv_interactive.py with BATOS_HV_MTP_KBD_PROBE=1
+on fresh power cycle and stock m1n1:
+
+```
+[mgmt] Starting via message
+[mgmt] Supported versions 12 .. 12
+[mgmt] Adding endpoint 0x0/0x1/0x2/0x4/0x8/0x20
+[mgmt] IOP power state is now 0x20
+[mgmt] AP power state is now 0x20
+[mgmt] Startup complete
+```
+
+SMC's ADT compatible is `iop,ascwrap-v6` — SAME as MTP and AOP.
+Same driver class, same protocol, same mailbox layout. Different
+outcome. This proves:
+
+1. The RTBuddy mgmt protocol DOES work on ascwrap-v6 M4.
+2. `+0x8800/+0x8830` mailbox IS the right address.
+3. `SetIOPPower(0x220)` IS the right first-message.
+4. `mgmt.start()` + `wait_boot()` IS the right flow.
+
+### MTP: tried everything, no Hello
+
+Test matrix with fresh power cycles:
+
+| Setup | SMC | MTP |
+|--|--|--|
+| Stock m1n1 | ✅ Hello | ❌ timeout |
+| Stock m1n1 + firmware stage | ✅ Hello | ❌ timeout |
+| Stock m1n1 + stage + DART.initialize | ✅ Hello | ❌ timeout |
+| Stock m1n1 + pmgr + stage + DART.init + DockChannel | ✅ Hello | ❌ timeout |
+| Stock m1n1 + SMC boot first + everything | ✅ Hello | ❌ timeout |
+
+Every MTP attempt:
+- Pre-boot: CC=0x0, CS=0x6a (clean iBoot state)
+- Post-RUN=1: CC=0x10, CS=0x4c (FW steady)
+- A2I: advances WPTR with our INBOX writes
+- I2A: 0x20001 (EMPTY, ENABLE) — sometimes 0xa0001 (adds bit 19)
+- OUT0 at +0x8830: 0 forever
+- +b14: 0 (AOP also 0; MTP advanced once to 0x100 in an accumulated-
+  state session but not on fresh boot)
+
+### The wall is real
+
+After dozens of configuration variations across many power cycles
+on real M4 hardware, with Apple's own ASCWrapV6 kext disassembly
+confirming our register addresses and protocol, MTP simply does
+not send Hello. SMC — using the SAME driver — sends Hello every
+time, confirming the mechanism works.
+
+The only remaining difference is what happens at IOKit service
+probe time on macOS. `AppleA7IOP::start(IOService*)` does a long
+service-provider chain setup (IOInterruptEventSource registration,
+power domain linkage) that we literally cannot replicate from raw
+proxy. FW expects this infrastructure to be present before it sends
+Hello — for MTP specifically, not for SMC.
+
+Why SMC works without IOKit but MTP needs it is unclear. Possible
+reasons:
+- SMC is a simpler ASC with fewer endpoints (6 vs MTP's expected 20+)
+- SMC uses dockchannel-less IPC (MTP goes through DockChannel)
+- SMC doesn't need DART (no DMA from SMC to DRAM)
+- MTP FW is newer/stricter about AP-side preparation
+
+### Keyboard path — external USB
+
+Given this wall, the keyboard for Bat_OS demos stays on external USB
+via the existing USB stack. Demo loop already works without internal
+keyboard. When Asahi Linux eventually supports M4, or when we have
+1-2 days for full HV-trace setup (boot macOS as HV guest and log
+every MMIO touch during enablePower), we can revisit.
+
+### Permanent assets from this whole arc
+
+- WDT fix in m1n1 (safe variant, committed)
+- SMC boot reliable (well-tested)
+- MTP firmware extraction + staging (works)
+- DART-MTP setup knowledge
+- DockChannel ready
+- Apple kext disasm tooling (capstone+LIEF+pyimg4 locally installed)
+- AppleA7IOP + ASCWrap-v6 extracted kexts in macos_dump/
+- Comprehensive session journal of what does/doesn't work
+
+### Status
+
+Bat_OS demo loop functional with external USB keyboard. AOP/MTP
+keyboard via ascwrap-v6 documented as unsolved within raw-proxy
+RE scope. Doesn't block any current Bat_OS work.
+
+---
+
 ## 2026-04-22 04:45 — Ubuntu — Extensive proxy-side exhaustion; honest assessment
 
 Kept pushing per Kaden's "keep going" request. New findings,
