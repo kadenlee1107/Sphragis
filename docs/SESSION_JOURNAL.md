@@ -11,6 +11,82 @@ end of a session.
 
 ---
 
+## 2026-04-21 18:30 — Ubuntu — 🎉 LOOP with patched m1n1 + stim fix + AOP fw extracted
+
+Two wins + one blocker cleared this pass.
+
+### Win 1: 2-cycle Bat_OS loop WORKING end-to-end
+
+Canonical demo ran cleanly:
+
+```
+iter 0: AUTH PASSED (L313) → halt via UI close (L449) → hv returned
+        (L456) → chainload fresh m1n1 (L460)
+iter 1: fresh m1n1 (L595) → Bat_OS loaded (L627) → AUTH PASSED (L800)
+        → halt (L936) → hv returned (L943) → hit LOOP_MAX=2 (L947)
+        → detaching via os._exit(0) (L948)
+```
+
+Full 2-cycle Bat_OS demo in a single Python invocation, no
+power-cycle between iters. Two fixes made it work:
+
+  a. **AP watchdog disable in Python (not just hv_init)**. The
+     patched m1n1's 72c606f4 wdt-off only runs inside hv_init().
+     Proxy-only sessions never hit that path → watchdog fires at
+     ~118s → Mac reboots. Added the 4-reg zap in boot_mtp_full.py /
+     boot_mtp_ref.py / boot_mtp_diff.py — same addresses
+     (0x3882BC224, 0x3882B8008, 0x3882B802C, 0x3882B8020) that
+     hv.c:151-169 writes.
+
+  b. **Stim quoting via launcher script**. `sg dialout -c "..."`
+     nested with `$'batman;;\\t*9\\r'` was sending `$batman\\r`
+     (literal `$`). Created /tmp/run_loop.sh shebang'd to bash
+     that sets env vars including `BATOS_HV_STIMULUS=$'...'`
+     BEFORE `exec`ing Python — bash's ANSI-C quoting lands
+     correctly since it's in a file, not an arg to sg.
+
+     Verified at launcher startup: `STIMULUS hex=6261746d616e3b3b0909...` =
+     "batman;;\\t*9\\r" exactly.
+
+### Win 2: AOP firmware extracted from macOS
+
+SSH'd into Mac and pulled:
+  - `firmware/aop/aopfw-mac16gaop.RELEASE.im4p` (2179097B)
+  - `firmware/aop/aopfw-mac16gaop.RELEASE.bin` (2179072B, extracted)
+  - `firmware/aop/aopfw-mac16gaop_l4.RELEASE.im4p` (2175001B)
+  - `firmware/aop/aop2fw-j704aop2.RELEASE.im4p` (1425433B)
+
+ioreg on macOS says our AOP uses `mac16gaop` (not mac16j — despite
+the board being J604). Preboot/*/restore/Firmware/AOP/ has variants
+for each mac16 sub-family.
+
+Format: **raw Mach-O directly** (magic `cffaedfe` at offset 0,
+no rkosftab wrapper). Simpler than MTP. Can skip parse_rkosftab,
+go straight to LC_SEGMENT_64 enumeration.
+
+### The open blocker — MTP still hangs post-Hello
+
+Unchanged from 17:30: MTP FW reads 1 INBOX msg, hangs. Running
+theory still that MTP depends on AOP being up (mtp-aop-mux).
+
+### Next session path
+
+With AOP firmware in hand:
+  1. probe `/arm-io/aop` ADT for segment-ranges (same pattern as MTP)
+  2. verify __TEXT is iBoot-staged (it should be, mirrors MTP)
+  3. stage __DATA / __OS_LOG from aopfw-mac16gaop.RELEASE.bin
+  4. AOP ASC mgmt.start → Hello
+  5. THEN stage + boot MTP
+  6. MTP should complete its Hello now that AOP's responsive
+
+If AOP boots cleanly and MTP still hangs, theory is wrong and we
+need to dig further. But the mtp-aop-mux ADT compatible is strong
+circumstantial evidence.
+
+### Net: demo loop shipped ✓ ; AOP fw in place ✓ ; MTP wall gated on AOP
+
+---
+
 ## 2026-04-21 17:30 — Ubuntu — patched-m1n1 fixes self-reset; FW reads 1 INBOX msg then hangs (DMA?)
 
 Kaden pointed out we'd been running against the kmutil-installed stock
