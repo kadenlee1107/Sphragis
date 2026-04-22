@@ -22,3 +22,4 @@
 # Bring-up camera captures — huge binary blobs, regenerable on live M4.
 /captures
 firmware/
+macos_dump/
