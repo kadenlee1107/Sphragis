@@ -11,6 +11,110 @@ end of a session.
 
 ---
 
+## 2026-04-21 23:30 — Ubuntu — 🔥 AOP uses M3-mailbox, not classical ASC mailbox
+
+**Found via Asahi Linux** (`/tmp/asahi_linux/drivers/soc/apple/mailbox.c`):
+M4 AOP (ascwrap-v6) uses `apple,m3-mailbox-v2` compatible, with
+COMPLETELY DIFFERENT register offsets from classic ASC mailbox:
+
+```
+M3 layout (offsets from ASC base):
+  +0x44 CPU_CONTROL   (RUN bit 4 — matches classic)
+  +0x48 IRQ_ENABLE    (NOT CS! my earlier "CS=0x4c" interpretation
+                       was wrong — it's IRQ_ENABLE with I2A_EMPTY +
+                       I2A_NOT_EMPTY bits set, which is normal)
+  +0x4c IRQ_ACK
+  +0x50 A2I_CTRL      (the real A2I control)
+  +0x60 A2I_SEND0     (real INBOX — not +0x8800!)
+  +0x68 A2I_SEND1
+  +0x70 A2I_RECV0
+  +0x78 A2I_RECV1
+  +0x80 I2A_CTRL
+  +0x90 I2A_SEND0     (FW-side)
+  +0x98 I2A_SEND1
+  +0xa0 I2A_RECV0     (real OUTBOX — not +0x8830!)
+  +0xa8 I2A_RECV1
+  IRQ bits: 0 A2I_EMPTY, 1 A2I_NOT_EMPTY, 2 I2A_EMPTY, 3 I2A_NOT_EMPTY
+  CTRL bits: 16 FULL, 17 EMPTY
+```
+
+### This explains EVERYTHING
+
+- Our writes to "INBOX" at +0x8800 never reached FW (wrong address).
+- Our reads of "OUTBOX" at +0x8830 always returned 0 (wrong address).
+- +0x48 "CS=0x4c" = IRQ_ENABLE with I2A_EMPTY + I2A_NOT_EMPTY + bit 6 set.
+  The value 0x6a pre-boot (added bit 1=A2I_NOT_EMPTY) = "AP has
+  sent msg (or expects to)". Post-boot 0x4c = "I2A IRQs enabled,
+  A2I empty — healthy idle state".
+- The +0x8180 slot ring we were seeing was some OTHER structure we
+  didn't identify (maybe auxiliary queue for large payloads).
+
+### NEW BLOCKER: mailbox regs are clock-gated
+
+Writes to AOP reg[0]+0x50..+0xa8 DO NOT PERSIST. They all read as 0
+regardless. Clock/power-gated from AP-side.
+
+AOP reg[3] = `0x3882a8000` is a PMGR-style device register:
+```
+  current = 0x4e744f7f
+  TARGET = 0xf  (we're requesting ACTIVE)
+  ACTUAL = 0x7  (stuck at intermediate — NOT fully powered)
+  AUTO_ENABLE (bit 28) is CLEAR
+```
+
+Need to push ACTUAL → 0xf before mailbox becomes writable.
+
+**DON'T PROBE `0x3882a0000` region** — DAPF-protects it, m1n1 SYNCs
+and wedges. (That's how we wedged this session.)
+
+### Also: DART-AOP handles reg coverage
+
+Interesting — `dapf-instance-0` on `/arm-io/dart-aop` lists MMIO
+ranges (for DART access control, not CPU-side). Entries include
+ranges like `0x38c634000..0x38c640003` and `0x38de00000..0x38defffff`.
+Doesn't cover AOP reg[0] at 0x390600000, so DAPF isn't blocking
+AP→AOP writes directly.
+
+### Script shipped
+
+`scripts/hv/boot_aop_m3.py` — candidate boot via M3 mailbox:
+1. chainload m1n1
+2. disable WDT
+3. power up AOP via reg[3] writes (AUTO_ENABLE + TARGET=0xf)
+4. verify mailbox writable (test A2I_SEND0 write/readback)
+5. stage firmware
+6. update bootargs
+7. dapf_init /arm-io/dart-aop
+8. CC.RUN=1
+9. send SetIOPPower via M3 A2I_SEND (+0x60)
+10. poll I2A (+0xa0) for Hello reply
+
+### Next session
+
+1. Power-cycle (m1n1 wedged from DAPF SYNC at 0x3882a0000).
+2. Run `scripts/hv/boot_aop_m3.py`. This is the canonical M4 AOP
+   boot attempt with corrected register layout.
+3. If AUTO_ENABLE doesn't move ACTUAL → 0xf, look at t8132 pmgr
+   device-graph for AOP's dependencies (maybe a clock parent isn't
+   ACTIVE either).
+4. If mailbox opens up but FW still doesn't Hello: likely bootargs
+   format difference — compare our 51-key layout vs macOS's actual
+   bootargs via dump.
+
+### Status on Bat_OS
+
+Demo loop still works; keyboard via MTP/AOP still blocked. External
+USB keyboard unaffected.
+
+### Net this session (total across cycles)
+
+- 🎉 AOP is alive (skipped dart.initialize)
+- 🎉 Found M3 mailbox layout via Asahi Linux
+- 🎉 Identified clock-gate on mailbox (reg[3] PMGR dev reg)
+- Remaining: unlock the PMGR gate → send M3 INBOX msg → expect Hello.
+
+---
+
 ## 2026-04-21 22:45 — Ubuntu — AOP further: dapf_init OK, FW reaches CS=0x4c +0x818=0 (MTP steady-state)
 
 Continuation after power-cycle. Kaden confirmed ACM1 is proxy and
