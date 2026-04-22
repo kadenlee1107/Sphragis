@@ -85,6 +85,80 @@ circumstantial evidence.
 
 ### Net: demo loop shipped ✓ ; AOP fw in place ✓ ; MTP wall gated on AOP
 
+### Addendum 19:30 — AOP boot attempted with AOPClient + bootargs; still stalls
+
+Studied `experiments/aop_als.py` reference. The M1/M2 pattern:
+  1. `pmgr_adt_power_enable` aop + dart-aop
+  2. DART.initialize() with vm_base from ADT (0x10000018000 on M4)
+  3. `AOPClient(u, "/arm-io/aop", dart)` — subclasses StandardASC + AOPBase
+  4. `aop.update_bootargs({'p0CE': 0x20000, 'laCn': 0, 'tPOA': 1, 'gila': 0x80})`
+     — writes config into DRAM bootargs blob read by FW early in init.
+     Without this, FW can't even consume its first INBOX message.
+  5. `p.dapf_init_all()` (we skip — hangs on M4 dart-mtp)
+  6. `aop.start()` → RUN=1 + mgmt.start + wait_boot
+
+Our implementation in scripts/hv/boot_aop.py:
+
+WINS:
+  - Bootargs region correctly located via aop-nub reg[2] + 0x22c/0x230.
+    21 keys present; iBoot populates with zeros/defaults.
+  - update_bootargs writes land correctly — verified via dump_diff
+    (p0CE: 0→0x20000, laCn: 1→0, gila: 0→0x80, tPOA: 0→1).
+  - __TEXT AND __ETEXT are both iBoot-staged (verified against
+    Mach-O 3 probes each). We skip host writes for both to avoid
+    the SYNC exception seen when trying to overwrite __ETEXT.
+  - compressed_writemem for the big segments: __DATA (996KB) in
+    1.6s, __OS_LOG (168KB) in 6ms.
+
+WALL:
+  - Fresh power-cycle, bootargs written BEFORE RUN=1 kick, still:
+      CC=0x10 CS=0x48 IB=0x100101 OB=0x20001 +b14=0x0
+    FW doesn't consume the first INBOX msg. `+b14` stays 0 (vs MTP
+    advances to 0x100). AOP is MORE stuck than MTP.
+  - `CS=0x48` vs MTP's `CS=0x4c` — bit 2 (IRQ_NOT_PEND) is CLEAR on
+    AOP, meaning **an IRQ is pending that's never acked**. This is
+    the likely root cause: AOP expects AIC IRQ routing, and we're
+    not handling AIC at all from the proxy path.
+  - `pmgr_adt_power_enable` errors ("no clock-gates") for both aop
+    and dart-aop on M4. Like MTP, AOP's power isn't managed via the
+    standard pmgr path on t8132.
+  - RUN=0 on ascwrap-v6 does NOT actually halt the CPU — CS stays
+    running. The reset mechanism is unknown (not bit 4 of CC).
+
+### What would unblock next session
+
+The AIC IRQ theory is testable but requires:
+  1. Locate AIC IRQ numbers for AOP in ADT (`interrupts` property)
+  2. Program AIC to route those IRQs somewhere (ack'd handler or
+     just mask them via AIC_MASK_SET).
+  3. Retry boot with IRQ-pending state cleared.
+
+OR: find the actual CPU reset mechanism for ascwrap-v6 — likely a
+different IMPL register we haven't identified. Apple's t8132 RE
+docs would help here, but we don't have them.
+
+### Practical impact on Bat_OS
+
+Keyboard via MTP/AOP is blocked on this v6 boot protocol RE.
+External USB keyboard works fine through our existing USB stack, so
+Bat_OS demos are unaffected. Recommend shelving MTP/AOP boot
+attempts until:
+  a. Asahi publishes M3/M4 AOP boot reference code, OR
+  b. We can HV-trace macOS's own AOP init sequence.
+
+### On disk
+
+  - `scripts/hv/boot_aop.py` — AOPClient-based approach,
+    bootargs-aware. Bootstrap + WDT + stage + boot.
+  - `scripts/hv/run_loop.sh` — canonical 2-cycle demo launcher.
+  - `firmware/aop/` — AOP firmware blobs (gitignored).
+
+Total commits this session: 5. Three wins knocked down
+(write-protect scoping, mgmt.start kick, WDT-in-Python). Two walls
+still standing (ascwrap-v6 mailbox protocol + CPU reset). All
+machinery for staging/probing/booting is in place — the gap is
+pure M4-specific RE.
+
 ---
 
 ## 2026-04-21 17:30 — Ubuntu — patched-m1n1 fixes self-reset; FW reads 1 INBOX msg then hangs (DMA?)
