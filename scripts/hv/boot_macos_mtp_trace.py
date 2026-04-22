@@ -118,6 +118,31 @@ def main() -> int:
     # else: self.tba.cmdline carries whatever iBoot passed to m1n1 — for a
     # Mac that boots macOS normally that's already the right thing.
 
+    # Monkey-patch hv.start's proxy call so the guest enters with the
+    # boot-CPU register convention observed in macOS 26.3 J604
+    # kernelcache disasm (see docs/SESSION_JOURNAL.md):
+    #     x0 = 4              (bootstrap-CPU magic at
+    #                          __TEXT_BOOT_EXEC entry, offset 0x8)
+    #     x1 = bootargs_ptr
+    #     x2 = flag byte      (stored at adrp(...) + 0xf48 by
+    #                          the entry-code strb prelude)
+    # Without x0 == 4 XNU lands in its MPIDR-based CPU-lookup path and
+    # spins forever on an unpopulated cpu_table (cbz x21, self at
+    # 0xfffffe000c1bc0d4). m1n1's stock run_guest.py passes only
+    # x0=bootargs_ptr, which is the old (pre-Darwin 26?) convention.
+    if os.environ.get("XNU_BOOT_CPU_ID") != "":  # default on; "" to disable
+        orig_hv_start = hv.p.hv_start
+        bootargs_ptr = hv.guest_base + hv.bootargs_off
+
+        def patched_hv_start(entry, _old_bootargs_ptr_unused):
+            cpu_id = int(os.environ.get("XNU_BOOT_CPU_ID", "4"))
+            flag   = int(os.environ.get("XNU_BOOT_FLAG",   "0"))
+            print(f"hv_start override: x0={cpu_id} x1={bootargs_ptr:#x} "
+                  f"x2={flag} entry={entry:#x}")
+            return orig_hv_start(entry, cpu_id, bootargs_ptr, flag)
+
+        hv.p.hv_start = patched_hv_start
+
     # Install tracers. `hv.run_script` evaluates the script in an env where
     # `hv`, `p`, `u`, `iface` are already injected (see hv.shell_locals).
     print(f"Installing MTP tracer: {TRACE_MTP_SCRIPT}")

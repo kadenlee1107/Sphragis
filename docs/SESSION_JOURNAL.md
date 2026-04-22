@@ -239,24 +239,95 @@ This is several more RE days and there's a long tail: the handler
 at `0x8a2ca08` itself dereferences `[x20=bootargs]` and more struct
 fields. Each missing field is another wedge or panic.
 
-### Honest assessment
+### Update: `x0=4` convention discovered — XNU actually boots now
 
-For MTP keyboard work, this HV-trace approach has a much higher
-activation energy than expected on M4+macOS 26.3. Apple's newer
-kernelcache entry format requires per-CPU state iBoot hands over.
-Options going forward:
+Re-reading the entry code: the `cmp x0, #4 ; b.ne <MPIDR-path>` at
+offset 0x8 isn't a sanity check, it's a **dispatch**. iBoot's
+convention for this kernelcache is:
 
-1. **Keep doing raw-proxy RE but with the ADT cpu_table knowledge**.
-   Maybe iBoot's *pre-kernel* setup (including cpu_table fill) is
-   itself interesting for MTP — unlikely but worth a glance.
-2. **Find/install an older macOS kernelcache** that uses the iBoot
-   convention m1n1 already handles (earlier ADT boot_args revs, no
-   cpu_table).
-3. **Park this, ship external-USB keyboard** as documented — not
-   critical path for Bat_OS demos.
-4. **Patch kernelcache at `c1bc0d4`** to `nop` + fake a minimal
-   per-CPU struct. Short term wedge goes away but likely uncovers
-   10 more downstream panics.
+```
+   x0 = 4                ; "bootstrap CPU" magic
+   x1 = bootargs_ptr
+   x2 = flag-byte (stored at 0xfffffe000c613f48 by the prelude)
+   x3 = ?
+```
+
+The `x0=4` path at 0x10..0x1c does the initial strb of x2, then
+`mov x0, x1` (→ x0 now has bootargs_ptr) and `b +0x3fe4` to the real
+bootstrap at `__TEXT_BOOT_EXEC + 0x4000`. Secondary CPUs enter with
+x0 != 4, fall through the MPIDR cpu_table lookup, and wait for the
+bootstrap to populate their entry. So the cpu_table isn't the root
+cause — it's a symptom of entering via the wrong path.
+
+**Wrapper patch landed:** `boot_macos_mtp_trace.py` now monkey-patches
+`hv.p.hv_start` to pass `(entry, x0=4, x1=bootargs_ptr, x2=0)` instead
+of `(entry, bootargs_ptr)`.
+
+With the patch, XNU actually executes — we see a genuine guest
+exception for the first time:
+
+```
+[cpu6] Guest exception: EXCEPTION_LOWER/SYNC
+  SPSR = 0x600003c5 (EL1h, D=A=I=F=1, Z=1)
+  ELR  = 0x200
+  SP_EL1 = 0x0
+  ESR  = 0x82000006 EC=0x20 (IABORT_LOWER)  FAR = 0x200
+    x0-x3  = 10021664000  10021664000  0  0    ; bootargs_ptr, mirrored
+    x4     = 1001eeb0000                       ; entry
+    x16    = 4                                 ; cpu_id preserved
+    x19    = 10005fa02a8  (unsled kernel ptr)
+    x20    = 10005f9b000
+    x21    = 10005fa02a8  (per-CPU struct XNU built)
+    x26    = 00000000addedbad                  ; checksum sentinel
+```
+
+Archived: `logs/hv-mtp-v3-x0-4-20260421-220000.log`.
+
+Reading the state: XNU got through the bootstrap prelude, set up
+several kernel-internal pointers (`x19..x23` look like pre-slide
+kernel addresses), and then took some sync exception while VBAR_EL1
+was `0` — vector went to 0x200, which isn't mapped in EL1 address
+space, so the instruction-abort bounced to EL2. The original cause
+of the sync (PAC auth fail? UNDEF on a missing M4 sysreg?
+stack-overflow?) is lost in the vector dispatch.
+
+`SP_EL1 = 0` is suspicious but not obviously the problem — XNU would
+normally set SP itself before the first stack op, and the fact that
+`x29-x30` have real values means stack ops were happening at some
+point. `m1n1`'s `hv_enter_guest` does `msr sp_el1, x5 (=0)` right
+before ERET; XNU's own SP setup would normally overwrite this, but
+the M4 path may differ.
+
+### What would unblock further progress
+
+1. **Rebuild m1n1 with an extra hv_start arg for initial SP_EL1**.
+   Requires clang + lld (not installed on this Ubuntu host —
+   `apt install clang lld` then rebuild per m1n1 Makefile).
+2. **Identify what EL1 exception XNU took** — requires either
+   interactive HV shell access (kill-via-^C path) or wider HV trap
+   (capture and log first sync exc at EL1 level). Could instrument
+   `_hv_vectors` in `m1n1/src/hv_exc_asm.S` to dump ELR/FAR/ESR
+   first time it enters the sync path, before XNU overrides VBAR.
+3. **Patch kernelcache** to insert SP setup prelude at 0x4000, or
+   to install a breadcrumb that tells us how far XNU gets. Risky
+   but tractable.
+
+### Practical assessment
+
+We're now three layers deep into XNU early-boot internals. Each layer
+has been solvable (run_guest.py → dockchannel opcode → cpu_table →
+x0=4 convention → VBAR=0 exception). The remaining layer requires
+either source modification or deeper state inspection. At this point
+it's fair to say HV-trace for MTP is a 1-2 week focused project on
+its own, not a quick side-quest.
+
+If the goal is just MTP keyboard support:
+
+1. **Ship with external-USB keyboard** — already works, not blocked.
+2. **Wait for Asahi M4 support** — they have the XNU-under-HV machinery
+   already, for M1-M3; M4 port is likely a 2026 thing.
+3. **Dedicate a session** to completing the HV-trace path. Very
+   possible but needs focus.
 
 ### Wrapper state
 
