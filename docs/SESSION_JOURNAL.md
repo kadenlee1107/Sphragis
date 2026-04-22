@@ -440,6 +440,98 @@ long as EnI{A,B} stay set and keys don't change during boot,
 
 Archived v7 log: `logs/hv-mtp-v7-sp-set-20260422-0747.log`.
 
+### v8 — PAC enabled, but APIA-key mismatch now the wall
+
+v8 dump:
+```
+=== EL1 sysreg dump (at exception reason=2 code=0) ===
+  SCTLR_EL12  = 0x00000000f0d50980   ← EnIA|EnIB set, good
+  SP_EL1      = 0x000001002011fcd0   ← advanced ~0x330 (same depth as v7)
+  ELR_EL12    = 0x000001001ab43d94
+  ESR_EL12    = 0x0000000072000000   ← EC=0x1C = PAC AUTH FAIL
+  FAR_EL12    = 0
+```
+
+Disassembling around the faulting instruction via the kernelcache
+Mach-O:
+
+```
+0xfffffe0008a03d54: ldr  x19, [x10]        ; load signed fn ptr
+0xfffffe0008a03d60: mov  x20, x0
+0xfffffe0008a03d70: blraa x19, x17         ; blraa with mod=0xd7e1 (fn call 1)
+0xfffffe0008a03d78: mov  x16, x19
+0xfffffe0008a03d8c: autibsp                ; auth LR
+0xfffffe0008a03d94: braa  x16, x17         ; <<< FAULTS — auth x16, branch
+```
+
+So XNU loads a function pointer from a `__DATA_CONST` table at VA
+`0xfffffe000_7cbe_408`, then `braa`s through it. `braa` authenticates
+the pointer using the **APIA** key, stripping PAC bits on success or
+raising PAC-auth-fault on mismatch. Ours mismatches.
+
+### Why this is a hard wall
+
+Apple's kernelcache ships **pre-signed** function pointers in the
+`__DATA_CONST` segment. Those pointers were signed at build time (or
+at SEP/iBoot hand-off) with an **APIA key derived from hardware fuses
+via SEP**. XNU assumes APIA_EL1 is set to that specific value when
+the kernel starts running.
+
+Our HV ERETs with APIA_EL1 undefined (we never set it), so `braa`
+fails. Real iBoot reads a SEP ticket before jumping to the kernel
+and sets APIA_KEY_{HI,LO}_EL1 to the hw-derived value. Without SEP
+cooperation we don't have that key.
+
+Options, all hard:
+
+1. **Extract APIA key from hardware**. Requires talking to SEP, which
+   itself needs its own firmware running. We've never talked to SEP
+   from the proxy. Multi-week RE project on M4 where nobody has done
+   it before.
+2. **Disable `SCTLR.EnIA`** (so `braa` = `br` without auth strip).
+   But then `br`s to PAC-signed pointers target the raw signed
+   value — same IABORT as v7.
+3. **Patch every `braa`/`blraa` site in the kernelcache** to a plain
+   `br`/`blr` + manual XPACI first. There are thousands of sites
+   and they rely on knowing where each signed table lives.
+4. **Re-sign the entire `__DATA_CONST` pointer table** with our own
+   APIA key. Would need to identify every `__got_ptrauth`-style
+   section and re-compute signatures using QARMA PAC primitives.
+   Probably a week of careful work.
+
+### Practical conclusion
+
+This session peeled five layers off the M4-macOS-guest-HV onion:
+
+1. `run_guest.py` boot ✔ (dockchannel vuart opcode fallback)
+2. Kernelcache FILESET load ✔
+3. Boot-CPU register convention (x0=4) ✔
+4. SP_EL1 must be pre-set ✔
+5. SCTLR.EnIA|EnIB must be pre-enabled ✔
+6. **APIA key must match hw fuses** ← dead stop
+
+Layer 6 is the kind of wall only Apple + SEP can clear. Asahi's
+M1/M2/M3 HV work handles this, but their exact strategy on M4 isn't
+known — M4 macOS 26.3 is new ground.
+
+### Recommendation
+
+For the Bat_OS demo use case (internal keyboard), **ship with
+external USB keyboard** (already works). The HV-trace path has
+pushed past many layers that looked impossible a week ago, but the
+APIA-key wall is different in kind — it needs hardware / SEP, not
+just clever RE.
+
+If Kaden wants to revisit, the two realistic paths forward are:
+
+- Watch for Asahi's `upstream/asahi` branch adding M4 guest-HV
+  plumbing; when they crack SEP on M4, cherry-pick their ERET
+  register setup.
+- Spend a focused week re-signing `__DATA_CONST` pointer tables
+  with a chosen APIA key before boot. Feasible but non-trivial.
+
+Archived v8 log: `logs/hv-mtp-v8-pac-enabled-20260422-0755.log`.
+
 ### Wrapper state
 
 `scripts/hv/boot_macos_mtp_trace.py` is solid — HV init, load, trace
