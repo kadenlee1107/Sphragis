@@ -11,6 +11,50 @@ end of a session.
 
 ---
 
+## 2026-04-22 01:00 — Ubuntu — wake-attempts fail; macOS kext extraction is next
+
+Tried wake mechanisms on live-FW AOP (CS=0x4c / CS=0x48):
+- `IRQ_ACK` (+0x4c) write all-ones: no effect on FW; reads 0 back.
+- `IRQ_EN` (+0x48) write bits 0,1 (A2I_EMPTY/NOT_EMPTY): don't
+  stick — hardware-controlled.
+- AIC SW_SET self-trigger for AOP IRQs 433/434: no effect.
+
+**Nothing AP-side from m1n1 proxy unblocks OUTBOX writes.**
+
+### Pivot plan: extract macOS AOP driver
+
+Patched m1n1 already gates AMX on M4 (hv/__init__.py:1442), so
+`run_guest.py` would work. But without a usable macOS kernelcache
+extracted and HV boot chain set up, the effort is large.
+
+Simpler path: SSH to macOS (Kaden reboots Mac to macOS via boot
+picker) and extract the AOP kext. Likely candidates:
+- `/System/Library/Extensions/AppleH11ANEInterface.kext` (ANE-like)
+- `/System/Library/Extensions/AppleH11VIDInterface.kext`
+- `/System/Library/Extensions/AppleEmbeddedAudio.kext`
+- `/System/Library/Extensions/AOPFamily.kext` (if exists)
+
+Plan:
+1. Kaden reboots Mac to macOS.
+2. `ssh kadenlee@kadens-MacBook-Pro.local`.
+3. `find /System/Library/Extensions -name '*AOP*' -o -name '*rtkit*'`.
+4. Identify which kext registers for `apple,j604` + AOP MMIO.
+5. scp to Ubuntu, disassemble with radare2/ghidra.
+6. Find the init sequence: MMIO writes to 0x390600000 + 0x88000 range.
+7. Replay in our boot_aop_no_dart.py.
+
+Alternative: if Kaden's macOS has Asahi Linux installed (dual-boot),
+its kernel may already know how to talk to M4 AOP via `apple,m3-
+mailbox-v2` compat or similar — just read `dmesg | grep -i aop`.
+
+### Net this session
+
+Closed out all proxy-side probing avenues. AOP boots to alive state
+but without the actual macOS driver init sequence, we can't get FW
+to send OUTBOX. Next step is macOS-side extraction.
+
+---
+
 ## 2026-04-22 00:15 — Ubuntu — M3 theory busted; classic mailbox alive; ascwrap-v6 is genuinely new
 
 Tested `scripts/hv/boot_aop_m3.py` on fresh boot. Disproved M3 theory:
