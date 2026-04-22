@@ -11,6 +11,122 @@ end of a session.
 
 ---
 
+## 2026-04-22 02:00 — Ubuntu — Extracted macOS kext, found real doorbell, FW partially responsive
+
+**Massive progress via macOS kext disassembly.** Pulled
+`BootKernelExtensions.kc` (66MB), `SystemKernelExtensions.kc`
+(362MB), and J604-specific `kernelcache.release.mac16j` (31MB →
+120MB decompressed Mach-O FILESET with 364 embedded kexts).
+
+Extracted `AppleA7IOP-ASCWrap-v6`, `AppleA7IOP`,
+`AppleA7IOP-MXWrap-v1`, `IOSlaveProcessor`, `AOPAudio2` kexts.
+Installed capstone + LIEF + macholib + pyimg4 + lzfse tooling.
+
+### Confirmed mailbox architecture from disasm
+
+```
+AppleASCWrapV6::_inbox(msg):           stp @ base+0x8800  (classic!)
+AppleASCWrapV6::_outbox(msg):          ldp @ base+0x8830
+AppleASCWrapV6::_triggerFiqNmi():      str 0x10 @ +0x1004
+                                       str 0x1  @ +0x1014
+AppleASCWrapV6::_enableOutbox(bool):   bit 0 @ +0x8114
+AppleASCWrapV6::_getInboxEmpty():      bit 17 of +0x8110
+AppleASCWrapV6::_getOutboxEmpty():     bit 17 of +0x8114
+AppleASCWrapV6::_getKICInboxEnabled(): bit 0 of +0x8110
+_enableInboxInterrupt / _enableOutboxInterrupt / _disableAll: NO-OPs (ret)
+```
+
+So INBOX/OUTBOX ARE at +0x8800/+0x8830 and doorbell IS at
++0x1004/+0x1014. All our existing addressing was correct.
+
+### What +0x8180 slot ring really is
+
+`AppleASCWrapV6::getMailboxDebugEntries()` reads +0x8180. That's a
+**debug/history ring**, not the primary mailbox. Our earlier
+"slot ring with trailer 0x00891900" observations were correct but
+mislabeled — those are debug log entries, not msgs.
+
+### What we tested (scripts/hv/boot_aop_doorbell.py)
+
+Full sequence: skip dart.initialize → stage FW → bootargs →
+dapf_init dart-aop → CC.RUN=1 → write INBOX at +0x8800 → ring
+doorbell (+0x1004=0x10, +0x1014=1) → poll OUTBOX.
+
+Observations:
+- CC.RUN=1 works (CC=0x10, IRQ_EN transitions 0x6a → 0x68)
+- INBOX write at +0x8800 advances A2I_CTRL (WPTR→1)
+- Doorbell flips IRQ_EN bit 3 (0x48 → 0x40) — FIQ registered as pending
+- After activity, +0x100c=4 and +0x101c=1 appear (HW handshake state)
+- IRQ_EN eventually returns to 0x60 (idle)
+- **But OUTBOX at +0x8830 STAYS 0 — FW never writes Hello**
+
+### Also tried (all no-op)
+
+- AIC MASK_CLR for AOP IRQs (433-436): unmask didn't help
+- AIC SW_SET for each AOP IRQ: doesn't help either
+- FIQ doorbell + AIC together: no effect
+- Reading I2A_SEND side (+0x8820): always 0
+
+### Additional macOS resources pulled (tarball at macos_dump/)
+
+- `ioreg_ASCWrapV6.txt` — AOP live kernel state: shows **12 endpoints**
+  (not 8): SPUApp, wakehint, aop-audio, voicetrigger, accel, gyro, las,
+  als, cma, devmotion6, als-temp, aop-audprov. All via RTBuddy(AOP)
+  wrapper — AFK framework on top of raw mailbox.
+- `DeviceTree.j604ap.im4p` — authoritative J604 devicetree blob.
+- kext Info.plists for AOP*, MTP*, HID*, DockChannel*, Multitouch*.
+- kmutil_loaded.txt — live load order.
+- PMP runs ASCWrapV6 too (second instance).
+
+### Still unresolved
+
+FW is alive and reacts to every signal we send, but never sends
+OUTBOX. Possible remaining issues:
+
+1. **PMGR full enable.** `AppleA7IOP::enablePower()` calls two
+   vtable functions at offsets +0x8a8 and +0x8b0 on a provider —
+   these are IOKit power-management calls we can't easily replicate
+   from m1n1 without full IOKit. reg[3] at 0x3882a8000 may be the
+   PMGR register, but its value changes wildly (0x7474de15 → 0x7478bdf0
+   → 0x77706f10) — either a counter or multi-bit state.
+
+2. **AP-ready signal.** FW may be waiting for AP to set a specific
+   bit somewhere we haven't found. Unlike m3-mailbox's IRQ_EN at
+   +0x48, we can't find where AP signals "ready" on ascwrap-v6.
+
+3. **Bootargs format.** We set 4 keys (p0CE, laCn, tPOA, gila);
+   the M1/M2 reference set. The FW has 51 keys total — some may
+   be required on M4 but we don't know which.
+
+### Next session plan
+
+- Disassemble AppleA7IOP-ASCWrap-v6 more deeply, specifically the
+  vtable initialization (gMetaClass) to resolve the vtable offsets
+  referenced in enablePower / startCPUWithOptions.
+- If that doesn't clarify: attempt HV-trace. Our patched m1n1
+  already gates AMX on M4 per hv/__init__.py:1442, so run_guest.py
+  should work with a macOS kernelcache payload. Would need to boot
+  macOS inside m1n1 HV and trace AOP MMIO accesses.
+- Alternative: ssh back to macOS and use `log show --predicate
+  'process == "kernel"'` during AOP init with narrower time window
+  (last boot was too far back, need fresh boot).
+
+### Scripts shipped this segment
+
+- `scripts/hv/boot_aop_doorbell.py` — canonical boot with doorbell.
+- `scripts/re/find_aop_init.py` — kext string/xref scanner.
+- `macos_dump/` — extracted kexts, ioreg, kmutil info (gitignored).
+
+### Net
+
+Made huge progress: we now KNOW the exact mailbox protocol and
+doorbell. FW is alive and responsive. Remaining gap is getting
+FW past its pre-Hello init stage. Strong candidate is some IOKit
+power-management call that has no trivial m1n1 equivalent, needing
+either HV trace or deeper kext disasm.
+
+---
+
 ## 2026-04-22 01:00 — Ubuntu — wake-attempts fail; macOS kext extraction is next
 
 Tried wake mechanisms on live-FW AOP (CS=0x4c / CS=0x48):
