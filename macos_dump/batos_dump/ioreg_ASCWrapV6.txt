@@ -1,0 +1,876 @@
++-o AppleASCWrapV6  <class AppleASCWrapV6, id 0x10000044a, !registered, !matched, active, busy 0 (148 ms), retain 5>
+  | {
+  |   "IOProbeScore" = 0x0
+  |   "CFBundleIdentifier" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOProviderClass" = "AppleARMIODevice"
+  |   "IOClass" = "AppleASCWrapV6"
+  |   "IOPersonalityPublisher" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOMatchedAtBoot" = Yes
+  |   "IONameMatch" = ("iop,ascwrap-v6","iop,ascwrap-v7")
+  |   "IOMatchCategory" = "IODefaultMatchCategory"
+  |   "IONameMatched" = "iop,ascwrap-v6"
+  |   "role" = "AOP"
+  | }
+  | 
+  +-o iop-aop-nub  <class AppleA7IOPNub, id 0x100000536, registered, matched, active, busy 0 (148 ms), retain 14>
+    +-o AppleSPUTimesyncV2  <class AppleSPUTimesyncV2, id 0x100000538, registered, matched, active, busy 0 (0 ms), retain 18>
+    +-o RTBuddy(AOP)  <class RTBuddy, id 0x100000539, registered, matched, active, busy 0 (147 ms), retain 51>
+      +-o RTBuddyService  <class RTBuddyService, id 0x10000053c, registered, matched, active, busy 0 (13 ms), retain 6>
+      | +-o AppleSPUFirmwareService  <class AppleSPUFirmwareService, id 0x10000053e, registered, matched, active, busy 0 (13 ms), retain 5>
+      +-o RTBuddyIOReportingEndpoint  <class RTBuddyIOReportingEndpoint, id 0x10000054e, registered, matched, active, busy 0 (0 ms), retain 7>
+      +-o AOPEndpoint1  <class RTBuddyEndpointService, id 0x10000054f, registered, matched, active, busy 0 (32 ms), retain 7>
+      | +-o AppleSPU@10000000  <class AppleSPU, id 0x10000056a, registered, matched, active, busy 0 (24 ms), retain 8>
+      |   +-o SPUApp  <class AppleSPUAppInterface, id 0x10000071c, registered, matched, active, busy 0 (24 ms), retain 9>
+      |     +-o AppleSPUAppDriver  <class AppleSPUAppDriver, id 0x100000753, registered, matched, active, busy 0 (16 ms), retain 7>
+      |       +-o AppleSPUProfileDriver  <class AppleSPUProfileDriver, id 0x100000775, registered, matched, active, busy 0 (1 ms), retain 5>
+      +-o AOPEndpoint2  <class RTBuddyEndpointService, id 0x100000550, registered, matched, active, busy 0 (89 ms), retain 7>
+      | +-o AppleSPU@10000001  <class AppleSPU, id 0x10000055c, registered, matched, active, busy 0 (86 ms), retain 8>
+      |   +-o wakehint  <class AppleSPUHIDInterface, id 0x100000715, registered, matched, active, busy 0 (82 ms), retain 9>
+      |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000728, registered, matched, active, busy 0 (73 ms), retain 8>
+      |       +-o IOHIDInterface  <class IOHIDInterface, id 0x1000007c1, registered, matched, active, busy 0 (56 ms), retain 8>
+      |       | +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x100000827, registered, matched, active, busy 0 (37 ms), retain 10>
+      |       |   +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c0f, !registered, !matched, active, busy 0, retain 6>
+      |       |   +-o AppleSPUHIDDriverUserClient  <class AppleSPUHIDDriverUserClient, id 0x100000cb2, !registered, !matched, active, busy 0, retain 5>
+      |       +-o AppleSPUHIDDeviceUserClient  <class AppleSPUHIDDeviceUserClient, id 0x100000cb3, !registered, !matched, active, busy 0, retain 6>
+      +-o AOPEndpoint3  <class RTBuddyEndpointService, id 0x100000551, registered, matched, active, busy 0 (29 ms), retain 7>
+      | +-o AppleSPU@1000000a  <class AppleSPU, id 0x10000055f, registered, matched, active, busy 0 (27 ms), retain 8>
+      |   +-o aop-audio  <class AppleSPUAppInterface, id 0x10000071e, registered, matched, active, busy 0 (27 ms), retain 11>
+      |     +-o AOPAudioService  <class AOPAudioService, id 0x10000074f, registered, matched, active, busy 0 (3 ms), retain 10>
+      +-o AOPEndpoint4  <class RTBuddyEndpointService, id 0x100000552, registered, matched, active, busy 0 (32 ms), retain 7>
+      | +-o AppleSPU@1000000c  <class AppleSPU, id 0x10000056c, registered, matched, active, busy 0 (23 ms), retain 8>
+      |   +-o aop-voicetrigger  <class AppleSPUAppInterface, id 0x100000720, registered, matched, active, busy 0 (23 ms), retain 11>
+      |     +-o AOPVoiceTriggerService  <class AOPAudioService, id 0x100000759, registered, matched, active, busy 0 (19 ms), retain 10>
+      +-o AOPEndpoint5  <class RTBuddyEndpointService, id 0x100000553, registered, matched, active, busy 0 (100 ms), retain 7>
+      | +-o AppleSPU@10000004  <class AppleSPU, id 0x100000563, registered, matched, active, busy 0 (95 ms), retain 8>
+      |   +-o accel  <class AppleSPUHIDInterface, id 0x100000716, registered, matched, active, busy 0 (95 ms), retain 10>
+      |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000729, registered, matched, active, busy 0 (92 ms), retain 7>
+      |       +-o IOHIDInterface  <class IOHIDInterface, id 0x10000087f, registered, matched, active, busy 0 (47 ms), retain 8>
+      |         +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x1000008bb, registered, matched, active, busy 0 (26 ms), retain 9>
+      |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c0c, !registered, !matched, active, busy 0, retain 6>
+      +-o AOPEndpoint6  <class RTBuddyEndpointService, id 0x100000554, registered, matched, active, busy 0 (29 ms), retain 7>
+      | +-o AppleSPU@10000005  <class AppleSPU, id 0x100000574, registered, matched, active, busy 0 (19 ms), retain 8>
+      |   +-o gyro  <class AppleSPUHIDInterface, id 0x100000717, registered, matched, active, busy 0 (19 ms), retain 10>
+      |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000740, registered, matched, active, busy 0 (15 ms), retain 7>
+      |       +-o IOHIDInterface  <class IOHIDInterface, id 0x100000762, registered, matched, active, busy 0 (14 ms), retain 8>
+      |         +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x10000076a, registered, matched, active, busy 0 (7 ms), retain 9>
+      |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c13, !registered, !matched, active, busy 0, retain 6>
+      +-o AOPEndpoint7  <class RTBuddyEndpointService, id 0x100000555, registered, matched, active, busy 0 (89 ms), retain 7>
+      | +-o AppleSPU@600  <class AppleSPU, id 0x100000566, registered, matched, active, busy 0 (82 ms), retain 8>
+      |   +-o las  <class AppleSPUHIDInterface, id 0x100000718, registered, matched, active, busy 0 (82 ms), retain 9>
+      |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000749, registered, matched, active, busy 0 (58 ms), retain 7>
+      |       +-o IOHIDInterface  <class IOHIDInterface, id 0x10000087e, registered, matched, active, busy 0 (34 ms), retain 8>
+      |         +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x1000008b7, registered, matched, active, busy 0 (13 ms), retain 9>
+      |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c0d, !registered, !matched, active, busy 0, retain 6>
+      +-o AOPEndpoint8  <class RTBuddyEndpointService, id 0x100000556, registered, matched, active, busy 0 (79 ms), retain 7>
+      | +-o AppleSPU@1000000e  <class AppleSPU, id 0x10000057c, registered, matched, active, busy 0 (66 ms), retain 8>
+      |   +-o als  <class AppleSPUHIDInterface, id 0x100000719, registered, matched, active, busy 0 (55 ms), retain 10>
+      |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000750, registered, matched, active, busy 0 (49 ms), retain 7>
+      |       +-o IOHIDInterface  <class IOHIDInterface, id 0x100000774, registered, matched, active, busy 0 (24 ms), retain 8>
+      |         +-o AppleSPUVD6286  <class AppleSPUVD6286, id 0x1000007a2, registered, matched, active, busy 0 (14 ms), retain 9>
+      |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c12, !registered, !matched, active, busy 0, retain 6>
+      +-o AOPEndpoint9  <class RTBuddyEndpointService, id 0x100000557, registered, matched, active, busy 0 (72 ms), retain 7>
+      | +-o AppleSPU@1000000f  <class AppleSPU, id 0x10000057a, registered, matched, active, busy 0 (61 ms), retain 8>
+      |   +-o cma  <class AppleSPUHIDInterface, id 0x10000071a, registered, matched, active, busy 0 (61 ms), retain 9>
+      |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000747, registered, matched, active, busy 0 (40 ms), retain 7>
+      |       +-o IOHIDInterface  <class IOHIDInterface, id 0x10000078e, registered, matched, active, busy 0 (38 ms), retain 8>
+      |         +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x100000826, registered, matched, active, busy 0 (14 ms), retain 10>
+      |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c11, !registered, !matched, active, busy 0, retain 6>
+      |           +-o AppleSPUHIDDriverUserClient  <class AppleSPUHIDDriverUserClient, id 0x100000d40, !registered, !matched, active, busy 0, retain 5>
+      +-o AOPEndpoint10  <class RTBuddyEndpointService, id 0x100000558, registered, matched, active, busy 0 (102 ms), retain 7>
+      | +-o AppleSPU@10000010  <class AppleSPU, id 0x100000580, registered, matched, active, busy 0 (88 ms), retain 8>
+      |   +-o devmotion6  <class AppleSPUHIDInterface, id 0x10000071d, registered, matched, active, busy 0 (85 ms), retain 9>
+      |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000746, registered, matched, active, busy 0 (63 ms), retain 7>
+      |       +-o IOHIDInterface  <class IOHIDInterface, id 0x1000007b9, registered, matched, active, busy 0 (60 ms), retain 8>
+      |         +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x10000088d, registered, matched, active, busy 0 (3 ms), retain 9>
+      |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c0b, !registered, !matched, active, busy 0, retain 6>
+      +-o AOPEndpoint11  <class RTBuddyEndpointService, id 0x100000559, registered, matched, active, busy 0 (110 ms), retain 7>
+      | +-o AppleSPU@10000007  <class AppleSPU, id 0x100000579, registered, matched, active, busy 0 (80 ms), retain 8>
+      |   +-o als-temp  <class AppleSPUHIDInterface, id 0x10000071b, registered, matched, active, busy 0 (65 ms), retain 9>
+      |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x10000074e, registered, matched, active, busy 0 (38 ms), retain 7>
+      |       +-o IOHIDInterface  <class IOHIDInterface, id 0x100000870, registered, matched, active, busy 0 (19 ms), retain 8>
+      |         +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x10000088b, registered, matched, active, busy 0 (3 ms), retain 9>
+      |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c0e, !registered, !matched, active, busy 0, retain 6>
+      +-o AOPEndpoint12  <class RTBuddyEndpointService, id 0x10000055a, registered, matched, active, busy 0 (15 ms), retain 7>
+        +-o AppleSPU@1000000b  <class AppleSPU, id 0x10000056e, registered, matched, active, busy 0 (6 ms), retain 8>
+          +-o aop-audprov  <class AppleSPUAppInterface, id 0x10000071f, registered, matched, active, busy 0 (6 ms), retain 7>
+
++-o AppleASCWrapV6  <class AppleASCWrapV6, id 0x10000043c, !registered, !matched, active, busy 0 (57 ms), retain 5>
+  | {
+  |   "IOProbeScore" = 0x0
+  |   "CFBundleIdentifier" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOProviderClass" = "AppleARMIODevice"
+  |   "IOClass" = "AppleASCWrapV6"
+  |   "IOPersonalityPublisher" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOMatchedAtBoot" = Yes
+  |   "IONameMatch" = ("iop,ascwrap-v6","iop,ascwrap-v7")
+  |   "IOMatchCategory" = "IODefaultMatchCategory"
+  |   "IONameMatched" = "iop,ascwrap-v6"
+  |   "role" = "PMP"
+  | }
+  | 
+  +-o iop-pmp-nub  <class AppleA7IOPNub, id 0x100000710, registered, matched, active, busy 0 (57 ms), retain 7>
+    +-o RTBuddy(PMP)  <class RTBuddy, id 0x100000752, registered, matched, active, busy 0 (46 ms), retain 21>
+      +-o RTBuddyService  <class RTBuddyService, id 0x100000779, registered, matched, active, busy 0 (2 ms), retain 5>
+      +-o ApplePMPFirmware  <class ApplePMPFirmware, id 0x10000077a, registered, matched, active, busy 0 (6 ms), retain 5>
+      +-o RTBuddyIOReportingEndpoint  <class RTBuddyIOReportingEndpoint, id 0x1000007b5, registered, matched, active, busy 0 (18 ms), retain 7>
+      +-o RTBuddyCoreAnalyticsEndpoint  <class RTBuddyCoreAnalyticsEndpoint, id 0x1000007b6, registered, matched, active, busy 0 (31 ms), retain 6>
+      +-o PMPEndpoint1  <class RTBuddyEndpointService, id 0x1000007ba, registered, matched, active, busy 0 (21 ms), retain 7>
+        +-o ApplePMPv2  <class ApplePMPv2, id 0x1000007e2, registered, matched, active, busy 0 (18 ms), retain 5>
+
++-o AppleASCWrapV6  <class AppleASCWrapV6, id 0x100000522, !registered, !matched, active, busy 0 (91 ms), retain 5>
+  | {
+  |   "IOProbeScore" = 0x0
+  |   "CFBundleIdentifier" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOProviderClass" = "AppleARMIODevice"
+  |   "IOClass" = "AppleASCWrapV6"
+  |   "IOPersonalityPublisher" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOMatchedAtBoot" = Yes
+  |   "IONameMatch" = ("iop,ascwrap-v6","iop,ascwrap-v7")
+  |   "IOMatchCategory" = "IODefaultMatchCategory"
+  |   "IONameMatched" = "iop,ascwrap-v6"
+  |   "role" = "SIO"
+  | }
+  | 
+  +-o iop-sio-nub  <class AppleA7IOPNub, id 0x100000523, registered, matched, active, busy 0 (91 ms), retain 8>
+    +-o RTBuddy(SIO)  <class RTBuddy, id 0x100000524, registered, matched, active, busy 0 (88 ms), retain 17>
+      +-o RTBuddyService  <class RTBuddyService, id 0x100000525, registered, matched, active, busy 0 (0 ms), retain 5>
+      +-o RTBuddyIOReportingEndpoint  <class RTBuddyIOReportingEndpoint, id 0x10000052f, registered, matched, active, busy 0 (0 ms), retain 7>
+      +-o SIOEndpoint1  <class RTBuddyEndpointService, id 0x100000530, registered, matched, active, busy 0 (88 ms), retain 8>
+        +-o AppleSmartIO  <class AppleSmartIO, id 0x100000531, registered, matched, active, busy 0 (70 ms), retain 6>
+          +-o sio-dma  <class AppleSmartIODMANub, id 0x100000569, registered, matched, active, busy 0 (70 ms), retain 8>
+            +-o IODMAController00000103  <class AppleSmartIODMAController, id 0x100000591, registered, matched, active, busy 0 (53 ms), retain 10>
+
++-o AppleASCWrapV6  <class AppleASCWrapV6, id 0x1000003ca, !registered, !matched, active, busy 0 (429 ms), retain 5>
+  | {
+  |   "IOProbeScore" = 0x0
+  |   "CFBundleIdentifier" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOProviderClass" = "AppleARMIODevice"
+  |   "IOClass" = "AppleASCWrapV6"
+  |   "IOPersonalityPublisher" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOMatchedAtBoot" = Yes
+  |   "IONameMatch" = ("iop,ascwrap-v6","iop,ascwrap-v7")
+  |   "IOMatchCategory" = "IODefaultMatchCategory"
+  |   "IONameMatched" = "iop,ascwrap-v6"
+  |   "role" = "ANS2"
+  | }
+  | 
+  +-o iop-ans-nub  <class AppleA7IOPNub, id 0x10000045f, registered, matched, active, busy 0 (429 ms), retain 8>
+    +-o RTBuddy(ANS2)  <class RTBuddy, id 0x100000460, registered, matched, active, busy 0 (429 ms), retain 24>
+      +-o RTBuddyService  <class RTBuddyService, id 0x100000462, registered, matched, active, busy 0 (428 ms), retain 7>
+      | +-o AppleANS3CGv2Controller  <class AppleANS3CGv2Controller, id 0x10000046b, registered, matched, active, busy 0 (40 ms), retain 21>
+      |   +-o AppleEmbeddedNVMeTemperatureSensor  <class AppleEmbeddedNVMeTemperatureSensor, id 0x100000a94, registered, matched, active, busy 0 (0 ms), retain 8>
+      |   | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c07, !registered, !matched, active, busy 0, retain 6>
+      |   +-o NS_01@1  <class IOEmbeddedNVMeBlockDevice, id 0x100000a95, registered, matched, active, busy 0 (40 ms), retain 7>
+      |   | +-o IOBlockStorageDriver  <class IOBlockStorageDriver, id 0x100000a97, registered, matched, active, busy 0 (40 ms), retain 8>
+      |   |   +-o APPLE SSD AP0512Z Media  <class IOMedia, id 0x100000a98, registered, matched, active, busy 0 (40 ms), retain 12>
+      |   |     +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x100000a9a, registered, matched, active, busy 0 (0 ms), retain 6>
+      |   |     +-o IOGUIDPartitionScheme  <class IOGUIDPartitionScheme, id 0x100000a9c, !registered, !matched, active, busy 0 (27 ms), retain 8>
+      |   |       +-o iBootSystemContainer@1  <class IOMedia, id 0x100000aa0, registered, matched, active, busy 0 (10 ms), retain 12>
+      |   |       | +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x100000aa3, registered, matched, active, busy 0 (0 ms), retain 6>
+      |   |       | +-o AppleAPFSContainerScheme  <class AppleAPFSContainerScheme, id 0x100000aa4, !registered, !matched, active, busy 0 (9 ms), retain 7>
+      |   |       |   +-o AppleAPFSMedia  <class AppleAPFSMedia, id 0x100000aa7, registered, matched, active, busy 0 (9 ms), retain 11>
+      |   |       |     +-o AppleAPFSMediaBSDClient  <class AppleAPFSMediaBSDClient, id 0x100000aab, registered, matched, active, busy 0 (0 ms), retain 7>
+      |   |       |     +-o AppleAPFSContainer  <class AppleAPFSContainer, id 0x100000aba, registered, matched, active, busy 0 (0 ms), retain 11>
+      |   |       |       +-o iSCPreboot@1  <class AppleAPFSVolume, id 0x100000ac4, registered, matched, active, busy 0 (0 ms), retain 11>
+      |   |       |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000acc, registered, matched, active, busy 0 (0 ms), retain 7>
+      |   |       |       +-o xART@2  <class AppleAPFSVolume, id 0x100000ac5, registered, matched, active, busy 0 (0 ms), retain 11>
+      |   |       |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000ac8, registered, matched, active, busy 0 (0 ms), retain 7>
+      |   |       |       +-o Hardware@3  <class AppleAPFSVolume, id 0x100000ac6, registered, matched, active, busy 0 (0 ms), retain 11>
+      |   |       |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000ac9, registered, matched, active, busy 0 (0 ms), retain 7>
+      |   |       |       +-o Recovery@4  <class AppleAPFSVolume, id 0x100000ac7, registered, matched, active, busy 0 (0 ms), retain 9>
+      |   |       |         +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000ace, registered, matched, active, busy 0 (0 ms), retain 6>
+      |   |       +-o Container@2  <class IOMedia, id 0x100000aa1, registered, matched, active, busy 0 (27 ms), retain 12>
+      |   |       | +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x100000aa5, registered, matched, active, busy 0 (0 ms), retain 6>
+      |   |       | +-o AppleAPFSContainerScheme  <class AppleAPFSContainerScheme, id 0x100000aa6, !registered, !matched, active, busy 0 (27 ms), retain 7>
+      |   |       |   +-o AppleAPFSMedia  <class AppleAPFSMedia, id 0x100000aaa, registered, matched, active, busy 0 (27 ms), retain 11>
+      |   |       |     +-o AppleAPFSMediaBSDClient  <class AppleAPFSMediaBSDClient, id 0x100000aae, registered, matched, active, busy 0 (0 ms), retain 7>
+      |   |       |     +-o AppleAPFSContainer  <class AppleAPFSContainer, id 0x100000abf, registered, matched, active, busy 0 (11 ms), retain 14>
+      |   |       |       +-o Macintosh HD@1  <class AppleAPFSVolume, id 0x100000ad6, registered, matched, active, busy 0 (7 ms), retain 14>
+      |   |       |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000add, registered, matched, active, busy 0 (1 ms), retain 6>
+      |   |       |       | +-o com.apple.os.update-CF9513BCD92B3766A60BDBD4D2EDBAE4750AF74781836A8C6C16E37CA65CAE0F@1  <class AppleAPFSSnapshot, id 0x100000aee, registered, matched, active, busy 0 (0 ms), retain 10>
+      |   |       |       |   +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x100000aef, registered, matched, active, busy 0 (0 ms), retain 7>
+      |   |       |       +-o Preboot@2  <class AppleAPFSVolume, id 0x100000ad7, registered, matched, active, busy 0 (1 ms), retain 14>
+      |   |       |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000ae3, registered, matched, active, busy 0 (0 ms), retain 7>
+      |   |       |       | +-o CheerD25D125.arm64eSystemCryptex  <class AppleAPFSGraft, id 0x100000b8f, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o AppCryptex  <class AppleAPFSGraft, id 0x100000b90, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o CheerD25D125.arm64eSystemCryptex  <class AppleAPFSGraft, id 0x100000b91, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       +-o Recovery@3  <class AppleAPFSVolume, id 0x100000ad8, registered, matched, active, busy 0 (5 ms), retain 9>
+      |   |       |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000ae5, registered, matched, active, busy 0 (0 ms), retain 6>
+      |   |       |       +-o Update@4  <class AppleAPFSVolume, id 0x100000ad9, registered, matched, active, busy 0 (1 ms), retain 11>
+      |   |       |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000ae9, registered, matched, active, busy 0 (0 ms), retain 7>
+      |   |       |       +-o Macintosh HD - Data@5  <class AppleAPFSVolume, id 0x100000ada, registered, matched, active, busy 0 (1 ms), retain 39>
+      |   |       |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000ae1, registered, matched, active, busy 0 (0 ms), retain 7>
+      |   |       |       | +-o RevivalB13M203016.UC_FM_LANGUAGE_INSTRUCT_3B_SHORTCUTS_ASK_AFM_ACTION_3B_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e37, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202601.UC_FM_LANGUAGE_INSTRUCT_3B_MESSAGES_REPLY_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e3b, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202379.UC_FM_CODE_GENERATE_SMALL_V2_BASE_GENERIC_H16_Cryptex  <class AppleAPFSGraft, id 0x100000e3c, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202252.UC_FM_LANGUAGE_INSTRUCT_3B_FM_API_GENERIC_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e3d, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202330.UC_FM_LANGUAGE_INSTRUCT_3B_TEXT_PERSON_EXTRACTION_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e3e, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202707.UC_FM_VISUAL_IMAGE_DIFFUSION_V1_BASE_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e3f, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202244.UC_FM_LANGUAGE_INSTRUCT_300M_BASE_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e44, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202641.UC_FM_LANGUAGE_INSTRUCT_300M_ADM_PROMPT_REWRITING_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e45, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202244.UC_FM_LANGUAGE_INSTRUCT_300M_IMAGE_TOKENIZER_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e47, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202407.UC_FM_LANGUAGE_INSTRUCT_3B_REMINDERS_SUGGEST_ACTION_ITEMS_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e48, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202353.UC_FM_LANGUAGE_INSTRUCT_3B_SHORTCUTS_ASK_AFM_ACTION_3B_V2_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e49, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202252.UC_FM_LANGUAGE_INSTRUCT_3B_CONCISE_TONE_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e4a, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202652.UC_FM_LANGUAGE_INSTRUCT_3B_TEXT_EVENT_EXTRACTION_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e4b, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202072.UC_FM_CODE_GENERATE_SAFETY_GUARDRAIL_BASE_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e4d, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202303.UC_FM_LANGUAGE_INSTRUCT_3B_PHOTOS_MEMORIES_ASSET_CURATION_OUTLIER_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e4e, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202694.UC_FM_LANGUAGE_INSTRUCT_3B_MAIL_REPLY_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e4f, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202252.UC_FM_LANGUAGE_INSTRUCT_3B_BASE_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e54, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202252.UC_FM_LANGUAGE_INSTRUCT_3B_AUTONAMING_MESSAGES_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e55, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202952.UC_FM_LANGUAGE_INSTRUCT_3B_SUMMARIZATION_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e61, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202407.UC_FM_LANGUAGE_INSTRUCT_3B_SUGGEST_RECIPE_ITEMS_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e62, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202522.UC_FM_LANGUAGE_INSTRUCT_3B_FRIENDLY_TONE_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e65, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202252.UC_FM_LANGUAGE_INSTRUCT_3B_MESSAGES_ACTION_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e67, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202555.UC_FM_LANGUAGE_INSTRUCT_3B_MAGIC_REWRITE_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e68, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202252.UC_FM_LANGUAGE_INSTRUCT_3B_PHOTOS_MEMORIES_TITLE_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e6b, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202326.UC_FM_LANGUAGE_INSTRUCT_3B_PROFESSIONAL_TONE_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e71, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o Creedence11M6270.SECUREPKITRUSTSTOREASSETS_SECUREPKITRUSTSTORE_Cryptex  <class AppleAPFSGraft, id 0x100000e72, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202785.UC_FM_LANGUAGE_INSTRUCT_3B_PROOFREADING_REVIEW_DRAFT_GENERIC_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e77, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       | +-o RevivalB13M202404.UC_IF_PLANNER_NLROUTER_BASE_EN_GENERIC_H16G_Cryptex  <class AppleAPFSGraft, id 0x100000e7a, !registered, !matched, active, busy 0, retain 5>
+      |   |       |       +-o VM@6  <class AppleAPFSVolume, id 0x100000adb, registered, matched, active, busy 0 (1 ms), retain 11>
+      |   |       |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000ae8, registered, matched, active, busy 0 (0 ms), retain 7>
+      |   |       |       +-o Bat_OS@7  <class AppleAPFSVolume, id 0x100000adc, registered, matched, active, busy 0 (1 ms), retain 11>
+      |   |       |         +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000adf, registered, matched, active, busy 0 (0 ms), retain 7>
+      |   |       +-o RecoveryOSContainer@3  <class IOMedia, id 0x100000aa2, registered, matched, active, busy 0 (11 ms), retain 11>
+      |   |         +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x100000aa8, registered, matched, active, busy 0 (0 ms), retain 6>
+      |   |         +-o AppleAPFSContainerScheme  <class AppleAPFSContainerScheme, id 0x100000aa9, !registered, !matched, active, busy 0 (11 ms), retain 6>
+      |   |           +-o AppleAPFSMedia  <class AppleAPFSMedia, id 0x100000ab1, registered, matched, active, busy 0 (11 ms), retain 10>
+      |   |             +-o AppleAPFSMediaBSDClient  <class AppleAPFSMediaBSDClient, id 0x100000ab4, registered, matched, active, busy 0 (0 ms), retain 6>
+      |   |             +-o AppleAPFSContainer  <class AppleAPFSContainer, id 0x100000ac3, registered, matched, active, busy 0 (0 ms), retain 7>
+      |   |               +-o Recovery@1  <class AppleAPFSVolume, id 0x100000ad0, registered, matched, active, busy 0 (0 ms), retain 9>
+      |   |               | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000ad2, registered, matched, active, busy 0 (0 ms), retain 6>
+      |   |               +-o Update@2  <class AppleAPFSVolume, id 0x100000ad1, registered, matched, active, busy 0 (0 ms), retain 9>
+      |   |                 +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000ad4, registered, matched, active, busy 0 (0 ms), retain 6>
+      |   +-o NS_02  <class AppleNVMeNamespaceDevice, id 0x100000aec, registered, matched, active, busy 0 (0 ms), retain 5>
+      |   +-o NS_03  <class AppleNVMeEAN, id 0x100000aed, registered, matched, active, busy 0 (0 ms), retain 7>
+      |     +-o AppleNVMeEANUC  <class AppleNVMeEANUC, id 0x100000d5f, !registered, !matched, active, busy 0, retain 6>
+      +-o RTBuddyIOReportingEndpoint  <class RTBuddyIOReportingEndpoint, id 0x100000463, registered, matched, active, busy 0 (101 ms), retain 7>
+      +-o RTBuddyTraceKitEndpoint  <class RTBuddyTraceKitEndpoint, id 0x100000464, registered, matched, active, busy 0 (101 ms), retain 7>
+      +-o ANS2Endpoint1  <class RTBuddyEndpointService, id 0x100000465, registered, matched, active, busy 0 (103 ms), retain 7>
+      +-o ANS2Endpoint2  <class RTBuddyEndpointService, id 0x100000466, registered, matched, active, busy 0 (100 ms), retain 6>
+
++-o AppleASCWrapV6  <class AppleASCWrapV6, id 0x1000003bd, !registered, !matched, active, busy 0 (637 ms), retain 5>
+  | {
+  |   "IOProbeScore" = 0x0
+  |   "CFBundleIdentifier" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOProviderClass" = "AppleARMIODevice"
+  |   "IOClass" = "AppleASCWrapV6"
+  |   "IOPersonalityPublisher" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOMatchedAtBoot" = Yes
+  |   "IONameMatch" = ("iop,ascwrap-v6","iop,ascwrap-v7")
+  |   "IOMatchCategory" = "IODefaultMatchCategory"
+  |   "IONameMatched" = "iop,ascwrap-v6"
+  |   "role" = "SMC"
+  | }
+  | 
+  +-o iop-smc-nub  <class AppleA7IOPNub, id 0x1000003be, registered, matched, active, busy 0 (637 ms), retain 12>
+    +-o RTBuddy(SMC)  <class RTBuddy, id 0x1000003bf, registered, matched, active, busy 0 (635 ms), retain 17>
+      +-o RTBuddyService  <class RTBuddyService, id 0x1000003c0, registered, matched, active, busy 0 (0 ms), retain 5>
+      +-o RTBuddyIOReportingEndpoint  <class RTBuddyIOReportingEndpoint, id 0x1000003d8, registered, matched, active, busy 0 (24 ms), retain 7>
+      +-o SMCEndpoint1  <class RTBuddyEndpointService, id 0x1000003d9, registered, matched, active, busy 0 (634 ms), retain 7>
+        +-o AppleSMCKeysEndpoint  <class AppleSMCKeysEndpoint, id 0x1000003da, registered, matched, active, busy 0 (434 ms), retain 273>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x1000005f1, registered, matched, active, busy 0 (22 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c95, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x10000061c, registered, matched, active, busy 0 (78 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c42, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000061d, registered, matched, active, busy 0 (77 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c94, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000621, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c41, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000622, registered, matched, active, busy 0 (3 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c40, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000623, registered, matched, active, busy 0 (2 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c3f, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000624, registered, matched, active, busy 0 (2 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c3e, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000625, registered, matched, active, busy 0 (2 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c3d, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000629, registered, matched, active, busy 0 (20 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c3c, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000639, registered, matched, active, busy 0 (26 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c3b, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x10000063f, registered, matched, active, busy 0 (33 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c3a, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000640, registered, matched, active, busy 0 (9 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c39, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000641, registered, matched, active, busy 0 (31 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c38, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000642, registered, matched, active, busy 0 (9 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c37, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000643, registered, matched, active, busy 0 (51 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c36, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x10000064f, registered, matched, active, busy 0 (51 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c35, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000657, registered, matched, active, busy 0 (68 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c33, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x10000065a, registered, matched, active, busy 0 (4 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c32, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x10000065b, registered, matched, active, busy 0 (19 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c31, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x10000065c, registered, matched, active, busy 0 (61 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c30, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x10000065d, registered, matched, active, busy 0 (47 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c2f, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x10000065e, registered, matched, active, busy 0 (18 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c2e, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x10000065f, registered, matched, active, busy 0 (12 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c2d, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000662, registered, matched, active, busy 0 (64 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c2c, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000665, registered, matched, active, busy 0 (65 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c2b, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000668, registered, matched, active, busy 0 (2 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c93, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000674, registered, matched, active, busy 0 (16 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c92, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000070e, registered, matched, active, busy 0 (21 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c91, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000713, registered, matched, active, busy 0 (8 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c90, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000733, registered, matched, active, busy 0 (16 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c8f, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000738, registered, matched, active, busy 0 (17 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c8e, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000074b, registered, matched, active, busy 0 (18 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c8d, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000778, registered, matched, active, busy 0 (2 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c8c, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000077e, registered, matched, active, busy 0 (2 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c8b, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000780, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c8a, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000782, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c89, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000785, registered, matched, active, busy 0 (5 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c88, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000787, registered, matched, active, busy 0 (6 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c87, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x1000007be, registered, matched, active, busy 0 (30 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c86, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x1000007c0, registered, matched, active, busy 0 (17 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c85, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x1000007c2, registered, matched, active, busy 0 (10 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c83, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x1000007c3, registered, matched, active, busy 0 (2 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c82, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x1000007c8, registered, matched, active, busy 0 (15 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c81, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x1000007dd, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c80, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x1000007e1, registered, matched, active, busy 0 (11 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c7f, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x1000007f7, registered, matched, active, busy 0 (10 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c7e, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x1000007f8, registered, matched, active, busy 0 (6 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c7d, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x1000007fb, registered, matched, active, busy 0 (14 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c7c, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000802, registered, matched, active, busy 0 (13 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c7b, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000846, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c7a, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000863, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c79, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000086b, registered, matched, active, busy 0 (14 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c78, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000086f, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c77, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000087a, registered, matched, active, busy 0 (38 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c76, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000087d, registered, matched, active, busy 0 (40 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c75, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000880, registered, matched, active, busy 0 (34 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c74, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000091a, registered, matched, active, busy 0 (4 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c73, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000091c, registered, matched, active, busy 0 (2 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c72, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000921, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c71, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000927, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c70, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000092d, registered, matched, active, busy 0 (18 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c6f, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000930, registered, matched, active, busy 0 (16 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c6e, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000933, registered, matched, active, busy 0 (14 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c6d, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000941, registered, matched, active, busy 0 (11 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c6c, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000944, registered, matched, active, busy 0 (10 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c6b, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000946, registered, matched, active, busy 0 (10 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c6a, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000094d, registered, matched, active, busy 0 (9 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c69, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000094e, registered, matched, active, busy 0 (8 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c68, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x10000094f, registered, matched, active, busy 0 (11 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c67, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000950, registered, matched, active, busy 0 (7 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c66, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000951, registered, matched, active, busy 0 (5 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c65, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000952, registered, matched, active, busy 0 (5 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c64, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000953, registered, matched, active, busy 0 (2 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c63, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000954, registered, matched, active, busy 0 (4 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c62, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000955, registered, matched, active, busy 0 (4 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c2a, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x10000095a, registered, matched, active, busy 0 (4 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c28, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x1000009aa, registered, matched, active, busy 0 (20 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c27, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x1000009ac, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c26, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x1000009ae, registered, matched, active, busy 0 (19 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c25, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x1000009b3, registered, matched, active, busy 0 (18 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c24, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x1000009c4, registered, matched, active, busy 0 (21 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c23, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x1000009d8, registered, matched, active, busy 0 (3 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c22, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x1000009df, registered, matched, active, busy 0 (6 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c21, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x1000009e5, registered, matched, active, busy 0 (4 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c20, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x1000009f4, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c1f, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x1000009fb, registered, matched, active, busy 0 (2 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c1e, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000a00, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c1d, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000a05, registered, matched, active, busy 0 (2 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c1c, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000a08, registered, matched, active, busy 0 (2 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c1b, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000a09, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c1a, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a0e, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c61, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a18, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c60, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a1f, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c5f, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a23, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c5e, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a27, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c5d, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a2e, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c5c, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a30, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c5b, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a31, registered, matched, active, busy 0 (1 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c5a, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a33, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c59, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a38, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c58, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a3a, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c57, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a3b, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c55, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a3e, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c54, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a40, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c53, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a42, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c52, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a44, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c51, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a46, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c50, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a48, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c4f, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a4a, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c4e, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a4c, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c4d, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a4e, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c4c, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a50, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c4b, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a52, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c4a, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a54, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c49, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a56, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c48, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a58, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c47, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a5a, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c46, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a5c, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c45, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a5e, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c44, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUPowerSensor  <class AppleARMPMUPowerSensor, id 0x100000a60, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c43, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000a62, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c19, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000a64, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c18, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000a66, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c17, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000a68, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c16, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000a6a, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c15, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleARMPMUTempSensor  <class AppleARMPMUTempSensor, id 0x100000a6c, registered, matched, active, busy 0 (0 ms), retain 8>
+          | +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c14, !registered, !matched, active, busy 0, retain 6>
+          +-o smc-pmu  <class AppleSMCInterface, id 0x100000a6e, registered, matched, active, busy 0 (4 ms), retain 9>
+          | +-o AppleSMCPMU  <class AppleSMCPMU, id 0x100000a7a, registered, matched, active, busy 0 (0 ms), retain 17>
+          +-o smc-charger-util-0  <class AppleSMCInterface, id 0x100000a6f, registered, matched, active, busy 0 (2 ms), retain 9>
+          | +-o AppleSMCChargerUtil  <class AppleSMCChargerUtil, id 0x100000a75, registered, matched, active, busy 0 (0 ms), retain 5>
+          +-o smc-charger-util-1  <class AppleSMCInterface, id 0x100000a70, registered, matched, active, busy 0 (2 ms), retain 9>
+          | +-o AppleSMCChargerUtil  <class AppleSMCChargerUtil, id 0x100000a78, registered, matched, active, busy 0 (0 ms), retain 7>
+          +-o smc-charger-util-3  <class AppleSMCInterface, id 0x100000a71, registered, matched, active, busy 0 (1 ms), retain 9>
+          | +-o AppleSMCChargerUtil  <class AppleSMCChargerUtil, id 0x100000a76, registered, matched, active, busy 0 (0 ms), retain 5>
+          +-o smc-charger-util  <class AppleSMCInterface, id 0x100000a72, registered, matched, active, busy 0 (5 ms), retain 9>
+          | +-o AppleSMCChargerUtil  <class AppleSMCChargerUtil, id 0x100000a79, registered, matched, active, busy 0 (0 ms), retain 5>
+          +-o AppleSmartBatteryManager  <class AppleSmartBatteryManager, id 0x100000a73, registered, matched, active, busy 0 (6 ms), retain 7>
+          | +-o AppleSmartBattery  <class AppleSmartBattery, id 0x100000a74, registered, matched, active, busy 0 (6 ms), retain 7>
+          +-o AppleSMCClient  <class AppleSMCClient, id 0x100000d3a, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleSMCClient  <class AppleSMCClient, id 0x100000d62, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleSMCClient  <class AppleSMCClient, id 0x100000d64, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleSMCClient  <class AppleSMCClient, id 0x100000e34, !registered, !matched, active, busy 0, retain 6>
+          +-o AppleSMCClient  <class AppleSMCClient, id 0x10000184d, !registered, !matched, active, busy 0, retain 6>
+
++-o AppleASCWrapV6  <class AppleASCWrapV6, id 0x100000458, !registered, !matched, active, busy 0 (11 ms), retain 5>
+  | {
+  |   "IOProbeScore" = 0x0
+  |   "CFBundleIdentifier" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOProviderClass" = "AppleARMIODevice"
+  |   "IOClass" = "AppleASCWrapV6"
+  |   "IOPersonalityPublisher" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOMatchedAtBoot" = Yes
+  |   "IONameMatch" = ("iop,ascwrap-v6","iop,ascwrap-v7")
+  |   "IOMatchCategory" = "IODefaultMatchCategory"
+  |   "IONameMatched" = "iop,ascwrap-v6"
+  |   "role" = "MTP"
+  | }
+  | 
+  +-o iop-mtp-nub  <class AppleA7IOPNub, id 0x10000054c, registered, matched, active, busy 0 (11 ms), retain 8>
+    +-o RTBuddy(MTP)  <class RTBuddy, id 0x10000054d, registered, matched, active, busy 0 (10 ms), retain 19>
+      +-o RTBuddyIOReportingEndpoint  <class RTBuddyIOReportingEndpoint, id 0x10000055d, registered, matched, active, busy 0 (0 ms), retain 7>
+      +-o RTBuddyTraceKitEndpoint  <class RTBuddyTraceKitEndpoint, id 0x10000055e, registered, matched, active, busy 0 (0 ms), retain 7>
+      +-o RTBuddyService  <class RTBuddyService, id 0x100000577, registered, matched, active, busy 0 (0 ms), retain 5>
+
++-o AppleASCWrapV6  <class AppleASCWrapV6, id 0x100000514, !registered, !matched, active, busy 0 (575 ms), retain 5>
+  | {
+  |   "IOProbeScore" = 0x0
+  |   "CFBundleIdentifier" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOProviderClass" = "AppleARMIODevice"
+  |   "IOClass" = "AppleASCWrapV6"
+  |   "IOPersonalityPublisher" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOMatchedAtBoot" = Yes
+  |   "IONameMatch" = ("iop,ascwrap-v6","iop,ascwrap-v7")
+  |   "IOMatchCategory" = "IODefaultMatchCategory"
+  |   "IONameMatched" = "iop,ascwrap-v6"
+  |   "role" = "DCP"
+  | }
+  | 
+  +-o iop-dcp-nub  <class AppleA7IOPNub, id 0x1000005a3, registered, matched, active, busy 0 (576 ms), retain 7>
+    +-o RTBuddy(DCP)  <class RTBuddy, id 0x1000005a7, registered, matched, active, busy 0 (573 ms), retain 47>
+      +-o RTBuddyService  <class RTBuddyService, id 0x1000005ab, registered, matched, active, busy 0 (15 ms), retain 34>
+      | +-o AFKFirmwareService  <class AFKFirmwareService, id 0x1000005eb, registered, matched, active, busy 0 (7 ms), retain 5>
+      +-o RTBuddyIOReportingEndpoint  <class RTBuddyIOReportingEndpoint, id 0x1000005b0, registered, matched, active, busy 0 (1 ms), retain 7>
+      +-o RTBuddyTraceKitEndpoint  <class RTBuddyTraceKitEndpoint, id 0x1000005b1, registered, matched, active, busy 0 (50 ms), retain 7>
+      +-o DCPEndpoint1  <class RTBuddyEndpointService, id 0x1000005c2, registered, matched, active, busy 0 (71 ms), retain 7>
+      | +-o AFKDCPEndpoint1  <class DCPEndpointV2, id 0x1000005c6, registered, matched, active, busy 0 (31 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000006f5, registered, matched, active, busy 0 (32 ms), retain 10>
+      |     +-o powerlog-service  <class AFKEPInterfaceKextV2, id 0x1000006fb, registered, matched, active, busy 0 (1 ms), retain 10>
+      |     | +-o AFKEndpointInterfaceUserClient  <class AFKEndpointInterfaceUserClient, id 0x100000e05, !registered, !matched, active, busy 0, retain 7>
+      |     +-o system  <class AFKEPInterfaceKextV2, id 0x1000006fe, registered, matched, active, busy 0 (2 ms), retain 7>
+      +-o DCPEndpoint3  <class RTBuddyEndpointService, id 0x1000005c3, registered, matched, active, busy 0 (69 ms), retain 7>
+      | +-o AFKDCPEndpoint3  <class DCPEndpointV2, id 0x1000005c9, registered, matched, active, busy 0 (19 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x100000744, registered, matched, active, busy 0 (2 ms), retain 8>
+      |     +-o dcpexpert-service  <class AFKEPInterfaceKextV2, id 0x10000075b, registered, matched, active, busy 0 (1 ms), retain 7>
+      +-o DCPEndpoint4  <class RTBuddyEndpointService, id 0x1000005c4, registered, matched, active, busy 0 (69 ms), retain 7>
+      | +-o AFKDCPEndpoint4  <class DCPEndpointV2, id 0x1000005e3, registered, matched, active, busy 0 (20 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x10000073a, registered, matched, active, busy 0 (19 ms), retain 8>
+      |     +-o disp0-service  <class AFKEPInterfaceKextV2, id 0x10000075e, registered, matched, active, busy 0 (18 ms), retain 7>
+      +-o DCPEndpoint5  <class RTBuddyEndpointService, id 0x1000005c7, registered, matched, active, busy 0 (90 ms), retain 7>
+      | +-o AFKDCPEndpoint5  <class DCPEndpointV2, id 0x1000005e4, registered, matched, active, busy 0 (57 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000006b3, registered, matched, active, busy 0 (54 ms), retain 10>
+      |     +-o disp0:dcpav-controller-epic:0  <class AFKEPInterfaceKextV2, id 0x1000006dc, registered, matched, active, busy 0 (35 ms), retain 8>
+      |     | +-o DCPAVControllerProxy  <class DCPAVControllerProxy, id 0x1000006f9, registered, matched, active, busy 0 (30 ms), retain 6>
+      |     +-o disp0:dcpdp-controller-epic:0  <class AFKEPInterfaceKextV2, id 0x1000006e0, registered, matched, active, busy 0 (52 ms), retain 8>
+      |       +-o DCPDPControllerProxy  <class DCPDPControllerProxy, id 0x1000006f7, registered, matched, active, busy 0 (48 ms), retain 6>
+      +-o DCPEndpoint6  <class RTBuddyEndpointService, id 0x1000005c8, registered, matched, active, busy 0 (64 ms), retain 7>
+      | +-o AFKDCPEndpoint6  <class DCPEndpointV2, id 0x1000005d3, registered, matched, active, busy 0 (31 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000006ae, registered, matched, active, busy 0 (27 ms), retain 8>
+      |     +-o disp0:dcpav-power-epic:0  <class AFKEPInterfaceKextV2, id 0x1000006de, registered, matched, active, busy 0 (26 ms), retain 8>
+      |       +-o DCPAVPowerControllerProxy  <class DCPAVPowerControllerProxy, id 0x1000006f8, registered, matched, active, busy 0 (19 ms), retain 6>
+      +-o DCPEndpoint7  <class RTBuddyEndpointService, id 0x1000005ca, registered, matched, active, busy 0 (68 ms), retain 7>
+      | +-o AFKDCPEndpoint7  <class DCPEndpointV2, id 0x1000005ce, registered, matched, active, busy 0 (18 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x10000073d, registered, matched, active, busy 0 (12 ms), retain 8>
+      |     +-o disp0:dcpav-sac-epic:0  <class AFKEPInterfaceKextV2, id 0x100000763, registered, matched, active, busy 0 (12 ms), retain 8>
+      |       +-o DCPAVRemoteSACControllerProxy  <class DCPAVRemoteSACControllerProxy, id 0x100000769, registered, matched, active, busy 0 (3 ms), retain 6>
+      +-o DCPEndpoint8  <class RTBuddyEndpointService, id 0x1000005cb, registered, matched, active, busy 0 (72 ms), retain 7>
+      | +-o AFKDCPEndpoint8  <class DCPEndpointV2, id 0x1000005db, registered, matched, active, busy 0 (26 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x100000735, registered, matched, active, busy 0 (26 ms), retain 10>
+      |     +-o disp0:dcpav-device-epic:0  <class AFKEPInterfaceKextV2, id 0x10000073f, registered, matched, active, busy 0 (25 ms), retain 8>
+      |     | +-o DCPAVDeviceProxy  <class DCPAVDeviceProxy, id 0x100000765, registered, matched, active, busy 0 (20 ms), retain 6>
+      |     +-o disp0:dcpdp-device-epic:0  <class AFKEPInterfaceKextV2, id 0x10000074c, registered, matched, active, busy 0 (22 ms), retain 8>
+      |       +-o DCPDPDeviceProxy  <class DCPDPDeviceProxy, id 0x10000079d, registered, matched, active, busy 0 (1 ms), retain 6>
+      +-o DCPEndpoint9  <class RTBuddyEndpointService, id 0x1000005cd, registered, matched, active, busy 0 (68 ms), retain 7>
+      | +-o AFKDCPEndpoint9  <class DCPEndpointV2, id 0x1000005d4, registered, matched, active, busy 0 (39 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000006a4, registered, matched, active, busy 0 (32 ms), retain 10>
+      |     +-o disp0:dcpav-service-epic:0  <class AFKEPInterfaceKextV2, id 0x1000006d8, registered, matched, active, busy 0 (4 ms), retain 8>
+      |     | +-o DCPAVServiceProxy  <class DCPAVServiceProxy, id 0x1000006fd, registered, matched, active, busy 0 (0 ms), retain 8>
+      |     |   +-o DCPAVServiceProxyUserClient  <class DCPAVServiceProxyUserClient, id 0x10000139d, !registered, !matched, active, busy 0, retain 5>
+      |     +-o disp0:dcpdp-service-epic:0  <class AFKEPInterfaceKextV2, id 0x1000006da, registered, matched, active, busy 0 (31 ms), retain 9>
+      |       +-o DCPDPServiceProxy  <class DCPDPServiceProxy, id 0x10000075a, registered, matched, active, busy 0 (19 ms), retain 7>
+      +-o DCPEndpoint10  <class RTBuddyEndpointService, id 0x1000005cf, registered, matched, active, busy 0 (88 ms), retain 7>
+      | +-o AFKDCPEndpoint10  <class DCPEndpointV2, id 0x1000005d9, registered, matched, active, busy 0 (56 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000006aa, registered, matched, active, busy 0 (55 ms), retain 8>
+      |     +-o disp0:dcpav-video-interface-epic:0  <class AFKEPInterfaceKextV2, id 0x1000006e2, registered, matched, active, busy 0 (51 ms), retain 8>
+      |       +-o DCPAVVideoInterfaceProxy  <class DCPAVVideoInterfaceProxy, id 0x1000006fa, registered, matched, active, busy 0 (49 ms), retain 6>
+      +-o DCPEndpoint11  <class RTBuddyEndpointService, id 0x1000005d0, registered, matched, active, busy 0 (49 ms), retain 7>
+      | +-o AFKDCPEndpoint11  <class DCPEndpointV2, id 0x1000005d7, registered, matched, active, busy 0 (3 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000006b9, registered, matched, active, busy 0 (4 ms), retain 6>
+      +-o DCPEndpoint12  <class RTBuddyEndpointService, id 0x1000005d1, registered, matched, active, busy 0 (566 ms), retain 7>
+      | +-o AFKDCPEndpoint12  <class DCPEndpointV2, id 0x1000005d8, registered, matched, active, busy 0 (524 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x10000070a, registered, matched, active, busy 0 (523 ms), retain 8>
+      |     +-o disp0:dcpdptx-hdcp-interface:0  <class AFKEPInterfaceKextV2, id 0x10000070f, registered, matched, active, busy 0 (522 ms), retain 8>
+      |       +-o AppleDCPDPTXRemoteHDCPInterfaceProxy  <class AppleDCPDPTXRemoteHDCPInterfaceProxy, id 0x10000074a, !registered, !matched, active, busy 0, retain 5>
+      +-o DCPEndpoint13  <class RTBuddyEndpointService, id 0x1000005d2, registered, matched, active, busy 0 (36 ms), retain 7>
+      | +-o AFKDCPEndpoint13  <class DCPEndpointV2, id 0x1000005da, registered, matched, active, busy 0 (5 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000006b6, registered, matched, active, busy 0 (1 ms), retain 6>
+      +-o DCPEndpoint14  <class RTBuddyEndpointService, id 0x1000005d5, registered, matched, active, busy 0 (37 ms), retain 7>
+      | +-o AFKDCPEndpoint14  <class DCPEndpointV2, id 0x1000005dd, registered, matched, active, busy 0 (6 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000006b0, registered, matched, active, busy 0 (7 ms), retain 8>
+      |     +-o md-manager  <class AFKEPInterfaceKextV2, id 0x1000006e4, registered, matched, active, busy 0 (3 ms), retain 8>
+      |       +-o AFKLocalMemoryDescriptorManager  <class AFKLocalMemoryDescriptorManager, id 0x1000006e6, registered, matched, active, busy 0 (0 ms), retain 19>
+      +-o DCPEndpoint24  <class RTBuddyEndpointService, id 0x1000005d6, registered, matched, active, busy 0 (10 ms), retain 7>
+        +-o AppleDCPLinkServiceSoC  <class AppleDCPLinkServiceSoC, id 0x1000005e1, registered, matched, active, busy 0 (4 ms), retain 6>
+
++-o AppleASCWrapV6  <class AppleASCWrapV6, id 0x1000004fc, !registered, !matched, active, busy 0 (621 ms), retain 5>
+  | {
+  |   "IOProbeScore" = 0x0
+  |   "CFBundleIdentifier" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOProviderClass" = "AppleARMIODevice"
+  |   "IOClass" = "AppleASCWrapV6"
+  |   "IOPersonalityPublisher" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOMatchedAtBoot" = Yes
+  |   "IONameMatch" = ("iop,ascwrap-v6","iop,ascwrap-v7")
+  |   "IOMatchCategory" = "IODefaultMatchCategory"
+  |   "IONameMatched" = "iop,ascwrap-v6"
+  |   "role" = "DCPEXT0"
+  | }
+  | 
+  +-o iop-dcpext0-nub  <class AppleA7IOPNub, id 0x1000005af, registered, matched, active, busy 0 (623 ms), retain 7>
+    +-o RTBuddy(DCPEXT0)  <class RTBuddy, id 0x1000005e0, registered, matched, active, busy 0 (615 ms), retain 47>
+      +-o RTBuddyService  <class RTBuddyService, id 0x1000005ed, registered, matched, active, busy 0 (3 ms), retain 33>
+      +-o RTBuddyIOReportingEndpoint  <class RTBuddyIOReportingEndpoint, id 0x1000005f2, registered, matched, active, busy 0 (0 ms), retain 7>
+      +-o RTBuddyTraceKitEndpoint  <class RTBuddyTraceKitEndpoint, id 0x1000005f3, registered, matched, active, busy 0 (0 ms), retain 7>
+      +-o DCPEXT0Endpoint1  <class RTBuddyEndpointService, id 0x1000005f4, registered, matched, active, busy 0 (64 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint1  <class DCPEndpointV2, id 0x1000005f9, registered, matched, active, busy 0 (17 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x100000647, registered, matched, active, busy 0 (7 ms), retain 10>
+      |     +-o powerlog-service  <class AFKEPInterfaceKextV2, id 0x100000650, registered, matched, active, busy 0 (1 ms), retain 7>
+      |     +-o system  <class AFKEPInterfaceKextV2, id 0x100000655, registered, matched, active, busy 0 (1 ms), retain 7>
+      +-o DCPEXT0Endpoint3  <class RTBuddyEndpointService, id 0x1000005f5, registered, matched, active, busy 0 (62 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint3  <class DCPEndpointV2, id 0x10000063a, registered, matched, active, busy 0 (24 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x10000064d, registered, matched, active, busy 0 (25 ms), retain 8>
+      |     +-o dcpexpert-service  <class AFKEPInterfaceKextV2, id 0x100000658, registered, matched, active, busy 0 (4 ms), retain 7>
+      +-o DCPEXT0Endpoint4  <class RTBuddyEndpointService, id 0x1000005f6, registered, matched, active, busy 0 (92 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint4  <class DCPEndpointV2, id 0x100000631, registered, matched, active, busy 0 (83 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x100000634, registered, matched, active, busy 0 (36 ms), retain 8>
+      |     +-o disp0-service  <class AFKEPInterfaceKextV2, id 0x100000644, registered, matched, active, busy 0 (1 ms), retain 7>
+      +-o DCPEXT0Endpoint5  <class RTBuddyEndpointService, id 0x1000005f7, registered, matched, active, busy 0 (99 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint5  <class DCPEndpointV2, id 0x10000063d, registered, matched, active, busy 0 (84 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x100000653, registered, matched, active, busy 0 (84 ms), retain 14>
+      |     +-o dispext0:dcpav-controller-epic:0  <class AFKEPInterfaceKextV2, id 0x100000660, registered, matched, active, busy 0 (30 ms), retain 8>
+      |     | +-o DCPAVControllerProxy  <class DCPAVControllerProxy, id 0x100000897, registered, matched, active, busy 0 (26 ms), retain 6>
+      |     +-o dispext0:dcpdp-controller-epic:0  <class AFKEPInterfaceKextV2, id 0x100000663, registered, matched, active, busy 0 (36 ms), retain 8>
+      |     | +-o DCPDPControllerProxy  <class DCPDPControllerProxy, id 0x100000898, registered, matched, active, busy 0 (4 ms), retain 6>
+      |     +-o dispext0:dcpav-controller-epic:1  <class AFKEPInterfaceKextV2, id 0x100000666, registered, matched, active, busy 0 (31 ms), retain 8>
+      |     | +-o DCPAVControllerProxy  <class DCPAVControllerProxy, id 0x100000895, registered, matched, active, busy 0 (29 ms), retain 6>
+      |     +-o dispext0:dcpdp-controller-epic:1  <class AFKEPInterfaceKextV2, id 0x100000669, registered, matched, active, busy 0 (26 ms), retain 8>
+      |       +-o DCPDPControllerProxy  <class DCPDPControllerProxy, id 0x1000008a0, registered, matched, active, busy 0 (0 ms), retain 6>
+      +-o DCPEXT0Endpoint6  <class RTBuddyEndpointService, id 0x1000005fa, registered, matched, active, busy 0 (66 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint6  <class DCPEndpointV2, id 0x100000632, registered, matched, active, busy 0 (54 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x100000637, registered, matched, active, busy 0 (54 ms), retain 6>
+      +-o DCPEXT0Endpoint7  <class RTBuddyEndpointService, id 0x1000005fb, registered, matched, active, busy 0 (61 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint7  <class DCPEndpointV2, id 0x1000006ca, registered, matched, active, busy 0 (29 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x100000703, registered, matched, active, busy 0 (0 ms), retain 6>
+      +-o DCPEXT0Endpoint8  <class RTBuddyEndpointService, id 0x1000005fc, registered, matched, active, busy 0 (123 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint8  <class DCPEndpointV2, id 0x100000689, registered, matched, active, busy 0 (14 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x100000865, registered, matched, active, busy 0 (1 ms), retain 10>
+      |     +-o dispext0:dcpav-device-epic:0  <class AFKEPInterfaceKextV2, id 0x100000b5f, registered, matched, active, busy 0 (0 ms), retain 8>
+      |     | +-o DCPAVDeviceProxy  <class DCPAVDeviceProxy, id 0x100000b61, registered, matched, active, busy 0 (0 ms), retain 6>
+      |     +-o dispext0:dcpdp-device-epic:0  <class AFKEPInterfaceKextV2, id 0x100000b6d, registered, matched, active, busy 0 (1 ms), retain 8>
+      |       +-o DCPDPDeviceProxy  <class DCPDPDeviceProxy, id 0x100000b6f, registered, matched, active, busy 0 (0 ms), retain 10>
+      +-o DCPEXT0Endpoint9  <class RTBuddyEndpointService, id 0x1000005fd, registered, matched, active, busy 0 (63 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint9  <class DCPEndpointV2, id 0x10000060f, registered, matched, active, busy 0 (30 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x10000064a, registered, matched, active, busy 0 (26 ms), retain 10>
+      |     +-o dispext0:dcpav-service-epic:0  <class AFKEPInterfaceKextV2, id 0x100000b62, registered, matched, active, busy 0 (0 ms), retain 8>
+      |     | +-o DCPAVServiceProxy  <class DCPAVServiceProxy, id 0x100000b64, registered, matched, active, busy 0 (0 ms), retain 8>
+      |     |   +-o DCPAVServiceProxyUserClient  <class DCPAVServiceProxyUserClient, id 0x10000139e, !registered, !matched, active, busy 0, retain 5>
+      |     +-o dispext0:dcpdp-service-epic:0  <class AFKEPInterfaceKextV2, id 0x100000b65, registered, matched, active, busy 0 (0 ms), retain 9>
+      |       +-o DCPDPServiceProxy  <class DCPDPServiceProxy, id 0x100000b67, registered, matched, active, busy 0 (0 ms), retain 7>
+      +-o DCPEXT0Endpoint10  <class RTBuddyEndpointService, id 0x1000005fe, registered, matched, active, busy 0 (109 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint10  <class DCPEndpointV2, id 0x100000693, registered, matched, active, busy 0 (89 ms), retain 10>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x100000696, registered, matched, active, busy 0 (49 ms), retain 12>
+      |     +-o dispext0:dcpav-cec-interface-epic:0  <class AFKEPInterfaceKextV2, id 0x100000b69, registered, matched, active, busy 0 (0 ms), retain 8>
+      |     | +-o DCPAVCECInterfaceProxy  <class DCPAVCECInterfaceProxy, id 0x100000b6b, registered, matched, active, busy 0 (0 ms), retain 8>
+      |     |   +-o IOAVCECService  <class IOAVCECService, id 0x100000b6c, registered, matched, active, busy 0 (0 ms), retain 7>
+      |     |     +-o IOCECUserClient  <class IOCECUserClient, id 0x100000c00, !registered, !matched, active, busy 0, retain 5>
+      |     +-o dispext0:dcpav-video-interface-epic:0  <class AFKEPInterfaceKextV2, id 0x100000b70, registered, matched, active, busy 0 (0 ms), retain 8>
+      |     | +-o DCPAVVideoInterfaceProxy  <class DCPAVVideoInterfaceProxy, id 0x100000b72, registered, matched, active, busy 0 (0 ms), retain 6>
+      |     +-o dispext0:dcpav-audio-interface-epic:0  <class AFKEPInterfaceKextV2, id 0x100000b73, registered, matched, active, busy 0 (48 ms), retain 9>
+      |       +-o DCPAVAudioInterfaceProxy  <class DCPAVAudioInterfaceProxy, id 0x100000b75, registered, matched, active, busy 0 (47 ms), retain 9>
+      |         +-o DCPAVAudioDriver(iop-dcpext0-nub)  <class DCPAVAudioDriver, id 0x100000b77, registered, matched, active, busy 0 (0 ms), retain 7>
+      |           +-o IOAudio2DeviceUserClient  <class IOAudio2DeviceUserClient, id 0x100000cb4, !registered, !matched, active, busy 0, retain 5>
+      +-o DCPEXT0Endpoint11  <class RTBuddyEndpointService, id 0x1000005ff, registered, matched, active, busy 0 (88 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint11  <class DCPEndpointV2, id 0x100000690, registered, matched, active, busy 0 (29 ms), retain 10>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x10000077c, registered, matched, active, busy 0 (28 ms), retain 10>
+      |     +-o dispext0:dcpdptx-port-epic:0  <class AFKEPInterfaceKextV2, id 0x10000077f, registered, matched, active, busy 0 (26 ms), retain 9>
+      |     | +-o AppleDCPDPTXRemotePortProxy  <class AppleDCPDPTXRemotePortProxy, id 0x1000008b6, registered, matched, active, busy 0 (16 ms), retain 9>
+      |     |   +-o AppleDCPDPTXRemotePortUFP(iop-dcpext0-nub)  <class AppleDCPDPTXRemotePortUFP, id 0x1000008e6, registered, matched, active, busy 0 (15 ms), retain 8>
+      |     +-o dispext0:dcpdptx-port-epic:1  <class AFKEPInterfaceKextV2, id 0x100000783, registered, matched, active, busy 0 (25 ms), retain 9>
+      |       +-o AppleDCPDPTXRemotePortProxy  <class AppleDCPDPTXRemotePortProxy, id 0x1000008d2, registered, matched, active, busy 0 (15 ms), retain 9>
+      |         +-o AppleDCPDPTXRemotePortUFP(iop-dcpext0-nub)  <class AppleDCPDPTXRemotePortUFP, id 0x1000008e4, registered, matched, active, busy 0 (14 ms), retain 7>
+      +-o DCPEXT0Endpoint12  <class RTBuddyEndpointService, id 0x100000600, registered, matched, active, busy 0 (505 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint12  <class DCPEndpointV2, id 0x10000066f, registered, matched, active, busy 0 (477 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000006eb, registered, matched, active, busy 0 (470 ms), retain 14>
+      |     +-o dispext0:dcpdptx-hdcp-interface:0  <class AFKEPInterfaceKextV2, id 0x1000006f0, registered, matched, active, busy 0 (467 ms), retain 8>
+      |     | +-o AppleDCPDPTXRemoteHDCPInterfaceProxy  <class AppleDCPDPTXRemoteHDCPInterfaceProxy, id 0x100000896, !registered, !matched, active, busy 0, retain 5>
+      |     +-o dispext0:dcpdptx-hdcp-interface:1  <class AFKEPInterfaceKextV2, id 0x1000006f2, registered, matched, active, busy 0 (466 ms), retain 8>
+      |     | +-o AppleDCPDPTXRemoteHDCPInterfaceProxy  <class AppleDCPDPTXRemoteHDCPInterfaceProxy, id 0x1000008d8, !registered, !matched, active, busy 0, retain 5>
+      |     +-o dispext0:dcpdptx-hdcp-auth-session:0  <class AFKEPInterfaceKextV2, id 0x100000d0e, registered, matched, active, busy 0 (0 ms), retain 8>
+      |     | +-o AppleDCPDPTXRemoteHDCPAuthSessionProxy  <class AppleDCPDPTXRemoteHDCPAuthSessionProxy, id 0x100000d12, !registered, !matched, active, busy 0, retain 5>
+      |     +-o dispext0:dcpdptx-hdcp-auth-session:0  <class AFKEPInterfaceKextV2, id 0x100000d10, registered, matched, active, busy 0 (0 ms), retain 8>
+      |       +-o AppleDCPDPTXRemoteHDCPAuthSessionProxy  <class AppleDCPDPTXRemoteHDCPAuthSessionProxy, id 0x100000d13, !registered, !matched, active, busy 0, retain 5>
+      +-o DCPEXT0Endpoint13  <class RTBuddyEndpointService, id 0x100000601, registered, matched, active, busy 0 (60 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint13  <class DCPEndpointV2, id 0x10000066e, registered, matched, active, busy 0 (29 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000006ee, registered, matched, active, busy 0 (2 ms), retain 6>
+      +-o DCPEXT0Endpoint14  <class RTBuddyEndpointService, id 0x100000602, registered, matched, active, busy 0 (91 ms), retain 7>
+      | +-o AFKDCPEXT0Endpoint14  <class DCPEndpointV2, id 0x100000670, registered, matched, active, busy 0 (9 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x100000868, registered, matched, active, busy 0 (9 ms), retain 8>
+      |     +-o md-manager  <class AFKEPInterfaceKextV2, id 0x10000086c, registered, matched, active, busy 0 (9 ms), retain 8>
+      |       +-o AFKLocalMemoryDescriptorManager  <class AFKLocalMemoryDescriptorManager, id 0x100000879, registered, matched, active, busy 0 (8 ms), retain 26>
+      +-o DCPEXT0Endpoint24  <class RTBuddyEndpointService, id 0x100000603, registered, matched, active, busy 0 (80 ms), retain 7>
+        +-o AppleDCPLinkServiceSoC  <class AppleDCPLinkServiceSoC, id 0x10000062a, registered, matched, active, busy 0 (17 ms), retain 6>
+
++-o AppleASCWrapV6  <class AppleASCWrapV6, id 0x1000004e6, !registered, !matched, active, busy 0 (503 ms), retain 5>
+  | {
+  |   "IOProbeScore" = 0x0
+  |   "CFBundleIdentifier" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOProviderClass" = "AppleARMIODevice"
+  |   "IOClass" = "AppleASCWrapV6"
+  |   "IOPersonalityPublisher" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOMatchedAtBoot" = Yes
+  |   "IONameMatch" = ("iop,ascwrap-v6","iop,ascwrap-v7")
+  |   "IOMatchCategory" = "IODefaultMatchCategory"
+  |   "IONameMatched" = "iop,ascwrap-v6"
+  |   "role" = "DCPEXT1"
+  | }
+  | 
+  +-o iop-dcpext1-nub  <class AppleA7IOPNub, id 0x100000737, registered, matched, active, busy 0 (521 ms), retain 7>
+    +-o RTBuddy(DCPEXT1)  <class RTBuddy, id 0x100000788, registered, matched, active, busy 0 (496 ms), retain 47>
+      +-o RTBuddyIOReportingEndpoint  <class RTBuddyIOReportingEndpoint, id 0x1000007de, registered, matched, active, busy 0 (3 ms), retain 7>
+      +-o RTBuddyTraceKitEndpoint  <class RTBuddyTraceKitEndpoint, id 0x1000007df, registered, matched, active, busy 0 (0 ms), retain 7>
+      +-o DCPEXT1Endpoint1  <class RTBuddyEndpointService, id 0x1000007e3, registered, matched, active, busy 0 (54 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint1  <class DCPEndpointV2, id 0x100000822, registered, matched, active, busy 0 (15 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008d0, registered, matched, active, busy 0 (12 ms), retain 10>
+      |     +-o powerlog-service  <class AFKEPInterfaceKextV2, id 0x1000008f4, registered, matched, active, busy 0 (9 ms), retain 7>
+      |     +-o system  <class AFKEPInterfaceKextV2, id 0x1000008fa, registered, matched, active, busy 0 (0 ms), retain 7>
+      +-o DCPEXT1Endpoint3  <class RTBuddyEndpointService, id 0x1000007e4, registered, matched, active, busy 0 (44 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint3  <class DCPEndpointV2, id 0x100000815, registered, matched, active, busy 0 (1 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008c5, registered, matched, active, busy 0 (4 ms), retain 8>
+      |     +-o dcpexpert-service  <class AFKEPInterfaceKextV2, id 0x1000008f8, registered, matched, active, busy 0 (1 ms), retain 7>
+      +-o DCPEXT1Endpoint4  <class RTBuddyEndpointService, id 0x1000007e5, registered, matched, active, busy 0 (53 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint4  <class DCPEndpointV2, id 0x10000081f, registered, matched, active, busy 0 (13 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008cd, registered, matched, active, busy 0 (13 ms), retain 8>
+      |     +-o disp0-service  <class AFKEPInterfaceKextV2, id 0x1000008fe, registered, matched, active, busy 0 (8 ms), retain 7>
+      +-o DCPEXT1Endpoint5  <class RTBuddyEndpointService, id 0x1000007ea, registered, matched, active, busy 0 (72 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint5  <class DCPEndpointV2, id 0x100000820, registered, matched, active, busy 0 (36 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008c1, registered, matched, active, busy 0 (27 ms), retain 14>
+      |     +-o dispext1:dcpav-controller-epic:0  <class AFKEPInterfaceKextV2, id 0x1000008d3, registered, matched, active, busy 0 (12 ms), retain 8>
+      |     | +-o DCPAVControllerProxy  <class DCPAVControllerProxy, id 0x10000090a, registered, matched, active, busy 0 (0 ms), retain 6>
+      |     +-o dispext1:dcpdp-controller-epic:0  <class AFKEPInterfaceKextV2, id 0x1000008d9, registered, matched, active, busy 0 (10 ms), retain 8>
+      |     | +-o DCPDPControllerProxy  <class DCPDPControllerProxy, id 0x100000909, registered, matched, active, busy 0 (2 ms), retain 6>
+      |     +-o dispext1:dcpav-controller-epic:1  <class AFKEPInterfaceKextV2, id 0x1000008db, registered, matched, active, busy 0 (26 ms), retain 8>
+      |     | +-o DCPAVControllerProxy  <class DCPAVControllerProxy, id 0x10000090b, registered, matched, active, busy 0 (15 ms), retain 6>
+      |     +-o dispext1:dcpdp-controller-epic:1  <class AFKEPInterfaceKextV2, id 0x1000008dd, registered, matched, active, busy 0 (10 ms), retain 8>
+      |       +-o DCPDPControllerProxy  <class DCPDPControllerProxy, id 0x100000912, registered, matched, active, busy 0 (2 ms), retain 6>
+      +-o DCPEXT1Endpoint6  <class RTBuddyEndpointService, id 0x1000007eb, registered, matched, active, busy 0 (53 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint6  <class DCPEndpointV2, id 0x100000814, registered, matched, active, busy 0 (13 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008ed, registered, matched, active, busy 0 (14 ms), retain 6>
+      +-o DCPEXT1Endpoint7  <class RTBuddyEndpointService, id 0x1000007ec, registered, matched, active, busy 0 (45 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint7  <class DCPEndpointV2, id 0x10000081a, registered, matched, active, busy 0 (1 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008e9, registered, matched, active, busy 0 (4 ms), retain 6>
+      +-o DCPEXT1Endpoint8  <class RTBuddyEndpointService, id 0x1000007ed, registered, matched, active, busy 0 (44 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint8  <class DCPEndpointV2, id 0x100000819, registered, matched, active, busy 0 (2 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008e2, registered, matched, active, busy 0 (5 ms), retain 6>
+      +-o DCPEXT1Endpoint9  <class RTBuddyEndpointService, id 0x1000007ef, registered, matched, active, busy 0 (57 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint9  <class DCPEndpointV2, id 0x100000803, registered, matched, active, busy 0 (25 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008ad, registered, matched, active, busy 0 (25 ms), retain 6>
+      +-o DCPEXT1Endpoint10  <class RTBuddyEndpointService, id 0x1000007f0, registered, matched, active, busy 0 (74 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint10  <class DCPEndpointV2, id 0x10000080a, registered, matched, active, busy 0 (33 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008ca, registered, matched, active, busy 0 (7 ms), retain 6>
+      +-o DCPEXT1Endpoint11  <class RTBuddyEndpointService, id 0x1000007f1, registered, matched, active, busy 0 (35 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint11  <class DCPEndpointV2, id 0x100000825, registered, matched, active, busy 0 (2 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008b1, registered, matched, active, busy 0 (2 ms), retain 10>
+      |     +-o dispext1:dcpdptx-port-epic:0  <class AFKEPInterfaceKextV2, id 0x1000008b4, registered, matched, active, busy 0 (2 ms), retain 9>
+      |     | +-o AppleDCPDPTXRemotePortProxy  <class AppleDCPDPTXRemotePortProxy, id 0x100000903, registered, matched, active, busy 0 (2 ms), retain 9>
+      |     |   +-o AppleDCPDPTXRemotePortUFP(iop-dcpext1-nub)  <class AppleDCPDPTXRemotePortUFP, id 0x100000906, registered, matched, active, busy 0 (2 ms), retain 7>
+      |     +-o dispext1:dcpdptx-port-epic:1  <class AFKEPInterfaceKextV2, id 0x1000008b9, registered, matched, active, busy 0 (2 ms), retain 9>
+      |       +-o AppleDCPDPTXRemotePortProxy  <class AppleDCPDPTXRemotePortProxy, id 0x100000905, registered, matched, active, busy 0 (1 ms), retain 9>
+      |         +-o AppleDCPDPTXRemotePortUFP(iop-dcpext1-nub)  <class AppleDCPDPTXRemotePortUFP, id 0x100000908, registered, matched, active, busy 0 (1 ms), retain 7>
+      +-o DCPEXT1Endpoint12  <class RTBuddyEndpointService, id 0x1000007f2, registered, matched, active, busy 0 (494 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint12  <class DCPEndpointV2, id 0x10000081d, registered, matched, active, busy 0 (454 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008d6, registered, matched, active, busy 0 (455 ms), retain 10>
+      |     +-o dispext1:dcpdptx-hdcp-interface:0  <class AFKEPInterfaceKextV2, id 0x10000090c, registered, matched, active, busy 0 (447 ms), retain 8>
+      |     | +-o AppleDCPDPTXRemoteHDCPInterfaceProxy  <class AppleDCPDPTXRemoteHDCPInterfaceProxy, id 0x100000911, !registered, !matched, active, busy 0, retain 5>
+      |     +-o dispext1:dcpdptx-hdcp-interface:1  <class AFKEPInterfaceKextV2, id 0x10000090f, registered, matched, active, busy 0 (448 ms), retain 8>
+      |       +-o AppleDCPDPTXRemoteHDCPInterfaceProxy  <class AppleDCPDPTXRemoteHDCPInterfaceProxy, id 0x100000913, !registered, !matched, active, busy 0, retain 5>
+      +-o DCPEXT1Endpoint13  <class RTBuddyEndpointService, id 0x1000007f3, registered, matched, active, busy 0 (43 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint13  <class DCPEndpointV2, id 0x100000823, registered, matched, active, busy 0 (2 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008c6, registered, matched, active, busy 0 (4 ms), retain 6>
+      +-o DCPEXT1Endpoint14  <class RTBuddyEndpointService, id 0x1000007f4, registered, matched, active, busy 0 (45 ms), retain 7>
+      | +-o AFKDCPEXT1Endpoint14  <class DCPEndpointV2, id 0x10000081e, registered, matched, active, busy 0 (6 ms), retain 9>
+      |   +-o AFKEPInterfaceServiceKextV2  <class AFKEPInterfaceServiceKextV2, id 0x1000008bf, registered, matched, active, busy 0 (6 ms), retain 8>
+      |     +-o md-manager  <class AFKEPInterfaceKextV2, id 0x1000008fc, registered, matched, active, busy 0 (1 ms), retain 8>
+      |       +-o AFKLocalMemoryDescriptorManager  <class AFKLocalMemoryDescriptorManager, id 0x100000901, registered, matched, active, busy 0 (0 ms), retain 17>
+      +-o DCPEXT1Endpoint24  <class RTBuddyEndpointService, id 0x1000007f5, registered, matched, active, busy 0 (10 ms), retain 7>
+      | +-o AppleDCPLinkServiceSoC  <class AppleDCPLinkServiceSoC, id 0x100000824, registered, matched, active, busy 0 (3 ms), retain 6>
+      +-o RTBuddyService  <class RTBuddyService, id 0x100000812, registered, matched, active, busy 0 (22 ms), retain 33>
+
++-o AppleASCWrapV6  <class AppleASCWrapV6, id 0x10000067e, !registered, !matched, active, busy 0 (711 ms), retain 5>
+  | {
+  |   "IOProbeScore" = 0x0
+  |   "CFBundleIdentifier" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOProviderClass" = "AppleARMIODevice"
+  |   "IOClass" = "AppleASCWrapV6"
+  |   "IOPersonalityPublisher" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleA7IOP-ASCWrap-v6"
+  |   "IOMatchedAtBoot" = Yes
+  |   "IONameMatch" = ("iop,ascwrap-v6","iop,ascwrap-v7")
+  |   "IOMatchCategory" = "IODefaultMatchCategory"
+  |   "IONameMatched" = "iop,ascwrap-v6"
+  |   "role" = "GFX"
+  | }
+  | 
+  +-o iop-gfx-nub  <class AppleA7IOPNub, id 0x10000068d, registered, matched, active, busy 0 (754 ms), retain 7>
+    +-o RTBuddy(GFX)  <class RTBuddy, id 0x100000804, registered, matched, active, busy 0 (29 ms), retain 17>
+      +-o RTBuddyService  <class RTBuddyService, id 0x100000813, registered, matched, active, busy 0 (28 ms), retain 6>
+      | +-o AGXFirmwareKextG16RTBuddy  <class AGXFirmwareKextG16RTBuddy, id 0x100000835, registered, matched, active, busy 0 (16 ms), retain 5>
+      +-o GFXEndpoint1  <class RTBuddyEndpointService, id 0x100000b5b, registered, matched, active, busy 0 (0 ms), retain 6>
+      +-o GFXEndpoint2  <class RTBuddyEndpointService, id 0x100000b5c, registered, matched, active, busy 0 (0 ms), retain 6>
+

@@ -1,0 +1,164 @@
+2026-04-22 11:09:41.726044-0700  localhost kernel[0]: (RTBuddy) RTBuddy(MTP): start(<private>) - (Jan 28 2026@20:34:20)
+2026-04-22 11:09:41.726064-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x390064
+2026-04-22 11:09:41.726066-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.726095-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x3a0064
+2026-04-22 11:09:41.726096-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.726863-0700  localhost kernel[0]: (AppleSPMIPMU) AppleDialogSPMIPMU::start: pmu-main _pmuNub: <private> built 20:34:13 Jan 28 2026
+2026-04-22 11:09:41.726922-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x3b0064
+2026-04-22 11:09:41.726924-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.726970-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x3c0064
+2026-04-22 11:09:41.726971-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.727516-0700  localhost kernel[0]: (AppleSPMIPMU) pmu fault log: wdog,reset_in_1
+2026-04-22 11:09:41.727624-0700  localhost kernel[0]: (AppleSPMIPMU) LPM: Log data is NOT valid. 0x4d45504c 0x101
+2026-04-22 11:09:41.727685-0700  localhost kernel[0]: (AppleSPMIPMU) SOCD: BASE 0x8B00, COUNT 0x1800
+2026-04-22 11:09:41.727736-0700  localhost kernel[0]: (AppleSPMIPMU) SOCD: Magic value 49h 4Eh 49h 54h
+2026-04-22 11:09:41.727747-0700  localhost kernel[0]: (AppleSPMIPMU) AppleDialogSPMIPMU::start: Primary PMU detected
+2026-04-22 11:09:41.728909-0700  localhost kernel[0]: (ApplePassthroughPPM) ApplePPMCPMS::admissionCheckOfValue:client 2, timescale 1, level 128001
+2026-04-22 11:09:41.728921-0700  localhost kernel[0]: (ApplePassthroughPPM) ApplePPMPolicyCPMS::resolveClientBudgets:Budget Trace: clientId 2, Timescale 0, Requested Budget 0, Granted Budget 129000, Thermal Budget 7760, PowerBudgetUPO 129000
+2026-04-22 11:09:41.728928-0700  localhost kernel[0]: (ApplePassthroughPPM) ApplePPMPolicyCPMS::resolveClientBudgets:Budget Trace: clientId 2, Timescale 1, Requested Budget 0, Granted Budget 1000000, Thermal Budget 7760, PowerBudgetUPO 4294967295
+2026-04-22 11:09:41.728934-0700  localhost kernel[0]: (ApplePassthroughPPM) ApplePPMPolicyCPMS::resolveClientBudgets:Budget Trace: clientId 2, Timescale 2, Requested Budget 0, Granted Budget 129000, Thermal Budget 7760, PowerBudgetUPO 129000
+2026-04-22 11:09:41.728952-0700  localhost kernel[0]: (ApplePassthroughPPM) ApplePPMCPMS::admissionCheckOfValue:granted client 2, timescale 0, level 128001
+2026-04-22 11:09:41.728976-0700  localhost kernel[0]: (ApplePassthroughPPM) ApplePPMPolicyCPMS::resolveClientBudgets:Budget Trace: clientId 2, Timescale 0, Requested Budget 0, Granted Budget 129000, Thermal Budget 7760, PowerBudgetUPO 129000
+2026-04-22 11:09:41.728981-0700  localhost kernel[0]: (ApplePassthroughPPM) ApplePPMPolicyCPMS::resolveClientBudgets:Budget Trace: clientId 2, Timescale 1, Requested Budget 0, Granted Budget 1000000, Thermal Budget 7760, PowerBudgetUPO 4294967295
+2026-04-22 11:09:41.728986-0700  localhost kernel[0]: (ApplePassthroughPPM) ApplePPMPolicyCPMS::resolveClientBudgets:Budget Trace: clientId 2, Timescale 2, Requested Budget 0, Granted Budget 129000, Thermal Budget 7760, PowerBudgetUPO 129000
+2026-04-22 11:09:41.729435-0700  localhost kernel[0]: (AppleProcessorTrace) AppleProcessorTrace::setState(0)
+2026-04-22 11:09:41.729552-0700  localhost kernel[0]: (AppleARMPlatform) AppleARMRTC started!#####
+2026-04-22 11:09:41.729556-0700  localhost kernel[0]: (AppleSPMIPMU) AppleDialogSPMIPMURTC started!******
+2026-04-22 11:09:41.729580-0700  localhost kernel[0]: (AppleSPMIPMU) AppleDialogSPMIPMURTC::handleStart: ro=0 nvram=0 helper=0 AppleDialogSPMIPMU _pmuNub: <private> 0x2002:0x2100-0x0000 built 20:34:13 Jan 28 2026
+2026-04-22 11:09:41.729659-0700  localhost kernel[0]: (AppleSPMIPMU) AppleDialogSPMIPMURTC tick read!&&&&&&&
+2026-04-22 11:09:41.729680-0700  localhost kernel[0]: (AppleSPMIPMU) AppleDialogSPMIPMURTC ending!%%%
+2026-04-22 11:09:41.731062-0700  localhost kernel[0]: (AppleS5L8920XPWM) [com.apple.driver.AppleS5L8920XFPWM:default] _pwmBaseAddress: <private>
+2026-04-22 11:09:41.731538-0700  localhost kernel[0]: (AppleARMWatchdogTimer) AppleARMWatchdogTimer::start: _wdtBaseAddress: <private> _wdtResetCount=0xe4e1c00 _useSMCEnforcedWatchdog=1
+2026-04-22 11:09:41.732247-0700  localhost kernel[0]: (AOP) MA981::probe -- Probe error=e00002c0, ID=0x82
+2026-04-22 11:09:41.732395-0700  localhost kernel[0]: (AOP) [TMP108.cpp:178] AssertMacros:   error: e00002eb
+2026-04-22 11:09:41.732403-0700  localhost kernel[0]: (AOP) TMP108 device NOT found.
+2026-04-22 11:09:41.732410-0700  localhost kernel[0]: (AOP) [TMP108.cpp:35] AssertMacros:   error: e00002eb
+2026-04-22 11:09:41.732413-0700  localhost kernel[0]: (AOP) TMP108::probe -- Probe error=e00002eb, Device ID: 0x0
+2026-04-22 11:09:41.732632-0700  localhost kernel[0]: (AOP) TMP114 device (null)found.
+2026-04-22 11:09:41.732640-0700  localhost kernel[0]: (AOP) TMP118::probe -- Found device with ID: 0x1114
+2026-04-22 11:09:41.736303-0700  localhost kernel[0]: (AppleA7IOP) AppleA7IOPNub: withRegistryEntry, 47: allocated nub <private>
+2026-04-22 11:09:41.736334-0700  localhost kernel[0]: (IONVMeFamily) virtual bool AppleANS2NVMeController::start(IOService *)::430:Found the ANS2Endpoint1
+2026-04-22 11:09:41.736589-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x3d0064
+2026-04-22 11:09:41.736594-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.736633-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x3e0064
+2026-04-22 11:09:41.736637-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.737482-0700  localhost kernel[0]: (IONVMeFamily) bool AppleEmbeddedNVMeController::SetNamespacesStruct()::196:Obtained 3 namespaces from DT
+2026-04-22 11:09:41.737489-0700  localhost kernel[0]: (IONVMeFamily) virtual bool IONVMeController::start(IOService *)::733:start 0x100000631
+2026-04-22 11:09:41.737685-0700  localhost kernel[0]: (RTBuddy) [com.apple.rtbuddy.MTP:RTBuddyFirmware] Resuming...
+2026-04-22 11:09:41.738986-0700  localhost kernel[0]: (AppleARMWatchdogTimer) watchdog configured (source: inferred defaults) to monitor userspace, SoC watchdog enabled, panic SoC watchdog enabled, halt on SoC watchdog expiration: no, userspace IOKit monitoring enabled, shutdown monitoring enabled
+2026-04-22 11:09:41.739984-0700  localhost kernel[0]: (AppleSPIMC) spi2 start:203: Done.
+2026-04-22 11:09:41.740190-0700  localhost kernel[0]: (RTBuddy) RTBuddy(DCP): start(<private>) - (Jan 28 2026@20:34:20)
+2026-04-22 11:09:41.740268-0700  localhost kernel[0]: (RTBuddy) [com.apple.rtbuddy.DCPEXT1:RTBuddyFirmware] Resuming...
+2026-04-22 11:09:41.741131-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x3f0064
+2026-04-22 11:09:41.741136-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.741178-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x400064
+2026-04-22 11:09:41.741181-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.741320-0700  localhost kernel[0]: PMRD: power event 7 args 0x723fcc216c5ea2f1 0x0
+2026-04-22 11:09:41.741325-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x302) tag 0x410064
+2026-04-22 11:09:41.741352-0700  localhost kernel[0]: (MTP) MTP Says Hello
+2026-04-22 11:09:41.741362-0700  localhost kernel[0]: (MTP) Version: AppleMTPFirmwareMac-5330.61.16~31
+2026-04-22 11:09:41.741371-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.741373-0700  localhost kernel[0]: PMRD: power event 7 args 0xe2d88e010807db39 0x0
+2026-04-22 11:09:41.741375-0700  localhost kernel[0]: (MTP) Personality: MTP_SYS
+2026-04-22 11:09:41.741381-0700  localhost kernel[0]: (MTP) SDK: 25D110i
+2026-04-22 11:09:41.741388-0700  localhost kernel[0]: (MTP) Built on: 2026-01-17__09:48:31
+2026-04-22 11:09:41.741397-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x302) tag 0x420064
+2026-04-22 11:09:41.741399-0700  localhost kernel[0]: (RTBuddy) [MTP:main.c:245] MTP Says Hello
+2026-04-22 11:09:41.741402-0700  localhost kernel[0]: (AppleHIDTransport) [7a][AppleHIDTransportHibernator::setPowerState_block_invoke]: ordinal: 1, hibernate: 0
+2026-04-22 11:09:41.741412-0700  localhost kernel[0]: (AppleInputDeviceSupport) [HID] [0x100000452][40a][AppleHIDTransportDeviceFIFO::setPowerStateGated]: ordinal: 1
+2026-04-22 11:09:41.741415-0700  localhost kernel[0]: (AppleInputDeviceSupport) [HID] [0x100000452][40a][AppleHIDTransportDeviceFIFO::powerHasChanged]: ERROR!! No protocol specified, probably OK for the first power change.
+2026-04-22 11:09:41.741417-0700  localhost kernel[0]: (AppleInputDeviceSupport) AIDLog: [0x100000452][40a][AppleHIDTransportDeviceFIFO::powerHasChanged]: ERROR!! No protocol specified, probably OK for the first power change.
+2026-04-22 11:09:41.741425-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.741430-0700  localhost kernel[0]: (RTBuddy) [com.apple.rtbuddy.MTP:RTBuddyOSLogEndpoint] OSLog endpoint registering to logd(uuid: 06BBB06F-9784-344B-9E16-A9431C36D5CD, role: MTP, range_start: 0, range_end: 255, fw_type: 1)
+2026-04-22 11:09:41.741433-0700  localhost kernel[0]: (RTBuddy) [MTP:main.c:245] Version: AppleMTPFirmwareMac-5330.61.16~31
+2026-04-22 11:09:41.741448-0700  localhost kernel[0]: (RTBuddy) [MTP:main.c:245] Personality: MTP_SYS
+2026-04-22 11:09:41.741454-0700  localhost kernel[0]: (RTBuddy) [MTP:main.c:245] SDK: 25D110i
+2026-04-22 11:09:41.741461-0700  localhost kernel[0]: (RTBuddy) [MTP:main.c:245] Built on: 2026-01-17__09:48:31
+2026-04-22 11:09:41.741465-0700  localhost kernel[0]: (AppleARMPlatform) AppleARMRTC registering service!@@@@@@
+2026-04-22 11:09:41.741471-0700  localhost kernel[0]: PMRD: power event 7 args 0x759f08ca36ae4ad3 0x0
+2026-04-22 11:09:41.741476-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x302) tag 0x430064
+2026-04-22 11:09:41.741487-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.741511-0700  localhost kernel[0]: (RTBuddy) [com.apple.rtbuddy.MTP:RTBuddyOSLogEndpoint] OSLog endpoint registering to logd(uuid: 06BBB06F-9784-344B-9E16-A9431C36D5CD, role: MTP/MtpFirmware, range_start: 0, range_end: 255, fw_type: 1)
+2026-04-22 11:09:41.741675-0700  localhost kernel[0]: PMRD: power event 7 args 0xbf2c0fd4eeb7904f 0x0
+2026-04-22 11:09:41.741680-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x302) tag 0x440064
+2026-04-22 11:09:41.741691-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.742815-0700  localhost kernel[0]: (AppleEmbeddedPCIE) [PCIe:0 5577990291 ns] apcie[0:wlan]::enableGated enabling with flags 0x00000002
+2026-04-22 11:09:41.743298-0700  localhost kernel[0]: (AppleEmbeddedPCIE) [PCIe:0 5578473083 ns] apcie[2:pcie-sdreader]::enableGated enabling with flags 0x00000002
+2026-04-22 11:09:41.743457-0700  localhost kernel[0]: (RTBuddy) [DCPEXT1:_logging_common.cpp:425] [AFK]binary_log_infrastructure_late_init coalescer initialized
+2026-04-22 11:09:41.743465-0700  localhost kernel[0]: (RTBuddy) [com.apple.rtbuddy.DCPEXT1:RTBuddyOSLogEndpoint] OSLog endpoint registering to logd(uuid: A1000010-2140-1ED5-A178-80D201401ED7, role: DCPEXT1, range_start: 0, range_end: 1, fw_type: 1)
+2026-04-22 11:09:41.743535-0700  localhost kernel[0]: (IONVMeFamily) virtual IOFilterInterruptEventSource *AppleANS2NVMeController::CreateDeviceInterrupt(IOInterruptEventSource::Action, IOFilterInterruptEventSource::Filter, IOService *)::2756:ANS2 NVMe interrupt index - 0x4
+2026-04-22 11:09:41.743588-0700  localhost kernel[0]: (IONVMeFamily) virtual uint32_t AppleANS2CGv2Controller::GetNVMeSPTMQueueEntries()::164:NVMe Queue Entries=64
+2026-04-22 11:09:41.743744-0700  localhost kernel[0]: (AppleEmbeddedPCIE) [PCIe:0 5578919041 ns] AppleEmbeddedPCIE::_waitForLinkUp waiting for linkup on port mask 0x0
+2026-04-22 11:09:41.743774-0700  localhost kernel[0]: (IOPCIFamily) [ PCI configuration begin ]
+2026-04-22 11:09:41.743776-0700  localhost kernel[0]: (IOPCIFamily) [IOPCIConfigurator::configure()] PCI configuration apcie
+2026-04-22 11:09:41.743779-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5578954083 ns] scan (boot) [i2]0:0:0(0:8)
+2026-04-22 11:09:41.743780-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x450064
+2026-04-22 11:09:41.743783-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.743784-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5578958708 ns] Found type 1 device class-code 0x060400 cmd 0x0000 at [i3]0:0:0(0x106b:0x100c) [state 0x0]
+2026-04-22 11:09:41.743798-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5578973166 ns] Found type 1 device class-code 0x060400 cmd 0x0000 at [i4]0:2:0(0x106b:0x100c) [state 0x0]
+2026-04-22 11:09:41.743819-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5578994166 ns] bridge [i2]0:0:0(0:8) child change
+2026-04-22 11:09:41.743824-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5578999958 ns] bridge [i2]0:0:0(0x0:0x0)  probe child ranges
+2026-04-22 11:09:41.743827-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5579002375 ns] Probing type 1 device class-code 0x060400 cmd 0x0000 at [i3]0:0:0(0x106b:0x100c) [state 0x2000]
+2026-04-22 11:09:41.743841-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5579015750 ns] Probing type 1 device class-code 0x060400 cmd 0x0000 at [i4]0:2:0(0x106b:0x100c) [state 0x2000]
+2026-04-22 11:09:41.743864-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5579039666 ns] bridge [i3]0:0:0(0x106b:0x100c) supportsHotPlug 0, linkInterrupts 0
+2026-04-22 11:09:41.743870-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5579045875 ns] bridge [i4]0:2:0(0x106b:0x100c) supportsHotPlug 0, linkInterrupts 0
+2026-04-22 11:09:41.743898-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5579073500 ns] scan [i3]0:0:0(2:2)
+2026-04-22 11:09:41.743903-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5579078208 ns] bridge [i3]0:0:0(0x106b:0x100c) nolink  linkStatus 0x1011, linkCaps 0x737814
+2026-04-22 11:09:41.743907-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5579082375 ns] bridge [i3]0:0:0(0x106b:0x100c)  probe child ranges
+2026-04-22 11:09:41.743910-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5579085166 ns] scan [i4]0:2:0(1:1)
+2026-04-22 11:09:41.743913-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5579088416 ns] bridge [i4]0:2:0(0x106b:0x100c) nolink  linkStatus 0x1011, linkCaps 0x737814
+2026-04-22 11:09:41.743916-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5579091333 ns] bridge [i4]0:2:0(0x106b:0x100c)  probe child ranges
+2026-04-22 11:09:41.743943-0700  localhost kernel[0]: (IOPCIFamily) [PCIe:0 5579118375 ns] payload set 0x00000810 -> 0x00000830 (at [i4]0:2:0(0x106b:0x100c)), maxPayload 0x1
+2026-04-22 11:09:41.744006-0700  localhost kernel[0]: (IOPCIFamily) [ PCI configuration end, bridges 3, devices 0 ]
+2026-04-22 11:09:41.744470-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x460064
+2026-04-22 11:09:41.744473-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.744538-0700  localhost kernel[0]: (AppleH16ANEInterface) ANE0: start: ANE Mapper: <private>
+2026-04-22 11:09:41.744544-0700  localhost kernel[0]: (AppleH16ANEInterface) ANE0: start: fANEMaxDartMemSize: 0x30000000000 fANEMaxSystemMemSize: 0x400000000 fANEMaxMachoSize: 0x280000000
+2026-04-22 11:09:41.744723-0700  localhost kernel[0]: (AppleSPMIPMU) AppleDialogSPMIPMU::start: pmu-aux _pmuNub: <private> built 20:34:13 Jan 28 2026
+2026-04-22 11:09:41.745374-0700  localhost kernel[0]: (AppleSPMIPMU) pmu fault log: wdog,reset_in_1 rst_in,reset_in_rise rst_in,reset_in_fall
+2026-04-22 11:09:41.745391-0700  localhost kernel[0]: (AppleSPMIPMU) AppleDialogSPMIPMU::start: Non-primary PMU detected
+2026-04-22 11:09:41.745431-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x470064
+2026-04-22 11:09:41.745434-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.745458-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x480064
+2026-04-22 11:09:41.745460-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.745475-0700  localhost kernel[0]: (AppleARMPlatform) AppleARMRTC started!#####
+2026-04-22 11:09:41.745477-0700  localhost kernel[0]: (AppleSPMIPMU) AppleDialogSPMIPMURTC started!******
+2026-04-22 11:09:41.745481-0700  localhost kernel[0]: (AppleSPMIPMU) AppleDialogSPMIPMURTC::handleStart: AppleDialogSPMIPMU _pmuNub: <private> ** stopped (non-primary PMU detected) **
+2026-04-22 11:09:41.745690-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x490064
+2026-04-22 11:09:41.745692-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.745951-0700  localhost kernel[0]: (RTBuddy) [com.apple.rtbuddy.DCPEXT0:RTBuddyFirmware] Resuming...
+2026-04-22 11:09:41.745995-0700  localhost kernel[0]: PMRD: PowerChangeOverride (ON_STATE->ON_STATE, f, 0x2) tag 0x4a0064
+2026-04-22 11:09:41.745997-0700  localhost kernel[0]: PMRD: PowerChangeDone: ON_STATE->ON_STATE
+2026-04-22 11:09:41.746002-0700  localhost kernel[0]: (AppleEmbeddedPCIE) [PCIe:0 5581177500 ns] apcie[0:wlan]::_mapRIDToSID no mapper defined and device <private> (0:0:0) does not support hot-plug
+2026-04-22 11:09:41.746192-0700  localhost kernel[0]: (MTP) IPD HIDSPI attached
+2026-04-22 11:09:41.746204-0700  localhost kernel[0]: (MTP) ipd_manager_event_notify() not started yet
+2026-04-22 11:09:41.746216-0700  localhost kernel[0]: (RTBuddy) [MTP:kb_transport.c:271] IPD HIDSPI attached
+2026-04-22 11:09:41.746259-0700  localhost kernel[0]: (MTP) [TPM] Mac Power Manager State Machine Initialized (0)
+2026-04-22 11:09:41.746273-0700  localhost kernel[0]: (MTP) Called act_mgr_init()
+2026-04-22 11:09:41.746284-0700  localhost kernel[0]: (RTBuddy) [MTP:touch_pwr_mgr.c:198] [TPM] Mac Power Manager State Machine Initialized (0)
+2026-04-22 11:09:41.746286-0700  localhost kernel[0]: (MTP) Initializing comm interface <0- "comm">
+2026-04-22 11:09:41.746293-0700  localhost kernel[0]: (RTBuddy) [MTP:act_mgr.c:551] Called act_mgr_init()
+2026-04-22 11:09:41.746317-0700  localhost kernel[0]: (MTP) Initializing comm interface <1- "multi-touch">
+2026-04-22 11:09:41.746327-0700  localhost kernel[0]: (RTBuddy) [MTP:comm.c:199] Initializing comm interface <0- "comm">
+2026-04-22 11:09:41.746330-0700  localhost kernel[0]: (MTP) Initializing comm interface <2- "keyboard">
+2026-04-22 11:09:41.746334-0700  localhost kernel[0]: (RTBuddy) [MTP:comm.c:199] Initializing comm interface <1- "multi-touch">
+2026-04-22 11:09:41.746361-0700  localhost kernel[0]: (MTP) Initializing comm interface <3- "stm">
+2026-04-22 11:09:41.746372-0700  localhost kernel[0]: (RTBuddy) [MTP:comm.c:199] Initializing comm interface <2- "keyboard">
+2026-04-22 11:09:41.746375-0700  localhost kernel[0]: (MTP) Initializing comm interface <4- "actuator">
+2026-04-22 11:09:41.746380-0700  localhost kernel[0]: (RTBuddy) [MTP:comm.c:199] Initializing comm interface <3- "stm">
+2026-04-22 11:09:41.746407-0700  localhost kernel[0]: (MTP) Initializing comm interface <5- "tp-accel">
+2026-04-22 11:09:41.746418-0700  localhost kernel[0]: (RTBuddy) [MTP:comm.c:199] Initializing comm interface <4- "actuator">
+2026-04-22 11:09:41.746420-0700  localhost kernel[0]: (MTP) Initializing comm interface <6- "mtp">
+2026-04-22 11:09:41.746431-0700  localhost kernel[0]: (RTBuddy) [MTP:comm.c:199] Initializing comm interface <5- "tp-accel">
+2026-04-22 11:09:41.746465-0700  localhost kernel[0]: (RTBuddy) [MTP:comm.c:199] Initializing comm interface <6- "mtp">
+2026-04-22 11:09:41.746528-0700  localhost kernel[0]: (MTP) ST IF complete enumeration: SENT (0)
+2026-04-22 11:09:41.746542-0700  localhost kernel[0]: (MTP) Grape interface initializing
+2026-04-22 11:09:41.746553-0700  localhost kernel[0]: (RTBuddy) [MTP:stm.c:75] ST IF complete enumeration: SENT (0x0)
+2026-04-22 11:09:41.746563-0700  localhost kernel[0]: (RTBuddy) [MTP:touch_iface.c:171] Grape interface initializing
+2026-04-22 11:09:41.746601-0700  localhost kernel[0]: (MTP) Grape interface initialized
+2026-04-22 11:09:41.746610-0700  localhost kernel[0]: (MTP) Touch IF complete enumeration: SENT
+2026-04-22 11:09:41.746620-0700  localhost kernel[0]: (RTBuddy) [MTP:touch_iface.c:179] Grape interface initialized
+2026-04-22 11:09:41.746622-0700  localhost kernel[0]: (MTP) AFE bootloader initialized for device_id=0x0
+2026-04-22 11:09:41.746627-0700  localhost kernel[0]: (RTBuddy) [MTP:touch_mgr.c:65] Touch IF complete enumeration: SENT
+2026-04-22 11:09:41.746662-0700  localhost kernel[0]: (MTP) Touch_mgr initialized
+2026-04-22 11:09:41.746705-0700  localhost kernel[0]: (MTP) Keyboard initialized

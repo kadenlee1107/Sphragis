@@ -1,0 +1,263 @@
+TTY> Initialized dockchannel UART at 0x388128000
+TTY> Device info:
+TTY>   Model: Mac16,1
+TTY>   Target: J604
+TTY>   Board-ID: 0x22
+TTY>   Chip-ID: 0x8132
+TTY> 
+TTY> CPU init (MIDR: 0x611f0531 smp_id:0x6)...
+TTY>   CPU part: 0x53 rev: 0x11
+TTY>   CPU: M4 Donan (P core)
+TTY> 
+TTY> boot_args at 0x10004c8c000
+TTY>   revision:     3
+TTY>   version:      2
+TTY>   virt_base:    0x4798000
+TTY>   phys_base:    0x10002798000
+TTY>   mem_size:     0x3d8f30000
+TTY>   top_of_kdata: 0x10004c9c000
+TTY>   video:
+TTY>     base:       0x103e0050000
+TTY>     display:    0x1
+TTY>     stride:     0x2f40
+TTY>     width:      3024
+TTY>     height:     1964
+TTY>     depth:      30bpp
+TTY>     density:    1
+TTY>   machine_type: 0
+TTY>   devtree:      0x63e0000
+TTY>   devtree_size: 0x84000
+TTY>   cmdline:      
+TTY>   boot_flags:   0x0
+TTY>   mem_size_act: 0x400000000
+TTY> 
+TTY> 
+TTY> 
+TTY> m1n1 bcee7f2
+TTY> Copyright The Asahi Linux Contributors
+TTY> Licensed under the MIT license
+TTY> 
+TTY> Running in EL2
+TTY> 
+TTY> OS FW version: 26.3 (iBoot-13822.81.10)
+TTY> System FW version: 26.3 (iBoot-13822.81.10)
+TTY> Heap base: 0x10004c9c000
+TTY> MCC: Unsupported version:mcc,t8132
+TTY> MMU: Initializing...
+TTY> MMU: RAM base: 0x10000000000
+TTY> MMU: Top of normal RAM: 0x103db6c8000
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c50000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c60000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c70000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c80000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1cb0000000 (0x14000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff1c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffedc000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffebc000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe7c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe5c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe1c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fffb8000 (0x4000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff70000 (0x4000)
+TTY> MMU: SCTLR_EL1: 30000180 -> 30901085
+TTY> MMU: running with MMU and caches enabled!
+TTY> AIC: Version 3 @ 0x381000000
+TTY> AIC: AIC3 with 1/2 dies, 2048/4096 IRQs, reg_size:40004, config:10000, extintrcfg_stride:04a00, intmaskset_stride:04a00, intmaskclear_stride:04a00
+TTY> WDT registers @ 0x3882b0000
+TTY> WDT disabled
+TTY> pmgr: Cleaning up device states...
+TTY> pmgr: initialized, 392 devices on 1 dies found.
+TTY> display: Display is internal
+TTY> display: Display is already initialized (3024x1964)
+TTY> fb init: 3024x1964 (30) [s=3024] @0x103e0050000
+TTY> fb console: max rows 57, max cols 78
+TTY> fb: display logo
+TTY> cpufreq: Chip 0x8132 is unsupported
+TTY> Initialization complete.
+TTY> Checking for payloads...
+TTY> Devicetree compatible value: apple,j604
+TTY> Unknown payload at 0x100045d0000 (magic: 5b41464b)
+TTY> No valid payload found
+TTY> dart: dart /arm-io/dart-usb0 at 0x402f80000 is a t8110
+TTY> USB0: initialized at 0x10004ca0090
+TTY> dart: dart /arm-io/dart-usb1 at 0x40af80000 is a t8110
+TTY> USB1: initialized at 0x10004ca0560
+TTY> dart: dart /arm-io/dart-usb3 at 0x41af80000 is a t8110
+TTY> USB3: initialized at 0x10004ca0a60
+TTY> Running proxy...
+[m2] chainloading...
+LOAD: _HDR 16384 bytes from 0 to 0
+LOAD: TEXT 327680 bytes from 4000 to 4000
+LOAD: RODA 114688 bytes from 54000 to 54000
+LOAD: DATA 425984 bytes from 70000 to 70000
+ZERO: 245760 bytes from 0xd8000 to 0x114000
+LOAD: PYLD 0 bytes from d8000 to 114000
+SKIP: 67108864 bytes from 0x114000 to 0x4114000
+Fetching ADT (0x00084000 bytes)...
+.............................
+Pushing ADT (528924 bytes)...
+TTY> Preparing to run next stage at 0x1000f9fc200...
+Waiting for reconnection... ....................... Connected
+TTY> Initialized dockchannel UART at 0x388128000
+TTY> Device info:
+TTY>   Model: Mac16,1
+TTY>   Target: J604
+TTY>   Board-ID: 0x22
+TTY>   Chip-ID: 0x8132
+TTY> 
+TTY> CPU init (MIDR: 0x611f0531 smp_id:0x6)...
+TTY>   CPU part: 0x53 rev: 0x11
+TTY>   CPU: M4 Donan (P core)
+TTY> 
+TTY> boot_args at 0x10004bec000
+TTY>   revision:     3
+TTY>   version:      2
+TTY>   virt_base:    0x4798000
+TTY>   phys_base:    0x10002798000
+TTY>   mem_size:     0x3d8f30000
+TTY>   top_of_kdata: 0x10004bf0000
+TTY>   video:
+TTY>     base:       0x103e0050000
+TTY>     display:    0x1
+TTY>     stride:     0x2f40
+TTY>     width:      3024
+TTY>     height:     1964
+TTY>     depth:      30bpp
+TTY>     density:    1
+TTY>   machine_type: 0
+TTY>   devtree:      0x63e0000
+TTY>   devtree_size: 0x84000
+TTY>   cmdline:      
+TTY>   boot_flags:   0x0
+TTY>   mem_size_act: 0x400000000
+TTY> 
+TTY> 
+TTY> 
+TTY> m1n1 unknown
+TTY> Copyright The Asahi Linux Contributors
+TTY> Licensed under the MIT license
+TTY> 
+TTY> Running in EL2
+TTY> 
+TTY> OS FW version: 26.3 (iBoot-13822.81.10)
+TTY> System FW version: 26.3 (iBoot-13822.81.10)
+TTY> Heap base: 0x10004bf0000
+TTY> MCC: Unsupported version:mcc,t8132
+TTY> MMU: Initializing...
+TTY> MMU: RAM base: 0x10000000000
+TTY> MMU: Top of normal RAM: 0x103db6c8000
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c50000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c60000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c70000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c80000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1cb0000000 (0x14000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff1c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffedc000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffebc000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe7c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe5c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe1c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fffb8000 (0x4000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff70000 (0x4000)
+TTY> MMU: SCTLR_EL1: 30900180 -> 30901085
+TTY> MMU: running with MMU and caches enabled!
+TTY> AIC: Version 3 @ 0x381000000
+TTY> AIC: AIC3 with 1/2 dies, 2048/4096 IRQs, reg_size:40004, config:10000, extintrcfg_stride:04a00, intmaskset_stride:04a00, intmaskclear_stride:04a00
+TTY> WDT registers @ 0x3882b0000
+TTY> AP-WDT (t8132) deadline-arm: 00000000->00000000
+TTY> WDT disabled
+TTY> pmgr: Cleaning up device states...
+TTY> pmgr: initialized, 392 devices on 1 dies found.
+TTY> display: Display is internal
+TTY> display: Display is already initialized (3024x1964)
+TTY> fb init: 3024x1964 (30) [s=3024] @0x103e0050000
+TTY> fb console: max rows 57, max cols 78
+TTY> fb: display logo
+TTY> Initialization complete.
+TTY> Checking for payloads...
+TTY> Devicetree compatible value: apple,j604
+TTY> No more payloads at 0x100045d8000
+TTY> No valid payload found
+TTY> dart: dart /arm-io/dart-usb0 at 0x402f80000 is a t8110
+TTY> USB0: initialized at 0x10004bf4090
+TTY> dart: dart /arm-io/dart-usb1 at 0x40af80000 is a t8110
+TTY> USB1: initialized at 0x10004bf4560
+TTY> dart: dart /arm-io/dart-usb3 at 0x41af80000 is a t8110
+TTY> USB3: initialized at 0x10004bf4a60
+TTY> Running proxy...
+[m2] 
+=== P1: AOP reg[4] pre-boot dump (0x390c62000 + 256 bytes) ===
+[m2]   +0x00: 42288052cd510194c1fd7d9021343491220000141f01056b48090054df00056b
+[m2]   +0x20: 290a0054684242391f110071c2000054681242391f0d0071c2010054f3031f2a
+[m2]   +0x40: 18000014220300f0e158805242b82e91e00b00910100bc72632b8052f3588052
+[m2]   +0x60: 1654019421fd7df021003d910b000014220300f0e158805242b82e91e00b0091
+[m2]   +0x80: 0100bc72032d8052f35880520b54019421fd7df021003d91e20b00918f1b0194
+[m2]   +0xa0: 690500f0a8835ef829e11891290140f93f0108eb21090054fd7b44a9e003132a
+[m2]   +0xc0: f44f43a9ff430191ff0f5fd6210300f021b82e91e00b00916226805297510194
+[m2]   +0xe0: 81fd7d9021cc3691ecffff178a57019413150051210300f0e303132a21b82e91
+[m2]   473 non-zero bytes in first 512
+[m2] 
+=== P2: AOP reg[0]+0x1000..0x1200 (MMIO scan 128 regs) ===
+[m2]   found 0 non-trivial values in +0x1000..0x1200
+[m2] 
+=== P3: AOP reg[0]+0x100..0x1000 scan ===
+[m2]   found 4 non-trivial values in +0x100..0x1000
+[m2]     +0x444 = 0x10
+[m2]     +0x818 = 0x40001
+[m2]     +0xb00 = 0x1000000
+[m2]     +0xb10 = 0x14
+[m2] 
+=== Staging AOP FW ===
+TTY> dapf: Initialized /arm-io/dart-aop
+Fetching ADT (0x00084000 bytes)...
+....
+....
+[m2]   staged
+[m2] 
+=== P4: AOP __DATA+0x498 (PAC seed + 128 bytes) ===
+[m2]   +0x00: 00000000000000000000000000000000  (0x0000000000000000 0x0000000000000000)
+[m2]   +0x10: 00000000000000000000000000000000  (0x0000000000000000 0x0000000000000000)
+[m2]   +0x20: 00000000000000000000000000000000  (0x0000000000000000 0x0000000000000000)
+[m2]   +0x30: 00000000000000000000000000000000  (0x0000000000000000 0x0000000000000000)
+[m2]   +0x40: 00000000000000000000000000000000  (0x0000000000000000 0x0000000000000000)
+[m2]   +0x50: 00000000000000000000000000000000  (0x0000000000000000 0x0000000000000000)
+[m2]   +0x60: 00000000000000000000000000000000  (0x0000000000000000 0x0000000000000000)
+[m2]   +0x70: 00000000000000000000000000000000  (0x0000000000000000 0x0000000000000000)
+[m2] 
+=== P5: AOP __DATA+0x370..0x400 (dispatch table area) ===
+[m2]   VA=0x1118494 phys=0x390d18494: 0800000000000000000000004256545008000000000000000000000073503154
+[m2]   VA=0x11183e5 phys=0x390d183e5: 0010010000000000535253410800000000000000000000004746434d08000000
+[m2]   VA=0x11183e1 phys=0x390d183e1: 080000000010010000000000535253410800000000000000000000004746434d
+[m2]   VA=0x1118504 phys=0x390d18504: 0800000000000000000000004c5a534408000000000000000000000053327847
+[m2]   VA=0x1118514 phys=0x390d18514: 08000000000000000000000053327847080000000000000000000000534e5554
+[m2]   VA=0x1119378 phys=0x390d19378: 00000000000000000000000000000000001bedfe000000000000000000000000
+[m2]   VA=0x1119388 phys=0x390d19388: 001bedfe00000000000000000000000003000000000000001e00000000000000
+[m2]   VA=0x1119390 phys=0x390d19390: 000000000000000003000000000000001e000000000000000000000000000000
+[m2]   VA=0x111b020 phys=0x390d1b020: 0000000000000000000000000000000000000000000000000000000000000000
+[m2]   VA=0x111a000 phys=0x390d1a000: 0000000000000000000000000000000000000000000000000000000000000000
+	p0CE = b'\x00\x00\x00\x00\x00\x00\x00\x00' -> b'\x00\x00\x02\x00\x00\x00\x00\x00'
+	laCn = b'\x01' -> b'\x00'
+	gila = b'\x00\x00\x00\x00' -> b'\x80\x00\x00\x00'
+	tPOA = b'\x00\x00\x00\x00' -> b'\x01\x00\x00\x00'
+[m2] 
+=== RUN sequence ===
+[m2]   pre-RUN: CC=0x0 CS=0x6a IB=0x20001 OB=0x20001
+[m2]   post-RUN: CC=0x10 CS=0x68 IB=0x20001 OB=0x20001
+[m2]   post-INBOX: CC=0x10 CS=0x48 IB=0x100101 OB=0x20001
+[m2] 
+=== P6: AOP MMIO scan +0x100..0x2000 POST-STALL (compare pre-boot) ===
+[m2]   found 4 non-trivial post-stall (was 4 pre-boot +0x1000..0x1200)
+[m2]     +0x444 = 0x10
+[m2]     +0x818 = 0x40000
+[m2]     +0xb00 = 0x1000000
+[m2]     +0xb10 = 0x14
+[m2] 
+=== P7: AOP __DATA+0x498 POST-STALL (compare to pre-RUN) ===
+[m2]   post-RUN __DATA+0x498:
+[m2]     +0x00: 8334c990030000008344c99003000000
+[m2]     +0x10: 8354c990030000008364c99003000000
+[m2]     +0x20: 8374c990030000008384c99003000000
+[m2]     +0x30: 8394c9900300000083a4c99003000000
+[m2] 
+=== P8: AOP __OS_LOG post-stall (first 2 KB, look for NEW text) ===
+[m2]   OS_LOG bytes differ from blob at 0 offsets

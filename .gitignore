@@ -22,7 +22,11 @@
 **/.claude-flow/
 **/__pycache__/
 
-# Bring-up camera captures — huge binary blobs, regenerable on live M4.
-/captures
-firmware/
-macos_dump/
+# Bring-up research data now tracked (private repo, Kaden's personal tool).
+# Previously ignored: /captures, firmware/, macos_dump/.
+# Big files in macos_dump/ (>100 MB) are split into .partNN chunks;
+# see macos_dump/README.md for reassembly.
+
+# Split-file parts — don't track source files if they're already split.
+macos_dump/kernelcache.mac16j.bin
+macos_dump/SystemKernelExtensions.kc

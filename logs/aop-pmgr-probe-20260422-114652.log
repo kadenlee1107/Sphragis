@@ -1,0 +1,231 @@
+TTY> Initialized dockchannel UART at 0x388128000
+TTY> Device info:
+TTY>   Model: Mac16,1
+TTY>   Target: J604
+TTY>   Board-ID: 0x22
+TTY>   Chip-ID: 0x8132
+TTY> 
+TTY> CPU init (MIDR: 0x611f0531 smp_id:0x6)...
+TTY>   CPU part: 0x53 rev: 0x11
+TTY>   CPU: M4 Donan (P core)
+TTY> 
+TTY> boot_args at 0x10004d90000
+TTY>   revision:     3
+TTY>   version:      2
+TTY>   virt_base:    0xa798000
+TTY>   phys_base:    0x10002798000
+TTY>   mem_size:     0x3d8f30000
+TTY>   top_of_kdata: 0x10004da0000
+TTY>   video:
+TTY>     base:       0x103e0050000
+TTY>     display:    0x1
+TTY>     stride:     0x2f40
+TTY>     width:      3024
+TTY>     height:     1964
+TTY>     depth:      30bpp
+TTY>     density:    1
+TTY>   machine_type: 0
+TTY>   devtree:      0xc4e4000
+TTY>   devtree_size: 0x84000
+TTY>   cmdline:      
+TTY>   boot_flags:   0x0
+TTY>   mem_size_act: 0x400000000
+TTY> 
+TTY> 
+TTY> 
+TTY> m1n1 bcee7f2
+TTY> Copyright The Asahi Linux Contributors
+TTY> Licensed under the MIT license
+TTY> 
+TTY> Running in EL2
+TTY> 
+TTY> OS FW version: 26.3 (iBoot-13822.81.10)
+TTY> System FW version: 26.3 (iBoot-13822.81.10)
+TTY> Heap base: 0x10004da0000
+TTY> MCC: Unsupported version:mcc,t8132
+TTY> MMU: Initializing...
+TTY> MMU: RAM base: 0x10000000000
+TTY> MMU: Top of normal RAM: 0x103db6c8000
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c50000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c60000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c70000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c80000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1cb0000000 (0x14000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff1c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffedc000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffebc000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe7c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe5c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe1c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fffb8000 (0x4000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff70000 (0x4000)
+TTY> MMU: SCTLR_EL1: 30000180 -> 30901085
+TTY> MMU: running with MMU and caches enabled!
+TTY> AIC: Version 3 @ 0x381000000
+TTY> AIC: AIC3 with 1/2 dies, 2048/4096 IRQs, reg_size:40004, config:10000, extintrcfg_stride:04a00, intmaskset_stride:04a00, intmaskclear_stride:04a00
+TTY> WDT registers @ 0x3882b0000
+TTY> WDT disabled
+TTY> pmgr: Cleaning up device states...
+TTY> pmgr: initialized, 392 devices on 1 dies found.
+TTY> display: Display is internal
+TTY> display: Display is already initialized (3024x1964)
+TTY> fb init: 3024x1964 (30) [s=3024] @0x103e0050000
+TTY> fb console: max rows 57, max cols 78
+TTY> fb: display logo
+TTY> cpufreq: Chip 0x8132 is unsupported
+TTY> Initialization complete.
+TTY> Checking for payloads...
+TTY> Devicetree compatible value: apple,j604
+TTY> Unknown payload at 0x100046d4000 (magic: 5b41464b)
+TTY> No valid payload found
+TTY> dart: dart /arm-io/dart-usb0 at 0x402f80000 is a t8110
+TTY> USB0: initialized at 0x10004da4090
+TTY> dart: dart /arm-io/dart-usb1 at 0x40af80000 is a t8110
+TTY> USB1: initialized at 0x10004da4560
+TTY> dart: dart /arm-io/dart-usb3 at 0x41af80000 is a t8110
+TTY> USB3: initialized at 0x10004da4a60
+TTY> Running proxy...
+[exp] chainloading patched m1n1 (with WDT fix)...
+LOAD: _HDR 16384 bytes from 0 to 0
+LOAD: TEXT 327680 bytes from 4000 to 4000
+LOAD: RODA 114688 bytes from 54000 to 54000
+LOAD: DATA 425984 bytes from 70000 to 70000
+ZERO: 245760 bytes from 0xd8000 to 0x114000
+LOAD: PYLD 0 bytes from d8000 to 114000
+SKIP: 67108864 bytes from 0x114000 to 0x4114000
+Fetching ADT (0x00084000 bytes)...
+.............................
+Pushing ADT (528924 bytes)...
+TTY> Preparing to run next stage at 0x1000fb00200...
+Waiting for reconnection... ....................... Connected
+TTY> Initialized dockchannel UART at 0x388128000
+TTY> Device info:
+TTY>   Model: Mac16,1
+TTY>   Target: J604
+TTY>   Board-ID: 0x22
+TTY>   Chip-ID: 0x8132
+TTY> 
+TTY> CPU init (MIDR: 0x611f0531 smp_id:0x6)...
+TTY>   CPU part: 0x53 rev: 0x11
+TTY>   CPU: M4 Donan (P core)
+TTY> 
+TTY> boot_args at 0x10004cf0000
+TTY>   revision:     3
+TTY>   version:      2
+TTY>   virt_base:    0xa798000
+TTY>   phys_base:    0x10002798000
+TTY>   mem_size:     0x3d8f30000
+TTY>   top_of_kdata: 0x10004cf4000
+TTY>   video:
+TTY>     base:       0x103e0050000
+TTY>     display:    0x1
+TTY>     stride:     0x2f40
+TTY>     width:      3024
+TTY>     height:     1964
+TTY>     depth:      30bpp
+TTY>     density:    1
+TTY>   machine_type: 0
+TTY>   devtree:      0xc4e4000
+TTY>   devtree_size: 0x84000
+TTY>   cmdline:      
+TTY>   boot_flags:   0x0
+TTY>   mem_size_act: 0x400000000
+TTY> 
+TTY> 
+TTY> 
+TTY> m1n1 unknown
+TTY> Copyright The Asahi Linux Contributors
+TTY> Licensed under the MIT license
+TTY> 
+TTY> Running in EL2
+TTY> 
+TTY> OS FW version: 26.3 (iBoot-13822.81.10)
+TTY> System FW version: 26.3 (iBoot-13822.81.10)
+TTY> Heap base: 0x10004cf4000
+TTY> MCC: Unsupported version:mcc,t8132
+TTY> MMU: Initializing...
+TTY> MMU: RAM base: 0x10000000000
+TTY> MMU: Top of normal RAM: 0x103db6c8000
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c50000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c60000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c70000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c80000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1cb0000000 (0x14000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff1c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffedc000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffebc000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe7c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe5c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe1c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fffb8000 (0x4000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff70000 (0x4000)
+TTY> MMU: SCTLR_EL1: 30900180 -> 30901085
+TTY> MMU: running with MMU and caches enabled!
+TTY> AIC: Version 3 @ 0x381000000
+TTY> AIC: AIC3 with 1/2 dies, 2048/4096 IRQs, reg_size:40004, config:10000, extintrcfg_stride:04a00, intmaskset_stride:04a00, intmaskclear_stride:04a00
+TTY> WDT registers @ 0x3882b0000
+TTY> AP-WDT (t8132) deadline-arm: 00000000->00000000
+TTY> WDT disabled
+TTY> pmgr: Cleaning up device states...
+TTY> pmgr: initialized, 392 devices on 1 dies found.
+TTY> display: Display is internal
+TTY> display: Display is already initialized (3024x1964)
+TTY> fb init: 3024x1964 (30) [s=3024] @0x103e0050000
+TTY> fb console: max rows 57, max cols 78
+TTY> fb: display logo
+TTY> Initialization complete.
+TTY> Checking for payloads...
+TTY> Devicetree compatible value: apple,j604
+TTY> No more payloads at 0x100046dc000
+TTY> No valid payload found
+TTY> dart: dart /arm-io/dart-usb0 at 0x402f80000 is a t8110
+TTY> USB0: initialized at 0x10004cf8090
+TTY> dart: dart /arm-io/dart-usb1 at 0x40af80000 is a t8110
+TTY> USB1: initialized at 0x10004cf8560
+TTY> dart: dart /arm-io/dart-usb3 at 0x41af80000 is a t8110
+TTY> USB3: initialized at 0x10004cf8a60
+TTY> Running proxy...
+[exp]   patched m1n1 up
+[exp] 
+=== STEP 1: AOP PMGR device enable ===
+[exp] AOP PMGR pre: 0x47c620ce  TGT=0xe ACT=0xc DD=0 PO=0 WC=0 WP=0 AE=0 RST=0 
+[exp] AOP PMGR+4 pre: 0x00000000
+[exp]   [RMW TARGET=0xf only] write 0x47c620cf
+[exp]     read-back: 0x47c6430a  TGT=0xa ACT=0x0 DD=0 PO=0 WC=1 WP=1 AE=0 RST=0 
+[exp]     read-back: 0x47cdac56  TGT=0x6 ACT=0x5 DD=1 PO=1 WC=0 WP=0 AE=0 RST=0 
+[exp]     read-back: 0x47d522f1  TGT=0x1 ACT=0xf DD=0 PO=0 WC=1 WP=0 AE=0 RST=0 
+[exp]     *** ACTUAL=0xf reached ***
+[exp] 
+checking ASC mailbox writability...
+[exp]   [AOP+0x60] write 0xdeadbeef → read 0x0  UNWRITABLE
+[exp] 
+=== STEP 2: pmgr_adt_power_enable /arm-io/dart-aop ===
+TTY> pmgr: Error getting /arm-io/dart-aop clock-gates.
+[exp]   rc=18446744073709551615
+[exp] 
+=== STEP 3: Stage AOP firmware ===
+Fetching ADT (0x00084000 bytes)...
+[exp] aop ADT segs: ['__TEXT', '__DATA', '__ETEXT', '__OS_LOG']
+[exp]   aop __TEXT: iBoot-staged (skip)
+[exp]   aop __ETEXT: iBoot-staged (skip)
+....
+[exp]   aop __DATA: 1019904B -> 0x390ccd000 (1654ms)
+....
+[exp]   aop __OS_LOG: 172032B -> 0x10004740000 (6ms)
+[exp] 
+=== STEP 4: AOP DART + AOPClient boot ===
+[exp]   DART vm-base=0x10000018000
+[exp]   pre-boot CC=0x0 CS=0x6a
+[exp]   bootargs keys: ['GKTS', 'p0CE', 'p0DE', 'laCn', 'Hlca', 'Epan', 'Hsid', 'gila', 'tPOA', 'Idrb']
+[exp]   update_bootargs({p0CE:0x20000,laCn:0,tPOA:1,gila:0x80})
+	p0CE = b'\x00\x00\x00\x00\x00\x00\x00\x00' -> b'\x00\x00\x02\x00\x00\x00\x00\x00'
+	laCn = b'\x01' -> b'\x00'
+	gila = b'\x00\x00\x00\x00' -> b'\x80\x00\x00\x00'
+	tPOA = b'\x00\x00\x00\x00' -> b'\x01\x00\x00\x00'
+[exp]   aop.start() — waits up to 3s for Hello...
+[mgmt] Starting via message
+[exp]   aop.start() FAIL: ASCTimeout: Boot timed out
+[exp]   CC=0x10 CS=0x48 IB=0x100101 OB=0x20001 PMGR=0x4ed5b1a3
+[exp] 
+=== AOP did not Hello → skipping MTP chain ===
+[exp] final PMGR: 0x4ed5bd98 TGT=0x6 ACT=0xc DD=0 PO=1 WC=0 WP=0 AE=0 RST=0 

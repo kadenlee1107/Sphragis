@@ -1,0 +1,19 @@
+Traceback (most recent call last):
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py", line 23, in <module>
+    from m1n1.setup import *
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/setup.py", line 18, in <module>
+    bootstrap_port(iface, p)
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxyutils.py", line 572, in bootstrap_port
+    iface.nop()
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 367, in nop
+    result = self.reply(self.REQ_NOP)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 258, in reply
+    reply += self.readfull(1)
+             ^^^^^^^^^^^^^^^^
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 195, in readfull
+    block = self.dev.read(size - len(d))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/serial/serialposix.py", line 595, in read
+    raise SerialException(
+serial.serialutil.SerialException: device reports readiness to read but returned no data (device disconnected or multiple access on port?)

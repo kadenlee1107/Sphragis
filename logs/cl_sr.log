@@ -1,0 +1,125 @@
+TTY> Initialized dockchannel UART at 0x388128000
+TTY> Device info:
+TTY>   Model: Mac16,1
+TTY>   Target: J604
+TTY>   Board-ID: 0x22
+TTY>   Chip-ID: 0x8132
+TTY> 
+TTY> CPU init (MIDR: 0x611f0531 smp_id:0x6)...
+TTY>   CPU part: 0x53 rev: 0x11
+TTY>   CPU: M4 Donan (P core)
+TTY> 
+TTY> boot_args at 0x10005ed4000
+TTY>   revision:     3
+TTY>   version:      2
+TTY>   virt_base:    0x16798000
+TTY>   phys_base:    0x10002798000
+TTY>   mem_size:     0x3d8f30000
+TTY>   top_of_kdata: 0x10005ee4000
+TTY>   video:
+TTY>     base:       0x103e0050000
+TTY>     display:    0x1
+TTY>     stride:     0x2f40
+TTY>     width:      3024
+TTY>     height:     1964
+TTY>     depth:      30bpp
+TTY>     density:    1
+TTY>   machine_type: 0
+TTY>   devtree:      0x19628000
+TTY>   devtree_size: 0x84000
+TTY>   cmdline:      
+TTY>   boot_flags:   0x0
+TTY>   mem_size_act: 0x400000000
+TTY> 
+TTY> 
+TTY> 
+TTY> m1n1 bcee7f2
+TTY> Copyright The Asahi Linux Contributors
+TTY> Licensed under the MIT license
+TTY> 
+TTY> Running in EL2
+TTY> 
+TTY> OS FW version: 26.3 (iBoot-13822.81.10)
+TTY> System FW version: 26.3 (iBoot-13822.81.10)
+TTY> Heap base: 0x10005ee4000
+TTY> MCC: Unsupported version:mcc,t8132
+TTY> MMU: Initializing...
+TTY> MMU: RAM base: 0x10000000000
+TTY> MMU: Top of normal RAM: 0x103db6c8000
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c50000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c60000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c70000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c80000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1cb0000000 (0x14000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff1c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffedc000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffebc000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe7c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe5c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe1c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fffb8000 (0x4000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff70000 (0x4000)
+TTY> MMU: SCTLR_EL1: 30000180 -> 30901085
+TTY> MMU: running with MMU and caches enabled!
+TTY> AIC: Version 3 @ 0x381000000
+TTY> AIC: AIC3 with 1/2 dies, 2048/4096 IRQs, reg_size:40004, config:10000, extintrcfg_stride:04a00, intmaskset_stride:04a00, intmaskclear_stride:04a00
+TTY> WDT registers @ 0x3882b0000
+TTY> WDT disabled
+TTY> pmgr: Cleaning up device states...
+TTY> pmgr: initialized, 392 devices on 1 dies found.
+TTY> display: Display is internal
+TTY> display: Display is already initialized (3024x1964)
+TTY> fb init: 3024x1964 (30) [s=3024] @0x103e0050000
+TTY> fb console: max rows 57, max cols 78
+TTY> fb: display logo
+TTY> cpufreq: Chip 0x8132 is unsupported
+TTY> Initialization complete.
+TTY> Checking for payloads...
+TTY> Devicetree compatible value: apple,j604
+TTY> Unknown payload at 0x10005818000 (magic: 5b41464b)
+TTY> No valid payload found
+TTY> dart: dart /arm-io/dart-usb0 at 0x402f80000 is a t8110
+TTY> USB0: initialized at 0x10005ee8090
+TTY> dart: dart /arm-io/dart-usb1 at 0x40af80000 is a t8110
+TTY> USB1: initialized at 0x10005ee8560
+TTY> dart: dart /arm-io/dart-usb3 at 0x41af80000 is a t8110
+TTY> USB3: initialized at 0x10005ee8a60
+TTY> Running proxy...
+m1n1 base: 0x1000570c000
+Fetching ADT (0x00084000 bytes)...
+Total region size: 0x15a8000 bytes
+Loading kernel image (0xf922d4 bytes)...
+..................................................................................................................................................................................................................................................................................................................................................
+Copying SEPFW (0x5d0000 bytes)...
+Adjusting addresses in ADT...
+Skipping secondary CPU RVBAR writes (--skip-secondary-cpus / M4 workaround)
+Pushing ADT (528760 bytes)...
+Setting up bootargs...
+Copying stub...
+Entry point: 0x1000570c000
+Reloading into stub at 0x10011bc0200
+TTY> Preparing to run next stage at 0x10011bc0200...
+Waiting for reconnection... ........................................................................................................................................................................................................Traceback (most recent call last):
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 339, in wait_boot
+    return self.reply(self.REQ_BOOT)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 258, in reply
+    reply += self.readfull(1)
+             ^^^^^^^^^^^^^^^^
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 195, in readfull
+    block = self.dev.read(size - len(d))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/serial/serialposix.py", line 595, in read
+    raise SerialException(
+serial.serialutil.SerialException: device reports readiness to read but returned no data (device disconnected or multiple access on port?)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py", line 176, in <module>
+    p.reload(stub.addr, new_base + bootargs_off, image_addr, new_base, image_size)
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 727, in reload
+    self.iface.wait_boot()
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 355, in wait_boot
+    raise UartTimeout("Reconnection timed out")
+m1n1.proxy.UartTimeout: Reconnection timed out
