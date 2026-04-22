@@ -11,6 +11,121 @@ end of a session.
 
 ---
 
+## 2026-04-22 12:00 — Ubuntu — AOP boot path: PMGR was a timer; real blocker is FIQ handler stall
+
+Hypothesis from the 11:25 dtrace entry: AOP reg[3] at `0x3_882A_8000`
+(ioreg: canonical 15169388544) is a PMGR device-enable slot that
+macOS directly pokes. **This was wrong.** reg[3] is a 24 MHz
+always-on timer/counter: values increment monotonically ~24M/s
+across every read, and writes have no effect.
+
+Evidence (logs/aop-pmgr-v2-*.log, 10s observation):
+```
+  t=0.05s PMGR=0x82fe3494   delta-from-t0: 0x1CB10 = 117k
+  t=0.15s PMGR=0x8323904a   +0x25_5BB6 / 100ms ≈ 24M/s
+  t=0.87s PMGR=0x8429e11a
+  t=10.0s PMGR=0x91448d07   total delta over 10s ~ 235M ticks = 24 MHz
+```
+Low-nibble variation (the pattern I mistook for PMGR TARGET/ACTUAL
+fields) is just the counter's LSBs ticking. Any `p.write32` is
+overwritten by the next counter tick before subsequent reads.
+
+### What IS the real AOP start mechanism
+
+Combined findings from v3 + v4 + v5 (4 boot cycles, no power-cycle
+needed — Mac recovered itself each time):
+
+1. **DAPF init is needed**. `p.dapf_init("/arm-io/dart-aop")` writes
+   the t8110 DAPF config from ADT. Without this, FW later DMAs fail.
+   m1n1 prints `dapf: Initialized /arm-io/dart-aop`.
+2. **AOP ASC regs are always accessible**. No power-gate to kick;
+   reg[0] MMIO (+0x44 CC, +0x48 CS, +0x8110 IB_CTRL, +0x8114 OB_CTRL,
+   +0x8800 INBOX, +0x8830 OUTBOX) all respond immediately.
+3. **`dart_aop.initialize()` is a LANDMINE**. It blanks iBoot's DART
+   page tables. When AOP FW's FIQ handler then DMAs via DART, the
+   fabric faults → SoC-wide reset. `boot_aop_doorbell.py` already
+   documented this (skip dart.initialize) but v3 ignored it and
+   crashed the Mac.
+4. **bootargs accessible via AOPBase** (no DART needed). Keys
+   present: GKTS p0CE p0DE laCn Hlca Epan Hsid gila tPOA Idrb.
+5. **CC.RUN=1 changes CPU_STATUS**:
+     pre:  0x6a  RUNNING=0 STOPPED=1 IDLE=1 FIQ_NOT_PEND=1 bit6=1
+     post: 0x68  STOPPED→0, IDLE=1 still (FW waiting)
+6. **INBOX write wakes FW from IDLE**:
+     after write: CS=0x48  IDLE→0  (FW running its main loop)
+     IB=0x100101  FIFOCNT=1 WPTR=1 (msg queued)
+7. **Doorbell (+0x1004=0x10, +0x1014=1) triggers FIQ to AOP**:
+     after ring: CS=0x40  FIQ_NOT_PEND→0  (FIQ pending/taken)
+8. **But FW stalls in FIQ handler**:
+     10s later: CS stays 0x40, IB stays 0x100101 (msg NOT drained),
+     OB stays EMPTY. FW is stuck somewhere in handler, before it
+     even reads INBOX.
+
+### What each configuration produces
+
+ config                                     outcome
+ ──────────────────────────────────────────  ──────────────────────────
+ v3 (dart.initialize + INBOX + doorbell)    Mac resets (DART fault)
+ v4 (no-DART + INBOX + doorbell)            FW FIQ stall, no reset
+ v5 (no-DART + RUN only, no msg/ring)       FW stays IDLE forever
+
+Whatever the FIQ handler stalls on is the remaining unknown. Possible:
+  (a) PAC auth on a __DATA_CONST pointer — same class of issue as
+      HV-trace v8 APIA-key wall. Our firmware/aop/aopfw-mac16gaop
+      blob may be signed for a different APIA key than is loaded
+      on this board's AOP core.
+  (b) FW polls for SMC or PMP mailbox state before processing own
+      INBOX. (Live-macOS boot log sequence suggests SMC comes up
+      simultaneously with AOP.)
+  (c) DART still needs specific iomap_at entries for FW's own
+      __DATA/__OS_LOG DVA ranges. We skipped dart.initialize but
+      maybe iBoot's DART config was already cycled by our earlier
+      write to `p.write32(OUTBOX_CTRL, 0x20001)` or similar.
+  (d) Bootargs override is corrupting FW expectation (v5 skipped
+      update_bootargs but still didn't Hello — if update_bootargs
+      were the issue v4 should have stalled, but v5 would have too;
+      so not this).
+
+### Artifacts landed
+
+- `scripts/hv/probe_aop_pmgr.py`     — v1: PMGR-as-PMGR hypothesis
+- `scripts/hv/probe_aop_pmgr_v2.py`  — + dapf + observation loop
+                                        (discovered timer behavior)
+- `scripts/hv/probe_aop_pmgr_v3.py`  — first doorbell attempt, crashed
+- `scripts/hv/probe_aop_pmgr_v4.py`  — no-DART + doorbell; stalls
+- `scripts/hv/probe_aop_pmgr_v5.py`  — RUN only; stays IDLE
+- `logs/aop-pmgr-*.log`              — 5 logs of live-M4 experiments
+
+### Next session starting points (cheap — 1 cycle each)
+
+1. **INBOX without doorbell**. Our v4 sent INBOX + rang the doorbell.
+   Try INBOX alone — FW might eventually drain it on its own timer,
+   telling us whether doorbell is the stall cause.
+2. **Doorbell without INBOX**. Ring FIQ with nothing queued — does
+   FW's handler run the same stall path, or skip cleanly and return?
+   Isolates "FIQ dispatch code" vs "message-processing code".
+3. **Drain OB0/OB1 first**. Pre-RUN we see OB1=0xa000000000000 —
+   looks like a stale iBoot message descriptor. Write 0 to OB0/OB1
+   regs (if writable) then RUN; maybe FW checks these on startup.
+4. **Try sending Mgmt_Ping (TYPE=3)** instead of SetIOPPower. If
+   Pong comes back, we know mgmt is alive; if not, mgmt is stuck.
+5. **Look at Asahi `upstream/asahi` for recent AOP boot code**.
+   `git -C external/m1n1 log --grep='aop' --all` may show M2/M3-era
+   patches that have info we don't.
+
+### Status
+
+**Mac is alive and in stock m1n1** (bcee7f2) — no power-cycle needed.
+ACM1/ACM2 enumerate as expected. Experiments 1-4 above cost ~1 boot
+cycle each (chainload + run + observe) with graceful recovery. If
+the FIQ stall cause is PAC-related (option a), it's the same wall
+as HV-trace v8 and needs different approach entirely.
+
+External USB keyboard pipeline is unaffected and still works as the
+fallback for internal keyboard.
+
+---
+
 ## 2026-04-21 21:30 — Ubuntu — HV-trace wrapper lands, dry-run boots on M4
 
 Picked up HV-trace work from `docs/HV_TRACE_HANDOFF.md`. Wrote a thin

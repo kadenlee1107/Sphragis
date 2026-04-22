@@ -306,6 +306,85 @@ We do NOT yet have the real address of:
 the ADT paths match. If they don't match, update the paths in
 `src/drivers/apple/soc.rs::discover_from_adt`.
 
+### 3.6 AOP ASCWrapV6 bring-up (partial — 2026-04-22)
+
+AOP is at canonical MMIO base `0x3_9060_0000` (proxy-alias form of
+`reg[0]` for `/arm-io/aop`). Its `reg[3]` at `0x3_882A_8000` size 8
+is **NOT a PMGR device-enable register** — despite its location in
+the PMGR block (offset `+0x2A_8000`), reads return a monotonically-
+incrementing 24 MHz counter. Writes are silently ignored. Early
+session notes in the Journal described this as "AOP's missing PMGR
+poke" — that hypothesis is disproven.
+
+Verified MMIO offsets from AOP base (by kext disasm + live test):
+
+| Offset | Name | Notes |
+|---|---|---|
+| `+0x0044` | `CPU_CONTROL` | `RUN` bit 4 |
+| `+0x0048` | `CPU_STATUS` | bit 0 RUNNING, 1 STOPPED, 3 FIQ_NOT_PEND, 5 IDLE |
+| `+0x1004` | `FIQ_NMI_CFG` | write `0x10` then write 1 to `+0x1014` to ring FW's FIQ |
+| `+0x1014` | `FIQ_NMI_ARM` | doorbell arm |
+| `+0x8110` | `INBOX_CTRL` | bit 0 ENABLE, 8:11 WPTR, 16 FULL, 17 EMPTY, 20:23 FIFOCNT |
+| `+0x8114` | `OUTBOX_CTRL` | same layout |
+| `+0x8800` | `INBOX0` | 64-bit message lo |
+| `+0x8808` | `INBOX1` | 64-bit message hi; bits 7:0 = EP |
+| `+0x8830` | `OUTBOX0` | |
+| `+0x8838` | `OUTBOX1` | |
+
+Observed boot-state transitions (no PMGR poke needed — MMIO is live
+from m1n1 proxy immediately):
+
+```
+  pre-RUN        CC=0x00  CS=0x6a  IB=0x20001  OB=0x20001
+  post RUN=1     CC=0x10  CS=0x68  IB=0x20001  OB=0xa0001
+      STOPPED→0, IDLE=1 still (FW waiting for work)
+  after INBOX    CC=0x10  CS=0x48  IB=0x100101 OB=0xa0001
+      IDLE→0 (FW running main loop), WPTR=1 (msg queued)
+  after doorbell CC=0x10  CS=0x40  IB=0x100101 OB=0xa0001
+      FIQ_NOT_PEND→0 (FIQ pending/taken)
+```
+
+Required host-side setup for AOP boot (verified):
+1. `p.dapf_init("/arm-io/dart-aop")` — t8110 fabric protection config
+2. Stage `__DATA` + `__OS_LOG` from `firmware/aop/aopfw-mac16gaop.RELEASE.bin`
+   (iBoot leaves `__TEXT` + `__ETEXT` in place; hash-compare first
+   16 bytes at offsets 0/0x100/0x200 before overwriting)
+3. Optional: `update_bootargs({p0CE:0x20000, laCn:0, tPOA:1, gila:0x80})`
+   via `m1n1.fw.aop.base.AOPBase` (no DART needed for this)
+4. **DO NOT** call `dart.initialize()` for dart-aop — it blanks
+   iBoot's page tables and causes FW DMA fault → SoC reset
+5. Reset OUTBOX_CTRL via `p.write32(AOP + 0x8114, 0x20001)`
+6. `p.write32(AOP + 0x44, 0x10)` — set RUN
+
+Status as of 2026-04-22: host-side sequence runs cleanly, FW takes
+the doorbell-triggered FIQ, but **FW stalls inside the FIQ handler
+without draining INBOX**. CS stays at 0x40 indefinitely; OUTBOX
+never populates. Root cause unknown — candidates: PAC-key mismatch
+against blob's signed pointers (same class as HV-trace APIA wall),
+missing DART iomap_at entries, or undocumented startup dependency.
+
+See `scripts/hv/probe_aop_pmgr_v4.py` for the current known-best
+host-side sequence, and `SESSION_JOURNAL.md` 2026-04-22 12:00 for
+the next-session starting points.
+
+### 3.7 PMGR layout note: alias for proxy access
+
+M4's PMGR base is at canonical `0x1_8800_0000`. All scripts that
+access PMGR regs directly via the m1n1 proxy use the **high-alias
+form** at `0x3_8800_0000` — m1n1's MMU sets up both aliases, and the
+proxy request protocol accepts 64-bit addresses. Examples:
+
+| Register | Canonical | Proxy-alias (what scripts use) |
+|---|---|---|
+| PMGR base | `0x1_8800_0000` | `0x3_8800_0000` |
+| WDT deadline-arm | `0x1_882B_C224` | `0x3_882B_C224` |
+| AOP aot-timer (reg[3]) | `0x1_882A_8000` | `0x3_882A_8000` |
+| SMC panic-scratch (DO NOT WRITE 0xffffffff) | `0x1_882B_8008` | `0x3_882B_8008` |
+
+A common scripting error: dropping a hex digit and writing e.g.
+`0x3882a800` (8 digits, ≈902 MB into DRAM) instead of the correct
+9-digit alias `0x3_882A_8000`. The 9-digit form is always right.
+
 ---
 
 ## 4. ATC PHY register window — atc-phy3 snapshot
