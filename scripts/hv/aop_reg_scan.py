@@ -61,4 +61,15 @@ for base, nm in [(AOP, "AOP"), (MTP, "MTP")]:
 for base, nm in [(AOP, "AOP"), (MTP, "MTP")]:
     dump_range(base, nm + " [0xc00..0xd00]", 0xc00, 0xd00, 4)
 
+# 0x4000..0x4800 — attestation-like slots seen at +0x4400..+0x4700
+# (4 rows, 3 random u32 + 0x00020000 trailer on AOP).
+# Check if MTP has equivalent table — that tells us if it's AOP-specific.
+for base, nm in [(AOP, "AOP"), (MTP, "MTP")]:
+    dump_range(base, nm + " [0x4000..0x4800]", 0x4000, 0x4800, 4)
+
+# 0x8000..0x8200 — +0x8000 had CS-like 0x4c on AOP. DO NOT read past
+# +0x8200 — DAPF SYNC wedges m1n1.
+for base, nm in [(AOP, "AOP"), (MTP, "MTP")]:
+    dump_range(base, nm + " [0x8000..0x8200]", 0x8000, 0x8200, 4)
+
 os._exit(0)
