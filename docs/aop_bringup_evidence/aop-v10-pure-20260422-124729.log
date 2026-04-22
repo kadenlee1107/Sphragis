@@ -1,0 +1,232 @@
+TTY> Initialized dockchannel UART at 0x388128000
+TTY> Device info:
+TTY>   Model: Mac16,1
+TTY>   Target: J604
+TTY>   Board-ID: 0x22
+TTY>   Chip-ID: 0x8132
+TTY> 
+TTY> CPU init (MIDR: 0x611f0531 smp_id:0x6)...
+TTY>   CPU part: 0x53 rev: 0x11
+TTY>   CPU: M4 Donan (P core)
+TTY> 
+TTY> boot_args at 0x100048ac000
+TTY>   revision:     3
+TTY>   version:      2
+TTY>   virt_base:    0x1a798000
+TTY>   phys_base:    0x10002798000
+TTY>   mem_size:     0x3d8f30000
+TTY>   top_of_kdata: 0x100048bc000
+TTY>   video:
+TTY>     base:       0x103e0050000
+TTY>     display:    0x1
+TTY>     stride:     0x2f40
+TTY>     width:      3024
+TTY>     height:     1964
+TTY>     depth:      30bpp
+TTY>     density:    1
+TTY>   machine_type: 0
+TTY>   devtree:      0x1c000000
+TTY>   devtree_size: 0x84000
+TTY>   cmdline:      
+TTY>   boot_flags:   0x0
+TTY>   mem_size_act: 0x400000000
+TTY> 
+TTY> 
+TTY> 
+TTY> m1n1 bcee7f2
+TTY> Copyright The Asahi Linux Contributors
+TTY> Licensed under the MIT license
+TTY> 
+TTY> Running in EL2
+TTY> 
+TTY> OS FW version: 26.3 (iBoot-13822.81.10)
+TTY> System FW version: 26.3 (iBoot-13822.81.10)
+TTY> Heap base: 0x100048bc000
+TTY> MCC: Unsupported version:mcc,t8132
+TTY> MMU: Initializing...
+TTY> MMU: RAM base: 0x10000000000
+TTY> MMU: Top of normal RAM: 0x103db6c8000
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c50000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c60000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c70000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c80000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1cb0000000 (0x14000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff1c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffedc000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffebc000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe7c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe5c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe1c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fffb8000 (0x4000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff70000 (0x4000)
+TTY> MMU: SCTLR_EL1: 30000180 -> 30901085
+TTY> MMU: running with MMU and caches enabled!
+TTY> AIC: Version 3 @ 0x381000000
+TTY> AIC: AIC3 with 1/2 dies, 2048/4096 IRQs, reg_size:40004, config:10000, extintrcfg_stride:04a00, intmaskset_stride:04a00, intmaskclear_stride:04a00
+TTY> WDT registers @ 0x3882b0000
+TTY> WDT disabled
+TTY> pmgr: Cleaning up device states...
+TTY> pmgr: initialized, 392 devices on 1 dies found.
+TTY> display: Display is internal
+TTY> display: Display is already initialized (3024x1964)
+TTY> fb init: 3024x1964 (30) [s=3024] @0x103e0050000
+TTY> fb console: max rows 57, max cols 78
+TTY> fb: display logo
+TTY> cpufreq: Chip 0x8132 is unsupported
+TTY> Initialization complete.
+TTY> Checking for payloads...
+TTY> Devicetree compatible value: apple,j604
+TTY> Unknown payload at 0x100041f0000 (magic: 5b41464b)
+TTY> No valid payload found
+TTY> dart: dart /arm-io/dart-usb0 at 0x402f80000 is a t8110
+TTY> USB0: initialized at 0x100048c0090
+TTY> dart: dart /arm-io/dart-usb1 at 0x40af80000 is a t8110
+TTY> USB1: initialized at 0x100048c0560
+TTY> dart: dart /arm-io/dart-usb3 at 0x41af80000 is a t8110
+TTY> USB3: initialized at 0x100048c0a60
+TTY> Running proxy...
+[v10] chainloading patched m1n1 (WDT fix only)...
+LOAD: _HDR 16384 bytes from 0 to 0
+LOAD: TEXT 327680 bytes from 4000 to 4000
+LOAD: RODA 114688 bytes from 54000 to 54000
+LOAD: DATA 425984 bytes from 70000 to 70000
+ZERO: 245760 bytes from 0xd8000 to 0x114000
+LOAD: PYLD 0 bytes from d8000 to 114000
+SKIP: 67108864 bytes from 0x114000 to 0x4114000
+Fetching ADT (0x00084000 bytes)...
+.............................
+Pushing ADT (528924 bytes)...
+TTY> Preparing to run next stage at 0x1000f61c200...
+Waiting for reconnection... ....................... Connected
+TTY> Initialized dockchannel UART at 0x388128000
+TTY> Device info:
+TTY>   Model: Mac16,1
+TTY>   Target: J604
+TTY>   Board-ID: 0x22
+TTY>   Chip-ID: 0x8132
+TTY> 
+TTY> CPU init (MIDR: 0x611f0531 smp_id:0x6)...
+TTY>   CPU part: 0x53 rev: 0x11
+TTY>   CPU: M4 Donan (P core)
+TTY> 
+TTY> boot_args at 0x1000480c000
+TTY>   revision:     3
+TTY>   version:      2
+TTY>   virt_base:    0x1a798000
+TTY>   phys_base:    0x10002798000
+TTY>   mem_size:     0x3d8f30000
+TTY>   top_of_kdata: 0x10004810000
+TTY>   video:
+TTY>     base:       0x103e0050000
+TTY>     display:    0x1
+TTY>     stride:     0x2f40
+TTY>     width:      3024
+TTY>     height:     1964
+TTY>     depth:      30bpp
+TTY>     density:    1
+TTY>   machine_type: 0
+TTY>   devtree:      0x1c000000
+TTY>   devtree_size: 0x84000
+TTY>   cmdline:      
+TTY>   boot_flags:   0x0
+TTY>   mem_size_act: 0x400000000
+TTY> 
+TTY> 
+TTY> 
+TTY> m1n1 unknown
+TTY> Copyright The Asahi Linux Contributors
+TTY> Licensed under the MIT license
+TTY> 
+TTY> Running in EL2
+TTY> 
+TTY> OS FW version: 26.3 (iBoot-13822.81.10)
+TTY> System FW version: 26.3 (iBoot-13822.81.10)
+TTY> Heap base: 0x10004810000
+TTY> MCC: Unsupported version:mcc,t8132
+TTY> MMU: Initializing...
+TTY> MMU: RAM base: 0x10000000000
+TTY> MMU: Top of normal RAM: 0x103db6c8000
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c50000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c60000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c70000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1c80000000 (0x4000)
+TTY> MMU: Adding Device-nGnRE mapping at 0x1cb0000000 (0x14000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff1c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffedc000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffebc000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe7c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe5c000 (0x20000)
+TTY> MMU: Adding Normal-NC mapping at 0x103ffe1c000 (0x10000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fffb8000 (0x4000)
+TTY> MMU: Adding Normal-NC mapping at 0x103fff70000 (0x4000)
+TTY> MMU: SCTLR_EL1: 30900180 -> 30901085
+TTY> MMU: running with MMU and caches enabled!
+TTY> AIC: Version 3 @ 0x381000000
+TTY> AIC: AIC3 with 1/2 dies, 2048/4096 IRQs, reg_size:40004, config:10000, extintrcfg_stride:04a00, intmaskset_stride:04a00, intmaskclear_stride:04a00
+TTY> WDT registers @ 0x3882b0000
+TTY> AP-WDT (t8132) deadline-arm: 00000000->00000000
+TTY> WDT disabled
+TTY> pmgr: Cleaning up device states...
+TTY> pmgr: initialized, 392 devices on 1 dies found.
+TTY> display: Display is internal
+TTY> display: Display is already initialized (3024x1964)
+TTY> fb init: 3024x1964 (30) [s=3024] @0x103e0050000
+TTY> fb console: max rows 57, max cols 78
+TTY> fb: display logo
+TTY> Initialization complete.
+TTY> Checking for payloads...
+TTY> Devicetree compatible value: apple,j604
+TTY> No more payloads at 0x100041f8000
+TTY> No valid payload found
+TTY> dart: dart /arm-io/dart-usb0 at 0x402f80000 is a t8110
+TTY> USB0: initialized at 0x10004814090
+TTY> dart: dart /arm-io/dart-usb1 at 0x40af80000 is a t8110
+TTY> USB1: initialized at 0x10004814560
+TTY> dart: dart /arm-io/dart-usb3 at 0x41af80000 is a t8110
+TTY> USB3: initialized at 0x10004814a60
+TTY> Running proxy...
+[v10]   up
+TTY> dapf: Initialized /arm-io/dart-aop
+[v10] dapf OK
+[v10]   [raw pre-RUN (iBoot state)] CC=0x0 CS=0x6a IB=0x20001 OB=0x20001
+Fetching ADT (0x00084000 bytes)...
+[v10] iBoot bootargs keys: ['GKTS', 'p0CE', 'p0DE', 'laCn', 'Hlca', 'Epan', 'Hsid', 'gila', 'tPOA', 'Idrb']
+[v10] read_bootargs: KeyError: 0
+[v10] 
+CC.RUN=1 (pure, no other writes)
+[v10] 
+observe 20 s (watch for ANY state change or OUTBOX msg)...
+[v10]   t= 0.00s CC=0x10 CS=0x68 IB=0x20001 OB=0x20001
+[v10]   proxy err: SerialException('device reports readiness to read but returned no data (device disconnected or multiple access on port?)')
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/serial/serialposix.py", line 621, in write
+    n = os.write(self.fd, d)
+        ^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 5] Input/output error
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v10.py", line 179, in <module>
+    main()
+  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v10.py", line 169, in main
+    snap(p, "final")
+  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v10.py", line 45, in snap
+    cc = p.read32(AOP + CPU_CONTROL)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 817, in read32
+    return self.request(self.P_READ32, addr)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 707, in request
+    return self._request(opcode, *args2, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 671, in _request
+    reply = self.iface.proxyreq(req, reboot=reboot, no_reply=no_reply, pre_reply=None)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 379, in proxyreq
+    self.cmd(self.REQ_PROXY, req)
+  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 210, in cmd
+    self.dev.write(command)
+  File "/usr/lib/python3/dist-packages/serial/serialposix.py", line 655, in write
+    raise SerialException('write failed: {}'.format(e))
+serial.serialutil.SerialException: write failed: [Errno 5] Input/output error
