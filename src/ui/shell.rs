@@ -1166,6 +1166,12 @@ fn cmd_run_elf(name: &str) {
     crate::kernel::mm::print_num(hello_data.len());
     platform::serial_puts(" bytes\n");
 
+    // Activate the ambient "shell-host" cave so the ELF's syscalls have a
+    // capability set to check against. Without this every write/mmap gets
+    // EACCES and the hello/libc/threads tests produce log spam (see BUG-2
+    // in docs/SESSION_JOURNAL.md 2026-04-22).
+    crate::batcave::cave::ensure_host_cave_active();
+
     match crate::batcave::linux::loader::load_hello_elf(hello_data) {
         Ok((phys_entry, _phys_base, _orig_entry)) => {
             platform::serial_puts("[shell] ELF loaded, entry=0x");

@@ -121,11 +121,22 @@ pub fn putc(c: u8) {
     CURSOR_Y.store(cy, Ordering::Relaxed);
 }
 
+/// Mirror console writes to PL011 on QEMU so test harnesses can observe
+/// shell output over serial. On Apple, `fb_console` already mirrors
+/// serial→FB so we don't mirror FB→serial (would double-write).
+#[inline]
+fn mirror_to_serial(s: &str) {
+    if matches!(crate::platform::current(), crate::platform::Platform::QemuVirt) {
+        crate::drivers::uart::puts(s);
+    }
+}
+
 /// Print a string to the console.
 pub fn puts(s: &str) {
     for b in s.bytes() {
         putc(b);
     }
+    mirror_to_serial(s);
 }
 
 /// Print a string in highlight color.
@@ -160,6 +171,8 @@ pub fn puts_hi(s: &str) {
 
     // Flush the area we drew
     gpu::flush(0, MARGIN_Y, w, gpu::height() - STATUS_BAR_H);
+
+    mirror_to_serial(s);
 }
 
 /// Print the shell prompt.
@@ -175,6 +188,10 @@ pub fn prompt() {
     CURSOR_X.store(9, Ordering::Relaxed);
 
     gpu::flush(MARGIN_X, py, 12 * CHAR_W, CHAR_H);
+
+    // Echo the prompt to serial on QEMU so test harnesses have a
+    // deterministic readiness marker between commands.
+    mirror_to_serial("bat_os > ");
 }
 
 fn scroll_up() {

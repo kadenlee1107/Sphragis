@@ -65,37 +65,39 @@ pub fn run_dev_preview(hold_ms: u64) {
 /// Returns only on successful authentication.
 /// On duress or lockout, never returns.
 pub fn run() {
-    use crate::drivers::apple::uart;
-
-    uart::puts("[bs] enter run\n");
+    // Route debug traces through the platform-neutral serial so this
+    // works on both QEMU (PL011) and Apple M4 (dockchannel). Direct
+    // `drivers::apple::uart::puts` here used to fault on QEMU because
+    // the M4 dockchannel MMIO is unmapped there.
+    platform::serial_puts("[bs] enter run\n");
     let w = gpu::width();
     let h = gpu::height();
     let fb = gpu::framebuffer();
-    uart::puts("[bs] fb obtained\n");
+    platform::serial_puts("[bs] fb obtained\n");
 
     loop {
         // Draw the auth screen
-        uart::puts("[bs] fill_screen\n");
+        platform::serial_puts("[bs] fill_screen\n");
         gpu::fill_screen(BLACK);
-        uart::puts("[bs] fill_screen done\n");
+        platform::serial_puts("[bs] fill_screen done\n");
 
         let cx = w / 2;
         let cy = h / 2 - 80;
 
         // Bat emblem (simplified)
-        uart::puts("[bs] draw_bat\n");
+        platform::serial_puts("[bs] draw_bat\n");
         draw_bat(fb, w, cx, cy - 40);
-        uart::puts("[bs] draw_bat done\n");
+        platform::serial_puts("[bs] draw_bat done\n");
 
         // "BAT_OS" text
-        uart::puts("[bs] draw BAT_OS title\n");
+        platform::serial_puts("[bs] draw BAT_OS title\n");
         font::draw_str(fb, w, cx - 28, cy + 20, "BAT_OS", WHITE, BLACK);
 
         // Passphrase prompt
         font::draw_str(fb, w, cx - 80, cy + 80, "PASSPHRASE:", DIM, BLACK);
 
         // Input field border
-        uart::puts("[bs] field border\n");
+        platform::serial_puts("[bs] field border\n");
         let field_x = cx - 120;
         let field_y = cy + 100;
         let field_w = 240u32;
@@ -106,12 +108,12 @@ pub fn run() {
         gpu::fill_rect(field_x + field_w, field_y, 1, field_h, DIM);
 
         // YubiKey status
-        uart::puts("[bs] yubikey label\n");
+        platform::serial_puts("[bs] yubikey label\n");
         font::draw_str(fb, w, cx - 80, cy + 140, "YUBIKEY:", DIM, BLACK);
         font::draw_str(fb, w, cx, cy + 140, "[SIMULATED OK]", DIM, BLACK);
 
         // Attempts remaining
-        uart::puts("[bs] attempts\n");
+        platform::serial_puts("[bs] attempts\n");
         let remaining = auth::attempts_remaining();
         if remaining < 5 {
             font::draw_str(fb, w, cx - 60, cy + 180, "ATTEMPTS:", RED, BLACK);
@@ -119,9 +121,9 @@ pub fn run() {
             font::draw_char(fb, w, cx + 20, cy + 180, ch, RED, BLACK);
         }
 
-        uart::puts("[bs] flush\n");
+        platform::serial_puts("[bs] flush\n");
         gpu::flush(0, 0, w, h);
-        uart::puts("[bs] flush done — entering input loop\n");
+        platform::serial_puts("[bs] flush done — entering input loop\n");
 
         // Read passphrase
         let mut buf = [0u8; 128];

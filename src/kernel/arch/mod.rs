@@ -14,6 +14,25 @@ unsafe extern "C" {
 // Saved busybox SP at clone time (for eret back to parent)
 static mut SAVED_BUSYBOX_SP: u64 = 0;
 
+/// Kernel SP save slot used by `batcave::linux::loader::execute_with_args`
+/// before erets to EL0, and read back by the exit-syscall + brk paths below
+/// so the shell can resume after a user ELF exits.
+///
+/// Lives in kernel BSS so it's guaranteed writable (unlike the previous
+/// hardcoded `0x40000100`/`0x40001000` addresses which both sat inside the
+/// Linux arm64 Image header region and were mapped R-X by the kernel MMU).
+/// The addresses also didn't match between the store and restore sites;
+/// that was the root cause of the QEMU `DATA ABORT DFSC=0x0e` at FAR
+/// 0x40000100 for every BatCave-runner ELF (netsurf/freetype/png/v8/etc).
+#[unsafe(no_mangle)]
+pub static mut KERNEL_SP_SAVE: u64 = 0;
+
+/// Return the address of `KERNEL_SP_SAVE` as a u64 so inline asm can use it.
+#[inline(always)]
+pub fn kernel_sp_save_addr() -> u64 {
+    &raw const KERNEL_SP_SAVE as u64
+}
+
 // Saved exception frame in kernel BSS (safe from busybox)
 static mut SAVED_FRAME: [u64; 35] = [0; 35]; // 35 * 8 = 280 bytes > 272
 
@@ -226,11 +245,14 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                         // with no AP/UXN/PXN enforcement at all. Switch to
                         // primary TTBR0 instead; MMU stays on.
                         crate::batcave::linux::mmu::switch_to_primary();
+                        // Restore the kernel SP that the loader stashed before
+                        // erets to EL0. See KERNEL_SP_SAVE above.
+                        let save_addr = kernel_sp_save_addr();
                         core::arch::asm!(
-                            "movz x0, #0x1000",
-                            "movk x0, #0x4000, lsl #16",
-                            "ldr x0, [x0]",
+                            "ldr x0, [{addr}]",
                             "mov sp, x0",
+                            addr = in(reg) save_addr,
+                            out("x0") _,
                         );
                         crate::ui::desktop::resume();
                     }
@@ -926,11 +948,14 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             uart::puts("[linux] exit — returning to desktop\n");
             unsafe {
                 crate::batcave::linux::mmu::switch_to_primary();
+                // Restore the kernel SP that the loader stashed before
+                // erets to EL0. See KERNEL_SP_SAVE above.
+                let save_addr = kernel_sp_save_addr();
                 core::arch::asm!(
-                    "movz x0, #0x1000",
-                    "movk x0, #0x4000, lsl #16",
-                    "ldr x0, [x0]",
+                    "ldr x0, [{addr}]",
                     "mov sp, x0",
+                    addr = in(reg) save_addr,
+                    out("x0") _,
                 );
                 crate::ui::desktop::resume();
             }

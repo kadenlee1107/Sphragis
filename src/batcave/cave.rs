@@ -183,6 +183,42 @@ pub fn init() {
     INITIALIZED.store(true, Ordering::Relaxed);
 }
 
+/// Ensure an "ambient" BatCave is active for the shell-launched ELF runner
+/// paths (hello / libc / threads + the content_shell/netsurf/freetype/png/
+/// v8/blink binaries that `cmd_run_elf` spawns).
+///
+/// Without this, `cave::get_active()` returns `usize::MAX`, every
+/// capability check fails (because `active_has_cap` can't index a cave
+/// slot), and the ELF hits `EACCES` on the first `write`/`mmap`/... syscall.
+///
+/// We install a single ephemeral cave named `"shell-host"` with a broad cap
+/// set. This intentionally does NOT enforce isolation — it's the host
+/// process equivalent on a UNIX-like system. Production-sensitive workloads
+/// still create named BatCaves with narrower caps via the `batcave` shell
+/// commands.
+pub fn ensure_host_cave_active() {
+    const HOST: &str = "shell-host";
+    const HOST_CAPS: &[&str] = &["proc", "mem", "fs", "net", "raw", "display"];
+
+    if get_active() != usize::MAX {
+        return; // something else already owns the current thread
+    }
+
+    let id = match find_id(HOST) {
+        Some(id) => id,
+        None => match create(HOST, true) {
+            Ok(id) => {
+                for cap in HOST_CAPS {
+                    let _ = grant_cap(HOST, cap);
+                }
+                id
+            }
+            Err(_e) => return, // out of slots — leave active = MAX, syscalls will block
+        },
+    };
+    set_active(id);
+}
+
 /// Create a new BatCave.
 pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
     if name.len() > MAX_NAME { return Err("name too long"); }

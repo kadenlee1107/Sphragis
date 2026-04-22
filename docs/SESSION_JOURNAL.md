@@ -11,6 +11,156 @@ end of a session.
 
 ---
 
+## 2026-04-22 15:30 — Mac — QEMU full-feature exercise + 4 root-cause fixes
+
+**Context.** Kaden came back after 4 days and said: "let's nail QEMU first,
+then come back to M4". So I wrote a QEMU test harness, drove Bat_OS
+through every shell command + every desktop app + every ELF binary
+(except Chromium per user), and fixed every root-cause bug I hit along
+the way.
+
+### What I added to the tree
+
+- `scripts/qemu_smoke.py` — 30 s boot + auth sanity check
+- `scripts/qemu_test_suite.py` — two-phase driver:
+  - phase 1 = one long-lived QEMU: shell cmds + desktop-app Tab cycle
+  - phase 2 = one QEMU per ELF (they're noreturn; each needs a clean boot)
+- `scripts/qemu_extras.py` — edge cases (clear, browse URL, panic, Ctrl+A)
+- `logs/qemu-tests/` — timestamped per-run logs + markdown reports
+
+### Results: 36 / 40 OK (90%)
+
+ Category         Count  Notes
+ ───────────────  ─────  ─────────────────────────────────────────
+ Shell cmds       24/24  help,status,uname,whoami,uptime,mem,ls,
+                         write,cat,verify,rm,net,fw,ping,dns,
+                         batcave create/grant/list/destroy — all OK
+ Desktop apps     7/7    Dashboard,Files,NetMon,Editor,Security,
+                         Comms,BatCave — all cycle via Tab, render
+ ELF programs     5/9    hello,libc,threads,posix,v8 → OK
+                         freetype,png,netsurf,blink → HANG (see BUG-4)
+ Extras           4/4    clear, browse http://example.com (TCP SYN
+                         out the door!), fw, panic (clean halt)
+
+`browse http://example.com` resolved the host via DNS, hit firewall
+allow-rule, opened a TCP connection and sent SYN — the whole network
+stack works end-to-end on QEMU user-net.
+
+### Five root-cause fixes landed
+
+**BUG-1: boot_screen Apple UART hardcoded (crashed QEMU)**
+File: `src/security/boot_screen.rs`.
+`security::boot_screen::run()` used `drivers::apple::uart::puts(...)`
+for debug traces — which writes to the M4 dockchannel MMIO at
+`0x3_8812_8000`. On QEMU that address is unmapped → DATA ABORT at
+`FAR=0x3_8812_c014` the moment auth_gate tried to log. Replaced 15
+direct calls with `platform::serial_puts(...)` which dispatches to
+the correct UART per platform.
+
+**BUG-2: `cave::set_active` was never called**
+File: `src/batcave/cave.rs` (+ `src/batcave/linux/loader.rs`, `src/ui/shell.rs`).
+`get_active()` returned `usize::MAX` on a fresh boot, so
+`active_has_cap("fs"|"mem"|…)` always returned false. Every user-ELF
+syscall that was cap-gated (write, mmap, socket, …) returned EACCES.
+Added `cave::ensure_host_cave_active()` — creates an ephemeral cave
+named `"shell-host"` with a broad cap set (proc/mem/fs/net/raw/display)
+and activates it. Called from both ELF-runner entry points in the
+shell (`execute_with_args` and the `load_hello_elf` path).
+
+**BUG-3a: mismatched SP-save addresses in R-X page**
+Files: `src/batcave/linux/loader.rs`, `src/kernel/arch/mod.rs`.
+The ELF runner stored the kernel SP to hardcoded `0x40000100` before
+eret to EL0, and the exit-syscall handler restored it from
+`0x40001000` — **different addresses!** Both sat inside the Linux
+arm64 Image header region which QEMU's MMU setup maps R-X, so the
+store faulted with DATA ABORT `DFSC=0x0e` and every BatCave-runner
+ELF crashed before its entry point.
+Added `pub static mut KERNEL_SP_SAVE: u64 = 0` in kernel BSS (via
+`src/kernel/arch/mod.rs`) plus a `kernel_sp_save_addr()` accessor.
+Updated all three sites (one store in `execute_with_args`, two
+restores in the exit-syscall/brk handlers) to use the same address.
+
+**BUG-3b: user stack wasn't mapped EL0-writable**
+File: `src/batcave/linux/loader.rs`.
+`execute_with_args` used to allocate the user stack via
+`frame::alloc_frame()` — which returns pages anywhere in kernel RAM.
+The primary cave's `mmu::setup_and_enable()` maps user VA 0..20 MB
+→ `phys_base..phys_base+20 MB`; kernel RAM is identity-mapped via
+L2_high but EL1-only. So after eret the ELF's first `stp x29,x30,[sp]`
+faulted with EC=0x24.
+Changed `load_elf` to allocate `LOADED_STACK_PAGES` (256 = 1 MB)
+contiguous frames immediately after the ELF pages, verified
+contiguous, stored in `LOADED_STACK_PHYS`. `execute_with_args` reads
+that and computes the user-VA equivalent (`sp - phys_base`) before
+`msr sp_el0`. Added a bounds check — ELF + stack must fit in the
+20 MB primary user window.
+
+**BUG-3c: R_RELATIVE patched PHYS pointers into GOT**
+File: `src/batcave/linux/loader.rs`.
+`load_elf` used one `reloc_offset = phys_base - min_addr` for BOTH
+"where the kernel writes the patched bytes" AND "what value goes into
+the relocation". The value is a pointer the EL0 binary dereferences;
+it must be a USER VA, not a phys address. Every big ELF (freetype,
+netsurf, v8, etc.) that used GOT-backed loads (printf writing errno
+was the first example) crashed once they hit their first relocated
+pointer.
+Split into `reloc_offset` (phys for kernel writes) and
+`va_reloc_offset = 0 - min_addr` (what goes into R_AARCH64_RELATIVE
+values — matches the cave's user VA window starting at 0). Updated
+the single relocation-apply site at the bottom of `load_elf`.
+
+**BUG-1.5 (tooling): console output not visible over serial on QEMU**
+File: `src/ui/console.rs`.
+The console writes only to the framebuffer. On Apple, `fb_console`
+mirrors serial→FB; on QEMU we needed the opposite to make the test
+harness observe shell output. Added a QEMU-only mirror from
+`console::{puts, puts_hi, prompt}` to `drivers::uart` (PL011) via
+`mirror_to_serial()` — only active when `platform::current() ==
+QemuVirt`, so Apple path is unchanged.
+
+### Known outstanding bug (not fixed this session)
+
+**BUG-4: `sys_mmap` returns a phys address, EL0 can't use it**
+File: `src/batcave/linux/syscall.rs` sys_mmap at line 1235.
+The mmap syscall calls `frame::alloc_frame()` and returns the phys
+address. EL0 expects a user VA. On QEMU this shows up when larger
+ELFs mmap heap pages:
+```
+[mmap] len=4096 pages=1 base=1111408640      ← phys 0x42400800
+!!! UNHANDLED SYNC EXCEPTION EC=0x24 ELR=0x… ← next EL0 access faults
+```
+This is the remaining blocker for freetype/png/netsurf/blink on QEMU.
+Fix requires either:
+  (a) adding 4 K-granular page-table entries to the cave's L2_low for
+      each mmap'd page (maps phys → some free user VA), returning the
+      user VA, OR
+  (b) reserving a larger contiguous phys region per cave (like
+      `load_elf` now does for stack) and slicing it for mmap.
+
+Option (a) is the clean fix but needs an L3 page-table implementation
+for the primary cave (currently only 2 MB blocks). Option (b) is
+simpler but wastes memory.
+
+### Status handed to next session
+
+- QEMU: 36/40 green. Any further ELF work needs BUG-4 fixed.
+- M4: untouched this session. Ubuntu Claude's AOP work from earlier
+  today still stands — external-keyboard ship path recommended.
+- All fixes apply to both QEMU and Apple M4 code paths (the
+  address-mismatch + active-cave bugs would have bitten M4 too the
+  moment anyone tried a netsurf-class ELF there; Apple was never
+  tested at that depth).
+
+### Repro
+
+```bash
+BAT_OS_PASSPHRASE=batman cargo build --release
+python3 scripts/qemu_test_suite.py
+# logs in logs/qemu-tests/
+```
+
+---
+
 ## 2026-04-22 12:00 — Ubuntu — AOP boot path: PMGR was a timer; real blocker is FIQ handler stall
 
 Hypothesis from the 11:25 dtrace entry: AOP reg[3] at `0x3_882A_8000`
