@@ -772,6 +772,72 @@ Steady-state trace is archived at
 `macos_dump/dtrace_traces/mtp_steady_20260422.trace.gz` (8.1 MB gz,
 132 MB raw) in case future analysis needs it.
 
+### Concrete ADT-diff: AOP's extra PMGR reg
+
+Pulled `ioreg -lrw0 -n aop/-n smc/-n mtp` on the live Mac and parsed
+the `reg` properties:
+
+```
+SMC reg (3 entries):
+  [0] 0x18c600000  size 0x880000  — ASC main regs
+  [1] 0x18c500000  size 0x4000    — ASC control
+  [2] 0x18c810000  size 0x1       — single byte (unknown)
+
+AOP reg (4+ entries):
+  [0] 0x190600000  size 0x880000  — ASC main regs
+  [1] 0x190500000  size 0x4000    — ASC control
+  [2] 0x190c00000  size 0x1e0000  — 1.9 MB FW memory region
+  [3] 0x1_8882_a800  size 0x8       ← PMGR device-enable reg
+                                      (NOT present for SMC)
+  [4] 0x190c62000  size 0x3c0     — another small reg
+
+MTP reg (only 2 entries):
+  [0] 0x194600000  size 0x880000  — ASC main regs
+  [1] 0x194500000  size 0x4000    — ASC control
+```
+
+**AOP has an extra mapping into the PMGR block (`0x1_8882_a800`) that
+SMC doesn't have.** 0x1_8800_0000 is t8132 PMGR base; `+0x82a800` is
+deep in the device-state-enable page. AOP's driver clearly touches
+this register as part of its power-up sequence — and our raw-proxy
+boot attempts have never done so.
+
+**MTP only has 2 reg entries** — no PMGR poke of its own. So MTP
+doesn't need a direct PMGR touch; it just needs AOP's FW to be
+running so that MTP's FW can find AOP-populated state in shared
+DRAM (or get power via AOP's PDM).
+
+### Testable next step
+
+On Ubuntu side (next session, fresh m1n1 boot):
+
+1. Read `0x1_8882_a800` (8 bytes) to see current state.
+2. Try writing an "enable" value (guess: `0xf` or `0xffffffff`).
+3. Attempt AOP boot via raw proxy: `mgmt.start()` + `SetIOPPower(0x220)`.
+4. If AOP Hellos → try MTP. If MTP Hellos → keyboard works via
+   existing `batos_hv_interactive.py :: _mtp_kbd_probe` pipeline.
+
+If 0xf doesn't work, try reading the same reg from within macOS:
+```
+ssh kadenlee@kadens-MacBook-Pro.local 'sudo dtrace -n "
+io:::read-nogated /args[0]->conf_blkno == 0x1_8882_a800/ { printf(\"%llx\\n\", args[1]); }
+"'
+```
+or just `ioreg -l -n AppleARMIODevice | grep aop -A 30` to see
+how macOS configured it at boot.
+
+### Archived outputs
+
+- `macos_dump/dtrace_traces/mtp_boot_sequence_20260422.txt` — 500
+  lines of boot-relevant kernel log events.
+- `macos_dump/dtrace_traces/mtp_init_only_20260422.txt` — just MTP
+  start→Hello→comm-interface-init span (164 lines).
+- `macos_dump/dtrace_traces/mtp_steady_20260422.trace.gz` — the 8.1
+  MB dtrace full log.
+- `/tmp/mac_ioreg_{a7iop,ascwrap,mtp}.txt` on Ubuntu host — full
+  ioreg dumps.
+- `/tmp/mac_full_syslog.txt` on Ubuntu host — 286 MB full syslog.
+
 ### Wrapper state
 
 `scripts/hv/boot_macos_mtp_trace.py` is solid — HV init, load, trace
