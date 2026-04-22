@@ -532,6 +532,89 @@ If Kaden wants to revisit, the two realistic paths forward are:
 
 Archived v8 log: `logs/hv-mtp-v8-pac-enabled-20260422-0755.log`.
 
+---
+
+## 2026-04-22 08:45 — Ubuntu — pivot: live-macOS dtrace instead of HV
+
+After the APIA-key wall in v8, spent some time thinking about what
+would actually get MTP keyboard working. The HV-trace approach has
+five more weeks of PAC/fixup-chain work ahead of it, and those don't
+even get us the goal directly — they just build a general M4 guest-HV
+foundation that Asahi will eventually also build and do better.
+
+The **direct** answer: run macOS normally on the Mac, dtrace the
+AppleASCWrapV6 mailbox primitives while MTP brings up, translate the
+captured mailbox sequence into a replay from our m1n1 proxy. That
+works because our raw-proxy RE already got the mailbox layout,
+doorbell addresses, and CPU_CONTROL register correct — what we were
+missing was the IOKit-service-layer orchestration. dtrace on live
+macOS sees all of it.
+
+### What landed
+
+- `scripts/macos/trace_mtp_mailbox.d` — DTrace script with FBT probes
+  for every `AppleASCWrapV6::_*` primitive (inbox, outbox, doorbell,
+  RVBAR, runCPU, interrupt enables) plus `AppleA7IOP::{start,
+  startCPUWithOptions, _dartMap*, _*Handler}`. Mangled symbols were
+  pulled from `macos_dump/kexts/com_apple_driver_AppleA7IOP-ASCWrap-v6.syms`.
+- `scripts/macos/parse_dtrace_trace.py` — parser that turns the
+  dtrace log into an m1n1-proxy Python replay script.
+- `scripts/macos/README.md` — step-by-step: reboot into Recovery,
+  `csrutil enable --without dtrace` (one-time), boot macOS, run the
+  trace, trigger an MTP re-init via sleep/wake, copy the log back,
+  parse, replay on m1n1.
+
+### Why this should work where HV-trace couldn't
+
+The HV-trace wall was hardware: APIA key derived from SEP, not
+reproducible without SEP cooperation. Live macOS boot already has
+that key set correctly; we're just watching the kernel write to MMIO.
+No PAC issue. No fixup-chain issue. No bootargs issue. The trace is
+a linear list of `(timestamp, mailbox-op, value)` tuples that we can
+replay byte-for-byte against the same hardware under m1n1 proxy.
+
+### What's left for Kaden on the macOS side
+
+1. One-time: reboot into Recovery, `csrutil enable --without dtrace`,
+   reboot into macOS.
+2. Per-run: `sudo dtrace -q -s scripts/macos/trace_mtp_mailbox.d -o
+   ~/mtp_init.trace`, sleep/wake to trigger MTP re-init, Ctrl-C,
+   copy the trace file to this repo.
+
+Then Ubuntu side:
+```
+python3 scripts/macos/parse_dtrace_trace.py ~/mtp_init.trace \
+    > scripts/hv/replay_mtp_sequence.py
+```
+And run the replay after chainloading patched m1n1:
+```
+sg dialout -c 'M1N1DEVICE=/dev/ttyACM1 python3 \
+    scripts/hv/replay_mtp_sequence.py'
+```
+
+### Risk: what if the probes don't match?
+
+Apple could have changed the method names or inlined them. In that
+case, `sudo dtrace -ln 'fbt::_ZN14AppleASCWrapV6*:entry'` will show
+what IS probeable, and we iterate on the .d script names. Fallback:
+switch to the `kcsuffix=development` kernelcache (extra symbols) and
+re-run.
+
+### Risk: what if the trace is empty during sleep/wake?
+
+macOS 26 keeps the MTP firmware alive across suspend to save power
+(MTP HID drains 0.1 W — not worth shutting down). If sleep/wake
+doesn't re-run `AppleA7IOP::start`, we need a different trigger.
+Options: `kextunload` + `kextload` (probably blocked for built-in
+kexts), unplug-replug the USB-C hub to force re-enumeration, or
+boot-time tracing via a LaunchDaemon that launches dtrace at
+`com.apple.boot.early`.
+
+Archiving state at this point. The dtrace path is **2-4 hours of
+Kaden-on-macOS work** if nothing surprises us. The HV-trace path
+would have been **1-2 weeks of solo Ubuntu-Claude work** to clear
+the PAC/fixup wall with unclear payoff. Big win on cost.
+
 ### Wrapper state
 
 `scripts/hv/boot_macos_mtp_trace.py` is solid — HV init, load, trace
