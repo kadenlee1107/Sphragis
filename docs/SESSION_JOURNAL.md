@@ -11,6 +11,105 @@ end of a session.
 
 ---
 
+## 2026-04-22 03:30 — Ubuntu — Mailbox mechanics confirmed working; FW still won't Hello
+
+Extensive testing of doorbell, alternate mailbox paths, and Hello
+protocols. Core mechanics ALL WORK. FW runs state machine to
+steady state, but never spontaneously writes OUTBOX.
+
+### Confirmed working
+
+- **INBOX write at +0x8800**: A2I_CTRL.WPTR advances by 1 per send.
+- **Doorbell at +0x1004/+0x1014**: Writing 0x10/0x1 triggers FIQ
+  pending (IRQ_EN bit 3 clears).
+- **FW state machine at +0x818**: After RUN=1, +0x818 cycles through
+  0x40003→0x40005→0x40007→0x40009→0x4000b→0x4000d→0x4000f→0x40011→
+  0x40013→0x40025→0x40027→0 in ~1.1s.
+- **CS transitions**: pre-RUN 0x6a → post-RUN 0x68 → init 0x48 →
+  steady-state 0x4c (matches MTP's steady state).
+- **Mirror mailbox at +0x4000-+0x4200** observed — parallel set of
+  mailbox CTRL regs tracking identical state as +0x8000 bank.
+- **I2A_SEND write test**: Writing msg to +0x4820 (or +0x8820 per
+  Apple's classic asc.c layout) makes msg appear at +0x8830. So
+  mailbox FIFO hardware works correctly.
+
+### Confirmed not the issue
+
+- AIC IRQ state: mask/unmask both no-op for this problem.
+- Different SetIOPPower STATE values (0x20 vs 0x220): same behavior.
+- Sending TYPE=1 Hello, TYPE=2 HelloAck, TYPE=3 Ping, TYPE=0xb
+  SetAPPower as "first message": FW advances A2I WPTR each time
+  but never drains RPTR, never responds.
+- Doorbell value variations (0x11, 0x12, 0xff for cfg; different
+  arm values): no change.
+- Writing +0x100c/+0x101c: FW reacts via HW handshake (both toggle
+  to specific values), but no OUTBOX.
+- IRQ_ACK writes: no observable effect.
+
+### Asahi rtkit.c protocol (for reference)
+
+FW always initiates:
+1. RUN=1
+2. FW sends Mgmt_Hello (TYPE=1) to OUTBOX with MIN_VER/MAX_VER
+3. AP replies Mgmt_HelloAck (TYPE=2) with agreed version
+4. FW sends Mgmt_EPMap (TYPE=8) listing endpoints
+5. AP replies Mgmt_EPMap (TYPE=8) ack per base
+6. On last EPMap: boot complete
+
+So AP is passive until FW sends Hello. Our AOP FW is alive
+(receives INBOX, runs state machine, reaches CS=0x4c) but never
+sends Hello. Either:
+- FW's send path has a prerequisite we haven't satisfied, OR
+- FW sent Hello BEFORE we started polling (extremely unlikely with
+  1.1s state machine), OR
+- FW sends to a DIFFERENT destination (mirror mbox, DRAM region,
+  not classical OUTBOX).
+
+### Open questions remaining
+
+1. **+0x4000 mirror mailbox**: Same CTRL state as +0x8000. Why
+   duplicate? Possibly for SEP/SISP role variants, or debug/
+   coredump channel. Writing via it *does* work (self-write
+   round-trip via I2A_SEND landed in I2A_RECV), so it's live.
+2. **+0x100c / +0x101c**: FW sets these (4/1) after our doorbell.
+   Writing 0 to them doesn't seem to help. Purpose unclear.
+3. **Why does FW run its state machine but not send Hello?** If FW
+   is in a "pre-power-up waiting" state, maybe an IOKit power-
+   management call via provider's vtable (+0x8a8 / +0x8b0 in
+   enablePower) is THE missing step.
+
+### Next session — HV trace or give up proxy-side
+
+At this point we've done every reasonable proxy-side experiment:
+  - mailbox address: confirmed via Apple kext disasm
+  - doorbell: confirmed via Apple kext disasm
+  - state machine: observed going through full init
+  - FIFO mechanics: confirmed working
+  - bootargs: correct per reference
+
+The missing piece is likely something the kext does via IOKit that
+we can't replicate from raw m1n1 proxy. Options:
+  1. HV-trace macOS (run_guest.py with patched m1n1) during AOP init
+  2. Continue kext RE to resolve enablePower vtable calls to their
+     concrete MMIO/IOKit equivalents
+  3. Accept: AOP boot on M4 ascwrap-v6 requires full macOS IOKit,
+     can't be done from raw proxy; use external USB keyboard for
+     Bat_OS demos (already works)
+
+### Scripts shipped this segment
+
+- `scripts/hv/boot_aop_full.py` — canonical + multi-TYPE probe
+- `/tmp/ack_hunt.py`, `/tmp/try_alt_mbox.py`, `/tmp/wait_hello_long.py`,
+  `/tmp/probe_4100.py` — iteration helpers (not in tree)
+
+### Note about current state
+
+Current Mac AOP is "alive but stuck" at CS=0x4c from accumulated
+probe writes (A2I WPTR=0x8+). Any fresh experiment will need
+power-cycle back to iBoot's clean state.
+
+---
+
 ## 2026-04-22 02:00 — Ubuntu — Extracted macOS kext, found real doorbell, FW partially responsive
 
 **Massive progress via macOS kext disassembly.** Pulled
