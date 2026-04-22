@@ -11,6 +11,147 @@ end of a session.
 
 ---
 
+## 2026-04-22 04:45 — Ubuntu — Extensive proxy-side exhaustion; honest assessment
+
+Kept pushing per Kaden's "keep going" request. New findings,
+narrowed down what isn't the issue, but still no OUTBOX.
+
+### New findings this segment
+
+**FW init code has a conditional poll at 0x10003a0** (AOP) /
+0x10003a8 (MTP) that reads a pointer from bootargs offset
+0xb5 (VA 0x1118405):
+```
+adrp  x0, #0x1118000          ; bootargs region
+add   x0, x0, #0x405           ; offset 0xb5 into bootargs
+bl    #0x10008a0               ; address adjust
+bl    #0x10008c0               ; load 8 bytes from [x0]
+cbz   x0, skip_poll             ; if zero, skip (our case!)
+mov   w1, #1
+str   w1, [x0]                 ; write 1 to ptr
+ldr   w1, [x0]
+cbnz  w1, loop                 ; wait for HW to clear bit
+```
+
+That pointer is currently 0 — FW skips this poll. So not our
+blocker, but good to document.
+
+**MTP FW has the same identical init code** starting at the same
+virtual addresses. Confirms this is shared RTBuddy/ASC runtime
+boot code.
+
+**+0xb04 register observations:**
+- MTP's +0xb04 = 0x40a (iBoot-set)
+- AOP's +0xb04 = 0 (iBoot does NOT set it)
+- Writing +0xb04 doesn't persist — reads-back-0 immediately.
+- Forcing various values there doesn't change FW behavior.
+
+So +0xb04 is not a mutable AP-side register — maybe a HW status
+register with device-specific defaults. Not our lever.
+
+### +0x818 state machine fully characterized
+
+Post-RUN, FW runs an autonomous state machine at +0x818:
+```
+0x40003 → 0x40005 → 0x40007 → 0x40009 → 0x4000b → 0x4000d
+       → 0x4000f → 0x40011 → 0x40013 → 0x40025 → 0x40027 → 0
+```
+
+Transitions happen over ~1.1s with no AP intervention needed.
+Each step is `+2` except the 0x40013 → 0x40025 jump (+0x12).
+At 0 the FW is in steady state. CS transitions 0x6a → 0x68/0x6c
+→ 0x48 → 0x4c in parallel. **This happens even if we send nothing.**
+
+So FW boots autonomously, reaches steady state, and then sits
+there. It doesn't send Hello spontaneously and doesn't respond
+to our INBOX writes.
+
+### Complete "what doesn't work" list
+
+Everything tried from proxy side:
+1. Correct mailbox offsets (+0x8800 inbox, +0x8830 outbox) ✓
+   addresses confirmed via kext disasm
+2. Correct doorbell (+0x1004=0x10, +0x1014=1) ✓
+   from AppleASCWrapV6::_triggerFiqNmi disasm
+3. dapf_init targeted for dart-aop ✓
+4. Skip DART.initialize (preserves iBoot config) ✓
+5. Various TYPE values for first INBOX msg ✗
+6. Variations of doorbell values ✗
+7. AIC IRQ mask/unmask/SW_SET for AOP IRQs 433-436 ✗
+8. Writing +0x100c, +0x101c, +0x4c (IRQ_ACK) ✗
+9. Writing +0xb04 with MTP's 0x40a value + variants ✗
+10. All 4 bootarg keys (p0CE, laCn, tPOA, gila) ✓ per reference
+11. 128-bit paired write (write64 followed by write64) ✗
+12. Reading +0x8820 (I2A_SEND) side manually ✗
+13. Alt mailbox at +0x4800 ✗ (mirror of main)
+
+### The real remaining gap
+
+`AppleA7IOP::enablePower` calls the provider service's vtable
+functions at offsets +0x8a8 and +0x8b0. Without the full IOKit
+service chain (platform expert → parent provider → AOP), those
+calls don't happen. These are likely power-domain management
+calls (IOService::registerPowerDriver, IOInterruptEventSource
+setup) that establish AP-side infrastructure FW expects.
+
+### Honest assessment: path forward options
+
+1. **Full HV-trace of macOS** (complex):
+   - Boot m1n1 in HV mode with tracer for AOP MMIO
+   - Boot macOS kernelcache as guest inside HV
+   - Log every write to 0x390600000..0x390688000 during AOP
+     native probe + enablePower call
+   - Requires: setting up run_guest.py with the J604 kernelcache,
+     getting proper bootargs, root filesystem, display handoff
+   - Est. 1-2 days of setup work per our schedule
+
+2. **Build minimal IOKit provider shim** (very complex):
+   - Reverse-engineer what +0x8a8/+0x8b0 do on provider
+   - Likely need to implement AppleARMIODevice class equivalent
+   - Est. 1+ week
+
+3. **Accept and move on** (pragmatic):
+   - External USB keyboard already works for demos
+   - Bat_OS demo loop unaffected by AOP
+   - Internal keyboard/trackpad/sensors via AOP = nice-to-have
+   - AOP boot RE can be revisited when someone (Asahi Linux) ships
+     M4 AOP support in their mainline
+
+### Recommendation
+
+**Option 3 for now, option 1 later.** The effort-to-value for
+option 1 is poor given Bat_OS is functional without AOP. We've
+made massive progress (docs will help Asahi team if/when they
+tackle M4) and proved this is genuinely beyond raw-proxy RE.
+
+### Full summary of this session's wins
+
+| Finding | Status |
+|--|--|
+| Skip DART.initialize() → FW boots | ✅ Permanent fix |
+| dapf_init("/arm-io/dart-aop") works | ✅ Permanent fix |
+| Mailbox addresses +0x8800/+0x8830 | ✅ Confirmed via Apple kext |
+| Doorbell at +0x1004/+0x1014 | ✅ Confirmed via _triggerFiqNmi |
+| +0x8180 = debug entries, NOT mailbox | ✅ Confirmed |
+| FW +0x818 state machine characterized | ✅ Documented |
+| FW reaches CS=0x4c/0x6c steady state | ✅ Observed |
+| Extracted ASCWrapV6 + A7IOP + AOPAudio2 kexts | ✅ In macos_dump/ |
+| Installed capstone + LIEF + pyimg4 + lzfse | ✅ Tool chain ready |
+
+### Scripts shipped this session
+
+- `scripts/hv/boot_aop_no_dart.py` — initial breakthrough
+- `scripts/hv/boot_aop_doorbell.py` — doorbell fix
+- `scripts/hv/boot_aop_full.py` — multi-TYPE probe
+- `scripts/hv/boot_aop_m3.py` — M3 layout experiment (disproven)
+- `scripts/hv/boot_mtp_doorbell.py` — MTP variant (same result)
+- `scripts/hv/aop_dapf_start.py`, `aop_retry_start.py`, etc.
+- `scripts/re/find_aop_init.py` — kext string/xref scanner
+
+All extracted data in `macos_dump/` (gitignored).
+
+---
+
 ## 2026-04-22 03:30 — Ubuntu — Mailbox mechanics confirmed working; FW still won't Hello
 
 Extensive testing of doorbell, alternate mailbox paths, and Hello
