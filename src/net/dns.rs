@@ -67,6 +67,31 @@ pub fn set_doh(enabled: bool) {
     DOH_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
+/// Parse a dotted-quad IPv4 literal ("10.0.2.2") to a big-endian u32. Returns
+/// None if the string isn't a well-formed literal — caller should fall back
+/// to real DNS in that case. This is the standard short-circuit: hostnames
+/// that ARE valid IPs should not round-trip through a resolver.
+fn parse_ipv4_literal(s: &str) -> Option<u32> {
+    let mut parts = [0u32; 4];
+    let mut count = 0usize;
+    for p in s.split('.') {
+        if count >= 4 { return None; }
+        if p.is_empty() || p.len() > 3 { return None; }
+        let mut n: u32 = 0;
+        for b in p.bytes() {
+            if !(b'0'..=b'9').contains(&b) { return None; }
+            n = n * 10 + (b - b'0') as u32;
+        }
+        if n > 255 { return None; }
+        parts[count] = n;
+        count += 1;
+    }
+    if count != 4 { return None; }
+    // Big-endian (network byte order) — matches what RESOLVED_IP stores
+    // when a real DNS A-record reply lands.
+    Some((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3])
+}
+
 static RESOLVED_IP: AtomicU32 = AtomicU32::new(0);
 static DNS_DONE: AtomicBool = AtomicBool::new(false);
 
@@ -176,6 +201,15 @@ pub fn handle_response(data: &[u8]) {
 /// Resolve a hostname to an IPv4 address.
 /// Tries DNS-over-HTTPS first, falls back to plaintext UDP.
 pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
+    // IP-literal short-circuit: a dotted quad like "10.0.2.2" is not a
+    // hostname; skip DNS entirely. Before this, the resolver encoded
+    // the four numeric labels as a DNS query ("10" "0" "2" "2") and
+    // then timed out waiting for an NXDOMAIN response. That broke the
+    // 10.0.2.2 slirp-gateway address from Bat_OS under QEMU.
+    if let Some(ip) = parse_ipv4_literal(hostname) {
+        return Ok(ip);
+    }
+
     // Try DoH first if enabled
     if DOH_ENABLED.load(Ordering::Relaxed) {
         DNS_DONE.store(false, Ordering::Relaxed);

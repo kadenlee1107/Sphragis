@@ -111,6 +111,17 @@ pub fn putc(c: u8) {
         }
     }
 
+    // QEMU-only: mirror single-char writes to PL011 so byte-granular
+    // output (like `print_num(n)` which calls putc per digit) is visible
+    // to test harnesses. Note: shell input-echo also writes via
+    // `console::putc(c)` + `platform::serial_putc(c)` — which together
+    // produce a doubled char on serial here. That's cosmetic (test
+    // harnesses strip duplicates) and worth the tradeoff: without this
+    // mirror, inline numbers are invisible to harnesses.
+    if matches!(crate::platform::current(), crate::platform::Platform::QemuVirt) {
+        crate::drivers::uart::putc(c);
+    }
+
     // Scroll if needed
     if cy >= max_rows {
         scroll_up();
