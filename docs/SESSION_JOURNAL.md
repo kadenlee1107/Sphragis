@@ -119,25 +119,119 @@ in v4, handler runs, takes FIQ, but doesn't finish.)
 So the stall is in the *message handler code path*, not the FIQ
 plumbing.
 
-### Remaining next-session starting points (cheap — 1 cycle each)
+### Follow-up tests same session (v7/v8/v9)
 
-1. **Try sending Mgmt_Ping (TYPE=3)** instead of SetIOPPower. If
-   Pong (TYPE=4) comes back from OUTBOX, we know message-handling
-   IS alive — just SetIOPPower's state=0x220 specifically triggers
-   the stall. If Ping also stalls, handler is dead for any msg.
-2. **Send zero INBOX + doorbell**. No valid message type; tests
-   whether the FIQ path alone is alive (handler handles unknown
-   msg gracefully? or falls into same stall?).
-3. **Drain OB0/OB1 first**. Pre-RUN we see OB1=0xa000000000000 —
-   looks like a stale iBoot message descriptor. Could be confusing
-   FW's state machine.
-4. **Look at Asahi `upstream/asahi` for recent AOP boot code**.
-   `git -C external/m1n1 log --grep='aop' --all` may show M2/M3-era
-   patches that have info we don't.
-5. **Disasm AOP FW's FIQ handler entry**. Parse
-   `firmware/aop/aopfw-mac16gaop.RELEASE.bin` Mach-O, find entry
-   point, find vectors table, disasm the FIQ handler path to see
-   where it'd stall. RE-heavy but informative.
+**v7: 3-phase message probe (Ping / zero / SetIOPPower).**
+All three identical: INBOX FIFOCNT grew 1→2→3, none drained,
+no OUTBOX, no reset. **Handler is dead for all message types**,
+localizing the stall to code that runs *after* FIQ dispatch but
+before INBOX drain.
+
+**v8: SMC-first boot.**
+SMCClient.start() → SMC Hello'd perfectly (iop=0x20, ap=0x20,
+"Startup complete"). **SMC uses the SAME ASCWrapV6 hardware** with
+the SAME mgmt mailbox and the SAME `Mgmt_SetIOPPower(0x220)` recipe
+— and it works **without any doorbell ring**. Same sequence applied
+to AOP: identical stall. So SMC is NOT a prereq, and the plumbing
+is correct — the issue is AOP-firmware-specific.
+
+**v9: disasm + attempt to patch PAC off.**
+Parsed `firmware/aop/aopfw-mac16gaop.RELEASE.bin`:
+- 7544 PAC instructions in __TEXT: pacibsp 2955, retab 2358,
+  blraa 1098, autibsp 886, braa 229, pacia 18.
+- **Sleep/resume path at 0x1002480 LOADS PAC keys** from a per-CPU
+  context buffer via `msr apiakeylo_el1 ... apibkeylo_el1 ...`.
+- **First-boot prologue (entry 0x1000244 → 0x10002b4) NEVER sets
+  PAC keys** — it calls cache invalidation + `bl 0x1000848` then
+  proceeds with MMU/SCTLR setup. FW expects iBoot to have
+  pre-loaded APIAKey/APIBKey sysregs before RUN=1 hits.
+
+Patch attempt: overwrite first 8 insns of __TEXT at phys
+0x390c00000 with `mrs sctlr_el1, x1 / and-mask EnIA+EnIB+EnDA+EnDB /
+msr sctlr_el1, x1 / isb / b #0x1000244` so PAC auth runs through
+without enforcement. Result: **`iface.writemem(0x390c00000, ...)`
+→ m1n1 reports `Exception: SError`**. iBoot's DAPF/fabric
+protection locks AOP __TEXT as read-only from AP, regardless of
+whether our `p.dapf_init` has run yet.
+
+### The wall
+
+This is the AP-side analog of HV-trace v8's APIA-key wall, and it
+blocks by the same mechanism:
+- FW binary has CFI pointer-auth built in (arm64e, PAC00 caps)
+- FW relies on iBoot-provided PAC keys in APIAKey/APIBKey
+- iBoot halts AOP after staging → keys cleared on whatever
+  state it left AOP in
+- We (from AP proxy, EL2 on AP's core) cannot write AOP's EL1
+  PAC-key sysregs
+- We cannot patch __TEXT to disable PAC enforcement because the
+  __TEXT phys region is fabric-protected
+
+SMC doesn't hit this because iBoot keeps SMC FW running continuously
+from its own boot (so SMC's PAC keys stay set).
+
+### Viable paths forward (all are bigger projects)
+
+1. **Find the PAC key value iBoot uses on AOP.** Requires either
+   SEP cooperation (multi-week RE; nobody has cracked M4 SEP) or
+   reversing iBoot's key-derivation enough to compute it outside.
+2. **Use iBoot's pre-RUN AOP state — don't re-stage.** Chainload
+   m1n1 via iBoot, keep iBoot's AOP __TEXT AND __DATA state intact
+   (don't update_bootargs), RUN=1 immediately. Only works if
+   iBoot leaves AOP in "ready to resume" state with PAC keys still
+   set at handoff. Our pre-RUN snaps show CC=0 (AOP halted) and
+   bootargs show defaults (not iBoot-populated) — so iBoot likely
+   resets AOP state on handoff. But worth one test with minimal
+   intervention: just RUN=1, no __DATA write, no bootargs, no
+   doorbell. Pure observation.
+3. **Ship with external keyboard.** Unblocks the demo. Revisit
+   AOP when Asahi M4 work lands — they'll hit the same wall and
+   solve it generally.
+
+### v6-v9 artifacts landed
+
+- scripts/hv/probe_aop_pmgr_v6.py  — INBOX without doorbell
+- scripts/hv/probe_aop_pmgr_v7.py  — 3-phase message probe
+- scripts/hv/probe_aop_pmgr_v8.py  — SMC first, then AOP
+- scripts/hv/probe_aop_pmgr_v9.py  — PAC-off patch attempt (SError)
+- logs/aop-v{6,7,8,9}-*.log         — observations
+
+### v10 — pure observation run
+
+Tested the "leave iBoot's AOP state alone" idea: chainload m1n1,
+dapf_init, skip __DATA re-stage, skip update_bootargs, skip all
+mailbox writes, just `CC.RUN=1`.
+
+Result: **Mac went down within microseconds of RUN=1**. Proxy
+`SerialException` on the first post-RUN read. Stock m1n1 came
+back ~90 s later.
+
+Interpretation: iBoot's __DATA residue contains partial config
+state that our prior runs have been OVERWRITING with clean
+firmware-blob __DATA before RUN=1. Without that re-stage, AOP FW
+trips over corrupt/stale state and triggers a SoC-wide panic
+(likely via SMC or system-reset path), instead of the benign
+stall we saw in v4/v6-v9.
+
+Both paths fail:
+  - re-stage __DATA → FW PAC-walls in FIQ handler
+  - keep iBoot's __DATA → FW panics the SoC
+
+Neither is a path forward without a way past the PAC wall.
+
+### Remaining next-session starting points
+
+1. **Look at Asahi `upstream/asahi` for M4 AOP bring-up**.
+   `git -C external/m1n1 log --grep='aop' --all` may show recent
+   patches; Asahi has years of head-start on M1/M2/M3 AOP but M4
+   is new. If they've cracked M4, cherry-pick their approach.
+2. **Investigate iBoot's AOP PAC-key derivation**. If we can
+   compute the key value iBoot uses without needing SEP live, we
+   could... still not write AOP EL1 regs from AP. But it'd help
+   if paired with a HV-trace path that does run on AOP's core.
+3. **Ship external keyboard**. The bring-up work is documented;
+   when Asahi or someone else cracks M4 AOP, the answer slots
+   in and we flip over quickly.
 
 ### Status
 
