@@ -96,22 +96,48 @@ Whatever the FIQ handler stalls on is the remaining unknown. Possible:
 - `scripts/hv/probe_aop_pmgr_v5.py`  — RUN only; stays IDLE
 - `logs/aop-pmgr-*.log`              — 5 logs of live-M4 experiments
 
-### Next session starting points (cheap — 1 cycle each)
+### v6 update (later in same session) — stall is NOT the FIQ path
 
-1. **INBOX without doorbell**. Our v4 sent INBOX + rang the doorbell.
-   Try INBOX alone — FW might eventually drain it on its own timer,
-   telling us whether doorbell is the stall cause.
-2. **Doorbell without INBOX**. Ring FIQ with nothing queued — does
-   FW's handler run the same stall path, or skip cleanly and return?
-   Isolates "FIQ dispatch code" vs "message-processing code".
+Ran v6 = INBOX alone, no doorbell, 15 s observation. Result:
+```
+  pre-RUN:  CC=0x0  CS=0x6a  IB=0x20001  OB=0x20001
+  post-RUN: CC=0x10 CS=0x68  IB=0x20001  OB=0x20001
+  post-INBOX write: CS=0x48  IB=0x100101  OB=0x20001
+  (15 s later, no doorbell rung)
+  final:    CS=0x48  IB=0x100101  OB=0x20001  (unchanged)
+```
+FW does NOT spontaneously drain INBOX. IB stays at FIFOCNT=1 for
+15 s.
+
+This **rules out "FW polls INBOX on a timer"** — a doorbell ring
+IS required to wake the handler. And that in turn refines the v4
+stall diagnosis: the handler stalls **while processing the
+SetIOPPower(0x220) message**, not in FIQ dispatch or INBOX drain.
+(Because without doorbell, handler never runs at all; with doorbell
+in v4, handler runs, takes FIQ, but doesn't finish.)
+
+So the stall is in the *message handler code path*, not the FIQ
+plumbing.
+
+### Remaining next-session starting points (cheap — 1 cycle each)
+
+1. **Try sending Mgmt_Ping (TYPE=3)** instead of SetIOPPower. If
+   Pong (TYPE=4) comes back from OUTBOX, we know message-handling
+   IS alive — just SetIOPPower's state=0x220 specifically triggers
+   the stall. If Ping also stalls, handler is dead for any msg.
+2. **Send zero INBOX + doorbell**. No valid message type; tests
+   whether the FIQ path alone is alive (handler handles unknown
+   msg gracefully? or falls into same stall?).
 3. **Drain OB0/OB1 first**. Pre-RUN we see OB1=0xa000000000000 —
-   looks like a stale iBoot message descriptor. Write 0 to OB0/OB1
-   regs (if writable) then RUN; maybe FW checks these on startup.
-4. **Try sending Mgmt_Ping (TYPE=3)** instead of SetIOPPower. If
-   Pong comes back, we know mgmt is alive; if not, mgmt is stuck.
-5. **Look at Asahi `upstream/asahi` for recent AOP boot code**.
+   looks like a stale iBoot message descriptor. Could be confusing
+   FW's state machine.
+4. **Look at Asahi `upstream/asahi` for recent AOP boot code**.
    `git -C external/m1n1 log --grep='aop' --all` may show M2/M3-era
    patches that have info we don't.
+5. **Disasm AOP FW's FIQ handler entry**. Parse
+   `firmware/aop/aopfw-mac16gaop.RELEASE.bin` Mach-O, find entry
+   point, find vectors table, disasm the FIQ handler path to see
+   where it'd stall. RE-heavy but informative.
 
 ### Status
 
