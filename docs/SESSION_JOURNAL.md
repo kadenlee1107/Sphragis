@@ -148,6 +148,168 @@ vtimer, no console, no MMIO access before giving up. Needs another
 round of M4-specific HV plumbing debug, and Kaden needs to power-cycle
 the Mac first.
 
+### Added after initial entry: v2 attempt, HV_SMP=0 knob
+
+Re-ran with `BATOS_KEEP_FB=1 XNU_BOOTARGS="-v debug=0x8 serial=3"` —
+same wedge after ERET, identical stats signature (`Vt=0, S=0, I=0`
+across 40 s). Verbose bootargs did not produce any console output.
+Keep-FB did not change behavior.
+
+Disassembled XNU's `__TEXT_BOOT_EXEC` entry (via m1n1.macho parser):
+
+```
+fffffe000c1bc000: d503245f  BTI j
+fffffe000c1bc004: d2800088  mov x8, #4
+fffffe000c1bc008: eb08001f  cmp x0, x8
+fffffe000c1bc00c: 540000c1  b.ne +0x18   ; x0 != 4 → jump
+fffffe000c1bc010: f00022a8  adrp x8, <pg>
+fffffe000c1bc014: 393d2102  strb w2, [x8, #0xf48]
+fffffe000c1bc018: aa0103e0  mov x0, x1
+fffffe000c1bc01c: 14000ff9  b +0x3fe4
+fffffe000c1bc020: 14000000  b +0          ; (unreachable)
+fffffe000c1bc024: d518d09f  msr TPIDR_EL1, xzr   ; b.ne lands here
+```
+
+We pass `x0 = bootargs_ptr`, not 4, so `b.ne` lands at `0x024`:
+`msr TPIDR_EL1, xzr` — a non-trapping sysreg write. XNU IS executing,
+just silently. No trap path is armed for TPIDR_EL1, so no HV stat.
+
+The `cmp x0, #4` / `b.ne` pattern strongly implies a per-CPU-idx
+entry. CPU-0 / bootstrap takes one path; all others take the other.
+Since our m1n1 passes `bootargs_ptr` in x0 (not a CPU-idx), we land
+in the non-bootstrap path even though we're the only CPU. Likely
+wedge: secondary CPUs wait at a boot barrier that only the primary
+can release.
+
+### Added HV_SMP=0 knob to wrapper
+
+`HV_SMP=0 python3 scripts/hv/boot_macos_mtp_trace.py` sets
+`hv.smp = False` before `hv.init()`, which makes `setup_adt` strip
+non-running CPUs. With only 1 CPU in ADT, XNU's bootstrap check may
+treat the running CPU as primary and proceed.
+
+Could not test — Mac wedged again after v2 kill. Waiting for SMC
+watchdog recovery.
+
+### Root cause: unpopulated cpu_table at 0xfffffe000c688ae0
+
+Disassembled the MPIDR path at offset 0xa0 of `__TEXT_BOOT_EXEC`.
+Entry code does a CPU lookup loop that requires a pre-populated table
+which iBoot normally fills and m1n1's `load_macho` doesn't:
+
+```
+c1bc0a4: mrs   x15, mpidr_el1
+c1bc0a8: and   x0, x15, #0xffff          ; low 16 of MPIDR
+c1bc0ac: adrp  x1, 0xfffffe000c688000
+c1bc0b0: add   x1, x1, #0xae0             ; cpu_table base
+c1bc0c4: mov   x4, #0xa                   ; max_cpus = 10
+c1bc0d0: ldr   x21, [x1, #8]              ; x21 = *(cpu_table + idx*0x10 + 8)
+c1bc0d4: cbz   x21, 0xc1bc0d4             ; ←── SPINS HERE IF ENTRY=0
+c1bc0d8: ldr   w2, [x21, #0x1c8]          ; cpu_id in per-cpu struct
+c1bc0dc: cmp   x0, x2                     ; matches our MPIDR?
+c1bc0e0: b.eq  0xc1bc0f4                  ; match → start
+c1bc0e4: add   x1, x1, #0x10               ; next entry
+```
+
+Kernelcache file at `__DATA` offset `0xdcae0` (cpu_table) is **all
+zero**. Without iBoot writing per-CPU pointers into this table, XNU
+spins forever at `0xc1bc0d4` — which is **exactly** the wedge we
+observed (FIQ ticks keep firing, no MMIO, no traps, no console).
+
+After matching, the struct at `[x21]` provides:
+
+- `[+0x18]`  — SP for EL1t
+- `[+0x28]`  — SP for EL1h
+- `[+0xb8]`  — cold-start handler pointer; must be one of
+  - `0xfffffe0008a2ca08`  (bootstrap init; uses x1 = bootargs)
+  - `0xfffffe0008a2cee0`  (secondary init)
+  - else XNU spins in a `0xdead0001` marker loop
+- `[+0x1c8]` — CPU id (must match `MPIDR & 0xffff`)
+
+### To make XNU boot under HV, we need to fake iBoot's setup
+
+1. Allocate a per-CPU struct in guest DRAM (large — XNU reads many
+   more fields past the four above).
+2. Populate `[+0x1c8] = MPIDR & 0xffff` of whatever core m1n1 pins us
+   to, `[+0xb8] = 0xfffffe0008a2ca08`, `[+0x18]/[+0x28]` = valid
+   stacks.
+3. Write the struct pointer to `cpu_table + 8`.
+
+This is several more RE days and there's a long tail: the handler
+at `0x8a2ca08` itself dereferences `[x20=bootargs]` and more struct
+fields. Each missing field is another wedge or panic.
+
+### Honest assessment
+
+For MTP keyboard work, this HV-trace approach has a much higher
+activation energy than expected on M4+macOS 26.3. Apple's newer
+kernelcache entry format requires per-CPU state iBoot hands over.
+Options going forward:
+
+1. **Keep doing raw-proxy RE but with the ADT cpu_table knowledge**.
+   Maybe iBoot's *pre-kernel* setup (including cpu_table fill) is
+   itself interesting for MTP — unlikely but worth a glance.
+2. **Find/install an older macOS kernelcache** that uses the iBoot
+   convention m1n1 already handles (earlier ADT boot_args revs, no
+   cpu_table).
+3. **Park this, ship external-USB keyboard** as documented — not
+   critical path for Bat_OS demos.
+4. **Patch kernelcache at `c1bc0d4`** to `nop` + fake a minimal
+   per-CPU struct. Short term wedge goes away but likely uncovers
+   10 more downstream panics.
+
+### Wrapper state
+
+`scripts/hv/boot_macos_mtp_trace.py` is solid — HV init, load, trace
+install all verified on M4. Has `HV_SMP=0`, `BATOS_KEEP_FB=1`,
+`WDT_KICK=1`, `XNU_BOOTARGS="..."`, `TRACE_AOP=1` env knobs. Re-run
+any of them if you want to try again post-kernelcache-patching.
+
+### Disasm commands for reference
+
+Entry disasm (first instructions):
+```
+python3 -c "
+import sys, struct; sys.path.insert(0, 'external/m1n1/proxyclient')
+from m1n1.macho import MachO, MachOLoadCmdType
+from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
+md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+m = MachO(open('macos_dump/kernelcache.mac16j.bin','rb'))
+for c in m.obj.cmds:
+  if c.cmd == MachOLoadCmdType.SEGMENT_64 and c.args.segname=='__TEXT_BOOT_EXEC':
+    m.io.seek(c.args.fileoff); d = m.io.read(0x200)
+    for i in md.disasm(d, c.args.vmaddr):
+      print(f'{i.address:#x}: {i.mnemonic} {i.op_str}')"
+```
+
+cpu_table dump (file offset calc: `__DATA.fileoff + (va - __DATA.vmaddr)`):
+```
+python3 -c "
+import struct
+with open('macos_dump/kernelcache.mac16j.bin','rb') as f:
+  f.seek(0x5684ae0)              # __DATA@0x55a8000 + (0xc688ae0 - 0xc5ac000)
+  for i in range(0,0xa0,8):
+    print(f'+{i:#04x}: {struct.unpack(\"<Q\", f.read(8))[0]:#018x}')"
+```
+
+### Entry disasm helper
+
+```python
+python3 -c "
+import sys, struct
+sys.path.insert(0, 'external/m1n1/proxyclient')
+from m1n1.macho import MachO, MachOLoadCmdType
+m = MachO(open('macos_dump/kernelcache.mac16j.bin','rb'))
+for c in m.obj.cmds:
+    if c.cmd == MachOLoadCmdType.SEGMENT_64 and c.args.segname == '__TEXT_BOOT_EXEC':
+        base_va, base_fo = c.args.vmaddr, c.args.fileoff
+        m.io.seek(base_fo); d = m.io.read(0x400)
+        for i in range(0, len(d), 4):
+            x = struct.unpack('<I', d[i:i+4])[0]
+            print(f'{base_va + i:#x}: {x:08x}')
+"
+```
+
 ---
 
 ## 2026-04-22 05:30 — Ubuntu — m1n1 WDT fix lands + SMC works cleanly; MTP hard wall

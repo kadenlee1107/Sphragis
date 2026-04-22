@@ -29,6 +29,7 @@ Env knobs:
                                             patched m1n1 that already did it)
   KERNELCACHE=<path>                      — override default J604 kernelcache
   XNU_BOOTARGS="-v debug=0x8 serial=3"    — override iBoot-inherited bootargs
+  HV_SMP=0                                — strip secondary CPUs from ADT (debug)
   BATOS_LINKALIAS=0                       — forced off (we're XNU, not Bat_OS)
   BATOS_KEEP_FB=0                         — forced off (XNU owns the FB)
 
@@ -93,6 +94,9 @@ def main() -> int:
         p.write32(M4_AP_WDT_DEADLINE, 0)
 
     hv = HV(iface, p, u)
+    if os.environ.get("HV_SMP") == "0":
+        hv.smp = False
+        print("HV: single-CPU mode (stripping secondaries from ADT)")
     hv.init()
 
     # Open the trace log up-front so every hv.log(...) / trace event lands
