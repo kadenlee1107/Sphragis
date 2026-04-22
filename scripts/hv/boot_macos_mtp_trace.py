@@ -43,9 +43,11 @@ import traceback
 # --- Force HV flags appropriate for XNU guest BEFORE importing m1n1.hv
 # hv/__init__.py reads these at start() time; setting them in argv or env
 # here is the cleanest way to override what the Bat_OS chainload defaults
-# would otherwise set.
+# would otherwise set. BATOS_KEEP_FB defaults to 0 (XNU owns the FB) but
+# we let the user override it — some XNU early-boot paths may panic if
+# the FB goes away mid-init.
 os.environ["BATOS_LINKALIAS"] = "0"
-os.environ["BATOS_KEEP_FB"]   = "0"
+os.environ.setdefault("BATOS_KEEP_FB", "0")
 
 # --- Path bootstrap identical to tools/run_guest.py so `from m1n1.*`
 # resolves against the vendored proxyclient.

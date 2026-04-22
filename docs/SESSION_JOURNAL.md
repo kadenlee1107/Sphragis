@@ -59,25 +59,94 @@ KERNELCACHE=<path>                      # override default kernelcache
 XNU_BOOTARGS="-v debug=0x8 serial=3"    # override iBoot-inherited cmdline
 ```
 
-### Next: actually ERET into XNU
+### Real run attempted — XNU ERET succeeds but wedges silently
 
-Dry-run proves setup is right. Next attempt: same wrapper without
-`--dry-run`. Expected outcome — XNU boots far enough for IOKit service
-matching to probe `AppleA7IOP::start()` on MTP, then panics at APFS /
-root volume / anything disk-related. That window is exactly what we
-need. The MMIO writes in `/tmp/mtp_hv_trace.log` are the target diff
-against `scripts/hv/boot_mtp_dartmap.py`.
-
-Invocation (fresh power cycle + chainload patched m1n1 first):
+Chainloaded patched m1n1, ran the wrapper without `--dry-run`. XNU
+entry was reached:
 ```
+TTY> [hv_start] S8 entering guest @ 0x1001ede0000 x0=10021594000
+```
+`0x1001ede0000 - guest_base(0x10019c28000) = 0x51b8000` =
+`__TEXT_BOOT_EXEC` → XNU's `_start`, correct.
+
+Then 10+ minutes of silence. HV-side FIQ/slow counters rise at ~1000
+ticks/sec (HV tick-handler + WDT keepalive). Every other HV counter
+stays zero:
+```
+TTY> [hv-stats snap t=NNN cpu0] Ff=0 Fs=0 Tk=0 Vt=0 I=0 S=0(mu=0 iu=0
+     da=0 m=0 i=0 px=0) E=0
+```
+`Vt=0` means the vtimer has never been injected into the guest. `S=0`
+means zero sync exceptions — no msr/mrs traps, no data aborts, no
+MMIO touches. XNU is either in WFE/WFI or a sysreg-only spin that
+doesn't trap. Nothing in `/dev/ttyACM2` (dockchannel vuart) or on the
+uart0 vuart (ttyACM1 muxed) either — no console output at all.
+
+Logs preserved at:
+- `logs/hv-mtp-real-20260421-213100.log`    (python + TTY stdout)
+- `logs/hv-mtp-tracelog-20260421-213100.log` (HV MMIO log — empty)
+
+### Mac now wedged — needs power cycle
+
+After killing the run, subsequent proxy probes hang (m1n1 unresponsive
+on ttyACM1). State is poisoned as handoff warned; only recovery is
+physical power button.
+
+### Hypotheses for the wedge (order of likelihood)
+
+1. **vtimer not being delivered**. With `Vt=0` across 10 minutes, XNU
+   never gets a timer interrupt, so its scheduler never ticks.
+   Possibly ECV timer programming on M4 needs something our path
+   misses — inspect `m1n1/hv/vcpu.c` for M1 vs M4 differences.
+2. **SMP deadlock in early boot**. `hv.smp` defaults False; `setup_adt`
+   strips non-running CPUs, leaving 1. XNU expects N cores and may
+   spin in `cpu_start_boot_thread` waiting for IPIs that never fire.
+3. **SEPFW / ticket mismatch**. We re-staged SEPFW at new address but
+   the ticket XNU was booted with refers to the original phys addr.
+4. **Missing BATOS_LINKALIAS-style translation for XNU pages**. We
+   forced BATOS_LINKALIAS=0 since XNU≠Bat_OS, but maybe XNU's early
+   boot touches an address we didn't map.
+5. **Missing platform-expert init**. iBoot does more than hand a
+   bootargs pointer; it primes a bunch of state XNU assumes.
+
+### What to try next session (in order)
+
+1. Set `XNU_BOOTARGS="-v debug=0x8 serial=3"` — hope for XNU's own
+   panic output on uart0 vuart.
+2. Set `BATOS_KEEP_FB=1` — macOS may panic if the FB vanishes mid-init.
+3. Flip `hv.smp = True` in the wrapper before `hv.start()` (don't
+   remove secondary CPUs from ADT) and see if XNU stops waiting.
+   Caveat: then m1n1 tries to start secondaries on M4 → SError on
+   P-cluster RVBAR writes. Need to also short-circuit
+   `start_secondary` on M4.
+4. If 1-3 don't unwedge, look at Asahi's `upstream/asahi` branch —
+   `git -C external/m1n1 log --all --grep='macOS.*guest'` — they
+   have years of head-start on this.
+
+### Invocation reminder
+
+Requires fresh power cycle of the Mac, then:
+```
+# chainload patched m1n1 (gives us safe WDT + dockchannel vuart opcode)
+sg dialout -c 'M1N1DEVICE=/dev/ttyACM1 python3 \
+    external/m1n1/proxyclient/tools/chainload.py -S \
+    external/m1n1/build/m1n1.macho'
+
+# then actual HV run
 sg dialout -c 'M1N1DEVICE=/dev/ttyACM1 M1N1TIMEOUT=30 \
-    PYTHONUNBUFFERED=1 python3 scripts/hv/boot_macos_mtp_trace.py'
+    PYTHONUNBUFFERED=1 \
+    XNU_BOOTARGS="-v debug=0x8 serial=3" \
+    BATOS_KEEP_FB=1 \
+    python3 scripts/hv/boot_macos_mtp_trace.py'
 ```
 
 ### Status
 
-Wrapper proven in dry-run on real hardware. Real boot attempt not
-yet run; handoff is clean for next session to pick up.
+Wrapper works. Dry-run proves HV infrastructure is right on M4. Real
+run starts XNU but wedges silently in first few instructions — no
+vtimer, no console, no MMIO access before giving up. Needs another
+round of M4-specific HV plumbing debug, and Kaden needs to power-cycle
+the Mac first.
 
 ---
 
