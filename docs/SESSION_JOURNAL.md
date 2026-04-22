@@ -11,6 +11,141 @@ end of a session.
 
 ---
 
+## 2026-04-21 21:00 — Ubuntu — AIC theory disproven; AOP FW alive but trapped; +0x4400 crypto-like slots found
+
+Inherited Kaden's brief to "knock down Wall A (AIC IRQ masking)". Did
+lots of probing. AIC theory is wrong, but the probing turned up
+useful ground truth.
+
+### Key findings
+
+**1. AIC IRQs are already masked on fresh boot.**
+   Wrote `scripts/hv/probe_aic.py` to read AIC topology:
+   - `/arm-io/aic` is `aic,3` (not aic,2 like M1/M2) @ `0x381000000`.
+   - Strides: `intmaskset/clear/extintrcfg = 0x4a00`
+   - `aic-iack-offset = 0x40000`
+   - M4 AIC3 layout computed: IRQ_CFG @ `base+0x10000`, SW_SET
+     `+0x14000`, SW_CLR `+0x14200`, MASK_SET `+0x14400`, MASK_CLR
+     `+0x14600`, HW_STATE `+0x14800`. Per-die stride `0x4a00`.
+     max_irq = 4096.
+   - AOP IRQs: `[434, 433, 436, 435]`, MTP IRQs:
+     `[1114, 1113, 1116, 1115]`, dart-aop: `[457]`.
+
+   `scripts/hv/aic_poke.py` observed current state: **MASK_SET for AOP's
+   IRQ word 13 (+0x34) is already 0xffffffff** — every IRQ in that word
+   is masked. AIC isn't routing AOP IRQs anywhere. However HW_STATE =
+   0xac0000 shows IRQs 434/435 (AOP) plus 437/439 (unknown devs)
+   asserted at the hardware level — but AIC is eating them.
+
+   So the AOP FW's `CS=0x48` (bit 2 "IRQ_NOT_PEND" clear, i.e. IRQ
+   pending) is NOT about AIC-delivered IRQs. It's ASC-internal.
+
+**2. AOP FW is ALIVE and responsive.**
+   `scripts/hv/aop_818_poke.py` writes to `+0x818` (NOT a mailbox reg
+   — mailbox starts at +0x8800). Iboot leaves 0x40003 there. FW
+   actively manipulates the low nibble. Each of my bit writes got
+   OR'd with FW-set bits in response. After several writes the FW
+   cleared the register to 0 AND transitioned CS from `0x48` to
+   `0x4c` (same state MTP has when "ready"). So the ASC CPU IS
+   executing code and responding to a register-level handshake.
+
+   But `+0x40` (CPU_unk0, "pre-boot stage marker") stays at 0xa0000
+   the whole time. MTP's journal-documented behavior is +0x40 goes
+   from 0xa0000 → 0x1 when FW fully boots. AOP never advances.
+
+**3. __TEXT is correctly staged in memory.**
+   Verified byte-equal to Mach-O file offset 0x1000. Read memory at
+   phys 0x390c00000 +0x100 etc. matches file. So iBoot-staging is
+   good. FW entry point decodes as standard ARMv8 init:
+   - `+0x000 = b 0x244` (branch to entry)
+   - `+0x244 = mrs x1, CurrentEL`
+   - `+0x248 = ubfx x1, x1, #2, #2`
+   - `+0x24c = cmp x1, #3`
+   - `+0x250 = b.ne +0x18`
+   - Then EL3-side: VBAR_EL3 + SPSR_EL3 + eret. Or EL<3: continue.
+
+   Nothing weird in entry. Something later in FW init must trap →
+   land in sync exception vector at +0x200 (=`b .` halt loop).
+
+**4. NEW: AOP reg[0] contains crypto/key-like slots at +0x4400.**
+   From `scripts/hv/aop_wide_scan.py` (nonzero 16B hits):
+   ```
+   +0x004100 = 0x11110110 0x00001111 0x11110110 0x00001111
+   +0x004400 = 0x4401271a 0x40004b8a 0x2fb4a1e2 0x00020000
+   +0x004500 = 0x6dbb6a9c 0x07c520b7 0x5337e69b 0x00020000
+   +0x004600 = 0xff5ff77b 0xb10547ff 0xb5c7aa2a 0x00020000
+   +0x004700 = 0x59e1c8e8 0x9c731eab 0xf537ccec 0x00020000
+   +0x008000 = 0x0000004c 0x00000000 0x00000000 0x00000000
+   +0x008800 = 0x00000220 0x00600000 ...   [last INBOX msg latched]
+   ```
+   Each +0x4400..+0x4700 row has 3 random-looking u32s then 0x20000
+   suffix. Pattern screams "4 slot table of crypto material with
+   type flag 0x20000" — likely attestation/auth tokens iBoot leaves
+   for FW to verify. If we're booting a FW that doesn't match these
+   tokens, init might reject silently and trap.
+
+   **This is likely the real M4 vs M1/M2 difference.** On earlier
+   Apple Silicon there may have been no attestation table or it
+   was at a different offset. On M4 ascwrap-v6, FW expects these 4
+   slots populated with valid tokens. We haven't verified signatures
+   at all — iBoot provides them but we kicked RUN=1 mid-init.
+
+**5. Do not read AOP+0x8200.** Causes m1n1 SYNC exception (unmapped
+   or DAPF-protected). Scan should stop at +0x8200. Now m1n1 is
+   wedged and needs power-cycle.
+
+**6. +0x8000 = 0x4c** — mirror of CS? Or the actual CS on ascwrap-v6?
+   Could mean on M4 the "real" CPU_STATUS is at +0x8000 and +0x48 is
+   a (stale) alias. Worth checking whether writing to CC (+0x44) also
+   has a mirror at +0x8044 / +0x8000.
+
+### Next session priority
+
+**Kaden: please power-cycle Mac** (m1n1 wedged from +0x8200 SYNC).
+
+When fresh:
+   1. Run `scripts/hv/aop_reg_scan.py` BEFORE any boot attempt — read
+      the +0x4400..+0x4700 table on fresh iBoot state. Then run it
+      AGAIN after our boot_aop.py — see what FW ate.
+   2. Compare AOP's +0x4400 table against MTP's same offset. If MTP
+      has an equivalent table, we can compare. If not, AOP's init
+      protocol is genuinely different.
+   3. Explore +0x8000..+0x8200 (NOT past +0x8200) for a second
+      CPU_CTRL/CPU_STATUS mirror — maybe ascwrap-v6 moved it.
+   4. If +0x4400 is indeed auth tokens, we can't forge them. Pivot
+      to HV-trace of macOS boot (trace MMIO accesses to 0x390600000
+      during kernel's AOP-driver init) and replay.
+
+### Scripts shipped this session
+
+All probes checked in under `scripts/hv/`:
+   - `probe_aic.py` — ADT + AIC topology dump.
+   - `aic_poke.py` — masks AOP IRQs while AOP stuck (diagnostic).
+   - `aop_reg_scan.py` — AOP vs MTP reg[0] diff (first 0xd00).
+   - `aop_818_poke.py` — +0x818 handshake walk.
+   - `aop_reset_hunt.py` — CC bit fuzzing (no halt found).
+   - `aop_wide_scan.py` — full reg[0] scan (stops before +0x8200).
+   - `aop_dump_bootargs.py` — all 51 AOP bootarg keys/values.
+   - `aop_adt_nub.py` — nub region and boot-metadata probe.
+   - `aop_retry_start.py` — retry mgmt.start after +0x818 walk.
+   - `boot_aop_aic.py` — variant of boot_aop.py with AIC mask
+     (will keep for future, but AIC theory disproven).
+
+### Net
+
+- Wall A (AIC) ❌ disproven. AIC isn't the blocker; AP side
+  already masks AOP IRQs; AOP's CS bit is ASC-internal.
+- New wall discovered: **+0x4400..+0x4700 attestation-like table**.
+  This is likely the real root cause. M4 ascwrap-v6 expects iBoot-
+  populated slots that FW verifies during init.
+- Wall B (CPU reset on v6) still standing. No CC bit I tried halts
+  the CPU. Need M4-specific docs or HV tracer.
+
+Kaden: keyboard via MTP/AOP still blocked. External USB keyboard
+works through the existing USB stack. Demo loop unaffected.
+
+---
+
 ## 2026-04-21 18:30 — Ubuntu — 🎉 LOOP with patched m1n1 + stim fix + AOP fw extracted
 
 Two wins + one blocker cleared this pass.
