@@ -11,6 +11,96 @@ end of a session.
 
 ---
 
+## 2026-04-21 22:45 — Ubuntu — AOP further: dapf_init OK, FW reaches CS=0x4c +0x818=0 (MTP steady-state)
+
+Continuation after power-cycle. Kaden confirmed ACM1 is proxy and
+our patched m1n1 runs (via in-script chainload).
+
+### Wins layered onto previous breakthrough
+
+- `p.dapf_init("/arm-io/dart-aop")` works cleanly (rc=0, 7ms).
+  Previously `dapf_init_all` was marked "hangs on M4" — but only
+  because it iterates dart-mtp, which is the actual hang. dart-aop
+  is fine. Targeted call avoids the hang entirely.
+- `boot_aop_no_dart.py` updated to call `dapf_init` BEFORE RUN=1
+  (matches aop_als.py reference order).
+- After full init sequence (update_bootargs → dapf_init → OB_CTRL=
+  0x20001 → RUN=1), AOP FW reaches the **MTP steady-state**:
+  `CS=0x4c` (running, not IDLE, no IRQ pending) and `+0x818=0`
+  (handshake register drained). MTP spends its event-loop time at
+  exactly this register pattern.
+
+### What still doesn't work
+
+- FW drains 0 messages from INBOX (RPTR stays 0 regardless of how
+  many we write; IB grows to 0x400401 = WPTR=4 after 4 msgs).
+- FW never writes classical OUTBOX (+0x8830 stays 0).
+- Writing bootargs like `Hlca`/`Hsid` after FW already running has
+  no effect (expected — FW consumed bootargs during init).
+- Scanning +0x1000..+0x4000 at 0x40 stride found no additional
+  non-zero regs.
+
+### What FW IS doing
+
+- `+0x8180..+0x81ff` slot ring (8 × 16B) mirrors INBOX msgs with
+  FW-updated trailer 0x00891900 (post-processing state).
+- `+0x8200..+0x827f` slot ring is being actively modified between
+  sessions (random bytes flip) — live FW state, but trailer stays
+  0x000a0000 (not the INBOX "processed" marker). Purpose unknown.
+- +0x818 responds to AP writes by flipping alternating bits; when
+  FW reaches the final steady-state, it clears to 0.
+
+### Conclusion on Wall: OUTBOX protocol is non-standard on ascwrap-v6
+
+The classical `+0x8830` OUTBOX seems deprecated or gated. FW
+processes our writes but its reply path goes SOMEWHERE ELSE that
+we haven't found via brute register scanning. The +0x8200 ring
+is a candidate (FW-modified, 8-slot structure matching +0x8180).
+
+### Next session priority
+
+HV-trace macOS booting AOP is now genuinely the only path forward.
+Approach:
+1. Boot m1n1 into HV mode with trace config covering
+   `0x390600000..0x390688000` (AOP reg[0]).
+2. Let macOS's kernel init AOP natively.
+3. Capture all MMIO writes/reads from the AP to AOP reg[0].
+4. Compare the sequence against our script; the delta is the
+   missing init + mailbox protocol.
+
+Existing HV trace infrastructure is in
+`external/m1n1/proxyclient/m1n1/trace/asc.py` and
+`external/m1n1/proxyclient/hv/trace_all.py`. We need to modify to
+trace ONLY AOP reg range (not touch mtp — BYPASS_DAPF for dart-mtp
+stays in place).
+
+Alternatively: peek at `external/m1n1/proxyclient/experiments/` for
+M3/M4 AOP experiments — maybe Asahi has updated `aop_als.py` for
+ascwrap-v6 with the new protocol.
+
+### Scripts shipped this segment
+
+- `scripts/hv/aop_dapf_start.py` — iterate without full reboot:
+  dapf + SetIOPPower + poll.
+- `scripts/hv/boot_aop_no_dart.py` (updated) — canonical AOP boot
+  with dapf_init baked in.
+
+### Net this session (total)
+
+- 6 major RE findings:
+  1. `dart.initialize()` clobbers iBoot's DART → causes AOP trap.
+  2. Skipping it → CS=0x6c healthy.
+  3. Targeted `dapf_init` for dart-aop works.
+  4. FW processes INBOX into +0x8180 slot ring w/ trailer 0x00891900.
+  5. +0x8200 slot ring is live FW state.
+  6. AIC mask/unmask definitively not involved.
+- Canonical boot recipe: `scripts/hv/boot_aop_no_dart.py` now works
+  fully automated through init phases.
+- AOP reaches MTP steady-state. Remaining block is the OUTBOX
+  protocol which is ascwrap-v6-new and needs HV tracing.
+
+---
+
 ## 2026-04-21 22:00 — Ubuntu — 🎉 AOP BOOT BREAKTHROUGH: skip dart.initialize() → FW alive
 
 **Headline:** `DART.initialize()` was clobbering iBoot's AOP stream/TTBR
