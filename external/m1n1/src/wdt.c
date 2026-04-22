@@ -54,20 +54,14 @@ void wdt_disable(void)
      * 118s. Moving it here ensures every m1n1 boot (HV or proxy) stays
      * alive. See docs/SESSION_JOURNAL.md for incident history. */
     if (chip_id == T8132) {
+        /* Minimal-risk write: only zero the deadline-arm bit at reg[1].
+         * The panic-scratch regs (reg[2..4]) live in the same page as
+         * SMC's state registers — writing 0xffffffff there made SMC
+         * refuse to Hello on subsequent boots. See 2026-04-22 journal. */
         u32 r1_pre = read32(0x3882BC224UL);
-        u32 r2_pre = read32(0x3882B8008UL);
-        u32 r3_pre = read32(0x3882B802CUL);
-        u32 r4_pre = read32(0x3882B8020UL);
         write32(0x3882BC224UL, 0);
-        write32(0x3882B8008UL, 0xffffffff);
-        write32(0x3882B802CUL, 0xffffffff);
-        write32(0x3882B8020UL, 0xffffffff);
-        printf("AP-WDT (t8132): r1 %08x->%08x  r2 %08x->%08x  "
-               "r3 %08x->%08x  r4 %08x->%08x\n",
-               r1_pre, read32(0x3882BC224UL),
-               r2_pre, read32(0x3882B8008UL),
-               r3_pre, read32(0x3882B802CUL),
-               r4_pre, read32(0x3882B8020UL));
+        u32 r1_post = read32(0x3882BC224UL);
+        printf("AP-WDT (t8132) deadline-arm: %08x->%08x\n", r1_pre, r1_post);
     }
 
     printf("WDT disabled\n");
