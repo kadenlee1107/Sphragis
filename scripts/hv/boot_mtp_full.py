@@ -253,6 +253,30 @@ def main():
         else:
             log("chainload skipped/failed — continuing on current m1n1")
 
+    # CRITICAL: disable M4 AP watchdog. The patched m1n1 only disables
+    # this in hv_init(), not at boot. Without it, the watchdog fires
+    # every ~118s and reboots the Mac — which is why m1n1 "keeps
+    # booting over and over" during long MTP sessions. Replicate the
+    # hv.c:151-169 sequence in Python.
+    log("disabling M4 AP watchdog (mirror src/hv.c:137-169)...")
+    try:
+        r1_pre = p.read32(0x3882BC224)
+        r2_pre = p.read32(0x3882B8008)
+        r3_pre = p.read32(0x3882B802C)
+        r4_pre = p.read32(0x3882B8020)
+        p.write32(0x3882BC224, 0)
+        p.write32(0x3882B8008, 0xffffffff)
+        p.write32(0x3882B802C, 0xffffffff)
+        p.write32(0x3882B8020, 0xffffffff)
+        r1_post = p.read32(0x3882BC224)
+        r2_post = p.read32(0x3882B8008)
+        r3_post = p.read32(0x3882B802C)
+        r4_post = p.read32(0x3882B8020)
+        log(f"  WDT: r1 {r1_pre:#x}->{r1_post:#x}  r2 {r2_pre:#x}->{r2_post:#x}  "
+            f"r3 {r3_pre:#x}->{r3_post:#x}  r4 {r4_pre:#x}->{r4_post:#x}")
+    except Exception as e:
+        log(f"  WDT disable err (continuing): {e!r}")
+
     # Pre-boot CPU state
     mtp_node = u.adt["/arm-io/mtp"]
     mtp_base = mtp_node.get_reg(0)[0]

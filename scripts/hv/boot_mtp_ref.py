@@ -122,6 +122,18 @@ def main():
         u = ProxyUtils(p, heap_size=64 * 1024 * 1024)
         log("  patched m1n1 up")
 
+    # Disable M4 AP watchdog (mirror src/hv.c:137-169). Without this
+    # the watchdog fires every ~118s and reboots the Mac.
+    log("disabling M4 AP watchdog...")
+    try:
+        p.write32(0x3882BC224, 0)
+        p.write32(0x3882B8008, 0xffffffff)
+        p.write32(0x3882B802C, 0xffffffff)
+        p.write32(0x3882B8020, 0xffffffff)
+        log(f"  WDT regs zapped")
+    except Exception as e:
+        log(f"  WDT disable err: {e!r}")
+
     # 1. SMC (like reference experiments/mtp.py)
     from m1n1.fw.smc import SMCClient
     smc_addr = u.adt["arm-io/smc"].get_reg(0)[0]

@@ -167,6 +167,16 @@ def main():
         u = ProxyUtils(p, heap_size=64 * 1024 * 1024)
         log("  patched m1n1 up")
 
+    # Disable M4 AP watchdog (mirror src/hv.c:137-169).
+    log("disabling M4 AP watchdog...")
+    try:
+        p.write32(0x3882BC224, 0)
+        p.write32(0x3882B8008, 0xffffffff)
+        p.write32(0x3882B802C, 0xffffffff)
+        p.write32(0x3882B8020, 0xffffffff)
+    except Exception as e:
+        log(f"  WDT disable err: {e!r}")
+
     mtp_base = u.adt["/arm-io/mtp"].get_reg(0)[0]
     log(f"MTP @ {mtp_base:#x}")
 
