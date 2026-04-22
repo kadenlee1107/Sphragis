@@ -173,29 +173,74 @@ def run_in_batcave(tool_cmd: str, pcap_path: Path, port: int) -> str:
     return out
 
 # ── Post-hoc tshark analysis ────────────────────────────────────
-def tshark_summary(pcap: Path) -> list[str]:
-    """Run tshark on the pcap with a few useful display filters."""
+def pcap_summary(pcap: Path) -> list[str]:
+    """Read + decode the pcap using macOS-builtin tcpdump (no host installs).
+    Falls back to tshark if tcpdump isn't available.
+
+    Runs offline — purely file I/O — so this tool never touches the network
+    during analysis. Safe to run alongside a live BatCave demo.
+    """
+    tool = None
+    for candidate in ["tcpdump", "tshark"]:
+        if subprocess.run(["which", candidate], capture_output=True).returncode == 0:
+            tool = candidate
+            break
+    if tool is None:
+        return ["  (no pcap reader installed — apt/brew install tcpdump)"]
+
     results = []
-    filters = [
-        ("all packets",  []),
-        ("DNS",          ["-Y", "dns"]),
-        ("ICMP",         ["-Y", "icmp"]),
-        ("TCP handshake",["-Y", "tcp.flags.syn==1 or tcp.flags.fin==1"]),
-        ("HTTP",         ["-Y", "http"]),
-    ]
-    for title, filt in filters:
-        try:
-            r = subprocess.run(
-                ["tshark", "-r", str(pcap), "-n", *filt],
-                capture_output=True, text=True, timeout=15,
-            )
-            lines = [l for l in r.stdout.splitlines() if l.strip()][:6]
-            if lines:
-                results.append(f"  {title}:")
-                for l in lines:
-                    results.append(f"    {l[:110]}")
-        except Exception as e:
-            results.append(f"  {title}: (tshark err: {e})")
+    if tool == "tcpdump":
+        filters = [
+            ("all packets",   []),
+            ("ARP",           ["arp"]),
+            ("ICMP",          ["icmp"]),
+            ("DNS",           ["port 53"]),
+            ("TCP handshake", ["tcp[tcpflags] & (tcp-syn|tcp-fin) != 0"]),
+            ("HTTP payload",  ["tcp port 80 or tcp portrange 8000-65535",
+                               "-A", "-s", "200"]),
+        ]
+        for title, filt in filters:
+            try:
+                cmd = ["tcpdump", "-r", str(pcap), "-nn", "-q"]
+                # -q suppresses verbose protocol decoding for readability
+                # Switch to -v for HTTP to get payload
+                if title == "HTTP payload":
+                    cmd = ["tcpdump", "-r", str(pcap), "-nn"]
+                cmd.extend([f for f in filt if not f.startswith("-")])
+                # Flags that weren't absorbed as filter get appended
+                for f in filt:
+                    if f.startswith("-"):
+                        cmd.append(f)
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                lines = [l for l in r.stdout.splitlines() if l.strip()
+                         and "reading from file" not in l][:6]
+                if lines:
+                    results.append(f"  {title}:")
+                    for l in lines:
+                        results.append(f"    {l[:110]}")
+            except Exception as e:
+                results.append(f"  {title}: err: {e}")
+    else:  # tshark fallback
+        filters = [
+            ("all packets",  []),
+            ("DNS",          ["-Y", "dns"]),
+            ("ICMP",         ["-Y", "icmp"]),
+            ("TCP handshake",["-Y", "tcp.flags.syn==1 or tcp.flags.fin==1"]),
+            ("HTTP",         ["-Y", "http"]),
+        ]
+        for title, filt in filters:
+            try:
+                r = subprocess.run(
+                    ["tshark", "-r", str(pcap), "-n", *filt],
+                    capture_output=True, text=True, timeout=15,
+                )
+                lines = [l for l in r.stdout.splitlines() if l.strip()][:6]
+                if lines:
+                    results.append(f"  {title}:")
+                    for l in lines:
+                        results.append(f"    {l[:110]}")
+            except Exception as e:
+                results.append(f"  {title}: (tshark err: {e})")
     return results
 
 # ── Main ────────────────────────────────────────────────────────
@@ -238,9 +283,9 @@ def main():
         else:
             print("     (no visible stdout — check per-tool log)")
 
-        # External observation (what tshark sees)
-        print(f"   tshark analysis of {pcap.name}:")
-        for s in tshark_summary(pcap):
+        # External observation — pcap analysis with macOS-builtin tcpdump
+        print(f"   pcap analysis of {pcap.name}:")
+        for s in pcap_summary(pcap):
             print(s)
         pcaps.append((cmd, pcap))
 
