@@ -395,6 +395,51 @@ next wedges:
 Each becomes visible once the SP fix lands. Waiting on next
 power-cycle to run.
 
+### v7 — SP fix works, PAC pointer corruption is next layer
+
+v7 dump:
+```
+=== EL1 sysreg dump (at exception reason=2 code=0) ===
+  SCTLR_EL12  = 0x0000000030d50980  (MMU/PAC all OFF)
+  SP_EL1      = 0x000001002111fcd0  ← SP is now VALID — our x3 took hold
+  ELR_EL12    = 0x8010d7e1019ffe5c  ← PAC-decorated garbage PC
+  ESR_EL12    = 0x0000000086000000  (IABORT_CURRENT_EL, DFSC=0 addr size)
+  FAR_EL12    = 0x8010d7e1019ffe5c
+```
+
+`SP_EL1 = 0x1002111fcd0` = `bootstrap_sp - 0x330` — XNU made ~800 B
+of stack pushes across multiple bl's before failing. The SP fix
+clearly unblocks that.
+
+New failure: PC goes to `0x8010d7e1019ffe5c`, a PAC-decorated pointer.
+That's the signature of `br` or `blr` to an address that was produced
+by (or stored in data tables as) a PAC-signed pointer. With
+`SCTLR_EL1.EnIA = EnIB = 0` (PAC disabled), `blraa`/`braa` don't
+strip the signature — they branch directly to the signed value.
+
+### v8 attempt: enable PAC in SCTLR_EL1 before XNU entry
+
+Extended the entry patch to 8 insns (overwrites 0x00..0x1f of
+`__TEXT_BOOT_EXEC`, replacing the BTI+cmp+b.ne prelude that dispatches
+bootstrap-vs-secondary — safe because we only boot one CPU):
+
+```
+mrs   x9,  sctlr_el1                 ; read current SCTLR
+mov   x10, #0xc0000000                ; EnIA|EnIB mask (bits 31, 30)
+orr   x9,  x9, x10                    ; set bits
+msr   sctlr_el1, x9                   ; commit
+isb                                   ; fence
+mov   sp,  x3                         ; EL1 stack from ERET x3
+mov   x0,  x1                         ; preserve bootargs_ptr
+b     #0x4000                         ; enter bootstrap handler
+```
+
+PAC keys are left whatever-they-are at ERET (zero by default). As
+long as EnI{A,B} stay set and keys don't change during boot,
+`pacibsp`/`autibsp` round-trip correctly.
+
+Archived v7 log: `logs/hv-mtp-v7-sp-set-20260422-0747.log`.
+
 ### Wrapper state
 
 `scripts/hv/boot_macos_mtp_trace.py` is solid — HV init, load, trace

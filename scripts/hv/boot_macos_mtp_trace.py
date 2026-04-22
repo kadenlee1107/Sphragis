@@ -179,19 +179,36 @@ def main() -> int:
     iface.set_handler(START.EXCEPTION_LOWER, EXC.FIQ,    _handle_exception_with_dump)
     iface.set_handler(START.EXCEPTION_LOWER, EXC.SERROR, _handle_exception_with_dump)
 
-    # Patch __TEXT_BOOT_EXEC entry prelude (offsets 0x10..0x1f) so the
-    # bootstrap CPU's first stack op doesn't data-abort on SP_EL1=0.
-    # Original prelude stashes a flag byte we can skip (only used as a
-    # secondary-CPU handshake signal; we don't start secondaries).
-    # Replacement:
-    #   0x10:  mov sp, x3       ; set EL1 stack from x3 (passed at ERET)
-    #   0x14:  mov x0, x1       ; preserve bootargs_ptr for handler
-    #   0x18:  b +0x3fe8        ; branch to real bootstrap at +0x4000
-    #   0x1c:  nop
-    # Everything else (entry check, cpu_table path for non-bootstrap
-    # CPUs) is left untouched.
-    PATCH_BYTES = bytes.fromhex("7f000091" "e00301aa" "fa0f0014" "1f2003d5")
-    PATCH_OFFSET = 0x10          # within __TEXT_BOOT_EXEC
+    # Patch the whole __TEXT_BOOT_EXEC prelude (offsets 0x00..0x1f, 8
+    # insns). Two reasons iBoot-simulation is necessary:
+    #   1. m1n1's hv_enter_guest zeroes SP_EL1 → first `stp [sp,#-0x10]!`
+    #      in the bootstrap handler at +0x4000 wraps to 0xFFFF...FFF0
+    #      (data abort, ESR=0x96000040 observed on v6).
+    #   2. SCTLR_EL1.EnIA/EnIB start 0 at ERET → `pacibsp` is a NOP and
+    #      saved LRs are unsigned. When XNU's init later sets En*B=1 (or
+    #      uses blraa/braa to branch to PAC-signed function pointers
+    #      already encoded in data tables), the mismatched auth yields
+    #      a garbage PC — observed on v7 as ELR=FAR=0x8010d7e1019ffe5c
+    #      (PAC-decorated), ESR=0x86000000 IABORT_CURRENT_EL address-
+    #      size fault.
+    # The secondary-CPU handshake this prelude does (store w2 at a
+    # progress-flag address) only matters if we start other CPUs, which
+    # we don't. Safe to overwrite the whole range.
+    #
+    # New 8-insn prelude (verified via capstone):
+    #   mrs   x9, sctlr_el1                   ; 09 10 38 d5
+    #   mov   x10, #0xc0000000                ; 0a 00 b8 d2  (EnIA|EnIB)
+    #   orr   x9, x9, x10                     ; 29 01 0a aa
+    #   msr   sctlr_el1, x9                   ; 09 10 18 d5
+    #   isb                                   ; df 3f 03 d5
+    #   mov   sp, x3                          ; 7f 00 00 91  (SP from ERET x3)
+    #   mov   x0, x1                          ; e0 03 01 aa  (preserve bootargs)
+    #   b     #0x4000                         ; f9 0f 00 14  (real bootstrap)
+    PATCH_BYTES = bytes.fromhex(
+        "091038d5" "0a00b8d2" "29010aaa" "091018d5"
+        "df3f03d5" "7f000091" "e00301aa" "f90f0014"
+    )
+    PATCH_OFFSET = 0x00          # within __TEXT_BOOT_EXEC
     entry_pa = hv.entry          # load_macho set hv.entry to guest PA
     patch_pa = entry_pa + PATCH_OFFSET
     print(f"Patching entry prelude at {patch_pa:#x} ({len(PATCH_BYTES)} bytes)")
