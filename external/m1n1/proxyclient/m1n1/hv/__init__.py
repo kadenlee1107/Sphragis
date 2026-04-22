@@ -1479,6 +1479,16 @@ class HV(Reloadable):
         # dockchannel UART at 0x3_8812_8000, not the Samsung-style
         # uart0 we just mapped. Hook that region too so guest TX bytes
         # get forwarded to /dev/ttyACM2.
+        #
+        # `hv_map_vuart_dockchannel` is a Bat_OS-side extension to m1n1
+        # firmware. Stock upstream Asahi m1n1 doesn't have the opcode and
+        # responds "Bad Command" — in that case we just skip the extra
+        # mapping. XNU/macOS console still lands on uart0 above, which
+        # is fine for HV tracing.
+        try:
+            from ..proxy import ProxyCommandError
+        except ImportError:
+            ProxyCommandError = Exception
         try:
             dc = self.adt["/arm-io/dockchannel-uart"]
             dc_base = dc.get_reg(0)[0]
@@ -1489,6 +1499,9 @@ class HV(Reloadable):
         except (KeyError, IndexError):
             # No dockchannel-uart node (pre-M1-pro, non-Apple) — silently skip.
             pass
+        except ProxyCommandError as e:
+            print(f"Skipping dockchannel vuart (m1n1 firmware lacks "
+                  f"hv_map_vuart_dockchannel): {e}")
 
     def map_essential(self):
         # Things we always map/take over, for the hypervisor to work

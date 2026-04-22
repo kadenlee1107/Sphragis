@@ -11,6 +11,76 @@ end of a session.
 
 ---
 
+## 2026-04-21 21:30 — Ubuntu — HV-trace wrapper lands, dry-run boots on M4
+
+Picked up HV-trace work from `docs/HV_TRACE_HANDOFF.md`. Wrote a thin
+`run_guest.py`-shaped wrapper (`scripts/hv/boot_macos_mtp_trace.py`)
+that hardcodes the J604 kernelcache and installs `trace_mtp.py` (ASC
++ DART + DockChannel tracers, already vendored in
+`external/m1n1/proxyclient/hv/`). Dry-run (no ERET) completes cleanly
+on real M4 hardware.
+
+### What ran clean on the Mac
+
+1. Chainloaded `external/m1n1/build/m1n1.macho` over stock Asahi
+   bcee7f2 (kmutil had the upstream build; our patched m1n1 is the
+   one with `hv_map_vuart_dockchannel` + WDT fix).
+2. `boot_macos_mtp_trace.py --dry-run`:
+   - `hv.init()` finished on M4 — all M4 guards (AMX/SPRR/VMKEY)
+     skipped, ECV enabled, PA range 42-bit, dockchannel vuart mapped
+     at `0x388128000`.
+   - `hv.load_macho()` parsed the 120 MB J604 kernelcache
+     (`__TEXT 32768, __PRELINK_TEXT 13 MB, __DATA_CONST 12 MB,
+     __DATA_SPTM 336 KB, __TEXT_EXEC 60 MB, __TEXT_BOOT_EXEC 32 KB,
+     __PRELINK_INFO 4 MB, __DATA 4.7 MB, __LINKEDIT 26 MB`). Total
+     region 0x7970000, uploaded via `compressed_writemem`.
+   - SEPFW (5.8 MB), TrustCache, preoslog all copied into the guest
+     region. `__OS_LOG` removed from `/arm-io/{aop,mtp,dcp,…}` nubs.
+   - Bootargs rev-3 staged at `0x10021594000`. Secondary-CPU RVBAR
+     writes skipped on M4 (our existing guard).
+   - `trace_mtp.py` loaded without errors — tracers installed for
+     `/arm-io/mtp`, `/arm-io/dart-mtp`, `/arm-io/dockchannel-mtp`.
+   - Dropped to HV shell instead of ERET.
+
+### Python-side resilience fix
+
+`external/m1n1/proxyclient/m1n1/hv/__init__.py` — `map_vuart` now
+catches `ProxyCommandError` too, so the script also works against a
+stock Asahi m1n1 that lacks `hv_map_vuart_dockchannel`. (With stock
+m1n1, XNU console still lands on uart0 vuart — fine for HV tracing.)
+
+### Env knobs on the wrapper
+
+```
+MTP_TRACE_LOG=/tmp/mtp_hv_trace.log    # HV log path (default)
+TRACE_AOP=1                             # also load trace_aop.py
+WDT_KICK=1                              # p.write32(0x3882BC224, 0) for stock m1n1
+KERNELCACHE=<path>                      # override default kernelcache
+XNU_BOOTARGS="-v debug=0x8 serial=3"    # override iBoot-inherited cmdline
+```
+
+### Next: actually ERET into XNU
+
+Dry-run proves setup is right. Next attempt: same wrapper without
+`--dry-run`. Expected outcome — XNU boots far enough for IOKit service
+matching to probe `AppleA7IOP::start()` on MTP, then panics at APFS /
+root volume / anything disk-related. That window is exactly what we
+need. The MMIO writes in `/tmp/mtp_hv_trace.log` are the target diff
+against `scripts/hv/boot_mtp_dartmap.py`.
+
+Invocation (fresh power cycle + chainload patched m1n1 first):
+```
+sg dialout -c 'M1N1DEVICE=/dev/ttyACM1 M1N1TIMEOUT=30 \
+    PYTHONUNBUFFERED=1 python3 scripts/hv/boot_macos_mtp_trace.py'
+```
+
+### Status
+
+Wrapper proven in dry-run on real hardware. Real boot attempt not
+yet run; handoff is clean for next session to pick up.
+
+---
+
 ## 2026-04-22 05:30 — Ubuntu — m1n1 WDT fix lands + SMC works cleanly; MTP hard wall
 
 ### WDT fix IN C, less invasive

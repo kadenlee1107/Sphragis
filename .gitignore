@@ -18,6 +18,9 @@
 /.claude
 /.claude-flow
 /.mcp.json
+# Harness state also shows up inside vendored submodules.
+**/.claude-flow/
+**/__pycache__/
 
 # Bring-up camera captures — huge binary blobs, regenerable on live M4.
 /captures
