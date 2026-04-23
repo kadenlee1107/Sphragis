@@ -788,7 +788,132 @@ fn ensure_default_cave() {
 
 fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) {
     use crate::batcave::cave;
+    use crate::batcave::docker_client;
     match subcmd {
+        // ── Docker-backed BatCaves (Phase 2 of design alignment) ──
+        // These delegate to the Mac-side `batcaved` daemon over TCP.
+        // Protocol: see src/batcave/docker_client.rs + scripts/batcaved.py.
+        "docker-create" => {
+            if arg1.is_empty() || arg2.is_empty() {
+                console::puts("  usage: batcave docker-create <name> <image> [caps-csv]\n");
+                console::puts("  e.g.:  batcave docker-create kali kalilinux/kali-rolling NET_RAW,NET_ADMIN\n");
+                return;
+            }
+            // parts layout: [batcave, docker-create, <name>, <image>, <caps?>, ...]
+            let caps_csv = parts[4];
+            let r = docker_client::with_daemon(|| {
+                // Split caps_csv into &str slices
+                let mut caps_buf: [&str; 8] = [""; 8];
+                let mut n = 0;
+                if !caps_csv.is_empty() {
+                    for part in caps_csv.split(',') {
+                        if n < 8 && !part.is_empty() {
+                            caps_buf[n] = part;
+                            n += 1;
+                        }
+                    }
+                }
+                docker_client::create(arg1, arg2, &caps_buf[..n])
+            });
+            match r {
+                Ok(id) => {
+                    console::puts("  Docker BatCave created: ");
+                    console::puts(arg1);
+                    console::puts(" → container ");
+                    console::puts(&id);
+                    console::puts("\n");
+                }
+                Err(e) => {
+                    console::puts("  Error: "); console::puts(e); console::puts("\n");
+                }
+            }
+        }
+        "docker-run" => {
+            if arg1.is_empty() || arg2.is_empty() {
+                console::puts("  usage: batcave docker-run <name> <cmd> [args...]\n");
+                return;
+            }
+            // parts: [batcave, docker-run, <name>, <cmd>, <arg1>, <arg2>, <arg3>, <arg4>]
+            let mut argv_buf: [&str; 6] = [""; 6];
+            let mut argc = 0;
+            for i in 3..MAX_PARTS {
+                if parts[i].is_empty() { break; }
+                if argc < 6 { argv_buf[argc] = parts[i]; argc += 1; }
+            }
+            let r = docker_client::with_daemon(|| {
+                docker_client::run(arg1, &argv_buf[..argc], |line| {
+                    // Output lines from the daemon come in already '\n'-terminated
+                    // from the docker subprocess. Forward verbatim to the user's
+                    // console — this is the tool's actual stdout.
+                    console::puts("  ");
+                    console::puts(line);
+                    console::puts("\n");
+                })
+            });
+            match r {
+                Ok(rc) => {
+                    console::puts("  [exit code ");
+                    print_num(rc as usize);
+                    console::puts("]\n");
+                }
+                Err(e) => {
+                    console::puts("  Error: "); console::puts(e); console::puts("\n");
+                }
+            }
+        }
+        "docker-list" => {
+            let r = docker_client::with_daemon(|| docker_client::list());
+            match r {
+                Ok(caves) => {
+                    console::puts_hi("  DOCKER BATCAVES\n");
+                    console::puts("  ────────────────\n");
+                    if caves.is_empty() {
+                        console::puts("  (none)\n");
+                    } else {
+                        for (name, image, status) in &caves {
+                            console::puts("  ");
+                            console::puts(name);
+                            console::puts("  ");
+                            console::puts(image);
+                            console::puts("  [");
+                            console::puts(status);
+                            console::puts("]\n");
+                        }
+                    }
+                    console::puts("  ────────────────\n");
+                    print_num(caves.len());
+                    console::puts(" docker cave(s)\n");
+                }
+                Err(e) => {
+                    console::puts("  Error: "); console::puts(e); console::puts("\n");
+                }
+            }
+        }
+        "docker-destroy" => {
+            if arg1.is_empty() {
+                console::puts("  usage: batcave docker-destroy <name>\n");
+                return;
+            }
+            let r = docker_client::with_daemon(|| docker_client::destroy(arg1));
+            match r {
+                Ok(()) => {
+                    console::puts("  Docker BatCave destroyed: ");
+                    console::puts(arg1);
+                    console::puts("\n");
+                }
+                Err(e) => {
+                    console::puts("  Error: "); console::puts(e); console::puts("\n");
+                }
+            }
+        }
+        "docker-ping" => {
+            // quick connectivity check — is the daemon reachable?
+            let r = docker_client::with_daemon(|| docker_client::ping());
+            match r {
+                Ok(()) => console::puts("  batcaved: PONG (OK)\n"),
+                Err(e) => { console::puts("  batcaved: "); console::puts(e); console::puts("\n"); }
+            }
+        }
         "create" => {
             let ephemeral = arg2 == "--ephemeral";
             // Check for --kit flag

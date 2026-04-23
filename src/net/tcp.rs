@@ -1065,7 +1065,16 @@ pub fn close_pcb(id: usize) {
         if s == STATE_CLOSED || s == STATE_TIME_WAIT { break; }
         core::hint::spin_loop();
     }
-    pcb(id).state.store(STATE_CLOSED, Ordering::Release);
+    let p = pcb(id);
+    p.state.store(STATE_CLOSED, Ordering::Release);
+    // QEMU-BUGFIX: release the PCB so `ensure_legacy_pcb()` will
+    // re-initialize it on the next `connect()`. Without this, the
+    // legacy PCB keeps stale tx/rx buffers, local port, and half-
+    // drained state from the previous session — the second
+    // `connect()` succeeds at SYN level but subsequent sends fail
+    // with "send: no progress". Symptom: first docker-* command
+    // works, second one returns "send failed".
+    p.in_use.store(false, Ordering::Release);
 }
 
 // ===========================================================================
