@@ -170,6 +170,8 @@ fn execute(cmd: &str) {
         "nat-beacons"        => cmd_nat_beacons(),
         "nat-beacon-selftest" => cmd_nat_beacon_selftest(),
         "nat-beacon-reset"   => cmd_nat_beacon_reset(),
+        "cpol-flow-rate"     => cmd_cpol_flow_rate(&parts[1..]),
+        "cpol-flow-rate-selftest" => cmd_cpol_flow_rate_selftest(),
         "cpol-daemon-list" => cmd_cpol_daemon_list(),
         "cpol-daemon-show" => cmd_cpol_daemon_show(parts[1]),
         "nic-status"  => cmd_nic_status(),
@@ -1017,6 +1019,44 @@ fn cmd_cpol_rate_list() {
         console::puts(" tokens_now=");
         print_num(*tok_now as usize);
         console::puts("\n");
+    }
+}
+
+/// cpol-flow-rate <cave> <pps> <burst>
+/// Set the per-flow rate limit for all destinations this cave reaches.
+/// pps=0 clears the default. Each (dst_ip, dst_port) gets its own
+/// bucket lazy-allocated from this default.
+fn cmd_cpol_flow_rate(args: &[&str]) {
+    if args.len() < 3 || args[0].is_empty() {
+        console::puts("  usage: cpol-flow-rate <cave> <pps> <burst>\n");
+        return;
+    }
+    let pps: u32 = match args[1].parse() {
+        Ok(n) => n, Err(_) => { console::puts("  bad pps\n"); return; }
+    };
+    let burst: u32 = match args[2].parse() {
+        Ok(n) => n, Err(_) => { console::puts("  bad burst\n"); return; }
+    };
+    crate::net::flow_shaper::set_default_by_name(args[0], pps, burst);
+    console::puts("  cpol-flow-rate "); console::puts(args[0]);
+    console::puts(" -> per-flow pps="); print_num(pps as usize);
+    console::puts(" burst="); print_num(burst as usize);
+    console::puts("  OK\n");
+}
+
+fn cmd_cpol_flow_rate_selftest() {
+    console::puts_hi("  CPOL-FLOW-RATE SELF-TEST (per-flow buckets)\n");
+    match crate::net::flow_shaper::selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS flow_shaper: per-destination independence\n");
+            console::puts("    flow A allowed: "); print_num(r.flow_a_allowed as usize);
+            console::puts("  (expected 5)\n");
+            console::puts("    flow B allowed: "); print_num(r.flow_b_allowed as usize);
+            console::puts("  (expected 5)\n");
+            console::puts("    independent:    ");
+            console::puts(if r.both_independently_capped { "yes\n" } else { "no\n" });
+        }
+        Err(e) => { console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n"); }
     }
 }
 

@@ -3,6 +3,7 @@ pub mod beacon;
 pub mod cave_policy;
 pub mod cave_shaper;
 pub mod dns;
+pub mod flow_shaper;
 pub mod ethernet;
 pub mod firewall;
 pub mod http;

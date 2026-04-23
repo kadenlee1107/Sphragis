@@ -1683,23 +1683,30 @@ pub fn classify(frame: &[u8]) -> PktVerdict {
     );
     match sv {
         SniVerdict::Allow => {
-            // Second-layer defense: rate limiter (packets AND bytes).
+            // Second-layer defense: aggregate cave shaper.
             use super::cave_shaper::{check_and_debit_sized_by_name, RateVerdict};
             match check_and_debit_sized_by_name(&cave, frame.len()) {
-                RateVerdict::Unlimited | RateVerdict::Ok => {
-                    PKT_ALLOW.fetch_add(1, Ordering::Relaxed);
-                    // Anomaly-detection side effect: record this flow
-                    // in the beacon detector so periodicity anomalies
-                    // surface even when rate/policy let the flow pass.
-                    let cave_id = cave_policy::cave_id_from_name(&cave);
-                    super::beacon::record(&cave_id, flow.dst_ip, flow.dst_port);
-                    PktVerdict::Allow
-                }
                 RateVerdict::OverLimit => {
                     DROP_RATE.fetch_add(1, Ordering::Relaxed);
-                    PktVerdict::DropRate
+                    return PktVerdict::DropRate;
                 }
+                _ => {}
             }
+            // 2b. Per-flow shaper: if the cave has a flow default set,
+            // the (cave, dst_ip, dst_port) tuple has its own bucket too.
+            // This stops spread-DDoS where a single cave's aggregate
+            // stays under budget by distributing across many victims.
+            let cave_id = cave_policy::cave_id_from_name(&cave);
+            match super::flow_shaper::check_and_debit(&cave_id, flow.dst_ip, flow.dst_port) {
+                super::cave_shaper::RateVerdict::OverLimit => {
+                    DROP_RATE.fetch_add(1, Ordering::Relaxed);
+                    return PktVerdict::DropRate;
+                }
+                _ => {}
+            }
+            PKT_ALLOW.fetch_add(1, Ordering::Relaxed);
+            super::beacon::record(&cave_id, flow.dst_ip, flow.dst_port);
+            PktVerdict::Allow
         }
         SniVerdict::DropSni => {
             DROP_SNI.fetch_add(1, Ordering::Relaxed);
