@@ -11,6 +11,121 @@ end of a session.
 
 ---
 
+## 2026-04-23 17:00 — Mac — demand paging lands; content_shell hits mysterious text-memory corruption
+
+Kaden said "keep going bro" and I landed **demand paging** (commit
+23a4dc0d) for V8's huge mmap reservations. Now content_shell's
+mprotect calls actually succeed AND subsequent EL0 accesses work —
+the data-abort handler lazily allocates 4 KB pages, walks/creates
+L1→L2→L3 tables (new `demand_page.rs` module), installs an L3 entry
+with EL0 RWX, tlbi + dsb + isb, returns. Each huge mmap gets
+recorded in a per-boot ReservationTable (keyed by the cave's L1
+phys) that the fault handler consults.
+
+content_shell now gets **much farther** — through multiple mprotects
+of V8's pointer-compression and trusted-sandbox heaps, into real
+V8 heap use, and finally into a new crash:
+
+  !!! UNHANDLED EC=0 !!!
+    ELR: 0x11a4ff44  insn=0x199b45b8  ISS=0x0
+
+Deterministic (two runs, same ELR + same insn). EC=0 means the
+CPU saw an encoded instruction it didn't recognise. `0x199b45b8`
+decodes loosely as "load/store" family but the specific bit pattern
+isn't a standard ARMv8 instruction.
+
+### The weird part
+
+The file at content_shell vaddr 0x1a4ff44 (PT_LOAD R-X, mapped
+1:1 into the cave at VA 0x11a4ff44) contains bytes
+`5f 24 03 d5 c0 03 5f d6` — that's `HINT #0x22` (BTI c landing pad)
+followed by `RET`. Perfectly legitimate aarch64.
+
+But the kernel reads `0x199b45b8` from VA 0x11a4ff44 (which
+translates to phys 0x5c64ff44 via the cave's 2 MB block mapping).
+Something overwrote the original BTI c + RET.
+
+Scanned `.rela.dyn` and `.rela.plt` for any relocation targeting
+vaddr 0x1a4ff44 — **zero hits**. No legitimate reloc reason for
+that memory to be modified. Yet the bytes differ between file and
+live memory.
+
+Suspects (untested — sleep on this):
+
+1. Our `apply_relocs_cross` bounds check lets a RELATIVE reloc
+   with a pathological r_offset + value_offset combo land on
+   .text. Each lib's check uses `phys_base < patch_addr < phys_range_end`
+   for the CURRENT lib. A hand-audit says no cross-lib can reach
+   content_shell's text (their phys_base values are all > content
+   _shell's phys + total_size), but the i64 arithmetic in `let
+   patch_addr = (r_offset as i64 + patch_offset) as usize;` has a
+   wrapping case worth instrumenting.
+
+2. The PT_LOAD copy itself is wrong — `copy_nonoverlapping` with
+   a filesz of 130 MB (content_shell text). If the pointer math
+   was off by one segment header size, we'd be copying the WRONG
+   bytes into text's phys region.
+
+3. Something in the demand-paging handler's L2/L3 allocation
+   accidentally wrote into the cave slab. `alloc_kernel_frame`
+   can return frames anywhere in the kernel pool; if the kernel
+   pool overlaps the cave slab (shouldn't — kernel pool is top
+   of RAM, cave slab is middle), writes to a freshly-allocated
+   L3 table zero out 4 KB of actually-live cave memory.
+
+   This feels most likely. The kernel pool runs
+   `[total - KERNEL_RESERVED_FRAMES, total)` counting from top;
+   cave allocator runs from LOW frames upward. Unless the cave
+   grew into kernel-pool territory for content_shell (188 MB
+   contiguous allocation starting at 0x5AC00000). Observe: the
+   initrd reservation at 0x48000000..0x59C723C4 ends RIGHT before
+   0x5A... — are kernel-pool frames being handed back near the
+   initrd tail and colliding with content_shell's tail?
+
+### Diagnostic improvements in 23a4dc0d
+
+Exception handler now dumps the faulting instruction word + ISS
+for EC=0 (not just ELR). Makes the next undefined-insn crash a
+one-shot diagnostic.
+
+### 8 commits today on the Chromium branch
+
+  eabded85 — DTB-initrd delivery (this morning, carry-over)
+  9ee74129 — pipeline works with tests/hello
+  28f973f2 — real content_shell loads to __libc_start_main sentinel
+  ee004ba1 — in-kernel dynamic linker, 575/600 symbols
+  c4a110b0 — session journal (first dynamic-linker one)
+  5c23ac62 — content_shell RUNS and exits cleanly
+  c12e051d — syscall trace + huge-mmap reservation stub
+  98e9b5c3 — document demand-paging boundary (reverted in situ)
+  b91b2b03 — session journal (V8 heap boundary)
+  23a4dc0d — demand paging implemented
+
+### Morning trailhead
+
+`grep demand_page src/batcave/linux/*.rs` — the new module.
+`python3 scripts/qemu_chromium_pipeline_smoke.py` — reproduce.
+Expected: ELR=0x11a4ff44 insn=0x199b45b8.
+
+Primary question: **why is content_shell's text modified at this
+VA, given no relocation targets it?** Approach order:
+
+1. Add a "canary read" right after `stage_copy_and_parse`:
+   `uart::puts(bytes at phys 0x5c64ff44)`. If it's already
+   0x199b45b8 there, the PT_LOAD copy is wrong.
+   If it's 0xd503245f, something AFTER loading writes over it
+   (reloc bug OR demand-page L3 alloc collision).
+
+2. If the latter: instrument `apply_relocs_cross` to log every
+   write that lands in a content_shell text-segment address.
+   One rogue write identifies the culprit.
+
+3. If the former: fixed-size comparison of copied-in bytes against
+   file bytes over a range. Probably a stride / p_offset bug in
+   the PT_LOAD copy loop.
+
+---
+
 ## 2026-04-23 16:35 — Mac — content_shell reaches V8 heap setup; demand paging is next
 
 Kaden said "keep going bro no worries" so I pushed forward past the

@@ -859,9 +859,31 @@ pub fn load_archive_multi(
         stage_copy_and_parse(&mut libs[i])?;
     }
 
+    // Diagnostic: dump 8 bytes at content_shell vaddr 0x1a4ff44 to see
+    // if text is already corrupted post-copy. File says 0xd503245f
+    // (BTI c) + 0xd65f03c0 (RET).
+    {
+        let check_phys = libs[0].info.phys_base + 0x1a4ff44;
+        let v0 = unsafe { core::ptr::read_volatile(check_phys as *const u64) };
+        let v8 = unsafe { core::ptr::read_volatile((check_phys + 8) as *const u64) };
+        uart::puts("[loader/multi] post-copy check phys=0x"); print_hex(check_phys as u64);
+        uart::puts(" bytes=0x"); print_hex(v0);
+        uart::puts(" 0x"); print_hex(v8);
+        uart::puts("\n");
+    }
+
     // --- Second pass per lib: apply relocations with cross-module lookup ---
     for i in 0..lib_count {
         apply_relocs_cross(&libs, lib_count, i)?;
+    }
+
+    // Same diagnostic after reloc — shows whether a reloc corrupted it.
+    {
+        let check_phys = libs[0].info.phys_base + 0x1a4ff44;
+        let v0 = unsafe { core::ptr::read_volatile(check_phys as *const u64) };
+        uart::puts("[loader/multi] post-reloc check phys=0x"); print_hex(check_phys as u64);
+        uart::puts(" bytes=0x"); print_hex(v0);
+        uart::puts("\n");
     }
 
     // Flush i/d cache over the full reserved region.
