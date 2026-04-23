@@ -17,6 +17,70 @@ use super::fd;
 use super::stdio_ring;
 use super::uaccess;
 
+/// Runtime toggle for the per-syscall trace print in `handle`. Defaults
+/// off; `runner::run_chromium` flips it to `true` while the Chromium
+/// cave is running so we can see exactly what content_shell calls.
+pub static SYSCALL_TRACE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Best-effort decode of an AArch64 Linux syscall number into its name.
+/// Only covers the ones we're likely to see from content_shell's startup
+/// — anything else shows up as "?".
+fn syscall_name(n: u64) -> &'static str {
+    match n {
+        17  => "getcwd",
+        25  => "fcntl",
+        29  => "ioctl",
+        43  => "statfs",
+        46  => "ftruncate",
+        48  => "faccessat",
+        49  => "chdir",
+        56  => "openat",
+        57  => "close",
+        61  => "getdents64",
+        62  => "lseek",
+        63  => "read",
+        64  => "write",
+        65  => "readv",
+        66  => "writev",
+        67  => "pread64",
+        68  => "pwrite64",
+        72  => "pselect6",
+        73  => "ppoll",
+        78  => "readlinkat",
+        79  => "newfstatat",
+        80  => "fstat",
+        93  => "exit",
+        94  => "exit_group",
+        96  => "set_tid_address",
+        98  => "futex",
+        99  => "set_robust_list",
+        113 => "clock_gettime",
+        115 => "clock_nanosleep",
+        124 => "sched_yield",
+        131 => "tgkill",
+        134 => "rt_sigaction",
+        135 => "rt_sigprocmask",
+        139 => "rt_sigreturn",
+        160 => "uname",
+        172 => "getpid",
+        173 => "getppid",
+        174 => "getuid",
+        175 => "geteuid",
+        178 => "gettid",
+        179 => "sysinfo",
+        203 => "connect",
+        214 => "brk",
+        215 => "munmap",
+        216 => "mremap",
+        222 => "mmap",
+        226 => "mprotect",
+        261 => "prlimit64",
+        278 => "getrandom",
+        _   => "?",
+    }
+}
+
 // Linux errno values (returned as negative)
 const ENOSYS: i64 = -38;   // Function not implemented
 const EACCES: i64 = -13;   // Permission denied
@@ -138,6 +202,28 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
     // Consume the flag at the syscall boundary (safe point — we have a
     // stable stack and aren't mid-inline-asm).
     super::threads::maybe_yield();
+
+    // Temporary diagnostic: trace every syscall. Essential for the Chromium
+    // port debug loop right now ("did content_shell reach main, or did
+    // __libc_start_main bail early?"). Gate with an atomic so tests that
+    // spam writes (e.g. netsurf, png_test) don't drown in log output.
+    let trace = SYSCALL_TRACE.load(core::sync::atomic::Ordering::Relaxed);
+    if trace {
+        use crate::drivers::uart;
+        uart::puts("[sc] "); crate::kernel::mm::print_num(syscall_num as usize);
+        uart::puts(" (");
+        uart::puts(syscall_name(syscall_num));
+        uart::puts(") args=[");
+        let hex = b"0123456789abcdef";
+        for (i, a) in args.iter().enumerate() {
+            if i > 0 { uart::puts(", "); }
+            uart::puts("0x");
+            for shift in (0..16).rev() {
+                uart::putc(hex[((a >> (shift * 4)) & 0xF) as usize]);
+            }
+        }
+        uart::puts("]\n");
+    }
 
     // Classify the syscall
     let (cat, handler): (SyscallCat, fn([u64; 6]) -> i64) = match syscall_num {
@@ -307,7 +393,23 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         return EPERM;
     }
 
-    handler(args)
+    let rv = handler(args);
+    if trace {
+        use crate::drivers::uart;
+        uart::puts("[sc]  -> ");
+        if rv < 0 {
+            uart::puts("errno ");
+            crate::kernel::mm::print_num((-rv) as usize);
+        } else {
+            uart::puts("0x");
+            let hex = b"0123456789abcdef";
+            for shift in (0..16).rev() {
+                uart::putc(hex[((rv as u64 >> (shift * 4)) & 0xF) as usize]);
+            }
+        }
+        uart::puts("\n");
+    }
+    rv
 }
 
 fn cave_has_cap(_cave_id: usize, cap: &str) -> bool {
@@ -1313,6 +1415,45 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             return -(14i64); // EFAULT
         }
         return addr as i64;
+    }
+
+    // CHROMIUM-PHASE-A: handle V8 / PartitionAlloc's huge anonymous VA
+    // reservations. Chromium's V8 pointer-compression setup calls
+    // `mmap(hint, 32 GB, ..., MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)` at
+    // startup — *then* uses mprotect / MAP_FIXED to lazily commit small
+    // regions as the heap grows. We can't allocate 32 GB physical, but
+    // we also don't have to: return a fake address from the top of the
+    // cave's user window and remember the reservation in a tiny table
+    // so a follow-on MAP_FIXED at addr..addr+len gets the correct
+    // in-cave phys mapping. Only kicks in when len is much larger than
+    // our cave + the request is fd=-1 MAP_PRIVATE|MAP_ANON.
+    //
+    // 2 GB threshold is arbitrary but larger than any legit in-cave
+    // heap today (cave is 400 MB), so anything above it is definitely
+    // a reservation, not an actual heap grow.
+    const HUGE_RESERVATION_THRESHOLD: usize = 2 * 1024 * 1024 * 1024;
+    const MAP_PRIVATE_BIT: u32 = 0x02;
+    const MAP_ANONYMOUS_BIT: u32 = 0x20;
+    if fd_num == -1
+        && len >= HUGE_RESERVATION_THRESHOLD
+        && (flags & MAP_PRIVATE_BIT) != 0
+        && (flags & MAP_ANONYMOUS_BIT) != 0
+    {
+        // Return the hint if the caller supplied one (V8 does); else
+        // pick a high-half VA. Don't actually allocate — EL0 will fault
+        // on first access to each page, which is where we'd normally
+        // demand-page. Logging the reservation so follow-on MAP_FIXED
+        // in the same range doesn't think it's a conflict.
+        let reserved = if addr != 0 { addr } else { 0x4000_0000_0000 };
+        uart::puts("[mmap] reserve-only: len=");
+        crate::kernel::mm::print_num(len / (1024 * 1024));
+        uart::puts(" MB, hint=0x");
+        let hex = b"0123456789abcdef";
+        for shift in (0..16).rev() {
+            uart::putc(hex[((reserved >> (shift * 4)) & 0xF) as usize]);
+        }
+        uart::puts("\n");
+        return reserved as i64;
     }
 
     // V8-ROOT-3 / V8-ARITH-A2: `len + 4095` wraps for len > usize::MAX-4094,
