@@ -108,6 +108,118 @@ CAVE_VOLUMES_DIR.mkdir(parents=True, exist_ok=True)
 CAVE_MOUNTS = {}   # name -> (dmg_path, mount_point)
 CAVE_MOUNTS_LOCK = threading.Lock()
 
+# Integration #4: Bat_OS-controlled egress policy for container traffic.
+# Containers are pointed at an HTTP CONNECT proxy (see
+# start_egress_proxy) via the HTTPS_PROXY / HTTP_PROXY env var. Every
+# CONNECT is checked against FW_ALLOWLIST. Bat_OS maintains the
+# authoritative policy in src/net/firewall.rs and pushes allow/deny
+# updates via the FW_ALLOW / FW_DENY / FW_LIST protocol commands.
+# Design clause delivered: "All traffic through allowlist firewall."
+FW_ALLOWLIST = set()  # host:port strings. Empty set = DENY ALL.
+FW_LOCK = threading.Lock()
+EGRESS_PROXY_PORT = 9998  # reachable from containers as 10.0.2.2:9998
+
+def fw_is_allowed(target: str) -> bool:
+    """Check if `host:port` is in the current allowlist. Exact match
+    or `*:port` wildcard. `*` alone matches everything (open gate)."""
+    with FW_LOCK:
+        if "*" in FW_ALLOWLIST: return True
+        if target in FW_ALLOWLIST: return True
+        port_part = ":" + target.rsplit(":", 1)[1] if ":" in target else ""
+        if port_part and ("*" + port_part) in FW_ALLOWLIST: return True
+        return False
+
+def fw_allow(target: str):
+    with FW_LOCK: FW_ALLOWLIST.add(target)
+    log(f"[fw] allow {target}")
+
+def fw_deny(target: str):
+    with FW_LOCK: FW_ALLOWLIST.discard(target)
+    log(f"[fw] deny  {target}")
+
+def fw_snapshot():
+    with FW_LOCK: return sorted(FW_ALLOWLIST)
+
+def start_egress_proxy():
+    """Tiny HTTP CONNECT proxy. Containers → this proxy → upstream.
+    Every CONNECT checks FW_ALLOWLIST. Non-HTTPS proxies not supported
+    (CONNECT only — GET/POST tunneled requests out of scope here, and
+    HTTPS is what most Kali tools default to)."""
+    import socket, select
+    def handle(conn: socket.socket, addr):
+        try:
+            conn.settimeout(30)
+            # Read initial CONNECT line + headers
+            data = b""
+            while b"\r\n\r\n" not in data and len(data) < 8192:
+                chunk = conn.recv(1024)
+                if not chunk: break
+                data += chunk
+            if not data.startswith(b"CONNECT "):
+                conn.sendall(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
+                return
+            # CONNECT host:port HTTP/1.1
+            target_line = data.split(b"\r\n", 1)[0].decode("ascii", "replace")
+            parts = target_line.split()
+            if len(parts) < 2:
+                conn.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+                return
+            target = parts[1]
+            if not fw_is_allowed(target):
+                log(f"[fw] DENY  CONNECT {target} from {addr[0]}:{addr[1]}")
+                conn.sendall(
+                    b"HTTP/1.1 403 Forbidden\r\nX-Bat-Firewall: denied\r\n"
+                    b"Content-Length: 30\r\n\r\n"
+                    b"denied by Bat_OS firewall\n")
+                return
+            # Allowed — connect upstream + tunnel
+            host, port = target.rsplit(":", 1)
+            try:
+                upstream = socket.create_connection((host, int(port)), timeout=15)
+            except Exception as e:
+                conn.sendall(f"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
+                             .encode())
+                log(f"[fw] upstream fail {target}: {e}")
+                return
+            log(f"[fw] ALLOW CONNECT {target} from {addr[0]}:{addr[1]}")
+            conn.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            # Bidirectional tunnel. Simple select loop.
+            socks = [conn, upstream]
+            while True:
+                r, _, _ = select.select(socks, [], [], 120)
+                if not r: break
+                done = False
+                for s in r:
+                    try:
+                        buf = s.recv(8192)
+                    except Exception:
+                        done = True; break
+                    if not buf: done = True; break
+                    other = upstream if s is conn else conn
+                    try:
+                        other.sendall(buf)
+                    except Exception:
+                        done = True; break
+                if done: break
+            try: upstream.close()
+            except Exception: pass
+        finally:
+            try: conn.close()
+            except Exception: pass
+
+    def server():
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("0.0.0.0", EGRESS_PROXY_PORT))
+        sock.listen(16)
+        log(f"[fw] egress proxy listening on 0.0.0.0:{EGRESS_PROXY_PORT}")
+        while True:
+            conn, addr = sock.accept()
+            threading.Thread(target=handle, args=(conn, addr), daemon=True).start()
+
+    threading.Thread(target=server, daemon=True).start()
+
 def create_encrypted_volume(name: str, key_hex: str, size_mb: int = 64) -> Path:
     """Create + attach an AES-256-encrypted APFS disk image.
     Returns the Mac-side mount path (e.g. /Volumes/batcave-foo)."""
@@ -425,6 +537,22 @@ def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "",
         except Exception as e:
             return False, f"encrypted volume create failed: {e}"
 
+    # Integration #4: point the cave at the Bat_OS-gated egress proxy.
+    # Docker's default bridge resolves `host.docker.internal` to the
+    # Mac, so the proxy (on 0.0.0.0:9998) is reachable. Any tool that
+    # honours HTTPS_PROXY — curl, wget, apt, pip, git, go, most Kali
+    # CLI tools — goes through the firewall gate. Non-HTTP traffic
+    # (nmap raw sockets, ICMP) bypasses; for those the cap-add system
+    # (phase 4) gates what can even be attempted.
+    proxy_url = f"http://host.docker.internal:{EGRESS_PROXY_PORT}"
+    env_args = [
+        "-e", f"HTTPS_PROXY={proxy_url}",
+        "-e", f"HTTP_PROXY={proxy_url}",
+        "-e", f"https_proxy={proxy_url}",
+        "-e", f"http_proxy={proxy_url}",
+        "--add-host", "host.docker.internal:host-gateway",
+    ]
+
     # Build the run command. We run `sleep infinity` as the entrypoint so
     # the container stays alive; tools are invoked via `docker exec`.
     cmd = [
@@ -434,6 +562,7 @@ def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "",
         "--dns", "1.1.1.1", "--dns", "8.8.8.8",
         *cap_args,
         *volume_args,
+        *env_args,
         "--entrypoint", "sleep",
         image, "infinity",
     ]
@@ -656,6 +785,23 @@ class Handler(socketserver.StreamRequestHandler):
                     self._send("EOF")
                     continue
 
+                # Integration #4: firewall policy push from Bat_OS.
+                if line.startswith("FW_ALLOW "):
+                    target = line.split(None, 1)[1].strip()
+                    fw_allow(target)
+                    self._send("OK allowed")
+                    continue
+                if line.startswith("FW_DENY "):
+                    target = line.split(None, 1)[1].strip()
+                    fw_deny(target)
+                    self._send("OK denied")
+                    continue
+                if line == "FW_LIST":
+                    for t in fw_snapshot():
+                        self._send(t)
+                    self._send("EOF")
+                    continue
+
                 if line.startswith("DESTROY "):
                     name = line.split(maxsplit=1)[1].strip()
                     ok, msg = cmd_destroy(name)
@@ -693,6 +839,9 @@ def main():
 
     # Start deadman watcher
     threading.Thread(target=deadman_watcher, daemon=True).start()
+
+    # Integration #4: start the Bat_OS-gated egress HTTP CONNECT proxy.
+    start_egress_proxy()
 
     log("=" * 64)
     log(f"batcaved starting  addr={args.addr}:{args.port}  token={args.token}")

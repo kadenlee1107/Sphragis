@@ -147,6 +147,9 @@ fn execute(cmd: &str) {
         "ipc-selftest"    => cmd_ipc_selftest(),
         "secure-ipc-selftest" => cmd_secure_ipc_selftest(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
+        "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
+        "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
+        "batcave-fw-list"  => cmd_batcave_fw_list(),
         "smc-probe" => cmd_smc_probe(),
         "smc-pet" => cmd_smc_pet_start(),
         "smc-stop" => cmd_smc_pet_stop(),
@@ -420,6 +423,61 @@ fn hex_nibble(b: u8) -> u8 {
         b'a'..=b'f' => b - b'a' + 10,
         b'A'..=b'F' => b - b'A' + 10,
         _ => 255,
+    }
+}
+
+// Integration #4: Bat_OS pushes firewall rules to the daemon's egress proxy.
+fn cmd_batcave_fw_allow(target: &str) {
+    if target.is_empty() {
+        console::puts("  usage: batcave-fw-allow <host:port>  (or *:port / *)\n");
+        return;
+    }
+    let r = crate::batcave::docker_client::with_daemon(|| {
+        crate::batcave::docker_client::fw_allow(target)
+    });
+    match r {
+        Ok(()) => {
+            console::puts("  [fw] ALLOW "); console::puts(target);
+            console::puts("  → daemon proxy will tunnel CONNECTs to this target\n");
+        }
+        Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
+    }
+}
+fn cmd_batcave_fw_deny(target: &str) {
+    if target.is_empty() {
+        console::puts("  usage: batcave-fw-deny <host:port>\n");
+        return;
+    }
+    let r = crate::batcave::docker_client::with_daemon(|| {
+        crate::batcave::docker_client::fw_deny(target)
+    });
+    match r {
+        Ok(()) => {
+            console::puts("  [fw] DENY "); console::puts(target); console::puts("\n");
+        }
+        Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
+    }
+}
+fn cmd_batcave_fw_list() {
+    let r = crate::batcave::docker_client::with_daemon(|| {
+        crate::batcave::docker_client::fw_list()
+    });
+    match r {
+        Ok(list) => {
+            console::puts_hi("  BATCAVE EGRESS ALLOWLIST (daemon-enforced)\n");
+            console::puts("  ----------------------------------------------\n");
+            if list.is_empty() {
+                console::puts("  (empty — DEFAULT DENY ALL)\n");
+            } else {
+                for t in &list {
+                    console::puts("  "); console::puts(t); console::puts("\n");
+                }
+            }
+            console::puts("  ----------------------------------------------\n  ");
+            print_num(list.len());
+            console::puts(" entries\n");
+        }
+        Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
     }
 }
 

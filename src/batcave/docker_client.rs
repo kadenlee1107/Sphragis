@@ -310,6 +310,38 @@ pub fn ping() -> Result<(), &'static str> {
     if reply == "PONG" { Ok(()) } else { Err("no pong") }
 }
 
+// ───── Firewall policy push (Integration #4) ──────────────────
+
+/// Add a `host:port` (or `*:port` wildcard) to the daemon's egress
+/// allowlist. Any container CONNECT targeting this endpoint succeeds;
+/// anything else gets 403 Forbidden from the proxy.
+pub fn fw_allow(target: &str) -> Result<(), &'static str> {
+    let mut cmd = String::from("FW_ALLOW ");
+    cmd.push_str(target);
+    send_cmd(&cmd)?;
+    let reply = recv_line()?;
+    if reply.starts_with("OK") { Ok(()) } else { Err("fw_allow rejected") }
+}
+
+pub fn fw_deny(target: &str) -> Result<(), &'static str> {
+    let mut cmd = String::from("FW_DENY ");
+    cmd.push_str(target);
+    send_cmd(&cmd)?;
+    let reply = recv_line()?;
+    if reply.starts_with("OK") { Ok(()) } else { Err("fw_deny rejected") }
+}
+
+pub fn fw_list() -> Result<Vec<String>, &'static str> {
+    send_cmd("FW_LIST")?;
+    let mut out = Vec::new();
+    for _ in 0..4096 {
+        let line = recv_line()?;
+        if line == "EOF" { break; }
+        if !line.is_empty() { out.push(line); }
+    }
+    Ok(out)
+}
+
 // ───── Convenience wrapper: open-do-close ─────────────────────────
 
 /// Run a closure with an authenticated connection; auto-disconnect on
