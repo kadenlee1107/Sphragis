@@ -11,6 +11,51 @@ end of a session.
 
 ---
 
+## 2026-04-23 09:00 — Mac — Defense-in-depth: six layers shipped (SNI, syscall, byte-rate, beacon, flow-rate + upgraded red-team demo)
+
+Kaden: "honestly do 1 and 2 and then whatever doesn't need my intervention"
+
+Six commits. Each layer closes a class of attacks the previous
+layers couldn't see.
+
+| commit | layer | attack it stops |
+|---|---|---|
+| b849848a | SNI pinning per-cave | TLS domain-fronting / CDN abuse to allowed IP |
+| be27103d | syscall_filter per-cave | host-side RCE pivoting (connect/sendmsg/execve) |
+| 0a1c2861 | byte-rate shaper | jumbo-frame volume attacks that evade pps limit |
+| 94c4dcf4 | beacon detector | low-and-slow C2 beaconing under rate budget |
+| c0772886 | flow_shaper (per-flow rate) | distributed fan-out DDoS across allowed dsts |
+| 9a8d9071 | redteam_demo upgrade | 10-round demo exercising SNI + flow + existing |
+
+**Where each layer lives:**
+  - `src/net/cave_policy.rs`       — allowlist with optional SNI pin
+  - `src/net/cave_shaper.rs`       — aggregate per-cave pps + bps
+  - `src/net/flow_shaper.rs`       — per-(cave, dst_ip, dst_port) bucket
+  - `src/net/beacon.rs`            — CoV-based periodicity detector
+  - `src/batcave/syscall_filter.rs` — host-side per-cave syscall denylist
+  - `src/net/nat.rs` classifier composes them: cave_policy+SNI →
+    cave_shaper → flow_shaper → (observe beacon) → Allow
+
+**Regression:** 23 automated QEMU tests + 1 red-team demo, all green:
+  15 packet-pipeline tests from yesterday +
+  qemu_nat_ratelimit_selftest + qemu_nat_ratelimit_e2e +
+  qemu_sni_selftest + qemu_sni_e2e +
+  qemu_syscall_filter_selftest + qemu_byterate_e2e +
+  qemu_beacon_selftest + qemu_flow_rate_selftest.
+  Red-team demo verdict: **DEFENDED · four layers held**
+    drop-policy=44, drop-rate=145, drop-sni=5, allow=16.
+
+**What remains deferred (genuinely needs sudo or M4 bare metal):**
+  - Real-Docker-through-vmnet (sudo QEMU + macvlan; wrapper ready).
+  - PMGR gate-enable + USB2PHY + SPI keyboard + AIC2 base (M4 TODOs).
+  - Browser / Chromium port (DESIGN_BROWSER + DESIGN_CHROMIUM; huge).
+  - In-code TODOs (ELF PT_LOAD PF_X/PF_W, loader alignment, js array
+    grow, typeof callable) — all smaller than the defense work above.
+
+Session totals since resume: **38 commits** pushed to origin.
+
+---
+
 ## 2026-04-22 22:35 — Mac — Followup #3c final deferred items closed
 
 Kaden: "lets finish these last deferred". Three more commits, the
