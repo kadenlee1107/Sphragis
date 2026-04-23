@@ -251,6 +251,19 @@ pub fn cave_seal(name: &str) -> Result<(), &'static str> {
     if reply.starts_with("OK") { Ok(()) } else { Err("cave_seal rejected") }
 }
 
+/// Install a tool inside a Docker cave's container. Daemon auto-
+/// detects the package manager (apt / apk / dnf) based on what's
+/// present in the image.
+pub fn install_tool(cave: &str, tool: &str) -> Result<(), &'static str> {
+    let mut cmd = String::from("INSTALL_TOOL ");
+    cmd.push_str(cave);
+    cmd.push(' ');
+    cmd.push_str(tool);
+    send_cmd(&cmd)?;
+    let reply = recv_line()?;
+    if reply.starts_with("OK") { Ok(()) } else { Err("install_tool rejected") }
+}
+
 pub fn destroy(name: &str) -> Result<(), &'static str> {
     let mut cmd = String::from("DESTROY ");
     cmd.push_str(name);

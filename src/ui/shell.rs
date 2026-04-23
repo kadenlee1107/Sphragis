@@ -2316,6 +2316,31 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
         "install" => {
             if arg1.is_empty() || arg2.is_empty() {
                 console::puts("  usage: batcave install <cave> <tool>\n");
+            } else if cave::find_id(arg1)
+                .map(|id| unsafe { cave::CAVES[id].is_docker() })
+                .unwrap_or(false)
+            {
+                // Docker-backed cave: dispatch to the daemon, which will
+                // `docker exec apt-get install` (or apk / dnf) inside the
+                // container. This is the path that gets real Kali tools
+                // into real containers — busybox symlink trick below only
+                // works for native caves.
+                console::puts("  Installing "); console::puts(arg2);
+                console::puts(" in "); console::puts(arg1);
+                console::puts(" via daemon apt/apk...\n");
+                let r = crate::batcave::docker_client::with_daemon(|| {
+                    crate::batcave::docker_client::install_tool(arg1, arg2)
+                });
+                match r {
+                    Ok(()) => {
+                        // Also register in the cave table so `batcave list`
+                        // shows it.
+                        let _ = cave::install_tool(arg1, arg2);
+                        console::puts("  "); console::puts(arg2);
+                        console::puts(" installed in Docker cave\n");
+                    }
+                    Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
+                }
             } else {
                 // Enter the cave first
                 cave::enter(arg1).ok();

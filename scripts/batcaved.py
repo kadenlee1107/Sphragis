@@ -57,6 +57,7 @@ USAGE
 """
 import argparse
 import json
+import re
 import shlex
 import socket
 import socketserver
@@ -993,6 +994,45 @@ class Handler(socketserver.StreamRequestHandler):
                     _, ip, cave = parts
                     cave_net_register(ip.strip(), cave.strip())
                     self._send("OK bound")
+                    continue
+
+                # Install a tool inside a Docker cave's container.
+                # Auto-detects the package manager (apt / apk / dnf)
+                # based on what's actually present in the image.
+                if line.startswith("INSTALL_TOOL "):
+                    parts = line.split(None, 2)
+                    if len(parts) != 3:
+                        self._send("ERR install_tool usage: INSTALL_TOOL <cave> <tool>")
+                        continue
+                    _, name, tool = parts
+                    cname = CAVE_PREFIX + name
+                    # Safety: tool name should be a plain package name, not
+                    # a shell expression. Enforce [a-zA-Z0-9_.-]+ only.
+                    if not re.match(r"^[a-zA-Z0-9_.+-]+$", tool):
+                        self._send("ERR install_tool: bad tool name")
+                        continue
+                    # Detect package manager.
+                    pm = None
+                    for candidate, install_cmd in (
+                        ("apt-get", ["apt-get", "install", "-y", "--no-install-recommends", tool]),
+                        ("apk",     ["apk",     "add",     "--no-cache",                     tool]),
+                        ("dnf",     ["dnf",     "install", "-y",                             tool]),
+                    ):
+                        probe = docker("exec", cname, "which", candidate, check=False)
+                        if probe.returncode == 0:
+                            pm = (candidate, install_cmd); break
+                    if pm is None:
+                        self._send("ERR no known package manager (apt/apk/dnf) in container")
+                        continue
+                    # apt-get needs an update first.
+                    if pm[0] == "apt-get":
+                        docker("exec", cname, "apt-get", "update", check=False)
+                    result = docker("exec", cname, *pm[1], check=False)
+                    if result.returncode != 0:
+                        self._send("ERR install failed: " + (result.stderr.strip()[:120] or "unknown"))
+                        continue
+                    log(f"INSTALL_TOOL {name} {tool} via {pm[0]} OK")
+                    self._send("OK installed via " + pm[0])
                     continue
 
                 # Seal: destroy persistent volume + zero cave key, leave
