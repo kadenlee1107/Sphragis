@@ -105,6 +105,12 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // V4: probe ARMv8.5 RNDR hardware RNG and wire it into crypto::rng.
     crypto::rng::probe_hw_rng();
 
+    // DESIGN_CRYPTO.md #11+#12: seed the OTP pad with fresh true-random
+    // bytes from the RNDR-backed CSPRNG. Tokens can then be dumped via
+    // `otp-dump` shell command at provisioning for operator to record
+    // offline, and consumed via the duress/deadman channels.
+    security::otp::init();
+
     // ═══════════════════════════════════════════
     // SECURITY INITIALIZATION
     // ═══════════════════════════════════════════

@@ -139,6 +139,9 @@ fn execute(cmd: &str) {
             }
         }
         "screen" => cmd_screen(parts[1]),
+        "otp-dump"    => cmd_otp_dump(),
+        "otp-stats"   => cmd_otp_stats(),
+        "otp-consume" => cmd_otp_consume(parts[1]),
         "smc-probe" => cmd_smc_probe(),
         "smc-pet" => cmd_smc_pet_start(),
         "smc-stop" => cmd_smc_pet_stop(),
@@ -330,6 +333,89 @@ fn cmd_uptime() {
 fn cmd_panic() {
     console::puts("  Triggering kernel panic...\n");
     panic!("user-triggered panic from shell");
+}
+
+// ── DESIGN_CRYPTO.md #11+#12: OTP duress + deadman pad handlers ──
+
+fn cmd_otp_dump() {
+    // Dump every token as hex. THIS IS THE PROVISIONING COMMAND —
+    // the operator should run it ONCE at first boot, record the
+    // output offline (paper / QR / air-gapped device), and never
+    // run it again unless rotating the pad.
+    console::puts_hi("  OTP PAD — RECORD OFFLINE, DO NOT RE-DUMP\n");
+    console::puts("  ──────────────────────────────────────────\n");
+    let found = crate::security::otp::dump_for_provisioning(&mut |slot, region, tok| {
+        console::puts("  [");
+        print_num(slot);
+        console::puts("] ");
+        // Pad slot number so columns align (slots 0..31 → 2 digits)
+        if slot < 10 { console::puts(" "); }
+        console::puts(region);
+        for _ in region.len()..8 { console::puts(" "); }
+        let hex = b"0123456789abcdef";
+        for &b in tok.iter() {
+            console::putc(hex[(b >> 4) as usize]);
+            console::putc(hex[(b & 0x0f) as usize]);
+        }
+        console::puts("\n");
+    });
+    if !found {
+        console::puts("  ERROR: OTP pad not initialised\n");
+    }
+    console::puts("  ──────────────────────────────────────────\n");
+    console::puts("  After this boot, tokens are consumed per-use. Store them.\n");
+}
+
+fn cmd_otp_stats() {
+    let (duress, deadman) = crate::security::otp::remaining();
+    console::puts_hi("  OTP PAD STATUS\n");
+    console::puts("  --------------\n");
+    console::puts("  Duress tokens:   ");
+    print_num(duress);
+    console::puts(" remaining\n");
+    console::puts("  Deadman tokens:  ");
+    print_num(deadman);
+    console::puts(" remaining\n");
+}
+
+fn cmd_otp_consume(hex: &str) {
+    if hex.len() != 64 {
+        console::puts("  usage: otp-consume <64-char-hex>\n");
+        return;
+    }
+    let mut tok = [0u8; 32];
+    for i in 0..32 {
+        let hi = hex_nibble(hex.as_bytes()[i * 2]);
+        let lo = hex_nibble(hex.as_bytes()[i * 2 + 1]);
+        if hi > 15 || lo > 15 {
+            console::puts("  ERROR: invalid hex\n");
+            return;
+        }
+        tok[i] = (hi << 4) | lo;
+    }
+    match crate::security::otp::consume(&tok) {
+        Some("duress") => {
+            console::puts("  DURESS TOKEN ACCEPTED — wiping now\n");
+            crate::security::wipe::execute(
+                crate::security::wipe::WipeReason::Duress, false);
+        }
+        Some("deadman") => {
+            console::puts("  DEADMAN TOKEN ACCEPTED — refreshing timer\n");
+            crate::security::deadman::refresh();
+        }
+        Some(_) | None => {
+            console::puts("  token rejected (invalid or already consumed)\n");
+        }
+    }
+}
+
+fn hex_nibble(b: u8) -> u8 {
+    match b {
+        b'0'..=b'9' => b - b'0',
+        b'a'..=b'f' => b - b'a' + 10,
+        b'A'..=b'F' => b - b'A' + 10,
+        _ => 255,
+    }
 }
 
 /// SMC ASC base on M4 T8132 (confirmed via ADT walk 2026-04-20):
