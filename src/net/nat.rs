@@ -69,6 +69,11 @@ static FRAG_DROPPED: AtomicU32 = AtomicU32::new(0);
 /// Number of times `send_with_fragmentation` had to split an oversized
 /// datagram back into IPv4 fragments before transmitting.
 static FRAG_REFRAGMENTED: AtomicU32 = AtomicU32::new(0);
+/// Packets allowed by cave_policy but dropped by cave_shaper because
+/// the cave exceeded its configured packet-rate budget. Second layer
+/// of defense against exfil bursts / C2 beaconing within an allowed
+/// destination.
+static DROP_RATE: AtomicU32 = AtomicU32::new(0);
 /// Frames pumped off nic 0 that were NOT NAT replies and got
 /// re-dispatched into the kernel's own IP stack. Tracks how many
 /// control-plane packets flowed through the NAT pump correctly.
@@ -103,6 +108,7 @@ pub struct Stats {
     pub frag_refragmented: u32,
     pub icmp_redirect_dropped: u32,
     pub icmp_src_quench_dropped: u32,
+    pub drop_rate: u32,
 }
 
 pub fn stats() -> Stats {
@@ -124,6 +130,7 @@ pub fn stats() -> Stats {
         frag_refragmented: FRAG_REFRAGMENTED.load(Ordering::Relaxed),
         icmp_redirect_dropped:   ICMP_REDIRECT_DROPPED.load(Ordering::Relaxed),
         icmp_src_quench_dropped: ICMP_SRC_QUENCH_DROPPED.load(Ordering::Relaxed),
+        drop_rate: DROP_RATE.load(Ordering::Relaxed),
     }
 }
 
@@ -145,6 +152,7 @@ pub fn reset_stats() {
     FRAG_REFRAGMENTED.store(0, Ordering::Relaxed);
     ICMP_REDIRECT_DROPPED.store(0, Ordering::Relaxed);
     ICMP_SRC_QUENCH_DROPPED.store(0, Ordering::Relaxed);
+    DROP_RATE.store(0, Ordering::Relaxed);
 }
 
 // ── ARP on nic 1 (caves interface) ──────────────────────────────
@@ -1441,6 +1449,10 @@ pub enum PktVerdict {
     /// we drop but count separately so operators can tell this is
     /// the "need larger MTU" case vs true garbage.
     DropFragment,
+    /// cave_policy approved the destination but the cave is over its
+    /// configured token-bucket rate. The cave's own shaper knows
+    /// more than we do here — debited or not.
+    DropRate,
 }
 
 /// The 5-tuple extracted from an outbound cave frame.
@@ -1563,8 +1575,20 @@ pub fn classify(frame: &[u8]) -> PktVerdict {
     let v = cave_policy::check_by_name(&cave, &dst_str, flow.dst_port, flow.proto);
     match v {
         cave_policy::Verdict::Allow => {
-            PKT_ALLOW.fetch_add(1, Ordering::Relaxed);
-            PktVerdict::Allow
+            // Second-layer defense: even when cave_policy permits the
+            // destination, the cave's shaper may rate-limit the cave.
+            // Debits one token when under budget.
+            use super::cave_shaper::{check_and_debit_by_name, RateVerdict};
+            match check_and_debit_by_name(&cave) {
+                RateVerdict::Unlimited | RateVerdict::Ok => {
+                    PKT_ALLOW.fetch_add(1, Ordering::Relaxed);
+                    PktVerdict::Allow
+                }
+                RateVerdict::OverLimit => {
+                    DROP_RATE.fetch_add(1, Ordering::Relaxed);
+                    PktVerdict::DropRate
+                }
+            }
         }
         cave_policy::Verdict::Drop => {
             PKT_DROP_POLICY.fetch_add(1, Ordering::Relaxed);

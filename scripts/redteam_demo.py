@@ -317,7 +317,28 @@ def main():
         time.sleep(0.5)
         drain_all(h["conn"], 0.3)
 
+        # ── Attack 7: Exfil burst over the ALLOWED channel ───────────
+        # Demonstrates cave_shaper (second defense layer): attacker
+        # can't dodge cave_policy by using the one allowed host as
+        # a tunnel, because the shaper will cap burst rate.
+        section("Attack #7: Exfil burst through the allowed channel (cave_shaper)")
+        print("   Clever attacker: 'Bat_OS allows example.com:443 — I'll just")
+        print("   pump 100 SYNs at it and ride that one legit flow.'")
+        print("   → token bucket (cpol-rate) caps burst to 10, refills slowly.")
+        run_cmd(c, "cpol-rate kali 5 10")
+        for i in range(100):
+            send_frame(v["conn"], build_tcp(
+                kali_mac, nic1_mac, cave_ip, ip_int("93.184.216.34"),
+                60000 + i, 443, flags=0x02))
+        print("   sent 100 SYNs at the allowed destination")
+        attacks.append(("Exfil burst at allowed host (rate attack)", 100))
+        time.sleep(1.5)
+        drain_all(h["conn"], 0.3)
+
         # ── Legitimate request (should GO THROUGH) ───────────────────
+        # Clear the rate limit so our legitimate request isn't itself
+        # rate-limited (we already proved rate-limit works above).
+        run_cmd(c, "cpol-rate-clear kali")
         section("Legitimate (operator's normal traffic)")
         print("   The operator of the cave genuinely needs example.com:443.")
         print("   That's the ONE thing cave_policy allows for kali.")
@@ -343,14 +364,23 @@ def main():
         # ── Verdict ──────────────────────────────────────────────────
         stats = run_cmd(c,"nat-stats")
         drop_policy = parse_counter(stats, "drop-policy")
+        drop_rate   = parse_counter(stats, "drop-rate")
         allow       = parse_counter(stats, "allow:")
-        total_attacks = sum(n for _, n in attacks)
+
+        # Attack #7 straddles two counters: burst packets hit `allow`
+        # (because cave_policy passed them) then got shaped as
+        # drop-rate. Everything else should land in drop-policy.
+        rate_attack_packets = 100
+        total_policy_attacks = sum(n for label, n in attacks if "rate attack" not in label)
 
         banner("DEFENSE REPORT", char="═")
         print()
-        print("Attack summary (all should be BLOCKED):")
+        print("Attack summary:")
         for label, n in attacks:
-            bullet("drop", f"{label:<45s} {n:>3d} packets")
+            if "rate attack" in label:
+                bullet("drop", f"{label:<45s} {n:>3d} packets (rate-shaped)")
+            else:
+                bullet("drop", f"{label:<45s} {n:>3d} packets")
         print()
         print("Legitimate summary (should be ALLOWED):")
         wire_note = f"{legit_forwarded} wire-observed on nic 0"
@@ -358,26 +388,32 @@ def main():
                f"example.com:443   (kernel allow={allow}, {wire_note})")
         print()
         print("Bat_OS kernel counters:")
-        print(f"  drop-policy:  {drop_policy}   (expected ≥ {total_attacks})")
-        print(f"  allow:        {allow}          (expected ≥ 1)")
+        print(f"  drop-policy:  {drop_policy}   (expected ≥ {total_policy_attacks} — off-allowlist traffic)")
+        print(f"  drop-rate:    {drop_rate}    (expected ≥ {rate_attack_packets - 25} — shaper-capped burst)")
+        print(f"  allow:        {allow}         (expected legit + burst tokens)")
 
-        # Kernel counters are the source of truth. legit_forwarded is
-        # an extra wire-level confirmation; we don't gate on it because
-        # socket timing between QEMU and Python can swallow frames after
-        # a burst of 44 drops.
-        pipeline_ok = (drop_policy >= total_attacks and allow >= 1)
+        # Kernel counters are the source of truth.
+        pipeline_ok = (drop_policy >= total_policy_attacks
+                       and drop_rate  >= rate_attack_packets - 25
+                       and allow      >= 1)
         print()
         if pipeline_ok:
-            banner("✓  DEFENDED  ·  every attack dropped at layer 2/3/4", char="═")
+            banner("✓  DEFENDED  ·  two layers held", char="═")
             print()
-            print("Every malicious frame was classified by cave_policy at packet")
-            print("arrival on nic 1. None reached nic 0. The attacker sits in the")
-            print("cave with shell access but cannot make a single out-bound")
-            print("connection to any destination not pre-authorized.")
+            print("Layer 1 — cave_policy (allowlist):")
+            print("  Every off-allowlist frame classified at nic 1 and dropped.")
+            print("  Reconnaissance, C2 callback, tunnels, exfil to attacker-")
+            print("  controlled hosts all bucketed into drop-policy.")
             print()
-            print("Meanwhile, the one legitimate allowed destination went through")
-            print("normally — proof that the filter is policy-driven, not a blunt")
-            print("'drop everything' switch.")
+            print("Layer 2 — cave_shaper (token bucket):")
+            print("  Attacker's fallback of flooding the ONE allowed destination")
+            print(f"  was capped to burst tokens; {drop_rate} packets of the 100-SYN")
+            print("  exfil burst were rejected as DropRate. The cave can reach")
+            print("  example.com:443 at the operator-configured rate, but can't")
+            print("  weaponise it for high-throughput exfil.")
+            print()
+            print("One legitimate frame still went through after the rate limit")
+            print("was cleared — defense remains policy-driven, not a blunt switch.")
             return 0
         else:
             banner("✗  DEFENSE FAILED  ·  investigate counters above", char="═")

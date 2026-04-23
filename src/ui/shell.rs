@@ -154,6 +154,11 @@ fn execute(cmd: &str) {
         "cpol-check"  => cmd_cpol_check(&parts[1..]),
         "cpol-clear"  => cmd_cpol_clear(parts[1]),
         "cpol-sync"   => cmd_cpol_sync(parts[1]),
+        "cpol-rate"       => cmd_cpol_rate(&parts[1..]),
+        "cpol-rate-show"  => cmd_cpol_rate_show(parts[1]),
+        "cpol-rate-list"  => cmd_cpol_rate_list(),
+        "cpol-rate-clear" => cmd_cpol_rate_clear(parts[1]),
+        "cpol-rate-selftest" => cmd_cpol_rate_selftest(),
         "cpol-daemon-list" => cmd_cpol_daemon_list(),
         "cpol-daemon-show" => cmd_cpol_daemon_show(parts[1]),
         "nic-status"  => cmd_nic_status(),
@@ -805,6 +810,94 @@ fn cmd_cpol_daemon_list() {
     }
 }
 
+// ── Per-cave rate limiter (cave_shaper) shell drivers ─────────────
+
+fn cmd_cpol_rate(args: &[&str]) {
+    if args.len() < 3 || args[0].is_empty() {
+        console::puts("  usage: cpol-rate <cave_name> <pkts/sec> <burst>\n");
+        return;
+    }
+    let name = args[0];
+    let pps: u32   = match args[1].parse() { Ok(n) => n, _ => { console::puts("  bad pps\n"); return; } };
+    let burst: u32 = match args[2].parse() { Ok(n) => n, _ => { console::puts("  bad burst\n"); return; } };
+    crate::net::cave_shaper::set_rate_by_name(name, pps, burst);
+    console::puts("  cpol-rate ");
+    console::puts(name);
+    console::puts(" -> pps=");
+    print_num(pps as usize);
+    console::puts(" burst=");
+    print_num(burst as usize);
+    console::puts("  OK\n");
+}
+
+fn cmd_cpol_rate_show(name: &str) {
+    if name.is_empty() {
+        console::puts("  usage: cpol-rate-show <cave_name>\n");
+        return;
+    }
+    match crate::net::cave_shaper::rate_for(name) {
+        Some((pps, burst)) => {
+            console::puts_hi("  cpol-rate-show "); console::puts(name); console::puts("\n");
+            console::puts("    pps:   "); print_num(pps as usize); console::puts("\n");
+            console::puts("    burst: "); print_num(burst as usize); console::puts("\n");
+        }
+        None => {
+            console::puts("  "); console::puts(name);
+            console::puts(" has no rate limit (unlimited)\n");
+        }
+    }
+}
+
+fn cmd_cpol_rate_list() {
+    let entries = crate::net::cave_shaper::list();
+    console::puts_hi("  CPOL RATE LIMITS\n");
+    if entries.is_empty() {
+        console::puts("  (no caves with rate limits)\n");
+        return;
+    }
+    for (id, pps, burst, tok_now) in entries.iter() {
+        console::puts("    ");
+        let hex = b"0123456789abcdef";
+        for b in id.iter().take(4) {
+            console::putc(hex[(b >> 4) as usize]);
+            console::putc(hex[(b & 0x0F) as usize]);
+        }
+        console::puts("..  pps=");
+        print_num(*pps as usize);
+        console::puts(" burst=");
+        print_num(*burst as usize);
+        console::puts(" tokens_now=");
+        print_num(*tok_now as usize);
+        console::puts("\n");
+    }
+}
+
+fn cmd_cpol_rate_clear(name: &str) {
+    if name.is_empty() {
+        console::puts("  usage: cpol-rate-clear <cave_name>\n");
+        return;
+    }
+    crate::net::cave_shaper::clear_rate_by_name(name);
+    console::puts("  cpol-rate-clear "); console::puts(name);
+    console::puts("  -> unlimited\n");
+}
+
+fn cmd_cpol_rate_selftest() {
+    console::puts_hi("  CPOL-RATE SELF-TEST (token bucket)\n");
+    match crate::net::cave_shaper::selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS token-bucket semantics\n");
+            console::puts("    allowed in burst:       ");
+            print_num(r.allowed_in_burst as usize); console::puts("  (expected 5)\n");
+            console::puts("    denied immediately:     ");
+            print_num(r.denied_immediately as usize); console::puts(" (expected 15)\n");
+            console::puts("    cross-cave unaffected:  ");
+            console::puts(if r.cross_cave_unaffected { "yes\n" } else { "no\n" });
+        }
+        Err(e) => { console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
 // Followup 3c-nat: parse IP octet fields
 fn parse_ipv4(s: &str) -> Option<u32> {
     let mut ip: u32 = 0;
@@ -854,6 +947,7 @@ fn cmd_nat_stats() {
     console::puts("    frag-refragd:     "); print_num(s.frag_refragmented as usize); console::puts("\n");
     console::puts("    icmp-redir-drop:  "); print_num(s.icmp_redirect_dropped as usize); console::puts("\n");
     console::puts("    icmp-squench-drp: "); print_num(s.icmp_src_quench_dropped as usize); console::puts("\n");
+    console::puts("    drop-rate:        "); print_num(s.drop_rate as usize); console::puts("\n");
 }
 
 fn cmd_nat_bind(args: &[&str]) {
