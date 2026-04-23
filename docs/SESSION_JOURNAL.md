@@ -11,6 +11,31 @@ end of a session.
 
 ---
 
+## 2026-04-22 22:10 — Mac — Followup #3c deferred items all closed (4 more commits)
+
+Kaden: "lets work on the rest of the deferred stuff". Four more
+commits, 13 commits total for the packet-pipeline stack. Every item
+in the DESIGN_PACKET_PIPELINE.md "Still deferred" section from
+earlier has either shipped or been explicitly not-worth-doing-today.
+
+| commit | piece |
+|---|---|
+| c006e2a1 | 3c-deferred-1: pump_replies falls through to kernel IP stack. Real correctness bug — once any cave flow populated the NAT table, pump_replies drained EVERY nic-0 frame and silently lost control-plane traffic. Fix: if no NAT match, call `net::dispatch_host_frame`. Counter `host-frames-pass`. |
+| a2fae309 | 3c-deferred-2: ICMP error types (Dest-Unreach 3, Time-Exceeded 11). Rewrites outer dst + inner src + inner L4 src port + all four checksums. Counter `icmp-error-deliv`. Traceroute from a cave now works. |
+| 25992cba | 3c-deferred-3: outbound IPv4 fragment reassembly. FragCtx (4 slots × 2048 B), 30s TTL via frag_gc_sweep. Fragments buffer → once complete → feed reassembled frame through classify + NAT. Counters `frag-reassembled`, `frag-timeout`. |
+| 252bd70c | 3c-deferred-4: `qemu_vmnet_preflight.sh` (no sudo, 5 checks, green on this Mac) + `qemu_vmnet_docker_e2e.sh` (sudo, full automated real-container path: daemon + QEMU + bridge discovery + macvlan + alpine + curl → pipeline verification + teardown). |
+
+**Regression (12/12 automated + 1 manual-sudo):**
+  multinic, nat-selftest, rewrite-selftest, autopump E2E,
+  daemon-bind sync, ARP, NAT GC, ICMP Echo, fragment detect,
+  host-passthrough, ICMP errors, frag reassembly.
+
+**Remaining "still deferred" items are explicitly-not-worth-today:**
+  inbound fragment reassembly, egress re-fragmentation,
+  Redirect/Parameter Problem/Source Quench ICMP types.
+
+---
+
 ## 2026-04-22 21:45 — Mac — Followup #3c gaps closed (ARP, NAT GC, ICMP, fragments)
 
 Kaden: "lets fix those known gaps". Four more commits; the packet
