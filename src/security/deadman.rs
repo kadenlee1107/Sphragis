@@ -43,12 +43,40 @@ pub fn arm(interval_hours: u64) {
     platform::serial_puts("  [dms] Dead man's switch ARMED (");
     crate::kernel::mm::print_num(interval_hours as usize);
     platform::serial_puts("h)\n");
+
+    // Phase 5 (design-alignment): propagate the arm to the batcaved
+    // daemon so Docker caves get wiped even if Bat_OS itself goes
+    // dark (kernel panic, host crash, power loss). The daemon keeps
+    // its own heartbeat timer; if Bat_OS doesn't PING within
+    // `interval`, the daemon DESTROYS everything.
+    //
+    // Best-effort: if the daemon isn't running, skip quietly — the
+    // native in-Bat_OS wipe path still covers native caves.
+    let secs = interval_hours * 3600;
+    let r = crate::batcave::docker_client::with_daemon(|| {
+        crate::batcave::docker_client::arm_deadman(secs)
+    });
+    match r {
+        Ok(()) => {
+            platform::serial_puts("  [dms] batcaved heartbeat armed (");
+            crate::kernel::mm::print_num(secs as usize);
+            platform::serial_puts("s)\n");
+        }
+        Err(_) => {
+            // quiet — daemon may not be running in dev
+        }
+    }
 }
 
 /// Refresh the timer — call this when the user re-authenticates.
 pub fn refresh() {
     if ARMED.load(Ordering::Relaxed) {
         LAST_REFRESH.store(current_time(), Ordering::Relaxed);
+        // Phase 5: mirror to the daemon so its heartbeat resets too.
+        // Best-effort — daemon may not be running in dev builds.
+        let _ = crate::batcave::docker_client::with_daemon(|| {
+            crate::batcave::docker_client::ping()
+        });
     }
 }
 

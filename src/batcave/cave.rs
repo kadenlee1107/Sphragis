@@ -27,6 +27,24 @@ pub enum CaveType {
     Ephemeral,
 }
 
+/// What kind of isolation actually backs this cave.
+///
+/// NATIVE caves run user ELFs under Bat_OS's own MMU page tables via
+/// the `batcave::linux` loader. DOCKER caves live as Linux containers
+/// on the Mac host, orchestrated by the `batcaved` daemon over TCP
+/// (see `docker_client.rs`). From the user's perspective both are
+/// just BatCaves — the backing field lets `batcave list/destroy/run`
+/// route to the right implementation.
+#[derive(Clone, Copy, PartialEq)]
+pub enum CaveBacking {
+    Native,
+    Docker,
+}
+
+/// Max length of the image name we store alongside a docker-backed cave
+/// (e.g. `kalilinux/kali-rolling`). 64 covers the typical registry+tag.
+pub const MAX_IMAGE: usize = 64;
+
 #[derive(Clone, Copy)]
 pub struct CaveCap {
     pub active: bool,
@@ -76,6 +94,12 @@ pub struct BatCave {
     pub display_y: u32,
     pub display_w: u32,     // size of allocated region
     pub display_h: u32,
+    /// Which isolation primitive actually backs this cave.
+    pub backing: CaveBacking,
+    /// For docker-backed caves: the image reference passed to
+    /// `docker run` (e.g. "kalilinux/kali-rolling"). Empty for native.
+    pub image: [u8; MAX_IMAGE],
+    pub image_len: usize,
 }
 
 impl BatCave {
@@ -94,7 +118,18 @@ impl BatCave {
             display_y: 0,
             display_w: 0,
             display_h: 0,
+            backing: CaveBacking::Native,
+            image: [0; MAX_IMAGE],
+            image_len: 0,
         }
+    }
+
+    pub fn image_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.image[..self.image_len]) }
+    }
+
+    pub fn is_docker(&self) -> bool {
+        matches!(self.backing, CaveBacking::Docker)
     }
 
     pub fn name_str(&self) -> &str {
@@ -141,7 +176,11 @@ impl BatCave {
 }
 
 // Global registry
-static mut CAVES: [BatCave; MAX_CAVES] = {
+//
+// Phase 6: made `pub` so the shell can read per-cave backing/image
+// via `cave::CAVES[id].is_docker()` when routing `batcave run/destroy`.
+// All mutation still goes through the pub fns in this file.
+pub static mut CAVES: [BatCave; MAX_CAVES] = {
     const EMPTY: BatCave = BatCave::empty();
     [EMPTY; MAX_CAVES]
 };
@@ -256,11 +295,37 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
             name.as_bytes(),
         );
 
+        // New caves default to Native backing. `create_docker` upgrades
+        // the backing + stores the image name after this returns.
+        cave.backing = CaveBacking::Native;
+        cave.image_len = 0;
+
         let count = CAVE_COUNT.load(Ordering::Relaxed);
         CAVE_COUNT.store(count + 1, Ordering::Relaxed);
 
         Ok(slot)
     }
+}
+
+/// Create a docker-backed BatCave. Thin wrapper over `create` that also
+/// stores the image ref so `list` / `destroy` / `run` can route to the
+/// `batcaved` daemon via `docker_client`.
+///
+/// This function does NOT spin up the container — the shell handler is
+/// responsible for calling `docker_client::create` so a daemon-side
+/// failure can be surfaced BEFORE we've polluted the cave table.
+pub fn create_docker(name: &str, image: &str, ephemeral: bool)
+    -> Result<usize, &'static str>
+{
+    if image.len() > MAX_IMAGE { return Err("image name too long"); }
+    let slot = create(name, ephemeral)?;
+    unsafe {
+        let cave = &mut CAVES[slot];
+        cave.backing = CaveBacking::Docker;
+        cave.image[..image.len()].copy_from_slice(image.as_bytes());
+        cave.image_len = image.len();
+    }
+    Ok(slot)
 }
 
 /// Install a tool into a BatCave.
@@ -557,6 +622,45 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
 
 /// Destroy ALL BatCaves — called by wipe system.
 pub fn destroy_all() {
+    // Phase 5: every wipe event (deadman, duress, panic, emergency_wipe)
+    // must take out docker-backed caves too. Fan out to the batcaved
+    // daemon via docker_client::destroy_all BEFORE we zero the local
+    // cave table — otherwise the daemon has no way to know which caves
+    // were Bat_OS's (the `name_len = 0` reset below wipes that).
+    //
+    // Errors from the daemon are logged but not fatal — the local
+    // teardown still runs. If the daemon is unreachable (operator
+    // killed it, network blip), we can't help the remote containers,
+    // but the in-Bat_OS state still gets zeroed. A daemon restart
+    // reconciles via its own state (it tracks every `batcave-*` name
+    // it knows about through docker ps).
+    let had_docker = unsafe {
+        let mut any = false;
+        for i in 0..MAX_CAVES {
+            if CAVES[i].state != CaveState::Free && CAVES[i].is_docker() {
+                any = true; break;
+            }
+        }
+        any
+    };
+    if had_docker {
+        let r = crate::batcave::docker_client::with_daemon(|| {
+            crate::batcave::docker_client::destroy_all()
+        });
+        match r {
+            Ok(n) => {
+                crate::drivers::uart::puts("  [wipe] docker caves destroyed: ");
+                crate::kernel::mm::print_num(n);
+                crate::drivers::uart::puts("\n");
+            }
+            Err(e) => {
+                crate::drivers::uart::puts("  [wipe] docker destroy_all failed: ");
+                crate::drivers::uart::puts(e);
+                crate::drivers::uart::puts(" (daemon unreachable?)\n");
+            }
+        }
+    }
+
     unsafe {
         for i in 0..MAX_CAVES {
             if CAVES[i].state != CaveState::Free {
@@ -565,6 +669,8 @@ pub fn destroy_all() {
                 CAVES[i].tool_count = 0;
                 CAVES[i].cap_count = 0;
                 CAVES[i].name_len = 0;
+                CAVES[i].backing = CaveBacking::Native;
+                CAVES[i].image_len = 0;
             }
         }
     }

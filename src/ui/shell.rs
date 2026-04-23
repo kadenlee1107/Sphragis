@@ -915,9 +915,82 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
             }
         }
         "create" => {
-            let ephemeral = arg2 == "--ephemeral";
-            // Check for --kit flag
-            let is_kit = arg2.starts_with("--kit");
+            // Parse flags. Supported:
+            //   --ephemeral           — destroyed on wipe, no persistent state
+            //   --kit:<name>          — pre-install a tool bundle
+            //   --docker:<image>      — docker-backed cave (Phase 6 of the
+            //                           design-alignment plan). Image passed
+            //                           through to docker_client / batcaved.
+            //   --caps:<csv>          — only meaningful with --docker; Linux
+            //                           capabilities to pass via --cap-add
+            //
+            // Scan all parts from [3..) so flag order doesn't matter.
+            let mut ephemeral = false;
+            let mut kit_name: &str = "";
+            let mut docker_image: &str = "";
+            let mut docker_caps: &str = "";
+            for i in 3..MAX_PARTS {
+                let p = parts[i];
+                if p.is_empty() { continue; }
+                if p == "--ephemeral" { ephemeral = true; }
+                else if let Some(k) = p.strip_prefix("--kit:")    { kit_name = k; }
+                else if let Some(img) = p.strip_prefix("--docker:") { docker_image = img; }
+                else if let Some(c) = p.strip_prefix("--caps:")   { docker_caps = c; }
+            }
+
+            if !docker_image.is_empty() {
+                // Docker-backed cave. Spin the container FIRST so a
+                // daemon-side failure doesn't leave a dangling entry in
+                // the native cave table.
+                let caps_csv = docker_caps;
+                let spin_res = crate::batcave::docker_client::with_daemon(|| {
+                    // caps_csv → &[&str]
+                    let mut caps_buf: [&str; 8] = [""; 8];
+                    let mut n = 0;
+                    if !caps_csv.is_empty() {
+                        for part in caps_csv.split(',') {
+                            if n < 8 && !part.is_empty() {
+                                caps_buf[n] = part;
+                                n += 1;
+                            }
+                        }
+                    }
+                    crate::batcave::docker_client::create(arg1, docker_image, &caps_buf[..n])
+                });
+                match spin_res {
+                    Ok(id) => {
+                        // Container is up; now register in the cave table
+                        // with Docker backing so list/destroy can find it.
+                        match cave::create_docker(arg1, docker_image, ephemeral) {
+                            Ok(_) => {
+                                console::puts("  BatCave created: ");
+                                console::puts(arg1);
+                                console::puts(" [docker:");
+                                console::puts(docker_image);
+                                console::puts("] container=");
+                                console::puts(&id);
+                                if ephemeral { console::puts(" (ephemeral)"); }
+                                console::puts("\n");
+                            }
+                            Err(e) => {
+                                // Cave-table insert failed — undo the container.
+                                console::puts("  Error (cave table): ");
+                                console::puts(e); console::puts("\n");
+                                let _ = crate::batcave::docker_client::with_daemon(|| {
+                                    crate::batcave::docker_client::destroy(arg1)
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        console::puts("  Error (docker): ");
+                        console::puts(e); console::puts("\n");
+                    }
+                }
+                return;
+            }
+
+            // Native cave path (unchanged behaviour).
             match cave::create(arg1, ephemeral) {
                 Ok(_) => {
                     console::puts("  BatCave created: ");
@@ -926,9 +999,7 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                     else { console::puts(" (persistent)"); }
                     console::puts("\n");
 
-                    // Apply kit if specified: batcave create mylab --kit:recon
-                    if is_kit && arg2.len() > 6 {
-                        let kit_name = &arg2[6..]; // skip "--kit:"
+                    if !kit_name.is_empty() {
                         match crate::batcave::batkits::apply_kit(arg1, kit_name) {
                             Ok(()) => {
                                 console::puts("  Kit '"); console::puts(kit_name);
@@ -1029,10 +1100,31 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
             }
         }
         "destroy" => {
+            // Phase 6: route by backing. Docker-backed caves need the
+            // container torn down via `batcaved` before we zero the
+            // cave table entry. Native caves are unchanged.
+            let is_docker = cave::find_id(arg1)
+                .map(|id| unsafe { cave::CAVES[id].is_docker() })
+                .unwrap_or(false);
+            if is_docker {
+                let r = crate::batcave::docker_client::with_daemon(|| {
+                    crate::batcave::docker_client::destroy(arg1)
+                });
+                if let Err(e) = r {
+                    console::puts("  Warning (docker): ");
+                    console::puts(e); console::puts("\n");
+                    // Continue to zero the cave entry anyway — the
+                    // daemon may have already cleaned up the container.
+                }
+            }
             match cave::destroy(arg1) {
                 Ok(()) => {
                     console::puts("  DESTROYED: "); console::puts(arg1);
-                    console::puts(" (zeroed + keys destroyed)\n");
+                    if is_docker {
+                        console::puts(" (container rm'd + cave keys zeroed)\n");
+                    } else {
+                        console::puts(" (zeroed + keys destroyed)\n");
+                    }
                 }
                 Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
             }
@@ -1054,7 +1146,18 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                     console::puts(cave::state_str(c.state));
                     console::puts("] [");
                     console::puts(cave::type_str(c.cave_type));
-                    console::puts("] tools:");
+                    console::puts("]");
+                    // Phase 6: show backing so the user can see at a glance
+                    // which caves live inside Bat_OS (native, MMU-isolated)
+                    // vs which live as Docker containers on the Mac.
+                    if c.is_docker() {
+                        console::puts(" [docker:");
+                        console::puts(c.image_str());
+                        console::puts("]");
+                    } else {
+                        console::puts(" [native]");
+                    }
+                    console::puts(" tools:");
                     print_num(c.tool_count);
                     console::puts(" caps:");
                     print_num(c.cap_count);
@@ -1120,36 +1223,77 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
         }
         "run" => {
             if arg1.is_empty() {
-                console::puts("  usage: batcave run <tool> [args...]\n");
-            } else {
-                // Auto-create + enter the shell-host cave if none active.
-                ensure_default_cave();
+                console::puts("  usage: batcave run <cave|tool> [args...]\n");
+                console::puts("    if <cave|tool> is an existing BatCave name, the\n");
+                console::puts("    next argument is the tool to run inside it.\n");
+                console::puts("    otherwise <cave|tool> is interpreted as a busybox\n");
+                console::puts("    applet in the ambient shell-host cave.\n");
+                return;
+            }
 
-                // Real argv: ["busybox", tool, arg1, arg2, ...]. The shell
-                // command splitter gives us up to `MAX_PARTS` (8) tokens;
-                // layout is parts = ["batcave", "run", TOOL, A1, A2, A3, A4, A5].
-                // Build the argv from parts[2..] prefixed with "busybox".
-                let mut full: [&str; MAX_PARTS] = [""; MAX_PARTS];
-                full[0] = "busybox";
-                let mut argc = 1;
-                for i in 2..MAX_PARTS {
-                    if parts[i].is_empty() { break; }
-                    full[argc] = parts[i];
-                    argc += 1;
+            // Phase 6: route by cave backing. If arg1 matches an existing
+            // docker-backed cave, send the rest of argv to the daemon for
+            // execution inside the container. Otherwise, fall through to
+            // the legacy "run a busybox applet in shell-host" path.
+            if let Some(id) = cave::find_id(arg1) {
+                let is_docker = unsafe { cave::CAVES[id].is_docker() };
+                if is_docker {
+                    // Docker path: parts[3..MAX_PARTS] is the container argv.
+                    let mut argv_buf: [&str; 6] = [""; 6];
+                    let mut argc = 0;
+                    for i in 3..MAX_PARTS {
+                        if parts[i].is_empty() { break; }
+                        if argc < 6 { argv_buf[argc] = parts[i]; argc += 1; }
+                    }
+                    if argc == 0 {
+                        console::puts("  usage: batcave run <cave> <tool> [args]\n");
+                        return;
+                    }
+                    let r = crate::batcave::docker_client::with_daemon(|| {
+                        crate::batcave::docker_client::run(arg1, &argv_buf[..argc], |line| {
+                            console::puts("  ");
+                            console::puts(line);
+                            console::puts("\n");
+                        })
+                    });
+                    match r {
+                        Ok(rc) => {
+                            console::puts("  [exit ");
+                            print_num(rc as usize);
+                            console::puts("]\n");
+                        }
+                        Err(e) => {
+                            console::puts("  Error: "); console::puts(e); console::puts("\n");
+                        }
+                    }
+                    return;
                 }
+                // Native cave with same name — fall through to shell-host
+                // busybox path. (A future commit can plumb native caves
+                // through per-cave page tables via `cave::enter`, but
+                // that's blocked on BUG-6.)
+            }
 
-                // Trace the argv so operators can see what actually landed.
-                platform::serial_puts("[batcave run] argv:");
-                for i in 0..argc {
-                    platform::serial_puts(" ");
-                    platform::serial_puts(full[i]);
-                }
-                platform::serial_puts("\n");
-
-                match crate::batcave::linux::runner::run_busybox_cmd(&full[..argc]) {
-                    Ok(()) => {}
-                    Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
-                }
+            // Legacy / default: run a busybox applet in the ambient
+            // shell-host cave.
+            ensure_default_cave();
+            let mut full: [&str; MAX_PARTS] = [""; MAX_PARTS];
+            full[0] = "busybox";
+            let mut argc = 1;
+            for i in 2..MAX_PARTS {
+                if parts[i].is_empty() { break; }
+                full[argc] = parts[i];
+                argc += 1;
+            }
+            platform::serial_puts("[batcave run] argv:");
+            for i in 0..argc {
+                platform::serial_puts(" ");
+                platform::serial_puts(full[i]);
+            }
+            platform::serial_puts("\n");
+            match crate::batcave::linux::runner::run_busybox_cmd(&full[..argc]) {
+                Ok(()) => {}
+                Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
             }
         }
         "kits" => {
