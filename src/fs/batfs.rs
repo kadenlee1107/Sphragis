@@ -1,12 +1,21 @@
 #![allow(dead_code)]
 // Bat_OS — BatFS: Custom Encrypted Filesystem
-// In-memory filesystem with per-file AES-256-CTR encryption.
-// Each file gets a unique derived key. Merkle tree integrity.
-// Phase 4 runs in RAM; Phase 7 will back this with NVMe.
+//
+// DESIGN_CRYPTO.md #2: per-file **ChaCha20-Poly1305 AEAD**. Replaces
+// the prior AES-256-CTR + HMAC-SHA256 encrypt-then-MAC construction
+// with a single AEAD primitive: one pass, constant-time, no timing
+// side channels on the key, integrity bundled inline with the tag.
+//
+// Per-file key is still derived via `sha256::derive_key(master,
+// filename)` — that's the HKDF role, unchanged and fast. The change
+// is only to the record encryption primitive.
 
-use crate::crypto::aes::Aes256;
 use crate::crypto::sha256;
 use crate::kernel::mm::frame;
+use chacha20poly1305::{
+    aead::{AeadInPlace, KeyInit},
+    ChaCha20Poly1305,
+};
 
 const MAX_FILES: usize = 128;
 const MAX_FILENAME: usize = 64;
@@ -273,25 +282,40 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
             frame::alloc_frame().ok_or("out of memory")?;
         }
 
-        // Derive per-file encryption key
+        // DESIGN_CRYPTO.md #2: ChaCha20-Poly1305 AEAD.
+        //   * Key — sha256::derive_key(master, filename). Unchanged.
+        //   * Nonce — 12 bytes, file-unique (AEAD allows nonce reuse
+        //     only to break confidentiality, not integrity — still
+        //     fatal, so we use our monotonic next_nonce pattern).
+        //   * AAD — filename bytes. Binds ciphertext to its filename;
+        //     an attacker can't rename a file to an accessible slot
+        //     and reuse the ciphertext.
+        //   * Output — ciphertext (same length as plaintext) + 16-byte
+        //     Poly1305 authentication tag stored in entry.hash[..16].
         let file_key = derive_file_key(name);
-        let cipher = Aes256::new(&file_key);
-        let nonce = next_nonce();
+        let cipher = ChaCha20Poly1305::new(&file_key.into());
+        let nonce_full = next_nonce();
+        // entry.nonce is 12 bytes already (ChaCha20-Poly1305 native size)
+        let mut nonce: [u8; 12] = [0; 12];
+        nonce.copy_from_slice(&nonce_full[..12]);
 
-        // Copy data to allocated memory and encrypt in place
+        // Copy plaintext into allocated memory, then encrypt in place.
         let dest = data_addr as *mut u8;
         core::ptr::copy_nonoverlapping(data.as_ptr(), dest, data.len());
+        let slice_mut = core::slice::from_raw_parts_mut(dest, data.len());
 
-        // Encrypt
-        let encrypted_slice = core::slice::from_raw_parts_mut(dest, data.len());
-        cipher.ctr_crypt(&nonce, encrypted_slice);
+        let tag = match cipher.encrypt_in_place_detached(
+                (&nonce).into(), name.as_bytes(), slice_mut) {
+            Ok(t) => t,
+            Err(_) => return Err("encryption failed (AEAD)"),
+        };
 
-        // FL-028: HMAC-SHA256(master_key, name||nonce||ciphertext) as the
-        // integrity tag. An attacker with a kernel-write primitive can't
-        // forge this without the master key.
-        let hash = compute_file_mac(name, &nonce, encrypted_slice);
+        // Store the 16-byte Poly1305 tag in the 32-byte hash field.
+        // Remaining bytes left zero — future fields (e.g. Merkle
+        // neighbor) can reuse the slack.
+        let mut hash = [0u8; 32];
+        hash[..16].copy_from_slice(&tag);
 
-        // Store file entry
         let entry = &mut FILES[slot];
         entry.state = FileState::Active;
         entry.name[..name.len()].copy_from_slice(name.as_bytes());
@@ -321,23 +345,28 @@ pub fn read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
             return Err("buffer too small");
         }
 
-        // Copy encrypted data to output buffer
+        // Copy ciphertext to output buffer (decrypt in place).
         let src = entry.data_addr as *const u8;
         core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), entry.size);
 
-        // FL-028: verify HMAC over the CIPHERTEXT + nonce + name BEFORE
-        // decrypting. Constant-time byte-compare against the stored tag.
-        let expected = compute_file_mac(name, &entry.nonce, &buf[..entry.size]);
-        let mut diff: u8 = 0;
-        for i in 0..32 { diff |= expected[i] ^ entry.hash[i]; }
-        if diff != 0 {
-            return Err("INTEGRITY VIOLATION — file tampered");
-        }
-
-        // Decrypt after MAC verification (Encrypt-then-MAC pattern).
+        // DESIGN_CRYPTO.md #2: ChaCha20-Poly1305 AEAD decrypt.
+        //   - AAD is the filename (binds ciphertext to file slot).
+        //   - Tag is the first 16 bytes of entry.hash (stored at write).
+        //   - decrypt_in_place_detached returns Err on tag mismatch;
+        //     Poly1305 is a constant-time MAC so no timing leak.
         let file_key = derive_file_key(name);
-        let cipher = Aes256::new(&file_key);
-        cipher.ctr_crypt(&entry.nonce, &mut buf[..entry.size]);
+        let cipher = ChaCha20Poly1305::new(&file_key.into());
+        let tag_bytes: [u8; 16] = match entry.hash[..16].try_into() {
+            Ok(b) => b,
+            Err(_) => return Err("internal: tag slice"),
+        };
+        let tag: &chacha20poly1305::Tag = (&tag_bytes).into();
+        cipher.decrypt_in_place_detached(
+                (&entry.nonce).into(),
+                name.as_bytes(),
+                &mut buf[..entry.size],
+                tag,
+            ).map_err(|_| "INTEGRITY VIOLATION — file tampered")?;
 
         Ok(entry.size)
     }
