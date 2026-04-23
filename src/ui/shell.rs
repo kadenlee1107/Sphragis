@@ -146,6 +146,7 @@ fn execute(cmd: &str) {
         "pq-sig-selftest" => cmd_pq_sig_selftest(),
         "ipc-selftest"    => cmd_ipc_selftest(),
         "secure-ipc-selftest" => cmd_secure_ipc_selftest(),
+        "secure-ipc-wire-selftest" => cmd_secure_ipc_wire_selftest(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
         "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
@@ -507,6 +508,33 @@ fn cmd_pq_tls_selftest() {
                 console::putc(hex[(b & 0x0f) as usize]);
             }
             console::puts("\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
+        }
+    }
+}
+
+// Followup #2: handshake-over-wire + AEAD IPC proof (secure_ipc module).
+fn cmd_secure_ipc_wire_selftest() {
+    console::puts_hi("  SECURE-IPC WIRE-LEVEL SELF-TEST\n");
+    console::puts("  handshake exchanged as IPC messages → AEAD-sealed traffic\n");
+    match crate::batcave::secure_ipc::selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS end-to-end mock-bus\n");
+            console::puts("    handshake messages: ");
+            print_num(r.handshake_msgs);
+            console::puts(" (offer each side)\n");
+            console::puts("    offer size:         ");
+            print_num(r.offer_len);
+            console::puts(" bytes (fits 1 ipc::Message = 256 B)\n");
+            console::puts("    plaintext:          ");
+            print_num(r.plaintext_len);
+            console::puts(" bytes\n");
+            console::puts("    sealed frame:       ");
+            print_num(r.sealed_len);
+            console::puts(" bytes (fits 1 ipc::Message)\n");
+            console::puts("    plaintext round-trip OK — session key derived on both sides\n");
         }
         Err(e) => {
             console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
