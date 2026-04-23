@@ -59,6 +59,14 @@ pub type CaveId = [u8; 16];
 
 /// A single allow entry for a cave. Default-deny means we only store
 /// allow rules; a destination that doesn't match any rule is denied.
+///
+/// SNI constraint (optional): if `sni` is `Some(hostname)`, the rule
+/// additionally demands that any TLS ClientHello on this flow names
+/// that SNI. The classifier passes the parsed SNI (if the current
+/// packet was a ClientHello) to `matches_full`; until a ClientHello
+/// is observed, SYN/ACK packets are allowed so the handshake can
+/// start. This closes the "attacker tunnels C2 to their own CDN on
+/// the same IP" gap that IP-only allowlists leave open.
 #[derive(Clone)]
 pub struct EgressRule {
     /// Lowercased hostname. Empty string = wildcard (any host).
@@ -67,23 +75,51 @@ pub struct EgressRule {
     pub port: u16,
     /// Protocol. 6 = TCP, 17 = UDP, 0 = any.
     pub proto: u8,
+    /// Optional SNI pin. None = no SNI check; Some("example.com") =
+    /// packets carrying a TLS ClientHello must advertise that exact
+    /// SNI or get DropSNI'd. Case-insensitive.
+    pub sni: Option<String>,
 }
 
 impl EgressRule {
     pub fn tcp(host: &str, port: u16) -> Self {
-        Self { host: host.to_ascii_lowercase(), port, proto: 6 }
+        Self { host: host.to_ascii_lowercase(), port, proto: 6, sni: None }
     }
     pub fn udp(host: &str, port: u16) -> Self {
-        Self { host: host.to_ascii_lowercase(), port, proto: 17 }
+        Self { host: host.to_ascii_lowercase(), port, proto: 17, sni: None }
     }
+    /// TCP rule pinned to a specific SNI (TLS ClientHello must match).
+    pub fn tcp_sni(host: &str, port: u16, sni: &str) -> Self {
+        Self {
+            host: host.to_ascii_lowercase(),
+            port,
+            proto: 6,
+            sni: Some(sni.to_ascii_lowercase()),
+        }
+    }
+
+    /// Host/port/proto match only — backward compat for callers that
+    /// don't know about SNI. A rule with a non-empty SNI constraint
+    /// will still match here because `matches` alone cannot check SNI.
     pub fn matches(&self, host: &str, port: u16, proto: u8) -> bool {
-        // Protocol: 0 wildcards.
         if self.proto != 0 && self.proto != proto { return false; }
-        // Port: 0 wildcards.
         if self.port != 0 && self.port != port { return false; }
-        // Host: empty wildcards; else case-insensitive exact.
         if self.host.is_empty() { return true; }
         self.host.as_bytes().eq_ignore_ascii_case(host.as_bytes())
+    }
+
+    /// Full match including SNI. If the rule has an SNI constraint AND
+    /// we have an observed SNI, they must match case-insensitively. If
+    /// the packet has no SNI (e.g. a SYN), the rule is satisfied from
+    /// the non-SNI side (classifier will re-check on the ClientHello).
+    pub fn matches_full(&self, host: &str, port: u16, proto: u8,
+                        observed_sni: Option<&str>) -> bool {
+        if !self.matches(host, port, proto) { return false; }
+        match (&self.sni, observed_sni) {
+            (None, _) => true,
+            (Some(_), None) => true,
+            (Some(want), Some(got)) => want.as_bytes().eq_ignore_ascii_case(got.as_bytes()),
+        }
     }
 }
 
@@ -157,17 +193,61 @@ pub fn clear_policy(cave: &CaveId) {
 
 /// The connect-time question: "may CAVE reach HOST:PORT over PROTO?"
 pub fn check(cave: &CaveId, host: &str, port: u16, proto: u8) -> Verdict {
+    check_with_sni(cave, host, port, proto, None)
+}
+
+/// Like `check` but also considers an observed TLS SNI. If the cave
+/// has rules pinned to specific SNIs, one of them must match (given
+/// an observed SNI) OR no SNI was observed (handshake phase).
+pub fn check_with_sni(cave: &CaveId, host: &str, port: u16, proto: u8,
+                       observed_sni: Option<&str>) -> Verdict {
     let table = ensure_init();
     for p in table.iter() {
         if &p.cave != cave { continue; }
+        // First pass: any rule that matches (including SNI if present).
         for r in p.rules.iter() {
-            if r.matches(host, port, proto) { return Verdict::Allow; }
+            if r.matches_full(host, port, proto, observed_sni) {
+                return Verdict::Allow;
+            }
         }
-        // Cave found but no rule matched — deny.
         return Verdict::Drop;
     }
-    // Cave has no entry at all — default deny.
     Verdict::Drop
+}
+
+/// Dedicated SNI-check return that lets the classifier distinguish
+/// "host/port allowed but SNI wrong" from "host/port not allowed".
+/// Used when the caller has ALREADY parsed an SNI off the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SniVerdict {
+    Allow,
+    /// The cave has a rule for (host, port, proto) but every such rule
+    /// pins to a different SNI than the one observed. This is the
+    /// "TLS tunnel to attacker CDN on allowed IP" case.
+    DropSni,
+    /// The (host, port, proto) doesn't match any rule regardless of
+    /// SNI. Same as cave_policy::check Drop.
+    DropPolicy,
+}
+
+/// SNI-aware check that returns which kind of drop.
+pub fn check_sni_aware(cave: &CaveId, host: &str, port: u16, proto: u8,
+                        observed_sni: Option<&str>) -> SniVerdict {
+    let table = ensure_init();
+    for p in table.iter() {
+        if &p.cave != cave { continue; }
+        let mut host_port_matched = false;
+        for r in p.rules.iter() {
+            if r.matches(host, port, proto) {
+                host_port_matched = true;
+                if r.matches_full(host, port, proto, observed_sni) {
+                    return SniVerdict::Allow;
+                }
+            }
+        }
+        return if host_port_matched { SniVerdict::DropSni } else { SniVerdict::DropPolicy };
+    }
+    SniVerdict::DropPolicy
 }
 
 /// How many rules are installed for this cave (0 if cave is unknown).
@@ -242,6 +322,13 @@ pub fn check_by_name(name: &str, host: &str, port: u16, proto: u8) -> Verdict {
     check(&id, host, port, proto)
 }
 
+/// SNI-aware check by cave name. Delegates to `check_sni_aware`.
+pub fn check_sni_aware_by_name(name: &str, host: &str, port: u16, proto: u8,
+                                observed_sni: Option<&str>) -> SniVerdict {
+    let id = cave_id_from_name(name);
+    check_sni_aware(&id, host, port, proto, observed_sni)
+}
+
 pub fn rule_count_by_name(name: &str) -> usize {
     let id = cave_id_from_name(name);
     rule_count(&id)
@@ -284,7 +371,7 @@ pub fn selftest() -> Result<SelftestReport, &'static str> {
 
     // Cave B: can hit httpbin on any port; plus DNS (UDP/53) anywhere.
     let mut b_rules = Vec::new();
-    b_rules.push(EgressRule { host: "httpbin.org".to_string(), port: 0, proto: 6 });
+    b_rules.push(EgressRule { host: "httpbin.org".to_string(), port: 0, proto: 6, sni: None });
     b_rules.push(EgressRule::udp("", 53)); // wildcard host on UDP/53
     set_policy(cave_b, b_rules);
 

@@ -151,7 +151,9 @@ fn execute(cmd: &str) {
         "cpol-list"   => cmd_cpol_list(),
         "cpol-show"   => cmd_cpol_show(parts[1]),
         "cpol-add"    => cmd_cpol_add(&parts[1..]),
+        "cpol-add-sni" => cmd_cpol_add_sni(&parts[1..]),
         "cpol-check"  => cmd_cpol_check(&parts[1..]),
+        "cpol-sni-selftest" => cmd_cpol_sni_selftest(),
         "cpol-clear"  => cmd_cpol_clear(parts[1]),
         "cpol-sync"   => cmd_cpol_sync(parts[1]),
         "cpol-rate"       => cmd_cpol_rate(&parts[1..]),
@@ -698,6 +700,7 @@ fn cmd_cpol_add(args: &[&str]) {
         host: host.to_ascii_lowercase().to_string(),
         port,
         proto,
+        sni: None,
     };
     crate::net::cave_policy::add_rule_by_name(name, rule);
     console::puts("  cpol-add ");
@@ -709,6 +712,53 @@ fn cmd_cpol_add(args: &[&str]) {
     console::puts("/");
     console::puts(args[3]);
     console::puts("  OK\n");
+}
+
+/// cpol-add-sni <cave> <ip> <port> <sni_host>
+/// Adds a TCP allow rule pinned to a specific TLS SNI. Any
+/// ClientHello on this (ip, port) tuple whose SNI doesn't match
+/// `sni_host` gets DropSni.
+fn cmd_cpol_add_sni(args: &[&str]) {
+    if args.len() < 4 || args[0].is_empty() || args[3].is_empty() {
+        console::puts("  usage: cpol-add-sni <cave> <ip> <port> <sni_host>\n");
+        return;
+    }
+    let name = args[0];
+    let host = args[1];
+    let port = match cpol_parse_port(args[2]) {
+        Some(p) => p,
+        None => { console::puts("  bad port\n"); return; }
+    };
+    let sni = args[3];
+    use crate::net::cave_policy::EgressRule;
+    let rule = EgressRule::tcp_sni(host, port, sni);
+    crate::net::cave_policy::add_rule_by_name(name, rule);
+    console::puts("  cpol-add-sni ");
+    console::puts(name);
+    console::puts(" -> tcp ");
+    console::puts(host);
+    console::puts(":");
+    print_num(port as usize);
+    console::puts(" sni=");
+    console::puts(sni);
+    console::puts("  OK\n");
+}
+
+fn cmd_cpol_sni_selftest() {
+    console::puts_hi("  CPOL-SNI SELF-TEST (TLS ClientHello parser)\n");
+    match crate::net::nat::sni_selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS SNI parse + match\n");
+            console::puts("    extracted SNI: "); console::puts(&r.parsed); console::puts("\n");
+            console::puts("    matching rule accepted:    ");
+            console::puts(if r.match_ok { "yes\n" } else { "no\n" });
+            console::puts("    non-matching rule rejected:");
+            console::puts(if r.mismatch_ok { " yes\n" } else { " no\n" });
+            console::puts("    no-payload SYN admitted:   ");
+            console::puts(if r.syn_admitted { "yes\n" } else { "no\n" });
+        }
+        Err(e) => { console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n"); }
+    }
 }
 
 fn cmd_cpol_check(args: &[&str]) {
@@ -948,6 +998,7 @@ fn cmd_nat_stats() {
     console::puts("    icmp-redir-drop:  "); print_num(s.icmp_redirect_dropped as usize); console::puts("\n");
     console::puts("    icmp-squench-drp: "); print_num(s.icmp_src_quench_dropped as usize); console::puts("\n");
     console::puts("    drop-rate:        "); print_num(s.drop_rate as usize); console::puts("\n");
+    console::puts("    drop-sni:         "); print_num(s.drop_sni as usize); console::puts("\n");
 }
 
 fn cmd_nat_bind(args: &[&str]) {

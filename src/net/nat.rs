@@ -74,6 +74,10 @@ static FRAG_REFRAGMENTED: AtomicU32 = AtomicU32::new(0);
 /// of defense against exfil bursts / C2 beaconing within an allowed
 /// destination.
 static DROP_RATE: AtomicU32 = AtomicU32::new(0);
+/// Packets dropped because a TLS ClientHello carried the wrong SNI
+/// for the cave's pinned rule. Third layer of defense — stops C2
+/// hiding in a TLS session to an allowed IP but a different hostname.
+static DROP_SNI: AtomicU32 = AtomicU32::new(0);
 /// Frames pumped off nic 0 that were NOT NAT replies and got
 /// re-dispatched into the kernel's own IP stack. Tracks how many
 /// control-plane packets flowed through the NAT pump correctly.
@@ -109,6 +113,7 @@ pub struct Stats {
     pub icmp_redirect_dropped: u32,
     pub icmp_src_quench_dropped: u32,
     pub drop_rate: u32,
+    pub drop_sni: u32,
 }
 
 pub fn stats() -> Stats {
@@ -131,6 +136,7 @@ pub fn stats() -> Stats {
         icmp_redirect_dropped:   ICMP_REDIRECT_DROPPED.load(Ordering::Relaxed),
         icmp_src_quench_dropped: ICMP_SRC_QUENCH_DROPPED.load(Ordering::Relaxed),
         drop_rate: DROP_RATE.load(Ordering::Relaxed),
+        drop_sni:  DROP_SNI.load(Ordering::Relaxed),
     }
 }
 
@@ -153,6 +159,7 @@ pub fn reset_stats() {
     ICMP_REDIRECT_DROPPED.store(0, Ordering::Relaxed);
     ICMP_SRC_QUENCH_DROPPED.store(0, Ordering::Relaxed);
     DROP_RATE.store(0, Ordering::Relaxed);
+    DROP_SNI.store(0, Ordering::Relaxed);
 }
 
 // ── ARP on nic 1 (caves interface) ──────────────────────────────
@@ -1453,6 +1460,10 @@ pub enum PktVerdict {
     /// configured token-bucket rate. The cave's own shaper knows
     /// more than we do here — debited or not.
     DropRate,
+    /// cave_policy's (host, port, proto) matched but the pinned-SNI
+    /// constraint was violated — attacker's TLS ClientHello named
+    /// a different hostname than the cave's allowlist permits.
+    DropSni,
 }
 
 /// The 5-tuple extracted from an outbound cave frame.
@@ -1536,6 +1547,92 @@ pub fn parse_outbound(frame: &[u8]) -> Option<OutboundFlow> {
     Some(OutboundFlow { src_ip, dst_ip, src_port, dst_port, proto })
 }
 
+/// If `frame` is Ethernet + IPv4 + TCP, return the TCP payload slice
+/// (everything past the TCP header). None if not TCP or no payload.
+fn tcp_payload<'a>(frame: &'a [u8]) -> Option<&'a [u8]> {
+    if frame.len() < 14 + 20 + 20 { return None; }
+    if &frame[12..14] != b"\x08\x00" { return None; }
+    let ip_hdr_len = ((frame[14] & 0x0F) as usize) * 4;
+    if frame.len() < 14 + ip_hdr_len + 20 { return None; }
+    if frame[14 + 9] != IPPROTO_TCP { return None; }
+    let tcp_off = 14 + ip_hdr_len;
+    let data_off_words = (frame[tcp_off + 12] >> 4) as usize;
+    let tcp_hdr_len = data_off_words * 4;
+    if tcp_hdr_len < 20 || frame.len() < tcp_off + tcp_hdr_len { return None; }
+    let payload = &frame[tcp_off + tcp_hdr_len..];
+    if payload.is_empty() { None } else { Some(payload) }
+}
+
+/// Try to extract the SNI (server_name extension host_name) from a
+/// TLS ClientHello contained in `payload`. Returns the parsed ASCII
+/// lowercased hostname or None if the payload isn't a well-formed
+/// TLS 1.0+ ClientHello with a server_name extension.
+///
+/// This is a deliberately tight, allocation-light parser — we walk
+/// the handshake struct once, bail out on any length mismatch, and
+/// never read past the declared record length. We don't decrypt, so
+/// post-QUIC / encrypted-ClientHello flows will return None and fall
+/// back to the host/port-only check.
+pub fn parse_tls_sni(payload: &[u8]) -> Option<String> {
+    // TLS record header (5 B):  content_type, version (2), length (2)
+    if payload.len() < 5 { return None; }
+    if payload[0] != 0x16 { return None; }               // Handshake
+    let rec_len = ((payload[3] as usize) << 8) | (payload[4] as usize);
+    let record = payload.get(5..5 + rec_len)?;
+
+    // Handshake header (4 B): msg_type, length (3 bytes)
+    if record.len() < 4 { return None; }
+    if record[0] != 0x01 { return None; }                // ClientHello
+    let hs_len = ((record[1] as usize) << 16)
+               | ((record[2] as usize) << 8)
+               |  (record[3] as usize);
+    let hs = record.get(4..4 + hs_len)?;
+
+    // ClientHello: version(2) + random(32) + session_id_len(1) + session_id
+    if hs.len() < 2 + 32 + 1 { return None; }
+    let mut i = 2 + 32;
+    let sid_len = hs[i] as usize;
+    i += 1 + sid_len;
+    // cipher_suites_len(2) + cipher_suites
+    if hs.len() < i + 2 { return None; }
+    let cs_len = ((hs[i] as usize) << 8) | (hs[i + 1] as usize);
+    i += 2 + cs_len;
+    // compression_methods_len(1) + compression_methods
+    if hs.len() <= i { return None; }
+    let cm_len = hs[i] as usize;
+    i += 1 + cm_len;
+    // Extensions len(2) + extensions
+    if hs.len() < i + 2 { return None; }
+    let ext_len = ((hs[i] as usize) << 8) | (hs[i + 1] as usize);
+    i += 2;
+    let ext = hs.get(i..i + ext_len)?;
+
+    // Walk extensions looking for type 0x0000 (server_name).
+    let mut j = 0usize;
+    while j + 4 <= ext.len() {
+        let ty = ((ext[j] as u16) << 8) | (ext[j + 1] as u16);
+        let ln = ((ext[j + 2] as usize) << 8) | (ext[j + 3] as usize);
+        j += 4;
+        if j + ln > ext.len() { return None; }
+        if ty == 0x0000 {
+            // server_name extension:
+            //   list_len(2), name_type(1=host_name), hostname_len(2), hostname
+            let data = &ext[j..j + ln];
+            if data.len() < 5 { return None; }
+            let name_type = data[2];
+            if name_type != 0x00 { return None; } // only host_name supported
+            let host_len = ((data[3] as usize) << 8) | (data[4] as usize);
+            if 5 + host_len > data.len() { return None; }
+            let host_bytes = &data[5..5 + host_len];
+            // Must be ASCII printable to be a reasonable hostname.
+            if host_bytes.iter().any(|&b| b < 0x20 || b > 0x7E) { return None; }
+            return Some(core::str::from_utf8(host_bytes).ok()?.to_ascii_lowercase());
+        }
+        j += ln;
+    }
+    None
+}
+
 /// Peek at an Ethernet+IPv4 frame and return true if it's a fragment
 /// (MF=1 or non-zero fragment offset). Used to separate DropFragment
 /// from DropParse in the classifier.
@@ -1572,12 +1669,21 @@ pub fn classify(frame: &[u8]) -> PktVerdict {
         }
     };
     let dst_str = ip_to_string(flow.dst_ip);
-    let v = cave_policy::check_by_name(&cave, &dst_str, flow.dst_port, flow.proto);
-    match v {
-        cave_policy::Verdict::Allow => {
-            // Second-layer defense: even when cave_policy permits the
-            // destination, the cave's shaper may rate-limit the cave.
-            // Debits one token when under budget.
+
+    // SNI peek: if this packet is TCP and carries a TLS ClientHello,
+    // extract the SNI. That lets the cave_policy check reject a
+    // ClientHello whose hostname doesn't match the cave's pinned SNI
+    // — even though the (host, port, proto) is in the allowlist.
+    let sni_str = tcp_payload(frame).and_then(parse_tls_sni);
+    let sni_deref: Option<&str> = sni_str.as_deref();
+
+    use cave_policy::SniVerdict;
+    let sv = cave_policy::check_sni_aware_by_name(
+        &cave, &dst_str, flow.dst_port, flow.proto, sni_deref,
+    );
+    match sv {
+        SniVerdict::Allow => {
+            // Second-layer defense: rate limiter.
             use super::cave_shaper::{check_and_debit_by_name, RateVerdict};
             match check_and_debit_by_name(&cave) {
                 RateVerdict::Unlimited | RateVerdict::Ok => {
@@ -1590,7 +1696,11 @@ pub fn classify(frame: &[u8]) -> PktVerdict {
                 }
             }
         }
-        cave_policy::Verdict::Drop => {
+        SniVerdict::DropSni => {
+            DROP_SNI.fetch_add(1, Ordering::Relaxed);
+            PktVerdict::DropSni
+        }
+        SniVerdict::DropPolicy => {
             PKT_DROP_POLICY.fetch_add(1, Ordering::Relaxed);
             PktVerdict::DropPolicy
         }
@@ -1827,6 +1937,106 @@ fn build_fragment(id: u16, mf: bool, offset_units: u16, extra_bytes: usize) -> V
     v[total_slot]     = (tl >> 8) as u8;
     v[total_slot + 1] = (tl & 0xFF) as u8;
     v
+}
+
+// ── SNI parser + match self-test ─────────────────────────────────
+
+pub struct SniSelftestReport {
+    pub parsed: String,
+    pub match_ok: bool,
+    pub mismatch_ok: bool,
+    pub syn_admitted: bool,
+}
+
+/// Proves the SNI path end-to-end:
+///   1. Build a minimal TLS ClientHello with server_name="example.com".
+///   2. parse_tls_sni extracts "example.com".
+///   3. Rule pinned to "example.com" → SniVerdict::Allow.
+///   4. Rule pinned to "attacker.com" → SniVerdict::DropSni.
+///   5. A SYN (no payload) against a pinned rule → Allow (handshake
+///      phase; classifier re-checks on ClientHello).
+pub fn sni_selftest() -> Result<SniSelftestReport, &'static str> {
+    reset_stats();
+    reset_bindings();
+    cave_policy::init();
+
+    // ── Build a synthetic TLS ClientHello payload ──────────────────
+    // Minimal shape: record header + handshake header + body.
+    let sni_host = b"example.com";
+    // extension server_name body:
+    //   list_len(2) + name_type(1) + host_name_len(2) + host_name
+    let mut sn_ext_body: Vec<u8> = Vec::new();
+    let host_len = sni_host.len();
+    let list_len: u16 = (1 + 2 + host_len) as u16;
+    sn_ext_body.push((list_len >> 8) as u8);
+    sn_ext_body.push(list_len as u8);
+    sn_ext_body.push(0x00);                       // name_type = host_name
+    sn_ext_body.push((host_len >> 8) as u8);
+    sn_ext_body.push(host_len as u8);
+    sn_ext_body.extend_from_slice(sni_host);
+    // Full extension = type(2) + len(2) + body
+    let mut ext: Vec<u8> = Vec::new();
+    ext.push(0x00); ext.push(0x00);               // type = server_name
+    ext.push((sn_ext_body.len() >> 8) as u8);
+    ext.push(sn_ext_body.len() as u8);
+    ext.extend_from_slice(&sn_ext_body);
+
+    // ClientHello body
+    let mut ch: Vec<u8> = Vec::new();
+    ch.extend_from_slice(&[0x03, 0x03]);          // version = TLS 1.2
+    ch.extend_from_slice(&[0u8; 32]);             // random
+    ch.push(0);                                   // session_id_len = 0
+    ch.extend_from_slice(&[0x00, 0x02, 0xC0, 0x2C]);  // cs_len=2 + 1 suite
+    ch.push(1); ch.push(0);                       // cm_len=1 + null
+    ch.push((ext.len() >> 8) as u8);
+    ch.push(ext.len() as u8);
+    ch.extend_from_slice(&ext);
+
+    // Handshake header
+    let mut hs: Vec<u8> = Vec::new();
+    hs.push(0x01);                                // msg_type = ClientHello
+    let chl = ch.len();
+    hs.push((chl >> 16) as u8);
+    hs.push((chl >>  8) as u8);
+    hs.push( chl        as u8);
+    hs.extend_from_slice(&ch);
+
+    // TLS record
+    let mut record: Vec<u8> = Vec::new();
+    record.push(0x16);                            // Handshake
+    record.push(0x03); record.push(0x01);         // record version TLS 1.0
+    record.push((hs.len() >> 8) as u8);
+    record.push(hs.len() as u8);
+    record.extend_from_slice(&hs);
+
+    let got = parse_tls_sni(&record).ok_or("parse_tls_sni returned None")?;
+    if got != "example.com" { return Err("parsed SNI mismatch"); }
+
+    // ── Match/mismatch against pinned rules ────────────────────────
+    use cave_policy::{EgressRule, SniVerdict, check_sni_aware_by_name};
+    cave_policy::set_policy_by_name("kali", Vec::new());
+    cave_policy::add_rule_by_name("kali",
+        EgressRule::tcp_sni("93.184.216.34", 443, "example.com"));
+
+    let m = check_sni_aware_by_name("kali", "93.184.216.34", 443, 6, Some("example.com"));
+    let match_ok = matches!(m, SniVerdict::Allow);
+    let bad = check_sni_aware_by_name("kali", "93.184.216.34", 443, 6, Some("attacker.com"));
+    let mismatch_ok = matches!(bad, SniVerdict::DropSni);
+
+    // SYN (no SNI observed) against the same pinned rule.
+    let syn = check_sni_aware_by_name("kali", "93.184.216.34", 443, 6, None);
+    let syn_admitted = matches!(syn, SniVerdict::Allow);
+
+    if !(match_ok && mismatch_ok && syn_admitted) {
+        return Err("SNI match/mismatch/SYN semantics wrong");
+    }
+
+    Ok(SniSelftestReport {
+        parsed: got,
+        match_ok,
+        mismatch_ok,
+        syn_admitted,
+    })
 }
 
 // ── GC self-test ─────────────────────────────────────────────────
