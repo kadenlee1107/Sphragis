@@ -605,9 +605,10 @@ fn cmd_cave_policy_selftest() {
 
 fn cpol_parse_proto(s: &str) -> Option<u8> {
     match s {
-        "tcp" | "TCP" | "6"  => Some(6),
-        "udp" | "UDP" | "17" => Some(17),
-        "any" | "*"  | "0"   => Some(0),
+        "tcp"  | "TCP"  | "6"  => Some(6),
+        "udp"  | "UDP"  | "17" => Some(17),
+        "icmp" | "ICMP" | "1"  => Some(1),
+        "any"  | "*"    | "0"  => Some(0),
         _ => None,
     }
 }

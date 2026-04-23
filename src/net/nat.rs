@@ -221,6 +221,9 @@ pub fn pump_and_forward(nic0_ip: u32, nic0_mac: [u8; 6], gw_mac: [u8; 6]) -> (us
         if rewrite_outbound_into(&mut out, flow, eph_port, nic0_ip, nic0_mac, gw_mac).is_ok() {
             let _ = net::send_n(0, &out);
             forwarded += 1;
+            if flow.proto == IPPROTO_ICMP {
+                ICMP_ECHO_FORWARDED.fetch_add(1, Ordering::Relaxed);
+            }
             let _ = src_mac; // reserved for reply-MAC caching below
         }
     }
@@ -278,6 +281,9 @@ pub fn pump_replies(nic1_mac: [u8; 6]) -> (usize, usize) {
         if rewrite_inbound_into(&mut out, &entry, nic1_mac).is_ok() {
             let _ = net::send_n(1, &out);
             delivered += 1;
+            if entry.proto == IPPROTO_ICMP {
+                ICMP_ECHO_DELIVERED.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
     (drained, delivered)
@@ -490,12 +496,46 @@ pub struct InboundFlow {
 }
 
 pub fn parse_inbound(frame: &[u8]) -> Option<InboundFlow> {
-    let o = parse_outbound(frame)?;
-    Some(InboundFlow {
-        src_ip: o.src_ip, dst_ip: o.dst_ip,
-        src_port: o.src_port, dst_port: o.dst_port,
-        proto: o.proto,
-    })
+    // Inbound differs from outbound for ICMP: we accept Echo Reply
+    // (type 0) here, whereas parse_outbound only accepts Echo Request.
+    if frame.len() < 14 + 20 { return None; }
+    let ethertype = ((frame[12] as u16) << 8) | (frame[13] as u16);
+    if ethertype != ETHERTYPE_IPV4 { return None; }
+    let ip = &frame[14..];
+    let ver_ihl = ip[0];
+    if (ver_ihl >> 4) != 4 { return None; }
+    let ihl = ((ver_ihl & 0x0F) as usize) * 4;
+    if ip.len() < ihl { return None; }
+    let total_len = ((ip[2] as usize) << 8) | (ip[3] as usize);
+    if total_len > ip.len() { return None; }
+    let frag = ((ip[6] as u16) << 8) | (ip[7] as u16);
+    if (frag & 0x3FFF) != 0 { return None; }
+    let proto = ip[9];
+    let src_ip = ((ip[12] as u32) << 24) | ((ip[13] as u32) << 16)
+               | ((ip[14] as u32) <<  8) |  (ip[15] as u32);
+    let dst_ip = ((ip[16] as u32) << 24) | ((ip[17] as u32) << 16)
+               | ((ip[18] as u32) <<  8) |  (ip[19] as u32);
+    let l4 = &ip[ihl..];
+    let (src_port, dst_port) = match proto {
+        IPPROTO_TCP | IPPROTO_UDP => {
+            if l4.len() < 4 { return None; }
+            let sp = ((l4[0] as u16) << 8) | (l4[1] as u16);
+            let dp = ((l4[2] as u16) << 8) | (l4[3] as u16);
+            (sp, dp)
+        }
+        IPPROTO_ICMP => {
+            if l4.len() < 8 { return None; }
+            // Accept only Echo Reply on inbound.
+            if l4[0] != ICMP_TYPE_ECHO_REPLY { return None; }
+            let id = ((l4[4] as u16) << 8) | (l4[5] as u16);
+            // The NAT lookup table keys on (proto, eph_port = id).
+            // Store the identifier in dst_port so the caller's lookup
+            // flow works unchanged for all three protos.
+            (0, id)
+        }
+        _ => return None,
+    };
+    Some(InboundFlow { src_ip, dst_ip, src_port, dst_port, proto })
 }
 
 // ── Rewrite (outbound + inbound) ──────────────────────────────────
@@ -577,27 +617,53 @@ pub fn rewrite_outbound_into(
     };
     frame[14 + 10] = (ip_cksum >> 8) as u8;
     frame[14 + 11] = (ip_cksum & 0xFF) as u8;
-    // Rewrite L4 src port + checksum
+    // Rewrite L4 src port (or ICMP id) + checksum
     let l4_start = 14 + ip_hdr_len;
     if frame.len() < l4_start + 8 { return Err("l4 too short"); }
-    // src port (first 2 bytes of TCP/UDP header)
-    frame[l4_start    ] = (eph_port >> 8) as u8;
-    frame[l4_start + 1] = (eph_port & 0xFF) as u8;
-    // Zero L4 checksum, compute, write back.
-    let cksum_off = match proto {
-        6  => l4_start + 16, // TCP: checksum field at offset 16
-        17 => l4_start +  6, // UDP: checksum field at offset 6
+    match proto {
+        IPPROTO_TCP | IPPROTO_UDP => {
+            // src port (first 2 bytes of TCP/UDP header)
+            frame[l4_start    ] = (eph_port >> 8) as u8;
+            frame[l4_start + 1] = (eph_port & 0xFF) as u8;
+            let cksum_off = if proto == IPPROTO_TCP { l4_start + 16 } else { l4_start + 6 };
+            frame[cksum_off]     = 0;
+            frame[cksum_off + 1] = 0;
+            let l4_len = frame.len() - l4_start;
+            let l4 = &frame[l4_start..l4_start + l4_len];
+            let ck = l4_checksum(src_ip, dst_ip, proto, l4);
+            let ck = if proto == IPPROTO_UDP && ck == 0 { 0xFFFF } else { ck };
+            frame[cksum_off]     = (ck >> 8) as u8;
+            frame[cksum_off + 1] = (ck & 0xFF) as u8;
+        }
+        IPPROTO_ICMP => {
+            // ICMP identifier at offset 4..6. Zero checksum at 2..4,
+            // compute over the entire ICMP segment (no pseudo-header).
+            frame[l4_start + 4] = (eph_port >> 8) as u8;
+            frame[l4_start + 5] = (eph_port & 0xFF) as u8;
+            frame[l4_start + 2] = 0;
+            frame[l4_start + 3] = 0;
+            let l4_len = frame.len() - l4_start;
+            let ck = icmp_checksum(&frame[l4_start..l4_start + l4_len]);
+            frame[l4_start + 2] = (ck >> 8) as u8;
+            frame[l4_start + 3] = (ck & 0xFF) as u8;
+        }
         _ => return Err("unsupported proto"),
-    };
-    frame[cksum_off]     = 0;
-    frame[cksum_off + 1] = 0;
-    let l4_len = frame.len() - l4_start;
-    let l4 = &frame[l4_start..l4_start + l4_len];
-    let ck = l4_checksum(src_ip, dst_ip, proto, l4);
-    let ck = if proto == 17 && ck == 0 { 0xFFFF } else { ck };
-    frame[cksum_off]     = (ck >> 8) as u8;
-    frame[cksum_off + 1] = (ck & 0xFF) as u8;
+    }
     Ok(())
+}
+
+/// ICMP checksum: 16-bit one's-complement sum over the entire ICMP
+/// message (header + payload). No pseudo-header.
+fn icmp_checksum(buf: &[u8]) -> u16 {
+    let mut sum: u32 = 0;
+    let mut i = 0;
+    while i + 1 < buf.len() {
+        sum = sum.wrapping_add(((buf[i] as u16) << 8 | buf[i + 1] as u16) as u32);
+        i += 2;
+    }
+    if i < buf.len() { sum = sum.wrapping_add((buf[i] as u32) << 8); }
+    while sum >> 16 != 0 { sum = (sum & 0xFFFF) + (sum >> 16); }
+    !(sum as u16)
 }
 
 /// Rewrite an inbound reply frame in-place: dst IP/port → cave's
@@ -628,24 +694,37 @@ pub fn rewrite_inbound_into(
     let ip_cksum = ipv4_checksum(&frame[14..14 + ihl]);
     frame[14 + 10] = (ip_cksum >> 8) as u8;
     frame[14 + 11] = (ip_cksum & 0xFF) as u8;
-    // L4 dst port + checksum
+    // L4 dst port / ICMP identifier + checksum
     let l4_start = 14 + ihl;
     if frame.len() < l4_start + 8 { return Err("l4 too short"); }
-    frame[l4_start + 2] = (entry.cave_src_port >> 8) as u8;
-    frame[l4_start + 3] = (entry.cave_src_port & 0xFF) as u8;
-    let cksum_off = match proto {
-        6  => l4_start + 16,
-        17 => l4_start +  6,
+    match proto {
+        IPPROTO_TCP | IPPROTO_UDP => {
+            frame[l4_start + 2] = (entry.cave_src_port >> 8) as u8;
+            frame[l4_start + 3] = (entry.cave_src_port & 0xFF) as u8;
+            let cksum_off = if proto == IPPROTO_TCP { l4_start + 16 } else { l4_start + 6 };
+            frame[cksum_off]     = 0;
+            frame[cksum_off + 1] = 0;
+            let l4_len = frame.len() - l4_start;
+            let l4 = &frame[l4_start..l4_start + l4_len];
+            let ck = l4_checksum(src_ip, dst_ip, proto, l4);
+            let ck = if proto == IPPROTO_UDP && ck == 0 { 0xFFFF } else { ck };
+            frame[cksum_off]     = (ck >> 8) as u8;
+            frame[cksum_off + 1] = (ck & 0xFF) as u8;
+        }
+        IPPROTO_ICMP => {
+            // Restore the cave's original identifier.
+            frame[l4_start + 4] = (entry.cave_src_port >> 8) as u8;
+            frame[l4_start + 5] = (entry.cave_src_port & 0xFF) as u8;
+            frame[l4_start + 2] = 0;
+            frame[l4_start + 3] = 0;
+            let l4_len = frame.len() - l4_start;
+            let ck = icmp_checksum(&frame[l4_start..l4_start + l4_len]);
+            frame[l4_start + 2] = (ck >> 8) as u8;
+            frame[l4_start + 3] = (ck & 0xFF) as u8;
+        }
         _ => return Err("unsupported proto"),
-    };
-    frame[cksum_off]     = 0;
-    frame[cksum_off + 1] = 0;
-    let l4_len = frame.len() - l4_start;
-    let l4 = &frame[l4_start..l4_start + l4_len];
-    let ck = l4_checksum(src_ip, dst_ip, proto, l4);
-    let ck = if proto == 17 && ck == 0 { 0xFFFF } else { ck };
-    frame[cksum_off]     = (ck >> 8) as u8;
-    frame[cksum_off + 1] = (ck & 0xFF) as u8;
+    }
+    let _ = src_ip; let _ = dst_ip;
     Ok(())
 }
 
@@ -790,6 +869,19 @@ pub fn parse_outbound(frame: &[u8]) -> Option<OutboundFlow> {
             let sp = ((l4[0] as u16) << 8) | (l4[1] as u16);
             let dp = ((l4[2] as u16) << 8) | (l4[3] as u16);
             (sp, dp)
+        }
+        IPPROTO_ICMP => {
+            // Outbound ICMP: only Echo Request is NATable without
+            // per-flow state at the classifier layer. Other types
+            // (destination-unreachable, time-exceeded, etc) carry an
+            // embedded header we can't round-trip through a stateless
+            // port translation.
+            if l4.len() < 8 { return None; }
+            if l4[0] != ICMP_TYPE_ECHO_REQUEST { return None; }
+            // Use ICMP identifier as the "src_port" so NAT-table
+            // bookkeeping works the same way for all three protos.
+            let id = ((l4[4] as u16) << 8) | (l4[5] as u16);
+            (id, 0)
         }
         _ => return None, // other protocols out of scope
     };
