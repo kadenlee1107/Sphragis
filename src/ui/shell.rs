@@ -148,6 +148,11 @@ fn execute(cmd: &str) {
         "secure-ipc-selftest" => cmd_secure_ipc_selftest(),
         "secure-ipc-wire-selftest" => cmd_secure_ipc_wire_selftest(),
         "cave-policy-selftest" => cmd_cave_policy_selftest(),
+        "cpol-list"   => cmd_cpol_list(),
+        "cpol-show"   => cmd_cpol_show(parts[1]),
+        "cpol-add"    => cmd_cpol_add(&parts[1..]),
+        "cpol-check"  => cmd_cpol_check(&parts[1..]),
+        "cpol-clear"  => cmd_cpol_clear(parts[1]),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
         "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
@@ -568,6 +573,158 @@ fn cmd_cave_policy_selftest() {
             console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
         }
     }
+}
+
+// Followup #3b: shell drivers for the per-cave policy store.
+//
+// `cpol-list` prints every cave the kernel knows about + rule count.
+// `cpol-show  <name>` dumps the full rule list for a cave.
+// `cpol-add   <name> <host> <port> <proto>` appends one allow rule.
+//   proto: "tcp", "udp", "any".  port: 0 = any.
+// `cpol-check <name> <host> <port> <proto>` runs the decision path
+//   and prints ALLOW / DROP — useful for verifying the kernel sees
+//   the same policy the daemon advertises.
+// `cpol-clear <name>` drops the cave's entry entirely.
+
+fn cpol_parse_proto(s: &str) -> Option<u8> {
+    match s {
+        "tcp" | "TCP" | "6"  => Some(6),
+        "udp" | "UDP" | "17" => Some(17),
+        "any" | "*"  | "0"   => Some(0),
+        _ => None,
+    }
+}
+
+fn cpol_parse_port(s: &str) -> Option<u16> {
+    s.parse::<u16>().ok()
+}
+
+fn cpol_print_id(id: &[u8; 16]) {
+    let hex = |n: u8| if n < 10 { b'0' + n } else { b'a' + n - 10 };
+    for b in id.iter().take(4) {
+        console::putc(hex(b >> 4));
+        console::putc(hex(b & 0x0F));
+    }
+    console::puts("..");
+}
+
+fn cmd_cpol_list() {
+    console::puts_hi("  CAVE-POLICY LIST (kernel view)\n");
+    let entries = crate::net::cave_policy::list_all();
+    if entries.is_empty() {
+        console::puts("  (no caves registered)\n");
+        return;
+    }
+    for (id, n) in entries.iter() {
+        console::puts("  ");
+        cpol_print_id(id);
+        console::puts("  rules=");
+        print_num(*n);
+        console::puts("\n");
+    }
+    console::puts("    total caves: ");
+    print_num(entries.len());
+    console::puts("\n");
+}
+
+fn cmd_cpol_show(name: &str) {
+    if name.is_empty() {
+        console::puts("  usage: cpol-show <cave_name>\n");
+        return;
+    }
+    let rules = crate::net::cave_policy::rules_for_by_name(name);
+    console::puts_hi("  cpol-show ");
+    console::puts(name);
+    console::puts("\n");
+    if rules.is_empty() {
+        console::puts("    (no rules — default deny)\n");
+        return;
+    }
+    for r in rules.iter() {
+        console::puts("    allow ");
+        let proto_tag = match r.proto { 6 => "tcp", 17 => "udp", _ => "any" };
+        console::puts(proto_tag);
+        console::puts("  ");
+        console::puts(if r.host.is_empty() { "*" } else { r.host.as_str() });
+        console::puts(":");
+        if r.port == 0 { console::puts("*"); } else { print_num(r.port as usize); }
+        console::puts("\n");
+    }
+}
+
+fn cmd_cpol_add(args: &[&str]) {
+    // args[0]=name, args[1]=host, args[2]=port, args[3]=proto
+    if args.len() < 4 || args[0].is_empty() || args[3].is_empty() {
+        console::puts("  usage: cpol-add <cave_name> <host> <port> <tcp|udp|any>\n");
+        return;
+    }
+    let name  = args[0];
+    let host  = args[1];
+    let port  = match cpol_parse_port(args[2]) {
+        Some(p) => p,
+        None => { console::puts("  bad port\n"); return; }
+    };
+    let proto = match cpol_parse_proto(args[3]) {
+        Some(p) => p,
+        None => { console::puts("  bad proto (tcp|udp|any)\n"); return; }
+    };
+    use crate::net::cave_policy::EgressRule;
+    use alloc::string::ToString;
+    let rule = EgressRule {
+        host: host.to_ascii_lowercase().to_string(),
+        port,
+        proto,
+    };
+    crate::net::cave_policy::add_rule_by_name(name, rule);
+    console::puts("  cpol-add ");
+    console::puts(name);
+    console::puts(" -> ");
+    console::puts(host);
+    console::puts(":");
+    print_num(port as usize);
+    console::puts("/");
+    console::puts(args[3]);
+    console::puts("  OK\n");
+}
+
+fn cmd_cpol_check(args: &[&str]) {
+    if args.len() < 4 || args[0].is_empty() || args[3].is_empty() {
+        console::puts("  usage: cpol-check <cave_name> <host> <port> <tcp|udp|any>\n");
+        return;
+    }
+    let name  = args[0];
+    let host  = args[1];
+    let port  = match cpol_parse_port(args[2]) {
+        Some(p) => p,
+        None => { console::puts("  bad port\n"); return; }
+    };
+    let proto = match cpol_parse_proto(args[3]) {
+        Some(p) => p,
+        None => { console::puts("  bad proto\n"); return; }
+    };
+    let v = crate::net::cave_policy::check_by_name(name, host, port, proto);
+    console::puts("  cpol-check ");
+    console::puts(name);
+    console::puts(" ");
+    console::puts(host);
+    console::puts(":");
+    print_num(port as usize);
+    console::puts(" -> ");
+    match v {
+        crate::net::cave_policy::Verdict::Allow => console::puts("ALLOW\n"),
+        crate::net::cave_policy::Verdict::Drop  => console::puts("DROP\n"),
+    }
+}
+
+fn cmd_cpol_clear(name: &str) {
+    if name.is_empty() {
+        console::puts("  usage: cpol-clear <cave_name>\n");
+        return;
+    }
+    crate::net::cave_policy::clear_by_name(name);
+    console::puts("  cpol-clear ");
+    console::puts(name);
+    console::puts("  OK\n");
 }
 
 // Integration #1: secure_channel on top of ipc_session.

@@ -184,6 +184,74 @@ pub fn cave_count() -> usize {
     ensure_init().len()
 }
 
+/// Enumerate (cave_id, rule_count) for every installed policy.
+/// Caller gets a fresh Vec; safe to iterate outside the table.
+pub fn list_all() -> Vec<(CaveId, usize)> {
+    let table = ensure_init();
+    let mut out = Vec::with_capacity(table.len());
+    for p in table.iter() {
+        out.push((p.cave, p.rules.len()));
+    }
+    out
+}
+
+/// Read-only access to a cave's rule vec. Returned vec is a fresh clone.
+pub fn rules_for(cave: &CaveId) -> Vec<EgressRule> {
+    let table = ensure_init();
+    for p in table.iter() {
+        if &p.cave == cave { return p.rules.clone(); }
+    }
+    Vec::new()
+}
+
+// ── By-name convenience layer ────────────────────────────────────
+//
+// Cave names are human-readable ("kali1"), cave_policy keys are
+// opaque 16 B ids. We derive one from the other via SHA-256(name),
+// truncated. Deterministic per-build so a reboot with the same
+// configuration lands on the same id; collision-resistant enough
+// for a local table that caps at hundreds of entries.
+
+/// Deterministic 16-byte CaveId from a human-readable cave name.
+pub fn cave_id_from_name(name: &str) -> CaveId {
+    use sha2::{Sha256, Digest};
+    let mut h = Sha256::new();
+    h.update(b"batos-cave-id-v1\0");
+    h.update(name.as_bytes());
+    let full = h.finalize();
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&full[..16]);
+    out
+}
+
+pub fn set_policy_by_name(name: &str, rules: Vec<EgressRule>) {
+    set_policy(cave_id_from_name(name), rules);
+}
+
+pub fn add_rule_by_name(name: &str, rule: EgressRule) {
+    add_rule(cave_id_from_name(name), rule);
+}
+
+pub fn clear_by_name(name: &str) {
+    let id = cave_id_from_name(name);
+    clear_policy(&id);
+}
+
+pub fn check_by_name(name: &str, host: &str, port: u16, proto: u8) -> Verdict {
+    let id = cave_id_from_name(name);
+    check(&id, host, port, proto)
+}
+
+pub fn rule_count_by_name(name: &str) -> usize {
+    let id = cave_id_from_name(name);
+    rule_count(&id)
+}
+
+pub fn rules_for_by_name(name: &str) -> Vec<EgressRule> {
+    let id = cave_id_from_name(name);
+    rules_for(&id)
+}
+
 // ── Self-test ────────────────────────────────────────────────────
 
 pub struct SelftestReport {

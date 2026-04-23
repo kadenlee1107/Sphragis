@@ -325,6 +325,16 @@ pub fn create_docker(name: &str, image: &str, ephemeral: bool)
         cave.image[..image.len()].copy_from_slice(image.as_bytes());
         cave.image_len = image.len();
     }
+    // Followup 3a/3b: register the cave with the kernel's policy store
+    // with ZERO rules. Any egress attempt will hit default-deny until a
+    // grant arrives via `cpol-add` / `batcave-fw-allow`. This guarantees
+    // the kernel is aware of the cave's existence at creation time —
+    // the 3c packet path will be able to map container source addresses
+    // to a known policy entry.
+    crate::net::cave_policy::set_policy_by_name(
+        name,
+        alloc::vec::Vec::new(),
+    );
     Ok(slot)
 }
 
@@ -602,6 +612,10 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
 
     cave.state = CaveState::Free;
     cave.name_len = 0;
+
+    // Followup 3a/3b: a destroyed cave must not leave stale egress rules
+    // the kernel would match against a fresh cave that reuses the name.
+    crate::net::cave_policy::clear_by_name(name);
 
     let count = CAVE_COUNT.load(Ordering::Relaxed);
     if count > 0 { CAVE_COUNT.store(count - 1, Ordering::Relaxed); }
