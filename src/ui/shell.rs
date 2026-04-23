@@ -147,6 +147,7 @@ fn execute(cmd: &str) {
         "ipc-selftest"    => cmd_ipc_selftest(),
         "secure-ipc-selftest" => cmd_secure_ipc_selftest(),
         "secure-ipc-wire-selftest" => cmd_secure_ipc_wire_selftest(),
+        "cave-policy-selftest" => cmd_cave_policy_selftest(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
         "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
@@ -535,6 +536,33 @@ fn cmd_secure_ipc_wire_selftest() {
             print_num(r.sealed_len);
             console::puts(" bytes (fits 1 ipc::Message)\n");
             console::puts("    plaintext round-trip OK — session key derived on both sides\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
+        }
+    }
+}
+
+// Followup #3a: per-cave kernel egress policy store.
+// Prove the kernel now owns the allow/deny brain for per-cave
+// destinations — independent of the daemon's FW_ALLOWLIST dict.
+fn cmd_cave_policy_selftest() {
+    console::puts_hi("  CAVE-POLICY SELF-TEST\n");
+    console::puts("  per-cave egress allowlist (default deny, hostname + port + proto)\n");
+    match crate::net::cave_policy::selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS kernel-side policy store\n");
+            console::puts("    caves remaining:       ");
+            print_num(r.caves_installed);
+            console::puts(" (after clearing cave A)\n");
+            console::puts("    allow-path checks:     ");
+            print_num(r.allow_checks);
+            console::puts("\n");
+            console::puts("    drop-path checks:      ");
+            print_num(r.drop_checks);
+            console::puts("\n");
+            console::puts("    cross-cave isolation:  ");
+            console::puts(if r.cross_cave_isolation_ok { "OK\n" } else { "FAILED\n" });
         }
         Err(e) => {
             console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");

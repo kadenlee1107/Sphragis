@@ -1,4 +1,5 @@
 pub mod arp;
+pub mod cave_policy;
 pub mod dns;
 pub mod ethernet;
 pub mod firewall;
@@ -32,4 +33,5 @@ pub fn poll_once() {
 
 pub fn init() {
     firewall::init();
+    cave_policy::init();
 }
