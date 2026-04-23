@@ -67,6 +67,29 @@ pub fn reset_stats() {
     PKT_DROP_PARSE.store(0, Ordering::Relaxed);
 }
 
+/// Drain every pending frame on nic 1 (the caves interface), running
+/// each through `classify`. Returns how many frames were processed.
+/// Safe to call when nic 1 is absent — returns 0.
+pub fn pump() -> usize {
+    use crate::drivers::virtio::net;
+    if !net::is_ready_n(1) { return 0; }
+    let mut count = 0usize;
+    let mut buf = [0u8; 1514];
+    // Bounded drain: we don't want to loop forever if the peer is
+    // flooding us. 256 frames per pump call is plenty for interactive
+    // shell use; a future main-loop integration can adjust the budget.
+    for _ in 0..256 {
+        match net::recv_n(1, &mut buf) {
+            Some(len) => {
+                let _ = classify(&buf[..len]);
+                count += 1;
+            }
+            None => break,
+        }
+    }
+    count
+}
+
 // ── Source-IP → cave-name mapping ────────────────────────────────
 //
 // When a container is created, its IP on the caves bridge is

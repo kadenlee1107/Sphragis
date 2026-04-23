@@ -159,8 +159,10 @@ fn execute(cmd: &str) {
         "nic-status"  => cmd_nic_status(),
         "nat-selftest"=> cmd_nat_selftest(),
         "nat-stats"   => cmd_nat_stats(),
+        "nat-reset"   => cmd_nat_reset(),
         "nat-bind"    => cmd_nat_bind(&parts[1..]),
         "nat-bindings" => cmd_nat_bindings(),
+        "nat-pump"    => cmd_nat_pump(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
         "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
@@ -843,6 +845,24 @@ fn cmd_nat_bind(args: &[&str]) {
     crate::net::nat::bind_ip(ip, args[1]);
     console::puts("  nat-bind "); console::puts(args[0]); console::puts(" -> ");
     console::puts(args[1]); console::puts("  OK\n");
+}
+
+fn cmd_nat_reset() {
+    crate::net::nat::reset_stats();
+    console::puts("  nat-reset: counters zeroed\n");
+}
+
+fn cmd_nat_pump() {
+    let n = crate::net::nat::pump();
+    console::puts("  nat-pump: drained ");
+    print_num(n);
+    console::puts(" frames from nic 1\n");
+    let s = crate::net::nat::stats();
+    console::puts("    after: allow=");  print_num(s.allow as usize);
+    console::puts(" drop-policy="); print_num(s.drop_policy as usize);
+    console::puts(" drop-unk-src="); print_num(s.drop_unknown_src as usize);
+    console::puts(" drop-parse="); print_num(s.drop_parse as usize);
+    console::puts("\n");
 }
 
 fn cmd_nat_bindings() {
