@@ -11,6 +11,40 @@ end of a session.
 
 ---
 
+## 2026-04-22 21:45 — Mac — Followup #3c gaps closed (ARP, NAT GC, ICMP, fragments)
+
+Kaden: "lets fix those known gaps". Four more commits; the packet
+pipeline now has everything a real Docker container needs to go
+through Bat_OS.
+
+| commit | piece |
+|---|---|
+| 8ccd469f | 3c-gap-arp: answer ARP requests on nic 1 for 192.168.77.1. Containers can finally resolve the gateway MAC before sending IP traffic. |
+| d301d6bf | 3c-gap-nat-gc: per-proto TTL eviction (UDP 60s / TCP 300s / ICMP 30s). `gc_tick()` from main loop with 1Hz throttle. NAT table no longer leaks. |
+| 87c3819a | 3c-gap-icmp: ICMP Echo Request/Reply through NAT. The identifier field plays the role of ports. Ping from a cave now works. |
+| 9031e600 | 3c-gap-fragments: classifier distinguishes fragments from parse errors via dedicated `DropFragment` verdict + counter. Reassembly deferred to a standalone future commit. |
+
+**Full 3c regression (9/9 PASS):**
+  - multinic probe
+  - nat-selftest (synthetic classifier)
+  - rewrite-selftest (in-kernel round-trip)
+  - autopump E2E (Python cave ↔ Python internet, no manual ticks)
+  - daemon-bind sync (batcaved → kernel IP bindings)
+  - ARP E2E (reply for gateway, silent for others)
+  - NAT GC (3 entries, 2 evicted, 1 kept)
+  - ICMP E2E (Echo Request translated → reply id restored)
+  - fragment detection (distinct drop counter)
+
+**Still deferred (none blocking):**
+  - Stateful fragment reassembly-then-NAT (rare in practice, multi-day).
+  - Other ICMP types (dest-unreachable, time-exceeded — carry embedded
+    original header).
+  - Automated real-Docker vmnet test (needs interactive sudo).
+
+Commits this gap-closure burst: 4 + regression + docs update.
+
+---
+
 ## 2026-04-22 21:25 — Mac — Followup #3c shipped end-to-end: kernel is a NAT router
 
 Kaden: "lets move onto 3c bro … we can push ultra hard on this next

@@ -115,6 +115,10 @@ Everything is exercised end-to-end on QEMU, no real Docker needed:
 | `qemu_nat_full_pipeline_e2e.py` | Python cave ↔ Python internet | PASS |
 | `qemu_nat_autopump_e2e.py` | same but no manual shell ticks | PASS |
 | `qemu_nat_daemon_bind_demo.py` | daemon → kernel IP sync | PASS |
+| `qemu_nat_arp_e2e.py` | ARP responder on nic 1 | PASS |
+| `qemu_nat_gc_demo.py` | TTL eviction per-proto | PASS |
+| `qemu_nat_icmp_e2e.py` | ICMP Echo Request/Reply through NAT | PASS |
+| `qemu_nat_fragment_demo.py` | fragment detection distinct from parse | PASS |
 
 ## Going live against real Docker containers
 
@@ -148,22 +152,50 @@ To wire a real Docker container onto nic 1:
 7. Frames now traverse vmnet → Bat_OS nic 1 → classifier → NAT →
    Bat_OS nic 0 → QEMU slirp → internet, with replies reversed.
 
-## Known gaps / future work
+## Gap closures (2026-04-22 evening)
 
+- **ARP on nic 1** — `try_handle_arp` in nat.rs answers ARP requests
+  for `CAVES_GATEWAY_IP = 192.168.77.1` with nic 1's MAC; requests
+  for any other target are ignored. Counted as `arp-replies` /
+  `arp-ignored`. Test: `qemu_nat_arp_e2e.py` PASS.
+- **NAT TTL GC** — per-proto TTLs (UDP 60s / TCP 300s / ICMP 30s).
+  Entries stamped with `last_seen_ticks` on create + every hit;
+  `gc_tick()` runs from `nat::tick()` every main-loop iteration
+  with a 1Hz throttle. Counter `nat-gc-evicted`. Test:
+  `qemu_nat_gc_demo.py` PASS (3 entries installed, 2 evicted, 1
+  TCP kept fresh).
+- **ICMP Echo Request/Reply** — identifier plays the role of ports
+  for NAT translation. Outbound Echo Request: id rewritten to a
+  NAT-allocated handle, checksum recomputed (no pseudo-header).
+  Inbound Echo Reply: lookup by translated id → restore cave's
+  original id → deliver. Counters: `icmp-forwarded`, `icmp-delivered`.
+  Test: `qemu_nat_icmp_e2e.py` PASS (cave id=0x1234 → translated
+  → reply arrives with id=0x1234 restored).
+- **IPv4 fragments** — classifier now distinguishes fragments
+  (MF=1 or offset>0) from parse errors via a dedicated
+  `PktVerdict::DropFragment` + `drop-fragment` counter. Full
+  reassembly-then-NAT is the natural next step; this commit ships
+  the visibility so operators can see "need larger MTU" instead of
+  bucketing into drop-parse. Test: `qemu_nat_fragment_demo.py` PASS.
+
+## Still deferred
+
+- **Reassemble-and-NAT fragments** — buffered fragment table
+  (src_ip, ip_id, proto) → reassembled buffer, with egress
+  re-fragmentation. Independent multi-day chunk.
+- **Real Docker container through vmnet** — works per the recipe
+  above but requires sudo + Docker macvlan setup the test harness
+  doesn't automate. `scripts/qemu_vmnet_launch.sh` handles the
+  QEMU side; the Docker side is 3-4 manual commands in the design
+  doc.
+- **Other ICMP types** — destination-unreachable, time-exceeded,
+  redirect — all carry an embedded original header we'd have to
+  rewrite for stateless NAT to work. Ping is what operators
+  actually miss; the rest can wait.
 - **Packet path vs slirp**: Bat_OS's own IP stack also uses nic 0
   (via `net::poll_once`). A reply arriving on nic 0 currently gets
   tried by `nat::pump_replies` FIRST, then falls through to the
   existing IP handlers. On an overlap (e.g. a reply whose port
-  collides with a real kernel socket) the NAT path wins. This is
-  desirable today but worth reviewing once we load Bat_OS's own TLS
-  client + packet pipeline concurrently.
-- **ARP on nic 1**: containers will ARP for 192.168.77.1 (Bat_OS's
-  gateway address). We don't answer ARP on nic 1 yet; current tests
-  skip ARP because socket netdev peers fake L2 directly.
-- **ICMP / fragments**: classifier rejects. Real `ping` from a cave
-  won't work until we extend `parse_outbound` to cover proto 1.
-- **NAT table GC**: entries live forever today (up to 64 slots).
-  Need TTL-based eviction for long-running caves.
-- **UDP return traffic**: works but any stateless UDP reply that
-  arrives AFTER the single outbound packet with no more from the
-  cave side will hit stale NAT entries. GC will fix.
+  collides with a real kernel socket) the NAT path wins. Desirable
+  today but worth reviewing once we load Bat_OS's own TLS client +
+  packet pipeline concurrently.
