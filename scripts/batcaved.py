@@ -94,6 +94,82 @@ CAVE_KEYS_LOCK = threading.Lock()
 CAVE_AUDIT_DIR = LOG_ROOT / "caves"
 CAVE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
 
+# Integration #2: per-cave encrypted persistent volume.
+# On a `CREATE --persistent` request, we create an AES-256-encrypted
+# APFS disk image via macOS's built-in hdiutil, mount it, and bind-mount
+# it into the container at /data. The encryption key is the same
+# per-cave key Bat_OS sent for audit-log encryption. On DESTROY we
+# detach the volume AND delete the .dmg file — the key is also
+# zeroized in memory, so even if the .dmg survives via file-recovery
+# tools, no key exists to decrypt it.
+CAVE_VOLUMES_DIR = Path.home() / ".batcaved/volumes"
+CAVE_VOLUMES_DIR.mkdir(parents=True, exist_ok=True)
+# Track mount points so DESTROY can detach them.
+CAVE_MOUNTS = {}   # name -> (dmg_path, mount_point)
+CAVE_MOUNTS_LOCK = threading.Lock()
+
+def create_encrypted_volume(name: str, key_hex: str, size_mb: int = 64) -> Path:
+    """Create + attach an AES-256-encrypted APFS disk image.
+    Returns the Mac-side mount path (e.g. /Volumes/batcave-foo)."""
+    dmg_path = CAVE_VOLUMES_DIR / f"batcave-{name}.dmg"
+    vol_name = f"batcave-{name}"
+    if dmg_path.exists():
+        # Race with a leftover from a crashed prior run — nuke + rebuild
+        # so the key<->dmg binding is fresh.
+        try: dmg_path.unlink()
+        except Exception: pass
+    # hdiutil accepts passphrase via stdin with -stdinpass.
+    passphrase = key_hex
+    r = subprocess.run(
+        ["hdiutil", "create",
+         "-size", f"{size_mb}m",
+         "-fs", "APFS",
+         "-encryption", "AES-256",
+         "-stdinpass",
+         "-volname", vol_name,
+         str(dmg_path.with_suffix(""))],
+        input=passphrase, capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        raise RuntimeError(f"hdiutil create failed: {r.stderr.strip()}")
+    # Attach. Returns the mount path we need.
+    r = subprocess.run(
+        ["hdiutil", "attach", str(dmg_path), "-stdinpass"],
+        input=passphrase, capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        raise RuntimeError(f"hdiutil attach failed: {r.stderr.strip()}")
+    # Parse the last line of stdout — it's tab-separated and contains
+    # the mount path in the 3rd column for the APFS volume entry.
+    mount_path = None
+    for line in r.stdout.splitlines():
+        if "/Volumes/" in line:
+            mount_path = line.split("\t")[-1].strip()
+            break
+    if not mount_path:
+        raise RuntimeError(f"hdiutil attach: no mount path in output: {r.stdout}")
+
+    with CAVE_MOUNTS_LOCK:
+        CAVE_MOUNTS[name] = (str(dmg_path), mount_path)
+    log(f"[vol] cave {name}: encrypted DMG → {mount_path}")
+    return Path(mount_path)
+
+def destroy_encrypted_volume(name: str):
+    """Detach + delete a cave's encrypted volume. Safe to call even if
+    the volume doesn't exist."""
+    with CAVE_MOUNTS_LOCK:
+        entry = CAVE_MOUNTS.pop(name, None)
+    if not entry:
+        return
+    dmg_path, mount_path = entry
+    # Detach (force, in case something's still holding a handle).
+    subprocess.run(["hdiutil", "detach", "-force", mount_path],
+                   capture_output=True, timeout=15)
+    # Delete the backing file so even file-recovery tools find nothing.
+    try:
+        Path(dmg_path).unlink(missing_ok=True)
+    except Exception:
+        pass
+    log(f"[vol] cave {name}: encrypted DMG detached + deleted")
+
 # ── Crypto (DESIGN_CRYPTO.md #4) ─────────────────────────────
 # ChaCha20-Poly1305 AEAD per frame, with previous-frame tag chained
 # into the next frame's Associated Data (AAD). This gives us:
@@ -284,14 +360,22 @@ def list_managed():
             out.append({"name": name, "image": parts[1], "status": parts[2]})
     return out
 
-def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "") -> tuple[bool, str]:
+def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "",
+               persistent: bool = False) -> tuple[bool, str]:
     """Create a BatCave container. `caps_csv` is a comma-separated list of
     Linux capabilities to add (e.g. "NET_RAW,NET_ADMIN").
 
     `key_hex` (Phase 3) is an optional 64-char hex-encoded AES-256 key
     derived by Bat_OS from the cave name + master KDF. If provided, the
     daemon stores it in memory and uses it to AES-encrypt this cave's
-    audit log at rest. Key is zeroed on DESTROY."""
+    audit log at rest. Key is zeroed on DESTROY.
+
+    `persistent` (Integration #2) creates an AES-256-encrypted APFS disk
+    image (via macOS hdiutil) using `key_hex` as the passphrase, attaches
+    it, and bind-mounts into the container at /data. On DESTROY the image
+    is detached AND deleted — combined with key zeroization this gives
+    us "destroy = data unrecoverable" even if the .dmg file were
+    recovered via forensic tools."""
     if not name.replace("-", "").replace("_", "").isalnum():
         return False, "invalid name (alnum + - + _)"
     if not image:
@@ -329,6 +413,18 @@ def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "") -> tuple
     docker_caps = [c for c in caps if c.upper() not in ("EGRESS", "NET")]
     cap_args = [f for c in docker_caps for f in ("--cap-add", c)]
 
+    # Integration #2: if persistent, provision an encrypted volume
+    # using Bat_OS's per-cave key, mount it, bind into container /data.
+    volume_args = []
+    if persistent:
+        if not key_hex:
+            return False, "persistent mode requires a key_hex"
+        try:
+            mount_path = create_encrypted_volume(name, key_hex)
+            volume_args = ["-v", f"{mount_path}:/data"]
+        except Exception as e:
+            return False, f"encrypted volume create failed: {e}"
+
     # Build the run command. We run `sleep infinity` as the entrypoint so
     # the container stays alive; tools are invoked via `docker exec`.
     cmd = [
@@ -337,11 +433,16 @@ def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "") -> tuple
         "--network", network,
         "--dns", "1.1.1.1", "--dns", "8.8.8.8",
         *cap_args,
+        *volume_args,
         "--entrypoint", "sleep",
         image, "infinity",
     ]
     r = docker(*cmd)
     if r.returncode != 0:
+        # Clean up the encrypted volume we allocated above if docker failed
+        if persistent:
+            try: destroy_encrypted_volume(name)
+            except Exception: pass
         return False, r.stderr.strip() or "docker run failed"
 
     container_id = r.stdout.strip()[:12]
@@ -410,17 +511,18 @@ def cmd_run_stream(name: str, argv: list[str], writeln, write_raw):
 def cmd_destroy(name: str) -> tuple[bool, str]:
     cname = CAVE_PREFIX + name
     r = docker("rm", "-f", cname)
+    # Integration #2: tear down the encrypted volume (detach + delete DMG).
+    # Runs AFTER docker rm so the mount isn't held by the container.
+    # Safe even for non-persistent caves — just a no-op.
+    destroy_encrypted_volume(name)
     if r.returncode != 0:
         # Still zero the key — the container might already be gone.
         zeroize_cave_key(name)
         return False, r.stderr.strip() or "rm failed"
     # Phase 3: zero the per-cave key + delete the encrypted audit log.
-    # After this returns, there is no decryption path for any historical
-    # exec captures from this cave.
     zeroize_cave_key(name)
-    log(f"DESTROY {name} [key zeroed + audit log removed]")
-    # If no caves remain, tear down the shared network so restart-after-wipe
-    # is clean.
+    log(f"DESTROY {name} [container rm'd + encrypted volume deleted + "
+        f"key zeroed + audit log removed]")
     if not list_managed():
         teardown_network()
     return True, ""
@@ -434,13 +536,20 @@ def cmd_destroy_all() -> int:
         if r.returncode == 0:
             n += 1
             log(f"wipe: destroyed {c['name']}")
+        destroy_encrypted_volume(c["name"])
         zeroize_cave_key(c["name"])
     # Also clear any stragglers: keys for caves we don't track as docker
     # containers any more (e.g., container was already gone).
     with CAVE_KEYS_LOCK:
         stragglers = list(CAVE_KEYS.keys())
     for name in stragglers:
+        destroy_encrypted_volume(name)
         zeroize_cave_key(name)
+    # Also: any dangling mount points (e.g. daemon restarted after crash)
+    with CAVE_MOUNTS_LOCK:
+        straggler_mounts = list(CAVE_MOUNTS.keys())
+    for name in straggler_mounts:
+        destroy_encrypted_volume(name)
     teardown_network()
     return n
 
@@ -520,12 +629,13 @@ class Handler(socketserver.StreamRequestHandler):
                 if line.startswith("CREATE "):
                     parts = shlex.split(line)[1:]
                     if len(parts) < 2:
-                        self._send("ERR usage: CREATE <name> <image> [caps-csv] [key-hex]")
+                        self._send("ERR usage: CREATE <name> <image> [caps-csv] [key-hex] [--persistent]")
                         continue
                     name, image = parts[0], parts[1]
                     caps = parts[2] if len(parts) > 2 else ""
                     key_hex = parts[3] if len(parts) > 3 else ""
-                    ok, msg = cmd_create(name, image, caps, key_hex)
+                    persistent = any(p == "--persistent" for p in parts[4:])
+                    ok, msg = cmd_create(name, image, caps, key_hex, persistent)
                     self._send("OK " + msg if ok else "ERR " + msg)
                     continue
 

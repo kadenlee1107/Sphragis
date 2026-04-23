@@ -144,6 +144,28 @@ pub fn create_with_key(
     caps: &[&str],
     key: Option<&[u8; 32]>,
 ) -> Result<String, &'static str> {
+    create_full(name, image, caps, key, false)
+}
+
+/// Integration #2: create a cave backed by an AES-256-encrypted APFS
+/// disk image on the Mac host. The daemon uses the per-cave key as
+/// the volume passphrase; destroy detaches AND deletes the .dmg.
+pub fn create_persistent(
+    name: &str,
+    image: &str,
+    caps: &[&str],
+    key: &[u8; 32],
+) -> Result<String, &'static str> {
+    create_full(name, image, caps, Some(key), true)
+}
+
+fn create_full(
+    name: &str,
+    image: &str,
+    caps: &[&str],
+    key: Option<&[u8; 32]>,
+    persistent: bool,
+) -> Result<String, &'static str> {
     let mut cmd = String::from("CREATE ");
     cmd.push_str(name);
     cmd.push(' ');
@@ -169,6 +191,16 @@ pub fn create_with_key(
             cmd.push(hex[(b >> 4) as usize] as char);
             cmd.push(hex[(b & 0x0f) as usize] as char);
         }
+    } else if persistent {
+        // Persistent volumes require a key; protocol would otherwise
+        // place --persistent in the key slot.
+        return Err("persistent caves require a key");
+    }
+
+    // Integration #2: --persistent flag. Daemon provisions an encrypted
+    // DMG via hdiutil using the key above as the passphrase.
+    if persistent {
+        cmd.push_str(" --persistent");
     }
 
     send_cmd(&cmd)?;

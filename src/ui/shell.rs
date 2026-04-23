@@ -1127,10 +1127,12 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
             let mut kit_name: &str = "";
             let mut docker_image: &str = "";
             let mut docker_caps: &str = "";
+            let mut persistent_vol = false;
             for i in 3..MAX_PARTS {
                 let p = parts[i];
                 if p.is_empty() { continue; }
                 if p == "--ephemeral" { ephemeral = true; }
+                else if p == "--persistent" { persistent_vol = true; }
                 else if let Some(k) = p.strip_prefix("--kit:")    { kit_name = k; }
                 else if let Some(img) = p.strip_prefix("--docker:") { docker_image = img; }
                 else if let Some(c) = p.strip_prefix("--caps:")   { docker_caps = c; }
@@ -1172,8 +1174,13 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                             }
                         }
                     }
-                    crate::batcave::docker_client::create_with_key(
-                        arg1, docker_image, &caps_buf[..n], Some(&key))
+                    if persistent_vol {
+                        crate::batcave::docker_client::create_persistent(
+                            arg1, docker_image, &caps_buf[..n], &key)
+                    } else {
+                        crate::batcave::docker_client::create_with_key(
+                            arg1, docker_image, &caps_buf[..n], Some(&key))
+                    }
                 });
                 match spin_res {
                     Ok(id) => {
