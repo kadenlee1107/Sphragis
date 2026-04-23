@@ -79,7 +79,9 @@ LOG_FILE      = LOG_ROOT / f"daemon-{datetime.now().strftime('%Y%m%d-%H%M%S')}.l
 
 # ── State (thread-safe-ish, single-daemon design) ────────────────
 STATE_LOCK = threading.Lock()
-NETWORK_NAME = None     # created on first CREATE, torn down on last DESTROY
+NETWORK_NAME = None     # legacy single-network pointer (first created)
+NETWORK_INTERNAL = None # --internal bridge for caves without `net` cap
+NETWORK_EGRESS   = None # normal bridge for caves with `net` cap (Phase 4)
 HEARTBEAT    = {"last": time.time(), "deadman_s": 0}  # deadman_s=0 → disabled
 
 # Per-cave AES-256 keys. Lives in RAM ONLY — NEVER touched to disk.
@@ -178,26 +180,55 @@ def docker(*args, check=False, capture=True):
                        capture_output=capture, text=True, check=check)
     return r
 
-def ensure_network():
-    global NETWORK_NAME
+def ensure_network(internal: bool = False):
+    """Bring up (lazily) the internal or external cave bridge.
+    Phase 4: we track TWO bridges.
+      * batnet-internal-XXXX  — created with `--internal`: no external
+        routing, caves on this bridge can ONLY talk to each other or
+        the Mac host. Used when Bat_OS's cave lacks the `net` capability.
+      * batnet-egress-XXXX    — normal bridge; permits external egress.
+        Used when Bat_OS grants `net`.
+    """
+    global NETWORK_NAME, NETWORK_INTERNAL, NETWORK_EGRESS
     with STATE_LOCK:
-        if NETWORK_NAME:
-            return NETWORK_NAME
-        name = f"batnet-{uuid.uuid4().hex[:8]}"
-        r = docker("network", "create", "--driver", "bridge", name)
-        if r.returncode != 0:
-            raise RuntimeError(f"network create failed: {r.stderr.strip()}")
-        NETWORK_NAME = name
-        log(f"network created: {name}")
-        return name
+        if internal:
+            if NETWORK_INTERNAL:
+                return NETWORK_INTERNAL
+            name = f"batnet-internal-{uuid.uuid4().hex[:6]}"
+            r = docker("network", "create", "--driver", "bridge",
+                       "--internal", name)
+            if r.returncode != 0:
+                raise RuntimeError(f"internal network create failed: {r.stderr.strip()}")
+            NETWORK_INTERNAL = name
+            # Keep legacy NETWORK_NAME pointing at whichever was created
+            # first, for list/cleanup paths that don't need to know.
+            if NETWORK_NAME is None: NETWORK_NAME = name
+            log(f"network created: {name} (INTERNAL — no external egress)")
+            return name
+        else:
+            if NETWORK_EGRESS:
+                return NETWORK_EGRESS
+            name = f"batnet-egress-{uuid.uuid4().hex[:6]}"
+            r = docker("network", "create", "--driver", "bridge", name)
+            if r.returncode != 0:
+                raise RuntimeError(f"egress network create failed: {r.stderr.strip()}")
+            NETWORK_EGRESS = name
+            if NETWORK_NAME is None: NETWORK_NAME = name
+            log(f"network created: {name} (egress — net cap required)")
+            return name
 
 def teardown_network():
-    global NETWORK_NAME
+    global NETWORK_NAME, NETWORK_INTERNAL, NETWORK_EGRESS
     with STATE_LOCK:
-        if NETWORK_NAME:
-            docker("network", "rm", NETWORK_NAME, check=False)
-            log(f"network removed: {NETWORK_NAME}")
-            NETWORK_NAME = None
+        for (var_name, val) in [("INTERNAL", NETWORK_INTERNAL),
+                                  ("EGRESS", NETWORK_EGRESS),
+                                  ("NAME", NETWORK_NAME)]:
+            if val and (val == NETWORK_INTERNAL or val == NETWORK_EGRESS or val == NETWORK_NAME):
+                docker("network", "rm", val, check=False)
+        log("networks removed")
+        NETWORK_NAME = None
+        NETWORK_INTERNAL = None
+        NETWORK_EGRESS = None
 
 def list_managed():
     """Return list of {name, image, status} dicts for all containers
@@ -233,10 +264,31 @@ def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "") -> tuple
     if r.returncode == 0 and cname in r.stdout.splitlines():
         return False, f"cave '{name}' already exists"
 
-    network = ensure_network()
+    # `-` is the Bat_OS client's placeholder for "no caps csv provided".
+    # Treat as empty so it doesn't get passed as a literal cap.
+    if caps_csv.strip() == "-":
+        caps_csv = ""
+    caps = [c.strip() for c in caps_csv.split(",") if c.strip() and c.strip() != "-"]
 
-    caps = [c.strip() for c in caps_csv.split(",") if c.strip()]
-    cap_args = [f for c in caps for f in ("--cap-add", c)]
+    # Phase 4: network egress is a capability. If the caps csv contains
+    # "NET" or the special marker "EGRESS" (which Bat_OS adds when the
+    # cave has the `net` cap granted), we join the egress bridge;
+    # otherwise the cave lands on the --internal bridge which cannot
+    # reach anything outside the docker host.
+    #
+    # Docker-level caps (NET_RAW, NET_ADMIN) don't grant egress — they
+    # control kernel primitives inside the container (raw sockets,
+    # interface config). Egress is a separate concern that lives at
+    # the Docker-network layer, where we can enforce it uniformly
+    # across every tool (nmap, curl, wget, netcat — all blocked if
+    # the cave lacks egress).
+    want_egress = any(c.upper() in ("EGRESS", "NET") for c in caps)
+    network = ensure_network(internal=not want_egress)
+
+    # Don't pass our marker caps to docker run — they're Bat_OS-level
+    # signals, not Linux kernel capabilities.
+    docker_caps = [c for c in caps if c.upper() not in ("EGRESS", "NET")]
+    cap_args = [f for c in docker_caps for f in ("--cap-add", c)]
 
     # Build the run command. We run `sleep infinity` as the entrypoint so
     # the container stays alive; tools are invoked via `docker exec`.
