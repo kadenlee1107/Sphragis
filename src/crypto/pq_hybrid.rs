@@ -132,6 +132,20 @@ impl HybridKeyPair {
         out[X25519_PUB_LEN..].copy_from_slice(ek.as_slice());
         out
     }
+
+    /// Extract the raw X25519 secret scalar for storage in places that
+    /// can only hold [u8; 32] (e.g., const-initialized TlsSession).
+    pub fn x25519_sk_bytes(&self) -> [u8; X25519_PUB_LEN] {
+        self.x25519_sk.to_bytes()
+    }
+
+    /// Serialize the ML-KEM-768 decapsulation key to raw bytes (2400 B
+    /// per NIST FIPS 203). Used by the TLS integration to stash decap
+    /// material in a fixed-size TlsSession field.
+    pub fn mlkem_dk_bytes(&self) -> Vec<u8> {
+        let enc = self.mlkem_dk.as_bytes();
+        enc.as_slice().to_vec()
+    }
 }
 
 /// Sender-side hybrid KEM. Given a recipient's hybrid public key (as
@@ -180,6 +194,55 @@ pub fn encapsulate(recipient_public: &[u8])
     out[..X25519_PUB_LEN].copy_from_slice(&eph_pk);
     out[X25519_PUB_LEN..].copy_from_slice(ct_arr.as_slice());
     Ok((shared, out))
+}
+
+/// Stateless variant used by the TLS integration where the session
+/// stores raw serialized key material (const-initializable) rather
+/// than a live `HybridKeyPair` struct.
+///
+/// Inputs:
+///   * `x25519_sk_bytes`  — 32-byte X25519 secret scalar
+///   * `mlkem_dk_bytes`   — serialized ML-KEM-768 decapsulation key
+///                          (2400 bytes per NIST FIPS 203)
+///   * `ciphertext_blob`  — 1120-byte wire blob: eph_x25519_pub || ml_kem_ct
+///
+/// Output: 32-byte combined shared secret identical to what
+/// `decapsulate(HybridKeyPair, blob)` would produce.
+pub fn decapsulate_from_bytes(
+    x25519_sk_bytes: &[u8; X25519_PUB_LEN],
+    mlkem_dk_bytes: &[u8],
+    ciphertext_blob: &[u8],
+) -> Result<[u8; SHARED_LEN], &'static str> {
+    if ciphertext_blob.len() != HYBRID_CT_LEN {
+        return Err("hybrid: bad ciphertext length");
+    }
+
+    // ── Classical half ──
+    let mut eph_pk_bytes = [0u8; 32];
+    eph_pk_bytes.copy_from_slice(&ciphertext_blob[..X25519_PUB_LEN]);
+    let eph_pk = X25519Public::from(eph_pk_bytes);
+    let my_sk = StaticSecret::from(*x25519_sk_bytes);
+    let ss_c = my_sk.diffie_hellman(&eph_pk);
+
+    // ── PQ half ──
+    type MlKemDk = <MlKem768 as KemCore>::DecapsulationKey;
+    let dk_arr: Encoded<MlKemDk> = Array::try_from(mlkem_dk_bytes)
+        .map_err(|_| "hybrid: ML-KEM decap key length mismatch")?;
+    let dk = <MlKemDk as EncodedSizeUser>::from_bytes(&dk_arr);
+    let ct_bytes: &[u8] = &ciphertext_blob[X25519_PUB_LEN..];
+    let ct_arr: ml_kem::Ciphertext<MlKem768> = Array::try_from(ct_bytes)
+        .map_err(|_| "hybrid: ML-KEM ciphertext length mismatch")?;
+    let ss_pq_arr = dk.decapsulate(&ct_arr)
+        .map_err(|_| "hybrid: ML-KEM decapsulate failed")?;
+
+    let mut combined_in = [0u8; 64 + 16];
+    combined_in[..32].copy_from_slice(ss_c.as_bytes());
+    combined_in[32..64].copy_from_slice(ss_pq_arr.as_slice());
+    combined_in[64..].copy_from_slice(b"BATOS-PQ-HYBRID\x00");
+    let mut shared = [0u8; SHARED_LEN];
+    let h = sha256::hash(&combined_in);
+    shared.copy_from_slice(&h);
+    Ok(shared)
 }
 
 /// Recipient-side hybrid decap. Given our keypair and the sender's

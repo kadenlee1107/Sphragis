@@ -42,6 +42,17 @@ const EXT_SERVER_NAME: u16 = 0;
 
 // Named groups
 const X25519: u16 = 29;
+// IETF-assigned codepoint for hybrid X25519+ML-KEM-768 (RFC-in-progress).
+const X25519_MLKEM768: u16 = 0x11EC;
+
+/// Toggle advertising of post-quantum hybrid key_share alongside
+/// classical X25519. When `true`, ClientHello includes BOTH entries
+/// and the server picks. When `false`, only X25519 is offered
+/// (identical to pre-integration behaviour).
+///
+/// Safe to flip — servers that don't understand 0x11EC MUST ignore it
+/// per RFC 8446's extensibility rules.
+const TLS_HYBRID_ENABLED: bool = true;
 
 /// NET2-016 / NEW-CRYPTO-026 / debug-fingerprint scrub: TLS-internal debug
 /// prints are gated behind this flag. The default is `false` so production
@@ -114,6 +125,21 @@ pub struct TlsSession {
     // Certificate / CertificateVerify / EncryptedExtensions will
     // be accepted within the same handshake.
     pub finished_seen: bool,
+    // Integration #3 wiring (DESIGN_CRYPTO.md #5): PQ-hybrid
+    // key_share material. Populated when ClientHello advertises
+    // X25519MLKEM768 (0x11EC) alongside classical X25519. If the
+    // server picks the hybrid group in its ServerHello, we
+    // deserialize mlkem_dk_bytes and decapsulate the server's blob
+    // instead of computing classical X25519(our_private, peer_public).
+    //
+    // ML-KEM-768 decapsulation key size per NIST FIPS 203 is 2400 B;
+    // we store 2432 (rounded) so the fixed array accommodates the full
+    // encoded form plus a small slack byte.
+    pub hybrid_x25519_sk: [u8; 32],
+    pub hybrid_mlkem_dk: [u8; 2432],
+    pub hybrid_mlkem_dk_len: usize,
+    pub hybrid_active: bool,   // we advertised hybrid this session
+    pub hybrid_used:   bool,   // server actually picked hybrid
 }
 
 impl TlsSession {
@@ -167,6 +193,11 @@ const EMPTY_TLS_SESSION: TlsSession = TlsSession {
     peer_spki_len: 0,
     peer_pubkey_alg: 0,
     finished_seen: false,
+    hybrid_x25519_sk: [0; 32],
+    hybrid_mlkem_dk: [0; 2432],
+    hybrid_mlkem_dk_len: 0,
+    hybrid_active: false,
+    hybrid_used: false,
 };
 
 static mut TLS_STATES: [TlsSession; TLS_MAX_PCBS] =
@@ -292,11 +323,20 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
     buf[pos] = 2; pos += 1; // list length (1 version × 2 bytes)
     buf[pos] = 0x03; buf[pos+1] = 0x04; pos += 2; // TLS 1.3
 
-    // Supported groups extension (required)
+    // Supported groups extension (required). Advertise hybrid first so
+    // servers that support both pick it (server-side typically picks
+    // the first mutually-supported group).
     buf[pos] = 0; buf[pos+1] = 10; pos += 2; // type = supported_groups
-    buf[pos] = 0; buf[pos+1] = 4; pos += 2; // length
-    buf[pos] = 0; buf[pos+1] = 2; pos += 2; // list length
-    buf[pos] = 0; buf[pos+1] = 29; pos += 2; // X25519
+    if TLS_HYBRID_ENABLED {
+        buf[pos] = 0; buf[pos+1] = 6;  pos += 2; // length = 2 + 4
+        buf[pos] = 0; buf[pos+1] = 4;  pos += 2; // list length = 4
+        buf[pos..pos+2].copy_from_slice(&X25519_MLKEM768.to_be_bytes()); pos += 2;
+        buf[pos..pos+2].copy_from_slice(&X25519.to_be_bytes());          pos += 2;
+    } else {
+        buf[pos] = 0; buf[pos+1] = 4;  pos += 2; // length = 2 + 2
+        buf[pos] = 0; buf[pos+1] = 2;  pos += 2; // list length
+        buf[pos..pos+2].copy_from_slice(&X25519.to_be_bytes()); pos += 2;
+    }
 
     // Signature algorithms extension
     buf[pos] = 0; buf[pos+1] = 13; pos += 2; // type = signature_algorithms
@@ -323,14 +363,60 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
     let alpn = b"http/1.1";
     buf[pos..pos+8].copy_from_slice(alpn); pos += 8;
 
-    // Key share extension (X25519 public key)
+    // Key share extension. When hybrid is enabled we include BOTH a
+    // classical X25519 key_share AND a hybrid X25519+ML-KEM-768 one.
+    // Server picks one based on its supported_groups intersection.
+    //
+    // Size accounting (hybrid branch):
+    //   entry = 2 group + 2 len + 1216 payload = 1220 B per hybrid
+    //   X25519 entry      = 2 + 2 + 32 = 36 B
+    //   client_key_share  = 36 + 1220 = 1256 B
+    //   extension payload = 2 list_len + 1256 = 1258 B
+    //   extension         = 2 type + 2 len + 1258 = 1262 B
+    //
+    // This is why the ClientHello buffer in `handshake_inner` was bumped
+    // from 512 → 4096.
     buf[pos] = 0; buf[pos+1] = 51; pos += 2; // type = key_share
-    buf[pos] = 0; buf[pos+1] = 38; pos += 2; // length = 2 + 2 + 2 + 32
-    buf[pos] = 0; buf[pos+1] = 36; pos += 2; // client key share length
-    buf[pos] = 0; buf[pos+1] = 29; pos += 2; // X25519
+    let ks_len_pos = pos; pos += 2;          // ext len placeholder
+    let ks_inner_len_pos = pos; pos += 2;    // inner list len placeholder
+
+    if TLS_HYBRID_ENABLED {
+        // Generate hybrid keypair for this session. Stash the decap
+        // material in the session so we can complete the handshake
+        // when/if the server picks hybrid.
+        let kp = crate::crypto::pq_hybrid::HybridKeyPair::generate();
+        let pub_bytes = kp.public_bytes();
+        let sk_bytes = kp.x25519_sk_bytes();
+        let dk_bytes = kp.mlkem_dk_bytes();
+        sess.hybrid_x25519_sk = sk_bytes;
+        let dk_n = dk_bytes.len().min(sess.hybrid_mlkem_dk.len());
+        sess.hybrid_mlkem_dk[..dk_n].copy_from_slice(&dk_bytes[..dk_n]);
+        sess.hybrid_mlkem_dk_len = dk_n;
+        sess.hybrid_active = true;
+
+        // Hybrid key_share entry (preferred)
+        buf[pos..pos+2].copy_from_slice(&X25519_MLKEM768.to_be_bytes()); pos += 2;
+        buf[pos] = (pub_bytes.len() >> 8) as u8;
+        buf[pos+1] = pub_bytes.len() as u8; pos += 2;
+        buf[pos..pos+pub_bytes.len()].copy_from_slice(&pub_bytes);
+        pos += pub_bytes.len();
+    } else {
+        sess.hybrid_active = false;
+    }
+
+    // Classical X25519 entry (always sent as fallback)
+    buf[pos..pos+2].copy_from_slice(&X25519.to_be_bytes()); pos += 2;
     buf[pos] = 0; buf[pos+1] = 32; pos += 2; // key length
     buf[pos..pos+32].copy_from_slice(&sess.our_public);
     pos += 32;
+
+    // Fill in key_share lengths
+    let ks_inner_len = pos - ks_inner_len_pos - 2;
+    buf[ks_inner_len_pos]   = (ks_inner_len >> 8) as u8;
+    buf[ks_inner_len_pos+1] = ks_inner_len as u8;
+    let ks_ext_len = pos - ks_len_pos - 2;
+    buf[ks_len_pos]   = (ks_ext_len >> 8) as u8;
+    buf[ks_len_pos+1] = ks_ext_len as u8;
 
     // Fill in lengths
     let ext_len = pos - ext_len_pos - 2;
@@ -440,15 +526,43 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
 
             if ext_type == 51 {
                 // key_share: named_group (2) + key_exchange_length (2) + key_exchange
-                if ext_data_len >= 4 + 32 {
-                    if let Some(key_end) = pos.checked_add(36) {
-                        if key_end <= content.len() {
-                            let group = ((content[pos] as u16) << 8) | content[pos + 1] as u16;
-                            let key_len = ((content[pos + 2] as usize) << 8) | content[pos + 3] as usize;
-                            if group == 29 && key_len == 32 {
-                                sess.peer_public.copy_from_slice(&content[pos + 4..pos + 36]);
+                if ext_data_len >= 4 {
+                    let group = ((content[pos] as u16) << 8) | content[pos + 1] as u16;
+                    let key_len = ((content[pos + 2] as usize) << 8) | content[pos + 3] as usize;
+                    let key_start = pos + 4;
+                    let key_end = match key_start.checked_add(key_len) {
+                        Some(e) if e <= content.len() => e,
+                        _ => break,
+                    };
+
+                    if group == X25519 && key_len == 32 {
+                        sess.peer_public.copy_from_slice(&content[key_start..key_end]);
+                        saw_key_share = true;
+                        tdbg("[tls] found X25519 key_share\n");
+                    } else if group == X25519_MLKEM768
+                        && key_len == crate::crypto::pq_hybrid::HYBRID_CT_LEN
+                        && sess.hybrid_active
+                    {
+                        // Integration: server picked hybrid. Decapsulate
+                        // using our stored decap material; put the hybrid
+                        // shared secret into sess.shared_secret so the
+                        // HKDF schedule downstream consumes it unchanged.
+                        let ct_blob = &content[key_start..key_end];
+                        let dk_bytes = &sess.hybrid_mlkem_dk[..sess.hybrid_mlkem_dk_len];
+                        match crate::crypto::pq_hybrid::decapsulate_from_bytes(
+                            &sess.hybrid_x25519_sk, dk_bytes, ct_blob)
+                        {
+                            Ok(ss) => {
+                                sess.shared_secret.copy_from_slice(&ss);
+                                sess.hybrid_used = true;
                                 saw_key_share = true;
-                                tdbg("[tls] found X25519 key_share\n");
+                                uart::puts("[tls] server selected X25519+ML-KEM-768 hybrid — decap OK\n");
+                            }
+                            Err(e) => {
+                                uart::puts("[tls] hybrid decapsulate failed: ");
+                                uart::puts(e);
+                                uart::puts(" — abort\n");
+                                return Err("hybrid decap failed");
                             }
                         }
                     }
@@ -466,25 +580,24 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
             return Err("TLS: ServerHello missing X25519 key_share");
         }
 
-        // ATTACK-CRYPTO-008: reject small-order / identity X25519 peer
-        // public keys. RFC 7748 §6.1 lists the 12 known low-order inputs;
-        // on Curve25519 they all force shared_secret = 0, which would
-        // derive known session keys. An active MITM can inject one of
-        // these in the server key_share to pwn the handshake.
-        if is_low_order_x25519(&sess.peer_public) {
-            uart::puts("[tls] rejected low-order X25519 peer public\n");
-            return Err("X25519 peer public key has small order");
-        }
-
-        // Compute shared secret via X25519
-        x25519_scalar_mult(&sess.our_private, &sess.peer_public, &mut sess.shared_secret);
-
-        // Defense in depth: even if the low-order check missed a new
-        // point, if the shared secret is all-zero we've been pwned.
-        // RFC 8446 §7.4.2 requires aborting in that case.
-        if sess.shared_secret.iter().all(|&b| b == 0) {
-            uart::puts("[tls] shared_secret is all-zero — abort\n");
-            return Err("X25519 shared secret is zero");
+        // Classical X25519 path only runs when the server did NOT pick
+        // the hybrid group. (When hybrid is used, shared_secret was
+        // already populated by decapsulate_from_bytes above.)
+        if !sess.hybrid_used {
+            // ATTACK-CRYPTO-008: reject small-order / identity X25519 peer
+            // public keys. RFC 7748 §6.1 lists the 12 known low-order inputs;
+            // on Curve25519 they all force shared_secret = 0, which would
+            // derive known session keys. An active MITM can inject one of
+            // these in the server key_share to pwn the handshake.
+            if is_low_order_x25519(&sess.peer_public) {
+                uart::puts("[tls] rejected low-order X25519 peer public\n");
+                return Err("X25519 peer public key has small order");
+            }
+            x25519_scalar_mult(&sess.our_private, &sess.peer_public, &mut sess.shared_secret);
+            if sess.shared_secret.iter().all(|&b| b == 0) {
+                uart::puts("[tls] shared_secret is all-zero — abort\n");
+                return Err("X25519 shared secret is zero");
+            }
         }
 
         sess.state = TlsState::ServerHelloReceived;
@@ -513,7 +626,9 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
     sess.leftover_len = 0; // Reset leftover buffer for new session
 
     // Step 1: Send ClientHello
-    let mut ch_buf = [0u8; 512];
+    // Bumped from 512 → 4096 to accommodate the optional hybrid
+    // key_share entry (X25519+ML-KEM-768 adds ~1220 B).
+    let mut ch_buf = [0u8; 4096];
     let ch_len = build_client_hello(hostname, &mut ch_buf);
     crate::net::tcp::send_data(&ch_buf[..ch_len]).map_err(|_| "send ClientHello failed")?;
     tdbg("[tls] ClientHello sent\n");
