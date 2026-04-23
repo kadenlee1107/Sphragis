@@ -157,6 +157,10 @@ fn execute(cmd: &str) {
         "cpol-daemon-list" => cmd_cpol_daemon_list(),
         "cpol-daemon-show" => cmd_cpol_daemon_show(parts[1]),
         "nic-status"  => cmd_nic_status(),
+        "nat-selftest"=> cmd_nat_selftest(),
+        "nat-stats"   => cmd_nat_stats(),
+        "nat-bind"    => cmd_nat_bind(&parts[1..]),
+        "nat-bindings" => cmd_nat_bindings(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
         "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
@@ -787,6 +791,79 @@ fn cmd_cpol_daemon_list() {
         Err(e) => {
             console::puts("  cpol-daemon-list FAILED: "); console::puts(e); console::puts("\n");
         }
+    }
+}
+
+// Followup 3c-nat: parse IP octet fields
+fn parse_ipv4(s: &str) -> Option<u32> {
+    let mut ip: u32 = 0;
+    let mut n = 0;
+    for (i, part) in s.split('.').enumerate() {
+        if i >= 4 { return None; }
+        let oct: u32 = part.parse().ok()?;
+        if oct > 255 { return None; }
+        ip = (ip << 8) | oct;
+        n += 1;
+    }
+    if n == 4 { Some(ip) } else { None }
+}
+
+fn cmd_nat_selftest() {
+    console::puts_hi("  NAT SELF-TEST (packet-layer cave_policy gate)\n");
+    match crate::net::nat::selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS synthetic-frame classifier\n");
+            console::puts("    allow:            "); print_num(r.allow as usize); console::puts("\n");
+            console::puts("    drop-policy:      "); print_num(r.drop_policy as usize); console::puts("\n");
+            console::puts("    drop-unknown-src: "); print_num(r.drop_unknown_src as usize); console::puts("\n");
+            console::puts("    drop-parse:       "); print_num(r.drop_parse as usize); console::puts("\n");
+            console::puts("    bindings:         "); print_num(r.bindings_installed); console::puts("\n");
+        }
+        Err(e) => { console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
+fn cmd_nat_stats() {
+    let s = crate::net::nat::stats();
+    console::puts_hi("  NAT COUNTERS\n");
+    console::puts("    allow:            "); print_num(s.allow as usize); console::puts("\n");
+    console::puts("    drop-policy:      "); print_num(s.drop_policy as usize); console::puts("\n");
+    console::puts("    drop-unknown-src: "); print_num(s.drop_unknown_src as usize); console::puts("\n");
+    console::puts("    drop-parse:       "); print_num(s.drop_parse as usize); console::puts("\n");
+}
+
+fn cmd_nat_bind(args: &[&str]) {
+    if args.len() < 2 || args[0].is_empty() {
+        console::puts("  usage: nat-bind <ipv4> <cave_name>\n");
+        return;
+    }
+    let Some(ip) = parse_ipv4(args[0]) else {
+        console::puts("  bad IPv4\n"); return;
+    };
+    crate::net::nat::bind_ip(ip, args[1]);
+    console::puts("  nat-bind "); console::puts(args[0]); console::puts(" -> ");
+    console::puts(args[1]); console::puts("  OK\n");
+}
+
+fn cmd_nat_bindings() {
+    let bs = crate::net::nat::list_bindings();
+    console::puts_hi("  NAT IP BINDINGS\n");
+    if bs.is_empty() { console::puts("  (no bindings)\n"); return; }
+    for (ip, cave) in bs.iter() {
+        let b = [
+            ((ip >> 24) & 0xFF) as u8,
+            ((ip >> 16) & 0xFF) as u8,
+            ((ip >>  8) & 0xFF) as u8,
+            ( ip        & 0xFF) as u8,
+        ];
+        console::puts("    ");
+        for i in 0..4 {
+            print_num(b[i] as usize);
+            if i < 3 { console::putc(b'.'); }
+        }
+        console::puts(" -> ");
+        console::puts(cave.as_str());
+        console::puts("\n");
     }
 }
 
