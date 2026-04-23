@@ -11,6 +11,104 @@ end of a session.
 
 ---
 
+## 2026-04-23 16:05 — Mac — In-kernel dynamic linker, 575/600 glibc symbols resolved
+
+Kaden said "whatever you have to do let's do it" after I laid out the
+Phase 2 / Phase 4 options. Rather than attempt a musl-static Chromium
+rebuild (multi-day blocker), I went with the in-kernel dynamic-linker
+route: load content_shell alongside its DT_NEEDED `.so` files in one
+cave, resolve cross-module symbols at load time.
+
+End result of this session: `content_shell` now loads at EL0 with
+540k relocations + 575 cross-module symbol resolutions applied, jumps
+into `__libc_start_main` in the **real** glibc, runs libc's own
+startup code, and eventually crashes on an uninitialized function
+pointer (EC=0x22 / PC alignment). That's the "DT_INIT_ARRAY hasn't
+run yet / TLS isn't set up" boundary — exactly the next unit of work.
+
+### Landed in commit ee004ba1
+
+1. **`tools/bake_chromium_archive.sh`**: new bake script that packs
+   `bin/content_shell` + 12 `.so` files into one BATARCH-framed
+   initrd blob (284 MB total). Fixed-header format with per-file
+   `{name[64], size, offset}` entries.
+2. **Real runtime libraries** pulled from a `debian:bookworm` ARM64
+   container and stashed under `ports/chromium_port/out/lib_runtime/`
+   (gitignored). The Chromium sysroot we had was stubbed (ld-linux
+   was 8.8 KB — real is 203 KB), so we bypass it for runtime blobs.
+3. **`src/kernel/mm/initrd.rs`**: `is_archive()`, `archive_file()`,
+   `archive_for_each()`, `blob_phys_range()` — let the rest of the
+   kernel consume the multi-file format without touching the
+   existing BATCHROM probe logic.
+4. **`src/kernel/mm/mod.rs`** (critical bug fix): reserve the actual
+   initrd phys range in the frame bitmap. With `-initrd` delivery
+   the blob sits inside the frame pool's range; without reserving,
+   `alloc_frame` was handing us pages inside the initrd and the
+   first big PT_LOAD copy smashed the baked-in libraries (we saw
+   "0 REL 0 GLOB" for every `lib/*` before this fix).
+5. **`src/batcave/linux/loader.rs`**:
+   - `LoadedLib` struct (name, symtab_file, strtab_file, rela_off,
+     pltrel_off, value_offset, patch_offset, virt_base, …).
+   - `load_archive_multi(files, cave_virt_base)`: allocates one
+     contiguous slab for everything + 1 MB stack. Each lib gets a
+     2 MB-aligned sub-window. Two passes per lib: stage_copy_and_
+     parse (copy PT_LOADs, parse PT_DYNAMIC) then apply_relocs_
+     cross (walk .rela.dyn + .rela.plt, resolve UNDEF
+     GLOB_DAT/JUMP_SLOT across ALL loaded libs by name).
+   - Legacy single-ELF `load_elf_rebased` unchanged; baked-in
+     tests/hello / netsurf / freetype still use the old path.
+6. **`src/batcave/linux/runner.rs`**: detects `initrd::is_archive()`
+   and takes the multi-ELF path; plain-blob initrds go through the
+   old single-ELF path.
+
+### Measured progress
+
+```
+[mm] initrd reserved @ 0x48000000..0x59c723c4
+[runner] archive: 13 file(s)
+[loader/multi] reserved 188 MB + 1024 KB stack at phys 0x5ac00000
+[loader/multi] bin/content_shell: 539446 REL 50 GLOB 550 JUMP 5 IREL,
+               575 cross, 25 UNDEF                 ← down from 600
+[loader/multi] lib/libc.so.6:     1219 REL 58 GLOB 17 JUMP 2 IREL, 20 cross
+[loader/multi] lib/libnss3.so:     788 REL 64 GLOB 659 JUMP, 315 cross
+... every lib now has its own relocations ...
+[loader] --- executing ---
+!!! UNHANDLED SYNC EXCEPTION !!!
+  EC: 0x22     (PC alignment — calling through uninit glibc state)
+  ELR: 0xcf469e347c673dea
+```
+
+### Next session
+
+The crash is "I called through a function pointer in glibc's state
+that should have been filled in by the dynamic linker's init sequence."
+Two natural next pieces (pick one or do both):
+
+1. **DT_INIT_ARRAY execution.** Each lib has its own init constructors;
+   glibc depends on them running before anything else. Implementation:
+   queue each lib's init_array entries, eret to each one in order, handle
+   return via a trampoline that bounces back to EL1 for the next call.
+2. **TLS setup.** glibc uses `tpidr_el0` as the TLS pointer for
+   per-thread data (errno, stdio, locale). Allocate a TLS block for
+   the main thread, fill it per glibc's expected layout, write
+   `tpidr_el0` before the eret.
+
+Alternatively, **use the REAL ld-linux** (load it, not content_shell,
+as the main exe; ld.so then walks DT_NEEDED, opens .so files,
+mmap's, applies relocs, runs init_array, etc. all correctly). Needs
+~20 syscalls (mmap, openat, mprotect, fstat, read, close,
+set_tid_address, brk, getrandom, rt_sigprocmask, etc.) plus a ramfs
+serving our baked libs at /lib/. Longer path, but once done it's
+correct forever.
+
+Four clean commits today on the Chromium branch:
+  eabded85 — DTB-initrd delivery
+  9ee74129 — pipeline works with tests/hello
+  28f973f2 — real content_shell reaches __libc_start_main sentinel
+  ee004ba1 — in-kernel dynamic linker, 575/600 symbols resolved
+
+---
+
 ## 2026-04-23 15:10 — Mac — Real content_shell loads, reaches __libc_start_main
 
 Continued from the 12:35 entry. Kaden said "let's get moving" on the
