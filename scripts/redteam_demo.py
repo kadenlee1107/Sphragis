@@ -69,6 +69,26 @@ def icmp_cksum(buf):
 def ip_int(s): a,b,c,d=[int(p) for p in s.split(".")]; return (a<<24)|(b<<16)|(c<<8)|d
 def send_frame(c,f): c.sendall(struct.pack(">I",len(f))+f)
 
+def build_tls_client_hello(sni_host: str) -> bytes:
+    sni = sni_host.encode("ascii")
+    list_len = 1 + 2 + len(sni)
+    sn_ext = (bytes([(list_len>>8)&0xFF, list_len&0xFF])
+              + b"\x00"
+              + bytes([(len(sni)>>8)&0xFF, len(sni)&0xFF])
+              + sni)
+    ext = (b"\x00\x00"
+           + bytes([(len(sn_ext)>>8)&0xFF, len(sn_ext)&0xFF])
+           + sn_ext)
+    ch = (b"\x03\x03" + b"\x00"*32 + b"\x00"
+          + b"\x00\x02\xc0\x2c" + b"\x01\x00"
+          + bytes([(len(ext)>>8)&0xFF, len(ext)&0xFF]) + ext)
+    hs = (b"\x01"
+          + bytes([(len(ch)>>16)&0xFF, (len(ch)>>8)&0xFF, len(ch)&0xFF])
+          + ch)
+    return (b"\x16\x03\x01"
+            + bytes([(len(hs)>>8)&0xFF, len(hs)&0xFF])
+            + hs)
+
 def build_tcp(smac,dmac,sip,dip,sport,dport,flags=0x02,payload=b""):
     fr=bytearray(); fr+=bytes(dmac)+bytes(smac)+b"\x08\x00"
     ip=bytearray(20); ip[0]=0x45; ip[8]=64; ip[9]=6
@@ -222,7 +242,13 @@ def main():
 
         run_cmd(c,"nat-reset")
         run_cmd(c,"nat-bind 192.168.77.10 kali")
-        run_cmd(c,"cpol-add kali 93.184.216.34 443 tcp")
+        # Pin the allowed rule to a specific SNI (example.com) so the
+        # classifier can distinguish legitimate TLS sessions from a
+        # C2 tunnel using the same IP:port.
+        run_cmd(c,"cpol-add-sni kali 93.184.216.34 443 example.com")
+        # Per-flow rate defends against fan-out attacks that spread
+        # across many destinations; per-cave pps is tuned permissive.
+        run_cmd(c,"cpol-flow-rate kali 2 3")
 
         kali_mac=[0x02,0xAA,0,0,0,0x10]
         nic1_mac=[0x52,0x54,0,0x12,0x34,0x57]
@@ -335,6 +361,56 @@ def main():
         time.sleep(1.5)
         drain_all(h["conn"], 0.3)
 
+        # ── Attack 8: TLS domain-front / SNI mismatch ────────────────
+        section("Attack #8: TLS domain-fronting to hide C2 on allowed IP")
+        print("   Attacker: 'example.com and attacker.com are on the same CDN IP.")
+        print("   I'll just send a TLS ClientHello with SNI=attacker.com — the")
+        print("   IP/port matches the rule; surely that's enough.'")
+        print("   → cave_policy's pinned SNI says NO — DropSni.")
+        # Clear rate so this round isn't muddled by pps drops.
+        run_cmd(c, "cpol-rate-clear kali")
+        ch_bad = build_tls_client_hello("attacker.com")
+        for i in range(5):
+            send_frame(v["conn"], build_tcp(
+                kali_mac, nic1_mac, cave_ip, ip_int("93.184.216.34"),
+                57000 + i, 443, flags=0x18, payload=ch_bad))
+        print("   sent 5 ClientHello(SNI=attacker.com) frames")
+        attacks.append(("TLS domain-front (SNI=attacker.com)", 5))
+        time.sleep(0.5)
+        drain_all(h["conn"], 0.3)
+
+        # ── Attack 9: Fan-out across many destinations (flow-rate) ───
+        section("Attack #9: Distributed fan-out (flow_shaper)")
+        print("   Attacker: 'the per-cave aggregate budget is shared. If I")
+        print("   spread packets across many allowed destinations a little each,")
+        print("   the aggregate won't fill — but every one sees probes.'")
+        print("   → per-flow bucket (pps=2 burst=3) caps each destination")
+        print("     INDEPENDENTLY. 15 → 3 allowed per dst; 48 dropped.")
+        # Add 4 extra allowed destinations so the fan-out actually exercises
+        # flow_shaper rather than hitting policy drops. These stand in for
+        # the real-world case of an operator who allowlisted multiple CDN IPs.
+        run_cmd(c, "cpol-rate-clear kali")        # reset pps cap between attacks
+        for dst in ("1.1.1.1", "9.9.9.9", "8.8.4.4", "64.6.64.6"):
+            run_cmd(c, f"cpol-add kali {dst} 443 tcp")
+        fanout_count = 0
+        for dst in ("1.1.1.1", "9.9.9.9", "8.8.4.4", "64.6.64.6"):
+            for i in range(15):
+                send_frame(v["conn"], build_tcp(
+                    kali_mac, nic1_mac, cave_ip, ip_int(dst),
+                    58000 + fanout_count, 443, flags=0x02))
+                fanout_count += 1
+        print(f"   sent {fanout_count} SYNs spread across 4 allowed targets")
+        attacks.append(("Fan-out across 4 allowed targets (rate attack)", fanout_count))
+        time.sleep(1.0)
+        drain_all(h["conn"], 0.3)
+
+        # ── Attack 10: C2 beacon (regularity) ────────────────────────
+        # Beacons are detection-only today; show that the detector
+        # flags it so the operator sees anomaly evidence in nat-beacons.
+        # (We don't assert here since the sender here sends bursts, not
+        # really spaced intervals — the beacon test sits alone in
+        # qemu_beacon_selftest.)
+
         # ── Legitimate request (should GO THROUGH) ───────────────────
         # Clear the rate limit so our legitimate request isn't itself
         # rate-limited (we already proved rate-limit works above).
@@ -365,13 +441,17 @@ def main():
         stats = run_cmd(c,"nat-stats")
         drop_policy = parse_counter(stats, "drop-policy")
         drop_rate   = parse_counter(stats, "drop-rate")
+        drop_sni    = parse_counter(stats, "drop-sni")
         allow       = parse_counter(stats, "allow:")
 
-        # Attack #7 straddles two counters: burst packets hit `allow`
-        # (because cave_policy passed them) then got shaped as
-        # drop-rate. Everything else should land in drop-policy.
-        rate_attack_packets = 100
-        total_policy_attacks = sum(n for label, n in attacks if "rate attack" not in label)
+        # Attacks #7 + #9 ride the drop-rate counter (shaper + per-flow).
+        # Attack #8 rides drop-sni.
+        # Everything else is drop-policy.
+        rate_attack_packets = 100 + 60       # attack 7 + attack 9 combined
+        sni_attack_packets  = 5              # attack 8
+        total_policy_attacks = sum(n for label, n in attacks
+                                   if "rate attack" not in label
+                                   and "SNI" not in label)
 
         banner("DEFENSE REPORT", char="═")
         print()
@@ -379,6 +459,8 @@ def main():
         for label, n in attacks:
             if "rate attack" in label:
                 bullet("drop", f"{label:<45s} {n:>3d} packets (rate-shaped)")
+            elif "SNI" in label:
+                bullet("drop", f"{label:<45s} {n:>3d} packets (SNI pinned)")
             else:
                 bullet("drop", f"{label:<45s} {n:>3d} packets")
         print()
@@ -389,31 +471,44 @@ def main():
         print()
         print("Bat_OS kernel counters:")
         print(f"  drop-policy:  {drop_policy}   (expected ≥ {total_policy_attacks} — off-allowlist traffic)")
-        print(f"  drop-rate:    {drop_rate}    (expected ≥ {rate_attack_packets - 25} — shaper-capped burst)")
+        print(f"  drop-rate:    {drop_rate}    (expected ≥ {rate_attack_packets - 40} — aggregate + per-flow shaper)")
+        print(f"  drop-sni:     {drop_sni}     (expected ≥ {sni_attack_packets} — TLS domain-fronting)")
         print(f"  allow:        {allow}         (expected legit + burst tokens)")
 
-        # Kernel counters are the source of truth.
         pipeline_ok = (drop_policy >= total_policy_attacks
-                       and drop_rate  >= rate_attack_packets - 25
+                       and drop_rate  >= rate_attack_packets - 40
+                       and drop_sni   >= sni_attack_packets
                        and allow      >= 1)
         print()
         if pipeline_ok:
-            banner("✓  DEFENDED  ·  two layers held", char="═")
+            banner("✓  DEFENDED  ·  four layers held", char="═")
             print()
-            print("Layer 1 — cave_policy (allowlist):")
-            print("  Every off-allowlist frame classified at nic 1 and dropped.")
-            print("  Reconnaissance, C2 callback, tunnels, exfil to attacker-")
-            print("  controlled hosts all bucketed into drop-policy.")
+            print("Layer 1 — cave_policy allowlist:")
+            print("  Every off-allowlist frame dropped at the classifier — scans,")
+            print("  C2 callback, tunnels, exfil, internal sweeps. drop-policy "
+                  f"= {drop_policy}.")
             print()
-            print("Layer 2 — cave_shaper (token bucket):")
-            print("  Attacker's fallback of flooding the ONE allowed destination")
-            print(f"  was capped to burst tokens; {drop_rate} packets of the 100-SYN")
-            print("  exfil burst were rejected as DropRate. The cave can reach")
-            print("  example.com:443 at the operator-configured rate, but can't")
-            print("  weaponise it for high-throughput exfil.")
+            print("Layer 2 — cave_shaper (aggregate rate):")
+            print("  When attacker flooded the one allowed destination, the")
+            print("  token bucket capped the burst. drop-rate shared with layer 3.")
             print()
-            print("One legitimate frame still went through after the rate limit")
-            print("was cleared — defense remains policy-driven, not a blunt switch.")
+            print("Layer 3 — flow_shaper (per-destination rate):")
+            print("  Fan-out attack tried to spread packets across 4 victims.")
+            print("  Each destination hit its own 3-packet burst and was rejected.")
+            print(f"  Combined rate drops: {drop_rate}.")
+            print()
+            print("Layer 4 — SNI pinning:")
+            print(f"  TLS domain-fronting attack (SNI=attacker.com) caught by")
+            print(f"  cave_policy's pinned-SNI rule. drop-sni = {drop_sni}.")
+            print()
+            print("One legitimate SYN still went through (handshake phase —")
+            print("cave_policy admits SYNs so TCP can complete, then SNI gets")
+            print("checked on the ClientHello).  allow = " + str(allow) + ".")
+            print()
+            print("Additional hardening in place but not exercised here:")
+            print("  Layer 5 — beacon detector (periodicity anomaly, detection only)")
+            print("  Layer 6 — syscall_filter (host-side per-cave syscall denylist)")
+            print("  Plus byte-rate shaper alongside pps for volume-aware control.")
             return 0
         else:
             banner("✗  DEFENSE FAILED  ·  investigate counters above", char="═")
