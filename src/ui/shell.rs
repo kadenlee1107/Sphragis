@@ -849,6 +849,8 @@ fn cmd_nat_stats() {
     console::puts("    icmp-error-deliv: "); print_num(s.icmp_error_delivered as usize); console::puts("\n");
     console::puts("    nat-gc-evicted:   "); print_num(s.nat_gc_evicted as usize); console::puts("\n");
     console::puts("    host-frames-pass: "); print_num(s.host_frames_passed as usize); console::puts("\n");
+    console::puts("    frag-reassembled: "); print_num(s.frag_reassembled as usize); console::puts("\n");
+    console::puts("    frag-timeout:     "); print_num(s.frag_timeout as usize); console::puts("\n");
 }
 
 fn cmd_nat_bind(args: &[&str]) {

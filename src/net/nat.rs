@@ -62,6 +62,12 @@ static FRAG_DROPPED: AtomicU32 = AtomicU32::new(0);
 /// re-dispatched into the kernel's own IP stack. Tracks how many
 /// control-plane packets flowed through the NAT pump correctly.
 static HOST_FRAMES_PASSED: AtomicU32 = AtomicU32::new(0);
+/// IPv4 fragments successfully reassembled on nic 1 and classified
+/// + forwarded as a single packet. Separate from drop_fragment so
+/// operators can see the reassembler is working.
+static FRAG_REASSEMBLED: AtomicU32 = AtomicU32::new(0);
+/// Fragment contexts evicted without completing (TTL expired).
+static FRAG_TIMEOUT: AtomicU32 = AtomicU32::new(0);
 
 /// IPv4 address Bat_OS advertises as the caves-side gateway. Used in
 /// ARP replies and as the default source when we originate traffic on
@@ -81,6 +87,8 @@ pub struct Stats {
     pub icmp_error_delivered: u32,
     pub nat_gc_evicted: u32,
     pub host_frames_passed: u32,
+    pub frag_reassembled: u32,
+    pub frag_timeout: u32,
 }
 
 pub fn stats() -> Stats {
@@ -97,6 +105,8 @@ pub fn stats() -> Stats {
         icmp_error_delivered: ICMP_ERROR_DELIVERED.load(Ordering::Relaxed),
         nat_gc_evicted: NAT_GC_EVICTED.load(Ordering::Relaxed),
         host_frames_passed: HOST_FRAMES_PASSED.load(Ordering::Relaxed),
+        frag_reassembled: FRAG_REASSEMBLED.load(Ordering::Relaxed),
+        frag_timeout: FRAG_TIMEOUT.load(Ordering::Relaxed),
     }
 }
 
@@ -113,6 +123,8 @@ pub fn reset_stats() {
     ICMP_ERROR_DELIVERED.store(0, Ordering::Relaxed);
     NAT_GC_EVICTED.store(0, Ordering::Relaxed);
     HOST_FRAMES_PASSED.store(0, Ordering::Relaxed);
+    FRAG_REASSEMBLED.store(0, Ordering::Relaxed);
+    FRAG_TIMEOUT.store(0, Ordering::Relaxed);
 }
 
 // ── ARP on nic 1 (caves interface) ──────────────────────────────
@@ -232,15 +244,34 @@ pub fn pump_and_forward(nic0_ip: u32, nic0_mac: [u8; 6], gw_mac: [u8; 6]) -> (us
         // we reply directly on nic 1 and don't touch NAT. Containers MUST
         // resolve the gateway before they can send the first IP frame.
         if try_handle_arp(frame) { continue; }
-        let verdict = classify(frame);
+        // Fragment reassembly: a fragmented IPv4 datagram can't be
+        // classified from a single fragment (only the first has the
+        // L4 header) and can't be NAT'd without recomputing L4
+        // checksum over the reassembled payload. Buffer fragments,
+        // and once complete feed the reassembled frame through the
+        // normal classify/NAT/forward path below.
+        let reassembled: Vec<u8>;
+        let work_frame: &[u8] = if is_ipv4_fragment(frame) {
+            match frag_accept(frame) {
+                Some(full) => {
+                    FRAG_REASSEMBLED.fetch_add(1, Ordering::Relaxed);
+                    reassembled = full;
+                    &reassembled[..]
+                }
+                None => continue, // still waiting for more fragments
+            }
+        } else {
+            frame
+        };
+        let verdict = classify(work_frame);
         if verdict != PktVerdict::Allow { continue; }
-        let flow = match parse_outbound(frame) { Some(f) => f, None => continue };
+        let flow = match parse_outbound(work_frame) { Some(f) => f, None => continue };
         // Allocate (or reuse) a NAT entry for this cave flow.
-        let (eph_port, src_mac) = match nat_alloc_out(&flow, &buf[..len]) {
+        let (eph_port, src_mac) = match nat_alloc_out(&flow, work_frame) {
             Some(v) => v,
             None => continue, // table full
         };
-        let mut out = Vec::from(frame);
+        let mut out = Vec::from(work_frame);
         if rewrite_outbound_into(&mut out, flow, eph_port, nic0_ip, nic0_mac, gw_mac).is_ok() {
             let _ = net::send_n(0, &out);
             forwarded += 1;
@@ -497,6 +528,7 @@ pub fn gc_tick() {
     if last == 0 || now.saturating_sub(last) >= tps {
         NAT_GC_LAST_RUN_TICKS.store(now, Ordering::Relaxed);
         let _ = nat_gc_sweep(now, tps);
+        frag_gc_sweep(now, tps);
     }
 }
 
@@ -525,6 +557,229 @@ pub fn nat_table_clear() {
         }
     }
     NAT_NEXT_EPH.store(EPH_PORT_BASE as u32, Ordering::Relaxed);
+}
+
+// ── Outbound fragment reassembler ────────────────────────────────
+//
+// Policy decisions need the L4 src/dst ports which only live in the
+// first fragment; NAT rewrite needs to recompute the L4 checksum
+// which spans the whole payload. The only correct way to make both
+// work is to buffer fragments until the full datagram is present,
+// then run the reassembled packet through the normal classify →
+// rewrite → forward path as if it had arrived unfragmented.
+//
+// This first-pass implementation supports small outbound fragments
+// (total datagram up to FRAG_BUF_BYTES) and discards contexts that
+// sit half-complete for more than FRAG_TTL_SECS. Inbound fragments
+// (replies from the internet on nic 0) are deliberately out of
+// scope — slirp on the other side of nic 0 already reassembles for
+// us in practice, and adding inbound-frag support would mostly be
+// needed for corner-case jumbo-frame routing.
+
+const FRAG_BUF_BYTES:  usize = 2048;   // max reassembled datagram size
+const FRAG_SLOTS:      usize = 4;      // concurrent contexts
+const FRAG_TTL_SECS:   u64   = 30;     // standard IP-reassembly timeout
+
+#[derive(Clone, Copy)]
+struct FragCtx {
+    active: bool,
+    src_ip: u32,
+    dst_ip: u32,
+    ip_id: u16,
+    proto: u8,
+    /// Total length of the reassembled IPv4 DATAGRAM (payload only,
+    /// i.e. ihl + L4 + data — everything after Ethernet). Set when
+    /// the last fragment (MF=0) arrives. 0 = unknown.
+    total_len: u16,
+    /// Highest "expected" end-offset seen so far — once total_len is
+    /// known and received_bytes == total_len we're complete.
+    received_bytes: u16,
+    /// Cached first-fragment source + dest MACs for the final frame.
+    eth_src: [u8; 6],
+    eth_dst: [u8; 6],
+    /// IHL of the first fragment's IPv4 header (we copy that verbatim
+    /// into the reassembled packet).
+    first_ihl: u8,
+    /// Tick of first fragment arrival — used by frag_gc.
+    first_seen_ticks: u64,
+    /// Reassembly scratch. IPv4 header is at offset 0 (from the
+    /// first fragment); subsequent fragment payloads land starting
+    /// at offset 14 + ihl + 8*frag_offset relative to the original
+    /// Ethernet frame, but we only store the IP datagram here so
+    /// subtract 14 (Ethernet).
+    buf: [u8; FRAG_BUF_BYTES],
+}
+
+const FRAG_CTX_NEW: FragCtx = FragCtx {
+    active: false, src_ip: 0, dst_ip: 0, ip_id: 0, proto: 0,
+    total_len: 0, received_bytes: 0,
+    eth_src: [0; 6], eth_dst: [0; 6], first_ihl: 0,
+    first_seen_ticks: 0,
+    buf: [0u8; FRAG_BUF_BYTES],
+};
+
+static mut FRAG_TABLE: [FragCtx; FRAG_SLOTS] = [FRAG_CTX_NEW; FRAG_SLOTS];
+
+fn frag_find(src: u32, dst: u32, id: u16, proto: u8) -> Option<usize> {
+    unsafe {
+        let t = core::ptr::addr_of!(FRAG_TABLE);
+        for i in 0..FRAG_SLOTS {
+            let c = &(*t)[i];
+            if c.active && c.src_ip == src && c.dst_ip == dst
+                && c.ip_id == id && c.proto == proto
+            { return Some(i); }
+        }
+    }
+    None
+}
+
+fn frag_alloc(src: u32, dst: u32, id: u16, proto: u8, now: u64) -> Option<usize> {
+    unsafe {
+        let t = core::ptr::addr_of_mut!(FRAG_TABLE);
+        for i in 0..FRAG_SLOTS {
+            if !(*t)[i].active {
+                (*t)[i].active = true;
+                (*t)[i].src_ip = src; (*t)[i].dst_ip = dst;
+                (*t)[i].ip_id = id; (*t)[i].proto = proto;
+                (*t)[i].total_len = 0; (*t)[i].received_bytes = 0;
+                (*t)[i].first_ihl = 0;
+                (*t)[i].first_seen_ticks = now;
+                for b in (*t)[i].buf.iter_mut() { *b = 0; }
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+fn frag_evict(idx: usize) {
+    unsafe {
+        let t = core::ptr::addr_of_mut!(FRAG_TABLE);
+        (*t)[idx].active = false;
+    }
+}
+
+/// Periodically called from gc_tick: discard fragment contexts older
+/// than FRAG_TTL_SECS. Counts into FRAG_TIMEOUT so operators notice.
+pub fn frag_gc_sweep(now_t: u64, tps: u64) {
+    let mut stale = 0u32;
+    unsafe {
+        let t = core::ptr::addr_of_mut!(FRAG_TABLE);
+        for i in 0..FRAG_SLOTS {
+            if !(*t)[i].active { continue; }
+            let age_secs = now_t.saturating_sub((*t)[i].first_seen_ticks) / tps;
+            if age_secs >= FRAG_TTL_SECS {
+                (*t)[i].active = false;
+                stale += 1;
+            }
+        }
+    }
+    if stale > 0 { FRAG_TIMEOUT.fetch_add(stale, Ordering::Relaxed); }
+}
+
+pub fn frag_ctx_count() -> usize {
+    unsafe {
+        let t = core::ptr::addr_of!(FRAG_TABLE);
+        (0..FRAG_SLOTS).filter(|i| (*t)[*i].active).count()
+    }
+}
+
+/// Accept an IPv4 fragment frame on nic 1. Returns:
+///   Some(Vec<u8>) with a COMPLETE reassembled Ethernet+IPv4 frame
+///     (no fragment flags) if this fragment finished a datagram;
+///   None if still pending, or on any error.
+pub fn frag_accept(frame: &[u8]) -> Option<Vec<u8>> {
+    if frame.len() < 14 + 20 { return None; }
+    if &frame[12..14] != b"\x08\x00" { return None; }
+    let ip = &frame[14..];
+    let ihl = ((ip[0] & 0x0F) as usize) * 4;
+    if frame.len() < 14 + ihl { return None; }
+    let total_len_hdr = ((ip[2] as usize) << 8) | (ip[3] as usize);
+    let frag = ((ip[6] as u16) << 8) | (ip[7] as u16);
+    let mf = (frag & 0x2000) != 0;
+    let offset_bytes = ((frag & 0x1FFF) as usize) * 8;
+    if !mf && offset_bytes == 0 {
+        return None; // not actually fragmented, caller shouldn't use us
+    }
+    let proto = ip[9];
+    let src_ip =
+        ((ip[12] as u32) << 24) | ((ip[13] as u32) << 16)
+      | ((ip[14] as u32) <<  8) |  (ip[15] as u32);
+    let dst_ip =
+        ((ip[16] as u32) << 24) | ((ip[17] as u32) << 16)
+      | ((ip[18] as u32) <<  8) |  (ip[19] as u32);
+    let ip_id = ((ip[4] as u16) << 8) | (ip[5] as u16);
+
+    // Only TCP/UDP (protos our classifier understands post-reassembly).
+    if proto != IPPROTO_TCP && proto != IPPROTO_UDP { return None; }
+
+    let payload_len = total_len_hdr.saturating_sub(ihl);
+    if payload_len == 0 { return None; }
+    if offset_bytes + payload_len > FRAG_BUF_BYTES { return None; }
+
+    let now = now_ticks();
+    // Find or allocate the context.
+    let idx = match frag_find(src_ip, dst_ip, ip_id, proto) {
+        Some(i) => i,
+        None => match frag_alloc(src_ip, dst_ip, ip_id, proto, now) {
+            Some(i) => i,
+            None => return None, // table full
+        }
+    };
+
+    unsafe {
+        let t = core::ptr::addr_of_mut!(FRAG_TABLE);
+        let c = &mut (*t)[idx];
+        // First fragment provides the IP header + eth MACs.
+        if offset_bytes == 0 {
+            c.first_ihl = ihl as u8;
+            c.eth_dst.copy_from_slice(&frame[0..6]);
+            c.eth_src.copy_from_slice(&frame[6..12]);
+            // Copy IHL header bytes into buf[0..ihl].
+            c.buf[..ihl].copy_from_slice(&ip[..ihl]);
+        }
+        // Copy payload into buf[ihl + offset_bytes..ihl + offset_bytes + payload_len].
+        let dst_start = (c.first_ihl as usize).max(ihl) + offset_bytes;
+        if dst_start + payload_len > FRAG_BUF_BYTES {
+            frag_evict(idx);
+            return None;
+        }
+        c.buf[dst_start..dst_start + payload_len]
+            .copy_from_slice(&ip[ihl..ihl + payload_len]);
+        c.received_bytes = c.received_bytes.saturating_add(payload_len as u16);
+        if !mf {
+            // Last fragment — total_len = offset + payload_len + ihl
+            c.total_len = (offset_bytes + payload_len + (c.first_ihl as usize)) as u16;
+        }
+        // Complete?
+        if c.total_len > 0 && (c.received_bytes as usize + c.first_ihl as usize) >= c.total_len as usize {
+            // Build the reassembled Ethernet+IPv4 frame.
+            let ihl_u = c.first_ihl as usize;
+            let total = c.total_len as usize;
+            let mut out = Vec::with_capacity(14 + total);
+            out.extend_from_slice(&c.eth_dst);
+            out.extend_from_slice(&c.eth_src);
+            out.extend_from_slice(&[0x08, 0x00]);
+            out.extend_from_slice(&c.buf[..total]);
+            // Patch the IPv4 header: total_len, zero fragment fields,
+            // recompute checksum.
+            let ip_start = 14;
+            out[ip_start + 2] = (total >> 8) as u8;
+            out[ip_start + 3] = (total & 0xFF) as u8;
+            // Keep id but zero flags/frag offset (MF=0, offset=0).
+            out[ip_start + 6] = 0;
+            out[ip_start + 7] = 0;
+            // Header cksum
+            out[ip_start + 10] = 0; out[ip_start + 11] = 0;
+            let ck = ipv4_checksum(&out[ip_start..ip_start + ihl_u]);
+            out[ip_start + 10] = (ck >> 8) as u8;
+            out[ip_start + 11] = (ck & 0xFF) as u8;
+            // Done — evict + return.
+            frag_evict(idx);
+            return Some(out);
+        }
+    }
+    None
 }
 
 // ── Inbound parse (replies from internet on nic 0) ───────────────
