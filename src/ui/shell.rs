@@ -158,11 +158,15 @@ fn execute(cmd: &str) {
         "cpol-daemon-show" => cmd_cpol_daemon_show(parts[1]),
         "nic-status"  => cmd_nic_status(),
         "nat-selftest"=> cmd_nat_selftest(),
+        "nat-rewrite-selftest" => cmd_nat_rewrite_selftest(),
         "nat-stats"   => cmd_nat_stats(),
         "nat-reset"   => cmd_nat_reset(),
         "nat-bind"    => cmd_nat_bind(&parts[1..]),
         "nat-bindings" => cmd_nat_bindings(),
         "nat-pump"    => cmd_nat_pump(),
+        "nat-forward" => cmd_nat_forward(),
+        "nat-reply"   => cmd_nat_reply(),
+        "nat-table"   => cmd_nat_table(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
         "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
@@ -849,7 +853,61 @@ fn cmd_nat_bind(args: &[&str]) {
 
 fn cmd_nat_reset() {
     crate::net::nat::reset_stats();
-    console::puts("  nat-reset: counters zeroed\n");
+    crate::net::nat::nat_table_clear();
+    console::puts("  nat-reset: counters + table zeroed\n");
+}
+
+fn cmd_nat_rewrite_selftest() {
+    console::puts_hi("  NAT REWRITE SELF-TEST (outbound → inbound round-trip)\n");
+    match crate::net::nat::rewrite_selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS outbound rewrite + NAT table + inbound reverse\n");
+            console::puts("    outbound dst_ip:  0x"); print_hex32(r.outbound_dst_ip); console::puts("\n");
+            console::puts("    outbound src_ip:  0x"); print_hex32(r.outbound_src_ip); console::puts("  (nic 0)\n");
+            console::puts("    outbound src_port: "); print_num(r.outbound_src_port as usize); console::puts("  (NAT eph)\n");
+            console::puts("    inbound  dst_ip:  0x"); print_hex32(r.inbound_dst_ip); console::puts("  (cave)\n");
+            console::puts("    inbound  dst_port: "); print_num(r.inbound_dst_port as usize); console::puts("  (cave orig)\n");
+            console::puts("    NAT slots in use:  "); print_num(r.nat_slots_in_use); console::puts("\n");
+        }
+        Err(e) => { console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
+fn print_hex32(v: u32) {
+    let hex = b"0123456789abcdef";
+    for s in (0..8).rev() {
+        let nyb = ((v >> (s * 4)) & 0xF) as usize;
+        console::putc(hex[nyb]);
+    }
+}
+
+fn cmd_nat_forward() {
+    use crate::drivers::virtio::net;
+    let nic0_mac = net::mac_n(0);
+    // Static for now: nic 0 = slirp 10.0.2.15, gateway 10.0.2.2 has a
+    // virtual MAC the slirp host never actually advertises (QEMU just
+    // accepts anything). Use 52:55:0a:00:02:02 as a conventional slirp
+    // GW MAC; real value is irrelevant because slirp is L4-NAT itself.
+    let nic0_ip:  u32 = 0x0A00020F;
+    let gw_mac = [0x52, 0x55, 0x0A, 0x00, 0x02, 0x02];
+    let (drained, forwarded) = crate::net::nat::pump_and_forward(nic0_ip, nic0_mac, gw_mac);
+    console::puts("  nat-forward: drained "); print_num(drained);
+    console::puts(" → forwarded "); print_num(forwarded); console::puts(" on nic 0\n");
+}
+
+fn cmd_nat_reply() {
+    use crate::drivers::virtio::net;
+    let nic1_mac = net::mac_n(1);
+    let (drained, delivered) = crate::net::nat::pump_replies(nic1_mac);
+    console::puts("  nat-reply: drained "); print_num(drained);
+    console::puts(" from nic 0 → delivered "); print_num(delivered);
+    console::puts(" on nic 1\n");
+}
+
+fn cmd_nat_table() {
+    let n = crate::net::nat::nat_table_size();
+    console::puts_hi("  NAT TABLE\n");
+    console::puts("    entries active: "); print_num(n); console::puts("\n");
 }
 
 fn cmd_nat_pump() {

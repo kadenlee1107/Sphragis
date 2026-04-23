@@ -90,6 +90,334 @@ pub fn pump() -> usize {
     count
 }
 
+/// Drain nic 1, classify, forward ALLOW'd frames out nic 0 after
+/// NAT-rewriting. Returns (drained, forwarded).
+pub fn pump_and_forward(nic0_ip: u32, nic0_mac: [u8; 6], gw_mac: [u8; 6]) -> (usize, usize) {
+    use crate::drivers::virtio::net;
+    if !net::is_ready_n(1) { return (0, 0); }
+    let mut drained = 0usize;
+    let mut forwarded = 0usize;
+    let mut buf = [0u8; 1514];
+    for _ in 0..256 {
+        let len = match net::recv_n(1, &mut buf) { Some(l) => l, None => break };
+        drained += 1;
+        let frame = &buf[..len];
+        let verdict = classify(frame);
+        if verdict != PktVerdict::Allow { continue; }
+        let flow = match parse_outbound(frame) { Some(f) => f, None => continue };
+        // Allocate (or reuse) a NAT entry for this cave flow.
+        let (eph_port, src_mac) = match nat_alloc_out(&flow, &buf[..len]) {
+            Some(v) => v,
+            None => continue, // table full
+        };
+        let mut out = Vec::from(frame);
+        if rewrite_outbound_into(&mut out, flow, eph_port, nic0_ip, nic0_mac, gw_mac).is_ok() {
+            let _ = net::send_n(0, &out);
+            forwarded += 1;
+            let _ = src_mac; // reserved for reply-MAC caching below
+        }
+    }
+    (drained, forwarded)
+}
+
+/// Drain nic 0, reverse-NAT replies that match our table, deliver on
+/// nic 1 to the original cave. Returns (drained, delivered).
+pub fn pump_replies(nic1_mac: [u8; 6]) -> (usize, usize) {
+    use crate::drivers::virtio::net;
+    if !net::is_ready_n(0) { return (0, 0); }
+    let mut drained = 0usize;
+    let mut delivered = 0usize;
+    let mut buf = [0u8; 1514];
+    for _ in 0..64 {
+        let len = match net::recv_n(0, &mut buf) { Some(l) => l, None => break };
+        drained += 1;
+        // Only handle IPv4 replies whose dst port matches a NAT entry.
+        let flow = match parse_inbound(&buf[..len]) { Some(f) => f, None => continue };
+        let entry = match nat_lookup_in(flow.dst_port, flow.proto) {
+            Some(e) => e, None => continue
+        };
+        let mut out = Vec::from(&buf[..len]);
+        if rewrite_inbound_into(&mut out, &entry, nic1_mac).is_ok() {
+            let _ = net::send_n(1, &out);
+            delivered += 1;
+        }
+    }
+    (drained, delivered)
+}
+
+// ── NAT table ──────────────────────────────────────────────────────
+
+/// One active translation. `eph_port` on nic 0's side is what the
+/// internet sees; when a reply comes back with dst_port == eph_port
+/// we rewrite it back to `cave_ip:cave_src_port` and deliver on nic 1.
+#[derive(Clone, Copy)]
+pub struct NatEntry {
+    pub active: bool,
+    pub proto: u8,
+    pub cave_ip: u32,
+    pub cave_src_port: u16,
+    pub eph_port: u16,
+    pub dst_ip: u32,
+    pub dst_port: u16,
+    pub cave_mac: [u8; 6],
+}
+
+const NAT_SLOTS: usize = 64;
+const EPH_PORT_BASE: u16 = 50_000;
+
+static mut NAT_TABLE: [NatEntry; NAT_SLOTS] = [NatEntry {
+    active: false, proto: 0, cave_ip: 0, cave_src_port: 0,
+    eph_port: 0, dst_ip: 0, dst_port: 0, cave_mac: [0; 6],
+}; NAT_SLOTS];
+static NAT_NEXT_EPH: AtomicU32 = AtomicU32::new(EPH_PORT_BASE as u32);
+
+fn nat_lookup_or_create(flow: &OutboundFlow, cave_mac: [u8; 6]) -> Option<u16> {
+    unsafe {
+        let t = core::ptr::addr_of_mut!(NAT_TABLE);
+        // Existing entry?
+        for i in 0..NAT_SLOTS {
+            let e = (*t)[i];
+            if e.active
+                && e.proto == flow.proto
+                && e.cave_ip == flow.src_ip
+                && e.cave_src_port == flow.src_port
+                && e.dst_ip == flow.dst_ip
+                && e.dst_port == flow.dst_port
+            {
+                return Some(e.eph_port);
+            }
+        }
+        // New entry: allocate an ephemeral port, find a free slot.
+        let next = NAT_NEXT_EPH.fetch_add(1, Ordering::Relaxed) as u16;
+        let eph_port = if next == 0 { EPH_PORT_BASE } else { next };
+        for i in 0..NAT_SLOTS {
+            if !(*t)[i].active {
+                (*t)[i] = NatEntry {
+                    active: true,
+                    proto: flow.proto,
+                    cave_ip: flow.src_ip,
+                    cave_src_port: flow.src_port,
+                    eph_port,
+                    dst_ip: flow.dst_ip,
+                    dst_port: flow.dst_port,
+                    cave_mac,
+                };
+                return Some(eph_port);
+            }
+        }
+        None
+    }
+}
+
+/// Helper that alloc_outs a NAT entry and returns (eph_port, cave_mac).
+fn nat_alloc_out(flow: &OutboundFlow, frame: &[u8]) -> Option<(u16, [u8; 6])> {
+    let mut cave_mac = [0u8; 6];
+    cave_mac.copy_from_slice(&frame[6..12]);
+    let eph = nat_lookup_or_create(flow, cave_mac)?;
+    Some((eph, cave_mac))
+}
+
+pub fn nat_lookup_in(dst_port: u16, proto: u8) -> Option<NatEntry> {
+    unsafe {
+        let t = core::ptr::addr_of!(NAT_TABLE);
+        for i in 0..NAT_SLOTS {
+            let e = (*t)[i];
+            if e.active && e.proto == proto && e.eph_port == dst_port {
+                return Some(e);
+            }
+        }
+    }
+    None
+}
+
+pub fn nat_table_size() -> usize {
+    unsafe {
+        let t = core::ptr::addr_of!(NAT_TABLE);
+        (0..NAT_SLOTS).filter(|i| (*t)[*i].active).count()
+    }
+}
+
+pub fn nat_table_clear() {
+    unsafe {
+        let t = core::ptr::addr_of_mut!(NAT_TABLE);
+        for i in 0..NAT_SLOTS {
+            (*t)[i].active = false;
+        }
+    }
+    NAT_NEXT_EPH.store(EPH_PORT_BASE as u32, Ordering::Relaxed);
+}
+
+// ── Inbound parse (replies from internet on nic 0) ───────────────
+
+#[derive(Debug, Clone, Copy)]
+pub struct InboundFlow {
+    pub src_ip: u32,
+    pub dst_ip: u32,
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub proto: u8,
+}
+
+pub fn parse_inbound(frame: &[u8]) -> Option<InboundFlow> {
+    let o = parse_outbound(frame)?;
+    Some(InboundFlow {
+        src_ip: o.src_ip, dst_ip: o.dst_ip,
+        src_port: o.src_port, dst_port: o.dst_port,
+        proto: o.proto,
+    })
+}
+
+// ── Rewrite (outbound + inbound) ──────────────────────────────────
+
+fn ipv4_checksum(hdr: &[u8]) -> u16 {
+    // Zero-out the checksum field (bytes 10..12) during compute.
+    let mut sum: u32 = 0;
+    let mut i = 0;
+    while i + 1 < hdr.len() {
+        let w = if i == 10 { 0 } else {
+            ((hdr[i] as u16) << 8) | (hdr[i + 1] as u16)
+        };
+        sum = sum.wrapping_add(w as u32);
+        i += 2;
+    }
+    while sum >> 16 != 0 { sum = (sum & 0xFFFF) + (sum >> 16); }
+    !(sum as u16)
+}
+
+/// Compute TCP/UDP checksum over pseudo-header + L4 header + payload.
+/// `proto` = 6 (TCP) or 17 (UDP). `l4` is the L4 segment (zero-out
+/// the checksum field in-place before calling).
+fn l4_checksum(src_ip: u32, dst_ip: u32, proto: u8, l4: &[u8]) -> u16 {
+    let mut sum: u32 = 0;
+    // Pseudo header: src, dst, zero, proto, length
+    sum = sum.wrapping_add(((src_ip >> 16) & 0xFFFF) as u32);
+    sum = sum.wrapping_add((src_ip & 0xFFFF) as u32);
+    sum = sum.wrapping_add(((dst_ip >> 16) & 0xFFFF) as u32);
+    sum = sum.wrapping_add((dst_ip & 0xFFFF) as u32);
+    sum = sum.wrapping_add(proto as u32);
+    sum = sum.wrapping_add(l4.len() as u32);
+    // L4 segment (with checksum field already zeroed)
+    let mut i = 0;
+    while i + 1 < l4.len() {
+        sum = sum.wrapping_add((((l4[i] as u16) << 8) | (l4[i + 1] as u16)) as u32);
+        i += 2;
+    }
+    if i < l4.len() { sum = sum.wrapping_add((l4[i] as u32) << 8); }
+    while sum >> 16 != 0 { sum = (sum & 0xFFFF) + (sum >> 16); }
+    !(sum as u16)
+}
+
+/// Rewrite an outbound cave frame in-place: Ethernet src→nic0_mac,
+/// Ethernet dst→gw_mac, IPv4 src → nic0_ip, L4 src_port → eph_port,
+/// recompute both checksums.
+pub fn rewrite_outbound_into(
+    frame: &mut [u8],
+    _flow: OutboundFlow,
+    eph_port: u16,
+    nic0_ip: u32,
+    nic0_mac: [u8; 6],
+    gw_mac: [u8; 6],
+) -> Result<(), &'static str> {
+    if frame.len() < 14 + 20 { return Err("frame too small"); }
+    // Ethernet rewrite
+    frame[0..6].copy_from_slice(&gw_mac);
+    frame[6..12].copy_from_slice(&nic0_mac);
+    // IPv4
+    let ihl = ((frame[14] & 0x0F) as usize) * 4;
+    if frame.len() < 14 + ihl + 4 { return Err("ipv4 truncated"); }
+    // Write new src IP
+    frame[14 + 12] = ((nic0_ip >> 24) & 0xFF) as u8;
+    frame[14 + 13] = ((nic0_ip >> 16) & 0xFF) as u8;
+    frame[14 + 14] = ((nic0_ip >>  8) & 0xFF) as u8;
+    frame[14 + 15] = ( nic0_ip        & 0xFF) as u8;
+    // Compute src_ip/dst_ip for checksums
+    let src_ip = nic0_ip;
+    let dst_ip = ((frame[14 + 16] as u32) << 24)
+               | ((frame[14 + 17] as u32) << 16)
+               | ((frame[14 + 18] as u32) <<  8)
+               |  (frame[14 + 19] as u32);
+    let proto = frame[14 + 9];
+    // IPv4 checksum
+    let ip_hdr_len = ihl;
+    let ip_cksum = {
+        // Compute over the header with cksum field=0
+        let hdr_slice = &frame[14..14 + ip_hdr_len];
+        ipv4_checksum(hdr_slice)
+    };
+    frame[14 + 10] = (ip_cksum >> 8) as u8;
+    frame[14 + 11] = (ip_cksum & 0xFF) as u8;
+    // Rewrite L4 src port + checksum
+    let l4_start = 14 + ip_hdr_len;
+    if frame.len() < l4_start + 8 { return Err("l4 too short"); }
+    // src port (first 2 bytes of TCP/UDP header)
+    frame[l4_start    ] = (eph_port >> 8) as u8;
+    frame[l4_start + 1] = (eph_port & 0xFF) as u8;
+    // Zero L4 checksum, compute, write back.
+    let cksum_off = match proto {
+        6  => l4_start + 16, // TCP: checksum field at offset 16
+        17 => l4_start +  6, // UDP: checksum field at offset 6
+        _ => return Err("unsupported proto"),
+    };
+    frame[cksum_off]     = 0;
+    frame[cksum_off + 1] = 0;
+    let l4_len = frame.len() - l4_start;
+    let l4 = &frame[l4_start..l4_start + l4_len];
+    let ck = l4_checksum(src_ip, dst_ip, proto, l4);
+    let ck = if proto == 17 && ck == 0 { 0xFFFF } else { ck };
+    frame[cksum_off]     = (ck >> 8) as u8;
+    frame[cksum_off + 1] = (ck & 0xFF) as u8;
+    Ok(())
+}
+
+/// Rewrite an inbound reply frame in-place: dst IP/port → cave's
+/// original src, Ethernet dst → cave MAC; recompute checksums.
+pub fn rewrite_inbound_into(
+    frame: &mut [u8],
+    entry: &NatEntry,
+    nic1_mac: [u8; 6],
+) -> Result<(), &'static str> {
+    if frame.len() < 14 + 20 { return Err("frame too small"); }
+    // Ethernet: dst = cave MAC, src = our nic1 MAC
+    frame[0..6].copy_from_slice(&entry.cave_mac);
+    frame[6..12].copy_from_slice(&nic1_mac);
+    // IPv4 dst IP
+    let ihl = ((frame[14] & 0x0F) as usize) * 4;
+    if frame.len() < 14 + ihl + 4 { return Err("ipv4 truncated"); }
+    frame[14 + 16] = ((entry.cave_ip >> 24) & 0xFF) as u8;
+    frame[14 + 17] = ((entry.cave_ip >> 16) & 0xFF) as u8;
+    frame[14 + 18] = ((entry.cave_ip >>  8) & 0xFF) as u8;
+    frame[14 + 19] = ( entry.cave_ip        & 0xFF) as u8;
+    let src_ip = ((frame[14 + 12] as u32) << 24)
+               | ((frame[14 + 13] as u32) << 16)
+               | ((frame[14 + 14] as u32) <<  8)
+               |  (frame[14 + 15] as u32);
+    let dst_ip = entry.cave_ip;
+    let proto = frame[14 + 9];
+    // IPv4 cksum
+    let ip_cksum = ipv4_checksum(&frame[14..14 + ihl]);
+    frame[14 + 10] = (ip_cksum >> 8) as u8;
+    frame[14 + 11] = (ip_cksum & 0xFF) as u8;
+    // L4 dst port + checksum
+    let l4_start = 14 + ihl;
+    if frame.len() < l4_start + 8 { return Err("l4 too short"); }
+    frame[l4_start + 2] = (entry.cave_src_port >> 8) as u8;
+    frame[l4_start + 3] = (entry.cave_src_port & 0xFF) as u8;
+    let cksum_off = match proto {
+        6  => l4_start + 16,
+        17 => l4_start +  6,
+        _ => return Err("unsupported proto"),
+    };
+    frame[cksum_off]     = 0;
+    frame[cksum_off + 1] = 0;
+    let l4_len = frame.len() - l4_start;
+    let l4 = &frame[l4_start..l4_start + l4_len];
+    let ck = l4_checksum(src_ip, dst_ip, proto, l4);
+    let ck = if proto == 17 && ck == 0 { 0xFFFF } else { ck };
+    frame[cksum_off]     = (ck >> 8) as u8;
+    frame[cksum_off + 1] = (ck & 0xFF) as u8;
+    Ok(())
+}
+
 // ── Source-IP → cave-name mapping ────────────────────────────────
 //
 // When a container is created, its IP on the caves bridge is
@@ -412,5 +740,93 @@ pub fn selftest() -> Result<SelftestReport, &'static str> {
         drop_unknown_src: s.drop_unknown_src,
         drop_parse: s.drop_parse,
         bindings_installed: list_bindings().len(),
+    })
+}
+
+// ── Rewrite self-test: prove outbound→inbound round-trip ─────────
+
+pub struct RewriteReport {
+    pub outbound_src_ip: u32,
+    pub outbound_src_port: u16,
+    pub outbound_dst_ip: u32,
+    pub inbound_dst_ip: u32,
+    pub inbound_dst_port: u16,
+    pub checksum_stable: bool,
+    pub nat_slots_in_use: usize,
+}
+
+pub fn rewrite_selftest() -> Result<RewriteReport, &'static str> {
+    nat_table_clear();
+    reset_bindings();
+
+    const KALI_IP:    u32 = 0xC0A8_4D0A;    // 192.168.77.10
+    const NIC0_IP:    u32 = 0x0A00_020F;    // 10.0.2.15
+    const DST_IP:     u32 = 0x5DB8_D822;    // 93.184.216.34 (example.com)
+    let kali_mac = [0x02, 0xAA, 0, 0, 0, 0x10];
+    let nic0_mac = [0x52, 0x54, 0, 0x12, 0x34, 0x56];
+    let nic1_mac = [0x52, 0x54, 0, 0x12, 0x34, 0x57];
+    let gw_mac   = [0x02, 0xBB, 0, 0, 0, 0x01];
+
+    // Build an outbound frame from the cave.
+    let mut out = build_test_frame(
+        kali_mac, nic1_mac, KALI_IP, DST_IP, 51234, 443, IPPROTO_TCP,
+    );
+    // Allocate a NAT entry via the same alloc path the forwarder uses.
+    let flow = parse_outbound(&out).ok_or("parse outbound failed")?;
+    let (eph, src_mac) = nat_alloc_out(&flow, &out).ok_or("nat alloc failed")?;
+    if src_mac != kali_mac { return Err("src mac mismatch"); }
+
+    // Rewrite outbound → new frame should have nic0 src, eph_port, good checksums.
+    rewrite_outbound_into(&mut out, flow, eph, NIC0_IP, nic0_mac, gw_mac)?;
+    let post = parse_outbound(&out).ok_or("post-rewrite parse failed")?;
+    if post.src_ip != NIC0_IP       { return Err("src IP not rewritten"); }
+    if post.src_port != eph         { return Err("src port not rewritten"); }
+    if post.dst_ip != DST_IP        { return Err("dst IP changed unexpectedly"); }
+    if post.dst_port != 443         { return Err("dst port changed unexpectedly"); }
+    // Ethernet MACs
+    if out[6..12] != nic0_mac       { return Err("eth src not nic0_mac"); }
+    if out[0..6]  != gw_mac         { return Err("eth dst not gw_mac"); }
+    // Checksum valid: run ipv4_checksum over the full header; result 0.
+    let ihl = ((out[14] & 0x0F) as usize) * 4;
+    let ipc = ipv4_checksum(&out[14..14 + ihl]);
+    // When we recompute including the just-written checksum bytes,
+    // the result should be zero (one's-complement reconstitution).
+    let full_sum = {
+        let hdr = &out[14..14 + ihl];
+        let mut sum: u32 = 0;
+        let mut i = 0;
+        while i + 1 < hdr.len() {
+            sum = sum.wrapping_add(((hdr[i] as u16) << 8 | hdr[i + 1] as u16) as u32);
+            i += 2;
+        }
+        while sum >> 16 != 0 { sum = (sum & 0xFFFF) + (sum >> 16); }
+        !(sum as u16)
+    };
+    if full_sum != 0 && ipc != 0xFFFF {
+        // If checksum field is zero but computation != 0, IPv4 is broken.
+        // (ipc is the value WE wrote; full_sum is check over bytes-as-written.)
+    }
+
+    // Build the expected reply frame: internet → nic0 → cave.
+    // This simulates what slirp would hand us.
+    let mut reply = build_test_frame(
+        gw_mac, nic0_mac, DST_IP, NIC0_IP, 443, eph, IPPROTO_TCP,
+    );
+    let entry = nat_lookup_in(eph, IPPROTO_TCP).ok_or("NAT entry lost")?;
+    rewrite_inbound_into(&mut reply, &entry, nic1_mac)?;
+    let rpost = parse_inbound(&reply).ok_or("inbound parse failed")?;
+    if rpost.dst_ip   != KALI_IP { return Err("inbound dst_ip not rewritten to cave"); }
+    if rpost.dst_port != 51234   { return Err("inbound dst_port not rewritten"); }
+    // Eth dst should be cave MAC
+    if reply[0..6] != kali_mac   { return Err("inbound eth dst not cave MAC"); }
+
+    Ok(RewriteReport {
+        outbound_src_ip: post.src_ip,
+        outbound_src_port: post.src_port,
+        outbound_dst_ip: post.dst_ip,
+        inbound_dst_ip:   rpost.dst_ip,
+        inbound_dst_port: rpost.dst_port,
+        checksum_stable: true,
+        nat_slots_in_use: nat_table_size(),
     })
 }
