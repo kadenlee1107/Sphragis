@@ -2,13 +2,23 @@
 // Handles ICMP echo requests (replies to pings) and sends pings.
 
 use super::ip::{self, IpPacket};
-use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 
 const ICMP_ECHO_REPLY: u8 = 0;
 const ICMP_ECHO_REQUEST: u8 = 8;
 
 static PING_RECEIVED: AtomicBool = AtomicBool::new(false);
 static PING_SEQ: AtomicU16 = AtomicU16::new(0);
+
+/// Raw-socket delivery buffer. Populated whenever an ICMP packet arrives
+/// so a SOCK_RAW reader (e.g. busybox ping) can pull back the bytes in a
+/// Linux-compatible "IP header + ICMP payload" shape via `take_raw_reply`.
+/// The synthesized IP header lets the user's parser (which expects a full
+/// IPv4 datagram) walk the bytes without modification.
+const RAW_BUF_CAP: usize = 1500;
+static mut RAW_REPLY_BUF: [u8; RAW_BUF_CAP] = [0; RAW_BUF_CAP];
+static RAW_REPLY_LEN: AtomicUsize = AtomicUsize::new(0);
+static RAW_REPLY_SRC: AtomicU32 = AtomicU32::new(0);
 
 pub fn handle(pkt: &IpPacket) {
     if pkt.payload.len() < 8 { return; }
@@ -32,9 +42,60 @@ pub fn handle(pkt: &IpPacket) {
             PING_SEQ.store(seq, Ordering::Relaxed);
             PING_RECEIVED.store(true, Ordering::Release);
             crate::drivers::uart::puts("[icmp] ping reply received!\n");
+
+            // Also publish a Linux-compatible raw-socket view (IP header
+            // + ICMP payload) so a SOCK_RAW/IPPROTO_ICMP reader can pull
+            // it out via `take_raw_reply`. busybox ping parses an IPv4
+            // datagram and won't accept headerless ICMP.
+            publish_raw_reply(pkt, ICMP_ECHO_REPLY);
         }
-        _ => {}
+        _ => {
+            // Still publish so raw sockets see non-echo traffic (TTL
+            // exceeded, unreachable, etc.) a future busybox traceroute
+            // variant could listen for.
+            publish_raw_reply(pkt, icmp_type);
+        }
     }
+}
+
+fn publish_raw_reply(pkt: &IpPacket, _icmp_type: u8) {
+    unsafe {
+        let icmp_len = pkt.payload.len().min(RAW_BUF_CAP - 20);
+        let total_len = 20 + icmp_len;
+        // IPv4 header (20 bytes, no options)
+        RAW_REPLY_BUF[0] = 0x45;                           // version 4, IHL 5
+        RAW_REPLY_BUF[1] = 0;                              // TOS
+        let tot = (total_len as u16).to_be_bytes();
+        RAW_REPLY_BUF[2] = tot[0]; RAW_REPLY_BUF[3] = tot[1];
+        RAW_REPLY_BUF[4] = 0; RAW_REPLY_BUF[5] = 0;        // ID
+        RAW_REPLY_BUF[6] = 0; RAW_REPLY_BUF[7] = 0;        // flags / frag
+        RAW_REPLY_BUF[8] = pkt.ttl.max(1);                 // TTL (carry through)
+        RAW_REPLY_BUF[9] = pkt.protocol;                   // protocol (1 = ICMP)
+        RAW_REPLY_BUF[10] = 0; RAW_REPLY_BUF[11] = 0;      // checksum placeholder
+        RAW_REPLY_BUF[12..16].copy_from_slice(&pkt.src.to_be_bytes());
+        RAW_REPLY_BUF[16..20].copy_from_slice(&pkt.dst.to_be_bytes());
+        // Fill in correct IP checksum so parsers that validate don't reject.
+        let cksum = ip::checksum(&RAW_REPLY_BUF[..20]);
+        RAW_REPLY_BUF[10..12].copy_from_slice(&cksum.to_be_bytes());
+        // ICMP body as-is
+        RAW_REPLY_BUF[20..20 + icmp_len].copy_from_slice(&pkt.payload[..icmp_len]);
+        RAW_REPLY_SRC.store(pkt.src, Ordering::Relaxed);
+        RAW_REPLY_LEN.store(total_len, Ordering::Release);
+    }
+}
+
+/// Consume the last raw ICMP delivery into `out`. Returns Some((n, src_ip))
+/// on success, None if no reply is pending. Used by `sys_recvfrom` on
+/// SOCK_RAW+IPPROTO_ICMP sockets.
+pub fn take_raw_reply(out: &mut [u8]) -> Option<(usize, u32)> {
+    let len = RAW_REPLY_LEN.swap(0, Ordering::Acquire);
+    if len == 0 { return None; }
+    let n = len.min(out.len());
+    unsafe {
+        out[..n].copy_from_slice(&RAW_REPLY_BUF[..n]);
+    }
+    let src = RAW_REPLY_SRC.load(Ordering::Relaxed);
+    Some((n, src))
 }
 
 /// Send a ping and wait for reply. Returns round-trip info.

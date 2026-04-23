@@ -1422,6 +1422,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
 const AF_INET: u32 = 2;
 const SOCK_STREAM: u32 = 1;
 const SOCK_DGRAM: u32 = 2;
+const SOCK_RAW: u32 = 3;
 static mut SOCKET_TYPE: u32 = 0;
 
 // Per-socket state (simple: tracks the last socket's connection info)
@@ -1577,6 +1578,27 @@ fn sys_sendto(args: [u64; 6]) -> i64 {
 
             let sock_type = unsafe { SOCKET_TYPE };
 
+            // Raw socket (SOCK_RAW + IPPROTO_ICMP — busybox ping's path).
+            // User's buffer IS a pre-built ICMP packet; forward it as the
+            // IP payload with protocol=1. Dest IP comes from sockaddr_in
+            // arg if non-null, otherwise from SOCK_DEST_IP.
+            if sock_type == SOCK_RAW {
+                let ip_dest = if dest_ptr != 0 {
+                    let ip_be: u32;
+                    unsafe {
+                        core::arch::asm!("ldr {v:w}, [{a}]",
+                            a = in(reg) dest_ptr + 4, v = out(reg) ip_be);
+                    }
+                    u32::from_be(ip_be)
+                } else {
+                    unsafe { SOCK_DEST_IP }
+                };
+                match crate::net::ip::send(ip_dest, 1, &data[..send_len]) {
+                    Ok(()) => return send_len as i64,
+                    Err(_) => return -5, // EIO
+                }
+            }
+
             // UDP socket
             if sock_type == SOCK_DGRAM {
                 let (ip, port) = if dest_ptr != 0 {
@@ -1631,6 +1653,65 @@ fn sys_recvfrom(args: [u64; 6]) -> i64 {
         let node = vfs::get_node(entry.node_idx);
         if node.node_type == vfs::NodeType::Socket {
             let sock_type = unsafe { SOCKET_TYPE };
+
+            // SOCK_RAW + IPPROTO_ICMP: busybox ping reads back a full
+            // IPv4 datagram (IP header + ICMP payload). Poll net::icmp
+            // for a pending raw reply; time-bounded so a no-reply
+            // target doesn't wedge the cave.
+            if sock_type == SOCK_RAW {
+                let src_addr_ptr = args[4] as usize;
+                let addrlen_ptr = args[5] as usize;
+                if src_addr_ptr != 0 && !uaccess::is_user_range(src_addr_ptr, 16) {
+                    return EFAULT;
+                }
+                if addrlen_ptr != 0 && !uaccess::is_user_range(addrlen_ptr, 4) {
+                    return EFAULT;
+                }
+                let mut scratch = [0u8; 1500];
+                let cap = len.min(1500);
+                for _ in 0..50_000_000u64 {
+                    crate::net::poll_once();
+                    if let Some((n, src)) = crate::net::icmp::take_raw_reply(
+                            &mut scratch[..cap]) {
+                        for i in 0..n {
+                            unsafe {
+                                core::arch::asm!("strb {v:w}, [{a}]",
+                                    a = in(reg) buf + i,
+                                    v = in(reg) scratch[i] as u32);
+                            }
+                        }
+                        // Fill sockaddr_in (AF_INET, port=0, IP=src)
+                        if src_addr_ptr != 0 {
+                            let af: u16 = AF_INET as u16;
+                            let port_be: u16 = 0;
+                            let ip_be = src.to_be();
+                            unsafe {
+                                core::arch::asm!("strh {v:w}, [{a}]",
+                                    a = in(reg) src_addr_ptr, v = in(reg) af as u32);
+                                core::arch::asm!("strh {v:w}, [{a}]",
+                                    a = in(reg) src_addr_ptr + 2,
+                                    v = in(reg) port_be as u32);
+                                core::arch::asm!("str {v:w}, [{a}]",
+                                    a = in(reg) src_addr_ptr + 4, v = in(reg) ip_be);
+                                for z in 0..8u64 {
+                                    core::arch::asm!("strb wzr, [{a}]",
+                                        a = in(reg) src_addr_ptr + 8 + z as usize);
+                                }
+                            }
+                            if addrlen_ptr != 0 {
+                                let alen: u32 = 16;
+                                unsafe {
+                                    core::arch::asm!("str {v:w}, [{a}]",
+                                        a = in(reg) addrlen_ptr, v = in(reg) alen);
+                                }
+                            }
+                        }
+                        return n as i64;
+                    }
+                    core::hint::spin_loop();
+                }
+                return -11; // EAGAIN
+            }
 
             if sock_type == SOCK_DGRAM {
                 let src_addr_ptr = args[4] as usize;
