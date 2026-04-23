@@ -10,6 +10,13 @@ const PAGE_SIZE: usize = 4096;
 static LOADED_ENTRY: AtomicUsize = AtomicUsize::new(0);
 static LOADED_ORIG_ENTRY: AtomicUsize = AtomicUsize::new(0);
 static LOADED_PHYS_BASE: AtomicUsize = AtomicUsize::new(0);
+/// User VA base for the cave we'll eret into.
+/// 0 for the primary cave (user VA 0..20 MB → phys_base..+20 MB).
+/// Non-zero for a rebased cave — e.g., Chromium at 0x10000000.
+/// `execute_with_args` uses this to translate every stack pointer +
+/// the entry point from kernel-physical to the VA EL0 will actually see
+/// through TTBR0 once the cave's page table is loaded.
+static LOADED_USER_VA_BASE: AtomicUsize = AtomicUsize::new(0);
 pub static SAVED_RETURN_ADDR: AtomicUsize = AtomicUsize::new(0);
 static SAVED_KERNEL_SP: AtomicUsize = AtomicUsize::new(0);
 
@@ -474,6 +481,38 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
 
     let virt_entry = (entry as i64 + value_offset) as u64;
 
+    // Allocate a user stack contiguous with the ELF image so it lives inside
+    // the cave's user window (cave maps virt_base..virt_base+200MB →
+    // phys_base..phys_base+200MB). Matches `load_elf`'s QEMU-BUGFIX-3 layout.
+    // Without this, `execute_with_args` aborts with "no stack reserved" the
+    // moment the rebased path hands off (see runner::run_chromium).
+    let stack_phys_start = phys_base + total_pages * PAGE_SIZE;
+    for i in 0..LOADED_STACK_PAGES {
+        let expected = stack_phys_start + i * PAGE_SIZE;
+        let got = frame::alloc_frame().ok_or("oom (rebased stack)")?;
+        if got != expected {
+            return Err("non-contiguous rebased stack alloc (memory fragmented)");
+        }
+    }
+    // Cave virt window is 100 blocks × 2 MB = 200 MB (see
+    // mmu::setup_cave_pagetable_at). ELF + stack must fit under that.
+    let cave_window_bytes: usize = 100 * 0x200000;
+    if total_pages * PAGE_SIZE + LOADED_STACK_PAGES * PAGE_SIZE > cave_window_bytes {
+        return Err("ELF + stack > cave user window");
+    }
+
+    // Publish loader state so `execute_with_args` knows where the stack +
+    // phys base live, and that user VAs should be biased by `virt_base`.
+    LOADED_ENTRY.store(virt_entry as usize, Ordering::Relaxed);
+    LOADED_ORIG_ENTRY.store(entry as usize, Ordering::Relaxed);
+    LOADED_PHYS_BASE.store(phys_base, Ordering::Relaxed);
+    LOADED_STACK_PHYS.store(stack_phys_start, Ordering::Relaxed);
+    LOADED_USER_VA_BASE.store(virt_base as usize, Ordering::Relaxed);
+
+    uart::puts("[loader] Rebased stack phys: 0x"); print_hex(stack_phys_start as u64);
+    uart::puts("  ("); crate::kernel::mm::print_num(LOADED_STACK_PAGES);
+    uart::puts(" pages)\n");
+
     Ok(LoadedElfInfo {
         virt_entry,
         phys_base,
@@ -753,6 +792,10 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
     LOADED_ENTRY.store(phys_entry as usize, Ordering::Relaxed);
     LOADED_ORIG_ENTRY.store(entry as usize, Ordering::Relaxed);
     LOADED_PHYS_BASE.store(phys_base, Ordering::Relaxed);
+    // Primary cave: user VA 0..20 MB → phys_base..+20 MB. Ensure a prior
+    // `load_elf_rebased` (which set `virt_base` here) doesn't leak into
+    // busybox/hello stack-pointer arithmetic in `execute_with_args`.
+    LOADED_USER_VA_BASE.store(0, Ordering::Relaxed);
     Ok(phys_entry)
 }
 
@@ -768,6 +811,10 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
 
     let orig_entry = LOADED_ORIG_ENTRY.load(Ordering::Relaxed) as u64;
     let phys_base = LOADED_PHYS_BASE.load(Ordering::Relaxed);
+    // Non-zero when the loader set up a rebased cave (Chromium path). The
+    // primary cave keeps this at 0 so existing busybox/hello behavior is
+    // byte-identical.
+    let user_va_base = LOADED_USER_VA_BASE.load(Ordering::Relaxed) as u64;
 
     // QEMU-BUGFIX-3: the ELF loader reserved a contiguous `LOADED_STACK_PAGES`
     // block immediately after the ELF's PT_LOAD pages so the user stack sits
@@ -783,9 +830,9 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     }
     let stack_bytes = LOADED_STACK_PAGES * PAGE_SIZE;
 
-    // The primary cave maps user VA 0..20 MB → phys_base..phys_base+20 MB.
-    // So the stack's user VA is simply `stack_phys - phys_base`.
-    let stack_va_base = stack_phys - phys_base;
+    // Primary cave: user VA 0..20 MB → phys_base..+20 MB, so user VA is the
+    // phys offset. Rebased cave (Chromium): user VA = virt_base + phys offset.
+    let stack_va_base = user_va_base as usize + (stack_phys - phys_base);
     let stack_base = stack_phys;           // kept for kernel-side writes
     let stack_top = stack_base + stack_bytes;  // kernel-side (for argv push)
 
@@ -800,11 +847,12 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     let mut sp = stack_top;
 
     // Helper: convert a kernel-physical stack pointer into the user-visible
-    // VA that EL0 sees through the primary cave's L2 map (user 0..20 MB →
-    // phys_base..phys_base+20 MB). Every pointer we push onto the user
-    // stack for argv/envp/auxv/random must go through this so EL0 can
-    // dereference it via sp_el0.
-    let to_uva = |kphys: usize| -> u64 { (kphys - phys_base) as u64 };
+    // VA that EL0 sees via TTBR0. Primary cave maps user 0..20 MB →
+    // phys_base..+20 MB, so user VA = phys - phys_base (user_va_base=0). A
+    // rebased cave (Chromium) maps virt_base..virt_base+N → phys_base..+N,
+    // so user VA = virt_base + (phys - phys_base). Every pointer we push
+    // onto the user stack (argv/envp/auxv/random) must go through this.
+    let to_uva = |kphys: usize| -> u64 { user_va_base + (kphys - phys_base) as u64 };
 
     // AT_RANDOM
     sp -= 16;
@@ -880,10 +928,17 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     unsafe { core::arch::asm!("msr tpidr_el0, xzr"); }
     let _ = tls_page; // still allocated; not leaked via tpidr_el0 any more
 
-    // Enable MMU
+    // Enable MMU (idempotent: no-op if a cave page table is already loaded
+    // via `switch_to_cave`, so the Chromium path keeps its rebased L1).
     super::mmu::setup_and_enable(phys_base)?;
 
-    let virt_entry = orig_entry;
+    // Primary cave: swap in `orig_entry` (the ELF's declared entry), which
+    // EL0 sees as VA `(orig_entry - min_addr)` through the 0..20 MB map.
+    // Rebased cave: the caller already passed `info.virt_entry`, which IS
+    // the user VA — don't second-guess it. Using `orig_entry` here would
+    // eret to a VA not mapped by the cave's TTBR0 → instant instruction
+    // abort the moment Chromium's first function tries to return.
+    let virt_entry = if user_va_base == 0 { orig_entry } else { entry };
     uart::puts("[loader] --- executing ---\n");
 
     // Save kernel SP into the kernel-BSS scratch slot shared with the
@@ -932,11 +987,11 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     // = xzr means PSTATE.I = 0 on the new EL0 thread (interrupts
     // unmasked), which is correct.
     // QEMU-BUGFIX-3: EL0 sees the stack through the cave's user-window
-    // mapping (user 0..20 MB → phys_base..phys_base+20 MB). Translate the
-    // kernel-physical sp we've been writing into the user VA equivalent
-    // before handing it to sp_el0. All pointers written onto the stack
-    // (argv/envp/AT_RANDOM/etc.) were already converted via `to_uva`.
-    let user_sp = (sp - phys_base) as u64;
+    // mapping. Primary cave: user VA = phys - phys_base. Rebased cave
+    // (Chromium): user VA = virt_base + (phys - phys_base). All pointers
+    // written onto the stack (argv/envp/AT_RANDOM/etc.) were already
+    // converted via `to_uva`, which uses the same formula.
+    let user_sp = to_uva(sp);
     let _ = stack_va_base; // silence unused (stack_va_base is implicit in user_sp)
 
     let _g = crate::kernel::sync::IrqGuard::new();

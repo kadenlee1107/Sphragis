@@ -186,7 +186,9 @@ fn probe() -> Option<BlobInfo> {
 
     for &off in &CANDIDATES {
         let head = base + off;
-        if head + 16 >= ceiling {
+        // Need to read [head, head+16) — 8 B magic + 8 B size.
+        // Range is valid iff head+16 <= ceiling.
+        if head + 16 > ceiling {
             break;
         }
         if !magic_matches(head, &MAGIC_HEAD) {
@@ -202,7 +204,8 @@ fn probe() -> Option<BlobInfo> {
         let crc_off = blob_start + size;
         let tail_off = crc_off + 4;
 
-        if tail_off + 8 >= ceiling {
+        // Need to read [tail_off, tail_off+8) — 8 B CHROMEND marker.
+        if tail_off + 8 > ceiling {
             continue;
         }
 

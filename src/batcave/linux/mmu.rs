@@ -326,23 +326,21 @@ pub fn setup_cave_pagetable_at(
 
     // L2_high: identity map kernel RAM with W^X.
     //
-    // Below `__text_end`: kernel .text — RO + executable-from-EL1 (UXN
-    //   stops EL0 from executing it even if ATTACK-KM-007 aliases it
-    //   into a user window).
-    // At/above `__text_end`: kernel .rodata/.data/.bss/heap — NX (UXN
-    //   and PXN both set) + EL1 RW. Any arbitrary-write exploit against
-    //   kernel data can no longer redirect execution there.
+    // INITRD-FIX: mirror the transitional map from setup_and_enable. Rust
+    // places `.text.cold.*` past __text_end (inside the rodata segment), and
+    // after a `switch_to_cave` that lands TTBR0 on a cave-owned L2 the first
+    // instruction fetch goes through THIS table, so the same widening applies
+    // here. Without it, every switch_to_cave in the Chromium path
+    // instruction-aborts on the next insn the CPU fetches from 0x402xxxxx.
+    // TODO (V9): undo once *(.text.cold.*) lives inside the .text segment.
     let text_end = text_end_addr();
     for block in 0..128 {
         let addr = 0x40000000u64 + (block as u64) * 0x200000;
-        // The block covers [addr, addr + 2 MB). Treat it as kernel text
-        // only if it lies ENTIRELY below __text_end; once any byte of
-        // the block is past __text_end we must mark it data (NX+RW) so
-        // that writes to .data/.bss don't fault.
         let flags = if addr + 0x200000 <= text_end {
             BLOCK_KERNEL_TEXT
         } else {
-            BLOCK_KERNEL_DATA
+            PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL
+                | PTE_AP_EL1_RW | PTE_UXN
         };
         write_pte(l2_high, block, addr | flags);
     }
@@ -493,13 +491,30 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     // L2_high: Identity map kernel RAM (0x40000000 - 0x4FFFFFFF), 256MB =
     // 128 × 2MB blocks, with W^X split at __text_end. See the matching
     // comment in setup_cave_pagetable above.
+    //
+    // INITRD-FIX: With QEMU `-kernel Image` + flat binary, Rust is producing
+    // `.text.cold.*` variants that end up in the rodata PT_LOAD (segment 1,
+    // 0x40200000+), OUTSIDE __text_end=0x40200000. That makes block 1 get
+    // BLOCK_KERNEL_DATA (PXN set) and the first insn fetch after MMU-enable
+    // hits an instruction abort (observed: PC=0x402986ec after `msr sctlr`).
+    // As a pragmatic fix while the linker script is reworked, mark ALL kernel
+    // RAM as text-capable (RO + EL1-exec). Kernel writes to .data/.bss now
+    // go through the RO mapping... that's also wrong. So we need a more
+    // permissive transitional map: every block gets EL1-RW, EL1-exec, UXN.
+    // This loses the EL1 W^X property but keeps the kernel bootable.
+    // TODO (V9): restore W^X by linking .text.cold.* into the text segment
+    // via a `*(.text.cold.*)` glob, then revert this to the split loop.
     let text_end = text_end_addr();
     for block in 0..128 {
         let addr = 0x40000000u64 + (block as u64) * 0x200000;
         let flags = if addr + 0x200000 <= text_end {
-            BLOCK_KERNEL_TEXT
+            BLOCK_KERNEL_TEXT  // RO + EL1-exec, for the real .text only
         } else {
-            BLOCK_KERNEL_DATA
+            // Transitional: EL1-RW + EL1-exec + UXN. Loses W^X within
+            // kernel RAM but keeps the MMU-enable fetch working when
+            // Rust scatters code through rodata/data segments.
+            PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL
+                | PTE_AP_EL1_RW | PTE_UXN
         };
         write_pte(l2_high, block, addr | flags);
     }

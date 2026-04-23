@@ -108,9 +108,16 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
     // "refuse unless explicitly permitted". A shipped kernel with
     // INITRD_PUBKEY=[0u8;32] used to just print a warning and load the
     // blob, making the Ed25519 verify infrastructure a no-op on every
-    // production binary. Now the default is REFUSE; dev builds must
-    // opt into unsigned blobs via `ALLOW_UNSIGNED_INITRD = true`.
-    const ALLOW_UNSIGNED_INITRD: bool = false;
+    // production binary. Now the default is REFUSE; dev builds opt in
+    // explicitly via `BAT_OS_ALLOW_UNSIGNED_INITRD=1` at build time.
+    // (build.rs declares this as a rerun-if-env-changed input so cargo
+    // picks up changes without a `cargo clean`.)
+    // Presence of BAT_OS_ALLOW_UNSIGNED_INITRD (any value) opts in. We'd
+    // prefer `matches!(…, Some("1") | Some("true"))` but const `str` equality
+    // isn't stable yet — is_some() is the same convention Cargo features use
+    // (setting the flag at all means "yes, I know what I'm doing").
+    const ALLOW_UNSIGNED_INITRD: bool =
+        option_env!("BAT_OS_ALLOW_UNSIGNED_INITRD").is_some();
     let pk_nonzero = initrd::INITRD_PUBKEY.iter().any(|&b| b != 0);
     if !bi.sig_valid {
         if pk_nonzero {
@@ -167,6 +174,15 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
 
     super::threads::init_main_thread(info.virt_entry, 0);
 
+    // Ensure the MMU is enabled with PRIMARY_L1 before we switch to
+    // chromium's cave L1. The cave path assumes MMU is already up (see
+    // mmu::setup_and_enable's V2-NEW-026 comment) — if chromium is the
+    // first user binary after boot, nobody has turned it on yet. Calling
+    // setup_and_enable here builds PRIMARY_L1 and flips SCTLR.M=1; the
+    // immediately-following switch_to_cave overwrites TTBR0 with our
+    // rebased L1. The setup_and_enable call inside execute_with_args is
+    // then a no-op (SCTLR.M==1), preserving chromium's page table.
+    super::mmu::setup_and_enable(info.phys_base)?;
     super::mmu::switch_to_cave(l1);
     let r = loader::execute_with_args(info.virt_entry, argv);
     super::mmu::switch_to_primary();

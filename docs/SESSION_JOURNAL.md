@@ -11,6 +11,69 @@ end of a session.
 
 ---
 
+## 2026-04-23 12:35 — Mac — Chromium pipeline now reaches user code E2E
+
+Picked up where `eabded85` left off and finished wiring the delivery
+pipeline all the way through. `scripts/qemu_chromium_pipeline_smoke.py`
+now shows the stand-in ELF (`tests/hello`) actually executing
+inside the rebased cave, doing syscalls (write / mmap / clock /
+getpid / exit), and exiting 0. Pipeline delivery is no longer
+theoretical — it's a measurable behaviour.
+
+Specific fixes this session (all in one commit):
+
+1. **`load_elf_rebased` allocates its own stack** and sets loader
+   globals, including a new `LOADED_USER_VA_BASE`. Before this,
+   `execute_with_args` aborted with "no stack reserved" because the
+   rebased path never populated `LOADED_STACK_PHYS`.
+2. **`execute_with_args` honours `LOADED_USER_VA_BASE`** — to_uva
+   now returns `virt_base + offset` instead of just the offset, the
+   final `user_sp` goes through `to_uva`, and the primary-cave
+   `orig_entry` override is skipped when a rebased cave is active
+   (use the caller's `entry` directly).
+3. **Runner primes the MMU** via `setup_and_enable(info.phys_base)`
+   before `switch_to_cave(l1)`. Chromium was the first user binary
+   of the session, so MMU was still off when `execute_with_args` ran.
+4. **Kernel-RAM identity map widened** past `__text_end` in both
+   `setup_and_enable` and `setup_cave_pagetable_at`. Rust is
+   scattering code into the rodata PT_LOAD (observed PC=0x402986ec
+   after `msr sctlr_el1`, inside the rodata vaddr range). The old
+   W^X split made block 1 PXN → instruction abort on the very next
+   fetch. Transitional widen marks past-text blocks EL1-RW + exec +
+   UXN; `linker.ld` also gathers `.text.cold.*` etc. explicitly so
+   a future rustc bump may let us revert the widen. Tracked as V9.
+5. **`BAT_OS_ALLOW_UNSIGNED_INITRD` env flag** gates the dev-only
+   unsigned-blob path (`runner::run_chromium`). Plumbed via
+   `option_env!` + `build.rs` rerun-if-env-changed so the operator
+   doesn't need `cargo clean` when flipping it.
+6. **`initrd::probe` off-by-one fix** — `head + 16 >= ceiling` was
+   refusing blobs that sit exactly against the ceiling. Changed to
+   `head + 16 > ceiling` (and same for the tail-magic check).
+7. **Smoke test** now objcopies the kernel to a flat `bat_os.bin`
+   and boots `-kernel <flat> -initrd <blob>` so QEMU honours the
+   ARM64 Linux boot protocol (DTB delivered in x0) — this is what
+   lets `/chosen/linux,initrd-*` reach `initrd::set_range`.
+
+**Known follow-up:** running a primary-cave ELF (busybox / netsurf)
+and THEN chromium in the same session faults with `DATA ABORT
+DFSC=0x05` at `setup_cave_pagetable_at`. The kernel-pool frame
+allocator hands out pages above 0x50000000 (observed 0xbfffe000),
+but the kernel's identity map only covers 0x40000000..0x50000000,
+so writes to newly allocated cave L1/L2 frames fault when MMU is
+already on. Chromium-first works because MMU is off during cave
+setup and writes go direct. Fix: extend identity map to cover the
+full kernel pool. Filed as TODO.
+
+**Next concrete action (per STATE_2026-04-23.md):**
+1. Kick off `ports/chromium_port/build.sh` under Docker — 4-8 hr
+   overnight job to produce a real `content_shell` binary.
+2. Morning: copy `out/BatOs/content_shell` out of the Docker
+   volume, bake with `tools/bake_chromium_initrd.sh`, re-run the
+   smoke test. Observe first unimplemented-syscall crash.
+3. Work the syscall-coverage delta (current ~50 → needed ~150-200).
+
+---
+
 ## 2026-04-23 10:05 — Mac — REAL VMNET E2E PROVEN (scapy, bypassing Docker)
 
 Kaden ran `sudo python3 scripts/qemu_vmnet_docker_e2e.py` → failed

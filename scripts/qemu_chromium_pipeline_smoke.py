@@ -31,16 +31,46 @@ LOG.parent.mkdir(parents=True, exist_ok=True)
 PROMPT = rb"bat_os\s*>\s*"
 
 def main():
-    # Use the -initrd path: plain kernel + standalone framed blob.
-    kernel = ROOT / "target/aarch64-unknown-none/release/bat_os"
-    initrd = ROOT / "target/aarch64-unknown-none/release/chromium_initrd.bin"
-    if not kernel.exists():
-        print(f"[smoke] no kernel at {kernel}; `cargo build --release` first")
+    # Use the -initrd path + FLAT KERNEL IMAGE (not ELF) so QEMU
+    # honours the ARM64 Linux boot protocol and delivers the DTB
+    # in x0. The DTB's /chosen/linux,initrd-* nodes carry the
+    # initrd range, and `initrd::set_range` hands the probe the
+    # physical address QEMU loaded the blob at.
+    kernel_elf = ROOT / "target/aarch64-unknown-none/release/bat_os"
+    kernel_bin = ROOT / "target/aarch64-unknown-none/release/bat_os.bin"
+    initrd     = ROOT / "target/aarch64-unknown-none/release/chromium_initrd.bin"
+    if not kernel_elf.exists():
+        print(f"[smoke] no kernel ELF at {kernel_elf}")
+        print("        build: BAT_OS_ALLOW_UNSIGNED_INITRD=1 \\")
+        print("               BAT_OS_PASSPHRASE=batman \\")
+        print("               cargo build --release")
+        print("        (the env flag enables the dev-only unsigned-blob path)")
         return 1
     if not initrd.exists():
         print(f"[smoke] no initrd at {initrd}")
         print("        run: tools/bake_chromium_initrd.sh tests/hello")
         return 1
+    # Produce the flat Image if it doesn't exist or is stale.
+    if (not kernel_bin.exists()
+            or kernel_bin.stat().st_mtime < kernel_elf.stat().st_mtime):
+        import shutil
+        rust_objcopy = Path.home() / (
+            ".rustup/toolchains/nightly-aarch64-apple-darwin/"
+            "lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy")
+        if not rust_objcopy.exists():
+            alt = shutil.which("llvm-objcopy") or shutil.which("objcopy")
+            rust_objcopy = Path(alt) if alt else None
+        if rust_objcopy is None:
+            print("[smoke] need rust-objcopy / llvm-objcopy; install rustup llvm-tools")
+            return 1
+        print(f"[smoke] {rust_objcopy.name} -O binary …")
+        r = subprocess.run(
+            [str(rust_objcopy), "-O", "binary", str(kernel_elf), str(kernel_bin)],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            print(f"[smoke] objcopy failed: {r.stderr}")
+            return 1
 
     daemon = subprocess.Popen(
         ["python3", str(ROOT / "scripts" / "batcaved.py")],
@@ -58,7 +88,7 @@ def main():
             "-netdev", "user,id=net0",
             "-device", "virtio-net-device,netdev=net0",
             "-serial", "mon:stdio",
-            "-kernel", str(kernel),
+            "-kernel", str(kernel_bin),
             "-initrd", str(initrd)]
     fp = open(LOG, "wb")
     c = pexpect.spawn(args[0], args[1:], timeout=90, logfile=fp, encoding=None)
