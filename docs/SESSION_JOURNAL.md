@@ -11,6 +11,46 @@ end of a session.
 
 ---
 
+## 2026-04-22 20:45 — Mac — Followup #3 data plane landed (3a + 3b-shell + 3b-sync + 3b-enforce)
+
+Kaden: "lets keep it moving!" Followup #3 (tap-device packet path) is
+multi-day; split into sub-phases to ship incremental value:
+
+- **3a (bc9a4738):** kernel-side per-cave egress policy store.
+  `src/net/cave_policy.rs`. 16-byte `CaveId`, `EgressRule { host,
+  port, proto }`, default deny. `check(cave, host, port, proto) ->
+  Verdict`. Self-test: 6 allow paths + 5 drop paths + cross-cave
+  isolation. Shell: `cave-policy-selftest`.
+- **3b-shell (af2bf5ec):** by-name convenience layer + shell drivers.
+  `cave_id_from_name(name) = SHA-256("batos-cave-id-v1" || name)[..16]`.
+  Shell: `cpol-list`, `cpol-show`, `cpol-add`, `cpol-check`,
+  `cpol-clear`. Hook: `create_docker` registers, `destroy` clears.
+  QEMU: 9/9 steps OK.
+- **3b-sync (c55a0c32):** daemon mirrors kernel policy via new
+  `CPOL_PUSH` / `CPOL_CLEAR` / `CPOL_SHOW` / `CPOL_LIST` protocol
+  commands. Daemon-side unit test 8/8. Kernel→daemon E2E
+  (`qemu_cpol_sync_demo.py`) 9/9.
+- **3b-enforce (ee83cd3b):** daemon's HTTP CONNECT proxy identifies
+  the cave via source-IP (populated at `docker inspect` on create),
+  consults per-cave mirror first, falls back to `FW_ALLOWLIST` only
+  if peer IP isn't a cave. Cross-cave isolation: cave A can't reach
+  targets only granted to cave B. Unit test 8/8.
+
+**What's still pending in Followup #3:** the tap-device packet
+pipeline itself (vmnet-backed netdev + Bat_OS as NAT router). That
+remains multi-day and is the outstanding capstone. Everything short
+of real packet-level intercept is now in place and tested.
+
+Commits this session:
+  66a35bfc followup 1/3: TLS 1.3 handshake wires hybrid PQ key_share
+  092a2aa3 followup 2/3: wrap kernel::ipc with handshake + AEAD
+  bc9a4738 followup 3a/3: per-cave kernel egress policy store
+  af2bf5ec followup 3b/3: cpol shell + cave lifecycle hook
+  c55a0c32 followup 3b-sync/3: daemon mirrors kernel cave_policy
+  ee83cd3b followup 3b-enforce/3: proxy enforces per-cave mirror
+
+---
+
 ## 2026-04-22 16:10 — Mac — QEMU 40/40 ALL GREEN (BUG-4 mmap user-VA fixed)
 
 Kaden: "lets keep pushing lets make this qemu run seamlessly."
