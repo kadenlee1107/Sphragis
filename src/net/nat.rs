@@ -253,6 +253,8 @@ pub fn tick() -> (usize, usize) {
     let inn = if net::is_ready_n(0) && nat_table_size() > 0 {
         pump_replies(nic1_mac)
     } else { (0, 0) };
+    // Keep the NAT table honest — sweep any entries past their TTL.
+    gc_tick();
     (out.1, inn.1)
 }
 
@@ -296,21 +298,62 @@ pub struct NatEntry {
     pub dst_ip: u32,
     pub dst_port: u16,
     pub cave_mac: [u8; 6],
+    /// CNTPCT_EL0 tick when this entry last saw traffic. Bumped on
+    /// create, every outbound hit, and every inbound match. The GC
+    /// evicts entries whose last_seen is older than the proto's TTL.
+    pub last_seen_ticks: u64,
 }
 
 const NAT_SLOTS: usize = 64;
 const EPH_PORT_BASE: u16 = 50_000;
 
+/// TTL per protocol in seconds. UDP is a stateless datagram service —
+/// a flow that's silent for a minute is reasonable to reclaim. TCP
+/// sessions can idle for minutes between packets on long-running
+/// keepalive connections, so we're more patient.
+pub const NAT_TTL_UDP_SECS:  u64 = 60;
+pub const NAT_TTL_TCP_SECS:  u64 = 300;
+pub const NAT_TTL_ICMP_SECS: u64 = 30;
+
 static mut NAT_TABLE: [NatEntry; NAT_SLOTS] = [NatEntry {
     active: false, proto: 0, cave_ip: 0, cave_src_port: 0,
     eph_port: 0, dst_ip: 0, dst_port: 0, cave_mac: [0; 6],
+    last_seen_ticks: 0,
 }; NAT_SLOTS];
 static NAT_NEXT_EPH: AtomicU32 = AtomicU32::new(EPH_PORT_BASE as u32);
+static NAT_GC_LAST_RUN_TICKS: core::sync::atomic::AtomicU64
+    = core::sync::atomic::AtomicU64::new(0);
+
+/// Current virtual timer tick. Stable counter on aarch64; used for
+/// NAT entry TTL bookkeeping and GC throttling.
+fn now_ticks() -> u64 {
+    let t: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) t); }
+    t
+}
+
+fn ticks_per_sec() -> u64 {
+    let f: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f); }
+    // Guard against a zero reading on weird hardware so callers don't
+    // divide by zero downstream.
+    if f == 0 { 24_000_000 } else { f }
+}
+
+fn ttl_for(proto: u8) -> u64 {
+    match proto {
+        IPPROTO_UDP  => NAT_TTL_UDP_SECS,
+        IPPROTO_TCP  => NAT_TTL_TCP_SECS,
+        IPPROTO_ICMP => NAT_TTL_ICMP_SECS,
+        _ => NAT_TTL_UDP_SECS,
+    }
+}
 
 fn nat_lookup_or_create(flow: &OutboundFlow, cave_mac: [u8; 6]) -> Option<u16> {
+    let now = now_ticks();
     unsafe {
         let t = core::ptr::addr_of_mut!(NAT_TABLE);
-        // Existing entry?
+        // Existing entry? Bump last_seen so GC doesn't evict a hot flow.
         for i in 0..NAT_SLOTS {
             let e = (*t)[i];
             if e.active
@@ -320,6 +363,7 @@ fn nat_lookup_or_create(flow: &OutboundFlow, cave_mac: [u8; 6]) -> Option<u16> {
                 && e.dst_ip == flow.dst_ip
                 && e.dst_port == flow.dst_port
             {
+                (*t)[i].last_seen_ticks = now;
                 return Some(e.eph_port);
             }
         }
@@ -337,6 +381,7 @@ fn nat_lookup_or_create(flow: &OutboundFlow, cave_mac: [u8; 6]) -> Option<u16> {
                     dst_ip: flow.dst_ip,
                     dst_port: flow.dst_port,
                     cave_mac,
+                    last_seen_ticks: now,
                 };
                 return Some(eph_port);
             }
@@ -354,16 +399,66 @@ fn nat_alloc_out(flow: &OutboundFlow, frame: &[u8]) -> Option<(u16, [u8; 6])> {
 }
 
 pub fn nat_lookup_in(dst_port: u16, proto: u8) -> Option<NatEntry> {
+    let now = now_ticks();
     unsafe {
-        let t = core::ptr::addr_of!(NAT_TABLE);
+        let t = core::ptr::addr_of_mut!(NAT_TABLE);
         for i in 0..NAT_SLOTS {
             let e = (*t)[i];
             if e.active && e.proto == proto && e.eph_port == dst_port {
+                // Inbound traffic proves the flow is still alive.
+                (*t)[i].last_seen_ticks = now;
                 return Some(e);
             }
         }
     }
     None
+}
+
+/// Evict NAT entries whose `last_seen` is older than their proto's
+/// TTL. Returns how many slots were freed. Throttled by the caller
+/// so it doesn't walk the whole table on every tick — see `gc_tick`.
+pub fn nat_gc_sweep(now_t: u64, tps: u64) -> u32 {
+    let mut evicted = 0u32;
+    unsafe {
+        let t = core::ptr::addr_of_mut!(NAT_TABLE);
+        for i in 0..NAT_SLOTS {
+            let e = (*t)[i];
+            if !e.active { continue; }
+            let age_ticks = now_t.saturating_sub(e.last_seen_ticks);
+            let age_secs = age_ticks / tps;
+            if age_secs >= ttl_for(e.proto) {
+                (*t)[i].active = false;
+                evicted += 1;
+            }
+        }
+    }
+    if evicted > 0 {
+        NAT_GC_EVICTED.fetch_add(evicted, Ordering::Relaxed);
+    }
+    evicted
+}
+
+/// Throttle wrapper: only sweep once per second of wall-clock. Safe
+/// to call every tick — the counter avoids redundant scans.
+pub fn gc_tick() {
+    let now = now_ticks();
+    let tps = ticks_per_sec();
+    let last = NAT_GC_LAST_RUN_TICKS.load(Ordering::Relaxed);
+    // Run if we've never run, or if at least 1 second has elapsed.
+    if last == 0 || now.saturating_sub(last) >= tps {
+        NAT_GC_LAST_RUN_TICKS.store(now, Ordering::Relaxed);
+        let _ = nat_gc_sweep(now, tps);
+    }
+}
+
+/// Force-run a GC sweep regardless of throttle. For tests + shell.
+pub fn nat_gc_force(now_override_secs: Option<u64>) -> u32 {
+    let tps = ticks_per_sec();
+    let now = match now_override_secs {
+        Some(s) => s.saturating_mul(tps),
+        None => now_ticks(),
+    };
+    nat_gc_sweep(now, tps)
 }
 
 pub fn nat_table_size() -> usize {
@@ -882,6 +977,89 @@ pub fn selftest() -> Result<SelftestReport, &'static str> {
         drop_unknown_src: s.drop_unknown_src,
         drop_parse: s.drop_parse,
         bindings_installed: list_bindings().len(),
+    })
+}
+
+// ── GC self-test ─────────────────────────────────────────────────
+
+pub struct GcReport {
+    pub entries_before: usize,
+    pub evicted: u32,
+    pub entries_after: usize,
+    pub kept_fresh: bool,
+}
+
+/// Verify TTL-based eviction. Install three entries (UDP, TCP, ICMP)
+/// with ages that straddle each proto's TTL. Forced GC must evict
+/// UDP + ICMP (age past TTL) but keep TCP (within TTL).
+///
+/// We use a synthetic `now` that's large enough to accommodate our
+/// 120-second back-dating without underflow. At boot CNTPCT_EL0 is
+/// small (a few million ticks ≈ tenths of a second) — subtracting
+/// `120 * tps` would saturate to 0 for every entry, collapsing the
+/// age differences we're trying to test.
+pub fn gc_selftest() -> Result<GcReport, &'static str> {
+    nat_table_clear();
+    reset_stats();
+
+    let tps = ticks_per_sec();
+    // Synthetic now: 1000 seconds of ticks, well past every TTL we test.
+    let now: u64 = 1000u64 * tps;
+
+    // Ages: UDP entry is 90 s old (past 60 s TTL) → evict.
+    //       ICMP entry is 40 s old (past 30 s TTL)  → evict.
+    //       TCP entry is 120 s old (within 300 s)   → keep.
+    let udp_age  = 90u64  * tps;
+    let icmp_age = 40u64  * tps;
+    let tcp_age  = 120u64 * tps;
+
+    // Poke three entries directly.
+    unsafe {
+        let t = core::ptr::addr_of_mut!(NAT_TABLE);
+        (*t)[0] = NatEntry {
+            active: true, proto: IPPROTO_UDP,
+            cave_ip: 0xC0A8_4D0A, cave_src_port: 41000,
+            eph_port: 50000, dst_ip: 0x0808_0808, dst_port: 53,
+            cave_mac: [0x02; 6],
+            last_seen_ticks: now.saturating_sub(udp_age),
+        };
+        (*t)[1] = NatEntry {
+            active: true, proto: IPPROTO_TCP,
+            cave_ip: 0xC0A8_4D0A, cave_src_port: 51234,
+            eph_port: 50001, dst_ip: 0x5DB8_D822, dst_port: 443,
+            cave_mac: [0x02; 6],
+            last_seen_ticks: now.saturating_sub(tcp_age),
+        };
+        (*t)[2] = NatEntry {
+            active: true, proto: IPPROTO_ICMP,
+            cave_ip: 0xC0A8_4D0A, cave_src_port: 1,
+            eph_port: 50002, dst_ip: 0x0808_0808, dst_port: 0,
+            cave_mac: [0x02; 6],
+            last_seen_ticks: now.saturating_sub(icmp_age),
+        };
+    }
+    let before = nat_table_size();
+    if before != 3 { return Err("expected 3 entries before GC"); }
+
+    let evicted = nat_gc_sweep(now, tps);
+    let after = nat_table_size();
+
+    // We expect 2 evicted (UDP + ICMP), 1 left (TCP).
+    if evicted != 2 { return Err("should have evicted 2 entries"); }
+    if after != 1 { return Err("should have 1 active entry left"); }
+
+    // Confirm the TCP entry is the one that survived.
+    let tcp_still = unsafe {
+        let t = core::ptr::addr_of!(NAT_TABLE);
+        (*t).iter().any(|e| e.active && e.proto == IPPROTO_TCP)
+    };
+    if !tcp_still { return Err("TCP entry was wrongly evicted"); }
+
+    Ok(GcReport {
+        entries_before: before,
+        evicted,
+        entries_after: after,
+        kept_fresh: tcp_still,
     })
 }
 

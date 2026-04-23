@@ -159,6 +159,8 @@ fn execute(cmd: &str) {
         "nic-status"  => cmd_nic_status(),
         "nat-selftest"=> cmd_nat_selftest(),
         "nat-rewrite-selftest" => cmd_nat_rewrite_selftest(),
+        "nat-gc-selftest"      => cmd_nat_gc_selftest(),
+        "nat-gc-force"         => cmd_nat_gc_force(),
         "nat-stats"   => cmd_nat_stats(),
         "nat-reset"   => cmd_nat_reset(),
         "nat-bind"    => cmd_nat_bind(&parts[1..]),
@@ -861,6 +863,28 @@ fn cmd_nat_reset() {
     crate::net::nat::reset_stats();
     crate::net::nat::nat_table_clear();
     console::puts("  nat-reset: counters + table zeroed\n");
+}
+
+fn cmd_nat_gc_selftest() {
+    console::puts_hi("  NAT GC SELF-TEST (TTL eviction per-proto)\n");
+    match crate::net::nat::gc_selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS NAT TTL GC\n");
+            console::puts("    entries before: "); print_num(r.entries_before); console::puts("\n");
+            console::puts("    evicted:        "); print_num(r.evicted as usize); console::puts("\n");
+            console::puts("    entries after:  "); print_num(r.entries_after); console::puts("\n");
+            console::puts("    TCP kept fresh: ");
+            console::puts(if r.kept_fresh { "yes\n" } else { "no\n" });
+        }
+        Err(e) => { console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
+fn cmd_nat_gc_force() {
+    let n = crate::net::nat::nat_gc_force(None);
+    console::puts("  nat-gc-force: evicted ");
+    print_num(n as usize);
+    console::puts(" stale entries\n");
 }
 
 fn cmd_nat_rewrite_selftest() {
