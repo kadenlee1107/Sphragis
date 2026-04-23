@@ -146,6 +146,7 @@ fn execute(cmd: &str) {
         "pq-sig-selftest" => cmd_pq_sig_selftest(),
         "ipc-selftest"    => cmd_ipc_selftest(),
         "secure-ipc-selftest" => cmd_secure_ipc_selftest(),
+        "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "smc-probe" => cmd_smc_probe(),
         "smc-pet" => cmd_smc_pet_start(),
         "smc-stop" => cmd_smc_pet_stop(),
@@ -419,6 +420,39 @@ fn hex_nibble(b: u8) -> u8 {
         b'a'..=b'f' => b - b'a' + 10,
         b'A'..=b'F' => b - b'A' + 10,
         _ => 255,
+    }
+}
+
+// Integration #3: hybrid PQ in TLS 1.3 key_share format.
+fn cmd_pq_tls_selftest() {
+    console::puts_hi("  TLS-HYBRID KEY-SHARE SELF-TEST\n");
+    console::puts("  TLS 1.3 key_share format carrying X25519 + ML-KEM-768\n");
+    console::puts("  (IETF codepoint 0x11EC — X25519MlKem768)\n");
+
+    match crate::net::tls_hybrid::selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS  full client/server round-trip\n");
+            console::puts("    named_group:    0x");
+            let hex = b"0123456789abcdef";
+            for shift in (0..4).rev() {
+                console::putc(hex[((r.group_code >> (shift * 4)) & 0xf) as usize]);
+            }
+            console::puts("\n    ClientHello ks: ");
+            print_num(r.client_ks_bytes);
+            console::puts(" bytes (2 group | 2 len | 1216 pub)\n");
+            console::puts("    ServerHello ks: ");
+            print_num(r.server_ks_bytes);
+            console::puts(" bytes (2 group | 2 len | 1120 ct)\n");
+            console::puts("    shared prefix:  ");
+            for &b in &r.shared_prefix {
+                console::putc(hex[(b >> 4) as usize]);
+                console::putc(hex[(b & 0x0f) as usize]);
+            }
+            console::puts("\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
+        }
     }
 }
 

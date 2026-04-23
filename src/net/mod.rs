@@ -7,6 +7,7 @@ pub mod icmp;
 pub mod ip;
 pub mod tcp;
 pub mod tls;
+pub mod tls_hybrid;
 pub mod tls_pinning;
 pub mod x509;
 pub mod tor;
