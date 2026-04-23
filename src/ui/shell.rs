@@ -156,6 +156,7 @@ fn execute(cmd: &str) {
         "cpol-sync"   => cmd_cpol_sync(parts[1]),
         "cpol-daemon-list" => cmd_cpol_daemon_list(),
         "cpol-daemon-show" => cmd_cpol_daemon_show(parts[1]),
+        "nic-status"  => cmd_nic_status(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
         "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
@@ -785,6 +786,40 @@ fn cmd_cpol_daemon_list() {
         }
         Err(e) => {
             console::puts("  cpol-daemon-list FAILED: "); console::puts(e); console::puts("\n");
+        }
+    }
+}
+
+// Followup 3c-multinic: multi-NIC observability.
+// Prints how many virtio-net NICs came up + MAC of each. nic 0 is
+// historically the host/slirp control plane; nic 1 (when present)
+// is the caves-side interface the NAT forwarder owns.
+fn cmd_nic_status() {
+    use crate::drivers::virtio::net;
+    console::puts_hi("  NIC STATUS\n");
+    let n = net::count();
+    console::puts("    brought up: ");
+    print_num(n as usize);
+    console::puts(" of max ");
+    print_num(net::MAX_NICS);
+    console::puts("\n");
+    for id in 0..net::MAX_NICS {
+        if !net::is_ready_n(id) { continue; }
+        let mac = net::mac_n(id);
+        console::puts("    nic ");
+        print_num(id);
+        console::puts(":  ready  mac=");
+        let hex = b"0123456789abcdef";
+        for i in 0..6 {
+            let b = mac[i];
+            console::putc(hex[(b >> 4) as usize]);
+            console::putc(hex[(b & 0xF) as usize]);
+            if i < 5 { console::putc(b':'); }
+        }
+        match id {
+            0 => console::puts("  (host / slirp)\n"),
+            1 => console::puts("  (caves / packet pipeline)\n"),
+            _ => console::puts("\n"),
         }
     }
 }
