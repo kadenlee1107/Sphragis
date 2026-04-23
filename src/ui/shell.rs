@@ -939,9 +939,28 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
             }
 
             if !docker_image.is_empty() {
-                // Docker-backed cave. Spin the container FIRST so a
-                // daemon-side failure doesn't leave a dangling entry in
-                // the native cave table.
+                // Docker-backed cave. Phase 3: derive the per-cave AES-256
+                // key up-front (same path as native BatFS) so we can pass
+                // it to the daemon in CREATE and have the cave's audit
+                // log encrypted at rest.
+                //
+                // cave::create_docker() will also store this key in the
+                // native cave table (fs_key field) so native destroy() +
+                // wipe() zero it symmetrically with the daemon side.
+                let key = {
+                    // Derive key here so we don't allocate a cave slot
+                    // before docker succeeds. (Same formula as cave::create.)
+                    const MASTER: [u8; 32] = [
+                        0xBA, 0x7C, 0xA7, 0xE0, 0xBA, 0x7C, 0xA7, 0xE0,
+                        0xBA, 0x7C, 0xA7, 0xE0, 0xBA, 0x7C, 0xA7, 0xE0,
+                        0xBA, 0x7C, 0xA7, 0xE0, 0xBA, 0x7C, 0xA7, 0xE0,
+                        0xBA, 0x7C, 0xA7, 0xE0, 0xBA, 0x7C, 0xA7, 0xE0,
+                    ];
+                    crate::crypto::sha256::derive_key(&MASTER, arg1.as_bytes())
+                };
+
+                // Spin the container FIRST so a daemon-side failure
+                // doesn't leave a dangling entry in the native cave table.
                 let caps_csv = docker_caps;
                 let spin_res = crate::batcave::docker_client::with_daemon(|| {
                     // caps_csv → &[&str]
@@ -955,7 +974,8 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                             }
                         }
                     }
-                    crate::batcave::docker_client::create(arg1, docker_image, &caps_buf[..n])
+                    crate::batcave::docker_client::create_with_key(
+                        arg1, docker_image, &caps_buf[..n], Some(&key))
                 });
                 match spin_res {
                     Ok(id) => {

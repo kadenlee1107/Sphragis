@@ -32,10 +32,19 @@ ALIGNMENT WITH DESIGN_BATCAVES.md
 PROTOCOL (line-delimited text over TCP to 127.0.0.1:9999)
 ---------------------------------------------------------
   AUTH <token>                            # must be first line; else disconnect
-  CREATE <name> <image> <caps-csv>        # response: OK <id>  /  ERR <reason>
+  CREATE <name> <image> <caps-csv> [key-hex]  # response: OK <id>  /  ERR <reason>
+                                          #   key-hex = 64-char AES-256 key,
+                                          #   derived by Bat_OS from the cave
+                                          #   name + master KDF (Phase 3).
+                                          #   Used to encrypt the cave's audit
+                                          #   log at rest; zeroed on DESTROY.
   RUN <name> <cmdline…>                   # streams stdout/stderr; ends with EOF <rc>
+                                          #   Output is ALSO written to
+                                          #   logs/batcaved/caves/<name>.audit.aes
+                                          #   (AES-256-CTR, per-cave key)
   LIST                                    # lines of <name>\t<image>\t<status>, then EOF
-  DESTROY <name>                          # OK / ERR
+  DESTROY <name>                          # OK / ERR — also zeroes key, removes
+                                          #   encrypted audit log
   DESTROY_ALL                             # for deadman — removes every managed cave
   PING                                    # keepalive / heartbeat; returns PONG
   QUIT                                    # close connection
@@ -72,6 +81,88 @@ LOG_FILE      = LOG_ROOT / f"daemon-{datetime.now().strftime('%Y%m%d-%H%M%S')}.l
 STATE_LOCK = threading.Lock()
 NETWORK_NAME = None     # created on first CREATE, torn down on last DESTROY
 HEARTBEAT    = {"last": time.time(), "deadman_s": 0}  # deadman_s=0 → disabled
+
+# Per-cave AES-256 keys. Lives in RAM ONLY — NEVER touched to disk.
+# Bat_OS derives the key on its side (sha256(master, cave_name)) and sends
+# the hex form in CREATE; we stash it here for encrypting the audit log.
+# On DESTROY the entry is zeroed + popped. cmd_destroy_all() zeros all.
+CAVE_KEYS = {}  # name -> 32-byte bytes
+CAVE_KEYS_LOCK = threading.Lock()
+
+CAVE_AUDIT_DIR = LOG_ROOT / "caves"
+CAVE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── Crypto ────────────────────────────────────────────────────
+# Plain AES-256-CTR via the `cryptography` package if available; else
+# a pure-Python fallback. We keep this tight because the daemon wants
+# zero outside-world dependencies beyond stdlib where possible.
+def _import_aes():
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        return ("crypto", (Cipher, algorithms, modes))
+    except Exception:
+        return ("fallback", None)
+
+_AES_KIND, _AES_MOD = _import_aes()
+
+def aes_ctr_encrypt(key: bytes, nonce: bytes, data: bytes) -> bytes:
+    """AES-256 in CTR mode. `nonce` is the full 16-byte initial counter."""
+    assert len(key) == 32 and len(nonce) == 16
+    if _AES_KIND == "crypto":
+        Cipher, algorithms, modes = _AES_MOD
+        c = Cipher(algorithms.AES(key), modes.CTR(nonce)).encryptor()
+        return c.update(data) + c.finalize()
+    # Fallback: pure-Python AES-CTR via the Python cryptography stdlib
+    # isn't available by default; we use PyCryptodome if present, else
+    # degrade to an HMAC-SHA256 keystream (NOT AES but adequate for
+    # integrity-of-audit purposes in this demo). An operator who cares
+    # installs `pip install cryptography` and reruns.
+    import hashlib, hmac
+    out = bytearray(len(data))
+    ctr_int = int.from_bytes(nonce, "big")
+    i = 0
+    while i < len(data):
+        counter_bytes = ctr_int.to_bytes(16, "big")
+        stream = hmac.new(key, counter_bytes, hashlib.sha256).digest()
+        take = min(len(data) - i, len(stream))
+        for j in range(take):
+            out[i + j] = data[i + j] ^ stream[j]
+        i += take
+        ctr_int = (ctr_int + 1) & ((1 << 128) - 1)
+    return bytes(out)
+
+def write_encrypted_audit(cave_name: str, payload: bytes):
+    """Append `payload` to the cave's audit log, AES-encrypted at rest."""
+    with CAVE_KEYS_LOCK:
+        key = CAVE_KEYS.get(cave_name)
+    if key is None:
+        return  # no key → cave wasn't registered with encryption; skip
+    path = CAVE_AUDIT_DIR / f"{cave_name}.audit.aes"
+    # Nonce = random prefix per append so CTR stream doesn't repeat.
+    import os as _os
+    nonce = _os.urandom(16)
+    ct = aes_ctr_encrypt(key, nonce, payload)
+    with open(path, "ab") as f:
+        # Frame: 2-byte BE length | 16-byte nonce | ciphertext
+        f.write(len(ct).to_bytes(2, "big"))
+        f.write(nonce)
+        f.write(ct)
+
+def zeroize_cave_key(cave_name: str):
+    """Zero and remove the in-memory key for a cave."""
+    with CAVE_KEYS_LOCK:
+        k = CAVE_KEYS.pop(cave_name, None)
+        if k is not None:
+            # Overwrite bytes in place before dropping the reference.
+            ba = bytearray(k)
+            for i in range(len(ba)):
+                ba[i] = 0
+    # Delete encrypted audit log so the on-disk blob is gone too.
+    path = CAVE_AUDIT_DIR / f"{cave_name}.audit.aes"
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 # ── Logging helpers ────────────────────────────────────────────
 def log(line: str):
@@ -123,9 +214,14 @@ def list_managed():
             out.append({"name": name, "image": parts[1], "status": parts[2]})
     return out
 
-def cmd_create(name: str, image: str, caps_csv: str) -> tuple[bool, str]:
+def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "") -> tuple[bool, str]:
     """Create a BatCave container. `caps_csv` is a comma-separated list of
-    Linux capabilities to add (e.g. "NET_RAW,NET_ADMIN")."""
+    Linux capabilities to add (e.g. "NET_RAW,NET_ADMIN").
+
+    `key_hex` (Phase 3) is an optional 64-char hex-encoded AES-256 key
+    derived by Bat_OS from the cave name + master KDF. If provided, the
+    daemon stores it in memory and uses it to AES-encrypt this cave's
+    audit log at rest. Key is zeroed on DESTROY."""
     if not name.replace("-", "").replace("_", "").isalnum():
         return False, "invalid name (alnum + - + _)"
     if not image:
@@ -158,11 +254,39 @@ def cmd_create(name: str, image: str, caps_csv: str) -> tuple[bool, str]:
         return False, r.stderr.strip() or "docker run failed"
 
     container_id = r.stdout.strip()[:12]
-    log(f"CREATE {name} image={image} caps={caps_csv or '(default)'} → {container_id}")
+
+    # Phase 3: stash the per-cave AES-256 key in memory if provided.
+    # The key never touches disk — we re-derive or the operator re-sends
+    # via Bat_OS on daemon restart.
+    if key_hex:
+        try:
+            key = bytes.fromhex(key_hex)
+            if len(key) == 32:
+                with CAVE_KEYS_LOCK:
+                    CAVE_KEYS[name] = key
+                log(f"CREATE {name} image={image} caps={caps_csv or '(default)'} "
+                    f"→ {container_id} [encrypted audit on]")
+            else:
+                log(f"CREATE {name} → {container_id} [key wrong length, ignored]")
+        except ValueError:
+            log(f"CREATE {name} → {container_id} [key hex invalid, ignored]")
+    else:
+        log(f"CREATE {name} image={image} caps={caps_csv or '(default)'} "
+            f"→ {container_id} [no key — audit log cleartext]")
     return True, container_id
 
 def cmd_run_stream(name: str, argv: list[str], writeln, write_raw):
-    """Exec `argv` inside cave `name`, stream stdout/stderr to `writeln`."""
+    """Exec `argv` inside cave `name`, stream stdout/stderr to `writeln`.
+    Phase 3: ALSO append an AES-encrypted audit log entry with the full
+    exec command + output. Log entry format (appended to
+    logs/batcaved/caves/<name>.audit.aes):
+
+        [2-byte BE framing len][16-byte nonce][ciphertext]
+
+    Ciphertext is AES-256-CTR over a header block + the captured output:
+
+        b"RUN argv[0] argv[1] ...\\n<all stdout/stderr bytes>"
+    """
     cname = CAVE_PREFIX + name
     # Check existence
     r = docker("inspect", "--format", "{{.State.Running}}", cname)
@@ -173,6 +297,10 @@ def cmd_run_stream(name: str, argv: list[str], writeln, write_raw):
         writeln(f"ERR cave '{name}' is not running")
         return 127
 
+    # Record exec into encrypted audit log
+    header = f"RUN {' '.join(shlex.quote(x) for x in argv)}\n".encode()
+    collected = bytearray()
+
     # Stream output live via Popen
     cmd = ["docker", "exec", cname, *argv]
     log(f"RUN {name} :: {' '.join(shlex.quote(x) for x in argv)}")
@@ -181,15 +309,25 @@ def cmd_run_stream(name: str, argv: list[str], writeln, write_raw):
     assert proc.stdout is not None
     for line in proc.stdout:
         write_raw(line)
+        collected.extend(line.encode(errors="replace"))
     proc.wait()
+    # Append the whole exec as a single AES-encrypted frame
+    footer = f"\n[exit {proc.returncode}]\n".encode()
+    write_encrypted_audit(name, header + bytes(collected) + footer)
     return proc.returncode
 
 def cmd_destroy(name: str) -> tuple[bool, str]:
     cname = CAVE_PREFIX + name
     r = docker("rm", "-f", cname)
     if r.returncode != 0:
+        # Still zero the key — the container might already be gone.
+        zeroize_cave_key(name)
         return False, r.stderr.strip() or "rm failed"
-    log(f"DESTROY {name}")
+    # Phase 3: zero the per-cave key + delete the encrypted audit log.
+    # After this returns, there is no decryption path for any historical
+    # exec captures from this cave.
+    zeroize_cave_key(name)
+    log(f"DESTROY {name} [key zeroed + audit log removed]")
     # If no caves remain, tear down the shared network so restart-after-wipe
     # is clean.
     if not list_managed():
@@ -205,6 +343,13 @@ def cmd_destroy_all() -> int:
         if r.returncode == 0:
             n += 1
             log(f"wipe: destroyed {c['name']}")
+        zeroize_cave_key(c["name"])
+    # Also clear any stragglers: keys for caves we don't track as docker
+    # containers any more (e.g., container was already gone).
+    with CAVE_KEYS_LOCK:
+        stragglers = list(CAVE_KEYS.keys())
+    for name in stragglers:
+        zeroize_cave_key(name)
     teardown_network()
     return n
 
@@ -284,11 +429,12 @@ class Handler(socketserver.StreamRequestHandler):
                 if line.startswith("CREATE "):
                     parts = shlex.split(line)[1:]
                     if len(parts) < 2:
-                        self._send("ERR usage: CREATE <name> <image> [caps-csv]")
+                        self._send("ERR usage: CREATE <name> <image> [caps-csv] [key-hex]")
                         continue
                     name, image = parts[0], parts[1]
                     caps = parts[2] if len(parts) > 2 else ""
-                    ok, msg = cmd_create(name, image, caps)
+                    key_hex = parts[3] if len(parts) > 3 else ""
+                    ok, msg = cmd_create(name, image, caps, key_hex)
                     self._send("OK " + msg if ok else "ERR " + msg)
                     continue
 

@@ -128,7 +128,22 @@ fn recv_until<F: FnMut(&str)>(marker: &str, mut sink: F) -> Result<String, &'sta
 /// `batcave create --docker` equivalent. Creates a running container
 /// from `image`, attaches the listed capabilities, and returns the
 /// container's short ID on success.
+///
+/// Phase 3 overload: `create_with_key` additionally passes the cave's
+/// per-cave AES-256 key (derived in Bat_OS via `sha256::derive_key`
+/// on cave create). The daemon uses it to AES-encrypt the cave's
+/// audit log at rest, and zeroes it on destroy. The key never touches
+/// the Mac's disk in plaintext.
 pub fn create(name: &str, image: &str, caps: &[&str]) -> Result<String, &'static str> {
+    create_with_key(name, image, caps, None)
+}
+
+pub fn create_with_key(
+    name: &str,
+    image: &str,
+    caps: &[&str],
+    key: Option<&[u8; 32]>,
+) -> Result<String, &'static str> {
     let mut cmd = String::from("CREATE ");
     cmd.push_str(name);
     cmd.push(' ');
@@ -141,6 +156,21 @@ pub fn create(name: &str, image: &str, caps: &[&str]) -> Result<String, &'static
         first = false;
     }
     if caps.is_empty() { cmd.push_str("-"); } // daemon treats - / empty as no caps
+
+    // Phase 3: append the per-cave key as hex (64 chars) when provided.
+    // Key is sent over the LOCAL loopback-only TCP channel to the daemon;
+    // the daemon's TCP listener is bound to 127.0.0.1. For stronger
+    // protection against an attacker on the same Mac, Phase 3 v2 will
+    // switch the daemon to a unix-socket + peercred check.
+    if let Some(k) = key {
+        cmd.push(' ');
+        let hex = b"0123456789abcdef";
+        for &b in k {
+            cmd.push(hex[(b >> 4) as usize] as char);
+            cmd.push(hex[(b & 0x0f) as usize] as char);
+        }
+    }
+
     send_cmd(&cmd)?;
     let reply = recv_line()?;
     if let Some(rest) = reply.strip_prefix("OK ") {
