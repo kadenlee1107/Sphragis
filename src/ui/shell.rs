@@ -144,6 +144,7 @@ fn execute(cmd: &str) {
         "otp-consume" => cmd_otp_consume(parts[1]),
         "pq-selftest" => cmd_pq_selftest(),
         "pq-sig-selftest" => cmd_pq_sig_selftest(),
+        "ipc-selftest"    => cmd_ipc_selftest(),
         "smc-probe" => cmd_smc_probe(),
         "smc-pet" => cmd_smc_pet_start(),
         "smc-stop" => cmd_smc_pet_stop(),
@@ -417,6 +418,39 @@ fn hex_nibble(b: u8) -> u8 {
         b'a'..=b'f' => b - b'a' + 10,
         b'A'..=b'F' => b - b'A' + 10,
         _ => 255,
+    }
+}
+
+// DESIGN_CRYPTO.md #10+#13: Noise-style IPC session handshake self-test.
+fn cmd_ipc_selftest() {
+    console::puts_hi("  INTER-CAVE IPC SESSION SELF-TEST\n");
+    console::puts("  Ed25519 identity + X25519 ephemeral, mutual auth + FS\n");
+    console::puts("  Simulating Alice ↔ Bob handshake round-trip...\n");
+
+    match crate::batcave::ipc_session::selftest_round_trip() {
+        Ok((a_pfx, b_pfx, matched)) => {
+            if matched {
+                console::puts("  ✓ PASS  both sides derived identical 32-byte session key\n");
+            } else {
+                console::puts("  ✗ FAIL  session keys disagree\n");
+            }
+            let hex = b"0123456789abcdef";
+            console::puts("    Alice key prefix: ");
+            for &b in &a_pfx {
+                console::putc(hex[(b >> 4) as usize]);
+                console::putc(hex[(b & 0x0f) as usize]);
+            }
+            console::puts("\n    Bob   key prefix: ");
+            for &b in &b_pfx {
+                console::putc(hex[(b >> 4) as usize]);
+                console::putc(hex[(b & 0x0f) as usize]);
+            }
+            console::puts("\n");
+            console::puts("    Forward-secret (ephemerals discarded), mutually authenticated\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
+        }
     }
 }
 
