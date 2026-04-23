@@ -969,6 +969,32 @@ class Handler(socketserver.StreamRequestHandler):
                     self._send(cave if cave is not None else "NONE")
                     continue
 
+                # 3c-daemon-bind: dump every (ip, cave) binding so Bat_OS's
+                # kernel can sync its nat::bind_ip table from the daemon's
+                # docker-inspect-populated view. Format: "<ip> <cave>"
+                # one per line, terminated by EOF.
+                if line == "CPOL_BIND_LIST":
+                    with CAVE_NET_LOCK:
+                        items = list(CAVE_NET_IP.items())
+                    for ip, cave in sorted(items):
+                        self._send(f"{ip} {cave}")
+                    self._send("EOF")
+                    continue
+
+                # CPOL_BIND_SET <ip> <cave>: direct add to CAVE_NET_IP.
+                # Useful for (1) integration tests that need to inject
+                # bindings without starting a real container, and (2)
+                # manual operator overrides when debugging.
+                if line.startswith("CPOL_BIND_SET "):
+                    parts = line.split(None, 2)
+                    if len(parts) != 3:
+                        self._send("ERR cpol_bind_set: CPOL_BIND_SET <ip> <cave>")
+                        continue
+                    _, ip, cave = parts
+                    cave_net_register(ip.strip(), cave.strip())
+                    self._send("OK bound")
+                    continue
+
                 if line.startswith("DESTROY "):
                     name = line.split(maxsplit=1)[1].strip()
                     ok, msg = cmd_destroy(name)

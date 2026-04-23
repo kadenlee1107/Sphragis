@@ -407,6 +407,28 @@ pub fn cpol_list() -> Result<Vec<String>, &'static str> {
     Ok(out)
 }
 
+/// Pull every (ip, cave_name) binding the daemon has learned from
+/// `docker inspect` at container create. Used by the kernel's
+/// nat::bind_ip sync path so the packet-layer classifier knows which
+/// cave owns each container source IP.
+pub fn cpol_bind_list() -> Result<Vec<(String, String)>, &'static str> {
+    send_cmd("CPOL_BIND_LIST")?;
+    let mut out = Vec::new();
+    for _ in 0..4096 {
+        let line = recv_line()?;
+        if line == "EOF" { break; }
+        if line.is_empty() { continue; }
+        // "<ip> <cave>"
+        let mut it = line.split_whitespace();
+        let ip = it.next().unwrap_or("").to_string();
+        let cave = it.next().unwrap_or("").to_string();
+        if !ip.is_empty() && !cave.is_empty() {
+            out.push((ip, cave));
+        }
+    }
+    Ok(out)
+}
+
 /// Render a u16 into the provided buffer; returns the str slice that
 /// borrows from the buffer. Keeps us out of alloc::format! which would
 /// pull a pile of format-string machinery into this translation unit.

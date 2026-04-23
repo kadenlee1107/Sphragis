@@ -167,6 +167,7 @@ fn execute(cmd: &str) {
         "nat-forward" => cmd_nat_forward(),
         "nat-reply"   => cmd_nat_reply(),
         "nat-table"   => cmd_nat_table(),
+        "nat-sync"    => cmd_nat_sync(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
         "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
@@ -908,6 +909,32 @@ fn cmd_nat_table() {
     let n = crate::net::nat::nat_table_size();
     console::puts_hi("  NAT TABLE\n");
     console::puts("    entries active: "); print_num(n); console::puts("\n");
+}
+
+/// Pull (ip, cave) bindings from batcaved's CAVE_NET_IP table and
+/// mirror them into nat::bind_ip. This is how containers' actual
+/// Docker-bridge IPs get known to the kernel's packet classifier.
+fn cmd_nat_sync() {
+    let r = crate::batcave::docker_client::with_daemon(
+        crate::batcave::docker_client::cpol_bind_list,
+    );
+    match r {
+        Ok(binds) => {
+            let mut installed = 0usize;
+            for (ip_s, cave) in binds.iter() {
+                if let Some(ip) = parse_ipv4(ip_s) {
+                    crate::net::nat::bind_ip(ip, cave);
+                    installed += 1;
+                }
+            }
+            console::puts_hi("  nat-sync (daemon → kernel IP bindings)\n");
+            console::puts("    pulled:    "); print_num(binds.len()); console::puts("\n");
+            console::puts("    installed: "); print_num(installed); console::puts("\n");
+        }
+        Err(e) => {
+            console::puts("  nat-sync FAILED: "); console::puts(e); console::puts("\n");
+        }
+    }
 }
 
 fn cmd_nat_pump() {
