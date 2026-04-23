@@ -1459,6 +1459,21 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             uart::putc(hex[((reserved >> (shift * 4)) & 0xF) as usize]);
         }
         uart::puts("\n");
+
+        // Tell the demand-page handler to lazily back 4 KB pages in this
+        // range on first access. Without this, EL0 accesses through the
+        // huge reservation DATA-ABORT (the cave's L2 has no entry for
+        // 0x3c25aa0000-style addresses). We use the current cave's
+        // TTBR0 as the reservation's identity — each cave's reservations
+        // live under its own L1.
+        let ttbr0: u64;
+        unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
+        super::demand_page::register_reservation(
+            reserved as u64,
+            (reserved as u64).saturating_add(len as u64),
+            ttbr0 & !1u64,
+        );
+
         return reserved as i64;
     }
 

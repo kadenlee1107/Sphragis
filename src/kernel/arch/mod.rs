@@ -1018,17 +1018,38 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             }
             uart::puts("!!! UNHANDLED EC=0 !!!\n");
             uart::puts("  ELR: 0x"); print_hex(elr);
+            // Dump the 4-byte instruction at ELR so we can decode it
+            // (BTI mismatch? undefined? LSE atomic we don't emulate?).
+            let insn: u32 = unsafe {
+                let v: u32;
+                core::arch::asm!("ldr {v:w}, [{a}]", a = in(reg) elr, v = out(reg) v);
+                v
+            };
+            uart::puts("  insn=0x"); print_hex(insn as u64);
+            // Include ESR_EL1 iss field.
+            uart::puts("  ISS=0x"); print_hex(esr & 0x01FF_FFFF);
             uart::puts("\n");
             loop { unsafe { core::arch::asm!("wfe") }; }
         }
         _ => {
+            // Demand-paging: EC=0x24 (data abort from lower EL) may
+            // be a legitimate lazy-commit for a huge mmap reservation.
+            // Ask `demand_page::try_handle` first — if it commits a
+            // page, just return so eret retries the faulting insn.
+            let far: u64;
+            unsafe { core::arch::asm!("mrs {}, far_el1", out(reg) far); }
+            if ec == 0x24
+                && crate::batcave::linux::demand_page::try_handle(far, esr)
+            {
+                return;
+            }
+
             uart::puts("!!! UNHANDLED SYNC EXCEPTION !!!\n");
             uart::puts("  EC: 0x"); print_hex(ec);
             uart::puts("  ISS: 0x"); print_hex(esr & 0x01FF_FFFF);
             uart::puts("\n");
-            let far: u64; let sp_el0: u64; let tp: u64;
+            let sp_el0: u64; let tp: u64;
             unsafe {
-                core::arch::asm!("mrs {}, far_el1",    out(reg) far);
                 core::arch::asm!("mrs {}, sp_el0",     out(reg) sp_el0);
                 core::arch::asm!("mrs {}, tpidr_el0",  out(reg) tp);
             }

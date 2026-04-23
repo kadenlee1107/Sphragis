@@ -1,0 +1,218 @@
+// Bat_OS — Demand paging for rebased-cave large mmap reservations.
+//
+// Chromium / V8 asks for huge VA reservations at startup (32 GB for
+// pointer-compression, 16 GB for trusted-sandbox). `sys_mmap`'s
+// huge-reservation stub returns the caller's hint without committing
+// any physical memory. That was only half the deal — V8 then mprotects
+// small sub-ranges and tries to use them. With no cave L2 entry for
+// the reserved VA range, the first access data-aborts.
+//
+// This module fills in the other half: a reservation table + an
+// EC=0x24 data-abort handler that lazily allocates 4 KB pages and
+// installs them via L1→L2→L3 page-table walk. Each page is drawn from
+// the general frame pool on first access.
+//
+// Scope limits (deliberate, for tonight's cut):
+//
+// - No page ageing, no swap, no sharing across caves. Once committed,
+//   a page stays committed until the cave tears down.
+// - No mprotect honouring — all committed pages get
+//   `BLOCK_USER_RW_EXEC` like the legacy cave window does. Chromium's
+//   prot argument (the odd `0x14d82074` value we see in the trace) is
+//   ignored.
+// - No MAP_FIXED into a reserved range. The huge-reservation stub
+//   already rejects MAP_FIXED.
+// - Up to `MAX_RESERVATIONS` regions per boot (global, not per-cave).
+//   Chromium's two reservations + maybe a third for V8 code cages
+//   comfortably fit.
+
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use crate::drivers::uart;
+use crate::kernel::mm::frame;
+
+/// Bits in an L1/L2 table descriptor: valid + type=table.
+const TABLE_DESC: u64 = 0b11;
+/// L3 page descriptor bits. Matches `BLOCK_USER_RW_EXEC` but at 4 KB
+/// granule (L3 entries are "pages", not "blocks" — bit 1 = 1 means
+/// "page" for L3, which is the 0b11 pattern too).
+const PAGE_VALID: u64 = 0b11;
+const PAGE_AF: u64    = 1 << 10;
+const PAGE_SH: u64    = 3 << 8;
+const PAGE_ATTR: u64  = 0 << 2;
+const PAGE_AP_EL0_RW: u64 = 1 << 6;
+const PAGE_PXN: u64   = 1 << 53;
+
+/// Flags we program into every committed user page.  EL0 R/W/X (the
+/// cave already trusts its own code; glibc JIT support would need this
+/// anyway), PXN so EL1 can't accidentally execute from here.
+const USER_PAGE_FLAGS: u64 = PAGE_VALID | PAGE_AF | PAGE_SH | PAGE_ATTR
+    | PAGE_AP_EL0_RW | PAGE_PXN;
+
+const MAX_RESERVATIONS: usize = 8;
+
+#[derive(Copy, Clone)]
+struct Reservation {
+    start: u64,
+    end:   u64,
+    l1_phys: u64,    // which cave L1 this reservation belongs to (TTBR0 value)
+}
+
+// Flat array, no atomics on individual Reservation — we guard the
+// whole table with a single IrqGuard during mutation / lookup.
+static mut RESV_TABLE: [Reservation; MAX_RESERVATIONS] =
+    [Reservation { start: 0, end: 0, l1_phys: 0 }; MAX_RESERVATIONS];
+
+static RESV_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Total pages the demand-page handler has committed since boot.
+/// Diagnostic — `chromium` status line prints this.
+pub static COMMITTED_PAGES: AtomicU64 = AtomicU64::new(0);
+
+/// Record a huge mmap reservation so the fault handler will lazily
+/// back its pages. `sys_mmap` calls this after its hint-return path.
+pub fn register_reservation(start: u64, end: u64, l1_phys: u64) {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        let slot = RESV_COUNT.load(Ordering::Acquire);
+        if slot >= MAX_RESERVATIONS {
+            uart::puts("[demand_page] WARN: reservation table full\n");
+            return;
+        }
+        core::ptr::write(
+            core::ptr::addr_of_mut!(RESV_TABLE[slot]),
+            Reservation { start, end, l1_phys },
+        );
+        RESV_COUNT.store(slot + 1, Ordering::Release);
+    }
+}
+
+/// Data-abort handler. Returns `true` if the fault was inside a
+/// registered reservation and we satisfied it by committing a fresh
+/// page — the caller should eret to retry. Returns `false` for any
+/// fault we don't own.
+pub fn try_handle(far: u64, esr: u64) -> bool {
+    // EC is bits 31:26. We only handle EC=0x24 (data abort from
+    // lower EL). Everything else → not ours.
+    let ec = (esr >> 26) & 0x3F;
+    if ec != 0x24 { return false; }
+
+    // Find the active cave's L1 phys from TTBR0_EL1.
+    let ttbr0: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
+    // TTBR0 low bit is CnP; mask it off.
+    let l1_phys = ttbr0 & !1u64;
+
+    // Lookup.
+    let _g = crate::kernel::sync::IrqGuard::new();
+    let count = RESV_COUNT.load(Ordering::Acquire);
+    let mut hit_idx: Option<usize> = None;
+    for i in 0..count {
+        let r = unsafe { core::ptr::read(core::ptr::addr_of!(RESV_TABLE[i])) };
+        if r.l1_phys == l1_phys && far >= r.start && far < r.end {
+            hit_idx = Some(i);
+            break;
+        }
+    }
+    if hit_idx.is_none() {
+        return false;
+    }
+
+    // Allocate a fresh page + install it.
+    let frame = match frame::alloc_frame() {
+        Some(f) => f,
+        None => {
+            uart::puts("[demand_page] OOM — cannot back fault\n");
+            return false;
+        }
+    };
+    // Zero the page so EL0 reads well-defined data (MAP_ANONYMOUS
+    // Linux guarantee).
+    unsafe {
+        let p = frame as *mut u8;
+        for i in 0..4096 { core::ptr::write_volatile(p.add(i), 0); }
+    }
+
+    let page_va = far & !0xFFFu64;
+    if install_l3_mapping(l1_phys, page_va, frame as u64, USER_PAGE_FLAGS).is_err() {
+        // Leak the page — frame is still allocated but unmapped. Next
+        // iteration will grab a fresh one. Small-leak < kernel crash.
+        uart::puts("[demand_page] page-table install failed\n");
+        return false;
+    }
+
+    // Invalidate the TLB entry for this VA so the next access picks
+    // up the new mapping.
+    unsafe {
+        core::arch::asm!("dsb ishst");
+        core::arch::asm!("tlbi vaae1, {}", in(reg) page_va >> 12);
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("isb");
+    }
+
+    COMMITTED_PAGES.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
+/// Walk/create L1→L2→L3 for `user_va` under the given cave L1, and
+/// install an L3 entry mapping `user_va`'s 4 KB page to `phys_page`.
+/// Allocates intermediate tables from the kernel frame pool on demand.
+fn install_l3_mapping(
+    l1_phys: u64,
+    user_va: u64,
+    phys_page: u64,
+    flags: u64,
+) -> Result<(), &'static str> {
+    // T0SZ=25 gives a 39-bit VA: bits 38..30 → L1, 29..21 → L2, 20..12 → L3.
+    let l1_idx = ((user_va >> 30) & 0x1FF) as usize;
+    let l2_idx = ((user_va >> 21) & 0x1FF) as usize;
+    let l3_idx = ((user_va >> 12) & 0x1FF) as usize;
+
+    // Step 1: ensure L1[l1_idx] is a TABLE descriptor pointing to an L2.
+    let l1_entry_ptr = (l1_phys + (l1_idx * 8) as u64) as *mut u64;
+    let l1_entry = unsafe { core::ptr::read_volatile(l1_entry_ptr) };
+    let l2_phys = if (l1_entry & TABLE_DESC) == TABLE_DESC {
+        l1_entry & 0x0000_FFFF_FFFF_F000
+    } else if l1_entry == 0 {
+        // Allocate a new L2 table from the kernel pool.
+        let t = frame::alloc_kernel_frame()
+            .ok_or("demand_page: oom for L2 table")?;
+        // Zero it.
+        unsafe {
+            let p = t as *mut u64;
+            for i in 0..512 { core::ptr::write_volatile(p.add(i), 0); }
+        }
+        let desc = (t as u64) | TABLE_DESC;
+        unsafe { core::ptr::write_volatile(l1_entry_ptr, desc); }
+        t as u64
+    } else {
+        // L1 entry is a BLOCK descriptor (e.g., the cave's user
+        // window already lives here). We don't mess with those.
+        return Err("demand_page: L1 entry is a block, not a table");
+    };
+
+    // Step 2: same for L2[l2_idx] → L3.
+    let l2_entry_ptr = (l2_phys + (l2_idx * 8) as u64) as *mut u64;
+    let l2_entry = unsafe { core::ptr::read_volatile(l2_entry_ptr) };
+    let l3_phys = if (l2_entry & TABLE_DESC) == TABLE_DESC {
+        l2_entry & 0x0000_FFFF_FFFF_F000
+    } else if l2_entry == 0 {
+        let t = frame::alloc_kernel_frame()
+            .ok_or("demand_page: oom for L3 table")?;
+        unsafe {
+            let p = t as *mut u64;
+            for i in 0..512 { core::ptr::write_volatile(p.add(i), 0); }
+        }
+        let desc = (t as u64) | TABLE_DESC;
+        unsafe { core::ptr::write_volatile(l2_entry_ptr, desc); }
+        t as u64
+    } else {
+        return Err("demand_page: L2 entry is a block, not a table");
+    };
+
+    // Step 3: write the L3 page entry.
+    let l3_entry_ptr = (l3_phys + (l3_idx * 8) as u64) as *mut u64;
+    let desc = (phys_page & 0x0000_FFFF_FFFF_F000) | flags;
+    unsafe { core::ptr::write_volatile(l3_entry_ptr, desc); }
+
+    Ok(())
+}
