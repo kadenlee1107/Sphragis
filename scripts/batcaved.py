@@ -154,6 +154,11 @@ def fw_snapshot():
 # allowlist the proxy consults today.
 CAVE_POLICY_MIRROR = {}
 CAVE_POLICY_LOCK = threading.Lock()
+# IP → cave_name.  Populated at container create via `docker inspect`,
+# cleared at destroy.  The egress proxy uses this to identify which
+# cave owns an incoming CONNECT so it can consult that cave's policy.
+CAVE_NET_IP = {}
+CAVE_NET_LOCK = threading.Lock()
 
 def cpol_push(cave: str, host: str, port: int, proto: int):
     rule = (host.lower(), int(port), int(proto))
@@ -175,6 +180,46 @@ def cpol_show(cave: str):
 def cpol_list_caves():
     with CAVE_POLICY_LOCK:
         return sorted(CAVE_POLICY_MIRROR.keys())
+
+def cave_net_register(ip: str, cave: str):
+    with CAVE_NET_LOCK:
+        CAVE_NET_IP[ip] = cave
+    log(f"[cpol] ip {ip} -> cave {cave}")
+
+def cave_net_unregister_cave(cave: str):
+    """Drop every IP that mapped to this cave (containers restart with
+    new IPs, so we unmap by cave name not by specific IP)."""
+    with CAVE_NET_LOCK:
+        for ip, c in list(CAVE_NET_IP.items()):
+            if c == cave: CAVE_NET_IP.pop(ip, None)
+
+def cave_for_ip(ip: str):
+    with CAVE_NET_LOCK:
+        return CAVE_NET_IP.get(ip)
+
+def cpol_target_allowed(cave: str, target: str) -> bool:
+    """Per-cave allowlist check. `target` is "host:port" from CONNECT.
+    Matches:
+      - exact lowercase host + port (proto TCP = 6 for CONNECT)
+      - port wildcard (port==0) on the same host
+      - host wildcard (host=="") on the same port
+    """
+    if ":" not in target: return False
+    host, port_s = target.rsplit(":", 1)
+    host = host.lower()
+    try: port = int(port_s)
+    except ValueError: return False
+    with CAVE_POLICY_LOCK:
+        rules = CAVE_POLICY_MIRROR.get(cave, [])
+        for rhost, rport, rproto in rules:
+            if rproto not in (0, 6):     # CONNECT is TCP
+                continue
+            if rhost != "" and rhost != host:
+                continue
+            if rport != 0 and rport != port:
+                continue
+            return True
+    return False
 
 def start_egress_proxy():
     """Tiny HTTP CONNECT proxy. Containers → this proxy → upstream.
@@ -201,7 +246,26 @@ def start_egress_proxy():
                 conn.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
                 return
             target = parts[1]
-            if not fw_is_allowed(target):
+            # Followup 3b-enforce: first try to identify which cave owns
+            # this TCP peer. If CAVE_NET_IP has an entry, the cave's
+            # mirror policy is authoritative — if the target isn't in it,
+            # deny even if FW_ALLOWLIST would have admitted it. This is
+            # per-cave egress enforcement: cave A can't reach targets
+            # granted only to cave B.
+            cave = cave_for_ip(addr[0])
+            if cave is not None:
+                if cpol_target_allowed(cave, target):
+                    log(f"[cpol] ALLOW {cave} CONNECT {target} from {addr[0]}")
+                else:
+                    log(f"[cpol] DENY  {cave} CONNECT {target} from {addr[0]} "
+                        f"(not in cave mirror)")
+                    conn.sendall(
+                        b"HTTP/1.1 403 Forbidden\r\nX-Bat-Firewall: cave-policy\r\n"
+                        b"Content-Length: 35\r\n\r\n"
+                        b"denied by Bat_OS cave-policy\n")
+                    return
+            elif not fw_is_allowed(target):
+                # Unknown peer + not in the global allowlist → deny.
                 log(f"[fw] DENY  CONNECT {target} from {addr[0]}:{addr[1]}")
                 conn.sendall(
                     b"HTTP/1.1 403 Forbidden\r\nX-Bat-Firewall: denied\r\n"
@@ -612,6 +676,22 @@ def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "",
 
     container_id = r.stdout.strip()[:12]
 
+    # Followup 3b-enforce: inspect the container to find its IP on the
+    # bridge and register (ip → cave) so the egress proxy can identify
+    # which cave owns each incoming CONNECT.
+    try:
+        insp = docker("inspect", "--format",
+                      "{{range .NetworkSettings.Networks}}{{.IPAddress}}\n{{end}}",
+                      cname, capture=True)
+        ip = (insp.stdout or "").strip().splitlines()
+        ip = [l.strip() for l in ip if l.strip()]
+        if ip:
+            cave_net_register(ip[0], name)
+        else:
+            log(f"CREATE {name} → no IP found in inspect (per-cave enforcement won't fire)")
+    except Exception as e:
+        log(f"CREATE {name} → inspect failed ({e}); per-cave enforcement won't fire")
+
     # Phase 3: stash the per-cave AES-256 key in memory if provided.
     # The key never touches disk — we re-derive or the operator re-sends
     # via Bat_OS on daemon restart.
@@ -680,6 +760,12 @@ def cmd_destroy(name: str) -> tuple[bool, str]:
     # Runs AFTER docker rm so the mount isn't held by the container.
     # Safe even for non-persistent caves — just a no-op.
     destroy_encrypted_volume(name)
+    # Followup 3b-enforce: forget every IP mapped to this cave so a new
+    # container reusing the IP doesn't inherit the old policy view.
+    cave_net_unregister_cave(name)
+    # Also clear the policy mirror — a fresh cave with the same name
+    # should start from default-deny, not inherit stale rules.
+    cpol_clear(name)
     if r.returncode != 0:
         # Still zero the key — the container might already be gone.
         zeroize_cave_key(name)
@@ -703,6 +789,9 @@ def cmd_destroy_all() -> int:
             log(f"wipe: destroyed {c['name']}")
         destroy_encrypted_volume(c["name"])
         zeroize_cave_key(c["name"])
+        # Followup 3b-enforce: drop cave→ip map + policy mirror.
+        cave_net_unregister_cave(c["name"])
+        cpol_clear(c["name"])
     # Also clear any stragglers: keys for caves we don't track as docker
     # containers any more (e.g., container was already gone).
     with CAVE_KEYS_LOCK:
@@ -870,6 +959,14 @@ class Handler(socketserver.StreamRequestHandler):
                     for cave in cpol_list_caves():
                         self._send(cave)
                     self._send("EOF")
+                    continue
+
+                # CPOL_WHO <ip> → cave name (or "NONE" if unmapped). Lets
+                # Bat_OS verify the daemon's source-ip→cave mapping.
+                if line.startswith("CPOL_WHO "):
+                    ip = line.split(None, 1)[1].strip()
+                    cave = cave_for_ip(ip)
+                    self._send(cave if cave is not None else "NONE")
                     continue
 
                 if line.startswith("DESTROY "):
