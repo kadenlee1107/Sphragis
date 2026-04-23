@@ -859,31 +859,24 @@ pub fn load_archive_multi(
         stage_copy_and_parse(&mut libs[i])?;
     }
 
-    // Diagnostic: dump 8 bytes at content_shell vaddr 0x1a4ff44 to see
-    // if text is already corrupted post-copy. File says 0xd503245f
-    // (BTI c) + 0xd65f03c0 (RET).
-    {
-        let check_phys = libs[0].info.phys_base + 0x1a4ff44;
-        let v0 = unsafe { core::ptr::read_volatile(check_phys as *const u64) };
-        let v8 = unsafe { core::ptr::read_volatile((check_phys + 8) as *const u64) };
-        uart::puts("[loader/multi] post-copy check phys=0x"); print_hex(check_phys as u64);
-        uart::puts(" bytes=0x"); print_hex(v0);
-        uart::puts(" 0x"); print_hex(v8);
-        uart::puts("\n");
-    }
-
     // --- Second pass per lib: apply relocations with cross-module lookup ---
+    // Diagnostic (kept during Chromium bring-up): the reloc pass has a
+    // latent bug where some write lands at content_shell's text address
+    // 0x1a4ff44 (user VA 0x11a4ff44), even though no reloc's r_offset
+    // targets that address. Post-reloc memory there contains phys_base
+    // (0x5ac00000) instead of the original BTI c instruction (0xd503245f).
+    // Tracked with this scaffolding so the next session can bisect the
+    // reloc loop without re-deriving the symptom. Source bytes (initrd)
+    // vs dest bytes (cave) check confirms the PT_LOAD copy itself is OK.
     for i in 0..lib_count {
         apply_relocs_cross(&libs, lib_count, i)?;
     }
-
-    // Same diagnostic after reloc — shows whether a reloc corrupted it.
     {
         let check_phys = libs[0].info.phys_base + 0x1a4ff44;
         let v0 = unsafe { core::ptr::read_volatile(check_phys as *const u64) };
         uart::puts("[loader/multi] post-reloc check phys=0x"); print_hex(check_phys as u64);
         uart::puts(" bytes=0x"); print_hex(v0);
-        uart::puts("\n");
+        uart::puts("  (file: 0xd65f03c0d503245f)\n");
     }
 
     // Flush i/d cache over the full reserved region.
