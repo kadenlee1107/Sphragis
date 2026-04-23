@@ -122,6 +122,9 @@ Everything is exercised end-to-end on QEMU, no real Docker needed:
 | `qemu_nat_host_passthrough_e2e.py` | non-NAT nic-0 frames → host IP stack | PASS |
 | `qemu_nat_icmp_errors_e2e.py` | Dest-Unreach + Time-Exceeded through NAT | PASS |
 | `qemu_nat_frag_reassembly_e2e.py` | 2-fragment reassembly → NAT forward | PASS |
+| `qemu_nat_frag_inbound_e2e.py` | inbound fragment reassembly on nic 0 | PASS |
+| `qemu_nat_refrag_e2e.py` | reassembly + re-fragmentation when > MTU | PASS |
+| `qemu_nat_icmp_misc_e2e.py` | Param Problem deliver + Redirect/SQ drop | PASS |
 | `qemu_vmnet_preflight.sh` | prerequisite checker (no sudo) | PASS |
 | `qemu_vmnet_docker_e2e.sh` | real alpine container through vmnet | manual sudo |
 
@@ -215,20 +218,36 @@ Four items marked deferred in the first cut of this doc shipped:
   → nic 0 → internet). Preflight passes on this Mac; the sudo
   script is shell-lint-clean but only runs under interactive sudo.
 
-## Still deferred
+## Last three closures (2026-04-22 very late)
 
-Only the genuinely-not-worth-doing-today items remain:
+Kaden asked to finish the last "still deferred" items. All three shipped:
 
-- **Inbound fragment reassembly** — replies from the internet rarely
-  fragment (slirp / modern MTU handling) and adding the state
-  machine on nic 0 would mostly be paranoia.
-- **Egress re-fragmentation** — if a reassembled datagram > nic 0's
-  MTU after NAT rewrite we'd need to split on the way out. Our
-  tests stay well under 1500 B; real jumbo-frame scenarios are
-  niche.
-- **Redirect / Parameter Problem / Source Quench ICMP types** — we
-  intentionally don't forward these. Redirect would subvert the
-  cave's routing (which we fully control); Parameter Problem
-  requires pointer-field rewriting that's rarely useful. Traceroute
-  + normal error reporting uses Dest Unreachable + Time Exceeded,
-  which we already do.
+- **Inbound fragment reassembly** — `pump_replies` now feeds
+  nic-0 fragments through the same `frag_accept` that already
+  handled outbound fragments. Slot count bumped 4 → 8 so both
+  directions have headroom. Test: `qemu_nat_frag_inbound_e2e.py`.
+
+- **Egress re-fragmentation** — `send_with_fragmentation(nic, frame)`
+  splits post-rewrite datagrams > 1500 B into wire-legal IPv4
+  fragments with correct MF/offset/checksum per piece. DF-set
+  datagrams refuse to split. Counter `frag-refragd`. Test:
+  `qemu_nat_refrag_e2e.py` — 1900 B cave datagram reassembles then
+  splits back into two fragments on nic 0.
+
+- **Remaining ICMP types** — Parameter Problem (12) routes like
+  Dest Unreach + Time Exceeded (embedded-header rewrite); Redirect
+  (5) + Source Quench (4) are explicitly dropped via
+  `try_drop_icmp_problematic` so they never reach the cave OR the
+  kernel's own IP stack. Counters `icmp-redir-drop` + `icmp-squench-drp`.
+  Test: `qemu_nat_icmp_misc_e2e.py`.
+
+## Nothing left deferred
+
+The packet pipeline is feature-complete for the BatCave threat
+model: per-cave egress enforcement at layer 2/3/4, bidirectional
+NAT with TTL GC, ARP responder on the caves segment, full ICMP
+coverage (Echo + all three error types + intentional drops for
+Redirect + SourceQuench), fragment reassembly in both directions,
+egress re-fragmentation, and a fall-through path for kernel's own
+control-plane traffic. 15 automated tests + 1 manual-sudo test,
+all green.

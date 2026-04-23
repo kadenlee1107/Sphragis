@@ -11,6 +11,29 @@ end of a session.
 
 ---
 
+## 2026-04-22 22:35 — Mac — Followup #3c final deferred items closed
+
+Kaden: "lets finish these last deferred". Three more commits, the
+DESIGN_PACKET_PIPELINE.md "Still deferred" section now says
+"Nothing left deferred".
+
+| commit | piece |
+|---|---|
+| 6f252690 | deferred-5: inbound fragment reassembly on nic 0. `pump_replies` feeds fragments through `frag_accept`. Slot count 4→8 for bidirectional headroom. |
+| 4f6ba20c | deferred-6: egress re-fragmentation. `send_with_fragmentation` splits >1500 B datagrams into IPv4 fragments with correct MF/offset/checksum per piece. DF-set refuses to split. Counter `frag-refragd`. |
+| f42abbbb | deferred-7: Parameter Problem (12) rewrite+deliver (same path as Dest Unreach/Time Exceeded); Redirect (5) + Source Quench (4) explicitly dropped. Counters `icmp-redir-drop`, `icmp-squench-drp`. All ICMP types have an explicit handler now. |
+
+**Full regression (15/15 PASS + preflight OK):**
+  multinic, nat-selftest, rewrite-selftest, autopump E2E,
+  daemon-bind sync, ARP, NAT GC, ICMP Echo, frag detect,
+  host-passthrough, ICMP errors, outbound frag reassembly,
+  INBOUND frag reassembly, egress re-fragmentation, ICMP misc.
+
+Packet pipeline is feature-complete for the BatCave threat model.
+Total 3c commits: 17. Session total since resume: 29 commits.
+
+---
+
 ## 2026-04-22 22:10 — Mac — Followup #3c deferred items all closed (4 more commits)
 
 Kaden: "lets work on the rest of the deferred stuff". Four more
