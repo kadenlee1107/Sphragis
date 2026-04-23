@@ -39,7 +39,7 @@
 
 use crate::drivers::uart;
 use crate::net::tcp;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 /// Mac host, seen from the QEMU guest via slirp's 10.0.2.2 alias.
@@ -340,6 +340,88 @@ pub fn fw_list() -> Result<Vec<String>, &'static str> {
         if !line.is_empty() { out.push(line); }
     }
     Ok(out)
+}
+
+// ───── Followup 3b-sync: cave_policy mirror RPC ───────────────────
+
+/// Push one allow rule into the daemon's per-cave mirror.
+/// `proto` is 6 (TCP), 17 (UDP), or 0 (any).  `port` is 0 for any.
+pub fn cpol_push(cave: &str, host: &str, port: u16, proto: u8)
+    -> Result<(), &'static str>
+{
+    let mut cmd = String::from("CPOL_PUSH ");
+    cmd.push_str(cave);
+    cmd.push(' ');
+    cmd.push_str(host);
+    cmd.push(' ');
+    // push_str on u16 via a stack buffer
+    let mut pbuf = [0u8; 8];
+    let ps = u16_to_str(port, &mut pbuf);
+    cmd.push_str(ps);
+    cmd.push(' ');
+    let mut rbuf = [0u8; 4];
+    let rs = u16_to_str(proto as u16, &mut rbuf);
+    cmd.push_str(rs);
+    send_cmd(&cmd)?;
+    let reply = recv_line()?;
+    if reply.starts_with("OK") { Ok(()) } else { Err("cpol_push rejected") }
+}
+
+pub fn cpol_clear(cave: &str) -> Result<(), &'static str> {
+    let mut cmd = String::from("CPOL_CLEAR ");
+    cmd.push_str(cave);
+    send_cmd(&cmd)?;
+    let reply = recv_line()?;
+    if reply.starts_with("OK") { Ok(()) } else { Err("cpol_clear rejected") }
+}
+
+/// Return (host, port, proto) triples for a cave.
+pub fn cpol_show(cave: &str) -> Result<Vec<(String, u16, u8)>, &'static str> {
+    let mut cmd = String::from("CPOL_SHOW ");
+    cmd.push_str(cave);
+    send_cmd(&cmd)?;
+    let mut out = Vec::new();
+    for _ in 0..4096 {
+        let line = recv_line()?;
+        if line == "EOF" { break; }
+        if line.is_empty() { continue; }
+        // "host port proto"
+        let mut it = line.split_whitespace();
+        let h = it.next().unwrap_or("").to_string();
+        let p: u16 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let r: u8  = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        out.push((h, p, r));
+    }
+    Ok(out)
+}
+
+/// List cave names the daemon holds mirror entries for.
+pub fn cpol_list() -> Result<Vec<String>, &'static str> {
+    send_cmd("CPOL_LIST")?;
+    let mut out = Vec::new();
+    for _ in 0..4096 {
+        let line = recv_line()?;
+        if line == "EOF" { break; }
+        if !line.is_empty() { out.push(line); }
+    }
+    Ok(out)
+}
+
+/// Render a u16 into the provided buffer; returns the str slice that
+/// borrows from the buffer. Keeps us out of alloc::format! which would
+/// pull a pile of format-string machinery into this translation unit.
+fn u16_to_str(mut n: u16, buf: &mut [u8]) -> &str {
+    if n == 0 {
+        buf[0] = b'0';
+        return core::str::from_utf8(&buf[..1]).unwrap_or("0");
+    }
+    let mut i = buf.len();
+    while n > 0 && i > 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    core::str::from_utf8(&buf[i..]).unwrap_or("?")
 }
 
 // ───── Convenience wrapper: open-do-close ─────────────────────────

@@ -153,6 +153,9 @@ fn execute(cmd: &str) {
         "cpol-add"    => cmd_cpol_add(&parts[1..]),
         "cpol-check"  => cmd_cpol_check(&parts[1..]),
         "cpol-clear"  => cmd_cpol_clear(parts[1]),
+        "cpol-sync"   => cmd_cpol_sync(parts[1]),
+        "cpol-daemon-list" => cmd_cpol_daemon_list(),
+        "cpol-daemon-show" => cmd_cpol_daemon_show(parts[1]),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
         "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
@@ -725,6 +728,99 @@ fn cmd_cpol_clear(name: &str) {
     console::puts("  cpol-clear ");
     console::puts(name);
     console::puts("  OK\n");
+}
+
+// Followup 3b-sync: push the kernel's cave_policy view of <cave> to
+// the daemon's CAVE_POLICY_MIRROR. Round-trip walk: cpol-sync clears
+// the daemon entry first, then pushes every rule. Result is that the
+// daemon's mirror is byte-equivalent to the kernel's view.
+fn cmd_cpol_sync(name: &str) {
+    if name.is_empty() {
+        console::puts("  usage: cpol-sync <cave_name>\n");
+        return;
+    }
+    let rules = crate::net::cave_policy::rules_for_by_name(name);
+    let n = rules.len();
+    let r = crate::batcave::docker_client::with_daemon(|| {
+        crate::batcave::docker_client::cpol_clear(name)?;
+        for rule in rules.iter() {
+            crate::batcave::docker_client::cpol_push(
+                name,
+                rule.host.as_str(),
+                rule.port,
+                rule.proto,
+            )?;
+        }
+        Ok(())
+    });
+    match r {
+        Ok(()) => {
+            console::puts("  cpol-sync ");
+            console::puts(name);
+            console::puts(" -> daemon  (");
+            print_num(n);
+            console::puts(" rules pushed)\n");
+        }
+        Err(e) => {
+            console::puts("  cpol-sync FAILED: "); console::puts(e); console::puts("\n");
+        }
+    }
+}
+
+fn cmd_cpol_daemon_list() {
+    let r = crate::batcave::docker_client::with_daemon(
+        crate::batcave::docker_client::cpol_list,
+    );
+    match r {
+        Ok(caves) => {
+            console::puts_hi("  CPOL DAEMON MIRROR (caves)\n");
+            if caves.is_empty() {
+                console::puts("  (daemon mirror is empty)\n");
+                return;
+            }
+            for c in caves.iter() {
+                console::puts("  "); console::puts(c.as_str()); console::puts("\n");
+            }
+            console::puts("    total: "); print_num(caves.len()); console::puts("\n");
+        }
+        Err(e) => {
+            console::puts("  cpol-daemon-list FAILED: "); console::puts(e); console::puts("\n");
+        }
+    }
+}
+
+fn cmd_cpol_daemon_show(name: &str) {
+    if name.is_empty() {
+        console::puts("  usage: cpol-daemon-show <cave_name>\n");
+        return;
+    }
+    let r = crate::batcave::docker_client::with_daemon(|| {
+        crate::batcave::docker_client::cpol_show(name)
+    });
+    match r {
+        Ok(rules) => {
+            console::puts_hi("  cpol-daemon-show ");
+            console::puts(name);
+            console::puts("\n");
+            if rules.is_empty() {
+                console::puts("    (no mirror entries for this cave)\n");
+                return;
+            }
+            for (host, port, proto) in rules.iter() {
+                console::puts("    allow ");
+                let tag = match *proto { 6 => "tcp", 17 => "udp", _ => "any" };
+                console::puts(tag);
+                console::puts("  ");
+                console::puts(if host.is_empty() { "*" } else { host.as_str() });
+                console::puts(":");
+                if *port == 0 { console::puts("*"); } else { print_num(*port as usize); }
+                console::puts("\n");
+            }
+        }
+        Err(e) => {
+            console::puts("  cpol-daemon-show FAILED: "); console::puts(e); console::puts("\n");
+        }
+    }
 }
 
 // Integration #1: secure_channel on top of ipc_session.

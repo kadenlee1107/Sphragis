@@ -140,6 +140,42 @@ def fw_deny(target: str):
 def fw_snapshot():
     with FW_LOCK: return sorted(FW_ALLOWLIST)
 
+# ── Followup 3b-sync: per-cave policy mirror from kernel ────────────
+#
+# The kernel's `src/net/cave_policy.rs` is the authority on what each
+# cave may reach. This dict mirrors it so the egress proxy can make
+# per-cave decisions without an RPC on every CONNECT. Shape:
+#   CAVE_POLICY_MIRROR["kali"] = [("github.com", 443, 6), ...]
+# Proto codes match DESIGN_CRYPTO and kernel side: 6=TCP, 17=UDP,
+# 0=any. Port 0 = wildcard. host "" = wildcard.
+#
+# Enforcement lands in the NEXT sub-phase (3b-enforce); this one is
+# just the data plane. Existing FW_ALLOWLIST remains the global
+# allowlist the proxy consults today.
+CAVE_POLICY_MIRROR = {}
+CAVE_POLICY_LOCK = threading.Lock()
+
+def cpol_push(cave: str, host: str, port: int, proto: int):
+    rule = (host.lower(), int(port), int(proto))
+    with CAVE_POLICY_LOCK:
+        entries = CAVE_POLICY_MIRROR.setdefault(cave, [])
+        if rule not in entries:
+            entries.append(rule)
+    log(f"[cpol] push {cave} -> {host}:{port}/{proto}")
+
+def cpol_clear(cave: str):
+    with CAVE_POLICY_LOCK:
+        CAVE_POLICY_MIRROR.pop(cave, None)
+    log(f"[cpol] clear {cave}")
+
+def cpol_show(cave: str):
+    with CAVE_POLICY_LOCK:
+        return list(CAVE_POLICY_MIRROR.get(cave, []))
+
+def cpol_list_caves():
+    with CAVE_POLICY_LOCK:
+        return sorted(CAVE_POLICY_MIRROR.keys())
+
 def start_egress_proxy():
     """Tiny HTTP CONNECT proxy. Containers → this proxy → upstream.
     Every CONNECT checks FW_ALLOWLIST. Non-HTTPS proxies not supported
@@ -799,6 +835,40 @@ class Handler(socketserver.StreamRequestHandler):
                 if line == "FW_LIST":
                     for t in fw_snapshot():
                         self._send(t)
+                    self._send("EOF")
+                    continue
+
+                # Followup 3b-sync: per-cave policy mirror commands.
+                # CPOL_PUSH <cave> <host> <port> <proto>   (proto: 6|17|0)
+                # CPOL_CLEAR <cave>
+                # CPOL_SHOW  <cave>  -> list of "<host> <port> <proto>" lines
+                # CPOL_LIST             -> list of cave names
+                if line.startswith("CPOL_PUSH "):
+                    parts = line.split(None, 4)
+                    if len(parts) != 5:
+                        self._send("ERR cpol_push usage: CPOL_PUSH <cave> <host> <port> <proto>")
+                        continue
+                    _, cave, host, port_s, proto_s = parts
+                    try:
+                        cpol_push(cave, host, int(port_s), int(proto_s))
+                        self._send("OK pushed")
+                    except ValueError:
+                        self._send("ERR cpol_push bad port/proto")
+                    continue
+                if line.startswith("CPOL_CLEAR "):
+                    cave = line.split(None, 1)[1].strip()
+                    cpol_clear(cave)
+                    self._send("OK cleared")
+                    continue
+                if line.startswith("CPOL_SHOW "):
+                    cave = line.split(None, 1)[1].strip()
+                    for host, port, proto in cpol_show(cave):
+                        self._send(f"{host} {port} {proto}")
+                    self._send("EOF")
+                    continue
+                if line == "CPOL_LIST":
+                    for cave in cpol_list_caves():
+                        self._send(cave)
                     self._send("EOF")
                     continue
 
