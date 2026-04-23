@@ -48,6 +48,12 @@ static ARP_REQUESTS_IGNORED: AtomicU32 = AtomicU32::new(0);
 static ICMP_ECHO_FORWARDED: AtomicU32 = AtomicU32::new(0);
 static ICMP_ECHO_DELIVERED: AtomicU32 = AtomicU32::new(0);
 static NAT_GC_EVICTED: AtomicU32 = AtomicU32::new(0);
+/// Counted separately from `drop_parse` so operators can see WHY a
+/// frame was refused. Fragment forwarding requires stateful
+/// reassembly (so L4 checksum can be recomputed after NAT rewrites
+/// the src port) — out of scope for this pipeline version. The
+/// existing rule: fragments are dropped distinctly and logged.
+static FRAG_DROPPED: AtomicU32 = AtomicU32::new(0);
 
 /// IPv4 address Bat_OS advertises as the caves-side gateway. Used in
 /// ARP replies and as the default source when we originate traffic on
@@ -59,6 +65,7 @@ pub struct Stats {
     pub drop_policy: u32,
     pub drop_unknown_src: u32,
     pub drop_parse: u32,
+    pub drop_fragment: u32,
     pub arp_replies: u32,
     pub arp_ignored: u32,
     pub icmp_forwarded: u32,
@@ -72,6 +79,7 @@ pub fn stats() -> Stats {
         drop_policy: PKT_DROP_POLICY.load(Ordering::Relaxed),
         drop_unknown_src: PKT_DROP_UNKNOWN_SRC.load(Ordering::Relaxed),
         drop_parse: PKT_DROP_PARSE.load(Ordering::Relaxed),
+        drop_fragment: FRAG_DROPPED.load(Ordering::Relaxed),
         arp_replies: ARP_REPLIES_SENT.load(Ordering::Relaxed),
         arp_ignored: ARP_REQUESTS_IGNORED.load(Ordering::Relaxed),
         icmp_forwarded: ICMP_ECHO_FORWARDED.load(Ordering::Relaxed),
@@ -85,6 +93,7 @@ pub fn reset_stats() {
     PKT_DROP_POLICY.store(0, Ordering::Relaxed);
     PKT_DROP_UNKNOWN_SRC.store(0, Ordering::Relaxed);
     PKT_DROP_PARSE.store(0, Ordering::Relaxed);
+    FRAG_DROPPED.store(0, Ordering::Relaxed);
     ARP_REPLIES_SENT.store(0, Ordering::Relaxed);
     ARP_REQUESTS_IGNORED.store(0, Ordering::Relaxed);
     ICMP_ECHO_FORWARDED.store(0, Ordering::Relaxed);
@@ -804,8 +813,12 @@ pub enum PktVerdict {
     DropPolicy,
     /// Source IP not bound to any cave → default deny.
     DropUnknownSrc,
-    /// Frame parse failed (too short, bad ethertype, fragmented, etc).
+    /// Frame parse failed (too short, bad ethertype, unknown proto).
     DropParse,
+    /// Frame was an IPv4 fragment. Reassembly is not implemented, so
+    /// we drop but count separately so operators can tell this is
+    /// the "need larger MTU" case vs true garbage.
+    DropFragment,
 }
 
 /// The 5-tuple extracted from an outbound cave frame.
@@ -889,6 +902,19 @@ pub fn parse_outbound(frame: &[u8]) -> Option<OutboundFlow> {
     Some(OutboundFlow { src_ip, dst_ip, src_port, dst_port, proto })
 }
 
+/// Peek at an Ethernet+IPv4 frame and return true if it's a fragment
+/// (MF=1 or non-zero fragment offset). Used to separate DropFragment
+/// from DropParse in the classifier.
+fn is_ipv4_fragment(frame: &[u8]) -> bool {
+    if frame.len() < 14 + 20 { return false; }
+    let ethertype = ((frame[12] as u16) << 8) | (frame[13] as u16);
+    if ethertype != ETHERTYPE_IPV4 { return false; }
+    let ip = &frame[14..];
+    if (ip[0] >> 4) != 4 { return false; }
+    let frag = ((ip[6] as u16) << 8) | (ip[7] as u16);
+    (frag & 0x3FFF) != 0
+}
+
 /// Classify a raw Ethernet frame arriving on the caves interface.
 /// Increments the appropriate counter and returns the verdict so
 /// callers can decide whether to proceed with forwarding.
@@ -896,6 +922,10 @@ pub fn classify(frame: &[u8]) -> PktVerdict {
     let flow = match parse_outbound(frame) {
         Some(f) => f,
         None => {
+            if is_ipv4_fragment(frame) {
+                FRAG_DROPPED.fetch_add(1, Ordering::Relaxed);
+                return PktVerdict::DropFragment;
+            }
             PKT_DROP_PARSE.fetch_add(1, Ordering::Relaxed);
             return PktVerdict::DropParse;
         }
@@ -1070,6 +1100,87 @@ pub fn selftest() -> Result<SelftestReport, &'static str> {
         drop_parse: s.drop_parse,
         bindings_installed: list_bindings().len(),
     })
+}
+
+// ── Fragment self-test ───────────────────────────────────────────
+
+pub struct FragmentReport {
+    pub frag_count: u32,
+    pub parse_count: u32,
+    pub fragment_verdicts: [PktVerdict; 3],
+}
+
+/// Verify the classifier distinguishes IPv4 fragments (return
+/// DropFragment + bump frag counter) from true parse errors (garbage
+/// frames → DropParse + bump parse counter).
+pub fn fragment_selftest() -> Result<FragmentReport, &'static str> {
+    reset_stats();
+    reset_bindings();
+    cave_policy::init();
+
+    // MF=1 (more-fragments) on an otherwise-normal Ethernet+IPv4.
+    let mf = build_fragment(0x4000, true, 0, 100);
+    // Non-zero fragment offset, MF=0 (last fragment).
+    let last_frag = build_fragment(0x4000, false, 185, 0);
+    // A third fragment, same id, middle fragment (MF=1, offset>0).
+    let mid_frag = build_fragment(0x4000, true, 50, 0);
+
+    let v1 = classify(&mf);
+    let v2 = classify(&last_frag);
+    let v3 = classify(&mid_frag);
+
+    // Garbage: wrong ethertype + too short. MUST NOT be counted as frag.
+    let garbage = [0u8; 40];
+    let v4 = classify(&garbage);
+
+    let s = stats();
+    if v1 != PktVerdict::DropFragment
+        || v2 != PktVerdict::DropFragment
+        || v3 != PktVerdict::DropFragment {
+        return Err("classifier misjudged an IPv4 fragment");
+    }
+    if v4 != PktVerdict::DropParse {
+        return Err("classifier misjudged garbage as a fragment");
+    }
+    if s.drop_fragment != 3 { return Err("frag counter should be 3"); }
+    if s.drop_parse    != 1 { return Err("parse counter should be 1"); }
+
+    Ok(FragmentReport {
+        frag_count: s.drop_fragment,
+        parse_count: s.drop_parse,
+        fragment_verdicts: [v1, v2, v3],
+    })
+}
+
+/// Build a synthetic IPv4 fragment frame. `id` is the IP identifier;
+/// `mf` sets the More-Fragments flag; `offset_units` is the 8-byte
+/// fragment offset; `extra_bytes` lets the caller pad the L4 payload.
+fn build_fragment(id: u16, mf: bool, offset_units: u16, extra_bytes: usize) -> Vec<u8> {
+    let mut v = Vec::with_capacity(14 + 20 + extra_bytes);
+    // Ethernet
+    v.extend_from_slice(&[0x02, 0xBB, 0, 0, 0, 0x01]);  // dst
+    v.extend_from_slice(&[0x02, 0xAA, 0, 0, 0, 0x10]);  // src
+    v.extend_from_slice(&[0x08, 0x00]);
+    // IPv4 header
+    v.push(0x45); v.push(0x00);
+    let total_slot = v.len();
+    v.extend_from_slice(&[0, 0]);                 // total length
+    v.push((id >> 8) as u8); v.push(id as u8);    // id
+    let frag_field = if mf { 0x2000 | offset_units } else { offset_units };
+    v.push((frag_field >> 8) as u8);
+    v.push( frag_field as u8);
+    v.push(64);                                    // TTL
+    v.push(IPPROTO_TCP);                           // proto
+    v.extend_from_slice(&[0, 0]);                  // header cksum (ignored)
+    v.extend_from_slice(&[192, 168, 77, 10]);      // src ip
+    v.extend_from_slice(&[93, 184, 216, 34]);      // dst ip
+    // Opaque fragment payload
+    for _ in 0..extra_bytes { v.push(0); }
+    // Fill total_len
+    let tl = v.len() - 14;
+    v[total_slot]     = (tl >> 8) as u8;
+    v[total_slot + 1] = (tl & 0xFF) as u8;
+    v
 }
 
 // ── GC self-test ─────────────────────────────────────────────────
