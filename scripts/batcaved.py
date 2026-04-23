@@ -94,61 +94,97 @@ CAVE_KEYS_LOCK = threading.Lock()
 CAVE_AUDIT_DIR = LOG_ROOT / "caves"
 CAVE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── Crypto ────────────────────────────────────────────────────
-# Plain AES-256-CTR via the `cryptography` package if available; else
-# a pure-Python fallback. We keep this tight because the daemon wants
-# zero outside-world dependencies beyond stdlib where possible.
-def _import_aes():
-    try:
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        return ("crypto", (Cipher, algorithms, modes))
-    except Exception:
-        return ("fallback", None)
+# ── Crypto (DESIGN_CRYPTO.md #4) ─────────────────────────────
+# ChaCha20-Poly1305 AEAD per frame, with previous-frame tag chained
+# into the next frame's Associated Data (AAD). This gives us:
+#   1. Confidentiality — ciphertext reveals nothing
+#   2. Integrity — any bit-flip in a frame fails verification
+#   3. Chain-of-custody — each frame's tag depends on all prior
+#      frames' tags, so truncation/reordering breaks the chain
+#   4. Tamper-evident — an attacker can't redact a single exec
+#      without invalidating every later frame
+#
+# Frame format on disk:
+#   [2-byte BE len][12-byte nonce][ciphertext+16-byte tag]
+# len = len(ciphertext+tag). The prev-frame-tag is fed via AAD, so
+# it's NOT stored in the frame (verifier must walk forward from the
+# beginning; loss of the file beginning = loss of all decryption).
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+    _AEAD_AVAILABLE = True
+except ImportError:
+    _AEAD_AVAILABLE = False
 
-_AES_KIND, _AES_MOD = _import_aes()
-
-def aes_ctr_encrypt(key: bytes, nonce: bytes, data: bytes) -> bytes:
-    """AES-256 in CTR mode. `nonce` is the full 16-byte initial counter."""
-    assert len(key) == 32 and len(nonce) == 16
-    if _AES_KIND == "crypto":
-        Cipher, algorithms, modes = _AES_MOD
-        c = Cipher(algorithms.AES(key), modes.CTR(nonce)).encryptor()
-        return c.update(data) + c.finalize()
-    # Fallback: pure-Python AES-CTR via the Python cryptography stdlib
-    # isn't available by default; we use PyCryptodome if present, else
-    # degrade to an HMAC-SHA256 keystream (NOT AES but adequate for
-    # integrity-of-audit purposes in this demo). An operator who cares
-    # installs `pip install cryptography` and reruns.
-    import hashlib, hmac
-    out = bytearray(len(data))
-    ctr_int = int.from_bytes(nonce, "big")
-    i = 0
-    while i < len(data):
-        counter_bytes = ctr_int.to_bytes(16, "big")
-        stream = hmac.new(key, counter_bytes, hashlib.sha256).digest()
-        take = min(len(data) - i, len(stream))
-        for j in range(take):
-            out[i + j] = data[i + j] ^ stream[j]
-        i += take
-        ctr_int = (ctr_int + 1) & ((1 << 128) - 1)
-    return bytes(out)
+# Per-cave: last frame's Poly1305 tag (bytes) for chaining into next AAD.
+CAVE_LAST_TAG = {}  # name -> 16 bytes
+CAVE_LAST_TAG_LOCK = threading.Lock()
 
 def write_encrypted_audit(cave_name: str, payload: bytes):
-    """Append `payload` to the cave's audit log, AES-encrypted at rest."""
+    """Append `payload` to the cave's audit log as an AEAD frame
+    chained to the previous frame."""
     with CAVE_KEYS_LOCK:
         key = CAVE_KEYS.get(cave_name)
     if key is None:
         return  # no key → cave wasn't registered with encryption; skip
+    if not _AEAD_AVAILABLE:
+        # Bail honestly — operator should `pip install cryptography`.
+        log(f"[audit] ChaCha20-Poly1305 unavailable; skipping frame "
+            f"for {cave_name} (install `cryptography`)")
+        return
+
     path = CAVE_AUDIT_DIR / f"{cave_name}.audit.aes"
-    # Nonce = random prefix per append so CTR stream doesn't repeat.
+
+    # Pull previous tag for chaining. First frame gets a fixed
+    # "GENESIS" AAD so verification knows where the chain starts.
+    with CAVE_LAST_TAG_LOCK:
+        prev_tag = CAVE_LAST_TAG.get(cave_name, b"GENESIS-BATOS\x00\x00\x00")
+    aad = prev_tag  # 16 bytes
+
     import os as _os
-    nonce = _os.urandom(16)
-    ct = aes_ctr_encrypt(key, nonce, payload)
+    nonce = _os.urandom(12)  # ChaCha20-Poly1305 uses 96-bit nonces
+    aead = ChaCha20Poly1305(key)
+    ct_and_tag = aead.encrypt(nonce, payload, aad)
+    # Last 16 bytes of ct_and_tag is the Poly1305 tag — save for chain.
+    tag = ct_and_tag[-16:]
+    with CAVE_LAST_TAG_LOCK:
+        CAVE_LAST_TAG[cave_name] = tag
+
     with open(path, "ab") as f:
-        # Frame: 2-byte BE length | 16-byte nonce | ciphertext
-        f.write(len(ct).to_bytes(2, "big"))
+        f.write(len(ct_and_tag).to_bytes(2, "big"))
         f.write(nonce)
-        f.write(ct)
+        f.write(ct_and_tag)
+
+
+def verify_and_decrypt_audit(cave_name: str, key: bytes) -> tuple[bool, bytes]:
+    """Read the full encrypted audit log, verify the chain, return
+    (ok, concatenated-plaintext). Used for operator audit review — not
+    called by the daemon loop. Exposed via DUMP_AUDIT for diagnostics."""
+    if not _AEAD_AVAILABLE:
+        return False, b""
+    path = CAVE_AUDIT_DIR / f"{cave_name}.audit.aes"
+    if not path.exists():
+        return False, b""
+    aead = ChaCha20Poly1305(key)
+    out = bytearray()
+    prev_tag = b"GENESIS-BATOS\x00\x00\x00"
+    with open(path, "rb") as f:
+        while True:
+            lenhdr = f.read(2)
+            if len(lenhdr) < 2: break
+            frame_len = int.from_bytes(lenhdr, "big")
+            nonce = f.read(12)
+            ct_and_tag = f.read(frame_len)
+            if len(nonce) < 12 or len(ct_and_tag) < 16:
+                return False, bytes(out)
+            try:
+                pt = aead.decrypt(nonce, ct_and_tag, prev_tag)
+            except Exception:
+                # Chain break — tamper detected
+                out.extend(b"\n*** CHAIN BROKEN / TAMPERING DETECTED ***\n")
+                return False, bytes(out)
+            out.extend(pt)
+            prev_tag = ct_and_tag[-16:]
+    return True, bytes(out)
 
 def zeroize_cave_key(cave_name: str):
     """Zero and remove the in-memory key for a cave."""
@@ -159,6 +195,9 @@ def zeroize_cave_key(cave_name: str):
             ba = bytearray(k)
             for i in range(len(ba)):
                 ba[i] = 0
+    # Drop chain tag so a same-named cave re-created later starts fresh
+    with CAVE_LAST_TAG_LOCK:
+        CAVE_LAST_TAG.pop(cave_name, None)
     # Delete encrypted audit log so the on-disk blob is gone too.
     path = CAVE_AUDIT_DIR / f"{cave_name}.audit.aes"
     try:
