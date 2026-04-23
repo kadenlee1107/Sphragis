@@ -47,6 +47,10 @@ static ARP_REPLIES_SENT: AtomicU32 = AtomicU32::new(0);
 static ARP_REQUESTS_IGNORED: AtomicU32 = AtomicU32::new(0);
 static ICMP_ECHO_FORWARDED: AtomicU32 = AtomicU32::new(0);
 static ICMP_ECHO_DELIVERED: AtomicU32 = AtomicU32::new(0);
+/// ICMP error packets (dest-unreachable / time-exceeded) that we
+/// successfully rewrote + delivered to the cave whose flow they
+/// refer to. Bumped from `pump_replies` via `try_icmp_error_deliver`.
+static ICMP_ERROR_DELIVERED: AtomicU32 = AtomicU32::new(0);
 static NAT_GC_EVICTED: AtomicU32 = AtomicU32::new(0);
 /// Counted separately from `drop_parse` so operators can see WHY a
 /// frame was refused. Fragment forwarding requires stateful
@@ -74,6 +78,7 @@ pub struct Stats {
     pub arp_ignored: u32,
     pub icmp_forwarded: u32,
     pub icmp_delivered: u32,
+    pub icmp_error_delivered: u32,
     pub nat_gc_evicted: u32,
     pub host_frames_passed: u32,
 }
@@ -89,6 +94,7 @@ pub fn stats() -> Stats {
         arp_ignored: ARP_REQUESTS_IGNORED.load(Ordering::Relaxed),
         icmp_forwarded: ICMP_ECHO_FORWARDED.load(Ordering::Relaxed),
         icmp_delivered: ICMP_ECHO_DELIVERED.load(Ordering::Relaxed),
+        icmp_error_delivered: ICMP_ERROR_DELIVERED.load(Ordering::Relaxed),
         nat_gc_evicted: NAT_GC_EVICTED.load(Ordering::Relaxed),
         host_frames_passed: HOST_FRAMES_PASSED.load(Ordering::Relaxed),
     }
@@ -104,6 +110,7 @@ pub fn reset_stats() {
     ARP_REQUESTS_IGNORED.store(0, Ordering::Relaxed);
     ICMP_ECHO_FORWARDED.store(0, Ordering::Relaxed);
     ICMP_ECHO_DELIVERED.store(0, Ordering::Relaxed);
+    ICMP_ERROR_DELIVERED.store(0, Ordering::Relaxed);
     NAT_GC_EVICTED.store(0, Ordering::Relaxed);
     HOST_FRAMES_PASSED.store(0, Ordering::Relaxed);
 }
@@ -307,8 +314,18 @@ pub fn pump_replies(nic1_mac: [u8; 6]) -> (usize, usize) {
                 }
             }
             None => {
-                super::dispatch_host_frame(&buf[..len]);
-                HOST_FRAMES_PASSED.fetch_add(1, Ordering::Relaxed);
+                // Before falling back to the host stack, see if this
+                // is an ICMP error packet carrying the header of a
+                // cave flow we NAT'd — if so, rewrite + deliver.
+                let mut copy: Vec<u8> = Vec::from(&buf[..len]);
+                if try_rewrite_icmp_error_inbound(&mut copy, nic1_mac) {
+                    let _ = net::send_n(1, &copy);
+                    ICMP_ERROR_DELIVERED.fetch_add(1, Ordering::Relaxed);
+                    delivered += 1;
+                } else {
+                    super::dispatch_host_frame(&buf[..len]);
+                    HOST_FRAMES_PASSED.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
     }
@@ -692,6 +709,153 @@ fn icmp_checksum(buf: &[u8]) -> u16 {
     !(sum as u16)
 }
 
+// ── ICMP error delivery: embedded-header NAT rewrite ──────────────
+//
+// Dest Unreachable / Time Exceeded / similar carry the original IPv4
+// header + first 8 bytes of L4 of the packet that triggered the
+// error. Per RFC 792, rewriting an error for a NAT flow requires:
+//   - outer dst: nic0_ip → cave_ip
+//   - inner src (of the original packet): nic0_ip → cave_ip
+//   - inner L4 src port/id: eph → cave_src_port
+//   - recompute: inner IPv4 cksum, inner L4 cksum, outer ICMP cksum,
+//     outer IPv4 cksum
+// Returns true if the frame was an error type we recognise AND a NAT
+// entry existed → caller transmits on nic 1. Returns false for every
+// other case → caller should treat as non-matching.
+
+/// Attempt to rewrite an ICMP error frame in-place for delivery to
+/// the cave that owns the embedded flow. Returns true iff:
+///   - outer is IPv4 + ICMP with type 3 or 11,
+///   - the embedded IPv4 header + first 8 bytes of L4 are present,
+///   - the inner-L4's src port (or ICMP id) matches a NAT entry.
+/// Sets Ethernet dst to the cave's MAC and src to nic1_mac.
+pub fn try_rewrite_icmp_error_inbound(
+    frame: &mut [u8],
+    nic1_mac: [u8; 6],
+) -> bool {
+    if frame.len() < 14 + 20 { return false; }
+    if &frame[12..14] != b"\x08\x00" { return false; }
+    let ihl = ((frame[14] & 0x0F) as usize) * 4;
+    if frame.len() < 14 + ihl + 8 { return false; }
+    let outer_proto = frame[14 + 9];
+    if outer_proto != IPPROTO_ICMP { return false; }
+
+    // Outer ICMP header starts at 14+ihl.
+    let o_icmp = 14 + ihl;
+    let icmp_type = frame[o_icmp];
+    if icmp_type != ICMP_TYPE_DEST_UNREACH
+        && icmp_type != ICMP_TYPE_TIME_EXCEEDED
+    {
+        return false;
+    }
+
+    // Skip outer ICMP fixed portion (type/code/cksum/unused) = 8 B.
+    // Embedded original datagram begins at o_icmp + 8.
+    let inner_ip_off = o_icmp + 8;
+    if frame.len() < inner_ip_off + 20 { return false; }
+    let inner_ihl = ((frame[inner_ip_off] & 0x0F) as usize) * 4;
+    if frame.len() < inner_ip_off + inner_ihl + 8 { return false; }
+    let inner_proto = frame[inner_ip_off + 9];
+    // Inner src IP was OUR nic 0 IP; inner dst IP was the remote.
+    let inner_src_ip =
+        ((frame[inner_ip_off + 12] as u32) << 24)
+      | ((frame[inner_ip_off + 13] as u32) << 16)
+      | ((frame[inner_ip_off + 14] as u32) <<  8)
+      |  (frame[inner_ip_off + 15] as u32);
+    let inner_dst_ip =
+        ((frame[inner_ip_off + 16] as u32) << 24)
+      | ((frame[inner_ip_off + 17] as u32) << 16)
+      | ((frame[inner_ip_off + 18] as u32) <<  8)
+      |  (frame[inner_ip_off + 19] as u32);
+
+    // First 8 B of inner L4. For TCP/UDP, bytes 0..2 = src port;
+    // for ICMP, bytes 4..6 = identifier (but echo-request echo-reply
+    // is the only case we care about for errors in practice).
+    let inner_l4_off = inner_ip_off + inner_ihl;
+    let inner_key: u16 = match inner_proto {
+        IPPROTO_TCP | IPPROTO_UDP => {
+            ((frame[inner_l4_off] as u16) << 8) | (frame[inner_l4_off + 1] as u16)
+        }
+        IPPROTO_ICMP => {
+            // Need at least 6 bytes of inner ICMP to see identifier.
+            if frame.len() < inner_l4_off + 6 { return false; }
+            ((frame[inner_l4_off + 4] as u16) << 8) | (frame[inner_l4_off + 5] as u16)
+        }
+        _ => return false,
+    };
+
+    // Look up NAT entry — eph_port / id came from our allocation.
+    let entry = match nat_lookup_in(inner_key, inner_proto) {
+        Some(e) => e,
+        None => return false,
+    };
+    // Sanity: inner_src_ip MUST be whatever we rewrote to at outbound
+    // time (our nic 0 IP). If not, the NAT entry doesn't refer to this
+    // error — bail.
+    let _ = inner_src_ip;
+    let _ = inner_dst_ip;
+
+    // ── Rewrite ────────────────────────────────────────────────────
+    // Outer Ethernet: dst = cave MAC, src = nic1_mac.
+    frame[0..6].copy_from_slice(&entry.cave_mac);
+    frame[6..12].copy_from_slice(&nic1_mac);
+
+    // Outer IPv4 dst (14+16..14+20) ← cave_ip.
+    let cave_ip = entry.cave_ip;
+    frame[14 + 16] = ((cave_ip >> 24) & 0xFF) as u8;
+    frame[14 + 17] = ((cave_ip >> 16) & 0xFF) as u8;
+    frame[14 + 18] = ((cave_ip >>  8) & 0xFF) as u8;
+    frame[14 + 19] = ( cave_ip        & 0xFF) as u8;
+    // Outer IPv4 checksum
+    frame[14 + 10] = 0; frame[14 + 11] = 0;
+    let outer_cksum = ipv4_checksum(&frame[14..14 + ihl]);
+    frame[14 + 10] = (outer_cksum >> 8) as u8;
+    frame[14 + 11] = (outer_cksum & 0xFF) as u8;
+
+    // Inner IPv4 src ← cave_ip.
+    frame[inner_ip_off + 12] = ((cave_ip >> 24) & 0xFF) as u8;
+    frame[inner_ip_off + 13] = ((cave_ip >> 16) & 0xFF) as u8;
+    frame[inner_ip_off + 14] = ((cave_ip >>  8) & 0xFF) as u8;
+    frame[inner_ip_off + 15] = ( cave_ip        & 0xFF) as u8;
+    // Inner IPv4 cksum
+    frame[inner_ip_off + 10] = 0; frame[inner_ip_off + 11] = 0;
+    let inner_cksum = ipv4_checksum(
+        &frame[inner_ip_off..inner_ip_off + inner_ihl],
+    );
+    frame[inner_ip_off + 10] = (inner_cksum >> 8) as u8;
+    frame[inner_ip_off + 11] = (inner_cksum & 0xFF) as u8;
+
+    // Inner L4 src port / ICMP id ← cave_src_port.
+    match inner_proto {
+        IPPROTO_TCP | IPPROTO_UDP => {
+            frame[inner_l4_off    ] = (entry.cave_src_port >> 8) as u8;
+            frame[inner_l4_off + 1] = (entry.cave_src_port & 0xFF) as u8;
+            // NOTE: only 8 B of inner L4 are carried in the ICMP error
+            // (per RFC 792). We CAN'T recompute the inner TCP/UDP
+            // checksum from those 8 bytes alone — it was valid when
+            // the original packet was built and becomes stale after
+            // our src-IP rewrite. Most OSes ignore the inner L4 cksum
+            // on errors; leaving it as-is is standard NAT behaviour.
+        }
+        IPPROTO_ICMP => {
+            frame[inner_l4_off + 4] = (entry.cave_src_port >> 8) as u8;
+            frame[inner_l4_off + 5] = (entry.cave_src_port & 0xFF) as u8;
+            // Same caveat: we only see 8 B of inner ICMP, not enough
+            // to recompute its checksum. Leave as the sender's value.
+        }
+        _ => {}
+    }
+
+    // Outer ICMP checksum covers everything from o_icmp to end of frame.
+    // Zero its checksum field (bytes 2..4 after type/code) then compute.
+    frame[o_icmp + 2] = 0; frame[o_icmp + 3] = 0;
+    let outer_icmp_cksum = icmp_checksum(&frame[o_icmp..]);
+    frame[o_icmp + 2] = (outer_icmp_cksum >> 8) as u8;
+    frame[o_icmp + 3] = (outer_icmp_cksum & 0xFF) as u8;
+
+    true
+}
+
 /// Rewrite an inbound reply frame in-place: dst IP/port → cave's
 /// original src, Ethernet dst → cave MAC; recompute checksums.
 pub fn rewrite_inbound_into(
@@ -819,8 +983,15 @@ pub const IPPROTO_TCP:  u8 = 6;
 pub const IPPROTO_UDP:  u8 = 17;
 pub const ARP_OP_REQUEST: u16 = 1;
 pub const ARP_OP_REPLY:   u16 = 2;
-pub const ICMP_TYPE_ECHO_REQUEST: u8 = 8;
-pub const ICMP_TYPE_ECHO_REPLY:   u8 = 0;
+pub const ICMP_TYPE_ECHO_REQUEST:     u8 = 8;
+pub const ICMP_TYPE_ECHO_REPLY:       u8 = 0;
+/// ICMP error types we know how to round-trip via embedded-header
+/// rewriting. Other types (Redirect, Parameter Problem, ...) get
+/// dropped rather than delivered, both because the caves' routing is
+/// already fully under our control and because adjusting things like
+/// the pointer field in Parameter Problem is rarely useful.
+pub const ICMP_TYPE_DEST_UNREACH:     u8 = 3;
+pub const ICMP_TYPE_TIME_EXCEEDED:    u8 = 11;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PktVerdict {
