@@ -17,6 +17,15 @@ static LOADED_PHYS_BASE: AtomicUsize = AtomicUsize::new(0);
 /// the entry point from kernel-physical to the VA EL0 will actually see
 /// through TTBR0 once the cave's page table is loaded.
 static LOADED_USER_VA_BASE: AtomicUsize = AtomicUsize::new(0);
+/// Physical address of a TLS page allocated contiguously with the ELF
+/// image + stack. Non-zero means `execute_with_args` should program
+/// `tpidr_el0` with the user VA of this page before ERET so libc's
+/// thread-local accesses don't dereference VA 0. Zero means "legacy
+/// behaviour — just clear tpidr_el0". Size is `LOADED_TLS_PAGES` pages.
+static LOADED_TLS_PHYS: AtomicUsize = AtomicUsize::new(0);
+/// 4 KB pages reserved for the TLS block. 16 KB is enough for glibc's
+/// tcbhead_t plus a reasonable main-thread scratch area.
+pub const LOADED_TLS_PAGES: usize = 4;
 pub static SAVED_RETURN_ADDR: AtomicUsize = AtomicUsize::new(0);
 static SAVED_KERNEL_SP: AtomicUsize = AtomicUsize::new(0);
 
@@ -803,11 +812,12 @@ pub fn load_archive_multi(
             .ok_or("cave virt offset overflow")?;
     }
 
-    // Total contiguous pages: all libs + a 1 MB (LOADED_STACK_PAGES) stack.
+    // Total contiguous pages: all libs + 1 MB user stack + 16 KB TLS.
     let total_bytes = next_virt_offset;
     let total_pages = total_bytes / PAGE_SIZE;
-    let stack_va_offset = next_virt_offset; // stack starts right after last lib
-    let grand_total_pages = total_pages + LOADED_STACK_PAGES;
+    let stack_va_offset = next_virt_offset;                       // stack follows last lib
+    let tls_va_offset   = stack_va_offset + LOADED_STACK_PAGES * PAGE_SIZE; // TLS after stack
+    let grand_total_pages = total_pages + LOADED_STACK_PAGES + LOADED_TLS_PAGES;
 
     // Enforce cave window.
     let cave_window_bytes = super::mmu::CAVE_BLOCKS * 0x200000;
@@ -868,8 +878,26 @@ pub fn load_archive_multi(
         core::arch::asm!("isb");
     }
 
-    // Stack sits right after the last lib.
+    // Stack sits right after the last lib; TLS right after the stack.
     let stack_phys = phys_base + stack_va_offset;
+    let tls_phys   = phys_base + tls_va_offset;
+
+    // Zero the TLS block. glibc's tcbhead_t layout on aarch64 is:
+    //   offset 0:  dtv pointer
+    //   offset 8:  private
+    //   offset 16: padding[2] (16 bytes)
+    //   offset 32: TLS data
+    // All zeros is enough to stop the first tpidr_el0 dereference from
+    // segfaulting — proper DTV + TLS initialization is follow-up work.
+    unsafe {
+        let tls_end = tls_phys + LOADED_TLS_PAGES * PAGE_SIZE;
+        let mut p = tls_phys;
+        while p < tls_end {
+            core::arch::asm!("str xzr, [{a}]", a = in(reg) p);
+            p += 8;
+        }
+    }
+
     // Publish loader state for `execute_with_args`. virt_entry + phys_base
     // + user_va_base all correspond to the MAIN exe (libs[0]).
     LOADED_ENTRY.store(libs[0].info.virt_entry as usize, Ordering::Relaxed);
@@ -877,8 +905,10 @@ pub fn load_archive_multi(
     LOADED_PHYS_BASE.store(libs[0].info.phys_base, Ordering::Relaxed);
     LOADED_STACK_PHYS.store(stack_phys, Ordering::Relaxed);
     LOADED_USER_VA_BASE.store(libs[0].info.virt_base as usize, Ordering::Relaxed);
+    LOADED_TLS_PHYS.store(tls_phys, Ordering::Relaxed);
 
     uart::puts("[loader/multi] stack phys 0x"); print_hex(stack_phys as u64);
+    uart::puts(", tls phys 0x"); print_hex(tls_phys as u64);
     uart::puts(", main virt_entry 0x"); print_hex(libs[0].info.virt_entry);
     uart::puts("\n");
 
@@ -996,10 +1026,15 @@ fn stage_copy_and_parse(lib: &mut LoadedLib) -> Result<(), &'static str> {
         lib.init_array_sz = init_array_sz;
 
 
-        // Derive sym_count from DT_HASH's nchain (DT_HASH format: nbucket,
-        // nchain, buckets[nbucket], chain[nchain]) or estimate generously
-        // from DT_GNU_HASH (which doesn't give total count directly; we
-        // use symtab_end derived from the reloc max r_sym).
+        // Derive sym_count. Prefer DT_HASH's nchain (exact); otherwise use
+        // the fact that ELF builders always place the symbol table
+        // IMMEDIATELY BEFORE the string table, so `(strtab_vaddr -
+        // symtab_vaddr) / 24` is a tight safe upper bound. The old
+        // fallback of 65536 was the bug behind our EC=0x22 crash: our
+        // cross-module resolver scanned FAR past the real symtab into
+        // random bytes, interpreted them as symbols, and "matched"
+        // garbage names — one such false match wrote 0xcf469e347c673dea
+        // to a GOT slot that then took down content_shell.
         lib.sym_count = 0;
         if hash_va != 0 {
             let hash_file = vaddr_to_file_off(data, phoff, phnum, phentsz, hash_va as usize);
@@ -1008,12 +1043,15 @@ fn stage_copy_and_parse(lib: &mut LoadedLib) -> Result<(), &'static str> {
                 lib.sym_count = nchain;
             }
         }
-        if lib.sym_count == 0 && gnu_hash_va != 0 {
-            // Rough upper bound: count symbols by scanning until we see
-            // a symbol with name_offset == 0 AND shndx == 0 AND value == 0.
-            // This is approximate but fine for a not-found lookup.
-            lib.sym_count = 65536; // cap — we bound loop iterations anyway
+        if lib.sym_count == 0 && symtab_va != 0 && strtab_va > symtab_va {
+            // Tight bound — strtab directly follows symtab in every
+            // mainstream linker.
+            lib.sym_count = ((strtab_va - symtab_va) / 24) as usize;
         }
+        if lib.sym_count == 0 {
+            lib.sym_count = 1; // at least the undefined slot
+        }
+        let _ = gnu_hash_va; // retained for future DT_GNU_HASH-based lookups
         break;
     }
     Ok(())
@@ -1146,31 +1184,39 @@ fn apply_relocs_cross(
                         _ => continue,
                     };
                     let sym_value = u64_at(data, sym_off + 8);
+                    let st_info   = data[sym_off + 4];
+                    let sym_bind  = st_info >> 4;             // STB_* — 2 = STB_WEAK
                     let sym_shndx = u16::from_le_bytes([data[sym_off+6], data[sym_off+7]]);
                     let value = if sym_shndx == 0 {
                         // UNDEF — try cross-module lookup first.
+                        let mut resolved: Option<u64> = None;
                         if strtab_file != usize::MAX {
                             let name_off = u32_at(data, sym_off) as usize;
                             let str_addr = strtab_file.saturating_add(name_off);
                             if str_addr < data.len() {
-                                // Find null-terminated name length.
                                 let end = data[str_addr..].iter()
-                                    .position(|&b| b == 0)
-                                    .unwrap_or(256);
+                                    .position(|&b| b == 0).unwrap_or(256);
                                 let name = &data[str_addr..str_addr + end];
-                                if let Some(v) = resolve_cross_module(libs, count, name) {
-                                    resolved_cross += 1;
-                                    (v as i64 + r_addend as i64) as u64
-                                } else {
-                                    unresolved += 1;
-                                    0xBAD0_0000_0000_0000u64 | ((r_sym as u64 & 0x0FFF_FFFF) << 4)
-                                }
-                            } else {
+                                resolved = resolve_cross_module(libs, count, name);
+                            }
+                        }
+                        match resolved {
+                            Some(v) => {
+                                resolved_cross += 1;
+                                (v as i64 + r_addend as i64) as u64
+                            }
+                            None if sym_bind == 2 => {
+                                // STB_WEAK unresolved → NULL. The caller is
+                                // expected to null-check this pointer (the
+                                // classic case is `__gmon_start__`, which
+                                // every PIE has as a weak ref and every
+                                // non-gprof program skips when null).
+                                0
+                            }
+                            None => {
                                 unresolved += 1;
                                 0xBAD0_0000_0000_0000u64 | ((r_sym as u64 & 0x0FFF_FFFF) << 4)
                             }
-                        } else {
-                            0xBAD0_0000_0000_0000u64 | ((r_sym as u64 & 0x0FFF_FFFF) << 4)
                         }
                     } else {
                         (sym_value as i64 + r_addend as i64 + value_offset) as u64
@@ -1600,19 +1646,33 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
 
     // TLS
     //
-    // V5-CHAIN-005 / V5-KMEM-007 fix: previously we wrote the raw
-    // kernel-physical address of the TLS page into tpidr_el0, which
-    // EL0 could read back via `mrs xN, tpidr_el0` (no trap). That
-    // leaked kernel RAM layout and gave a ROP chain a starting point.
-    // We now zero tpidr_el0 for EL0 entry. Binaries that rely on TLS
-    // (pthread) will fault on access; busybox static / hello / content_shell
-    // at launch do not. A proper per-cave-VA TLS mapping is Phase B.
-    let tls_page = frame::alloc_frame().ok_or("oom")?;
-    for i in 0..PAGE_SIZE {
-        unsafe { core::arch::asm!("strb wzr, [{a}]", a = in(reg) tls_page + i); }
+    // V5-CHAIN-005 / V5-KMEM-007 fix: never leak a kernel-physical TLS
+    // address into tpidr_el0 (EL0 can read it back via `mrs xN,
+    // tpidr_el0` with no trap — that used to hand a ROP chain a
+    // starting kernel pointer).
+    //
+    // Two paths now:
+    // 1. Multi-ELF cave (`load_archive_multi`) has reserved a TLS page
+    //    INSIDE the cave window. Use its user VA — the cave's L2 maps
+    //    it, EL0 can both read and write it, and no kernel address ever
+    //    hits tpidr_el0. glibc's tcbhead_t goes at offset 0 of this
+    //    page; everything is zero-initialized.
+    // 2. Legacy single-ELF path has no reserved TLS page. Keep the
+    //    pre-existing behaviour: zero tpidr_el0 and let the binary
+    //    fault if it touches TLS (busybox / hello / the small test
+    //    ELFs don't).
+    let tls_phys_reserved = LOADED_TLS_PHYS.load(Ordering::Relaxed);
+    if tls_phys_reserved != 0 {
+        let tls_uva = to_uva(tls_phys_reserved);
+        unsafe { core::arch::asm!("msr tpidr_el0, {}", in(reg) tls_uva); }
+    } else {
+        let tls_page = frame::alloc_frame().ok_or("oom")?;
+        for i in 0..PAGE_SIZE {
+            unsafe { core::arch::asm!("strb wzr, [{a}]", a = in(reg) tls_page + i); }
+        }
+        unsafe { core::arch::asm!("msr tpidr_el0, xzr"); }
+        let _ = tls_page;
     }
-    unsafe { core::arch::asm!("msr tpidr_el0, xzr"); }
-    let _ = tls_page; // still allocated; not leaked via tpidr_el0 any more
 
     // Enable MMU (idempotent: no-op if a cave page table is already loaded
     // via `switch_to_cave`, so the Chromium path keeps its rebased L1).

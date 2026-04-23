@@ -1024,10 +1024,39 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
         _ => {
             uart::puts("!!! UNHANDLED SYNC EXCEPTION !!!\n");
             uart::puts("  EC: 0x"); print_hex(ec);
+            uart::puts("  ISS: 0x"); print_hex(esr & 0x01FF_FFFF);
             uart::puts("\n");
+            let far: u64; let sp_el0: u64; let tp: u64;
+            unsafe {
+                core::arch::asm!("mrs {}, far_el1",    out(reg) far);
+                core::arch::asm!("mrs {}, sp_el0",     out(reg) sp_el0);
+                core::arch::asm!("mrs {}, tpidr_el0",  out(reg) tp);
+            }
             let elr = unsafe { (*frame).elr };
             uart::puts("  ELR: 0x"); print_hex(elr);
+            uart::puts("  FAR: 0x"); print_hex(far);
+            uart::puts("  SP:  0x"); print_hex(sp_el0);
+            uart::puts("  TP:  0x"); print_hex(tp);
             uart::puts("\n");
+            // x0..x8 dump — x8 is syscall number on ARM64; x0..x7 are
+            // either syscall args or scratch. Useful to tell a corrupt
+            // function-pointer call from an almost-working syscall.
+            unsafe {
+                for i in 0..9 {
+                    uart::puts("  x"); uart::putc(b'0' + i as u8);
+                    uart::puts("=0x"); print_hex((*frame).x[i]);
+                    if (i + 1) % 3 == 0 { uart::puts("\n"); }
+                    else { uart::puts("  "); }
+                }
+            }
+            uart::puts("\n");
+            // LR (x30) tells us the caller that made the bad jump. For a
+            // call-through-a-bad-pointer this is the instruction right
+            // after the `blr` that trapped.
+            unsafe {
+                uart::puts("  LR(x30)=0x"); print_hex((*frame).x[30]);
+                uart::puts("\n");
+            }
             loop { unsafe { core::arch::asm!("wfe") }; }
         }
     }
