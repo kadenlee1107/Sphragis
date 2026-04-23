@@ -11,6 +11,72 @@ end of a session.
 
 ---
 
+## 2026-04-22 21:25 — Mac — Followup #3c shipped end-to-end: kernel is a NAT router
+
+Kaden: "lets move onto 3c bro … we can push ultra hard on this next
+one." 8 more commits landed; Bat_OS now polices per-cave egress at
+the packet layer, not just at the daemon's HTTP CONNECT proxy.
+
+**What shipped:**
+
+| commit | piece |
+|---|---|
+| 753500c1 | 3c-multinic: virtio-net driver brings up two NICs (probe reversed to match QEMU declaration order). `nic-status` shell cmd. |
+| 7800624e | 3c-nat: `src/net/nat.rs` classifier — parse Eth/IPv4/TCP/UDP, ip→cave lookup, cave_policy verdict, counters. Synthetic 6-frame selftest. |
+| 00ccff82 | 3c-packet-e2e: `pump()` drains nic 1 live. Python sends real frames via `-netdev socket`; kernel classifies them. |
+| d6e1a741 | 3c-nat-forward: full bidirectional NAT. NAT table (64 slots), rewrite_outbound_into / rewrite_inbound_into with IPv4 + TCP/UDP checksums (pseudo-header), `pump_and_forward` + `pump_replies`. |
+| 2f2109fa | 3c-autopump: `nat::tick()` runs every desktop idle-loop iteration. Full E2E with NO manual shell ticks passes. |
+| 4169d7fa | 3c-daemon-bind: batcaved's `CAVE_NET_IP` exposed via `CPOL_BIND_LIST` + `CPOL_BIND_SET`. Kernel `nat-sync` shell cmd pulls. |
+| 83a770e2 | 3c-vmnet: `batcave create --docker` auto-syncs. `scripts/qemu_vmnet_launch.sh` wraps sudo vmnet. `DESIGN_PACKET_PIPELINE.md` full architecture. |
+
+**Flow:**
+  caves-container (192.168.77.10)
+    → nic 1 (virtio-net)
+    → kernel parses Eth/IP/TCP
+    → `nat::cave_for(src_ip)` → "kali"
+    → `cave_policy::check("kali", dst_ip_str, dst_port, proto)`
+    → if Allow: NAT-rewrite (src → 10.0.2.15:eph, checksums) → send nic 0
+    → QEMU slirp → internet
+    → reply arrives on nic 0
+    → `nat::pump_replies` looks up eph → finds entry
+    → reverse rewrite (dst → 192.168.77.10:cave_src_port) → send nic 1
+    → container sees the reply
+
+**Regression status (all 8 tests PASS):**
+  - cave-policy-selftest (6 allows + 5 drops)
+  - qemu_multinic_probe.py (both NICs up)
+  - nat-selftest (synthetic frames, counters match)
+  - qemu_nat_packet_e2e.py (real frames via socket netdev)
+  - qemu_nat_rewrite_demo.py (rewrite round-trip)
+  - qemu_nat_full_pipeline_e2e.py (cave ↔ internet via Python peer)
+  - qemu_nat_autopump_e2e.py (same, NO manual shell ticks)
+  - qemu_nat_daemon_bind_demo.py (daemon → kernel IP sync)
+
+**What's still pending:**
+- ARP on nic 1 (containers will ARP for 192.168.77.1)
+- ICMP / IP fragment support in the classifier
+- NAT table TTL-based GC (currently entries live forever)
+- Real-Docker integration test — `scripts/qemu_vmnet_launch.sh`
+  works, but needs interactive sudo + Docker macvlan setup that
+  didn't fit in the automated test harness.
+
+Commits this session total: 11
+  66a35bfc TLS hybrid (Followup #1)
+  092a2aa3 secure_ipc (Followup #2)
+  bc9a4738 3a kernel policy store
+  af2bf5ec 3b-shell cpol commands
+  c55a0c32 3b-sync daemon mirror
+  ee83cd3b 3b-enforce proxy per-cave
+  753500c1 3c-multinic
+  7800624e 3c-nat
+  00ccff82 3c-packet-e2e
+  d6e1a741 3c-nat-forward
+  2f2109fa 3c-autopump
+  4169d7fa 3c-daemon-bind
+  83a770e2 3c-vmnet
+
+---
+
 ## 2026-04-22 20:45 — Mac — Followup #3 data plane landed (3a + 3b-shell + 3b-sync + 3b-enforce)
 
 Kaden: "lets keep it moving!" Followup #3 (tap-device packet path) is
