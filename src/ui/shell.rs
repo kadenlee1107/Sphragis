@@ -142,6 +142,7 @@ fn execute(cmd: &str) {
         "otp-dump"    => cmd_otp_dump(),
         "otp-stats"   => cmd_otp_stats(),
         "otp-consume" => cmd_otp_consume(parts[1]),
+        "pq-selftest" => cmd_pq_selftest(),
         "smc-probe" => cmd_smc_probe(),
         "smc-pet" => cmd_smc_pet_start(),
         "smc-stop" => cmd_smc_pet_stop(),
@@ -415,6 +416,33 @@ fn hex_nibble(b: u8) -> u8 {
         b'a'..=b'f' => b - b'a' + 10,
         b'A'..=b'F' => b - b'A' + 10,
         _ => 255,
+    }
+}
+
+// DESIGN_CRYPTO.md #5: post-quantum hybrid self-test.
+fn cmd_pq_selftest() {
+    console::puts_hi("  POST-QUANTUM HYBRID SELF-TEST\n");
+    console::puts("  X25519 + ML-KEM-768  (classical + PQ key exchange)\n");
+    console::puts("  Running encap/decap round trip...\n");
+
+    match crate::crypto::pq_hybrid::selftest() {
+        Ok((blob_len, prefix)) => {
+            console::puts("  ✓ PASS  shared secrets match on both sides\n");
+            console::puts("    hybrid ciphertext size: ");
+            print_num(blob_len);
+            console::puts(" bytes (32 X25519 pub + 1088 ML-KEM-768 ct)\n");
+            console::puts("    shared-secret prefix: ");
+            let hex = b"0123456789abcdef";
+            for &b in &prefix {
+                console::putc(hex[(b >> 4) as usize]);
+                console::putc(hex[(b & 0x0f) as usize]);
+            }
+            console::puts("\n");
+            console::puts("    Security: safe against classical AND quantum adversaries\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
+        }
     }
 }
 

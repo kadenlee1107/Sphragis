@@ -36,6 +36,18 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 # (encrypt-then-MAC) with a single AEAD primitive: one pass,
 # constant-time by design, no timing side channels on the key.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+# DESIGN_CRYPTO.md priority #5 + #6: post-quantum KEM + signatures.
+# Hybrid construction — X25519 || ML-KEM-768 for key agreement,
+# Ed25519 || ML-DSA-65 for signatures — gives us classical security
+# today plus PQ security against future CRQC "store now, decrypt later"
+# attacks. Both NIST FIPS-203 / FIPS-204 standardized August 2024.
+ml-kem = { version = "0.2", default-features = false }
+ml-dsa = { version = "0.1.0-rc.8", default-features = false }
+# X25519 classical key agreement for the classical half of the hybrid.
+# Our current TLS stack constructs X25519 by hand against p256; moving
+# to the dedicated crate gives us clean interop.
+x25519-dalek = { version = "2", default-features = false, features = ["static_secrets"] }
+rand_core = { version = "0.6", default-features = false }
 
 [profile.dev]
 panic = "abort"

@@ -1404,8 +1404,21 @@ fn panic(info: &PanicInfo) -> ! {
     if let Some(location) = info.location() {
         drivers::uart::puts("  File: ");
         drivers::uart::puts(location.file());
+        drivers::uart::puts(":");
+        kernel::mm::print_num(location.line() as usize);
         drivers::uart::puts("\n");
     }
+    // info.message() is available on stable since 1.81; print it if any.
+    drivers::uart::puts("  Msg:  ");
+    use core::fmt::Write;
+    struct UartWriter;
+    impl Write for UartWriter {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            drivers::uart::puts(s); Ok(())
+        }
+    }
+    let _ = write!(UartWriter, "{}", info.message());
+    drivers::uart::puts("\n");
     // V8-ROOT-6: best-effort wipe of sensitive globals before halting.
     // If we panic while holding auth secrets, TLS keys, or BatFS keys,
     // an attacker with physical access could cold-boot the DRAM and
