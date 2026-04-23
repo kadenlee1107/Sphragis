@@ -119,6 +119,11 @@ Everything is exercised end-to-end on QEMU, no real Docker needed:
 | `qemu_nat_gc_demo.py` | TTL eviction per-proto | PASS |
 | `qemu_nat_icmp_e2e.py` | ICMP Echo Request/Reply through NAT | PASS |
 | `qemu_nat_fragment_demo.py` | fragment detection distinct from parse | PASS |
+| `qemu_nat_host_passthrough_e2e.py` | non-NAT nic-0 frames → host IP stack | PASS |
+| `qemu_nat_icmp_errors_e2e.py` | Dest-Unreach + Time-Exceeded through NAT | PASS |
+| `qemu_nat_frag_reassembly_e2e.py` | 2-fragment reassembly → NAT forward | PASS |
+| `qemu_vmnet_preflight.sh` | prerequisite checker (no sudo) | PASS |
+| `qemu_vmnet_docker_e2e.sh` | real alpine container through vmnet | manual sudo |
 
 ## Going live against real Docker containers
 
@@ -178,24 +183,52 @@ To wire a real Docker container onto nic 1:
   the visibility so operators can see "need larger MTU" instead of
   bucketing into drop-parse. Test: `qemu_nat_fragment_demo.py` PASS.
 
+## Deferred closures (2026-04-22 late)
+
+Four items marked deferred in the first cut of this doc shipped:
+
+- **pump_replies falls through to host IP stack** — before the fix,
+  any nic-0 frame that wasn't a NAT reply got silently consumed as
+  soon as the NAT table had entries. Now non-NAT frames get
+  re-dispatched to `net::dispatch_host_frame`. Counter
+  `host-frames-pass`. Test: `qemu_nat_host_passthrough_e2e.py`.
+
+- **ICMP error types** — Destination Unreachable (3) + Time Exceeded
+  (11) route back to the cave whose flow they refer to, via
+  embedded-header NAT rewrite: outer dst, inner src, inner L4 src
+  port, and all four checksums. Counter `icmp-error-deliv`. Test:
+  `qemu_nat_icmp_errors_e2e.py`.
+
+- **Outbound fragment reassembly** — `frag_accept` buffers fragments
+  per (src_ip, dst_ip, ip_id, proto) until complete, then feeds the
+  reassembled datagram through classify + NAT as if it had arrived
+  unfragmented. 4 concurrent slots, 2048-byte cap, 30s TTL via
+  `frag_gc_sweep`. Counters `frag-reassembled` + `frag-timeout`.
+  Test: `qemu_nat_frag_reassembly_e2e.py`.
+
+- **Real Docker-through-vmnet automation** — `scripts/qemu_vmnet_preflight.sh`
+  (no sudo, verifies QEMU has vmnet-host backend, Docker reachable,
+  kernel built, :9999 free, pexpect present) +
+  `scripts/qemu_vmnet_docker_e2e.sh` (sudo, full automated path:
+  daemon + QEMU + bridge discovery + macvlan + alpine container
+  with curl + shell drive + curl → container → bridge → nic 1 → NAT
+  → nic 0 → internet). Preflight passes on this Mac; the sudo
+  script is shell-lint-clean but only runs under interactive sudo.
+
 ## Still deferred
 
-- **Reassemble-and-NAT fragments** — buffered fragment table
-  (src_ip, ip_id, proto) → reassembled buffer, with egress
-  re-fragmentation. Independent multi-day chunk.
-- **Real Docker container through vmnet** — works per the recipe
-  above but requires sudo + Docker macvlan setup the test harness
-  doesn't automate. `scripts/qemu_vmnet_launch.sh` handles the
-  QEMU side; the Docker side is 3-4 manual commands in the design
-  doc.
-- **Other ICMP types** — destination-unreachable, time-exceeded,
-  redirect — all carry an embedded original header we'd have to
-  rewrite for stateless NAT to work. Ping is what operators
-  actually miss; the rest can wait.
-- **Packet path vs slirp**: Bat_OS's own IP stack also uses nic 0
-  (via `net::poll_once`). A reply arriving on nic 0 currently gets
-  tried by `nat::pump_replies` FIRST, then falls through to the
-  existing IP handlers. On an overlap (e.g. a reply whose port
-  collides with a real kernel socket) the NAT path wins. Desirable
-  today but worth reviewing once we load Bat_OS's own TLS client +
-  packet pipeline concurrently.
+Only the genuinely-not-worth-doing-today items remain:
+
+- **Inbound fragment reassembly** — replies from the internet rarely
+  fragment (slirp / modern MTU handling) and adding the state
+  machine on nic 0 would mostly be paranoia.
+- **Egress re-fragmentation** — if a reassembled datagram > nic 0's
+  MTU after NAT rewrite we'd need to split on the way out. Our
+  tests stay well under 1500 B; real jumbo-frame scenarios are
+  niche.
+- **Redirect / Parameter Problem / Source Quench ICMP types** — we
+  intentionally don't forward these. Redirect would subvert the
+  cave's routing (which we fully control); Parameter Problem
+  requires pointer-field rewriting that's rarely useful. Traceroute
+  + normal error reporting uses Dest Unreachable + Time Exceeded,
+  which we already do.
