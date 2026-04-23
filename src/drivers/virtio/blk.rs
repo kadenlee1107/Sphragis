@@ -161,14 +161,18 @@ fn submit_request(ty: u32, sector: u64, data_ptr: usize, data_len: usize,
 }
 
 /// Read `buf.len()` bytes starting at logical-sector `sector`.
-/// buf.len() must be a multiple of 512.
+/// buf.len() must be a multiple of 512. Bounds are enforced with
+/// checked_add so a malicious `sector` near u64::MAX can't wrap
+/// through the capacity check.
 pub fn read_sectors(sector: u64, buf: &mut [u8]) -> Result<(), &'static str> {
-    if sector + (buf.len() / BLK_SECTOR_SIZE) as u64 > capacity_sectors() {
+    if buf.len() > 4096 { return Err("blk read too large (buffer cap)"); }
+    let end_sector = sector.checked_add((buf.len() / BLK_SECTOR_SIZE) as u64)
+        .ok_or("blk read sector overflow")?;
+    if end_sector > capacity_sectors() {
         return Err("blk read past end of device");
     }
     let data_buf = DATA_BUF.load(Ordering::Relaxed);
     if data_buf == 0 { return Err("blk data buffer not allocated"); }
-    if buf.len() > 4096 { return Err("blk read too large (buffer cap)"); }
     submit_request(VIRTIO_BLK_T_IN, sector, data_buf, buf.len(), true)?;
     // Copy from scratch into the caller's buffer.
     for i in 0..buf.len() {
@@ -179,12 +183,14 @@ pub fn read_sectors(sector: u64, buf: &mut [u8]) -> Result<(), &'static str> {
 
 /// Write `buf.len()` bytes starting at logical-sector `sector`.
 pub fn write_sectors(sector: u64, buf: &[u8]) -> Result<(), &'static str> {
-    if sector + (buf.len() / BLK_SECTOR_SIZE) as u64 > capacity_sectors() {
+    if buf.len() > 4096 { return Err("blk write too large (buffer cap)"); }
+    let end_sector = sector.checked_add((buf.len() / BLK_SECTOR_SIZE) as u64)
+        .ok_or("blk write sector overflow")?;
+    if end_sector > capacity_sectors() {
         return Err("blk write past end of device");
     }
     let data_buf = DATA_BUF.load(Ordering::Relaxed);
     if data_buf == 0 { return Err("blk data buffer not allocated"); }
-    if buf.len() > 4096 { return Err("blk write too large (buffer cap)"); }
     // Copy into scratch.
     for i in 0..buf.len() {
         unsafe { core::ptr::write_volatile((data_buf + i) as *mut u8, buf[i]); }
