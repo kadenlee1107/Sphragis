@@ -143,6 +143,7 @@ fn execute(cmd: &str) {
         "otp-stats"   => cmd_otp_stats(),
         "otp-consume" => cmd_otp_consume(parts[1]),
         "pq-selftest" => cmd_pq_selftest(),
+        "pq-sig-selftest" => cmd_pq_sig_selftest(),
         "smc-probe" => cmd_smc_probe(),
         "smc-pet" => cmd_smc_pet_start(),
         "smc-stop" => cmd_smc_pet_stop(),
@@ -416,6 +417,29 @@ fn hex_nibble(b: u8) -> u8 {
         b'a'..=b'f' => b - b'a' + 10,
         b'A'..=b'F' => b - b'A' + 10,
         _ => 255,
+    }
+}
+
+// DESIGN_CRYPTO.md #6: post-quantum hybrid signature self-test.
+fn cmd_pq_sig_selftest() {
+    console::puts_hi("  POST-QUANTUM HYBRID SIGNATURE SELF-TEST\n");
+    console::puts("  Ed25519 + ML-DSA-65  (classical + PQ signatures)\n");
+    console::puts("  Keygen + sign + verify + tamper-detection round trip...\n");
+
+    match crate::crypto::pq_hybrid_sig::selftest() {
+        Ok((pub_len, sig_len, _prefix)) => {
+            console::puts("  ✓ PASS  verify OK + tamper rejected on BOTH halves\n");
+            console::puts("    hybrid public key: ");
+            print_num(pub_len);
+            console::puts(" bytes (32 Ed25519 pub + 1952 ML-DSA-65 pub)\n");
+            console::puts("    hybrid signature:  ");
+            print_num(sig_len);
+            console::puts(" bytes (64 Ed25519 sig + 3309 ML-DSA-65 sig)\n");
+            console::puts("    Unforgeable under classical AND quantum attack\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
+        }
     }
 }
 

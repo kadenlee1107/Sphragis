@@ -42,7 +42,8 @@ chacha20poly1305 = { version = "0.10", default-features = false, features = ["al
 # today plus PQ security against future CRQC "store now, decrypt later"
 # attacks. Both NIST FIPS-203 / FIPS-204 standardized August 2024.
 ml-kem = { version = "0.2", default-features = false }
-ml-dsa = { version = "0.1.0-rc.8", default-features = false }
+ml-dsa = { version = "0.1.0-rc.8", default-features = false, features = ["rand_core"] }
+hybrid-array = { version = "0.4", default-features = false }
 # X25519 classical key agreement for the classical half of the hybrid.
 # Our current TLS stack constructs X25519 by hand against p256; moving
 # to the dedicated crate gives us clean interop.
