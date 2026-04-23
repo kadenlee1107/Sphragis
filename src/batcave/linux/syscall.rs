@@ -1439,11 +1439,17 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         && (flags & MAP_PRIVATE_BIT) != 0
         && (flags & MAP_ANONYMOUS_BIT) != 0
     {
-        // Return the hint if the caller supplied one (V8 does); else
-        // pick a high-half VA. Don't actually allocate — EL0 will fault
-        // on first access to each page, which is where we'd normally
-        // demand-page. Logging the reservation so follow-on MAP_FIXED
-        // in the same range doesn't think it's a conflict.
+        // CHROMIUM-PHASE-A: return the caller's hint (or a high-half
+        // default) without allocating physical memory. V8's pointer-
+        // compression setup sends a 4 GB-aligned hint and will
+        // munmap + give up if we hand back a misaligned replacement
+        // (we tried picking 0x20000000 in-cave; V8 rejected that
+        // address and unmapped). Returning the hint passes the
+        // alignment check and lets the setup proceed to mprotect +
+        // first access — which will fault because the reserved range
+        // isn't in the cave's L2. Demand paging + L3 page tables are
+        // the real fix; this stub at least exposes the next
+        // boundary.
         let reserved = if addr != 0 { addr } else { 0x4000_0000_0000 };
         uart::puts("[mmap] reserve-only: len=");
         crate::kernel::mm::print_num(len / (1024 * 1024));
