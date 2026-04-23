@@ -141,8 +141,9 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
     uart::puts(" MB) into sandboxed cave...\n");
 
     // ROOT-1: Chromium runs in a per-cave page table with its user VA
-    // window at 0x10000000 — above MMIO (0x08M-0x0AM). The 200 MB cave
-    // window fits 150 MB of content_shell without hitting MMIO holes.
+    // window at 0x10000000 — above MMIO (0x08M-0x0AM). The cave window
+    // (mmu::CAVE_BLOCKS × 2 MB = 400 MB default) fits today's ~280 MB
+    // content_shell plus stack + heap headroom.
     const CHROMIUM_VIRT_BASE: u64 = 0x10000000;
 
     let cave_slot = super::mmu::alloc_cave_slot().ok_or("no free cave slots")?;

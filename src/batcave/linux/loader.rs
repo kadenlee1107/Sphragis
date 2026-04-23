@@ -400,8 +400,22 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
         }
     }
 
-    // Apply PT_DYNAMIC R_AARCH64_RELATIVE relocations.
-    // Patches go to physical (patch_offset); values use virt_base (value_offset).
+    // Apply PT_DYNAMIC relocations.
+    //   R_AARCH64_RELATIVE (0x403): *R = addend + value_offset
+    //   R_AARCH64_GLOB_DAT  (0x401): *R = sym_value + addend + value_offset
+    //   R_AARCH64_IRELATIVE (0x408): treat like RELATIVE for now — real
+    //                                support requires calling the resolver;
+    //                                this makes a call through the GOT hit
+    //                                the resolver itself rather than 0x0.
+    //   R_AARCH64_ABS32    (0x101): narrow 32-bit variant of GLOB_DAT, rare.
+    //
+    // Chromium content_shell has 539446 RELATIVE + 50 GLOB_DAT + 5 IRELATIVE
+    // + 20 ABS32 entries. Skipping GLOB_DAT left GOT slots at their pre-link
+    // placeholder (bare symbol value, e.g., 0x9909164), so the first call
+    // through the GOT jumped to 0x9909xxx — well below virt_base=0x10000000,
+    // landing in MMIO → instruction abort from EL0. This block brings
+    // GLOB_DAT under the same value_offset rebase as RELATIVE and looks up
+    // the symbol via DT_SYMTAB.
     let phys_range_end = phys_base.saturating_add(total_size);
     for i in 0..phnum {
         let ph = phoff + i * phentsz;
@@ -412,6 +426,9 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
         let dyn_size = u64_at(data, ph + 32) as usize;
         let mut rela_off: usize = 0;
         let mut rela_sz: usize = 0;
+        let mut jmprel_off: usize = 0;
+        let mut pltrel_sz: usize = 0;
+        let mut symtab_vaddr: usize = 0;
 
         // V8-ROOT-10: dyn_offset + dyn_size could wrap — bound dyn_end first.
         let dyn_end = match dyn_offset.checked_add(dyn_size) {
@@ -422,17 +439,60 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
         while pos + 16 <= dyn_end {
             let tag = u64_at(data, pos);
             let val = u64_at(data, pos + 8);
-            match tag { 0 => break, 7 => rela_off = val as usize, 8 => rela_sz = val as usize, _ => {} }
+            match tag {
+                0 => break,
+                6 => symtab_vaddr = val as usize, // DT_SYMTAB  (vaddr)
+                7 => rela_off = val as usize,     // DT_RELA    (vaddr)
+                8 => rela_sz  = val as usize,     // DT_RELASZ  (bytes)
+                0x17 => jmprel_off = val as usize, // DT_JMPREL (PLT rela vaddr)
+                0x02 => pltrel_sz  = val as usize, // DT_PLTRELSZ
+                _ => {}
+            }
             pos += 16;
         }
 
-        if rela_off > 0 && rela_sz > 0 {
-            let num = (rela_sz / 24).min(50_000_000);
+        // Turn a vaddr like `symtab_vaddr` into a file offset by scanning
+        // PT_LOAD. The caller (load_elf_rebased) already bounded these
+        // headers; we just need p_vaddr / p_offset / p_filesz to locate
+        // each vaddr in the file. Returns usize::MAX when the vaddr is
+        // not covered by any PT_LOAD.
+        let vaddr_to_file_off = |va: usize| -> usize {
+            for j in 0..phnum {
+                let ph_j = phoff + j * phentsz;
+                if ph_j + phentsz > data.len() { break; }
+                if u32_at(data, ph_j) != 1 { continue; }
+                let p_offset_j = u64_at(data, ph_j + 8) as usize;
+                let p_vaddr_j  = u64_at(data, ph_j + 16) as usize;
+                let p_filesz_j = u64_at(data, ph_j + 32) as usize;
+                if va >= p_vaddr_j && va < p_vaddr_j.saturating_add(p_filesz_j) {
+                    return p_offset_j.saturating_add(va - p_vaddr_j);
+                }
+            }
+            usize::MAX
+        };
+        let symtab_file = vaddr_to_file_off(symtab_vaddr);
+
+        // Apply relocations from both the main RELA table AND the PLT rela
+        // table. Static-PIE Chromium carries 340 R_AARCH64_JUMP_SLOT entries
+        // in .rela.plt pointing at functions in the same binary — skipping
+        // those leaves PLT stubs jumping into unrelocated symbol values
+        // (e.g., a function at vaddr 0x9909164 stays 0x9909164 instead of
+        // being rebased to 0x19909164, landing in MMIO on the first call).
+        let mut applied_rel = 0usize;
+        let mut applied_glob = 0usize;
+        let mut applied_irel = 0usize;
+        let mut applied_jump = 0usize;
+        for &(tbl_off, tbl_sz, label_is_plt) in &[
+            (rela_off, rela_sz, false),
+            (jmprel_off, pltrel_sz, true),
+        ] {
+            if tbl_off == 0 || tbl_sz == 0 { continue; }
+            let num = (tbl_sz / 24).min(50_000_000);
             uart::puts("[loader] Applying "); crate::kernel::mm::print_num(num);
-            uart::puts(" relocations (rebased)\n");
-            let mut applied = 0usize;
+            uart::puts(if label_is_plt { " plt relocs (rebased)\n" }
+                       else            { " rela relocs (rebased)\n" });
             for r in 0..num {
-                let re = match rela_off.checked_add(r.checked_mul(24).unwrap_or(usize::MAX)) {
+                let re = match tbl_off.checked_add(r.checked_mul(24).unwrap_or(usize::MAX)) {
                     Some(v) => v,
                     None => break,
                 };
@@ -441,27 +501,108 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
                     _ => break,
                 }
                 let r_offset = u64_at(data, re);
-                let r_info = u64_at(data, re + 8);
+                let r_info   = u64_at(data, re + 8);
                 let r_addend = u64_at(data, re + 16);
-                if (r_info & 0xFFFFFFFF) as u32 == 0x403 {
-                    let patch_addr = (r_offset as i64 + patch_offset) as usize;
-                    let value      = (r_addend as i64 + value_offset) as u64;
-                    let patch_end = match patch_addr.checked_add(8) {
-                        Some(v) => v,
-                        None => continue,
-                    };
-                    if patch_addr < phys_base || patch_end > phys_range_end {
-                        continue; // hostile / stray — silent skip
+                let r_type   = (r_info & 0xFFFFFFFF) as u32;
+                let r_sym    = (r_info >> 32) as usize;
+
+                let patch_addr = (r_offset as i64 + patch_offset) as usize;
+                let patch_end = match patch_addr.checked_add(8) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                if patch_addr < phys_base || patch_end > phys_range_end {
+                    continue; // hostile / stray — silent skip
+                }
+
+                match r_type {
+                    0x403 => {
+                        // R_AARCH64_RELATIVE: base + addend
+                        let value = (r_addend as i64 + value_offset) as u64;
+                        unsafe {
+                            core::arch::asm!("str {v}, [{a}]",
+                                a = in(reg) patch_addr, v = in(reg) value);
+                        }
+                        applied_rel += 1;
                     }
-                    unsafe {
-                        core::arch::asm!("str {v}, [{a}]",
-                            a = in(reg) patch_addr, v = in(reg) value);
+                    0x401 | 0x402 => {
+                        // R_AARCH64_GLOB_DAT (0x401) / R_AARCH64_JUMP_SLOT
+                        // (0x402): both compute *R = sym_value + addend + base.
+                        // For a static-PIE (no dynamic linker to do lazy
+                        // binding) the JUMP_SLOT formula is identical to
+                        // GLOB_DAT — we just need the symbol's defined
+                        // vaddr from DT_SYMTAB.
+                        if symtab_file == usize::MAX { continue; }
+                        let sym_file = match symtab_file
+                            .checked_add(r_sym.checked_mul(24).unwrap_or(usize::MAX))
+                        {
+                            Some(v) if v + 24 <= data.len() => v,
+                            _ => continue,
+                        };
+                        let sym_value = u64_at(data, sym_file + 8); // Elf64_Sym::st_value
+                        let sym_shndx = u64::from(
+                            u16::from_le_bytes([data[sym_file + 6], data[sym_file + 7]])
+                        );
+                        // SHN_UNDEF (shndx == 0): the symbol is not defined
+                        // inside THIS binary — e.g., `printf`, `__libc_start_main`,
+                        // `pthread_*`, compiler-rt `__divti3`. A real static
+                        // PIE (musl-linked) wouldn't have these. content_shell
+                        // as built today is dynamically linked against glibc
+                        // (567 undef symbols). Rather than writing `base + 0`
+                        // and having EL0 call into the rodata segment at
+                        // virt_base (mysterious EC=0 crash at 0x10000000),
+                        // stash a sentinel containing the symbol index. When
+                        // EL0 tries to call through the GOT, it instruction-
+                        // aborts with FAR=0xBAD_UNDEF...[idx], which the
+                        // sync-exception handler decodes into a human-
+                        // readable "undef sym #X called" log.
+                        let value = if sym_shndx == 0 {
+                            // 0xBAD0_0000_0000_0000 | (sym_idx << 4)
+                            // The <<4 keeps the low 4 bits zero so the CPU
+                            // raises a plain instruction abort (EC=0x20)
+                            // on PC fetch rather than a PC-alignment fault
+                            // (EC=0x22), and leaves room for a human-readable
+                            // 0xBAD prefix at bit 63:52. The sync handler
+                            // tests for this pattern and prints the symbol
+                            // name.
+                            0xBAD0_0000_0000_0000u64 | ((r_sym as u64 & 0x0FFF_FFFF) << 4)
+                        } else {
+                            (sym_value as i64 + r_addend as i64 + value_offset) as u64
+                        };
+                        unsafe {
+                            core::arch::asm!("str {v}, [{a}]",
+                                a = in(reg) patch_addr, v = in(reg) value);
+                        }
+                        if r_type == 0x402 { applied_jump += 1; }
+                        else               { applied_glob += 1; }
                     }
-                    applied += 1;
+                    0x408 => {
+                        // R_AARCH64_IRELATIVE: *R = resolver() — but we
+                        // can't call user code during load yet. Writing the
+                        // resolver's address is a survivable approximation
+                        // (a call through the GOT invokes the resolver,
+                        // which returns the variant pointer and typically
+                        // has no side effects). TODO: call the resolver at
+                        // load-time in EL1 to get the real value.
+                        let value = (r_addend as i64 + value_offset) as u64;
+                        unsafe {
+                            core::arch::asm!("str {v}, [{a}]",
+                                a = in(reg) patch_addr, v = in(reg) value);
+                        }
+                        applied_irel += 1;
+                    }
+                    _ => {
+                        // ABS32 (0x101), TLS_*, etc. — ignore for now.
+                    }
                 }
             }
-            uart::puts("[loader] Applied "); crate::kernel::mm::print_num(applied);
-            uart::puts(" R_RELATIVE (rebased)\n");
+        }
+        if applied_rel + applied_glob + applied_irel + applied_jump > 0 {
+            uart::puts("[loader] Applied "); crate::kernel::mm::print_num(applied_rel);
+            uart::puts(" REL, "); crate::kernel::mm::print_num(applied_glob);
+            uart::puts(" GLOB, "); crate::kernel::mm::print_num(applied_jump);
+            uart::puts(" JUMP, "); crate::kernel::mm::print_num(applied_irel);
+            uart::puts(" IREL (rebased)\n");
         }
     }
 
@@ -494,9 +635,9 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
             return Err("non-contiguous rebased stack alloc (memory fragmented)");
         }
     }
-    // Cave virt window is 100 blocks × 2 MB = 200 MB (see
-    // mmu::setup_cave_pagetable_at). ELF + stack must fit under that.
-    let cave_window_bytes: usize = 100 * 0x200000;
+    // Cave virt window = CAVE_BLOCKS × 2 MB (400 MB default — see
+    // mmu::CAVE_BLOCKS). ELF + stack must fit under that.
+    let cave_window_bytes: usize = super::mmu::CAVE_BLOCKS * 0x200000;
     if total_pages * PAGE_SIZE + LOADED_STACK_PAGES * PAGE_SIZE > cave_window_bytes {
         return Err("ELF + stack > cave user window");
     }

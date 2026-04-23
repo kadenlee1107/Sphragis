@@ -30,3 +30,11 @@
 # Split-file parts — don't track source files if they're already split.
 macos_dump/kernelcache.mac16j.bin
 macos_dump/SystemKernelExtensions.kc
+
+# Chromium content_shell output — 293 MB PIE binary produced by
+# ports/chromium_port/build.sh (in Docker) + manually copied out of
+# the batos-chromium-src volume. Not source. Reproduce via:
+#   docker run --rm -v batos-chromium-src:/src \
+#       -v $(pwd)/ports/chromium_port/out:/out \
+#       alpine cp /src/src/out/BatOs/content_shell /out/content_shell
+/ports/chromium_port/out/

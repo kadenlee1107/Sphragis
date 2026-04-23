@@ -30,6 +30,71 @@ LOG = ROOT / f"logs/qemu-tests/chromium-smoke-{datetime.now().strftime('%Y%m%d-%
 LOG.parent.mkdir(parents=True, exist_ok=True)
 PROMPT = rb"bat_os\s*>\s*"
 
+
+def _resolve_undef_sym(elf_path: Path, sym_idx: int) -> str:
+    """Look up the name of undef symbol #sym_idx in a content_shell-style ELF.
+
+    Walks PT_DYNAMIC for DT_SYMTAB + DT_STRTAB, pulls the sym_idx'th entry,
+    returns the name. Returns "(idx=N)" if the ELF can't be read. Kept here
+    (not imported) because the smoke script has to work in a bare venv on
+    an environment that may not have pyelftools.
+    """
+    import struct
+    if not elf_path.exists():
+        return f"(idx={sym_idx}, no ELF)"
+    try:
+        with open(elf_path, "rb") as f:
+            data = f.read()
+        phoff = struct.unpack("<Q", data[0x20:0x28])[0]
+        phnum = struct.unpack("<H", data[0x38:0x3A])[0]
+        vranges = []
+        for i in range(phnum):
+            hdr = data[phoff + i * 56 : phoff + i * 56 + 56]
+            p_type, _, p_offset, p_vaddr, _, p_filesz, _, _ = struct.unpack(
+                "<IIQQQQQQ", hdr
+            )
+            if p_type == 1:
+                vranges.append((p_vaddr, p_filesz, p_offset))
+
+        def v2f(va):
+            for v, sz, off in vranges:
+                if v <= va < v + sz:
+                    return off + (va - v)
+            return None
+
+        dyn_off = dyn_size = 0
+        for i in range(phnum):
+            hdr = data[phoff + i * 56 : phoff + i * 56 + 56]
+            p_type, _, _, _, _, p_filesz, _, _ = struct.unpack("<IIQQQQQQ", hdr)
+            if p_type == 2:
+                dyn_off = struct.unpack("<Q", hdr[8:16])[0]
+                dyn_size = p_filesz
+                break
+
+        symtab_va = strtab_va = 0
+        pos, end = dyn_off, dyn_off + dyn_size
+        while pos < end:
+            tag, val = struct.unpack("<QQ", data[pos : pos + 16])
+            if tag == 5:
+                strtab_va = val
+            elif tag == 6:
+                symtab_va = val
+            if tag == 0:
+                break
+            pos += 16
+
+        symtab = v2f(symtab_va)
+        strtab = v2f(strtab_va)
+        if symtab is None or strtab is None:
+            return f"(idx={sym_idx}, no symtab)"
+
+        sym_off = symtab + sym_idx * 24
+        name_off = struct.unpack("<I", data[sym_off : sym_off + 4])[0]
+        nm_end = data.index(b"\x00", strtab + name_off)
+        return data[strtab + name_off : nm_end].decode("utf-8", "ignore") or f"(idx={sym_idx}, no name)"
+    except Exception as e:
+        return f"(idx={sym_idx}, err: {e})"
+
 def main():
     # Use the -initrd path + FLAT KERNEL IMAGE (not ELF) so QEMU
     # honours the ARM64 Linux boot protocol and delivers the DTB
@@ -132,6 +197,25 @@ def main():
         # runtime bit.
         if re.search(r"chromium: |chromium exited OK|refusing|content_shell", raw):
             verdict = "PIPELINE-REACHED"
+
+        # Decode any 0xBAD0.... sentinels the loader wrote for SHN_UNDEF
+        # PLT/GOT slots. Pattern: 0xBAD0_0000_0000_0000 | (sym_idx << 4).
+        # When content_shell's first libc call fires, we trap on PC=this
+        # sentinel and can print the symbol name from the content_shell
+        # symbol table — turns an opaque "ELR: 0xbad0000000000010" into a
+        # "UNDEF symbol __libc_start_main called (sym #1)" diagnostic.
+        undef_sentinel = re.search(r"ELR: 0x([0-9a-f]{16})", raw)
+        if undef_sentinel:
+            elr = int(undef_sentinel.group(1), 16)
+            if (elr & 0xFFF0_0000_0000_0000) == 0xBAD0_0000_0000_0000:
+                sym_idx = (elr >> 4) & 0x0FFF_FFFF
+                name = _resolve_undef_sym(ROOT / "ports/chromium_port/out/content_shell",
+                                         sym_idx)
+                print(f"\n[smoke] UNDEF symbol call: sym #{sym_idx} = {name}")
+                print("[smoke] content_shell reached its libc-init phase and")
+                print("[smoke] called a glibc-resolved symbol that Bat_OS has")
+                print("[smoke] no implementation for. This is Phase 4 / Phase 2")
+                print("[smoke] work (see ports/chromium_port/STATE_2026-04-23.md).")
 
         # Print the last 30 lines for visibility.
         print("\n--- last serial output ---")

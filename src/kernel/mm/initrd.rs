@@ -28,8 +28,12 @@ const MAGIC_HEAD: [u8; 8] = *b"BATCHROM";
 const MAGIC_TAIL: [u8; 8] = *b"CHROMEND";
 
 /// Upper bound we'll trust a declared blob size against.
-/// 256 MB is comfortably larger than a stripped content_shell.
-const MAX_BLOB_SIZE: usize = 256 * 1024 * 1024;
+/// A non-stripped ARM64 content_shell weighs ~280 MB (measured
+/// 2026-04-23 from the Chromium 132 checkout). Keep the ceiling a
+/// comfortable step above that so future blob growth doesn't silently
+/// re-trip the probe with "size implausible → skip candidate" — the
+/// user sees "no blob" and thinks the bake failed.
+const MAX_BLOB_SIZE: usize = 512 * 1024 * 1024;
 
 /// Safety cap on how far past `__kernel_end` we will search. Under QEMU
 /// virt the frame allocator sits at `MEMORY_END = 2 GB`, so anything

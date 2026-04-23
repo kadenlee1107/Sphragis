@@ -30,6 +30,13 @@ fn text_end_addr() -> u64 {
 const PAGE_SIZE: usize = 4096;
 const ENTRIES_PER_TABLE: usize = 512;
 
+/// Cave user-window size in 2 MB blocks. 400 MB = 200 × 2 MB, large enough
+/// for a real Chromium content_shell (~280 MB today) plus headroom for
+/// future growth. Each cave maps `CAVE_BLOCKS` × 2 MB starting at its
+/// `virt_base` (0x10000000 for Chromium, above MMIO at indices 64..82).
+/// Also consulted by `loader::load_elf_rebased` via `CAVE_BLOCKS_PUB`.
+pub const CAVE_BLOCKS: usize = 200;
+
 // Page table entry flags
 const PTE_VALID: u64 = 1;
 const PTE_TABLE: u64 = 1 << 1;  // Points to next-level table
@@ -282,28 +289,34 @@ pub fn setup_cave_pagetable_at(
     let l1 = frame::alloc_kernel_frame().ok_or("oom for cave L1 (kernel pool)")?;
     let l2_low = frame::alloc_kernel_frame().ok_or("oom for cave L2_low (kernel pool)")?;
     let l2_high = frame::alloc_kernel_frame().ok_or("oom for cave L2_high (kernel pool)")?;
+    // INITRD-FIX 2: same 2 GB identity widen as `setup_and_enable` — the
+    // cave needs to reach its own phys_base (which for a 280 MB content_shell
+    // can land past 0x50000000) via the kernel identity map while syscalls
+    // run under the cave's TTBR0.
+    let l2_xhi = frame::alloc_kernel_frame().ok_or("oom for cave L2_xhi (kernel pool)")?;
 
     // Zero tables
-    for table in [l1, l2_low, l2_high] {
+    for table in [l1, l2_low, l2_high, l2_xhi] {
         for i in 0..(PAGE_SIZE / 8) {
             unsafe { core::arch::asm!("str xzr, [{a}]", a = in(reg) table + i * 8); }
         }
     }
 
-    // L1[0] → L2_low, L1[1] → L2_high
+    // L1[0] → L2_low, L1[1] → L2_high, L1[2] → L2_xhi
     write_pte(l1, 0, l2_low as u64 | TABLE_DESC);
     write_pte(l1, 1, l2_high as u64 | TABLE_DESC);
+    write_pte(l1, 2, l2_xhi as u64 | TABLE_DESC);
 
-    // L2_low: map THIS cave's user-space binary (200 MB window starting
+    // L2_low: map THIS cave's user-space binary (400 MB window starting
     // at `virt_base`).  With `virt_base = 0x10000000` the user blocks
-    // live at L2 indices 128..227 — above MMIO (indices 64/72/80/81/82),
-    // so 150 MB Chromium and future bigger binaries no longer collide.
+    // live at L2 indices 128..327 — above MMIO (indices 64/72/80/81/82),
+    // so real content_shell (280 MB today, may grow) fits with headroom.
     //
     // W^X CAVEAT (ROOT-3): we still use BLOCK_USER_RW_EXEC because
     // Chromium/V8 JIT needs W+X pages. Per-PT_LOAD PF_X/PF_W permissions
     // are future work; kernel-side W^X is unaffected.
     let virt_base_block = (virt_base / 0x200000) as usize;
-    for i in 0..100 {
+    for i in 0..CAVE_BLOCKS {
         let block_idx = virt_base_block + i;
         if block_idx >= 512 { break; }
         let phys_block = (phys_base & !0x1FFFFF) + i * 0x200000;
@@ -324,25 +337,25 @@ pub fn setup_cave_pagetable_at(
         write_pte(l2_low, mmio / 0x200000, mmio as u64 | BLOCK_DEVICE);
     }
 
-    // L2_high: identity map kernel RAM with W^X.
-    //
-    // INITRD-FIX: mirror the transitional map from setup_and_enable. Rust
-    // places `.text.cold.*` past __text_end (inside the rodata segment), and
-    // after a `switch_to_cave` that lands TTBR0 on a cave-owned L2 the first
-    // instruction fetch goes through THIS table, so the same widening applies
-    // here. Without it, every switch_to_cave in the Chromium path
-    // instruction-aborts on the next insn the CPU fetches from 0x402xxxxx.
-    // TODO (V9): undo once *(.text.cold.*) lives inside the .text segment.
+    // L2_high + L2_xhi: identity map full 2 GB kernel RAM (mirror
+    // `setup_and_enable`). Transitional widen past __text_end stays in
+    // place until .text.cold.* actually lands inside the .text segment.
     let text_end = text_end_addr();
-    for block in 0..128 {
-        let addr = 0x40000000u64 + (block as u64) * 0x200000;
-        let flags = if addr + 0x200000 <= text_end {
+    let kblk = |addr: u64| -> u64 {
+        if addr + 0x200000 <= text_end {
             BLOCK_KERNEL_TEXT
         } else {
             PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL
                 | PTE_AP_EL1_RW | PTE_UXN
-        };
-        write_pte(l2_high, block, addr | flags);
+        }
+    };
+    for block in 0..512 {
+        let addr = 0x40000000u64 + (block as u64) * 0x200000;
+        write_pte(l2_high, block, addr | kblk(addr));
+    }
+    for block in 0..512 {
+        let addr = 0x80000000u64 + (block as u64) * 0x200000;
+        write_pte(l2_xhi, block, addr | kblk(addr));
     }
 
     unsafe {
@@ -352,8 +365,8 @@ pub fn setup_cave_pagetable_at(
         // outside the cave that's actually mounted (vs. the legacy coarse
         // 0x1000..0x4000_0000 window).
         CAVE_VIRT_BASE[cave_slot] = virt_base as usize;
-        // Match the 100-block (200 MB) loop above.
-        CAVE_VIRT_EXTENT[cave_slot] = 100 * 0x200000;
+        // Match the CAVE_BLOCKS loop above (400 MB by default).
+        CAVE_VIRT_EXTENT[cave_slot] = CAVE_BLOCKS * 0x200000;
     }
 
     Ok(l1)
@@ -442,9 +455,20 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     let l1 = frame::alloc_kernel_frame().ok_or("oom for primary L1")?;
     let l2_low = frame::alloc_kernel_frame().ok_or("oom for primary L2 low")?;
     let l2_high = frame::alloc_kernel_frame().ok_or("oom for primary L2 high")?;
+    // INITRD-FIX 2: kernel-pool frames sit near the top of RAM (observed
+    // 0xbffff000 on `-m 4G virt`), and a real content_shell baked into
+    // initrd spans ~280 MB starting around 0x48000000 — both past the old
+    // 256 MB (0x40000000..0x50000000) identity window. We now map the full
+    // 2 GB frame pool with two more L2 tables:
+    //   L1[1] → L2_high  covers 0x40000000..0x7FFFFFFF (1 GB)
+    //   L1[2] → L2_xhi   covers 0x80000000..0xBFFFFFFF (1 GB)
+    // Without L2_xhi every write to a kernel frame above 0x80000000 —
+    // including ELF loader copies to the rebased cave's phys_base+ELF
+    // image — faults DATA ABORT DFSC=0x06.
+    let l2_xhi = frame::alloc_kernel_frame().ok_or("oom for primary L2 xhi")?;
 
     // Zero all tables
-    for table in [l0, l1, l2_low, l2_high] {
+    for table in [l0, l1, l2_low, l2_high, l2_xhi] {
         for i in 0..(PAGE_SIZE / 8) {
             let addr = table + i * 8;
             unsafe {
@@ -460,6 +484,8 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     write_pte(l1, 0, l2_low as u64 | TABLE_DESC);
     // L1[1] → L2_high (covers 0x40000000 - 0x7FFFFFFF)
     write_pte(l1, 1, l2_high as u64 | TABLE_DESC);
+    // L1[2] → L2_xhi  (covers 0x80000000 - 0xBFFFFFFF)
+    write_pte(l1, 2, l2_xhi as u64 | TABLE_DESC);
 
     // L2_low: Map busybox virtual addresses to physical.
     // Block 0: 0x00000000-0x001FFFFF → phys_base (busybox code segment 1).
@@ -488,35 +514,36 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
         write_pte(l2_low, block, phys_block as u64 | BLOCK_USER_RW_EXEC);
     }
 
-    // L2_high: Identity map kernel RAM (0x40000000 - 0x4FFFFFFF), 256MB =
-    // 128 × 2MB blocks, with W^X split at __text_end. See the matching
-    // comment in setup_cave_pagetable above.
+    // L2_high + L2_xhi: Identity map the full 2 GB frame pool
+    // (0x40000000 - 0xBFFFFFFF) with the same W^X split at __text_end.
     //
-    // INITRD-FIX: With QEMU `-kernel Image` + flat binary, Rust is producing
-    // `.text.cold.*` variants that end up in the rodata PT_LOAD (segment 1,
-    // 0x40200000+), OUTSIDE __text_end=0x40200000. That makes block 1 get
-    // BLOCK_KERNEL_DATA (PXN set) and the first insn fetch after MMU-enable
-    // hits an instruction abort (observed: PC=0x402986ec after `msr sctlr`).
-    // As a pragmatic fix while the linker script is reworked, mark ALL kernel
-    // RAM as text-capable (RO + EL1-exec). Kernel writes to .data/.bss now
-    // go through the RO mapping... that's also wrong. So we need a more
-    // permissive transitional map: every block gets EL1-RW, EL1-exec, UXN.
-    // This loses the EL1 W^X property but keeps the kernel bootable.
-    // TODO (V9): restore W^X by linking .text.cold.* into the text segment
-    // via a `*(.text.cold.*)` glob, then revert this to the split loop.
+    // INITRD-FIX notes (both folded in here):
+    //  1. Rust scatters executable code past __text_end into the rodata
+    //     PT_LOAD, so the post-text blocks must stay EL1-exec. Transitional
+    //     widen to EL1-RW + EL1-exec + UXN (loses EL1 W^X). TODO V9: revert
+    //     once `.text.cold.*` lands inside the text segment reliably.
+    //  2. Real content_shell initrd lives at 0x48000000..~0x60000000 and
+    //     kernel-pool frames sit near 0xBFFFX000 — both past the old 256 MB
+    //     window. Extending to 2 GB via L2_xhi (L1[2]) keeps every kernel
+    //     write reachable through TTBR0 after MMU-enable.
     let text_end = text_end_addr();
-    for block in 0..128 {
-        let addr = 0x40000000u64 + (block as u64) * 0x200000;
-        let flags = if addr + 0x200000 <= text_end {
-            BLOCK_KERNEL_TEXT  // RO + EL1-exec, for the real .text only
+    let kernel_blk_flags = |addr: u64| -> u64 {
+        if addr + 0x200000 <= text_end {
+            BLOCK_KERNEL_TEXT  // RO + EL1-exec (real .text only)
         } else {
-            // Transitional: EL1-RW + EL1-exec + UXN. Loses W^X within
-            // kernel RAM but keeps the MMU-enable fetch working when
-            // Rust scatters code through rodata/data segments.
+            // EL1-RW + EL1-exec + UXN. Loses EL1 W^X; keeps MMU-enable
+            // fetch + large-initrd writes working.
             PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL
                 | PTE_AP_EL1_RW | PTE_UXN
-        };
-        write_pte(l2_high, block, addr | flags);
+        }
+    };
+    for block in 0..512 {
+        let addr = 0x40000000u64 + (block as u64) * 0x200000;
+        write_pte(l2_high, block, addr | kernel_blk_flags(addr));
+    }
+    for block in 0..512 {
+        let addr = 0x80000000u64 + (block as u64) * 0x200000;
+        write_pte(l2_xhi, block, addr | kernel_blk_flags(addr));
     }
 
     uart::puts("[mmu] Page tables built\n");

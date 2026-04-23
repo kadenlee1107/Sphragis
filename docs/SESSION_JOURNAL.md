@@ -11,6 +11,85 @@ end of a session.
 
 ---
 
+## 2026-04-23 15:10 — Mac — Real content_shell loads, reaches __libc_start_main
+
+Continued from the 12:35 entry. Kaden said "let's get moving" on the
+Chromium Docker build, so I pivoted to exercise the pipeline with a
+real binary. Discovered the `batos-chromium-src` Docker volume
+already contains a 293 MB content_shell from a build attempt on
+2026-04-19. Copied it out, baked into a BATCHROM initrd, pushed it
+through the smoke test, and iteratively fixed everything that came
+up. End result: content_shell loads at virt 0x10000000, applies
+539,446 R_RELATIVE + 50 R_GLOB_DAT + 550 R_JUMP_SLOT + 5
+R_IRELATIVE relocations, eret's into EL0, runs its C runtime
+startup, and cleanly halts at `__libc_start_main` — exactly the
+Phase 2 / Phase 4 boundary.
+
+What landed in this commit:
+
+1. **`mmu::CAVE_BLOCKS = 200`** — cave user window grew from 200 MB
+   to 400 MB. content_shell is 162 MB of PT_LOAD + 1 MB stack;
+   200 MB was just barely short and content_shell stack landed at
+   the edge of the old window.
+2. **Kernel identity map extended to a full 2 GB** via a third L2
+   table (`l2_xhi`) at L1[2] covering 0x80000000..0xBFFFFFFF. Fixes
+   two latent bugs: (a) cave page-table writes faulted when the
+   kernel allocator returned frames at ~0xBFFFX000 (observed
+   DATA ABORT DFSC=0x05 when running netsurf then chromium); (b)
+   ELF loader writes to phys_base + 162 MB landed past 0x50000000
+   for Chromium and faulted (DATA ABORT DFSC=0x06). Both flavours
+   fixed in one sweep. The "netsurf→chromium cave-setup crash"
+   noted in the previous journal entry is now closed.
+3. **`initrd::MAX_BLOB_SIZE` 256 MB → 512 MB.** 293 MB framed
+   initrd was being rejected as "declared size implausible."
+4. **Loader handles GLOB_DAT (0x401), JUMP_SLOT (0x402),
+   IRELATIVE (0x408)** on top of R_RELATIVE. Walks DT_SYMTAB to
+   resolve symbol vaddrs. Walks DT_JMPREL/DT_PLTRELSZ for the
+   separate PLT rela table (340 JUMP_SLOT entries in content_shell
+   that were silently dropped before — all function pointers in
+   the PLT that left the GOT holding their unrelocated symbol
+   values, so the first call through the PLT jumped to 0x09909xxx,
+   which lives in the MMIO device range of the cave map →
+   instruction abort at 0x9909400).
+5. **Undefined-symbol sentinel.** When GLOB_DAT/JUMP_SLOT targets
+   a SHN_UNDEF symbol (glibc functions content_shell expects a
+   dynamic linker to resolve), the loader writes
+   `0xBAD0_0000_0000_0000 | (sym_idx << 4)` into the GOT slot.
+   First call through the GOT faults with a recognisable ELR.
+   `qemu_chromium_pipeline_smoke.py` now parses this pattern,
+   walks DT_SYMTAB / DT_STRTAB in content_shell, and prints the
+   human-readable symbol name. Today's run reported:
+
+       [smoke] UNDEF symbol call: sym #2 = __libc_start_main
+
+**Root blocker found:** content_shell has 567 SHN_UNDEF symbols
+(glibc + compiler-rt + pthread surface). The build it came from
+links dynamically against the Chromium-bundled glibc sysroot, not
+musl. To execute, we need one of:
+
+- **(A) Musl-static rebuild** — update `.gn-args` + `Dockerfile`
+  for musl toolchain, run the 4-8 hr build again. Blocked on disk:
+  Mac has 30 GB free, OrbStack volume has 29 GB free, build needs
+  ~60 GB. Need to either prune 8 stale `batos-chromium-build`
+  tagged images (~21 GB reclaim) or offload to Ubuntu dev host
+  (currently unreachable — Tailscale timed out). **Recommended.**
+- **(B) Kernel-side libc stubs** — implement the 567 symbols in
+  Bat_OS. Compiler-rt helpers (`__divti3` etc.) ~50 symbols, maybe
+  a day. Pthread is 2–4 weeks minimum (futex, clone, signals, TLS).
+
+Updated `ports/chromium_port/STATE_2026-04-23.md` with the full
+decision doc. Extracted content_shell from the Docker volume to
+`ports/chromium_port/out/content_shell`; added to `.gitignore`
+(293 MB, not source, reproducible from the Docker volume).
+
+Next action (when disk is available): kick off the musl-static
+rebuild overnight. In the meantime, the kernel side is finished —
+the moment a static content_shell exists, the smoke test will
+either run clean or fault on the first un-implemented Bat_OS
+syscall (Phase 4).
+
+---
+
 ## 2026-04-23 12:35 — Mac — Chromium pipeline now reaches user code E2E
 
 Picked up where `eabded85` left off and finished wiring the delivery
