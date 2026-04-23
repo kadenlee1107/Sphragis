@@ -58,6 +58,9 @@ static NAT_GC_EVICTED: AtomicU32 = AtomicU32::new(0);
 /// the src port) — out of scope for this pipeline version. The
 /// existing rule: fragments are dropped distinctly and logged.
 static FRAG_DROPPED: AtomicU32 = AtomicU32::new(0);
+/// Number of times `send_with_fragmentation` had to split an oversized
+/// datagram back into IPv4 fragments before transmitting.
+static FRAG_REFRAGMENTED: AtomicU32 = AtomicU32::new(0);
 /// Frames pumped off nic 0 that were NOT NAT replies and got
 /// re-dispatched into the kernel's own IP stack. Tracks how many
 /// control-plane packets flowed through the NAT pump correctly.
@@ -89,6 +92,7 @@ pub struct Stats {
     pub host_frames_passed: u32,
     pub frag_reassembled: u32,
     pub frag_timeout: u32,
+    pub frag_refragmented: u32,
 }
 
 pub fn stats() -> Stats {
@@ -107,6 +111,7 @@ pub fn stats() -> Stats {
         host_frames_passed: HOST_FRAMES_PASSED.load(Ordering::Relaxed),
         frag_reassembled: FRAG_REASSEMBLED.load(Ordering::Relaxed),
         frag_timeout: FRAG_TIMEOUT.load(Ordering::Relaxed),
+        frag_refragmented: FRAG_REFRAGMENTED.load(Ordering::Relaxed),
     }
 }
 
@@ -125,6 +130,7 @@ pub fn reset_stats() {
     HOST_FRAMES_PASSED.store(0, Ordering::Relaxed);
     FRAG_REASSEMBLED.store(0, Ordering::Relaxed);
     FRAG_TIMEOUT.store(0, Ordering::Relaxed);
+    FRAG_REFRAGMENTED.store(0, Ordering::Relaxed);
 }
 
 // ── ARP on nic 1 (caves interface) ──────────────────────────────
@@ -273,7 +279,9 @@ pub fn pump_and_forward(nic0_ip: u32, nic0_mac: [u8; 6], gw_mac: [u8; 6]) -> (us
         };
         let mut out = Vec::from(work_frame);
         if rewrite_outbound_into(&mut out, flow, eph_port, nic0_ip, nic0_mac, gw_mac).is_ok() {
-            let _ = net::send_n(0, &out);
+            // Re-fragment if the rewritten datagram now exceeds nic 0's
+            // MTU (e.g. a cave that sent a fully-reassembled jumbo).
+            send_with_fragmentation(0, &out);
             forwarded += 1;
             if flow.proto == IPPROTO_ICMP {
                 ICMP_ECHO_FORWARDED.fetch_add(1, Ordering::Relaxed);
@@ -355,7 +363,7 @@ pub fn pump_replies(nic1_mac: [u8; 6]) -> (usize, usize) {
             Some(entry) => {
                 let mut out = Vec::from(work);
                 if rewrite_inbound_into(&mut out, &entry, nic1_mac).is_ok() {
-                    let _ = net::send_n(1, &out);
+                    send_with_fragmentation(1, &out);
                     delivered += 1;
                     if entry.proto == IPPROTO_ICMP {
                         ICMP_ECHO_DELIVERED.fetch_add(1, Ordering::Relaxed);
@@ -368,7 +376,7 @@ pub fn pump_replies(nic1_mac: [u8; 6]) -> (usize, usize) {
                 // cave flow we NAT'd — if so, rewrite + deliver.
                 let mut copy: Vec<u8> = Vec::from(work);
                 if try_rewrite_icmp_error_inbound(&mut copy, nic1_mac) {
-                    let _ = net::send_n(1, &copy);
+                    send_with_fragmentation(1, &copy);
                     ICMP_ERROR_DELIVERED.fetch_add(1, Ordering::Relaxed);
                     delivered += 1;
                 } else {
@@ -575,6 +583,101 @@ pub fn nat_table_clear() {
         }
     }
     NAT_NEXT_EPH.store(EPH_PORT_BASE as u32, Ordering::Relaxed);
+}
+
+// ── Egress re-fragmentation ──────────────────────────────────────
+//
+// After NAT rewrite (or after upstream we just reassembled a
+// fragmented inbound reply), the resulting Ethernet frame may be
+// larger than the destination NIC's MTU. Real Ethernet caps the
+// payload at 1500 B (so 1514 with header). virtio-net guests CAN
+// usually accept oversized frames, but doing the right thing means
+// re-fragmenting the IPv4 datagram so what leaves the NIC is wire-
+// legal.
+//
+// `send_with_fragmentation` checks the frame size and splits if
+// needed, recomputing the IPv4 header per fragment.
+
+const NIC_MTU: usize = 1500;
+/// Max payload bytes per non-last fragment. Must be a multiple of 8
+/// because IPv4 fragment offset is in 8-byte units. 1480 = 1500 MTU
+/// minus 20 IPv4 header, and 1480 % 8 == 0.
+const FRAG_PAYLOAD_MAX: usize = 1480;
+
+/// Send `frame` on `nic`. If the IPv4 datagram exceeds NIC_MTU and
+/// the DF bit isn't set, split into IPv4 fragments and emit each.
+/// Returns the number of frames actually transmitted.
+pub fn send_with_fragmentation(nic: usize, frame: &[u8]) -> usize {
+    use crate::drivers::virtio::net;
+    if frame.len() <= 14 + NIC_MTU {
+        let _ = net::send_n(nic, frame);
+        return 1;
+    }
+    // Fragment.
+    if frame.len() < 14 + 20 { return 0; }
+    if &frame[12..14] != b"\x08\x00" {
+        // Not IPv4, nothing to fragment — send as-is and hope for the best.
+        let _ = net::send_n(nic, frame);
+        return 1;
+    }
+    let ihl = ((frame[14] & 0x0F) as usize) * 4;
+    if frame.len() < 14 + ihl { return 0; }
+    let total_len = ((frame[14 + 2] as usize) << 8) | (frame[14 + 3] as usize);
+    let payload_len = total_len.saturating_sub(ihl);
+    if payload_len == 0 { return 0; }
+    // Refuse to fragment if DF (Don't Fragment) is set in the original.
+    let frag_field = ((frame[14 + 6] as u16) << 8) | (frame[14 + 7] as u16);
+    if (frag_field & 0x4000) != 0 {
+        // Drop with no transmission — caller's NAT path counts this
+        // as no-delivery; a future iteration could send ICMP back.
+        return 0;
+    }
+    let id = ((frame[14 + 4] as u16) << 8) | (frame[14 + 5] as u16);
+
+    let payload = &frame[14 + ihl..14 + ihl + payload_len];
+    let eth_hdr = &frame[0..14];
+    let ip_hdr_orig = &frame[14..14 + ihl];
+
+    let mut sent = 0;
+    let mut offset_bytes = 0usize;
+    let mut emitted_any = false;
+    while offset_bytes < payload_len {
+        let chunk_max = if offset_bytes + FRAG_PAYLOAD_MAX < payload_len {
+            FRAG_PAYLOAD_MAX
+        } else {
+            payload_len - offset_bytes
+        };
+        let last = offset_bytes + chunk_max == payload_len;
+        let mut out: Vec<u8> = Vec::with_capacity(14 + ihl + chunk_max);
+        out.extend_from_slice(eth_hdr);
+        out.extend_from_slice(ip_hdr_orig);
+        out.extend_from_slice(&payload[offset_bytes..offset_bytes + chunk_max]);
+        // Patch the fragment's IPv4 header.
+        let total_this = (ihl + chunk_max) as u16;
+        out[14 + 2] = (total_this >> 8) as u8;
+        out[14 + 3] = (total_this & 0xFF) as u8;
+        // Preserve id.
+        out[14 + 4] = (id >> 8) as u8;
+        out[14 + 5] = (id & 0xFF) as u8;
+        // Set MF + offset.
+        let mf_bit: u16 = if last { 0 } else { 0x2000 };
+        let frag_field = mf_bit | ((offset_bytes / 8) as u16);
+        out[14 + 6] = (frag_field >> 8) as u8;
+        out[14 + 7] = (frag_field & 0xFF) as u8;
+        // Recompute checksum.
+        out[14 + 10] = 0; out[14 + 11] = 0;
+        let ck = ipv4_checksum(&out[14..14 + ihl]);
+        out[14 + 10] = (ck >> 8) as u8;
+        out[14 + 11] = (ck & 0xFF) as u8;
+        let _ = net::send_n(nic, &out);
+        sent += 1;
+        emitted_any = true;
+        offset_bytes += chunk_max;
+    }
+    if emitted_any {
+        FRAG_REFRAGMENTED.fetch_add(1, Ordering::Relaxed);
+    }
+    sent
 }
 
 // ── Outbound fragment reassembler ────────────────────────────────

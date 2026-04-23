@@ -851,6 +851,7 @@ fn cmd_nat_stats() {
     console::puts("    host-frames-pass: "); print_num(s.host_frames_passed as usize); console::puts("\n");
     console::puts("    frag-reassembled: "); print_num(s.frag_reassembled as usize); console::puts("\n");
     console::puts("    frag-timeout:     "); print_num(s.frag_timeout as usize); console::puts("\n");
+    console::puts("    frag-refragd:     "); print_num(s.frag_refragmented as usize); console::puts("\n");
 }
 
 fn cmd_nat_bind(args: &[&str]) {
