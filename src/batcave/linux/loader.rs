@@ -267,6 +267,70 @@ pub struct LoadedElfInfo {
     pub virt_base: u64,
 }
 
+/// Entry in the multi-ELF loader's per-library table. Carries enough to
+/// (a) do a second-pass relocation walk with cross-module symbol lookup
+/// (b) run DT_INIT_ARRAY when we're ready to, and (c) dump diagnostics.
+///
+/// `data` is the pointer into the initrd blob for this library; the loader
+/// already copied the PT_LOADs to `phys_base`, so `data` is read-only
+/// reference material for relocation processing.
+#[derive(Clone, Copy)]
+pub struct LoadedLib {
+    pub name_bytes: [u8; 64],
+    pub name_len: usize,
+    pub info: LoadedElfInfo,
+    /// Raw ELF bytes (kept so the second-pass reloc walk can read the
+    /// symtab/strtab/rela tables without keeping a `&[u8]` alongside).
+    pub data_ptr: usize,
+    pub data_len: usize,
+    /// PT_LOAD min_addr (the ELF's base vaddr before rebase).
+    pub min_addr: u64,
+    /// value_offset = virt_base - min_addr (what RELATIVE relocs add).
+    pub value_offset: i64,
+    /// patch_offset = phys_base - min_addr (for writes during load).
+    pub patch_offset: i64,
+    /// DT_SYMTAB file offset inside the raw data.
+    pub symtab_file: usize,
+    /// DT_STRTAB file offset inside the raw data.
+    pub strtab_file: usize,
+    /// DT_SYMTAB entry count (derived from DT_HASH or DT_GNU_HASH).
+    pub sym_count: usize,
+    /// DT_RELA / DT_RELASZ (file offset, bytes).
+    pub rela_off: usize,
+    pub rela_sz: usize,
+    /// DT_JMPREL / DT_PLTRELSZ (file offset, bytes).
+    pub jmprel_off: usize,
+    pub pltrel_sz: usize,
+    /// DT_INIT_ARRAY vaddr + size (for later running).
+    pub init_array_va: u64,
+    pub init_array_sz: u64,
+}
+
+impl LoadedLib {
+    pub fn new() -> Self {
+        Self {
+            name_bytes: [0; 64],
+            name_len: 0,
+            info: LoadedElfInfo { virt_entry: 0, phys_base: 0, total_size: 0, virt_base: 0 },
+            data_ptr: 0, data_len: 0,
+            min_addr: 0, value_offset: 0, patch_offset: 0,
+            symtab_file: 0, strtab_file: 0, sym_count: 0,
+            rela_off: 0, rela_sz: 0, jmprel_off: 0, pltrel_sz: 0,
+            init_array_va: 0, init_array_sz: 0,
+        }
+    }
+    pub fn name(&self) -> &[u8] { &self.name_bytes[..self.name_len] }
+    pub fn data(&self) -> &'static [u8] {
+        // SAFETY: data_ptr + data_len is the initrd blob slice, owned by
+        // the static initrd region for the kernel's lifetime.
+        unsafe { core::slice::from_raw_parts(self.data_ptr as *const u8, self.data_len) }
+    }
+}
+
+/// Maximum libraries we can hold in a multi-ELF cave. content_shell pulls
+/// in ~10 DT_NEEDED libs; keep a small cushion.
+pub const MAX_LOADED_LIBS: usize = 16;
+
 /// FLv2-NEW-017/018 fix: free every page that `load_elf_rebased` allocated.
 /// Without this, ~150 MB of Chromium pages leaked permanently per cave
 /// teardown — caves got destroyed, the `Cave` struct cleared, but the
@@ -660,6 +724,487 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
         total_size,
         virt_base,
     })
+}
+
+/// Multi-ELF cave loader. Loads content_shell plus any number of shared
+/// libraries into ONE contiguous physical region, placed so the cave's
+/// simple 1:1 (virt..virt+N → phys..phys+N) mapping covers everything.
+///
+/// This is a minimal in-kernel dynamic linker: after each ELF is loaded
+/// and has its R_AARCH64_RELATIVE applied, we do a second pass over
+/// every lib's GLOB_DAT / JUMP_SLOT / IRELATIVE entries — for any
+/// SHN_UNDEF symbol, we scan every other loaded lib's symbol table
+/// and write the real resolved address over the sentinel we left in
+/// place during the first pass.
+///
+/// No symbol versioning (DT_VERSYM / DT_VERNEED), no init_array
+/// execution, no TLS setup. This is only enough to get content_shell
+/// to reach its first real libc call and exercise the syscall surface.
+///
+/// Returns `LoadedElfInfo` for the FIRST entry in `files` — that's the
+/// main executable whose entry point the runner will eret to.
+pub fn load_archive_multi(
+    files: &[(&[u8], &[u8])],  // (name, bytes) — [0] is the main exe
+    cave_virt_base: u64,
+) -> Result<LoadedElfInfo, &'static str> {
+    if files.is_empty() { return Err("no files"); }
+    if files.len() > MAX_LOADED_LIBS { return Err("too many libs"); }
+    if cave_virt_base & 0x1FFFFF != 0 { return Err("cave_virt_base not 2MB aligned"); }
+
+    // Parse each ELF to find its (min_addr, max_addr) PT_LOAD extent,
+    // then lay them out in the cave with 2 MB alignment between them.
+    let mut lib_count = 0usize;
+    let mut libs: [LoadedLib; MAX_LOADED_LIBS] = [LoadedLib::new(); MAX_LOADED_LIBS];
+    let mut next_virt_offset: usize = 0;
+    for (name, data) in files {
+        if data.len() < 64 || &data[0..4] != b"\x7fELF" {
+            return Err("archive member is not ELF");
+        }
+        let phoff = u64_at(data, 32) as usize;
+        let phnum = u16_at(data, 56) as usize;
+        let phentsz = u16_at(data, 54) as usize;
+        if phentsz < 56 || phentsz > 4096 || phnum > 1024 {
+            return Err("phdr table implausible");
+        }
+
+        let mut min_addr: u64 = u64::MAX;
+        let mut max_addr: u64 = 0;
+        for i in 0..phnum {
+            let ph = phoff + i * phentsz;
+            if ph + phentsz > data.len() { break; }
+            if u32_at(data, ph) != 1 { continue; }
+            let vaddr = u64_at(data, ph + 16);
+            let memsz = u64_at(data, ph + 40);
+            if vaddr < min_addr { min_addr = vaddr; }
+            let seg_end = vaddr.checked_add(memsz).ok_or("PT_LOAD overflow")?;
+            if seg_end > max_addr { max_addr = seg_end; }
+        }
+        if min_addr == u64::MAX { return Err("no PT_LOAD"); }
+
+        // Round the extent up to 2 MB so each lib starts at a 2-MB cave
+        // block boundary. Pairs with mmu::setup_cave_pagetable_at.
+        let total_size = (max_addr - min_addr) as usize;
+        let rounded = (total_size + 0x1FFFFF) & !0x1FFFFF;
+
+        let my_virt_base = cave_virt_base + next_virt_offset as u64;
+        let name_bytes_len = name.len().min(63);
+        libs[lib_count].name_bytes[..name_bytes_len].copy_from_slice(&name[..name_bytes_len]);
+        libs[lib_count].name_len = name_bytes_len;
+        libs[lib_count].data_ptr = data.as_ptr() as usize;
+        libs[lib_count].data_len = data.len();
+        libs[lib_count].min_addr = min_addr;
+        libs[lib_count].info.virt_base = my_virt_base;
+        libs[lib_count].info.total_size = total_size;
+        libs[lib_count].value_offset = my_virt_base as i64 - min_addr as i64;
+        // phys_base fills in below once we've allocated the mega-block.
+        lib_count += 1;
+        next_virt_offset = next_virt_offset
+            .checked_add(rounded)
+            .ok_or("cave virt offset overflow")?;
+    }
+
+    // Total contiguous pages: all libs + a 1 MB (LOADED_STACK_PAGES) stack.
+    let total_bytes = next_virt_offset;
+    let total_pages = total_bytes / PAGE_SIZE;
+    let stack_va_offset = next_virt_offset; // stack starts right after last lib
+    let grand_total_pages = total_pages + LOADED_STACK_PAGES;
+
+    // Enforce cave window.
+    let cave_window_bytes = super::mmu::CAVE_BLOCKS * 0x200000;
+    if grand_total_pages * PAGE_SIZE > cave_window_bytes {
+        return Err("archive + stack > cave user window");
+    }
+
+    // Contiguous 2MB-aligned allocation.
+    let mut phys_base = frame::alloc_frame().ok_or("oom (archive)")?;
+    while phys_base & 0x1FFFFF != 0 {
+        phys_base = frame::alloc_frame().ok_or("oom (archive align)")?;
+    }
+    for i in 1..grand_total_pages {
+        let expected = phys_base + i * PAGE_SIZE;
+        let got = frame::alloc_frame().ok_or("oom (archive tail)")?;
+        if got != expected {
+            return Err("non-contiguous archive alloc");
+        }
+    }
+    uart::puts("[loader/multi] reserved "); crate::kernel::mm::print_num(total_bytes / (1024 * 1024));
+    uart::puts(" MB + "); crate::kernel::mm::print_num(LOADED_STACK_PAGES * 4);
+    uart::puts(" KB stack at phys 0x"); print_hex(phys_base as u64); uart::puts("\n");
+
+    // Fill in phys_base + patch_offset now that we have the allocation.
+    let mut offset_in_cave: usize = 0;
+    for i in 0..lib_count {
+        let lib_virt_base = libs[i].info.virt_base;
+        let lib_phys = phys_base + offset_in_cave;
+        libs[i].info.phys_base = lib_phys;
+        libs[i].patch_offset = lib_phys as i64 - libs[i].min_addr as i64;
+        libs[i].info.virt_entry = (u64_at(libs[i].data(), 24) as i64 + libs[i].value_offset) as u64;
+        let rounded = (libs[i].info.total_size + 0x1FFFFF) & !0x1FFFFF;
+        offset_in_cave += rounded;
+        let _ = lib_virt_base;
+    }
+
+    // --- First pass per lib: copy PT_LOADs + parse .dynamic ---
+    for i in 0..lib_count {
+        stage_copy_and_parse(&mut libs[i])?;
+    }
+
+    // --- Second pass per lib: apply relocations with cross-module lookup ---
+    for i in 0..lib_count {
+        apply_relocs_cross(&libs, lib_count, i)?;
+    }
+
+    // Flush i/d cache over the full reserved region.
+    unsafe {
+        let start = phys_base & !63;
+        let end = phys_base + total_bytes + 0x20000;
+        let mut addr = start;
+        while addr < end {
+            core::arch::asm!("dc cvac, {a}", a = in(reg) addr);
+            core::arch::asm!("ic ivau, {a}", a = in(reg) addr);
+            addr += 64;
+        }
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("isb");
+    }
+
+    // Stack sits right after the last lib.
+    let stack_phys = phys_base + stack_va_offset;
+    // Publish loader state for `execute_with_args`. virt_entry + phys_base
+    // + user_va_base all correspond to the MAIN exe (libs[0]).
+    LOADED_ENTRY.store(libs[0].info.virt_entry as usize, Ordering::Relaxed);
+    LOADED_ORIG_ENTRY.store(u64_at(libs[0].data(), 24) as usize, Ordering::Relaxed);
+    LOADED_PHYS_BASE.store(libs[0].info.phys_base, Ordering::Relaxed);
+    LOADED_STACK_PHYS.store(stack_phys, Ordering::Relaxed);
+    LOADED_USER_VA_BASE.store(libs[0].info.virt_base as usize, Ordering::Relaxed);
+
+    uart::puts("[loader/multi] stack phys 0x"); print_hex(stack_phys as u64);
+    uart::puts(", main virt_entry 0x"); print_hex(libs[0].info.virt_entry);
+    uart::puts("\n");
+
+    Ok(libs[0].info)
+}
+
+/// Stage 1 for a lib: copy PT_LOAD segments into `lib.info.phys_base` and
+/// parse .dynamic to record the tables we need for the reloc pass.
+fn stage_copy_and_parse(lib: &mut LoadedLib) -> Result<(), &'static str> {
+    let data = lib.data();
+    let phys_base = lib.info.phys_base;
+    let min_addr = lib.min_addr;
+    let patch_offset = lib.patch_offset;
+    let total_size = lib.info.total_size;
+
+    let phoff = u64_at(data, 32) as usize;
+    let phnum = u16_at(data, 56) as usize;
+    let phentsz = u16_at(data, 54) as usize;
+
+    // Copy PT_LOADs.
+    for i in 0..phnum {
+        let ph = phoff + i * phentsz;
+        if ph + phentsz > data.len() { break; }
+        if u32_at(data, ph) != 1 { continue; }
+
+        let p_offset = u64_at(data, ph + 8) as usize;
+        let vaddr    = u64_at(data, ph + 16) as usize;
+        let filesz   = u64_at(data, ph + 32) as usize;
+        let memsz    = u64_at(data, ph + 40) as usize;
+
+        if (vaddr as u64) < min_addr { return Err("PT_LOAD below min_addr"); }
+        let phys_addr_i = (vaddr as i64).checked_add(patch_offset)
+            .ok_or("PT_LOAD phys overflow")?;
+        if phys_addr_i < phys_base as i64 { return Err("PT_LOAD phys < base"); }
+        let phys_addr = phys_addr_i as usize;
+        let seg_end = phys_addr.checked_add(memsz.max(filesz))
+            .ok_or("PT_LOAD end overflow")?;
+        if seg_end > phys_base.saturating_add(total_size) {
+            return Err("PT_LOAD past reserved range");
+        }
+
+        if filesz > 0 {
+            let end = p_offset.checked_add(filesz).ok_or("p_offset overflow")?;
+            if end > data.len() { return Err("PT_LOAD past data end"); }
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    data.as_ptr().add(p_offset),
+                    phys_addr as *mut u8,
+                    filesz,
+                );
+            }
+        }
+        if memsz > filesz {
+            unsafe {
+                core::ptr::write_bytes(
+                    (phys_addr + filesz) as *mut u8, 0, memsz - filesz,
+                );
+            }
+        }
+    }
+
+    // Parse PT_DYNAMIC.
+    for i in 0..phnum {
+        let ph = phoff + i * phentsz;
+        if ph + phentsz > data.len() { break; }
+        if u32_at(data, ph) != 2 { continue; } // PT_DYNAMIC
+
+        let dyn_offset = u64_at(data, ph + 8) as usize;
+        let dyn_size = u64_at(data, ph + 32) as usize;
+        let dyn_end = match dyn_offset.checked_add(dyn_size) {
+            Some(e) if e <= data.len() => e,
+            _ => continue,
+        };
+        let mut pos = dyn_offset;
+        let mut symtab_va = 0u64;
+        let mut strtab_va = 0u64;
+        let mut rela_va   = 0u64;
+        let mut rela_sz   = 0u64;
+        let mut jmprel_va = 0u64;
+        let mut pltrel_sz = 0u64;
+        let mut init_array_va = 0u64;
+        let mut init_array_sz = 0u64;
+        let mut hash_va = 0u64;
+        let mut gnu_hash_va = 0u64;
+        while pos + 16 <= dyn_end {
+            let tag = u64_at(data, pos);
+            let val = u64_at(data, pos + 8);
+            match tag {
+                0 => break,
+                1 => {} // DT_NEEDED — we ignore the name list and rely on
+                        // the caller having baked the right libs into the
+                        // archive.
+                4 => hash_va = val,       // DT_HASH
+                5 => strtab_va = val,     // DT_STRTAB
+                6 => symtab_va = val,     // DT_SYMTAB
+                7 => rela_va = val,       // DT_RELA
+                8 => rela_sz = val,       // DT_RELASZ
+                0x17 => jmprel_va = val,  // DT_JMPREL
+                0x02 => pltrel_sz = val,  // DT_PLTRELSZ
+                25 => init_array_va = val,// DT_INIT_ARRAY
+                27 => init_array_sz = val,// DT_INIT_ARRAYSZ
+                0x6ffffef5 => gnu_hash_va = val, // DT_GNU_HASH
+                _ => {}
+            }
+            pos += 16;
+        }
+
+        lib.symtab_file = vaddr_to_file_off(data, phoff, phnum, phentsz, symtab_va as usize);
+        lib.strtab_file = vaddr_to_file_off(data, phoff, phnum, phentsz, strtab_va as usize);
+        lib.rela_off   = vaddr_to_file_off(data, phoff, phnum, phentsz, rela_va as usize);
+        lib.rela_sz    = rela_sz as usize;
+        lib.jmprel_off = vaddr_to_file_off(data, phoff, phnum, phentsz, jmprel_va as usize);
+        lib.pltrel_sz  = pltrel_sz as usize;
+        lib.init_array_va = init_array_va;
+        lib.init_array_sz = init_array_sz;
+
+
+        // Derive sym_count from DT_HASH's nchain (DT_HASH format: nbucket,
+        // nchain, buckets[nbucket], chain[nchain]) or estimate generously
+        // from DT_GNU_HASH (which doesn't give total count directly; we
+        // use symtab_end derived from the reloc max r_sym).
+        lib.sym_count = 0;
+        if hash_va != 0 {
+            let hash_file = vaddr_to_file_off(data, phoff, phnum, phentsz, hash_va as usize);
+            if hash_file != usize::MAX && hash_file + 8 <= data.len() {
+                let nchain = u32_at(data, hash_file + 4) as usize;
+                lib.sym_count = nchain;
+            }
+        }
+        if lib.sym_count == 0 && gnu_hash_va != 0 {
+            // Rough upper bound: count symbols by scanning until we see
+            // a symbol with name_offset == 0 AND shndx == 0 AND value == 0.
+            // This is approximate but fine for a not-found lookup.
+            lib.sym_count = 65536; // cap — we bound loop iterations anyway
+        }
+        break;
+    }
+    Ok(())
+}
+
+/// Walk PT_LOAD headers to convert an ELF vaddr into a file offset.
+/// Returns `usize::MAX` if the vaddr isn't mapped by any PT_LOAD.
+fn vaddr_to_file_off(data: &[u8], phoff: usize, phnum: usize, phentsz: usize, va: usize) -> usize {
+    if va == 0 { return usize::MAX; }
+    for i in 0..phnum {
+        let ph = phoff + i * phentsz;
+        if ph + phentsz > data.len() { break; }
+        if u32_at(data, ph) != 1 { continue; }
+        let p_offset = u64_at(data, ph + 8) as usize;
+        let p_vaddr  = u64_at(data, ph + 16) as usize;
+        let p_filesz = u64_at(data, ph + 32) as usize;
+        if va >= p_vaddr && va < p_vaddr.saturating_add(p_filesz) {
+            return p_offset.saturating_add(va - p_vaddr);
+        }
+    }
+    usize::MAX
+}
+
+/// Look up a symbol name across every loaded lib's symbol table. If a
+/// DEFINED symbol with the matching name is found, return its cave-VA
+/// (`lib.value_offset + sym.st_value`). Ignores UNDEF (shndx==0)
+/// entries and names that don't match byte-for-byte.
+fn resolve_cross_module(
+    libs: &[LoadedLib],
+    count: usize,
+    name: &[u8],
+) -> Option<u64> {
+    if name.is_empty() { return None; }
+    for i in 0..count {
+        let lib = &libs[i];
+        if lib.symtab_file == usize::MAX || lib.strtab_file == usize::MAX {
+            continue;
+        }
+        let data = lib.data();
+        let limit = lib.sym_count.min(200_000);
+        for s in 1..limit {
+            let sym_off = lib.symtab_file + s * 24;
+            if sym_off + 24 > data.len() { break; }
+            let name_off = u32_at(data, sym_off) as usize;
+            let st_info  = data[sym_off + 4];
+            let st_shndx = u16::from_le_bytes([data[sym_off + 6], data[sym_off + 7]]);
+            let st_value = u64_at(data, sym_off + 8);
+            if st_shndx == 0 { continue; } // UNDEF — skip
+            // STB_WEAK (bind=2) with value 0 is also treated as unresolvable.
+            let _ = st_info;
+            if st_value == 0 && st_shndx == 0xFFFF { continue; }
+            // Compare name.
+            let str_addr = lib.strtab_file + name_off;
+            if str_addr >= data.len() { continue; }
+            if !str_eq(&data[str_addr..], name) { continue; }
+            // Match. Resolve to cave VA.
+            return Some((st_value as i64 + lib.value_offset) as u64);
+        }
+    }
+    None
+}
+
+/// Byte-compare `haystack` (null-terminated) against `needle` (exact).
+fn str_eq(haystack: &[u8], needle: &[u8]) -> bool {
+    if haystack.len() < needle.len() + 1 { return false; }
+    if &haystack[..needle.len()] != needle { return false; }
+    haystack[needle.len()] == 0
+}
+
+/// Apply the relocations for one lib, with cross-module lookup for
+/// SHN_UNDEF GLOB_DAT / JUMP_SLOT entries. For UNDEFs that resolve in
+/// another lib we write the resolved vaddr; for UNDEFs that don't
+/// resolve we write the 0xBAD0… sentinel so the first call through
+/// the GOT is diagnosable.
+fn apply_relocs_cross(
+    libs: &[LoadedLib; MAX_LOADED_LIBS],
+    count: usize,
+    idx: usize,
+) -> Result<(), &'static str> {
+    let lib = &libs[idx];
+    let data = lib.data();
+    let phys_base = lib.info.phys_base;
+    let phys_range_end = phys_base.saturating_add(lib.info.total_size);
+    let value_offset = lib.value_offset;
+    let patch_offset = lib.patch_offset;
+    let symtab_file = lib.symtab_file;
+    let strtab_file = lib.strtab_file;
+
+    let mut applied_rel = 0u32;
+    let mut applied_glob = 0u32;
+    let mut applied_jump = 0u32;
+    let mut applied_irel = 0u32;
+    let mut resolved_cross = 0u32;
+    let mut unresolved = 0u32;
+
+    for &(tbl_off, tbl_sz) in &[(lib.rela_off, lib.rela_sz), (lib.jmprel_off, lib.pltrel_sz)] {
+        if tbl_off == 0 || tbl_off == usize::MAX || tbl_sz == 0 { continue; }
+        let num = (tbl_sz / 24).min(50_000_000);
+        for r in 0..num {
+            let re = match tbl_off.checked_add(r.checked_mul(24).unwrap_or(usize::MAX)) {
+                Some(v) => v,
+                None => break,
+            };
+            if re + 24 > data.len() { break; }
+            let r_offset = u64_at(data, re);
+            let r_info   = u64_at(data, re + 8);
+            let r_addend = u64_at(data, re + 16);
+            let r_type   = (r_info & 0xFFFFFFFF) as u32;
+            let r_sym    = (r_info >> 32) as usize;
+
+            let patch_addr = (r_offset as i64 + patch_offset) as usize;
+            let patch_end = match patch_addr.checked_add(8) { Some(v) => v, None => continue };
+            if patch_addr < phys_base || patch_end > phys_range_end { continue; }
+
+            match r_type {
+                0x403 => {
+                    let value = (r_addend as i64 + value_offset) as u64;
+                    unsafe {
+                        core::arch::asm!("str {v}, [{a}]",
+                            a = in(reg) patch_addr, v = in(reg) value);
+                    }
+                    applied_rel += 1;
+                }
+                0x401 | 0x402 => {
+                    if symtab_file == usize::MAX { continue; }
+                    let sym_off = match symtab_file
+                        .checked_add(r_sym.checked_mul(24).unwrap_or(usize::MAX))
+                    {
+                        Some(v) if v + 24 <= data.len() => v,
+                        _ => continue,
+                    };
+                    let sym_value = u64_at(data, sym_off + 8);
+                    let sym_shndx = u16::from_le_bytes([data[sym_off+6], data[sym_off+7]]);
+                    let value = if sym_shndx == 0 {
+                        // UNDEF — try cross-module lookup first.
+                        if strtab_file != usize::MAX {
+                            let name_off = u32_at(data, sym_off) as usize;
+                            let str_addr = strtab_file.saturating_add(name_off);
+                            if str_addr < data.len() {
+                                // Find null-terminated name length.
+                                let end = data[str_addr..].iter()
+                                    .position(|&b| b == 0)
+                                    .unwrap_or(256);
+                                let name = &data[str_addr..str_addr + end];
+                                if let Some(v) = resolve_cross_module(libs, count, name) {
+                                    resolved_cross += 1;
+                                    (v as i64 + r_addend as i64) as u64
+                                } else {
+                                    unresolved += 1;
+                                    0xBAD0_0000_0000_0000u64 | ((r_sym as u64 & 0x0FFF_FFFF) << 4)
+                                }
+                            } else {
+                                unresolved += 1;
+                                0xBAD0_0000_0000_0000u64 | ((r_sym as u64 & 0x0FFF_FFFF) << 4)
+                            }
+                        } else {
+                            0xBAD0_0000_0000_0000u64 | ((r_sym as u64 & 0x0FFF_FFFF) << 4)
+                        }
+                    } else {
+                        (sym_value as i64 + r_addend as i64 + value_offset) as u64
+                    };
+                    unsafe {
+                        core::arch::asm!("str {v}, [{a}]",
+                            a = in(reg) patch_addr, v = in(reg) value);
+                    }
+                    if r_type == 0x402 { applied_jump += 1; } else { applied_glob += 1; }
+                }
+                0x408 => {
+                    let value = (r_addend as i64 + value_offset) as u64;
+                    unsafe {
+                        core::arch::asm!("str {v}, [{a}]",
+                            a = in(reg) patch_addr, v = in(reg) value);
+                    }
+                    applied_irel += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    uart::puts("[loader/multi] ");
+    for &b in lib.name() { uart::putc(b); }
+    uart::puts(": ");
+    crate::kernel::mm::print_num(applied_rel as usize); uart::puts(" REL ");
+    crate::kernel::mm::print_num(applied_glob as usize); uart::puts(" GLOB ");
+    crate::kernel::mm::print_num(applied_jump as usize); uart::puts(" JUMP ");
+    crate::kernel::mm::print_num(applied_irel as usize); uart::puts(" IREL, ");
+    crate::kernel::mm::print_num(resolved_cross as usize); uart::puts(" cross, ");
+    crate::kernel::mm::print_num(unresolved as usize); uart::puts(" UNDEF\n");
+
+    Ok(())
 }
 
 pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {

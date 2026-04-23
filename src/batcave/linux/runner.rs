@@ -150,9 +150,54 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
     uart::puts("[runner] Cave slot "); crate::kernel::mm::print_num(cave_slot);
     uart::puts(" allocated\n");
 
-    let info = match loader::load_elf_rebased(blob, CHROMIUM_VIRT_BASE) {
-        Ok(i) => i,
-        Err(e) => { super::mmu::free_cave_slot(cave_slot); return Err(e); }
+    // If the initrd is a BATARCH multi-file archive (tools/bake_chromium_archive.sh),
+    // load every file in it as a separate ELF in the same cave, with a
+    // cross-module symbol-resolution pass to fix up content_shell's
+    // undefined glibc/pthread/libm references to the real library bodies.
+    // Falls back to the legacy single-ELF path for plain-blob initrds.
+    let info = if initrd::is_archive() {
+        let shell = initrd::archive_file("bin/content_shell").ok_or("archive has no bin/content_shell")?;
+        // Collect libs in the order they appear in the archive. Main exe
+        // MUST be files[0] because load_archive_multi treats it as the
+        // entry point and sets the loader globals from it.
+        let mut files: [(&[u8], &[u8]); 16] = [(&[], &[]); 16];
+        let mut count = 0usize;
+        files[0] = (b"bin/content_shell", shell);
+        count += 1;
+        // Walk the archive header for every lib/* entry.
+        initrd::archive_for_each(|name, _sz| {
+            if count >= files.len() { return; }
+            if !name.starts_with("lib/") { return; }
+            if let Some(bytes) = initrd::archive_file(name) {
+                // Unchecked cast OK: archive_file returns an initrd-region
+                // slice with 'static lifetime; we already bounded count.
+                // Copy the name into a static-ish slot: we reuse the name
+                // bytes from inside the archive's own header region.
+                let name_bytes: &'static [u8] = {
+                    // We don't have the name's slice pointer from archive_for_each;
+                    // re-derive it by searching. archive_file copies the name up
+                    // to the lookup — but we need the backing bytes for the table.
+                    // Simpler: leak through a hardcoded matcher for the well-known
+                    // libs we expect so we can point at a long-lived &str.
+                    match_known_lib_name(name)
+                };
+                if !name_bytes.is_empty() {
+                    files[count] = (name_bytes, bytes);
+                    count += 1;
+                }
+            }
+        });
+        uart::puts("[runner] archive: "); crate::kernel::mm::print_num(count);
+        uart::puts(" file(s)\n");
+        match loader::load_archive_multi(&files[..count], CHROMIUM_VIRT_BASE) {
+            Ok(i) => i,
+            Err(e) => { super::mmu::free_cave_slot(cave_slot); return Err(e); }
+        }
+    } else {
+        match loader::load_elf_rebased(blob, CHROMIUM_VIRT_BASE) {
+            Ok(i) => i,
+            Err(e) => { super::mmu::free_cave_slot(cave_slot); return Err(e); }
+        }
     };
 
     let l1 = match super::mmu::setup_cave_pagetable_at(
@@ -193,6 +238,31 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
     super::mmu::free_cave_slot(cave_slot);
     loader::free_loaded_elf(&info);
     r
+}
+
+/// We need a `&'static [u8]` for each lib name so the multi-ELF loader
+/// can record it in `LoadedLib::name_bytes`. Returning a reference into
+/// the archive's header region would work but would require preserving
+/// pointers through `archive_for_each`. A fixed match for the libs
+/// `tools/bake_chromium_archive.sh` actually packs is simpler and makes
+/// new libs explicit (you have to add a branch here when you add one to
+/// the bake).
+fn match_known_lib_name(name: &str) -> &'static [u8] {
+    match name {
+        "lib/ld-linux-aarch64.so.1" => b"lib/ld-linux-aarch64.so.1",
+        "lib/libc.so.6"             => b"lib/libc.so.6",
+        "lib/libdl.so.2"            => b"lib/libdl.so.2",
+        "lib/libexpat.so.1"         => b"lib/libexpat.so.1",
+        "lib/libgcc_s.so.1"         => b"lib/libgcc_s.so.1",
+        "lib/libm.so.6"             => b"lib/libm.so.6",
+        "lib/libnspr4.so"           => b"lib/libnspr4.so",
+        "lib/libnss3.so"            => b"lib/libnss3.so",
+        "lib/libnssutil3.so"        => b"lib/libnssutil3.so",
+        "lib/libplc4.so"            => b"lib/libplc4.so",
+        "lib/libplds4.so"           => b"lib/libplds4.so",
+        "lib/libpthread.so.0"       => b"lib/libpthread.so.0",
+        _ => b"",
+    }
 }
 
 /// Run a small test ELF (single-segment, simple format).

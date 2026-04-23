@@ -101,6 +101,28 @@ pub fn is_present() -> bool {
     info().is_some()
 }
 
+/// Physical (kernel identity) address where the blob actually lives, and
+/// the end of its BATCHROM framing. Used by `mm::init` to reserve this
+/// range in the frame bitmap — without that reservation, `alloc_frame`
+/// hands out the same pages that hold the baked content_shell + libs and
+/// our first big copy corrupts the archive. Returns `(0, 0)` if no
+/// blob is present.
+pub fn blob_phys_range() -> (usize, usize) {
+    ensure_cached();
+    unsafe {
+        let size = core::ptr::read(core::ptr::addr_of!(CACHED_SIZE));
+        let base = core::ptr::read(core::ptr::addr_of!(CACHED_BASE));
+        if size == 0 || base == 0 {
+            return (0, 0);
+        }
+        // `base` points to the blob bytes (right after BATCHROM+size
+        // header). The framing head/tail we need to keep intact too.
+        let head = base.saturating_sub(16); // BATCHROM(8) + size(8)
+        let tail = base.saturating_add(size).saturating_add(4 + 8); // crc32 + CHROMEND
+        (head, tail)
+    }
+}
+
 /// Returns blob metadata if present.
 pub fn info() -> Option<BlobInfo> {
     ensure_cached();
@@ -124,6 +146,104 @@ pub fn locate_chromium_blob() -> Option<&'static [u8]> {
             None
         }
     }
+}
+
+/// Multi-file archive magic: if the blob starts with `BATARCH\0` instead
+/// of a plain ELF header, it's the new tools/bake_chromium_archive.sh
+/// layout — `[BATARCH\0][n_files:u32][reserved:u32][files_table: 128 B * n]
+/// then concatenated file bytes`. Each table entry is
+///   name: [u8; 64]      null-padded POSIX path
+///   file_size: u64
+///   file_offset: u64    relative to the start of the archive
+///   reserved: [u8; 48]
+///
+/// Returns `true` if the BATCHROM blob actually contains an archive.
+pub fn is_archive() -> bool {
+    match locate_chromium_blob() {
+        Some(b) if b.len() >= 8 => &b[0..8] == b"BATARCH\0",
+        _ => false,
+    }
+}
+
+/// Look up a file by name inside the archive (e.g. `"bin/content_shell"`,
+/// `"lib/libc.so.6"`). Returns `None` if the blob is not an archive or
+/// the name isn't present. Does bounds-checked arithmetic throughout —
+/// a crafted initrd can't coerce us into reading past the blob.
+pub fn archive_file(name: &str) -> Option<&'static [u8]> {
+    let blob = locate_chromium_blob()?;
+    if blob.len() < 16 || &blob[0..8] != b"BATARCH\0" {
+        return None;
+    }
+    let n_files = u32_le(blob, 8)? as usize;
+    if n_files > 4096 {
+        // Sanity cap — our bake never produces anywhere near this.
+        return None;
+    }
+    let table_start = 16usize;
+    let entry_size = 128usize;
+    let table_end = table_start.checked_add(entry_size.checked_mul(n_files)?)?;
+    if table_end > blob.len() { return None; }
+    let needle = name.as_bytes();
+    if needle.len() >= 64 { return None; } // name cap from bake script
+    for i in 0..n_files {
+        let off = table_start + i * entry_size;
+        // The name is null-padded to 64 bytes.
+        let name_slice = &blob[off .. off + 64];
+        let real_len = name_slice.iter().position(|&b| b == 0).unwrap_or(64);
+        if real_len == needle.len() && &name_slice[..real_len] == needle {
+            let file_size = u64_le(blob, off + 64)? as usize;
+            let file_off  = u64_le(blob, off + 72)? as usize;
+            let file_end = file_off.checked_add(file_size)?;
+            if file_end > blob.len() { return None; }
+            // SAFETY: blob is a static slice backed by the initrd memory
+            // region. The returned sub-slice inherits its lifetime.
+            return Some(&blob[file_off .. file_end]);
+        }
+    }
+    None
+}
+
+/// Enumerate (name, len) pairs for every file in the archive. Useful for
+/// the shell's `chromium --list-archive` diagnostic. Returns 0..N file
+/// entries via a caller-supplied callback; lets the caller decide how
+/// many to print without pulling alloc into the kernel initrd path.
+pub fn archive_for_each<F: FnMut(&str, usize)>(mut f: F) {
+    let blob = match locate_chromium_blob() { Some(b) => b, None => return };
+    if blob.len() < 16 || &blob[0..8] != b"BATARCH\0" { return; }
+    let n_files = match u32_le(blob, 8) { Some(v) => v as usize, None => return };
+    if n_files > 4096 { return; }
+    let entry_size = 128usize;
+    let table_end = match 16usize.checked_add(entry_size.checked_mul(n_files).unwrap_or(usize::MAX)) {
+        Some(v) if v <= blob.len() => v,
+        _ => return,
+    };
+    let _ = table_end;
+    for i in 0..n_files {
+        let off = 16 + i * entry_size;
+        let name_slice = &blob[off .. off + 64];
+        let real_len = name_slice.iter().position(|&b| b == 0).unwrap_or(64);
+        let sz = match u64_le(blob, off + 64) { Some(v) => v as usize, None => return };
+        // SAFETY: name_slice bytes are bounded + valid UTF-8 in practice
+        // (ASCII POSIX paths); we use from_utf8 lossily via a temporary
+        // str::from_utf8 and fall back to empty on non-ASCII junk.
+        let name = match core::str::from_utf8(&name_slice[..real_len]) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        f(name, sz);
+    }
+}
+
+fn u32_le(s: &[u8], off: usize) -> Option<u32> {
+    if off.checked_add(4)? > s.len() { return None; }
+    Some(u32::from_le_bytes([s[off], s[off+1], s[off+2], s[off+3]]))
+}
+fn u64_le(s: &[u8], off: usize) -> Option<u64> {
+    if off.checked_add(8)? > s.len() { return None; }
+    Some(u64::from_le_bytes([
+        s[off], s[off+1], s[off+2], s[off+3],
+        s[off+4], s[off+5], s[off+6], s[off+7],
+    ]))
 }
 
 /// Called once from `kernel_main` / `init` to log what was (or wasn't)

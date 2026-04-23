@@ -56,6 +56,22 @@ pub fn init() {
 
     frame::init(frame_start, memory_end);
 
+    // BUG-2026-04-23: when the initrd is delivered via QEMU `-initrd`
+    // instead of appended-to-kernel, its actual phys address (e.g.
+    // 0x48000000 on -m 4G virt) is INSIDE the frame pool's range.
+    // Without this reservation, `alloc_frame` returns pages from the
+    // initrd region and the multi-ELF loader's PT_LOAD copies smash
+    // the baked-in content_shell + .so archive before we can read it.
+    let (ir_start, ir_end) = initrd::blob_phys_range();
+    if ir_end > ir_start {
+        frame::reserve_range(ir_start, ir_end);
+        platform::serial_puts("  [mm] initrd reserved @ 0x");
+        print_hex(ir_start);
+        platform::serial_puts("..0x");
+        print_hex(ir_end);
+        platform::serial_puts("\n");
+    }
+
     let (used, total) = frame::stats();
     platform::serial_puts("  [mm] Frame allocator initialized — ");
     print_num((total - used) * 4);
