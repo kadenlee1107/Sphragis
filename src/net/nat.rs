@@ -47,10 +47,18 @@ static ARP_REPLIES_SENT: AtomicU32 = AtomicU32::new(0);
 static ARP_REQUESTS_IGNORED: AtomicU32 = AtomicU32::new(0);
 static ICMP_ECHO_FORWARDED: AtomicU32 = AtomicU32::new(0);
 static ICMP_ECHO_DELIVERED: AtomicU32 = AtomicU32::new(0);
-/// ICMP error packets (dest-unreachable / time-exceeded) that we
-/// successfully rewrote + delivered to the cave whose flow they
-/// refer to. Bumped from `pump_replies` via `try_icmp_error_deliver`.
+/// ICMP error packets (dest-unreachable / time-exceeded / parameter
+/// problem) that we successfully rewrote + delivered to the cave
+/// whose flow they refer to.
 static ICMP_ERROR_DELIVERED: AtomicU32 = AtomicU32::new(0);
+/// ICMP Redirect frames we dropped on the nic 0 path. Caves route
+/// through Bat_OS by design; a redirect would tell them to ARP a
+/// gateway we don't control, breaking the policy boundary.
+static ICMP_REDIRECT_DROPPED: AtomicU32 = AtomicU32::new(0);
+/// ICMP Source Quench drops. The type is deprecated per RFC 6633
+/// (2012) and shouldn't appear from any modern internet peer, but
+/// we count it to surface a weird packet if one shows up.
+static ICMP_SRC_QUENCH_DROPPED: AtomicU32 = AtomicU32::new(0);
 static NAT_GC_EVICTED: AtomicU32 = AtomicU32::new(0);
 /// Counted separately from `drop_parse` so operators can see WHY a
 /// frame was refused. Fragment forwarding requires stateful
@@ -93,6 +101,8 @@ pub struct Stats {
     pub frag_reassembled: u32,
     pub frag_timeout: u32,
     pub frag_refragmented: u32,
+    pub icmp_redirect_dropped: u32,
+    pub icmp_src_quench_dropped: u32,
 }
 
 pub fn stats() -> Stats {
@@ -112,6 +122,8 @@ pub fn stats() -> Stats {
         frag_reassembled: FRAG_REASSEMBLED.load(Ordering::Relaxed),
         frag_timeout: FRAG_TIMEOUT.load(Ordering::Relaxed),
         frag_refragmented: FRAG_REFRAGMENTED.load(Ordering::Relaxed),
+        icmp_redirect_dropped:   ICMP_REDIRECT_DROPPED.load(Ordering::Relaxed),
+        icmp_src_quench_dropped: ICMP_SRC_QUENCH_DROPPED.load(Ordering::Relaxed),
     }
 }
 
@@ -131,6 +143,8 @@ pub fn reset_stats() {
     FRAG_REASSEMBLED.store(0, Ordering::Relaxed);
     FRAG_TIMEOUT.store(0, Ordering::Relaxed);
     FRAG_REFRAGMENTED.store(0, Ordering::Relaxed);
+    ICMP_REDIRECT_DROPPED.store(0, Ordering::Relaxed);
+    ICMP_SRC_QUENCH_DROPPED.store(0, Ordering::Relaxed);
 }
 
 // ── ARP on nic 1 (caves interface) ──────────────────────────────
@@ -371,6 +385,11 @@ pub fn pump_replies(nic1_mac: [u8; 6]) -> (usize, usize) {
                 }
             }
             None => {
+                // ICMP Redirect / Source Quench — actively drop so
+                // the kernel IP stack doesn't honour them either.
+                if try_drop_icmp_problematic(work) {
+                    continue;
+                }
                 // Before falling back to the host stack, see if this
                 // is an ICMP error packet carrying the header of a
                 // cave flow we NAT'd — if so, rewrite + deliver.
@@ -1085,6 +1104,37 @@ fn icmp_checksum(buf: &[u8]) -> u16 {
     !(sum as u16)
 }
 
+// ── ICMP Redirect / Source Quench drop ───────────────────────────
+//
+// Redirect (type 5) would tell the kernel "to reach host H, send to
+// gateway G". Caves are behind our NAT; a redirect learned from the
+// upstream would retarget kernel routing in a way that subverts
+// policy. Source Quench (type 4) is RFC 6633-deprecated and
+// shouldn't show up. Drop both and count so operators can see.
+
+/// If `frame` is an ICMP Redirect or Source Quench on nic 0, bump
+/// the appropriate counter and return true so the caller treats it
+/// as handled (no dispatch to the kernel IP stack).
+pub fn try_drop_icmp_problematic(frame: &[u8]) -> bool {
+    if frame.len() < 14 + 20 + 1 { return false; }
+    if &frame[12..14] != b"\x08\x00" { return false; }
+    let ihl = ((frame[14] & 0x0F) as usize) * 4;
+    if frame.len() < 14 + ihl + 1 { return false; }
+    if frame[14 + 9] != IPPROTO_ICMP { return false; }
+    let t = frame[14 + ihl];
+    match t {
+        ICMP_TYPE_REDIRECT => {
+            ICMP_REDIRECT_DROPPED.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        ICMP_TYPE_SOURCE_QUENCH => {
+            ICMP_SRC_QUENCH_DROPPED.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        _ => false,
+    }
+}
+
 // ── ICMP error delivery: embedded-header NAT rewrite ──────────────
 //
 // Dest Unreachable / Time Exceeded / similar carry the original IPv4
@@ -1121,6 +1171,7 @@ pub fn try_rewrite_icmp_error_inbound(
     let icmp_type = frame[o_icmp];
     if icmp_type != ICMP_TYPE_DEST_UNREACH
         && icmp_type != ICMP_TYPE_TIME_EXCEEDED
+        && icmp_type != ICMP_TYPE_PARAMETER_PROBLEM
     {
         return false;
     }
@@ -1361,13 +1412,20 @@ pub const ARP_OP_REQUEST: u16 = 1;
 pub const ARP_OP_REPLY:   u16 = 2;
 pub const ICMP_TYPE_ECHO_REQUEST:     u8 = 8;
 pub const ICMP_TYPE_ECHO_REPLY:       u8 = 0;
-/// ICMP error types we know how to round-trip via embedded-header
-/// rewriting. Other types (Redirect, Parameter Problem, ...) get
-/// dropped rather than delivered, both because the caves' routing is
-/// already fully under our control and because adjusting things like
-/// the pointer field in Parameter Problem is rarely useful.
+/// ICMP error types with the "original datagram embedded" shape that
+/// lets us round-trip them via NAT rewrite: Destination Unreachable,
+/// Time Exceeded, Parameter Problem. All three carry outer IPv4 +
+/// ICMP (8 B fixed) + inner IPv4 + first 8 B of inner L4.
 pub const ICMP_TYPE_DEST_UNREACH:     u8 = 3;
 pub const ICMP_TYPE_TIME_EXCEEDED:    u8 = 11;
+pub const ICMP_TYPE_PARAMETER_PROBLEM: u8 = 12;
+/// ICMP types we explicitly DROP rather than forward:
+///   4  = Source Quench (deprecated per RFC 6633, 2012)
+///   5  = Redirect (routers telling senders to use a different gateway).
+///         Caves route through Bat_OS by construction — honouring
+///         upstream redirects would subvert our policy.
+pub const ICMP_TYPE_SOURCE_QUENCH:    u8 = 4;
+pub const ICMP_TYPE_REDIRECT:         u8 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PktVerdict {
