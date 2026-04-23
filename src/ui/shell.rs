@@ -1814,6 +1814,27 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                                 console::puts(&id);
                                 if ephemeral { console::puts(" (ephemeral)"); }
                                 console::puts("\n");
+
+                                // Followup 3c-daemon-bind: pull the fresh
+                                // ip→cave binding the daemon just learned
+                                // from docker inspect, so the kernel's
+                                // packet classifier knows about this cave
+                                // before the container starts talking.
+                                let sync = crate::batcave::docker_client::with_daemon(
+                                    crate::batcave::docker_client::cpol_bind_list,
+                                );
+                                if let Ok(binds) = sync {
+                                    let mut n = 0usize;
+                                    for (ip_s, cave_n) in binds.iter() {
+                                        if let Some(ip) = parse_ipv4(ip_s) {
+                                            crate::net::nat::bind_ip(ip, cave_n);
+                                            n += 1;
+                                        }
+                                    }
+                                    console::puts("    nat-sync: ");
+                                    print_num(n);
+                                    console::puts(" IP bindings\n");
+                                }
                             }
                             Err(e) => {
                                 // Cave-table insert failed — undo the container.
