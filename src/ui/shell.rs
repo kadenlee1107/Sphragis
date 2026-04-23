@@ -167,6 +167,9 @@ fn execute(cmd: &str) {
         "cpol-rate-clear" => cmd_cpol_rate_clear(parts[1]),
         "cpol-rate-selftest" => cmd_cpol_rate_selftest(),
         "cpol-byte-rate"     => cmd_cpol_byte_rate(&parts[1..]),
+        "nat-beacons"        => cmd_nat_beacons(),
+        "nat-beacon-selftest" => cmd_nat_beacon_selftest(),
+        "nat-beacon-reset"   => cmd_nat_beacon_reset(),
         "cpol-daemon-list" => cmd_cpol_daemon_list(),
         "cpol-daemon-show" => cmd_cpol_daemon_show(parts[1]),
         "nic-status"  => cmd_nic_status(),
@@ -1015,6 +1018,65 @@ fn cmd_cpol_rate_list() {
         print_num(*tok_now as usize);
         console::puts("\n");
     }
+}
+
+fn cmd_nat_beacons() {
+    use crate::net::beacon;
+    let flagged = beacon::list_flagged();
+    console::puts_hi("  FLAGGED BEACONS (low-CoV periodic flows)\n");
+    console::puts("    total samples recorded: ");
+    print_num(beacon::total_samples() as usize);
+    console::puts("\n    total flow-flags:       ");
+    print_num(beacon::total_flags() as usize);
+    console::puts("\n");
+    if flagged.is_empty() {
+        console::puts("    (no flows currently flagged)\n");
+        return;
+    }
+    for (id, dst_ip, dst_port, mean, n) in flagged.iter() {
+        console::puts("    cave=");
+        let hex = b"0123456789abcdef";
+        for b in id.iter().take(4) {
+            console::putc(hex[(b >> 4) as usize]);
+            console::putc(hex[(b & 0x0F) as usize]);
+        }
+        console::puts(".. dst=");
+        let bs = [((dst_ip>>24)&0xFF) as u8, ((dst_ip>>16)&0xFF) as u8,
+                  ((dst_ip>>8)&0xFF) as u8, (dst_ip&0xFF) as u8];
+        for i in 0..4 {
+            print_num(bs[i] as usize);
+            if i < 3 { console::putc(b'.'); }
+        }
+        console::puts(":");
+        print_num(*dst_port as usize);
+        console::puts(" mean_ticks=");
+        // mean can be huge — print in units of 1M ticks to keep readable
+        print_num((*mean / 1_000_000) as usize);
+        console::puts("M samples=");
+        print_num(*n as usize);
+        console::puts("\n");
+    }
+}
+
+fn cmd_nat_beacon_selftest() {
+    console::puts_hi("  NAT BEACON DETECTOR SELF-TEST\n");
+    match crate::net::beacon::selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS periodic vs jittery classification\n");
+            console::puts("    beacon flagged: ");
+            console::puts(if r.beacon_flagged { "yes\n" } else { "no\n" });
+            console::puts("    jitter flagged: ");
+            console::puts(if !r.jitter_flagged { "no (correct)\n" } else { "yes (INCORRECT)\n" });
+            console::puts("    total_flags bumped: ");
+            print_num(r.total_flags as usize); console::puts("\n");
+        }
+        Err(e) => { console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
+fn cmd_nat_beacon_reset() {
+    crate::net::beacon::reset();
+    console::puts("  beacon detector: cleared\n");
 }
 
 /// cpol-byte-rate <cave> <bps> <byte_burst>

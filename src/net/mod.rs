@@ -1,4 +1,5 @@
 pub mod arp;
+pub mod beacon;
 pub mod cave_policy;
 pub mod cave_shaper;
 pub mod dns;

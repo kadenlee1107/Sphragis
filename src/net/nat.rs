@@ -1688,6 +1688,11 @@ pub fn classify(frame: &[u8]) -> PktVerdict {
             match check_and_debit_sized_by_name(&cave, frame.len()) {
                 RateVerdict::Unlimited | RateVerdict::Ok => {
                     PKT_ALLOW.fetch_add(1, Ordering::Relaxed);
+                    // Anomaly-detection side effect: record this flow
+                    // in the beacon detector so periodicity anomalies
+                    // surface even when rate/policy let the flow pass.
+                    let cave_id = cave_policy::cave_id_from_name(&cave);
+                    super::beacon::record(&cave_id, flow.dst_ip, flow.dst_port);
                     PktVerdict::Allow
                 }
                 RateVerdict::OverLimit => {
