@@ -145,6 +145,7 @@ fn execute(cmd: &str) {
         "pq-selftest" => cmd_pq_selftest(),
         "pq-sig-selftest" => cmd_pq_sig_selftest(),
         "ipc-selftest"    => cmd_ipc_selftest(),
+        "secure-ipc-selftest" => cmd_secure_ipc_selftest(),
         "smc-probe" => cmd_smc_probe(),
         "smc-pet" => cmd_smc_pet_start(),
         "smc-stop" => cmd_smc_pet_stop(),
@@ -418,6 +419,31 @@ fn hex_nibble(b: u8) -> u8 {
         b'a'..=b'f' => b - b'a' + 10,
         b'A'..=b'F' => b - b'A' + 10,
         _ => 255,
+    }
+}
+
+// Integration #1: secure_channel on top of ipc_session.
+fn cmd_secure_ipc_selftest() {
+    console::puts_hi("  SECURE-IPC END-TO-END SELF-TEST\n");
+    console::puts("  handshake → session key → AEAD-framed channel\n");
+    console::puts("  (confidentiality + integrity + replay resistance)\n");
+
+    match crate::batcave::secure_channel::selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS\n");
+            console::puts("    plaintext:      ");
+            print_num(r.plaintext_len); console::puts(" bytes\n");
+            console::puts("    wire frame:     ");
+            print_num(r.frame_len); console::puts(" bytes (+");
+            print_num(r.expansion); console::puts(" AEAD overhead)\n");
+            console::puts("    round 1 match:  "); console::puts(if r.round_1_matched {"✓"} else {"✗"}); console::puts("\n");
+            console::puts("    round 2 match:  "); console::puts(if r.round_2_matched {"✓"} else {"✗"}); console::puts("\n");
+            console::puts("    tamper rejected:"); console::puts(if r.tamper_rejected {"✓"} else {"✗"}); console::puts("\n");
+            console::puts("    replay rejected:"); console::puts(if r.replay_rejected {"✓"} else {"✗"}); console::puts("\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
+        }
     }
 }
 

@@ -4,3 +4,4 @@ pub mod cave;
 pub mod docker_client;
 pub mod ipc_session;
 pub mod linux;
+pub mod secure_channel;
