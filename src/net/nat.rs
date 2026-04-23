@@ -120,6 +120,35 @@ pub fn pump_and_forward(nic0_ip: u32, nic0_mac: [u8; 6], gw_mac: [u8; 6]) -> (us
     (drained, forwarded)
 }
 
+/// Main-loop entry point. Called each iteration of the desktop idle
+/// loop (bounded budget inside pump_and_forward / pump_replies so a
+/// packet flood can't starve the UI).
+///
+/// Uses the built-in nic 0 slirp defaults: 10.0.2.15 source IP,
+/// 52:55:0a:00:02:02 gateway MAC (slirp is L4-NAT so the specific MAC
+/// is irrelevant). Returns total activity count for debug counters.
+pub fn tick() -> (usize, usize) {
+    use crate::drivers::virtio::net;
+    if !net::is_ready_n(1) && !net::is_ready_n(0) { return (0, 0); }
+    let nic0_mac = net::mac_n(0);
+    let nic1_mac = net::mac_n(1);
+    let nic0_ip:  u32 = 0x0A00020F;
+    let gw_mac = [0x52, 0x55, 0x0A, 0x00, 0x02, 0x02];
+    // Skip the outbound path if nic 1 isn't up — otherwise would
+    // spam "not ready" for every tick.
+    let out = if net::is_ready_n(1) {
+        pump_and_forward(nic0_ip, nic0_mac, gw_mac)
+    } else { (0, 0) };
+    // Only drain nic 0 for reply frames if we have caves registered.
+    // Without bindings, every reply would fall through the lookup and
+    // we'd burn cycles on unrelated traffic. This also avoids racing
+    // with the existing `net::poll_once` callers.
+    let inn = if net::is_ready_n(0) && nat_table_size() > 0 {
+        pump_replies(nic1_mac)
+    } else { (0, 0) };
+    (out.1, inn.1)
+}
+
 /// Drain nic 0, reverse-NAT replies that match our table, deliver on
 /// nic 1 to the original cave. Returns (drained, delivered).
 pub fn pump_replies(nic1_mac: [u8; 6]) -> (usize, usize) {

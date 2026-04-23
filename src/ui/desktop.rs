@@ -231,6 +231,12 @@ pub fn run() -> ! {
             }
         }
 
+        // Followup 3c-autopump: drive the NAT forwarder from the main
+        // idle loop. Bounded to 256 frames per direction per tick
+        // (inside nat::tick) so a flood can't starve the UI. Cheap
+        // no-op when nic 1 isn't present or table is empty.
+        let _ = crate::net::nat::tick();
+
         core::hint::spin_loop();
     }
 }
