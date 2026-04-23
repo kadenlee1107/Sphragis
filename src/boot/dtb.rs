@@ -34,6 +34,11 @@ pub struct DtbInfo {
     pub virtio_count: usize,
     pub memory_base: usize,
     pub memory_size: usize,
+    /// Initrd physical range populated by QEMU via `-initrd`.
+    /// Both zero when no initrd was supplied. Range is inclusive
+    /// start, exclusive end per Linux FDT convention.
+    pub initrd_start: usize,
+    pub initrd_end:   usize,
     pub valid: bool,
 }
 
@@ -44,6 +49,8 @@ impl DtbInfo {
             virtio_count: 0,
             memory_base: 0,
             memory_size: 0,
+            initrd_start: 0,
+            initrd_end:   0,
             valid: false,
         }
     }
@@ -142,6 +149,25 @@ pub fn parse(dtb_addr: usize) -> DtbInfo {
                     if val_len >= 16 {
                         info.memory_base = be64(pos) as usize;
                         info.memory_size = be64(pos + 8) as usize;
+                    }
+                }
+
+                // `/chosen/linux,initrd-start` + `linux,initrd-end`.
+                // QEMU emits u32 or u64 depending on DTB address-cells.
+                // Accept both widths.
+                if node_name == "chosen"
+                    && (prop_name == "linux,initrd-start"
+                        || prop_name == "linux,initrd-end")
+                {
+                    let val = match val_len {
+                        4 => be32(pos) as usize,
+                        8 => be64(pos) as usize,
+                        _ => 0,
+                    };
+                    if prop_name == "linux,initrd-start" {
+                        info.initrd_start = val;
+                    } else {
+                        info.initrd_end = val;
                     }
                 }
 

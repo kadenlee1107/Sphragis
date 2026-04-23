@@ -73,6 +73,37 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
                 }
                 drivers::uart::puts("\n");
             }
+
+            // Chromium blob delivery via QEMU `-initrd`. The kernel
+            // linker's `__kernel_end` symbol is past `.bss + stack`,
+            // so the legacy "append the blob to the ELF file" trick
+            // in `tools/bake_chromium.sh` doesn't work with ELF
+            // kernels under QEMU — ELF only loads PT_LOAD segments,
+            // skipping the tail bytes. The DTB path sidesteps that:
+            // QEMU's `-initrd` puts the blob at a known physical
+            // address and records it in `/chosen/linux,initrd-*`.
+            if dtb_info.initrd_start != 0
+                && dtb_info.initrd_end > dtb_info.initrd_start
+            {
+                drivers::uart::puts("  [dtb] initrd @ 0x");
+                let hex = b"0123456789abcdef";
+                let addr = dtb_info.initrd_start;
+                for shift in (0..16).rev() {
+                    let nibble = ((addr >> (shift * 4)) & 0xF) as usize;
+                    drivers::uart::putc(hex[nibble]);
+                }
+                drivers::uart::puts("..0x");
+                let end = dtb_info.initrd_end;
+                for shift in (0..16).rev() {
+                    let nibble = ((end >> (shift * 4)) & 0xF) as usize;
+                    drivers::uart::putc(hex[nibble]);
+                }
+                drivers::uart::puts("\n");
+                kernel::mm::initrd::set_range(
+                    dtb_info.initrd_start,
+                    dtb_info.initrd_end,
+                );
+            }
         }
     }
 

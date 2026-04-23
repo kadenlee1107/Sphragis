@@ -72,6 +72,25 @@ static mut CACHE_INITIALIZED: bool = false;
 static mut CACHED: Option<BlobInfo> = None;
 static mut CACHED_BASE: usize = 0;
 static mut CACHED_SIZE: usize = 0;
+/// Override range set by the boot code when QEMU's `-initrd` path
+/// delivered the blob instead of the `tools/bake_chromium.sh`
+/// append-to-kernel path. Zero → probe falls back to `__kernel_end`.
+static mut OVERRIDE_BASE: usize = 0;
+static mut OVERRIDE_END:  usize = 0;
+
+/// Called by the boot code after the DTB is parsed. If `start != 0`
+/// the probe will look at `[start, end)` (typically the region QEMU
+/// loaded via `-initrd`) instead of scanning past `__kernel_end`.
+/// Safe to call multiple times as long as the cache hasn't been
+/// populated yet — after that we ignore further calls so the blob
+/// pointer stays stable for the rest of the kernel's life.
+pub fn set_range(start: usize, end: usize) {
+    unsafe {
+        if core::ptr::read(core::ptr::addr_of!(CACHE_INITIALIZED)) { return; }
+        core::ptr::write(core::ptr::addr_of_mut!(OVERRIDE_BASE), start);
+        core::ptr::write(core::ptr::addr_of_mut!(OVERRIDE_END),  end);
+    }
+}
 
 /// Returns `true` if a Chromium blob was baked into this image.
 pub fn is_present() -> bool {
@@ -143,8 +162,19 @@ fn kernel_end_addr() -> usize {
 /// Returns the discovered BlobInfo and (via the module-level cache)
 /// records the base pointer + size for later slice construction.
 fn probe() -> Option<BlobInfo> {
-    let base = kernel_end_addr();
-    if base == 0 || base >= SEARCH_CEILING {
+    // Prefer the DTB-supplied initrd range (populated by
+    // `set_range`). Fall back to scanning past `__kernel_end` for
+    // the legacy bake-to-kernel-image path.
+    let (base, ceiling) = unsafe {
+        let ob = core::ptr::read(core::ptr::addr_of!(OVERRIDE_BASE));
+        let oe = core::ptr::read(core::ptr::addr_of!(OVERRIDE_END));
+        if ob != 0 && oe > ob {
+            (ob, oe)
+        } else {
+            (kernel_end_addr(), SEARCH_CEILING)
+        }
+    };
+    if base == 0 || base >= ceiling {
         return None;
     }
 
@@ -156,7 +186,7 @@ fn probe() -> Option<BlobInfo> {
 
     for &off in &CANDIDATES {
         let head = base + off;
-        if head + 16 >= SEARCH_CEILING {
+        if head + 16 >= ceiling {
             break;
         }
         if !magic_matches(head, &MAGIC_HEAD) {
@@ -172,7 +202,7 @@ fn probe() -> Option<BlobInfo> {
         let crc_off = blob_start + size;
         let tail_off = crc_off + 4;
 
-        if tail_off + 8 >= SEARCH_CEILING {
+        if tail_off + 8 >= ceiling {
             continue;
         }
 
