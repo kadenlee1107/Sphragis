@@ -1683,9 +1683,9 @@ pub fn classify(frame: &[u8]) -> PktVerdict {
     );
     match sv {
         SniVerdict::Allow => {
-            // Second-layer defense: rate limiter.
-            use super::cave_shaper::{check_and_debit_by_name, RateVerdict};
-            match check_and_debit_by_name(&cave) {
+            // Second-layer defense: rate limiter (packets AND bytes).
+            use super::cave_shaper::{check_and_debit_sized_by_name, RateVerdict};
+            match check_and_debit_sized_by_name(&cave, frame.len()) {
                 RateVerdict::Unlimited | RateVerdict::Ok => {
                     PKT_ALLOW.fetch_add(1, Ordering::Relaxed);
                     PktVerdict::Allow

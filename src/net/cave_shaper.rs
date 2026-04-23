@@ -27,16 +27,22 @@ use alloc::vec::Vec;
 
 use super::cave_policy::{CaveId, cave_id_from_name};
 
-/// Refill rate / burst for one cave.
+/// Refill rate / burst for one cave. Two parallel buckets — packets
+/// (pps) and bytes (bps). Either can be 0 to mean "unlimited on this
+/// axis". Most operators will pick one or the other; both can be
+/// useful together when a cave has small legit traffic but could
+/// otherwise fill the allowance with a single jumbo frame.
 #[derive(Clone, Copy)]
 struct Bucket {
     cave: CaveId,
+    // Packet-rate limit.
     tokens_per_sec: u32,
     burst: u32,
-    /// Accumulated tokens scaled by TICK_SCALE to preserve fractional
-    /// fill between calls. A "token" = 1 packet; we keep the running
-    /// count in ticks-worth-of-tokens and divide when comparing.
     tokens_scaled: u64,
+    // Byte-rate limit.
+    bytes_per_sec: u32,
+    byte_burst: u32,
+    byte_tokens_scaled: u64,
     last_refill_ticks: u64,
 }
 
@@ -82,10 +88,17 @@ fn find_free() -> Option<usize> {
 /// Install or update a cave's rate limit.  pps=0 means "remove the
 /// limit" (reverts to unlimited). burst is the peak bucket depth.
 pub fn set_rate(cave: CaveId, tokens_per_sec: u32, burst: u32) {
+    set_rate_full(cave, tokens_per_sec, burst, 0, 0);
+}
+
+/// Install or update a cave's rate limits on BOTH packet and byte
+/// axes. 0 on either pair means "no limit on this axis". If all four
+/// are zero, the bucket is removed entirely (back to unlimited).
+pub fn set_rate_full(cave: CaveId, pps: u32, burst: u32,
+                     bps: u32, byte_burst: u32) {
     unsafe {
         let t = core::ptr::addr_of_mut!(BUCKETS);
-        if tokens_per_sec == 0 {
-            // Remove any existing bucket.
+        if pps == 0 && bps == 0 {
             for i in 0..MAX_BUCKETS {
                 if let Some(b) = &(*t)[i] {
                     if b.cave == cave { (*t)[i] = None; return; }
@@ -94,22 +107,26 @@ pub fn set_rate(cave: CaveId, tokens_per_sec: u32, burst: u32) {
             return;
         }
         let now = now_ticks();
-        // If there's already a bucket, update it and preserve tokens.
         if let Some(i) = find(&cave) {
             let b = (*t)[i].as_mut().unwrap();
-            b.tokens_per_sec = tokens_per_sec;
+            b.tokens_per_sec = pps;
             b.burst = burst;
             b.tokens_scaled = (burst as u64) * TICK_SCALE;
+            b.bytes_per_sec = bps;
+            b.byte_burst = byte_burst;
+            b.byte_tokens_scaled = (byte_burst as u64) * TICK_SCALE;
             b.last_refill_ticks = now;
             return;
         }
-        // Else install in a free slot.
         if let Some(i) = find_free() {
             (*t)[i] = Some(Bucket {
                 cave,
-                tokens_per_sec,
+                tokens_per_sec: pps,
                 burst,
                 tokens_scaled: (burst as u64) * TICK_SCALE,
+                bytes_per_sec: bps,
+                byte_burst,
+                byte_tokens_scaled: (byte_burst as u64) * TICK_SCALE,
                 last_refill_ticks: now,
             });
         }
@@ -120,8 +137,27 @@ pub fn set_rate_by_name(name: &str, tokens_per_sec: u32, burst: u32) {
     set_rate(cave_id_from_name(name), tokens_per_sec, burst);
 }
 
+/// Operator-facing: set byte-rate (bps) + byte-burst on a cave.
+pub fn set_byte_rate_by_name(name: &str, bps: u32, byte_burst: u32) {
+    let cave = cave_id_from_name(name);
+    // Preserve existing pps settings if present.
+    let (pps, burst) = rate_for_full(&cave).map(|(p, b, _, _)| (p, b)).unwrap_or((0, 0));
+    set_rate_full(cave, pps, burst, bps, byte_burst);
+}
+
+/// Read back both axes: (pps, burst, bps, byte_burst).
+pub fn rate_for_full(cave: &CaveId) -> Option<(u32, u32, u32, u32)> {
+    let idx = find(cave)?;
+    unsafe {
+        let t = core::ptr::addr_of!(BUCKETS);
+        let b = (*t)[idx].as_ref()?;
+        Some((b.tokens_per_sec, b.burst, b.bytes_per_sec, b.byte_burst))
+    }
+}
+
 pub fn clear_rate_by_name(name: &str) {
-    set_rate(cave_id_from_name(name), 0, 0);
+    let cave = cave_id_from_name(name);
+    set_rate_full(cave, 0, 0, 0, 0);
 }
 
 /// Outcome of a rate-limit check.
@@ -133,6 +169,66 @@ pub enum RateVerdict {
     Ok,
     /// Bucket empty; caller should drop the packet.
     OverLimit,
+}
+
+/// Byte-aware check that validates BOTH buckets. Caller passes the
+/// packet's wire-level size in bytes; byte-bucket is bypassed (bps=0)
+/// when the cave has no byte-rate config. Over-limit on EITHER axis
+/// returns OverLimit — neither bucket is debited in that case so
+/// retries stay accurate.
+pub fn check_and_debit_sized(cave: &CaveId, frame_bytes: usize) -> RateVerdict {
+    let idx = match find(cave) { Some(i) => i, None => return RateVerdict::Unlimited };
+    let now = now_ticks();
+    let tps = ticks_per_sec();
+    unsafe {
+        let t = core::ptr::addr_of_mut!(BUCKETS);
+        let b = (*t)[idx].as_mut().unwrap();
+        // Refill both axes based on elapsed ticks.
+        let elapsed = now.saturating_sub(b.last_refill_ticks);
+        if elapsed > 0 {
+            if b.tokens_per_sec > 0 {
+                let add = (elapsed.saturating_mul(b.tokens_per_sec as u64))
+                            .saturating_mul(TICK_SCALE) / tps;
+                b.tokens_scaled = core::cmp::min(
+                    b.tokens_scaled.saturating_add(add),
+                    (b.burst as u64) * TICK_SCALE,
+                );
+            }
+            if b.bytes_per_sec > 0 {
+                let add = (elapsed.saturating_mul(b.bytes_per_sec as u64))
+                            .saturating_mul(TICK_SCALE) / tps;
+                b.byte_tokens_scaled = core::cmp::min(
+                    b.byte_tokens_scaled.saturating_add(add),
+                    (b.byte_burst as u64) * TICK_SCALE,
+                );
+            }
+            b.last_refill_ticks = now;
+        }
+        // Check pps (if configured).
+        if b.tokens_per_sec > 0 && b.tokens_scaled < TICK_SCALE {
+            return RateVerdict::OverLimit;
+        }
+        // Check bps (if configured).
+        if b.bytes_per_sec > 0 {
+            let need = (frame_bytes as u64).saturating_mul(TICK_SCALE);
+            if b.byte_tokens_scaled < need {
+                return RateVerdict::OverLimit;
+            }
+        }
+        // Both OK — debit both.
+        if b.tokens_per_sec > 0 {
+            b.tokens_scaled -= TICK_SCALE;
+        }
+        if b.bytes_per_sec > 0 {
+            let need = (frame_bytes as u64).saturating_mul(TICK_SCALE);
+            b.byte_tokens_scaled -= need;
+        }
+        RateVerdict::Ok
+    }
+}
+
+pub fn check_and_debit_sized_by_name(name: &str, frame_bytes: usize) -> RateVerdict {
+    check_and_debit_sized(&cave_id_from_name(name), frame_bytes)
 }
 
 /// Check whether the cave may send one more packet now. Refills the

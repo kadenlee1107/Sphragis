@@ -166,6 +166,7 @@ fn execute(cmd: &str) {
         "cpol-rate-list"  => cmd_cpol_rate_list(),
         "cpol-rate-clear" => cmd_cpol_rate_clear(parts[1]),
         "cpol-rate-selftest" => cmd_cpol_rate_selftest(),
+        "cpol-byte-rate"     => cmd_cpol_byte_rate(&parts[1..]),
         "cpol-daemon-list" => cmd_cpol_daemon_list(),
         "cpol-daemon-show" => cmd_cpol_daemon_show(parts[1]),
         "nic-status"  => cmd_nic_status(),
@@ -1014,6 +1015,28 @@ fn cmd_cpol_rate_list() {
         print_num(*tok_now as usize);
         console::puts("\n");
     }
+}
+
+/// cpol-byte-rate <cave> <bps> <byte_burst>
+/// Companion to cpol-rate: limits by bytes/sec instead of pkts/sec.
+/// Set either, both, or neither. 0 on both = unlimited bytes (the
+/// pps limit, if any, still applies).
+fn cmd_cpol_byte_rate(args: &[&str]) {
+    if args.len() < 3 || args[0].is_empty() {
+        console::puts("  usage: cpol-byte-rate <cave> <bytes/sec> <byte_burst>\n");
+        return;
+    }
+    let bps: u32 = match args[1].parse() {
+        Ok(n) => n, Err(_) => { console::puts("  bad bps\n"); return; }
+    };
+    let bb: u32 = match args[2].parse() {
+        Ok(n) => n, Err(_) => { console::puts("  bad byte_burst\n"); return; }
+    };
+    crate::net::cave_shaper::set_byte_rate_by_name(args[0], bps, bb);
+    console::puts("  cpol-byte-rate "); console::puts(args[0]);
+    console::puts(" -> bps="); print_num(bps as usize);
+    console::puts(" byte_burst="); print_num(bb as usize);
+    console::puts("  OK\n");
 }
 
 fn cmd_cpol_rate_clear(name: &str) {
