@@ -3714,6 +3714,35 @@ fn sys_socketpair(args: [u64; 6]) -> i64 {
 }
 
 fn sys_bind(args: [u64; 6]) -> i64 {
+    let fd_num = args[0] as i32;
+
+    // Legacy path: `sys_socket` creates sockets as VFS nodes with low
+    // fds (e.g. 10) instead of the modern `sockets::` table at fd >=
+    // SOCKET_FD_BASE (1024). `sockets::bind()` would reject them with
+    // ENOTSOCK. Since our outbound-only legacy sockets pick ephemeral
+    // ports on connect(), bind() is advisory — accept it as a no-op.
+    // This unlocks busybox nslookup (UDP DGRAM → bind → sendto DNS).
+    if fd_num >= 0 {
+        if let Some(entry) = fd::get(fd_num as u32) {
+            let node = vfs::get_node(entry.node_idx);
+            if node.node_type == vfs::NodeType::Socket {
+                // Validate the addr pointer if non-null; trust the
+                // content (ephemeral local port picking happens on
+                // the send side in sys_sendto).
+                let addr_ptr = args[1] as usize;
+                let addr_len = args[2] as usize;
+                if addr_ptr != 0 && addr_len >= 8 {
+                    if !uaccess::is_user_range(addr_ptr, addr_len.min(16)) {
+                        return EFAULT;
+                    }
+                }
+                return 0;
+            }
+        }
+    }
+
+    // Modern-socket path: fd was handed out by sockets::socket() with
+    // fd >= SOCKET_FD_BASE; the table entry holds per-socket state.
     super::sockets::bind(
         args[0] as i32,
         args[1] as *const super::sockets::SockaddrIn,
@@ -3769,6 +3798,64 @@ fn accept_charged(listen_fd: i32,
     r
 }
 fn sys_getsockname(args: [u64; 6]) -> i64 {
+    let fd_num = args[0] as i32;
+    let addr_ptr = args[1] as usize;
+    let addrlen_ptr = args[2] as usize;
+
+    // Legacy VFS-socket path: fabricate a plausible local address
+    // (0.0.0.0 : ephemeral) so traceroute can read a local port and
+    // continue. Busybox traceroute calls getsockname after connect()
+    // purely to learn the kernel-picked local port.
+    if fd_num >= 0 {
+        if let Some(entry) = fd::get(fd_num as u32) {
+            let node = vfs::get_node(entry.node_idx);
+            if node.node_type == vfs::NodeType::Socket {
+                if addr_ptr == 0 || addrlen_ptr == 0 { return EINVAL; }
+                if !uaccess::is_user_range(addr_ptr, 16) { return EFAULT; }
+                if !uaccess::is_user_range(addrlen_ptr, 4) { return EFAULT; }
+
+                // Read caller-provided buffer length; write back min(avail, 16).
+                let available: u32;
+                unsafe {
+                    let mut v: u32 = 0;
+                    core::arch::asm!("ldr {v:w}, [{a}]",
+                        a = in(reg) addrlen_ptr, v = out(reg) v);
+                    available = v;
+                }
+                let write_len = (available as usize).min(16);
+
+                // struct sockaddr_in { family(u16), port_be(u16), addr_be(u32), zero(u64) }
+                let local_port = unsafe { SOCK_LOCAL_PORT };
+                let port_be = local_port.to_be();
+                let family: u16 = AF_INET as u16;
+                let zero: u64 = 0;
+                unsafe {
+                    if write_len >= 2 {
+                        core::arch::asm!("strh {v:w}, [{a}]",
+                            a = in(reg) addr_ptr, v = in(reg) family as u32);
+                    }
+                    if write_len >= 4 {
+                        core::arch::asm!("strh {v:w}, [{a}]",
+                            a = in(reg) addr_ptr + 2, v = in(reg) port_be as u32);
+                    }
+                    if write_len >= 8 {
+                        core::arch::asm!("str {v:w}, [{a}]",
+                            a = in(reg) addr_ptr + 4, v = in(reg) 0u32);
+                    }
+                    if write_len >= 16 {
+                        core::arch::asm!("str {v}, [{a}]",
+                            a = in(reg) addr_ptr + 8, v = in(reg) zero);
+                    }
+                    // Store actual size back to addrlen.
+                    let filled: u32 = 16;
+                    core::arch::asm!("str {v:w}, [{a}]",
+                        a = in(reg) addrlen_ptr, v = in(reg) filled);
+                }
+                return 0;
+            }
+        }
+    }
+
     super::sockets::getsockname(
         args[0] as i32,
         args[1] as *mut super::sockets::SockaddrIn,
@@ -3797,6 +3884,28 @@ fn sys_recvmsg(args: [u64; 6]) -> i64 {
     )
 }
 fn sys_setsockopt(args: [u64; 6]) -> i64 {
+    let fd_num = args[0] as i32;
+
+    // Legacy path: legacy-table socket fds (VFS Socket node) — accept
+    // common socket options as no-ops. busybox traceroute sets
+    // SO_SNDBUF/SO_RCVBUF/IP_TTL; none require state we track.
+    if fd_num >= 0 {
+        if let Some(entry) = fd::get(fd_num as u32) {
+            let node = vfs::get_node(entry.node_idx);
+            if node.node_type == vfs::NodeType::Socket {
+                // Validate the optval pointer if present; ignore contents.
+                let optval_ptr = args[3] as usize;
+                let optlen = args[4] as usize;
+                if optval_ptr != 0 && optlen > 0 {
+                    if !uaccess::is_user_range(optval_ptr, optlen.min(64)) {
+                        return EFAULT;
+                    }
+                }
+                return 0;
+            }
+        }
+    }
+
     super::sockets::setsockopt(
         args[0] as i32, args[1] as i32, args[2] as i32,
         args[3] as *const u8, args[4] as u32,
