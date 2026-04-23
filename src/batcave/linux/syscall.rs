@@ -295,6 +295,18 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         return EACCES;
     }
 
+    // Per-cave surgical denylist — even if the broader capability is
+    // granted, this cave can ban specific syscall numbers. Lets an
+    // operator grant `net` but still deny `connect()` so an RCE'd
+    // cave can't dial out on behalf of an attacker.
+    if super::super::syscall_filter::is_denied(cave_id, syscall_num) {
+        super::super::syscall_filter::bump_denied();
+        uart::puts("[linux] BLOCKED syscall ");
+        crate::kernel::mm::print_num(syscall_num as usize);
+        uart::puts(" (per-cave denylist)\n");
+        return EPERM;
+    }
+
     handler(args)
 }
 

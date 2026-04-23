@@ -154,6 +154,11 @@ fn execute(cmd: &str) {
         "cpol-add-sni" => cmd_cpol_add_sni(&parts[1..]),
         "cpol-check"  => cmd_cpol_check(&parts[1..]),
         "cpol-sni-selftest" => cmd_cpol_sni_selftest(),
+        "cave-syscall-deny"  => cmd_cave_syscall_deny(&parts[1..]),
+        "cave-syscall-allow" => cmd_cave_syscall_allow(&parts[1..]),
+        "cave-syscall-list"  => cmd_cave_syscall_list(parts[1]),
+        "cave-syscall-clear" => cmd_cave_syscall_clear(parts[1]),
+        "cave-syscall-selftest" => cmd_cave_syscall_selftest(),
         "cpol-clear"  => cmd_cpol_clear(parts[1]),
         "cpol-sync"   => cmd_cpol_sync(parts[1]),
         "cpol-rate"       => cmd_cpol_rate(&parts[1..]),
@@ -742,6 +747,95 @@ fn cmd_cpol_add_sni(args: &[&str]) {
     console::puts(" sni=");
     console::puts(sni);
     console::puts("  OK\n");
+}
+
+// ── Per-cave syscall denylist ──────────────────────────────────────
+
+fn cmd_cave_syscall_deny(args: &[&str]) {
+    if args.len() < 2 || args[0].is_empty() {
+        console::puts("  usage: cave-syscall-deny <cave_name> <nr>\n");
+        return;
+    }
+    let nr: u64 = match args[1].parse() {
+        Ok(n) => n,
+        Err(_) => { console::puts("  bad syscall number\n"); return; }
+    };
+    let id = match crate::batcave::cave::find_id(args[0]) {
+        Some(i) => i,
+        None => { console::puts("  no such cave\n"); return; }
+    };
+    crate::batcave::syscall_filter::deny(id, nr);
+    console::puts("  cave-syscall-deny ");
+    console::puts(args[0]);
+    console::puts(" nr="); print_num(nr as usize);
+    console::puts("  OK\n");
+}
+
+fn cmd_cave_syscall_allow(args: &[&str]) {
+    if args.len() < 2 || args[0].is_empty() {
+        console::puts("  usage: cave-syscall-allow <cave_name> <nr>\n");
+        return;
+    }
+    let nr: u64 = match args[1].parse() {
+        Ok(n) => n,
+        Err(_) => { console::puts("  bad syscall number\n"); return; }
+    };
+    let id = match crate::batcave::cave::find_id(args[0]) {
+        Some(i) => i,
+        None => { console::puts("  no such cave\n"); return; }
+    };
+    crate::batcave::syscall_filter::allow(id, nr);
+    console::puts("  cave-syscall-allow OK\n");
+}
+
+fn cmd_cave_syscall_list(name: &str) {
+    if name.is_empty() {
+        console::puts("  usage: cave-syscall-list <cave_name>\n");
+        return;
+    }
+    let id = match crate::batcave::cave::find_id(name) {
+        Some(i) => i,
+        None => { console::puts("  no such cave\n"); return; }
+    };
+    let mut buf = [0u16; 32];
+    let n = crate::batcave::syscall_filter::list(id, &mut buf);
+    console::puts_hi("  CAVE SYSCALL DENYLIST for ");
+    console::puts(name); console::puts("\n");
+    if n == 0 { console::puts("  (no denials)\n"); return; }
+    for i in 0..n {
+        console::puts("    nr="); print_num(buf[i] as usize); console::puts("\n");
+    }
+}
+
+fn cmd_cave_syscall_clear(name: &str) {
+    if name.is_empty() {
+        console::puts("  usage: cave-syscall-clear <cave_name>\n");
+        return;
+    }
+    let id = match crate::batcave::cave::find_id(name) {
+        Some(i) => i,
+        None => { console::puts("  no such cave\n"); return; }
+    };
+    crate::batcave::syscall_filter::clear(id);
+    console::puts("  cave-syscall-clear OK\n");
+}
+
+fn cmd_cave_syscall_selftest() {
+    console::puts_hi("  CAVE-SYSCALL-FILTER SELF-TEST\n");
+    match crate::batcave::syscall_filter::selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS per-cave denylist semantics\n");
+            console::puts("    installed (dup suppressed): ");
+            print_num(r.installed); console::puts("  (expected 3)\n");
+            console::puts("    CONNECT (203) denied:       ");
+            console::puts(if r.is_denied_203 { "yes\n" } else { "no\n" });
+            console::puts("    GETSOCKNAME (204) allowed:  ");
+            console::puts(if !r.is_denied_204 { "yes\n" } else { "no\n" });
+            console::puts("    after clear: entries=");
+            print_num(r.after_clear); console::puts("\n");
+        }
+        Err(e) => { console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n"); }
+    }
 }
 
 fn cmd_cpol_sni_selftest() {

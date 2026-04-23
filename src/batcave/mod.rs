@@ -6,3 +6,4 @@ pub mod ipc_session;
 pub mod linux;
 pub mod secure_channel;
 pub mod secure_ipc;
+pub mod syscall_filter;
