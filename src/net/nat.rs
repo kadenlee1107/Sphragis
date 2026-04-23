@@ -43,12 +43,27 @@ static PKT_ALLOW: AtomicU32 = AtomicU32::new(0);
 static PKT_DROP_POLICY: AtomicU32 = AtomicU32::new(0);
 static PKT_DROP_UNKNOWN_SRC: AtomicU32 = AtomicU32::new(0);
 static PKT_DROP_PARSE: AtomicU32 = AtomicU32::new(0);
+static ARP_REPLIES_SENT: AtomicU32 = AtomicU32::new(0);
+static ARP_REQUESTS_IGNORED: AtomicU32 = AtomicU32::new(0);
+static ICMP_ECHO_FORWARDED: AtomicU32 = AtomicU32::new(0);
+static ICMP_ECHO_DELIVERED: AtomicU32 = AtomicU32::new(0);
+static NAT_GC_EVICTED: AtomicU32 = AtomicU32::new(0);
+
+/// IPv4 address Bat_OS advertises as the caves-side gateway. Used in
+/// ARP replies and as the default source when we originate traffic on
+/// nic 1 (e.g. ICMP time-exceeded, not wired yet).
+pub const CAVES_GATEWAY_IP: u32 = 0xC0A8_4D01; // 192.168.77.1
 
 pub struct Stats {
     pub allow: u32,
     pub drop_policy: u32,
     pub drop_unknown_src: u32,
     pub drop_parse: u32,
+    pub arp_replies: u32,
+    pub arp_ignored: u32,
+    pub icmp_forwarded: u32,
+    pub icmp_delivered: u32,
+    pub nat_gc_evicted: u32,
 }
 
 pub fn stats() -> Stats {
@@ -57,6 +72,11 @@ pub fn stats() -> Stats {
         drop_policy: PKT_DROP_POLICY.load(Ordering::Relaxed),
         drop_unknown_src: PKT_DROP_UNKNOWN_SRC.load(Ordering::Relaxed),
         drop_parse: PKT_DROP_PARSE.load(Ordering::Relaxed),
+        arp_replies: ARP_REPLIES_SENT.load(Ordering::Relaxed),
+        arp_ignored: ARP_REQUESTS_IGNORED.load(Ordering::Relaxed),
+        icmp_forwarded: ICMP_ECHO_FORWARDED.load(Ordering::Relaxed),
+        icmp_delivered: ICMP_ECHO_DELIVERED.load(Ordering::Relaxed),
+        nat_gc_evicted: NAT_GC_EVICTED.load(Ordering::Relaxed),
     }
 }
 
@@ -65,6 +85,89 @@ pub fn reset_stats() {
     PKT_DROP_POLICY.store(0, Ordering::Relaxed);
     PKT_DROP_UNKNOWN_SRC.store(0, Ordering::Relaxed);
     PKT_DROP_PARSE.store(0, Ordering::Relaxed);
+    ARP_REPLIES_SENT.store(0, Ordering::Relaxed);
+    ARP_REQUESTS_IGNORED.store(0, Ordering::Relaxed);
+    ICMP_ECHO_FORWARDED.store(0, Ordering::Relaxed);
+    ICMP_ECHO_DELIVERED.store(0, Ordering::Relaxed);
+    NAT_GC_EVICTED.store(0, Ordering::Relaxed);
+}
+
+// ── ARP on nic 1 (caves interface) ──────────────────────────────
+//
+// A real container ARPs for 192.168.77.1 (the gateway we advertise)
+// before it can send its first IP frame — without a reply, its
+// outgoing traffic never hits nic 1 because the Ethernet dst is
+// unresolved. `try_handle_arp` answers those requests with nic 1's
+// MAC; anything else (requests for other targets, replies, wrong
+// ethertype) falls through to the IPv4 path or the drop counter.
+
+/// If `frame` is an ARP request on nic 1 for the caves gateway IP,
+/// build + send the reply and return true. Otherwise returns false
+/// so the caller can try the IPv4 path.
+pub fn try_handle_arp(frame: &[u8]) -> bool {
+    if frame.len() < 14 + 28 { return false; }
+    let ethertype = ((frame[12] as u16) << 8) | (frame[13] as u16);
+    if ethertype != ETHERTYPE_ARP { return false; }
+    let arp = &frame[14..];
+    // Only handle Ethernet/IPv4 ARP.
+    let hw_type   = ((arp[0] as u16) << 8) | (arp[1] as u16);
+    let proto_ty  = ((arp[2] as u16) << 8) | (arp[3] as u16);
+    if hw_type != 1 || proto_ty != ETHERTYPE_IPV4 { return false; }
+    if arp[4] != 6 || arp[5] != 4 { return false; }
+    let op = ((arp[6] as u16) << 8) | (arp[7] as u16);
+    if op != ARP_OP_REQUEST {
+        ARP_REQUESTS_IGNORED.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    // Sender + target proto addresses.
+    let target_ip = ((arp[24] as u32) << 24) | ((arp[25] as u32) << 16)
+                  | ((arp[26] as u32) <<  8) |  (arp[27] as u32);
+    if target_ip != CAVES_GATEWAY_IP {
+        ARP_REQUESTS_IGNORED.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    // Capture sender MAC + IP so we can build a targeted reply.
+    let mut sender_mac = [0u8; 6];
+    sender_mac.copy_from_slice(&arp[8..14]);
+    let sender_ip = ((arp[14] as u32) << 24) | ((arp[15] as u32) << 16)
+                  | ((arp[16] as u32) <<  8) |  (arp[17] as u32);
+    // Build the reply. We claim CAVES_GATEWAY_IP at our nic 1 MAC.
+    use crate::drivers::virtio::net;
+    if !net::is_ready_n(1) { return false; }
+    let nic1_mac = net::mac_n(1);
+    let reply = build_arp_reply(sender_mac, sender_ip, nic1_mac, target_ip);
+    let _ = net::send_n(1, &reply);
+    ARP_REPLIES_SENT.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
+/// Build a raw ARP reply Ethernet frame.
+pub fn build_arp_reply(
+    target_mac: [u8; 6], target_ip: u32,
+    sender_mac: [u8; 6], sender_ip: u32,
+) -> Vec<u8> {
+    let mut v = Vec::with_capacity(14 + 28);
+    // Ethernet
+    v.extend_from_slice(&target_mac);
+    v.extend_from_slice(&sender_mac);
+    v.extend_from_slice(&[0x08, 0x06]); // ARP
+    // ARP payload
+    v.extend_from_slice(&[0x00, 0x01]);      // hw type = Ethernet
+    v.extend_from_slice(&[0x08, 0x00]);      // proto type = IPv4
+    v.push(6);                               // hw addr len
+    v.push(4);                               // proto addr len
+    v.extend_from_slice(&[0x00, 0x02]);      // op = reply
+    v.extend_from_slice(&sender_mac);        // sender HW
+    v.push(((sender_ip >> 24) & 0xFF) as u8);
+    v.push(((sender_ip >> 16) & 0xFF) as u8);
+    v.push(((sender_ip >>  8) & 0xFF) as u8);
+    v.push(( sender_ip        & 0xFF) as u8);
+    v.extend_from_slice(&target_mac);        // target HW
+    v.push(((target_ip >> 24) & 0xFF) as u8);
+    v.push(((target_ip >> 16) & 0xFF) as u8);
+    v.push(((target_ip >>  8) & 0xFF) as u8);
+    v.push(( target_ip        & 0xFF) as u8);
+    v
 }
 
 /// Drain every pending frame on nic 1 (the caves interface), running
@@ -102,6 +205,10 @@ pub fn pump_and_forward(nic0_ip: u32, nic0_mac: [u8; 6], gw_mac: [u8; 6]) -> (us
         let len = match net::recv_n(1, &mut buf) { Some(l) => l, None => break };
         drained += 1;
         let frame = &buf[..len];
+        // ARP first — if the frame is an ARP request for our gateway IP,
+        // we reply directly on nic 1 and don't touch NAT. Containers MUST
+        // resolve the gateway before they can send the first IP frame.
+        if try_handle_arp(frame) { continue; }
         let verdict = classify(frame);
         if verdict != PktVerdict::Allow { continue; }
         let flow = match parse_outbound(frame) { Some(f) => f, None => continue };
@@ -506,8 +613,14 @@ pub fn reset_bindings() {
 // ── Packet parser ────────────────────────────────────────────────
 
 pub const ETHERTYPE_IPV4: u16 = 0x0800;
-pub const IPPROTO_TCP: u8 = 6;
-pub const IPPROTO_UDP: u8 = 17;
+pub const ETHERTYPE_ARP:  u16 = 0x0806;
+pub const IPPROTO_ICMP: u8 = 1;
+pub const IPPROTO_TCP:  u8 = 6;
+pub const IPPROTO_UDP:  u8 = 17;
+pub const ARP_OP_REQUEST: u16 = 1;
+pub const ARP_OP_REPLY:   u16 = 2;
+pub const ICMP_TYPE_ECHO_REQUEST: u8 = 8;
+pub const ICMP_TYPE_ECHO_REPLY:   u8 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PktVerdict {

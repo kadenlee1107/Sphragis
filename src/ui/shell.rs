@@ -837,6 +837,11 @@ fn cmd_nat_stats() {
     console::puts("    drop-policy:      "); print_num(s.drop_policy as usize); console::puts("\n");
     console::puts("    drop-unknown-src: "); print_num(s.drop_unknown_src as usize); console::puts("\n");
     console::puts("    drop-parse:       "); print_num(s.drop_parse as usize); console::puts("\n");
+    console::puts("    arp-replies:      "); print_num(s.arp_replies as usize); console::puts("\n");
+    console::puts("    arp-ignored:      "); print_num(s.arp_ignored as usize); console::puts("\n");
+    console::puts("    icmp-forwarded:   "); print_num(s.icmp_forwarded as usize); console::puts("\n");
+    console::puts("    icmp-delivered:   "); print_num(s.icmp_delivered as usize); console::puts("\n");
+    console::puts("    nat-gc-evicted:   "); print_num(s.nat_gc_evicted as usize); console::puts("\n");
 }
 
 fn cmd_nat_bind(args: &[&str]) {
