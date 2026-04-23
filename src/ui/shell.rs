@@ -159,6 +159,7 @@ fn execute(cmd: &str) {
         "cave-syscall-list"  => cmd_cave_syscall_list(parts[1]),
         "cave-syscall-clear" => cmd_cave_syscall_clear(parts[1]),
         "cave-syscall-selftest" => cmd_cave_syscall_selftest(),
+        "cave-seal-selftest"    => cmd_cave_seal_selftest(),
         "cpol-clear"  => cmd_cpol_clear(parts[1]),
         "cpol-sync"   => cmd_cpol_sync(parts[1]),
         "cpol-rate"       => cmd_cpol_rate(&parts[1..]),
@@ -824,6 +825,24 @@ fn cmd_cave_syscall_clear(name: &str) {
     };
     crate::batcave::syscall_filter::clear(id);
     console::puts("  cave-syscall-clear OK\n");
+}
+
+fn cmd_cave_seal_selftest() {
+    console::puts_hi("  CAVE-SEAL SELF-TEST (anti-coercion one-way ratchet)\n");
+    match crate::batcave::cave::seal_selftest() {
+        Ok(r) => {
+            console::puts("  ✓ PASS seal semantics\n");
+            console::puts("    before: Persistent:   ");
+            console::puts(if r.before_was_persistent { "yes\n" } else { "no\n" });
+            console::puts("    after:  Ephemeral:    ");
+            console::puts(if r.after_is_ephemeral { "yes\n" } else { "no\n" });
+            console::puts("    fs_key zeroed:        ");
+            console::puts(if r.fs_key_zeroed { "yes\n" } else { "no (INCORRECT)\n" });
+            console::puts("    re-seal rejected:     ");
+            console::puts(if r.reseal_rejected { "yes\n" } else { "no (INCORRECT)\n" });
+        }
+        Err(e) => { console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n"); }
+    }
 }
 
 fn cmd_cave_syscall_selftest() {

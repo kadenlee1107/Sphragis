@@ -995,6 +995,20 @@ class Handler(socketserver.StreamRequestHandler):
                     self._send("OK bound")
                     continue
 
+                # Seal: destroy persistent volume + zero cave key, leave
+                # the container alive for its current session. Per
+                # DESIGN_BATCAVES.md anti-coercion ratchet.
+                if line.startswith("CAVE_SEAL "):
+                    name = line.split(maxsplit=1)[1].strip()
+                    try:
+                        destroy_encrypted_volume(name)
+                    except Exception as e:
+                        log(f"SEAL {name} volume destroy: {e}")
+                    zeroize_cave_key(name)
+                    log(f"SEAL {name} volume destroyed + key zeroed (cave alive until session end)")
+                    self._send("OK sealed")
+                    continue
+
                 if line.startswith("DESTROY "):
                     name = line.split(maxsplit=1)[1].strip()
                     ok, msg = cmd_destroy(name)

@@ -239,6 +239,18 @@ pub fn run<F: FnMut(&str)>(
 
 /// `batcave destroy --docker` — stops + removes the container. Daemon
 /// also collapses the shared network when the last cave is destroyed.
+/// Seal a Docker cave: destroys the persistent encrypted volume
+/// and zeroes the per-cave key on the daemon side, but leaves the
+/// container alive for its current session. One-way ratchet —
+/// any data still in the volume becomes unrecoverable immediately.
+pub fn cave_seal(name: &str) -> Result<(), &'static str> {
+    let mut cmd = String::from("CAVE_SEAL ");
+    cmd.push_str(name);
+    send_cmd(&cmd)?;
+    let reply = recv_line()?;
+    if reply.starts_with("OK") { Ok(()) } else { Err("cave_seal rejected") }
+}
+
 pub fn destroy(name: &str) -> Result<(), &'static str> {
     let mut cmd = String::from("DESTROY ");
     cmd.push_str(name);

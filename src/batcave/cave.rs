@@ -550,13 +550,51 @@ pub fn find_id(name: &str) -> Option<usize> {
 }
 
 /// Seal a persistent BatCave to ephemeral (one-way, irreversible).
+///
+/// Anti-coercion design per DESIGN_BATCAVES.md §"Seal": once an
+/// operator is facing duress and seals a cave, the persistent-state
+/// guarantees go away IMMEDIATELY — not at next-reboot. This means:
+///
+///   1. cave_type flips to Ephemeral (blocks future "already sealed"
+///      re-seals and will get swept by destroy_all like any ephemeral).
+///   2. fs_key is zeroed RIGHT NOW. Any BatFS blob that survives
+///      on disk becomes undecryptable — even to the operator, even
+///      with the passphrase. One-way ratchet.
+///   3. For Docker-backed caves: the daemon's encrypted APFS volume
+///      is destroyed. The bind-mount inside the container becomes
+///      inert — the container keeps running for its current session
+///      but has nothing persistent backing /data. On next wipe /
+///      reboot the remaining container state dies with the cave.
+///
+/// There is no `unseal`. Callers that get "already ephemeral" have
+/// either sealed this cave before OR created it as ephemeral; in
+/// either case the operator is not losing anything by the error.
 pub fn seal(name: &str) -> Result<(), &'static str> {
-    let cave = find_mut(name)?;
+    // Capture Docker-ness + image name BEFORE we flip state, because
+    // the daemon call needs the existing identifiers.
+    let (is_docker, already_ephemeral) = {
+        let cave = find_mut(name)?;
+        (matches!(cave.backing, CaveBacking::Docker),
+         cave.cave_type == CaveType::Ephemeral)
+    };
 
-    if cave.cave_type == CaveType::Ephemeral {
+    if already_ephemeral {
         return Err("already ephemeral");
     }
 
+    // Tell the daemon to destroy the encrypted volume + drop the
+    // per-cave key mapping. Best-effort — if the daemon is down we
+    // still flip state locally so the ratchet holds.
+    if is_docker {
+        let _ = crate::batcave::docker_client::with_daemon(|| {
+            crate::batcave::docker_client::cave_seal(name)
+        });
+    }
+
+    // Zero the BatFS key + flip state. `find_mut` is re-run because
+    // the daemon call above may have yielded.
+    let cave = find_mut(name)?;
+    cave.fs_key = [0; 32];
     cave.cave_type = CaveType::Ephemeral;
     Ok(())
 }
@@ -720,6 +758,61 @@ pub fn type_str(t: CaveType) -> &'static str {
         CaveType::Persistent => "persistent",
         CaveType::Ephemeral => "ephemeral",
     }
+}
+
+// ── Seal ratchet selftest ─────────────────────────────────────────
+
+pub struct SealReport {
+    pub before_was_persistent: bool,
+    pub after_is_ephemeral: bool,
+    pub fs_key_zeroed: bool,
+    pub reseal_rejected: bool,
+}
+
+/// Pure in-kernel proof of the seal ratchet:
+///   1. Create a persistent cave with a non-zero fs_key (derived from
+///      the name).
+///   2. Inspect pre-state: type=Persistent, fs_key != 0.
+///   3. Call `seal()`.
+///   4. Inspect post-state: type=Ephemeral AND fs_key == [0;32].
+///   5. Call `seal()` again — must return "already ephemeral" (one-way).
+///   6. Destroy cave to clean up.
+pub fn seal_selftest() -> Result<SealReport, &'static str> {
+    let name = "seal-selftest-cave";
+    // Fresh slate in case a prior run left residue.
+    let _ = destroy(name);
+
+    let _slot = create(name, false)?;   // ephemeral=false → Persistent
+    let (ptype_before, key_before) = {
+        let c = find_mut(name)?;
+        (c.cave_type, c.fs_key)
+    };
+    if ptype_before != CaveType::Persistent { return Err("expected Persistent before seal"); }
+    if key_before == [0u8; 32] { return Err("fresh cave's fs_key should not be all-zero"); }
+
+    // Seal. This is a native cave so there's no daemon round-trip.
+    seal(name)?;
+
+    let (ptype_after, key_after) = {
+        let c = find_mut(name)?;
+        (c.cave_type, c.fs_key)
+    };
+    if ptype_after != CaveType::Ephemeral { return Err("expected Ephemeral after seal"); }
+    let key_zeroed = key_after == [0u8; 32];
+
+    // Re-seal must reject.
+    let reseal = seal(name);
+    let reseal_rejected = reseal.is_err();
+
+    // Cleanup.
+    let _ = destroy(name);
+
+    Ok(SealReport {
+        before_was_persistent: ptype_before == CaveType::Persistent,
+        after_is_ephemeral: ptype_after == CaveType::Ephemeral,
+        fs_key_zeroed: key_zeroed,
+        reseal_rejected,
+    })
 }
 
 fn find_mut(name: &str) -> Result<&'static mut BatCave, &'static str> {
