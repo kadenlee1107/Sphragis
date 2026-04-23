@@ -54,6 +54,10 @@ static NAT_GC_EVICTED: AtomicU32 = AtomicU32::new(0);
 /// the src port) — out of scope for this pipeline version. The
 /// existing rule: fragments are dropped distinctly and logged.
 static FRAG_DROPPED: AtomicU32 = AtomicU32::new(0);
+/// Frames pumped off nic 0 that were NOT NAT replies and got
+/// re-dispatched into the kernel's own IP stack. Tracks how many
+/// control-plane packets flowed through the NAT pump correctly.
+static HOST_FRAMES_PASSED: AtomicU32 = AtomicU32::new(0);
 
 /// IPv4 address Bat_OS advertises as the caves-side gateway. Used in
 /// ARP replies and as the default source when we originate traffic on
@@ -71,6 +75,7 @@ pub struct Stats {
     pub icmp_forwarded: u32,
     pub icmp_delivered: u32,
     pub nat_gc_evicted: u32,
+    pub host_frames_passed: u32,
 }
 
 pub fn stats() -> Stats {
@@ -85,6 +90,7 @@ pub fn stats() -> Stats {
         icmp_forwarded: ICMP_ECHO_FORWARDED.load(Ordering::Relaxed),
         icmp_delivered: ICMP_ECHO_DELIVERED.load(Ordering::Relaxed),
         nat_gc_evicted: NAT_GC_EVICTED.load(Ordering::Relaxed),
+        host_frames_passed: HOST_FRAMES_PASSED.load(Ordering::Relaxed),
     }
 }
 
@@ -99,6 +105,7 @@ pub fn reset_stats() {
     ICMP_ECHO_FORWARDED.store(0, Ordering::Relaxed);
     ICMP_ECHO_DELIVERED.store(0, Ordering::Relaxed);
     NAT_GC_EVICTED.store(0, Ordering::Relaxed);
+    HOST_FRAMES_PASSED.store(0, Ordering::Relaxed);
 }
 
 // ── ARP on nic 1 (caves interface) ──────────────────────────────
@@ -271,7 +278,10 @@ pub fn tick() -> (usize, usize) {
 }
 
 /// Drain nic 0, reverse-NAT replies that match our table, deliver on
-/// nic 1 to the original cave. Returns (drained, delivered).
+/// nic 1 to the original cave. Frames that DON'T match the NAT table
+/// are not lost — they get re-dispatched into the kernel's own IPv4
+/// stack (`net::dispatch_host_frame`) so daemon heartbeat, DNS, etc.
+/// still reach their handlers. Returns (drained, delivered).
 pub fn pump_replies(nic1_mac: [u8; 6]) -> (usize, usize) {
     use crate::drivers::virtio::net;
     if !net::is_ready_n(0) { return (0, 0); }
@@ -281,17 +291,24 @@ pub fn pump_replies(nic1_mac: [u8; 6]) -> (usize, usize) {
     for _ in 0..64 {
         let len = match net::recv_n(0, &mut buf) { Some(l) => l, None => break };
         drained += 1;
-        // Only handle IPv4 replies whose dst port matches a NAT entry.
-        let flow = match parse_inbound(&buf[..len]) { Some(f) => f, None => continue };
-        let entry = match nat_lookup_in(flow.dst_port, flow.proto) {
-            Some(e) => e, None => continue
-        };
-        let mut out = Vec::from(&buf[..len]);
-        if rewrite_inbound_into(&mut out, &entry, nic1_mac).is_ok() {
-            let _ = net::send_n(1, &out);
-            delivered += 1;
-            if entry.proto == IPPROTO_ICMP {
-                ICMP_ECHO_DELIVERED.fetch_add(1, Ordering::Relaxed);
+        // Decide if this is a NAT reply. If NOT, hand it to the kernel
+        // stack so we don't silently consume control-plane packets.
+        let maybe_entry = parse_inbound(&buf[..len])
+            .and_then(|f| nat_lookup_in(f.dst_port, f.proto));
+        match maybe_entry {
+            Some(entry) => {
+                let mut out = Vec::from(&buf[..len]);
+                if rewrite_inbound_into(&mut out, &entry, nic1_mac).is_ok() {
+                    let _ = net::send_n(1, &out);
+                    delivered += 1;
+                    if entry.proto == IPPROTO_ICMP {
+                        ICMP_ECHO_DELIVERED.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+            None => {
+                super::dispatch_host_frame(&buf[..len]);
+                HOST_FRAMES_PASSED.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
