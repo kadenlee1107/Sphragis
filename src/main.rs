@@ -199,6 +199,14 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
         }
     }
 
+    // Initialize virtio-blk (optional — only if QEMU was launched
+    // with a `-drive ... -device virtio-blk-device` pair).
+    drivers::uart::puts("[boot] Initializing block device...\n");
+    match drivers::virtio::blk::init() {
+        Some(()) => drivers::uart::puts("  [blk] Block device ready\n"),
+        None    => drivers::uart::puts("  [blk] No block device (offline)\n"),
+    }
+
     // Initialize keyboard (virtio — type in GUI window)
     drivers::uart::puts("[boot] Initializing keyboard...\n");
     match drivers::virtio::keyboard::init() {

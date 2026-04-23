@@ -160,6 +160,8 @@ fn execute(cmd: &str) {
         "cave-syscall-clear" => cmd_cave_syscall_clear(parts[1]),
         "cave-syscall-selftest" => cmd_cave_syscall_selftest(),
         "cave-seal-selftest"    => cmd_cave_seal_selftest(),
+        "blk-status"            => cmd_blk_status(),
+        "blk-selftest"          => cmd_blk_selftest(),
         "cpol-clear"  => cmd_cpol_clear(parts[1]),
         "cpol-sync"   => cmd_cpol_sync(parts[1]),
         "cpol-rate"       => cmd_cpol_rate(&parts[1..]),
@@ -825,6 +827,48 @@ fn cmd_cave_syscall_clear(name: &str) {
     };
     crate::batcave::syscall_filter::clear(id);
     console::puts("  cave-syscall-clear OK\n");
+}
+
+// virtio-blk (DESIGN.md Phase 3 gap) ───────────────────────────────
+
+fn cmd_blk_status() {
+    use crate::drivers::virtio::blk;
+    console::puts_hi("  BLK STATUS\n");
+    if !blk::is_ready() {
+        console::puts("    device not present (QEMU needs -drive + virtio-blk-device)\n");
+        return;
+    }
+    console::puts("    ready.  capacity: ");
+    print_num(blk::capacity_sectors() as usize);
+    console::puts(" sectors (");
+    print_num((blk::capacity_sectors() as usize) / 2);
+    console::puts(" KiB)\n");
+}
+
+fn cmd_blk_selftest() {
+    use crate::drivers::virtio::blk;
+    console::puts_hi("  BLK SELF-TEST (sector round-trip)\n");
+    match blk::selftest() {
+        Ok(r) if !r.ready => {
+            console::puts("  - no block device; skipping\n");
+        }
+        Ok(r) => {
+            console::puts("  ✓ PASS sector 42 write+read round-trip\n");
+            console::puts("    capacity: ");
+            print_num(r.capacity_sectors as usize);
+            console::puts(" sectors\n");
+            console::puts("    write ok: ");
+            console::puts(if r.write_ok { "yes\n" } else { "no\n" });
+            console::puts("    readback OK: ");
+            console::puts(if r.readback_ok { "yes\n" } else { "no (MISMATCH)\n" });
+            console::puts("    first byte of pattern: 0x");
+            let hex = b"0123456789abcdef";
+            console::putc(hex[((r.first_byte >> 4) & 0xF) as usize]);
+            console::putc(hex[(r.first_byte & 0xF) as usize]);
+            console::puts("\n");
+        }
+        Err(e) => { console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n"); }
+    }
 }
 
 fn cmd_cave_seal_selftest() {

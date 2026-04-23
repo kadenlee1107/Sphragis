@@ -218,6 +218,49 @@ impl Virtqueue {
         Some(idx0)
     }
 
+    /// Three-segment chain for protocols like virtio-blk whose request
+    /// layout is (header, data, status) with per-segment direction.
+    /// `data_writable`/`status_writable` control the W bit.
+    pub fn add_chain3(
+        &mut self,
+        header: *const u8, header_len: u32,
+        data:   *mut u8,   data_len:   u32, data_writable:   bool,
+        status: *mut u8,   status_len: u32, status_writable: bool,
+    ) -> Option<u16> {
+        if header.is_null() || header_len == 0 { return None; }
+        if data.is_null()   || data_len   == 0 { return None; }
+        if status.is_null() || status_len == 0 { return None; }
+        if self.num_free < 3 { return None; }
+
+        let id0 = self.alloc_desc()?;
+        let id1 = self.alloc_desc()?;
+        let id2 = self.alloc_desc()?;
+
+        let d0 = self.desc_base() + (id0 as usize) * 16;
+        safe_write64(d0, header as u64);
+        safe_write32(d0 + 8, header_len);
+        safe_write16(d0 + 12, VRING_DESC_F_NEXT);
+        safe_write16(d0 + 14, id1);
+
+        let d1 = self.desc_base() + (id1 as usize) * 16;
+        safe_write64(d1, data as u64);
+        safe_write32(d1 + 8, data_len);
+        let mut f1 = VRING_DESC_F_NEXT;
+        if data_writable { f1 |= VRING_DESC_F_WRITE; }
+        safe_write16(d1 + 12, f1);
+        safe_write16(d1 + 14, id2);
+
+        let d2 = self.desc_base() + (id2 as usize) * 16;
+        safe_write64(d2, status as u64);
+        safe_write32(d2 + 8, status_len);
+        let f2 = if status_writable { VRING_DESC_F_WRITE } else { 0 };
+        safe_write16(d2 + 12, f2);
+        safe_write16(d2 + 14, 0);
+
+        self.push_avail(id0);
+        Some(id0)
+    }
+
     pub fn last_used(&self) -> u16 { self.last_used_idx }
 
     pub fn poll_used(&mut self) -> Option<(u16, u32)> {
