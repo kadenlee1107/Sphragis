@@ -11,6 +11,46 @@ end of a session.
 
 ---
 
+## 2026-04-23 10:05 — Mac — REAL VMNET E2E PROVEN (scapy, bypassing Docker)
+
+Kaden ran `sudo python3 scripts/qemu_vmnet_docker_e2e.py` → failed
+at the Docker-macvlan step because Docker Desktop / OrbStack runs
+containers inside a Linux VM that can't attach to a macOS-side
+bridge. We pivoted to `qemu_vmnet_scapy_e2e.py`: scapy sends raw
+Ethernet frames FROM THE MACOS HOST directly onto the vmnet bridge,
+bypassing Docker's VM boundary entirely. Same wire-format a real
+container would produce.
+
+**Result — real vmnet.framework end-to-end:**
+  bridge: bridge104 (created by `-netdev vmnet-host`)
+  cave binding: 192.168.77.10 → vmnet-kali
+  rule: cpol-add-sni vmnet-kali 172.66.147.243 443 example.com
+        cpol-rate vmnet-kali 5 10
+
+  attacks scapy-sent:
+    1× SYN to example.com:443  (legit, allowed)
+    3× SYN to 203.0.113.66:4444 (C2 callback)
+    40× burst to example.com:443 (flood)
+    3× TLS ClientHello SNI=attacker.com (domain-front)
+
+  Bat_OS nat-stats after:
+    allow       = 11   (1 legit + 10 burst tokens)
+    drop-policy =  3   (C2 callbacks)
+    drop-rate   = 30   (burst beyond budget)
+    drop-sni    =  3   (wrong SNI)
+    drop-unknown-src = 0
+    total       = 47   (matches sent 1+3+40+3 exactly)
+
+PASS. First non-simulated proof that cave_policy + shaper + SNI all
+fire correctly on packets that really traversed vmnet.framework on
+the Mac host.
+
+Removed: `scripts/qemu_vmnet_docker_e2e.{sh,py}` — both Docker-based
+variants were dead code once we confirmed the macvlan-on-macOS
+limitation.
+
+---
+
 ## 2026-04-23 09:00 — Mac — Defense-in-depth: six layers shipped (SNI, syscall, byte-rate, beacon, flow-rate + upgraded red-team demo)
 
 Kaden: "honestly do 1 and 2 and then whatever doesn't need my intervention"

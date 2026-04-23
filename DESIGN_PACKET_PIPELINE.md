@@ -249,5 +249,27 @@ NAT with TTL GC, ARP responder on the caves segment, full ICMP
 coverage (Echo + all three error types + intentional drops for
 Redirect + SourceQuench), fragment reassembly in both directions,
 egress re-fragmentation, and a fall-through path for kernel's own
-control-plane traffic. 15 automated tests + 1 manual-sudo test,
-all green.
+control-plane traffic.
+
+## Real-vmnet validation (2026-04-23)
+
+Initial attempt to plug a real Docker container onto the vmnet
+bridge via macvlan hit a macOS architecture limitation: Docker
+Desktop + OrbStack run containers inside a Linux VM that can't
+attach to a macOS-side bridge. Rather than chase the Docker layer,
+`scripts/qemu_vmnet_scapy_e2e.py` uses scapy to send raw Ethernet
+frames from the macOS host directly onto the vmnet bridge — same
+wire-format a container would produce, bypassing the Docker-VM
+boundary. Result on a real M4 Mac:
+
+  bridge104 (vmnet-host 192.168.77.0/24) → Bat_OS nic 1 → classifier:
+    allow            = 11    (1 legit SYN + 10 rate burst tokens)
+    drop-policy      =  3    (C2 callbacks to 203.0.113.66:4444)
+    drop-rate        = 30    (flood of 40 beyond 10 burst)
+    drop-sni         =  3    (TLS ClientHello SNI=attacker.com)
+    drop-unknown-src =  0
+    total classified = 47    (matches sent-packet sum exactly)
+
+This is the first end-to-end real-network proof of the pipeline —
+packets genuinely traversing vmnet.framework, not a socket-netdev
+simulation.
