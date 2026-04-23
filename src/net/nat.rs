@@ -329,13 +329,31 @@ pub fn pump_replies(nic1_mac: [u8; 6]) -> (usize, usize) {
     for _ in 0..64 {
         let len = match net::recv_n(0, &mut buf) { Some(l) => l, None => break };
         drained += 1;
+        // Inbound fragment reassembly mirrors the outbound path: if
+        // this frame is an IPv4 fragment, buffer it via frag_accept.
+        // Only run the rest of the reverse-NAT flow once the datagram
+        // is fully reassembled; until then nothing to forward.
+        let frame_slice = &buf[..len];
+        let reassembled_inbound: Vec<u8>;
+        let work: &[u8] = if is_ipv4_fragment(frame_slice) {
+            match frag_accept(frame_slice) {
+                Some(full) => {
+                    FRAG_REASSEMBLED.fetch_add(1, Ordering::Relaxed);
+                    reassembled_inbound = full;
+                    &reassembled_inbound[..]
+                }
+                None => continue,  // waiting for more fragments
+            }
+        } else {
+            frame_slice
+        };
         // Decide if this is a NAT reply. If NOT, hand it to the kernel
         // stack so we don't silently consume control-plane packets.
-        let maybe_entry = parse_inbound(&buf[..len])
+        let maybe_entry = parse_inbound(work)
             .and_then(|f| nat_lookup_in(f.dst_port, f.proto));
         match maybe_entry {
             Some(entry) => {
-                let mut out = Vec::from(&buf[..len]);
+                let mut out = Vec::from(work);
                 if rewrite_inbound_into(&mut out, &entry, nic1_mac).is_ok() {
                     let _ = net::send_n(1, &out);
                     delivered += 1;
@@ -348,13 +366,13 @@ pub fn pump_replies(nic1_mac: [u8; 6]) -> (usize, usize) {
                 // Before falling back to the host stack, see if this
                 // is an ICMP error packet carrying the header of a
                 // cave flow we NAT'd — if so, rewrite + deliver.
-                let mut copy: Vec<u8> = Vec::from(&buf[..len]);
+                let mut copy: Vec<u8> = Vec::from(work);
                 if try_rewrite_icmp_error_inbound(&mut copy, nic1_mac) {
                     let _ = net::send_n(1, &copy);
                     ICMP_ERROR_DELIVERED.fetch_add(1, Ordering::Relaxed);
                     delivered += 1;
                 } else {
-                    super::dispatch_host_frame(&buf[..len]);
+                    super::dispatch_host_frame(work);
                     HOST_FRAMES_PASSED.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -577,7 +595,7 @@ pub fn nat_table_clear() {
 // needed for corner-case jumbo-frame routing.
 
 const FRAG_BUF_BYTES:  usize = 2048;   // max reassembled datagram size
-const FRAG_SLOTS:      usize = 4;      // concurrent contexts
+const FRAG_SLOTS:      usize = 8;      // concurrent contexts (bidir)
 const FRAG_TTL_SECS:   u64   = 30;     // standard IP-reassembly timeout
 
 #[derive(Clone, Copy)]
