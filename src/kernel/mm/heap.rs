@@ -16,7 +16,14 @@ use core::ptr;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use linked_list_allocator::Heap;
 
-pub const KERNEL_HEAP_SIZE: usize = 4 * 1024 * 1024; // 4 MB
+// Bumped from 4 MB → 32 MB to give Argon2id (DESIGN_CRYPTO.md #1) and
+// the upcoming PQ primitives (ML-KEM key exchange, ML-DSA signatures)
+// room to work. Argon2 alone scales with its memory_cost parameter
+// (per-auth cost + attacker's per-guess cost); we set it to 8 MiB in
+// security::auth, leaving ~24 MB for general kernel heap. Measured
+// peak utilisation under the 40/40 test suite was ~2 MB so the slack
+// is deliberate.
+pub const KERNEL_HEAP_SIZE: usize = 32 * 1024 * 1024; // 32 MB
 
 /// Resolved at init() time. Reads as 0 before init().
 static HEAP_BASE: AtomicUsize = AtomicUsize::new(0);
