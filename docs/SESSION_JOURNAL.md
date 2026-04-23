@@ -11,6 +11,105 @@ end of a session.
 
 ---
 
+## 2026-04-23 16:35 — Mac — content_shell reaches V8 heap setup; demand paging is next
+
+Kaden said "keep going bro no worries" so I pushed forward past the
+ee004ba1 dynamic-linker milestone. Three targeted fixes made
+content_shell genuinely EXECUTE:
+
+1. **Proper `sym_count` derivation** (commit 5c23ac62). The ee004ba1
+   loader used 65536 as a fallback cap when a lib had DT_GNU_HASH
+   but no DT_HASH — which every Debian arm64 lib does. Cross-module
+   resolution then scanned hundreds of KB past the real symtab,
+   "matched" garbage symbol names, and wrote bogus pointers to
+   content_shell's GOT (hence the mysterious `ELR=0xcf469e347c673dea`
+   crash). Fix: when DT_HASH is absent, use
+   `(strtab_vaddr - symtab_vaddr) / 24` as the count — symtab
+   always precedes strtab in every mainstream linker's output.
+
+2. **TLS page inside the cave** (5c23ac62). Added
+   `LOADED_TLS_PHYS` + `LOADED_TLS_PAGES=4`;
+   `load_archive_multi` now allocates 16 KB contiguously after the
+   user stack, and `execute_with_args` programs `tpidr_el0` with
+   that page's cave VA. glibc's `errno` / FILE* / locale /
+   stack-canary accesses all deref tpidr_el0 + offset; zero'd
+   memory at a valid VA is enough for the code path content_shell
+   actually takes.
+
+3. **STB_WEAK → NULL** (5c23ac62). `__gmon_start__`,
+   `_ITM_deregisterTMCloneTable`, etc. are weak PIE refs every C
+   program carries but no one defines at runtime. The caller
+   null-checks and skips. Writing a 0xBAD0 sentinel there broke a
+   path that was supposed to be dormant. New behaviour: when
+   cross-module lookup misses AND the symbol bind is STB_WEAK,
+   write 0 instead of the sentinel. Strong misses still get the
+   sentinel.
+
+After these three, the smoke test showed `[linux] exit` — clean!
+But suspicious: no stdout output. Added a per-syscall trace
+(commit c12e051d) to see what content_shell actually called:
+
+  [sc] 178 (gettid) -> 0                       × 4
+  [sc] 278 (getrandom) -> 0x8                  × 6
+  [sc] 222 (mmap) len=32 GB ... -> ENOMEM      × 2
+  [linux] exit
+
+So content_shell does libc init (gettid, getrandom for canaries),
+then tries to reserve 32 GB for V8's pointer-compression heap,
+gets ENOMEM, calls exit. Good: real syscalls, real V8. Bad: that
+32 GB reservation is fundamental to V8's heap model.
+
+Added a **huge-reservation stub** (c12e051d) to `sys_mmap`: when
+len ≥ 2 GB AND fd=-1 AND MAP_PRIVATE|MAP_ANONYMOUS, return the
+hint address without allocating anything. V8 then proceeds:
+
+  [sc] 222 (mmap) len=32 GB hint=0x4800000000 -> 0x4800000000
+  [sc] 167 (prctl/PR_SET_VMA_ANON_NAME "VMSA") -> 0
+  [sc] 222 (mmap) len=16 GB hint=0x3c25aa0000 -> 0x3c25aa0000
+  [sc] 167 (prctl) -> 0
+  [sc] 226 (mprotect) 0x3c25ab0000..+64KB -> 0
+  <DATA ABORT EC=0x24 at FAR=0x3c25ab0010>
+
+content_shell reserved two huge VA regions (32 GB + 16 GB), named
+them for debugging, mprotect'd a 64 KB sub-range to commit, then
+tried to read the committed memory and translation-faulted — the
+cave's L2 only covers the 400 MB cave window, not the reserved
+huge VAs at ~240 GB.
+
+**This is the demand-paging boundary.** The proper fix is:
+
+1. Per-cave `ReservationTable` (vec of (va_start, va_end, prot)).
+2. `sys_mmap`'s huge-reservation stub records each range.
+3. On EC=0x24 data-abort from EL0, the sync handler checks FAR
+   against the table; if hit, allocates a frame from the cave's
+   pool, installs an L3 PTE mapping FAR's 4 KB page → that frame.
+4. L3 page tables: today's cave uses only L2 2 MB block mappings.
+   Each reserved region's L2 entry needs to transition from
+   "block" to "table → L3", and the L3 is populated lazily.
+
+Estimated ~500-1000 LoC. Kicking to next session.
+
+**Seven commits landed today on the Chromium branch:**
+
+  eabded85 — DTB-initrd delivery path
+  9ee74129 — pipeline works with tests/hello
+  28f973f2 — real content_shell reaches __libc_start_main sentinel
+  ee004ba1 — in-kernel dynamic linker, 575/600 symbols resolved
+  c4a110b0 — session journal for the above
+  5c23ac62 — content_shell now EXECUTES AND EXITS cleanly
+  c12e051d — syscall trace + huge-mmap reservation stub
+  98e9b5c3 — documented demand-paging boundary
+
+Morning trailhead for whoever picks this up:
+
+  git log --oneline 9ee74129..HEAD   # see everything today
+  python3 scripts/qemu_chromium_pipeline_smoke.py   # reproduce current state
+  grep CHROMIUM-PHASE src/batcave/linux/syscall.rs  # stub marker
+
+Start work on `ReservationTable` + EC=0x24 handler + L3 tables.
+
+---
+
 ## 2026-04-23 16:05 — Mac — In-kernel dynamic linker, 575/600 glibc symbols resolved
 
 Kaden said "whatever you have to do let's do it" after I laid out the
