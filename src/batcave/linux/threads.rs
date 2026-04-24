@@ -114,7 +114,7 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use crate::kernel::mm::frame;
 use crate::drivers::uart;
 
@@ -160,7 +160,64 @@ const EINVAL: i64 = -22;
 // hitting the 64-slot ceiling.
 pub const MAX_THREADS: usize = 256;
 const DEFAULT_STACK_PAGES: usize = 16; // 64 KiB fallback
+/// One 4-KiB page per thread is reserved for the kernel-side stack the
+/// cooperative context switch parks SP_EL1 on. 4 KiB is plenty: the
+/// thread_first_run trampoline is a handful of `msr` + `eret`, and the
+/// deepest syscall frame we actually use is well under this.
+const KERNEL_STACK_PAGES: usize = 1;
 const PAGE_SIZE: usize = 4096;
+
+/// Assembly helper (threads.s) that saves the OLD thread's regs and
+/// erets to EL0 with the NEW thread's user-mode state. Used for the
+/// very first dispatch of a freshly-cloned thread — where we do NOT
+/// have a previously-saved kernel continuation to `ret` into, so the
+/// normal cxt_switch_cooperative path can't be used. Never returns.
+///
+/// The caller must **tail-call** (branch, not bl) into this helper
+/// after popping its own stack frame and restoring x30 to its
+/// caller-LR. The helper snapshots the current x30/SP into OLD's
+/// saved_regs — so on a later cooperative resume OLD `ret`s back
+/// into its original caller.
+///
+/// Parameters (AAPCS64):
+///   x0: old_ptr  — save callee-saved regs of the outgoing thread here
+///   x1: new_ptr  — load user x0..x30, elr_el1, spsr_el1, kernel sp, tpidr from here
+///   x2: user_sp  — sp_el0 at eret (user-space stack pointer)
+unsafe extern "C" {
+    fn cxt_switch_first_run(
+        old: *mut SavedRegs,
+        new: *const SavedRegs,
+        user_sp: u64,
+    ) -> !;
+}
+
+/// Parent's ELR_EL1 at the moment of the `svc` that invoked clone().
+/// Written by the arch SVC dispatcher before calling the syscall layer
+/// (handle_sync_exception, syscall 220 path), read by sys_clone_thread
+/// immediately after `threads::clone` returns. Avoids racing a timer
+/// IRQ that would clobber the live elr_el1 register.
+pub static PARENT_SYSCALL_ELR:  AtomicU64 = AtomicU64::new(0);
+pub static PARENT_SYSCALL_SPSR: AtomicU64 = AtomicU64::new(0);
+
+/// Parent's x0..x30 at svc entry. Linux clone's user-space ABI
+/// (both glibc and musl on aarch64) relies on non-syscall argument
+/// registers surviving the svc — glibc specifically stashes the fn
+/// pointer in x10 and the arg in x12 before svc, then branches via
+/// `blr x10` / `mov x0, x12` in the child path. The kernel must
+/// preserve those across the child's first return to EL0.
+///
+/// Populated by the arch dispatcher on svc #220 entry; consumed by
+/// sys_clone_thread's set_child_resume call.
+pub static PARENT_SYSCALL_REGS: [AtomicU64; 31] = [
+    AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+    AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+    AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+    AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+    AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+    AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+    AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+    AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+];
 
 /// Full GPR snapshot + special registers. Large, but we have 64 slots so
 /// 64 * ~800 bytes ≈ 50 KiB total — still within budget.
@@ -168,6 +225,10 @@ const PAGE_SIZE: usize = 4096;
 #[derive(Clone, Copy)]
 pub struct SavedRegs {
     pub x: [u64; 31],    // x0..x30    @ 0..248
+    /// Kernel-side SP (SP_EL1) at cooperative-yield time. Confusingly
+    /// named for historical reasons — the asm writes `mov x, sp` here
+    /// which, from EL1, captures SP_EL1. The original SP_EL0 save is
+    /// the new `user_sp_el0` field below.
     pub sp_el0: u64,     //            @ 248
     pub elr_el1: u64,    //            @ 256
     pub spsr_el1: u64,   //            @ 264
@@ -180,6 +241,16 @@ pub struct SavedRegs {
     pub q: [u128; 32],   // q0..q31    @ 272..784
     pub fpsr: u64,       //            @ 784
     pub fpcr: u64,       //            @ 792
+    /// ROOT-FIX (2026-04-24): the USER stack pointer (SP_EL0). The
+    /// `sp_el0` field above is a misnomer and actually holds SP_EL1
+    /// at cooperative-yield time. Without capturing the real SP_EL0
+    /// per-thread, `eret` after a cooperative context switch resumes
+    /// the newly-scheduled thread with whatever SP_EL0 the previous
+    /// thread left in the MSR — so thread A reads `[sp]` off thread
+    /// B's user stack. On Chromium this surfaced as `ret` loading x30
+    /// from t2's stack slot holding a V8 cage pointer, then branching
+    /// into cage data = SIGSEGV.
+    pub user_sp_el0: u64,//            @ 800
 }
 
 impl SavedRegs {
@@ -192,6 +263,7 @@ impl SavedRegs {
             q: [0; 32],
             fpsr: 0,
             fpcr: 0,
+            user_sp_el0: 0,
         }
     }
 }
@@ -224,6 +296,15 @@ pub struct Thread {
     pub stack_top: u64,              // SP starts here (16-byte aligned)
     pub stack_pages: usize,
     pub tls_ptr: u64,                // value to load into tpidr_el0 on switch
+    /// Kernel stack for this thread. cxt_switch_cooperative loads this
+    /// into SP_EL1 on every switch-in. Freed at thread exit.
+    pub kernel_stack_base: u64,
+    pub kernel_stack_top: u64,
+    /// True until the scheduler has dispatched this thread for the
+    /// first time. On a fresh dispatch we use `cxt_switch_first_run`
+    /// (which erets to EL0) instead of `cxt_switch_cooperative`
+    /// (which `ret`s to a previously-saved kernel continuation).
+    pub fresh: bool,
     /// CLONE_CHILD_CLEARTID user address. On thread exit, we zero *addr and
     /// call futex_wake(addr, 1) so pthread_join can observe termination.
     pub tid_clear_on_exit: Option<u64>,
@@ -247,6 +328,9 @@ impl Thread {
             stack_top: 0,
             stack_pages: 0,
             tls_ptr: 0,
+            kernel_stack_base: 0,
+            kernel_stack_top: 0,
+            fresh: false,
             tid_clear_on_exit: None,
             tid_set_parent: None,
             tid_set_child: None,
@@ -270,6 +354,15 @@ static THREADS_LOCK: AtomicBool = AtomicBool::new(false);
 /// eventually subsume that, but the switchover is the human's wiring job.
 static RUNNING_TID: AtomicU32 = AtomicU32::new(1);
 static NEXT_TID: AtomicU32 = AtomicU32::new(2);
+
+/// ROOT-FIX (2026-04-24): PID of the most recent fake-forked "child".
+/// Set by `clone()` when it sees a fork-style clone (no CLONE_VM) and
+/// consumed by `wait4()` which synthesises an immediate exit
+/// notification. Only one outstanding fake child at a time — if
+/// Chromium ever forks twice without wait4ing in between we'd lose
+/// the earlier one, but content_shell's helper-subprocess pattern
+/// does one fork at a time.
+pub static FAKE_CHILD_PID: AtomicU32 = AtomicU32::new(0);
 static THREADING_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Call once (from the runner, when a multi-threaded ELF is about to start)
@@ -293,10 +386,20 @@ pub fn init_main_thread(main_entry_pc: u64, main_sp_el0: u64) {
         t[0].entry_pc = main_entry_pc;
         t[0].stack_top = main_sp_el0;
         t[0].saved_regs.sp_el0 = main_sp_el0;
+        // ROOT-FIX: seed user_sp_el0 too. Gets overwritten the first
+        // time t0 yields (asm saves current SP_EL0 there), but having
+        // a sane value avoids a spurious load from an uninitialised
+        // slot if anything reads it before the first yield.
+        t[0].saved_regs.user_sp_el0 = main_sp_el0;
         t[0].saved_regs.elr_el1 = main_entry_pc;
         // EL0t, IRQs unmasked:
         t[0].saved_regs.spsr_el1 = 0;
     });
+    // CHROMIUM-PHASE-C: the NEXT_TID AtomicU32::new(2) const-init
+    // lands as 0 in release builds sometimes (same family as the
+    // CAVE_QUOTAS / THREADS-table flake). Explicitly reset to 2 so
+    // `fetch_add(1)` returns 2 on the first clone — not 0.
+    NEXT_TID.store(2, Ordering::Release);
     RUNNING_TID.store(1, Ordering::Release);
     THREADING_ENABLED.store(true, Ordering::Release);
     uart::puts("[threads] Main thread registered, threading enabled\n");
@@ -396,11 +499,36 @@ pub fn clone(flags: u64,
         return EINVAL;
     }
     // We don't have separate fs/files/sighand yet — must be shared.
+    // EXCEPTION: fork-style clone (no CLONE_VM) is faked. Chromium's
+    // content_shell calls `clone(SIGCHLD|CLONE_CHILD_SETTID|CLONE_
+    // CHILD_CLEARTID)` late in startup to launch a helper subprocess
+    // (crashpad handler / zygote / sandbox). With `--single-process`
+    // we don't actually need that subprocess to render HTML, but
+    // rejecting the clone makes Chromium exit. Instead we fake a
+    // successful fork: mint a PID, note it in FAKE_CHILD_PID so
+    // wait4() can reap it, and let the parent continue believing
+    // the fork worked. The child never runs — we pretend it
+    // immediately exited with status 0.
     let needs_shared = CLONE_VM | CLONE_THREAD;
     if flags & needs_shared != needs_shared {
-        uart::puts("[clone] reject: missing CLONE_VM|CLONE_THREAD\n");
-        // Legacy fork-style clone still goes through the old path.
-        return EINVAL;
+        // Synthesise a fake child PID. Use NEXT_TID so we don't
+        // collide with real thread IDs. Record it in
+        // FAKE_CHILD_PID (the next `wait4` will synthesise an exit
+        // notification).
+        let fake_pid = NEXT_TID.fetch_add(1, Ordering::AcqRel);
+        // Best effort: write the fake pid into parent_tid / child_tid
+        // if the flags asked us to (Chromium checks these slots).
+        if flags & CLONE_PARENT_SETTID != 0 && !parent_tid.is_null() {
+            unsafe { core::ptr::write_volatile(parent_tid, fake_pid as i32); }
+        }
+        if flags & CLONE_CHILD_SETTID != 0 && !child_tid.is_null() {
+            unsafe { core::ptr::write_volatile(child_tid, fake_pid as i32); }
+        }
+        FAKE_CHILD_PID.store(fake_pid, Ordering::Release);
+        uart::puts("[clone] fake-fork: returning pid=");
+        crate::kernel::mm::print_num(fake_pid as usize);
+        uart::puts("\n");
+        return fake_pid as i64;
     }
 
     // V8-ROOT-1 / V8-IRQ-#3: charge-Threads + charge-Mem must be atomic
@@ -438,6 +566,23 @@ pub fn clone(flags: u64,
                     super::quotas::Resource::Mem, DEFAULT_STACK_PAGES * PAGE_SIZE);
                 return ENOMEM;
             }
+        }
+    };
+
+    // Allocate a dedicated kernel stack page for this thread. SP_EL1
+    // will point here when we context-switch in; IRQs / syscalls that
+    // fire while this thread is running use it as their trap-frame
+    // spill.
+    let (kstack_base, kstack_top) = match alloc_stack(KERNEL_STACK_PAGES) {
+        Some(pair) => pair,
+        None => {
+            super::quotas::refund_active(super::quotas::Resource::Threads, 1);
+            if stack_pages > 0 {
+                crate::kernel::mm::frame::free_contig(stack_base as usize, stack_pages);
+                super::quotas::refund_active(
+                    super::quotas::Resource::Mem, stack_pages * PAGE_SIZE);
+            }
+            return ENOMEM;
         }
     };
 
@@ -505,33 +650,41 @@ pub fn clone(flags: u64,
         t[slot].stack_base = stack_base;
         t[slot].stack_top = stack_top;
         t[slot].stack_pages = stack_pages;
-        t[slot].tls_ptr = if flags & CLONE_SETTLS != 0 { tls } else { 0 };
+        t[slot].kernel_stack_base = kstack_base;
+        t[slot].kernel_stack_top = kstack_top;
+        t[slot].fresh = true;
+        let tls_val = if flags & CLONE_SETTLS != 0 { tls } else { 0 };
+        t[slot].tls_ptr = tls_val;
         t[slot].tid_set_parent = if flags & CLONE_PARENT_SETTID != 0 {
             Some(parent_tid as u64)
         } else { None };
         t[slot].tid_set_child = tid_set_child;
         t[slot].tid_clear_on_exit = tid_clear_on_exit;
 
-        // Child register seed.
+        // Child register seed. Most of x[0..30] gets overwritten from
+        // the parent's svc-entry snapshot in set_child_resume below;
+        // the explicit fields here populate the rest of the bootstrap
+        // state cxt_switch_first_run needs:
         //
-        // On ARM64 the pthread_create trampoline calls __clone which does:
-        //     mov x8, #220      // SYS_clone
-        //     svc #0
-        //     cbnz x0, 1f       // parent returns
-        //     // child: x9 holds fn, x10 holds arg
-        //     blr x9
-        // So for Chromium we need x0=0, and we resume at the instruction
-        // AFTER the svc. `entry_pc` is set by the syscall shim to ELR_EL1+4
-        // (return address of the svc) before calling clone(). Same for sp.
+        //   saved_regs.x[18]   → tpidr_el0 (TLS base)
+        //   saved_regs.elr_el1 → user_pc   (patched by set_child_resume)
+        //   saved_regs.spsr_el1 → EL0t, IRQs on
+        //   saved_regs.sp_el0  → kernel SP_EL1 for this thread
         //
-        // Until the shim is wired, these stay as defaults; the human will
-        // pass them in through a thin wrapper like:
-        //     threads::set_child_resume(new_tid, elr_plus_4, sp_at_svc);
+        // User SP comes through as a separate arg to cxt_switch_first_run
+        // (see Thread.stack_top). We do NOT overload x[19..22] any more.
         t[slot].saved_regs = SavedRegs::zero();
-        t[slot].saved_regs.x[0] = 0;               // clone() returns 0 in child
-        t[slot].saved_regs.sp_el0 = stack_top;
-        t[slot].saved_regs.elr_el1 = 0;            // to be patched by shim
-        t[slot].saved_regs.spsr_el1 = 0;           // EL0t, IRQs on
+        t[slot].saved_regs.x[18] = tls_val;
+        t[slot].saved_regs.sp_el0 = kstack_top;
+        // ROOT-FIX: seed the new thread's user SP_EL0 so that the
+        // scheduler's cooperative-restore path can feed a valid
+        // SP_EL0 into the MSR before the first eret. The asm first-
+        // run path takes user SP via x2 arg; this value is for the
+        // path where an IRQ preempts the thread after it starts
+        // running and we later cooperatively resume it.
+        t[slot].saved_regs.user_sp_el0 = child_stack;
+        t[slot].saved_regs.elr_el1 = 0;
+        t[slot].saved_regs.spsr_el1 = 0;
 
         0
     });
@@ -544,9 +697,16 @@ pub fn clone(flags: u64,
             super::quotas::refund_active(
                 super::quotas::Resource::Mem, stack_pages * PAGE_SIZE);
         }
+        if kstack_base != 0 {
+            crate::kernel::mm::frame::free_contig(
+                kstack_base as usize, KERNEL_STACK_PAGES);
+        }
         return result;
     }
 
+    uart::puts("[clone] success new_tid=");
+    crate::kernel::mm::print_num(new_tid as usize);
+    uart::puts("\n");
     new_tid as i64
 }
 
@@ -558,6 +718,28 @@ pub fn clone(flags: u64,
 pub fn set_child_resume(tid: u32, resume_pc: u64, _parent_sp: u64) {
     with_table(|t| {
         if let Some(i) = slot_of(t, tid) {
+            // Copy the parent's register snapshot (captured by the
+            // arch SVC dispatcher) into the child's saved_regs so
+            // cxt_switch_first_run can restore the full GPR state
+            // before eret — matches Linux's clone() ABI where the
+            // child inherits all registers except x0 (set to 0 by
+            // the kernel as the child's clone() return value).
+            for k in 0..31 {
+                t[i].saved_regs.x[k] = PARENT_SYSCALL_REGS[k]
+                    .load(Ordering::Acquire);
+            }
+            // Child-specific overrides:
+            //   x[0] = 0    (clone() returns 0 in child)
+            //   x[19]       (elr_el1 after eret — set here)
+            // x[18] we leave as whatever the parent had — TLS is
+            // sourced from saved_regs.x[18] by cxt_switch_first_run
+            // to set tpidr_el0, and we already wrote tls_val in
+            // clone(). Overwrite it here so the snapshot doesn't
+            // stomp the explicit CLONE_SETTLS value.
+            let preserved_x18 = t[i].tls_ptr;
+            t[i].saved_regs.x[0]  = 0;
+            t[i].saved_regs.x[18] = preserved_x18;
+            t[i].saved_regs.x[19] = resume_pc;
             t[i].saved_regs.elr_el1 = resume_pc;
             t[i].entry_pc = resume_pc;
         }
@@ -634,11 +816,18 @@ pub fn exit_current(code: i32) -> ! {
                 let sb = t[i].stack_base;
                 let sp = t[i].stack_pages;
                 let ca = t[i].tid_clear_on_exit;
+                let ksb = t[i].kernel_stack_base;
                 if sp > 0 && sb != 0 {
                     crate::kernel::mm::frame::free_contig(sb as usize, sp);
                 }
+                if ksb != 0 {
+                    crate::kernel::mm::frame::free_contig(
+                        ksb as usize, KERNEL_STACK_PAGES);
+                }
                 t[i].stack_base = 0;
                 t[i].stack_pages = 0;
+                t[i].kernel_stack_base = 0;
+                t[i].kernel_stack_top = 0;
                 t[i].tid_clear_on_exit = None;
                 ca
             } else { None }
@@ -713,6 +902,66 @@ pub fn schedule() {
         (next_tid, op, np)
     };
     let _ = next_tid;
+    // Is the NEW thread being dispatched for the first time? If so we
+    // take the eret-to-EL0 path instead of the ret-to-kernel-continuation
+    // path. Read-and-clear the fresh flag under the table lock so a
+    // parallel clone can't race us. Single-core assumption still applies.
+    let is_fresh = with_table(|t| {
+        if let Some(i) = slot_of(t, next_tid) {
+            let was_fresh = t[i].fresh;
+            t[i].fresh = false;
+            was_fresh
+        } else { false }
+    });
+    if is_fresh {
+        // Read user_sp from Thread.stack_top (set in clone()). Passed
+        // to cxt_switch_first_run as a dedicated arg so we don't have
+        // to repurpose any saved_regs field for it.
+        let user_sp = with_table(|t| {
+            if let Some(i) = slot_of(t, next_tid) { t[i].stack_top } else { 0 }
+        });
+        unsafe {
+            // Tail-call into cxt_switch_first_run from inline asm so
+            // that (a) schedule's own stack frame is popped before we
+            // hand off to the helper — otherwise the helper saves
+            // OLD's kernel SP = schedule's frame top and OLD's later
+            // cooperative resume reads stale schedule locals as its
+            // own stack; and (b) the call uses `br` not `bl`, so x30
+            // stays as schedule's caller-LR (park_slot / ppoll / etc.),
+            // which cxt_switch_first_run saves as OLD.saved_regs.x[30]
+            // — the address OLD's eventual `ret` from the next
+            // cooperative switch should land on.
+            //
+            // The frame-pop size (`add sp, sp, #{frame}`) must match
+            // what schedule's prologue allocated. Rust doesn't
+            // expose this symbolically, so we spell it out. If the
+            // prologue ever changes we'll SEGV and know to update.
+            // Current observed layout (release build, Apr 2026):
+            //     stp x30, x21, [sp, #-0x20]!
+            //     stp x20, x19, [sp, #0x10]
+            // → 0x20 bytes, with x30 at sp+0 pre-pop.
+            core::arch::asm!(
+                // Restore the two callee-saved pairs schedule spilled.
+                "ldp x20, x19, [sp, #0x10]",
+                // Pop the frame; writes x30 back to the original
+                // caller-LR, which is what we want the helper to
+                // stash via the resume_lr arg.
+                "ldp x30, x21, [sp], #0x20",
+                // Branch (not BL) to the helper so x30 isn't
+                // clobbered by a fresh `bl`.
+                "b   cxt_switch_first_run",
+                in("x0") old_ptr,
+                in("x1") new_ptr,
+                in("x2") user_sp,
+                options(noreturn),
+            );
+        }
+    }
+    // Log first 16 switches and then one every 64k so we can see the
+    // round-robin without drowning the trace.
+    static SWITCH_COUNT: AtomicU64 = AtomicU64::new(0);
+    let n = SWITCH_COUNT.fetch_add(1, Ordering::Relaxed);
+    let _ = n;
     unsafe { cxt_switch_cooperative(old_ptr, new_ptr); }
 }
 

@@ -41,12 +41,22 @@ const PAGE_SH: u64    = 3 << 8;
 const PAGE_ATTR: u64  = 0 << 2;
 const PAGE_AP_EL0_RW: u64 = 1 << 6;
 const PAGE_PXN: u64   = 1 << 53;
+const PAGE_UXN: u64   = 1 << 54;
 
-/// Flags we program into every committed user page.  EL0 R/W/X (the
-/// cave already trusts its own code; glibc JIT support would need this
-/// anyway), PXN so EL1 can't accidentally execute from here.
+/// Flags we program into every committed user page by default. EL0 R/W,
+/// PXN (EL1 can't accidentally execute here), *and UXN* — committed
+/// demand-page frames are RW-only at EL0 so Chromium/V8 control-flow
+/// that accidentally branches into data (V8 pointer-compression cage,
+/// anonymous heap pages, etc.) traps cleanly as EC=0x20 (instruction
+/// abort, lower EL) instead of silently fetching garbage and limping
+/// along through a cascade of EC=0x19/0x1c/0x1d decoder-confusion
+/// faults.
+///
+/// Regions that *need* execute permission (V8 JIT code areas, PLT
+/// trampolines) must call `sys_mprotect` with `PROT_EXEC` to clear
+/// UXN. See `sys_mprotect` in syscall.rs.
 const USER_PAGE_FLAGS: u64 = PAGE_VALID | PAGE_AF | PAGE_SH | PAGE_ATTR
-    | PAGE_AP_EL0_RW | PAGE_PXN;
+    | PAGE_AP_EL0_RW | PAGE_PXN | PAGE_UXN;
 
 const MAX_RESERVATIONS: usize = 8;
 
@@ -195,7 +205,9 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
 
 
     let n = COMMITTED_PAGES.fetch_add(1, Ordering::Relaxed);
-    if n < 5 {
+    // Rate-limited trace so we can at least see the count advance
+    // without drowning the log on active workloads.
+    if n < 5 || (n & 0xFF) == 0 {
         uart::puts("[dp] commit #");
         crate::kernel::mm::print_num(n as usize);
         uart::puts(" va=0x");

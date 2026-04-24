@@ -274,6 +274,9 @@ fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32) -> i64 {
     let s = &b.slots[slot];
     let deadline = s.deadline_ticks.load(Ordering::Relaxed);
     let has_deadline = deadline != 0;
+    // Diagnostic: every N iterations, dump the slot state so we can
+    // confirm whether the waiter is actually observing its wake flag.
+    let mut iters: u64 = 0;
 
     loop {
         // Waker set the flag?
@@ -284,6 +287,8 @@ fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32) -> i64 {
             bucket_unlock(b);
             return 0;
         }
+        iters += 1;
+        let _ = iters;
 
         // Timeout expired?
         if has_deadline && cntpct() >= deadline {
@@ -313,7 +318,12 @@ fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32) -> i64 {
 
         // Yield hint to the CPU, then re-poll. When the real scheduler
         // integration lands, swap this for a true block.
+        // CHROMIUM-PHASE-C: also call threads::schedule() periodically
+        // so that a newly-created (via clone) thread gets a chance to
+        // run and signal the futex. Otherwise the waiter spins forever
+        // because the child never gets CPU time.
         core::hint::spin_loop();
+        crate::batcave::linux::threads::schedule();
         let _ = uaddr;
     }
 }

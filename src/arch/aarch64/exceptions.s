@@ -53,6 +53,7 @@
     eret
 .endm
 
+
 // Vector entry macro — branch to handler
 .macro VECTOR_ENTRY label
     .balign 128

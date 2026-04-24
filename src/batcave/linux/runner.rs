@@ -231,6 +231,16 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
 
     super::threads::init_main_thread(info.virt_entry, 0);
 
+    // Plant the rt_sigreturn trampoline in this cave's address space
+    // so synchronous-fault signal delivery (SIGILL on V8 WASM traps,
+    // SIGSEGV on sandbox OOB, etc.) has a stable user-mode restorer
+    // the handler can `ret` to.
+    if let Err(e) = super::signal::install_trampoline(l1 as u64) {
+        uart::puts("[runner] signal trampoline install failed: ");
+        uart::puts(e);
+        uart::puts("\n");
+    }
+
     // Turn on per-syscall tracing while we're in the Chromium debug loop.
     // Prints one line per svc #0 so we can see what content_shell calls.
     super::syscall::SYSCALL_TRACE.store(true, core::sync::atomic::Ordering::Relaxed);

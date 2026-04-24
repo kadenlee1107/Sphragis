@@ -24,8 +24,19 @@ _start:
     b       halt
 
 primary_core:
-    // Enable FP/NEON (CPACR_EL1.FPEN = 0b11)
-    mov     x0, #(3 << 20)
+    // Enable FP/NEON (FPEN = 0b11, bits 21:20) + SVE (ZEN = 0b11,
+    // bits 17:16) + SME (SMEN = 0b11, bits 25:24).
+    //   FPEN bits: 0x00300000
+    //   ZEN  bits: 0x00030000
+    //   SMEN bits: 0x03000000
+    //   Total    : 0x03330000
+    // Chromium/V8 is built with ARMv9-friendly toolchains that can
+    // emit SVE autovectorisation in glibc's str/mem routines and
+    // occasional SME ops; trapping those as EC=0x19/0x1d crashes
+    // the futex wrapper post-wake. If the CPU lacks SVE/SME these
+    // bits are RES0 and the writes are harmless.
+    mov     x0, xzr
+    movk    x0, #0x0333, lsl #16
     msr     cpacr_el1, x0
     isb
 

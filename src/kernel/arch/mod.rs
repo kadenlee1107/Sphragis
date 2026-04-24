@@ -139,6 +139,7 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
     unsafe { core::arch::asm!("mrs {}, esr_el1", out(reg) esr); }
     let ec = (esr >> 26) & 0x3F;
 
+
     match ec {
         0x15 => {
             let svc_num = (esr & 0xFFFF) as u16;
@@ -148,6 +149,17 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                     let f = &mut *frame;
                     let syscall_num = f.x[8];
                     let args = [f.x[0], f.x[1], f.x[2], f.x[3], f.x[4], f.x[5]];
+
+                    // Record the pre-syscall register state into the
+                    // history ring. This runs BEFORE the dispatcher
+                    // touches f.x[0] so we capture the caller's LR
+                    // (x30) and FP (x29), plus the arguments — which
+                    // is exactly the forensic data the UNHANDLED dump
+                    // needs when a `ret` eventually lands in the cage.
+                    let tid_now = crate::batcave::linux::threads::current_tid();
+                    crate::batcave::linux::syscall_history::record(
+                        tid_now, syscall_num, &f.x, f.elr,
+                    );
 
                     // EXIT: child exit → eret back to parent at clone return
                     if syscall_num == 93 || syscall_num == 94 {
@@ -562,8 +574,60 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                         }
                     }
 
-                    let result = crate::batcave::linux::syscall::handle(0, syscall_num, args);
-                    f.x[0] = result as u64;
+                    // For the threading-model clone path, stash the
+                    // parent's post-svc return address and saved PSTATE
+                    // so threads::set_child_resume can seed the child's
+                    // eret-target. ELR_EL1 at SVC entry already points
+                    // at the instruction *after* svc, so it's what the
+                    // child resumes at.
+                    if syscall_num == 220
+                        && crate::batcave::linux::threads::is_enabled()
+                    {
+                        crate::batcave::linux::threads::PARENT_SYSCALL_ELR
+                            .store(f.elr, core::sync::atomic::Ordering::Release);
+                        crate::batcave::linux::threads::PARENT_SYSCALL_SPSR
+                            .store(f.spsr, core::sync::atomic::Ordering::Release);
+                        // Snapshot all of the parent's GPRs at svc entry
+                        // so set_child_resume can seed the child's full
+                        // register state. glibc / musl pthread trampolines
+                        // on AArch64 stash fn in x10 and arg in x12 before
+                        // svc and expect them to survive into the child's
+                        // post-svc code (`blr x10` / `mov x0, x12`). Without
+                        // this carry, the child indirect-branch lands at
+                        // PC=0.
+                        for i in 0..31 {
+                            crate::batcave::linux::threads::PARENT_SYSCALL_REGS[i]
+                                .store(f.x[i], core::sync::atomic::Ordering::Release);
+                        }
+                    }
+
+                    // rt_sigreturn (syscall 139) must run against the
+                    // trap frame directly — it restores every GPR,
+                    // ELR, SPSR, and SP_EL0 from the ucontext the
+                    // handler's stack. The regular syscall dispatcher
+                    // can't see the frame, so short-circuit it here.
+                    let result: i64 = if syscall_num == 139 {
+                        let sf = unsafe {
+                            &mut *(frame as *mut crate::batcave::linux::signal::TrapFrame)
+                        };
+                        crate::batcave::linux::signal::complete_rt_sigreturn(sf)
+                        // NB: do NOT overwrite f.x[0] below — every
+                        // register has just been restored from the
+                        // ucontext and the subsequent `f.x[0] = result`
+                        // would clobber x0. We short-circuit with a
+                        // direct return after the syscall trace.
+                    } else {
+                        let r = crate::batcave::linux::syscall::handle(0, syscall_num, args);
+                        f.x[0] = r as u64;
+                        r
+                    };
+                    // After complete_rt_sigreturn the frame has fresh
+                    // contents; any further post-processing (CLONE
+                    // child_stack path, EXIT special handling, …)
+                    // doesn't apply to rt_sigreturn. Bail out.
+                    if syscall_num == 139 {
+                        return;
+                    }
 
                     // CLONE with child_stack: jump child to new stack via manual eret
                     if syscall_num == 220 && result == 0 {
@@ -641,6 +705,28 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                                 options(noreturn),
                             );
                         }
+                    }
+
+                    // Async signal poll. If `sys_tgkill` / `sys_kill`
+                    // queued a signal on this thread during the
+                    // current syscall (or before it — the poll also
+                    // picks up anything that accumulated while we
+                    // were blocked in `futex_wait` / `ppoll` / etc.),
+                    // redirect the trap frame into the registered
+                    // user handler on the way back to EL0. On
+                    // success the caller's x0 / ELR have been
+                    // rewritten to the handler's entry arguments;
+                    // on SIG_DFL-with-fatal-default the helper
+                    // `terminate_cave_fatal`s instead of returning.
+                    //
+                    // Skip for rt_sigreturn (syscall 139) — the
+                    // frame has just been restored from a ucontext
+                    // and polling on top of it would re-raise a
+                    // signal we're literally in the middle of
+                    // completing.
+                    if syscall_num != 139 {
+                        let sf = &mut *(frame as *mut crate::batcave::linux::signal::TrapFrame);
+                        let _ = crate::batcave::linux::signal::try_deliver_pending(sf);
                     }
                 }
             } else {
@@ -960,11 +1046,47 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                 crate::ui::desktop::resume();
             }
         }
+        0x19 | 0x1c | 0x1d => {
+            // 0x19 = SVE functionality trapped,
+            // 0x1c = FPAC (pointer-authentication failure),
+            // 0x1d = SME functionality trapped.
+            // When user control-flow strays into data (V8 cage, string
+            // literals, etc.) the CPU decoder often matches the random
+            // bytes against one of these encodings and traps, instead
+            // of the plain EC=0 "unknown instruction" that would make
+            // the symptom obvious. Skip the faulting word so the next
+            // truly-invalid fetch surfaces with a cleaner diagnostic.
+            let elr_raw = unsafe { (*frame).elr };
+            let elr = elr_raw & 0x00FF_FFFF_FFFF_FFFF;
+            unsafe { (*frame).elr = elr + 4; }
+            static SVE_PAC_SME_SKIPS: core::sync::atomic::AtomicU64 =
+                core::sync::atomic::AtomicU64::new(0);
+            let n = SVE_PAC_SME_SKIPS.fetch_add(
+                1, core::sync::atomic::Ordering::Relaxed);
+            if n < 4 || (n & 0xFFFF) == 0 {
+                uart::puts("[sve/pac/sme-skip] ec=0x");
+                let hex = b"0123456789abcdef";
+                uart::putc(hex[((ec >> 4) & 0xF) as usize]);
+                uart::putc(hex[(ec & 0xF) as usize]);
+                uart::puts(" ELR=0x"); print_hex(elr);
+                uart::puts(" n="); crate::kernel::mm::print_num(n as usize);
+                uart::puts("\n");
+            }
+            return;
+        }
         0x00 => {
             // Unknown/undefined instruction — might be HVF-unsupported atomics
             // (LDADD, LDSET, LDCLR, SWP, etc. at encoding 0x38/0xB8/0xF8)
-            let elr = unsafe { (*frame).elr };
-            let in_code = (elr < 0x1400000) || (elr >= 0x40000000 && elr < 0x50000000);
+            // Strip TBI tag so tagged-pointer user code still matches the
+            // "in code" range. Our TCR_EL1 has TBI0=1, so the CPU ignores
+            // bits 63:56 during translation but reports them in ELR.
+            let elr_raw = unsafe { (*frame).elr };
+            let elr = elr_raw & 0x00FF_FFFF_FFFF_FFFF;
+            // Accept any ELR that lives inside our 39-bit user VA window
+            // (< 2^39). The previous check pinned it to busybox ranges
+            // and missed V8 JIT trampolines in the pointer-compression
+            // cage (0x30_0000_0000..0x38_0000_0000) and friends.
+            let in_code = elr < (1u64 << 39);
             if in_code {
                 let instr: u32 = unsafe {
                     let val: u32;
@@ -1012,12 +1134,34 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                     return;
                 }
 
+                // UDF / unknown instruction that isn't an atomic we can
+                // emulate. V8 / WASM / ASan etc. all emit `udf #X` as a
+                // deliberate trap sentinel and rely on SIGILL delivery
+                // to a registered handler for recovery. Route through
+                // the signal layer first; only if no handler is
+                // installed do we fall back to the legacy "silently
+                // skip" behaviour (kept so the busybox cleanup path
+                // still works).
+                let sf = unsafe {
+                    &mut *(frame as *mut crate::batcave::linux::signal::TrapFrame)
+                };
+                if crate::batcave::linux::signal::try_deliver_synchronous(
+                    sf,
+                    crate::batcave::linux::signal::SIGILL,
+                    crate::batcave::linux::signal::ILL_ILLOPC,
+                    elr,
+                ) {
+                    return;
+                }
                 // Other unknown instr in busybox — skip
                 unsafe { (*frame).elr = elr + 4; }
                 return;
             }
             uart::puts("!!! UNHANDLED EC=0 !!!\n");
-            uart::puts("  ELR: 0x"); print_hex(elr);
+            uart::puts("  tid=t");
+            crate::kernel::mm::print_num(
+                crate::batcave::linux::threads::current_tid() as usize);
+            uart::puts(" ELR: 0x"); print_hex(elr);
             let ttbr0: u64; let sctlr: u64; let far: u64;
             unsafe {
                 core::arch::asm!("mrs {}, ttbr0_el1",  out(reg) ttbr0);
@@ -1118,7 +1262,71 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                 return;
             }
 
+            // Synchronous faults from a lower EL that we can't
+            // service transparently: try to deliver them as a POSIX
+            // signal so user-registered handlers (V8's WASM trap
+            // handler, libc assertions, etc.) get a chance to
+            // recover. EC → signal mapping:
+            //   0x20 / 0x21 (instruction abort)     → SIGSEGV
+            //   0x22       (PC alignment)           → SIGBUS
+            //   0x24 / 0x25 (data abort)            → SIGSEGV
+            //   0x26       (SP alignment)           → SIGBUS
+            //   0x2C / 0x2D (FP trap)               → SIGFPE
+            // Everything else falls through to the UNHANDLED dump.
+            {
+                let (signo, si_code): (u32, i32) = match ec {
+                    0x20 | 0x21 => {
+                        // Instruction abort: ISS DFSC bits 5:0. 0b0001xx
+                        // = translation fault, 0b0011xx = access flag,
+                        // 0b0111xx = permission. MAPERR vs ACCERR.
+                        let iss = (esr & 0x3F) as u32;
+                        let si_code = if (iss >> 2) == 0b0011
+                            || (iss >> 2) == 0b0001
+                        {
+                            crate::batcave::linux::signal::SEGV_MAPERR
+                        } else {
+                            crate::batcave::linux::signal::SEGV_ACCERR
+                        };
+                        (crate::batcave::linux::signal::SIGSEGV, si_code)
+                    }
+                    0x22 => (
+                        crate::batcave::linux::signal::SIGBUS,
+                        crate::batcave::linux::signal::BUS_ADRALN,
+                    ),
+                    0x24 | 0x25 => {
+                        let iss = (esr & 0x3F) as u32;
+                        let si_code = if (iss >> 2) == 0b0011
+                            || (iss >> 2) == 0b0001
+                        {
+                            crate::batcave::linux::signal::SEGV_MAPERR
+                        } else {
+                            crate::batcave::linux::signal::SEGV_ACCERR
+                        };
+                        (crate::batcave::linux::signal::SIGSEGV, si_code)
+                    }
+                    0x26 => (
+                        crate::batcave::linux::signal::SIGBUS,
+                        crate::batcave::linux::signal::BUS_ADRALN,
+                    ),
+                    _ => (0, 0),
+                };
+                if signo != 0 {
+                    let sf = unsafe {
+                        &mut *(frame as *mut crate::batcave::linux::signal::TrapFrame)
+                    };
+                    if crate::batcave::linux::signal::try_deliver_synchronous(
+                        sf, signo, si_code, far,
+                    ) {
+                        return;
+                    }
+                }
+            }
+
             uart::puts("!!! UNHANDLED SYNC EXCEPTION !!!\n");
+            uart::puts("  tid=t");
+            crate::kernel::mm::print_num(
+                crate::batcave::linux::threads::current_tid() as usize);
+            uart::puts("\n");
             uart::puts("  EC: 0x"); print_hex(ec);
             uart::puts("  ISS: 0x"); print_hex(esr & 0x01FF_FFFF);
             uart::puts("\n");
@@ -1161,7 +1369,7 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             unsafe {
                 // x0..x28 so we can trace x21/x26 (TLS ptr chain) and
                 // anything else the faulting instruction needed.
-                for i in 0..29 {
+                for i in 0..30 {
                     if i > 0 && i % 3 == 0 { uart::puts("\n"); }
                     uart::puts("  x");
                     if i < 10 {
@@ -1174,6 +1382,34 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                     uart::puts("=0x"); print_hex((*frame).x[i]);
                 }
                 uart::puts("\n  LR(x30)=0x"); print_hex((*frame).x[30]);
+                uart::puts("\n");
+                // Scan the user stack for plausible saved-LR slots
+                // (values whose `v-4` decodes as a BL/BLR). Useful for
+                // tracing the caller of a function that ret'd to a bad
+                // address — the fp-chain can't be trusted if x29 is
+                // already corrupted.
+                uart::puts("  stack LR candidates (SP+0 .. SP+0x200):");
+                let sp_val = sp_el0;
+                for i in 0..64usize {
+                    let addr = sp_val + (i as u64) * 8;
+                    let v: u64 = core::ptr::read_volatile(addr as *const u64);
+                    if v >= 0x10000000 && v < 0x1f000000 && (v & 3) == 0 {
+                        let pc = v.wrapping_sub(4);
+                        let ins: u32 = core::ptr::read_volatile(pc as *const u32);
+                        let top6 = (ins >> 26) & 0x3F;
+                        let is_bl = top6 == 0x25;
+                        let is_blr = (ins & 0xFFFE0000) == 0xD63F0000;
+                        if is_bl || is_blr {
+                            uart::puts("\n    [sp+0x");
+                            let off = i * 8;
+                            uart::putc(b"0123456789abcdef"[(off >> 8) & 0xF]);
+                            uart::putc(b"0123456789abcdef"[(off >> 4) & 0xF]);
+                            uart::putc(b"0123456789abcdef"[off & 0xF]);
+                            uart::puts("]=0x"); print_hex(v);
+                            uart::puts(if is_bl { " BL" } else { " BLR" });
+                        }
+                    }
+                }
                 uart::puts("\n");
                 // Dump 4 instructions before LR so we can tell what the
                 // function's call site looked like. LR points at the
@@ -1231,25 +1467,78 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                 // top of the active stack frame; walking up lets us
                 // see return addresses.
                 if sp_el0 > 0x1000 && sp_el0 < 0x0000_4000_0000_0000 {
-                    uart::puts("  user stack near SP (0x");
+                    uart::puts("  user stack around SP (0x");
                     print_hex(sp_el0);
                     uart::puts("):");
-                    for i in 0..8usize {
-                        uart::puts("\n    +0x");
+                    // Dump SP-0x80..SP+0x100: covers the just-popped
+                    // frame (negative offsets) plus a few caller
+                    // frames. Each row = 4 u64s = 32 bytes.
+                    let base = (sp_el0 as i64 - 0x80) as u64;
+                    for i in 0..48usize {
                         let off = i * 8;
-                        uart::putc(b"0123456789abcdef"[(off >> 4) & 0xF]);
-                        uart::putc(b"0123456789abcdef"[off & 0xF]);
-                        uart::puts(": ");
-                        for j in 0..8usize {
-                            let byte: u8 = core::ptr::read_volatile(
-                                (sp_el0 as usize + i * 8 + j) as *const u8);
-                            uart::putc(b"0123456789abcdef"[(byte >> 4) as usize]);
-                            uart::putc(b"0123456789abcdef"[(byte & 0xF) as usize]);
-                            uart::putc(b' ');
+                        let addr = base + off as u64;
+                        let signed_off = (addr as i64) - (sp_el0 as i64);
+                        if off % 32 == 0 {
+                            uart::puts("\n    ");
+                            if signed_off < 0 {
+                                uart::puts("-0x");
+                                let v = (-signed_off) as u64;
+                                uart::putc(b"0123456789abcdef"[((v >> 8) & 0xF) as usize]);
+                                uart::putc(b"0123456789abcdef"[((v >> 4) & 0xF) as usize]);
+                                uart::putc(b"0123456789abcdef"[(v & 0xF) as usize]);
+                            } else {
+                                uart::puts("+0x");
+                                let v = signed_off as u64;
+                                uart::putc(b"0123456789abcdef"[((v >> 8) & 0xF) as usize]);
+                                uart::putc(b"0123456789abcdef"[((v >> 4) & 0xF) as usize]);
+                                uart::putc(b"0123456789abcdef"[(v & 0xF) as usize]);
+                            }
+                            uart::puts(":");
+                        } else {
+                            uart::puts(" ");
+                        }
+                        let qword: u64 = core::ptr::read_volatile(addr as *const u64);
+                        uart::puts("0x");
+                        for sh in (0..16).rev() {
+                            uart::putc(b"0123456789abcdef"[((qword >> (sh*4)) & 0xF) as usize]);
                         }
                     }
                     uart::puts("\n");
                 }
+            }
+            // Dump the syscall-history ring so we can correlate the
+            // fault with the last few svc calls — invaluable for
+            // tracking how x29 / x30 got populated with a cage
+            // pointer before the crashing `ret`.
+            crate::batcave::linux::syscall_history::dump();
+
+            // If the fault came from EL0 (SPSR.M[3:0] == 0b0000 = EL0t)
+            // and the EC maps to a synchronous-fault signal whose
+            // default disposition is terminate, we can give Chromium /
+            // the test harness a soft landing: tear the cave down and
+            // drop back into the shell instead of wedging the whole
+            // kernel on `wfe`. Real EL1-origin faults (genuine kernel
+            // bugs) still `wfe` so the operator can investigate.
+            let spsr_m = unsafe { (*frame).spsr & 0xF };
+            let from_el0 = spsr_m == 0;
+            let fatal_signo: u32 = match ec {
+                0x20 | 0x21 | 0x24 | 0x25 => {
+                    crate::batcave::linux::signal::SIGSEGV
+                }
+                0x22 | 0x26 => {
+                    crate::batcave::linux::signal::SIGBUS
+                }
+                _ => 0,
+            };
+            if from_el0 && fatal_signo != 0 {
+                let far_now: u64;
+                unsafe {
+                    core::arch::asm!("mrs {}, far_el1", out(reg) far_now);
+                }
+                crate::batcave::linux::signal::terminate_cave_fatal(
+                    fatal_signo, far_now,
+                );
+                // never returns
             }
             loop { unsafe { core::arch::asm!("wfe") }; }
         }

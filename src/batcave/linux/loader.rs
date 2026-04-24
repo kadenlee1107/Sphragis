@@ -2102,7 +2102,7 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     // Chromium content_shell passes 20-40 flags (--no-sandbox, --disable-gpu,
     // --user-data-dir=..., --remote-debugging-port=..., etc.); bump from 16.
     let mut arg_uvas = [0u64; 64];
-    let argc = argv.len().min(16);
+    let argc = argv.len().min(32);
     for i in 0..argc {
         let arg = argv[i].as_bytes();
         sp -= arg.len() + 1;

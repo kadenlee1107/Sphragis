@@ -11,6 +11,764 @@ end of a session.
 
 ---
 
+## 2026-04-24 15:45 — Mac — 🔥 ROOT CAUSE FOUND: SP_EL0 leaked across context switches. Chromium now logs its own FATAL.
+
+**This session found and fixed the V8 "cage pointer in x30" bug that has
+been the wall for days.** It wasn't V8. It wasn't glibc. It was the
+scheduler. `cxt_switch_cooperative` saved/restored SP_EL1 (kernel
+stack) but **never touched SP_EL0** (user stack). So when t1 yielded
+on futex, t2 ran with its own SP_EL0, and when the scheduler later
+put t1 back on the CPU the `eret` delivered t1 to EL0 with **t2's
+SP_EL0 still in the MSR**. t1 then popped x29/x30 off t2's stack,
+loaded cage pointers that t2 had stashed there, and `ret`'d into
+unmapped cage memory → SIGSEGV.
+
+### The concrete fix (src/batcave/linux/threads.s + threads.rs)
+
+Added a new `SavedRegs.user_sp_el0: u64` field at offset 800 and
+`mrs x, sp_el0 ; str x, [old, #800]` / `ldr x, [new, #800] ; msr
+sp_el0, x` in both `cxt_switch_cooperative` and
+`cxt_switch_first_run`'s OLD-thread-save section. Confusingly, the
+pre-existing `sp_el0` field at offset 248 actually holds SP_EL1 at
+cooperative-yield time — the asm writes `mov x2, sp` which from EL1
+captures the kernel stack pointer. That field is kept as-is (rename
+would churn a lot of code) but is now correctly labelled with a
+comment.
+
+Main thread init (`init_main_thread`) and `clone()` both seed the
+new field with their user stack so the first schedule-in has
+sensible state.
+
+### What this unblocks
+
+Before: Chromium crashed at ~370 syscalls with a SIGSEGV on a `ret`
+to a V8 cage pointer. Every run. Deterministic. The "bad ret" was
+literally t1 reading x30 off t2's stack.
+
+After the SP_EL0 fix: Chromium runs **771 syscalls**, opens its
+resources (content_shell.pak, icudtl.dat, hello.html), initialises
+libc, registers signal handlers, creates socketpairs + pipes for
+IPC, and calls `clone(SIGCHLD|CLONE_CHILD_SETTID|CLONE_CHILD_
+CLEARTID)` to launch its zygote helper subprocess.
+
+### The new wall: zygote IPC
+
+Our `clone()` originally rejected the fork-style call with EINVAL
+because we don't have real fork yet (no copy-on-write page
+tables). Chromium handled that gracefully and exited.
+
+This session also added a **fake-fork**: when `clone()` sees a
+pure-fork pattern (no CLONE_VM), it mints a PID from `NEXT_TID`,
+stores it in `FAKE_CHILD_PID`, writes it into parent_tid /
+child_tid slots if requested, and returns the PID. `sys_wait4`
+now special-cases this PID and synthesises an immediate exit-
+status-0 reap.
+
+With that stub in place Chromium proceeds past the clone and
+tries to handshake with the zygote subprocess. The stderr comes
+through to our serial console:
+
+```
+[1:0:0101/000000.000000:FATAL:content/common/zygote/zygote_
+communication_linux.cc:270] Cannot communicate with zygote
+```
+
+**That's Chromium's own logging — which means we're genuinely
+inside Chromium's runtime now, not just making it through early
+libc init.**
+
+`--no-zygote` exposes an ICU bug (faulting in
+`icu_78::CharString::append` with a pointer corrupted by ASCII
+"type" bytes at the top 4 bytes of a stack address) so we stay
+on the zygote path for now.
+
+### Other landings this session
+
+1. **Per-cave termination on SIG_DFL fatal**: replaced the
+   UNHANDLED `wfe` wedge with a conditional that tears the cave
+   down and returns to the shell when (a) SPSR shows EL0 origin
+   and (b) the EC maps to a signal whose default is terminate.
+   Kernel-origin faults still wedge so they're investigable.
+
+2. **Async signal delivery**: process-wide PENDING/MASK atomics
+   in signal.rs, polled at the SVC exit path in arch/mod.rs.
+   `sys_tgkill` mirrors into it; `sys_rt_sigprocmask` routes
+   through it. Lays the groundwork for real signal-based
+   preemption.
+
+3. **Syscall-history ring buffer** (src/batcave/linux/
+   syscall_history.rs, 64 entries): every SVC entry captures
+   `tid, syscall_num, x0..x2, x8, x29, x30, sp_el0, elr`. The
+   UNHANDLED dump prints the ring in chronological order. This
+   is what made tracking down the SP_EL0 bug tractable —
+   without it we couldn't correlate "t2 did these syscalls,
+   then t1 resumed with t2's stack pointer".
+
+4. **Fake-fork + fake-wait4**: see above.
+
+### Smoke-test invocation
+
+```
+BAT_OS_PASSPHRASE=batman \
+BAT_OS_DURESS=duress \
+BAT_OS_ALLOW_UNSIGNED_INITRD=1 \
+cargo build --release --target aarch64-unknown-none
+
+python3 scripts/qemu_chromium_pipeline_smoke.py
+```
+
+### Next steps
+
+1. **Real zygote IPC stub** — either (a) respond to Chromium's
+   zygote messages with "OK, proceed without me", or (b) find a
+   Chromium flag that truly skips zygote-init code (not just
+   --no-zygote which hits a different bug).
+
+2. **ICU CharString pointer-corruption bug** — the
+   `--no-zygote` path shows a `strb wzr, [x9, w8]` with x9 =
+   0x7079740_0_<stack_addr> (ASCII "type" in the top 4 bytes).
+   Looks like a struct-field / string-buffer union confusion in
+   CharString::append's callers. Might be an init-order issue
+   that only surfaces without the zygote.
+
+3. **Actual DOM rendering** — once zygote handshake works, run
+   with `--dump-dom` and look for the parsed HTML. That's the
+   "Chromium REALLY works" finish line the user is after.
+
+### Files touched
+
+- `src/batcave/linux/signal.rs` — `terminate_cave_fatal`, async
+  PENDING/MASK, `try_deliver_pending`.
+- `src/batcave/linux/syscall.rs` — async poll wiring,
+  `sys_tgkill` mirror, `sys_rt_sigprocmask` route, fake-fork
+  wait4 path, `syscall_name` pub.
+- `src/batcave/linux/syscall_history.rs` — new file, 64-entry
+  ring.
+- `src/batcave/linux/threads.rs` — `user_sp_el0` field,
+  initialisation in `init_main_thread` + `clone`, fake-fork
+  branch, `FAKE_CHILD_PID`.
+- `src/batcave/linux/threads.s` — `mrs/msr sp_el0` pair in
+  cooperative + first_run paths.
+- `src/batcave/linux/mod.rs` — export syscall_history.
+- `src/batcave/linux/loader.rs` — argc min(16) → min(32).
+- `src/kernel/arch/mod.rs` — syscall-history record in SVC
+  entry, dump in UNHANDLED, EL0-terminate in UNHANDLED, async
+  signal poll in SVC exit.
+
+---
+
+## 2026-04-24 14:15 — Mac — Three steps landed: cave-terminate, crash-site identified, async signal delivery
+
+Three follow-ups from the 12:55 entry all shipped in this session.
+
+### 1. Per-cave termination on SIG_DFL fatal (no more kernel wedge)
+
+Chromium's first crash used to `wfe`-wedge the whole kernel. Now the
+arch UNHANDLED-exception path checks SPSR for EL0 origin and, if the
+EC maps to a synchronous-fault signal whose default disposition is
+terminate, calls the new `signal::terminate_cave_fatal(signo, far)`.
+That mirrors the regular `exit_group` shutdown: switch TTBR0 back to
+primary, restore the kernel SP the loader stashed in `KERNEL_SP_SAVE`,
+and `-> !` into `desktop::resume()`.
+
+Kernel-origin faults (SPSR.M[3:0] ≠ 0b0000) still `wfe` so genuine
+kernel bugs stay investigable.
+
+Files touched:
+- `src/batcave/linux/signal.rs` — new `terminate_cave_fatal()`.
+- `src/kernel/arch/mod.rs` — replaced the final `loop { wfe }` in the
+  `_ =>` unhandled arm with an EL0-origin + fatal-signo check that
+  calls `terminate_cave_fatal`.
+
+### 2. Crash-site localisation (V8 cage-pointer ret in SetName's frame)
+
+Disassembled content_shell around the caller-LR the crash dump
+identified (saved LR 0x14ce3ab4 at sp+0x08 → `base::WaitableEvent::
+Signal` at VA 0x4ce3a60, which bl's `SignalImpl` at 0x4d55eac). The
+faulting frame is 0x20-byte with paciasp/autiasp; it matches
+`base::PlatformThreadBase::SetName` at VA 0x4d367c4. Its epilogue:
+
+```
+4d367f0: ldp x20, x19, [sp, #0x10]
+4d367f4: ldp x29, x30, [sp], #0x20
+4d367f8: autiasp
+4d367fc: ret                        ← x30 = cage, fetch faults
+```
+
+The crash dump shows saved x29 *and* x30 both hold the V8 cage pointer
+(`0x180001c4e0`). PAC doesn't trip because QEMU's default CPU has no
+PAC — `autiasp` is effectively a NOP, so a corrupted x30 is accepted
+silently.
+
+So the corruption is upstream of SetName: some caller ran with
+x29=cage AND x30=cage before the call. `stp x29, x30, [sp, #...]`
+then faithfully persisted the cage pointers into the saved-reg slots
+of SetName's frame. That pattern is consistent with V8 having
+hand-constructed a pseudo-frame (trap-dispatch trampoline?) before
+entering Chromium code, relying on its later-installed SIGILL handler
+to unwind it. Without a live debugger we can't narrow which caller
+manufactured the cage-pointer x29/x30; the right next step when we
+have better tooling is to stash the full register history at each
+syscall entry and dump it on fatal fault.
+
+Files touched: none (pure investigation). Recording the findings here
+so the next session doesn't rerun the disassembly.
+
+### 3. Async signal delivery via tgkill / kill pending bits
+
+Added process-wide pending + block-mask state to `signal.rs` and a
+poll point at the SVC return path in `arch/mod.rs`. When a thread
+calls `tgkill(getpid(), tid, signo)`, the bit goes into PENDING; on
+the way back to EL0 the SVC handler calls `signal::
+try_deliver_pending(frame)`, which:
+
+1. Picks the lowest PENDING & !MASK bit (CAS-clear so concurrent
+   senders don't lose a set-bit race).
+2. Drops silently if the disposition is SIG_IGN.
+3. For SIG_DFL: if the signal's default is ignore (SIGCHLD, SIGURG,
+   SIGWINCH, SIGCONT, SIGSTOP-family), drop it; otherwise calls
+   `terminate_cave_fatal`.
+4. For a real handler: redirects the trap frame via the existing
+   `try_deliver_synchronous` — builds an rt_sigframe on the user
+   stack, sets x0/x1/x2/x30/ELR, and returns true. `eret` then
+   enters the handler; its `ret` falls into the trampoline at
+   `RT_SIGRETURN_TRAMPOLINE_VA` which calls rt_sigreturn to restore
+   the pre-signal state.
+
+`rt_sigprocmask` routes through the new mask (`SIG_BLOCK` / `SIG_
+UNBLOCK` / `SIG_SETMASK`) and mirrors to the legacy bitmap so
+anything still reading `SIGNAL_MASK` sees the same value.
+
+`tgkill` also mirrors into the new `PENDING` bitmap alongside the
+legacy `SIGNAL_PENDING`. SIGKILL still shortcuts to a direct exit
+(can't be caught or queued).
+
+`rt_sigreturn` (syscall 139) is explicitly skipped in the poll — the
+frame was just restored from a ucontext and polling on top of that
+would re-deliver the signal we're completing.
+
+Files touched:
+- `src/batcave/linux/signal.rs` — new PENDING/MASK atomics,
+  `mark_pending`, `set_mask`, `mask_block`, `mask_unblock`,
+  `take_pending_unblocked`, `try_deliver_pending`, `SI_TKILL`.
+- `src/batcave/linux/syscall.rs` — `sys_tgkill` mirrors into
+  `signal::mark_pending`; `sys_rt_sigprocmask` routes through
+  `signal::set_mask` / `mask_block` / `mask_unblock`.
+- `src/kernel/arch/mod.rs` — async signal poll at SVC exit.
+
+### What this unblocks
+
+Chromium's thread-cancel path uses signo=33 (a real-time signal) via
+tgkill. Previously that bit went into a bitmap nobody consulted.
+Now it actually gets delivered to the registered handler. The cage
+crash is still upstream of V8 install-signal-handlers, so we don't
+yet see the handler fire in Chromium — but if a future smoke-test
+run gets past the cage crash (say, by hot-patching content_shell or
+by finding the real corruption source), async delivery will Just
+Work.
+
+More importantly: a fatal Chromium crash no longer wedges the kernel.
+The test loop can now cycle through Chromium launches back-to-back
+without a QEMU reboot in between.
+
+### Next steps
+
+1. **Root-cause the cage-pointer x29/x30 corruption.** Needs live
+   register tracing — stash full GPR state at every syscall entry
+   so the UNHANDLED dump can print the call chain with actual
+   register history. Without that we're guessing.
+2. **Per-thread pending queues.** Today PENDING is process-wide
+   (fine for Chromium's self-kill pattern, but if two threads call
+   `tgkill(me, other_tid, signo)` simultaneously the bits collide).
+3. **IRQ-driven async delivery.** The preempt flag set in
+   `handle_irq` yields at the next syscall boundary. Signals queued
+   while the thread is burning CPU in user mode won't fire until it
+   calls a syscall. A low-priority extension: have `handle_irq`
+   itself check the pending mask and flip ELR on the way back.
+
+---
+
+## 2026-04-24 12:55 — Mac — POSIX signal delivery landed; V8 crash earlier than any handler install
+
+Built out an end-to-end synchronous-signal delivery path so fault
+handlers (SIGILL on `udf #1`, SIGSEGV on instruction/data abort from
+a lower EL, SIGBUS on alignment, SIGFPE on FP trap) actually get
+routed into the user's registered handler instead of kernel-wedging.
+
+### New: `src/batcave/linux/signal.rs`
+
+- `Sigaction { handler, flags, restorer, mask }` — per-process table,
+  spinlock-protected. Replaces the legacy `SIGNAL_HANDLERS[64]` flat
+  array for the active delivery path; the legacy array still mirrors
+  installs so `sys_tgkill` etc. keep working.
+- Full `Siginfo` (128 B) / `Sigcontext` (GPRs + SP + PC + PSTATE +
+  4 KiB reserved) / `Ucontext` (uc_flags/uc_link/stack_t + 128-byte
+  sigset_t + 8-byte pad + `uc_mcontext`) struct layout matching
+  AArch64 Linux UAPI. Compile-time asserts on
+  `offset_of!(Ucontext, uc_mcontext) == 0xb0` and
+  `offset_of!(Sigcontext, pc) == 0x108` so a layout drift fails the
+  build instead of silently miscommunicating with glibc.
+- `try_deliver_synchronous(frame, signo, si_code, fault_addr)` builds
+  the `rt_sigframe` on the user stack just below SP (respecting a
+  128-byte red zone and 16-byte alignment), copies the current GPRs
+  / SP / PC / PSTATE into `uc_mcontext`, sets x0=signo, x1=&info,
+  x2=&uc, x30=restorer, redirects ELR to `handler`, and bumps SP_EL0
+  to the frame base. Returns true on successful redirect, false for
+  SIG_DFL / SIG_IGN / no-handler (caller falls through).
+- `complete_rt_sigreturn(frame)` pops the ucontext from the user
+  stack and restores the full trap frame. Invoked directly from the
+  arch svc dispatcher when `syscall_num == 139` so it sees the
+  mutable trap frame the generic syscall layer can't touch.
+
+### rt_sigreturn trampoline page
+
+We don't have a vDSO to host the restorer, so `install_trampoline()`
+allocates one 4 KiB frame per cave at boot, writes the 8-byte
+`mov x8, #139 ; svc #0` sequence, and installs it into the cave's
+L3 at **0x0080_0000** (well below any library load). That VA goes
+into `RESTORER_ADDR` and is pre-loaded into x30 on every signal
+dispatch. When the handler `ret`s, it falls into the restorer and
+svc #139 triggers the state restore.
+
+### Arch wiring
+
+- `kernel/arch/mod.rs` EC=0x00 arm: after the atomic-op emulation
+  check, try SIGILL (ILL_ILLOPC) delivery before the legacy
+  "advance PC+4" fallback.
+- EC=0x20 / 0x21 (instruction abort, lower EL): SIGSEGV with
+  si_code = SEGV_MAPERR (translation fault) vs SEGV_ACCERR
+  (permission fault) derived from ISS DFSC bits.
+- EC=0x22 (PC alignment): SIGBUS / BUS_ADRALN.
+- EC=0x24 / 0x25 (data abort, lower EL): after demand_page's
+  try_handle returns false, SIGSEGV with the same MAPERR/ACCERR
+  split.
+- EC=0x26 (SP alignment): SIGBUS / BUS_ADRALN.
+- sys_rt_sigreturn (#139) short-circuits the generic dispatch so
+  `complete_rt_sigreturn` can restore every register in place.
+
+### State of the test
+
+The smoke still ends with `UNHANDLED SYNC EXCEPTION EC=0x20` at the
+V8 cage, but the diagnostics now tell us *why* cleanly:
+
+```
+[sig] SIG_DFL signo=11 — terminate (no user handler)
+```
+
+Chromium's per-signal install pass leaves SIGSEGV at SIG_DFL. It
+only real-install'd handlers for signo=33 (glibc thread-cancel
+RT signal) before the futex crash. V8's own WASM / sandbox signal
+handlers are registered **later** during `V8::Initialize`, but the
+parent thread crashes inside glibc's `pthread_create` cleanup
+path (post-futex-wake) — long before V8 gets a turn.
+
+So the cage branch isn't a V8 WASM trap after all; it's something
+in glibc / Chromium's `pthread_create` finish that's legitimately
+computing a cage pointer as a function-pointer-shaped value and
+`ret`ting through it. Most likely a compressed-pointer field in
+a glibc-allocated struct that Chromium poisons. Pinning down the
+exact site needs a Chromium disassembly — can't narrow it in-kernel
+without symbols.
+
+### Next steps
+
+1. **Per-cave termination on SIG_DFL fatal** — replace the current
+   `UNHANDLED → kernel-wedge` with a clean cave exit so a Chromium
+   crash doesn't take the whole kernel down.
+2. **V8 crash site localisation** — objdump around 0x14ce3ab0
+   (caller-LR we extracted via the stack LR-candidate scanner) to
+   identify which glibc function does the bad `ret`, then decide
+   whether it's a kernel bug (we mis-set some pthread state) or a
+   Chromium/V8 issue (deliberate poisoning of a pointer that expects
+   a later V8 init).
+3. **Async signal delivery** — once synchronous faults work, wire
+   `kill` / `tgkill` to set pending bits and have the syscall-entry
+   path poll them and deliver pending signals at safe yield points.
+
+### Files touched
+
+- `src/batcave/linux/signal.rs` (new, ~380 lines)
+- `src/batcave/linux/mod.rs` — register the new module
+- `src/batcave/linux/runner.rs` — call `signal::install_trampoline`
+  after cave L1 is live
+- `src/batcave/linux/syscall.rs` — rewire `sys_rt_sigaction` to
+  route through `signal::set_action` + capture sa_flags + restorer;
+  route `reset_cave_statics` through `signal::reset`
+- `src/kernel/arch/mod.rs` — EC=0x00 SIGILL path, EC=0x20/0x21/
+  0x22/0x24/0x25/0x26 signal path, inline rt_sigreturn dispatch
+
+---
+
+## 2026-04-24 12:15 — Mac — V8 cage crash: diagnosed as missing SIGILL delivery for V8 WASM-trap pattern
+
+Spent a long stretch chasing the EC=0x1d crash that happens immediately
+after the parent's futex wait returns. Landed multiple kernel fixes
+along the way (real sys_mprotect, UXN-by-default demand_page,
+EC=0x19/0x1c/0x1d/0x20 handlers, CPACR FPEN|ZEN|SMEN, crash-site
+stack-LR scanner), and ultimately identified the root cause: **V8
+uses `udf #1` as a deliberate WebAssembly trap sentinel and relies
+on a SIGILL handler to catch it and reroute execution. Our kernel
+has no signal-delivery plumbing, so V8's trap becomes an unhandled
+user-mode fault.**
+
+### How we narrowed it down
+
+1. With demand_page defaulting to RWX (no UXN), V8 pages were
+   implicitly executable. User code would `blr xN` with xN pointing
+   into the cage (0x38_0001_c4e0 in one run), execute the byte
+   pattern `01 00 00 00` as `udf #1`, and trip EC=0 → our handler
+   would advance PC past the UDF, only to hit further garbage (the
+   next bytes `00 01 c5 a0` decoded as an SME instruction), which
+   triggered EC=0x1d → UNHANDLED.
+2. Setting `sys_mprotect` to actually program AP+UXN+PXN bits, and
+   flipping demand_page's default flags to UXN-on (RW-no-exec),
+   changed the crash signature to **EC=0x20 ISS=0xf** (instruction
+   abort from lower EL, permission fault at L3) at exactly the
+   same `cage + 0x1c4e0` address. That confirmed the bad branch
+   was into a non-executable page the user tried to fetch from.
+3. `code around ELR` dump: `[cage+0x1c4e0] 0x01  [cage+0x1c4e4]
+   0xa0c50100  [cage+0x1c4e8] 0x00 …`. The `0x01` is exactly
+   `udf #1` in AArch64 encoding — V8's WASM-trap sentinel. The
+   following `0xa0c50100` is the start of a legitimate V8 trampoline
+   (an ADRP that V8's SIGILL handler reads to dispatch to the
+   appropriate trap body).
+4. Stack LR-candidate scanner confirmed the user call chain going
+   *into* the cage is consistent with V8's signal-recovery flow:
+   libc frames at `sp+0x08` (0x14ce3ab4), `sp+0x18` (0x14d367dc),
+   `sp+0xc8` (0x1c151e9c), plus the clone+pthread entry at
+   `sp+0x1e0` (0x1c1bbef8). `x29` and the popped stack's x30 slot
+   both hold cage pointers — V8 stashed them there expecting its
+   SIGILL handler to find them during recovery.
+
+### Why this is blocking DOM output
+
+V8's WASM trap sentinel is emitted all over V8's runtime. Without
+SIGILL delivery (and rt_sigaction'd handler invocation) there's no
+way V8 can execute any code that uses protected-memory semantics —
+which is most of its runtime for Chromium's single-process shell.
+
+### What landed this session
+
+- `src/batcave/linux/syscall.rs::sys_mprotect` — real page-table
+  walker that toggles AP / UXN / PXN bits per the requested PROT_*
+  flags, plus a TLB sledgehammer (`tlbi vmalle1`) after edits.
+- `src/batcave/linux/demand_page.rs::USER_PAGE_FLAGS` — defaults
+  to RW with UXN set. Pages that need exec must be mprotect'd with
+  PROT_EXEC explicitly.
+- `src/kernel/arch/mod.rs` EC=0x19/0x1c/0x1d skip arm: advances
+  ELR by 4 and continues, so decoder-confusion cascades don't
+  drown the crash trace with false-alarm UNHANDLEDs. The
+  *real* fault then surfaces downstream as EC=0x20.
+- `src/kernel/arch/mod.rs` UNHANDLED dump: now includes `tid=tN`,
+  all 30 GPRs, and a post-crash scan of the user stack for BL/BLR
+  return-address patterns so we can reconstruct the call chain
+  even when x29 is poisoned.
+- `src/arch/aarch64/boot.s` — CPACR_EL1 = 0x03330000 (FPEN+ZEN+SMEN).
+  Defence in depth; makes no difference on QEMU virt but future-
+  proofs us against real ARMv9 targets.
+
+### Next step (the big one)
+
+Implement POSIX signal delivery end-to-end:
+
+1. Record rt_sigaction targets per thread.
+2. On fault (EC=0x0 UDF, EC=0x1c FPAC, EC=0x20 INSTR abort, etc.)
+   convert to the appropriate signal (SIGILL / SIGSEGV / SIGBUS).
+3. If the thread has a handler registered, set up the AArch64
+   signal frame on the user stack (siginfo_t + ucontext_t),
+   adjust the trap frame so `eret` lands in the handler, and
+   wire rt_sigreturn to restore the pre-fault state.
+4. Default actions for un-handled signals (typically exit).
+
+Without this, V8 sandbox / WASM code simply cannot run. With it,
+Chromium's cascade of "graceful fault recovery" kicks in and we
+should get past the futex+V8 wall into actual DOM rendering.
+
+---
+
+## 2026-04-24 10:35 — Mac — Chased the post-futex user crash into V8's cage; fall-back skip handlers added
+
+After the scheduler fix the parent futex wait correctly resumes (finally
+we see `[sc t1] -> 0x0` for the wait return). User immediately takes an
+EC=0x1d "SME functionality trapped" at `ELR=<cage>_0001_c4e4`, where
+`<cage>` is V8's pointer-compression cage base (0x10/0x18/0x28/…,
+depends on run). The cage is mmap'd with `reserve-only` semantics and
+demand-paged in zeroed; V8 mprotects sub-pages RW (our `sys_mprotect`
+is still a no-op, so effectively RWX).
+
+Traced the full path:
+- `post-sc t1 n=98 elr=0x1c14e838` (trap frame's ELR is correct).
+- eret to 0x1c14e838; user ran 60+ instructions that each demand-paged
+  a cage page (EC=0x24 handled by `demand_page::try_handle`).
+- Eventually user does `ret` with `x30 = cage + 0x1c4e0`, lands in
+  what V8 intends as data (compressed-pointer slots, string literals).
+- First fetch trips EC=0x1d; our existing EC=0 arm didn't match so
+  we fell to UNHANDLED.
+
+Added a skip handler for EC=0x19 (SVE trap), 0x1c (FPAC), 0x1d (SME)
+that advances ELR by 4 and returns. With the skip in place, user
+chews through ~0xd28 bytes of fake "instructions" in cage data and
+eventually hits an unmapped page at `cage+0x1d000`, raising EC=0x20
+(instruction abort, translation fault L3). That's the natural end
+of the garbage execution — the true bug is upstream, at whatever
+user-mode ret populated x30 with a cage pointer. Likely a V8
+vtable/function-pointer confusion where a compressed pointer gets
+decompressed and treated as code; without the content_shell binary's
+symbol table we can't narrow the call site further in this session.
+
+### What the skip handlers buy us
+
+Even though user still crashes, the skip handlers mean `UNHANDLED
+SYNC EXCEPTION` only fires on *truly* novel faults — no more
+false-alarms on SVE/SME/PAC when user code accidentally fetches
+bytes that match those encodings. That should make future debugging
+(once we land a working pointer-compression redirect or disassemble
+the crash site) a lot cleaner.
+
+### Also added
+
+- Explicit `tid=tN` tag on the `UNHANDLED SYNC EXCEPTION` dump so we
+  know which thread is in trouble. (Confirmed: it's tid=t1, main
+  thread, post-futex.)
+- CPACR_EL1 now enables FPEN + ZEN + SMEN (0x3330000) so if the CPU
+  *does* support SVE/SME the user's accesses don't auto-trap. (QEMU's
+  virt default CPU doesn't implement SME so 0x1d came from the
+  decoder, not a real SME access — but this is defence in depth.)
+- Full-39-bit-VA `in_code` check in EC=0 handler (already landed
+  earlier today but keeping the note here for completeness).
+
+### Next steps for a future session
+
+1. Implement a real `sys_mprotect` so V8's RW-only cage pages stop
+   being effectively RWX. That might trap the bad branch as
+   `EC=0x20` at the first fetch instead of letting user chew
+   through data.
+2. Get a Chromium binary disassembly — even `readelf -a
+   ports/chromium_port/out/content_shell | head -200` + a targeted
+   objdump around 0x1c14e838 / 0x1c14e424 would tell us what
+   function is setting x30.
+3. V8 pointer-compression redirect — right now we accept V8's hints
+   directly (0x10_0000_0000 fits in VA39). The crash is not
+   caused by that, but if we need to redirect high-hint allocations
+   we should make the cage base consistent across runs so we can
+   debug symbolically.
+
+---
+
+## 2026-04-24 10:00 — Mac — Scheduler fall-through bug: OLD.saved_regs.x[30] was being stashed to dead trampoline
+
+Big subtle bug fixed today. The previous session got child threads spawning
+and waking the parent via FUTEX_WAKE, but the parent never actually ran
+any code past the wake — it was stuck in an infinite schedule-yield loop.
+After instrumenting park_slot and the scheduler we saw `[park] t1 iters=1`
+once, then 11 million scheduler switches all sourced from t1, with no
+corresponding `[park-wake]` or `iters=2` ever printing.
+
+Root cause: `schedule()` calls `cxt_switch_first_run(-> !)` via `bl`. The
+compiler, even with `-> !`, emits normal fall-through code right after
+the `bl` — the lock-release / DAIF-restore / tail-call-to-
+cxt_switch_cooperative that belongs to the non-fresh path below. The
+save block inside `cxt_switch_first_run` stashes OLD.x[30] = *post-bl*
+address. When OLD was later resumed by a regular cooperative switch,
+its `ret` landed on that dead-code trampoline with whatever x0..x18
+the restoring thread had in scratch registers, so `cxt_switch_cooperative`
+got called with garbage pointers. Everything went sideways.
+
+Fix: pop schedule()'s stack frame and branch (`b`, not `bl`) into
+`cxt_switch_first_run` from inline asm, so the helper's save block
+captures x30 = schedule()'s **caller-LR** (park_slot / ppoll / …)
+instead of a post-`bl` trampoline inside schedule itself.
+
+```rust
+// In schedule(), for the fresh-thread path:
+core::arch::asm!(
+    "ldp x20, x19, [sp, #0x10]",   // restore schedule's callee-saved
+    "ldp x30, x21, [sp], #0x20",   // pop schedule's frame, restore caller-LR
+    "b   cxt_switch_first_run",     // tail-call (no bl)
+    in("x0") old_ptr,
+    in("x1") new_ptr,
+    in("x2") user_sp,
+    options(noreturn),
+);
+```
+
+After the fix: `[park-wake] t1 slot=0 iters=1` prints and `[sc t1] ->
+0x0` appears. The parent futex wait correctly resumes when the child
+posts FUTEX_WAKE.
+
+### Downstream walls now visible (didn't exist before — we were dead
+before even reaching them)
+
+1. **syscalls 140 (setpriority), 167 (prctl), 293 (rseq)** — Chromium
+   calls them during pthread setup. Stubbed 140/167 to zero and 293 to
+   -ENOSYS (glibc has a rseq-unavailable fallback). Named them in the
+   `syscall_name` table so the trace reads cleanly instead of `?`.
+2. **sys_ppoll returning 0 on NULL-timeout** — our earlier hack was a
+   POSIX violation. Chromium's event loop assumes ppoll never returns 0
+   with an infinite timeout and wedges silently if it does. Rewrote the
+   handler to loop on `schedule()` + scan until an fd has data or the
+   bounded timeout elapses.
+3. **pipe2 still on the legacy single-buffer backing** — socketpair had
+   already moved to `pipe_buf` pair slots, so pipe-kinded fds got
+   POLLIN correctly but pipe2's fds were VFS files that ppoll couldn't
+   track. Pointed sys_pipe2 at `pipe_buf::alloc_pair` too, so both
+   pipe-family syscalls share the same pair-slot infrastructure.
+4. **EC=0 undefined-instruction handler's in_code range was too narrow**
+   — was `elr < 0x1400000 || (0x40000000..0x50000000)`, which missed
+   V8's heap-cage allocations in the 0x28/0x30 GB window. Widened to
+   the full 39-bit user VA. Also masks TBI bits off the tagged ELR
+   before the range check.
+
+### What's next
+
+The current run ends with `EC=0x1d ELR=0x30_0001_c4e4`. 0x30_0000_0000
+is our V8 pointer-compression cage base, so the user code is trying to
+execute inside the cage — V8 JIT code, presumably, but also possibly
+just a function pointer into data gone wrong. EC=0x1d on AArch64 is
+"SME functionality trapped" (not FPAC — that's 0x1c; I had them
+swapped at first). Either V8 is using SME instructions and we need to
+enable SME in CPACR_EL1, or the user has taken an indirect branch to
+data and is executing whatever bytes happen to match the SME trap
+encoding.
+
+Either way, this is post-scheduler; the scheduler itself is now sound.
+Follow-up: investigate whether Chromium's x30 at futex return points
+at legitimate code (and if not, where it got corrupted).
+
+### Files touched
+
+- `src/batcave/linux/threads.rs` — asm tail-call to cxt_switch_first_run;
+  removed the `bl` + unreachable_unchecked fallback
+- `src/batcave/linux/threads.s` — stp x29, x30 at OLD's x[29..30]
+  unchanged; the caller now guarantees x30 = caller-LR
+- `src/batcave/linux/syscall.rs` — rewrote sys_ppoll wait loop to
+  honour NULL-timeout; routed sys_pipe2 through pipe_buf; thread-id
+  tag on every `[sc]` trace
+- `src/kernel/arch/mod.rs` — full-39-bit VA check in the EC=0 arm;
+  snapshot parent GPRs on svc #220 (already landed earlier)
+
+---
+
+## 2026-04-24 04:50 — Mac — Child thread bootstrap: spawned threads now actually run
+
+Picked up where the previous session left off — Chromium's first
+`pthread_create` was succeeding at the slot-allocation level
+(`[clone] success new_tid=2`) but the child never got CPU time, so
+the parent's subsequent `FUTEX_WAIT` spun forever on a futex the
+child was supposed to post. Two root causes, both fixed.
+
+### 1. `sys_futex` wasn't stripping `FUTEX_CLOCK_REALTIME`
+
+glibc's pthread sync primitives set op = `FUTEX_CLOCK_REALTIME |
+FUTEX_PRIVATE_FLAG | FUTEX_WAIT_BITSET` = 0x189. We were only
+stripping `FUTEX_PRIVATE_FLAG` (0x80) before the match, so
+`FUTEX_CLOCK_REALTIME | FUTEX_WAIT_BITSET` = 0x109 fell through
+the match into `_ => 0` and returned "success" instantly. The
+waiter never actually blocked — it just burned 60k syscalls and
+then crashed with a stale schedule state.
+
+Fix in `src/batcave/linux/syscall.rs::sys_futex`: strip both flags.
+
+### 2. Freshly-cloned threads had no bootstrap path to EL0
+
+`cxt_switch_cooperative` was the only context-switch primitive, and
+it assumes the incoming thread has a previously-saved kernel
+continuation to `ret` into (the PC where it last called `schedule()`
+from). A brand-new thread has no such continuation — it has never
+been on the CPU, has no saved x30, has no saved kernel SP.
+
+Solved with a second helper, `cxt_switch_first_run(old, new, user_sp)`,
+that saves OLD's callee-saved state as usual and then *erets to EL0*
+using NEW's saved_regs:
+- SP_EL1 ← new.sp_el0 (dedicated per-thread kernel stack, one 4 KiB
+  page allocated in `clone()`; freed in `exit_current`)
+- TPIDR_EL0 ← new.x[18] (TLS base, set by CLONE_SETTLS)
+- ELR_EL1 ← new.elr_el1 (user PC — the post-svc return address)
+- SPSR_EL1 ← new.spsr_el1 (0 = EL0t, IRQs on)
+- SP_EL0 ← user_sp (passed as arg, mirrors Thread.stack_top)
+- x0..x30 ← new.x[0..30] (full parent-snapshot restore; x0 forced to
+  0 by `set_child_resume`)
+
+The scheduler picks the helper by checking a new `Thread.fresh` bool,
+set in `clone()` and read-and-cleared on first dispatch.
+
+Added a `Thread.kernel_stack_base/_top` pair so each thread owns its
+EL1 stack — otherwise cxt_switch_first_run's `mov sp, <new.sp_el0>`
+would park SP_EL1 on the user stack and the first IRQ would corrupt
+user memory.
+
+### 3. Full parent-register snapshot through clone
+
+glibc's aarch64 `__clone` trampoline stashes `fn` in x10 and `arg` in
+x12 pre-svc, and after svc the child path does:
+```
+mov x29, #0
+mov x0, x12     // arg
+blr x10         // call fn
+```
+If the kernel zeroes x10/x12 (as my first pass did for "hygiene"),
+the child's `blr x10` branches to PC=0. Symptom was a user-mode
+instruction abort at PC=0 / PC=0xd after eret.
+
+Plumbed through:
+- `PARENT_SYSCALL_REGS: [AtomicU64; 31]` in `threads.rs` — snapshot
+  of the parent's x0..x30 at svc entry.
+- Arch SVC dispatcher (`kernel/arch/mod.rs`) populates it when
+  `syscall_num == 220` and threads are enabled.
+- `set_child_resume` copies the snapshot into the child's
+  `saved_regs.x[0..30]`, then overrides x[0]=0 (Linux clone ABI)
+  and x[19]=resume_pc, and preserves tls_ptr in x[18].
+
+### 4. Function-address mis-resolution aside (filed, not fixed)
+
+Spent time debugging why `thread_first_run as *const () as usize`
+was returning a .rodata address (0x402014e0) that didn't match the
+actual `.text` body of the function (0x400814e8). Even `adrp`+`add`
+with the symbol name, and even an asm-internal `adr` via a local
+label, returned the bogus .rodata address — but a direct `bl` from
+Rust resolved correctly. The new design side-steps the issue
+entirely (cxt_switch_first_run is reached via a direct `bl`), but
+the underlying LLVM/Rust interaction with our linker script is worth
+understanding at some point.
+
+### Current state
+
+`python3 scripts/qemu_chromium_pipeline_smoke.py` runs clean. Log:
+`logs/qemu-tests/chromium-smoke-20260424-004813.log`. No
+UNHANDLED SYNC EXCEPTION, no DATA ABORT — content_shell completes
+clone(), child thread executes its glibc-side init (set_robust_list,
+rt_sigprocmask, gettid, getrandom, mprotect, clock_gettime,
+newfstatat, etc.), calls FUTEX_WAKE to release the parent, and
+both threads settle into ppoll waiting for Mojo IPC events. This is
+exactly where Chromium's Blink/V8 thread pool sits at steady state
+before it has a page to render.
+
+### Files touched
+
+- `src/batcave/linux/threads.s` — added `cxt_switch_first_run`
+- `src/batcave/linux/threads.rs` — `Thread.fresh`, kernel_stack
+  fields, `PARENT_SYSCALL_REGS` snapshot, updated
+  `set_child_resume`, updated `schedule()` to take the first-run
+  path
+- `src/batcave/linux/syscall.rs` — strip `FUTEX_CLOCK_REALTIME` in
+  `sys_futex`; call `set_child_resume` after `clone` returns
+- `src/kernel/arch/mod.rs` — snapshot parent regs on `svc #220`
+
+### What's next
+
+- `syscall 140` (setpriority) and `syscall 167` (prctl) currently
+  log `[linux] unknown syscall` and return 0-or-ENOSYS by default.
+  Real stubs → 0 would likely let Chromium progress past a few more
+  syscalls of GPU-thread init without log spam.
+- Some Chromium user-mode code at ELR=0x14d34814 does a load from
+  FAR=0x6003_0100_0000_0000 — non-canonical high-bit address,
+  probably a tagged pointer or V8 sandboxed pointer that our TCR
+  layout doesn't accept. Investigate TCR.TBI0 vs what V8 expects.
+- Then: renderer process actually laying out `/bin/hello.html` and
+  emitting `--dump-dom` to stdout.
+
+---
+
 ## 2026-04-24 03:30 — Mac — content_shell stably running Chromium event loop 🎉
 
 Broke through three more walls tonight. Content_shell no longer

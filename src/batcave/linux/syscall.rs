@@ -26,17 +26,21 @@ pub static SYSCALL_TRACE: core::sync::atomic::AtomicBool =
 /// Best-effort decode of an AArch64 Linux syscall number into its name.
 /// Only covers the ones we're likely to see from content_shell's startup
 /// — anything else shows up as "?".
-fn syscall_name(n: u64) -> &'static str {
+pub fn syscall_name(n: u64) -> &'static str {
     match n {
         17  => "getcwd",
+        23  => "dup",
+        24  => "dup3",
         25  => "fcntl",
         29  => "ioctl",
+        34  => "mkdirat",
         43  => "statfs",
         46  => "ftruncate",
         48  => "faccessat",
         49  => "chdir",
         56  => "openat",
         57  => "close",
+        59  => "pipe2",
         61  => "getdents64",
         62  => "lseek",
         63  => "read",
@@ -45,6 +49,7 @@ fn syscall_name(n: u64) -> &'static str {
         66  => "writev",
         67  => "pread64",
         68  => "pwrite64",
+        71  => "sendfile",
         72  => "pselect6",
         73  => "ppoll",
         78  => "readlinkat",
@@ -62,21 +67,31 @@ fn syscall_name(n: u64) -> &'static str {
         134 => "rt_sigaction",
         135 => "rt_sigprocmask",
         139 => "rt_sigreturn",
+        140 => "setpriority",
+        141 => "getpriority",
         160 => "uname",
+        167 => "prctl",
+        169 => "gettimeofday",
         172 => "getpid",
         173 => "getppid",
         174 => "getuid",
         175 => "geteuid",
         178 => "gettid",
         179 => "sysinfo",
+        199 => "socketpair",
         203 => "connect",
+        210 => "shutdown",
         214 => "brk",
         215 => "munmap",
         216 => "mremap",
+        220 => "clone",
+        221 => "execve",
         222 => "mmap",
         226 => "mprotect",
+        233 => "madvise",
         261 => "prlimit64",
         278 => "getrandom",
+        293 => "rseq",
         _   => "?",
     }
 }
@@ -210,7 +225,13 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
     let trace = SYSCALL_TRACE.load(core::sync::atomic::Ordering::Relaxed);
     if trace {
         use crate::drivers::uart;
-        uart::puts("[sc] "); crate::kernel::mm::print_num(syscall_num as usize);
+        // Tag each traced syscall with the running thread's tid so we
+        // can distinguish main (1) from worker threads when multiple
+        // pthreads are active.
+        uart::puts("[sc t");
+        crate::kernel::mm::print_num(super::threads::current_tid() as usize);
+        uart::puts("] ");
+        crate::kernel::mm::print_num(syscall_num as usize);
         uart::puts(" (");
         uart::puts(syscall_name(syscall_num));
         uart::puts(") args=[");
@@ -260,8 +281,18 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         155 => (SyscallCat::Always, sys_stub_zero),  // getpgid
         157 => (SyscallCat::Always, sys_stub_zero),  // sched_getscheduler
         158 => (SyscallCat::Always, sys_stub_zero),  // sched_getparam
+        140 => (SyscallCat::Always, sys_stub_zero),  // setpriority — glibc
+                                                     // pthread_create tunes
+                                                     // nice level; stub accepts
+                                                     // any value with 0-return
+                                                     // so the call doesn't
+                                                     // log spam.
+        141 => (SyscallCat::Always, sys_stub_zero),  // getpriority — counterpart
         166 => (SyscallCat::Always, sys_stub_zero),  // umask
-        167 => (SyscallCat::Always, sys_stub_zero),  // old sysinfo (compat)
+        167 => (SyscallCat::Always, sys_stub_zero),  // prctl — many sub-ops;
+                                                     // stub 0 keeps glibc
+                                                     // happy for PR_SET_NAME,
+                                                     // PR_SET_DUMPABLE, etc.
         169 => (SyscallCat::Always, sys_stub_zero),  // gettimeofday
         170 => (SyscallCat::Always, sys_stub_zero),  // getpgrp/setpgid
         171 => (SyscallCat::Always, sys_sigaltstack), // sigaltstack (compat)
@@ -280,6 +311,11 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         262 => (SyscallCat::Always, sys_stub_zero),  // getrlimit equiv
         276 => (SyscallCat::Always, sys_stub_zero),  // renameat2
         279 => (SyscallCat::Memory, sys_memfd_create), // memfd_create — needs mem cap
+        // rseq: restartable sequences, added in Linux 4.18. glibc ≥ 2.35
+        // probes it once per thread; if we return ENOSYS glibc falls back
+        // gracefully to the non-rseq path. Stub-zero is wrong because it
+        // lies about successful registration; return ENOSYS explicitly.
+        293 => (SyscallCat::Always, sys_stub_enosys),
 
         // ── Epoll + eventfd + timerfd (real implementations) ──
         nr::EPOLL_CREATE1 => (SyscallCat::FileIO, sys_epoll_create1),
@@ -396,7 +432,9 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
     let rv = handler(args);
     if trace {
         use crate::drivers::uart;
-        uart::puts("[sc]  -> ");
+        uart::puts("[sc t");
+        crate::kernel::mm::print_num(super::threads::current_tid() as usize);
+        uart::puts("] -> ");
         if rv < 0 {
             uart::puts("errno ");
             crate::kernel::mm::print_num((-rv) as usize);
@@ -424,6 +462,7 @@ fn sys_getppid(_args: [u64; 6]) -> i64 { 0 }
 fn sys_getuid(_args: [u64; 6]) -> i64 { 0 } // root
 fn sys_getgid(_args: [u64; 6]) -> i64 { 0 }
 fn sys_stub_zero(_args: [u64; 6]) -> i64 { 0 }
+fn sys_stub_enosys(_args: [u64; 6]) -> i64 { ENOSYS }
 fn sys_stub_enoent(_args: [u64; 6]) -> i64 { ENOENT }
 
 // ─── nanosleep (101) — real sleep using ARM64 generic timer ───
@@ -535,11 +574,136 @@ fn sys_munmap(args: [u64; 6]) -> i64 {
 }
 
 // ─── mprotect (226) — change memory protection ───
+//
+// Walk the cave's page table for each 4 KB page in [addr, addr+len)
+// and flip AP (access perm) / UXN (unprivileged execute-never) bits
+// to match the requested PROT_* flags. Pages that are not yet
+// backed (demand-paged reservation) are left alone — they'll get
+// the default RW-no-exec flags when demand_page::try_handle commits
+// them. Regions that need exec MUST call sys_mprotect after the
+// page has been materialised via a first access.
 fn sys_mprotect(args: [u64; 6]) -> i64 {
-    let _addr = args[0] as usize;
-    let _len = args[1] as usize;
-    let _prot = args[2] as u32;
-    // Accept any protection change (stack guard pages, etc.)
+    let addr = args[0] as u64;
+    let len  = args[1] as usize;
+    let prot = args[2] as u32;
+
+    const PROT_READ:  u32 = 1;
+    const PROT_WRITE: u32 = 2;
+    const PROT_EXEC:  u32 = 4;
+
+    if len == 0 { return 0; }
+
+    // Align range to 4 KB.
+    let start = addr & !0xFFFu64;
+    let end_raw = match (addr as usize).checked_add(len) {
+        Some(e) => e as u64,
+        None => return EINVAL,
+    };
+    let end = (end_raw + 0xFFF) & !0xFFFu64;
+
+    // Cave's L1 physical address.
+    let ttbr0: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
+    let l1_phys = ttbr0 & !1u64;
+
+    // Build the new AP + UXN bit pattern. Always set PXN + AF + SH +
+    // VALID. UXN is *on* (no-exec) unless PROT_EXEC was requested.
+    const BITS_VALID: u64 = 0b11;
+    const BITS_AF:    u64 = 1 << 10;
+    const BITS_SH:    u64 = 3 << 8;
+    const BITS_PXN:   u64 = 1 << 53;
+    const BITS_UXN:   u64 = 1 << 54;
+
+    // AP[2:1] at bits [7:6]:
+    //   0b00: EL1 R/W, no EL0 access
+    //   0b01: EL1 R/W, EL0 R/W
+    //   0b10: EL1 R/O, no EL0 access
+    //   0b11: EL1 R/O, EL0 R/O
+    let ap_bits: u64 = if (prot & PROT_WRITE) != 0 {
+        0b01 << 6  // EL0 R/W
+    } else if (prot & PROT_READ) != 0 {
+        0b11 << 6  // EL0 R/O
+    } else {
+        0b00 << 6  // no EL0 access
+    };
+    let mut new_low: u64 =
+        BITS_VALID | BITS_AF | BITS_SH | ap_bits;
+    // High attribute bits.
+    let mut new_high: u64 = BITS_PXN;
+    if (prot & PROT_EXEC) == 0 {
+        new_high |= BITS_UXN;
+    }
+    let _ = &mut new_low;
+
+    // Walk page-by-page.
+    let mut updated: usize = 0;
+    for va in (start..end).step_by(4096) {
+        let l1_idx = ((va >> 30) & 0x1FF) as usize;
+        let l1_ent_addr = l1_phys + (l1_idx as u64) * 8;
+        let l1_ent = unsafe {
+            core::ptr::read_volatile(l1_ent_addr as *const u64)
+        };
+        // Must be a TABLE descriptor (lower 2 bits = 0b11).
+        if (l1_ent & 0b11) != 0b11 { continue; }
+        let l2_phys = l1_ent & 0x0000_FFFF_FFFF_F000;
+
+        let l2_idx = ((va >> 21) & 0x1FF) as usize;
+        let l2_ent_addr = l2_phys + (l2_idx as u64) * 8;
+        let l2_ent = unsafe {
+            core::ptr::read_volatile(l2_ent_addr as *const u64)
+        };
+        if (l2_ent & 0b11) != 0b11 { continue; }
+        let l3_phys = l2_ent & 0x0000_FFFF_FFFF_F000;
+
+        let l3_idx = ((va >> 12) & 0x1FF) as usize;
+        let l3_ent_addr = l3_phys + (l3_idx as u64) * 8;
+        let l3_ent = unsafe {
+            core::ptr::read_volatile(l3_ent_addr as *const u64)
+        };
+        // L3 entry must be a valid PAGE descriptor (lower 2 bits = 0b11).
+        if (l3_ent & 0b11) != 0b11 { continue; }
+        // Preserve the physical frame address and attr-index, replace
+        // the AP / PXN / UXN / AF / SH bits.
+        const MASK_FRAME: u64 = 0x0000_FFFF_FFFF_F000;
+        const MASK_ATTR:  u64 = 0b111 << 2;
+        let kept = l3_ent & (MASK_FRAME | MASK_ATTR);
+        let new_ent = kept | new_low | new_high;
+        unsafe {
+            core::ptr::write_volatile(l3_ent_addr as *mut u64, new_ent);
+        }
+        updated += 1;
+    }
+
+    // TLB flush if we actually changed anything. Full-ASID sledgehammer
+    // so the next EL0 fetch/load picks up the new permissions.
+    if updated > 0 {
+        unsafe {
+            core::arch::asm!("dsb ishst");
+            core::arch::asm!("tlbi vmalle1");
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+    }
+    // Log rate-limited — mprotect fires dozens of times during
+    // Chromium startup as V8 commits cage sub-pages.
+    static MPROTECT_CALLS: core::sync::atomic::AtomicU64
+        = core::sync::atomic::AtomicU64::new(0);
+    let n = MPROTECT_CALLS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if n < 8 || (n & 0xFF) == 0 {
+        uart::puts("[mprotect] addr=0x");
+        let hex = b"0123456789abcdef";
+        for sh in (0..16).rev() {
+            uart::putc(hex[((start >> (sh*4)) & 0xF) as usize]);
+        }
+        uart::puts(" len=");
+        crate::kernel::mm::print_num(len);
+        uart::puts(" prot=0x");
+        uart::putc(hex[((prot >> 4) & 0xF) as usize]);
+        uart::putc(hex[(prot & 0xF) as usize]);
+        uart::puts(" updated=");
+        crate::kernel::mm::print_num(updated);
+        uart::puts("\n");
+    }
     0
 }
 
@@ -702,6 +866,38 @@ fn sys_write(args: [u64; 6]) -> i64 {
     let fd_num = args[0] as u32;
     let buf = args[1] as usize;
     let count = args[2] as usize;
+
+    // Pipe-kinded fd (socketpair / pipe2): copy the user buffer
+    // into the paired pipe. Checked before the kernel-ptr gate
+    // below because we need is_user_ptr anyway.
+    if count > 0 && !is_user_ptr(buf, count) { return EFAULT; }
+    if let Some((slot, side)) = fd::pipe_info(fd_num) {
+        let mut tmp = [0u8; 256];
+        let mut total = 0usize;
+        while total < count {
+            let n = (count - total).min(tmp.len());
+            for i in 0..n {
+                let b: u32;
+                unsafe {
+                    core::arch::asm!("ldrb {v:w}, [{a}]",
+                        a = in(reg) buf + total + i,
+                        v = out(reg) b);
+                }
+                tmp[i] = b as u8;
+            }
+            match super::pipe_buf::write(slot, side, &tmp[..n]) {
+                Ok(pushed) => {
+                    total += pushed;
+                    if pushed < n { break; } // pipe full
+                }
+                Err(e) => {
+                    if total > 0 { return total as i64; }
+                    return e;
+                }
+            }
+        }
+        return total as i64;
+    }
 
     // Reject pointer-to-kernel attacks before any dereference.
     if count > 0 && !is_user_ptr(buf, count) { return EFAULT; }
@@ -910,6 +1106,34 @@ fn sys_read(args: [u64; 6]) -> i64 {
         let node_idx = entry.node_idx;
         let pos = entry.position;
         let node = vfs::get_node(node_idx);
+
+        // Pipe-kinded fd (socketpair / pipe2): read from the paired buffer.
+        if let Some((slot, side)) = fd::pipe_info(fd_num) {
+            let mut tmp = [0u8; 256];
+            let mut total = 0usize;
+            while total < count {
+                let n = (count - total).min(tmp.len());
+                match super::pipe_buf::read(slot, side, &mut tmp[..n]) {
+                    Ok(0) => break,
+                    Ok(got) => {
+                        for i in 0..got {
+                            unsafe {
+                                core::arch::asm!("strb {v:w}, [{a}]",
+                                    a = in(reg) buf + total + i,
+                                    v = in(reg) tmp[i] as u32);
+                            }
+                        }
+                        total += got;
+                        if got < n { break; } // buffer drained
+                    }
+                    Err(e) => {
+                        if total > 0 { return total as i64; }
+                        return e;
+                    }
+                }
+            }
+            return total as i64;
+        }
 
         // Socket → TCP recv
         if node.node_type == vfs::NodeType::Socket {
@@ -2600,31 +2824,53 @@ fn sys_faccessat(args: [u64; 6]) -> i64 {
 
 fn sys_ppoll(args: [u64; 6]) -> i64 {
     // ppoll(fds, nfds, timeout, sigmask)
-    // struct pollfd { fd: i32, events: i16, revents: i16 } — 8 bytes
-    let fds_ptr = args[0] as usize;
-    let nfds = args[1] as usize;
+    //   struct pollfd { fd: i32, events: i16, revents: i16 } — 8 bytes
+    //   timeout == NULL  → block indefinitely
+    //   timeout->tv_*=0  → non-blocking; return immediately with
+    //                      whatever's already ready (possibly 0)
+    //   timeout > 0      → wait up to that duration
+    let fds_ptr     = args[0] as usize;
+    let nfds        = args[1] as usize;
+    let timeout_ptr = args[2] as usize;
 
     if nfds == 0 || fds_ptr == 0 { return 0; }
 
-    // ATTACK-SYS-049 / NEW-SYS-024: gate the full fds array. The loop below
-    // only reads the first 8 entries but also scatters revents writes —
-    // both arms need the fds[] buffer to live entirely in userspace.
     let n = nfds.min(8);
     let bytes = match n.checked_mul(8) { Some(b) => b, None => return -(22i64) };
     if !uaccess::is_user_range(fds_ptr, bytes) { return -(14i64); }
 
-    // Read all polled fds
-    let mut poll_fds = [0i32; 8];
-    let mut has_stdin = false;
-    let mut has_socket = false;
-    for i in 0..nfds.min(8) {
+    // Decode timeout: None → block; Some(0) → don't block; Some(ns) → bounded.
+    let timeout_ns: Option<u64> = if timeout_ptr == 0 {
+        None
+    } else {
+        if !is_user_ptr(timeout_ptr, 16) { return -(14i64); }
+        let tv_sec: u64; let tv_nsec: u64;
+        unsafe {
+            core::arch::asm!("ldr {v}, [{a}]",
+                a = in(reg) timeout_ptr, v = out(reg) tv_sec);
+            core::arch::asm!("ldr {v}, [{a}]",
+                a = in(reg) timeout_ptr + 8, v = out(reg) tv_nsec);
+        }
+        Some(tv_sec.saturating_mul(1_000_000_000).saturating_add(tv_nsec))
+    };
+
+    // Snapshot the (fd, events) pairs once. revents gets filled in on
+    // each iteration of the wait loop.
+    let mut poll_fds    = [0i32; 8];
+    let mut poll_events = [0u16; 8];
+    let mut has_stdin   = false;
+    let mut has_socket  = false;
+    for i in 0..n {
         unsafe {
             let mut fd: u32 = 0;
             core::arch::asm!("ldr {v:w}, [{a}]",
                 a = in(reg) fds_ptr + i * 8, v = out(reg) fd);
             poll_fds[i] = fd as i32;
+            let mut ev: u32 = 0;
+            core::arch::asm!("ldrh {v:w}, [{a}]",
+                a = in(reg) fds_ptr + i * 8 + 4, v = out(reg) ev);
+            poll_events[i] = ev as u16;
             if fd == 0 { has_stdin = true; }
-            // Check if it's a socket fd
             if let Some(entry) = fd::get(fd) {
                 let node = vfs::get_node(entry.node_idx);
                 if node.node_type == vfs::NodeType::Socket { has_socket = true; }
@@ -2632,107 +2878,121 @@ fn sys_ppoll(args: [u64; 6]) -> i64 {
         }
     }
 
-    // CHROMIUM-PHASE-C: Chromium's main event loop ppoll's on the
-    // socketpair fds (stub'd by our socketpair()) plus possibly
-    // stdin. With no real Mojo backing those sockets, no data
-    // ever arrives — the 50M-iter spin below burns 90 seconds of
-    // smoke-test time before giving up.
-    //
-    // Compromise: when ALL polled fds are our stub Socket VFS nodes
-    // and nothing else, return POLLIN on them immediately so the
-    // event loop can process its task queue. Real socket I/O (UDP,
-    // TCP) still hits the long-spin path. This is a pragmatic
-    // no-op-on-socketpair hack; once we wire real pipe semantics
-    // on socketpair's two fds this branch goes away.
-    // CHROMIUM-PHASE-C: Chromium's main-thread ppoll waits for
-    // eventfd/socketpair/epoll wake-ups that our stub plumbing
-    // never emits. Detect "nothing on this list looks like a
-    // stdin-or-UDP-socket" and short-circuit to "nothing ready
-    // yet, zero events" — the main thread loops back and
-    // processes whatever's in its internal task queue, making
-    // forward progress.
-    //
-    // If it turns out Chromium genuinely needs to WAIT for a real
-    // event, we'll see that (a visible hang / wedge) and can
-    // refine this with proper pipe semantics on socketpair.
-    let mut has_real_io_source = has_stdin;
-    if has_socket {
-        // UDP RX queue has data? Real network socket? Go through
-        // the long-spin path so TCP/UDP I/O works.
-        unsafe {
-            if UDP_RX_TAIL < UDP_RX_HEAD {
-                has_real_io_source = true;
+    // One-shot diagnostic so we can see what the caller is blocking on.
+    {
+        uart::puts("[ppoll] fds=[");
+        for i in 0..n {
+            if i > 0 { uart::putc(b','); }
+            crate::kernel::mm::print_num(poll_fds[i] as usize);
+            uart::putc(b':');
+            if let Some((slot, side)) = fd::pipe_info(poll_fds[i] as u32) {
+                uart::puts("pipe");
+                crate::kernel::mm::print_num(slot);
+                if side == 0 { uart::putc(b'A'); } else { uart::putc(b'B'); }
+            } else if let Some(entry) = fd::get(poll_fds[i] as u32) {
+                let node = vfs::get_node(entry.node_idx);
+                if node.node_type == vfs::NodeType::Socket { uart::puts("sock"); }
+                else { uart::puts("vfs"); }
+            } else {
+                uart::puts("bad");
             }
         }
-    }
-    if !has_real_io_source {
-        // Every polled fd is an event-wake stub. Return 0 (no
-        // events, matching a NULL-timeout ppoll returning on a
-        // spurious wake). Chromium's event loop will call ppoll
-        // again; between calls it processes its task queue. Busy
-        // loop but forward progress.
-        //
-        // Previously we tried setting POLLIN on every fd so the
-        // event loop would "read and go" — but then Chromium
-        // called abort()/tgkill(SIGABRT), presumably because a
-        // CHECK in its IPC code hit an unexpected state when
-        // read() on the fake socketpair returned EAGAIN every
-        // time.
-        return 0;
+        uart::puts("] timeout=");
+        match timeout_ns {
+            None => uart::puts("inf"),
+            Some(0) => uart::puts("0"),
+            Some(ns) => crate::kernel::mm::print_num(ns as usize),
+        }
+        uart::puts("\n");
     }
 
-    // Poll loop — check all sources (long timeout for network I/O)
-    for _ in 0..50_000_000 {
+    // Scans all polled fds, writes revents bits, returns the count of
+    // fds that had anything ready.
+    let scan = || -> i64 {
         let mut ready = 0i64;
+        for i in 0..n {
+            let fd = poll_fds[i];
+            let events = poll_events[i];
+            let mut revents: u16 = 0;
 
-        // Check stdin
-        if has_stdin && uart::has_char() {
-            for i in 0..nfds.min(8) {
-                if poll_fds[i] == 0 {
-                    let pollin: u16 = 1;
-                    unsafe {
-                        core::arch::asm!("strh {v:w}, [{a}]",
-                            a = in(reg) fds_ptr + i * 8 + 6,
-                            v = in(reg) pollin as u32);
-                    }
-                    ready += 1;
-                }
+            // stdin: POLLIN if there's a byte waiting on UART.
+            if fd == 0 && (events & 0x1) != 0 && uart::has_char() {
+                revents |= 0x1;
             }
-        }
 
-        // Check socket fds (UDP RX queue has data)
-        if has_socket {
-            crate::net::poll_once();
-            unsafe {
-                if UDP_RX_TAIL < UDP_RX_HEAD {
-                    for i in 0..nfds.min(8) {
-                        if poll_fds[i] > 2 {
-                            if let Some(entry) = fd::get(poll_fds[i] as u32) {
-                                let node = vfs::get_node(entry.node_idx);
-                                if node.node_type == vfs::NodeType::Socket {
-                                    let pollin: u16 = 1;
-                                    core::arch::asm!("strh {v:w}, [{a}]",
-                                        a = in(reg) fds_ptr + i * 8 + 6,
-                                        v = in(reg) pollin as u32);
-                                    ready += 1;
-                                }
+            // pipe-kinded fds: POLLIN if the inbound buffer has data,
+            // POLLOUT always (writes don't block in our impl).
+            if let Some((slot, side)) = fd::pipe_info(fd as u32) {
+                if (events & 0x1) != 0
+                    && super::pipe_buf::has_readable(slot, side)
+                {
+                    revents |= 0x1;
+                }
+                if (events & 0x4) != 0 {
+                    revents |= 0x4;
+                }
+            } else if fd > 2 {
+                // Socket VFS nodes (legacy non-pipe-kinded): report
+                // POLLIN when the UDP RX ring has data.
+                if let Some(entry) = fd::get(fd as u32) {
+                    let node = vfs::get_node(entry.node_idx);
+                    if node.node_type == vfs::NodeType::Socket
+                        && (events & 0x1) != 0
+                    {
+                        unsafe {
+                            if UDP_RX_TAIL < UDP_RX_HEAD {
+                                revents |= 0x1;
                             }
                         }
                     }
                 }
             }
+
+            if revents != 0 {
+                unsafe {
+                    core::arch::asm!("strh {v:w}, [{a}]",
+                        a = in(reg) fds_ptr + i * 8 + 6,
+                        v = in(reg) revents as u32);
+                }
+                ready += 1;
+            }
         }
+        ready
+    };
 
-        if ready > 0 { return ready; }
-
-        // If only waiting on stdin (no socket), block indefinitely
-        if has_stdin && !has_socket { continue; }
-
-        core::hint::spin_loop();
+    // Fast path: something is already ready, or caller asked for
+    // non-blocking (timeout_ns == Some(0)).
+    let ready_now = scan();
+    if ready_now > 0 || matches!(timeout_ns, Some(0)) {
+        return ready_now;
     }
 
-    // Timeout
-    0
+    // Wait loop. Yield on each iteration so sibling threads can run
+    // (and possibly drop data into one of the polled pipes). For a
+    // NULL timeout we loop indefinitely; for a bounded timeout we
+    // cap by a rough iteration count (real deadline arithmetic is
+    // blocked on a usable monotonic clock in our scheduler).
+    //
+    // The iteration cap is intentionally high (50M) so the real
+    // POSIX contract — "a NULL-timeout ppoll returns only when an
+    // fd is ready or a signal arrives" — is effectively honoured for
+    // the single-process content_shell workload. Chromium's code
+    // explicitly asserts n != 0 on infinite-timeout poll returns, so
+    // we must NOT return 0 spuriously here.
+    let max_iters: u64 = match timeout_ns {
+        Some(ns) => (ns / 1_000).max(1),  // ~1 spin per µs
+        None     => u64::MAX,
+    };
+    let mut iters: u64 = 0;
+    loop {
+        super::threads::schedule();
+        if has_socket { crate::net::poll_once(); }
+        let ready = scan();
+        if ready > 0 { return ready; }
+        iters += 1;
+        if iters >= max_iters { return 0; }
+        core::hint::spin_loop();
+    }
 }
 
 fn sys_dup(args: [u64; 6]) -> i64 {
@@ -2805,11 +3065,17 @@ static TID_ADDRESS: AtomicU64 = AtomicU64::new(0);
 // which provides a 2048-waiter hash table with FUTEX_REQUEUE, bitset ops, and
 // real cntpct_el0 timeouts.
 const FUTEX_PRIVATE_FLAG: u64 = 128;
+const FUTEX_CLOCK_REALTIME: u64 = 256;
 
 fn sys_futex(args: [u64; 6]) -> i64 {
     use super::futex;
     let uaddr = args[0];
-    let op = (args[1] & !(FUTEX_PRIVATE_FLAG)) as u32;
+    // Strip BOTH FUTEX_PRIVATE_FLAG and FUTEX_CLOCK_REALTIME before the
+    // match — glibc's pthread sync primitives always set these (op = 0x189
+    // for WAIT_BITSET), and without the clock-realtime mask the match
+    // dropped into the `_ => 0` catch-all and returned instantly, leaving
+    // the waiter spinning on a futex that never actually blocked.
+    let op = (args[1] & !(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME)) as u32;
     let val = args[2] as u32;
     let timeout_ptr = args[3] as usize;
     let uaddr2 = args[4];
@@ -2863,13 +3129,26 @@ fn sys_clone_thread(args: [u64; 6]) -> i64 {
     // threads::init_main_thread), delegate to the real clone().
     // ARM64 Linux clone ABI: (flags, child_stack, parent_tidptr, tls, child_tidptr)
     if super::threads::is_enabled() {
-        return super::threads::clone(
+        let tid = super::threads::clone(
             flags,
             child_stack,
             args[2] as *mut i32, // parent_tidptr
             args[4] as *mut i32, // child_tidptr
             args[3],              // tls
         );
+        // Only fill in the child's resume PC when clone succeeded
+        // (positive return = new TID). Negative returns are errnos
+        // and no slot was allocated.
+        if tid > 0 {
+            let parent_elr = super::threads::PARENT_SYSCALL_ELR
+                .load(core::sync::atomic::Ordering::Acquire);
+            // The arch SVC dispatcher stashes ELR_EL1 (already the
+            // post-svc return address on ARM64) into PARENT_SYSCALL_ELR
+            // before calling us. Plumb it through so cxt_switch_first_run
+            // erets the child at the instruction after the parent's svc.
+            super::threads::set_child_resume(tid as u32, parent_elr, child_stack);
+        }
+        return tid;
     }
 
     // Legacy fork/thread path (busybox, v8_exec, etc.)
@@ -3301,6 +3580,34 @@ fn sys_execve(args: [u64; 6]) -> i64 {
 }
 
 fn sys_wait_stub(args: [u64; 6]) -> i64 {
+    // ROOT-FIX (2026-04-24): fake-fork reap path. When `clone()`
+    // synthesised a fake child PID (see threads::clone), there's no
+    // real process to wait on — the child "exited immediately" with
+    // status 0. Report it as reaped exactly once; subsequent calls
+    // return -ECHILD.
+    let fake = super::threads::FAKE_CHILD_PID
+        .load(core::sync::atomic::Ordering::Acquire);
+    if fake != 0 {
+        super::threads::FAKE_CHILD_PID
+            .store(0, core::sync::atomic::Ordering::Release);
+        let status_ptr = args[1] as usize;
+        if status_ptr != 0 {
+            if !uaccess::is_user_range(status_ptr, 4) { return -(14i64); }
+            // Linux wait status layout for normal exit:
+            //   low 7 bits = termination signal (0 = normal)
+            //   bit 7 = core dump
+            //   bits 15:8 = exit code
+            let status: u32 = 0;
+            unsafe {
+                core::arch::asm!("str {v:w}, [{a}]", a = in(reg) status_ptr, v = in(reg) status);
+            }
+        }
+        uart::puts("[wait4] fake-fork reap: pid=");
+        crate::kernel::mm::print_num(fake as usize);
+        uart::puts(" status=0\n");
+        return fake as i64;
+    }
+
     // Check if there's a child to reap
     let has_child = CHILD_REAPED.load(core::sync::atomic::Ordering::Relaxed);
     if has_child {
@@ -3678,77 +3985,66 @@ fn sys_pipe2(args: [u64; 6]) -> i64 {
 }
 
 fn sys_pipe2_inner(fds_ptr: usize) -> i64 {
-
-    // Reset pipe buffer
-    unsafe {
-        core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_LEN), 0);
-        for i in 0..PIPE_BUF_SIZE {
-            core::arch::asm!("strb wzr, [{a}]",
-                a = in(reg) core::ptr::addr_of_mut!(PIPE_BUF) as usize + i);
+    // CHROMIUM-PHASE-C: route pipe2 through the same pipe_buf pair
+    // slots that socketpair uses. That way reads on pipefd[0] block
+    // in ppoll until someone writes to pipefd[1], and POLLIN reporting
+    // works uniformly. Previously pipe2 handed out VFS-file fds that
+    // ppoll couldn't track.
+    //
+    // We still need two VFS Socket nodes (well, Pipe would be nicer,
+    // but we don't have that variant yet — sockets work because ppoll's
+    // VFS-node path treats Socket specially). stat/fstat on the fds
+    // see them as "socket-like pipes"; nothing user-visible cares.
+    if !vfs::is_ready() { return -(38i64); }
+    let slot = match super::pipe_buf::alloc_pair() {
+        Some(s) => s,
+        None => return -(24i64), // EMFILE
+    };
+    // Two VFS stub nodes under /tmp so /proc-style introspection sees
+    // a name. Unique per-slot.
+    let mut name = [0u8; 16];
+    name[0] = b'.'; name[1] = b'p'; name[2] = b'i'; name[3] = b'p'; name[4] = b'e';
+    name[5] = b'0' + ((slot / 10) % 10) as u8;
+    name[6] = b'0' + (slot % 10) as u8;
+    let name_len = 7;
+    let parent = vfs::find_child(0, b"tmp").unwrap_or(0);
+    let node_r = match vfs::create_node(parent, &name[..name_len], vfs::NodeType::Socket, 0o140600) {
+        Ok(n) => n,
+        Err(e) => { super::pipe_buf::release(slot); return e; }
+    };
+    let node_w = match vfs::create_node(parent, &name[..name_len], vfs::NodeType::Socket, 0o140600) {
+        Ok(n) => n,
+        Err(e) => { super::pipe_buf::release(slot); return e; }
+    };
+    // side 0 is the read end (reads pull data that side 1 wrote);
+    // side 1 is the write end. pipe2 returns [read_fd, write_fd].
+    let read_fd = match fd::alloc_fd_pipe(node_r, fd::O_RDONLY, slot, 0) {
+        Ok(f) => f,
+        Err(e) => { super::pipe_buf::release(slot); return e; }
+    };
+    let write_fd = match fd::alloc_fd_pipe(node_w, fd::O_WRONLY, slot, 1) {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = fd::close(read_fd);
+            super::pipe_buf::release(slot);
+            return e;
         }
-    }
-
-    // Create a temp VFS file to act as pipe backing
-    if vfs::is_ready() {
-        if let Some(tmp) = vfs::find_child(0, b"tmp") {
-            // Create a unique pipe file name
-            static mut PIPE_NUM: u32 = 0;
-            let pnum = unsafe {
-                let n = core::ptr::read_volatile(core::ptr::addr_of!(PIPE_NUM));
-                core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_NUM), n + 1);
-                n
-            };
-            let mut name = [0u8; 16];
-            name[0] = b'.'; name[1] = b'p'; name[2] = b'i'; name[3] = b'p'; name[4] = b'e';
-            name[5] = b'0' + ((pnum / 10) % 10) as u8;
-            name[6] = b'0' + (pnum % 10) as u8;
-            let name_len = 7;
-
-            if let Ok(node_idx) = vfs::create_node(tmp, &name[..name_len], vfs::NodeType::File, 0o100600) {
-                // V5-CHAIN-003 fix: if the SECOND alloc_fd fails, release
-                // the FIRST fd so it doesn't leak. sys_pipe2 (caller)
-                // already charged 2 fds up front; if only one ended up
-                // in the fd table we must release it too.
-                let read_fd = match fd::alloc_fd(node_idx, fd::O_RDONLY) {
-                    Ok(f) => f,
-                    Err(e) => return e,
-                };
-                let write_fd = match fd::alloc_fd(node_idx, fd::O_WRONLY) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        // Release the already-allocated read_fd so it
-                        // doesn't stay as an orphan in the fd table.
-                        let _ = fd::close(read_fd);
-                        return e;
-                    }
-                };
-
-                unsafe {
-                    core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_READ_FD), read_fd);
-                    core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_WRITE_FD), write_fd);
-                }
-
-                // Return fds to userspace
-                unsafe {
-                    core::arch::asm!("str {v:w}, [{a}]",
-                        a = in(reg) fds_ptr, v = in(reg) read_fd);
-                    core::arch::asm!("str {v:w}, [{a}]",
-                        a = in(reg) fds_ptr + 4, v = in(reg) write_fd);
-                }
-                return 0;
-            }
-        }
-    }
-
-    // Fallback: return fake fds backed by pipe buffer
+    };
     unsafe {
-        let read_fd: u32 = 20;
-        let write_fd: u32 = 21;
         core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_READ_FD), read_fd);
         core::ptr::write_volatile(core::ptr::addr_of_mut!(PIPE_WRITE_FD), write_fd);
-        core::arch::asm!("str {v:w}, [{a}]", a = in(reg) fds_ptr, v = in(reg) read_fd);
-        core::arch::asm!("str {v:w}, [{a}]", a = in(reg) fds_ptr + 4, v = in(reg) write_fd);
+        core::arch::asm!("str {v:w}, [{a}]",
+            a = in(reg) fds_ptr, v = in(reg) read_fd);
+        core::arch::asm!("str {v:w}, [{a}]",
+            a = in(reg) fds_ptr + 4, v = in(reg) write_fd);
     }
+    uart::puts("[pipe2] fd=");
+    crate::kernel::mm::print_num(read_fd as usize);
+    uart::puts(",");
+    crate::kernel::mm::print_num(write_fd as usize);
+    uart::puts(" slot=");
+    crate::kernel::mm::print_num(slot);
+    uart::puts("\n");
     0
 }
 
@@ -3966,6 +4262,14 @@ pub fn reset_cave_statics() {
         SIGNAL_PENDING = 0;
         SIGALT_SP = 0;
         SIGALT_SIZE = 0;
+    }
+    // Clear the real signal module's handler table too.
+    super::signal::reset();
+    // Wipe the syscall-history ring — the next cave should start
+    // with a blank forensic record so its crash dump only contains
+    // its own syscalls.
+    super::syscall_history::reset();
+    unsafe {
         // Pipe buffer + bookkeeping. V11-state-sweep: prior fd IDs AND
         // the fn-local PIPE_NUM counter (reset via write_volatile below)
         // were leaking across caves so a read() on an inherited fd could
@@ -4037,37 +4341,57 @@ pub fn reset_cave_statics() {
     CLONE_CHILD_STACK.store(0, core::sync::atomic::Ordering::Release);
 }
 
-/// rt_sigaction — set/get signal handler
+/// rt_sigaction — set/get signal handler. Route through `signal::`
+/// which owns the real handler table + delivery path.
 fn sys_rt_sigaction(args: [u64; 6]) -> i64 {
+    use super::signal;
     let signum = args[0] as u32;
     let act_ptr = args[1] as usize;
     let oldact_ptr = args[2] as usize;
 
-    if signum == 0 || signum as usize >= MAX_SIG { return EINVAL; }
+    if signum == 0 || signum as usize >= signal::MAX_SIG { return EINVAL; }
     if signum == SIGKILL || signum == SIGSTOP { return EINVAL; }
 
-    // sigaction struct is 32 bytes (4 × u64).  ATTACK-SYS-037: the
-    // `oldact` write is an arbitrary 8-byte kernel-write primitive if
-    // the attacker points it at kernel state and can pre-arm
-    // SIGNAL_HANDLERS[idx] via the `act` path.  Validate both before
-    // any deref.
+    // sigaction struct: handler (u64), flags (u64), restorer (u64),
+    // sigset_t mask (u64 on our simple impl). Linux actually has a
+    // larger sa_mask but glibc wraps this.
     if act_ptr != 0 && !is_user_ptr(act_ptr, 32) { return EFAULT; }
     if oldact_ptr != 0 && !is_user_ptr(oldact_ptr, 32) { return EFAULT; }
 
-    let idx = signum as usize;
-    unsafe {
-        // Return old action if requested
-        if oldact_ptr != 0 {
-            let old = oldact_ptr as *mut u64;
-            core::ptr::write(old, SIGNAL_HANDLERS[idx]);
-            core::ptr::write(old.add(1), 0); // sa_flags
-            core::ptr::write(old.add(2), 0); // sa_restorer
-            core::ptr::write(old.add(3), 0); // sa_mask
+    let mut old = signal::Sigaction::default();
+    let old_out = if oldact_ptr != 0 { Some(&mut old) } else { None };
+
+    let new_sa = if act_ptr != 0 {
+        unsafe {
+            let p = act_ptr as *const u64;
+            Some(signal::Sigaction {
+                handler:  core::ptr::read(p),
+                flags:    core::ptr::read(p.add(1)),
+                restorer: core::ptr::read(p.add(2)),
+                mask:     core::ptr::read(p.add(3)),
+            })
         }
-        // Set new action if provided
-        if act_ptr != 0 {
-            let act = act_ptr as *const u64;
-            SIGNAL_HANDLERS[idx] = core::ptr::read(act);
+    } else { None };
+
+    let rc = signal::set_action(signum, new_sa, old_out);
+    if rc < 0 { return rc; }
+
+    if oldact_ptr != 0 {
+        unsafe {
+            let p = oldact_ptr as *mut u64;
+            core::ptr::write(p,           old.handler);
+            core::ptr::write(p.add(1),    old.flags);
+            core::ptr::write(p.add(2),    old.restorer);
+            core::ptr::write(p.add(3),    old.mask);
+        }
+    }
+    // Mirror the handler in the legacy bitmap too so sys_tgkill etc.
+    // keep working during this transition.
+    if let Some(sa) = new_sa {
+        unsafe {
+            if (signum as usize) < MAX_SIG {
+                SIGNAL_HANDLERS[signum as usize] = sa.handler;
+            }
         }
     }
     0
@@ -4092,17 +4416,32 @@ fn sys_rt_sigprocmask(args: [u64; 6]) -> i64 {
 
     unsafe {
         if oldset_ptr != 0 {
-            core::ptr::write(oldset_ptr as *mut u64, SIGNAL_MASK);
+            // Prefer the new signal module's view; it's what the
+            // async-delivery poll actually consults.
+            let cur = super::signal::get_mask();
+            core::ptr::write(oldset_ptr as *mut u64, cur);
+            // Mirror into the legacy global too so anybody still
+            // reading SIGNAL_MASK sees the same value.
+            SIGNAL_MASK = cur;
         }
         if set_ptr != 0 {
             let new_set = core::ptr::read(set_ptr as *const u64)
                 & !((1u64 << SIGKILL) | (1u64 << SIGSTOP));
-            match how {
-                0 => SIGNAL_MASK |= new_set,   // SIG_BLOCK
-                1 => SIGNAL_MASK &= !new_set,  // SIG_UNBLOCK
-                2 => SIGNAL_MASK = new_set,     // SIG_SETMASK
+            let new_mask = match how {
+                0 => super::signal::mask_block(new_set),        // SIG_BLOCK   — returns prev
+                1 => super::signal::mask_unblock(new_set),      // SIG_UNBLOCK — returns prev
+                2 => super::signal::set_mask(new_set),          // SIG_SETMASK — returns prev
                 _ => return EINVAL,
-            }
+            };
+            // `new_mask` is the *old* value; compute the new one and
+            // mirror into the legacy bitmap so nothing diverges.
+            let resulting = match how {
+                0 => new_mask | new_set,
+                1 => new_mask & !new_set,
+                2 => new_set,
+                _ => new_mask,
+            };
+            SIGNAL_MASK = resulting;
         }
     }
     0
@@ -4132,9 +4471,20 @@ fn sys_tgkill(args: [u64; 6]) -> i64 {
     }
     if (sig as usize) < MAX_SIG {
         unsafe { SIGNAL_PENDING |= 1u64 << sig; }
+        // V8-NEW: also mirror into signal.rs's async-pending bitmap so
+        // the syscall-return poll in arch/mod.rs picks it up and
+        // routes through the real delivery path (rt_sigframe, user
+        // handler, rt_sigreturn). The legacy SIGNAL_PENDING is still
+        // used by check_pending_signal() which a few older call sites
+        // consult; keeping both in sync is cheap.
+        super::signal::mark_pending(sig);
     }
-    if sig == SIGKILL || sig == SIGTERM || sig == SIGABRT {
-        uart::puts("[signal] fatal signal, terminating\n");
+    // SIGKILL / SIGSTOP can't be caught or ignored; take the cave
+    // down directly rather than wait for the next syscall return.
+    // (Async delivery of a SIGKILL would eventually fire
+    // terminate_cave_fatal anyway — this just shortcuts.)
+    if sig == SIGKILL {
+        uart::puts("[signal] SIGKILL, terminating\n");
         sys_exit([1, 0, 0, 0, 0, 0]);
     }
     0
@@ -4329,30 +4679,34 @@ fn sys_blit_framebuffer(args: [u64; 6]) -> i64 {
 // namespace (>=1024) that sockets.rs manages.
 
 fn sys_socketpair(args: [u64; 6]) -> i64 {
-    // CHROMIUM-PHASE-B: minimal socketpair that returns two fresh
-    // VFS Socket-node fds pointing at the same cave. Chromium (even
-    // in --single-process) calls socketpair during Mojo IPC init;
-    // returning ENOSYS caused it to abort right after V8 startup.
-    // We don't actually wire up the pair for bidirectional traffic —
-    // Mojo in single-process is expected to use in-process channels,
-    // not the socket pair. The fds just need to exist + read/write
-    // to accept basic data (which we treat as no-op sends).
+    // CHROMIUM-PHASE-C: real pipe-backed socketpair. Creates two
+    // VFS Socket nodes + two pipe-kinded fds sharing a pair slot
+    // from `pipe_buf`. Bytes written to one end become readable
+    // on the other. `read()` / `write()` / `poll()` dispatch on
+    // FdKind::Pipe in their syscall handlers.
     let _domain = args[0] as u32;
     let _sock_type = args[1] as u32;
     let _protocol = args[2] as u32;
     let sv_ptr = args[3] as usize;
     if sv_ptr == 0 || !is_user_ptr(sv_ptr, 8) { return EFAULT; }
 
-    // Create two Socket nodes + two fds.
-    if !vfs::is_ready() { return -38; } // ENOSYS as "not supported without vfs"
+    if !vfs::is_ready() { return -38; }
+    let slot = match super::pipe_buf::alloc_pair() {
+        Some(s) => s,
+        None => return -24, // EMFILE
+    };
     let node_a = match vfs::create_node(0, b".sockpair_a", vfs::NodeType::Socket, 0o140755) {
-        Ok(n) => n, Err(e) => return e,
+        Ok(n) => n, Err(e) => { super::pipe_buf::release(slot); return e; },
     };
     let node_b = match vfs::create_node(0, b".sockpair_b", vfs::NodeType::Socket, 0o140755) {
-        Ok(n) => n, Err(e) => return e,
+        Ok(n) => n, Err(e) => { super::pipe_buf::release(slot); return e; },
     };
-    let fd_a = match fd::alloc_fd(node_a, 0) { Ok(f) => f, Err(e) => return e };
-    let fd_b = match fd::alloc_fd(node_b, 0) { Ok(f) => f, Err(e) => return e };
+    let fd_a = match fd::alloc_fd_pipe(node_a, 0, slot, 0) {
+        Ok(f) => f, Err(e) => { super::pipe_buf::release(slot); return e; },
+    };
+    let fd_b = match fd::alloc_fd_pipe(node_b, 0, slot, 1) {
+        Ok(f) => f, Err(e) => { super::pipe_buf::release(slot); return e; },
+    };
     unsafe {
         core::arch::asm!("str {v:w}, [{a}]",
             a = in(reg) sv_ptr, v = in(reg) fd_a);
@@ -4363,6 +4717,8 @@ fn sys_socketpair(args: [u64; 6]) -> i64 {
     crate::kernel::mm::print_num(fd_a as usize);
     uart::puts(",");
     crate::kernel::mm::print_num(fd_b as usize);
+    uart::puts(" slot=");
+    crate::kernel::mm::print_num(slot);
     uart::puts("\n");
     0
 }

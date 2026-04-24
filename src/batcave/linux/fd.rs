@@ -2,7 +2,19 @@
 // Maps Linux fd numbers to VFS node indices with read/write positions.
 // Fds 0/1/2 are hardwired to stdin/stdout/stderr (UART).
 
-const MAX_FDS: usize = 64;
+// CHROMIUM-PHASE-C: bumped from 64 to 256 — Chromium's Mojo IPC
+// and thread-pool each want a handful of fds; 64 was tight for a
+// full content_shell run.
+const MAX_FDS: usize = 256;
+
+/// Kind-tag for fds that have backing beyond a VFS node. `Pipe`
+/// carries a pair_slot (0..pipe_buf::MAX_PAIRS) and a side (0 or 1)
+/// packed into a single u16: low bit = side, upper bits = slot.
+#[derive(Clone, Copy, PartialEq)]
+pub enum FdKind {
+    Vfs,         // position indexes into node data
+    Pipe(u16),   // (slot<<1)|side — see pipe_buf.rs
+}
 
 #[derive(Clone, Copy)]
 pub struct FdEntry {
@@ -10,6 +22,7 @@ pub struct FdEntry {
     pub node_idx: u16,    // VFS node index
     pub position: usize,  // current read/write offset
     pub flags: u32,       // O_RDONLY, O_WRONLY, O_RDWR, O_APPEND, etc.
+    pub kind: FdKind,
 }
 
 impl FdEntry {
@@ -19,6 +32,7 @@ impl FdEntry {
             node_idx: 0,
             position: 0,
             flags: 0,
+            kind: FdKind::Vfs,
         }
     }
 }
@@ -69,12 +83,51 @@ pub fn alloc_fd(node_idx: u16, flags: u32) -> Result<u32, i64> {
                     node_idx,
                     position: 0,
                     flags,
+                    kind: FdKind::Vfs,
                 };
                 return Ok(i as u32);
             }
         }
     }
     Err(-24) // EMFILE — too many open files
+}
+
+/// Allocate an fd backed by a pipe-buffer pair slot. Used by
+/// socketpair(2) / pipe2(2). `pair_slot` is the index returned by
+/// `pipe_buf::alloc_pair`, `side` is 0 (end A) or 1 (end B). The
+/// caller should also create a fresh VFS Socket node and pass its
+/// index in `node_idx` so stat / poll-by-type work.
+pub fn alloc_fd_pipe(node_idx: u16, flags: u32, pair_slot: usize, side: u8)
+    -> Result<u32, i64>
+{
+    if pair_slot >= 0x8000 { return Err(-22); } // EINVAL
+    let packed = ((pair_slot as u16) << 1) | (side as u16 & 1);
+    unsafe {
+        for i in 3..MAX_FDS {
+            if !FD_TABLE[i].active {
+                FD_TABLE[i] = FdEntry {
+                    active: true,
+                    node_idx,
+                    position: 0,
+                    flags,
+                    kind: FdKind::Pipe(packed),
+                };
+                return Ok(i as u32);
+            }
+        }
+    }
+    Err(-24)
+}
+
+/// If this fd is a pipe-end, return (pair_slot, side). Else None.
+pub fn pipe_info(fd: u32) -> Option<(usize, u8)> {
+    let entry = get(fd)?;
+    match entry.kind {
+        FdKind::Pipe(packed) => {
+            Some(((packed >> 1) as usize, (packed & 1) as u8))
+        }
+        _ => None,
+    }
 }
 
 /// Get an fd entry (immutable).

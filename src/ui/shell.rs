@@ -3024,7 +3024,7 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     // specifically wants a pre-set fd via base::i18n::SetIcuFile.
     // But passing a real path costs nothing and helps other PathService
     // lookups that cascade off argv[0].)
-    let mut argv: [&str; 16] = [""; 16];
+    let mut argv: [&str; 20] = [""; 20];
     let mut n = 0;
     argv[n] = "/bin/content_shell"; n += 1;
     if headless    { argv[n] = "--headless";     n += 1; }
@@ -3033,6 +3033,12 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     if dump_dom    { argv[n] = "--dump-dom";     n += 1; }
     argv[n] = "--single-process";          n += 1;
     argv[n] = "--ozone-platform=headless"; n += 1;
+    // (Deliberately NOT passing --no-zygote: it puts content_shell
+    // on a different init order that hits an ICU CharString pointer
+    // bug at ~300 syscalls in. The zygote path gets further —
+    // Chromium's fake-forked zygote doesn't respond and Chromium
+    // FATALs on "Cannot communicate with zygote", but that's a
+    // solvable problem via a real zygote IPC stub.)
     // --enable-logging=stderr --v=1 — make Chromium's own LOG(INFO)
     // + VLOG(1) lines hit stderr so we see what it's doing right
     // before it crashes. Cheap to enable; no-op if logging is

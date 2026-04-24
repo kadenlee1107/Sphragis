@@ -1,0 +1,207 @@
+// Bat_OS — Minimal pipe buffer pool for socketpair() and pipe2().
+//
+// Chromium's Mojo IPC in --single-process still uses socketpair(2) as
+// the wake-up channel between its main thread and various worker
+// threads. Our earlier stub — two VFS Socket nodes with no backing —
+// meant writes vanished and reads never saw data, so ppoll on those
+// fds blocked forever and Chromium's event loop never made progress.
+//
+// This module provides a fixed pool of 8 bidirectional pipe pairs,
+// each with two 4 KB circular buffers (A→B and B→A). Allocated by
+// `socketpair()`, associated with a pair of fds via
+// `fd::FdEntry.pipe_slot`, serviced by read/write/poll hooks in
+// `syscall.rs`. Buffers live in a single `static mut` so there's no
+// heap involvement — matches the rest of the kernel.
+//
+// Limitations (deliberate for first cut):
+// - No blocking. read() on empty returns EAGAIN. Chromium's event
+//   loop handles that (retries on next wake).
+// - No partial-write retry. If the outbound buffer is full, write()
+//   returns EAGAIN. Caller should poll before trying again.
+// - Fixed 8 pairs × 4 KB × 2 = 64 KB kernel BSS. Cheap.
+// - No cleanup on close(). The buffers sit until the pool wraps
+//   around; fine for a short-lived shell run.
+
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+pub const MAX_PAIRS: usize = 16;
+pub const BUF_SIZE: usize = 4096;
+
+#[repr(C)]
+pub struct PairBuf {
+    /// data written by end A, read by end B
+    a_to_b: [u8; BUF_SIZE],
+    a_to_b_len: usize,
+    /// data written by end B, read by end A
+    b_to_a: [u8; BUF_SIZE],
+    b_to_a_len: usize,
+    active: bool,
+}
+
+impl PairBuf {
+    const fn empty() -> Self {
+        Self {
+            a_to_b: [0; BUF_SIZE],
+            a_to_b_len: 0,
+            b_to_a: [0; BUF_SIZE],
+            b_to_a_len: 0,
+            active: false,
+        }
+    }
+}
+
+static mut PAIRS: [PairBuf; MAX_PAIRS] = {
+    const EMPTY: PairBuf = PairBuf::empty();
+    [EMPTY; MAX_PAIRS]
+};
+
+/// Simple spinlock guarding PAIRS mutation.  Reads also hold it so
+/// that read-side sees the most-recent write without barriers.
+static LOCK: AtomicBool = AtomicBool::new(false);
+
+fn lock() {
+    while LOCK.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+    }
+}
+
+fn unlock() {
+    LOCK.store(false, Ordering::Release);
+}
+
+/// One-shot initializer — force every slot into the "free" state.
+/// Chromium's 256-thread clone experiment showed that our release
+/// builds occasionally fail to apply const-initializers to statics;
+/// this hand-reset eliminates that class of surprise.
+pub fn init() {
+    lock();
+    unsafe {
+        let table = &mut *core::ptr::addr_of_mut!(PAIRS);
+        for p in table.iter_mut() {
+            *p = PairBuf::empty();
+        }
+    }
+    unlock();
+}
+
+/// Allocate a new pair. Returns the slot index (0..MAX_PAIRS) or
+/// None if the pool is exhausted. The two fds that share this slot
+/// should be marked with `side = 0` and `side = 1` respectively via
+/// `fd::attach_pipe`.
+pub fn alloc_pair() -> Option<usize> {
+    lock();
+    let result = unsafe {
+        let table = &mut *core::ptr::addr_of_mut!(PAIRS);
+        let mut chosen: Option<usize> = None;
+        for i in 0..MAX_PAIRS {
+            if !table[i].active {
+                table[i] = PairBuf::empty();
+                table[i].active = true;
+                chosen = Some(i);
+                break;
+            }
+        }
+        chosen
+    };
+    unlock();
+    result
+}
+
+/// Count of pair writes since boot — diagnostic only.
+pub static WRITES: AtomicUsize = AtomicUsize::new(0);
+pub static READS:  AtomicUsize = AtomicUsize::new(0);
+
+/// Write `data` to the outbound buffer of `side` in pair `slot`.
+/// Returns number of bytes queued, or Err(-errno). If the outbound
+/// buffer doesn't have enough room, queues as much as fits.
+pub fn write(slot: usize, side: u8, data: &[u8]) -> Result<usize, i64> {
+    if slot >= MAX_PAIRS { return Err(-9); /* EBADF */ }
+    lock();
+    let result = unsafe {
+        let table = &mut *core::ptr::addr_of_mut!(PAIRS);
+        let p = &mut table[slot];
+        if !p.active { unlock(); return Err(-9); /* EBADF */ }
+        let (buf, len_field): (&mut [u8; BUF_SIZE], &mut usize) = if side == 0 {
+            (&mut p.a_to_b, &mut p.a_to_b_len)
+        } else {
+            (&mut p.b_to_a, &mut p.b_to_a_len)
+        };
+        let free = BUF_SIZE - *len_field;
+        if free == 0 {
+            unlock();
+            return Err(-11); // EAGAIN
+        }
+        let n = data.len().min(free);
+        buf[*len_field..*len_field + n].copy_from_slice(&data[..n]);
+        *len_field += n;
+        WRITES.fetch_add(1, Ordering::Relaxed);
+        Ok(n)
+    };
+    unlock();
+    result
+}
+
+/// Read from the inbound buffer for `side` in pair `slot`. Returns
+/// bytes read or Err(-errno). If inbound buffer is empty, returns
+/// EAGAIN (caller should poll before trying again).
+pub fn read(slot: usize, side: u8, out: &mut [u8]) -> Result<usize, i64> {
+    if slot >= MAX_PAIRS { return Err(-9); }
+    lock();
+    let result = unsafe {
+        let table = &mut *core::ptr::addr_of_mut!(PAIRS);
+        let p = &mut table[slot];
+        if !p.active { unlock(); return Err(-9); }
+        // Side A reads what B wrote → b_to_a.
+        // Side B reads what A wrote → a_to_b.
+        let (buf, len_field): (&mut [u8; BUF_SIZE], &mut usize) = if side == 0 {
+            (&mut p.b_to_a, &mut p.b_to_a_len)
+        } else {
+            (&mut p.a_to_b, &mut p.a_to_b_len)
+        };
+        if *len_field == 0 {
+            unlock();
+            return Err(-11); // EAGAIN
+        }
+        let n = out.len().min(*len_field);
+        out[..n].copy_from_slice(&buf[..n]);
+        // Shift remaining bytes to the front.
+        let remaining = *len_field - n;
+        if remaining > 0 {
+            buf.copy_within(n..*len_field, 0);
+        }
+        *len_field = remaining;
+        READS.fetch_add(1, Ordering::Relaxed);
+        Ok(n)
+    };
+    unlock();
+    result
+}
+
+/// Returns true if `side` of pair `slot` has buffered inbound data
+/// ready to read. Used by poll/ppoll for POLLIN reporting.
+pub fn has_readable(slot: usize, side: u8) -> bool {
+    if slot >= MAX_PAIRS { return false; }
+    lock();
+    let result = unsafe {
+        let p = &(*core::ptr::addr_of!(PAIRS))[slot];
+        if !p.active { false }
+        else if side == 0 { p.b_to_a_len > 0 }
+        else              { p.a_to_b_len > 0 }
+    };
+    unlock();
+    result
+}
+
+/// Deactivate a pair — called when BOTH fds have been closed. Leaves
+/// the buffer contents in place so a concurrent read can still drain
+/// (the next alloc_pair will wipe it).
+#[allow(dead_code)]
+pub fn release(slot: usize) {
+    if slot >= MAX_PAIRS { return; }
+    lock();
+    unsafe {
+        let table = &mut *core::ptr::addr_of_mut!(PAIRS);
+        table[slot].active = false;
+    }
+    unlock();
+}
