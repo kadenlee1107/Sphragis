@@ -3024,7 +3024,7 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     // specifically wants a pre-set fd via base::i18n::SetIcuFile.
     // But passing a real path costs nothing and helps other PathService
     // lookups that cascade off argv[0].)
-    let mut argv: [&str; 12] = [""; 12];
+    let mut argv: [&str; 16] = [""; 16];
     let mut n = 0;
     argv[n] = "/bin/content_shell"; n += 1;
     if headless    { argv[n] = "--headless";     n += 1; }
@@ -3033,6 +3033,12 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     if dump_dom    { argv[n] = "--dump-dom";     n += 1; }
     argv[n] = "--single-process";          n += 1;
     argv[n] = "--ozone-platform=headless"; n += 1;
+    // --enable-logging=stderr --v=1 — make Chromium's own LOG(INFO)
+    // + VLOG(1) lines hit stderr so we see what it's doing right
+    // before it crashes. Cheap to enable; no-op if logging is
+    // compiled out.
+    argv[n] = "--enable-logging=stderr";   n += 1;
+    argv[n] = "--v=1";                     n += 1;
     argv[n] = size_arg_str;                n += 1;
     argv[n] = url;                         n += 1;
 

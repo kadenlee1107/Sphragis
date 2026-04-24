@@ -3402,11 +3402,18 @@ fn sys_readlinkat(args: [u64; 6]) -> i64 {
         return len as i64;
     }
     // /etc/localtime — Chromium's ICU TZ detector readlinks this.
-    // On a typical Linux system it's a symlink into /usr/share/zoneinfo.
-    // We don't have a real timezone database; return UTC so ICU picks
-    // that up and moves on.
+    // On a typical Linux system it's a symlink into
+    // `/usr/share/zoneinfo/<Region>/<City>` (e.g. `.../Etc/UTC`).
+    // ICU's `TimeZoneGenericNames` extracts the tail after the
+    // last `/zoneinfo/` and treats it as the timezone ID; the rest
+    // of the TZ data comes from icudtl.dat, not the linked file.
+    //
+    // Use `Etc/UTC` rather than bare `UTC` — ICU's validators treat
+    // a missing region prefix as untrusted and the CharString::append
+    // call chain it runs on the suffix crashes when the input
+    // doesn't fit its internal shape.
     if path_len >= 14 && &path_buf[..14] == b"/etc/localtime" {
-        let tz_link = b"/usr/share/zoneinfo/UTC";
+        let tz_link = b"/usr/share/zoneinfo/Etc/UTC";
         let len = tz_link.len().min(bufsiz);
         for i in 0..len {
             unsafe {
