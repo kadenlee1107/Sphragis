@@ -26,6 +26,18 @@ static LOADED_TLS_PHYS: AtomicUsize = AtomicUsize::new(0);
 /// 4 KB pages reserved for the TLS block. 16 KB is enough for glibc's
 /// tcbhead_t plus a reasonable main-thread scratch area.
 pub const LOADED_TLS_PAGES: usize = 4;
+
+/// One page for the init_array trampoline. Holds a tiny assembly stub
+/// that walks a terminated list of init function VAs, calls each, and
+/// finally branches to the main exe's original entry point. Used by
+/// `load_archive_multi` when any loaded lib carries a DT_INIT_ARRAY.
+pub const LOADED_TRAMPOLINE_PAGES: usize = 1;
+
+/// VA of the init_array trampoline. Set by `load_archive_multi` when
+/// one is built; read by `execute_with_args` to override `virt_entry`
+/// so eret jumps to the trampoline first instead of the main exe's
+/// _start. Zero means "no trampoline, eret directly to main".
+static LOADED_TRAMPOLINE_VA: AtomicUsize = AtomicUsize::new(0);
 pub static SAVED_RETURN_ADDR: AtomicUsize = AtomicUsize::new(0);
 static SAVED_KERNEL_SP: AtomicUsize = AtomicUsize::new(0);
 
@@ -817,7 +829,9 @@ pub fn load_archive_multi(
     let total_pages = total_bytes / PAGE_SIZE;
     let stack_va_offset = next_virt_offset;                       // stack follows last lib
     let tls_va_offset   = stack_va_offset + LOADED_STACK_PAGES * PAGE_SIZE; // TLS after stack
-    let grand_total_pages = total_pages + LOADED_STACK_PAGES + LOADED_TLS_PAGES;
+    let tramp_va_offset = tls_va_offset   + LOADED_TLS_PAGES   * PAGE_SIZE; // trampoline after TLS
+    let grand_total_pages = total_pages + LOADED_STACK_PAGES
+        + LOADED_TLS_PAGES + LOADED_TRAMPOLINE_PAGES;
 
     // Enforce cave window.
     let cave_window_bytes = super::mmu::CAVE_BLOCKS * 0x200000;
@@ -905,6 +919,42 @@ pub fn load_archive_multi(
     // Stack sits right after the last lib; TLS right after the stack.
     let stack_phys = phys_base + stack_va_offset;
     let tls_phys   = phys_base + tls_va_offset;
+    let tramp_phys = phys_base + tramp_va_offset;
+    let tramp_va   = cave_virt_base as usize + tramp_va_offset;
+
+    // Build the init_array trampoline. Emits a tiny aarch64 stub that
+    // walks a null-terminated list of init function VAs, calls each
+    // via BLR, then BRs to the main exe's real entry. The main exe
+    // gets the stack glibc's _start expects (argc/argv/envp/auxv
+    // already placed there by `execute_with_args`), and init
+    // constructors run BEFORE _start — exactly what ld-linux does.
+    //
+    // Layout in the trampoline page:
+    //   0x00..0x20: code (8 instructions)
+    //   0x20..0x28: main_entry VA
+    //   0x28..:     init function VAs, terminated by 0
+    let tramp_entry_va = build_init_trampoline(
+        tramp_phys,
+        tramp_va as u64,
+        &libs,
+        lib_count,
+        libs[0].info.virt_entry,  // real main entry
+    )?;
+    LOADED_TRAMPOLINE_VA.store(tramp_entry_va as usize, Ordering::Relaxed);
+
+    // Additional flush for the trampoline page so the icache sees it
+    // once the CPU eret's there.
+    unsafe {
+        let tramp_end = tramp_phys + LOADED_TRAMPOLINE_PAGES * PAGE_SIZE;
+        let mut a = tramp_phys;
+        while a < tramp_end {
+            core::arch::asm!("dc cvau, {a}", a = in(reg) a);
+            core::arch::asm!("ic ivau, {a}", a = in(reg) a);
+            a += 64;
+        }
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("isb");
+    }
 
     // Zero the TLS block. glibc's tcbhead_t layout on aarch64 is:
     //   offset 0:  dtv pointer
@@ -1136,6 +1186,150 @@ fn resolve_cross_module(
         }
     }
     None
+}
+
+/// Build the init_array trampoline in a cave-resident page. Writes
+/// ~32 bytes of aarch64 code followed by a main-entry slot and a
+/// null-terminated array of init function VAs (gathered from every
+/// loaded lib's DT_INIT_ARRAY).
+///
+/// Layout in the page:
+///   offset 0x00: adr x19, init_list       ; offset +0x28
+///          0x04: adr x20, main_slot       ; offset +0x1c
+///          0x08: loop: ldr x21, [x19], #8 ; post-indexed
+///          0x0c:       cbz x21, done      ; +3 words
+///          0x10:       blr x21
+///          0x14:       b loop             ; -3 words
+///          0x18: done: ldr x20, [x20]     ; deref slot
+///          0x1c:       br x20
+///          0x20: main_slot (u64)
+///          0x28: init_list:
+///                  .quad init_fn_0
+///                  .quad init_fn_1
+///                  ...
+///                  .quad 0
+///
+/// Initialization order: we walk `libs[0..lib_count]` in archive
+/// order (matches the DT_NEEDED dependency pass: the main exe is
+/// files[0], then libs). ld-linux normally runs in reverse-dependency
+/// order (leaf libs first) — close enough for the common case where
+/// inits are idempotent and don't depend on each other's internal
+/// state. If that assumption breaks for specific apps, we'll
+/// iterate.
+///
+/// Returns the VA of the first instruction (the stub entry).
+fn build_init_trampoline(
+    tramp_phys: usize,
+    tramp_va: u64,
+    libs: &[LoadedLib; MAX_LOADED_LIBS],
+    lib_count: usize,
+    main_entry: u64,
+) -> Result<u64, &'static str> {
+    // Aarch64 instruction encoders (just enough for this stub).
+    fn enc_adr(rd: u32, imm: i32) -> u32 {
+        let imm = imm as u32;
+        let immlo = (imm & 0x3) << 29;
+        let immhi = ((imm >> 2) & 0x7FFFF) << 5;
+        0x1000_0000 | immlo | immhi | (rd & 0x1F)
+    }
+    // Post-indexed LDR of 64-bit Xt from [Xn], #imm8
+    fn enc_ldr_post(rt: u32, rn: u32, imm9: i32) -> u32 {
+        let imm = (imm9 as u32) & 0x1FF;
+        0xF840_0400 | (imm << 12) | ((rn & 0x1F) << 5) | (rt & 0x1F)
+    }
+    // CBZ Xt, #imm (signed 19-bit in words)
+    fn enc_cbz(rt: u32, imm_words: i32) -> u32 {
+        let imm = (imm_words as u32) & 0x7FFFF;
+        0xB400_0000 | (imm << 5) | (rt & 0x1F)
+    }
+    fn enc_b(imm_words: i32) -> u32 {
+        let imm = (imm_words as u32) & 0x03FFFFFF;
+        0x1400_0000 | imm
+    }
+    fn enc_ldr_unsigned(rt: u32, rn: u32) -> u32 {
+        0xF940_0000 | ((rn & 0x1F) << 5) | (rt & 0x1F)
+    }
+    fn enc_br(rn: u32) -> u32 {
+        0xD61F_0000 | ((rn & 0x1F) << 5)
+    }
+    fn enc_blr(rn: u32) -> u32 {
+        // Not used here — kept for reference. BLR Xn.
+        0xD63F_0000 | ((rn & 0x1F) << 5)
+    }
+    let _ = enc_blr;
+
+    // Collect init function VAs into the page. Main slot at 0x20,
+    // init list from 0x28 onward.
+    let code: [u32; 8] = [
+        enc_adr(19, 0x28),          // adr x19, init_list (+40 from PC=0x00)
+        enc_adr(20, 0x1c),          // adr x20, main_slot (+28 from PC=0x04)
+        enc_ldr_post(21, 19, 8),    // loop: ldr x21, [x19], #8
+        enc_cbz(21, 3),             // cbz x21, done (+3 words from PC=0x0c)
+        0xD63F_02A0,                // blr x21
+        enc_b(-3),                  // b loop (-3 words from PC=0x14)
+        enc_ldr_unsigned(20, 20),   // done: ldr x20, [x20]
+        enc_br(20),                 // br x20
+    ];
+
+    // Write code.
+    for (i, &insn) in code.iter().enumerate() {
+        unsafe {
+            core::ptr::write_volatile(
+                (tramp_phys + i * 4) as *mut u32,
+                insn,
+            );
+        }
+    }
+
+    // Write main_slot at offset 0x20.
+    unsafe {
+        core::ptr::write_volatile(
+            (tramp_phys + 0x20) as *mut u64,
+            main_entry,
+        );
+    }
+
+    // Walk each lib's init_array and write entries starting at 0x28.
+    let init_list_base = tramp_phys + 0x28;
+    let mut slot = 0usize;
+    let max_entries = (PAGE_SIZE - 0x28) / 8 - 1; // leave room for terminator
+    for i in 0..lib_count {
+        let lib = &libs[i];
+        if lib.init_array_sz == 0 { continue; }
+        let ia_phys = (lib.init_array_va as i64 + lib.patch_offset) as u64;
+        let n = (lib.init_array_sz / 8) as usize;
+        for j in 0..n {
+            if slot >= max_entries {
+                return Err("too many init_array entries for one-page trampoline");
+            }
+            let entry = unsafe {
+                core::ptr::read_volatile((ia_phys + (j * 8) as u64) as *const u64)
+            };
+            if entry == 0 || entry == !0 { continue; } // skip placeholder slots
+            unsafe {
+                core::ptr::write_volatile(
+                    (init_list_base + slot * 8) as *mut u64,
+                    entry,
+                );
+            }
+            slot += 1;
+        }
+    }
+    // Null terminator.
+    unsafe {
+        core::ptr::write_volatile(
+            (init_list_base + slot * 8) as *mut u64,
+            0,
+        );
+    }
+
+    uart::puts("[trampoline] built at va=0x"); print_hex(tramp_va);
+    uart::puts(" phys=0x"); print_hex(tramp_phys as u64);
+    uart::puts(" inits="); crate::kernel::mm::print_num(slot);
+    uart::puts(" main=0x"); print_hex(main_entry);
+    uart::puts("\n");
+
+    Ok(tramp_va)
 }
 
 /// Short suffix shown in the ghost-reloc tracer so we can tell which
@@ -1738,7 +1932,15 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     // the user VA — don't second-guess it. Using `orig_entry` here would
     // eret to a VA not mapped by the cave's TTBR0 → instant instruction
     // abort the moment Chromium's first function tries to return.
-    let virt_entry = if user_va_base == 0 { orig_entry } else { entry };
+    let virt_entry = if user_va_base == 0 {
+        orig_entry
+    } else {
+        // Multi-ELF cave: if a trampoline was installed (init_array
+        // walker), eret there instead of straight to main. The
+        // trampoline calls each lib's constructors then BRs to main.
+        let tva = LOADED_TRAMPOLINE_VA.load(Ordering::Relaxed) as u64;
+        if tva != 0 { tva } else { entry }
+    };
     uart::puts("[loader] --- executing ---\n");
 
     // Save kernel SP into the kernel-BSS scratch slot shared with the
