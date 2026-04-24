@@ -813,11 +813,7 @@ fn populate_rootfs() {
 /// Idempotent: calling twice is a no-op (find_child skips duplicates).
 pub fn populate_lib_from_archive() {
     use crate::kernel::mm::initrd;
-    uart::puts("  [vfs] populate_lib_from_archive: entry\n");
-    if !initrd::is_archive() {
-        uart::puts("  [vfs] populate_lib_from_archive: not an archive\n");
-        return;
-    }
+    if !initrd::is_archive() { return; }
 
     // /lib must exist to park files under. populate_rootfs() doesn't
     // create it by default (busybox uses /bin), so create it now.

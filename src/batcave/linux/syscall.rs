@@ -1364,32 +1364,6 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
     let fd_num = args[4] as i32;
     let offset = args[5] as usize;
 
-    uart::puts("[mmap] entry addr=0x");
-    {
-        let hex = b"0123456789abcdef";
-        for shift in (0..16).rev() {
-            uart::putc(hex[((addr >> (shift * 4)) & 0xF) as usize]);
-        }
-    }
-    uart::puts(" len=0x");
-    {
-        let hex = b"0123456789abcdef";
-        for shift in (0..16).rev() {
-            uart::putc(hex[((len >> (shift * 4)) & 0xF) as usize]);
-        }
-    }
-    uart::puts(" flags=0x");
-    {
-        let hex = b"0123456789abcdef";
-        for shift in (0..8).rev() {
-            uart::putc(hex[((flags >> (shift * 4)) & 0xF) as usize]);
-        }
-    }
-    uart::puts(" fd=");
-    if fd_num < 0 { uart::puts("-1"); }
-    else { crate::kernel::mm::print_num(fd_num as usize); }
-    uart::puts("\n");
-
     if len == 0 { return EINVAL; }
 
     // ─── /batos/fb0 ChromiumFb: MAP_SHARED of the pre-allocated region ───

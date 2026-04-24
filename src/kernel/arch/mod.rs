@@ -1063,7 +1063,45 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                 uart::puts("\n    ["); print_hex(addr as u64);
                 uart::puts("] 0x"); print_hex(word as u64);
             }
-            uart::puts("\n  ISS=0x");  print_hex(esr & 0x01FF_FFFF);
+            // CHROMIUM-PHASE-B: dump general-purpose registers so we can
+            // tell where a jump to a zeroed/unmapped page came from. LR
+            // in particular tells us the caller — when an EC=0 UDF fires
+            // inside libc/ld-linux, the caller PC is almost always the
+            // key clue (what computed the bad target).
+            unsafe {
+                let f = &*frame;
+                uart::puts("\n  x0 =0x"); print_hex(f.x[0]);
+                uart::puts("  x1 =0x"); print_hex(f.x[1]);
+                uart::puts("  x2 =0x"); print_hex(f.x[2]);
+                uart::puts("\n  x3 =0x"); print_hex(f.x[3]);
+                uart::puts("  x4 =0x"); print_hex(f.x[4]);
+                uart::puts("  x5 =0x"); print_hex(f.x[5]);
+                uart::puts("\n  x16=0x"); print_hex(f.x[16]);
+                uart::puts("  x17=0x"); print_hex(f.x[17]);
+                uart::puts("  x18=0x"); print_hex(f.x[18]);
+                uart::puts("\n  x19=0x"); print_hex(f.x[19]);
+                uart::puts("  x20=0x"); print_hex(f.x[20]);
+                uart::puts("  x21=0x"); print_hex(f.x[21]);
+                uart::puts("\n  x29=0x"); print_hex(f.x[29]);
+                uart::puts("  x30(LR)=0x"); print_hex(f.x[30]);
+                uart::puts("\n");
+                // Dump the 4 instructions before LR — that tells us what
+                // the caller intended. If LR points right after a BLR xN
+                // then xN held the bad target; if after a BL #imm, the
+                // jump was direct (and therefore a reloc/relink issue).
+                if f.x[30] >= 16 {
+                    uart::puts("  code around LR:");
+                    for off in [-12i64, -8, -4, 0].iter() {
+                        let addr = (f.x[30] as i64 + off) as usize;
+                        let word: u32 = core::ptr::read_volatile(
+                            addr as *const u32);
+                        uart::puts("\n    ["); print_hex(addr as u64);
+                        uart::puts("] 0x"); print_hex(word as u64);
+                    }
+                    uart::puts("\n");
+                }
+            }
+            uart::puts("  ISS=0x");  print_hex(esr & 0x01FF_FFFF);
             uart::puts("\n");
             loop { unsafe { core::arch::asm!("wfe") }; }
         }

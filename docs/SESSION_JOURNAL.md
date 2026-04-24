@@ -11,6 +11,100 @@ end of a session.
 
 ---
 
+## 2026-04-23 21:00 — Mac — hello_dyn prints "hello from dyn-linked elf!" 🎉
+
+**Milestone.** A real dynamically-linked ELF ran end-to-end on Bat_OS
+with the **real glibc ld-linux-aarch64.so.1** as the interpreter.
+`hello_dyn` (67 KB, `gcc -pie`, links against libc.so.6) printed its
+string via `write(1, ...)` and exited with code 42. Every
+moving part — demand paging, TLS, dynamic linking, mmap, syscalls —
+lined up for the first time.
+
+Five fixes landed in sequence after discovering that ld-linux was
+running but couldn't `openat("/lib/libc.so.6")`:
+
+1. **`/lib/*.so` populated from the BATARCH archive** (`vfs.rs::
+   populate_lib_from_archive`). Walks `initrd::archive_for_each()`
+   and registers every `lib/*` as a File node whose `data_addr`
+   points directly into the initrd memory region — zero-copy.
+   Called from both `populate_rootfs` AND the runner, because
+   `populate_rootfs` has a pre-existing panic at
+   `find_child(b"bin").unwrap()` that sometimes aborts first.
+
+2. **USER_WINDOW_SIZE 20 MB → 400 MB** (`syscall.rs:sys_mmap`).
+   The const was stale; actual cave window is `CAVE_BLOCKS × 2 MB`.
+   The loader's 26 MB ELF reservation meant every post-load mmap
+   landed past offset 20 MB and ENOMEM'd.
+
+3. **mmap return-VA adds `virt_base`** (`syscall.rs:sys_mmap`).
+   Was returning `offset as i64`, assuming `virt_base = 0`. Chromium
+   cave uses `virt_base = 0x10000000`; `offset` alone put the caller
+   at an unmapped VA.
+
+4. **fd-backed `MAP_FIXED` mmap** (`syscall.rs:sys_mmap`). When
+   `addr && MAP_FIXED && fd >= 0`, copy file bytes from the VFS
+   node's archive-memory pointer into `phys_base + (uva - virt_base)`,
+   zero any tail, then `dc cvau + ic ivau` for I-side coherence.
+   This is what actually loads libc into ld-linux's chosen VA.
+
+5. **Skip cross-module relocs on the main exe when ld-linux runs**
+   (`loader.rs:apply_relocs_cross`). Our loader was resolving
+   `__libc_start_main` etc. to our kernel-side libc copy at
+   `0x20427780` and writing that into hello_dyn's .got.plt.
+   ld-linux's freshly-mmap'd libc at `0x11b10000` never overwrote
+   those entries (either because ld-linux doesn't redo main-exe
+   relocs when `AT_ENTRY` is set, or because the PLT lazy-binding
+   path expects file-default GOT contents). Fix: under
+   `running_interp`, skip `0x401` / `0x402` / `0x406` for idx == 0;
+   keep `0x403` (RELATIVE) and `0x408` (IRELATIVE) since those
+   don't depend on lib symbols.
+
+Also bypassed the Mem quota charge in mmap — the ledger reads
+`mem_limit = 0` for valid caves despite `CaveQuota::new()` static-
+init'ing to `DEFAULT_MEM = 1 GiB`. Root cause unknown; TODO comment
+left in place. Other resource charges (Fds, Sockets) still gated.
+
+### Successful syscall trace (abridged)
+```
+openat /lib/libc.so.6 → fd=3
+read(3, buf, 832) → 832          (ELF header + phdrs)
+fstat(3)            → 0
+mmap(NULL, 8192, W+R, ANON)      → 0x11b05000  (ld-linux scratch)
+mmap(NULL, 1.9MB, NONE, ANON)    → 0x11b07000  (reserve)
+mmap(0x11b10000, 1.75MB, R+X, FIXED+PRIV+DENYWRITE, fd=3, 0)
+  [mmap] fd=3 off=0x0 copying 1651408 bytes archive→uva
+mprotect / munmap / mmap R+W+fd off=0x18c000 (data segment)
+mmap(..., ANON, FIXED) for BSS
+close(3)
+set_tid_address / set_robust_list / rseq (ENOSYS, ok)
+mprotect x3 / prlimit64 / write(1, "hello from dyn-linked elf!\n", 27)
+exit_group(42)
+```
+
+### Files touched this session
+- `src/batcave/linux/vfs.rs` (+88 lines — populate_lib_from_archive)
+- `src/batcave/linux/runner.rs` (+11 lines — call populate_lib in runner)
+- `src/batcave/linux/syscall.rs` (+144 lines — mmap fixes + fd-backed)
+- `src/batcave/linux/loader.rs` (+46 lines — skip-cross-reloc for main exe)
+- `src/kernel/arch/mod.rs` (+37 lines — EC=0 register dump helper)
+
+### Open issues for next session
+- Pre-existing panic in `populate_rootfs` at
+  `find_child(b"bin").unwrap()` — pre-dates all my work but lets
+  VFS_READY stay `true` with a half-populated tree (breaks the
+  vfs::init() idempotency check). Mitigation in place via runner-
+  side populate_lib_from_archive call; root cause still unknown.
+- `CaveQuota` `mem_limit = 0` at runtime despite static init to
+  `DEFAULT_MEM`. Likely static-init ordering vs .bss zeroing.
+  Mitigation: mmap bypasses Mem charge entirely (TODO in code).
+- Re-test with the real 280 MB content_shell — hello_dyn is a
+  67 KB reproducer and the scaling might expose new issues
+  (540k relocs, init_array chain, signal handlers, pthread TLS).
+- `rseq` returns ENOSYS; glibc handled it gracefully for hello_dyn
+  but content_shell might actually need it for pthread support.
+
+---
+
 ## 2026-04-23 20:15 — Mac — init_array trampoline, PT_TLS, TPREL64 — wall at _rtld_global
 
 Kept pushing past 18:30. Shipped three more commits (b2fb74a3,

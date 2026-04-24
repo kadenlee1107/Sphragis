@@ -38,6 +38,20 @@ pub const LOADED_TRAMPOLINE_PAGES: usize = 1;
 /// so eret jumps to the trampoline first instead of the main exe's
 /// _start. Zero means "no trampoline, eret directly to main".
 static LOADED_TRAMPOLINE_VA: AtomicUsize = AtomicUsize::new(0);
+
+/// Fields populated by `load_archive_multi` so `execute_with_args`
+/// can build a glibc-compatible auxv when we eret to ld-linux
+/// rather than directly to the main exe's _start.
+///
+/// Non-zero `LOADED_INTERP_ENTRY` means "eret here, not to main"; it
+/// should be the cave VA of ld-linux's _start. The rest are the
+/// values auxv advertises so ld-linux can find content_shell
+/// (AT_PHDR / AT_PHENT / AT_PHNUM / AT_ENTRY / AT_BASE).
+static LOADED_INTERP_ENTRY: AtomicUsize = AtomicUsize::new(0);
+static LOADED_INTERP_BASE:  AtomicUsize = AtomicUsize::new(0);
+static LOADED_MAIN_PHOFF:   AtomicUsize = AtomicUsize::new(0);
+static LOADED_MAIN_PHNUM:   AtomicUsize = AtomicUsize::new(0);
+static LOADED_MAIN_PHENT:   AtomicUsize = AtomicUsize::new(0);
 pub static SAVED_RETURN_ADDR: AtomicUsize = AtomicUsize::new(0);
 static SAVED_KERNEL_SP: AtomicUsize = AtomicUsize::new(0);
 
@@ -883,6 +897,29 @@ pub fn load_archive_multi(
         stage_copy_and_parse(&mut libs[i])?;
     }
 
+    // CHROMIUM-PHASE-B: detect the interpreter BEFORE we apply
+    // relocations. apply_relocs_cross reads LOADED_INTERP_ENTRY to
+    // decide whether to skip JUMP_SLOT/GLOB_DAT for the main exe —
+    // see the `skip_cross_for_main` comment inside that function.
+    // Without this the statics were only populated AFTER the reloc
+    // loop, so the skip-check never fired.
+    {
+        const INTERP_NAME: &[u8] = b"lib/ld-linux-aarch64.so.1";
+        for i in 1..lib_count {
+            if libs[i].name() == INTERP_NAME {
+                LOADED_INTERP_ENTRY.store(
+                    libs[i].info.virt_entry as usize, Ordering::Relaxed);
+                LOADED_INTERP_BASE.store(
+                    libs[i].info.virt_base as usize, Ordering::Relaxed);
+                uart::puts("[loader/multi] interp early-detect: ");
+                for &b in libs[i].name() { uart::putc(b); }
+                uart::puts(" base=0x"); print_hex(libs[i].info.virt_base);
+                uart::puts(" entry=0x"); print_hex(libs[i].info.virt_entry);
+                uart::puts("\n");
+                break;
+            }
+        }
+    }
 
     // --- Second pass per lib: apply relocations with cross-module lookup ---
     for i in 0..lib_count {
@@ -1073,6 +1110,37 @@ pub fn load_archive_multi(
     LOADED_STACK_PHYS.store(stack_phys, Ordering::Relaxed);
     LOADED_USER_VA_BASE.store(libs[0].info.virt_base as usize, Ordering::Relaxed);
     LOADED_TLS_PHYS.store(tls_phys, Ordering::Relaxed);
+
+    // Publish main-exe ELF-header fields auxv needs, plus find the ELF
+    // interpreter (ld-linux) in the loaded lib list and publish its
+    // entry VA + base VA. When both interp entry and base are non-zero,
+    // `execute_with_args` eret's to ld-linux and hands it a full auxv
+    // with AT_PHDR / AT_PHENT / AT_PHNUM / AT_ENTRY / AT_BASE so
+    // ld-linux can find the main exe and do its job.
+    let main_data = libs[0].data();
+    let main_phoff_raw = u64_at(main_data, 32) as usize;
+    let main_phnum_raw = u16_at(main_data, 56) as usize;
+    let main_phent_raw = u16_at(main_data, 54) as usize;
+    LOADED_MAIN_PHOFF.store(main_phoff_raw, Ordering::Relaxed);
+    LOADED_MAIN_PHNUM.store(main_phnum_raw, Ordering::Relaxed);
+    LOADED_MAIN_PHENT.store(main_phent_raw, Ordering::Relaxed);
+
+    // Interpreter detection: match by filename. The bake script packs
+    // ld-linux under `lib/ld-linux-aarch64.so.1` (see
+    // tools/bake_chromium_archive.sh).
+    const INTERP_NAME: &[u8] = b"lib/ld-linux-aarch64.so.1";
+    for i in 1..lib_count {
+        if libs[i].name() == INTERP_NAME {
+            LOADED_INTERP_ENTRY.store(libs[i].info.virt_entry as usize, Ordering::Relaxed);
+            LOADED_INTERP_BASE.store(libs[i].info.virt_base as usize, Ordering::Relaxed);
+            uart::puts("[loader/multi] interpreter found: ");
+            for &b in libs[i].name() { uart::putc(b); }
+            uart::puts(" base=0x"); print_hex(libs[i].info.virt_base);
+            uart::puts(" entry=0x"); print_hex(libs[i].info.virt_entry);
+            uart::puts("\n");
+            break;
+        }
+    }
 
     uart::puts("[loader/multi] stack phys 0x"); print_hex(stack_phys as u64);
     uart::puts(", tls phys 0x"); print_hex(tls_phys as u64);
@@ -1481,6 +1549,26 @@ fn apply_relocs_cross(
     let symtab_file = lib.symtab_file;
     let strtab_file = lib.strtab_file;
 
+    // CHROMIUM-PHASE-B: when we're going to hand off to real ld-linux,
+    // SKIP cross-module JUMP_SLOT/GLOB_DAT/TPREL relocations for the
+    // MAIN EXECUTABLE (idx == 0). Our loader was resolving those to
+    // the kernel-side copies of libc etc. — addresses like 0x20427780
+    // that ld-linux's freshly-mmap'd libc at 0x11b10000 doesn't
+    // populate. Leaving the main exe's .got / .got.plt at their
+    // file-default values lets ld-linux's own relocator write the
+    // correct addresses during its symbol-resolution pass.
+    //
+    // We still apply RELATIVE (0x403) and IRELATIVE (0x408) for the
+    // main exe — those are base-rebase operations that don't depend
+    // on external symbols, so ld-linux would write the same result.
+    let running_interp = LOADED_INTERP_ENTRY.load(Ordering::Relaxed) != 0;
+    let skip_cross_for_main = running_interp && idx == 0;
+    if skip_cross_for_main {
+        uart::puts("[loader/multi] ");
+        for &b in lib.name() { uart::putc(b); }
+        uart::puts(": interp present, skipping JUMP_SLOT/GLOB_DAT/TPREL (ld-linux will resolve)\n");
+    }
+
     let mut applied_rel = 0u32;
     let mut applied_glob = 0u32;
     let mut applied_jump = 0u32;
@@ -1541,6 +1629,7 @@ fn apply_relocs_cross(
                     applied_rel += 1;
                 }
                 0x401 | 0x402 => {
+                    if skip_cross_for_main { continue; }
                     if symtab_file == usize::MAX { continue; }
                     let sym_off = match symtab_file
                         .checked_add(r_sym.checked_mul(24).unwrap_or(usize::MAX))
@@ -1608,6 +1697,7 @@ fn apply_relocs_cross(
                     // this, every TLS access through GLOB_DAT produces
                     // zero and glibc NULL-derefs (libc.so.6+0x27824
                     // observed).
+                    if skip_cross_for_main { continue; }
                     if symtab_file == usize::MAX { continue; }
                     let sym_off = match symtab_file
                         .checked_add(r_sym.checked_mul(24).unwrap_or(usize::MAX))
@@ -2012,10 +2102,43 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
         unsafe { core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) sp + j, v = in(reg) b as u32); }
     }
 
-    sp = (sp - 64) & !0xF;
+    sp = (sp - 256) & !0xF; // leave headroom for extended auxv
 
-    // auxv: AT_NULL, AT_RANDOM, AT_PAGESZ — AT_RANDOM must be a user VA.
-    for &(k, v) in &[(0u64, 0u64), (25u64, random_uva), (6u64, 4096u64)] {
+    // auxv. When ld-linux is the interpreter we're eret'ing to, give it
+    // enough to find the main exe:
+    //   AT_PHDR  (3) = main_virt_base + main_phoff
+    //   AT_PHENT (4) = sizeof(Elf64_Phdr) = 56
+    //   AT_PHNUM (5) = main's phnum
+    //   AT_ENTRY (9) = main exe's rebased entry VA
+    //   AT_BASE  (7) = ld-linux's load base (virt_base)
+    //   AT_PAGESZ(6), AT_RANDOM(25), AT_NULL(0)
+    // When NOT running ld-linux (legacy single-ELF / old multi-ELF
+    // path without an interpreter), only the original 3 entries are
+    // emitted so existing binaries stay binary-compatible.
+    let interp_entry = LOADED_INTERP_ENTRY.load(Ordering::Relaxed) as u64;
+    let interp_base  = LOADED_INTERP_BASE.load(Ordering::Relaxed) as u64;
+    let main_phoff   = LOADED_MAIN_PHOFF.load(Ordering::Relaxed) as u64;
+    let main_phnum   = LOADED_MAIN_PHNUM.load(Ordering::Relaxed) as u64;
+    let main_phent   = LOADED_MAIN_PHENT.load(Ordering::Relaxed) as u64;
+    let running_interp = interp_entry != 0 && interp_base != 0;
+    let main_entry_va = user_va_base + (LOADED_ORIG_ENTRY.load(Ordering::Relaxed) as u64);
+    let main_phdr_va  = user_va_base + main_phoff;
+
+    let auxv: &[(u64, u64)] = if running_interp {
+        &[
+            (0, 0),                      // AT_NULL (last — written first, grows up)
+            (3, main_phdr_va),           // AT_PHDR
+            (4, main_phent),             // AT_PHENT
+            (5, main_phnum),             // AT_PHNUM
+            (9, main_entry_va),          // AT_ENTRY
+            (7, interp_base),            // AT_BASE
+            (6, 4096),                   // AT_PAGESZ
+            (25, random_uva),            // AT_RANDOM
+        ]
+    } else {
+        &[(0, 0), (25, random_uva), (6, 4096)]
+    };
+    for &(k, v) in auxv {
         sp -= 16;
         unsafe {
             core::arch::asm!("str {v}, [{a}]", a = in(reg) sp, v = in(reg) k);
@@ -2081,11 +2204,17 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     let virt_entry = if user_va_base == 0 {
         orig_entry
     } else {
-        // Multi-ELF cave: if a trampoline was installed (init_array
-        // walker), eret there instead of straight to main. The
-        // trampoline calls each lib's constructors then BRs to main.
-        let tva = LOADED_TRAMPOLINE_VA.load(Ordering::Relaxed) as u64;
-        if tva != 0 { tva } else { entry }
+        // Priority order for the multi-ELF cave:
+        //  1. Interp entry (ld-linux) — ld-linux does init/reloc itself.
+        //  2. Init trampoline — if we're running things ourselves
+        //     (no interp), chain through init_array constructors.
+        //  3. Plain `entry` — single-ELF-like fallback.
+        let interp = LOADED_INTERP_ENTRY.load(Ordering::Relaxed) as u64;
+        if interp != 0 { interp }
+        else {
+            let tva = LOADED_TRAMPOLINE_VA.load(Ordering::Relaxed) as u64;
+            if tva != 0 { tva } else { entry }
+        }
     };
     uart::puts("[loader] --- executing ---\n");
 
