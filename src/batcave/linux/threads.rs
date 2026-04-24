@@ -154,7 +154,11 @@ const EINVAL: i64 = -22;
 // -----------------------------------------------------------------------------
 // Thread table
 // -----------------------------------------------------------------------------
-pub const MAX_THREADS: usize = 64;
+// CHROMIUM-PHASE-C: bumped from 64 to 256 to match DEFAULT_THREADS
+// quota. Chromium content_shell creates 30+ threads even in
+// --single-process mode and pthread_create was EAGAIN'ing after
+// hitting the 64-slot ceiling.
+pub const MAX_THREADS: usize = 256;
 const DEFAULT_STACK_PAGES: usize = 16; // 64 KiB fallback
 const PAGE_SIZE: usize = 4096;
 
@@ -273,18 +277,25 @@ static THREADING_ENABLED: AtomicBool = AtomicBool::new(false);
 /// the legacy single-thread path untouched when not called.
 pub fn init_main_thread(main_entry_pc: u64, main_sp_el0: u64) {
     with_table(|t| {
-        if t[0].state == ThreadState::Free {
-            t[0] = Thread::empty();
-            t[0].tid = 1;
-            t[0].parent_tid = 0;
-            t[0].state = ThreadState::Running;
-            t[0].entry_pc = main_entry_pc;
-            t[0].stack_top = main_sp_el0;
-            t[0].saved_regs.sp_el0 = main_sp_el0;
-            t[0].saved_regs.elr_el1 = main_entry_pc;
-            // EL0t, IRQs unmasked:
-            t[0].saved_regs.spsr_el1 = 0;
+        // CHROMIUM-PHASE-C: belt-and-suspenders reset. The static
+        // `[Thread::empty(); MAX_THREADS]` const initializer has been
+        // unreliable in release builds (same family of bug as the
+        // CAVE_QUOTAS static init that needed an explicit quotas::init()).
+        // Force every slot to Free before we populate slot 0.
+        for slot in t.iter_mut() {
+            *slot = Thread::empty();
         }
+
+        t[0] = Thread::empty();
+        t[0].tid = 1;
+        t[0].parent_tid = 0;
+        t[0].state = ThreadState::Running;
+        t[0].entry_pc = main_entry_pc;
+        t[0].stack_top = main_sp_el0;
+        t[0].saved_regs.sp_el0 = main_sp_el0;
+        t[0].saved_regs.elr_el1 = main_entry_pc;
+        // EL0t, IRQs unmasked:
+        t[0].saved_regs.spsr_el1 = 0;
     });
     RUNNING_TID.store(1, Ordering::Release);
     THREADING_ENABLED.store(true, Ordering::Release);
@@ -364,12 +375,30 @@ pub fn clone(flags: u64,
              parent_tid: *mut i32,
              child_tid: *mut i32,
              tls: u64) -> i64 {
+    use crate::drivers::uart;
+    uart::puts("[clone] flags=0x");
+    let hex = b"0123456789abcdef";
+    for sh in (0..16).rev() {
+        uart::putc(hex[((flags >> (sh*4)) & 0xF) as usize]);
+    }
+    uart::puts(" stack=0x");
+    for sh in (0..16).rev() {
+        uart::putc(hex[((child_stack >> (sh*4)) & 0xF) as usize]);
+    }
+    uart::puts("\n");
     // Reject flag combos we can't support yet.
-    if flags & CLONE_VFORK != 0 { return EINVAL; }
-    if flags & CLONE_PTRACE != 0 { return EINVAL; }
+    if flags & CLONE_VFORK != 0 {
+        uart::puts("[clone] reject VFORK\n");
+        return EINVAL;
+    }
+    if flags & CLONE_PTRACE != 0 {
+        uart::puts("[clone] reject PTRACE\n");
+        return EINVAL;
+    }
     // We don't have separate fs/files/sighand yet — must be shared.
     let needs_shared = CLONE_VM | CLONE_THREAD;
     if flags & needs_shared != needs_shared {
+        uart::puts("[clone] reject: missing CLONE_VM|CLONE_THREAD\n");
         // Legacy fork-style clone still goes through the old path.
         return EINVAL;
     }
@@ -380,11 +409,13 @@ pub fn clone(flags: u64,
     // path could leave one ledger drifted.
     crate::critical_section! {
         if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Threads, 1) {
+            uart::puts("[clone] reject: Threads quota\n");
             return e;
         }
         if child_stack == 0 {
             let bytes = DEFAULT_STACK_PAGES * PAGE_SIZE;
             if let Err(e) = super::quotas::charge_active(super::quotas::Resource::Mem, bytes) {
+                uart::puts("[clone] reject: Mem quota\n");
                 super::quotas::refund_active(super::quotas::Resource::Threads, 1);
                 return e;
             }
@@ -461,7 +492,10 @@ pub fn clone(flags: u64,
 
     // Populate the slot.
     let result = with_table(|t| -> i64 {
-        let Some(slot) = find_free_slot(t) else { return EAGAIN; };
+        let Some(slot) = find_free_slot(t) else {
+            uart::puts("[clone] reject: no free thread slot\n");
+            return EAGAIN;
+        };
         let parent = current_tid();
 
         t[slot] = Thread::empty();

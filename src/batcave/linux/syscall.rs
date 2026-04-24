@@ -559,7 +559,7 @@ fn sys_fcntl(args: [u64; 6]) -> i64 {
 // ─── prlimit64 (261) — get/set resource limits ───
 fn sys_prlimit64(args: [u64; 6]) -> i64 {
     let _pid = args[0] as i32;
-    let _resource = args[1] as u32;
+    let resource = args[1] as u32;
     let new_limit = args[2] as usize;
     let old_limit = args[3] as usize;
 
@@ -570,13 +570,34 @@ fn sys_prlimit64(args: [u64; 6]) -> i64 {
     if new_limit != 0 && !is_user_ptr(new_limit, 16) { return EFAULT; }
     if old_limit != 0 && !is_user_ptr(old_limit, 16) { return EFAULT; }
 
-    // If old_limit is non-null, write generous defaults
+    // CHROMIUM-PHASE-C: return resource-specific sane defaults when
+    // `old_limit` is non-null. The previous stub returned
+    // `rlim_cur = rlim_max = 0x7FFFFFFFFFFFFFFF` for every resource
+    // — pthread_create(3) computes `stacksize = rlim_cur * 2` (or
+    // clamps to 32 MB), overflows, and mmap's an 8 EB stack that
+    // our kernel ENOMEM's. Using a BSD-ish 8 MB cap for STACK keeps
+    // glibc happy.
+    //
+    // RLIMIT_STACK = 3
+    // RLIMIT_AS    = 9
+    // RLIMIT_NOFILE= 7
+    // RLIMIT_CORE  = 4
+    // (See asm-generic/resource.h. On arm64 these match generic.)
     if old_limit != 0 {
-        let unlimited: u64 = 0x7FFFFFFFFFFFFFFF;
+        const RLIMIT_STACK: u32 = 3;
+        const RLIMIT_AS:    u32 = 9;
+        const RLIMIT_NOFILE:u32 = 7;
+        const RLIMIT_CORE:  u32 = 4;
+        let (cur, max): (u64, u64) = match resource {
+            RLIMIT_STACK  => (8 * 1024 * 1024, 8 * 1024 * 1024),     // 8 MB
+            RLIMIT_AS     => (4 * 1024 * 1024 * 1024, 4 * 1024 * 1024 * 1024), // 4 GB
+            RLIMIT_NOFILE => (1024, 4096),
+            RLIMIT_CORE   => (0, 0),
+            _             => (0x7FFFFFFFFFFFFFFF, 0x7FFFFFFFFFFFFFFF),
+        };
         unsafe {
-            // struct rlimit { rlim_cur: u64, rlim_max: u64 }
-            core::arch::asm!("str {v}, [{a}]", a = in(reg) old_limit, v = in(reg) unlimited);
-            core::arch::asm!("str {v}, [{a}]", a = in(reg) old_limit + 8, v = in(reg) unlimited);
+            core::arch::asm!("str {v}, [{a}]", a = in(reg) old_limit, v = in(reg) cur);
+            core::arch::asm!("str {v}, [{a}]", a = in(reg) old_limit + 8, v = in(reg) max);
         }
     }
     0
@@ -1564,7 +1585,65 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         // isn't in the cave's L2. Demand paging + L3 page tables are
         // the real fix; this stub at least exposes the next
         // boundary.
-        let reserved = if addr != 0 { addr } else { 0x4000_0000_0000 };
+        //
+        // CHROMIUM-PHASE-C: if the hint exceeds our 39-bit VA (addr >=
+        // 2^39), the hardware will fault on first access before
+        // demand-page can even run L1/L2/L3 walks. Redirect such
+        // hints to a low, 4 GB-aligned address within our window
+        // instead. V8's pointer compression just wants SOME base with
+        // matching alignment; it doesn't hard-require the specific
+        // value. Addresses we've seen V8 ask for:
+        //   0x28_00000000  — 32 GB pointer-compression cage ≤ 39-bit OK
+        //   0x4a_11810000  — 16 GB trusted-sandbox ≥ 39-bit NOT OK
+        //   0x400_00000000 — 8 EB hardware sandbox ≥ 39-bit NOT OK
+        const VA_LIMIT: u64 = 1u64 << 39;         // our T0SZ=25 ceiling
+        const LOW_REDIRECT_BASE: usize = 0x30_0000_0000; // 192 GB (in-range)
+        static REDIRECT_CURSOR: core::sync::atomic::AtomicUsize =
+            core::sync::atomic::AtomicUsize::new(LOW_REDIRECT_BASE);
+        let hint_in_range = (addr as u64) < VA_LIMIT
+            && ((addr as u64).saturating_add(len as u64)) <= VA_LIMIT;
+        let reserved = if addr != 0 && hint_in_range {
+            addr
+        } else {
+            // Bump-allocate inside the 39-bit window. Align len up to
+            // 4 GB so each reservation starts at a V8-friendly
+            // boundary. (V8's sandbox code checks the base is
+            // pointer-compression-aligned.)
+            let aligned_len = (len + 0xFFFF_FFFF) & !0xFFFF_FFFFusize;
+            use core::sync::atomic::Ordering as Ord2;
+            let mut base = REDIRECT_CURSOR.load(Ord2::Relaxed);
+            loop {
+                let next = base.saturating_add(aligned_len);
+                if next as u64 >= VA_LIMIT {
+                    // No room left — fall back to returning the raw
+                    // hint and let the demand-page failure surface.
+                    return ENOMEM;
+                }
+                match REDIRECT_CURSOR.compare_exchange(
+                    base, next,
+                    Ord2::AcqRel, Ord2::Acquire,
+                ) {
+                    Ok(_) => break,
+                    Err(cur) => base = cur,
+                }
+            }
+            uart::puts("[mmap] reserve-only: REDIRECT high-hint 0x");
+            {
+                let hex = b"0123456789abcdef";
+                for s in (0..16).rev() {
+                    uart::putc(hex[((addr >> (s*4)) & 0xF) as usize]);
+                }
+            }
+            uart::puts(" → 0x");
+            {
+                let hex = b"0123456789abcdef";
+                for s in (0..16).rev() {
+                    uart::putc(hex[((base >> (s*4)) & 0xF) as usize]);
+                }
+            }
+            uart::puts("\n");
+            base
+        };
         uart::puts("[mmap] reserve-only: len=");
         crate::kernel::mm::print_num(len / (1024 * 1024));
         uart::puts(" MB, hint=0x");

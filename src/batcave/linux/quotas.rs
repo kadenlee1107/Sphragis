@@ -95,7 +95,10 @@ impl CaveQuota {
 // catching "allocate until death" attacks.
 pub const DEFAULT_MEM:      usize = 1 << 30;   // 1 GiB
 pub const DEFAULT_SOCKETS:  usize = 32;
-pub const DEFAULT_THREADS:  usize = 16;
+// Chromium content_shell wants 30+ threads even in --single-process
+// mode (V8 GC, IO thread, blink main, compositor, io-poll, ...).
+// Bumped from 16 to 256 for the Chromium port.
+pub const DEFAULT_THREADS:  usize = 256;
 pub const DEFAULT_FDS:      usize = 64;
 pub const DEFAULT_EPOLLS:   usize = 16;
 pub const DEFAULT_EVENTFDS: usize = 16;
