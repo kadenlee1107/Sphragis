@@ -564,11 +564,20 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
         // SH0 = 0b11 (Inner shareable)
         // ORGN0 = 0b01 (Write-back, write-allocate)
         // IRGN0 = 0b01 (Write-back, write-allocate)
+        // TBI0 = 1 (Top Byte Ignore for EL0/TTBR0 accesses)
+        //
+        // CHROMIUM-PHASE-B: Chromium's PartitionAlloc uses tagged
+        // pointers with a sentinel byte in the top 8 bits. Without
+        // TBI0=1 the hardware faults with FAR=0x70797400... during
+        // string-copy-ish code deep in content_shell startup. With
+        // TBI0 enabled the CPU strips the top byte for translation,
+        // matching Linux's default ARM64 config.
         let tcr: u64 = (25 << 0)  // T0SZ
                       | (0b00 << 14) // TG0: 4KB
                       | (0b11 << 12) // SH0: inner shareable
                       | (0b01 << 10) // ORGN0
-                      | (0b01 << 8); // IRGN0
+                      | (0b01 << 8)  // IRGN0
+                      | (1u64 << 37); // TBI0: top byte ignore for TTBR0
         core::arch::asm!("msr tcr_el1, {}", in(reg) tcr);
 
         // TTBR0_EL1: Point to L1 table (T0SZ=25 → 39-bit VA → starts at L1)
