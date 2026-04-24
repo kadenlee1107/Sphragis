@@ -100,6 +100,27 @@ exit_group(42)
 - Re-test with the real 280 MB content_shell — hello_dyn is a
   67 KB reproducer and the scaling might expose new issues
   (540k relocs, init_array chain, signal handlers, pthread TLS).
+  **UPDATE:** retested at 21:30, content_shell runs all the way
+  into ld-linux's symbol resolution phase. Every needed lib
+  (libdl / libnspr4 / libnss3 / libnssutil3 / libexpat / libm /
+  libgcc_s / libpthread / libc) was openat'd AND loaded into
+  memory. ld-linux then reports a big batch of missing version
+  symbols:
+  ```
+  version `NSS_3.2' not found
+  version `NSS_3.30' not found
+  version `NSSUTIL_3.12.3' not found
+  version `GCC_3.3' not found
+  version `GLIBC_2.25' not found (weak)
+  ...
+  ```
+  This is a PACKAGING mismatch — the content_shell binary was
+  linked against newer lib versions than what tools/bake_
+  chromium_archive.sh scoops out of ports/chromium_port/out/
+  lib_runtime. Bat_OS is NOT the bug here; ld-linux's error
+  reporting is working correctly. Fix is in the bake step:
+  either rebuild content_shell against the same libs we package,
+  or rsync content_shell's actual link-time libs into lib_runtime.
 - `rseq` returns ENOSYS; glibc handled it gracefully for hello_dyn
   but content_shell might actually need it for pthread support.
 
