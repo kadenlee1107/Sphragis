@@ -84,13 +84,18 @@ if os.path.isfile(icu_candidate):
     files.append(("bin/icudtl.dat", icu_candidate))
     print(f"[bake-archive] including icudtl.dat from {icu_candidate}")
 
-# Also pack any *.html and *.bat_os_* files next to the shell — these
-# are test pages / inherited configs for headless runs.
+# Also pack any *.html, *.bat_os_*, and *.bin (minus icudtl.dat
+# already packed above) files next to the shell — these are test
+# pages, inherited configs, and V8 snapshots for headless runs.
 for entry in sorted(os.listdir(shell_dir)):
-    if entry.endswith(".html") or entry.startswith("bat_os_"):
+    if entry == "icudtl.dat":
+        continue
+    if (entry.endswith(".html") or entry.startswith("bat_os_")
+            or entry.endswith(".bin") or entry.endswith(".pak")):
         full = os.path.join(shell_dir, entry)
         if os.path.isfile(full):
             files.append((f"bin/{entry}", full))
+            print(f"[bake-archive]   + {entry}")
 
 for entry in sorted(os.listdir(lib_dir)):
     full = os.path.join(lib_dir, entry)

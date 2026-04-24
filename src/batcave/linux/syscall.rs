@@ -4201,9 +4201,42 @@ fn sys_blit_framebuffer(args: [u64; 6]) -> i64 {
 // namespace (>=1024) that sockets.rs manages.
 
 fn sys_socketpair(args: [u64; 6]) -> i64 {
-    // Chromium Mojo uses socketpair + SCM_RIGHTS. Not implemented yet.
-    let _ = args;
-    ENOSYS
+    // CHROMIUM-PHASE-B: minimal socketpair that returns two fresh
+    // VFS Socket-node fds pointing at the same cave. Chromium (even
+    // in --single-process) calls socketpair during Mojo IPC init;
+    // returning ENOSYS caused it to abort right after V8 startup.
+    // We don't actually wire up the pair for bidirectional traffic —
+    // Mojo in single-process is expected to use in-process channels,
+    // not the socket pair. The fds just need to exist + read/write
+    // to accept basic data (which we treat as no-op sends).
+    let _domain = args[0] as u32;
+    let _sock_type = args[1] as u32;
+    let _protocol = args[2] as u32;
+    let sv_ptr = args[3] as usize;
+    if sv_ptr == 0 || !is_user_ptr(sv_ptr, 8) { return EFAULT; }
+
+    // Create two Socket nodes + two fds.
+    if !vfs::is_ready() { return -38; } // ENOSYS as "not supported without vfs"
+    let node_a = match vfs::create_node(0, b".sockpair_a", vfs::NodeType::Socket, 0o140755) {
+        Ok(n) => n, Err(e) => return e,
+    };
+    let node_b = match vfs::create_node(0, b".sockpair_b", vfs::NodeType::Socket, 0o140755) {
+        Ok(n) => n, Err(e) => return e,
+    };
+    let fd_a = match fd::alloc_fd(node_a, 0) { Ok(f) => f, Err(e) => return e };
+    let fd_b = match fd::alloc_fd(node_b, 0) { Ok(f) => f, Err(e) => return e };
+    unsafe {
+        core::arch::asm!("str {v:w}, [{a}]",
+            a = in(reg) sv_ptr, v = in(reg) fd_a);
+        core::arch::asm!("str {v:w}, [{a}]",
+            a = in(reg) sv_ptr + 4, v = in(reg) fd_b);
+    }
+    uart::puts("[socketpair] fd=");
+    crate::kernel::mm::print_num(fd_a as usize);
+    uart::puts(",");
+    crate::kernel::mm::print_num(fd_b as usize);
+    uart::puts("\n");
+    0
 }
 
 fn sys_bind(args: [u64; 6]) -> i64 {
@@ -4411,6 +4444,22 @@ fn sys_getsockopt(args: [u64; 6]) -> i64 {
     )
 }
 fn sys_shutdown(args: [u64; 6]) -> i64 {
+    // CHROMIUM-PHASE-B: handle shutdown on VFS-Socket fds (the ones
+    // our socketpair() stub creates). The sockets::shutdown path
+    // only knows about real TCP/UDP pcbs; for our stub sockets it
+    // would return ENOTSOCK, which Chromium's sandbox_host_linux.cc
+    // takes as a CHECK failure. Return 0 (success) for any fd that
+    // maps to a Socket-type VfsNode — Mojo's sandbox-host init just
+    // wants the call to succeed.
+    let fd_num = args[0] as i32;
+    if fd_num >= 0 {
+        if let Some(entry) = fd::get(fd_num as u32) {
+            let node = vfs::get_node(entry.node_idx);
+            if node.node_type == vfs::NodeType::Socket {
+                return 0;
+            }
+        }
+    }
     super::sockets::shutdown(args[0] as i32, args[1] as i32)
 }
 

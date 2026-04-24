@@ -1226,6 +1226,30 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                     }
                     uart::puts("\n");
                 }
+                // Also dump the user stack — finds the call chain when
+                // a function faults mid-execution. SP points at the
+                // top of the active stack frame; walking up lets us
+                // see return addresses.
+                if sp_el0 > 0x1000 && sp_el0 < 0x0000_4000_0000_0000 {
+                    uart::puts("  user stack near SP (0x");
+                    print_hex(sp_el0);
+                    uart::puts("):");
+                    for i in 0..8usize {
+                        uart::puts("\n    +0x");
+                        let off = i * 8;
+                        uart::putc(b"0123456789abcdef"[(off >> 4) & 0xF]);
+                        uart::putc(b"0123456789abcdef"[off & 0xF]);
+                        uart::puts(": ");
+                        for j in 0..8usize {
+                            let byte: u8 = core::ptr::read_volatile(
+                                (sp_el0 as usize + i * 8 + j) as *const u8);
+                            uart::putc(b"0123456789abcdef"[(byte >> 4) as usize]);
+                            uart::putc(b"0123456789abcdef"[(byte & 0xF) as usize]);
+                            uart::putc(b' ');
+                        }
+                    }
+                    uart::puts("\n");
+                }
             }
             loop { unsafe { core::arch::asm!("wfe") }; }
         }

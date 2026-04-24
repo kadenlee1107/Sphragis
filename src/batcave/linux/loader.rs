@@ -2113,10 +2113,32 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
         unsafe { core::arch::asm!("strb wzr, [{a}]", a = in(reg) sp + arg.len()); }
     }
 
-    // envp
+    // envp — push each entry string to the stack. glibc and ICU
+    // read several of these during startup:
+    //   PATH=/bin              (basic $PATH)
+    //   TZ=UTC                 — lets ICU skip the filesystem-based
+    //                            timezone lookup that was crashing
+    //                            in getAliasTargetAsResourceBundle.
+    //   HOME=/root             (stops glibc from looking it up via getpw)
+    //   LANG=C.UTF-8           (UTF-8 locale, no collation lookup)
     sp -= 10;
     let env0_uva = to_uva(sp);
     for (j, &b) in b"PATH=/bin\0".iter().enumerate() {
+        unsafe { core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) sp + j, v = in(reg) b as u32); }
+    }
+    sp -= 7;
+    let env1_uva = to_uva(sp);
+    for (j, &b) in b"TZ=UTC\0".iter().enumerate() {
+        unsafe { core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) sp + j, v = in(reg) b as u32); }
+    }
+    sp -= 11;
+    let env2_uva = to_uva(sp);
+    for (j, &b) in b"HOME=/root\0".iter().enumerate() {
+        unsafe { core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) sp + j, v = in(reg) b as u32); }
+    }
+    sp -= 12;
+    let env3_uva = to_uva(sp);
+    for (j, &b) in b"LANG=C.UTF-8\0".iter().enumerate() {
         unsafe { core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) sp + j, v = in(reg) b as u32); }
     }
 
@@ -2164,8 +2186,13 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
         }
     }
 
-    // envp NULL + pointer (user VA for env0)
+    // envp NULL + pointers (user VAs), most-recent first per SysV ABI
+    // (envp[] is: env0, env1, env2, env3, NULL — NULL is pushed first,
+    // then env3, env2, env1, env0, so env0 sits at the lowest addr).
     sp -= 8; unsafe { core::arch::asm!("str xzr, [{a}]", a = in(reg) sp); }
+    sp -= 8; unsafe { core::arch::asm!("str {v}, [{a}]", a = in(reg) sp, v = in(reg) env3_uva); }
+    sp -= 8; unsafe { core::arch::asm!("str {v}, [{a}]", a = in(reg) sp, v = in(reg) env2_uva); }
+    sp -= 8; unsafe { core::arch::asm!("str {v}, [{a}]", a = in(reg) sp, v = in(reg) env1_uva); }
     sp -= 8; unsafe { core::arch::asm!("str {v}, [{a}]", a = in(reg) sp, v = in(reg) env0_uva); }
 
     // argv NULL + pointers (user VAs)
