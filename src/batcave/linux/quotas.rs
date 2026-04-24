@@ -102,10 +102,36 @@ pub const DEFAULT_EVENTFDS: usize = 16;
 pub const DEFAULT_TIMERFDS: usize = 16;
 
 // ─── The ledger ──────────────────────────────────────────────────────────
-static CAVE_QUOTAS: [CaveQuota; MAX_CAVES] = {
+// CHROMIUM-PHASE-B: was `static CAVE_QUOTAS = [CaveQuota::new(); MAX_CAVES]`.
+// Despite the const initializer setting `mem_limit = DEFAULT_MEM` (1 GiB)
+// the field was reading back as 0 at runtime — same family of bug as the
+// vfs.rs dirs/applets slice-of-byte-literals miscompile. Switched to
+// `static mut` with all-zeros default + an explicit `init()` call from
+// kernel boot. `init()` is idempotent so calling it multiple times is
+// safe.
+static mut CAVE_QUOTAS: [CaveQuota; MAX_CAVES] = {
     const INIT: CaveQuota = CaveQuota::new();
     [INIT; MAX_CAVES]
 };
+
+/// One-shot quota-ledger initializer — call from kernel boot before any
+/// syscall handler can run. Overwrites each slot's `mem_limit` etc. with
+/// the DEFAULT_* consts so runtime reads pick up the right values even
+/// when the static-init const-fold didn't take.
+pub fn init() {
+    unsafe {
+        let q = &mut *core::ptr::addr_of_mut!(CAVE_QUOTAS);
+        for slot in q.iter_mut() {
+            slot.mem_limit     = DEFAULT_MEM;
+            slot.sockets_limit = DEFAULT_SOCKETS;
+            slot.threads_limit = DEFAULT_THREADS;
+            slot.fds_limit     = DEFAULT_FDS;
+            slot.epolls_limit  = DEFAULT_EPOLLS;
+            slot.eventfds_limit = DEFAULT_EVENTFDS;
+            slot.timerfds_limit = DEFAULT_TIMERFDS;
+        }
+    }
+}
 
 /// Is this cave_id valid for ledger access?
 #[inline]
@@ -116,7 +142,13 @@ fn valid(cave_id: usize) -> bool {
 /// Pick the (counter, limit, errno) triple for a resource on the given cave.
 #[inline]
 fn slot(cave_id: usize, r: Resource) -> (&'static AtomicUsize, usize, i64) {
-    let q = &CAVE_QUOTAS[cave_id];
+    // SAFETY: CAVE_QUOTAS is `static mut` only so that `init()` can
+    // patch the `*_limit` fields at boot (const-init was flaky in
+    // release; see CHROMIUM-PHASE-B note above). Once `init()` has
+    // run we treat the array as immutable — readers hand out
+    // `&'static AtomicUsize` references whose interior mutability
+    // handles all runtime mutation.
+    let q = unsafe { &(*core::ptr::addr_of!(CAVE_QUOTAS))[cave_id] };
     match r {
         Resource::Mem       => (&q.mem_bytes, q.mem_limit,     ENOMEM),
         Resource::Sockets   => (&q.sockets,   q.sockets_limit, EMFILE),
@@ -188,7 +220,7 @@ pub fn usage(cave_id: usize, r: Resource) -> (usize, usize) {
 #[allow(dead_code)]
 pub fn reset(cave_id: usize) {
     if !valid(cave_id) { return; }
-    let q = &CAVE_QUOTAS[cave_id];
+    let q = unsafe { &(*core::ptr::addr_of!(CAVE_QUOTAS))[cave_id] };
     q.mem_bytes.store(0, Ordering::Relaxed);
     q.sockets.store(0, Ordering::Relaxed);
     q.threads.store(0, Ordering::Relaxed);

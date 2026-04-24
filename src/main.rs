@@ -216,6 +216,11 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // Initialize BatCave runtime
     drivers::uart::puts("[boot] Initializing BatCave runtime...\n");
     batcave::cave::init();
+    // Set mem_limit / sockets_limit / etc. to DEFAULT_* — the const
+    // initializer on `static CAVE_QUOTAS` was reading back as zero
+    // in release (same family of bug as the vfs.rs slice-of-literals
+    // miscompile). init() patches the ledger into a sane state.
+    batcave::linux::quotas::init();
     drivers::uart::puts("  [bc] BatCave runtime ready\n");
 
     // Initialize networking

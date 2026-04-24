@@ -959,13 +959,24 @@ fn sys_openat(args: [u64; 6]) -> i64 {
     // V8-ROOT-1 (re-audit follow-up): wrap charge+inner+refund in CS so
     // a preempt between charge and inner can't race a concurrent fd op.
     // sys_openat_inner is mostly local + VFS lookups, no schedule().
+    //
+    // CHROMIUM-PHASE-B: charge Resource::Fds up-front; refund on any
+    // non-success return. Before the quotas::init() fix mem_limit was
+    // 0 (so ALL charges would wrongly fail), and openat skipped the
+    // charge entirely as a stopgap — now the limits read correctly
+    // so we can restore the accounting. Every successful openat
+    // consumes 1 fd; close() refunds.
     crate::critical_section! {
-        // Temporarily bypass Fds quota during Chromium port bring-up —
-        // ld-linux opens a lot of probing paths and the active cave
-        // (host cave for Chromium) hits the 64-fd default cap quickly.
-        // TODO: bump DEFAULT_FDS for the Chromium cave specifically, or
-        // find where the cave ledger is getting inflated.
+        if let Err(e) = super::quotas::charge_active(
+                super::quotas::Resource::Fds, 1) {
+            return e;
+        }
         let result = sys_openat_inner(args);
+        if result < 0 {
+            // Error path: either the file didn't exist or fd alloc
+            // failed. Refund the fd we pre-charged.
+            super::quotas::refund_active(super::quotas::Resource::Fds, 1);
+        }
         result
     }
 }
@@ -1569,17 +1580,14 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
     // ROOT-6 quota check — before we touch the frame allocator, make sure
     // this cave isn't already at its per-cave memory cap. -ENOMEM matches
     // what Linux returns when RLIMIT_AS is hit.
-    // CHROMIUM-PHASE-B: Mem quota ledger is reporting mem_limit=0 for
-    // active caves despite the static init setting it to DEFAULT_MEM
-    // (1 GiB). Something is zeroing the Mem limit during boot — possibly
-    // an uninitialized frame handed out that overlaps CAVE_QUOTAS, or a
-    // static-init ordering bug. TODO: trace the zeroing path. Until then
-    // we bypass the Mem charge for mmap so ld-linux can make progress —
-    // other resources (Fds, Sockets, Threads) still go through quotas.
-    // We still account via saturating add so refund() has something to
-    // drain, keeping the accounting honest once the limit bug is fixed.
-    let _ = super::quotas::charge_active(
-        super::quotas::Resource::Mem, charge_bytes);
+    // ROOT-6 quota check. CHROMIUM-PHASE-B (fixed): mem_limit was
+    // reading as 0 at runtime because the static CAVE_QUOTAS const-
+    // init was flaky. Fixed by adding `quotas::init()` called at
+    // kernel boot that explicitly writes DEFAULT_* into every slot.
+    if let Err(e) = super::quotas::charge_active(
+            super::quotas::Resource::Mem, charge_bytes) {
+        return e;
+    }
 
     uart::puts("[mmap] len=");
     crate::kernel::mm::print_num(len);

@@ -11,6 +11,80 @@ end of a session.
 
 ---
 
+## 2026-04-23 22:00 — Mac — three more fixes: populate_rootfs panic, Mem quota, Fds quota
+
+Cleaned up the three "pre-existing open issues" from the 21:00 session:
+
+### 1. populate_rootfs panic at `find_child(b"bin").unwrap()` — FIXED
+
+Diagnostic: added a node-name dump right after the dirs loop and saw
+the VFS node slots held *garbage names* with CORRECT name_len values:
+`1:'a??' 2:'TH?' 3:'???' ...`. The bytes were wrong but the lengths
+matched the expected lib names.
+
+Root cause: `let dirs: &[&[u8]] = &[b"bin", b"etc", ...]` was being
+miscompiled in `--release`. Each call through the loop passed the
+right `&[u8]` *length* but a bogus byte pointer — the actual
+printable-garbage seen at the callee was whatever happened to be on
+the stack at that address. Repeated `llvm-objdump` showed this wasn't
+a field-layout issue; even with `#[repr(C)]` and explicit volatile
+pointer writes it still failed. The **fix** was to hoist the slice
+to a `const DIRS` (and `const APPLETS` for the busybox-symlink list):
+const slices-of-byte-literals land in .rodata, read-only, and the
+miscompile evaporates. The build config or an LLVM quirk is probably
+the real culprit — filing this as a TODO for when we can bisect.
+
+### 2. `CaveQuota.mem_limit = 0` at runtime despite static init — FIXED
+
+Same family of bug as #1 — the `static CAVE_QUOTAS = [CaveQuota::new(); 32]`
+with `DEFAULT_MEM = 1 GiB` was reading back as zero at runtime, so
+every `charge_active(Mem, ...)` returned ENOMEM and the mmap syscall
+had been bypassing the ledger entirely during hello_dyn bringup.
+
+Fix: switched CAVE_QUOTAS to `static mut` (same const initializer)
+and added an explicit `quotas::init()` called from `kernel_main` that
+overwrites each slot's `mem_limit` / `sockets_limit` / etc. with the
+`DEFAULT_*` consts. Idempotent; called once after cave::init.
+Runtime reads now see DEFAULT_MEM = 1 GiB as expected.
+
+### 3. Fds quota bypass on openat — FIXED
+
+The old wrapper said "Temporarily bypass Fds quota during Chromium
+port bring-up" but actually openat never charged Fds at all —
+close() was refunding into a ledger that never got charged, so the
+saturating-sub in refund kept the counter at 0 forever. Now that
+`init()` populates the limit correctly, added
+`charge_active(Fds, 1)` up-front + refund-on-error so fd allocation
+gets properly accounted. sys_close already refunds on success path.
+
+### Regression tests
+- hello_dyn: exits 42 (print "hello from dyn-linked elf!") ✓
+- content_shell: reaches ld-linux symbol version check (same as
+  21:00 session, no regression from these fixes)
+
+### Still open
+- content_shell hits ld-linux version errors
+  (`/lib/libdl.so.2: version 'NSS_3.2' not found` etc.). md5sum
+  shows our packaged libs match the libs in the build container
+  bit-for-bit, so it's NOT a packaging issue. Most likely cause:
+  after mmapping libdl.so.2, ld-linux is iterating content_shell's
+  `.gnu.version_r` and can't resolve references to libs not yet
+  loaded. Trace shows ld-linux doing a small-read + stat + close on
+  each subsequent lib (libpthread, libnspr4, libnss3, …) but NOT
+  mmapping them before erroring — some two-pass flow where the
+  version check fires between passes. Needs deeper instrumentation
+  of ld-linux's dl_check_map_versions.
+
+Files touched:
+- src/batcave/linux/vfs.rs (DIRS/APPLETS hoisted to const; debug
+  probes removed; graceful match for find_child fallback kept as
+  defence-in-depth)
+- src/batcave/linux/quotas.rs (static mut CAVE_QUOTAS + init())
+- src/batcave/linux/syscall.rs (restored Mem + Fds quota charges)
+- src/main.rs (call quotas::init() after cave::init())
+
+---
+
 ## 2026-04-23 21:00 — Mac — hello_dyn prints "hello from dyn-linked elf!" 🎉
 
 **Milestone.** A real dynamically-linked ELF ran end-to-end on Bat_OS

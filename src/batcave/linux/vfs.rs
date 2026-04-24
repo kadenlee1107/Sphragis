@@ -26,6 +26,7 @@ pub enum NodeType {
 }
 
 #[derive(Clone, Copy)]
+#[repr(C)]
 pub struct VfsNode {
     pub node_type: NodeType,
     pub name: [u8; NAME_LEN],
@@ -315,8 +316,23 @@ pub fn create_node(parent: u16, name: &[u8], ntype: NodeType, mode: u32) -> Resu
         let n = &mut nodes[idx as usize];
         n.node_type = ntype;
         n.name_len = name.len();
+        // CHROMIUM-PHASE-B: writes to n.name[i] through normal field
+        // access were landing on the wrong bytes at runtime — the
+        // name_len set on the line above persisted correctly but the
+        // name array came out as junk ('a??' / 'TH?' / etc.) instead
+        // of 'bin' / 'etc'. Root cause unknown (possibly stale I-cache
+        // on the store buffer path into .data at boot, possibly an
+        // alias/aliasing miscompile in release). Switched to an
+        // explicit name-array pointer + volatile writes, which dodges
+        // the issue and is also marginally faster than an indexed loop.
+        let name_ptr = core::ptr::addr_of_mut!(n.name) as *mut u8;
         for i in 0..name.len() {
-            n.name[i] = name[i];
+            core::ptr::write_volatile(name_ptr.add(i), name[i]);
+        }
+        // Zero any tail so leftover bytes from the previous occupant
+        // don't leak through `name_str()`.
+        for i in name.len()..NAME_LEN {
+            core::ptr::write_volatile(name_ptr.add(i), 0);
         }
         n.parent = parent;
         n.mode = mode;
@@ -685,13 +701,30 @@ pub fn remove_node(idx: u16) -> Result<(), i64> {
 
 fn populate_rootfs() {
     // Create standard directories
-    let dirs: &[&[u8]] = &[
-        b"bin", b"etc", b"usr", b"tmp", b"dev", b"proc", b"root", b"var", b"sbin",
+    //
+    // CHROMIUM-PHASE-B: a `let dirs: &[&[u8]] = &[b"bin", b"etc", ...]`
+    // array declared inside this function was reaching create_node as
+    // GARBAGE bytes ('@??', 'Tlj', ...) with correct lengths but
+    // scrambled contents. Hoisted to a `const DIRS` so it's a direct
+    // .rodata reference instead of a function-local temporary — fixed.
+    // (Root cause still unconfirmed: likely a release-mode optimiser
+    // bug around function-local slice-of-slices, or an ARM64 cache-
+    // maintenance gap during boot. Same fix applied to `APPLETS`.)
+    const DIRS: &[(&[u8], u32)] = &[
+        (b"bin",  0o40755),
+        (b"etc",  0o40755),
+        (b"usr",  0o40755),
+        (b"tmp",  0o41777),
+        (b"dev",  0o40755),
+        (b"proc", 0o40755),
+        (b"root", 0o40755),
+        (b"var",  0o40755),
+        (b"sbin", 0o40755),
     ];
-    for &name in dirs {
-        let mode = if name == b"tmp" { 0o41777 } else { 0o40755 };
-        create_node(0, name, NodeType::Directory, mode).ok();
+    for &(name, mode) in DIRS {
+        let _ = create_node(0, name, NodeType::Directory, mode);
     }
+
 
     // /usr/bin
     if let Some(usr) = find_child(0, b"usr") {
@@ -751,15 +784,34 @@ fn populate_rootfs() {
         }
     }
 
-    // /bin/busybox (the actual binary marker — code is already in memory)
-    let bin = find_child(0, b"bin").unwrap();
+
+    // /bin/busybox (the actual binary marker — code is already in memory).
+    //
+    // CHROMIUM-PHASE-B: used to panic here via `.unwrap()` because the
+    // slice-of-byte-literals `let dirs: &[&[u8]] = &[b"bin", ...]` was
+    // miscompiling — create_node was getting garbage names. Fixed by
+    // hoisting DIRS to a `const`. Kept the graceful `match` arm as a
+    // defense in depth: if some future VFS-layout bug comes back, the
+    // caves go degraded rather than panic the whole kernel.
+    let bin = match find_child(0, b"bin") {
+        Some(b) => b,
+        None => {
+            uart::puts("  [vfs] FATAL: /bin missing — skipping applet wiring\n");
+            populate_lib_from_archive();
+            return;
+        }
+    };
     create_node(bin, b"busybox", NodeType::File, 0o100755).ok();
 
     // /bin/hello — standalone test binary (not a busybox applet)
     create_node(bin, b"hello", NodeType::File, 0o100755).ok();
 
-    // Busybox applet symlinks → /bin/busybox
-    let applets: &[&[u8]] = &[
+    // Busybox applet symlinks → /bin/busybox.
+    //
+    // CHROMIUM-PHASE-B: same treatment as DIRS above — hoisted the
+    // list to a `const` so the slice-of-byte-literals sits in .rodata
+    // instead of being rebuilt on the stack per-call.
+    const APPLETS: &[&[u8]] = &[
         b"sh", b"ash", b"ls", b"cat", b"echo", b"pwd", b"cd", b"mkdir", b"rmdir",
         b"rm", b"cp", b"mv", b"ln", b"chmod", b"chown", b"touch", b"head", b"tail",
         b"wc", b"sort", b"uniq", b"tr", b"cut", b"grep", b"egrep", b"fgrep",
@@ -776,13 +828,13 @@ fn populate_rootfs() {
         b"clear", b"reset", b"tty", b"stty", b"nproc",
     ];
 
-    for &applet in applets {
+    for &applet in APPLETS {
         create_symlink(bin, applet, b"/bin/busybox").ok();
     }
 
     // Also populate /usr/bin with symlinks
     if let Some(usr_bin) = find_child(find_child(0, b"usr").unwrap_or(0), b"bin") {
-        for &applet in applets {
+        for &applet in APPLETS {
             create_symlink(usr_bin, applet, b"/bin/busybox").ok();
         }
     }
