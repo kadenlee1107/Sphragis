@@ -75,6 +75,21 @@ gets properly accounted. sys_close already refunds on success path.
   version check fires between passes. Needs deeper instrumentation
   of ld-linux's dl_check_map_versions.
 
+### Bonus: content_shell relocations fully applied now
+
+With the Mem quota fixed, the loader's reservation for content_shell
+went from 26 MB (broken) to 188 MB (correct total_size for the
+13-file archive). That in turn let `apply_relocs_cross` iterate
+content_shell's full `.rela.dyn` table — **539,446 RELATIVE
+relocations applied** instead of the 4 we were seeing before the
+fix. The quota-failure-before-quota-init was apparently truncating
+the reservation / frame-alloc path somewhere and the loader was
+silently dropping relocs whose patch_addr fell past the tiny
+allocated window. Open question: exactly where was the truncation
+happening? (Trace suggests the phys_range_end check in
+apply_relocs_cross was the filter, but the UPSTREAM cause was the
+charge-on-mmap path returning ENOMEM on 188 MB contig alloc.)
+
 Files touched:
 - src/batcave/linux/vfs.rs (DIRS/APPLETS hoisted to const; debug
   probes removed; graceful match for find_child fallback kept as
