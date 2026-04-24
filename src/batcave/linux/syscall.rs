@@ -3401,28 +3401,13 @@ fn sys_readlinkat(args: [u64; 6]) -> i64 {
         }
         return len as i64;
     }
-    // /etc/localtime — Chromium's ICU TZ detector readlinks this.
-    // On a typical Linux system it's a symlink into
-    // `/usr/share/zoneinfo/<Region>/<City>` (e.g. `.../Etc/UTC`).
-    // ICU's `TimeZoneGenericNames` extracts the tail after the
-    // last `/zoneinfo/` and treats it as the timezone ID; the rest
-    // of the TZ data comes from icudtl.dat, not the linked file.
-    //
-    // Use `Etc/UTC` rather than bare `UTC` — ICU's validators treat
-    // a missing region prefix as untrusted and the CharString::append
-    // call chain it runs on the suffix crashes when the input
-    // doesn't fit its internal shape.
-    if path_len >= 14 && &path_buf[..14] == b"/etc/localtime" {
-        let tz_link = b"/usr/share/zoneinfo/Etc/UTC";
-        let len = tz_link.len().min(bufsiz);
-        for i in 0..len {
-            unsafe {
-                core::arch::asm!("strb {v:w}, [{a}]",
-                    a = in(reg) buf + i, v = in(reg) tz_link[i] as u32);
-            }
-        }
-        return len as i64;
-    }
+    // /etc/localtime — deliberately return EINVAL. The ICU TZ
+    // detector's symlink-target-parsing code reaches a CharString::
+    // append that hits a non-canonical pointer deref on our setup;
+    // making /etc/localtime act as a plain file (not a symlink)
+    // steers ICU down the tzdata-from-icudtl.dat path instead,
+    // which works. (-EINVAL is what readlinkat returns on any
+    // non-symlink inode — matches kernel semantics.)
 
     if vfs::is_ready() {
         // Don't follow symlinks — resolve parent then find the final component

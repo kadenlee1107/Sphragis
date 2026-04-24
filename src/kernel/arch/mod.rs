@@ -1189,6 +1189,43 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                     }
                     uart::puts("\n");
                 }
+                // CHROMIUM-PHASE-B: dump 64 bytes of the object at x19.
+                // x19 is callee-saved in the AArch64 AAPCS, so functions
+                // often use it to hold `this`. When a crash happens
+                // inside a method, dumping [x19..x19+64] reveals the
+                // object's state and is more informative than just
+                // the register file. Also dump [x19-32..x19] for context.
+                if (*frame).x[19] > 0x1000
+                    && (*frame).x[19] < 0x0000_4000_0000_0000
+                {
+                    uart::puts("  memory around x19 (32 before + 64 after):");
+                    let obj = (*frame).x[19] as usize;
+                    for i in -4i64..8i64 {
+                        uart::puts("\n    ");
+                        if i < 0 { uart::putc(b'-'); } else { uart::putc(b'+'); }
+                        let off_abs = (i * 8).unsigned_abs() as usize;
+                        uart::puts("0x");
+                        uart::putc(b"0123456789abcdef"[(off_abs >> 4) & 0xF]);
+                        uart::putc(b"0123456789abcdef"[off_abs & 0xF]);
+                        uart::puts(": ");
+                        let row_base = (obj as i64 + i * 8) as usize;
+                        for j in 0..8usize {
+                            let byte: u8 = core::ptr::read_volatile(
+                                (row_base + j) as *const u8);
+                            uart::putc(b"0123456789abcdef"[(byte >> 4) as usize]);
+                            uart::putc(b"0123456789abcdef"[(byte & 0xF) as usize]);
+                            uart::putc(b' ');
+                        }
+                        uart::puts(" | ");
+                        for j in 0..8usize {
+                            let byte: u8 = core::ptr::read_volatile(
+                                (row_base + j) as *const u8);
+                            if (0x20..=0x7e).contains(&byte) { uart::putc(byte); }
+                            else { uart::putc(b'.'); }
+                        }
+                    }
+                    uart::puts("\n");
+                }
             }
             loop { unsafe { core::arch::asm!("wfe") }; }
         }
