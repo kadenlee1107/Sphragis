@@ -904,6 +904,33 @@ fn sys_read(args: [u64; 6]) -> i64 {
             }
             return count as i64;
         }
+        // /dev/random + /dev/urandom → ARMv8.5 RNDR / fallback RNG.
+        // glibc uses /dev/urandom for stack canaries, ASLR seed, and
+        // getrandom() fallback. Without this the first attempt to open
+        // /dev/urandom failed with ENOENT and content_shell exited
+        // before reaching main.
+        if node.node_type == vfs::NodeType::DevRandom {
+            // fill_bytes() pulls from RNDR if available (the kernel
+            // logs "[rng] ARMv8.5 RNDR available — mixing HW entropy"
+            // at boot), falling back to a SHA-mixed software RNG.
+            // We copy into a small stack buffer then write to EL0.
+            const CHUNK: usize = 256;
+            let mut total = 0usize;
+            while total < count {
+                let n = (count - total).min(CHUNK);
+                let mut tmp = [0u8; CHUNK];
+                crate::crypto::rng::fill_bytes(&mut tmp[..n]);
+                for i in 0..n {
+                    unsafe {
+                        core::arch::asm!("strb {v:w}, [{a}]",
+                            a = in(reg) buf + total + i,
+                            v = in(reg) tmp[i] as u32);
+                    }
+                }
+                total += n;
+            }
+            return count as i64;
+        }
         // /dev/console → read from UART
         if node.node_type == vfs::NodeType::DevConsole {
             return sys_read([0, args[1], args[2], 0, 0, 0]); // redirect to stdin
@@ -2290,24 +2317,54 @@ fn sys_writev(args: [u64; 6]) -> i64 {
 
 fn sys_newfstatat(args: [u64; 6]) -> i64 {
     // newfstatat(dirfd, pathname, statbuf, flags)
+    let dirfd = args[0] as i32;
     let path_ptr = args[1] as usize;
     let buf = args[2] as usize;
+    let flags = args[3] as u32;
     if buf == 0 { return EINVAL; }
 
-    // Empty path with AT_EMPTY_PATH flag → fstat on dirfd
-    if path_ptr == 0 {
-        fill_stat(buf, 0o100755, 4096, 0, 1);
-        return 0;
+    const AT_EMPTY_PATH: u32 = 0x1000;
+
+    // CHROMIUM-PHASE-B: AT_EMPTY_PATH with empty string means "stat
+    // the dirfd itself" (glibc's fstat() is implemented as
+    // newfstatat(fd, "", buf, AT_EMPTY_PATH)). Previously we
+    // returned a bogus mode=0o100755, size=4096 stat regardless of
+    // the fd's actual backing — which broke ld-linux's ELF size
+    // check for every lib after libdl, so content_shell loading
+    // stopped short with "NSS_3.2 not found" style errors.
+    //
+    // Now: when path is empty (null ptr OR first byte NUL) with
+    // AT_EMPTY_PATH set, go through the fd table and fill stat
+    // from the VfsNode that fd points at.
+    let path_is_empty = if path_ptr == 0 {
+        true
+    } else {
+        // Peek the first byte of the user-space path without reading
+        // the whole buffer.
+        let mut b: u32 = 0;
+        unsafe {
+            core::arch::asm!("ldrb {v:w}, [{a}]",
+                a = in(reg) path_ptr, v = out(reg) b);
+        }
+        b == 0
+    };
+
+    if path_is_empty {
+        if flags & AT_EMPTY_PATH != 0 && dirfd >= 0 {
+            if let Some(entry) = fd::get(dirfd as u32) {
+                let node = vfs::get_node(entry.node_idx);
+                fill_stat(buf, node.mode, node.size as u64,
+                    entry.node_idx as u64, node.nlink);
+                return 0;
+            }
+        }
+        // Empty path without AT_EMPTY_PATH (or bad fd): Linux returns
+        // ENOENT. Returning the bogus 4096 stat breaks ELF loading.
+        return ENOENT;
     }
 
     let mut path_buf = [0u8; 128];
     let path_len = read_user_str(path_ptr, &mut path_buf);
-
-    if path_len == 0 {
-        // Empty string with AT_EMPTY_PATH
-        fill_stat(buf, 0o100755, 4096, 0, 1);
-        return 0;
-    }
 
     // FLv2-NEW-011: extend `..` guard to newfstatat.
     if has_dotdot(&path_buf[..path_len]) { return EACCES; }

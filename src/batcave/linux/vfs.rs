@@ -21,6 +21,7 @@ pub enum NodeType {
     DevNull,
     DevZero,
     DevConsole,
+    DevRandom,     // /dev/random + /dev/urandom — HW RNG via ARMv8.5 RNDR
     Socket,     // network socket (TCP/UDP)
     ChromiumFb, // /batos/fb0 — Chromium↔kernel display shared-memory region
 }
@@ -773,6 +774,8 @@ fn populate_rootfs() {
         create_node(dev, b"null", NodeType::DevNull, 0o20666).ok();
         create_node(dev, b"zero", NodeType::DevZero, 0o20666).ok();
         create_node(dev, b"console", NodeType::DevConsole, 0o20600).ok();
+        create_node(dev, b"urandom", NodeType::DevRandom, 0o20666).ok();
+        create_node(dev, b"random",  NodeType::DevRandom, 0o20666).ok();
     }
 
     // /batos — Bat_OS-native namespace (Chromium display bridge, etc.)

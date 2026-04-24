@@ -52,7 +52,21 @@ pub fn is_user_range(p: usize, size: usize) -> bool {
         crate::batcave::linux::mmu::active_user_window();
     if active_start != 0 && active_end != 0 {
         // Active cave window — the tight check wins.
-        return p >= active_start && end <= active_end;
+        if p >= active_start && end <= active_end {
+            return true;
+        }
+        // CHROMIUM-PHASE-B: a syscall buffer can also legitimately
+        // live inside a huge mmap reservation (V8 pointer compression
+        // reserves 32 GB in the 0x28_00xx_xxxx range and lazily
+        // commits via mprotect / demand-page). Those reservations are
+        // OUTSIDE the cave's L2 window so the range check above
+        // rejects them, but they ARE user-owned memory once a page
+        // fault commits a frame. Accept them here; the demand-page
+        // handler commits on first physical access.
+        if crate::batcave::linux::demand_page::is_in_active_reservation(p, size) {
+            return true;
+        }
+        return false;
     }
     // V5-WEIRD-008: no active cave means we're either in kernel context
     // (early boot, IRQ handler) or in the primary/ash path. In kernel

@@ -11,6 +11,84 @@ end of a session.
 
 ---
 
+## 2026-04-23 23:00 — Mac — content_shell prints Chromium's own logging 🎉🎉🎉
+
+**Milestone.** content_shell now reaches CHROMIUM'S OWN CODE. The
+very first line of Chromium-side logging we've ever produced from
+Bat_OS:
+
+```
+[1:0:0101/000000.000000:ERROR:base/i18n/icu_util.cc:232]
+    Invalid file descriptor to ICU data received.
+```
+
+That's `base/i18n/icu_util.cc:232` — a real Chromium source file.
+We're past dynamic linking, past __libc_start_main, past argv
+parsing (saw `--run-web-tests`, `--single-process`, `--window-size=`
+argv bytes flying past in gettid args), past V8's pointer-
+compression reservation mprotects, through futex + readlinkat +
+clock_gettime + gettid + uname + write(stderr) + openat("", O_CREAT).
+
+Three fixes got us here:
+
+### 1. newfstatat AT_EMPTY_PATH bug — fstat(fd) was returning 4096
+
+glibc's `fstat(fd, buf)` is implemented as `newfstatat(fd, "", buf,
+AT_EMPTY_PATH)`. Our handler's empty-path branch was returning a
+bogus `size=4096` for every call regardless of fd. ld-linux uses
+the returned `st_size` to validate it can mmap the whole file;
+for libdl (67 KB) 4096 was smaller than needed but glibc allows it;
+for the NEXT libs the version check fires first and we never see
+the mmap fail. Fix: when AT_EMPTY_PATH is set and path is empty,
+resolve through the fd table and fill stat from the VfsNode.
+
+Result: all 13 version-mismatch errors disappeared.
+
+### 2. /dev/urandom backed by ARMv8.5 RNDR
+
+glibc / Chromium want entropy for stack canaries, ASLR, random
+seeds. Without /dev/urandom (or /dev/random) they fall back to
+some paths that sometimes exit. Added a new `NodeType::DevRandom`
+that the read() syscall services via `crypto::rng::fill_bytes` —
+pulls from the hardware RNDR register (available on QEMU virt
+-cpu max) with software fallback.
+
+### 3. is_user_range honors V8 huge reservations
+
+V8's pointer-compression setup reserves 32 GB at 0x28_xxxx_xxxx
+via `mmap(NULL, 32G, ANON|PRIVATE, -1, 0)`. Our mmap's
+HUGE_RESERVATION path returns a hint address and registers the
+range with demand_page so the fault handler commits real frames
+lazily. But uaccess::is_user_range only looked at the cave's L2
+window (0x10000000..0x29000000) — it didn't know about the V8
+reservation, so `write(fd, 0x28_0006_8000, 103)` returned EFAULT
+before the demand-page handler could commit a frame. Added
+`demand_page::is_in_active_reservation()` + call it from
+is_user_range as a fallback.
+
+Result: write(stderr) now succeeds into V8's reservation; the
+first page gets committed on access, and Chromium's ERROR log
+flies past.
+
+### Regression tests
+- hello_dyn: still prints + exits 42 ✓
+- content_shell: 539,446 relocs applied, ld-linux full dynamic
+  linking, 17 init_array entries run, reaches Chromium's icu_util.cc
+
+### Next walls (not kernel — Chromium-side)
+- ICU data not found: content_shell expects a passed-in fd to
+  icudtl.dat. Need to either (a) ship icudtl.dat in the archive
+  and have Chromium find it, or (b) pass /bin/content_shell.icu
+  as an fd inheritance.
+- `/bin/content_shell.log` openat fails: content_shell wants to
+  write its logs to a file next to the binary. We could either
+  add a writable VFS file for it, or redirect logs to /dev/null.
+- `--single-process`: Chromium's sandbox expects a zygote parent
+  process. Bat_OS doesn't have fork/exec chains. Need to either
+  inject `--no-sandbox` or run with a shim that skips the zygote.
+
+---
+
 ## 2026-04-23 22:00 — Mac — three more fixes: populate_rootfs panic, Mem quota, Fds quota
 
 Cleaned up the three "pre-existing open issues" from the 21:00 session:

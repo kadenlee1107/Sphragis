@@ -68,6 +68,34 @@ static RESV_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Diagnostic — `chromium` status line prints this.
 pub static COMMITTED_PAGES: AtomicU64 = AtomicU64::new(0);
 
+/// Returns `true` if `[addr, addr+len)` falls inside a registered
+/// huge reservation for the CURRENT cave (matched via TTBR0). Used by
+/// `uaccess::is_user_range` so syscalls that dereference user pointers
+/// don't reject a buffer sitting in V8's pointer-compression area
+/// just because it's outside the cave's L2 window — the demand-page
+/// handler will commit a real frame on first access.
+pub fn is_in_active_reservation(addr: usize, len: usize) -> bool {
+    let a = addr as u64;
+    let end = match a.checked_add(len as u64) {
+        Some(e) => e,
+        None => return false,
+    };
+    let ttbr0: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
+    let l1_phys = ttbr0 & !1u64;
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        let count = RESV_COUNT.load(Ordering::Acquire);
+        let table = &*core::ptr::addr_of!(RESV_TABLE);
+        for i in 0..count {
+            let r = &table[i];
+            if r.l1_phys != l1_phys { continue; }
+            if a >= r.start && end <= r.end { return true; }
+        }
+    }
+    false
+}
+
 /// Record a huge mmap reservation so the fault handler will lazily
 /// back its pages. `sys_mmap` calls this after its hint-return path.
 pub fn register_reservation(start: u64, end: u64, l1_phys: u64) {
