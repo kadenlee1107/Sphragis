@@ -11,6 +11,97 @@ end of a session.
 
 ---
 
+## 2026-04-23 20:15 — Mac — init_array trampoline, PT_TLS, TPREL64 — wall at _rtld_global
+
+Kept pushing past 18:30. Shipped three more commits (b2fb74a3,
+494422f6, 4981090e) that cover:
+
+1. **Init_array trampoline**: hand-emitted aarch64 stub at a reserved
+   cave page. Walks a combined init_array list (33 entries across
+   12 libs in Chromium's DT_NEEDED set), BLRs each, then BRs to the
+   real main entry. ADR / LDR post-indexed / CBZ / B / LDR unsigned /
+   BR encoders implemented just enough for this loop. Controlled
+   via `BAT_OS_DISABLE_INIT_TRAMPOLINE` env flag.
+
+2. **PT_TLS layout + TLS_TPREL64 relocs**: each lib's PT_TLS is
+   parsed; combined TLS block is laid out per-lib at tp+offset
+   respecting p_align. Relocs of type R_AARCH64_TLS_TPREL64 (0x406)
+   compute `sym.st_value + addend + lib.tls_tp_offset` and write to
+   the GOT slot — glibc's initial-exec accesses now find the right
+   tpidr_el0-relative offset. 14 libc TPREL64s + 1 libm TPREL64 now
+   resolve.
+
+3. **Enhanced EC=0x24 exception dump**: 7 instructions around ELR
+   + full x0..x28 + LR. One-shot forensics for the next wedge.
+
+### The actual wall, now localised to one glibc structure
+
+The hello_dyn test binary lets us iterate in seconds. Its crash:
+
+```
+ELR = 0x10427824   (libc.so.6 + 0x27824)
+x21 = 0            (cause of NULL-deref)
+x26 = 0x10240028   (ld-linux BSS addr, &_rtld_global.something)
+```
+
+Disassembling libc.so.6 around the crash site:
+
+```
+-12: adrp x26, <page>            PC-relative page
+- 8: ldr  x26, [x26, #0xf98]     load GOT → &_rtld_global
+- 4: ldr  x21, [x26]             x21 = _rtld_global.first_field
++ 0: ldr  x0,  [x21, #0xa0]      ← FAULT: x21=0 (the field is 0)
+```
+
+Our cross-module resolver CORRECTLY points libc's GOT at
+`&_rtld_global` (defined in ld-linux.so.1's BSS). But the field at
+offset 0 of `_rtld_global` is zero, because `ld-linux` never ran to
+populate it. `_rtld_global` is glibc+ld-linux's shared runtime
+state — tracks loaded modules, TLS generation, search paths,
+thread-cancel hooks. Without it, every libc path that touches
+runtime state NULL-derefs.
+
+### Two paths to closure
+
+**Option A — run real ld-linux-aarch64.so.1**. Change the runner
+to eret to ld-linux's entry (0x00010200e00 in our current layout,
+per the init_array diagnostic output). Populate auxv so ld-linux
+finds content_shell (AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY,
+AT_BASE). Serve our baked libs at `/lib/` via a minimal ramfs
+synthesised from the BATARCH archive. Add ~10 syscalls ld-linux
+needs (openat, read, close, fstat, newfstatat, mmap, mprotect,
+munmap, brk, set_tid_address, getrandom — most of which we
+already have).
+
+Pros: correct by construction. ld-linux handles PT_TLS, DTV,
+init_array, _rtld_global, symbol versioning — the whole thing.
+Cons: 1-3 days of careful work.
+
+**Option B — populate _rtld_global by hand**. Read glibc's
+rtld.c, identify fields the init paths need, write values at the
+right offsets during load_archive_multi.
+
+Pros: no new syscalls. Cons: field-by-field plays whack-a-mole
+with glibc source, fragile across glibc versions.
+
+Recommendation for next session: **Option A**. The syscalls are
+mostly in place; the missing pieces are `openat` routing to a
+BATARCH-backed ramfs, and auxv wiring.
+
+### 17 commits today, Chromium pipeline status
+
+Boot → shell → cave → multi-ELF load → dynamic linker (540k
+relocs, 575 cross-module) → TLS (per-lib PT_TLS placement,
+TPREL64 resolved) → demand paging (5 commits, no loop) → MMU →
+TLS-aware eret → init_array trampoline (13 lib inits called
+successfully for the ones that don't touch _rtld_global) → wedge
+at _rtld_global NULL-deref.
+
+That's the morning trailhead. `tools/build_hello_dyn.sh` gives a
+67 KB repro so iterations on Option A take seconds, not minutes.
+
+---
+
 ## 2026-04-23 18:30 — Mac — built a tiny repro, isolated bug to glibc-init path
 
 Built `tools/build_hello_dyn.sh` — a 67 KB dynamic-linked hello
