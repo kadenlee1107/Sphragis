@@ -150,6 +150,17 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
     uart::puts("[runner] Cave slot "); crate::kernel::mm::print_num(cave_slot);
     uart::puts(" allocated\n");
 
+    // Register /lib/*.so VFS nodes backed by archive memory so ld-linux
+    // can openat("/lib/libc.so.6") + read() them at runtime. This used to
+    // live only in populate_rootfs(), but that function has a panic on
+    // `find_child(0, b"bin").unwrap()` that sometimes fires during early
+    // boot — when it does, VFS_READY is already true and a subsequent
+    // vfs::init() no-ops, so the /lib nodes never get created. Calling
+    // here is a belt-and-suspenders fix: populate_lib_from_archive is
+    // idempotent (skips duplicates via find_child), so running it from
+    // both places is harmless.
+    super::vfs::populate_lib_from_archive();
+
     // If the initrd is a BATARCH multi-file archive (tools/bake_chromium_archive.sh),
     // load every file in it as a separate ELF in the same cave, with a
     // cross-module symbol-resolution pass to fix up content_shell's

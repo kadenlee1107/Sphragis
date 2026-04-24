@@ -226,9 +226,21 @@ pub fn destroy_cave_vfs(cave_id: usize) {
                 // only free page 0 (leaking the other 1280 pages and
                 // desynchronizing the bitmap), AND the 4 KiB zero-loop
                 // below would leak ~5238 KiB of the region.
+                // V12b: also skip nodes whose data_addr points into the
+                // initrd BATARCH archive memory (populate_lib_from_archive
+                // registers /lib/*.so that way). Those bytes are owned by
+                // the initrd region — freeing them would corrupt the
+                // archive + leak allocator state (the frames were never
+                // handed out by alloc_frame to begin with).
+                let (archive_lo, archive_hi) = crate::kernel::mm::initrd::blob_phys_range();
                 for j in 0..MAX_NODES {
                     let n = &mut instances[i].nodes[j];
-                    if n.data_addr != 0 && n.node_type != NodeType::ChromiumFb {
+                    let in_archive = archive_lo != 0 && archive_hi > archive_lo
+                        && n.data_addr >= archive_lo && n.data_addr < archive_hi;
+                    if n.data_addr != 0
+                        && n.node_type != NodeType::ChromiumFb
+                        && !in_archive
+                    {
                         // Volatile-zero the 4 KiB frame so a later
                         // `alloc_frame` tenant cannot observe the old
                         // file content even before alloc's str-xzr pass.
@@ -773,6 +785,82 @@ fn populate_rootfs() {
         for &applet in applets {
             create_symlink(usr_bin, applet, b"/bin/busybox").ok();
         }
+    }
+
+    // /lib/*.so backed by the BATARCH archive — so ld-linux's openat()
+    // probing (e.g. openat("/lib/libc.so.6")) hits a real file instead
+    // of ENOENT. Each node's data_addr points directly into the initrd
+    // region (identity-mapped in EL1), so the normal read() path works
+    // with zero copy. No-op if no archive is present.
+    populate_lib_from_archive();
+}
+
+/// Register every `lib/*` entry in the BATARCH initrd as a VFS file
+/// under /lib so ld-linux's openat("/lib/libc.so.6") can find it.
+///
+/// Called from two places: (1) populate_rootfs() during normal VFS init,
+/// and (2) the Chromium runner right before execve of ld-linux (as a
+/// safety net — populate_rootfs has a pre-existing panic path on the
+/// `find_child(0, b"bin").unwrap()` line if it races with something,
+/// and we don't want to lose the /lib files when that fires).
+///
+/// The node's `data_addr` is the archive-memory pointer, NOT an
+/// allocator-owned frame. destroy_cave_vfs() must therefore skip these
+/// nodes during its free-frame walk — otherwise we'd try to free bytes
+/// the initrd owns. We mark them with a distinct mode bit to tell them
+/// apart from real files: 0o100444 (read-only regular file, world-readable).
+///
+/// Idempotent: calling twice is a no-op (find_child skips duplicates).
+pub fn populate_lib_from_archive() {
+    use crate::kernel::mm::initrd;
+    uart::puts("  [vfs] populate_lib_from_archive: entry\n");
+    if !initrd::is_archive() {
+        uart::puts("  [vfs] populate_lib_from_archive: not an archive\n");
+        return;
+    }
+
+    // /lib must exist to park files under. populate_rootfs() doesn't
+    // create it by default (busybox uses /bin), so create it now.
+    let lib_dir = match find_child(0, b"lib") {
+        Some(i) => i,
+        None => match create_node(0, b"lib", NodeType::Directory, 0o40755) {
+            Ok(i) => i,
+            Err(_) => {
+                uart::puts("  [vfs] /lib create failed\n");
+                return;
+            }
+        },
+    };
+
+    let mut added: usize = 0;
+    initrd::archive_for_each(|name, _sz| {
+        if !name.starts_with("lib/") { return; }
+        let leaf = &name.as_bytes()[4..]; // strip "lib/"
+        if leaf.is_empty() || leaf.len() > NAME_LEN { return; }
+        let bytes = match initrd::archive_file(name) {
+            Some(b) => b,
+            None => return,
+        };
+        // Dodge duplicate work if this VFS instance was already populated
+        // (init_for_cave can be called twice for the same cave slot).
+        if find_child(lib_dir, leaf).is_some() { return; }
+        let idx = match create_node(lib_dir, leaf, NodeType::File, 0o100444) {
+            Ok(i) => i,
+            Err(_) => return,
+        };
+        unsafe {
+            let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+            let n = &mut (*core::ptr::addr_of_mut!(INSTANCES))[ai].nodes[idx as usize];
+            n.data_addr = bytes.as_ptr() as usize;
+            n.size = bytes.len();
+        }
+        added += 1;
+    });
+
+    if added > 0 {
+        uart::puts("  [vfs] /lib populated with ");
+        crate::kernel::mm::print_num(added);
+        uart::puts(" archive file(s)\n");
     }
 }
 
