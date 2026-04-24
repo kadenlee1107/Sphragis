@@ -11,6 +11,61 @@ end of a session.
 
 ---
 
+## 2026-04-24 02:00 — Mac — past CharString wall, deep into V8 heap init 🚀
+
+Tonight's marathon. The CharString crash from the 01:00 session was
+bypassed (not fixed) by setting TZ=UTC in envp — that skips the
+ICU timezone-alias codepath that constructed the broken CharString.
+With that single env var, content_shell ran ALL the way through
+Chromium's pre-V8 init:
+
+1. ICU data fully loaded (U_INVALID_FORMAT gone — already fixed)
+2. Timezone init skipped via TZ=UTC
+3. V8 startup snapshot loaded from `/bin/v8_context_snapshot.bin`
+   (shipped in archive)
+4. Content shell resource bundle loaded from
+   `/bin/content_shell.pak` (+ 3 other `.pak` files)
+5. Mojo IPC setup via `socketpair()` — implemented a minimal
+   two-VFS-Socket stub
+6. Sandbox host init via `shutdown()` — returns 0 for
+   Socket-type VfsNodes so the CHECK passes
+7. Starts building V8 isolate
+
+Current wall: `FAR=0x800040000000ec20` data abort inside V8's
+heap setup. V8's pointer compression allocates its 4 GB heap
+"cage" at a high address (bit 42+). Our TCR_EL1.T0SZ=25 caps
+user VAs at 39 bits (512 GB), so V8's mmap picks an address
+outside what our page tables can translate.
+
+### Commits this session
+
+- **8516b534** — diagnostic: memory dump around x19 on crash
+  (turned CharString crash investigation into 5 min)
+- **d5e0e229** — past CharString + ICU TZ, content_shell into V8
+  init: TZ=UTC env var, V8 snapshots + .pak files plumbed,
+  socketpair + shutdown stubs
+
+### Next options
+
+A. **T0SZ=16** — expand to 48-bit VA. Big page-table refactor
+   (need level 0 / L0 entry with 4 levels instead of 3).
+B. **Mmap hint redirection** — when V8 asks for `mmap(0x..., 4 GB,
+   ANON|PRIVATE, ...)`, ignore the hint and place the allocation
+   inside our 39-bit window. V8 might handle that gracefully —
+   or it might hard-require a specific bit pattern and abort.
+C. **Rebuild V8 with pointer compression DISABLED** — global build
+   flag `v8_enable_pointer_compression=false`. 6-hour rebuild but
+   eliminates the whole class of issues.
+
+Tried (didn't help): `--js-flags=--no-pointer-compression`
+command-line flag. Apparently it's a BUILD-time decision, not a
+runtime toggle.
+
+Recommend option B first — it's minimal kernel work and might
+just work.
+
+---
+
 ## 2026-04-24 01:00 — Mac — ICU loaded, Chromium deep into post-init
 
 Marathon session. Rolled through FIVE distinct Chromium walls:
@@ -78,6 +133,14 @@ Chromium progression:
 - `icu_util.cc:246` "U_INVALID_FORMAT" — GONE (mmap copies bytes now)
 - `/proc/self/exe` EINVAL — GONE
 - `/etc/localtime` EINVAL — GONE
+
+**UPDATE:** In the next session (2026-04-24 02:00) we DID crack
+it — via TZ=UTC env var to skip the TZ-lookup codepath and
+shipping all of Chromium's data files (icudtl.dat,
+v8_context_snapshot.bin, snapshot_blob.bin, *.pak). Content_shell
+now reaches V8 heap init. See the next entry in this journal.
+
+Original analysis (kept for context):
 
 Current wall: non-canonical VA data abort at ELR=0x14fc22cc,
 FAR=0x707974001bcfee6d. addr2line says:
