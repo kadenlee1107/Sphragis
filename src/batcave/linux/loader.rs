@@ -865,6 +865,29 @@ pub fn load_archive_multi(
         apply_relocs_cross(&libs, lib_count, i)?;
     }
 
+    // Diagnostic: dump init_array entries per lib (first 3 each). These
+    // are function VAs glibc expects the dynamic linker to have run
+    // before __libc_start_main. After relocation they should hold
+    // cave-VA function addresses.
+    for i in 0..lib_count {
+        if libs[i].init_array_sz == 0 { continue; }
+        let ia_phys = (libs[i].init_array_va as i64 + libs[i].patch_offset) as u64;
+        let n = (libs[i].init_array_sz / 8) as usize;
+        uart::puts("[init_array] ");
+        for &b in libs[i].name() { uart::putc(b); }
+        uart::puts(": ");
+        crate::kernel::mm::print_num(n);
+        uart::puts(" entries @0x");
+        print_hex(ia_phys);
+        for j in 0..n.min(3) {
+            let entry = unsafe {
+                core::ptr::read_volatile((ia_phys + (j * 8) as u64) as *const u64)
+            };
+            uart::puts(" 0x"); print_hex(entry);
+        }
+        uart::puts("\n");
+    }
+
     // Flush i/d cache over the full reserved region.
     unsafe {
         let start = phys_base & !63;
