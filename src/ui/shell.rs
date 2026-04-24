@@ -2943,6 +2943,7 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     let mut headless = true;
     let mut no_sandbox = true;
     let mut disable_gpu = true;
+    let mut dump_dom = false;
     let mut window_size: &str = "1280x1024";
     let mut url: &str = "";
 
@@ -2953,6 +2954,7 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
             if *tok == "--headless" { headless = true; }
             else if *tok == "--no-sandbox" { no_sandbox = true; }
             else if *tok == "--disable-gpu" { disable_gpu = true; }
+            else if *tok == "--dump-dom" { dump_dom = true; }
             else if tok.starts_with("--window-size=") {
                 window_size = &tok["--window-size=".len()..];
             }
@@ -2975,7 +2977,9 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
         console::puts("         --headless            (default on)\n");
         console::puts("         --no-sandbox          (default on)\n");
         console::puts("         --disable-gpu         (default on)\n");
+        console::puts("         --dump-dom            (print parsed DOM to stdout)\n");
         console::puts("         --window-size=WxH     (default 1280x1024)\n");
+        console::puts("\n  built-in test URL: `chromium file:///bin/hello.html`\n");
         return;
     }
 
@@ -3014,12 +3018,13 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
         unsafe { core::str::from_utf8_unchecked(&size_arg[..size_len]) };
 
     // Build argv in a fixed-capacity array (no alloc in no_std).
-    let mut argv: [&str; 10] = [""; 10];
+    let mut argv: [&str; 12] = [""; 12];
     let mut n = 0;
     argv[n] = "content_shell"; n += 1;
     if headless    { argv[n] = "--headless";     n += 1; }
     if no_sandbox  { argv[n] = "--no-sandbox";   n += 1; }
     if disable_gpu { argv[n] = "--disable-gpu";  n += 1; }
+    if dump_dom    { argv[n] = "--dump-dom";     n += 1; }
     argv[n] = "--single-process";          n += 1;
     argv[n] = "--ozone-platform=headless"; n += 1;
     argv[n] = size_arg_str;                n += 1;

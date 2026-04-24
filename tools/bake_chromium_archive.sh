@@ -47,12 +47,51 @@ mkdir -p "$TARGET_DIR"
 WORK="$(mktemp -d -t batos-bake-archive-XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
+# Materialize a default hello.html next to content_shell if one isn't
+# already there — it's the target of `chromium file:///bin/hello.html`
+# from the shell and gives a local test page that doesn't need
+# network / TLS infrastructure.
+SHELL_DIR="$(dirname "$SHELL_BIN")"
+if [ ! -f "$SHELL_DIR/hello.html" ]; then
+    cat >"$SHELL_DIR/hello.html" <<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>Bat_OS First Render</title></head>
+<body>
+  <h1>Hello from Bat_OS</h1>
+  <p>If you see this, Blink parsed HTML on a bare-metal Rust kernel for Apple M4.</p>
+  <p id="mark">April 2026, first DOM render.</p>
+</body>
+</html>
+HTML
+    echo "[bake-archive] materialised default hello.html at $SHELL_DIR"
+fi
+
 python3 - "$WORK" "$SHELL_BIN" "$LIB_DIR" "$OUT" <<'PY'
 import os, struct, sys, zlib
 work, shell_bin, lib_dir, out = sys.argv[1:]
 
 # Build the list of files we're packing. Each entry is (name_in_archive, host_path).
 files = [("bin/content_shell", shell_bin)]
+
+# icudtl.dat ships alongside content_shell in Chromium's output dir;
+# Chromium's PathService looks for it at `DIR_ASSETS/icudtl.dat`,
+# which resolves to the executable directory in our setup. Pack it
+# under bin/ so `/bin/icudtl.dat` exists in the VFS.
+shell_dir = os.path.dirname(os.path.abspath(shell_bin))
+icu_candidate = os.path.join(shell_dir, "icudtl.dat")
+if os.path.isfile(icu_candidate):
+    files.append(("bin/icudtl.dat", icu_candidate))
+    print(f"[bake-archive] including icudtl.dat from {icu_candidate}")
+
+# Also pack any *.html and *.bat_os_* files next to the shell — these
+# are test pages / inherited configs for headless runs.
+for entry in sorted(os.listdir(shell_dir)):
+    if entry.endswith(".html") or entry.startswith("bat_os_"):
+        full = os.path.join(shell_dir, entry)
+        if os.path.isfile(full):
+            files.append((f"bin/{entry}", full))
+
 for entry in sorted(os.listdir(lib_dir)):
     full = os.path.join(lib_dir, entry)
     if os.path.isfile(full):

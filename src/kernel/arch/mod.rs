@@ -1175,6 +1175,20 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                 }
                 uart::puts("\n  LR(x30)=0x"); print_hex((*frame).x[30]);
                 uart::puts("\n");
+                // Dump 4 instructions before LR so we can tell what the
+                // function's call site looked like. LR points at the
+                // insn AFTER the BL/BLR, so [-4] is the actual jump.
+                if (*frame).x[30] >= 16 {
+                    uart::puts("  code around LR:");
+                    for off in [-16i64, -12, -8, -4, 0].iter() {
+                        let addr = ((*frame).x[30] as i64 + off) as usize;
+                        let word: u32 = core::ptr::read_volatile(
+                            addr as *const u32);
+                        uart::puts("\n    ["); print_hex(addr as u64);
+                        uart::puts("] 0x"); print_hex(word as u64);
+                    }
+                    uart::puts("\n");
+                }
             }
             loop { unsafe { core::arch::asm!("wfe") }; }
         }

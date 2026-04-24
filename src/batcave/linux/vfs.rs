@@ -870,32 +870,46 @@ pub fn populate_lib_from_archive() {
     use crate::kernel::mm::initrd;
     if !initrd::is_archive() { return; }
 
-    // /lib must exist to park files under. populate_rootfs() doesn't
-    // create it by default (busybox uses /bin), so create it now.
+    // /lib holds the DT_NEEDED libs ld-linux opens at runtime.
+    // /bin/{icudtl.dat, hello.html, ...} are data files Chromium
+    // needs — we also route those from archive entries starting
+    // with `bin/` (minus `bin/content_shell`, which is loaded by
+    // the ELF loader directly and doesn't need a VFS node).
     let lib_dir = match find_child(0, b"lib") {
         Some(i) => i,
         None => match create_node(0, b"lib", NodeType::Directory, 0o40755) {
             Ok(i) => i,
-            Err(_) => {
-                uart::puts("  [vfs] /lib create failed\n");
-                return;
-            }
+            Err(_) => { uart::puts("  [vfs] /lib create failed\n"); return; }
         },
     };
+    let bin_dir = find_child(0, b"bin");
 
-    let mut added: usize = 0;
+    let mut added_lib: usize = 0;
+    let mut added_bin: usize = 0;
     initrd::archive_for_each(|name, _sz| {
-        if !name.starts_with("lib/") { return; }
-        let leaf = &name.as_bytes()[4..]; // strip "lib/"
+        // Route archive entries to /lib or /bin based on prefix.
+        // SKIP `bin/content_shell` — the ELF loader owns it and a
+        // VFS node would mask the busybox marker (symbolic, not a
+        // real backing) that populate_rootfs already made.
+        let (parent_opt, leaf_bytes, prefix_len, is_lib) =
+            if name.starts_with("lib/") {
+                (Some(lib_dir), name.as_bytes(), 4, true)
+            } else if name == "bin/content_shell" {
+                return;
+            } else if name.starts_with("bin/") {
+                (bin_dir, name.as_bytes(), 4, false)
+            } else {
+                return;
+            };
+        let parent = match parent_opt { Some(p) => p, None => return };
+        let leaf = &leaf_bytes[prefix_len..];
         if leaf.is_empty() || leaf.len() > NAME_LEN { return; }
         let bytes = match initrd::archive_file(name) {
             Some(b) => b,
             None => return,
         };
-        // Dodge duplicate work if this VFS instance was already populated
-        // (init_for_cave can be called twice for the same cave slot).
-        if find_child(lib_dir, leaf).is_some() { return; }
-        let idx = match create_node(lib_dir, leaf, NodeType::File, 0o100444) {
+        if find_child(parent, leaf).is_some() { return; }
+        let idx = match create_node(parent, leaf, NodeType::File, 0o100444) {
             Ok(i) => i,
             Err(_) => return,
         };
@@ -905,12 +919,17 @@ pub fn populate_lib_from_archive() {
             n.data_addr = bytes.as_ptr() as usize;
             n.size = bytes.len();
         }
-        added += 1;
+        if is_lib { added_lib += 1; } else { added_bin += 1; }
     });
 
-    if added > 0 {
+    if added_lib > 0 {
         uart::puts("  [vfs] /lib populated with ");
-        crate::kernel::mm::print_num(added);
+        crate::kernel::mm::print_num(added_lib);
+        uart::puts(" archive file(s)\n");
+    }
+    if added_bin > 0 {
+        uart::puts("  [vfs] /bin populated with ");
+        crate::kernel::mm::print_num(added_bin);
         uart::puts(" archive file(s)\n");
     }
 }

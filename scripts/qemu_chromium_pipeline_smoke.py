@@ -168,7 +168,11 @@ def main():
         # Record what happens between sending the command and the next
         # prompt (the runner either succeeds, errors out with a message,
         # or crashes into the kernel's exception handler).
-        c.sendline(b"chromium https://example.com")
+        # CHROMIUM-PHASE-B: use a local file:// URL with --dump-dom so
+        # we don't need the network / TLS stack just to exercise the
+        # Chromium pipeline through init + HTML parse. hello.html is
+        # shipped in the archive alongside content_shell.
+        c.sendline(b"chromium --dump-dom file:///bin/hello.html")
         try:
             c.expect(PROMPT, timeout=20)
         except pexpect.TIMEOUT:
