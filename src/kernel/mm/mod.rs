@@ -29,6 +29,8 @@ pub fn init() {
     initrd::init();
 
     let kernel_end = core::ptr::addr_of!(__kernel_end) as usize;
+    let (ir_start, ir_end) = initrd::blob_phys_range();
+    let ir_end_aligned = (ir_end + 0xFFFF) & !0xFFFF;
     let blob_end_aligned = match initrd::info() {
         Some(bi) => {
             let blob_end = kernel_end + 16 + bi.size + 4 + 8;
@@ -41,7 +43,21 @@ pub fn init() {
     // mem_size from the stashed boot_args (set by kernel_main_apple).
     // On QEMU we use the old hardcoded value. Both paths place the
     // heap immediately past the end of the loaded kernel/blob.
-    let heap_base = (blob_end_aligned + 0xFFFF) & !0xFFFF;
+    //
+    // CHROMIUM-PHASE-B fix: take max(blob_end_aligned, ir_end_aligned).
+    // With QEMU `-initrd`, the blob actually lives at 0x48000000 (far
+    // past kernel_end), so using kernel_end + blob_size as heap_base
+    // placed the heap INSIDE the initrd region. alloc_frame reserved
+    // the initrd range but the HEAP allocator itself didn't know;
+    // kernel allocations silently stomped content_shell's bytes and
+    // ld-linux later crashed with NULL-deref on a half-relocated
+    // data pointer. Bumping heap_base past the real initrd end
+    // eliminates the overlap.
+    let heap_base = {
+        let a = (blob_end_aligned + 0xFFFF) & !0xFFFF;
+        let b = ir_end_aligned;
+        if a > b { a } else { b }
+    };
     let memory_end = if crate::platform::is_apple_silicon() {
         crate::drivers::apple::boot_args::with(|b| {
             (b.phys_base().saturating_add(b.mem_size())) as usize
@@ -62,7 +78,6 @@ pub fn init() {
     // Without this reservation, `alloc_frame` returns pages from the
     // initrd region and the multi-ELF loader's PT_LOAD copies smash
     // the baked-in content_shell + .so archive before we can read it.
-    let (ir_start, ir_end) = initrd::blob_phys_range();
     if ir_end > ir_start {
         frame::reserve_range(ir_start, ir_end);
         platform::serial_puts("  [mm] initrd reserved @ 0x");

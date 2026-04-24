@@ -895,6 +895,9 @@ pub fn populate_lib_from_archive() {
             if name.starts_with("lib/") {
                 (Some(lib_dir), name.as_bytes(), 4, true)
             } else if name == "bin/content_shell" {
+                // The ELF loader owns bin/content_shell. Putting a VFS
+                // node for it would mask the busybox placeholder that
+                // populate_rootfs already created under the same name.
                 return;
             } else if name.starts_with("bin/") {
                 (bin_dir, name.as_bytes(), 4, false)

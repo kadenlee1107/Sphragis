@@ -1673,6 +1673,56 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                 }
             }
 
+            // CHROMIUM-PHASE-B: if this is a file-backed mmap (fd >= 0
+            // and the fd points at a VFS File node), copy the file
+            // bytes into the freshly-allocated pages. Without this,
+            // `mmap(NULL, sz, PROT_READ, MAP_SHARED, fd, 0)` returns
+            // a zeroed region — Chromium's ICU loader reads zeros
+            // and reports `U_INVALID_FORMAT_ERROR`. Only the
+            // non-MAP_FIXED path needs this; MAP_FIXED has its own
+            // copy earlier. Skip for anonymous (fd < 0) mmaps which
+            // legitimately want zeros.
+            if fd_num >= 0 {
+                if let Some(entry) = fd::get(fd_num as u32) {
+                    let node = vfs::get_node(entry.node_idx);
+                    if node.node_type == vfs::NodeType::File
+                        && node.data_addr != 0
+                    {
+                        let available =
+                            node.size.saturating_sub(offset);
+                        let to_copy = available.min(len);
+                        uart::puts("[mmap] fd=");
+                        crate::kernel::mm::print_num(fd_num as usize);
+                        uart::puts(" off=0x");
+                        {
+                            let hex = b"0123456789abcdef";
+                            for sh in (0..16).rev() {
+                                uart::putc(hex[((offset >> (sh * 4)) & 0xF) as usize]);
+                            }
+                        }
+                        uart::puts(" copying ");
+                        crate::kernel::mm::print_num(to_copy);
+                        uart::puts(" bytes archive→frame\n");
+                        unsafe {
+                            let src = (node.data_addr + offset) as *const u8;
+                            let dst = base as *mut u8;
+                            core::ptr::copy_nonoverlapping(src, dst, to_copy);
+                            // I-cache maintenance for code-loaded mmaps.
+                            let start = base & !63;
+                            let end = base + to_copy;
+                            let mut line = start;
+                            while line < end {
+                                core::arch::asm!("dc cvau, {a}", a = in(reg) line);
+                                core::arch::asm!("ic ivau, {a}", a = in(reg) line);
+                                line += 64;
+                            }
+                            core::arch::asm!("dsb ish");
+                            core::arch::asm!("isb");
+                        }
+                    }
+                }
+            }
+
             // Compute the user-VA equivalent. Bail + refund quota if the
             // allocation landed outside the cave's user window.
             if phys_base == 0 || base < phys_base {
