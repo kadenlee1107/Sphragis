@@ -11,6 +11,47 @@ end of a session.
 
 ---
 
+## 2026-04-23 18:30 — Mac — built a tiny repro, isolated bug to glibc-init path
+
+Built `tools/build_hello_dyn.sh` — a 67 KB dynamic-linked hello
+that uses the same glibc / ld.so / bake path as content_shell.
+Purpose: if our pipeline's bug is in the loader/TLS/init-setup
+(not Chromium-specific), a small repro will hit the same failure
+mode at 1/100,000th the complexity.
+
+Ran it through the existing smoke test (swapping content_shell for
+hello_dyn in the archive). Result: **DIFFERENT crash, SAME class
+of bug.**
+
+```
+main virt_entry 0x10000640     (hello_dyn's _start)
+!!! UNHANDLED SYNC EXCEPTION
+  ELR: 0x10427824  (inside libc.so.6 text, offset 0x27824)
+  FAR: 0x000000a0  (NULL + 0xa0)
+  insn: 0xf94052a0 = ldr x0, [x21, #0xa0]
+```
+
+x21 is zero (uninitialized TLS/GOT register), glibc loads via
+`[x21+0xa0]` and NULL-derefs. This is glibc expecting runtime
+state the dynamic linker should have set up before calling
+`__libc_start_main`.
+
+Conclusion: the `EC=0 at 0x11a4ff44` crash we were chasing in
+content_shell has a COUSIN with the tiny test — both stem from our
+loader not fully mimicking what ld-linux-aarch64.so.1 normally does
+before handing control to the main exe.
+
+Real fix path (unchanged from plan): **DT_INIT_ARRAY execution +
+proper tcbhead_t/TLS setup.** The tiny repro is useful going
+forward because we can iterate in seconds, not minutes, and the
+crash site is in glibc source we can read.
+
+`tools/build_hello_dyn.sh` is kept in the tree as a quick-cycle
+test. Output goes to `ports/chromium_port/out/hello_test/hello_dyn`
+(gitignored like other baked artifacts).
+
+---
+
 ## 2026-04-23 18:00 — Mac — EC=0 deep dive, many dead ends, open for fresh eyes
 
 Spent another couple hours on the `EC=0 ELR=0x11a4ff44` crash from
