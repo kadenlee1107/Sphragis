@@ -80,17 +80,38 @@ Chromium progression:
 - `/etc/localtime` EINVAL — GONE
 
 Current wall: non-canonical VA data abort at ELR=0x14fc22cc,
-FAR=0x707974001bcfee6d. The fault instruction is `strb wzr,
-[x9, w8, sxtw]` — a memset-like byte-clear loop. x9 has upper
-bytes "pyt\0" bleeding in from somewhere (not stack — stack is
-zeroed now; not TBI-style tagging — TBI0 is on).
+FAR=0x707974001bcfee6d. addr2line says:
 
-Suspect: content_shell read 8 bytes from a spot in memory that
-straddles a pointer field and a string. Bytes 0-3 were a valid
-user VA (0x1bcfee5d, on the stack), bytes 4-7 were "\0tyP" —
-could be the tail of a "...type=..." or similar string. Needs a
-memory dump around the faulting ELR's x19-indexed struct to
-identify. Good target for next session.
+```
+icu_78::CharString::append(char const*, int, UErrorCode&)
+charstr.cpp
+```
+
+The fault is in ICU's `CharString::append`, specifically the
+`buffer[len+=sLength] = 0` null-terminator write after a memcpy.
+The fault instruction: `strb wzr, [x9, w8, sxtw]` — where
+x9 is `buffer.getAlias()` (the CharString's internal char* ptr)
+and w8 is `len + sLength` (the position of the null terminator).
+
+x9 has upper 4 bytes `"pyt\0"` bleed in from somewhere — the
+classic "read a pointer from memory that straddles a string
+boundary" pattern. Lower 4 bytes match x10 = user stack VA
+0x1bcfee5d.
+
+**Not** stack garbage (stack is zeroed pre-eret now). **Not**
+TBI-style tagging (TBI0 is on; upper bytes exceed what TBI
+strips anyway — bits 55:48 non-zero, still non-canonical with
+our T0SZ=25 / 39-bit VA config).
+
+**Hypothesis:** The CharString's stack-allocated buffer was
+somehow displaced — either
+  (a) ensureCapacity's resize returned a wild pointer, or
+  (b) something scribbled over the CharString's buffer.ptr
+      field in the owning struct.
+Worth adding: post-ICU-mmap instrumentation printing the bytes
+at base+buffer.ptr_offset to distinguish.
+
+Good target for next session.
 
 ### Progress arc
 ```
