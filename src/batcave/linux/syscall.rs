@@ -3361,30 +3361,60 @@ fn sys_readlinkat(args: [u64; 6]) -> i64 {
     let mut path_buf = [0u8; 128];
     let path_len = read_user_str(path_ptr, &mut path_buf);
 
+    // Trace — Chromium readlinks a bunch of /proc/self/* paths
+    // during startup; seeing which ones and what we return helps
+    // chase down post-ICU content_shell crashes.
+    uart::puts("[readlinkat] '");
+    for &b in &path_buf[..path_len] {
+        if b.is_ascii_graphic() || b == b'/' || b == b'.' { uart::putc(b); }
+        else { uart::putc(b'?'); }
+    }
+    uart::puts("'\n");
+
     // FLv2-NEW-011: extend `..` guard to readlinkat.
     if has_dotdot(&path_buf[..path_len]) { return EACCES; }
 
-    // Handle /proc/self/exe — return path to our binary
-    if path_len >= 14 {
-        let proc_self_exe = b"/proc/self/exe";
-        let mut is_match = true;
-        for i in 0..14 {
-            if path_buf[i] != proc_self_exe[i] {
-                is_match = false;
-                break;
+    // Handle /proc/self/exe — return path to the active EL0 binary.
+    // Chromium reads this during startup to compute DIR_EXE / DIR_ASSETS
+    // via realpath; without a sensible answer, various PathService
+    // lookups fall back to EINVAL and Chromium derefs garbage later.
+    if path_len >= 14 && &path_buf[..14] == b"/proc/self/exe" {
+        let exe_path = b"/bin/content_shell";
+        let len = exe_path.len().min(bufsiz);
+        for i in 0..len {
+            unsafe {
+                core::arch::asm!("strb {v:w}, [{a}]",
+                    a = in(reg) buf + i, v = in(reg) exe_path[i] as u32);
             }
         }
-        if is_match {
-            let exe_path = b"/bin/init";
-            let len = exe_path.len().min(bufsiz);
-            for i in 0..len {
-                unsafe {
-                    core::arch::asm!("strb {v:w}, [{a}]",
-                        a = in(reg) buf + i, v = in(reg) exe_path[i] as u32);
-                }
+        return len as i64;
+    }
+    // /proc/self/cwd — currently always "/"
+    if path_len >= 14 && &path_buf[..14] == b"/proc/self/cwd" {
+        let cwd = b"/";
+        let len = cwd.len().min(bufsiz);
+        for i in 0..len {
+            unsafe {
+                core::arch::asm!("strb {v:w}, [{a}]",
+                    a = in(reg) buf + i, v = in(reg) cwd[i] as u32);
             }
-            return len as i64;
         }
+        return len as i64;
+    }
+    // /etc/localtime — Chromium's ICU TZ detector readlinks this.
+    // On a typical Linux system it's a symlink into /usr/share/zoneinfo.
+    // We don't have a real timezone database; return UTC so ICU picks
+    // that up and moves on.
+    if path_len >= 14 && &path_buf[..14] == b"/etc/localtime" {
+        let tz_link = b"/usr/share/zoneinfo/UTC";
+        let len = tz_link.len().min(bufsiz);
+        for i in 0..len {
+            unsafe {
+                core::arch::asm!("strb {v:w}, [{a}]",
+                    a = in(reg) buf + i, v = in(reg) tz_link[i] as u32);
+            }
+        }
+        return len as i64;
     }
 
     if vfs::is_ready() {
