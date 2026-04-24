@@ -11,6 +11,120 @@ end of a session.
 
 ---
 
+## 2026-04-24 01:00 — Mac — ICU loaded, Chromium deep into post-init
+
+Marathon session. Rolled through FIVE distinct Chromium walls:
+
+### 1. Heap vs initrd overlap — STALE MEMORY
+`kernel/mm/mod.rs` computed heap_base as `kernel_end + 16 +
+blob_size`, assuming append-to-kernel layout. With QEMU `-initrd`
+the blob actually lives at 0x48000000 (far past kernel_end), so
+heap_base landed INSIDE the real initrd region. Kernel slab
+allocations silently stomped content_shell's baked-in bytes; the
+corruption showed up as a deferred NULL-deref in ld-linux mid-
+reloc-pass because the bytes it was processing came from archive
+slices that had been stomped.
+
+Fix: `heap_base = max(append-style-end, real-initrd-end)`.
+
+### 2. fd-backed mmap without MAP_FIXED — zero pages
+Chromium's ICU loader calls `mmap(NULL, sz, PROT_READ, MAP_SHARED,
+fd, 0)` — NO MAP_FIXED. Our mmap path only copied file bytes for
+MAP_FIXED (the ld-linux text/data load case). The ICU mmap
+returned zeroed anon pages; ICU read zeros, `U_INVALID_FORMAT`.
+
+Fix: in the non-FIXED anonymous-alloc branch, check for fd >= 0 +
+File node, copy `min(node.size - offset, len)` bytes after zeroing,
+then dc cvau + ic ivau for I-cache coherence.
+
+### 3. icudtl.dat + hello.html bundled + /bin VFS serves them
+- `tools/bake_chromium_archive.sh` picks up icudtl.dat from the
+  Chromium output dir and any *.html / bat_os_* data files next
+  to the shell binary. Materializes a default hello.html if
+  missing so the archive always ships a test page.
+- `vfs::populate_lib_from_archive` now also walks `bin/` entries
+  and creates VFS nodes under /bin (skipping `bin/content_shell`
+  since the ELF loader owns it).
+- Shell's argv[0] is now the full `/bin/content_shell` path so
+  PathService can resolve DIR_ASSETS to /bin.
+
+### 4. /proc/self/exe + /etc/localtime readlinkat
+Chromium's startup readlinks four things: `/proc/self/exe`,
+`/proc/self/cwd`, `/etc/localtime`, and each path component of
+whatever those return. Previously /proc/self/exe returned
+`/bin/init` (wrong) and /etc/localtime returned EINVAL
+(Chromium's ICU TZ path chased a bad pointer). Now:
+- /proc/self/exe → `/bin/content_shell` (matches argv[0])
+- /proc/self/cwd → `/` (placeholder)
+- /etc/localtime → `/usr/share/zoneinfo/UTC` (UTC fallback)
+- Walks of `/usr`, `/usr/share`, etc. return EINVAL (correct —
+  they're directories, not symlinks)
+
+### 5. TBI0 in TCR_EL1
+Linux ARM64 userspace expects the kernel to enable top-byte-ignore
+so user code can carry tags in pointer bits 63:56. Set
+`TCR_EL1.TBI0 = 1`. Correct-by-default kernel config; didn't
+unblock the current wall specifically but is needed for MTE /
+HWASAN / various tagging schemes Chromium uses.
+
+### 6. Zero stack + TLS pages at cave init
+alloc_contig() returns raw frames with whatever a previous tenant
+left. Now volatile-zero stack_phys..tls_phys+TLS_PAGES so content
+_shell's startup reads of its own uninit stack see zeros.
+
+### End state
+Chromium progression:
+- `icu_util.cc:232` "Invalid file descriptor" — GONE (icudtl.dat plumbed)
+- `icu_util.cc:246` "U_INVALID_FORMAT" — GONE (mmap copies bytes now)
+- `/proc/self/exe` EINVAL — GONE
+- `/etc/localtime` EINVAL — GONE
+
+Current wall: non-canonical VA data abort at ELR=0x14fc22cc,
+FAR=0x707974001bcfee6d. The fault instruction is `strb wzr,
+[x9, w8, sxtw]` — a memset-like byte-clear loop. x9 has upper
+bytes "pyt\0" bleeding in from somewhere (not stack — stack is
+zeroed now; not TBI-style tagging — TBI0 is on).
+
+Suspect: content_shell read 8 bytes from a spot in memory that
+straddles a pointer field and a string. Bytes 0-3 were a valid
+user VA (0x1bcfee5d, on the stack), bytes 4-7 were "\0tyP" —
+could be the tail of a "...type=..." or similar string. Needs a
+memory dump around the faulting ELR's x19-indexed struct to
+identify. Good target for next session.
+
+### Progress arc
+```
+Previous session end:  Chromium reaches icu_util.cc:232 (ICU fd error)
+                              │
+                              ▼
+          heap/initrd fix  →  Content_shell loads 539k relocs cleanly
+                              │
+                              ▼
+          fd-backed mmap   →  ICU data reads real bytes, passes format check
+                              │
+                              ▼
+          /proc/self/exe   →  PathService resolves DIR_EXE
+                              │
+                              ▼
+          /etc/localtime   →  ICU TZ detection moves on (UTC)
+                              │
+                              ▼
+                     (post-ICU Chromium startup, deep in base/)
+                              │
+                              ▼
+                     Non-canonical VA deref (next session)
+```
+
+Commits this session (b30288aa..d46466d7):
+- b30288aa ICU data + hello.html + --dump-dom plumbing
+- b602fcea argv[0] = /bin/content_shell
+- 4c69f972 heap/initrd overlap + fd-backed anon mmap
+- b8a9ad35 /proc/self/exe + /etc/localtime readlinkat
+- 59fa6fc8 TBI0 in TCR_EL1
+- d46466d7 zero stack + TLS at cave init
+
+---
+
 ## 2026-04-23 23:00 — Mac — content_shell prints Chromium's own logging 🎉🎉🎉
 
 **Milestone.** content_shell now reaches CHROMIUM'S OWN CODE. The
