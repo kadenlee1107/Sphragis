@@ -325,6 +325,14 @@ pub struct LoadedLib {
     /// DT_INIT_ARRAY vaddr + size (for later running).
     pub init_array_va: u64,
     pub init_array_sz: u64,
+    /// PT_TLS segment: vaddr, file/mem sizes, alignment. Zero if none.
+    pub tls_vaddr: u64,
+    pub tls_filesz: usize,
+    pub tls_memsz: usize,
+    pub tls_align: usize,
+    /// Offset from tpidr_el0 where THIS lib's TLS block starts. Set
+    /// AFTER all libs are loaded; used to compute TLS_TPREL64 values.
+    pub tls_tp_offset: usize,
 }
 
 impl LoadedLib {
@@ -338,6 +346,8 @@ impl LoadedLib {
             symtab_file: 0, strtab_file: 0, sym_count: 0,
             rela_off: 0, rela_sz: 0, jmprel_off: 0, pltrel_sz: 0,
             init_array_va: 0, init_array_sz: 0,
+            tls_vaddr: 0, tls_filesz: 0, tls_memsz: 0, tls_align: 0,
+            tls_tp_offset: 0,
         }
     }
     pub fn name(&self) -> &[u8] { &self.name_bytes[..self.name_len] }
@@ -933,14 +943,27 @@ pub fn load_archive_multi(
     //   0x00..0x20: code (8 instructions)
     //   0x20..0x28: main_entry VA
     //   0x28..:     init function VAs, terminated by 0
-    let tramp_entry_va = build_init_trampoline(
-        tramp_phys,
-        tramp_va as u64,
-        &libs,
-        lib_count,
-        libs[0].info.virt_entry,  // real main entry
-    )?;
-    LOADED_TRAMPOLINE_VA.store(tramp_entry_va as usize, Ordering::Relaxed);
+    // BAT_OS_DISABLE_INIT_TRAMPOLINE=1 at build time disables the
+    // init_array trampoline. Useful while we iterate on TLS / rtld
+    // setup — without the trampoline content_shell gets to V8 heap
+    // setup before wedging; with it we crash earlier in libc init
+    // because its constructors dereference uninitialized _rtld_global
+    // state.
+    const DISABLE_TRAMPOLINE: bool =
+        option_env!("BAT_OS_DISABLE_INIT_TRAMPOLINE").is_some();
+    if !DISABLE_TRAMPOLINE {
+        let tramp_entry_va = build_init_trampoline(
+            tramp_phys,
+            tramp_va as u64,
+            &libs,
+            lib_count,
+            libs[0].info.virt_entry,  // real main entry
+        )?;
+        LOADED_TRAMPOLINE_VA.store(tramp_entry_va as usize, Ordering::Relaxed);
+    } else {
+        uart::puts("[loader/multi] init-trampoline DISABLED via env\n");
+        let _ = build_init_trampoline; // silence dead_code
+    }
 
     // Additional flush for the trampoline page so the icache sees it
     // once the CPU eret's there.
@@ -956,30 +979,90 @@ pub fn load_archive_multi(
         core::arch::asm!("isb");
     }
 
-    // Initialize the TLS block. glibc's tcbhead_t on aarch64 lays out
-    // the TCB at `tp-16` with self / private / DTV-related fields,
-    // then TLS data follows `tp`. With a plain zero block, glibc's
-    // init functions hit paths like `ldr x21, [x_tp + N]; ldr x0,
-    // [x21, #0xa0]` where the first load reads 0 and the second
-    // NULL-derefs (observed FAR=0xa0 at libc offset 0x27824).
+    // Initialize the TLS block per the aarch64 Variant I ABI.
     //
-    // Short-term hack: fill every 8-byte slot with the TLS block's
-    // user VA. Any such read now returns a valid (though circular)
-    // in-cave pointer — every chained deref resolves to somewhere
-    // inside the TLS block, which is zero, which then fails as a
-    // NULL deref on whatever field glibc actually expected. The
-    // failure pattern will move forward per init step until we
-    // populate real fields. TODO: walk PT_TLS per lib and copy
-    // template data at the right offsets.
+    // Layout (16 KB total, LOADED_TLS_PAGES pages):
+    //   [tp - 0]..[tp + 16):  tcbhead_t (dtv ptr, self, pad, pad)
+    //   [tp + 16)..:          per-module TLS data, packed in the order
+    //                         libs[0], libs[1], ... with each module's
+    //                         memsz rounded up to p_align. The file
+    //                         portion is copied verbatim from each
+    //                         lib's PT_TLS; bss portion is zero.
+    //
+    // `lib.tls_tp_offset` is set to the offset-from-tp where that
+    // module's data starts — this is the value TLS_TPREL64 relocs add
+    // to `sym.st_value` when computing the final offset in the GOT.
+    //
+    // TCB_SIZE on aarch64 (for glibc) is 16 bytes. First module's data
+    // starts at tp + 16.
+    const TCB_SIZE: usize = 16;
     let tls_user_va = user_va_base_from_libs(&libs, 0) + tls_va_offset as u64;
+    let tls_total_bytes = LOADED_TLS_PAGES * PAGE_SIZE;
+
+    // First, zero the whole block. tcbhead_t fields stay zero except
+    // `self` (offset 8) which we fill below with tls_user_va so any
+    // code that reads `[tp + 8]` (glibc does for robust-list / etc.)
+    // gets a non-null pointer back.
     unsafe {
-        let tls_end = tls_phys + LOADED_TLS_PAGES * PAGE_SIZE;
         let mut p = tls_phys;
-        while p < tls_end {
-            core::arch::asm!("str {v}, [{a}]",
-                a = in(reg) p, v = in(reg) tls_user_va);
+        while p < tls_phys + tls_total_bytes {
+            core::arch::asm!("str xzr, [{a}]", a = in(reg) p);
             p += 8;
         }
+        // `self` pointer at tp + 8 (points to the tcbhead_t itself).
+        core::ptr::write_volatile((tls_phys + 8) as *mut u64, tls_user_va);
+    }
+
+    // Assign each lib a TLS offset and copy its template in.
+    let mut cur_tp_offset: usize = TCB_SIZE;
+    for i in 0..lib_count {
+        if libs[i].tls_memsz == 0 { continue; }
+        let align = libs[i].tls_align.max(1);
+        cur_tp_offset = (cur_tp_offset + align - 1) & !(align - 1);
+        libs[i].tls_tp_offset = cur_tp_offset;
+        // Copy the template from the lib's data (file-offset derived
+        // from tls_vaddr via vaddr_to_file_off).
+        let data_ref = libs[i].data();
+        let phoff_i = u64_at(data_ref, 32) as usize;
+        let phnum_i = u16_at(data_ref, 56) as usize;
+        let phentsz_i = u16_at(data_ref, 54) as usize;
+        let src_off = vaddr_to_file_off(
+            data_ref, phoff_i, phnum_i, phentsz_i,
+            libs[i].tls_vaddr as usize,
+        );
+        let dst_phys = tls_phys + cur_tp_offset;
+        if src_off != usize::MAX
+            && src_off + libs[i].tls_filesz <= data_ref.len()
+            && cur_tp_offset + libs[i].tls_memsz <= tls_total_bytes
+        {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    data_ref.as_ptr().add(src_off),
+                    dst_phys as *mut u8,
+                    libs[i].tls_filesz,
+                );
+                // Zero the BSS portion (memsz - filesz).
+                if libs[i].tls_memsz > libs[i].tls_filesz {
+                    core::ptr::write_bytes(
+                        (dst_phys + libs[i].tls_filesz) as *mut u8,
+                        0,
+                        libs[i].tls_memsz - libs[i].tls_filesz,
+                    );
+                }
+            }
+        }
+        uart::puts("[tls] ");
+        for &b in libs[i].name() { uart::putc(b); }
+        uart::puts(" tp+0x"); print_hex(cur_tp_offset as u64);
+        uart::puts(" filesz="); crate::kernel::mm::print_num(libs[i].tls_filesz);
+        uart::puts(" memsz="); crate::kernel::mm::print_num(libs[i].tls_memsz);
+        uart::puts("\n");
+        cur_tp_offset += libs[i].tls_memsz;
+    }
+    if cur_tp_offset > tls_total_bytes {
+        uart::puts("[tls] WARN: overflow — combined TLS > ");
+        crate::kernel::mm::print_num(tls_total_bytes);
+        uart::puts("\n");
     }
 
     // Publish loader state for `execute_with_args`. virt_entry + phys_base
@@ -1052,6 +1135,24 @@ fn stage_copy_and_parse(lib: &mut LoadedLib) -> Result<(), &'static str> {
                 );
             }
         }
+    }
+
+    // Parse PT_TLS (p_type == 7). Captures the TLS template's
+    // location + size so the loader can lay out a combined TLS block
+    // across all libs and copy template data in at the right offset.
+    for i in 0..phnum {
+        let ph = phoff + i * phentsz;
+        if ph + phentsz > data.len() { break; }
+        if u32_at(data, ph) != 7 { continue; }
+        let p_vaddr = u64_at(data, ph + 16);
+        let p_filesz = u64_at(data, ph + 32) as usize;
+        let p_memsz  = u64_at(data, ph + 40) as usize;
+        let p_align  = u64_at(data, ph + 48) as usize;
+        lib.tls_vaddr  = p_vaddr;
+        lib.tls_filesz = p_filesz;
+        lib.tls_memsz  = p_memsz;
+        lib.tls_align  = p_align.max(1);
+        break; // at most one PT_TLS per ELF
     }
 
     // Parse PT_DYNAMIC.
@@ -1497,6 +1598,35 @@ fn apply_relocs_cross(
                         core::arch::asm!("str {v}, [{a}]",
                             a = in(reg) patch_addr, v = in(reg) value);
                     }
+                    applied_irel += 1;
+                }
+                0x406 => {
+                    // R_AARCH64_TLS_TPREL64: *R = sym.st_value + addend +
+                    // lib_tls_offset. glibc's initial-exec-model code
+                    // reads this GOT slot and adds `tpidr_el0` to get
+                    // the absolute address of the TLS variable. Without
+                    // this, every TLS access through GLOB_DAT produces
+                    // zero and glibc NULL-derefs (libc.so.6+0x27824
+                    // observed).
+                    if symtab_file == usize::MAX { continue; }
+                    let sym_off = match symtab_file
+                        .checked_add(r_sym.checked_mul(24).unwrap_or(usize::MAX))
+                    {
+                        Some(v) if v + 24 <= data.len() => v,
+                        _ => continue,
+                    };
+                    let sym_value = u64_at(data, sym_off + 8);
+                    let tls_off = lib.tls_tp_offset as u64;
+                    let value = sym_value
+                        .wrapping_add(r_addend as u64)
+                        .wrapping_add(tls_off);
+                    unsafe {
+                        core::arch::asm!("str {v}, [{a}]",
+                            a = in(reg) patch_addr, v = in(reg) value);
+                    }
+                    // Counted in applied_irel to avoid another counter
+                    // for this rare type; logs will show IREL counts
+                    // slightly inflated when TLS relocs are present.
                     applied_irel += 1;
                 }
                 _ => {}

@@ -17,6 +17,7 @@ fn main() {
     // cargo would cache the previous `ALLOW_UNSIGNED_INITRD` boolean across
     // env flips and the operator would see a stale FATAL refusal.
     println!("cargo:rerun-if-env-changed=BAT_OS_ALLOW_UNSIGNED_INITRD");
+    println!("cargo:rerun-if-env-changed=BAT_OS_DISABLE_INIT_TRAMPOLINE");
 
     // Blink library available as standalone test binary.
     // Deep kernel integration will be done via shared memory IPC.
