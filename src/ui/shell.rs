@@ -3018,9 +3018,15 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
         unsafe { core::str::from_utf8_unchecked(&size_arg[..size_len]) };
 
     // Build argv in a fixed-capacity array (no alloc in no_std).
+    // argv[0] is the full VFS path to the executable — lets Chromium's
+    // PathService::Get(DIR_EXE, ...) resolve to /bin when /proc/self/exe
+    // isn't available. (Doesn't currently unlock ICU — that path
+    // specifically wants a pre-set fd via base::i18n::SetIcuFile.
+    // But passing a real path costs nothing and helps other PathService
+    // lookups that cascade off argv[0].)
     let mut argv: [&str; 12] = [""; 12];
     let mut n = 0;
-    argv[n] = "content_shell"; n += 1;
+    argv[n] = "/bin/content_shell"; n += 1;
     if headless    { argv[n] = "--headless";     n += 1; }
     if no_sandbox  { argv[n] = "--no-sandbox";   n += 1; }
     if disable_gpu { argv[n] = "--disable-gpu";  n += 1; }
