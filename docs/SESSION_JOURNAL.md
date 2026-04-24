@@ -11,6 +11,100 @@ end of a session.
 
 ---
 
+## 2026-04-24 03:30 — Mac — content_shell stably running Chromium event loop 🎉
+
+Broke through three more walls tonight. Content_shell no longer
+crashes AT ALL — it reaches Chromium's main event loop (ppoll),
+spins waiting for Mojo IPC messages. Every early-init wall is
+cleared.
+
+### 1. V8's high-address reservations → redirected to 39-bit window
+
+V8 asks for THREE large reservations during startup:
+  - 32 GB at 0x28_0000_0000  (pointer-compression cage)  ✓ in range
+  - 16 GB at 0x4a_1181_0000  (trusted sandbox)           ✗ bit 46+
+  -  8 EB at 0x4000_0000_0000 (hardware sandbox)         ✗ bit 46+
+
+Our TCR_EL1.T0SZ=25 only sees 39-bit VAs (512 GB). The two
+high-range hints faulted on first access (FAR=0x80004000_0000ec20
+style non-canonical). Fix: `sys_mmap`'s huge-reservation branch
+checks if `hint + len > 2^39` and if so bump-allocates from
+`REDIRECT_CURSOR` starting at 0x30_0000_0000 inside the window.
+
+V8's sandbox code just needs SOME base at 4 GB alignment — it
+didn't care about the specific value.
+
+### 2. Thread table static-init + MAX_THREADS bump
+
+`pthread_create` EAGAIN'd on the FIRST thread. Two causes:
+- `MAX_THREADS=64` → bumped to 256 (Chromium spawns 30+ threads
+  even in --single-process).
+- Same const-init flake we saw in CAVE_QUOTAS: the
+  `[Thread::empty(); MAX_THREADS]` static was leaving slots with
+  non-Free state. `init_main_thread()` now explicitly zeroes every
+  slot before installing slot 0.
+- `DEFAULT_THREADS` quota bumped 16 → 256 to match.
+
+### 3. `prlimit64` sane per-resource defaults
+
+Was returning `0x7FFFFFFFFFFFFFFF` for every resource. glibc's
+pthread_create computed `stacksize = rlim_cur * 2`, overflowed, and
+mmap'd 8 EB stacks → ENOMEM → EAGAIN back to pthread. Now:
+
+| Resource      | rlim_cur | rlim_max |
+|---------------|----------|----------|
+| RLIMIT_STACK  | 8 MB     | 8 MB     |
+| RLIMIT_AS     | 4 GB     | 4 GB     |
+| RLIMIT_NOFILE | 1024     | 4096     |
+| RLIMIT_CORE   | 0        | 0        |
+
+### 4. ppoll short-circuit on stub-socket fds
+
+Chromium's main thread ppolls on {socketpair_fd, eventfd} waiting
+for Mojo. Our socketpair is a stub (two VFS Socket nodes with no
+data pipe). Detect "no stdin + no real I/O socket" and return 0
+(spurious wake) immediately instead of spinning 50M iterations.
+Content_shell loops back into ppoll — busy CPU but forward
+progress. (Tried `POLLIN` to let it process EAGAIN'd reads;
+Chromium CHECK'd-and-abort'd — IPC invariant in read path.)
+
+### End state
+
+Content_shell runs the full 90 s smoke-test timeout without
+crashing. ~750 syscalls into Chromium startup, stable in the
+main event loop. Infrastructure clean:
+- ICU data loads correctly
+- V8 heap allocated
+- pthread_create succeeds
+- Mojo IPC init completes
+- Sandbox host CHECKs pass
+- resource bundles + V8 snapshots mapped
+
+### Commits this session
+
+- 4c69f972  heap/initrd overlap + fd-backed anon mmap (ICU loads)
+- b8a9ad35  /proc/self/exe + /etc/localtime readlinkat
+- 59fa6fc8  TBI0 in TCR_EL1
+- d46466d7  zero stack + TLS at cave init
+- 8516b534  memory dump around x19 on crash (diagnostic)
+- d5e0e229  past CharString + ICU TZ, content_shell into V8 init
+- 5f02ab70  V8 redirect + thread fixes — content_shell NOW RUNS
+- ff752522  ppoll short-circuit on stub-socket fds
+
+### Next session's big need
+
+Real pipe semantics on socketpair(). A small circular buffer per
+pair, read() returns buffered bytes, poll() reports non-empty.
+That unblocks Mojo wake-ups and, in turn, Chromium's task queue
+actually draining → page parsing → DOM dump.
+
+Progressively fewer kernel issues; increasingly Chromium-internal
+stuff. A good wall to hit.
+
+Regressions: none. hello_dyn still prints + exits 42 ✓
+
+---
+
 ## 2026-04-24 02:00 — Mac — past CharString wall, deep into V8 heap init 🚀
 
 Tonight's marathon. The CharString crash from the 01:00 session was
