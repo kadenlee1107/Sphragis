@@ -967,6 +967,24 @@ pub fn load_archive_multi(
     let stack_phys = phys_base + stack_va_offset;
     let tls_phys   = phys_base + tls_va_offset;
     let tramp_phys = phys_base + tramp_va_offset;
+
+    // CHROMIUM-PHASE-B: zero the stack + TLS region before handing
+    // control to EL0. Without this, alloc_contig() may hand back
+    // pages that still contain bytes from a previous tenant. Content
+    // shell's startup code reads its own uninitialised stack in a
+    // few places (glibc _start reserves a scratch area; ICU's TZ
+    // path loads 8 bytes at a time via strlen magic); stale pointers
+    // there caused an immediate non-canonical-VA data abort with
+    // FAR=0x70797400... (ASCII "pyt\0" bleeding into a pointer).
+    unsafe {
+        let zero_start = stack_phys;
+        let zero_end = tls_phys + LOADED_TLS_PAGES * PAGE_SIZE;
+        let mut p = zero_start;
+        while p < zero_end {
+            core::ptr::write_volatile(p as *mut u64, 0);
+            p += 8;
+        }
+    }
     let tramp_va   = cave_virt_base as usize + tramp_va_offset;
 
     // Build the init_array trampoline. Emits a tiny aarch64 stub that
