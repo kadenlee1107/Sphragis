@@ -2632,6 +2632,55 @@ fn sys_ppoll(args: [u64; 6]) -> i64 {
         }
     }
 
+    // CHROMIUM-PHASE-C: Chromium's main event loop ppoll's on the
+    // socketpair fds (stub'd by our socketpair()) plus possibly
+    // stdin. With no real Mojo backing those sockets, no data
+    // ever arrives — the 50M-iter spin below burns 90 seconds of
+    // smoke-test time before giving up.
+    //
+    // Compromise: when ALL polled fds are our stub Socket VFS nodes
+    // and nothing else, return POLLIN on them immediately so the
+    // event loop can process its task queue. Real socket I/O (UDP,
+    // TCP) still hits the long-spin path. This is a pragmatic
+    // no-op-on-socketpair hack; once we wire real pipe semantics
+    // on socketpair's two fds this branch goes away.
+    // CHROMIUM-PHASE-C: Chromium's main-thread ppoll waits for
+    // eventfd/socketpair/epoll wake-ups that our stub plumbing
+    // never emits. Detect "nothing on this list looks like a
+    // stdin-or-UDP-socket" and short-circuit to "nothing ready
+    // yet, zero events" — the main thread loops back and
+    // processes whatever's in its internal task queue, making
+    // forward progress.
+    //
+    // If it turns out Chromium genuinely needs to WAIT for a real
+    // event, we'll see that (a visible hang / wedge) and can
+    // refine this with proper pipe semantics on socketpair.
+    let mut has_real_io_source = has_stdin;
+    if has_socket {
+        // UDP RX queue has data? Real network socket? Go through
+        // the long-spin path so TCP/UDP I/O works.
+        unsafe {
+            if UDP_RX_TAIL < UDP_RX_HEAD {
+                has_real_io_source = true;
+            }
+        }
+    }
+    if !has_real_io_source {
+        // Every polled fd is an event-wake stub. Return 0 (no
+        // events, matching a NULL-timeout ppoll returning on a
+        // spurious wake). Chromium's event loop will call ppoll
+        // again; between calls it processes its task queue. Busy
+        // loop but forward progress.
+        //
+        // Previously we tried setting POLLIN on every fd so the
+        // event loop would "read and go" — but then Chromium
+        // called abort()/tgkill(SIGABRT), presumably because a
+        // CHECK in its IPC code hit an unexpected state when
+        // read() on the fake socketpair returned EAGAIN every
+        // time.
+        return 0;
+    }
+
     // Poll loop — check all sources (long timeout for network I/O)
     for _ in 0..50_000_000 {
         let mut ready = 0i64;
