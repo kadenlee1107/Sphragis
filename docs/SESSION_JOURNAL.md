@@ -11,6 +11,125 @@ end of a session.
 
 ---
 
+## 2026-04-23 18:00 — Mac — EC=0 deep dive, many dead ends, open for fresh eyes
+
+Spent another couple hours on the `EC=0 ELR=0x11a4ff44` crash from
+the earlier entry. Learned a lot, ruled out a lot, bug is NOT what
+I thought it was but still unexplained.
+
+### What we verified (NOT the problem)
+
+1. **PT_LOAD copy is correct.** Source bytes in initrd match file;
+   dest bytes in cave match source. Verified with a direct
+   read_volatile right after `stage_copy_and_parse`.
+2. **No rogue reloc.** Traced every reloc in every lib that
+   writes to content_shell's text range — zero hits at or near
+   VA 0x1a4ff44. Confirmed both programmatically (ghost tracer
+   in `apply_relocs_cross`) and by a file-level scan of
+   `.rela.dyn` + `.rela.plt`.
+3. **Earlier "text corrupted to phys_base" was a false alarm.**
+   I was using an **8-byte LDR on a 4-byte-aligned address** (the
+   instruction lives at `0x5c64ff44`, only 4-byte aligned). 8-byte
+   LDR to a 4-byte-aligned addr on this CPU config returns garbage.
+   Switching to 4-byte LDR `ldr w, [a]` shows correct bytes
+   (`0xd503245f` = BTI c).
+4. **Memory at that phys is fine when tested.** A tight
+   write/read loop (no UART between) at `0x5c64ff44` writes and
+   reads back correctly. Previous UART-interleaved test was
+   confused by the 8-byte-alignment issue.
+5. **BTI c patched to NOP doesn't help.** I patched the crashing
+   insn to NOP (`0xd503201f`) right before ERET; verified via
+   4-byte read that the bytes are NOP post-patch; EL0 still
+   crashes at the exact same VA with the same `insn=0x199b45b8`
+   reported by the exception handler.
+
+### The remaining mystery
+
+The exception handler, reading `[ELR]` via both asm-LDR and
+`read_volatile`, gets `0x199b45b8` — a 32-bit value that doesn't
+appear anywhere in content_shell, any .so, or any baked blob.
+Yet moments earlier (pre-eret) the same VA reads as the correct
+file bytes (or the patched NOP).
+
+Key exception-handler observations (dumped via enriched handler in
+`src/kernel/arch/mod.rs`):
+
+```
+ELR = 0x11a4ff44
+ESR = 0x02000000   (EC=0, IL=1, ISS=0)
+FAR = 0x3x000004f000   (different per run — ALWAYS in V8's
+                         huge reservation range 0x3x000000000..)
+TTBR0 = 0xbffff000 (cave L1)
+L1[0] = cave L2_low @ 0xbfffe003
+L2[141] = 0x002000005c600741 (phys 0x5c600000, EL0 RW exec,
+                               PXN, inner shareable — correct)
+direct read at phys 0x5c64ff44 = 0x199b45b8
+insn(asm) = 0x199b45b8
+insn(volatile) = 0x199b45b8
+bytes at -4 = 0xd4200020 (BRK #1 — also weird!)
+bytes at +4 = 0x00000000 (zeros — also weird!)
+```
+
+So THREE 4-byte words (at `-4`, `0`, `+4`) are different from the
+file. All three were correct before ERET. EL0 executed, and after
+the fault, the bytes differ. 
+
+### Leading hypothesis: EC=0 is misclassified data abort
+
+FAR being set AND pointing at V8's reservation (every run, different
+value in range) strongly suggests a DATA ABORT during some
+instruction at 0x11a4ff44 that touches V8's heap. Our demand-paging
+handler should catch EC=0x24 but the ESR reports EC=0.
+
+If that's right, the instruction at ELR is real and doing a memory
+access; our exception handler's read seeing different bytes is
+probably a secondary symptom (maybe cache-line issue, maybe
+post-abort state weirdness).
+
+Approach for next session:
+1. Have `demand_page::try_handle` ALSO fire for EC=0 when FAR is
+   in the reservation table. If that lets execution proceed, we've
+   found it.
+2. Or: install a data-abort-specific handler that prints ESR + FAR
+   on EC=0x24 directly. If EC=0x24 is being raised underneath and
+   we're missing it, this'll catch it.
+3. Check whether QEMU's aarch64 emulation under HVF on macOS mis-
+   encodes some abort class. Hosted QEMU on Linux might differ.
+
+### Diagnostic scaffolding kept in place
+
+- Enhanced EC=0 handler: prints ESR/FAR/TTBR0/SCTLR, L1[0] entry,
+  L2[ELR>>21] entry, direct phys read, insn via asm + volatile,
+  bytes at ELR±4. One crash, full forensics.
+- Syscall tracer (enable via `SYSCALL_TRACE` atomic in runner).
+- Ghost-reloc tracer in `apply_relocs_cross` — prints when any
+  reloc targets a specific `WATCH_PHYS` constant.
+- Demand-paging module (`demand_page.rs`) — on-fault L3-granular
+  commit for huge reservations.
+
+### 12 commits today, pipeline truly end-to-end through libc init
+
+  eabded85 — DTB-initrd delivery
+  9ee74129 — pipeline works with tests/hello
+  28f973f2 — real content_shell reaches __libc_start_main sentinel
+  ee004ba1 — in-kernel dynamic linker, 575/600 symbols
+  c4a110b0 — journal
+  5c23ac62 — content_shell RUNS + exits cleanly (TLS + weak-null + sym_count)
+  c12e051d — syscall trace + huge-mmap reservation stub
+  98e9b5c3 — doc demand-paging boundary (later superseded)
+  b91b2b03 — journal
+  23a4dc0d — demand paging (ReservationTable + L3 tables + EC=0x24 handler)
+  c8371b4e — post-copy/post-reloc diagnostics (false alarm in hindsight)
+  15bd32b3 — "isolated to reloc phase" (also false alarm in hindsight)
+  (this commit) — enriched EC=0 exception dump + journal for the
+  actual mystery.
+
+Morning trailhead: read the EC=0 handler dump in the current log,
+then approach (1) above — route EC=0 with FAR in reservation to
+demand_page::try_handle.
+
+---
+
 ## 2026-04-23 17:00 — Mac — demand paging lands; content_shell hits mysterious text-memory corruption
 
 Kaden said "keep going bro" and I landed **demand paging** (commit

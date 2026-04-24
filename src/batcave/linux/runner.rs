@@ -234,6 +234,22 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
     // then a no-op (SCTLR.M==1), preserving chromium's page table.
     super::mmu::setup_and_enable(info.phys_base)?;
     super::mmu::switch_to_cave(l1);
+
+    // Flush the entire icache before handing off to EL0 — our cache
+    // maintenance in load_archive_multi happened while MMU was OFF, so
+    // the VAs we invalidated with `ic ivau` were phys addresses. Once
+    // the cave's TTBR0 is active, EL0 fetches come through new VAs
+    // (virt_base + offset) that may still have stale icache lines from
+    // the kernel's own fetches (ic ivau is VA-tagged). `ic iallu` is
+    // a blanket "invalidate all icache" — overkill but safe.
+    unsafe {
+        core::arch::asm!("ic iallu");
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("isb");
+    }
+
+
+
     let r = loader::execute_with_args(info.virt_entry, argv);
     super::mmu::switch_to_primary();
     // FLv2-NEW-017/018: free both the cave page-table frames AND the

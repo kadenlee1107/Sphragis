@@ -92,7 +92,12 @@ pub fn register_reservation(start: u64, end: u64, l1_phys: u64) {
 /// fault we don't own.
 pub fn try_handle(far: u64, esr: u64) -> bool {
     // EC is bits 31:26. We only handle EC=0x24 (data abort from
-    // lower EL). Everything else → not ours.
+    // lower EL). We USED to also accept EC=0 with in-reservation
+    // FAR, but FAR isn't reliably updated for EC=0, and that path
+    // caused a tight infinite loop — the "data abort" FAR was
+    // actually stale from a prior fault, so each eret re-crashed
+    // EC=0 on the original (non-DA) issue and we re-entered
+    // demand_page forever, exhausting the frame pool.
     let ec = (esr >> 26) & 0x3F;
     if ec != 0x24 { return false; }
 
@@ -121,7 +126,15 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     let frame = match frame::alloc_frame() {
         Some(f) => f,
         None => {
-            uart::puts("[demand_page] OOM — cannot back fault\n");
+            let (used, total) = frame::stats();
+            uart::puts("[demand_page] OOM — frames used=");
+            crate::kernel::mm::print_num(used);
+            uart::puts(" total=");
+            crate::kernel::mm::print_num(total);
+            uart::puts(" committed_pages=");
+            crate::kernel::mm::print_num(
+                COMMITTED_PAGES.load(Ordering::Relaxed) as usize);
+            uart::puts("\n");
             return false;
         }
     };
@@ -140,16 +153,30 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
         return false;
     }
 
-    // Invalidate the TLB entry for this VA so the next access picks
-    // up the new mapping.
+    // Invalidate TLB so the next EL0 access picks up the new L3 entry.
+    // Use `vmalle1` (all stage-1, all ASIDs) as a sledgehammer while
+    // we debug — per-VA `vaae1` was somehow not landing. Cost is a
+    // full TLB flush per demand-paged fault; acceptable on the debug
+    // loop, to be tightened later.
     unsafe {
         core::arch::asm!("dsb ishst");
-        core::arch::asm!("tlbi vaae1, {}", in(reg) page_va >> 12);
+        core::arch::asm!("tlbi vmalle1");
         core::arch::asm!("dsb ish");
         core::arch::asm!("isb");
     }
 
-    COMMITTED_PAGES.fetch_add(1, Ordering::Relaxed);
+
+    let n = COMMITTED_PAGES.fetch_add(1, Ordering::Relaxed);
+    if n < 5 {
+        uart::puts("[dp] commit #");
+        crate::kernel::mm::print_num(n as usize);
+        uart::puts(" va=0x");
+        let hex = b"0123456789abcdef";
+        for i in (0..16).rev() {
+            uart::putc(hex[((page_va >> (i * 4)) & 0xF) as usize]);
+        }
+        uart::puts("\n");
+    }
     true
 }
 
@@ -210,9 +237,38 @@ fn install_l3_mapping(
     };
 
     // Step 3: write the L3 page entry.
+    // NOTE: L3 page descriptors need bit 1 SET (page=1, block=0 is
+    // undefined at L3). Our `flags` comes from USER_PAGE_FLAGS which
+    // uses `PAGE_VALID = 0b11` — sets both bit 0 (valid) and bit 1
+    // (page), so that part is correct.
     let l3_entry_ptr = (l3_phys + (l3_idx * 8) as u64) as *mut u64;
     let desc = (phys_page & 0x0000_FFFF_FFFF_F000) | flags;
     unsafe { core::ptr::write_volatile(l3_entry_ptr, desc); }
+
+    // Verify the write took effect — if this read shows a different
+    // value, either our write is going somewhere else or the MMU's
+    // table walker is hitting a cached stale entry.
+    let readback = unsafe { core::ptr::read_volatile(l3_entry_ptr) };
+    if readback != desc {
+        uart::puts("[dp/install] mismatch write=0x");
+        let hex = b"0123456789abcdef";
+        for i in (0..16).rev() {
+            uart::putc(hex[((desc >> (i * 4)) & 0xF) as usize]);
+        }
+        uart::puts(" read=0x");
+        for i in (0..16).rev() {
+            uart::putc(hex[((readback >> (i * 4)) & 0xF) as usize]);
+        }
+        uart::puts("\n");
+    }
+
+    // Flush the L3 entry's cache line to PoC so the table walker sees
+    // the new value. Without this, the walk hits a stale line even
+    // though we wrote via write_volatile.
+    unsafe {
+        core::arch::asm!("dc civac, {a}", a = in(reg) l3_entry_ptr as u64);
+        core::arch::asm!("dsb sy");
+    }
 
     Ok(())
 }

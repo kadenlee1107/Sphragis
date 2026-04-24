@@ -859,24 +859,10 @@ pub fn load_archive_multi(
         stage_copy_and_parse(&mut libs[i])?;
     }
 
+
     // --- Second pass per lib: apply relocations with cross-module lookup ---
-    // Diagnostic (kept during Chromium bring-up): the reloc pass has a
-    // latent bug where some write lands at content_shell's text address
-    // 0x1a4ff44 (user VA 0x11a4ff44), even though no reloc's r_offset
-    // targets that address. Post-reloc memory there contains phys_base
-    // (0x5ac00000) instead of the original BTI c instruction (0xd503245f).
-    // Tracked with this scaffolding so the next session can bisect the
-    // reloc loop without re-deriving the symptom. Source bytes (initrd)
-    // vs dest bytes (cave) check confirms the PT_LOAD copy itself is OK.
     for i in 0..lib_count {
         apply_relocs_cross(&libs, lib_count, i)?;
-    }
-    {
-        let check_phys = libs[0].info.phys_base + 0x1a4ff44;
-        let v0 = unsafe { core::ptr::read_volatile(check_phys as *const u64) };
-        uart::puts("[loader/multi] post-reloc check phys=0x"); print_hex(check_phys as u64);
-        uart::puts(" bytes=0x"); print_hex(v0);
-        uart::puts("  (file: 0xd65f03c0d503245f)\n");
     }
 
     // Flush i/d cache over the full reserved region.
@@ -1129,6 +1115,12 @@ fn resolve_cross_module(
     None
 }
 
+/// Short suffix shown in the ghost-reloc tracer so we can tell which
+/// of a lib's two rela tables produced the write.
+fn idx_dbg_suffix(idx: usize) -> &'static str {
+    if idx == 0 { ".dyn" } else { ".plt" }
+}
+
 /// Byte-compare `haystack` (null-terminated) against `needle` (exact).
 fn str_eq(haystack: &[u8], needle: &[u8]) -> bool {
     if haystack.len() < needle.len() + 1 { return false; }
@@ -1162,7 +1154,16 @@ fn apply_relocs_cross(
     let mut resolved_cross = 0u32;
     let mut unresolved = 0u32;
 
-    for &(tbl_off, tbl_sz) in &[(lib.rela_off, lib.rela_sz), (lib.jmprel_off, lib.pltrel_sz)] {
+    // Debug trap: the Chromium port has a ghost-reloc bug that
+    // writes 0x5ac00000 (phys_base) to content_shell's text at
+    // vaddr 0x1a4ff44 (phys 0x5c64ff44). Set to non-zero to log
+    // the specific reloc; leave at 0 in prod.
+    const WATCH_PHYS: usize = 0x5c64ff44;
+
+    for (tbl_idx, &(tbl_off, tbl_sz)) in [
+        (lib.rela_off, lib.rela_sz),
+        (lib.jmprel_off, lib.pltrel_sz),
+    ].iter().enumerate() {
         if tbl_off == 0 || tbl_off == usize::MAX || tbl_sz == 0 { continue; }
         let num = (tbl_sz / 24).min(50_000_000);
         for r in 0..num {
@@ -1180,6 +1181,21 @@ fn apply_relocs_cross(
             let patch_addr = (r_offset as i64 + patch_offset) as usize;
             let patch_end = match patch_addr.checked_add(8) { Some(v) => v, None => continue };
             if patch_addr < phys_base || patch_end > phys_range_end { continue; }
+
+            // Ghost-reloc tracer — fires ONCE per reloc targeting the
+            // watch address, so we see every write that would land there.
+            if patch_addr == WATCH_PHYS || (patch_addr < WATCH_PHYS && WATCH_PHYS < patch_end) {
+                uart::puts("[ghost] ");
+                for &b in lib.name() { uart::putc(b); }
+                uart::puts(idx_dbg_suffix(tbl_idx));
+                uart::puts(" r_off=0x"); print_hex(r_offset);
+                uart::puts(" type=0x"); print_hex(r_type as u64);
+                uart::puts(" addend=0x"); print_hex(r_addend);
+                uart::puts(" sym="); crate::kernel::mm::print_num(r_sym);
+                uart::puts(" patch_addr=0x"); print_hex(patch_addr as u64);
+                uart::puts(" value_offset=0x"); print_hex(value_offset as u64);
+                uart::puts("\n");
+            }
 
             match r_type {
                 0x403 => {

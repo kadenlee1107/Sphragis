@@ -1018,16 +1018,58 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             }
             uart::puts("!!! UNHANDLED EC=0 !!!\n");
             uart::puts("  ELR: 0x"); print_hex(elr);
-            // Dump the 4-byte instruction at ELR so we can decode it
-            // (BTI mismatch? undefined? LSE atomic we don't emulate?).
-            let insn: u32 = unsafe {
+            let ttbr0: u64; let sctlr: u64; let far: u64;
+            unsafe {
+                core::arch::asm!("mrs {}, ttbr0_el1",  out(reg) ttbr0);
+                core::arch::asm!("mrs {}, sctlr_el1",  out(reg) sctlr);
+                core::arch::asm!("mrs {}, far_el1",    out(reg) far);
+            }
+            uart::puts("  ESR_full=0x"); print_hex(esr);
+            uart::puts("  TTBR0=0x"); print_hex(ttbr0);
+            uart::puts("  FAR=0x"); print_hex(far);
+            uart::puts("\n");
+            // Look up the L2_low entry for ELR and read phys bytes directly.
+            let l1_phys = ttbr0 & !1u64;
+            let l2_low = unsafe {
+                core::ptr::read_volatile((l1_phys) as *const u64)
+            };
+            let l2_low_phys = l2_low & 0x0000_FFFF_FFFF_F000;
+            let l2_idx = (elr >> 21) & 0x1FF;
+            let l2_entry = unsafe {
+                core::ptr::read_volatile(
+                    (l2_low_phys + l2_idx * 8) as *const u64)
+            };
+            let mapped_phys_block = l2_entry & 0x0000_FFFF_FFE0_0000; // 2 MB aligned
+            let offset_in_block = elr & 0x1F_FFFF;
+            let direct_phys = mapped_phys_block + offset_in_block;
+            let direct_word: u32 = unsafe {
+                core::ptr::read_volatile(direct_phys as *const u32)
+            };
+            uart::puts("  l1[0]=0x"); print_hex(l2_low);
+            uart::puts("  l2[");
+            crate::kernel::mm::print_num(l2_idx as usize);
+            uart::puts("]=0x"); print_hex(l2_entry);
+            uart::puts("\n  direct_phys=0x"); print_hex(direct_phys);
+            uart::puts("  bytes_there=0x"); print_hex(direct_word as u64);
+            uart::puts("\n");
+            // Two ways to read insn at ELR — asm vs volatile — to
+            // cross-check whether we're really reading what we think.
+            let insn_asm: u32 = {
                 let v: u32;
-                core::arch::asm!("ldr {v:w}, [{a}]", a = in(reg) elr, v = out(reg) v);
+                unsafe {
+                    core::arch::asm!("ldr {v:w}, [{a}]",
+                        a = in(reg) elr, v = out(reg) v);
+                }
                 v
             };
-            uart::puts("  insn=0x"); print_hex(insn as u64);
-            // Include ESR_EL1 iss field.
-            uart::puts("  ISS=0x"); print_hex(esr & 0x01FF_FFFF);
+            let insn_rv: u32 = unsafe { core::ptr::read_volatile(elr as *const u32) };
+            let before:  u32 = unsafe { core::ptr::read_volatile((elr.wrapping_sub(4)) as *const u32) };
+            let after:   u32 = unsafe { core::ptr::read_volatile((elr.wrapping_add(4)) as *const u32) };
+            uart::puts("  insn(asm)=0x");      print_hex(insn_asm as u64);
+            uart::puts("  insn(volatile)=0x"); print_hex(insn_rv  as u64);
+            uart::puts("\n  -4=0x"); print_hex(before as u64);
+            uart::puts("  +4=0x");   print_hex(after  as u64);
+            uart::puts("  ISS=0x");  print_hex(esr & 0x01FF_FFFF);
             uart::puts("\n");
             loop { unsafe { core::arch::asm!("wfe") }; }
         }
@@ -1048,6 +1090,18 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             uart::puts("  EC: 0x"); print_hex(ec);
             uart::puts("  ISS: 0x"); print_hex(esr & 0x01FF_FFFF);
             uart::puts("\n");
+            // Extra sanity: read TTBR0 + SCTLR to make sure the EL1
+            // context is what we think.
+            {
+                let ttbr0: u64; let sctlr: u64;
+                unsafe {
+                    core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0);
+                    core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr);
+                }
+                uart::puts("  TTBR0: 0x"); print_hex(ttbr0);
+                uart::puts("  SCTLR: 0x"); print_hex(sctlr);
+                uart::puts("\n");
+            }
             let sp_el0: u64; let tp: u64;
             unsafe {
                 core::arch::asm!("mrs {}, sp_el0",     out(reg) sp_el0);
@@ -1058,6 +1112,17 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             uart::puts("  FAR: 0x"); print_hex(far);
             uart::puts("  SP:  0x"); print_hex(sp_el0);
             uart::puts("  TP:  0x"); print_hex(tp);
+            uart::puts("\n");
+            // Read instruction bytes via read_volatile as a cross-check.
+            let insn_rv: u32 = unsafe {
+                core::ptr::read_volatile(elr as *const u32)
+            };
+            uart::puts("  insn(read_volatile)=0x"); print_hex(insn_rv as u64);
+            // And read 4 bytes at elr-4 and elr+4 to see surrounding code.
+            let before: u32 = unsafe { core::ptr::read_volatile((elr.wrapping_sub(4)) as *const u32) };
+            let after:  u32 = unsafe { core::ptr::read_volatile((elr.wrapping_add(4)) as *const u32) };
+            uart::puts("  -4: 0x"); print_hex(before as u64);
+            uart::puts("  +4: 0x"); print_hex(after as u64);
             uart::puts("\n");
             // x0..x8 dump — x8 is syscall number on ARM64; x0..x7 are
             // either syscall args or scratch. Useful to tell a corrupt
