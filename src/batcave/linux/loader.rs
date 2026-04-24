@@ -956,18 +956,28 @@ pub fn load_archive_multi(
         core::arch::asm!("isb");
     }
 
-    // Zero the TLS block. glibc's tcbhead_t layout on aarch64 is:
-    //   offset 0:  dtv pointer
-    //   offset 8:  private
-    //   offset 16: padding[2] (16 bytes)
-    //   offset 32: TLS data
-    // All zeros is enough to stop the first tpidr_el0 dereference from
-    // segfaulting — proper DTV + TLS initialization is follow-up work.
+    // Initialize the TLS block. glibc's tcbhead_t on aarch64 lays out
+    // the TCB at `tp-16` with self / private / DTV-related fields,
+    // then TLS data follows `tp`. With a plain zero block, glibc's
+    // init functions hit paths like `ldr x21, [x_tp + N]; ldr x0,
+    // [x21, #0xa0]` where the first load reads 0 and the second
+    // NULL-derefs (observed FAR=0xa0 at libc offset 0x27824).
+    //
+    // Short-term hack: fill every 8-byte slot with the TLS block's
+    // user VA. Any such read now returns a valid (though circular)
+    // in-cave pointer — every chained deref resolves to somewhere
+    // inside the TLS block, which is zero, which then fails as a
+    // NULL deref on whatever field glibc actually expected. The
+    // failure pattern will move forward per init step until we
+    // populate real fields. TODO: walk PT_TLS per lib and copy
+    // template data at the right offsets.
+    let tls_user_va = user_va_base_from_libs(&libs, 0) + tls_va_offset as u64;
     unsafe {
         let tls_end = tls_phys + LOADED_TLS_PAGES * PAGE_SIZE;
         let mut p = tls_phys;
         while p < tls_end {
-            core::arch::asm!("str xzr, [{a}]", a = in(reg) p);
+            core::arch::asm!("str {v}, [{a}]",
+                a = in(reg) p, v = in(reg) tls_user_va);
             p += 8;
         }
     }
@@ -1186,6 +1196,12 @@ fn resolve_cross_module(
         }
     }
     None
+}
+
+/// Helper — the user VA of libs[0] (the main exe). Just a shorthand
+/// since the expression shows up in a couple of spots.
+fn user_va_base_from_libs(libs: &[LoadedLib; MAX_LOADED_LIBS], idx: usize) -> u64 {
+    libs[idx].info.virt_base
 }
 
 /// Build the init_array trampoline in a cave-resident page. Writes

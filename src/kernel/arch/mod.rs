@@ -1054,22 +1054,16 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             uart::puts("\n");
             // Two ways to read insn at ELR — asm vs volatile — to
             // cross-check whether we're really reading what we think.
-            let insn_asm: u32 = {
-                let v: u32;
-                unsafe {
-                    core::arch::asm!("ldr {v:w}, [{a}]",
-                        a = in(reg) elr, v = out(reg) v);
-                }
-                v
-            };
-            let insn_rv: u32 = unsafe { core::ptr::read_volatile(elr as *const u32) };
-            let before:  u32 = unsafe { core::ptr::read_volatile((elr.wrapping_sub(4)) as *const u32) };
-            let after:   u32 = unsafe { core::ptr::read_volatile((elr.wrapping_add(4)) as *const u32) };
-            uart::puts("  insn(asm)=0x");      print_hex(insn_asm as u64);
-            uart::puts("  insn(volatile)=0x"); print_hex(insn_rv  as u64);
-            uart::puts("\n  -4=0x"); print_hex(before as u64);
-            uart::puts("  +4=0x");   print_hex(after  as u64);
-            uart::puts("  ISS=0x");  print_hex(esr & 0x01FF_FFFF);
+            // Dump 6 instructions around ELR — helps see what computed
+            // the bad pointer that the faulting LDR then dereferenced.
+            uart::puts("  code around ELR:");
+            for off in [-12i64, -8, -4, 0, 4, 8].iter() {
+                let addr = (elr as i64 + off) as usize;
+                let word: u32 = unsafe { core::ptr::read_volatile(addr as *const u32) };
+                uart::puts("\n    ["); print_hex(addr as u64);
+                uart::puts("] 0x"); print_hex(word as u64);
+            }
+            uart::puts("\n  ISS=0x");  print_hex(esr & 0x01FF_FFFF);
             uart::puts("\n");
             loop { unsafe { core::arch::asm!("wfe") }; }
         }
@@ -1113,34 +1107,35 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             uart::puts("  SP:  0x"); print_hex(sp_el0);
             uart::puts("  TP:  0x"); print_hex(tp);
             uart::puts("\n");
-            // Read instruction bytes via read_volatile as a cross-check.
-            let insn_rv: u32 = unsafe {
-                core::ptr::read_volatile(elr as *const u32)
-            };
-            uart::puts("  insn(read_volatile)=0x"); print_hex(insn_rv as u64);
-            // And read 4 bytes at elr-4 and elr+4 to see surrounding code.
-            let before: u32 = unsafe { core::ptr::read_volatile((elr.wrapping_sub(4)) as *const u32) };
-            let after:  u32 = unsafe { core::ptr::read_volatile((elr.wrapping_add(4)) as *const u32) };
-            uart::puts("  -4: 0x"); print_hex(before as u64);
-            uart::puts("  +4: 0x"); print_hex(after as u64);
+            // Dump 6 instructions around ELR + x9..x28 so we can see
+            // where the bad pointer argument came from.
+            uart::puts("  code around ELR:");
+            for off in [-16i64, -12, -8, -4, 0, 4, 8].iter() {
+                let addr = (elr as i64 + off) as usize;
+                let word: u32 = unsafe { core::ptr::read_volatile(addr as *const u32) };
+                uart::puts("\n    ["); print_hex(addr as u64);
+                uart::puts("] 0x"); print_hex(word as u64);
+            }
             uart::puts("\n");
             // x0..x8 dump — x8 is syscall number on ARM64; x0..x7 are
             // either syscall args or scratch. Useful to tell a corrupt
             // function-pointer call from an almost-working syscall.
             unsafe {
-                for i in 0..9 {
-                    uart::puts("  x"); uart::putc(b'0' + i as u8);
+                // x0..x28 so we can trace x21/x26 (TLS ptr chain) and
+                // anything else the faulting instruction needed.
+                for i in 0..29 {
+                    if i > 0 && i % 3 == 0 { uart::puts("\n"); }
+                    uart::puts("  x");
+                    if i < 10 {
+                        uart::putc(b'0' + i as u8);
+                        uart::puts(" ");
+                    } else {
+                        uart::putc(b'0' + (i / 10) as u8);
+                        uart::putc(b'0' + (i % 10) as u8);
+                    }
                     uart::puts("=0x"); print_hex((*frame).x[i]);
-                    if (i + 1) % 3 == 0 { uart::puts("\n"); }
-                    else { uart::puts("  "); }
                 }
-            }
-            uart::puts("\n");
-            // LR (x30) tells us the caller that made the bad jump. For a
-            // call-through-a-bad-pointer this is the instruction right
-            // after the `blr` that trapped.
-            unsafe {
-                uart::puts("  LR(x30)=0x"); print_hex((*frame).x[30]);
+                uart::puts("\n  LR(x30)=0x"); print_hex((*frame).x[30]);
                 uart::puts("\n");
             }
             loop { unsafe { core::arch::asm!("wfe") }; }
