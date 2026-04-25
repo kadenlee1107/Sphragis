@@ -3034,9 +3034,8 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     argv[n] = "--single-process";          n += 1;
     argv[n] = "--ozone-platform=headless"; n += 1;
     // (Stay on the zygote path: --no-zygote hits an ICU CharString
-    // bug at ~300 syscalls. The zygote path goes further and now
-    // that pipe-routed sendmsg/recvmsg works, Chromium can write to
-    // its socketpair. Next: synthesise a zygote response.)
+    // bug at ~300 syscalls (verified again 2026-04-25). The zygote
+    // path goes much further; deadlock comes later in IPC pump.)
     // --enable-logging=stderr --v=1 — make Chromium's own LOG(INFO)
     // + VLOG(1) lines hit stderr so we see what it's doing right
     // before it crashes. Cheap to enable; no-op if logging is
