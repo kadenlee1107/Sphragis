@@ -133,7 +133,17 @@ pub fn init_timer() {
     unsafe {
         let freq: u64;
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+        // Diagnostic: print cntfrq so we can verify our 100Hz interval
+        // is actually 100Hz. (We observed effective IRQ rate ~1Hz on
+        // QEMU virt, which would mean either freq is 100x larger than
+        // expected or the GIC delivery is missing 99% of fires.)
+        uart::puts("  [arch] cntfrq_el0 = ");
+        crate::kernel::mm::print_num(freq as usize);
+        uart::puts("\n");
         let interval = freq / 100;
+        uart::puts("  [arch] timer interval = ");
+        crate::kernel::mm::print_num(interval as usize);
+        uart::puts("\n");
         core::arch::asm!("msr cntp_tval_el0, {}", in(reg) interval);
         core::arch::asm!("mov x0, #1", "msr cntp_ctl_el0, x0", out("x0") _);
         core::arch::asm!("msr daifclr, #0x2");
