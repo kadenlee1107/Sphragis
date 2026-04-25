@@ -3376,6 +3376,17 @@ fn sys_set_tid_address(args: [u64; 6]) -> i64 {
 
 // ─── gettid (178) ───
 fn sys_gettid(_args: [u64; 6]) -> i64 {
+    // Prefer the real per-thread TID from the threading layer when
+    // it's active. The legacy CURRENT_TID was the single-threaded
+    // simulation's notion of "which child is on the CPU" and often
+    // sits at 0 — which Chromium then registers as a real thread
+    // TID, leaving ThreadIdNameManager's cache populated with
+    // (cached_id=0, cached_name=NULL) and crashing on the next
+    // GetName(0) lookup.
+    let real_tid = super::threads::current_tid();
+    if real_tid != 0 {
+        return real_tid as i64;
+    }
     CURRENT_TID.load(core::sync::atomic::Ordering::Relaxed) as i64
 }
 

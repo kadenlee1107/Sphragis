@@ -776,6 +776,13 @@ fn populate_rootfs() {
         create_node(dev, b"console", NodeType::DevConsole, 0o20600).ok();
         create_node(dev, b"urandom", NodeType::DevRandom, 0o20666).ok();
         create_node(dev, b"random",  NodeType::DevRandom, 0o20666).ok();
+        // /dev/shm — POSIX shared-memory tmpfs. Chromium accesses
+        // it for shm_open / mmap-of-shared-memory. We don't have a
+        // real tmpfs but creating the directory + giving it world-
+        // RWX gets past the access(W_OK|X_OK) check that otherwise
+        // FATALs base/memory/platform_shared_memory_region_posix.cc
+        // very early in init.
+        create_node(dev, b"shm", NodeType::Directory, 0o41777).ok();
     }
 
     // /batos — Bat_OS-native namespace (Chromium display bridge, etc.)
