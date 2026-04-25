@@ -5466,6 +5466,43 @@ fn sendmsg_pipe(slot: usize, side: u8, msg: *const super::sockets::Msghdr) -> i6
     let target_side = side ^ 1;
     let m: super::sockets::Msghdr = unsafe { core::ptr::read(msg) };
     if m.msg_iovlen > 16 { return EINVAL; }
+
+    // SCM_RIGHTS handling. Walk the cmsg list in m.msg_control; for any
+    // SOL_SOCKET/SCM_RIGHTS cmsg, push the fd numbers onto the pipe's
+    // fd-passing queue. Single-process: receiver shares our fd table so
+    // the same fd numbers are valid on both ends.
+    if !m.msg_control.is_null() && m.msg_controllen >= 16 {
+        let ctrl_addr = m.msg_control as usize;
+        if uaccess::is_user_range(ctrl_addr, m.msg_controllen) {
+            const SOL_SOCKET: i32 = 1;
+            const SCM_RIGHTS: i32 = 1;
+            let mut off: usize = 0;
+            while off + 16 <= m.msg_controllen {
+                let header = ctrl_addr + off;
+                let cmsg_len: u64 = unsafe { core::ptr::read_unaligned(header as *const u64) };
+                let cmsg_level: i32 = unsafe { core::ptr::read_unaligned((header + 8) as *const i32) };
+                let cmsg_type: i32 = unsafe { core::ptr::read_unaligned((header + 12) as *const i32) };
+                if cmsg_len < 16 || (cmsg_len as usize) > (m.msg_controllen - off) {
+                    break;
+                }
+                if cmsg_level == SOL_SOCKET && cmsg_type == SCM_RIGHTS {
+                    let fd_bytes = (cmsg_len - 16) as usize;
+                    let fd_count = (fd_bytes / 4).min(32);
+                    let mut fds = [0u32; 32];
+                    for i in 0..fd_count {
+                        let fd: i32 = unsafe {
+                            core::ptr::read_unaligned((header + 16 + i * 4) as *const i32)
+                        };
+                        fds[i] = fd as u32;
+                    }
+                    let _ = super::pipe_buf::push_fds(slot, side, &fds[..fd_count]);
+                }
+                let aligned = ((cmsg_len as usize) + 7) & !7;
+                off += aligned.max(16); // safety
+            }
+        }
+    }
+
     let mut total: i64 = 0;
     for i in 0..m.msg_iovlen {
         let iv = unsafe { core::ptr::read(m.msg_iov.add(i)) };
@@ -5536,6 +5573,59 @@ fn recvmsg_pipe(slot: usize, side: u8, msg: *mut super::sockets::Msghdr) -> i64 
             Err(e) => {
                 if total > 0 { return total; }
                 return e;
+            }
+        }
+    }
+
+    // SCM_RIGHTS delivery: drain any fds the sender pushed into our
+    // queue and encode them as a single SOL_SOCKET/SCM_RIGHTS cmsg in
+    // the user's msg_control buffer. Update msg_controllen via the
+    // user pointer so glibc's CMSG_FIRSTHDR/CMSG_NXTHDR walk works.
+    if !m.msg_control.is_null() && m.msg_controllen >= 16 {
+        let pending = super::pipe_buf::pending_fds(slot, side);
+        if pending > 0 {
+            const SOL_SOCKET: i32 = 1;
+            const SCM_RIGHTS: i32 = 1;
+            let max_fds = ((m.msg_controllen - 16) / 4).min(pending).min(32);
+            let mut fds = [0u32; 32];
+            let n = super::pipe_buf::pop_fds(slot, side, &mut fds[..max_fds]);
+            if n > 0 {
+                let ctrl_addr = m.msg_control as usize;
+                if uaccess::is_user_range(ctrl_addr, m.msg_controllen) {
+                    let cmsg_len = (16 + n * 4) as u64;
+                    unsafe {
+                        core::ptr::write_unaligned(ctrl_addr as *mut u64, cmsg_len);
+                        core::ptr::write_unaligned((ctrl_addr + 8) as *mut i32, SOL_SOCKET);
+                        core::ptr::write_unaligned((ctrl_addr + 12) as *mut i32, SCM_RIGHTS);
+                        for i in 0..n {
+                            core::ptr::write_unaligned(
+                                (ctrl_addr + 16 + i * 4) as *mut i32,
+                                fds[i] as i32,
+                            );
+                        }
+                    }
+                    // Update msg_controllen back into the user struct.
+                    let ctrllen_offset =
+                        core::mem::offset_of!(super::sockets::Msghdr, msg_controllen);
+                    unsafe {
+                        core::ptr::write_unaligned(
+                            (msg as *mut u8).add(ctrllen_offset) as *mut usize,
+                            cmsg_len as usize,
+                        );
+                    }
+                }
+            }
+        } else {
+            // No fds queued — clear msg_controllen so glibc's
+            // CMSG_FIRSTHDR returns NULL. Otherwise garbage in
+            // msg_control could be interpreted as a stale cmsg.
+            let ctrllen_offset =
+                core::mem::offset_of!(super::sockets::Msghdr, msg_controllen);
+            unsafe {
+                core::ptr::write_unaligned(
+                    (msg as *mut u8).add(ctrllen_offset) as *mut usize,
+                    0usize,
+                );
             }
         }
     }

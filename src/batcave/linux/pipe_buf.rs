@@ -26,6 +26,7 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub const MAX_PAIRS: usize = 16;
 pub const BUF_SIZE: usize = 4096;
+pub const MAX_FDS_QUEUED: usize = 32;
 
 #[repr(C)]
 pub struct PairBuf {
@@ -35,6 +36,16 @@ pub struct PairBuf {
     /// data written by end B, read by end A
     b_to_a: [u8; BUF_SIZE],
     b_to_a_len: usize,
+    /// File descriptors passed via SCM_RIGHTS, A→B and B→A. Single-process
+    /// only — sender and receiver share the same per-cave fd table, so the
+    /// fd numbers are valid on both sides; we just need to NOT drop them
+    /// the way iov data alone would. Chromium's IPC channel handshake
+    /// relies on this — the receiver pulls a Mojo socket fd out of the
+    /// first inbound message and binds its IPC endpoint to it.
+    a_to_b_fds: [u32; MAX_FDS_QUEUED],
+    a_to_b_fds_len: usize,
+    b_to_a_fds: [u32; MAX_FDS_QUEUED],
+    b_to_a_fds_len: usize,
     active: bool,
 }
 
@@ -45,6 +56,10 @@ impl PairBuf {
             a_to_b_len: 0,
             b_to_a: [0; BUF_SIZE],
             b_to_a_len: 0,
+            a_to_b_fds: [0; MAX_FDS_QUEUED],
+            a_to_b_fds_len: 0,
+            b_to_a_fds: [0; MAX_FDS_QUEUED],
+            b_to_a_fds_len: 0,
             active: false,
         }
     }
@@ -190,6 +205,86 @@ pub fn has_readable(slot: usize, side: u8) -> bool {
     };
     unlock();
     result
+}
+
+/// Push file descriptors onto the pair's outbound fd queue. Used by
+/// sendmsg(SCM_RIGHTS): the sender's iov data goes through write(),
+/// the cmsg fd list goes through here. The receiving recvmsg() pops
+/// them via pop_fds and re-encodes them in its own cmsg buffer.
+///
+/// `side` matches the side WRITING (i.e. the same side parameter that
+/// `write()` would use); the fds queue onto the OPPOSITE side for
+/// receiver to drain.
+pub fn push_fds(slot: usize, side: u8, fds: &[u32]) -> Result<(), i64> {
+    if slot >= MAX_PAIRS { return Err(-9); } // EBADF
+    lock();
+    let result = unsafe {
+        let table = &mut *core::ptr::addr_of_mut!(PAIRS);
+        let p = &mut table[slot];
+        if !p.active { unlock(); return Err(-9); }
+        let target_side = side ^ 1;
+        let (queue, len) = if target_side == 1 {
+            (&mut p.a_to_b_fds[..], &mut p.a_to_b_fds_len)
+        } else {
+            (&mut p.b_to_a_fds[..], &mut p.b_to_a_fds_len)
+        };
+        let space = MAX_FDS_QUEUED - *len;
+        if fds.len() > space {
+            unlock();
+            return Err(-105); // ENOBUFS
+        }
+        for &fd in fds {
+            queue[*len] = fd;
+            *len += 1;
+        }
+        Ok(())
+    };
+    if result.is_ok() { unlock(); }
+    result
+}
+
+/// Drain up to `out.len()` fds from the pair's inbound fd queue.
+/// Returns the number of fds copied. `side` is the receiver side.
+pub fn pop_fds(slot: usize, side: u8, out: &mut [u32]) -> usize {
+    if slot >= MAX_PAIRS { return 0; }
+    lock();
+    let n = unsafe {
+        let table = &mut *core::ptr::addr_of_mut!(PAIRS);
+        let p = &mut table[slot];
+        if !p.active { unlock(); return 0; }
+        // Receiver side reads from its own queue (the queue the sender
+        // pushed to, which is OUR side from the receiver's POV).
+        let (queue, len) = if side == 0 {
+            (&mut p.b_to_a_fds[..], &mut p.b_to_a_fds_len)
+        } else {
+            (&mut p.a_to_b_fds[..], &mut p.a_to_b_fds_len)
+        };
+        let take = (*len).min(out.len());
+        for i in 0..take {
+            out[i] = queue[i];
+        }
+        // Shift remaining fds down.
+        for i in take..*len {
+            queue[i - take] = queue[i];
+        }
+        *len -= take;
+        take
+    };
+    unlock();
+    n
+}
+
+/// Number of fds currently queued for the receiver on `side`.
+pub fn pending_fds(slot: usize, side: u8) -> usize {
+    if slot >= MAX_PAIRS { return 0; }
+    lock();
+    let n = unsafe {
+        let p = &(*core::ptr::addr_of!(PAIRS))[slot];
+        if !p.active { unlock(); return 0; }
+        if side == 0 { p.b_to_a_fds_len } else { p.a_to_b_fds_len }
+    };
+    unlock();
+    n
 }
 
 /// Deactivate a pair — called when BOTH fds have been closed. Leaves
