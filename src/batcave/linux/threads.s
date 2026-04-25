@@ -159,6 +159,18 @@ cxt_switch_cooperative:
 
         isb
 
+        // CRITICAL: re-enable IRQs at the EL1 boundary before returning
+        // to the new thread's continuation. Without this, if we entered
+        // cxt_switch_cooperative from an exception handler (IRQs masked
+        // by exception entry) and the new thread's chain doesn't reach
+        // an `eret` for a long time (e.g. it's parked deep in
+        // park_slot's block-and-yield loop), DAIF.I stays =1 across many
+        // context switches. Timer IRQs delayed indefinitely; we observed
+        // them dying out after ~20 fires. Unmasking here means every
+        // context switch is a fresh chance for the timer IRQ to fire on
+        // whatever thread we resumed.
+        msr     daifclr, #0x2
+
         ret
         .size   cxt_switch_cooperative, . - cxt_switch_cooperative
 

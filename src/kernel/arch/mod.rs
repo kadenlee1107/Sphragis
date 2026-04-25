@@ -244,19 +244,24 @@ pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
         let spsr = unsafe { (*frame).spsr };
         let was_in_el0 = (spsr & 0xF) == 0; // M[3:0] == 0000 ⇒ EL0t
 
-        // Diagnostic: log the user PC of whoever was preempted, every
-        // 25 IRQs. This exposes WHICH user code is hogging CPU between
-        // syscalls — combined with rust-objdump on content_shell we can
-        // name the function. Useful for finding CPU loops that prevent
-        // cooperative-yield from making progress.
+        // Diagnostic: occasional total IRQ count + per-EL0 PC sample.
+        // Tuned to be quiet during normal operation but reveal the
+        // hot path under deadlock investigation.
+        static TOTAL_IRQ: core::sync::atomic::AtomicU64 =
+            core::sync::atomic::AtomicU64::new(0);
+        let total_n = TOTAL_IRQ.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if total_n > 0 && total_n % 5000 == 0 {
+            uart::puts("[total_irq=");
+            crate::kernel::mm::print_num(total_n as usize);
+            uart::puts("]\n");
+        }
         if was_in_el0 {
             static IRQ_PC_COUNT: core::sync::atomic::AtomicU64 =
                 core::sync::atomic::AtomicU64::new(0);
             let n = IRQ_PC_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            if n < 10 || (n > 0 && n % 10 == 0) {
+            if n > 0 && n % 200 == 0 {
                 let elr = unsafe { (*frame).elr };
                 let lr  = unsafe { (*frame).x[30] };
-                let fp  = unsafe { (*frame).x[29] };
                 let tid = crate::batcave::linux::threads::current_tid();
                 uart::puts("[irq#");
                 crate::kernel::mm::print_num(n as usize);
@@ -270,10 +275,6 @@ pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
                 uart::puts(" lr=0x");
                 for sh in (0..16).rev() {
                     uart::putc(hex[((lr >> (sh * 4)) & 0xF) as usize]);
-                }
-                uart::puts(" fp=0x");
-                for sh in (0..16).rev() {
-                    uart::putc(hex[((fp >> (sh * 4)) & 0xF) as usize]);
                 }
                 uart::puts("]\n");
             }
