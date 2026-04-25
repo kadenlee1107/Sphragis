@@ -11,6 +11,92 @@ end of a session.
 
 ---
 
+## 2026-04-24 22:50 — Mac — Past 4 more post-fork crashes; Chromium now alive in its event loop
+
+Quick wins after the real-fork landing:
+
+### 1. `sys_gettid` returned legacy CURRENT_TID (often 0)
+Chromium registered TID=0 in `ThreadIdNameManager`. When
+`tracing::TrackNameRecorder` later called `GetName(0)`, the
+cached fast-path matched `cached_id=0` and dereferenced
+`cached_name=NULL`. Fix: prefer `threads::current_tid()`.
+
+### 2. `/dev/shm` missing
+Chromium's `PlatformSharedMemoryRegion` FATALs on
+`access(W_OK|X_OK, /dev/shm)`. Fix: create `/dev/shm` as a 0o41777
+directory in `populate_rootfs`.
+
+### 3. `fcntl(F_DUPFD_CLOEXEC=1030)` returned 0
+Caught Chromium's FD ownership tracker: it expected a fresh fd
+duplicating the source, got fd 0 (stdin), FATAL'd with
+"Crashing due to FD ownership violation". Fix: route F_DUPFD /
+F_DUPFD_CLOEXEC through `fd::dup`.
+
+### 4. `fd::alloc_fd` reused closed fd numbers
+Chromium's tracker also FATALs when a previously-closed fd gets
+reassigned to a new owner. Fix: monotonically-increasing
+`ALLOC_CURSOR` (no reuse until cursor exhausts MAX_FDS); bumped
+MAX_FDS 256 → 1024 to give the cursor room.
+
+### Where Chromium is now
+
+**Alive and running.** ~4757 syscalls, 1 main thread + 4 forked
+child caves + many pthreads (Chromium's worker pool — last
+clone returned tid=24). Forked grandchildren run real code:
+glibc post-fork init, `set_robust_list`, signal-mask setup,
+`prctl(PR_SET_NAME)`, `epoll_create1`, etc.
+
+The main t1 loop has been spawning pthreads via `clone(0x3d0f00)`
+(CLONE_VM | THREAD | FS | FILES | SIGHAND | SETTLS | …) for the
+worker pool. Forked child t5 spins in `epoll_pwait(46, ev, 16,
+{0|72000ms}, NULL, 8)` waiting for IPC events that don't come —
+no crash, just a hang.
+
+This is the "Chromium is alive but its event loop has nothing
+to do" state. The renderer should be parsing
+`file:///bin/hello.html` and dumping DOM, but with no upstream
+event source delivering the navigation message via Mojo IPC,
+nothing advances.
+
+### What's left to actually render the DOM
+
+1. **Mojo IPC plumbing** — Chromium expects messages via
+   `socketpair`-backed channels for "navigate", "execute JS",
+   "render frame". Without a producer pushing those messages,
+   the renderer thread can't start. Possible paths: stub Mojo's
+   `BrokerHost` to inject a fake "navigate" message; or
+   trace which fd the navigation arrives on and synthesise the
+   protocol bytes ourselves.
+2. **Per-process FD table** — currently FD_TABLE is a kernel
+   global shared across all caves. POSIX fork gives each
+   process its own. Won't matter for `--dump-dom` if we get
+   IPC working, but it's lurking architectural debt.
+3. **Real `wait4` + cave-destroy** — kernel-stack leak on each
+   forked child exit (~16 KB), cave page tables stay
+   allocated until reboot.
+4. **Real timer/IRQ-driven preemption** — currently all our
+   threading is cooperative. Chromium's worker pool would
+   benefit from real preemption to make sure the right thread
+   runs when needed.
+
+### Pipeline depth comparison
+
+| Session phase               | Syscalls | What blocks |
+|-----------------------------|----------|-------------|
+| Pre-real-fork start         |   ~580   | fork-as-thread NULL deref |
+| Real fork landed            |   582    | ThreadIdNameManager NULL |
+| gettid + /dev/shm fixes     |  2483    | FD ownership FATAL |
+| F_DUPFD + monotonic fd      |  4757    | epoll_pwait hang |
+
+### Files touched this session (continued from earlier writeup)
+
+- `src/batcave/linux/syscall.rs` — sys_gettid honors threading
+  layer; sys_fcntl F_DUPFD/F_DUPFD_CLOEXEC.
+- `src/batcave/linux/vfs.rs` — /dev/shm.
+- `src/batcave/linux/fd.rs` — ALLOC_CURSOR; MAX_FDS 256→1024.
+
+---
+
 ## 2026-04-24 21:30 — Mac — 🚀 REAL FORK landed; Chromium parent + child run in separate address spaces
 
 This session built **real fork** end-to-end and got Chromium past
