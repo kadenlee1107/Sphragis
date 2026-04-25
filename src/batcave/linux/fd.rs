@@ -111,6 +111,11 @@ fn current_cursor() -> &'static core::sync::atomic::AtomicUsize {
 /// allocated so the child inherits the parent's open fds — POSIX
 /// fork semantics. Subsequent close() / dup() in the child only
 /// touches the child's slot.
+///
+/// Eventfd/Timerfd entries: bump the underlying slot's refcount for
+/// each cloned reference. Without this the child's eventually-close()
+/// would free the slot while the parent's fd still pointed at it
+/// (use-after-free at the kernel level).
 pub fn clone_fd_table(child_slot: usize) {
     if child_slot >= NUM_CAVES { return; }
     let parent_slot = 0; // host cave is always slot 0
@@ -121,6 +126,21 @@ pub fn clone_fd_table(child_slot: usize) {
         // Force-copy the array by swapping out via tmp.
         let parent_copy = tables[parent_slot];
         tables[child_slot] = parent_copy;
+        // POSIX file-description refcount: every Eventfd/Timerfd
+        // entry we just copied is now a second reference to the
+        // shared slot. Bump the slot's refcount to match.
+        for entry in tables[child_slot].iter() {
+            if !entry.active { continue; }
+            match entry.kind {
+                FdKind::Eventfd(s) => {
+                    crate::batcave::linux::async_fds::ref_eventfd_slot(s as usize);
+                }
+                FdKind::Timerfd(s) => {
+                    crate::batcave::linux::async_fds::ref_timerfd_slot(s as usize);
+                }
+                _ => {}
+            }
+        }
     }
     // Child's allocator cursor starts where parent's was — fds
     // before that point are inherited / valid; fds after start
@@ -378,17 +398,67 @@ pub fn close(fd: u32) -> Result<(), i64> {
     Ok(())
 }
 
-/// Duplicate an fd.
+/// Duplicate an fd. For Eventfd/Timerfd kinds the new fd points at
+/// the SAME slot as the old fd (Linux semantics: dup'd file
+/// descriptors share the file description), so bump the slot's
+/// refcount.
 pub fn dup(old_fd: u32) -> Result<u32, i64> {
     let old = old_fd as usize;
     if old >= MAX_FDS { return Err(-9); }
     let table = current_table();
     if !table[old].active { return Err(-9); }
     let entry = table[old];
-    alloc_fd(entry.node_idx, entry.flags)
+    // For VFS/Pipe entries, alloc_fd is the simple path. For
+    // Eventfd/Timerfd we need to allocate a new slot in the table
+    // with the SAME kind tag so it routes back to the same backing
+    // slot, and bump the underlying slot's refcount.
+    use core::sync::atomic::Ordering;
+    match entry.kind {
+        FdKind::Eventfd(slot) | FdKind::Timerfd(slot) => {
+            let cursor = current_cursor();
+            let cur = cursor.fetch_add(1, Ordering::AcqRel);
+            let mut place = |i: usize| -> Option<u32> {
+                if !table[i].active {
+                    table[i] = entry;
+                    Some(i as u32)
+                } else { None }
+            };
+            let new_fd = if cur < MAX_FDS {
+                place(cur).or_else(|| {
+                    for i in 3..MAX_FDS {
+                        if let Some(f) = place(i) { return Some(f); }
+                    }
+                    None
+                })
+            } else {
+                let mut found = None;
+                for i in 3..MAX_FDS {
+                    if let Some(f) = place(i) { found = Some(f); break; }
+                }
+                found
+            };
+            let new_fd = new_fd.ok_or(-24i64)?;
+            // Now that the entry is registered, bump the slot's refcount.
+            match entry.kind {
+                FdKind::Eventfd(s) => {
+                    crate::batcave::linux::async_fds::ref_eventfd_slot(s as usize);
+                    let _ = slot;
+                }
+                FdKind::Timerfd(s) => {
+                    crate::batcave::linux::async_fds::ref_timerfd_slot(s as usize);
+                }
+                _ => unreachable!(),
+            }
+            Ok(new_fd)
+        }
+        _ => alloc_fd(entry.node_idx, entry.flags),
+    }
 }
 
-/// Duplicate an fd to a specific new fd number.
+/// Duplicate an fd to a specific new fd number. Same Eventfd/Timerfd
+/// refcount bookkeeping as `dup`. Linux dup2 also closes the existing
+/// new_fd if it was open — when that fd is itself an Eventfd/Timerfd we
+/// must drop ITS reference too, otherwise the slot leaks.
 pub fn dup2(old_fd: u32, new_fd: u32) -> Result<u32, i64> {
     let old = old_fd as usize;
     let new = new_fd as usize;
@@ -396,9 +466,29 @@ pub fn dup2(old_fd: u32, new_fd: u32) -> Result<u32, i64> {
     let table = current_table();
     if !table[old].active { return Err(-9); }
     if new >= 3 && table[new].active {
+        // Drop the soon-to-be-clobbered fd's ref (if any).
+        match table[new].kind {
+            FdKind::Eventfd(s) => {
+                let _ = crate::batcave::linux::async_fds::free_eventfd_slot(s as usize);
+            }
+            FdKind::Timerfd(s) => {
+                let _ = crate::batcave::linux::async_fds::free_timerfd_slot(s as usize);
+            }
+            _ => {}
+        }
         table[new] = FdEntry::empty();
     }
     table[new] = table[old];
+    // Bump the new entry's slot refcount.
+    match table[new].kind {
+        FdKind::Eventfd(s) => {
+            crate::batcave::linux::async_fds::ref_eventfd_slot(s as usize);
+        }
+        FdKind::Timerfd(s) => {
+            crate::batcave::linux::async_fds::ref_timerfd_slot(s as usize);
+        }
+        _ => {}
+    }
     Ok(new_fd)
 }
 

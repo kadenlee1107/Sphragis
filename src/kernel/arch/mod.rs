@@ -1152,7 +1152,17 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             // Only reach here for non-busybox BRK (real shell exit).
             // V2-NEW-024: switch TTBR0 back to primary instead of disabling
             // the MMU so subsequent caves keep W^X / UXN / PXN protection.
-            uart::puts("[linux] exit — returning to desktop\n");
+            uart::puts("[linux] exit (BRK from EL0) elr=0x");
+            {
+                let hex = b"0123456789abcdef";
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((elr >> (sh * 4)) & 0xF) as usize]);
+                }
+            }
+            uart::puts(" tid=");
+            crate::kernel::mm::print_num(
+                crate::batcave::linux::threads::current_tid() as usize);
+            uart::puts(" — returning to desktop\n");
             unsafe {
                 crate::batcave::linux::mmu::switch_to_primary();
                 // Restore the kernel SP that the loader stashed before

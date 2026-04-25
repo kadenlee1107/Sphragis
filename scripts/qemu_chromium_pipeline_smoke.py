@@ -156,7 +156,10 @@ def main():
             "-kernel", str(kernel_bin),
             "-initrd", str(initrd)]
     fp = open(LOG, "wb")
-    c = pexpect.spawn(args[0], args[1:], timeout=300, logfile=fp, encoding=None)
+    # Bumped from 300s to 900s — Chromium's cooperative-scheduler init
+    # is slow (4000+ syscalls just to get past fontconfig), and the
+    # full DOM-dump path needs even more time.
+    c = pexpect.spawn(args[0], args[1:], timeout=900, logfile=fp, encoding=None)
     events = []
     verdict = "FAIL"
     try:
@@ -174,7 +177,9 @@ def main():
         # shipped in the archive alongside content_shell.
         c.sendline(b"chromium --dump-dom file:///bin/hello.html")
         try:
-            c.expect(PROMPT, timeout=240)
+            # Bumped from 240s to 720s. 18 worker threads × cooperative
+            # yield scheduling = a lot of round-trips to get to dump-dom.
+            c.expect(PROMPT, timeout=720)
         except pexpect.TIMEOUT:
             pass
 

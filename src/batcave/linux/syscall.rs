@@ -359,14 +359,19 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         25 => (SyscallCat::FileIO, sys_fcntl),        // fcntl
         34 => (SyscallCat::FileIO, sys_mkdirat),      // mkdirat
         35 => (SyscallCat::FileIO, sys_stub_zero),    // unlinkat
-        46 => (SyscallCat::Always, sys_stub_zero),    // ftruncate
+        46 => (SyscallCat::FileIO, sys_ftruncate),    // ftruncate — must really set node size for shm
+        47 => (SyscallCat::FileIO, sys_stub_zero),    // fallocate — Chromium uses for shmem pre-alloc; success-stub OK
         48 => (SyscallCat::FileIO, sys_faccessat),    // faccessat
         49 => (SyscallCat::FileIO, sys_chdir),        // chdir
         59 => (SyscallCat::FileIO, sys_pipe2),        // pipe2
         61 => (SyscallCat::FileIO, sys_getdents64),   // getdents64
         66 => (SyscallCat::FileIO, sys_writev),       // writev
+        67 => (SyscallCat::FileIO, sys_pread64),      // pread64 — Chromium uses for positional file reads
+        68 => (SyscallCat::FileIO, sys_pwrite64),     // pwrite64
         71 => (SyscallCat::FileIO, sys_sendfile),     // sendfile
         78 => (SyscallCat::FileIO, sys_readlinkat),   // readlinkat
+        88 => (SyscallCat::FileIO, sys_stub_zero),    // utimensat — return 0; we don't track mtime
+        53 => (SyscallCat::FileIO, sys_stub_zero),    // fchownat — single-user OS; ignore
 
         // ── Memory — always allowed within cave ──
         nr::BRK => (SyscallCat::Memory, sys_brk),
@@ -815,8 +820,35 @@ fn sys_fcntl(args: [u64; 6]) -> i64 {
         }
         1 => 0,   // F_GETFD — return 0 (no FD_CLOEXEC)
         2 => 0,   // F_SETFD — accept and ignore
-        3 => 0,   // F_GETFL — return 0 (O_RDONLY)
-        4 => 0,   // F_SETFL — accept and ignore
+        3 => {
+            // F_GETFL — return the fd's open flags. Chromium's
+            // PlatformSharedMemoryRegion::TakeOrFail uses
+            // CheckFDAccessMode which compares (F_GETFL & 3) to the
+            // requested access mode. Returning a fixed 0 here makes
+            // every shm region look O_RDONLY, breaking RDWR shm.
+            if fd < 0 { return -9; }
+            match fd::get(fd as u32) {
+                Some(e) => e.flags as i64,
+                None => -9,
+            }
+        }
+        4 => {
+            // F_SETFL — update the fd's open flags. Linux only allows
+            // O_APPEND, O_NONBLOCK, O_DIRECT, O_NOATIME bits to change
+            // (the access mode is fixed at open time). We honor that
+            // restriction so the (RDONLY|RDWR|WRONLY) part of flags
+            // stays correct for F_GETFL.
+            if fd < 0 { return -9; }
+            const O_NONBLOCK: u32 = 0o4000;
+            const O_APPEND:   u32 = 0o2000;
+            let new_flags = _arg as u32 & (O_NONBLOCK | O_APPEND);
+            if let Some(e) = fd::get_mut(fd as u32) {
+                e.flags = (e.flags & !(O_NONBLOCK | O_APPEND)) | new_flags;
+                0
+            } else {
+                -9
+            }
+        }
         _ => 0,   // Unknown: return 0
     }
 }
@@ -2225,9 +2257,30 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
     // to a high-VA demand-paged region lets these small allocations
     // succeed without colliding with already-mapped memory. The
     // pages get committed on first access by demand_page::try_handle.
-    if fd_num < 0
+    //
+    // ALSO: route file-backed mmaps for /dev/shm (and any other file
+    // with no backing memory) through this same path. Chromium's
+    // base::SharedMemoryRegion code creates a fresh /dev/shm file and
+    // then mmaps it without first ftruncating; the file has data_addr
+    // == 0, and our regular file-mmap path tries to allocate via
+    // alloc_contig — which returns frames outside the cave's contig
+    // window. The demand-page region just gives back zero pages,
+    // which is exactly what an empty shm file should look like.
+    // Detect a backing-less VFS file (e.g. /dev/shm files: created via
+    // openat under /dev/shm, optionally ftruncate'd to set size, but no
+    // data_addr because shm is purely RAM-backed at mmap time). Route
+    // those through the small-mmap demand-page region so the eventual
+    // first access faults onto a fresh zero page rather than a frame
+    // outside the cave's identity-mapped window.
+    let backing_is_empty = fd_num >= 0 && fd::get(fd_num as u32)
+        .map(|e| {
+            let n = vfs::get_node(e.node_idx);
+            n.node_type == vfs::NodeType::File && n.data_addr == 0
+        })
+        .unwrap_or(false);
+    if (fd_num < 0 || backing_is_empty)
         && (flags & 0x10) == 0   // not MAP_FIXED
-        && (flags & 0x20) != 0   // MAP_ANONYMOUS
+        && ((flags & 0x20) != 0 || backing_is_empty)  // anon OR empty file
         && len < HUGE_RESERVATION_THRESHOLD
     {
         let aligned_len = (len + 0xFFF) & !0xFFFusize;
@@ -2920,6 +2973,77 @@ fn print_ip(ip: u32) {
     crate::kernel::mm::print_num(((ip >> 8) & 0xFF) as usize);
     uart::putc(b'.');
     crate::kernel::mm::print_num((ip & 0xFF) as usize);
+}
+
+/// ftruncate(fd, length): set file size. We don't actually allocate
+/// backing memory here — Chromium's typical pattern is ftruncate then
+/// mmap, and our mmap path returns demand-paged zero pages for any
+/// VFS file with no backing memory. Reflecting the size in the node
+/// makes downstream fstat / mmap-bounds checks pass.
+fn sys_ftruncate(args: [u64; 6]) -> i64 {
+    let fd_num = args[0] as u32;
+    let length = args[1] as usize;
+    let entry = match fd::get(fd_num) {
+        Some(e) => e,
+        None => return -9, // EBADF
+    };
+    if !matches!(entry.kind, fd::FdKind::Vfs) {
+        return -22; // EINVAL — non-file fds can't be truncated
+    }
+    match vfs::set_node_size(entry.node_idx, length) {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+
+/// pread64(fd, buf, count, offset): like read() but at a specific
+/// file offset. Doesn't change the fd's position.
+fn sys_pread64(args: [u64; 6]) -> i64 {
+    let fd_num = args[0] as u32;
+    let buf    = args[1] as usize;
+    let count  = args[2] as usize;
+    let offset = args[3] as usize;
+
+    if count == 0 { return 0; }
+    if !is_user_ptr(buf, count) { return EFAULT; }
+
+    let entry = match fd::get(fd_num) {
+        Some(e) => e,
+        None => return -9, // EBADF
+    };
+    // Only VFS-backed regular files supported. Eventfd/timerfd/pipe
+    // semantics for pread are nonsensical (they have no offset).
+    if !matches!(entry.kind, fd::FdKind::Vfs) {
+        return -29; // ESPIPE — illegal seek for non-seekable
+    }
+    match vfs::read_file_data(entry.node_idx, offset, buf, count) {
+        Ok(n) => n as i64,
+        Err(e) => e,
+    }
+}
+
+/// pwrite64(fd, buf, count, offset): like write() but at a specific
+/// file offset. Doesn't change the fd's position.
+fn sys_pwrite64(args: [u64; 6]) -> i64 {
+    let fd_num = args[0] as u32;
+    let buf    = args[1] as usize;
+    let count  = args[2] as usize;
+    let offset = args[3] as usize;
+
+    if count == 0 { return 0; }
+    if !is_user_ptr(buf, count) { return EFAULT; }
+
+    let entry = match fd::get(fd_num) {
+        Some(e) => e,
+        None => return -9, // EBADF
+    };
+    if !matches!(entry.kind, fd::FdKind::Vfs) {
+        return -29; // ESPIPE
+    }
+    match vfs::write_to_file(entry.node_idx, offset, buf, count) {
+        Ok(n) => n as i64,
+        Err(e) => e,
+    }
 }
 
 fn sys_writev(args: [u64; 6]) -> i64 {

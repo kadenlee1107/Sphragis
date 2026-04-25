@@ -396,6 +396,21 @@ pub fn write_file_data(idx: u16, data: &[u8]) -> Result<(), i64> {
     Ok(())
 }
 
+/// Set a node's size (ftruncate-style). Used by sys_ftruncate so that
+/// Chromium's PlatformSharedMemoryRegion::TakeOrFail sees a non-zero
+/// size on the freshly-created shm file. We don't actually allocate
+/// backing data here — the small-mmap path provides demand-paged zero
+/// pages on first access.
+pub fn set_node_size(idx: u16, new_size: usize) -> Result<(), i64> {
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        let n = &mut (*core::ptr::addr_of_mut!(INSTANCES))[ai].nodes[idx as usize];
+        if n.node_type != NodeType::File { return Err(-22); } // EINVAL
+        n.size = new_size;
+        Ok(())
+    }
+}
+
 /// Read file data into a userspace buffer. Returns bytes read.
 pub fn read_file_data(idx: u16, offset: usize, buf_addr: usize, count: usize) -> Result<usize, i64> {
     unsafe {

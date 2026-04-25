@@ -102,6 +102,12 @@ pub struct EventfdState {
     pub in_use:  AtomicBool,
     pub counter: AtomicU64,
     pub flags:   AtomicI32,
+    /// POSIX file-description refcount. eventfd2 starts at 1; clone_fd_table
+    /// (fork) increments it for each cloned reference; close decrements;
+    /// the slot is freed when the count hits 0. Without this a forked
+    /// child closing its eventfd fd would free the global slot, leaving
+    /// the parent's fd entry pointing at a free slot.
+    pub refcount: AtomicI32,
     // Each state is externally addressed by its slot index; the owning fd
     // number lives in the fd-table entry that points here.
 }
@@ -112,6 +118,7 @@ impl EventfdState {
             in_use:  AtomicBool::new(false),
             counter: AtomicU64::new(0),
             flags:   AtomicI32::new(0),
+            refcount: AtomicI32::new(0),
         }
     }
 }
@@ -137,17 +144,37 @@ pub fn alloc_eventfd_slot(initval: u32, flags: i32) -> Result<usize, i64> {
         {
             EVENTFDS[i].counter.store(initval as u64, Ordering::Release);
             EVENTFDS[i].flags.store(flags, Ordering::Release);
+            EVENTFDS[i].refcount.store(1, Ordering::Release);
             return Ok(i);
         }
     }
     Err(EMFILE)
 }
 
-/// Free an eventfd slot (called when the fd is closed).
+/// Bump the refcount of an existing eventfd slot. Called by
+/// fd::clone_fd_table on fork so the child's reference doesn't
+/// double-free the slot when it closes.
+pub fn ref_eventfd_slot(slot: usize) {
+    if slot >= MAX_EVENTFDS { return; }
+    if !EVENTFDS[slot].in_use.load(Ordering::Acquire) { return; }
+    EVENTFDS[slot].refcount.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Drop one reference to an eventfd slot. Returns Ok(()) when the
+/// reference is released; the slot is fully freed only when the
+/// refcount transitions to zero.
 pub fn free_eventfd_slot(slot: usize) -> Result<(), i64> {
     if slot >= MAX_EVENTFDS { return Err(EBADF); }
+    if !EVENTFDS[slot].in_use.load(Ordering::Acquire) { return Err(EBADF); }
+    let prev = EVENTFDS[slot].refcount.fetch_sub(1, Ordering::AcqRel);
+    if prev > 1 {
+        // More references outstanding — leave the slot alive.
+        return Ok(());
+    }
+    // Last reference dropped — actually free.
     EVENTFDS[slot].counter.store(0, Ordering::Release);
     EVENTFDS[slot].flags.store(0, Ordering::Release);
+    EVENTFDS[slot].refcount.store(0, Ordering::Release);
     EVENTFDS[slot].in_use.store(false, Ordering::Release);
     Ok(())
 }
@@ -298,6 +325,7 @@ pub struct TimerfdState {
     pub expires_at:  AtomicI64,   // monotonic-ns deadline; 0 = disarmed
     pub interval_ns: AtomicI64,   // 0 = one-shot
     pub counter:     AtomicU64,   // number of pending expirations
+    pub refcount:    AtomicI32,   // POSIX file-description refcount (see EventfdState)
 }
 
 impl TimerfdState {
@@ -309,6 +337,7 @@ impl TimerfdState {
             expires_at:  AtomicI64::new(0),
             interval_ns: AtomicI64::new(0),
             counter:     AtomicU64::new(0),
+            refcount:    AtomicI32::new(0),
         }
     }
 }
@@ -337,19 +366,31 @@ pub fn alloc_timerfd_slot(clockid: i32, flags: i32) -> Result<usize, i64> {
             TIMERFDS[i].expires_at.store(0, Ordering::Release);
             TIMERFDS[i].interval_ns.store(0, Ordering::Release);
             TIMERFDS[i].counter.store(0, Ordering::Release);
+            TIMERFDS[i].refcount.store(1, Ordering::Release);
             return Ok(i);
         }
     }
     Err(EMFILE)
 }
 
-/// Free a timerfd slot (called from close()).
+/// Bump the timerfd slot refcount on fork/dup. Mirrors ref_eventfd_slot.
+pub fn ref_timerfd_slot(slot: usize) {
+    if slot >= MAX_TIMERFDS { return; }
+    if !TIMERFDS[slot].in_use.load(Ordering::Acquire) { return; }
+    TIMERFDS[slot].refcount.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Drop one reference to a timerfd slot. Slot freed when count → 0.
 pub fn free_timerfd_slot(slot: usize) -> Result<(), i64> {
     if slot >= MAX_TIMERFDS { return Err(EBADF); }
+    if !TIMERFDS[slot].in_use.load(Ordering::Acquire) { return Err(EBADF); }
+    let prev = TIMERFDS[slot].refcount.fetch_sub(1, Ordering::AcqRel);
+    if prev > 1 { return Ok(()); }
     TIMERFDS[slot].expires_at.store(0, Ordering::Release);
     TIMERFDS[slot].interval_ns.store(0, Ordering::Release);
     TIMERFDS[slot].counter.store(0, Ordering::Release);
     TIMERFDS[slot].flags.store(0, Ordering::Release);
+    TIMERFDS[slot].refcount.store(0, Ordering::Release);
     TIMERFDS[slot].in_use.store(false, Ordering::Release);
     Ok(())
 }

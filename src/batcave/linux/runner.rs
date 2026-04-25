@@ -241,9 +241,9 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
         uart::puts("\n");
     }
 
-    // Turn on per-syscall tracing while we're in the Chromium debug loop.
-    // Prints one line per svc #0 so we can see what content_shell calls.
-    super::syscall::SYSCALL_TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+    // Per-syscall tracing OFF — UART back-pressure on every syscall is
+    // dominating the runtime. Re-enable for syscall-level debugging.
+    super::syscall::SYSCALL_TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
 
     // Ensure the MMU is enabled with PRIMARY_L1 before we switch to
     // chromium's cave L1. The cave path assumes MMU is already up (see
