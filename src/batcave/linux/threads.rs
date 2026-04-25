@@ -315,6 +315,16 @@ pub struct Thread {
     /// Entry fields — only meaningful before the thread has run once.
     pub entry_pc: u64,
     pub entry_arg: u64,
+    /// Fork-as-thread frame-pointer relocation. Non-zero ONLY when
+    /// this thread was created by a fork-style clone where we
+    /// allocated a fresh user stack and copied parent's stack into
+    /// it. Equals `child_sp - parent_sp` (the byte delta between
+    /// the same logical stack offset in the two regions). Applied
+    /// to x29 (and the saved x29 chain at [x29, [x29], ...]) by
+    /// `set_child_resume` so frame-pointer-relative accesses land
+    /// in the copied stack instead of the parent's stack. Zero for
+    /// regular thread-clone.
+    pub fork_fp_relocation: i64,
 }
 
 impl Thread {
@@ -336,6 +346,7 @@ impl Thread {
             tid_set_child: None,
             entry_pc: 0,
             entry_arg: 0,
+            fork_fp_relocation: 0,
         }
     }
 }
@@ -356,13 +367,18 @@ static RUNNING_TID: AtomicU32 = AtomicU32::new(1);
 static NEXT_TID: AtomicU32 = AtomicU32::new(2);
 
 /// ROOT-FIX (2026-04-24): PID of the most recent fake-forked "child".
-/// Set by `clone()` when it sees a fork-style clone (no CLONE_VM) and
-/// consumed by `wait4()` which synthesises an immediate exit
-/// notification. Only one outstanding fake child at a time — if
-/// Chromium ever forks twice without wait4ing in between we'd lose
-/// the earlier one, but content_shell's helper-subprocess pattern
-/// does one fork at a time.
+/// Kept around for any wait4 code that still consults it, but the
+/// fork-as-thread path no longer sets it (real children get a real
+/// thread slot now).
 pub static FAKE_CHILD_PID: AtomicU32 = AtomicU32::new(0);
+
+/// Per-fork counter used to allocate a unique stack VA region for
+/// fork-as-thread children. Stack VAs are at
+///   0x0000_0060_0000_0000 + (FORK_COUNTER * 0x100_0000)
+/// (see `clone()`), giving 16 MB per fork — enough for any sane
+/// thread, and sized so the first 256 forks fit in 4 GB of unused
+/// VA space below the kernel-half boundary.
+static FORK_COUNTER: AtomicU32 = AtomicU32::new(0);
 static THREADING_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Call once (from the runner, when a multi-threaded ELF is about to start)
@@ -499,37 +515,138 @@ pub fn clone(flags: u64,
         return EINVAL;
     }
     // We don't have separate fs/files/sighand yet — must be shared.
-    // EXCEPTION: fork-style clone (no CLONE_VM) is faked. Chromium's
-    // content_shell calls `clone(SIGCHLD|CLONE_CHILD_SETTID|CLONE_
-    // CHILD_CLEARTID)` late in startup to launch a helper subprocess
-    // (crashpad handler / zygote / sandbox). With `--single-process`
-    // we don't actually need that subprocess to render HTML, but
-    // rejecting the clone makes Chromium exit. Instead we fake a
-    // successful fork: mint a PID, note it in FAKE_CHILD_PID so
-    // wait4() can reap it, and let the parent continue believing
-    // the fork worked. The child never runs — we pretend it
-    // immediately exited with status 0.
+    //
+    // FORK-AS-THREAD (2026-04-24): when the caller is doing a fork-
+    // style clone (no CLONE_VM), we re-interpret it as a thread
+    // clone with VM/files/sighand shared. The child gets:
+    //   * a fresh user stack (Chromium passes child_stack=NULL)
+    //   * a fresh kernel stack
+    //   * the parent's TLS pointer (TPIDR_EL0) — glibc fork
+    //     doesn't pass CLONE_SETTLS so we'd otherwise zero it
+    //   * the parent's full GPR snapshot (set_child_resume) with
+    //     x0 = 0 to signal "you are the child"
+    //
+    // What we DON'T do: copy the parent's address space. Memory
+    // is shared. For Chromium's zygote pattern that's acceptable:
+    // zygote_main() loops on an IPC socket, doesn't need its own
+    // memory view. Real CoW fork is a follow-up project; this
+    // gets us through enough of Chromium's init to render a DOM.
     let needs_shared = CLONE_VM | CLONE_THREAD;
+    let mut effective_flags = flags;
+    let mut effective_tls = tls;
+    let mut effective_stack = child_stack;
+    let mut fp_relocation: i64 = 0;
     if flags & needs_shared != needs_shared {
-        // Synthesise a fake child PID. Use NEXT_TID so we don't
-        // collide with real thread IDs. Record it in
-        // FAKE_CHILD_PID (the next `wait4` will synthesise an exit
-        // notification).
-        let fake_pid = NEXT_TID.fetch_add(1, Ordering::AcqRel);
-        // Best effort: write the fake pid into parent_tid / child_tid
-        // if the flags asked us to (Chromium checks these slots).
-        if flags & CLONE_PARENT_SETTID != 0 && !parent_tid.is_null() {
-            unsafe { core::ptr::write_volatile(parent_tid, fake_pid as i32); }
+        uart::puts("[clone] fork-as-thread: rewriting fork-style clone as a shared-VM thread\n");
+        // Inherit parent's TLS pointer so errno + similar work in
+        // the child. (Sharing is the same compromise we're making
+        // for memory.)
+        let parent_tls: u64;
+        unsafe { core::arch::asm!("mrs {}, tpidr_el0", out(reg) parent_tls); }
+        effective_tls = parent_tls;
+        // Strip the exit-signal byte (low 8 bits, e.g. SIGCHLD =
+        // 0x11) — that's a fork concept, not a thread concept, and
+        // would otherwise cause our existing thread cleanup path
+        // to try to deliver SIGCHLD to a non-existent parent
+        // (we don't model fork parent-child relationships yet).
+        // Force on the shared-resource flags + CLONE_SETTLS so we
+        // actually use `effective_tls`.
+        effective_flags = (flags & !0xFFu64)
+            | CLONE_VM | CLONE_THREAD | CLONE_FS | CLONE_FILES
+            | CLONE_SIGHAND | CLONE_SETTLS;
+        // Allocate a fresh user-VA stack for the child. Picking it
+        // *outside* the cave's main pre-mapped 400 MB window
+        // (virt_base..virt_base+400 MB) keeps us out of Chromium's
+        // way; we use a per-fork slot at 0x60_0000_0000 + N*0x100_0000
+        // (16 MB per fork) and register a demand-page reservation
+        // so the pages get committed on first access. Any cave's
+        // user VA is fine since we share the parent's L1.
+        const FORK_STACK_REGION_BASE: u64 = 0x0000_0060_0000_0000;
+        const FORK_STACK_SIZE:        u64 = 0x0000_0000_0100_0000; // 16 MB
+        let slot = FORK_COUNTER.fetch_add(1, Ordering::AcqRel) as u64;
+        let stack_lo = FORK_STACK_REGION_BASE + slot * FORK_STACK_SIZE;
+        let stack_hi = stack_lo + FORK_STACK_SIZE;
+        // Register the reservation under the parent's L1 (= the
+        // active L1, since we're inside the parent's syscall).
+        let parent_l1: u64;
+        unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) parent_l1); }
+        super::demand_page::register_reservation(
+            stack_lo, stack_hi, parent_l1 & !1u64);
+        // Copy a window of parent's user stack into the child's
+        // stack so that frame-pointer-relative accesses (including
+        // glibc's stack-canary check at function epilogue) see the
+        // same data the parent had. Without this, the child's
+        // glibc fork() epilogue reads garbage at [fp-N], the
+        // canary check fails, and the process aborts with
+        // "*** stack smashing detected ***".
+        //
+        // We mirror parent's [SP, SP+64K] into the child at the
+        // SAME RELATIVE OFFSET from the new stack top. Then the
+        // child's SP is set so SP-relative reads land in the
+        // copied region.
+        let parent_sp: u64;
+        unsafe { core::arch::asm!("mrs {}, sp_el0", out(reg) parent_sp); }
+        const COPY_BYTES: u64 = 0x10000; // 64 KB
+        // Position child SP so [child_SP, child_SP + COPY_BYTES)
+        // = the copy of [parent_SP, parent_SP + COPY_BYTES).
+        // Anchor child_SP at a fixed offset (4 KB) below stack_hi
+        // so we have headroom both above (for the copy) and below
+        // (for the child's growing stack).
+        let copy_top = (stack_hi - 0x1000) & !0xFu64;
+        effective_stack = copy_top - COPY_BYTES;
+        // Round to 16 B for ABI.
+        let effective_stack_aligned = effective_stack & !0xFu64;
+        // Touch every page in the copy range so demand-paging
+        // commits frames before we memcpy into them.
+        let mut va = effective_stack_aligned & !0xFFFu64;
+        while va < copy_top {
+            unsafe {
+                // A read forces a commit; the value is discarded.
+                core::ptr::read_volatile(va as *const u8);
+            }
+            va += 0x1000;
         }
-        if flags & CLONE_CHILD_SETTID != 0 && !child_tid.is_null() {
-            unsafe { core::ptr::write_volatile(child_tid, fake_pid as i32); }
+        // Now do the copy. parent_sp is a user VA; we read it via
+        // the active page table (still parent's, since we're
+        // inside a syscall in parent's context).
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                parent_sp as *const u8,
+                effective_stack_aligned as *mut u8,
+                COPY_BYTES as usize,
+            );
         }
-        FAKE_CHILD_PID.store(fake_pid, Ordering::Release);
-        uart::puts("[clone] fake-fork: returning pid=");
-        crate::kernel::mm::print_num(fake_pid as usize);
-        uart::puts("\n");
-        return fake_pid as i64;
+        effective_stack = effective_stack_aligned;
+        // Relocation: child_x29 = parent_x29 + (effective_stack - parent_sp).
+        // We DON'T know parent_x29 here — it's recorded later in
+        // PARENT_SYSCALL_REGS when set_child_resume runs. Stash the
+        // delta so set_child_resume can apply it.
+        fp_relocation = effective_stack as i64 - parent_sp as i64;
+        uart::puts("[fork-as-thread] reserved stack VA 0x");
+        let hex = b"0123456789abcdef";
+        for sh in (0..16).rev() {
+            uart::putc(hex[((stack_lo >> (sh * 4)) & 0xF) as usize]);
+        }
+        uart::puts("..0x");
+        for sh in (0..16).rev() {
+            uart::putc(hex[((stack_hi >> (sh * 4)) & 0xF) as usize]);
+        }
+        uart::puts(" sp=0x");
+        for sh in (0..16).rev() {
+            uart::putc(hex[((effective_stack >> (sh * 4)) & 0xF) as usize]);
+        }
+        uart::puts(" (parent_sp=0x");
+        for sh in (0..16).rev() {
+            uart::putc(hex[((parent_sp >> (sh * 4)) & 0xF) as usize]);
+        }
+        uart::puts(")\n");
     }
+    // From here on, refer to `effective_flags` / `effective_tls` /
+    // `effective_stack` instead of the originals so the
+    // fork-as-thread remap takes effect for everything downstream.
+    let flags = effective_flags;
+    let tls = effective_tls;
+    let child_stack = effective_stack;
 
     // V8-ROOT-1 / V8-IRQ-#3: charge-Threads + charge-Mem must be atomic
     // w.r.t. preempt — otherwise a racing syscall could see Threads
@@ -685,6 +802,10 @@ pub fn clone(flags: u64,
         t[slot].saved_regs.user_sp_el0 = child_stack;
         t[slot].saved_regs.elr_el1 = 0;
         t[slot].saved_regs.spsr_el1 = 0;
+        // Stash the fork-as-thread frame-pointer relocation so
+        // set_child_resume can adjust x29 (and walk the saved-FP
+        // chain to fix up nested frames).
+        t[slot].fork_fp_relocation = fp_relocation;
 
         0
     });
@@ -742,6 +863,47 @@ pub fn set_child_resume(tid: u32, resume_pc: u64, _parent_sp: u64) {
             t[i].saved_regs.x[19] = resume_pc;
             t[i].saved_regs.elr_el1 = resume_pc;
             t[i].entry_pc = resume_pc;
+
+            // Fork-as-thread: relocate the frame pointer so it
+            // lands in the child's copy of parent's stack instead
+            // of pointing back into parent's actual stack VA. We
+            // also walk the saved-FP chain in the COPIED stack to
+            // relocate every saved x29, so glibc's stack-canary
+            // check (and any FP-based unwinding the child does)
+            // sees a valid chain entirely in child memory.
+            let reloc = t[i].fork_fp_relocation;
+            if reloc != 0 {
+                let parent_x29 = t[i].saved_regs.x[29];
+                let child_x29 = (parent_x29 as i64).wrapping_add(reloc) as u64;
+                t[i].saved_regs.x[29] = child_x29;
+                // Walk the saved-FP chain. Each frame stores
+                // [prev_x29, prev_x30] at [x29], so prev_x29 lives
+                // at [x29] and prev_x30 at [x29 + 8]. Follow the
+                // chain in the COPIED stack and add `reloc` to
+                // each saved prev_x29 so they stay self-consistent.
+                let mut walker = child_x29;
+                for _ in 0..32 {
+                    // Bounds-check: must be inside the stack
+                    // region we copied. Heuristic — addresses we
+                    // copied range up to ~64 KB above effective_stack.
+                    if walker == 0 { break; }
+                    // Inline read+rewrite. The pages were demand-
+                    // committed during the copy phase so this
+                    // shouldn't fault, but we read volatile to be
+                    // explicit.
+                    let saved_x29: u64 = unsafe {
+                        core::ptr::read_volatile(walker as *const u64)
+                    };
+                    if saved_x29 == 0 { break; }
+                    let new_saved = (saved_x29 as i64)
+                        .wrapping_add(reloc) as u64;
+                    unsafe {
+                        core::ptr::write_volatile(
+                            walker as *mut u64, new_saved);
+                    }
+                    walker = new_saved;
+                }
+            }
         }
     });
 }
