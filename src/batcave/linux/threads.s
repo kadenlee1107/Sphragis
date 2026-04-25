@@ -57,6 +57,14 @@ cxt_switch_cooperative:
         mrs     x2, sp_el0
         str     x2, [x0, #800]
 
+        // REAL-FORK: save the user TTBR0 into old.user_ttbr0
+        // (offset 808). Thread might have been moved to a forked
+        // cave; capturing TTBR0 here means the next time we resume
+        // it, the asm below restores the same address space.
+        mrs     x2, ttbr0_el1
+        bic     x2, x2, #1              // strip CnP bit
+        str     x2, [x0, #808]
+
         // Save tpidr_el0 into old.x[18] slot (offset 144).
         mrs     x2, tpidr_el0
         str     x2, [x0, #144]
@@ -101,6 +109,28 @@ cxt_switch_cooperative:
         // to leave in the SP_EL0 MSR.
         ldr     x2, [x1, #800]
         msr     sp_el0, x2
+
+        // REAL-FORK: restore user TTBR0 from new.user_ttbr0 if it
+        // differs from the currently-active TTBR0. Crossing into a
+        // different cave (different process address space) requires
+        // a TLB flush to drop stale translations. Same-cave threads
+        // skip the swap to avoid the TLB hit.
+        //
+        // user_ttbr0 == 0 means the thread inherits whatever was
+        // active (used for early-init phases before init_main_thread
+        // captures the live TTBR0).
+        ldr     x2, [x1, #808]
+        cbz     x2, 1f                  // 0 → don't touch TTBR0
+        mrs     x3, ttbr0_el1
+        bic     x3, x3, #1              // strip CnP for compare
+        cmp     x2, x3
+        b.eq    1f                      // same — skip
+        msr     ttbr0_el1, x2
+        isb
+        tlbi    vmalle1
+        dsb     ish
+        isb
+1:
 
         ldr     x2, [x1, #144]
         msr     tpidr_el0, x2
@@ -197,6 +227,11 @@ cxt_switch_first_run:
         // cooperative resume of OLD eret's with the right user sp.
         mrs     x3, sp_el0
         str     x3, [x0, #800]
+        // REAL-FORK: capture OLD's user TTBR0 so cross-cave
+        // resumes restore the right address space.
+        mrs     x3, ttbr0_el1
+        bic     x3, x3, #1
+        str     x3, [x0, #808]
         mrs     x3, tpidr_el0
         str     x3, [x0, #144]
         stp     q0,  q1,  [x0, #272]
@@ -230,6 +265,24 @@ cxt_switch_first_run:
         // ─── Restore tpidr_el0 (TLS) from new.x[18] ───
         ldr     x3, [x1, #144]
         msr     tpidr_el0, x3
+
+        // REAL-FORK: activate NEW thread's user TTBR0 if non-zero
+        // and different from the current. Forked children get a
+        // fresh L1 (their own address space); without this swap
+        // the child would eret into the parent's page table and
+        // see parent's memory.
+        ldr     x3, [x1, #808]          // new.user_ttbr0
+        cbz     x3, 2f                  // 0 → leave TTBR0 alone
+        mrs     x4, ttbr0_el1
+        bic     x4, x4, #1
+        cmp     x3, x4
+        b.eq    2f                      // same — skip
+        msr     ttbr0_el1, x3
+        isb
+        tlbi    vmalle1
+        dsb     ish
+        isb
+2:
 
         // ─── Set up the exception-return registers ───
         ldr     x3, [x1, #256]          // elr_el1 (user_pc)

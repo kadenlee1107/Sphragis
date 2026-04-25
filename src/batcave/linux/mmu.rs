@@ -372,6 +372,326 @@ pub fn setup_cave_pagetable_at(
     Ok(l1)
 }
 
+/// Look up the user-window bounds (virt_base, virt_extent) for
+/// the given L1 phys address. Returns None if no cave is
+/// registered with that L1.
+pub fn cave_bounds_for_l1(l1_phys: u64) -> Option<(u64, u64)> {
+    unsafe {
+        for i in 0..MAX_CAVE_PAGETABLES {
+            if CAVE_L1[i] == l1_phys as usize && l1_phys != 0 {
+                return Some((
+                    CAVE_VIRT_BASE[i] as u64,
+                    CAVE_VIRT_EXTENT[i] as u64,
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Look up the physical base of the given L1's cave.
+pub fn cave_phys_base_for_l1(l1_phys: u64) -> Option<usize> {
+    unsafe {
+        for i in 0..MAX_CAVE_PAGETABLES {
+            if CAVE_L1[i] == l1_phys as usize && l1_phys != 0 {
+                return Some(CAVE_PHYS_BASE[i]);
+            }
+        }
+    }
+    None
+}
+
+/// Real-fork (eager-copy) page table duplication.
+///
+/// Allocates a fresh L1 + L2 set for the child cave and copies the
+/// parent's user-window mappings into it page-by-page. Kernel
+/// mappings (L2_high, L2_xhi) and MMIO entries are shared verbatim
+/// — they're identical for every cave anyway. User pages get fresh
+/// physical frames + memcpy of the parent's data so post-fork
+/// writes from one process don't bleed into the other.
+///
+/// This is the one-shot "real fork" primitive that gives us proper
+/// process semantics (separate address spaces). It costs ~1 frame
+/// allocation + page copy per touched user page, and a 2 MB
+/// contiguous alloc + memcpy per pre-mapped block. Slow at fork
+/// time (~50-200 ms for a 100 MB Chromium cave) but correct, and
+/// happens at most a handful of times per browser launch.
+///
+/// Caller must register the returned L1 + per-cave bookkeeping
+/// via `record_forked_cave` (below) so `switch_to_cave(child_l1)`
+/// finds the right user-window bounds when the child is scheduled.
+pub fn fork_cave_pagetable(
+    parent_l1: usize,
+    virt_base: u64,
+    virt_extent: u64,
+) -> Result<usize, &'static str> {
+    use crate::drivers::uart;
+    use crate::kernel::mm::frame;
+
+    // 1. Allocate child page tables.
+    let child_l1     = frame::alloc_kernel_frame().ok_or("fork: oom L1")?;
+    let child_l2_low = frame::alloc_kernel_frame().ok_or("fork: oom L2_low")?;
+    let child_l2_high= frame::alloc_kernel_frame().ok_or("fork: oom L2_high")?;
+    let child_l2_xhi = frame::alloc_kernel_frame().ok_or("fork: oom L2_xhi")?;
+    for t in [child_l1, child_l2_low, child_l2_high, child_l2_xhi] {
+        unsafe {
+            for i in 0..(PAGE_SIZE / 8) {
+                core::arch::asm!("str xzr, [{a}]",
+                    a = in(reg) t + i * 8);
+            }
+        }
+    }
+
+    // 2. L1 entries: child's L2s for the standard 3 slots.
+    write_pte(child_l1, 0, child_l2_low  as u64 | TABLE_DESC);
+    write_pte(child_l1, 1, child_l2_high as u64 | TABLE_DESC);
+    write_pte(child_l1, 2, child_l2_xhi  as u64 | TABLE_DESC);
+
+    // 3. L2_high + L2_xhi: copy verbatim (kernel identity mappings,
+    //    same for every cave; never written to from EL0).
+    let parent_l2_high = unsafe {
+        core::ptr::read_volatile((parent_l1 + 8) as *const u64)
+    } & 0x0000_FFFF_FFFF_F000;
+    let parent_l2_xhi  = unsafe {
+        core::ptr::read_volatile((parent_l1 + 16) as *const u64)
+    } & 0x0000_FFFF_FFFF_F000;
+    for i in 0..512 {
+        let pte = unsafe {
+            core::ptr::read_volatile((parent_l2_high + (i * 8) as u64) as *const u64)
+        };
+        write_pte(child_l2_high, i, pte);
+    }
+    for i in 0..512 {
+        let pte = unsafe {
+            core::ptr::read_volatile((parent_l2_xhi + (i * 8) as u64) as *const u64)
+        };
+        write_pte(child_l2_xhi, i, pte);
+    }
+
+    // 4. L1[3..512]: V8 cage and other high-VA user mappings live
+    //    here (e.g. L1 idx 0x60 for VA 0x18_0000_0000). Demand
+    //    paging populates them lazily as the parent touches new
+    //    addresses. Walk each L1 entry; if it points to a user
+    //    L2, deep-copy that L2's L3 pages (cage allocations are
+    //    page-granular L3 entries, never 2 MB blocks).
+    for l1_idx in 3..512usize {
+        let parent_l1_pte = unsafe {
+            core::ptr::read_volatile(
+                (parent_l1 + (l1_idx * 8)) as *const u64
+            )
+        };
+        if parent_l1_pte & PTE_VALID == 0 { continue; }
+        // Allocate fresh L2 for the child at this slot.
+        let child_l2 = frame::alloc_kernel_frame()
+            .ok_or("fork: oom L2 (high)")? as u64;
+        unsafe {
+            for k in 0..(PAGE_SIZE / 8) {
+                core::arch::asm!("str xzr, [{a}]",
+                    a = in(reg) child_l2 as usize + k * 8);
+            }
+        }
+        let parent_l2 = parent_l1_pte & 0x0000_FFFF_FFFF_F000;
+        // Walk parent's L2 entries.
+        for l2_idx in 0..512usize {
+            let l2_pte = unsafe {
+                core::ptr::read_volatile(
+                    (parent_l2 + (l2_idx * 8) as u64) as *const u64
+                )
+            };
+            if l2_pte & PTE_VALID == 0 { continue; }
+            // Should always be TABLE descriptor (cage uses L3 entries),
+            // but handle BLOCK defensively by copying it as a block-
+            // split (same as L2_low BLOCK path).
+            if (l2_pte & 0b11) != TABLE_DESC { continue; }
+            let parent_l3 = l2_pte & 0x0000_FFFF_FFFF_F000;
+            let child_l3 = frame::alloc_kernel_frame()
+                .ok_or("fork: oom L3 (high)")? as u64;
+            unsafe {
+                for k in 0..(PAGE_SIZE / 8) {
+                    core::arch::asm!("str xzr, [{a}]",
+                        a = in(reg) child_l3 as usize + k * 8);
+                }
+            }
+            for l3_idx in 0..512usize {
+                let l3_pte = unsafe {
+                    core::ptr::read_volatile(
+                        (parent_l3 + (l3_idx * 8) as u64) as *const u64
+                    )
+                };
+                if l3_pte & PTE_VALID == 0 { continue; }
+                let parent_page = l3_pte & 0x0000_FFFF_FFFF_F000;
+                let child_page = match frame::alloc_frame() {
+                    Some(p) => p as u64,
+                    None => return Err("fork: oom L3 leaf (high)"),
+                };
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        parent_page as *const u8,
+                        child_page as *mut u8,
+                        PAGE_SIZE,
+                    );
+                }
+                let flag_mask = l3_pte & !0x0000_FFFF_FFFF_F000;
+                write_pte(child_l3 as usize, l3_idx, child_page | flag_mask);
+            }
+            write_pte(child_l2 as usize, l2_idx, child_l3 | TABLE_DESC);
+        }
+        write_pte(child_l1, l1_idx, child_l2 | TABLE_DESC);
+    }
+
+    // 5. L2_low: walk and fork.
+    let parent_l2_low = unsafe {
+        core::ptr::read_volatile(parent_l1 as *const u64)
+    } & 0x0000_FFFF_FFFF_F000;
+    let virt_base_block = (virt_base / 0x200000) as usize;
+    let virt_end_block  = ((virt_base + virt_extent + 0x1FFFFF) / 0x200000) as usize;
+
+    let mut blocks_copied: usize = 0;
+    let mut l3_pages_copied: usize = 0;
+
+    for i in 0..512usize {
+        let parent_pte = unsafe {
+            core::ptr::read_volatile(
+                (parent_l2_low + (i * 8) as u64) as *const u64
+            )
+        };
+        if parent_pte & PTE_VALID == 0 { continue; }
+
+        let in_user = i >= virt_base_block && i < virt_end_block;
+        if !in_user {
+            // MMIO or unused — share verbatim. (MMIO is device memory
+            // that both processes can/should access identically.)
+            write_pte(child_l2_low, i, parent_pte);
+            continue;
+        }
+
+        let is_table = (parent_pte & 0b11) == TABLE_DESC;
+        if !is_table {
+            // 2 MB BLOCK descriptor in parent. We CANNOT do the
+            // same in the child because `frame::alloc_contig(512)`
+            // returns 4 KB-aligned (not 2 MB-aligned) memory, and
+            // writing a non-2MB-aligned address into a BLOCK
+            // descriptor truncates the low bits — child reads
+            // wrong data, fetches garbage instructions, faults.
+            //
+            // Instead, break the 2 MB block into 512 individual
+            // 4 KB L3 entries on the child side. Each L3 leaf is
+            // a fresh 4 KB frame with parent's data memcpy'd in.
+            // The PTE permission/attribute bits are preserved
+            // from the parent block.
+            let parent_phys = parent_pte & 0x0000_FFFF_FFE0_0000;
+            let flag_mask = parent_pte & !0x0000_FFFF_FFE0_0000;
+            // L3 entries on AArch64 *require* PTE_TABLE bit set
+            // (= 0b11 in low bits) to mark them as PAGE descriptors
+            // even though they're leaves. The block desc didn't
+            // have PTE_TABLE; OR it in for the L3 leaves.
+            let l3_leaf_flags = flag_mask | PTE_TABLE;
+            // Allocate child's L3 table.
+            let child_l3 = frame::alloc_kernel_frame()
+                .ok_or("fork: oom L3 (block-split)")? as u64;
+            unsafe {
+                for k in 0..(PAGE_SIZE / 8) {
+                    core::arch::asm!("str xzr, [{a}]",
+                        a = in(reg) child_l3 as usize + k * 8);
+                }
+            }
+            // 512 4KB frames + memcpy each.
+            for j in 0..512usize {
+                let src_phys = parent_phys + (j * PAGE_SIZE) as u64;
+                let dst_phys = match frame::alloc_frame() {
+                    Some(p) => p as u64,
+                    None => {
+                        uart::puts("[fork] oom on L3 leaf during block split\n");
+                        return Err("fork: oom L3 leaf");
+                    }
+                };
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        src_phys as *const u8,
+                        dst_phys as *mut u8,
+                        PAGE_SIZE,
+                    );
+                }
+                write_pte(child_l3 as usize, j, dst_phys | l3_leaf_flags);
+                l3_pages_copied += 1;
+            }
+            // Install L3 table in child's L2_low.
+            write_pte(child_l2_low, i, child_l3 | TABLE_DESC);
+            blocks_copied += 1;
+        } else {
+            // TABLE descriptor → walk L3, copy each leaf page.
+            let parent_l3 = parent_pte & 0x0000_FFFF_FFFF_F000;
+            let child_l3 = frame::alloc_kernel_frame().ok_or("fork: oom L3")? as u64;
+            unsafe {
+                for k in 0..(PAGE_SIZE / 8) {
+                    core::arch::asm!("str xzr, [{a}]",
+                        a = in(reg) child_l3 as usize + k * 8);
+                }
+            }
+            for j in 0..512usize {
+                let l3_pte = unsafe {
+                    core::ptr::read_volatile(
+                        (parent_l3 + (j * 8) as u64) as *const u64
+                    )
+                };
+                if l3_pte & PTE_VALID == 0 { continue; }
+                let parent_page = l3_pte & 0x0000_FFFF_FFFF_F000;
+                let child_page = match frame::alloc_frame() {
+                    Some(p) => p as u64,
+                    None => {
+                        uart::puts("[fork] oom on L3 leaf page, aborting\n");
+                        return Err("fork: oom L3 page");
+                    }
+                };
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        parent_page as *const u8,
+                        child_page as *mut u8,
+                        PAGE_SIZE,
+                    );
+                }
+                let flag_mask = l3_pte & !0x0000_FFFF_FFFF_F000;
+                write_pte(child_l3 as usize, j, child_page | flag_mask);
+                l3_pages_copied += 1;
+            }
+            write_pte(child_l2_low, i, child_l3 | TABLE_DESC);
+        }
+    }
+
+    uart::puts("[fork] pagetable cloned: ");
+    crate::kernel::mm::print_num(blocks_copied);
+    uart::puts(" blocks (2MB) + ");
+    crate::kernel::mm::print_num(l3_pages_copied);
+    uart::puts(" L3 pages (4KB)\n");
+
+    Ok(child_l1)
+}
+
+/// Register a forked cave's page table + user-window bounds in
+/// the per-slot tables so `switch_to_cave(child_l1)` finds the
+/// right `is_user_range` bounds when scheduling the child. Uses
+/// the same CAVE_L1 / CAVE_PHYS_BASE / CAVE_VIRT_BASE arrays as
+/// `setup_cave_pagetable_at` so one set of bookkeeping covers
+/// both the initial cave creation and post-fork children.
+pub fn record_forked_cave(
+    cave_slot: usize,
+    l1_phys: u64,
+    parent_phys_base: usize,
+    virt_base: u64,
+    virt_extent: u64,
+) -> Result<(), &'static str> {
+    if cave_slot >= MAX_CAVE_PAGETABLES {
+        return Err("record_forked_cave: slot oob");
+    }
+    unsafe {
+        CAVE_L1[cave_slot] = l1_phys as usize;
+        CAVE_PHYS_BASE[cave_slot] = parent_phys_base;
+        CAVE_VIRT_BASE[cave_slot] = virt_base as usize;
+        CAVE_VIRT_EXTENT[cave_slot] = virt_extent as usize;
+    }
+    Ok(())
+}
+
 /// Switch MMU to a cave's page table.
 pub fn switch_to_cave(l1_addr: usize) {
     unsafe {

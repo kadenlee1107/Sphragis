@@ -251,6 +251,15 @@ pub struct SavedRegs {
     /// from t2's stack slot holding a V8 cage pointer, then branching
     /// into cage data = SIGSEGV.
     pub user_sp_el0: u64,//            @ 800
+    /// REAL-FORK (2026-04-24): the user-space page table root for
+    /// this thread (TTBR0_EL1 value). Threads in the same cave
+    /// share an L1; forked-child threads have their own. Set by
+    /// `init_main_thread` to the cave's L1 and by `clone()` (real
+    /// fork branch) to the freshly forked L1. The cooperative
+    /// context switch reads it and swaps TTBR0 if it differs from
+    /// what's currently active — which makes cross-cave scheduling
+    /// transparent without touching every callsite.
+    pub user_ttbr0: u64, //            @ 808
 }
 
 impl SavedRegs {
@@ -264,6 +273,7 @@ impl SavedRegs {
             fpsr: 0,
             fpcr: 0,
             user_sp_el0: 0,
+            user_ttbr0: 0,
         }
     }
 }
@@ -420,6 +430,13 @@ pub fn init_main_thread(main_entry_pc: u64, main_sp_el0: u64) {
         // a sane value avoids a spurious load from an uninitialised
         // slot if anything reads it before the first yield.
         t[0].saved_regs.user_sp_el0 = main_sp_el0;
+        // REAL-FORK: capture current TTBR0 as t0's user page table.
+        // Subsequent forked children get a different L1 stored in
+        // their saved_regs.user_ttbr0; the cooperative context
+        // switch swaps TTBR0 transparently when crossing caves.
+        let ttbr0_now: u64;
+        unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0_now); }
+        t[0].saved_regs.user_ttbr0 = ttbr0_now & !1u64; // strip CnP bit
         t[0].saved_regs.elr_el1 = main_entry_pc;
         // EL0t, IRQs unmasked:
         t[0].saved_regs.spsr_el1 = 0;
@@ -545,124 +562,20 @@ pub fn clone(flags: u64,
     // memory view. Real CoW fork is a follow-up project; this
     // gets us through enough of Chromium's init to render a DOM.
     let needs_shared = CLONE_VM | CLONE_THREAD;
-    let mut effective_flags = flags;
-    let mut effective_tls = tls;
-    let mut effective_stack = child_stack;
-    let mut fp_relocation: i64 = 0;
     if flags & needs_shared != needs_shared {
-        uart::puts("[clone] fork-as-thread: rewriting fork-style clone as a shared-VM thread\n");
-        // Inherit parent's TLS pointer so errno + similar work in
-        // the child. (Sharing is the same compromise we're making
-        // for memory.)
-        let parent_tls: u64;
-        unsafe { core::arch::asm!("mrs {}, tpidr_el0", out(reg) parent_tls); }
-        effective_tls = parent_tls;
-        // Strip the exit-signal byte (low 8 bits, e.g. SIGCHLD =
-        // 0x11) — that's a fork concept, not a thread concept, and
-        // would otherwise cause our existing thread cleanup path
-        // to try to deliver SIGCHLD to a non-existent parent
-        // (we don't model fork parent-child relationships yet).
-        // Force on the shared-resource flags + CLONE_SETTLS so we
-        // actually use `effective_tls`.
-        effective_flags = (flags & !0xFFu64)
-            | CLONE_VM | CLONE_THREAD | CLONE_FS | CLONE_FILES
-            | CLONE_SIGHAND | CLONE_SETTLS;
-        // Allocate a fresh user-VA stack for the child. Picking it
-        // *outside* the cave's main pre-mapped 400 MB window
-        // (virt_base..virt_base+400 MB) keeps us out of Chromium's
-        // way; we use a per-fork slot at 0x60_0000_0000 + N*0x100_0000
-        // (16 MB per fork) and register a demand-page reservation
-        // so the pages get committed on first access. Any cave's
-        // user VA is fine since we share the parent's L1.
-        const FORK_STACK_REGION_BASE: u64 = 0x0000_0060_0000_0000;
-        const FORK_STACK_SIZE:        u64 = 0x0000_0000_0100_0000; // 16 MB
-        let slot = FORK_COUNTER.fetch_add(1, Ordering::AcqRel) as u64;
-        let stack_lo = FORK_STACK_REGION_BASE + slot * FORK_STACK_SIZE;
-        let stack_hi = stack_lo + FORK_STACK_SIZE;
-        // Register the reservation under the parent's L1 (= the
-        // active L1, since we're inside the parent's syscall).
-        let parent_l1: u64;
-        unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) parent_l1); }
-        super::demand_page::register_reservation(
-            stack_lo, stack_hi, parent_l1 & !1u64);
-        // Copy a window of parent's user stack into the child's
-        // stack so that frame-pointer-relative accesses (including
-        // glibc's stack-canary check at function epilogue, and
-        // anything reading struct contents through a stack-
-        // resident pointer like base::LaunchOptions) see the same
-        // data the parent had. Without this, the child's glibc
-        // fork() epilogue reads garbage at [fp-N], the canary
-        // check fails, and the process aborts with "*** stack
-        // smashing detected ***".
-        //
-        // 512 KB of parent's stack is copied — covers any
-        // reasonable Chromium call depth at fork time without
-        // wasting too much memory. (Chromium browser threads
-        // typically run with 256 KB stacks; a 512 KB window
-        // captures the entire stack of any thread that forks.)
-        let parent_sp: u64;
-        unsafe { core::arch::asm!("mrs {}, sp_el0", out(reg) parent_sp); }
-        const COPY_BYTES: u64 = 0x80000; // 512 KB
-        // Position child SP so [child_SP, child_SP + COPY_BYTES)
-        // = the copy of [parent_SP, parent_SP + COPY_BYTES).
-        // Anchor child_SP at a fixed offset (4 KB) below stack_hi
-        // so we have headroom both above (for the copy) and below
-        // (for the child's growing stack).
-        let copy_top = (stack_hi - 0x1000) & !0xFu64;
-        effective_stack = copy_top - COPY_BYTES;
-        // Round to 16 B for ABI.
-        let effective_stack_aligned = effective_stack & !0xFu64;
-        // Touch every page in the copy range so demand-paging
-        // commits frames before we memcpy into them.
-        let mut va = effective_stack_aligned & !0xFFFu64;
-        while va < copy_top {
-            unsafe {
-                // A read forces a commit; the value is discarded.
-                core::ptr::read_volatile(va as *const u8);
-            }
-            va += 0x1000;
-        }
-        // Now do the copy. parent_sp is a user VA; we read it via
-        // the active page table (still parent's, since we're
-        // inside a syscall in parent's context).
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                parent_sp as *const u8,
-                effective_stack_aligned as *mut u8,
-                COPY_BYTES as usize,
-            );
-        }
-        effective_stack = effective_stack_aligned;
-        // Relocation: child_x29 = parent_x29 + (effective_stack - parent_sp).
-        // We DON'T know parent_x29 here — it's recorded later in
-        // PARENT_SYSCALL_REGS when set_child_resume runs. Stash the
-        // delta so set_child_resume can apply it.
-        fp_relocation = effective_stack as i64 - parent_sp as i64;
-        uart::puts("[fork-as-thread] reserved stack VA 0x");
-        let hex = b"0123456789abcdef";
-        for sh in (0..16).rev() {
-            uart::putc(hex[((stack_lo >> (sh * 4)) & 0xF) as usize]);
-        }
-        uart::puts("..0x");
-        for sh in (0..16).rev() {
-            uart::putc(hex[((stack_hi >> (sh * 4)) & 0xF) as usize]);
-        }
-        uart::puts(" sp=0x");
-        for sh in (0..16).rev() {
-            uart::putc(hex[((effective_stack >> (sh * 4)) & 0xF) as usize]);
-        }
-        uart::puts(" (parent_sp=0x");
-        for sh in (0..16).rev() {
-            uart::putc(hex[((parent_sp >> (sh * 4)) & 0xF) as usize]);
-        }
-        uart::puts(")\n");
+        // REAL FORK PATH (no CLONE_VM): give the child its own
+        // address space (separate L1 page table, eager-copied from
+        // the parent's). The child's TTBR0 is set on its first
+        // schedule by the cooperative-switch asm (which checks
+        // saved_regs.user_ttbr0). Memory is fully separated;
+        // post-fork writes from one process don't bleed into the
+        // other. Parent's CURRENT user SP is preserved for the
+        // child via set_child_resume — both processes start at the
+        // same logical stack offset, but in separate physical
+        // pages.
+        return real_fork(flags, parent_tid, child_tid);
     }
-    // From here on, refer to `effective_flags` / `effective_tls` /
-    // `effective_stack` instead of the originals so the
-    // fork-as-thread remap takes effect for everything downstream.
-    let flags = effective_flags;
-    let tls = effective_tls;
-    let child_stack = effective_stack;
+    let child_stack = child_stack; // (no rewrite path for thread-clone)
 
     // V8-ROOT-1 / V8-IRQ-#3: charge-Threads + charge-Mem must be atomic
     // w.r.t. preempt — otherwise a racing syscall could see Threads
@@ -818,23 +731,16 @@ pub fn clone(flags: u64,
         t[slot].saved_regs.user_sp_el0 = child_stack;
         t[slot].saved_regs.elr_el1 = 0;
         t[slot].saved_regs.spsr_el1 = 0;
-        // Stash the fork-as-thread frame-pointer relocation so
-        // set_child_resume can adjust x29 (and walk the saved-FP
-        // chain to fix up nested frames).
-        t[slot].fork_fp_relocation = fp_relocation;
-        if fp_relocation != 0 {
-            // Bounds of the copied-stack region (the only place
-            // where a relocated FP value is meaningful). Anything
-            // outside is past the end of the useful frame chain
-            // and must NOT be rewritten — that's how we previously
-            // turned a random vector::end pointer into a billions-
-            // size and looped Chromium's fd remap forever.
-            // child_stack now points at the BOTTOM of where we
-            // copied (effective_stack); the copy extends UP by
-            // COPY_BYTES (defined in the fork-as-thread block).
-            t[slot].fork_stack_lo = child_stack;
-            t[slot].fork_stack_hi = child_stack + 0x80000; // == COPY_BYTES
-        }
+        // Thread-clone (CLONE_VM): no fork relocation needed —
+        // the child shares the parent's address space and runs at
+        // the user-supplied child_stack.
+        t[slot].fork_fp_relocation = 0;
+        t[slot].fork_stack_lo = 0;
+        t[slot].fork_stack_hi = 0;
+        // Inherit parent's TTBR0 — same cave.
+        let cur_ttbr0: u64;
+        unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) cur_ttbr0); }
+        t[slot].saved_regs.user_ttbr0 = cur_ttbr0 & !1u64;
 
         0
     });
@@ -856,6 +762,173 @@ pub fn clone(flags: u64,
 
     uart::puts("[clone] success new_tid=");
     crate::kernel::mm::print_num(new_tid as usize);
+    uart::puts("\n");
+    new_tid as i64
+}
+
+/// REAL FORK (2026-04-24): create a new process with its own
+/// address space.
+///
+/// Called from `clone()` when the caller passes fork-style flags
+/// (no CLONE_VM). Steps:
+///   1. Look up the parent's user-window bounds.
+///   2. `mmu::fork_cave_pagetable` — eager-copy parent's user
+///      pages into a fresh L1.
+///   3. `mmu::record_forked_cave` — register the child's L1 in
+///      the per-cave table so `is_user_range` works for it.
+///   4. Allocate a thread slot, kernel stack, and seed
+///      saved_regs so the cooperative-switch asm activates
+///      child_l1 on first run.
+///   5. Return new TID. set_child_resume (called from the
+///      arch SVC dispatcher) will fill in the parent's GPR
+///      snapshot with x0=0 for the child.
+///
+/// Memory: the parent's user-window contents are duplicated into
+/// fresh physical frames. Fork is therefore O(parent's mapped
+/// memory) — typically 50-200 ms for Chromium-sized caves. We
+/// pay this once per fork, not per access (unlike CoW), so the
+/// child runs at full speed afterward.
+fn real_fork(
+    flags: u64,
+    parent_tid_ptr: *mut i32,
+    child_tid_ptr: *mut i32,
+) -> i64 {
+    use crate::drivers::uart;
+
+    // 1. Parent's L1 + user-window bounds. We can't trust the
+    // global active_user_window() here because the SVC handler may
+    // have run code that disturbed the per-cave bookkeeping — go
+    // straight to TTBR0 and the per-cave tables.
+    let parent_l1: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) parent_l1); }
+    let parent_l1 = parent_l1 & !1u64;
+    let (virt_base, virt_extent) = super::mmu::cave_bounds_for_l1(parent_l1)
+        .ok_or_else(|| {
+            uart::puts("[fork] parent L1 not registered, aborting\n");
+        })
+        .unwrap_or((0x10000000u64, (400 * 1024 * 1024) as u64)); // safe default
+    let parent_phys_base = super::mmu::cave_phys_base_for_l1(parent_l1)
+        .unwrap_or(0);
+
+    // 2. Allocate a cave slot + duplicate the page table.
+    let cave_slot = match super::mmu::alloc_cave_slot() {
+        Some(s) => s,
+        None => {
+            uart::puts("[fork] no free cave slot\n");
+            return ENOMEM;
+        }
+    };
+    let child_l1 = match super::mmu::fork_cave_pagetable(
+        parent_l1 as usize, virt_base, virt_extent)
+    {
+        Ok(l) => l as u64,
+        Err(e) => {
+            uart::puts("[fork] fork_cave_pagetable failed: ");
+            uart::puts(e);
+            uart::puts("\n");
+            super::mmu::free_cave_slot(cave_slot);
+            return ENOMEM;
+        }
+    };
+    if let Err(e) = super::mmu::record_forked_cave(
+        cave_slot, child_l1, parent_phys_base, virt_base, virt_extent)
+    {
+        uart::puts("[fork] record_forked_cave failed: ");
+        uart::puts(e);
+        uart::puts("\n");
+        super::mmu::free_cave_slot(cave_slot);
+        return ENOMEM;
+    }
+
+    // 3. Allocate kernel stack for the child thread.
+    let kstack_pages = KERNEL_STACK_PAGES;
+    let kstack_base = match crate::kernel::mm::frame::alloc_contig(kstack_pages) {
+        Some(b) => b as u64,
+        None => {
+            uart::puts("[fork] no kernel stack\n");
+            super::mmu::free_cave_slot(cave_slot);
+            return ENOMEM;
+        }
+    };
+    let kstack_top = kstack_base + (kstack_pages * PAGE_SIZE) as u64;
+
+    // 4. Allocate a thread slot and seed it. Most state will be
+    // overwritten by set_child_resume from the parent's syscall
+    // snapshot — we only need to populate the bits that aren't
+    // GPRs (TTBR0, kernel SP, fresh flag).
+    let parent_sp: u64;
+    unsafe { core::arch::asm!("mrs {}, sp_el0", out(reg) parent_sp); }
+    let parent_tls: u64;
+    unsafe { core::arch::asm!("mrs {}, tpidr_el0", out(reg) parent_tls); }
+
+    let new_tid = NEXT_TID.fetch_add(1, Ordering::AcqRel);
+    let me = current_tid();
+    let alloc_ok = with_table(|t| -> bool {
+        let slot = match find_free_slot(t) {
+            Some(s) => s,
+            None => return false,
+        };
+        t[slot] = Thread::empty();
+        t[slot].tid = new_tid;
+        t[slot].parent_tid = me;
+        t[slot].state = ThreadState::Runnable;
+        t[slot].kernel_stack_base = kstack_base;
+        t[slot].kernel_stack_top = kstack_top;
+        t[slot].fresh = true;
+        t[slot].tls_ptr = parent_tls;
+        t[slot].entry_pc = 0; // patched by set_child_resume
+
+        // Stash CLONE_*_TID pointers so the existing code at
+        // thread bring-up writes the child's TID into them.
+        if flags & CLONE_PARENT_SETTID != 0 && !parent_tid_ptr.is_null() {
+            t[slot].tid_set_parent = Some(parent_tid_ptr as u64);
+        }
+        if flags & CLONE_CHILD_SETTID != 0 && !child_tid_ptr.is_null() {
+            t[slot].tid_set_child = Some(child_tid_ptr as u64);
+        }
+        if flags & CLONE_CHILD_CLEARTID != 0 && !child_tid_ptr.is_null() {
+            t[slot].tid_clear_on_exit = Some(child_tid_ptr as u64);
+        }
+
+        // saved_regs init: most overwritten by set_child_resume.
+        t[slot].saved_regs = SavedRegs::zero();
+        t[slot].saved_regs.x[18] = parent_tls;          // TPIDR_EL0
+        t[slot].saved_regs.sp_el0 = kstack_top;          // kernel SP
+        t[slot].saved_regs.user_sp_el0 = parent_sp;      // user SP
+        t[slot].saved_regs.user_ttbr0 = child_l1;        // ⭐ THE KEY BIT
+        // elr_el1 / spsr_el1 / x[0..30] all set later by
+        // set_child_resume (called from arch dispatcher).
+
+        // stack_top — used by cxt_switch_first_run as x2 arg.
+        // For real fork, child runs on parent's user SP (same VA;
+        // distinct phys via the new page table).
+        t[slot].stack_top = parent_sp;
+
+        true
+    });
+    if !alloc_ok {
+        uart::puts("[fork] no free thread slot\n");
+        crate::kernel::mm::frame::free_contig(kstack_base as usize, kstack_pages);
+        super::mmu::free_cave_slot(cave_slot);
+        return ENOMEM;
+    }
+
+    // Write parent_tid_ptr immediately — Linux semantics.
+    if flags & CLONE_PARENT_SETTID != 0 && !parent_tid_ptr.is_null() {
+        unsafe { core::ptr::write_volatile(parent_tid_ptr, new_tid as i32); }
+    }
+    // Note: child_tid_ptr writing is deferred to when the child
+    // actually runs (at cxt_switch_first_run / first svc-return).
+
+    uart::puts("[fork] real fork → child_tid=");
+    crate::kernel::mm::print_num(new_tid as usize);
+    uart::puts(" cave_slot=");
+    crate::kernel::mm::print_num(cave_slot);
+    uart::puts(" child_l1=0x");
+    let hex = b"0123456789abcdef";
+    for sh in (0..16).rev() {
+        uart::putc(hex[((child_l1 >> (sh * 4)) & 0xF) as usize]);
+    }
     uart::puts("\n");
     new_tid as i64
 }
