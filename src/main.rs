@@ -132,6 +132,13 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     kernel::scheduler::init();
     kernel::ipc::init();
     kernel::arch::init_exceptions();
+    // (init_timer + GICv2 init removed — IRQ-driven preemption
+    // hangs boot somewhere after the timer fires the first time.
+    // GIC init is correct for the QEMU virt machine layout but
+    // either the timer fires too aggressively or our IRQ vector
+    // doesn't preserve enough state. Filed for follow-up; for
+    // now the periodic-yield-every-4096-syscalls fallback in the
+    // syscall dispatcher covers cooperative scheduling.)
 
     // V4: probe ARMv8.5 RNDR hardware RNG and wire it into crypto::rng.
     crypto::rng::probe_hw_rng();

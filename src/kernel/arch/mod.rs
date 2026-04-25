@@ -80,7 +80,52 @@ pub fn init_exceptions() {
     uart::puts("  [arch] CNTKCTL_EL1 cleared — EL0 timer access denied\n");
 }
 
+/// Minimal GICv2 init for QEMU virt. The "virt" machine wires:
+///   GIC Distributor (GICD)  @ 0x0800_0000
+///   GIC CPU Interface (GICC)@ 0x0801_0000
+/// Physical-timer IRQ is PPI #14 → INTID 30.
+///
+/// We need: enable the distributor, enable the CPU interface,
+/// set PMR (priority mask) to accept all priorities, enable
+/// INTID 30 in GICD's ISENABLER. Without this the timer fires
+/// in CNTP_CTL but the CPU never sees an IRQ.
+fn init_gicv2() {
+    const GICD_BASE: usize = 0x0800_0000;
+    const GICC_BASE: usize = 0x0801_0000;
+    const GICD_CTLR: usize = GICD_BASE + 0x000;
+    const GICD_ISENABLER0: usize = GICD_BASE + 0x100;
+    const GICD_IPRIORITYR: usize = GICD_BASE + 0x400;
+    const GICC_CTLR: usize = GICC_BASE + 0x000;
+    const GICC_PMR:  usize = GICC_BASE + 0x004;
+
+    unsafe {
+        // Enable distributor (Group 0).
+        core::ptr::write_volatile(GICD_CTLR as *mut u32, 1);
+        // Lowest priority byte for INTID 30 (timer PPI). Priority
+        // 0xa0 — middle of the range so other IRQs (if any) can
+        // override.
+        let prio_word_addr = (GICD_IPRIORITYR + (30 / 4) * 4) as *mut u32;
+        let mut prio = core::ptr::read_volatile(prio_word_addr);
+        let lane = (30 % 4) * 8;
+        prio &= !(0xFFu32 << lane);
+        prio |= 0xA0u32 << lane;
+        core::ptr::write_volatile(prio_word_addr, prio);
+        // Enable INTID 30 (PPI #14 = physical timer) — bit 30 of
+        // GICD_ISENABLER0 (covers IRQs 0..31).
+        core::ptr::write_volatile(GICD_ISENABLER0 as *mut u32, 1u32 << 30);
+        // Accept all priorities at the CPU interface.
+        core::ptr::write_volatile(GICC_PMR  as *mut u32, 0xFF);
+        // Enable CPU interface.
+        core::ptr::write_volatile(GICC_CTLR as *mut u32, 1);
+    }
+    uart::puts("  [arch] GICv2 initialized (timer PPI 30 enabled)\n");
+}
+
 pub fn init_timer() {
+    // Initialize the GIC first so the CPU actually receives the
+    // timer IRQ. Without this, CNTP_CTL fires but no IRQ vector
+    // is taken — preemption is dead in the water.
+    init_gicv2();
     unsafe {
         let freq: u64;
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
@@ -102,7 +147,7 @@ fn reset_timer() {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn handle_irq(_frame: *mut TrapFrame) {
+pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
     // V-ASAHI-2.2: on Apple Silicon, IRQs come through AIC2 instead of
     // a per-CPU GIC. We MUST drain the AIC event queue every entry,
     // otherwise level-triggered IRQs (timer, UART, SPI, etc.) re-fire
@@ -121,14 +166,51 @@ pub extern "C" fn handle_irq(_frame: *mut TrapFrame) {
         reset_timer();
         crate::kernel::scheduler::tick();
 
-        // V4 preemption request: set a flag the syscall layer checks on
-        // entry / exit. Full trap-frame preemption via on_tick() would
-        // require TrapFrame and SavedRegs to be layout-identical
-        // (they're not today — SavedRegs has sp_el0 which TrapFrame
-        // lacks). So we do deferred preemption: the running thread
-        // yields at the next syscall boundary. Combined with the
-        // V3 scheduler yields inside long syscalls, this gives
-        // effective time-sharing.
+        // CHROMIUM-PHASE-D / REAL PREEMPTION: invoke the threads
+        // layer's on_tick(). It snapshots the current thread's
+        // user-mode state (from `frame` + live MSRs), picks the
+        // next runnable thread, and returns a pointer to that
+        // thread's saved regs. We then blit those into the trap
+        // frame and update the user MSRs (SP_EL0, TPIDR_EL0,
+        // TTBR0_EL1) so eret resumes the new thread.
+        //
+        // This replaces the old "set request_preempt flag, yield
+        // at next syscall boundary" model — workers stuck in user-
+        // mode loops with no syscalls would otherwise never get
+        // preempted, starving Chromium's worker pool.
+        unsafe {
+            let frame_ptr = frame as *mut crate::batcave::linux::threads::SavedRegs;
+            let new_regs = crate::batcave::linux::threads::on_tick(frame_ptr);
+            if let Some(new_ptr) = new_regs {
+                // Blit the new thread's user-mode state into the
+                // trap frame so eret picks it up.
+                let new = &*new_ptr;
+                // Frame layout: x[0..31] @ 0..248, elr @ 248, spsr @ 256.
+                let tf_x = frame as *mut [u64; 31];
+                core::ptr::write(tf_x, new.x);
+                let tf_elr = (frame as *mut u8).add(248) as *mut u64;
+                core::ptr::write(tf_elr, new.elr_el1);
+                let tf_spsr = (frame as *mut u8).add(256) as *mut u64;
+                core::ptr::write(tf_spsr, new.spsr_el1);
+                // Live MSRs: SP_EL0, TPIDR_EL0, TTBR0_EL1.
+                core::arch::asm!("msr sp_el0, {}", in(reg) new.user_sp_el0);
+                core::arch::asm!("msr tpidr_el0, {}", in(reg) new.x[18]);
+                if new.user_ttbr0 != 0 {
+                    let cur_ttbr0: u64;
+                    core::arch::asm!("mrs {}, ttbr0_el1", out(reg) cur_ttbr0);
+                    if (cur_ttbr0 & !1u64) != new.user_ttbr0 {
+                        core::arch::asm!("msr ttbr0_el1, {}", in(reg) new.user_ttbr0);
+                        core::arch::asm!("isb");
+                        core::arch::asm!("tlbi vmalle1");
+                        core::arch::asm!("dsb ish");
+                        core::arch::asm!("isb");
+                    }
+                }
+            }
+        }
+        // Belt-and-suspenders: also set the preempt flag so the
+        // syscall-boundary fallback fires if something prevents
+        // the IRQ from completing the swap.
         crate::batcave::linux::threads::request_preempt();
     }
 }

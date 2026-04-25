@@ -1289,11 +1289,32 @@ pub fn on_tick(current_trap_frame: *mut SavedRegs) -> Option<*const SavedRegs> {
     if !is_enabled() { return None; }
     let me = current_tid();
 
-    // 1. Snapshot the trap frame into the current thread's slot.
+    // 1. Snapshot the trap frame's user-mode state into the current
+    // thread's slot. TrapFrame (arch/mod.rs) has layout:
+    //   x[0..31] @ 0..248, elr @ 248, spsr @ 256.
+    // SavedRegs has DIFFERENT layout — direct struct copy would
+    // misalign elr_el1 (which lives at offset 256 in SavedRegs but
+    // 248 in TrapFrame). So copy field-by-field and pull SP_EL0 /
+    // TPIDR_EL0 / TTBR0_EL1 from the live MSRs.
     unsafe {
+        let tf_x: [u64; 31] = (*(current_trap_frame as *const [u64; 31])).clone();
+        let tf_elr: u64 = *((current_trap_frame as *const u8).add(248) as *const u64);
+        let tf_spsr: u64 = *((current_trap_frame as *const u8).add(256) as *const u64);
+        let cur_sp_el0: u64;
+        let cur_ttbr0: u64;
+        let cur_tpidr: u64;
+        core::arch::asm!("mrs {}, sp_el0",   out(reg) cur_sp_el0);
+        core::arch::asm!("mrs {}, ttbr0_el1", out(reg) cur_ttbr0);
+        core::arch::asm!("mrs {}, tpidr_el0", out(reg) cur_tpidr);
+        let cur_ttbr0 = cur_ttbr0 & !1u64;
         with_table(|t| {
             if let Some(i) = slot_of(t, me) {
-                t[i].saved_regs = *current_trap_frame;
+                t[i].saved_regs.x = tf_x;
+                t[i].saved_regs.x[18] = cur_tpidr; // TPIDR_EL0
+                t[i].saved_regs.elr_el1 = tf_elr;
+                t[i].saved_regs.spsr_el1 = tf_spsr;
+                t[i].saved_regs.user_sp_el0 = cur_sp_el0;
+                t[i].saved_regs.user_ttbr0 = cur_ttbr0;
             }
         });
     }
