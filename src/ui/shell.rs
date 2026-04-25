@@ -3033,9 +3033,12 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     if dump_dom    { argv[n] = "--dump-dom";     n += 1; }
     argv[n] = "--single-process";          n += 1;
     argv[n] = "--ozone-platform=headless"; n += 1;
-    // (Stay on the zygote path: --no-zygote hits an ICU CharString
-    // bug at ~300 syscalls (verified again 2026-04-25). The zygote
-    // path goes much further; deadlock comes later in IPC pump.)
+    // (Stay on the zygote path: --no-zygote (with or without
+    // --single-process) hits an ICU CharString bug at ~300 syscalls
+    // — verified again 2026-04-25. Same SIGSEGV at ELR=0x14d73e54
+    // (partition_alloc::TryRecommitSystemPages, FAR=0x70797400-prefix
+    // = "pyt\\0…" suggesting a string interpreted as a pointer).
+    // The zygote path goes much further; deadlock is later in IPC pump.)
     // --enable-logging=stderr --v=1 — make Chromium's own LOG(INFO)
     // + VLOG(1) lines hit stderr so we see what it's doing right
     // before it crashes. Cheap to enable; no-op if logging is

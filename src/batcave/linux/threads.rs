@@ -1374,13 +1374,38 @@ pub fn on_tick(current_trap_frame: *mut SavedRegs) -> Option<*const SavedRegs> {
 /// not resume this thread until wake_thread() or a matching futex/epoll
 /// wake. Yields the CPU immediately.
 pub fn block_current_thread(reason: BlockReason) {
+    mark_current_blocked(reason);
+    schedule();
+}
+
+/// Mark the current thread as Blocked WITHOUT immediately yielding. The
+/// caller (typically futex park_slot) will yield via schedule() at a
+/// safer point — usually after dropping a bucket lock so a racing waker
+/// can take it. The IRQ scheduler skips Blocked threads, so the next
+/// preemption naturally switches us out even before the explicit
+/// schedule() lands.
+pub fn mark_current_blocked(reason: BlockReason) {
     let me = current_tid();
     with_table(|t| {
         if let Some(i) = slot_of(t, me) {
             t[i].state = ThreadState::Blocked(reason);
         }
     });
-    schedule();
+}
+
+/// Mark the current thread Runnable again. Used by futex's park_slot when
+/// it observes its wake flag while holding the bucket lock — must undo
+/// the Blocked transition before falling through to release-and-return,
+/// otherwise the thread would never run again.
+pub fn mark_current_runnable() {
+    let me = current_tid();
+    with_table(|t| {
+        if let Some(i) = slot_of(t, me) {
+            if matches!(t[i].state, ThreadState::Blocked(_)) {
+                t[i].state = ThreadState::Running;
+            }
+        }
+    });
 }
 
 /// Move the named thread from Blocked -> Runnable. No-op if the thread is

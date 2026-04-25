@@ -274,57 +274,55 @@ fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32) -> i64 {
     let s = &b.slots[slot];
     let deadline = s.deadline_ticks.load(Ordering::Relaxed);
     let has_deadline = deadline != 0;
-    // Diagnostic: every N iterations, dump the slot state so we can
-    // confirm whether the waiter is actually observing its wake flag.
-    let mut iters: u64 = 0;
+    let _ = val;
 
+    // Real block path. Mark self Blocked under the bucket lock so a
+    // racing futex_wake either:
+    //   (a) sees our Blocked state via wake_thread → transitions us to
+    //       Runnable, OR
+    //   (b) takes the lock first, sets woken=true, calls wake_thread on
+    //       our (still-Running) tid (no-op), then unlocks. We then
+    //       observe woken=true on the next check and never block.
+    // The bucket_lock ↔ wake_thread ordering keeps the two cases atomic.
     loop {
-        // Waker set the flag?
+        bucket_lock(b);
+        // Fast-path check: did we already get our wake?
         if s.woken.load(Ordering::Acquire) {
-            // Detach the slot under the bucket lock and report success.
-            bucket_lock(b);
             release(b, slot);
             bucket_unlock(b);
             return 0;
         }
-        iters += 1;
-        let _ = iters;
-
         // Timeout expired?
         if has_deadline && cntpct() >= deadline {
-            bucket_lock(b);
-            // Re-check woken under the lock — a wake that raced with us
-            // should still be honoured (we'd rather consume that wake than
-            // return ETIMEDOUT and leave another thread blocked forever).
-            if s.woken.load(Ordering::Acquire) {
-                release(b, slot);
-                bucket_unlock(b);
-                return 0;
-            }
             release(b, slot);
             bucket_unlock(b);
             return ETIMEDOUT;
         }
+        // Mark self Blocked. Doesn't yield yet — that comes after we
+        // drop the bucket lock so a parallel waker can take it.
+        crate::batcave::linux::threads::mark_current_blocked(
+            crate::batcave::linux::threads::BlockReason::FutexWait { uaddr, val },
+        );
+        bucket_unlock(b);
 
-        // Belt-and-braces: if the user memory diverges from `val` and no
-        // wake arrived, we can still wake ourselves spuriously. This is
-        // allowed by the futex contract (POSIX calls it a spurious wakeup)
-        // and helps if we missed a FUTEX_WAKE due to a bug. Commented out
-        // by default because strict FUTEX_WAIT semantics require only
-        // returning on explicit wake or timeout.
-        //
-        // if load_u32(uaddr) != val { ... }
-        let _ = val; // silence unused-var when the check is commented
-
-        // Yield hint to the CPU, then re-poll. When the real scheduler
-        // integration lands, swap this for a true block.
-        // CHROMIUM-PHASE-C: also call threads::schedule() periodically
-        // so that a newly-created (via clone) thread gets a chance to
-        // run and signal the futex. Otherwise the waiter spins forever
-        // because the child never gets CPU time.
-        core::hint::spin_loop();
+        // Yield. The IRQ scheduler skips Blocked threads, so this thread
+        // sleeps until either a futex_wake transitions us back to Runnable
+        // or the timeout expires (we'd need a periodic timer wakeup for
+        // that — see the wakeup loop below for the polling fallback).
         crate::batcave::linux::threads::schedule();
-        let _ = uaddr;
+
+        // Resumed. Either:
+        //   * Waker called wake_thread + set woken=true → loop, see
+        //     woken=true, return 0.
+        //   * Spurious wake (timer IRQ that picked us anyway despite
+        //     Blocked? Shouldn't happen, but handle gracefully) → loop.
+        //   * Timeout fired and someone set us Runnable → loop, see
+        //     timeout, return ETIMEDOUT.
+        //
+        // mark_current_runnable resets state in case schedule() returned
+        // without going through wake_thread (e.g. someone manually
+        // Runnable'd us).
+        crate::batcave::linux::threads::mark_current_runnable();
     }
 }
 
@@ -450,9 +448,13 @@ pub fn futex_wake(uaddr: u64, max_wakers: u32) -> i64 {
         if s.woken.load(Ordering::Relaxed) {
             continue; // already flagged, waiter just hasn't reaped yet
         }
-        // Mark woken. The waiter will detach the slot itself.
+        // Mark woken first, THEN transition the waiter from Blocked to
+        // Runnable. Order matters: if we transitioned first, an IRQ
+        // could pick the waiter, run it through park_slot's bucket_lock
+        // before woken=true is visible, and re-block it forever.
         s.woken.store(true, Ordering::Release);
-        // TODO(sched): scheduler::unblock(s.tid.load(Ordering::Relaxed))
+        let waiter_tid = s.tid.load(Ordering::Relaxed) as u32;
+        let _ = crate::batcave::linux::threads::wake_thread(waiter_tid);
         woken += 1;
     }
     bucket_unlock(b);
@@ -487,6 +489,8 @@ pub fn futex_wake_bitset(uaddr: u64, max_wakers: u32, bitset: u32) -> i64 {
             continue;
         }
         s.woken.store(true, Ordering::Release);
+        let waiter_tid = s.tid.load(Ordering::Relaxed) as u32;
+        let _ = crate::batcave::linux::threads::wake_thread(waiter_tid);
         woken += 1;
     }
     bucket_unlock(b);
@@ -572,6 +576,8 @@ fn requeue_impl(
             continue;
         }
         s.woken.store(true, Ordering::Release);
+        let waiter_tid = s.tid.load(Ordering::Relaxed) as u32;
+        let _ = crate::batcave::linux::threads::wake_thread(waiter_tid);
         woken += 1;
     }
 
