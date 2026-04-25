@@ -11,6 +11,163 @@ end of a session.
 
 ---
 
+## 2026-04-24 21:30 — Mac — 🚀 REAL FORK landed; Chromium parent + child run in separate address spaces
+
+This session built **real fork** end-to-end and got Chromium past
+every fork-related blocker. The pipeline now goes:
+
+1. Parent forks zygote → eager-copy page tables → child has its
+   OWN address space (separate L1, separate physical pages for
+   every user mapping).
+2. Child runs Chromium's `LaunchProcess` code: gettid, getpid,
+   set_robust_list, opens IPC fds, calls `execve(helper)` which
+   correctly returns ENOENT.
+3. Child writes `LaunchProcess: failed to execvp:` to stderr —
+   Chromium's own error message — and `exit_group(127)`.
+4. Arch SVC dispatcher detects "this is a forked child cave"
+   (TTBR0 != host_cave_l1) and routes `exit_group` to
+   `threads::exit_current` instead of `desktop::resume()`. Parent
+   cave is preserved.
+5. Parent continues, forks again, same cycle.
+6. Parent does `pthread_create` → small-anon `mmap` → returns a
+   high-VA demand-paged region (0x70_0000_0000+). Worker thread
+   stacks now succeed.
+7. Parent loads more libraries via `MAP_FIXED` at high VAs:
+   demand-commit each page, memcpy file bytes through the user
+   VA, then `sys_mprotect` with the caller's `prot` so PROT_EXEC
+   pages get UXN cleared.
+8. Parent runs **582 syscalls** of post-fork init.
+9. Parent crashes in `base::ThreadIdNameManager::GetName` —
+   `[this->cached_name @ this+0x78] == NULL` because nothing
+   ever called `SetName` to populate it. That's a
+   Chromium-internal expectation, not a fork/mmap issue (the
+   same crash happens whether we fork or not).
+
+### What landed
+
+**`mmu::fork_cave_pagetable` (~200 lines)**
+Eager-copy fork primitive. Walks parent's L1; for the cave's
+main user window (L2_low) breaks each 2 MB BLOCK into 512 4 KB
+L3 entries (because `frame::alloc_contig` returns 4 KB-aligned,
+not 2 MB-aligned, so block descriptors would silently truncate);
+walks the cage / mmap regions at L1[3..512]; copies kernel
+identity mappings (L2_high, L2_xhi, MMIO) verbatim. Each user
+page gets a fresh physical frame + memcpy of the parent's data.
+~50-200 ms per fork; happens at most a handful of times per
+Chromium launch.
+
+**`mmu::record_forked_cave` + `cave_bounds_for_l1` +
+`cave_phys_base_for_l1` + `host_cave_l1`**
+Per-cave bookkeeping so `is_user_range`, demand-page reservation
+lookup, and the arch exit handler all find the right state for
+forked children.
+
+**`SavedRegs.user_ttbr0` + `cxt_switch_cooperative` /
+`cxt_switch_first_run` TTBR0 swap**
+Per-thread page table root. The cooperative-switch asm reads
+`new.user_ttbr0` and swaps TTBR0 with TLB flush when crossing
+into a different cave. Same-cave threads skip the swap to avoid
+the TLB hit.
+
+**`threads::real_fork` (~150 lines)**
+Replaces the fake-fork branch in `clone()`. Allocates a thread
+slot + kernel stack, calls `fork_cave_pagetable`, seeds
+`saved_regs.user_ttbr0 = child_l1`. Child's GPRs are filled by
+`set_child_resume` from the parent's SVC-entry snapshot with
+`x0 = 0`.
+
+**Arch `exit_group` scoping**
+SVC dispatcher checks `TTBR0 != host_cave_l1()` before tearing
+the cave down. Forked-child exits route to
+`threads::exit_current()`; only the host cave's exit goes to
+`desktop::resume()`. (Kernel stack of the exiting thread is
+intentionally leaked since we're running on it; ~16 KB per fork
+until proper cave-destroy lands.)
+
+**`sys_mmap` small-anon path**
+For `MAP_PRIVATE | MAP_ANONYMOUS` with no `MAP_FIXED`, fd=-1,
+and len < 2 GB: bump-allocate from a 32 GB region at
+0x70_0000_0000. ONE big demand-page reservation per active L1
+covers the whole region (Chromium does hundreds of small
+mmaps; per-call reservations would blow the 8-slot table).
+
+**`sys_mmap` MAP_FIXED at high VA**
+When `addr` is outside the cave's main 400 MB window, the old
+`phys_target = phys_base + (addr - va_start)` math was garbage
+and copying the file into it triggered a kernel data abort. New
+path: touch each page (demand-commit), memcpy file bytes
+through the user VA, call `sys_mprotect` with the requested
+`prot` so PROT_EXEC code segments get UXN cleared.
+
+**`arch/mod.rs` EC=0x25 demand_page** (last session, used here)
+Kernel uaccess that hits an uncommitted user page now demand-
+commits via `demand_page::try_handle` instead of fault-looping.
+
+### Files touched this session
+
+- `src/batcave/linux/mmu.rs` — fork_cave_pagetable,
+  record_forked_cave, cave_bounds_for_l1, cave_phys_base_for_l1,
+  host_cave_l1.
+- `src/batcave/linux/threads.rs` — real_fork; SavedRegs
+  user_ttbr0; init_main_thread/clone seed it.
+- `src/batcave/linux/threads.s` — TTBR0 save/restore + TLB flush
+  in cooperative + first_run paths.
+- `src/kernel/arch/mod.rs` — exit_group scoping for forked caves.
+- `src/batcave/linux/syscall.rs` — small-mmap region, FIXED-
+  high-VA path, mprotect call, single big reservation per L1.
+- `src/batcave/linux/syscall_history.rs` — `last_entry()` helper
+  for in-handler diagnostics.
+
+### Where Chromium dies now
+
+`base::ThreadIdNameManager::GetName(thread_id)` at
+content_shell offset 0x4d21328:
+
+```
+4d21318: ldr w8, [x19, #0x80]   ; cached_thread_id
+4d2131c: cmp w8, w20            ; matches requested?
+4d21320: b.ne search_loop       ; no → search
+4d21324: ldr x20, [x19, #0x78]  ; YES → load cached_name
+4d21328: ldrsb w8, [x20, #0x17] ; ← FAULT, x20 == 0
+```
+
+The cached `(id, name)` pair has been left half-initialised: id
+matches but name is NULL. Likely SetName was called with a
+default-constructed `std::string` that has `data() == nullptr`,
+or the SetName/GetName path crosses a fork boundary that we
+don't model correctly.
+
+Same crash whether we fork or not. **Not a fork bug.** Real
+Chromium-internal expectation about who-sets-thread-name-when.
+
+### Next steps
+
+1. **`ThreadIdNameManager::GetName` NULL deref** — either:
+   (a) Find the caller and what thread name is being looked up;
+       maybe we need to register a name for the main thread
+       early (e.g. via prctl PR_SET_NAME at cave start, plus
+       wiring the kernel-side stash into anywhere ThreadIdName-
+       Manager could read).
+   (b) Patch content_shell or pass a Chromium flag that
+       initialises thread names eagerly.
+   (c) Stub `pthread_setname_np` to make Chromium believe
+       the name is set.
+2. **CoW page table fork** (optimisation): eager copy is
+   ~50-200 ms per fork and burns 100+ MB per child. CoW would
+   share pages until written, much cheaper. Software-managed
+   PTE bit + write-fault handler + per-physical-page refcount.
+3. **wait4 + cave-destroy**: when child exits, parent's
+   `wait4` should block, then unblock with status; child's
+   page tables, frames, kernel stack should be freed. Currently
+   the kernel stack leaks (~16 KB per fork) and the cave's page
+   tables stay allocated until reboot.
+4. **execve** (real implementation): currently returns ENOENT
+   for any path. Chromium's child paths that actually want to
+   exec a helper would benefit, though for `--single-process`
+   most of these are no-ops.
+
+---
+
 ## 2026-04-24 15:45 — Mac — 🔥 ROOT CAUSE FOUND: SP_EL0 leaked across context switches. Chromium now logs its own FATAL.
 
 **This session found and fixed the V8 "cage pointer in x30" bug that has
