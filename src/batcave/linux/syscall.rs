@@ -249,6 +249,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         crate::kernel::mm::print_num(n as usize);
         uart::puts("\n");
         super::threads::dump();
+        super::syscall_history::dump_per_tid_last();
     }
 
     // Temporary diagnostic: trace every syscall. Essential for the Chromium

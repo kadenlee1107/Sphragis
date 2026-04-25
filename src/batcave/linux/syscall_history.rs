@@ -153,6 +153,50 @@ fn hex64(v: u64) {
     }
 }
 
+/// Compact per-tid dump — show the LAST syscall for each TID seen in
+/// the ring, with its ELR (the user-mode PC the syscall returned to).
+/// At a deadlock that ELR points into the user code each thread is now
+/// executing — combine with `rust-objdump` to identify what function
+/// is hogging the CPU or sitting in a CPU loop.
+pub fn dump_per_tid_last() {
+    uart::puts("  per-tid last syscall + return PC:\n");
+    let head = HEAD.load(Ordering::Acquire) as usize;
+    // Track which TIDs we've already printed so we only show the most-recent
+    // entry per TID. Walk newest → oldest.
+    let mut seen: [u32; 32] = [0u32; 32];
+    let mut seen_count = 0usize;
+    for i in 0..RING_SIZE {
+        let slot = (head + RING_SIZE - 1 - i) % RING_SIZE;
+        let e = unsafe {
+            let ring = &*core::ptr::addr_of!(RING);
+            ring[slot]
+        };
+        if e.seq == 0 && e.tid == 0 && e.syscall_num == 0 { continue; }
+        // Already saw a more-recent entry for this TID?
+        let mut already = false;
+        for j in 0..seen_count {
+            if seen[j] == e.tid { already = true; break; }
+        }
+        if already { continue; }
+        if seen_count < seen.len() {
+            seen[seen_count] = e.tid;
+            seen_count += 1;
+        }
+        // Compact one-liner: "tid=N sc=K (name) elr=0x..."
+        uart::puts("    t");
+        crate::kernel::mm::print_num(e.tid as usize);
+        uart::puts(" sc=");
+        crate::kernel::mm::print_num(e.syscall_num as usize);
+        uart::puts(" (");
+        uart::puts(crate::batcave::linux::syscall::syscall_name(e.syscall_num));
+        uart::puts(") elr=0x");
+        hex64(e.elr);
+        uart::puts(" lr=0x");
+        hex64(e.x30);
+        uart::puts("\n");
+    }
+}
+
 /// Read the most-recently-recorded entry. Useful when a syscall
 /// handler needs to peek at the caller's LR (`x30`) for diagnostic
 /// purposes — the dispatcher already captured it into the ring at

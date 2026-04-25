@@ -1202,6 +1202,7 @@ pub fn schedule() {
             if !DEADLOCK_REPORTED.swap(true, Ordering::AcqRel) {
                 uart::puts("[diag] schedule() found NO runnable thread — possible deadlock\n");
                 dump();
+                crate::batcave::linux::syscall_history::dump_per_tid_last();
             }
             return;
         };
@@ -1284,6 +1285,7 @@ pub fn schedule() {
         crate::kernel::mm::print_num(n as usize);
         uart::puts("\n");
         dump();
+        crate::batcave::linux::syscall_history::dump_per_tid_last();
     }
     unsafe { cxt_switch_cooperative(old_ptr, new_ptr); }
 }
@@ -1605,6 +1607,17 @@ pub fn dump() {
                     uart::puts("Exited(");
                     crate::kernel::mm::print_num(c as usize);
                     uart::puts(")");
+                }
+            }
+            // Show the saved user PC (where this thread will resume to
+            // when next scheduled). For Runnable/Blocked threads this is
+            // the user-mode address they were last at; combined with
+            // rust-objdump on content_shell we can name the function.
+            if s.saved_regs.elr_el1 != 0 {
+                uart::puts(" elr=0x");
+                let hex = b"0123456789abcdef";
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((s.saved_regs.elr_el1 >> (sh * 4)) & 0xF) as usize]);
                 }
             }
             uart::puts("\n");
