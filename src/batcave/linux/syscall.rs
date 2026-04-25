@@ -1779,9 +1779,74 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             if let Some(entry) = fd::get(fd_num as u32) {
                 let node = vfs::get_node(entry.node_idx);
                 if node.node_type == vfs::NodeType::File && node.data_addr != 0 {
-                    let (va_start, _) =
+                    let (va_start, va_end) =
                         crate::batcave::linux::mmu::active_user_window();
                     let phys_base = crate::batcave::linux::loader::get_phys_base();
+                    // CHROMIUM-PHASE-D: if `addr` is in a demand-paged
+                    // reservation outside the cave's main window
+                    // (small-anon-mmap region at 0x70_0000_0000+, or
+                    // V8 cage at 0x30_0000_0000+), the
+                    // phys_base + (addr - va_start) translation is
+                    // garbage. Touch each page in the destination
+                    // range to demand-commit it, then copy file
+                    // bytes through the USER VA directly — the
+                    // active page table maps it.
+                    if addr >= va_end || addr < va_start {
+                        let bytes_available = node.size.saturating_sub(offset);
+                        let to_copy = bytes_available.min(len);
+                        // Touch every page to demand-commit.
+                        let end_addr = addr + len;
+                        let mut va = addr & !0xFFFusize;
+                        while va < end_addr {
+                            unsafe {
+                                core::ptr::write_volatile(va as *mut u8, 0);
+                            }
+                            va += 4096;
+                        }
+                        unsafe {
+                            let src = (node.data_addr + offset) as *const u8;
+                            let dst = addr as *mut u8;
+                            core::ptr::copy_nonoverlapping(src, dst, to_copy);
+                            // Zero tail (.bss-ish region).
+                            for i in to_copy..len {
+                                core::ptr::write_volatile(dst.add(i), 0);
+                            }
+                            // Cache maintenance for code pages.
+                            let mut line = addr & !63;
+                            let end = addr + len;
+                            while line < end {
+                                core::arch::asm!("dc cvau, {a}", a = in(reg) line);
+                                core::arch::asm!("ic ivau, {a}", a = in(reg) line);
+                                line += 64;
+                            }
+                            core::arch::asm!("dsb ish");
+                            core::arch::asm!("isb");
+                        }
+                        // Apply the requested protection (prot
+                        // arg of mmap) — without this, the bytes
+                        // we just copied sit in pages with our
+                        // demand_page default flags (RW, UXN=1)
+                        // and the first instruction fetch from a
+                        // code segment faults EC=0x20.
+                        let _ = sys_mprotect([
+                            addr as u64, len as u64, _prot as u64,
+                            0, 0, 0,
+                        ]);
+                        uart::puts("[mmap] FIXED-high-VA fd=");
+                        crate::kernel::mm::print_num(fd_num as usize);
+                        uart::puts(" → 0x");
+                        let hex = b"0123456789abcdef";
+                        for sh in (0..16).rev() {
+                            uart::putc(hex[((addr >> (sh * 4)) & 0xF) as usize]);
+                        }
+                        uart::puts(" copied=");
+                        crate::kernel::mm::print_num(to_copy);
+                        uart::puts(" prot=0x");
+                        uart::putc(hex[((_prot >> 4) & 0xF) as usize]);
+                        uart::putc(hex[(_prot & 0xF) as usize]);
+                        uart::puts("\n");
+                        return addr as i64;
+                    }
                     if addr < va_start || phys_base == 0 {
                         return -(14i64); // EFAULT — misconfigured cave
                     }
@@ -2017,10 +2082,6 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
     {
         let aligned_len = (len + 0xFFF) & !0xFFFusize;
         use core::sync::atomic::Ordering as Ord2;
-        // Lazy-init: function-scope statics with non-zero defaults
-        // don't always carry their value through our boot setup
-        // (BSS-zero pass quirk). Force the cursor to SMALL_MMAP_BASE
-        // on first use if it's still zero.
         let cur = SMALL_MMAP_CURSOR.load(Ord2::Acquire);
         if cur == 0 {
             let _ = SMALL_MMAP_CURSOR.compare_exchange(
@@ -2028,31 +2089,27 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                 Ord2::AcqRel, Ord2::Acquire,
             );
         }
+        // Ensure the entire small-mmap region is covered by ONE
+        // big demand-page reservation per active L1 — Chromium does
+        // hundreds of small mmaps and would blow our 8-slot
+        // reservation table if we registered per-call.
+        let active_l1: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, ttbr0_el1", out(reg) active_l1);
+        }
+        let active_l1 = active_l1 & !1u64;
+        ensure_small_mmap_reservation(active_l1);
         let mut base = SMALL_MMAP_CURSOR.load(Ord2::Acquire);
         loop {
             let next = base.saturating_add(aligned_len);
-            if (next as u64) >= (1u64 << 39) {
-                // Out of high VA — fall through to the legacy path
-                // and accept whatever ENOMEM it produces.
+            if (next as u64) >= SMALL_MMAP_END as u64 {
                 break;
             }
             match SMALL_MMAP_CURSOR.compare_exchange(
                 base, next, Ord2::AcqRel, Ord2::Acquire,
             ) {
                 Ok(_) => {
-                    // Register the demand-page reservation so the
-                    // first access by user code commits a fresh
-                    // frame. Use the active TTBR0 (the caller's L1).
-                    let active_l1: u64;
-                    unsafe {
-                        core::arch::asm!("mrs {}, ttbr0_el1", out(reg) active_l1);
-                    }
-                    super::demand_page::register_reservation(
-                        base as u64,
-                        (base + aligned_len) as u64,
-                        active_l1 & !1u64,
-                    );
-                    uart::puts("[mmap] anon → demand-paged 0x");
+                    uart::puts("[mmap] anon → 0x");
                     let hex = b"0123456789abcdef";
                     for sh in (0..16).rev() {
                         uart::putc(hex[((base >> (sh * 4)) & 0xF) as usize]);
@@ -4370,8 +4427,35 @@ static mut SIGNAL_PENDING: u64 = 0;
 /// (sys_mmap, line ~2010). Module-scope so a known initial value
 /// survives any early static-init quirks.
 const SMALL_MMAP_BASE: usize = 0x70_0000_0000;
+const SMALL_MMAP_END:  usize = 0x78_0000_0000; // 32 GB region
 static SMALL_MMAP_CURSOR: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(SMALL_MMAP_BASE);
+
+/// Bitmap of L1s for which we've registered the big small-mmap
+/// reservation. Indexed by cave-slot equivalent — but since we
+/// only have ~8 caves total, a u64 is overkill. Use a small
+/// linear table.
+static mut SMALL_MMAP_RESV_L1S: [u64; 16] = [0u64; 16];
+static SMALL_MMAP_RESV_COUNT: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+fn ensure_small_mmap_reservation(l1: u64) {
+    use core::sync::atomic::Ordering as Ord2;
+    unsafe {
+        let n = SMALL_MMAP_RESV_COUNT.load(Ord2::Acquire);
+        for i in 0..n {
+            if SMALL_MMAP_RESV_L1S[i] == l1 { return; }
+        }
+        if n >= 16 { return; }
+        SMALL_MMAP_RESV_L1S[n] = l1;
+        SMALL_MMAP_RESV_COUNT.store(n + 1, Ord2::Release);
+    }
+    super::demand_page::register_reservation(
+        SMALL_MMAP_BASE as u64,
+        SMALL_MMAP_END  as u64,
+        l1,
+    );
+}
 /// Alternate signal stack
 static mut SIGALT_SP: u64 = 0;
 static mut SIGALT_SIZE: u64 = 0;
