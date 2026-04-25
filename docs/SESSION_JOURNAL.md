@@ -11,6 +11,109 @@ end of a session.
 
 ---
 
+## 2026-04-25 08:15 — Mac — 🎯 ROOT CAUSE: EpollEvent was 12-byte packed (x86_64 layout) instead of 16-byte unpacked (AArch64). Chromium now in its main loop with 18 threads.
+
+**The previous wall is gone.** The t5 SIGSEGV at FAR=0x5c7d8 was an
+ABI mismatch in our `EpollEvent` struct. After the one-line fix
+(strip `packed`), Chromium goes from "crashes after 5 threads at 2279
+syscalls" to "18 threads happily looping in epoll_pwait at 4024
+syscalls" — and the smoke test only times out because Chromium is now
+actually alive and waiting for input.
+
+### How we found it
+
+Steps:
+
+1. Look up the load base. `runner.rs` puts content_shell at
+   `CHROMIUM_VIRT_BASE = 0x10000000`. The ELF's PT_LOAD min_addr is
+   0, so runtime PC `0x14d52e18` ↔ file VMA `0x4d52e18`.
+2. `rust-objdump --triple=aarch64-unknown-none -d --start-address=0x4d52d80
+   --stop-address=0x4d52e60 ports/chromium_port/out/content_shell` →
+   the function is `base::MessagePumpEpoll::WaitForEpollEvents`.
+3. The crash instruction `ldr x8, [x26, #0x20]` had `x26 =
+   event[i].data`. Looking back, the loop iterates events at stride
+   `0x10` (16 bytes) and reads `.data` at `[x25, #0x8]` (offset 8
+   into each event).
+4. Our `EpollEvent` was `#[repr(C, packed)]` → size 12, data at
+   offset 4. Chromium reads at offset 8 → reads into the next event's
+   `events` field → garbage bytes interpreted as a pointer → SIGSEGV
+   on first deref.
+
+### The kernel ABI quirk
+
+`include/uapi/linux/eventpoll.h`:
+
+```c
+#ifdef __x86_64__
+#define EPOLL_PACKED __attribute__((packed))
+#else
+#define EPOLL_PACKED
+#endif
+struct epoll_event { __poll_t events; __u64 data; } EPOLL_PACKED;
+```
+
+So on x86_64 it's 12 bytes packed; on AArch64 it's 16 bytes naturally
+aligned. The original comment in `epoll.rs` confidently claimed both
+arches use the packed layout — that was wrong, and it cost a session.
+
+### Smoke comparison (before/after the one-line strip-packed fix)
+
+| metric                   | before       | after          |
+|--------------------------|--------------|----------------|
+| threads spawned          | 5            | 18             |
+| syscalls executed        | 2279         | 4024           |
+| log size                 | 195 KB       | ~4400 lines    |
+| crash                    | SIGSEGV @ t5 | none           |
+| final state              | terminated   | epoll wait loop|
+
+### What this leaves on the table
+
+The smoke test still times out because the test sends a single command
+and waits for a prompt; with Chromium now actually running, it doesn't
+exit. To turn this into a real "DOM dumped" pass we need:
+
+1. **content_shell --dump-dom output to actually flow back through
+   stdout.** The DOM dump comes through `write(1, ...)` once the page
+   is parsed; it should appear in the serial log. Need to verify the
+   pipeline gets that far (HTML parser, DOM tree built, serialized).
+2. **The smoke test needs an exit signal** — either Chromium calls
+   `exit_group(0)` after the dump, or we add a "saw the DOM, kill the
+   shell" hook in the smoke script.
+
+If we hit a new wall it'll be in HTML/V8 land, not in syscall plumbing.
+
+### Files changed
+
+* `src/batcave/linux/epoll.rs` — `#[repr(C, packed)]` → `#[repr(C)]`
+  on `EpollEvent`. Single-line semantic change, plus a comment block
+  documenting the ABI gotcha so it doesn't get re-introduced.
+
+### Commits
+
+```
+58b4b4ab Fix EpollEvent ABI: 16 bytes (unpacked) on AArch64, not 12 (packed)
+7d644321 journal: wait4 + cave teardown landed
+0ad5f8d5 wait4 + real cave teardown
+54158b6e journal: eventfd ↔ FD bridge landed
+d82ad104 Bridge eventfd2 / timerfd_create to real FD numbers
+02b9a29f journal: real preemption landed via cooperative-switch path
+07dbe10b Real timer-IRQ preemption via cooperative-switch path
+```
+
+### Today's full session, in one paragraph
+
+Walked through the pending list one item at a time. Per-cave fd tables
+killed the zygote IPC FATAL. close_range + lower NOFILE killed the
+4000-syscall close-loop. Real timer-IRQ preemption — routed through
+the cooperative cxt-switch path with the IRQ trap frame parked on the
+kernel stack — unblocked 10 worker threads. Eventfd↔FD bridge unlocked
+Chromium's IPC. wait4 + cave teardown plumbed real reaping. Then the
+EpollEvent ABI fix made it all work end-to-end: 18 worker threads,
+4000+ syscalls, Chromium settled into its main epoll loop. Real
+progress, 7 commits, no kernel hacks left in the way.
+
+---
+
 ## 2026-04-25 01:15 — Mac — wait4 + real cave teardown; full pending todo list cleared
 
 Last item from the session's "work one-by-one through the pending list"
