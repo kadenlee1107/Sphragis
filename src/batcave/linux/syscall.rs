@@ -147,6 +147,7 @@ mod nr {
     pub const CHDIR: u64 = 49;
     pub const OPENAT: u64 = 56;
     pub const CLOSE: u64 = 57;
+    pub const CLOSE_RANGE: u64 = 436;
     pub const LSEEK: u64 = 62;
     pub const READ: u64 = 63;
     pub const WRITE: u64 = 64;
@@ -345,6 +346,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         // ── File I/O — needs fs capability ──
         nr::OPENAT => (SyscallCat::FileIO, sys_openat),
         nr::CLOSE => (SyscallCat::FileIO, sys_close),
+        nr::CLOSE_RANGE => (SyscallCat::FileIO, sys_close_range),
         nr::READ => (SyscallCat::FileIO, sys_read),
         nr::WRITE => (SyscallCat::FileIO, sys_write),
         nr::LSEEK => (SyscallCat::FileIO, sys_stub_zero),
@@ -854,7 +856,12 @@ fn sys_prlimit64(args: [u64; 6]) -> i64 {
         let (cur, max): (u64, u64) = match resource {
             RLIMIT_STACK  => (8 * 1024 * 1024, 8 * 1024 * 1024),     // 8 MB
             RLIMIT_AS     => (4 * 1024 * 1024 * 1024, 4 * 1024 * 1024 * 1024), // 4 GB
-            RLIMIT_NOFILE => (1024, 4096),
+            // Cap at 256 instead of 1024/4096 — keeps Chromium's
+            // close-all-fds-before-exec loop from spending 4000+
+            // syscalls in a forked child. Real ulimit on most
+            // systems is 1024-4096 but our cave doesn't actually
+            // benefit from that headroom.
+            RLIMIT_NOFILE => (256, 256),
             RLIMIT_CORE   => (0, 0),
             _             => (0x7FFFFFFFFFFFFFFF, 0x7FFFFFFFFFFFFFFF),
         };
@@ -1542,6 +1549,25 @@ fn sys_close(args: [u64; 6]) -> i64 {
         }
         Err(e) => e,
     }
+}
+
+/// close_range(first, last, flags) — close every fd in [first, last]
+/// in a single syscall. Chromium uses this (or falls back to a
+/// per-fd loop of close() calls) before exec to ensure the new
+/// process doesn't inherit unintended fds. The fallback loop on
+/// 4096 fds is ~4000 syscalls per fork — implementing close_range
+/// keeps it to one. We ignore CLOSE_RANGE_UNSHARE / CLOEXEC flags
+/// since our model doesn't have shared-fd-table differentiation.
+fn sys_close_range(args: [u64; 6]) -> i64 {
+    let first = args[0] as u32;
+    let last  = args[1] as u32;
+    let _flags = args[2] as u32;
+    let last = last.min(crate::batcave::linux::fd::MAX_FDS_PUB as u32 - 1);
+    if first > last { return EINVAL; }
+    for fd in first..=last {
+        let _ = fd::close(fd); // ignore EBADF; that's expected for unset fds
+    }
+    0
 }
 
 fn fill_stat(buf: usize, mode: u32, size: u64, ino: u64, nlink: u32) {

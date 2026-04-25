@@ -14,6 +14,8 @@
 // SubsystemA scoped_fd). Bumping MAX_FDS + handing out
 // monotonically increasing fd numbers keeps that table happy.
 const MAX_FDS: usize = 1024;
+/// Public alias so syscall.rs's close_range can clamp to it.
+pub const MAX_FDS_PUB: usize = MAX_FDS;
 
 /// Kind-tag for fds that have backing beyond a VFS node. `Pipe`
 /// carries a pair_slot (0..pipe_buf::MAX_PAIRS) and a side (0 or 1)
