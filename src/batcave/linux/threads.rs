@@ -731,6 +731,19 @@ pub fn clone(flags: u64,
         t[slot].saved_regs.user_sp_el0 = child_stack;
         t[slot].saved_regs.elr_el1 = 0;
         t[slot].saved_regs.spsr_el1 = 0;
+        // CAVE-CORRECTNESS-2026-04-25: capture the PARENT's TTBR0
+        // as this thread's user_ttbr0. Previously left as 0, which
+        // means "don't touch TTBR0 on switch-in" — correct only when
+        // the OUTGOING thread happens to be in the same cave. If a
+        // thread from a different cave yields to us, we'd inherit
+        // their TTBR0 and execute in the wrong address space. This
+        // never bit single-cave Chromium runs but with zygote forks
+        // creating multiple caves it's a latent bug.
+        let parent_ttbr0: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, ttbr0_el1", out(reg) parent_ttbr0);
+        }
+        t[slot].saved_regs.user_ttbr0 = parent_ttbr0 & !1u64; // strip CnP
         // Thread-clone (CLONE_VM): no fork relocation needed —
         // the child shares the parent's address space and runs at
         // the user-supplied child_stack.
