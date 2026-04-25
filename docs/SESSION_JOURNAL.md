@@ -11,6 +11,119 @@ end of a session.
 
 ---
 
+## 2026-04-25 01:05 — Mac — eventfd ↔ FD bridge landed; Chromium now hits a deeper user-mode SIGSEGV instead of EBADF
+
+**Quick continuation of the preemption session.** With timer-IRQ preemption
+working, the next pending bug was eventfd2/timerfd_create returning slot
+indices instead of real fds — Chromium's epoll_ctl(EPOLL_CTL_ADD, fd=<slot>)
+was blowing up with EBADF because the "fd" wasn't actually in the per-cave
+fd table.
+
+### Bridge design
+
+* `FdKind` grew two new variants: `Eventfd(u16)` and `Timerfd(u16)`,
+  each carrying the underlying `async_fds::EVENTFDS` /  `TIMERFDS` slot
+  index. Mirrors the existing `Pipe(u16)` model for socketpair/pipe2.
+* `fd::alloc_fd_eventfd(slot, flags)` and `fd::alloc_fd_timerfd(slot,
+  flags)` allocate a real fd from the per-cave table whose tag points
+  at the slot. Cursor allocation is monotonic-then-scan (same as
+  `alloc_fd`), so the no-reuse property still holds.
+* `eventfd2()` and `timerfd_create()` now do alloc_slot → alloc_fd, and
+  unwind the slot if the fd allocation fails (EMFILE).
+* `sys_write` / `sys_read` route Eventfd/Timerfd fds to
+  `eventfd_write_slot` / `eventfd_read_slot` / `timerfd_read_slot`
+  based on `FdKind`, with the appropriate 8-byte u64 marshalling.
+* `sys_close` checks `FdKind` first when picking the refund quota
+  class — Eventfds → Eventfds, Timerfds → Timerfds — and frees the
+  underlying slot.
+* `fd::close` itself frees the eventfd/timerfd slot before clearing
+  the entry, so callers can't leak slots.
+* `timerfd_settime` / `timerfd_gettime` translate fd → slot via
+  `fd::timerfd_slot`, with a fallback to interpreting the int as a raw
+  slot for backward-compat.
+* `sys_write` on an Eventfd fd also calls `epoll::mark_ready(fd,
+  EPOLLIN)` after the write, so any epoll_pwait watching the fd
+  actually fires. Without this, Chromium's IPC pumps wait forever
+  on an event that has already happened. `sys_read` symmetrically
+  calls `clear_ready` when the counter drains.
+
+### Smoke run
+
+```
+Verdict: PIPELINE-REACHED
+Threads: t1, t2, t3, t4, t5, t64
+Syscalls: 2101
+Final state: SIGSEGV in t5 user code at FAR=0x000000000005c7d8
+             (deep in Chromium IPC handling, post-epoll_pwait return)
+```
+
+The crash is in user mode — `EC=0x24` data abort, `ELR=0x14d52e18`
+inside Chromium's binary, instruction `ldr x8, [x26, #0x20]` with
+`x26=0x5c7b8`. The interesting forensic detail: `x20=0x180005c7b8`,
+which looks like a valid Chromium heap pointer; `x26 = x20 & 0xFFFFFFFF`
+— a 32-bit truncation. So somewhere Chromium did `mov w26, w20` (zero-
+extending the low 32 bits) intentionally, and then dereferenced the
+result expecting a small-address allocation that doesn't exist.
+
+This is **not** a kernel bug — it's in Chromium's code that wasn't
+reached before because the eventfd bridge wasn't working. We've moved
+the failure point ~600 syscalls deeper into Chromium's startup.
+
+### Why fewer threads (5 vs 10)
+
+In the previous run, Chromium kept retrying after t5's EBADF and the
+retry path eventually spawned t6-t10. With the EBADF gone, Chromium
+proceeds in the eventfd-actually-works path and crashes inside it
+before spawning t6. We're hitting a different bug, not a regression
+of total work done.
+
+### Known caveat in the bridge
+
+Forked caves' fd tables are bitwise-copied (`clone_fd_table`), so a
+parent and child both end up with `FdKind::Eventfd(N)` entries
+pointing at the same global slot N. There is no refcount, so:
+
+* Closing the eventfd fd from EITHER cave frees the underlying slot
+  immediately — leaving the OTHER cave with a dangling `FdKind::Eventfd(N)`
+  entry.
+* Subsequent reads/writes from that other cave will see the slot as
+  `in_use=false` and return EBADF.
+
+POSIX needs proper refcounting on the slot. Filed as deferred work.
+
+### Files changed
+
+* `src/batcave/linux/fd.rs` — new FdKind variants, `alloc_fd_eventfd`,
+  `alloc_fd_timerfd`, `eventfd_slot`, `timerfd_slot` accessors,
+  slot-free in `close`.
+* `src/batcave/linux/async_fds.rs` — `eventfd2` / `timerfd_create` now
+  allocate real fds; `timerfd_settime` / `gettime` translate fd→slot.
+* `src/batcave/linux/syscall.rs` — `sys_write` / `sys_read` early-
+  branch on `FdKind::Eventfd` / `Timerfd`, with mark_ready /
+  clear_ready calls for epoll integration; `sys_close` refund picks
+  the right quota class.
+
+### Commits
+
+```
+d82ad104 Bridge eventfd2 / timerfd_create to real FD numbers
+02b9a29f journal: real preemption landed via cooperative-switch path
+07dbe10b Real timer-IRQ preemption via cooperative-switch path
+4c6f3b70 journal: per-cave FD tables + close_range + GIC scaffolding session
+```
+
+### Next pending tasks
+
+1. **Diagnose Chromium SIGSEGV at FAR=0x5c7d8.** Best lead: the
+   register state shows `x26 = x20 & 0xFFFFFFFF`, suggesting a 32-bit
+   truncation pattern. Probably need ports/chromium_port symbols to
+   resolve `0x14d52e18` → function name. If it lands in the eventfd
+   handler chain, our wakeup is firing in the wrong context.
+2. **eventfd slot refcounting** for fork-shared fds (see caveat above).
+3. **wait4 + cave teardown** — still pending.
+
+---
+
 ## 2026-04-25 00:45 — Mac — 🚀 REAL PREEMPTION lands. 10 threads run; Chromium init completes; clean exit on a real eventfd↔fd bug
 
 **TL;DR**: Real timer-IRQ preemption is now working. Chromium spawns
