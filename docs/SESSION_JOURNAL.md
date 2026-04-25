@@ -11,6 +11,82 @@ end of a session.
 
 ---
 
+## 2026-04-25 01:15 — Mac — wait4 + real cave teardown; full pending todo list cleared
+
+Last item from the session's "work one-by-one through the pending list"
+sweep. `sys_wait_stub` is no longer a fake-only stub — it now properly
+reaps real Exited children of the calling thread, freeing kernel stack,
+the cave's L1+L2 page tables, and the cave's per-cave fd table.
+
+### What real reaping looks like now
+
+```
+sys_wait4(target_pid, status_ptr, options, rusage)
+  └─ try_reap_any_child(me, target_pid)
+        ├─ scan threads table for slot.parent_tid == me && slot.state == Exited
+        ├─ pull bookkeeping out under the table lock
+        ├─ free kernel stack pages         (frame::free_contig)
+        ├─ free fd table for the cave      (fd::reset_for_cave_slot — also
+        │                                   releases any eventfd/timerfd
+        │                                   slots the child held)
+        └─ free cave page tables           (mmu::free_cave_slot)
+```
+
+### New helpers landed
+
+* `mmu::cave_slot_for_l1(l1) -> Option<usize>` — like the existing
+  `current_cave_slot()` but for an arbitrary L1 phys, so wait4 can
+  resolve `child.saved_regs.user_ttbr0 → cave slot`.
+* `fd::reset_for_cave_slot(slot)` — wipes a non-current cave's fd
+  table, releasing eventfd/timerfd slots on the way out.
+* `threads::try_reap_any_child(parent, target_pid)` — the actual
+  reaper. Honors POSIX waitpid semantics: pid > 0 → that specific
+  child; pid <= 0 → any child.
+
+### Bonus fix: ADR_PREL_LO21 out of range
+
+The kernel grew past 1 MB between `kernel_main` and `exception_vectors`,
+so the `adr x0, exception_vectors` instruction in `init_exceptions`
+started failing the linker's `R_AARCH64_ADR_PREL_LO21` relocation
+range check. Switched to `adrp + add :lo12:` (±4 GB range). Same
+codegen pattern Linux/Asahi use everywhere.
+
+### Smoke run
+
+Same SIGSEGV as the previous run — Chromium isn't getting far enough
+into its child-process lifecycle to actually call wait4 yet. The
+plumbing is in place for when it does. We're at 2279 syscalls vs 2101
+in the last run; the small drift is probably scheduler noise.
+
+### Session summary — all the things that landed today
+
+1. **Per-cave FD tables** — eliminated zygote IPC FATAL.
+2. **lower NOFILE + close_range** — eliminated 4000-syscall close-loop.
+3. **Periodic yield tuning (4096)** — found the right point on the
+   TLB-flush-cost vs worker-starvation curve.
+4. **Real timer-IRQ preemption via cooperative-switch path** —
+   architectural shift that unblocked 10 worker threads.
+5. **Eventfd ↔ FD bridge** — Chromium's epoll_ctl on eventfd works.
+6. **wait4 + real cave teardown** — kernel stack + cave + fd-table
+   freeing, ready for the moment Chromium starts reaping children.
+
+The current wall is the Chromium-side SIGSEGV at FAR=0x5c7d8 (probably
+needs Chromium symbol resolution to nail down — see the previous
+journal entry for register-state forensics).
+
+### Commits
+
+```
+0ad5f8d5 wait4 + real cave teardown
+54158b6e journal: eventfd ↔ FD bridge landed; deeper Chromium SIGSEGV is the new wall
+d82ad104 Bridge eventfd2 / timerfd_create to real FD numbers
+02b9a29f journal: real preemption landed via cooperative-switch path
+07dbe10b Real timer-IRQ preemption via cooperative-switch path
+4c6f3b70 journal: per-cave FD tables + close_range + GIC scaffolding session
+```
+
+---
+
 ## 2026-04-25 01:05 — Mac — eventfd ↔ FD bridge landed; Chromium now hits a deeper user-mode SIGSEGV instead of EBADF
 
 **Quick continuation of the preemption session.** With timer-IRQ preemption
