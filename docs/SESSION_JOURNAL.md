@@ -11,6 +11,145 @@ end of a session.
 
 ---
 
+## 2026-04-25 00:30 — Mac — Per-cave FD tables + monotonic alloc + close_range + GIC scaffolding; preemption is the new wall
+
+This session attacked the post-real-fork wall step by step.
+
+### Per-cave FD tables (the big win)
+
+Discovered: the "Cannot communicate with zygote" FATAL was being
+caused by t3 (forked child) calling `close(fd=23)` on what was
+ALSO parent's zygote socketpair fd. With our shared global
+FD_TABLE, child's close immediately invalidated parent's fd,
+parent's later sendmsg returned ENOTSOCK, FATAL.
+
+Fix: per-cave FD tables.
+- `mmu::current_cave_slot()` finds the cave-table index from
+  active TTBR0; `mmu::NUM_CAVES` const exposed.
+- `fd::FD_TABLES: [[FdEntry; MAX_FDS]; NUM_CAVES]` — each cave
+  gets its own table; all helpers (`init`, `alloc_fd`, `get`,
+  `close`, `dup`, `dup2`) operate on the active cave's slot.
+- `fd::clone_fd_table(child_slot)` copies parent's table on
+  fork. Cursor inherited.
+- `threads::real_fork` calls it.
+
+Result: zygote IPC FATAL is GONE. Chromium runs ~3500 syscalls
+across t1 + 3 forked children + 4 pthreads, hits its first
+real Chromium-internal log lines:
+```
+Applying FieldTrialTestingConfig
+VariationsSetupComplete
+No entry found for browser/global
+No entry found for browser/*
+No entry found for browser/amsc
+Unable to revert mtime: /.local/share/fonts
+```
+
+### Other fixes
+
+- **Monotonic fd allocation** (`ALLOC_CURSOR`s per cave): closed
+  fds aren't reused. Stops Chromium's FD ownership tracker from
+  confusing a closed-fd's old owner with a new owner reusing
+  the number.
+- **MAX_FDS 256 → 1024**: cursor needs room.
+- **`F_DUPFD` / `F_DUPFD_CLOEXEC` properly handled**: previously
+  fell through the catch-all `_ => 0` arm, returned fd=0
+  (stdin), confused Chromium's IPC tracker.
+- **RLIMIT_NOFILE 1024/4096 → 256/256**: Chromium's
+  close-all-fds-before-exec loop is bounded by ulimit. 4000
+  syscalls per fork ate most of our 90s smoke budget.
+- **`close_range` syscall (#436) implemented**: closes a range
+  in one syscall when Chromium uses it.
+- **Smoke-test pexpect timeouts**: 90s → 300s and 20s → 240s
+  to give Chromium more init time.
+
+### Real preemption: started, didn't land
+
+The blocker after IPC was: t1 spawns 24+ pthreads, then
+futex_waits for one to ack. Workers (t6-t21) sit Runnable but
+never get CPU because they don't make syscalls. Cooperative-
+yield-only model can't preempt user-mode tight loops.
+
+Built the IRQ-driven preemption infrastructure:
+- `arch/mod.rs::handle_irq` invokes `threads::on_tick`, blits
+  the new thread's saved_regs into the trap frame (x[0..30],
+  elr, spsr) plus user MSRs (SP_EL0, TPIDR_EL0, TTBR0_EL1
+  with TLB flush on cross-cave).
+- `threads::on_tick` does field-by-field copy from TrapFrame
+  (which has different layout than SavedRegs — broken struct
+  assignment was overwriting elr_el1 with elr's offset).
+- `arch/mod.rs::init_gicv2` — minimal QEMU-virt GICv2 setup
+  (distributor enable, CPU interface enable, PMR, INTID 30
+  enable for physical timer PPI #14).
+- `arch/mod.rs::init_timer` calls init_gicv2 first.
+
+Two attempts to enable it:
+1. **Boot-time `init_timer()`** — hangs the auth-screen render.
+   Likely IRQ fires during the bootscreen's GPU-MMIO write
+   loop and something doesn't survive.
+2. **Late `init_timer()` (right before execute_with_args)** —
+   crashes Chromium after 50 syscalls. Diagnosis: cooperative
+   `cxt_switch_cooperative` only saves callee-saved regs
+   (x19-x30); x0-x18 in saved_regs are stale. When IRQ later
+   blits the full state, garbage caller-saved regs cause the
+   thread to re-execute the syscall it just finished with
+   bogus args.
+
+The honest fix needs:
+- Track per-thread kernel-mode vs user-mode state
+- IRQ blit only resumes user-mode threads via full-state
+  restore; kernel-mode (cooperatively-yielded) threads need
+  to resume via cxt_switch_cooperative with partial state
+- Or: extend cxt_switch_cooperative to save FULL GPR state and
+  align TrapFrame/SavedRegs layouts so the IRQ path can use
+  the same blit unconditionally
+
+That's a day or two of careful asm + struct work. The GICv2
+init code + handle_irq logic + on_tick field-copy are all
+preserved in the tree as scaffolding for next session.
+
+### Pipeline
+
+| Phase                              | Syscalls | Wall |
+|------------------------------------|----------|------|
+| Real-fork session end              |  4757    | epoll hang in worker |
+| + per-cave FDs                     |  ~3000   | event-loop hang (no FATAL) |
+| + close_range / NOFILE / yield 4096|  3554    | t1 futex_wait, workers don't run |
+
+### Files touched today (continuing yesterday's session)
+
+- `src/batcave/linux/fd.rs` — per-cave tables, monotonic
+  cursor, clone_fd_table, MAX_FDS_PUB.
+- `src/batcave/linux/mmu.rs` — current_cave_slot,
+  cave_bounds_for_l1, cave_phys_base_for_l1, NUM_CAVES.
+- `src/batcave/linux/syscall.rs` — gettid honors threading
+  layer, fcntl F_DUPFD/CLOEXEC, sys_close_range,
+  RLIMIT_NOFILE 256, periodic yield every 4096, /dev/shm
+  awareness, MAP_FIXED high-VA path with mprotect.
+- `src/batcave/linux/threads.rs` — real_fork calls
+  clone_fd_table, on_tick field-copy.
+- `src/batcave/linux/vfs.rs` — /dev/shm directory.
+- `src/kernel/arch/mod.rs` — handle_irq trap-frame blit,
+  init_gicv2 (scaffolding, not called).
+- `src/main.rs` — init_timer NOT called (would break boot or
+  Chromium until preemption-vs-cooperative state mismatch is
+  resolved).
+- `scripts/qemu_chromium_pipeline_smoke.py` — 5min timeouts.
+
+### Where Chromium stops
+
+t1 successfully runs Variations init, scheduler-loop config,
+fontconfig font scan, library loading via MAP_FIXED + mprotect,
+spawns 24 pthreads via clone(CLONE_VM | CLONE_THREAD | …).
+Eventually `futex_wait` on a worker ack address. Workers are
+Runnable but the round-robin scheduler rarely visits them
+(they don't make syscalls; the periodic yield only runs every
+4096 calls).
+
+Real preemption would unblock this. That's the next session.
+
+---
+
 ## 2026-04-24 23:30 — Mac — Hit the Mojo IPC wall; periodic-yield + execve-park don't unstick
 
 After the post-init-crash sweep, two more attempts to push past
