@@ -11,6 +11,151 @@ end of a session.
 
 ---
 
+## 2026-04-25 10:15 — Mac — Past the SharedMemoryRegion CHECK; Chromium runs 20 worker threads but stalls in IPC pump
+
+Continuation of the same session. After the EpollEvent ABI fix landed
+Chromium got into its main epoll loop, but the smoke timed out without
+producing DOM output. Spent the next pass identifying every wall on the
+critical path and unblocking each one.
+
+### What landed in this session
+
+**Six new syscalls wired up** (most are stubs; pread64/pwrite64 are
+real impls):
+
+| #   | Name           | Impl     | Why                                      |
+|-----|----------------|----------|------------------------------------------|
+| 37  | linkat         | stub     | Cache hardlinks; success-stub OK          |
+| 38  | renameat       | stub     | Fontconfig cache .NEW→real swap           |
+| 43  | statfs         | stub     | leveldb / shm dir checks                  |
+| 46  | ftruncate      | **real** | Sets vfs node size; required by shm path  |
+| 47  | fallocate      | stub     | shm pre-alloc; success-stub               |
+| 53  | fchownat       | stub     | Single-user OS; ignore                    |
+| 67  | pread64        | **real** | Positional file reads                     |
+| 68  | pwrite64       | **real** | Positional file writes                    |
+| 82  | fsync          | stub     | No persistent fs                          |
+| 83  | fdatasync      | stub     | No persistent fs                          |
+| 88  | utimensat      | stub     | No mtime tracking                         |
+
+**The single highest-impact bug fix**: `fcntl(F_GETFL)` was returning
+a fixed 0 (always O_RDONLY) regardless of how the fd was opened.
+Chromium's `PlatformSharedMemoryRegion::TakeOrFail` calls
+`CheckFDAccessMode` which compares `(F_GETFL & 3)` to the requested
+mode (RDWR=2 for shm regions). Always-zero meant every shm region
+failed the check and `brk #0`'d at
+`base/memory/PlatformSharedMemoryRegion::Take+0xa0`. Now F_GETFL
+returns the entry's stored flags. F_SETFL also honors the writable
+subset (O_NONBLOCK | O_APPEND).
+
+**`/dev/shm` mmap**: file-backed mmaps for VFS files with
+`data_addr == 0` (i.e. shm-style empty files) now route through the
+small-mmap demand-page region. Previously they fell through to
+alloc_contig which returned frames outside the cave's identity-mapped
+window → `FAILED (outside cave user window)`.
+
+**Eventfd/Timerfd refcounting**: forks bitwise-copy the parent's fd
+table including Eventfd/Timerfd entries. Without refcounting, the
+child's eventual close() would free the underlying slot while the
+parent still pointed at it — use-after-free across caves. Added a
+proper file-description refcount in EventfdState/TimerfdState; the
+slot is freed only when the count hits zero. dup/dup2 also bump the
+new entry's refcount and drop the displaced entry's.
+
+**Diagnostic improvement**: handle_sync_exception's BRK-from-EL0
+branch now logs ELR + tid so the caller can disassemble the BRK site
+directly. Used this to find the SharedMemoryRegion CHECK above
+(`elr=0x14ca7bfc tid=1` → file VMA `0x4ca7bfc` → 
+`base::subtle::PlatformSharedMemoryRegion::Take+0xa0`).
+
+**ftruncate is now real**: Chromium's typical pattern is `ftruncate(fd,
+N) → mmap(fd, N, ...)`. Our previous always-0-stub left the file's
+size at 0, which downstream fstat checks would catch. Now we actually
+update the vfs node's `size` field — no backing memory allocated (the
+mmap path provides demand-paged zero pages), but size is honored.
+
+**SYSCALL_TRACE off by default in the cave runner.** Each trace line
+is two PL011 UART lines (~200 bytes) at 115200 baud (~14 KB/s); with
+4000+ syscalls that's seconds spent blocking on UART. Flip it on for
+syscall-level debugging.
+
+### Smoke trajectory across the session
+
+| stage                                   | threads | syscalls | log size | notable                       |
+|-----------------------------------------|---------|----------|----------|-------------------------------|
+| (last journal: EpollEvent ABI fix)      | 18      | 4024     | ~ 387 KB | Chromium in main epoll loop   |
+| + fcntl F_GETFL real impl               | ~20     | 4500+    | ~ 440 KB | past the shm CHECK            |
+| + new syscalls + trace off              | 20      | (no trace)| ~ 18 KB | netlink/inotify err but lives |
+
+The current wall is **Chromium IPC pump deadlock**. The main thread
+parks on a glibc condition-variable futex (`FUTEX_WAIT_BITSET` at
+`uaddr=0x1a224df8`) waiting for a worker to signal it; the workers all
+spin in `epoll_pwait` with no events. Nothing is producing the
+inter-thread signal Chromium expects. This is Mojo / Channel
+handshake territory now — the kernel isn't blocking it, the thread
+pool is alive and scheduled, but the IPC bootstrap doesn't progress.
+
+### Diagnosis path used to find F_GETFL bug
+
+1. Hit a SIGSEGV-style exit at `[linux] exit (BRK from EL0)
+   elr=0x14ca7bfc tid=1`.
+2. `0x14ca7bfc - CHROMIUM_VIRT_BASE (0x10000000) = 0x4ca7bfc` →
+   file VMA inside `content_shell`'s `.text`.
+3. `rust-objdump -d --start-address=0x4ca7b80 --stop-address=0x4ca7c20
+   ports/chromium_port/out/content_shell` →
+   `_ZN4base6subtle26PlatformSharedMemoryRegion4Take...`
+4. Read the disassembly → `cbnz w8, brk #0` after a `TakeOrFail` call.
+5. Followed `TakeOrFail → CheckFDAccessMode`. Saw the
+   `fcntl(fd, F_GETFL)` call and the
+   `(returned & 3 == expected_mode)` check.
+6. Grep'd our `sys_fcntl` → found `3 => 0` always-zero stub.
+
+### Files changed this pass
+
+```
+src/batcave/linux/syscall.rs   — F_GETFL + ftruncate + new syscalls
+src/batcave/linux/vfs.rs       — vfs::set_node_size
+src/batcave/linux/fd.rs        — refcount integration in clone/dup/close
+src/batcave/linux/async_fds.rs — refcount field + ref/free helpers
+src/batcave/linux/runner.rs    — SYSCALL_TRACE off by default
+src/kernel/arch/mod.rs         — BRK-from-EL0 logs ELR + tid
+scripts/qemu_chromium_pipeline_smoke.py — timeout 240→720s
+```
+
+### Commits
+
+```
+7c2a2957 Stub renameat (38) — fontconfig cache .NEW→real rename loop
+58b0c7ad Stub more syscalls Chromium calls during init
+dc31c1ee Chromium init unblockers: pread64, ftruncate, F_GETFL, /dev/shm mmap, eventfd refcount
+2c2ac342 journal: ROOT CAUSE — EpollEvent ABI
+58b4b4ab Fix EpollEvent ABI: 16 bytes (unpacked) on AArch64, not 12 (packed)
+```
+
+### Next session: cracking the IPC pump deadlock
+
+The main thread is in `FUTEX_WAIT_BITSET` on a glibc cond var. The
+workers are in `epoll_pwait`. Whatever Chromium expects to wake the
+main thread isn't happening. Most likely candidates:
+
+1. **socketpair → pipe substitution.** In `--single-process` Chromium
+   uses an in-process Mojo channel built on top of socketpair. Our
+   socketpair currently bridges to `pipe_buf`. Maybe sendmsg/recvmsg
+   over our pipe doesn't deliver the bytes the channel handshake
+   expects (file descriptors as ancillary data, message boundaries,
+   etc.).
+2. **Missing eventfd-based wake.** Some Mojo channels use eventfd as
+   the wake signal; we wired mark_ready/clear_ready in this session
+   but maybe not for the right fd.
+3. **A worker never reaches its first epoll_pwait.** If t1's wake
+   waits for "all workers initialized", and one worker is parked on
+   a different futex, t1 blocks forever.
+
+Next pass: trace the futex address t1 is waiting on through the
+saved register state at the futex syscall, and find out which thread
+should be waking it. Then find why that thread isn't.
+
+---
+
 ## 2026-04-25 08:15 — Mac — 🎯 ROOT CAUSE: EpollEvent was 12-byte packed (x86_64 layout) instead of 16-byte unpacked (AArch64). Chromium now in its main loop with 18 threads.
 
 **The previous wall is gone.** The t5 SIGSEGV at FAR=0x5c7d8 was an
