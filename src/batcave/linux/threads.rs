@@ -1193,7 +1193,18 @@ pub fn schedule() {
             }
             None
         });
-        let Some(next_tid) = next_tid_opt else { return; };
+        let Some(next_tid) = next_tid_opt else {
+            // No Runnable thread found. If we're Blocked too then we
+            // have a real deadlock — every BatCave thread is parked
+            // and nobody can wake anyone. Emit a one-shot dump so the
+            // next session knows what each thread is waiting on.
+            static DEADLOCK_REPORTED: AtomicBool = AtomicBool::new(false);
+            if !DEADLOCK_REPORTED.swap(true, Ordering::AcqRel) {
+                uart::puts("[diag] schedule() found NO runnable thread — possible deadlock\n");
+                dump();
+            }
+            return;
+        };
         if next_tid == me { return; }
         RUNNING_TID.store(next_tid, Ordering::Release);
         let (op, np) = with_table(|t| -> (*mut SavedRegs, *const SavedRegs) {
@@ -1265,7 +1276,15 @@ pub fn schedule() {
     // round-robin without drowning the trace.
     static SWITCH_COUNT: AtomicU64 = AtomicU64::new(0);
     let n = SWITCH_COUNT.fetch_add(1, Ordering::Relaxed);
-    let _ = n;
+    // Periodic thread-state dump every 1024 switches. Useful when the
+    // syscall-counter dump can't fire because syscalls have stopped
+    // (workers spinning in epoll_pwait or all threads blocked).
+    if n > 0 && n % 1024 == 0 {
+        uart::puts("[diag] thread-state dump @ switch ");
+        crate::kernel::mm::print_num(n as usize);
+        uart::puts("\n");
+        dump();
+    }
     unsafe { cxt_switch_cooperative(old_ptr, new_ptr); }
 }
 

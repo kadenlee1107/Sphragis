@@ -231,8 +231,24 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
     static SYSCALL_COUNTER: core::sync::atomic::AtomicU64 =
         core::sync::atomic::AtomicU64::new(0);
     let n = SYSCALL_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    if (n & 0xFFF) == 0 {  // every 4096 — TLB-flush is expensive
-        super::threads::schedule();
+    // EVERY-syscall yield: timer IRQ is ~1Hz on QEMU virt despite
+    // 100Hz config (likely GIC delivery quirk). Yielding on every
+    // syscall is the only mechanism giving Runnable but unscheduled
+    // threads a chance to run when the current thread is in a tight
+    // CPU loop between syscalls. Same-cave switches are cheap (no
+    // TTBR0 change inside a single Chromium process).
+    super::threads::schedule();
+    // Periodic thread-state dump for deadlock diagnosis. Triggered off
+    // the syscall counter (NOT the timer IRQ — that fires too sporadically
+    // on QEMU virt for a useful diagnostic cadence). At every 1024
+    // syscalls we get frequent enough snapshots to see the thread table
+    // evolution as Chromium init progresses, including the deadlock
+    // moment when no further syscalls happen.
+    if (n & 0x3FF) == 0 && n > 0 {
+        uart::puts("[diag] thread-state dump @ syscall ");
+        crate::kernel::mm::print_num(n as usize);
+        uart::puts("\n");
+        super::threads::dump();
     }
 
     // Temporary diagnostic: trace every syscall. Essential for the Chromium
@@ -5147,7 +5163,18 @@ pub fn proc_read(path: &str, buf: &mut [u8]) -> usize {
         "/proc/self/status" | "/proc/1/status" =>
             b"Name:\tbat_process\nState:\tR (running)\nTgid:\t1\nPid:\t1\nPPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nVmSize:\t4096 kB\nVmRSS:\t2048 kB\nThreads:\t1\n",
         "/proc/self/maps" | "/proc/1/maps" =>
-            b"00010000-00100000 r-xp 00000000 00:00 0  [code]\n00100000-00200000 rw-p 00000000 00:00 0  [data]\n40000000-42000000 rw-p 00000000 00:00 0  [heap]\nfffff000-ffffffff rw-p 00000000 00:00 0  [stack]\n",
+            // Realistic /proc/self/maps for a Chromium content_shell run
+            // in a Bat_OS cave at virt_base 0x10000000. Chromium reads this
+            // to discover its own code segment (for symbolization, leak
+            // detection, etc.) and to identify the heap/stack regions.
+            // The previous stub had code at 0x10000 which Chromium would
+            // reject as not-its-binary.
+            //
+            // Layout:
+            //   0x10000000-0x29000000  r-xp  cave window (Chromium binary)
+            //   0x70_0000_0000+        rw-p  small-mmap region (anon stacks)
+            //   0xff_ff00_0000+        rw-p  user stack
+            b"10000000-29000000 r-xp 00000000 00:00 0  /bin/content_shell\n7000000000-7008000000 rw-p 00000000 00:00 0  [stack]\n7000000000-7100000000 rw-p 00000000 00:00 0  [heap]\nffffff000000-ffffff100000 rw-p 00000000 00:00 0  [stack]\n",
         "/proc/self/stat" | "/proc/1/stat" =>
             b"1 (bat_process) R 0 1 1 0 -1 4194304 100 0 0 0 10 5 0 0 20 0 1 0 100 4194304 512 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0\n",
         "/proc/self/cmdline" | "/proc/1/cmdline" =>

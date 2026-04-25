@@ -153,10 +153,18 @@ pub fn init_timer() {
 
 fn reset_timer() {
     unsafe {
+        // Disable the timer first to clear ISTATUS, then re-arm with a
+        // fresh interval and re-enable. Just writing cntp_tval should
+        // reset the down-counter, but on QEMU virt with GICv3-default
+        // delivery we observed only ~10 IRQs total — the timer's IRQ
+        // line stays asserted somehow. Disabling fully drops the
+        // interrupt output, then re-enable kicks off a clean cycle.
+        core::arch::asm!("msr cntp_ctl_el0, xzr");  // disable
         let freq: u64;
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
         let interval = freq / 100;
         core::arch::asm!("msr cntp_tval_el0, {}", in(reg) interval);
+        core::arch::asm!("mov x0, #1", "msr cntp_ctl_el0, x0", out("x0") _);
     }
 }
 
@@ -182,6 +190,7 @@ pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
     const GICC_EOIR: usize = 0x0801_0000 + 0x010;
     let iar: u32 = unsafe { core::ptr::read_volatile(GICC_IAR as *const u32) };
     let intid = iar & 0x3FF;
+
     // Spurious (1023) means no IRQ pending — bail without EOI.
     if intid == 1023 { return; }
 
@@ -235,6 +244,15 @@ pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
         let spsr = unsafe { (*frame).spsr };
         let was_in_el0 = (spsr & 0xF) == 0; // M[3:0] == 0000 ⇒ EL0t
 
+        // GIC end-of-interrupt MUST happen BEFORE schedule(). schedule()
+        // may switch us to another thread (parking this handle_irq frame
+        // on the kernel stack until we're rescheduled). If EOI is deferred
+        // until after schedule(), the GIC sees the IRQ as still active
+        // for however long we're swapped out — could be seconds — and
+        // blocks all subsequent timer IRQs. The "1Hz instead of 100Hz"
+        // observation traces directly to this.
+        unsafe { core::ptr::write_volatile(GICC_EOIR as *mut u32, iar); }
+
         if was_in_el0 {
             crate::batcave::linux::threads::schedule();
         } else {
@@ -242,13 +260,10 @@ pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
             // kernel code that might be holding a lock.
             crate::batcave::linux::threads::request_preempt();
         }
+    } else {
+        // Non-timer IRQ — still need to ack so the GIC can deliver more.
+        unsafe { core::ptr::write_volatile(GICC_EOIR as *mut u32, iar); }
     }
-
-    // GIC end-of-interrupt: tell the controller this IRQ is done so
-    // it'll deliver the next one. WITHOUT this, after the first IRQ
-    // fires the GIC keeps it active forever and the timer never
-    // re-triggers — preemption dies after one tick.
-    unsafe { core::ptr::write_volatile(GICC_EOIR as *mut u32, iar); }
 }
 
 #[unsafe(no_mangle)]

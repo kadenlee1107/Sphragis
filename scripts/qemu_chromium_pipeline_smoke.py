@@ -145,7 +145,10 @@ def main():
         try: socket.create_connection(("127.0.0.1", 9999), timeout=0.3).close(); break
         except OSError: time.sleep(0.2)
 
-    args = ["qemu-system-aarch64", "-machine", "virt", "-cpu", "max",
+    # gic-version=2 forces QEMU to expose GICv2 MMIO (matches our handler).
+    # Default "max" picks v3 which uses system registers (ICC_*) we don't
+    # touch — IRQs would still fire but couldn't be acked properly.
+    args = ["qemu-system-aarch64", "-machine", "virt,gic-version=2", "-cpu", "max",
             "-m", "4G",
             "-display", "none",
             "-device", "virtio-gpu-device",
