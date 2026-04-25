@@ -2003,6 +2003,70 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
     const USER_WINDOW_SIZE: usize =
         crate::batcave::linux::mmu::CAVE_BLOCKS * 0x200000;
 
+    // For small anonymous private mmaps (the pthread_create stack
+    // case especially), the cave's main 400 MB user window can be
+    // exhausted by the time Chromium's worker pool spins up, and
+    // alloc_contig returns memory outside that window. Falling back
+    // to a high-VA demand-paged region lets these small allocations
+    // succeed without colliding with already-mapped memory. The
+    // pages get committed on first access by demand_page::try_handle.
+    if fd_num < 0
+        && (flags & 0x10) == 0   // not MAP_FIXED
+        && (flags & 0x20) != 0   // MAP_ANONYMOUS
+        && len < HUGE_RESERVATION_THRESHOLD
+    {
+        let aligned_len = (len + 0xFFF) & !0xFFFusize;
+        use core::sync::atomic::Ordering as Ord2;
+        // Lazy-init: function-scope statics with non-zero defaults
+        // don't always carry their value through our boot setup
+        // (BSS-zero pass quirk). Force the cursor to SMALL_MMAP_BASE
+        // on first use if it's still zero.
+        let cur = SMALL_MMAP_CURSOR.load(Ord2::Acquire);
+        if cur == 0 {
+            let _ = SMALL_MMAP_CURSOR.compare_exchange(
+                0, SMALL_MMAP_BASE,
+                Ord2::AcqRel, Ord2::Acquire,
+            );
+        }
+        let mut base = SMALL_MMAP_CURSOR.load(Ord2::Acquire);
+        loop {
+            let next = base.saturating_add(aligned_len);
+            if (next as u64) >= (1u64 << 39) {
+                // Out of high VA — fall through to the legacy path
+                // and accept whatever ENOMEM it produces.
+                break;
+            }
+            match SMALL_MMAP_CURSOR.compare_exchange(
+                base, next, Ord2::AcqRel, Ord2::Acquire,
+            ) {
+                Ok(_) => {
+                    // Register the demand-page reservation so the
+                    // first access by user code commits a fresh
+                    // frame. Use the active TTBR0 (the caller's L1).
+                    let active_l1: u64;
+                    unsafe {
+                        core::arch::asm!("mrs {}, ttbr0_el1", out(reg) active_l1);
+                    }
+                    super::demand_page::register_reservation(
+                        base as u64,
+                        (base + aligned_len) as u64,
+                        active_l1 & !1u64,
+                    );
+                    uart::puts("[mmap] anon → demand-paged 0x");
+                    let hex = b"0123456789abcdef";
+                    for sh in (0..16).rev() {
+                        uart::putc(hex[((base >> (sh * 4)) & 0xF) as usize]);
+                    }
+                    uart::puts(" len=");
+                    crate::kernel::mm::print_num(len);
+                    uart::puts("\n");
+                    return base as i64;
+                }
+                Err(cur) => base = cur,
+            }
+        }
+    }
+
     match crate::kernel::mm::frame::alloc_contig(pages) {
         Some(base) => {
             uart::puts(" base=0x");
@@ -4301,6 +4365,13 @@ static mut SIGNAL_HANDLERS: [u64; MAX_SIG] = [0; MAX_SIG];
 static mut SIGNAL_MASK: u64 = 0;
 /// Pending signals bitmap
 static mut SIGNAL_PENDING: u64 = 0;
+
+/// VA bump-cursor for the small-anonymous-mmap fallback path
+/// (sys_mmap, line ~2010). Module-scope so a known initial value
+/// survives any early static-init quirks.
+const SMALL_MMAP_BASE: usize = 0x70_0000_0000;
+static SMALL_MMAP_CURSOR: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(SMALL_MMAP_BASE);
 /// Alternate signal stack
 static mut SIGALT_SP: u64 = 0;
 static mut SIGALT_SIZE: u64 = 0;
