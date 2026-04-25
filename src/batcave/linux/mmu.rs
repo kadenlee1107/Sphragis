@@ -384,6 +384,33 @@ pub fn host_cave_l1() -> usize {
     }
 }
 
+/// Find the cave slot whose L1 matches the active TTBR0. Used by
+/// per-cave structures (FD table, signal handlers, …) so they can
+/// look up the right per-process state without every caller
+/// having to plumb cave_id through.
+///
+/// Returns 0 (the host cave) if no cave matches — that's the
+/// pre-fork single-cave path and the safe default for any thread
+/// that started before the fork machinery exists.
+pub fn current_cave_slot() -> usize {
+    let active_l1: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) active_l1); }
+    let active_l1 = (active_l1 & !1u64) as usize;
+    unsafe {
+        for i in 0..MAX_CAVE_PAGETABLES {
+            if CAVE_L1[i] == active_l1 && active_l1 != 0 {
+                return i;
+            }
+        }
+    }
+    0
+}
+
+/// Maximum number of cave page tables we support. Exposed so
+/// per-cave bookkeeping (fd tables, etc.) can size their arrays
+/// to match.
+pub const NUM_CAVES: usize = MAX_CAVE_PAGETABLES;
+
 /// Look up the user-window bounds (virt_base, virt_extent) for
 /// the given L1 phys address. Returns None if no cave is
 /// registered with that L1.

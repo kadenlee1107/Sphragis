@@ -840,6 +840,15 @@ fn real_fork(
         return ENOMEM;
     }
 
+    // CHROMIUM-PHASE-D: child gets its OWN copy of the parent's
+    // FD table. POSIX: subsequent close()/dup() in the child only
+    // touches the child's fds; parent's view is unaffected.
+    // Without this, e.g. a forked zygote child closing fd 23
+    // (its post-fork dup of an IPC socketpair end) ALSO closes
+    // parent's fd 23 — parent's later sendmsg returns ENOTSOCK
+    // and Chromium FATALs with "Cannot communicate with zygote".
+    super::fd::clone_fd_table(cave_slot);
+
     // 3. Allocate kernel stack for the child thread.
     let kstack_pages = KERNEL_STACK_PAGES;
     let kstack_base = match crate::kernel::mm::frame::alloc_contig(kstack_pages) {
