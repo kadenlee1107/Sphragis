@@ -372,6 +372,18 @@ pub fn setup_cave_pagetable_at(
     Ok(l1)
 }
 
+/// Returns the L1 phys of the FIRST registered cave (slot 0) —
+/// what the runner set up at cave creation time. Used by the
+/// arch exit handler to tell "this is the main process exiting,
+/// tear down the whole cave and go to desktop" from "this is a
+/// forked child exiting, just unwind the thread".
+pub fn host_cave_l1() -> usize {
+    unsafe {
+        if MAX_CAVE_PAGETABLES == 0 { return 0; }
+        CAVE_L1[0]
+    }
+}
+
 /// Look up the user-window bounds (virt_base, virt_extent) for
 /// the given L1 phys address. Returns None if no cave is
 /// registered with that L1.

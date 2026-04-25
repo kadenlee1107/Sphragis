@@ -1097,18 +1097,19 @@ pub fn exit_current(code: i32) -> ! {
                 let sb = t[i].stack_base;
                 let sp = t[i].stack_pages;
                 let ca = t[i].tid_clear_on_exit;
-                let ksb = t[i].kernel_stack_base;
                 if sp > 0 && sb != 0 {
                     crate::kernel::mm::frame::free_contig(sb as usize, sp);
                 }
-                if ksb != 0 {
-                    crate::kernel::mm::frame::free_contig(
-                        ksb as usize, KERNEL_STACK_PAGES);
-                }
+                // NOTE (real-fork): we deliberately DO NOT free the
+                // thread's kernel stack here. We're called from the
+                // SVC handler running on that very stack — freeing
+                // it would pull the rug out before schedule()'s asm
+                // could read its own locals. The stack leaks until
+                // the cave is fully reaped (a real wait4 + cave-
+                // destroy is the proper fix; for now the leak is
+                // bounded to ~16 KB per fork).
                 t[i].stack_base = 0;
                 t[i].stack_pages = 0;
-                t[i].kernel_stack_base = 0;
-                t[i].kernel_stack_top = 0;
                 t[i].tid_clear_on_exit = None;
                 ca
             } else { None }

@@ -250,7 +250,32 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                             );
                         }
 
-                        // Real exit (not a child — leave BatCave entirely).
+                        // REAL-FORK: if this exit_group is from a forked
+                        // child cave (its TTBR0 differs from the host cave's),
+                        // tear down ONLY the child cave and let the
+                        // scheduler resume the parent. Otherwise it's
+                        // the main process exiting and we go all the
+                        // way back to the desktop shell.
+                        let cur_ttbr0: u64;
+                        core::arch::asm!("mrs {}, ttbr0_el1", out(reg) cur_ttbr0);
+                        let cur_ttbr0 = cur_ttbr0 & !1u64;
+                        let host_l1 = crate::batcave::linux::mmu::host_cave_l1() as u64;
+                        if host_l1 != 0 && cur_ttbr0 != host_l1 {
+                            // Forked-child exit. Mark this thread Exited
+                            // (parent can wait4 it), then schedule out.
+                            // The cooperative-switch asm will activate the
+                            // parent's TTBR0 when it picks the parent up.
+                            //
+                            // (We don't free the child's page tables /
+                            // frames yet — wait4 will do that when
+                            // implemented. Leak for now; reboot recovers.)
+                            crate::batcave::linux::threads::exit_current(
+                                args[0] as i32);
+                            // exit_current never returns — it schedules
+                            // another thread and wfi's if none.
+                        }
+
+                        // Real exit (not a forked child — leave BatCave entirely).
                         // V2-NEW-024: DO NOT call mmu::disable here — it
                         // clears SCTLR.M which the next switch_to_cave does
                         // not re-enable, leaving subsequent caves running
