@@ -231,7 +231,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
     static SYSCALL_COUNTER: core::sync::atomic::AtomicU64 =
         core::sync::atomic::AtomicU64::new(0);
     let n = SYSCALL_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    if (n & 0xFF) == 0 {  // every 256 — TLB-flush is expensive
+    if (n & 0xFFF) == 0 {  // every 4096 — TLB-flush is expensive
         super::threads::schedule();
     }
 

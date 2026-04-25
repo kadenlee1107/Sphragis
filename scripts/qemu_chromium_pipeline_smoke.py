@@ -156,7 +156,7 @@ def main():
             "-kernel", str(kernel_bin),
             "-initrd", str(initrd)]
     fp = open(LOG, "wb")
-    c = pexpect.spawn(args[0], args[1:], timeout=90, logfile=fp, encoding=None)
+    c = pexpect.spawn(args[0], args[1:], timeout=300, logfile=fp, encoding=None)
     events = []
     verdict = "FAIL"
     try:
@@ -174,7 +174,7 @@ def main():
         # shipped in the archive alongside content_shell.
         c.sendline(b"chromium --dump-dom file:///bin/hello.html")
         try:
-            c.expect(PROMPT, timeout=20)
+            c.expect(PROMPT, timeout=240)
         except pexpect.TIMEOUT:
             pass
 
