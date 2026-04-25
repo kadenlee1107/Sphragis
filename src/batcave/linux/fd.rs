@@ -20,10 +20,19 @@ pub const MAX_FDS_PUB: usize = MAX_FDS;
 /// Kind-tag for fds that have backing beyond a VFS node. `Pipe`
 /// carries a pair_slot (0..pipe_buf::MAX_PAIRS) and a side (0 or 1)
 /// packed into a single u16: low bit = side, upper bits = slot.
+///
+/// `Eventfd` / `Timerfd` carry an async_fds slot index. Without these,
+/// eventfd2(...) returned a slot number (e.g. 3) that wasn't actually
+/// in the fd table — Chromium would call epoll_ctl(EPOLL_CTL_ADD, fd=3)
+/// and fd::get(3) returned None → EBADF. Now eventfd2 allocates a real
+/// fd whose kind tag points at the slot, so reads/writes/epoll all
+/// resolve correctly.
 #[derive(Clone, Copy, PartialEq)]
 pub enum FdKind {
-    Vfs,         // position indexes into node data
-    Pipe(u16),   // (slot<<1)|side — see pipe_buf.rs
+    Vfs,            // position indexes into node data
+    Pipe(u16),      // (slot<<1)|side — see pipe_buf.rs
+    Eventfd(u16),   // async_fds::EVENTFDS slot index
+    Timerfd(u16),   // async_fds::TIMERFDS slot index
 }
 
 #[derive(Clone, Copy)]
@@ -223,6 +232,86 @@ pub fn pipe_info(fd: u32) -> Option<(usize, u8)> {
     }
 }
 
+/// Allocate an fd backed by an eventfd slot. Used by eventfd2(2).
+/// The eventfd slot itself is allocated via async_fds::alloc_eventfd_slot
+/// before this call; this just registers a real fd that resolves to it.
+pub fn alloc_fd_eventfd(slot: u16, flags: u32) -> Result<u32, i64> {
+    use core::sync::atomic::Ordering;
+    let table = current_table();
+    let cursor = current_cursor();
+    let cur = cursor.fetch_add(1, Ordering::AcqRel);
+    if cur < MAX_FDS && !table[cur].active {
+        table[cur] = FdEntry {
+            active: true,
+            node_idx: 0,
+            position: 0,
+            flags,
+            kind: FdKind::Eventfd(slot),
+        };
+        return Ok(cur as u32);
+    }
+    for i in 3..MAX_FDS {
+        if !table[i].active {
+            table[i] = FdEntry {
+                active: true,
+                node_idx: 0,
+                position: 0,
+                flags,
+                kind: FdKind::Eventfd(slot),
+            };
+            return Ok(i as u32);
+        }
+    }
+    Err(-24)
+}
+
+/// Allocate an fd backed by a timerfd slot. Used by timerfd_create(2).
+pub fn alloc_fd_timerfd(slot: u16, flags: u32) -> Result<u32, i64> {
+    use core::sync::atomic::Ordering;
+    let table = current_table();
+    let cursor = current_cursor();
+    let cur = cursor.fetch_add(1, Ordering::AcqRel);
+    if cur < MAX_FDS && !table[cur].active {
+        table[cur] = FdEntry {
+            active: true,
+            node_idx: 0,
+            position: 0,
+            flags,
+            kind: FdKind::Timerfd(slot),
+        };
+        return Ok(cur as u32);
+    }
+    for i in 3..MAX_FDS {
+        if !table[i].active {
+            table[i] = FdEntry {
+                active: true,
+                node_idx: 0,
+                position: 0,
+                flags,
+                kind: FdKind::Timerfd(slot),
+            };
+            return Ok(i as u32);
+        }
+    }
+    Err(-24)
+}
+
+/// If this fd is an eventfd, return its slot. Else None.
+pub fn eventfd_slot(fd: u32) -> Option<usize> {
+    match get(fd)?.kind {
+        FdKind::Eventfd(slot) => Some(slot as usize),
+        _ => None,
+    }
+}
+
+/// If this fd is a timerfd, return its slot. Else None.
+pub fn timerfd_slot(fd: u32) -> Option<usize> {
+    match get(fd)?.kind {
+        FdKind::Timerfd(slot) => Some(slot as usize),
+        _ => None,
+    }
+}
+
 /// Get an fd entry (immutable).
 pub fn get(fd: u32) -> Option<&'static FdEntry> {
     let fd = fd as usize;
@@ -239,14 +328,26 @@ pub fn get_mut(fd: u32) -> Option<&'static mut FdEntry> {
     if table[fd].active { Some(&mut table[fd]) } else { None }
 }
 
-/// Close an fd.
+/// Close an fd. Also frees the backing eventfd/timerfd slot if any.
 pub fn close(fd: u32) -> Result<(), i64> {
-    let fd = fd as usize;
-    if fd < 3 { return Ok(()); }
-    if fd >= MAX_FDS { return Err(-9); }
+    let fd_u = fd as usize;
+    if fd_u < 3 { return Ok(()); }
+    if fd_u >= MAX_FDS { return Err(-9); }
     let table = current_table();
-    if !table[fd].active { return Err(-9); }
-    table[fd] = FdEntry::empty();
+    if !table[fd_u].active { return Err(-9); }
+    // Free backing slot before clearing the entry so we still have
+    // the slot index visible. We swallow the slot-free error — the
+    // important user-facing result is "fd is gone".
+    match table[fd_u].kind {
+        FdKind::Eventfd(slot) => {
+            let _ = crate::batcave::linux::async_fds::free_eventfd_slot(slot as usize);
+        }
+        FdKind::Timerfd(slot) => {
+            let _ = crate::batcave::linux::async_fds::free_timerfd_slot(slot as usize);
+        }
+        _ => {}
+    }
+    table[fd_u] = FdEntry::empty();
     Ok(())
 }
 

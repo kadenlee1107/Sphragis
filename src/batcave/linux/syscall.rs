@@ -977,6 +977,38 @@ fn sys_write(args: [u64; 6]) -> i64 {
     // into the paired pipe. Checked before the kernel-ptr gate
     // below because we need is_user_ptr anyway.
     if count > 0 && !is_user_ptr(buf, count) { return EFAULT; }
+
+    // Eventfd write: must be exactly 8 bytes; value is added to
+    // the slot's counter (saturating at u64::MAX-1, blocking when
+    // the slot can't accept more — but we don't have a wait queue,
+    // so EAGAIN). Chromium uses this as a wakeup signal across
+    // worker threads.
+    if let Some(slot) = fd::eventfd_slot(fd_num) {
+        if count != 8 { return -22; } // EINVAL — eventfd writes are 8 bytes
+        let mut value: u64 = 0;
+        for i in 0..8 {
+            let b: u32;
+            unsafe {
+                core::arch::asm!("ldrb {v:w}, [{a}]",
+                    a = in(reg) buf + i, v = out(reg) b);
+            }
+            value |= (b as u64) << (i * 8);
+        }
+        let r = super::async_fds::eventfd_write_slot(slot, value);
+        if r < 0 { return r; }
+        // Wake any epoll waiting on this eventfd. Without this an
+        // epoll_pwait would block forever even though the counter is
+        // non-zero — Chromium's IPC layer is built on this signal.
+        super::epoll::mark_ready(fd_num as i32, super::epoll::EPOLLIN);
+        return 8;
+    }
+
+    // Timerfd write isn't a thing on Linux either — return EINVAL
+    // if Chromium tries it.
+    if fd::timerfd_slot(fd_num).is_some() {
+        return -22; // EINVAL
+    }
+
     if let Some((slot, side)) = fd::pipe_info(fd_num) {
         let mut tmp = [0u8; 256];
         let mut total = 0usize;
@@ -1106,6 +1138,46 @@ fn sys_read(args: [u64; 6]) -> i64 {
 
     // Reject pointer-to-kernel attacks before any dereference.
     if count > 0 && !is_user_ptr(buf, count) { return EFAULT; }
+
+    // Eventfd read: must be exactly 8 bytes; result is the slot's
+    // counter as a u64 LE. Mirrors Linux eventfd_read semantics.
+    if let Some(slot) = fd::eventfd_slot(fd_num) {
+        if count < 8 { return -22; } // EINVAL
+        let mut value: u64 = 0;
+        let r = super::async_fds::eventfd_read_slot(slot, &mut value as *mut u64);
+        if r < 0 { return r; }
+        for i in 0..8 {
+            let b = ((value >> (i * 8)) & 0xff) as u32;
+            unsafe {
+                core::arch::asm!("strb {v:w}, [{a}]",
+                    a = in(reg) buf + i, v = in(reg) b);
+            }
+        }
+        // Counter was drained — clear the readable bit on any epoll
+        // watching this fd so subsequent epoll_pwait waits properly.
+        if !super::async_fds::eventfd_is_readable(slot) {
+            super::epoll::clear_ready(fd_num as i32, super::epoll::EPOLLIN);
+        }
+        return 8;
+    }
+
+    // Timerfd read: 8-byte u64 = number of expirations since last
+    // read. Linux blocks if no expirations and not NONBLOCK; we just
+    // return EAGAIN (cooperative scheduler with no real waitqueue).
+    if let Some(slot) = fd::timerfd_slot(fd_num) {
+        if count < 8 { return -22; } // EINVAL
+        let mut value: u64 = 0;
+        let r = super::async_fds::timerfd_read_slot(slot, &mut value as *mut u64);
+        if r < 0 { return r; }
+        for i in 0..8 {
+            let b = ((value >> (i * 8)) & 0xff) as u32;
+            unsafe {
+                core::arch::asm!("strb {v:w}, [{a}]",
+                    a = in(reg) buf + i, v = in(reg) b);
+            }
+        }
+        return 8;
+    }
 
     // stdin (0) — read from UART, BLOCKING
     if fd_num == 0 {
@@ -1517,16 +1589,24 @@ fn sys_close(args: [u64; 6]) -> i64 {
 
     if !handled_special {
         // Fall through to standard fd-table close, picking refund class
-        // by node type.
+        // by node type. Eventfd / timerfd fds carry their slot via the
+        // FdKind tag — match those FIRST so the right pool gets the
+        // refund (NEW-DOS-003 was a best-effort guess via low-fd
+        // sentinel ranges; now that the slot lives in the table, we
+        // can refund precisely).
         refund_res = match fd::get(fd_num) {
-            Some(entry) => {
-                let node = vfs::get_node(entry.node_idx);
-                if node.node_type == vfs::NodeType::Socket {
-                    Some(super::quotas::Resource::Sockets)
-                } else {
-                    Some(super::quotas::Resource::Fds)
+            Some(entry) => match entry.kind {
+                fd::FdKind::Eventfd(_) => Some(super::quotas::Resource::Eventfds),
+                fd::FdKind::Timerfd(_) => Some(super::quotas::Resource::Timerfds),
+                _ => {
+                    let node = vfs::get_node(entry.node_idx);
+                    if node.node_type == vfs::NodeType::Socket {
+                        Some(super::quotas::Resource::Sockets)
+                    } else {
+                        Some(super::quotas::Resource::Fds)
+                    }
                 }
-            }
+            },
             None => None,
         };
     }

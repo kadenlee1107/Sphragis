@@ -162,9 +162,32 @@ fn eventfd_slot(slot: usize) -> Result<&'static EventfdState, i64> {
 /// Returns the slot index (cast to i64) on success, or -errno.
 /// Final fd-number allocation happens in the syscall layer.
 pub fn eventfd2(initval: u32, flags: i32) -> i64 {
-    match alloc_eventfd_slot(initval, flags) {
-        Ok(slot) => slot as i64,
-        Err(e)   => e,
+    // Eventfd lives in two layers:
+    //   1. The slot in EVENTFDS holds the counter + flags.
+    //   2. The fd-table entry (FdKind::Eventfd) carries the user-visible
+    //      fd number that points back at the slot. Without (2), Chromium's
+    //      epoll_ctl(EPOLL_CTL_ADD, fd=<slot>) would fail with EBADF
+    //      because fd::get(slot) returns None.
+    let slot = match alloc_eventfd_slot(initval, flags) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    if slot > u16::MAX as usize {
+        let _ = free_eventfd_slot(slot);
+        return EMFILE;
+    }
+    // Translate EFD_CLOEXEC / EFD_NONBLOCK into the fd-table flags.
+    // We don't currently key off these inside the fd table, but
+    // recording them keeps fcntl(F_GETFL/F_SETFL) coherent.
+    let mut fd_flags: u32 = 0;
+    if flags & EFD_NONBLOCK != 0 { fd_flags |= 0o4000; } // O_NONBLOCK
+    if flags & EFD_CLOEXEC  != 0 { fd_flags |= 0o2000000; } // O_CLOEXEC
+    match crate::batcave::linux::fd::alloc_fd_eventfd(slot as u16, fd_flags) {
+        Ok(fd) => fd as i64,
+        Err(e) => {
+            let _ = free_eventfd_slot(slot);
+            e
+        }
     }
 }
 
@@ -337,11 +360,27 @@ fn timerfd_slot(slot: usize) -> Result<&'static TimerfdState, i64> {
     Ok(&TIMERFDS[slot])
 }
 
-/// Public timerfd_create — required API. Returns slot index or -errno.
+/// Public timerfd_create — returns a real fd whose `FdKind::Timerfd`
+/// tag points at the slot. Same two-layer structure as eventfd2 (see
+/// the long comment in `eventfd2` above).
 pub fn timerfd_create(clockid: i32, flags: i32) -> i64 {
-    match alloc_timerfd_slot(clockid, flags) {
-        Ok(slot) => slot as i64,
-        Err(e)   => e,
+    let slot = match alloc_timerfd_slot(clockid, flags) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    if slot > u16::MAX as usize {
+        let _ = free_timerfd_slot(slot);
+        return EMFILE;
+    }
+    let mut fd_flags: u32 = 0;
+    if flags & TFD_NONBLOCK != 0 { fd_flags |= 0o4000; } // O_NONBLOCK
+    if flags & TFD_CLOEXEC  != 0 { fd_flags |= 0o2000000; } // O_CLOEXEC
+    match crate::batcave::linux::fd::alloc_fd_timerfd(slot as u16, fd_flags) {
+        Ok(fd) => fd as i64,
+        Err(e) => {
+            let _ = free_timerfd_slot(slot);
+            e
+        }
     }
 }
 
@@ -384,7 +423,17 @@ pub fn timerfd_settime(
     old_value: *mut Itimerspec,
 ) -> i64 {
     if fd < 0 { return EBADF; }
-    let s = match timerfd_slot(fd as usize) { Ok(s) => s, Err(e) => return e };
+    // Translate fd → slot via the per-cave FD table (the user-visible
+    // fd is a real file descriptor whose FdKind tag carries the slot
+    // index). Falls back to interpreting `fd` as a raw slot index for
+    // backward-compat with pre-bridge call sites that still hand us
+    // slot numbers — Chromium goes through the bridge, so this fallback
+    // path is only for in-kernel callers.
+    let slot_idx = match crate::batcave::linux::fd::timerfd_slot(fd as u32) {
+        Some(s) => s,
+        None => fd as usize,
+    };
+    let s = match timerfd_slot(slot_idx) { Ok(s) => s, Err(e) => return e };
     if new_value.is_null() { return EFAULT; }
 
     // V8-ROOT-8 / V8-PTR-003: gate both pointers before any deref. Itimerspec
@@ -455,7 +504,11 @@ pub fn timerfd_settime(
 /// Public timerfd_gettime. Writes remaining time + interval.
 pub fn timerfd_gettime(fd: i32, curr_value: *mut Itimerspec) -> i64 {
     if fd < 0 { return EBADF; }
-    let s = match timerfd_slot(fd as usize) { Ok(s) => s, Err(e) => return e };
+    let slot_idx = match crate::batcave::linux::fd::timerfd_slot(fd as u32) {
+        Some(s) => s,
+        None => fd as usize,
+    };
+    let s = match timerfd_slot(slot_idx) { Ok(s) => s, Err(e) => return e };
     if curr_value.is_null() { return EFAULT; }
     // V8-ROOT-8 / V8-PTR-003: gate curr_value (32-byte write to attacker ptr).
     if !crate::batcave::linux::uaccess::is_user_range(
