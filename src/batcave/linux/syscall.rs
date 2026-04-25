@@ -3689,31 +3689,31 @@ fn sys_execve(args: [u64; 6]) -> i64 {
         Err(_) => return -(14i64), // EFAULT
     };
 
-    // CHROMIUM-PHASE-D: when the calling thread is in a forked
-    // child cave (TTBR0 != host_cave_l1), execve usually means
-    // "I'm a zygote helper that's about to exec a new binary".
-    // We can't actually exec; instead, park the thread forever
-    // by entering an infinite sleep loop. The parent thinks the
-    // helper is alive and IPC handshake might succeed.
+    // 2026-04-25: when the calling thread is in a forked child cave
+    // (TTBR0 != host_cave_l1), execve usually means "I'm a Chromium
+    // helper subprocess (zygote / utility / GPU) about to exec the
+    // helper binary". We can't actually exec — but parking the cave
+    // forever (the previous strategy) deadlocks the parent's IPC
+    // pump because nothing ever responds on the helper's pipe end.
     //
-    // Without this, the failed execve makes the child fall
-    // through to its error-handling path (write to stderr,
-    // exit_group) which kills the cave; parent's later IPC
-    // attempt then FATALs with "Cannot communicate with zygote".
+    // Cleanly exit instead: mark the thread Exited(0). The parent's
+    // wait4 (now backed by try_reap_any_child) will reap, free the
+    // child's cave + kernel stack, and Chromium's "helper crashed,
+    // fall back" path will engage. The earlier "Cannot communicate
+    // with zygote" FATAL was a different bug (cross-cave fd table
+    // pollution) — now fixed by per-cave fd tables.
+    //
+    // exit_current(0) marks state=Exited, frees user stack pages,
+    // futex-wakes any joiner, then schedules another thread —
+    // never returns. The cave's L1/L2 page tables are freed by the
+    // parent's wait4 path (try_reap_any_child → mmu::free_cave_slot).
     let active_l1: u64;
     unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) active_l1); }
     let active_l1 = active_l1 & !1u64;
     let host_l1 = super::mmu::host_cave_l1() as u64;
     if host_l1 != 0 && active_l1 != host_l1 {
-        uart::puts("[execve] forked-child cave parking forever instead of exec\n");
-        loop {
-            // Yield to other threads. Eventually the parent runs,
-            // does its IPC handshake, etc.
-            super::threads::schedule();
-            // After scheduling we end up here when nothing else is
-            // runnable. wfi to save power and wait for next IRQ.
-            unsafe { core::arch::asm!("wfi"); }
-        }
+        uart::puts("[execve] forked-child cave: clean exit instead of exec\n");
+        super::threads::exit_current(0);
     }
 
     let _ = path; // silence unused-warning when the rest of the
