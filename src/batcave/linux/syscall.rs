@@ -360,6 +360,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         34 => (SyscallCat::FileIO, sys_mkdirat),      // mkdirat
         35 => (SyscallCat::FileIO, sys_stub_zero),    // unlinkat
         37 => (SyscallCat::FileIO, sys_stub_zero),    // linkat — hardlinks; success-stub
+        38 => (SyscallCat::FileIO, sys_stub_zero),    // renameat — fontconfig cache .NEW→real; no-op OK
         43 => (SyscallCat::FileIO, sys_stub_zero),    // statfs — return 0; bufs come back zeroed by caller
         46 => (SyscallCat::FileIO, sys_ftruncate),    // ftruncate — must really set node size for shm
         47 => (SyscallCat::FileIO, sys_stub_zero),    // fallocate — Chromium uses for shmem pre-alloc; success-stub OK
