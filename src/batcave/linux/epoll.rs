@@ -48,10 +48,34 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 // ─────────────────────── Public Linux ABI ───────────────────────
 
 /// Event descriptor exchanged with userspace. Matches the Linux
-/// `struct epoll_event` ABI: packed, little-endian, 12 bytes on 64-bit.
-/// Note that glibc uses `__attribute__((__packed__))` on x86_64 so the
-/// struct is 12 bytes there; on arm64 musl it's also 12 bytes. We match.
-#[repr(C, packed)]
+/// `struct epoll_event` ABI **as it actually appears on AArch64** —
+/// which is the unpacked, naturally-aligned 16-byte layout, not the
+/// 12-byte packed layout used on x86_64.
+///
+/// The kernel's `include/uapi/linux/eventpoll.h` defines:
+///
+/// ```c
+/// #ifdef __x86_64__
+/// #define EPOLL_PACKED __attribute__((packed))
+/// #else
+/// #define EPOLL_PACKED
+/// #endif
+/// struct epoll_event { __poll_t events; __u64 data; } EPOLL_PACKED;
+/// ```
+///
+/// On AArch64 EPOLL_PACKED is empty, so natural alignment kicks in:
+/// `events` at offset 0 (u32), 4 bytes of padding, `data` at offset 8
+/// (u64), total size 16. Chromium's `base::MessagePumpEpoll::WaitForEpoll
+/// Events` uses an `epoll_event[16]` stack buffer indexed in 16-byte
+/// strides and reads `event.data` at `[x25, #0x8]` (offset 8).
+///
+/// **Pre-fix bug**: this struct was `#[repr(C, packed)]` = 12 bytes with
+/// data at offset 4. Our drain_ready wrote `data` at offset 4 of each
+/// 12-byte slot; Chromium read `data` at offset 8 of each 16-byte slot
+/// (i.e. into the next event's `events` field, which contained whatever
+/// random bytes were on the stack). Dereferencing that random "pointer"
+/// faulted with FAR=0x5c7d8 in `MessagePumpEpoll::WaitForEpollEvents`.
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct EpollEvent {
     /// Bitmask of EPOLLIN / EPOLLOUT / EPOLLERR / ... plus flags
