@@ -11,6 +11,128 @@ end of a session.
 
 ---
 
+## 2026-04-25 00:45 — Mac — 🚀 REAL PREEMPTION lands. 10 threads run; Chromium init completes; clean exit on a real eventfd↔fd bug
+
+**TL;DR**: Real timer-IRQ preemption is now working. Chromium spawns
+**ten** worker threads (was 5 in baseline), runs through 2677 syscalls of
+init (vs 3554 in baseline that hung), and exits cleanly when it hits a
+pre-existing eventfd↔fd bridge bug. No kernel crashes. We're back to the
+shell prompt, not stuck in a hang.
+
+### What unblocked it
+
+The earlier session's note read like an architectural wall:
+> cxt_switch_cooperative only saves callee-saved x19-x30; IRQ blit needs
+> full x0-x30 state.
+
+That framing was wrong. The fix wasn't to make the IRQ blit work with
+cooperatively-yielded threads — it was to **stop blitting altogether**
+and route IRQs through `threads::schedule()` (the cooperative-switch
+path) instead.
+
+The trick: when handle_irq calls schedule() → cxt_switch_cooperative,
+the OLD thread's kernel stack still has the IRQ trap frame parked at the
+top with handle_irq + schedule call frames below it. cxt_switch_cooperative
+saves the OLD thread's SP (pointing into those frames) and switches to
+the NEW thread. Whenever the OLD thread is later rescheduled, SP is
+restored, ret unwinds back through schedule + handle_irq, the IRQ vector's
+RESTORE_REGS pops the still-parked trap frame, and `eret` resumes user
+mode. No special blit needed; the trap frame describes exactly the user
+state we want to restore.
+
+For threads that were cooperatively parked deep in a syscall handler
+(not preempted in user mode), the same path works — they get switched in
+the same way and eventually return up through their syscall handler to
+the SVC trap frame and eret.
+
+The one safety condition: only switch if the IRQ interrupted EL0. If
+SPSR shows EL1 (kernel mode) we just set the deferred `request_preempt`
+flag, because preempting kernel code that might be holding a lock would
+deadlock.
+
+### Two non-obvious gotchas hit along the way
+
+**1. `kernel::scheduler::tick()` was burning ~30x throughput.**
+After enabling init_timer, the smoke test made it past auth + Chromium
+launch but only got 40 syscalls in 4 minutes (vs 3554 in baseline). The
+culprit: `tick()` is the legacy task-table scheduler that ping-pongs
+with the `chromium-blit` kernel kthread on every timer fire. Two full
+context switches + a `gpu::flush` cycle every 10ms.
+
+Fix: drop the `tick()` call from handle_irq, keep just the
+`stdio_ring::drain_to_uart()` (which is the only useful thing tick()
+was doing for us). The legacy scheduler is now invoked only via
+explicit `yield_now()` calls from chromium-blit.
+
+**2. The smoke test's `batman` passphrase hangs unless built with
+`BAT_OS_PASSPHRASE=batman`.** The dev fallback is now derived from the
+kernel hash (V6-WEIRD-002), so `batman` is no longer the dev default for
+arbitrary builds. The smoke test script's header already documents the
+required env, but it's worth flagging: `BAT_OS_ALLOW_UNSIGNED_INITRD=1
+BAT_OS_PASSPHRASE=batman cargo build --release`.
+
+### Smoke test result
+
+```
+Verdict: PIPELINE-REACHED
+Threads spawned: t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 (+ t64 kthread)
+Syscalls: 2677
+Final state: clean shell prompt (`bat_os >`)
+Last syscall: t10 epoll_ctl(epfd=0x22, ADD, fd=0x3) → EBADF
+Exit cause: Chromium CHECK assertion fired (brk from EL0)
+```
+
+### Why epoll_ctl returned EBADF
+
+`eventfd2(initval, flags)` returns an internal **slot** number, not a
+real FD allocated through the per-cave FD table. So `eventfd2(0, ...) →
+3` looks like fd 3, but it isn't a real fd — it's eventfd-slot 3.
+When Chromium passes that "fd" to `epoll_ctl(EPOLL_CTL_ADD)`, the
+epoll_ctl handler tries to look up fd 3 in the per-cave FD table and
+gets EBADF (because slot 3 isn't an entry there).
+
+This is a separate, pre-existing bug. Filed as the next pending task:
+bridge eventfd-slots to real FDs by allocating an FD table entry that
+points at the eventfd slot, the way pipes/sockets already do.
+
+### Files changed
+
+* `src/kernel/arch/mod.rs` — handle_irq rewritten:
+  - drop `kernel::scheduler::tick()`, inline just the
+    `stdio_ring::drain_to_uart()` call
+  - check SPSR.M; if EL0 call `threads::schedule()`, if EL1 call
+    `request_preempt()`
+  - removed all the on_tick blit code (schedule() handles everything now)
+* `src/batcave/linux/runner.rs` — re-enable `init_timer()` right before
+  the EL0 eret in the cave runner.
+
+### Next pending tasks (in priority order)
+
+1. **Bridge eventfd2 slots to real FDs.** The `async_fds::eventfd2`
+   path returns a slot index; Chromium hands it to epoll_ctl which then
+   fails with EBADF. Need to allocate a per-cave FD entry that
+   references the eventfd slot, the same way pipe2/socketpair do.
+2. **wait4 + cave teardown.** Real reaping with proper exit status,
+   free kernel stack and per-cave page tables.
+3. **on_tick + the unused blit path** can be deleted now that
+   handle_irq doesn't call them. Marked dead code.
+
+### Current commit graph
+
+```
+07dbe10b Real timer-IRQ preemption via cooperative-switch path
+4c6f3b70 journal: per-cave FD tables + close_range + GIC scaffolding session
+45adafa4 Revert late-init timer call: state-mismatch with cooperative cxt switch
+d6ea90aa WIP: real preemption infrastructure (handle_irq blits new thread state, on_tick field-copy, GICv2 init scaffolding)
+5fb36605 yield every 4096 syscalls; bump smoke test timeout to 5 min
+```
+
+The d6ea90aa "WIP blit infrastructure" and the on_tick blit path in
+threads.rs are now dead code — kept around because deleting them is
+its own cleanup commit. The next session should feel free to rip them.
+
+---
+
 ## 2026-04-25 00:30 — Mac — Per-cave FD tables + monotonic alloc + close_range + GIC scaffolding; preemption is the new wall
 
 This session attacked the post-real-fork wall step by step.
