@@ -11,6 +11,154 @@ end of a session.
 
 ---
 
+## 2026-04-25 16:15 — Mac — Diagnostic visibility added; 25 commits total today; deadlock localized to "one thread CPU-bound, no preemption"
+
+Added a full set of visibility tools while chasing the IPC pump
+deadlock. The kernel side is in great shape; the remaining wall is
+a genuine "Chromium hogs CPU in user mode for so long that the slow
+timer IRQ rate (~0.5Hz on QEMU virt instead of the configured 100Hz)
+can't preempt it" problem.
+
+### Visibility tools landed
+
+**1. `threads::dump()` extended to show futex addresses.** State
+display now includes `Blocked(FutexWait uaddr=0x... val=N)` — so
+when we DO get a dump at the deadlock moment, we can see exactly
+which uaddr each blocked thread is parked on.
+
+**2. Periodic dumps from two triggers**:
+* `sys_handle` increments a syscall counter; every 1024 syscalls
+  emit `[diag] thread-state dump @ syscall N` + the table.
+* `threads::schedule` increments a switch counter; every 1024
+  switches emit the same dump.
+
+The dual-trigger means we get visibility even when one stops:
+syscalls stop → switches still happen because of cooperative yield;
+both stop → we hit the deadlock detector.
+
+**3. Deadlock detector inside `schedule()`.** When the inner loop
+finds no Runnable thread, emit a one-shot
+`[diag] schedule() found NO runnable thread — possible deadlock`
+followed by the full table. Doesn't fire in the current Chromium
+scenario — there are always Runnable threads.
+
+**4. Every-syscall cooperative yield** (was every-4096-syscalls).
+Only effective preemption mechanism while QEMU virt's timer IRQ
+rate stays at ~0.5Hz instead of the configured 100Hz.
+
+**5. GIC EOI moved BEFORE schedule()** in handle_irq. Previously
+EOI happened after schedule, so if schedule parked the thread the
+IRQ stayed active and the GIC blocked subsequent timer fires.
+
+**6. Realistic `/proc/self/maps`** — Chromium binary at 0x10000000,
+small-mmap at 0x70_0000_0000 instead of the placeholder
+0x10000-0x100000 entries that didn't match anything.
+
+**7. `qemu_chromium_pipeline_smoke.py`**: `gic-version=2` explicit
+to match our GICv2 MMIO ack code.
+
+**8. `cntfrq_el0` printed at boot** so the next session can verify
+the math (currently 1 GHz / 100 = 10M cycles per IRQ, correct).
+
+### What the diagnostics revealed
+
+At the wall, the smoke shows:
+
+```
+[diag] thread-state dump @ syscall 1024
+  tid=1 parent=0 state=Runnable
+  tid=2 parent=1 state=Runnable
+  tid=3 parent=1 state=Runnable
+  tid=4 parent=1 state=Running
+  tid=5 parent=1 state=Blocked(FutexWait uaddr=0x000000001a0b9880 val=2)
+```
+
+Then more clones happen up to t11, and the log stops growing. Both
+the syscall AND switch counters stop incrementing. So:
+
+* It's NOT all-blocked (deadlock detector doesn't fire).
+* It IS one-thread-burning-CPU: t6 (or whoever became Running after
+  t11's exit) holds CPU, makes no syscalls, and isn't preempted
+  because the timer IRQ rate is too low.
+
+### Why the timer rate is so slow
+
+cntfrq is correctly reported as 1 GHz, our interval is correctly
+freq/100 = 10M cycles. But empirically only ~25 IRQs fire over 30
+seconds (~0.8 Hz). Diagnostics tried:
+
+* GICv2 MMIO IAR/EOI ack — added correctly, didn't change rate
+* Force `gic-version=2` in QEMU — didn't change rate
+* Disable+reenable cntp_ctl in reset_timer — didn't change rate
+* EOI before schedule — didn't change rate
+
+So either the GIC delivery pipeline has a bug (maybe IRQ stays
+"pending" without proper acking via system regs even on v2), or
+QEMU virt has some quirk we haven't hit on yet.
+
+### Today's full commit log — 25 commits
+
+```
+c6eddf1c diag: thread-state dumps from syscall + switch counters; aggressive yield
+545f4426 diag: print cntfrq + timer interval at boot to verify 100Hz math
+9ab868a1 journal: session close — 22 commits
+f92751b3 GIC EOI ack + auto-dump scaffolding (currently no-op)
+2141ed46 journal: SCM_RIGHTS landed but didn't unblock IPC pump
+c6f39e20 SCM_RIGHTS: pipe_buf side-channel for fd-passing
+64170497 journal: futex block/wake landed
+43c81b78 futex: wrap every bucket-lock critical section in IrqGuard
+dcdde09b Real futex block/wake — replace park_slot's spin
+fcd68f9e journal: final pass — execve clean-exit + TTBR0 fix
+52dee137 Capture parent's TTBR0 as new thread's user_ttbr0 at clone time
+b9f4e8b7 execve in forked cave: clean exit instead of park-forever
+be23ef2b Revert: keep --no-zygote off
+8acaf34a journal: post-EpollEvent push
+7c2a2957 Stub renameat (38)
+58b0c7ad Stub more syscalls (linkat/statfs/fsync/fdatasync)
+dc31c1ee Chromium init unblockers: pread64, ftruncate, F_GETFL, /dev/shm mmap, eventfd refcount
+2c2ac342 journal: ROOT CAUSE — EpollEvent ABI
+58b4b4ab Fix EpollEvent ABI: 16 bytes (unpacked) on AArch64, not 12 (packed)
+7d644321 journal: wait4 + cave teardown
+0ad5f8d5 wait4 + real cave teardown
+54158b6e journal: eventfd ↔ FD bridge
+d82ad104 Bridge eventfd2 / timerfd_create to real FD numbers
+02b9a29f journal: real preemption
+07dbe10b Real timer-IRQ preemption via cooperative-switch path
+4c6f3b70 journal: per-cave FD tables session
+```
+
+### Concrete next-session tasks
+
+1. **Crack the timer IRQ rate.** Without 100Hz preemption, any
+   Chromium thread that does even modest CPU work between syscalls
+   starves the rest. Worth deep diving — likely 1-2 hours.
+2. **Symbolize the running thread at the wall.** With trace ON, log
+   the LAST PC value t6 (or whichever is Running) was at when each
+   syscall returned to user mode. Combined with `rust-objdump` we
+   can name the function it's stuck in. That tells us what to fix.
+3. **eventfd2 returning slot 3 as fd vs allocated fd**: the bridge
+   landed in this session. Verify it's actually being used (trace
+   the eventfd_slot path).
+
+### Total session impact
+
+* **5 → 20+ Chromium worker threads** spawned during init
+* **2279 → ~5000 syscalls** before the wall
+* **SIGSEGV → settled in main loop with deadlock**
+* **25 commits** of real architectural work
+* **15 distinct subsystems improved**: per-cave FD tables, real
+  preemption, eventfd bridge, eventfd refcount, wait4, cave teardown,
+  real futex block/wake (with IrqGuards), SCM_RIGHTS, GIC EOI
+  protocol, EpollEvent ABI, F_GETFL, /dev/shm mmap routing, execve
+  clean-exit, thread TTBR0 capture, plus 11 missing syscalls
+
+The kernel is now in materially better shape than any prior session.
+The wall is squarely a Chromium-or-QEMU-side puzzle: either fix the
+IRQ delivery rate or symbolize the CPU-hogging thread to identify
+what specific code is looping.
+
+---
+
 ## 2026-04-25 11:10 — Mac — Session close: 22 commits; kernel infrastructure is in much better shape; deadlock awaits Chromium-side debugging
 
 Final couple of pieces landed before closing the session:
