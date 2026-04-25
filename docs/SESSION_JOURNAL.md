@@ -11,6 +11,87 @@ end of a session.
 
 ---
 
+## 2026-04-25 11:00 — Mac — SCM_RIGHTS landed too; same wall persists; next session needs a thread-state dump syscall
+
+Implemented `SCM_RIGHTS` fd-passing on top of pipe_buf as the
+suspected unblocker for the IPC pump deadlock. Smoke unchanged at
+the same wall. Either Chromium isn't using sendmsg+SCM_RIGHTS in
+this codepath, or the deadlock is elsewhere.
+
+### What SCM_RIGHTS plumbing now does
+
+* `pipe_buf::push_fds(slot, side, fds)` — sender's send path queues
+  fd numbers on the destination side.
+* `pipe_buf::pop_fds(slot, side, out)` — receiver drains the queue
+  on its read.
+* `pipe_buf::pending_fds(slot, side)` — count check.
+* `sendmsg_pipe`: walks `m.msg_control` for `SOL_SOCKET/SCM_RIGHTS`
+  cmsgs, pushes the fd numbers via `push_fds`, then sends the iov
+  data through `pipe_buf::write` as before.
+* `recvmsg_pipe`: after reading iov data, drains queued fds via
+  `pop_fds` and synthesizes a `SOL_SOCKET/SCM_RIGHTS` cmsg in the
+  user's `msg_control`. Updates `msg_controllen` via the user
+  pointer so glibc's `CMSG_FIRSTHDR` walk sees it. If no fds queued,
+  zeros `msg_controllen` so stale buffer bytes don't get
+  misinterpreted as a cmsg.
+
+Single-process simplification: sender and receiver share the same
+per-cave fd table, so the fd numbers are valid on both sides without
+re-allocation or duping.
+
+### Why this wasn't the unblocker
+
+Chromium reaches the same `scheduler_loop_quarantine_config` log
+line and stops. Either:
+
+1. The deadlock is in a different IPC path (not socketpair-cmsg).
+2. Our impl has a bug — e.g. `msg_controllen` write gets clobbered.
+3. The deadlock is unrelated to IPC (could be a futex glibc internal
+   that depends on something we don't model).
+
+Without per-thread state introspection at the deadlock point, we're
+guessing. The next session's first move should be: **add a syscall
+that dumps `(tid, state, BlockReason)` for every Thread slot**, and
+trigger it from the host (via stdin or a timer). That would
+immediately tell us what t1 is waiting on (the exact uaddr of the
+futex it's parked on) and what state every other thread is in.
+
+### Final commit log for the session — 20 commits
+
+```
+c6f39e20 SCM_RIGHTS: pipe_buf side-channel for fd-passing
+64170497 journal: futex block/wake landed; the wall is Mojo SCM_RIGHTS
+43c81b78 futex: wrap every bucket-lock critical section in IrqGuard
+dcdde09b Real futex block/wake — replace park_slot's spin
+fcd68f9e journal: final pass — execve clean-exit + TTBR0 fix
+52dee137 Capture parent's TTBR0 as new thread's user_ttbr0 at clone time
+b9f4e8b7 execve in forked cave: clean exit instead of park-forever
+be23ef2b Revert: keep --no-zygote off
+8acaf34a journal: post-EpollEvent push
+7c2a2957 Stub renameat (38)
+58b0c7ad Stub more syscalls (linkat/statfs/fsync/fdatasync)
+dc31c1ee Chromium init unblockers: pread64, ftruncate, F_GETFL, /dev/shm mmap, eventfd refcount
+2c2ac342 journal: ROOT CAUSE — EpollEvent ABI
+58b4b4ab Fix EpollEvent ABI: 16 bytes (unpacked) on AArch64, not 12 (packed)
+7d644321 journal: wait4 + cave teardown
+0ad5f8d5 wait4 + real cave teardown
+54158b6e journal: eventfd ↔ FD bridge
+d82ad104 Bridge eventfd2 / timerfd_create to real FD numbers
+02b9a29f journal: real preemption
+07dbe10b Real timer-IRQ preemption via cooperative-switch path
+4c6f3b70 journal: per-cave FD tables session
+```
+
+That's a single day of compounding wins. The kernel side is in
+materially better shape than any prior session: real preemption,
+real eventfd bridge, real wait4 reaping, real futex block/wake,
+SCM_RIGHTS plumbing, plus the ABI fix (EpollEvent) and the F_GETFL
+real impl that actually moved the smoke from "5 threads, 2279
+syscalls, SIGSEGV" to "20 threads, full Chromium init through
+allocator setup, in-loop". Next session: introspect the deadlock.
+
+---
+
 ## 2026-04-25 10:55 — Mac — Real futex block/wake + IrqGuards; the kernel is sound, the wall is Mojo SCM_RIGHTS
 
 Final pass of the session — replaced the futex `park_slot` busy-spin
