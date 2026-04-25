@@ -325,6 +325,17 @@ pub struct Thread {
     /// in the copied stack instead of the parent's stack. Zero for
     /// regular thread-clone.
     pub fork_fp_relocation: i64,
+    /// Bounds of the fork-as-thread copied-stack region, used to
+    /// limit the FP-chain walker. Saved x29 values OUTSIDE this
+    /// range are left alone — they're either past the end of the
+    /// useful chain (parent never went that deep) or garbage in an
+    /// uninitialised stack slot. Without bounding, the walker
+    /// happily relocates random qwords and corrupts data the child
+    /// later reads (e.g. an `std::vector<int>::end` pointer turning
+    /// into a HUGE size, causing infinite loops in
+    /// base::LaunchProcess's fd-remap iteration).
+    pub fork_stack_lo: u64,
+    pub fork_stack_hi: u64,
 }
 
 impl Thread {
@@ -347,6 +358,8 @@ impl Thread {
             entry_pc: 0,
             entry_arg: 0,
             fork_fp_relocation: 0,
+            fork_stack_lo: 0,
+            fork_stack_hi: 0,
         }
     }
 }
@@ -574,19 +587,22 @@ pub fn clone(flags: u64,
             stack_lo, stack_hi, parent_l1 & !1u64);
         // Copy a window of parent's user stack into the child's
         // stack so that frame-pointer-relative accesses (including
-        // glibc's stack-canary check at function epilogue) see the
-        // same data the parent had. Without this, the child's
-        // glibc fork() epilogue reads garbage at [fp-N], the
-        // canary check fails, and the process aborts with
-        // "*** stack smashing detected ***".
+        // glibc's stack-canary check at function epilogue, and
+        // anything reading struct contents through a stack-
+        // resident pointer like base::LaunchOptions) see the same
+        // data the parent had. Without this, the child's glibc
+        // fork() epilogue reads garbage at [fp-N], the canary
+        // check fails, and the process aborts with "*** stack
+        // smashing detected ***".
         //
-        // We mirror parent's [SP, SP+64K] into the child at the
-        // SAME RELATIVE OFFSET from the new stack top. Then the
-        // child's SP is set so SP-relative reads land in the
-        // copied region.
+        // 512 KB of parent's stack is copied — covers any
+        // reasonable Chromium call depth at fork time without
+        // wasting too much memory. (Chromium browser threads
+        // typically run with 256 KB stacks; a 512 KB window
+        // captures the entire stack of any thread that forks.)
         let parent_sp: u64;
         unsafe { core::arch::asm!("mrs {}, sp_el0", out(reg) parent_sp); }
-        const COPY_BYTES: u64 = 0x10000; // 64 KB
+        const COPY_BYTES: u64 = 0x80000; // 512 KB
         // Position child SP so [child_SP, child_SP + COPY_BYTES)
         // = the copy of [parent_SP, parent_SP + COPY_BYTES).
         // Anchor child_SP at a fixed offset (4 KB) below stack_hi
@@ -806,6 +822,19 @@ pub fn clone(flags: u64,
         // set_child_resume can adjust x29 (and walk the saved-FP
         // chain to fix up nested frames).
         t[slot].fork_fp_relocation = fp_relocation;
+        if fp_relocation != 0 {
+            // Bounds of the copied-stack region (the only place
+            // where a relocated FP value is meaningful). Anything
+            // outside is past the end of the useful frame chain
+            // and must NOT be rewritten — that's how we previously
+            // turned a random vector::end pointer into a billions-
+            // size and looped Chromium's fd remap forever.
+            // child_stack now points at the BOTTOM of where we
+            // copied (effective_stack); the copy extends UP by
+            // COPY_BYTES (defined in the fork-as-thread block).
+            t[slot].fork_stack_lo = child_stack;
+            t[slot].fork_stack_hi = child_stack + 0x80000; // == COPY_BYTES
+        }
 
         0
     });
@@ -873,30 +902,47 @@ pub fn set_child_resume(tid: u32, resume_pc: u64, _parent_sp: u64) {
             // sees a valid chain entirely in child memory.
             let reloc = t[i].fork_fp_relocation;
             if reloc != 0 {
+                let stack_lo = t[i].fork_stack_lo;
+                let stack_hi = t[i].fork_stack_hi;
                 let parent_x29 = t[i].saved_regs.x[29];
                 let child_x29 = (parent_x29 as i64).wrapping_add(reloc) as u64;
-                t[i].saved_regs.x[29] = child_x29;
-                // Walk the saved-FP chain. Each frame stores
-                // [prev_x29, prev_x30] at [x29], so prev_x29 lives
-                // at [x29] and prev_x30 at [x29 + 8]. Follow the
-                // chain in the COPIED stack and add `reloc` to
-                // each saved prev_x29 so they stay self-consistent.
+                // Only relocate the top-level x29 if the result
+                // lands in the copied region; otherwise the parent
+                // x29 was outside our copy window and we have no
+                // valid target to point at — in which case zero
+                // x29 (frame chain ends here, FP-relative reads
+                // will fault rather than return garbage).
+                if child_x29 >= stack_lo && child_x29 < stack_hi {
+                    t[i].saved_regs.x[29] = child_x29;
+                } else {
+                    t[i].saved_regs.x[29] = 0;
+                }
+                // Walk the saved-FP chain. We only relocate slots
+                // whose ORIGINAL value was a valid frame pointer
+                // — i.e., the relocated target lands inside the
+                // copied region. This stops the walker from
+                // rewriting garbage values (uninitialised stack
+                // slots that happen to contain a non-zero qword)
+                // which previously corrupted things like
+                // base::LaunchOptions::fds_to_remap and caused
+                // infinite loops in the child.
                 let mut walker = child_x29;
                 for _ in 0..32 {
-                    // Bounds-check: must be inside the stack
-                    // region we copied. Heuristic — addresses we
-                    // copied range up to ~64 KB above effective_stack.
-                    if walker == 0 { break; }
-                    // Inline read+rewrite. The pages were demand-
-                    // committed during the copy phase so this
-                    // shouldn't fault, but we read volatile to be
-                    // explicit.
+                    if walker < stack_lo || walker >= stack_hi {
+                        break;
+                    }
                     let saved_x29: u64 = unsafe {
                         core::ptr::read_volatile(walker as *const u64)
                     };
                     if saved_x29 == 0 { break; }
                     let new_saved = (saved_x29 as i64)
                         .wrapping_add(reloc) as u64;
+                    if new_saved < stack_lo || new_saved >= stack_hi {
+                        // Original was outside copy window, so
+                        // it's not a real saved x29 we control.
+                        // Don't write back. Stop the walk.
+                        break;
+                    }
                     unsafe {
                         core::ptr::write_volatile(
                             walker as *mut u64, new_saved);

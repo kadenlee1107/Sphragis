@@ -709,8 +709,63 @@ fn sys_mprotect(args: [u64; 6]) -> i64 {
 
 // ─── fcntl (25) — file descriptor control ───
 fn sys_fcntl(args: [u64; 6]) -> i64 {
-    let _fd = args[0] as i32;
+    let fd = args[0] as i32;
     let cmd = args[1] as i32;
+
+    // Diagnostic: log the call site (LR) for fcntl whenever it
+    // happens at high frequency — Chromium's fork-as-thread child
+    // loops on fcntl(0, F_GETFD) ~57k times in 90s, and we need to
+    // see what's calling it. Print every 256th invocation for the
+    // first 4096 calls, then go quiet.
+    static FCNTL_COUNTER: core::sync::atomic::AtomicU64
+        = core::sync::atomic::AtomicU64::new(0);
+    let n = FCNTL_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if n < 4096 && (n & 0xFF) == 0 {
+        if let Some(e) = super::syscall_history::last_entry() {
+            uart::puts("[fcntl] n=");
+            crate::kernel::mm::print_num(n as usize);
+            uart::puts(" tid=t");
+            crate::kernel::mm::print_num(e.tid as usize);
+            uart::puts(" fd=0x");
+            let hex = b"0123456789abcdef";
+            for sh in (0..16).rev() {
+                uart::putc(hex[((fd as u64 >> (sh * 4)) & 0xF) as usize]);
+            }
+            uart::puts(" cmd=");
+            crate::kernel::mm::print_num(cmd as usize);
+            uart::puts(" lr=0x");
+            for sh in (0..16).rev() {
+                uart::putc(hex[((e.x30 >> (sh * 4)) & 0xF) as usize]);
+            }
+            // Walk the FP chain so we can see the call stack. Each
+            // frame stores [prev_x29, prev_x30] at [x29], so the
+            // saved LR of the function whose frame this is sits at
+            // [x29+8]. Chase up to 6 frames; stop when we leave
+            // the user VA range or hit 0.
+            let mut fp = e.x29;
+            for depth in 0..6u32 {
+                if fp == 0 || !uaccess::is_user_range(fp as usize, 16) {
+                    break;
+                }
+                let saved_x30: u64 = unsafe {
+                    core::ptr::read_volatile((fp + 8) as *const u64)
+                };
+                let prev_fp: u64 = unsafe {
+                    core::ptr::read_volatile(fp as *const u64)
+                };
+                uart::puts(" f");
+                crate::kernel::mm::print_num(depth as usize);
+                uart::puts("=0x");
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((saved_x30 >> (sh * 4)) & 0xF) as usize]);
+                }
+                fp = prev_fp;
+                if saved_x30 == 0 { break; }
+            }
+            uart::puts("\n");
+        }
+    }
+
     match cmd {
         1 => 0,   // F_GETFD — return 0 (no FD_CLOEXEC)
         2 => 0,   // F_SETFD — accept and ignore

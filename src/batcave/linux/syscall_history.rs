@@ -153,6 +153,23 @@ fn hex64(v: u64) {
     }
 }
 
+/// Read the most-recently-recorded entry. Useful when a syscall
+/// handler needs to peek at the caller's LR (`x30`) for diagnostic
+/// purposes — the dispatcher already captured it into the ring at
+/// SVC entry, so we just look it up rather than re-plumbing the
+/// trap frame through every handler.
+pub fn last_entry() -> Option<Entry> {
+    let head = HEAD.load(Ordering::Acquire) as usize;
+    if head == 0 { return None; }
+    let slot = (head - 1) % RING_SIZE;
+    let e = unsafe {
+        let ring = &*core::ptr::addr_of!(RING);
+        ring[slot]
+    };
+    if e.seq == 0 && e.tid == 0 && e.syscall_num == 0 { return None; }
+    Some(e)
+}
+
 /// Reset the ring. Called from `reset_cave_statics` so the next
 /// cave starts with an empty history.
 pub fn reset() {
