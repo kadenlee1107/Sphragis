@@ -11,6 +11,100 @@ end of a session.
 
 ---
 
+## 2026-04-24 23:30 — Mac — Hit the Mojo IPC wall; periodic-yield + execve-park don't unstick
+
+After the post-init-crash sweep, two more attempts to push past
+the IPC hang:
+
+### Attempt 1: periodic yield in syscall::handle (every 64th call)
+**Diagnosis**: t1 spawns 24+ pthreads via clone in a tight loop
+of non-blocking syscalls (clone / mprotect / gettid /
+clock_gettime). Cooperative scheduler only yields on blocking
+syscalls, so the new pthreads sit Runnable forever. t1
+eventually futex_waits on a worker-ack that never arrives →
+deadlock.
+
+**Fix**: yield every 64th syscall via `super::threads::schedule()`.
+
+**Result**: works for the deadlock but kicks the zygote child
+into running its execve→ENOENT→exit path. Parent's later
+"GETPID" message to the zygote socketpair then FATALs with
+"Cannot communicate with zygote".
+
+### Attempt 2: park forked-child threads on execve
+**Idea**: instead of returning ENOENT from execve in the forked
+child, enter an infinite schedule()+wfi loop. The thread stays
+"alive" so the parent's wait4 doesn't see the child die.
+
+**Result**: also FATALs. The handshake doesn't just want the
+child to exist — it needs the child to actively READ the
+"GETPID" message from the socketpair and write back its PID.
+A parked thread doesn't do either.
+
+### The actual wall
+
+Chromium's zygote IPC protocol:
+```
+parent → GETPID request (Pickle-encoded) → socketpair fd
+parent ← PID response (Pickle-encoded) ← socketpair fd
+```
+
+Without a kernel-side stub that:
+1. Detects writes to the parent's zygote socketpair
+2. Decodes the Mojo Pickle message format
+3. Synthesises a plausible response
+4. Injects it into the read side
+
+…the handshake will never complete and Chromium FATALs.
+
+That stub is a separate project — a few hundred lines of
+Chromium-IPC-protocol-aware kernel code. It needs the Mojo
+Pickle format reverse-engineered and our pipe_buf machinery
+extended to support kernel-side producers.
+
+### Final session pipeline
+
+| Phase                              | Syscalls | What blocked |
+|------------------------------------|----------|--------------|
+| Session start                      |   ~580   | fork-as-thread NULL deref |
+| Real fork landed                   |   582    | ThreadIdNameManager NULL |
+| gettid + /dev/shm fixes            |  2483    | FD ownership FATAL |
+| F_DUPFD + monotonic fd alloc       |  4757    | epoll hang in worker |
+| Periodic-yield + execve-park       |  ~3000   | Mojo zygote handshake FATAL |
+
+### What's done
+
+Massive. Genuine real fork (eager-copy page tables, per-thread
+TTBR0, cross-cave context switch, scoped exit_group), small-anon
+mmap region with one-big demand-page reservation, MAP_FIXED
+high-VA file copy + mprotect, gettid honoring threads layer,
+/dev/shm directory, F_DUPFD properly allocating new fds,
+monotonic fd allocator, periodic cooperative yield, forked-child
+execve parking. ~12 commits today.
+
+### What's left to *actually render*
+
+1. **Mojo zygote IPC stub** (~few hundred lines) — kernel reads
+   parent's GETPID/FORK messages on the socketpair, encodes
+   plausible Pickle responses, writes them back. Requires Mojo
+   Pickle format knowledge.
+2. **Per-process FD table** — currently FD_TABLE is a kernel
+   global; multiple forked caves see each other's fds. POSIX
+   says each process has its own. Latent issue waiting to bite.
+3. **Real preemption** — periodic-yield-every-64-syscalls is a
+   crude proxy. A timer IRQ that swaps the running thread
+   mid-execution would let workers actually run without the
+   yield-causes-zygote-to-die problem.
+4. **Real wait4 + cave teardown** — kernel stack leaks ~16 KB
+   per fork; cave page tables stay allocated until reboot.
+
+The kernel side is genuinely in great shape. The remaining work
+is half kernel infrastructure (preemption, per-process tables)
+and half Chromium-protocol reverse-engineering (Mojo). Either
+could land in a 2-3 day focused effort; together it's a week.
+
+---
+
 ## 2026-04-24 22:50 — Mac — Past 4 more post-fork crashes; Chromium now alive in its event loop
 
 Quick wins after the real-fork landing:
