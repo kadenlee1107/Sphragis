@@ -218,6 +218,22 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
     // stable stack and aren't mid-inline-asm).
     super::threads::maybe_yield();
 
+    // CHROMIUM-PHASE-D: cooperative-yield every Nth syscall when
+    // many threads are runnable. Without this, a hot loop of
+    // non-blocking syscalls (Chromium's worker-pool init does
+    // exactly this — clone/mprotect/gettid/clock_gettime in a
+    // tight cycle) starves freshly-spawned pthreads. They sit in
+    // Runnable state forever and never get a chance to run their
+    // glibc post-clone setup, so Chromium thinks the worker pool
+    // is hung and never advances to navigation. Yielding every
+    // 64 syscalls keeps the cooperative scheduler making progress.
+    static SYSCALL_COUNTER: core::sync::atomic::AtomicU64 =
+        core::sync::atomic::AtomicU64::new(0);
+    let n = SYSCALL_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if (n & 0x3F) == 0 {
+        super::threads::schedule();
+    }
+
     // Temporary diagnostic: trace every syscall. Essential for the Chromium
     // port debug loop right now ("did content_shell reach main, or did
     // __libc_start_main bail early?"). Gate with an atomic so tests that
