@@ -11,6 +11,81 @@ end of a session.
 
 ---
 
+## 2026-04-25 11:10 — Mac — Session close: 22 commits; kernel infrastructure is in much better shape; deadlock awaits Chromium-side debugging
+
+Final couple of pieces landed before closing the session:
+
+**1. GIC EOI ack** in handle_irq. Read GICC_IAR at entry, write back
+to GICC_EOIR at exit. Was missing — without it the GIC keeps the IRQ
+in the active state and won't deliver the next one in the
+spec-compliant way. The kernel mostly worked because schedule()
+preempts on every IRQ entry, but the EOI is the right thing.
+
+**2. Thread-state auto-dump scaffolding** (`threads::auto_dump_if_idle`)
+called from the timer-IRQ branch. Was meant to fire every 5 sec to
+print every thread's `(tid, state, BlockReason)` so we can see what
+the deadlock looks like. Empirical observation: timer IRQs fire at
+**~1Hz instead of 100Hz** on QEMU virt. Either `cntfrq_el0` reports
+larger than expected, or our GICv2 init mismatches QEMU's default
+GICv3 in some way (forcing `gic-version=2` in the smoke script
+didn't change the rate). The auto-dump is currently a stub; needs
+the IRQ rate fixed before it's useful.
+
+### Two diagnostic loose ends for the next session
+
+1. **Timer IRQ rate is 100x slow.** Print `cntfrq_el0` at boot,
+   confirm it matches our assumed value. If wrong, fix the divisor.
+   If right, dig into GICv3 vs v2 handover. (The cooperative-yield
+   fallback covers scheduling for now.)
+2. **Deadlock diagnosis.** Once the timer rate is right the
+   auto-dump will tell us what every thread is parked on. If the
+   timer fix is hard, add a stdin-triggered `dump_threads` shell
+   command to the bat_os shell instead.
+
+### Final commit log — 22 commits this session
+
+```
+f92751b3 GIC EOI ack + auto-dump scaffolding (currently no-op)
+2141ed46 journal: SCM_RIGHTS landed but didn't unblock IPC pump
+c6f39e20 SCM_RIGHTS: pipe_buf side-channel for fd-passing
+64170497 journal: futex block/wake landed; the wall is Mojo SCM_RIGHTS
+43c81b78 futex: wrap every bucket-lock critical section in IrqGuard
+dcdde09b Real futex block/wake — replace park_slot's spin
+fcd68f9e journal: final pass — execve clean-exit + TTBR0 fix
+52dee137 Capture parent's TTBR0 as new thread's user_ttbr0 at clone time
+b9f4e8b7 execve in forked cave: clean exit instead of park-forever
+be23ef2b Revert: keep --no-zygote off (still ICU CharString bug)
+8acaf34a journal: post-EpollEvent push
+7c2a2957 Stub renameat (38)
+58b0c7ad Stub more syscalls (linkat/statfs/fsync/fdatasync)
+dc31c1ee Chromium init unblockers: pread64, ftruncate, F_GETFL, /dev/shm mmap, eventfd refcount
+2c2ac342 journal: ROOT CAUSE — EpollEvent ABI
+58b4b4ab Fix EpollEvent ABI: 16 bytes (unpacked) on AArch64, not 12 (packed)
+7d644321 journal: wait4 + cave teardown
+0ad5f8d5 wait4 + real cave teardown
+54158b6e journal: eventfd ↔ FD bridge
+d82ad104 Bridge eventfd2 / timerfd_create to real FD numbers
+02b9a29f journal: real preemption
+07dbe10b Real timer-IRQ preemption via cooperative-switch path
+4c6f3b70 journal: per-cave FD tables session
+```
+
+### Total session impact
+
+* **5 → 20 worker threads** spawned by Chromium during init
+* **2279 → 4500+ syscalls** before the wall
+* **SIGSEGV** → **clean settle into main loop**
+* Real preemption, real eventfd bridge, real wait4 reaping, real
+  futex block/wake, SCM_RIGHTS fd-passing, EpollEvent ABI fix,
+  F_GETFL real impl, /dev/shm mmap routing, eventfd refcounting,
+  execve clean-exit, thread TTBR0 capture, GIC EOI, plus 11 missing
+  syscalls wired up.
+
+The kernel side is genuinely good now. Next session: crack the IPC
+pump deadlock with the new diagnostics infrastructure.
+
+---
+
 ## 2026-04-25 11:00 — Mac — SCM_RIGHTS landed too; same wall persists; next session needs a thread-state dump syscall
 
 Implemented `SCM_RIGHTS` fd-passing on top of pipe_buf as the
