@@ -283,19 +283,26 @@ fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32) -> i64 {
     //   (b) takes the lock first, sets woken=true, calls wake_thread on
     //       our (still-Running) tid (no-op), then unlocks. We then
     //       observe woken=true on the next check and never block.
-    // The bucket_lock ↔ wake_thread ordering keeps the two cases atomic.
+    //
+    // IRQ guard around the lock-and-state-mutation: if a timer IRQ fired
+    // between mark_blocked and bucket_unlock, the scheduler would skip us
+    // (Blocked), pick another thread, and that thread spinning on
+    // bucket_lock would deadlock — we'd never run again to release it.
     loop {
+        let g = crate::kernel::sync::IrqGuard::new();
         bucket_lock(b);
         // Fast-path check: did we already get our wake?
         if s.woken.load(Ordering::Acquire) {
             release(b, slot);
             bucket_unlock(b);
+            drop(g);
             return 0;
         }
         // Timeout expired?
         if has_deadline && cntpct() >= deadline {
             release(b, slot);
             bucket_unlock(b);
+            drop(g);
             return ETIMEDOUT;
         }
         // Mark self Blocked. Doesn't yield yet — that comes after we
@@ -304,6 +311,7 @@ fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32) -> i64 {
             crate::batcave::linux::threads::BlockReason::FutexWait { uaddr, val },
         );
         bucket_unlock(b);
+        drop(g);
 
         // Yield. The IRQ scheduler skips Blocked threads, so this thread
         // sleeps until either a futex_wake transitions us back to Runnable
@@ -355,12 +363,16 @@ pub fn futex_wait(uaddr: u64, val: u32, timeout_ns: u64) -> i64 {
 
     // Critical section: check user memory and enqueue atomically wrt other
     // wakers. Without this lock, a FUTEX_WAKE firing between our value
-    // check and our enqueue would be lost.
+    // check and our enqueue would be lost. IrqGuard so we can't be
+    // preempted while holding the spinlock — that would deadlock any
+    // other thread spinning on this bucket.
+    let g = crate::kernel::sync::IrqGuard::new();
     bucket_lock(b);
 
     let current = load_u32(uaddr);
     if current != val {
         bucket_unlock(b);
+        drop(g);
         return EAGAIN;
     }
 
@@ -368,11 +380,13 @@ pub fn futex_wait(uaddr: u64, val: u32, timeout_ns: u64) -> i64 {
         Some(s) => s,
         None => {
             bucket_unlock(b);
+            drop(g);
             return ENOSPC;
         }
     };
 
     bucket_unlock(b);
+    drop(g);
 
     // Release the bucket lock before blocking — park_slot re-acquires it
     // only for the short detach at the end.
@@ -401,20 +415,24 @@ pub fn futex_wait_bitset(uaddr: u64, val: u32, timeout_ns: u64, bitset: u32) -> 
     let bi = bucket_index(uaddr);
     let b = bucket(bi);
 
+    let g = crate::kernel::sync::IrqGuard::new();
     bucket_lock(b);
     let current = load_u32(uaddr);
     if current != val {
         bucket_unlock(b);
+        drop(g);
         return EAGAIN;
     }
     let slot = match enqueue(b, uaddr, current_tid(), deadline, bitset) {
         Some(s) => s,
         None => {
             bucket_unlock(b);
+            drop(g);
             return ENOSPC;
         }
     };
     bucket_unlock(b);
+    drop(g);
 
     park_slot(b, slot, uaddr, val)
 }
@@ -434,6 +452,7 @@ pub fn futex_wake(uaddr: u64, max_wakers: u32) -> i64 {
     let b = bucket(bi);
     let mut woken: i64 = 0;
 
+    let g = crate::kernel::sync::IrqGuard::new();
     bucket_lock(b);
     for s in b.slots.iter() {
         if woken as u32 >= max_wakers {
@@ -458,6 +477,7 @@ pub fn futex_wake(uaddr: u64, max_wakers: u32) -> i64 {
         woken += 1;
     }
     bucket_unlock(b);
+    drop(g);
 
     woken
 }
@@ -471,6 +491,7 @@ pub fn futex_wake_bitset(uaddr: u64, max_wakers: u32, bitset: u32) -> i64 {
     let b = bucket(bi);
     let mut woken: i64 = 0;
 
+    let g = crate::kernel::sync::IrqGuard::new();
     bucket_lock(b);
     for s in b.slots.iter() {
         if woken as u32 >= max_wakers {
@@ -494,6 +515,7 @@ pub fn futex_wake_bitset(uaddr: u64, max_wakers: u32, bitset: u32) -> i64 {
         woken += 1;
     }
     bucket_unlock(b);
+    drop(g);
 
     woken
 }
@@ -538,6 +560,7 @@ fn requeue_impl(
     let b1 = bucket(bi1);
     let b2 = bucket(bi2);
 
+    let g = crate::kernel::sync::IrqGuard::new();
     if bi1 == bi2 {
         bucket_lock(b1);
     } else if bi1 < bi2 {
@@ -556,6 +579,7 @@ fn requeue_impl(
                 bucket_unlock(b2);
             }
             bucket_unlock(b1);
+            drop(g);
             return EAGAIN;
         }
     }
@@ -642,6 +666,7 @@ fn requeue_impl(
         bucket_unlock(b2);
     }
     bucket_unlock(b1);
+    drop(g);
 
     woken + requeued
 }
