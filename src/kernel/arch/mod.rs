@@ -49,8 +49,12 @@ pub struct TrapFrame {
 
 pub fn init_exceptions() {
     unsafe {
+        // adrp+add (±4 GB range) instead of `adr` (±1 MB) — the
+        // kernel grew past the ADR_PREL_LO21 range and the linker
+        // was rejecting the relocation.
         core::arch::asm!(
-            "adr x0, exception_vectors",
+            "adrp x0, exception_vectors",
+            "add  x0, x0, :lo12:exception_vectors",
             "msr vbar_el1, x0",
             "isb",
             out("x0") _,

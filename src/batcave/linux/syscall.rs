@@ -3948,6 +3948,41 @@ fn sys_execve(args: [u64; 6]) -> i64 {
 }
 
 fn sys_wait_stub(args: [u64; 6]) -> i64 {
+    // wait4(pid, status_ptr, options, rusage)
+    // Real path: scan for any Exited child of the current thread (pid<=0
+    // means "any") via threads::try_reap_any_child, which also frees the
+    // child's kernel stack + cave page tables + fd table. Falls back to
+    // the legacy fake-fork / CHILD_REAPED stubs when no real child is
+    // found, so synthetic-fork callers (the very early non-real-fork
+    // path) still get a sensible reply.
+    let target_pid = args[0] as i32;
+    let status_ptr = args[1] as usize;
+    let options    = args[2] as i32;
+    const WNOHANG: i32 = 1;
+
+    if status_ptr != 0 && !uaccess::is_user_range(status_ptr, 4) {
+        return -(14i64); // EFAULT
+    }
+
+    // Real-fork reaping path.
+    let me = super::threads::current_tid();
+    if let Some((tid, code)) = super::threads::try_reap_any_child(me, target_pid) {
+        if status_ptr != 0 {
+            // Linux wait status: exit code in bits 15:8 (normal exit).
+            let status: u32 = (code as u32 & 0xFF) << 8;
+            unsafe {
+                core::arch::asm!("str {v:w}, [{a}]",
+                    a = in(reg) status_ptr, v = in(reg) status);
+            }
+        }
+        uart::puts("[wait4] reaped pid=");
+        crate::kernel::mm::print_num(tid as usize);
+        uart::puts(" code=");
+        crate::kernel::mm::print_num(code as usize);
+        uart::puts("\n");
+        return tid as i64;
+    }
+
     // ROOT-FIX (2026-04-24): fake-fork reap path. When `clone()`
     // synthesised a fake child PID (see threads::clone), there's no
     // real process to wait on — the child "exited immediately" with
@@ -3958,13 +3993,7 @@ fn sys_wait_stub(args: [u64; 6]) -> i64 {
     if fake != 0 {
         super::threads::FAKE_CHILD_PID
             .store(0, core::sync::atomic::Ordering::Release);
-        let status_ptr = args[1] as usize;
         if status_ptr != 0 {
-            if !uaccess::is_user_range(status_ptr, 4) { return -(14i64); }
-            // Linux wait status layout for normal exit:
-            //   low 7 bits = termination signal (0 = normal)
-            //   bit 7 = core dump
-            //   bits 15:8 = exit code
             let status: u32 = 0;
             unsafe {
                 core::arch::asm!("str {v:w}, [{a}]", a = in(reg) status_ptr, v = in(reg) status);
@@ -3979,20 +4008,16 @@ fn sys_wait_stub(args: [u64; 6]) -> i64 {
     // Check if there's a child to reap
     let has_child = CHILD_REAPED.load(core::sync::atomic::Ordering::Relaxed);
     if has_child {
-        // Already reaped — no more children
+        // Already reaped — return ECHILD if blocking, 0 if WNOHANG.
+        if options & WNOHANG != 0 { return 0; }
         return -10; // ECHILD
     }
 
     // Mark as reaped so subsequent calls return ECHILD
     CHILD_REAPED.store(true, core::sync::atomic::Ordering::Relaxed);
 
-    let status_ptr = args[1] as usize;
     let code = CHILD_EXIT_CODE.load(core::sync::atomic::Ordering::Relaxed);
     if status_ptr != 0 {
-        // NEW-SYS-026: status_ptr must be user memory. Without this, wait4
-        // was a 4-byte controlled kernel-write primitive (attacker-controlled
-        // status value limited to 8 bits but attacker-chosen location).
-        if !uaccess::is_user_range(status_ptr, 4) { return -(14i64); }
         // Linux wait status: exit code in bits 15:8
         let status: u32 = (code as u32 & 0xFF) << 8;
         unsafe {

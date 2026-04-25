@@ -1418,6 +1418,69 @@ pub fn futex_wait_on(uaddr: u64, val: u32) -> i64 {
     0
 }
 
+/// Real wait4(): scan the thread table for any Exited child of the
+/// current thread (parent_tid == me). If found, reap it: free its
+/// kernel stack, free its forked cave (page tables), and clear the
+/// thread slot. Returns (child_tid, exit_code) or None.
+///
+/// `target_pid` selects which child to reap:
+///   * -1 → any child
+///   * >0 → that specific child TID (POSIX waitpid semantics)
+///   * 0 / <-1 → process-group filtering (we don't have process groups,
+///     so treat as "any" too)
+///
+/// Caller is responsible for stuffing the exit code into the user's
+/// status_ptr (Linux wait status format) and returning the child TID
+/// to user space.
+pub fn try_reap_any_child(parent: u32, target_pid: i32) -> Option<(u32, i32)> {
+    // Phase 1: locate a matching Exited child under the table lock.
+    // Capture everything we need to free OUTSIDE the lock (frame::free
+    // takes its own state and we don't want to nest lock orders).
+    let reaped = with_table(|t| {
+        for slot in t.iter_mut() {
+            if slot.state == ThreadState::Free { continue; }
+            if slot.parent_tid != parent { continue; }
+            if target_pid > 0 && slot.tid != target_pid as u32 { continue; }
+            if let ThreadState::Exited(code) = slot.state {
+                let tid = slot.tid;
+                let kbase = slot.kernel_stack_base;
+                let kpages = if slot.kernel_stack_top > kbase && kbase != 0 {
+                    ((slot.kernel_stack_top - kbase) as usize) / PAGE_SIZE
+                } else { 0 };
+                let cave_l1 = slot.saved_regs.user_ttbr0;
+                // Wipe the slot now so a future spawn can reuse it.
+                *slot = Thread::empty();
+                return Some((tid, code, kbase, kpages, cave_l1));
+            }
+        }
+        None
+    });
+    let (tid, code, kbase, kpages, cave_l1) = reaped?;
+
+    // Phase 2: free the kernel stack pages (zeroed by free_frame so no
+    // residue leaks to the next allocation).
+    if kbase != 0 && kpages > 0 {
+        crate::kernel::mm::frame::free_contig(kbase as usize, kpages);
+    }
+
+    // Phase 3: free the child's cave (L1 + L2 page tables back to the
+    // kernel pool). The slot bit is released last by free_cave_slot, in
+    // the right order to avoid the V5-CHAIN-002 race.
+    if cave_l1 != 0 {
+        if let Some(cave_slot) = super::mmu::cave_slot_for_l1(cave_l1) {
+            // Drop the per-cave fd table for this slot — the child's
+            // open fds are gone with it.
+            super::fd::reset_for_cave_slot(cave_slot);
+            super::mmu::free_cave_slot(cave_slot);
+        }
+    }
+
+    // Phase 4: refund the per-cave thread quota slot.
+    super::quotas::refund_active(super::quotas::Resource::Threads, 1);
+
+    Some((tid, code))
+}
+
 /// Poll for Exited children of the current thread (for pthread_join).
 /// Returns Some(exit_code) if found & reaped.
 pub fn try_reap(tid: u32) -> Option<i32> {

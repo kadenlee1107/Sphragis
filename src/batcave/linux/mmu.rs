@@ -411,6 +411,21 @@ pub fn current_cave_slot() -> usize {
 /// to match.
 pub const NUM_CAVES: usize = MAX_CAVE_PAGETABLES;
 
+/// Look up the cave slot for a given L1 phys address. Like
+/// `current_cave_slot()` but for an arbitrary L1 (used by wait4
+/// to figure out which cave to free when reaping a forked child).
+pub fn cave_slot_for_l1(l1_phys: u64) -> Option<usize> {
+    if l1_phys == 0 { return None; }
+    unsafe {
+        for i in 0..MAX_CAVE_PAGETABLES {
+            if CAVE_L1[i] == l1_phys as usize {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
 /// Look up the user-window bounds (virt_base, virt_extent) for
 /// the given L1 phys address. Returns None if no cave is
 /// registered with that L1.

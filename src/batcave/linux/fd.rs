@@ -137,6 +137,33 @@ pub fn reset_for_cave_switch() {
     init();
 }
 
+/// Wipe a specific cave's fd table. Used by wait4 reaping to release
+/// any eventfd/timerfd slots the child held before we destroy the cave
+/// itself. Different from reset_for_cave_switch (which targets the
+/// CURRENT cave) — this targets a slot we know by index.
+pub fn reset_for_cave_slot(slot: usize) {
+    if slot >= NUM_CAVES { return; }
+    use core::sync::atomic::Ordering;
+    unsafe {
+        let tables = &mut *core::ptr::addr_of_mut!(FD_TABLES);
+        for i in 0..MAX_FDS {
+            // Free any backing eventfd/timerfd slots this entry held
+            // (otherwise they leak — bridge entries ARE the only owner).
+            match tables[slot][i].kind {
+                FdKind::Eventfd(s) => {
+                    let _ = crate::batcave::linux::async_fds::free_eventfd_slot(s as usize);
+                }
+                FdKind::Timerfd(s) => {
+                    let _ = crate::batcave::linux::async_fds::free_timerfd_slot(s as usize);
+                }
+                _ => {}
+            }
+            tables[slot][i] = FdEntry::empty();
+        }
+    }
+    ALLOC_CURSORS[slot].store(3, Ordering::Release);
+}
+
 /// Initialize the fd table for the CURRENT cave. Fds 0/1/2
 /// reserved (UART). Note: only the host cave (slot 0) typically
 /// calls init(); forked children inherit the parent's table via
