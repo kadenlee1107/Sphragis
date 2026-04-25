@@ -359,6 +359,8 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         25 => (SyscallCat::FileIO, sys_fcntl),        // fcntl
         34 => (SyscallCat::FileIO, sys_mkdirat),      // mkdirat
         35 => (SyscallCat::FileIO, sys_stub_zero),    // unlinkat
+        37 => (SyscallCat::FileIO, sys_stub_zero),    // linkat — hardlinks; success-stub
+        43 => (SyscallCat::FileIO, sys_stub_zero),    // statfs — return 0; bufs come back zeroed by caller
         46 => (SyscallCat::FileIO, sys_ftruncate),    // ftruncate — must really set node size for shm
         47 => (SyscallCat::FileIO, sys_stub_zero),    // fallocate — Chromium uses for shmem pre-alloc; success-stub OK
         48 => (SyscallCat::FileIO, sys_faccessat),    // faccessat
@@ -372,6 +374,8 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         78 => (SyscallCat::FileIO, sys_readlinkat),   // readlinkat
         88 => (SyscallCat::FileIO, sys_stub_zero),    // utimensat — return 0; we don't track mtime
         53 => (SyscallCat::FileIO, sys_stub_zero),    // fchownat — single-user OS; ignore
+        82 => (SyscallCat::FileIO, sys_stub_zero),    // fsync
+        83 => (SyscallCat::FileIO, sys_stub_zero),    // fdatasync — no real disk
 
         // ── Memory — always allowed within cave ──
         nr::BRK => (SyscallCat::Memory, sys_brk),
