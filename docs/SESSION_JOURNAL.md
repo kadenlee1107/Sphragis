@@ -11,6 +11,110 @@ end of a session.
 
 ---
 
+## 2026-04-25 10:55 — Mac — Real futex block/wake + IrqGuards; the kernel is sound, the wall is Mojo SCM_RIGHTS
+
+Final pass of the session — replaced the futex `park_slot` busy-spin
+with real block/wake state transitions, then chased the resulting
+deadlock all the way to its root: holding the bucket spinlock across
+a state transition is unsafe under preemption, and needs IrqGuard
+discipline.
+
+### What landed
+
+**1. `park_slot` now genuinely blocks.** Marks the thread `Blocked`
+under the bucket lock, drops the lock, calls `schedule()`. The IRQ
+scheduler skips Blocked threads, so the waiter sleeps until a
+`futex_wake` transitions it back to Runnable. New helpers in
+`threads.rs`:
+* `mark_current_blocked(reason)` — set state without yielding
+* `mark_current_runnable()` — restore state on resume
+
+**2. `futex_wake` / `futex_wake_bitset` / `requeue_impl` all call
+`threads::wake_thread(s.tid)`** after setting `s.woken = true`. Order
+matters: woken first so a racing waiter sees it; then the state
+transition so the waiter actually runs again.
+
+**3. `IrqGuard` around every bucket-lock critical section.** Without
+it, a timer IRQ between `mark_blocked` and `bucket_unlock` would
+deadlock the next thread that tried to take the same bucket lock —
+the formerly-current thread is Blocked and won't run again to
+release the lock. Wrapped in 6 places: park_slot's loop, both
+futex_wait variants' enqueue, both futex_wake variants' scan, and
+the requeue two-bucket lock.
+
+### Smoke result
+
+Same wall as the previous pass — Chromium reaches `scheduler_loop_
+quarantine_config` and stops. The new block/wake actually does its
+job (kernel is no longer burning CPU on spinning waiters) but doesn't
+unblock Chromium's IPC pump.
+
+### Why the wall persists
+
+Best read: **Mojo `sendmsg`/`recvmsg` doesn't carry SCM_RIGHTS** in
+our impl. We route Pipe-kinded fds through `pipe_buf::write/read`
+which only handles iov data. The `msg_control` field — where Chromium
+stuffs the file descriptors that the channel handshake requires — is
+silently dropped. The receiver's IPC bootstrap can't find the fd it
+expects → waits forever for it → IPC pump never starts.
+
+Implementing SCM_RIGHTS in single-process is tractable: sender and
+receiver share the same per-cave fd table, so the fd numbers are
+already valid on both sides. Just need to multiplex the cmsg bytes
+into the pipe alongside iov data. Has to be a framed protocol so
+ordinary writes don't collide. Maybe ~150 lines of careful work.
+
+### Other tractable next-steps
+
+1. **SCM_RIGHTS** (above) — the most likely unblocker.
+2. **Implement a real `signalfd4`** — currently ENOSYS, returns -38.
+   Chromium uses it for its renderer-host signal pipe.
+3. **Trace the futex Chromium is waiting on.** Add a syscall that
+   dumps every blocked thread's `BlockReason::FutexWait{uaddr}` to
+   the UART. We'd see the exact uaddr and could correlate with what
+   else touches that address.
+
+### Files changed this final pass
+
+```
+src/batcave/linux/futex.rs    — park_slot block path, IrqGuards everywhere,
+                                  wake_thread calls in wake/wake_bitset/requeue
+src/batcave/linux/threads.rs  — mark_current_blocked/runnable helpers
+src/ui/shell.rs               — try-then-revert --no-zygote (verified ICU bug)
+```
+
+### Today's full commit log (final)
+
+```
+43c81b78 futex: wrap every bucket-lock critical section in IrqGuard
+dcdde09b Real futex block/wake — replace park_slot's spin
+fcd68f9e journal: final pass — execve clean-exit + TTBR0 fix
+52dee137 Capture parent's TTBR0 as new thread's user_ttbr0 at clone time
+b9f4e8b7 execve in forked cave: clean exit instead of park-forever
+be23ef2b Revert: keep --no-zygote off (still hits ICU CharString bug)
+8acaf34a journal: post-EpollEvent push
+7c2a2957 Stub renameat (38)
+58b0c7ad Stub more syscalls (linkat/statfs/fsync/fdatasync)
+dc31c1ee Chromium init unblockers
+2c2ac342 journal: ROOT CAUSE — EpollEvent ABI
+58b4b4ab Fix EpollEvent ABI: 16 bytes (unpacked) on AArch64, not 12 (packed)
+7d644321 journal: wait4 + cave teardown
+0ad5f8d5 wait4 + real cave teardown
+54158b6e journal: eventfd ↔ FD bridge
+d82ad104 Bridge eventfd2 / timerfd_create to real FD numbers
+02b9a29f journal: real preemption
+07dbe10b Real timer-IRQ preemption via cooperative-switch path
+4c6f3b70 journal: per-cave FD tables session
+```
+
+That's **19 commits in one session.** The kernel is in materially better
+shape than this morning. Real preemption, real eventfd bridge, real
+wait4/cave-teardown, real futex block/wake, plus the EpollEvent ABI
+and F_GETFL fixes that were the actual unblockers for Chromium's init.
+The next push needs to crack Mojo IPC.
+
+---
+
 ## 2026-04-25 10:35 — Mac — execve clean-exit + thread TTBR0 fix; deadlock unchanged; the wall is below the kernel layer
 
 Last push of the session — tried two more potential unblockers for the
