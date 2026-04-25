@@ -740,6 +740,17 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             unsafe { core::arch::asm!("mrs {}, far_el1", out(reg) far); }
             let elr = unsafe { (*frame).elr };
 
+            // CHROMIUM-PHASE-D: kernel uaccess (e.g. pipe_buf::write
+            // copying from a user iov) can hit a USER VA whose page
+            // hasn't been demand-committed yet. The user-side handler
+            // for this is EC=0x24, but when the KERNEL is the one
+            // touching it the EC is 0x25 (data abort from current EL).
+            // Try the lazy-commit path first; if demand_page accepts,
+            // retry the faulting instruction.
+            if crate::batcave::linux::demand_page::try_handle(far, esr) {
+                return;
+            }
+
             let in_code_range = (elr < 0x1400000)
                 || (elr >= 0x40000000 && elr < 0x50000000);
             if in_code_range {
@@ -1256,7 +1267,13 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             // page, just return so eret retries the faulting insn.
             let far: u64;
             unsafe { core::arch::asm!("mrs {}, far_el1", out(reg) far); }
-            if ec == 0x24
+            // EC=0x24 = data abort from lower EL (user touched
+            // uncommitted page). EC=0x25 = data abort from current
+            // EL — happens when the kernel reads/writes user memory
+            // (uaccess) into a not-yet-committed page. Both can be
+            // a legitimate lazy commit. Try to back the page; if
+            // demand_page accepts, retry the instruction by returning.
+            if (ec == 0x24 || ec == 0x25)
                 && crate::batcave::linux::demand_page::try_handle(far, esr)
             {
                 return;

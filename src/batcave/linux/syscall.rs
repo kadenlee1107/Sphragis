@@ -4880,18 +4880,110 @@ fn sys_getpeername(args: [u64; 6]) -> i64 {
     )
 }
 fn sys_sendmsg(args: [u64; 6]) -> i64 {
+    let fd_num = args[0] as i32;
+    // CHROMIUM-PHASE-D: socketpair() returns Pipe-kinded fds (the
+    // sockets:: table only knows about TCP/UDP). When Chromium does
+    // sendmsg on its zygote control socketpair, the sockets:: code
+    // returns ENOTSOCK and Chromium FATALs with "Cannot communicate
+    // with zygote". Route Pipe-kinded fds through pipe_buf::write
+    // so the iovec data actually lands somewhere.
+    if fd_num >= 0 {
+        if let Some((pair_slot, side)) = fd::pipe_info(fd_num as u32) {
+            return sendmsg_pipe(pair_slot, side, args[1] as *const super::sockets::Msghdr);
+        }
+    }
     super::sockets::sendmsg(
         args[0] as i32,
         args[1] as *const super::sockets::Msghdr,
         args[2] as i32,
     )
 }
+
+fn sendmsg_pipe(slot: usize, side: u8, msg: *const super::sockets::Msghdr) -> i64 {
+    if msg.is_null() { return EFAULT; }
+    if !is_user_ptr(msg as usize, core::mem::size_of::<super::sockets::Msghdr>()) {
+        return EFAULT;
+    }
+    // The sender side writes to the OPPOSITE side of the pipe — that's
+    // what the receiver reads from. pipe_buf::write expects "side" to
+    // be the side data lands ON, not the side we're calling from.
+    let target_side = side ^ 1;
+    let m: super::sockets::Msghdr = unsafe { core::ptr::read(msg) };
+    if m.msg_iovlen > 16 { return EINVAL; }
+    let mut total: i64 = 0;
+    for i in 0..m.msg_iovlen {
+        let iv = unsafe { core::ptr::read(m.msg_iov.add(i)) };
+        if iv.iov_len == 0 { continue; }
+        if iv.iov_base.is_null() { return EFAULT; }
+        if !uaccess::is_user_range(iv.iov_base as usize, iv.iov_len) {
+            return EFAULT;
+        }
+        let data = unsafe {
+            core::slice::from_raw_parts(iv.iov_base as *const u8, iv.iov_len)
+        };
+        match super::pipe_buf::write(slot, target_side, data) {
+            Ok(n) => {
+                total += n as i64;
+                if n < iv.iov_len { break; } // partial write
+            }
+            Err(e) => {
+                if total > 0 { return total; }
+                return e;
+            }
+        }
+    }
+    total
+}
+
 fn sys_recvmsg(args: [u64; 6]) -> i64 {
+    let fd_num = args[0] as i32;
+    // Mirror of sys_sendmsg: route socketpair-Pipe fds through
+    // pipe_buf::read so the iovecs get filled with whatever the
+    // peer wrote.
+    if fd_num >= 0 {
+        if let Some((pair_slot, side)) = fd::pipe_info(fd_num as u32) {
+            return recvmsg_pipe(pair_slot, side, args[1] as *mut super::sockets::Msghdr);
+        }
+    }
     super::sockets::recvmsg(
         args[0] as i32,
         args[1] as *mut super::sockets::Msghdr,
         args[2] as i32,
     )
+}
+
+fn recvmsg_pipe(slot: usize, side: u8, msg: *mut super::sockets::Msghdr) -> i64 {
+    if msg.is_null() { return EFAULT; }
+    if !is_user_ptr(msg as usize, core::mem::size_of::<super::sockets::Msghdr>()) {
+        return EFAULT;
+    }
+    let m: super::sockets::Msghdr = unsafe { core::ptr::read(msg) };
+    if m.msg_iovlen > 16 { return EINVAL; }
+    let mut total: i64 = 0;
+    for i in 0..m.msg_iovlen {
+        let iv = unsafe { core::ptr::read(m.msg_iov.add(i)) };
+        if iv.iov_len == 0 { continue; }
+        if iv.iov_base.is_null() { return EFAULT; }
+        if !uaccess::is_user_range(iv.iov_base as usize, iv.iov_len) {
+            return EFAULT;
+        }
+        let buf = unsafe {
+            core::slice::from_raw_parts_mut(iv.iov_base as *mut u8, iv.iov_len)
+        };
+        // We read from OUR side of the pipe (where peer's writes land).
+        match super::pipe_buf::read(slot, side, buf) {
+            Ok(n) => {
+                total += n as i64;
+                if n == 0 { break; }      // EOF or empty
+                if n < iv.iov_len { break; } // partial read
+            }
+            Err(e) => {
+                if total > 0 { return total; }
+                return e;
+            }
+        }
+    }
+    total
 }
 fn sys_setsockopt(args: [u64; 6]) -> i64 {
     let fd_num = args[0] as i32;

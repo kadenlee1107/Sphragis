@@ -129,15 +129,20 @@ pub fn register_reservation(start: u64, end: u64, l1_phys: u64) {
 /// page — the caller should eret to retry. Returns `false` for any
 /// fault we don't own.
 pub fn try_handle(far: u64, esr: u64) -> bool {
-    // EC is bits 31:26. We only handle EC=0x24 (data abort from
-    // lower EL). We USED to also accept EC=0 with in-reservation
-    // FAR, but FAR isn't reliably updated for EC=0, and that path
-    // caused a tight infinite loop — the "data abort" FAR was
-    // actually stale from a prior fault, so each eret re-crashed
-    // EC=0 on the original (non-DA) issue and we re-entered
-    // demand_page forever, exhausting the frame pool.
+    // EC is bits 31:26. We accept:
+    //   0x24 — data abort from lower EL (user touched uncommitted page)
+    //   0x25 — data abort from current EL (kernel uaccess hit
+    //          uncommitted user page, e.g. pipe_buf::write copying
+    //          from a user iov whose backing page hasn't been
+    //          demand-committed yet)
+    // We USED to also accept EC=0 with in-reservation FAR, but FAR
+    // isn't reliably updated for EC=0, and that path caused a tight
+    // infinite loop — the "data abort" FAR was actually stale from
+    // a prior fault, so each eret re-crashed EC=0 on the original
+    // (non-DA) issue and we re-entered demand_page forever,
+    // exhausting the frame pool.
     let ec = (esr >> 26) & 0x3F;
-    if ec != 0x24 { return false; }
+    if ec != 0x24 && ec != 0x25 { return false; }
 
     // Find the active cave's L1 phys from TTBR0_EL1.
     let ttbr0: u64;
