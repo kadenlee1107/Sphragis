@@ -3454,6 +3454,37 @@ fn sys_execve(args: [u64; 6]) -> i64 {
         Err(_) => return -(14i64), // EFAULT
     };
 
+    // CHROMIUM-PHASE-D: when the calling thread is in a forked
+    // child cave (TTBR0 != host_cave_l1), execve usually means
+    // "I'm a zygote helper that's about to exec a new binary".
+    // We can't actually exec; instead, park the thread forever
+    // by entering an infinite sleep loop. The parent thinks the
+    // helper is alive and IPC handshake might succeed.
+    //
+    // Without this, the failed execve makes the child fall
+    // through to its error-handling path (write to stderr,
+    // exit_group) which kills the cave; parent's later IPC
+    // attempt then FATALs with "Cannot communicate with zygote".
+    let active_l1: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) active_l1); }
+    let active_l1 = active_l1 & !1u64;
+    let host_l1 = super::mmu::host_cave_l1() as u64;
+    if host_l1 != 0 && active_l1 != host_l1 {
+        uart::puts("[execve] forked-child cave parking forever instead of exec\n");
+        loop {
+            // Yield to other threads. Eventually the parent runs,
+            // does its IPC handshake, etc.
+            super::threads::schedule();
+            // After scheduling we end up here when nothing else is
+            // runnable. wfi to save power and wait for next IRQ.
+            unsafe { core::arch::asm!("wfi"); }
+        }
+    }
+
+    let _ = path; // silence unused-warning when the rest of the
+    // function doesn't reach a use of path — we handle the busybox
+    // path below.
+
     // Check if it's a /bin/* command — these are busybox applets
     if path.starts_with("/bin/") || path.starts_with("/usr/bin/") {
         // Extract the tool name from the path
