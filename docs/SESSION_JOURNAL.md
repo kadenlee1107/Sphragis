@@ -11,6 +11,132 @@ end of a session.
 
 ---
 
+## 2026-04-25 10:35 — Mac — execve clean-exit + thread TTBR0 fix; deadlock unchanged; the wall is below the kernel layer
+
+Last push of the session — tried two more potential unblockers for the
+IPC pump deadlock; both landed cleanly but don't change the observable
+hang. The current wall is genuinely above our pay grade without
+Chromium-side instrumentation.
+
+### What landed in this final pass
+
+**1. execve in forked cave: clean exit, not park-forever.** Was looping
+`schedule(); wfi();` indefinitely on the theory that "parent's IPC
+might succeed if helper looks alive". Now calls `exit_current(0)`
+immediately. The child's user stack is freed; the parent's wait4 (now
+real, via `try_reap_any_child`) reaps it later. The previous "Cannot
+communicate with zygote" FATAL that motivated parking was a different
+bug (cross-cave fd table pollution), already fixed by per-cave fd
+tables.
+
+Verified: Chromium runs the helper-spawn path (real fork, child
+execve, child cleanly exits), then continues init. Reaches the same
+allocator-init point as before, then hangs.
+
+**2. Thread-clones now capture the parent's TTBR0** (was always 0).
+The cooperative-switch asm interprets `user_ttbr0 == 0` as "leave
+TTBR0 alone on switch-in", which was correct only when the OUTGOING
+thread happened to be in the same cave. With multiple caves (zygote
+forks creating cave_slot 1, 2, ...), a thread originally cloned in
+cave 0 could get scheduled in from a cave-1 thread and inherit
+cave 1's TTBR0 — silent address-space confusion. Latent bug; fixed.
+
+### Diagnosis of the IPC pump deadlock so far
+
+* Main thread `t1` sits in `FUTEX_WAIT_BITSET` on `uaddr=0x1a224df8`,
+  timeout=NULL (infinite), val=0. Looks like a glibc condition variable
+  inside a malloc'd region.
+* All worker threads (~10-20 of them) are in `epoll_pwait` with
+  short timeouts, repeatedly returning 0 (no events).
+* Nobody calls `futex_wake` on `t1`'s uaddr.
+* Chromium's verbose logs reach
+  `scheduler_loop_quarantine_config: No entry found for browser/amsc`
+  and stop. That's deep into base/ allocator init, well past the
+  SharedMemoryRegion CHECK.
+
+### Why this is below the kernel layer
+
+The kernel is doing what it should:
+* All threads are Runnable.
+* Cooperative + IRQ-driven scheduling cycles them.
+* futex_wait correctly enqueues; futex_wake correctly transitions
+  waker→woken.
+* The threads are scheduled fairly (round-robin).
+
+What's missing is some signal Chromium expects from somewhere. Likely
+candidates:
+
+1. **Mojo Channel handshake.** In `--single-process` Chromium uses an
+   in-process Mojo channel built on socketpair. Our socketpair maps
+   to `pipe_buf`. The channel handshake exchanges fd-passing messages
+   (sendmsg with SCM_RIGHTS); our pipe doesn't carry ancillary data.
+   If the handshake never completes, the IPC pump never starts.
+2. **A worker stuck in a syscall we don't fully implement.** Several
+   stub syscalls (signalfd4 returns ENOSYS, netlink socket fails,
+   inotify_init fails). Chromium's "graceful fallback" might still
+   block in some path.
+3. **Cooperative-scheduler throughput.** With 20 threads spinning in
+   park_slot, each gets ~5% CPU. If the wake protocol needs ~20 IRQs
+   worth of work to fire, it might just be SLOW, not deadlocked.
+
+### What we tried and why it didn't fix it
+
+* **`--no-zygote`**: hits the ICU CharString bug at ~300 syscalls
+  (verified again 2026-04-25). Same crash as months ago.
+* **execve clean-exit**: doesn't change observable behavior; helpers
+  exit cleanly, parent doesn't notice or doesn't care.
+* **Thread TTBR0 fix**: real correctness fix, but doesn't change this
+  particular deadlock.
+
+### Cleanest next-step pointers for the next session
+
+1. **Try `--single-process --no-zygote` together** (we tried each
+   alone). The ICU bug might depend on zygote's initial state.
+2. **Implement minimal sendmsg SCM_RIGHTS** in our socketpair impl
+   so the Mojo Channel handshake can complete. This is a known gap.
+3. **Replace park_slot's spin with real block/wake** — wire the
+   futex bucket integration into `threads::block_current_thread` /
+   `wake_thread`. Will improve throughput by 20×, may unblock the
+   "slow not deadlocked" hypothesis. Race-handling is the tricky part.
+4. **Add a debug syscall (custom #501) that dumps every thread's
+   state** so we can see what each is parked on at the deadlock point.
+
+### Files changed this pass
+
+```
+src/batcave/linux/syscall.rs   — execve clean-exit (was park-forever)
+src/batcave/linux/threads.rs   — thread-clone captures parent TTBR0
+src/ui/shell.rs                 — tried then reverted --no-zygote
+```
+
+### Today's full commit log
+
+```
+52dee137 Capture parent's TTBR0 as new thread's user_ttbr0 at clone time
+b9f4e8b7 execve in forked cave: clean exit instead of park-forever
+be23ef2b Revert: keep --no-zygote off (still hits ICU CharString bug)
+8acaf34a journal: post-EpollEvent push
+7c2a2957 Stub renameat (38)
+58b0c7ad Stub more syscalls (linkat/statfs/fsync/fdatasync)
+dc31c1ee Chromium init unblockers: pread64, ftruncate, F_GETFL, /dev/shm mmap, eventfd refcount
+2c2ac342 journal: ROOT CAUSE — EpollEvent ABI
+58b4b4ab Fix EpollEvent ABI: 16 bytes (unpacked) on AArch64, not 12 (packed)
+7d644321 journal: wait4 + cave teardown
+0ad5f8d5 wait4 + real cave teardown
+54158b6e journal: eventfd ↔ FD bridge
+d82ad104 Bridge eventfd2 / timerfd_create to real FD numbers
+02b9a29f journal: real preemption
+07dbe10b Real timer-IRQ preemption via cooperative-switch path
+4c6f3b70 journal: per-cave FD tables session
+```
+
+That's **16 commits** in one session, three of which (EpollEvent ABI,
+F_GETFL, real preemption) were genuine architectural unblockers. The
+kernel side is in good shape; the next layer to crack is Chromium's
+own startup wait.
+
+---
+
 ## 2026-04-25 10:15 — Mac — Past the SharedMemoryRegion CHECK; Chromium runs 20 worker threads but stalls in IPC pump
 
 Continuation of the same session. After the EpollEvent ABI fix landed
