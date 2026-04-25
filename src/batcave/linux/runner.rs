@@ -269,13 +269,15 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
         core::arch::asm!("isb");
     }
 
-    // (init_timer call removed — IRQ-driven preemption requires
-    // cxt_switch_cooperative to save the FULL register state
-    // (currently only callee-saved x19-x30) so that when an IRQ
-    // later swaps to that thread, it has a valid full-state
-    // snapshot. Mixing IRQ preemption with cooperative switching
-    // reads garbage caller-saved regs from never-initialised
-    // saved_regs slots. See follow-up plan in journal.)
+    // REAL PREEMPTION: enable timer IRQ here, right before we hand
+    // off to EL0. handle_irq uses the cooperative-switch path
+    // (cxt_switch_cooperative) for thread switching, so it works
+    // unmodified with the existing partial-state register save —
+    // the trap frame is parked on the kernel stack while the thread
+    // is switched out and popped when it's resumed. We only preempt
+    // EL0 (handle_irq guards on SPSR.M); EL1 IRQs just set the
+    // deferred-preempt flag for the next syscall boundary to honor.
+    crate::kernel::arch::init_timer();
 
     let r = loader::execute_with_args(info.virt_entry, argv);
     super::mmu::switch_to_primary();

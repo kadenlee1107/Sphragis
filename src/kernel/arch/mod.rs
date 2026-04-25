@@ -164,54 +164,53 @@ pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
     unsafe { core::arch::asm!("mrs {}, cntp_ctl_el0", out(reg) ctl); }
     if ctl & 0b100 != 0 {
         reset_timer();
-        crate::kernel::scheduler::tick();
+        // Drain stdio_ring to UART (was inside scheduler::tick()).
+        // We don't want to call kernel::scheduler::schedule() from
+        // here — it's the legacy task-table scheduler that ping-
+        // pongs with chromium-blit on every tick and adds massive
+        // overhead. The drain is the only useful thing tick() does.
+        crate::batcave::linux::stdio_ring::drain_to_uart();
 
-        // CHROMIUM-PHASE-D / REAL PREEMPTION: invoke the threads
-        // layer's on_tick(). It snapshots the current thread's
-        // user-mode state (from `frame` + live MSRs), picks the
-        // next runnable thread, and returns a pointer to that
-        // thread's saved regs. We then blit those into the trap
-        // frame and update the user MSRs (SP_EL0, TPIDR_EL0,
-        // TTBR0_EL1) so eret resumes the new thread.
+        // REAL PREEMPTION via the cooperative-switch path.
         //
-        // This replaces the old "set request_preempt flag, yield
-        // at next syscall boundary" model — workers stuck in user-
-        // mode loops with no syscalls would otherwise never get
-        // preempted, starving Chromium's worker pool.
-        unsafe {
-            let frame_ptr = frame as *mut crate::batcave::linux::threads::SavedRegs;
-            let new_regs = crate::batcave::linux::threads::on_tick(frame_ptr);
-            if let Some(new_ptr) = new_regs {
-                // Blit the new thread's user-mode state into the
-                // trap frame so eret picks it up.
-                let new = &*new_ptr;
-                // Frame layout: x[0..31] @ 0..248, elr @ 248, spsr @ 256.
-                let tf_x = frame as *mut [u64; 31];
-                core::ptr::write(tf_x, new.x);
-                let tf_elr = (frame as *mut u8).add(248) as *mut u64;
-                core::ptr::write(tf_elr, new.elr_el1);
-                let tf_spsr = (frame as *mut u8).add(256) as *mut u64;
-                core::ptr::write(tf_spsr, new.spsr_el1);
-                // Live MSRs: SP_EL0, TPIDR_EL0, TTBR0_EL1.
-                core::arch::asm!("msr sp_el0, {}", in(reg) new.user_sp_el0);
-                core::arch::asm!("msr tpidr_el0, {}", in(reg) new.x[18]);
-                if new.user_ttbr0 != 0 {
-                    let cur_ttbr0: u64;
-                    core::arch::asm!("mrs {}, ttbr0_el1", out(reg) cur_ttbr0);
-                    if (cur_ttbr0 & !1u64) != new.user_ttbr0 {
-                        core::arch::asm!("msr ttbr0_el1, {}", in(reg) new.user_ttbr0);
-                        core::arch::asm!("isb");
-                        core::arch::asm!("tlbi vmalle1");
-                        core::arch::asm!("dsb ish");
-                        core::arch::asm!("isb");
-                    }
-                }
-            }
+        // Approach: only switch threads if the IRQ interrupted EL0
+        // user code. Preempting EL1 (kernel) code is unsafe — we
+        // could be holding a kernel lock — so for that case we just
+        // set the deferred-preempt flag so the syscall boundary
+        // yields voluntarily.
+        //
+        // For EL0 IRQs we call schedule() directly. schedule() picks
+        // the next runnable thread and invokes cxt_switch_cooperative,
+        // which:
+        //   * saves OUR (current thread's) callee-saved regs + SP +
+        //     SP_EL0 + TTBR0 into our slot — that's enough state to
+        //     resume us later;
+        //   * restores the new thread's callee-saved + SP + SP_EL0 +
+        //     TTBR0;
+        //   * rets to the new thread's saved x30 (back into ITS prior
+        //     schedule() / handle_irq call site).
+        //
+        // The trap frame stays parked at the top of OUR kernel stack
+        // while we're switched out — perfectly safe, nothing else
+        // writes to that stack. When we're eventually rescheduled,
+        // schedule() returns into here, handle_irq returns up to the
+        // IRQ vector, RESTORE_REGS pops the still-parked trap frame,
+        // and `eret` resumes user mode.
+        //
+        // This unified model means cooperatively-yielded threads (in
+        // syscall handlers) and preemptively-interrupted threads (in
+        // user mode) BOTH park their state via cxt_switch_cooperative,
+        // so resuming either kind requires no special-case logic.
+        let spsr = unsafe { (*frame).spsr };
+        let was_in_el0 = (spsr & 0xF) == 0; // M[3:0] == 0000 ⇒ EL0t
+
+        if was_in_el0 {
+            crate::batcave::linux::threads::schedule();
+        } else {
+            // EL1 — defer to syscall boundary so we don't preempt
+            // kernel code that might be holding a lock.
+            crate::batcave::linux::threads::request_preempt();
         }
-        // Belt-and-suspenders: also set the preempt flag so the
-        // syscall-boundary fallback fires if something prevents
-        // the IRQ from completing the swap.
-        crate::batcave::linux::threads::request_preempt();
     }
 }
 
