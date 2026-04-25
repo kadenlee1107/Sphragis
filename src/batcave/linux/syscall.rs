@@ -708,9 +708,19 @@ fn sys_mprotect(args: [u64; 6]) -> i64 {
 }
 
 // ─── fcntl (25) — file descriptor control ───
+//
+// F_GETFD (1) / F_SETFD (2) / F_GETFL (3) / F_SETFL (4) are stubs.
+// F_DUPFD (0) and F_DUPFD_CLOEXEC (1030) MUST allocate a new fd
+// duplicating the input — without this, Chromium's FD ownership
+// tracker sees "fd 15 was duplicated, the dup's fd is the same as
+// some unrelated open fd" and FATALs with
+// "Crashing due to FD ownership violation". F_DUPFD_CLOEXEC just
+// adds the close-on-exec flag to the new fd; we don't track that
+// flag, so it's treated identically to F_DUPFD.
 fn sys_fcntl(args: [u64; 6]) -> i64 {
     let fd = args[0] as i32;
     let cmd = args[1] as i32;
+    let _arg = args[2] as i64;
 
     // Diagnostic: log the call site (LR) for fcntl whenever it
     // happens at high frequency — Chromium's fork-as-thread child
@@ -767,6 +777,24 @@ fn sys_fcntl(args: [u64; 6]) -> i64 {
     }
 
     match cmd {
+        0 | 1030 => {
+            // F_DUPFD (0) / F_DUPFD_CLOEXEC (1030) — duplicate fd
+            // to a NEW fd >= arg (lowest available, but >= arg).
+            // Chromium expects a fresh fd number it can then track
+            // via its scoped-fd machinery; returning 0 (stdin)
+            // silently corrupts Chromium's view of which fds are
+            // owned by which subsystem.
+            if fd < 0 { return -9; } // EBADF
+            // Look up the source fd; fail if not open.
+            if fd::get(fd as u32).is_none() { return -9; }
+            // Allocate a new fd that duplicates the source's
+            // backing. Easiest path: ask fd::dup which copies the
+            // FdEntry into the next free slot.
+            match fd::dup(fd as u32) {
+                Ok(new_fd) => new_fd as i64,
+                Err(_) => -24, // EMFILE
+            }
+        }
         1 => 0,   // F_GETFD — return 0 (no FD_CLOEXEC)
         2 => 0,   // F_SETFD — accept and ignore
         3 => 0,   // F_GETFL — return 0 (O_RDONLY)
