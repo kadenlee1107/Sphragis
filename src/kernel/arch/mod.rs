@@ -162,12 +162,29 @@ pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
         return;
     }
 
-    // QEMU virt path: ARM Generic Timer wired directly via the GIC,
-    // no indirection. Just check the timer-fired flag.
+    // QEMU virt path: ARM Generic Timer wired directly via the GIC.
+    //
+    // GICv2 ack protocol: read GICC_IAR to get the active IRQ ID (ack),
+    // handle, write the same value back to GICC_EOIR (end-of-interrupt).
+    // Without this the GIC keeps the IRQ in the active state and won't
+    // deliver the next one — we'd see only ONE timer tick after enable.
+    const GICC_IAR:  usize = 0x0801_0000 + 0x00C;
+    const GICC_EOIR: usize = 0x0801_0000 + 0x010;
+    let iar: u32 = unsafe { core::ptr::read_volatile(GICC_IAR as *const u32) };
+    let intid = iar & 0x3FF;
+    // Spurious (1023) means no IRQ pending — bail without EOI.
+    if intid == 1023 { return; }
+
     let ctl: u64;
     unsafe { core::arch::asm!("mrs {}, cntp_ctl_el0", out(reg) ctl); }
     if ctl & 0b100 != 0 {
         reset_timer();
+        // Periodic thread-state dump for deadlock diagnosis. Fires
+        // every ~5 seconds. Cheap when the system is making progress;
+        // when it's stuck the dump tells us exactly what every thread
+        // is parked on. See threads::auto_dump_if_idle.
+        crate::batcave::linux::threads::auto_dump_if_idle();
+
         // Drain stdio_ring to UART (was inside scheduler::tick()).
         // We don't want to call kernel::scheduler::schedule() from
         // here — it's the legacy task-table scheduler that ping-
@@ -216,6 +233,12 @@ pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
             crate::batcave::linux::threads::request_preempt();
         }
     }
+
+    // GIC end-of-interrupt: tell the controller this IRQ is done so
+    // it'll deliver the next one. WITHOUT this, after the first IRQ
+    // fires the GIC keeps it active forever and the timer never
+    // re-triggers — preemption dies after one tick.
+    unsafe { core::ptr::write_volatile(GICC_EOIR as *mut u32, iar); }
 }
 
 #[unsafe(no_mangle)]

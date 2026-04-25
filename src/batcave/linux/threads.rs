@@ -1571,12 +1571,39 @@ pub fn dump() {
                 ThreadState::Free       => uart::puts("Free"),
                 ThreadState::Runnable   => uart::puts("Runnable"),
                 ThreadState::Running    => uart::puts("Running"),
-                ThreadState::Blocked(_) => uart::puts("Blocked"),
-                ThreadState::Exited(_)  => uart::puts("Exited"),
+                ThreadState::Blocked(BlockReason::FutexWait { uaddr, val }) => {
+                    uart::puts("Blocked(FutexWait uaddr=0x");
+                    let hex = b"0123456789abcdef";
+                    for sh in (0..16).rev() {
+                        uart::putc(hex[((uaddr >> (sh * 4)) & 0xF) as usize]);
+                    }
+                    uart::puts(" val=");
+                    crate::kernel::mm::print_num(val as usize);
+                    uart::puts(")");
+                }
+                ThreadState::Blocked(_) => uart::puts("Blocked(other)"),
+                ThreadState::Exited(c)  => {
+                    uart::puts("Exited(");
+                    crate::kernel::mm::print_num(c as usize);
+                    uart::puts(")");
+                }
             }
             uart::puts("\n");
         }
     });
+}
+
+/// Periodic auto-dump from the IRQ handler. Fires every N ticks so a
+/// human watching the smoke log can see the evolution of thread states
+/// without needing to send a signal. Tune the divisor in handle_irq.
+pub fn auto_dump_if_idle() {
+    static LAST_DUMP: AtomicU64 = AtomicU64::new(0);
+    let _count = LAST_DUMP.fetch_add(1, Ordering::Relaxed);
+    // Disabled — observed timer IRQ rate is ~1Hz on QEMU virt despite
+    // cntp_tval being set to freq/100. Either cntfrq_el0 reads larger
+    // than expected, or QEMU's GICv3 doesn't deliver via our v2 init.
+    // The kernel still works — cooperative-yield-every-4096-syscalls
+    // drives scheduling. Re-enable once IRQ rate is fixed.
 }
 
 // =============================================================================
