@@ -29,10 +29,8 @@ unsafe extern "C" {
 // `src/batcave/linux/mmu.rs` (L1[3] + L1[4]) — otherwise kernel writes
 // to PAs above 0xC0000000 (where alloc_frame would now hand out
 // frames) would fault DATA ABORT DFSC=0x06.
-// Bisect: revert to 2 GiB to test if MMU-enable hang is caused by the
-// memory expansion vs the bitmap expansion. v45 hung at "[mmu] TLB
-// flushed, enabling MMU..." right after MMU turn-on. Was 4 * 1024^3.
-const QEMU_MEMORY_END: usize = 0x4000_0000 + 2 * 1024 * 1024 * 1024;
+// 🎯 STUMP #7: 4 GiB to give Chromium enough working set.
+const QEMU_MEMORY_END: usize = 0x4000_0000 + 4 * 1024 * 1024 * 1024;
 
 pub fn init() {
     // V6-KMEM-001: order is

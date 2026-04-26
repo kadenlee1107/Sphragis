@@ -410,6 +410,25 @@ pub fn setup_cave_pagetable_at(
         write_pte(l2_xxxhi, block, addr | kblk(addr));
     }
 
+    // 🎯 STUMP #7: clean every PT page we just wrote to PoC so that
+    // when the walker activates (after switch_to_cave) it sees the
+    // entries instead of stale zeros. Without this, accesses through
+    // any of the new tables fault L2-translation despite the entries
+    // being correctly written. (Mirrors the cache-flush we do in
+    // setup_and_enable.)
+    unsafe {
+        for pt in [l1, l2_low, l2_high, l2_xhi, l2_xxhi, l2_xxxhi] {
+            let base = pt as u64;
+            let mut line = base;
+            while line < base + PAGE_SIZE as u64 {
+                core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                line += 64;
+            }
+        }
+        core::arch::asm!("dsb sy");
+        core::arch::asm!("isb");
+    }
+
     unsafe {
         CAVE_L1[cave_slot] = l1;
         CAVE_PHYS_BASE[cave_slot] = phys_base;
@@ -1047,11 +1066,17 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
         // string-copy-ish code deep in content_shell startup. With
         // TBI0 enabled the CPU strips the top byte for translation,
         // matching Linux's default ARM64 config.
+        // 🎯 STUMP #7: TCR.IPS = 0b010 (40-bit IPA, 1 TB) so PAs above
+        // 4 GiB (= 0x100000000) translate. Default IPS=0 = 32-bit max
+        // = 4 GiB, and any walker output >= 0x100000000 is silently
+        // invalidated → DFSC=0x02 (L2 translation fault) on the first
+        // kernel access through L2_xxxhi. Sized for headroom.
         let tcr: u64 = (25 << 0)  // T0SZ
                       | (0b00 << 14) // TG0: 4KB
                       | (0b11 << 12) // SH0: inner shareable
                       | (0b01 << 10) // ORGN0
                       | (0b01 << 8)  // IRGN0
+                      | (0b010u64 << 32) // IPS: 40-bit IPA (1 TB)
                       | (1u64 << 37); // TBI0: top byte ignore for TTBR0
         core::arch::asm!("msr tcr_el1, {}", in(reg) tcr);
 
@@ -1075,6 +1100,24 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
         // Don't enable caches yet — keep it simple
         sctlr &= !(1 << 2);  // C bit OFF
         sctlr &= !(1 << 12); // I bit OFF
+
+        // 🎯 STUMP #7: clean every page-table page we just wrote to PoC.
+        // The walker reads PT entries with TCR attributes (inner-
+        // shareable, write-back); our pre-MMU writes need to be
+        // visible after turn-on. Without this, the walker hits stale
+        // (zero) cache lines for the new high-PA tables and the next
+        // instruction fetch silently faults.
+        for pt in [l0, l1, l2_low, l2_high, l2_xhi, l2_xxhi, l2_xxxhi] {
+            let base = pt as u64;
+            let mut line = base;
+            while line < base + PAGE_SIZE as u64 {
+                core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                line += 64;
+            }
+        }
+        core::arch::asm!("dsb sy");
+        core::arch::asm!("isb");
+
         core::arch::asm!("msr sctlr_el1, {}", in(reg) sctlr);
         core::arch::asm!("isb");
     }

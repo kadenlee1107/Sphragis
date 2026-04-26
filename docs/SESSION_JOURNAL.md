@@ -11,6 +11,128 @@ end of a session.
 
 ---
 
+## 2026-04-26 12:30 — Mac — 🎯🎯🎯 STUMP #7 KILLED: TCR.IPS was defaulting to 32-bit IPA, silently invalidating any walker output ≥ 4 GiB. Plus PT cache flushes + kernel-pool PA cap. Cave now does 820k commits = 3.36 GB.
+
+**Goal.** Push past Stump #7 (physical RAM exhaustion at 296k commits =
+1.2 GB, with the previous 2 GiB ceiling).
+
+**The session arc.** Bumped `QEMU_MEMORY_END` from 2 GiB to 4 GiB,
+extended the identity map (L1[3]+L1[4]), and bumped the frame bitmap
+to 4 GiB. Boot completed and reported 3.72 GiB free. Then setup_and_enable
+hung at MMU-enable — boot completes, all tables allocate fine in the
+new high-RAM range (PAs ~0x13FFFx000), MAIR/TCR/TTBR get configured,
+TLB flush completes, and the kernel hangs immediately after the
+SCTLR.M=1 write. The expected `[mmu] MMU enabled!` print never
+appeared.
+
+**Three independent bugs blocked the 4 GiB switch — all in one session.**
+
+**Bug A: TCR.IPS defaulted to 32-bit IPA (THE ROOT CAUSE).**
+
+The MMU walker's translation output was being silently invalidated
+for any PA ≥ 0x100000000 because TCR.IPS defaulted to 0 = 32-bit
+intermediate PA = 4 GiB max. PRIMARY_L1 lived at PA 0x13FFF8000
+(in the new high-RAM range, just above 4 GiB), so the walker reading
+it produced a translation fault on EVERY access. Identical behaviour
+for the cave's L1 at 0xBFFFF000 once the cave tried to use any
+high-PA mapping (DFSC=0x02, FAR=0x100000000).
+
+Sentinel test confirmed RAM was real at the high PAs (direct EL1
+read+write worked with MMU off). It's only the WALKER's translation
+that respects IPS; direct loads/stores don't.
+
+Fix: `src/batcave/linux/mmu.rs:1079-1080` — set TCR.IPS = 0b010
+(40-bit IPA = 1 TB). Plenty of headroom.
+
+```rust
+| (0b010u64 << 32)  // IPS: 40-bit IPA (1 TB)
+```
+
+**Bug B: cache coherency — PT pages stale to walker.**
+
+After the first IPS fix, MMU-enable still hung in some configurations
+because the page-table pages we wrote with MMU OFF weren't visible
+to the walker after MMU ON. The walker reads PT entries with TCR
+attributes (inner-shareable, write-back); pre-MMU writes might
+sit in the data cache without ever reaching RAM, and the walker
+hits stale (zero) lines.
+
+Fix: in both `setup_and_enable` and `setup_cave_pagetable_at`, add
+`dc civac` per cache-line for every PT page we wrote, followed by
+`dsb sy` + `isb`. Standard MMU-bring-up sequence; we'd been missing it.
+
+**Bug C: bitmap too small for 4 GiB, kernel-pool PA cap.**
+
+Two pieces:
+1. `MAX_FRAMES` was 524288 (= 2 GiB / 4 KiB). Bumping `QEMU_MEMORY_END`
+   to 4 GiB needed `MAX_FRAMES = 1048576` so the bitmap covers all
+   frames. Without this, alloc_kernel_frame's scan from `total-1`
+   downward immediately hit `bitmap_index >= BITMAP_SIZE` (skipped)
+   → OOM on every alloc_kernel_frame call.
+2. `alloc_kernel_frame` was returning frames at PA > 0xC0000000. As
+   debugging Bug A, we discovered (incorrectly, before finding IPS)
+   that high-PA tables seemed unreachable. Capped alloc_kernel_frame
+   to PAs < 0xC0000000 just to be safe — kernel page tables now
+   live in the original kernel-mapped range. Belt-and-suspenders
+   alongside the IPS fix.
+
+Fixes: `src/kernel/mm/frame.rs` — `MAX_FRAMES` 524288 → 1048576,
+`alloc_kernel_frame` capped at PA < 0xC0000000 with a defensive
+`KERNEL_FRAME_PA_CAP` constant.
+
+**Verification.** Smoke v54 (post-fix, all three bugs addressed):
+
+```
+[mm] Frame allocator initialized — 3719744 KB free  ← 3.72 GiB vs 1.55 GiB
+[mmu] MMU enabled!
+... (cave runs normally)
+[demand_page] OOM — frames used=925840 total=929936 committed_pages=820719
+```
+
+- 820,719 demand-page commits = 3.36 GB working set (vs 296k = 1.2
+  GB before).
+- ZERO `0x14d73000` / `CorruptionDetected` in the log (Stump #6 still
+  fixed).
+- Cave reaches and runs Chromium for thousands of syscalls before
+  exhausting the bigger pool.
+
+**STUMP #8 — Chromium wants more than 3.36 GiB.**
+
+99.6% of available frames consumed; final OOM identical to Stump #7's
+original symptom (FAR in small_mmap region, kernel-side EL1 fault
+because demand-paging ran dry mid-syscall). Options for the next
+session:
+
+1. Bump QEMU `-m 4G` to `-m 8G` AND extend kernel `QEMU_MEMORY_END`
+   + identity map (L1[5]+L1[6]) to 8 GiB. The IPS=40-bit setting
+   already supports up to 1 TB.
+2. Smarter memory: free frames on thread exit, on munmap of real
+   ranges, on cave teardown. Currently we leak everything until
+   the cave is gone.
+3. Reduce Chromium's footprint (V8 cage size, fewer worker threads,
+   etc.). Not great because we want to test at scale.
+
+Option 2 is the right long-term answer (real munmap + thread-exit
+frame reclaim). Option 1 is the quickest immediate path.
+
+**Final session score:**
+| Stump | Cause | Commit |
+|---|---|---|
+| #1 | brk-zeroing + stack-top-cap | 39a14df1 |
+| #2 | futex.rs current_tid stub | 7c2c45b5 |
+| #3 | cave VA window unreserved | a36856e2 |
+| #4 | sys_mmap ENOMEM for outside-window | 2ebb8c13 |
+| #5 | KERNEL_RESERVED_FRAMES too small | 2ebb8c13 |
+| #6 | install_l3_mapping not idempotent | 0563d145 |
+| **#7** | TCR.IPS + PT cache flush + bigger bitmap | _this commit_ |
+
+**Seven stumps killed in one session.** From "futex deadlock at 5M
+syscalls" at session start to "Chromium does 820k demand-pages = 3.36
+GiB working set" now. The remaining ceiling (Stump #8) is just "needs
+more RAM than we have."
+
+---
+
 ## 2026-04-26 11:15 — Mac — Stump #7 partial: identity map + bitmap extended for 4 GiB infrastructure, but MMU-enable hangs when QEMU_MEMORY_END = 4 GiB. Bisected. Investigation TBD.
 
 **Goal.** Kill Stump #7 (physical RAM exhaustion at 296k demand-page commits).

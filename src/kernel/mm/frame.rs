@@ -145,10 +145,25 @@ pub fn alloc_kernel_frame() -> Option<usize> {
     let total = TOTAL_FRAMES.load(Ordering::Relaxed);
     let start = MEMORY_START.load(Ordering::Relaxed);
     if total < 1 { return None; }
-    let lower_bound = total.saturating_sub(KERNEL_RESERVED_FRAMES);
+
+    // 🎯 STUMP #7: cap kernel frames at PA < 0xC0000000. The cave's
+    // identity map only covers L2_high+L2_xhi (0x40000000–0xC0000000)
+    // for kernel access; tables placed at higher PAs are direct-PA-
+    // writable but the MMU walker can't reach them after MMU-enable
+    // (observed: kernel hangs immediately after SCTLR.M=1 even though
+    // a sentinel write+read at the same PA succeeds). Until we fix
+    // the actual walker reachability problem, restrict the kernel pool
+    // to PAs the walker can definitely reach. User pool stays at 4 GiB.
+    const KERNEL_FRAME_PA_CAP: usize = 0xC000_0000;
+    let cap_index = if start < KERNEL_FRAME_PA_CAP {
+        ((KERNEL_FRAME_PA_CAP - start) / PAGE_SIZE).min(total)
+    } else { 0 };
+    if cap_index == 0 { return None; }
+    let scan_top = cap_index;
+    let lower_bound = scan_top.saturating_sub(KERNEL_RESERVED_FRAMES);
 
     for rev in 0..KERNEL_RESERVED_FRAMES {
-        let frame_index = total.saturating_sub(1).saturating_sub(rev);
+        let frame_index = scan_top.saturating_sub(1).saturating_sub(rev);
         if frame_index < lower_bound { break; }
         let bitmap_index = frame_index / 64;
         let bit = frame_index % 64;
