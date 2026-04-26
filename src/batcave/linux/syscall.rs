@@ -709,7 +709,33 @@ fn sys_mprotect(args: [u64; 6]) -> i64 {
             core::ptr::read_volatile(l3_ent_addr as *const u64)
         };
         // L3 entry must be a valid PAGE descriptor (lower 2 bits = 0b11).
-        if (l3_ent & 0b11) != 0b11 { continue; }
+        if (l3_ent & 0b11) != 0b11 {
+            // 🎯 STUMP #8: materialize missing pages with the requested
+            // perms so future user writes see the right AP bits.
+            // Avoids the symptom where mprotect skips unmapped pages
+            // and a later access demand-pages with default RW (which
+            // is right for RW intent, but wrong for R+X / R/O / NONE
+            // — and on a FIXED-high-VA path that mprotects the whole
+            // segment to R+X, the BSS pages past filesz inherit R+X
+            // and break ld-linux's first BSS write).
+            if super::demand_page::is_in_active_reservation(va as usize, 4096) {
+                if let Some(frame) = crate::kernel::mm::frame::alloc_frame() {
+                    unsafe {
+                        let p = frame as *mut u8;
+                        for i in 0..4096 {
+                            core::ptr::write_volatile(p.add(i), 0);
+                        }
+                    }
+                    let user_flags = new_low | new_high;
+                    if super::demand_page::install_l3_mapping(
+                        l1_phys, va, frame as u64, user_flags,
+                    ).is_ok() {
+                        updated += 1;
+                    }
+                }
+            }
+            continue;
+        }
         // Preserve the physical frame address and attr-index, replace
         // the AP / PXN / UXN / AF / SH bits.
         const MASK_FRAME: u64 = 0x0000_FFFF_FFFF_F000;
@@ -2113,16 +2139,24 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                             core::arch::asm!("dsb ish");
                             core::arch::asm!("isb");
                         }
-                        // Apply the requested protection (prot
-                        // arg of mmap) — without this, the bytes
-                        // we just copied sit in pages with our
-                        // demand_page default flags (RW, UXN=1)
-                        // and the first instruction fetch from a
-                        // code segment faults EC=0x20.
+                        // 🎯 STUMP #8: only apply user's prot to the
+                        // FILE-CONTENT portion (rounded up to page).
+                        // The tail past `to_copy` is .bss-equivalent
+                        // memory that the user (ld-linux) expects to
+                        // be writable for zero-init / BSS access.
+                        // Applying user_prot=R+X to BSS pages then
+                        // faults on the first user write to BSS.
+                        let content_end_aligned =
+                            (to_copy + 0xFFF) & !0xFFFusize;
+                        let user_prot_len = content_end_aligned.min(len);
                         let _ = sys_mprotect([
-                            addr as u64, len as u64, _prot as u64,
+                            addr as u64, user_prot_len as u64,
+                            _prot as u64,
                             0, 0, 0,
                         ]);
+                        // Tail (BSS) — keep RW from the pre-mprotect.
+                        // Already RW from our pre-mprotect step; no
+                        // explicit call needed. Just don't clobber it.
                         uart::puts("[mmap] FIXED-high-VA fd=");
                         crate::kernel::mm::print_num(fd_num as usize);
                         uart::puts(" → 0x");
