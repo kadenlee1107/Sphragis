@@ -243,11 +243,11 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
     }
     // Periodic thread-state dump for deadlock diagnosis. Triggered off
     // the syscall counter (NOT the timer IRQ — that fires too sporadically
-    // on QEMU virt for a useful diagnostic cadence). At every 1024
-    // syscalls we get frequent enough snapshots to see the thread table
-    // evolution as Chromium init progresses, including the deadlock
-    // moment when no further syscalls happen.
-    if (n & 0x3FF) == 0 && n > 0 {
+    // on QEMU virt for a useful diagnostic cadence). At every 65536
+    // syscalls we get periodic snapshots to see the thread table
+    // evolution. (Was 1024 — too noisy now that Chromium does millions
+    // of syscalls past the prior 3K wall.)
+    if (n & 0xFFFF) == 0 && n > 0 {
         uart::puts("[diag] thread-state dump @ syscall ");
         crate::kernel::mm::print_num(n as usize);
         uart::puts("\n");

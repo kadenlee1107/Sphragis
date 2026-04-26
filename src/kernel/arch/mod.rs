@@ -1152,11 +1152,25 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             uart::puts(") !!!\n");
             uart::puts("  FAR: 0x"); print_hex(far);
             uart::puts("  ELR: 0x"); print_hex(elr);
+            // V8-DABT-DIAG: also show x30 (link reg) — that's the
+            // PC that CALLED into the bad ELR. If ELR is in rodata
+            // (function pointer corruption), x30 tells us the real
+            // call site that branched there.
+            let lr = unsafe { (*frame).x[30] };
+            uart::puts("  LR:  0x"); print_hex(lr);
             // Log TTBR0 to see which page table is active
             let ttbr0: u64;
             unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
             uart::puts("  TTBR0: 0x"); print_hex(ttbr0);
             uart::puts("\n");
+            // V8-DABT-DIAG: also dump x0..x7 — args/locals at fault
+            // time. If FAR=0xc0000000 came from a register, we'll see
+            // it here.
+            for i in 0..8usize {
+                let v = unsafe { (*frame).x[i] };
+                uart::puts("  x"); uart::putc(hex[i]); uart::puts(": 0x");
+                print_hex(v); uart::puts("\n");
+            }
             // Skip instruction to prevent infinite loop (first time only)
             static mut ABORT_COUNT: u32 = 0;
             unsafe {
