@@ -11,6 +11,93 @@ end of a session.
 
 ---
 
+## 2026-04-25 22:55 — Mac — Stump #3 is plural: post-#2-fix runs reach font loading + V8 cage init; each run dies a different way (PartitionAlloc NULL, NULL-call, boss BRK)
+
+**Goal.** Identify Stump #3 root cause and fix.
+
+**The problem with "Stump #3" framing.** After the futex fix unlocked
+content_shell past 19→32 threads, three back-to-back smoke runs each
+hit a *different* terminal failure:
+
+- **v31** — t32 NULL deref in `partition_alloc::PartitionBucket::SlowPathAlloc`
+  reading `*(SlotSpanMetadata + 0x10) == NULL`. x24=0x323ec24040 (in
+  the second 16 GB reservation hint=0x323e621000). Smelled like an
+  un-backed metadata page.
+- **v33** — t30 NULL function call (`ELR=0`, `EC=0x20` instruction
+  abort lower EL). The kernel dump itself crashed because
+  `code around ELR` tried to read `0xfffffffffffffff0` (= NULL-16
+  underflow) → recursive EL1 abort, dump masked.
+- **v34** — boss tid 1 hit `BRK from EL0 elr=0x14ca8664`. Just before
+  the BRK, content_shell printed two real Chromium error lines
+  (`net/socket/socket_posix.cc:187` listen failed ENOTSOCK,
+  `ui/gfx/platform_font_skia.cc:258` "Could not find any font: ,
+  sans. Falling back to the default"), then aborted. Likely a
+  follow-on CHECK() in V8 / Skia / Mojo init.
+
+**What changed between runs:** nothing in the kernel. Pure scheduler
+non-determinism — different threads finish setup in different orders
+across runs, so different code paths fault first.
+
+**What's actually true after #2 fix:**
+- 30+ threads spawn cleanly (vs 19 hard-stuck pre-fix).
+- Every libc/glibc init path runs to completion (clone, TLS, futex,
+  mprotect, mmap, munmap, brk all functional enough).
+- content_shell reaches **font lookup + devtools server + V8
+  pointer-compression cage allocation + leveldb persistent storage**.
+  These are *deep* into Chromium init.
+- The Chromium error log lines that appear (`socket_posix.cc:187`,
+  `platform_font_skia.cc:258`) are *Chromium's own* `LOG(ERROR)`
+  output — they're not kernel messages, they're proof that Chromium's
+  logging infrastructure works.
+
+**Investigation done this session.** Five parallel agents hit
+the futex deadlock and broke it. Then four more agents on Stump #3:
+- ❌ rseq (sysno 293 already returns ENOSYS, ruled out by direct grep)
+- ❌ sched_getaffinity (sysno 123) — Agent 2 confirmed it's a latent
+  hardening bug but not the direct cause
+- ❌ clone()/TLS — Agent 3 verified TPIDR_EL0, x0=0, SP, SPSR all
+  correct; CLONE_SETTLS path explicitly restores x[18] from `tls_ptr`
+- ❌ mprotect PTE bits — Agent 4 verified AP/PXN/UXN are correct,
+  single-core TLBI is sound, range doesn't intersect t32 reads
+- ✅ ELR decoded — Agent 1 found `partition_alloc::PartitionBucket::SlowPathAlloc`
+  reading SlotSpanMetadata; speculated mprotect-on-reserve-only
+  doesn't establish PTEs
+
+**Instrumentation added.** `src/kernel/arch/mod.rs`:
+1. Bound-check ELR before reading `code around ELR` — NULL function
+   calls (ELR=0) now print `SKIPPED (elr=0x0...)` instead of
+   recursively aborting on `[ELR-16] = 0xfffffffffffffff0`.
+2. STUMP3 dump: walk L1→L2→L3 for x24 and (if mapped) print 64
+   bytes of metadata. Will tell us in the next run with this crash
+   mode whether the page is unmapped, fresh-zero, or has corrupted
+   data.
+
+**Strategic verdict.** Stump #3 is not a single root cause to chase.
+Each run is a different lottery ticket. The pragmatic next steps:
+1. Run smoke many times; collect a histogram of crash modes.
+2. Address the most common crash mode first.
+3. Or skip to the next big architectural milestone — implement enough
+   of Skia / V8 / fonts / sockets to let content_shell complete
+   `--dump-dom`. The remaining work is filling in syscall stubs that
+   Chromium relies on (sockets that listen, fonts that load, etc.).
+
+**State of the tree:**
+- `src/kernel/arch/mod.rs` — instrumentation + ELR bound-check (uncommitted as of journal time).
+- Build env required: `BAT_OS_ALLOW_UNSIGNED_INITRD=1
+  BAT_OS_PASSPHRASE=batman cargo build --release`. Plain
+  `cargo build --release` produces a binary that rejects the smoke's
+  "batman" password (auth gate falls through to dev default).
+- Smoke verdict: PIPELINE-REACHED across all post-fix runs.
+
+**Next actions (prioritized):**
+1. Decide whether to chase Stump #3a (PartitionAlloc NULL) further,
+   or pivot to the listen() / fonts gaps that Chromium itself flagged.
+2. The font loader + socket listen() failures are real holes our
+   side ought to fill regardless — those will unlock further progress
+   even if PartitionAlloc settles itself.
+
+---
+
 ## 2026-04-25 22:35 — Mac — 🎯 STUMP #2 KILLED: futex.rs `current_tid()` was hardcoded to 1, so wake_thread() always missed real waiters → 32 threads now (vs 19 stuck), new stump = NULL deref @0x1c
 
 **Goal.** Resume from prior session: Stump #2 (futex deadlock @ uaddr

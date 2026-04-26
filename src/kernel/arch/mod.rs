@@ -1732,14 +1732,27 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             uart::puts("\n");
             // Dump 6 instructions around ELR + x9..x28 so we can see
             // where the bad pointer argument came from.
-            uart::puts("  code around ELR:");
-            for off in [-16i64, -12, -8, -4, 0, 4, 8].iter() {
-                let addr = (elr as i64 + off) as usize;
-                let word: u32 = unsafe { core::ptr::read_volatile(addr as *const u32) };
-                uart::puts("\n    ["); print_hex(addr as u64);
-                uart::puts("] 0x"); print_hex(word as u64);
+            // Bound-check ELR before reading: NULL function calls (BLR
+            // to a zeroed register) jump us to ELR=0, and `elr-16` then
+            // wraps to 0xfffffffffffffff0 — reading there triggers a
+            // recursive EL1 data abort that masks the entire crash dump.
+            // Also reject ELR in the kernel BSS / stack range; if user
+            // code somehow ended up at an EL1 address, dumping the
+            // surrounding text might alias kernel state.
+            if elr >= 16 && elr < 0x0000_8000_0000_0000 {
+                uart::puts("  code around ELR:");
+                for off in [-16i64, -12, -8, -4, 0, 4, 8].iter() {
+                    let addr = (elr as i64 + off) as usize;
+                    let word: u32 = unsafe { core::ptr::read_volatile(addr as *const u32) };
+                    uart::puts("\n    ["); print_hex(addr as u64);
+                    uart::puts("] 0x"); print_hex(word as u64);
+                }
+                uart::puts("\n");
+            } else {
+                uart::puts("  code around ELR: SKIPPED (elr=0x");
+                print_hex(elr);
+                uart::puts(" — NULL/oob, would crash dump)\n");
             }
-            uart::puts("\n");
             // x0..x8 dump — x8 is syscall number on ARM64; x0..x7 are
             // either syscall args or scratch. Useful to tell a corrupt
             // function-pointer call from an almost-working syscall.
@@ -1883,6 +1896,86 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                                 (row_base + j) as *const u8);
                             if (0x20..=0x7e).contains(&byte) { uart::putc(byte); }
                             else { uart::putc(b'.'); }
+                        }
+                    }
+                    uart::puts("\n");
+                }
+                // STUMP #3: dump 64 bytes at x24 + walk page tables for x24's
+                // page. PartitionAlloc::SlowPathAlloc reads x24 as a
+                // SlotSpanMetadata*; we want to know whether x24's page is
+                // mapped at all, and if so, whether the metadata bytes
+                // were ever written or are still fresh-zero from
+                // demand_page::try_handle.
+                if (*frame).x[24] > 0x1000
+                    && (*frame).x[24] < 0x0000_8000_0000_0000
+                {
+                    let probe = (*frame).x[24];
+                    uart::puts("  STUMP3: memory at x24 (0x");
+                    print_hex(probe);
+                    uart::puts(") + L3 walk:");
+                    // Walk TTBR0_EL1 → L1 → L2 → L3 for the page
+                    // containing x24, then print the L3 entry. If the
+                    // entry is 0 we got translation fault, fresh page
+                    // would be reading-as-zero on demand-page commit.
+                    let ttbr0_now: u64;
+                    core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0_now);
+                    let l1p = ttbr0_now & !1u64;
+                    let l1i = ((probe >> 30) & 0x1FF) as u64;
+                    let l1e: u64 = core::ptr::read_volatile(
+                        (l1p + l1i * 8) as *const u64);
+                    uart::puts("\n    L1[0x");
+                    let hex = b"0123456789abcdef";
+                    uart::putc(hex[((l1i >> 8) & 0xF) as usize]);
+                    uart::putc(hex[((l1i >> 4) & 0xF) as usize]);
+                    uart::putc(hex[(l1i & 0xF) as usize]);
+                    uart::puts("]=0x"); print_hex(l1e);
+                    let mut is_mapped = false;
+                    if (l1e & 0b11) == 0b11 {
+                        let l2p = l1e & 0x0000_FFFF_FFFF_F000;
+                        let l2i = ((probe >> 21) & 0x1FF) as u64;
+                        let l2e: u64 = core::ptr::read_volatile(
+                            (l2p + l2i * 8) as *const u64);
+                        uart::puts("\n    L2[0x");
+                        uart::putc(hex[((l2i >> 8) & 0xF) as usize]);
+                        uart::putc(hex[((l2i >> 4) & 0xF) as usize]);
+                        uart::putc(hex[(l2i & 0xF) as usize]);
+                        uart::puts("]=0x"); print_hex(l2e);
+                        if (l2e & 0b11) == 0b11 {
+                            let l3p = l2e & 0x0000_FFFF_FFFF_F000;
+                            let l3i = ((probe >> 12) & 0x1FF) as u64;
+                            let l3e: u64 = core::ptr::read_volatile(
+                                (l3p + l3i * 8) as *const u64);
+                            uart::puts("\n    L3[0x");
+                            uart::putc(hex[((l3i >> 8) & 0xF) as usize]);
+                            uart::putc(hex[((l3i >> 4) & 0xF) as usize]);
+                            uart::putc(hex[(l3i & 0xF) as usize]);
+                            uart::puts("]=0x"); print_hex(l3e);
+                            if (l3e & 0b11) == 0b11 {
+                                uart::puts(" MAPPED");
+                                is_mapped = true;
+                            } else {
+                                uart::puts(" UNMAPPED");
+                            }
+                        }
+                    }
+                    // Only dump bytes if we proved the page is mapped —
+                    // otherwise the read recursively faults the kernel
+                    // and we lose the entire dump.
+                    if is_mapped {
+                        uart::puts("\n    bytes at x24:");
+                        for row in 0..4usize {
+                            uart::puts("\n      +0x");
+                            let off = row * 16;
+                            uart::putc(hex[(off >> 4) & 0xF]);
+                            uart::putc(hex[off & 0xF]);
+                            uart::puts(": ");
+                            for j in 0..16usize {
+                                let byte: u8 = core::ptr::read_volatile(
+                                    (probe as usize + off + j) as *const u8);
+                                uart::putc(hex[(byte >> 4) as usize]);
+                                uart::putc(hex[(byte & 0xF) as usize]);
+                                uart::putc(b' ');
+                            }
                         }
                     }
                     uart::puts("\n");
