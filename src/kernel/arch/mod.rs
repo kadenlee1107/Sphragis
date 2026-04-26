@@ -1392,6 +1392,19 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             // Only reach here for non-busybox BRK (real shell exit).
             // V2-NEW-024: switch TTBR0 back to primary instead of disabling
             // the MMU so subsequent caves keep W^X / UXN / PXN protection.
+            //
+            // CHROMIUM-PHASE-D diagnostic: dump x0/x1/x30 + the bytes
+            // around ELR. Chromium's `base::CheckedNumeric` and
+            // RefCountedThreadSafeBase::AddRefWithCheck emit a bare
+            // `brk #0` after a `cmp + b.le/b.eq` sequence; the BRK PC
+            // alone tells you nothing about which object failed the
+            // check. With the surrounding instr words you can decode
+            // (atomic ldadd → refcount overflow / use-after-free) and
+            // x0/x30 give you the offending pointer + caller for an
+            // addr2line lookup against ports/chromium_port/out/content_shell.
+            let x0 = unsafe { (*frame).x[0] };
+            let x1 = unsafe { (*frame).x[1] };
+            let x30 = unsafe { (*frame).x[30] };
             uart::puts("[linux] exit (BRK from EL0) elr=0x");
             {
                 let hex = b"0123456789abcdef";
@@ -1402,7 +1415,36 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             uart::puts(" tid=");
             crate::kernel::mm::print_num(
                 crate::batcave::linux::threads::current_tid() as usize);
-            uart::puts(" — returning to desktop\n");
+            uart::puts("\n  x0=0x");
+            {
+                let hex = b"0123456789abcdef";
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((x0 >> (sh * 4)) & 0xF) as usize]);
+                }
+                uart::puts(" x1=0x");
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((x1 >> (sh * 4)) & 0xF) as usize]);
+                }
+                uart::puts(" lr=0x");
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((x30 >> (sh * 4)) & 0xF) as usize]);
+                }
+                uart::puts("\n  instr@elr-8..elr+4: ");
+                for off in [-8i64, -4, 0, 4] {
+                    let pc = (elr as i64 + off) as u64;
+                    let w: u32 = unsafe {
+                        let v: u32;
+                        core::arch::asm!("ldr {v:w}, [{a}]",
+                            a = in(reg) pc, v = out(reg) v);
+                        v
+                    };
+                    for sh in (0..8).rev() {
+                        uart::putc(hex[((w >> (sh * 4)) & 0xF) as usize]);
+                    }
+                    uart::putc(b' ');
+                }
+            }
+            uart::puts("\n  → returning to desktop\n");
             unsafe {
                 crate::batcave::linux::mmu::switch_to_primary();
                 // Restore the kernel SP that the loader stashed before

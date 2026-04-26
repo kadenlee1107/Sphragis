@@ -5418,7 +5418,26 @@ fn sys_bind(args: [u64; 6]) -> i64 {
     )
 }
 fn sys_listen(args: [u64; 6]) -> i64 {
-    super::sockets::listen(args[0] as i32, args[1] as i32)
+    let fd_num = args[0] as i32;
+
+    // Legacy path: `sys_socket` creates VFS-backed sockets at low fds
+    // (e.g. fd=86) instead of the modern `sockets::` table at fd >=
+    // SOCKET_FD_BASE (1024). `sockets::listen()` would reject those with
+    // ENOTSOCK (-88). Our TCP stack is client-only, so listen() can't
+    // actually do anything anyway — accept it as a no-op so Chromium's
+    // devtools_http_handler init doesn't bail. accept() will later return
+    // EAGAIN (its standard stub behaviour) and devtools just won't work.
+    if fd_num >= 0 {
+        if let Some(entry) = fd::get(fd_num as u32) {
+            let node = vfs::get_node(entry.node_idx);
+            if node.node_type == vfs::NodeType::Socket {
+                return 0;
+            }
+        }
+    }
+
+    // Modern-socket path (fd >= SOCKET_FD_BASE).
+    super::sockets::listen(fd_num, args[1] as i32)
 }
 fn sys_accept(args: [u64; 6]) -> i64 {
     accept_charged(args[0] as i32,
