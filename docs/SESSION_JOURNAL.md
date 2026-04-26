@@ -164,6 +164,53 @@ ready and isn't. **First investigation target next session:** which
 glibc / Mojo code writes to `0x38000d8000` and `0x1a0b5fc0`, and what
 trigger we're missing.
 
+---
+
+### 🎯🎯🎯 LATER THE SAME SESSION: ROOT CAUSE #3 — LINKER VMA / QEMU LOAD PA MISMATCH
+
+This was the deepest bug of the day. After capturing register state
++ frame walk + the actual instruction bytes at the fault PC, I traced
+the chain:
+
+1. The "user code branches to kernel rodata at 0x4020113c" pattern
+   was real, but the bytes the kernel SAW at runtime VA 0x4020113c
+   were NOT what the binary's `.rodata` file content said should be
+   there.
+2. Added a kernel-side diagnostic that reads `*0x40080000` and
+   `*0x40200000` directly. Result:
+   - `*0x40080000 = 0x00000000` (where linker put `_start`, but it's empty)
+   - `*0x40200000 = 0x14000010` = `b _real_start` (the FIRST INSTRUCTION
+     OF `_start`)
+3. The binary actually loads at PA `0x40200000`, not the linker's
+   `0x40080000`. QEMU virt's `-kernel` with our Linux Image header
+   (text_offset=0) loads at base+2MB, not base+0.
+4. Kernel ran "successfully" only because PC-relative branches don't
+   care about absolute address. Every absolute load (`ldr x0, =SYMBOL`)
+   resolved to the linker VMA but the bytes there were WRONG (they
+   were a 0x180000-shifted view of the binary). This corrupted every
+   kernel function-pointer table read, eventually surfacing as the
+   indirect-call-into-rodata fault we'd been chasing.
+
+**Fix (commit `2dc94331`):**
+- `linker.ld`: `. = 0x40080000` → `. = 0x40200000`
+- `src/main.rs`: `text_start: usize = 0x40080000` → `0x40200000`
+  (used by kernel hash computation)
+
+**Result:** Smoke advanced from "1 thread blocked at clone" /
+"5.35M syscalls then SIGBUS" to **tid=37**, past viz init and
+GPUCache initialization, exiting cleanly via BRK from chromium tid=35
+(probably an assertion deeper in the renderer). Verdict: PIPELINE-REACHED.
+
+DOM dump output still not seen — chromium hits a BRK at user PC
+`0x14d73000` (likely an assertion in some lib). Next session: chase
+that assertion. But the kernel-data-corruption class of bugs is now
+gone.
+
+This fix has implications BEYOND chromium: anything reading a kernel
+data structure at its linker VMA was getting wrong bytes. Many
+subtle "this should work but doesn't" issues across today's session
+likely had the same root cause.
+
 **Files touched today (this session):**
 - `src/batcave/linux/syscall.rs` — sendmsg_pipe direction fix +
   mark_ready in pipe write + sendmsg_pipe
