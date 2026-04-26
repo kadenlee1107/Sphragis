@@ -295,6 +295,21 @@ pub(crate) fn install_l3_mapping(
     // (page), so that part is correct.
     let l3_entry_ptr = (l3_phys + (l3_idx * 8) as u64) as *mut u64;
     let desc = (phys_page & 0x0000_FFFF_FFFF_F000) | flags;
+    // IDEMPOTENCY GUARD: if the L3 entry is already valid, do NOT
+    // overwrite it. A second install for the same VA would silently
+    // leak the old physical frame AND clobber any user data the
+    // caller wrote to it — exactly the symptom we saw with
+    // `PartitionAlloc::CorruptionDetected()`. This can happen when
+    // sys_mmap's Stump #4 path pre-installs a file-backed page and
+    // a later spurious EC=0x24/0x25 fault routes through
+    // `try_handle`, which would otherwise allocate a fresh zero
+    // frame and overwrite the file content. Returning Ok here is
+    // safe: the page is already mapped, so the caller's "retry"
+    // (eret) will succeed.
+    let existing = unsafe { core::ptr::read_volatile(l3_entry_ptr) };
+    if (existing & PAGE_VALID) == PAGE_VALID {
+        return Ok(());
+    }
     unsafe { core::ptr::write_volatile(l3_entry_ptr, desc); }
 
     // Verify the write took effect — if this read shows a different

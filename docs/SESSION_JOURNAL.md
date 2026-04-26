@@ -11,6 +11,103 @@ end of a session.
 
 ---
 
+## 2026-04-26 09:08 — Mac — 🎯🎯🎯 STUMP #6 KILLED: install_l3_mapping idempotency guard. Cave now reaches 296k demand-page commits (= 1.2 GB heap) before OOMing on physical RAM.
+
+**Goal.** Kill Stump #6 — `partition_alloc::CorruptionDetected()` BRK at ELR=0x14d73000 fired by every smoke run after Stumps #4 + #5 unblocked enough progress to reach PartitionAlloc heap.
+
+**Two parallel agents converge on the same root cause, independently.**
+
+Agent A (decoded the BRK call site from content_shell ELF):
+- The single caller of `CorruptionDetected()` is inside
+  `partition_alloc::internal::InSlotMetadata::DoubleFreeOrCorruptionDetected`,
+  specifically the freelist-walk path that fires when:
+  - Per-node integrity (encoded back-pointer at +0x8 == ~next, super-page
+    identity, bucket size, alignment) all PASS.
+  - The slot we tried to free is NOT in the freelist.
+  - But the freelist length counter (`SlotSpanMetadata.num_free_slots`)
+    SAYS it should be there.
+- Diagnosis: chain looks intact, but the count is wrong → "lost write"
+  on a freelist push, OR alias from demand-paging populating a fresh
+  frame on top of an existing valid mapping.
+
+Agent B (audited install_l3_mapping):
+- `demand_page::install_l3_mapping` (line 295) wrote the L3 entry
+  unconditionally — even if the existing L3 was already valid pointing
+  to a DIFFERENT physical frame. Old frame silently leaked, user data
+  on it became zeros at the next read.
+- Trigger path: my Stump #4 fix in `sys_mmap` calls install_l3 for
+  file-backed pages in the SMALL_MMAP region. The same region also has
+  a demand-page reservation. Any spurious / stale-TLB / parallel
+  EC=0x24 fault in that range routes through `try_handle`, which
+  doesn't pre-check the L3 entry — so it allocates a fresh zero frame
+  and overwrites our file-content L3. PartitionAlloc reads back zeros
+  where it wrote a bucket pointer → CorruptionDetected.
+
+**Same diagnosis, two angles. Confidence high.**
+
+**The fix** (`src/batcave/linux/demand_page.rs:296-311`, applied by
+Agent B):
+```rust
+let existing = unsafe { core::ptr::read_volatile(l3_entry_ptr) };
+if (existing & PAGE_VALID) == PAGE_VALID {
+    return Ok(());
+}
+```
+
+Idempotent install: if L3 entry already valid, return Ok without
+clobbering. Caller's eret will succeed because the page IS already
+mapped.
+
+**Verification.** Smoke v43:
+- 0 occurrences of `0x14d73000` / `CorruptionDetected` in entire log.
+- 0 BRK from EL0 events.
+- Cave reaches 296,446 demand-page commits = 1.2 GB of demand-paged
+  user memory before hitting physical-RAM OOM.
+
+**Stump #7 (next session, ALREADY CHARACTERIZED).** Physical memory
+exhaustion:
+
+```
+[demand_page] OOM — frames used=401563 total=405648 committed_pages=296446
+!!! DATA ABORT (DFSC=0x0f) !!!
+  FAR: 0x000000700002f000  ELR: 0x00000000402c1eb0
+  ...
+[abort] EL1 fault unrecoverable
+```
+
+QEMU_MEMORY_END is hardcoded at 0xC0000000 (= 2 GB usable starting at
+0x40000000, minus kernel/heap = ~1.5 GB available). Chromium's full
+runtime working set exceeds this.
+
+Options for #7:
+1. Bump `QEMU_MEMORY_END` (`src/kernel/mm/mod.rs:20`) AND extend
+   the cave's identity map (`src/batcave/linux/mmu.rs`, add L1[3]+
+   onwards covering up to the new end) — gives us more usable RAM
+   without changing the architecture.
+2. Smarter memory: release frames when threads exit, when munmap is
+   called on real ranges, when caves tear down.
+3. Deliver SIGBUS gracefully on OOM instead of an unrecoverable EL1
+   fault. (Defensive — doesn't help us proceed.)
+4. Reduce Chromium's footprint somehow (V8 cage size, fewer worker
+   threads, etc.).
+
+Option 1 is the obvious next move. Option 2 is a bigger refactor.
+
+**Session score so far:**
+| Stump | Cause | Commit |
+|---|---|---|
+| #1 | brk-zeroing + stack-top-cap | 39a14df1 |
+| #2 | futex.rs current_tid stub | 7c2c45b5 |
+| #3 | cave VA window unreserved | a36856e2 |
+| #4 | sys_mmap ENOMEM for outside-window allocs | 2ebb8c13 |
+| #5 | KERNEL_RESERVED_FRAMES too small | 2ebb8c13 |
+| #6 | install_l3_mapping not idempotent | _this commit_ |
+
+Six down. Each fix is real (a known-broken path now works). Each
+exposed the next deeper bug. Pattern continues.
+
+---
+
 ## 2026-04-26 00:18 — Mac — 🎯🎯 STUMPS #4 + #5 KILLED in one push: ICU loads via install_l3 fallback + kernel pool bumped 8x to fit demand-paging traffic. New corruption (#6) lurks deeper.
 
 **Goal.** Push past the v37 ICU-mmap ENOMEM ceiling.
