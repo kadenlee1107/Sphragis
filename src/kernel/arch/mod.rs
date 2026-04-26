@@ -1854,7 +1854,12 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         uart::puts("]=KERNEL 0x"); print_hex(v);
                         continue;
                     }
-                    if v >= 0x10000000 && v < 0x1f000000 && (v & 3) == 0 {
+                    // Lower-text candidate scan — exclude v == 0x10000000
+                    // (and aligned values within 4 bytes of the boundary),
+                    // because pc=v-4 then equals 0x0ffffffc which is the
+                    // last word of an unmapped page → recursive EL1 data
+                    // abort that masks the entire crash dump.
+                    if v > 0x10000004 && v < 0x1f000000 && (v & 3) == 0 {
                         let pc = v.wrapping_sub(4);
                         let ins: u32 = core::ptr::read_volatile(pc as *const u32);
                         let top6 = (ins >> 26) & 0x3F;
