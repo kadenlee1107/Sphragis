@@ -624,10 +624,38 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
                     continue; // hostile / stray — silent skip
                 }
 
+                // V8-RELOC-LEAK: catch any relocation that produces a
+                // KERNEL VA (0x40000000..0x80000000). User-mode code can't
+                // legitimately call/load through such a value — calling
+                // would EL0-instruction-abort, loading a kernel data
+                // pointer is meaningless. If we ever see one, log it
+                // loudly: tells us which (sym, addend, value_offset)
+                // produced it and where in the user binary the slot lives.
+                let value_check = |val: u64, kind: &str| {
+                    if val >= 0x40000000 && val < 0x80000000 {
+                        uart::puts("[reloc] KERNEL-VA value 0x");
+                        let hex = b"0123456789abcdef";
+                        for sh in (0..16).rev() {
+                            uart::putc(hex[((val >> (sh * 4)) & 0xF) as usize]);
+                        }
+                        uart::puts(" written to user GOT slot uva=0x");
+                        let uva = (r_offset as i64 + value_offset) as u64;
+                        for sh in (0..16).rev() {
+                            uart::putc(hex[((uva >> (sh * 4)) & 0xF) as usize]);
+                        }
+                        uart::puts(" via "); uart::puts(kind);
+                        uart::puts(" addend=0x");
+                        for sh in (0..16).rev() {
+                            uart::putc(hex[((r_addend >> (sh * 4)) & 0xF) as usize]);
+                        }
+                        uart::puts("\n");
+                    }
+                };
                 match r_type {
                     0x403 => {
                         // R_AARCH64_RELATIVE: base + addend
                         let value = (r_addend as i64 + value_offset) as u64;
+                        value_check(value, "RELATIVE");
                         unsafe {
                             core::arch::asm!("str {v}, [{a}]",
                                 a = in(reg) patch_addr, v = in(reg) value);
@@ -678,6 +706,7 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
                         } else {
                             (sym_value as i64 + r_addend as i64 + value_offset) as u64
                         };
+                        value_check(value, if r_type == 0x402 { "JUMP_SLOT" } else { "GLOB_DAT" });
                         unsafe {
                             core::arch::asm!("str {v}, [{a}]",
                                 a = in(reg) patch_addr, v = in(reg) value);
@@ -694,6 +723,7 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
                         // has no side effects). TODO: call the resolver at
                         // load-time in EL1 to get the real value.
                         let value = (r_addend as i64 + value_offset) as u64;
+                        value_check(value, "IRELATIVE");
                         unsafe {
                             core::arch::asm!("str {v}, [{a}]",
                                 a = in(reg) patch_addr, v = in(reg) value);
@@ -1637,9 +1667,37 @@ fn apply_relocs_cross(
                 uart::puts("\n");
             }
 
+            // V8-RELOC-LEAK (loader/multi): same kernel-VA detector as
+            // the single-binary path. Logs any reloc that produces a
+            // value in 0x40000000..0x80000000 — those are kernel
+            // addresses and shouldn't ever be written to user GOT/data.
+            let value_check_multi = |val: u64, kind: &str| {
+                if val >= 0x40000000 && val < 0x80000000 {
+                    uart::puts("[reloc/multi] KERNEL-VA value 0x");
+                    let hex = b"0123456789abcdef";
+                    for sh in (0..16).rev() {
+                        uart::putc(hex[((val >> (sh * 4)) & 0xF) as usize]);
+                    }
+                    uart::puts(" written via "); uart::puts(kind);
+                    uart::puts(" addend=0x");
+                    for sh in (0..16).rev() {
+                        uart::putc(hex[((r_addend >> (sh * 4)) & 0xF) as usize]);
+                    }
+                    uart::puts(" patch_addr=0x");
+                    for sh in (0..16).rev() {
+                        uart::putc(hex[((patch_addr as u64 >> (sh * 4)) & 0xF) as usize]);
+                    }
+                    uart::puts(" value_offset=0x");
+                    for sh in (0..16).rev() {
+                        uart::putc(hex[((value_offset as u64 >> (sh * 4)) & 0xF) as usize]);
+                    }
+                    uart::puts("\n");
+                }
+            };
             match r_type {
                 0x403 => {
                     let value = (r_addend as i64 + value_offset) as u64;
+                    value_check_multi(value, "RELATIVE");
                     unsafe {
                         core::arch::asm!("str {v}, [{a}]",
                             a = in(reg) patch_addr, v = in(reg) value);
@@ -1693,6 +1751,7 @@ fn apply_relocs_cross(
                     } else {
                         (sym_value as i64 + r_addend as i64 + value_offset) as u64
                     };
+                    value_check_multi(value, if r_type == 0x402 { "JUMP_SLOT" } else { "GLOB_DAT" });
                     unsafe {
                         core::arch::asm!("str {v}, [{a}]",
                             a = in(reg) patch_addr, v = in(reg) value);
@@ -1701,6 +1760,7 @@ fn apply_relocs_cross(
                 }
                 0x408 => {
                     let value = (r_addend as i64 + value_offset) as u64;
+                    value_check_multi(value, "IRELATIVE");
                     unsafe {
                         core::arch::asm!("str {v}, [{a}]",
                             a = in(reg) patch_addr, v = in(reg) value);

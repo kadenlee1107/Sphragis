@@ -170,6 +170,29 @@ fn reset_timer() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
+    // V8-ELR-WATCH: snapshot frame.elr at IRQ entry. After all the IRQ
+    // work + potential context switches, if we end this function with
+    // frame.elr in kernel range AND spsr.M=0 (eret target = EL0), the
+    // IRQ handler corrupted the trap frame in a way that'll send the
+    // user thread to a kernel PC. Log it.
+    let elr_in = unsafe { (*frame).elr };
+    let spsr_in = unsafe { (*frame).spsr };
+    handle_irq_inner(frame);
+    let elr_out = unsafe { (*frame).elr };
+    let spsr_out = unsafe { (*frame).spsr };
+    let goes_to_el0 = (spsr_out & 0xF) == 0;
+    if goes_to_el0 && elr_out >= 0x40000000 && elr_out < 0x80000000 {
+        uart::puts("!!! IRQ left frame.elr=KERNEL going to EL0\n");
+        let hex = b"0123456789abcdef";
+        uart::puts("  in:  elr=0x"); for sh in (0..16).rev() { uart::putc(hex[((elr_in >> (sh*4)) & 0xF) as usize]); }
+        uart::puts(" spsr=0x"); for sh in (0..16).rev() { uart::putc(hex[((spsr_in >> (sh*4)) & 0xF) as usize]); }
+        uart::puts("\n  out: elr=0x"); for sh in (0..16).rev() { uart::putc(hex[((elr_out >> (sh*4)) & 0xF) as usize]); }
+        uart::puts(" spsr=0x"); for sh in (0..16).rev() { uart::putc(hex[((spsr_out >> (sh*4)) & 0xF) as usize]); }
+        uart::puts("\n");
+    }
+}
+
+fn handle_irq_inner(frame: *mut TrapFrame) {
     // V-ASAHI-2.2: on Apple Silicon, IRQs come through AIC2 instead of
     // a per-CPU GIC. We MUST drain the AIC event queue every entry,
     // otherwise level-triggered IRQs (timer, UART, SPI, etc.) re-fire
@@ -307,6 +330,38 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
     let esr: u64;
     unsafe { core::arch::asm!("mrs {}, esr_el1", out(reg) esr); }
     let ec = (esr >> 26) & 0x3F;
+    // Wrap inner dispatch in a closure-like block so we can run a
+    // post-check before returning. If the caller is going to RESTORE_REGS
+    // and eret to EL0 with frame.elr in kernel range, that's the bug —
+    // log loudly so we can correlate to which handler call did it.
+    handle_sync_exception_inner(frame, esr, ec);
+    unsafe {
+        let elr_now = (*frame).elr;
+        let spsr_now = (*frame).spsr;
+        let target_el = (spsr_now >> 2) & 0x3;
+        // M[3:0]=0 means eret target is EL0t (user mode). M[3:0]=5 is EL1h.
+        let goes_to_el0 = (spsr_now & 0xF) == 0;
+        if goes_to_el0 && elr_now >= 0x40000000 && elr_now < 0x80000000 {
+            uart::puts("!!! frame.elr=KERNEL going to EL0: ec=0x");
+            let hex = b"0123456789abcdef";
+            uart::putc(hex[((ec >> 4) & 0xF) as usize]);
+            uart::putc(hex[(ec & 0xF) as usize]);
+            uart::puts(" elr=0x");
+            for sh in (0..16).rev() {
+                uart::putc(hex[((elr_now >> (sh * 4)) & 0xF) as usize]);
+            }
+            uart::puts(" spsr=0x");
+            for sh in (0..16).rev() {
+                uart::putc(hex[((spsr_now >> (sh * 4)) & 0xF) as usize]);
+            }
+            uart::puts(" target_el=");
+            uart::putc(b'0' + target_el as u8);
+            uart::puts("\n");
+        }
+    }
+}
+
+fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
 
 
     match ec {
