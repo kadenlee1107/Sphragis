@@ -369,7 +369,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::CLOSE_RANGE => (SyscallCat::FileIO, sys_close_range),
         nr::READ => (SyscallCat::FileIO, sys_read),
         nr::WRITE => (SyscallCat::FileIO, sys_write),
-        nr::LSEEK => (SyscallCat::FileIO, sys_stub_zero),
+        nr::LSEEK => (SyscallCat::FileIO, sys_lseek),
         nr::FSTAT => (SyscallCat::FileIO, sys_fstat),
         nr::NEWFSTATAT => (SyscallCat::FileIO, sys_newfstatat),
         nr::IOCTL => (SyscallCat::FileIO, sys_ioctl),
@@ -512,6 +512,38 @@ fn sys_getgid(_args: [u64; 6]) -> i64 { 0 }
 fn sys_stub_zero(_args: [u64; 6]) -> i64 { 0 }
 fn sys_stub_enosys(_args: [u64; 6]) -> i64 { ENOSYS }
 fn sys_stub_enoent(_args: [u64; 6]) -> i64 { ENOENT }
+
+// ─── lseek (62) — file seek ───
+//
+// STUMP #10 fix: previously stubbed to return 0. PartitionAlloc / SQLite /
+// LevelDB use `lseek(fd, 0, SEEK_END)` to size files for slot-span
+// computation; getting 0 means "file is empty" → slot_count = 0 → freelist
+// head walked into uninit memory and surfaced as `0x1` slot-pointer BRK.
+fn sys_lseek(args: [u64; 6]) -> i64 {
+    let fd_num = args[0] as u32;
+    let offset = args[1] as i64;
+    let whence = args[2] as i32;
+    const SEEK_SET: i32 = 0;
+    const SEEK_CUR: i32 = 1;
+    const SEEK_END: i32 = 2;
+
+    let entry = match fd::get_mut(fd_num) {
+        Some(e) => e,
+        None => return EBADF,
+    };
+    // Only VFS-backed fds support seek. Pipes/eventfd/timerfd → ESPIPE (-29).
+    if entry.kind != fd::FdKind::Vfs { return -29; }
+    let node_size = vfs::get_node(entry.node_idx).size as i64;
+    let new_pos: i64 = match whence {
+        SEEK_SET => offset,
+        SEEK_CUR => (entry.position as i64).saturating_add(offset),
+        SEEK_END => node_size.saturating_add(offset),
+        _ => return EINVAL,
+    };
+    if new_pos < 0 { return EINVAL; }
+    entry.position = new_pos as usize;
+    new_pos
+}
 
 // ─── nanosleep (101) — real sleep using ARM64 generic timer ───
 fn sys_nanosleep(args: [u64; 6]) -> i64 {
