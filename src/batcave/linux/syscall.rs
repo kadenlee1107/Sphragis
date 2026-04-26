@@ -231,13 +231,16 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
     static SYSCALL_COUNTER: core::sync::atomic::AtomicU64 =
         core::sync::atomic::AtomicU64::new(0);
     let n = SYSCALL_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    // EVERY-syscall yield: timer IRQ is ~1Hz on QEMU virt despite
-    // 100Hz config (likely GIC delivery quirk). Yielding on every
-    // syscall is the only mechanism giving Runnable but unscheduled
-    // threads a chance to run when the current thread is in a tight
-    // CPU loop between syscalls. Same-cave switches are cheap (no
-    // TTBR0 change inside a single Chromium process).
-    super::threads::schedule();
+    // Cooperative yield every 64 syscalls — balances giving other
+    // threads CPU time without thrashing on context switches. Now
+    // that timer IRQs work (after the daifclr fix in cxt_switch), the
+    // 100Hz timer handles user-mode preemption; this yield mostly
+    // services the very-bursty syscall pattern (e.g. Chromium's
+    // pthread setup which can do hundreds of syscalls in a tight loop
+    // without re-entering user mode long enough to be preempted).
+    if (n & 0x3F) == 0 {
+        super::threads::schedule();
+    }
     // Periodic thread-state dump for deadlock diagnosis. Triggered off
     // the syscall counter (NOT the timer IRQ — that fires too sporadically
     // on QEMU virt for a useful diagnostic cadence). At every 1024
