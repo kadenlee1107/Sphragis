@@ -143,6 +143,16 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     // exhausting the frame pool.
     let ec = (esr >> 26) & 0x3F;
     if ec != 0x24 && ec != 0x25 { return false; }
+    // 🎯 STUMP #7 follow-on: only handle TRANSLATION faults (page not
+    // mapped). Permission faults (DFSC 0x0d/0x0e/0x0f) come from a page
+    // that IS mapped but with wrong perms (e.g., kernel uaccess writing
+    // to a page just mprotect'd to R/O). Allocating a fresh frame would
+    // not fix permissions; idempotency guard would then return Ok
+    // without doing anything, the caller eret'd, and we'd re-fault on
+    // the same VA forever (820k loops observed before alloc_frame OOM).
+    let dfsc = esr & 0x3F;
+    let is_translation_fault = matches!(dfsc, 0x04..=0x07);
+    if !is_translation_fault { return false; }
 
     // Find the active cave's L1 phys from TTBR0_EL1.
     let ttbr0: u64;
@@ -262,6 +272,19 @@ pub(crate) fn install_l3_mapping(
         }
         let desc = (t as u64) | TABLE_DESC;
         unsafe { core::ptr::write_volatile(l1_entry_ptr, desc); }
+        // 🎯 STUMP #7 follow-on: flush the L1 entry's cache line + the
+        // freshly-zeroed L2 table to PoC. Without this, the walker
+        // can hit a stale (zero) cache line for L1[l1_idx] and re-fault
+        // on the same VA → infinite alloc_frame loop → OOM.
+        unsafe {
+            core::arch::asm!("dc civac, {a}", a = in(reg) l1_entry_ptr as u64);
+            let mut line = t as u64;
+            while line < t as u64 + 4096u64 {
+                core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                line += 64;
+            }
+            core::arch::asm!("dsb sy");
+        }
         t as u64
     } else {
         // L1 entry is a BLOCK descriptor (e.g., the cave's user
@@ -283,6 +306,16 @@ pub(crate) fn install_l3_mapping(
         }
         let desc = (t as u64) | TABLE_DESC;
         unsafe { core::ptr::write_volatile(l2_entry_ptr, desc); }
+        // Same flush as the L1-create path above.
+        unsafe {
+            core::arch::asm!("dc civac, {a}", a = in(reg) l2_entry_ptr as u64);
+            let mut line = t as u64;
+            while line < t as u64 + 4096u64 {
+                core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                line += 64;
+            }
+            core::arch::asm!("dsb sy");
+        }
         t as u64
     } else {
         return Err("demand_page: L2 entry is a block, not a table");

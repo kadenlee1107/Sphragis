@@ -11,6 +11,79 @@ end of a session.
 
 ---
 
+## 2026-04-26 13:18 — Mac — Stump #7 follow-ons: demand_page DFSC gating + FIXED-high-VA pre-mprotect-RW. Cave now boots Chromium past ICU into multi-library loading (libnspr4/libnss3/libnssutil3/libexpat/libm/libgcc_s).
+
+**Goal.** Fix the post-Stump-#7 regression where cave entered an
+infinite loop on demand-page (820k commits on a single VA before
+alloc_frame OOM).
+
+**Root cause: two bugs that compound.**
+
+1. **demand_page::try_handle accepts permission faults too.** The
+   handler gates on EC=0x24/0x25 (data abort) but NOT on DFSC. A
+   permission fault at L3 (DFSC=0x0d/0x0e/0x0f) would call try_handle.
+   try_handle's idempotency guard (Stump #6 fix) sees the L3 entry
+   is valid, returns Ok without changing anything. The cave eret's,
+   re-faults on the same VA, infinite loop.
+
+2. **FIXED-high-VA path's touch loop hits R/O pages.** sys_mmap's
+   FIXED-high-VA path does: touch every page (write 0 to demand-
+   commit) → copy file content → mprotect to user's prot. For the
+   FIRST call the touch works (pages are fresh demand-paged with
+   USER_PAGE_FLAGS = RW). But if a SECOND FIXED-high-VA call
+   overlaps a page that an EARLIER call mprotected to R+X (AP=11
+   = R/O at BOTH EL0 and EL1), the kernel touch-write fails with
+   permission fault → demand_page can't handle it → infinite loop
+   per #1.
+
+**Fixes (both in this commit):**
+
+- `src/batcave/linux/demand_page.rs:147-153` — gate try_handle to
+  TRANSLATION faults only (DFSC 0x04..=0x07). Permission faults
+  return false → kernel propagates the fault → cave SIGSEGV. No
+  more infinite loop.
+- `src/batcave/linux/syscall.rs:2079-2089` — pre-mprotect the
+  FIXED-high-VA range to RW BEFORE the touch loop. The user's
+  requested prot is reapplied at the end. Idempotent w.r.t. fresh
+  pages (mprotect on an unmapped VA is a no-op in our impl).
+
+Plus belt-and-suspenders: install_l3_mapping now flushes the L1 +
+L2 entries it writes (not just the L3) so the walker sees them
+after MMU enable. Was a latent bug exposed by the bigger working
+set; fixed defensively.
+
+**Verification (smoke v58):**
+- 0 commits at the same VA in a row (vs 820k before).
+- 158 syscalls, 66 mmap+openat+clone events, multiple libraries
+  successfully loaded via FIXED-high-VA: libnspr4, libnss3,
+  libnssutil3, libexpat, libm, libgcc_s.
+- Cave finally SIGSEGVs in user code (libc-region ELR=0x700050474),
+  not kernel-side. Real progress past where v54 looped.
+
+**Stump #8 (next session).** The new SIGSEGV at user VA 0x70057e05e
+during library-load init. Different bug class — content_shell or
+libc init code is hitting a NULL deref or similar. addr2line on
+0x700050474 against the loaded libraries should pinpoint it.
+
+**Where we ended this session:**
+
+| # | Stump | Status | Commit |
+|---|---|---|---|
+| 1 | brk-zeroing + stack-top-cap | ✅ KILLED | 39a14df1 |
+| 2 | futex.rs current_tid stub | ✅ KILLED | 7c2c45b5 |
+| 3 | cave VA window unreserved | ✅ KILLED | a36856e2 |
+| 4 | sys_mmap ENOMEM for outside-window | ✅ KILLED | 2ebb8c13 |
+| 5 | KERNEL_RESERVED_FRAMES too small | ✅ KILLED | 2ebb8c13 |
+| 6 | install_l3_mapping not idempotent | ✅ KILLED | 0563d145 |
+| 7 | TCR.IPS + PT cache flush + bitmap | ✅ KILLED | dfd132b1 |
+| 7+ | DFSC gating + FIXED-high-VA pre-mprotect | ✅ KILLED | _this commit_ |
+| 8 | User SIGSEGV during library load | open | next session |
+
+From "futex deadlock at 5M syscalls" at session start to "cave loads
+6 libraries via FIXED-high-VA, then SIGSEGVs in lib init code" now.
+
+---
+
 ## 2026-04-26 12:30 — Mac — 🎯🎯🎯 STUMP #7 KILLED: TCR.IPS was defaulting to 32-bit IPA, silently invalidating any walker output ≥ 4 GiB. Plus PT cache flushes + kernel-pool PA cap. Cave now does 820k commits = 3.36 GB.
 
 **Goal.** Push past Stump #7 (physical RAM exhaustion at 296k commits =

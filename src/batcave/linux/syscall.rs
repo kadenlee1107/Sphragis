@@ -2072,6 +2072,19 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                     if addr >= va_end || addr < va_start {
                         let bytes_available = node.size.saturating_sub(offset);
                         let to_copy = bytes_available.min(len);
+                        // 🎯 STUMP #7 follow-on: pre-mprotect the range
+                        // to RW so the touch-each-page loop can write
+                        // even if a previous FIXED-high-VA call mprotected
+                        // overlapping pages to R+X (which sets AP=11 =
+                        // R/O at BOTH EL0 and EL1, faulting our kernel
+                        // write 820k times until alloc_frame OOMs).
+                        // The user's requested `_prot` is reapplied
+                        // after the copy (line 2109).
+                        let _ = sys_mprotect([
+                            addr as u64, len as u64,
+                            0x3, // PROT_READ | PROT_WRITE
+                            0, 0, 0,
+                        ]);
                         // Touch every page to demand-commit.
                         let end_addr = addr + len;
                         let mut va = addr & !0xFFFusize;
