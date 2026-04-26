@@ -338,7 +338,14 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         // NOTE: on AArch64, syscall 204 is getsockname (not sched_getaffinity).
         // getsockname is routed below via nr::GETSOCKNAME in the network block.
         // True sched_getaffinity is 123 (AArch64), sched_setaffinity is 122.
-        nr::SCHED_GETAFFINITY => (SyscallCat::Always, sys_stub_zero),
+        // 🎯 STUMP #10b: real sched_getaffinity. Was sys_stub_zero, returning 0
+        // and writing nothing to the user mask. glibc's _SC_NPROCESSORS_ONLN /
+        // CPU_COUNT(mask) then walked uninitialized memory; Chromium uses this
+        // value to size lock-free freelists, sharded counters, and worker pools.
+        // Stale memory containing 0x01 → freelist[0] keyed on garbage → eventually
+        // a freelist head value of 0x1 ends up in PartitionAlloc → the deterministic
+        // x1=0x1 BRK we've been chasing.
+        nr::SCHED_GETAFFINITY => (SyscallCat::Always, sys_sched_getaffinity),
         nr::SCHED_SETAFFINITY => (SyscallCat::Always, sys_stub_zero),
         // NOTE: AArch64 syscall 222 is mmap (already routed via nr::MMAP),
         // 223 is fadvise64. 210 is shutdown (moved to Network block below).
@@ -515,8 +522,18 @@ fn cave_has_cap(_cave_id: usize, cap: &str) -> bool {
 
 // ─── Syscall Implementations ───
 
-fn sys_getpid(_args: [u64; 6]) -> i64 { 1 }
-fn sys_getppid(_args: [u64; 6]) -> i64 { 0 }
+// 🎯 STUMP #10b: PID was hardcoded to 1. PartitionAlloc / glibc / V8
+// use getpid() as a random-seed input to per-thread cache slot indices,
+// hash table seeds, and `cookie` / `brp_cookie` fields stored in slot-
+// span metadata. With pid=1, several derived "tags" stored into slot
+// pointers come out as 0x1 → freelist heads / metadata words read 0x1
+// → PartitionAlloc::DoubleFreeOrCorruptionDetected fires with x1=0x1.
+//
+// 0x4242 = 16962 is a non-trivial PID that won't collide with init/
+// zygote-host expectations. Picked to be both non-1 and to make the
+// derived bit pattern obviously not a stale read.
+fn sys_getpid(_args: [u64; 6]) -> i64 { 0x4242 }
+fn sys_getppid(_args: [u64; 6]) -> i64 { 1 }
 fn sys_getuid(_args: [u64; 6]) -> i64 { 0 } // root
 fn sys_getgid(_args: [u64; 6]) -> i64 { 0 }
 fn sys_stub_zero(_args: [u64; 6]) -> i64 { 0 }
@@ -553,6 +570,45 @@ fn sys_lseek(args: [u64; 6]) -> i64 {
     if new_pos < 0 { return EINVAL; }
     entry.position = new_pos as usize;
     new_pos
+}
+
+// 🎯 STUMP #10b: sched_getaffinity(pid, cpusetsize, mask). Linux ABI:
+// returns the SIZE OF THE CPUSET WRITTEN (≥ 8 bytes for one CPU), and
+// populates the user `mask` buffer with the affinity bitmap. We're
+// single-CPU, so write byte 0 = 0x01 (CPU 0 online), zero the rest,
+// return min(cpusetsize, 8).
+//
+// Why this matters: glibc `_SC_NPROCESSORS_ONLN` and `CPU_COUNT(mask)`
+// both walk this buffer. With our previous stub_zero (returns 0, no
+// write), glibc read whatever uninitialized stack/heap garbage was at
+// the user mask ptr → reported a wrong CPU count → Chromium sized
+// lock-free freelists wrong → freelist heads keyed on garbage → eventual
+// PartitionAlloc free(0x1).
+fn sys_sched_getaffinity(args: [u64; 6]) -> i64 {
+    let _pid = args[0] as i32;
+    let cpusetsize = args[1] as usize;
+    let mask_ptr = args[2] as usize;
+    if cpusetsize == 0 || mask_ptr == 0 { return EINVAL; }
+    // glibc requires cpusetsize be a multiple of sizeof(unsigned long)=8.
+    if cpusetsize < 8 { return EINVAL; }
+    if !uaccess::is_user_range(mask_ptr, cpusetsize) {
+        // Allow demand-paged user reservations too.
+        if !super::demand_page::is_in_active_reservation(mask_ptr, cpusetsize) {
+            return -(14i64); // EFAULT
+        }
+    }
+    // Zero the whole buffer first.
+    unsafe {
+        for i in 0..cpusetsize {
+            core::ptr::write_volatile((mask_ptr + i) as *mut u8, 0);
+        }
+        // Set CPU 0 online (bit 0 of byte 0).
+        core::ptr::write_volatile(mask_ptr as *mut u8, 0x01);
+    }
+    // Return the SIZE of the cpuset we filled. Linux returns
+    // min(kernel_cpu_set_size, user_cpusetsize). For single-CPU, kernel
+    // cpu_set_t is 8 bytes (long-aligned).
+    core::cmp::min(cpusetsize, 8) as i64
 }
 
 // 🎯 STUMP #11: madvise — handle MADV_DONTNEED by zeroing the user range.
@@ -1838,8 +1894,12 @@ fn fill_stat(buf: usize, mode: u32, size: u64, ino: u64, nlink: u32) {
         unsafe { core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf + i); }
     }
     unsafe {
-        // st_dev at offset 0
-        let dev: u64 = 1;
+        // 🎯 STUMP #10b: st_dev was 1. PartitionAlloc / V8 use (st_dev,
+        // st_ino) as a cache key for shmem-backed memory pools. With
+        // st_dev==1, the key is effectively just st_ino, and stale
+        // bytes containing the literal 1 can collide and produce
+        // wrong slot lookups → x1=0x1 BRK in PartitionAlloc.
+        let dev: u64 = 0x100;
         core::arch::asm!("str {v}, [{a}]", a = in(reg) buf, v = in(reg) dev);
         // st_ino at offset 8
         core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 8, v = in(reg) ino);

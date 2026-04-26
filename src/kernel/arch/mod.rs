@@ -1444,6 +1444,46 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     uart::putc(b' ');
                 }
             }
+            // 🎯 STUMP #10b deep-dive: dump the user-stack saved LRs.
+            // CorruptionDetected's prologue stores x29/x30 at SP+0x10. The
+            // CALLER of CorruptionDetected has its LR there. Walking
+            // a few frames up reveals which Chromium subsystem called
+            // free(0x1).
+            let sp_el0: u64;
+            unsafe { core::arch::asm!("mrs {}, sp_el0", out(reg) sp_el0); }
+            uart::puts("\n  sp=0x");
+            {
+                let hex = b"0123456789abcdef";
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((sp_el0 >> (sh * 4)) & 0xF) as usize]);
+                }
+            }
+            // Print the first 32 8-byte slots above SP — covers
+            // CorruptionDetected's frame + several upstream frames.
+            uart::puts("\n  user-stack [sp..sp+0x100]:");
+            for i in 0..32usize {
+                let off = i * 8;
+                let addr = sp_el0 + off as u64;
+                let val: u64 = unsafe {
+                    let v: u64;
+                    core::arch::asm!("ldr {v}, [{a}]",
+                        a = in(reg) addr, v = out(reg) v);
+                    v
+                };
+                if i % 4 == 0 {
+                    uart::puts("\n    +0x");
+                    let hex = b"0123456789abcdef";
+                    uart::putc(hex[(off >> 8) & 0xF]);
+                    uart::putc(hex[(off >> 4) & 0xF]);
+                    uart::putc(hex[off & 0xF]);
+                    uart::puts(": ");
+                }
+                let hex = b"0123456789abcdef";
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((val >> (sh * 4)) & 0xF) as usize]);
+                }
+                uart::putc(b' ');
+            }
             uart::puts("\n  → returning to desktop\n");
             unsafe {
                 crate::batcave::linux::mmu::switch_to_primary();
