@@ -211,6 +211,23 @@ data structure at its linker VMA was getting wrong bytes. Many
 subtle "this should work but doesn't" issues across today's session
 likely had the same root cause.
 
+**Lingering bug worth a clean session:** EVEN AFTER the linker fix,
+some smoke runs still terminate with `[sig] fatal signo=11
+fault=0x000000004020113c — terminating cave`. That's an EL0 instruction-
+abort: user code branches to kernel VA `0x4020113c`. Searched the
+kernel binary for that constant — appears 0 times. So the address is
+COMPUTED at runtime, not stored as a literal. Possibilities:
+- A chromium relocation gets the wrong value during ELF load
+- A syscall return value gets a kernel address into user state
+- A struct field cast / GOT entry leaks a kernel pointer
+
+The fault pattern is reproducible, last-LR is `0x70004bc090` (libc
+syscall trampoline), ~6.3M syscalls before the fault. Next session
+strategy: instrument the kernel→user eret path to log the saved-frame
+ELR value before each eret, and bisect which syscall return path is
+contaminating it. Or disassemble user code at LR-4 to find what BL
+target preceded the bad branch (libc/Mojo PLT stub presumably).
+
 **Files touched today (this session):**
 - `src/batcave/linux/syscall.rs` — sendmsg_pipe direction fix +
   mark_ready in pipe write + sendmsg_pipe
