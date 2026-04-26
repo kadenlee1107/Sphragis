@@ -1765,10 +1765,12 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 // tracing the caller of a function that ret'd to a bad
                 // address — the fp-chain can't be trusted if x29 is
                 // already corrupted.
-                uart::puts("  stack LR candidates (SP+0 .. SP+0x200):");
+                uart::puts("  stack LR candidates (SP+0 .. SP+0x4000):");
                 let sp_val = sp_el0;
                 let elr_now = (*frame).elr;
-                for i in 0..64usize {
+                // Scan 16 KB of user stack instead of 0x200 — the leak
+                // might be in a deeper frame.
+                for i in 0..2048usize {
                     let addr = sp_val + (i as u64) * 8;
                     let v: u64 = core::ptr::read_volatile(addr as *const u64);
                     // Match A: any 8-byte slot that EXACTLY equals the
@@ -1777,6 +1779,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     if v == elr_now {
                         uart::puts("\n    [sp+0x");
                         let off = i * 8;
+                        uart::putc(b"0123456789abcdef"[(off >> 12) & 0xF]);
                         uart::putc(b"0123456789abcdef"[(off >> 8) & 0xF]);
                         uart::putc(b"0123456789abcdef"[(off >> 4) & 0xF]);
                         uart::putc(b"0123456789abcdef"[off & 0xF]);
@@ -1789,6 +1792,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     if v >= 0x40000000 && v < 0x80000000 {
                         uart::puts("\n    [sp+0x");
                         let off = i * 8;
+                        uart::putc(b"0123456789abcdef"[(off >> 12) & 0xF]);
                         uart::putc(b"0123456789abcdef"[(off >> 8) & 0xF]);
                         uart::putc(b"0123456789abcdef"[(off >> 4) & 0xF]);
                         uart::putc(b"0123456789abcdef"[off & 0xF]);
