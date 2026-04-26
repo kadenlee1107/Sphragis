@@ -11,6 +11,118 @@ end of a session.
 
 ---
 
+## 2026-04-25 23:38 — Mac — 🎯🎯 STUMP #3 KILLED: cave VA window aliased unreserved physical frames → alloc_frame served frames already mapped at content_shell low VAs → PartitionAlloc heap silently corrupted
+
+**Goal.** Find what corrupts PartitionAlloc heap (CorruptionDetected BRK at ELR=0x14d73000, modal failure 3/5 runs).
+
+**The headline fix.** Three parallel agents on heap-corruption root cause. Agent 1 (frame allocator + cave VA window audit) found it in ~5 min:
+
+`src/batcave/linux/mmu.rs:319-324` — `setup_cave_pagetable_at` maps
+`phys_base..phys_base + CAVE_BLOCKS*2MB` (= 400 MB) into the cave's
+user VA window via L2 BLOCK descriptors. The loader only RESERVES
+the actually-loaded portion (~188 MB for content_shell). The
+remaining ~212 MB of physical frames was:
+1. Mapped into the cave's user VA window (writable from EL0).
+2. Marked FREE in the frame bitmap.
+
+Any later `alloc_frame()` (PartitionAlloc's `sys_mmap` → `alloc_contig`,
+`sys_brk` worker, demand_page::try_handle, anything) scanning the
+bitmap from low → high would hand out a physical frame **already
+aliased to the cave's user VA**.
+
+Two virtual addresses → same physical frame:
+- VA1 = high (e.g., PartitionAlloc 0x2c00195000, thread stack 0x70...)
+- VA2 = low (cave window, e.g., 0x1e700000 inside content_shell .data)
+
+Content_shell writes its own .data via VA2; PartitionAlloc reads its
+metadata via VA1 → sees content_shell's bytes (often NULL pointers
+in .bss) instead of the bucket pointer it wrote → CorruptionDetected.
+
+This unifies Mode A (NULL deref reading SlotSpanMetadata bucket
+pointer) and Mode C (CorruptionDetected BRK): same root cause, two
+manifestations of the same alias.
+
+**The fix** (`src/batcave/linux/mmu.rs:325`, single delta):
+```rust
+frame::reserve_range(phys_base, phys_base + CAVE_BLOCKS * 0x200000);
+```
+Inside `setup_cave_pagetable_at`, immediately after writing the L2
+BLOCK PTEs that map the cave window, mark the entire 400-MB physical
+range as in-use so alloc_frame skips it. Idempotent w.r.t. the
+loader's own reservation of the loaded portion.
+
+**The verification.** Smoke v37: `0x14d73000` / `CorruptionDetected`
+**completely gone** (grep returns 0 matches across the whole log).
+Cave still BRKs but at a different VA (0x1505f564, tid 1 boss),
+and the immediate predecessor in the log is:
+
+```
+[mmap] len=10876464 pages=2656 base=0x0000000076f80000 fd=15 off=0x0
+       copying 10876464 bytes archive→frame
+ FAILED (outside cave user window)
+```
+
+That's `icudtl.dat` (Chromium's ICU data, 10.4 MB). My fix exposed
+a SECOND assumption-breaker: `sys_mmap`'s file-backed path implicitly
+relied on `alloc_contig` returning frames inside the cave's identity
+window. With the window now properly reserved, `alloc_contig` returns
+frames just past it (0x76f80000 vs phys_base + 400MB ≈ 0x76a00000),
+and the post-alloc check at `syscall.rs:2523` (`if end > USER_WINDOW_SIZE`)
+fails → ENOMEM → Chromium aborts because ICU couldn't initialize.
+
+Net: same bug class (cave-window aliasing assumed as feature instead
+of recognized as bug), exposed once we closed the heap-corruption side.
+
+**Strategic note.** Three agents in parallel on three angles
+(frame allocator / demand-page L3 / mmap-munmap), one found the
+root cause cold. Pattern continues: when a single-thread search keeps
+missing it, fan out.
+
+**State of the tree:**
+- `src/batcave/linux/mmu.rs` — cave-window reservation added (uncommitted).
+- Build env: `BAT_OS_ALLOW_UNSIGNED_INITRD=1 BAT_OS_PASSPHRASE=batman
+  cargo build --release`.
+- v37 verdict: PIPELINE-REACHED. PartitionAlloc CorruptionDetected
+  eliminated. New ceiling: ICU (icudtl.dat) file-backed mmap fails
+  ENOMEM because alloc_contig'd frames fall outside the cave window.
+
+**Stump #4 (next session).** Make `sys_mmap`'s file-backed path
+install L3 mappings into the small_mmap region for allocations whose
+PA lands outside the cave window. Specifically, in
+`syscall.rs:2504-2548`, replace the "outside cave user window" hard
+ENOMEM with a fallback that:
+1. Atomically reserves a small_mmap VA (cursor-bump from
+   `SMALL_MMAP_CURSOR`).
+2. Walks each page and calls a (newly pub(crate)-exposed)
+   `demand_page::install_l3_mapping(small_va, alloc_contig_pa,
+   USER_PAGE_FLAGS)`.
+3. Returns the small_mmap VA.
+
+The file-content copy already works (kernel identity-maps PAs up to
+0xC0000000 via L2_high/L2_xhi; `core::ptr::copy_nonoverlapping` sees
+the right bytes regardless of the user-VA story).
+
+**Other notes from this session:**
+- Agent 1 (sys_listen): VFS-socket fds (e.g. devtools fd=86) were
+  rejected by sockets::listen() requiring fd >= 1024. Fix mirrored
+  the existing sys_bind workaround (no-op success for VFS sockets).
+  Devtools now fails later in accept() with EAGAIN (correct).
+- Agent 2 (V8 cage / BRK PC decode): the v34 `0x14ca8664` BRK was
+  NOT V8 cage CHECK — it was `RefCountedThreadSafeBase::AddRefWithCheck()`
+  detecting a UAF. Different bug; not the modal failure.
+- Agent 3 (sys_munmap): real bug found — munmap zeros frames + frees
+  bitmap bits but never clears L3 entries. NOT the active cause
+  (Chromium calls 0 munmap in our smoke), but worth fixing later.
+- Stack-LR scanner (`src/kernel/arch/mod.rs:1857`): excluded `v <= 0x10000004`
+  to prevent v-4 reading unmapped 0x0ffffffc → recursive EL1 abort
+  that masked the entire crash dump. Without this fix v35 produced
+  a 65 MB log of identical repeated aborts.
+- BRK exit dump (`src/kernel/arch/mod.rs:1395`): now logs x0/x1/x30 +
+  4 instructions around ELR. Used to identify CorruptionDetected
+  (0x14d73000) as the modal failure.
+
+---
+
 ## 2026-04-25 22:55 — Mac — Stump #3 is plural: post-#2-fix runs reach font loading + V8 cage init; each run dies a different way (PartitionAlloc NULL, NULL-call, boss BRK)
 
 **Goal.** Identify Stump #3 root cause and fix.

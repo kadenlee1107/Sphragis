@@ -323,6 +323,35 @@ pub fn setup_cave_pagetable_at(
         write_pte(l2_low, block_idx, phys_block as u64 | BLOCK_USER_RW_EXEC);
     }
 
+    // 🎯 STUMP #3 ROOT CAUSE FIX (PartitionAlloc CorruptionDetected):
+    //
+    // The cave's user-VA window above maps phys_base..phys_base+400 MB
+    // into virt_base..virt_base+400 MB via L2 BLOCK descriptors. But the
+    // loader only RESERVES (in the frame bitmap) the actual loaded ELF +
+    // stacks portion (~188 MB for content_shell). The remaining ~212 MB
+    // of physical frames were:
+    //   1. Mapped into the cave's user VA window (writable from EL0 +
+    //      kernel via the L2 BLOCK PTEs we just wrote).
+    //   2. Marked FREE in the frame bitmap.
+    //
+    // Any later alloc_frame() (sys_brk worker, demand_page::try_handle,
+    // sys_mmap anon contig, anything else) would scan the bitmap from
+    // low → high, hand out a frame inside that aliased range, and
+    // install it at a SECOND virtual address (PartitionAlloc super-
+    // page region 0x2c..., thread stack region 0x70..., etc.).
+    //
+    // Two VAs → same physical frame. Content_shell writes its own
+    // .data/.bss via the low VA (0x1xxxxxxx, inside the cave window);
+    // PartitionAlloc reads its metadata via the high VA → sees
+    // content_shell's bytes (often NULL pointers in BSS) instead of
+    // the bucket pointer it wrote → CorruptionDetected() BRK.
+    //
+    // The fix: reserve every page in the cave's mapped 400-MB window
+    // BEFORE alloc_frame can scan the bitmap. Idempotent w.r.t. the
+    // loader's own reservations of the loaded portion (reserve_range
+    // sets bits unconditionally).
+    frame::reserve_range(phys_base, phys_base + CAVE_BLOCKS * 0x200000);
+
     // MMIO identity mappings — EL1 can read/write MMIO during syscall
     // handling while the cave's TTBR0 is active; EL0 gets a fault (AP
     // forbids EL0 on BLOCK_DEVICE).  Required so the exception handler
