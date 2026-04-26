@@ -251,6 +251,15 @@ pub(crate) fn install_l3_mapping(
     phys_page: u64,
     flags: u64,
 ) -> Result<(), &'static str> {
+    // 🎯 STUMP #9: hold IrqGuard across the entire walk-and-install so
+    // we can't be preempted mid-install. Without this, sys_mmap or
+    // sys_mprotect calling install_l3_mapping (Stump #4 / Stump #8
+    // paths) can be interrupted by a timer IRQ that schedules another
+    // thread; if that thread also lands in install_l3_mapping for the
+    // same VA, we get conflicting allocations + L3 writes that show
+    // up as PartitionAlloc CorruptionDetected later.
+    let _g = crate::kernel::sync::IrqGuard::new();
+
     // T0SZ=25 gives a 39-bit VA: bits 38..30 → L1, 29..21 → L2, 20..12 → L3.
     let l1_idx = ((user_va >> 30) & 0x1FF) as usize;
     let l2_idx = ((user_va >> 21) & 0x1FF) as usize;
