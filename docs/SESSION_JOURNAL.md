@@ -129,12 +129,30 @@ shell prompt comes back. Smoke verdict: PIPELINE-REACHED.
 **Follow-up: abort-skip recovery for the EL1 case.** The kernel-mode
 abort (EC=0x25) DID still loop forever — 50K+ identical "DATA ABORT"
 log lines in one run — because the handler returned without advancing
-ELR past the bad load/store. Fixed by tracking last-ELR and, after 4
-identical repeats, advancing ELR by 4 with a one-line
-`[abort] skipping bad instr at ELR — kernel proceeds`. The cave's
-state is probably already corrupt by then, but at minimum we limp
-forward and either complete or hit a clean SIGSEGV. The fix landed
-in commit `062d7ce5`.
+ELR past the bad load/store. First attempt: track last-ELR and after
+4 identical repeats, advance ELR by 4. That STILL didn't escape — one
+run logged 50K skip messages because the next instruction also
+faulted, and the next, and the next. Per-instruction skipping can't
+recover from corrupt kernel state.
+
+**Final fix (commit `28cf0915`):** after 4 identical-ELR aborts, call
+`signal::terminate_cave_fatal(SIGBUS, far)` directly from the EL1
+handler. That cleanly:
+  * restores TTBR0 to primary,
+  * restores the kernel SP the loader stashed pre-eret,
+  * jumps to `desktop::resume()` — shell prompt comes back.
+
+Verified end-to-end:
+```
+[abort] EL1 fault unrecoverable — terminating cave
+[sig] fatal signo=7 fault=0x00000000c0000000 — terminating cave, returning to shell
+bat_os >
+```
+4 DATA ABORTs total before clean termination, instead of 50K. The
+`0xc0000000` fault at PC=`0x4020114c` (kernel rodata, not text) is
+still the real bug — likely a corrupt function pointer or vtable in
+the kernel that branches into rodata. **First investigation target
+next session.**
 
 **Run-to-run variance.** The smoke is somewhat non-deterministic.
 With the same code, one run reaches syscall 5.35M with viz/leveldb,
