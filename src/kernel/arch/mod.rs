@@ -777,6 +777,24 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                     if syscall_num == 220
                         && crate::batcave::linux::threads::is_enabled()
                     {
+                        // V8-CLONE-ELR-CHECK: f.elr should be the user's
+                        // post-svc PC, always a user VA. If it's anywhere
+                        // in kernel range, every child cloned from here
+                        // will eret straight into kernel space → instant
+                        // EL0 instruction-abort. Catch it loudly.
+                        if f.elr >= 0x40000000 && f.elr < 0x80000000 {
+                            uart::puts("!!! CLONE: parent ELR is KERNEL VA 0x");
+                            let hex = b"0123456789abcdef";
+                            for sh in (0..16).rev() {
+                                uart::putc(hex[((f.elr >> (sh * 4)) & 0xF) as usize]);
+                            }
+                            uart::puts(" — would corrupt child resume PC\n");
+                            uart::puts("  spsr=0x");
+                            for sh in (0..16).rev() {
+                                uart::putc(hex[((f.spsr >> (sh * 4)) & 0xF) as usize]);
+                            }
+                            uart::puts(" (M[3:0]=0 means from EL0)\n");
+                        }
                         crate::batcave::linux::threads::PARENT_SYSCALL_ELR
                             .store(f.elr, core::sync::atomic::Ordering::Release);
                         crate::batcave::linux::threads::PARENT_SYSCALL_SPSR
