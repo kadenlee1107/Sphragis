@@ -126,6 +126,26 @@ around ELR" pretty-printer.
 terminates cleanly via signal 11 instead of looping aborts. The
 shell prompt comes back. Smoke verdict: PIPELINE-REACHED.
 
+**Follow-up: abort-skip recovery for the EL1 case.** The kernel-mode
+abort (EC=0x25) DID still loop forever — 50K+ identical "DATA ABORT"
+log lines in one run — because the handler returned without advancing
+ELR past the bad load/store. Fixed by tracking last-ELR and, after 4
+identical repeats, advancing ELR by 4 with a one-line
+`[abort] skipping bad instr at ELR — kernel proceeds`. The cave's
+state is probably already corrupt by then, but at minimum we limp
+forward and either complete or hit a clean SIGSEGV. The fix landed
+in commit `062d7ce5`.
+
+**Run-to-run variance.** The smoke is somewhat non-deterministic.
+With the same code, one run reaches syscall 5.35M with viz/leveldb,
+another stalls at ~6 threads stuck on libc cond_var futexes (`uaddr
+=0x1a0b5fc0 val=2` and `uaddr=0x38000d8000 val=2`). The deadlock state
+suggests the wake side of cond_var signaling is missing some path —
+something is supposed to broadcast on `0x38000d8000` when work is
+ready and isn't. **First investigation target next session:** which
+glibc / Mojo code writes to `0x38000d8000` and `0x1a0b5fc0`, and what
+trigger we're missing.
+
 **Files touched today (this session):**
 - `src/batcave/linux/syscall.rs` — sendmsg_pipe direction fix +
   mark_ready in pipe write + sendmsg_pipe
