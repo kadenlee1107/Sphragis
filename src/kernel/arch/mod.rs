@@ -1694,9 +1694,34 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                 // already corrupted.
                 uart::puts("  stack LR candidates (SP+0 .. SP+0x200):");
                 let sp_val = sp_el0;
+                let elr_now = (*frame).elr;
                 for i in 0..64usize {
                     let addr = sp_val + (i as u64) * 8;
                     let v: u64 = core::ptr::read_volatile(addr as *const u64);
+                    // Match A: any 8-byte slot that EXACTLY equals the
+                    // fault PC. Tells us "this kernel pointer is sitting
+                    // RIGHT HERE on the stack" — pinpoints the leak source.
+                    if v == elr_now {
+                        uart::puts("\n    [sp+0x");
+                        let off = i * 8;
+                        uart::putc(b"0123456789abcdef"[(off >> 8) & 0xF]);
+                        uart::putc(b"0123456789abcdef"[(off >> 4) & 0xF]);
+                        uart::putc(b"0123456789abcdef"[off & 0xF]);
+                        uart::puts("]=ELR (=0x"); print_hex(v); uart::puts(") !!!");
+                        continue;
+                    }
+                    // Match B: kernel-range pointers that landed on user
+                    // stack — any saved value in 0x40000000..0x80000000
+                    // is suspicious. Print them all.
+                    if v >= 0x40000000 && v < 0x80000000 {
+                        uart::puts("\n    [sp+0x");
+                        let off = i * 8;
+                        uart::putc(b"0123456789abcdef"[(off >> 8) & 0xF]);
+                        uart::putc(b"0123456789abcdef"[(off >> 4) & 0xF]);
+                        uart::putc(b"0123456789abcdef"[off & 0xF]);
+                        uart::puts("]=KERNEL 0x"); print_hex(v);
+                        continue;
+                    }
                     if v >= 0x10000000 && v < 0x1f000000 && (v & 3) == 0 {
                         let pc = v.wrapping_sub(4);
                         let ins: u32 = core::ptr::read_volatile(pc as *const u32);

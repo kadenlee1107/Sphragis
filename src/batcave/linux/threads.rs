@@ -160,11 +160,19 @@ const EINVAL: i64 = -22;
 // hitting the 64-slot ceiling.
 pub const MAX_THREADS: usize = 256;
 const DEFAULT_STACK_PAGES: usize = 16; // 64 KiB fallback
-/// One 4-KiB page per thread is reserved for the kernel-side stack the
-/// cooperative context switch parks SP_EL1 on. 4 KiB is plenty: the
-/// thread_first_run trampoline is a handful of `msr` + `eret`, and the
-/// deepest syscall frame we actually use is well under this.
-const KERNEL_STACK_PAGES: usize = 1;
+/// Two 4-KiB pages per thread for the kernel-side stack. We were 1
+/// page (4 KiB), but a trap frame is 272 bytes and the EL1 abort
+/// handler can recursively call schedule + dump + uart, blowing past
+/// 4 KiB easily. The smoking-gun was smoke v16: a thread got its
+/// kernel stack at PA 0xbffff000 (last-frame in cave-mapped range),
+/// SP set to top = 0xc0000000 - 16 = 0xbfffffe0. SAVE_REGS subtracted
+/// 272 → SP=0xbfffeed0, then a nested abort SAVE_REGS subtracted
+/// another 272 → SP at 0xbfffe... fine. But RESTORE_REGS reading
+/// `ldp x_,x_,[sp,#0xf8]` at the OUTER trap frame went to 0xc0000098
+/// → unmapped, EL1 data abort, abort-handler-loops-then-cave-terminates.
+/// 8 KiB gives headroom: even when SP starts at the very top of an
+/// 8-KiB region, sp+0xf8 stays inside.
+const KERNEL_STACK_PAGES: usize = 2;
 const PAGE_SIZE: usize = 4096;
 
 /// Assembly helper (threads.s) that saves the OLD thread's regs and
