@@ -1171,8 +1171,17 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                 uart::puts("  x"); uart::putc(hex[i]); uart::puts(": 0x");
                 print_hex(v); uart::puts("\n");
             }
-            // Track repeats so we can stop spamming and move forward
-            // instead of infinite-looping the same fault.
+            // Track repeats so we can stop spamming and force-terminate
+            // the cave instead of looping forever in this handler. Two
+            // tries earlier landed the per-instruction skip approach,
+            // but skipping just bounced to the next bad instruction
+            // (50K+ skip messages in one run, never escapes). When the
+            // kernel is touching a clearly-bogus user pointer
+            // repeatedly, the cave's state is corrupt and the only
+            // safe out is `terminate_cave_fatal` which returns to the
+            // shell prompt. SIGBUS (signo=7) matches what a user-mode
+            // bad pointer access would have delivered if it had
+            // surfaced as EL0.
             static mut ABORT_COUNT: u32 = 0;
             static mut LAST_ABORT_ELR: u64 = 0;
             unsafe {
@@ -1183,18 +1192,10 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                     LAST_ABORT_ELR = elr;
                 }
                 if ABORT_COUNT > 3 {
-                    // V8-DABT-RECOVER: previously this just printed "halting
-                    // binary" and returned without advancing ELR — the
-                    // re-fetched faulting instruction would re-fault forever
-                    // (50K+ aborts in the log). Now we ADVANCE past the
-                    // faulting load/store so the kernel can keep going.
-                    // The cave's state is likely already corrupt; better to
-                    // limp forward and either complete or hit a clean
-                    // user-mode SIGSEGV than spin in the abort handler.
-                    uart::puts("[abort] skipping bad instr at ELR — kernel proceeds\n");
-                    (*frame).elr = elr + 4;
-                    ABORT_COUNT = 0;
-                    return;
+                    uart::puts("[abort] EL1 fault unrecoverable — terminating cave\n");
+                    crate::batcave::linux::signal::terminate_cave_fatal(7, far);
+                    // terminate_cave_fatal returns ! — control never
+                    // reaches here.
                 }
             }
         }
