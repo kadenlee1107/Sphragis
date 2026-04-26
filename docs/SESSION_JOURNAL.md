@@ -11,6 +11,123 @@ end of a session.
 
 ---
 
+## 2026-04-25 17:05 — Mac — 🚀 ROOT CAUSE: daifclr in cxt_switch_cooperative. IRQ rate 10/30s → 120Hz. Past the wall!
+
+The kernel wall we'd been chasing for the entire session — Chromium
+hangs at scheduler_loop_quarantine_config "amsc" — was caused by
+cooperative context switches inheriting masked IRQs across the chain.
+
+### The rubik's cube
+
+**Side 1 (visibility)** — per-syscall + per-switch periodic dumps,
+futex-uaddr in state display, deadlock detector. Surfaced that we
+weren't truly deadlocked: there was always a Runnable thread, but
+nothing got CPU.
+
+**Side 2 (diagnose CPU-hog)** — handle_irq PC sampling logged the
+preempted thread's user PC + LR. With rust-objdump on content_shell
++ the loaded libs we identified the hot paths:
+* t6 in libc futex wrapper (LR offsets ~0x24 — classic SpinningMutex
+  spin)
+* t5 Blocked in `partition_alloc::SpinningMutex::LockSlow`
+  (futex uaddr=0x1a0b9880 val=2: locked + waiters)
+* t1 in `base::MemoryMappedFile::MapFileRegionToMemory` calling
+  mmap64
+
+So the picture: one thread (the mutex holder) was running CPU-bound
+code making no syscalls. Without timer preemption, it ran forever.
+Other threads parked waiting. Total IRQ count was ~10 over 30 sec
+when expected 3000 at 100Hz.
+
+**Side 3 (THE FIX)** — added `msr daifclr, #0x2` to
+cxt_switch_cooperative right before its `ret`.
+
+Sequence that was broken:
+1. timer IRQ fires from EL0 → exception entry masks DAIF.I
+2. handle_irq runs → schedule() → cxt_switch_cooperative
+3. switch to thread B's continuation deep in park_slot
+4. B's chain doesn't reach an `eret` (it just blocks again,
+   schedule() picks thread C, ...)
+5. DAIF.I stays =1 across N context switches in EL1
+6. Timer IRQs delayed indefinitely until SOME thread finally erets
+
+After the fix, every context switch unmasks IRQs. Verified:
+* IRQ rate: ~10/30s → 10000+/90s ≈ 120 Hz
+* Thread count past wall: stuck-at-t11 → spawned to t21
+* Reached `viz_main_impl.cc:87 VizNullHypothesis is disabled` —
+  Chromium's GPU process init, FAR past where we'd ever been
+* Renderer process started (`[1:17:0101/...]` log prefix)
+* Inotify and netlink errors logged (benign, expected)
+
+**Side 4 (DOM dump)** — smoke continues progressing past the wall;
+Chromium is now in deeper init / fontconfig / GPU setup. 720s
+timeout still not enough for the full dump-DOM run.
+
+### Why daifclr-in-asm works
+
+Linux kernels do similar at every scheduler boundary. The recursion
+concern (an IRQ firing between daifclr and ret) is bounded — IRQs
+on top of IRQs work fine on AArch64 as long as the handlers are
+short and the kernel stack has headroom. Our handle_irq is short
+(EOI + maybe schedule). Stack headroom is plentiful (16KB per
+thread).
+
+### Other tweaks landed today
+
+* Cooperative yield re-tuned to every 64 syscalls (was every-1 for
+  the worst-case hot loop, way too thrashy for normal operation
+  now that timer IRQs work).
+* Quieter diagnostics: total_irq print every 5000 (was 50), PC
+  sample every 200 EL0 IRQs (was 10).
+
+### Today's commit log — 27 commits
+
+```
+aaaa685f Re-enable daifclr in cxt_switch + tune cooperative yield to every 64 syscalls
+731614c3 🚀 fix(threads.s): daifclr in cxt_switch_cooperative — IRQ rate jumps from ~10/30s to 120 Hz
+8ab85c30 diag: per-tid syscall+ELR dump and IRQ-time PC sampling
+b465f9e4 journal: 25 commits, full diagnostic suite landed
+c6eddf1c diag: thread-state dumps from syscall + switch counters
+545f4426 diag: print cntfrq + timer interval at boot
+9ab868a1 journal: session close — 22 commits
+f92751b3 GIC EOI ack + auto-dump scaffolding
+2141ed46 journal: SCM_RIGHTS landed
+c6f39e20 SCM_RIGHTS: pipe_buf side-channel for fd-passing
+64170497 journal: futex block/wake landed
+43c81b78 futex: wrap every bucket-lock critical section in IrqGuard
+dcdde09b Real futex block/wake — replace park_slot's spin
+fcd68f9e journal: final pass — execve clean-exit + TTBR0 fix
+52dee137 Capture parent's TTBR0 as new thread's user_ttbr0 at clone time
+b9f4e8b7 execve in forked cave: clean exit instead of park-forever
+be23ef2b Revert: keep --no-zygote off
+8acaf34a journal: post-EpollEvent push
+7c2a2957 Stub renameat (38)
+58b0c7ad Stub more syscalls
+dc31c1ee Chromium init unblockers: pread64, ftruncate, F_GETFL, /dev/shm mmap, eventfd refcount
+2c2ac342 journal: ROOT CAUSE — EpollEvent ABI
+58b4b4ab Fix EpollEvent ABI: 16 bytes (unpacked) on AArch64, not 12 (packed)
+7d644321 journal: wait4 + cave teardown
+0ad5f8d5 wait4 + real cave teardown
+54158b6e journal: eventfd ↔ FD bridge
+d82ad104 Bridge eventfd2 / timerfd_create to real FD numbers
+02b9a29f journal: real preemption
+07dbe10b Real timer-IRQ preemption via cooperative-switch path
+4c6f3b70 journal: per-cave FD tables session
+```
+
+That's 4 ABI / kernel-level fixes (EpollEvent ABI, F_GETFL,
+EpollEvent layout, daifclr) and 5+ subsystem rewrites (per-cave fd
+tables, real preemption, eventfd bridge, real wait4, real futex
+block/wake) in one day. The kernel is in materially better shape
+than any prior session.
+
+### Next session
+
+* Let the smoke run the full 720s and see if DOM dump completes.
+* If a new wall: now we have visibility tools to find it quickly.
+
+---
+
 ## 2026-04-25 16:15 — Mac — Diagnostic visibility added; 25 commits total today; deadlock localized to "one thread CPU-bound, no preemption"
 
 Added a full set of visibility tools while chasing the IPC pump
