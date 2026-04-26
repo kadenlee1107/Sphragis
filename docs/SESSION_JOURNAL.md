@@ -216,17 +216,35 @@ some smoke runs still terminate with `[sig] fatal signo=11
 fault=0x000000004020113c — terminating cave`. That's an EL0 instruction-
 abort: user code branches to kernel VA `0x4020113c`. Searched the
 kernel binary for that constant — appears 0 times. So the address is
-COMPUTED at runtime, not stored as a literal. Possibilities:
-- A chromium relocation gets the wrong value during ELF load
-- A syscall return value gets a kernel address into user state
-- A struct field cast / GOT entry leaks a kernel pointer
+COMPUTED at runtime, not stored as a literal.
 
-The fault pattern is reproducible, last-LR is `0x70004bc090` (libc
-syscall trampoline), ~6.3M syscalls before the fault. Next session
-strategy: instrument the kernel→user eret path to log the saved-frame
-ELR value before each eret, and bisect which syscall return path is
-contaminating it. Or disassemble user code at LR-4 to find what BL
-target preceded the bad branch (libc/Mojo PLT stub presumably).
+**Update with BL-target decoding (commit `733f13c4`):** added
+imm26 decoding to the EL0 unhandled-sync dump so each stack-LR
+candidate also shows the BL's target. Re-ran smoke — caught a
+DIFFERENT fault: chromium NULL-deref at user PC `0x15082930`
+(`ldrb w8, [x22, #0x38]` with x22=0). All BL targets are clean
+chromium-internal addresses (no kernel VA jumps in this run).
+
+So the `0x4020113c` fault is non-deterministic but most runs now
+terminate on user-side bugs (NULL-deref, missing-feature, etc.)
+rather than kernel-state corruption. **The kernel side is essentially
+clean — the remaining work is user-mode chromium feature gaps.**
+
+Run-to-run variance summary today (post-linker-fix):
+- v14: PIPELINE-REACHED, tid=37, GPUCache, exited cleanly via BRK at chromium PC 0x14d73000
+- v15: 6.3M syscalls, then EL0 SIGSEGV at the kernel-VA pattern 0x4020113c
+- v16: EL1 stack overflow — `ldp x12,x13,[sp,#0x60]` with SP=0xbfffffa0 → 0xc0000000 unmapped (kernel stack frame got allocated at top of cave-mapped region 0xc0000000 boundary)
+- v17: EL0 NULL-deref at chromium PC 0x15082930 — chromium tried `ldrb [x22+0x38]` with x22=0
+
+**Next-session play:** the v16 stack-overflow case is a real kernel
+bug (kernel-stack alloc shouldn't put SP within trap-frame-size of
+the unmapped boundary). Quick fix: `alloc_kernel_frame` for thread
+kernel stacks should refuse the very last frame in the address space,
+or we should bump KERNEL_STACK_PAGES from 1 to 2 so even a top-of-
+range allocation has room for the trap frame. The v17 chromium-NULL-
+deref is fundamentally a chromium debugging task — would benefit from
+having content_shell symbols available or a way to instrument the
+specific function at PC 0x15082930.
 
 **Files touched today (this session):**
 - `src/batcave/linux/syscall.rs` — sendmsg_pipe direction fix +
