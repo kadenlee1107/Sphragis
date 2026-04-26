@@ -1,11 +1,20 @@
 /* Bat_OS Linker Script — ARM64 bare metal for QEMU virt machine */
-/* QEMU virt loads kernel at 0x40080000 */
+/* QEMU virt with `-kernel <Image-header binary>` loads at PA 0x40200000.
+ * (Empirically verified: see V8-PT-DIAG output 2026-04-25 where
+ * *0x40080000=0 but *0x40200000=0x14000010 = `b _real_start`.) Linker
+ * VMA must match runtime PA so identity MMU mappings + absolute address
+ * loads against linker-resolved VMAs both find the correct bytes.
+ * Previously . = 0x40080000 — kernel "worked" via PC-relative branches
+ * but every kernel-address absolute load (e.g. `ldr x0, =KERNEL_FN`) was
+ * off by 0x180000, which surfaced as Chromium SIGBUS at fake PC
+ * 0x4020113c after enough indirect calls landed on misread function
+ * pointers. */
 
 ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x40080000;
+    . = 0x40200000;
 
     .text : {
         KEEP(*(.text.boot))

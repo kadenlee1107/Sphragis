@@ -374,7 +374,9 @@ fn compute_kernel_text_hash() -> [u8; 32] {
     unsafe extern "C" {
         static __text_end: u8;
     }
-    let text_start: usize = 0x40080000;
+    // V8-LINKER-FIX 2026-04-25: matches linker.ld . = 0x40200000
+    // (was 0x40080000 — see linker.ld comment).
+    let text_start: usize = 0x40200000;
     let text_end = core::ptr::addr_of!(__text_end) as usize;
     if text_end <= text_start || text_end - text_start > 32 * 1024 * 1024 {
         return [0u8; 32];
@@ -454,7 +456,9 @@ fn print_kernel_hash() {
     unsafe extern "C" {
         static __text_end: u8;
     }
-    let text_start: usize = 0x40080000;
+    // V8-LINKER-FIX 2026-04-25: matches linker.ld . = 0x40200000
+    // (was 0x40080000 — see linker.ld comment).
+    let text_start: usize = 0x40200000;
     let text_end = core::ptr::addr_of!(__text_end) as usize;
     if text_end <= text_start || text_end - text_start > 32 * 1024 * 1024 {
         drivers::uart::puts("[boot] kernel hash: skipped (implausible range)\n");
