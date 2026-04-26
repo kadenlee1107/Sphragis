@@ -246,6 +246,50 @@ deref is fundamentally a chromium debugging task — would benefit from
 having content_shell symbols available or a way to instrument the
 specific function at PC 0x15082930.
 
+---
+
+### LATER (still 2026-04-25): exhaustive hunt for `0x4020113c` source
+
+Spent ~1.5 hours stump-and-rooting the `0x4020113c` user-mode jump.
+Added a series of dedicated detectors, each targeting one hypothesis:
+
+**Hypotheses ruled out (every detector NEVER fired in repeated smoke runs):**
+1. `clone()` capturing parent ELR_EL1 as kernel VA — added warn at
+   PARENT_SYSCALL_ELR.store site for SVC #220 (commit `e6b8c52e`).
+2. TrapFrame/SavedRegs cast confusion — verified layouts match
+   (TrapFrame.elr@248, SavedRegs.elr_el1@256, our casts respect this).
+3. Loader writing kernel-VA value into a chromium GOT slot via
+   RELATIVE/JUMP_SLOT/GLOB_DAT/IRELATIVE relocation — added detector
+   in BOTH single-binary and multi-library reloc paths
+   (commit `0e5450d1`).
+4. `handle_sync_exception` modifying frame.elr to a kernel value while
+   frame.spsr.M=0 (EL0t target) — checked at function exit
+   (commit `e6b8c52e`).
+5. `handle_irq` doing the same — checked at handle_irq exit
+   (commit `e6b8c52e`).
+6. The address `0x4020113c` sitting on the user stack within 16 KB of
+   SP — added EL0-fault dump that scans 2048 8-byte slots looking for
+   exact match OR any kernel-range pointer (commit `0e5450d1`). Zero
+   matches.
+
+**Also confirmed:** kernel binary does NOT contain `0x4020113c` as a
+literal (4-byte, 8-byte, or otherwise). Searched with python; 0 hits.
+
+**What that leaves as the source:**
+- Some chromium-internal data table populated at static-link time
+  with a value that aliases our kernel memory (or computed at runtime
+  from such a value). The leak doesn't pass through any of OUR code.
+- This needs chromium binary disassembly + symbols to track. The kernel
+  side is exhausted via this stump.
+
+**21 commits today**, latest `0e5450d1`. Diagnostic suite is now
+substantial: per-tid syscall ring + frame walk + register dump + BL
+target decoder + stack scan for kernel-VA values + per-handler kernel-
+ELR-to-EL0 detector + loader kernel-value-write detector. Next
+session should use these to chase a different stump (the v17 chromium
+NULL-deref at PC 0x15082930 is a more tractable target — it's
+USER-side and has clear BL chain visibility).
+
 **Files touched today (this session):**
 - `src/batcave/linux/syscall.rs` — sendmsg_pipe direction fix +
   mark_ready in pipe write + sendmsg_pipe
