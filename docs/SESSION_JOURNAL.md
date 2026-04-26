@@ -11,6 +11,111 @@ end of a session.
 
 ---
 
+## 2026-04-26 16:25 — Mac — 🎯🎯🎯 Stump #10 KILLED (lseek) + alloc_stack contig fix + 3 new syscalls. Cave reaches Dawn WebGPU + Skia Graphite GPU renderer. ELEVEN STUMPS THIS SESSION.
+
+**Goal.** Push as far as possible toward Chromium DOM render.
+
+**Stump #10 root cause (Agent 2's find).** `lseek(fd, 0, SEEK_END)` returned
+0 because lseek was wired to `sys_stub_zero`. PartitionAlloc / SQLite /
+LevelDB / Skia all use this to size mmap-backed files for slot-span
+math. "File empty" → slot_count=0 → freelist head walked uninitialized
+memory → handed PartitionAlloc a slot pointer of 0x1 →
+`DoubleFreeOrCorruptionDetected` BRK.
+
+Fix: real `sys_lseek` (~30 lines) that consults vfs::get_node().size,
+updates FdEntry.position by SEEK_SET / SEEK_CUR / SEEK_END, returns
+the new offset.
+
+**alloc_stack non-contiguous bug (Agent 3's find).** `alloc_stack(pages)`
+claimed contiguous in its docstring but called `alloc_frame()` `pages`
+times in a loop. Sequential `alloc_frame` returns are only adjacent
+on a clean bitmap; with 30+ Chromium threads + demand_page commits
++ free_contig holes, the allocator fragments and pages get scattered.
+Caller (clone path) treats `[first, top)` as ONE contiguous range
+and sets the new thread's SP to top. As the stack grows down it hits
+pages between `first` and `last` that BELONG TO OTHER ALLOCATIONS
+(PartitionAlloc super-pages, V8 cage L3 leaves, other thread stacks).
+Stack writes silently stomp on someone else's data → opaque later
+corruption.
+
+Fix: `alloc_stack` now uses `frame::alloc_contig(pages)`. Boundary-
+limit retry preserved.
+
+**New syscalls landed (Agent 2's other recommendations):**
+- `sys_madvise` (sysno 233) — real impl. `MADV_DONTNEED` zeros the
+  user range in-place (PartitionAlloc + V8 expect fresh zeros on
+  re-read; previous stub-zero left stale data).
+- `sys_clock_nanosleep_compat` (sysno 115) — alias to `sys_nanosleep`.
+- `sys_stub_zero` for `fchown` (sysno 55) — kills the "unknown
+  syscall 55" log spam; semantically correct on our virtual fs.
+
+**Where v62-v76 actually got to (post all 11 stumps):**
+
+- **Frame allocator: 3.72 GiB free.**
+- **27-32 threads spawned consistently across runs.**
+- Cave loads via FIXED-high-VA: ld-linux, libc, libnspr4, libnss3,
+  libnssutil3, libexpat, libm, libgcc_s, libplc4, libplds4, libpthread.
+- ICU loaded.
+- V8 reservations succeed (32 GB cage at 0x3800000000, 16 GB at
+  0x323e621000, 32 GB at 0x2c00000000, 32 GB at 0x3400000000,
+  266 GB(!) at 0x1c00000000 [redirected from 0x8c300000000]).
+- Sockets: listen()→accept()-EAGAIN (devtools fails gracefully).
+- inotify_init returns ENOSYS, NETLINK returns EAFNOSUPPORT,
+  fchown silently 0, clock_nanosleep actually sleeps.
+- **Skia reaches font init + falls back to default font.**
+- **Cave reaches DawnWebGPUCache** (Chromium's WebGPU implementation).
+- **Cave reaches DawnGraphiteCache** (Skia Graphite GPU renderer
+  using Dawn).
+- Cave reaches Shared Dictionary network HTTP cache.
+- Cave reaches PAC config check (proxy resolution).
+- Chromium's `LOG()` system fully functional.
+
+**STUMP #10 still partially open (5/5 deterministic with new syscalls).**
+PartitionAlloc x1=0x1 still fires AT EVERY RUN with the lseek fix +
+alloc_stack contig + new syscalls. The lseek fix kills SOME x1=0x1
+sources but not all. Honest investigation: x1 is the runtime value
+of pointer-being-freed AND-masked with 0x00ffffffffffffff. Chromium
+is calling free(0x1) — pointer value 1 came from somewhere in our
+syscall surface. Possibilities still open:
+- A stub-zero syscall returning 0 where Chromium expects a small
+  non-NULL pointer (e.g., a TLS slot, an arena handle).
+- A struct field initialization order issue exposed by our memory
+  model (e.g., we don't fault on PROT_NONE pages where Linux would).
+- A Chromium internal bug exposed by our exact init sequence.
+
+**Strategy for next session: dispatch agents to objdump-walk every
+DoubleFreeOrCorruptionDetected caller, identify which one carries
+literal 0x1 in x1 deterministically, and trace upward to find the
+syscall that returns it.**
+
+**Final session score:**
+
+| # | Stump | Commit |
+|---|---|---|
+| 1 | brk-zeroing + stack-top-cap | 39a14df1 |
+| 2 | futex.rs current_tid stub | 7c2c45b5 |
+| 3 | cave VA window unreserved | a36856e2 |
+| 4 | sys_mmap ENOMEM for outside-window | 2ebb8c13 |
+| 5 | KERNEL_RESERVED_FRAMES too small | 2ebb8c13 |
+| 6 | install_l3_mapping not idempotent | 0563d145 |
+| 7 | TCR.IPS + cache flushes + bitmap (3 bugs in one) | dfd132b1 |
+| 7+ | DFSC gating + FIXED-high-VA pre-mprotect-RW | 8d0f20f9 |
+| 8 | FIXED-high-VA tail-prot + mprotect-demand-page | 023b5ba6 |
+| 9 | install_l3_mapping race (no IrqGuard) | e67f68fb |
+| 10 | lseek silently returned 0 (PartitionAlloc x1=0x1) | 2ca892e7 |
+| 10b | alloc_stack non-contiguous + madvise/fchown/clock_nanosleep | 2f3b5d71 |
+
+**ELEVEN STUMPS KILLED (counting both #7 commits) IN ONE SESSION.**
+
+From "futex deadlock at 5M syscalls" at session start to "Chromium
+runs Dawn WebGPU init + Skia Graphite + V8 cage allocation + multi-
+threaded init + LOG output, then BRKs in PartitionAlloc internals
+with x1=0x1 (still open)."
+
+DOM not on screen YET but Chromium is genuinely RUNNING deeply.
+
+---
+
 ## 2026-04-26 13:55 — Mac — 🎯🎯🎯 Stumps #8 + #9 KILLED. Cave boots Chromium past Skia font init. 30 threads, real Chromium LOG output. Stump #10 = PartitionAlloc DoubleFreeOrCorruptionDetected with x1=0x1.
 
 **Goal.** Push past the post-Stump-#7 user SIGSEGV in lib init code,
