@@ -11,6 +11,107 @@ end of a session.
 
 ---
 
+## 2026-04-26 13:55 — Mac — 🎯🎯🎯 Stumps #8 + #9 KILLED. Cave boots Chromium past Skia font init. 30 threads, real Chromium LOG output. Stump #10 = PartitionAlloc DoubleFreeOrCorruptionDetected with x1=0x1.
+
+**Goal.** Push past the post-Stump-#7 user SIGSEGV in lib init code,
+keep grinding until Chromium displays DOM.
+
+**Stump #8 — FIXED-high-VA path applied user_prot to BSS tail.**
+
+After Stump #7's pre-mprotect-RW fix, the FIXED-high-VA path was:
+1. pre-mprotect [addr, addr+len) RW
+2. touch each page (write 0)
+3. copy file content
+4. mprotect [addr, addr+len) to user_prot
+
+For ld-linux loading a shared lib like libnss3 with PROT_READ|PROT_EXEC
+and len covering text + bss (PT_LOAD memsz > filesz), step 4 set the
+BSS portion to R+X. ld-linux then writes to BSS for zero-init → R/O
+permission fault → cave SIGSEGV.
+
+Fix: only apply user_prot to the file-content portion (rounded up to
+page). Tail past `to_copy` stays RW. Plus: sys_mprotect now
+materializes missing pages with the requested perms when the VA is
+in a registered demand-page reservation (was silently skipping →
+later access demand-paged with default RW which is wrong intent).
+
+**Stump #9 — install_l3_mapping race without IrqGuard.**
+
+PartitionAlloc::CorruptionDetected was firing intermittently on
+worker threads after Skia font init. install_l3_mapping had no
+IrqGuard; sys_mmap or sys_mprotect calling it could be preempted
+by a timer IRQ that scheduled another thread; if that thread also
+ran install_l3_mapping for the same VA, the allocations + L3 writes
+raced and produced conflicting mappings → heap corruption visible
+to PartitionAlloc.
+
+Fix: IrqGuard at install_l3_mapping entry. Atomicity across the
+walk-and-install.
+
+**Where v62-v66 actually got to (post-Stumps-#8+#9):**
+
+- **Frame allocator: 3.72 GiB free** (vs 1.55 GiB in pre-Stump-#7).
+- **30+ threads spawned** (vs 0 in v54, 19 in pre-Stump-#2).
+- Cave loads via FIXED-high-VA: ld-linux, libc, libnspr4, libnss3,
+  libnssutil3, libexpat, libm, libgcc_s, libplc4, libplds4, libpthread.
+- ICU loaded.
+- V8 reservations succeed (32 GB pointer-compression cage at
+  0x3800000000, 16 GB at 0x323e621000, 32 GB at 0x2c00000000,
+  266 GB(!) at 0x3000000000 redirected from 0x8c300000000).
+- Sockets work as far as listen()→accept()-EAGAIN (devtools http
+  server fails gracefully with the documented Chromium error).
+- inotify_init returns ENOSYS, NETLINK socket returns EAFNOSUPPORT
+  (we don't implement; Chromium logs and continues — exactly what's
+  intended).
+- **Skia reaches font init + falls back to default font.**
+- Cave reaches `Shared Dictionary` storage (network HTTP cache).
+- **Chromium's `LOG()` system is fully functional** — emits VERBOSE/
+  WARNING/ERROR lines visible on the kernel UART.
+
+**Stump #10 (still open).** Deterministic
+`partition_alloc::InSlotMetadata::DoubleFreeOrCorruptionDetected`
+called with `UntaggedSlotStart=1` (a small integer being passed as
+a pointer). PartitionAlloc walks the freelist looking for slot 1,
+doesn't find it, BRKs. Same `x1=0x1` across all reproductions.
+
+This is not a kernel-side fix. Either:
+- Chromium has an internal bug exposed by something we don't
+  implement (e.g. unknown syscall 55=fchown returning ENOSYS, or
+  some edge case in our memory model).
+- A specific Chromium init order requires a syscall we stub.
+- A subtle aliasing issue we haven't isolated yet.
+
+**Stochastic alternative**: SIGSEGV in V8 cage region (FAR ~0x300...)
+or content_shell text NULL deref (FAR=0x10 from `ldr x11, [x9, #0x10]`
+with x9=NULL). These are user-space bugs — not kernel.
+
+**Final session score (eight stumps killed, one in scope, two open):**
+
+| # | Stump | Commit |
+|---|---|---|
+| 1 | brk-zeroing + stack-top-cap | 39a14df1 |
+| 2 | futex.rs current_tid stub | 7c2c45b5 |
+| 3 | cave VA window unreserved | a36856e2 |
+| 4 | sys_mmap ENOMEM for outside-window | 2ebb8c13 |
+| 5 | KERNEL_RESERVED_FRAMES too small | 2ebb8c13 |
+| 6 | install_l3_mapping not idempotent | 0563d145 |
+| 7 | TCR.IPS + cache flushes + bitmap (the big one) | dfd132b1, 8d0f20f9 |
+| 8 | FIXED-high-VA tail-prot + mprotect-demand-page | 023b5ba6 |
+| 9 | install_l3_mapping race (no IrqGuard) | e67f68fb |
+| 10 | PartitionAlloc DoubleFreeOrCorruptionDetected x1=0x1 | open (Chromium-side?) |
+| 11 | NULL deref in content_shell text (stochastic) | open |
+
+**From "futex deadlock at 5M syscalls" at session start to "Chromium
+loads 11+ libraries, runs Skia font init, V8 cage allocation, network
+stack init, then BRKs in PartitionAlloc internals."**
+
+DOM is not on screen yet but Chromium is genuinely RUNNING. The
+remaining work is debugging deep Chromium internals which require
+either understanding their internal expectations better or implementing
+more precise syscall semantics.
+
+---
+
 ## 2026-04-26 13:18 — Mac — Stump #7 follow-ons: demand_page DFSC gating + FIXED-high-VA pre-mprotect-RW. Cave now boots Chromium past ICU into multi-library loading (libnspr4/libnss3/libnssutil3/libexpat/libm/libgcc_s).
 
 **Goal.** Fix the post-Stump-#7 regression where cave entered an
