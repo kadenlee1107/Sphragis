@@ -110,8 +110,18 @@ pub fn alloc_frame() -> Option<usize> {
 
 /// Kernel-reserved frames at the top of the memory range. Never returned
 /// by `alloc_frame`, so cave user-window mappings cannot alias into them.
-/// Sized for ~64 caves × 4 tables each (256) + slack.
-pub const KERNEL_RESERVED_FRAMES: usize = 512;
+///
+/// HISTORY: was 512 (= 2 MB) sized for cave L1/L2 tables only. Once
+/// demand_page::install_l3_mapping started lazily allocating L2/L3 tables
+/// (Stump #3 + Stump #4 fixes), and Chromium spread its 30+ thread stacks
+/// + many small_mmap regions across hundreds of distinct 2-MB pages,
+/// 512 frames blew through ~2300 demand-page commits and threw
+/// `oom for L3 table`.
+///
+/// 4096 frames = 16 MB on a 4 GB system (0.4%). Plenty for any
+/// reasonable cave + small_mmap workload, including 32 caves of
+/// content_shell-class binaries with their full thread/cage layouts.
+pub const KERNEL_RESERVED_FRAMES: usize = 4096;
 
 /// V2-001/V2-040 fix: allocate a frame from the kernel-reserved pool.
 /// Used by `setup_cave_pagetable` / `setup_cave_pagetable_at` so a cave's

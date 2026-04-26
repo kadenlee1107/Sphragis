@@ -11,6 +11,111 @@ end of a session.
 
 ---
 
+## 2026-04-26 00:18 — Mac — 🎯🎯 STUMPS #4 + #5 KILLED in one push: ICU loads via install_l3 fallback + kernel pool bumped 8x to fit demand-paging traffic. New corruption (#6) lurks deeper.
+
+**Goal.** Push past the v37 ICU-mmap ENOMEM ceiling.
+
+**Stump #4 — ICU file-backed mmap fails outside cave window.**
+
+After Stump #3 (cave VA window properly reserved), `sys_mmap`'s
+file-backed path bailed with `FAILED (outside cave user window)` for
+icudtl.dat (10.4 MB) because `alloc_contig` returned PA 0x76f80000 —
+just past the cave's identity window (`phys_base + 400 MB ≈ 0x76a00000`).
+The check at `syscall.rs:2523` returned ENOMEM → Chromium aborted ICU
+init.
+
+Same bug class as #3: `sys_mmap` was implicitly relying on the cave
+window aliasing (Stump #3) to give every allocated frame a user-VA
+"for free". Once #3 was fixed, this assumption broke.
+
+Fix: `src/batcave/linux/syscall.rs:2523-2599` — replace the hard
+ENOMEM with a fallback that:
+1. Allocates a fresh `aligned_len` slice from `SMALL_MMAP_CURSOR`
+   (the high-VA region used for anon/lazy mmaps).
+2. For each page, calls `demand_page::install_l3_mapping(active_l1,
+   user_va, alloc_contig_pa, USER_PAGE_FLAGS)`.
+3. Sledgehammer `tlbi vmalle1` so EL0 walks see the new entries.
+4. Returns the small_mmap VA.
+
+Made `install_l3_mapping` and `USER_PAGE_FLAGS` `pub(crate)` for
+this. The kernel-side file content copy already worked unchanged —
+PAs in `[0x40000000, 0xC0000000)` are identity-mapped via L2_high /
+L2_xhi for kernel access regardless of whether they have a user VA.
+
+Verification: smoke v40 logged 4 successful `out-of-window install_l3`
+events, mapping ICU + 3 other big libs (font/locale/etc.) into the
+small_mmap region.
+
+**Stump #5 — `oom for L3 table` after ~2300 demand-page commits.**
+
+Smoke v40 then crashed with:
+
+```
+[demand_page] install_l3 failed va=0x0000004400404000
+              reason: demand_page: oom for L3 table
+```
+
+Each demand-page commit on a new 2-MB-aligned region requires fresh
+L2 + L3 tables from `frame::alloc_kernel_frame()`. With Chromium
+spreading 30+ thread stacks + many small_mmap regions across hundreds
+of distinct 2 MB pages, plus my Stump #4 fix adding more `install_l3`
+traffic, the 512-frame kernel-reserved pool was exhausted in ~2300
+commits.
+
+Fix: `src/kernel/mm/frame.rs:114` — bump `KERNEL_RESERVED_FRAMES`
+from 512 to 4096 (= 16 MB on a 4 GB system, 0.4% overhead). Plenty
+of slack for any reasonable cave + small_mmap workload.
+
+Also `src/batcave/linux/demand_page.rs:192` — wrap the
+`install_l3_mapping` Err with the actual reason string so future
+failures don't show as opaque "page-table install failed".
+
+**A/B test confirmed both fixes are necessary.**
+
+- v41 (Stump #4 + KRF=4096): no OOM. Cave reaches PartitionAlloc
+  heap, hits a deeper corruption bug (`CorruptionDetected` BRK at
+  ELR=0x14d73000, x1=0x34001b06a0 in PartitionAlloc heap region).
+- v42 (Stump #4 + KRF=512): OOMs at install_l3 first. The deeper
+  corruption never surfaces because we don't run far enough.
+
+So Stump #5 is genuinely needed (not a workaround), and the v41 BRK
+is a real Stump #6 — independent of the Stump #3 cave-window bug, but
+hidden by the OOM ceiling until #5 was fixed.
+
+**Stump #6 (next session).** PartitionAlloc::CorruptionDetected fires
+with x1 = a heap pointer in the PartitionAlloc super-page region
+(0x32...-0x72... reservation). Same ELR=0x14d73000 as the original
+Stump #3a, but different cause:
+- Stump #3a: cave-window aliasing → low-VA writes corrupted heap (FIXED).
+- Stump #6: ??? — still corrupting heap somehow even with no aliasing
+  and no L3 OOM.
+
+Hypotheses to investigate (parallel agents next time):
+1. `install_l3_mapping` overwriting an existing valid L3 entry without
+   freeing the old frame (Agent 2 in earlier session flagged this as
+   latent; my Stump #4 fix may have made it reachable).
+2. demand_page being called with a FAR that already has a valid L3 entry
+   (race window? mis-classified fault?).
+3. Something in PartitionAlloc's hashing (super-page key derivation)
+   that fails when small_mmap region overlaps with what PartitionAlloc
+   expects to be exclusive.
+4. The 8-slot reservation table silently dropping registrations past
+   `MAX_RESERVATIONS = 8` (Agent 3 flagged this earlier).
+
+**State of the tree:**
+- `src/batcave/linux/syscall.rs` — Stump #4 install_l3 fallback in sys_mmap.
+- `src/batcave/linux/demand_page.rs` — install_l3_mapping + USER_PAGE_FLAGS pub(crate); Err includes reason string.
+- `src/kernel/mm/frame.rs` — KERNEL_RESERVED_FRAMES = 4096.
+- Build env: same as before. Smoke verdict: PIPELINE-REACHED.
+
+**Next actions (prioritized):**
+1. Open Stump #6 — dispatch parallel agents on PartitionAlloc heap
+   corruption hypotheses above.
+2. Run more smokes for histogram of post-#5 failure modes.
+3. The deeper we get, the closer we are to actual DOM render.
+
+---
+
 ## 2026-04-25 23:38 — Mac — 🎯🎯 STUMP #3 KILLED: cave VA window aliased unreserved physical frames → alloc_frame served frames already mapped at content_shell low VAs → PartitionAlloc heap silently corrupted
 
 **Goal.** Find what corrupts PartitionAlloc heap (CorruptionDetected BRK at ELR=0x14d73000, modal failure 3/5 runs).

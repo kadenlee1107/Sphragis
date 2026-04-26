@@ -55,7 +55,7 @@ const PAGE_UXN: u64   = 1 << 54;
 /// Regions that *need* execute permission (V8 JIT code areas, PLT
 /// trampolines) must call `sys_mprotect` with `PROT_EXEC` to clear
 /// UXN. See `sys_mprotect` in syscall.rs.
-const USER_PAGE_FLAGS: u64 = PAGE_VALID | PAGE_AF | PAGE_SH | PAGE_ATTR
+pub(crate) const USER_PAGE_FLAGS: u64 = PAGE_VALID | PAGE_AF | PAGE_SH | PAGE_ATTR
     | PAGE_AP_EL0_RW | PAGE_PXN | PAGE_UXN;
 
 const MAX_RESERVATIONS: usize = 8;
@@ -189,7 +189,14 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     }
 
     let page_va = far & !0xFFFu64;
-    if install_l3_mapping(l1_phys, page_va, frame as u64, USER_PAGE_FLAGS).is_err() {
+    let install_result = install_l3_mapping(l1_phys, page_va, frame as u64, USER_PAGE_FLAGS);
+    if let Err(why) = install_result {
+        uart::puts("[demand_page] install_l3 failed va=0x");
+        let hex = b"0123456789abcdef";
+        for sh in (0..16).rev() {
+            uart::putc(hex[((page_va >> (sh * 4)) & 0xF) as usize]);
+        }
+        uart::puts(" reason: "); uart::puts(why); uart::puts("\n");
         // Leak the page — frame is still allocated but unmapped. Next
         // iteration will grab a fresh one. Small-leak < kernel crash.
         uart::puts("[demand_page] page-table install failed\n");
@@ -228,7 +235,7 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
 /// Walk/create L1→L2→L3 for `user_va` under the given cave L1, and
 /// install an L3 entry mapping `user_va`'s 4 KB page to `phys_page`.
 /// Allocates intermediate tables from the kernel frame pool on demand.
-fn install_l3_mapping(
+pub(crate) fn install_l3_mapping(
     l1_phys: u64,
     user_va: u64,
     phys_page: u64,

@@ -2521,10 +2521,81 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                 }
             };
             if end > USER_WINDOW_SIZE {
-                uart::puts(" FAILED (outside cave user window)\n");
-                super::quotas::refund_active(
-                    super::quotas::Resource::Mem, charge_bytes);
-                return ENOMEM;
+                // 🎯 STUMP #4 FIX: alloc_contig returned frames outside
+                // the cave's identity-mapped window. This used to be a
+                // hard ENOMEM — fine when the cave window happened to
+                // include unreserved frames (the Stump #3 aliasing bug),
+                // but fatal once the window is properly reserved. Falls
+                // here for big file-backed mmaps like icudtl.dat (10 MB,
+                // PA lands at ~0x76f80000, just past phys_base+400MB).
+                //
+                // Fix: install L3 mappings into the small_mmap VA region
+                // so EL0 can reach the alloc_contig'd frames at any PA.
+                // The kernel-side file-content copy above already worked
+                // (kernel identity-maps PAs up to 0xC0000000 via L2_high
+                // and L2_xhi); only the user-VA story was broken.
+                use core::sync::atomic::Ordering as Ord2;
+                let active_l1: u64;
+                unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) active_l1); }
+                let active_l1 = active_l1 & !1u64;
+                ensure_small_mmap_reservation(active_l1);
+
+                // Atomically reserve a fresh slice of the small_mmap region.
+                let aligned_len = pages * 4096;
+                let mut va_base = SMALL_MMAP_CURSOR.load(Ord2::Acquire);
+                if va_base == 0 {
+                    let _ = SMALL_MMAP_CURSOR.compare_exchange(
+                        0, SMALL_MMAP_BASE, Ord2::AcqRel, Ord2::Acquire);
+                    va_base = SMALL_MMAP_CURSOR.load(Ord2::Acquire);
+                }
+                let mapped_va = loop {
+                    let next = va_base.saturating_add(aligned_len);
+                    if (next as u64) >= SMALL_MMAP_END as u64 {
+                        uart::puts(" FAILED (small_mmap exhausted)\n");
+                        super::quotas::refund_active(
+                            super::quotas::Resource::Mem, charge_bytes);
+                        return ENOMEM;
+                    }
+                    match SMALL_MMAP_CURSOR.compare_exchange(
+                        va_base, next, Ord2::AcqRel, Ord2::Acquire,
+                    ) {
+                        Ok(_) => break va_base,
+                        Err(cur) => va_base = cur,
+                    }
+                };
+
+                // Install L3 mappings for every page so EL0 can read/write
+                // the file content we already copied into the frames.
+                for i in 0..pages {
+                    let user_va = (mapped_va + i * 4096) as u64;
+                    let phys    = (base + i * 4096) as u64;
+                    if let Err(msg) = super::demand_page::install_l3_mapping(
+                        active_l1, user_va, phys,
+                        super::demand_page::USER_PAGE_FLAGS,
+                    ) {
+                        uart::puts(" FAILED (install_l3_mapping: ");
+                        uart::puts(msg);
+                        uart::puts(")\n");
+                        super::quotas::refund_active(
+                            super::quotas::Resource::Mem, charge_bytes);
+                        return ENOMEM;
+                    }
+                }
+                // Sledgehammer TLB flush so the new L3 entries are
+                // visible to subsequent walks under this TTBR0.
+                unsafe {
+                    core::arch::asm!("dsb ishst");
+                    core::arch::asm!("tlbi vmalle1");
+                    core::arch::asm!("dsb ish");
+                    core::arch::asm!("isb");
+                }
+                uart::puts(" → out-of-window install_l3 → uva=0x");
+                let hex2 = b"0123456789abcdef";
+                for sh in (0..16).rev() {
+                    uart::putc(hex2[((mapped_va >> (sh * 4)) & 0xF) as usize]);
+                }
+                uart::puts("\n");
+                return mapped_va as i64;
             }
 
             // CHROMIUM-PHASE-B: add the cave's virt_base to the phys
