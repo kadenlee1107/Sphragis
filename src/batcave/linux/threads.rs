@@ -1059,6 +1059,19 @@ pub fn set_child_resume(tid: u32, resume_pc: u64, _parent_sp: u64) {
 
 /// Helper for the stack fallback path. Allocates contiguous 4 KiB frames
 /// and returns (base, top). 16-byte aligned top.
+///
+/// 🎯 STUMP #10 FIX: previously called `frame::alloc_frame()` in a loop,
+/// which DOES NOT guarantee contiguity — `alloc_frame` just returns the
+/// lowest clear bit. With heavy fragmentation (many threads, demand-page
+/// commits), `pages` sequential calls return scattered frames. Code then
+/// computed `top = last + PAGE_SIZE` and treated `[first, top)` as one
+/// contiguous stack range, but the gap pages were owned by other
+/// allocations — thread stack writes silently clobbered PartitionAlloc /
+/// V8 / TLS data sitting in those frames. Symptom:
+/// `PartitionAlloc::DoubleFreeOrCorruptionDetected` with `x1=0x1`.
+///
+/// Fix: use `alloc_contig(pages)` so the returned run is guaranteed
+/// physically contiguous. Boundary check still applies to the LAST page.
 fn alloc_stack(pages: usize) -> Option<(u64, u64)> {
     // V8-STACK-TOP-FIX 2026-04-25: refuse any allocation whose top hits
     // the cave-mapped boundary at 0xC0000000. Cave's TTBR0 maps L2_xhi
@@ -1070,32 +1083,23 @@ fn alloc_stack(pages: usize) -> Option<(u64, u64)> {
     // that would put `top` >= 0xC0000000 by retrying with a fresh one.
     const TOP_LIMIT: u64 = 0xC0000000;
 
-    fn try_alloc_below_limit(limit: u64) -> Option<u64> {
-        // Try up to 8 times; in practice the frame allocator is sequential
-        // so the very-last frame only comes up once.
-        for _ in 0..8 {
-            let p = frame::alloc_frame()? as u64;
-            if p + PAGE_SIZE as u64 <= limit {
-                return Some(p);
-            }
-            // Frame at the boundary — leak it and try again.
-            // (We don't have a free path that handles single frames cleanly.)
+    // Try up to 8 times to find an alloc_contig run whose top fits below
+    // the limit. Any rejected run is leaked (we can't free it without
+    // a free_contig that takes a count, which we have — but the spec
+    // here matches the previous "leak the boundary frame" behavior
+    // applied to the whole run).
+    for _ in 0..8 {
+        let first = frame::alloc_contig(pages)? as u64;
+        let last  = first + ((pages - 1) * PAGE_SIZE) as u64;
+        let top   = (last + PAGE_SIZE as u64) & !0xFu64;
+        if top + 256 > TOP_LIMIT {
+            // Leak the run; try again. alloc_contig is sequential
+            // bottom-up so this only triggers near the very top.
+            continue;
         }
-        None
+        return Some((first, top));
     }
-
-    let first = try_alloc_below_limit(TOP_LIMIT)?;
-    let mut last = first;
-    for _ in 1..pages {
-        let p = try_alloc_below_limit(TOP_LIMIT)?;
-        last = p;
-    }
-    let top = (last + PAGE_SIZE as u64) & !0xFu64;
-    // Belt-and-suspenders: if somehow `top` still lands at the limit
-    // (should be impossible given the per-frame check), refuse rather
-    // than return a doomed stack.
-    if top + 256 > TOP_LIMIT { return None; }
-    Some((first, top))
+    None
 }
 
 // -----------------------------------------------------------------------------

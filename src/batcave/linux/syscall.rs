@@ -344,10 +344,20 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         // 223 is fadvise64. 210 is shutdown (moved to Network block below).
         // Previously these were mislabeled as shmget/shmctl/shutdown-stub.
         nr::FADVISE64 => (SyscallCat::Always, sys_stub_zero),
-        233 => (SyscallCat::Always, sys_stub_zero),  // madvise
+        233 => (SyscallCat::Always, sys_madvise), // 🎯 STUMP #11: real madvise (handles MADV_DONTNEED by zeroing the range)
         262 => (SyscallCat::Always, sys_stub_zero),  // getrlimit equiv
         276 => (SyscallCat::Always, sys_stub_zero),  // renameat2
         279 => (SyscallCat::Memory, sys_memfd_create), // memfd_create — needs mem cap
+        // 🎯 STUMP #11: fchown/lchown/chown — return success (no-op on our virtual fs).
+        // Was: unknown syscall 55, returned 0 anyway, but with a stale "[linux] unknown
+        // syscall 55" warning that suggested something was wrong. Stub-zero matches
+        // semantics: our VFS doesn't track owner/group, no-op is correct.
+        55 => (SyscallCat::Always, sys_stub_zero),  // fchown
+        // 🎯 STUMP #11: clock_nanosleep — alias to sys_nanosleep. The clockid_t arg
+        // (x0) is ignored; we treat it as CLOCK_MONOTONIC since cntpct_el0 is
+        // monotonic. Linux's clock_nanosleep with TIMER_ABSTIME would need
+        // different handling but we don't see that in practice.
+        115 => (SyscallCat::Always, sys_clock_nanosleep_compat),
         // rseq: restartable sequences, added in Linux 4.18. glibc ≥ 2.35
         // probes it once per thread; if we return ENOSYS glibc falls back
         // gracefully to the non-rseq path. Stub-zero is wrong because it
@@ -543,6 +553,54 @@ fn sys_lseek(args: [u64; 6]) -> i64 {
     if new_pos < 0 { return EINVAL; }
     entry.position = new_pos as usize;
     new_pos
+}
+
+// 🎯 STUMP #11: madvise — handle MADV_DONTNEED by zeroing the user range.
+// PartitionAlloc + V8 use madvise(MADV_DONTNEED) to "decommit" pages,
+// expecting subsequent reads to return zero. Returning 0 silently without
+// zeroing leaves stale data → PartitionAlloc reads garbage freelist pointers.
+//
+// CAREFUL: only zero for MADV_DONTNEED. MADV_FREE is "lazy free — kernel
+// may discard"; not zeroing is valid. MADV_REMOVE is for shmem hole-punch.
+fn sys_madvise(args: [u64; 6]) -> i64 {
+    let addr = args[0] as usize;
+    let len  = args[1] as usize;
+    let advice = args[2] as i32;
+    const MADV_DONTNEED: i32 = 4;
+    if len == 0 { return 0; }
+    if advice == MADV_DONTNEED {
+        // Tolerate addrs in registered demand-page reservations even if
+        // is_user_range rejects them — the cave window check is cave-VA-only.
+        let in_user = uaccess::is_user_range(addr, len);
+        let in_resv = super::demand_page::is_in_active_reservation(addr, len);
+        if !in_user && !in_resv {
+            return 0; // silently ignore unmapped advice
+        }
+        // Zero in 8-byte chunks. If the page isn't backed yet, the
+        // demand-page handler will give us a fresh zero page on first
+        // write — which is exactly the MADV_DONTNEED semantic.
+        unsafe {
+            let mut p = addr;
+            let end = addr + len;
+            while p + 8 <= end {
+                core::ptr::write_volatile(p as *mut u64, 0);
+                p += 8;
+            }
+            while p < end {
+                core::ptr::write_volatile(p as *mut u8, 0);
+                p += 1;
+            }
+        }
+    }
+    0
+}
+
+// 🎯 STUMP #11: clock_nanosleep — alias to nanosleep. Ignores the
+// clockid_t arg (x0) and the TIMER_ABSTIME flag (x1); we treat the
+// timespec at x2 as a relative duration on cntpct_el0 (monotonic).
+fn sys_clock_nanosleep_compat(args: [u64; 6]) -> i64 {
+    // Forward to sys_nanosleep with the timespec arg (x2 → x0).
+    sys_nanosleep([args[2], args[3], 0, 0, 0, 0])
 }
 
 // ─── nanosleep (101) — real sleep using ARM64 generic timer ───
