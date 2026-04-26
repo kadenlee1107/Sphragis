@@ -11,6 +11,107 @@ end of a session.
 
 ---
 
+## 2026-04-25 17:30 — Mac — 🎯 ROOT CAUSE #2: sendmsg_pipe wrote to wrong buffer; +mark_ready + active-poll → 5.35M syscalls (vs 3K), new wall is kernel data abort
+
+**Goal:** Push past the wall where 4 renderer threads spin forever in
+epoll_pwait waiting for events that never come.
+
+**The headline fix.** `sendmsg_pipe` was writing the SCM_RIGHTS+iov data
+into the WRONG pipe buffer. Convention in `pipe_buf::write(slot, side,
+data)` is that `side` = the WRITER's side and data goes into that
+side's outbound buffer (which the OPPOSITE side reads). The code passed
+`side ^ 1`, so the SENDER's iov data was being deposited into the
+SENDER's own read-buffer — the receiver never saw a single byte. Every
+Mojo sendmsg silently black-holed; every renderer epoll_pwait waited
+forever on a pipe that would never fire. Fix: pass `side` (the writer's
+side), not `side ^ 1`. One-character delta, massive consequence.
+
+**Wake plumbing for epoll.** Even with the right buffer, `epoll_pwait`
+still didn't see the data because `mark_ready` wasn't being called by
+most writers. Added:
+- `sys_write` pipe path → `mark_ready(peer_fd, EPOLLIN)` after a
+  successful `pipe_buf::write`. (Previously only eventfd_write did
+  this.)
+- `sendmsg_pipe` → same wake on the peer FD after a successful
+  multi-iov pipe write.
+- `fd::pipe_peer_fd(slot, side)` helper that scans the current cave's
+  FD table for the FD that owns the OPPOSITE side of a pipe pair.
+  Required because pipe_buf doesn't know FD numbers.
+- `epoll::drain_ready` now actively polls underlying FD state on every
+  iteration: for any interest, if it's an eventfd/timerfd/pipe and the
+  underlying state is "readable", OR EPOLLIN into `entry.ready`.
+  Without this, a timerfd that expires while a thread sits in
+  epoll_pwait would never trigger because nobody was calling
+  `mark_ready` on timer-fire.
+
+**Cooperative yield is real now.** Changed `epoll::cooperative_yield()`
+from a bare `asm!("yield")` (just a CPU hint, doesn't switch threads)
+to a real call into `threads::schedule()`. With the previous
+implementation, an epoll-spinning thread could starve every other
+runnable thread in its cave because it never voluntarily handed off
+the CPU; we relied entirely on the timer IRQ to preempt. Now each
+unsuccessful `drain_ready` immediately yields to whoever's runnable.
+
+**fd helpers added.** For wake routing:
+- `fd::pipe_peer_fd(pair_slot, writer_side)` — FD owning the opposite side
+- `fd::eventfd_fd_for_slot(slot)` — FD owning an eventfd slot
+- `fd::timerfd_fd_for_slot(slot)` — FD owning a timerfd slot
+
+**The result.** Smoke advanced from syscall 3,072 (the previous wall)
+to syscall 5,350,400 — 1700× more progress. Renderer process,
+fontconfig setup, leveldb persistent storage init, V8 Code Cache init,
+NETLINK probe (gracefully fails), inotify probe (gracefully fails),
+multi-thread cond-var dance — all happening for real now.
+
+**The new wall.** Around syscall 5.35M, a kernel `DATA ABORT
+DFSC=0x05` (translation fault L1) fires repeatedly: `FAR=0xc0000000`,
+`ELR=0x40201140`, `TTBR0=0xbffff000` (cave 1's user PT). DFSC=0x05 =
+the L1 page-table walk for 0xc0000000 returned an invalid entry — the
+kernel is trying to dereference a user-space pointer into a region
+cave 1 doesn't have mapped.
+
+Confusing detail: ELR=0x40201140 is in `.rodata` (font bitmap data),
+not `.text` (which ends at 0x401a9dec). So either the kernel jumped
+to a stale function pointer that happens to point into rodata, or the
+exception entry is reading a corrupt frame — needs investigation.
+
+The abort handler returns without skipping the instruction, so it
+re-fires immediately and we hit `[abort] too many — halting binary`
+after 3 reps. Then the binary stops making forward progress.
+
+**Per-tid sample at the freeze:** 29 threads running. Many blocked on
+libc cond_var futexes (`uaddr=0x1a0b5fc0 val=2`, `uaddr=0x18000d8000
+val=2`). Last known syscall before abort: t6 doing clock_gettime.
+
+**Files touched today (this session):**
+- `src/batcave/linux/syscall.rs` — sendmsg_pipe direction fix +
+  mark_ready in pipe write + sendmsg_pipe
+- `src/batcave/linux/epoll.rs` — active-poll in drain_ready;
+  cooperative_yield → schedule()
+- `src/batcave/linux/fd.rs` — pipe_peer_fd / eventfd_fd_for_slot /
+  timerfd_fd_for_slot helpers
+
+**Next session priorities:**
+1. **Identify the source of FAR=0xc0000000 fault.** Strategies:
+   (a) build with `debug = true` in release profile so symbols survive
+       and we can resolve 0x40201140 to a Rust function — but it's in
+       rodata so probably an indirect-call target;
+   (b) add a one-shot `[abort] caller_lr=0x...` print that captures
+       x30 (link register) at abort time so we know who CALLED into
+       the bad PC;
+   (c) bisect: temporarily revert cooperative_yield → schedule() and
+       see if abort still fires. If abort vanishes, we have the
+       smoking gun. If it persists, the cause is in the
+       sendmsg/pipe-direction fix or earlier.
+2. **Once the abort is fixed**, smoke past 5.35M syscalls and look for
+   the DOM dump output (`<html>`, `<body>`, etc.) on stdout.
+3. **Clean up the dump rate.** With cooperative_yield calling
+   schedule() every iteration, the periodic dump fires constantly.
+   Either bump the dump period from 1024 to 65536 syscalls, or
+   suppress it when we just dumped < N ms ago.
+
+---
+
 ## 2026-04-25 17:05 — Mac — 🚀 ROOT CAUSE: daifclr in cxt_switch_cooperative. IRQ rate 10/30s → 120Hz. Past the wall!
 
 The kernel wall we'd been chasing for the entire session — Chromium
