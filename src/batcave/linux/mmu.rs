@@ -294,18 +294,30 @@ pub fn setup_cave_pagetable_at(
     // can land past 0x50000000) via the kernel identity map while syscalls
     // run under the cave's TTBR0.
     let l2_xhi = frame::alloc_kernel_frame().ok_or("oom for cave L2_xhi (kernel pool)")?;
+    // 🎯 STUMP #7 FIX: extend identity map to cover the full 4 GiB
+    // physical RAM (paired with QEMU_MEMORY_END bump in mm/mod.rs).
+    // L2_xxhi covers [0xC0000000, 0x100000000); L2_xxxhi covers
+    // [0x100000000, 0x140000000). Without these, alloc_frame would
+    // hand out frames in the new range but kernel writes to them
+    // (demand_page::install, file copies, etc.) would DATA ABORT.
+    let l2_xxhi = frame::alloc_kernel_frame().ok_or("oom for cave L2_xxhi (kernel pool)")?;
+    let l2_xxxhi = frame::alloc_kernel_frame().ok_or("oom for cave L2_xxxhi (kernel pool)")?;
 
     // Zero tables
-    for table in [l1, l2_low, l2_high, l2_xhi] {
+    for table in [l1, l2_low, l2_high, l2_xhi, l2_xxhi, l2_xxxhi] {
         for i in 0..(PAGE_SIZE / 8) {
             unsafe { core::arch::asm!("str xzr, [{a}]", a = in(reg) table + i * 8); }
         }
     }
 
     // L1[0] → L2_low, L1[1] → L2_high, L1[2] → L2_xhi
+    // L1[3] → L2_xxhi (kernel identity 0xC0000000-0x100000000)
+    // L1[4] → L2_xxxhi (kernel identity 0x100000000-0x140000000)
     write_pte(l1, 0, l2_low as u64 | TABLE_DESC);
     write_pte(l1, 1, l2_high as u64 | TABLE_DESC);
     write_pte(l1, 2, l2_xhi as u64 | TABLE_DESC);
+    write_pte(l1, 3, l2_xxhi as u64 | TABLE_DESC);
+    write_pte(l1, 4, l2_xxxhi as u64 | TABLE_DESC);
 
     // L2_low: map THIS cave's user-space binary (400 MB window starting
     // at `virt_base`).  With `virt_base = 0x10000000` the user blocks
@@ -366,9 +378,12 @@ pub fn setup_cave_pagetable_at(
         write_pte(l2_low, mmio / 0x200000, mmio as u64 | BLOCK_DEVICE);
     }
 
-    // L2_high + L2_xhi: identity map full 2 GB kernel RAM (mirror
-    // `setup_and_enable`). Transitional widen past __text_end stays in
-    // place until .text.cold.* actually lands inside the .text segment.
+    // L2_high + L2_xhi + L2_xxhi + L2_xxxhi: identity map the full
+    // 4 GiB kernel RAM (mirror `setup_and_enable`). Transitional widen
+    // past __text_end stays in place until .text.cold.* actually lands
+    // inside the .text segment. The two HIGHER tables (L2_xxhi for
+    // [0xC0000000, 0x100000000), L2_xxxhi for [0x100000000, 0x140000000))
+    // never contain text, so they always get the EL1-RW + UXN flags.
     let text_end = text_end_addr();
     let kblk = |addr: u64| -> u64 {
         if addr + 0x200000 <= text_end {
@@ -385,6 +400,14 @@ pub fn setup_cave_pagetable_at(
     for block in 0..512 {
         let addr = 0x80000000u64 + (block as u64) * 0x200000;
         write_pte(l2_xhi, block, addr | kblk(addr));
+    }
+    for block in 0..512 {
+        let addr = 0xC0000000u64 + (block as u64) * 0x200000;
+        write_pte(l2_xxhi, block, addr | kblk(addr));
+    }
+    for block in 0..512 {
+        let addr = 0x100000000u64 + (block as u64) * 0x200000;
+        write_pte(l2_xxxhi, block, addr | kblk(addr));
     }
 
     unsafe {
@@ -512,11 +535,14 @@ pub fn fork_cave_pagetable(
     use crate::kernel::mm::frame;
 
     // 1. Allocate child page tables.
-    let child_l1     = frame::alloc_kernel_frame().ok_or("fork: oom L1")?;
-    let child_l2_low = frame::alloc_kernel_frame().ok_or("fork: oom L2_low")?;
-    let child_l2_high= frame::alloc_kernel_frame().ok_or("fork: oom L2_high")?;
-    let child_l2_xhi = frame::alloc_kernel_frame().ok_or("fork: oom L2_xhi")?;
-    for t in [child_l1, child_l2_low, child_l2_high, child_l2_xhi] {
+    let child_l1      = frame::alloc_kernel_frame().ok_or("fork: oom L1")?;
+    let child_l2_low  = frame::alloc_kernel_frame().ok_or("fork: oom L2_low")?;
+    let child_l2_high = frame::alloc_kernel_frame().ok_or("fork: oom L2_high")?;
+    let child_l2_xhi  = frame::alloc_kernel_frame().ok_or("fork: oom L2_xhi")?;
+    // 🎯 STUMP #7: kernel identity-map extended into L1[3]+L1[4].
+    let child_l2_xxhi  = frame::alloc_kernel_frame().ok_or("fork: oom L2_xxhi")?;
+    let child_l2_xxxhi = frame::alloc_kernel_frame().ok_or("fork: oom L2_xxxhi")?;
+    for t in [child_l1, child_l2_low, child_l2_high, child_l2_xhi, child_l2_xxhi, child_l2_xxxhi] {
         unsafe {
             for i in 0..(PAGE_SIZE / 8) {
                 core::arch::asm!("str xzr, [{a}]",
@@ -525,18 +551,27 @@ pub fn fork_cave_pagetable(
         }
     }
 
-    // 2. L1 entries: child's L2s for the standard 3 slots.
-    write_pte(child_l1, 0, child_l2_low  as u64 | TABLE_DESC);
-    write_pte(child_l1, 1, child_l2_high as u64 | TABLE_DESC);
-    write_pte(child_l1, 2, child_l2_xhi  as u64 | TABLE_DESC);
+    // 2. L1 entries: child's L2s for the standard 5 kernel-identity slots.
+    write_pte(child_l1, 0, child_l2_low   as u64 | TABLE_DESC);
+    write_pte(child_l1, 1, child_l2_high  as u64 | TABLE_DESC);
+    write_pte(child_l1, 2, child_l2_xhi   as u64 | TABLE_DESC);
+    write_pte(child_l1, 3, child_l2_xxhi  as u64 | TABLE_DESC);
+    write_pte(child_l1, 4, child_l2_xxxhi as u64 | TABLE_DESC);
 
-    // 3. L2_high + L2_xhi: copy verbatim (kernel identity mappings,
-    //    same for every cave; never written to from EL0).
-    let parent_l2_high = unsafe {
-        core::ptr::read_volatile((parent_l1 + 8) as *const u64)
+    // 3. L2_high + L2_xhi + L2_xxhi + L2_xxxhi: copy verbatim
+    //    (kernel identity mappings, same for every cave; never
+    //    written to from EL0).
+    let parent_l2_high  = unsafe {
+        core::ptr::read_volatile((parent_l1 + 8)  as *const u64)
     } & 0x0000_FFFF_FFFF_F000;
-    let parent_l2_xhi  = unsafe {
+    let parent_l2_xhi   = unsafe {
         core::ptr::read_volatile((parent_l1 + 16) as *const u64)
+    } & 0x0000_FFFF_FFFF_F000;
+    let parent_l2_xxhi  = unsafe {
+        core::ptr::read_volatile((parent_l1 + 24) as *const u64)
+    } & 0x0000_FFFF_FFFF_F000;
+    let parent_l2_xxxhi = unsafe {
+        core::ptr::read_volatile((parent_l1 + 32) as *const u64)
     } & 0x0000_FFFF_FFFF_F000;
     for i in 0..512 {
         let pte = unsafe {
@@ -550,14 +585,29 @@ pub fn fork_cave_pagetable(
         };
         write_pte(child_l2_xhi, i, pte);
     }
+    for i in 0..512 {
+        let pte = unsafe {
+            core::ptr::read_volatile((parent_l2_xxhi + (i * 8) as u64) as *const u64)
+        };
+        write_pte(child_l2_xxhi, i, pte);
+    }
+    for i in 0..512 {
+        let pte = unsafe {
+            core::ptr::read_volatile((parent_l2_xxxhi + (i * 8) as u64) as *const u64)
+        };
+        write_pte(child_l2_xxxhi, i, pte);
+    }
 
-    // 4. L1[3..512]: V8 cage and other high-VA user mappings live
+    // 4. L1[5..512]: V8 cage and other high-VA user mappings live
     //    here (e.g. L1 idx 0x60 for VA 0x18_0000_0000). Demand
     //    paging populates them lazily as the parent touches new
     //    addresses. Walk each L1 entry; if it points to a user
     //    L2, deep-copy that L2's L3 pages (cage allocations are
     //    page-granular L3 entries, never 2 MB blocks).
-    for l1_idx in 3..512usize {
+    //
+    //    🎯 STUMP #7: changed lower bound from 3 to 5 because L1[3]+L1[4]
+    //    are now kernel identity mappings (handled verbatim above).
+    for l1_idx in 5..512usize {
         let parent_l1_pte = unsafe {
             core::ptr::read_volatile(
                 (parent_l1 + (l1_idx * 8)) as *const u64
@@ -869,9 +919,15 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     // including ELF loader copies to the rebased cave's phys_base+ELF
     // image — faults DATA ABORT DFSC=0x06.
     let l2_xhi = frame::alloc_kernel_frame().ok_or("oom for primary L2 xhi")?;
+    // 🎯 STUMP #7: extend identity map to cover the full 4 GiB physical
+    // RAM (paired with QEMU_MEMORY_END = 0x140000000). Without these,
+    // alloc_frame would hand out frames in [0xC0000000, 0x140000000)
+    // but kernel writes there would DATA ABORT.
+    let l2_xxhi  = frame::alloc_kernel_frame().ok_or("oom for primary L2 xxhi")?;
+    let l2_xxxhi = frame::alloc_kernel_frame().ok_or("oom for primary L2 xxxhi")?;
 
     // Zero all tables
-    for table in [l0, l1, l2_low, l2_high, l2_xhi] {
+    for table in [l0, l1, l2_low, l2_high, l2_xhi, l2_xxhi, l2_xxxhi] {
         for i in 0..(PAGE_SIZE / 8) {
             let addr = table + i * 8;
             unsafe {
@@ -889,6 +945,10 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     write_pte(l1, 1, l2_high as u64 | TABLE_DESC);
     // L1[2] → L2_xhi  (covers 0x80000000 - 0xBFFFFFFF)
     write_pte(l1, 2, l2_xhi as u64 | TABLE_DESC);
+    // L1[3] → L2_xxhi (covers 0xC0000000 - 0xFFFFFFFF)
+    write_pte(l1, 3, l2_xxhi as u64 | TABLE_DESC);
+    // L1[4] → L2_xxxhi (covers 0x100000000 - 0x13FFFFFFF)
+    write_pte(l1, 4, l2_xxxhi as u64 | TABLE_DESC);
 
     // L2_low: Map busybox virtual addresses to physical.
     // Block 0: 0x00000000-0x001FFFFF → phys_base (busybox code segment 1).
@@ -947,6 +1007,18 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     for block in 0..512 {
         let addr = 0x80000000u64 + (block as u64) * 0x200000;
         write_pte(l2_xhi, block, addr | kernel_blk_flags(addr));
+    }
+    // 🎯 STUMP #7: identity-map [0xC0000000, 0x140000000). No kernel
+    // text lives here, so always EL1-RW + UXN + PXN-implicit (the
+    // kernel_blk_flags closure will return non-text flags for these
+    // addresses since they're past text_end_addr()).
+    for block in 0..512 {
+        let addr = 0xC0000000u64 + (block as u64) * 0x200000;
+        write_pte(l2_xxhi, block, addr | kernel_blk_flags(addr));
+    }
+    for block in 0..512 {
+        let addr = 0x100000000u64 + (block as u64) * 0x200000;
+        write_pte(l2_xxxhi, block, addr | kernel_blk_flags(addr));
     }
 
     uart::puts("[mmu] Page tables built\n");

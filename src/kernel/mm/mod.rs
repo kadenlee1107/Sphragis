@@ -15,8 +15,23 @@ unsafe extern "C" {
     pub static __kernel_end: u8;
 }
 
-// QEMU-virt / Chromium host: 1 GiB RAM base + 2 GiB = 3 GiB top.
+// QEMU-virt / Chromium host: 1 GiB RAM base + 4 GiB = 5 GiB top.
 // Apple Silicon path overrides this with boot_args-derived values.
+//
+// 🎯 STUMP #7: was `+ 2 * 1024 * 1024 * 1024` (= 0xC0000000), giving
+// only 2 GiB of usable physical RAM (kernel + ~1.5 GB user). Chromium
+// content_shell with full thread pool + V8 cage + PartitionAlloc heap
+// hits 296k demand-page commits = 1.2 GB before exhausting frames and
+// crashing in `[demand_page] OOM`. Bumping to 4 GiB usable matches
+// the smoke script's `qemu -m 4G` and gives plenty of headroom.
+//
+// MUST be paired with extending the cave + primary identity map in
+// `src/batcave/linux/mmu.rs` (L1[3] + L1[4]) — otherwise kernel writes
+// to PAs above 0xC0000000 (where alloc_frame would now hand out
+// frames) would fault DATA ABORT DFSC=0x06.
+// Bisect: revert to 2 GiB to test if MMU-enable hang is caused by the
+// memory expansion vs the bitmap expansion. v45 hung at "[mmu] TLB
+// flushed, enabling MMU..." right after MMU turn-on. Was 4 * 1024^3.
 const QEMU_MEMORY_END: usize = 0x4000_0000 + 2 * 1024 * 1024 * 1024;
 
 pub fn init() {

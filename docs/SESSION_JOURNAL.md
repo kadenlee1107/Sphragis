@@ -11,6 +11,83 @@ end of a session.
 
 ---
 
+## 2026-04-26 11:15 — Mac — Stump #7 partial: identity map + bitmap extended for 4 GiB infrastructure, but MMU-enable hangs when QEMU_MEMORY_END = 4 GiB. Bisected. Investigation TBD.
+
+**Goal.** Kill Stump #7 (physical RAM exhaustion at 296k demand-page commits).
+
+**Plan.** Bump `QEMU_MEMORY_END` from 2 GiB to 4 GiB to match the
+smoke's `qemu -m 4G`. Pair with:
+1. Extending the cave + primary identity map (L1[3] for 0xC0000000–
+   0x100000000, L1[4] for 0x100000000–0x140000000) — `src/batcave/linux/mmu.rs`.
+2. Bumping the frame bitmap (`MAX_FRAMES` 524288 → 1048576) — without
+   this, alloc_kernel_frame's scan from `total-1` downward immediately
+   hits `bitmap_index >= BITMAP_SIZE` and OOMs.
+
+**What works (v46):** with the identity-map extension + bigger
+bitmap in place but `QEMU_MEMORY_END` reverted to 2 GiB, smoke runs
+clean to the same Stump #7 OOM as v43. No regression. So both
+infrastructure pieces are correct in isolation.
+
+**What hangs (v45):** when `QEMU_MEMORY_END` is bumped to 4 GiB
+(0x140000000), boot completes normally and the cave's L1 is built at
+PA 0x13FFFF000 (in the new high range — `alloc_kernel_frame` is now
+returning frames there). Then `setup_and_enable` runs, builds
+PRIMARY_L1 + the 6 sub-tables in high RAM, configures MAIR/TCR/TTBR,
+flushes TLB, and writes SCTLR.M=1. The kernel hangs IMMEDIATELY
+after the MMU-enable. The `[mmu] MMU enabled!` print that should
+follow never appears. Smoke times out 12 minutes later.
+
+```
+[cave] chromium now on its own page table (L1=0x000000013ffff000)
+[runner] Launching on file:///bin/hello.html
+[mmu] Setting up page tables...
+[mmu] Page tables built
+[mmu] Configuring registers...
+[mmu] MAIR+TCR+TTBR set
+[mmu] TLB flushed, enabling MMU...
+←  hang (no further output for 720 s)
+```
+
+**Hypotheses to investigate next session:**
+1. **QEMU virt RAM layout** — `-m 4G` may not provide RAM at
+   [0x40000000, 0x140000000) contiguously. Need to dump the DTB
+   `/memory` node to confirm. If high RAM is at 0x10_0000_0000 (256
+   GB) instead of 0x100000000, our PT lookups would hit unmapped PA.
+2. **Walker access to high-PA tables** — the MMU walker reads PRIMARY_L1
+   from PA ~0x13FFFx000. If that PA is unbacked, it reads garbage →
+   translation fault → recursive abort → silent hang. Verifiable by
+   adding a pre-MMU-enable probe: write+read a sentinel at PA
+   0x13FFFE000 to confirm RAM is real.
+3. **AArch64 PTE-PA encoding** — PTEs encode PA in bits 47..12. PA
+   0x13FFFE000 fits (33 bits). Should work, but worth double-checking
+   for off-by-one or sign-extension.
+4. **Bigger BSS shifted layout** — bigger bitmap (128 KiB BSS vs 64
+   KiB) shifted the linker's `__stack_start` symbol by 64 KiB. Stack
+   pointer set at boot is now 64 KiB higher. If something downstream
+   computed an offset from `__bss_end` and assumed the old size,
+   could miscompute. Verify via `nm target/.../bat_os | grep stack`.
+
+**State of the tree:**
+- `src/kernel/mm/mod.rs` — `QEMU_MEMORY_END` reverted to 2 GiB
+  (with comment about the bisect).
+- `src/kernel/mm/frame.rs` — `MAX_FRAMES` bumped to 1 MiB (= 4 GiB
+  bitmap). Harmless overhead at 2 GiB; ready for the eventual bump.
+- `src/batcave/linux/mmu.rs` — identity map extended L1[3] + L1[4]
+  in `setup_and_enable`, `setup_cave_pagetable_at`, and
+  `fork_cave_pagetable_at`. Harmless when memory_end <= 0xC0000000;
+  ready for the eventual bump.
+
+**Stump #7 = still open.** The infrastructure for 4 GiB is in place;
+the actual switch to 4 GiB needs the MMU-enable hang debugged first.
+Next session priorities:
+1. DTB-dump QEMU's `-m 4G` RAM layout. Most likely culprit is the
+   high-RAM split that QEMU does for some virt configurations.
+2. If RAM IS contiguous, instrument `setup_and_enable` to print PAs
+   of allocated tables + a pre-MMU-enable sentinel-read to find the
+   exact failure point.
+
+---
+
 ## 2026-04-26 09:08 — Mac — 🎯🎯🎯 STUMP #6 KILLED: install_l3_mapping idempotency guard. Cave now reaches 296k demand-page commits (= 1.2 GB heap) before OOMing on physical RAM.
 
 **Goal.** Kill Stump #6 — `partition_alloc::CorruptionDetected()` BRK at ELR=0x14d73000 fired by every smoke run after Stumps #4 + #5 unblocked enough progress to reach PartitionAlloc heap.

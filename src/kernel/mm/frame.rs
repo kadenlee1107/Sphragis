@@ -5,8 +5,17 @@
 use core::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 
 pub const PAGE_SIZE: usize = 4096;
-const MAX_FRAMES: usize = 524288; // 2GB / 4KB = 524288 frames
-const BITMAP_SIZE: usize = MAX_FRAMES / 64; // 8192 u64s = 8192 bitmap entries
+// 🎯 STUMP #7 (paired with QEMU_MEMORY_END = 0x140000000): bitmap now
+// covers 4 GiB of frames so alloc_kernel_frame can find frames at the
+// top of physical RAM. Was 524288 (= 2 GiB) — when QEMU_MEMORY_END
+// got bumped to 4 GiB, the kernel-pool scan from total-1 downward
+// always hit `bitmap_index >= BITMAP_SIZE` (skipped) → OOM on every
+// alloc_kernel_frame call.
+//
+// 1 MiB frames = 4 GiB physical. Bitmap is 16384 u64s = 128 KiB —
+// negligible static overhead.
+const MAX_FRAMES: usize = 1024 * 1024;            // 4 GiB / 4 KiB
+const BITMAP_SIZE: usize = MAX_FRAMES / 64;        // 16384 u64s = 128 KiB
 
 static BITMAP: [AtomicU64; BITMAP_SIZE] = {
     const INIT: AtomicU64 = AtomicU64::new(0);
