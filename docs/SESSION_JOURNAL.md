@@ -11,6 +11,81 @@ end of a session.
 
 ---
 
+## 2026-04-26 17:30 — Mac — Stump #10b cracked open: getpid+st_dev+sched_getaffinity. PartitionAlloc x1=0x1 pattern breaking, 10-run distribution shows 6 different failure modes (used to be 1).
+
+**Goal.** Continue grinding past Stump #10b (PartitionAlloc x1=0x1
+deterministic across all runs).
+
+**Agent A (decode every Free caller in PartitionRoot):** found:
+- The DOUBLE FREE detection path inside `Free<0>` reads `[x24]`
+  (in-slot metadata word), expects refcount=1, atomic ldclr clears
+  bit 0, if pre-clear bit was 0 → `bl DoubleFreeOrCorruptionDetected`
+  with x1 = MTE-stripped pointer being freed.
+- NO BL site has literal `mov x0, #1`. The 0x1 comes from a memory
+  read.
+- TOP HYPOTHESIS: `sys_getpid` returns 1; PartitionAlloc + glibc + V8
+  use getpid() as a random-seed input to per-thread cache slot
+  indices, hash-table seeds, and `cookie` / `brp_cookie` fields
+  stored in slot-span metadata. With pid=1, derived "tags" come out
+  as 0x1.
+
+**Three targeted fixes applied (commit 5321efc1):**
+
+1. **`sched_getaffinity` real impl** — was sys_stub_zero. Now writes
+   mask[0]=0x01 + zeros the rest, returns min(cpusetsize, 8). glibc's
+   `_SC_NPROCESSORS_ONLN` and `CPU_COUNT(mask)` now read sensible
+   values instead of garbage.
+2. **`sys_getpid` → 0x4242** (was 1).
+3. **fill_stat st_dev → 0x100** (was 1). PartitionAlloc + V8 use
+   (st_dev, st_ino) as cache key for shmem-backed memory pools.
+
+Plus: arch/mod.rs BRK exit dump now prints SP_EL0 + first 32 user-
+stack u64s (revealing the saved LR chain so we can decode upstream
+callers). Confirmed the immediate caller of DoubleFreeOrCorruptionDetected
+is PartitionRoot::Alloc → SlowPathAlloc → DeducedRootIsValid.
+
+**10-run distribution post-fix:**
+| failure | count |
+|---|---|
+| BRK PartitionAlloc x1=0x1 | 3 |
+| BRK PartitionAlloc x1=0x140091cd20 (real-looking ptr!) | 1 |
+| SIGSEGV NULL+0x0 | 1 |
+| SIGSEGV NULL+0x1c (Stump #3a-style — SlotSpanMetadata->bucket NULL) | 3 |
+| SIGSEGV V8 cage region (FAR=0x30...) | 2 |
+
+**Pattern is BREAKING** — pre-fix: 5/5 deterministic at the same
+PartitionAlloc spot. Post-fix: 6 different failure modes across 10
+runs. The cave is going further into different code paths and hitting
+different walls.
+
+**Stump #10c+ still open.** PartitionAlloc state-init is being read
+uninitialized in MULTIPLE places. Each fix shifts the failure but
+the fundamental "Chromium expects this memory to be initialized
+properly" issue keeps surfacing. Possible final causes:
+- A specific syscall return value still returns small non-zero where
+  Chromium expects a real pointer / large value.
+- A subtle aliasing in our memory model not yet isolated.
+- A Chromium init path requires a syscall feature we haven't
+  implemented (e.g., proper file owner inheritance via fchown,
+  or a missing filesystem stat field).
+
+**Net state of the tree:**
+- Cave reliably reaches Dawn WebGPU + Skia Graphite + Shared
+  Dictionary + V8 sandbox init.
+- 27-32 threads spawn consistently.
+- Chromium's LOG() infrastructure fully functional.
+- 6 different terminal failure modes across 10 runs (= chaos =
+  progress past the deterministic wall).
+- 13+ commits pushed this session.
+
+**Honest assessment for the user:** DOM is still not on screen, but
+the path from "futex deadlock at 5M syscalls" (session start) to
+"Chromium runs Dawn+Skia+V8 init machinery and dies in 6 different
+ways depending on timing" is enormous. Each remaining failure mode
+is a separate stump that needs its own focused investigation.
+
+---
+
 ## 2026-04-26 16:25 — Mac — 🎯🎯🎯 Stump #10 KILLED (lseek) + alloc_stack contig fix + 3 new syscalls. Cave reaches Dawn WebGPU + Skia Graphite GPU renderer. ELEVEN STUMPS THIS SESSION.
 
 **Goal.** Push as far as possible toward Chromium DOM render.
