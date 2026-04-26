@@ -222,14 +222,18 @@ pub(crate) fn is_valid_uaddr(uaddr: u64) -> bool {
     crate::batcave::linux::uaccess::is_user_range(uaddr as usize, 4)
 }
 
-// ─── Current thread id stub ──────────────────────────────────────────────
-// The Linux compat layer keeps the "current TID" in syscall.rs's CURRENT_TID.
-// We expose a tiny shim here so we don't create a cyclic module dependency.
-// When syscall.rs wires us up, it can pass the real TID via the public API.
+// ─── Current thread id ───────────────────────────────────────────────────
+// Returns the TID of the thread currently executing on this CPU. Used by
+// the wait path to tag each parked slot so the wake path can flip the
+// correct ThreadState::Blocked -> Runnable.
+//
+// HISTORY: previously a stub returning 1 unconditionally. That broke wake
+// for every multi-threaded glibc primitive (pthread_cond, PartitionAlloc
+// SpinningMutex, etc.): the slot was tagged tid=1, but the actual waiter
+// was tid=N, so wake_thread(1) was a no-op and the real waiter stayed
+// Blocked forever. Stump #2 root cause; see SESSION_JOURNAL.md.
 fn current_tid() -> usize {
-    // Placeholder: without integration we treat everything as tid 1.
-    // syscall.rs should call futex_wait_tid() directly once wired.
-    1
+    crate::batcave::linux::threads::current_tid() as usize
 }
 
 // ─── Enqueue / dequeue ───────────────────────────────────────────────────

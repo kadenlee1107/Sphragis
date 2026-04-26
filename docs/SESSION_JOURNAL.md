@@ -11,6 +11,105 @@ end of a session.
 
 ---
 
+## 2026-04-25 22:35 — Mac — 🎯 STUMP #2 KILLED: futex.rs `current_tid()` was hardcoded to 1, so wake_thread() always missed real waiters → 32 threads now (vs 19 stuck), new stump = NULL deref @0x1c
+
+**Goal.** Resume from prior session: Stump #2 (futex deadlock @ uaddr
+0x1a0b5fc0 val=2) — many threads `Blocked(FutexWait)` on a
+PartitionAlloc/glibc cond_var address, wake side never moved them
+back to Runnable.
+
+**The headline fix.** Five parallel agents combed the futex/wake/wait
+plumbing. Agent 2 (futex audit) found the smoking gun in 60 seconds:
+`src/batcave/linux/futex.rs:229` — `fn current_tid() -> usize { 1 }`
+— a placeholder stub that pre-dated the real `threads::current_tid()`.
+Every waiter that called `futex_wait()` got tagged into its bucket
+slot with `tid = 1`. The wake side then read `s.tid.load()` and called
+`threads::wake_thread(1)`, which only flips state if tid 1 is
+`Blocked` — and tid 1 (the boss) was usually `Running`, so the call
+was a no-op. The actual waiter (tid 17 or wherever) stayed
+`Blocked(FutexWait)` forever.
+
+This is the kind of bug that's invisible by inspection because the
+futex.rs code looks fine — it stores the tid, reads it back, calls
+wake_thread. The TID-source plumbing was the lie.
+
+**The fix** (`src/batcave/linux/futex.rs:229-233`, single delta):
+```rust
+fn current_tid() -> usize {
+    crate::batcave::linux::threads::current_tid() as usize
+}
+```
+
+Rebuilt with `BAT_OS_ALLOW_UNSIGNED_INITRD=1 BAT_OS_PASSPHRASE=batman
+cargo build --release` (env vars matter — without PASSPHRASE the
+auth gate uses the dev default and rejects "batman").
+
+**The verification.** Smoke v31 (`logs/qemu-tests/chromium-smoke-
+20260425-223348.log`):
+- Pre-fix run (v29 @ 21:41) → 35MB log, 80,634 futex syscalls, 19
+  threads, all stuck on uaddr=0x1a0b5fc0 (PartitionAlloc lock) or
+  uaddr=0x1a224df8 (boss-wait), only t6 hot-spinning epoll. Pure
+  deadlock by `[diag] thread-state dump @ switch 16M+`.
+- Post-fix run → 54KB log, **32 threads** spawned, sequential init
+  through libc → fontconfig → leveldb → GPUCache, then crash on a
+  brand-new bug.
+
+We never reached the futex-deadlock zone because the cave hit a
+different stump first. Net: futex wake plumbing is no longer the
+blocker; the libc thread machinery is now actually progressing.
+
+**The new stump (Stump #3 — opens for next investigation).**
+
+```
+!!! UNHANDLED SYNC EXCEPTION !!!  tid=t32
+  EC: 0x24  ISS: 0x6   (EL0 data abort, translation fault L2)
+  ELR: 0x14d76128   FAR: 0x1c   SP: 0x700efbfd40   TP: 0x700efc1360
+  [14d76128] = 0x3940712c → ldrb w12, [x9, #0x1c]
+```
+
+`x9 = NULL`, `[x9 + 0x1c]` faults. The `+0x1c` offset and the timing
+(immediately after a fresh thread did its gettid → clock_gettime →
+sched_setaffinity → mprotect → gettid → clock_gettime → getpid init
+sequence) smells like glibc's **rseq** (restartable sequences) thread
+init: glibc 2.34+ calls `rseq()` syscall, then accesses the TLS
+`rseq_cs` field at offset 0x1c of the struct rseq pointer. If our
+kernel returns 0 from rseq() but doesn't actually map / point glibc
+at a valid rseq area, glibc would deref NULL.
+
+To-investigate (next session):
+1. Grep `sysno=293` (rseq) handler in syscall.rs — does it return 0
+   without actually mapping anything?
+2. Check what's at user VA 0x14d76128 — bin/content_shell text or
+   one of the libs (probably libc).
+3. Confirm offset 0x1c matches `struct rseq.rseq_cs` per the Linux
+   uapi.
+4. If rseq is the cause, options: (a) return -ENOSYS and let glibc
+   fall back to the non-rseq path, (b) actually implement rseq.
+
+**Strategic note.** The parallel-agent strategy from Stump #1 worked
+again on Stump #2: 5 agents, ~5 minutes, root cause found. Single-
+threaded grinding kept missing it because everyone (myself included)
+was inspecting the wake/wait code, not the trivially-named
+`current_tid` helper. When stuck, fan out.
+
+**State of the tree:**
+- `src/batcave/linux/futex.rs` — current_tid fixed.
+- Build: `BAT_OS_ALLOW_UNSIGNED_INITRD=1 BAT_OS_PASSPHRASE=batman
+  cargo build --release` → 15.8 MB binary, clean.
+- Smoke verdict: `PIPELINE-REACHED` (script's success bar is
+  "got past load and trapped"; we did).
+- 32 threads spawned, multi-lib glibc init advancing, content_shell
+  reaching scoped-dir + leveldb stage.
+
+**Next actions:**
+1. Open Stump #3: investigate rseq / NULL-deref @0x1c hypothesis with
+   parallel agents (proven strategy).
+2. Grep `293` and `rseq` in syscall.rs.
+3. Decode user VA 0x14d76128 against the loader's mmap log to identify
+   which binary/lib is doing the deref.
+
+---
+
 ## 2026-04-25 17:30 — Mac — 🎯 ROOT CAUSE #2: sendmsg_pipe wrote to wrong buffer; +mark_ready + active-poll → 5.35M syscalls (vs 3K), new wall is kernel data abort
 
 **Goal:** Push past the wall where 4 renderer threads spin forever in
