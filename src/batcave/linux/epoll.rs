@@ -519,6 +519,37 @@ fn drain_ready(slot: usize, events_ptr: *mut EpollEvent, max: usize) -> usize {
         None => return 0,
     };
 
+    // V8-EPOLL-POLL: before scanning entry.ready, actively poll the
+    // underlying state of timerfds/eventfds/pipes/sockets in this
+    // instance. Without this, an epoll_pwait would never see a timerfd
+    // expire (sweep is lazy) or a pipe go from empty→non-empty unless
+    // the writer also called mark_ready (which only sys_write does
+    // today, not e.g. ioctl/sendmsg paths that drain into the buffer).
+    use crate::batcave::linux::{async_fds, fd as fd_mod, pipe_buf};
+    for entry in inst.interests.iter_mut() {
+        if !entry.used { continue; }
+        let fdn = entry.fd;
+        if fdn < 0 { continue; }
+        // Eventfd: counter > 0 → EPOLLIN
+        if let Some(slot) = fd_mod::eventfd_slot(fdn as u32) {
+            if async_fds::eventfd_is_readable(slot) {
+                entry.ready |= EPOLLIN;
+            }
+        }
+        // Timerfd: counter > 0 (with lazy sweep) → EPOLLIN
+        if let Some(slot) = fd_mod::timerfd_slot(fdn as u32) {
+            if async_fds::timerfd_is_readable(slot) {
+                entry.ready |= EPOLLIN;
+            }
+        }
+        // Pipe: peer's outbound buffer has bytes → EPOLLIN on us
+        if let Some((pair_slot, side)) = fd_mod::pipe_info(fdn as u32) {
+            if pipe_buf::has_readable(pair_slot, side) {
+                entry.ready |= EPOLLIN;
+            }
+        }
+    }
+
     let mut written = 0usize;
     for entry in inst.interests.iter_mut() {
         if written >= max {
@@ -642,15 +673,16 @@ pub fn notify_fd_closed(fd: i32) {
 
 // ─────────────────────── Low-level helpers ───────────────────────
 
-/// Cooperative yield hint for spin-wait loops. On ARM64 `wfe` parks the
-/// core until an event; on single-core bare metal with no other tasks
-/// it acts as a cheap power-save. Replace with a real scheduler hook
-/// once the BatCave runner has one.
+/// Cooperative yield. Calls into the BatCave thread scheduler so other
+/// runnable threads in this cave can make progress while we wait for
+/// an FD to become ready. Replaces the old asm-only `yield` hint which
+/// only nudged the CPU but did NOT switch threads — that meant a
+/// renderer thread spinning in epoll_pwait could starve the very
+/// browser thread that was supposed to write the eventfd that would
+/// wake it. Now each unsuccessful drain_ready hands the CPU back.
 #[inline(always)]
 fn cooperative_yield() {
-    unsafe {
-        core::arch::asm!("yield", options(nomem, nostack, preserves_flags));
-    }
+    crate::batcave::linux::threads::schedule();
 }
 
 // ─────────────────────── Debug / introspection ───────────────────────

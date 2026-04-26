@@ -1091,6 +1091,15 @@ fn sys_write(args: [u64; 6]) -> i64 {
                 }
             }
         }
+        // V8-PIPE-EPOLL: wake any epoll watching the read end of this
+        // pipe. Without this, content_shell's Mojo IPC blocks forever
+        // — browser thread writes a request, renderer thread is in
+        // epoll_pwait spinning on the read end, never sees the bits.
+        if total > 0 {
+            if let Some(peer) = fd::pipe_peer_fd(slot, side) {
+                super::epoll::mark_ready(peer as i32, super::epoll::EPOLLIN);
+            }
+        }
         return total as i64;
     }
 
@@ -5491,10 +5500,13 @@ fn sendmsg_pipe(slot: usize, side: u8, msg: *const super::sockets::Msghdr) -> i6
     if !is_user_ptr(msg as usize, core::mem::size_of::<super::sockets::Msghdr>()) {
         return EFAULT;
     }
-    // The sender side writes to the OPPOSITE side of the pipe — that's
-    // what the receiver reads from. pipe_buf::write expects "side" to
-    // be the side data lands ON, not the side we're calling from.
-    let target_side = side ^ 1;
+    // V8-PIPE-DIR: pipe_buf::write(slot, side, data) writes to `side`'s
+    // OUTBOUND buffer — the buffer the OTHER side reads from. So
+    // `side` here must be the WRITER's side, not the receiver's.
+    // (The previous code passed `side ^ 1` which dumped the data into
+    // the receiver's-write buffer = our-read buffer, so the receiver
+    // never saw it. That's why every Mojo IPC via sendmsg silently
+    // black-holed and every epoll_pwait blocked forever.)
     let m: super::sockets::Msghdr = unsafe { core::ptr::read(msg) };
     if m.msg_iovlen > 16 { return EINVAL; }
 
@@ -5545,7 +5557,7 @@ fn sendmsg_pipe(slot: usize, side: u8, msg: *const super::sockets::Msghdr) -> i6
         let data = unsafe {
             core::slice::from_raw_parts(iv.iov_base as *const u8, iv.iov_len)
         };
-        match super::pipe_buf::write(slot, target_side, data) {
+        match super::pipe_buf::write(slot, side, data) {
             Ok(n) => {
                 total += n as i64;
                 if n < iv.iov_len { break; } // partial write
@@ -5554,6 +5566,15 @@ fn sendmsg_pipe(slot: usize, side: u8, msg: *const super::sockets::Msghdr) -> i6
                 if total > 0 { return total; }
                 return e;
             }
+        }
+    }
+    // V8-PIPE-EPOLL: wake any epoll watching the read end of this pipe
+    // so the receiver's MessagePumpEpoll exits its wait. Same as the
+    // sys_write path. Without this, sendmsg → silent enqueue → forever-
+    // wait.
+    if total > 0 {
+        if let Some(peer) = fd::pipe_peer_fd(slot, side) {
+            super::epoll::mark_ready(peer as i32, super::epoll::EPOLLIN);
         }
     }
     total

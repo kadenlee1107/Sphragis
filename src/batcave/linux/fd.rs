@@ -279,6 +279,56 @@ pub fn pipe_info(fd: u32) -> Option<(usize, u8)> {
     }
 }
 
+/// Look up the FD number in the current cave's table for the peer
+/// (opposite side) of a pipe pair_slot. Returns None if no FD owns
+/// the peer side in this cave (e.g. after sendmsg(SCM_RIGHTS) moved
+/// it to another cave).
+///
+/// Used by sys_write to call epoll::mark_ready on the READER end after
+/// a successful pipe_buf::write — without this, an epoll_pwait blocked
+/// on the read end never wakes up.
+pub fn pipe_peer_fd(pair_slot: usize, writer_side: u8) -> Option<u32> {
+    let table = current_table();
+    let target_packed = (((pair_slot as u16) << 1) | ((writer_side ^ 1) as u16 & 1)) as u16;
+    for i in 0..MAX_FDS {
+        if !table[i].active { continue; }
+        if let FdKind::Pipe(packed) = table[i].kind {
+            if packed == target_packed {
+                return Some(i as u32);
+            }
+        }
+    }
+    None
+}
+
+/// Look up the FD number in the current cave's table for an eventfd
+/// slot. Returns None if no FD in this cave references that slot.
+/// Used by eventfd_write paths in OTHER subsystems (e.g. timerfd
+/// expiry, IPC delivery) to find the watcher and notify epoll.
+pub fn eventfd_fd_for_slot(slot: u16) -> Option<u32> {
+    let table = current_table();
+    for i in 0..MAX_FDS {
+        if !table[i].active { continue; }
+        if let FdKind::Eventfd(s) = table[i].kind {
+            if s == slot { return Some(i as u32); }
+        }
+    }
+    None
+}
+
+/// Look up the FD number in the current cave's table for a timerfd
+/// slot. Mirror of eventfd_fd_for_slot.
+pub fn timerfd_fd_for_slot(slot: u16) -> Option<u32> {
+    let table = current_table();
+    for i in 0..MAX_FDS {
+        if !table[i].active { continue; }
+        if let FdKind::Timerfd(s) = table[i].kind {
+            if s == slot { return Some(i as u32); }
+        }
+    }
+    None
+}
+
 /// Allocate an fd backed by an eventfd slot. Used by eventfd2(2).
 /// The eventfd slot itself is allocated via async_fds::alloc_eventfd_slot
 /// before this call; this just registers a real fd that resolves to it.
