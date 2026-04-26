@@ -1163,14 +1163,67 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
             unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
             uart::puts("  TTBR0: 0x"); print_hex(ttbr0);
             uart::puts("\n");
-            // V8-DABT-DIAG: also dump x0..x7 — args/locals at fault
-            // time. If FAR=0xc0000000 came from a register, we'll see
-            // it here.
-            for i in 0..8usize {
-                let v = unsafe { (*frame).x[i] };
-                uart::puts("  x"); uart::putc(hex[i]); uart::puts(": 0x");
-                print_hex(v); uart::puts("\n");
+            // V8-DABT-DIAG: dump ALL GPRs so we can compute the load
+            // address from whichever Xn the faulting instr used.
+            // Format: "x00..x07: 0x... 0x... ..." 4 per row, more compact.
+            for row in 0..8usize {
+                uart::puts("  x");
+                let r = row * 4;
+                if r < 10 { uart::putc(hex[r]); } else {
+                    uart::putc(hex[r / 10]); uart::putc(hex[r % 10]);
+                }
+                uart::puts(": ");
+                for col in 0..4usize {
+                    let i = row * 4 + col;
+                    if i > 30 { break; }
+                    let v = unsafe { (*frame).x[i] };
+                    uart::puts("0x"); print_hex(v); uart::puts(" ");
+                }
+                uart::puts("\n");
             }
+            // V8-DABT-DIAG: walk the frame-pointer chain so we see the
+            // KERNEL CALL STACK, not just LR. With LR=0 (no recent BL)
+            // the only way to know who called us is x29 (FP) which
+            // points at [saved_fp, saved_lr] of the caller's frame.
+            // Walk up to 8 frames before giving up.
+            uart::puts("  fp-walk:\n");
+            let mut fp = unsafe { (*frame).x[29] };
+            for _ in 0..8 {
+                if fp == 0 { break; }
+                // Refuse to deref obviously-bad frame pointers.
+                if fp < 0x40000000 || fp >= 0xc0000000 {
+                    if fp >= 0x10000000 && fp < 0x80000000_0000 {
+                        // user-VA range, OK to read
+                    } else {
+                        uart::puts("    (fp=0x"); print_hex(fp); uart::puts(" — out of range)\n");
+                        break;
+                    }
+                }
+                let saved_fp: u64;
+                let saved_lr: u64;
+                unsafe {
+                    core::arch::asm!("ldr {v}, [{a}]", a = in(reg) fp,        v = out(reg) saved_fp);
+                    core::arch::asm!("ldr {v}, [{a}]", a = in(reg) fp + 8,    v = out(reg) saved_lr);
+                }
+                uart::puts("    fp=0x"); print_hex(fp);
+                uart::puts(" lr=0x"); print_hex(saved_lr);
+                uart::puts("\n");
+                if saved_fp <= fp { break; } // stop on backwards/equal frames
+                fp = saved_fp;
+            }
+            // V8-DABT-DIAG: also dump the bytes around ELR so we know
+            // which load/store instruction faulted (helps identify
+            // which Xn was used to compute FAR).
+            uart::puts("  instr@elr: ");
+            let instr: u32 = unsafe {
+                let v: u32;
+                core::arch::asm!("ldr {v:w}, [{a}]", a = in(reg) elr, v = out(reg) v);
+                v
+            };
+            for sh in (0..8).rev() {
+                uart::putc(hex[((instr >> (sh*4)) & 0xF) as usize]);
+            }
+            uart::puts("\n");
             // Track repeats so we can stop spamming and force-terminate
             // the cave instead of looping forever in this handler. Two
             // tries earlier landed the per-instruction skip approach,
@@ -1657,7 +1710,26 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
                             uart::putc(b"0123456789abcdef"[(off >> 4) & 0xF]);
                             uart::putc(b"0123456789abcdef"[off & 0xF]);
                             uart::puts("]=0x"); print_hex(v);
-                            uart::puts(if is_bl { " BL" } else { " BLR" });
+                            if is_bl {
+                                // Decode BL imm26 → target. If any of these
+                                // targets matches the fault address, we've
+                                // found which user code branched there.
+                                let imm26 = (ins & 0x03FFFFFF) as i64;
+                                let signed = if imm26 & (1 << 25) != 0 {
+                                    imm26 - (1 << 26)
+                                } else {
+                                    imm26
+                                };
+                                let target = (pc as i64 + signed * 4) as u64;
+                                uart::puts(" BL→0x"); print_hex(target);
+                            } else {
+                                // BLR xN — register-indirect, target lives
+                                // in xN. Print which register.
+                                let rn = ((ins >> 5) & 0x1F) as u8;
+                                uart::puts(" BLR x");
+                                if rn < 10 { uart::putc(b'0' + rn); }
+                                else { uart::putc(b'1'); uart::putc(b'0' + (rn - 10)); }
+                            }
                         }
                     }
                 }
