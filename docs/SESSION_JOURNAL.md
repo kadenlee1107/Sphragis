@@ -83,6 +83,49 @@ after 3 reps. Then the binary stops making forward progress.
 libc cond_var futexes (`uaddr=0x1a0b5fc0 val=2`, `uaddr=0x18000d8000
 val=2`). Last known syscall before abort: t6 doing clock_gettime.
 
+**Update: better diagnostics revealed the real fault is in EL0, not
+EL1.** Added LR + x0..x7 dump on EL1 data abort and re-ran. The
+SECOND run produces a clean trap-and-terminate with full trace:
+
+```
+!!! UNHANDLED SYNC EXCEPTION !!! tid=t10
+EC: 0x20 ISS: 0x0e
+ELR: 0x4020113c  FAR: 0x4020113c   ← FAR == ELR = instruction abort
+SP:  0x7003e5df80  TP: 0x7003e5f360
+LR(x30) = 0x70004adb74              ← user-mode trampoline return addr
+stack LR candidates:
+  [sp+0x008]=0x14d52e68 BL          ← chromium libc/glibc range
+  [sp+0x168]=0x14d52b60 BL
+[sig] fatal signo=11 fault=0x4020113c — terminating cave, returning to shell
+```
+
+EC=0x20 means **Instruction Abort from a LOWER exception level** —
+this is USER MODE crashing, not the kernel. The user thread tried to
+fetch instructions at PC=0x4020113c. That address is a KERNEL VA
+(in our .rodata at 0x40201xxx). Cave 1's TTBR0 has no L2 mapping for
+0x40201140, so even with EL0 trying to execute it, the page-table
+walk fails → instruction abort.
+
+How did user code get a kernel pointer? Three plausible paths:
+1. **Bad relocation in the loader** — content_shell's GOT/PLT slot got
+   resolved to a kernel rodata address. Subsequent indirect call
+   (`blr x16`) jumps there.
+2. **Function pointer leak via syscall return** — some syscall returned
+   a pointer that's actually a kernel address (e.g. faulty mmap
+   returning the kernel-image VA instead of a user VA).
+3. **Memory corruption** — heap overflow / stack smash overwrote a
+   vtable / function pointer with rodata-region garbage.
+
+Note: 0x40201140 happens to be inside FONT_DATA bitmap at offset
+0x1140 from rodata base. Coincidence — bytes there decode as
+`MSR TTBR0_EL1, x1` etc., but that's just font glyph data being
+mistaken for an instruction stream by the abort handler's "code
+around ELR" pretty-printer.
+
+**The good news:** with the proper EL0-fault path the cave now
+terminates cleanly via signal 11 instead of looping aborts. The
+shell prompt comes back. Smoke verdict: PIPELINE-REACHED.
+
 **Files touched today (this session):**
 - `src/batcave/linux/syscall.rs` — sendmsg_pipe direction fix +
   mark_ready in pipe write + sendmsg_pipe
