@@ -1060,18 +1060,41 @@ pub fn set_child_resume(tid: u32, resume_pc: u64, _parent_sp: u64) {
 /// Helper for the stack fallback path. Allocates contiguous 4 KiB frames
 /// and returns (base, top). 16-byte aligned top.
 fn alloc_stack(pages: usize) -> Option<(u64, u64)> {
-    let first = frame::alloc_frame()? as u64;
+    // V8-STACK-TOP-FIX 2026-04-25: refuse any allocation whose top hits
+    // the cave-mapped boundary at 0xC0000000. Cave's TTBR0 maps L2_xhi
+    // for VA 0x80000000..0xBFFFFFFF; VA 0xC0000000+ is UNMAPPED. If a
+    // thread's kernel stack top = 0xC0000000, then SAVE_REGS does
+    // `sub sp,sp,#272; stp x0,x1,[sp,#248]` and the LAST store lands
+    // at 0xBFFFFEE0+248 = 0xC0000018 → translation fault → can't even
+    // capture the trap frame, and the abort spam loops. Drop any frame
+    // that would put `top` >= 0xC0000000 by retrying with a fresh one.
+    const TOP_LIMIT: u64 = 0xC0000000;
+
+    fn try_alloc_below_limit(limit: u64) -> Option<u64> {
+        // Try up to 8 times; in practice the frame allocator is sequential
+        // so the very-last frame only comes up once.
+        for _ in 0..8 {
+            let p = frame::alloc_frame()? as u64;
+            if p + PAGE_SIZE as u64 <= limit {
+                return Some(p);
+            }
+            // Frame at the boundary — leak it and try again.
+            // (We don't have a free path that handles single frames cleanly.)
+        }
+        None
+    }
+
+    let first = try_alloc_below_limit(TOP_LIMIT)?;
     let mut last = first;
     for _ in 1..pages {
-        let p = frame::alloc_frame()? as u64;
-        // Note: frame allocator isn't guaranteed contiguous; in a proper
-        // kernel we'd use mmap. TODO: replace with vmalloc-style mapping
-        // that strings pages together virtually. For now we *assume* the
-        // frame allocator hands back contiguous pages in a fresh run, which
-        // matches what loader.rs already relies on.
+        let p = try_alloc_below_limit(TOP_LIMIT)?;
         last = p;
     }
     let top = (last + PAGE_SIZE as u64) & !0xFu64;
+    // Belt-and-suspenders: if somehow `top` still lands at the limit
+    // (should be impossible given the per-frame check), refuse rather
+    // than return a doomed stack.
+    if top + 256 > TOP_LIMIT { return None; }
     Some((first, top))
 }
 

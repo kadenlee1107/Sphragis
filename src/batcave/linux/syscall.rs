@@ -1844,7 +1844,15 @@ fn sys_brk(args: [u64; 6]) -> i64 {
     let requested = args[0];
 
     if IN_CHILD.load(core::sync::atomic::Ordering::Relaxed) {
-        // Worker process: use physical addresses (identity-mapped)
+        // Worker process: use physical addresses (identity-mapped).
+        //
+        // V8-BRK-LEAK 2026-04-25: previously returned `WORKER_BRK` raw —
+        // a kernel-physical address (e.g. 0x402x_xxxx). User glibc would
+        // then use it as a heap pointer; storing function pointers in
+        // that "heap" let chromium eventually call into kernel space
+        // (one of the suspected sources of the 0x4020113c branch). Now
+        // we ALSO zero each newly-allocated frame so user reads only
+        // see zeros, never stale kernel data with kernel-VA pointers.
         unsafe {
             if WORKER_BRK == 0 {
                 // Start worker brk after the worker's loaded segments
@@ -1868,10 +1876,25 @@ fn sys_brk(args: [u64; 6]) -> i64 {
                     return e;
                 }
                 for _ in 0..pages {
-                    if crate::kernel::mm::frame::alloc_frame().is_none() {
-                        super::quotas::refund_active(
-                            super::quotas::Resource::Mem, bytes);
-                        return ENOMEM;
+                    let f = crate::kernel::mm::frame::alloc_frame();
+                    match f {
+                        Some(p) => {
+                            // V8-BRK-LEAK: zero each freshly-allocated brk
+                            // frame. Without this user reads stale kernel
+                            // data containing kernel-range pointers (.text
+                            // function pointers, vtable entries, etc.) and
+                            // can branch through them — landing in kernel
+                            // space with EL0 permission fault.
+                            let p_ptr = p as *mut u8;
+                            for i in 0..4096 {
+                                core::ptr::write_volatile(p_ptr.add(i), 0);
+                            }
+                        }
+                        None => {
+                            super::quotas::refund_active(
+                                super::quotas::Resource::Mem, bytes);
+                            return ENOMEM;
+                        }
                     }
                 }
                 WORKER_BRK = requested;
@@ -1903,9 +1926,48 @@ fn sys_brk(args: [u64; 6]) -> i64 {
         }
     }
 
-    // Primary (ash): use virtual addresses in the mapped region
+    // Primary (chromium / ash): use virtual addresses in the mapped region.
+    //
+    // V8-BRK-LEAK 2026-04-25: previously echoed `requested` as-is without
+    // any backing-memory hygiene. The cave's user mapping maps
+    // virt_base..virt_base+CAVE_BLOCKS*2MB to phys_base..+ identity. The
+    // first ~chromium-binary-size of that physical range was loader-copied
+    // from the ELF; the REST is uninitialized kernel-pool RAM that may
+    // contain kernel pointers (.text addrs, vtable entries) from previous
+    // use. When chromium grows brk into that region and reads/uses values
+    // there, it can pick up a kernel-range value (e.g. 0x4020113c) and
+    // branch through it. Zero the new region on each grow.
+    static mut PRIMARY_BRK_HWM: u64 = 0;
+    const PRIMARY_BRK_BASE: u64 = 0x0080_0000;
     if requested == 0 {
-        return 0x0080_0000;
+        unsafe {
+            if PRIMARY_BRK_HWM == 0 { PRIMARY_BRK_HWM = PRIMARY_BRK_BASE; }
+            return PRIMARY_BRK_HWM as i64;
+        }
+    }
+    unsafe {
+        if PRIMARY_BRK_HWM == 0 { PRIMARY_BRK_HWM = PRIMARY_BRK_BASE; }
+        if requested > PRIMARY_BRK_HWM {
+            // Zero the newly-extended range so user reads can't see stale
+            // kernel data. We zero by USER VA (the cave's mapping makes
+            // EL1 reads via the same VA work).
+            let from = PRIMARY_BRK_HWM;
+            let to = requested;
+            // Sanity: refuse insane growth (>256 MB in one call).
+            if to.saturating_sub(from) > (256u64 << 20) {
+                return ENOMEM;
+            }
+            let mut p = from;
+            while p < to {
+                core::ptr::write_volatile(p as *mut u8, 0);
+                p += 1;
+                // Yield occasionally so we don't pin the core for huge brks.
+                if (p & 0xFFFF) == 0 {
+                    super::threads::schedule();
+                }
+            }
+            PRIMARY_BRK_HWM = to;
+        }
     }
     requested as i64
 }
