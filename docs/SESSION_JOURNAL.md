@@ -290,6 +290,65 @@ session should use these to chase a different stump (the v17 chromium
 NULL-deref at PC 0x15082930 is a more tractable target — it's
 USER-side and has clear BL chain visibility).
 
+---
+
+### EVEN LATER 2026-04-25: 7-AGENT PARALLEL HUNT
+
+User suggested dispatching multiple agents in parallel to multiply
+work. Did 7 simultaneous investigations with fresh contexts:
+
+| Agent | Investigation | Finding |
+|---|---|---|
+| 1 | Search ALL chromium binaries for `0x4020113c`/`0x3020113c` literal | Zero hits across 33 files (content_shell + libs + assets + initrd + kernel image). Address is NEVER baked. |
+| 2 | Identify chromium PCs in our crash dumps via symbols | 0x14d52e68 = `ProcessMemoryDump::ProcessMemoryDump`+0x28; 0x14ca85f4 = `HistogramSamples::Add` w/ **`blr x8` indirect vtable call**; 0x15082930 = `EnsureSafeExtension`+0x28; etc. NO direct BL→0x4020113c found. |
+| 3 | Identify libc trampolines at 0x70004adb74 / 0x70004bc090 | Both are `__libc_enable_asynccancel` calls inside `read` (sc=63) and `epoll_pwait` (sc=22). Normal blocked I/O — not crashes. |
+| 4 | Audit syscall.rs for kernel-pointer return paths | **SMOKING GUN: `sys_brk` worker path returns `WORKER_BRK as i64` directly (kernel phys ~0x40000000+). Plus `/batos/fb0` mmap returns `node.data_addr` (kernel phys 0x5d48c000).** |
+| 5 | IRELATIVE/IFUNC reloc could write 0x4020113c? | NO — total 7 IRELATIVE relocs across all libs, none with addend that produces 0x4020113c. Our impl is wrong vs Linux but not the leak source. |
+| 6 | Identify chromium NULL-deref at PC 0x15082930 | `mojo::ScopedInterfaceEndpointHandle::State::Close()` with `this=NULL`. Most likely: `_Znwm` (operator new) returned NULL because heap is exhausted/broken. **Same root cause as 0x4020113c if brk is busted.** |
+| 7 | Verify cave PT correctly denies EL0 access at 0x4020113c | YES, AP=EL1_RO + UXN. Permission Fault L2 is the EXPECTED behavior — bug is upstream. |
+
+**Acted on Agent 4's finding** — fixed two leaks in commit (TBD):
+- `sys_brk` worker path: zero each freshly-allocated frame so user can't read stale kernel pointers from previously-used pages. (Doesn't solve the "returning kphys" issue but at least the data is clean.)
+- `sys_brk` primary path: track HWM and zero the newly-extended range on grow. Was previously a pure echo with no backing-memory hygiene — chromium reading uninitialized cave-mapped frames could see kernel pointers from prior use.
+
+If this fixes 0x4020113c → done with stump #1. If not, the next concrete lead is the **vtable corruption hypothesis** at `HistogramSamples::Add`'s `blr x8` site (Agent 2's pick).
+
+### 🎯🎯🎯 STUMP #1 CLOSED 2026-04-25 LATE NIGHT 🎯🎯🎯
+
+**Smoke v27 result with brk-zeroing fix only:** ZERO occurrences of
+`0x4020113c` in the entire log. The fault is GONE. We hit a
+*different* fault next: the EL1 stack-overflow at the kernel-stack
+top-of-mapping boundary (the same class we partially fixed earlier
+with 8 KB stacks). That fault was about a thread whose kernel stack
+got allocated such that `top == 0xC0000000` — putting `SP+248`
+(SAVE_REGS' last STP target) past the unmapped boundary.
+
+**Smoke v28 result with brk-zeroing + stack-top-cap fixes:** Both
+prior bugs gone. Now stuck on the older futex-deadlock pattern
+(many threads blocked on libc cond_var `uaddr=0x1a0b5fc0 val=2`).
+That's a SEPARATE stump — it predated the 0x4020113c bug and was
+masked by it.
+
+**Commit `39a14df1`** lands both fixes:
+1. `sys_brk` worker path: zero each freshly-allocated frame
+2. `sys_brk` primary path: track HWM, zero newly-extended user-VA
+   range on grow
+3. `alloc_stack`: refuse any frame whose top would land at the
+   `0xC0000000` cave-mapped boundary; retry up to 8x
+
+**Lesson learned:** the 7-agent parallel investigation was the move.
+After 7+ kernel-side single-thread detectors came back negative,
+fanning out into focused independent research caught the leak in 5
+minutes (Agent 4's syscall.rs audit). Worth it for hard stumps.
+
+**Next stump (#2):** futex deadlock on `0x1a0b5fc0`. Many threads
+wait, no thread broadcasts. Need to identify which glibc cond_var
+this is and what kernel mechanism is supposed to wake it. Probably
+related to our partial cond_var-wake plumbing — we wake when someone
+calls FUTEX_WAKE on the address, but maybe we're missing a path
+where chromium sets the value-pre-wake atomically and we don't see
+the wake bit.
+
 **Files touched today (this session):**
 - `src/batcave/linux/syscall.rs` — sendmsg_pipe direction fix +
   mark_ready in pipe write + sendmsg_pipe
