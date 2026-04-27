@@ -117,6 +117,22 @@ causes still on the table:
 Bisect candidate next session: add `dc civac` to free_frame /
 free_contig to invalidate cache lines on free.
 
+**Update:** added `dc civac` to alloc_frame, alloc_kernel_frame,
+alloc_contig, and free_frame. 5-smoke re-test:
+- 3/5 PA BRK (same exact 0x14d73000 signature, tids 16982/16989/16990)
+- 1/5 SIGSEGV NULL+0x280
+- 1/5 SIGSEGV at 0x70_03df_7000 (mapped-but-zero page access?)
+
+Frame-allocator dc civac is correct in principle (defense in depth) but
+didn't shift the PA-BRK rate. The residual ~3/5 PA BRK is from a
+different mechanism — possibly:
+- A race between worker init and PA's slot setup in the boss V8 cage
+- An untracked syscall path that writes 0 to slot metadata
+- Compiler-rt outline atomics fallback (LDXR/STLXR) misbehaving on
+  some specific cache state
+
+Worth investigating next session.
+
 **Commits this session leg:**
 - `🎯🎯🎯 fix(stump #10c FINAL)`: dc civac in demand_page + RUNNING_TID=0x4242
 - `🎯🎯 fix(threads)`: boss thread tid match RUNNING_TID
