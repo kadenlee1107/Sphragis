@@ -47,6 +47,50 @@ pub struct TrapFrame {
     pub spsr: u64,
 }
 
+/// Walk the active cave's L1→L2→L3 to verify a user VA has a valid
+/// L3 entry. Returns true if the page is mapped (and therefore safe
+/// to read from EL1 without triggering a translation fault).
+///
+/// This is conservative: if any of the L1/L2/L3 reads themselves
+/// might fault, we return false. Used in the diagnostic dump path
+/// to avoid recursive aborts when the original fault left us with
+/// a partially-committed reservation.
+///
+/// `#[inline(never)]` to keep the call edge in the disassembly so the
+/// compiler can't fold this into the caller and notice a "this load
+/// can't possibly fail" theorem (it CAN fail because of lazy demand-
+/// paging which the compiler doesn't model).
+#[inline(never)]
+fn page_is_mapped(user_va: u64) -> bool {
+    let ttbr0: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
+    let l1_phys = ttbr0 & !1u64;
+    if l1_phys == 0 { return false; }
+
+    // T0SZ=25 → 39-bit VA: bits 38..30 → L1, 29..21 → L2, 20..12 → L3.
+    let l1_idx = ((user_va >> 30) & 0x1FF) as u64;
+    let l1e: u64 = unsafe {
+        core::ptr::read_volatile((l1_phys + l1_idx * 8) as *const u64)
+    };
+    // L1 must be a TABLE (0b11) entry pointing to L2.
+    if (l1e & 0b11) != 0b11 { return false; }
+    let l2_phys = l1e & 0x0000_FFFF_FFFF_F000;
+    let l2_idx = ((user_va >> 21) & 0x1FF) as u64;
+    let l2e: u64 = unsafe {
+        core::ptr::read_volatile((l2_phys + l2_idx * 8) as *const u64)
+    };
+    // L2 BLOCK descriptor (0b01): identity-mapped 2 MB block; valid.
+    if (l2e & 0b11) == 0b01 { return true; }
+    // L2 TABLE (0b11) → walk L3.
+    if (l2e & 0b11) != 0b11 { return false; }
+    let l3_phys = l2e & 0x0000_FFFF_FFFF_F000;
+    let l3_idx = ((user_va >> 12) & 0x1FF) as u64;
+    let l3e: u64 = unsafe {
+        core::ptr::read_volatile((l3_phys + l3_idx * 8) as *const u64)
+    };
+    (l3e & 0b11) == 0b11
+}
+
 pub fn init_exceptions() {
     unsafe {
         // adrp+add (±4 GB range) instead of `adr` (±1 MB) — the
@@ -1757,7 +1801,9 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 // of a sparsely-committed cave reservation. Without this
                 // the diagnostic dump triggers another exception, the
                 // handler runs again, and we either hang or stack-blow.
-                if !crate::batcave::linux::uaccess::is_user_range(addr, 4) {
+                if !crate::batcave::linux::uaccess::is_user_range(addr, 4)
+                    || !page_is_mapped(addr as u64)
+                {
                     uart::puts("\n    ["); print_hex(addr as u64);
                     uart::puts("] (unmapped)");
                     continue;
@@ -1978,15 +2024,23 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 let elr_now = (*frame).elr;
                 // Scan 16 KB of user stack instead of 0x200 — the leak
                 // might be in a deeper frame.
-                for i in 0..2048usize {
+                // Cap the scan at the page boundary to avoid crossing
+                // into an uncommitted neighbor.
+                let first_page_end = (sp_val | 0xFFF) + 1;
+                let max_iter = ((first_page_end - sp_val) / 8) as usize;
+                let scan_limit = max_iter.min(2048);
+                for i in 0..scan_limit {
                     let addr = sp_val + (i as u64) * 8;
-                    // 🎯 STUMP #18: gate via is_user_range. The cave's
-                    // stack mmap may end before sp+0x4000, and an
-                    // unmapped page within a registered reservation
-                    // would here trigger a recursive EL1 data abort that
-                    // wipes out the very crash dump we're emitting.
-                    // Stop the scan when we hit unmapped territory.
-                    if !crate::batcave::linux::uaccess::is_user_range(addr as usize, 8) {
+                    // 🎯 STUMP #18: gate via is_user_range AND verify the
+                    // L3 entry is actually present. is_user_range
+                    // returns true for addresses in registered
+                    // reservations even when the L3 isn't installed
+                    // yet — the demand-page handler is supposed to fix
+                    // that on access, but if it fails (OOM, race) we
+                    // recursively fault here and lose the entire dump.
+                    if !crate::batcave::linux::uaccess::is_user_range(addr as usize, 8)
+                        || !page_is_mapped(addr)
+                    {
                         uart::puts("\n    [sp+0x");
                         let off = i * 8;
                         uart::putc(b"0123456789abcdef"[(off >> 12) & 0xF]);
@@ -2030,10 +2084,11 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // abort that masks the entire crash dump.
                     if v > 0x10000004 && v < 0x1f000000 && (v & 3) == 0 {
                         let pc = v.wrapping_sub(4);
-                        // 🎯 STUMP #18: gate via is_user_range so a
-                        // saved-LR pointing at an uncommitted text page
-                        // doesn't trigger a recursive abort.
-                        if !crate::batcave::linux::uaccess::is_user_range(pc as usize, 4) {
+                        // 🎯 STUMP #18: gate via is_user_range AND
+                        // page_is_mapped — see helper for why.
+                        if !crate::batcave::linux::uaccess::is_user_range(pc as usize, 4)
+                            || !page_is_mapped(pc)
+                        {
                             continue;
                         }
                         let ins: u32 = core::ptr::read_volatile(pc as *const u32);
@@ -2195,7 +2250,9 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             // matching fixes. is_mapped only checks the
                             // first byte of probe; we read 64 bytes here.
                             let row_addr = probe as usize + off;
-                            if !crate::batcave::linux::uaccess::is_user_range(row_addr, 16) {
+                            if !crate::batcave::linux::uaccess::is_user_range(row_addr, 16)
+                                || !page_is_mapped(row_addr as u64)
+                            {
                                 uart::puts("(unmapped)");
                                 continue;
                             }
@@ -2245,11 +2302,13 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         } else {
                             uart::puts(" ");
                         }
-                        // 🎯 STUMP #18: gate via is_user_range. The cave's
-                        // stack mmap can end before sp+0x100, and the
-                        // sp-0x80 base means we may also read BEFORE the
-                        // mmap's start.
-                        if !crate::batcave::linux::uaccess::is_user_range(addr as usize, 8) {
+                        // 🎯 STUMP #18: gate via is_user_range AND
+                        // page_is_mapped. is_user_range only checks
+                        // logical reservations; the page might be in
+                        // a reservation but not yet committed.
+                        if !crate::batcave::linux::uaccess::is_user_range(addr as usize, 8)
+                            || !page_is_mapped(addr)
+                        {
                             uart::puts("(unmapped) ");
                             continue;
                         }
