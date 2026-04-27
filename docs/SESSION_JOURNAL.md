@@ -161,6 +161,35 @@ table tid, R_AARCH64_IRELATIVE actually calls resolver, AT_HWCAP
 advertises LSE atomics. Stumps left to crack: residual race-y PA BRK,
 IPC hot-loop NULL deref.
 
+## 2026-04-27 09:30 — Mac — STUMP #18 KILLED. Cave stable 10/10 deep, zero kernel faults. Failures all in Chromium runtime.
+
+**This leg: STUMP #18 (kernel UART-print fault when reading user
+memory in fatal-signal dump path) killed by adding is_user_range
+guards to ALL kernel→user reads in arch::handle_sync_exception:**
+
+- 'code around ELR' loops at EC=0 and EC=other handlers
+- saved-LR text candidate disassembly scan
+- 2048-iteration stack scan for ELR matches
+- bytes-at-x24 hex dump
+- user-stack u64 dump (sp-0x80 .. sp+0x100)
+
+Each load now bails cleanly with `(unmapped)` instead of triggering
+recursive EL1 data abort that mangled the dump.
+
+**Final 10-smoke distribution after this leg:**
+- 4/10 PA::SlowPathAlloc NULL+0x1c (LR=0x14d75cc8, NULL slot-span field)
+- 3/10 signo=7 elr=lr=0x1 (Rehash → HashTable::insert chain, bad funcptr)
+- 1/10 PA::SlotAddressAndSize::From high-VA (corrupt slot ptr)
+- 1/10 NEW: std::__tree_balance_after_insert NULL+0 from
+        IPC::ChannelAssociatedGroupController::AssociateInterface
+- 1/10 bssl::CryptoBufferPool::FindBufferLocked NULL+0x10
+- ZERO kernel faults
+- ZERO PA-BRK at 0x14d73000 (the original Stump #10 nemesis)
+
+Cave reaches 880-1021 lines reliably; max syscalls per run in this
+batch: 16450+. All failures are real Chromium runtime bugs, not
+kernel-side memory corruption.
+
 ## 2026-04-27 03:30 — Mac — Deep-run failure modes catalogued; 10/10 deep, distinct V8/Blink/PA/BoringSSL crash sites identified
 
 **This leg: ELR + LR + user-stack dump on every fatal signal. Lets us
