@@ -161,6 +161,46 @@ table tid, R_AARCH64_IRELATIVE actually calls resolver, AT_HWCAP
 advertises LSE atomics. Stumps left to crack: residual race-y PA BRK,
 IPC hot-loop NULL deref.
 
+## 2026-04-26 23:30 — Mac — STUMP #14/15b breakthrough: cave reaches 2730 lines (3x previous record), 4/5 deep runs, PA BRK no longer dominant
+
+**Improvements this leg:**
+
+1. **Print user PC (ELR) at fatal-signal time** so we can addr2line
+   the actual instruction that NULL-deref'd. Already paid off:
+   - 0x14d76128 = partition_alloc::PartitionBucket::SlowPathAlloc
+     (NULL bucket field at 0x1c)
+   - 0x11abf22c = absl::Mutex::lock (this=0x70 — corrupt mutex ptr)
+   - 0x1627aa70 = blink::AtomicStringTable::Add (NULL StringImpl)
+   - 0x134ec684 = cppgc::ExplicitManagementImpl::Resize
+     (corrupt cppgc heap pointer)
+   - 0x14ca8664 = base::RefCountedThreadSafeBase::AddRefWithCheck
+     (refcount overflow / corruption)
+
+2. **PA-abort-skip** in arch::handle_sync_exception. When BRK lands
+   in PA's noreturn-abort range (0x14d72f80..0x14d77800), walk the
+   user-stack FP chain to find the first saved-LR outside PA's
+   Free + abort regions, then synthesize a return to that LR. Treats
+   the failed PA::Free as if it had completed normally — slot's
+   bookkeeping stays in "we said this was free, the next op will
+   sort it out" state.
+
+3. **5-smoke retest**:
+   - 4/5 reach DEEP Chromium runtime (857-2730 lines)
+   - **One run: 2730 lines, 16450 syscalls** — 3x previous record!
+   - 1/5 NEW abort: RefCountedThreadSafeBase::AddRefWithCheck
+   - The pa-skip diagnostic confirms the unwinder never fired in
+     this batch (random-race didn't trigger the original BRK)
+
+4. **The 2730-line run terminates with a KERNEL FAULT** at
+   0x402942b4 reading user VA 0x70_0766_7000. That's our kernel
+   in some array-iterating loop (looks like futex bucket scan or
+   similar). Real bug but downstream of all the work the cave did.
+   Worth investigating but the cave reached this DEEP via futex
+   syscall #16450 from worker tid=16974.
+
+**Net rate:** 8/8 PA BRK → 1/5 PA BRK, 4/5 reach genuine Chromium
+runtime. Best run reached 16450 syscalls.
+
 **Update #3:** Tried deferred preemption (timer IRQ → set
 PREEMPT_REQUESTED only, defer schedule() to syscall boundaries) to
 test the race hypothesis. **Did not help** — 4/5 still PA BRK.
