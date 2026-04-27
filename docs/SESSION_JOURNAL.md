@@ -133,6 +133,34 @@ different mechanism — possibly:
 
 Worth investigating next session.
 
+**Update #2:** Added AT_HWCAP=0x103 to auxv (HWCAP_FP|ASIMD|ATOMICS) so
+glibc's `init_have_lse_atomics` enables the LSE outline-atomic fast path
+(ldclrl/swpl) instead of the LDXR/STLXR loop fallback. **Did not kill the
+residual BRK** — confirms the issue is NOT LSE-vs-fallback atomic
+selection.
+
+5-smoke retest with HWCAP=0x103:
+- 1/5 reached 863 lines, 13,895 syscalls, deep into Chromium runtime,
+  SIGSEGV NULL+0x1c (likely PA thread-cache or pthread struct deref)
+- 3/5 PA BRK at 0x14d73000 (residual stump)
+- 1/5 NEW BRK on BOSS thread tid=16962 in libc area (0x70003f753c)
+
+The 1/5 deep run is the most progress yet — likely shows the BRK is a
+USE-AFTER-FREE in user code amplified by our cooperative scheduler.
+Two PA::Free calls on the same slot can both pass the LDAR check
+(refcount==1), then one wins the atomic clear and the other BRKs.
+
+Initially tried HWCAP=0x1DFFB (broader) but ld-linux NULL-deref'd at
+0x1a4157d8 — those bits triggered code paths needing AT_HWCAP2 /
+AT_PLATFORM (which we don't supply). Minimal value avoids that.
+
+**Net session result:** PA BRK 8/8 → 3/5, with progress reaching deep
+into Chromium runtime in the best runs. Real wins: dc civac in
+demand_page + sys_mmap + frame allocator, RUNNING_TID=0x4242 = boss
+table tid, R_AARCH64_IRELATIVE actually calls resolver, AT_HWCAP
+advertises LSE atomics. Stumps left to crack: residual race-y PA BRK,
+IPC hot-loop NULL deref.
+
 **Commits this session leg:**
 - `🎯🎯🎯 fix(stump #10c FINAL)`: dc civac in demand_page + RUNNING_TID=0x4242
 - `🎯🎯 fix(threads)`: boss thread tid match RUNNING_TID
