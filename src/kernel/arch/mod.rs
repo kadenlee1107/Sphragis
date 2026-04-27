@@ -1752,6 +1752,16 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             uart::puts("  code around ELR:");
             for off in [-12i64, -8, -4, 0, 4, 8].iter() {
                 let addr = (elr as i64 + off) as usize;
+                // 🎯 STUMP #18: gate the read through is_user_range so
+                // we don't recursively fault when ELR is near the end
+                // of a sparsely-committed cave reservation. Without this
+                // the diagnostic dump triggers another exception, the
+                // handler runs again, and we either hang or stack-blow.
+                if !crate::batcave::linux::uaccess::is_user_range(addr, 4) {
+                    uart::puts("\n    ["); print_hex(addr as u64);
+                    uart::puts("] (unmapped)");
+                    continue;
+                }
                 let word: u32 = unsafe { core::ptr::read_volatile(addr as *const u32) };
                 uart::puts("\n    ["); print_hex(addr as u64);
                 uart::puts("] 0x"); print_hex(word as u64);
@@ -1921,6 +1931,13 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 uart::puts("  code around ELR:");
                 for off in [-16i64, -12, -8, -4, 0, 4, 8].iter() {
                     let addr = (elr as i64 + off) as usize;
+                    // 🎯 STUMP #18: gate via is_user_range — see the
+                    // matching fix at the EC=0 dump site above.
+                    if !crate::batcave::linux::uaccess::is_user_range(addr, 4) {
+                        uart::puts("\n    ["); print_hex(addr as u64);
+                        uart::puts("] (unmapped)");
+                        continue;
+                    }
                     let word: u32 = unsafe { core::ptr::read_volatile(addr as *const u32) };
                     uart::puts("\n    ["); print_hex(addr as u64);
                     uart::puts("] 0x"); print_hex(word as u64);
@@ -1963,6 +1980,22 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 // might be in a deeper frame.
                 for i in 0..2048usize {
                     let addr = sp_val + (i as u64) * 8;
+                    // 🎯 STUMP #18: gate via is_user_range. The cave's
+                    // stack mmap may end before sp+0x4000, and an
+                    // unmapped page within a registered reservation
+                    // would here trigger a recursive EL1 data abort that
+                    // wipes out the very crash dump we're emitting.
+                    // Stop the scan when we hit unmapped territory.
+                    if !crate::batcave::linux::uaccess::is_user_range(addr as usize, 8) {
+                        uart::puts("\n    [sp+0x");
+                        let off = i * 8;
+                        uart::putc(b"0123456789abcdef"[(off >> 12) & 0xF]);
+                        uart::putc(b"0123456789abcdef"[(off >> 8) & 0xF]);
+                        uart::putc(b"0123456789abcdef"[(off >> 4) & 0xF]);
+                        uart::putc(b"0123456789abcdef"[off & 0xF]);
+                        uart::puts("] (stack scan stops at unmapped)");
+                        break;
+                    }
                     let v: u64 = core::ptr::read_volatile(addr as *const u64);
                     // Match A: any 8-byte slot that EXACTLY equals the
                     // fault PC. Tells us "this kernel pointer is sitting
@@ -1997,6 +2030,12 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // abort that masks the entire crash dump.
                     if v > 0x10000004 && v < 0x1f000000 && (v & 3) == 0 {
                         let pc = v.wrapping_sub(4);
+                        // 🎯 STUMP #18: gate via is_user_range so a
+                        // saved-LR pointing at an uncommitted text page
+                        // doesn't trigger a recursive abort.
+                        if !crate::batcave::linux::uaccess::is_user_range(pc as usize, 4) {
+                            continue;
+                        }
                         let ins: u32 = core::ptr::read_volatile(pc as *const u32);
                         let top6 = (ins >> 26) & 0x3F;
                         let is_bl = top6 == 0x25;
