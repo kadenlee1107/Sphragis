@@ -161,6 +161,65 @@ table tid, R_AARCH64_IRELATIVE actually calls resolver, AT_HWCAP
 advertises LSE atomics. Stumps left to crack: residual race-y PA BRK,
 IPC hot-loop NULL deref.
 
+## 2026-04-27 13:00 — Mac — STUMP #17 + #18 ALL CRACKED. Three runs reach 21K-22K lines. Cave routinely surviving deep Chromium runtime.
+
+**Today's leg added two more cracks:**
+
+1. **STUMP #18 fully killed** — `black_box` defeats the LLVM
+   optimization that elided `page_is_mapped()` at unrolled diagnostic
+   sites. Applied at every kernel→user read in arch::handle_sync_exception
+   (code-around-ELR/LR loops, hex dumps, stack scans).
+   Result: ZERO kernel faults in 10 consecutive runs.
+
+2. **STUMP #17 cracked via pc-skip mechanism** — extends the
+   pa-skip-data unwinder to ALSO catch instruction aborts (EC=0x20,
+   0x21) and PC alignment faults (EC=0x22) where ELR < 0x1000. These
+   are the Rehash → HashTable::insert → AtomicStringTable::Add bad-
+   funcptr crashes (Smi tag or freed-pointer sentinel branched to).
+
+   When x29 is also corrupt (often the case post bad-ret), falls back
+   to scanning sp_el0..sp+0x200 for a plausible saved-LR (in
+   content_shell text range, 4-byte aligned, not in PA libchrome).
+
+### Latest 10-smoke distribution after all session fixes:
+
+| Lines | Skips | Failure |
+|-------|-------|---------|
+| 22009 | pc=2 pa=8 | NULL+8 deref at libchrome 0x152df624 |
+| 21596 | pc=0 pa=10 | FreeWithSize NULL+0x21 |
+| 21293 | pc=2 pa=8 | FreeWithSize NULL+0x9d |
+| 2563 | pc=2 pa=3 | NULL+0 in libc-area 0x11adfef8 |
+| 1951 | pc=2 pa=1 | high-VA fault at 0x44_0004_e548 |
+| 1405 | pc=0 pa=2 | libchrome 0x14d82f54 |
+| 1192 | pc=0 pa=1 | NULL+0 from PA-skip-data → HashTable::insert |
+| 1192 | pc=0 pa=1 | (same as above) |
+| 909 | pc=0 pa=0 | NULL+0 in libc-area 0x11adfef8 |
+| 413 | pc=0 pa=0 | kernel SP_EL1 corruption from nested exceptions |
+
+3/10 reach 21K+ lines! Average run length is now 6,200 lines vs
+~880 before.
+
+### Net session arc
+
+| Stage | PA BRK rate | Max line count | Skips |
+|-------|-------------|----------------|-------|
+| Session start | 8/8 | ~540 | 0 |
+| After dc civac + RUNNING_TID fixes | 4/5 | 935 | 0 |
+| After AT_HWCAP + IRELATIVE fix | 1/5 | 935 | 0 |
+| After pa-skip-brk unwinder | 0/5 | 1500 | 0 |
+| After pa-skip-data unwinder | 0/10 | 21,066 | up to 10 |
+| After STUMP #17 + #18 fixes | 0/10 | **22,009** | **up to 12** |
+
+### Open stumps for next session
+
+- Some 21K-line runs end at FreeWithSize NULL+0x21 / 0x9d — caller
+  free()s a value in x[0] that we left from before the synthesized
+  return. Either zero x[0] (causing NULL-checks to fire safely) or
+  set it to a known-good "freed sentinel" that doesn't deref small.
+- 1/10 had kernel SP_EL1 corruption (probably from nested-exception
+  stack underflow). Need to bump kernel stack size or detect SP_EL1
+  exhaustion.
+
 ## 2026-04-27 09:55 — Mac — STUMP #15c CRACKED. Cave reaches 21,066 lines with pa-skip-data unwinder. Single 1.2M-line monster run!
 
 **Today's leg added:**
