@@ -715,14 +715,26 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
                         else               { applied_glob += 1; }
                     }
                     0x408 => {
-                        // R_AARCH64_IRELATIVE: *R = resolver() — but we
-                        // can't call user code during load yet. Writing the
-                        // resolver's address is a survivable approximation
-                        // (a call through the GOT invokes the resolver,
-                        // which returns the variant pointer and typically
-                        // has no side effects). TODO: call the resolver at
-                        // load-time in EL1 to get the real value.
-                        let value = (r_addend as i64 + value_offset) as u64;
+                        // 🎯 STUMP #12 ROOT: R_AARCH64_IRELATIVE — actually
+                        // call the resolver at EL1 to get the resolved impl
+                        // address. See the loader/multi handler above for
+                        // the full root-cause writeup. Without this fix
+                        // PA::Free's call through RemaskPointer IFUNC reads
+                        // the wrong address and BRKs on a CHECK.
+                        let resolver_pa = (r_addend as i64 + patch_offset) as u64;
+                        let result_pa: u64;
+                        unsafe {
+                            core::arch::asm!(
+                                "blr {f}",
+                                f = in(reg) resolver_pa,
+                                inout("x0") 0u64 => result_pa,
+                                in("x1") 0u64,
+                                clobber_abi("C"),
+                            );
+                        }
+                        let value = (result_pa as i64
+                                     + value_offset
+                                     - patch_offset) as u64;
                         value_check(value, "IRELATIVE");
                         unsafe {
                             core::arch::asm!("str {v}, [{a}]",
@@ -1759,7 +1771,40 @@ fn apply_relocs_cross(
                     if r_type == 0x402 { applied_jump += 1; } else { applied_glob += 1; }
                 }
                 0x408 => {
-                    let value = (r_addend as i64 + value_offset) as u64;
+                    // 🎯 STUMP #12 ROOT: R_AARCH64_IRELATIVE — the GOT slot
+                    // must hold the RESOLVED implementation address, not
+                    // the resolver itself. Previously we wrote the resolver
+                    // into the slot; the IPLT trampoline branched to the
+                    // resolver and treated its return value as the operation's
+                    // result, when in fact that return value IS a function
+                    // pointer the caller expected to dereference indirectly.
+                    //
+                    // For PA's RemaskPointer IFUNC, this caused the IPLT
+                    // call to return the no-MTE remask function address
+                    // (0x1a4ff44 = `bti c; ret`) instead of the slot pointer
+                    // PA passed in. PA then `ldar w8, [x24]` read the bytes
+                    // at 0x1a4ff44 (a `bti c` opcode) instead of the
+                    // InSlotMetadata refcount, eventually triggering
+                    // `DoubleFreeOrCorruptionDetected` BRK.
+                    //
+                    // Fix: actually call the resolver from EL1. It runs at
+                    // its physical address (PC-relative `adrp` gives PA-
+                    // based results), so we must convert the PA returned to
+                    // a runtime VA before storing.
+                    let resolver_pa = (r_addend as i64 + patch_offset) as u64;
+                    let result_pa: u64;
+                    unsafe {
+                        core::arch::asm!(
+                            "blr {f}",
+                            f = in(reg) resolver_pa,
+                            inout("x0") 0u64 => result_pa,
+                            in("x1") 0u64,
+                            clobber_abi("C"),
+                        );
+                    }
+                    let value = (result_pa as i64
+                                 + value_offset
+                                 - patch_offset) as u64;
                     value_check_multi(value, "IRELATIVE");
                     unsafe {
                         core::arch::asm!("str {v}, [{a}]",

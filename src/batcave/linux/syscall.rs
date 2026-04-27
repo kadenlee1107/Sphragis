@@ -2439,15 +2439,19 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                             for i in to_copy..len {
                                 core::ptr::write_volatile(dst.add(i), 0);
                             }
-                            // Cache maintenance for code pages.
+                            // 🎯 STUMP #12: dc civac (PoC) instead of
+                            // dc cvau (PoU) so the freshly-copied bytes
+                            // hit main memory and are visible through
+                            // any future EL0 mapping. ic ivau still
+                            // needed for code pages.
                             let mut line = addr & !63;
                             let end = addr + len;
                             while line < end {
-                                core::arch::asm!("dc cvau, {a}", a = in(reg) line);
+                                core::arch::asm!("dc civac, {a}", a = in(reg) line);
                                 core::arch::asm!("ic ivau, {a}", a = in(reg) line);
                                 line += 64;
                             }
-                            core::arch::asm!("dsb ish");
+                            core::arch::asm!("dsb sy");
                             core::arch::asm!("isb");
                         }
                         // 🎯 STUMP #8: only apply user's prot to the
@@ -2511,19 +2515,19 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                         for i in to_copy..len {
                             core::ptr::write_volatile(dst.add(i), 0);
                         }
-                        // Cache maintenance: this region will be
-                        // fetched as instructions (libc .text). Without
-                        // `dc cvau` + `ic ivau` the D-side sees our
-                        // stores but the I-side may fetch stale lines.
+                        // 🎯 STUMP #12: dc civac (PoC) — also handles
+                        // the data side. Was dc cvau (PoU) which only
+                        // synchronizes D↔I within a core. PoC ensures
+                        // the bytes hit main memory.
                         let start = phys_target;
                         let end = phys_target + len;
                         let mut line = start & !63;
                         while line < end {
-                            core::arch::asm!("dc cvau, {a}", a = in(reg) line);
+                            core::arch::asm!("dc civac, {a}", a = in(reg) line);
                             core::arch::asm!("ic ivau, {a}", a = in(reg) line);
                             line += 64;
                         }
-                        core::arch::asm!("dsb ish");
+                        core::arch::asm!("dsb sy");
                         core::arch::asm!("isb");
                     }
                 }
@@ -2796,6 +2800,13 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             //
             // NEW-DOS-014: yield to the scheduler every 64 pages so a
             // cave that mmap's 1 GiB doesn't pin the core for seconds.
+            //
+            // 🎯 STUMP #12: dc civac after zeroing each page. Same root
+            // cause as STUMP #10c demand_page fix: alloc_contig may
+            // return a frame whose previous EL1-side use left dirty
+            // cache lines that PartitionAlloc's InSlotMetadata refcount
+            // check (`ldar w8, [x24]; cmp w27, #0x1`) reads as stale,
+            // producing CorruptionDetected BRK with x1=0x1.
             unsafe {
                 let ptr = base as *mut u8;
                 for p in 0..pages {
@@ -2803,10 +2814,18 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                     for i in 0..4096 {
                         core::ptr::write_volatile(ptr.add(off + i), 0);
                     }
+                    // Flush this page's cache lines to PoC.
+                    let mut line = (base as u64) + (off as u64);
+                    let end_line = line + 4096;
+                    while line < end_line {
+                        core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                        line += 64;
+                    }
                     if p % 64 == 63 {
                         super::threads::schedule();
                     }
                 }
+                core::arch::asm!("dsb sy");
             }
 
             // CHROMIUM-PHASE-B: if this is a file-backed mmap (fd >= 0
@@ -2843,16 +2862,22 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                             let src = (node.data_addr + offset) as *const u8;
                             let dst = base as *mut u8;
                             core::ptr::copy_nonoverlapping(src, dst, to_copy);
-                            // I-cache maintenance for code-loaded mmaps.
+                            // 🎯 STUMP #12: D-cache + I-cache maintenance.
+                            // dc civac (clean+invalidate to PoC) for data
+                            // visibility — was previously dc cvau (PoU)
+                            // which only synchronizes between D-cache and
+                            // I-cache. PoC ensures the freshly-copied
+                            // bytes hit main memory so EL0 reads them
+                            // through any mapping.
                             let start = base & !63;
                             let end = base + to_copy;
                             let mut line = start;
                             while line < end {
-                                core::arch::asm!("dc cvau, {a}", a = in(reg) line);
+                                core::arch::asm!("dc civac, {a}", a = in(reg) line);
                                 core::arch::asm!("ic ivau, {a}", a = in(reg) line);
                                 line += 64;
                             }
-                            core::arch::asm!("dsb ish");
+                            core::arch::asm!("dsb sy");
                             core::arch::asm!("isb");
                         }
                     }
