@@ -2269,6 +2269,31 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     let main_entry_va = user_va_base + (LOADED_ORIG_ENTRY.load(Ordering::Relaxed) as u64);
     let main_phdr_va  = user_va_base + main_phoff;
 
+    // 🎯 STUMP #13b: AT_HWCAP advertises CPU features. Without it,
+    // glibc's `init_have_lse_atomics` calls `getauxval(AT_HWCAP)`,
+    // sees 0, sets `__aarch64_have_lse_atomics = 0`, and ALL outline
+    // atomics (used by PartitionAlloc's __aarch64_swp4_rel /
+    // __aarch64_ldclr4_rel / __aarch64_ldadd4_rel etc.) fall back to
+    // LDXR/STLXR loops. The LDXR/STLXR fallback is correct in theory
+    // but has a tighter exclusive-monitor window and may miss
+    // concurrent updates under cooperative scheduling, producing
+    // spurious "old refcount didn't have bit 0 set" failures.
+    //
+    // QEMU `-cpu max` exposes LSE atomics; advertise them. Keep the
+    // value MINIMAL: just the bits PA's outline atomics actually
+    // check, plus FP/ASIMD which glibc ld-linux assumes everywhere.
+    //   HWCAP_FP (1<<0)      = 0x001
+    //   HWCAP_ASIMD (1<<1)   = 0x002
+    //   HWCAP_ATOMICS (1<<8) = 0x100
+    // = 0x103
+    //
+    // Earlier broader values (0x1DFFB inc. SHA, AES, FPHP, FCMA,
+    // LRCPC, DCPOP) made ld-linux NULL-deref at 0x1a4157d8 — likely
+    // a code path that's only reached when those bits are set and
+    // depends on additional auxv entries (AT_HWCAP2, AT_PLATFORM)
+    // we don't supply. Keep it minimal.
+    const AT_HWCAP_VALUE: u64 = 0x0000_0103;
+
     let auxv: &[(u64, u64)] = if running_interp {
         &[
             (0, 0),                      // AT_NULL (last — written first, grows up)
@@ -2279,9 +2304,10 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
             (7, interp_base),            // AT_BASE
             (6, 4096),                   // AT_PAGESZ
             (25, random_uva),            // AT_RANDOM
+            (16, AT_HWCAP_VALUE),        // AT_HWCAP — see comment above
         ]
     } else {
-        &[(0, 0), (25, random_uva), (6, 4096)]
+        &[(0, 0), (25, random_uva), (6, 4096), (16, AT_HWCAP_VALUE)]
     };
     for &(k, v) in auxv {
         sp -= 16;
