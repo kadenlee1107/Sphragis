@@ -435,7 +435,13 @@ pub fn init_main_thread(main_entry_pc: u64, main_sp_el0: u64) {
         }
 
         t[0] = Thread::empty();
-        t[0].tid = 1;
+        // 🎯 STUMP #11: boss thread table entry MUST match RUNNING_TID, or
+        // schedule()/on_tick()'s `slot_of(t, current_tid())` returns None
+        // → "no runnable thread" deadlock-diag fires AND no context
+        // switches happen. Workers spawned via clone() never get the CPU
+        // because the scheduler can't find the boss to swap out from.
+        // Match the BOSS_TID constant used in init.
+        t[0].tid = 0x4242;
         t[0].parent_tid = 0;
         t[0].state = ThreadState::Running;
         t[0].entry_pc = main_entry_pc;
