@@ -11,6 +11,105 @@ end of a session.
 
 ---
 
+## 2026-04-26 19:30 — Mac — Stumps #10c-#12 KILLED. Cave reaches DevTools, 29 workers, fontconfig, Skia, WebGPU. PartitionAlloc BRK is GONE. New stump #13 = epoll/eventfd hot-loop → NULL deref.
+
+**Goal.** Continue grinding past Stump #10c (the residual PartitionAlloc
+x1=0x1 BRK).
+
+**Stumps killed this session:**
+
+### Stump #10c FINAL: dc civac in demand_page + RUNNING_TID=0x4242
+
+Two complementary fixes that together eliminated the deterministic
+PartitionAlloc CorruptionDetected BRK.
+
+1. **`dc civac` in `demand_page::try_handle`** after zeroing fresh
+   frames. ARM64 Normal memory IS supposed to be coherent in the
+   inner-shareable domain, but the small_mmap region (0x70_xxxx_xxxx+)
+   reuses frames whose previous EL1-side residency left dirty cache
+   lines. PartitionAlloc's InSlotMetadata refcount check
+   (`ldar w8, [x24]; cmp w27, #0x1`) read stale data → CorruptionDetected.
+
+2. **`RUNNING_TID = 0x4242`** (matching `getpid()`). gettid()==getpid()
+   for main thread is a Linux-libc/PA assumption; mismatch produced
+   PID-derived cookies in slot pointers that violated PA's invariants.
+
+### Stump #11: t[0].tid mismatch in thread table
+
+`init_main_thread` set `t[0].tid = 1` but `RUNNING_TID = 0x4242`. Every
+`schedule()`/`on_tick()` `slot_of(t, current_tid())` returned None →
+"no runnable thread" deadlock-diag fired and NO context switches
+happened. After clone(), workers were never dispatched; cave appeared
+to hang post-clone.
+
+Fix: `t[0].tid = 0x4242` to match `RUNNING_TID`.
+
+**Result of #11:** Cave log expanded 16 KB → 39 KB. Reaches DevTools
+listening on ws://0.0.0.0:30000, 29 worker threads (tids 16963-16991),
+Skia + fontconfig + LevelDB + WebGPU cache initialized.
+
+### Stump #12: madvise(DONTNEED) was zeroing active PA slot metadata
+
+The PT-walking madvise from earlier this session was Zero ALL committed
+pages in the requested range. PA calls `madvise(DONTNEED)` on ranges
+that include both freed slots AND active slots — zeroing the active
+slots' in-slot refcount → next PA::Free read 0 instead of 1 →
+CorruptionDetected at libchrome ELR=0x14d73000.
+
+Fix: `madvise(MADV_DONTNEED)` is now a **no-op** that returns 0 success.
+Linux semantics allow this ("you may discard, not must"). PA's freelist
+remains intact. Memory is reclaimed via cave-destroy quotas instead.
+
+**Bonus fixes uncovered while chasing #12:**
+
+- **R_AARCH64_IRELATIVE actually calls the resolver** — was storing
+  the resolver address in the GOT slot, so IPLT branched to the
+  resolver and treated its return value (a function pointer for the
+  chosen impl) as the operation's result. For PA's RemaskPointer
+  IFUNC, this caused `ldar` to read from the no-MTE remask function
+  address (0x1a4ff44 = `bti c; ret`) instead of the slot pointer.
+  Fix: BLR resolver from EL1 with hwcap=0 (safe path for all PA
+  MTE-related IFUNCs), convert PA-based result to runtime VA via
+  (value_offset - patch_offset), store THAT in GOT.
+
+- **sys_mmap dc civac** instead of dc cvau (PoC instead of PoU) for
+  both anon-zero and file-backed copy paths.
+
+### Result: cave reaches NEW failure mode
+
+Log: 525 lines (Stump #12 BRK) → 913 lines (Stump #13 SIGSEGV)
+- All previous milestones retained
+- Worker tid=16993 enters epoll_pwait + read hot loop on fds 105/106
+- 17,024 syscalls in tight cycle (epoll_pwait → read → repeat)
+- Eventually NULL-deref'd at user-mode addr 0x10 → SIGSEGV
+- Cave terminates cleanly (signo=11 → SIG_DFL), no kernel-side corruption
+
+### Stump #13: epoll_pwait/read hot-loop → NULL deref
+
+Worker thread does `while (true) { epoll_pwait(epfd=105, events, 16, T);
+read(106, buf, 8); }`. Loop iterations are extremely fast — either
+epoll_pwait returns immediately (timeout=0 mode?) or our spin-yield
+estimator is wrong. Eventually some downstream invariant fails and
+Chromium NULL-derefs.
+
+Need to:
+- Verify our epoll_pwait actually blocks for non-zero timeouts
+- Check if our eventfd read decrements the counter properly
+- Find what's at user PC where the NULL-deref happens
+
+**Commits this session leg:**
+- `🎯🎯🎯 fix(stump #10c FINAL)`: dc civac in demand_page + RUNNING_TID=0x4242
+- `🎯🎯 fix(threads)`: boss thread tid match RUNNING_TID
+- `🎯 fix(loader, mmap)`: IRELATIVE resolver call + dc civac in mmap
+- `🎯🎯🎯 fix(stump #12)`: madvise(DONTNEED) → no-op
+
+**State of the tree:**
+Cave reaches genuine Chromium IPC layer. PA corruption gone. New stump
+is a real Chromium runtime issue (likely needs proper blocking epoll +
+correct eventfd semantics). Closer than ever to DOM render.
+
+---
+
 ## 2026-04-26 18:30 — Mac — Stump #10c continued: smarter madvise (PT-walking) + 5 new real syscall handlers (gettimeofday/statfs/times/getitimer/sched_getparam) + getppid=0x100. x1=0x1 still 5/10 stochastic.
 
 **Goal.** Continue grinding Stump #10c (PartitionAlloc x1=0x1).
