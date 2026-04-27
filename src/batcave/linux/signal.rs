@@ -714,6 +714,12 @@ fn install_l3_mapping(l1_phys: u64, user_va: u64, l3_entry: u64)
 /// fault came from EL0 and no user handler is installed for the
 /// signal. Never returns — resumes the shell.
 pub fn terminate_cave_fatal(signo: u32, fault_addr: u64) -> ! {
+    terminate_cave_fatal_with_lr(signo, fault_addr, 0)
+}
+
+/// Variant that also prints x30 / LR — invaluable when ELR=0x1 (jumped
+/// to a bad function pointer) and we need the caller's resume PC.
+pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
     uart::puts("[sig] fatal signo=");
     crate::kernel::mm::print_num(signo as usize);
     uart::puts(" fault=0x");
@@ -731,7 +737,53 @@ pub fn terminate_cave_fatal(signo: u32, fault_addr: u64) -> ! {
     for sh in (0..16).rev() {
         uart::putc(hex[((elr_now >> (sh * 4)) & 0xF) as usize]);
     }
+    if lr != 0 {
+        uart::puts(" lr=0x");
+        for sh in (0..16).rev() {
+            uart::putc(hex[((lr >> (sh * 4)) & 0xF) as usize]);
+        }
+    }
     uart::puts(" — terminating cave, returning to shell\n");
+
+    // 🎯 STUMP #17: when ELR/LR are both garbage (e.g. =0x1, jumped via
+    // bad function pointer), the only way to identify the culprit is
+    // walking the user FP chain. Dump 32 saved (FP, LR) pairs from the
+    // top of the user stack so we can see the genuine call chain.
+    let sp_el0: u64;
+    unsafe { core::arch::asm!("mrs {}, sp_el0", out(reg) sp_el0); }
+    if sp_el0 >= 0x1000 && sp_el0 < 0x0000_0100_0000_0000 {
+        uart::puts("  user-stack@sp:");
+        for i in 0..16usize {
+            let off = i * 16;
+            let addr = sp_el0 + off as u64;
+            let fp_v: u64 = unsafe {
+                let v: u64;
+                core::arch::asm!("ldr {v}, [{a}]",
+                    a = in(reg) addr, v = out(reg) v);
+                v
+            };
+            let lr_v: u64 = unsafe {
+                let v: u64;
+                core::arch::asm!("ldr {v}, [{a}]",
+                    a = in(reg) addr + 8, v = out(reg) v);
+                v
+            };
+            uart::puts("\n    +0x");
+            let h = b"0123456789abcdef";
+            uart::putc(h[(off >> 8) & 0xF]);
+            uart::putc(h[(off >> 4) & 0xF]);
+            uart::putc(h[off & 0xF]);
+            uart::puts(": fp=0x");
+            for sh in (0..16).rev() {
+                uart::putc(h[((fp_v >> (sh * 4)) & 0xF) as usize]);
+            }
+            uart::puts(" lr=0x");
+            for sh in (0..16).rev() {
+                uart::putc(h[((lr_v >> (sh * 4)) & 0xF) as usize]);
+            }
+        }
+        uart::puts("\n");
+    }
 
     // Clear the per-cave signal-handler table so a subsequent cave
     // doesn't inherit the dying Chromium's dispositions. (The full

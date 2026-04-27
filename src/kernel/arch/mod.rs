@@ -2236,8 +2236,9 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 unsafe {
                     core::arch::asm!("mrs {}, far_el1", out(reg) far_now);
                 }
-                crate::batcave::linux::signal::terminate_cave_fatal(
-                    fatal_signo, far_now,
+                let lr = unsafe { (*frame).x[30] };
+                crate::batcave::linux::signal::terminate_cave_fatal_with_lr(
+                    fatal_signo, far_now, lr,
                 );
                 // never returns
             }
