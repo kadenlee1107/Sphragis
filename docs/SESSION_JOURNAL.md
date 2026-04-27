@@ -97,6 +97,26 @@ Need to:
 - Check if our eventfd read decrements the counter properly
 - Find what's at user PC where the NULL-deref happens
 
+### CAVEAT: residual PA BRK still happens stochastically (2/3 runs)
+
+Stability re-test: 3 fresh smokes after all fixes:
+- Run 1: SIGSEGV NULL+0x70 (cave reaches leveldb fcntl/pwrite hot-loop)
+- Run 2: PA BRK at 0x14d73000 tid=16989 (BOSS V8 cage, 0x48..0x50)
+- Run 3: PA BRK at 0x14d73000 tid=16989
+
+So madvise no-op helped (rate dropped from 8/8 to ~2/3) but isn't the
+ONLY corruption source. The residual BRK has the same exact signature
+as before — slot in boss's V8 cage, refcount=0 instead of 1. Possible
+causes still on the table:
+- Cross-thread cache aliasing for cage slots (workers share TTBR0
+  with boss but maybe TLB has staleness post-reservation)
+- frame::free_frame doesn't dc civac after zeroing (if frame is
+  later reallocated to a different cave VA, stale zeros may persist)
+- Some other path that writes 0 to slot metadata
+
+Bisect candidate next session: add `dc civac` to free_frame /
+free_contig to invalidate cache lines on free.
+
 **Commits this session leg:**
 - `🎯🎯🎯 fix(stump #10c FINAL)`: dc civac in demand_page + RUNNING_TID=0x4242
 - `🎯🎯 fix(threads)`: boss thread tid match RUNNING_TID
