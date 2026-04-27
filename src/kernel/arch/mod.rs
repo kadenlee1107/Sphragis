@@ -2000,15 +2000,16 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 uart::puts("  code around ELR:");
                 for off in [-16i64, -12, -8, -4, 0, 4, 8].iter() {
                     let addr = (elr as i64 + off) as usize;
-                    // 🎯 STUMP #18: gate via is_user_range — see the
-                    // matching fix at the EC=0 dump site above.
-                    if !crate::batcave::linux::uaccess::is_user_range(addr, 4) {
-                        uart::puts("\n    ["); print_hex(addr as u64);
+                    let safe_addr = core::hint::black_box(addr);
+                    if !crate::batcave::linux::uaccess::is_user_range(safe_addr, 4)
+                        || !page_is_mapped(core::hint::black_box(safe_addr as u64))
+                    {
+                        uart::puts("\n    ["); print_hex(safe_addr as u64);
                         uart::puts("] (unmapped)");
                         continue;
                     }
-                    let word: u32 = unsafe { core::ptr::read_volatile(addr as *const u32) };
-                    uart::puts("\n    ["); print_hex(addr as u64);
+                    let word: u32 = unsafe { core::ptr::read_volatile(safe_addr as *const u32) };
+                    uart::puts("\n    ["); print_hex(safe_addr as u64);
                     uart::puts("] 0x"); print_hex(word as u64);
                 }
                 uart::puts("\n");
@@ -2150,9 +2151,17 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     uart::puts("  code around LR:");
                     for off in [-16i64, -12, -8, -4, 0].iter() {
                         let addr = ((*frame).x[30] as i64 + off) as usize;
+                        let safe_addr = core::hint::black_box(addr);
+                        if !crate::batcave::linux::uaccess::is_user_range(safe_addr, 4)
+                            || !page_is_mapped(core::hint::black_box(safe_addr as u64))
+                        {
+                            uart::puts("\n    ["); print_hex(safe_addr as u64);
+                            uart::puts("] (unmapped)");
+                            continue;
+                        }
                         let word: u32 = core::ptr::read_volatile(
-                            addr as *const u32);
-                        uart::puts("\n    ["); print_hex(addr as u64);
+                            safe_addr as *const u32);
+                        uart::puts("\n    ["); print_hex(safe_addr as u64);
                         uart::puts("] 0x"); print_hex(word as u64);
                     }
                     uart::puts("\n");
@@ -2177,9 +2186,16 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         uart::putc(b"0123456789abcdef"[off_abs & 0xF]);
                         uart::puts(": ");
                         let row_base = (obj as i64 + i * 8) as usize;
+                        let safe_row = core::hint::black_box(row_base);
+                        if !crate::batcave::linux::uaccess::is_user_range(safe_row, 8)
+                            || !page_is_mapped(core::hint::black_box(safe_row as u64))
+                        {
+                            uart::puts("(unmapped)");
+                            continue;
+                        }
                         for j in 0..8usize {
                             let byte: u8 = core::ptr::read_volatile(
-                                (row_base + j) as *const u8);
+                                (safe_row + j) as *const u8);
                             uart::putc(b"0123456789abcdef"[(byte >> 4) as usize]);
                             uart::putc(b"0123456789abcdef"[(byte & 0xF) as usize]);
                             uart::putc(b' ');
@@ -2187,7 +2203,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         uart::puts(" | ");
                         for j in 0..8usize {
                             let byte: u8 = core::ptr::read_volatile(
-                                (row_base + j) as *const u8);
+                                (safe_row + j) as *const u8);
                             if (0x20..=0x7e).contains(&byte) { uart::putc(byte); }
                             else { uart::putc(b'.'); }
                         }
@@ -2263,19 +2279,17 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             uart::putc(hex[(off >> 4) & 0xF]);
                             uart::putc(hex[off & 0xF]);
                             uart::puts(": ");
-                            // 🎯 STUMP #18: gate via is_user_range — see other
-                            // matching fixes. is_mapped only checks the
-                            // first byte of probe; we read 64 bytes here.
                             let row_addr = probe as usize + off;
-                            if !crate::batcave::linux::uaccess::is_user_range(row_addr, 16)
-                                || !page_is_mapped(row_addr as u64)
+                            let safe_row = core::hint::black_box(row_addr);
+                            if !crate::batcave::linux::uaccess::is_user_range(safe_row, 16)
+                                || !page_is_mapped(core::hint::black_box(safe_row as u64))
                             {
                                 uart::puts("(unmapped)");
                                 continue;
                             }
                             for j in 0..16usize {
                                 let byte: u8 = core::ptr::read_volatile(
-                                    (row_addr + j) as *const u8);
+                                    (safe_row + j) as *const u8);
                                 uart::putc(hex[(byte >> 4) as usize]);
                                 uart::putc(hex[(byte & 0xF) as usize]);
                                 uart::putc(b' ');
@@ -2319,17 +2333,14 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         } else {
                             uart::puts(" ");
                         }
-                        // 🎯 STUMP #18: gate via is_user_range AND
-                        // page_is_mapped. is_user_range only checks
-                        // logical reservations; the page might be in
-                        // a reservation but not yet committed.
-                        if !crate::batcave::linux::uaccess::is_user_range(addr as usize, 8)
-                            || !page_is_mapped(addr)
+                        let safe_addr = core::hint::black_box(addr);
+                        if !crate::batcave::linux::uaccess::is_user_range(safe_addr as usize, 8)
+                            || !page_is_mapped(core::hint::black_box(safe_addr))
                         {
                             uart::puts("(unmapped) ");
                             continue;
                         }
-                        let qword: u64 = core::ptr::read_volatile(addr as *const u64);
+                        let qword: u64 = core::ptr::read_volatile(safe_addr as *const u64);
                         uart::puts("0x");
                         for sh in (0..16).rev() {
                             uart::putc(b"0123456789abcdef"[((qword >> (sh*4)) & 0xF) as usize]);
