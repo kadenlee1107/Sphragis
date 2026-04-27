@@ -161,6 +161,86 @@ table tid, R_AARCH64_IRELATIVE actually calls resolver, AT_HWCAP
 advertises LSE atomics. Stumps left to crack: residual race-y PA BRK,
 IPC hot-loop NULL deref.
 
+## 2026-04-27 16:55 — Mac — STUMP #21 cracked + cave reaches FileURLLoader::Start in best run. Loading hello.html literally begins.
+
+### STUMP #21 — 0x29000000 indirect-call corruption ✅
+
+The 0x29000000 indirect-call jumps were caused by my pc-skip's
+stack-scan falling back to addresses in content_shell's BSS/data
+range (0x1a050040..0x1a224e58) as 'plausible saved-LR' values.
+
+Restricted both the main FP-walk AND the sp-scan fallback to require
+saved-LR be in content_shell's TEXT range
+(0x11720000..0x19910000). Bumped skip cap 64 → 256.
+
+### Cave's BEST run reached:
+
+```
+[runner] Launching on file:///bin/hello.html
+[16962:16962:0101] Applying FieldTrialTestingConfig
+[16962:16962:0101] VariationsSetupComplete
+[16962:16974:0101] components/discardable_memory: ...
+[16962:16978:0101] components/viz/service/main/viz_main_impl.cc:87
+[16962:16962:0101] ui/gfx/platform_font_skia.cc:258 Could not find any font
+[16962:16983:0101] proxy_resolution: PAC support disabled
+[16962:16973:0101] leveldb_proto: shared_proto_db/metadata
+[16962:16973:0101] simple_index_file: Simple Cache Index restoring
+[readlinkat] '/bin/hello.html'
+[openat] '/bin/hello.html' flags=0x00000000
+[16962:16973:0101] FileURLLoader::Start: file:///bin/hello.html  ← LITERALLY LOADING THE PAGE!
+```
+
+After FileURLLoader::Start, fault in
+`network::NetworkContext::CreateURLLoaderFactory` →
+`mojo::PendingReceiverState` ctor (NULL+2 deref).
+
+### Final 10-smoke distribution
+
+Typical runs: 538-1537 lines (Mojo IPC pump faults). The 22K-line
+peak run was a stochastic outlier where pa-skip placement was lucky
+and we got past PA's race-condition bookkeeping.
+
+| Lines | pc-skip | pa-skip | Phase |
+|-------|---------|---------|-------|
+| **22,079** | 2 | 8 | FileURLLoader::Start ✓ + NetworkContext factory |
+| 1537 | 2 | 0 | Mojo IPC pump |
+| 1297 | 0 | 1 | Mojo serialization |
+| 1192 (×3) | 0 | 1 | Blink HashTable::insert NULL+0 |
+| 887 | 0 | 0 | absl::Mutex::lock this=0x70 |
+| 871 | 0 | 0 | various |
+| 538 | 0 | 0 | Early BRK at PA AddRefWithCheck |
+
+Cave reaches: V8 startup, Skia, fontconfig, leveldb, WebGPU/Dawn,
+Blink CSS selector matching, Mojo IPC, sql::Database, network
+context init, **and starts loading hello.html** (in best run).
+
+### Remaining work to reach full DOM render
+
+To consistently reach `--dump-dom` output (parsed DOM tree printed
+to stderr), we'd need to push past:
+
+1. Mojo IPC initialization (NetworkContext, URLLoaderFactory)
+2. File response delivery to the URL loader
+3. Blink HTML parsing (HTMLDocumentParser, SegmentedString)
+4. DOM tree construction (Element, Document)
+5. Layout (LayoutObject, LayoutBlock)
+6. Render tree → --dump-dom output
+
+Each layer has its own PA-related races / NULL-derefs that our
+skip mechanisms catch some-but-not-all of.
+
+### Net session arc — full summary
+
+| Stage | Max lines | pc-skip | pa-skip | Notable |
+|-------|-----------|---------|---------|---------|
+| Session start | ~540 | 0 | 0 | PA BRK 8/8 |
+| dc civac + RUNNING_TID | 935 | 0 | 0 | PA BRK 4/5 |
+| AT_HWCAP + IRELATIVE | 935 | 0 | 0 | PA BRK 1/5 |
+| pa-skip-brk + pa-skip-data | 21,066 | 0 | 10 | DevTools, fonts |
+| STUMP #17 + #18 (LR/stack dump) | 22,009 | 2 | 12 | Mojo IPC reached |
+| STUMP #19 + #20 (filters + kstack) | 22,009 | 2 | 12 | SQL DB, V8 |
+| **STUMP #21 (text filter)** | **22,079** | **2** | **8** | **FileURLLoader started!** |
+
 ## 2026-04-27 14:30 — Mac — STUMP #19 + #20 cracked. Cave routinely 1.5K-6.5K lines, occasional 21K. Reaches Mojo IPC, SQL, V8 internals.
 
 **This leg added two more cracks:**
