@@ -2191,9 +2191,17 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             uart::putc(hex[(off >> 4) & 0xF]);
                             uart::putc(hex[off & 0xF]);
                             uart::puts(": ");
+                            // 🎯 STUMP #18: gate via is_user_range — see other
+                            // matching fixes. is_mapped only checks the
+                            // first byte of probe; we read 64 bytes here.
+                            let row_addr = probe as usize + off;
+                            if !crate::batcave::linux::uaccess::is_user_range(row_addr, 16) {
+                                uart::puts("(unmapped)");
+                                continue;
+                            }
                             for j in 0..16usize {
                                 let byte: u8 = core::ptr::read_volatile(
-                                    (probe as usize + off + j) as *const u8);
+                                    (row_addr + j) as *const u8);
                                 uart::putc(hex[(byte >> 4) as usize]);
                                 uart::putc(hex[(byte & 0xF) as usize]);
                                 uart::putc(b' ');
@@ -2236,6 +2244,14 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             uart::puts(":");
                         } else {
                             uart::puts(" ");
+                        }
+                        // 🎯 STUMP #18: gate via is_user_range. The cave's
+                        // stack mmap can end before sp+0x100, and the
+                        // sp-0x80 base means we may also read BEFORE the
+                        // mmap's start.
+                        if !crate::batcave::linux::uaccess::is_user_range(addr as usize, 8) {
+                            uart::puts("(unmapped) ");
+                            continue;
                         }
                         let qword: u64 = core::ptr::read_volatile(addr as *const u64);
                         uart::puts("0x");
