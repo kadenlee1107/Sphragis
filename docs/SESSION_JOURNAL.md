@@ -11,6 +11,94 @@ end of a session.
 
 ---
 
+## 2026-04-26 18:30 — Mac — Stump #10c continued: smarter madvise (PT-walking) + 5 new real syscall handlers (gettimeofday/statfs/times/getitimer/sched_getparam) + getppid=0x100. x1=0x1 still 5/10 stochastic.
+
+**Goal.** Continue grinding Stump #10c (PartitionAlloc x1=0x1).
+
+**New fixes this session leg:**
+
+1. **sys_madvise(MADV_DONTNEED) PT-walking** — only zeros pages with valid
+   L3 entries. Previous version touched every byte → demand-paged
+   uncommitted regions → OOM after 64K commits AND zeroed PartitionAlloc
+   bucket metadata V8 had written inside the cage. V8 calls
+   `madvise(0x3000000000, 256 GB, MADV_DONTNEED)` on its sandbox cage
+   — naive zero-loop is lethal.
+
+2. **5 new real syscall handlers** (Agent A's stub_zero audit):
+   - `gettimeofday` (169) — real cntpct→timeval write
+   - `statfs` (43) — zero-fill + sane defaults (f_bsize=4096, TMPFS_MAGIC)
+   - `times` (153) — zero-fill struct tms + real cntpct→ticks return
+   - `getitimer` (102) — zero-fill output buffer
+   - `sched_getparam` (158) — zero-fill output buffer
+   All previously stub_zero (returned 0 with NO write to user output)
+   → caller read uninitialized stack/heap garbage.
+
+3. **sys_getppid → 0x100** (was 1, matched the original getpid=1
+   anti-pattern after I changed getpid).
+
+4. **BRK exit dump now prints SP_EL0 + 32 user-stack u64s** so we can
+   see the call chain. Confirmed the path is:
+   PartitionRoot::Alloc → SlowPathAlloc → DoubleFreeOrCorruptionDetected
+   → CorruptionDetected. SlowPathAlloc detects corruption while walking
+   the bucket freelist during ALLOC, not Free.
+
+**Final 10-run distribution:**
+| failure | count |
+|---|---|
+| BRK PA x1=0x1 (CorruptionDetected) | 5 |
+| BRK PA x1=real-looking ptr (0x2400016220) | 1 |
+| BRK PA at NEW location (ELR=0x16f703d0, NOT PartitionAlloc) | 1 |
+| SIGSEGV NULL+0x70 | 1 |
+| SIGSEGV NULL+0x280 | 2 |
+
+**Bisect confirmed: madvise is NOT the source of x1=0x1.** With
+madvise=stub_zero, 7/8 still hit x1=0x1. So my earlier hypothesis
+(madvise zeroing PartitionAlloc bucket metadata) was wrong.
+
+**The 0x1 source remains elusive.** Per Agent A's earlier disassembly:
+- x1 = MTE-stripped pointer being freed/checked.
+- value 0x1 means a small integer is being treated as a pointer.
+- NO BL site has `mov x0, #1` literal; the 0x1 comes from a memory read.
+- Most likely: a sentinel value from some Chromium init path that we
+  don't satisfy correctly.
+
+**Possible next investigations (next session):**
+1. Add per-page logging to madvise(MADV_DONTNEED) showing which addrs
+   get zeroed. Cross-reference with PartitionAlloc super-page regions
+   to confirm/rule out overlap.
+2. Change SCHED_GETAFFINITY return value strategy (return cpusetsize
+   directly or 16 instead of 8).
+3. Audit `sys_getrandom` outputs — could it leak a 0x01 byte that
+   becomes a slot pointer LSB?
+4. Check `sys_uname` output values — Chromium might branch on
+   sysname/machine string.
+
+**Final session score (16 commits pushed):**
+
+| # | Stump | Commit |
+|---|---|---|
+| 1 | brk-zeroing + stack-top-cap | 39a14df1 |
+| 2 | futex.rs current_tid stub | 7c2c45b5 |
+| 3 | cave VA window unreserved | a36856e2 |
+| 4 | sys_mmap ENOMEM for outside-window | 2ebb8c13 |
+| 5 | KERNEL_RESERVED_FRAMES too small | 2ebb8c13 |
+| 6 | install_l3_mapping not idempotent | 0563d145 |
+| 7 | TCR.IPS + cache flushes + bitmap | dfd132b1 |
+| 7+ | DFSC gating + FIXED-high-VA pre-mprotect-RW | 8d0f20f9 |
+| 8 | FIXED-high-VA tail-prot + mprotect demand-page | 023b5ba6 |
+| 9 | install_l3_mapping race (no IrqGuard) | e67f68fb |
+| 10 | lseek silently returned 0 | 2ca892e7 |
+| 10+ | alloc_stack non-contiguous + new syscalls | 2f3b5d71 |
+| 10b | getpid=1 + st_dev=1 + sched_getaffinity=stub | 5321efc1 |
+| 10c | madvise PT-walk + 5 new syscalls + getppid=0x100 | 1a7b55b4 |
+
+**Where we are: cave reaches Dawn WebGPU + Skia Graphite + V8 sandbox
+init + Shared Dictionary + 30 threads + Chromium LOG output. PartitionAlloc
+x1=0x1 still fires 50% of runs but other 50% reach further into
+unique failure modes — pattern is fragmenting in a healthy way.**
+
+---
+
 ## 2026-04-26 17:30 — Mac — Stump #10b cracked open: getpid+st_dev+sched_getaffinity. PartitionAlloc x1=0x1 pattern breaking, 10-run distribution shows 6 different failure modes (used to be 1).
 
 **Goal.** Continue grinding past Stump #10b (PartitionAlloc x1=0x1
