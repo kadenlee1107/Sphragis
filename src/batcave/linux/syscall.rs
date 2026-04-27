@@ -752,6 +752,31 @@ fn sys_madvise(args: [u64; 6]) -> i64 {
     if len == 0 { return 0; }
     if advice != MADV_DONTNEED { return 0; }
 
+    // 🎯 STUMP #12 BISECT: temporarily make MADV_DONTNEED a no-op (just
+    // return 0 success). If PartitionAlloc was BRK'ing because madvise
+    // was clearing slot metadata behind PA's back, this lets us prove
+    // it. Real Linux madvise(DONTNEED) zeros pages, but most callers
+    // can tolerate "still has old data" — they only assume the pages
+    // are still committed (they re-allocate before reading).
+    static MADVISE_TRACE: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(0);
+    let n = MADVISE_TRACE.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if n < 5 || (n & 0xFF) == 0 {
+        uart::puts("[madv] DONTNEED #");
+        crate::kernel::mm::print_num(n as usize);
+        uart::puts(" addr=0x");
+        let hex = b"0123456789abcdef";
+        for sh in (0..16).rev() {
+            uart::putc(hex[((addr >> (sh * 4)) & 0xF) as usize]);
+        }
+        uart::puts(" len=");
+        crate::kernel::mm::print_num(len);
+        uart::puts("\n");
+    }
+    return 0;
+
+    // (UNREACHABLE — left intact for re-enable after bisect)
+    #[allow(unreachable_code)]
     // Page-align bounds.
     let start = addr & !0xFFFusize;
     let end_raw = match addr.checked_add(len) {
