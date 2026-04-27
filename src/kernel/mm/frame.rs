@@ -110,6 +110,17 @@ pub fn alloc_frame() -> Option<usize> {
                     addr = in(reg) target,
                 );
             }
+            // 🎯 STUMP #13: dc civac to PoC. The caller may map this
+            // frame into a different cave VA; any stale dirty cache
+            // lines (from a previous EL1-side use of this PA) would
+            // shadow our fresh zeros.
+            let mut line = addr as u64;
+            let end_line = line + PAGE_SIZE as u64;
+            while line < end_line {
+                core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                line += 64;
+            }
+            core::arch::asm!("dsb sy");
         }
         return Some(addr);
     }
@@ -181,6 +192,14 @@ pub fn alloc_kernel_frame() -> Option<usize> {
                     a = in(reg) addr + i * 8,
                     options(nostack, preserves_flags));
             }
+            // 🎯 STUMP #13: dc civac to PoC (see alloc_frame).
+            let mut line = addr as u64;
+            let end_line = line + PAGE_SIZE as u64;
+            while line < end_line {
+                core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                line += 64;
+            }
+            core::arch::asm!("dsb sy");
         }
         return Some(addr);
     }
@@ -248,6 +267,14 @@ pub fn alloc_contig(n_pages: usize) -> Option<usize> {
                     a = in(reg) base + i * 8,
                     options(nostack, preserves_flags));
             }
+            // 🎯 STUMP #13: dc civac to PoC (see alloc_frame).
+            let mut line = base as u64;
+            let end_line = line + (n_pages * PAGE_SIZE) as u64;
+            while line < end_line {
+                core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                line += 64;
+            }
+            core::arch::asm!("dsb sy");
         }
         return Some(base);
     }
@@ -289,6 +316,19 @@ pub fn free_frame(addr: usize) {
                 a = in(reg) addr + i * 8,
                 options(nostack, preserves_flags));
         }
+        // 🎯 STUMP #13: dc civac to PoC after zeroing on free. Same
+        // root cause family as STUMP #10c demand_page fix: when this
+        // frame is later reallocated to a NEW user VA via demand-page,
+        // the user might read via that new VA and see stale (cached
+        // dirty) data instead of the zeros we just wrote. PartitionAlloc
+        // CHECK on InSlotMetadata fails → CorruptionDetected BRK.
+        let mut line = addr as u64;
+        let end_line = line + PAGE_SIZE as u64;
+        while line < end_line {
+            core::arch::asm!("dc civac, {a}", a = in(reg) line);
+            line += 64;
+        }
+        core::arch::asm!("dsb sy");
     }
 
     let bit = frame_index % 64;
