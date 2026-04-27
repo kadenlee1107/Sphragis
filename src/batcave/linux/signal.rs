@@ -721,6 +721,16 @@ pub fn terminate_cave_fatal(signo: u32, fault_addr: u64) -> ! {
     for sh in (0..16).rev() {
         uart::putc(hex[((fault_addr >> (sh * 4)) & 0xF) as usize]);
     }
+    // 🎯 STUMP #14: also print user PC (ELR_EL1) so we can addr2line
+    // the actual instruction that faulted. fault_addr is just the
+    // dereferenced address (FAR) — without ELR we can't tell which
+    // user-code function blew up.
+    let elr_now: u64;
+    unsafe { core::arch::asm!("mrs {}, elr_el1", out(reg) elr_now); }
+    uart::puts(" elr=0x");
+    for sh in (0..16).rev() {
+        uart::putc(hex[((elr_now >> (sh * 4)) & 0xF) as usize]);
+    }
     uart::puts(" — terminating cave, returning to shell\n");
 
     // Clear the per-cave signal-handler table so a subsequent cave
