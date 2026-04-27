@@ -1766,29 +1766,41 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             uart::puts("  FAR=0x"); print_hex(far);
             uart::puts("\n");
             // Look up the L2_low entry for ELR and read phys bytes directly.
-            let l1_phys = ttbr0 & !1u64;
-            let l2_low = unsafe {
-                core::ptr::read_volatile((l1_phys) as *const u64)
-            };
-            let l2_low_phys = l2_low & 0x0000_FFFF_FFFF_F000;
-            let l2_idx = (elr >> 21) & 0x1FF;
-            let l2_entry = unsafe {
-                core::ptr::read_volatile(
-                    (l2_low_phys + l2_idx * 8) as *const u64)
-            };
-            let mapped_phys_block = l2_entry & 0x0000_FFFF_FFE0_0000; // 2 MB aligned
-            let offset_in_block = elr & 0x1F_FFFF;
-            let direct_phys = mapped_phys_block + offset_in_block;
-            let direct_word: u32 = unsafe {
-                core::ptr::read_volatile(direct_phys as *const u32)
-            };
-            uart::puts("  l1[0]=0x"); print_hex(l2_low);
-            uart::puts("  l2[");
-            crate::kernel::mm::print_num(l2_idx as usize);
-            uart::puts("]=0x"); print_hex(l2_entry);
-            uart::puts("\n  direct_phys=0x"); print_hex(direct_phys);
-            uart::puts("  bytes_there=0x"); print_hex(direct_word as u64);
-            uart::puts("\n");
+            // 🎯 STUMP #18 v2: skip this whole manual walk if ELR is
+            // outside the cave's identity-mapped low window
+            // (0..0x4000_0000) — for high-VA elr (0x70_xxxx_xxxx etc.)
+            // the L1[0]/L2 dance gives garbage that's likely to
+            // recursive-fault on the direct_phys read.
+            if elr < 0x4000_0000 {
+                let l1_phys = ttbr0 & !1u64;
+                let l2_low = unsafe {
+                    core::ptr::read_volatile((l1_phys) as *const u64)
+                };
+                let l2_low_phys = l2_low & 0x0000_FFFF_FFFF_F000;
+                let l2_idx = (elr >> 21) & 0x1FF;
+                let l2_entry = unsafe {
+                    core::ptr::read_volatile(
+                        (l2_low_phys + l2_idx * 8) as *const u64)
+                };
+                let mapped_phys_block = l2_entry & 0x0000_FFFF_FFE0_0000;
+                let offset_in_block = elr & 0x1F_FFFF;
+                let direct_phys = mapped_phys_block + offset_in_block;
+                // Gate the direct_phys read too — if l2_entry was 0 or
+                // garbage, direct_phys is junk and the read traps.
+                let direct_word: u32 = if direct_phys >= 0x4000_0000
+                    && direct_phys < 0xC000_0000 {
+                    unsafe { core::ptr::read_volatile(direct_phys as *const u32) }
+                } else { 0 };
+                uart::puts("  l1[0]=0x"); print_hex(l2_low);
+                uart::puts("  l2[");
+                crate::kernel::mm::print_num(l2_idx as usize);
+                uart::puts("]=0x"); print_hex(l2_entry);
+                uart::puts("\n  direct_phys=0x"); print_hex(direct_phys);
+                uart::puts("  bytes_there=0x"); print_hex(direct_word as u64);
+                uart::puts("\n");
+            } else {
+                uart::puts("  (skipping manual L1[0]/L2 walk — ELR is high-VA)\n");
+            }
             // Two ways to read insn at ELR — asm vs volatile — to
             // cross-check whether we're really reading what we think.
             // Dump 6 instructions around ELR — helps see what computed
@@ -1801,14 +1813,17 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 // of a sparsely-committed cave reservation. Without this
                 // the diagnostic dump triggers another exception, the
                 // handler runs again, and we either hang or stack-blow.
-                if !crate::batcave::linux::uaccess::is_user_range(addr, 4)
-                    || !page_is_mapped(addr as u64)
+                // black_box defeats the compiler's "I can prove page
+                // is mapped from is_user_range alone" optimization.
+                let safe_addr = core::hint::black_box(addr);
+                if !crate::batcave::linux::uaccess::is_user_range(safe_addr, 4)
+                    || !page_is_mapped(core::hint::black_box(safe_addr as u64))
                 {
-                    uart::puts("\n    ["); print_hex(addr as u64);
+                    uart::puts("\n    ["); print_hex(safe_addr as u64);
                     uart::puts("] (unmapped)");
                     continue;
                 }
-                let word: u32 = unsafe { core::ptr::read_volatile(addr as *const u32) };
+                let word: u32 = unsafe { core::ptr::read_volatile(safe_addr as *const u32) };
                 uart::puts("\n    ["); print_hex(addr as u64);
                 uart::puts("] 0x"); print_hex(word as u64);
             }
@@ -1842,9 +1857,17 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     uart::puts("  code around LR:");
                     for off in [-12i64, -8, -4, 0].iter() {
                         let addr = (f.x[30] as i64 + off) as usize;
+                        let safe_addr = core::hint::black_box(addr);
+                        if !crate::batcave::linux::uaccess::is_user_range(safe_addr, 4)
+                            || !page_is_mapped(core::hint::black_box(safe_addr as u64))
+                        {
+                            uart::puts("\n    ["); print_hex(safe_addr as u64);
+                            uart::puts("] (unmapped)");
+                            continue;
+                        }
                         let word: u32 = core::ptr::read_volatile(
-                            addr as *const u32);
-                        uart::puts("\n    ["); print_hex(addr as u64);
+                            safe_addr as *const u32);
+                        uart::puts("\n    ["); print_hex(safe_addr as u64);
                         uart::puts("] 0x"); print_hex(word as u64);
                     }
                     uart::puts("\n");
@@ -2031,15 +2054,9 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 let scan_limit = max_iter.min(2048);
                 for i in 0..scan_limit {
                     let addr = sp_val + (i as u64) * 8;
-                    // 🎯 STUMP #18: gate via is_user_range AND verify the
-                    // L3 entry is actually present. is_user_range
-                    // returns true for addresses in registered
-                    // reservations even when the L3 isn't installed
-                    // yet — the demand-page handler is supposed to fix
-                    // that on access, but if it fails (OOM, race) we
-                    // recursively fault here and lose the entire dump.
-                    if !crate::batcave::linux::uaccess::is_user_range(addr as usize, 8)
-                        || !page_is_mapped(addr)
+                    let safe_addr = core::hint::black_box(addr);
+                    if !crate::batcave::linux::uaccess::is_user_range(safe_addr as usize, 8)
+                        || !page_is_mapped(core::hint::black_box(safe_addr))
                     {
                         uart::puts("\n    [sp+0x");
                         let off = i * 8;
@@ -2050,7 +2067,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         uart::puts("] (stack scan stops at unmapped)");
                         break;
                     }
-                    let v: u64 = core::ptr::read_volatile(addr as *const u64);
+                    let v: u64 = core::ptr::read_volatile(safe_addr as *const u64);
                     // Match A: any 8-byte slot that EXACTLY equals the
                     // fault PC. Tells us "this kernel pointer is sitting
                     // RIGHT HERE on the stack" — pinpoints the leak source.
