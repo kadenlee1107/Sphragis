@@ -2485,7 +2485,13 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             };
                             // Want: a code address (0x10000000..0x1f000000),
                             // not in PA's libchrome range, 4-byte aligned.
-                            if v >= 0x10000000 && v < 0x1f000000
+                            // 🎯 STUMP #21: restrict LR candidate to
+                            // content_shell's TEXT range (0x11720000
+                            // .. 0x1990ab00) — picking up BSS/data
+                            // addresses (0x1a050040..0x1a224e58) led
+                            // to elr=BSS, then bad-instruction-fetch
+                            // after walking through zero-fill memory.
+                            if v >= 0x11720000 && v < 0x19910000
                                 && (v & 3) == 0
                                 && !(0x14d70000..=0x14da0000).contains(&v)
                                 && !(0x11a63000..=0x11a6a800).contains(&v)
