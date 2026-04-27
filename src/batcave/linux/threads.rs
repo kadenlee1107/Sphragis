@@ -172,7 +172,13 @@ const DEFAULT_STACK_PAGES: usize = 16; // 64 KiB fallback
 /// → unmapped, EL1 data abort, abort-handler-loops-then-cave-terminates.
 /// 8 KiB gives headroom: even when SP starts at the very top of an
 /// 8-KiB region, sp+0xf8 stays inside.
-const KERNEL_STACK_PAGES: usize = 2;
+// 🎯 STUMP #20: bumped from 2 to 8 pages (32 KB). Each nested
+// exception eats 272 bytes of SP_EL1, and our pa-skip / pc-skip
+// unwinders can chain several before the cave terminates. 8 KB
+// allowed ~30 nestings; 32 KB allows ~120 — should never run out
+// in practice. The kernel stack lives below 0xC0000000 and is
+// allocated per-thread via alloc_stack.
+const KERNEL_STACK_PAGES: usize = 8;
 const PAGE_SIZE: usize = 4096;
 
 /// Assembly helper (threads.s) that saves the OLD thread's regs and
