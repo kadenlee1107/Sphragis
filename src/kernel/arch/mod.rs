@@ -2431,7 +2431,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     let mut fp = if frame_x29 > 0x1000 { frame_x29 } else { sp_el0_now };
                     let mut hops = 0;
                     let mut found_lr: u64 = 0;
-                    while hops < 8 && fp != 0 {
+                    while hops < 16 && fp != 0 {
                         // Validate fp is in user range AND mapped.
                         if !crate::batcave::linux::uaccess::is_user_range(fp as usize, 16)
                             || !page_is_mapped(fp)
@@ -2447,8 +2447,13 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         // Skip PA::Free (0x11a63000..0x11a64000) AND
                         // PA::SlowPathAlloc + abort sites (libchrome
                         // 0x14d70000..0x14d80000).
-                        let in_pa_free = (0x11a63000..=0x11a64000).contains(&saved_lr);
-                        let in_pa_libchrome = (0x14d70000..=0x14d80000).contains(&saved_lr);
+                        // PA::Free family is at file VMA 0x1a63000..0x1a6a800
+                        // → runtime 0x11a63000..0x11a6a800 (after virt_base
+                        // 0x10000000 rebase).
+                        let in_pa_free = (0x11a63000..=0x11a6a800).contains(&saved_lr);
+                        // PA's libchrome-side wrappers + allocator_shim
+                        // span 0x14d70000..0x14da0000 — cover all of it.
+                        let in_pa_libchrome = (0x14d70000..=0x14da0000).contains(&saved_lr);
                         if !in_pa_free && !in_pa_libchrome && saved_lr != 0
                             && saved_lr > 0x1000
                         {
@@ -2482,8 +2487,8 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             // not in PA's libchrome range, 4-byte aligned.
                             if v >= 0x10000000 && v < 0x1f000000
                                 && (v & 3) == 0
-                                && !(0x14d70000..=0x14d80000).contains(&v)
-                                && !(0x11a63000..=0x11a64000).contains(&v)
+                                && !(0x14d70000..=0x14da0000).contains(&v)
+                                && !(0x11a63000..=0x11a6a800).contains(&v)
                             {
                                 found_lr = v;
                                 fp = probe_addr;
