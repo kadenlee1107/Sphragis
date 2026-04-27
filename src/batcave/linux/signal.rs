@@ -747,8 +747,13 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
 
     // 🎯 STUMP #17: when ELR/LR are both garbage (e.g. =0x1, jumped via
     // bad function pointer), the only way to identify the culprit is
-    // walking the user FP chain. Dump 32 saved (FP, LR) pairs from the
-    // top of the user stack so we can see the genuine call chain.
+    // walking the user FP chain. Dump up to 16 saved (FP, LR) pairs
+    // from the top of the user stack so we can see the genuine call
+    // chain.
+    //
+    // 🎯 STUMP #16: each load is gated by is_user_range so we don't
+    // recursively fault on an unmapped tail page (the cave's stack
+    // mmap may end before sp+0x100). On reject, stop the dump.
     let sp_el0: u64;
     unsafe { core::arch::asm!("mrs {}, sp_el0", out(reg) sp_el0); }
     if sp_el0 >= 0x1000 && sp_el0 < 0x0000_0100_0000_0000 {
@@ -756,6 +761,12 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
         for i in 0..16usize {
             let off = i * 16;
             let addr = sp_el0 + off as u64;
+            // Bail if either u64 in this 16-byte slot would overflow
+            // out of a known user range.
+            if !crate::batcave::linux::uaccess::is_user_range(addr as usize, 16) {
+                uart::puts("\n    [stops at unmapped page]");
+                break;
+            }
             let fp_v: u64 = unsafe {
                 let v: u64;
                 core::arch::asm!("ldr {v}, [{a}]",
