@@ -2398,9 +2398,15 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 // a cap, PA can spiral into a loop where each unwound
                 // call returns into a caller that faults again. 64
                 // skips is plenty to clear transient races.
+                // Bumped from 64 to 256 — Mojo IPC pump generates a
+                // lot of PA traffic and we want to give the cave room
+                // to push past many race-induced faults.
                 static PA_DATA_SKIP_TOTAL: core::sync::atomic::AtomicU32 =
                     core::sync::atomic::AtomicU32::new(0);
                 let skip_count = PA_DATA_SKIP_TOTAL.load(core::sync::atomic::Ordering::Relaxed);
+                let _ = skip_count;
+                // Use a higher cap since each iteration is bounded by
+                // the FP-walk failing (16 hops max).
                 // 🎯 STUMP #17: also catch the signo=7 elr=lr=fault=0x1
                 // pattern (Rehash chain bad-funcptr). EC=0x22 = PC
                 // alignment fault, ELR < 0x1000 = jumped to a small
@@ -2418,7 +2424,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 let is_bad_pc_fault = (ec == 0x20 || ec == 0x21 || ec == 0x22)
                     && elr_now < 0x1000;
                 if (is_pa_data_fault || is_bad_pc_fault)
-                    && skip_count < 64
+                    && skip_count < 256
                 {
                     // For bad-PC case, x29 may also be corrupt. Try
                     // starting the fp-walk from sp_el0 if x29 looks
@@ -2454,8 +2460,14 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         // PA's libchrome-side wrappers + allocator_shim
                         // span 0x14d70000..0x14da0000 — cover all of it.
                         let in_pa_libchrome = (0x14d70000..=0x14da0000).contains(&saved_lr);
+                        // 🎯 STUMP #21: restrict saved-LR to content_shell
+                        // TEXT (0x11720000..0x19910000) — accepting
+                        // BSS/data addrs leads to bad-instruction-fetch
+                        // after the cave 'returns' there.
+                        let in_text_range = saved_lr >= 0x11720000
+                            && saved_lr < 0x19910000;
                         if !in_pa_free && !in_pa_libchrome && saved_lr != 0
-                            && saved_lr > 0x1000
+                            && saved_lr > 0x1000 && in_text_range
                         {
                             found_lr = saved_lr;
                             break;
