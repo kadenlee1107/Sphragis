@@ -161,6 +161,52 @@ table tid, R_AARCH64_IRELATIVE actually calls resolver, AT_HWCAP
 advertises LSE atomics. Stumps left to crack: residual race-y PA BRK,
 IPC hot-loop NULL deref.
 
+## 2026-04-27 03:30 — Mac — Deep-run failure modes catalogued; 10/10 deep, distinct V8/Blink/PA/BoringSSL crash sites identified
+
+**This leg: ELR + LR + user-stack dump on every fatal signal. Lets us
+correlate every NULL deref with an addr2line'd Chromium function.**
+
+10-smoke distribution after this session's complete fix set:
+- 6/10 SIGBUS signo=7 fault=0x1 elr=0x1 lr=0x1 — bad-funcptr jump
+  (Rehash → HashTable::insert → AtomicStringTable::Add chain)
+- 2/10 mutex deref NULL+0x70 in absl::Mutex::lock
+- 2/10 PA::SlowPathAlloc NULL+0x1c (NULL bucket->slot_span->...)
+
+A second 5-smoke after adding x30/LR + 16-pair user-stack dump:
+- 935 lines: SIGSEGV in bssl::CryptoBufferPool::FindBufferLocked (BoringSSL)
+- 867 lines: KERNEL fault in our UART debug-print loop (0x40293de8)
+- 886 lines (×2): signo=7 elr=lr=0x1 (bad-funcptr)
+- 570 lines: NEW BRK at 0x16f706a8 = `blink::RuleMap::Add` (CSS rules)
+
+So the cave is now reliably reaching DEEP Chromium runtime in 4-5/5
+runs. Each failure is a distinct V8/Blink/PA/BoringSSL runtime issue,
+not a kernel-side memory-corruption symptom anymore.
+
+### Identified deep-run failure modes (each is its own stump):
+
+1. **signo=7 elr=0x1 lr=0x1** — bad function-pointer jump. Stack
+   trace: AtomicStringTable::Add → HashTable::insert → Rehash. Either
+   buffer overflow corrupted saved x30, or PAC autiasp returned a
+   sentinel. Needs PAC-aware investigation.
+
+2. **absl::Mutex::lock with this=0x70** — corrupt mutex pointer
+   (some struct was uninitialized OR free'd before lock).
+
+3. **PA::SlowPathAlloc NULL+0x1c** — slot_span->bucket field NULL
+   (slot span partial init under contention).
+
+4. **bssl::CryptoBufferPool::FindBufferLocked NULL+0x10** — empty
+   hashmap deref.
+
+5. **blink::RuleMap::Add brk #0x1** — CSS rule add hit a CHECK after
+   cppgc WriteBarrier returned. Likely cppgc-level corruption of
+   the GC handle being added.
+
+6. **Kernel UART-print fault** at 0x40293de8 — when our register-
+   dump prints user state and one of the printed-from addresses is
+   in an unmapped reservation. Easy to fix with a is_user_range check
+   wrapping the loads.
+
 ## 2026-04-26 23:30 — Mac — STUMP #14/15b breakthrough: cave reaches 2730 lines (3x previous record), 4/5 deep runs, PA BRK no longer dominant
 
 **Improvements this leg:**
