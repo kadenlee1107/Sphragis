@@ -302,8 +302,8 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         99 => (SyscallCat::Always, sys_stub_zero),   // set_robust_list
         100 => (SyscallCat::Always, sys_stub_zero),  // get_robust_list
         101 => (SyscallCat::Always, sys_nanosleep),  // nanosleep
-        102 => (SyscallCat::Always, sys_stub_zero),  // getitimer
-        103 => (SyscallCat::Always, sys_stub_zero),  // setitimer
+        102 => (SyscallCat::Always, sys_getitimer),  // 🎯 STUMP #10d: zero-fill struct itimerval
+        103 => (SyscallCat::Always, sys_stub_zero),  // setitimer (no out-buffer; 0 OK)
         131 => (SyscallCat::Always, sys_tgkill),       // tgkill
         132 => (SyscallCat::Always, sys_sigaltstack),  // sigaltstack
         134 => (SyscallCat::Always, sys_rt_sigaction), // rt_sigaction
@@ -313,11 +313,11 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         139 => (SyscallCat::Always, sys_rt_sigreturn), // rt_sigreturn
         144 => (SyscallCat::Always, sys_stub_zero),  // setgid
         146 => (SyscallCat::Always, sys_stub_zero),  // setuid
-        153 => (SyscallCat::Always, sys_stub_zero),  // times
+        153 => (SyscallCat::Always, sys_times),      // 🎯 STUMP #10d: real ticks + zero-fill tms
         154 => (SyscallCat::Always, sys_stub_zero),  // setpgid
         155 => (SyscallCat::Always, sys_stub_zero),  // getpgid
         157 => (SyscallCat::Always, sys_stub_zero),  // sched_getscheduler
-        158 => (SyscallCat::Always, sys_stub_zero),  // sched_getparam
+        158 => (SyscallCat::Always, sys_sched_getparam), // 🎯 STUMP #10d: zero-fill struct sched_param
         140 => (SyscallCat::Always, sys_stub_zero),  // setpriority — glibc
                                                      // pthread_create tunes
                                                      // nice level; stub accepts
@@ -330,7 +330,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
                                                      // stub 0 keeps glibc
                                                      // happy for PR_SET_NAME,
                                                      // PR_SET_DUMPABLE, etc.
-        169 => (SyscallCat::Always, sys_stub_zero),  // gettimeofday
+        169 => (SyscallCat::Always, sys_gettimeofday), // 🎯 STUMP #10d: real timeval write
         170 => (SyscallCat::Always, sys_stub_zero),  // getpgrp/setpgid
         171 => (SyscallCat::Always, sys_sigaltstack), // sigaltstack (compat)
         178 => (SyscallCat::Always, sys_gettid),      // gettid
@@ -398,7 +398,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         35 => (SyscallCat::FileIO, sys_stub_zero),    // unlinkat
         37 => (SyscallCat::FileIO, sys_stub_zero),    // linkat — hardlinks; success-stub
         38 => (SyscallCat::FileIO, sys_stub_zero),    // renameat — fontconfig cache .NEW→real; no-op OK
-        43 => (SyscallCat::FileIO, sys_stub_zero),    // statfs — return 0; bufs come back zeroed by caller
+        43 => (SyscallCat::FileIO, sys_statfs),       // 🎯 STUMP #10d: real statfs fill (was leaking uninit buf)
         46 => (SyscallCat::FileIO, sys_ftruncate),    // ftruncate — must really set node size for shm
         47 => (SyscallCat::FileIO, sys_stub_zero),    // fallocate — Chromium uses for shmem pre-alloc; success-stub OK
         48 => (SyscallCat::FileIO, sys_faccessat),    // faccessat
@@ -533,12 +533,133 @@ fn cave_has_cap(_cave_id: usize, cap: &str) -> bool {
 // zygote-host expectations. Picked to be both non-1 and to make the
 // derived bit pattern obviously not a stale read.
 fn sys_getpid(_args: [u64; 6]) -> i64 { 0x4242 }
-fn sys_getppid(_args: [u64; 6]) -> i64 { 1 }
+// 🎯 STUMP #10c: getppid was 1 (which I just changed from 0). 1 is
+// just as suspect as the original getpid=1. Use 0x100 so PartitionAlloc
+// doesn't get a literal-1 from PID derivation in any code path.
+fn sys_getppid(_args: [u64; 6]) -> i64 { 0x100 }
 fn sys_getuid(_args: [u64; 6]) -> i64 { 0 } // root
 fn sys_getgid(_args: [u64; 6]) -> i64 { 0 }
 fn sys_stub_zero(_args: [u64; 6]) -> i64 { 0 }
 fn sys_stub_enosys(_args: [u64; 6]) -> i64 { ENOSYS }
 fn sys_stub_enoent(_args: [u64; 6]) -> i64 { ENOENT }
+
+/// Helper: zero `len` bytes at user pointer `buf` (no-op if buf==0).
+/// Returns false on bounds-check failure so the caller can EFAULT.
+fn user_zero(buf: usize, len: usize) -> bool {
+    if buf == 0 || len == 0 { return true; }
+    if !is_user_ptr(buf, len) { return false; }
+    for i in 0..len {
+        unsafe { core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf + i); }
+    }
+    true
+}
+
+// 🎯 STUMP #10d: gettimeofday(tv, tz). The previous stub returned 0 but
+// did NOT write the user's struct timeval — glibc / Chromium then read
+// whatever uninitialized stack memory was at *tv. PartitionAlloc seeds
+// per-thread random state from gettimeofday during early init; a stale
+// 0x1 in the residual stack frame surfaces as the deterministic
+// PartitionAlloc x1=0x1 BRK we've been chasing.
+fn sys_gettimeofday(args: [u64; 6]) -> i64 {
+    let tv = args[0] as usize;
+    let tz = args[1] as usize;
+    // struct timeval = { time_t tv_sec; suseconds_t tv_usec; } = 16 bytes
+    if tv != 0 {
+        if !is_user_ptr(tv, 16) { return EFAULT; }
+        let count: u64;
+        let freq: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, cntpct_el0", out(reg) count);
+            core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+        }
+        let secs = if freq == 0 { 0 } else { count / freq };
+        let usecs: u64 = if freq == 0 {
+            0
+        } else {
+            let num = (count as u128 % freq as u128).saturating_mul(1_000_000u128);
+            (num / (freq as u128)) as u64
+        };
+        unsafe {
+            core::arch::asm!("str {v}, [{a}]", a = in(reg) tv, v = in(reg) secs);
+            core::arch::asm!("str {v}, [{a}]", a = in(reg) tv + 8, v = in(reg) usecs);
+        }
+    }
+    // struct timezone = { int tz_minuteswest; int tz_dsttime; } = 8 bytes
+    if !user_zero(tz, 8) { return EFAULT; }
+    0
+}
+
+// 🎯 STUMP #10d: statfs(path, buf). The previous stub returned 0 without
+// touching `buf`. struct statfs is 120 bytes on aarch64 Linux; Chromium's
+// disk_cache backend uses f_bsize and f_bfree to size in-memory freelist
+// shards. Reading uninit residual stack at *buf could surface a literal
+// 0x1 into PartitionAlloc-managed buffers. Fix: zero-fill, then write
+// minimal sane values (f_bsize=4096, f_blocks=large, f_bfree=large).
+fn sys_statfs(args: [u64; 6]) -> i64 {
+    let _path = args[0] as usize;
+    let buf = args[1] as usize;
+    if buf == 0 { return EFAULT; }
+    if !user_zero(buf, 120) { return EFAULT; }
+    // struct statfs (aarch64): f_type, f_bsize, f_blocks, f_bfree, f_bavail,
+    // f_files, f_ffree, f_fsid, f_namelen, f_frsize, f_flags, f_spare[4].
+    // We write the most-consulted fields with conservative defaults.
+    unsafe {
+        // f_type @ 0 (8 bytes) — TMPFS_MAGIC = 0x01021994
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf, v = in(reg) 0x01021994u64);
+        // f_bsize @ 8 (8 bytes) — 4096
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 8, v = in(reg) 4096u64);
+        // f_blocks @ 16 — 64K blocks (256 MB)
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 16, v = in(reg) 65536u64);
+        // f_bfree @ 24 — 56K free
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 24, v = in(reg) 57344u64);
+        // f_bavail @ 32 — 56K avail
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 32, v = in(reg) 57344u64);
+        // f_namelen @ 72 (8 bytes) — 255
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 72, v = in(reg) 255u64);
+        // f_frsize @ 80 — 4096
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 80, v = in(reg) 4096u64);
+    }
+    0
+}
+
+// 🎯 STUMP #10d: getitimer(which, curr_value). Linux fills struct
+// itimerval (32 bytes: 2× struct timeval). Stub returning 0 with no
+// write leaks uninit stack to caller. Zero-fill is correct — "no
+// timer armed" maps to all-zero itimerval.
+fn sys_getitimer(args: [u64; 6]) -> i64 {
+    let curr = args[1] as usize;
+    if !user_zero(curr, 32) { return EFAULT; }
+    0
+}
+
+// 🎯 STUMP #10d: sched_getparam(pid, param). Linux fills struct
+// sched_param (just `int sched_priority` = 4 bytes; padded to 16
+// in some glibc versions — zero 16 to be safe). Returning 0 without
+// writing leaks uninit; freelist sizing keyed on garbage priority.
+fn sys_sched_getparam(args: [u64; 6]) -> i64 {
+    let param = args[1] as usize;
+    if !user_zero(param, 16) { return EFAULT; }
+    0
+}
+
+// 🎯 STUMP #10d: times(buf). Linux fills struct tms (4× clock_t = 32
+// bytes) AND returns clock_t (real ticks, not 0). Returning 0 plus
+// uninit buf has been confirmed to leak literal 0x1 into Chromium's
+// base/time scratch storage in some configs. Zero-fill + return a
+// monotonically-growing tick count from cntpct_el0.
+fn sys_times(args: [u64; 6]) -> i64 {
+    let buf = args[0] as usize;
+    if !user_zero(buf, 32) { return EFAULT; }
+    let count: u64;
+    let freq: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) count);
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+    }
+    // CLK_TCK = 100 on Linux/aarch64; convert cntpct → ticks.
+    let ticks = if freq == 0 { 0 } else { (count.saturating_mul(100)) / freq };
+    ticks as i64
+}
 
 // ─── lseek (62) — file seek ───
 //
@@ -611,42 +732,82 @@ fn sys_sched_getaffinity(args: [u64; 6]) -> i64 {
     core::cmp::min(cpusetsize, 8) as i64
 }
 
-// 🎯 STUMP #11: madvise — handle MADV_DONTNEED by zeroing the user range.
-// PartitionAlloc + V8 use madvise(MADV_DONTNEED) to "decommit" pages,
-// expecting subsequent reads to return zero. Returning 0 silently without
-// zeroing leaves stale data → PartitionAlloc reads garbage freelist pointers.
+// 🎯 STUMP #10c FIX (replaces previous Stump #11 madvise impl):
+// madvise(MADV_DONTNEED) now ONLY zeroes pages that are ALREADY committed
+// (have a valid L3 entry). Skips uncommitted pages — they'll demand-page
+// to fresh zeros on first access, which IS the MADV_DONTNEED contract.
 //
-// CAREFUL: only zero for MADV_DONTNEED. MADV_FREE is "lazy free — kernel
-// may discard"; not zeroing is valid. MADV_REMOVE is for shmem hole-punch.
+// CRITICAL FIX: previous version touched every byte in the range, which
+// triggered demand-page commits on every 4 KB. V8 calls
+// `madvise(0x3000000000, 256 GB, MADV_DONTNEED)` on its sandbox cage; my
+// old code OOM'd after ~64K commits AND zeroed PartitionAlloc bucket
+// metadata pages V8 had written inside the cage → bucket=NULL →
+// PartitionBucket::SlowPathAlloc NULL deref + DoubleFreeOrCorruptionDetected
+// BRK with x1=0x1.
 fn sys_madvise(args: [u64; 6]) -> i64 {
     let addr = args[0] as usize;
     let len  = args[1] as usize;
     let advice = args[2] as i32;
     const MADV_DONTNEED: i32 = 4;
     if len == 0 { return 0; }
-    if advice == MADV_DONTNEED {
-        // Tolerate addrs in registered demand-page reservations even if
-        // is_user_range rejects them — the cave window check is cave-VA-only.
-        let in_user = uaccess::is_user_range(addr, len);
-        let in_resv = super::demand_page::is_in_active_reservation(addr, len);
-        if !in_user && !in_resv {
-            return 0; // silently ignore unmapped advice
+    if advice != MADV_DONTNEED { return 0; }
+
+    // Page-align bounds.
+    let start = addr & !0xFFFusize;
+    let end_raw = match addr.checked_add(len) {
+        Some(v) => v,
+        None => return -(22i64), // EINVAL
+    };
+    let end = (end_raw + 0xFFF) & !0xFFFusize;
+
+    // Walk cave's L1/L2/L3 for each page. Only zero where L3 is valid.
+    let ttbr0: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
+    let l1_phys = ttbr0 & !1u64;
+
+    let _g = crate::kernel::sync::IrqGuard::new();
+    let mut va = start;
+    while va < end {
+        let l1_idx = ((va >> 30) & 0x1FF) as u64;
+        let l1e: u64 = unsafe {
+            core::ptr::read_volatile((l1_phys + l1_idx * 8) as *const u64)
+        };
+        if (l1e & 0b11) != 0b11 {
+            // L1 entry invalid; skip the entire 1 GB it covers.
+            let next_l1 = ((va >> 30) + 1) << 30;
+            va = next_l1;
+            continue;
         }
-        // Zero in 8-byte chunks. If the page isn't backed yet, the
-        // demand-page handler will give us a fresh zero page on first
-        // write — which is exactly the MADV_DONTNEED semantic.
-        unsafe {
-            let mut p = addr;
-            let end = addr + len;
-            while p + 8 <= end {
-                core::ptr::write_volatile(p as *mut u64, 0);
-                p += 8;
-            }
-            while p < end {
-                core::ptr::write_volatile(p as *mut u8, 0);
-                p += 1;
+        let l2_phys = l1e & 0x0000_FFFF_FFFF_F000;
+        let l2_idx = ((va >> 21) & 0x1FF) as u64;
+        let l2e: u64 = unsafe {
+            core::ptr::read_volatile((l2_phys + l2_idx * 8) as *const u64)
+        };
+        // L2 BLOCK descriptor (cave window) has bits[1:0]=0b01 — for our
+        // purposes treat it as "not a table; skip" since we don't want
+        // to zero kernel-window pages.
+        if (l2e & 0b11) != 0b11 {
+            let next_l2 = ((va >> 21) + 1) << 21;
+            va = next_l2;
+            continue;
+        }
+        let l3_phys = l2e & 0x0000_FFFF_FFFF_F000;
+        let l3_idx = ((va >> 12) & 0x1FF) as u64;
+        let l3e: u64 = unsafe {
+            core::ptr::read_volatile((l3_phys + l3_idx * 8) as *const u64)
+        };
+        if (l3e & 0b11) == 0b11 {
+            // Page is committed — zero it via the user VA.
+            unsafe {
+                let mut p = va;
+                let page_end = va + 4096;
+                while p + 8 <= page_end {
+                    core::ptr::write_volatile(p as *mut u64, 0);
+                    p += 8;
+                }
             }
         }
+        va += 4096;
     }
     0
 }
