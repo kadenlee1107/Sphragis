@@ -2394,20 +2394,41 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 // Only fire for: EC=0x24 (data abort from EL0), FAR
                 // small (NULL+offset < 0x1000), ELR in PA's libchrome
                 // region (0x14000000..0x1c000000).
-                // Cap the cumulative PA-data-skip count per cave run.
-                // Without a cap, PA can spiral into a loop where each
-                // unwound call returns into a caller that faults again.
-                // 64 skips is plenty to clear transient races without
-                // letting a bad run produce a million lines of dump.
+                // Cap the cumulative skip count per cave run. Without
+                // a cap, PA can spiral into a loop where each unwound
+                // call returns into a caller that faults again. 64
+                // skips is plenty to clear transient races.
                 static PA_DATA_SKIP_TOTAL: core::sync::atomic::AtomicU32 =
                     core::sync::atomic::AtomicU32::new(0);
                 let skip_count = PA_DATA_SKIP_TOTAL.load(core::sync::atomic::Ordering::Relaxed);
-                if (ec == 0x24 || ec == 0x21)
+                // 🎯 STUMP #17: also catch the signo=7 elr=lr=fault=0x1
+                // pattern (Rehash chain bad-funcptr). EC=0x22 = PC
+                // alignment fault, ELR < 0x1000 = jumped to a small
+                // numeric (likely Smi tag or freed-pointer sentinel).
+                // The caller's x30 wasn't restored to a real LR —
+                // walk the FP chain like the PA-data-skip case.
+                let is_pa_data_fault = (ec == 0x24 || ec == 0x21)
                     && far_now < 0x1000
-                    && (0x14000000..=0x1c000000).contains(&elr_now)
+                    && (0x14000000..=0x1c000000).contains(&elr_now);
+                // EC=0x20 = instruction abort from lower EL (jumped
+                // to non-executable / unmapped). EC=0x21 = same from
+                // current EL. EC=0x22 = PC alignment. Any of these
+                // with ELR < 0x1000 means a corrupt-pointer indirect
+                // branch (Smi tag, NULL+offset, etc.).
+                let is_bad_pc_fault = (ec == 0x20 || ec == 0x21 || ec == 0x22)
+                    && elr_now < 0x1000;
+                if (is_pa_data_fault || is_bad_pc_fault)
                     && skip_count < 64
                 {
-                    let mut fp = unsafe { (*frame).x[29] };
+                    // For bad-PC case, x29 may also be corrupt. Try
+                    // starting the fp-walk from sp_el0 if x29 looks
+                    // bogus. The user stack at sp typically has
+                    // (saved_fp, saved_lr) for the most recent frame
+                    // even after a bad ret.
+                    let frame_x29 = unsafe { (*frame).x[29] };
+                    let sp_el0_now: u64;
+                    unsafe { core::arch::asm!("mrs {}, sp_el0", out(reg) sp_el0_now); }
+                    let mut fp = if frame_x29 > 0x1000 { frame_x29 } else { sp_el0_now };
                     let mut hops = 0;
                     let mut found_lr: u64 = 0;
                     while hops < 8 && fp != 0 {
@@ -2437,6 +2458,40 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         fp = next_fp;
                         hops += 1;
                     }
+
+                    // Fallback: if fp-walk failed, scan sp_el0 for any
+                    // plausible saved-LR slot (a value > 0x1000 that's
+                    // not in PA's text). This is conservative but
+                    // catches the Rehash-chain bad-funcptr where x29
+                    // is corrupt but the stack still has a real return
+                    // address from one of the outer Hashtable::insert
+                    // / AtomicStringTable::Add frames.
+                    if found_lr == 0 && is_bad_pc_fault {
+                        let mut probe_addr = sp_el0_now;
+                        let probe_end = sp_el0_now + 0x200;
+                        while probe_addr < probe_end {
+                            if !crate::batcave::linux::uaccess::is_user_range(probe_addr as usize, 8)
+                                || !page_is_mapped(probe_addr)
+                            {
+                                break;
+                            }
+                            let v: u64 = unsafe {
+                                core::ptr::read_volatile(probe_addr as *const u64)
+                            };
+                            // Want: a code address (0x10000000..0x1f000000),
+                            // not in PA's libchrome range, 4-byte aligned.
+                            if v >= 0x10000000 && v < 0x1f000000
+                                && (v & 3) == 0
+                                && !(0x14d70000..=0x14d80000).contains(&v)
+                                && !(0x11a63000..=0x11a64000).contains(&v)
+                            {
+                                found_lr = v;
+                                fp = probe_addr;
+                                break;
+                            }
+                            probe_addr += 8;
+                        }
+                    }
                     if found_lr != 0 {
                         unsafe {
                             (*frame).elr   = found_lr;
@@ -2455,7 +2510,11 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         }
                         let n = PA_DATA_SKIP_TOTAL.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                         if n < 10 || (n & 0xFF) == 0 {
-                            uart::puts("[pa-skip-data] #");
+                            uart::puts(if is_bad_pc_fault {
+                                "[pc-skip] #"
+                            } else {
+                                "[pa-skip-data] #"
+                            });
                             crate::kernel::mm::print_num(n as usize);
                             uart::puts(" elr=0x");
                             let hex = b"0123456789abcdef";
