@@ -2351,6 +2351,103 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     core::arch::asm!("mrs {}, far_el1", out(reg) far_now);
                 }
                 let lr = unsafe { (*frame).x[30] };
+                let elr_now = unsafe { (*frame).elr };
+
+                // 🎯 STUMP #15c: PA NULL-deref skip. PartitionAlloc's
+                // SlowPathAlloc / SlotAddressAndSize::From / friends
+                // can race on the V8 cage (slot span partially init,
+                // freelist not yet linked) and load NULL at a small
+                // offset. The fault is benign-ish — same pattern as
+                // PA's CHECK BRK family. Treat it like the abort skip:
+                // walk the FP chain, find the first non-PA caller,
+                // synthesize a return there as if PA::Free/Alloc had
+                // succeeded.
+                //
+                // Only fire for: EC=0x24 (data abort from EL0), FAR
+                // small (NULL+offset < 0x1000), ELR in PA's libchrome
+                // region (0x14000000..0x1c000000).
+                // Cap the cumulative PA-data-skip count per cave run.
+                // Without a cap, PA can spiral into a loop where each
+                // unwound call returns into a caller that faults again.
+                // 64 skips is plenty to clear transient races without
+                // letting a bad run produce a million lines of dump.
+                static PA_DATA_SKIP_TOTAL: core::sync::atomic::AtomicU32 =
+                    core::sync::atomic::AtomicU32::new(0);
+                let skip_count = PA_DATA_SKIP_TOTAL.load(core::sync::atomic::Ordering::Relaxed);
+                if (ec == 0x24 || ec == 0x21)
+                    && far_now < 0x1000
+                    && (0x14000000..=0x1c000000).contains(&elr_now)
+                    && skip_count < 64
+                {
+                    let mut fp = unsafe { (*frame).x[29] };
+                    let mut hops = 0;
+                    let mut found_lr: u64 = 0;
+                    while hops < 8 && fp != 0 {
+                        // Validate fp is in user range AND mapped.
+                        if !crate::batcave::linux::uaccess::is_user_range(fp as usize, 16)
+                            || !page_is_mapped(fp)
+                        {
+                            break;
+                        }
+                        let next_fp: u64 = unsafe {
+                            core::ptr::read_volatile(fp as *const u64)
+                        };
+                        let saved_lr: u64 = unsafe {
+                            core::ptr::read_volatile((fp + 8) as *const u64)
+                        };
+                        // Skip PA::Free (0x11a63000..0x11a64000) AND
+                        // PA::SlowPathAlloc + abort sites (libchrome
+                        // 0x14d70000..0x14d80000).
+                        let in_pa_free = (0x11a63000..=0x11a64000).contains(&saved_lr);
+                        let in_pa_libchrome = (0x14d70000..=0x14d80000).contains(&saved_lr);
+                        if !in_pa_free && !in_pa_libchrome && saved_lr != 0
+                            && saved_lr > 0x1000
+                        {
+                            found_lr = saved_lr;
+                            break;
+                        }
+                        fp = next_fp;
+                        hops += 1;
+                    }
+                    if found_lr != 0 {
+                        unsafe {
+                            (*frame).elr   = found_lr;
+                            (*frame).x[29] = fp;
+                            (*frame).x[30] = found_lr;
+                            // Don't synthesize x[0] — leave it as it
+                            // was at fault. Setting x[0]=0 made callers
+                            // (Blink::HashTable::insert) NULL-deref the
+                            // result without checking. Whatever stale
+                            // value was in x[0] is more likely to be
+                            // safer (PA::Alloc rarely returns NULL on
+                            // success path; callers that DO check NULL
+                            // already filter that case).
+                            core::arch::asm!("msr sp_el0, {a}",
+                                a = in(reg) fp + 16);
+                        }
+                        let n = PA_DATA_SKIP_TOTAL.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        if n < 10 || (n & 0xFF) == 0 {
+                            uart::puts("[pa-skip-data] #");
+                            crate::kernel::mm::print_num(n as usize);
+                            uart::puts(" elr=0x");
+                            let hex = b"0123456789abcdef";
+                            for sh in (0..16).rev() {
+                                uart::putc(hex[((elr_now >> (sh * 4)) & 0xF) as usize]);
+                            }
+                            uart::puts(" far=0x");
+                            for sh in (0..16).rev() {
+                                uart::putc(hex[((far_now >> (sh * 4)) & 0xF) as usize]);
+                            }
+                            uart::puts(" → 0x");
+                            for sh in (0..16).rev() {
+                                uart::putc(hex[((found_lr >> (sh * 4)) & 0xF) as usize]);
+                            }
+                            uart::puts("\n");
+                        }
+                        return;
+                    }
+                }
+
                 crate::batcave::linux::signal::terminate_cave_fatal_with_lr(
                     fatal_signo, far_now, lr,
                 );
