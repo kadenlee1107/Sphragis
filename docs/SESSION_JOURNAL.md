@@ -161,6 +161,29 @@ table tid, R_AARCH64_IRELATIVE actually calls resolver, AT_HWCAP
 advertises LSE atomics. Stumps left to crack: residual race-y PA BRK,
 IPC hot-loop NULL deref.
 
+**Update #3:** Tried deferred preemption (timer IRQ → set
+PREEMPT_REQUESTED only, defer schedule() to syscall boundaries) to
+test the race hypothesis. **Did not help** — 4/5 still PA BRK.
+Reverted. The race isn't timer-induced.
+
+**FINAL fresh-build retest (5 smokes after all session fixes):**
+- 3/5 reach DEEP Chromium runtime (863, 899, 907 lines), each with
+  a different NULL-deref offset (0x1c, 0x38, 0xf8) → real Chromium
+  runtime issues, not memory corruption
+- 2/5 PA BRK at 0x14d73000 tid=16990 (residual stump)
+
+**Net rate this session:** 8/8 PA BRK → 2/5 PA BRK + 3/5 deep runs.
+That's a major shift. Cave reaches Chromium IPC + leveldb + WebGPU
++ font/Skia init + DevTools listening reliably; the 3 NULL-deref
+runs each crash in DIFFERENT places, suggesting we're past the
+worst memory-corruption bottleneck and into "sandboxed user code
+behaving badly because we lack X subsystem".
+
+The residual PA BRK has the same exact slot offset (0x624500
+within whichever cage gets used) every time — suggests a SPECIFIC
+allocation Chromium does that we mishandle, not random corruption.
+Worth instrumenting next session.
+
 **Commits this session leg:**
 - `🎯🎯🎯 fix(stump #10c FINAL)`: dc civac in demand_page + RUNNING_TID=0x4242
 - `🎯🎯 fix(threads)`: boss thread tid match RUNNING_TID
