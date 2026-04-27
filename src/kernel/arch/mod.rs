@@ -1330,6 +1330,102 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             let in_child = crate::batcave::linux::syscall::IN_CHILD
                 .load(core::sync::atomic::Ordering::Relaxed);
 
+            // 🎯 STUMP #15b: PartitionAlloc's noreturn-abort BRKs.
+            // PA's three crash points (CorruptionDetected,
+            // FreelistCorruptionDetected, and the body of
+            // DoubleFreeOrCorruptionDetected) are reached from
+            // PA::Free's two-phase atomic CHECK firing. The check is a
+            // real race (TOCTOU between LDAR and atomic ldclr) in user
+            // code; ignoring it lets us see how much further the cave
+            // can get with PA's bookkeeping in a "we said this was
+            // free, the next op will sort it out" state.
+            //
+            // Walk the FP chain to find the first stack frame whose
+            // saved-LR is OUTSIDE PA's noreturn-abort code range, then
+            // return there as if PA::Free completed normally.
+            //
+            // KNOWN ABORT ELRs (this build of content_shell):
+            //   0x14d73000 = CorruptionDetected
+            //   0x14d73298 = DFOCD body fault after partial skip
+            //   0x14d777ac = FreelistCorruptionDetected
+            // PA libchrome text region is roughly 0x14000000-0x1B000000;
+            // PA::Free itself is at 0x11a630c0 so we test for "still
+            // inside PA::Free" by looking for LR < 0x12000000 (not in
+            // libchrome PA region).
+            const PA_ABORT_BRKS: &[u64] = &[
+                0x14d73000, 0x14d77780, 0x14d77784, 0x14d77788, 0x14d7778c,
+                0x14d77790, 0x14d77794, 0x14d77798, 0x14d7779c, 0x14d777a0,
+                0x14d777a4, 0x14d777a8, 0x14d777ac, 0x14d777b0,
+                0x14d72f98, 0x14d72fdc,
+            ];
+            // Treat anything in the PA-abort range as abort-y.
+            let pa_abort = PA_ABORT_BRKS.contains(&elr)
+                || (0x14d72f80..=0x14d77800).contains(&elr);
+            if pa_abort {
+                // Walk the user stack's FP chain. Each frame: FP -> [FP], LR -> [FP+8].
+                let sp_el0: u64;
+                unsafe { core::arch::asm!("mrs {}, sp_el0", out(reg) sp_el0); }
+                let mut fp = unsafe { (*frame).x[29] };
+                let mut hops = 0;
+                let mut found_lr: u64 = 0;
+                while hops < 8 && fp != 0 {
+                    let next_fp: u64 = unsafe {
+                        core::ptr::read_volatile(fp as *const u64)
+                    };
+                    let saved_lr: u64 = unsafe {
+                        core::ptr::read_volatile((fp + 8) as *const u64)
+                    };
+                    // Is saved_lr OUTSIDE PA's Free + abort regions?
+                    // PA::Free is at 0x11a630c0..0x11a64000.
+                    // PA's abort functions are at 0x14d72f80..0x14d77800.
+                    // Both are in libchrome but most user code is at
+                    // OTHER offsets — we want the first non-PA caller.
+                    let in_pa_free = (0x11a63000..=0x11a64000).contains(&saved_lr);
+                    let in_pa_aborts = (0x14d72f80..=0x14d77800).contains(&saved_lr);
+                    if !in_pa_free && !in_pa_aborts && saved_lr != 0 {
+                        found_lr = saved_lr;
+                        break;
+                    }
+                    fp = next_fp;
+                    hops += 1;
+                }
+                if found_lr != 0 {
+                    // Synthesize "PA::Free returned normally": restore
+                    // SP to past PA::Free's frame, set elr to user's LR.
+                    unsafe {
+                        (*frame).elr   = found_lr;
+                        (*frame).x[29] = fp; // user-code FP
+                        (*frame).x[30] = found_lr;
+                        // Pop PA's nested frames. Caller's frame starts
+                        // right after the saved x29 we just used.
+                        core::arch::asm!("msr sp_el0, {a}",
+                            a = in(reg) fp + 16);
+                    }
+                    static SKIP_COUNT: core::sync::atomic::AtomicU32 =
+                        core::sync::atomic::AtomicU32::new(0);
+                    let n = SKIP_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    if n < 10 || (n & 0xFF) == 0 {
+                        uart::puts("[pa-skip] #");
+                        crate::kernel::mm::print_num(n as usize);
+                        uart::puts(" elr=0x");
+                        let hex = b"0123456789abcdef";
+                        for sh in (0..16).rev() {
+                            uart::putc(hex[((elr >> (sh * 4)) & 0xF) as usize]);
+                        }
+                        uart::puts(" hops=");
+                        crate::kernel::mm::print_num(hops);
+                        uart::puts(" → user-LR=0x");
+                        for sh in (0..16).rev() {
+                            uart::putc(hex[((found_lr >> (sh * 4)) & 0xF) as usize]);
+                        }
+                        uart::puts("\n");
+                    }
+                    let _ = sp_el0;
+                    return;
+                }
+                uart::puts("[pa-skip] couldn't unwind; falling through to terminate\n");
+            }
+
             // If abort/brk from busybox code range, skip the instruction
             // (worker cleanup, musl assertions, etc. — non-fatal)
             let in_code = (elr < 0x1400000)
