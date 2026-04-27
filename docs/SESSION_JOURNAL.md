@@ -202,10 +202,43 @@ not a kernel-side memory-corruption symptom anymore.
    cppgc WriteBarrier returned. Likely cppgc-level corruption of
    the GC handle being added.
 
-6. **Kernel UART-print fault** at 0x40293de8 — when our register-
-   dump prints user state and one of the printed-from addresses is
-   in an unmapped reservation. Easy to fix with a is_user_range check
-   wrapping the loads.
+6. **Kernel fault at 0x402942b4** (different from the user-stack
+   dump): a 2048-iteration loop in some kernel debug-print path
+   reads user u64s. When the cave's mmap reservation has
+   uncommitted gap pages, we fault. STUMP #17 — needs to wrap the
+   read with is_user_range and stop on unmapped. Triggers downstream
+   of high-syscall-volume runs (setpriority + others).
+
+   Fixed the user-stack-dump path in signal.rs but the 0x402942b4
+   loop is in a different function we haven't located by symbol yet.
+
+### Net session result
+
+**8/8 PA BRK at session start → 4/5 deep runs (up to 2730 lines /
+16450 syscalls) at session end.** Cave reaches DevTools + 29
+workers + Skia + WebGPU + Blink + V8 + cppgc + leveldb + BoringSSL
++ fontconfig in the deep runs. Each remaining failure is a distinct
+real Chromium-runtime bug, not memory corruption.
+
+### Stumps killed this session
+
+- #10c FINAL: dc civac in demand_page + RUNNING_TID=0x4242
+- #11: t[0].tid mismatch fixed (boss-tid match RUNNING_TID)
+- #12: madvise(DONTNEED) → no-op (was zeroing active PA slot metadata)
+       + R_AARCH64_IRELATIVE actually calls resolver from EL1
+       + sys_mmap dc civac (PoC instead of PoU)
+- #13: dc civac in alloc_frame/free_frame/alloc_contig
+- #13b: AT_HWCAP=0x103 advertises LSE atomics
+- #14: ELR + x30/LR + 16-pair user-stack dump on fatal signal
+- #14b: 5+ distinct deep-run failure sites identified by addr2line
+- #15b: PA-abort-skip via FP-walk (synthesized return)
+- #16: is_user_range guard on user-stack dump
+
+### Open stumps for next session
+
+- #17: signo=7 elr=0x1 — Rehash → HashTable::insert → string-table
+- #15c: residual race-y PA BRK (now rare, not dominant)
+- #18: kernel 0x402942b4 loop reading user pages without bounds check
 
 ## 2026-04-26 23:30 — Mac — STUMP #14/15b breakthrough: cave reaches 2730 lines (3x previous record), 4/5 deep runs, PA BRK no longer dominant
 
