@@ -394,8 +394,16 @@ static THREADS_LOCK: AtomicBool = AtomicBool::new(false);
 /// TID of the thread currently executing on the CPU. Distinct from
 /// CURRENT_TID in syscall.rs (the legacy single-thread TID) — we will
 /// eventually subsume that, but the switchover is the human's wiring job.
-static RUNNING_TID: AtomicU32 = AtomicU32::new(1);
-static NEXT_TID: AtomicU32 = AtomicU32::new(2);
+// 🎯 STUMP #10c: boss tid=1 was inconsistent with getpid=0x4242.
+// In Linux, gettid()==getpid() for the main thread; many libc /
+// PartitionAlloc paths assume this and use them interchangeably.
+// PID/TID derivation cookies stored in PartitionAlloc slot-spans
+// would compute differently on the boss vs from getpid() lookups,
+// producing literal-1 sentinels in slot pointers.
+//
+// Match the boss tid to getpid (0x4242). Workers start at 0x4243.
+static RUNNING_TID: AtomicU32 = AtomicU32::new(0x4242);
+static NEXT_TID: AtomicU32 = AtomicU32::new(0x4243);
 
 /// ROOT-FIX (2026-04-24): PID of the most recent fake-forked "child".
 /// Kept around for any wait4 code that still consults it, but the
@@ -453,8 +461,9 @@ pub fn init_main_thread(main_entry_pc: u64, main_sp_el0: u64) {
     // lands as 0 in release builds sometimes (same family as the
     // CAVE_QUOTAS / THREADS-table flake). Explicitly reset to 2 so
     // `fetch_add(1)` returns 2 on the first clone — not 0.
-    NEXT_TID.store(2, Ordering::Release);
-    RUNNING_TID.store(1, Ordering::Release);
+    // 🎯 STUMP #10c: keep boss tid in sync with getpid (0x4242).
+    NEXT_TID.store(0x4243, Ordering::Release);
+    RUNNING_TID.store(0x4242, Ordering::Release);
     THREADING_ENABLED.store(true, Ordering::Release);
     uart::puts("[threads] Main thread registered, threading enabled\n");
 }
@@ -474,8 +483,8 @@ pub fn reset_for_cave_switch() {
             *t = Thread::empty();
         }
     }
-    RUNNING_TID.store(1, Ordering::Release);
-    NEXT_TID.store(2, Ordering::Release);
+    RUNNING_TID.store(0x4242, Ordering::Release);
+    NEXT_TID.store(0x4243, Ordering::Release);
     THREADING_ENABLED.store(false, Ordering::Release);
     PREEMPT_REQUESTED.store(false, Ordering::Release);
 }

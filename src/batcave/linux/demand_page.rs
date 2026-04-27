@@ -196,6 +196,21 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     unsafe {
         let p = frame as *mut u8;
         for i in 0..4096 { core::ptr::write_volatile(p.add(i), 0); }
+        // 🎯 STUMP #10c FINAL: clean every cache line we wrote to PoC.
+        // We zeroed via the kernel identity map (EL1). EL0 will read
+        // the same physical frame via the user VA we're about to install.
+        // ARM64 normal memory is supposed to be coherent in the inner-
+        // shareable domain, but the small_mmap region (0x70_0000_0000+)
+        // is the hot path and stale cache lines from prior PA usage
+        // can persist. PartitionAlloc's InSlotMetadata refcount check
+        // (`ldar w8, [x24]; cmp w27, #0x1`) reads stale data → fails →
+        // CorruptionDetected BRK.
+        let mut line = frame as u64;
+        while line < frame as u64 + 4096 {
+            core::arch::asm!("dc civac, {a}", a = in(reg) line);
+            line += 64;
+        }
+        core::arch::asm!("dsb sy");
     }
 
     let page_va = far & !0xFFFu64;

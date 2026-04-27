@@ -351,7 +351,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         // 223 is fadvise64. 210 is shutdown (moved to Network block below).
         // Previously these were mislabeled as shmget/shmctl/shutdown-stub.
         nr::FADVISE64 => (SyscallCat::Always, sys_stub_zero),
-        233 => (SyscallCat::Always, sys_madvise), // 🎯 STUMP #11: real madvise (handles MADV_DONTNEED by zeroing the range)
+        233 => (SyscallCat::Always, sys_madvise), // 🎯 STUMP #10c: PT-walking madvise (only zeros committed pages)
         262 => (SyscallCat::Always, sys_stub_zero),  // getrlimit equiv
         276 => (SyscallCat::Always, sys_stub_zero),  // renameat2
         279 => (SyscallCat::Memory, sys_memfd_create), // memfd_create — needs mem cap
