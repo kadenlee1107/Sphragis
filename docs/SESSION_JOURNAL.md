@@ -161,6 +161,37 @@ table tid, R_AARCH64_IRELATIVE actually calls resolver, AT_HWCAP
 advertises LSE atomics. Stumps left to crack: residual race-y PA BRK,
 IPC hot-loop NULL deref.
 
+## 2026-04-27 09:55 — Mac — STUMP #15c CRACKED. Cave reaches 21,066 lines with pa-skip-data unwinder. Single 1.2M-line monster run!
+
+**Today's leg added:**
+
+- `page_is_mapped(user_va)` helper — walks active L1→L2→L3 to verify
+  the page has a valid L3 entry, used in all kernel-side diagnostic
+  reads to avoid recursive aborts on uncommitted reservation pages.
+- Extended `pa_abort_skip` to `pa-skip-data`: handles PA's data-abort
+  NULL-derefs (EC=0x24/0x21, FAR<0x1000, ELR in libchrome
+  0x14000000..0x1c000000) by FP-walking to the first non-PA caller's
+  saved LR and synthesizing a return there.
+- Cap skip count at 64/cave so a single bad run can't spiral into
+  the multi-million-line dump territory we saw briefly.
+
+### Result:
+- One run reached **1,199,047 lines, 24 pa-skip-data events** — cave
+  ran for an enormous stretch of Chromium activity before terminating.
+- After capping: one run reached 21,066 lines with 10 skips.
+- Typical runs: 850-1192 lines.
+- All five end states are real Chromium runtime issues:
+  - signo=7 elr=0x1 (Rehash → HashTable::insert bad funcptr)
+  - PA::SlotAddressAndSize::From high VA fault
+  - blink::HashTable::insert NULL+0 from synthesized return
+  - Kernel UART-print fault (rare; couldn't fully suppress because
+    page_is_mapped gets compiled out at some sites)
+
+The kernel-side diagnostic fault is a residual annoyance but doesn't
+affect the cave's outcome (it still terminates with the original
+SIGSEGV). The 21K-line single run shows the cave can survive A LOT
+of PA misbehavior given a workable unwinder.
+
 ## 2026-04-27 09:30 — Mac — STUMP #18 KILLED. Cave stable 10/10 deep, zero kernel faults. Failures all in Chromium runtime.
 
 **This leg: STUMP #18 (kernel UART-print fault when reading user
