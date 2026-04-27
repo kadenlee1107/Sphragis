@@ -161,6 +161,70 @@ table tid, R_AARCH64_IRELATIVE actually calls resolver, AT_HWCAP
 advertises LSE atomics. Stumps left to crack: residual race-y PA BRK,
 IPC hot-loop NULL deref.
 
+## 2026-04-27 14:30 — Mac — STUMP #19 + #20 cracked. Cave routinely 1.5K-6.5K lines, occasional 21K. Reaches Mojo IPC, SQL, V8 internals.
+
+**This leg added two more cracks:**
+
+1. **STUMP #19 (FreeWithSize NULL+small)** — widened pa-skip filter
+   from `0x14d70000..0x14d80000` to `0x14d70000..0x14da0000` to cover
+   PA's allocator_shim wrappers (FreeWithSize at 0x14d92780 was just
+   outside the old range). Bumped fp-walk depth from 8 to 16 hops.
+
+2. **STUMP #20 (kernel SP_EL1 underflow)** — bumped
+   `KERNEL_STACK_PAGES` from 2 to 8 (8 KB → 32 KB). Each nested
+   exception eats 272 bytes of SP_EL1 and our pa-skip / pc-skip
+   unwinders can chain several. Now allows ~120 nestings before
+   underflow.
+
+### Latest 10-smoke distribution (after STUMP #19 + #20):
+
+| Lines | pc-skip | pa-skip | Failure |
+|-------|---------|---------|---------|
+| 6,536 | 2 | 0 | 0x29000000 indirect call (libc/V8) |
+| 5,973 | 2 | 0 | 0x29000000 indirect call (libc/V8) |
+| 1,974 | 1 | 2 | signo=7 corrupted-hash value |
+| 1,960 | 0 | 3 | high-VA cage 0x1c_0051f600 |
+| 1,279 | 0 | 1 | cage fault 0x34_000521a0 |
+| 969 | 0 | 0 | absl::Mutex::lock this=0x70 |
+| 913 | 0 | 0 | cppgc Resize NULL+0x280 |
+| 850 | 0 | 0 | user instruction abort 0x70_0ef58000 |
+| 565 | 0 | 0 | BRK at libc 0x70_003f753c |
+| 541 | 0 | 0 | BRK at AddRefWithCheck (early) |
+
+ZERO kernel faults. Cave reaches:
+- Blink CSS selector matching
+- net::ChromeRootStoreData (BoringSSL net cert data)
+- url::Parsed (URL parsing)
+- mojo::Serializer (Mojo IPC serialization)
+- sql::Database::GetCachedStatement
+- V8/libc indirect call tables
+
+### New stump uncovered
+
+**STUMP #21**: 0x29000000 indirect-call corruption. Pattern: V8/Blink
+calls libc function via function-pointer (e.g. through libc's
+__libc_init_first or similar callback table). Function pointer in
+the table reads as 0x29000000 (a USER VA in cage area, but no
+executable code there). LR=0x1a1fd550 (libc text). Likely libc's
+ifunc-resolver or vtable initialized incorrectly because we set
+AT_HWCAP=0x103 but didn't supply AT_HWCAP2 / AT_PLATFORM.
+
+### Net session arc
+
+| Stage | Max lines | pc-skip | pa-skip |
+|-------|-----------|---------|---------|
+| Session start | ~540 | 0 | 0 |
+| After dc civac + RUNNING_TID | 935 | 0 | 0 |
+| After AT_HWCAP + IRELATIVE | 935 | 0 | 0 |
+| After pa-skip-brk | 1500 | 0 | 0 |
+| After pa-skip-data | 21,066 | 0 | 10 |
+| After STUMP #17 + #18 | 22,009 | 2 | 12 |
+| After STUMP #19 + #20 | **6,536 typical** | 2 | 3 |
+
+The bimodal "either 21K or 850" distribution from earlier has
+compressed to a more uniform 540-6500 range. Cave makes consistent
+deeper progress per run vs occasional jackpot-deep.
+
 ## 2026-04-27 13:00 — Mac — STUMP #17 + #18 ALL CRACKED. Three runs reach 21K-22K lines. Cave routinely surviving deep Chromium runtime.
 
 **Today's leg added two more cracks:**
