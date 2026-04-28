@@ -11,6 +11,83 @@ end of a session.
 
 ---
 
+## 2026-04-28 00:05 — Mac — Autonomous block winding down. ICU "typeMap/timezone" stack corruption identified as the bug behind ANY-extra-flag crashes. PRECOMMIT_CAP experiments converged on 32 MiB = best. State preserved at consistent 7.4K cluster.
+
+**Session summary (autonomous, starting 22:15):**
+
+Worked alone with GPT-5.4 as decision partner. User went to bed at
+~22:15. Total grind time: ~2 hours. Commits pushed: 5.
+
+**Cracked tonight:**
+- STUMP #28 v2 — pre-commit ALL anon mmaps. **Eliminated PA
+  CorruptionDetected BRKs in EVERY run.** This was the single biggest
+  breakthrough — variance dropped from 1.5K-35K to consistent 7.4K
+  cluster.
+- STUMP #29 — Smi-release-skip in `__aarch64_ldadd4_acq_rel` for V8
+  MemoryPool cleanup.
+- DEFAULT_MEM bumped 1 → 4 GiB (diagnostic).
+- STUMP #30 — 16 MiB alignment for large mmaps (no behavioral change,
+  but matches kernel norms).
+
+**Investigated and rejected:**
+- `--js-flags=--jitless` to bypass V8 CodeRange — triggers ICU bug.
+- `--disable-features=PartitionAllocBackupRefPtr,...` — triggers ICU bug.
+- Function-start filter on FP-walk (paciasp/bti c detection) — regressed.
+- PRECOMMIT_CAP=384 MiB — regressed via PA RawPtrBackupRefImpl crash.
+- PRECOMMIT_CAP=256 MiB — bypasses V8 OOM half the time but introduces
+  noise; net regression.
+
+**Key discovery: ICU "typeMap/timezone" stack corruption**
+
+The ICU CharString::append crash that fires when ANY new flag is
+added: looking at the stack dump near the crash site, bytes spell
+`typeMap/timezone\0`. The buffer pointer of the CharString got
+overwritten to `0x707974001bcfedcd` where:
+- High 32 bits: `0x70797400` = ASCII `"pyt\0"`
+- Low 32 bits: `0x1bcfeddd` = a stack address fragment
+
+Pattern fits **two 32-bit writes**: one to offset+0 (stack ptr), one
+to offset+4 (ASCII "pyt\0"). When argv has 13 args, layout shifts so
+the writes don't overlap with the CharString. With 14+ args, layout
+shifts again, the writes land on `CharString::buffer`, and the
+buffer pointer is corrupted.
+
+**This is an argv/envp/auxv bootstrap layout bug**, not Chromium logic.
+GPT-5.4: "make the kernel stop lying to PA about memory persistence"
+(STUMP #28 v2) was the right call there; for ICU, GPT-5.4 says set a
+watchpoint on the buffer field to catch the corrupting write. Without
+that capability in our QEMU setup, this is hard to debug further.
+
+**Final stable state (just verified):**
+
+| Run | Lines |
+|-----|-------|
+| 1 | 7,463 |
+| 2 | 7,451 |
+| 3 | 7,443 |
+| 4 | 7,428 |
+| 5 | 1,883 (outlier) |
+
+4/5 runs at 7.4K cluster. Remaining ceiling: V8 CodeRange OOM, which
+we pa-skip past, then NULL-deref in `V8Initializer::InitializeIsolate
+Holder + 0x28`. Loop-detect + escape mechanism kills the cave after
+~5 attempts.
+
+**For tomorrow's user:**
+- The cave reaches DEEP into Chromium runtime: message pump, Mojo
+  IPC, Viz GPU, NetworkContext, certificate trust store, V8 isolate
+  setup. All the way to V8 init itself.
+- Two structural ceilings remain:
+  1. ICU CharString stack corruption (any-extra-flag triggers it)
+  2. V8 CodeRange OOM (need to either fix #1 to use --jitless, or
+     understand what V8 expects)
+- Best peak observed: 143K lines (random, pre-loop-detect).
+- Median is now consistent ~7.4K.
+
+5 commits pushed to feat/js-engine-browser-posix.
+
+---
+
 ## 2026-04-27 23:50 — Mac — STUMP #30: 16 MiB alignment for large mmaps. New ceiling: V8 CodeRange "OOM" — V8 mmaps 256 MiB region, our pre-commit cap is 32 MiB so it lazy-commits, V8 detects something during init and OOMs. STUMP #31 attempts (function-start filter, --jitless) regressed; reverted.
 
 **Goal.** Push past V8's CodeRange "OOM" that's the new deterministic

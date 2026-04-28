@@ -2839,12 +2839,14 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                     // frames available. Pre-committing all anon is a
                     // tiny fraction of available memory.
                     //
-                    // STUMP #30 experiment with PRECOMMIT_CAP=384 MiB
-                    // regressed the cave to ~1.1K lines (different
-                    // crash, RawPtrBackupRefImpl::AcquireInternal on
-                    // a sign-extended ptr). Reverted to 32 MiB.
-                    // V8's CodeRange OOM survives this — but the cave
-                    // pa-skips through it consistently to ~7.4K.
+                    // STUMP #30 v2: tested PRECOMMIT_CAP=256 MiB.
+                    // Bypasses V8 OOM ~half the time but introduces a
+                    // different crash (RawPtrBackupRefImpl::Acquire on
+                    // sign-extended ptr) at ~1.3K lines. Net: regressed
+                    // average run depth. Reverted to 32 MiB.
+                    // V8 OOM-then-pa-skip path lands consistently at
+                    // ~7.4K which is better than the noisy 256-MiB
+                    // distribution.
                     const PRECOMMIT_CAP: usize = 32 * 1024 * 1024;
                     let should_precommit = fd_num < 0
                         && len <= PRECOMMIT_CAP;
