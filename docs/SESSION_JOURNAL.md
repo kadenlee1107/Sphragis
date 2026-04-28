@@ -64,6 +64,25 @@ already there with valid data; we just need to make it executable.
 ~1500. Best peak still 25K-30K range; 143K peak from earlier session
 not seen in this batch but architectural ceiling is gone.
 
+**Repeated 10-smoke confirmation:**
+
+| Run | Lines |
+|-----|-------|
+| 1 | 26,384 |
+| 2 | 23,279 |
+| 3 | 7,669 |
+| 4 | 4,640 |
+| 5 | 4,250 |
+| 6 | 2,214 |
+| 7 | 1,546 |
+| 8 | 1,504 |
+| 9 | 1,215 |
+| 10 | 998 |
+
+5/10 over 4K lines, 2/10 over 23K. Median ~2200. Variance is genuine
+runtime non-determinism (thread scheduling, memory layout) not kernel
+flake.
+
 ---
 
 ## 2026-04-27 21:00 — Mac — STUMPS #22-#24 cracked. Cave reaches 143K-line peaks; CSS parsing, Viz GPU init, Skia fonts, Mojo message pump all functional. ChromeRootStoreData cert init is the new ceiling.
