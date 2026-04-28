@@ -11,6 +11,61 @@ end of a session.
 
 ---
 
+## 2026-04-28 00:20 — Mac — Final 10-smoke distribution: 6/10 at 7.4K cluster, 4/10 at 1.2K. Autonomous block done.
+
+| Run | Lines |
+|-----|-------|
+| 1 | 7,501 |
+| 2 | 7,452 |
+| 3 | 7,448 |
+| 4 | 7,447 |
+| 5 | 7,444 |
+| 6 | 7,437 |
+| 7 | 1,256 |
+| 8 | 1,252 |
+| 9 | 1,249 |
+| 10 | 1,212 |
+
+Bimodal: 60% reach V8 init / message pump (7.4K), 40% die earlier
+in PA backup-ref-ptr / WorkDeduplicator. The split likely depends on
+thread scheduling — when the cave's worker threads race toward
+certain code paths, they hit different bugs.
+
+**Final commits in this autonomous block (since user went to bed at
+22:15):**
+
+```
+4ef9c26b finding: ICU "typeMap/timezone" bug is arg-COUNT-sensitive
+b2844709 journal: autonomous block summary + PRECOMMIT_CAP experiments
+b25cbbbc STUMP #30: 16 MiB alignment for large mmaps + investigation logs
+77050d44 🎯 BREAKTHROUGH: STUMPS #28 v2 + #29 — eliminated PA CorruptionDetected
+2294d240 STUMP #27: BRK-after-tail-call skip
+```
+
+Total session output: 6 commits, ~3 hours autonomous, GPT-5.4 used
+as decision partner for 4 major calls.
+
+**Single biggest win:** STUMP #28 v2 (pre-commit anon mmaps) eliminated
+PA `CorruptionDetected` BRKs that fired in EVERY run. Median run depth
+went from sporadic 1-30K to consistent 7.4K cluster.
+
+**For tomorrow (next session):**
+1. Audit `loader.rs` argv/envp/auxv layout for off-by-one when arg
+   count varies. The ICU CharString bug is now confirmed arg-count-
+   sensitive. Fix that and we unblock `--disable-features` and
+   `--js-flags=--jitless` flags.
+2. V8 still allocates CodeRange even with `--jitless` (so `--jitless`
+   alone won't bypass the OOM). Need a deeper look at what V8 wants
+   for CodeRange.
+3. Investigate why 40% of runs die early at PA backup-ref-ptr — these
+   might have a separate root cause from the V8 init path.
+
+Cave's reachable depth in best runs: Chromium message pump, Mojo IPC,
+Viz GPU, NetworkContext, certificate trust store, V8 isolate setup.
+Real progress.
+
+---
+
 ## 2026-04-28 00:10 — Mac — KEY FINDING: ICU "typeMap/timezone" CharString bug is **arg-COUNT-sensitive**, not byte-content-sensitive. Arg-swap experiment confirms.
 
 **Experiment.** Replaced `--v=1` (4 chars) with `--js-flags=--jitless`
