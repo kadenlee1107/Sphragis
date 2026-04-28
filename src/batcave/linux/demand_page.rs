@@ -135,6 +135,11 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     //          uncommitted user page, e.g. pipe_buf::write copying
     //          from a user iov whose backing page hasn't been
     //          demand-committed yet)
+    //   0x20 — instruction abort from lower EL (user fetched code
+    //          from uncommitted page, e.g. V8 JIT'd code in cage area
+    //          that needs lazy executable commit)
+    //   0x21 — instruction abort from current EL (rare; treated same
+    //          as 0x20)
     // We USED to also accept EC=0 with in-reservation FAR, but FAR
     // isn't reliably updated for EC=0, and that path caused a tight
     // infinite loop — the "data abort" FAR was actually stale from
@@ -142,7 +147,9 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     // (non-DA) issue and we re-entered demand_page forever,
     // exhausting the frame pool.
     let ec = (esr >> 26) & 0x3F;
-    if ec != 0x24 && ec != 0x25 { return false; }
+    let is_data_abort = ec == 0x24 || ec == 0x25;
+    let is_inst_abort = ec == 0x20 || ec == 0x21;
+    if !is_data_abort && !is_inst_abort { return false; }
     // 🎯 STUMP #7 follow-on: only handle TRANSLATION faults (page not
     // mapped). Permission faults (DFSC 0x0d/0x0e/0x0f) come from a page
     // that IS mapped but with wrong perms (e.g., kernel uaccess writing
@@ -172,7 +179,25 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
         }
     }
     if hit_idx.is_none() {
-        return false;
+        // 🎯 No registered reservation matches. Fall back to lazy
+        // commit anyway IF the FAR is in plausible user-VA range.
+        // The cave's normal user window is 0x10000000..0x1c800000;
+        // anything BEYOND content_shell BSS (0x1a224e58) but BELOW
+        // kernel range (0x80_0000_0000) is most likely V8 cage /
+        // cppgc heap that V8 chose without going through our
+        // reserve-only mmap path.
+        //
+        // Reject NULL+small, content_shell text/data/bss (where a
+        // fault is a real bug), kernel range, etc.
+        let far_plausible = far >= 0x2000_0000 && far < 0x80_0000_0000
+            // Don't commit pages in cave's main window (those are
+            // either content_shell content or unmapped padding).
+            && !(far >= 0x10000000 && far < 0x1c800000);
+        if !far_plausible {
+            return false;
+        }
+        // Treat as virtual-reservation hit: drop through to alloc
+        // a frame and install_l3_mapping for this VA.
     }
 
     // Allocate a fresh page + install it.
@@ -214,7 +239,17 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     }
 
     let page_va = far & !0xFFFu64;
-    let install_result = install_l3_mapping(l1_phys, page_va, frame as u64, USER_PAGE_FLAGS);
+    // 🎯 STUMP #24: when the fault is an instruction abort (EC=0x20/0x21),
+    // commit the page WITHOUT UXN so it can be executed. V8's JIT writes
+    // code into a region and starts executing without an explicit mprotect
+    // when the cage is allocated as a single big reservation. Letting the
+    // page commit executable is safer than spurious-failing the fault.
+    let page_flags = if is_inst_abort {
+        USER_PAGE_FLAGS & !PAGE_UXN
+    } else {
+        USER_PAGE_FLAGS
+    };
+    let install_result = install_l3_mapping(l1_phys, page_va, frame as u64, page_flags);
     if let Err(why) = install_result {
         uart::puts("[demand_page] install_l3 failed va=0x");
         let hex = b"0123456789abcdef";

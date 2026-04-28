@@ -56,6 +56,66 @@ pub struct TrapFrame {
 /// to avoid recursive aborts when the original fault left us with
 /// a partially-committed reservation.
 ///
+/// EL0-writable scratch page for pa-skip-data's fake Alloc returns.
+/// Mmap'd lazily on first call into the small_mmap user-VA region
+/// at a fixed address so it's stable across the cave's lifetime.
+/// Multiple "fake allocs" all share this single page (intentional
+/// — the cave is in degraded state by the time we synthesize, so
+/// shared garbage is preferable to NULL-deref).
+///
+/// Returns 0 if init failed (alloc OOM or install_l3 failed).
+static SCRATCH_UVA: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+#[inline(never)]
+fn pa_skip_scratch_uva() -> u64 {
+    let cached = SCRATCH_UVA.load(core::sync::atomic::Ordering::Acquire);
+    if cached != 0 {
+        return cached;
+    }
+
+    // Use a fixed VA at the high end of the small_mmap region
+    // (0x70_0000_0000..0x78_0000_0000). Pick 0x77_FFFF_0000 — well
+    // away from where regular small_mmap allocations land
+    // (which fill upward from 0x70_0000_0000).
+    const SCRATCH_VA: u64 = 0x77_FFFF_0000;
+
+    // Get a frame from the kernel pool.
+    let frame = match crate::kernel::mm::frame::alloc_frame() {
+        Some(f) => f as u64,
+        None    => return 0,
+    };
+
+    // Get current cave's TTBR0 (the L1 we install into).
+    let ttbr0: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
+    let l1_phys = ttbr0 & !1u64;
+
+    // Install L3: map SCRATCH_VA → frame with USER_PAGE_FLAGS
+    // (which includes EL0_RW + UXN + Normal + Inner Shareable).
+    let install_result = crate::batcave::linux::demand_page::install_l3_mapping(
+        l1_phys,
+        SCRATCH_VA,
+        frame,
+        crate::batcave::linux::demand_page::USER_PAGE_FLAGS,
+    );
+    if install_result.is_err() {
+        return 0;
+    }
+
+    // Flush TLB so the new entry is visible.
+    unsafe {
+        core::arch::asm!("dsb ishst");
+        core::arch::asm!("tlbi vmalle1");
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("isb");
+    }
+
+    // Cache and return.
+    SCRATCH_UVA.store(SCRATCH_VA, core::sync::atomic::Ordering::Release);
+    SCRATCH_VA
+}
+
 /// `#[inline(never)]` to keep the call edge in the disassembly so the
 /// compiler can't fold this into the caller and notice a "this load
 /// can't possibly fail" theorem (it CAN fail because of lazy demand-
@@ -1402,14 +1462,15 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 0x14d777a4, 0x14d777a8, 0x14d777ac, 0x14d777b0,
                 0x14d72f98, 0x14d72fdc,
             ];
-            // Treat anything in the PA-abort range as abort-y.
-            // Also covers AddRefWithCheck (0x14ca8664) and other base/
-            // refcount BRK sites scattered across content_shell text.
-            // We're aggressive here: any BRK in the libchrome region
-            // (0x14000000..0x1c000000) gets the unwind treatment.
+            // PA-abort range. The narrow 0x14d72f80..0x14d77800 catches
+            // CorruptionDetected/DoubleFree/FreelistCorruption/etc.
+            // Also include AddRefWithCheck (0x14ca8664) and a few
+            // other refcount-overflow sites that we've seen in the wild.
             let pa_abort = PA_ABORT_BRKS.contains(&elr)
                 || (0x14d72f80..=0x14d77800).contains(&elr)
-                || (0x14000000..=0x1c000000).contains(&elr);
+                || elr == 0x14ca8664
+                || elr == 0x14d92390
+                || elr == 0x14ca3dfc;
             if pa_abort {
                 // Walk the user stack's FP chain. Each frame: FP -> [FP], LR -> [FP+8].
                 let sp_el0: u64;
@@ -2537,14 +2598,86 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         }
                     }
                     if found_lr != 0 {
-                        // Don't synthesize x[0] — leave whatever was
-                        // there. Earlier attempt with x[0]=NULL caused
-                        // memset(NULL, ...) faults; attempt with a
-                        // kernel BSS scratch buffer caused EL0
-                        // permission faults (BSS not mapped EL0-RW).
-                        // Stale value is the least-bad option; many
-                        // callers that DO null-check the result will
-                        // bail safely.
+                        // 🎯 STUMP #22: detect repeated-same-elr loops
+                        // and abort the cave instead of spinning. The
+                        // 85K-line ChromeRootStoreData loop spun 7 times
+                        // at the SAME elr (0x152df784) returning to the
+                        // SAME found_lr (0x152df77c) — wasting cycles
+                        // before finally dying. If we see the identical
+                        // (elr, found_lr) pair more than 3 times in a
+                        // row, fall through to terminate_cave_fatal.
+                        static LAST_SKIP_ELR: core::sync::atomic::AtomicU64 =
+                            core::sync::atomic::AtomicU64::new(0);
+                        static LAST_SKIP_LR: core::sync::atomic::AtomicU64 =
+                            core::sync::atomic::AtomicU64::new(0);
+                        static SAME_SKIP_COUNT: core::sync::atomic::AtomicU32 =
+                            core::sync::atomic::AtomicU32::new(0);
+                        let prev_elr = LAST_SKIP_ELR.load(core::sync::atomic::Ordering::Relaxed);
+                        let prev_lr = LAST_SKIP_LR.load(core::sync::atomic::Ordering::Relaxed);
+                        let same_pair = prev_elr == elr_now && prev_lr == found_lr;
+                        let mut loop_detected = false;
+                        if same_pair {
+                            let cnt = SAME_SKIP_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+                            // 🎯 STUMP #22 tuning: bumped 3 → 64. Loops
+                            // of 5-10 same-pair skips are normal in
+                            // Chromium's iterative codepaths (e.g. anim
+                            // controller iterating through entries that
+                            // each fault). 64 is a sane cap that
+                            // catches genuine infinite loops without
+                            // killing the 80K+ deep runs.
+                            if cnt > 64 {
+                                loop_detected = true;
+                                uart::puts("[pa-skip-data] LOOP DETECTED at elr=0x");
+                                let hex = b"0123456789abcdef";
+                                for sh in (0..16).rev() {
+                                    uart::putc(hex[((elr_now >> (sh * 4)) & 0xF) as usize]);
+                                }
+                                uart::puts(" — terminating cave\n");
+                                // Reset counters so next cave starts fresh.
+                                SAME_SKIP_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+                                LAST_SKIP_ELR.store(0, core::sync::atomic::Ordering::Relaxed);
+                                LAST_SKIP_LR.store(0, core::sync::atomic::Ordering::Relaxed);
+                            }
+                        } else {
+                            SAME_SKIP_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+                            LAST_SKIP_ELR.store(elr_now, core::sync::atomic::Ordering::Relaxed);
+                            LAST_SKIP_LR.store(found_lr, core::sync::atomic::Ordering::Relaxed);
+                        }
+                        if loop_detected {
+                            // Bail out — terminate cave. Skip all the
+                            // elr/x[0] mucking and let the outer fault
+                            // handler kill the cave.
+                            crate::batcave::linux::signal::terminate_cave_fatal_with_lr(
+                                fatal_signo, far_now, found_lr
+                            );
+                        }
+                        // 🎯 Synthesize a SAFE Alloc return for
+                        // PA-Alloc-region faults: set x[0] to a
+                        // user-VA-mapped scratch page. Most Alloc
+                        // callers immediately memset/memcpy the
+                        // result; with a real writable buffer they
+                        // succeed instead of NULL-derefing.
+                        //
+                        // 🎯 STUMP #22 extension: also substitute
+                        // scratch when the caller is in chrome text
+                        // (0x14000000..0x1c000000) and the fault
+                        // address is small (NULL+small offset). This
+                        // covers cases like ChromeRootStoreData
+                        // ctor failing because BSSL ParsedCertificate::
+                        // Create returned NULL — the caller does
+                        // ptr->field where field offset < 0x100.
+                        // A zero-init scratch reads as zero which is
+                        // typically a no-op.
+                        let is_alloc_fault = (0x14d75c40..=0x14d80000)
+                            .contains(&elr_now);
+                        let is_chrome_text_null_deref = far_now < 0x100
+                            && (0x14000000..0x1c000000).contains(&elr_now);
+                        if is_alloc_fault || is_chrome_text_null_deref {
+                            let scratch = pa_skip_scratch_uva();
+                            if scratch != 0 {
+                                unsafe { (*frame).x[0] = scratch; }
+                            }
+                        }
                         unsafe {
                             (*frame).elr   = found_lr;
                             (*frame).x[29] = fp;

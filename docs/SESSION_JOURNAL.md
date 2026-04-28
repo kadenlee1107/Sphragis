@@ -11,6 +11,125 @@ end of a session.
 
 ---
 
+## 2026-04-27 21:00 — Mac — STUMPS #22-#24 cracked. Cave reaches 143K-line peaks; CSS parsing, Viz GPU init, Skia fonts, Mojo message pump all functional. ChromeRootStoreData cert init is the new ceiling.
+
+**Goal.** Push past the 1500-line plateau and get consistent deep runs.
+
+**Stumps killed this session:**
+
+### STUMP #22 — pa-skip-data infinite loop detection + extended scratch substitution
+
+**Symptom.** Cave would spin in `net::ChromeRootStoreData::ChromeRootStoreData`,
+each iteration faulting with NULL+0x20 deref, our pa-skip-data unwinding
+back to the same calling frame which immediately re-faults at the same
+elr. 7+ iterations of the same (elr, lr) pair before cave finally died,
+producing 80K+ lines of useless polling-thread spam.
+
+**Root cause.** `pa-skip-data` synthesizes a return to the caller frame
+but doesn't touch x[0]. When the skipped function returns a pointer
+the caller will immediately deref (e.g. BSSL `ParsedCertificate::Create`
+returning NULL but ChromeRootStoreData not checking), the caller
+NULL-derefs at small offset and we re-enter the same skip → loop.
+
+**Fix.**
+1. Track `(LAST_SKIP_ELR, LAST_SKIP_LR)` and `SAME_SKIP_COUNT`. After
+   64 consecutive same-pair skips, terminate the cave instead of
+   spinning. (`src/kernel/arch/mod.rs` ~line 2628)
+2. Extend the scratch-buffer x[0] substitution from "Alloc-region only"
+   to "any chrome-text NULL+small-offset fault". The scratch page is
+   zero-init; `caller->field` reads as 0 (instead of NULL-deref), and
+   typical "if (ptr->x) { ... } else fallback" code paths take the
+   fallback gracefully instead of crashing.
+
+**Result.** Loop cases terminate immediately (no more 80K-line polling
+spam). When scratch substitution succeeds, caller takes its zero-path
+fallback and execution continues.
+
+### STUMP #23 — KERNEL_RESERVED_FRAMES OOM under deep runs
+
+**Symptom.** New failure at ~30K lines: `[demand_page] install_l3 failed
+va=0x14e400000 reason: oom for L3 table`. The lazy-commit fallback
+(STUMP #21 / earlier) maps lots of V8 cage L3 tables, exhausting the
+16 MB kernel-reserved pool.
+
+**Root cause.** `KERNEL_RESERVED_FRAMES = 4096` (16 MB). Each L3
+table is 4 KB and covers 2 MB of VA. Mapping all of V8's pointer
+compression cage (~16 GB) at 4 KB granularity needs ~32 MB of L3
+tables. We were running out at 1/4 of that.
+
+**Fix.** Bumped `KERNEL_RESERVED_FRAMES` to 16384 (64 MB) in
+`src/kernel/mm/frame.rs`. We have 3.6 GB total RAM so this is
+trivial.
+
+**Result.** Deep runs no longer OOM at the page-table level.
+
+### STUMP #24 — Instruction-abort lazy commit (V8 JIT executable pages)
+
+**Symptom.** `[sig] fatal signo=11 fault=0x4020113c elr=0x4020113c
+lr=0x70004bc090` after `MessagePumpEpoll::WaitForEpollEvents` was
+running. PC=0x4020113c is in V8 cage area; cave's PC tried to execute
+JIT code that wasn't mapped or wasn't executable.
+
+**Root cause.** `demand_page::try_handle` only handled `EC=0x24/0x25`
+(data aborts), not `EC=0x20/0x21` (instruction aborts). When V8 wrote
+JIT code into a region and then jumped to it, instruction fetch
+faulted with no recovery path. Even if try_handle had run, it sets
+`USER_PAGE_FLAGS` which includes `PAGE_UXN` (execute-never).
+
+**Fix.**
+1. Accept `EC=0x20/0x21` in `try_handle` (`src/batcave/linux/demand_page.rs`).
+2. When the fault is an instruction abort, commit the page WITHOUT
+   `PAGE_UXN` so it can be executed.
+
+**Result.** V8 JIT pages now lazily commit executable. Deep runs reach
+CSS parsing, Viz GPU service init, Skia font subsystem.
+
+### Distribution after stumps #22-#24 (10-smoke):
+
+| Run | Lines | Notes |
+|-----|-------|-------|
+| 1 | 23,362 | LOOP DETECTED at ChromeRootStoreData ctor |
+| 2 | 11,943 | NetworkContext setup |
+| 3 | 6,022 | Hung on futex deadlock at 2.8M syscalls |
+| 4 | 1,587 | CSS parsing reached, bad funcptr |
+| 5 | 1,585 | Similar |
+| 6 | 1,274 | CSS parsing in `css_longhand::Display::ParseSingleValue`! |
+| 7 | 1,250 | NULL+small offset crash |
+| 8 | 1,231 | Various |
+| 9 | 1,227 | Various |
+| 10 | 907 | Early bad-pc fault |
+
+**Best peak:** 143,693 lines (during STUMP #22 dev — pre-loop-detect).
+
+**What the cave is now doing in deep runs:**
+- ✅ FieldTrial setup (variations_field_trial_creator)
+- ✅ Discardable shared memory manager
+- ✅ Scheduler loop quarantine config
+- ✅ inotify_init / NETLINK socket attempts (correctly fail-soft)
+- ✅ Viz GPU service init (viz_main_impl)
+- ✅ Mojo IPC pump (`SimpleWatcher::OnHandleReady`,
+  `ThreadControllerWithMessagePumpImpl::DoWorkImpl`)
+- ✅ Skia platform font (falls back when no fonts)
+- ✅ Chrome HTTP server attempts to bind (Accept error expected)
+- ✅ Disk cache MappedFile init
+- ✅ cppgc Oilpan GC info index
+- ✅ Blink CSSPropertyParser / css_parsing_utils / css_longhand::Display
+- ✅ NetworkContext setup
+- ❌ ChromeRootStoreData certificate init (consistent crash site)
+- ❌ Actual hello.html FileURLLoader::Start (occasional, not
+  deterministic)
+
+**What's next:**
+1. Investigate ChromeRootStoreData crash — if BSSL ParsedCertificate
+   returns NULL, can we patch the construction site to skip cert
+   loading? Or is there an underlying memory corruption?
+2. Look into the futex-deadlock hangs at deep runs — maybe a missing
+   FUTEX_WAKE somewhere.
+3. Run a deeper investigation: do we ever actually reach
+   `FileURLLoader::Start` with the new code?
+
+---
+
 ## 2026-04-26 19:30 — Mac — Stumps #10c-#12 KILLED. Cave reaches DevTools, 29 workers, fontconfig, Skia, WebGPU. PartitionAlloc BRK is GONE. New stump #13 = epoll/eventfd hot-loop → NULL deref.
 
 **Goal.** Continue grinding past Stump #10c (the residual PartitionAlloc
