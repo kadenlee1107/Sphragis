@@ -56,20 +56,6 @@ pub struct TrapFrame {
 /// to avoid recursive aborts when the original fault left us with
 /// a partially-committed reservation.
 ///
-/// 256 KB static scratch buffer for pa-skip-data's fake alloc
-/// returns. Reachable by EL0 via the cave's identity-low mapping
-/// (kernel BSS lives in 0x40000000..0xC0000000 which IS user-
-/// accessible). Concurrent users share the same memory (intentional
-/// — the cave is already in a degraded state by the time we
-/// synthesize a fake alloc; race-corruption here is preferable to
-/// downstream NULL-derefs).
-static mut PA_SKIP_SCRATCH: [u64; 0x8000] = [0; 0x8000]; // 256 KB
-
-#[inline(never)]
-fn pa_skip_scratch_uva() -> u64 {
-    unsafe { core::ptr::addr_of!(PA_SKIP_SCRATCH) as u64 }
-}
-
 /// `#[inline(never)]` to keep the call edge in the disassembly so the
 /// compiler can't fold this into the caller and notice a "this load
 /// can't possibly fail" theorem (it CAN fail because of lazy demand-
@@ -1417,8 +1403,13 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 0x14d72f98, 0x14d72fdc,
             ];
             // Treat anything in the PA-abort range as abort-y.
+            // Also covers AddRefWithCheck (0x14ca8664) and other base/
+            // refcount BRK sites scattered across content_shell text.
+            // We're aggressive here: any BRK in the libchrome region
+            // (0x14000000..0x1c000000) gets the unwind treatment.
             let pa_abort = PA_ABORT_BRKS.contains(&elr)
-                || (0x14d72f80..=0x14d77800).contains(&elr);
+                || (0x14d72f80..=0x14d77800).contains(&elr)
+                || (0x14000000..=0x1c000000).contains(&elr);
             if pa_abort {
                 // Walk the user stack's FP chain. Each frame: FP -> [FP], LR -> [FP+8].
                 let sp_el0: u64;
@@ -1426,21 +1417,27 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 let mut fp = unsafe { (*frame).x[29] };
                 let mut hops = 0;
                 let mut found_lr: u64 = 0;
-                while hops < 8 && fp != 0 {
+                while hops < 16 && fp != 0 {
+                    // Validate fp is in user range AND mapped.
+                    if !crate::batcave::linux::uaccess::is_user_range(fp as usize, 16)
+                        || !page_is_mapped(fp)
+                    {
+                        break;
+                    }
                     let next_fp: u64 = unsafe {
                         core::ptr::read_volatile(fp as *const u64)
                     };
                     let saved_lr: u64 = unsafe {
                         core::ptr::read_volatile((fp + 8) as *const u64)
                     };
-                    // Is saved_lr OUTSIDE PA's Free + abort regions?
-                    // PA::Free is at 0x11a630c0..0x11a64000.
-                    // PA's abort functions are at 0x14d72f80..0x14d77800.
-                    // Both are in libchrome but most user code is at
-                    // OTHER offsets — we want the first non-PA caller.
-                    let in_pa_free = (0x11a63000..=0x11a64000).contains(&saved_lr);
-                    let in_pa_aborts = (0x14d72f80..=0x14d77800).contains(&saved_lr);
-                    if !in_pa_free && !in_pa_aborts && saved_lr != 0 {
+                    let in_pa_free = (0x11a63000..=0x11a6a800).contains(&saved_lr);
+                    let in_pa_libchrome = (0x14d70000..=0x14da0000).contains(&saved_lr);
+                    // 🎯 STUMP #21: restrict to content_shell TEXT.
+                    let in_text_range = saved_lr >= 0x11720000
+                        && saved_lr < 0x19910000;
+                    if !in_pa_free && !in_pa_libchrome && saved_lr != 0
+                        && saved_lr > 0x1000 && in_text_range
+                    {
                         found_lr = saved_lr;
                         break;
                     }
@@ -2540,28 +2537,14 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         }
                     }
                     if found_lr != 0 {
-                        // 🎯 Make pa-skip-data SAFE for downstream
-                        // memset/memcpy/strcpy etc. by returning a
-                        // pointer to a static 64KB kernel scratch
-                        // page that's mapped in the cave's window.
-                        // Most callers that use the alloc result
-                        // pass it to memset(ptr, 0, size) right after
-                        // — that crashed with x[0]=NULL or stale
-                        // value. With a real writable buffer, memset
-                        // succeeds and the cave continues (with
-                        // shared/garbage state, but doesn't fault).
-                        //
-                        // Only do this for PA-Alloc-region faults
-                        // (elr in 0x14d75c40..0x14d80000 = SlowPathAlloc
-                        // range). For libc-area faults, leave x[0]
-                        // alone since the caller may already have
-                        // a valid local pointer in another reg.
-                        let is_alloc_fault = (0x14d75c40..=0x14d80000)
-                            .contains(&elr_now);
-                        if is_alloc_fault {
-                            let scratch = pa_skip_scratch_uva();
-                            unsafe { (*frame).x[0] = scratch; }
-                        }
+                        // Don't synthesize x[0] — leave whatever was
+                        // there. Earlier attempt with x[0]=NULL caused
+                        // memset(NULL, ...) faults; attempt with a
+                        // kernel BSS scratch buffer caused EL0
+                        // permission faults (BSS not mapped EL0-RW).
+                        // Stale value is the least-bad option; many
+                        // callers that DO null-check the result will
+                        // bail safely.
                         unsafe {
                             (*frame).elr   = found_lr;
                             (*frame).x[29] = fp;
