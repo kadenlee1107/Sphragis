@@ -11,6 +11,78 @@ end of a session.
 
 ---
 
+## 2026-04-28 09:00 — Mac — Morning push: 3 stumps cracked (#35, #36, #37). Cave reaches FileURLLoader::Start, deepest run 20,509 lines.
+
+### TODAY'S MORNING WINS
+
+**STUMP #35** — Honor V8's CodeRange hint
+* V8 mmaps with hint=0xF0000000 (~4 GB), expects CodeRange near
+  there. Our small_mmap returned 0x70_e400_0000 (~484 GB) — way
+  too far for V8's 32-bit relative jumps.
+* Fix: when len ≥ 64 MiB and hint in 1 GB..256 GB range, return
+  the hint and register a demand-page reservation.
+* **Impact:** V8 OOM eliminated. Cave reaches FileURLLoader::Start.
+
+**STUMP #36** — prlimit64 returns EFAULT for read-only addrs
+* `base::CheckMemoryReadOnly` calls `getrlimit(6, addr)` to verify
+  RO; expects EFAULT. Our prlimit64 only checked is_user_ptr (range)
+  not write permission, kernel-faulted on str to RO page.
+* Fix: walk page tables, check AP[2:1]=0b01 (EL0 R/W). Return EFAULT
+  if not.
+
+**STUMP #37** — Extended Smi-release-skip to ldadd4_relax variant
+* New LSE atomic site at 0x117d066c (`__aarch64_ldadd4_relax`). Same
+  Smi-tagged-this fault pattern as STUMP #29 at 0x11ab142c.
+* Fix: refactored smi_skip_target as a match expression.
+
+### FINAL 10-SMOKE DISTRIBUTION
+
+| Run | Lines | FileURLLoader::Start |
+|-----|-------|--------------------|
+| 1 | 20,509 | ✅ |
+| 2 | 8,048 | ✗ |
+| 3 | timeout | — |
+| 4 | 1,674 | ✗ |
+| 5 | 1,350 | ✗ |
+| 6 | 1,303 | ✅ |
+| 7 | 1,301 | ✅ |
+| 8 | 1,295 | ✅ |
+| 9 | 1,285 | ✅ |
+| 10 | 1,285 | ✗ |
+
+**5+/10 runs reach FileURLLoader::Start.** Best run: 20,509 lines
+in V8 cage code (likely V8 JIT execution).
+
+### REMAINING CEILINGS
+
+1. **V8 JIT 0x4020117c** — `desc_end at compiler_builtins`. Cave's
+   PC ends up in the LSE outline atomics descriptor table data.
+   Some pointer corruption in V8's JIT'd code path.
+2. **PA DoubleFreeDetected at 0x14d72fd8** — pa_abort_skip's FP-walk
+   sometimes can't find a non-PA frame to escape to.
+3. **V8 HeapObject::InitSelfIndirectPointerField at 0x11a54538** —
+   V8 sandbox indirect pointer init.
+
+### CAVE'S REACHABLE STATE
+
+Best runs reach this WITH `FileURLLoader::Start: file:///bin/hello.html`
+in the log:
+- Variations + FieldTrials
+- Discardable shared memory
+- Viz GPU service
+- Mojo IPC pump
+- HTTP server bind
+- Skia font fallback
+- LevelDB proto db
+- PAC proxy resolver
+- **FileURLLoader::Start (THE GOAL)**
+- ResourceScheduler::Client
+- network::URLLoaderFactory
+
+This is the deepest the cave has ever reached, by a large margin.
+
+---
+
 ## 2026-04-28 08:43 — Mac — 🎯🎯🎯 BREAKTHROUGH MORNING: STUMPS #35 + #36 — cave reaches FileURLLoader::Start in 9/10 runs. The cave is now actually trying to load hello.html.
 
 **STUMP #35 — Honor V8's CodeRange hint**
