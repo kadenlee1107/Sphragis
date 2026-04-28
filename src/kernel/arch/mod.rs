@@ -2644,26 +2644,47 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 let lr = unsafe { (*frame).x[30] };
                 let elr_now = unsafe { (*frame).elr };
 
-                // 🎯 STUMP #29 (extended in #37): LSE atomic on small/
-                // Smi-tagged "this". V8's MemoryPool stores Smi-tagged
-                // values in the same field as refcounted pointers.
-                // When V8 calls Release() on a pool entry that's
-                // actually a Smi (e.g. 0xd, 0x70, small numerics),
+                // 🎯 STUMP #29 (extended in #37, generalized in #41):
+                // LSE atomic on small/Smi-tagged "this". V8's MemoryPool
+                // stores Smi-tagged values in the same field as refcounted
+                // pointers. When V8 calls Release() on a pool entry that's
+                // actually a Smi (e.g. 0xd, 0x70, 0x17 small numerics),
                 // the LSE atomic faults on the small "address".
                 //
-                // Known sites:
-                //   0x11ab142c → __aarch64_ldadd4_acq_rel (ldaddal)
-                //   0x117d066c → __aarch64_ldadd4_relax  (ldadd)
+                // Generalized: detect ANY LSE atomic (LDADD/LDSET/SWP
+                // family) at ELR with a small fault address. Skip the
+                // instruction (advance ELR by 4), zero w0.
                 //
-                // Recovery: skip the atomic, set w0=0 (pretend prior
-                // refcount was 0, not 1, so Release returns false =
-                // "not last ref"), advance ELR to the `ret` at +4.
-                let smi_skip_target = if far_now < 0x100 {
-                    match elr_now {
-                        0x11ab142c => Some(0x11ab1430),
-                        0x117d066c => Some(0x117d0670),
-                        _ => None,
-                    }
+                // ARM64 LSE encoding: 1 0 1 1 1 0 0 0 SZ A R 1 Rs 0 op 0 0
+                // i.e. mask 0xBFE0_FC00, value 0xB820_0000 for size=4
+                // (W reg op). For size=8, mask 0xBFE0_FC00, value 0xF820_0000.
+                let smi_skip_target = if far_now < 0x100
+                    && elr_now >= 0x11000000 && elr_now < 0x1c800000
+                {
+                    let prev_addr = elr_now;
+                    if crate::batcave::linux::uaccess::is_user_range(
+                        prev_addr as usize, 4)
+                        && page_is_mapped(prev_addr & !0xFFF)
+                    {
+                        let instr: u32 = unsafe {
+                            core::ptr::read_volatile(prev_addr as *const u32)
+                        };
+                        // LSE w-reg LDADD/LDSET/SWP/LDCLR/LDEOR/LDSMAX/etc:
+                        // top byte 0xb8, specific bits.
+                        // 32-bit ops:  0xb820..0xb83f variants
+                        // 64-bit ops:  0xf820..0xf83f variants
+                        // We accept top 12 bits = 0xb82 or 0xf82.
+                        let high12 = instr >> 20;
+                        let is_lse = high12 == 0xb82 || high12 == 0xf82
+                            || high12 == 0xb86 || high12 == 0xf86  // L variants
+                            || high12 == 0xb8a || high12 == 0xf8a  // A variants
+                            || high12 == 0xb8e || high12 == 0xf8e; // AL variants
+                        if is_lse {
+                            Some(elr_now + 4)
+                        } else {
+                            None
+                        }
+                    } else { None }
                 } else { None };
                 if let Some(ret_addr) = smi_skip_target {
                     unsafe {
