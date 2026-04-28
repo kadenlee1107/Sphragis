@@ -2249,6 +2249,26 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
 
     sp = (sp - 256) & !0xF; // leave headroom for extended auxv
 
+    // 🎯 STUMP #32: ensure FINAL SP (process-entry SP) lands 16-byte
+    // aligned regardless of argc. After this padding sp is 16-aligned.
+    // Subsequent pushes are: auxv (multiples of 16), envp ptrs (40
+    // bytes = 8 % 16), argv ptrs ((argc+1)*8 bytes), argc word (8).
+    // Total non-aligned tail: 40 + (argc+1)*8 + 8 = 48 + (argc+1)*8.
+    // For final to be 16-aligned: (48 + (argc+1)*8) % 16 == 0
+    //   → (argc+1)*8 % 16 == 0 (since 48 % 16 == 0)
+    //   → (argc+1) must be even → argc must be ODD
+    // If argc is EVEN, push 8 extra bytes here to swap parity.
+    //
+    // Without this fix, adding any extra command-line flag (going from
+    // argc=11 to argc=12) misaligned process-entry SP by 8 bytes,
+    // which corrupted ICU CharString::buffer somewhere downstream
+    // ("typeMap/timezone" stack-data bytes leaking into a pointer
+    // field, with the high 4 bytes spelling "pyt\0").
+    if argc % 2 == 0 {
+        sp -= 8;
+        unsafe { core::arch::asm!("str xzr, [{a}]", a = in(reg) sp); }
+    }
+
     // auxv. When ld-linux is the interpreter we're eret'ing to, give it
     // enough to find the main exe:
     //   AT_PHDR  (3) = main_virt_base + main_phoff

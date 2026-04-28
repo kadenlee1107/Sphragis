@@ -3045,15 +3045,11 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     // compiled out.
     argv[n] = "--enable-logging=stderr";   n += 1;
     argv[n] = "--v=1";                     n += 1;
-    // FINDING 2026-04-28: arg-swap experiment confirmed ICU
-    // "typeMap/timezone" CharString bug is COUNT-sensitive, not
-    // byte-content-sensitive. Replacing --v=1 with --js-flags=--jitless
-    // (same arg count) bypasses ICU bug. Adding --js-flags=--jitless
-    // ALONE (count+1) triggers it. So our argv/envp/auxv layout has
-    // an off-by-one or alignment-sensitive bug somewhere when count
-    // changes. Even with --jitless honored, V8 still OOMs for
-    // CodeRange (perhaps allocates it regardless), so --jitless
-    // alone doesn't unblock the cave. Reverted to known-good config.
+    // 🎯 TEST: now that STUMP #32 fixes the argc-parity SP alignment
+    // bug, adding --js-flags=--jitless (which previously triggered the
+    // ICU CharString crash) should work. If V8 still OOMs CodeRange,
+    // we'll see what comes next.
+    argv[n] = "--js-flags=--jitless";      n += 1;
     argv[n] = size_arg_str;                n += 1;
     argv[n] = url;                         n += 1;
 
