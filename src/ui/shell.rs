@@ -3045,9 +3045,15 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     // compiled out.
     argv[n] = "--enable-logging=stderr";   n += 1;
     argv[n] = "--v=1";                     n += 1;
-    // 🎯 STUMP #32 fixed the argc-parity ICU bug, so we can now
-    // freely add command-line flags. Reverted to known-good config
-    // (no --jitless since V8 still OOMs CodeRange even with it).
+    // STUMP #32 unblocks all extra flags. Tested with STUMP #32:
+    //   --no-zygote alone: works, lands at 7.4K
+    //   --js-flags=--jitless alone: works, lands at 7.4K (V8 still
+    //     OOMs CodeRange tho)
+    //   --no-zygote + --js-flags=--jitless: works, lands at 7.4K
+    //   --disable-features=PartitionAllocBackupRefPtr,...: bypasses
+    //     V8 OOM, but cave dies at 799 lines on V8 JIT code
+    //     (instruction abort at 0x4020113c)
+    // Best behavior: BASE config (no extra flags) — 9/10 runs at 7.4K
     argv[n] = size_arg_str;                n += 1;
     argv[n] = url;                         n += 1;
 
