@@ -1544,14 +1544,41 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // instead of crashing cleanly at 7.4K. Worse net
                     // outcome — the partially-init isolate deadlocked
                     // somewhere downstream. Keeping known-good logic.
+                    //
+                    // 🎯 STUMP #46 (2026-04-28 PM): SP-resume was wrong.
+                    // Pre-fix: sp_el0 = fp + 16, x[29] = fp. fp is the
+                    // FP of the LAST PA frame before user code (e.g.
+                    // BufferFree's x29). Setting sp to fp+16 lands
+                    // INSIDE that PA frame's local-saves area, NOT at
+                    // the user code's body sp. When user (e.g.
+                    // blink::HashTable::Rehash) reaches its epilogue
+                    // `ldp x29, x30, [sp], #0x50`, it reads x30 from
+                    // sp+8 = inside PA's locals = stale ~0x1 = ret to
+                    // PC=0x1. This was producing the chain that Agent A
+                    // (and yesterday's investigation) tagged as "skip-
+                    // induced corruption" — every pa-skip planted a
+                    // garbage saved-x30 into Rehash's frame, surfacing
+                    // a few hundred lines later as the bad-PC fault.
+                    //
+                    // Correct values: x29 should be the CALLER's saved
+                    // x29 (= [fp]), and sp should be the caller's body
+                    // sp at bl-time. For ARM64 simple-prologue functions
+                    // (`stp x29,x30,[sp,#-N]!; mov x29, sp`) with no
+                    // further `sub sp, sp, #M`, body sp equals x29. So
+                    // setting sp_el0 = caller's x29 = [fp] is the
+                    // best heuristic without per-function metadata. It
+                    // matches Rehash exactly; for functions that DO
+                    // have a body-sp delta, it overshoots SP by that
+                    // delta but stays within the caller's frame
+                    // instead of leaving SP buried inside PA's frame
+                    // (the prior bug).
                     unsafe {
+                        let caller_x29 = core::ptr::read_volatile(fp as *const u64);
                         (*frame).elr   = found_lr;
-                        (*frame).x[29] = fp; // user-code FP
+                        (*frame).x[29] = caller_x29;
                         (*frame).x[30] = found_lr;
-                        // Pop PA's nested frames. Caller's frame starts
-                        // right after the saved x29 we just used.
                         core::arch::asm!("msr sp_el0, {a}",
-                            a = in(reg) fp + 16);
+                            a = in(reg) caller_x29);
                     }
                     static SKIP_COUNT: core::sync::atomic::AtomicU32 =
                         core::sync::atomic::AtomicU32::new(0);
@@ -3125,8 +3152,19 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                                             if scratch != 0 {
                                                 (*frame).x[0] = scratch;
                                             }
+                                            // 🎯 STUMP #46: was `fp_e + 16`.
+                                            // fp_e here is already the
+                                            // CALLER'S saved-x29 (we did
+                                            // `fp_e = nfp` at the find
+                                            // step), so its body sp at
+                                            // call time is fp_e itself
+                                            // (assuming simple prologue).
+                                            // The +16 was placing SP into
+                                            // the caller's caller's frame
+                                            // — same class of bug as the
+                                            // brk-skip resume.
                                             core::arch::asm!("msr sp_el0, {a}",
-                                                a = in(reg) fp_e + 16);
+                                                a = in(reg) fp_e);
                                         }
                                         return;
                                     } else {
@@ -3173,12 +3211,26 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                                 unsafe { (*frame).x[0] = scratch; }
                             }
                         }
+                        // 🎯 STUMP #46: same SP fix as the brk-skip
+                        // path. `fp` is the FP of the deepest non-PA
+                        // frame in the chain (i.e. the FRAME WHOSE
+                        // saved-LR we'll resume at). The CALLER's
+                        // saved x29 lives at [fp]; the caller's body
+                        // sp at bl-time equals that x29 for simple-
+                        // prologue functions. Pre-fix: `sp = fp + 16`
+                        // landed inside the deepest PA frame's
+                        // local-saves area, so the user code's
+                        // epilogue read garbage as x30 and ret'd to
+                        // PC=0x1.
+                        let caller_x29 = unsafe {
+                            core::ptr::read_volatile(fp as *const u64)
+                        };
                         unsafe {
                             (*frame).elr   = found_lr;
-                            (*frame).x[29] = fp;
+                            (*frame).x[29] = caller_x29;
                             (*frame).x[30] = found_lr;
                             core::arch::asm!("msr sp_el0, {a}",
-                                a = in(reg) fp + 16);
+                                a = in(reg) caller_x29);
                         }
                         let n = PA_DATA_SKIP_TOTAL.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                         if n < 10 || (n & 0xFF) == 0 {
