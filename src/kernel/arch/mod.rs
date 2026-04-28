@@ -2696,6 +2696,13 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                                         SAME_SKIP_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
                                         LAST_SKIP_ELR.store(elr_now, core::sync::atomic::Ordering::Relaxed);
                                         LAST_SKIP_LR.store(found_e, core::sync::atomic::Ordering::Relaxed);
+                                        // Restore scratch substitute on escape
+                                        // — the grand-caller's "I just got
+                                        // back from a callee" expects x0
+                                        // to be a return value, and a zeroed
+                                        // scratch (readable as zero pointer
+                                        // chains) gives more code paths a
+                                        // chance to take fallback branches.
                                         let scratch = pa_skip_scratch_uva();
                                         unsafe {
                                             (*frame).elr = found_e;

@@ -3045,6 +3045,12 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     // compiled out.
     argv[n] = "--enable-logging=stderr";   n += 1;
     argv[n] = "--v=1";                     n += 1;
+    // ATTEMPT: --disable-features=PartitionAllocBackupRefPtr,...
+    //   Tested 2026-04-27. Trigged the ICU CharString "pyt\\0…"
+    //   string-as-pointer crash at ELR=0x14fc22cc (icu_78::CharString::
+    //   append) consistently after ~600 lines. Same class of bug as
+    //   the --no-zygote path. Adding flags changes Chromium's startup
+    //   ordering enough to expose unrelated bugs. Revert.
     argv[n] = size_arg_str;                n += 1;
     argv[n] = url;                         n += 1;
 

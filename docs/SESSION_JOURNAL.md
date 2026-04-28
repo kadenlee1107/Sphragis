@@ -11,6 +11,66 @@ end of a session.
 
 ---
 
+## 2026-04-27 22:15 — Mac — Diagnostic deep-dive: every cave run begins with PA `CorruptionDetected()` BRK at AtomicStringTable::Rehash / ipcz::Parcel::~Parcel. Cumulative pa-skip damage causes downstream UAF crashes (poisoned 0xefef… pointers). New ceiling is PA InSlotMetadata corruption itself.
+
+**Goal.** Look at WHAT specifically kills the median (1500-line) runs to
+understand the remaining ceiling.
+
+**Discovery.** Every cave run starts with the SAME first fault:
+`pa-skip #0 elr=0x14d73000 hops=2 → user-LR=...` where `0x14d73000 =
+partition_alloc::internal::CorruptionDetected()`. The user-LRs
+consistently point to:
+- `blink::HashTable<StringImpl*, ...>::Rehash` (atomic_string_table.cc)
+- `blink::HashTable::insert` (html_form_controls_collection.cc)
+- `ipcz::Parcel::~Parcel` (parcel.cc)
+
+PA's `InSlotMetadata` corruption check is firing on the FIRST PA
+operation that touches a freshly-committed page. The pa_abort_skip
+unwinds us past the BRK, the caller thinks the operation succeeded,
+but the object's BRP cookie / refcount is bogus.
+
+Downstream consequence: when Chromium runtime later `Release()`s a
+refcounted object whose pointer was kept stale, the atomic decrement
+hits a poisoned `0xefefefefefefeff7` address (`0xef` = freed-memory
+sentinel). Stack trace ends at `__aarch64_ldadd4_acq_rel` called from
+`base::subtle::RefCountedThreadSafeBase::Release()`.
+
+**Hypothesis.** demand_page commits zero pages in slots PA had
+previously reserved. PA expected its InSlotMetadata at the start of
+each slot to have BRP cookies / refcount magic, but our zero-fill
+gives it all-zeros → PA detects corruption.
+
+**Why it can't be cleanly fixed without major surgery:**
+1. We need to give MAP_ANONYMOUS pages zero (Linux ABI guarantee).
+2. PA expects its metadata to persist across uncommitted-then-committed
+   page cycles within a super-page.
+3. We can't tell from a translation fault alone whether the page is
+   "first commit" (should be zero) vs "lazy-commit recovery" (should
+   restore PA metadata).
+
+**Current state of cave runs:**
+- ~~Architectural ceilings (mmu, kernel pool, lazy-commit) — fixed.~~
+- Every run starts with PA-corruption pa-skip; cumulative damage
+  caps depth.
+- Best peak: 143K lines (last session, by chance + escape).
+- Median: 1.5K-3.5K lines, dies in poisoned-pointer UAF or vtable
+  corruption.
+
+**What would actually move the needle further:**
+1. Make demand_page recognize PA super-page boundaries and skip
+   committing slot-metadata pages (defer to PA-managed paths).
+2. OR: replace pa-skip with a proper PA InSlotMetadata "regenerate"
+   that writes valid BRP cookies to freshly-committed slots.
+3. OR: pre-commit V8/PA cage areas at reservation time instead of
+   lazy.
+
+These are all multi-day projects. Single-session leverage on the
+cave's depth is mostly tapped out. The cave's FUNCTIONALITY (Mojo
+IPC, Viz GPU, Blink CSS, NetworkContext) is now consistently
+reachable in deeper runs — that's the real progress.
+
+---
+
 ## 2026-04-27 21:50 — Mac — STUMP #26 added. pa-skip-data ESCAPE mechanism walks further up FP chain on detected loops instead of immediately terminating.
 
 **Goal.** When loop-detect (STUMP #22) fires, instead of killing the
