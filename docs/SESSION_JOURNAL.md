@@ -11,6 +11,153 @@ end of a session.
 
 ---
 
+## 2026-04-28 14:30 — Mac — STUMPS #44 + #45 committed (futex op-dispatch + 5 epoll wake-path fixes). 3 parallel agents synthesized; root cause traced past the OnEpollEvent symptom to a Blink HashTable Rehash bad-funcptr.
+
+### Wins on disk
+- **STUMP #44** (commit `9695dced`) — futex `args[3]` op-dispatch.
+  `pthread_cond_broadcast` was waking 1 instead of all because we read
+  `args[3]` as a timespec pointer for every op; FUTEX_REQUEUE /
+  CMP_REQUEUE / WAKE_OP need it parsed as the `nr_requeue` integer.
+  Now split on op: WAIT/WAIT_BITSET/LOCK_PI read utime; everyone else
+  reads `(args[3] & 0xFFFF_FFFF) as u32` for nr_requeue.
+- **STUMP #45** (commit `a4968fdd`) — 5 epoll/eventfd/pipe wake fixes.
+  Sub-agent audit: sys_read/recvmsg pipe drain didn't lower EPOLLIN,
+  sys_close didn't notify epoll, drain_ready didn't lower bits on ET
+  delivery, drain_ready didn't re-poll EPOLLOUT. All cleaned up.
+
+### Three parallel ruflo-coordinated agents this session
+
+- **Agent A** (work_queue.cc audit). Critical META-FINDING: each
+  targeted skip we add (PA-data, bad-PC, V8 cage, PCheck sret) damages
+  the cave further via stale-frame restoration. We're playing whack-a-
+  mole with downstream symptoms; the next failure is always worse
+  because of memory state corruption from the previous skip. **Stop
+  adding targeted skips.** Find the FIRST genuine fault and fix THAT.
+
+- **Agent B** (15-smoke characterization, archive bake). Top ceiling
+  post-#44+#45 is `base::MessagePumpEpoll::OnEpollEvent NULL+0x1c` at
+  `0x14d531cc` — 3/15 runs (20%). Other classes: mojo
+  InterfaceEndpointClient (2/15), PA SlotAddressAndSize (2/15), 8 more
+  singletons, plus 5 timed-out-alive. Critical operational finding:
+  smokes only get deep with `tools/bake_chromium_archive.sh`, NOT
+  `bake_chromium_initrd.sh` — the journal's "deep runs" only ever
+  worked through the multi-file archive bake. Deepest run (33,974
+  lines) hung 30s in `read(fd=0x4a)/clock_gettime/sc=22` loop on a
+  Mojo pipe that never received bytes — that's the post-openat hang.
+
+- **Agent C** (cooperative scheduler audit). No correctness bugs in
+  `src/batcave/linux/threads.rs`. Throughput-only opportunities only
+  (helper to wake all epoll waiters defensively, etc.). Parking lot.
+
+### Reproduction + drill-down on the OnEpollEvent crash
+
+Foreground smoke (run `chromium-smoke-20260428-141848.log`, 7012
+lines) confirmed Agent B's signature exactly:
+
+```
+[sig] fatal signo=11 fault=0x000000000000001c elr=0x14d531cc lr=0x14d53170
+```
+
+Disassembly of `MessagePumpEpoll::OnEpollEvent` at `0x4d531cc`:
+
+```
+4d531c8: ldr x23, [x25]            ; x23 = next subscription slot
+4d531cc: ldr w8, [x23, #0x1c]      ; FAULT — x23 == NULL
+4d531d0: cbnz w8, 0x4d531b4        ; if refcount!=0 → fast-path increment
+4d531ec: bl  RawPtrBackupRefImpl::AcquireInternal  ; else slow path
+```
+
+This is `absl::InlinedVector<scoped_refptr<MessagePumpEpoll::Interest>, 2>::InitFrom`
+copying `entry.subscriptions_`, then iterating to `AddRef` each Interest.
+**One slot is NULL** — i.e. `subscriptions_` contains a default-
+constructed scoped_refptr whose `ptr_` is nullptr. Chromium has no
+NULL check in this loop; Linux Chromium relies on the invariant that
+`subscriptions_` never contains NULL slots.
+
+### Root cause is upstream — the skips are corrupting refcount state
+
+In this run there were **14 pa-skip-data ESCAPES** before the fatal
+one. Order:
+1. `bad_pc ec=0x22 elr=0x1 far=0x1` (line 1037)
+2. `bad_pc ec=0x22 elr=0x7f far=0x7f`
+3. `v8_cage ec=0x20 elr=0x4020113c`
+4. `pa_data ec=0x24 elr=0x14ca85b8 far=0x1` — `RefCountedBase::AddRefImpl`
+5. `pa_data ec=0x24 elr=0x14d531cc far=0x1c` — fatal
+
+The earlier `RefCountedBase::AddRefImpl far=0x1` skips are **the same
+pattern as the fatal one** (refcount field deref on a NULL/bad
+scoped_refptr ptr_), just at a different call site. Each successful
+skip leaves Chromium's reference-counted graph more inconsistent
+because we restore a stale-but-valid stack frame and resume execution
+as if the AddRef succeeded — so the count diverges from reality and
+later releases see NULL pointers.
+
+### THE FIRST genuine fault — and the prize for next session
+
+Decoded stack at the FIRST bad-PC (line 1037, BEFORE any skip
+contamination):
+
+```
+1. blink::Partitions::InitializeOnce()::buffer_allocator (0x1a1ef400)
+2. blink::AtomicString::AddSlowCase
+3. blink::event_interface_names::InitModules
+4. blink::AtomicStringTable::Add
+5. blink::HashTable<...>::Rehash  (atomic_string_table.cc)
+6. blink::HashTable<...>::insert  (html_form_controls_collection.cc)
+   ↓
+   ELR=0x1, LR=0x1 — indirect call through a corrupt funcptr
+```
+
+This is **STUMP #17's pattern reborn**: Blink's templated HashTable
+Rehash uses a function-pointer trampoline; one slot is 0x1 (or a
+freed Smi-style sentinel). The cave does an indirect call, faults at
+PC=0x1.
+
+**Before this run had skipped a single fault, Blink's HashTable
+already had a corrupt funcptr.** This is the real bug. Everything
+downstream — every PA-data skip, every accumulated refcount drift,
+the OnEpollEvent crash — is a direct consequence of letting the cave
+limp past this with stale-frame restoration.
+
+### Recommendation for next Claude
+
+**Don't fix OnEpollEvent. Fix the Rehash funcptr.**
+
+Investigation path:
+1. Build with `BAT_OS_NO_SKIPS=1` (would need to add — gate the
+   pa-skip-data block on an env var) so the cave dies at the FIRST
+   fault instead of limping. Confirms the Rehash trampoline is
+   genuinely the entry point.
+2. Disassemble `blink::HashTable<...>::Rehash` and identify which
+   funcptr table is being indexed. Likely one of:
+   - The `key_get_value` / `equal` virtual table the HashTraits
+     templates instantiate.
+   - An `AtomicString` key-extractor pointer that lands in a region
+     V8/PA REDIRECT (STUMP #38) misclassified.
+   - A relocation we didn't apply (R_AARCH64_GLOB_DAT or
+     R_AARCH64_RELATIVE on a function symbol).
+3. Cross-check with the kernel-frame-pool fix from #38 (Agent C's
+   work) — that touched the same address range Blink uses for its
+   PartitionAlloc-backed HashTable storage.
+
+The PA-skip-data classifier should NOT be widened further. Anything
+new that lands in 0x14000000..0x1c000000 with FAR<0x1000 is almost
+certainly downstream of this Rehash bug.
+
+### Cave reachable state (unchanged from previous entry)
+- ✅ All Chromium init (with skip-induced corruption ticking up)
+- ✅ FileURLLoader::Start, openat /bin/hello.html
+- ❌ DOM not printed; deepest run hangs in renderer-unresponsive
+
+### Files touched this session
+- `src/batcave/linux/syscall.rs` — STUMP #44, STUMP #45 syscall paths
+- `src/batcave/linux/epoll.rs` — STUMP #45 drain_ready wake paths
+- `docs/SESSION_JOURNAL.md` — this entry
+
+No additional skip mechanisms added. Per Agent A's directive.
+
+---
+
 ## 2026-04-28 11:55 — Mac — Late-morning autonomous block: STUMPS #38–43 cracked (6 stumps incl 3 from parallel agents). Cave reaches openat('/bin/hello.html'), stays alive 30K+ lines.
 
 **Total stumps today: 9 (#35–43)**
