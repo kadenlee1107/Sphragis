@@ -2827,9 +2827,71 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     && unsafe { (*frame).x[30] } == elr_now;
                 let is_bad_pc_fault = (ec == 0x20 || ec == 0x21 || ec == 0x22)
                     && (elr_now < 0x1000 || bad_pc_match_lr_far);
-                if (is_pa_data_fault || is_bad_pc_fault || is_libc_data_fault || is_v8_cage_inst_fault)
+                // 🎯 STUMP #43: PCheck sret-write fault. The instruction
+                // at file VMA 0x4c929dc (cave VMA 0x14c929dc) is
+                // `str x19, [x20]` inside
+                // `logging::CheckNoreturnError::PCheck(base::Location const&)`.
+                // x20 is the sret pointer the caller passed in x8 — when
+                // a prior pa-skip-data restored sp_el0 to a stale-but-
+                // valid frame whose Free() ancestor was entered with a
+                // garbage sp, Free's `add x8, sp, #0x8` produces a
+                // page-zero-region pointer (0x3a78, 0x3ac4, etc.). The
+                // sret pointer is bogus but the LIVE fp/sp chain at
+                // PCheck-trap time is still sane (the lambda's saved x29
+                // is a real user-stack address). Treat it like a chrome-
+                // text NULL deref but allow fault up to 0x10000 (covers
+                // the entire page-zero region the bogus sret pointer can
+                // land in). The FP-walk skip below will unwind past
+                // PCheck → lambda → Free → caller and resume cleanly.
+                //
+                // Limited to elr exactly at the str instruction so we
+                // don't accidentally widen the fault threshold for any
+                // unrelated case.
+                let is_pcheck_sret_fault = ec == 0x24
+                    && elr_now == 0x14c929dc
+                    && far_now < 0x10000;
+                if (is_pa_data_fault || is_bad_pc_fault || is_libc_data_fault
+                    || is_v8_cage_inst_fault || is_pcheck_sret_fault)
                     && skip_count < 256
                 {
+                    // 🎯 Diagnostic: emit a single-line trace so log readers
+                    // can tell that we entered the pa-skip-data block AT ALL
+                    // — the heavyweight dump above runs UNCONDITIONALLY for
+                    // every fault, so seeing "UNHANDLED SYNC EXCEPTION" in
+                    // the log doesn't mean recovery failed. This line says
+                    // "we got here, and we're about to try recovery."
+                    static PA_ENTER_COUNT: core::sync::atomic::AtomicU32 =
+                        core::sync::atomic::AtomicU32::new(0);
+                    let n_enter = PA_ENTER_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    if n_enter < 16 || (n_enter & 0xFF) == 0 {
+                        uart::puts("[pa-skip-data] entered ec=0x");
+                        let hex = b"0123456789abcdef";
+                        uart::putc(hex[((ec >> 4) & 0xF) as usize]);
+                        uart::putc(hex[(ec & 0xF) as usize]);
+                        uart::puts(" elr=0x");
+                        for sh in (0..16).rev() {
+                            uart::putc(hex[((elr_now >> (sh * 4)) & 0xF) as usize]);
+                        }
+                        uart::puts(" far=0x");
+                        for sh in (0..16).rev() {
+                            uart::putc(hex[((far_now >> (sh * 4)) & 0xF) as usize]);
+                        }
+                        uart::puts(" x29=0x");
+                        let frame_x29_log = unsafe { (*frame).x[29] };
+                        for sh in (0..16).rev() {
+                            uart::putc(hex[((frame_x29_log >> (sh * 4)) & 0xF) as usize]);
+                        }
+                        // Decode which classifier matched so future logs
+                        // make the routing visible.
+                        uart::puts(" cls=");
+                        if is_bad_pc_fault { uart::puts("bad_pc"); }
+                        else if is_pa_data_fault { uart::puts("pa_data"); }
+                        else if is_libc_data_fault { uart::puts("libc_data"); }
+                        else if is_v8_cage_inst_fault { uart::puts("v8_cage"); }
+                        else if is_pcheck_sret_fault { uart::puts("pcheck_sret"); }
+                        else { uart::puts("?"); }
+                        uart::puts("\n");
+                    }
                     // For bad-PC case, x29 may also be corrupt. Try
                     // starting the fp-walk from sp_el0 if x29 looks
                     // bogus. The user stack at sp typically has
@@ -2870,8 +2932,22 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         // after the cave 'returns' there.
                         let in_text_range = saved_lr >= 0x11720000
                             && saved_lr < 0x19910000;
+                        // 🎯 STUMP #43: when the trap is the PCheck-sret
+                        // pattern, also filter out the Free + lambda +
+                        // PCheck call chain that lives in chrome text but
+                        // is part of the broken frame we're trying to
+                        // escape. Returning into any of these would just
+                        // re-enter the broken context. The chain spans:
+                        //   PCheck    @ 0x14c92964..0x14c929f4
+                        //   Lambda    @ 0x14c9e3f8..0x14c9e444
+                        //   Free      @ 0x14c9e394..0x14c9e3f8
+                        //   D2 dtor   @ 0x14c92948..0x14c92964
+                        // So skip 0x14c92900..0x14c9e500 inclusive.
+                        let in_pcheck_chain = is_pcheck_sret_fault
+                            && (0x14c92900..=0x14c9e500).contains(&saved_lr);
                         // STUMP #31 reverted (see pa_abort_skip walk).
-                        if !in_pa_free && !in_pa_libchrome && saved_lr != 0
+                        if !in_pa_free && !in_pa_libchrome && !in_pcheck_chain
+                            && saved_lr != 0
                             && saved_lr > 0x1000 && in_text_range
                         {
                             found_lr = saved_lr;
@@ -2888,9 +2964,21 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // is corrupt but the stack still has a real return
                     // address from one of the outer Hashtable::insert
                     // / AtomicStringTable::Add frames.
+                    //
+                    // 🎯 Widened scan window from 0x200 → 0x1000 (one page).
+                    // The previous 0x200 caught most bad-PC cases (e.g. the
+                    // x29=0 ELR=0x7f case where the LR is at sp+0x50), but
+                    // some V8/PA frame-prologue patterns push their saved
+                    // LR further down the active frame (sp+0x300..0x800).
+                    // The diagnostic dump above scans up to 16KB and routinely
+                    // finds candidates in this range that the recovery path
+                    // missed. Keep scanning bounded by page-end so we don't
+                    // walk into unmapped neighbors.
                     if found_lr == 0 && is_bad_pc_fault {
                         let mut probe_addr = sp_el0_now;
-                        let probe_end = sp_el0_now + 0x200;
+                        let page_end = (sp_el0_now | 0xFFF) + 1;
+                        let probe_end = (sp_el0_now + 0x1000).min(page_end);
+                        let mut sp_scan_hits = 0u32;
                         while probe_addr < probe_end {
                             if !crate::batcave::linux::uaccess::is_user_range(probe_addr as usize, 8)
                                 || !page_is_mapped(probe_addr)
@@ -2915,8 +3003,10 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             {
                                 found_lr = v;
                                 fp = probe_addr;
+                                let _ = sp_scan_hits;
                                 break;
                             }
+                            sp_scan_hits = sp_scan_hits.wrapping_add(1);
                             probe_addr += 8;
                         }
                     }
