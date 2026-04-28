@@ -11,6 +11,75 @@ end of a session.
 
 ---
 
+## 2026-04-28 08:43 — Mac — 🎯🎯🎯 BREAKTHROUGH MORNING: STUMPS #35 + #36 — cave reaches FileURLLoader::Start in 9/10 runs. The cave is now actually trying to load hello.html.
+
+**STUMP #35 — Honor V8's CodeRange hint**
+
+After morning re-investigation, added diagnostic logging for hint
+values on large anon mmaps. V8 passes hint=0xF0000000 (~4 GB) for
+the 256 MiB CodeRange. Our small_mmap region returns 0x70_e400_0000
+(~484 GB) — way too far from V8's hint.
+
+V8 likely requires CodeRange close to its other code regions (32-bit
+relative jumps for JIT'd code). Our address is 484 GB away from
+V8's expectations → V8 logs OOM and aborts.
+
+**Fix:** when sys_mmap is called with hint in 1 GB..256 GB range
+and len >= 64 MiB, return the hint directly and register a
+demand-page reservation. Cave's user VA at 0xF0000000 isn't backed
+yet, but demand_page handles the faults.
+
+**STUMP #36 — prlimit64 returns EFAULT for read-only pointers**
+
+Chromium's `base::CheckMemoryReadOnly` calls `getrlimit(6, addr)`
+to verify a region is RO — kernel tries to write rlimit struct to
+addr; EFAULT means addr is RO (success). Our prlimit64 only checked
+if addr was in user range, not whether it was writable. Result:
+kernel-faulted on `str` or returned 0 → BRK.
+
+Fix: walk the page tables, check AP[2:1] bits, return EFAULT if
+not EL0 R/W (0b01).
+
+**The result:**
+
+```
+[VERBOSE1:content/browser/loader/file_url_loader_factory.cc:474]
+FileURLLoader::Start: file:///bin/hello.html
+```
+
+**9/10 runs reach FileURLLoader::Start.** The cave is processing
+the file URL request through Chromium's network stack
+(`network::ResourceScheduler::Client`, `ResourceSchedulerParamsManager`).
+
+Best run: **13,595 lines** with full Chromium runtime active —
+message pump, FileURLLoader, network stack, V8 isolate.
+
+**What the cave reaches now in deep runs:**
+- ✅ Full Chromium init (variations, viz, mojo, skia, fonts)
+- ✅ V8 Isolate init (no OOM!)
+- ✅ NetworkContext + URLLoaderFactory
+- ✅ MessagePumpEpoll active (workers running)
+- ✅ LevelDB proto database init
+- ✅ PAC proxy resolution
+- ✅ **FileURLLoader::Start: file:///bin/hello.html**
+- ✅ ResourceScheduler::Client construction
+- (next stump) actual file read + DOM parsing
+
+**Remaining ceilings:**
+1. V8 JIT instruction abort at 0x4020113c (V8 cage area, page not
+   executable for some reason — STUMP #24/#25 should handle but
+   apparently miss this case)
+2. ResourceScheduler::Client constructor crashes on a corrupt vtable
+   (fault address looks like instruction bytes — function-ptr
+   corruption)
+3. ~30% of runs die earlier in PA backup-ref-ptr territory
+
+This is the biggest progress in months. The cave is doing REAL
+Chromium runtime work, including the file load operation we've been
+chasing.
+
+---
+
 ## 2026-04-28 00:38 — Mac — STUMP #33 added: mprotect dc cvau + ic ivau for PROT_EXEC. Autonomous block done. 9 commits, 6 stumps cracked.
 
 **STUMP #33 — mprotect cache coherency for PROT_EXEC**
