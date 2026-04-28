@@ -1496,6 +1496,13 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // 🎯 STUMP #21: restrict to content_shell TEXT.
                     let in_text_range = saved_lr >= 0x11720000
                         && saved_lr < 0x19910000;
+                    // STUMP #31 (reverted): function-start filter pushed
+                    // pa-skip one frame deeper but landed inside V8's
+                    // ReportOOMFailure which itself crashes — walking
+                    // up the stack from inside the OOM chain just lands
+                    // in another part of the broken OOM chain. Going
+                    // back to the simpler "first valid LR in text range"
+                    // policy.
                     if !in_pa_free && !in_pa_libchrome && saved_lr != 0
                         && saved_lr > 0x1000 && in_text_range
                     {
@@ -2638,6 +2645,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         // after the cave 'returns' there.
                         let in_text_range = saved_lr >= 0x11720000
                             && saved_lr < 0x19910000;
+                        // STUMP #31 reverted (see pa_abort_skip walk).
                         if !in_pa_free && !in_pa_libchrome && saved_lr != 0
                             && saved_lr > 0x1000 && in_text_range
                         {

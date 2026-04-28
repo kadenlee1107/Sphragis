@@ -11,6 +11,80 @@ end of a session.
 
 ---
 
+## 2026-04-27 23:50 — Mac — STUMP #30: 16 MiB alignment for large mmaps. New ceiling: V8 CodeRange "OOM" — V8 mmaps 256 MiB region, our pre-commit cap is 32 MiB so it lazy-commits, V8 detects something during init and OOMs. STUMP #31 attempts (function-start filter, --jitless) regressed; reverted.
+
+**Goal.** Push past V8's CodeRange "OOM" that's the new deterministic
+ceiling at ~7.4K lines.
+
+**Stump tuned this session:**
+
+### STUMP #30 — 16 MiB alignment for large allocations
+
+GPT-5.4 suggested V8's CodeRange might require alignment >= 4-16 MiB.
+Our small_mmap cursor returned arbitrary 4 KiB-aligned addresses for
+the 256 MiB CodeRange, which V8 might reject.
+
+**Fix.** Round cursor up to 16 MiB before issuing the VA for any
+allocation >= 64 MiB.
+
+**Result.** No change in V8 OOM behavior — V8 still logs OOM. So
+alignment is not the cause. But the change is harmless and matches
+typical kernel mmap behavior.
+
+### STUMP #31 attempts (REVERTED)
+
+**Attempt 1: function-start filter on FP-walk.**
+Hypothesis: pa_abort_skip's FP walk lands on the START of a function
+when ReportV8OOMError tail-calls OnNoMemoryInternal — saved LR points
+to the next function's prologue instead of a real return site.
+
+Implementation: detect `paciasp` (0xd503233f) or `bti c` (0xd503245f)
+at saved_lr and walk further.
+
+Result: regressed 7.4K runs to 1.2K. The deeper frame just lands in
+V8::Utils::ReportOOMFailure which itself crashes. Walking up the OOM
+chain just lands in another part of the OOM chain.
+
+**Attempt 2: --js-flags=--jitless.**
+Try V8 bytecode-only mode to skip CodeRange entirely.
+
+Result: triggered the ICU CharString "pyt\\0…" string-as-pointer crash
+at line 624 (`elr=0x14fc22cc icu_78::CharString::append`). Adding ANY
+new command-line flag changes Chromium argv parsing ordering and
+exposes this latent bug. Same class as `--no-zygote` and
+`--disable-features=...`.
+
+**Attempt 3: PRECOMMIT_CAP 32 MiB → 384 MiB.**
+Pre-commit V8's 256 MiB CodeRange explicitly so V8's probe writes
+land on already-mapped pages.
+
+Result: regressed to 1.1K with crash in `RawPtrBackupRefImpl::
+AcquireInternal` on a sign-extended pointer (0xfffffffa173c003e).
+Pre-committing 384 MiB seems to disturb something downstream.
+
+### Current state
+
+The cave consistently reaches ~7.4K lines in best runs, but variance
+is back (1-7K range). The 7.4K crashes at:
+- elr=0x16dc8678 (V8Initializer::InitializeIsolateHolder + 0x28)
+- fault=0x17 (NULL+0x17 deref of std::string::size byte)
+- preceded by `V8 process OOM (Failed to reserve virtual memory for
+  CodeRange)` log
+
+This V8 init failure is structural — V8 doesn't like SOMETHING about
+our CodeRange mmap and OOMs deterministically. Without the V8 source
+to understand the check, we can't easily fix it.
+
+**Notes for next session:**
+1. Could try implementing a real PROT_NONE → PROT_RW mprotect probe
+   in our handler so V8's reservation feels "real".
+2. Could try investigating the ICU "pyt" crash itself — fix that and
+   we can add `--js-flags=--jitless` to bypass CodeRange.
+3. Could try targeted instrumentation of which PA call exactly hits
+   OnNoMemoryInternal — that tells us what V8 needed but failed.
+
+---
+
 ## 2026-04-27 23:25 — Mac — 🎯 BREAKTHROUGH: STUMP #28 v2 (pre-commit anon mmaps) eliminated PA `CorruptionDetected` BRKs entirely. STUMP #29 (Smi-release-skip) handles V8 MemoryPool cleanup. Median runs went from ~1.2K to consistently ~7.4K lines.
 
 **Goal.** With user asleep, working autonomously with GPT-5.4 as decision partner. After diagnostic confirmed `demand_page` zero-fill IS what Chromium reads (no aliasing), GPT recommended pre-committing anonymous mmaps so PA's metadata setup hits already-mapped memory.

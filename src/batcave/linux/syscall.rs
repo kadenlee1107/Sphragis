@@ -2785,9 +2785,25 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         }
         let active_l1 = active_l1 & !1u64;
         ensure_small_mmap_reservation(active_l1);
+        // 🎯 STUMP #30: align large allocations to 16 MiB. V8's CodeRange
+        // (256 MiB) and similar large-region reservations expect a
+        // strongly-aligned base; if our cursor lands at an arbitrary
+        // 4 KiB boundary V8 rejects with "Failed to reserve virtual
+        // memory for CodeRange" and triggers the OOM cleanup chain
+        // that hits __aarch64_ldadd4_acq_rel on a Smi'd refcount.
+        const LARGE_THRESHOLD: usize = 64 * 1024 * 1024; // 64 MiB
+        const LARGE_ALIGN: usize = 16 * 1024 * 1024;     // 16 MiB
+        let needs_large_align = aligned_len >= LARGE_THRESHOLD;
         let mut base = SMALL_MMAP_CURSOR.load(Ord2::Acquire);
         loop {
-            let next = base.saturating_add(aligned_len);
+            // For large allocations, round base up to 16 MiB before
+            // computing next.
+            let aligned_base = if needs_large_align {
+                (base + LARGE_ALIGN - 1) & !(LARGE_ALIGN - 1)
+            } else {
+                base
+            };
+            let next = aligned_base.saturating_add(aligned_len);
             if (next as u64) >= SMALL_MMAP_END as u64 {
                 break;
             }
@@ -2795,6 +2811,8 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                 base, next, Ord2::AcqRel, Ord2::Acquire,
             ) {
                 Ok(_) => {
+                    // From here `base` refers to the aligned base.
+                    let base = aligned_base;
                     uart::puts("[mmap] anon → 0x");
                     let hex = b"0123456789abcdef";
                     for sh in (0..16).rev() {
@@ -2802,6 +2820,9 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                     }
                     uart::puts(" len=");
                     crate::kernel::mm::print_num(len);
+                    if needs_large_align {
+                        uart::puts(" (16M-aligned)");
+                    }
                     uart::puts("\n");
                     // 🎯 STUMP #28 v2: pre-commit ALL anonymous private
                     // mappings, not just 2 MiB-aligned PA super-pages.
@@ -2818,8 +2839,12 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                     // frames available. Pre-committing all anon is a
                     // tiny fraction of available memory.
                     //
-                    // Cap at 32 MiB per single mmap to avoid a pathological
-                    // big request stealing all frames.
+                    // STUMP #30 experiment with PRECOMMIT_CAP=384 MiB
+                    // regressed the cave to ~1.1K lines (different
+                    // crash, RawPtrBackupRefImpl::AcquireInternal on
+                    // a sign-extended ptr). Reverted to 32 MiB.
+                    // V8's CodeRange OOM survives this — but the cave
+                    // pa-skips through it consistently to ~7.4K.
                     const PRECOMMIT_CAP: usize = 32 * 1024 * 1024;
                     let should_precommit = fd_num < 0
                         && len <= PRECOMMIT_CAP;
