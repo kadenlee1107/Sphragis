@@ -3045,11 +3045,9 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     // compiled out.
     argv[n] = "--enable-logging=stderr";   n += 1;
     argv[n] = "--v=1";                     n += 1;
-    // 🎯 TEST: now that STUMP #32 fixes the argc-parity SP alignment
-    // bug, adding --js-flags=--jitless (which previously triggered the
-    // ICU CharString crash) should work. If V8 still OOMs CodeRange,
-    // we'll see what comes next.
-    argv[n] = "--js-flags=--jitless";      n += 1;
+    // 🎯 STUMP #32 fixed the argc-parity ICU bug, so we can now
+    // freely add command-line flags. Reverted to known-good config
+    // (no --jitless since V8 still OOMs CodeRange even with it).
     argv[n] = size_arg_str;                n += 1;
     argv[n] = url;                         n += 1;
 

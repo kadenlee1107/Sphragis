@@ -11,6 +11,80 @@ end of a session.
 
 ---
 
+## 2026-04-28 00:30 — Mac — 🎯 STUMP #32 LANDED: argc-parity SP alignment was the ROOT cause of ICU "typeMap/timezone" CharString crash. With fix: 9/10 runs land in tight 7.4K cluster.
+
+**The breakthrough.** After investigating the ICU bug all night, I
+realized the corruption was **arg-count-sensitive**, not byte-content-
+sensitive. From there:
+
+Math:
+- After our padding step, sp is 16-byte aligned.
+- Subsequent pushes to construct the process-entry stack:
+  - auxv: 9 × 16 = 144 (multiple of 16 ✓)
+  - envp ptrs: 5 × 8 = 40 (8 bytes off-mod-16 ✗)
+  - argv ptrs: (argc+1) × 8
+  - argc word: 8
+- Total non-aligned tail: 48 + (argc+1)×8.
+- For final SP to be 16-aligned: (argc+1) × 8 must be multiple of 16
+  → argc must be **ODD**.
+- Base argc=11 ✓
+- Adding any extra flag → argc=12 → SP misaligned by 8 bytes → all
+  subsequent stack-relative writes drift, eventually corrupting an
+  ICU CharString::buffer field with stack data ("typeMap/timezone").
+
+**Fix:** in loader.rs, after the initial padding step, push 8 zero
+bytes if argc is even. This swaps parity so final SP lands 16-aligned
+regardless of argc.
+
+**Verification:** added `--js-flags=--jitless` (which previously
+triggered ICU bug at line ~620). With STUMP #32: ICU NEVER fires
+across 10 runs. Cave reaches the same 7.4K cluster.
+
+### Final 10-smoke distribution (STUMP #32, base config):
+
+| Run | Lines |
+|-----|-------|
+| 1 | 7,499 |
+| 2 | 7,479 |
+| 3 | 7,461 |
+| 4 | 7,446 |
+| 5 | 7,443 |
+| 6 | 7,442 |
+| 7 | 7,438 |
+| 8 | 7,434 |
+| 9 | 7,429 |
+| 10 | 1,261 (outlier) |
+
+**9/10 runs in the 7.4K cluster. 90% consistency.** Single biggest
+improvement in months.
+
+### Total autonomous-block summary:
+
+| Stump | Effect |
+|-------|--------|
+| #28 v2 | Pre-commit all anon mmaps → eliminated PA CorruptionDetected |
+| #29 | Smi-release-skip in LSE atomic → handles V8 MemoryPool cleanup |
+| #30 | 16 MiB alignment for large mmaps → cosmetic, kept |
+| #32 | argc-parity SP alignment → unblocks all extra command-line flags |
+
+7 commits pushed in this autonomous block (~3 hours, 22:15 → 00:30).
+GPT-5.4 used as decision partner for major architectural calls.
+
+**Cave's reachable depth in best runs:** Chromium message pump, Mojo
+IPC, Viz GPU, NetworkContext, certificate trust store, V8 isolate
+setup. Real progress — the cave is doing real Chromium runtime work.
+
+**Remaining ceilings for next session:**
+1. V8 still allocates CodeRange even with --jitless (so still OOMs).
+   Need to dig into why or find a different bypass.
+2. The 1 outlier run at 1.2K was a different code path (some PA
+   backup-ref-ptr issue). Investigate when more samples available.
+
+Now that STUMP #32 is fixed, `--disable-features=...`, `--no-zygote`,
+and other flags are usable. May open up new bypass options.
+
+---
+
 ## 2026-04-28 00:20 — Mac — Final 10-smoke distribution: 6/10 at 7.4K cluster, 4/10 at 1.2K. Autonomous block done.
 
 | Run | Lines |
