@@ -1090,6 +1090,29 @@ fn sys_mprotect(args: [u64; 6]) -> i64 {
             core::arch::asm!("isb");
         }
     }
+
+    // 🎯 STUMP #33: when adding PROT_EXEC, do `dc cvau` + `ic ivau`
+    // for each cache line in the affected range. ARM64 D-cache and
+    // I-cache are separate; a JIT engine that writes code (D-cache),
+    // mprotects RX, and then executes will I-fetch stale data unless
+    // we explicitly clean D-cache to PoU and invalidate I-cache.
+    //
+    // This was the cause of the "0x4020113c instruction abort" we
+    // saw when V8 ran with --disable-features=PartitionAllocBackupRefPtr
+    // (no V8 OOM, so JIT path engaged, and the JIT code wasn't visible
+    // to fetch).
+    if updated > 0 && (prot & PROT_EXEC) != 0 {
+        unsafe {
+            let mut line = start & !63;
+            while line < end {
+                core::arch::asm!("dc cvau, {a}", a = in(reg) line);
+                core::arch::asm!("ic ivau, {a}", a = in(reg) line);
+                line += 64;
+            }
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+    }
     // Log rate-limited — mprotect fires dozens of times during
     // Chromium startup as V8 commits cage sub-pages.
     static MPROTECT_CALLS: core::sync::atomic::AtomicU64
