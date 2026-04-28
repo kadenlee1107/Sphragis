@@ -11,6 +11,61 @@ end of a session.
 
 ---
 
+## 2026-04-27 21:25 — Mac — STUMP #25 added. Bad-PC detection covers funcptr corruption beyond 0x1000; permission-fault instruction aborts now flip UXN off for V8 JIT mixed-mode pages.
+
+**Goal.** Push the median run depth past the 1500-line plateau. Many
+runs were dying at 800-1500 with `fault=elr=lr=X` patterns where X
+was a corrupt function pointer (e.g. 0x4000, 0x2c00537400) outside
+our existing pc-skip range (which only covered ELR<0x1000).
+
+**Stumps killed this session:**
+
+### STUMP #25 — Extended bad-PC detection + permission-fault inst-abort
+
+**Symptom A.** Short runs (<2K lines) dying with `fault=elr=lr=X`
+where X is a small or V8-cage-area address. The cave used `BLR Xn`
+where Xn was a garbage value, the CPU jumped to that address,
+faulted on instruction fetch, and PC/LR/FAR all show the same bad
+address. Our pc-skip only triggered for ELR<0x1000; anything in
+between (0x1000..text_base) or in V8 cage (0x2c..) wasn't caught.
+
+**Fix A.** Recognize the pattern `elr_now == far_now &&
+(*frame).x[30] == elr_now` for instruction-abort exception classes
+(EC=0x20/0x21/0x22) and treat it as bad-PC for the FP-walk recovery
+even when ELR ≥ 0x1000.
+
+**Symptom B.** 28K-line runs dying with `fault=elr=0x4020113c`,
+`lr=libc-area`. PC tried to fetch at V8 cage area but the page was
+already mapped (with UXN set from a prior data-fault commit). Our
+demand_page only handled translation faults (DFSC 0x04..=0x07), not
+permission faults (DFSC 0x0d..=0x0f).
+
+**Fix B.** When the fault is an instruction abort AND DFSC is
+0x0d..=0x0f (permission fault), walk to the existing L3 entry,
+clear the UXN bit, and TLBI. No new frame needed — the page is
+already there with valid data; we just need to make it executable.
+
+**Distribution after #22-#25 (10-smoke):**
+
+| Run | Lines | Notes |
+|-----|-------|-------|
+| 1 | 25,454 | deepest |
+| 2 | 6,484 | medium |
+| 3 | 5,016 | medium |
+| 4 | 4,437 | medium |
+| 5 | 1,697 | short |
+| 6 | 1,558 | short |
+| 7 | 1,524 | short |
+| 8 | 1,224 | short |
+| 9 | 900 | short |
+| 10 | timeout | hung |
+
+**Improvement:** 4/10 runs now exceed 4K lines (was 1-2/10). Median
+~1500. Best peak still 25K-30K range; 143K peak from earlier session
+not seen in this batch but architectural ceiling is gone.
+
+---
+
 ## 2026-04-27 21:00 — Mac — STUMPS #22-#24 cracked. Cave reaches 143K-line peaks; CSS parsing, Viz GPU init, Skia fonts, Mojo message pump all functional. ChromeRootStoreData cert init is the new ceiling.
 
 **Goal.** Push past the 1500-line plateau and get consistent deep runs.

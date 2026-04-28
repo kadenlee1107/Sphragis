@@ -159,7 +159,13 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     // the same VA forever (820k loops observed before alloc_frame OOM).
     let dfsc = esr & 0x3F;
     let is_translation_fault = matches!(dfsc, 0x04..=0x07);
-    if !is_translation_fault { return false; }
+    // 🎯 STUMP #25 helper: also accept permission faults (DFSC 0x0d/0x0e/0x0f)
+    // when they're instruction aborts. The page is already mapped (with UXN
+    // set from a previous data-fault commit) but execution faults. Flip
+    // UXN off below by re-installing with the inst-abort flags.
+    let is_perm_fault_inst_abort = is_inst_abort
+        && matches!(dfsc, 0x0d..=0x0f);
+    if !is_translation_fault && !is_perm_fault_inst_abort { return false; }
 
     // Find the active cave's L1 phys from TTBR0_EL1.
     let ttbr0: u64;
@@ -198,6 +204,39 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
         }
         // Treat as virtual-reservation hit: drop through to alloc
         // a frame and install_l3_mapping for this VA.
+    }
+
+    // 🎯 STUMP #25 helper: for permission-fault instruction aborts,
+    // the page is already mapped but with UXN set. Just flip UXN off
+    // on the existing L3 entry — no new frame needed.
+    if is_perm_fault_inst_abort {
+        let page_va = far & !0xFFFu64;
+        // Walk L1 -> L2 -> L3 to find the existing entry.
+        let l1_idx = ((page_va >> 30) & 0x1FF) as u64;
+        let l1_ent_addr = l1_phys + l1_idx * 8;
+        let l1_ent = unsafe { core::ptr::read_volatile(l1_ent_addr as *const u64) };
+        if (l1_ent & 0b11) != 0b11 { return false; }
+        let l2_phys = l1_ent & 0x0000_FFFF_FFFF_F000;
+        let l2_idx = ((page_va >> 21) & 0x1FF) as u64;
+        let l2_ent_addr = l2_phys + l2_idx * 8;
+        let l2_ent = unsafe { core::ptr::read_volatile(l2_ent_addr as *const u64) };
+        if (l2_ent & 0b11) != 0b11 { return false; }
+        let l3_phys = l2_ent & 0x0000_FFFF_FFFF_F000;
+        let l3_idx = ((page_va >> 12) & 0x1FF) as u64;
+        let l3_ent_addr = l3_phys + l3_idx * 8;
+        let l3_ent = unsafe { core::ptr::read_volatile(l3_ent_addr as *const u64) };
+        if (l3_ent & PAGE_VALID) != PAGE_VALID { return false; }
+        // Clear UXN bit (bit 54).
+        let new_ent = l3_ent & !PAGE_UXN;
+        unsafe {
+            core::ptr::write_volatile(l3_ent_addr as *mut u64, new_ent);
+            core::arch::asm!("dc civac, {a}", a = in(reg) l3_ent_addr);
+            core::arch::asm!("dsb ishst");
+            core::arch::asm!("tlbi vaae1is, {a}", a = in(reg) page_va >> 12);
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+        return true;
     }
 
     // Allocate a fresh page + install it.

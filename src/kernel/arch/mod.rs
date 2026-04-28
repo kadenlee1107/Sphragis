@@ -2503,8 +2503,20 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 // current EL. EC=0x22 = PC alignment. Any of these
                 // with ELR < 0x1000 means a corrupt-pointer indirect
                 // branch (Smi tag, NULL+offset, etc.).
+                //
+                // 🎯 STUMP #25: also catch ELR == FAR == LR ≥ 0x1000
+                // pattern. The cave called BLR Xn where Xn was a
+                // garbage value (e.g. 0x4000, 0x2c00537400). The CPU
+                // jumped to that address, faulted on instruction fetch
+                // (no executable mapping), and PC/LR/FAR all show the
+                // same bad address. Skip to a real frame in the FP
+                // chain instead of letting the cave die.
+                let bad_pc_match_lr_far = (ec == 0x20 || ec == 0x21 || ec == 0x22)
+                    && elr_now == far_now
+                    && elr_now != 0
+                    && unsafe { (*frame).x[30] } == elr_now;
                 let is_bad_pc_fault = (ec == 0x20 || ec == 0x21 || ec == 0x22)
-                    && elr_now < 0x1000;
+                    && (elr_now < 0x1000 || bad_pc_match_lr_far);
                 if (is_pa_data_fault || is_bad_pc_fault || is_libc_data_fault)
                     && skip_count < 256
                 {
