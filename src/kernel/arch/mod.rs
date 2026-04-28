@@ -2724,6 +2724,23 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 let is_pa_data_fault = (ec == 0x24 || ec == 0x21)
                     && far_now < 0x1000
                     && (0x14000000..=0x1c000000).contains(&elr_now);
+                // 🎯 STUMP #40: V8 cage instruction abort. Cave's PC
+                // jumped to a V8-internal address (e.g. 0x4020113c)
+                // that isn't backed by executable memory. Common when
+                // a Mojo IPC callback resolves to a stale V8 builtin
+                // pointer or V8's pointer compression decoded a
+                // garbage offset against a code-base register.
+                //
+                // Range: V8 cages can land in 0x40000000..0x80000000
+                // (when CodeRange goes there). Treat any inst-abort
+                // (EC=0x20/0x21) where ELR is in this range AND fault
+                // == ELR (instruction-fetch fault) as a bad-PC and
+                // walk the FP chain to escape.
+                let is_v8_cage_inst_fault = (ec == 0x20 || ec == 0x21)
+                    && far_now == elr_now
+                    && elr_now >= 0x40000000
+                    && elr_now < 0x80_0000_0000
+                    && elr_now != 0;
                 // 🎯 Also catch libc-area NULL-derefs that happen
                 // DOWNSTREAM of a pa-skip-data return: e.g. when our
                 // fake AllocateBacking result is passed to memset
@@ -2752,7 +2769,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     && unsafe { (*frame).x[30] } == elr_now;
                 let is_bad_pc_fault = (ec == 0x20 || ec == 0x21 || ec == 0x22)
                     && (elr_now < 0x1000 || bad_pc_match_lr_far);
-                if (is_pa_data_fault || is_bad_pc_fault || is_libc_data_fault)
+                if (is_pa_data_fault || is_bad_pc_fault || is_libc_data_fault || is_v8_cage_inst_fault)
                     && skip_count < 256
                 {
                     // For bad-PC case, x29 may also be corrupt. Try
