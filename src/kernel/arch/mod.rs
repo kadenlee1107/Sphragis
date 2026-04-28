@@ -2624,41 +2624,103 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             core::sync::atomic::AtomicU64::new(0);
                         static SAME_SKIP_COUNT: core::sync::atomic::AtomicU32 =
                             core::sync::atomic::AtomicU32::new(0);
+                        // 🎯 STUMP #26: when loop is detected, instead of
+                        // terminating immediately, try to ESCAPE by
+                        // walking further up the FP chain. Skip the
+                        // first ESCAPE_DEPTH valid LRs to land in the
+                        // grand-caller's frame. If we exhaust 5 escape
+                        // attempts at the same loop, give up.
+                        static ESCAPE_DEPTH: core::sync::atomic::AtomicU32 =
+                            core::sync::atomic::AtomicU32::new(0);
                         let prev_elr = LAST_SKIP_ELR.load(core::sync::atomic::Ordering::Relaxed);
                         let prev_lr = LAST_SKIP_LR.load(core::sync::atomic::Ordering::Relaxed);
                         let same_pair = prev_elr == elr_now && prev_lr == found_lr;
                         let mut loop_detected = false;
                         if same_pair {
                             let cnt = SAME_SKIP_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
-                            // 🎯 STUMP #22 tuning: bumped 3 → 64. Loops
-                            // of 5-10 same-pair skips are normal in
-                            // Chromium's iterative codepaths (e.g. anim
-                            // controller iterating through entries that
-                            // each fault). 64 is a sane cap that
-                            // catches genuine infinite loops without
-                            // killing the 80K+ deep runs.
-                            if cnt > 64 {
-                                loop_detected = true;
-                                uart::puts("[pa-skip-data] LOOP DETECTED at elr=0x");
-                                let hex = b"0123456789abcdef";
-                                for sh in (0..16).rev() {
-                                    uart::putc(hex[((elr_now >> (sh * 4)) & 0xF) as usize]);
+                            if cnt > 32 {
+                                let depth = ESCAPE_DEPTH.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+                                if depth > 5 {
+                                    loop_detected = true;
+                                    uart::puts("[pa-skip-data] LOOP+ESCAPE EXHAUSTED at elr=0x");
+                                    let hex = b"0123456789abcdef";
+                                    for sh in (0..16).rev() {
+                                        uart::putc(hex[((elr_now >> (sh * 4)) & 0xF) as usize]);
+                                    }
+                                    uart::puts(" — terminating cave\n");
+                                    SAME_SKIP_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+                                    ESCAPE_DEPTH.store(0, core::sync::atomic::Ordering::Relaxed);
+                                    LAST_SKIP_ELR.store(0, core::sync::atomic::Ordering::Relaxed);
+                                    LAST_SKIP_LR.store(0, core::sync::atomic::Ordering::Relaxed);
+                                } else {
+                                    // Walk up the FP chain to escape.
+                                    uart::puts("[pa-skip-data] ESCAPE depth=");
+                                    crate::kernel::mm::print_num(depth as usize);
+                                    uart::puts(" elr=0x");
+                                    let hex = b"0123456789abcdef";
+                                    for sh in (0..16).rev() {
+                                        uart::putc(hex[((elr_now >> (sh * 4)) & 0xF) as usize]);
+                                    }
+                                    uart::puts("\n");
+                                    let mut fp_e = if frame_x29 > 0x1000 { frame_x29 } else { sp_el0_now };
+                                    let mut hops_e = 0;
+                                    let mut found_e: u64 = 0;
+                                    let mut skip_n = depth as usize;
+                                    while hops_e < 32 && fp_e != 0 {
+                                        if !crate::batcave::linux::uaccess::is_user_range(fp_e as usize, 16)
+                                            || !page_is_mapped(fp_e)
+                                        {
+                                            break;
+                                        }
+                                        let nfp: u64 = unsafe {
+                                            core::ptr::read_volatile(fp_e as *const u64)
+                                        };
+                                        let slr: u64 = unsafe {
+                                            core::ptr::read_volatile((fp_e + 8) as *const u64)
+                                        };
+                                        let in_pa = (0x11a63000..=0x11a6a800).contains(&slr)
+                                            || (0x14d70000..=0x14da0000).contains(&slr);
+                                        let in_text = slr >= 0x11720000 && slr < 0x19910000;
+                                        if !in_pa && slr > 0x1000 && in_text {
+                                            if skip_n == 0 {
+                                                found_e = slr;
+                                                fp_e = nfp;
+                                                break;
+                                            }
+                                            skip_n -= 1;
+                                        }
+                                        fp_e = nfp;
+                                        hops_e += 1;
+                                    }
+                                    if found_e != 0 {
+                                        SAME_SKIP_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+                                        LAST_SKIP_ELR.store(elr_now, core::sync::atomic::Ordering::Relaxed);
+                                        LAST_SKIP_LR.store(found_e, core::sync::atomic::Ordering::Relaxed);
+                                        let scratch = pa_skip_scratch_uva();
+                                        unsafe {
+                                            (*frame).elr = found_e;
+                                            (*frame).x[29] = fp_e;
+                                            (*frame).x[30] = found_e;
+                                            if scratch != 0 {
+                                                (*frame).x[0] = scratch;
+                                            }
+                                            core::arch::asm!("msr sp_el0, {a}",
+                                                a = in(reg) fp_e + 16);
+                                        }
+                                        return;
+                                    } else {
+                                        loop_detected = true;
+                                        uart::puts("[pa-skip-data] ESCAPE FAILED — terminating cave\n");
+                                    }
                                 }
-                                uart::puts(" — terminating cave\n");
-                                // Reset counters so next cave starts fresh.
-                                SAME_SKIP_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
-                                LAST_SKIP_ELR.store(0, core::sync::atomic::Ordering::Relaxed);
-                                LAST_SKIP_LR.store(0, core::sync::atomic::Ordering::Relaxed);
                             }
                         } else {
                             SAME_SKIP_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+                            ESCAPE_DEPTH.store(0, core::sync::atomic::Ordering::Relaxed);
                             LAST_SKIP_ELR.store(elr_now, core::sync::atomic::Ordering::Relaxed);
                             LAST_SKIP_LR.store(found_lr, core::sync::atomic::Ordering::Relaxed);
                         }
                         if loop_detected {
-                            // Bail out — terminate cave. Skip all the
-                            // elr/x[0] mucking and let the outer fault
-                            // handler kill the cave.
                             crate::batcave::linux::signal::terminate_cave_fatal_with_lr(
                                 fatal_signo, far_now, found_lr
                             );

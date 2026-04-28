@@ -11,6 +11,60 @@ end of a session.
 
 ---
 
+## 2026-04-27 21:50 — Mac — STUMP #26 added. pa-skip-data ESCAPE mechanism walks further up FP chain on detected loops instead of immediately terminating.
+
+**Goal.** When loop-detect (STUMP #22) fires, instead of killing the
+cave, try to ESCAPE by skipping the inner spinning frame and returning
+to a grand-caller. Maybe the outer frame can recover and the cave can
+keep running.
+
+**Stumps killed this session:**
+
+### STUMP #26 — pa-skip-data ESCAPE mechanism
+
+**Symptom.** Loop-detect kills caves at the ChromeRootStoreData ctor
+spin (32+ same-pair skips). Cave stops at ~25K lines even though there
+might be productive work past the cert init crash if we could just
+skip out of the whole construction frame.
+
+**Fix.** When `SAME_SKIP_COUNT > 32`, instead of terminating:
+1. Increment `ESCAPE_DEPTH` (capped at 5).
+2. Walk the FP chain up to 32 hops, but skip the first `ESCAPE_DEPTH`
+   valid LRs.
+3. Return to that grand-caller frame with scratch substituted into x[0].
+4. Reset same-skip tracking — the new (elr, lr) pair counts as fresh.
+5. If 5 escape attempts all loop again, terminate.
+
+**Result.** First evidence: a 13K-line run successfully escaped from
+ChromeRootStoreData (`elr=0x152df784`) at depth=1, continued running,
+and then died ~10K lines later at a `V8 API Close` site. So escape
+got us past the cert ceiling but downstream V8 cleanup also has issues.
+No 25K+ run in this 10-smoke batch (variance), but escape is now an
+option in the toolbox.
+
+**Distribution after STUMP #26 (10-smoke):**
+
+| Run | Lines | Escape |
+|-----|-------|--------|
+| 1 | 13,051 | depth=1 (ChromeRootStoreData) |
+| 2 | 3,673 | none |
+| 3 | 3,157 | none |
+| 4 | 2,248 | none |
+| 5 | 1,790 | none |
+| 6 | 1,648 | none |
+| 7 | 1,568 | none |
+| 8 | 1,507 | none |
+| 9 | 1,250 | none |
+| 10 | 1,222 | none |
+
+Most runs don't reach the loop threshold so escape doesn't fire. The
+median runs (1.2K-3.7K) are dying from FIRST faults — different crash
+sites every time (V8 API Close, VDSOSupport::Init, PostTaskAndReplyRelay,
+unknown text). These are downstream consequences of pa-skip cumulative
+damage and are harder to attack directly.
+
+---
+
 ## 2026-04-27 21:25 — Mac — STUMP #25 added. Bad-PC detection covers funcptr corruption beyond 0x1000; permission-fault instruction aborts now flip UXN off for V8 JIT mixed-mode pages.
 
 **Goal.** Push the median run depth past the 1500-line plateau. Many
