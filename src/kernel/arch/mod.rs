@@ -1515,6 +1515,14 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 if found_lr != 0 {
                     // Synthesize "PA::Free returned normally": restore
                     // SP to past PA::Free's frame, set elr to user's LR.
+                    //
+                    // STUMP #34 attempt (REVERTED): tried to set x1 to
+                    // scratch when found_lr == V8Initializer start to
+                    // avoid the NULL+0x17 deref. Result: V8Initializer
+                    // proceeded further but caves HUNG (timed out)
+                    // instead of crashing cleanly at 7.4K. Worse net
+                    // outcome — the partially-init isolate deadlocked
+                    // somewhere downstream. Keeping known-good logic.
                     unsafe {
                         (*frame).elr   = found_lr;
                         (*frame).x[29] = fp; // user-code FP

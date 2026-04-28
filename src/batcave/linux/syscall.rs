@@ -2808,6 +2808,47 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         }
         let active_l1 = active_l1 & !1u64;
         ensure_small_mmap_reservation(active_l1);
+        // Diagnostic: log hint for large allocations.
+        if aligned_len >= 64 * 1024 * 1024 {
+            uart::puts("[mmap/large-anon] hint=0x");
+            let hex = b"0123456789abcdef";
+            for sh in (0..16).rev() {
+                uart::putc(hex[((addr >> (sh * 4)) & 0xF) as usize]);
+            }
+            uart::puts(" len=");
+            crate::kernel::mm::print_num(len);
+            uart::puts("\n");
+        }
+
+        // 🎯 STUMP #35: V8's CodeRange mmap passes hint=0xF0000000
+        // (4 GB) for 256 MiB. Our small_mmap region is at 0x70_xxxx
+        // (484 GB+) — too far from V8's expected location, V8 logs
+        // OOM. Honor low-hint large allocations by returning the hint
+        // and registering a reservation. demand_page commits on first
+        // access. Range: hint in 1 GB..32 GB (0x40_0000_0000), not
+        // overlapping our cave window (< 0x1c800000) or small_mmap
+        // (>= 0x70_0000_0000).
+        if aligned_len >= 64 * 1024 * 1024
+            && addr >= 0x4000_0000          // > 1 GB
+            && addr < 0x40_0000_0000         // < 256 GB
+            && addr.checked_add(aligned_len).map(|e| e < 0x70_0000_0000).unwrap_or(false)
+        {
+            // Use V8's hint directly. Register reservation for demand-page.
+            super::demand_page::register_reservation(
+                addr as u64,
+                (addr as u64).saturating_add(aligned_len as u64),
+                active_l1,
+            );
+            uart::puts("[mmap/honor-hint] addr=0x");
+            let hex = b"0123456789abcdef";
+            for sh in (0..16).rev() {
+                uart::putc(hex[((addr >> (sh * 4)) & 0xF) as usize]);
+            }
+            uart::puts(" len=");
+            crate::kernel::mm::print_num(len);
+            uart::puts("\n");
+            return addr as i64;
+        }
         // 🎯 STUMP #30: align large allocations to 16 MiB. V8's CodeRange
         // (256 MiB) and similar large-region reservations expect a
         // strongly-aligned base; if our cursor lands at an arbitrary

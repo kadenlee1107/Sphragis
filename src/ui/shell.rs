@@ -3045,13 +3045,8 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     // compiled out.
     argv[n] = "--enable-logging=stderr";   n += 1;
     argv[n] = "--v=1";                     n += 1;
-    // STUMP #32 unblocks all extra flags. STUMP #33 adds ic ivau for
-    // mprotect PROT_EXEC. Tested combinations:
-    //   base config: 9/10 at 7.4K cluster (best)
-    //   --disable-features=PA*: 5/10 at 7.4K, 5/10 at 1-2K (no V8 OOM
-    //     but message pump dies)
-    //   --js-flags=--jitless: 9/10 at 7.4K (same as base)
-    // Best behavior: BASE config — keeping that as default.
+    // STUMP #35 honors V8's CodeRange hint, eliminating V8 OOM. New
+    // ceiling: PA / MessagePumpEpoll crashes around 1.2K lines.
     argv[n] = size_arg_str;                n += 1;
     argv[n] = url;                         n += 1;
 
