@@ -11,6 +11,45 @@ end of a session.
 
 ---
 
+## 2026-04-28 00:10 — Mac — KEY FINDING: ICU "typeMap/timezone" CharString bug is **arg-COUNT-sensitive**, not byte-content-sensitive. Arg-swap experiment confirms.
+
+**Experiment.** Replaced `--v=1` (4 chars) with `--js-flags=--jitless`
+(19 chars). Same arg count (kept at base+0). Result: ICU bug **does
+NOT fire**. The cave runs for 1-7K lines without ever hitting the
+CharString crash.
+
+**Prior experiments:** adding `--js-flags=--jitless`, `--no-zygote`,
+or `--disable-features=...` (each +1 to arg count) ALL trigger the
+ICU bug at line ~620.
+
+**Conclusion.** Our argv/envp/auxv stack-layout has an off-by-one
+or alignment-sensitive bug when arg count changes. The corrupting
+write IS deterministic-w-r-t-arg-count, not flag-content. This is
+a Bat_OS loader bug, not a Chromium issue.
+
+**Bonus discovery.** Even with `--js-flags=--jitless` applied, V8
+still logs `V8 process OOM (Failed to reserve virtual memory for
+CodeRange)`. So V8 allocates CodeRange even in jitless mode (or our
+jitless flag isn't being honored). This means fixing the ICU bug
+won't directly unblock the V8 CodeRange ceiling — they're separate.
+
+Reverted to known-good base config (--v=1, no --jitless). Distribution
+remains consistent 7.4K cluster.
+
+**For tomorrow.** The ICU bug is now better characterized. To find
+the corrupting write:
+1. Audit `loader.rs` argv/envp/auxv setup for off-by-one when argc
+   varies. arg_uvas[64] is sized correctly but the way args are
+   pushed onto stack might leave gaps that get overwritten.
+2. Specifically check the AT_RANDOM and headroom-padding math at
+   `sp = (sp - 256) & !0xF` — an off-by-one here would shift
+   downstream pushes.
+3. If we find and fix it, we can use `--disable-features=...` flags
+   that may bypass other ceilings (incl. potentially the V8
+   CodeRange path).
+
+---
+
 ## 2026-04-28 00:05 — Mac — Autonomous block winding down. ICU "typeMap/timezone" stack corruption identified as the bug behind ANY-extra-flag crashes. PRECOMMIT_CAP experiments converged on 32 MiB = best. State preserved at consistent 7.4K cluster.
 
 **Session summary (autonomous, starting 22:15):**

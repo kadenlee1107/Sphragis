@@ -3045,13 +3045,15 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     // compiled out.
     argv[n] = "--enable-logging=stderr";   n += 1;
     argv[n] = "--v=1";                     n += 1;
-    // ATTEMPT LOG: any new command-line flag (--disable-features,
-    // --js-flags=--jitless, --no-zygote) triggers the same ICU
-    // CharString "pyt\\0…" string-as-pointer crash at ELR=0x14fc22cc
-    // around line 600. Adding flags changes Chromium's command-line
-    // parsing ordering and exposes a latent bug where some
-    // CharString's buffer pointer gets corrupted with the string
-    // "python" or similar. Reverted.
+    // FINDING 2026-04-28: arg-swap experiment confirmed ICU
+    // "typeMap/timezone" CharString bug is COUNT-sensitive, not
+    // byte-content-sensitive. Replacing --v=1 with --js-flags=--jitless
+    // (same arg count) bypasses ICU bug. Adding --js-flags=--jitless
+    // ALONE (count+1) triggers it. So our argv/envp/auxv layout has
+    // an off-by-one or alignment-sensitive bug somewhere when count
+    // changes. Even with --jitless honored, V8 still OOMs for
+    // CodeRange (perhaps allocates it regardless), so --jitless
+    // alone doesn't unblock the cave. Reverted to known-good config.
     argv[n] = size_arg_str;                n += 1;
     argv[n] = url;                         n += 1;
 
