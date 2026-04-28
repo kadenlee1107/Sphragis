@@ -56,6 +56,20 @@ pub struct TrapFrame {
 /// to avoid recursive aborts when the original fault left us with
 /// a partially-committed reservation.
 ///
+/// 256 KB static scratch buffer for pa-skip-data's fake alloc
+/// returns. Reachable by EL0 via the cave's identity-low mapping
+/// (kernel BSS lives in 0x40000000..0xC0000000 which IS user-
+/// accessible). Concurrent users share the same memory (intentional
+/// — the cave is already in a degraded state by the time we
+/// synthesize a fake alloc; race-corruption here is preferable to
+/// downstream NULL-derefs).
+static mut PA_SKIP_SCRATCH: [u64; 0x8000] = [0; 0x8000]; // 256 KB
+
+#[inline(never)]
+fn pa_skip_scratch_uva() -> u64 {
+    unsafe { core::ptr::addr_of!(PA_SKIP_SCRATCH) as u64 }
+}
+
 /// `#[inline(never)]` to keep the call edge in the disassembly so the
 /// compiler can't fold this into the caller and notice a "this load
 /// can't possibly fail" theorem (it CAN fail because of lazy demand-
@@ -2413,9 +2427,19 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 // numeric (likely Smi tag or freed-pointer sentinel).
                 // The caller's x30 wasn't restored to a real LR —
                 // walk the FP chain like the PA-data-skip case.
+                // PA / libchrome data faults: ELR in chrome text region.
                 let is_pa_data_fault = (ec == 0x24 || ec == 0x21)
                     && far_now < 0x1000
                     && (0x14000000..=0x1c000000).contains(&elr_now);
+                // 🎯 Also catch libc-area NULL-derefs that happen
+                // DOWNSTREAM of a pa-skip-data return: e.g. when our
+                // fake AllocateBacking result is passed to memset
+                // (libc) which faults trying to write to NULL.
+                // libc is mmap'd at 0x70_003d_0000ish; cover the
+                // 0x70_0000_0000..0x70_0100_0000 range to catch it.
+                let is_libc_data_fault = ec == 0x24
+                    && far_now < 0x1000
+                    && (0x7000000000..=0x7001000000).contains(&elr_now);
                 // EC=0x20 = instruction abort from lower EL (jumped
                 // to non-executable / unmapped). EC=0x21 = same from
                 // current EL. EC=0x22 = PC alignment. Any of these
@@ -2423,7 +2447,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 // branch (Smi tag, NULL+offset, etc.).
                 let is_bad_pc_fault = (ec == 0x20 || ec == 0x21 || ec == 0x22)
                     && elr_now < 0x1000;
-                if (is_pa_data_fault || is_bad_pc_fault)
+                if (is_pa_data_fault || is_bad_pc_fault || is_libc_data_fault)
                     && skip_count < 256
                 {
                     // For bad-PC case, x29 may also be corrupt. Try
@@ -2516,18 +2540,32 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         }
                     }
                     if found_lr != 0 {
+                        // 🎯 Make pa-skip-data SAFE for downstream
+                        // memset/memcpy/strcpy etc. by returning a
+                        // pointer to a static 64KB kernel scratch
+                        // page that's mapped in the cave's window.
+                        // Most callers that use the alloc result
+                        // pass it to memset(ptr, 0, size) right after
+                        // — that crashed with x[0]=NULL or stale
+                        // value. With a real writable buffer, memset
+                        // succeeds and the cave continues (with
+                        // shared/garbage state, but doesn't fault).
+                        //
+                        // Only do this for PA-Alloc-region faults
+                        // (elr in 0x14d75c40..0x14d80000 = SlowPathAlloc
+                        // range). For libc-area faults, leave x[0]
+                        // alone since the caller may already have
+                        // a valid local pointer in another reg.
+                        let is_alloc_fault = (0x14d75c40..=0x14d80000)
+                            .contains(&elr_now);
+                        if is_alloc_fault {
+                            let scratch = pa_skip_scratch_uva();
+                            unsafe { (*frame).x[0] = scratch; }
+                        }
                         unsafe {
                             (*frame).elr   = found_lr;
                             (*frame).x[29] = fp;
                             (*frame).x[30] = found_lr;
-                            // Don't synthesize x[0] — leave it as it
-                            // was at fault. Setting x[0]=0 made callers
-                            // (Blink::HashTable::insert) NULL-deref the
-                            // result without checking. Whatever stale
-                            // value was in x[0] is more likely to be
-                            // safer (PA::Alloc rarely returns NULL on
-                            // success path; callers that DO check NULL
-                            // already filter that case).
                             core::arch::asm!("msr sp_el0, {a}",
                                 a = in(reg) fp + 16);
                         }
