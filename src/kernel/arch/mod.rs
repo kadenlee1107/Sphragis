@@ -1648,20 +1648,26 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 return;
             }
 
-            // 🎯 STUMP #27: BRK from chrome text where the previous
-            // instruction is an unconditional branch (`b`, opcode 0x14...).
-            // This is the `__builtin_unreachable()` pattern after a tail
-            // call. If our cave somehow returned from the tail-call'd
-            // function (e.g. SetCurrentThreadType returning when CHECK
-            // fired internally), we hit the trap. Recover by manually
-            // ret-ing to LR.
+            // 🎯 STUMP #27 (extended in #39): BRK from chrome text where
+            // the previous instruction is a `b` (tail call) OR `bl`
+            // (regular call) to a function that wasn't supposed to
+            // return but did (because we pa-skipped its internal CHECK).
             //
-            // chrome text spans roughly 0x10000000..0x1c800000 — anything
-            // in that range that's not handled above could be a bullet
-            // we can dodge.
+            // Tail-call case (`b X`): saved x30 still has the OUTER
+            // caller's return address — ret to that.
+            //
+            // Call case (`bl X`): x30 was clobbered by the BL to
+            // BL+4 (= the BRK address), so we can't ret to x30.
+            // Instead, walk one frame up via x29: at function
+            // prologue `stp x29, x30, [sp, #-N]!; mov x29, sp`, the
+            // saved outer x30 is at [x29 + 8]. Load it, advance
+            // sp_el0 past this frame, and ret there.
+            //
+            // chrome text spans roughly 0x10000000..0x1c800000.
             let in_chrome_text = elr >= 0x10000000 && elr < 0x1c800000;
             if in_chrome_text && !in_child {
                 let lr_now = unsafe { (*frame).x[30] };
+                let x29_now = unsafe { (*frame).x[29] };
                 // Look at the instruction at elr-4.
                 let prev_instr_addr = elr.wrapping_sub(4);
                 if crate::batcave::linux::uaccess::is_user_range(
@@ -1673,8 +1679,11 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // Unconditional B opcode is 0x14000000..0x18000000
                     // (top 6 bits = 000101).
                     let is_uncond_branch = (prev_instr >> 26) == 0b000101;
+                    // BL opcode top 6 bits = 100101.
+                    let is_bl = (prev_instr >> 26) == 0b100101;
+
                     if is_uncond_branch && lr_now > 0x1000 {
-                        // Skip the BRK and ret to LR.
+                        // Tail-call case: ret to LR.
                         uart::puts("[brk-skip] unreachable-after-tail-call elr=0x");
                         let hex = b"0123456789abcdef";
                         for sh in (0..16).rev() {
@@ -1689,6 +1698,47 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             (*frame).elr = lr_now;
                         }
                         return;
+                    } else if is_bl
+                        && x29_now > 0x1000
+                        && x29_now < 0x80_0000_0000
+                        && crate::batcave::linux::uaccess::is_user_range(x29_now as usize, 16)
+                    {
+                        // BL-call case: walk one frame up via x29.
+                        // [x29] = saved outer x29, [x29+8] = saved
+                        // outer x30 (the real return address).
+                        let saved_outer_lr: u64 = unsafe {
+                            core::ptr::read_volatile((x29_now + 8) as *const u64)
+                        };
+                        let saved_outer_fp: u64 = unsafe {
+                            core::ptr::read_volatile(x29_now as *const u64)
+                        };
+                        // Sanity: outer LR should be in chrome text or
+                        // libc area (>0x1000 minimum).
+                        let outer_in_text = saved_outer_lr >= 0x10000000
+                            && saved_outer_lr < 0x1c800000;
+                        let outer_in_libc = saved_outer_lr >= 0x70_0000_0000
+                            && saved_outer_lr < 0x70_0100_0000;
+                        if outer_in_text || outer_in_libc {
+                            uart::puts("[brk-skip] unreachable-after-bl elr=0x");
+                            let hex = b"0123456789abcdef";
+                            for sh in (0..16).rev() {
+                                uart::putc(hex[((elr >> (sh * 4)) & 0xF) as usize]);
+                            }
+                            uart::puts(" → outer-lr=0x");
+                            for sh in (0..16).rev() {
+                                uart::putc(hex[((saved_outer_lr >> (sh * 4)) & 0xF) as usize]);
+                            }
+                            uart::puts("\n");
+                            unsafe {
+                                (*frame).elr = saved_outer_lr;
+                                (*frame).x[29] = saved_outer_fp;
+                                (*frame).x[30] = saved_outer_lr;
+                                // Pop this frame off the stack.
+                                core::arch::asm!("msr sp_el0, {a}",
+                                    a = in(reg) x29_now + 16);
+                            }
+                            return;
+                        }
                     }
                 }
             }
