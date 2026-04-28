@@ -11,6 +11,114 @@ end of a session.
 
 ---
 
+## 2026-04-28 16:40 — Mac — 🎯 STUMP #46 cracked: pa-skip's `sp_el0 = fp + 16` was wrong. Resume now sets sp = caller's x29. OnEpollEvent NULL+0x1c eliminated, deepest run 27,395 lines, 5/8 alive at timeout.
+
+**Commit `0180dc41`** — fix the SP arithmetic in both pa-skip handlers
+(brk-skip at line 1547, pa-skip-data ESCAPE at 3155, pa-skip-data
+simple-resume at 3203).
+
+### What was actually broken
+
+The 14:30 entry pointed at Blink's HashTable Rehash and "a corrupt
+funcptr trampoline at PC=0x1". Re-read of the log + agent feedback
+showed a more accurate sequence:
+
+1. PA's `Partitions::BufferFree` is called from Rehash.
+2. PA hits `InSlotMetadata::DoubleFreeOrCorruptionDetected` brk at
+   ELR=0x14d73000.
+3. Our brk-skip handler walks the FP chain past PA frames, finds
+   Rehash's resume PC at 0x1627c03c, and resumes there with
+   `sp_el0 = fp + 16`.
+4. `fp` at that point is the FP of the LAST PA frame in the chain
+   (BufferFree's saved x29). `fp + 16` lands inside that PA frame's
+   local-saves area — NOT at Rehash's body sp.
+5. Rehash continues, eventually reaches its epilogue
+   `ldp x29, x30, [sp], #0x50; autiasp; ret`, reads x30 from PA's
+   stale stack data (typically 0x1), `ret` → PC=0x1 → EC=0x22.
+
+So the "bad-PC fault at PC=0x1" was self-inflicted by our own SP
+arithmetic. Every pa-skip in the previous build planted a garbage
+saved-x30 into the resumed function's frame, surfacing later as
+the cascade Agent B labelled the OnEpollEvent NULL+0x1c ceiling.
+
+### Why the brk-style fix
+For ARM64 simple-prologue functions
+(`stp x29, x30, [sp, #-N]!; mov x29, sp`) with no further
+`sub sp, sp, #M`, body sp equals x29. Reading `[fp]` gives us the
+caller's saved x29. Setting `sp_el0 = caller_x29` is exactly
+right for those — Rehash matches this shape. For functions that DO
+have a body-sp delta, the new logic overshoots SP by M bytes, but
+stays within the caller's frame instead of leaving SP buried in
+PA's locals. Strictly less wrong in every case we measured.
+
+### 8-smoke distribution post-#46
+
+| Metric | Pre-#46 (Agent B's 15) | Post-#46 (8 runs) |
+|---|---|---|
+| FileURLLoader::Start | ~10/15 | **8/8 = 100%** |
+| openat /bin/hello.html | mixed | **8/8 = 100%** |
+| OnEpollEvent NULL+0x1c (Class A) | 3/15 = 20% | **0/8** |
+| Mojo InterfaceEndpointClient (Class B) | 2/15 | **0/8** |
+| Reached 20K+ lines | 1/15 | **3/8** |
+| Alive at timeout | 5/15 | 5/8 = 63% |
+| Deepest run | 33,974 lines (alive) | 27,395 (died at AddRefImpl) |
+
+The skip-induced cascade is eliminated. ALL classes that were
+downstream symptoms of bad SP-resume are gone.
+
+### New ceiling
+
+The remaining failures fall into two camps:
+
+1. **Genuine PA double-free at `0x14d73000` is still happening** —
+   we just resume Rehash CORRECTLY now, so it doesn't cascade. The
+   double-free itself is a real bug we should still understand. It
+   may be a Chromium-side use-after-free, OR it may be triggered
+   by something we do during the previous Rehash iteration. The
+   8-smoke runs each had 0–2 brk-skip events on this signature.
+
+2. **Post-openat Mojo hang** — the deepest runs (23K, 25K, 27K
+   lines) reach `[dp] commit #230000+` demand-paging burst and
+   time out alive. That's the same "renderer waits on read(fd=0x4a)
+   which never delivers" pattern Agent B characterized as Class D.
+   The browser-side FileURLLoader presumably wrote data to a Mojo
+   pipe; the renderer's read returns EAGAIN forever.
+
+### Recommendations for next session
+
+**Attack the post-openat Mojo hang next.** It's the new ceiling
+and 3/8 runs sit there. Investigation paths:
+- Trace the Mojo pipe pair: which fd is the browser writing to?
+  Is `mark_ready(peer, EPOLLIN)` being called from sys_write
+  for that pipe? STUMP #45 added this for sockets, but Mojo IPC
+  may use socketpair/eventfd combos that don't go through the
+  pipe path.
+- Check whether `eventfd_write` correctly notifies cross-thread
+  epoll waiters when the broadcaster wakes everyone (post-#44
+  fixes pthread_cond_broadcast, but cross-thread eventfd may
+  have its own missing-wake bug).
+- The deep runs spend most of their time in demand_page::commit
+  loops on VAs in 0x174c00000 region (0x174c1d000, 0x174d0f000,
+  0x174e00000). 230K commits in a single run is ~1 GB of pages —
+  is something thrashing? Worth checking whether the
+  cooperative scheduler is starving the writer thread.
+
+**Don't touch the PA double-free yet.** With #46, PA correctly
+reports the bug, we resume cleanly past it, and the cave runs on.
+Investigating why Chromium hits double-free in `Rehash → BufferFree`
+is a deeper rabbit hole that's not blocking progress today.
+
+### Files touched this session
+
+- `src/kernel/arch/mod.rs` — STUMP #46 (3 SP-resume sites)
+- `docs/SESSION_JOURNAL.md` — this entry
+
+Background agent (`ab05de55…`) confirmed the SP-resume hypothesis
+in a worktree investigation; foreground reproduced + extended the
+fix to both handlers.
+
+---
+
 ## 2026-04-28 14:30 — Mac — STUMPS #44 + #45 committed (futex op-dispatch + 5 epoll wake-path fixes). 3 parallel agents synthesized; root cause traced past the OnEpollEvent symptom to a Blink HashTable Rehash bad-funcptr.
 
 ### Wins on disk
