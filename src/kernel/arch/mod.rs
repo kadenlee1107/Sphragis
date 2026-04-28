@@ -2577,6 +2577,35 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         }
                         return;
                     }
+
+                    // 🎯 found_lr == 0 means FP-walk and sp-scan
+                    // both failed to find a non-PA caller. Last-
+                    // resort: just SKIP THE FAULTING INSTRUCTION
+                    // (advance ELR by 4) and zero x[0..7] so the
+                    // continued execution starts with a clean slate.
+                    // This is more aggressive than synthesizing a
+                    // return — risky, but the alternative is cave
+                    // termination.
+                    static LAST_RESORT_SKIPS: core::sync::atomic::AtomicU32 =
+                        core::sync::atomic::AtomicU32::new(0);
+                    let n = LAST_RESORT_SKIPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    if n < 32 {
+                        unsafe {
+                            (*frame).elr = elr_now + 4;
+                            for i in 0..8 { (*frame).x[i] = 0; }
+                        }
+                        if n < 10 || (n & 0xF) == 0 {
+                            uart::puts("[skip-instr] #");
+                            crate::kernel::mm::print_num(n as usize);
+                            uart::puts(" elr=0x");
+                            let hex = b"0123456789abcdef";
+                            for sh in (0..16).rev() {
+                                uart::putc(hex[((elr_now >> (sh * 4)) & 0xF) as usize]);
+                            }
+                            uart::puts(" → +4 with x[0..7]=0\n");
+                        }
+                        return;
+                    }
                 }
 
                 crate::batcave::linux::signal::terminate_cave_fatal_with_lr(
