@@ -11,6 +11,92 @@ end of a session.
 
 ---
 
+## 2026-04-27 23:25 — Mac — 🎯 BREAKTHROUGH: STUMP #28 v2 (pre-commit anon mmaps) eliminated PA `CorruptionDetected` BRKs entirely. STUMP #29 (Smi-release-skip) handles V8 MemoryPool cleanup. Median runs went from ~1.2K to consistently ~7.4K lines.
+
+**Goal.** With user asleep, working autonomously with GPT-5.4 as decision partner. After diagnostic confirmed `demand_page` zero-fill IS what Chromium reads (no aliasing), GPT recommended pre-committing anonymous mmaps so PA's metadata setup hits already-mapped memory.
+
+**Stumps cracked tonight:**
+
+### STUMP #28 v2 — Pre-commit ALL anonymous private mmaps
+
+In `sys_mmap`, after the small_mmap path returns a VA, eagerly
+`alloc_frame` + `install_l3_mapping` for every page in the range
+(capped at 32 MiB per call). Frame is already zeroed by alloc_frame.
+
+**Result:** PA's `CorruptionDetected` BRK at `0x14d73000` — which
+fired in EVERY run before, called from `blink::HashTable::Rehash`,
+`HashTable::insert`, or `ipcz::Parcel::~Parcel` — went to ZERO across
+11 consecutive runs.
+
+The diagnostic that confirmed the mechanism (run 230800, 0xA5 fill
+instead of 0): cave died at 437 lines with `fault=0xa5a5a5a5a5a5a5ad`,
+proving cave reads OUR fresh page contents (no aliasing). PA's
+"corruption" was actually PA expecting valid `InSlotMetadata` at slot
+starts that PA had set up in earlier frames — but our lazy commit
+clobbered them when later code touched a different page in the same
+slot span.
+
+### STUMP #29 — Smi-tagged refcount skip in `__aarch64_ldadd4_acq_rel`
+
+After STUMP #28, all runs deterministically died at the same chain:
+```
+v8::internal::TrustedRange::InitReservation
+  → v8::internal::VirtualMemoryCage::InitReservation
+    → v8::internal::OnCriticalMemoryPressure
+      → v8::internal::MemoryPool::ReleaseAllImmediately
+        → base::subtle::RefCountedThreadSafeBase::Release
+          → __aarch64_ldadd4_acq_rel (LSE atomic at 0x11ab142c)
+            → fault: NULL+0x70 / +0xd / +0x17 (Smi tag-as-pointer)
+```
+
+V8's `MemoryPool` stores both Smi-tagged values and refcounted
+pointers in the same field. When `Release()` is called on a Smi
+entry, the LSE atomic faults on the small "address".
+
+**Fix:** Detect `elr_now == 0x11ab142c && far_now < 0x100`. Set x[0]
+= 0 (so `Release()` returns false = "not last ref"), advance ELR to
+the `ret` at 0x11ab1430. Cave continues past V8 cleanup.
+
+### Bumped DEFAULT_MEM quota 1 GiB → 4 GiB
+
+Diagnostic to remove false memory pressure. Didn't change anything
+on its own (V8's pressure detection isn't quota-based) but kept it
+because pre-commit can use 200+ MB.
+
+### Distribution after #28 v2 + #29 (10-smoke):
+
+| Run | Lines | Notes |
+|-----|-------|-------|
+| 1 | 7,457 | clustered |
+| 2 | 7,448 | |
+| 3 | 7,447 | |
+| 4 | 7,445 | |
+| 5 | 7,443 | |
+| 6 | 7,437 | |
+| 7 | 7,437 | |
+| 8 | 7,427 | |
+| 9 | 2,791 | outlier |
+| 10 | 1,221 | outlier (different code path) |
+
+**This is incredibly consistent compared to past runs (variance was
+1.2K-35K).** The remaining ceiling is V8 CodeRange reservation:
+```
+ERROR:v8_initializer.cc:944] V8 process OOM (Failed to reserve
+virtual memory for CodeRange).
+```
+
+V8 thinks it can't reserve a CodeRange (its JIT-code memory region).
+PA's `OnNoMemoryInternal` fires, our pa-skip unwinds to
+`V8Initializer::InitializeIsolateHolder` which then NULL-derefs at
++0x17 because the reservation returned NULL. pa-skip-data loops on
+the same site, loop-detect terminates.
+
+**Next attack:** make CodeRange reservation succeed. Likely V8 wants
+specific alignment or our small_mmap path returns an address V8
+rejects.
+
+---
+
 ## 2026-04-27 22:50 — Mac — STUMP #27: BRK-after-tail-call skip handles `__builtin_unreachable()` traps. Targets 484-line crashes in `SetCurrentThreadType` and similar tail-called noreturn functions.
 
 **Goal.** A short 484-line run died at a BRK in

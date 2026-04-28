@@ -2803,6 +2803,61 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                     uart::puts(" len=");
                     crate::kernel::mm::print_num(len);
                     uart::puts("\n");
+                    // 🎯 STUMP #28 v2: pre-commit ALL anonymous private
+                    // mappings, not just 2 MiB-aligned PA super-pages.
+                    // GPT-5.4 advice: "make anon mmap boring and OS-like".
+                    // PartitionAlloc / V8 / Blink heap allocators
+                    // assume newly mapped span memory is fully present
+                    // and zeroed — they may initialize metadata for
+                    // one slot then inspect neighbors, expecting
+                    // already-zero contiguous backing. Lazy commit
+                    // breaks that contract.
+                    //
+                    // Cost analysis: typical Chromium run mmaps
+                    // ~50-100 MB anon. We have 3.6 GB phys, 870K user
+                    // frames available. Pre-committing all anon is a
+                    // tiny fraction of available memory.
+                    //
+                    // Cap at 32 MiB per single mmap to avoid a pathological
+                    // big request stealing all frames.
+                    const PRECOMMIT_CAP: usize = 32 * 1024 * 1024;
+                    let should_precommit = fd_num < 0
+                        && len <= PRECOMMIT_CAP;
+                    if should_precommit {
+                        let n_pages = (len + 0xFFF) / 4096;
+                        let mut committed = 0usize;
+                        for i in 0..n_pages {
+                            let va = base as u64 + (i * 4096) as u64;
+                            let phys = match crate::kernel::mm::frame::alloc_frame() {
+                                Some(p) => p as u64,
+                                None => break,
+                            };
+                            // Frame is already zeroed by alloc_frame.
+                            let install = super::demand_page::install_l3_mapping(
+                                active_l1, va, phys,
+                                super::demand_page::USER_PAGE_FLAGS,
+                            );
+                            if install.is_err() { break; }
+                            committed += 1;
+                            if i & 63 == 63 {
+                                super::threads::schedule();
+                            }
+                        }
+                        unsafe {
+                            core::arch::asm!("dsb ishst");
+                            core::arch::asm!("tlbi vmalle1");
+                            core::arch::asm!("dsb ish");
+                            core::arch::asm!("isb");
+                        }
+                        // Quiet log — only print for big allocs.
+                        if n_pages > 16 {
+                            uart::puts("[mmap/precommit] pages=");
+                            crate::kernel::mm::print_num(committed);
+                            uart::puts(" of ");
+                            crate::kernel::mm::print_num(n_pages);
+                            uart::puts("\n");
+                        }
+                    }
                     return base as i64;
                 }
                 Err(cur) => base = cur,

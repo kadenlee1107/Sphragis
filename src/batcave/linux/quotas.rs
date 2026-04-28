@@ -93,7 +93,12 @@ impl CaveQuota {
 // Chosen to be comfortably above anything the existing test binaries
 // consume (hello, v8_exec, busybox, Chromium blob startup) while still
 // catching "allocate until death" attacks.
-pub const DEFAULT_MEM:      usize = 1 << 30;   // 1 GiB
+// 🎯 Diagnostic bump: 1 GiB → 4 GiB. V8's startup probes memory pressure
+// via allocation tests; with 1 GiB quota and our pre-commit (~237 MB at
+// crash time + many small mmaps), V8 may detect false pressure and
+// trigger OnCriticalMemoryPressure cleanup — which finds a NULL pool
+// entry and crashes.
+pub const DEFAULT_MEM:      usize = 4 << 30;   // 4 GiB
 pub const DEFAULT_SOCKETS:  usize = 32;
 // Chromium content_shell wants 30+ threads even in --single-process
 // mode (V8 GC, IO thread, blink main, compositor, io-poll, ...).

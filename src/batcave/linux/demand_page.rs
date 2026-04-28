@@ -255,8 +255,14 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
             return false;
         }
     };
-    // Zero the page so EL0 reads well-defined data (MAP_ANONYMOUS
-    // Linux guarantee).
+    // DIAGNOSTIC RESULT (STUMP #29 investigation, run 230800):
+    // Tested with 0xA5 fill — cave died at 437 lines with
+    // `fault=0xa5a5a5a5a5a5a5ad` from a deref of our 0xA5 pattern as
+    // a pointer. This proves: cave reads OUR page contents, no
+    // aliasing or page-table bug. So PA's "corruption" must come
+    // from PA's expected free-slot metadata not matching our zeros.
+    // Reverting to 0 — that's the Linux MAP_ANONYMOUS contract and
+    // Chromium handles NULL pointers in C code far better than 0xA5.
     unsafe {
         let p = frame as *mut u8;
         for i in 0..4096 { core::ptr::write_volatile(p.add(i), 0); }
