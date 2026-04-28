@@ -301,7 +301,19 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
         for sh in (0..16).rev() {
             uart::putc(hex[((page_va >> (sh * 4)) & 0xF) as usize]);
         }
-        uart::puts(" reason: "); uart::puts(why); uart::puts("\n");
+        uart::puts(" reason: "); uart::puts(why);
+        // 🎯 STUMP #38 diagnostic: when alloc_kernel_frame returns None,
+        // print pool stats so we can tell whether it's actually exhausted
+        // or whether the new top-down scan logic has a bug.
+        let (used, total) = frame::stats();
+        uart::puts(" frames used=");
+        crate::kernel::mm::print_num(used);
+        uart::puts(" total=");
+        crate::kernel::mm::print_num(total);
+        uart::puts(" committed=");
+        crate::kernel::mm::print_num(
+            COMMITTED_PAGES.load(Ordering::Relaxed) as usize);
+        uart::puts("\n");
         // Leak the page — frame is still allocated but unmapped. Next
         // iteration will grab a fresh one. Small-leak < kernel crash.
         uart::puts("[demand_page] page-table install failed\n");

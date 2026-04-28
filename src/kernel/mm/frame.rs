@@ -81,6 +81,25 @@ pub fn alloc_frame() -> Option<usize> {
     let start = MEMORY_START.load(Ordering::Relaxed);
     let user_cap = total.saturating_sub(KERNEL_RESERVED_FRAMES);
 
+    // 🎯 STUMP #38: skip the kernel-pool window so user pool can't poach
+    // the kernel-reachable PAs that `alloc_kernel_frame` needs for L1/L2/
+    // L3 page tables. Without this, deep Chromium runs (~50K demand-page
+    // commits) would fill user-pool frames from index 0 upward, eventually
+    // crossing `kern_cap_index` (~405K) and leaving zero free frames
+    // below 0xC0000000 for kernel-pool to grab → `oom for L3 table`
+    // crashes ~50K commits in.
+    //
+    // The kernel pool reserves the TOP `KERNEL_RESERVED_FRAMES` frames
+    // of the [start, 0xC0000000) range. We compute that bound here and
+    // make user_pool / alloc_contig skip frames in [kern_pool_lo,
+    // kern_cap_index). They remain reachable by `alloc_kernel_frame`
+    // via my top-down scan above.
+    const KERNEL_FRAME_PA_CAP_LOCAL: usize = 0xC000_0000;
+    let kern_cap_index = if start < KERNEL_FRAME_PA_CAP_LOCAL {
+        ((KERNEL_FRAME_PA_CAP_LOCAL - start) / PAGE_SIZE).min(total)
+    } else { 0 };
+    let kern_pool_lo = kern_cap_index.saturating_sub(KERNEL_RESERVED_FRAMES);
+
     for i in 0..BITMAP_SIZE {
         // M4 / MMU-off: `compare_exchange*` lowers to LDXR/STXR which
         // never succeeds on Device-nGnRnE memory. We already hold
@@ -90,7 +109,17 @@ pub fn alloc_frame() -> Option<usize> {
         let val = BITMAP[i].load(Ordering::Acquire);
         if val == u64::MAX { continue; } // full word, try next
 
-        let bit = (!val).trailing_zeros() as usize;
+        // Find the lowest clear bit whose frame_index falls outside the
+        // kernel-pool window [kern_pool_lo, kern_cap_index).
+        let mut bit_opt: Option<usize> = None;
+        for b in 0..64usize {
+            if val & (1u64 << b) != 0 { continue; }
+            let fi = i * 64 + b;
+            if fi >= kern_pool_lo && fi < kern_cap_index { continue; }
+            bit_opt = Some(b);
+            break;
+        }
+        let bit = match bit_opt { Some(b) => b, None => continue };
         let frame_index = i * 64 + bit;
 
         if frame_index >= user_cap {
@@ -177,37 +206,63 @@ pub fn alloc_kernel_frame() -> Option<usize> {
     } else { 0 };
     if cap_index == 0 { return None; }
     let scan_top = cap_index;
-    let lower_bound = scan_top.saturating_sub(KERNEL_RESERVED_FRAMES);
 
-    for rev in 0..KERNEL_RESERVED_FRAMES {
-        let frame_index = scan_top.saturating_sub(1).saturating_sub(rev);
-        if frame_index < lower_bound { break; }
-        let bitmap_index = frame_index / 64;
-        let bit = frame_index % 64;
-        if bitmap_index >= BITMAP_SIZE { continue; }
-        // M4 / MMU-off: plain load + store under the outer IrqGuard.
-        // See `alloc_frame` for why CAS doesn't work here.
-        let val = BITMAP[bitmap_index].load(Ordering::Acquire);
-        if val & (1u64 << bit) != 0 { continue; }
-        BITMAP[bitmap_index].store(val | (1u64 << bit), Ordering::Release);
+    // 🎯 STUMP #38: scan the ENTIRE range below KERNEL_FRAME_PA_CAP
+    // top-down rather than capping at `KERNEL_RESERVED_FRAMES` iterations.
+    //
+    // Symptom this fixes: deep Chromium runs (~20K lines) hit
+    // "oom for L3 table" from `install_l3_mapping` even though we only
+    // demand-paged ~107 L3 tables. The 32K-iteration cap meant any
+    // fragmentation in the top 128 MB kernel-pool window (e.g. fork()'s
+    // bulk-cloned L2/L3 tables, repeated cave setup_cave_pagetable
+    // hitting the same upper frames) made `alloc_kernel_frame` return
+    // None even though plenty of kernel-reachable frames remained free
+    // below the window.
+    //
+    // The reserved-pool ROLE (don't let user pool starve kernel) is
+    // still preserved by `user_cap = total - KERNEL_RESERVED_FRAMES`
+    // in `alloc_frame`; we just relax kernel pool's *scan range* so it
+    // can find any kernel-reachable free frame top-down.
+    //
+    // Word-level fast-skip on `u64::MAX` keeps the worst-case cost
+    // bounded: 64 frames per non-MAX bitmap probe, one cheap read per
+    // fully-saturated word.
+    // Top word index (inclusive) — the word that contains frame
+    // `scan_top - 1`. May be a partial word: any bit `bit` such that
+    // `wi*64 + bit >= scan_top` is skipped.
+    let top_word = scan_top.saturating_sub(1) / 64;
+    let mut wi = top_word as isize;
+    while wi >= 0 {
+        let wu = wi as usize;
+        if wu < BITMAP_SIZE {
+            let val = BITMAP[wu].load(Ordering::Acquire);
+            if val != u64::MAX {
+                for bit in (0..64usize).rev() {
+                    let frame_index = wu * 64 + bit;
+                    if frame_index >= scan_top { continue; }
+                    if val & (1u64 << bit) != 0 { continue; }
+                    BITMAP[wu].store(val | (1u64 << bit), Ordering::Release);
 
-        let addr = start + frame_index * PAGE_SIZE;
-        unsafe {
-            for i in 0..(PAGE_SIZE / 8) {
-                core::arch::asm!("str xzr, [{a}]",
-                    a = in(reg) addr + i * 8,
-                    options(nostack, preserves_flags));
+                    let addr = start + frame_index * PAGE_SIZE;
+                    unsafe {
+                        for i in 0..(PAGE_SIZE / 8) {
+                            core::arch::asm!("str xzr, [{a}]",
+                                a = in(reg) addr + i * 8,
+                                options(nostack, preserves_flags));
+                        }
+                        let mut line = addr as u64;
+                        let end_line = line + PAGE_SIZE as u64;
+                        while line < end_line {
+                            core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                            line += 64;
+                        }
+                        core::arch::asm!("dsb sy");
+                    }
+                    return Some(addr);
+                }
             }
-            // 🎯 STUMP #13: dc civac to PoC (see alloc_frame).
-            let mut line = addr as u64;
-            let end_line = line + PAGE_SIZE as u64;
-            while line < end_line {
-                core::arch::asm!("dc civac, {a}", a = in(reg) line);
-                line += 64;
-            }
-            core::arch::asm!("dsb sy");
         }
-        return Some(addr);
+        wi -= 1;
     }
     None
 }
@@ -228,9 +283,24 @@ pub fn alloc_contig(n_pages: usize) -> Option<usize> {
     let user_cap = total.saturating_sub(KERNEL_RESERVED_FRAMES);
     if user_cap < n_pages { return None; }
 
+    // 🎯 STUMP #38: skip the kernel-pool window — see the comment in
+    // `alloc_frame`. If a contiguous run would straddle the window,
+    // bump `frame_idx` past the window and resume.
+    const KERNEL_FRAME_PA_CAP_LOCAL: usize = 0xC000_0000;
+    let kern_cap_index = if start < KERNEL_FRAME_PA_CAP_LOCAL {
+        ((KERNEL_FRAME_PA_CAP_LOCAL - start) / PAGE_SIZE).min(total)
+    } else { 0 };
+    let kern_pool_lo = kern_cap_index.saturating_sub(KERNEL_RESERVED_FRAMES);
+
     // Scan bitmap for `n_pages` consecutive zero bits.
     let mut frame_idx: usize = 0;
     'outer: while frame_idx + n_pages <= user_cap {
+        // If the proposed run [frame_idx, frame_idx + n_pages) overlaps
+        // the kernel-pool window, jump frame_idx past the window.
+        if frame_idx < kern_cap_index && frame_idx + n_pages > kern_pool_lo {
+            frame_idx = kern_cap_index;
+            continue 'outer;
+        }
         // Check each of the next n_pages bits — all must be clear.
         for j in 0..n_pages {
             let fi = frame_idx + j;
