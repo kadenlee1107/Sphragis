@@ -11,6 +11,73 @@ end of a session.
 
 ---
 
+## 2026-04-28 00:38 — Mac — STUMP #33 added: mprotect dc cvau + ic ivau for PROT_EXEC. Autonomous block done. 9 commits, 6 stumps cracked.
+
+**STUMP #33 — mprotect cache coherency for PROT_EXEC**
+
+ARM64 D-cache / I-cache are separate. When V8's JIT writes code,
+mprotects RX, and executes, the I-fetch sees stale data unless we
+explicitly clean D-cache to PoU and invalidate I-cache to PoU.
+
+Verified with `--disable-features=PartitionAllocBackupRefPtr,...`
+config (which engages V8 JIT). Before #33: cave died at 0x4020113c
+instruction abort. After #33: cave reaches `MessagePumpEpoll::
+WaitForEpollEvents`.
+
+Base config (no extra flags) still gives 9/10 at 7.4K cluster, so
+keeping that as default.
+
+### TONIGHT'S FINAL SCOREBOARD
+
+**Autonomous block: 22:15 → 00:38 (2.5 hours, 9 commits, 6 stumps)**
+
+| Stump | Effect |
+|-------|--------|
+| #28 v2 | Pre-commit anon mmaps → eliminated PA CorruptionDetected BRKs |
+| #29 | Smi-release-skip in `__aarch64_ldadd4_acq_rel` |
+| #30 | 16 MiB alignment for large mmaps (cosmetic) |
+| #32 | **argc-parity SP alignment** — fixed ICU CharString crash |
+| #33 | mprotect dc cvau + ic ivau for PROT_EXEC |
+
+**Best result:** 9/10 runs land at 7,429-7,499 lines (tight 7.4K
+cluster), 1 outlier per batch.
+
+**Top 2 wins:**
+1. **STUMP #28 v2** — eliminated the PA `CorruptionDetected` BRK that
+   fired in EVERY run before. Root cause was demand-page zero-fill
+   clobbering PA's slot metadata.
+2. **STUMP #32** — argc-parity SP alignment. Final SP needs 16-byte
+   alignment per ABI; our pushes only land aligned when argc is odd.
+   Adding any flag changed parity → SP off by 8 → downstream stack
+   writes drifted → ICU CharString::buffer corrupted with stack data
+   ("typeMap/timezone" + "pyt\0").
+
+**For tomorrow's user:**
+
+The cave's reachable state is now MUCH deeper:
+- Mojo IPC pump
+- Viz GPU service init
+- Skia fonts
+- NetworkContext + CertVerifier
+- V8 Isolate setup
+- (with --disable-features) `MessagePumpEpoll::WaitForEpollEvents`
+
+**Remaining ceilings:**
+1. V8 still allocates CodeRange even with `--js-flags=--jitless` →
+   OOMs. Need to figure out why or find another bypass.
+2. With `--disable-features=PA*`, V8 OOM is bypassed, but cave dies
+   in message pump area (~1.2K lines). Investigate.
+3. The 1 outlier in the 9/10 distribution dies in PA backup-ref-ptr
+   territory — separate code path.
+
+**STUMP #32 was the MVP discovery of the night.** With it, you can
+freely add command-line flags (`--no-zygote`, `--js-flags=...`,
+`--disable-features=...`) without triggering ICU.
+
+Sleep well. Sweet dreams of 100K+ line runs.
+
+---
+
 ## 2026-04-28 00:30 — Mac — 🎯 STUMP #32 LANDED: argc-parity SP alignment was the ROOT cause of ICU "typeMap/timezone" CharString crash. With fix: 9/10 runs land in tight 7.4K cluster.
 
 **The breakthrough.** After investigating the ICU bug all night, I
