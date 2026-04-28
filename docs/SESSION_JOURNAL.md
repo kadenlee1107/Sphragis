@@ -11,6 +11,69 @@ end of a session.
 
 ---
 
+## 2026-04-27 22:50 — Mac — STUMP #27: BRK-after-tail-call skip handles `__builtin_unreachable()` traps. Targets 484-line crashes in `SetCurrentThreadType` and similar tail-called noreturn functions.
+
+**Goal.** A short 484-line run died at a BRK in
+`base::PlatformThreadBase::SetCurrentThreadType`. The disassembly
+showed:
+
+```
+4d1cd84: ldp x20, x19, [sp, #0x10]    ; restore callee-saved
+4d1cd88: ldp x29, x30, [sp], #0x20    ; restore fp/lr, deallocate stack
+4d1cd8c: autiasp                       ; PAC verify
+4d1cd90: b ThreadTypeManager::SetCurrentThreadTypeImpl  ; tail call
+4d1cd94: brk #0                        ; <-- unreachable trap
+```
+
+The compiler emits BRK after a noreturn tail call. If our cave
+returns from the called function (e.g. SetCurrentThreadTypeImpl
+returning when an internal CHECK fired and got pa_abort_skip'd),
+we hit the BRK.
+
+### STUMP #27 — BRK-after-tail-call skip
+
+When a BRK fires from chrome text (0x10000000..0x1c800000) AND the
+previous instruction is an unconditional `b` (top 6 bits = 0b000101),
+treat as `__builtin_unreachable()` after a tail call. Skip the BRK
+and ret to LR.
+
+Hasn't fired in current batches (the SetCurrentThreadType pattern
+is rare), but is in the toolbox for when it does occur.
+
+### Distribution after #27 (10-smoke):
+- 11,881 (no escape)
+- 11,003 (1 escape)
+- 8,224 / 8,224 / 5,500 (2 escapes each)
+- 1,793 / 1,632 / 1,574 / 1,549 (medium)
+
+5/9 runs over 5K lines. Better consistency than the previous batches.
+
+### Confirmation batch:
+- 5,312 (deepest)
+- 3,046, 1,937, 1,932, 1,792, 1,567, 1,559, 1,285 (medium)
+- 909, 875 (short)
+
+Tighter distribution — no deep peaks but consistent 1.5-5K. The
+variance is genuine runtime non-determinism; peaks happen when
+favorable thread schedules avoid the worst zombie-creation paths.
+
+### Total session impact:
+
+| Stump | Lever |
+|-------|-------|
+| #22 | pa-skip-data loop-detect + extended scratch |
+| #23 v2 | KERNEL_RESERVED_FRAMES → 32 K (128 MB) |
+| #24 | EC=0x20/0x21 instruction-abort lazy commit |
+| #25 | bad-PC funcptr extension + perm-fault UXN flip |
+| #26 v3 | escape mechanism (FP-walk) + eager threshold + cap 16 |
+| #27 | BRK-after-tail-call skip |
+
+Cave's reachable depth in best runs: Chromium message pump (Run() →
+DoWork → SelectNextTask → TaskQueueImpl::OnWakeUp). That's active
+task processing, not just init.
+
+---
+
 ## 2026-04-27 22:35 — Mac — STUMPS #26 v3 + #23 v2: eager escape (cnt > 8) + 128 MB kernel pool. Cave reaches Chromium task scheduler internals (TaskQueueImpl::OnWakeUp, SequenceManagerImpl::SelectNextTask, ThreadController::Run); 35K-line peak run with 10 escapes.
 
 **Goal.** After identifying PA InSlotMetadata corruption as the

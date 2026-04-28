@@ -1552,6 +1552,51 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 return;
             }
 
+            // 🎯 STUMP #27: BRK from chrome text where the previous
+            // instruction is an unconditional branch (`b`, opcode 0x14...).
+            // This is the `__builtin_unreachable()` pattern after a tail
+            // call. If our cave somehow returned from the tail-call'd
+            // function (e.g. SetCurrentThreadType returning when CHECK
+            // fired internally), we hit the trap. Recover by manually
+            // ret-ing to LR.
+            //
+            // chrome text spans roughly 0x10000000..0x1c800000 — anything
+            // in that range that's not handled above could be a bullet
+            // we can dodge.
+            let in_chrome_text = elr >= 0x10000000 && elr < 0x1c800000;
+            if in_chrome_text && !in_child {
+                let lr_now = unsafe { (*frame).x[30] };
+                // Look at the instruction at elr-4.
+                let prev_instr_addr = elr.wrapping_sub(4);
+                if crate::batcave::linux::uaccess::is_user_range(
+                    prev_instr_addr as usize, 4)
+                {
+                    let prev_instr: u32 = unsafe {
+                        core::ptr::read_volatile(prev_instr_addr as *const u32)
+                    };
+                    // Unconditional B opcode is 0x14000000..0x18000000
+                    // (top 6 bits = 000101).
+                    let is_uncond_branch = (prev_instr >> 26) == 0b000101;
+                    if is_uncond_branch && lr_now > 0x1000 {
+                        // Skip the BRK and ret to LR.
+                        uart::puts("[brk-skip] unreachable-after-tail-call elr=0x");
+                        let hex = b"0123456789abcdef";
+                        for sh in (0..16).rev() {
+                            uart::putc(hex[((elr >> (sh * 4)) & 0xF) as usize]);
+                        }
+                        uart::puts(" → lr=0x");
+                        for sh in (0..16).rev() {
+                            uart::putc(hex[((lr_now >> (sh * 4)) & 0xF) as usize]);
+                        }
+                        uart::puts("\n");
+                        unsafe {
+                            (*frame).elr = lr_now;
+                        }
+                        return;
+                    }
+                }
+            }
+
             if in_child {
                 uart::puts("[linux] child abort — returning to parent\n");
                 crate::batcave::linux::syscall::IN_CHILD
