@@ -127,6 +127,61 @@ fn is_user_ptr(p: usize, size: usize) -> bool {
     uaccess::is_user_range(p, size)
 }
 
+/// 🎯 STUMP #36: walk the page tables to verify a user pointer is
+/// WRITABLE (not just mapped). Used by syscalls that emulate Linux
+/// behavior of returning EFAULT when the user-supplied buffer is
+/// read-only or unmapped (e.g. `getrlimit` from `CheckMemoryReadOnly`).
+///
+/// AP[2:1] in L3 PTE (bits 7:6):
+///   0b00: EL1 R/W, no EL0 access
+///   0b01: EL1 R/W, EL0 R/W   ← user-writable
+///   0b10: EL1 R/O, no EL0 access
+///   0b11: EL1 R/O, EL0 R/O
+fn is_user_writable(p: usize, size: usize) -> bool {
+    if !uaccess::is_user_range(p, size) { return false; }
+    let ttbr0: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
+    let l1_phys = ttbr0 & !1u64;
+    if l1_phys == 0 { return false; }
+
+    // Check first and last byte's pages.
+    let start_page = (p as u64) & !0xFFFu64;
+    let end_page = ((p + size - 1) as u64) & !0xFFFu64;
+    let mut va = start_page;
+    while va <= end_page {
+        let l1_idx = (va >> 30) & 0x1FF;
+        let l1e: u64 = unsafe {
+            core::ptr::read_volatile((l1_phys + l1_idx * 8) as *const u64)
+        };
+        if (l1e & 0b11) != 0b11 { return false; }
+        let l2_phys = l1e & 0x0000_FFFF_FFFF_F000;
+        let l2_idx = (va >> 21) & 0x1FF;
+        let l2e: u64 = unsafe {
+            core::ptr::read_volatile((l2_phys + l2_idx * 8) as *const u64)
+        };
+        // L2 BLOCK descriptor (0b01): identity-mapped 2 MB block.
+        // L2 TABLE (0b11): walk L3.
+        let pte = if (l2e & 0b11) == 0b01 {
+            l2e
+        } else if (l2e & 0b11) == 0b11 {
+            let l3_phys = l2e & 0x0000_FFFF_FFFF_F000;
+            let l3_idx = (va >> 12) & 0x1FF;
+            unsafe {
+                core::ptr::read_volatile((l3_phys + l3_idx * 8) as *const u64)
+            }
+        } else {
+            return false;
+        };
+        if (pte & 0b11) != 0b11 { return false; } // not valid
+        // AP[2:1] at bits 7:6. Only AP=0b01 means EL0 writable.
+        let ap = (pte >> 6) & 0b11;
+        if ap != 0b01 { return false; }
+        if va == end_page { break; }
+        va += 4096;
+    }
+    true
+}
+
 // Syscall categories for capability checking
 #[derive(Clone, Copy)]
 enum SyscallCat {
@@ -1270,8 +1325,16 @@ fn sys_prlimit64(args: [u64; 6]) -> i64 {
     // rlimit64 is 16 bytes (two u64).  Reject any pointer into the
     // kernel identity map.  NULL is legal for both args ("don't write"
     // / "no new limits"), so skip those.
+    //
+    // 🎯 STUMP #36: old_limit must be WRITABLE (not just mapped).
+    // Chromium's `base::CheckMemoryReadOnly` calls `getrlimit64(...)`
+    // with a deliberately read-only address as `old_limit` and expects
+    // the syscall to return -1 with EFAULT (proving the addr is RO).
+    // If we don't check write permission, we'd kernel-fault on the
+    // store, or worse, silently write to a "protected" page. Return
+    // EFAULT for read-only / unmapped old_limit pointers.
     if new_limit != 0 && !is_user_ptr(new_limit, 16) { return EFAULT; }
-    if old_limit != 0 && !is_user_ptr(old_limit, 16) { return EFAULT; }
+    if old_limit != 0 && !is_user_writable(old_limit, 16) { return EFAULT; }
 
     // CHROMIUM-PHASE-C: return resource-specific sane defaults when
     // `old_limit` is non-null. The previous stub returned
