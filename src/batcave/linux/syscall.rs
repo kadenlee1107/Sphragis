@@ -4311,31 +4311,66 @@ fn sys_futex(args: [u64; 6]) -> i64 {
     // the waiter spinning on a futex that never actually blocked.
     let op = (args[1] & !(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME)) as u32;
     let val = args[2] as u32;
-    let timeout_ptr = args[3] as usize;
     let uaddr2 = args[4];
     let val3 = args[5] as u32;
 
-    // Read optional timeout from *const timespec at args[3]
-    // V8-ROOT-8: gate timeout_ptr (16 bytes — 2× u64) before raw asm reads.
-    // Without this, attacker timeout_ptr=kernel_addr is a 16-byte kernel-read
-    // oracle for any cave with FUTEX cap.
-    if timeout_ptr != 0 && !is_user_ptr(timeout_ptr, 16) {
-        return EFAULT;
-    }
-    let timeout_ns = if timeout_ptr != 0 {
-        let tv_sec: u64; let tv_nsec: u64;
-        unsafe {
-            core::arch::asm!("ldr {v}, [{a}]", a = in(reg) timeout_ptr, v = out(reg) tv_sec);
-            core::arch::asm!("ldr {v}, [{a}]", a = in(reg) timeout_ptr + 8, v = out(reg) tv_nsec);
+    // STUMP #44 — Linux's futex(2) overloads `args[3]` based on the op:
+    //   * FUTEX_WAIT / FUTEX_WAIT_BITSET / FUTEX_LOCK_PI:
+    //       args[3] is `const struct timespec *utime` (a pointer).
+    //   * FUTEX_REQUEUE / FUTEX_CMP_REQUEUE / FUTEX_WAKE_OP:
+    //       args[3] is `val2` — an INTEGER count (nr_requeue), not a pointer.
+    //   * FUTEX_WAKE / FUTEX_WAKE_BITSET / FUTEX_FD: args[3] is unused.
+    //
+    // Pre-fix bug: args[3] was unconditionally treated as a timeout pointer
+    // and gated through `is_user_ptr`. For pthread_cond_broadcast (which uses
+    // FUTEX_CMP_REQUEUE with args[3] = INT_MAX = 0x7FFFFFFF), that integer
+    // happened to fall inside USER_MIN..USER_MAX so the gate accepted it —
+    // and we then read garbage `tv_sec`/`tv_nsec` from address 0x7FFFFFFF
+    // (or kernel-faulted, recovered via brk-skip). Either way the requeue
+    // call itself was reached with `wake_count` and `requeue_count` BOTH
+    // set to args[2], so cond_broadcast woke at most one waiter and silently
+    // failed to requeue the rest — the renderer threads parked on the
+    // condvar's internal futex stayed parked forever. That's why the cave
+    // reaches openat('/bin/hello.html') but FileURLLoader's reply task
+    // never runs: the FILE-thread cond_wait never wakes.
+    //
+    // Fix: split the parsing on op. Only WAIT-family ops dereference utime;
+    // REQUEUE/CMP_REQUEUE pass `args[3] as u32` straight through as
+    // nr_requeue.
+    let needs_timeout = matches!(
+        op,
+        futex::FUTEX_WAIT | futex::FUTEX_WAIT_BITSET | futex::FUTEX_LOCK_PI
+    );
+    let timeout_ns: u64 = if needs_timeout {
+        let timeout_ptr = args[3] as usize;
+        if timeout_ptr == 0 {
+            0
+        } else {
+            // V8-ROOT-8: gate timeout_ptr (16 bytes — 2× u64) before raw asm
+            // reads. Without this, attacker timeout_ptr=kernel_addr is a
+            // 16-byte kernel-read oracle for any cave with FUTEX cap.
+            if !is_user_ptr(timeout_ptr, 16) {
+                return EFAULT;
+            }
+            let tv_sec: u64; let tv_nsec: u64;
+            unsafe {
+                core::arch::asm!("ldr {v}, [{a}]", a = in(reg) timeout_ptr, v = out(reg) tv_sec);
+                core::arch::asm!("ldr {v}, [{a}]", a = in(reg) timeout_ptr + 8, v = out(reg) tv_nsec);
+            }
+            tv_sec.saturating_mul(1_000_000_000).saturating_add(tv_nsec)
         }
-        tv_sec.saturating_mul(1_000_000_000).saturating_add(tv_nsec)
-    } else { 0 };
+    } else {
+        0
+    };
+    // For REQUEUE/CMP_REQUEUE, args[3] is `nr_requeue` (val2). Saturate to
+    // u32::MAX so glibc's INT_MAX sentinel maps cleanly.
+    let nr_requeue = (args[3] & 0xFFFF_FFFF) as u32;
 
     match op {
         futex::FUTEX_WAIT       => futex::futex_wait(uaddr, val, timeout_ns),
         futex::FUTEX_WAKE       => futex::futex_wake(uaddr, val),
-        futex::FUTEX_REQUEUE    => futex::futex_requeue(uaddr, uaddr2, val, args[2] as u32),
-        futex::FUTEX_CMP_REQUEUE => futex::futex_cmp_requeue(uaddr, uaddr2, val3, val, args[2] as u32),
+        futex::FUTEX_REQUEUE    => futex::futex_requeue(uaddr, uaddr2, val, nr_requeue),
+        futex::FUTEX_CMP_REQUEUE => futex::futex_cmp_requeue(uaddr, uaddr2, val3, val, nr_requeue),
         futex::FUTEX_WAIT_BITSET => futex::futex_wait_bitset(uaddr, val, timeout_ns, val3),
         futex::FUTEX_WAKE_BITSET => futex::futex_wake_bitset(uaddr, val, val3),
         _ => 0, // unknown op — return success for compatibility
