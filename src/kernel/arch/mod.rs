@@ -1683,6 +1683,43 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     let is_bl = (prev_instr >> 26) == 0b100101;
 
                     if is_uncond_branch && lr_now > 0x1000 {
+                        // 🎯 STUMP #42: detect brk-skip livelock. If
+                        // we keep skipping the same (elr, lr) pair, we're
+                        // in an infinite loop (cave returns to caller,
+                        // caller calls noreturn function again, BRK
+                        // fires, we skip again). Cap at 32 same-pair
+                        // skips, then terminate the cave.
+                        static BRK_SKIP_LAST_ELR: core::sync::atomic::AtomicU64 =
+                            core::sync::atomic::AtomicU64::new(0);
+                        static BRK_SKIP_LAST_LR: core::sync::atomic::AtomicU64 =
+                            core::sync::atomic::AtomicU64::new(0);
+                        static BRK_SKIP_SAME_COUNT: core::sync::atomic::AtomicU32 =
+                            core::sync::atomic::AtomicU32::new(0);
+                        let prev_elr = BRK_SKIP_LAST_ELR.load(core::sync::atomic::Ordering::Relaxed);
+                        let prev_lr = BRK_SKIP_LAST_LR.load(core::sync::atomic::Ordering::Relaxed);
+                        if prev_elr == elr && prev_lr == lr_now {
+                            let cnt = BRK_SKIP_SAME_COUNT.fetch_add(
+                                1, core::sync::atomic::Ordering::Relaxed) + 1;
+                            if cnt > 32 {
+                                uart::puts("[brk-skip] LIVELOCK at elr=0x");
+                                let hex = b"0123456789abcdef";
+                                for sh in (0..16).rev() {
+                                    uart::putc(hex[((elr >> (sh * 4)) & 0xF) as usize]);
+                                }
+                                uart::puts(" — terminating cave\n");
+                                BRK_SKIP_SAME_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+                                BRK_SKIP_LAST_ELR.store(0, core::sync::atomic::Ordering::Relaxed);
+                                BRK_SKIP_LAST_LR.store(0, core::sync::atomic::Ordering::Relaxed);
+                                crate::batcave::linux::signal::terminate_cave_fatal_with_lr(
+                                    crate::batcave::linux::signal::SIGSEGV,
+                                    elr, lr_now,
+                                );
+                            }
+                        } else {
+                            BRK_SKIP_SAME_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+                            BRK_SKIP_LAST_ELR.store(elr, core::sync::atomic::Ordering::Relaxed);
+                            BRK_SKIP_LAST_LR.store(lr_now, core::sync::atomic::Ordering::Relaxed);
+                        }
                         // Tail-call case: ret to LR.
                         uart::puts("[brk-skip] unreachable-after-tail-call elr=0x");
                         let hex = b"0123456789abcdef";
