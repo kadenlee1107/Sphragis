@@ -2513,22 +2513,33 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 let lr = unsafe { (*frame).x[30] };
                 let elr_now = unsafe { (*frame).elr };
 
-                // 🎯 STUMP #29: LSE atomic on small/Smi-tagged "this".
-                // V8's MemoryPool stores Smi-tagged values in the same
-                // field as refcounted pointers. When V8 calls Release()
-                // on a pool entry that's actually a Smi (e.g. 0xd, 0x70,
-                // small numerics), the LSE atomic at __aarch64_ldadd4_acq_rel
-                // (elr=0x11ab142c) faults on the small "address".
+                // 🎯 STUMP #29 (extended in #37): LSE atomic on small/
+                // Smi-tagged "this". V8's MemoryPool stores Smi-tagged
+                // values in the same field as refcounted pointers.
+                // When V8 calls Release() on a pool entry that's
+                // actually a Smi (e.g. 0xd, 0x70, small numerics),
+                // the LSE atomic faults on the small "address".
+                //
+                // Known sites:
+                //   0x11ab142c → __aarch64_ldadd4_acq_rel (ldaddal)
+                //   0x117d066c → __aarch64_ldadd4_relax  (ldadd)
                 //
                 // Recovery: skip the atomic, set w0=0 (pretend prior
                 // refcount was 0, not 1, so Release returns false =
                 // "not last ref"), advance ELR to the `ret` at +4.
-                if elr_now == 0x11ab142c && far_now < 0x100 {
+                let smi_skip_target = if far_now < 0x100 {
+                    match elr_now {
+                        0x11ab142c => Some(0x11ab1430),
+                        0x117d066c => Some(0x117d0670),
+                        _ => None,
+                    }
+                } else { None };
+                if let Some(ret_addr) = smi_skip_target {
                     unsafe {
                         // Set w0 (low 32 bits of x[0]) to 0.
                         (*frame).x[0] = 0;
-                        // ELR → ret at 0x11ab1430.
-                        (*frame).elr = 0x11ab1430;
+                        // ELR → ret at +4.
+                        (*frame).elr = ret_addr;
                     }
                     static SMI_RELEASE_SKIPS: core::sync::atomic::AtomicU32 =
                         core::sync::atomic::AtomicU32::new(0);
