@@ -141,11 +141,13 @@ pub fn alloc_frame() -> Option<usize> {
 /// 4096 frames = 16 MB on a 4 GB system (0.4%). Plenty for any
 /// reasonable cave + small_mmap workload, including 32 caves of
 /// content_shell-class binaries with their full thread/cage layouts.
-// 🎯 STUMP #23: bumped 4096 → 16384 (16 MB → 64 MB) because the
-// demand_page lazy-commit fallback maps lots of V8 cage L3 tables.
-// At 4096 we'd OOM trying to install_l3 for ChromeRootStoreData
-// area (0x14e400000) after ~30K log lines.
-pub const KERNEL_RESERVED_FRAMES: usize = 16384;
+// 🎯 STUMP #23: bumped 4096 → 16384 → 32768 (16 MB → 64 MB → 128 MB)
+// Even at 64 MB we OOM at ~22K-line runs ("install_l3 failed
+// va=0x14e200000 reason: demand_page: oom for L3 table"). The
+// deep runs map many L3 tables for V8 cages + content_shell text +
+// scratch + Mojo IPC pages. 128 MB gives 32K L3 tables = 64 GB
+// VA range, well over what V8 needs. We have 3.6 GB total RAM.
+pub const KERNEL_RESERVED_FRAMES: usize = 32768;
 
 /// V2-001/V2-040 fix: allocate a frame from the kernel-reserved pool.
 /// Used by `setup_cave_pagetable` / `setup_cave_pagetable_at` so a cave's

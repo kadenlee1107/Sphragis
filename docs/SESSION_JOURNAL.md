@@ -11,6 +11,71 @@ end of a session.
 
 ---
 
+## 2026-04-27 22:35 — Mac — STUMPS #26 v3 + #23 v2: eager escape (cnt > 8) + 128 MB kernel pool. Cave reaches Chromium task scheduler internals (TaskQueueImpl::OnWakeUp, SequenceManagerImpl::SelectNextTask, ThreadController::Run); 35K-line peak run with 10 escapes.
+
+**Goal.** After identifying PA InSlotMetadata corruption as the
+fundamental ceiling, see if escape-heavy runs reach further.
+
+**Stumps tuned this session:**
+
+### STUMP #26 v3 — Eager escape (cnt > 8 instead of > 32)
+
+Lowered the same-pair threshold for triggering ESCAPE from 32 → 8.
+Before, cave wasted 24+ skip iterations spinning before escape kicked
+in. Lowering it lets escape happen sooner, before other threads
+race ahead and pile up more zombie state.
+
+Also bumped the escape attempt cap from 5 → 16 — the 35K-line peak
+run hit the 5-cap at `ThreadControllerWithMessagePumpImpl::Run` after
+escaping through 4 different task-queue methods. With 16 attempts
+the message pump can recurse more freely.
+
+### STUMP #23 v2 — KERNEL_RESERVED_FRAMES 16384 → 32768 (64 → 128 MB)
+
+A 22K-line run hit `oom for L3 table` at VA 0x14e200000. Even with
+64 MB of kernel-reserved frames, deep runs exhausted L3 tables.
+Bumped to 128 MB (32K L3 tables = 64 GB VA). We have 3.6 GB total.
+
+**Best run this session:**
+
+35,611 lines with 10 ESCAPE attempts, EXHAUSTED at
+`ThreadControllerWithMessagePumpImpl::Run` (`elr=0x14cfe22c`,
+`fault=0x7d`).
+
+The escape sites trace the cave's main thread's task scheduler:
+1. `TaskQueueImpl::OnWakeUp`
+2. `SequenceManagerImpl::MoveReadyDelayedTasksToWorkQueues`
+3. `SequenceManagerImpl::SelectNextTask`
+4. `ThreadControllerWithMessagePumpImpl::DoWork`
+5. `ThreadControllerWithMessagePumpImpl::Run` (recursive — 5 escapes here)
+
+So we're INSIDE Chromium's active task processing loop, not just
+init. Each task hits a pa-skip-data zombie state, escape pops up,
+next task hits another, escape again.
+
+**Distribution after #26 v3 + #23 v2 (10-smoke):**
+
+Eager escape batch:
+- 35,611 (10 escapes, 1 exhausted)
+- 26,165, 20,853, 19,720 (no escapes)
+- 1,568 / 1,567 / 1,192 / 887 (short)
+
+128 MB pool batch:
+- 13,440 (3 escapes)
+- 3,598, 1,887, 1,518, 1,188 (medium)
+- 960, 928, 919, 901 (short, no OOM)
+
+**What kills the short runs (consistent pattern):**
+- `absl::Mutex::lock()` from `v8::MemoryPool::ReleaseAllImmediately`
+- `cppgc::ExplicitManagementImpl::Resize`
+- `WorkQueue::RemoveCancelledTasks`
+- `base::sequence_manager::internal::SequenceManager::~SequenceManager`
+
+All cleanup/destructor paths on partially-constructed objects (zombies).
+Different cleanup for different threads/timing → different crash sites.
+
+---
+
 ## 2026-04-27 22:15 — Mac — Diagnostic deep-dive: every cave run begins with PA `CorruptionDetected()` BRK at AtomicStringTable::Rehash / ipcz::Parcel::~Parcel. Cumulative pa-skip damage causes downstream UAF crashes (poisoned 0xefef… pointers). New ceiling is PA InSlotMetadata corruption itself.
 
 **Goal.** Look at WHAT specifically kills the median (1500-line) runs to

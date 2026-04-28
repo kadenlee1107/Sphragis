@@ -2638,9 +2638,22 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         let mut loop_detected = false;
                         if same_pair {
                             let cnt = SAME_SKIP_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
-                            if cnt > 32 {
+                            // 🎯 STUMP #26 tuning: lowered 32 → 8 so
+                            // escape kicks in sooner. Saving 24 wasted
+                            // skip iterations means the escape attempt
+                            // happens before the cave's other threads
+                            // race ahead and create more zombie state.
+                            if cnt > 8 {
                                 let depth = ESCAPE_DEPTH.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
-                                if depth > 5 {
+                                // 🎯 STUMP #26 v3: bumped 5 → 16. The 35K
+                                // run got into Chromium's task scheduler
+                                // (TaskQueueImpl::OnWakeUp,
+                                // SequenceManagerImpl::SelectNextTask,
+                                // ThreadController::Run) and re-entered
+                                // Run() repeatedly. 5 escapes wasn't
+                                // enough to break out of the recursive
+                                // pump. 16 gives more room.
+                                if depth > 16 {
                                     loop_detected = true;
                                     uart::puts("[pa-skip-data] LOOP+ESCAPE EXHAUSTED at elr=0x");
                                     let hex = b"0123456789abcdef";
