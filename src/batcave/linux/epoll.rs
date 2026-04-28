@@ -525,27 +525,41 @@ fn drain_ready(slot: usize, events_ptr: *mut EpollEvent, max: usize) -> usize {
     // expire (sweep is lazy) or a pipe go from empty→non-empty unless
     // the writer also called mark_ready (which only sys_write does
     // today, not e.g. ioctl/sendmsg paths that drain into the buffer).
+    //
+    // EPOLLOUT is only re-polled when the user actually asked for it
+    // (entry.events & EPOLLOUT != 0). Otherwise an unconditional set
+    // would keep an EPOLLET-on-EPOLLOUT watch in a hot loop forever.
     use crate::batcave::linux::{async_fds, fd as fd_mod, pipe_buf};
     for entry in inst.interests.iter_mut() {
         if !entry.used { continue; }
         let fdn = entry.fd;
         if fdn < 0 { continue; }
-        // Eventfd: counter > 0 → EPOLLIN
+        let wants_in  = entry.events & EPOLLIN  != 0;
+        let wants_out = entry.events & EPOLLOUT != 0;
+        // Eventfd
         if let Some(slot) = fd_mod::eventfd_slot(fdn as u32) {
-            if async_fds::eventfd_is_readable(slot) {
+            if wants_in && async_fds::eventfd_is_readable(slot) {
                 entry.ready |= EPOLLIN;
             }
+            if wants_out && async_fds::eventfd_is_writable(slot) {
+                entry.ready |= EPOLLOUT;
+            }
         }
-        // Timerfd: counter > 0 (with lazy sweep) → EPOLLIN
+        // Timerfd: only readable (counter > 0)
         if let Some(slot) = fd_mod::timerfd_slot(fdn as u32) {
-            if async_fds::timerfd_is_readable(slot) {
+            if wants_in && async_fds::timerfd_is_readable(slot) {
                 entry.ready |= EPOLLIN;
             }
         }
-        // Pipe: peer's outbound buffer has bytes → EPOLLIN on us
+        // Pipe: peer's outbound buffer has bytes → EPOLLIN on us. We
+        // approximate "writable" as "any active pair", since pipe_buf
+        // exposes no precise has_writable getter today.
         if let Some((pair_slot, side)) = fd_mod::pipe_info(fdn as u32) {
-            if pipe_buf::has_readable(pair_slot, side) {
+            if wants_in && pipe_buf::has_readable(pair_slot, side) {
                 entry.ready |= EPOLLIN;
+            }
+            if wants_out {
+                entry.ready |= EPOLLOUT;
             }
         }
     }
@@ -578,15 +592,19 @@ fn drain_ready(slot: usize, events_ptr: *mut EpollEvent, max: usize) -> usize {
         written += 1;
 
         // Level-triggered: clear the bits we just delivered so they
-        // won't fire again until mark_ready is called anew.
+        // won't fire again until mark_ready is called anew (or until
+        // active polling at the top of drain_ready re-asserts them
+        // from underlying state on the next epoll_pwait).
         //
-        // Edge-triggered (EPOLLET): leave `ready` alone — the caller is
-        // expected to drain the underlying fd to EAGAIN. This is a
-        // simplification; true ET semantics only re-fire on a fresh
-        // transition. See TODO below.
-        if entry.events & EPOLLET == 0 {
-            entry.ready &= !deliverable;
-        }
+        // Edge-triggered (EPOLLET): also clear after delivery. With the
+        // active poll above, ready will only be re-set if the underlying
+        // fd is still ready, which approximates true ET semantics: a
+        // single delivery per ready→drained→ready cycle. Without this
+        // clear, every subsequent epoll_pwait would re-deliver the same
+        // bits (because EPOLLET pre-fix never lowered them), keeping the
+        // userspace event loop in a tight spin even after it had drained
+        // the fd to EAGAIN.
+        entry.ready &= !deliverable;
 
         // One-shot: suppress further deliveries until EPOLL_CTL_MOD.
         if entry.events & EPOLLONESHOT != 0 {

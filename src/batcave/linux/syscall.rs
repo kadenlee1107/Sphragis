@@ -1820,6 +1820,16 @@ fn sys_read(args: [u64; 6]) -> i64 {
                     }
                 }
             }
+            // V8-EPOLL-PIPECLEAR: if we drained the inbound buffer to empty,
+            // clear EPOLLIN on this fd in every watching epoll instance.
+            // Without this, an EPOLLET watcher would see a stale EPOLLIN bit
+            // on the next epoll_pwait (drain_ready leaves entry.ready set
+            // for ET, and only re-OR's from underlying state — which is
+            // empty here, so the bit must come down explicitly). The
+            // active poll at drain_ready time will re-arm on a fresh write.
+            if !super::pipe_buf::has_readable(slot, side) {
+                super::epoll::clear_ready(fd_num as i32, super::epoll::EPOLLIN);
+            }
             return total as i64;
         }
 
@@ -2119,6 +2129,16 @@ fn sys_close(args: [u64; 6]) -> i64 {
             },
             None => None,
         };
+    }
+
+    // V8-EPOLL-CLOSE: prune any stale interests pointing at this fd before
+    // it goes back into the allocator. Without this, a future fd reuse
+    // would inherit the prior watcher's ready bits and deliver spurious
+    // EPOLLIN/HUP — or worse, a watcher's interest list could keep firing
+    // on whatever the new fd is. Skipped for the epoll fd itself: epoll_close
+    // already wiped the instance backing it.
+    if !handled_special {
+        super::epoll::notify_fd_closed(fd_num as i32);
     }
 
     let close_result = if handled_special {
@@ -6391,7 +6411,7 @@ fn sys_recvmsg(args: [u64; 6]) -> i64 {
     // peer wrote.
     if fd_num >= 0 {
         if let Some((pair_slot, side)) = fd::pipe_info(fd_num as u32) {
-            return recvmsg_pipe(pair_slot, side, args[1] as *mut super::sockets::Msghdr);
+            return recvmsg_pipe(fd_num, pair_slot, side, args[1] as *mut super::sockets::Msghdr);
         }
     }
     super::sockets::recvmsg(
@@ -6401,7 +6421,7 @@ fn sys_recvmsg(args: [u64; 6]) -> i64 {
     )
 }
 
-fn recvmsg_pipe(slot: usize, side: u8, msg: *mut super::sockets::Msghdr) -> i64 {
+fn recvmsg_pipe(fd_num: i32, slot: usize, side: u8, msg: *mut super::sockets::Msghdr) -> i64 {
     if msg.is_null() { return EFAULT; }
     if !is_user_ptr(msg as usize, core::mem::size_of::<super::sockets::Msghdr>()) {
         return EFAULT;
@@ -6484,6 +6504,14 @@ fn recvmsg_pipe(slot: usize, side: u8, msg: *mut super::sockets::Msghdr) -> i64 
                 );
             }
         }
+    }
+    // V8-EPOLL-PIPECLEAR: parallel to sys_read's drain — when our inbound
+    // pipe buffer is empty, clear the EPOLLIN bit on this fd in every
+    // watching epoll instance. Otherwise EPOLLET watchers keep firing
+    // a stale bit on the next epoll_pwait. The active drain_ready poll
+    // re-arms it the moment a new write lands.
+    if !super::pipe_buf::has_readable(slot, side) {
+        super::epoll::clear_ready(fd_num, super::epoll::EPOLLIN);
     }
     total
 }
