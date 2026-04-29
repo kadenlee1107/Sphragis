@@ -492,22 +492,16 @@ fn serial_shell() -> ! {
                     uart::puts("\n");
                     if len > 0 {
                         let cmd = unsafe { core::str::from_utf8_unchecked(&buf[..len]) };
-                        match cmd {
-                            "help" => uart::puts("  commands: help, mem, uname, whoami\n"),
-                            "mem" => {
-                                let (used, total) = kernel::mm::frame::stats();
-                                uart::puts("  free: ");
-                                kernel::mm::print_num((total - used) * 4);
-                                uart::puts(" KB\n");
-                            }
-                            "uname" => uart::puts("  Bat_OS v0.3.0 aarch64\n"),
-                            "whoami" => uart::puts("  KADEN\n"),
-                            _ => {
-                                uart::puts("  unknown: ");
-                                uart::puts(cmd);
-                                uart::puts("\n");
-                            }
-                        }
+                        // 🎯 Dispatch to the full shell so headless smokes
+                        // can run `chromium`, `batcave`, and the rest of
+                        // the command set. Pre-#56 this serial_shell was
+                        // a stub with only help/mem/uname/whoami; the
+                        // QEMU smoke had to enable virtio-gpu/keyboard
+                        // just to get the GUI shell that registered
+                        // `chromium`. Routing through `ui::shell::execute_cmd`
+                        // unifies the command surface and lets us drop
+                        // those virtio devices for ~10-20% faster smokes.
+                        crate::ui::shell::execute_cmd(cmd);
                         len = 0;
                     }
                     uart::puts("bat_os > ");
