@@ -153,6 +153,25 @@ fn is_user_writable(p: usize, size: usize) -> bool {
         let l1e: u64 = unsafe {
             core::ptr::read_volatile((l1_phys + l1_idx * 8) as *const u64)
         };
+        // 🎯 STUMP #53: pages in an active demand-page reservation
+        // count as writable even if they aren't yet committed —
+        // the next access will demand-page them in with EL0 R/W
+        // perms (USER_PAGE_FLAGS). Without this, every check on a
+        // freshly-allocated pthread stack returns EFAULT (e.g.
+        // Chromium's `base::GetMaxFds()` calls `getrlimit(RLIMIT_NOFILE,
+        // &rlim)` with `&rlim` on a not-yet-committed thread stack
+        // page, and our prlimit64 returns EFAULT — Chromium logs
+        // "Failed to get file descriptor limit: Bad address (14)"
+        // and downstream code may misuse the unset rlim).
+        if super::demand_page::is_in_active_reservation(va as usize, 4096) {
+            // Conservative: treat as writable if the page is reserved
+            // (will be backed lazily). The actual write either hits
+            // a committed page or triggers demand_page::commit which
+            // installs USER_PAGE_FLAGS (= AP=01, EL0 R/W).
+            if va == end_page { break; }
+            va += 4096;
+            continue;
+        }
         if (l1e & 0b11) != 0b11 { return false; }
         let l2_phys = l1e & 0x0000_FFFF_FFFF_F000;
         let l2_idx = (va >> 21) & 0x1FF;
