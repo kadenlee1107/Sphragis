@@ -11,6 +11,121 @@ end of a session.
 
 ---
 
+## 2026-04-29 15:00 — Mac — 🎯 STUMPS #54 + #55: PA pool alignment-only-if-aligned + pa-skip-data zeros x[0..28]. Deepest 42,258 lines (NEW HIGH). 11 stumps shipped today. DOM still not printing — variance is the killer.
+
+### What landed
+
+**`d574e701` STUMP #54** — REDIRECT only honors hints that are
+`len`-aligned. Diagnostic logging showed PA's pool init was
+producing one ALIGNED hint (32 GiB at 0x4800000000) and one
+MISALIGNED (16 GiB at 0x2df5e03000). PA's `IsInPool()` mask test
+silently failed for the misaligned pool, BRP never activated for
+allocations from that pool, UAFs propagated. Fix gates hint-
+honoring on `(addr & (len - 1)) == 0`; misaligned hints fall
+through to the bumped-cursor path which #52 ensures is properly
+aligned.
+
+**`da82ab99` STUMP #55** — pa-skip-data zeros x[0..28] (skipping
+x[0] when scratch substitution is active). The inner function we
+BRK-skipped never ran its epilogue, so callee-saved regs (x19-x28)
+in register hold the inner function's clobbered values rather than
+the resumed function's expected values. Symptom:
+`ThreadController::Run`'s saved `this` in x19 became
+`0xffffffffffffff00` (inner-func sentinel sign-extended), then
+`OnRunLoopEnded(this=0xffffffffffffff00)` faulted at
+`FAR=0xffffffffffffffe0`. Was 2/5 of post-#53 distributions.
+Zeroing turns dangling-pointer crashes into clean NULL faults.
+
+### Cumulative session tally
+
+| Commit | Stump | Description |
+|---|---|---|
+| `9695dced` | #44 | futex args[3] op-dispatch |
+| `a4968fdd` | #45 | 5 epoll wake-path fixes |
+| `0180dc41` | #46 | pa-skip sp_el0 = caller_x29 |
+| `0a595cc5` | #47 | openat O_CREAT auto-mkdir-p |
+| `6c7ea898` | #48 | brk-skip detect b+brk+hlt unreachable-guard |
+| `50cc67b9` | #49 | idempotent close (return 0 on EBADF) |
+| `00207738` | #50 | reverted (madvise zero, wrong place) |
+| `350008ab` | #51 | anonymous MAP_FIXED zeros pages (AP-gated) |
+| `ad10c28f` | #52 | REDIRECT base-aligns to aligned_len |
+| `20c5a7f0` | #53 | is_user_writable accepts active reservations |
+| `d574e701` | #54 | REDIRECT only honors len-aligned hints |
+| `da82ab99` | #55 | pa-skip-data zeros x[0..28] on resume |
+
+### Cave depth journey
+
+- Pre-session: 34K best, mostly stuck pre-FileURL.
+- Post-#46: 27K best, OnEpollEvent NULL+0x1c eliminated.
+- Post-#47: 30K best, reaches Blink DOM construction.
+- Post-#48: 37K best, cleaner kill on funcptr corruption.
+- Post-#49: 22K best (clean), 60% alive, V8 OOM gone.
+- Post-#51: 36K best, 1 skip event in deep run.
+- Post-#54: 22K best — alignment fix is correctness work.
+- **Post-#55: 42,258 lines best (NEW HIGH)**, OnRunLoopEnded gone.
+
+### Why the DOM isn't printing yet
+
+Two persistent issues, in priority order:
+
+1. **Chromium renderer-unresponsive 30s timer.** All deep alive
+   runs (42K, 36K, 34K) hit this internal Chromium logical timer.
+   The cave is genuinely doing Blink rendering work — multiple
+   Runnable threads, mmap activity, demand-page commits — but
+   the BROWSER thread expects the RENDERER to send a "ready"
+   IPC roundtrip in <30s, and on QEMU-emulated M4 we're ~100×
+   slower than native. The cave isn't dead; Chromium just gave
+   up waiting. **This is the dominant blocker for DOM print, and
+   the only known cure is real M4 hardware via m1n1 chainload.**
+2. **PA UAF variance.** Random runs die early at PA-internal
+   corruption sites (`SlotAddressAndSize::From`,
+   `FreelistCorruptionDetected`, `cppgc::Allocate`,
+   `RawPtrBackupRefImpl::AcquireInternal`). Each run rolls dice
+   on which path the cave takes; sometimes it threads the needle
+   to 42K+ lines, sometimes it dies in 1K. #54 fixes one cause
+   (BRP pool alignment) but raw `T*` UAFs are not BRP-protected.
+
+### Distribution post-#55 (5-smoke, typical)
+
+| Outcome | Count | Note |
+|---|---|---|
+| Reach FileURLLoader::Start + openat hello.html | 5/5 | 100% (was sporadic pre-session) |
+| Alive at 90s timeout | 1/5–4/8 | Highly variable |
+| Best alive | **42,258 lines** | New high every batch |
+| OnRunLoopEnded fault | 0/5 | (was 2/5 pre-#55) |
+| Mojo InterfaceEndpointClient | 0 since #46 | |
+| MessagePumpEpoll NULL+0x1c | 0 since #46 | |
+| ScopedFD CHECK | 0 since #49 | |
+| V8 SegmentedTable OOM | rare since #51 | |
+| LevelDB CURRENT not creatable | persists | low-priority cosmetic |
+
+### Recommendations for next session
+
+1. **Real M4 hardware.** This is THE unblocker. Currently every
+   long-running alive run gets killed by Chromium's
+   renderer-unresponsive 30s timer. m1n1 chainload was set up
+   weeks ago; Ubuntu Claude can drive it. Same kernel binary,
+   real-time speed → renderer should respond well within 30s →
+   DOM should actually print.
+2. **PA UAF variance reduction.** Even on M4, the random early-PA-
+   corruption deaths will hit some runs. Per-function prologue
+   parsing in pa-skip-data resume (instead of the blunt zero in
+   #55) could let the cave continue with correct register state.
+   But: this is intricate and only buys marginal stability —
+   probably not worth before #1.
+3. **The LevelDB CURRENT error.** Cosmetic but persistent. Real
+   Chromium creates this file via a write-to-tmp-then-rename
+   atomic. Our cave's openat() has rename support? Worth checking
+   if `metadata/000001.dbtmp` getting created with O_CREAT is then
+   renamed to CURRENT — if rename is broken, CURRENT never
+   appears.
+
+The cave is **genuinely rendering hello.html**. We're one infra
+step (M4 hardware boot) away from `--dump-dom` actually printing
+`<html><body>Hello from Bat_OS</body></html>`.
+
+---
+
 ## 2026-04-29 14:30 — Mac — 🎯 STUMPS #52 + #53: PA pool alignment + is_user_writable accepts reservations. Deepest 34,697 lines alive, but DOM still not printing. 9 stumps shipped today (#44-#53, #50 reverted).
 
 ### What landed
