@@ -2876,7 +2876,33 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             use core::sync::atomic::Ordering as Ord2;
             let mut base = REDIRECT_CURSOR.load(Ord2::Relaxed);
             loop {
-                let next = base.saturating_add(aligned_len);
+                // 🎯 STUMP #52: align BASE to power-of-two of
+                // `aligned_len`. PA's `PartitionAddressSpace::Init`
+                // calls `AllocPages(32 GiB size, 32 GiB alignment,
+                // kInaccessible)` for the glued regular+BRP pool,
+                // and uses a fixed bitmask test for "is this address
+                // in BRP pool":
+                //   (address & ~(core_pool_size - 1)) == brp_pool_base
+                // If PA's pool base isn't `core_pool_size`-aligned
+                // (16 GiB-aligned for our build, 32 GiB-aligned
+                // accounting for the glued layout), the mask test
+                // fails for every legitimate BRP-allocated pointer,
+                // BRP never activates, and UAFs go undetected →
+                // dangling-this in `RefCountedBase::AddRefImpl`,
+                // `RunLevelTracker::OnRunLoopEnded`,
+                // `WorkQueueSets::OnPopMinQueueInSet`, etc. Pre-#52
+                // the cursor advanced by `aligned_len` (4 GiB) but
+                // the BASE didn't get re-aligned — so the second 32
+                // GiB allocation landed at e.g. 0x34_0000_0000 (=
+                // 0x30_0000_0000 + 4 GiB), which is 4 GiB-aligned
+                // but NOT 32 GiB-aligned.
+                //
+                // For power-of-two aligned_len, align base up to
+                // aligned_len. This automatically satisfies any
+                // alignment up to and including aligned_len itself.
+                let align_mask = aligned_len.wrapping_sub(1);
+                let aligned_base = (base + align_mask) & !align_mask;
+                let next = aligned_base.saturating_add(aligned_len);
                 if next as u64 >= VA_LIMIT {
                     // No room left — fall back to returning the raw
                     // hint and let the demand-page failure surface.
@@ -2886,7 +2912,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                     base, next,
                     Ord2::AcqRel, Ord2::Acquire,
                 ) {
-                    Ok(_) => break,
+                    Ok(_) => { base = aligned_base; break; }
                     Err(cur) => base = cur,
                 }
             }
