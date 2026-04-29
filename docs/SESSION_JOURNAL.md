@@ -11,6 +11,96 @@ end of a session.
 
 ---
 
+## 2026-04-29 00:30 — Mac — STUMP #50 attempted (madvise(DONTNEED) zero) — REVERTED (regressed 3/5 → 2/5 alive). Final session tally: 6 stumps committed.
+
+**Commit `c7de2e24`** added MADV_DONTNEED zero-on-decommit (re-
+enabled the L1/L2/L3 walk + per-page zero loop that had been
+disabled by STUMP #12's bisect, plus added `dc civac` cache
+flush). Reasoning: PA's `0xef` freelist poison was surviving the
+no-op madvise, so PA's next-alloc verifier read 0xef and
+FreelistCorruptionDetected fired.
+
+**Commit `00207738`** REVERTS #50 because the 5-smoke distribution
+got worse, not better:
+
+| | Pre-#50 (post-#49) | Post-#50 |
+|---|---|---|
+| Alive at timeout | 3/5 | 2/5 (both <600 lines) |
+| Best alive | 22,108 lines | 545 lines |
+| FileURL reach | 5/5 | 2/5 |
+
+The most likely explanation: PA does store some state inside
+DONTNEED'd pages that it expects to survive (or it never re-
+initialises after decommit, treating the slot as still containing
+its prior metadata). Real Linux really does zero those pages;
+either real Chromium has different behavior, or our timing
+exposes a PA race.
+
+Revert restores the 3/5 alive @ 22K best baseline.
+
+### Final stump tally for this 24-hour session
+
+| Commit | Stump | Description | Net effect |
+|---|---|---|---|
+| `9695dced` | #44 | futex args[3] op-dispatch | pthread_cond_broadcast wakes all |
+| `a4968fdd` | #45 | 5 epoll wake-path fixes | Eliminates Mojo IPC missed wakes |
+| `0180dc41` | #46 | pa-skip sp_el0 = caller_x29 | Kills OnEpollEvent NULL+0x1c cascade |
+| `0a595cc5` | #47 | openat O_CREAT auto-mkdir-p | Cave reaches Blink DOM construction |
+| `6c7ea898` | #48 | brk-skip detect b+brk+hlt unreachable-guard | Clean kill on funcptr corruption |
+| `50cc67b9` | #49 | idempotent close (return 0 on EBADF) | Silences ScopedFD CHECK + V8 OOM |
+
+Cave depth journey:
+- Pre-session: 34K best, mostly stuck pre-FileURL.
+- Post-#46: 27K best, 5/8 alive.
+- Post-#47: 30K best, multiple Blink DOM faults.
+- Post-#48: 37K best, cleaner kill on funcptr corruption.
+- Post-#49: 22K best, 3/5 alive (60%), 100% reach FileURLLoader.
+
+### What's actually blocking the DOM print
+
+Three remaining failure families, in rough order of frequency:
+
+1. **PA freelist corruption** (`SlotAddressAndSize::From`,
+   `FreelistCorruptionDetected`, `RawPtrBackupRefImpl::AcquireInternal`,
+   `0xef` poison reads). The dominant late-failure family. STUMP #50
+   tried a fix and failed; the real fix needs more PA-internals
+   knowledge.
+2. **`RunLevelTracker::OnRunLoopEnded` corrupt `this`** (e.g.
+   `x0 = 0xffffffffffffff00` → `ldr x8, [x0, #0xe0]` faults at
+   `0xffffffffffffffe0`). Same family — corrupt `this` from a
+   stale scoped_refptr. Hits the deeper, longer-running renderer
+   thread.
+3. **30s "renderer unresponsive"** Chromium internal timer fires
+   on the deep alive runs because the renderer hasn't sent its
+   "ready" signal in time. May just be QEMU emulation slowness;
+   may also be a missing futex wake somewhere.
+
+### Recommendations for next session
+
+The PA corruption is the real blocker. Two productive paths:
+
+1. **Trace `frame::alloc_frame` invocations.** Log every (PA, VA)
+   pair returned to PA via demand_page. If we ever see a PA
+   re-allocated to a different VA without zero — or two VAs
+   pointing at the same PA — that's the bug. Useful tooling: an
+   `static FRAME_HISTORY: [(PA, VA, time); 4096]` ring buffer in
+   `frame.rs` that the kernel can dump on a fault.
+2. **Look at how V8's CodeRange interacts with our REDIRECT
+   path.** STUMP #38 mentions REDIRECT puts trusted heap inside
+   sandbox cage region. If PA's freelist for the V8 region uses
+   tagged pointers that overlap with another region, stale entries
+   can survive. Worth auditing `register_reservation` in
+   `demand_page.rs` for overlap.
+
+The `--dump-dom file:///bin/hello.html` is genuinely close. The
+cave runs the entire Chromium init, opens the file, starts the
+renderer, hits Blink DOM construction — then dies in a PA
+corruption that's been the ceiling for 3 distinct stumps (#46,
+#48, #50-attempt). Cracking PA properly should be worth several
+ceiling-removals at once.
+
+---
+
 ## 2026-04-28 21:00 — Mac — 🎯 STUMP #49: idempotent close (return 0 on EBADF). Eliminates ScopedFD FATAL CHECK + V8 process_oom. 3/5 alive at timeout.
 
 **Commit `50cc67b9`** — `sys_close` now returns 0 instead of EBADF
