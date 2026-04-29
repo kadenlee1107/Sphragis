@@ -2884,7 +2884,28 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             core::sync::atomic::AtomicUsize::new(LOW_REDIRECT_BASE);
         let hint_in_range = (addr as u64) < VA_LIMIT
             && ((addr as u64).saturating_add(len as u64)) <= VA_LIMIT;
-        let reserved = if addr != 0 && hint_in_range {
+        // 🎯 STUMP #54: hints are honored ONLY if `len`-aligned. PA's
+        // `PartitionAddressSpace::Init` calls
+        // `AllocPages(N GiB, N GiB-align, kInaccessible)` and uses
+        // `(address & ~(N - 1)) == pool_base` for IsInPool checks.
+        // The hint PA passes (from `GetRandomPageBase()`) is N-aligned
+        // most of the time, but there's a code path (e.g. configurable
+        // pool init) that produces a non-aligned hint. Pre-#54 we
+        // returned the hint unchanged; PA's BRP mask test silently
+        // failed for every legit pool pointer, BRP never activated,
+        // and UAFs propagated to dangling-`this` faults in
+        // `RefCountedBase::AddRefImpl` / `OnRunLoopEnded` /
+        // `WorkQueueSets::OnPopMinQueueInSet`.
+        //
+        // For len that's a power of two, "len-aligned" is
+        // `(addr & (len - 1)) == 0`. PA always requests power-of-two
+        // pool sizes (16/32 GiB), so this check is correct. If the
+        // hint is misaligned, fall through to the bumped-cursor
+        // REDIRECT path which #52 ensures is properly aligned.
+        let hint_is_aligned = len > 0
+            && len.is_power_of_two()
+            && (addr & (len - 1)) == 0;
+        let reserved = if addr != 0 && hint_in_range && hint_is_aligned {
             addr
         } else {
             // Bump-allocate inside the 39-bit window. Align len up to
@@ -2959,6 +2980,19 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         for shift in (0..16).rev() {
             uart::putc(hex[((reserved >> (shift * 4)) & 0xF) as usize]);
         }
+        // 🎯 STUMP #54-prep: log prot + alignment for PA-pool detection.
+        // PROT_NONE huge reservations are almost certainly PA's pool
+        // init (it calls mmap(PROT_NONE) for the regular+BRP glued
+        // pool, then uses MAP_FIXED to carve SuperPages). If the
+        // returned base isn't aligned to len (which for PA's pools
+        // is power-of-2 = pool size = 32 GiB for glued, 16 GiB for
+        // a single pool), BRP's mask-test for "is this address in
+        // BRP pool" will silently fail and UAFs propagate.
+        uart::puts(" prot=0x");
+        uart::putc(hex[((_prot >> 4) & 0xF) as usize]);
+        uart::putc(hex[(_prot & 0xF) as usize]);
+        let aligned_to_len = (reserved & (len - 1)) == 0 && len > 0;
+        uart::puts(if aligned_to_len { " ALIGNED" } else { " *MISALIGNED*" });
         uart::puts("\n");
 
         // Tell the demand-page handler to lazily back 4 KB pages in this
