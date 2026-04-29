@@ -1709,6 +1709,65 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // BL opcode top 6 bits = 100101.
                     let is_bl = (prev_instr >> 26) == 0b100101;
 
+                    // 🎯 STUMP #48: detect compiler "unreachable guard"
+                    // sequences `b X; brk #0; hlt #0`. clang emits this
+                    // after an unconditional branch that the optimiser
+                    // proved would always be taken — the brk+hlt is dead
+                    // code that should NEVER execute. If the cave gets
+                    // here, it's via a corrupt funcptr (e.g. an
+                    // uninitialised vtable slot in a Blink struct that
+                    // happens to point at the brk address). The
+                    // existing brk-skip "rescues" by resuming at LR,
+                    // but LR is the BLR's return address — execution
+                    // loops back into the caller's struct, dispatches
+                    // through the corrupt funcptr again, and we BRK
+                    // again. STUMP #42 catches the resulting livelock
+                    // after 32 iterations and terminates the cave;
+                    // detecting the guard pattern up front saves the
+                    // 32 wasted skips and gives a cleaner termination.
+                    let next_instr_addr = elr.wrapping_add(4);
+                    let next_is_hlt = if crate::batcave::linux::uaccess::is_user_range(
+                        next_instr_addr as usize, 4)
+                    {
+                        let ni: u32 = unsafe {
+                            core::ptr::read_volatile(next_instr_addr as *const u32)
+                        };
+                        // HLT #imm16 opcode: 0xD4400000 with imm16 in
+                        // bits[20:5]. We check the fixed bits.
+                        (ni & 0xFFE0001F) == 0xD4400000
+                    } else { false };
+                    let is_unreachable_guard = is_uncond_branch && next_is_hlt;
+                    if is_unreachable_guard {
+                        // The cave reached this brk via a corrupt
+                        // funcptr (BLR to bad address that happened
+                        // to land on the guard). Pre-#48 the brk-skip
+                        // path below "rescued" by resuming at LR, but
+                        // the caller would re-dispatch through the
+                        // same corrupt funcptr → BRK → loop until #42
+                        // livelock terminator after 32 iterations.
+                        //
+                        // Per Agent A's directive (skips cause
+                        // downstream corruption), the right move is
+                        // to TERMINATE at the genuine fault site
+                        // instead of trying to rescue. Compiler-emit
+                        // `b X; brk; hlt` is a hard "this code is
+                        // unreachable" — if we get here, something
+                        // upstream is genuinely broken, and pretending
+                        // otherwise just amplifies the corruption.
+                        // Saves the 32 wasted iterations + livelock
+                        // dance and gives a clean kill.
+                        uart::puts("[brk-skip] UNREACHABLE-GUARD elr=0x");
+                        let hex = b"0123456789abcdef";
+                        for sh in (0..16).rev() {
+                            uart::putc(hex[((elr >> (sh * 4)) & 0xF) as usize]);
+                        }
+                        uart::puts(" — corrupt funcptr; terminating cave\n");
+                        crate::batcave::linux::signal::terminate_cave_fatal_with_lr(
+                            crate::batcave::linux::signal::SIGSEGV,
+                            elr, lr_now,
+                        );
+                    }
+
                     if is_uncond_branch && lr_now > 0x1000 {
                         // 🎯 STUMP #42: detect brk-skip livelock. If
                         // we keep skipping the same (elr, lr) pair, we're
