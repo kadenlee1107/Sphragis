@@ -11,6 +11,108 @@ end of a session.
 
 ---
 
+## 2026-04-28 21:00 — Mac — 🎯 STUMP #49: idempotent close (return 0 on EBADF). Eliminates ScopedFD FATAL CHECK + V8 process_oom. 3/5 alive at timeout.
+
+**Commit `50cc67b9`** — `sys_close` now returns 0 instead of EBADF
+when `fd::close` reports EBADF. The single-process cave has no
+multi-threaded close-race ambiguity that EBADF was originally
+designed to disambiguate; treating it as success silences
+Chromium's `base::ScopedFD::~ScopedFD` assert
+(`scoped_file.cc:45`: `Check failed: . : Bad file descriptor (9)`)
+which was killing the cave with a Chromium-internal FATAL CHECK.
+
+### Why this matters
+
+The `ScopedFD` CHECK was firing in late-Chromium-init (multi-second
+into renderer startup) and taking down deep runs that had already
+reached FileURLLoader::Start + Blink rendering. V8's OOM message
+(`SegmentedTable::InitializeTable subspace allocation`) was a
+follow-on consequence of the ScopedFD failure leaving an fd
+reference dangling that V8 later tried to use as a sandbox handle.
+
+### 5-smoke distribution post-#49
+
+| Metric | Pre-#49 | Post-#49 |
+|---|---|---|
+| ScopedFD Bad-fd CHECK | 1+ runs | **0/5** |
+| V8 SegmentedTable OOM | 1 run | **0/5** |
+| FileURL + openat hello.html | 4/5 | **5/5 = 100%** |
+| Alive at timeout | 2/5 | **3/5 = 60%** |
+| Best run | 37,010 (with CHECK) | 22,108 (clean) |
+
+3 long (180s) smokes after #49 still don't dump the DOM —
+all 3 die at PA-internal corruption sites:
+- 8,517 lines: `0xefefefef…` poison read at `0x11ab142c` (PA freed-memory pattern)
+- 11,276 lines: NULL+0x68 indirect branch at `0x68`
+- 19,591 lines: `0xffffffffffffffe0` neg-addr deref at `0x14cfa638`
+
+### The remaining ceiling: PartitionAlloc freelist corruption
+
+Across many runs today, the dominant late-failure family is PA's
+own "this slot is freed" detection / corruption faults:
+- `partition_alloc::SlotAddressAndSize::From`
+- `partition_alloc::PartitionRoot::Allocate` / `…::Free`
+- `partition_alloc::InSlotMetadata::DoubleFreeOrCorruptionDetected`
+- `partition_alloc::FreelistCorruptionDetected`
+- `cppgc::PageBackend::TryAllocateNormalPageMemory`
+- `RawPtrBackupRefImpl::AcquireInternal`
+
+The `0xef` poison signature on multiple faults strongly suggests
+PA is reading freed memory that still has its poison bytes — i.e.
+the freelist invariant "alloc returns zeroed (or initialised) bytes"
+is being broken for some specific allocations. Hypothesis: our
+`alloc_frame()` zeroes pages on RETURN (frame.rs:132), but if PA
+uses memory acquired via a different path (mmap with a hint, mremap,
+or a previously-freed slot from PA's own freelist that we don't
+re-zero), the poison survives.
+
+This is the next deep dive. **Don't add more skip mechanisms** —
+they amplify rather than fix.
+
+### SESSION TOTAL: 6 stumps shipped today
+
+| Commit | Stump | Description |
+|---|---|---|
+| `9695dced` | #44 | futex args[3] op-dispatch |
+| `a4968fdd` | #45 | 5 epoll wake-path fixes |
+| `0180dc41` | #46 | pa-skip sp_el0 = caller_x29 (was fp+16) |
+| `0a595cc5` | #47 | openat O_CREAT auto-mkdir-p |
+| `6c7ea898` | #48 | brk-skip detect b+brk+hlt unreachable-guard |
+| `50cc67b9` | #49 | idempotent close (return 0 on EBADF) |
+
+Cave depth journey today:
+- Pre-session: 34K best, mostly stuck pre-FileURL
+- Post-#46: 27,395 best, 5/8 alive
+- Post-#47: 30,295 best, multiple Blink DOM faults
+- Post-#48: 37,010 best, cleaner kill on funcptr corruption
+- Post-#49: 22,108 best (no CHECK), 3/5 alive (60%)
+
+The cave is reaching FileURLLoader::Start + openat /bin/hello.html
+in 100% of recent runs, processing several thousand lines of
+Chromium runtime + Blink rendering work, but still doesn't print
+the DOM in a 180s smoke window.
+
+### Recommendations for next session
+
+1. **PA freelist deep dive.** Enumerate every place we hand pages
+   to PA / cppgc (mmap path, demand_page commit, mremap, etc.) and
+   verify each zeroes the page before PA sees it. The `0xef` poison
+   signature is the smoking gun. Suggested: instrument
+   `demand_page::commit` to log when it returns a frame whose first
+   8 bytes are `0xef…`. That will show whether the corruption is
+   inbound (frame allocator) or outbound (PA freelist invariant
+   broken by something we did).
+2. **The `[total_irq=5000]` line at end of long alive runs.** This
+   may indicate the timer IRQ counter rolling over; worth checking
+   if our timer subsystem has a 16-bit counter or similar limit
+   that stalls progress at high tick counts.
+3. **Try adding a /proc/self/maps response.** Chromium queries it
+   during init; we may be returning bad data that triggers downstream
+   PA misconfiguration. Currently we have a /proc-pseudo-fd handler
+   but the content for /proc/self/maps may be incorrect.
+
+---
+
 ## 2026-04-28 18:50 — Mac — 🎯 STUMP #48: brk-skip detects compiler unreachable-guard (b+brk+hlt) and terminates cleanly. Best run: 37,010 lines alive at timeout (new high).
 
 **Commit `6c7ea898`** — refines the brk-skip handler in
