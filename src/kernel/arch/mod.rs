@@ -3290,6 +3290,45 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             (*frame).x[30] = found_lr;
                             core::arch::asm!("msr sp_el0, {a}",
                                 a = in(reg) caller_x29);
+                            // 🎯 STUMP #55: zero callee-saved regs
+                            // (x19-x28) on pa-skip resume. The inner
+                            // function we BRK-skipped never ran its
+                            // epilogue, so x19-x28 in register hold
+                            // INNER's clobbered values, not the
+                            // resumed function's expected values.
+                            // Symptom: x19 in `Run()` after pa-skip
+                            // = 0xffffffffffffff00 (an inner-function
+                            // sentinel sign-extended), then x0 =
+                            // x19+0x20 = 0xffffff00 → OnRunLoopEnded
+                            // faults at FAR=0xffffff00+0xe0=0xffe0.
+                            //
+                            // Zeroing makes any deref of these regs
+                            // a clean NULL-fault rather than a
+                            // confused dangling-pointer crash. If the
+                            // resumed function uses x19 as a saved
+                            // `this`, NULL-deref kills the cave fast
+                            // — which is BETTER than letting the
+                            // corruption propagate through more
+                            // function calls. (Restoring the actual
+                            // saved values requires per-function
+                            // prologue parsing; skip for now.)
+                            //
+                            // Zero callee-saved AND scratch regs.
+                            // The inner function clobbered both;
+                            // x[0..7] hold its garbage return values
+                            // and arg shuffle, x[8..15] are scratch
+                            // and x[19..28] are saved-but-not-restored.
+                            // Skip x[0] if scratch substitution is
+                            // active (synthesizes a NULL Alloc result
+                            // → caller takes fallback branch).
+                            let preserve_x0 =
+                                (is_alloc_fault || is_chrome_text_null_deref)
+                                && pa_skip_scratch_uva() != 0;
+                            for i in 0..=28 {
+                                if i == 0 && preserve_x0 { continue; }
+                                if i == 29 || i == 30 { continue; } // already set
+                                (*frame).x[i] = 0;
+                            }
                         }
                         let n = PA_DATA_SKIP_TOTAL.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                         if n < 10 || (n & 0xFF) == 0 {
