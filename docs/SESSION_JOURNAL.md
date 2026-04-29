@@ -11,6 +11,129 @@ end of a session.
 
 ---
 
+## 2026-04-29 14:30 — Mac — 🎯 STUMPS #52 + #53: PA pool alignment + is_user_writable accepts reservations. Deepest 34,697 lines alive, but DOM still not printing. 9 stumps shipped today (#44-#53, #50 reverted).
+
+### What landed
+
+**`ad10c28f` STUMP #52** — REDIRECT base now aligns to
+`aligned_len`. PA's `PartitionAddressSpace::Init` calls
+`AllocPages(32 GiB size, 32 GiB alignment, kInaccessible)` for the
+glued regular+BRP pool, and uses `(address & ~(core_pool_size-1))
+== brp_pool_base` for "is this address in BRP pool" checks. If our
+cave's REDIRECT cursor wasn't `aligned_len`-aligned when PA's hint
+fell through (3-attempt exact-size retries fail), PA got a 4 GiB-
+aligned base where it needed 32 GiB-aligned. Mask test fails →
+BRP never activates → UAFs go undetected.
+
+**`20c5a7f0` STUMP #53** — `is_user_writable` accepts pages in
+active demand-page reservations. Pre-#53 a freshly-allocated
+pthread stack page (not yet committed) failed the "valid L3 + AP=01"
+check, so prlimit64 returned EFAULT for `&rlim` on a thread stack
+→ Chromium's `base::GetMaxFds()` logged `Failed to get file
+descriptor limit: Bad address (14)` and downstream code used a
+broken rlim, which broke fork-cleanup loops + fcntl fd checks.
+Fix: treat reservation-mapped pages as writable, since the next
+access lazily commits with EL0 R/W via `USER_PAGE_FLAGS`.
+
+### Tooling improvement
+
+User pointed out I should run things myself instead of asking.
+Sparse-cloned `chromium/src` at `~/chromium-src` covering
+`base/allocator/partition_allocator/`, `base/memory/`,
+`base/files/`, `base/task/sequence_manager/`, `base/run_loop.{cc,h}`.
+`base/allocator/...` alone is what unlocked #51/#52/#53 — reading
+PA's `DecommitAndZeroSystemPagesInternal`, `PartitionAddressSpace::
+Init`, and `RawPtrBackupRefImpl::AcquireInternal` directly.
+
+### Distribution state (post-#53, multiple 5-smoke batches)
+
+| Metric | Best observed |
+|---|---|
+| FileURLLoader::Start | 5/5 → 8/8 (100%) |
+| Reach openat /bin/hello.html | 100% |
+| Alive at 90s timeout | typically 3/5–4/8 |
+| Deepest single ALIVE run | 34,528–36,093 lines |
+| ScopedFD CHECK | 0 since #49 |
+| OnEpollEvent NULL+0x1c | 0 since #46 |
+| V8 SegmentedTable OOM | rare since #51 |
+
+### Remaining ceiling: PA UAF detection
+
+Across hours of smokes, the dominant late-failure pattern is
+corrupt-`this`/dangling-pointer derefs in:
+- `RefCountedBase::AddRefImpl` (FAR=0x1, FAR=0x7fff…ffff)
+- `RunLevelTracker::OnRunLoopEnded` (x0=0xffffffffffffff00,
+  FAR=0xffffffffffffffe0) — looks like `(int32_t)~0xff` sign-
+  extended to int64
+- `WorkQueueSets::OnPopMinQueueInSet` (instr-fetch fault on
+  corrupt funcptr)
+- `partition_alloc::SlotAddressAndSize::From` (FAR=0xfffff…03e —
+  `0xef` PA poison shifted)
+
+All are downstream of PA's BRP-protection-not-activating: PA's
+`raw_ptr<T>` should intercept these reads and return NULL via
+backup-ref-impl, but `IsManagedByPartitionAllocBRPPool(addr)` is
+returning false somewhere — possibly because `addr` has bits set
+that don't match PA's pool mask (TBI top byte? V8 pointer-
+compression bits?), or because the pool itself wasn't initialized
+in a way our cave preserves.
+
+### Cumulative session tally
+
+| Commit | Stump | Description |
+|---|---|---|
+| `9695dced` | #44 | futex args[3] op-dispatch |
+| `a4968fdd` | #45 | 5 epoll wake-path fixes |
+| `0180dc41` | #46 | pa-skip sp_el0 = caller_x29 |
+| `0a595cc5` | #47 | openat O_CREAT auto-mkdir-p |
+| `6c7ea898` | #48 | brk-skip detect b+brk+hlt unreachable-guard |
+| `50cc67b9` | #49 | idempotent close (return 0 on EBADF) |
+| `00207738` | #50 | reverted (madvise zero, wrong place) |
+| `350008ab` | #51 | anonymous MAP_FIXED zeros pages (AP-gated) |
+| `ad10c28f` | #52 | REDIRECT base-aligns to aligned_len |
+| `20c5a7f0` | #53 | is_user_writable accepts active reservations |
+
+Cave depth journey:
+- Pre-session: 34K best, mostly stuck pre-FileURL.
+- Post-#46: 27K best, 5/8 alive.
+- Post-#47: 30K best, multiple Blink DOM faults.
+- Post-#48: 37K best (with broken-build artefact).
+- Post-#49: 22K best (clean), 3/5 alive.
+- Post-#51: 36K best, only 1 skip event in deep run.
+- Post-#53: 34,697 best, 100% reach FileURL+openat hello.html.
+
+### Recommendations for next session
+
+The DOM is *still* one focused stump away. Three concrete attack
+paths in priority order:
+
+1. **Trace BRP activation.** Add a kernel trace that fires when
+   PA's `IsManagedByPartitionAllocBRPPool(addr)` would be called
+   on a cave-allocated pointer. Compare against `brp_pool_base_address_`
+   value from PA's init. If they mismatch, the alignment fix in
+   #52 either didn't fire (PA's hint was honored at a non-aligned
+   address) or didn't propagate. Useful: `~/chromium-src/base/
+   allocator/partition_allocator/src/partition_alloc/partition_address_space.h`
+   line 234 (`IsInBRPPool`).
+2. **Look at TBI interaction.** TCR.TBI0=1 strips top byte for
+   translation. PA's mask test compares full 64-bit. If raw_ptr
+   stores a pointer with non-zero top byte (Chromium uses this
+   for sub-class tagging in some code paths), PA's `IsInBRPPool`
+   does `(0xab_xxxxxxxx & mask) == base` and fails because
+   `0xab_xxxx` doesn't match the actual pool base. Fix at PA-side
+   would be `address & 0x00FFFFFFFFFFFFFF` before mask test.
+3. **Real M4 hardware.** All the deep-alive runs sit in the
+   "renderer unresponsive" Chromium 30s timer with multiple
+   threads making real progress. QEMU-emulated M4 is genuinely
+   slow. m1n1 chainload should give ~10× speedup, possibly enough
+   to finish DOM dump in a real-time-bounded run.
+
+The DOM print feels like one well-placed stump away. Trace
+infrastructure for the BRP-activation question is probably the
+fastest path to confirming the actual root cause.
+
+---
+
 ## 2026-04-29 02:30 — Mac — 🎯 STUMP #51: anonymous MAP_FIXED zeros pages (gated on AP[2]=0). Deepest run 36,093 lines alive, only 1 skip event. 7 stumps total.
 
 **Commit `350008ab`** — anonymous MAP_FIXED now walks the cave's
