@@ -11,6 +11,100 @@ end of a session.
 
 ---
 
+## 2026-04-28 18:50 — Mac — 🎯 STUMP #48: brk-skip detects compiler unreachable-guard (b+brk+hlt) and terminates cleanly. Best run: 37,010 lines alive at timeout (new high).
+
+**Commit `6c7ea898`** — refines the brk-skip handler in
+`src/kernel/arch/mod.rs` to recognize the compiler's
+`b X; brk #0; hlt #0` unreachable-guard sequence and terminate the
+cave at the genuine fault site instead of "rescuing" into a
+livelock-and-die.
+
+### Why
+
+When a corrupt funcptr (uninitialised vtable slot) sends the cave
+to a brk address via BLR, the existing brk-skip "rescues" by
+resuming at LR — but LR is the BLR's return address, so execution
+loops back into the caller's struct, re-dispatches through the same
+corrupt funcptr, BRK again. STUMP #42's livelock guard catches it
+after 32 iterations and kills the cave.
+
+Detection: if `prev_instr` (at `elr-4`) is unconditional B AND
+`next_instr` (at `elr+4`) is HLT (`0xD440xxxx` masked to fixed
+bits), this is clang's compiler-emitted unreachable guard. Don't
+try to skip — terminate immediately. Saves 32 wasted iterations and
+points the next investigator at the real fault site.
+
+Found while diagnosing the brk-skip livelock at
+`blink::ContainerNode::NotifyNodeInsertedInternal` (file VMA
+0x7e91908): the cave reaches there via `[x8, #0x1f0]; blr x8`
+where `[x8 + 0x1f0]` is corrupt.
+
+### Distribution post-#48 (6 runs)
+
+| Outcome | Count | Notes |
+|---|---|---|
+| Alive at timeout | 2/6 | Best 37,010 lines (new high) |
+| Died at PA / cppgc | 4/6 | Various early-init faults |
+
+The ALIVE deep runs show the cave doing real work post-FileURLLoader
+— low [dp] commit counts (13 in the 37K run vs 132K-230K in earlier
+deep runs), threads in normal Runnable/FutexWait mix. The cave is
+processing the DOM but not finishing the dump in 90s.
+
+### Remaining ceilings
+
+The early-death runs all hit PA-allocator code paths:
+- `cppgc::internal::MakeGarbageCollectedTraitInternal::Allocate`
+- `cppgc::internal::PageBackend::TryAllocateNormalPageMemory`
+- `partition_alloc::SlotAddressAndSize::From`
+- `base::internal::RawPtrBackupRefImpl::AcquireInternal`
+- `blink::DOMWrapperWorld::Create`
+
+These are all NULL/bad-pointer derefs in PA / cppgc. They're the
+same family as the Rehash double-free that #46 indirectly addressed,
+just at different call sites. Likely cause: PA's freelist invariants
+are violated by something we do during memory operations (mmap?
+demand-page? page-table walk?). Fixing them needs a focused PA
+investigation, not more skip mechanisms.
+
+### Cumulative this session (commits in chronological order)
+
+| Commit | Stump | Description |
+|---|---|---|
+| `9695dced` | #44 | futex args[3] op-dispatch |
+| `a4968fdd` | #45 | 5 epoll wake-path fixes |
+| `0180dc41` | #46 | pa-skip sp_el0 = caller_x29 (was fp+16) |
+| `0a595cc5` | #47 | openat O_CREAT auto-mkdir-p |
+| `6c7ea898` | #48 | brk-skip detect b+brk+hlt unreachable-guard |
+
+Cave depth journey today:
+- Pre-session: 34K-line best, mostly stuck pre-FileURL
+- Post-#46: 27,395 best, 5/8 alive
+- Post-#47: 30,295 best, multiple Blink DOM faults
+- Post-#48: 37,010 best, cleaner kill on funcptr corruption
+
+### Recommendations for next Claude
+
+1. **Investigate the PA early-death cluster.** The faults in
+   `cppgc::Allocate` / `PageBackend::TryAllocateNormalPageMemory` /
+   `partition_alloc::SlotAddressAndSize::From` likely share a
+   common cause. Suggested approach: write a kernel-side trace
+   that logs every alloc_frame() result + every demand_page::commit
+   so we can see whether PA sees the same VA mapped to different PAs
+   over time.
+2. **Investigate why deep-alive runs don't finish the DOM in 90s.**
+   The 37K run has stable thread state but Chromium isn't outputting
+   the dumped DOM. Either it's still in early init (fewer than 90s
+   isn't enough for Chromium's full startup on QEMU-emulated M4),
+   OR there's a missing wake somewhere that prevents the FINAL
+   "DOM ready → write to stdout" callback from firing. Try a
+   180s smoke and see if any run manages to print the DOM.
+3. **The prlimit64 EFAULT, the ENOTSOCK warning, and the
+   Less-than-64MB-of-shm warning are still on the books** — none
+   are blocking but might be easy wins.
+
+---
+
 ## 2026-04-28 18:25 — Mac — 🎯 STUMP #47: openat(O_CREAT) auto-mkdir-p missing parents. Cave now reaches Blink DOM construction (`ContainerNode::AppendChild` → `NotifyNodeInsertedInternal`). New ceiling is Blink-internal recursion livelock.
 
 **Commit `0a595cc5`** — `sys_openat_inner` walks the path left-to-
