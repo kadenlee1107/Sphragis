@@ -807,12 +807,26 @@ fn sys_madvise(args: [u64; 6]) -> i64 {
     if len == 0 { return 0; }
     if advice != MADV_DONTNEED { return 0; }
 
-    // 🎯 STUMP #12 BISECT: temporarily make MADV_DONTNEED a no-op (just
-    // return 0 success). If PartitionAlloc was BRK'ing because madvise
-    // was clearing slot metadata behind PA's back, this lets us prove
-    // it. Real Linux madvise(DONTNEED) zeros pages, but most callers
-    // can tolerate "still has old data" — they only assume the pages
-    // are still committed (they re-allocate before reading).
+    // 🎯 STUMP #50 (re-enables the zeroing path that #12 BISECT
+    // disabled). Real Linux madvise(MADV_DONTNEED) on a private anon
+    // mapping causes future accesses to see fresh ZEROS — the kernel
+    // discards the underlying pages and re-faults them in zeroed.
+    // Chromium's PartitionAlloc relies on this: when PA decommits a
+    // slot via madvise, then re-uses the same VA later, PA assumes
+    // the bytes are zero.
+    //
+    // Pre-#50 we returned 0 (success) without actually zeroing,
+    // leaving PA's prior 0xef freelist-poison bytes intact. PA's
+    // next allocation read the 0xef bytes back, sometimes via an
+    // atomic ldadd/ldset whose target operand was a "freed" pointer
+    // (FAR=0xefefefefefefeff7), and FreelistCorruptionDetected /
+    // RawPtrBackupRefImpl::AcquireInternal would BRK. That was the
+    // dominant late-failure family in the post-#49 distribution.
+    //
+    // Re-enabled below: walk the cave's L1/L2/L3, zero every
+    // committed L3 page in [addr, addr+len), then dc civac to PoC
+    // so PA's subsequent reads from the same VA see zeros (not
+    // stale cache lines from PA's poison stores).
     static MADVISE_TRACE: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(0);
     let n = MADVISE_TRACE.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -828,10 +842,7 @@ fn sys_madvise(args: [u64; 6]) -> i64 {
         crate::kernel::mm::print_num(len);
         uart::puts("\n");
     }
-    return 0;
 
-    // (UNREACHABLE — left intact for re-enable after bisect)
-    #[allow(unreachable_code)]
     // Page-align bounds.
     let start = addr & !0xFFFusize;
     let end_raw = match addr.checked_add(len) {
@@ -877,7 +888,12 @@ fn sys_madvise(args: [u64; 6]) -> i64 {
             core::ptr::read_volatile((l3_phys + l3_idx * 8) as *const u64)
         };
         if (l3e & 0b11) == 0b11 {
-            // Page is committed — zero it via the user VA.
+            // Page is committed — zero it via the user VA, then flush
+            // cache lines to PoC so a subsequent read from this same
+            // VA returns zero (not the cache copy of the poison bytes
+            // PA wrote before calling madvise). Without the dc civac,
+            // PA's read after madvise sometimes saw 0xef from L1d
+            // and tripped FreelistCorruptionDetected.
             unsafe {
                 let mut p = va;
                 let page_end = va + 4096;
@@ -885,10 +901,18 @@ fn sys_madvise(args: [u64; 6]) -> i64 {
                     core::ptr::write_volatile(p as *mut u64, 0);
                     p += 8;
                 }
+                // Flush the page's cache lines.
+                let mut line = va as u64;
+                let end_line = line + 4096;
+                while line < end_line {
+                    core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                    line += 64;
+                }
             }
         }
         va += 4096;
     }
+    unsafe { core::arch::asm!("dsb sy"); }
     0
 }
 
