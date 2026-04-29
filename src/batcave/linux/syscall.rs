@@ -2062,6 +2062,23 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
         Err(_) => {
             // O_CREAT: create the file
             if flags & fd::O_CREAT != 0 {
+                // 🎯 STUMP #47: real Chromium expects its profile dirs
+                // (/tmp/.config/content_shell/{Local Storage,Shared
+                // Dictionary,shared_proto_db,...}/) to be pre-created
+                // by the installer. Our cave starts with only a few
+                // top-level dirs (/tmp, /etc, /bin, /proc, ...) — every
+                // openat(O_CREAT) for a Chromium DB file failed because
+                // resolve_parent couldn't find the (non-existent)
+                // intermediate dirs, and Chromium's LevelDB then spun
+                // in a 200+ retry loop trying to open `metadata/CURRENT`
+                // (read-only, no O_CREAT, so our O_CREAT branch was a
+                // dead end). Now: when O_CREAT is set and the parent
+                // chain doesn't exist yet, mkdir-p the parents on the
+                // fly. Mirrors what `base::CreateDirectory()` would
+                // have done if Chromium had bothered to call it before
+                // the open — which it doesn't, on platforms where the
+                // installer pre-creates these dirs.
+                ensure_parent_dirs(path);
                 match vfs::resolve_parent(path) {
                     Ok((parent, name)) => {
                         match vfs::create_node(parent, name, vfs::NodeType::File, 0o100644) {
@@ -2080,6 +2097,46 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
                 ENOENT
             }
         }
+    }
+}
+
+/// 🎯 STUMP #47 helper: walk `path` left-to-right and create each
+/// missing intermediate directory. Stops at the LAST `/` (so the basename
+/// — which the caller will create as a file — is not touched). Best-
+/// effort: silently swallows create errors (a competing thread or an
+/// already-existing slot is fine).
+fn ensure_parent_dirs(path: &[u8]) {
+    if path.is_empty() { return; }
+    // Find the last '/' — everything to its left is parent path.
+    let mut last_slash: Option<usize> = None;
+    for i in (0..path.len()).rev() {
+        if path[i] == b'/' { last_slash = Some(i); break; }
+    }
+    let parent_end = match last_slash {
+        Some(p) => p,
+        None    => return, // basename only → no parents to create
+    };
+    if parent_end == 0 { return; } // root; can't create
+
+    // Walk components left-to-right, ensuring each prefix exists.
+    let mut start = if path[0] == b'/' { 1 } else { 0 };
+    while start < parent_end {
+        let mut end = start;
+        while end < parent_end && path[end] != b'/' { end += 1; }
+        if end > start {
+            // Try to look up the prefix `path[..end]`.
+            if vfs::resolve_path(&path[..end]).is_err() {
+                // Missing — create the component under its own parent.
+                if let Ok((p_idx, name)) = vfs::resolve_parent(&path[..end]) {
+                    let _ = vfs::create_node(
+                        p_idx, name,
+                        vfs::NodeType::Directory,
+                        0o40755,
+                    );
+                }
+            }
+        }
+        start = end + 1;
     }
 }
 
