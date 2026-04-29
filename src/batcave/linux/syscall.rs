@@ -2732,6 +2732,86 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                 }
             }
         }
+        // 🎯 STUMP #51: anonymous MAP_FIXED must return ZERO pages.
+        // PA's `DecommitAndZeroSystemPages` is implemented as
+        //   madvise(addr, len, MADV_DONTNEED);
+        //   mmap(addr, len, PROT_NONE, MAP_FIXED|MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
+        // and assumes the MAP_FIXED step makes future accesses see
+        // ZERO (per POSIX: MAP_FIXED removes prior mappings, so the
+        // next fault re-maps fresh zero pages). Confirmed against
+        // chromium/.../page_allocator_internals_posix.h. Pre-#51 we
+        // returned `addr` without touching pages, so PA's reads saw
+        // its own 0xef freelist poison and tripped
+        // FreelistCorruptionDetected / RawPtrBackupRefImpl::AcquireInternal.
+        //
+        // Zeros via the user VA only when the L3 entry's AP[2] = 0
+        // (writable from EL1). Skipping non-writable pages avoids
+        // the ld-linux-BSS regression where a v1 of #51 tried to zero
+        // pages that were RO from EL1 (DFSC=0x0F permission fault
+        // inside the kernel).
+        if fd_num < 0 {
+            let start = addr & !0xFFFusize;
+            let end_raw = match addr.checked_add(len) {
+                Some(v) => v,
+                None => return -(22i64),
+            };
+            let end = (end_raw + 0xFFF) & !0xFFFusize;
+            let ttbr0: u64;
+            unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
+            let l1_phys = ttbr0 & !1u64;
+            let _g = crate::kernel::sync::IrqGuard::new();
+            let mut va = start;
+            while va < end {
+                let l1_idx = ((va >> 30) & 0x1FF) as u64;
+                let l1e: u64 = unsafe {
+                    core::ptr::read_volatile((l1_phys + l1_idx * 8) as *const u64)
+                };
+                if (l1e & 0b11) != 0b11 {
+                    let next_l1 = ((va >> 30) + 1) << 30;
+                    va = next_l1;
+                    continue;
+                }
+                let l2_phys = l1e & 0x0000_FFFF_FFFF_F000;
+                let l2_idx = ((va >> 21) & 0x1FF) as u64;
+                let l2e: u64 = unsafe {
+                    core::ptr::read_volatile((l2_phys + l2_idx * 8) as *const u64)
+                };
+                if (l2e & 0b11) != 0b11 {
+                    // L2 BLOCK (cave's identity-mapped main window)
+                    // or invalid — skip the entire 2 MB.
+                    let next_l2 = ((va >> 21) + 1) << 21;
+                    va = next_l2;
+                    continue;
+                }
+                let l3_phys = l2e & 0x0000_FFFF_FFFF_F000;
+                let l3_idx = ((va >> 12) & 0x1FF) as u64;
+                let l3e: u64 = unsafe {
+                    core::ptr::read_volatile((l3_phys + l3_idx * 8) as *const u64)
+                };
+                // L3e bit[1:0] = 0b11 → page valid.
+                // AP[2] @ bit 7: 0 = R/W from EL1, 1 = R/O from EL1.
+                let valid    = (l3e & 0b11) == 0b11;
+                let writable = (l3e >> 7) & 1 == 0;
+                if valid && writable {
+                    unsafe {
+                        let mut p = va;
+                        let page_end = va + 4096;
+                        while p + 8 <= page_end {
+                            core::ptr::write_volatile(p as *mut u64, 0);
+                            p += 8;
+                        }
+                        let mut line = va as u64;
+                        let line_end = line + 4096;
+                        while line < line_end {
+                            core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                            line += 64;
+                        }
+                    }
+                }
+                va += 4096;
+            }
+            unsafe { core::arch::asm!("dsb sy"); }
+        }
         return addr as i64;
     }
 
