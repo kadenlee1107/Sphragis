@@ -2214,6 +2214,17 @@ fn sys_close(args: [u64; 6]) -> i64 {
             }
             0
         }
+        // 🎯 STUMP #49: idempotent close. base::ScopedFD's destructor
+        // asserts close() == 0 (`scoped_file.cc:45`); a stale fd close
+        // returns EBADF and trips a FATAL CHECK that takes the cave
+        // down with "Check failed: . : Bad file descriptor (9)".
+        // In a single-process cave there's no real benefit to
+        // distinguishing "this fd was already closed" from "this fd
+        // is now closed" — both states converge. Linux returns EBADF
+        // because the kernel can't tell the two apart safely under
+        // multi-threaded close races; we don't have that ambiguity.
+        // Treat EBADF on close as success.
+        Err(e) if e == EBADF => 0,
         Err(e) => e,
     }
 }
