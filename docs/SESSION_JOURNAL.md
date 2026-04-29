@@ -11,6 +11,104 @@ end of a session.
 
 ---
 
+## 2026-04-28 18:25 — Mac — 🎯 STUMP #47: openat(O_CREAT) auto-mkdir-p missing parents. Cave now reaches Blink DOM construction (`ContainerNode::AppendChild` → `NotifyNodeInsertedInternal`). New ceiling is Blink-internal recursion livelock.
+
+**Commit `0a595cc5`** — `sys_openat_inner` walks the path left-to-
+right and `vfs::create_node` each missing component as a Directory
+before re-attempting the file create when O_CREAT is set.
+
+### Why it was needed
+
+Real Chromium's installer pre-creates `/tmp/.config/content_shell/{
+Local Storage, Shared Dictionary, shared_proto_db, ...}/`. Our cave
+boots with only the top-level dirs (/tmp, /etc, /bin, /proc, ...),
+and Chromium NEVER calls mkdirat at runtime — 0 mkdirat in the entire
+log. So every openat(O_CREAT) for a profile-DB file failed in our
+`vfs::resolve_parent` lookup, returning ENOENT. Worse, Chromium's
+LevelDB then spun in a 200+ retry loop on `metadata/CURRENT` (the
+read-only open with no O_CREAT, so even our O_CREAT branch was a
+dead end), and each retry consumed scheduler cycles, starving the
+renderer thread.
+
+### What changed
+
+Pre-#47 deepest run: 27,395 lines. Cave reached FileURLLoader::Start
++ `openat /bin/hello.html` but then sat in db-shm retry loop +
+demand-page burst, never read hello.html, hit 30s
+"renderer unresponsive".
+
+Post-#47 deepest run: 30,295 lines (alive at timeout). 4-smoke
+distribution showed:
+
+| Run | Lines | Failure site |
+|---|---|---|
+| 181328 | 30,295 | ALIVE at timeout |
+| 181744 | 1,594 | brk-skip livelock at `blink::ContainerNode::NotifyNodeInsertedInternal` |
+| 181937 | 1,009 | NULL+0x28 in `ipcz::Router::AllocateOutboundParcel` |
+| 181955 | 1,415 | fault=0x4160 in `blink::StyleScope::From` (CSS) |
+| 181804 | 17,085 | ALIVE at timeout |
+
+The crashes have moved from kernel-init failures to **Blink rendering
+failures**. The cave is parsing hello.html, processing CSS, building
+DOM nodes — exactly what's supposed to happen.
+
+### The new ceiling: Blink DOM AppendChild livelock
+
+`brk-skip] LIVELOCK at elr=0x17e91908` fires on the
+`NotifyNodeInsertedInternal → AppendChild` recursion. Either:
+- Genuine Blink recursion deeper than STUMP #42's 32-pair guard,
+- Or a corrupted parent pointer creates a true infinite loop.
+
+The fault has FAR=ELR=0x17e91908 — i.e. the cave executed its own
+text address as if it were a new instruction (PC=that_addr fault).
+Suggests `ret` from within NotifyNodeInsertedInternal landed on the
+function's own start address (frame corruption again).
+
+### Other interesting finds
+
+- `Failed to get file descriptor limit: Bad address (14)` at startup
+  — our prlimit64 returns EFAULT for one of Chromium's RLIMIT_NOFILE
+  queries. Doesn't seem to break anything but worth a look.
+- `Unknown error Socket operation on non-socket (88) mapped to
+  net::ERR_FAILED` — net stack got ENOTSOCK. Some net syscall thinks
+  it's working with a socket fd but ours says it isn't.
+- `Less than 64MB of free space in temporary directory for shared
+  memory files: 13` — Chromium thinks /dev/shm is tiny. Cosmetic.
+
+### Recommendations for next session
+
+The renderer is running. To dump the DOM we need either:
+1. **Make the brk-skip livelock guard smarter** — recognize Blink
+   recursion patterns vs genuine corruption. Right now the 32-pair
+   threshold is the same for both. A guard that allows up to N
+   recursive calls in functions matching `blink::*` (or that detects
+   "the FP chain is sane, this IS recursion not corruption") would
+   let DOM construction finish.
+2. **Investigate the CSS/PA failures** as separate bugs — they're
+   probably PA-slot-corruption variants. Each one would need its
+   own fix similar to STUMP #46 / Rehash double-free.
+3. **Inspect the prlimit64 EFAULT** at startup. May not be related,
+   but Chromium logs the error explicitly.
+
+### Cumulative this session
+
+| Commit | Stump | Description |
+|---|---|---|
+| `9695dced` | #44 | futex args[3] op-dispatch |
+| `a4968fdd` | #45 | 5 epoll wake-path fixes |
+| `0180dc41` | #46 | pa-skip sp_el0 = caller_x29 (was fp+16) |
+| `0a595cc5` | #47 | openat O_CREAT auto-mkdir-p |
+
+Cave depth journey today:
+- Pre-session: deepest 34K alive, mostly stuck pre-FileURL.
+- Post-#46: 5/8 alive, deepest 27,395, all reach FileURLLoader::Start.
+- Post-#47: deepest 30,295 alive, multiple runs reach Blink DOM.
+
+We are one or two stumps from `--dump-dom file:///bin/hello.html`
+actually printing `<html><body>Hello from Bat_OS</body></html>`.
+
+---
+
 ## 2026-04-28 16:40 — Mac — 🎯 STUMP #46 cracked: pa-skip's `sp_el0 = fp + 16` was wrong. Resume now sets sp = caller's x29. OnEpollEvent NULL+0x1c eliminated, deepest run 27,395 lines, 5/8 alive at timeout.
 
 **Commit `0180dc41`** — fix the SP arithmetic in both pa-skip handlers
