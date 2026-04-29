@@ -10,6 +10,13 @@ edition = "2024"
 # the ADT parser on real M4 silicon without needing m1n1 installed.
 layer-b-test = []
 
+# Use GICv3 (system registers + redistributor) instead of GICv2 (CPU
+# interface MMIO). Required for HVF acceleration on macOS/Apple Silicon
+# host. Enable with `cargo build --release --features gicv3` and the
+# matching `qemu -machine virt,gic-version=3` (and optionally
+# `--accel hvf -cpu host` for native speed).
+gicv3 = []
+
 [dependencies]
 # ROOT-4 crypto replacement — RustCrypto audited primitives.
 # All no_std-compatible, no heap needed with default-features=false.

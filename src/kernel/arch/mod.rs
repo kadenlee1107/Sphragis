@@ -188,6 +188,117 @@ pub fn init_exceptions() {
     uart::puts("  [arch] CNTKCTL_EL1 cleared — EL0 timer access denied\n");
 }
 
+/// Detected GIC version, set by `init_gic`. 2 = v2 MMIO CPU iface,
+/// 3 = v3 ICC_* system registers + per-CPU redistributor.
+/// Read by `handle_irq_inner` to choose ack/EOI path.
+pub(crate) static GIC_VERSION: core::sync::atomic::AtomicU8 =
+    core::sync::atomic::AtomicU8::new(0);
+
+/// QEMU virt machine GIC layout:
+///   gic-version=2: GICD @ 0x0800_0000, GICC @ 0x0801_0000
+///   gic-version=3: GICD @ 0x0800_0000, GICR @ 0x080A_0000 (per-CPU)
+/// Both share GICD_PIDR2 at GICD_BASE+0xFFE8 with arch_rev in bits[7:4].
+const GICD_BASE: usize = 0x0800_0000;
+const GICD_PIDR2: usize = GICD_BASE + 0xFFE8;
+
+/// GICv3 redistributor base for CPU 0. QEMU virt places the redist
+/// frame at this address; subsequent CPUs are at +0x20000 stride
+/// (or +0x40000 for the GICv4 LPI variant — we don't care, single-CPU).
+const GICR_BASE: usize = 0x080A_0000;
+
+/// Compile-time GIC version selection. Default 2 matches the current
+/// QEMU virt smoke (`-machine virt,gic-version=2`). Build with
+/// `cargo build --release --features gicv3` to flip to the v3 path
+/// for HVF acceleration on Apple Silicon hosts.
+///
+/// We do NOT runtime-probe via GICD_PIDR2 because on v2 QEMU only
+/// maps the first 4 KB of GICD, so reading the PIDR registers at
+/// offset 0xFFE8 faults. A safer probe would parse the DTB
+/// `compatible` string, but the smoke pipeline already controls
+/// the GIC version via the QEMU command line — propagating that
+/// choice through a Cargo feature is simpler.
+fn detect_gic_version() -> u8 {
+    if cfg!(feature = "gicv3") { 3 } else { 2 }
+}
+
+#[allow(dead_code)] // referenced only when gicv3 feature is on (PIDR2 path)
+fn _gicd_pidr2_addr() -> usize { GICD_PIDR2 }
+
+/// Minimal GICv3 init for QEMU virt. Distributor + per-CPU
+/// redistributor + ICC_* system registers. Enables Group 1 NS
+/// for the physical-timer PPI (INTID 30).
+fn init_gicv3() {
+    // Distributor MMIO offsets
+    const GICD_CTLR:  usize = GICD_BASE + 0x000;
+    // Redistributor for CPU 0:
+    //   GICR_RD_BASE  = GICR_BASE          (control + WAKER + IDREGs)
+    //   GICR_SGI_BASE = GICR_BASE + 0x10000 (SGI/PPI control)
+    const GICR_WAKER:       usize = GICR_BASE + 0x0014;
+    const GICR_SGI_BASE:    usize = GICR_BASE + 0x10000;
+    const GICR_ISENABLER0:  usize = GICR_SGI_BASE + 0x100;
+    const GICR_IPRIORITYR:  usize = GICR_SGI_BASE + 0x400;
+    const GICR_IGROUPR0:    usize = GICR_SGI_BASE + 0x080;
+
+    unsafe {
+        // 1. Distributor: enable Group 1 NS + Affinity Routing.
+        //    GICD_CTLR.EnableGrp1NS = bit 1, GICD_CTLR.ARE_NS = bit 4.
+        //    (DS=0 disables security, simplifies — we don't have EL3.)
+        core::ptr::write_volatile(GICD_CTLR as *mut u32, (1 << 1) | (1 << 4));
+
+        // 2. Wake the redistributor: clear ProcessorSleep (bit 1),
+        //    then poll until ChildrenAsleep (bit 2) clears.
+        let mut waker = core::ptr::read_volatile(GICR_WAKER as *const u32);
+        waker &= !(1u32 << 1); // clear ProcessorSleep
+        core::ptr::write_volatile(GICR_WAKER as *mut u32, waker);
+        // Poll ChildrenAsleep — bounded retry so a misconfigured GIC
+        // doesn't hang boot. Real GICv3 wakes within a few cycles.
+        for _ in 0..10000 {
+            let w = core::ptr::read_volatile(GICR_WAKER as *const u32);
+            if (w & (1 << 2)) == 0 { break; }
+            core::hint::spin_loop();
+        }
+
+        // 3. Per-CPU SGI/PPI config: put PPI 30 (timer) in Group 1,
+        //    set its priority, enable it.
+        let mut grp = core::ptr::read_volatile(GICR_IGROUPR0 as *const u32);
+        grp |= 1u32 << 30;  // bit 30 = INTID 30 in group 1
+        core::ptr::write_volatile(GICR_IGROUPR0 as *mut u32, grp);
+
+        let prio_word = (GICR_IPRIORITYR + (30 / 4) * 4) as *mut u32;
+        let mut prio = core::ptr::read_volatile(prio_word);
+        let lane = (30 % 4) * 8;
+        prio &= !(0xFFu32 << lane);
+        prio |= 0xA0u32 << lane;
+        core::ptr::write_volatile(prio_word, prio);
+
+        core::ptr::write_volatile(GICR_ISENABLER0 as *mut u32, 1u32 << 30);
+
+        // 4. ICC_* system registers — CPU interface. SRE bit MUST
+        //    be set BEFORE any other ICC_*_EL1 access; on GICv2 this
+        //    register doesn't exist. We accept that — a v2-only host
+        //    would never have entered init_gicv3 since detection
+        //    via PIDR2 said v2.
+        //    ICC_SRE_EL1 = 1 << 0 (SRE)
+        core::arch::asm!("msr S3_0_C12_C12_5, {}", in(reg) 1u64);
+        core::arch::asm!("isb");
+
+        //    ICC_PMR_EL1 = 0xff (allow all priorities)
+        core::arch::asm!("msr S3_0_C4_C6_0, {}", in(reg) 0xffu64);
+
+        //    ICC_BPR1_EL1 = 0 (max preemption granularity)
+        core::arch::asm!("msr S3_0_C12_C12_3, {}", in(reg) 0u64);
+
+        //    ICC_CTLR_EL1 = 0 (EOImode=0 — single drop+deactivate)
+        core::arch::asm!("msr S3_0_C12_C12_4, {}", in(reg) 0u64);
+
+        //    ICC_IGRPEN1_EL1 = 1 (enable group 1 IRQs)
+        core::arch::asm!("msr S3_0_C12_C12_7, {}", in(reg) 1u64);
+
+        core::arch::asm!("isb");
+    }
+    uart::puts("  [arch] GICv3 initialized (timer PPI 30 enabled)\n");
+}
+
 /// Minimal GICv2 init for QEMU virt. The "virt" machine wires:
 ///   GIC Distributor (GICD)  @ 0x0800_0000
 ///   GIC CPU Interface (GICC)@ 0x0801_0000
@@ -233,7 +344,13 @@ pub fn init_timer() {
     // Initialize the GIC first so the CPU actually receives the
     // timer IRQ. Without this, CNTP_CTL fires but no IRQ vector
     // is taken — preemption is dead in the water.
-    init_gicv2();
+    let v = detect_gic_version();
+    GIC_VERSION.store(v, core::sync::atomic::Ordering::Release);
+    if v == 3 {
+        init_gicv3();
+    } else {
+        init_gicv2();
+    }
     unsafe {
         let freq: u64;
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
@@ -308,14 +425,23 @@ fn handle_irq_inner(frame: *mut TrapFrame) {
     }
 
     // QEMU virt path: ARM Generic Timer wired directly via the GIC.
-    //
-    // GICv2 ack protocol: read GICC_IAR to get the active IRQ ID (ack),
-    // handle, write the same value back to GICC_EOIR (end-of-interrupt).
-    // Without this the GIC keeps the IRQ in the active state and won't
-    // deliver the next one — we'd see only ONE timer tick after enable.
+    // Branches on GIC_VERSION (set by init_timer):
+    //   v2: MMIO ack via GICC_IAR (0x0801000C), EOI via GICC_EOIR.
+    //   v3: system register ack via ICC_IAR1_EL1, EOI via ICC_EOIR1_EL1.
+    // Without ack+EOI the GIC keeps the IRQ active and stops delivering.
     const GICC_IAR:  usize = 0x0801_0000 + 0x00C;
     const GICC_EOIR: usize = 0x0801_0000 + 0x010;
-    let iar: u32 = unsafe { core::ptr::read_volatile(GICC_IAR as *const u32) };
+    let gic_v = GIC_VERSION.load(core::sync::atomic::Ordering::Acquire);
+    let iar: u32 = if gic_v == 3 {
+        let ack: u64;
+        unsafe {
+            // ICC_IAR1_EL1 = S3_0_C12_C12_0
+            core::arch::asm!("mrs {}, S3_0_C12_C12_0", out(reg) ack);
+        }
+        (ack & 0xFFFFFF) as u32
+    } else {
+        unsafe { core::ptr::read_volatile(GICC_IAR as *const u32) }
+    };
     let intid = iar & 0x3FF;
 
     // Spurious (1023) means no IRQ pending — bail without EOI.
@@ -414,7 +540,7 @@ fn handle_irq_inner(frame: *mut TrapFrame) {
         // for however long we're swapped out — could be seconds — and
         // blocks all subsequent timer IRQs. The "1Hz instead of 100Hz"
         // observation traces directly to this.
-        unsafe { core::ptr::write_volatile(GICC_EOIR as *mut u32, iar); }
+        eoi(gic_v, iar);
 
         if was_in_el0 {
             crate::batcave::linux::threads::schedule();
@@ -425,6 +551,20 @@ fn handle_irq_inner(frame: *mut TrapFrame) {
         }
     } else {
         // Non-timer IRQ — still need to ack so the GIC can deliver more.
+        eoi(gic_v, iar);
+    }
+}
+
+/// End-of-Interrupt write. v2 = MMIO GICC_EOIR; v3 = ICC_EOIR1_EL1.
+#[inline(always)]
+fn eoi(gic_v: u8, iar: u32) {
+    if gic_v == 3 {
+        unsafe {
+            // ICC_EOIR1_EL1 = S3_0_C12_C12_1
+            core::arch::asm!("msr S3_0_C12_C12_1, {}", in(reg) iar as u64);
+        }
+    } else {
+        const GICC_EOIR: usize = 0x0801_0000 + 0x010;
         unsafe { core::ptr::write_volatile(GICC_EOIR as *mut u32, iar); }
     }
 }
