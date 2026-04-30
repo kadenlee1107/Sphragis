@@ -165,9 +165,41 @@ pub fn apply_property(prop: &str, val: &str, style: &mut ComputedStyle) {
             }
         }
         // Flex properties (store but layout handles separately)
-        "flex-direction" | "justify-content" | "align-items" | "flex-wrap"
-        | "flex" | "flex-grow" | "flex-shrink" | "flex-basis"
-        | "gap" | "row-gap" | "column-gap" => {}
+        "flex-direction" => {
+            style.flex_direction = match val.trim() {
+                "column" => 1,
+                "row-reverse" => 2,
+                "column-reverse" => 3,
+                _ => 0,
+            };
+        }
+        "justify-content" => {
+            style.justify_content = match val.trim() {
+                "flex-end" | "end" => 1,
+                "center" => 2,
+                "space-between" => 3,
+                "space-around" => 4,
+                "space-evenly" => 5,
+                _ => 0,
+            };
+        }
+        "align-items" => {
+            style.align_items = match val.trim() {
+                "flex-start" | "start" => 1,
+                "flex-end" | "end" => 2,
+                "center" => 3,
+                _ => 0, // stretch
+            };
+        }
+        "gap" => {
+            style.gap = Length::parse(val).to_px(0, 16);
+        }
+        "row-gap" | "column-gap" => {
+            // Treat as gap until we split row vs column.
+            style.gap = Length::parse(val).to_px(0, 16);
+        }
+        "flex-wrap"
+        | "flex" | "flex-grow" | "flex-shrink" | "flex-basis" => {}
         // Transitions/animations — ignore for now
         "transition" | "animation" | "transform" | "cursor" | "user-select"
         | "outline" | "outline-width" | "outline-color" | "outline-style"

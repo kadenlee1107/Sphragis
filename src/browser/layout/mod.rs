@@ -260,6 +260,97 @@ fn str_has(haystack: &str, needle: &str) -> bool {
 }
 
 /// Lay out children of a DOM node into a layout box
+/// 🎯 STUMP #75: reposition the direct children of a flex container
+/// along the main axis. Currently row-only (column-direction reuses
+/// the same code with width/height swapped at the call site, but
+/// vertical flex is rare in real pages so we skip it for now).
+///
+/// `start_idx..end_idx` = the slice of LayoutTree.boxes that were
+/// just allocated by this container's recursive layout_children call.
+/// Filtered to direct children of `container` so a flex item that
+/// itself contains nested boxes doesn't double-shift.
+fn flex_reposition_children(
+    tree: &mut LayoutTree,
+    container: usize,
+    start_idx: usize,
+    end_idx: usize,
+    cont_x: i32,
+    cont_y: i32,
+    cont_w: i32,
+    direction: u8,
+    justify: u8,
+    gap: i32,
+) {
+    let _ = direction; // row only for now
+
+    // Pass 1: collect direct-child indices + total natural width.
+    let mut total_w: i32 = 0;
+    let mut count: i32 = 0;
+    for i in start_idx..end_idx {
+        if !tree.boxes[i].active { continue; }
+        if tree.boxes[i].parent != container as u16 { continue; }
+        total_w += tree.boxes[i].width;
+        count += 1;
+    }
+    if count == 0 { return; }
+    let total_with_gaps = total_w + gap * (count - 1).max(0);
+
+    // Compute starting offset + per-item extra spacing per `justify`.
+    let free = (cont_w - total_with_gaps).max(0);
+    let (mut x, between, around_pad) = match justify {
+        1 /* end */    => (cont_x + free, 0, 0),
+        2 /* center */ => (cont_x + free / 2, 0, 0),
+        3 /* between */=> (cont_x, if count > 1 { free / (count - 1) } else { 0 }, 0),
+        4 /* around */ => {
+            let pad = free / (count * 2).max(1);
+            (cont_x + pad, pad * 2, pad)
+        }
+        5 /* evenly */ => {
+            let pad = free / (count + 1).max(1);
+            (cont_x + pad, pad, pad)
+        }
+        _ /* start */  => (cont_x, 0, 0),
+    };
+    let _ = around_pad;
+
+    // Pass 2: place each child at (x, cont_y), preserve natural sizes.
+    for i in start_idx..end_idx {
+        if !tree.boxes[i].active { continue; }
+        if tree.boxes[i].parent != container as u16 { continue; }
+        let w = tree.boxes[i].width;
+        let dx = x - tree.boxes[i].x;
+        let dy = cont_y - tree.boxes[i].y;
+        // Translate this box and ALL its descendants in the just-laid
+        // range so nested children move with their parent flex item.
+        for j in i..end_idx {
+            if !tree.boxes[j].active { continue; }
+            // descend: include j itself plus any box rooted under i
+            if j == i || box_descendant_of(tree, j, i, end_idx) {
+                tree.boxes[j].x += dx;
+                tree.boxes[j].y += dy;
+                tree.boxes[j].content_x += dx;
+                tree.boxes[j].content_y += dy;
+            }
+        }
+        x += w + gap + between;
+    }
+}
+
+/// Is `j` a transitive child of `i` within the just-allocated range?
+fn box_descendant_of(tree: &LayoutTree, j: usize, i: usize, end: usize) -> bool {
+    let mut p = tree.boxes[j].parent as usize;
+    let mut steps = 0;
+    while p < end && steps < 32 {
+        if p == i { return true; }
+        if tree.boxes[p].parent == 0xFFFF { break; }
+        let np = tree.boxes[p].parent as usize;
+        if np == p { break; }
+        p = np;
+        steps += 1;
+    }
+    false
+}
+
 /// 🎯 STUMP #74: minimal column-aligned <table> layout. Two passes:
 ///   1. Walk all <tr> children to find the max column count (so
 ///      column widths divide the table width evenly).
@@ -1002,7 +1093,36 @@ fn layout_children(
                     let mut child_y = child_y_start;
 
                     // Recurse into children
+                    let first_child_box = tree.box_count;
                     layout_children(doc, tree, sheet, ebox, child_idx, block_x, &mut child_y, block_w);
+                    let last_child_box = tree.box_count;
+
+                    // 🎯 STUMP #75: real flexbox. After children get
+                    // their natural sizes from the normal block flow
+                    // above, walk just-allocated boxes parented by
+                    // ebox and call layout_flex_reposition to lay them
+                    // out along the main axis with justify-content +
+                    // gap honored. Cross-axis stretching is left to
+                    // each child's own height.
+                    if style.display == Display::Flex && last_child_box > first_child_box {
+                        flex_reposition_children(
+                            tree, ebox, first_child_box, last_child_box,
+                            block_x, child_y_start, block_w,
+                            style.flex_direction,
+                            style.justify_content,
+                            style.gap,
+                        );
+                        // child_y for height calc — use the bottom of
+                        // the tallest repositioned child.
+                        let mut max_y = child_y_start;
+                        for i in first_child_box..last_child_box {
+                            if !tree.boxes[i].active { continue; }
+                            if tree.boxes[i].parent != ebox as u16 { continue; }
+                            let by = tree.boxes[i].y + tree.boxes[i].height;
+                            if by > max_y { max_y = by; }
+                        }
+                        child_y = max_y;
+                    }
 
                     let content_h = (child_y - child_y_start).max(0);
 

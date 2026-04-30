@@ -309,6 +309,13 @@ pub struct ComputedStyle {
     pub text_transform: TextTransform,
     pub white_space: WhiteSpace,
     pub vertical_align: VerticalAlign,
+    // 🎯 STUMP #75: minimal flexbox properties on every box. Only used
+    // when display: flex; cheap to carry on every ComputedStyle since
+    // we already have ~20 fields. Strings parsed in css/parser.rs.
+    pub flex_direction: u8,   // 0=row 1=column 2=row-reverse 3=column-reverse
+    pub justify_content: u8,  // 0=start 1=end 2=center 3=between 4=around 5=evenly
+    pub align_items: u8,      // 0=stretch 1=start 2=end 3=center
+    pub gap: i32,
 }
 
 impl ComputedStyle {
@@ -331,6 +338,10 @@ impl ComputedStyle {
             height: Length::Auto,
             max_width: Length::Auto,
             min_height: Length::Auto,
+            flex_direction: 0,
+            justify_content: 0,
+            align_items: 0,
+            gap: 0,
             line_height: 0,
             overflow: Overflow::Visible,
             visibility: Visibility::Visible,

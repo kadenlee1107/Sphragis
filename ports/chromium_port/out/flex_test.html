@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Flex Test</title>
+  <style>
+    body {
+      background: #0a0a0a;
+      color: #e0e0e0;
+      padding: 32px;
+    }
+    h1 { color: #ffd700; margin-bottom: 16px; }
+    h2 { color: #4fc3f7; margin-top: 24px; margin-bottom: 8px; font-size: 18px; }
+    .row {
+      display: flex;
+      gap: 12px;
+      padding: 12px;
+      background: #1a1a1a;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+    .row.center  { justify-content: center; }
+    .row.end     { justify-content: flex-end; }
+    .row.between { justify-content: space-between; }
+    .row.around  { justify-content: space-around; }
+    .row.evenly  { justify-content: space-evenly; }
+    .chip {
+      background: #2e7d32;
+      color: white;
+      padding: 6px 14px;
+      border-radius: 4px;
+    }
+    .chip.b { background: #1565c0; }
+    .chip.r { background: #c62828; }
+  </style>
+</head>
+<body>
+  <h1>Flexbox Test</h1>
+
+  <h2>flex-start (default)</h2>
+  <div class="row">
+    <span class="chip">A</span>
+    <span class="chip b">B</span>
+    <span class="chip r">C</span>
+  </div>
+
+  <h2>justify-content: center</h2>
+  <div class="row center">
+    <span class="chip">A</span>
+    <span class="chip b">B</span>
+    <span class="chip r">C</span>
+  </div>
+
+  <h2>justify-content: flex-end</h2>
+  <div class="row end">
+    <span class="chip">A</span>
+    <span class="chip b">B</span>
+    <span class="chip r">C</span>
+  </div>
+
+  <h2>justify-content: space-between</h2>
+  <div class="row between">
+    <span class="chip">A</span>
+    <span class="chip b">B</span>
+    <span class="chip r">C</span>
+  </div>
+
+  <h2>justify-content: space-around</h2>
+  <div class="row around">
+    <span class="chip">A</span>
+    <span class="chip b">B</span>
+    <span class="chip r">C</span>
+  </div>
+</body>
+</html>
