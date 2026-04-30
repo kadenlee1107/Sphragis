@@ -11,6 +11,38 @@ end of a session.
 
 ---
 
+## 2026-04-29 23:30 — Mac — 🎯 STUMP #58 + #59: HVF unblocked. D-cache enable + fetch_add. Real content_shell loads under HVF. ld-linux runs, all 12 libs relocate, init_array detected, threads/fork/clone work, first child exits cleanly.
+
+**TL;DR.** Got real content_shell + glibc loading under HVF acceleration on Apple M4 (was previously only running under TCG, ~10× slower). Two-part fix:
+
+1. **STUMP #59 — D-cache enable.** `setup_cave_pagetable` was leaving SCTLR_EL1.C and .I cleared after MMU enable ("don't enable caches yet — keep it simple"). Per ARM ARM C5.2.4, exclusive accesses (LDXR/STXR/CAS/LDADD) targeting cacheable memory while the cache is OFF have UNPREDICTABLE behavior. TCG's software interpreter masks the bug; HVF passes the access through to real M4 silicon and the atomic produces nonsense results.
+
+   Symptom: `SMALL_MMAP_CURSOR.compare_exchange(0x7000000000, 0x7000002000)` returned `Err(0)` even though `cur_now = SMALL_MMAP_CURSOR.load()` printed `0x7000000000` two instructions earlier. The follow-up `cmpxchg(0, 0x2000)` then SUCCEEDED while cursor was still 0x7000000000. Diagnostic added six print sites confirming each step was sane individually but the atomic itself was broken.
+
+   Fix: SCTLR_EL1 |= (1<<2) | (1<<12) after MMU enable. The pre-MMU writes to BSS / page-tables already use `dc civac`, so flipping caches on immediately is safe.
+
+2. **STUMP #58 — fetch_add bump allocator.** Belt-and-suspenders: replaced the cmpxchg-loop bump allocator in `sys_mmap` with `fetch_add(bump_amount)`. Single-instruction RMW (LDADD on LSE), no separate compare step that could go wrong if any residual atomic weirdness exists.
+
+**Result on HVF + GICv3:**
+- Pipeline reaches PIPELINE-REACHED ✓
+- All 13 ELFs (content_shell + 12 libs) load + relocate ✓
+- init_array entries detected for every lib ✓
+- threading enabled, fork/clone create child processes ✓
+- First child openat('/dev/null'), fcntl, exits cleanly ✓
+- Speed: vastly faster than TCG
+
+**Outstanding:** post-process-exit kernel data abort at PC=0x402fb12c with FAR bytes that look like ELF e_ident (0x00010102464c5002). Disassembly traces to the apple/uart driver code path (constants `mov x21, #0x3ffff8000; movk x21, #0x8812, lsl #16` produce 0x3_8812_8000 = T8132 dockchannel UART base). Suspect: when the cave's child terminates, some error printer is invoked that ends up in apple::uart::puts → fb_console::puts → font::draw_char_scaled, and one of those dereferences a stale pointer. Not a regression — TCG runs at this stage hit different aborts (DFSC=0x06 with different FARs).
+
+**Files changed (commit cf10a4cd):**
+- `src/batcave/linux/mmu.rs` — enable SCTLR_EL1.C and .I after MMU enable
+- `src/batcave/linux/syscall.rs` — fetch_add-based bump allocator
+- `scripts/qemu_chromium_pipeline_smoke.py` — HVF args (gic-version=3, cpu=host)
+
+**What's next (priority order):**
+1. Trace the post-exit fault — likely in error-message printer triggered by child exit cleanup. Cheaper option: gate `apple::uart::*` on `is_apple_silicon()` so QEMU-virt boots never call it.
+2. With kernel cleanup fixed, run smoke under HVF to see how far content_shell gets — it should now execute init_array, hit __libc_start_main, then run main.
+3. Get DOM output. The HMTL parser path needs threading + futex + epoll all working. STATE_2026-04-23.md documents the 25 remaining UNDEF symbols and Phase 4 syscall work.
+
 ## 2026-04-29 15:00 — Mac — 🎯 STUMPS #54 + #55: PA pool alignment-only-if-aligned + pa-skip-data zeros x[0..28]. Deepest 42,258 lines (NEW HIGH). 11 stumps shipped today. DOM still not printing — variance is the killer.
 
 ### What landed
