@@ -156,6 +156,16 @@ impl Stylesheet {
     /// Apply matching CSS rules to a ComputedStyle for a given element.
     /// `tag`, `id`, `classes` describe the element.
     /// `ancestors` is a list of (tag, class, id) tuples for ancestor elements.
+    ///
+    /// 🎯 STUMP #72: rules are now applied in **specificity order**
+    /// (low → high) instead of source order, so a more-specific rule
+    /// always wins regardless of where it sits in the stylesheet.
+    /// Specificity per CSS 2.1 §6.4.3:
+    ///   * #id contributes  100
+    ///   * .class           10
+    ///   * tag               1
+    /// per selector part. Compound (descendant) selectors sum their
+    /// parts. Source-order ties broken by document order (last wins).
     pub fn apply(
         &self,
         tag: &str,
@@ -164,26 +174,54 @@ impl Stylesheet {
         ancestors: &[(&str, &str, &str)],
         style: &mut ComputedStyle,
     ) {
+        // Two-pass: first collect (specificity, rule_idx) for every
+        // matching rule, then sort by specificity ascending and apply
+        // each rule's declarations in order. Bounded to MAX_RULES
+        // so we don't allocate.
+        let mut hits: [(u32, usize); MAX_RULES] = [(0u32, 0usize); MAX_RULES];
+        let mut n_hits = 0usize;
+
         for ri in 0..self.rule_count {
             let rule = &self.rules[ri];
-            let mut matched = false;
-
-            // Check if any selector matches
+            // For a rule with multiple comma-separated selectors, each
+            // gets its own specificity. We pick the highest of the
+            // matching ones.
+            let mut best: Option<u32> = None;
             for si in 0..rule.sel_count {
                 if selector_matches(&rule.selectors[si], tag, id, classes, ancestors) {
-                    matched = true;
-                    break;
+                    let s = selector_specificity(&rule.selectors[si]);
+                    best = Some(best.map_or(s, |b| b.max(s)));
                 }
             }
-
-            if matched {
-                // Apply all declarations
-                for di in 0..rule.decl_count {
-                    let d = &rule.decls[di];
-                    let prop = unsafe { core::str::from_utf8_unchecked(&d.prop[..d.prop_len]) };
-                    let val = unsafe { core::str::from_utf8_unchecked(&d.value[..d.value_len]) };
-                    apply_property(prop, val, style);
+            if let Some(spec) = best {
+                if n_hits < MAX_RULES {
+                    // Encode (spec << 16) | ri so source-order is the
+                    // tiebreaker (later rule = higher ri → larger key
+                    // → applied later).
+                    hits[n_hits] = ((spec << 16) | (ri as u32 & 0xFFFF), ri);
+                    n_hits += 1;
                 }
+            }
+        }
+
+        // Insertion sort by encoded key (low → high). MAX_RULES is
+        // 128, so O(n²) is fine.
+        for i in 1..n_hits {
+            let mut j = i;
+            while j > 0 && hits[j - 1].0 > hits[j].0 {
+                hits.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+
+        // Apply in order; later (higher-spec) rules override earlier.
+        for h in 0..n_hits {
+            let rule = &self.rules[hits[h].1];
+            for di in 0..rule.decl_count {
+                let d = &rule.decls[di];
+                let prop = unsafe { core::str::from_utf8_unchecked(&d.prop[..d.prop_len]) };
+                let val = unsafe { core::str::from_utf8_unchecked(&d.value[..d.value_len]) };
+                apply_property(prop, val, style);
             }
         }
     }
@@ -382,6 +420,22 @@ fn trim(s: &[u8]) -> &[u8] {
 /// Check if a selector matches a given element + ancestor chain.
 /// The last part of the selector must match the target element.
 /// Earlier parts must match ancestor elements (descendant combinator).
+/// CSS specificity per §6.4.3: count IDs (×100), classes (×10), tags
+/// (×1) across every part of a compound selector. Returns a single
+/// 16-bit number (caps any overflow to 0xFFFF, well above realistic
+/// values). Used by Stylesheet::apply to order matching rules from
+/// least- to most-specific.
+fn selector_specificity(sel: &Selector) -> u32 {
+    let mut score: u32 = 0;
+    for i in 0..sel.part_count {
+        let p = &sel.parts[i];
+        if p.id_len > 0    { score = score.saturating_add(100); }
+        if p.class_len > 0 { score = score.saturating_add(10);  }
+        if p.tag_len > 0   { score = score.saturating_add(1);   }
+    }
+    score.min(0xFFFF)
+}
+
 fn selector_matches(
     sel: &Selector,
     tag: &str,
