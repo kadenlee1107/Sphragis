@@ -11,6 +11,22 @@ end of a session.
 
 ---
 
+## 2026-04-30 09:45 — Mac — 🎯 STUMP #61 cracked: gpu_cmd null-deref. Post-exit DATA ABORT eliminated. Content_shell loads, runs, exits cleanly under HVF.
+
+**TL;DR.** Tracked the post-exit kernel data abort to the headless serial shell printing chromium runner messages through `console::puts` → `gpu::flush` → `gpu_cmd` → `Virtqueue::poll_used` on a Virtqueue whose `QUEUE_STORAGE` was never set (gpu::init returned None on QEMU virt with no -device virtio-gpu). Null-pointer deref through the descriptor ring landed at `safe_read16(used_base + 2)` whose computed PA started looking like ELF magic bytes — that's why the FAR pattern `0x00010102464c5002` was so eye-catching. The fix is one early-return guard at the top of `gpu_cmd`.
+
+**Disassembly identification:** Built once with `RUSTFLAGS="-C link-arg=-Tlinker.ld -C target-feature=+reserve-x18 -C debuginfo=2 -C strip=none"` (must keep the linker.ld arg or rust-lld can't find `__bss_start` etc.). Then `llvm-objdump -d --demangle` resolved the fault PC to `bat_os::drivers::virtio::virtqueue::Virtqueue::poll_used`.
+
+**Result:** smoke completes, no kernel data aborts, cave exits with 127 (from one of Chromium's spawned children — probably a posix_spawn helper failing on /dev/null dup2 or similar). Pipeline reaches `bat_os >` prompt cleanly. 281 lines of log (vs 437 in the previous fault-spam version).
+
+**Files changed (commit 8d5af615):**
+- `src/drivers/virtio/gpu.rs` — early-return when QUEUE_STORAGE==0
+
+**Pending:** content_shell exits with code 127 partway through. Likely a posix_spawn helper. To get past this:
+- Need `dup2()` working
+- May need `execve` not just bouncing on forked-child caves
+- Implement `landlock_create_ruleset` (syscall 444) → return ENOSYS gracefully (already done, but may need a real stub)
+
 ## 2026-04-29 23:30 — Mac — 🎯 STUMP #58 + #59: HVF unblocked. D-cache enable + fetch_add. Real content_shell loads under HVF. ld-linux runs, all 12 libs relocate, init_array detected, threads/fork/clone work, first child exits cleanly.
 
 **TL;DR.** Got real content_shell + glibc loading under HVF acceleration on Apple M4 (was previously only running under TCG, ~10× slower). Two-part fix:
