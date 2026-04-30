@@ -253,6 +253,14 @@ fn layout_children(
     let _char_w: i32 = if use_tt { 7 } else { 8 }; // avg char width
     let line_h: i32 = if use_tt { 20 } else { 18 };
 
+    // 🎯 STUMP #65: track the tallest line_h placed on the current
+    // inline run so the block path can advance cursor_y past it when
+    // the run ends. Pre-fix every inline child only updated
+    // `inline_x`; cursor_y never moved, so a block whose only child
+    // was a single-line <p> ended up with content_h=0 and the next
+    // sibling stacked on top.
+    let mut max_line_h_on_current_line: i32 = 0;
+
     for child_idx in doc.children(dom_parent) {
         let node = doc.get(child_idx);
 
@@ -327,6 +335,9 @@ fn layout_children(
                     tree.boxes[tbox].content_w = text_w;
                     tree.boxes[tbox].content_h = line_h;
                     inline_x += text_w;
+                    if line_h > max_line_h_on_current_line {
+                        max_line_h_on_current_line = line_h;
+                    }
                 } else {
                     // Text needs to wrap across multiple lines.
                     // Position the box at the start, compute its total height.
@@ -363,6 +374,12 @@ fn layout_children(
                         chars_placed
                     };
                     inline_x = x_offset + last_line_chars * char_w;
+                    // The last (possibly partial) line is still open;
+                    // record its height so the function-end flush
+                    // closes it.
+                    if line_h > max_line_h_on_current_line {
+                        max_line_h_on_current_line = line_h;
+                    }
                 }
             }
             NodeType::Element => {
@@ -619,9 +636,15 @@ fn layout_children(
                 if is_block && !force_inline {
                     // Block element: new line, full width
                     if inline_x > x_offset {
-                        // End current inline run
-                        *cursor_y += line_h;
+                        // End current inline run — flush by max line
+                        // height seen on it, not the conservative
+                        // function-default `line_h`.
+                        let flush = if max_line_h_on_current_line > 0 {
+                            max_line_h_on_current_line
+                        } else { line_h };
+                        *cursor_y += flush;
                         inline_x = x_offset;
+                        max_line_h_on_current_line = 0;
                     }
 
                     *cursor_y += style.margin_top;
@@ -680,6 +703,9 @@ fn layout_children(
                     // Inline element — flow horizontally with siblings
                     let fs = style.font_size.max(10).min(48);
                     let elem_line_h = (fs * 14 / 10).max(14);
+                    if elem_line_h > max_line_h_on_current_line {
+                        max_line_h_on_current_line = elem_line_h;
+                    }
 
                     // Add horizontal padding/margin
                     inline_x += style.margin_left + style.padding_left;
@@ -722,10 +748,23 @@ fn layout_children(
                     if inline_x > x_offset + avail_width {
                         inline_x = x_offset;
                         *cursor_y += elem_line_h;
+                        max_line_h_on_current_line = 0;
                     }
                 }
             }
             _ => {}
         }
+    }
+
+    // 🎯 STUMP #65 (cont): close any open inline run before returning.
+    // Without this, a block element whose only contents are inline
+    // (e.g. <h1>Hello</h1>) returns with cursor_y unchanged — the
+    // caller's content_h calculation gets 0, and the block's height
+    // collapses to padding-only. Sibling blocks then stack on top.
+    if inline_x > x_offset {
+        let flush = if max_line_h_on_current_line > 0 {
+            max_line_h_on_current_line
+        } else { line_h };
+        *cursor_y += flush;
     }
 }
