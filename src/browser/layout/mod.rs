@@ -713,9 +713,18 @@ fn layout_children(
                     let start_x = inline_x;
                     let start_y = *cursor_y;
 
-                    // Lay out children inline
+                    // Lay out children inline. Save cursor_y around
+                    // the recursion: layout_children's end-flush
+                    // would close the inline run for *us*, advancing
+                    // cursor_y, which then makes our next sibling
+                    // start a row lower (staircase). Inline-element
+                    // recursion is supposed to keep the line open;
+                    // restore cursor_y after, so only the outermost
+                    // (block-context) layout_children advances it.
+                    let saved_cursor_y = *cursor_y;
                     layout_children(doc, tree, sheet, ebox, child_idx, inline_x, cursor_y,
                         avail_width - (inline_x - x_offset));
+                    *cursor_y = saved_cursor_y;
 
                     // Calculate width from text content
                     let mut child_text_w = 0i32;
