@@ -54,6 +54,18 @@ fn get_device() -> VirtioMmio {
 }
 
 fn gpu_cmd<T: Copy>(cmd: &T) -> u32 {
+    // 🎯 STUMP #61: bail if the GPU never initialized. Without this
+    // guard, callers like `console::putc` → `gpu::flush` → `gpu_cmd`
+    // dereference a null Virtqueue pointer and the kernel does
+    // millions of safe_read16/safe_write16 ops on garbage memory.
+    // On HVF this surfaces as a DATA ABORT in Virtqueue::poll_used
+    // shortly after the cave exits (the timer-driven
+    // chromium-blit kthread isn't the cause; it's the headless
+    // shell printing chromium's "launching ..." message via
+    // console::puts which calls gpu::flush per character).
+    if QUEUE_STORAGE.load(Ordering::Acquire) == 0 {
+        return 0;
+    }
     let queue = get_queue();
     let device = get_device();
 
