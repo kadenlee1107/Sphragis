@@ -3054,14 +3054,24 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     console::puts(url);
     console::puts("\n");
 
+    // Reset the skip ring so this run produces an independent map
+    // of failures (no stale events from a prior chromium invocation).
+    crate::batcave::linux::skip_log::reset();
+
     match runner::run_chromium(url, &argv[..n]) {
         Ok(()) => {
-            console::puts("  chromium exited OK\n");
+            crate::drivers::uart::puts("  chromium exited OK\n");
         }
         Err(e) => {
-            console::puts("  chromium: ");
-            console::puts(e);
-            console::puts("\n");
+            crate::drivers::uart::puts("  chromium: ");
+            crate::drivers::uart::puts(e);
+            crate::drivers::uart::puts("\n");
         }
     }
+
+    // Always dump the skip-summary AFTER the cave finishes (whether
+    // successful, errored, or terminated by terminate_cave_fatal).
+    // Parser-friendly markers `[SKIP-SUMMARY ...]` / `[SKIP-DETAIL
+    // ...]` let scripts/agents pull the failure tree out in one pass.
+    crate::batcave::linux::skip_log::dump_summary();
 }

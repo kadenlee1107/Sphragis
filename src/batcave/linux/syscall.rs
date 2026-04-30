@@ -522,10 +522,29 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::SHUTDOWN => (SyscallCat::Network, sys_shutdown),
 
         _ => {
-            // Unknown syscall — log and return ENOSYS
+            // Unknown syscall — log and return ENOSYS.
+            //
+            // BAT_OS_KEEP_GOING: also record into the skip ring so
+            // the end-of-run summary lists every distinct unknown
+            // syscall number, with example registers, so we can
+            // dispatch one fixer per distinct syscall in parallel
+            // instead of finding them one-at-a-time.
             uart::puts("[linux] unknown syscall ");
             crate::kernel::mm::print_num(syscall_num as usize);
             uart::puts("\n");
+            if super::skip_log::is_enabled() {
+                let elr_now: u64;
+                unsafe { core::arch::asm!("mrs {}, elr_el1", out(reg) elr_now); }
+                super::skip_log::record(
+                    super::skip_log::SkipKind::UnknownSyscall,
+                    super::threads::current_tid(),
+                    syscall_num,
+                    args[0],
+                    args[1],
+                    elr_now,
+                    0,
+                );
+            }
             return ENOSYS;
         }
     };
@@ -1409,6 +1428,43 @@ fn sys_exit(args: [u64; 6]) -> i64 {
         IN_CHILD.store(false, core::sync::atomic::Ordering::Relaxed);
         // Return code will be handled by wait4
         // For now, this exit is caught by the exception handler
+    }
+
+    // BAT_OS_KEEP_GOING: when enabled, log the non-zero exit but
+    // retire THIS thread cleanly (so the rest of the cave keeps
+    // running and we surface more problems in one run). Zero exits
+    // pass through unchanged.
+    //
+    // exit_current(0) marks the thread Exited(0), frees its user
+    // stack, futex-wakes any joiner, and schedules another thread —
+    // never returns. So the cave's parent / sibling threads keep
+    // running while the failing child quietly retires.
+    if code != 0 && super::skip_log::is_enabled() {
+        let elr_now: u64;
+        unsafe { core::arch::asm!("mrs {}, elr_el1", out(reg) elr_now); }
+        super::skip_log::record(
+            super::skip_log::SkipKind::Exit,
+            super::threads::current_tid(),
+            code as u64,
+            0, 0,
+            elr_now,
+            0,
+        );
+        // Dump the per-tid syscall trail every 4 skips so we can
+        // correlate exit-skips with the call sites that led to them.
+        static SKIP_DUMP_TICK: core::sync::atomic::AtomicU32 =
+            core::sync::atomic::AtomicU32::new(0);
+        let n = SKIP_DUMP_TICK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if n % 4 == 0 {
+            super::syscall_history::dump_per_tid_last();
+        }
+        // Retire the failing thread so its sibling / parent threads
+        // can keep running and surface MORE failure signatures.
+        // exit_current never returns. (For the case where this is
+        // the *only* runnable thread, exit_current's schedule()
+        // call falls through to the deadlock-detect path which
+        // dumps everything — not silent.)
+        super::threads::exit_current(0);
     }
 
     uart::puts("[linux] process exited with code ");

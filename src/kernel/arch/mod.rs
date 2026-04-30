@@ -2516,6 +2516,38 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 }
             }
 
+            // BAT_OS_KEEP_GOING: instead of dumping + terminating
+            // on every user-mode unhandled exception, record the
+            // event into the skip ring and retire just THIS thread.
+            // The cave's other threads keep running and we map the
+            // full failure tree in one smoke. EC=0x24/0x25 is data
+            // abort, EC=0x20/0x21 is instruction abort.
+            //
+            // Cap: limit to 32 EL0 abort skips per run so a single
+            // looping thread doesn't drown the trace.
+            if crate::batcave::linux::skip_log::is_enabled()
+                && (ec == 0x24 || ec == 0x25 || ec == 0x20 || ec == 0x21)
+            {
+                let elr = unsafe { (*frame).elr };
+                let kind = if ec == 0x20 || ec == 0x21 {
+                    crate::batcave::linux::skip_log::SkipKind::UserInstAbort
+                } else {
+                    crate::batcave::linux::skip_log::SkipKind::UserDataAbort
+                };
+                let recorded = crate::batcave::linux::skip_log::record(
+                    kind,
+                    crate::batcave::linux::threads::current_tid(),
+                    ec, esr & 0x01FF_FFFF, 0,
+                    elr, far,
+                );
+                if recorded {
+                    // Retire the offending thread; other threads
+                    // continue. exit_current never returns.
+                    crate::batcave::linux::threads::exit_current(0);
+                }
+                // Cap exceeded — fall through to original handler.
+            }
+
             uart::puts("!!! UNHANDLED SYNC EXCEPTION !!!\n");
             uart::puts("  tid=t");
             crate::kernel::mm::print_num(

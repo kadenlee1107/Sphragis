@@ -132,6 +132,17 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // tampered kernel produces a different hash.
     print_kernel_hash();
 
+    // BAT_OS_KEEP_GOING — when set at build time, the kernel records
+    // every cave-fatal event (non-zero exit, unknown syscall, EL0
+    // fault) into a structured ring and continues running instead of
+    // tearing down at the first failure. One smoke run then maps the
+    // entire failure tree of content_shell / ld-linux / glibc setup
+    // so we can dispatch parallel fixers per distinct failure
+    // signature. See `src/batcave/linux/skip_log.rs`.
+    if option_env!("BAT_OS_KEEP_GOING").is_some() {
+        batcave::linux::skip_log::enable();
+    }
+
     // Initialize kernel
     drivers::uart::puts("[boot] Initializing kernel...\n");
     kernel::mm::init();

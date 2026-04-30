@@ -836,6 +836,12 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
             out("x0") _,
         );
     }
+    // BAT_OS_KEEP_GOING: dump the skip-summary on cave-fatal teardown
+    // too — otherwise a fatal fault that fires before the shell's
+    // post-run dump_summary call would lose every event recorded
+    // during this run.
+    super::skip_log::dump_summary();
+
     // 🎯 STUMP #57b: in headless mode, `console`/`gpu` aren't
     // initialized, so calling desktop::resume() → console::prompt()
     // dereferences a NULL framebuffer pointer → re-enters this

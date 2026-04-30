@@ -10,6 +10,7 @@ pub mod pipe_buf;
 pub mod quotas;
 pub mod runner;
 pub mod signal;
+pub mod skip_log;
 pub mod sockets;
 pub mod stdio_ring;
 pub mod syscall;
