@@ -36,6 +36,9 @@ pub struct LayoutBox {
     pub parent: u16,
     pub first_child: u16,
     pub next_sibling: u16,
+    // 🎯 STUMP #69: index into the PNG image pool for <img> tags.
+    // 0xFFFF means "no image" (paint draws border + alt text instead).
+    pub image_slot: u16,
 }
 
 const NULL: u16 = 0xFFFF;
@@ -50,6 +53,7 @@ impl LayoutBox {
             content_x: 0, content_y: 0, content_w: 0, content_h: 0,
             text_start: 0, text_len: 0,
             parent: NULL, first_child: NULL, next_sibling: NULL,
+            image_slot: NULL,
         }
     }
 }
@@ -139,6 +143,9 @@ pub fn build(doc: &Document, tree: &mut LayoutTree, viewport_w: i32) {
     tree.box_count = 0;
     tree.text_len = 0;
     tree.page_height = 0;
+    // Each render starts with an empty image cache so stale slots
+    // from a previous page don't leak in.
+    crate::browser::media::img_pool::reset();
 
     // Parse any <style> block CSS into a stylesheet
     // NOTE: Stylesheet is ~448KB — MUST be static, not on stack!
@@ -549,14 +556,47 @@ fn layout_children(
                     }
                 }
 
-                // <img> tags -- allocate space for image
+                // <img> tags — try to decode the PNG referenced by `src`
+                // (file://-style paths into the initrd archive). If the
+                // decode succeeds, layout sizes the box to the actual
+                // image dimensions and paint draws the pixels; if the
+                // decode fails, we fall back to a bordered alt-text box.
                 if node.tag_str() == "img" {
-                    let img_w = node.get_attr("width")
+                    let mut img_w = node.get_attr("width")
                         .and_then(|v| v.parse::<i32>().ok())
                         .unwrap_or(200);
-                    let img_h = node.get_attr("height")
+                    let mut img_h = node.get_attr("height")
                         .and_then(|v| v.parse::<i32>().ok())
                         .unwrap_or(150);
+                    let mut image_slot: u16 = 0xFFFF;
+
+                    // Try to load the image from the initrd archive.
+                    if let Some(src) = node.get_attr("src") {
+                        // Normalise: strip file:// + leading /.
+                        let mut path = src;
+                        if let Some(rest) = path.strip_prefix("file://") {
+                            path = rest;
+                        }
+                        while path.starts_with('/') { path = &path[1..]; }
+                        if let Some(bytes) =
+                            crate::kernel::mm::initrd::archive_file(path)
+                        {
+                            let slot = crate::browser::media::img_pool::load(bytes);
+                            if slot != 0xFFFF {
+                                image_slot = slot;
+                                if let Some(img) =
+                                    crate::browser::media::img_pool::get(slot)
+                                {
+                                    if node.get_attr("width").is_none() {
+                                        img_w = img.width as i32;
+                                    }
+                                    if node.get_attr("height").is_none() {
+                                        img_h = img.height as i32;
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     if inline_x > x_offset {
                         *cursor_y += line_h;
@@ -578,21 +618,24 @@ fn layout_children(
                     tree.boxes[ibox].content_y = *cursor_y;
                     tree.boxes[ibox].content_w = img_w.min(avail_width);
                     tree.boxes[ibox].content_h = img_h;
+                    tree.boxes[ibox].image_slot = image_slot;
 
-                    // Store alt text as fallback
-                    if let Some(alt) = node.get_attr("alt") {
-                        let (ts, tl) = tree.store_text(alt.as_bytes());
-                        tree.boxes[ibox].text_start = ts;
-                        tree.boxes[ibox].text_len = tl;
-                    } else {
-                        let (ts, tl) = tree.store_text(b"[image]");
-                        tree.boxes[ibox].text_start = ts;
-                        tree.boxes[ibox].text_len = tl;
+                    // Alt text fallback when decode failed.
+                    if image_slot == 0xFFFF {
+                        if let Some(alt) = node.get_attr("alt") {
+                            let (ts, tl) = tree.store_text(alt.as_bytes());
+                            tree.boxes[ibox].text_start = ts;
+                            tree.boxes[ibox].text_len = tl;
+                        } else {
+                            let (ts, tl) = tree.store_text(b"[image]");
+                            tree.boxes[ibox].text_start = ts;
+                            tree.boxes[ibox].text_len = tl;
+                        }
+                        // Draw image border so the alt text has a frame.
+                        tree.boxes[ibox].style.border_width = 1;
+                        tree.boxes[ibox].style.border_color =
+                            Color::from_rgb(60, 60, 60);
                     }
-
-                    // Draw image border
-                    tree.boxes[ibox].style.border_width = 1;
-                    tree.boxes[ibox].style.border_color = Color::from_rgb(60, 60, 60);
 
                     *cursor_y += img_h + 4;
                     inline_x = x_offset;

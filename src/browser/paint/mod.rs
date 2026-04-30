@@ -82,6 +82,16 @@ pub fn paint(
         if sx + b.width < clip_left { continue; }
         if sx > clip_right { continue; }
 
+        // 🎯 STUMP #69: <img> elements with a successfully-decoded PNG
+        // skip the normal background/border/text path and draw the
+        // image bytes directly. draw_png honors clip + scaling.
+        if b.image_slot != 0xFFFF {
+            if let Some(img) = crate::browser::media::img_pool::get(b.image_slot) {
+                draw_png(img, sx, sy, b.width, b.height);
+                continue;
+            }
+        }
+
         // Compute clipped background rectangle
         let bg_x1 = sx.max(clip_left);
         let bg_y1 = sy.max(clip_top);

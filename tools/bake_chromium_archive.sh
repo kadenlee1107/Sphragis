@@ -91,7 +91,9 @@ for entry in sorted(os.listdir(shell_dir)):
     if entry == "icudtl.dat":
         continue
     if (entry.endswith(".html") or entry.startswith("bat_os_")
-            or entry.endswith(".bin") or entry.endswith(".pak")):
+            or entry.endswith(".bin") or entry.endswith(".pak")
+            or entry.endswith(".png") or entry.endswith(".jpg")
+            or entry.endswith(".css")):
         full = os.path.join(shell_dir, entry)
         if os.path.isfile(full):
             files.append((f"bin/{entry}", full))
