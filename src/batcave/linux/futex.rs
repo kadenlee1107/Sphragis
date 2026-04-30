@@ -355,6 +355,22 @@ pub fn futex_wait(uaddr: u64, val: u32, timeout_ns: u64) -> i64 {
         return EINVAL;
     }
 
+    // 🎯 STUMP #63 livelock-breaker: under BAT_OS_KEEP_GOING, cap any
+    // infinite-timeout wait at 100ms. Chromium's worker pool parks
+    // threads with `pthread_cond_wait`-style infinite waits that
+    // never get signaled in our partial impl — capping forces them
+    // to retry, which often picks a different code path. ETIMEDOUT
+    // is a legal return from FUTEX_WAIT, so this doesn't break user
+    // semantics, just unsticks threads that would otherwise park
+    // forever.
+    let timeout_ns = if timeout_ns == 0
+        && super::skip_log::is_enabled()
+    {
+        100_000_000  // 100ms
+    } else {
+        timeout_ns
+    };
+
     // Compute absolute deadline in cntpct ticks (0 == none).
     let deadline = if timeout_ns == 0 {
         0

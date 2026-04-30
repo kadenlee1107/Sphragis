@@ -51,6 +51,10 @@ pub enum SkipKind {
     UserDataAbort,
     /// User-mode instruction abort skipped.
     UserInstAbort,
+    /// All threads in the cave are blocked (FutexWait/EpollWait/Join/etc).
+    /// Scheduler force-woke one to keep the run going.
+    /// a0 = woken tid, a1 = uaddr/epfd/etc, a2 = block-reason discriminant.
+    FutexDeadlock,
 }
 
 impl SkipKind {
@@ -60,6 +64,7 @@ impl SkipKind {
             SkipKind::UnknownSyscall => "UNKNOWN_SYSCALL",
             SkipKind::UserDataAbort => "USER_DATA_ABORT",
             SkipKind::UserInstAbort => "USER_INST_ABORT",
+            SkipKind::FutexDeadlock => "FUTEX_DEADLOCK",
         }
     }
 }
@@ -84,6 +89,7 @@ static N_EXIT: AtomicU32 = AtomicU32::new(0);
 static N_UNK_SC: AtomicU32 = AtomicU32::new(0);
 static N_DABT: AtomicU32 = AtomicU32::new(0);
 static N_IABT: AtomicU32 = AtomicU32::new(0);
+static N_DEADLOCK: AtomicU32 = AtomicU32::new(0);
 
 pub fn enable() {
     ENABLED.store(true, Ordering::Release);
@@ -105,6 +111,7 @@ pub fn reset() {
     N_UNK_SC.store(0, Ordering::Release);
     N_DABT.store(0, Ordering::Release);
     N_IABT.store(0, Ordering::Release);
+    N_DEADLOCK.store(0, Ordering::Release);
 }
 
 /// Record an event. Returns `true` if the caller is permitted to
@@ -127,6 +134,7 @@ pub fn record(kind: SkipKind, tid: u32, a0: u64, a1: u64, a2: u64,
         SkipKind::UnknownSyscall  => { N_UNK_SC.fetch_add(1, Ordering::Relaxed); }
         SkipKind::UserDataAbort   => { N_DABT.fetch_add(1, Ordering::Relaxed); }
         SkipKind::UserInstAbort   => { N_IABT.fetch_add(1, Ordering::Relaxed); }
+        SkipKind::FutexDeadlock   => { N_DEADLOCK.fetch_add(1, Ordering::Relaxed); }
     }
     // One-line trace per event so a `grep '^\[SKIP'` against the
     // serial log reproduces the full timeline.
@@ -173,6 +181,8 @@ pub fn dump_summary() {
     print_num(N_DABT.load(Ordering::Relaxed) as u64);
     uart::puts(" iabt=");
     print_num(N_IABT.load(Ordering::Relaxed) as u64);
+    uart::puts(" deadlock=");
+    print_num(N_DEADLOCK.load(Ordering::Relaxed) as u64);
     uart::puts("]\n");
 
     // De-dup by (kind, a0) — collapse repeated unknown-syscalls of
@@ -222,6 +232,7 @@ pub fn dump_summary() {
             1 => "UNKNOWN_SYSCALL",
             2 => "USER_DATA_ABORT",
             3 => "USER_INST_ABORT",
+            4 => "FUTEX_DEADLOCK",
             _ => "OTHER",
         };
         uart::puts(name);

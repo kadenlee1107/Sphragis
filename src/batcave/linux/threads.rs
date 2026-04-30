@@ -1252,8 +1252,62 @@ pub fn schedule() {
         let Some(next_tid) = next_tid_opt else {
             // No Runnable thread found. If we're Blocked too then we
             // have a real deadlock — every BatCave thread is parked
-            // and nobody can wake anyone. Emit a one-shot dump so the
-            // next session knows what each thread is waiting on.
+            // and nobody can wake anyone.
+            //
+            // 🎯 STUMP #63: under BAT_OS_KEEP_GOING, instead of just
+            // dumping and stalling, force-wake the FIRST blocked
+            // thread we find (lowest slot index = oldest worker, most
+            // likely a missed signal). Log a parser-friendly
+            // [SKIP-DEADLOCK ...] entry so the timeline is clear, and
+            // re-enter the loop. Cap at 32 force-wakes per cave run
+            // so we don't infinite-loop a genuinely stuck program.
+            if crate::batcave::linux::skip_log::is_enabled() {
+                static N_FORCED: core::sync::atomic::AtomicU32 =
+                    core::sync::atomic::AtomicU32::new(0);
+                let forced_n = N_FORCED.fetch_add(1, Ordering::AcqRel);
+                if forced_n < 32 {
+                    let woken: Option<(u32, BlockReason)> = with_table(|t| {
+                        for slot in t.iter_mut() {
+                            match slot.state {
+                                ThreadState::Blocked(reason) => {
+                                    slot.state = ThreadState::Runnable;
+                                    return Some((slot.tid, reason));
+                                }
+                                _ => continue,
+                            }
+                        }
+                        None
+                    });
+                    if let Some((wtid, reason)) = woken {
+                        let (a1, a2) = match reason {
+                            BlockReason::FutexWait { uaddr, val } => (uaddr, val as u64),
+                            BlockReason::EpollWait { epfd, timeout_ms } =>
+                                (epfd as u64, timeout_ms as u64),
+                            BlockReason::Nanosleep { deadline_ns } => (deadline_ns, 0),
+                            BlockReason::Join { target_tid } => (target_tid as u64, 0),
+                            BlockReason::IoWait => (0, 0),
+                        };
+                        let kind_disc = match reason {
+                            BlockReason::FutexWait { .. } => 0u64,
+                            BlockReason::EpollWait { .. } => 1u64,
+                            BlockReason::Nanosleep { .. } => 2u64,
+                            BlockReason::Join { .. } => 3u64,
+                            BlockReason::IoWait => 4u64,
+                        };
+                        crate::batcave::linux::skip_log::record(
+                            crate::batcave::linux::skip_log::SkipKind::FutexDeadlock,
+                            wtid, wtid as u64, a1, a2 | (kind_disc << 32),
+                            0, 0,
+                        );
+                        // Tail-call back into schedule by returning;
+                        // the caller's outer loop re-enters us with
+                        // the freshly-runnable thread available.
+                        return;
+                    }
+                }
+                // Cap reached or no blocked thread found — fall
+                // through to the legacy dump.
+            }
             static DEADLOCK_REPORTED: AtomicBool = AtomicBool::new(false);
             if !DEADLOCK_REPORTED.swap(true, Ordering::AcqRel) {
                 uart::puts("[diag] schedule() found NO runnable thread — possible deadlock\n");
