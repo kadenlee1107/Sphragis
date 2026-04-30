@@ -180,25 +180,33 @@ pub fn build(doc: &Document, tree: &mut LayoutTree, viewport_w: i32) {
     tree.boxes[root].x = 0;
     tree.boxes[root].y = 0;
     tree.boxes[root].width = viewport_w;
-    // 🎯 STUMP #67 (cont): honor the body's CSS padding instead of the
-    // hardcoded 8px we used to splat. CSS like `body { padding: 24px }`
-    // now actually pushes children inward.
+    // 🎯 STUMP #71: honor the body's CSS padding AND margin. Pre-fix
+    // we hardcoded 8px and ignored body { margin: ... }. Browsers
+    // treat body as the document-root content origin: margin pushes
+    // it from the viewport edge, padding indents children further.
+    let mar_l = body_style.margin_left;
+    let mar_r = body_style.margin_right;
+    let mar_t = body_style.margin_top;
+    let mar_b = body_style.margin_bottom;
     let pad_l = body_style.padding_left;
     let pad_r = body_style.padding_right;
     let pad_t = body_style.padding_top;
     let pad_b = body_style.padding_bottom;
-    let inner_w = (viewport_w - pad_l - pad_r).max(0);
+    let inner_w = (viewport_w - mar_l - mar_r - pad_l - pad_r).max(0);
+    tree.boxes[root].x = mar_l;
+    tree.boxes[root].y = mar_t;
     tree.boxes[root].content_w = inner_w;
-    tree.boxes[root].content_x = pad_l;
-    tree.boxes[root].content_y = pad_t;
+    tree.boxes[root].content_x = mar_l + pad_l;
+    tree.boxes[root].content_y = mar_t + pad_t;
 
     // Recursively lay out children
-    let mut cursor_y = pad_t;
-    layout_children(doc, tree, &sheet, root, body, pad_l, &mut cursor_y, inner_w);
+    let mut cursor_y = mar_t + pad_t;
+    layout_children(doc, tree, &sheet, root, body,
+        mar_l + pad_l, &mut cursor_y, inner_w);
 
-    tree.boxes[root].height = cursor_y + pad_b;
-    tree.boxes[root].content_h = cursor_y - pad_t;
-    tree.page_height = cursor_y + pad_b;
+    tree.boxes[root].height = cursor_y + pad_b - mar_t;
+    tree.boxes[root].content_h = cursor_y - (mar_t + pad_t);
+    tree.page_height = cursor_y + pad_b + mar_b;
 }
 
 /// Check if a DOM node should be hidden (hidden attr, aria-hidden, etc.)
@@ -275,6 +283,12 @@ fn layout_children(
     // was a single-line <p> ended up with content_h=0 and the next
     // sibling stacked on top.
     let mut max_line_h_on_current_line: i32 = 0;
+
+    // 🎯 STUMP #71: track the previous block's margin_bottom so the
+    // next block's margin_top collapses to max(prev_mb, next_mt)
+    // instead of adding both. Per CSS spec: adjacent vertical margins
+    // collapse to the larger of the two.
+    let mut prev_block_mb: i32 = 0;
 
     for child_idx in doc.children(dom_parent) {
         let node = doc.get(child_idx);
@@ -696,9 +710,18 @@ fn layout_children(
                         *cursor_y += flush;
                         inline_x = x_offset;
                         max_line_h_on_current_line = 0;
+                        // Inline content was just placed; reset the
+                        // collapse tracker so the next block's
+                        // margin_top isn't shrunk against an inline run.
+                        prev_block_mb = 0;
                     }
 
-                    *cursor_y += style.margin_top;
+                    // Margin collapsing: the gap between two adjacent
+                    // blocks is max(prev.margin_bottom, this.margin_top),
+                    // not their sum.
+                    let collapse_gap = style.margin_top.max(prev_block_mb);
+                    let extra = (collapse_gap - prev_block_mb).max(0);
+                    *cursor_y += extra;
 
                     let block_x = x_offset + style.margin_left + style.padding_left;
                     let block_w = (avail_width - style.margin_left - style.margin_right
@@ -765,6 +788,9 @@ fn layout_children(
 
                     *cursor_y = tree.boxes[ebox].y + tree.boxes[ebox].height + style.margin_bottom;
                     inline_x = x_offset;
+                    // Remember this block's margin_bottom for the next
+                    // sibling's collapse calculation.
+                    prev_block_mb = style.margin_bottom;
                 } else {
                     // Inline element — flow horizontally with siblings
                     let fs = style.font_size.max(10).min(48);
