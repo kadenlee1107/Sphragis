@@ -321,7 +321,10 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
     // syscalls we get periodic snapshots to see the thread table
     // evolution. (Was 1024 — too noisy now that Chromium does millions
     // of syscalls past the prior 3K wall.)
-    if (n & 0xFFFF) == 0 && n > 0 {
+    // Bumped from 0xFFFF to 0xFFFFF — once per million syscalls.
+    // The thread pool can do ~50M syscalls per smoke; one dump
+    // every 65k was 95% of the log volume.
+    if (n & 0xF_FFFF) == 0 && n > 0 {
         uart::puts("[diag] thread-state dump @ syscall ");
         crate::kernel::mm::print_num(n as usize);
         uart::puts("\n");
@@ -371,6 +374,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::PRLIMIT64 => (SyscallCat::Always, sys_prlimit64),
         nr::CLOCK_GETTIME => (SyscallCat::Always, sys_clock_gettime),
         nr::GETRANDOM => (SyscallCat::Always, sys_getrandom),
+        32 => (SyscallCat::Always, sys_stub_zero),    // flock — single-process, no real lock needed
         73 => (SyscallCat::Always, sys_ppoll),        // ppoll
         98 => (SyscallCat::Always, sys_futex),        // futex
         99 => (SyscallCat::Always, sys_stub_zero),   // set_robust_list
@@ -2049,35 +2053,6 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
     uart::puts("\n");
 
     if has_dotdot(path) { return EACCES; }
-
-    // 🎯 STUMP #64 (KEEP_GOING-only): refuse opens to known
-    // Chromium subsystems that retry forever on partial backing —
-    // Shared Dictionary's SQLite shm files are the worst offender
-    // (200+ db-shm retries observed). Return ENOSPC so Chromium
-    // logs the error and gives up. Only active when KEEP_GOING is
-    // on so production paths still attempt the open.
-    if super::skip_log::is_enabled() {
-        let path_str = unsafe { core::str::from_utf8_unchecked(path) };
-        let blacklist: [&str; 4] = [
-            "Shared Dictionary",
-            "shared_proto_db",
-            "DIPS-",
-            "Local Storage",
-        ];
-        for needle in &blacklist {
-            // poor-man's contains
-            if path_str.len() >= needle.len() {
-                let mut found = false;
-                for i in 0..=(path_str.len() - needle.len()) {
-                    if &path_str.as_bytes()[i..i + needle.len()] == needle.as_bytes() {
-                        found = true;
-                        break;
-                    }
-                }
-                if found { return -28; /* ENOSPC */ }
-            }
-        }
-    }
 
     // Handle /proc paths BEFORE VFS check — /proc is always available
     let path_str = unsafe { core::str::from_utf8_unchecked(path) };
