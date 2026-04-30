@@ -14,6 +14,10 @@
 # Compressed logs from past sessions (regenerable).
 *.log
 
+# Render artifacts from `make render` — regenerable from the source HTML.
+logs/qemu-tests/render-*.png
+logs/qemu-tests/dumpdom-*.log
+
 # Claude Code / harness local state (not project state).
 /.claude
 /.claude-flow
