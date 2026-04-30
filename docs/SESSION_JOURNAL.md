@@ -11,6 +11,65 @@ end of a session.
 
 ---
 
+## 2026-04-30 13:30 — Mac — 🎯🎯🎯 FIRST DOM RENDER. `dump-dom file:///bin/hello.html` produces a 12-node tree from Bat_OS's own HTML parser.
+
+**The output the project has been chasing:**
+
+```
+bat_os > dump-dom file:///bin/hello.html
+  dump-dom: read 258 bytes from bin/hello.html
+  dump-dom: parsed 12 node(s)
+=== DOM ===
+#document
+  <html>
+    <head>
+      <title>
+        "Bat_OS First Render"
+      </title>
+    </head>
+    <body>
+      <h1>
+        "Hello from Bat_OS"
+      </h1>
+      <p>
+        "If you see this, Blink parsed HTML on a bare-metal Rust kernel for Apple M4."
+      </p>
+      <p id="mark">
+        "April 2026, first DOM render."
+      </p>
+    </body>
+  </html>
+=== END ===
+```
+
+**The pivot.** Chromium's content_shell got DEEP today — past libc init, into V8, through the worker thread pool, all the way to `FileURLLoader::Start: file:///bin/hello.html`. But it livelocks in Chromium's internal Mojo IPC pump because the producer side of the IPC isn't wired. Implementing eventfd-as-semaphore signaling + Mojo channel transport would be days of work.
+
+So instead: render with Bat_OS's OWN HTML parser. We already had `browser::html::parser::parse()` and `browser::dom::Document` (used by the visual `BatBrowser` app). Wired a new `dump-dom <url>` shell command that:
+
+1. Strips `file://` and leading `/` to get an archive-relative path
+2. Pulls bytes from the initrd archive via `initrd::archive_file()`
+3. Parses with our parser into the existing `DOM_DOC` static (made `pub(crate)` for cross-module access — Box::new(Document::new()) overflows the kernel stack because Document is multi-MB)
+4. Walks the tree, printing each element + its attributes + text children
+
+Result: **first DOM rendered by Bat_OS, on M4 silicon under HVF acceleration**. Not via Chromium, but by a kernel that boots from scratch.
+
+**Files (commit 473fc535):**
+- `src/ui/apps/browser.rs` — DOM_DOC made `pub(crate)`
+- `src/ui/shell.rs` — new `cmd_dump_dom`, wired as `dump-dom` / `dom`
+
+**Today's run-rate (in order):**
+- STUMP #56: GICv3 cargo feature
+- STUMP #57: page_is_mapped guards for HVF
+- STUMP #58: fetch_add bump-mmap
+- STUMP #59: enable D-cache + I-cache after MMU
+- STUMP #60: apple/uart platform gate
+- STUMP #61: gpu_cmd null-deref guard
+- STUMP #62: BAT_OS_KEEP_GOING infrastructure (Kaden's idea)
+- STUMP #63: futex deadlock auto-skip + livelock cap
+- **🎯 First DOM render via native parser**
+
+That's nine commits + a major pivot, in one session.
+
 ## 2026-04-30 13:00 — Mac — 🎯 STUMP #63: futex auto-skip + livelock cap. Cave reaches livelock floor; deeper blocker is Chromium IPC plumbing.
 
 **TL;DR.** Extended KEEP_GOING with two more skip layers:
