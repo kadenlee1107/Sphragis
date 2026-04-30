@@ -51,6 +51,17 @@ pub fn init() {}
 /// `platform::serial_putc`) also show up on the Mac's display, not
 /// just in the void of the dockchannel MMIO.
 pub fn putc(c: u8) {
+    // 🎯 STUMP #60 (HVF cleanup): on QEMU we MUST NOT touch the
+    // dockchannel UART MMIO — it lives at PA 0x3_8812_8000 which is
+    // unmapped on QEMU virt and any read faults. The platform layer
+    // routes serial_putc to the right driver based on
+    // `platform::current()`, but a few callers still reach in
+    // directly (panic-adjacent paths, kernel_main_apple). Add a
+    // platform gate so direct calls on QEMU silently no-op instead
+    // of trying to read DATA_TX_FREE from a phantom address.
+    if !crate::platform::is_apple_silicon() {
+        return;
+    }
     let mut guard: u32 = 1_000_000;
     while read32(DATA_TX_FREE) == 0 {
         guard = guard.saturating_sub(1);
