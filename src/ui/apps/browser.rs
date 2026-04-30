@@ -104,7 +104,7 @@ static mut SCROLL_Y: usize = 0;
 // Level 2 rendering engine (DOM + Layout)
 static mut USE_ENGINE: bool = true; // use Level 2 engine vs Level 1 fallback
 pub(crate) static mut DOM_DOC: crate::browser::dom::Document = crate::browser::dom::Document::new();
-static mut LAYOUT_TREE: crate::browser::layout::LayoutTree = crate::browser::layout::LayoutTree::new();
+pub(crate) static mut LAYOUT_TREE: crate::browser::layout::LayoutTree = crate::browser::layout::LayoutTree::new();
 
 // State
 static mut STATE: BrowserState = BrowserState::Idle;

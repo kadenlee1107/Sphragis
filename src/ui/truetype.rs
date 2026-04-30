@@ -1046,9 +1046,15 @@ pub fn draw_text_fb(
                     let dg = (dst >> 8) & 0xFF;
                     let db = dst & 0xFF;
 
-                    let r = dr + ((cr - dr) * coverage) / 255;
-                    let g = dg + ((cg - dg) * coverage) / 255;
-                    let b = db + ((cb - db) * coverage) / 255;
+                    // Signed alpha blend: dst + ((src - dst) * cov) / 255.
+                    // Cast to i32 because src may be darker than dst (cr < dr)
+                    // and we have overflow-checks=true in release.
+                    let r = (dr as i32 + (((cr as i32 - dr as i32) * coverage as i32) / 255))
+                        .clamp(0, 255) as u32;
+                    let g = (dg as i32 + (((cg as i32 - dg as i32) * coverage as i32) / 255))
+                        .clamp(0, 255) as u32;
+                    let b = (db as i32 + (((cb as i32 - db as i32) * coverage as i32) / 255))
+                        .clamp(0, 255) as u32;
 
                     core::ptr::write_volatile(
                         fb.add(fb_idx),

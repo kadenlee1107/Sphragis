@@ -123,6 +123,7 @@ fn execute(cmd: &str) {
         "blink" => cmd_run_elf("blink"),
         "chromium" | "chrome" => cmd_chromium(parts[1], parts[2], parts[3]),
         "dump-dom" | "dom" => cmd_dump_dom(parts[1]),
+        "render" => cmd_render(parts[1]),
         "browse" | "open" => {
             if !parts[1].is_empty() {
                 console::puts("  Opening in BatBrowser: ");
@@ -3190,4 +3191,129 @@ fn cmd_dump_dom(url: &str) {
     uart::puts("=== DOM ===\n");
     walk(&doc, 0, 0);
     uart::puts("=== END ===\n");
+}
+
+/// `render <url>` — parse HTML, run layout, paint into a software
+/// framebuffer (in BSS), and dump the resulting pixels over the UART
+/// as a base64-encoded RGBA stream. The companion host-side script
+/// `scripts/render_to_png.py` decodes that into a PNG file you can
+/// open. Lets you SEE the page Bat_OS renders, without needing the
+/// host to have a working virtio-gpu under HVF.
+fn cmd_render(url: &str) {
+    use crate::browser::dom::Document;
+    use crate::browser::{html, layout, paint};
+    use crate::drivers::uart;
+    use crate::kernel::mm::initrd;
+
+    if url.is_empty() {
+        uart::puts("  usage: render <url|path>\n");
+        uart::puts("  e.g.   render file:///bin/hello.html\n");
+        return;
+    }
+
+    let mut path = url;
+    if let Some(rest) = path.strip_prefix("file://") { path = rest; }
+    while path.starts_with('/') { path = &path[1..]; }
+
+    let bytes = match initrd::archive_file(path) {
+        Some(b) => b,
+        None => {
+            uart::puts("  render: not in archive: ");
+            uart::puts(path); uart::puts("\n");
+            return;
+        }
+    };
+
+    // Backing framebuffer — 800x600 BGRA = 1.92 MB. Lives in BSS, so
+    // it doesn't bloat the binary file but is zero-initialized at
+    // boot. Using static mut is fine: render is never called from
+    // multiple threads concurrently.
+    const RW: u32 = 800;
+    const RH: u32 = 600;
+    const FB_LEN: usize = (RW * RH) as usize;
+    static mut RENDER_FB: [u32; FB_LEN] = [0u32; FB_LEN];
+
+    // Take the visual browser's DOM_DOC + LAYOUT_TREE statics. They
+    // already exist in BSS (~5 MB combined); reusing avoids stack
+    // overflow from Box::new(Document::new()).
+    let doc: &mut Document = unsafe {
+        &mut *core::ptr::addr_of_mut!(crate::ui::apps::browser::DOM_DOC)
+    };
+    let tree: &mut layout::LayoutTree = unsafe {
+        &mut *core::ptr::addr_of_mut!(crate::ui::apps::browser::LAYOUT_TREE)
+    };
+
+    uart::puts("  render: read ");
+    crate::kernel::mm::print_num(bytes.len());
+    uart::puts(" bytes from "); uart::puts(path); uart::puts("\n");
+
+    html::parser::parse(bytes, doc);
+    uart::puts("  render: parsed "); crate::kernel::mm::print_num(doc.len());
+    uart::puts(" nodes\n");
+
+    layout::build(doc, tree, RW as i32);
+    uart::puts("  render: laid out "); crate::kernel::mm::print_num(tree.box_count);
+    uart::puts(" boxes (page_height=");
+    crate::kernel::mm::print_num(tree.page_height as usize);
+    uart::puts(")\n");
+
+    // Point the gpu module at our private buffer so paint() targets
+    // it. fill_screen sets the white background; paint draws boxes
+    // on top.
+    use core::sync::atomic::Ordering as O2;
+    let fb_ptr = unsafe { core::ptr::addr_of_mut!(RENDER_FB) as *mut u32 };
+    crate::drivers::virtio::gpu::SOFT_FB.store(fb_ptr as usize, O2::Release);
+    crate::drivers::virtio::gpu::SOFT_W.store(RW, O2::Release);
+    crate::drivers::virtio::gpu::SOFT_H.store(RH, O2::Release);
+
+    // White background
+    crate::drivers::virtio::gpu::fill_screen(0xFFFFFFFF);
+
+    paint::paint(tree, 0, 0, 0, RW as i32, RH as i32);
+
+    // Restore so other code paths (e.g. console::puts) don't keep
+    // writing into our buffer.
+    crate::drivers::virtio::gpu::SOFT_FB.store(0, O2::Release);
+    crate::drivers::virtio::gpu::SOFT_W.store(0, O2::Release);
+    crate::drivers::virtio::gpu::SOFT_H.store(0, O2::Release);
+
+    // Dump as base64-encoded raw BGRA. Wrap with markers so the
+    // host script can find the start/end. Width/height precede so
+    // the decoder knows the geometry.
+    uart::puts("=== RENDER-BEGIN ");
+    crate::kernel::mm::print_num(RW as usize);
+    uart::puts("x");
+    crate::kernel::mm::print_num(RH as usize);
+    uart::puts(" ===\n");
+
+    static B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    // Stream 76 base64 chars per line (= 57 raw bytes per line)
+    let total_bytes: usize = FB_LEN * 4; // BGRA per pixel
+    let mut col = 0usize;
+    let raw_ptr = fb_ptr as *const u8;
+    let mut i = 0usize;
+    while i < total_bytes {
+        let b0 = unsafe { core::ptr::read_volatile(raw_ptr.add(i)) };
+        let b1 = if i + 1 < total_bytes { unsafe { core::ptr::read_volatile(raw_ptr.add(i + 1)) } } else { 0 };
+        let b2 = if i + 2 < total_bytes { unsafe { core::ptr::read_volatile(raw_ptr.add(i + 2)) } } else { 0 };
+        uart::putc(B64[((b0 >> 2) & 0x3F) as usize]);
+        uart::putc(B64[(((b0 << 4) | (b1 >> 4)) & 0x3F) as usize]);
+        col += 2;
+        if i + 1 < total_bytes {
+            uart::putc(B64[(((b1 << 2) | (b2 >> 6)) & 0x3F) as usize]);
+            col += 1;
+        } else {
+            uart::putc(b'='); col += 1;
+        }
+        if i + 2 < total_bytes {
+            uart::putc(B64[(b2 & 0x3F) as usize]);
+            col += 1;
+        } else {
+            uart::putc(b'='); col += 1;
+        }
+        i += 3;
+        if col >= 76 { uart::putc(b'\n'); col = 0; }
+    }
+    if col != 0 { uart::putc(b'\n'); }
+    uart::puts("=== RENDER-END ===\n");
 }

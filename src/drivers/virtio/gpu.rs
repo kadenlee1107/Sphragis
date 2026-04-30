@@ -13,6 +13,14 @@ const SCREEN_WIDTH: u32 = 1280;
 const SCREEN_HEIGHT: u32 = 1024;
 const BPP: u32 = 4;
 
+// Software-render override: when SOFT_FB is non-zero, gpu::framebuffer()
+// returns it and gpu::width/height return SOFT_W/H. Lets the shell's
+// `render` command paint into a private buffer (no virtio-gpu device
+// needed) and dump the result over the UART.
+pub(crate) static SOFT_FB: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SOFT_W:  core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+pub(crate) static SOFT_H:  core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 // GPU command types
 const CMD_RESOURCE_CREATE_2D: u32 = 0x0101;
 const CMD_SET_SCANOUT: u32 = 0x0103;
@@ -163,11 +171,21 @@ pub fn init() -> Option<()> {
 }
 
 pub fn framebuffer() -> *mut u32 {
+    let soft = SOFT_FB.load(Ordering::Relaxed);
+    if soft != 0 { return soft as *mut u32; }
     FB_ADDR.load(Ordering::Relaxed) as *mut u32
 }
 
-pub fn width() -> u32 { SCREEN_WIDTH }
-pub fn height() -> u32 { SCREEN_HEIGHT }
+pub fn width() -> u32 {
+    let w = SOFT_W.load(Ordering::Relaxed);
+    if w != 0 { return w; }
+    SCREEN_WIDTH
+}
+pub fn height() -> u32 {
+    let h = SOFT_H.load(Ordering::Relaxed);
+    if h != 0 { return h; }
+    SCREEN_HEIGHT
+}
 
 pub fn flush(x: u32, y: u32, w: u32, h: u32) {
     #[repr(C)]
@@ -185,28 +203,35 @@ pub fn flush(x: u32, y: u32, w: u32, h: u32) {
 
 pub fn fill_screen(color: u32) {
     let fb = framebuffer();
-    let total = (SCREEN_WIDTH * SCREEN_HEIGHT) as usize;
+    if fb.is_null() { return; }
+    let w = width(); let h = height();
+    let total = (w * h) as usize;
     for i in 0..total {
         unsafe { core::ptr::write_volatile(fb.add(i), color); }
     }
-    flush(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+    if SOFT_FB.load(Ordering::Relaxed) == 0 { flush(0, 0, w, h); }
 }
 
 pub fn fill_rect(x: u32, y: u32, w: u32, h: u32, color: u32) {
     let fb = framebuffer();
-    for row in y..(y + h).min(SCREEN_HEIGHT) {
-        for col in x..(x + w).min(SCREEN_WIDTH) {
+    if fb.is_null() { return; }
+    let sw = width(); let sh = height();
+    for row in y..(y + h).min(sh) {
+        for col in x..(x + w).min(sw) {
             unsafe {
-                core::ptr::write_volatile(fb.add((row * SCREEN_WIDTH + col) as usize), color);
+                core::ptr::write_volatile(fb.add((row * sw + col) as usize), color);
             }
         }
     }
 }
 
 pub fn set_pixel(x: u32, y: u32, color: u32) {
-    if x < SCREEN_WIDTH && y < SCREEN_HEIGHT {
+    let fb = framebuffer();
+    if fb.is_null() { return; }
+    let sw = width(); let sh = height();
+    if x < sw && y < sh {
         unsafe {
-            core::ptr::write_volatile(framebuffer().add((y * SCREEN_WIDTH + x) as usize), color);
+            core::ptr::write_volatile(fb.add((y * sw + x) as usize), color);
         }
     }
 }
