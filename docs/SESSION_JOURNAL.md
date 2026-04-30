@@ -11,6 +11,48 @@ end of a session.
 
 ---
 
+## 2026-04-30 10:30 — Mac — 🎯 STUMP #62: BAT_OS_KEEP_GOING + skip ring → Chromium reaches FileURLLoader::Start on /bin/hello.html. Real subsystems initializing.
+
+**TL;DR.** Kaden's idea: instead of fixing one fault per smoke run, build a "skip-and-log" mode that keeps going past every fatal so ONE run maps the entire failure tree. Implemented as `BAT_OS_KEEP_GOING=1` build-time env var plus three skip sites:
+
+1. `sys_exit_group` with non-zero code → log + `exit_current(0)` the failing thread, leave siblings alive.
+2. Unknown syscall → log + return ENOSYS as before.
+3. EL0 data/inst abort → log + `exit_current(0)`.
+
+Each event prints a one-liner `[SKIP <seq> <KIND> tid=T a0=X a1=Y a2=Z elr=PC far=F]` so a single `grep '^\[SKIP'` recovers the timeline.
+
+**Result on a 180s HVF smoke:**
+- 4 distinct skip signatures collected:
+  - `UNKNOWN_SYSCALL 0x1bc` (444 = landlock_create_ruleset, harmless)
+  - `EXIT 0x7f` (127 = posix_spawn helper, harmless)
+  - `UNKNOWN_SYSCALL 0x1a` (26 = inotify_init1, harmless — Chromium logs ERROR + falls back)
+  - `USER_DATA_ABORT FAR=0x8 ELR=0x11ae8c3c` (NULL+8 deref in real Chromium code)
+- 30 Chromium worker threads alive (16966–16992)
+- One already finished cleanly: `tid=16990 state=Exited(0)`
+- Real Chromium subsystems initialized:
+  - `address_tracker_linux`: NETLINK socket ENOTSUP
+  - `file_path_watcher_inotify`: inotify_init() ENOSYS
+  - `platform_font_skia`: "no sans, falling back"
+  - `http_server`: accept rv=-2
+  - `discardable_shared_memory_manager`: low-tmp warning
+  - `leveldb_database`: shared_proto_db open errors
+- **`FileURLLoader::Start: file:///bin/hello.html`** — Chromium opened the HTML file
+- `readlinkat '/bin/hello.html'`, `openat '/bin/hello.html' fd=...`
+
+The cave is genuinely *trying to render*. The thread pool is running, the file loader started, hello.html is being read. The main blocker now is some downstream futex wait that never gets woken — likely because one of the worker tasks died on a fault and didn't signal completion. Next iteration should make the cave run to completion or fail with a useful late-stage signature.
+
+**Files (commit 78f15906):**
+- `src/batcave/linux/skip_log.rs` — new module, structured ring + summary
+- `src/batcave/linux/syscall.rs` — exit-skip + unknown-syscall log
+- `src/kernel/arch/mod.rs` — EL0 abort skip
+- `src/batcave/linux/signal.rs` + `src/ui/shell.rs` — summary hooks
+- `src/main.rs` — `BAT_OS_KEEP_GOING` env-var detection
+
+Next session priorities:
+- Trace the FAR=0x8 deref at content_shell+0x11ae8c3c (real bug in Chromium-side or a missing kernel feature)
+- Dig into why downstream workers block (futex stuck — likely related to the killed worker)
+- Watch FileURLLoader for the first sign of actual HTML parsing
+
 ## 2026-04-30 09:45 — Mac — 🎯 STUMP #61 cracked: gpu_cmd null-deref. Post-exit DATA ABORT eliminated. Content_shell loads, runs, exits cleanly under HVF.
 
 **TL;DR.** Tracked the post-exit kernel data abort to the headless serial shell printing chromium runner messages through `console::puts` → `gpu::flush` → `gpu_cmd` → `Virtqueue::poll_used` on a Virtqueue whose `QUEUE_STORAGE` was never set (gpu::init returned None on QEMU virt with no -device virtio-gpu). Null-pointer deref through the descriptor ring landed at `safe_read16(used_base + 2)` whose computed PA started looking like ELF magic bytes — that's why the FAR pattern `0x00010102464c5002` was so eye-catching. The fix is one early-return guard at the top of `gpu_cmd`.
