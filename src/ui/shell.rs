@@ -3224,13 +3224,14 @@ fn cmd_render(url: &str) {
         }
     };
 
-    // Backing framebuffer — 800x600 BGRA = 1.92 MB. Lives in BSS, so
-    // it doesn't bloat the binary file but is zero-initialized at
-    // boot. Using static mut is fine: render is never called from
-    // multiple threads concurrently.
-    const RW: u32 = 800;
-    const RH: u32 = 600;
-    const FB_LEN: usize = (RW * RH) as usize;
+    // Backing framebuffer — sized to fit pages up to 4096px tall at
+    // 1024px wide. Lives in BSS (16 MB zeroed at boot, no impact on
+    // binary file size). render is never called concurrently so
+    // static mut is fine. Actual render uses only the first
+    // (page_height) rows; the dump trims to that.
+    const MAX_W: u32 = 1024;
+    const MAX_H: u32 = 4096;
+    const FB_LEN: usize = (MAX_W * MAX_H) as usize;
     static mut RENDER_FB: [u32; FB_LEN] = [0u32; FB_LEN];
 
     // Take the visual browser's DOM_DOC + LAYOUT_TREE statics. They
@@ -3251,25 +3252,38 @@ fn cmd_render(url: &str) {
     uart::puts("  render: parsed "); crate::kernel::mm::print_num(doc.len());
     uart::puts(" nodes\n");
 
-    layout::build(doc, tree, RW as i32);
+    let rw: u32 = 800; // viewport width — same as default browsers' first guess
+    layout::build(doc, tree, rw as i32);
     uart::puts("  render: laid out "); crate::kernel::mm::print_num(tree.box_count);
     uart::puts(" boxes (page_height=");
     crate::kernel::mm::print_num(tree.page_height as usize);
     uart::puts(")\n");
 
+    // Auto-size render height to the page. Minimum 600 (so short
+    // pages still get a normal-looking screenshot), max MAX_H.
+    let rh: u32 = (tree.page_height.max(600) as u32).min(MAX_H);
+
+    // Pick the body's effective background color so the area below
+    // content matches the theme instead of staying white. Fall back
+    // to white when the body has no explicit background.
+    let body_bg = tree.boxes[0].style.background_color;
+    let bg_word = if body_bg == crate::browser::css::style::Color::TRANSPARENT {
+        0xFFFFFFFF
+    } else {
+        body_bg.raw()
+    };
+
     // Point the gpu module at our private buffer so paint() targets
-    // it. fill_screen sets the white background; paint draws boxes
-    // on top.
+    // it. fill_screen sets the background; paint draws boxes on top.
     use core::sync::atomic::Ordering as O2;
     let fb_ptr = unsafe { core::ptr::addr_of_mut!(RENDER_FB) as *mut u32 };
     crate::drivers::virtio::gpu::SOFT_FB.store(fb_ptr as usize, O2::Release);
-    crate::drivers::virtio::gpu::SOFT_W.store(RW, O2::Release);
-    crate::drivers::virtio::gpu::SOFT_H.store(RH, O2::Release);
+    crate::drivers::virtio::gpu::SOFT_W.store(rw, O2::Release);
+    crate::drivers::virtio::gpu::SOFT_H.store(rh, O2::Release);
 
-    // White background
-    crate::drivers::virtio::gpu::fill_screen(0xFFFFFFFF);
+    crate::drivers::virtio::gpu::fill_screen(bg_word);
 
-    paint::paint(tree, 0, 0, 0, RW as i32, RH as i32);
+    paint::paint(tree, 0, 0, 0, rw as i32, rh as i32);
 
     // Restore so other code paths (e.g. console::puts) don't keep
     // writing into our buffer.
@@ -3281,14 +3295,15 @@ fn cmd_render(url: &str) {
     // host script can find the start/end. Width/height precede so
     // the decoder knows the geometry.
     uart::puts("=== RENDER-BEGIN ");
-    crate::kernel::mm::print_num(RW as usize);
+    crate::kernel::mm::print_num(rw as usize);
     uart::puts("x");
-    crate::kernel::mm::print_num(RH as usize);
+    crate::kernel::mm::print_num(rh as usize);
     uart::puts(" ===\n");
 
     static B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    // Stream 76 base64 chars per line (= 57 raw bytes per line)
-    let total_bytes: usize = FB_LEN * 4; // BGRA per pixel
+    // Stream 76 base64 chars per line (= 57 raw bytes per line). Only
+    // dump the rows we actually painted (rw * rh pixels).
+    let total_bytes: usize = (rw * rh) as usize * 4;
     let mut col = 0usize;
     let raw_ptr = fb_ptr as *const u8;
     let mut i = 0usize;
