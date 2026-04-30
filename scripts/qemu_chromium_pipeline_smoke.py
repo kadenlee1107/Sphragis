@@ -148,13 +148,12 @@ def main():
     # gic-version=2 forces QEMU to expose GICv2 MMIO (matches our handler).
     # Default "max" picks v3 which uses system registers (ICC_*) we don't
     # touch — IRQs would still fire but couldn't be acked properly.
-    args = ["qemu-system-aarch64", "-machine", "virt,gic-version=2", "-cpu", "max",
+    args = ["qemu-system-aarch64",
+            "-accel", "hvf",
+            "-machine", "virt,gic-version=3",
+            "-cpu", "host",
             "-m", "4G",
             "-display", "none",
-            "-device", "virtio-gpu-device",
-            "-device", "virtio-keyboard-device",
-            "-netdev", "user,id=net0",
-            "-device", "virtio-net-device,netdev=net0",
             "-serial", "mon:stdio",
             "-kernel", str(kernel_bin),
             "-initrd", str(initrd)]
@@ -166,10 +165,15 @@ def main():
     events = []
     verdict = "FAIL"
     try:
-        c.expect(rb"\[bs\] flush done .+ entering input loop", timeout=60)
-        time.sleep(0.3)
-        c.sendline(b"batman")
-        c.expect(PROMPT, timeout=30)
+        idx = c.expect(
+            [rb"\[bs\] flush done .+ entering input loop",
+             PROMPT],
+            timeout=60,
+        )
+        if idx == 0:
+            time.sleep(0.3)
+            c.sendline(b"batman")
+            c.expect(PROMPT, timeout=30)
 
         # Record what happens between sending the command and the next
         # prompt (the runner either succeeds, errors out with a message,

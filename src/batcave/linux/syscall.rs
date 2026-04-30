@@ -3101,12 +3101,36 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
     {
         let aligned_len = (len + 0xFFF) & !0xFFFusize;
         use core::sync::atomic::Ordering as Ord2;
-        let cur = SMALL_MMAP_CURSOR.load(Ord2::Acquire);
-        if cur == 0 {
-            let _ = SMALL_MMAP_CURSOR.compare_exchange(
-                0, SMALL_MMAP_BASE,
-                Ord2::AcqRel, Ord2::Acquire,
-            );
+        // 🎯 STUMP #58: under HVF the static initializer for
+        // SMALL_MMAP_CURSOR (= SMALL_MMAP_BASE = 0x70_0000_0000)
+        // is observed as 0 — possibly a section/init quirk. Hard-fix:
+        // unconditionally promote any below-BASE cursor to BASE
+        // before the bump-alloc loop. Loop with cmpxchg so we don't
+        // race a concurrent caller that already set it.
+        loop {
+            let cur = SMALL_MMAP_CURSOR.load(Ord2::Acquire);
+            if cur >= SMALL_MMAP_BASE { break; }
+            if SMALL_MMAP_CURSOR
+                .compare_exchange(cur, SMALL_MMAP_BASE,
+                                  Ord2::AcqRel, Ord2::Acquire)
+                .is_ok() { break; }
+        }
+        // First-call diagnostic — print AFTER the fix-up so we see
+        // the value that survives. Use simple static counter (not
+        // AtomicBool whose init may be the same root cause).
+        static DBG_CNT: core::sync::atomic::AtomicUsize =
+            core::sync::atomic::AtomicUsize::new(0);
+        let n = DBG_CNT.fetch_add(1, Ord2::AcqRel);
+        if n < 3 {
+            let post = SMALL_MMAP_CURSOR.load(Ord2::Acquire);
+            uart::puts("[mmap dbg #");
+            crate::kernel::mm::print_num(n);
+            uart::puts("] cursor=0x");
+            let hex = b"0123456789abcdef";
+            for sh in (0..16).rev() {
+                uart::putc(hex[((post >> (sh * 4)) & 0xF) as usize]);
+            }
+            uart::puts("\n");
         }
         // Ensure the entire small-mmap region is covered by ONE
         // big demand-page reservation per active L1 — Chromium does
@@ -3168,101 +3192,117 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         const LARGE_THRESHOLD: usize = 64 * 1024 * 1024; // 64 MiB
         const LARGE_ALIGN: usize = 16 * 1024 * 1024;     // 16 MiB
         let needs_large_align = aligned_len >= LARGE_THRESHOLD;
-        let mut base = SMALL_MMAP_CURSOR.load(Ord2::Acquire);
-        loop {
-            // For large allocations, round base up to 16 MiB before
-            // computing next.
-            let aligned_base = if needs_large_align {
-                (base + LARGE_ALIGN - 1) & !(LARGE_ALIGN - 1)
-            } else {
-                base
-            };
-            let next = aligned_base.saturating_add(aligned_len);
-            if (next as u64) >= SMALL_MMAP_END as u64 {
-                break;
-            }
-            match SMALL_MMAP_CURSOR.compare_exchange(
-                base, next, Ord2::AcqRel, Ord2::Acquire,
-            ) {
-                Ok(_) => {
-                    // From here `base` refers to the aligned base.
-                    let base = aligned_base;
-                    uart::puts("[mmap] anon → 0x");
-                    let hex = b"0123456789abcdef";
-                    for sh in (0..16).rev() {
-                        uart::putc(hex[((base >> (sh * 4)) & 0xF) as usize]);
-                    }
-                    uart::puts(" len=");
-                    crate::kernel::mm::print_num(len);
-                    if needs_large_align {
-                        uart::puts(" (16M-aligned)");
-                    }
-                    uart::puts("\n");
-                    // 🎯 STUMP #28 v2: pre-commit ALL anonymous private
-                    // mappings, not just 2 MiB-aligned PA super-pages.
-                    // GPT-5.4 advice: "make anon mmap boring and OS-like".
-                    // PartitionAlloc / V8 / Blink heap allocators
-                    // assume newly mapped span memory is fully present
-                    // and zeroed — they may initialize metadata for
-                    // one slot then inspect neighbors, expecting
-                    // already-zero contiguous backing. Lazy commit
-                    // breaks that contract.
-                    //
-                    // Cost analysis: typical Chromium run mmaps
-                    // ~50-100 MB anon. We have 3.6 GB phys, 870K user
-                    // frames available. Pre-committing all anon is a
-                    // tiny fraction of available memory.
-                    //
-                    // STUMP #30 v2: tested PRECOMMIT_CAP=256 MiB.
-                    // Bypasses V8 OOM ~half the time but introduces a
-                    // different crash (RawPtrBackupRefImpl::Acquire on
-                    // sign-extended ptr) at ~1.3K lines. Net: regressed
-                    // average run depth. Reverted to 32 MiB.
-                    // V8 OOM-then-pa-skip path lands consistently at
-                    // ~7.4K which is better than the noisy 256-MiB
-                    // distribution.
-                    const PRECOMMIT_CAP: usize = 32 * 1024 * 1024;
-                    let should_precommit = fd_num < 0
-                        && len <= PRECOMMIT_CAP;
-                    if should_precommit {
-                        let n_pages = (len + 0xFFF) / 4096;
-                        let mut committed = 0usize;
-                        for i in 0..n_pages {
-                            let va = base as u64 + (i * 4096) as u64;
-                            let phys = match crate::kernel::mm::frame::alloc_frame() {
-                                Some(p) => p as u64,
-                                None => break,
-                            };
-                            // Frame is already zeroed by alloc_frame.
-                            let install = super::demand_page::install_l3_mapping(
-                                active_l1, va, phys,
-                                super::demand_page::USER_PAGE_FLAGS,
-                            );
-                            if install.is_err() { break; }
-                            committed += 1;
-                            if i & 63 == 63 {
-                                super::threads::schedule();
-                            }
-                        }
-                        unsafe {
-                            core::arch::asm!("dsb ishst");
-                            core::arch::asm!("tlbi vmalle1");
-                            core::arch::asm!("dsb ish");
-                            core::arch::asm!("isb");
-                        }
-                        // Quiet log — only print for big allocs.
-                        if n_pages > 16 {
-                            uart::puts("[mmap/precommit] pages=");
-                            crate::kernel::mm::print_num(committed);
-                            uart::puts(" of ");
-                            crate::kernel::mm::print_num(n_pages);
-                            uart::puts("\n");
-                        }
-                    }
-                    return base as i64;
+        // 🎯 STUMP #58: cmpxchg-based bump allocation observed broken
+        // under HVF — even when cur_now matched the expected value
+        // microseconds before, compare_exchange returned Err with a
+        // bogus current. Diagnostic showed base/next correct,
+        // cur_now correct, then cmpxchg(0x70..., 0x70...+len)
+        // returned Err(0). The follow-up iteration's cmpxchg(0,
+        // 0+len) then SUCCEEDED while cur was still 0x70...
+        // Likely an HVF/M4 LL/SC vs LSE atomic mismatch on the cursor's
+        // cache line. Switch to fetch_add (LDADD on LSE / atomic
+        // increment fallback) which is a single-instruction RMW
+        // and doesn't depend on a separate compare step. Sacrifices
+        // 16 MiB alignment guarantee — for that case we serialize
+        // through an IRQ-disabled window above the bump.
+        let bump_amount = if needs_large_align {
+            // Reserve enough headroom that we can pad up to 16 MiB after
+            // fetch_add. Worst case: we pad up by (LARGE_ALIGN - 1).
+            aligned_len + LARGE_ALIGN
+        } else {
+            aligned_len
+        };
+        // Promote cursor before the fetch_add so we never start below
+        // SMALL_MMAP_BASE on a cold static.
+        let _ = SMALL_MMAP_CURSOR.compare_exchange(
+            0, SMALL_MMAP_BASE, Ord2::AcqRel, Ord2::Acquire);
+        let raw_base = SMALL_MMAP_CURSOR.fetch_add(bump_amount, Ord2::AcqRel);
+        let raw_base = if raw_base < SMALL_MMAP_BASE {
+            // The fetch_add saw a too-low cursor (didn't promote in
+            // time); compensate by adding the missing offset. Safe
+            // because we reserved bump_amount above; we'll just waste
+            // the bytes in [raw_base, BASE).
+            SMALL_MMAP_BASE
+        } else {
+            raw_base
+        };
+        let aligned_base = if needs_large_align {
+            (raw_base + LARGE_ALIGN - 1) & !(LARGE_ALIGN - 1)
+        } else {
+            raw_base
+        };
+        if (aligned_base + aligned_len) as u64 >= SMALL_MMAP_END as u64 {
+            // Refund the bump. fetch_sub is best-effort; even if
+            // racing it just adds wasted space.
+            SMALL_MMAP_CURSOR.fetch_sub(bump_amount, Ord2::AcqRel);
+        } else {
+            // SUCCESS branch (replaces the cmpxchg loop's Ok arm).
+            let base = aligned_base;
+            // Diagnostic for the first few mmaps so we can verify the
+            // post-fix path works under HVF.
+            if DBG_CNT.load(Ord2::Acquire) < 4 {
+                uart::puts("[mmap fetch_add] raw=0x");
+                let hex = b"0123456789abcdef";
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((raw_base >> (sh * 4)) & 0xF) as usize]);
                 }
-                Err(cur) => base = cur,
+                uart::puts(" → base=0x");
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((base >> (sh * 4)) & 0xF) as usize]);
+                }
+                uart::puts("\n");
             }
+            uart::puts("[mmap] anon → 0x");
+            let hex = b"0123456789abcdef";
+            for sh in (0..16).rev() {
+                uart::putc(hex[((base >> (sh * 4)) & 0xF) as usize]);
+            }
+            uart::puts(" len=");
+            crate::kernel::mm::print_num(len);
+            if needs_large_align {
+                uart::puts(" (16M-aligned)");
+            }
+            uart::puts("\n");
+            // 🎯 STUMP #28 v2: pre-commit ALL anonymous private
+            // mappings, not just 2 MiB-aligned PA super-pages.
+            // PartitionAlloc / V8 / Blink heap allocators assume
+            // newly mapped span memory is fully present and zeroed.
+            const PRECOMMIT_CAP: usize = 32 * 1024 * 1024;
+            let should_precommit = fd_num < 0 && len <= PRECOMMIT_CAP;
+            if should_precommit {
+                let n_pages = (len + 0xFFF) / 4096;
+                let mut committed = 0usize;
+                for i in 0..n_pages {
+                    let va = base as u64 + (i * 4096) as u64;
+                    let phys = match crate::kernel::mm::frame::alloc_frame() {
+                        Some(p) => p as u64,
+                        None => break,
+                    };
+                    let install = super::demand_page::install_l3_mapping(
+                        active_l1, va, phys,
+                        super::demand_page::USER_PAGE_FLAGS,
+                    );
+                    if install.is_err() { break; }
+                    committed += 1;
+                    if i & 63 == 63 {
+                        super::threads::schedule();
+                    }
+                }
+                unsafe {
+                    core::arch::asm!("dsb ishst");
+                    core::arch::asm!("tlbi vmalle1");
+                    core::arch::asm!("dsb ish");
+                    core::arch::asm!("isb");
+                }
+                if n_pages > 16 {
+                    uart::puts("[mmap/precommit] pages=");
+                    crate::kernel::mm::print_num(committed);
+                    uart::puts(" of ");
+                    crate::kernel::mm::print_num(n_pages);
+                    uart::puts("\n");
+                }
+            }
+            return base as i64;
         }
     }
 

@@ -1093,13 +1093,20 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
 
         uart::puts("[mmu] TLB flushed, enabling MMU...\n");
 
-        // Enable MMU via SCTLR_EL1 (without caches first)
+        // Enable MMU via SCTLR_EL1.
+        // 🎯 STUMP #59: caches must be ON. With C=0, atomic exclusive
+        // accesses (LDXR/STXR/CAS) targeting cacheable memory have
+        // UNPREDICTABLE behavior per ARM ARM C5.2.4 — observed under
+        // HVF/M4 as fetch_add/cmpxchg returning the old value but
+        // NOT performing the RMW, breaking all bump-allocator
+        // atomics in syscall.rs. TCG's software path masks the bug
+        // (each instruction is interpreted), so this only surfaces
+        // on hardware-accelerated guests.
         let mut sctlr: u64;
         core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr);
-        sctlr |= 1;  // M bit = enable MMU
-        // Don't enable caches yet — keep it simple
-        sctlr &= !(1 << 2);  // C bit OFF
-        sctlr &= !(1 << 12); // I bit OFF
+        sctlr |= 1;          // M bit = enable MMU
+        sctlr |= 1 << 2;     // C bit  = enable D-cache (REQUIRED for atomics on M4/HVF)
+        sctlr |= 1 << 12;    // I bit  = enable I-cache
 
         // 🎯 STUMP #7: clean every page-table page we just wrote to PoC.
         // The walker reads PT entries with TCR attributes (inner-
