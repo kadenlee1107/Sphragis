@@ -11,6 +11,37 @@ end of a session.
 
 ---
 
+## 2026-04-30 15:40 — Mac — 🎯 Browser engine sprint: easy → medium. 5 easy + 4 medium fixes. Real flexbox, tables, PNG images, links, lists shipped.
+
+After the basic render-to-PNG path landed, Kaden asked "what else can we work on" and "let's work easy to hard". Twelve commits in the sprint:
+
+**Easy bundle:**
+
+- **STUMP #68** — render auto-sizes the viewport to `page_height` (was clipped at 600px) and fills the body's actual `background_color` instead of always white. Tall pages no longer truncate; the bg matches the theme below the content.
+- **STUMP #69** — `<img>` PNG rendering via existing decoder. New `media/img_pool.rs` with 8 PngImage slots in BSS. Layout decodes from initrd, paint draws via `draw_png`. Bake script now packs `.png/.jpg/.css` files alongside HTML.
+- **STUMP #70** — `<a>` default style: bright link blue (#63aeff) + underline. `<li>` bullet rendering fixed: switched bullet text from raw `\xB7` (no glyph in Verdana) to ASCII `*`, AND set `bullet.content_x/content_y` to match `bullet.x/y` (paint draws text at content_*; previously every bullet stacked at (0, 0)).
+- **STUMP #71** — body's CSS `margin` honored (was only padding). Adjacent block margins now collapse to `max(prev_mb, next_mt)` per CSS 2.1 §8.3.1 instead of summing.
+
+**Medium bundle:**
+
+- **STUMP #72** — CSS specificity sort. Stylesheet::apply now applies matching rules in specificity order (low → high). Pre-fix it iterated source order, so a more-specific rule buried earlier in the sheet would lose to a less-specific later rule. Specificity per part: `#id` 100, `.class` 10, `tag` 1.
+- **STUMP #73** — TrueType-measured text widths for box dimensions (was `chars × char_w`). Backgrounds + underlines now hug the actual rendered glyphs. Wrap-decision and `content_w` deliberately keep char-based geometry — mixing TT widths into wrap math caused section headers to wrap their last letter.
+- **STUMP #74** — `<table>` column-aligned layout. Two-pass: find max column count, then lay out each row's cells side-by-side at uniform widths. Honors `<thead>/<tbody>/<tfoot>` wrappers. Real columnar render — no more block-stack fakery.
+- **STUMP #75** — real flexbox. Wired the previously-stubbed `flex.rs` into the layout pipeline. Supports `flex-direction: row`, `justify-content: start|end|center|space-between|space-around|space-evenly`, `gap`. flex_test.html exercises all five modes — every row visibly distinct.
+
+**New test pages:**
+- `img_test.html` — single `<img>` exercising the PNG path
+- `table_test.html` — STUMPS table with header row + 5 data rows
+- `flex_test.html` — five `<div class="row">` containers each with a different `justify-content`
+- `swatch.png` — 200x100 gold→sky-blue gradient
+
+**End-to-session run-rate (the full day):**
+- STUMP #56 GICv3 → STUMP #75 real flexbox
+- 20 stumps, ~30 commits
+- Path: HVF atomics broken at session start → Verdana-rendered first DOM PNG → real flexbox + tables + images + links + lists by end
+
+`make render URL=…` produces a real-looking page render for any HTML you bake.
+
 ## 2026-04-30 14:35 — Mac — 🎯🎯🎯 BADASS RENDERING — actual PNG output of HTML pages by Bat_OS's native engine.
 
 **Final form of the user's "lets paint this thing into existence" wish.**
