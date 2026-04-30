@@ -11,6 +11,52 @@ end of a session.
 
 ---
 
+## 2026-04-30 14:35 — Mac — 🎯🎯🎯 BADASS RENDERING — actual PNG output of HTML pages by Bat_OS's native engine.
+
+**Final form of the user's "lets paint this thing into existence" wish.**
+
+`python3 scripts/render_to_png.py file:///bin/hello.html` produces a 800×600 PNG showing the rendered page. Verdana TrueType glyphs ("Hello from Bat_OS"), real text content, dark theme. All from Bat_OS's own DOM + layout + paint pipeline. No Chromium involved.
+
+Pipeline:
+```
+HTML bytes (initrd archive)
+  → browser::html::parser::parse  (12 DOM nodes for hello.html)
+  → browser::layout::build         (7 layout boxes, page_height=120)
+  → browser::paint::paint          (TrueType glyphs, backgrounds,
+                                    borders, padding, inline-block badges)
+  → 800×600 BGRA framebuffer in BSS
+  → base64 over UART
+  → host script decodes BGRA → RGBA → PNG
+```
+
+Showcase page (`showcase.html`) demonstrates more of the paint engine: gold h1, sky-blue h2, colored pill badges (green DOM/CSS/Layout/Paint, red "No JS yet"), a card with 2px border + 6px radius, inline orange `<code>`. All honored.
+
+Visible bug: layout's vertical flow stacks lines on top of each other instead of separating them. That's a `browser::layout::build` issue, not paint — paint draws each box exactly where layout puts it. Punt to next session.
+
+**Files (commits f48ca10e + e1b8dea7):**
+- `src/drivers/virtio/gpu.rs` — added `SOFT_FB`/`SOFT_W`/`SOFT_H` runtime override atomics so the GPU module can paint into a software buffer when no virtio-gpu device is present (HVF case).
+- `src/ui/apps/browser.rs` — `DOM_DOC` + `LAYOUT_TREE` made `pub(crate)` so the shell can share the visual browser's BSS arenas.
+- `src/ui/shell.rs` — `render <url>` shell command. Parse, layout, paint, base64 over UART with `RENDER-BEGIN`/`END` markers.
+- `src/ui/truetype.rs` — fixed `attempt to subtract with overflow` in alpha-blend math (signed i32 + clamp).
+- `scripts/render_to_png.py` — host decoder. Boots Bat_OS via QEMU-HVF, sends `render <url>`, captures the base64 dump, decodes BGRA→RGBA, hand-rolls a PNG (no PIL).
+- `ports/chromium_port/out/showcase.html` — fancier test page.
+
+**End-of-session run-rate (22 commits today!):**
+- STUMP #56 — GICv3 cargo feature
+- STUMP #57 — page_is_mapped guards for HVF
+- STUMP #58 — fetch_add bump-mmap
+- STUMP #59 — D-cache + I-cache enable (the actual HVF root cause)
+- STUMP #60 — apple/uart platform gate
+- STUMP #61 — gpu_cmd null-deref guard
+- STUMP #62 — BAT_OS_KEEP_GOING infrastructure (Kaden's idea)
+- STUMP #63 — futex deadlock auto-skip + livelock cap
+- STUMP #64 — push past FileURLLoader to HarfBuzz text layout
+- flock stub + diagnostics
+- 🎯 First native DOM render (12 nodes from hello.html)
+- 🎯🎯🎯 First PNG render of HTML by Bat_OS engine
+
+That's the path from "HVF won't even atomic-load correctly" at session start to "PNG output of real HTML rendered by our own browser" by end. One day.
+
 ## 2026-04-30 13:30 — Mac — 🎯🎯🎯 FIRST DOM RENDER. `dump-dom file:///bin/hello.html` produces a 12-node tree from Bat_OS's own HTML parser.
 
 **The output the project has been chasing:**
