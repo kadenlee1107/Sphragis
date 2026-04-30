@@ -332,6 +332,21 @@ fn layout_children(
                 let char_w = (fs * 6 / 10).max(5); // ~60% of font size
                 let line_h = (fs * 14 / 10).max(14); // 140% of font size
 
+                // 🎯 STUMP #73: actual TrueType width for box-rendered
+                // dimensions. The wrap-decision still uses char_w-based
+                // estimates because mixing TT measurements into the
+                // wrap path makes lines collapse incorrectly when
+                // `text_width` rounds advances up. Visible result of
+                // this halfway-measure: text boxes are sized to their
+                // actual rendered width (so backgrounds + borders +
+                // underlines hug the glyphs); flow / wrap behaviour
+                // is unchanged from char-based geometry.
+                let measured_w = if crate::ui::truetype::is_available() {
+                    crate::ui::truetype::text_width(text, fs as u16)
+                } else {
+                    text.len() as i32 * char_w
+                };
+
                 // Create text layout box
                 let tbox = match tree.alloc() {
                     Some(idx) => idx,
@@ -354,14 +369,23 @@ fn layout_children(
 
                 if chars_in_text <= remaining_on_line {
                     // Fits on current line
-                    let text_w = chars_in_text * char_w;
+                    let text_w = measured_w; // visible width = TT-measured
                     tree.boxes[tbox].x = inline_x;
                     tree.boxes[tbox].y = *cursor_y;
                     tree.boxes[tbox].width = text_w;
                     tree.boxes[tbox].height = line_h;
                     tree.boxes[tbox].content_x = inline_x;
                     tree.boxes[tbox].content_y = *cursor_y;
-                    tree.boxes[tbox].content_w = text_w;
+                    // 🎯 STUMP #73 (cont): keep content_w = avail_width
+                    // even when the text fits in less. Paint uses
+                    // content_w to compute its own max-chars-per-line
+                    // for in-text wrap; if we set it to the tight TT-
+                    // measured width, paint thinks "exactly enough"
+                    // and wraps the final char to a new line. Giving
+                    // it the full row width disables that fallback.
+                    let remaining_w_now =
+                        (x_offset + avail_width - inline_x).max(text_w);
+                    tree.boxes[tbox].content_w = remaining_w_now;
                     tree.boxes[tbox].content_h = line_h;
                     inline_x += text_w;
                     if line_h > max_line_h_on_current_line {
