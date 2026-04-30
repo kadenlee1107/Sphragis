@@ -11,6 +11,58 @@ end of a session.
 
 ---
 
+## 2026-04-30 13:00 — Mac — 🎯 STUMP #63: futex auto-skip + livelock cap. Cave reaches livelock floor; deeper blocker is Chromium IPC plumbing.
+
+**TL;DR.** Extended KEEP_GOING with two more skip layers:
+
+1. `FutexDeadlock` event kind: when `schedule()` finds zero
+   runnable threads, force-wake the first blocked thread and log
+   `[SKIP <seq> FUTEX_DEADLOCK ...]`. Capped at 32 wake-ups.
+2. `futex_wait` infinite-timeout cap: any `timeout_ns=0` wait is
+   rewritten to 100ms when KEEP_GOING is on. ETIMEDOUT is legal,
+   doesn't break user semantics.
+
+**Result of a 180s smoke:** identical to the prior run. Same 4 skip
+signatures, same Chromium subsystem ERROR/WARNING messages, same
+`FileURLLoader::Start: file:///bin/hello.html`. The
+`FutexDeadlock` event NEVER fires because we're not deadlocked —
+we're LIVELOCKED. The 30 worker threads cycle between:
+
+- `epoll_pwait(timeout=-1)` — cooperative-yield in a loop forever
+- `futex_wait(timeout=0)` — now bounded to 100ms ETIMEDOUT then retry
+- `clock_gettime` and friends in the retry path
+
+Net: 269M syscalls in 180s, zero new ERROR/WARNING messages, no
+forward progress past FileURLLoader.
+
+**Diagnosis.** This is the kernel doing exactly what it should. The
+problem is Chromium's IPC bus (Mojo) needs handler threads on the
+PRODUCER side that we haven't wired. Workers are correctly waiting;
+they just have nothing to wake them. Fixing that requires
+implementing:
+- proper eventfd-as-semaphore signaling
+- Mojo's pipe / channel transport
+- The browser→renderer thread fan-in
+- Cross-thread closure dispatch (Chromium's `PostTask`)
+
+Each is days of work. Not feasible in a single session. The cave
+faithfully reaches the boundary where "infrastructure + libc + V8
+init" ends and "Chromium-internal IPC pumping" begins.
+
+**Files (commit cb7b9239):** added `SkipKind::FutexDeadlock` to
+`skip_log.rs`, hooked auto-wake into `threads::schedule()`'s
+no-runnable branch, and added the timeout cap to
+`futex::futex_wait`.
+
+**Recommendation for next session:**
+- Implement the easy skip-stubs (NETLINK socket → ENOTSUP cleanly,
+  inotify_init1 → fake fd, mlock → 0)
+- Add `eventfd2` write-to-counter signaling so Chromium's IPC
+  pump can actually wake workers
+- Or: pivot to running content_shell in `--single-process` mode,
+  which avoids the multi-thread Mojo pump entirely. That's the
+  fastest path to first DOM render.
+
 ## 2026-04-30 10:30 — Mac — 🎯 STUMP #62: BAT_OS_KEEP_GOING + skip ring → Chromium reaches FileURLLoader::Start on /bin/hello.html. Real subsystems initializing.
 
 **TL;DR.** Kaden's idea: instead of fixing one fault per smoke run, build a "skip-and-log" mode that keeps going past every fatal so ONE run maps the entire failure tree. Implemented as `BAT_OS_KEEP_GOING=1` build-time env var plus three skip sites:
