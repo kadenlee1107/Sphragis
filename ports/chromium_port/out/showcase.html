@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Bat_OS Renderer Showcase</title>
+  <style>
+    body {
+      background: #0a0a0a;
+      color: #e0e0e0;
+      font-family: sans-serif;
+      padding: 24px;
+    }
+    h1 {
+      color: #ffd700;
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    h2 {
+      color: #4fc3f7;
+      font-size: 20px;
+      margin-top: 16px;
+      margin-bottom: 8px;
+    }
+    .badge {
+      background: #2e7d32;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 4px;
+      display: inline-block;
+      font-size: 14px;
+      margin-right: 8px;
+    }
+    .warn {
+      background: #c62828;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 4px;
+      display: inline-block;
+      font-size: 14px;
+    }
+    .card {
+      background: #1a1a1a;
+      border: 2px solid #333;
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 8px;
+    }
+    p { margin: 4px 0; }
+    code {
+      background: #2a2a2a;
+      color: #ffab40;
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Bat_OS Renderer Showcase</h1>
+  <p>
+    <span class="badge">DOM</span>
+    <span class="badge">CSS</span>
+    <span class="badge">Layout</span>
+    <span class="badge">Paint</span>
+    <span class="warn">No JS yet</span>
+  </p>
+
+  <h2>Backgrounds + borders + radius</h2>
+  <div class="card">
+    <p>This box has a dark background, a 2px border, and 6px corner radius.</p>
+    <p>All from Bat_OS's own paint module.</p>
+  </div>
+
+  <h2>Inline code styling</h2>
+  <p>Run <code>render file:///bin/showcase.html</code> to produce this image.</p>
+
+  <h2>Color + typography</h2>
+  <p>Headings are gold. Section headers are sky blue. Body is light gray on near-black.</p>
+  <p>Font is Verdana TrueType, 186KB, loaded from initrd.</p>
+</body>
+</html>
