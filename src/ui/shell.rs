@@ -3224,13 +3224,14 @@ fn cmd_render(url: &str) {
         }
     };
 
-    // Backing framebuffer — sized to fit pages up to 4096px tall at
-    // 1024px wide. Lives in BSS (16 MB zeroed at boot, no impact on
-    // binary file size). render is never called concurrently so
-    // static mut is fine. Actual render uses only the first
-    // (page_height) rows; the dump trims to that.
+    // Backing framebuffer — capped at 1900px tall. The host-side
+    // session that reads back the PNG cannot accept images >2000px
+    // in either dimension; exceeding it corrupts the conversation.
+    // Pages taller than the cap get truncated (their bottom rows
+    // clip). Render once at small height to verify a full page
+    // fits, paginate via separate URLs if not.
     const MAX_W: u32 = 1024;
-    const MAX_H: u32 = 4096;
+    const MAX_H: u32 = 1900;
     const FB_LEN: usize = (MAX_W * MAX_H) as usize;
     static mut RENDER_FB: [u32; FB_LEN] = [0u32; FB_LEN];
 

@@ -142,21 +142,31 @@ pub fn paint(
             let border_w = b.style.border_width as u32;
             let bc = b.style.border_color.raw();
 
-            if radius > 0 && bg_w > radius * 2 {
+            // 🎯 STUMP #76: bound every subtract by both `radius * 2`
+            // AND `border_w` so we can't underflow on tiny / thin
+            // boxes (e.g. <hr> 1px tall, or small <input>s with
+            // border-radius). Pre-fix the guard only checked vs
+            // radius and the bottom/right edges did
+            // `bg_h - border_w` which underflowed when border_w
+            // > bg_h.
+            let safe_w = bg_w >= radius * 2 + border_w * 2;
+            let safe_h = bg_h >= radius * 2 + border_w * 2;
+            if radius > 0 && safe_w && safe_h {
                 // Rounded border
                 gpu::fill_rect(bx + radius, by, bg_w - radius * 2, border_w, bc); // top
                 gpu::fill_rect(bx + radius, by + bg_h - border_w, bg_w - radius * 2, border_w, bc); // bottom
                 gpu::fill_rect(bx, by + radius, border_w, bg_h - radius * 2, bc); // left
                 gpu::fill_rect(bx + bg_w - border_w, by + radius, border_w, bg_h - radius * 2, bc); // right
             } else {
-                // Square border
-                gpu::fill_rect(bx, by, bg_w, border_w.min(bg_h), bc);
+                // Square border. Each edge guarded against the other
+                // dimension being smaller than the border width.
+                gpu::fill_rect(bx, by, bg_w, border_w.min(bg_h), bc); // top
                 if bg_h > border_w {
-                    gpu::fill_rect(bx, by + bg_h - border_w, bg_w, border_w, bc);
+                    gpu::fill_rect(bx, by + bg_h - border_w, bg_w, border_w, bc); // bottom
                 }
-                gpu::fill_rect(bx, by, border_w.min(bg_w), bg_h, bc);
+                gpu::fill_rect(bx, by, border_w.min(bg_w), bg_h, bc); // left
                 if bg_w > border_w {
-                    gpu::fill_rect(bx + bg_w - border_w, by, border_w, bg_h, bc);
+                    gpu::fill_rect(bx + bg_w - border_w, by, border_w, bg_h, bc); // right
                 }
             }
 

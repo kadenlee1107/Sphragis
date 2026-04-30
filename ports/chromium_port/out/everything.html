@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Bat_OS — Everything Page</title>
+  <style>
+    body {
+      background: #0d1117;
+      color: #d0d7de;
+      padding: 20px;
+      margin: 0;
+    }
+    h1 { color: #ffd700; font-size: 26px; margin: 0 0 4px 0; }
+    .subtitle { color: #8b949e; font-size: 13px; margin-bottom: 14px; }
+    h2 {
+      color: #4fc3f7;
+      font-size: 16px;
+      margin: 14px 0 4px 0;
+      padding: 2px 6px;
+      background: #161b22;
+      border: 1px solid #30363d;
+    }
+    p { margin: 3px 0; font-size: 14px; }
+    a { color: #79c0ff; }
+    code {
+      background: #161b22;
+      color: #ffab40;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 13px;
+    }
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 8px;
+      margin: 4px 0;
+    }
+    .pill {
+      background: #1f6feb;
+      color: white;
+      padding: 2px 9px;
+      border-radius: 12px;
+      font-size: 12px;
+    }
+    .ok   { background: #2ea043; }
+    .warn { background: #d29922; color: #1c1c1c; }
+    .err  { background: #da3633; }
+    .row {
+      display: flex;
+      gap: 8px;
+      padding: 6px;
+      background: #161b22;
+      border-radius: 6px;
+    }
+    .row.center  { justify-content: center; }
+    .row.between { justify-content: space-between; }
+    table { border: 1px solid #30363d; }
+    th { color: #4fc3f7; background: #161b22; }
+    td, th { padding: 3px 8px; }
+    .small { font-size: 11px; color: #8b949e; }
+  </style>
+</head>
+<body>
+  <h1>Bat_OS Renderer — Everything Page</h1>
+  <p class="subtitle">Stress test: every layout/paint feature, one render.</p>
+
+  <h2>1. Headings, paragraphs, inline emphasis</h2>
+  <p>Lorem ipsum, <strong>bold word</strong>, <em>italic word</em>, and an <a href="file:///bin/hello.html">internal link</a>.</p>
+
+  <h2>2. Pills — background + radius + colors</h2>
+  <p>
+    <span class="pill ok">200 OK</span>
+    <span class="pill">info</span>
+    <span class="pill warn">warning</span>
+    <span class="pill err">404</span>
+  </p>
+
+  <h2>3. Bulleted list</h2>
+  <ul>
+    <li>HTML parser</li>
+    <li>DOM arena (2048 nodes)</li>
+    <li>CSS matcher with specificity</li>
+    <li>Layout (block + inline + flex + table)</li>
+    <li>Paint (TrueType + PNG + borders + radius)</li>
+  </ul>
+
+  <h2>4. Card — border + radius + padding</h2>
+  <div class="card">
+    <p><strong>Bat_OS native browser engine</strong></p>
+    <p class="small">Bare-metal Rust kernel on Apple M4 under HVF. No Chromium — every line of layout/paint is in-tree.</p>
+  </div>
+
+  <h2>5. Embedded PNG image</h2>
+  <p class="small">200x100 swatch decoded from initrd:</p>
+  <img src="file:///bin/swatch.png" alt="gradient">
+
+  <h2>6. Flexbox</h2>
+  <div class="row center">
+    <span class="pill ok">flex</span>
+    <span class="pill">center</span>
+    <span class="pill warn">aligned</span>
+  </div>
+  <div class="row between">
+    <span class="pill ok">space</span>
+    <span class="pill">between</span>
+    <span class="pill err">items</span>
+  </div>
+
+  <h2>7. Table (column-aligned)</h2>
+  <table>
+    <tr><th>Feature</th><th>Status</th></tr>
+    <tr><td>HTML</td><td>shipped</td></tr>
+    <tr><td>CSS</td><td>shipped</td></tr>
+    <tr><td>Layout</td><td>shipped</td></tr>
+    <tr><td>Paint</td><td>shipped</td></tr>
+    <tr><td>JS</td><td>todo</td></tr>
+  </table>
+
+  <h2>8. Inline code</h2>
+  <p>Run <code>make render URL=file:///bin/everything.html</code> to produce this image.</p>
+</body>
+</html>
