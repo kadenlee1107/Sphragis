@@ -122,6 +122,7 @@ fn execute(cmd: &str) {
         "v8" | "js" | "javascript" => cmd_run_elf("v8"),
         "blink" => cmd_run_elf("blink"),
         "chromium" | "chrome" => cmd_chromium(parts[1], parts[2], parts[3]),
+        "dump-dom" | "dom" => cmd_dump_dom(parts[1]),
         "browse" | "open" => {
             if !parts[1].is_empty() {
                 console::puts("  Opening in BatBrowser: ");
@@ -3074,4 +3075,121 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     // Parser-friendly markers `[SKIP-SUMMARY ...]` / `[SKIP-DETAIL
     // ...]` let scripts/agents pull the failure tree out in one pass.
     crate::batcave::linux::skip_log::dump_summary();
+}
+
+/// `dump-dom <url-or-path>` — parse HTML through Bat_OS's own engine
+/// and print the DOM tree to UART. No Chromium, no IPC, no livelock —
+/// just our `browser::html::parser` + `browser::dom::Document`. This is
+/// the path to first DOM render: bypass content_shell entirely.
+///
+/// Accepted URL forms:
+///   - `file:///bin/foo.html`     → `archive_file("bin/foo.html")`
+///   - `/bin/foo.html`            → same as above (leading slash trimmed)
+///   - `bin/foo.html`             → archive lookup
+fn cmd_dump_dom(url: &str) {
+    use crate::browser::dom::{Document, NodeType};
+    use crate::browser::html;
+    use crate::drivers::uart;
+    use crate::kernel::mm::initrd;
+
+    if url.is_empty() {
+        uart::puts("  usage: dump-dom <url|path>\n");
+        uart::puts("  e.g.   dump-dom file:///bin/hello.html\n");
+        uart::puts("         dump-dom /bin/hello.html\n");
+        return;
+    }
+
+    // Normalize: strip "file://", leading "/", ".".
+    let mut path = url;
+    if let Some(rest) = path.strip_prefix("file://") { path = rest; }
+    while path.starts_with('/') { path = &path[1..]; }
+
+    let bytes = match initrd::archive_file(path) {
+        Some(b) => b,
+        None => {
+            uart::puts("  dump-dom: not in archive: ");
+            uart::puts(path);
+            uart::puts("\n");
+            return;
+        }
+    };
+
+    uart::puts("  dump-dom: read ");
+    crate::kernel::mm::print_num(bytes.len());
+    uart::puts(" bytes from ");
+    uart::puts(path);
+    uart::puts("\n");
+
+    // Parse with our native engine. Document is a multi-MB arena, so
+    // reuse the same static DOM_DOC the visual browser uses (in BSS,
+    // not the stack — Box::new(Document::new()) overflows the kernel
+    // stack before it ever copies into the heap).
+    let doc: &mut Document = unsafe {
+        &mut *core::ptr::addr_of_mut!(crate::ui::apps::browser::DOM_DOC)
+    };
+    html::parser::parse(bytes, doc);
+
+    uart::puts("  dump-dom: parsed ");
+    crate::kernel::mm::print_num(doc.len());
+    uart::puts(" node(s)\n");
+
+    // Walk and print. Indented tree — element opens print "<tag attr=\"v\">",
+    // children are indented +2, closes print "</tag>", text nodes
+    // print verbatim with indent.
+    fn walk(doc: &Document, idx: usize, depth: usize) {
+        use crate::drivers::uart;
+        let n = doc.get(idx);
+        for _ in 0..depth { uart::putc(b' '); uart::putc(b' '); }
+        match n.node_type {
+            NodeType::Document => {
+                uart::puts("#document\n");
+            }
+            NodeType::Element => {
+                uart::putc(b'<');
+                uart::puts(n.tag_str());
+                for i in 0..n.attr_count {
+                    uart::putc(b' ');
+                    uart::puts(n.attrs[i].name_str());
+                    uart::puts("=\"");
+                    uart::puts(n.attrs[i].value_str());
+                    uart::putc(b'"');
+                }
+                uart::puts(">\n");
+            }
+            NodeType::Text => {
+                let t = n.text_str();
+                let trimmed = t.trim();
+                if !trimmed.is_empty() {
+                    uart::puts("\"");
+                    uart::puts(trimmed);
+                    uart::puts("\"\n");
+                } else {
+                    // Suppress whitespace-only text — matches what
+                    // chromium --dump-dom does for readability.
+                    return;
+                }
+            }
+            NodeType::Comment => {
+                uart::puts("<!-- ");
+                uart::puts(n.text_str());
+                uart::puts(" -->\n");
+            }
+            NodeType::Empty => return,
+        }
+        // Recurse into children
+        for c in doc.children(idx) {
+            walk(doc, c, depth + 1);
+        }
+        // Closing tag for elements
+        if n.node_type == NodeType::Element {
+            for _ in 0..depth { uart::putc(b' '); uart::putc(b' '); }
+            uart::puts("</");
+            uart::puts(n.tag_str());
+            uart::puts(">\n");
+        }
+    }
+
+    uart::puts("=== DOM ===\n");
+    walk(&doc, 0, 0);
+    uart::puts("=== END ===\n");
 }
