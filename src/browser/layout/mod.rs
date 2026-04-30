@@ -173,17 +173,25 @@ pub fn build(doc: &Document, tree: &mut LayoutTree, viewport_w: i32) {
     tree.boxes[root].x = 0;
     tree.boxes[root].y = 0;
     tree.boxes[root].width = viewport_w;
-    tree.boxes[root].content_w = viewport_w - 16; // default padding
-    tree.boxes[root].content_x = 8;
-    tree.boxes[root].content_y = 8;
+    // 🎯 STUMP #67 (cont): honor the body's CSS padding instead of the
+    // hardcoded 8px we used to splat. CSS like `body { padding: 24px }`
+    // now actually pushes children inward.
+    let pad_l = body_style.padding_left;
+    let pad_r = body_style.padding_right;
+    let pad_t = body_style.padding_top;
+    let pad_b = body_style.padding_bottom;
+    let inner_w = (viewport_w - pad_l - pad_r).max(0);
+    tree.boxes[root].content_w = inner_w;
+    tree.boxes[root].content_x = pad_l;
+    tree.boxes[root].content_y = pad_t;
 
     // Recursively lay out children
-    let mut cursor_y = 8i32;
-    layout_children(doc, tree, &sheet, root, body, 8, &mut cursor_y, viewport_w - 16);
+    let mut cursor_y = pad_t;
+    layout_children(doc, tree, &sheet, root, body, pad_l, &mut cursor_y, inner_w);
 
-    tree.boxes[root].height = cursor_y + 8;
-    tree.boxes[root].content_h = cursor_y;
-    tree.page_height = cursor_y + 16;
+    tree.boxes[root].height = cursor_y + pad_b;
+    tree.boxes[root].content_h = cursor_y - pad_t;
+    tree.page_height = cursor_y + pad_b;
 }
 
 /// Check if a DOM node should be hidden (hidden attr, aria-hidden, etc.)

@@ -12,7 +12,7 @@ const FG: u32 = 0xFFA0A0A0;    // text-mid gray
 const FG_HI: u32 = 0xFFFFFFFF; // White
 const FG_DIM: u32 = 0xFF5A5A5A; // Dim
 const ACCENT_GREEN: u32 = 0xFF00FF00;
-const ACCENT_RED: u32 = 0xFF0000FF; // BGRA red
+const ACCENT_RED: u32 = 0xFFFF0000;
 
 const MARGIN_X: u32 = 16;
 const MARGIN_Y: u32 = 16;

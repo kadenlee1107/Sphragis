@@ -7,16 +7,23 @@
 pub struct Color(pub u32);
 
 impl Color {
+    // 🎯 STUMP #67: Color words target the framebuffer's B8G8R8A8 byte
+    // order (virtio-gpu's FORMAT_B8G8R8A8). When stored as a u32 LE,
+    // that's bytes [B, G, R, A] in memory — i.e. the u32 numeric
+    // value is `(A << 24) | (R << 16) | (G << 8) | B`. Pre-fix
+    // `from_rgb` had R and B swapped, so #ffd700 (gold) rendered as
+    // cyan and #4fc3f7 (sky-blue) rendered as gold — exactly the
+    // "H1/H2 colors look swapped" symptom we were seeing.
     pub const TRANSPARENT: Color = Color(0x00000000);
     pub const BLACK: Color = Color(0xFF000000);
     pub const WHITE: Color = Color(0xFFFFFFFF);
-    pub const RED: Color = Color(0xFF0000FF);
+    pub const RED:   Color = Color(0xFFFF0000);  // was 0xFF0000FF (blue!)
     pub const GREEN: Color = Color(0xFF00FF00);
-    pub const BLUE: Color = Color(0xFFFF0000);
-    pub const GRAY: Color = Color(0xFFA0A0A0);
+    pub const BLUE:  Color = Color(0xFF0000FF);  // was 0xFFFF0000 (red!)
+    pub const GRAY:  Color = Color(0xFFA0A0A0);
 
     pub fn from_rgb(r: u8, g: u8, b: u8) -> Self {
-        Color(0xFF000000 | (b as u32) << 16 | (g as u32) << 8 | r as u32)
+        Color(0xFF000000 | (r as u32) << 16 | (g as u32) << 8 | b as u32)
     }
 
     /// Parse CSS color: #RGB, #RRGGBB, rgb(r,g,b), rgba(r,g,b,a), or named

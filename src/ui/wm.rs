@@ -16,7 +16,7 @@ const FG: u32 = 0xFFA0A0A0;
 const FG_HI: u32 = 0xFFFFFFFF;
 const FG_DIM: u32 = 0xFF5A5A5A;
 const GREEN: u32 = 0xFF00FF00;
-const RED: u32 = 0xFF0000FF;
+const RED: u32 = 0xFFFF0000;
 const STATUS_BG: u32 = 0xFF0A0A0A;
 
 const TITLE_H: u32 = 24;
