@@ -51,6 +51,13 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     if is_qemu {
         drivers::uart::enable();
     }
+    // 🎯 STUMP #60: belt-and-suspenders — explicitly set the platform
+    // discriminator to QemuVirt so any later `is_apple_silicon()`
+    // check returns false. The static is `AtomicU8::new(0)` =
+    // QemuVirt by default, but pre-MMU BSS state might be observed
+    // before zeroing in some paths under HVF, and the post-cave-exit
+    // data abort traces to apple-uart code that's gated on this byte.
+    platform::set_platform(platform::Platform::QemuVirt);
 
     // Parse DTB if available (VZ VMs always pass one)
     let mut vz_virtio_bases: [usize; 16] = [0; 16];
