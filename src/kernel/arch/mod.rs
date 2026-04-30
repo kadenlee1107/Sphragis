@@ -121,7 +121,7 @@ fn pa_skip_scratch_uva() -> u64 {
 /// can't possibly fail" theorem (it CAN fail because of lazy demand-
 /// paging which the compiler doesn't model).
 #[inline(never)]
-fn page_is_mapped(user_va: u64) -> bool {
+pub fn page_is_mapped(user_va: u64) -> bool {
     let ttbr0: u64;
     unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
     let l1_phys = ttbr0 & !1u64;
@@ -1516,6 +1516,21 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         break;
                     }
                 }
+                // 🎯 STUMP #57: validate page is mapped before deref.
+                // Pre-fix the diagnostic FP-walk did `ldr [fp]` raw,
+                // assuming the page-table walk would either succeed
+                // or trap-and-recover. Under TCG that holds; under
+                // HVF the resulting translation fault has ESR.ISV=0
+                // (page-table walker faults can't be syndromed) and
+                // QEMU asserts in `hvf_handle_exception` (hvf.c:1883).
+                // page_is_mapped walks the cave's L1/L2/L3 itself
+                // (using `read_volatile` against KERNEL phys pages,
+                // which is always safe), so we can pre-check without
+                // risking a fault.
+                if !page_is_mapped(fp) || !page_is_mapped(fp + 8) {
+                    uart::puts("    (fp=0x"); print_hex(fp); uart::puts(" — unmapped)\n");
+                    break;
+                }
                 let saved_fp: u64;
                 let saved_lr: u64;
                 unsafe {
@@ -1531,14 +1546,19 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             // V8-DABT-DIAG: also dump the bytes around ELR so we know
             // which load/store instruction faulted (helps identify
             // which Xn was used to compute FAR).
+            // STUMP #57: gate on page_is_mapped — same reason as above.
             uart::puts("  instr@elr: ");
-            let instr: u32 = unsafe {
-                let v: u32;
-                core::arch::asm!("ldr {v:w}, [{a}]", a = in(reg) elr, v = out(reg) v);
-                v
-            };
-            for sh in (0..8).rev() {
-                uart::putc(hex[((instr >> (sh*4)) & 0xF) as usize]);
+            if page_is_mapped(elr) {
+                let instr: u32 = unsafe {
+                    let v: u32;
+                    core::arch::asm!("ldr {v:w}, [{a}]", a = in(reg) elr, v = out(reg) v);
+                    v
+                };
+                for sh in (0..8).rev() {
+                    uart::putc(hex[((instr >> (sh*4)) & 0xF) as usize]);
+                }
+            } else {
+                uart::puts("(unmapped)");
             }
             uart::puts("\n");
             // Track repeats so we can stop spamming and force-terminate
@@ -2098,6 +2118,12 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 uart::puts("\n  instr@elr-8..elr+4: ");
                 for off in [-8i64, -4, 0, 4] {
                     let pc = (elr as i64 + off) as u64;
+                    // STUMP #57: validate before deref (HVF can't
+                    // syndrome the resulting translation fault).
+                    if !page_is_mapped(pc) {
+                        uart::puts("???????? ");
+                        continue;
+                    }
                     let w: u32 = unsafe {
                         let v: u32;
                         core::arch::asm!("ldr {v:w}, [{a}]",
@@ -2130,12 +2156,6 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             for i in 0..32usize {
                 let off = i * 8;
                 let addr = sp_el0 + off as u64;
-                let val: u64 = unsafe {
-                    let v: u64;
-                    core::arch::asm!("ldr {v}, [{a}]",
-                        a = in(reg) addr, v = out(reg) v);
-                    v
-                };
                 if i % 4 == 0 {
                     uart::puts("\n    +0x");
                     let hex = b"0123456789abcdef";
@@ -2144,6 +2164,20 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     uart::putc(hex[off & 0xF]);
                     uart::puts(": ");
                 }
+                // STUMP #57: validate before deref. HVF asserts on
+                // unsyndromed translation faults; under TCG the read
+                // would silently return garbage. Either way, "????" is
+                // a more useful diagnostic than crashing the dump.
+                if !page_is_mapped(addr) {
+                    uart::puts("???????????????? ");
+                    continue;
+                }
+                let val: u64 = unsafe {
+                    let v: u64;
+                    core::arch::asm!("ldr {v}, [{a}]",
+                        a = in(reg) addr, v = out(reg) v);
+                    v
+                };
                 let hex = b"0123456789abcdef";
                 for sh in (0..16).rev() {
                     uart::putc(hex[((val >> (sh * 4)) & 0xF) as usize]);

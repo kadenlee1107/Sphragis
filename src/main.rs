@@ -291,6 +291,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
         }
         None => {
             drivers::uart::puts("[boot] No display — serial shell\n\n");
+            IS_HEADLESS.store(true, core::sync::atomic::Ordering::Release);
             serial_shell();
         }
     }
@@ -478,7 +479,15 @@ fn print_kernel_hash() {
 }
 
 /// Fallback shell for headless mode (serial only).
-fn serial_shell() -> ! {
+/// Track whether we booted to the headless serial shell (no display).
+/// Read by `signal::terminate_cave_fatal` to choose where to land
+/// after a cave dies — `desktop::resume()` requires the console
+/// framebuffer to be initialized, which only happens on the GUI
+/// path. Headless mode lands back in `serial_shell()` directly.
+pub static IS_HEADLESS: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+pub fn serial_shell() -> ! {
     use drivers::uart;
     uart::puts("bat_os > ");
 

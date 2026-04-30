@@ -767,6 +767,19 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
                 uart::puts("\n    [stops at unmapped page]");
                 break;
             }
+            // 🎯 STUMP #57: also check the page is actually MAPPED.
+            // is_user_range only validates the address falls in our
+            // user VA window — the page itself can still be uncommitted
+            // (e.g. demand-paged but not yet faulted in). Under TCG a
+            // raw `ldr` against an unmapped user page silently returns
+            // garbage; under HVF the resulting translation fault has
+            // ESR.ISV=0 and QEMU asserts hvf_handle_exception.
+            if !crate::kernel::arch::page_is_mapped(addr)
+                || !crate::kernel::arch::page_is_mapped(addr + 8)
+            {
+                uart::puts("\n    [stops at unmapped page]");
+                break;
+            }
             let fp_v: u64 = unsafe {
                 let v: u64;
                 core::arch::asm!("ldr {v}, [{a}]",
@@ -823,7 +836,17 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
             out("x0") _,
         );
     }
-    crate::ui::desktop::resume()
+    // 🎯 STUMP #57b: in headless mode, `console`/`gpu` aren't
+    // initialized, so calling desktop::resume() → console::prompt()
+    // dereferences a NULL framebuffer pointer → re-enters this
+    // handler → infinite loop ([abort] EL1 fault unrecoverable spam
+    // forever). Land back in serial_shell() instead, which only
+    // uses the UART.
+    if crate::IS_HEADLESS.load(core::sync::atomic::Ordering::Acquire) {
+        crate::serial_shell()
+    } else {
+        crate::ui::desktop::resume()
+    }
 }
 
 /// Complete an rt_sigreturn: read the ucontext at the current user SP
