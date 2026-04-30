@@ -266,6 +266,22 @@ pub fn eventfd_read_slot(slot: usize, out_value: *mut u64) -> i64 {
 pub fn eventfd_write_slot(slot: usize, value: u64) -> i64 {
     let s = match eventfd_slot(slot) { Ok(s) => s, Err(e) => return e };
     if value == u64::MAX { return EINVAL; }
+    // Diagnostic — trace first 20 eventfd writes to confirm IPC pump
+    // producer side is firing.
+    {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        static EFD_WRITE_LOG: AtomicU32 = AtomicU32::new(0);
+        let n = EFD_WRITE_LOG.fetch_add(1, Ordering::Relaxed);
+        if n < 20 {
+            crate::drivers::uart::puts("[eventfd-write #");
+            crate::kernel::mm::print_num(n as usize);
+            crate::drivers::uart::puts("] slot=");
+            crate::kernel::mm::print_num(slot);
+            crate::drivers::uart::puts(" value=");
+            crate::kernel::mm::print_num(value as usize);
+            crate::drivers::uart::puts("\n");
+        }
+    }
 
     loop {
         let cur = s.counter.load(Ordering::Acquire);

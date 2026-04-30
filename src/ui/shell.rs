@@ -3034,16 +3034,14 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     if dump_dom    { argv[n] = "--dump-dom";     n += 1; }
     argv[n] = "--single-process";          n += 1;
     argv[n] = "--ozone-platform=headless"; n += 1;
-    // (Stay on the zygote path: --no-zygote (with or without
-    // --single-process) hits an ICU CharString bug at ~300 syscalls
-    // — verified again 2026-04-25. Same SIGSEGV at ELR=0x14d73e54
-    // (partition_alloc::TryRecommitSystemPages, FAR=0x70797400-prefix
-    // = "pyt\\0…" suggesting a string interpreted as a pointer).
-    // The zygote path goes much further; deadlock is later in IPC pump.)
-    // --enable-logging=stderr --v=1 — make Chromium's own LOG(INFO)
-    // + VLOG(1) lines hit stderr so we see what it's doing right
-    // before it crashes. Cheap to enable; no-op if logging is
-    // compiled out.
+    // 2026-04-30: turn off the storage / IPC subsystems that spin
+    // on /tmp/.config/content_shell/* sqlite-shm files we can't
+    // currently keep open. Each Disable* feature here was observed
+    // in the smoke logs as a source of unbounded retries that
+    // prevented FileURLLoader::Start from completing.
+    argv[n] = "--disable-features=SharedDictionary,SharedDictionaryAPI,DIPS,LevelDBProto,UseDnsHttpsSvcb"; n += 1;
+    argv[n] = "--user-data-dir=/dev/shm/cs"; n += 1;
+    argv[n] = "--no-startup-window";        n += 1;
     argv[n] = "--enable-logging=stderr";   n += 1;
     argv[n] = "--v=1";                     n += 1;
     // STUMP #35 honors V8's CodeRange hint, eliminating V8 OOM. New

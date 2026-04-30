@@ -2050,6 +2050,35 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
 
     if has_dotdot(path) { return EACCES; }
 
+    // 🎯 STUMP #64 (KEEP_GOING-only): refuse opens to known
+    // Chromium subsystems that retry forever on partial backing —
+    // Shared Dictionary's SQLite shm files are the worst offender
+    // (200+ db-shm retries observed). Return ENOSPC so Chromium
+    // logs the error and gives up. Only active when KEEP_GOING is
+    // on so production paths still attempt the open.
+    if super::skip_log::is_enabled() {
+        let path_str = unsafe { core::str::from_utf8_unchecked(path) };
+        let blacklist: [&str; 4] = [
+            "Shared Dictionary",
+            "shared_proto_db",
+            "DIPS-",
+            "Local Storage",
+        ];
+        for needle in &blacklist {
+            // poor-man's contains
+            if path_str.len() >= needle.len() {
+                let mut found = false;
+                for i in 0..=(path_str.len() - needle.len()) {
+                    if &path_str.as_bytes()[i..i + needle.len()] == needle.as_bytes() {
+                        found = true;
+                        break;
+                    }
+                }
+                if found { return -28; /* ENOSPC */ }
+            }
+        }
+    }
+
     // Handle /proc paths BEFORE VFS check — /proc is always available
     let path_str = unsafe { core::str::from_utf8_unchecked(path) };
     if path_str.starts_with("/proc/") {

@@ -468,6 +468,27 @@ pub fn futex_wake(uaddr: u64, max_wakers: u32) -> i64 {
     if !is_valid_uaddr(uaddr) {
         return EINVAL;
     }
+    // Diagnostic — log first 20 wakes so we can see whether Chromium's
+    // signal path ever fires. Used to confirm the IPC-livelock theory:
+    // if zero wakes happen, the producer side isn't running.
+    {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        static WAKE_LOG_CNT: AtomicU32 = AtomicU32::new(0);
+        let n = WAKE_LOG_CNT.fetch_add(1, Ordering::Relaxed);
+        if n < 20 {
+            crate::drivers::uart::puts("[futex-wake #");
+            crate::kernel::mm::print_num(n as usize);
+            crate::drivers::uart::puts("] uaddr=0x");
+            let hex = b"0123456789abcdef";
+            for sh in (0..16).rev() {
+                crate::drivers::uart::putc(
+                    hex[((uaddr >> (sh * 4)) & 0xF) as usize]);
+            }
+            crate::drivers::uart::puts(" max=");
+            crate::kernel::mm::print_num(max_wakers as usize);
+            crate::drivers::uart::puts("\n");
+        }
+    }
     let bi = bucket_index(uaddr);
     let b = bucket(bi);
     let mut woken: i64 = 0;
