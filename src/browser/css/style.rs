@@ -425,8 +425,10 @@ impl ComputedStyle {
                 s.margin_top = 12; s.margin_bottom = 12;
             }
             "a" => {
-                s.color = Color::from_rgb(138, 180, 248); // Google blue link color
-                s.text_decoration.underline = false; // Google links don't underline by default
+                // Standard browser-default link styling. Visited
+                // distinction would need history; not yet.
+                s.color = Color::from_rgb(99, 174, 255); // bright link blue
+                s.text_decoration.underline = true;
             }
             "b" | "strong" => {
                 s.font_weight = FontWeight::Bold;

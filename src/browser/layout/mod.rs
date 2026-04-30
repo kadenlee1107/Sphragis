@@ -716,15 +716,30 @@ fn layout_children(
                             Some(idx) => idx,
                             None => return,
                         };
-                        let (bs, bl) = tree.store_text(b"\xB7 ");
+                        // ASCII '*' so the bullet renders in any font.
+                        // (Tried U+2022 BULLET via UTF-8 first; our text
+                        // path treats each byte as a separate char
+                        // through the glyph table, so the multi-byte
+                        // sequence renders as garbage. ASCII it is.)
+                        let (bs, bl) = tree.store_text(b"* ");
                         tree.boxes[bullet].text_start = bs;
                         tree.boxes[bullet].text_len = bl;
                         tree.boxes[bullet].style = style;
                         tree.boxes[bullet].style.color = Color::from_rgb(255, 136, 0);
-                        tree.boxes[bullet].x = block_x - 16;
-                        tree.boxes[bullet].y = *cursor_y + style.padding_top;
+                        let bx = block_x - 16;
+                        let by = *cursor_y + style.padding_top;
+                        tree.boxes[bullet].x = bx;
+                        tree.boxes[bullet].y = by;
                         tree.boxes[bullet].width = 16;
                         tree.boxes[bullet].height = line_h;
+                        // Without setting content_x/y, paint draws the
+                        // bullet text at (0, 0) — every list bullet
+                        // would stack at the top-left corner of the
+                        // page. Set them to match the box position.
+                        tree.boxes[bullet].content_x = bx;
+                        tree.boxes[bullet].content_y = by;
+                        tree.boxes[bullet].content_w = 16;
+                        tree.boxes[bullet].content_h = line_h;
                         tree.boxes[bullet].parent = ebox as u16;
                         tree.boxes[bullet].active = true;
                     }

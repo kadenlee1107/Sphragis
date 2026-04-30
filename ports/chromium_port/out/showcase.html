@@ -51,6 +51,7 @@
       padding: 2px 6px;
       border-radius: 3px;
     }
+    a { color: #63aeff; }
   </style>
 </head>
 <body>
@@ -60,6 +61,7 @@
     <span class="badge">CSS</span>
     <span class="badge">Layout</span>
     <span class="badge">Paint</span>
+    <span class="badge">PNG</span>
     <span class="warn">No JS yet</span>
   </p>
 
@@ -69,8 +71,24 @@
     <p>All from Bat_OS's own paint module.</p>
   </div>
 
-  <h2>Inline code styling</h2>
-  <p>Run <code>render file:///bin/showcase.html</code> to produce this image.</p>
+  <h2>Images</h2>
+  <p>Below: a 200x100 PNG decoded from the initrd archive and alpha-blended:</p>
+  <img src="file:///bin/swatch.png" alt="gradient">
+
+  <h2>Lists</h2>
+  <ul>
+    <li>HTML parser</li>
+    <li>DOM tree</li>
+    <li>CSS sheet matcher</li>
+    <li>Layout engine (block + inline)</li>
+    <li>Paint engine (TrueType, PNG, borders, radius)</li>
+  </ul>
+
+  <h2>Links + inline code</h2>
+  <p>
+    Run <code>render file:///bin/showcase.html</code> to produce this image.
+    See the <a href="file:///bin/hello.html">hello page</a> for the minimal version.
+  </p>
 
   <h2>Color + typography</h2>
   <p>Headings are gold. Section headers are sky blue. Body is light gray on near-black.</p>
