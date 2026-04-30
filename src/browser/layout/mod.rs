@@ -260,6 +260,197 @@ fn str_has(haystack: &str, needle: &str) -> bool {
 }
 
 /// Lay out children of a DOM node into a layout box
+/// 🎯 STUMP #74: minimal column-aligned <table> layout. Two passes:
+///   1. Walk all <tr> children to find the max column count (so
+///      column widths divide the table width evenly).
+///   2. Lay out each row at the current cursor_y; each cell at
+///      `row_x + col_idx * col_w`, sized to one column. Cell
+///      contents go through the regular layout_children flow.
+///
+/// Doesn't yet implement: column-spanning, per-column width hints,
+/// table-cell padding from CSS, header rendering distinct from data.
+/// Good enough to produce a recognizable table from typical HTML.
+fn layout_table(
+    doc: &Document,
+    tree: &mut LayoutTree,
+    sheet: &Stylesheet,
+    parent_box: usize,
+    table_idx: usize,
+    x_offset: i32,
+    cursor_y: &mut i32,
+    avail_width: i32,
+) {
+    use crate::ui::truetype;
+    let table_w = avail_width;
+
+    // Pass 1: max column count across all rows.
+    let mut max_cols: i32 = 1;
+    for row_idx in doc.children(table_idx) {
+        let row = doc.get(row_idx);
+        if row.node_type != NodeType::Element { continue; }
+        let tag = row.tag_str();
+        if tag != "tr" && tag != "thead" && tag != "tbody" && tag != "tfoot" {
+            continue;
+        }
+        // tr direct, OR <thead>/<tbody>/<tfoot> wrapping a tr
+        if tag == "tr" {
+            let n = count_cells(doc, row_idx);
+            if n > max_cols { max_cols = n; }
+        } else {
+            for inner_tr in doc.children(row_idx) {
+                let inner = doc.get(inner_tr);
+                if inner.node_type != NodeType::Element { continue; }
+                if inner.tag_str() != "tr" { continue; }
+                let n = count_cells(doc, inner_tr);
+                if n > max_cols { max_cols = n; }
+            }
+        }
+    }
+    let col_w = (table_w / max_cols).max(40);
+
+    // Allocate the table box (so a CSS background / border can render).
+    let tbox = match tree.alloc() { Some(i) => i, None => return };
+    let mut tstyle = ComputedStyle::for_tag("table");
+    if sheet.has_rules() {
+        let n = doc.get(table_idx);
+        sheet.apply("table",
+            n.get_attr("id").unwrap_or(""),
+            n.get_attr("class").unwrap_or(""),
+            &[], &mut tstyle);
+    }
+    tree.boxes[tbox].dom_node = table_idx as u16;
+    tree.boxes[tbox].style = tstyle;
+    tree.boxes[tbox].parent = parent_box as u16;
+    tree.boxes[tbox].x = x_offset;
+    let table_y = *cursor_y + tstyle.margin_top;
+    *cursor_y = table_y;
+    tree.boxes[tbox].y = table_y;
+    tree.boxes[tbox].width = max_cols * col_w;
+    tree.boxes[tbox].content_x = x_offset;
+    tree.boxes[tbox].content_y = table_y;
+    tree.boxes[tbox].content_w = max_cols * col_w;
+
+    // Pass 2: lay out rows + cells.
+    let row_h_default = if truetype::is_available() { 24 } else { 22 };
+    let mut total_rows: i32 = 0;
+
+    for row_idx in doc.children(table_idx) {
+        let row = doc.get(row_idx);
+        if row.node_type != NodeType::Element { continue; }
+        let row_tag = row.tag_str();
+        let row_iter: [usize; 1];
+        let rows: &[usize] = if row_tag == "tr" {
+            row_iter = [row_idx];
+            &row_iter
+        } else if row_tag == "thead" || row_tag == "tbody" || row_tag == "tfoot" {
+            // Walk the inner trs inline. To stay no_alloc, we
+            // re-walk children here.
+            for inner_tr in doc.children(row_idx) {
+                let inner = doc.get(inner_tr);
+                if inner.node_type != NodeType::Element { continue; }
+                if inner.tag_str() != "tr" { continue; }
+                let h = layout_one_row(doc, tree, sheet, tbox, inner_tr,
+                                       x_offset, *cursor_y, col_w,
+                                       max_cols, row_h_default);
+                *cursor_y += h;
+                total_rows += 1;
+            }
+            continue;
+        } else {
+            continue;
+        };
+        for &r in rows {
+            let h = layout_one_row(doc, tree, sheet, tbox, r,
+                                   x_offset, *cursor_y, col_w,
+                                   max_cols, row_h_default);
+            *cursor_y += h;
+            total_rows += 1;
+        }
+    }
+
+    let table_h = *cursor_y - table_y;
+    tree.boxes[tbox].height = table_h;
+    tree.boxes[tbox].content_h = table_h;
+    *cursor_y += tstyle.margin_bottom;
+    let _ = total_rows;
+}
+
+/// Count <td>/<th> children of a <tr>.
+fn count_cells(doc: &Document, tr_idx: usize) -> i32 {
+    let mut n = 0i32;
+    for cell in doc.children(tr_idx) {
+        let c = doc.get(cell);
+        if c.node_type != NodeType::Element { continue; }
+        let tag = c.tag_str();
+        if tag == "td" || tag == "th" { n += 1; }
+    }
+    n
+}
+
+/// Lay out a single <tr>: place each cell side-by-side. Returns the
+/// row's height in pixels.
+fn layout_one_row(
+    doc: &Document,
+    tree: &mut LayoutTree,
+    sheet: &Stylesheet,
+    table_box: usize,
+    row_idx: usize,
+    row_x: i32,
+    row_y: i32,
+    col_w: i32,
+    _max_cols: i32,
+    default_h: i32,
+) -> i32 {
+    let mut col_idx: i32 = 0;
+    let mut row_h: i32 = default_h;
+
+    for cell_idx in doc.children(row_idx) {
+        let cell = doc.get(cell_idx);
+        if cell.node_type != NodeType::Element { continue; }
+        let tag = cell.tag_str();
+        if tag != "td" && tag != "th" { continue; }
+
+        // Cell box (provides background + border + padding)
+        let cbox = match tree.alloc() { Some(i) => i, None => return row_h };
+        let mut cstyle = ComputedStyle::for_tag(tag);
+        if sheet.has_rules() {
+            sheet.apply(tag,
+                cell.get_attr("id").unwrap_or(""),
+                cell.get_attr("class").unwrap_or(""),
+                &[], &mut cstyle);
+        }
+        let pad_l = cstyle.padding_left.max(8);
+        let pad_r = cstyle.padding_right.max(8);
+        let pad_t = cstyle.padding_top.max(4);
+        let pad_b = cstyle.padding_bottom.max(4);
+
+        let cx = row_x + col_idx * col_w;
+        let cy = row_y;
+        let inner_w = (col_w - pad_l - pad_r).max(0);
+        tree.boxes[cbox].dom_node = cell_idx as u16;
+        tree.boxes[cbox].style = cstyle;
+        tree.boxes[cbox].parent = table_box as u16;
+        tree.boxes[cbox].x = cx;
+        tree.boxes[cbox].y = cy;
+        tree.boxes[cbox].width = col_w;
+        tree.boxes[cbox].content_x = cx + pad_l;
+        tree.boxes[cbox].content_y = cy + pad_t;
+        tree.boxes[cbox].content_w = inner_w;
+
+        // Lay out the cell's contents through the normal flow.
+        let mut cell_cursor_y = cy + pad_t;
+        layout_children(doc, tree, sheet, cbox, cell_idx,
+                        cx + pad_l, &mut cell_cursor_y, inner_w);
+        let content_h = (cell_cursor_y - (cy + pad_t)).max(default_h);
+        let cell_h = content_h + pad_t + pad_b;
+        tree.boxes[cbox].height = cell_h;
+        tree.boxes[cbox].content_h = content_h;
+        if cell_h > row_h { row_h = cell_h; }
+        col_idx += 1;
+    }
+    row_h
+}
+
 fn layout_children(
     doc: &Document,
     tree: &mut LayoutTree,
@@ -592,6 +783,22 @@ fn layout_children(
                     if style.height == Length::Auto {
                         style.height = Length::Px(80);
                     }
+                }
+
+                // <table> tags — column-aligned layout. Pre-fix tables
+                // rendered as nested block stacks (cells flowed inline
+                // within their row, but rows had no column awareness).
+                // This special path computes uniform column widths from
+                // the row with the most cells, then lays out each row's
+                // cells side-by-side using those widths so columns
+                // actually line up.
+                if node.tag_str() == "table" {
+                    layout_table(doc, tree, sheet, parent_box, child_idx,
+                                 x_offset, cursor_y, avail_width);
+                    inline_x = x_offset;
+                    max_line_h_on_current_line = 0;
+                    prev_block_mb = 0;
+                    continue;
                 }
 
                 // <img> tags — try to decode the PNG referenced by `src`
