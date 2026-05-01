@@ -128,6 +128,17 @@ pub fn poll() {
         let code  = super::virtqueue::safe_read16(buf_addr + 2);
         let value = super::virtqueue::safe_read32(buf_addr + 4) as i32;
 
+        // Diagnostic: log every raw tablet event so we can tell if
+        // QEMU is delivering them at all and how the kernel is
+        // decoding them. Remove once the input chain is confirmed.
+        uart::puts("    [tbl] ev type=");
+        crate::kernel::mm::print_num(etype as usize);
+        uart::puts(" code=");
+        crate::kernel::mm::print_num(code as usize);
+        uart::puts(" value=");
+        crate::kernel::mm::print_num(value as usize);
+        uart::puts("\n");
+
         match etype {
             EV_ABS => {
                 // Rescale tablet coords to GPU framebuffer coords.
