@@ -76,6 +76,13 @@ pub const OP_CALL: u8          = 0x60; // + u8 argc: call function
 pub const OP_RETURN: u8        = 0x61; // return top of stack
 pub const OP_CLOSURE: u8       = 0x62; // + u16 proto_idx: create closure
 pub const OP_NEW: u8           = 0x63; // + u8 argc: new Constructor(args)
+// STUMP #93: method call — stack on entry is
+//     [func, this, arg0, arg1, ...]   argc = number of REAL args (no this)
+// The runtime binds `this = stack[func_pos+1]` and passes
+// `args_start = func_pos + 2` to native callees, fixing the
+// console.log("x") prints "[object Object] x" bug where the
+// receiver leaked into arg[0].
+pub const OP_METHOD_CALL: u8   = 0x64;
 
 // ─── Objects and Properties ───
 pub const OP_GET_PROP: u8      = 0x70; // + u16 name_idx: obj.prop

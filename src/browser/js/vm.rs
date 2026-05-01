@@ -492,6 +492,11 @@ impl Vm {
                     let argc = self.read_u8() as usize;
                     self.call_function(argc)?;
                 }
+                OP_METHOD_CALL => {
+                    let argc = self.read_u8() as usize;
+                    // Stack: [func, this, arg0, ..., arg(argc-1)]
+                    self.call_method(argc)?;
+                }
                 OP_RETURN => {
                     let result = self.pop()?;
                     self.frame_count -= 1;
@@ -843,6 +848,77 @@ impl Vm {
     }
 
     // ─── Function calls ───
+
+    /// STUMP #93: method-call dispatch. Stack on entry is
+    ///     [func, this, arg0, ..., arg(argc-1)]
+    /// where `argc` is the number of real arguments (NOT counting
+    /// `this`). Native callees receive `args_start = func_pos + 2`
+    /// so the receiver doesn't leak into arg[0]. User-defined
+    /// functions inherit `this` into their CallFrame, and arguments
+    /// are copied from the post-`this` slots into local-param slots.
+    fn call_method(&mut self, argc: usize) -> Result<(), JsError> {
+        if self.frame_count >= MAX_FRAMES {
+            return Err(JsError::StackOverflow);
+        }
+        // func is at sp - argc - 2 (above it: this, then argc args).
+        let func_pos = self.sp - argc - 2;
+        let func_val = self.stack[func_pos];
+        let this_val = self.stack[func_pos + 1];
+
+        if func_val.is_object() {
+            let obj = func_val.as_obj();
+            let flags = self.heap.get_flags(obj);
+
+            if flags & ObjFlags::NATIVE != 0 {
+                let native_idx = self.heap.get_native_idx(obj);
+                if let Some(native_fn) = self.natives[native_idx as usize] {
+                    let args_start = func_pos + 2; // skip `this`
+                    let result = native_fn(self, args_start, argc)?;
+                    self.sp = func_pos;
+                    self.push(result)?;
+                    return Ok(());
+                }
+            }
+
+            if flags & ObjFlags::FUNCTION != 0 {
+                let proto_idx = self.heap.get_func_proto_idx(obj);
+                let new_base = func_pos;
+                let local_count = self.protos[proto_idx as usize].local_count as usize;
+                let param_count = self.protos[proto_idx as usize].param_count as usize;
+
+                // Snapshot args from the post-`this` slots.
+                let mut args_tmp = [JsValue::UNDEFINED; 16];
+                let real_argc = argc.min(16);
+                for i in 0..real_argc {
+                    args_tmp[i] = self.stack[func_pos + 2 + i];
+                }
+                self.sp = new_base;
+                for i in 0..local_count {
+                    if i < real_argc && i < param_count {
+                        self.stack[new_base + i] = args_tmp[i];
+                    } else {
+                        self.stack[new_base + i] = JsValue::UNDEFINED;
+                    }
+                }
+                self.sp = new_base + local_count;
+
+                self.frames[self.frame_count] = CallFrame {
+                    proto_idx,
+                    ip: 0,
+                    stack_base: new_base,
+                    this_val,
+                    closure_obj: obj,
+                };
+                self.frame_count += 1;
+                return Ok(());
+            }
+        }
+
+        // Not callable — pop everything we set up and push undefined.
+        self.sp = func_pos;
+        self.push(JsValue::UNDEFINED)?;
+        Ok(())
+    }
 
     fn call_function(&mut self, argc: usize) -> Result<(), JsError> {
         if self.frame_count >= MAX_FRAMES {

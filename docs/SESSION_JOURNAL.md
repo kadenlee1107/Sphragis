@@ -11,6 +11,29 @@ end of a session.
 
 ---
 
+## 2026-04-30 20:00 — Mac — 🎯 Live web render + interactive forms: example.com / info.cern.ch over real internet, JS method-call this/argv fixed, click=id event dispatch.
+
+Continuation of the same day. Two more stumps after the tier-3 sprint shipped:
+
+**STUMP #92 — render directly from a `http://...` URL.** `cmd_render` now branches on the URL scheme: `http://...` → fetch the HTML over HTTP into a 256 KB static buffer, then proceed through parse + JS + layout + paint as if the bytes had come from the initrd. `file://` is unchanged. `https://` is rejected with a friendly message (TLS pinning + cert validation makes arbitrary HTTPS demo-fragile). Tested live:
+- `make render URL=http://example.com/` → 528 bytes fetched, 17 nodes parsed, screenshot shows "Example Domain" heading, the standard paragraph, and the "Learn more" link in blue.
+- `make render URL=http://info.cern.ch/` → 646 bytes fetched, 36 nodes parsed, screenshot shows the original 1991 WWW page with its bullet-point links rendered in blue.
+
+This is the first time Bat_OS's native renderer has produced a screenshot from the actual public internet. ARP, TCP, HTTP, DNS (the host alias 10.0.2.2 is bypassed by the numeric-IP shortcut, but real DNS via 10.0.2.3 is exercised by the public hostnames), HTML parser, CSS sheet matcher, layout, paint — every layer in the pipeline working against a real, never-seen-before document.
+
+**STUMP #93 — three things, all interlocking:**
+1. **JS method-call this/argv.** The compiler was emitting `OP_CALL` with `argc = num_real_args + 1` for method calls, counting the receiver as arg[0]. Native callees that read `vm.stack[args_start]` saw the receiver instead of the user's first argument — `console.log("hello from JS")` printed `[object Object] hello from JS`. Fix: introduced `OP_METHOD_CALL` (opcode 0x64). Stack on entry is `[func, this, arg0, arg1, ...]` with `argc` being the count of real args only. Runtime dispatch (`call_method`) extracts `this` from `stack[func_pos+1]` and passes `args_start = func_pos+2` to native callees so the receiver doesn't leak. User-defined function calls inherit `this` into the new CallFrame and copy args from the post-`this` slots into local-param slots. Compile-side: `obj.method(args)` now emits `OP_METHOD_CALL` instead of `OP_CALL` and excludes `this` from `argc`. Verified: `console.log("hello from JS")` prints exactly `hello from JS`.
+2. **`click=<id>` shell-arg dispatch in cmd_render.** Sibling of `type=` from STUMP #90. Before layout, finds the matching DOM node, snapshots its `onclick` attribute into a stack-local buffer, and appends the JS source onto `doc.js_text` with a `;\n` separator. The existing pre-layout JS execution path runs it. With #93's method-call fix in place, attribute handlers like `onclick="document.getElementById('out').setAttribute('value', 'clicked!');"` round-trip cleanly: handler runs → `setAttribute` mutates the DOM → layout reads the new value → paint shows the post-click state.
+3. **Wire the renderer's DOM into the JS DOM API.** `dom_api::set_document(doc)` was called by `ui::apps::browser` but NOT by `cmd_render`, so `getElementById` (and every other DOM lookup) saw a null pointer and returned `null`. Added the `set_document` call right before `vm.init()` in `cmd_render`. Without this, click=id would have appeared to "work" (no errors, console.log fires) but no DOM mutations would land — a particularly silent failure mode.
+
+Demo: `make render URL='file:///bin/click_test.html click=btn'`. The page has `<input id="result" value="initial">` and a `<button id="btn" onclick="document.getElementById('result').setAttribute('value', 'clicked!'); console.log('button click handler fired');">`. Render output: input shows `clicked!` (DOM mutation reflected) and JS console shows `button click handler fired` (handler ran).
+
+Two background tasks closed (the JS method-call bug and the click=id dispatch were both filed earlier today). The renderer can now produce screenshots that exercise: HTML over the public internet, external CSS/images over HTTP, deterministically-typed form fields, deterministically-clicked buttons firing real onclick handlers that mutate the DOM, multi-page tall content, sticky headers that re-paint per page, soft Gaussian-ish shadows, and proper flex-stretch alignment.
+
+Eight stumps shipped today (#86 root-cause, #88 net atomics + fetch, #89 paginated render, #90 form-fill, #91 sticky/stretch/shadow, #92 live URL render, #93 method-call + click).
+
+---
+
 ## 2026-04-30 19:35 — Mac — 🎯 Tier 3 closed out: paginated render, form-fill, sticky/stretch/gaussian. All five tier-3 TODOs done.
 
 Continuation of the session above; finished 3-of-5 → 5-of-5 of the tier-3 list.

@@ -3211,18 +3211,47 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         return;
     }
 
-    let mut path = url;
-    if let Some(rest) = path.strip_prefix("file://") { path = rest; }
-    while path.starts_with('/') { path = &path[1..]; }
-
-    let bytes = match initrd::archive_file(path) {
-        Some(b) => b,
-        None => {
-            uart::puts("  render: not in archive: ");
-            uart::puts(path); uart::puts("\n");
-            return;
+    // STUMP #92: render directly from a live `http://...` URL — fetch the
+    // HTML over HTTP into a static buffer, then proceed through parse +
+    // layout + paint as if it'd been read from the initrd. file:// is
+    // unchanged. https:// is rejected (TLS pinning makes arbitrary hosts
+    // demo-fragile; same restriction as the <link>/<img> http fetcher).
+    static mut HTML_FETCH_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
+    let bytes: &[u8] = if url.starts_with("http://") {
+        uart::puts("  render: fetching "); uart::puts(url); uart::puts("\n");
+        let buf = unsafe { &mut *core::ptr::addr_of_mut!(HTML_FETCH_BUF) };
+        match crate::net::fetch::fetch_http(url, buf) {
+            Ok(n) => {
+                uart::puts("  render: fetched ");
+                crate::kernel::mm::print_num(n);
+                uart::puts(" bytes\n");
+                &buf[..n]
+            }
+            Err(e) => {
+                uart::puts("  render: HTTP fetch failed: ");
+                uart::puts(e); uart::puts("\n");
+                return;
+            }
+        }
+    } else if url.starts_with("https://") {
+        uart::puts("  render: https:// not supported yet (TLS pinning); use http:// or file://\n");
+        return;
+    } else {
+        let mut path = url;
+        if let Some(rest) = path.strip_prefix("file://") { path = rest; }
+        while path.starts_with('/') { path = &path[1..]; }
+        match initrd::archive_file(path) {
+            Some(b) => b,
+            None => {
+                uart::puts("  render: not in archive: ");
+                uart::puts(path); uart::puts("\n");
+                return;
+            }
         }
     };
+
+    // Use the URL itself as the "path" for the success log line.
+    let path = url;
 
     // Backing framebuffer — capped at 1900px tall. The host-side
     // session that reads back the PNG cannot accept images >2000px
@@ -3259,33 +3288,81 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     // attribute on matching <input>/<textarea> nodes. The existing
     // input layout already prefers `value` over `placeholder`, so the
     // typed text shows up in the screenshot.
+    //
+    // STUMP #93: a sibling `click=<id>` flag appends the matched
+    // node's `onclick` attribute (inline JS) onto doc.js_text so the
+    // existing pre-layout JS execution path runs it. With STUMP #93's
+    // method-call fix in place, attribute handlers like
+    //   onclick="document.getElementById('out').innerText='clicked'"
+    // round-trip cleanly.
     for pi in 2..MAX_PARTS {
         let arg = parts[pi];
-        let payload = match arg.strip_prefix("type=") {
-            Some(p) => p,
-            None => continue,
-        };
-        let eq = match payload.find('=') {
-            Some(e) => e,
-            None => {
-                uart::puts("  render: bad type= arg (need id=value): ");
-                uart::puts(arg); uart::puts("\n");
-                continue;
+        if let Some(payload) = arg.strip_prefix("type=") {
+            let eq = match payload.find('=') {
+                Some(e) => e,
+                None => {
+                    uart::puts("  render: bad type= arg (need id=value): ");
+                    uart::puts(arg); uart::puts("\n");
+                    continue;
+                }
+            };
+            let id = &payload[..eq];
+            let val = &payload[eq + 1..];
+            match doc.find_by_id(id) {
+                Some(idx) => {
+                    doc.nodes[idx].set_attr("value", val);
+                    uart::puts("  render: typed into #");
+                    uart::puts(id); uart::puts(" = ");
+                    uart::puts(val); uart::puts("\n");
+                }
+                None => {
+                    uart::puts("  render: no element with id="); uart::puts(id);
+                    uart::puts("\n");
+                }
             }
-        };
-        let id = &payload[..eq];
-        let val = &payload[eq + 1..];
-        match doc.find_by_id(id) {
-            Some(idx) => {
-                doc.nodes[idx].set_attr("value", val);
-                uart::puts("  render: typed into #");
-                uart::puts(id); uart::puts(" = ");
-                uart::puts(val); uart::puts("\n");
+            continue;
+        }
+        if let Some(id) = arg.strip_prefix("click=") {
+            // Snapshot the onclick body into a stack-local buffer so
+            // we can release the immutable borrow on doc before we
+            // mutate doc.js_text below.
+            let mut handler = [0u8; 1024];
+            let mut hlen = 0usize;
+            let found = match doc.find_by_id(id) {
+                Some(idx) => {
+                    if let Some(oc) = doc.nodes[idx].get_attr("onclick") {
+                        let n = oc.len().min(handler.len());
+                        handler[..n].copy_from_slice(&oc.as_bytes()[..n]);
+                        hlen = n;
+                        true
+                    } else {
+                        uart::puts("  render: #"); uart::puts(id);
+                        uart::puts(" has no onclick attribute\n");
+                        false
+                    }
+                }
+                None => {
+                    uart::puts("  render: no element with id="); uart::puts(id);
+                    uart::puts("\n"); false
+                }
+            };
+            if found && hlen > 0 {
+                let avail = crate::browser::dom::MAX_JS - doc.js_len;
+                let need = hlen + 2; // body + ";\n"
+                if avail >= need {
+                    doc.js_text[doc.js_len..doc.js_len + hlen]
+                        .copy_from_slice(&handler[..hlen]);
+                    doc.js_len += hlen;
+                    doc.js_text[doc.js_len] = b';';
+                    doc.js_text[doc.js_len + 1] = b'\n';
+                    doc.js_len += 2;
+                    uart::puts("  render: queued onclick for #");
+                    uart::puts(id); uart::puts("\n");
+                } else {
+                    uart::puts("  render: js buffer full, click skipped\n");
+                }
             }
-            None => {
-                uart::puts("  render: no element with id="); uart::puts(id);
-                uart::puts("\n");
-            }
+            continue;
         }
     }
 
@@ -3340,9 +3417,13 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
             crate::browser::js::vm::Vm::new();
         let vm: &mut crate::browser::js::vm::Vm =
             unsafe { &mut *core::ptr::addr_of_mut!(JS_VM) };
-        uart::puts("  [js] init...\n");
+        // STUMP #93: hand the DOM ptr to the JS DOM API so
+        // document.getElementById / setAttribute / appendChild etc.
+        // resolve against the same Document the renderer just parsed.
+        // Without this, getElementById returns null and onclick
+        // handlers silently no-op.
+        crate::browser::js::dom_api::set_document(doc);
         vm.init();
-        uart::puts("  [js] init done\n");
         let src_bytes = &doc.js_text[..doc.js_len];
         match vm.execute(src_bytes) {
             Ok(_) => {

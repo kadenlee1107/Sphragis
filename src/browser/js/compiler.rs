@@ -725,7 +725,14 @@ impl<'a> Compiler<'a> {
                     let callee = ast.nodes[node.left as usize];
                     if callee.kind == NodeKind::MemberExpr {
                         is_method = true;
-                        // Method call: stack = [method, this, args...]
+                        // STUMP #93: method call — emit stack layout
+                        //     [func, this, arg0, arg1, ...]
+                        // and dispatch via OP_METHOD_CALL with
+                        // argc = number of real args (NOT counting
+                        // `this`). The runtime extracts `this` from
+                        // stack[func_pos+1] and passes args_start =
+                        // func_pos+2 to native callees so the
+                        // receiver doesn't leak into arg[0].
                         // 1. Push obj (will become `this`)
                         if callee.left != NULL {
                             self.compile_node(ast, callee.left as usize);
@@ -746,9 +753,9 @@ impl<'a> Compiler<'a> {
                     }
                 }
 
-                // Compile arguments: linked via right → next chain
+                // Compile arguments: linked via right → next chain.
+                // argc = number of real args (excluding `this`).
                 let mut argc = 0u8;
-                if is_method { argc = 1; } // count `this` as first arg
                 let mut arg = node.right;
                 while arg != NULL && (arg as usize) < ast.count {
                     self.compile_node(ast, arg as usize);
@@ -756,7 +763,11 @@ impl<'a> Compiler<'a> {
                     arg = ast.nodes[arg as usize].next;
                 }
 
-                self.emit(OP_CALL);
+                if is_method {
+                    self.emit(OP_METHOD_CALL);
+                } else {
+                    self.emit(OP_CALL);
+                }
                 self.emit_byte(argc);
             }
 
