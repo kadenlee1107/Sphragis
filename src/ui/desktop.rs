@@ -16,7 +16,13 @@ pub fn resume() -> ! {
     console::prompt();
 
     loop {
-        if let Some(c) = platform::serial_getc() {
+        // STUMP #99: same dual-source read as desktop::run. Without
+        // this, after a cave exit the resumed shell wouldn't accept
+        // QEMU-window keystrokes either.
+        crate::drivers::virtio::keyboard::poll();
+        let next_char = platform::serial_getc()
+            .or_else(crate::drivers::virtio::keyboard::getc);
+        if let Some(c) = next_char {
             if security::check_panic_hotkey(c) {
                 loop { unsafe { core::arch::asm!("wfe") }; }
             }
@@ -88,8 +94,15 @@ pub fn run() -> ! {
     wm::flush_all();
 
     loop {
-        // Check for keyboard input
-        if let Some(c) = platform::serial_getc() {
+        // Check for keyboard input from EITHER serial (host terminal)
+        // or virtio-keyboard (QEMU GUI window). STUMP #99: pre-fix
+        // only serial was read, so a Mac user typing into the QEMU
+        // window saw zero feedback. Pump virtio events first so they
+        // land in the keystroke ring, then prefer serial.
+        crate::drivers::virtio::keyboard::poll();
+        let next_char = platform::serial_getc()
+            .or_else(crate::drivers::virtio::keyboard::getc);
+        if let Some(c) = next_char {
             // Check for Ctrl+1-5 (switch apps)
             if c == 0x11 { // Ctrl+Q (or we use raw codes)
                 // Alternative: use Escape sequences

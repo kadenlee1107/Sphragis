@@ -131,7 +131,19 @@ pub fn run() {
         let mut cursor_x = field_x + 4;
 
         loop {
-            if let Some(c) = platform::serial_getc() {
+            // STUMP #99: read from BOTH the host serial console
+            // (terminal) AND the virtio-keyboard (QEMU GUI window).
+            // Pre-fix the boot screen ignored GUI typing entirely —
+            // a Mac user clicking into the QEMU window and typing
+            // their passphrase saw zero feedback and assumed input
+            // was broken. We pump the virtio-keyboard each pass so
+            // events from the GUI window land in the keystroke ring,
+            // then prefer serial (already-buffered when called from
+            // the kernel shell) and fall through to the GUI ring.
+            crate::drivers::virtio::keyboard::poll();
+            let c_opt = platform::serial_getc()
+                .or_else(crate::drivers::virtio::keyboard::getc);
+            if let Some(c) = c_opt {
                 match c {
                     b'\r' | b'\n' => break,
                     0x08 | 0x7F => {
