@@ -9,6 +9,103 @@ fn starts_with_bytes(hay: &[u8], needle: &[u8]) -> bool {
     &hay[..needle.len()] == needle
 }
 
+/// STUMP #107 — Sprint 3.3: decode the next UTF-8 codepoint from
+/// `bytes`. Returns `(codepoint, byte_count)`. On malformed input
+/// returns `(U+FFFD, 1)` so the caller advances by exactly one byte
+/// and can keep parsing. ASCII passthrough is one byte.
+fn decode_utf8(bytes: &[u8]) -> (u32, usize) {
+    if bytes.is_empty() { return (0, 0); }
+    let b0 = bytes[0];
+    if b0 < 0x80 { return (b0 as u32, 1); }
+    if b0 < 0xC0 { return (0xFFFD, 1); } // stray continuation byte
+    let nbytes = if b0 < 0xE0 { 2 } else if b0 < 0xF0 { 3 } else { 4 };
+    if bytes.len() < nbytes { return (0xFFFD, 1); }
+    let mask: u32 = match nbytes { 2 => 0x1F, 3 => 0x0F, 4 => 0x07, _ => 0x7F };
+    let mut cp: u32 = (b0 as u32) & mask;
+    for k in 1..nbytes {
+        if (bytes[k] & 0xC0) != 0x80 { return (0xFFFD, k); }
+        cp = (cp << 6) | (bytes[k] & 0x3F) as u32;
+    }
+    (cp, nbytes)
+}
+
+/// STUMP #107: best-effort ASCII fallback for a Unicode codepoint.
+/// Returns a slice of replacement bytes (usually 1 char, occasionally
+/// 3 for ellipsis or 2 for AE/OE). Designed to make non-ASCII text
+/// READABLE, not preserve typographic fidelity. Real font fallback /
+/// glyph rendering for non-Latin scripts is a follow-up.
+fn ascii_fallback(cp: u32) -> &'static [u8] {
+    match cp {
+        // C1 controls and friends
+        0x00A0 => b" ",                                    // nbsp
+        0x00A2 => b"c",                                    // ¢
+        0x00A3 => b"L",                                    // £
+        0x00A5 => b"Y",                                    // ¥
+        0x00A7 => b"S",                                    // §
+        0x00A9 => b"(c)",                                  // ©
+        0x00AB => b"<<",                                   // «
+        0x00AD => b"-",                                    // soft hyphen
+        0x00AE => b"(R)",                                  // ®
+        0x00B0 => b"o",                                    // °
+        0x00B1 => b"+/-",                                  // ±
+        0x00B2 => b"2",                                    // ²
+        0x00B3 => b"3",                                    // ³
+        0x00B5 => b"u",                                    // µ
+        0x00B6 => b"P",                                    // ¶
+        0x00B7 => b"\xB7",                                 // middle dot — paint draws as bullet
+        0x00BB => b">>",                                   // »
+        0x00BC => b"1/4",
+        0x00BD => b"1/2",
+        0x00BE => b"3/4",
+        0x00BF => b"?",                                    // ¿
+        // Latin-1 Supplement: accented Latin letters → unaccented
+        0x00C0..=0x00C5 => b"A",
+        0x00C6           => b"AE",
+        0x00C7           => b"C",
+        0x00C8..=0x00CB => b"E",
+        0x00CC..=0x00CF => b"I",
+        0x00D0           => b"D",
+        0x00D1           => b"N",
+        0x00D2..=0x00D6 | 0x00D8 => b"O",
+        0x00D7           => b"x",
+        0x00D9..=0x00DC => b"U",
+        0x00DD           => b"Y",
+        0x00DE           => b"P",                          // thorn
+        0x00DF           => b"ss",                         // eszett
+        0x00E0..=0x00E5 => b"a",
+        0x00E6           => b"ae",
+        0x00E7           => b"c",
+        0x00E8..=0x00EB => b"e",
+        0x00EC..=0x00EF => b"i",
+        0x00F0           => b"d",
+        0x00F1           => b"n",
+        0x00F2..=0x00F6 | 0x00F8 => b"o",
+        0x00F7           => b"/",
+        0x00F9..=0x00FC => b"u",
+        0x00FD | 0x00FF => b"y",
+        0x00FE           => b"p",
+        // Common General Punctuation
+        0x2010..=0x2015 => b"-",                            // dashes
+        0x2018 | 0x2019 => b"'",                            // single quotes
+        0x201A           => b",",
+        0x201C | 0x201D => b"\"",                           // double quotes
+        0x201E           => b",,",
+        0x2020           => b"+",                           // dagger
+        0x2022           => b"\xB7",                        // bullet
+        0x2026           => b"...",                         // ellipsis
+        0x2030           => b"%",                           // per mille (close enough)
+        0x2039           => b"<",
+        0x203A           => b">",
+        // Currency
+        0x20AC           => b"EUR",
+        // Misc that show up a lot
+        0x2122           => b"TM",
+        0xFFFD           => b"?",                           // replacement char
+        // Anything else — single '?' so the layout still reflects a glyph.
+        _                => b"?",
+    }
+}
+
 /// Parse HTML bytes into a DOM tree.
 pub fn parse(html: &[u8], doc: &mut Document) {
     doc.init();
@@ -400,6 +497,26 @@ pub fn parse(html: &[u8], doc: &mut Document) {
                             emit(doc, &mut chunk, &mut clen, &mut last_space, b'&');
                             j += 1;
                         }
+                    } else if raw_text[j] >= 0x80 {
+                        // STUMP #107 — Sprint 3.3: UTF-8 decode at parse time.
+                        // The layout / paint path is ASCII-only because we
+                        // ship one Verdana TT font with no codepoints
+                        // beyond U+007F. Pre-fix, every multi-byte UTF-8
+                        // sequence was either dropped (paint's "ch < 0x20
+                        // || ch > 0x7E { skip }") or stamped one
+                        // continuation byte at a time as a black square.
+                        // Visible result on Wikipedia's language sidebar:
+                        // most non-Latin entries were unreadable.
+                        // Now we decode the codepoint here and substitute
+                        // an ASCII fallback (best-effort transliteration
+                        // for accented Latin + common typographic punct;
+                        // '?' otherwise). Real font fallback / actual
+                        // Unicode rendering is the next milestone.
+                        let (cp, n) = decode_utf8(&raw_text[j..]);
+                        for &b in ascii_fallback(cp).iter() {
+                            emit(doc, &mut chunk, &mut clen, &mut last_space, b);
+                        }
+                        j += n.max(1);
                     } else {
                         emit(doc, &mut chunk, &mut clen, &mut last_space, raw_text[j]);
                         j += 1;
