@@ -248,16 +248,20 @@ pub fn paint(
                     if truetype::is_available() {
                         // Anti-aliased TrueType rendering at actual CSS font size
                         let ch_buf = [ch];
-                        let advance = truetype::draw_text_fb(
+                        let italic = b.style.font_style
+                            == super::css::style::FontStyle::Italic;
+                        let advance = truetype::draw_text_fb_styled(
                             fb, sw, tx, ty, &ch_buf, font_px, color,
                             clip_left, clip_right, clip_top, clip_bottom,
+                            italic,
                         );
 
                         // Bold: draw again offset by 1px
                         if is_bold {
-                            truetype::draw_text_fb(
+                            truetype::draw_text_fb_styled(
                                 fb, sw, tx + 1, ty, &ch_buf, font_px, color,
                                 clip_left, clip_right, clip_top, clip_bottom,
+                                italic,
                             );
                         }
 

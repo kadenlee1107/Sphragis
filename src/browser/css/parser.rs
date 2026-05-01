@@ -32,6 +32,13 @@ pub fn apply_property(prop: &str, val: &str, style: &mut ComputedStyle) {
                 FontWeight::Normal
             };
         }
+        "font-style" => {
+            style.font_style = if val == "italic" || val == "oblique" {
+                FontStyle::Italic
+            } else {
+                FontStyle::Normal
+            };
+        }
         "text-align" => {
             style.text_align = match val {
                 "center" => TextAlign::Center,

@@ -217,6 +217,13 @@ pub enum FontWeight {
     Bold,    // 700
 }
 
+/// CSS font-style
+#[derive(Clone, Copy, PartialEq)]
+pub enum FontStyle {
+    Normal,
+    Italic,
+}
+
 /// CSS text-align
 #[derive(Clone, Copy, PartialEq)]
 pub enum TextAlign {
@@ -284,6 +291,7 @@ pub struct ComputedStyle {
     pub background_color: Color,
     pub font_size: i32,       // in pixels
     pub font_weight: FontWeight,
+    pub font_style: FontStyle,
     pub text_align: TextAlign,
     pub text_decoration: TextDecoration,
     pub margin_top: i32,
@@ -326,6 +334,7 @@ impl ComputedStyle {
             background_color: Color::TRANSPARENT,
             font_size: 16,
             font_weight: FontWeight::Normal,
+            font_style: FontStyle::Normal,
             text_align: TextAlign::Left,
             text_decoration: TextDecoration { underline: false, line_through: false },
             margin_top: 0, margin_bottom: 0,
@@ -446,6 +455,7 @@ impl ComputedStyle {
                 s.color = Color::WHITE;
             }
             "i" | "em" => {
+                s.font_style = FontStyle::Italic;
                 s.color = Color::from_rgb(210, 210, 210);
             }
             "code" => {

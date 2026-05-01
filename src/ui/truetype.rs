@@ -1010,6 +1010,29 @@ pub fn draw_text_fb(
     clip_top: i32,
     clip_bottom: i32,
 ) -> i32 {
+    draw_text_fb_styled(fb, screen_w, x, y, text, size_px, color,
+                       clip_left, clip_right, clip_top, clip_bottom, false)
+}
+
+/// Same as draw_text_fb but with a `shear_italic` flag. When set,
+/// each scanline of every glyph is offset to the right by an amount
+/// proportional to its distance below the top (≈ tan(12°) ≈ 0.21).
+/// Synthesizes oblique/italic rendering from the upright TrueType
+/// outline without needing a separate italic font face.
+pub fn draw_text_fb_styled(
+    fb: *mut u32,
+    screen_w: u32,
+    x: i32,
+    y: i32,
+    text: &[u8],
+    size_px: u16,
+    color: u32,
+    clip_left: i32,
+    clip_right: i32,
+    clip_top: i32,
+    clip_bottom: i32,
+    shear_italic: bool,
+) -> i32 {
     let font = match get_font() {
         Some(f) => f,
         None => return 0,
@@ -1027,13 +1050,22 @@ pub fn draw_text_fb(
 
         let (gw, gh, advance) = font.render_char(ch as char, size_px, &mut bitmap);
 
-        // Blit glyph with alpha blending and clipping
+        // Blit glyph with alpha blending and clipping. For italic,
+        // shear each scanline to the right based on its distance
+        // BELOW the bottom of the glyph (so the baseline stays put
+        // and the top of the letter slants right). Slant ≈ 12°
+        // matches typical italic font metrics; computed as
+        // `(gh - row) / 5` per row.
         for row in 0..gh as i32 {
             let sy = y + row;
             if sy < clip_top || sy >= clip_bottom { continue; }
 
+            let shear_dx = if shear_italic {
+                (gh as i32 - row) / 5
+            } else { 0 };
+
             for col in 0..gw as i32 {
-                let sx = cursor_x + col;
+                let sx = cursor_x + col + shear_dx;
                 if sx < clip_left || sx >= clip_right { continue; }
 
                 let coverage = bitmap[(row as usize) * (gw as usize) + (col as usize)] as u32;
