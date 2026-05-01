@@ -1025,13 +1025,29 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
                                         tdbg("[tls] leaf accepted (pin)\n");
                                     }
                                     crate::net::tls_pinning::PinDecision::Mismatch => {
-                                        return Err("TLS: cert pin mismatch (MITM?)");
+                                        // STUMP #101: Open mode logs and proceeds on mismatch.
+                                        // Lockdown / Research both abort.
+                                        if crate::net::tls_pinning::current_mode()
+                                            == crate::net::tls_pinning::Mode::Open
+                                        {
+                                            uart::puts("[tls] WARN: cert pin MISMATCH but mode=Open — accepting anyway\n");
+                                        } else {
+                                            return Err("TLS: cert pin mismatch (MITM?)");
+                                        }
                                     }
                                     crate::net::tls_pinning::PinDecision::NoPin => {
-                                        if crate::net::tls_pinning::is_strict() {
-                                            return Err("TLS: no pin / bad chain (strict)");
-                                        } else {
-                                            tdbg("[tls] leaf accepted (no pin, non-strict)\n");
+                                        // Lockdown rejects unpinned hosts. Research
+                                        // and Open allow them through with a log.
+                                        match crate::net::tls_pinning::current_mode() {
+                                            crate::net::tls_pinning::Mode::Lockdown => {
+                                                return Err("TLS: no pin / bad chain (lockdown)");
+                                            }
+                                            crate::net::tls_pinning::Mode::Research => {
+                                                tdbg("[tls] leaf accepted (no pin, mode=Research)\n");
+                                            }
+                                            crate::net::tls_pinning::Mode::Open => {
+                                                tdbg("[tls] leaf accepted (no pin, mode=Open)\n");
+                                            }
                                         }
                                     }
                                 }

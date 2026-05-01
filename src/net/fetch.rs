@@ -200,12 +200,12 @@ pub fn fetch_post_https(
         dns::resolve(host).map_err(|_| "DNS resolution failed")?
     };
     tcp::connect(ip, port).map_err(|_| "TCP connect failed")?;
-    let prev_strict = super::tls_pinning::is_strict();
+    let prev_strict = super::tls_pinning::current_mode();
     let prev_hybrid = tls::hybrid_enabled();
-    super::tls_pinning::set_strict(false);
+    super::tls_pinning::set_mode(super::tls_pinning::Mode::Research);
     tls::set_hybrid_enabled(false);
     if let Err(e) = tls::handshake(host) {
-        super::tls_pinning::set_strict(prev_strict);
+        super::tls_pinning::set_mode(prev_strict);
         tls::set_hybrid_enabled(prev_hybrid);
         tcp::close();
         return Err(e);
@@ -222,20 +222,20 @@ pub fn fetch_post_https(
     pos += copy_to(&mut req, pos, &clen_buf[..clen_len]);
     pos += copy_to(&mut req, pos, b"\r\nConnection: close\r\n\r\n");
     if pos > req.len() {
-        super::tls_pinning::set_strict(prev_strict);
+        super::tls_pinning::set_mode(prev_strict);
         tls::set_hybrid_enabled(prev_hybrid);
         tls::close();
         return Err("request too large");
     }
     if let Err(e) = tls::send_app_data(&req[..pos]) {
-        super::tls_pinning::set_strict(prev_strict);
+        super::tls_pinning::set_mode(prev_strict);
         tls::set_hybrid_enabled(prev_hybrid);
         tls::close();
         return Err(e);
     }
     if !body.is_empty() {
         if let Err(e) = tls::send_app_data(body) {
-            super::tls_pinning::set_strict(prev_strict);
+            super::tls_pinning::set_mode(prev_strict);
             tls::set_hybrid_enabled(prev_hybrid);
             tls::close();
             return Err(e);
@@ -261,7 +261,7 @@ pub fn fetch_post_https(
             Err(_) => break,
         }
     }
-    super::tls_pinning::set_strict(prev_strict);
+    super::tls_pinning::set_mode(prev_strict);
     tls::set_hybrid_enabled(prev_hybrid);
     tls::close();
 
@@ -347,13 +347,13 @@ pub fn fetch_https(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     // world bug ("handshake record auth failed") against major HTTPS
     // servers when they pick the hybrid group; plain X25519
     // handshakes cleanly. Restored to previous values on every exit.
-    let prev_strict = super::tls_pinning::is_strict();
+    let prev_strict = super::tls_pinning::current_mode();
     let prev_hybrid = tls::hybrid_enabled();
-    super::tls_pinning::set_strict(false);
+    super::tls_pinning::set_mode(super::tls_pinning::Mode::Research);
     tls::set_hybrid_enabled(false);
 
     if let Err(e) = tls::handshake(host) {
-        super::tls_pinning::set_strict(prev_strict);
+        super::tls_pinning::set_mode(prev_strict);
         tls::set_hybrid_enabled(prev_hybrid);
         tcp::close();
         return Err(e);
@@ -370,14 +370,14 @@ pub fn fetch_https(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     pos += copy_to(&mut req, pos, host.as_bytes());
     pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\nAccept: text/html\r\nConnection: close\r\n\r\n");
     if pos > req.len() {
-        super::tls_pinning::set_strict(prev_strict);
+        super::tls_pinning::set_mode(prev_strict);
         tls::set_hybrid_enabled(prev_hybrid);
         tls::close();
         return Err("request too large");
     }
 
     if let Err(e) = tls::send_app_data(&req[..pos]) {
-        super::tls_pinning::set_strict(prev_strict);
+        super::tls_pinning::set_mode(prev_strict);
         tls::set_hybrid_enabled(prev_hybrid);
         tls::close();
         return Err(e);
@@ -423,7 +423,7 @@ pub fn fetch_https(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
         }
     }
 
-    super::tls_pinning::set_strict(prev_strict);
+    super::tls_pinning::set_mode(prev_strict);
     tls::set_hybrid_enabled(prev_hybrid);
     tls::close();
 

@@ -124,6 +124,7 @@ fn execute(cmd: &str) {
         "chromium" | "chrome" => cmd_chromium(parts[1], parts[2], parts[3]),
         "dump-dom" | "dom" => cmd_dump_dom(parts[1]),
         "render" => cmd_render(parts[1], &parts),
+        "tls-mode" => cmd_tls_mode(parts[1]),
         "browse" | "open" => {
             if !parts[1].is_empty() {
                 console::puts("  Opening in BatBrowser: ");
@@ -4509,6 +4510,47 @@ fn draw_cursor(fb: *mut u32, fb_w: usize, fb_h: usize, cx: usize, cy: usize) {
             unsafe { core::ptr::write_volatile(fb.add(y * fb_w + x), color); }
         }
     }
+}
+
+/// STUMP #101 — Sprint 2.1: report or set the global TLS verification
+/// mode. Three modes:
+///   `lockdown` — only hosts in PINS may handshake (production default)
+///   `research` — pinned hosts must match; non-pinned allowed (renderer)
+///   `open`     — anything goes, even pin mismatches (debug only)
+fn cmd_tls_mode(arg: &str) {
+    use crate::net::tls_pinning::{Mode, current_mode, set_mode};
+    if arg.is_empty() {
+        console::puts("  current TLS mode: ");
+        console::puts(match current_mode() {
+            Mode::Lockdown => "lockdown",
+            Mode::Research => "research",
+            Mode::Open     => "open",
+        });
+        console::puts("\n  pinned hosts: ");
+        let n = crate::net::tls_pinning::PINS.len();
+        crate::kernel::mm::print_num(n);
+        console::puts("\n  usage: tls-mode <lockdown|research|open>\n");
+        return;
+    }
+    let new_mode = match arg {
+        "lockdown" | "strict"   => Mode::Lockdown,
+        "research" | "permissive" => Mode::Research,
+        "open"     | "debug"    => Mode::Open,
+        _ => {
+            console::puts("  unknown mode: ");
+            console::puts(arg);
+            console::puts(" (try lockdown / research / open)\n");
+            return;
+        }
+    };
+    set_mode(new_mode);
+    console::puts("  TLS mode → ");
+    console::puts(match new_mode {
+        Mode::Lockdown => "lockdown",
+        Mode::Research => "research",
+        Mode::Open     => "open",
+    });
+    console::puts("\n");
 }
 
 /// STUMP #97: write `application/x-www-form-urlencoded` octets into

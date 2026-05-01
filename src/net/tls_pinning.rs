@@ -28,28 +28,64 @@
 
 use crate::drivers::uart;
 
-/// Refuse handshakes when peer authentication is unsuccessful — i.e.
-/// `verify_chain` failed AND no pin matched. Defaults to **true**
-/// (V6-CRYPTO-001 fix). Operator can flip to false ONLY for active
-/// development against unpinned/uncertified hosts; production must
-/// keep this true. The previous default of `false` allowed any cert
-/// to pass when both TRUST_STORE and PINS were empty (the shipped
-/// state), making all of V4's X.509 work and V5's pin-fallback a
-/// no-op against a real MITM.
+/// STUMP #101 — Sprint 2.1: tri-state TLS verification mode.
 ///
-/// STUMP #94: was `pub const STRICT_MODE: bool = true`. Promoted to
-/// AtomicBool so the renderer's HTTPS fetch path can flip it to false
-/// for the duration of a single fetch and back, without disabling
-/// strictness globally. The TLS handshake reads it via `is_strict()`
-/// (call sites updated to use the function instead of the constant).
-use core::sync::atomic::{AtomicBool, Ordering};
-static STRICT_MODE_FLAG: AtomicBool = AtomicBool::new(true);
+/// `Lockdown` (default, production-safe):
+///   only hosts present in `PINS` may complete a TLS handshake.
+///   No-pin / pin-mismatch = abort.
+///
+/// `Research`:
+///   pinned hosts must still match their pin (no degradation), but
+///   hosts NOT in `PINS` are allowed through. Used by the renderer's
+///   live-fetch path so general-purpose web browsing works while
+///   internal/sensitive hosts retain strong cert pinning. The fetch
+///   helpers in `net::fetch` swap into this mode for the duration of
+///   one HTTPS request and restore on exit.
+///
+/// `Open`:
+///   anything goes — even pin mismatches accepted (logged). Reserved
+///   for explicit "I'm debugging a captured pcap, don't make me edit
+///   the source" workflows; never the default.
+///
+/// Replaces the earlier `STRICT_MODE` AtomicBool from STUMP #94. The
+/// `is_strict()` / `set_strict()` shims preserve the old call surface
+/// for external callers — `is_strict()` is true iff the mode is
+/// `Lockdown`, `set_strict(true)` returns to `Lockdown`,
+/// `set_strict(false)` switches to `Research`.
+use core::sync::atomic::{AtomicU8, Ordering};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum Mode {
+    Lockdown = 0,
+    Research = 1,
+    Open     = 2,
+}
+
+static MODE: AtomicU8 = AtomicU8::new(Mode::Lockdown as u8);
 
 #[inline]
-pub fn is_strict() -> bool { STRICT_MODE_FLAG.load(Ordering::Relaxed) }
+pub fn current_mode() -> Mode {
+    match MODE.load(Ordering::Relaxed) {
+        1 => Mode::Research,
+        2 => Mode::Open,
+        _ => Mode::Lockdown,
+    }
+}
 
 #[inline]
-pub fn set_strict(v: bool) { STRICT_MODE_FLAG.store(v, Ordering::Relaxed); }
+pub fn set_mode(m: Mode) {
+    MODE.store(m as u8, Ordering::Relaxed);
+}
+
+/// Backwards-compat with the pre-#101 boolean API.
+#[inline]
+pub fn is_strict() -> bool { current_mode() == Mode::Lockdown }
+
+#[inline]
+pub fn set_strict(v: bool) {
+    set_mode(if v { Mode::Lockdown } else { Mode::Research });
+}
 
 /// One pin entry. Hostname is matched literally (no wildcards).
 pub struct Pin {
