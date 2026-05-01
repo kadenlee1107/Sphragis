@@ -4196,9 +4196,20 @@ fn interactive_loop(
         if needs_redraw {
             blit_render_to_gpu(src_fb, src_w, copy_w, copy_h,
                                dst_fb, dst_w, x_off, y_off, bg_word);
+            // STUMP #100d: last_cx / last_cy are kept in LAYOUT
+            // coords (0..copy_w). Translate to GPU framebuffer coords
+            // by adding x_off / y_off when drawing. Pre-fix the
+            // cursor drew at the raw layout x (not offset by the
+            // horizontal centering padding), so the right-edge of
+            // the page felt like a cursor "wall" 240 px short of
+            // where the eye expected.
             if last_cx >= 0 && last_cy >= 0 {
-                draw_cursor(dst_fb, dst_w as usize, dst_h as usize,
-                            last_cx as usize, last_cy as usize);
+                let gx = last_cx + x_off as i32;
+                let gy = last_cy + y_off as i32;
+                if gx >= 0 && gy >= 0 {
+                    draw_cursor(dst_fb, dst_w as usize, dst_h as usize,
+                                gx as usize, gy as usize);
+                }
             }
             crate::drivers::virtio::gpu::flush(0, 0, dst_w, dst_h);
             needs_redraw = false;
