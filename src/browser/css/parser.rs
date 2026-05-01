@@ -266,9 +266,20 @@ pub fn apply_property(prop: &str, val: &str, style: &mut ComputedStyle) {
         | "flex" | "flex-grow" | "flex-shrink" | "flex-basis" => {}
         // Transitions/animations — ignore for now
         "transition" | "animation" | "transform" | "cursor" | "user-select"
-        | "outline" | "outline-width" | "outline-color" | "outline-style"
-        | "text-shadow" | "position" | "top" | "left"
-        | "right" | "bottom" | "z-index" | "float" | "clear" => {}
+        | "outline" | "outline-width" | "outline-color" | "outline-style" => {}
+        "position" => {
+            style.position = match val.trim() {
+                "relative" => Position::Relative,
+                "absolute" => Position::Absolute,
+                "fixed"    => Position::Fixed,
+                _          => Position::Static,
+            };
+        }
+        "top"    => { style.top    = Length::parse(val).to_px(0, 16); }
+        "left"   => { style.left   = Length::parse(val).to_px(0, 16); }
+        "right"  => { style.right  = Length::parse(val).to_px(0, 16); }
+        "bottom" => { style.bottom = Length::parse(val).to_px(0, 16); }
+        "text-shadow" | "z-index" | "float" | "clear" => {}
         _ => {} // unknown property — ignore
     }
 }

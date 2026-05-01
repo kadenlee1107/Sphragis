@@ -822,6 +822,47 @@ fn layout_children(
 
                 if style.display == Display::None { continue; }
 
+                // 🎯 STUMP #85: position: absolute / fixed take the
+                // element OUT of normal flow. Lay it out at its
+                // top/left coordinates (relative to body), reserve
+                // no vertical space, and continue with the next
+                // sibling without advancing cursor_y.
+                if style.position == Position::Absolute
+                    || style.position == Position::Fixed
+                {
+                    let abs_x = if style.left != i32::MIN { style.left } else { 0 };
+                    let abs_y = if style.top  != i32::MIN { style.top  } else { 0 };
+                    let abs_w = match style.width {
+                        Length::Px(w) => w,
+                        _ => 200,  // fallback when no width set
+                    };
+                    let abs_h = match style.height {
+                        Length::Px(h) => h,
+                        _ => 60,
+                    };
+                    let abox = match tree.alloc() {
+                        Some(idx) => idx,
+                        None => return,
+                    };
+                    tree.boxes[abox].dom_node = child_idx as u16;
+                    tree.boxes[abox].style = style;
+                    tree.boxes[abox].parent = parent_box as u16;
+                    tree.boxes[abox].x = abs_x;
+                    tree.boxes[abox].y = abs_y;
+                    tree.boxes[abox].width = abs_w;
+                    tree.boxes[abox].height = abs_h;
+                    tree.boxes[abox].content_x = abs_x + style.padding_left;
+                    tree.boxes[abox].content_y = abs_y + style.padding_top;
+                    tree.boxes[abox].content_w = (abs_w - style.padding_left - style.padding_right).max(0);
+                    tree.boxes[abox].content_h = (abs_h - style.padding_top - style.padding_bottom).max(0);
+
+                    let mut child_y = abs_y + style.padding_top;
+                    layout_children(doc, tree, sheet, abox, child_idx,
+                        abs_x + style.padding_left, &mut child_y,
+                        tree.boxes[abox].content_w);
+                    continue;
+                }
+
                 // Skip hidden elements
                 if should_hide(node) { continue; }
 
@@ -1205,6 +1246,30 @@ fn layout_children(
                     // Remember this block's margin_bottom for the next
                     // sibling's collapse calculation.
                     prev_block_mb = style.margin_bottom;
+
+                    // 🎯 STUMP #85: position: relative offsets the
+                    // element by (top, left) AFTER normal flow has
+                    // reserved its space. Just shift the box (and
+                    // its descendants) by the offset; cursor_y stays
+                    // where flow put it.
+                    if style.position == Position::Relative {
+                        let dx = if style.left != i32::MIN { style.left } else { 0 };
+                        let dy = if style.top  != i32::MIN { style.top  } else { 0 };
+                        if dx != 0 || dy != 0 {
+                            // Translate ebox + its descendants in the
+                            // just-allocated range.
+                            let end_idx = tree.box_count;
+                            for j in ebox..end_idx {
+                                if !tree.boxes[j].active { continue; }
+                                if j == ebox || box_descendant_of(tree, j, ebox, end_idx) {
+                                    tree.boxes[j].x += dx;
+                                    tree.boxes[j].y += dy;
+                                    tree.boxes[j].content_x += dx;
+                                    tree.boxes[j].content_y += dy;
+                                }
+                            }
+                        }
+                    }
                 } else {
                     // Inline element — flow horizontally with siblings
                     let fs = style.font_size.max(10).min(48);

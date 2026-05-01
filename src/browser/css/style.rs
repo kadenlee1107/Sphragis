@@ -224,6 +224,17 @@ pub enum FontStyle {
     Italic,
 }
 
+/// CSS position. Static is the default flow; the others reposition
+/// the element using top/left/right/bottom offsets.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Position {
+    Static,    // default — laid out in normal flow
+    Relative,  // flow position + (top, left) offset; reserves space
+    Absolute,  // positioned at (top, left) relative to viewport;
+               // no space reserved in flow
+    Fixed,     // same as absolute for static-render mode (no scroll)
+}
+
 /// CSS font-family family hint. We don't yet ship multiple fonts —
 /// Verdana TrueType is the only one in the initrd — but we can pick
 /// a different paint path for `monospace` so `<code>` and `<pre>`
@@ -345,6 +356,14 @@ pub struct ComputedStyle {
     pub box_shadow_y: i32,
     pub box_shadow_blur: i32,
     pub box_shadow_color: Color,
+    // 🎯 STUMP #85: CSS position + offsets. INT_MIN sentinels for
+    // "auto" (offset not specified) so we can leave one axis on flow
+    // and the other override.
+    pub position: Position,
+    pub top: i32,
+    pub left: i32,
+    pub right: i32,
+    pub bottom: i32,
 }
 
 impl ComputedStyle {
@@ -377,6 +396,11 @@ impl ComputedStyle {
             box_shadow_y: 0,
             box_shadow_blur: 0,
             box_shadow_color: Color::TRANSPARENT,
+            position: Position::Static,
+            top: i32::MIN,
+            left: i32::MIN,
+            right: i32::MIN,
+            bottom: i32::MIN,
             line_height: 0,
             overflow: Overflow::Visible,
             visibility: Visibility::Visible,

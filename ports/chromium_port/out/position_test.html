@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Position Test</title>
+  <style>
+    body {
+      background: #0d1117;
+      color: #d0d7de;
+      padding: 24px;
+    }
+    h1 { color: #ffd700; margin-bottom: 16px; }
+    h2 { color: #4fc3f7; font-size: 16px; margin-top: 16px; }
+    p { margin: 4px 0; }
+    .badge {
+      background: #2ea043;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 4px;
+    }
+    /* position: absolute — pinned at viewport coords. */
+    .corner-tl {
+      position: absolute;
+      top: 12;
+      left: 12;
+      background: #d29922;
+      color: #1c1c1c;
+      padding: 4px 10px;
+      border-radius: 4px;
+    }
+    .corner-tr {
+      position: absolute;
+      top: 12;
+      left: 700;
+      background: #1f6feb;
+      color: white;
+      padding: 4px 10px;
+      border-radius: 4px;
+    }
+    /* position: relative — nudged from flow position. */
+    .nudged {
+      position: relative;
+      top: 8;
+      left: 24;
+      background: #c62828;
+      color: white;
+      padding: 4px 10px;
+      border-radius: 4px;
+    }
+    /* position: fixed — same as absolute in our static render. */
+    .fixed-bottom {
+      position: fixed;
+      top: 700;
+      left: 12;
+      background: #6f42c1;
+      color: white;
+      padding: 6px 14px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <span class="corner-tl">TL absolute</span>
+  <span class="corner-tr">TR absolute</span>
+  <span class="fixed-bottom">fixed (top=700)</span>
+
+  <h1>CSS Position</h1>
+  <h2>Static (default flow)</h2>
+  <p>This paragraph is in normal flow.</p>
+  <p>So is this one.</p>
+
+  <h2>Relative</h2>
+  <p>Before the nudged one.</p>
+  <p><span class="nudged">I am position: relative; top: 8; left: 24</span></p>
+  <p>After the nudged one (notice the gap stays — relative reserves space).</p>
+
+  <h2>Absolute (corners)</h2>
+  <p>The two badges in the page corners are <span class="badge">position: absolute</span> and ignore flow.</p>
+
+  <h2>Fixed</h2>
+  <p>The purple badge near the bottom is <span class="badge">position: fixed</span>. In our static-render mode, fixed = absolute.</p>
+</body>
+</html>
