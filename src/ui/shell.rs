@@ -4080,20 +4080,29 @@ fn interactive_loop(
                 }
                 0x05 /* Ctrl+E — click at cursor */ => {
                     if last_cx >= 0 && last_cy >= 0 {
-                        // Translate to layout coords (already are,
-                        // since cursor is in copy_w/copy_h space).
                         let lx = last_cx;
                         let ly = last_cy;
                         if let Some(hit) = tree.hit_test(lx, ly) {
+                            let dom_idx = tree.boxes[hit].dom_node as usize;
+                            let tag = if dom_idx < doc.node_count {
+                                doc.nodes[dom_idx].tag_str()
+                            } else { "?" };
+                            crate::drivers::uart::puts("  [ctrl+E] cursor at (");
+                            crate::kernel::mm::print_num(lx as usize);
+                            crate::drivers::uart::puts(",");
+                            crate::kernel::mm::print_num(ly as usize);
+                            crate::drivers::uart::puts(") hit box ");
+                            crate::kernel::mm::print_num(hit);
+                            crate::drivers::uart::puts(" <"); crate::drivers::uart::puts(tag); crate::drivers::uart::puts(">\n");
                             let input_owner = tree.nearest_ancestor_with_attr(hit, doc, |n| {
                                 let t = n.tag_str();
                                 t == "input" || t == "textarea"
                             });
                             if let Some(box_idx) = input_owner {
-                                let dom_idx = tree.boxes[box_idx].dom_node as usize;
-                                focus_dom = Some(dom_idx);
+                                let fdom = tree.boxes[box_idx].dom_node as usize;
+                                focus_dom = Some(fdom);
                                 crate::drivers::uart::puts("  [ctrl+E] focus → DOM ");
-                                crate::kernel::mm::print_num(dom_idx);
+                                crate::kernel::mm::print_num(fdom);
                                 crate::drivers::uart::puts("\n");
                             } else {
                                 focus_dom = None;
