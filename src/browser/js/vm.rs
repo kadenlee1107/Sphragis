@@ -243,7 +243,18 @@ impl Vm {
 
     /// The main execution loop.
     fn run(&mut self) -> Result<JsValue, JsError> {
+        // 🎯 STUMP #84: hard instruction-count cap. The per-back-jump
+        // INTERRUPT_INTERVAL only catches loops; forward bytecode that
+        // gets stuck (e.g. a recursive call without progress) would
+        // hang the kernel. 10M instructions is plenty for any
+        // reasonable page-load script.
+        let mut total_ops: u32 = 0;
+        const MAX_TOTAL_OPS: u32 = 10_000_000;
         loop {
+            total_ops += 1;
+            if total_ops >= MAX_TOTAL_OPS {
+                return Err(JsError::Interrupted);
+            }
             if self.frame_count == 0 {
                 return Ok(if self.sp > 0 { self.stack[self.sp - 1] } else { JsValue::UNDEFINED });
             }

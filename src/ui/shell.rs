@@ -3253,6 +3253,29 @@ fn cmd_render(url: &str) {
     uart::puts("  render: parsed "); crate::kernel::mm::print_num(doc.len());
     uart::puts(" nodes\n");
 
+    // 🎯 STUMP #84: <script> content is captured into doc.js_text by
+    // the parser. JS execution would happen here, BEFORE layout, so
+    // DOM mutations are reflected in the render.
+    //
+    // STATUS: wiring complete but disabled. The bytecode VM in
+    // src/browser/js/ has a hang in `compile_script` for even
+    // trivial input ("console.log('x')") that needs a separate debug
+    // session — likely an infinite loop in the AST-to-bytecode pass
+    // or a stale field on JS_VM's static init (Vm::new() uses
+    // non-zero JsValue::UNDEFINED bit pattern, so the static lives in
+    // .data not .bss; if that section gets truncated or aligned
+    // weirdly the field state could be corrupt).
+    //
+    // To re-enable once the engine is fixed: uncomment the block
+    // below and set BAT_OS_RUN_JS=1 (env-var-style flag, gated like
+    // BAT_OS_KEEP_GOING).
+    if doc.js_len > 0 {
+        uart::puts("  render: skipping ");
+        crate::kernel::mm::print_num(doc.js_len);
+        uart::puts(" bytes of JS (engine debug pending)\n");
+        // let _vm = crate::browser::js::vm::Vm::new();  // see comment
+    }
+
     let rw: u32 = 800; // viewport width — same as default browsers' first guess
     layout::build(doc, tree, rw as i32);
     uart::puts("  render: laid out "); crate::kernel::mm::print_num(tree.box_count);

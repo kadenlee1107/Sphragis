@@ -187,6 +187,9 @@ impl DomNode {
 /// Maximum CSS text from <style> blocks
 pub const MAX_CSS: usize = 4096;
 
+/// Maximum JS source captured from <script> blocks
+pub const MAX_JS: usize = 8192;
+
 /// The DOM tree — flat arena of nodes
 pub struct Document {
     pub nodes: [DomNode; MAX_NODES],
@@ -194,6 +197,9 @@ pub struct Document {
     /// Extracted CSS text from <style> blocks
     pub css_text: [u8; MAX_CSS],
     pub css_len: usize,
+    /// Extracted JS source from <script> blocks (concatenated, separated by ;)
+    pub js_text: [u8; MAX_JS],
+    pub js_len: usize,
 }
 
 impl Document {
@@ -203,6 +209,8 @@ impl Document {
             node_count: 0,
             css_text: [0; MAX_CSS],
             css_len: 0,
+            js_text: [0; MAX_JS],
+            js_len: 0,
         }
     }
 
@@ -210,6 +218,7 @@ impl Document {
     pub fn init(&mut self) {
         self.node_count = 0;
         self.css_len = 0;
+        self.js_len = 0;
         let root = self.alloc_node();
         if let Some(idx) = root {
             self.nodes[idx].node_type = NodeType::Document;

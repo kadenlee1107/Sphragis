@@ -172,17 +172,36 @@ pub fn parse(html: &[u8], doc: &mut Document) {
             let parent = stack[stack_depth - 1];
             doc.append_child(parent, elem_idx);
 
-            // Skip <script>, extract <style> content
+            // Capture <script> content into Document.js_text and
+            // extract <style> content. Pre-fix the parser dropped
+            // script content entirely; STUMP #84 wires it through
+            // so the JS engine can run after parse.
             let tag_str = doc.get(elem_idx).tag_str();
             if tag_str == "script" {
+                let js_start = i;
                 let close = b"</script>" as &[u8];
                 while i + close.len() <= html.len() {
                     if starts_with_ci(&html[i..], close) {
-                        i += close.len();
                         break;
                     }
                     i += 1;
                 }
+                // Append the script body to doc.js_text, with a `;\n`
+                // separator so multiple scripts compose.
+                let js_bytes = &html[js_start..i];
+                let avail = super::super::dom::MAX_JS - doc.js_len;
+                let copy_len = (js_bytes.len() + 2).min(avail);
+                if copy_len > 2 {
+                    doc.js_text[doc.js_len..doc.js_len + copy_len - 2]
+                        .copy_from_slice(&js_bytes[..copy_len - 2]);
+                    doc.js_len += copy_len - 2;
+                    if doc.js_len + 2 <= super::super::dom::MAX_JS {
+                        doc.js_text[doc.js_len] = b';';
+                        doc.js_text[doc.js_len + 1] = b'\n';
+                        doc.js_len += 2;
+                    }
+                }
+                i += close.len();
                 continue;
             }
             if tag_str == "style" {
