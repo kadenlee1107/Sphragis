@@ -94,7 +94,14 @@ def main() -> int:
     ensure_passphrase_baked("batman")
     refresh_bin()
 
-    display = "cocoa" if platform.system() == "Darwin" else "gtk"
+    # Cocoa on Mac doesn't reliably route mouse motion to
+    # virtio-tablet. SDL works around this — install with
+    # `brew install sdl2` if you don't have it. Override with
+    # `BAT_OS_DISPLAY=cocoa` if SDL isn't an option.
+    if platform.system() == "Darwin":
+        display = os.environ.get("BAT_OS_DISPLAY", "sdl")
+    else:
+        display = os.environ.get("BAT_OS_DISPLAY", "gtk")
 
     args = [
         "qemu-system-aarch64",
@@ -102,10 +109,10 @@ def main() -> int:
         "-machine", "virt,gic-version=3",
         "-cpu", "host",
         "-m", "4G",
-        # `show-cursor=on` is the cocoa-friendly fix for the
-        # "host cursor disappears, no motion events delivered"
-        # symptom on Mac. Without it, QEMU tries to capture the
-        # cursor and cocoa stops sending motion to the guest.
+        # show-cursor=on keeps the host arrow visible over the
+        # QEMU window AND (on most backends) ensures motion is
+        # delivered to virtio-tablet. SDL is preferred on Mac
+        # because cocoa silently drops motion events.
         "-display", f"{display},show-cursor=on",
         "-serial", "mon:stdio",
         "-kernel", str(KERNEL_BIN),
