@@ -35,6 +35,35 @@ INITRD = TARGET / "chromium_initrd.bin"
 URL = sys.argv[1] if len(sys.argv) > 1 else "file:///bin/hello.html"
 
 
+def ensure_passphrase_baked(passphrase: str = "batman") -> None:
+    """STUMP #99 follow-up: the auth gate uses the dev-fallback
+    secret (a binary-derived string, untypeable) when
+    BAT_OS_PASSPHRASE wasn't set at build time. We rebuild the kernel
+    with BAT_OS_PASSPHRASE=<passphrase> baked in if the current
+    binary doesn't already contain it. Without this, every
+    render-live session strands the user at the bat-logo prompt
+    with no working passphrase.
+    """
+    if not KERNEL.exists():
+        return
+    raw = KERNEL.read_bytes()
+    if passphrase.encode() in raw:
+        return  # already baked
+    print(f"[render-live] kernel doesn't have BAT_OS_PASSPHRASE={passphrase} baked — rebuilding")
+    main_rs = ROOT / "src/main.rs"
+    if main_rs.exists():
+        # Touch so cargo notices the env change.
+        main_rs.touch()
+    env = os.environ.copy()
+    env["BAT_OS_PASSPHRASE"] = passphrase
+    env.setdefault("BAT_OS_ALLOW_UNSIGNED_INITRD", "1")
+    env.setdefault("BAT_OS_KEEP_GOING", "1")
+    subprocess.run(
+        ["cargo", "build", "--release", "--features", "gicv3"],
+        cwd=str(ROOT), env=env, check=True,
+    )
+
+
 def find_objcopy() -> str:
     for cand in ("rust-objcopy", "llvm-objcopy", "aarch64-linux-gnu-objcopy"):
         try:
@@ -62,6 +91,7 @@ def main() -> int:
     if not INITRD.exists():
         print(f"[render-live] no initrd at {INITRD}; run `make initrd`", file=sys.stderr)
         return 1
+    ensure_passphrase_baked("batman")
     refresh_bin()
 
     display = "cocoa" if platform.system() == "Darwin" else "gtk"
