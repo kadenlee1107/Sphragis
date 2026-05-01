@@ -131,6 +131,7 @@ fn execute(cmd: &str) {
         "origin" => cmd_origin(parts[1]),
         "origin-allow" => cmd_origin_allow(parts[1], parts[2]),
         "origin-mode" => cmd_origin_mode(parts[1]),
+        "cookies" => cmd_cookies(parts[1]),
         "browse" | "open" => {
             if !parts[1].is_empty() {
                 console::puts("  Opening in BatBrowser: ");
@@ -4585,6 +4586,21 @@ fn cmd_tls_mode(arg: &str) {
         Mode::Open     => "open",
     });
     console::puts("\n");
+}
+
+/// STUMP #105 — Sprint 3.1: dump or clear the cookie jar.
+///   `cookies`        → print all cookies (host + name only, values redacted)
+///   `cookies clear`  → wipe the jar
+fn cmd_cookies(arg: &str) {
+    if arg == "clear" {
+        crate::net::cookies::reset();
+        console::puts("  cookies: jar cleared\n");
+        return;
+    }
+    console::puts("  cookies: ");
+    crate::kernel::mm::print_num(crate::net::cookies::count());
+    console::puts(" active\n");
+    crate::net::cookies::dump();
 }
 
 /// STUMP #104 — Sprint 2.2: print current main origin + allowlist.

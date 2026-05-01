@@ -839,6 +839,10 @@ fn reset_all_globals_for_cave_switch() {
     crate::batcave::linux::fd::reset_for_cave_switch();
     crate::batcave::linux::sockets::reset_for_cave_switch();
     crate::net::tcp::reset_for_cave_switch();
+    // STUMP #105 — Sprint 3.1: cookie jar wipe on cave switch so a
+    // logged-out cave doesn't inherit the previous tenant's session
+    // tokens.
+    crate::net::cookies::reset_for_cave_switch();
 
     // ROOT 2 additions — previously missing, each one was a cross-cave
     // information-leak surface.

@@ -122,13 +122,23 @@ pub fn fetch_http(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     // Build "GET <path> HTTP/1.0\r\nHost: <host>\r\nConnection: close\r\n\r\n".
     // HTTP/1.0 + Connection: close means the server shuts down the TCP
     // half on body end, so our recv loop terminates naturally.
-    let mut req = [0u8; 512];
+    // Sprint 3.1 (STUMP #105): if the cookie jar has anything for this
+    // host, splice in a Cookie: header before Connection: close.
+    let mut req = [0u8; 2048];
     let mut pos = 0;
     pos += copy_to(&mut req, pos, b"GET ");
     pos += copy_to(&mut req, pos, path.as_bytes());
     pos += copy_to(&mut req, pos, b" HTTP/1.0\r\nHost: ");
     pos += copy_to(&mut req, pos, host.as_bytes());
-    pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\nConnection: close\r\n\r\n");
+    pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\n");
+    let mut cookie_buf = [0u8; 1024];
+    let cookie_len = super::cookies::build_header(host.as_bytes(), &mut cookie_buf);
+    if cookie_len > 0 {
+        pos += copy_to(&mut req, pos, b"Cookie: ");
+        pos += copy_to(&mut req, pos, &cookie_buf[..cookie_len]);
+        pos += copy_to(&mut req, pos, b"\r\n");
+    }
+    pos += copy_to(&mut req, pos, b"Connection: close\r\n\r\n");
     if pos > req.len() { tcp::close(); return Err("request too large"); }
 
     if tcp::send_data(&req[..pos]).is_err() {
@@ -166,6 +176,11 @@ pub fn fetch_http(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     {
         return Err("non-2xx response");
     }
+
+    // STUMP #105: ingest Set-Cookie headers from the response. Done
+    // BEFORE we copy the body so the jar is up-to-date even if the
+    // body copy is short-circuited by a small `out` buffer.
+    super::cookies::ingest_response_headers(host.as_bytes(), &scratch[..body_start.saturating_sub(4)]);
 
     let body_len = total - body_start;
     let copy_len = body_len.min(out.len());
@@ -225,13 +240,21 @@ pub fn fetch_post_http(
         dns::resolve(host).map_err(|_| "DNS resolution failed")?
     };
     tcp::connect(ip, port).map_err(|_| "TCP connect failed")?;
-    let mut req = [0u8; 1024];
+    let mut req = [0u8; 2048];
     let mut pos = 0;
     pos += copy_to(&mut req, pos, b"POST ");
     pos += copy_to(&mut req, pos, path.as_bytes());
     pos += copy_to(&mut req, pos, b" HTTP/1.0\r\nHost: ");
     pos += copy_to(&mut req, pos, host.as_bytes());
-    pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: ");
+    pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\n");
+    let mut cookie_buf = [0u8; 1024];
+    let cookie_len = super::cookies::build_header(host.as_bytes(), &mut cookie_buf);
+    if cookie_len > 0 {
+        pos += copy_to(&mut req, pos, b"Cookie: ");
+        pos += copy_to(&mut req, pos, &cookie_buf[..cookie_len]);
+        pos += copy_to(&mut req, pos, b"\r\n");
+    }
+    pos += copy_to(&mut req, pos, b"Content-Length: ");
     let mut clen_buf = [0u8; 16];
     let clen_len = write_usize_dec(body.len(), &mut clen_buf);
     pos += copy_to(&mut req, pos, &clen_buf[..clen_len]);
@@ -242,7 +265,7 @@ pub fn fetch_post_http(
         tcp::close();
         return Err("send body failed");
     }
-    drain_http_response(out)
+    drain_http_response_with_host(host, out)
 }
 
 pub fn fetch_post_https(
@@ -268,13 +291,21 @@ pub fn fetch_post_https(
         tcp::close();
         return Err(e);
     }
-    let mut req = [0u8; 1024];
+    let mut req = [0u8; 2048];
     let mut pos = 0;
     pos += copy_to(&mut req, pos, b"POST ");
     pos += copy_to(&mut req, pos, path.as_bytes());
     pos += copy_to(&mut req, pos, b" HTTP/1.1\r\nHost: ");
     pos += copy_to(&mut req, pos, host.as_bytes());
-    pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\nAccept: text/html\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: ");
+    pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\nAccept: text/html\r\nContent-Type: application/x-www-form-urlencoded\r\n");
+    let mut cookie_buf = [0u8; 1024];
+    let cookie_len = super::cookies::build_header(host.as_bytes(), &mut cookie_buf);
+    if cookie_len > 0 {
+        pos += copy_to(&mut req, pos, b"Cookie: ");
+        pos += copy_to(&mut req, pos, &cookie_buf[..cookie_len]);
+        pos += copy_to(&mut req, pos, b"\r\n");
+    }
+    pos += copy_to(&mut req, pos, b"Content-Length: ");
     let mut clen_buf = [0u8; 16];
     let clen_len = write_usize_dec(body.len(), &mut clen_buf);
     pos += copy_to(&mut req, pos, &clen_buf[..clen_len]);
@@ -331,6 +362,8 @@ pub fn fetch_post_https(
     if !scratch.starts_with(b"HTTP/1.") || scratch.len() < 12 {
         return Err("malformed status line");
     }
+    // STUMP #105: capture Set-Cookie before we hand the body off.
+    super::cookies::ingest_response_headers(host.as_bytes(), &scratch[..body_start.saturating_sub(4)]);
     let body_len = total - body_start;
     let copy_len = body_len.min(out.len());
     out[..copy_len].copy_from_slice(&scratch[body_start..body_start + copy_len]);
@@ -340,6 +373,12 @@ pub fn fetch_post_https(
 /// Helper: drain the HTTP response from the legacy TCP PCB into the
 /// caller's `out` buffer. Splits headers from body.
 fn drain_http_response(out: &mut [u8]) -> Result<usize, &'static str> {
+    drain_http_response_with_host("", out)
+}
+
+/// STUMP #105: same drain path, but feeds the response headers
+/// through cookies::ingest_response_headers if the host is known.
+fn drain_http_response_with_host(host: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     const MAX_TOTAL: usize = 256 * 1024;
     static mut SCRATCH: [u8; MAX_TOTAL] = [0; MAX_TOTAL];
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
@@ -358,6 +397,9 @@ fn drain_http_response(out: &mut [u8]) -> Result<usize, &'static str> {
         Some(i) => i + 4,
         None    => return Err("no header/body boundary"),
     };
+    if !host.is_empty() {
+        super::cookies::ingest_response_headers(host.as_bytes(), &scratch[..body_start.saturating_sub(4)]);
+    }
     let body_len = total - body_start;
     let copy_len = body_len.min(out.len());
     out[..copy_len].copy_from_slice(&scratch[body_start..body_start + copy_len]);
@@ -417,16 +459,24 @@ pub fn fetch_https(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
         return Err(e);
     }
 
-    // Build "GET <path> HTTP/1.1\r\nHost: <host>\r\nConnection: close\r\n\r\n".
+    // Build "GET <path> HTTP/1.1\r\nHost: <host>\r\n...\r\n\r\n".
     // HTTP/1.1 (not 1.0) because some HTTPS servers reject 1.0; "Connection:
     // close" still terminates the response cleanly.
-    let mut req = [0u8; 1024];
+    let mut req = [0u8; 2048];
     let mut pos = 0;
     pos += copy_to(&mut req, pos, b"GET ");
     pos += copy_to(&mut req, pos, path.as_bytes());
     pos += copy_to(&mut req, pos, b" HTTP/1.1\r\nHost: ");
     pos += copy_to(&mut req, pos, host.as_bytes());
-    pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\nAccept: text/html\r\nConnection: close\r\n\r\n");
+    pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\nAccept: text/html\r\n");
+    let mut cookie_buf = [0u8; 1024];
+    let cookie_len = super::cookies::build_header(host.as_bytes(), &mut cookie_buf);
+    if cookie_len > 0 {
+        pos += copy_to(&mut req, pos, b"Cookie: ");
+        pos += copy_to(&mut req, pos, &cookie_buf[..cookie_len]);
+        pos += copy_to(&mut req, pos, b"\r\n");
+    }
+    pos += copy_to(&mut req, pos, b"Connection: close\r\n\r\n");
     if pos > req.len() {
         super::tls_pinning::set_mode(prev_strict);
         tls::set_hybrid_enabled(prev_hybrid);
