@@ -76,6 +76,18 @@ pub fn current_mode() -> Mode {
 #[inline]
 pub fn set_mode(m: Mode) {
     MODE.store(m as u8, Ordering::Relaxed);
+    // STUMP #103 — audit log every TLS mode flip. Lockdown ↔ Research
+    // ↔ Open transitions are security-relevant; the operator (or a
+    // post-incident reviewer) needs them in the timeline.
+    let label = match m {
+        Mode::Lockdown => b"tls-mode -> lockdown".as_slice(),
+        Mode::Research => b"tls-mode -> research".as_slice(),
+        Mode::Open     => b"tls-mode -> open".as_slice(),
+    };
+    crate::security::audit::record(
+        crate::security::audit::Category::Mode,
+        label,
+    );
 }
 
 /// Backwards-compat with the pre-#101 boolean API.

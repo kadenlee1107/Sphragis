@@ -53,10 +53,46 @@ pub fn parse_url(url: &str) -> Option<(&'static str, &str, u16, &str)> {
 /// Scheme-dispatched fetch. Renderer call site.
 pub fn fetch_url(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     let (scheme, _, _, _) = parse_url(url).ok_or("bad URL")?;
-    match scheme {
+    let result = match scheme {
         "https" => fetch_https(url, out),
         _       => fetch_http(url, out),
+    };
+    // STUMP #103 — Sprint 2.3: log every URL fetch (success or fail)
+    // to the audit ring. Result tag is appended so the operator can
+    // see at a glance which URLs succeeded.
+    let mut buf = [0u8; 192];
+    let mut p = 0;
+    p += copy_audit(&mut buf[p..], b"GET ");
+    p += copy_audit(&mut buf[p..], url.as_bytes());
+    match &result {
+        Ok(n) => {
+            p += copy_audit(&mut buf[p..], b" OK ");
+            p += write_dec(&mut buf[p..], *n);
+            p += copy_audit(&mut buf[p..], b"B");
+        }
+        Err(e) => {
+            p += copy_audit(&mut buf[p..], b" FAIL ");
+            p += copy_audit(&mut buf[p..], e.as_bytes());
+        }
     }
+    crate::security::audit::record(crate::security::audit::Category::Fetch, &buf[..p]);
+    result
+}
+
+fn copy_audit(dst: &mut [u8], src: &[u8]) -> usize {
+    let n = src.len().min(dst.len());
+    dst[..n].copy_from_slice(&src[..n]);
+    n
+}
+
+fn write_dec(dst: &mut [u8], mut v: usize) -> usize {
+    if v == 0 { if !dst.is_empty() { dst[0] = b'0'; return 1; } return 0; }
+    let mut tmp = [0u8; 20];
+    let mut i = 0;
+    while v > 0 && i < tmp.len() { tmp[i] = b'0' + (v % 10) as u8; v /= 10; i += 1; }
+    let n = i.min(dst.len());
+    for j in 0..n { dst[j] = tmp[i - 1 - j]; }
+    n
 }
 
 /// Best-effort `GET <path> HTTP/1.0` fetch. Writes the response BODY
@@ -148,10 +184,32 @@ pub fn fetch_post_url(
     out: &mut [u8],
 ) -> Result<usize, &'static str> {
     let (scheme, _, _, _) = parse_url(url).ok_or("bad URL")?;
-    match scheme {
+    let result = match scheme {
         "https" => fetch_post_https(url, body, out),
         _       => fetch_post_http(url, body, out),
+    };
+    // STUMP #103: log POSTs with the BODY SIZE only — never body
+    // contents (could be a passphrase, credit card, etc).
+    let mut buf = [0u8; 192];
+    let mut p = 0;
+    p += copy_audit(&mut buf[p..], b"POST ");
+    p += copy_audit(&mut buf[p..], url.as_bytes());
+    p += copy_audit(&mut buf[p..], b" body=");
+    p += write_dec(&mut buf[p..], body.len());
+    p += copy_audit(&mut buf[p..], b"B ");
+    match &result {
+        Ok(n) => {
+            p += copy_audit(&mut buf[p..], b"OK ");
+            p += write_dec(&mut buf[p..], *n);
+            p += copy_audit(&mut buf[p..], b"B");
+        }
+        Err(e) => {
+            p += copy_audit(&mut buf[p..], b"FAIL ");
+            p += copy_audit(&mut buf[p..], e.as_bytes());
+        }
     }
+    crate::security::audit::record(crate::security::audit::Category::FormSubmit, &buf[..p]);
+    result
 }
 
 pub fn fetch_post_http(

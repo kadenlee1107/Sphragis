@@ -17,7 +17,14 @@ static JS_ENABLED: AtomicBool = AtomicBool::new(true);
 pub fn is_enabled() -> bool { JS_ENABLED.load(Ordering::Relaxed) }
 
 #[inline]
-pub fn set_enabled(v: bool) { JS_ENABLED.store(v, Ordering::Relaxed); }
+pub fn set_enabled(v: bool) {
+    JS_ENABLED.store(v, Ordering::Relaxed);
+    // STUMP #103: every mode flip is auditable.
+    crate::security::audit::record(
+        crate::security::audit::Category::Mode,
+        if v { b"js-mode -> on" } else { b"js-mode -> off" },
+    );
+}
 
 // ─── Core engine (new bytecode VM) ───
 pub mod value;      // NaN-boxed JsValue (8 bytes per value)

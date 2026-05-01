@@ -126,6 +126,8 @@ fn execute(cmd: &str) {
         "render" => cmd_render(parts[1], &parts),
         "tls-mode" => cmd_tls_mode(parts[1]),
         "js-mode" => cmd_js_mode(parts[1]),
+        "audit" => cmd_audit(parts[1]),
+        "audit-flush" => cmd_audit_flush(),
         "browse" | "open" => {
             if !parts[1].is_empty() {
                 console::puts("  Opening in BatBrowser: ");
@@ -3410,6 +3412,17 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         crate::drivers::uart::puts("  render: running ");
         crate::kernel::mm::print_num(doc.js_len);
         crate::drivers::uart::puts(" bytes of JS\n");
+        // STUMP #103: JS execution is auditable.
+        let mut amsg = [0u8; 64];
+        let mut p = 0;
+        amsg[p..p+9].copy_from_slice(b"exec js "); p += 8;
+        let mut v = doc.js_len; let mut tmp = [0u8; 8]; let mut i = 0;
+        while v > 0 && i < tmp.len() { tmp[i] = b'0' + (v % 10) as u8; v /= 10; i += 1; }
+        if i == 0 { amsg[p] = b'0'; p += 1; }
+        for j in 0..i { amsg[p + j] = tmp[i - 1 - j]; }
+        p += i;
+        amsg[p] = b'B'; p += 1;
+        crate::security::audit::record(crate::security::audit::Category::Script, &amsg[..p]);
         static mut JS_VM: crate::browser::js::vm::Vm =
             crate::browser::js::vm::Vm::new();
         let vm: &mut crate::browser::js::vm::Vm =
@@ -4558,6 +4571,53 @@ fn cmd_tls_mode(arg: &str) {
         Mode::Open     => "open",
     });
     console::puts("\n");
+}
+
+/// STUMP #103 — Sprint 2.3: dump recent audit-log entries.
+/// `audit`        → last 32 entries
+/// `audit <N>`    → last N entries
+/// `audit all`    → everything resident in the ring (≤ 1024)
+fn cmd_audit(arg: &str) {
+    let n = if arg.is_empty() {
+        32
+    } else if arg == "all" {
+        1024
+    } else {
+        match arg.parse::<usize>() {
+            Ok(v) => v.max(1),
+            Err(_) => {
+                console::puts("  usage: audit [N | all]\n");
+                return;
+            }
+        }
+    };
+    crate::security::audit::dump_tail(n);
+}
+
+/// STUMP #103: serialize the audit ring and write it to BatFS as
+/// /audit-<count>.log. Persists what we have. Cheap O(N) walk +
+/// one BatFS create call. (Append-only is the next milestone — for
+/// now we overwrite the same path with the latest dump.)
+fn cmd_audit_flush() {
+    static mut FLUSH_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
+    let buf = unsafe { &mut *core::ptr::addr_of_mut!(FLUSH_BUF) };
+    let n = crate::security::audit::serialize(buf);
+    if n == 0 {
+        console::puts("  audit-flush: nothing to write\n");
+        return;
+    }
+    match crate::fs::batfs::create("audit.log", &buf[..n]) {
+        Ok(()) => {
+            console::puts("  audit-flush: wrote ");
+            crate::kernel::mm::print_num(n);
+            console::puts(" bytes to /audit.log\n");
+        }
+        Err(e) => {
+            console::puts("  audit-flush: BatFS write failed: ");
+            console::puts(e);
+            console::puts("\n");
+        }
+    }
 }
 
 /// STUMP #102 — Sprint 2.4: report or set the global JS execute toggle.
