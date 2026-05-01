@@ -3092,9 +3092,9 @@ fn cmd_dump_dom(url: &str) {
     use crate::kernel::mm::initrd;
 
     if url.is_empty() {
-        uart::puts("  usage: dump-dom <url|path>\n");
-        uart::puts("  e.g.   dump-dom file:///bin/hello.html\n");
-        uart::puts("         dump-dom /bin/hello.html\n");
+        crate::drivers::uart::puts("  usage: dump-dom <url|path>\n");
+        crate::drivers::uart::puts("  e.g.   dump-dom file:///bin/hello.html\n");
+        crate::drivers::uart::puts("         dump-dom /bin/hello.html\n");
         return;
     }
 
@@ -3106,18 +3106,18 @@ fn cmd_dump_dom(url: &str) {
     let bytes = match initrd::archive_file(path) {
         Some(b) => b,
         None => {
-            uart::puts("  dump-dom: not in archive: ");
-            uart::puts(path);
-            uart::puts("\n");
+            crate::drivers::uart::puts("  dump-dom: not in archive: ");
+            crate::drivers::uart::puts(path);
+            crate::drivers::uart::puts("\n");
             return;
         }
     };
 
-    uart::puts("  dump-dom: read ");
+    crate::drivers::uart::puts("  dump-dom: read ");
     crate::kernel::mm::print_num(bytes.len());
-    uart::puts(" bytes from ");
-    uart::puts(path);
-    uart::puts("\n");
+    crate::drivers::uart::puts(" bytes from ");
+    crate::drivers::uart::puts(path);
+    crate::drivers::uart::puts("\n");
 
     // Parse with our native engine. Document is a multi-MB arena, so
     // reuse the same static DOM_DOC the visual browser uses (in BSS,
@@ -3128,9 +3128,9 @@ fn cmd_dump_dom(url: &str) {
     };
     html::parser::parse(bytes, doc);
 
-    uart::puts("  dump-dom: parsed ");
+    crate::drivers::uart::puts("  dump-dom: parsed ");
     crate::kernel::mm::print_num(doc.len());
-    uart::puts(" node(s)\n");
+    crate::drivers::uart::puts(" node(s)\n");
 
     // Walk and print. Indented tree — element opens print "<tag attr=\"v\">",
     // children are indented +2, closes print "</tag>", text nodes
@@ -3141,11 +3141,11 @@ fn cmd_dump_dom(url: &str) {
         for _ in 0..depth { uart::putc(b' '); uart::putc(b' '); }
         match n.node_type {
             NodeType::Document => {
-                uart::puts("#document\n");
+                crate::drivers::uart::puts("#document\n");
             }
             NodeType::Element => {
                 uart::putc(b'<');
-                uart::puts(n.tag_str());
+                crate::drivers::uart::puts(n.tag_str());
                 for i in 0..n.attr_count {
                     uart::putc(b' ');
                     uart::puts(n.attrs[i].name_str());
@@ -3153,7 +3153,7 @@ fn cmd_dump_dom(url: &str) {
                     uart::puts(n.attrs[i].value_str());
                     uart::putc(b'"');
                 }
-                uart::puts(">\n");
+                crate::drivers::uart::puts(">\n");
             }
             NodeType::Text => {
                 let t = n.text_str();
@@ -3169,9 +3169,9 @@ fn cmd_dump_dom(url: &str) {
                 }
             }
             NodeType::Comment => {
-                uart::puts("<!-- ");
-                uart::puts(n.text_str());
-                uart::puts(" -->\n");
+                crate::drivers::uart::puts("<!-- ");
+                crate::drivers::uart::puts(n.text_str());
+                crate::drivers::uart::puts(" -->\n");
             }
             NodeType::Empty => return,
         }
@@ -3182,15 +3182,15 @@ fn cmd_dump_dom(url: &str) {
         // Closing tag for elements
         if n.node_type == NodeType::Element {
             for _ in 0..depth { uart::putc(b' '); uart::putc(b' '); }
-            uart::puts("</");
-            uart::puts(n.tag_str());
-            uart::puts(">\n");
+            crate::drivers::uart::puts("</");
+            crate::drivers::uart::puts(n.tag_str());
+            crate::drivers::uart::puts(">\n");
         }
     }
 
-    uart::puts("=== DOM ===\n");
+    crate::drivers::uart::puts("=== DOM ===\n");
     walk(&doc, 0, 0);
-    uart::puts("=== END ===\n");
+    crate::drivers::uart::puts("=== END ===\n");
 }
 
 /// `render <url>` — parse HTML, run layout, paint into a software
@@ -3206,8 +3206,8 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     use crate::kernel::mm::initrd;
 
     if url.is_empty() {
-        uart::puts("  usage: render <url|path> [type=<id>=<value>] ...\n");
-        uart::puts("  e.g.   render file:///bin/login.html type=email=foo@bar.com type=pw=hunter2\n");
+        crate::drivers::uart::puts("  usage: render <url|path> [type=<id>=<value>] ...\n");
+        crate::drivers::uart::puts("  e.g.   render file:///bin/login.html type=email=foo@bar.com type=pw=hunter2\n");
         return;
     }
 
@@ -3217,18 +3217,18 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     // is unchanged.
     static mut HTML_FETCH_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
     let bytes: &[u8] = if url.starts_with("http://") || url.starts_with("https://") {
-        uart::puts("  render: fetching "); uart::puts(url); uart::puts("\n");
+        crate::drivers::uart::puts("  render: fetching "); uart::puts(url); uart::puts("\n");
         let buf = unsafe { &mut *core::ptr::addr_of_mut!(HTML_FETCH_BUF) };
         match crate::net::fetch::fetch_url(url, buf) {
             Ok(n) => {
-                uart::puts("  render: fetched ");
+                crate::drivers::uart::puts("  render: fetched ");
                 crate::kernel::mm::print_num(n);
-                uart::puts(" bytes\n");
+                crate::drivers::uart::puts(" bytes\n");
                 &buf[..n]
             }
             Err(e) => {
-                uart::puts("  render: fetch failed: ");
-                uart::puts(e); uart::puts("\n");
+                crate::drivers::uart::puts("  render: fetch failed: ");
+                crate::drivers::uart::puts(e); uart::puts("\n");
                 return;
             }
         }
@@ -3239,8 +3239,8 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         match initrd::archive_file(path) {
             Some(b) => b,
             None => {
-                uart::puts("  render: not in archive: ");
-                uart::puts(path); uart::puts("\n");
+                crate::drivers::uart::puts("  render: not in archive: ");
+                crate::drivers::uart::puts(path); uart::puts("\n");
                 return;
             }
         }
@@ -3270,13 +3270,13 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         &mut *core::ptr::addr_of_mut!(crate::ui::apps::browser::LAYOUT_TREE)
     };
 
-    uart::puts("  render: read ");
+    crate::drivers::uart::puts("  render: read ");
     crate::kernel::mm::print_num(bytes.len());
-    uart::puts(" bytes from "); uart::puts(path); uart::puts("\n");
+    crate::drivers::uart::puts(" bytes from "); uart::puts(path); uart::puts("\n");
 
     html::parser::parse(bytes, doc);
-    uart::puts("  render: parsed "); crate::kernel::mm::print_num(doc.len());
-    uart::puts(" nodes\n");
+    crate::drivers::uart::puts("  render: parsed "); crate::kernel::mm::print_num(doc.len());
+    crate::drivers::uart::puts(" nodes\n");
 
     // STUMP #90: apply any `type=<id>=<value>` shell args BEFORE layout
     // and JS execution. The renderer is one-shot today (no event loop
@@ -3379,7 +3379,7 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
             // through layout; relative URLs aren't resolved yet.
             continue;
         }
-        uart::puts("  render: fetching link "); uart::puts(url); uart::puts("\n");
+        crate::drivers::uart::puts("  render: fetching link "); uart::puts(url); uart::puts("\n");
         let avail = crate::browser::dom::MAX_CSS - doc.css_len;
         if avail == 0 { uart::puts("  render: css buffer full, skip\n"); break; }
         // Append directly into the tail of css_text.
@@ -3388,14 +3388,14 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         match crate::net::fetch::fetch_url(url, &mut doc.css_text[dst_start..dst_end]) {
             Ok(n) => {
                 doc.css_len += n;
-                uart::puts("  render: fetched ");
+                crate::drivers::uart::puts("  render: fetched ");
                 crate::kernel::mm::print_num(n);
-                uart::puts(" bytes of CSS\n");
+                crate::drivers::uart::puts(" bytes of CSS\n");
             }
             Err(e) => {
-                uart::puts("  render: link fetch failed: ");
-                uart::puts(e);
-                uart::puts("\n");
+                crate::drivers::uart::puts("  render: link fetch failed: ");
+                crate::drivers::uart::puts(e);
+                crate::drivers::uart::puts("\n");
             }
         }
     }
@@ -3405,9 +3405,9 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     // the render. STUMP #86 capped the sibling walks in compile_node
     // so a malformed AST can't hang the compiler.
     if doc.js_len > 0 {
-        uart::puts("  render: running ");
+        crate::drivers::uart::puts("  render: running ");
         crate::kernel::mm::print_num(doc.js_len);
-        uart::puts(" bytes of JS\n");
+        crate::drivers::uart::puts(" bytes of JS\n");
         static mut JS_VM: crate::browser::js::vm::Vm =
             crate::browser::js::vm::Vm::new();
         let vm: &mut crate::browser::js::vm::Vm =
@@ -3438,7 +3438,7 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
                 }
             }
             Err(_) => {
-                uart::puts("  render: JS execution error\n");
+                crate::drivers::uart::puts("  render: JS execution error\n");
                 if vm.console_len > 0 {
                     uart::puts("=== JS console (partial) ===\n");
                     let cb = unsafe {
@@ -3456,10 +3456,10 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
 
     let rw: u32 = 800; // viewport width — same as default browsers' first guess
     layout::build(doc, tree, rw as i32);
-    uart::puts("  render: laid out "); crate::kernel::mm::print_num(tree.box_count);
-    uart::puts(" boxes (page_height=");
+    crate::drivers::uart::puts("  render: laid out "); crate::kernel::mm::print_num(tree.box_count);
+    crate::drivers::uart::puts(" boxes (page_height=");
     crate::kernel::mm::print_num(tree.page_height as usize);
-    uart::puts(")\n");
+    crate::drivers::uart::puts(")\n");
 
     // STUMP #97 — Sprint 1.1: coordinate hit-testing via `click_xy=x,y`.
     // The renderer is still one-shot, but we can simulate a real mouse
@@ -3488,17 +3488,17 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
             let tag = if dn < doc.node_count {
                 unsafe { core::str::from_utf8_unchecked(&doc.nodes[dn].tag[..doc.nodes[dn].tag_len.min(16)]) }
             } else { "?" };
-            uart::puts("  box ");
+            crate::drivers::uart::puts("  box ");
             crate::kernel::mm::print_num(i);
-            uart::puts(" <"); uart::puts(tag); uart::puts(">");
-            uart::puts(" x="); crate::kernel::mm::print_num(b.x.max(0) as usize);
-            uart::puts(" y="); crate::kernel::mm::print_num(b.y.max(0) as usize);
-            uart::puts(" w="); crate::kernel::mm::print_num(b.width.max(0) as usize);
-            uart::puts(" h="); crate::kernel::mm::print_num(b.height.max(0) as usize);
+            crate::drivers::uart::puts(" <"); uart::puts(tag); uart::puts(">");
+            crate::drivers::uart::puts(" x="); crate::kernel::mm::print_num(b.x.max(0) as usize);
+            crate::drivers::uart::puts(" y="); crate::kernel::mm::print_num(b.y.max(0) as usize);
+            crate::drivers::uart::puts(" w="); crate::kernel::mm::print_num(b.width.max(0) as usize);
+            crate::drivers::uart::puts(" h="); crate::kernel::mm::print_num(b.height.max(0) as usize);
             if dn < doc.node_count && doc.nodes[dn].get_attr("onclick").is_some() {
-                uart::puts(" [onclick]");
+                crate::drivers::uart::puts(" [onclick]");
             }
-            uart::puts("\n");
+            crate::drivers::uart::puts("\n");
         }
     }
 
@@ -3512,8 +3512,8 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         let comma = match payload.find(',') {
             Some(c) => c,
             None => {
-                uart::puts("  render: bad click_xy= arg (need x,y): ");
-                uart::puts(arg); uart::puts("\n");
+                crate::drivers::uart::puts("  render: bad click_xy= arg (need x,y): ");
+                crate::drivers::uart::puts(arg); uart::puts("\n");
                 continue;
             }
         };
@@ -3529,11 +3529,11 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         let hit = match tree.hit_test(qx, qy) {
             Some(idx) => idx,
             None => {
-                uart::puts("  render: click_xy hit nothing at ");
+                crate::drivers::uart::puts("  render: click_xy hit nothing at ");
                 crate::kernel::mm::print_num(qx as usize);
-                uart::puts(",");
+                crate::drivers::uart::puts(",");
                 crate::kernel::mm::print_num(qy as usize);
-                uart::puts("\n");
+                crate::drivers::uart::puts("\n");
                 continue;
             }
         };
@@ -3779,7 +3779,7 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         vm.init();
         let _ = vm.execute(&doc.js_text[..doc.js_len]);
         if vm.console_len > 0 {
-            uart::puts("=== JS console (replay) ===\n");
+            crate::drivers::uart::puts("=== JS console (replay) ===\n");
             let cb = unsafe {
                 core::slice::from_raw_parts(
                     core::ptr::addr_of!(vm.console_buf) as *const u8,
@@ -3788,9 +3788,9 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
             };
             for &b in cb { uart::putc(b); }
             if !cb.last().map(|&b| b == b'\n').unwrap_or(false) {
-                uart::puts("\n");
+                crate::drivers::uart::puts("\n");
             }
-            uart::puts("=== /JS console ===\n");
+            crate::drivers::uart::puts("=== /JS console ===\n");
         }
         // Re-layout so paint sees the post-click DOM.
         // Reset the layout tree so build() doesn't append on top of
@@ -3799,10 +3799,10 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         tree.text_len = 0;
         tree.page_height = 0;
         layout::build(doc, tree, rw as i32);
-        uart::puts("  render: re-laid out "); crate::kernel::mm::print_num(tree.box_count);
-        uart::puts(" boxes after click_xy (page_height=");
+        crate::drivers::uart::puts("  render: re-laid out "); crate::kernel::mm::print_num(tree.box_count);
+        crate::drivers::uart::puts(" boxes after click_xy (page_height=");
         crate::kernel::mm::print_num(tree.page_height as usize);
-        uart::puts(")\n");
+        crate::drivers::uart::puts(")\n");
     }
 
     // Pick the body's effective background color so the area below
@@ -3856,17 +3856,17 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         // Dump as base64-encoded raw BGRA. Each page is its own
         // RENDER-BEGIN/END block; the page index is part of the
         // header line so the host script can name the files.
-        uart::puts("=== RENDER-BEGIN ");
+        crate::drivers::uart::puts("=== RENDER-BEGIN ");
         crate::kernel::mm::print_num(rw as usize);
-        uart::puts("x");
+        crate::drivers::uart::puts("x");
         crate::kernel::mm::print_num(rh as usize);
-        uart::puts(" page=");
+        crate::drivers::uart::puts(" page=");
         crate::kernel::mm::print_num(page as usize);
-        uart::puts("/");
+        crate::drivers::uart::puts("/");
         crate::kernel::mm::print_num(n_pages as usize);
-        uart::puts(" ===\n");
+        crate::drivers::uart::puts(" ===\n");
         emit_b64_dump(fb_ptr, rw, rh);
-        uart::puts("=== RENDER-END ===\n");
+        crate::drivers::uart::puts("=== RENDER-END ===\n");
     }
 
     // Restore so other code paths (e.g. console::puts) don't keep
@@ -3875,49 +3875,336 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     crate::drivers::virtio::gpu::SOFT_W.store(0, O2::Release);
     crate::drivers::virtio::gpu::SOFT_H.store(0, O2::Release);
 
-    // Sprint 1.4: live mode. Blit the FIRST page of the render onto
-    // the real virtio-gpu framebuffer and flush so the user looking at
-    // the QEMU display window actually sees the page rendered. Without
-    // this the only sink is the base64-over-UART dump. Multi-page
-    // content shows just the first page in live mode (real scrolling
-    // is the next milestone). No-op when virtio-gpu wasn't brought up
-    // (`-display none` test runs).
+    // Sprint 1.4 / 1.5 (STUMP #97/#98): live mode. Blit the FIRST page
+    // onto the real virtio-gpu framebuffer + flush so the user
+    // looking at the QEMU display window sees the page rendered. With
+    // a virtio-tablet attached we then enter an interactive loop:
+    // poll mouse + keyboard, draw a cursor, dispatch real clicks
+    // through the same hit-test / onclick / link-nav machinery as
+    // click_xy. ESC (or 'q' on serial) exits the loop and returns to
+    // the shell prompt.
     if live_mode {
         let real_w = crate::drivers::virtio::gpu::width();
         let real_h = crate::drivers::virtio::gpu::height();
         let real_fb = crate::drivers::virtio::gpu::framebuffer();
         if !real_fb.is_null() && real_w > 0 && real_h > 0 {
-            // Background fill so areas outside the page are uniform.
-            crate::drivers::virtio::gpu::fill_screen(bg_word);
-            // Center the rendered page horizontally on the GPU FB.
             let copy_w = rw.min(real_w);
             let copy_h = MAX_H.min(real_h).min(total_h);
             let x_off = ((real_w - copy_w) / 2) as usize;
             let y_off = 0usize;
-            // Source is RENDER_FB laid out at rw stride, MAX_H tall.
-            for row in 0..copy_h as usize {
-                let src_row_start = row * rw as usize;
-                let dst_row_start = (y_off + row) * real_w as usize + x_off;
-                for col in 0..copy_w as usize {
-                    let pixel = unsafe {
-                        core::ptr::read_volatile(fb_ptr.add(src_row_start + col))
-                    };
-                    unsafe {
-                        core::ptr::write_volatile(
-                            real_fb.add(dst_row_start + col),
-                            pixel,
-                        );
-                    }
+
+            blit_render_to_gpu(fb_ptr, rw, copy_w, copy_h,
+                               real_fb, real_w, x_off, y_off, bg_word);
+            crate::drivers::virtio::gpu::flush(0, 0, real_w, real_h);
+            crate::drivers::uart::puts("  render: live blit ");
+            crate::kernel::mm::print_num(copy_w as usize);
+            crate::drivers::uart::puts("x");
+            crate::kernel::mm::print_num(copy_h as usize);
+            crate::drivers::uart::puts(" → virtio-gpu\n");
+
+            // Sprint 1.5b: interactive loop. Only entered when the
+            // tablet driver came up (i.e. QEMU launched with
+            // -device virtio-tablet-device). Otherwise we just leave
+            // the static page on screen and return.
+            if crate::drivers::virtio::tablet::is_ready() {
+                crate::drivers::uart::puts("  render: entering interactive loop (ESC to exit)\n");
+                interactive_loop(
+                    doc, tree,
+                    fb_ptr, rw,
+                    real_fb, real_w, real_h,
+                    copy_w, copy_h, x_off, y_off,
+                    bg_word, body_bg,
+                );
+                crate::drivers::uart::puts("  render: interactive loop exited\n");
+            } else {
+                crate::drivers::uart::puts("  render: no tablet attached → static window\n");
+            }
+        } else {
+            crate::drivers::uart::puts("  render: live=1 set but no virtio-gpu (use -display gtk/cocoa)\n");
+        }
+    }
+}
+
+/// Sprint 1.5: copy our private render framebuffer into the real
+/// virtio-gpu framebuffer, centered horizontally. The destination's
+/// row stride is `real_w` pixels; the source's is `src_w`. Areas
+/// outside the page are filled with `bg_word`.
+fn blit_render_to_gpu(
+    src_fb: *mut u32, src_w: u32,
+    copy_w: u32, copy_h: u32,
+    dst_fb: *mut u32, dst_w: u32,
+    x_off: usize, y_off: usize,
+    bg_word: u32,
+) {
+    crate::drivers::virtio::gpu::fill_screen(bg_word);
+    for row in 0..copy_h as usize {
+        let src_row_start = row * src_w as usize;
+        let dst_row_start = (y_off + row) * dst_w as usize + x_off;
+        for col in 0..copy_w as usize {
+            let pixel = unsafe {
+                core::ptr::read_volatile(src_fb.add(src_row_start + col))
+            };
+            unsafe {
+                core::ptr::write_volatile(
+                    dst_fb.add(dst_row_start + col),
+                    pixel,
+                );
+            }
+        }
+    }
+}
+
+/// Sprint 1.5b — STUMP #98 — interactive event loop.
+///
+/// Polls the tablet + keyboard between repaint frames. Tablet
+/// movement repaints (the cheap path: re-blit the cached page +
+/// stamp a 12 px arrow cursor on top). Tablet clicks hit-test the
+/// layout tree, walk up to find an `onclick` ancestor or an `<a
+/// href>` ancestor, and dispatch — re-parse / re-layout / re-blit
+/// when navigation lands. ESC or 'q' returns to the shell.
+///
+/// Single-page only today: scrolling the layout tree under the
+/// cursor is the next milestone.
+fn interactive_loop(
+    doc: &mut crate::browser::dom::Document,
+    tree: &mut crate::browser::layout::LayoutTree,
+    src_fb: *mut u32, src_w: u32,
+    dst_fb: *mut u32, dst_w: u32, dst_h: u32,
+    copy_w: u32, copy_h: u32,
+    x_off: usize, y_off: usize,
+    bg_word: u32,
+    body_bg: crate::browser::css::style::Color,
+) {
+    use crate::drivers::virtio::tablet::{self, InputEvent};
+    use crate::drivers::virtio::keyboard;
+    let _ = body_bg;
+
+    let mut last_cx = -1i32;
+    let mut last_cy = -1i32;
+    let mut needs_redraw = true;
+    // Layout viewport width — same value cmd_render computed.
+    let viewport_w = src_w as i32;
+
+    'main: loop {
+        // Pump device polls. Cheap if no events queued.
+        keyboard::poll();
+        tablet::poll();
+
+        // ESC / 'q' exits.
+        while let Some(ch) = keyboard::getc() {
+            if ch == 27 || ch == b'q' { break 'main; }
+            // Other keys are ignored for now; focus + typing into
+            // <input> is on the Sprint 1.5c milestone.
+        }
+
+        // Drain tablet events. We coalesce moves and run at most one
+        // click per frame (since each click triggers a re-render).
+        let mut click_at: Option<(i32, i32)> = None;
+        while let Some(ev) = tablet::pop_event() {
+            match ev {
+                InputEvent::Move { x, y } => {
+                    last_cx = x;
+                    last_cy = y;
+                    needs_redraw = true;
+                }
+                InputEvent::ButtonDown { x, y, .. } => {
+                    click_at = Some((x, y));
+                }
+                InputEvent::ButtonUp { .. } => {}
+            }
+        }
+
+        if let Some((cx, cy)) = click_at {
+            let lx = cx - x_off as i32;
+            let ly = cy - y_off as i32;
+            if lx >= 0 && ly >= 0 && lx < copy_w as i32 && ly < copy_h as i32 {
+                handle_interactive_click(
+                    doc, tree, lx, ly, viewport_w,
+                    src_fb, src_w, dst_fb, dst_w, dst_h,
+                    copy_w, copy_h, x_off, y_off, bg_word,
+                );
+                needs_redraw = true;
+            }
+        }
+
+        if needs_redraw {
+            blit_render_to_gpu(src_fb, src_w, copy_w, copy_h,
+                               dst_fb, dst_w, x_off, y_off, bg_word);
+            if last_cx >= 0 && last_cy >= 0 {
+                draw_cursor(dst_fb, dst_w as usize, dst_h as usize,
+                            last_cx as usize, last_cy as usize);
+            }
+            crate::drivers::virtio::gpu::flush(0, 0, dst_w, dst_h);
+            needs_redraw = false;
+        }
+    }
+}
+
+/// STUMP #98: handle a real click in interactive mode. Mirrors the
+/// click_xy code in cmd_render but inlines the navigation /
+/// onclick-replay / form-POST decision tree and re-paints to
+/// RENDER_FB before the caller's blit pass.
+fn handle_interactive_click(
+    doc: &mut crate::browser::dom::Document,
+    tree: &mut crate::browser::layout::LayoutTree,
+    lx: i32, ly: i32, viewport_w: i32,
+    src_fb: *mut u32, src_w: u32,
+    dst_fb: *mut u32, dst_w: u32, dst_h: u32,
+    copy_w: u32, copy_h: u32,
+    x_off: usize, y_off: usize,
+    bg_word: u32,
+) {
+    let _ = (dst_fb, dst_w, dst_h, copy_w, copy_h, x_off, y_off, bg_word);
+
+    let hit = match tree.hit_test(lx, ly) {
+        Some(h) => h,
+        None => {
+            crate::drivers::uart::puts("  [click] hit nothing at ");
+            crate::kernel::mm::print_num(lx as usize);
+            crate::drivers::uart::puts(",");
+            crate::kernel::mm::print_num(ly as usize);
+            crate::drivers::uart::puts("\n");
+            return;
+        }
+    };
+
+    // Link first — most common case in real pages.
+    let link_owner = tree.nearest_ancestor_with_attr(hit, doc, |n| {
+        n.tag_str() == "a" && n.get_attr("href").is_some()
+    });
+    if let Some(box_idx) = link_owner {
+        let dom_idx = tree.boxes[box_idx].dom_node as usize;
+        let mut href_buf = [0u8; 512];
+        let mut href_len = 0usize;
+        if let Some(h) = doc.nodes[dom_idx].get_attr("href") {
+            let n = h.len().min(href_buf.len());
+            href_buf[..n].copy_from_slice(&h.as_bytes()[..n]);
+            href_len = n;
+        }
+        let href = unsafe { core::str::from_utf8_unchecked(&href_buf[..href_len]) };
+        if href.starts_with("http://") || href.starts_with("https://") {
+            crate::drivers::uart::puts("  [click] navigating → ");
+            crate::drivers::uart::puts(href);
+            crate::drivers::uart::puts("\n");
+            static mut NAV_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
+            let buf = unsafe { &mut *core::ptr::addr_of_mut!(NAV_BUF) };
+            match crate::net::fetch::fetch_url(href, buf) {
+                Ok(n) => {
+                    doc.init();
+                    tree.box_count = 0;
+                    tree.text_len = 0;
+                    tree.page_height = 0;
+                    crate::browser::html::parser::parse(&buf[..n], doc);
+                    crate::browser::layout::build(doc, tree, viewport_w);
+                    repaint_to_render_fb(tree, src_fb, src_w, bg_word);
+                }
+                Err(e) => {
+                    crate::drivers::uart::puts("  [click] nav fetch failed: ");
+                    crate::drivers::uart::puts(e);
+                    crate::drivers::uart::puts("\n");
                 }
             }
-            crate::drivers::virtio::gpu::flush(0, 0, real_w, real_h);
-            uart::puts("  render: live blit ");
-            crate::kernel::mm::print_num(copy_w as usize);
-            uart::puts("x");
-            crate::kernel::mm::print_num(copy_h as usize);
-            uart::puts(" → virtio-gpu\n");
-        } else {
-            uart::puts("  render: live=1 set but no virtio-gpu (use -display gtk/cocoa)\n");
+            return;
+        }
+    }
+
+    // onclick — run the inline JS, re-layout against the post-JS DOM.
+    let onclick_owner = tree.nearest_ancestor_with_attr(hit, doc, |n| {
+        n.get_attr("onclick").is_some()
+    });
+    if let Some(box_idx) = onclick_owner {
+        let dom_idx = tree.boxes[box_idx].dom_node as usize;
+        let mut handler = [0u8; 1024];
+        let mut hlen = 0usize;
+        if let Some(oc) = doc.nodes[dom_idx].get_attr("onclick") {
+            let n = oc.len().min(handler.len());
+            handler[..n].copy_from_slice(&oc.as_bytes()[..n]);
+            hlen = n;
+        }
+        if hlen > 0 {
+            crate::drivers::uart::puts("  [click] onclick on box ");
+            crate::kernel::mm::print_num(box_idx);
+            crate::drivers::uart::puts("\n");
+            let avail = crate::browser::dom::MAX_JS - doc.js_len;
+            if avail >= hlen + 2 {
+                doc.js_text[doc.js_len..doc.js_len + hlen].copy_from_slice(&handler[..hlen]);
+                doc.js_len += hlen;
+                doc.js_text[doc.js_len] = b';';
+                doc.js_text[doc.js_len + 1] = b'\n';
+                doc.js_len += 2;
+            }
+            // Run the JS engine against the appended handler.
+            static mut LIVE_VM: crate::browser::js::vm::Vm =
+                crate::browser::js::vm::Vm::new();
+            let vm = unsafe { &mut *core::ptr::addr_of_mut!(LIVE_VM) };
+            crate::browser::js::dom_api::set_document(doc);
+            vm.init();
+            let _ = vm.execute(&doc.js_text[..doc.js_len]);
+            tree.box_count = 0;
+            tree.text_len = 0;
+            tree.page_height = 0;
+            crate::browser::layout::build(doc, tree, viewport_w);
+            repaint_to_render_fb(tree, src_fb, src_w, bg_word);
+        }
+        return;
+    }
+
+    crate::drivers::uart::puts("  [click] hit box ");
+    crate::kernel::mm::print_num(hit);
+    crate::drivers::uart::puts(" — no link/onclick\n");
+}
+
+/// STUMP #98: re-paint the layout tree into our private render
+/// framebuffer at MAX_H tall. The caller's blit pass copies it onto
+/// the real GPU FB.
+fn repaint_to_render_fb(
+    tree: &crate::browser::layout::LayoutTree,
+    fb_ptr: *mut u32,
+    rw: u32,
+    bg_word: u32,
+) {
+    use core::sync::atomic::Ordering as O2;
+    const MAX_W: u32 = 1024;
+    const MAX_H: u32 = 1900;
+    crate::drivers::virtio::gpu::SOFT_FB.store(fb_ptr as usize, O2::Release);
+    crate::drivers::virtio::gpu::SOFT_W.store(rw, O2::Release);
+    crate::drivers::virtio::gpu::SOFT_H.store(MAX_H, O2::Release);
+    crate::drivers::virtio::gpu::fill_screen(bg_word);
+    crate::browser::paint::paint(tree, 0, 0, 0, rw as i32, MAX_H as i32);
+    crate::drivers::virtio::gpu::SOFT_FB.store(0, O2::Release);
+    crate::drivers::virtio::gpu::SOFT_W.store(0, O2::Release);
+    crate::drivers::virtio::gpu::SOFT_H.store(0, O2::Release);
+    let _ = MAX_W;
+}
+
+/// STUMP #98: stamp a tiny arrow cursor onto the destination
+/// framebuffer. Pixel-art black border + white fill so it shows over
+/// any background. Bounds-checked against the FB dimensions so a
+/// cursor near the edge clips cleanly.
+fn draw_cursor(fb: *mut u32, fb_w: usize, fb_h: usize, cx: usize, cy: usize) {
+    // 12-row classic arrow. 1 = white fill, 2 = black border, 0 = transparent.
+    static SHAPE: [&[u8]; 12] = [
+        b"2",
+        b"22",
+        b"212",
+        b"2112",
+        b"21112",
+        b"211112",
+        b"2111112",
+        b"21111112",
+        b"211222",
+        b"2122",
+        b"212",
+        b"22",
+    ];
+    for (dy, row) in SHAPE.iter().enumerate() {
+        for (dx, &px) in row.iter().enumerate() {
+            if px == b'0' { continue; }
+            let x = cx + dx;
+            let y = cy + dy;
+            if x >= fb_w || y >= fb_h { continue; }
+            let color = if px == b'1' { 0xFFFFFFFFu32 } else { 0xFF000000u32 };
+            unsafe { core::ptr::write_volatile(fb.add(y * fb_w + x), color); }
         }
     }
 }

@@ -80,12 +80,17 @@ def main() -> int:
         "-device", "virtio-net-device,netdev=net0",
         "-device", "virtio-gpu-device",
         "-device", "virtio-keyboard-device",
+        # Tablet MUST come after keyboard — the kernel takes input
+        # device #0 as keyboard and #1 as tablet (Sprint 1.5b).
+        "-device", "virtio-tablet-device",
     ]
 
     print(f"[render-live] launching QEMU ({display}). URL: {URL}")
-    print(f"[render-live] kernel will receive: render {URL} live=1")
-    print(f"[render-live] type that command in the kernel shell once you see the prompt")
-    print(f"[render-live] close the window or Ctrl-A X to quit")
+    print(f"[render-live] once the kernel shell prompts, type:")
+    print(f"[render-live]     render {URL} live=1")
+    print(f"[render-live] then move the mouse + click in the QEMU window;")
+    print(f"[render-live] press ESC to exit the interactive loop.")
+    print(f"[render-live] close the window or Ctrl-A X to quit QEMU.")
 
     # Run interactively — user types `render <URL> live=1` themselves once
     # the kernel boots. Future iteration: pre-feed the command via a

@@ -275,6 +275,15 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
         None => drivers::uart::puts("  [kbd] Serial input only\n"),
     }
 
+    // Sprint 1.5 (STUMP #98): virtio-tablet for absolute mouse input.
+    // Skipped silently when no second virtio-input device is attached
+    // (every QEMU run that doesn't pass `-device virtio-tablet-device`).
+    drivers::uart::puts("[boot] Initializing tablet...\n");
+    match drivers::virtio::tablet::init() {
+        Some(()) => drivers::uart::puts("  [tbl] tablet ready\n"),
+        None => drivers::uart::puts("  [tbl] no tablet attached\n"),
+    }
+
     // Initialize GPU
     drivers::uart::puts("[boot] Initializing display...\n");
     match gpu::init() {
