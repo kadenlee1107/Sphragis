@@ -3576,13 +3576,189 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
                 }
             }
             None => {
-                uart::puts("  render: click_xy(");
-                crate::kernel::mm::print_num(qx as usize);
-                uart::puts(",");
-                crate::kernel::mm::print_num(qy as usize);
-                uart::puts(") hit box ");
-                crate::kernel::mm::print_num(hit);
-                uart::puts(" — no onclick ancestor\n");
+                // Sprint 1.3: <form> submit. If the click hit a submit
+                // button (<input type=submit>, <input type=image>, or
+                // <button type=submit>/<button> inside a <form>), walk
+                // up to the enclosing <form>, gather all <input
+                // name=value> children into a urlencoded body, and
+                // POST to the form's action URL. The response replaces
+                // the current document.
+                let submit_owner = tree.nearest_ancestor_with_attr(hit, doc, |n| {
+                    let t = n.tag_str();
+                    if t == "button" {
+                        // Default <button> type is "submit" per HTML spec.
+                        let bt = n.get_attr("type").unwrap_or("submit");
+                        bt == "submit"
+                    } else if t == "input" {
+                        let it = n.get_attr("type").unwrap_or("text");
+                        it == "submit" || it == "image"
+                    } else { false }
+                });
+                if let Some(box_idx) = submit_owner {
+                    // Climb the DOM (not the layout) to find the form.
+                    let mut form_dom: Option<usize> = None;
+                    let mut cur = tree.boxes[box_idx].dom_node as usize;
+                    while cur < doc.node_count {
+                        if doc.nodes[cur].tag_str() == "form" {
+                            form_dom = Some(cur);
+                            break;
+                        }
+                        let p = doc.nodes[cur].parent;
+                        if p == 0xFFFF { break; }
+                        cur = p as usize;
+                    }
+                    if let Some(form_idx) = form_dom {
+                        // Snapshot the action URL.
+                        let mut action_buf = [0u8; 512];
+                        let mut action_len = 0usize;
+                        if let Some(a) = doc.nodes[form_idx].get_attr("action") {
+                            let n = a.len().min(action_buf.len());
+                            action_buf[..n].copy_from_slice(&a.as_bytes()[..n]);
+                            action_len = n;
+                        }
+                        let action = unsafe {
+                            core::str::from_utf8_unchecked(&action_buf[..action_len])
+                        };
+                        // Build urlencoded body by walking every
+                        // descendant <input>/<textarea>/<select> with
+                        // a `name=` attribute. Skip those without name
+                        // (per HTML spec) and submit inputs themselves.
+                        let mut body = [0u8; 4096];
+                        let mut blen = 0usize;
+                        for di in 0..doc.node_count {
+                            // Is `di` a transitive descendant of form_idx?
+                            let mut anc = di;
+                            let mut in_form = false;
+                            for _ in 0..32 {
+                                if anc == form_idx { in_form = true; break; }
+                                let p = doc.nodes[anc].parent;
+                                if p == 0xFFFF { break; }
+                                anc = p as usize;
+                            }
+                            if !in_form { continue; }
+                            let n = &doc.nodes[di];
+                            let tag = n.tag_str();
+                            if tag != "input" && tag != "textarea" && tag != "select" { continue; }
+                            // Skip submit inputs.
+                            if tag == "input" {
+                                let it = n.get_attr("type").unwrap_or("text");
+                                if it == "submit" || it == "image" || it == "button" { continue; }
+                            }
+                            let name = match n.get_attr("name") {
+                                Some(v) => v,
+                                None => continue,
+                            };
+                            let value = n.get_attr("value").unwrap_or("");
+                            if blen > 0 && blen < body.len() { body[blen] = b'&'; blen += 1; }
+                            blen += url_encode(name.as_bytes(), &mut body[blen..]);
+                            if blen < body.len() { body[blen] = b'='; blen += 1; }
+                            blen += url_encode(value.as_bytes(), &mut body[blen..]);
+                        }
+
+                        if action_len > 0 {
+                            uart::puts("  render: form submit → POST ");
+                            uart::puts(action);
+                            uart::puts(" body=");
+                            uart::puts(unsafe { core::str::from_utf8_unchecked(&body[..blen]) });
+                            uart::puts("\n");
+                            // Only absolute URLs supported in 1.3.
+                            if action.starts_with("http://") || action.starts_with("https://") {
+                                let buf = unsafe { &mut *core::ptr::addr_of_mut!(HTML_FETCH_BUF) };
+                                match crate::net::fetch::fetch_post_url(action, &body[..blen], buf) {
+                                    Ok(n) => {
+                                        uart::puts("  render: POST returned ");
+                                        crate::kernel::mm::print_num(n);
+                                        uart::puts(" bytes\n");
+                                        doc.init();
+                                        tree.box_count = 0;
+                                        tree.text_len = 0;
+                                        tree.page_height = 0;
+                                        html::parser::parse(&buf[..n], doc);
+                                        layout::build(doc, tree, rw as i32);
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        uart::puts("  render: POST failed: ");
+                                        uart::puts(e); uart::puts("\n");
+                                    }
+                                }
+                            } else {
+                                uart::puts("  render: form action is relative — not supported yet\n");
+                            }
+                        } else {
+                            uart::puts("  render: form has no action — would self-submit (not supported)\n");
+                        }
+                    }
+                }
+
+                // Sprint 1.2: link-click navigation. If the click hit
+                // an <a href="..."> (or descendant of one), treat that
+                // as a navigation request: replace the current document
+                // with the href target, re-parse, re-layout. Only
+                // absolute http(s):// hrefs are followed today;
+                // relative URL resolution is on the navigation
+                // milestone but not done here.
+                let link_owner = tree.nearest_ancestor_with_attr(hit, doc, |n| {
+                    n.tag_str() == "a" && n.get_attr("href").is_some()
+                });
+                if let Some(box_idx) = link_owner {
+                    let dom_idx = tree.boxes[box_idx].dom_node as usize;
+                    let mut href_buf = [0u8; 512];
+                    let mut href_len = 0usize;
+                    if let Some(h) = doc.nodes[dom_idx].get_attr("href") {
+                        let n = h.len().min(href_buf.len());
+                        href_buf[..n].copy_from_slice(&h.as_bytes()[..n]);
+                        href_len = n;
+                    }
+                    let href = unsafe {
+                        core::str::from_utf8_unchecked(&href_buf[..href_len])
+                    };
+                    if href.starts_with("http://") || href.starts_with("https://") {
+                        uart::puts("  render: click_xy → navigating to ");
+                        uart::puts(href); uart::puts("\n");
+                        // Fetch + re-parse in place. Reuse HTML_FETCH_BUF
+                        // (the same static the initial load used).
+                        let buf = unsafe { &mut *core::ptr::addr_of_mut!(HTML_FETCH_BUF) };
+                        match crate::net::fetch::fetch_url(href, buf) {
+                            Ok(n) => {
+                                uart::puts("  render: nav fetched ");
+                                crate::kernel::mm::print_num(n);
+                                uart::puts(" bytes\n");
+                                doc.init();
+                                tree.box_count = 0;
+                                tree.text_len = 0;
+                                tree.page_height = 0;
+                                html::parser::parse(&buf[..n], doc);
+                                uart::puts("  render: nav parsed ");
+                                crate::kernel::mm::print_num(doc.len());
+                                uart::puts(" nodes\n");
+                                layout::build(doc, tree, rw as i32);
+                                uart::puts("  render: nav laid out ");
+                                crate::kernel::mm::print_num(tree.box_count);
+                                uart::puts(" boxes\n");
+                                // Skip the JS replay block below — we
+                                // already have the fresh post-nav layout.
+                                continue;
+                            }
+                            Err(e) => {
+                                uart::puts("  render: nav fetch failed: ");
+                                uart::puts(e); uart::puts("\n");
+                            }
+                        }
+                    } else if href_len > 0 {
+                        uart::puts("  render: click_xy hit relative <a href=");
+                        uart::puts(href);
+                        uart::puts("> — relative-URL nav not wired yet\n");
+                    }
+                } else {
+                    uart::puts("  render: click_xy(");
+                    crate::kernel::mm::print_num(qx as usize);
+                    uart::puts(",");
+                    crate::kernel::mm::print_num(qy as usize);
+                    uart::puts(") hit box ");
+                    crate::kernel::mm::print_num(hit);
+                    uart::puts(" — no onclick or href ancestor\n");
+                }
             }
         }
     }
@@ -3693,6 +3869,31 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     crate::drivers::virtio::gpu::SOFT_W.store(0, O2::Release);
     crate::drivers::virtio::gpu::SOFT_H.store(0, O2::Release);
 
+}
+
+/// STUMP #97: write `application/x-www-form-urlencoded` octets into
+/// `out`, returning the number written. Only writes printable bytes
+/// directly; other bytes are escaped as `%XX`. Caller must size `out`
+/// to ≥ 3 × input length.
+fn url_encode(input: &[u8], out: &mut [u8]) -> usize {
+    let mut n = 0usize;
+    for &b in input {
+        let safe = matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~');
+        if safe {
+            if n < out.len() { out[n] = b; n += 1; }
+        } else if b == b' ' {
+            if n < out.len() { out[n] = b'+'; n += 1; }
+        } else {
+            if n + 2 < out.len() {
+                let h = b"0123456789ABCDEF";
+                out[n] = b'%';
+                out[n + 1] = h[(b >> 4) as usize];
+                out[n + 2] = h[(b & 0xF) as usize];
+                n += 3;
+            }
+        }
+    }
+    n
 }
 
 /// STUMP #89: base64 raw-BGRA dumper extracted so the paginated

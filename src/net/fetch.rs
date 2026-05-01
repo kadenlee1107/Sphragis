@@ -137,6 +137,186 @@ pub fn fetch_http(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     Ok(copy_len)
 }
 
+/// POST a `application/x-www-form-urlencoded` body to a URL. Same
+/// shape as fetch_url but with a method override and a request body.
+/// `scheme` chosen by URL prefix; HTTPS goes through fetch_post_https,
+/// HTTP through fetch_post_http. Used by the renderer's `<form>`
+/// submit path (Sprint 1.3 — STUMP #97).
+pub fn fetch_post_url(
+    url: &str,
+    body: &[u8],
+    out: &mut [u8],
+) -> Result<usize, &'static str> {
+    let (scheme, _, _, _) = parse_url(url).ok_or("bad URL")?;
+    match scheme {
+        "https" => fetch_post_https(url, body, out),
+        _       => fetch_post_http(url, body, out),
+    }
+}
+
+pub fn fetch_post_http(
+    url: &str,
+    body: &[u8],
+    out: &mut [u8],
+) -> Result<usize, &'static str> {
+    let (scheme, host, port, path) = parse_url(url).ok_or("bad URL")?;
+    if scheme != "http" { return Err("fetch_post_http: not http URL"); }
+    let ip = if let Some(numeric) = parse_numeric_ipv4(host) {
+        numeric
+    } else {
+        dns::resolve(host).map_err(|_| "DNS resolution failed")?
+    };
+    tcp::connect(ip, port).map_err(|_| "TCP connect failed")?;
+    let mut req = [0u8; 1024];
+    let mut pos = 0;
+    pos += copy_to(&mut req, pos, b"POST ");
+    pos += copy_to(&mut req, pos, path.as_bytes());
+    pos += copy_to(&mut req, pos, b" HTTP/1.0\r\nHost: ");
+    pos += copy_to(&mut req, pos, host.as_bytes());
+    pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: ");
+    let mut clen_buf = [0u8; 16];
+    let clen_len = write_usize_dec(body.len(), &mut clen_buf);
+    pos += copy_to(&mut req, pos, &clen_buf[..clen_len]);
+    pos += copy_to(&mut req, pos, b"\r\nConnection: close\r\n\r\n");
+    if pos + body.len() > req.len() { tcp::close(); return Err("request too large"); }
+    if tcp::send_data(&req[..pos]).is_err() { tcp::close(); return Err("send headers failed"); }
+    if !body.is_empty() && tcp::send_data(body).is_err() {
+        tcp::close();
+        return Err("send body failed");
+    }
+    drain_http_response(out)
+}
+
+pub fn fetch_post_https(
+    url: &str,
+    body: &[u8],
+    out: &mut [u8],
+) -> Result<usize, &'static str> {
+    let (scheme, host, port, path) = parse_url(url).ok_or("bad URL")?;
+    if scheme != "https" { return Err("fetch_post_https: not https URL"); }
+    let ip = if let Some(numeric) = parse_numeric_ipv4(host) {
+        numeric
+    } else {
+        dns::resolve(host).map_err(|_| "DNS resolution failed")?
+    };
+    tcp::connect(ip, port).map_err(|_| "TCP connect failed")?;
+    let prev_strict = super::tls_pinning::is_strict();
+    let prev_hybrid = tls::hybrid_enabled();
+    super::tls_pinning::set_strict(false);
+    tls::set_hybrid_enabled(false);
+    if let Err(e) = tls::handshake(host) {
+        super::tls_pinning::set_strict(prev_strict);
+        tls::set_hybrid_enabled(prev_hybrid);
+        tcp::close();
+        return Err(e);
+    }
+    let mut req = [0u8; 1024];
+    let mut pos = 0;
+    pos += copy_to(&mut req, pos, b"POST ");
+    pos += copy_to(&mut req, pos, path.as_bytes());
+    pos += copy_to(&mut req, pos, b" HTTP/1.1\r\nHost: ");
+    pos += copy_to(&mut req, pos, host.as_bytes());
+    pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\nAccept: text/html\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: ");
+    let mut clen_buf = [0u8; 16];
+    let clen_len = write_usize_dec(body.len(), &mut clen_buf);
+    pos += copy_to(&mut req, pos, &clen_buf[..clen_len]);
+    pos += copy_to(&mut req, pos, b"\r\nConnection: close\r\n\r\n");
+    if pos > req.len() {
+        super::tls_pinning::set_strict(prev_strict);
+        tls::set_hybrid_enabled(prev_hybrid);
+        tls::close();
+        return Err("request too large");
+    }
+    if let Err(e) = tls::send_app_data(&req[..pos]) {
+        super::tls_pinning::set_strict(prev_strict);
+        tls::set_hybrid_enabled(prev_hybrid);
+        tls::close();
+        return Err(e);
+    }
+    if !body.is_empty() {
+        if let Err(e) = tls::send_app_data(body) {
+            super::tls_pinning::set_strict(prev_strict);
+            tls::set_hybrid_enabled(prev_hybrid);
+            tls::close();
+            return Err(e);
+        }
+    }
+
+    const MAX_TOTAL: usize = 256 * 1024;
+    static mut POST_SCRATCH: [u8; MAX_TOTAL] = [0; MAX_TOTAL];
+    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(POST_SCRATCH) };
+    let mut total = 0usize;
+    let mut iters = 0u32;
+    let mut consecutive_empty = 0u32;
+    loop {
+        if total >= scratch.len() { break; }
+        if iters > 500 { break; }
+        iters += 1;
+        match tls::recv_app_data(&mut scratch[total..]) {
+            Ok(0) => {
+                consecutive_empty += 1;
+                if consecutive_empty > 8 { break; }
+            }
+            Ok(n) => { total += n; consecutive_empty = 0; }
+            Err(_) => break,
+        }
+    }
+    super::tls_pinning::set_strict(prev_strict);
+    tls::set_hybrid_enabled(prev_hybrid);
+    tls::close();
+
+    if total == 0 { return Err("empty response"); }
+    let body_start = match find_double_crlf(&scratch[..total]) {
+        Some(i) => i + 4,
+        None    => return Err("no header/body boundary"),
+    };
+    if !scratch.starts_with(b"HTTP/1.") || scratch.len() < 12 {
+        return Err("malformed status line");
+    }
+    let body_len = total - body_start;
+    let copy_len = body_len.min(out.len());
+    out[..copy_len].copy_from_slice(&scratch[body_start..body_start + copy_len]);
+    Ok(copy_len)
+}
+
+/// Helper: drain the HTTP response from the legacy TCP PCB into the
+/// caller's `out` buffer. Splits headers from body.
+fn drain_http_response(out: &mut [u8]) -> Result<usize, &'static str> {
+    const MAX_TOTAL: usize = 256 * 1024;
+    static mut SCRATCH: [u8; MAX_TOTAL] = [0; MAX_TOTAL];
+    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
+    let mut total = 0usize;
+    loop {
+        if total >= scratch.len() { break; }
+        match tcp::recv_data(&mut scratch[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(_) => break,
+        }
+    }
+    tcp::close();
+    if total == 0 { return Err("empty response"); }
+    let body_start = match find_double_crlf(&scratch[..total]) {
+        Some(i) => i + 4,
+        None    => return Err("no header/body boundary"),
+    };
+    let body_len = total - body_start;
+    let copy_len = body_len.min(out.len());
+    out[..copy_len].copy_from_slice(&scratch[body_start..body_start + copy_len]);
+    Ok(copy_len)
+}
+
+fn write_usize_dec(n: usize, out: &mut [u8]) -> usize {
+    if n == 0 { out[0] = b'0'; return 1; }
+    let mut buf = [0u8; 20];
+    let mut i = 0;
+    let mut v = n;
+    while v > 0 && i < buf.len() { buf[i] = b'0' + (v % 10) as u8; v /= 10; i += 1; }
+    let len = i;
+    for j in 0..len { out[j] = buf[len - 1 - j]; }
+    len
+}
+
 /// HTTPS fetch (TLS 1.3 over TCP/443 by default). Same surface as
 /// fetch_http: writes the response body into `out`, returns body len.
 ///
