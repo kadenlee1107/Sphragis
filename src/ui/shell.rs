@@ -3461,6 +3461,168 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     crate::kernel::mm::print_num(tree.page_height as usize);
     uart::puts(")\n");
 
+    // STUMP #97 — Sprint 1.1: coordinate hit-testing via `click_xy=x,y`.
+    // The renderer is still one-shot, but we can simulate a real mouse
+    // click by hit-testing the post-layout tree, walking up to find an
+    // ancestor with an `onclick` attribute, queuing that JS, re-running
+    // the engine, and re-laying-out. Multiple click_xy args fire in
+    // order. Each one triggers another JS+layout pass — heavy but fine
+    // for development; the live event loop (Sprint 1.4) will batch
+    // events and run the engine once per frame.
+    // Debug: `dump_layout=1` arg prints box coords for hit-test debugging.
+    let mut dump_layout = false;
+    for pi in 2..MAX_PARTS {
+        if parts[pi] == "dump_layout=1" { dump_layout = true; }
+    }
+    if dump_layout {
+        for i in 0..tree.box_count.min(30) {
+            let b = &tree.boxes[i];
+            if !b.active { continue; }
+            let dn = b.dom_node as usize;
+            let tag = if dn < doc.node_count {
+                unsafe { core::str::from_utf8_unchecked(&doc.nodes[dn].tag[..doc.nodes[dn].tag_len.min(16)]) }
+            } else { "?" };
+            uart::puts("  box ");
+            crate::kernel::mm::print_num(i);
+            uart::puts(" <"); uart::puts(tag); uart::puts(">");
+            uart::puts(" x="); crate::kernel::mm::print_num(b.x.max(0) as usize);
+            uart::puts(" y="); crate::kernel::mm::print_num(b.y.max(0) as usize);
+            uart::puts(" w="); crate::kernel::mm::print_num(b.width.max(0) as usize);
+            uart::puts(" h="); crate::kernel::mm::print_num(b.height.max(0) as usize);
+            if dn < doc.node_count && doc.nodes[dn].get_attr("onclick").is_some() {
+                uart::puts(" [onclick]");
+            }
+            uart::puts("\n");
+        }
+    }
+
+    let mut had_click_xy = false;
+    for pi in 2..MAX_PARTS {
+        let arg = parts[pi];
+        let payload = match arg.strip_prefix("click_xy=") {
+            Some(p) => p,
+            None => continue,
+        };
+        let comma = match payload.find(',') {
+            Some(c) => c,
+            None => {
+                uart::puts("  render: bad click_xy= arg (need x,y): ");
+                uart::puts(arg); uart::puts("\n");
+                continue;
+            }
+        };
+        let qx: i32 = match payload[..comma].parse() {
+            Ok(v) => v,
+            Err(_) => { uart::puts("  render: bad click_xy x\n"); continue; }
+        };
+        let qy: i32 = match payload[comma + 1..].parse() {
+            Ok(v) => v,
+            Err(_) => { uart::puts("  render: bad click_xy y\n"); continue; }
+        };
+
+        let hit = match tree.hit_test(qx, qy) {
+            Some(idx) => idx,
+            None => {
+                uart::puts("  render: click_xy hit nothing at ");
+                crate::kernel::mm::print_num(qx as usize);
+                uart::puts(",");
+                crate::kernel::mm::print_num(qy as usize);
+                uart::puts("\n");
+                continue;
+            }
+        };
+
+        // Walk up from the hit box looking for an onclick attribute.
+        // Most click handlers are on <button>/<a>/<input>, not the
+        // text-node child the user actually pointed at.
+        let owner = tree.nearest_ancestor_with_attr(hit, doc, |n| {
+            n.get_attr("onclick").is_some()
+        });
+
+        match owner {
+            Some(box_idx) => {
+                let dom_idx = tree.boxes[box_idx].dom_node as usize;
+                // Snapshot the onclick body, then mutate doc.js_text.
+                let mut handler = [0u8; 1024];
+                let mut hlen = 0usize;
+                if let Some(oc) = doc.nodes[dom_idx].get_attr("onclick") {
+                    let n = oc.len().min(handler.len());
+                    handler[..n].copy_from_slice(&oc.as_bytes()[..n]);
+                    hlen = n;
+                }
+                if hlen > 0 {
+                    let avail = crate::browser::dom::MAX_JS - doc.js_len;
+                    let need = hlen + 2;
+                    if avail >= need {
+                        doc.js_text[doc.js_len..doc.js_len + hlen]
+                            .copy_from_slice(&handler[..hlen]);
+                        doc.js_len += hlen;
+                        doc.js_text[doc.js_len] = b';';
+                        doc.js_text[doc.js_len + 1] = b'\n';
+                        doc.js_len += 2;
+                        uart::puts("  render: click_xy(");
+                        crate::kernel::mm::print_num(qx as usize);
+                        uart::puts(",");
+                        crate::kernel::mm::print_num(qy as usize);
+                        uart::puts(") hit box ");
+                        crate::kernel::mm::print_num(hit);
+                        uart::puts(" → onclick on box ");
+                        crate::kernel::mm::print_num(box_idx);
+                        uart::puts("\n");
+                        had_click_xy = true;
+                    } else {
+                        uart::puts("  render: js buffer full, click_xy skipped\n");
+                    }
+                }
+            }
+            None => {
+                uart::puts("  render: click_xy(");
+                crate::kernel::mm::print_num(qx as usize);
+                uart::puts(",");
+                crate::kernel::mm::print_num(qy as usize);
+                uart::puts(") hit box ");
+                crate::kernel::mm::print_num(hit);
+                uart::puts(" — no onclick ancestor\n");
+            }
+        }
+    }
+
+    // If any click_xy fired, re-run JS and re-layout against the
+    // mutated DOM so paint shows the post-click state.
+    if had_click_xy && doc.js_len > 0 {
+        static mut REPLAY_VM: crate::browser::js::vm::Vm =
+            crate::browser::js::vm::Vm::new();
+        let vm = unsafe { &mut *core::ptr::addr_of_mut!(REPLAY_VM) };
+        crate::browser::js::dom_api::set_document(doc);
+        vm.init();
+        let _ = vm.execute(&doc.js_text[..doc.js_len]);
+        if vm.console_len > 0 {
+            uart::puts("=== JS console (replay) ===\n");
+            let cb = unsafe {
+                core::slice::from_raw_parts(
+                    core::ptr::addr_of!(vm.console_buf) as *const u8,
+                    vm.console_len,
+                )
+            };
+            for &b in cb { uart::putc(b); }
+            if !cb.last().map(|&b| b == b'\n').unwrap_or(false) {
+                uart::puts("\n");
+            }
+            uart::puts("=== /JS console ===\n");
+        }
+        // Re-layout so paint sees the post-click DOM.
+        // Reset the layout tree so build() doesn't append on top of
+        // stale boxes from the first pass.
+        tree.box_count = 0;
+        tree.text_len = 0;
+        tree.page_height = 0;
+        layout::build(doc, tree, rw as i32);
+        uart::puts("  render: re-laid out "); crate::kernel::mm::print_num(tree.box_count);
+        uart::puts(" boxes after click_xy (page_height=");
+        crate::kernel::mm::print_num(tree.page_height as usize);
+        uart::puts(")\n");
+    }
+
     // Pick the body's effective background color so the area below
     // content matches the theme instead of staying white. Fall back
     // to white when the body has no explicit background.

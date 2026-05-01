@@ -96,6 +96,65 @@ impl LayoutTree {
         self.text_len += len;
         (start, len)
     }
+
+    /// STUMP #97: hit-test in layout coordinates.
+    ///
+    /// Returns the DEEPEST active box whose `(x, y, w, h)` rectangle
+    /// contains the query point. Walks the boxes flat array — boxes
+    /// are appended in document order with children laid down right
+    /// after their parent, so a forward scan plus "track the smallest
+    /// area" yields the most specific hit. Linear in box_count, which
+    /// is bounded by `MAX_BOXES` so worst-case is a few microseconds
+    /// per click.
+    ///
+    /// `qx`/`qy` are in the same coordinate space the layout produced
+    /// (i.e. screen-space minus the renderer's `scroll_y`/`offset`).
+    /// The caller is responsible for that translation.
+    pub fn hit_test(&self, qx: i32, qy: i32) -> Option<usize> {
+        let mut best: Option<usize> = None;
+        let mut best_area: i64 = i64::MAX;
+        for i in 0..self.box_count {
+            let b = &self.boxes[i];
+            if !b.active { continue; }
+            if b.width <= 0 || b.height <= 0 { continue; }
+            if qx < b.x || qx >= b.x + b.width { continue; }
+            if qy < b.y || qy >= b.y + b.height { continue; }
+            let area = b.width as i64 * b.height as i64;
+            if area < best_area {
+                best_area = area;
+                best = Some(i);
+            }
+        }
+        best
+    }
+
+    /// Walk up the parent chain from `box_idx` looking for an ancestor
+    /// whose DOM node has the named attribute (e.g. `"onclick"` or
+    /// `"href"`). Returns the matching box index. Useful because a
+    /// click on a `<span>` inside an `<a>` should fire the `<a>`'s
+    /// handler, not no-op.
+    pub fn nearest_ancestor_with_attr<F>(
+        &self,
+        box_idx: usize,
+        doc: &super::dom::Document,
+        check: F,
+    ) -> Option<usize>
+    where
+        F: Fn(&super::dom::DomNode) -> bool,
+    {
+        let mut cur = box_idx;
+        loop {
+            let b = &self.boxes[cur];
+            let dom_idx = b.dom_node as usize;
+            if dom_idx < doc.node_count {
+                if check(&doc.nodes[dom_idx]) {
+                    return Some(cur);
+                }
+            }
+            if b.parent == NULL { return None; }
+            cur = b.parent as usize;
+        }
+    }
 }
 
 /// Build a layout tree from a DOM tree.
