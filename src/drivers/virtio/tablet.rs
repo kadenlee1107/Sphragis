@@ -196,6 +196,19 @@ pub fn poll() {
         let code  = super::virtqueue::safe_read16(buf_addr + 2);
         let value = super::virtqueue::safe_read32(buf_addr + 4) as i32;
 
+        // Diagnostic: log every event so we can tell whether QMP-
+        // injected motion is arriving at the virtio-mouse device.
+        // Drop once the bridge is confirmed end-to-end.
+        if etype == EV_REL || etype == EV_ABS || (etype == EV_KEY && code >= 0x110) {
+            uart::puts("    [tbl] ev type=");
+            crate::kernel::mm::print_num(etype as usize);
+            uart::puts(" code=");
+            crate::kernel::mm::print_num(code as usize);
+            uart::puts(" value=");
+            crate::kernel::mm::print_num(value as usize);
+            uart::puts("\n");
+        }
+
         match etype {
             EV_ABS => {
                 // Rescale tablet coords to GPU framebuffer coords.

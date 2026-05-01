@@ -177,13 +177,10 @@ def main() -> int:
     if platform.system() == "Darwin":
         bridge_path = ROOT / "scripts/mouse_bridge.py"
         if bridge_path.exists():
-            print(f"[render-live] launching mouse_bridge.py (Ctrl-C the bridge to fall back to keyboard cursor)")
+            print(f"[render-live] launching mouse_bridge.py — its output streams to this terminal")
             try:
-                bridge_proc = subprocess.Popen(
-                    [sys.executable, str(bridge_path)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+                # Inherit our stdout/stderr so the user sees [bridge] lines.
+                bridge_proc = subprocess.Popen([sys.executable, str(bridge_path)])
             except Exception as e:
                 print(f"[render-live] mouse_bridge.py failed: {e}", file=sys.stderr)
 
