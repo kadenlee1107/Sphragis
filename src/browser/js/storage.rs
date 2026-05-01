@@ -1,6 +1,14 @@
 #![allow(dead_code)]
 // Bat_OS — Web Storage API (localStorage / sessionStorage)
 // Simple key-value store backed by in-memory arrays.
+//
+// STUMP #108 — Sprint 3.5: actually wired to JS now. Process-global
+// LOCAL_STORAGE instance, exposed as `localStorage` in JS with the
+// standard `getItem` / `setItem` / `removeItem` / `clear` methods.
+// Cleared on cave switch so a logged-out cave doesn't inherit the
+// previous tenant's UI state.
+
+use core::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_ENTRIES: usize = 64;
 const MAX_KEY: usize = 32;
@@ -115,4 +123,52 @@ impl WebStorage {
         }
         None
     }
+}
+
+// ── STUMP #108 ── module-level singleton + reset hook for cave switch.
+// One instance per kernel; the JS engine's localStorage methods read
+// and write this. No allocator dependency — fixed-size arrays.
+static mut LOCAL: WebStorage = WebStorage::new();
+static LOCAL_DIRTY: AtomicBool = AtomicBool::new(false);
+
+#[inline]
+fn local_mut() -> &'static mut WebStorage {
+    unsafe { &mut *core::ptr::addr_of_mut!(LOCAL) }
+}
+
+#[inline]
+fn local_ref() -> &'static WebStorage {
+    unsafe { &*core::ptr::addr_of!(LOCAL) }
+}
+
+pub fn local_get_item(key: &str) -> Option<&'static str> {
+    local_ref().get_item(key)
+}
+
+pub fn local_set_item(key: &str, value: &str) {
+    local_mut().set_item(key, value);
+    LOCAL_DIRTY.store(true, Ordering::Relaxed);
+}
+
+pub fn local_remove_item(key: &str) {
+    local_mut().remove_item(key);
+    LOCAL_DIRTY.store(true, Ordering::Relaxed);
+}
+
+pub fn local_clear() {
+    local_mut().clear();
+    LOCAL_DIRTY.store(true, Ordering::Relaxed);
+}
+
+pub fn local_length() -> usize { local_ref().length() }
+
+pub fn local_dirty() -> bool { LOCAL_DIRTY.load(Ordering::Relaxed) }
+pub fn clear_dirty() { LOCAL_DIRTY.store(false, Ordering::Relaxed); }
+
+/// STUMP #108: cave-switch hook. Wipes all keys so a logged-out cave
+/// doesn't inherit the previous tenant's UI state (theme, last URL,
+/// shopping cart, ...).
+pub fn reset_for_cave_switch() {
+    local_mut().clear();
+    LOCAL_DIRTY.store(false, Ordering::Relaxed);
 }

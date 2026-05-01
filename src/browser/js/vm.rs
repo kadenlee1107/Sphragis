@@ -1132,6 +1132,27 @@ impl Vm {
         let fetch_name = self.strings.intern(b"fetch");
         self.set_global(fetch_name, JsValue::from_obj(fetch_fn));
 
+        // STUMP #108 — Sprint 3.5: localStorage. Standard Web Storage
+        // API surface (getItem, setItem, removeItem, clear, length).
+        // Backed by the static singleton in browser::js::storage so
+        // values persist across vm.execute calls within the same
+        // cave session.
+        let ls_obj = self.heap.alloc_object();
+        let get_item_fn = self.make_native_function(native_ls_get_item);
+        let set_item_fn = self.make_native_function(native_ls_set_item);
+        let remove_item_fn = self.make_native_function(native_ls_remove_item);
+        let clear_fn = self.make_native_function(native_ls_clear);
+        let n = self.strings.intern(b"getItem");
+        self.heap.set_prop(ls_obj, n, JsValue::from_obj(get_item_fn));
+        let n = self.strings.intern(b"setItem");
+        self.heap.set_prop(ls_obj, n, JsValue::from_obj(set_item_fn));
+        let n = self.strings.intern(b"removeItem");
+        self.heap.set_prop(ls_obj, n, JsValue::from_obj(remove_item_fn));
+        let n = self.strings.intern(b"clear");
+        self.heap.set_prop(ls_obj, n, JsValue::from_obj(clear_fn));
+        let ls_name = self.strings.intern(b"localStorage");
+        self.set_global(ls_name, JsValue::from_obj(ls_obj));
+
         // Math object
         let math_obj = self.heap.alloc_object();
         let pi_name = self.strings.intern(b"PI");
@@ -1283,6 +1304,67 @@ fn native_console_warn(vm: &mut Vm, args_start: usize, argc: usize) -> Result<Js
 /// Returns the response body as a string. Returns "" on any error.
 /// Same SOP and TLS-mode rules apply as Rust-side fetch — JS
 /// can't bypass the renderer's security policy.
+// STUMP #108 — Sprint 3.5: localStorage natives. Each is a thin
+// wrapper that pulls (key, value) strings from the JS stack, copies
+// them to local buffers (so we drop the immutable borrow on
+// vm.strings before mutating the storage), and forwards to the
+// module-level singleton in storage.rs.
+
+fn native_ls_get_item(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsValue, JsError> {
+    if argc == 0 { return Ok(JsValue::UNDEFINED); }
+    let kv = vm.stack[args_start];
+    if !kv.is_string() { return Ok(JsValue::UNDEFINED); }
+    let kb = vm.strings.get(kv.as_str_id());
+    let mut kbuf = [0u8; 32];
+    let kl = kb.len().min(kbuf.len());
+    kbuf[..kl].copy_from_slice(&kb[..kl]);
+    let key = unsafe { core::str::from_utf8_unchecked(&kbuf[..kl]) };
+    match crate::browser::js::storage::local_get_item(key) {
+        Some(v) => {
+            let sid = vm.strings.intern(v.as_bytes());
+            Ok(JsValue::from_str(sid))
+        }
+        None => Ok(JsValue::UNDEFINED),
+    }
+}
+
+fn native_ls_set_item(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsValue, JsError> {
+    if argc < 2 { return Ok(JsValue::UNDEFINED); }
+    let kv = vm.stack[args_start];
+    let vv = vm.stack[args_start + 1];
+    if !kv.is_string() || !vv.is_string() { return Ok(JsValue::UNDEFINED); }
+    let kb = vm.strings.get(kv.as_str_id());
+    let vb = vm.strings.get(vv.as_str_id());
+    let mut kbuf = [0u8; 32];
+    let mut vbuf = [0u8; 128];
+    let kl = kb.len().min(kbuf.len());
+    let vl = vb.len().min(vbuf.len());
+    kbuf[..kl].copy_from_slice(&kb[..kl]);
+    vbuf[..vl].copy_from_slice(&vb[..vl]);
+    let k = unsafe { core::str::from_utf8_unchecked(&kbuf[..kl]) };
+    let v = unsafe { core::str::from_utf8_unchecked(&vbuf[..vl]) };
+    crate::browser::js::storage::local_set_item(k, v);
+    Ok(JsValue::UNDEFINED)
+}
+
+fn native_ls_remove_item(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsValue, JsError> {
+    if argc == 0 { return Ok(JsValue::UNDEFINED); }
+    let kv = vm.stack[args_start];
+    if !kv.is_string() { return Ok(JsValue::UNDEFINED); }
+    let kb = vm.strings.get(kv.as_str_id());
+    let mut kbuf = [0u8; 32];
+    let kl = kb.len().min(kbuf.len());
+    kbuf[..kl].copy_from_slice(&kb[..kl]);
+    let key = unsafe { core::str::from_utf8_unchecked(&kbuf[..kl]) };
+    crate::browser::js::storage::local_remove_item(key);
+    Ok(JsValue::UNDEFINED)
+}
+
+fn native_ls_clear(_vm: &mut Vm, _args_start: usize, _argc: usize) -> Result<JsValue, JsError> {
+    crate::browser::js::storage::local_clear();
+    Ok(JsValue::UNDEFINED)
+}
+
 fn native_fetch_sync(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsValue, JsError> {
     if argc == 0 { return Ok(JsValue::from_str(crate::browser::js::value::StringId::EMPTY)); }
     let url_val = vm.stack[args_start];

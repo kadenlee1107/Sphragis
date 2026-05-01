@@ -860,6 +860,9 @@ fn reset_all_globals_for_cave_switch() {
     crate::net::arp::reset_for_cave_switch();
     crate::browser::js::interpreter::reset_for_cave_switch();
     crate::browser::js::dom_api::reset_for_cave_switch();
+    // STUMP #108 — Sprint 3.5: localStorage wipe on cave switch so a
+    // logged-out cave doesn't inherit the previous tenant's UI state.
+    crate::browser::js::storage::reset_for_cave_switch();
 
     // ROOT 2 V10-re-audit additions — Tor circuit keys, batpipe inter-tool
     // buffer, and the loader's saved RA/SP (which were a cross-cave
