@@ -39,6 +39,37 @@ pub fn apply_property(prop: &str, val: &str, style: &mut ComputedStyle) {
                 FontStyle::Normal
             };
         }
+        "font-family" => {
+            // Pick the first family hint we recognize. Real CSS has
+            // a fallback chain ("Verdana, sans-serif"); we look for
+            // a generic family token anywhere in the string.
+            let lower_has = |needle: &str| -> bool {
+                let v = val.as_bytes();
+                let n = needle.as_bytes();
+                if v.len() < n.len() { return false; }
+                for i in 0..=(v.len() - n.len()) {
+                    let mut ok = true;
+                    for k in 0..n.len() {
+                        let c = v[i + k];
+                        let lc = if c >= b'A' && c <= b'Z' { c + 32 } else { c };
+                        if lc != n[k] { ok = false; break; }
+                    }
+                    if ok { return true; }
+                }
+                false
+            };
+            style.font_family = if lower_has("monospace")
+                || lower_has("courier")
+                || lower_has("consolas")
+                || lower_has("menlo")
+            {
+                FontFamily::Monospace
+            } else if lower_has("serif") && !lower_has("sans-serif") {
+                FontFamily::Serif
+            } else {
+                FontFamily::Sans
+            };
+        }
         "text-align" => {
             style.text_align = match val {
                 "center" => TextAlign::Center,

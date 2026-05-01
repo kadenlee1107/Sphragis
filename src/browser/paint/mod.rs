@@ -250,6 +250,8 @@ pub fn paint(
                         let ch_buf = [ch];
                         let italic = b.style.font_style
                             == super::css::style::FontStyle::Italic;
+                        let mono = b.style.font_family
+                            == super::css::style::FontFamily::Monospace;
                         let advance = truetype::draw_text_fb_styled(
                             fb, sw, tx, ty, &ch_buf, font_px, color,
                             clip_left, clip_right, clip_top, clip_bottom,
@@ -271,7 +273,18 @@ pub fn paint(
                                 advance.max(6) as u32, 1, color);
                         }
 
-                        tx += if advance > 0 { advance } else { char_w };
+                        // 🎯 STUMP #79: monospace font-family overrides
+                        // the per-glyph advance so columns line up
+                        // (essential for code blocks). Use 60% of the
+                        // font size as the cell width — matches what
+                        // typical monospace fonts ship at.
+                        tx += if mono {
+                            (font_px as i32 * 6 / 10).max(7)
+                        } else if advance > 0 {
+                            advance
+                        } else {
+                            char_w
+                        };
                     } else {
                         // Fallback: monospace bitmap font
                         let ch_buf = [ch];

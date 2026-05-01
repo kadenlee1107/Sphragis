@@ -224,6 +224,18 @@ pub enum FontStyle {
     Italic,
 }
 
+/// CSS font-family family hint. We don't yet ship multiple fonts —
+/// Verdana TrueType is the only one in the initrd — but we can pick
+/// a different paint path for `monospace` so `<code>` and `<pre>`
+/// content has fixed-width feel even though it's still drawn with
+/// the same outlines.
+#[derive(Clone, Copy, PartialEq)]
+pub enum FontFamily {
+    Sans,
+    Serif,
+    Monospace,
+}
+
 /// CSS text-align
 #[derive(Clone, Copy, PartialEq)]
 pub enum TextAlign {
@@ -292,6 +304,7 @@ pub struct ComputedStyle {
     pub font_size: i32,       // in pixels
     pub font_weight: FontWeight,
     pub font_style: FontStyle,
+    pub font_family: FontFamily,
     pub text_align: TextAlign,
     pub text_decoration: TextDecoration,
     pub margin_top: i32,
@@ -335,6 +348,7 @@ impl ComputedStyle {
             font_size: 16,
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
+            font_family: FontFamily::Sans,
             text_align: TextAlign::Left,
             text_decoration: TextDecoration { underline: false, line_through: false },
             margin_top: 0, margin_bottom: 0,
@@ -458,10 +472,11 @@ impl ComputedStyle {
                 s.font_style = FontStyle::Italic;
                 s.color = Color::from_rgb(210, 210, 210);
             }
-            "code" => {
+            "code" | "kbd" | "samp" | "tt" => {
                 s.color = Color::from_rgb(68, 221, 68); // green
                 s.background_color = Color::from_rgb(20, 20, 20);
                 s.padding_left = 2; s.padding_right = 2;
+                s.font_family = FontFamily::Monospace;
             }
             "pre" => {
                 s.display = Display::Block;
@@ -470,6 +485,7 @@ impl ComputedStyle {
                 s.padding_top = 8; s.padding_bottom = 8;
                 s.padding_left = 8; s.padding_right = 8;
                 s.margin_top = 8; s.margin_bottom = 8;
+                s.font_family = FontFamily::Monospace;
             }
             "blockquote" => {
                 s.display = Display::Block;
