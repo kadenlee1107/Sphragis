@@ -3984,17 +3984,54 @@ fn interactive_loop(
     let mut needs_redraw = true;
     // Layout viewport width — same value cmd_render computed.
     let viewport_w = src_w as i32;
+    // Sprint 1.5c: focused input. Tracked by DOM index (not box index)
+    // because re-layout invalidates box indices but DOM nodes are
+    // stable. None = nothing focused; keystrokes are ignored.
+    let mut focus_dom: Option<usize> = None;
 
     'main: loop {
         // Pump device polls. Cheap if no events queued.
         keyboard::poll();
         tablet::poll();
 
-        // ESC / 'q' exits.
+        // Drain typed characters. ESC always exits the loop. With a
+        // focused input, printable characters append to its `value`
+        // attribute and backspace removes the last character; either
+        // mutation triggers a re-layout + repaint.
         while let Some(ch) = keyboard::getc() {
-            if ch == 27 || ch == b'q' { break 'main; }
-            // Other keys are ignored for now; focus + typing into
-            // <input> is on the Sprint 1.5c milestone.
+            if ch == 27 { break 'main; } // ESC
+            if let Some(dom_idx) = focus_dom {
+                if ch == 0x08 || ch == 0x7F {
+                    // Backspace / DEL: drop last byte of value.
+                    let cur = doc.nodes[dom_idx].get_attr("value")
+                        .map(|s| s.as_bytes()).unwrap_or(b"");
+                    if !cur.is_empty() {
+                        let mut buf = [0u8; 256];
+                        let new_len = (cur.len() - 1).min(buf.len());
+                        buf[..new_len].copy_from_slice(&cur[..new_len]);
+                        let s = unsafe { core::str::from_utf8_unchecked(&buf[..new_len]) };
+                        doc.nodes[dom_idx].set_attr("value", s);
+                        rerun_layout_and_repaint(doc, tree, viewport_w, src_fb, src_w, bg_word);
+                        needs_redraw = true;
+                    }
+                } else if ch == b'\r' || ch == b'\n' {
+                    // Enter on a focused input: leave focus alone but
+                    // do nothing else for now. Implicit form submit
+                    // is on the Sprint 2 polish list.
+                } else if ch >= 0x20 && ch < 0x7F {
+                    // Printable ASCII: append to value.
+                    let cur = doc.nodes[dom_idx].get_attr("value")
+                        .map(|s| s.as_bytes()).unwrap_or(b"");
+                    let mut buf = [0u8; 256];
+                    let copy = cur.len().min(buf.len() - 1);
+                    buf[..copy].copy_from_slice(&cur[..copy]);
+                    buf[copy] = ch;
+                    let s = unsafe { core::str::from_utf8_unchecked(&buf[..copy + 1]) };
+                    doc.nodes[dom_idx].set_attr("value", s);
+                    rerun_layout_and_repaint(doc, tree, viewport_w, src_fb, src_w, bg_word);
+                    needs_redraw = true;
+                }
+            }
         }
 
         // Drain tablet events. We coalesce moves and run at most one
@@ -4018,6 +4055,24 @@ fn interactive_loop(
             let lx = cx - x_off as i32;
             let ly = cy - y_off as i32;
             if lx >= 0 && ly >= 0 && lx < copy_w as i32 && ly < copy_h as i32 {
+                // STUMP #98 / Sprint 1.5c: focus follows click. If
+                // the click landed inside an <input>/<textarea>, the
+                // next keystrokes append to that node's `value`.
+                if let Some(hit) = tree.hit_test(lx, ly) {
+                    let input_owner = tree.nearest_ancestor_with_attr(hit, doc, |n| {
+                        let t = n.tag_str();
+                        t == "input" || t == "textarea"
+                    });
+                    if let Some(box_idx) = input_owner {
+                        let dom_idx = tree.boxes[box_idx].dom_node as usize;
+                        focus_dom = Some(dom_idx);
+                        crate::drivers::uart::puts("  [click] focus → DOM ");
+                        crate::kernel::mm::print_num(dom_idx);
+                        crate::drivers::uart::puts("\n");
+                    } else {
+                        focus_dom = None;
+                    }
+                }
                 handle_interactive_click(
                     doc, tree, lx, ly, viewport_w,
                     src_fb, src_w, dst_fb, dst_w, dst_h,
@@ -4038,6 +4093,25 @@ fn interactive_loop(
             needs_redraw = false;
         }
     }
+}
+
+/// STUMP #98: re-layout + repaint the doc into RENDER_FB. Used after
+/// any DOM mutation in the interactive loop (focused-input typing,
+/// onclick re-runs). The caller's blit picks the new pixels up on
+/// the next redraw.
+fn rerun_layout_and_repaint(
+    doc: &mut crate::browser::dom::Document,
+    tree: &mut crate::browser::layout::LayoutTree,
+    viewport_w: i32,
+    src_fb: *mut u32,
+    src_w: u32,
+    bg_word: u32,
+) {
+    tree.box_count = 0;
+    tree.text_len = 0;
+    tree.page_height = 0;
+    crate::browser::layout::build(doc, tree, viewport_w);
+    repaint_to_render_fb(tree, src_fb, src_w, bg_word);
 }
 
 /// STUMP #98: handle a real click in interactive mode. Mirrors the
