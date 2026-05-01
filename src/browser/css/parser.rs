@@ -272,6 +272,7 @@ pub fn apply_property(prop: &str, val: &str, style: &mut ComputedStyle) {
                 "relative" => Position::Relative,
                 "absolute" => Position::Absolute,
                 "fixed"    => Position::Fixed,
+                "sticky"   => Position::Sticky,
                 _          => Position::Static,
             };
         }

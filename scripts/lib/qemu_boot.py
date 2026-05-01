@@ -150,6 +150,12 @@ def boot(*, log_prefix: str = "session", timeout: int = 120,
         "-serial", "mon:stdio",
         "-kernel", str(kernel),
         "-initrd", str(initrd),
+        # User-mode networking: gives the guest a 10.0.2.x/24 NIC that
+        # NATs to the host. Needed for the renderer to fetch real
+        # `<link rel=stylesheet>` and remote `<img>` URLs.
+        # `restrict=on` would block outbound — we WANT outbound, so off.
+        "-netdev", "user,id=net0",
+        "-device", "virtio-net-device,netdev=net0",
     ]
 
     fp = open(log_path, "wb")

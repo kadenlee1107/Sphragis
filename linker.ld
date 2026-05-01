@@ -56,7 +56,15 @@ SECTIONS
 
     . = ALIGN(4096);
     __stack_end = .;
-    . += 0x80000; /* 512KB kernel stack */
+    /* 🎯 STUMP #86: 8 MB stack (was 512KB). The JS engine's
+       compile_script returns a 1+MB tuple by value (FunctionProto
+       has bytecode: [u8; 8192]; the return type is
+       (FunctionProto, [FunctionProto; MAX_PROTOS=128], usize)
+       = ~1MB). 512KB stack silently overflowed and corrupted the
+       caller's frame; the visible symptom was the compiler hanging
+       immediately after the parser produced the AST. 8MB gives
+       plenty of headroom. */
+    . += 0x800000; /* 8 MB kernel stack */
     __stack_start = .;
 
     . = ALIGN(4096);

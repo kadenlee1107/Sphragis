@@ -123,7 +123,7 @@ fn execute(cmd: &str) {
         "blink" => cmd_run_elf("blink"),
         "chromium" | "chrome" => cmd_chromium(parts[1], parts[2], parts[3]),
         "dump-dom" | "dom" => cmd_dump_dom(parts[1]),
-        "render" => cmd_render(parts[1]),
+        "render" => cmd_render(parts[1], &parts),
         "browse" | "open" => {
             if !parts[1].is_empty() {
                 console::puts("  Opening in BatBrowser: ");
@@ -3199,15 +3199,15 @@ fn cmd_dump_dom(url: &str) {
 /// `scripts/render_to_png.py` decodes that into a PNG file you can
 /// open. Lets you SEE the page Bat_OS renders, without needing the
 /// host to have a working virtio-gpu under HVF.
-fn cmd_render(url: &str) {
+fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     use crate::browser::dom::Document;
     use crate::browser::{html, layout, paint};
     use crate::drivers::uart;
     use crate::kernel::mm::initrd;
 
     if url.is_empty() {
-        uart::puts("  usage: render <url|path>\n");
-        uart::puts("  e.g.   render file:///bin/hello.html\n");
+        uart::puts("  usage: render <url|path> [type=<id>=<value>] ...\n");
+        uart::puts("  e.g.   render file:///bin/login.html type=email=foo@bar.com type=pw=hunter2\n");
         return;
     }
 
@@ -3253,27 +3253,129 @@ fn cmd_render(url: &str) {
     uart::puts("  render: parsed "); crate::kernel::mm::print_num(doc.len());
     uart::puts(" nodes\n");
 
-    // 🎯 STUMP #84: <script> content is captured into doc.js_text by
-    // the parser. JS execution would happen here, BEFORE layout, so
-    // DOM mutations are reflected in the render.
-    //
-    // STATUS: wiring complete but disabled. The bytecode VM in
-    // src/browser/js/ has a hang in `compile_script` for even
-    // trivial input ("console.log('x')") that needs a separate debug
-    // session — likely an infinite loop in the AST-to-bytecode pass
-    // or a stale field on JS_VM's static init (Vm::new() uses
-    // non-zero JsValue::UNDEFINED bit pattern, so the static lives in
-    // .data not .bss; if that section gets truncated or aligned
-    // weirdly the field state could be corrupt).
-    //
-    // To re-enable once the engine is fixed: uncomment the block
-    // below and set BAT_OS_RUN_JS=1 (env-var-style flag, gated like
-    // BAT_OS_KEEP_GOING).
+    // STUMP #90: apply any `type=<id>=<value>` shell args BEFORE layout
+    // and JS execution. The renderer is one-shot today (no event loop
+    // yet), so we simulate user typing by mutating the DOM's `value`
+    // attribute on matching <input>/<textarea> nodes. The existing
+    // input layout already prefers `value` over `placeholder`, so the
+    // typed text shows up in the screenshot.
+    for pi in 2..MAX_PARTS {
+        let arg = parts[pi];
+        let payload = match arg.strip_prefix("type=") {
+            Some(p) => p,
+            None => continue,
+        };
+        let eq = match payload.find('=') {
+            Some(e) => e,
+            None => {
+                uart::puts("  render: bad type= arg (need id=value): ");
+                uart::puts(arg); uart::puts("\n");
+                continue;
+            }
+        };
+        let id = &payload[..eq];
+        let val = &payload[eq + 1..];
+        match doc.find_by_id(id) {
+            Some(idx) => {
+                doc.nodes[idx].set_attr("value", val);
+                uart::puts("  render: typed into #");
+                uart::puts(id); uart::puts(" = ");
+                uart::puts(val); uart::puts("\n");
+            }
+            None => {
+                uart::puts("  render: no element with id="); uart::puts(id);
+                uart::puts("\n");
+            }
+        }
+    }
+
+    // STUMP #88: fetch any captured `<link rel=stylesheet>` URLs over
+    // HTTP and append the bodies onto doc.css_text. The sheet matcher
+    // already reads from css_text, so the rules light up automatically
+    // on next layout pass. Failures are logged + ignored — a missing
+    // stylesheet shouldn't block the render entirely.
+    for li in 0..doc.link_count {
+        let url_len = doc.link_lens[li] as usize;
+        let url_bytes = &doc.link_urls[li][..url_len];
+        let url = match core::str::from_utf8(url_bytes) {
+            Ok(s) => s,
+            Err(_) => { uart::puts("  render: link href not utf-8, skip\n"); continue; }
+        };
+        if !url.starts_with("http://") {
+            // Only HTTP for now (TLS pinning + cert validation makes
+            // arbitrary HTTPS demo-fragile). file:// hrefs get loaded
+            // via the regular initrd path through layout.
+            continue;
+        }
+        uart::puts("  render: fetching link "); uart::puts(url); uart::puts("\n");
+        let avail = crate::browser::dom::MAX_CSS - doc.css_len;
+        if avail == 0 { uart::puts("  render: css buffer full, skip\n"); break; }
+        // Append directly into the tail of css_text.
+        let dst_start = doc.css_len;
+        let dst_end = doc.css_len + avail;
+        match crate::net::fetch::fetch_http(url, &mut doc.css_text[dst_start..dst_end]) {
+            Ok(n) => {
+                doc.css_len += n;
+                uart::puts("  render: fetched ");
+                crate::kernel::mm::print_num(n);
+                uart::puts(" bytes of CSS\n");
+            }
+            Err(e) => {
+                uart::puts("  render: link fetch failed: ");
+                uart::puts(e);
+                uart::puts("\n");
+            }
+        }
+    }
+
+    // 🎯 STUMP #84+#86: run captured <script> content through the
+    // JS engine BEFORE layout, so DOM mutations are reflected in
+    // the render. STUMP #86 capped the sibling walks in compile_node
+    // so a malformed AST can't hang the compiler.
     if doc.js_len > 0 {
-        uart::puts("  render: skipping ");
+        uart::puts("  render: running ");
         crate::kernel::mm::print_num(doc.js_len);
-        uart::puts(" bytes of JS (engine debug pending)\n");
-        // let _vm = crate::browser::js::vm::Vm::new();  // see comment
+        uart::puts(" bytes of JS\n");
+        static mut JS_VM: crate::browser::js::vm::Vm =
+            crate::browser::js::vm::Vm::new();
+        let vm: &mut crate::browser::js::vm::Vm =
+            unsafe { &mut *core::ptr::addr_of_mut!(JS_VM) };
+        uart::puts("  [js] init...\n");
+        vm.init();
+        uart::puts("  [js] init done\n");
+        let src_bytes = &doc.js_text[..doc.js_len];
+        match vm.execute(src_bytes) {
+            Ok(_) => {
+                if vm.console_len > 0 {
+                    uart::puts("=== JS console ===\n");
+                    let cb = unsafe {
+                        core::slice::from_raw_parts(
+                            core::ptr::addr_of!(vm.console_buf) as *const u8,
+                            vm.console_len,
+                        )
+                    };
+                    for &b in cb { uart::putc(b); }
+                    if !cb.last().map(|&b| b == b'\n').unwrap_or(false) {
+                        uart::puts("\n");
+                    }
+                    uart::puts("=== /JS console ===\n");
+                }
+            }
+            Err(_) => {
+                uart::puts("  render: JS execution error\n");
+                if vm.console_len > 0 {
+                    uart::puts("=== JS console (partial) ===\n");
+                    let cb = unsafe {
+                        core::slice::from_raw_parts(
+                            core::ptr::addr_of!(vm.console_buf) as *const u8,
+                            vm.console_len,
+                        )
+                    };
+                    for &b in cb { uart::putc(b); }
+                    uart::puts("\n=== /JS console ===\n");
+                }
+            }
+        }
     }
 
     let rw: u32 = 800; // viewport width — same as default browsers' first guess
@@ -3282,10 +3384,6 @@ fn cmd_render(url: &str) {
     uart::puts(" boxes (page_height=");
     crate::kernel::mm::print_num(tree.page_height as usize);
     uart::puts(")\n");
-
-    // Auto-size render height to the page. Minimum 600 (so short
-    // pages still get a normal-looking screenshot), max MAX_H.
-    let rh: u32 = (tree.page_height.max(600) as u32).min(MAX_H);
 
     // Pick the body's effective background color so the area below
     // content matches the theme instead of staying white. Fall back
@@ -3297,17 +3395,54 @@ fn cmd_render(url: &str) {
         body_bg.raw()
     };
 
-    // Point the gpu module at our private buffer so paint() targets
-    // it. fill_screen sets the background; paint draws boxes on top.
     use core::sync::atomic::Ordering as O2;
     let fb_ptr = unsafe { core::ptr::addr_of_mut!(RENDER_FB) as *mut u32 };
-    crate::drivers::virtio::gpu::SOFT_FB.store(fb_ptr as usize, O2::Release);
-    crate::drivers::virtio::gpu::SOFT_W.store(rw, O2::Release);
-    crate::drivers::virtio::gpu::SOFT_H.store(rh, O2::Release);
 
-    crate::drivers::virtio::gpu::fill_screen(bg_word);
+    // STUMP #89: paginated render. Each page is up to MAX_H tall; we
+    // emit ceil(page_height / MAX_H) RENDER-BEGIN/END blocks so the
+    // host script can split them into separate PNGs. Capped at
+    // MAX_PAGES so a runaway layout doesn't dump megabytes per page
+    // forever. Single-page pages still emit exactly one block, and
+    // the existing render_to_png.py finds it via the same regex.
+    const MAX_PAGES: u32 = 4;
+    let total_h = tree.page_height.max(600) as u32;
+    let mut n_pages = (total_h + MAX_H - 1) / MAX_H;
+    if n_pages == 0 { n_pages = 1; }
+    if n_pages > MAX_PAGES { n_pages = MAX_PAGES; }
 
-    paint::paint(tree, 0, 0, 0, rw as i32, rh as i32);
+    for page in 0..n_pages {
+        let scroll_y = (page * MAX_H) as i32;
+        // Last page may be shorter than MAX_H if there's less content
+        // remaining; keep at least 600 px tall so a short trailing
+        // chunk still looks like a screenshot.
+        let rh: u32 = ((total_h - page * MAX_H).min(MAX_H)).max(600);
+
+        // Point gpu at our buffer for THIS page. Re-set per page so
+        // SOFT_W/H reflect the (possibly shorter) trailing page.
+        crate::drivers::virtio::gpu::SOFT_FB.store(fb_ptr as usize, O2::Release);
+        crate::drivers::virtio::gpu::SOFT_W.store(rw, O2::Release);
+        crate::drivers::virtio::gpu::SOFT_H.store(rh, O2::Release);
+
+        crate::drivers::virtio::gpu::fill_screen(bg_word);
+        // paint() already supports scroll_y — boxes whose content sits
+        // outside the visible viewport are skipped via its clip check.
+        paint::paint(tree, 0, 0, scroll_y, rw as i32, rh as i32);
+
+        // Dump as base64-encoded raw BGRA. Each page is its own
+        // RENDER-BEGIN/END block; the page index is part of the
+        // header line so the host script can name the files.
+        uart::puts("=== RENDER-BEGIN ");
+        crate::kernel::mm::print_num(rw as usize);
+        uart::puts("x");
+        crate::kernel::mm::print_num(rh as usize);
+        uart::puts(" page=");
+        crate::kernel::mm::print_num(page as usize);
+        uart::puts("/");
+        crate::kernel::mm::print_num(n_pages as usize);
+        uart::puts(" ===\n");
+        emit_b64_dump(fb_ptr, rw, rh);
+        uart::puts("=== RENDER-END ===\n");
+    }
 
     // Restore so other code paths (e.g. console::puts) don't keep
     // writing into our buffer.
@@ -3315,18 +3450,15 @@ fn cmd_render(url: &str) {
     crate::drivers::virtio::gpu::SOFT_W.store(0, O2::Release);
     crate::drivers::virtio::gpu::SOFT_H.store(0, O2::Release);
 
-    // Dump as base64-encoded raw BGRA. Wrap with markers so the
-    // host script can find the start/end. Width/height precede so
-    // the decoder knows the geometry.
-    uart::puts("=== RENDER-BEGIN ");
-    crate::kernel::mm::print_num(rw as usize);
-    uart::puts("x");
-    crate::kernel::mm::print_num(rh as usize);
-    uart::puts(" ===\n");
+}
 
+/// STUMP #89: base64 raw-BGRA dumper extracted so the paginated
+/// renderer can call it once per page. 76 base64 chars per line
+/// (= 57 raw bytes), `read_volatile` per byte so the optimizer can't
+/// hoist the framebuffer reads outside the loop.
+fn emit_b64_dump(fb_ptr: *mut u32, rw: u32, rh: u32) {
+    use crate::drivers::uart;
     static B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    // Stream 76 base64 chars per line (= 57 raw bytes per line). Only
-    // dump the rows we actually painted (rw * rh pixels).
     let total_bytes: usize = (rw * rh) as usize * 4;
     let mut col = 0usize;
     let raw_ptr = fb_ptr as *const u8;
@@ -3354,5 +3486,4 @@ fn cmd_render(url: &str) {
         if col >= 76 { uart::putc(b'\n'); col = 0; }
     }
     if col != 0 { uart::putc(b'\n'); }
-    uart::puts("=== RENDER-END ===\n");
 }

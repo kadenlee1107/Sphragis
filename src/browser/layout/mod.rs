@@ -361,9 +361,26 @@ fn flex_reposition_children(
             tree.boxes[i].height
         };
         let align = tree.boxes[container].style.align_items;
+
+        // STUMP #91: real align-items: stretch resizes the flex item
+        // on the cross axis to match the tallest sibling so card
+        // backgrounds and box-shadows line up across a row. We DO
+        // NOT touch descendants — text inside still sits at its
+        // natural y; the extra height just extends the background.
+        // Skip the resize when the container hasn't actually computed
+        // a meaningful cross max (e.g. column-flex with auto height
+        // children all coming back zero), since stretching to 0 hides
+        // the box.
+        if align == 0 && cross_size < max_cross && max_cross > 0 {
+            if is_column {
+                tree.boxes[i].width = max_cross;
+            } else {
+                tree.boxes[i].height = max_cross;
+            }
+        }
+
         let cross_offset = match align {
-            // 0 = stretch (treated as start at top/left for now —
-            //              real stretch would need to resize box).
+            // 0 = stretch — items already resized above; cross_offset = 0.
             // 1 = flex-start (top/left)
             2 /* flex-end */ => max_cross - cross_size,
             3 /* center */   => (max_cross - cross_size) / 2,
@@ -876,10 +893,26 @@ fn layout_children(
                         None => return,
                     };
 
-                    let placeholder = node.get_attr("placeholder").unwrap_or(
-                        node.get_attr("value").unwrap_or("")
-                    );
-                    let (ts, tl) = tree.store_text(placeholder.as_bytes());
+                    // STUMP #90: prefer `value` over `placeholder` so
+                    // type-filled inputs (via `render <url> type=id=foo`)
+                    // and `<input value="x">` show their actual contents,
+                    // not the prompt. Fall back to placeholder when value
+                    // is empty so the empty-input case still labels itself.
+                    // Password inputs mask the *value* only — the
+                    // placeholder is shown verbatim so the user knows
+                    // what to type.
+                    let value = node.get_attr("value").filter(|v| !v.is_empty());
+                    let display = value
+                        .or_else(|| node.get_attr("placeholder"))
+                        .unwrap_or("");
+                    let mut mask_buf = [b'*'; 64];
+                    let (ts, tl) = if input_type == "password" && value.is_some() {
+                        let n = display.len().min(64);
+                        for i in 0..n { mask_buf[i] = b'*'; }
+                        tree.store_text(&mask_buf[..n])
+                    } else {
+                        tree.store_text(display.as_bytes())
+                    };
 
                     let is_search = input_type == "text" || input_type == "search";
                     let is_submit = input_type == "submit" || input_type == "button";
@@ -1010,28 +1043,62 @@ fn layout_children(
                         .unwrap_or(150);
                     let mut image_slot: u16 = 0xFFFF;
 
-                    // Try to load the image from the initrd archive.
+                    // Try to load the image. STUMP #88 added the http://
+                    // branch — for those we go through net::fetch into a
+                    // scratch buffer and then img_pool::load. Anything
+                    // else strips `file://` + leading `/` and looks the
+                    // bytes up in the initrd archive.
                     if let Some(src) = node.get_attr("src") {
-                        // Normalise: strip file:// + leading /.
-                        let mut path = src;
-                        if let Some(rest) = path.strip_prefix("file://") {
-                            path = rest;
-                        }
-                        while path.starts_with('/') { path = &path[1..]; }
-                        if let Some(bytes) =
-                            crate::kernel::mm::initrd::archive_file(path)
-                        {
-                            let slot = crate::browser::media::img_pool::load(bytes);
-                            if slot != 0xFFFF {
-                                image_slot = slot;
-                                if let Some(img) =
-                                    crate::browser::media::img_pool::get(slot)
-                                {
-                                    if node.get_attr("width").is_none() {
-                                        img_w = img.width as i32;
+                        if src.starts_with("http://") {
+                            // Fetch into a static scratch buffer (one img
+                            // at a time during layout — single-threaded).
+                            const IMG_FETCH_MAX: usize = 256 * 1024;
+                            static mut IMG_SCRATCH: [u8; IMG_FETCH_MAX] =
+                                [0; IMG_FETCH_MAX];
+                            let scratch = unsafe {
+                                &mut *core::ptr::addr_of_mut!(IMG_SCRATCH)
+                            };
+                            match crate::net::fetch::fetch_http(src, scratch) {
+                                Ok(n) => {
+                                    let slot = crate::browser::media::img_pool::load(&scratch[..n]);
+                                    if slot != 0xFFFF {
+                                        image_slot = slot;
+                                        if let Some(img) =
+                                            crate::browser::media::img_pool::get(slot)
+                                        {
+                                            if node.get_attr("width").is_none() {
+                                                img_w = img.width as i32;
+                                            }
+                                            if node.get_attr("height").is_none() {
+                                                img_h = img.height as i32;
+                                            }
+                                        }
                                     }
-                                    if node.get_attr("height").is_none() {
-                                        img_h = img.height as i32;
+                                }
+                                Err(_) => { /* fall through to alt-text */ }
+                            }
+                        } else {
+                            // Normalise: strip file:// + leading /.
+                            let mut path = src;
+                            if let Some(rest) = path.strip_prefix("file://") {
+                                path = rest;
+                            }
+                            while path.starts_with('/') { path = &path[1..]; }
+                            if let Some(bytes) =
+                                crate::kernel::mm::initrd::archive_file(path)
+                            {
+                                let slot = crate::browser::media::img_pool::load(bytes);
+                                if slot != 0xFFFF {
+                                    image_slot = slot;
+                                    if let Some(img) =
+                                        crate::browser::media::img_pool::get(slot)
+                                    {
+                                        if node.get_attr("width").is_none() {
+                                            img_w = img.width as i32;
+                                        }
+                                        if node.get_attr("height").is_none() {
+                                            img_h = img.height as i32;
+                                        }
                                     }
                                 }
                             }

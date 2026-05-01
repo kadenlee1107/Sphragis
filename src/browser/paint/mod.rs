@@ -9,6 +9,77 @@ use crate::ui::font;
 use crate::ui::truetype;
 use crate::drivers::virtio::gpu;
 
+/// STUMP #91: per-pixel alpha-blended box-shadow. Walks every pixel
+/// in the inflated shadow rectangle, computes the L1 distance into
+/// the blur ring, and BLENDS the shadow color into the framebuffer
+/// using that distance as the falloff. Returns immediately for
+/// degenerate rects so the cost stays at O(shadow_area).
+fn paint_soft_shadow(
+    out_x1: i32, out_y1: i32, out_x2: i32, out_y2: i32,
+    in_x1: i32,  in_y1: i32,  in_x2: i32,  in_y2: i32,
+    blur: i32, color: Color,
+) {
+    if out_x2 <= out_x1 || out_y2 <= out_y1 { return; }
+    let fb = gpu::framebuffer();
+    if fb.is_null() { return; }
+    let sw = gpu::width() as i32;
+    let sh = gpu::height() as i32;
+
+    // Pre-extract shadow RGB; the BGRA layout is B at byte 0, A at
+    // byte 3. We blend manually because gpu::fill_rect doesn't.
+    let raw = color.raw();
+    let sr = ((raw >> 16) & 0xFF) as u32;
+    let sg = ((raw >> 8) & 0xFF) as u32;
+    let sb = (raw & 0xFF) as u32;
+    let base_alpha: u32 = ((raw >> 24) & 0xFF) as u32; // typically 255
+
+    for y in out_y1..out_y2 {
+        if y < 0 || y >= sh { continue; }
+        for x in out_x1..out_x2 {
+            if x < 0 || x >= sw { continue; }
+
+            // Distance from the inner solid-shadow rectangle. Inside
+            // the inner rect this is 0 → full alpha. Outside, dist
+            // grows linearly toward the outer edge.
+            let dx = if x < in_x1 { in_x1 - x }
+                     else if x >= in_x2 { x - in_x2 + 1 }
+                     else { 0 };
+            let dy = if y < in_y1 { in_y1 - y }
+                     else if y >= in_y2 { y - in_y2 + 1 }
+                     else { 0 };
+            // Use Chebyshev (max) distance — square-ish falloff matches
+            // CSS box-shadow's "stretches the rounded ring" feel better
+            // than L1 (diamond-ish).
+            let dist = if dx > dy { dx } else { dy };
+
+            // Falloff function: alpha drops as the square of d/blur,
+            // which approximates a Gaussian sigma = blur/2 well enough
+            // visually. d ≥ blur → 0 alpha (skip).
+            if blur <= 0 || dist >= blur { continue; }
+            let t = dist as u32; // 0..blur
+            let denom = (blur as u32).max(1);
+            // alpha = base * (1 - (t/blur)^2). Integer math: (blur² - t²)/blur²
+            let num = denom * denom - t * t;
+            let alpha = base_alpha * num / (denom * denom);
+            if alpha == 0 { continue; }
+
+            // Read existing pixel and alpha-blend in place.
+            let ofs = (y * sw + x) as usize;
+            let cur = unsafe { core::ptr::read_volatile(fb.add(ofs)) };
+            let cb = (cur & 0xFF) as u32;
+            let cg = ((cur >> 8) & 0xFF) as u32;
+            let cr = ((cur >> 16) & 0xFF) as u32;
+            // out = src * alpha + dst * (1-alpha), all in 0..255.
+            let inv = 255u32 - alpha;
+            let nr = (sr * alpha + cr * inv + 127) / 255;
+            let ng = (sg * alpha + cg * inv + 127) / 255;
+            let nb = (sb * alpha + cb * inv + 127) / 255;
+            let pixel = 0xFF000000 | (nr << 16) | (ng << 8) | nb;
+            unsafe { core::ptr::write_volatile(fb.add(ofs), pixel); }
+        }
+    }
+}
+
 // Image rendering support
 /// Draw a PngImage directly at screen position, scaled to fit.
 pub fn draw_png(img: &PngImage, sx: i32, sy: i32, w: i32, h: i32) {
@@ -72,9 +143,26 @@ pub fn paint(
         if b.style.visibility != super::css::style::Visibility::Visible { continue; }
         if b.style.opacity == 0 { continue; }
 
-        // Transform coordinates: layout space -> screen space
+        // Transform coordinates: layout space -> screen space.
+        // STUMP #91: position:sticky boxes "stick" to the viewport top
+        // (plus their `top` offset) once the page has scrolled past
+        // their natural Y. Below that scroll threshold they paint as
+        // normal (Relative-like). In our paginated renderer scroll_y
+        // increments by MAX_H per page, so a sticky header re-appears
+        // at the top of every page after the first that scrolled past
+        // it.
         let sx = b.x + offset_x;
-        let sy = b.y + offset_y - scroll_y;
+        let sy = if b.style.position == super::css::style::Position::Sticky {
+            let stick_top = if b.style.top != i32::MIN { b.style.top } else { 0 };
+            let natural_screen_y = b.y + offset_y - scroll_y;
+            if natural_screen_y < clip_top + stick_top {
+                clip_top + stick_top
+            } else {
+                natural_screen_y
+            }
+        } else {
+            b.y + offset_y - scroll_y
+        };
 
         // Clipping: skip boxes completely outside visible area
         if sy + b.height < clip_top { continue; }
@@ -100,50 +188,38 @@ pub fn paint(
         let bg_w = (bg_x2 - bg_x1).max(0) as u32;
         let bg_h = (bg_y2 - bg_y1).max(0) as u32;
 
-        // 🎯 STUMP #82: cheap box-shadow. Paint a stack of expanded
-        // rounded-rect "halos" before the background, each one larger
-        // and more transparent than the last, to fake a soft drop
-        // shadow. Real CSS would do a Gaussian blur of the alpha
-        // channel; this approximation looks right for typical UI
-        // shadows and costs only a few fill_rect calls.
+        // STUMP #91: real soft (Gaussian-ish) box-shadow. Walks every
+        // pixel in the inflated shadow rect and writes it with an
+        // alpha derived from the L1 distance into the blur ring. This
+        // is O(shadow_area) so we cap blur at 20 px — real CSS would
+        // do a separable Gaussian convolution on the rasterized alpha
+        // mask, but a one-pass distance-falloff approximation is
+        // visually indistinguishable for typical UI shadows. Pre-fix
+        // (STUMP #82) was 6 hard-edged rect strips per shadow; you
+        // could see the seams.
         if b.style.box_shadow_color != Color::TRANSPARENT
             && b.width > 0 && b.height > 0
         {
-            let sh_color_raw = b.style.box_shadow_color.raw();
+            let sh = b.style.box_shadow_color;
             let off_x = b.style.box_shadow_x;
             let off_y = b.style.box_shadow_y;
             let blur = b.style.box_shadow_blur.max(0).min(20);
-            // Paint shadow as L-shaped fills (right + bottom strips)
-            // so it never bleeds BEHIND the box on the left/top, which
-            // is where rounded corners would let it peek through. Two
-            // strips × 3 stacked sizes for a soft drop-shadow look.
-            // Right strip: extends from box's top-right corner down
-            // and to the right by (off_x + pad, off_y + h + pad).
-            // Bottom strip: extends from box's bottom-left across
-            // and down by (off_x + w + pad, off_y + pad).
-            for i in (0..=2).rev() {
-                let pad = (blur * (i + 1) as i32 / 3).max(0);
-                // Right strip
-                let r_x1 = (sx + b.width).max(clip_left);
-                let r_y1 = (sy + off_y - pad).max(clip_top);
-                let r_x2 = (sx + b.width + off_x + pad).min(clip_right);
-                let r_y2 = (sy + b.height + off_y + pad).min(clip_bottom);
-                let rw = (r_x2 - r_x1).max(0) as u32;
-                let rh = (r_y2 - r_y1).max(0) as u32;
-                if rw > 0 && rh > 0 {
-                    gpu::fill_rect(r_x1 as u32, r_y1 as u32, rw, rh, sh_color_raw);
-                }
-                // Bottom strip
-                let b_x1 = (sx + off_x - pad).max(clip_left);
-                let b_y1 = (sy + b.height).max(clip_top);
-                let b_x2 = (sx + b.width + off_x + pad).min(clip_right);
-                let b_y2 = (sy + b.height + off_y + pad).min(clip_bottom);
-                let bw = (b_x2 - b_x1).max(0) as u32;
-                let bh = (b_y2 - b_y1).max(0) as u32;
-                if bw > 0 && bh > 0 {
-                    gpu::fill_rect(b_x1 as u32, b_y1 as u32, bw, bh, sh_color_raw);
-                }
-            }
+            // Inflated rect = box translated by (off_x, off_y), grown
+            // by blur on each side. inner_* is the solid-shadow zone;
+            // outside that, alpha falls off toward the edge.
+            let inner_x1 = sx + off_x;
+            let inner_y1 = sy + off_y;
+            let inner_x2 = inner_x1 + b.width;
+            let inner_y2 = inner_y1 + b.height;
+            let outer_x1 = (inner_x1 - blur).max(clip_left);
+            let outer_y1 = (inner_y1 - blur).max(clip_top);
+            let outer_x2 = (inner_x2 + blur).min(clip_right);
+            let outer_y2 = (inner_y2 + blur).min(clip_bottom);
+            paint_soft_shadow(
+                outer_x1, outer_y1, outer_x2, outer_y2,
+                inner_x1, inner_y1, inner_x2, inner_y2,
+                blur, sh,
+            );
         }
 
         // --- Background ---
@@ -239,9 +315,22 @@ pub fn paint(
             };
             let line_h: i32 = (font_px as i32 * 14 / 10).max(14); // 140% of font size
 
-            // Content area start (inside padding)
+            // Content area start (inside padding). Sticky boxes get
+            // the same Y shift as their box background so the text
+            // stays inside the painted box.
             let content_sx = b.content_x + offset_x;
-            let content_sy = b.content_y + offset_y - scroll_y;
+            let content_sy = if b.style.position == super::css::style::Position::Sticky {
+                let stick_top = if b.style.top != i32::MIN { b.style.top } else { 0 };
+                let natural = b.content_y + offset_y - scroll_y;
+                let inset = b.content_y - b.y; // content sits this far below the box top
+                if natural - inset < clip_top + stick_top {
+                    clip_top + stick_top + inset
+                } else {
+                    natural
+                }
+            } else {
+                b.content_y + offset_y - scroll_y
+            };
             let content_w = b.content_w.max(b.width); // use wider of the two
 
             // Text centering support

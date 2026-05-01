@@ -63,43 +63,64 @@ def write_png(path: Path, w: int, h: int, rgba: bytes) -> None:
 
 
 def main() -> int:
-    with boot(log_prefix="render", timeout=120) as session:
+    # The kernel emits one RENDER-BEGIN/END block per page (STUMP #89).
+    # We don't know up front how many pages we'll see, so we wait for
+    # the shell prompt to come back instead of for a single END marker.
+    with boot(log_prefix="render", timeout=180) as session:
         session.run(f"render {URL}".encode())
-        # The base64 dump is a couple hundred KB. Wait for END marker
-        # explicitly so we know the image is complete.
-        session.expect(rb"=== RENDER-END ===", timeout=120)
-        session.expect_prompt(timeout=10)
+        session.expect_prompt(timeout=180)
 
     log = session.log  # captured by the boot harness's logfile
     raw = log.read_text(encoding="utf-8", errors="replace")
 
-    m = re.search(
-        r"=== RENDER-BEGIN (\d+)x(\d+) ===\s*\n(.*?)\n\s*=== RENDER-END ===",
-        raw, re.DOTALL,
+    # Match every RENDER-BEGIN block. Header is either of:
+    #   === RENDER-BEGIN <W>x<H> ===                       (single-page legacy)
+    #   === RENDER-BEGIN <W>x<H> page=<i>/<n> ===          (paginated)
+    pattern = re.compile(
+        r"=== RENDER-BEGIN (?P<w>\d+)x(?P<h>\d+)"
+        r"(?:\s+page=(?P<idx>\d+)/(?P<total>\d+))?\s+===\s*\n"
+        r"(?P<b64>.*?)\n\s*=== RENDER-END ===",
+        re.DOTALL,
     )
-    if not m:
+    matches = list(pattern.finditer(raw))
+    if not matches:
         print(f"[render] FAILED — no RENDER-BEGIN/END markers in {log}",
               file=sys.stderr)
         return 1
-    w, h = int(m.group(1)), int(m.group(2))
-    b64 = "".join(m.group(3).split())  # drop newlines/whitespace
-    bgra = base64.b64decode(b64)
 
-    expected = w * h * 4
-    if len(bgra) < expected:
-        print(f"[render] WARNING: got {len(bgra)} bytes, expected {expected}",
-              file=sys.stderr)
-        bgra = bgra + b"\x00" * (expected - len(bgra))
-    elif len(bgra) > expected:
-        bgra = bgra[:expected]
+    paths = []
+    for m in matches:
+        w = int(m.group("w"))
+        h = int(m.group("h"))
+        idx_s = m.group("idx")
+        b64 = "".join(m.group("b64").split())  # drop newlines/whitespace
+        bgra = base64.b64decode(b64)
 
-    rgba = bgra_to_rgba(bgra)
-    png = log.with_suffix(".png")
-    write_png(png, w, h, rgba)
+        expected = w * h * 4
+        if len(bgra) < expected:
+            print(f"[render] WARNING: got {len(bgra)} bytes, expected {expected}",
+                  file=sys.stderr)
+            bgra = bgra + b"\x00" * (expected - len(bgra))
+        elif len(bgra) > expected:
+            bgra = bgra[:expected]
 
-    print(f"[render] wrote {png} ({w}x{h}, {len(bgra)} raw bytes)")
+        rgba = bgra_to_rgba(bgra)
+
+        # Single-page (legacy) → foo.png. Paginated → foo.p1.png, foo.p2.png ...
+        if idx_s is None or len(matches) == 1:
+            png = log.with_suffix(".png")
+        else:
+            png = log.with_suffix(f".p{int(idx_s) + 1}.png")
+        write_png(png, w, h, rgba)
+        paths.append((png, w, h, len(bgra)))
+
+    for png, w, h, n in paths:
+        print(f"[render] wrote {png} ({w}x{h}, {n} raw bytes)")
     print(f"[render] log:   {log}")
-    print(f"[render] open with: open {png}")
+    if len(paths) == 1:
+        print(f"[render] open with: open {paths[0][0]}")
+    else:
+        print(f"[render] open with: open {' '.join(str(p[0]) for p in paths)}")
     return 0
 
 

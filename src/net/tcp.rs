@@ -161,18 +161,44 @@ pub const TX_BUF_SIZE: usize = 8192;
 const LEGACY_PCB: usize = 0;
 
 /// Ephemeral local-port allocator. Starts at 49152 and wraps around 65535.
-static NEXT_LOCAL_PORT: AtomicU32 = AtomicU32::new(49152);
+///
+/// STUMP #88: previously a single `AtomicU32::fetch_add(1)`. On Apple
+/// Silicon (and on QEMU/HVF here) the kernel runs with the MMU
+/// disabled, so the backing memory is treated as Device-nGnRnE and
+/// LDXR/STXR have unpredictable behavior — STXR always fails, so
+/// `fetch_add` busy-spins forever inside its compare-exchange-weak
+/// retry loop. Same family of bug as the heap allocator's switch
+/// from `spin::Mutex` to manual IRQ masking. Single-CPU bring-up
+/// means we don't need the atomic; mask IRQs and read/write directly.
+static mut NEXT_LOCAL_PORT: u16 = 49152;
+
+#[inline(always)]
+unsafe fn irq_save() -> u64 {
+    let prev: u64;
+    core::arch::asm!(
+        "mrs {p}, daif",
+        "msr daifset, #0x2",
+        p = out(reg) prev,
+        options(nostack, preserves_flags),
+    );
+    prev
+}
+
+#[inline(always)]
+unsafe fn irq_restore(prev: u64) {
+    core::arch::asm!("msr daif, {p}", p = in(reg) prev,
+        options(nostack, preserves_flags));
+}
 
 fn alloc_local_port() -> u16 {
-    loop {
-        let p = NEXT_LOCAL_PORT.fetch_add(1, Ordering::Relaxed);
-        let port = (p & 0xFFFF) as u16;
-        if port < 49152 {
-            // Reset into ephemeral range.
-            NEXT_LOCAL_PORT.store(49152, Ordering::Relaxed);
-            continue;
-        }
-        return port;
+    unsafe {
+        let saved = irq_save();
+        let p = core::ptr::addr_of_mut!(NEXT_LOCAL_PORT);
+        let port = core::ptr::read_volatile(p);
+        let next = if port == 65535 || port < 49152 { 49152 } else { port + 1 };
+        core::ptr::write_volatile(p, next);
+        irq_restore(saved);
+        port
     }
 }
 

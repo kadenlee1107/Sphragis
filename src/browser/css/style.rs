@@ -233,6 +233,12 @@ pub enum Position {
     Absolute,  // positioned at (top, left) relative to viewport;
                // no space reserved in flow
     Fixed,     // same as absolute for static-render mode (no scroll)
+    Sticky,    // STUMP #91: behaves as Relative until the page scrolls
+               // past the box's natural Y, then "sticks" at the
+               // configured top offset for the rest of the scroll.
+               // In our paginated renderer we honor this by re-painting
+               // the sticky box at the top of every page after the
+               // first one whose natural Y ≤ page's scroll_y.
 }
 
 /// CSS font-family family hint. We don't yet ship multiple fonts —

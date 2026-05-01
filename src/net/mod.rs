@@ -5,6 +5,7 @@ pub mod cave_shaper;
 pub mod dns;
 pub mod flow_shaper;
 pub mod ethernet;
+pub mod fetch;
 pub mod firewall;
 pub mod http;
 pub mod icmp;

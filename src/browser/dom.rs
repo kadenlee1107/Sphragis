@@ -108,6 +108,12 @@ impl DomNode {
         unsafe { core::str::from_utf8_unchecked(&self.tag[..self.tag_len]) }
     }
 
+    /// Raw tag bytes (lowercased). Lets callers copy out without
+    /// holding an immutable borrow on the surrounding Document.
+    pub fn tag_bytes(&self) -> &[u8] {
+        &self.tag[..self.tag_len]
+    }
+
     pub fn text_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(&self.text[..self.text_len]) }
     }
@@ -144,6 +150,23 @@ impl DomNode {
             }
         }
         None
+    }
+
+    /// Set an attribute, replacing any existing value. Used by the
+    /// renderer's `type=id=val` shell-arg synthesis (STUMP #90) and
+    /// future event-driven mutations. Silently no-ops if attrs is full.
+    pub fn set_attr(&mut self, name: &str, value: &str) {
+        for i in 0..self.attr_count {
+            if self.attrs[i].name_str() == name {
+                self.attrs[i].set_value(value.as_bytes());
+                return;
+            }
+        }
+        if self.attr_count < MAX_ATTRS {
+            self.attrs[self.attr_count].set_name(name.as_bytes());
+            self.attrs[self.attr_count].set_value(value.as_bytes());
+            self.attr_count += 1;
+        }
     }
 
     pub fn has_children(&self) -> bool {
@@ -190,6 +213,12 @@ pub const MAX_CSS: usize = 4096;
 /// Maximum JS source captured from <script> blocks
 pub const MAX_JS: usize = 8192;
 
+/// Max external `<link rel=stylesheet>` URLs we'll chase per document.
+/// Each fits in MAX_LINK_URL bytes — anything bigger is dropped on the
+/// floor (real-world stylesheet URLs are well under 256 chars).
+pub const MAX_LINKS: usize = 4;
+pub const MAX_LINK_URL: usize = 256;
+
 /// The DOM tree — flat arena of nodes
 pub struct Document {
     pub nodes: [DomNode; MAX_NODES],
@@ -200,6 +229,12 @@ pub struct Document {
     /// Extracted JS source from <script> blocks (concatenated, separated by ;)
     pub js_text: [u8; MAX_JS],
     pub js_len: usize,
+    /// Captured `<link rel=stylesheet href=...>` URLs. cmd_render iterates
+    /// these AFTER parse, fetches each over HTTP, and appends the bodies
+    /// onto `css_text` so the existing sheet matcher picks them up.
+    pub link_urls: [[u8; MAX_LINK_URL]; MAX_LINKS],
+    pub link_lens: [u16; MAX_LINKS],
+    pub link_count: usize,
 }
 
 impl Document {
@@ -211,6 +246,9 @@ impl Document {
             css_len: 0,
             js_text: [0; MAX_JS],
             js_len: 0,
+            link_urls: [[0u8; MAX_LINK_URL]; MAX_LINKS],
+            link_lens: [0; MAX_LINKS],
+            link_count: 0,
         }
     }
 
@@ -219,6 +257,8 @@ impl Document {
         self.node_count = 0;
         self.css_len = 0;
         self.js_len = 0;
+        self.link_count = 0;
+        for i in 0..MAX_LINKS { self.link_lens[i] = 0; }
         let root = self.alloc_node();
         if let Some(idx) = root {
             self.nodes[idx].node_type = NodeType::Document;

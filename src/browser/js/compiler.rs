@@ -118,6 +118,13 @@ pub struct Compiler<'a> {
     enclosing_depth: usize,
     // Whether current function is an arrow function (inherits this)
     is_arrow: bool,
+    /// 🎯 STUMP #86: hard cap on total compile_node calls. A
+    /// malformed AST (cyclic .next, infinite recursion via wrong
+    /// .left, etc.) would otherwise hang the kernel. Bumping past
+    /// this returns early without emitting bytecode for the
+    /// over-run nodes — the script then runs as best-effort.
+    visits: u32,
+    visits_capped: bool,
 }
 
 impl<'a> Compiler<'a> {
@@ -142,6 +149,8 @@ impl<'a> Compiler<'a> {
             enclosing: [const { None }; MAX_NESTING],
             enclosing_depth: 0,
             is_arrow: false,
+            visits: 0,
+            visits_capped: false,
         }
     }
 
@@ -288,6 +297,11 @@ impl<'a> Compiler<'a> {
 
     fn compile_node(&mut self, ast: &Ast, idx: usize) {
         if idx >= ast.count || idx as u16 == NULL { return; }
+        if self.visits >= 100_000 {
+            self.visits_capped = true;
+            return;
+        }
+        self.visits += 1;
         let node = ast.nodes[idx];
 
         match node.kind {

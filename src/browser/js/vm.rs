@@ -154,7 +154,6 @@ impl Vm {
 
     /// Compile and execute a JavaScript source string.
     pub fn execute(&mut self, source: &[u8]) -> Result<JsValue, JsError> {
-        // Step 1: Lex + Parse → AST
         let mut ast = super::ast::Ast::new();
         let mut tokens = [super::lexer::Token::empty(); super::lexer::MAX_TOKENS];
         let token_count = super::lexer::tokenize(source, &mut tokens);
@@ -1180,11 +1179,11 @@ fn native_console_log(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsV
         pos += val.write_to(&mut buf[pos..], &vm.strings);
     }
     if pos < 255 { buf[pos] = b'\n'; pos += 1; }
-    // Output to UART for serial console
-    crate::drivers::uart::puts("[js] ");
-    for i in 0..pos {
-        crate::drivers::uart::putc(buf[i]);
-    }
+    // Console output goes to vm.console_buf only — the shell drains it
+    // into the serial log inside the `=== JS console ===` block. We used
+    // to also uart-mirror with a `[js] ` prefix during the bring-up of
+    // STUMP #86, but that doubled the output and leaked into the
+    // pre-console "render:" trace. Single source of truth = console_buf.
     vm.console_write(&buf[..pos]);
     Ok(JsValue::UNDEFINED)
 }

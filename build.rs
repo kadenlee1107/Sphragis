@@ -19,6 +19,16 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BAT_OS_ALLOW_UNSIGNED_INITRD");
     println!("cargo:rerun-if-env-changed=BAT_OS_DISABLE_INIT_TRAMPOLINE");
 
+    // STUMP #87: cargo doesn't natively re-link when linker.ld changes
+    // because the script is consumed by rustc via -Tlinker.ld in
+    // .cargo/config.toml — Cargo treats it as opaque. Hint here so a
+    // stack-size or section-layout change actually lands in the binary
+    // instead of being silently cached. Symptom that bit us: bumped
+    // kernel stack 512KB → 8MB to chase a JS compile_script hang, the
+    // build was suspiciously fast (0.13s), and the hang persisted
+    // because the new stack never made it into bat_os.bin.
+    println!("cargo:rerun-if-changed=linker.ld");
+
     // Blink library available as standalone test binary.
     // Deep kernel integration will be done via shared memory IPC.
 }

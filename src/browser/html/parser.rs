@@ -176,7 +176,21 @@ pub fn parse(html: &[u8], doc: &mut Document) {
             // extract <style> content. Pre-fix the parser dropped
             // script content entirely; STUMP #84 wires it through
             // so the JS engine can run after parse.
-            let tag_str = doc.get(elem_idx).tag_str();
+            //
+            // STUMP #88: copy tag bytes into a tiny stack buffer instead
+            // of borrowing through `doc.get(...)`. The `<link>` capture
+            // below mutates `doc.link_urls`, which collides with the
+            // immutable borrow tag_str would otherwise hold across all
+            // the `if tag_str == "..."` checks in this block.
+            let mut tag_buf = [0u8; 16];
+            let tag_buf_len = {
+                let n = doc.get(elem_idx);
+                let bytes = n.tag_bytes();
+                let l = bytes.len().min(tag_buf.len());
+                tag_buf[..l].copy_from_slice(&bytes[..l]);
+                l
+            };
+            let tag_str = unsafe { core::str::from_utf8_unchecked(&tag_buf[..tag_buf_len]) };
             if tag_str == "script" {
                 let js_start = i;
                 let close = b"</script>" as &[u8];
@@ -204,6 +218,45 @@ pub fn parse(html: &[u8], doc: &mut Document) {
                 i += close.len();
                 continue;
             }
+            // STUMP #88: capture `<link rel="stylesheet" href="...">`
+            // hrefs into Document.link_urls so cmd_render can fetch
+            // them over HTTP before layout. Only stylesheet rel matches —
+            // <link rel=icon> etc. fall through to the regular skip path.
+            if tag_str == "link" {
+                // Snapshot rel + href into stack-local buffers BEFORE
+                // mutating doc.link_urls — same borrow-checker dance as
+                // tag_buf above.
+                let mut is_stylesheet = false;
+                let mut href_buf = [0u8; super::super::dom::MAX_LINK_URL];
+                let mut href_len = 0usize;
+                {
+                    let n = doc.get(elem_idx);
+                    for a in 0..n.attr_count {
+                        let aname = n.attrs[a].name_str();
+                        let aval  = n.attrs[a].value_str();
+                        if aname == "rel" && aval == "stylesheet" {
+                            is_stylesheet = true;
+                        }
+                        if aname == "href" {
+                            let l = aval.len().min(href_buf.len());
+                            href_buf[..l].copy_from_slice(&aval.as_bytes()[..l]);
+                            href_len = l;
+                        }
+                    }
+                }
+                if is_stylesheet && href_len > 0
+                    && doc.link_count < super::super::dom::MAX_LINKS
+                {
+                    let slot = doc.link_count;
+                    doc.link_urls[slot][..href_len]
+                        .copy_from_slice(&href_buf[..href_len]);
+                    doc.link_lens[slot] = href_len as u16;
+                    doc.link_count += 1;
+                }
+                // <link> is void; nothing to push, fall through to the
+                // void-element handling below.
+            }
+
             if tag_str == "style" {
                 // Extract CSS text into document's css_text buffer
                 let css_start = i;
