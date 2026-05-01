@@ -337,6 +337,14 @@ pub struct ComputedStyle {
     pub justify_content: u8,  // 0=start 1=end 2=center 3=between 4=around 5=evenly
     pub align_items: u8,      // 0=stretch 1=start 2=end 3=center
     pub gap: i32,
+    // 🎯 STUMP #82: minimal box-shadow. Single-color soft drop shadow
+    // applied as ~3 stacked rectangles offset by `(box_shadow_x,
+    // box_shadow_y)` with `box_shadow_blur`-pixel feather. Setting
+    // box_shadow_color to TRANSPARENT (default) skips the paint.
+    pub box_shadow_x: i32,
+    pub box_shadow_y: i32,
+    pub box_shadow_blur: i32,
+    pub box_shadow_color: Color,
 }
 
 impl ComputedStyle {
@@ -365,6 +373,10 @@ impl ComputedStyle {
             justify_content: 0,
             align_items: 0,
             gap: 0,
+            box_shadow_x: 0,
+            box_shadow_y: 0,
+            box_shadow_blur: 0,
+            box_shadow_color: Color::TRANSPARENT,
             line_height: 0,
             overflow: Overflow::Visible,
             visibility: Visibility::Visible,
@@ -414,13 +426,25 @@ impl ComputedStyle {
                 s.margin_top = 4;
                 s.margin_bottom = 4;
             }
-            "header" | "footer" => {
-                // Typically hidden by reader mode
+            "header" => {
+                // 🎯 STUMP #80: distinguish <header> visually from
+                // a generic block. Subtle bottom border to separate
+                // navigation/branding area from page content.
                 s.display = Display::Block;
-                s.margin_top = 4;
-                s.margin_bottom = 4;
-                s.padding_top = 4;
-                s.padding_bottom = 4;
+                s.margin_top = 0;
+                s.margin_bottom = 12;
+                s.padding_top = 8;
+                s.padding_bottom = 8;
+                s.border_width = 0; // overridden below for bottom-only
+            }
+            "footer" => {
+                s.display = Display::Block;
+                s.margin_top = 16;
+                s.margin_bottom = 0;
+                s.padding_top = 8;
+                s.padding_bottom = 8;
+                s.color = Color::from_rgb(140, 140, 140);
+                s.font_size = 13;
             }
             "h1" => {
                 s.display = Display::Block;
@@ -553,6 +577,77 @@ impl ComputedStyle {
                 // Superscript/subscript — render inline, dimmer
                 s.display = Display::Inline;
                 s.color = Color::from_rgb(140, 140, 140);
+            }
+            // 🎯 STUMP #80: more HTML5 semantic + inline-emphasis tags.
+            "mark" => {
+                // Highlight — yellow background, dark text.
+                s.display = Display::Inline;
+                s.background_color = Color::from_rgb(255, 230, 0);
+                s.color = Color::from_rgb(20, 20, 20);
+                s.padding_left = 2; s.padding_right = 2;
+            }
+            "small" => {
+                s.display = Display::Inline;
+                s.font_size = 12;
+                s.color = Color::from_rgb(150, 150, 150);
+            }
+            "abbr" => {
+                s.display = Display::Inline;
+                s.text_decoration.underline = true;
+                s.color = Color::from_rgb(180, 180, 180);
+            }
+            "cite" => {
+                s.display = Display::Inline;
+                s.font_style = FontStyle::Italic;
+                s.color = Color::from_rgb(190, 190, 190);
+            }
+            "q" => {
+                // <q> is browser-defaulted to wrap content in quotes.
+                // We don't synthesize the quotes (would need ::before
+                // pseudo-elements); the user can include them inline.
+                s.display = Display::Inline;
+                s.color = Color::from_rgb(190, 190, 190);
+            }
+            "del" | "s" => {
+                s.display = Display::Inline;
+                s.text_decoration.line_through = true;
+                s.color = Color::from_rgb(160, 160, 160);
+            }
+            "ins" | "u" => {
+                s.display = Display::Inline;
+                s.text_decoration.underline = true;
+            }
+            "details" => {
+                s.display = Display::Block;
+                s.margin_top = 6;
+                s.margin_bottom = 6;
+                s.padding_left = 12;
+                s.background_color = Color::from_rgb(20, 22, 26);
+                s.border_width = 1;
+                s.border_color = Color::from_rgb(50, 50, 60);
+                s.border_radius = 4;
+                s.padding_top = 6;
+                s.padding_bottom = 6;
+            }
+            "summary" => {
+                // <summary> is a block child of <details> in our
+                // current rendering (no toggle interaction yet).
+                s.display = Display::Block;
+                s.font_weight = FontWeight::Bold;
+                s.color = Color::WHITE;
+                s.margin_bottom = 4;
+            }
+            "figure" => {
+                s.display = Display::Block;
+                s.margin_top = 8;
+                s.margin_bottom = 8;
+                s.padding_left = 16;
+            }
+            "figcaption" => {
+                s.display = Display::Block;
+                s.color = Color::from_rgb(150, 150, 150);
+                s.font_size = 13;
+                s.margin_top = 4;
             }
             "span" => {
                 s.display = Display::Inline;

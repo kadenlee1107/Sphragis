@@ -232,6 +232,32 @@ pub fn apply_property(prop: &str, val: &str, style: &mut ComputedStyle) {
         "gap" => {
             style.gap = Length::parse(val).to_px(0, 16);
         }
+        "box-shadow" => {
+            // Parse `<x> <y> <blur>? <color>`. Tokenize on whitespace,
+            // pull lengths until we hit the color token. CSS allows
+            // commas for multiple shadows; we honor only the first.
+            let head = val.split(',').next().unwrap_or(val).trim();
+            let mut nums: [i32; 3] = [0, 0, 0];
+            let mut n_nums = 0usize;
+            let mut color_str: &str = "rgba(0,0,0,0.5)";
+            for tok in head.split(' ') {
+                if tok.is_empty() { continue; }
+                if tok.starts_with('#')
+                    || tok.starts_with("rgb")
+                    || tok.starts_with("hsl")
+                    || tok.bytes().next().map(|b| b.is_ascii_alphabetic()).unwrap_or(false)
+                {
+                    color_str = tok;
+                } else if n_nums < 3 {
+                    nums[n_nums] = Length::parse(tok).to_px(0, 16);
+                    n_nums += 1;
+                }
+            }
+            style.box_shadow_x = nums[0];
+            style.box_shadow_y = nums[1];
+            style.box_shadow_blur = if n_nums >= 3 { nums[2] } else { 0 };
+            style.box_shadow_color = Color::parse(color_str);
+        }
         "row-gap" | "column-gap" => {
             // Treat as gap until we split row vs column.
             style.gap = Length::parse(val).to_px(0, 16);
@@ -241,7 +267,7 @@ pub fn apply_property(prop: &str, val: &str, style: &mut ComputedStyle) {
         // Transitions/animations — ignore for now
         "transition" | "animation" | "transform" | "cursor" | "user-select"
         | "outline" | "outline-width" | "outline-color" | "outline-style"
-        | "box-shadow" | "text-shadow" | "position" | "top" | "left"
+        | "text-shadow" | "position" | "top" | "left"
         | "right" | "bottom" | "z-index" | "float" | "clear" => {}
         _ => {} // unknown property — ignore
     }

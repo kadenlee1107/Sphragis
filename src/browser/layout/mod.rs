@@ -260,10 +260,9 @@ fn str_has(haystack: &str, needle: &str) -> bool {
 }
 
 /// Lay out children of a DOM node into a layout box
-/// 🎯 STUMP #75: reposition the direct children of a flex container
-/// along the main axis. Currently row-only (column-direction reuses
-/// the same code with width/height swapped at the call site, but
-/// vertical flex is rare in real pages so we skip it for now).
+/// 🎯 STUMP #75 + STUMP #81: reposition the direct children of a
+/// flex container along the main axis. Both row (default) and
+/// column directions supported.
 ///
 /// `start_idx..end_idx` = the slice of LayoutTree.boxes that were
 /// just allocated by this container's recursive layout_children call.
@@ -281,50 +280,81 @@ fn flex_reposition_children(
     justify: u8,
     gap: i32,
 ) {
-    let _ = direction; // row only for now
+    // 0 = row (default), 1 = column, 2 = row-reverse, 3 = column-reverse.
+    let is_column = direction == 1 || direction == 3;
+    let reverse = direction == 2 || direction == 3;
 
-    // Pass 1: collect direct-child indices + total natural width.
-    let mut total_w: i32 = 0;
+    // Pass 1: collect direct-child indices + total natural main size.
+    let mut total_main: i32 = 0;
     let mut count: i32 = 0;
     for i in start_idx..end_idx {
         if !tree.boxes[i].active { continue; }
         if tree.boxes[i].parent != container as u16 { continue; }
-        total_w += tree.boxes[i].width;
+        let main_size = if is_column { tree.boxes[i].height }
+                        else         { tree.boxes[i].width  };
+        total_main += main_size;
         count += 1;
     }
     if count == 0 { return; }
-    let total_with_gaps = total_w + gap * (count - 1).max(0);
+    let total_with_gaps = total_main + gap * (count - 1).max(0);
 
-    // Compute starting offset + per-item extra spacing per `justify`.
-    let free = (cont_w - total_with_gaps).max(0);
-    let (mut x, between, around_pad) = match justify {
-        1 /* end */    => (cont_x + free, 0, 0),
-        2 /* center */ => (cont_x + free / 2, 0, 0),
-        3 /* between */=> (cont_x, if count > 1 { free / (count - 1) } else { 0 }, 0),
-        4 /* around */ => {
-            let pad = free / (count * 2).max(1);
-            (cont_x + pad, pad * 2, pad)
+    // Container size along main axis. For row that's cont_w; for
+    // column we don't know cont_h up front (caller's content is
+    // unconstrained vertically), so column-flex with anything
+    // beyond `flex-start` doesn't have a meaningful "free space".
+    // Treat column as start-aligned regardless of `justify`.
+    let main_extent = if is_column { i32::MAX / 2 } else { cont_w };
+
+    let free = (main_extent - total_with_gaps).max(0);
+    let (mut main, between) = if is_column {
+        (0, 0)
+    } else {
+        match justify {
+            1 /* end */    => (free, 0),
+            2 /* center */ => (free / 2, 0),
+            3 /* between */=> (0, if count > 1 { free / (count - 1) } else { 0 }),
+            4 /* around */ => {
+                let pad = free / (count * 2).max(1);
+                (pad, pad * 2)
+            }
+            5 /* evenly */ => {
+                let pad = free / (count + 1).max(1);
+                (pad, pad)
+            }
+            _ /* start */  => (0, 0),
         }
-        5 /* evenly */ => {
-            let pad = free / (count + 1).max(1);
-            (cont_x + pad, pad, pad)
-        }
-        _ /* start */  => (cont_x, 0, 0),
     };
-    let _ = around_pad;
 
-    // Pass 2: place each child at (x, cont_y), preserve natural sizes.
-    for i in start_idx..end_idx {
-        if !tree.boxes[i].active { continue; }
-        if tree.boxes[i].parent != container as u16 { continue; }
-        let w = tree.boxes[i].width;
-        let dx = x - tree.boxes[i].x;
-        let dy = cont_y - tree.boxes[i].y;
+    // Pass 2: place each child at (x, y), preserve natural sizes.
+    // Iterate in reverse direction if requested.
+    let order_iter: alloc::vec::Vec<usize> = {
+        extern crate alloc;
+        let mut v: alloc::vec::Vec<usize> = alloc::vec::Vec::with_capacity(count as usize);
+        for i in start_idx..end_idx {
+            if !tree.boxes[i].active { continue; }
+            if tree.boxes[i].parent != container as u16 { continue; }
+            v.push(i);
+        }
+        if reverse { v.reverse(); }
+        v
+    };
+
+    for &i in &order_iter {
+        let main_size = if is_column { tree.boxes[i].height }
+                        else         { tree.boxes[i].width  };
+
+        let (target_x, target_y) = if is_column {
+            (cont_x, cont_y + main)
+        } else {
+            (cont_x + main, cont_y)
+        };
+
+        let dx = target_x - tree.boxes[i].x;
+        let dy = target_y - tree.boxes[i].y;
         // Translate this box and ALL its descendants in the just-laid
         // range so nested children move with their parent flex item.
         for j in i..end_idx {
             if !tree.boxes[j].active { continue; }
-            // descend: include j itself plus any box rooted under i
             if j == i || box_descendant_of(tree, j, i, end_idx) {
                 tree.boxes[j].x += dx;
                 tree.boxes[j].y += dy;
@@ -332,7 +362,7 @@ fn flex_reposition_children(
                 tree.boxes[j].content_y += dy;
             }
         }
-        x += w + gap + between;
+        main += main_size + gap + between;
     }
 }
 

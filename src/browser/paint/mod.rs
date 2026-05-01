@@ -100,6 +100,52 @@ pub fn paint(
         let bg_w = (bg_x2 - bg_x1).max(0) as u32;
         let bg_h = (bg_y2 - bg_y1).max(0) as u32;
 
+        // 🎯 STUMP #82: cheap box-shadow. Paint a stack of expanded
+        // rounded-rect "halos" before the background, each one larger
+        // and more transparent than the last, to fake a soft drop
+        // shadow. Real CSS would do a Gaussian blur of the alpha
+        // channel; this approximation looks right for typical UI
+        // shadows and costs only a few fill_rect calls.
+        if b.style.box_shadow_color != Color::TRANSPARENT
+            && b.width > 0 && b.height > 0
+        {
+            let sh_color_raw = b.style.box_shadow_color.raw();
+            let off_x = b.style.box_shadow_x;
+            let off_y = b.style.box_shadow_y;
+            let blur = b.style.box_shadow_blur.max(0).min(20);
+            // Paint shadow as L-shaped fills (right + bottom strips)
+            // so it never bleeds BEHIND the box on the left/top, which
+            // is where rounded corners would let it peek through. Two
+            // strips × 3 stacked sizes for a soft drop-shadow look.
+            // Right strip: extends from box's top-right corner down
+            // and to the right by (off_x + pad, off_y + h + pad).
+            // Bottom strip: extends from box's bottom-left across
+            // and down by (off_x + w + pad, off_y + pad).
+            for i in (0..=2).rev() {
+                let pad = (blur * (i + 1) as i32 / 3).max(0);
+                // Right strip
+                let r_x1 = (sx + b.width).max(clip_left);
+                let r_y1 = (sy + off_y - pad).max(clip_top);
+                let r_x2 = (sx + b.width + off_x + pad).min(clip_right);
+                let r_y2 = (sy + b.height + off_y + pad).min(clip_bottom);
+                let rw = (r_x2 - r_x1).max(0) as u32;
+                let rh = (r_y2 - r_y1).max(0) as u32;
+                if rw > 0 && rh > 0 {
+                    gpu::fill_rect(r_x1 as u32, r_y1 as u32, rw, rh, sh_color_raw);
+                }
+                // Bottom strip
+                let b_x1 = (sx + off_x - pad).max(clip_left);
+                let b_y1 = (sy + b.height).max(clip_top);
+                let b_x2 = (sx + b.width + off_x + pad).min(clip_right);
+                let b_y2 = (sy + b.height + off_y + pad).min(clip_bottom);
+                let bw = (b_x2 - b_x1).max(0) as u32;
+                let bh = (b_y2 - b_y1).max(0) as u32;
+                if bw > 0 && bh > 0 {
+                    gpu::fill_rect(b_x1 as u32, b_y1 as u32, bw, bh, sh_color_raw);
+                }
+            }
+        }
+
         // --- Background ---
         let radius = b.style.border_radius.max(0) as u32;
         if b.style.background_color != Color::TRANSPARENT && bg_w > 0 && bg_h > 0 {
