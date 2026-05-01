@@ -339,14 +339,41 @@ fn flex_reposition_children(
         v
     };
 
+    // 🎯 STUMP #83: align-items support. The cross-axis size for a
+    // flex-row container is the tallest child; we use that as the
+    // reference for `align-items: center | end`. Stretch (default,
+    // align == 0) and start (1) both put items at cross-axis 0.
+    let mut max_cross: i32 = 0;
+    for &i in &order_iter {
+        let cs = if is_column { tree.boxes[i].width } else { tree.boxes[i].height };
+        if cs > max_cross { max_cross = cs; }
+    }
+
     for &i in &order_iter {
         let main_size = if is_column { tree.boxes[i].height }
                         else         { tree.boxes[i].width  };
 
-        let (target_x, target_y) = if is_column {
-            (cont_x, cont_y + main)
+        // align-items computed against max_cross (best approximation
+        // when container has no explicit cross size).
+        let cross_size = if is_column {
+            tree.boxes[i].width
         } else {
-            (cont_x + main, cont_y)
+            tree.boxes[i].height
+        };
+        let align = tree.boxes[container].style.align_items;
+        let cross_offset = match align {
+            // 0 = stretch (treated as start at top/left for now —
+            //              real stretch would need to resize box).
+            // 1 = flex-start (top/left)
+            2 /* flex-end */ => max_cross - cross_size,
+            3 /* center */   => (max_cross - cross_size) / 2,
+            _                => 0,
+        };
+
+        let (target_x, target_y) = if is_column {
+            (cont_x + cross_offset, cont_y + main)
+        } else {
+            (cont_x + main, cont_y + cross_offset)
         };
 
         let dx = target_x - tree.boxes[i].x;
