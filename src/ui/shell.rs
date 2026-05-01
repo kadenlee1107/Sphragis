@@ -4067,18 +4067,6 @@ fn interactive_loop(
         // attribute and backspace removes the last character; either
         // mutation triggers a re-layout + repaint.
         while let Some(ch) = next_char() {
-            // Diagnostic: every key reaching the loop is logged so we
-            // can tell at a glance whether the issue is "keys not
-            // arriving" vs "keys arriving but not landing in the
-            // input". Remove once the wiring is confirmed.
-            crate::drivers::uart::puts("  [loop] key=");
-            crate::kernel::mm::print_num(ch as usize);
-            crate::drivers::uart::puts(" focus=");
-            match focus_dom {
-                Some(d) => { crate::kernel::mm::print_num(d); }
-                None    => { crate::drivers::uart::puts("none"); }
-            }
-            crate::drivers::uart::puts("\n");
             if ch == 27 { break 'main; } // ESC
 
             // Ctrl+WASD cursor move. Initialise on first use so the
@@ -4120,17 +4108,6 @@ fn interactive_loop(
                         let lx = last_cx;
                         let ly = last_cy;
                         if let Some(hit) = tree.hit_test(lx, ly) {
-                            let dom_idx = tree.boxes[hit].dom_node as usize;
-                            let tag = if dom_idx < doc.node_count {
-                                doc.nodes[dom_idx].tag_str()
-                            } else { "?" };
-                            crate::drivers::uart::puts("  [ctrl+E] cursor at (");
-                            crate::kernel::mm::print_num(lx as usize);
-                            crate::drivers::uart::puts(",");
-                            crate::kernel::mm::print_num(ly as usize);
-                            crate::drivers::uart::puts(") hit box ");
-                            crate::kernel::mm::print_num(hit);
-                            crate::drivers::uart::puts(" <"); crate::drivers::uart::puts(tag); crate::drivers::uart::puts(">\n");
                             let input_owner = tree.nearest_ancestor_with_attr(hit, doc, |n| {
                                 let t = n.tag_str();
                                 t == "input" || t == "textarea"
@@ -4138,9 +4115,6 @@ fn interactive_loop(
                             if let Some(box_idx) = input_owner {
                                 let fdom = tree.boxes[box_idx].dom_node as usize;
                                 focus_dom = Some(fdom);
-                                crate::drivers::uart::puts("  [ctrl+E] focus → DOM ");
-                                crate::kernel::mm::print_num(fdom);
-                                crate::drivers::uart::puts("\n");
                             } else {
                                 focus_dom = None;
                             }
@@ -4221,11 +4195,7 @@ fn interactive_loop(
                         t == "input" || t == "textarea"
                     });
                     if let Some(box_idx) = input_owner {
-                        let dom_idx = tree.boxes[box_idx].dom_node as usize;
-                        focus_dom = Some(dom_idx);
-                        crate::drivers::uart::puts("  [click] focus → DOM ");
-                        crate::kernel::mm::print_num(dom_idx);
-                        crate::drivers::uart::puts("\n");
+                        focus_dom = Some(tree.boxes[box_idx].dom_node as usize);
                     } else {
                         focus_dom = None;
                     }

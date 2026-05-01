@@ -198,7 +198,6 @@ fn apply_class_hints(class: &str, style: &mut ComputedStyle) {
 use super::css::sheet::Stylesheet;
 
 pub fn build(doc: &Document, tree: &mut LayoutTree, viewport_w: i32) {
-    crate::drivers::uart::puts("[layout] build() entered\n");
     tree.box_count = 0;
     tree.text_len = 0;
     tree.page_height = 0;
@@ -216,11 +215,6 @@ pub fn build(doc: &Document, tree: &mut LayoutTree, viewport_w: i32) {
     }
 
     let body = doc.body();
-    crate::drivers::uart::puts("[layout] body=");
-    crate::kernel::mm::print_num(body);
-    crate::drivers::uart::puts(" doc.nodes=");
-    crate::kernel::mm::print_num(doc.node_count);
-    crate::drivers::uart::puts("\n");
 
     // Create root layout box
     let root = match tree.alloc() {
