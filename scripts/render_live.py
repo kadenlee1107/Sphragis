@@ -127,11 +127,20 @@ def main() -> int:
     ]
 
     print(f"[render-live] launching QEMU ({display}). URL: {URL}")
-    print(f"[render-live] once the kernel shell prompts, type:")
+    print(f"[render-live]")
+    print(f"[render-live] At the bat-logo screen: type 'batman' Enter.")
+    print(f"[render-live] At the shell prompt:")
     print(f"[render-live]     render {URL} live=1")
-    print(f"[render-live] then move the mouse + click in the QEMU window;")
-    print(f"[render-live] press ESC to exit the interactive loop.")
-    print(f"[render-live] close the window or Ctrl-A X to quit QEMU.")
+    print(f"[render-live]")
+    print(f"[render-live] Interactive controls (works in EITHER window):")
+    print(f"[render-live]   Ctrl+W / A / S / D — move cursor up/left/down/right")
+    print(f"[render-live]   Ctrl+E             — click at cursor")
+    print(f"[render-live]   Ctrl+G             — recenter cursor")
+    print(f"[render-live]   typing             — into focused <input> after Ctrl+E")
+    print(f"[render-live]   ESC                — exit interactive loop")
+    print(f"[render-live]")
+    print(f"[render-live] (Mac cocoa drops mouse motion to virtio-tablet, hence")
+    print(f"[render-live]  the keyboard cursor.) Close window or Ctrl-A X to quit.")
 
     # Run interactively — user types `render <URL> live=1` themselves once
     # the kernel boots. Future iteration: pre-feed the command via a
