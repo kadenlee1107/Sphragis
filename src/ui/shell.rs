@@ -128,6 +128,9 @@ fn execute(cmd: &str) {
         "js-mode" => cmd_js_mode(parts[1]),
         "audit" => cmd_audit(parts[1]),
         "audit-flush" => cmd_audit_flush(),
+        "origin" => cmd_origin(parts[1]),
+        "origin-allow" => cmd_origin_allow(parts[1], parts[2]),
+        "origin-mode" => cmd_origin_mode(parts[1]),
         "browse" | "open" => {
             if !parts[1].is_empty() {
                 console::puts("  Opening in BatBrowser: ");
@@ -3222,6 +3225,9 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     static mut HTML_FETCH_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
     let bytes: &[u8] = if url.starts_with("http://") || url.starts_with("https://") {
         crate::drivers::uart::puts("  render: fetching "); uart::puts(url); uart::puts("\n");
+        // STUMP #104: lock the page's main origin so sub-resource
+        // fetches (link / img) get SOP-checked against it.
+        crate::security::origin::set_main_origin(url);
         let buf = unsafe { &mut *core::ptr::addr_of_mut!(HTML_FETCH_BUF) };
         match crate::net::fetch::fetch_url(url, buf) {
             Ok(n) => {
@@ -3386,6 +3392,14 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         crate::drivers::uart::puts("  render: fetching link "); uart::puts(url); uart::puts("\n");
         let avail = crate::browser::dom::MAX_CSS - doc.css_len;
         if avail == 0 { uart::puts("  render: css buffer full, skip\n"); break; }
+        // STUMP #104 — Sprint 2.2: SOP check on the stylesheet's origin
+        // vs the main page's origin. Cross-origin CSS is a known XSLeak
+        // vector — the renderer rejects unless the operator allowlisted.
+        if let Err(e) = crate::security::origin::check_subresource(url) {
+            uart::puts("  render: link "); uart::puts(url);
+            uart::puts(" blocked: "); uart::puts(e); uart::puts("\n");
+            continue;
+        }
         // Append directly into the tail of css_text.
         let dst_start = doc.css_len;
         let dst_end = doc.css_len + avail;
@@ -4571,6 +4585,64 @@ fn cmd_tls_mode(arg: &str) {
         Mode::Open     => "open",
     });
     console::puts("\n");
+}
+
+/// STUMP #104 — Sprint 2.2: print current main origin + allowlist.
+fn cmd_origin(_arg: &str) {
+    let main = crate::security::origin::current_main_origin();
+    if main.valid {
+        let mut buf = [0u8; 192];
+        let n = main.write_to(&mut buf);
+        console::puts("  current main origin: ");
+        console::puts(unsafe { core::str::from_utf8_unchecked(&buf[..n]) });
+        console::puts("\n");
+    } else {
+        console::puts("  current main origin: (none)\n");
+    }
+    console::puts("  SOP enforcement: ");
+    console::puts(if crate::security::origin::is_strict() { "strict\n" } else { "permissive\n" });
+    console::puts("  cross-origin allowlist:\n");
+    crate::security::origin::dump_allowlist();
+}
+
+/// STUMP #104: append a (main_host, other_host) pair to the SOP
+/// allowlist. Both args required. After this, the renderer will fetch
+/// sub-resources from `other_host` even when the main page is from
+/// `main_host`.
+fn cmd_origin_allow(main_host: &str, other_host: &str) {
+    if main_host.is_empty() || other_host.is_empty() {
+        console::puts("  usage: origin-allow <main-host> <other-host>\n");
+        return;
+    }
+    match crate::security::origin::allow(main_host, other_host) {
+        Ok(()) => {
+            console::puts("  origin-allow: ");
+            console::puts(main_host);
+            console::puts(" -> ");
+            console::puts(other_host);
+            console::puts(" (added)\n");
+        }
+        Err(e) => {
+            console::puts("  origin-allow: ");
+            console::puts(e);
+            console::puts("\n");
+        }
+    }
+}
+
+/// STUMP #104: flip SOP enforcement strict/permissive.
+fn cmd_origin_mode(arg: &str) {
+    if arg.is_empty() {
+        console::puts("  current SOP mode: ");
+        console::puts(if crate::security::origin::is_strict() { "strict" } else { "permissive" });
+        console::puts("\n  usage: origin-mode <strict|permissive>\n");
+        return;
+    }
+    match arg {
+        "strict" | "enforce" => { crate::security::origin::set_strict(true); console::puts("  SOP mode -> strict\n"); }
+        "permissive" | "warn" => { crate::security::origin::set_strict(false); console::puts("  SOP mode -> permissive (logs only)\n"); }
+        _ => { console::puts("  unknown SOP mode: "); console::puts(arg); console::puts("\n"); }
+    }
 }
 
 /// STUMP #103 — Sprint 2.3: dump recent audit-log entries.

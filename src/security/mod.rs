@@ -2,6 +2,7 @@ pub mod audit;
 pub mod auth;
 pub mod boot_screen;
 pub mod deadman;
+pub mod origin;
 pub mod otp;
 pub mod wipe;
 pub mod zeroize;
