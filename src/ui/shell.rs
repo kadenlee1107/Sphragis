@@ -4253,6 +4253,103 @@ fn handle_interactive_click(
         }
     };
 
+    // STUMP #100c: form submit. Mirrors the click_xy branch in
+    // cmd_render. If the click hit a submit element, walk up to the
+    // <form>, gather its inputs into a urlencoded body, POST to
+    // action, replace doc with response.
+    let submit_owner = tree.nearest_ancestor_with_attr(hit, doc, |n| {
+        let t = n.tag_str();
+        if t == "button" {
+            let bt = n.get_attr("type").unwrap_or("submit");
+            bt == "submit"
+        } else if t == "input" {
+            let it = n.get_attr("type").unwrap_or("text");
+            it == "submit" || it == "image"
+        } else { false }
+    });
+    if let Some(box_idx) = submit_owner {
+        let mut form_dom: Option<usize> = None;
+        let mut cur = tree.boxes[box_idx].dom_node as usize;
+        while cur < doc.node_count {
+            if doc.nodes[cur].tag_str() == "form" { form_dom = Some(cur); break; }
+            let p = doc.nodes[cur].parent;
+            if p == 0xFFFF { break; }
+            cur = p as usize;
+        }
+        if let Some(form_idx) = form_dom {
+            let mut action_buf = [0u8; 512];
+            let mut action_len = 0usize;
+            if let Some(a) = doc.nodes[form_idx].get_attr("action") {
+                let n = a.len().min(action_buf.len());
+                action_buf[..n].copy_from_slice(&a.as_bytes()[..n]);
+                action_len = n;
+            }
+            let action = unsafe {
+                core::str::from_utf8_unchecked(&action_buf[..action_len])
+            };
+            // Walk descendants gathering name=value pairs.
+            let mut body = [0u8; 4096];
+            let mut blen = 0usize;
+            for di in 0..doc.node_count {
+                let mut anc = di;
+                let mut in_form = false;
+                for _ in 0..32 {
+                    if anc == form_idx { in_form = true; break; }
+                    let p = doc.nodes[anc].parent;
+                    if p == 0xFFFF { break; }
+                    anc = p as usize;
+                }
+                if !in_form { continue; }
+                let n = &doc.nodes[di];
+                let tag = n.tag_str();
+                if tag != "input" && tag != "textarea" && tag != "select" { continue; }
+                if tag == "input" {
+                    let it = n.get_attr("type").unwrap_or("text");
+                    if it == "submit" || it == "image" || it == "button" { continue; }
+                }
+                let name = match n.get_attr("name") { Some(v) => v, None => continue };
+                let value = n.get_attr("value").unwrap_or("");
+                if blen > 0 && blen < body.len() { body[blen] = b'&'; blen += 1; }
+                blen += url_encode(name.as_bytes(), &mut body[blen..]);
+                if blen < body.len() { body[blen] = b'='; blen += 1; }
+                blen += url_encode(value.as_bytes(), &mut body[blen..]);
+            }
+            if action_len > 0
+                && (action.starts_with("http://") || action.starts_with("https://"))
+            {
+                crate::drivers::uart::puts("  [click] form submit → POST ");
+                crate::drivers::uart::puts(action);
+                crate::drivers::uart::puts(" body=");
+                crate::drivers::uart::puts(unsafe {
+                    core::str::from_utf8_unchecked(&body[..blen])
+                });
+                crate::drivers::uart::puts("\n");
+                static mut POST_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
+                let buf = unsafe { &mut *core::ptr::addr_of_mut!(POST_BUF) };
+                match crate::net::fetch::fetch_post_url(action, &body[..blen], buf) {
+                    Ok(n) => {
+                        doc.init();
+                        tree.box_count = 0;
+                        tree.text_len = 0;
+                        tree.page_height = 0;
+                        crate::browser::html::parser::parse(&buf[..n], doc);
+                        crate::browser::layout::build(doc, tree, viewport_w);
+                        repaint_to_render_fb(tree, src_fb, src_w, bg_word);
+                    }
+                    Err(e) => {
+                        crate::drivers::uart::puts("  [click] POST failed: ");
+                        crate::drivers::uart::puts(e);
+                        crate::drivers::uart::puts("\n");
+                    }
+                }
+                return;
+            } else if action_len > 0 {
+                crate::drivers::uart::puts("  [click] form action is relative — not supported in live mode yet\n");
+                return;
+            }
+        }
+    }
+
     // Link first — most common case in real pages.
     let link_owner = tree.nearest_ancestor_with_attr(hit, doc, |n| {
         n.tag_str() == "a" && n.get_attr("href").is_some()
