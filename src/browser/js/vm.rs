@@ -1123,6 +1123,15 @@ impl Vm {
         let console_name = self.strings.intern(b"console");
         self.set_global(console_name, JsValue::from_obj(console_obj));
 
+        // STUMP #106: synchronous fetch — exposed as both `fetch_sync`
+        // (the actual API name) and `fetch` (alias). Both return the
+        // response body as a string, "" on error.
+        let fetch_fn = self.make_native_function(native_fetch_sync);
+        let fetch_sync_name = self.strings.intern(b"fetch_sync");
+        self.set_global(fetch_sync_name, JsValue::from_obj(fetch_fn));
+        let fetch_name = self.strings.intern(b"fetch");
+        self.set_global(fetch_name, JsValue::from_obj(fetch_fn));
+
         // Math object
         let math_obj = self.heap.alloc_object();
         let pi_name = self.strings.intern(b"PI");
@@ -1266,6 +1275,38 @@ fn native_console_log(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsV
 
 fn native_console_warn(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsValue, JsError> {
     native_console_log(vm, args_start, argc)
+}
+
+/// STUMP #106 — Sprint 3.2: synchronous fetch from JS.
+/// Modern web `fetch()` is Promise-based and async; we don't have an
+/// event loop in the JS engine yet, so this is `fetch_sync(url)`.
+/// Returns the response body as a string. Returns "" on any error.
+/// Same SOP and TLS-mode rules apply as Rust-side fetch — JS
+/// can't bypass the renderer's security policy.
+fn native_fetch_sync(vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsValue, JsError> {
+    if argc == 0 { return Ok(JsValue::from_str(crate::browser::js::value::StringId::EMPTY)); }
+    let url_val = vm.stack[args_start];
+    if !url_val.is_string() {
+        return Ok(JsValue::from_str(crate::browser::js::value::StringId::EMPTY));
+    }
+    let url_bytes = vm.strings.get(url_val.as_str_id());
+    let mut url_buf = [0u8; 512];
+    let url_len = url_bytes.len().min(url_buf.len());
+    url_buf[..url_len].copy_from_slice(&url_bytes[..url_len]);
+    let url = unsafe { core::str::from_utf8_unchecked(&url_buf[..url_len]) };
+    // STUMP #106: Same-origin policy applies. Hostile JS can't use
+    // fetch() to exfiltrate to a different host.
+    if crate::security::origin::check_subresource(url).is_err() {
+        return Ok(JsValue::from_str(crate::browser::js::value::StringId::EMPTY));
+    }
+    static mut FETCH_BUF: [u8; 64 * 1024] = [0; 64 * 1024];
+    let buf = unsafe { &mut *core::ptr::addr_of_mut!(FETCH_BUF) };
+    let n = match crate::net::fetch::fetch_url(url, buf) {
+        Ok(n) => n,
+        Err(_) => return Ok(JsValue::from_str(crate::browser::js::value::StringId::EMPTY)),
+    };
+    let sid = vm.strings.intern(&buf[..n]);
+    Ok(JsValue::from_str(sid))
 }
 
 fn native_math_floor(_vm: &mut Vm, args_start: usize, argc: usize) -> Result<JsValue, JsError> {

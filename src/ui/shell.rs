@@ -3427,16 +3427,23 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         crate::drivers::uart::puts("  render: running ");
         crate::kernel::mm::print_num(doc.js_len);
         crate::drivers::uart::puts(" bytes of JS\n");
-        // STUMP #103: JS execution is auditable.
+        // STUMP #103: JS execution is auditable. Build a small
+        // "exec js NNNB" message into amsg without slice-len math
+        // (the original "amsg[p..p+9].copy_from_slice(b\"exec js \")"
+        // sliced 9 bytes from an 8-byte literal, panicking on the
+        // first JS run after Sprint 2.3 — silently hung the kernel).
         let mut amsg = [0u8; 64];
         let mut p = 0;
-        amsg[p..p+9].copy_from_slice(b"exec js "); p += 8;
-        let mut v = doc.js_len; let mut tmp = [0u8; 8]; let mut i = 0;
+        for &b in b"exec js " {
+            if p < amsg.len() { amsg[p] = b; p += 1; }
+        }
+        let mut v = doc.js_len; let mut tmp = [0u8; 16]; let mut i = 0;
         while v > 0 && i < tmp.len() { tmp[i] = b'0' + (v % 10) as u8; v /= 10; i += 1; }
-        if i == 0 { amsg[p] = b'0'; p += 1; }
-        for j in 0..i { amsg[p + j] = tmp[i - 1 - j]; }
-        p += i;
-        amsg[p] = b'B'; p += 1;
+        if i == 0 { if p < amsg.len() { amsg[p] = b'0'; p += 1; } }
+        for j in 0..i {
+            if p < amsg.len() { amsg[p] = tmp[i - 1 - j]; p += 1; }
+        }
+        if p < amsg.len() { amsg[p] = b'B'; p += 1; }
         crate::security::audit::record(crate::security::audit::Category::Script, &amsg[..p]);
         static mut JS_VM: crate::browser::js::vm::Vm =
             crate::browser::js::vm::Vm::new();
