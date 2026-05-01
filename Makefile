@@ -32,7 +32,7 @@ CONTENT_SHELL := ports/chromium_port/out/content_shell
 LIB_RUNTIME   := ports/chromium_port/out/lib_runtime
 
 # ─── Phony targets ──────────────────────────────────────────────────────
-.PHONY: help build initrd render dom smoke clean watch info
+.PHONY: help build initrd render render-live dom smoke clean watch info
 
 # Default: print the menu.
 help:
@@ -70,6 +70,16 @@ URL ?= file:///bin/hello.html
 
 render: build initrd
 	@python3 scripts/render_to_png.py "$(URL)"
+
+# Sprint 1.4: live render path. Boots QEMU with virtio-gpu attached and
+# the host's native display so the rendered page appears in a window
+# instead of only as a base64 PNG dump. Pass `URL=...` the same way as
+# `make render`. Rendering is single-page (first 1900 px); scrolling
+# is the next milestone. Closes the window with Cmd-Q (Cocoa) /
+# Ctrl-Alt-Q (GTK) — kernel keeps running but you've gone back to
+# headless.
+render-live: build initrd
+	@python3 scripts/render_live.py "$(URL)"
 
 dom: build initrd
 	@python3 scripts/dump_dom.py "$(URL)"

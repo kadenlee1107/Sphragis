@@ -11,6 +11,42 @@ end of a session.
 
 ---
 
+## 2026-04-30 21:30 — Mac — 🎯 Sprint 1 (Tier A): screenshot tool → real browser. Hit-test, link nav, form POST, live virtio-gpu output.
+
+After the user asked "what stops this from being a real browser", scoped a Sprint 1 ("Tier A — make it interactive") with four deliverables. All four landed under **STUMP #97**.
+
+**Sprint 1.1 — coordinate hit-testing.** Two new APIs in `src/browser/layout/mod.rs`:
+- `LayoutTree::hit_test(qx, qy) → Option<usize>` — deepest active box containing (qx,qy) by min-area.
+- `LayoutTree::nearest_ancestor_with_attr(box_idx, doc, predicate)` — walks up the parent chain so a click on a `<span>` inside an `<a>` finds the `<a>`.
+
+`cmd_render` learned a `click_xy=<x>,<y>` shell arg that hit-tests the post-layout tree, walks up to find an ancestor with `onclick`, queues that JS, re-runs the engine + re-lays out, and paints the post-click DOM. Multiple click_xy in one command apply in order.
+
+Verified end-to-end on `click_test.html`: click at (640, 240) → hits the `<button>` → fires its onclick → `setAttribute('value', 'clicked!')` → input renders "clicked!".
+
+**Sprint 1.2 — link-click navigation.** Same `click_xy` machinery, different ancestor predicate: when the click hits inside an `<a href>`, the renderer fetches the href, clears the document + tree + layout state, re-parses, re-lays-out, and paints in place. Verified: `render file:///bin/nav_test.html click_xy=150,220` → fetches http://example.com/, renders the post-nav page. Only absolute http(s):// hrefs followed; relative-URL resolution is on the navigation milestone.
+
+**Sprint 1.3 — form POST submission.** `click_xy` on a submit element (`<input type=submit>`, `<input type=image>`, default-typed `<button>`) climbs the DOM to the enclosing `<form>`, walks every descendant `<input>/<textarea>/<select>` with a `name=`, builds a urlencoded body (skipping submit inputs), POSTs to the form's `action` URL with `Content-Type: application/x-www-form-urlencoded`, and replaces the document with the response.
+
+New helpers in `src/net/fetch.rs`:
+- `fetch_post_url(url, body, out)` — scheme-dispatched POST.
+- `fetch_post_http` / `fetch_post_https` — same plumbing as the existing GET fetchers.
+
+New helper in `src/ui/shell.rs`: `url_encode(input, out)`.
+
+Verified: `tools/echo_server.py` (Python) listens on :8765 with a form whose action is `http://10.0.2.2:8765/post`. Run with `type=name=Kaden type=email=kaden@bat.os click_xy=240,140`. Renderer submits, server echoes back the body, screenshot shows "POST received" with `name=Kaden&email=kaden%40bat.os&note=`.
+
+**Sprint 1.4 — live virtio-gpu output.** Added a `live=1` arg to `cmd_render`. When set, after the normal render passes the renderer blits the rendered framebuffer onto the real virtio-gpu FB and calls `gpu::flush`. With `-display cocoa/gtk` and `-device virtio-gpu-device` the user actually sees the page in the QEMU window instead of just a base64 PNG dump on serial.
+
+New: `scripts/render_live.py` + `make render-live URL=...` — boots QEMU with the right flags. The user types `render <URL> live=1` in the kernel shell once they see the prompt; future iteration will pre-feed the command via the serial channel.
+
+**What Sprint 1 unlocks:** the renderer is no longer a screenshot generator — it's a browser that responds to clicks, follows links, submits forms, and (with `render-live`) puts pixels on the real screen. The PNG dump path stays intact for regression testing and screenshot-driven debugging.
+
+**Up next (per the strategic plan):** Sprint 2 is the Bat_OS-specific security model — per-origin BatCaves, TLS allowlist mode (we already promoted the strict-mode flag to runtime AtomicBool in #94), audit log to BatFS, no-JS toggle. That's what makes "Kaden's secure OS has its own native browser" meaningful vs. "Bat_OS happens to ship Chromium-class polish."
+
+15 stumps shipped today (#86–#97).
+
+---
+
 ## 2026-04-30 21:00 — Mac — 🎯 Wikipedia HTTPS rendered, long-paragraph text splitting works, full Moby-Dick excerpt now visible.
 
 Continuation of the HTTPS / wrap / MAX_TEXT push from earlier. The remaining "still broken" entries from the earlier scoreboard get triaged:

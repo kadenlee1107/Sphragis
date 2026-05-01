@@ -3470,9 +3470,15 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     // for development; the live event loop (Sprint 1.4) will batch
     // events and run the engine once per frame.
     // Debug: `dump_layout=1` arg prints box coords for hit-test debugging.
+    // Sprint 1.4: `live=1` blits the rendered framebuffer onto the real
+    // virtio-gpu FB and flushes, so a user looking at the QEMU window
+    // sees the page (rather than only the base64 PNG dump). Pairs well
+    // with `-display cocoa`/`-display gtk` instead of `-display none`.
     let mut dump_layout = false;
+    let mut live_mode = false;
     for pi in 2..MAX_PARTS {
         if parts[pi] == "dump_layout=1" { dump_layout = true; }
+        if parts[pi] == "live=1" { live_mode = true; }
     }
     if dump_layout {
         for i in 0..tree.box_count.min(30) {
@@ -3869,6 +3875,51 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     crate::drivers::virtio::gpu::SOFT_W.store(0, O2::Release);
     crate::drivers::virtio::gpu::SOFT_H.store(0, O2::Release);
 
+    // Sprint 1.4: live mode. Blit the FIRST page of the render onto
+    // the real virtio-gpu framebuffer and flush so the user looking at
+    // the QEMU display window actually sees the page rendered. Without
+    // this the only sink is the base64-over-UART dump. Multi-page
+    // content shows just the first page in live mode (real scrolling
+    // is the next milestone). No-op when virtio-gpu wasn't brought up
+    // (`-display none` test runs).
+    if live_mode {
+        let real_w = crate::drivers::virtio::gpu::width();
+        let real_h = crate::drivers::virtio::gpu::height();
+        let real_fb = crate::drivers::virtio::gpu::framebuffer();
+        if !real_fb.is_null() && real_w > 0 && real_h > 0 {
+            // Background fill so areas outside the page are uniform.
+            crate::drivers::virtio::gpu::fill_screen(bg_word);
+            // Center the rendered page horizontally on the GPU FB.
+            let copy_w = rw.min(real_w);
+            let copy_h = MAX_H.min(real_h).min(total_h);
+            let x_off = ((real_w - copy_w) / 2) as usize;
+            let y_off = 0usize;
+            // Source is RENDER_FB laid out at rw stride, MAX_H tall.
+            for row in 0..copy_h as usize {
+                let src_row_start = row * rw as usize;
+                let dst_row_start = (y_off + row) * real_w as usize + x_off;
+                for col in 0..copy_w as usize {
+                    let pixel = unsafe {
+                        core::ptr::read_volatile(fb_ptr.add(src_row_start + col))
+                    };
+                    unsafe {
+                        core::ptr::write_volatile(
+                            real_fb.add(dst_row_start + col),
+                            pixel,
+                        );
+                    }
+                }
+            }
+            crate::drivers::virtio::gpu::flush(0, 0, real_w, real_h);
+            uart::puts("  render: live blit ");
+            crate::kernel::mm::print_num(copy_w as usize);
+            uart::puts("x");
+            crate::kernel::mm::print_num(copy_h as usize);
+            uart::puts(" → virtio-gpu\n");
+        } else {
+            uart::puts("  render: live=1 set but no virtio-gpu (use -display gtk/cocoa)\n");
+        }
+    }
 }
 
 /// STUMP #97: write `application/x-www-form-urlencoded` octets into
