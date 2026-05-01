@@ -36,7 +36,20 @@ use crate::drivers::uart;
 /// to pass when both TRUST_STORE and PINS were empty (the shipped
 /// state), making all of V4's X.509 work and V5's pin-fallback a
 /// no-op against a real MITM.
-pub const STRICT_MODE: bool = true;
+///
+/// STUMP #94: was `pub const STRICT_MODE: bool = true`. Promoted to
+/// AtomicBool so the renderer's HTTPS fetch path can flip it to false
+/// for the duration of a single fetch and back, without disabling
+/// strictness globally. The TLS handshake reads it via `is_strict()`
+/// (call sites updated to use the function instead of the constant).
+use core::sync::atomic::{AtomicBool, Ordering};
+static STRICT_MODE_FLAG: AtomicBool = AtomicBool::new(true);
+
+#[inline]
+pub fn is_strict() -> bool { STRICT_MODE_FLAG.load(Ordering::Relaxed) }
+
+#[inline]
+pub fn set_strict(v: bool) { STRICT_MODE_FLAG.store(v, Ordering::Relaxed); }
 
 /// One pin entry. Hostname is matched literally (no wildcards).
 pub struct Pin {

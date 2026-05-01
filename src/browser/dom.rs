@@ -15,7 +15,13 @@ pub const MAX_NAME: usize = 32;
 /// Maximum attribute value length
 pub const MAX_VALUE: usize = 128;
 /// Maximum text content length per text node
-pub const MAX_TEXT: usize = 256;
+/// STUMP #95: bumped 256 → 1024 so real paragraphs (httpbin's
+/// Moby-Dick excerpt is ~700 chars; news-article body paragraphs
+/// commonly run 500-1000 chars) fit in a single text node instead
+/// of clipping mid-sentence. Per-DomNode growth is ~768 bytes; with
+/// MAX_NODES = 2048 that's +1.5 MB BSS — easy headroom inside the
+/// kernel image.
+pub const MAX_TEXT: usize = 1024;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum NodeType {

@@ -63,7 +63,7 @@ pub struct LayoutTree {
     pub boxes: [LayoutBox; MAX_BOXES],
     pub box_count: usize,
     // Shared text buffer for all text nodes
-    pub text_buf: [u8; 16384],
+    pub text_buf: [u8; 65536],
     pub text_len: usize,
     // Total page height (for scrolling)
     pub page_height: i32,
@@ -74,7 +74,7 @@ impl LayoutTree {
         LayoutTree {
             boxes: [LayoutBox::empty(); MAX_BOXES],
             box_count: 0,
-            text_buf: [0; 16384],
+            text_buf: [0; 65536],
             text_len: 0,
             page_height: 0,
         }
@@ -1049,7 +1049,7 @@ fn layout_children(
                     // else strips `file://` + leading `/` and looks the
                     // bytes up in the initrd archive.
                     if let Some(src) = node.get_attr("src") {
-                        if src.starts_with("http://") {
+                        if src.starts_with("http://") || src.starts_with("https://") {
                             // Fetch into a static scratch buffer (one img
                             // at a time during layout — single-threaded).
                             const IMG_FETCH_MAX: usize = 256 * 1024;
@@ -1058,7 +1058,7 @@ fn layout_children(
                             let scratch = unsafe {
                                 &mut *core::ptr::addr_of_mut!(IMG_SCRATCH)
                             };
-                            match crate::net::fetch::fetch_http(src, scratch) {
+                            match crate::net::fetch::fetch_url(src, scratch) {
                                 Ok(n) => {
                                     let slot = crate::browser::media::img_pool::load(&scratch[..n]);
                                     if slot != 0xFFFF {

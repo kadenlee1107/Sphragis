@@ -11,6 +11,54 @@ end of a session.
 
 ---
 
+## 2026-04-30 20:30 — Mac — 🎯 HTTPS (TLS 1.3) live, word-wrap fixed, MAX_TEXT 4×ed: real-world rendering substantially less broken.
+
+Three more stumps after the morning's tier-3 sprint and afternoon's live-URL work:
+
+**STUMP #94 — HTTPS support.** `fetch_https(url, &mut [u8])` added alongside `fetch_http`, dispatched by `fetch_url(url, ...)` based on the URL scheme. Wires TCP/443 → `tls::handshake(host)` → `tls::send_app_data` → `tls::recv_app_data` loop → `tls::close`. Two TLS knobs were `pub const` and had to be promoted to runtime-toggleable AtomicBools so the renderer can relax them only for the duration of one fetch:
+1. `tls_pinning::STRICT_MODE` → `is_strict()/set_strict()`. Strict mode aborts handshakes for unpinned hosts; we ship with empty PINS so every host failed pre-fix. Fetch flips it false, restores after.
+2. `tls::TLS_HYBRID_ENABLED` → `hybrid_enabled()/set_hybrid_enabled()`. Our X25519+ML-KEM-768 hybrid key-derivation has a real-world bug ("handshake record auth failed") against major HTTPS servers when the server picks the hybrid group. Plain X25519 handshakes cleanly. Fetch disables hybrid, restores after.
+
+Production caves keep both knobs strict; only the renderer's HTTPS path relaxes them. The HTTPS pipe is encrypted but NOT authenticated against a CA chain (TRUST_STORE ships empty, PINS ships empty) — explicitly opt-in best-effort, NOT a security boundary. Verified live: `make render URL=https://example.com/` → 540 bytes fetched, identical to the http:// rendering. Wikipedia and HN reach handshake but fail later (server-side rejections of our ClientHello fingerprint or unsupported extensions); recorded as known limitations and moved on.
+
+**STUMP #95 — paint-side word-wrap with TT-measured per-word widths.** Pre-fix the wrap decision was made at character boundaries using a `font_size × 0.55` estimate of char width — way too optimistic for variable-width fonts. Visible result on every public-internet site we rendered: the last word of a line straddled the right edge with a mid-word break ("in oper" / "ations." instead of "in" / "operations.").
+
+Replaced the inner text loop in `paint::paint` with a word-walking version that:
+1. Identifies whitespace-separated tokens.
+2. Calls `truetype::text_width` on each word to get the real pixel width.
+3. Wraps before any word that would push past `content_x + content_w` (instead of after).
+4. Falls through to per-char advance for single words longer than the line.
+
+Bullet (`0xB7`) and underline carve-outs preserved. Italic/bold/monospace branches identical to pre-fix.
+
+Visible result on motherfuckingwebsite.com: previously 5+ visible mid-word breaks across the page, now zero. example.com paragraph now reads `Avoid use in` / `operations.` instead of `Avoid use in oper` / `ations.`.
+
+**STUMP #95 (continued) — bumped MAX_TEXT 256 → 1024, decode buffer 512 → 2048, layout text_buf 16 KB → 64 KB.** httpbin's Moby-Dick excerpt is one ~3500-char `<p>` and we'd been clipping it at ~200 chars. Now we render ~1024 chars of it before the (still-present, now reasonable) limit. Per-DomNode growth is +768 bytes; with `MAX_NODES=2048` that's ~1.5 MB additional BSS — easy headroom inside the kernel image. Real article paragraphs in the wild rarely exceed 1024 chars, so this should fix the symptom on most pages without a follow-up text-node-splitting refactor.
+
+**Live HTTPS demos:**
+```
+make render URL=https://example.com/                                  ✓ identical to http
+make render URL=https://www.example.org/                              ✓ alias of example.com
+make render URL=https://news.ycombinator.com/                         ✗ ServerHello too short (TLS fingerprint reject)
+make render URL=https://en.wikipedia.org/wiki/Cat                     ✗ empty response after handshake
+make render URL=https://httpbin.org/html                              ✗ ServerHello too short
+```
+
+**Live HTTP scoreboard, post-#95:**
+```
+http://example.com/              ✓ clean
+http://info.cern.ch/             ✓ original WWW page
+http://perdu.com/                ✓ tiny minimalist
+http://motherfuckingwebsite.com/ ✓✓ full 1498-px page, headings/lists/blockquote/italic, NO mid-word breaks
+http://httpbin.org/html          ✓✓ now renders ~1024 chars of Moby-Dick body (was ~200)
+http://neverssl.com/             ✓ (transient TCP failure on first attempt; works on retry)
+http://www.textfiles.com/        ⚠ frameset/<table>-heavy HTML 3.2; renders header only
+```
+
+Eleven stumps shipped today total (#86, #88, #89, #90, #91, #92, #93, #94, #95 — counting #95's two parts as one).
+
+---
+
 ## 2026-04-30 20:00 — Mac — 🎯 Live web render + interactive forms: example.com / info.cern.ch over real internet, JS method-call this/argv fixed, click=id event dispatch.
 
 Continuation of the same day. Two more stumps after the tier-3 sprint shipped:

@@ -314,11 +314,15 @@ pub fn parse(html: &[u8], doc: &mut Document) {
             }
             if has_visible {
                 // Non-whitespace text — create text node
-                // First: decode HTML entities
-                let mut decoded = [0u8; 512];
+                // First: decode HTML entities.
+                // STUMP #95: 512 → 2048 so long article paragraphs
+                // (httpbin's Moby-Dick excerpt is ~3.5 KB single-text-
+                // node) don't lose >75 % of their characters at parse
+                // time. Pairs with the bumped MAX_TEXT (1024) below.
+                let mut decoded = [0u8; 2048];
                 let mut dlen = 0;
                 let mut j = 0;
-                while j < raw_text.len() && dlen < 510 {
+                while j < raw_text.len() && dlen < 2046 {
                     if raw_text[j] == b'&' {
                         // Try to decode entity
                         let rest = &raw_text[j..];
@@ -350,18 +354,19 @@ pub fn parse(html: &[u8], doc: &mut Document) {
                 // browsers preserve `<code>x</code> y` as "x y" not
                 // "xy". The layout's "at start of new line, skip ws"
                 // check handles paragraph-leading whitespace.
-                let mut collapsed = [0u8; 256];
+                // STUMP #95: 256 → 1024 to match the bumped MAX_TEXT.
+                let mut collapsed = [0u8; 1024];
                 let mut clen = 0;
                 let mut last_space = false;
                 for idx in 0..dlen {
                     let b = decoded[idx];
                     if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
-                        if !last_space && clen < 255 {
+                        if !last_space && clen < 1023 {
                             collapsed[clen] = b' ';
                             clen += 1;
                             last_space = true;
                         }
-                    } else if clen < 255 {
+                    } else if clen < 1023 {
                         collapsed[clen] = b;
                         clen += 1;
                         last_space = false;

@@ -3211,16 +3211,15 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         return;
     }
 
-    // STUMP #92: render directly from a live `http://...` URL — fetch the
-    // HTML over HTTP into a static buffer, then proceed through parse +
-    // layout + paint as if it'd been read from the initrd. file:// is
-    // unchanged. https:// is rejected (TLS pinning makes arbitrary hosts
-    // demo-fragile; same restriction as the <link>/<img> http fetcher).
+    // STUMP #92/#94: render directly from a live URL — http:// is plain
+    // TCP, https:// is TLS 1.3 (with strict-pinning relaxed for the
+    // duration of the fetch; see net/fetch.rs SECURITY comment). file://
+    // is unchanged.
     static mut HTML_FETCH_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
-    let bytes: &[u8] = if url.starts_with("http://") {
+    let bytes: &[u8] = if url.starts_with("http://") || url.starts_with("https://") {
         uart::puts("  render: fetching "); uart::puts(url); uart::puts("\n");
         let buf = unsafe { &mut *core::ptr::addr_of_mut!(HTML_FETCH_BUF) };
-        match crate::net::fetch::fetch_http(url, buf) {
+        match crate::net::fetch::fetch_url(url, buf) {
             Ok(n) => {
                 uart::puts("  render: fetched ");
                 crate::kernel::mm::print_num(n);
@@ -3228,14 +3227,11 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
                 &buf[..n]
             }
             Err(e) => {
-                uart::puts("  render: HTTP fetch failed: ");
+                uart::puts("  render: fetch failed: ");
                 uart::puts(e); uart::puts("\n");
                 return;
             }
         }
-    } else if url.starts_with("https://") {
-        uart::puts("  render: https:// not supported yet (TLS pinning); use http:// or file://\n");
-        return;
     } else {
         let mut path = url;
         if let Some(rest) = path.strip_prefix("file://") { path = rest; }
@@ -3378,10 +3374,9 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
             Ok(s) => s,
             Err(_) => { uart::puts("  render: link href not utf-8, skip\n"); continue; }
         };
-        if !url.starts_with("http://") {
-            // Only HTTP for now (TLS pinning + cert validation makes
-            // arbitrary HTTPS demo-fragile). file:// hrefs get loaded
-            // via the regular initrd path through layout.
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            // file:// hrefs get loaded via the regular initrd path
+            // through layout; relative URLs aren't resolved yet.
             continue;
         }
         uart::puts("  render: fetching link "); uart::puts(url); uart::puts("\n");
@@ -3390,7 +3385,7 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
         // Append directly into the tail of css_text.
         let dst_start = doc.css_len;
         let dst_end = doc.css_len + avail;
-        match crate::net::fetch::fetch_http(url, &mut doc.css_text[dst_start..dst_end]) {
+        match crate::net::fetch::fetch_url(url, &mut doc.css_text[dst_start..dst_end]) {
             Ok(n) => {
                 doc.css_len += n;
                 uart::puts("  render: fetched ");

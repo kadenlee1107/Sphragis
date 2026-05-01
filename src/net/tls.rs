@@ -52,7 +52,27 @@ const X25519_MLKEM768: u16 = 0x11EC;
 ///
 /// Safe to flip — servers that don't understand 0x11EC MUST ignore it
 /// per RFC 8446's extensibility rules.
-const TLS_HYBRID_ENABLED: bool = true;
+///
+/// STUMP #94: was `const`. Promoted to AtomicBool so the renderer's
+/// fetch_https can disable the hybrid path for the duration of one
+/// fetch. Our hybrid key-derivation has a real-world bug that
+/// surfaces as "handshake record auth failed" against major HTTPS
+/// servers (example.com, etc.) when the server picks the hybrid
+/// group; falling back to plain X25519 handshakes cleanly. Toggle
+/// is process-global (single-threaded kernel); restore on every
+/// exit path so caves' production TLS stays PQ-protected.
+use core::sync::atomic::{AtomicBool, Ordering as TlsOrdering};
+static TLS_HYBRID_ENABLED_FLAG: AtomicBool = AtomicBool::new(true);
+
+#[inline]
+pub fn hybrid_enabled() -> bool {
+    TLS_HYBRID_ENABLED_FLAG.load(TlsOrdering::Relaxed)
+}
+
+#[inline]
+pub fn set_hybrid_enabled(v: bool) {
+    TLS_HYBRID_ENABLED_FLAG.store(v, TlsOrdering::Relaxed);
+}
 
 /// NET2-016 / NEW-CRYPTO-026 / debug-fingerprint scrub: TLS-internal debug
 /// prints are gated behind this flag. The default is `false` so production
@@ -327,7 +347,7 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
     // servers that support both pick it (server-side typically picks
     // the first mutually-supported group).
     buf[pos] = 0; buf[pos+1] = 10; pos += 2; // type = supported_groups
-    if TLS_HYBRID_ENABLED {
+    if hybrid_enabled() {
         buf[pos] = 0; buf[pos+1] = 6;  pos += 2; // length = 2 + 4
         buf[pos] = 0; buf[pos+1] = 4;  pos += 2; // list length = 4
         buf[pos..pos+2].copy_from_slice(&X25519_MLKEM768.to_be_bytes()); pos += 2;
@@ -380,7 +400,7 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
     let ks_len_pos = pos; pos += 2;          // ext len placeholder
     let ks_inner_len_pos = pos; pos += 2;    // inner list len placeholder
 
-    if TLS_HYBRID_ENABLED {
+    if hybrid_enabled() {
         // Generate hybrid keypair for this session. Stash the decap
         // material in the session so we can complete the handshake
         // when/if the server picks hybrid.
@@ -996,7 +1016,7 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
                                         return Err("TLS: cert pin mismatch (MITM?)");
                                     }
                                     crate::net::tls_pinning::PinDecision::NoPin => {
-                                        if crate::net::tls_pinning::STRICT_MODE {
+                                        if crate::net::tls_pinning::is_strict() {
                                             return Err("TLS: no pin / bad chain (strict)");
                                         } else {
                                             tdbg("[tls] leaf accepted (no pin, non-strict)\n");

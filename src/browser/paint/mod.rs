@@ -341,59 +341,121 @@ pub fn paint(
                 0
             };
 
-            // Compute how many chars fit per line
-            let max_chars_per_line = if content_w > 0 { (content_w / char_w).max(1) } else { 80 };
-
-            let mut tx = content_sx + centered_offset;
+            // STUMP #95: word-wrap with TT-measured per-word widths.
+            // Pre-fix the wrap decision was made at character boundaries
+            // using a font-size × 0.55 estimate of char width — too
+            // optimistic for variable-width fonts, so the last 1-2
+            // chars of a line would overflow into the right padding
+            // (visible across every public-internet site we rendered:
+            // "in oper" / "ations." instead of "in" / "operations."). Now
+            // we walk word-by-word, measure each word via TT, and wrap
+            // before any word that would push past content_x + content_w.
+            // Single words longer than the line still fall back to
+            // per-char advance so they at least try to fit.
+            let line_left = content_sx + centered_offset;
+            let line_right = content_sx + content_w; // hard right edge
+            let mut tx = line_left;
             let mut ty = content_sy;
-            let mut col = 0i32; // character column on current line
+            let italic = b.style.font_style == super::css::style::FontStyle::Italic;
+            let mono = b.style.font_family == super::css::style::FontFamily::Monospace;
+            let space_w = if mono {
+                (font_px as i32 * 6 / 10).max(7)
+            } else if truetype::is_available() {
+                truetype::text_width(b" ", font_px).max(char_w / 2)
+            } else {
+                char_w
+            };
 
-            for &ch in text {
-                // Wrap to next line if we've exceeded the line width
-                if col >= max_chars_per_line {
-                    col = 0;
-                    tx = content_sx;
+            let measure_word = |word: &[u8]| -> i32 {
+                if mono {
+                    (word.len() as i32) * (font_px as i32 * 6 / 10).max(7)
+                } else if truetype::is_available() {
+                    truetype::text_width(word, font_px)
+                } else {
+                    (word.len() as i32) * char_w
+                }
+            };
+
+            let mut i = 0usize;
+            while i < text.len() {
+                // Skip leading whitespace at start of every line.
+                if tx == line_left {
+                    while i < text.len()
+                        && (text[i] == b' ' || text[i] == b'\t' || text[i] == b'\n' || text[i] == b'\r')
+                    { i += 1; }
+                    if i >= text.len() { break; }
+                }
+                let ch = text[i];
+
+                // Inline whitespace — advance by space_w (treat \n as space too).
+                if ch == b' ' || ch == b'\t' || ch == b'\n' || ch == b'\r' {
+                    if tx + space_w > line_right {
+                        tx = line_left;
+                        ty += line_h;
+                    } else {
+                        tx += space_w;
+                    }
+                    i += 1;
+                    continue;
+                }
+
+                // Bullet character carve-out preserved from STUMP #70.
+                if ch == 0xB7 {
+                    let dot_x = tx + 2; let dot_y = ty + 7;
+                    if dot_x >= clip_left && dot_x < clip_right
+                        && dot_y >= clip_top && dot_y < clip_bottom
+                    {
+                        gpu::fill_rect(dot_x as u32, dot_y as u32, 4, 4, color);
+                    }
+                    tx += char_w; i += 1;
+                    continue;
+                }
+
+                // Skip remaining non-printable bytes (mostly UTF-8 continuation).
+                if ch < 0x20 || ch > 0x7E {
+                    i += 1;
+                    continue;
+                }
+
+                // Find this word's extent (printable run terminated by ws).
+                let mut j = i;
+                while j < text.len() {
+                    let c = text[j];
+                    if c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' { break; }
+                    if c < 0x20 || c > 0x7E { break; }
+                    j += 1;
+                }
+                let word = &text[i..j];
+                let word_w = measure_word(word);
+
+                // Wrap if this word won't fit on the current line and
+                // we've already drawn something on this line.
+                if tx + word_w > line_right && tx > line_left {
+                    tx = line_left;
                     ty += line_h;
                 }
 
-                // Skip rendering if this line is outside clip region
+                // Skip rendering when this entire line is off-screen,
+                // but still advance tx so subsequent wraps line up.
                 if ty + line_h < clip_top || ty > clip_bottom {
-                    col += 1;
-                    tx += char_w;
+                    tx += word_w;
+                    i = j;
                     continue;
                 }
 
-                if ch < 0x20 || ch > 0x7E {
-                    if ch == 0xB7 {
-                        // Bullet character -> draw as a small dot
-                        let dot_x = tx + 2;
-                        let dot_y = ty + 7;
-                        if dot_x >= clip_left && dot_x < clip_right
-                            && dot_y >= clip_top && dot_y < clip_bottom
-                        {
-                            gpu::fill_rect(dot_x as u32, dot_y as u32, 4, 4, color);
-                        }
-                        tx += char_w;
-                        col += 1;
-                    }
-                    continue;
-                }
-
-                if tx >= clip_left && tx < clip_right {
-                    if truetype::is_available() {
-                        // Anti-aliased TrueType rendering at actual CSS font size
-                        let ch_buf = [ch];
-                        let italic = b.style.font_style
-                            == super::css::style::FontStyle::Italic;
-                        let mono = b.style.font_family
-                            == super::css::style::FontFamily::Monospace;
-                        let advance = truetype::draw_text_fb_styled(
+                // Draw the word char-by-char (keeps the TT/bitmap branch
+                // identical to the pre-fix code path; only the wrap
+                // decision changed).
+                let mut k = i;
+                while k < j {
+                    let c = text[k];
+                    let ch_buf = [c];
+                    let advance = if truetype::is_available() {
+                        let a = truetype::draw_text_fb_styled(
                             fb, sw, tx, ty, &ch_buf, font_px, color,
                             clip_left, clip_right, clip_top, clip_bottom,
                             italic,
                         );
-
-                        // Bold: draw again offset by 1px
                         if is_bold {
                             truetype::draw_text_fb_styled(
                                 fb, sw, tx + 1, ty, &ch_buf, font_px, color,
@@ -401,40 +463,34 @@ pub fn paint(
                                 italic,
                             );
                         }
-
-                        // Underline
-                        if is_underline && ch != b' ' {
-                            gpu::fill_rect(tx as u32, (ty + font_px as i32 + 1) as u32,
-                                advance.max(6) as u32, 1, color);
+                        if is_underline && c != b' ' {
+                            gpu::fill_rect(
+                                tx as u32, (ty + font_px as i32 + 1) as u32,
+                                a.max(6) as u32, 1, color,
+                            );
                         }
-
-                        // 🎯 STUMP #79: monospace font-family overrides
-                        // the per-glyph advance so columns line up
-                        // (essential for code blocks). Use 60% of the
-                        // font size as the cell width — matches what
-                        // typical monospace fonts ship at.
-                        tx += if mono {
+                        if mono {
                             (font_px as i32 * 6 / 10).max(7)
-                        } else if advance > 0 {
-                            advance
+                        } else if a > 0 {
+                            a
                         } else {
                             char_w
-                        };
+                        }
                     } else {
-                        // Fallback: monospace bitmap font
-                        let ch_buf = [ch];
                         let s = unsafe { core::str::from_utf8_unchecked(&ch_buf) };
                         font::draw_str(fb, sw, tx as u32, ty as u32, s, color, 0xFF0A0A0A);
                         if is_bold || font_px >= 24 {
                             font::draw_str(fb, sw, (tx + 1) as u32, ty as u32, s, color, 0xFF0A0A0A);
                         }
-                        if is_underline && ch != b' ' {
+                        if is_underline && c != b' ' {
                             gpu::fill_rect(tx as u32, (ty + 14) as u32, 8, 1, color);
                         }
-                        tx += char_w;
-                    }
+                        char_w
+                    };
+                    tx += advance;
+                    k += 1;
                 }
-                col += 1;
+                i = j;
             }
         }
     }
