@@ -224,7 +224,23 @@ pub fn parse(html: &[u8], doc: &mut Document) {
             }
 
             let raw_text = &html[text_start..i];
-            if raw_text.iter().any(|&b| b != b' ' && b != b'\t' && b != b'\n' && b != b'\r') {
+            // 🎯 STUMP #77: pure-whitespace text between two inline
+            // tags must collapse to a SINGLE space (not nothing).
+            // Pre-fix: <span>A</span> <span>B</span> rendered as
+            // "AB" because the inter-tag whitespace was dropped
+            // entirely. Browsers render that as "A B" — match.
+            let has_visible = raw_text.iter().any(|&b|
+                b != b' ' && b != b'\t' && b != b'\n' && b != b'\r');
+            let ws_only = !raw_text.is_empty() && !has_visible;
+            if ws_only {
+                // Emit a single-space text node so the inline run
+                // doesn't snap two siblings together.
+                if let Some(text_idx) = doc.create_text(b" ") {
+                    let parent = stack[stack_depth - 1];
+                    doc.append_child(parent, text_idx);
+                }
+            }
+            if has_visible {
                 // Non-whitespace text — create text node
                 // First: decode HTML entities
                 let mut decoded = [0u8; 512];
@@ -257,10 +273,14 @@ pub fn parse(html: &[u8], doc: &mut Document) {
                     }
                 }
 
-                // Collapse whitespace
+                // Collapse whitespace. last_space starts FALSE so a
+                // leading whitespace IS emitted (as a single space) —
+                // browsers preserve `<code>x</code> y` as "x y" not
+                // "xy". The layout's "at start of new line, skip ws"
+                // check handles paragraph-leading whitespace.
                 let mut collapsed = [0u8; 256];
                 let mut clen = 0;
-                let mut last_space = true;
+                let mut last_space = false;
                 for idx in 0..dlen {
                     let b = decoded[idx];
                     if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
@@ -275,10 +295,14 @@ pub fn parse(html: &[u8], doc: &mut Document) {
                         last_space = false;
                     }
                 }
-                // Trim leading space
-                let start = if clen > 0 && collapsed[0] == b' ' { 1 } else { 0 };
-                if clen > start {
-                    if let Some(text_idx) = doc.create_text(&collapsed[start..clen]) {
+                // 🎯 STUMP #77: don't trim leading whitespace at the
+                // parser level — layout/paint handle "at start of
+                // paragraph" naturally via the inline_x == x_offset
+                // check, and the parse-time trim was eating real
+                // spaces between </inline> and the next text node
+                // (visible as <code>foo</code>bar with no space).
+                if clen > 0 {
+                    if let Some(text_idx) = doc.create_text(&collapsed[..clen]) {
                         let parent = stack[stack_depth - 1];
                         doc.append_child(parent, text_idx);
                     }

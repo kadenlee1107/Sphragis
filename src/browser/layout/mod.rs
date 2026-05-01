@@ -581,7 +581,13 @@ fn layout_children(
                 let text = &node.text[..node.text_len];
                 if text.is_empty() { continue; }
 
-                // Skip whitespace-only text nodes
+                // 🎯 STUMP #77: do NOT skip pure-whitespace text nodes
+                // any more — the parser now emits a single-space node
+                // for whitespace BETWEEN inline tags, and dropping it
+                // here makes <span>A</span> <span>B</span> render as
+                // "AB". Skip only if we're at the start of a new line
+                // (inline_x == x_offset), so leading whitespace at the
+                // start of a paragraph still gets eaten.
                 let mut all_ws = true;
                 for &b in text.iter() {
                     if b != b' ' && b != b'\t' && b != b'\n' && b != b'\r' {
@@ -589,7 +595,7 @@ fn layout_children(
                         break;
                     }
                 }
-                if all_ws { continue; }
+                if all_ws && inline_x == x_offset { continue; }
 
                 let mut parent_style = tree.boxes[parent_box].style;
 
@@ -1169,14 +1175,24 @@ fn layout_children(
                         avail_width - (inline_x - x_offset));
                     *cursor_y = saved_cursor_y;
 
-                    // Calculate width from text content
+                    // Calculate width from text content using
+                    // TT-measured advances (when available). Pre-fix
+                    // used `chars × char_w` which over-estimated for
+                    // narrow letters and under-estimated for wide,
+                    // leaving visible gaps after every <strong> /
+                    // <em> / <a>.
                     let mut child_text_w = 0i32;
                     let mut ci = doc.get(child_idx).first_child;
                     while ci != 0xFFFF {
                         let cn = doc.get(ci as usize);
                         if cn.node_type == NodeType::Text && cn.text_len > 0 {
-                            let cw = (fs * 6 / 10).max(5);
-                            child_text_w += cn.text_len as i32 * cw;
+                            let cn_text = &cn.text[..cn.text_len];
+                            child_text_w += if crate::ui::truetype::is_available() {
+                                crate::ui::truetype::text_width(cn_text, fs as u16)
+                            } else {
+                                let cw = (fs * 6 / 10).max(5);
+                                cn.text_len as i32 * cw
+                            };
                         }
                         ci = cn.next_sibling;
                     }
@@ -1193,8 +1209,14 @@ fn layout_children(
                     tree.boxes[ebox].content_w = child_text_w;
                     tree.boxes[ebox].content_h = elem_line_h;
 
-                    // Advance inline position for next sibling
-                    inline_x = start_x + child_text_w + style.padding_right + style.margin_right + 4;
+                    // Advance inline position for next sibling.
+                    // 🎯 STUMP #77: removed the unconditional `+ 4` —
+                    // it added a phantom gap after every inline tag,
+                    // visible as a space before each comma in
+                    // "bold word , italic word ," etc. CSS leaves
+                    // inline spacing entirely to the surrounding
+                    // text-node whitespace.
+                    inline_x = start_x + child_text_w + style.padding_right + style.margin_right;
 
                     // Wrap to next line if we exceed available width
                     if inline_x > x_offset + avail_width {
