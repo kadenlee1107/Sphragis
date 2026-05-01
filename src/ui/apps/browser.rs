@@ -538,10 +538,13 @@ pub fn navigate(url: &[u8]) {
 
             // Reader mode disabled — Level 1 text renderer handles content well
 
-            // Step 3: Execute inline <script> tags
-            // Wire up the DOM pointer so JS DOM APIs operate on the real tree
-            crate::browser::js::dom_api::set_document(&mut *core::ptr::addr_of_mut!(DOM_DOC));
-            execute_scripts(&*core::ptr::addr_of!(DOM_DOC));
+            // Step 3: Execute inline <script> tags — gated by the
+            // global js-mode toggle (Sprint 2.4 / STUMP #102). Off →
+            // skip the VM entirely and render as static HTML+CSS.
+            if crate::browser::js::is_enabled() {
+                crate::browser::js::dom_api::set_document(&mut *core::ptr::addr_of_mut!(DOM_DOC));
+                execute_scripts(&*core::ptr::addr_of!(DOM_DOC));
+            }
 
             // Step 4: Check if scripts mutated the DOM
             let dom_was_dirty = crate::browser::js::dom_api::take_dirty();

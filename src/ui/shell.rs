@@ -125,6 +125,7 @@ fn execute(cmd: &str) {
         "dump-dom" | "dom" => cmd_dump_dom(parts[1]),
         "render" => cmd_render(parts[1], &parts),
         "tls-mode" => cmd_tls_mode(parts[1]),
+        "js-mode" => cmd_js_mode(parts[1]),
         "browse" | "open" => {
             if !parts[1].is_empty() {
                 console::puts("  Opening in BatBrowser: ");
@@ -3405,7 +3406,7 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     // JS engine BEFORE layout, so DOM mutations are reflected in
     // the render. STUMP #86 capped the sibling walks in compile_node
     // so a malformed AST can't hang the compiler.
-    if doc.js_len > 0 {
+    if doc.js_len > 0 && crate::browser::js::is_enabled() {
         crate::drivers::uart::puts("  render: running ");
         crate::kernel::mm::print_num(doc.js_len);
         crate::drivers::uart::puts(" bytes of JS\n");
@@ -3772,7 +3773,7 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
 
     // If any click_xy fired, re-run JS and re-layout against the
     // mutated DOM so paint shows the post-click state.
-    if had_click_xy && doc.js_len > 0 {
+    if had_click_xy && doc.js_len > 0 && crate::browser::js::is_enabled() {
         static mut REPLAY_VM: crate::browser::js::vm::Vm =
             crate::browser::js::vm::Vm::new();
         let vm = unsafe { &mut *core::ptr::addr_of_mut!(REPLAY_VM) };
@@ -4436,13 +4437,19 @@ fn handle_interactive_click(
                 doc.js_text[doc.js_len + 1] = b'\n';
                 doc.js_len += 2;
             }
-            // Run the JS engine against the appended handler.
-            static mut LIVE_VM: crate::browser::js::vm::Vm =
-                crate::browser::js::vm::Vm::new();
-            let vm = unsafe { &mut *core::ptr::addr_of_mut!(LIVE_VM) };
-            crate::browser::js::dom_api::set_document(doc);
-            vm.init();
-            let _ = vm.execute(&doc.js_text[..doc.js_len]);
+            // Run the JS engine against the appended handler — but
+            // only if the global js-mode is on. Off → onclick is a
+            // no-op (security mode).
+            if crate::browser::js::is_enabled() {
+                static mut LIVE_VM: crate::browser::js::vm::Vm =
+                    crate::browser::js::vm::Vm::new();
+                let vm = unsafe { &mut *core::ptr::addr_of_mut!(LIVE_VM) };
+                crate::browser::js::dom_api::set_document(doc);
+                vm.init();
+                let _ = vm.execute(&doc.js_text[..doc.js_len]);
+            } else {
+                crate::drivers::uart::puts("  [click] onclick suppressed (js-mode off)\n");
+            }
             tree.box_count = 0;
             tree.text_len = 0;
             tree.page_height = 0;
@@ -4551,6 +4558,26 @@ fn cmd_tls_mode(arg: &str) {
         Mode::Open     => "open",
     });
     console::puts("\n");
+}
+
+/// STUMP #102 — Sprint 2.4: report or set the global JS execute toggle.
+fn cmd_js_mode(arg: &str) {
+    use crate::browser::js;
+    if arg.is_empty() {
+        console::puts("  current JS mode: ");
+        console::puts(if js::is_enabled() { "on" } else { "off" });
+        console::puts("\n  usage: js-mode <on|off>\n");
+        return;
+    }
+    match arg {
+        "on" | "enable" | "1" | "true"   => { js::set_enabled(true);  console::puts("  JS mode → on\n"); }
+        "off" | "disable" | "0" | "false" => { js::set_enabled(false); console::puts("  JS mode → off\n"); }
+        _ => {
+            console::puts("  unknown js mode: ");
+            console::puts(arg);
+            console::puts(" (try on / off)\n");
+        }
+    }
 }
 
 /// STUMP #97: write `application/x-www-form-urlencoded` octets into

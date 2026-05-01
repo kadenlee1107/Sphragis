@@ -2,6 +2,23 @@
 // Bytecode-compiled VM with NaN-boxed values, string interning,
 // arena-allocated objects, and native function bindings.
 
+// STUMP #102 — Sprint 2.4: global JS-execute toggle. The renderer
+// (and BatBrowser app) consult `is_enabled()` before invoking the VM.
+// Default ON for usability; flip OFF via the `js-mode off` shell
+// command for sensitive contexts where script execution would be
+// a privilege escalation risk (reading a classified document where
+// embedded JS could exfiltrate via fetch, for instance). When OFF
+// the renderer skips the VM call AND skips re-layout-after-JS, so
+// the page renders as pure static HTML+CSS.
+use core::sync::atomic::{AtomicBool, Ordering};
+static JS_ENABLED: AtomicBool = AtomicBool::new(true);
+
+#[inline]
+pub fn is_enabled() -> bool { JS_ENABLED.load(Ordering::Relaxed) }
+
+#[inline]
+pub fn set_enabled(v: bool) { JS_ENABLED.store(v, Ordering::Relaxed); }
+
 // ─── Core engine (new bytecode VM) ───
 pub mod value;      // NaN-boxed JsValue (8 bytes per value)
 pub mod strings;    // String intern table
