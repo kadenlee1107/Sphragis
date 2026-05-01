@@ -64,6 +64,24 @@ def ensure_passphrase_baked(passphrase: str = "batman") -> None:
     )
 
 
+def _free_port(default: int = 4444) -> int:
+    """STUMP #110: pick a port for QMP. Tries `default`, falls back to
+    OS-assigned if it's taken. Prevents the 'Address already in use'
+    crash when an earlier QEMU/bridge run left something bound."""
+    import socket as _s
+    for candidate in (default,):
+        try:
+            with _s.socket(_s.AF_INET, _s.SOCK_STREAM) as t:
+                t.setsockopt(_s.SOL_SOCKET, _s.SO_REUSEADDR, 1)
+                t.bind(("127.0.0.1", candidate))
+                return candidate
+        except OSError:
+            pass
+    with _s.socket(_s.AF_INET, _s.SOCK_STREAM) as t:
+        t.bind(("127.0.0.1", 0))
+        return t.getsockname()[1]
+
+
 def _pointer_device_arg() -> str:
     """STUMP #109: pick virtio-mouse vs virtio-tablet based on host
     OS / env override. Mac default = mouse (cocoa delivers EV_REL but
@@ -118,6 +136,8 @@ def main() -> int:
     else:
         display = os.environ.get("BAT_OS_DISPLAY", "gtk")
 
+    qmp_port = _free_port()
+
     args = [
         "qemu-system-aarch64",
         "-accel", "hvf",
@@ -139,7 +159,7 @@ def main() -> int:
         # devices on Mac. The mouse_bridge.py sidecar reads host
         # mouse via CoreGraphics and injects rel/btn events through
         # this socket — bypasses cocoa, real mouse follows.
-        "-qmp", "tcp:127.0.0.1:4444,server,nowait",
+        "-qmp", f"tcp:127.0.0.1:{qmp_port},server,nowait",
         "-device", "virtio-gpu-device",
         "-device", "virtio-keyboard-device",
         # Pointer device. STUMP #109: QEMU's cocoa display silently
@@ -177,10 +197,12 @@ def main() -> int:
     if platform.system() == "Darwin":
         bridge_path = ROOT / "scripts/mouse_bridge.py"
         if bridge_path.exists():
-            print(f"[render-live] launching mouse_bridge.py — its output streams to this terminal")
+            print(f"[render-live] launching mouse_bridge.py against QMP 127.0.0.1:{qmp_port}")
             try:
                 # Inherit our stdout/stderr so the user sees [bridge] lines.
-                bridge_proc = subprocess.Popen([sys.executable, str(bridge_path)])
+                bridge_proc = subprocess.Popen(
+                    [sys.executable, str(bridge_path), f"127.0.0.1:{qmp_port}"]
+                )
             except Exception as e:
                 print(f"[render-live] mouse_bridge.py failed: {e}", file=sys.stderr)
 
