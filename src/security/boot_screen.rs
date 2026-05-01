@@ -144,6 +144,12 @@ pub fn run() {
             let c_opt = platform::serial_getc()
                 .or_else(crate::drivers::virtio::keyboard::getc);
             if let Some(c) = c_opt {
+                // Diagnostic: log every char the boot screen receives.
+                // Also echo to the terminal so the user can see typing
+                // is being delivered (the GUI dots are easy to miss).
+                platform::serial_puts("[bs] got char ");
+                crate::kernel::mm::print_num(c as usize);
+                platform::serial_puts("\n");
                 match c {
                     b'\r' | b'\n' => break,
                     0x08 | 0x7F => {
