@@ -94,12 +94,12 @@ def main() -> int:
     ensure_passphrase_baked("batman")
     refresh_bin()
 
-    # Cocoa on Mac doesn't reliably route mouse motion to
-    # virtio-tablet. SDL works around this — install with
-    # `brew install sdl2` if you don't have it. Override with
-    # `BAT_OS_DISPLAY=cocoa` if SDL isn't an option.
+    # Cocoa is the only display backend brew's QEMU ships with on
+    # Mac. cocoa+virtio-tablet doesn't deliver motion events, so the
+    # interactive loop also accepts arrow-key cursor movement (Enter
+    # to click) — no mouse required.
     if platform.system() == "Darwin":
-        display = os.environ.get("BAT_OS_DISPLAY", "sdl")
+        display = os.environ.get("BAT_OS_DISPLAY", "cocoa")
     else:
         display = os.environ.get("BAT_OS_DISPLAY", "gtk")
 

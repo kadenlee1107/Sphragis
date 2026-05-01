@@ -4007,6 +4007,19 @@ fn interactive_loop(
             platform::serial_getc()
         };
 
+        // STUMP #100 (sprint 1.5d): keyboard-driven cursor.
+        // QEMU-cocoa-on-Mac silently drops virtio-tablet motion
+        // events, so the user can never click anything with the
+        // physical mouse. We expose a parallel cursor controller:
+        //   Ctrl+W/A/S/D = move cursor 16 px up/left/down/right
+        //   Ctrl+E       = "click" at the cursor's current spot
+        //   Ctrl+G       = recenter cursor to (copy_w/2, copy_h/2)
+        // Plain WASD/ESC stay available for typing into focused inputs
+        // and quitting the loop. The Ctrl+letter codes (0x17, 0x01,
+        // 0x13, 0x04, 0x05, 0x07) come straight off the wire from the
+        // host terminal so no escape-sequence parsing is needed.
+        const CURSOR_STEP: i32 = 16;
+
         // Drain typed characters. ESC always exits the loop. With a
         // focused input, printable characters append to its `value`
         // attribute and backspace removes the last character; either
@@ -4025,6 +4038,74 @@ fn interactive_loop(
             }
             crate::drivers::uart::puts("\n");
             if ch == 27 { break 'main; } // ESC
+
+            // Ctrl+WASD cursor move. Initialise on first use so the
+            // cursor starts somewhere visible instead of (-1, -1).
+            let init_cursor = || (copy_w as i32 / 2, copy_h as i32 / 2);
+            match ch {
+                0x17 /* Ctrl+W */ => {
+                    if last_cx < 0 { let (a, b) = init_cursor(); last_cx = a; last_cy = b; }
+                    last_cy = (last_cy - CURSOR_STEP).max(0);
+                    needs_redraw = true;
+                    continue;
+                }
+                0x01 /* Ctrl+A */ => {
+                    if last_cx < 0 { let (a, b) = init_cursor(); last_cx = a; last_cy = b; }
+                    last_cx = (last_cx - CURSOR_STEP).max(0);
+                    needs_redraw = true;
+                    continue;
+                }
+                0x13 /* Ctrl+S */ => {
+                    if last_cx < 0 { let (a, b) = init_cursor(); last_cx = a; last_cy = b; }
+                    last_cy = (last_cy + CURSOR_STEP).min(copy_h as i32 - 1);
+                    needs_redraw = true;
+                    continue;
+                }
+                0x04 /* Ctrl+D */ => {
+                    if last_cx < 0 { let (a, b) = init_cursor(); last_cx = a; last_cy = b; }
+                    last_cx = (last_cx + CURSOR_STEP).min(copy_w as i32 - 1);
+                    needs_redraw = true;
+                    continue;
+                }
+                0x07 /* Ctrl+G — center cursor */ => {
+                    let (a, b) = init_cursor();
+                    last_cx = a; last_cy = b;
+                    needs_redraw = true;
+                    continue;
+                }
+                0x05 /* Ctrl+E — click at cursor */ => {
+                    if last_cx >= 0 && last_cy >= 0 {
+                        // Translate to layout coords (already are,
+                        // since cursor is in copy_w/copy_h space).
+                        let lx = last_cx;
+                        let ly = last_cy;
+                        if let Some(hit) = tree.hit_test(lx, ly) {
+                            let input_owner = tree.nearest_ancestor_with_attr(hit, doc, |n| {
+                                let t = n.tag_str();
+                                t == "input" || t == "textarea"
+                            });
+                            if let Some(box_idx) = input_owner {
+                                let dom_idx = tree.boxes[box_idx].dom_node as usize;
+                                focus_dom = Some(dom_idx);
+                                crate::drivers::uart::puts("  [ctrl+E] focus → DOM ");
+                                crate::kernel::mm::print_num(dom_idx);
+                                crate::drivers::uart::puts("\n");
+                            } else {
+                                focus_dom = None;
+                            }
+                        }
+                        handle_interactive_click(
+                            doc, tree, lx, ly, viewport_w,
+                            src_fb, src_w, dst_fb, dst_w, dst_h,
+                            copy_w, copy_h, x_off, y_off, bg_word,
+                        );
+                        needs_redraw = true;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+
             if let Some(dom_idx) = focus_dom {
                 if ch == 0x08 || ch == 0x7F {
                     // Backspace / DEL: drop last byte of value.
