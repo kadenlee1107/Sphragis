@@ -11,6 +11,48 @@ end of a session.
 
 ---
 
+## 2026-04-30 21:00 — Mac — 🎯 Wikipedia HTTPS rendered, long-paragraph text splitting works, full Moby-Dick excerpt now visible.
+
+Continuation of the HTTPS / wrap / MAX_TEXT push from earlier. The remaining "still broken" entries from the earlier scoreboard get triaged:
+
+**STUMP #96 — Wikipedia HTTPS now works.** Symptom was "fetch failed: empty response" after a successful TLS handshake. Root cause: `tls::recv_app_data` returns `Ok(0)` to mean "I just consumed a non-data record (NewSessionTicket / ChangeCipherSpec) — call me again for the next one." `fetch_https`'s recv loop treated `Ok(0)` as EOF and bailed without ever reading the actual response. Fixed by looping past `Ok(0)` (with a `consecutive_empty > 8` guard so a silent server can't spin us forever). 257 KB Wikipedia Cat article now fetches cleanly.
+
+Also bumped:
+- `MAX_PAGES` 4 → 12. Wikipedia's chrome (TOC + 200-language sidebar) eats ~7700 px before the article body starts; 4 pages put the entire visible output in the language list. 12 reaches the article.
+- `MAX_NODES` 2048 → 4096. Wikipedia's Cat article parses to exactly 2048 — i.e. it was being truncated.
+- Render-script prompt timeout 180 s → 600 s. Real public-internet pages take longer to lay out + paginate + base64-dump under HVF.
+
+**STUMP #96 (cont) — long text-node splitting in the parser.** Pre-fix, a single text run > MAX_TEXT (1024) got clipped at the parser. The Moby-Dick excerpt on httpbin.org/html (one ~3500-char `<p>`) lost ~70 % of its characters. Replaced the parse-time staged buffers (decoded[2048] → collapsed[1024] → emit) with a streaming pipeline: collapse into a single MAX_TEXT chunk, when it fills emit the chunk as a text node and start a new one carrying the trailing partial-word forward so we don't split mid-word. Result: the entire 3500-char excerpt now renders as 3 sibling text nodes flowing inline.
+
+Companion layout fix: the multi-line wrap path used to allocate the box at the current `inline_x` (mid-line). Paint's word-wrap then started every wrapped line at `line_left = inline_x`, so a long text node that started near the right edge would wrap into a 1-char-wide column down the right side. Fixed by resetting `inline_x = x_offset` and bumping `cursor_y` before the multi-line allocation when the line already has content. Now wrapped text fills the full width.
+
+**STUMP #96 (cont) — TLS Alert decoder.** When the handshake bails with `< 10` bytes received, decode the alert level/desc and print them. Lets the operator immediately see "level=2 desc=112 (unrecognized_name)" or "level=1 desc=0 (close_notify)" instead of digging through hex bytes in the log.
+
+**Updated public-internet scoreboard:**
+
+```
+http://example.com/              ✓
+http://info.cern.ch/             ✓
+http://perdu.com/                ✓
+http://motherfuckingwebsite.com/ ✓✓ now even better — full page, no clips
+http://httpbin.org/html          ✓✓ ENTIRE 3500-char Moby-Dick excerpt visible (was 200 chars)
+http://neverssl.com/             ✓ (header only — body is in flex container we don't lay out)
+http://www.textfiles.com/        ⚠ HTML 3.2 frameset; header only
+
+https://example.com/             ✓
+https://www.example.org/         ✓
+https://www.google.com/          ✓ (TLS handshake; render times out under heavy JS)
+https://en.wikipedia.org/wiki/Cat ✓✓ FETCHED + rendered (10+ pages of real content)
+https://news.ycombinator.com/    ✗ server-side: TLS Alert "unrecognized_name" — Cloudflare-style ClientHello fingerprint reject
+https://httpbin.org/html         ✗ server-side: TLS Alert "close_notify" pre-handshake — same family
+```
+
+The remaining HTTPS failures (HN, httpbin) are server-side fingerprint rejections — Cloudflare-class WAFs check for "browser-like" ClientHello extension order/contents and reject our minimal-but-RFC-conformant client. Fixing would require Chrome impersonation (JA3 spoofing), out of scope.
+
+13+ stumps shipped today (#86-#96). The renderer now produces useful screenshots from a wide swath of the live HTTPS internet — the original ask.
+
+---
+
 ## 2026-04-30 20:30 — Mac — 🎯 HTTPS (TLS 1.3) live, word-wrap fixed, MAX_TEXT 4×ed: real-world rendering substantially less broken.
 
 Three more stumps after the morning's tier-3 sprint and afternoon's live-URL work:

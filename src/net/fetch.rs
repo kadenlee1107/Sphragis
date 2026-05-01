@@ -208,16 +208,38 @@ pub fn fetch_https(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     // size as fetch_http — declared inside this function so we don't share
     // state between concurrent fetches (we don't have any, single-threaded,
     // but explicit > implicit).
+    // STUMP #96: keep looping past Ok(0). recv_app_data returns Ok(0)
+    // to mean "I just consumed a non-data record (NewSessionTicket,
+    // ChangeCipherSpec, etc.) — try again for the next record." If
+    // we treated Ok(0) as EOF (which we did, pre-fix), then on
+    // servers like Wikipedia that send NewSessionTicket between
+    // handshake and the actual response, fetch_https returned
+    // "empty response" without ever pulling the body. Cap by
+    // total iterations so a server replying only with empty
+    // records can't spin forever.
     const MAX_TOTAL: usize = 256 * 1024;
     static mut TLS_SCRATCH: [u8; MAX_TOTAL] = [0; MAX_TOTAL];
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(TLS_SCRATCH) };
     let mut total = 0usize;
+    let mut iters = 0u32;
+    let mut consecutive_empty = 0u32;
     loop {
         if total >= scratch.len() { break; }
+        if iters > 500 { break; } // pathological-server guard
+        iters += 1;
         match tls::recv_app_data(&mut scratch[total..]) {
-            Ok(0) => break,
-            Ok(n) => total += n,
-            Err(_) => break,
+            Ok(0) => {
+                // Non-data TLS record (NewSessionTicket / CCS / etc.).
+                // Loop, but bail if we get a long run of empty reads —
+                // that's the "server is silent, give up" signal.
+                consecutive_empty += 1;
+                if consecutive_empty > 8 { break; }
+            }
+            Ok(n) => {
+                total += n;
+                consecutive_empty = 0;
+            }
+            Err(_) => break, // timeout / FIN / alert
         }
     }
 

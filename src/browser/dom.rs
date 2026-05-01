@@ -7,7 +7,11 @@
 // traverse the tree without Vec or Box.
 
 /// Maximum nodes in one document
-pub const MAX_NODES: usize = 2048;
+/// STUMP #96: bumped 2048 → 4096. Wikipedia's Cat article parses to
+/// exactly 2048 nodes — i.e. it was being truncated. 4096 lets us
+/// fit the full DOM. Per-node growth (after #95's MAX_TEXT bump) is
+/// ~2.4 KB; doubling node count adds ~5 MB BSS, well within budget.
+pub const MAX_NODES: usize = 4096;
 /// Maximum attributes per element
 pub const MAX_ATTRS: usize = 8;
 /// Maximum tag/attr name length

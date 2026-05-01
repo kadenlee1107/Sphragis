@@ -754,20 +754,31 @@ fn layout_children(
                         max_line_h_on_current_line = line_h;
                     }
                 } else {
-                    // Text needs to wrap across multiple lines.
-                    // Position the box at the start, compute its total height.
+                    // STUMP #96: text doesn't fit on the rest of the
+                    // current line. Pre-fix, we'd allocate a multi-line
+                    // box at `inline_x` (near the right edge). Paint's
+                    // word-wrap then started every line at line_left =
+                    // inline_x — so every wrapped line painted in a
+                    // narrow column at the right edge instead of going
+                    // back to the left margin. The visible symptom was
+                    // the bottom half of httpbin.org/html's split
+                    // text-node continuation rendering as a 1-char-wide
+                    // staircase down the right side.
+                    //
+                    // Fix: if there's already content on this line,
+                    // start the wrapped run on a fresh line (cursor_y
+                    // advances by line_h, inline_x = x_offset). The
+                    // box's content_x then equals x_offset and paint's
+                    // line_left lands at the actual left margin.
+                    if inline_x > x_offset {
+                        *cursor_y += line_h;
+                        inline_x = x_offset;
+                    }
                     let start_y = *cursor_y;
 
-                    // First line: fill remaining space
-                    let mut lines = 1i32;
-                    let chars_placed = remaining_on_line;
-
-                    // Subsequent full lines
-                    let remaining_chars = chars_in_text - chars_placed;
-                    if remaining_chars > 0 {
-                        lines += (remaining_chars + max_chars_per_line - 1) / max_chars_per_line;
-                    }
-
+                    // Compute line count from char-width estimate.
+                    let lines = ((chars_in_text + max_chars_per_line - 1)
+                        / max_chars_per_line).max(1);
                     let total_h = lines * line_h;
 
                     tree.boxes[tbox].x = inline_x;
@@ -779,19 +790,14 @@ fn layout_children(
                     tree.boxes[tbox].content_w = avail_width;
                     tree.boxes[tbox].content_h = total_h;
 
-                    // After wrapping, cursor moves down
-                    *cursor_y += total_h - line_h; // (lines-1) extra lines
-                    // inline_x for the last line
-                    let last_line_chars = if remaining_chars > 0 {
-                        let rem = remaining_chars % max_chars_per_line;
-                        if rem == 0 { max_chars_per_line } else { rem }
-                    } else {
-                        chars_placed
-                    };
-                    inline_x = x_offset + last_line_chars * char_w;
-                    // The last (possibly partial) line is still open;
-                    // record its height so the function-end flush
-                    // closes it.
+                    // Move cursor past the wrapped run; the last line's
+                    // tail length is unknown (paint's word-wrap may not
+                    // match our char-estimate exactly), so reset inline_x
+                    // to x_offset and have callers continue on the next
+                    // logical line.
+                    *cursor_y += total_h - line_h;
+                    inline_x = x_offset;
+                    *cursor_y += line_h;
                     if line_h > max_line_h_on_current_line {
                         max_line_h_on_current_line = line_h;
                     }

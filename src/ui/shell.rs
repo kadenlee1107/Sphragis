@@ -3480,7 +3480,12 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
     // MAX_PAGES so a runaway layout doesn't dump megabytes per page
     // forever. Single-page pages still emit exactly one block, and
     // the existing render_to_png.py finds it via the same regex.
-    const MAX_PAGES: u32 = 4;
+    //
+    // STUMP #96: bumped 4 → 12. Wikipedia's Cat article is ~7700 px
+    // tall just for the chrome (TOC + 200-language sidebar) before
+    // the actual article body starts. 4 pages put the entire visible
+    // output in the language list. 12 lets us reach the article.
+    const MAX_PAGES: u32 = 12;
     let total_h = tree.page_height.max(600) as u32;
     let mut n_pages = (total_h + MAX_H - 1) / MAX_H;
     if n_pages == 0 { n_pages = 1; }

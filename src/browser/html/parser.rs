@@ -313,76 +313,100 @@ pub fn parse(html: &[u8], doc: &mut Document) {
                 }
             }
             if has_visible {
-                // Non-whitespace text — create text node
-                // First: decode HTML entities.
-                // STUMP #95: 512 → 2048 so long article paragraphs
-                // (httpbin's Moby-Dick excerpt is ~3.5 KB single-text-
-                // node) don't lose >75 % of their characters at parse
-                // time. Pairs with the bumped MAX_TEXT (1024) below.
-                let mut decoded = [0u8; 2048];
-                let mut dlen = 0;
-                let mut j = 0;
-                while j < raw_text.len() && dlen < 2046 {
+                // STUMP #96: stream-decode + collapse + emit so a long
+                // text run becomes multiple sibling text nodes instead
+                // of being clipped at MAX_TEXT. Pre-fix the parser
+                // staged everything in a fixed-size [u8; 2048] decoded
+                // buffer then a [u8; 1024] collapsed buffer, so 75 %+
+                // of httpbin.org/html's 3.5 KB Moby-Dick excerpt
+                // disappeared. Now we collapse into a single MAX_TEXT
+                // chunk; when it fills, we emit the chunk as a text
+                // node and start a new one. The layout already flows
+                // adjacent text nodes inline so the boundary is
+                // invisible in the rendered output.
+                use super::super::dom::MAX_TEXT;
+                let parent = stack[stack_depth - 1];
+                let mut chunk = [0u8; MAX_TEXT];
+                let mut clen = 0usize;
+                let mut last_space = false;
+
+                let flush = |doc: &mut Document, chunk: &[u8]| {
+                    if !chunk.is_empty() {
+                        if let Some(idx) = doc.create_text(chunk) {
+                            doc.append_child(parent, idx);
+                        }
+                    }
+                };
+
+                let mut emit = |doc: &mut Document,
+                                 chunk: &mut [u8; MAX_TEXT],
+                                 clen: &mut usize,
+                                 last_space: &mut bool,
+                                 b: u8| {
+                    let is_ws = b == b' ' || b == b'\t' || b == b'\n' || b == b'\r';
+                    let to_push = if is_ws {
+                        if *last_space { return; }
+                        *last_space = true;
+                        b' '
+                    } else {
+                        *last_space = false;
+                        b
+                    };
+                    if *clen >= MAX_TEXT - 1 {
+                        // Flush this chunk and start a new one. Try to
+                        // break at the most recent space inside the
+                        // chunk so we don't split mid-word.
+                        let mut break_at = *clen;
+                        let mut k = *clen;
+                        while k > 0 {
+                            k -= 1;
+                            if chunk[k] == b' ' { break_at = k; break; }
+                            if *clen - k > 64 { break; } // give up if word > 64 chars
+                        }
+                        flush(doc, &chunk[..break_at]);
+                        // Carry tail across to the new chunk.
+                        let tail_len = *clen - break_at;
+                        if tail_len > 0 && tail_len < MAX_TEXT {
+                            // Move bytes [break_at..clen] to start.
+                            for i in 0..tail_len {
+                                chunk[i] = chunk[break_at + i];
+                            }
+                        }
+                        *clen = if tail_len < MAX_TEXT { tail_len } else { 0 };
+                    }
+                    chunk[*clen] = to_push;
+                    *clen += 1;
+                };
+
+                let mut j = 0usize;
+                while j < raw_text.len() {
                     if raw_text[j] == b'&' {
-                        // Try to decode entity
                         let rest = &raw_text[j..];
-                        if starts_with_bytes(rest, b"&nbsp;") { decoded[dlen] = b' '; dlen += 1; j += 6; }
-                        else if starts_with_bytes(rest, b"&amp;") { decoded[dlen] = b'&'; dlen += 1; j += 5; }
-                        else if starts_with_bytes(rest, b"&lt;") { decoded[dlen] = b'<'; dlen += 1; j += 4; }
-                        else if starts_with_bytes(rest, b"&gt;") { decoded[dlen] = b'>'; dlen += 1; j += 4; }
-                        else if starts_with_bytes(rest, b"&quot;") { decoded[dlen] = b'"'; dlen += 1; j += 6; }
+                        if starts_with_bytes(rest, b"&nbsp;") { emit(doc, &mut chunk, &mut clen, &mut last_space, b' '); j += 6; }
+                        else if starts_with_bytes(rest, b"&amp;") { emit(doc, &mut chunk, &mut clen, &mut last_space, b'&'); j += 5; }
+                        else if starts_with_bytes(rest, b"&lt;") { emit(doc, &mut chunk, &mut clen, &mut last_space, b'<'); j += 4; }
+                        else if starts_with_bytes(rest, b"&gt;") { emit(doc, &mut chunk, &mut clen, &mut last_space, b'>'); j += 4; }
+                        else if starts_with_bytes(rest, b"&quot;") { emit(doc, &mut chunk, &mut clen, &mut last_space, b'"'); j += 6; }
                         else if starts_with_bytes(rest, b"&#39;") || starts_with_bytes(rest, b"&apos;") {
-                            decoded[dlen] = b'\''; dlen += 1;
+                            emit(doc, &mut chunk, &mut clen, &mut last_space, b'\'');
                             j += if rest[1] == b'#' { 5 } else { 6 };
                         }
-                        else if starts_with_bytes(rest, b"&copy;") { decoded[dlen] = b'c'; dlen += 1; j += 6; }
+                        else if starts_with_bytes(rest, b"&copy;") { emit(doc, &mut chunk, &mut clen, &mut last_space, b'c'); j += 6; }
                         else if starts_with_bytes(rest, b"&mdash;") || starts_with_bytes(rest, b"&#8212;") {
-                            decoded[dlen] = b'-'; dlen += 1;
-                            j += if rest[1] == b'#' { 7 } else { 7 };
+                            emit(doc, &mut chunk, &mut clen, &mut last_space, b'-');
+                            j += 7;
                         }
                         else {
-                            // Unknown entity — skip to ; or just output &
-                            decoded[dlen] = b'&'; dlen += 1; j += 1;
+                            emit(doc, &mut chunk, &mut clen, &mut last_space, b'&');
+                            j += 1;
                         }
                     } else {
-                        decoded[dlen] = raw_text[j]; dlen += 1; j += 1;
+                        emit(doc, &mut chunk, &mut clen, &mut last_space, raw_text[j]);
+                        j += 1;
                     }
                 }
-
-                // Collapse whitespace. last_space starts FALSE so a
-                // leading whitespace IS emitted (as a single space) —
-                // browsers preserve `<code>x</code> y` as "x y" not
-                // "xy". The layout's "at start of new line, skip ws"
-                // check handles paragraph-leading whitespace.
-                // STUMP #95: 256 → 1024 to match the bumped MAX_TEXT.
-                let mut collapsed = [0u8; 1024];
-                let mut clen = 0;
-                let mut last_space = false;
-                for idx in 0..dlen {
-                    let b = decoded[idx];
-                    if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
-                        if !last_space && clen < 1023 {
-                            collapsed[clen] = b' ';
-                            clen += 1;
-                            last_space = true;
-                        }
-                    } else if clen < 1023 {
-                        collapsed[clen] = b;
-                        clen += 1;
-                        last_space = false;
-                    }
-                }
-                // 🎯 STUMP #77: don't trim leading whitespace at the
-                // parser level — layout/paint handle "at start of
-                // paragraph" naturally via the inline_x == x_offset
-                // check, and the parse-time trim was eating real
-                // spaces between </inline> and the next text node
-                // (visible as <code>foo</code>bar with no space).
                 if clen > 0 {
-                    if let Some(text_idx) = doc.create_text(&collapsed[..clen]) {
-                        let parent = stack[stack_depth - 1];
-                        doc.append_child(parent, text_idx);
-                    }
+                    flush(doc, &chunk[..clen]);
                 }
             }
         }

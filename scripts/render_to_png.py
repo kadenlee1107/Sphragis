@@ -66,9 +66,14 @@ def main() -> int:
     # The kernel emits one RENDER-BEGIN/END block per page (STUMP #89).
     # We don't know up front how many pages we'll see, so we wait for
     # the shell prompt to come back instead of for a single END marker.
+    # STUMP #96: bump render-side prompt timeout. Real public-internet
+    # pages (Wikipedia at 257 KB / 2048 DOM nodes / 7 KB of JS) take
+    # longer than the previous 180 s budget to lay out + paginate +
+    # base64-dump under HVF. Boot still uses 180 s; only the post-
+    # render expect_prompt is extended.
     with boot(log_prefix="render", timeout=180) as session:
         session.run(f"render {URL}".encode())
-        session.expect_prompt(timeout=180)
+        session.expect_prompt(timeout=600)
 
     log = session.log  # captured by the boot harness's logfile
     raw = log.read_text(encoding="utf-8", errors="replace")

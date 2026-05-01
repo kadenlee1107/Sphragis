@@ -674,7 +674,19 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
             _ => break,
         }
     }
-    if all_len < 10 { return Err("ServerHello too short"); }
+    if all_len < 10 {
+        // Tiny replies are usually a TLS Alert. Decode the level/desc
+        // for the operator so they don't have to dig the bytes out of
+        // the log to figure out why the handshake bailed.
+        if all_len >= 7 && all_buf[0] == 0x15 {
+            crate::drivers::uart::puts("    [tls] alert during handshake: level=");
+            crate::kernel::mm::print_num(all_buf[5] as usize);
+            crate::drivers::uart::puts(" desc=");
+            crate::kernel::mm::print_num(all_buf[6] as usize);
+            crate::drivers::uart::puts("\n");
+        }
+        return Err("ServerHello too short");
+    }
 
     // Parse first record (ServerHello)
     let sh_rec_len = ((all_buf[3] as usize) << 8) | all_buf[4] as usize;
