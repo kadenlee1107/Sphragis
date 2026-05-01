@@ -3994,11 +3994,36 @@ fn interactive_loop(
         keyboard::poll();
         tablet::poll();
 
+        // STUMP #98 fix: read from BOTH the GUI virtio-keyboard AND
+        // the UART/serial console so it doesn't matter whether the
+        // user types into the QEMU window (cocoa display) or the
+        // host terminal that ran `make render-live`. On Mac the
+        // QEMU window often needs an explicit click-to-focus before
+        // it accepts keystrokes, and even then the cocoa input grab
+        // is finicky; routing serial in too means the user can just
+        // keep typing in the terminal where they launched it.
+        let mut next_char = || -> Option<u8> {
+            if let Some(c) = keyboard::getc() { return Some(c); }
+            platform::serial_getc()
+        };
+
         // Drain typed characters. ESC always exits the loop. With a
         // focused input, printable characters append to its `value`
         // attribute and backspace removes the last character; either
         // mutation triggers a re-layout + repaint.
-        while let Some(ch) = keyboard::getc() {
+        while let Some(ch) = next_char() {
+            // Diagnostic: every key reaching the loop is logged so we
+            // can tell at a glance whether the issue is "keys not
+            // arriving" vs "keys arriving but not landing in the
+            // input". Remove once the wiring is confirmed.
+            crate::drivers::uart::puts("  [loop] key=");
+            crate::kernel::mm::print_num(ch as usize);
+            crate::drivers::uart::puts(" focus=");
+            match focus_dom {
+                Some(d) => { crate::kernel::mm::print_num(d); }
+                None    => { crate::drivers::uart::puts("none"); }
+            }
+            crate::drivers::uart::puts("\n");
             if ch == 27 { break 'main; } // ESC
             if let Some(dom_idx) = focus_dom {
                 if ch == 0x08 || ch == 0x7F {
