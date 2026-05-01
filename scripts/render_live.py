@@ -102,7 +102,11 @@ def main() -> int:
         "-machine", "virt,gic-version=3",
         "-cpu", "host",
         "-m", "4G",
-        "-display", display,
+        # `show-cursor=on` is the cocoa-friendly fix for the
+        # "host cursor disappears, no motion events delivered"
+        # symptom on Mac. Without it, QEMU tries to capture the
+        # cursor and cocoa stops sending motion to the guest.
+        "-display", f"{display},show-cursor=on",
         "-serial", "mon:stdio",
         "-kernel", str(KERNEL_BIN),
         "-initrd", str(INITRD),
