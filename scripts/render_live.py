@@ -134,6 +134,12 @@ def main() -> int:
         "-initrd", str(INITRD),
         "-netdev", "user,id=net0",
         "-device", "virtio-net-device,netdev=net0",
+        # STUMP #110: QMP socket for the mouse-injection sidecar.
+        # Cocoa drops both EV_ABS and EV_REL motion to virtio input
+        # devices on Mac. The mouse_bridge.py sidecar reads host
+        # mouse via CoreGraphics and injects rel/btn events through
+        # this socket — bypasses cocoa, real mouse follows.
+        "-qmp", "tcp:127.0.0.1:4444,server,nowait",
         "-device", "virtio-gpu-device",
         "-device", "virtio-keyboard-device",
         # Pointer device. STUMP #109: QEMU's cocoa display silently
@@ -163,6 +169,24 @@ def main() -> int:
     print(f"[render-live] (Mac cocoa drops mouse motion to virtio-tablet, hence")
     print(f"[render-live]  the keyboard cursor.) Close window or Ctrl-A X to quit.")
 
+    # STUMP #110: launch the mouse-injection sidecar so real mouse
+    # motion drives the kernel cursor. It connects to the QMP socket
+    # we just opened. Mac-only (CoreGraphics dependency); silently
+    # skipped on Linux (where virtio-tablet works natively).
+    bridge_proc = None
+    if platform.system() == "Darwin":
+        bridge_path = ROOT / "scripts/mouse_bridge.py"
+        if bridge_path.exists():
+            print(f"[render-live] launching mouse_bridge.py (Ctrl-C the bridge to fall back to keyboard cursor)")
+            try:
+                bridge_proc = subprocess.Popen(
+                    [sys.executable, str(bridge_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception as e:
+                print(f"[render-live] mouse_bridge.py failed: {e}", file=sys.stderr)
+
     # Run interactively — user types `render <URL> live=1` themselves once
     # the kernel boots. Future iteration: pre-feed the command via a
     # serial pipe.
@@ -170,6 +194,11 @@ def main() -> int:
         subprocess.run(args, check=False)
     except KeyboardInterrupt:
         pass
+    finally:
+        if bridge_proc is not None and bridge_proc.poll() is None:
+            bridge_proc.terminate()
+            try: bridge_proc.wait(timeout=2)
+            except subprocess.TimeoutExpired: bridge_proc.kill()
     return 0
 
 
