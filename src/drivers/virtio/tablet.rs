@@ -38,9 +38,12 @@ const NUM_BUFS: usize = 32;
 // Event-type constants per linux/input-event-codes.h
 const EV_SYN: u16 = 0;
 const EV_KEY: u16 = 1;
+const EV_REL: u16 = 2;
 const EV_ABS: u16 = 3;
 const ABS_X: u16 = 0;
 const ABS_Y: u16 = 1;
+const REL_X: u16 = 0;
+const REL_Y: u16 = 1;
 const BTN_LEFT: u16 = 0x110;
 const BTN_RIGHT: u16 = 0x111;
 const BTN_MIDDLE: u16 = 0x112;
@@ -206,6 +209,23 @@ pub fn poll() {
                 } else if code == ABS_Y {
                     let sy = (value.max(0) * (fb_h - 1)) / TABLET_MAX;
                     PENDING_Y.store(sy, Ordering::Relaxed);
+                }
+            }
+            EV_REL => {
+                // STUMP #109 — relative motion from virtio-mouse-device.
+                // QEMU cocoa drops EV_ABS events to virtio-tablet on Mac
+                // (host cursor hides + motion never fires) but virtio-
+                // mouse uses a different code path that DOES deliver REL
+                // motion. Track an absolute (x,y) internally by
+                // accumulating the deltas; clamp to FB bounds.
+                let fb_w = super::gpu::width().max(1) as i32;
+                let fb_h = super::gpu::height().max(1) as i32;
+                if code == REL_X {
+                    let cur = PENDING_X.load(Ordering::Relaxed);
+                    PENDING_X.store((cur + value).clamp(0, fb_w - 1), Ordering::Relaxed);
+                } else if code == REL_Y {
+                    let cur = PENDING_Y.load(Ordering::Relaxed);
+                    PENDING_Y.store((cur + value).clamp(0, fb_h - 1), Ordering::Relaxed);
                 }
             }
             EV_KEY => {

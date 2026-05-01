@@ -64,6 +64,21 @@ def ensure_passphrase_baked(passphrase: str = "batman") -> None:
     )
 
 
+def _pointer_device_arg() -> str:
+    """STUMP #109: pick virtio-mouse vs virtio-tablet based on host
+    OS / env override. Mac default = mouse (cocoa delivers EV_REL but
+    not EV_ABS). Linux default = tablet (absolute coords, no relative
+    accumulation drift)."""
+    override = os.environ.get("BAT_OS_POINTER", "").strip().lower()
+    if override == "mouse":
+        return "virtio-mouse-device"
+    if override == "tablet":
+        return "virtio-tablet-device"
+    if platform.system() == "Darwin":
+        return "virtio-mouse-device"
+    return "virtio-tablet-device"
+
+
 def find_objcopy() -> str:
     for cand in ("rust-objcopy", "llvm-objcopy", "aarch64-linux-gnu-objcopy"):
         try:
@@ -121,9 +136,15 @@ def main() -> int:
         "-device", "virtio-net-device,netdev=net0",
         "-device", "virtio-gpu-device",
         "-device", "virtio-keyboard-device",
-        # Tablet MUST come after keyboard — the kernel takes input
-        # device #0 as keyboard and #1 as tablet (Sprint 1.5b).
-        "-device", "virtio-tablet-device",
+        # Pointer device. STUMP #109: QEMU's cocoa display silently
+        # drops EV_ABS motion events to virtio-tablet on Mac. The
+        # virtio-mouse-device (relative) takes a different cocoa code
+        # path that actually delivers EV_REL deltas. Default to mouse
+        # on Mac, tablet on Linux GTK/SDL (more accurate). Override
+        # with `BAT_OS_POINTER=mouse` or `BAT_OS_POINTER=tablet`. The
+        # kernel takes input #1 as the pointer device; tablet.rs
+        # handles both EV_ABS and EV_REL events.
+        "-device", _pointer_device_arg(),
     ]
 
     print(f"[render-live] launching QEMU ({display}). URL: {URL}")
