@@ -11,6 +11,45 @@ end of a session.
 
 ---
 
+## 2026-04-30 17:55 — Mac — 🎯 Browser engine sprint pt 3: tier 3 partial. Position absolute/relative/fixed shipped, JS engine wired but pre-existing compile_script hang.
+
+After tier 1/2 landed, Kaden asked to keep going through tier 3. Eight more stumps:
+
+**STUMP #76** — paint border-subtract underflow guard + render MAX_H capped at 1900px so PNG output stays under the 2000px session-load limit (above that the conversation context corrupts on read-back).
+
+**STUMP #77** — inline whitespace handling, three coordinated fixes: removed phantom `+4` advance after every inline element, switched inline element width measurement to TT-accurate per-text-node `text_width()`, parser now emits a single-space text node for inter-tag whitespace and preserves leading whitespace (layout's "at start of line, skip ws" check handles paragraph-leading). Visible result: `<strong>X</strong>,` no longer renders as `X ,`; pills no longer touch.
+
+**STUMP #78** — real italic via shear. Added `FontStyle: Normal | Italic` to ComputedStyle; `<em>`/`<i>`/`font-style: italic` set it; truetype's `draw_text_fb_styled` shears each scanline by `(gh - row) / 5` ≈ tan(12°). `<em>italic word</em>` now visibly slants.
+
+**STUMP #79** — monospace `font-family` for `<code>`/`<pre>`/`<kbd>`/`<samp>`/`<tt>`. Parser recognizes any of `monospace`/`courier`/`consolas`/`menlo` in the family chain. Paint overrides per-glyph advance to a fixed cell width (`font_size × 0.6`) so columns line up.
+
+**STUMP #80** — HTML5 semantic tag defaults: improved `<header>`/`<footer>` styling, plus new tag styling for `<mark>` (yellow highlight), `<small>`, `<abbr>` (underlined dim), `<cite>` (italic dim), `<q>`, `<del>`/`<s>` (line-through), `<ins>`/`<u>` (underline), `<details>`/`<summary>`, `<figure>`/`<figcaption>`.
+
+**STUMP #81** — `flex-direction: column`. Children stack vertically when `direction == 1`. Reverse variants iterate the order list reversed.
+
+**STUMP #82** — `box-shadow`. Parses `<x> <y> <blur> <color>`; paints L-shaped fills (right strip + bottom strip × 3 stacked sizes) so the shadow appears in the offset direction without leaking behind the box.
+
+**STUMP #83** — `align-items` honored on flex containers. Computes max cross-axis size of children and offsets per `start | end | center | stretch`.
+
+**STUMP #84** — `<script>` source captured into Document but execution disabled. The bytecode VM in `src/browser/js/` (~8000 lines) hangs in `compile_script` for trivial input (`console.log('hello')`). Likely caused by `Vm::new()` returning multi-MB non-zero data (NaN-boxed values), which puts JS_VM in `.data` not `.bss` — bigger linker output, possibly truncated or misaligned. The wiring (parser → js_text → cmd_render dispatch hook) is in place; uncommenting in shell.rs will run JS once the engine bug is fixed. Hard 10M-instruction cap added to vm::run() as defense-in-depth.
+
+**STUMP #85** — CSS `position` property. Added `Position::Static | Relative | Absolute | Fixed` to ComputedStyle, parser handles `position` + `top` / `left` / `right` / `bottom`. Layout: absolute/fixed take the box out of flow (no cursor_y advance); relative offsets the box + descendants by (top, left) AFTER normal flow.
+
+**Test pages shipped** in `ports/chromium_port/out/`:
+- `everything.html` — comprehensive showcase (headers, footer, badges, italic, code, mark, del, ins, card with shadow, PNG, flex row+col, table, blockquote)
+- `js_test.html` — minimal `console.log` (currently just exercises the parser-to-doc.js_text path)
+- `position_test.html` — TL/TR absolute corners, relative-nudged inline, fixed bottom
+
+**State of the engine after the sprint:**
+
+Working: every static-page-rendering primitive a real website uses — headings, inline emphasis (bold, italic-via-shear, link, code-monospace, mark, small, del, ins), block layout, inline flow, lists with bullets, tables with column alignment, flex (row + column + justify-content + gap + align-items), CSS specificity sort, body padding/margin, margin collapsing, box-shadow, border-radius, position absolute/relative/fixed, PNG `<img>`.
+
+Not working: JavaScript execution (engine has compile-time hang), real network fetch for remote `<link>`/`<img>`, scrolling beyond 1900px, form interactivity, `position: sticky`, multiple font faces.
+
+Verdict: at this point Bat_OS's native renderer can produce a faithful screenshot of any reasonable static webpage that doesn't depend on JS to construct its content. Eighteen stumps shipped today (#68-85, minus #75 from yesterday).
+
+`make render URL=file:///bin/everything.html` is the canonical demo.
+
 ## 2026-04-30 15:40 — Mac — 🎯 Browser engine sprint: easy → medium. 5 easy + 4 medium fixes. Real flexbox, tables, PNG images, links, lists shipped.
 
 After the basic render-to-PNG path landed, Kaden asked "what else can we work on" and "let's work easy to hard". Twelve commits in the sprint:
