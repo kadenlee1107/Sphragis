@@ -4002,8 +4002,13 @@ fn interactive_loop(
         // it accepts keystrokes, and even then the cocoa input grab
         // is finicky; routing serial in too means the user can just
         // keep typing in the terminal where they launched it.
+        // STUMP #100b: also read from the tablet's mis-routed key
+        // buffer. QEMU sends keystrokes from the QEMU window to
+        // virtio-tablet (not virtio-keyboard) when both devices are
+        // attached; tablet::getc_key surfaces them as ASCII.
         let mut next_char = || -> Option<u8> {
             if let Some(c) = keyboard::getc() { return Some(c); }
+            if let Some(c) = tablet::getc_key() { return Some(c); }
             platform::serial_getc()
         };
 

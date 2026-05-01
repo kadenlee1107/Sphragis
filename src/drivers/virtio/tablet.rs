@@ -61,6 +61,71 @@ static PENDING_X: AtomicI32 = AtomicI32::new(0);
 static PENDING_Y: AtomicI32 = AtomicI32::new(0);
 static PENDING_BTN: AtomicI32 = AtomicI32::new(-1); // -1 = no edge, 0/1 = up/down
 
+// STUMP #100b: QEMU routes ALL keyboard input to virtio-tablet when
+// the tablet device is attached (the tablet model claims the key-
+// event capability and steals it from virtio-keyboard). So this
+// driver also has to decode EV_KEY events into ASCII and surface
+// them via getc_key() so the interactive loop sees them. Same shape
+// as keyboard.rs.
+const KEY_BUF_SIZE: usize = 64;
+static mut KEY_BUF: [u8; KEY_BUF_SIZE] = [0; KEY_BUF_SIZE];
+static mut KEY_HEAD: usize = 0;
+static mut KEY_TAIL: usize = 0;
+static mut CTRL_HELD: bool = false;
+static mut SHIFT_HELD: bool = false;
+static mut ALT_HELD: bool = false;
+
+const KEY_LEFTCTRL: u16 = 29;
+const KEY_RIGHTCTRL: u16 = 97;
+const KEY_LEFTSHIFT: u16 = 42;
+const KEY_RIGHTSHIFT: u16 = 54;
+const KEY_LEFTALT: u16 = 56;
+const KEY_RIGHTALT: u16 = 100;
+
+// Linux evdev keycode → ASCII (subset that matters for the renderer).
+static KEYMAP: [u8; 128] = {
+    let mut map = [0u8; 128];
+    map[2] = b'1'; map[3] = b'2'; map[4] = b'3'; map[5] = b'4';
+    map[6] = b'5'; map[7] = b'6'; map[8] = b'7'; map[9] = b'8';
+    map[10] = b'9'; map[11] = b'0'; map[12] = b'-'; map[13] = b'=';
+    map[14] = 0x08; map[15] = 0x09;
+    map[16] = b'q'; map[17] = b'w'; map[18] = b'e'; map[19] = b'r';
+    map[20] = b't'; map[21] = b'y'; map[22] = b'u'; map[23] = b'i';
+    map[24] = b'o'; map[25] = b'p'; map[26] = b'['; map[27] = b']';
+    map[28] = b'\r';
+    map[30] = b'a'; map[31] = b's'; map[32] = b'd'; map[33] = b'f';
+    map[34] = b'g'; map[35] = b'h'; map[36] = b'j'; map[37] = b'k';
+    map[38] = b'l'; map[39] = b';'; map[40] = b'\''; map[41] = b'`';
+    map[43] = b'\\';
+    map[44] = b'z'; map[45] = b'x'; map[46] = b'c'; map[47] = b'v';
+    map[48] = b'b'; map[49] = b'n'; map[50] = b'm'; map[51] = b',';
+    map[52] = b'.'; map[53] = b'/';
+    map[57] = b' ';
+    map[1] = 27; // ESC
+    map
+};
+
+fn push_key(ch: u8) {
+    unsafe {
+        let next = (KEY_HEAD + 1) % KEY_BUF_SIZE;
+        if next != KEY_TAIL {
+            KEY_BUF[KEY_HEAD] = ch;
+            KEY_HEAD = next;
+        }
+    }
+}
+
+/// Pop the next decoded ASCII keystroke that arrived through the
+/// tablet's mis-routed EV_KEY stream. Mirrors keyboard::getc.
+pub fn getc_key() -> Option<u8> {
+    unsafe {
+        if KEY_HEAD == KEY_TAIL { return None; }
+        let ch = KEY_BUF[KEY_TAIL];
+        KEY_TAIL = (KEY_TAIL + 1) % KEY_BUF_SIZE;
+        Some(ch)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum InputEvent {
     Move { x: i32, y: i32 },
@@ -128,17 +193,6 @@ pub fn poll() {
         let code  = super::virtqueue::safe_read16(buf_addr + 2);
         let value = super::virtqueue::safe_read32(buf_addr + 4) as i32;
 
-        // Diagnostic: log every raw tablet event so we can tell if
-        // QEMU is delivering them at all and how the kernel is
-        // decoding them. Remove once the input chain is confirmed.
-        uart::puts("    [tbl] ev type=");
-        crate::kernel::mm::print_num(etype as usize);
-        uart::puts(" code=");
-        crate::kernel::mm::print_num(code as usize);
-        uart::puts(" value=");
-        crate::kernel::mm::print_num(value as usize);
-        uart::puts("\n");
-
         match etype {
             EV_ABS => {
                 // Rescale tablet coords to GPU framebuffer coords.
@@ -157,8 +211,48 @@ pub fn poll() {
             EV_KEY => {
                 if code == BTN_LEFT {
                     PENDING_BTN.store(value & 1, Ordering::Relaxed);
+                } else if code == BTN_RIGHT || code == BTN_MIDDLE {
+                    // Plumbed but not surfaced.
+                } else {
+                    // STUMP #100b: alphanumeric / control key — QEMU
+                    // mis-routed it to us instead of virtio-keyboard.
+                    // Decode and stash so the interactive loop can
+                    // pick it up via tablet::getc_key().
+                    unsafe {
+                        match code {
+                            KEY_LEFTCTRL | KEY_RIGHTCTRL  => CTRL_HELD  = value == 1,
+                            KEY_LEFTSHIFT | KEY_RIGHTSHIFT => SHIFT_HELD = value == 1,
+                            KEY_LEFTALT | KEY_RIGHTALT   => ALT_HELD   = value == 1,
+                            _ => {}
+                        }
+                    }
+                    if value == 1 {
+                        let idx = code as usize;
+                        if idx < KEYMAP.len() {
+                            let mut ch = KEYMAP[idx];
+                            if ch != 0 {
+                                unsafe {
+                                    if CTRL_HELD && ch >= b'a' && ch <= b'z' {
+                                        ch = ch - b'a' + 1;
+                                    } else if SHIFT_HELD {
+                                        ch = match ch {
+                                            b'a'..=b'z' => ch - 32,
+                                            b'1' => b'!', b'2' => b'@', b'3' => b'#',
+                                            b'4' => b'$', b'5' => b'%', b'6' => b'^',
+                                            b'7' => b'&', b'8' => b'*', b'9' => b'(',
+                                            b'0' => b')', b'-' => b'_', b'=' => b'+',
+                                            b'[' => b'{', b']' => b'}', b'\\' => b'|',
+                                            b';' => b':', b'\'' => b'"', b'`' => b'~',
+                                            b',' => b'<', b'.' => b'>', b'/' => b'?',
+                                            _ => ch,
+                                        };
+                                    }
+                                }
+                                push_key(ch);
+                            }
+                        }
+                    }
                 }
-                // BTN_RIGHT / BTN_MIDDLE intentionally ignored for now.
             }
             EV_SYN => {
                 // Commit: pending → cursor, emit ring entry.
