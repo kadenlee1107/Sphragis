@@ -99,9 +99,36 @@ impl JsHeap {
     }
 
     fn alloc_with_flags(&mut self, flags: u8, capacity: u16) -> ObjId {
-        if self.object_count >= MAX_OBJECTS { return ObjId::NULL; }
+        // STUMP #111 (audit M-jsheap-saturation): one-shot audit when
+        // either object table or prop arena saturates. Pre-fix scripts
+        // that allocated >4096 objects (or >32768 props) just got
+        // ObjId::NULL with no log entry — flooding behavior was
+        // invisible. Two separate flags so we can distinguish which
+        // table is exhausted.
+        use core::sync::atomic::{AtomicBool, Ordering};
+        if self.object_count >= MAX_OBJECTS {
+            static FF_OBJ: AtomicBool = AtomicBool::new(false);
+            if !FF_OBJ.swap(true, Ordering::AcqRel) {
+                crate::security::audit::record(
+                    crate::security::audit::Category::Script,
+                    b"JS heap MAX_OBJECTS (4096) full - script may be flooding",
+                );
+                crate::drivers::uart::puts("[js] WARNING: object heap full - alloc returns null\n");
+            }
+            return ObjId::NULL;
+        }
         let cap = (capacity as usize).min(MAX_OBJ_PROPS);
-        if self.prop_count + cap > MAX_PROPS { return ObjId::NULL; }
+        if self.prop_count + cap > MAX_PROPS {
+            static FF_PROP: AtomicBool = AtomicBool::new(false);
+            if !FF_PROP.swap(true, Ordering::AcqRel) {
+                crate::security::audit::record(
+                    crate::security::audit::Category::Script,
+                    b"JS heap MAX_PROPS (32768) full - script may be flooding",
+                );
+                crate::drivers::uart::puts("[js] WARNING: property arena full - alloc returns null\n");
+            }
+            return ObjId::NULL;
+        }
 
         let idx = self.object_count;
         self.objects[idx] = JsObject {
