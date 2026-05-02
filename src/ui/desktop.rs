@@ -65,6 +65,10 @@ pub fn resume() -> ! {
                             cmd_len -= 1;
                             console::putc(0x08);
                             platform::serial_putc(0x08); platform::serial_putc(b' '); platform::serial_putc(0x08);
+                            // STUMP #115: force fullscreen flush —
+                            // small per-rect flushes don't reach
+                            // QEMU's host display on Mac cocoa.
+                            wm::flush_all();
                         }
                     }
                     _ if c >= 0x20 && c <= 0x7E && cmd_len < 255 => {
@@ -72,6 +76,7 @@ pub fn resume() -> ! {
                         cmd_len += 1;
                         console::putc(c);
                         platform::serial_putc(c);
+                        wm::flush_all(); // STUMP #115
                     }
                     _ => {}
                 }
@@ -228,6 +233,16 @@ pub fn run() -> ! {
                                 platform::serial_putc(0x08);
                                 platform::serial_putc(b' ');
                                 platform::serial_putc(0x08);
+                                // STUMP #115: small per-char rect
+                                // flushes from console::putc don't
+                                // reliably propagate to QEMU's
+                                // virtio-gpu host display on Mac
+                                // cocoa — the user types but sees
+                                // nothing until something else
+                                // triggers a fullscreen flush. Force
+                                // one here. Cheap because user types
+                                // at human rate.
+                                wm::flush_all();
                             }
                         }
                         _ if c >= 0x20 && c <= 0x7E && cmd_len < 255 => {
@@ -235,6 +250,7 @@ pub fn run() -> ! {
                             cmd_len += 1;
                             console::putc(c);
                             platform::serial_putc(c);
+                            wm::flush_all(); // STUMP #115 — see above
                         }
                         _ => {}
                     }
