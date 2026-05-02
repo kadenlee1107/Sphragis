@@ -41,6 +41,32 @@ use crate::ui::font;
 use crate::platform;
 use super::{auth, wipe, deadman};
 
+/// Wall-clock hold via the ARM generic timer. Spin counts are CPU-rate-
+/// dependent and turned the denied/granted flashes into 1-frame blinks
+/// on M4 — use cntpct_el0 / cntfrq_el0 instead so the duration is real
+/// seconds regardless of clock speed.
+fn hold_ms(ms: u64) {
+    let freq: u64;
+    let start: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
+    }
+    let target_ticks = (freq / 1000).saturating_mul(ms);
+    loop {
+        let now: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+        if now.wrapping_sub(start) >= target_ticks { break; }
+        core::hint::spin_loop();
+    }
+}
+
+/// How long the screen holds in each transient state. Tuned for
+/// "long enough to read the message" on a denial, "short enough not
+/// to feel laggy" on success.
+const HOLD_DENIED_MS:  u64 = 2500;
+const HOLD_GRANTED_MS: u64 = 900;
+
 // ─── Palette ────────────────────────────────────────────────────────────
 
 const BG:        u32 = 0xFF0A0A0A; // background
@@ -509,8 +535,11 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
     // Denied overlay — red box centered over the stack.
     if state == LockState::Denied {
         let msg = "ACCESS DENIED";
-        let sub1 = "CODE 0X1A . SHA-256 VERIFY FAILED . 1.42S";
-        let sub2 = "ATTEMPT 2 OF 6 . COOLDOWN 8S";
+        let sub1 = "CODE 0X1A . SHA-256 VERIFY FAILED";
+        // Cooldown text matches the real hold (HOLD_DENIED_MS) so
+        // the screen doesn't lie about timing. Bumped from "8S" to
+        // match the actual 2.5s hold.
+        let sub2 = "COOLDOWN 2.5S . RETURN TO RETRY";
         let pad_x: u32 = 56;
         let pad_y: u32 = 28;
         let inner_w = msg.len() as u32 * CHAR_W;
@@ -636,14 +665,14 @@ pub fn run() {
                 // helper row instead of the field.
                 paint_lock_screen(fb, w, h, LockState::Granted(len as u8), attempts);
                 gpu::flush(0, 0, w, h);
-                for _ in 0..5_000_000 { core::hint::spin_loop(); }
+                hold_ms(HOLD_GRANTED_MS);
                 deadman::refresh();
                 return;
             }
             auth::AuthResult::Failed => {
                 paint_lock_screen(fb, w, h, LockState::Denied, attempts.saturating_sub(1));
                 gpu::flush(0, 0, w, h);
-                for _ in 0..3_000_000 { core::hint::spin_loop(); }
+                hold_ms(HOLD_DENIED_MS);
                 continue;
             }
             auth::AuthResult::Duress => {
