@@ -3475,7 +3475,20 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
                             vm.console_len,
                         )
                     };
-                    for &b in cb { uart::putc(b); }
+                    // STUMP #111 (audit M-console-uart-injection):
+                    // sanitize every byte before putc. JS scripts can
+                    // call `console.log("\x1B[2J\x1B[H")` to clearscreen
+                    // the operator's terminal, or "\r\rfaked log" to
+                    // overwrite the previous line — log-tampering via
+                    // ANSI/CR. Allow only printable ASCII + space + \n
+                    // + \t. Everything else becomes `?`.
+                    for &b in cb {
+                        if b == b'\n' || b == b'\t' || (b >= 0x20 && b < 0x7F) {
+                            uart::putc(b);
+                        } else {
+                            uart::putc(b'?');
+                        }
+                    }
                     if !cb.last().map(|&b| b == b'\n').unwrap_or(false) {
                         uart::puts("\n");
                     }
@@ -3492,7 +3505,15 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
                             vm.console_len,
                         )
                     };
-                    for &b in cb { uart::putc(b); }
+                    // STUMP #111 (audit M-console-uart-injection): same
+                    // sanitization on the error-partial path.
+                    for &b in cb {
+                        if b == b'\n' || b == b'\t' || (b >= 0x20 && b < 0x7F) {
+                            uart::putc(b);
+                        } else {
+                            uart::putc(b'?');
+                        }
+                    }
                     uart::puts("\n=== /JS console ===\n");
                 }
             }
@@ -3838,7 +3859,15 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
                     vm.console_len,
                 )
             };
-            for &b in cb { uart::putc(b); }
+            // STUMP #111 (audit M-console-uart-injection): same
+            // ANSI/CR sanitization on the click-replay drain path.
+            for &b in cb {
+                if b == b'\n' || b == b'\t' || (b >= 0x20 && b < 0x7F) {
+                    uart::putc(b);
+                } else {
+                    uart::putc(b'?');
+                }
+            }
             if !cb.last().map(|&b| b == b'\n').unwrap_or(false) {
                 crate::drivers::uart::puts("\n");
             }
