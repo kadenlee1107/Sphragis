@@ -372,22 +372,15 @@ pub fn draw_frame() {
             gpu::fill_rect(tx + TAB_W, 0, 1, TITLE_H, HAIR);
         }
 
-        // Ctrl+N digit hint at top.
-        // Design source used the Unicode "⌃" (U+2303) prefix to signal
-        // "Ctrl key", but our 8x16 bitmap font is ASCII-only and the
-        // ASCII fallback "^N" reads as visual noise. Dropped the
-        // caret — just the digit, in cyan. Cyan color + position
-        // above the letter pair still clearly says "this is a
-        // Ctrl-keybind hint" without the confusing prefix.
-        let hint_color = if is_active { CYAN } else { FAINT };
-        let hint_ch = b'0' + (i as u8 + 1);
-        let hint_x = tx + (TAB_W - CHAR_W) / 2;
-        font::draw_char(fb, w, hint_x, 2, hint_ch, hint_color, BG);
-
-        // Letter pair below.
+        // Letter pair, vertically centered in the title-bar
+        // (minus the 2px reserved for the active-state underline).
+        // No digit hint — the cyan underline + ink-vs-dim coloring
+        // already shows which tab is active, and the shell banner
+        // tells the operator about the Ctrl+N chord bindings.
         let label_color = if is_active { INK } else { DIM_TXT };
         let label_x = tx + (TAB_W - 2 * CHAR_W) / 2;
-        font::draw_str(fb, w, label_x, 8, labels[i], label_color, BG);
+        let label_y = (TITLE_H - 2 - CHAR_H) / 2;
+        font::draw_str(fb, w, label_x, label_y, labels[i], label_color, BG);
 
         // Active underline strip (2px tall, 6px inset L/R).
         if is_active {
