@@ -3398,14 +3398,19 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
             // through layout; relative URLs aren't resolved yet.
             continue;
         }
-        crate::drivers::uart::puts("  render: fetching link "); uart::puts(url); uart::puts("\n");
+        crate::drivers::uart::puts("  render: fetching link ");
+        // STUMP #111 (audit M-uart-untrusted): URL is from the page's
+        // <link rel=stylesheet href=...>, page-controlled.
+        uart::puts_safe(url);
+        uart::puts("\n");
         let avail = crate::browser::dom::MAX_CSS - doc.css_len;
         if avail == 0 { uart::puts("  render: css buffer full, skip\n"); break; }
         // STUMP #104 — Sprint 2.2: SOP check on the stylesheet's origin
         // vs the main page's origin. Cross-origin CSS is a known XSLeak
         // vector — the renderer rejects unless the operator allowlisted.
         if let Err(e) = crate::security::origin::check_subresource(url) {
-            uart::puts("  render: link "); uart::puts(url);
+            uart::puts("  render: link ");
+            uart::puts_safe(url);
             uart::puts(" blocked: "); uart::puts(e); uart::puts("\n");
             continue;
         }
@@ -3734,9 +3739,10 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
                             // url-encoded fields. Pre-fix the password
                             // hit the serial console verbatim. Now we
                             // only show the action URL + the byte
-                            // length of the body.
+                            // length of the body. Action is
+                            // page-controlled, sanitize via puts_safe.
                             uart::puts("  render: form submit → POST ");
-                            uart::puts(action);
+                            uart::puts_safe(action);
                             uart::puts(" (body=");
                             crate::kernel::mm::print_num(blen);
                             uart::puts(" bytes)\n");
@@ -3794,7 +3800,12 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
                     };
                     if href.starts_with("http://") || href.starts_with("https://") {
                         uart::puts("  render: click_xy → navigating to ");
-                        uart::puts(href); uart::puts("\n");
+                        // STUMP #111 (audit M-uart-untrusted): href is
+                        // page-controlled; sanitize before UART so a
+                        // crafted "<a href='\x1b[2J...'>" doesn't
+                        // clearscreen the operator's terminal.
+                        uart::puts_safe(href);
+                        uart::puts("\n");
                         // Fetch + re-parse in place. Reuse HTML_FETCH_BUF
                         // (the same static the initial load used).
                         let buf = unsafe { &mut *core::ptr::addr_of_mut!(HTML_FETCH_BUF) };
@@ -3826,7 +3837,7 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
                         }
                     } else if href_len > 0 {
                         uart::puts("  render: click_xy hit relative <a href=");
-                        uart::puts(href);
+                        uart::puts_safe(href);
                         uart::puts("> — relative-URL nav not wired yet\n");
                     }
                 } else {
@@ -4388,10 +4399,10 @@ fn handle_interactive_click(
             if action_len > 0
                 && (action.starts_with("http://") || action.starts_with("https://"))
             {
-                // STUMP #111 (audit M-form-body-leak): redacted —
-                // login passwords were leaking to UART verbatim.
+                // STUMP #111 (audit M-form-body-leak + M-uart-untrusted):
+                // body redacted; action sanitized via puts_safe.
                 crate::drivers::uart::puts("  [click] form submit → POST ");
-                crate::drivers::uart::puts(action);
+                crate::drivers::uart::puts_safe(action);
                 crate::drivers::uart::puts(" (body=");
                 crate::kernel::mm::print_num(blen);
                 crate::drivers::uart::puts(" bytes)\n");
@@ -4437,7 +4448,9 @@ fn handle_interactive_click(
         let href = unsafe { core::str::from_utf8_unchecked(&href_buf[..href_len]) };
         if href.starts_with("http://") || href.starts_with("https://") {
             crate::drivers::uart::puts("  [click] navigating → ");
-            crate::drivers::uart::puts(href);
+            // STUMP #111 (audit M-uart-untrusted): href is page-
+            // controlled, sanitize.
+            crate::drivers::uart::puts_safe(href);
             crate::drivers::uart::puts("\n");
             static mut NAV_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
             let buf = unsafe { &mut *core::ptr::addr_of_mut!(NAV_BUF) };

@@ -35,6 +35,29 @@ pub fn puts(s: &str) {
     }
 }
 
+/// STUMP #111 (audit M-uart-untrusted): print a slice that may have
+/// originated from page DOM / network traffic — i.e. attacker-
+/// influenced bytes. Replaces ANSI escapes / CR / NUL / other
+/// control bytes with `?` before emit, defeating the
+/// `\x1B[2J\x1B[H` clearscreen and `\r faked-line` overwrite
+/// attacks. Use this for href values, form-action URLs, page
+/// titles, anything where an attacker controls the bytes. The
+/// trusted `puts` path stays untouched so kernel-internal status
+/// lines keep their full formatting.
+pub fn puts_safe(s: &str) {
+    if !UART_ENABLED.load(Ordering::Relaxed) { return; }
+    for byte in s.bytes() {
+        if byte == b'\n' {
+            putc(b'\r');
+            putc(b'\n');
+        } else if byte == b'\t' || (byte >= 0x20 && byte < 0x7F) {
+            putc(byte);
+        } else {
+            putc(b'?');
+        }
+    }
+}
+
 pub fn has_char() -> bool {
     if !UART_ENABLED.load(Ordering::Relaxed) { return false; }
     unsafe {
