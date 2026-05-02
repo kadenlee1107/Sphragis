@@ -382,11 +382,68 @@ fn halt_bat_os() -> ! {
 }
 
 fn shell_banner() {
-    console::puts_hi("      ___       _      ___  ___\n");
-    console::puts_hi("     | _ ) __ _| |_   / _ \\/ __|\n");
-    console::puts_hi("     | _ \\/ _` |  _| | (_) \\__ \\\n");
-    console::puts_hi("     |___/\\__,_|\\__|  \\___/|___/\n");
-    console::puts("\n");
-    console::puts("  Microkernel Shell — Tab to switch apps\n");
-    console::puts("  Ctrl+A:SH  Ctrl+B:DS  Ctrl+D:NM  Ctrl+E:ED\n\n");
+    // STUMP #120: replace the old ASCII-art "BAT OS" letterforms with
+    // the geometric bat glyph + a structured banner per the spec.
+    // Layout below mirrors `docs/design/desktop-shell/desktop-shell.jsx`'s
+    // ShellBanner component, painted directly to the FB so the
+    // console doesn't have to know about pixel art.
+    use crate::ui::draw;
+    use crate::ui::font;
+    use crate::ui::gpu;
+    use crate::ui::wm;
+
+    const INK:      u32 = 0xFFE5E7EB;
+    const MID:      u32 = 0xFF9CA3AF;
+    const DIM_TXT:  u32 = 0xFF4B5563;
+    const FAINT:    u32 = 0xFF374151;
+    const CYAN:     u32 = 0xFF22D3EE;
+    const CYAN_DIM: u32 = 0xFF0E7490;
+    const BG:       u32 = 0xFF0A0A0A;
+
+    let fb = gpu::framebuffer();
+    let w = gpu::width();
+    // Banner is anchored just inside the console pane's content rect.
+    // wm::content_rect returns the active pane; for the post-auth
+    // single-pane shell that's the full content area.
+    let pr = wm::content_rect();
+    let bx = pr.x + 16;
+    let by = pr.y + 16;
+
+    // Bat glyph (36×24 simplified, drawn at full source resolution).
+    draw::draw_bat_mini_full(bx as i32, by as i32, CYAN);
+
+    // Wordmark + version + hint lines beside the bat.
+    let tx = bx + 50;
+    // Row 1: BAT_OS · version · "Microkernel Shell"
+    font::draw_str(fb, w, tx,                      by + 0,  "BAT", INK, BG);
+    font::draw_str(fb, w, tx + 3 * 8,              by + 0,  "_",   CYAN, BG);
+    font::draw_str(fb, w, tx + 4 * 8,              by + 0,  "OS",  INK, BG);
+    font::draw_str(fb, w, tx + 7 * 8 + 8,          by + 0,  "v0.5.0-DEV",       DIM_TXT, BG);
+    font::draw_str(fb, w, tx + 7 * 8 + 8 + 11 * 8, by + 0,  "MICROKERNEL SHELL", MID,    BG);
+
+    // Row 2: tab hint with chord codes.
+    let r2 = by + 18;
+    font::draw_str(fb, w, tx, r2,
+        "tab to switch apps  .  ^1:SH ^2:DS ^3:FS ^4:NM ^5:ED ^6:SK ^7:CM ^8:WB ^9:BC",
+        DIM_TXT, BG);
+
+    // Row 3: command call-outs (cyan keywords, dim glue).
+    let r3 = by + 36;
+    font::draw_str(fb, w, tx,                       r3, "type ",          DIM_TXT, BG);
+    font::draw_str(fb, w, tx + 5 * 8,               r3, "help",           CYAN,    BG);
+    font::draw_str(fb, w, tx + 9 * 8,               r3, " for commands  .  ", DIM_TXT, BG);
+    let mut x = tx + 9 * 8 + 18 * 8;
+    font::draw_str(fb, w, x, r3, "tls-mode",  CYAN, BG); x += 8 * 8;
+    font::draw_str(fb, w, x, r3, " . ",       FAINT, BG); x += 3 * 8;
+    font::draw_str(fb, w, x, r3, "render",    CYAN, BG); x += 6 * 8;
+    font::draw_str(fb, w, x, r3, " . ",       FAINT, BG); x += 3 * 8;
+    font::draw_str(fb, w, x, r3, "audit",     CYAN, BG); x += 5 * 8;
+    font::draw_str(fb, w, x, r3, " . ",       FAINT, BG); x += 3 * 8;
+    font::draw_str(fb, w, x, r3, "origin-allow", CYAN, BG);
+
+    let _ = CYAN_DIM; // reserved for future scrollback echo styling
+
+    // Push the console cursor below the banner so the prompt lands
+    // at row 4 (~ pixel y = MARGIN_Y + 4*CHAR_H). Each \n bumps cy.
+    console::puts("\n\n\n\n");
 }

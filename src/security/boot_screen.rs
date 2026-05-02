@@ -38,6 +38,7 @@
 
 use crate::ui::gpu;
 use crate::ui::font;
+use crate::ui::draw;
 use crate::platform;
 use super::{auth, wipe, deadman};
 
@@ -95,9 +96,9 @@ const HAIRLINE_Y:   u32 = 64;
 const CHAR_W:       u32 = 8;
 const CHAR_H:       u32 = 16;
 
-// Bat glyph rasterizes into a 120x72 native viewport. We draw it at 1x.
-const BAT_W: u32 = 120;
-const BAT_H: u32 = 72;
+// Bat glyph rasterizes into a 120x72 native viewport via ui::draw.
+const BAT_W: u32 = draw::BAT_FULL_W;
+const BAT_H: u32 = draw::BAT_FULL_H;
 
 // Field geometry: 480x56, centered horizontally, ~50px above vertical center.
 const FIELD_W: u32 = 480;
@@ -105,153 +106,7 @@ const FIELD_H: u32 = 56;
 const DOT_PX:  u32 = 8; // each masking dot is 8x8
 const DOT_GAP: u32 = 8;
 
-// ─── Geometric bat glyph ────────────────────────────────────────────────
-//
-// Translated from Claude Design's `bat-glyph.jsx`. The SVG defines four
-// filled polygons (left wing, right wing, head/ears, torso wedge) plus
-// 10 dim "finger-bone" lines and 13 small circuit nodes. We rasterize
-// them with a tiny scanline polygon fill (`fill_polygon` below), a
-// Bresenham line for the bones, and `fill_rect` for the nodes.
-
-// Coordinates are in the 120x72 source viewport; the renderer offsets
-// them by (origin_x, origin_y) at draw time.
-const BAT_LEFT_WING: &[(i32, i32)] = &[
-    (60, 22), (54, 18), (44, 14), (32, 10), (18,  8),
-    ( 6, 14), ( 2, 24), (10, 28), ( 4, 34), (14, 38),
-    ( 8, 46), (22, 46), (18, 54), (32, 50), (30, 58),
-    (44, 52), (46, 58), (56, 50), (58, 42),
-];
-const BAT_RIGHT_WING: &[(i32, i32)] = &[
-    (60, 22), (66, 18), (76, 14), (88, 10), (102,  8),
-    (114, 14), (118, 24), (110, 28), (116, 34), (106, 38),
-    (112, 46), (98, 46), (102, 54), (88, 50), (90, 58),
-    (76, 52), (74, 58), (64, 50), (62, 42),
-];
-const BAT_HEAD: &[(i32, i32)] = &[
-    (54, 18), (54, 8), (57, 14), (60, 4), (63, 14), (66, 8), (66, 18),
-];
-const BAT_TORSO: &[(i32, i32)] = &[
-    (54, 18), (66, 18), (64, 38), (60, 46), (56, 38),
-];
-
-// Finger-bone lines: (x1, y1) -> (x2, y2). Painted in CYAN_DIM over
-// the wing fills for a circuit-board feel.
-const BAT_BONES: &[(i32, i32, i32, i32)] = &[
-    (56, 22,  18,  8), (56, 26,   6, 20), (56, 30,  10, 32),
-    (56, 36,  14, 42), (56, 42,  22, 50),
-    (64, 22, 102,  8), (64, 26, 114, 20), (64, 30, 110, 32),
-    (64, 36, 106, 42), (64, 42,  98, 50),
-];
-
-// Circuit node 2x2 squares, in CYAN.
-const BAT_NODES: &[(i32, i32)] = &[
-    ( 17,  7), (  5, 13), (  9, 27), ( 13, 37), ( 21, 45),
-    (101,  7), (113, 13), (109, 27), (105, 37), ( 97, 45),
-    ( 51, 61), ( 67, 61), ( 59, 61),
-];
-
-// Eye slits (drawn near-black so they "punch through" the head fill).
-const BAT_EYES: &[(i32, i32)] = &[ (56, 13), (62, 13) ];
-
-// ─── Drawing primitives ────────────────────────────────────────────────
-
-/// Bresenham horizontal/diagonal line. We don't have a `gpu::draw_line`,
-/// and adding one to the GPU layer for one screen is overkill. Inline.
-fn draw_line(x0: i32, y0: i32, x1: i32, y1: i32, color: u32) {
-    let dx = (x1 - x0).abs();
-    let sx: i32 = if x0 < x1 { 1 } else { -1 };
-    let dy = -(y1 - y0).abs();
-    let sy: i32 = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
-    let mut x = x0;
-    let mut y = y0;
-    loop {
-        if x >= 0 && y >= 0 {
-            gpu::fill_rect(x as u32, y as u32, 1, 1, color);
-        }
-        if x == x1 && y == y1 { break; }
-        let e2 = 2 * err;
-        if e2 >= dy { err += dy; x += sx; }
-        if e2 <= dx { err += dx; y += sy; }
-    }
-}
-
-/// Scanline polygon fill, no_std-friendly. The polygons we use have at
-/// most 19 vertices — a fixed 32-slot intersection buffer per scanline
-/// is plenty.
-fn fill_polygon(points: &[(i32, i32)], origin_x: i32, origin_y: i32, color: u32) {
-    if points.len() < 3 { return; }
-    let mut min_y = points[0].1;
-    let mut max_y = points[0].1;
-    for &(_, y) in points {
-        if y < min_y { min_y = y; }
-        if y > max_y { max_y = y; }
-    }
-    for y in min_y..max_y {
-        let mut x_inters = [0i32; 32];
-        let mut n = 0usize;
-        for i in 0..points.len() {
-            let (x1, y1) = points[i];
-            let (x2, y2) = points[(i + 1) % points.len()];
-            // Edge spans this scanline iff y is in [min(y1,y2), max(y1,y2)).
-            let crosses = (y1 <= y && y < y2) || (y2 <= y && y < y1);
-            if crosses {
-                // Linear interpolate to find x at this y; integer math
-                // is fine because all polygon coords are integers.
-                let x = x1 + (y - y1) * (x2 - x1) / (y2 - y1);
-                if n < x_inters.len() { x_inters[n] = x; n += 1; }
-            }
-        }
-        // Bubble sort the intersections (n is tiny, max ~10).
-        for i in 0..n {
-            for j in 0..n.saturating_sub(i + 1) {
-                if x_inters[j] > x_inters[j + 1] {
-                    x_inters.swap(j, j + 1);
-                }
-            }
-        }
-        // Fill between consecutive pairs (even-odd rule).
-        let mut i = 0;
-        while i + 1 < n {
-            let xa = x_inters[i] + origin_x;
-            let xb = x_inters[i + 1] + origin_x;
-            let yy = y + origin_y;
-            if yy >= 0 && xb >= xa && xa >= 0 {
-                gpu::fill_rect(xa as u32, yy as u32, (xb - xa) as u32, 1, color);
-            }
-            i += 2;
-        }
-    }
-}
-
-/// Draw the geometric bat glyph at (origin_x, origin_y), sized 120x72.
-fn draw_bat_glyph(origin_x: i32, origin_y: i32, accent: u32, dim: u32) {
-    fill_polygon(BAT_LEFT_WING,  origin_x, origin_y, accent);
-    fill_polygon(BAT_RIGHT_WING, origin_x, origin_y, accent);
-    fill_polygon(BAT_HEAD,       origin_x, origin_y, accent);
-    fill_polygon(BAT_TORSO,      origin_x, origin_y, accent);
-    for &(x1, y1, x2, y2) in BAT_BONES {
-        draw_line(origin_x + x1, origin_y + y1, origin_x + x2, origin_y + y2, dim);
-    }
-    for &(x, y) in BAT_NODES {
-        gpu::fill_rect((origin_x + x) as u32, (origin_y + y) as u32, 2, 2, accent);
-    }
-    // Eye slits — paint near-black to punch through the head fill.
-    for &(x, y) in BAT_EYES {
-        gpu::fill_rect((origin_x + x) as u32, (origin_y + y) as u32, 2, 1, BG);
-    }
-    // Subtle circuit traces below the body.
-    draw_line(origin_x + 60, origin_y + 46, origin_x + 60, origin_y + 62, dim);
-    draw_line(origin_x + 52, origin_y + 62, origin_x + 68, origin_y + 62, dim);
-}
-
-/// Draw a 1px hollow rectangle border in the given color.
-fn draw_border(x: u32, y: u32, w: u32, h: u32, color: u32) {
-    gpu::fill_rect(x, y, w, 1, color);
-    gpu::fill_rect(x, y + h - 1, w, 1, color);
-    gpu::fill_rect(x, y, 1, h, color);
-    gpu::fill_rect(x + w - 1, y, 1, h, color);
-}
+// Bat glyph + drawing primitives now live in ui::draw — see STUMP #120.
 
 /// Draw a 14×14 L-shape crosshair mark at one of the four corners.
 /// `dx, dy` are the direction signs (-1 / +1) the L opens toward.
@@ -282,7 +137,7 @@ fn draw_status_pill(
     let pill_h: u32 = 22;
 
     gpu::fill_rect(x, y, pill_w, pill_h, PANEL);
-    draw_border(x, y, pill_w, pill_h, HAIR_HI);
+    draw::draw_border(x, y, pill_w, pill_h, HAIR_HI);
 
     // Colored dot with 1px ring (drawn as a 6x6 fill over an 8x8 ring).
     let dot_x = x + pad_x;
@@ -359,7 +214,7 @@ fn draw_clock_block(fb: *mut u32, w: u32, x_right: u32, y_top: u32, attempts: u8
     let border_color = if denied { RED } else { HAIR_HI };
 
     gpu::fill_rect(pill_x, pill_y, pill_w, 22, PANEL);
-    draw_border(pill_x, pill_y, pill_w, 22, border_color);
+    draw::draw_border(pill_x, pill_y, pill_w, 22, border_color);
     let dot_x = pill_x + 10;
     let dot_y = pill_y + 8;
     gpu::fill_rect(dot_x - 1, dot_y - 1, 8, 8, ring_color);
@@ -421,7 +276,7 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
     // Bat glyph centered, ~180px above vertical mid.
     let glyph_x = cx - BAT_W / 2;
     let glyph_y = cy.saturating_sub(180);
-    draw_bat_glyph(glyph_x as i32, glyph_y as i32, accent, accent_dim);
+    draw::draw_bat_full(glyph_x as i32, glyph_y as i32, accent, accent_dim, BG);
 
     // Wordmark "BAT_OS" — 32px in the spec, our font is 16px so it's
     // visually smaller than the mock, but the layout works.
@@ -461,10 +316,10 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
         LockState::Idle       => HAIR_HI,
     };
     gpu::fill_rect(field_x, field_y, FIELD_W, FIELD_H, PANEL);
-    draw_border(field_x, field_y, FIELD_W, FIELD_H, field_border);
+    draw::draw_border(field_x, field_y, FIELD_W, FIELD_H, field_border);
     if matches!(state, LockState::Typing(_) | LockState::Granted(_)) {
         // Inset 1px ring matching the accent.
-        draw_border(field_x + 1, field_y + 1, FIELD_W - 2, FIELD_H - 2, accent_dim);
+        draw::draw_border(field_x + 1, field_y + 1, FIELD_W - 2, FIELD_H - 2, accent_dim);
     }
 
     // Granted state — replace the dots/cursor row with a centered
@@ -563,8 +418,8 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
         let box_x = cx - box_w / 2;
         let box_y = cy - box_h / 2;
         gpu::fill_rect(box_x, box_y, box_w, box_h, BG);
-        draw_border(box_x, box_y, box_w, box_h, RED);
-        draw_border(box_x - 1, box_y - 1, box_w + 2, box_h + 2, RED_DIM);
+        draw::draw_border(box_x, box_y, box_w, box_h, RED);
+        draw::draw_border(box_x - 1, box_y - 1, box_w + 2, box_h + 2, RED_DIM);
         let msg_x = box_x + (box_w - msg.len() as u32 * CHAR_W) / 2;
         font::draw_str(fb, w, msg_x, box_y + pad_y, msg, RED, BG);
         let sub1_x = box_x + (box_w - sub1.len() as u32 * CHAR_W) / 2;
@@ -725,7 +580,7 @@ fn fake_boot_and_wipe(fb: *mut u32, w: u32, h: u32) {
     let bar_y = cy + 30;
     let bar_w: u32 = 200;
     let bar_h: u32 = 12;
-    draw_border(bar_x, bar_y, bar_w, bar_h, HAIR_HI);
+    draw::draw_border(bar_x, bar_y, bar_w, bar_h, HAIR_HI);
     gpu::flush(0, 0, w, h);
 
     wipe::execute(wipe::WipeReason::Duress, true);

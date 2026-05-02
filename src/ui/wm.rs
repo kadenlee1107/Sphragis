@@ -6,18 +6,45 @@
 
 use crate::ui::gpu;
 use super::font;
+use super::draw;
 use core::sync::atomic::{AtomicU8, AtomicBool, Ordering};
 
-const BLACK: u32 = 0xFF000000;
-const WHITE: u32 = 0xFFFFFFFF;
-const BORDER: u32 = 0xFF1E1E1E;
-const TITLE_BG: u32 = 0xFF0A0A0A;
-const FG: u32 = 0xFFA0A0A0;
-const FG_HI: u32 = 0xFFFFFFFF;
-const FG_DIM: u32 = 0xFF5A5A5A;
-const GREEN: u32 = 0xFF00FF00;
-const RED: u32 = 0xFFFF0000;
-const STATUS_BG: u32 = 0xFF0A0A0A;
+// STUMP #120 — Claude-Design desktop chrome. Palette mirrors the
+// lock-screen + spec sheet so apps inherit a single visual language.
+const BG:        u32 = 0xFF0A0A0A;
+const PANEL:     u32 = 0xFF0E0E0E;
+const HAIR:      u32 = 0xFF1A1A1A;
+const HAIR_HI:   u32 = 0xFF262626;
+const INK:       u32 = 0xFFE5E7EB;
+const MID:       u32 = 0xFF9CA3AF;
+const DIM_TXT:   u32 = 0xFF4B5563;
+const FAINT:     u32 = 0xFF374151;
+const CYAN:      u32 = 0xFF22D3EE;
+const CYAN_DIM:  u32 = 0xFF0E7490;
+const GREEN:     u32 = 0xFF22C55E;
+const GREEN_DIM: u32 = 0xFF14532D;
+const AMBER:     u32 = 0xFFF59E0B;
+const AMBER_DIM: u32 = 0xFF78350F;
+const RED:       u32 = 0xFFEF4444;
+const RED_DIM:   u32 = 0xFF7F1D1D;
+
+// Legacy aliases — kept so existing call sites don't have to be
+// rewritten in lockstep. Map onto the new palette.
+const BLACK: u32 = BG;
+const WHITE: u32 = INK;
+const BORDER: u32 = HAIR;
+const TITLE_BG: u32 = BG;
+const FG: u32 = MID;
+const FG_HI: u32 = INK;
+const FG_DIM: u32 = DIM_TXT;
+const STATUS_BG: u32 = BG;
+
+// Title-bar segment widths (per spec: brand 132 · 9 tabs × 64 · cave 168).
+const BRAND_W:    u32 = 132;
+const TAB_W:      u32 = 64;
+const CAVE_W_MIN: u32 = 168;
+const CHAR_W:     u32 = 8;
+const CHAR_H:     u32 = 16;
 
 const TITLE_H: u32 = 24;
 const STATUS_H: u32 = 28;
@@ -296,177 +323,290 @@ pub fn pane_rect(idx: usize) -> WindowRect {
 pub fn content_rect_secondary() -> WindowRect { pane_rect(1) }
 
 /// Draw the full window frame (title bar, borders, status bar).
+///
+/// STUMP #120 — Claude-Design desktop-chrome port. Layout per
+/// `docs/design/desktop-shell/shell-specs.jsx`:
+///   * Title bar 24px: brand block (132px) | tab strip (9 × 64px,
+///     centered between brand and cave) | cave block (168px right).
+///   * Content area: hairline top + bottom, apps own internal layout.
+///   * Status bar 28px: 5 live-state segments (ENCRYPTED · NET · TLS
+///     · JS · AUDIT) + right-aligned uptime.
 pub fn draw_frame() {
     let w = gpu::width();
     let h = gpu::height();
     let fb = gpu::framebuffer();
-    let app = ACTIVE_APP.load(Ordering::Relaxed) as usize;
+    let active_app = ACTIVE_APP.load(Ordering::Relaxed) as usize;
 
-    // Clear everything
-    gpu::fill_screen(BLACK);
+    // Background.
+    gpu::fill_screen(BG);
 
-    // Title bar background
-    gpu::fill_rect(0, 0, w, TITLE_H, TITLE_BG);
+    // ── TITLE BAR ───────────────────────────────────────────────
+    gpu::fill_rect(0, 0, w, TITLE_H, BG);
 
-    // Bat icon + app name
-    font::draw_str(fb, w, 8, 4, "\x04", WHITE, TITLE_BG); // bat char placeholder
-    font::draw_str(fb, w, 8, 4, ">>", FG_DIM, TITLE_BG);
-    font::draw_str(fb, w, 28, 4, APP_NAMES[app], FG_HI, TITLE_BG);
+    // 1) Brand block — bat-mini + "BAT_OS" wordmark.
+    let brand_text_y = (TITLE_H - CHAR_H) / 2;
+    let bat_y = (TITLE_H - 12) / 2;
+    draw::draw_bat_mini(14, bat_y, CYAN);
+    let wordmark_x = 14 + 18 + 8; // bat width + gap
+    font::draw_str(fb, w, wordmark_x, brand_text_y, "BAT", INK, BG);
+    font::draw_str(fb, w, wordmark_x + 3 * CHAR_W, brand_text_y, "_", CYAN, BG);
+    font::draw_str(fb, w, wordmark_x + 4 * CHAR_W, brand_text_y, "OS", INK, BG);
+    // 1px right separator on the brand block.
+    gpu::fill_rect(BRAND_W, 0, 1, TITLE_H, HAIR);
 
-    // Tab indicators — spread evenly across the title bar
-    let mode = unsafe { if PANE_COUNT > 1 { 1u8 } else { 0u8 } };
+    // 2) Tab strip — 9 × 64px = 576px, centered between brand and cave.
+    let tabs_total = NUM_APPS as u32 * TAB_W;
+    let tabs_start = (w - tabs_total) / 2;
+    let labels = ["SH", "DS", "FS", "NM", "ED", "SK", "CM", "WB", "BC"];
+    let pane_count_now = unsafe { PANE_COUNT };
+    let split_app = unsafe { if pane_count_now > 1 { PANES[1].app as usize } else { usize::MAX } };
     let focus = unsafe { FOCUSED_PANE };
-    let split_app_id = unsafe { if PANE_COUNT > 1 { PANES[1].app as usize } else { 0 } };
-
-    // Center the tabs in the title bar
-    let tab_spacing = 36u32;
-    let total_tabs_w = NUM_APPS as u32 * tab_spacing;
-    let tab_start = (w - total_tabs_w) / 2;
     for i in 0..NUM_APPS as usize {
-        let tx = tab_start + (i as u32) * tab_spacing;
-        let label = match i {
-            0 => "SH",
-            1 => "DS",
-            2 => "FS",
-            3 => "NM",
-            4 => "ED",
-            5 => "SK",
-            6 => "CM",
-            7 => "WB",
-            8 => "BC",
-            _ => "",
-        };
-        // Highlight: active app in primary panel
-        let is_primary = i == app;
-        let is_secondary = mode > 0 && i == split_app_id;
+        let tx = tabs_start + (i as u32) * TAB_W;
+        let is_primary = i == active_app;
+        let is_secondary = pane_count_now > 1 && i == split_app;
+        let is_active = is_primary || is_secondary;
 
-        if is_primary && is_secondary {
-            // Both panels show same app (unlikely but handle it)
-            font::draw_str(fb, w, tx, 4, label, BLACK, WHITE);
-        } else if is_primary {
-            let bg = if focus == 0 { WHITE } else { FG_DIM };
-            font::draw_str(fb, w, tx, 4, label, BLACK, bg);
-        } else if is_secondary {
-            let bg = if focus == 1 { WHITE } else { FG_DIM };
-            font::draw_str(fb, w, tx, 4, label, BLACK, bg);
-        } else {
-            font::draw_str(fb, w, tx, 4, label, FG_DIM, TITLE_BG);
+        // Vertical 1px hairline between tabs (skip the last one).
+        if i < (NUM_APPS as usize) - 1 {
+            gpu::fill_rect(tx + TAB_W, 0, 1, TITLE_H, HAIR);
         }
-    }
 
-    // Pane count indicator
-    let n_panes = unsafe { PANE_COUNT };
-    if n_panes > 1 {
-        let mut px = tab_start + NUM_APPS as u32 * tab_spacing + 8;
-        font::draw_str(fb, w, px, 4, "[", FG_DIM, TITLE_BG);
-        px += 8;
-        for i in 0..n_panes as usize {
-            let pane_app = unsafe { PANES[i].app } as usize;
-            let short = match pane_app {
-                0 => "SH", 1 => "DS", 2 => "FS", 3 => "NM", 4 => "ED", 5 => "BC", _ => "??",
+        // ⌃N digit hint at top — single char so we can color it
+        // separately from the letter pair.
+        let hint_color = if is_active { CYAN } else { FAINT };
+        let hint_ch = b'0' + (i as u8 + 1);
+        let hint_x = tx + (TAB_W - 2 * CHAR_W) / 2;
+        font::draw_char(fb, w, hint_x, 2, b'^', hint_color, BG);
+        font::draw_char(fb, w, hint_x + CHAR_W, 2, hint_ch, hint_color, BG);
+
+        // Letter pair below.
+        let label_color = if is_active { INK } else { DIM_TXT };
+        let label_x = tx + (TAB_W - 2 * CHAR_W) / 2;
+        font::draw_str(fb, w, label_x, 8, labels[i], label_color, BG);
+
+        // Active underline strip (2px tall, 6px inset L/R).
+        if is_active {
+            // Primary pane gets full cyan; secondary gets cyan-dim if
+            // the focus is on the other pane (so the user can still
+            // tell which is which).
+            let underline = if (is_primary && focus == 0) || (is_secondary && focus == 1) {
+                CYAN
+            } else {
+                CYAN_DIM
             };
-            let color = if i == focus as usize { FG_HI } else { FG_DIM };
-            font::draw_str(fb, w, px, 4, short, color, TITLE_BG);
-            px += 20;
-            if (i as u8) < n_panes - 1 {
-                font::draw_str(fb, w, px, 4, "|", FG_DIM, TITLE_BG);
-                px += 12;
-            }
+            gpu::fill_rect(tx + 6, TITLE_H - 2, TAB_W - 12, 2, underline);
         }
-        font::draw_str(fb, w, px, 4, "]", FG_DIM, TITLE_BG);
     }
 
-    // Minimize indicator (decorative) + Close button (functional via Tab + Enter)
-    font::draw_str(fb, w, w - 40, 4, "_ ", FG_DIM, TITLE_BG);
-    if CLOSE_FOCUSED.load(Ordering::Relaxed) {
-        // Highlighted: black-on-white, signals focus
-        font::draw_str(fb, w, w - 24, 4, "X", BLACK, WHITE);
-    } else {
-        font::draw_str(fb, w, w - 24, 4, "X", FG_DIM, TITLE_BG);
-    }
+    // 3) Cave block — right-aligned, "CAVE" label + name + status dot.
+    let cave_w = CAVE_W_MIN;
+    let cave_x = w - cave_w;
+    gpu::fill_rect(cave_x, 0, 1, TITLE_H, HAIR);
+    let cave_text_y = (TITLE_H - CHAR_H) / 2;
+    font::draw_str(fb, w, cave_x + 14, cave_text_y, "CAVE", DIM_TXT, BG);
+    let (cave_name, cave_dot, cave_dot_ring) = active_cave_indicator();
+    let name_x = cave_x + 14 + 4 * CHAR_W + CHAR_W;
+    font::draw_str(fb, w, name_x, cave_text_y, cave_name, INK, BG);
+    // 6px dot with 1px ring, far right.
+    let dot_x = w - 14 - 6;
+    let dot_y = (TITLE_H - 6) / 2;
+    gpu::fill_rect(dot_x - 1, dot_y - 1, 8, 8, cave_dot_ring);
+    gpu::fill_rect(dot_x, dot_y, 6, 6, cave_dot);
 
-    // Border below title
-    gpu::fill_rect(0, TITLE_H, w, BORDER_W, BORDER);
+    // ── CONTENT AREA HAIRLINES ──────────────────────────────────
+    gpu::fill_rect(0, TITLE_H, w, 1, HAIR);
+    gpu::fill_rect(0, h - STATUS_H - 1, w, 1, HAIR);
 
-    // Side borders
-    gpu::fill_rect(0, TITLE_H, BORDER_W, h - TITLE_H - STATUS_H, BORDER);
-    gpu::fill_rect(w - BORDER_W, TITLE_H, BORDER_W, h - TITLE_H - STATUS_H, BORDER);
-
-    // Pane dividers
+    // ── PANE DIVIDERS (when split) ──────────────────────────────
     unsafe {
         let total_w = w - BORDER_W * 2;
         let total_h = h - TITLE_H - STATUS_H - BORDER_W * 2;
         let rows = LAYOUT_ROWS.max(1) as u32;
         let cols = LAYOUT_COLS.max(1) as u32;
-
-        // Vertical dividers
         for c in 1..cols {
             let div_x = BORDER_W + c * (total_w / cols);
-            gpu::fill_rect(div_x, TITLE_H + BORDER_W, 2, total_h, BORDER);
+            gpu::fill_rect(div_x, TITLE_H + BORDER_W, 1, total_h, HAIR);
         }
-        // Horizontal dividers
         for r in 1..rows {
             let div_y = TITLE_H + BORDER_W + r * (total_h / rows);
-            gpu::fill_rect(BORDER_W, div_y, total_w, 2, BORDER);
+            gpu::fill_rect(BORDER_W, div_y, total_w, 1, HAIR);
         }
-
-        // Draw focused pane border highlight
+        // Focused pane: 1px cyan-dim border so the user can tell
+        // which pane keystrokes go to.
         let f = FOCUSED_PANE as usize;
         if PANE_COUNT > 1 && f < MAX_PANES {
             let rect = pane_rect(f);
-            let highlight: u32 = 0xFF3A3A3A;
-            gpu::fill_rect(rect.x, rect.y, rect.w, 1, highlight); // top
-            gpu::fill_rect(rect.x, rect.y + rect.h, rect.w, 1, highlight); // bottom
-            gpu::fill_rect(rect.x, rect.y, 1, rect.h, highlight); // left
-            gpu::fill_rect(rect.x + rect.w, rect.y, 1, rect.h, highlight); // right
+            draw::draw_border(rect.x, rect.y, rect.w, rect.h, CYAN_DIM);
         }
     }
 
-    // Status bar
+    // ── STATUS BAR ──────────────────────────────────────────────
     let sy = h - STATUS_H;
-    gpu::fill_rect(0, sy, w, STATUS_H, STATUS_BG);
-    gpu::fill_rect(0, sy, w, 1, BORDER);
-
+    gpu::fill_rect(0, sy, w, STATUS_H, BG);
+    gpu::fill_rect(0, sy, w, 1, HAIR);
     draw_status_bar(fb, w, sy);
 }
 
-fn draw_status_bar(fb: *mut u32, w: u32, sy: u32) {
-    let ty = sy + 6;
-
-    // Encryption status
-    gpu::fill_rect(8, ty + 2, 8, 8, GREEN);
-    font::draw_str(fb, w, 20, ty, "ENCRYPTED", GREEN, STATUS_BG);
-
-    font::draw_str(fb, w, 100, ty, "|", FG_DIM, STATUS_BG);
-
-    // Network status
-    let net_ok = crate::drivers::virtio::net::is_ready();
-    let net_color = if net_ok { GREEN } else { RED };
-    let net_text = if net_ok { "ONLINE" } else { "OFFLINE" };
-    gpu::fill_rect(112, ty + 2, 8, 8, net_color);
-    font::draw_str(fb, w, 124, ty, net_text, net_color, STATUS_BG);
-
-    font::draw_str(fb, w, 188, ty, "|", FG_DIM, STATUS_BG);
-
-    // Firewall
-    font::draw_str(fb, w, 200, ty, "FW:DENY_ALL", FG_DIM, STATUS_BG);
-
-    font::draw_str(fb, w, 300, ty, "|", FG_DIM, STATUS_BG);
-
-    // Uptime
-    let (mins, _secs) = get_uptime();
-    font::draw_str(fb, w, 312, ty, "UP:", FG_DIM, STATUS_BG);
-    draw_num_at(fb, w, 336, ty, mins as usize, FG_DIM, STATUS_BG);
-    font::draw_str(fb, w, 352, ty, "m", FG_DIM, STATUS_BG);
-
-    // Keyboard hints
-    unsafe {
-        if PANE_COUNT > 1 {
-            font::draw_str(fb, w, w - 320, ty, "Opt+Tab:focus Tab:app ^L:vsplit ^K:hsplit ^Q:close", FG_DIM, STATUS_BG);
-        } else {
-            font::draw_str(fb, w, w - 300, ty, "Tab:app ^L:vsplit ^K:hsplit", FG_DIM, STATUS_BG);
-        }
+/// Resolve the cave indicator for the title bar's right-hand block.
+fn active_cave_indicator() -> (&'static str, u32, u32) {
+    let id = crate::batcave::cave::get_active();
+    if id == usize::MAX {
+        // No active cave — kernel context.
+        return ("kernel", GREEN, GREEN_DIM);
     }
+    // We only render the first 16 chars of the cave name into a tiny
+    // static slot so we can return a `'static`-shaped reference. Most
+    // cave names are well within 16 ASCII chars.
+    static mut NAME_BUF: [u8; 16] = [b' '; 16];
+    let name_len = unsafe {
+        let buf_ptr = core::ptr::addr_of_mut!(NAME_BUF) as *mut u8;
+        // Fill with spaces first.
+        for i in 0..16 { core::ptr::write_volatile(buf_ptr.add(i), b' '); }
+        // Try a few likely accessor patterns. We don't have a generic
+        // "current_cave_name" helper, so call into the active cave
+        // table directly.
+        let raw = crate::batcave::cave::active_name_str();
+        let n = raw.len().min(16);
+        for i in 0..n { core::ptr::write_volatile(buf_ptr.add(i), raw.as_bytes()[i]); }
+        n
+    };
+    let name = unsafe {
+        core::str::from_utf8_unchecked(
+            core::slice::from_raw_parts(core::ptr::addr_of!(NAME_BUF) as *const u8, name_len)
+        )
+    };
+    (name, GREEN, GREEN_DIM)
+}
+
+fn draw_status_bar(fb: *mut u32, w: u32, sy: u32) {
+    // Each segment: dot? + 12px L/R padding + label (10px-equivalent
+    // tracking 1.5) + value (11px-equivalent tracking 1). Separators
+    // are 1px hair-hi vertical strips between segments.
+    let mut x = 0u32;
+
+    x = draw_status_segment(fb, w, x, sy, "ENCRYPTED", None, INK,
+        Some((GREEN, GREEN_DIM)));
+
+    let net_ok = crate::drivers::virtio::net::is_ready();
+    let mut net_buf = [0u8; 16];
+    let net_value: &str = if net_ok {
+        let ip = crate::net::ip::our_ip();
+        let n = crate::net::ip::ip_to_str(ip, &mut net_buf);
+        unsafe { core::str::from_utf8_unchecked(&net_buf[..n]) }
+    } else {
+        "OFFLINE"
+    };
+    let net_color = if net_ok { INK } else { RED };
+    x = draw_status_segment(fb, w, x, sy, "NET", Some(net_value), net_color, None);
+
+    let mode = crate::net::tls_pinning::current_mode();
+    let (tls_label, tls_color) = match mode {
+        crate::net::tls_pinning::Mode::Lockdown => ("LOCKDOWN", CYAN),
+        crate::net::tls_pinning::Mode::Research => ("RESEARCH", AMBER),
+        crate::net::tls_pinning::Mode::Open     => ("OPEN",     RED),
+    };
+    x = draw_status_segment(fb, w, x, sy, "TLS", Some(tls_label), tls_color, None);
+
+    let js_on = crate::browser::js::is_enabled();
+    x = draw_status_segment(fb, w, x, sy, "JS",
+        Some(if js_on { "ON" } else { "OFF" }),
+        if js_on { AMBER } else { INK }, None);
+
+    let audit_count = crate::security::audit::count();
+    let mut audit_buf = [0u8; 24];
+    let audit_n = format_audit(audit_count, &mut audit_buf);
+    let audit_text = unsafe { core::str::from_utf8_unchecked(&audit_buf[..audit_n]) };
+    let _ = draw_status_segment(fb, w, x, sy, "AUDIT", Some(audit_text), INK, None);
+
+    // Right-anchored UPTIME segment.
+    let (mins, secs) = get_uptime();
+    let mut up_buf = [0u8; 24];
+    let up_n = format_uptime(mins, secs, &mut up_buf);
+    let up_text = unsafe { core::str::from_utf8_unchecked(&up_buf[..up_n]) };
+    let label_w = 6 * CHAR_W;     // "UPTIME"
+    let value_w = up_n as u32 * CHAR_W;
+    let pad: u32 = 12;
+    let seg_w = pad + label_w + CHAR_W + value_w + pad;
+    let seg_x = w - seg_w;
+    gpu::fill_rect(seg_x, sy, 1, STATUS_H, HAIR_HI);
+    let text_y = sy + (STATUS_H - CHAR_H) / 2;
+    font::draw_str(fb, w, seg_x + pad, text_y, "UPTIME", MID, BG);
+    font::draw_str(fb, w, seg_x + pad + label_w + CHAR_W, text_y, up_text, INK, BG);
+}
+
+/// Paint a single status-bar segment (dot? + label + optional value).
+/// Returns the segment's right edge so the caller can chain.
+fn draw_status_segment(
+    fb: *mut u32, w: u32,
+    x: u32, sy: u32,
+    label: &str, value: Option<&str>,
+    value_color: u32,
+    dot: Option<(u32, u32)>,
+) -> u32 {
+    let pad: u32 = 12;
+    let label_w = label.len() as u32 * CHAR_W;
+    let value_w = value.map_or(0, |v| v.len() as u32 * CHAR_W + CHAR_W);
+    let dot_w: u32 = if dot.is_some() { 6 + 8 } else { 0 };
+    let seg_w = pad + dot_w + label_w + value_w + pad;
+    let text_y = sy + (STATUS_H - CHAR_H) / 2;
+
+    if let Some((dot_color, dot_ring)) = dot {
+        let dot_x = x + pad;
+        let dot_y = sy + (STATUS_H - 6) / 2;
+        gpu::fill_rect(dot_x - 1, dot_y - 1, 8, 8, dot_ring);
+        gpu::fill_rect(dot_x, dot_y, 6, 6, dot_color);
+    }
+    let label_x = x + pad + dot_w;
+    font::draw_str(fb, w, label_x, text_y, label, MID, BG);
+    if let Some(v) = value {
+        let value_x = label_x + label_w + CHAR_W;
+        font::draw_str(fb, w, value_x, text_y, v, value_color, BG);
+    }
+    // Right separator.
+    gpu::fill_rect(x + seg_w, sy, 1, STATUS_H, HAIR_HI);
+    x + seg_w
+}
+
+fn format_audit(count: usize, out: &mut [u8]) -> usize {
+    let mut p = 0;
+    p += write_dec(count, &mut out[p..]);
+    out[p] = b' '; p += 1;
+    out[p] = b'/'; p += 1;
+    out[p] = b' '; p += 1;
+    p += write_dec(1024, &mut out[p..]);
+    p
+}
+
+fn format_uptime(mins: u64, secs: u64, out: &mut [u8]) -> usize {
+    let days = mins / (60 * 24);
+    let hours = (mins / 60) % 24;
+    let m = mins % 60;
+    let mut p = 0;
+    p += write_dec(days as usize, &mut out[p..]);
+    out[p] = b'd'; p += 1;
+    out[p] = b' '; p += 1;
+    p += write_dec_2(hours as usize, &mut out[p..]);
+    out[p] = b':'; p += 1;
+    p += write_dec_2(m as usize, &mut out[p..]);
+    out[p] = b':'; p += 1;
+    p += write_dec_2(secs as usize, &mut out[p..]);
+    p
+}
+
+fn write_dec(mut n: usize, out: &mut [u8]) -> usize {
+    if n == 0 { out[0] = b'0'; return 1; }
+    let mut tmp = [0u8; 20];
+    let mut i = 0;
+    while n > 0 && i < tmp.len() { tmp[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
+    for j in 0..i { out[j] = tmp[i - 1 - j]; }
+    i
+}
+
+fn write_dec_2(n: usize, out: &mut [u8]) -> usize {
+    out[0] = b'0' + ((n / 10) % 10) as u8;
+    out[1] = b'0' + (n % 10) as u8;
+    2
 }
 
 fn get_uptime() -> (u64, u64) {

@@ -7,12 +7,15 @@ use crate::ui::gpu;
 use super::font::{self, CHAR_W, CHAR_H};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-const BG: u32 = 0xFF000000;    // Black
-const FG: u32 = 0xFFA0A0A0;    // text-mid gray
-const FG_HI: u32 = 0xFFFFFFFF; // White
-const FG_DIM: u32 = 0xFF5A5A5A; // Dim
-const ACCENT_GREEN: u32 = 0xFF00FF00;
-const ACCENT_RED: u32 = 0xFFFF0000;
+// STUMP #120: palette matches the WM chrome and lock screen.
+const BG: u32 = 0xFF0A0A0A;
+const FG: u32 = 0xFFE5E7EB;     // INK
+const FG_HI: u32 = 0xFFE5E7EB;
+const FG_DIM: u32 = 0xFF4B5563;
+const ACCENT_CYAN: u32 = 0xFF22D3EE;
+const ACCENT_CYAN_DIM: u32 = 0xFF0E7490;
+const ACCENT_GREEN: u32 = 0xFF22C55E;
+const ACCENT_RED: u32 = 0xFFEF4444;
 
 const MARGIN_X: u32 = 16;
 const MARGIN_Y: u32 = 16;
@@ -194,8 +197,10 @@ pub fn prompt() {
     let cy = CURSOR_Y.load(Ordering::Relaxed);
     let py = MARGIN_Y + cy * CHAR_H;
 
+    // STUMP #120: prompt typography per spec sheet —
+    // "bat_os" in INK, " > " in CYAN.
     font::draw_str(fb, w, MARGIN_X, py, "bat_os", FG_HI, BG);
-    font::draw_str(fb, w, MARGIN_X + 6 * CHAR_W, py, " > ", FG_DIM, BG);
+    font::draw_str(fb, w, MARGIN_X + 6 * CHAR_W, py, " > ", ACCENT_CYAN, BG);
     CURSOR_X.store(9, Ordering::Relaxed);
 
     gpu::flush(MARGIN_X, py, 12 * CHAR_W, CHAR_H);

@@ -201,6 +201,19 @@ pub fn get_active() -> usize {
     ACTIVE_CAVE_ID.load(Ordering::Relaxed)
 }
 
+/// STUMP #120: name of the currently-active cave for UI display
+/// (title-bar cave indicator). Returns "kernel" when no cave is
+/// active or the slot id is out of range.
+pub fn active_name_str() -> &'static str {
+    let id = ACTIVE_CAVE_ID.load(Ordering::Relaxed);
+    if id == usize::MAX || id >= MAX_CAVES { return "kernel"; }
+    unsafe {
+        let cave = &CAVES[id];
+        if cave.state == CaveState::Free { return "kernel"; }
+        cave.name_str()
+    }
+}
+
 /// Check if the active cave can access a filesystem path.
 pub fn active_can_access_path(path: &str) -> bool {
     let id = get_active();

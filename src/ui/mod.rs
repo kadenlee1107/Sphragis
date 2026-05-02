@@ -1,5 +1,6 @@
 pub mod apps;
 pub mod console;
+pub mod draw;
 pub mod font;
 pub mod gpu;
 pub mod shell;
