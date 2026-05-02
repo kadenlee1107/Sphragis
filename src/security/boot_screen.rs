@@ -140,9 +140,20 @@ pub fn run() {
             // events from the GUI window land in the keystroke ring,
             // then prefer serial (already-buffered when called from
             // the kernel shell) and fall through to the GUI ring.
+            //
+            // STUMP #112: ALSO drain the tablet/mouse key ring.
+            // QEMU's input multiplexer routes EV_KEY events to the
+            // pointer device (virtio-mouse / virtio-tablet) when one
+            // is attached — same bug STUMP #100b fixed for the
+            // interactive loop. The boot-screen was the last spot
+            // still ignoring tablet-routed keys, and that's exactly
+            // why the user saw "I click into QEMU and type but
+            // nothing appears in the passphrase field."
             crate::drivers::virtio::keyboard::poll();
+            crate::drivers::virtio::tablet::poll();
             let c_opt = platform::serial_getc()
-                .or_else(crate::drivers::virtio::keyboard::getc);
+                .or_else(crate::drivers::virtio::keyboard::getc)
+                .or_else(crate::drivers::virtio::tablet::getc_key);
             if let Some(c) = c_opt {
                 match c {
                     b'\r' | b'\n' => break,

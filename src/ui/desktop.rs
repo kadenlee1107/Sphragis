@@ -19,9 +19,14 @@ pub fn resume() -> ! {
         // STUMP #99: same dual-source read as desktop::run. Without
         // this, after a cave exit the resumed shell wouldn't accept
         // QEMU-window keystrokes either.
+        // STUMP #112: ALSO drain tablet/mouse key ring — pointer
+        // devices steal EV_KEY events on QEMU. See uart.rs for the
+        // full explanation.
         crate::drivers::virtio::keyboard::poll();
+        crate::drivers::virtio::tablet::poll();
         let next_char = platform::serial_getc()
-            .or_else(crate::drivers::virtio::keyboard::getc);
+            .or_else(crate::drivers::virtio::keyboard::getc)
+            .or_else(crate::drivers::virtio::tablet::getc_key);
         if let Some(c) = next_char {
             if security::check_panic_hotkey(c) {
                 loop { unsafe { core::arch::asm!("wfe") }; }
@@ -99,9 +104,13 @@ pub fn run() -> ! {
         // only serial was read, so a Mac user typing into the QEMU
         // window saw zero feedback. Pump virtio events first so they
         // land in the keystroke ring, then prefer serial.
+        // STUMP #112: drain tablet/mouse key ring too (QEMU pointer
+        // devices steal EV_KEY).
         crate::drivers::virtio::keyboard::poll();
+        crate::drivers::virtio::tablet::poll();
         let next_char = platform::serial_getc()
-            .or_else(crate::drivers::virtio::keyboard::getc);
+            .or_else(crate::drivers::virtio::keyboard::getc)
+            .or_else(crate::drivers::virtio::tablet::getc_key);
         if let Some(c) = next_char {
             // Check for Ctrl+1-5 (switch apps)
             if c == 0x11 { // Ctrl+Q (or we use raw codes)

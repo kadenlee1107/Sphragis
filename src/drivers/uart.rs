@@ -67,9 +67,21 @@ pub fn has_char() -> bool {
 }
 
 pub fn getc() -> Option<u8> {
-    // Check virtio keyboard first (GUI window input)
+    // Check virtio keyboard first (GUI window input).
     crate::drivers::virtio::keyboard::poll();
     if let Some(c) = crate::drivers::virtio::keyboard::getc() {
+        return Some(c);
+    }
+    // STUMP #112: QEMU's input multiplexer routes EV_KEY to virtio-
+    // tablet / virtio-mouse when both keyboard AND a pointer device
+    // are attached (the pointer-device model claims the key-event
+    // capability and steals it — this is the same bug STUMP #100b
+    // fixed for the interactive loop, but uart::getc was never
+    // updated, so the boot-screen passphrase prompt and the kernel
+    // shell silently dropped GUI typing on Mac). Drain the tablet's
+    // mis-routed key ring as a fallback before serial.
+    crate::drivers::virtio::tablet::poll();
+    if let Some(c) = crate::drivers::virtio::tablet::getc_key() {
         return Some(c);
     }
     // Fall back to serial UART

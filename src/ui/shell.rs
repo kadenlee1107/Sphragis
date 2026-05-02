@@ -132,6 +132,8 @@ fn execute(cmd: &str) {
         "origin-allow" => cmd_origin_allow(parts[1], parts[2]),
         "origin-mode" => cmd_origin_mode(parts[1]),
         "cookies" => cmd_cookies(parts[1]),
+        "kbd-stats" | "kbd" => cmd_kbd_stats(),
+        "kbd-trace" => cmd_kbd_trace(parts[1]),
         "browse" | "open" => {
             if !parts[1].is_empty() {
                 console::puts("  Opening in BatBrowser: ");
@@ -4635,6 +4637,56 @@ fn cmd_cookies(arg: &str) {
     crate::kernel::mm::print_num(crate::net::cookies::count());
     console::puts(" active\n");
     crate::net::cookies::dump();
+}
+
+/// Toggle the per-event "[kbd] ev type=X code=Y val=Z" UART trace.
+/// `kbd-trace on` to enable; `kbd-trace off` to disable.
+fn cmd_kbd_trace(arg: &str) {
+    match arg {
+        "on" | "true" | "1" => {
+            crate::drivers::virtio::keyboard::set_trace(true);
+            console::puts("  kbd-trace: ON (every event will print to serial)\n");
+        }
+        "off" | "false" | "0" | "" => {
+            crate::drivers::virtio::keyboard::set_trace(false);
+            console::puts("  kbd-trace: OFF\n");
+        }
+        _ => {
+            console::puts("  usage: kbd-trace on|off\n");
+        }
+    }
+}
+
+/// Diagnostic: print virtio-keyboard event counters. Helps answer
+/// "is QEMU sending keystrokes from the GUI window at all?" by
+/// showing total events received, EV_KEY DOWN/UP counts, last
+/// event type+code seen, and how many chars made it into the
+/// keystroke ring. Run before AND after typing a few keys in the
+/// QEMU window — the deltas reveal where input is getting lost.
+fn cmd_kbd_stats() {
+    // Pump once so any pending events are drained into our counters.
+    crate::drivers::virtio::keyboard::poll();
+    let (total, down, up, syn, other, last_type, last_code, pushes) =
+        crate::drivers::virtio::keyboard::dbg_stats();
+    console::puts("  kbd: ready=");
+    console::puts(if crate::drivers::virtio::keyboard::is_ready() { "yes" } else { "NO" });
+    console::puts("\n  events total=");
+    crate::kernel::mm::print_num(total);
+    console::puts("  EV_KEY down=");
+    crate::kernel::mm::print_num(down);
+    console::puts(" up=");
+    crate::kernel::mm::print_num(up);
+    console::puts("\n  EV_SYN=");
+    crate::kernel::mm::print_num(syn);
+    console::puts(" other=");
+    crate::kernel::mm::print_num(other);
+    console::puts("\n  last_type=");
+    crate::kernel::mm::print_num(last_type);
+    console::puts(" last_code=");
+    crate::kernel::mm::print_num(last_code);
+    console::puts("\n  ring pushes=");
+    crate::kernel::mm::print_num(pushes);
+    console::puts("\n");
 }
 
 /// STUMP #104 — Sprint 2.2: print current main origin + allowlist.

@@ -13,6 +13,36 @@ static KBD_QUEUE: AtomicUsize = AtomicUsize::new(0);
 static KBD_READY: AtomicBool = AtomicBool::new(false);
 static KBD_BUFS: AtomicUsize = AtomicUsize::new(0);
 
+/// Diagnostic counters — incremented on every event received from the
+/// device. Surface them via the `kbd-stats` shell command so the
+/// operator can answer "is QEMU sending keystrokes at all?"
+static DBG_EVENTS_TOTAL: AtomicUsize = AtomicUsize::new(0);
+static DBG_EVKEY_DOWN: AtomicUsize = AtomicUsize::new(0);
+static DBG_EVKEY_UP: AtomicUsize = AtomicUsize::new(0);
+static DBG_EVSYN: AtomicUsize = AtomicUsize::new(0);
+static DBG_OTHER: AtomicUsize = AtomicUsize::new(0);
+static DBG_LAST_CODE: AtomicUsize = AtomicUsize::new(0);
+static DBG_LAST_TYPE: AtomicUsize = AtomicUsize::new(0);
+static DBG_PUSHES: AtomicUsize = AtomicUsize::new(0);
+static DBG_TRACE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_trace(on: bool) {
+    DBG_TRACE.store(on, Ordering::Relaxed);
+}
+
+pub fn dbg_stats() -> (usize, usize, usize, usize, usize, usize, usize, usize) {
+    (
+        DBG_EVENTS_TOTAL.load(Ordering::Relaxed),
+        DBG_EVKEY_DOWN.load(Ordering::Relaxed),
+        DBG_EVKEY_UP.load(Ordering::Relaxed),
+        DBG_EVSYN.load(Ordering::Relaxed),
+        DBG_OTHER.load(Ordering::Relaxed),
+        DBG_LAST_TYPE.load(Ordering::Relaxed),
+        DBG_LAST_CODE.load(Ordering::Relaxed),
+        DBG_PUSHES.load(Ordering::Relaxed),
+    )
+}
+
 // Each event buffer is 8 bytes: type(u16) + code(u16) + value(u32)
 const EVENT_SIZE: usize = 8;
 const NUM_BUFS: usize = 32;
@@ -112,6 +142,33 @@ pub fn poll() {
         let code = super::virtqueue::safe_read16(buf_addr + 2);
         let value = super::virtqueue::safe_read32(buf_addr + 4);
 
+        // Bump diagnostic counters BEFORE we filter, so we can see
+        // EV_SYN / EV_REL etc. arriving even if they wouldn't push a
+        // char into the keystroke ring.
+        DBG_EVENTS_TOTAL.fetch_add(1, Ordering::Relaxed);
+        DBG_LAST_TYPE.store(event_type as usize, Ordering::Relaxed);
+        DBG_LAST_CODE.store(code as usize, Ordering::Relaxed);
+        match event_type {
+            0 => { DBG_EVSYN.fetch_add(1, Ordering::Relaxed); }
+            1 => {
+                if value == 1 { DBG_EVKEY_DOWN.fetch_add(1, Ordering::Relaxed); }
+                else if value == 0 { DBG_EVKEY_UP.fetch_add(1, Ordering::Relaxed); }
+            }
+            _ => { DBG_OTHER.fetch_add(1, Ordering::Relaxed); }
+        }
+        // Live trace toggle: when DBG_TRACE is true, every event prints
+        // a one-line "[kbd] ev type=X code=Y val=Z" to UART. Off by
+        // default to keep boot logs clean; flip on with `kbd-trace on`.
+        if DBG_TRACE.load(Ordering::Relaxed) {
+            uart::puts("[kbd] ev type=");
+            crate::kernel::mm::print_num(event_type as usize);
+            uart::puts(" code=");
+            crate::kernel::mm::print_num(code as usize);
+            uart::puts(" val=");
+            crate::kernel::mm::print_num(value as usize);
+            uart::puts("\n");
+        }
+
         // EV_KEY (type=1)
         if event_type == 1 {
             // Track modifier key state (DOWN=1, UP=0)
@@ -173,6 +230,7 @@ pub fn poll() {
 }
 
 fn push_key(ch: u8) {
+    DBG_PUSHES.fetch_add(1, Ordering::Relaxed);
     unsafe {
         let next = (KEY_HEAD + 1) % KEY_BUF_SIZE;
         if next != KEY_TAIL {
