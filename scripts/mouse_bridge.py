@@ -140,6 +140,12 @@ def run(host: str, port: int) -> int:
     last_btn = host_left_button_down()
     print(f"[bridge] starting host mouse @ ({last_x:.0f}, {last_y:.0f})", flush=True)
 
+    # STUMP #110 fallback: input-send-event silently swallowed our
+    # rel/btn events on this QEMU build (pipeline up, kernel saw 0
+    # [tbl] ev lines). Switch to the older human-monitor-command
+    # channel, which has been driving QEMU mice since 2.x.
+    # `mouse_move dx dy` injects EV_REL / EV_KEY into the active
+    # mouse device.
     sent_count = 0
     last_log = time.monotonic()
     try:
@@ -147,19 +153,31 @@ def run(host: str, port: int) -> int:
             now_x, now_y = host_mouse_pos()
             dx = int(round(now_x - last_x))
             dy = int(round(now_y - last_y))
-            events: list[dict] = []
-            if dx != 0:
-                events.append(rel_event("x", dx))
-                last_x = now_x
-            if dy != 0:
-                events.append(rel_event("y", dy))
-                last_y = now_y
             now_btn = host_left_button_down()
+            if dx != 0 or dy != 0:
+                qmp._send({
+                    "execute": "human-monitor-command",
+                    "arguments": {"command-line": f"mouse_move {dx} {dy}"},
+                })
+                qmp.s.settimeout(0.1)
+                try: qmp._recv()
+                except socket.timeout: pass
+                qmp.s.settimeout(10)
+                last_x = now_x
+                last_y = now_y
+                sent_count += 1
             if now_btn != last_btn:
-                events.append(btn_event("left", now_btn))
+                # mouse_button: 1 = left button mask
+                btn_mask = 1 if now_btn else 0
+                qmp._send({
+                    "execute": "human-monitor-command",
+                    "arguments": {"command-line": f"mouse_button {btn_mask}"},
+                })
+                qmp.s.settimeout(0.1)
+                try: qmp._recv()
+                except socket.timeout: pass
+                qmp.s.settimeout(10)
                 last_btn = now_btn
-            if events:
-                qmp.send_input_events(events)
                 sent_count += 1
             # Once per second: heartbeat with the count of event-batches
             # sent and the current mouse pos. Tells us at a glance
