@@ -11,6 +11,70 @@ end of a session.
 
 ---
 
+## 2026-04-30 — Mac — 🎯 STUMP #111 audit-fix sweep (35 vulnerabilities patched across 5 batches).
+
+Continuation of the prior session's adversarial audit. The audit
+itself produced ~100 grounded findings (real `file:line` refs,
+not hallucinated). This session shipped fixes in five batches:
+
+- **Batch 1** (commit 9a03e2eb, 13 fixes): Critical/High class —
+  cookie sanitize+lowercase, fs_key real-master derivation, file://
+  origin, RAII research-mode guard, parse_url userinfo rejection,
+  audit ctrl-strip, set_main_origin always-audit, audit ring evict
+  counter, AcqRel ordering for security flags, UTF-8 overlong /
+  surrogate rejection, empty TRUST_STORE/PINS boot warning.
+
+- **Batch 2** (ea9e374d, 7 fixes): MAX_NODES + MAX_ATTRS one-shot
+  audit alarms, parser.rs chunk-tail edge fix, JS intern + arena
+  saturation alarms, AcqRel for js-mode + tls-mode, dom_set_attribute
+  name validation.
+
+- **Batch 3** (faeda314, 8 fixes): passphrase no-echo, FIRST_FAIL
+  re-arm on cave switch (DOM, JS strings, cookies, ARP), cookie jar
+  saturation alarm, cave create/destroy lifecycle audit (new
+  `Category::Cave`), fetch 256 KB body cap warning, ARP unsolicited
+  reply count + audit, SOP allowlist add/clear audit.
+
+- **Batch 4** (fbe6fca8, 6 fixes): parse_url CRLF/control-byte
+  rejection in host+path (defeats request-smuggling via crafted
+  URL), parser.rs uses MAX_ATTRS not literal 8, form-body redacted
+  from UART (was leaking passwords), localStorage saturation alarm,
+  dom_create_element tag validation.
+
+- **Batch 5** (9bb75343, 1 fix): JS console.log drained to UART
+  WITHOUT sanitization — page running `console.log("\x1B[2J\x1B[H")`
+  could clearscreen the operator's terminal; `\r` could overwrite
+  earlier log lines. Three drain sites patched (success / partial /
+  click-replay).
+
+**Net:** 35 distinct hardening fixes in this session. Build clean
+across all batches (213 unrelated warnings, no errors).
+
+**State of the tree:**
+- `feat/js-engine-browser-posix` is at `9bb75343`. All five batches
+  pushed to GitHub.
+- No behavioral regressions introduced — all fixes are defensive
+  (audit-log + UART warning + sanitize). The renderer + JS engine
+  + fetch path still work end-to-end as the prior session left
+  them.
+
+**What's next** (operator's call — these are the obvious next
+audit items):
+- DNS answer-NAME validation (off-path attacker who guesses TXID
+  + source-port could return an A record for a different name;
+  we don't currently check the answer's NAME matches the question).
+- Per-origin BatCaves (multi-day refactor — was deferred from
+  Sprint 2.2 in favor of SOP).
+- Real Unicode font fallback (still `?`-mapping non-Latin glyphs).
+
+**Open questions:**
+- Should jar-full / arena-full FIRST_FAIL flags re-arm on something
+  finer-grained than cave-switch? E.g. `audit-flush` command? Today
+  they only re-arm on cave switch, so a long-lived cave that hits
+  saturation once never logs again.
+
+---
+
 ## 2026-05-01 02:30 — Mac — 🎯 Sprint 2 + 3 (Tier C/B): security model + cookies + fetch() + UTF-8.
 
 After landing Sprint 1's interactive event loop the day before, two more sprints in one push.
