@@ -306,7 +306,18 @@ fn render_current() {
 fn render_app(app: u8) {
     match app {
         wm::APP_SHELL => {
-            console::redraw_content();
+            // STUMP #123: tab-switch wipes the FB (draw_frame's
+            // fill_screen at the top) and the shell has no scrollback
+            // buffer to replay, so the previous version of redraw was
+            // a no-op and the shell came back blank. Other apps don't
+            // hit this because their render_app fully repaints from
+            // state. Until we land a real scrollback, the safe fallback
+            // is "fresh banner + empty prompt" — the operator sees the
+            // shell again, command history is gone (visually only;
+            // the audit log still has it).
+            console::init_in_window();
+            shell_banner();
+            console::prompt();
         }
         wm::APP_DASHBOARD => apps::dashboard::render(),
         wm::APP_FILES => apps::filemanager::render(),
