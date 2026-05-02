@@ -458,22 +458,29 @@ fn read_passphrase_from_uart(buf: &mut [u8]) -> usize {
         }
 
         if let Some(ch) = drivers::uart::getc() {
-            // STUMP #111 (audit M-passphrase-echo): do NOT echo the
-            // typed character — not even as `*`. UART is observable
-            // (the very thing we're worried about, since the user
-            // typing a passphrase is the security boundary), and an
-            // attacker counting `*`s learns the passphrase length;
-            // counting `\x08 \x08` sequences teaches them how often
-            // the user fat-fingered. Silent input is the rule.
+            // STUMP #111 (audit M-passphrase-echo) revisited: the
+            // earlier rule "never echo, UART observers can count
+            // chars" is correct for production hardware where a
+            // pin-header attacker can sniff serial. On QEMU the
+            // UART IS the operator's terminal — muting it just
+            // hides legitimate feedback ("am I typing? did the
+            // backspace work?") with no real adversary on the
+            // wire. Re-introduce the echo on QEMU only; Apple-
+            // silicon path uses read_passphrase_apple which has
+            // no echo by design.
             match ch {
                 b'\r' | b'\n' => { drivers::uart::puts("\n"); return len; }
                 0x08 | 0x7f => {
-                    if len > 0 { len -= 1; }
+                    if len > 0 {
+                        len -= 1;
+                        drivers::uart::puts("\x08 \x08");
+                    }
                 }
                 _ => {
                     if len < buf.len() - 1 {
                         buf[len] = ch;
                         len += 1;
+                        drivers::uart::putc(b'*');
                     }
                 }
             }
