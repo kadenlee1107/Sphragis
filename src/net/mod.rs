@@ -48,4 +48,31 @@ pub fn dispatch_host_frame(buf: &[u8]) {
 pub fn init() {
     firewall::init();
     cave_policy::init();
+    // STUMP #111 (audit C002 / C010): the TLS stack ships with an
+    // empty TRUST_STORE and an empty PINS list. With both empty the
+    // verification chain reduces to "accept anything" in Research
+    // mode — encrypted-but-not-authenticated. Warn loudly at boot so
+    // an operator deploying production-class workloads can't silently
+    // miss this. Populate src/net/x509.rs::TRUST_STORE with CA roots
+    // OR src/net/tls_pinning.rs::PINS with per-host SHA-256 pins
+    // before relying on TLS for authentication.
+    let n_trust = crate::net::x509::TRUST_STORE.len();
+    let n_pins = crate::net::tls_pinning::PINS.len();
+    if n_trust == 0 && n_pins == 0 {
+        crate::drivers::uart::puts("\n");
+        crate::drivers::uart::puts("================================================================\n");
+        crate::drivers::uart::puts("  WARNING: TRUST_STORE and PINS are both empty.\n");
+        crate::drivers::uart::puts("  TLS connections in Research mode (renderer's default) accept\n");
+        crate::drivers::uart::puts("  ANY certificate from ANY MITM. This is encrypted-but-not-\n");
+        crate::drivers::uart::puts("  authenticated. Do NOT use this for credential exchange.\n");
+        crate::drivers::uart::puts("  Populate src/net/x509.rs::TRUST_STORE or src/net/tls_pinning\n");
+        crate::drivers::uart::puts("  ::PINS before deploying.\n");
+        crate::drivers::uart::puts("================================================================\n\n");
+    } else {
+        crate::drivers::uart::puts("  [tls] trust store: ");
+        crate::kernel::mm::print_num(n_trust);
+        crate::drivers::uart::puts(" CA roots, ");
+        crate::kernel::mm::print_num(n_pins);
+        crate::drivers::uart::puts(" host pins\n");
+    }
 }

@@ -72,6 +72,17 @@ static mut RING: [Entry; RING_CAP] = [Entry::empty(); RING_CAP];
 /// gives the index of the oldest still-resident entry.
 static HEAD: AtomicUsize = AtomicUsize::new(0);
 
+/// STUMP #111 (audit C005): the ring silently overwrites the oldest
+/// entries when full. An adversary who suspects a forensic dump is
+/// imminent can flood the log to evict their tracks. This counter
+/// records how many entries have been EVICTED (not just rolled over)
+/// so a post-incident reviewer sees `audit-flush` blob size + this
+/// counter and can spot exfiltration. UART-warns the first time we
+/// roll over so a live operator gets one chance to react.
+static EVICTED: AtomicUsize = AtomicUsize::new(0);
+static FIRST_OVERFLOW_WARNED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 #[inline]
 fn now_ticks() -> u64 {
     let v: u64;
@@ -82,8 +93,24 @@ fn now_ticks() -> u64 {
 /// Record an event. Truncates `msg` to MSG_LEN bytes. Cheap — single
 /// store of an Entry into the ring + an atomic increment. Safe to call
 /// from any kernel context.
+///
+/// STUMP #111 (audit H024): non-printable bytes in `msg` are
+/// rewritten as `?` before storage. Pre-fix, an attacker who could
+/// influence a logged URL/cookie name with embedded `\r` or `\x1B`
+/// (terminal escape) could overwrite earlier log lines visually
+/// when the operator ran `audit` — log-tampering by carriage-return.
 pub fn record(cat: Category, msg: &[u8]) {
     let h = HEAD.fetch_add(1, Ordering::Relaxed);
+    // STUMP #111 (audit C005): detect first wrap-around — that's
+    // the moment we stop being able to tell the operator about the
+    // earliest events. Single one-time UART line so a live tail
+    // sees it.
+    if h >= RING_CAP {
+        EVICTED.fetch_add(1, Ordering::Relaxed);
+        if !FIRST_OVERFLOW_WARNED.swap(true, Ordering::AcqRel) {
+            uart::puts("[audit] WARNING: ring full, oldest entries now being overwritten — run audit-flush to persist\n");
+        }
+    }
     let slot = h % RING_CAP;
     let copy = msg.len().min(MSG_LEN);
     unsafe {
@@ -91,7 +118,13 @@ pub fn record(cat: Category, msg: &[u8]) {
         e.ts = now_ticks();
         e.cat = cat as u8;
         e.mlen = copy as u8;
-        e.msg[..copy].copy_from_slice(&msg[..copy]);
+        for i in 0..copy {
+            let b = msg[i];
+            // Allow printable ASCII + space; everything else → `?`.
+            // Includes the bullet 0xB7 from STUMP #70 by accident
+            // (>0x7E) — that's fine, audit log doesn't need bullets.
+            e.msg[i] = if b >= 0x20 && b < 0x7F { b } else { b'?' };
+        }
         if copy < MSG_LEN { e.msg[copy] = 0; }
     }
 }
@@ -135,6 +168,12 @@ pub fn dump_tail(n: usize) {
 
 /// Total events recorded since boot.
 pub fn count() -> usize { HEAD.load(Ordering::Relaxed) }
+
+/// STUMP #111 (audit C005): how many entries have been overwritten
+/// (i.e. lost forever) since boot. Surfaces in the `audit` shell
+/// command so a forensic reviewer knows the log was potentially
+/// tampered with by flooding.
+pub fn evicted() -> usize { EVICTED.load(Ordering::Relaxed) }
 
 /// Serialize the whole resident ring (oldest-first) into `out` as
 /// newline-delimited records. Returns the number of bytes written.

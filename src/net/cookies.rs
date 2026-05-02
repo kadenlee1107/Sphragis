@@ -60,6 +60,16 @@ impl Cookie {
 static mut JAR: [Cookie; MAX_COOKIES] = [Cookie::empty(); MAX_COOKIES];
 static SLOTS_USED: AtomicUsize = AtomicUsize::new(0);
 
+/// STUMP #111 (C004 cont.): ASCII-lowercase host bytes into a stack
+/// buffer so callers compare hostnames case-insensitively. RFC 3986:
+/// hostnames are case-insensitive. Pre-fix, a cookie set on
+/// `EXAMPLE.com` was never sent to `example.com`.
+fn host_lower(host: &[u8], out: &mut [u8; HOST_LEN]) -> usize {
+    let n = host.len().min(HOST_LEN);
+    for i in 0..n { out[i] = host[i].to_ascii_lowercase(); }
+    n
+}
+
 /// Look up an existing slot for (host, name) or allocate a new one.
 /// Returns None if the jar is full and we'd need to evict — the
 /// caller can then either drop the cookie or invoke
@@ -79,10 +89,40 @@ fn find_or_alloc(host: &[u8], name: &[u8]) -> Option<usize> {
     }
 }
 
+/// Strip bytes that would break HTTP header semantics. STUMP #111 (audit
+/// finding C003): without this, a `Set-Cookie: a=v\r\nCookie: stolen=`
+/// response value is spliced raw into the next outgoing `Cookie:` header
+/// — header-injection. Reject CR / LF / NUL / control chars in cookie
+/// names and values; truncate at the first such byte.
+fn sanitize_in_place(bytes: &[u8]) -> usize {
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\r' || b == b'\n' || b == 0
+            || b == b';' /* breaks Cookie: header field-value separator */
+            || b < 0x20 /* any other control char */
+        {
+            return i;
+        }
+    }
+    bytes.len()
+}
+
 /// Store a (host, name, value) triple in the jar. Overwrites any
 /// existing cookie with the same (host, name). Drops silently if
 /// host/name/value exceed their fixed buffers.
+///
+/// STUMP #111: name/value/host are sanitized — bytes from the first
+/// CR/LF/NUL/control char (or `;` in name/value) onward are dropped
+/// before storing. A cookie with `value="x\r\nCookie: stolen="` from a
+/// hostile Set-Cookie header is stored as `value="x"` only.
 pub fn set(host: &[u8], name: &[u8], value: &[u8]) {
+    let host_n = sanitize_in_place(host);
+    let name_n = sanitize_in_place(name);
+    let value_n = sanitize_in_place(value);
+    let mut host_lc = [0u8; HOST_LEN];
+    let host_lc_len = host_lower(&host[..host_n], &mut host_lc);
+    let host = &host_lc[..host_lc_len];
+    let name = &name[..name_n];
+    let value = &value[..value_n];
     if host.len() > HOST_LEN || name.is_empty() || name.len() > NAME_LEN {
         return;
     }
@@ -128,19 +168,34 @@ pub fn set(host: &[u8], name: &[u8], value: &[u8]) {
 /// `name1=v1; name2=v2; ...` into `out`, returns the byte count. If
 /// no cookies exist for the host, returns 0 and the caller should
 /// skip emitting the header.
+///
+/// STUMP #111: defense-in-depth — re-sanitize name/value as we
+/// emit. If a stale cookie somehow contains CR/LF/NUL (it shouldn't,
+/// since `set` strips them), we still refuse to emit those bytes.
 pub fn build_header(host: &[u8], out: &mut [u8]) -> usize {
     let mut pos = 0usize;
+    let mut host_lc = [0u8; HOST_LEN];
+    let host_lc_len = host_lower(host, &mut host_lc);
+    let host = &host_lc[..host_lc_len];
     unsafe {
         let jar = &*core::ptr::addr_of!(JAR);
         for c in jar.iter() {
             if !c.active { continue; }
             if c.host_str() != host { continue; }
+            let name_full = c.name_str();
+            let value_full = c.value_str();
+            // Re-validate every emit (cheap and absolute).
+            let name_n = sanitize_in_place(name_full);
+            let value_n = sanitize_in_place(value_full);
+            if name_n != name_full.len() || value_n != value_full.len() {
+                continue; // skip any cookie that wouldn't survive sanitization
+            }
+            let name = &name_full[..name_n];
+            let value = &value_full[..value_n];
             if pos > 0 {
                 if pos + 2 > out.len() { break; }
                 out[pos] = b';'; out[pos + 1] = b' '; pos += 2;
             }
-            let name = c.name_str();
-            let value = c.value_str();
             if pos + name.len() + 1 + value.len() > out.len() { break; }
             out[pos..pos + name.len()].copy_from_slice(name);
             pos += name.len();

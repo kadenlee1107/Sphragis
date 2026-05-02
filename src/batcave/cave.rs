@@ -283,15 +283,22 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
         cave.tool_count = 0;
         cave.cap_count = 0;
 
-        // Derive per-cave encryption key from name
-        let master: [u8; 32] = [
-            0xBA, 0x7C, 0xA7, 0xE0, 0xBA, 0x7C, 0xA7, 0xE0,
-            0xBA, 0x7C, 0xA7, 0xE0, 0xBA, 0x7C, 0xA7, 0xE0,
-            0xBA, 0x7C, 0xA7, 0xE0, 0xBA, 0x7C, 0xA7, 0xE0,
-            0xBA, 0x7C, 0xA7, 0xE0, 0xBA, 0x7C, 0xA7, 0xE0,
-        ];
+        // STUMP #111 (audit C011): pre-fix the per-cave fs_key was
+        // SHA256(`0xBA7CA7E0…` constant || cave_name). Both inputs
+        // were trivially recoverable — the constant is in the kernel
+        // binary, the name is in `info caves`/audit logs/IPC discovery.
+        // Anyone with read access to either could decrypt every cave's
+        // BatFS files.
+        //
+        // Now: HMAC-style derivation against the boot-time BatFS
+        // master key (which is itself derived from the operator's
+        // passphrase via SHA256 in derive_batfs_key, with per-boot
+        // entropy via the salt in main.rs). Knowing the cave name no
+        // longer suffices; the attacker also needs the operator
+        // passphrase. Defense-in-depth against an attacker with
+        // kernel-image read access.
         cave.fs_key = sha256::derive_key(
-            &master,
+            &crate::fs::batfs::master_key(),
             name.as_bytes(),
         );
 

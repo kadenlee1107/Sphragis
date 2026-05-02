@@ -24,6 +24,35 @@
 
 use super::{dns, tcp, tls};
 
+/// STUMP #111 (audit H019): RAII guard that restores
+/// `tls_pinning::Mode` + `tls::set_hybrid_enabled` on drop. Pre-fix,
+/// every fetch_https / fetch_post_https Err path manually called
+/// `set_mode(prev) + set_hybrid_enabled(prev)` — a panic in the
+/// middle would skip the restore and leave the kernel stuck in
+/// `Research` mode forever. With this guard, even a panic-unwind
+/// (when we get one) restores cleanly.
+struct ResearchModeGuard {
+    prev_mode: super::tls_pinning::Mode,
+    prev_hybrid: bool,
+}
+
+impl ResearchModeGuard {
+    fn relax_for_renderer() -> Self {
+        let prev_mode = super::tls_pinning::current_mode();
+        let prev_hybrid = tls::hybrid_enabled();
+        super::tls_pinning::set_mode(super::tls_pinning::Mode::Research);
+        tls::set_hybrid_enabled(false);
+        ResearchModeGuard { prev_mode, prev_hybrid }
+    }
+}
+
+impl Drop for ResearchModeGuard {
+    fn drop(&mut self) {
+        super::tls_pinning::set_mode(self.prev_mode);
+        tls::set_hybrid_enabled(self.prev_hybrid);
+    }
+}
+
 /// Parse a URL into `(scheme, host, port, path)`.
 /// `scheme` is one of "http" | "https"; default port follows.
 pub fn parse_url(url: &str) -> Option<(&'static str, &str, u16, &str)> {
@@ -38,6 +67,15 @@ pub fn parse_url(url: &str) -> Option<(&'static str, &str, u16, &str)> {
         Some(i) => (&rest[..i], &rest[i..]),
         None    => (rest, "/"),
     };
+    // STUMP #111 (audit H003): reject URLs with embedded userinfo
+    // ("user@host" or "user:pass@host"). Pre-fix, parse_url accepted
+    // `http://attacker@victim.com/` and treated `attacker@victim.com`
+    // as the literal host. The Host: header sent to the server differs
+    // from what the operator typed — phishing/HSTS-bypass class attack.
+    // Spec-compliant clients either parse out the userinfo and use it
+    // for Basic Auth, or reject. We don't support Basic Auth, so we
+    // reject — the safer of the two.
+    if authority.contains('@') { return None; }
     let (host, port) = match authority.find(':') {
         Some(i) => {
             let h = &authority[..i];
@@ -281,13 +319,10 @@ pub fn fetch_post_https(
         dns::resolve(host).map_err(|_| "DNS resolution failed")?
     };
     tcp::connect(ip, port).map_err(|_| "TCP connect failed")?;
-    let prev_strict = super::tls_pinning::current_mode();
-    let prev_hybrid = tls::hybrid_enabled();
-    super::tls_pinning::set_mode(super::tls_pinning::Mode::Research);
-    tls::set_hybrid_enabled(false);
+    // STUMP #111 (audit H019): RAII guard handles mode + hybrid
+    // restore on every exit path, including future panic-unwind.
+    let _mode_guard = ResearchModeGuard::relax_for_renderer();
     if let Err(e) = tls::handshake(host) {
-        super::tls_pinning::set_mode(prev_strict);
-        tls::set_hybrid_enabled(prev_hybrid);
         tcp::close();
         return Err(e);
     }
@@ -311,21 +346,15 @@ pub fn fetch_post_https(
     pos += copy_to(&mut req, pos, &clen_buf[..clen_len]);
     pos += copy_to(&mut req, pos, b"\r\nConnection: close\r\n\r\n");
     if pos > req.len() {
-        super::tls_pinning::set_mode(prev_strict);
-        tls::set_hybrid_enabled(prev_hybrid);
         tls::close();
         return Err("request too large");
     }
     if let Err(e) = tls::send_app_data(&req[..pos]) {
-        super::tls_pinning::set_mode(prev_strict);
-        tls::set_hybrid_enabled(prev_hybrid);
         tls::close();
         return Err(e);
     }
     if !body.is_empty() {
         if let Err(e) = tls::send_app_data(body) {
-            super::tls_pinning::set_mode(prev_strict);
-            tls::set_hybrid_enabled(prev_hybrid);
             tls::close();
             return Err(e);
         }
@@ -350,9 +379,8 @@ pub fn fetch_post_https(
             Err(_) => break,
         }
     }
-    super::tls_pinning::set_mode(prev_strict);
-    tls::set_hybrid_enabled(prev_hybrid);
     tls::close();
+    // _mode_guard's Drop restores prev_mode + prev_hybrid here.
 
     if total == 0 { return Err("empty response"); }
     let body_start = match find_double_crlf(&scratch[..total]) {
@@ -442,19 +470,15 @@ pub fn fetch_https(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
 
     tcp::connect(ip, port).map_err(|_| "TCP connect failed")?;
 
-    // STUMP #94: relax pinning + disable PQ-hybrid key-share for the
-    // duration of this fetch. Our hybrid key-derivation has a real-
-    // world bug ("handshake record auth failed") against major HTTPS
-    // servers when they pick the hybrid group; plain X25519
-    // handshakes cleanly. Restored to previous values on every exit.
-    let prev_strict = super::tls_pinning::current_mode();
-    let prev_hybrid = tls::hybrid_enabled();
-    super::tls_pinning::set_mode(super::tls_pinning::Mode::Research);
-    tls::set_hybrid_enabled(false);
+    // STUMP #94 + #111 (audit H019): relax pinning + disable PQ-hybrid
+    // for this fetch via the RAII ResearchModeGuard. Our hybrid
+    // key-derivation has a real-world bug against major HTTPS servers
+    // when they pick the hybrid group; plain X25519 handshakes
+    // cleanly. The guard's Drop restores the previous mode + hybrid
+    // setting on EVERY exit path including future panic-unwind.
+    let _mode_guard = ResearchModeGuard::relax_for_renderer();
 
     if let Err(e) = tls::handshake(host) {
-        super::tls_pinning::set_mode(prev_strict);
-        tls::set_hybrid_enabled(prev_hybrid);
         tcp::close();
         return Err(e);
     }
@@ -478,15 +502,11 @@ pub fn fetch_https(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     }
     pos += copy_to(&mut req, pos, b"Connection: close\r\n\r\n");
     if pos > req.len() {
-        super::tls_pinning::set_mode(prev_strict);
-        tls::set_hybrid_enabled(prev_hybrid);
         tls::close();
         return Err("request too large");
     }
 
     if let Err(e) = tls::send_app_data(&req[..pos]) {
-        super::tls_pinning::set_mode(prev_strict);
-        tls::set_hybrid_enabled(prev_hybrid);
         tls::close();
         return Err(e);
     }
@@ -531,9 +551,8 @@ pub fn fetch_https(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
         }
     }
 
-    super::tls_pinning::set_mode(prev_strict);
-    tls::set_hybrid_enabled(prev_hybrid);
     tls::close();
+    // _mode_guard's Drop restores prev_mode + prev_hybrid on return.
 
     if total == 0 { return Err("empty response"); }
 

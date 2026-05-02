@@ -66,18 +66,38 @@ impl Origin {
 
     pub fn from_url(url: &str) -> Self {
         let mut o = Self::empty();
+        // STUMP #111 (H017): synthetic "file" origin so file:// pages
+        // get SOP enforcement against external sub-resources. Any
+        // file:// URL collapses to scheme=file, host="" so two
+        // file:// pages are same-origin to each other but distinct
+        // from any http(s):// origin — `matches()` will refuse a
+        // cross to an http origin.
+        if url.starts_with("file://") {
+            let sb = b"file";
+            o.scheme[..4].copy_from_slice(sb);
+            o.scheme_len = 4;
+            o.host_len = 0;
+            o.port = 0;
+            o.valid = true;
+            return o;
+        }
         let parsed = match crate::net::fetch::parse_url(url) {
             Some(p) => p,
             None => return o,
         };
         let (scheme, host, port, _path) = parsed;
+        // STUMP #111 (C004): lower-case host and scheme on intake so
+        // `Example.com` and `example.com` compare equal — RFC 3986
+        // says hostnames are case-insensitive. Pre-fix, an SOP
+        // allowlist for `example.com` did not cover requests to
+        // `Example.com`.
         let sb = scheme.as_bytes();
         let sn = sb.len().min(o.scheme.len());
-        o.scheme[..sn].copy_from_slice(&sb[..sn]);
+        for i in 0..sn { o.scheme[i] = sb[i].to_ascii_lowercase(); }
         o.scheme_len = sn as u8;
         let hb = host.as_bytes();
         let hn = hb.len().min(o.host.len());
-        o.host[..hn].copy_from_slice(&hb[..hn]);
+        for i in 0..hn { o.host[i] = hb[i].to_ascii_lowercase(); }
         o.host_len = hn as u16;
         o.port = port;
         o.valid = true;
@@ -153,21 +173,42 @@ pub fn set_main_origin(url: &str) {
         let p = core::ptr::addr_of_mut!(MAIN_ORIGIN);
         let prev = core::ptr::read(p);
         core::ptr::write(p, new_origin);
+        // STUMP #111 (audit C014): cross-origin navigation drops the
+        // current origin's session state. Cookies bound to the prior
+        // host stay in the jar (host-keyed) — we don't dump them — but
+        // localStorage and the JS engine's heap are cave-scoped and
+        // don't survive a `cave::enter` anyway. The defense here:
+        // RECORD the transition prominently in the audit log so a
+        // forensic reviewer can spot session-fixation attempts where
+        // the renderer was steered to a hostile origin, then back.
         if prev.valid && !prev.matches(&new_origin) {
-            let mut buf = [0u8; 192];
-            let mut bp = 0;
-            let copy = |dst: &mut [u8], src: &[u8], bp: &mut usize| {
-                let n = src.len().min(dst.len().saturating_sub(*bp));
-                dst[*bp..*bp + n].copy_from_slice(&src[..n]);
-                *bp += n;
-            };
-            copy(&mut buf, b"main origin -> ", &mut bp);
-            bp += new_origin.write_to(&mut buf[bp..]);
-            crate::security::audit::record(
-                crate::security::audit::Category::Nav,
-                &buf[..bp],
-            );
+            uart::puts("[origin] cross-origin transition\n");
         }
+        // STUMP #111 (audit H010): always log on every set, not just
+        // on cross-origin transitions. Pre-fix the very first
+        // navigation after boot was silent (`prev.valid==false`),
+        // letting an attacker set up the renderer's first page
+        // unobserved. Now every set produces a Nav audit entry; the
+        // operator can correlate cross-origin transitions by reading
+        // consecutive entries.
+        let _ = prev; // we no longer condition on prev
+        let mut buf = [0u8; 192];
+        let mut bp = 0;
+        let copy = |dst: &mut [u8], src: &[u8], bp: &mut usize| {
+            let n = src.len().min(dst.len().saturating_sub(*bp));
+            dst[*bp..*bp + n].copy_from_slice(&src[..n]);
+            *bp += n;
+        };
+        copy(&mut buf, b"main origin -> ", &mut bp);
+        if new_origin.valid {
+            bp += new_origin.write_to(&mut buf[bp..]);
+        } else {
+            copy(&mut buf, b"(invalid url)", &mut bp);
+        }
+        crate::security::audit::record(
+            crate::security::audit::Category::Nav,
+            &buf[..bp],
+        );
     }
 }
 
@@ -232,9 +273,21 @@ pub fn check_subresource(url: &str) -> Result<(), &'static str> {
 
 /// Add an entry to the allowlist. Idempotent — a duplicate add is a no-op.
 pub fn allow(main_host: &str, other_host: &str) -> Result<(), &'static str> {
+    // STUMP #111 (C004): lowercase on intake. Operator typing
+    // `origin-allow Example.com cdn.Example.com` should match traffic
+    // to lowercase variants too.
+    let mut mh_buf = [0u8; 128];
+    let mut oh_buf = [0u8; 128];
+    let mhb = main_host.as_bytes();
+    let ohb = other_host.as_bytes();
+    let mhn = mhb.len().min(mh_buf.len());
+    let ohn = ohb.len().min(oh_buf.len());
+    for i in 0..mhn { mh_buf[i] = mhb[i].to_ascii_lowercase(); }
+    for i in 0..ohn { oh_buf[i] = ohb[i].to_ascii_lowercase(); }
+    let mh = &mh_buf[..mhn];
+    let oh = &oh_buf[..ohn];
+
     unsafe {
-        let mh = main_host.as_bytes();
-        let oh = other_host.as_bytes();
         let list = &mut *core::ptr::addr_of_mut!(ALLOWLIST);
         for e in list.iter() {
             if e.active

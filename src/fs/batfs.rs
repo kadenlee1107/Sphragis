@@ -99,6 +99,13 @@ static mut INITIALIZED: bool = false;
 const MERKLE_NODES: usize = MAX_FILES * 2;
 static mut MERKLE_TREE: [[u8; 32]; MERKLE_NODES] = [[0u8; 32]; MERKLE_NODES];
 
+/// STUMP #111 (audit C011): expose the per-boot master key for
+/// per-cave fs_key derivation. Volatile read so the compiler can't
+/// dead-store-eliminate a sensitive value in some future refactor.
+pub fn master_key() -> [u8; 32] {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(MASTER_KEY)) }
+}
+
 /// Rebuild the Merkle tree from all file hashes.
 pub fn rebuild_merkle() {
     unsafe {

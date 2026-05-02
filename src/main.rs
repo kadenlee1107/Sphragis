@@ -202,7 +202,18 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     const BUILD_DURESS: Option<&str> = option_env!("BAT_OS_DURESS");
 
     let passphrase_slice: &[u8] = if let Some(s) = BUILD_PASSPHRASE {
-        drivers::uart::puts("  [auth] using BAT_OS_PASSPHRASE (build-time)\n");
+        // STUMP #111 (audit C001): the BUILD_PASSPHRASE is baked into
+        // the kernel binary as a plaintext literal — `strings bat_os`
+        // recovers it. This is convenient for development but
+        // catastrophic for production. Loud red banner so the operator
+        // can never miss that this binary should not ship.
+        drivers::uart::puts("\n");
+        drivers::uart::puts("================================================================\n");
+        drivers::uart::puts("  WARNING: this kernel was built with BAT_OS_PASSPHRASE baked in.\n");
+        drivers::uart::puts("  Anyone with `strings bat_os` recovers the passphrase in seconds.\n");
+        drivers::uart::puts("  DO NOT ship this binary. Build production with:\n");
+        drivers::uart::puts("      unset BAT_OS_PASSPHRASE && cargo build --release\n");
+        drivers::uart::puts("================================================================\n\n");
         s.as_bytes()
     } else if passphrase_len == 0 {
         drivers::uart::puts("  [auth] empty passphrase, using dev default\n");

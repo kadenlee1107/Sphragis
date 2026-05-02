@@ -13,6 +13,14 @@ fn starts_with_bytes(hay: &[u8], needle: &[u8]) -> bool {
 /// `bytes`. Returns `(codepoint, byte_count)`. On malformed input
 /// returns `(U+FFFD, 1)` so the caller advances by exactly one byte
 /// and can keep parsing. ASCII passthrough is one byte.
+///
+/// STUMP #111 (audit H001/H002): rejects overlong encodings AND
+/// surrogate codepoints (U+D800..U+DFFF). RFC 3629 §3 requires UTF-8
+/// decoders to refuse these — overlongs are a known smuggling vector
+/// (NUL-via-overlong bypasses naive byte filters; pre-fix our decoder
+/// happily returned U+0000 for `0xC0 0x80` which then got '?'-mapped,
+/// silently obscuring the smuggle). Surrogates are reserved for
+/// UTF-16 pairs and have no UTF-8 representation; reject as malformed.
 fn decode_utf8(bytes: &[u8]) -> (u32, usize) {
     if bytes.is_empty() { return (0, 0); }
     let b0 = bytes[0];
@@ -26,6 +34,12 @@ fn decode_utf8(bytes: &[u8]) -> (u32, usize) {
         if (bytes[k] & 0xC0) != 0x80 { return (0xFFFD, k); }
         cp = (cp << 6) | (bytes[k] & 0x3F) as u32;
     }
+    // Reject overlong encodings — minimum codepoint per byte length:
+    // 2 bytes → ≥ 0x80, 3 bytes → ≥ 0x800, 4 bytes → ≥ 0x10000.
+    let min_cp: u32 = match nbytes { 2 => 0x80, 3 => 0x800, 4 => 0x10000, _ => 0 };
+    if cp < min_cp { return (0xFFFD, nbytes); }
+    // Reject UTF-16 surrogate halves and codepoints above Unicode max.
+    if (0xD800..=0xDFFF).contains(&cp) || cp > 0x10FFFF { return (0xFFFD, nbytes); }
     (cp, nbytes)
 }
 
