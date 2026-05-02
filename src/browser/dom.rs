@@ -176,6 +176,21 @@ impl DomNode {
             self.attrs[self.attr_count].set_name(name.as_bytes());
             self.attrs[self.attr_count].set_value(value.as_bytes());
             self.attr_count += 1;
+        } else {
+            // STUMP #111 (audit H015): attribute slot exhausted. Pre-fix
+            // a page with > MAX_ATTRS attributes on one element silently
+            // dropped the trailing ones — including potentially-defensive
+            // ones like `nonce`, `crossorigin`, `integrity`. Audit-log
+            // the first occurrence per session.
+            static FIRST_FAIL: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
+            if !FIRST_FAIL.swap(true, core::sync::atomic::Ordering::AcqRel) {
+                crate::security::audit::record(
+                    crate::security::audit::Category::Boot,
+                    b"DOM MAX_ATTRS hit, attributes truncated",
+                );
+                crate::drivers::uart::puts("[dom] WARNING: MAX_ATTRS (8) reached on element — extra attrs dropped\n");
+            }
         }
     }
 
@@ -277,7 +292,25 @@ impl Document {
 
     /// Allocate a new node, return its index
     pub fn alloc_node(&mut self) -> Option<usize> {
-        if self.node_count >= MAX_NODES { return None; }
+        if self.node_count >= MAX_NODES {
+            // STUMP #111 (audit H011): DOM-node-table saturation. The
+            // visible symptom pre-fix was "rest of the page silently
+            // missing" — an attacker page with > MAX_NODES elements
+            // truncates without any signal to the operator. Now we
+            // record an audit entry the FIRST time we hit it (not
+            // every alloc — that would flood the log). Subsequent
+            // alloc-fail returns None as before.
+            static FIRST_FAIL: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
+            if !FIRST_FAIL.swap(true, core::sync::atomic::Ordering::AcqRel) {
+                crate::security::audit::record(
+                    crate::security::audit::Category::Boot, // closest fit; "parser-truncation" not modeled
+                    b"DOM MAX_NODES hit, page truncated",
+                );
+                crate::drivers::uart::puts("[dom] WARNING: MAX_NODES (4096) reached — page truncated\n");
+            }
+            return None;
+        }
         let idx = self.node_count;
         self.nodes[idx] = DomNode::empty();
         self.node_count += 1;

@@ -159,12 +159,34 @@ impl StringTable {
         }
 
         // Not found — add new entry
+        // STUMP #111 (audit H020/H021): pre-fix the intern table and
+        // arena saturated silently — adversary script could `let s="";
+        // for(...) s+="x"` until every new string returned
+        // StringId::EMPTY, breaking subsequent ops invisibly. Now we
+        // record an audit entry the first time saturation occurs so
+        // the reviewer can see the script that exhausted us.
         if self.entry_count >= MAX_STRINGS {
-            // Table full — return empty string
+            static FIRST_FAIL: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
+            if !FIRST_FAIL.swap(true, core::sync::atomic::Ordering::AcqRel) {
+                crate::security::audit::record(
+                    crate::security::audit::Category::Script,
+                    b"JS string intern table FULL (MAX_STRINGS=4096) - script may be flooding",
+                );
+                crate::drivers::uart::puts("[js] WARNING: intern table full — string-flood script suspected\n");
+            }
             return StringId::EMPTY;
         }
         if self.data_len + bytes.len() > STRING_ARENA_SIZE {
-            // Arena full
+            static FIRST_FAIL: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
+            if !FIRST_FAIL.swap(true, core::sync::atomic::Ordering::AcqRel) {
+                crate::security::audit::record(
+                    crate::security::audit::Category::Script,
+                    b"JS string arena FULL - script may be flooding",
+                );
+                crate::drivers::uart::puts("[js] WARNING: string arena full — string-flood script suspected\n");
+            }
             return StringId::EMPTY;
         }
 

@@ -397,6 +397,20 @@ pub fn dom_set_attribute(vm: &mut Vm, args_start: usize, argc: usize) -> Result<
             // Set on real DOM node if bound
             if let Some(dom_idx) = vm.dom.get_dom_idx(this_val.as_obj()) {
                 let attr_name = vm.strings.get(name.as_str_id());
+                // STUMP #111 (audit H022): reject attribute names
+                // containing NUL or any control character. Pre-fix
+                // setAttribute("on\x00load", "alert(1)") stored the
+                // raw bytes; depending on downstream consumers the
+                // NUL could be stripped, leaving "onload" — defense
+                // bypass. Empty name also rejected.
+                if attr_name.is_empty() {
+                    return Ok(JsValue::UNDEFINED);
+                }
+                for &b in attr_name {
+                    if b < 0x20 || b == 0x7F {
+                        return Ok(JsValue::UNDEFINED);
+                    }
+                }
                 let attr_val = if value.is_string() {
                     vm.strings.get(value.as_str_id())
                 } else {

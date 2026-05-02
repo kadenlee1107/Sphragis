@@ -464,21 +464,37 @@ pub fn parse(html: &[u8], doc: &mut Document) {
                         b
                     };
                     if *clen >= MAX_TEXT - 1 {
-                        // Flush this chunk and start a new one. Try to
-                        // break at the most recent space inside the
-                        // chunk so we don't split mid-word.
+                        // STUMP #111 (audit H012): on a >MAX_TEXT word
+                        // (no space found in the trailing 64 bytes),
+                        // pre-fix `break_at == *clen`, `tail_len == 0`,
+                        // and we'd flush the FULL chunk and reset to 0
+                        // — eating the next byte we tried to push as the
+                        // start of a new word. Now: when no space found,
+                        // we explicitly hard-break mid-word at clen-1
+                        // (move the last byte into slot 0). This loses
+                        // one inter-byte boundary but keeps the byte
+                        // stream intact across the chunk boundary.
                         let mut break_at = *clen;
+                        let mut found_space = false;
                         let mut k = *clen;
                         while k > 0 {
                             k -= 1;
-                            if chunk[k] == b' ' { break_at = k; break; }
-                            if *clen - k > 64 { break; } // give up if word > 64 chars
+                            if chunk[k] == b' ' {
+                                break_at = k;
+                                found_space = true;
+                                break;
+                            }
+                            if *clen - k > 64 { break; }
+                        }
+                        if !found_space {
+                            // No space within last 64 bytes — hard-break
+                            // mid-word at clen-1 so the next byte
+                            // continues seamlessly.
+                            break_at = clen.saturating_sub(1);
                         }
                         flush(doc, &chunk[..break_at]);
-                        // Carry tail across to the new chunk.
                         let tail_len = *clen - break_at;
                         if tail_len > 0 && tail_len < MAX_TEXT {
-                            // Move bytes [break_at..clen] to start.
                             for i in 0..tail_len {
                                 chunk[i] = chunk[break_at + i];
                             }

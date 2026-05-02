@@ -14,11 +14,16 @@ use core::sync::atomic::{AtomicBool, Ordering};
 static JS_ENABLED: AtomicBool = AtomicBool::new(true);
 
 #[inline]
-pub fn is_enabled() -> bool { JS_ENABLED.load(Ordering::Relaxed) }
+pub fn is_enabled() -> bool {
+    // STUMP #111 (audit H026/H027): Acquire-load so future SMP
+    // schedulers can't observe a stale "enabled" view after a
+    // policy flip.
+    JS_ENABLED.load(Ordering::Acquire)
+}
 
 #[inline]
 pub fn set_enabled(v: bool) {
-    JS_ENABLED.store(v, Ordering::Relaxed);
+    JS_ENABLED.store(v, Ordering::Release);
     // STUMP #103: every mode flip is auditable.
     crate::security::audit::record(
         crate::security::audit::Category::Mode,

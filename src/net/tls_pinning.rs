@@ -66,7 +66,12 @@ static MODE: AtomicU8 = AtomicU8::new(Mode::Lockdown as u8);
 
 #[inline]
 pub fn current_mode() -> Mode {
-    match MODE.load(Ordering::Relaxed) {
+    // STUMP #111 (audit H026/H027): security-policy flags use
+    // Acquire/Release rather than Relaxed so a multi-threaded
+    // reader (when the scheduler comes online) can't observe a
+    // mode change in non-program-order. Lockdown→Research→use is
+    // the worst-case ordering bug here.
+    match MODE.load(Ordering::Acquire) {
         1 => Mode::Research,
         2 => Mode::Open,
         _ => Mode::Lockdown,
@@ -75,7 +80,7 @@ pub fn current_mode() -> Mode {
 
 #[inline]
 pub fn set_mode(m: Mode) {
-    MODE.store(m as u8, Ordering::Relaxed);
+    MODE.store(m as u8, Ordering::Release);
     // STUMP #103 — audit log every TLS mode flip. Lockdown ↔ Research
     // ↔ Open transitions are security-relevant; the operator (or a
     // post-incident reviewer) needs them in the timeline.

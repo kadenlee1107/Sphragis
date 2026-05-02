@@ -220,8 +220,11 @@ pub fn current_main_origin() -> Origin {
     unsafe { core::ptr::read(core::ptr::addr_of!(MAIN_ORIGIN)) }
 }
 
-pub fn is_strict() -> bool { SOP_ENFORCE.load(Ordering::Relaxed) }
-pub fn set_strict(v: bool) { SOP_ENFORCE.store(v, Ordering::Relaxed); }
+// STUMP #111 (audit H026/H027): Acquire/Release for security
+// policy flags. Future SMP schedulers must not observe stale views
+// of `strict` after a policy flip.
+pub fn is_strict() -> bool { SOP_ENFORCE.load(Ordering::Acquire) }
+pub fn set_strict(v: bool) { SOP_ENFORCE.store(v, Ordering::Release); }
 
 /// Check a sub-resource fetch against SOP. Returns Ok if allowed,
 /// Err if rejected. Audit-logs every cross-origin attempt (allowed
