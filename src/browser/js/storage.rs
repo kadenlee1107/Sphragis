@@ -14,6 +14,13 @@ const MAX_ENTRIES: usize = 64;
 const MAX_KEY: usize = 32;
 const MAX_VAL: usize = 128;
 
+/// STUMP #111 (audit M-storage-saturation): one-shot saturation alarm.
+/// Pre-fix `set_item` silently dropped new keys when count == MAX_ENTRIES,
+/// so a script could fill 64 entries with junk and the operator's auth
+/// state (e.g. "remember-me-token") never made it in. Re-armed on
+/// cave switch so the next tenant gets a fresh "first" event.
+static SET_FULL_FIRST_FAIL: AtomicBool = AtomicBool::new(false);
+
 #[derive(Clone, Copy)]
 struct StorageEntry {
     active: bool,
@@ -84,6 +91,17 @@ impl WebStorage {
             e.value[..vlen].copy_from_slice(&value.as_bytes()[..vlen]);
             e.value_len = vlen;
             self.count += 1;
+        } else {
+            // STUMP #111 (audit M-storage-saturation): table full —
+            // one-shot audit + UART warning so a flooding script is
+            // visible. Re-armed on cave switch.
+            if !SET_FULL_FIRST_FAIL.swap(true, Ordering::AcqRel) {
+                crate::security::audit::record(
+                    crate::security::audit::Category::Script,
+                    b"localStorage FULL (MAX_ENTRIES=64) - dropping new keys",
+                );
+                crate::drivers::uart::puts("[storage] WARNING: localStorage full - key dropped\n");
+            }
         }
     }
 
@@ -171,4 +189,7 @@ pub fn clear_dirty() { LOCAL_DIRTY.store(false, Ordering::Relaxed); }
 pub fn reset_for_cave_switch() {
     local_mut().clear();
     LOCAL_DIRTY.store(false, Ordering::Relaxed);
+    // STUMP #111: re-arm the saturation alarm so the next cave's
+    // first localStorage flood event is audible.
+    SET_FULL_FIRST_FAIL.store(false, Ordering::Release);
 }

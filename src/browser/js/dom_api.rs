@@ -272,6 +272,21 @@ pub fn dom_create_element(vm: &mut Vm, args_start: usize, argc: usize) -> Result
     let tag_len;
     if tag_val.is_string() {
         let tb = vm.strings.get(tag_val.as_str_id());
+        // STUMP #111 (audit M-tag-validation): reject tag names with
+        // control bytes, NUL, or whitespace. createElement("div\x00script")
+        // could store a node whose `tag_str()` is "div\x00script" — most
+        // downstream code uses byte-equality so this doesn't immediately
+        // exploit, but ANY future code that does any kind of split-on-NUL
+        // or printable-prefix match would create a defense bypass. Reject
+        // at the source. Empty tag also rejected.
+        if tb.is_empty() {
+            return Ok(JsValue::NULL);
+        }
+        for &b in tb {
+            if b < 0x20 || b == 0x7F || b == b' ' || b == b'<' || b == b'>' || b == b'/' {
+                return Ok(JsValue::NULL);
+            }
+        }
         tag_len = tb.len().min(MAX_NAME);
         tag_buf[..tag_len].copy_from_slice(&tb[..tag_len]);
     } else {

@@ -159,6 +159,7 @@ pub fn dump_tail(n: usize) {
             6 => "mode",
             7 => "auth",
             8 => "boot",
+            9 => "cave",
             _ => "?",
         };
         uart::puts("  [");
@@ -196,7 +197,8 @@ pub fn serialize(out: &mut [u8]) -> usize {
         let cat = match e.cat {
             1 => "fetch", 2 => "script", 3 => "click",
             4 => "nav",   5 => "form",   6 => "mode",
-            7 => "auth",  8 => "boot",   _ => "?",
+            7 => "auth",  8 => "boot",   9 => "cave",
+            _ => "?",
         };
         // ts cat msg\n — caller decodes ts.
         pos += write_u64(&mut out[pos..], e.ts);

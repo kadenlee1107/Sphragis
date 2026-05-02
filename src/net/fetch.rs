@@ -115,6 +115,20 @@ pub fn parse_url(url: &str) -> Option<(&'static str, &str, u16, &str)> {
         None => (authority, default_port),
     };
     if host.is_empty() { return None; }
+    // STUMP #111 (audit M-url-crlf-injection): reject URLs whose host
+    // or path contains CR / LF / NUL / any other control byte. Rust
+    // `&str` happily accepts these (they're valid UTF-8 scalar values),
+    // so without this check `http://victim.com/foo\r\nEvil: header/`
+    // got spliced unmodified into the outgoing GET line — the server
+    // saw a request-smuggled extra header. Reject every control byte
+    // (< 0x20 except none — we don't allow even tab in hostnames) and
+    // 0x7f. Space inside path is also rejected (must be percent-encoded).
+    for b in host.as_bytes() {
+        if *b < 0x20 || *b == 0x7f || *b == b' ' { return None; }
+    }
+    for b in path.as_bytes() {
+        if *b < 0x20 || *b == 0x7f || *b == b' ' { return None; }
+    }
     Some((scheme, host, port, path))
 }
 

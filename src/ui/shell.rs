@@ -3707,11 +3707,18 @@ fn cmd_render(url: &str, parts: &[&str; MAX_PARTS]) {
                         }
 
                         if action_len > 0 {
+                            // STUMP #111 (audit M-form-body-leak): do NOT
+                            // dump the encoded body to UART — login forms
+                            // include the password as one of the
+                            // url-encoded fields. Pre-fix the password
+                            // hit the serial console verbatim. Now we
+                            // only show the action URL + the byte
+                            // length of the body.
                             uart::puts("  render: form submit → POST ");
                             uart::puts(action);
-                            uart::puts(" body=");
-                            uart::puts(unsafe { core::str::from_utf8_unchecked(&body[..blen]) });
-                            uart::puts("\n");
+                            uart::puts(" (body=");
+                            crate::kernel::mm::print_num(blen);
+                            uart::puts(" bytes)\n");
                             // Only absolute URLs supported in 1.3.
                             if action.starts_with("http://") || action.starts_with("https://") {
                                 let buf = unsafe { &mut *core::ptr::addr_of_mut!(HTML_FETCH_BUF) };
@@ -4352,13 +4359,13 @@ fn handle_interactive_click(
             if action_len > 0
                 && (action.starts_with("http://") || action.starts_with("https://"))
             {
+                // STUMP #111 (audit M-form-body-leak): redacted —
+                // login passwords were leaking to UART verbatim.
                 crate::drivers::uart::puts("  [click] form submit → POST ");
                 crate::drivers::uart::puts(action);
-                crate::drivers::uart::puts(" body=");
-                crate::drivers::uart::puts(unsafe {
-                    core::str::from_utf8_unchecked(&body[..blen])
-                });
-                crate::drivers::uart::puts("\n");
+                crate::drivers::uart::puts(" (body=");
+                crate::kernel::mm::print_num(blen);
+                crate::drivers::uart::puts(" bytes)\n");
                 static mut POST_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
                 let buf = unsafe { &mut *core::ptr::addr_of_mut!(POST_BUF) };
                 match crate::net::fetch::fetch_post_url(action, &body[..blen], buf) {

@@ -2,7 +2,7 @@
 // Converts raw HTML bytes into a DOM tree.
 // Handles malformed HTML gracefully (like real browsers).
 
-use super::super::dom::{Document, NodeType, MAX_NAME, MAX_VALUE};
+use super::super::dom::{Document, NodeType, MAX_ATTRS, MAX_NAME, MAX_VALUE};
 
 fn starts_with_bytes(hay: &[u8], needle: &[u8]) -> bool {
     if hay.len() < needle.len() { return false; }
@@ -566,7 +566,12 @@ fn parse_attributes(html: &[u8], pos: &mut usize, doc: &mut Document, elem: usiz
     let node = doc.get_mut(elem);
     let mut count = 0usize;
 
-    while i < html.len() && html[i] != b'>' && count < 8 {
+    // STUMP #111 (audit M-attrs-hardcode): use MAX_ATTRS, not the
+    // literal 8. Pre-fix the parser silently capped at 8 even if
+    // MAX_ATTRS were ever bumped — the parser would honor only the
+    // first 8 attrs and the new slot would never see traffic from
+    // real pages. Source-of-truth is dom::MAX_ATTRS.
+    while i < html.len() && html[i] != b'>' && count < MAX_ATTRS {
         // Skip whitespace
         while i < html.len() && (html[i] == b' ' || html[i] == b'\t' || html[i] == b'\n') {
             i += 1;
