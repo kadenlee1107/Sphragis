@@ -346,7 +346,7 @@ fn draw_clock_block(fb: *mut u32, w: u32, x_right: u32, y_top: u32, attempts: u8
 
 /// State the screen is being painted in.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum LockState { Idle, Typing(u8), Denied }
+enum LockState { Idle, Typing(u8), Denied, Granted(u8) }
 
 fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u8) {
     // Background.
@@ -381,8 +381,16 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
     // ── CENTER STACK ─────────────────────────────────────────────
     let cx = w / 2;
     let cy = h / 2;
-    let accent = if state == LockState::Denied { RED } else { CYAN };
-    let accent_dim = if state == LockState::Denied { RED_DIM } else { CYAN_DIM };
+    let accent = match state {
+        LockState::Denied     => RED,
+        LockState::Granted(_) => GREEN,
+        _                     => CYAN,
+    };
+    let accent_dim = match state {
+        LockState::Denied     => RED_DIM,
+        LockState::Granted(_) => GREEN_DIM,
+        _                     => CYAN_DIM,
+    };
 
     // Bat glyph centered, ~180px above vertical mid.
     let glyph_x = cx - BAT_W / 2;
@@ -405,8 +413,15 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
     // Field label row (above the field).
     let field_x = cx - FIELD_W / 2;
     let field_y = word_y + 60;
-    let label = "[AUTH] PASSPHRASE";
-    let label_color = if state == LockState::Denied { RED } else { MID };
+    let label = match state {
+        LockState::Granted(_) => "[AUTH] GRANTED",
+        _                     => "[AUTH] PASSPHRASE",
+    };
+    let label_color = match state {
+        LockState::Denied     => RED,
+        LockState::Granted(_) => GREEN,
+        _                     => MID,
+    };
     font::draw_str(fb, w, field_x, field_y - 16, label, label_color, BG);
     let kdf = "SHA-256 KDF . 16 ROUNDS";
     let kdf_x = field_x + FIELD_W - (kdf.len() as u32 * CHAR_W);
@@ -414,59 +429,82 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
 
     // Passphrase field.
     let field_border = match state {
-        LockState::Denied   => RED,
-        LockState::Typing(_) => CYAN,
-        LockState::Idle     => HAIR_HI,
+        LockState::Denied     => RED,
+        LockState::Granted(_) => GREEN,
+        LockState::Typing(_)  => CYAN,
+        LockState::Idle       => HAIR_HI,
     };
     gpu::fill_rect(field_x, field_y, FIELD_W, FIELD_H, PANEL);
     draw_border(field_x, field_y, FIELD_W, FIELD_H, field_border);
-    if matches!(state, LockState::Typing(_)) {
-        // Inset 1px ring in CYAN_DIM.
-        draw_border(field_x + 1, field_y + 1, FIELD_W - 2, FIELD_H - 2, CYAN_DIM);
+    if matches!(state, LockState::Typing(_) | LockState::Granted(_)) {
+        // Inset 1px ring matching the accent.
+        draw_border(field_x + 1, field_y + 1, FIELD_W - 2, FIELD_H - 2, accent_dim);
     }
 
-    // Chevron prompt prefix.
-    font::draw_char(fb, w, field_x + 18, field_y + (FIELD_H - CHAR_H) / 2, b'>', accent, PANEL);
+    // Granted state — replace the dots/cursor row with a centered
+    // "ACCESS GRANTED" text inside the field. No chevron, no
+    // attempts counter (they'd just clutter the success moment).
+    if let LockState::Granted(_) = state {
+        let granted = "ACCESS GRANTED";
+        let g_x = field_x + (FIELD_W - granted.len() as u32 * CHAR_W) / 2;
+        let g_y = field_y + (FIELD_H - CHAR_H) / 2;
+        font::draw_str(fb, w, g_x, g_y, granted, GREEN, PANEL);
+    } else {
+        // Chevron prompt prefix.
+        font::draw_char(fb, w, field_x + 18, field_y + (FIELD_H - CHAR_H) / 2, b'>', accent, PANEL);
 
-    // Dots representing typed chars.
-    let dots = match state {
-        LockState::Typing(n) => n,
-        LockState::Denied    => 7, // freeze the field at the moment of denial
-        LockState::Idle      => 0,
-    };
-    let dots_x = field_x + 18 + CHAR_W + 14;
-    let dots_y = field_y + (FIELD_H - DOT_PX) / 2;
-    for i in 0..dots {
-        let dx = dots_x + (i as u32) * (DOT_PX + DOT_GAP);
-        gpu::fill_rect(dx, dots_y, DOT_PX, DOT_PX, INK);
+        // Dots representing typed chars.
+        let dots = match state {
+            LockState::Typing(n) => n,
+            LockState::Denied    => 7, // freeze the field at the moment of denial
+            _                    => 0,
+        };
+        let dots_x = field_x + 18 + CHAR_W + 14;
+        let dots_y = field_y + (FIELD_H - DOT_PX) / 2;
+        for i in 0..dots {
+            let dx = dots_x + (i as u32) * (DOT_PX + DOT_GAP);
+            gpu::fill_rect(dx, dots_y, DOT_PX, DOT_PX, INK);
+        }
+        // Inline cursor at the trailing edge of the dots (no blink yet).
+        let cursor_x = dots_x + (dots as u32) * (DOT_PX + DOT_GAP);
+        let cursor_color = match state {
+            LockState::Typing(_) => CYAN,
+            LockState::Idle      => MID,
+            LockState::Denied    => RED,
+            _                    => MID,
+        };
+        gpu::fill_rect(cursor_x, field_y + 17, 10, 22, cursor_color);
+
+        // Inline attempts indicator on the right side of the field.
+        let mut buf = [0u8; 16];
+        let mut p = 0usize;
+        buf[p] = b'0' + attempts; p += 1;
+        let suffix = b" ATTEMPTS LEFT";
+        buf[p..p + suffix.len()].copy_from_slice(suffix);
+        p += suffix.len();
+        let inline = unsafe { core::str::from_utf8_unchecked(&buf[..p]) };
+        let inline_color = if state == LockState::Denied { RED } else { DIM_TXT };
+        let inline_x = field_x + FIELD_W - 10 - (p as u32 * CHAR_W);
+        font::draw_str(fb, w, inline_x, field_y + (FIELD_H - CHAR_H) / 2, inline, inline_color, PANEL);
     }
-    // Inline cursor at the trailing edge of the dots (no blink yet).
-    let cursor_x = dots_x + (dots as u32) * (DOT_PX + DOT_GAP);
-    let cursor_color = match state {
-        LockState::Typing(_) => CYAN,
-        LockState::Idle      => MID,
-        LockState::Denied    => RED,
-    };
-    gpu::fill_rect(cursor_x, field_y + 17, 10, 22, cursor_color);
-
-    // Inline attempts indicator on the right side of the field.
-    let mut buf = [0u8; 16];
-    let mut p = 0usize;
-    buf[p] = b'0' + attempts; p += 1;
-    let suffix = b" ATTEMPTS LEFT";
-    buf[p..p + suffix.len()].copy_from_slice(suffix);
-    p += suffix.len();
-    let inline = unsafe { core::str::from_utf8_unchecked(&buf[..p]) };
-    let inline_color = if state == LockState::Denied { RED } else { DIM_TXT };
-    let inline_x = field_x + FIELD_W - 10 - (p as u32 * CHAR_W);
-    font::draw_str(fb, w, inline_x, field_y + (FIELD_H - CHAR_H) / 2, inline, inline_color, PANEL);
 
     // Helper hint row beneath the field.
     let hint_y = field_y + FIELD_H + 12;
-    font::draw_str(fb, w, field_x, hint_y, "RETURN TO SUBMIT . ESC TO WIPE . F2 KEYMAP", DIM_TXT, BG);
-    let caps = "CAPS OFF";
-    let caps_x = field_x + FIELD_W - (caps.len() as u32 * CHAR_W);
-    font::draw_str(fb, w, caps_x, hint_y, caps, DIM_TXT, BG);
+    let (hint_left, hint_right, hint_color) = match state {
+        LockState::Granted(_) => (
+            "DEADMAN REFRESHED . LAUNCHING DESKTOP",
+            "READY",
+            GREEN,
+        ),
+        _ => (
+            "RETURN TO SUBMIT . ESC TO WIPE . F2 KEYMAP",
+            "CAPS OFF",
+            DIM_TXT,
+        ),
+    };
+    font::draw_str(fb, w, field_x, hint_y, hint_left, hint_color, BG);
+    let caps_x = field_x + FIELD_W - (hint_right.len() as u32 * CHAR_W);
+    font::draw_str(fb, w, caps_x, hint_y, hint_right, hint_color, BG);
 
     // Denied overlay — red box centered over the stack.
     if state == LockState::Denied {
@@ -590,21 +628,13 @@ pub fn run() {
 
         match result {
             auth::AuthResult::Success => {
-                // Brief "GRANTED" flash via field accent. Easier than
-                // mocking up a separate success card; the cyan→green
-                // re-tint reads as approval.
-                paint_lock_screen(fb, w, h, LockState::Typing(len as u8), attempts);
-                let cx = w / 2;
-                let cy = h / 2;
-                let field_y = cy.saturating_sub(180) + BAT_H + 24 + 22 + 60;
-                let field_x = cx - FIELD_W / 2;
-                draw_border(field_x, field_y, FIELD_W, FIELD_H, GREEN);
-                draw_border(field_x + 1, field_y + 1, FIELD_W - 2, FIELD_H - 2, GREEN_DIM);
-                let granted = "ACCESS GRANTED";
-                let g_x = cx - (granted.len() as u32 * CHAR_W) / 2;
-                gpu::fill_rect(field_x + 2, field_y + (FIELD_H - CHAR_H) / 2 - 2,
-                               FIELD_W - 4, CHAR_H + 4, PANEL);
-                font::draw_str(fb, w, g_x, field_y + (FIELD_H - CHAR_H) / 2, granted, GREEN, PANEL);
+                // Repaint the whole screen in Granted state so the
+                // field, label, helper row, and accent (including
+                // the bat glyph) all turn green together. Pre-fix
+                // we painted only the field overlay and got the
+                // y-offset wrong, dropping the green box onto the
+                // helper row instead of the field.
+                paint_lock_screen(fb, w, h, LockState::Granted(len as u8), attempts);
                 gpu::flush(0, 0, w, h);
                 for _ in 0..5_000_000 { core::hint::spin_loop(); }
                 deadman::refresh();
