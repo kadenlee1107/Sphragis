@@ -372,13 +372,17 @@ pub fn draw_frame() {
             gpu::fill_rect(tx + TAB_W, 0, 1, TITLE_H, HAIR);
         }
 
-        // ⌃N digit hint at top — single char so we can color it
-        // separately from the letter pair.
+        // Ctrl+N digit hint at top.
+        // Design source used the Unicode "⌃" (U+2303) prefix to signal
+        // "Ctrl key", but our 8x16 bitmap font is ASCII-only and the
+        // ASCII fallback "^N" reads as visual noise. Dropped the
+        // caret — just the digit, in cyan. Cyan color + position
+        // above the letter pair still clearly says "this is a
+        // Ctrl-keybind hint" without the confusing prefix.
         let hint_color = if is_active { CYAN } else { FAINT };
         let hint_ch = b'0' + (i as u8 + 1);
-        let hint_x = tx + (TAB_W - 2 * CHAR_W) / 2;
-        font::draw_char(fb, w, hint_x, 2, b'^', hint_color, BG);
-        font::draw_char(fb, w, hint_x + CHAR_W, 2, hint_ch, hint_color, BG);
+        let hint_x = tx + (TAB_W - CHAR_W) / 2;
+        font::draw_char(fb, w, hint_x, 2, hint_ch, hint_color, BG);
 
         // Letter pair below.
         let label_color = if is_active { INK } else { DIM_TXT };
