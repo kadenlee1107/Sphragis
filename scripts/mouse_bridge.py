@@ -136,6 +136,38 @@ def run(host: str, port: int) -> int:
         return 1
     print("[bridge] QMP up. Move host mouse to drive kernel cursor.", flush=True)
 
+    # Probe registered mice via HMP `info mice`. There are usually
+    # multiple — cocoa default + virtio-mouse — and `mouse_move`
+    # targets whichever is "selected". The cocoa one's been swallowing
+    # our events; pick the last (virtio) device explicitly.
+    qmp._send({"execute": "human-monitor-command", "arguments": {"command-line": "info mice"}})
+    qmp.s.settimeout(0.5)
+    try:
+        info = qmp._recv()
+        out = (info.get("return") or "").strip()
+        if out:
+            print(f"[bridge] info mice:\n{out}", flush=True)
+            # Find the highest-numbered device that's NOT 'cocoa' and select it.
+            target_idx = None
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("Mouse #"):
+                    try:
+                        idx = int(line.split("#", 1)[1].split(":", 1)[0])
+                        if "cocoa" not in line.lower():
+                            target_idx = idx
+                    except ValueError:
+                        pass
+            if target_idx is not None:
+                qmp._send({"execute": "human-monitor-command",
+                           "arguments": {"command-line": f"mouse_set {target_idx}"}})
+                try: qmp._recv()
+                except socket.timeout: pass
+                print(f"[bridge] mouse_set {target_idx}", flush=True)
+    except socket.timeout:
+        print("[bridge] info mice: timeout", flush=True)
+    qmp.s.settimeout(10)
+
     last_x, last_y = host_mouse_pos()
     last_btn = host_left_button_down()
     print(f"[bridge] starting host mouse @ ({last_x:.0f}, {last_y:.0f})", flush=True)
