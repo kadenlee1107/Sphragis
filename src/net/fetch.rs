@@ -24,6 +24,36 @@
 
 use super::{dns, tcp, tls};
 
+/// STUMP #111 (audit M-body-truncate-silent): every drain path caps at
+/// 256 KB. Pre-fix the cap-hit was a silent `break`, so a server (or
+/// MITM) sending a > 256 KB response truncated the body invisibly —
+/// the renderer rendered a half-page and the operator never knew the
+/// cause. One-shot audit + UART warning the first time the cap fires.
+/// We don't log every hit because the cap fires on EVERY large
+/// download once it starts happening on a given page; the first
+/// occurrence is what tells the reviewer "this is happening."
+fn note_drain_capped(scheme: &str) {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static FIRST_FAIL: AtomicBool = AtomicBool::new(false);
+    if !FIRST_FAIL.swap(true, Ordering::AcqRel) {
+        let mut buf = [0u8; 192];
+        let mut p = 0usize;
+        let copy = |dst: &mut [u8], src: &[u8], p: &mut usize| {
+            let n = src.len().min(dst.len().saturating_sub(*p));
+            dst[*p..*p + n].copy_from_slice(&src[..n]);
+            *p += n;
+        };
+        copy(&mut buf, b"fetch ", &mut p);
+        copy(&mut buf, scheme.as_bytes(), &mut p);
+        copy(&mut buf, b" body capped at 256 KB - response truncated", &mut p);
+        crate::security::audit::record(
+            crate::security::audit::Category::Fetch,
+            &buf[..p],
+        );
+        crate::drivers::uart::puts("[fetch] WARNING: 256 KB body cap reached - response truncated\n");
+    }
+}
+
 /// STUMP #111 (audit H019): RAII guard that restores
 /// `tls_pinning::Mode` + `tls::set_hybrid_enabled` on drop. Pre-fix,
 /// every fetch_https / fetch_post_https Err path manually called
@@ -191,7 +221,7 @@ pub fn fetch_http(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
     let mut total = 0usize;
     loop {
-        if total >= scratch.len() { break; }
+        if total >= scratch.len() { note_drain_capped("http"); break; }
         match tcp::recv_data(&mut scratch[total..]) {
             Ok(0) => break,
             Ok(n) => total += n,
@@ -367,7 +397,7 @@ pub fn fetch_post_https(
     let mut iters = 0u32;
     let mut consecutive_empty = 0u32;
     loop {
-        if total >= scratch.len() { break; }
+        if total >= scratch.len() { note_drain_capped("https-post"); break; }
         if iters > 500 { break; }
         iters += 1;
         match tls::recv_app_data(&mut scratch[total..]) {
@@ -412,7 +442,7 @@ fn drain_http_response_with_host(host: &str, out: &mut [u8]) -> Result<usize, &'
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
     let mut total = 0usize;
     loop {
-        if total >= scratch.len() { break; }
+        if total >= scratch.len() { note_drain_capped("http-drain"); break; }
         match tcp::recv_data(&mut scratch[total..]) {
             Ok(0) => break,
             Ok(n) => total += n,
@@ -532,7 +562,7 @@ pub fn fetch_https(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     let mut iters = 0u32;
     let mut consecutive_empty = 0u32;
     loop {
-        if total >= scratch.len() { break; }
+        if total >= scratch.len() { note_drain_capped("https"); break; }
         if iters > 500 { break; } // pathological-server guard
         iters += 1;
         match tls::recv_app_data(&mut scratch[total..]) {

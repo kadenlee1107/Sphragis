@@ -260,20 +260,60 @@ pub fn ensure_host_cave_active() {
 
 /// Create a new BatCave.
 pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
-    if name.len() > MAX_NAME { return Err("name too long"); }
+    if name.len() > MAX_NAME {
+        // STUMP #111 (audit M-cave-create-no-audit): every cave-creation
+        // attempt is operationally significant and worth logging — both
+        // the success path AND every failure mode. Pre-fix the failure
+        // paths returned silently. An attacker (or buggy script) trying
+        // to flood the cave table left no breadcrumbs in the audit ring.
+        crate::security::audit::record(
+            crate::security::audit::Category::Cave,
+            b"cave create FAILED: name too long",
+        );
+        return Err("name too long");
+    }
 
     unsafe {
         // Check duplicate
         for i in 0..MAX_CAVES {
             if CAVES[i].state != CaveState::Free && CAVES[i].name_str() == name {
+                let mut buf = [0u8; 192];
+                let mut p = 0usize;
+                let copy = |dst: &mut [u8], src: &[u8], p: &mut usize| {
+                    let n = src.len().min(dst.len().saturating_sub(*p));
+                    dst[*p..*p + n].copy_from_slice(&src[..n]);
+                    *p += n;
+                };
+                copy(&mut buf, b"cave create FAILED: duplicate name ", &mut p);
+                copy(&mut buf, name.as_bytes(), &mut p);
+                crate::security::audit::record(
+                    crate::security::audit::Category::Cave,
+                    &buf[..p],
+                );
                 return Err("BatCave already exists");
             }
         }
 
         // Find free slot
-        let slot = (0..MAX_CAVES)
+        let slot = match (0..MAX_CAVES)
             .find(|&i| CAVES[i].state == CaveState::Free)
-            .ok_or("max BatCaves reached")?;
+        {
+            Some(s) => s,
+            None => {
+                // Cave-table saturation. This is a SECURITY-relevant
+                // event: an attacker with shell access trying to DoS
+                // the OS by spinning up 32 caves leaves a clear trace
+                // here. Always logged (not one-shot) since the operator
+                // needs to see EVERY rejected creation to understand
+                // the scope of the attempt.
+                crate::security::audit::record(
+                    crate::security::audit::Category::Cave,
+                    b"cave create FAILED: max caves reached (table full)",
+                );
+                crate::drivers::uart::puts("[cave] WARNING: MAX_CAVES reached - creation rejected\n");
+                return Err("max BatCaves reached");
+            }
+        };
 
         let cave = &mut CAVES[slot];
         cave.state = CaveState::Stopped;
@@ -309,6 +349,24 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
 
         let count = CAVE_COUNT.load(Ordering::Relaxed);
         CAVE_COUNT.store(count + 1, Ordering::Relaxed);
+
+        // STUMP #111 (audit M-cave-create-no-audit): success-path log.
+        // Pairs with the failure-path entries above so the audit ring
+        // tells a complete cave-lifecycle story.
+        let mut buf = [0u8; 192];
+        let mut p = 0usize;
+        let copy = |dst: &mut [u8], src: &[u8], p: &mut usize| {
+            let n = src.len().min(dst.len().saturating_sub(*p));
+            dst[*p..*p + n].copy_from_slice(&src[..n]);
+            *p += n;
+        };
+        copy(&mut buf, b"cave create OK ", &mut p);
+        copy(&mut buf, name.as_bytes(), &mut p);
+        copy(&mut buf, if ephemeral { b" (ephemeral)" } else { b" (persistent)" }, &mut p);
+        crate::security::audit::record(
+            crate::security::audit::Category::Cave,
+            &buf[..p],
+        );
 
         Ok(slot)
     }
@@ -638,7 +696,30 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
         }
     }
 
-    let cave = find_mut(name)?;
+    let cave = match find_mut(name) {
+        Ok(c) => c,
+        Err(e) => {
+            // STUMP #111 (audit M-cave-create-no-audit, paired): every
+            // destroy attempt is logged regardless of outcome. The
+            // failure path here is most often "operator typo" but it
+            // ALSO covers a malicious destroy probe (someone scanning
+            // for cave names by trying to delete them). Keep the trail.
+            let mut buf = [0u8; 192];
+            let mut p = 0usize;
+            let copy = |dst: &mut [u8], src: &[u8], p: &mut usize| {
+                let n = src.len().min(dst.len().saturating_sub(*p));
+                dst[*p..*p + n].copy_from_slice(&src[..n]);
+                *p += n;
+            };
+            copy(&mut buf, b"cave destroy FAILED ", &mut p);
+            copy(&mut buf, name.as_bytes(), &mut p);
+            crate::security::audit::record(
+                crate::security::audit::Category::Cave,
+                &buf[..p],
+            );
+            return Err(e);
+        }
+    };
 
     // Zero the encryption key — data is now unrecoverable
     cave.fs_key = [0; 32];
@@ -675,6 +756,23 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
     if let Some(id) = cave_id_for_reset {
         crate::batcave::linux::quotas::reset(id);
     }
+
+    // STUMP #111 (audit M-cave-create-no-audit, paired): success-path
+    // log so the audit ring shows full lifecycle (create → use →
+    // destroy) for every cave. Critical for post-incident review.
+    let mut buf = [0u8; 192];
+    let mut p = 0usize;
+    let copy = |dst: &mut [u8], src: &[u8], p: &mut usize| {
+        let n = src.len().min(dst.len().saturating_sub(*p));
+        dst[*p..*p + n].copy_from_slice(&src[..n]);
+        *p += n;
+    };
+    copy(&mut buf, b"cave destroy OK ", &mut p);
+    copy(&mut buf, name.as_bytes(), &mut p);
+    crate::security::audit::record(
+        crate::security::audit::Category::Cave,
+        &buf[..p],
+    );
 
     Ok(())
 }
@@ -893,4 +991,12 @@ fn reset_all_globals_for_cave_switch() {
     crate::ui::font::reset_for_cave_switch();
     crate::ui::wm::reset_for_cave_switch();
     crate::ui::console::reset_for_cave_switch();
+
+    // STUMP #111 (audit M-FIRST-FAIL re-arm): re-arm one-shot
+    // saturation alarms in the DOM and JS string-intern subsystems
+    // so the next tenant's first overflow is audible. Pre-fix the
+    // alarms fired exactly once per boot, hiding flooding events
+    // from any cave but the first.
+    crate::browser::dom::reset_for_cave_switch();
+    crate::browser::js::strings::reset_for_cave_switch();
 }

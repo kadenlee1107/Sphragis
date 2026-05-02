@@ -32,6 +32,11 @@ pub enum Category {
     Mode        = 6,  // tls-mode / js-mode flipped
     Auth        = 7,  // login / logout / failed attempt
     Boot        = 8,  // kernel boot, cave switch
+    /// STUMP #111 (audit M-cave-create-no-audit): cave-table mutations
+    /// (create / destroy / failed attempts). Distinct from `Boot`
+    /// (one-shot per power-on) so the operator can grep-filter cave
+    /// lifecycle events without drowning in boot noise.
+    Cave        = 9,
 }
 
 impl Category {
@@ -45,6 +50,7 @@ impl Category {
             Category::Mode       => "mode",
             Category::Auth       => "auth",
             Category::Boot       => "boot",
+            Category::Cave       => "cave",
         }
     }
 }

@@ -24,8 +24,14 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use crate::drivers::uart;
+
+/// STUMP #111 (audit M-FIRST-FAIL re-arm): the saturation alarm fires
+/// once per boot. On a cave-switch the jar is wiped, so the *new*
+/// cave's first flood event would be silent. We expose this flag at
+/// module scope and re-arm it from `reset_for_cave_switch`.
+static JAR_FULL_FIRST_FAIL: AtomicBool = AtomicBool::new(false);
 
 const MAX_COOKIES: usize = 128;
 const HOST_LEN: usize = 96;
@@ -128,7 +134,25 @@ pub fn set(host: &[u8], name: &[u8], value: &[u8]) {
     }
     let idx = match find_or_alloc(host, name) {
         Some(i) => i,
-        None => return, // jar full
+        None => {
+            // STUMP #111 (audit M-cookie-jar-full): silent drop on a
+            // saturated jar lets a hostile origin flood us with 128
+            // junk cookies so a real auth cookie from a later request
+            // is dropped invisibly. One-shot audit + UART warning so
+            // the operator (or post-incident reviewer) sees the
+            // saturation event in the timeline. Subsequent drops stay
+            // silent — we don't want a chatty per-request log to push
+            // older audit entries out of the ring. Re-armed on
+            // cave-switch reset so the next tenant gets its own warning.
+            if !JAR_FULL_FIRST_FAIL.swap(true, Ordering::AcqRel) {
+                crate::security::audit::record(
+                    crate::security::audit::Category::Fetch,
+                    b"cookie jar FULL (MAX_COOKIES=128) - dropping new cookies",
+                );
+                uart::puts("[cookies] WARNING: jar full - cookie dropped\n");
+            }
+            return;
+        }
     };
     unsafe {
         let jar = &mut *core::ptr::addr_of_mut!(JAR);
@@ -302,4 +326,8 @@ pub fn reset() {
 
 pub fn reset_for_cave_switch() {
     reset();
+    // STUMP #111: re-arm the saturation alarm so the next cave's
+    // first jar-full event is audible (otherwise the second cave
+    // floods silently).
+    JAR_FULL_FIRST_FAIL.store(false, Ordering::Release);
 }

@@ -10,6 +10,24 @@ const MAX_STRINGS: usize = 4096;
 /// Total byte storage for all string data.
 const STRING_ARENA_SIZE: usize = 256 * 1024; // 256 KB
 
+/// STUMP #111 (audit M-FIRST-FAIL re-arm): saturation alarms used to
+/// be function-local statics that fired once per boot. Cave switch
+/// doesn't currently rebuild the intern table (it's process-global by
+/// design — well-known strings like "length" are baked in at init),
+/// but we still want every NEW saturation event after a cave switch
+/// to be visible. Module-scope flags + a public re-arm hook called
+/// from `batcave::cave::reset_all_globals_for_cave_switch` give the
+/// new tenant a fresh "first" event.
+pub static INTERN_FULL_FIRST_FAIL: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+pub static ARENA_FULL_FIRST_FAIL: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+pub fn reset_for_cave_switch() {
+    INTERN_FULL_FIRST_FAIL.store(false, core::sync::atomic::Ordering::Release);
+    ARENA_FULL_FIRST_FAIL.store(false, core::sync::atomic::Ordering::Release);
+}
+
 /// Entry in the string table.
 #[derive(Clone, Copy)]
 struct StringEntry {
@@ -166,9 +184,7 @@ impl StringTable {
         // record an audit entry the first time saturation occurs so
         // the reviewer can see the script that exhausted us.
         if self.entry_count >= MAX_STRINGS {
-            static FIRST_FAIL: core::sync::atomic::AtomicBool =
-                core::sync::atomic::AtomicBool::new(false);
-            if !FIRST_FAIL.swap(true, core::sync::atomic::Ordering::AcqRel) {
+            if !INTERN_FULL_FIRST_FAIL.swap(true, core::sync::atomic::Ordering::AcqRel) {
                 crate::security::audit::record(
                     crate::security::audit::Category::Script,
                     b"JS string intern table FULL (MAX_STRINGS=4096) - script may be flooding",
@@ -178,9 +194,7 @@ impl StringTable {
             return StringId::EMPTY;
         }
         if self.data_len + bytes.len() > STRING_ARENA_SIZE {
-            static FIRST_FAIL: core::sync::atomic::AtomicBool =
-                core::sync::atomic::AtomicBool::new(false);
-            if !FIRST_FAIL.swap(true, core::sync::atomic::Ordering::AcqRel) {
+            if !ARENA_FULL_FIRST_FAIL.swap(true, core::sync::atomic::Ordering::AcqRel) {
                 crate::security::audit::record(
                     crate::security::audit::Category::Script,
                     b"JS string arena FULL - script may be flooding",

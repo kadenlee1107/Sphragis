@@ -8,7 +8,20 @@
 
 use crate::drivers::virtio::net as netdev;
 use super::ethernet;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+/// STUMP #111 (audit M-arp-unsolicited-silent): count + one-shot audit
+/// for unsolicited (gratuitous) ARP replies. Pre-fix the existing code
+/// silently dropped them — a textbook ARP-spoof attack tried to claim
+/// the gateway and left zero trace in the audit ring. We still drop
+/// them (that's correct), but we record the first occurrence so the
+/// reviewer can see it; subsequent drops bump a counter visible via
+/// `arp_unsolicited_count()` for the shell `info net` command.
+/// Re-armed on cave switch.
+static UNSOL_REPLIES: AtomicUsize = AtomicUsize::new(0);
+static UNSOL_FIRST_FAIL: AtomicBool = AtomicBool::new(false);
+
+pub fn unsolicited_count() -> usize { UNSOL_REPLIES.load(Ordering::Relaxed) }
 
 const ARP_HW_ETHERNET: u16 = 1;
 const ARP_OP_REQUEST: u16 = 1;
@@ -135,7 +148,19 @@ pub fn handle_arp(data: &[u8]) {
                 return;
             }
             if !pending_take(sender_ip) {
-                // Unsolicited — log once, drop. We don't spam uart.
+                // Unsolicited — drop. STUMP #111: also bump a counter
+                // and audit-log the first occurrence so the operator
+                // can see the attempt. We don't audit every drop —
+                // that would let an attacker flood the audit ring with
+                // forged replies and push real entries out.
+                UNSOL_REPLIES.fetch_add(1, Ordering::Relaxed);
+                if !UNSOL_FIRST_FAIL.swap(true, Ordering::AcqRel) {
+                    crate::security::audit::record(
+                        crate::security::audit::Category::Boot,
+                        b"unsolicited ARP reply dropped (possible spoof attempt)",
+                    );
+                    crate::drivers::uart::puts("[arp] WARNING: unsolicited reply dropped (possible spoof)\n");
+                }
                 return;
             }
             cache_put_rl(sender_ip, mac);
@@ -158,6 +183,12 @@ pub fn reset_for_cave_switch() {
         let ticks = &mut *core::ptr::addr_of_mut!(LAST_UPDATE_TICK);
         for slot in ticks.iter_mut() { *slot = 0; }
     }
+    // STUMP #111: re-arm the unsolicited-reply alarm + counter so the
+    // next cave starts with a clean slate. Otherwise a cave that ran
+    // long enough to see one spoof attempt would silence the warning
+    // for every subsequent cave on this boot.
+    UNSOL_REPLIES.store(0, Ordering::Relaxed);
+    UNSOL_FIRST_FAIL.store(false, Ordering::Release);
 }
 
 pub fn resolve(ip: u32) -> Option<[u8; 6]> {

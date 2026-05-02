@@ -12,6 +12,24 @@
 /// fit the full DOM. Per-node growth (after #95's MAX_TEXT bump) is
 /// ~2.4 KB; doubling node count adds ~5 MB BSS, well within budget.
 pub const MAX_NODES: usize = 4096;
+
+/// STUMP #111 (audit M-FIRST-FAIL re-arm): saturation alarms used to
+/// be function-local statics that fired once per boot. After a cave
+/// switch the DOM is rebuilt fresh, so a saturation event in the new
+/// cave was silent. Module-scope flags + a public re-arm hook called
+/// from `batcave::cave::reset_all_globals_for_cave_switch` make the
+/// next tenant's first overflow audible again.
+pub static MAX_NODES_FIRST_FAIL: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+pub static MAX_ATTRS_FIRST_FAIL: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Called from the cave-switch hub to re-arm the saturation alarms so
+/// the new cave's first overflow gets audited.
+pub fn reset_for_cave_switch() {
+    MAX_NODES_FIRST_FAIL.store(false, core::sync::atomic::Ordering::Release);
+    MAX_ATTRS_FIRST_FAIL.store(false, core::sync::atomic::Ordering::Release);
+}
 /// Maximum attributes per element
 pub const MAX_ATTRS: usize = 8;
 /// Maximum tag/attr name length
@@ -181,10 +199,9 @@ impl DomNode {
             // a page with > MAX_ATTRS attributes on one element silently
             // dropped the trailing ones — including potentially-defensive
             // ones like `nonce`, `crossorigin`, `integrity`. Audit-log
-            // the first occurrence per session.
-            static FIRST_FAIL: core::sync::atomic::AtomicBool =
-                core::sync::atomic::AtomicBool::new(false);
-            if !FIRST_FAIL.swap(true, core::sync::atomic::Ordering::AcqRel) {
+            // the first occurrence per cave-session (re-armed on cave
+            // switch by reset_for_cave_switch).
+            if !MAX_ATTRS_FIRST_FAIL.swap(true, core::sync::atomic::Ordering::AcqRel) {
                 crate::security::audit::record(
                     crate::security::audit::Category::Boot,
                     b"DOM MAX_ATTRS hit, attributes truncated",
@@ -297,12 +314,9 @@ impl Document {
             // visible symptom pre-fix was "rest of the page silently
             // missing" — an attacker page with > MAX_NODES elements
             // truncates without any signal to the operator. Now we
-            // record an audit entry the FIRST time we hit it (not
-            // every alloc — that would flood the log). Subsequent
-            // alloc-fail returns None as before.
-            static FIRST_FAIL: core::sync::atomic::AtomicBool =
-                core::sync::atomic::AtomicBool::new(false);
-            if !FIRST_FAIL.swap(true, core::sync::atomic::Ordering::AcqRel) {
+            // record an audit entry the FIRST time we hit it per
+            // cave-session (re-armed by reset_for_cave_switch).
+            if !MAX_NODES_FIRST_FAIL.swap(true, core::sync::atomic::Ordering::AcqRel) {
                 crate::security::audit::record(
                     crate::security::audit::Category::Boot, // closest fit; "parser-truncation" not modeled
                     b"DOM MAX_NODES hit, page truncated",

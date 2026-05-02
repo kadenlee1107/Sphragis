@@ -297,7 +297,7 @@ pub fn allow(main_host: &str, other_host: &str) -> Result<(), &'static str> {
                 && &e.main_host[..e.main_host_len as usize] == mh
                 && &e.other_host[..e.other_host_len as usize] == oh
             {
-                return Ok(());
+                return Ok(()); // duplicate = silent no-op (intentional)
             }
         }
         for e in list.iter_mut() {
@@ -309,9 +309,47 @@ pub fn allow(main_host: &str, other_host: &str) -> Result<(), &'static str> {
                 e.other_host[..on].copy_from_slice(&oh[..on]);
                 e.other_host_len = on as u16;
                 e.active = true;
+                // STUMP #111 (audit M-allowlist-no-audit): adding an
+                // SOP allowlist entry is a security-relevant operation
+                // — it extends the perimeter for cross-origin fetches.
+                // Audit-log every add so the operator (or post-incident
+                // reviewer) can reconstruct the allowlist's history.
+                let mut buf = [0u8; 192];
+                let mut p = 0usize;
+                let copy = |dst: &mut [u8], src: &[u8], p: &mut usize| {
+                    let n = src.len().min(dst.len().saturating_sub(*p));
+                    dst[*p..*p + n].copy_from_slice(&src[..n]);
+                    *p += n;
+                };
+                copy(&mut buf, b"origin-allow ADD ", &mut p);
+                copy(&mut buf, mh, &mut p);
+                copy(&mut buf, b" -> ", &mut p);
+                copy(&mut buf, oh, &mut p);
+                crate::security::audit::record(
+                    crate::security::audit::Category::Mode,
+                    &buf[..p],
+                );
                 return Ok(());
             }
         }
+        // Saturation. Audit-log every attempt — the allowlist is small
+        // (32 entries) and a flooding attempt is itself the signal.
+        let mut buf = [0u8; 192];
+        let mut p = 0usize;
+        let copy = |dst: &mut [u8], src: &[u8], p: &mut usize| {
+            let n = src.len().min(dst.len().saturating_sub(*p));
+            dst[*p..*p + n].copy_from_slice(&src[..n]);
+            *p += n;
+        };
+        copy(&mut buf, b"origin-allow REJECTED (allowlist full) ", &mut p);
+        copy(&mut buf, mh, &mut p);
+        copy(&mut buf, b" -> ", &mut p);
+        copy(&mut buf, oh, &mut p);
+        crate::security::audit::record(
+            crate::security::audit::Category::Mode,
+            &buf[..p],
+        );
+        uart::puts("[origin] WARNING: allowlist full - entry rejected\n");
         Err("origin-allow: allowlist full")
     }
 }
@@ -338,8 +376,36 @@ pub fn dump_allowlist() {
 }
 
 pub fn clear_allowlist() {
+    let mut count = 0usize;
     unsafe {
         let list = &mut *core::ptr::addr_of_mut!(ALLOWLIST);
-        for e in list.iter_mut() { *e = AllowEntry::empty(); }
+        for e in list.iter_mut() {
+            if e.active { count += 1; }
+            *e = AllowEntry::empty();
+        }
     }
+    // STUMP #111: wiping the SOP allowlist is a security-relevant
+    // operation — caves that were depending on a cross-origin entry
+    // suddenly can't fetch their CDN any more. Audit so the change
+    // shows up in the timeline alongside the rest of the policy
+    // mutations.
+    let mut buf = [0u8; 192];
+    let mut p = 0usize;
+    let copy = |dst: &mut [u8], src: &[u8], p: &mut usize| {
+        let n = src.len().min(dst.len().saturating_sub(*p));
+        dst[*p..*p + n].copy_from_slice(&src[..n]);
+        *p += n;
+    };
+    copy(&mut buf, b"origin-allow CLEAR (", &mut p);
+    let mut tmp = [0u8; 8];
+    let mut v = count;
+    let mut i = 0;
+    if v == 0 { tmp[0] = b'0'; i = 1; }
+    while v > 0 && i < tmp.len() { tmp[i] = b'0' + (v % 10) as u8; v /= 10; i += 1; }
+    for j in 0..i { let b = [tmp[i - 1 - j]]; copy(&mut buf, &b, &mut p); }
+    copy(&mut buf, b" entries removed)", &mut p);
+    crate::security::audit::record(
+        crate::security::audit::Category::Mode,
+        &buf[..p],
+    );
 }
