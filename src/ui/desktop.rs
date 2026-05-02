@@ -306,18 +306,22 @@ fn render_current() {
 fn render_app(app: u8) {
     match app {
         wm::APP_SHELL => {
-            // STUMP #123: tab-switch wipes the FB (draw_frame's
-            // fill_screen at the top) and the shell has no scrollback
-            // buffer to replay, so the previous version of redraw was
-            // a no-op and the shell came back blank. Other apps don't
-            // hit this because their render_app fully repaints from
-            // state. Until we land a real scrollback, the safe fallback
-            // is "fresh banner + empty prompt" — the operator sees the
-            // shell again, command history is gone (visually only;
-            // the audit log still has it).
-            console::init_in_window();
+            // STUMP #124: real scrollback now lives in console.rs.
+            // Order matters:
+            //   1. redraw_content clears the pane and replays every
+            //      buffered cell — that brings back the prompt,
+            //      command output, AND any in-progress typed input.
+            //   2. shell_banner re-paints the bat-glyph banner over
+            //      the cleared rows 0..3 (the banner is rendered
+            //      directly to the FB, not through the buffer).
+            //   3. shell_banner ends with set_cursor(0, 4) — but
+            //      that would clobber the cursor position the buffer
+            //      wants to keep (it's at the END of the user's last
+            //      typing). So save & restore around the banner call.
+            let (saved_cx, saved_cy) = console::cursor();
+            console::redraw_content();
             shell_banner();
-            console::prompt();
+            console::set_cursor(saved_cx, saved_cy);
         }
         wm::APP_DASHBOARD => apps::dashboard::render(),
         wm::APP_FILES => apps::filemanager::render(),
@@ -454,7 +458,9 @@ fn shell_banner() {
 
     let _ = CYAN_DIM; // reserved for future scrollback echo styling
 
-    // Push the console cursor below the banner so the prompt lands
-    // at row 4 (~ pixel y = MARGIN_Y + 4*CHAR_H). Each \n bumps cy.
-    console::puts("\n\n\n\n");
+    // STUMP #124: position the console cursor below the banner using
+    // an explicit set_cursor instead of emitting `\n` chars (which
+    // would write empty cells to the scrollback and shift cursor
+    // arbitrarily relative to wherever it was).
+    console::set_cursor(0, 4);
 }
