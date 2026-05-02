@@ -169,8 +169,17 @@ pub fn run() {
                     _ if c >= 0x20 && c <= 0x7E && len < 127 => {
                         buf[len] = c;
                         len += 1;
-                        // Show dot (not the actual character — no screen shoulder surfing)
-                        font::draw_char(fb, w, cursor_x, field_y + 4, 0x07, WHITE, BLACK);
+                        // STUMP #113: show '*' as the masking glyph,
+                        // NOT 0x07 (bell). 0x07 is below the font's
+                        // printable range (32..126), so draw_char's
+                        // out-of-range fallback rendered it as the
+                        // space-character bitmap — an invisible 8x16
+                        // black square on the black field. The user
+                        // saw NOTHING and assumed input was broken.
+                        // '*' is the conventional password mask and
+                        // sits squarely inside the printable range,
+                        // so it actually paints.
+                        font::draw_char(fb, w, cursor_x, field_y + 4, b'*', WHITE, BLACK);
                         cursor_x += 8;
                         gpu::flush(cursor_x - 8, field_y + 4, 8, 16);
                     }
