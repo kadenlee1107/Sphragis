@@ -81,7 +81,26 @@ impl LayoutTree {
     }
 
     fn alloc(&mut self) -> Option<usize> {
-        if self.box_count >= MAX_BOXES { return None; }
+        if self.box_count >= MAX_BOXES {
+            // STUMP #111 (audit M-layout-saturation): silent
+            // truncation when we run out of layout boxes. A single
+            // DOM node can spawn multiple line boxes (inline wrap)
+            // or multiple cell boxes (table), so box_count CAN
+            // outrun node_count even if MAX_BOXES==MAX_NODES. Pre-fix
+            // a long-text paragraph that wraps over MAX_BOXES lines
+            // silently chopped off the trailing ones; now an audit
+            // entry fires once so the operator can see the cause.
+            use core::sync::atomic::{AtomicBool, Ordering};
+            static FIRST_FAIL: AtomicBool = AtomicBool::new(false);
+            if !FIRST_FAIL.swap(true, Ordering::AcqRel) {
+                crate::security::audit::record(
+                    crate::security::audit::Category::Boot,
+                    b"layout MAX_BOXES reached - page truncated",
+                );
+                crate::drivers::uart::puts("[layout] WARNING: MAX_BOXES reached - layout truncated\n");
+            }
+            return None;
+        }
         let idx = self.box_count;
         self.boxes[idx] = LayoutBox::empty();
         self.boxes[idx].active = true;

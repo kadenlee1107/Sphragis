@@ -120,6 +120,16 @@ impl Stylesheet {
         let mut i = 0;
         let len = css.len();
 
+        // STUMP #111 (audit M-css-saturation): one-shot saturation
+        // alarm. Without it a page with > MAX_RULES (128) selectors
+        // silently dropped trailing rules — including potentially
+        // important ones like `body { display: block }` that landed
+        // late, leaving the page rendered with default styling.
+        // Re-armed indirectly by future code if we ever wire CSS
+        // sheets into per-cave reset.
+        use core::sync::atomic::{AtomicBool, Ordering};
+        static FIRST_FAIL: AtomicBool = AtomicBool::new(false);
+
         while i < len && self.rule_count < MAX_RULES {
             // Skip whitespace and comments
             i = skip_ws_comments(css, i);
@@ -150,6 +160,18 @@ impl Stylesheet {
 
             // Parse declarations (semicolon-separated)
             parse_declarations(&css[decl_start..decl_end], rule);
+        }
+        // STUMP #111 (audit M-css-saturation): if we exited because we
+        // hit MAX_RULES AND there's still css left to parse, that's
+        // saturation. Audit it once.
+        if i < len && self.rule_count >= MAX_RULES {
+            if !FIRST_FAIL.swap(true, Ordering::AcqRel) {
+                crate::security::audit::record(
+                    crate::security::audit::Category::Boot,
+                    b"CSS MAX_RULES (128) reached - rules truncated",
+                );
+                crate::drivers::uart::puts("[css] WARNING: MAX_RULES reached - sheet truncated\n");
+            }
         }
     }
 
