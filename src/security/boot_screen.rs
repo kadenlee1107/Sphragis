@@ -515,22 +515,36 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
     }
 
     // Helper hint row beneath the field.
+    //
+    // STUMP #119: dropped the design's "ESC TO WIPE" and "F2 KEYMAP"
+    // labels — neither is wired (and ESC-to-wipe would be a footgun
+    // anyway: a stray ESC press shouldn't nuke the system without
+    // confirmation). Wipe is reachable via the duress passphrase,
+    // which is intentionally NOT advertised. Caps state is now real:
+    // we read it from both keyboard.rs and tablet.rs (either could
+    // own KEY_CAPSLOCK depending on how QEMU multiplexes input).
     let hint_y = field_y + FIELD_H + 12;
-    let (hint_left, hint_right, hint_color) = match state {
+    let caps_on = crate::drivers::virtio::keyboard::caps_active()
+        || crate::drivers::virtio::tablet::caps_active();
+    let (hint_left, hint_right, hint_color, caps_color) = match state {
         LockState::Granted(_) => (
             "DEADMAN REFRESHED . LAUNCHING DESKTOP",
             "READY",
             GREEN,
+            GREEN,
         ),
         _ => (
-            "RETURN TO SUBMIT . ESC TO WIPE . F2 KEYMAP",
-            "CAPS OFF",
+            "RETURN TO SUBMIT . BACKSPACE TO EDIT",
+            if caps_on { "CAPS ON" } else { "CAPS OFF" },
             DIM_TXT,
+            // Caps-on gets amber so it stands out. Off stays dim
+            // so it doesn't compete visually with the actual hint.
+            if caps_on { AMBER } else { DIM_TXT },
         ),
     };
     font::draw_str(fb, w, field_x, hint_y, hint_left, hint_color, BG);
     let caps_x = field_x + FIELD_W - (hint_right.len() as u32 * CHAR_W);
-    font::draw_str(fb, w, caps_x, hint_y, hint_right, hint_color, BG);
+    font::draw_str(fb, w, caps_x, hint_y, hint_right, caps_color, BG);
 
     // Denied overlay — red box centered over the stack.
     if state == LockState::Denied {

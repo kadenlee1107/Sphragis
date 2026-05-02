@@ -79,6 +79,12 @@ static mut CTRL_HELD: bool = false;
 static mut SHIFT_HELD: bool = false;
 static mut ALT_HELD: bool = false;
 
+// STUMP #119: Caps Lock is a TOGGLE, not a held modifier. Each
+// KEY_CAPSLOCK DOWN event flips the state. We expose `caps_active()`
+// so the lock screen can render an honest "CAPS ON / OFF" indicator
+// instead of the static label the design mocked up.
+static mut CAPS_LOCK_ON: bool = false;
+
 // Linux evdev keycodes for modifiers
 const KEY_LEFTCTRL: u16 = 29;
 const KEY_RIGHTCTRL: u16 = 97;
@@ -86,7 +92,14 @@ const KEY_LEFTSHIFT: u16 = 42;
 const KEY_RIGHTSHIFT: u16 = 54;
 const KEY_LEFTALT: u16 = 56;
 const KEY_RIGHTALT: u16 = 100;
+const KEY_CAPSLOCK: u16 = 58;
 const KEY_TAB: u16 = 15;
+
+/// Public read of the caps-lock toggle. The lock screen and any
+/// other UI that wants a "CAPS ON" badge should read it.
+pub fn caps_active() -> bool {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CAPS_LOCK_ON)) }
+}
 
 pub fn init() -> Option<()> {
     let devices = mmio::probe(18); // virtio input device type
@@ -177,6 +190,11 @@ pub fn poll() {
                     KEY_LEFTCTRL | KEY_RIGHTCTRL => { CTRL_HELD = value == 1; }
                     KEY_LEFTSHIFT | KEY_RIGHTSHIFT => { SHIFT_HELD = value == 1; }
                     KEY_LEFTALT | KEY_RIGHTALT => { ALT_HELD = value == 1; }
+                    // STUMP #119: caps-lock is a press-to-toggle key,
+                    // not held. Flip on DOWN only; ignore UP.
+                    KEY_CAPSLOCK => {
+                        if value == 1 { CAPS_LOCK_ON = !CAPS_LOCK_ON; }
+                    }
                     _ => {}
                 }
             }
@@ -202,18 +220,28 @@ pub fn poll() {
                         unsafe {
                             if CTRL_HELD && ch >= b'a' && ch <= b'z' {
                                 ch = ch - b'a' + 1;
-                            } else if SHIFT_HELD {
-                                ch = match ch {
-                                    b'a'..=b'z' => ch - 32, // uppercase
-                                    b'1' => b'!', b'2' => b'@', b'3' => b'#',
-                                    b'4' => b'$', b'5' => b'%', b'6' => b'^',
-                                    b'7' => b'&', b'8' => b'*', b'9' => b'(',
-                                    b'0' => b')', b'-' => b'_', b'=' => b'+',
-                                    b'[' => b'{', b']' => b'}', b'\\' => b'|',
-                                    b';' => b':', b'\'' => b'"', b'`' => b'~',
-                                    b',' => b'<', b'.' => b'>', b'/' => b'?',
-                                    _ => ch,
-                                };
+                            } else {
+                                // STUMP #119: caps lock XORs with shift
+                                // for alpha keys (so caps+shift cancels
+                                // out, like every other OS). Number-row
+                                // symbols are SHIFT-only — caps lock
+                                // doesn't affect them.
+                                let alpha_upper = SHIFT_HELD ^ CAPS_LOCK_ON;
+                                if alpha_upper && ch >= b'a' && ch <= b'z' {
+                                    ch -= 32;
+                                }
+                                if SHIFT_HELD {
+                                    ch = match ch {
+                                        b'1' => b'!', b'2' => b'@', b'3' => b'#',
+                                        b'4' => b'$', b'5' => b'%', b'6' => b'^',
+                                        b'7' => b'&', b'8' => b'*', b'9' => b'(',
+                                        b'0' => b')', b'-' => b'_', b'=' => b'+',
+                                        b'[' => b'{', b']' => b'}', b'\\' => b'|',
+                                        b';' => b':', b'\'' => b'"', b'`' => b'~',
+                                        b',' => b'<', b'.' => b'>', b'/' => b'?',
+                                        _ => ch,
+                                    };
+                                }
                             }
                         }
                         push_key(ch);
@@ -269,5 +297,6 @@ pub fn reset_for_cave_switch() {
         core::ptr::write_volatile(core::ptr::addr_of_mut!(CTRL_HELD), false);
         core::ptr::write_volatile(core::ptr::addr_of_mut!(SHIFT_HELD), false);
         core::ptr::write_volatile(core::ptr::addr_of_mut!(ALT_HELD), false);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CAPS_LOCK_ON), false);
     }
 }

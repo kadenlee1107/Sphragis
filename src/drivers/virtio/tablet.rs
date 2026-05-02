@@ -77,6 +77,11 @@ static mut KEY_TAIL: usize = 0;
 static mut CTRL_HELD: bool = false;
 static mut SHIFT_HELD: bool = false;
 static mut ALT_HELD: bool = false;
+// STUMP #119: caps lock toggle, mirrored from keyboard.rs because
+// QEMU's input multiplexer routes EV_KEY to whichever device claimed
+// the capability first — caps-lock presses can land here on Mac
+// cocoa just like alpha keys do.
+static mut CAPS_LOCK_ON: bool = false;
 
 const KEY_LEFTCTRL: u16 = 29;
 const KEY_RIGHTCTRL: u16 = 97;
@@ -84,6 +89,11 @@ const KEY_LEFTSHIFT: u16 = 42;
 const KEY_RIGHTSHIFT: u16 = 54;
 const KEY_LEFTALT: u16 = 56;
 const KEY_RIGHTALT: u16 = 100;
+const KEY_CAPSLOCK: u16 = 58;
+
+pub fn caps_active() -> bool {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CAPS_LOCK_ON)) }
+}
 
 // Linux evdev keycode → ASCII (subset that matters for the renderer).
 static KEYMAP: [u8; 128] = {
@@ -256,6 +266,10 @@ pub fn poll() {
                             KEY_LEFTCTRL | KEY_RIGHTCTRL  => CTRL_HELD  = value == 1,
                             KEY_LEFTSHIFT | KEY_RIGHTSHIFT => SHIFT_HELD = value == 1,
                             KEY_LEFTALT | KEY_RIGHTALT   => ALT_HELD   = value == 1,
+                            // STUMP #119: caps-lock toggles on DOWN.
+                            KEY_CAPSLOCK => {
+                                if value == 1 { CAPS_LOCK_ON = !CAPS_LOCK_ON; }
+                            }
                             _ => {}
                         }
                     }
@@ -267,18 +281,25 @@ pub fn poll() {
                                 unsafe {
                                     if CTRL_HELD && ch >= b'a' && ch <= b'z' {
                                         ch = ch - b'a' + 1;
-                                    } else if SHIFT_HELD {
-                                        ch = match ch {
-                                            b'a'..=b'z' => ch - 32,
-                                            b'1' => b'!', b'2' => b'@', b'3' => b'#',
-                                            b'4' => b'$', b'5' => b'%', b'6' => b'^',
-                                            b'7' => b'&', b'8' => b'*', b'9' => b'(',
-                                            b'0' => b')', b'-' => b'_', b'=' => b'+',
-                                            b'[' => b'{', b']' => b'}', b'\\' => b'|',
-                                            b';' => b':', b'\'' => b'"', b'`' => b'~',
-                                            b',' => b'<', b'.' => b'>', b'/' => b'?',
-                                            _ => ch,
-                                        };
+                                    } else {
+                                        // STUMP #119: caps XOR shift on alpha;
+                                        // shift-only on number-row symbols.
+                                        let alpha_upper = SHIFT_HELD ^ CAPS_LOCK_ON;
+                                        if alpha_upper && ch >= b'a' && ch <= b'z' {
+                                            ch -= 32;
+                                        }
+                                        if SHIFT_HELD {
+                                            ch = match ch {
+                                                b'1' => b'!', b'2' => b'@', b'3' => b'#',
+                                                b'4' => b'$', b'5' => b'%', b'6' => b'^',
+                                                b'7' => b'&', b'8' => b'*', b'9' => b'(',
+                                                b'0' => b')', b'-' => b'_', b'=' => b'+',
+                                                b'[' => b'{', b']' => b'}', b'\\' => b'|',
+                                                b';' => b':', b'\'' => b'"', b'`' => b'~',
+                                                b',' => b'<', b'.' => b'>', b'/' => b'?',
+                                                _ => ch,
+                                            };
+                                        }
                                     }
                                 }
                                 push_key(ch);
@@ -353,4 +374,11 @@ pub fn reset_for_cave_switch() {
     PENDING_X.store(0, Ordering::Relaxed);
     PENDING_Y.store(0, Ordering::Relaxed);
     PENDING_BTN.store(-1, Ordering::Relaxed);
+    // STUMP #119: reset modifier + caps-lock state too.
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CTRL_HELD), false);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SHIFT_HELD), false);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(ALT_HELD), false);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CAPS_LOCK_ON), false);
+    }
 }
