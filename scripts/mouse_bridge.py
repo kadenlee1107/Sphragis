@@ -100,10 +100,13 @@ class QMP:
             "execute": "input-send-event",
             "arguments": {"events": events},
         })
-        # Drain a response; ignore async events.
+        # Drain QMP response. If QEMU returns an error, surface it
+        # (silent swallow was hiding real problems during bring-up).
         try:
-            self.s.settimeout(0.05)
-            self._recv()
+            self.s.settimeout(0.1)
+            resp = self._recv()
+            if resp.get("error"):
+                print(f"[bridge] QMP error: {resp['error']}", flush=True)
         except socket.timeout:
             pass
         finally:
@@ -135,7 +138,10 @@ def run(host: str, port: int) -> int:
 
     last_x, last_y = host_mouse_pos()
     last_btn = host_left_button_down()
+    print(f"[bridge] starting host mouse @ ({last_x:.0f}, {last_y:.0f})", flush=True)
 
+    sent_count = 0
+    last_log = time.monotonic()
     try:
         while True:
             now_x, now_y = host_mouse_pos()
@@ -154,6 +160,16 @@ def run(host: str, port: int) -> int:
                 last_btn = now_btn
             if events:
                 qmp.send_input_events(events)
+                sent_count += 1
+            # Once per second: heartbeat with the count of event-batches
+            # sent and the current mouse pos. Tells us at a glance
+            # whether the bridge is alive AND whether motion is being
+            # observed.
+            now_t = time.monotonic()
+            if now_t - last_log > 1.0:
+                print(f"[bridge] @({now_x:.0f},{now_y:.0f}) sent {sent_count} batches in last 1s", flush=True)
+                sent_count = 0
+                last_log = now_t
             time.sleep(0.016)  # ~60 Hz
     except KeyboardInterrupt:
         print("\n[bridge] stopped.")
