@@ -279,13 +279,16 @@ pub fn poll() {
                         }
                     }
                     if value == 1 {
-                        // STUMP #130: arrow keys → 0x90..0x93 in the
-                        // tablet ring too (QEMU may route keys here).
+                        // STUMP #130/#131: arrows → 0x90..0x93,
+                        // shift+arrows → 0x94..0x97 (for selection).
+                        let shifted = unsafe {
+                            core::ptr::read_volatile(core::ptr::addr_of!(SHIFT_HELD))
+                        };
                         let arrow = match code {
-                            KEY_UP_C    => Some(0x90u8),
-                            KEY_DOWN_C  => Some(0x91u8),
-                            KEY_LEFT_C  => Some(0x92u8),
-                            KEY_RIGHT_C => Some(0x93u8),
+                            KEY_UP_C    => Some(if shifted { 0x94u8 } else { 0x90u8 }),
+                            KEY_DOWN_C  => Some(if shifted { 0x95u8 } else { 0x91u8 }),
+                            KEY_LEFT_C  => Some(if shifted { 0x96u8 } else { 0x92u8 }),
+                            KEY_RIGHT_C => Some(if shifted { 0x97u8 } else { 0x93u8 }),
                             _ => None,
                         };
                         if let Some(b) = arrow {

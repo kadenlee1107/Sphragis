@@ -271,6 +271,12 @@ pub fn run() -> ! {
                     apps::editor::handle_key(c);
                     render_current();
                 }
+                wm::APP_FILES => {
+                    // STUMP #131: arrow keys move row selection,
+                    // Enter loads the selected file into the editor.
+                    apps::filemanager::handle_key(c);
+                    render_current();
+                }
                 _ => {
                     // Other apps: no keyboard input handling yet
                 }

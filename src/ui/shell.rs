@@ -134,6 +134,7 @@ fn execute(cmd: &str) {
         "cookies" => cmd_cookies(parts[1]),
         "kbd-stats" | "kbd" => cmd_kbd_stats(),
         "kbd-trace" => cmd_kbd_trace(parts[1]),
+        "edit" => cmd_edit(parts[1]),
         "browse" | "open" => {
             if !parts[1].is_empty() {
                 console::puts("  Opening in BatBrowser: ");
@@ -4687,6 +4688,30 @@ fn cmd_kbd_stats() {
     console::puts("\n  ring pushes=");
     crate::kernel::mm::print_num(pushes);
     console::puts("\n");
+}
+
+/// STUMP #131: load a BatFS file into the editor's active tab and
+/// switch to ED. `edit foo.txt` from the shell.
+fn cmd_edit(name: &str) {
+    if name.is_empty() {
+        console::puts("  usage: edit <filename>\n");
+        return;
+    }
+    match crate::ui::apps::editor::load_from_batfs(name) {
+        Ok(()) => {
+            console::puts("  edit: loaded ");
+            console::puts(name);
+            console::puts("\n");
+            // Switch to the editor app so the operator sees what they
+            // just loaded.
+            crate::ui::wm::switch_app(crate::ui::wm::APP_EDITOR);
+        }
+        Err(e) => {
+            console::puts("  edit: ");
+            console::puts(e);
+            console::puts("\n");
+        }
+    }
 }
 
 /// STUMP #104 — Sprint 2.2: print current main origin + allowlist.

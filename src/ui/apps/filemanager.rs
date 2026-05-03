@@ -19,6 +19,53 @@ use crate::ui::widgets::{
     AMBER, AMBER_DIM, HAIR,
 };
 use crate::fs::batfs;
+use crate::drivers::virtio::keyboard::{KEY_ARROW_UP, KEY_ARROW_DOWN};
+
+// STUMP #131: which row the user has highlighted. Up/down arrows
+// move it; Enter opens the selected file in the editor.
+static mut SELECTED_ROW: usize = 0;
+static mut ROW_COUNT_CACHE: usize = 0;
+
+#[inline] fn selected_row() -> usize { unsafe { SELECTED_ROW } }
+#[inline] fn row_count() -> usize { unsafe { ROW_COUNT_CACHE } }
+
+/// Public dispatch — desktop::run forwards APP_FILES keystrokes here.
+pub fn handle_key(c: u8) {
+    match c {
+        KEY_ARROW_UP => {
+            unsafe {
+                if SELECTED_ROW > 0 { SELECTED_ROW -= 1; }
+            }
+        }
+        KEY_ARROW_DOWN => {
+            unsafe {
+                if SELECTED_ROW + 1 < ROW_COUNT_CACHE { SELECTED_ROW += 1; }
+            }
+        }
+        b'\r' | b'\n' => {
+            // Open the selected file in the editor.
+            let idx = selected_row();
+            let mut name_buf = [0u8; 64];
+            let mut name_len = 0usize;
+            let mut row_i = 0usize;
+            batfs::list(|name, _size, _enc| {
+                if row_i == idx {
+                    let n = name.len().min(name_buf.len());
+                    name_buf[..n].copy_from_slice(&name.as_bytes()[..n]);
+                    name_len = n;
+                }
+                row_i += 1;
+            });
+            if name_len > 0 {
+                let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+                if crate::ui::apps::editor::load_from_batfs(name).is_ok() {
+                    crate::ui::wm::switch_app(crate::ui::wm::APP_EDITOR);
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
 const CHAR_W: u32 = 8;
 const CHAR_H: u32 = 16;
@@ -129,15 +176,23 @@ fn draw_empty(x: u32, y: u32, w: u32, h: u32) {
 }
 
 fn draw_rows(x: u32, y: u32, w: u32, h: u32) {
-    // Selection sentinel — for now, always select row 0 (we don't
-    // have keyboard arrow-nav wired yet, so this is purely visual
-    // to show the selection style works).
     let max_rows = (h / ROW_H) as usize;
+    // First pass: count the rows so SELECTED_ROW can be clamped if
+    // the table shrunk (file deleted while FS was the active pane).
+    let mut total = 0usize;
+    batfs::list(|_n, _s, _e| { total += 1; });
+    unsafe {
+        ROW_COUNT_CACHE = total;
+        if SELECTED_ROW >= total && total > 0 { SELECTED_ROW = total - 1; }
+        if total == 0 { SELECTED_ROW = 0; }
+    }
+    let sel = selected_row();
+    // Second pass: paint.
     let mut row_idx = 0usize;
     batfs::list(|name, size, encrypted| {
         if row_idx >= max_rows { return; }
         let ry = y + (row_idx as u32) * ROW_H;
-        draw_row(x, ry, w, name, size, encrypted, row_idx == 0);
+        draw_row(x, ry, w, name, size, encrypted, row_idx == sel);
         row_idx += 1;
     });
 }

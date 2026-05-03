@@ -106,6 +106,11 @@ pub const KEY_ARROW_UP:    u8 = 0x90;
 pub const KEY_ARROW_DOWN:  u8 = 0x91;
 pub const KEY_ARROW_LEFT:  u8 = 0x92;
 pub const KEY_ARROW_RIGHT: u8 = 0x93;
+// STUMP #131: shift+arrow for selection extension.
+pub const KEY_SHIFT_ARROW_UP:    u8 = 0x94;
+pub const KEY_SHIFT_ARROW_DOWN:  u8 = 0x95;
+pub const KEY_SHIFT_ARROW_LEFT:  u8 = 0x96;
+pub const KEY_SHIFT_ARROW_RIGHT: u8 = 0x97;
 
 /// Public read of the caps-lock toggle. The lock screen and any
 /// other UI that wants a "CAPS ON" badge should read it.
@@ -223,12 +228,14 @@ pub fn poll() {
                         device.notify(0);
                         continue;
                     }
-                    // STUMP #130: arrow keys → 0x90..0x93.
+                    // STUMP #130/#131: arrows → 0x90..0x93,
+                    // shift+arrows → 0x94..0x97 (for selection).
+                    let shifted = SHIFT_HELD;
                     let arrow = match code {
-                        KEY_UP    => Some(KEY_ARROW_UP),
-                        KEY_DOWN  => Some(KEY_ARROW_DOWN),
-                        KEY_LEFT  => Some(KEY_ARROW_LEFT),
-                        KEY_RIGHT => Some(KEY_ARROW_RIGHT),
+                        KEY_UP    => Some(if shifted { KEY_SHIFT_ARROW_UP    } else { KEY_ARROW_UP    }),
+                        KEY_DOWN  => Some(if shifted { KEY_SHIFT_ARROW_DOWN  } else { KEY_ARROW_DOWN  }),
+                        KEY_LEFT  => Some(if shifted { KEY_SHIFT_ARROW_LEFT  } else { KEY_ARROW_LEFT  }),
+                        KEY_RIGHT => Some(if shifted { KEY_SHIFT_ARROW_RIGHT } else { KEY_ARROW_RIGHT }),
                         _ => None,
                     };
                     if let Some(b) = arrow {
