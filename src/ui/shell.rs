@@ -100,7 +100,22 @@ fn execute(cmd: &str) {
         "uname" => cmd_uname(),
         "uptime" => cmd_uptime(),
         "ls" | "files" => cmd_ls(),
-        "write" => cmd_write(parts[1], parts[2]),
+        "write" => {
+            // STUMP #132: take everything after the filename verbatim
+            // so `write hello "test contents"` writes the whole quoted
+            // string, not just the first space-delimited chunk.
+            let after_cmd = cmd.trim_start()
+                .split_once(' ').map(|(_, r)| r.trim_start()).unwrap_or("");
+            let (name, raw_data) = match after_cmd.split_once(' ') {
+                Some((n, d)) => (n, d.trim_start()),
+                None => (after_cmd, ""),
+            };
+            // Strip surrounding "..." if present.
+            let data = if raw_data.starts_with('"') && raw_data.ends_with('"') && raw_data.len() >= 2 {
+                &raw_data[1..raw_data.len() - 1]
+            } else { raw_data };
+            cmd_write(name, data);
+        }
         "read" | "cat" => cmd_read(parts[1]),
         "rm" | "delete" => cmd_rm(parts[1]),
         "verify" => cmd_verify(parts[1]),

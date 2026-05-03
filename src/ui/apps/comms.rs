@@ -304,9 +304,11 @@ pub fn render() {
             "(composer disabled . not connected)", W_FAINT, W_PANEL);
     } else {
         font::draw_str(fb, sw, typed_x, c_text_y, compose_text, W_INK, W_PANEL);
-        // Cursor — 8x14 cyan block at end of typed text.
+        // STUMP #132: underscore cursor instead of a solid block —
+        // keeps the typed text readable + stays visible after a space.
         let cur_x = typed_x + (compose_len as u32) * 8;
-        gpu::fill_rect(cur_x, composer_y + (composer_h - 14) / 2, 8, 14, W_CYAN);
+        let cell_top = composer_y + (composer_h - 16) / 2;
+        gpu::fill_rect(cur_x, cell_top + 16 - 2, 7, 2, W_CYAN);
     }
     // Char counter on the right.
     let counter_color = if compose_len >= 80 { W::RED }

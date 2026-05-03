@@ -743,8 +743,13 @@ fn draw_gutter_and_code(x: u32, y: u32, w: u32, h: u32) {
         }
 
         if is_cur {
+            // STUMP #132: underscore cursor (7px wide × 2px tall at
+            // the bottom of the cell). The previous solid block
+            // overpainted the current char and was invisible after a
+            // space. Underscore keeps the char readable and stays
+            // visible at empty cells / end-of-line.
             let cur_x = line_x + (b.cur_col as u32) * CHAR_W;
-            gpu::fill_rect(cur_x, ly + 1, 8, 14, CYAN);
+            gpu::fill_rect(cur_x, ly + CHAR_H - 2, 7, 2, CYAN);
         }
     }
 }
