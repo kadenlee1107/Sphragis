@@ -177,18 +177,21 @@ fn draw_integrity(p: &W::PanelInner) {
     draw_kv_row(p.x, y, label_w, "OPEN PORTS", "0 . invisible-by-design", State::Ok,   true); y += KV_ROW_H;
     draw_kv_row(p.x, y, label_w, "WIPE",       "ARMED",                   State::Warn, true); y += KV_ROW_H;
 
-    // 3. Audit mini-strip — anchored to bottom.
+    // 3. Audit mini-strip — STUMP #128: was anchored to the panel
+    // bottom which left a huge empty gap below WIPE. Now drawn
+    // inline right after the WIPE row with a small separator.
+    y += 8;
+    gpu::fill_rect(p.x, y, p.w, 1, HAIR);
+    y += 8;
     let strip_h: u32 = 18 + 4 * 16 + 4;
-    if p.h > (y - p.y) + strip_h + 8 {
-        let strip_y = p.y + p.h - strip_h;
-        gpu::fill_rect(p.x, strip_y - 8, p.w, 1, HAIR);
+    if y + strip_h <= p.y + p.h {
         let lines = [
             AuditLine { idx: 243, cat: "script:", text: "exec js 1024B" },
             AuditLine { idx: 242, cat: "fetch :", text: "GET http://10.0.2.2:8765/  OK" },
             AuditLine { idx: 241, cat: "nav   :", text: "main origin -> http://10.0.2.2" },
             AuditLine { idx: 240, cat: "mode  :", text: "js-mode -> on" },
         ];
-        draw_audit_strip(p.x, strip_y, &lines);
+        draw_audit_strip(p.x, y, &lines);
     }
 }
 
