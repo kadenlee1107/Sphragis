@@ -450,6 +450,138 @@ pub fn draw_code_line(x: u32, y: u32, spans: &[(Tok, &str)]) {
     }
 }
 
+// ─── Wave 4 helpers (browser + batcave) ─────────────────────────────
+
+/// Hash a host string to a deterministic 12x12 swatch color.
+/// 8-color palette: cyan/green/amber/red plus their dim variants.
+pub fn host_swatch_color(host: &str) -> u32 {
+    let palette: [u32; 8] = [
+        CYAN, GREEN, AMBER, RED,
+        CYAN_DIM, GREEN_DIM, AMBER_DIM, RED_DIM,
+    ];
+    let mut h: u32 = 0;
+    for &b in host.as_bytes() {
+        h = h.wrapping_mul(31).wrapping_add(b as u32);
+    }
+    palette[(h as usize) % palette.len()]
+}
+
+/// 28×28 nav button. `glyph` is a single ASCII char ("<" ">" "R" "*").
+/// `state`: Ok = enabled cyan, Plan = disabled faint, Warn = amber
+/// (used during loading for the reload button).
+pub fn draw_nav_btn(x: u32, y: u32, glyph: u8, state: State) {
+    let fb = gpu::framebuffer();
+    let sw = gpu::width();
+    let color = match state {
+        State::Plan => FAINT,
+        State::Warn => AMBER,
+        State::Fail => RED,
+        _ => CYAN,
+    };
+    gpu::fill_rect(x, y, 28, 28, PANEL);
+    draw::draw_border(x, y, 28, 28, HAIR_HI);
+    let glyph_str = unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(&glyph, 1)) };
+    font::draw_str(fb, sw, x + (28 - CHAR_W) / 2, y + (28 - CHAR_H) / 2,
+        glyph_str, color, PANEL);
+}
+
+/// Bookmark chip — 12x12 hash-derived swatch + host name in ink.
+/// Returns the chip's right-edge x for chaining.
+pub fn draw_bookmark_chip(x: u32, y: u32, host: &str) -> u32 {
+    let fb = gpu::framebuffer();
+    let sw = gpu::width();
+    let pad: u32 = 12;
+    let swatch_size: u32 = 12;
+    let gap: u32 = 8;
+    let host_w = host.len() as u32 * CHAR_W;
+    let chip_w = pad + swatch_size + gap + host_w + pad;
+    // 12x12 swatch with 1px hair ring, vertically centered in 24px chip.
+    let sw_x = x + pad;
+    let sw_y = y + (24 - swatch_size) / 2;
+    if sw_x >= 1 && sw_y >= 1 {
+        gpu::fill_rect(sw_x - 1, sw_y - 1, swatch_size + 2, swatch_size + 2, HAIR);
+    }
+    gpu::fill_rect(sw_x, sw_y, swatch_size, swatch_size, host_swatch_color(host));
+    let text_y = y + (24 - CHAR_H) / 2;
+    font::draw_str(fb, sw, sw_x + swatch_size + gap, text_y, host, INK, BG);
+    x + chip_w
+}
+
+/// Geometric BatCave glyph — 64×48 stylized container box. Renders:
+///   * outer container rectangle (1px stroke in `color`)
+///   * dashed inner seal rect
+///   * 4 corner notches (small L-shapes)
+///   * single center node (2x2 dot)
+pub fn draw_cave_glyph(origin_x: u32, origin_y: u32, color: u32) {
+    let dim = match color {
+        c if c == CYAN  => CYAN_DIM,
+        c if c == AMBER => AMBER_DIM,
+        c if c == GREEN => GREEN_DIM,
+        c if c == RED   => RED_DIM,
+        _               => FAINT,
+    };
+    // Outer container rectangle (stroke).
+    draw::draw_border(origin_x + 6, origin_y + 8, 52, 32, color);
+    // Dashed inner seal — 3px dash, 2px gap.
+    let inner_x = origin_x + 12;
+    let inner_y = origin_y + 14;
+    let inner_w = 40u32;
+    let inner_h = 20u32;
+    let mut dx = 0u32;
+    while dx < inner_w {
+        let seg = (3u32).min(inner_w - dx);
+        gpu::fill_rect(inner_x + dx, inner_y, seg, 1, dim);
+        gpu::fill_rect(inner_x + dx, inner_y + inner_h - 1, seg, 1, dim);
+        dx += 5;
+    }
+    let mut dy = 0u32;
+    while dy < inner_h {
+        let seg = (3u32).min(inner_h - dy);
+        gpu::fill_rect(inner_x, inner_y + dy, 1, seg, dim);
+        gpu::fill_rect(inner_x + inner_w - 1, inner_y + dy, 1, seg, dim);
+        dy += 5;
+    }
+    // 4 corner notches (L-shapes).
+    gpu::fill_rect(origin_x + 2,  origin_y + 4,  6, 1, color);
+    gpu::fill_rect(origin_x + 2,  origin_y + 4,  1, 6, color);
+    gpu::fill_rect(origin_x + 56, origin_y + 4,  6, 1, color);
+    gpu::fill_rect(origin_x + 61, origin_y + 4,  1, 6, color);
+    gpu::fill_rect(origin_x + 2,  origin_y + 43, 6, 1, color);
+    gpu::fill_rect(origin_x + 2,  origin_y + 38, 1, 6, color);
+    gpu::fill_rect(origin_x + 56, origin_y + 43, 6, 1, color);
+    gpu::fill_rect(origin_x + 61, origin_y + 38, 1, 6, color);
+    // Center node.
+    gpu::fill_rect(origin_x + 31, origin_y + 23, 2, 2, color);
+}
+
+/// Action-hint line: "[shell] cmd  # comment". Used by BC's detail
+/// panel. `danger` paints the cmd in amber instead of cyan (for
+/// irreversible actions like seal / destroy).
+pub fn draw_action_hint(x: u32, y: u32, w: u32, cmd: &str, comment: &str, danger: bool) {
+    let fb = gpu::framebuffer();
+    let sw = gpu::width();
+    let prefix = "[shell]";
+    font::draw_str(fb, sw, x, y, prefix, FAINT, BG);
+    let cmd_x = x + (prefix.len() as u32 + 1) * CHAR_W;
+    let cmd_color = if danger { AMBER } else { CYAN };
+    font::draw_str(fb, sw, cmd_x, y, cmd, cmd_color, BG);
+    if !comment.is_empty() {
+        // Right-align "# comment".
+        let mut buf = [0u8; 64];
+        buf[0] = b'#';
+        buf[1] = b' ';
+        let n = comment.len().min(buf.len() - 2);
+        buf[2..2 + n].copy_from_slice(&comment.as_bytes()[..n]);
+        let total = 2 + n;
+        let total_w = total as u32 * CHAR_W;
+        if w > total_w + 16 {
+            let cmt_x = x + w - 8 - total_w;
+            font::draw_str(fb, sw, cmt_x, y,
+                unsafe { core::str::from_utf8_unchecked(&buf[..total]) }, FAINT, BG);
+        }
+    }
+}
+
 // ─── Internal helpers ───────────────────────────────────────────────
 
 fn write_dec(mut n: usize, out: &mut [u8]) -> usize {

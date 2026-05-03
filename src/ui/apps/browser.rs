@@ -1226,6 +1226,15 @@ fn write_num(buf: &mut [u8], n: usize) -> usize {
 // ─── Rendering ───
 
 pub fn render() {
+    use crate::ui::widgets::{
+        self as W, draw_strip, draw_seg_separator, draw_nav_btn,
+        draw_bookmark_chip, draw_conn_pill, host_swatch_color, State,
+        BG as W_BG, INK as W_INK, MID as W_MID, DIM_TXT as W_DIM,
+        FAINT as W_FAINT, CYAN as W_CYAN, CYAN_DIM as W_CYAN_DIM,
+        GREEN as W_GREEN, GREEN_DIM as W_GREEN_DIM,
+        AMBER as W_AMBER, RED as W_RED,
+        PANEL as W_PANEL, HAIR as W_HAIR, HAIR_HI as W_HAIR_HI,
+    };
     let r = wm::content_rect();
     let fb = gpu::framebuffer();
     let w = gpu::width();
@@ -1233,15 +1242,145 @@ pub fn render() {
     let ln = 16u32;
 
     init_browser();
-    gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
+    gpu::fill_rect(r.x, r.y, r.w, r.h, W_BG);
 
     let x = r.x;
     let content_w = r.w;
+    // STUMP #133 — Wave-4 chrome: 40px nav strip + 24px bookmarks
+    // bar above the page area, 24px status strip below. Page area
+    // fills the middle. The existing page-rendering pipeline picks
+    // up at `y` after this chrome paints.
+    let nav_h: u32 = 40;
+    let bm_h:  u32 = 24;
+    let status_h: u32 = 24;
     let mut y = r.y;
 
-    // ═══════════════════════════════════════════
-    // TAB BAR
-    // ═══════════════════════════════════════════
+    // ── NAV STRIP ────────────────────────────────────────────────
+    draw_strip(x, y, content_w, nav_h, false, true);
+    let nav_y = y + (nav_h - 28) / 2;
+    let mut bx = x + 12;
+    // Back / Forward / Reload buttons.
+    let back_state = unsafe { if STATE != BrowserState::Idle { State::Ok } else { State::Plan } };
+    draw_nav_btn(bx, nav_y, b'<', back_state); bx += 28 + 6;
+    draw_nav_btn(bx, nav_y, b'>', State::Plan);  bx += 28 + 6;
+    let reload_state = unsafe {
+        if STATE == BrowserState::Loading { State::Warn } else { State::Ok }
+    };
+    draw_nav_btn(bx, nav_y, b'R', reload_state); bx += 28 + 8;
+
+    // URL bar (flex). Reserve space on the right for SOP/JS/star pills.
+    let star_w: u32 = 28;
+    let pill_gap: u32 = 8;
+    // Compute right-side pill widths.
+    let main_origin = crate::security::origin::current_main_origin();
+    let mut sop_host_buf = [0u8; 32];
+    let sop_host_len = if main_origin.valid {
+        let n = main_origin.write_to(&mut sop_host_buf);
+        n.min(24)
+    } else { 0 };
+    let sop_host_str = if sop_host_len > 0 {
+        unsafe { core::str::from_utf8_unchecked(&sop_host_buf[..sop_host_len]) }
+    } else { "-" };
+    let sop_state = if !main_origin.valid {
+        State::Fail
+    } else if crate::security::origin::is_strict() {
+        State::Neutral
+    } else {
+        State::Warn
+    };
+    let js_on = crate::browser::js::is_enabled();
+    let js_state = if js_on { State::Warn } else { State::Neutral };
+    let js_label = if js_on { "JS ON" } else { "JS OFF" };
+    // Width of pills (matches widgets::draw_conn_pill geometry).
+    let sop_pill_w = pill_w("SOP", Some(sop_host_str));
+    let js_pill_w  = pill_w(js_label, None);
+    let right_reserve = sop_pill_w + pill_gap + js_pill_w + pill_gap + star_w + 12;
+    let url_w = (x + content_w).saturating_sub(bx + right_reserve + 8);
+
+    let url_x = bx;
+    let url_y = nav_y;
+    // URL bar chrome.
+    let url_focused = unsafe { matches!(STATE, BrowserState::Idle) };
+    let url_border = if url_focused { W_CYAN } else { W_HAIR_HI };
+    gpu::fill_rect(url_x, url_y, url_w, 28, W_PANEL);
+    crate::ui::draw::draw_border(url_x, url_y, url_w, 28, url_border);
+    // Lock zone.
+    let url_str = unsafe { core::str::from_utf8_unchecked(&URL_BUF[..URL_LEN]) };
+    let lock_glyph: &str;
+    let lock_color: u32;
+    if url_str.starts_with("https://") {
+        let mode = crate::net::tls_pinning::current_mode();
+        if mode == crate::net::tls_pinning::Mode::Lockdown {
+            lock_glyph = "[#]"; lock_color = W_GREEN;
+        } else {
+            lock_glyph = "[#]"; lock_color = W_AMBER;
+        }
+    } else if url_str.starts_with("http://") {
+        lock_glyph = "[/]"; lock_color = W_RED;
+    } else {
+        lock_glyph = " ? "; lock_color = W_DIM;
+    }
+    let lock_x = url_x + 10;
+    let lock_y = url_y + (28 - 16) / 2;
+    font::draw_str(fb, w, lock_x, lock_y, lock_glyph, lock_color, W_PANEL);
+    // 1px hair right divider after lock.
+    gpu::fill_rect(lock_x + 3 * 8 + 6, url_y + 4, 1, 20, W_HAIR);
+    // URL text.
+    let text_x = lock_x + 3 * 8 + 6 + 8;
+    let max_url_chars = ((url_x + url_w).saturating_sub(text_x + 16) / 8) as usize;
+    let url_len_now = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(URL_LEN)) };
+    let display_len = url_len_now.min(max_url_chars);
+    let url_display = unsafe {
+        core::str::from_utf8_unchecked(
+            core::slice::from_raw_parts(core::ptr::addr_of!(URL_BUF) as *const u8, display_len))
+    };
+    font::draw_str(fb, w, text_x, lock_y, url_display, W_INK, W_PANEL);
+    // Underscore cursor when focused.
+    if url_focused {
+        let cur_x = text_x + display_len as u32 * 8;
+        if cur_x + 8 < url_x + url_w - 8 {
+            gpu::fill_rect(cur_x, lock_y + 16 - 2, 7, 2, W_CYAN);
+        }
+    }
+
+    // SOP / JS / Star pills.
+    let mut rx = url_x + url_w + 8;
+    rx = draw_conn_pill(rx, url_y + (28 - 22) / 2, "SOP", Some(sop_host_str), sop_state);
+    rx += pill_gap;
+    rx = draw_conn_pill(rx, url_y + (28 - 22) / 2, js_label, None, js_state);
+    rx += pill_gap;
+    draw_nav_btn(rx, url_y, b'*', State::Plan); // star — bookmark state not tracked yet
+
+    y += nav_h;
+
+    // ── BOOKMARKS BAR ────────────────────────────────────────────
+    draw_strip(x, y, content_w, bm_h, false, true);
+    let bm_y = y;
+    let bookmarks: &[&str] = &["home", "shell", "docs", "feed", "ddg", "hn"];
+    let mut bxx = x + 8;
+    for h in bookmarks {
+        bxx = draw_bookmark_chip(bxx, bm_y, h);
+    }
+    let saved_str = "6 / 32 saved";
+    let saved_w = saved_str.len() as u32 * 8;
+    if content_w > saved_w + 16 {
+        font::draw_str(fb, w, x + content_w - 8 - saved_w,
+            bm_y + (bm_h - 16) / 2, saved_str, W_FAINT, W_BG);
+    }
+    let _ = host_swatch_color;
+    y += bm_h;
+
+    // Restore the existing page-rendering pipeline below — it picks
+    // up `y` and renders into the area between here and the status
+    // strip. Trim ymax so it doesn't paint into the status strip.
+    let ymax = r.y + r.h - status_h;
+
+    // STUMP #133 — old TAB BAR / NAVIGATION TOOLBAR / progress bar
+    // pre-Wave-4 chrome stripped out below. Kept gated under
+    // `cfg(any())` so the dead-code preserves the call shape for
+    // diff context but never compiles. Wave-4 chrome above already
+    // covers tab/nav/url/SOP/JS/star/progress/cookies.
+    #[cfg(any())]
     if y + 22 < ymax {
         gpu::fill_rect(x, y, content_w, 22, TAB_BG);
 
@@ -1285,8 +1424,9 @@ pub fn render() {
     }
 
     // ═══════════════════════════════════════════
-    // NAVIGATION TOOLBAR
+    // OLD NAVIGATION TOOLBAR — replaced by Wave-4 nav strip above.
     // ═══════════════════════════════════════════
+    #[cfg(any())]
     if y + 24 < ymax {
         gpu::fill_rect(x, y, content_w, 24, TOOLBAR_BG);
 
@@ -1380,23 +1520,9 @@ pub fn render() {
         y += 18;
     }
 
-    // ═══════════════════════════════════════════
-    // LOADING PROGRESS BAR (only when loading)
-    // ═══════════════════════════════════════════
-    unsafe {
-        if STATE == BrowserState::Loading && y + 3 < ymax {
-            gpu::fill_rect(x, y, content_w, 3, PROGRESS_BG);
-            let progress_w = (content_w as u64 * LOADING_PROGRESS as u64 / 100) as u32;
-            gpu::fill_rect(x, y, progress_w, 3, PROGRESS_FG);
-            y += 3;
-        }
-    }
-
-    // Divider before content
-    if y < ymax {
-        gpu::fill_rect(x, y, content_w, 1, BORDER);
-        y += 1;
-    }
+    // STUMP #133: progress bar + divider — moved into Wave-4
+    // status strip (rendered below at status_y). The old in-flow
+    // progress bar at top of page is gone.
 
     // ─── Page Content ───
     unsafe {
@@ -1569,54 +1695,93 @@ pub fn render() {
         }
     }
 
-    // ═══════════════════════════════════════════
-    // STATUS BAR (Chrome-style bottom bar)
-    // ═══════════════════════════════════════════
-    let status_y = ymax - 20;
-    if status_y > r.y + 40 {
-        gpu::fill_rect(x, status_y, content_w, 20, TOOLBAR_BG);
-        gpu::fill_rect(x, status_y, content_w, 1, BORDER);
-
-        unsafe {
-            // Left: status message
-            let (state_text, state_color) = match STATE {
-                BrowserState::Idle => ("Ready", DIM),
-                BrowserState::Loading => ("Loading...", CYAN),
-                BrowserState::Loaded => ("Secure", GREEN),
-                BrowserState::Error => ("Error", RED),
-            };
-
-            if STATE == BrowserState::Loaded {
-                font::draw_str(fb, w, x + 4, status_y + 2, "##", LOCK_COLOR, TOOLBAR_BG);
-                font::draw_str(fb, w, x + 22, status_y + 2, state_text, state_color, TOOLBAR_BG);
-            } else {
-                font::draw_str(fb, w, x + 4, status_y + 2, state_text, state_color, TOOLBAR_BG);
+    // ── STATUS STRIP (Wave-4 design) ──────────────────────────────
+    let status_y = r.y + r.h - status_h;
+    draw_strip(x, status_y, content_w, status_h, true, false);
+    let st_text_y = status_y + (status_h - 16) / 2;
+    // Left segment — connection state.
+    let (left_text, left_color) = unsafe {
+        match STATE {
+            BrowserState::Idle    => ("READY",                       W_DIM),
+            BrowserState::Loading => ("TLS HANDSHAKE...",            W_AMBER),
+            BrowserState::Loaded  => {
+                if BYTES_LOADED > 0 {
+                    ("RENDERED OK",                                  W_INK)
+                } else {
+                    ("READY",                                        W_DIM)
+                }
             }
-
-            // Center: status message detail
-            let msg = core::str::from_utf8_unchecked(&STATUS_MSG[..STATUS_LEN]);
-            font::draw_str(fb, w, x + 100, status_y + 2, msg, DIM, TOOLBAR_BG);
-
-            // Right: link count + bytes
-            if BYTES_LOADED > 0 {
-                let mut nbuf = [0u8; 10];
-                let nlen = write_num(&mut nbuf, BYTES_LOADED);
-                let bx = x + content_w - 80;
-                font::draw_str(fb, w, bx, status_y + 2,
-                    core::str::from_utf8_unchecked(&nbuf[..nlen]), DIM, TOOLBAR_BG);
-                font::draw_str(fb, w, bx + (nlen as u32) * 8, status_y + 2, " B", DIM, TOOLBAR_BG);
-            }
-
-            if LINK_COUNT > 0 {
-                let mut nbuf = [0u8; 4];
-                let nlen = write_num(&mut nbuf, LINK_COUNT);
-                let lx = x + content_w - 140;
-                font::draw_str(fb, w, lx, status_y + 2, "Links:", DIM, TOOLBAR_BG);
-                font::draw_str(fb, w, lx + 52, status_y + 2,
-                    core::str::from_utf8_unchecked(&nbuf[..nlen]), LINK_COLOR, TOOLBAR_BG);
-            }
+            BrowserState::Error   => ("ERROR",                       W_RED),
         }
+    };
+    let left_seg_w: u32 = 320;
+    font::draw_str(fb, w, x + 12, st_text_y, left_text, left_color, W_BG);
+    // Right-edge of left segment: byte count + node count appended in
+    // ink, when loaded.
+    let bytes_loaded = unsafe { BYTES_LOADED };
+    if bytes_loaded > 0 {
+        let mut bbuf = [0u8; 16];
+        let bn = format_dec_local(bytes_loaded, &mut bbuf);
+        let bs = unsafe { core::str::from_utf8_unchecked(&bbuf[..bn]) };
+        let bx2 = x + 12 + (left_text.len() as u32 + 1) * 8;
+        font::draw_str(fb, w, bx2, st_text_y, bs, W_INK, W_BG);
+        font::draw_str(fb, w, bx2 + (bn as u32) * 8 + 8, st_text_y, "B", W_DIM, W_BG);
     }
+    draw_seg_separator(x + left_seg_w, status_y, status_h);
+
+    // Mid: progress bar (only when loading and 0 < progress < 100).
+    let progress = unsafe { LOADING_PROGRESS };
+    let is_loading = unsafe { STATE == BrowserState::Loading };
+    if is_loading && progress > 0 && progress < 100 {
+        let bar_x = x + left_seg_w + 12;
+        let bar_y = status_y + status_h / 2;
+        let bar_w_avail = content_w.saturating_sub(left_seg_w + 12 + 200);
+        gpu::fill_rect(bar_x, bar_y, bar_w_avail, 1, W_CYAN_DIM);
+        let fill_w = (bar_w_avail as u64 * progress as u64 / 100) as u32;
+        gpu::fill_rect(bar_x, bar_y, fill_w, 1, W_CYAN);
+    }
+
+    // Right segment — cookie count for current host.
+    let cookie_count = crate::net::cookies::count();
+    let dot_color = if cookie_count > 0 { W_GREEN } else { W_FAINT };
+    let dot_ring  = if cookie_count > 0 { W_GREEN_DIM } else { W_HAIR };
+    let mut cbuf = [0u8; 16];
+    let cn = format_dec_local(cookie_count, &mut cbuf);
+    let cs = unsafe { core::str::from_utf8_unchecked(&cbuf[..cn]) };
+    let label = "COOKIES";
+    let total_w = 6 + 8 + (cn as u32) * 8 + 8 + (label.len() as u32) * 8 + 24;
+    let right_x = x + content_w - total_w;
+    draw_seg_separator(right_x - 12, status_y, status_h);
+    let dot_x = right_x;
+    let dot_y = status_y + (status_h - 6) / 2;
+    if dot_x >= 1 && dot_y >= 1 {
+        gpu::fill_rect(dot_x - 1, dot_y - 1, 8, 8, dot_ring);
+    }
+    gpu::fill_rect(dot_x, dot_y, 6, 6, dot_color);
+    let cs_color = if cookie_count > 0 { W_INK } else { W_DIM };
+    font::draw_str(fb, w, dot_x + 6 + 8, st_text_y, cs, cs_color, W_BG);
+    font::draw_str(fb, w, dot_x + 6 + 8 + (cn as u32) * 8 + 8, st_text_y,
+        label, W_DIM, W_BG);
+
+    // Quiet unused-import warnings from the local widget aliases.
+    let _ = (W::draw_kv_row, W_CYAN_DIM, W_HAIR_HI, W_MID);
+}
+
+fn pill_w(label: &str, value: Option<&str>) -> u32 {
+    let pad: u32 = 10;
+    let dot: u32 = 6;
+    let label_w = label.len() as u32 * 8;
+    let value_w = value.map_or(0, |v| v.len() as u32 * 8 + 8);
+    pad + dot + 8 + label_w + value_w + pad
+}
+
+fn format_dec_local(mut n: usize, out: &mut [u8]) -> usize {
+    if n == 0 { out[0] = b'0'; return 1; }
+    let mut tmp = [0u8; 20];
+    let mut i = 0;
+    while n > 0 && i < tmp.len() { tmp[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
+    for j in 0..i { out[j] = tmp[i - 1 - j]; }
+    i
 }
 
 /// Handle keyboard input for the browser.

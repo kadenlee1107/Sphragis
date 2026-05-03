@@ -277,6 +277,12 @@ pub fn run() -> ! {
                     apps::filemanager::handle_key(c);
                     render_current();
                 }
+                wm::APP_BATCAVE => {
+                    // STUMP #133: arrow keys move cave selection,
+                    // detail panel re-renders for the new selection.
+                    apps::batcave_mgr::handle_key(c);
+                    render_current();
+                }
                 _ => {
                     // Other apps: no keyboard input handling yet
                 }
