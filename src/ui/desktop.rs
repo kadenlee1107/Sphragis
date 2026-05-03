@@ -263,6 +263,14 @@ pub fn run() -> ! {
                     apps::comms::handle_key(c);
                     render_current();
                 }
+                wm::APP_EDITOR => {
+                    // STUMP #130: editor is a real text buffer now.
+                    // handle_key mutates the buffer + cursor; we
+                    // repaint the whole pane so the new content +
+                    // cursor land on screen.
+                    apps::editor::handle_key(c);
+                    render_current();
+                }
                 _ => {
                     // Other apps: no keyboard input handling yet
                 }

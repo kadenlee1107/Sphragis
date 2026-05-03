@@ -94,6 +94,18 @@ const KEY_LEFTALT: u16 = 56;
 const KEY_RIGHTALT: u16 = 100;
 const KEY_CAPSLOCK: u16 = 58;
 const KEY_TAB: u16 = 15;
+// STUMP #130: arrow keys aren't in KEYMAP (which only covers ASCII
+// 32-126). Surface them as bytes 0x90..0x93 in the keystroke ring.
+// 0x80 was already taken by Option+Tab. Apps that want arrow nav
+// match these constants.
+const KEY_UP:    u16 = 103;
+const KEY_DOWN:  u16 = 108;
+const KEY_LEFT:  u16 = 105;
+const KEY_RIGHT: u16 = 106;
+pub const KEY_ARROW_UP:    u8 = 0x90;
+pub const KEY_ARROW_DOWN:  u8 = 0x91;
+pub const KEY_ARROW_LEFT:  u8 = 0x92;
+pub const KEY_ARROW_RIGHT: u8 = 0x93;
 
 /// Public read of the caps-lock toggle. The lock screen and any
 /// other UI that wants a "CAPS ON" badge should read it.
@@ -206,6 +218,21 @@ pub fn poll() {
                     if ALT_HELD && code == KEY_TAB {
                         push_key(0x80);
                         // Don't continue — fall through to re-post buffer below
+                        vq.add_writable(buf_addr as *mut u8, EVENT_SIZE as u32);
+                        let device = VirtioMmio::new(base);
+                        device.notify(0);
+                        continue;
+                    }
+                    // STUMP #130: arrow keys → 0x90..0x93.
+                    let arrow = match code {
+                        KEY_UP    => Some(KEY_ARROW_UP),
+                        KEY_DOWN  => Some(KEY_ARROW_DOWN),
+                        KEY_LEFT  => Some(KEY_ARROW_LEFT),
+                        KEY_RIGHT => Some(KEY_ARROW_RIGHT),
+                        _ => None,
+                    };
+                    if let Some(b) = arrow {
+                        push_key(b);
                         vq.add_writable(buf_addr as *mut u8, EVENT_SIZE as u32);
                         let device = VirtioMmio::new(base);
                         device.notify(0);

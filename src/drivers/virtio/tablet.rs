@@ -90,6 +90,11 @@ const KEY_RIGHTSHIFT: u16 = 54;
 const KEY_LEFTALT: u16 = 56;
 const KEY_RIGHTALT: u16 = 100;
 const KEY_CAPSLOCK: u16 = 58;
+// STUMP #130: arrow keys, mirroring keyboard.rs.
+const KEY_UP_C:    u16 = 103;
+const KEY_DOWN_C:  u16 = 108;
+const KEY_LEFT_C:  u16 = 105;
+const KEY_RIGHT_C: u16 = 106;
 
 pub fn caps_active() -> bool {
     unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CAPS_LOCK_ON)) }
@@ -274,6 +279,24 @@ pub fn poll() {
                         }
                     }
                     if value == 1 {
+                        // STUMP #130: arrow keys → 0x90..0x93 in the
+                        // tablet ring too (QEMU may route keys here).
+                        let arrow = match code {
+                            KEY_UP_C    => Some(0x90u8),
+                            KEY_DOWN_C  => Some(0x91u8),
+                            KEY_LEFT_C  => Some(0x92u8),
+                            KEY_RIGHT_C => Some(0x93u8),
+                            _ => None,
+                        };
+                        if let Some(b) = arrow {
+                            push_key(b);
+                            // Re-post buffer + notify before falling
+                            // through to alpha-key handling.
+                            vq.add_writable(buf_addr as *mut u8, EVENT_SIZE as u32);
+                            let device = VirtioMmio::new(base);
+                            device.notify(0);
+                            continue;
+                        }
                         let idx = code as usize;
                         if idx < KEYMAP.len() {
                             let mut ch = KEYMAP[idx];
