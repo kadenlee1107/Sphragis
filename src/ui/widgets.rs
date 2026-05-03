@@ -287,7 +287,13 @@ pub fn draw_caves_empty_row(x: u32, y: u32, w: u32, free: usize) {
 
 // ─── Flow diagram (NetMon SECURITY STACK) ───────────────────────────
 
-pub const FLOW_BOX_W: u32 = 110;
+// STUMP #127 — bumped from 110 to 160. Spec called for 110 but
+// at our 8x16 bitmap font that only fits 13 chars per sub-caption,
+// which truncated "3 PINS . 0 MISMATCH" to "3 PINS . 0 MI" and
+// "origin allowlist" to "origin allowl". 160px = 20 chars fits the
+// longest sub we have. 6 boxes × 160 + 5 arrows × 32 = 1120px,
+// well under the 1248px available content width.
+pub const FLOW_BOX_W: u32 = 160;
 pub const FLOW_BOX_H: u32 = 44;
 pub const FLOW_ARROW_W: u32 = 32;
 
