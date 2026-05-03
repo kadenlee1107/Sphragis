@@ -83,7 +83,7 @@ fn draw_system_tiles(p: &W::PanelInner) {
     let (used_frames, total_frames) = crate::kernel::mm::frame::stats();
     let free_kb = (total_frames.saturating_sub(used_frames)) * 4;
     let mut mem_buf = [0u8; 16];
-    let mem_n = format_kb_short(free_kb, &mut mem_buf);
+    let mem_n = format_mem(free_kb, &mut mem_buf);
     let mem_s = unsafe { core::str::from_utf8_unchecked(&mem_buf[..mem_n]) };
 
     let audit_n = crate::security::audit::count();
@@ -96,7 +96,7 @@ fn draw_system_tiles(p: &W::PanelInner) {
     draw_tile(p.x,            p.y,            half_w, half_h,
         "UPTIME", ut_s, "since boot", None);
     draw_tile(p.x + half_w + 1, p.y,          half_w - 1, half_h,
-        "FREE MEM", mem_s, "KiB . 4 GiB total", None);
+        "FREE MEM", mem_s, "GiB . 4 GiB total", None);
     draw_tile(p.x,            p.y + half_h + 1, half_w, half_h - 1,
         "AUDIT", audit_s, "/ 1024 ring", Some(State::Neutral));
     draw_tile(p.x + half_w + 1, p.y + half_h + 1, half_w - 1, half_h - 1,
@@ -183,8 +183,18 @@ fn format_uptime_short(mins: u64, out: &mut [u8]) -> usize {
     p
 }
 
-fn format_kb_short(kb: usize, out: &mut [u8]) -> usize {
-    format_dec(kb, out)
+/// Format a KiB value as "X.Y" GiB (one decimal place). Raw KiB
+/// readouts get unwieldy fast (3.7 GiB free reads as "3709292 KiB"),
+/// so we collapse to GiB at the cost of <0.1 GiB precision. Caller
+/// pairs this with the unit string "GiB . X GiB total".
+fn format_mem(kb: usize, out: &mut [u8]) -> usize {
+    let mib = kb / 1024;
+    let gib_int = mib / 1024;
+    let gib_dec = ((mib * 10) / 1024) % 10; // tenths
+    let mut p = format_dec(gib_int, out);
+    out[p] = b'.'; p += 1;
+    out[p] = b'0' + gib_dec as u8; p += 1;
+    p
 }
 
 fn format_audit_count(n: usize, out: &mut [u8]) -> usize {
