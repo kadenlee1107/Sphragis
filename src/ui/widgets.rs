@@ -361,6 +361,95 @@ pub fn draw_audit_strip(x: u32, y: u32, lines: &[AuditLine]) {
     }
 }
 
+// ─── Wave 3: strip / conn pill / syntax tokens ──────────────────────
+
+/// Fill a horizontal strip + draw optional 1px hairlines on top/bottom.
+/// Returns the inner-content rect after a small left padding.
+pub struct StripRect {
+    pub x: u32, pub y: u32, pub w: u32, pub h: u32,
+}
+pub fn draw_strip(x: u32, y: u32, w: u32, h: u32, top_border: bool, bottom_border: bool) -> StripRect {
+    gpu::fill_rect(x, y, w, h, BG);
+    if top_border    { gpu::fill_rect(x, y, w, 1, HAIR); }
+    if bottom_border { gpu::fill_rect(x, y + h - 1, w, 1, HAIR); }
+    StripRect { x, y, w, h }
+}
+
+/// 1px vertical separator (between strip segments).
+pub fn draw_seg_separator(x: u32, y: u32, h: u32) {
+    gpu::fill_rect(x, y, 1, h, HAIR_HI);
+}
+
+/// Bordered "connection pill" with a colored dot + label + optional value.
+/// Reuses the same look as the desktop status-bar pills.
+/// Returns the pill's right-edge x.
+pub fn draw_conn_pill(
+    x: u32, y: u32,
+    label: &str, value: Option<&str>,
+    state: State,
+) -> u32 {
+    let fb = gpu::framebuffer();
+    let sw = gpu::width();
+    let pad_x: u32 = 10;
+    let dot_size: u32 = 6;
+    let label_w = label.len() as u32 * CHAR_W;
+    let value_w = value.map_or(0, |v| v.len() as u32 * CHAR_W + CHAR_W);
+    let pill_w = pad_x + dot_size + 8 + label_w + value_w + pad_x;
+    let pill_h: u32 = 22;
+    gpu::fill_rect(x, y, pill_w, pill_h, PANEL);
+    draw::draw_border(x, y, pill_w, pill_h, HAIR_HI);
+    let (dot_fg, dot_ring) = state_dot_colors(state);
+    let dot_x = x + pad_x;
+    let dot_y = y + (pill_h - dot_size) / 2;
+    if dot_x >= 1 && dot_y >= 1 {
+        gpu::fill_rect(dot_x - 1, dot_y - 1, dot_size + 2, dot_size + 2, dot_ring);
+    }
+    gpu::fill_rect(dot_x, dot_y, dot_size, dot_size, dot_fg);
+    let text_y = y + (pill_h - CHAR_H) / 2;
+    let label_x = x + pad_x + dot_size + 8;
+    font::draw_str(fb, sw, label_x, text_y, label, INK, PANEL);
+    if let Some(v) = value {
+        let value_x = label_x + label_w + CHAR_W;
+        font::draw_str(fb, sw, value_x, text_y, v, DIM_TXT, PANEL);
+    }
+    x + pill_w
+}
+
+/// Syntax token kinds for the Editor (Rust-flavored).
+#[derive(Clone, Copy)]
+pub enum Tok {
+    Keyword,
+    String,
+    Comment,
+    Attr,
+    Ident,
+    Punct,
+}
+
+pub fn tok_color(t: Tok) -> u32 {
+    match t {
+        Tok::Keyword => CYAN,
+        Tok::String  => GREEN,
+        Tok::Comment => FAINT,
+        Tok::Attr    => AMBER,
+        Tok::Ident   => INK,
+        Tok::Punct   => MID,
+    }
+}
+
+/// Draw one tokenized code line. `spans` is a slice of (kind, text)
+/// pairs; the function paints them left-to-right with the right
+/// color per token.
+pub fn draw_code_line(x: u32, y: u32, spans: &[(Tok, &str)]) {
+    let fb = gpu::framebuffer();
+    let sw = gpu::width();
+    let mut cx = x;
+    for (tok, text) in spans {
+        font::draw_str(fb, sw, cx, y, text, tok_color(*tok), BG);
+        cx += text.len() as u32 * CHAR_W;
+    }
+}
+
 // ─── Internal helpers ───────────────────────────────────────────────
 
 fn write_dec(mut n: usize, out: &mut [u8]) -> usize {
