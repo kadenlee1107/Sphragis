@@ -5,5 +5,6 @@ pub mod font;
 pub mod gpu;
 pub mod shell;
 pub mod truetype;
+pub mod widgets;
 pub mod wm;
 pub mod desktop;
