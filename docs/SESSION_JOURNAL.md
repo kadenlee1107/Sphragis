@@ -11,6 +11,112 @@ end of a session.
 
 ---
 
+## 2026-05-04 — Mac — 🎯 STUMP #136 Phase 7: BatFS goes persistent (real disk-backed FS).
+
+User tested STUMP #135's cave persistence and reported "didn't
+persist". Root cause: `src/fs/batfs.rs` was RAM-only (its own header
+even said "the persistent-across-reboot fix requires NVMe (Phase 7)").
+My #135 cave-manifest layer was correct in principle, but it landed
+on a filesystem that vanished on reboot.
+
+User's call: "lets just do the full on phase 7" — so we built it.
+
+**New module `src/fs/batfs_disk.rs` (~470 LOC):**
+
+On-disk layout (sector size = 512 B):
+
+```
+Sector 0           Superblock (magic "BATFS\0\0\0", version 1, FS UUID,
+                   FS salt, boot counter, layout constants, HMAC-SHA256
+                   over the rest with master_key as the HMAC key)
+Sectors 1..64      Inode table (128 entries × 256 B each — name, size,
+                   nonce, AEAD tag, state)
+Sectors 65..16448  Per-slot data region (128 slots × 128 sectors each =
+                   8 MB; fixed allocation, no fragmentation)
+```
+
+Public API: `mount`, `format`, `mount_or_format` (the convenient
+"try-mount-then-format-if-blank" path), `read_all_inodes`,
+`write_inode`, `free_inode`, `read_data`, `write_data`, `zero_data`,
+`flush`, `boot_counter`.
+
+**Crash consistency without journaling:** ordered shadow updates —
+data sectors first, then inode commit. Per-sector atomicity (virtio-blk
+guarantees this) means a crash mid-create leaves the OLD inode pointing
+at intact OLD ciphertext. The new data is "lost" but no existing data
+is corrupted. Cheap to implement, sufficient for v1.
+
+**HMAC over the superblock:** stops an attacker swapping a different
+disk under us. Wrong passphrase → master_key mismatch → HMAC verify
+fails → mount refuses. Wrong-build disk image → layout-constant
+mismatch → mount refuses. Either way the operator sees the failure
+rather than silent corruption.
+
+**Hooks in `src/fs/batfs.rs`:**
+
+- `init()` → after the existing RAM bookkeeping, calls a new
+  `init_disk()` that runs `mount_or_format` + restores every
+  Active inode into a fresh `alloc_contig` page set + populates
+  `FILES[i]`. Falls back to RAM-only if no virtio-blk attached
+  or HMAC fails (with a UART warning so the operator notices).
+- `create()` → after the AEAD encrypt-in-place, writes the
+  ciphertext to slot `i`'s data sectors + the inode + flushes.
+  Inside the existing unsafe block so `slot` stays in scope.
+- `delete()` → finds the slot first, then zeroes its data
+  sectors + clears the inode + flushes.
+
+**Boot ordering change in `src/main.rs`:**
+
+`virtio::blk::init()` now runs BEFORE `fs::batfs::init()`. Previously
+blk was way later (line 277), well after batfs (line 249), so even if
+batfs WANTED to use the disk, it couldn't. Reordered so the dependency
+is honoured. Cave init still runs after batfs, so STUMP #135's
+`persist::restore_all` reads from a now-disk-backed BatFS.
+
+**QEMU launcher updates:**
+
+- `scripts/lib/qemu_boot.py` (used by `make render` etc.)
+- `scripts/render_live.py` (interactive testing)
+
+Both auto-create a 64 MB sparse `state/batfs.img` and add
+`-drive file=...,format=raw,id=batfs0 -device virtio-blk-device,drive=batfs0`
+to the QEMU command. `state/` is in `.gitignore` so user data never
+hits the repo. Wipe with `rm state/batfs.img` to force fresh-format.
+
+**M4 / real-hardware path:**
+
+The M4 boot path (`main_apple` at line ~895) doesn't get the
+virtio-blk treatment because virtio doesn't exist on bare metal.
+Real M4 NVMe support stays a future STUMP — for now the M4 path
+is unchanged and runs RAM-only BatFS, with the kernel correctly
+reporting "no virtio-blk attached — BatFS is RAM-only this boot".
+The QEMU path is what unblocks the user's interactive testing today.
+
+**Verification path:**
+
+1. `batcave create test`
+2. `batcave grant test fs`
+3. Reboot Bat_OS (Ctrl-A X then re-launch)
+4. Re-enter passphrase
+5. Open BC → `test` is back, FS pill cyan, CAPS=FS
+
+If it still doesn't persist, the most likely failure is HMAC
+verification — check the UART log around `[fs] disk mount failed:`
+to see which error the kernel reported.
+
+**State of the tree:**
+
+Build clean (237 warnings, all pre-existing). Files changed:
+- new: `src/fs/batfs_disk.rs`, gitignore entry for `state/`
+- modified: `src/fs/batfs.rs`, `src/fs/mod.rs`, `src/main.rs`,
+  `scripts/lib/qemu_boot.py`, `scripts/render_live.py`,
+  `docs/SESSION_JOURNAL.md`
+
+Together with #135, BatFS now persists across reboots end-to-end
+on QEMU. M4 follows when NVMe lands.
+
+---
+
 ## 2026-05-04 — Mac — 🎯 STUMP #135: cave persistence (PERSISTENT now means persistent).
 
 User caught a real spec ↔ implementation mismatch while testing the

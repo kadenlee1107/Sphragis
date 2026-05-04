@@ -244,6 +244,16 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // Slow enough to blunt brute force against the binary alone, but
     // still deterministic per (passphrase, kernel_hash_seed) so the
     // same build + passphrase produces the same key across reboots.
+    // STUMP #136 (Phase 7): virtio-blk MUST init before BatFS so that
+    // BatFS can mount its on-disk format from sector 0. Without a disk
+    // BatFS still works — it falls back to in-RAM-only mode and warns —
+    // but with one attached, BatFS will persist across reboots.
+    drivers::uart::puts("[boot] Initializing block device...\n");
+    match drivers::virtio::blk::init() {
+        Some(()) => drivers::uart::puts("  [blk] Block device ready\n"),
+        None    => drivers::uart::puts("  [blk] No block device (RAM-only BatFS)\n"),
+    }
+
     // Derive the BatFS key from the same passphrase we just prompted for.
     let master_key = derive_batfs_key(passphrase_slice);
     fs::batfs::init(&master_key);
@@ -269,14 +279,6 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
         None => {
             drivers::uart::puts("  [net] No network device (offline)\n");
         }
-    }
-
-    // Initialize virtio-blk (optional — only if QEMU was launched
-    // with a `-drive ... -device virtio-blk-device` pair).
-    drivers::uart::puts("[boot] Initializing block device...\n");
-    match drivers::virtio::blk::init() {
-        Some(()) => drivers::uart::puts("  [blk] Block device ready\n"),
-        None    => drivers::uart::puts("  [blk] No block device (offline)\n"),
     }
 
     // Initialize keyboard (virtio — type in GUI window)

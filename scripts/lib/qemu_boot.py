@@ -70,6 +70,33 @@ def _refresh_bat_os_bin(elf: Path, bin_path: Path) -> None:
                    check=True)
 
 
+def _ensure_batfs_disk() -> Path:
+    """STUMP #136: ensure the persistent BatFS disk image exists.
+
+    Layout (must match `src/fs/batfs_disk.rs` constants):
+      - 1   sector  superblock
+      - 64  sectors inode table  (128 entries × 256 B each)
+      - 16384 sectors data       (128 slots × 128 sectors each = 8 MB)
+      = 16449 sectors total (~8 MB).
+
+    We round up to a clean 64 MB so there's headroom for v2 layouts
+    (free bitmap, journal sector, etc.) without re-formatting.
+
+    Wipe with `rm state/batfs.img` to start fresh; the next boot will
+    see a blank disk and the kernel will format it before mounting.
+    """
+    state_dir = ROOT / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    img = state_dir / "batfs.img"
+    target_bytes = 64 * 1024 * 1024
+    if not img.exists() or img.stat().st_size != target_bytes:
+        # truncate-style sparse file. macOS + Linux both honour seek+write
+        # to size a sparse file; QEMU is happy with a hole-y backing.
+        with open(img, "wb") as f:
+            f.truncate(target_bytes)
+    return img
+
+
 def _wait_for_daemon(port: int = 9999, attempts: int = 40) -> None:
     for _ in range(attempts):
         try:
@@ -140,6 +167,13 @@ def boot(*, log_prefix: str = "session", timeout: int = 120,
     )
     _wait_for_daemon()
 
+    # STUMP #136 (Phase 7): persistent BatFS disk image. Auto-created
+    # on first run with a fixed 64 MB raw image. All cave manifests +
+    # user files + audit etc that BatFS persists end up in here, and
+    # survive across QEMU invocations because the file outlives the
+    # guest. Wipe with `rm state/batfs.img` to start fresh.
+    batfs_img = _ensure_batfs_disk()
+
     args = [
         "qemu-system-aarch64",
         "-accel", "hvf",
@@ -156,6 +190,9 @@ def boot(*, log_prefix: str = "session", timeout: int = 120,
         # `restrict=on` would block outbound — we WANT outbound, so off.
         "-netdev", "user,id=net0",
         "-device", "virtio-net-device,netdev=net0",
+        # STUMP #136: virtio-blk for persistent BatFS.
+        "-drive", f"file={batfs_img},if=none,format=raw,id=batfs0",
+        "-device", "virtio-blk-device,drive=batfs0",
     ]
 
     fp = open(log_path, "wb")

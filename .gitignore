@@ -3,6 +3,12 @@
 # Cargo build artifacts — reproducible via `cargo build`.
 /target
 
+# STUMP #136 (Phase 7): persistent BatFS disk image and any other
+# host-side state files Bat_OS needs across QEMU invocations. The
+# image is auto-created on first boot — wipe with `rm state/batfs.img`
+# to start fresh. Never commit user data.
+/state
+
 # Vendored Chromium source tree (~1.9 GB, contains a pack file over
 # GitHub's 100 MB limit). Re-clone upstream if you need it.
 /ports/chromium

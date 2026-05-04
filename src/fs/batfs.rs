@@ -87,8 +87,11 @@ static NONCE_COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomic
 // FL-027 / NEW-CRYPTO-007 fix: per-boot random 4-byte prefix mixed into
 // every CTR nonce. Without this, re-encrypting the same filename across
 // boots gave the same (key, IV) — a crib-drag on recurring files. The
-// persistent-across-reboot fix requires NVMe (Phase 7); for in-memory
-// use, fresh random at boot is enough to ensure no cross-boot reuse.
+// persistent-across-reboot path (STUMP #136 Phase 7 / `batfs_disk.rs`)
+// stores the per-file `nonce` in the inode on disk, so recurring files
+// keep their original nonce across reboots; the BOOT_NONCE_PREFIX only
+// affects NEW files created after mount, where it still guarantees no
+// reuse against the file-table images on the previous boot.
 static mut BOOT_NONCE_PREFIX: [u8; 4] = [0u8; 4];
 static mut INITIALIZED: bool = false;
 
@@ -164,6 +167,12 @@ pub fn verify_all_integrity() -> bool {
 /// produces a different CTR stream than the previous boot did. The
 /// counter itself still restarts at 1; prefix + counter is the full
 /// unique value.
+///
+/// STUMP #136 (Phase 7): if a virtio-blk device is attached, this also
+/// mounts the on-disk format from sector 0 (or freshly formats it if
+/// the disk is blank). Inodes + ciphertext are restored from disk into
+/// `FILES[]` and per-file RAM pages. With no disk, we run as before
+/// (RAM-only) — the operator gets a UART warning so they know.
 pub fn init(master_key: &[u8; 32]) {
     use core::sync::atomic::Ordering;
 
@@ -187,6 +196,124 @@ pub fn init(master_key: &[u8; 32]) {
             INITIALIZED = true;
         }
     }
+
+    // STUMP #136: try to mount/format the on-disk BatFS. Outside the
+    // critical_section above because virtio-blk uses MMIO + DMA + IRQ
+    // and shouldn't run with IRQs masked the whole time.
+    init_disk(master_key);
+}
+
+/// STUMP #136 (Phase 7): mount the on-disk BatFS layout, or format it
+/// fresh if the disk is blank / a different layout. Restores the inode
+/// table + per-file ciphertext into `FILES[]` and RAM pages.
+fn init_disk(master_key: &[u8; 32]) {
+    use crate::drivers::uart;
+    use super::batfs_disk;
+
+    if !crate::drivers::virtio::blk::is_ready() {
+        uart::puts("  [fs] no virtio-blk attached — BatFS is RAM-only this boot\n");
+        return;
+    }
+
+    match batfs_disk::mount_or_format(master_key) {
+        Ok(true) => {
+            uart::puts("  [fs] disk was blank — formatted fresh BatFS layout\n");
+            return;
+        }
+        Ok(false) => {
+            uart::puts("  [fs] mounted existing BatFS from disk\n");
+        }
+        Err(e) => {
+            uart::puts("  [fs] disk mount failed: ");
+            uart::puts(e);
+            uart::puts(" — running RAM-only this boot\n");
+            return;
+        }
+    }
+
+    // Disk mounted. Read the inode table; for each Active inode,
+    // allocate contiguous RAM pages, copy the ciphertext from disk,
+    // populate FILES[i].
+    let mut inodes = [batfs_disk::DiskInode::empty(); batfs_disk::DISK_MAX_FILES];
+    if let Err(e) = batfs_disk::read_all_inodes(&mut inodes) {
+        uart::puts("  [fs] inode read failed: ");
+        uart::puts(e);
+        uart::puts(" — RAM-only fallback\n");
+        return;
+    }
+
+    let mut restored: usize = 0;
+    let mut count_buf = [0u8; 16];
+
+    unsafe {
+        for i in 0..MAX_FILES {
+            let inode = &inodes[i];
+            if inode.state != batfs_disk::DiskInode::STATE_ACTIVE { continue; }
+            let size = inode.size as usize;
+            if size == 0 || size > MAX_FILE_SIZE { continue; }
+
+            // Allocate contiguous frames so the existing data_addr
+            // (linear copy) layout still works.
+            let pages = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            let pages = if pages == 0 { 1 } else { pages };
+            let data_addr = match crate::kernel::mm::frame::alloc_contig(pages) {
+                Some(a) => a,
+                None    => {
+                    uart::puts("  [fs] OOM during disk restore — partial mount\n");
+                    break;
+                }
+            };
+
+            // Pull ciphertext from disk into the freshly-allocated pages.
+            let dest_slice = core::slice::from_raw_parts_mut(
+                data_addr as *mut u8, pages * BLOCK_SIZE);
+            if batfs_disk::read_data(i, dest_slice, size).is_err() {
+                uart::puts("  [fs] disk data read failed mid-restore\n");
+                continue;
+            }
+
+            // Install the FILES[] entry. Filename + nonce + tag are taken
+            // from the inode; AEAD verification happens lazily on read().
+            FILES[i] = FileEntry::empty();
+            let nl = (inode.name_len as usize).min(MAX_FILENAME);
+            FILES[i].name[..nl].copy_from_slice(&inode.name[..nl]);
+            FILES[i].name_len = nl;
+            FILES[i].size = size;
+            FILES[i].data_addr = data_addr;
+            FILES[i].nonce = inode.nonce;
+            // hash[..16] holds the Poly1305 tag; rest is unused for now.
+            FILES[i].hash[..16].copy_from_slice(&inode.tag);
+            FILES[i].encrypted = inode.encrypted != 0;
+            FILES[i].state = FileState::Active;
+            FILE_COUNT += 1;
+            restored += 1;
+        }
+    }
+
+    let n_written = write_dec(restored, &mut count_buf);
+    uart::puts("  [fs] restored ");
+    let s = unsafe { core::str::from_utf8_unchecked(&count_buf[..n_written]) };
+    uart::puts(s);
+    uart::puts(" file(s) from disk\n");
+
+    rebuild_merkle();
+}
+
+fn write_dec(mut n: usize, out: &mut [u8]) -> usize {
+    if n == 0 {
+        if !out.is_empty() { out[0] = b'0'; return 1; }
+        return 0;
+    }
+    let mut tmp = [0u8; 20];
+    let mut p = 0usize;
+    while n > 0 && p < tmp.len() {
+        tmp[p] = b'0' + (n % 10) as u8;
+        n /= 10;
+        p += 1;
+    }
+    let len = p.min(out.len());
+    for i in 0..len { out[i] = tmp[p - 1 - i]; }
+    len
 }
 
 fn next_nonce() -> [u8; 12] {
@@ -334,6 +461,35 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         entry.encrypted = true;
 
         FILE_COUNT += 1;
+
+        // STUMP #136 (Phase 7): write the ciphertext + inode through to
+        // disk. Order matters for crash consistency — data first, then
+        // inode (the metadata write is the commit point). If we crash
+        // between the two, the slot's old inode still references its
+        // OLD ciphertext (which is intact in RAM/disk because we
+        // allocated fresh frames and wrote into a different slot's
+        // sectors), so the FS stays consistent.
+        //
+        // Inside the unsafe block so we can read FILES[slot] directly
+        // and so `slot` is still in scope.
+        if super::batfs_disk::is_mounted() {
+            let entry_ro = &FILES[slot];
+            let cipher_slice = core::slice::from_raw_parts(
+                entry_ro.data_addr as *const u8, entry_ro.size);
+            let _ = super::batfs_disk::write_data(slot, cipher_slice);
+
+            let mut inode = super::batfs_disk::DiskInode::empty();
+            inode.state = super::batfs_disk::DiskInode::STATE_ACTIVE;
+            inode.encrypted = if entry_ro.encrypted { 1 } else { 0 };
+            inode.name_len = entry_ro.name_len as u32;
+            let nl = entry_ro.name_len.min(64);
+            inode.name[..nl].copy_from_slice(&entry_ro.name[..nl]);
+            inode.size = entry_ro.size as u64;
+            inode.nonce = entry_ro.nonce;
+            inode.tag.copy_from_slice(&entry_ro.hash[..16]);
+            let _ = super::batfs_disk::write_inode(slot, &inode);
+            let _ = super::batfs_disk::flush();
+        }
     }
 
     // Update Merkle tree
@@ -381,8 +537,23 @@ pub fn read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
 
 /// Delete a file — zeroes the encrypted data before freeing.
 pub fn delete(name: &str) -> Result<(), &'static str> {
+    // STUMP #136: find the slot index up front so we can target the
+    // disk wipe at exactly that slot's sector range.
+    let slot = unsafe {
+        let mut found: Option<usize> = None;
+        for i in 0..MAX_FILES {
+            if FILES[i].state == FileState::Active && FILES[i].name_str() == name {
+                found = Some(i); break;
+            }
+        }
+        match found {
+            Some(s) => s,
+            None    => return Err("file not found"),
+        }
+    };
+
     unsafe {
-        let entry = find_file_mut(name)?;
+        let entry = &mut FILES[slot];
 
         // Zero the encrypted data (secure delete)
         let ptr = entry.data_addr as *mut u8;
@@ -398,6 +569,17 @@ pub fn delete(name: &str) -> Result<(), &'static str> {
         entry.state = FileState::Deleted;
         FILE_COUNT -= 1;
     }
+
+    // STUMP #136 (Phase 7): wipe the slot's data sectors and clear the
+    // inode on disk. Order: data sectors first (so a crash mid-delete
+    // leaves the inode pointing at zeroed ciphertext, which AEAD will
+    // reject anyway), inode commit second.
+    if super::batfs_disk::is_mounted() {
+        let _ = super::batfs_disk::zero_data(slot);
+        let _ = super::batfs_disk::free_inode(slot);
+        let _ = super::batfs_disk::flush();
+    }
+
     // Update Merkle tree
     rebuild_merkle();
     Ok(())

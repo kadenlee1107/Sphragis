@@ -138,6 +138,19 @@ def main() -> int:
 
     qmp_port = _free_port()
 
+    # STUMP #136 (Phase 7): persistent BatFS disk image. Auto-created
+    # on first run as a 64MB sparse file at state/batfs.img. Cave
+    # manifests + user files survive across QEMU invocations because
+    # the image outlives the guest. Wipe with `rm state/batfs.img` to
+    # start fresh — the kernel will detect the blank disk and reformat.
+    state_dir = ROOT / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    batfs_img = state_dir / "batfs.img"
+    target_bytes = 64 * 1024 * 1024
+    if not batfs_img.exists() or batfs_img.stat().st_size != target_bytes:
+        with open(batfs_img, "wb") as f:
+            f.truncate(target_bytes)
+
     args = [
         "qemu-system-aarch64",
         "-accel", "hvf",
@@ -171,6 +184,9 @@ def main() -> int:
         # kernel takes input #1 as the pointer device; tablet.rs
         # handles both EV_ABS and EV_REL events.
         "-device", _pointer_device_arg(),
+        # STUMP #136: virtio-blk for persistent BatFS.
+        "-drive", f"file={batfs_img},if=none,format=raw,id=batfs0",
+        "-device", "virtio-blk-device,drive=batfs0",
     ]
 
     print(f"[render-live] launching QEMU ({display}). URL: {URL}")
