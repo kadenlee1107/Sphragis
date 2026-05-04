@@ -1,101 +1,139 @@
 # Bat_OS — Deployment Guide: Real M4 MacBook
 
-## What You Need
+> **STUMP #137 update.** The original DEPLOY.md was written before the
+> M4 reverse-engineering work and described an M1-era flow. Following
+> it on M4 would silently brick your day-1 (`run_guest.py` writes
+> `AMX_CONFIG_EL1`, which traps on M4 because M4 has SME instead of
+> AMX). This rewrite reflects the verified-on-real-hardware path. Cross-
+> reference `docs/M4_GROUND_TRUTH.md` and `CLAUDE.md` if anything here
+> looks off.
 
-- Your M4 MacBook (the target)
-- A second computer with USB-C (the dev machine — any Mac, PC, or Linux box)
-- A USB-C cable connecting the two
-- Python 3 on the dev machine
+## What you need
+
+- Your **M4 MacBook 14"** (Mac16,1 / J604 / T8132 "Donan") — the target
+- A second computer **running Linux** (any modern distro). **NOT
+  Windows** — m1n1's composite USB device doesn't enumerate on
+  Windows without a vendor INF that nobody publishes. Macs work too,
+  but Ubuntu is what we test on.
+- A USB-C cable that supports data (not charge-only)
+- Python 3 + `pyserial` on the dev machine
 
 ## Overview
 
 ```
 ┌─────────────┐    USB-C cable    ┌─────────────────┐
-│ Dev Machine  │◄────────────────►│  M4 MacBook      │
-│ (any PC/Mac) │   serial debug   │  (running m1n1)  │
-│              │                  │                  │
-│ Sends:       │                  │ Receives:        │
-│ bat_os.bin   │ ──────────────►  │ Loads + runs     │
-│              │                  │ Bat_OS!          │
+│ Dev Machine │◄─────────────────►│  M4 MacBook     │
+│  (Linux)    │   serial debug    │  (running m1n1) │
+│             │                   │                 │
+│ Sends:      │                   │ Receives:       │
+│ bat_os ELF  │ ────────────────► │ Loads + runs    │
+│             │                   │ Bat_OS!         │
 └─────────────┘                   └─────────────────┘
 ```
 
-## Step 1: Install m1n1 on Your M4 MacBook
+## Step 1: Install m1n1 on the M4 (in macOS Recovery)
 
-m1n1 is the Asahi Linux bootloader. It creates a new boot volume
-alongside macOS — your macOS stays untouched.
+The Asahi Linux installer (`alx.sh`) **refuses to run on M4** as of
+April 2026 — Asahi support hasn't landed for this generation yet. We
+install m1n1 directly via Apple's `kmutil` tool from Recovery.
 
-From macOS Terminal on the M4 MacBook, run:
+1. Boot the M4 into Recovery: hold the power button while powering on
+   until "Loading startup options" appears. Select **Options**.
+2. From Recovery's Utilities menu, open **Terminal**.
+3. Reduce security on the macOS volume so a non-Apple kernel image
+   can boot:
+
+   ```bash
+   csrutil disable                    # SIP off
+   bputil -nkc                        # full security → permissive
+   ```
+
+4. Bless m1n1 as the boot payload:
+
+   ```bash
+   kmutil configure-boot \
+       -c /path/to/m1n1.macho \
+       -v /Volumes/<your-volume>
+   ```
+
+   You can drop a built m1n1 onto a USB stick first if Recovery
+   networking is unavailable. The `external/m1n1/build/` directory
+   in this repo has a known-good build for M4 (with the `--skip-
+   secondary-cpus` patch already applied).
+
+5. Reboot. Holding the power button now shows a boot picker with
+   "m1n1" as one option.
+
+## Step 2: Use the vendored m1n1 (don't `pip install`)
+
+This repo ships m1n1 at `external/m1n1/` with the M4-specific
+P-cluster SError fix (`--skip-secondary-cpus` / `-S`) **already
+patched into `chainload.py`**. Use this copy. Do NOT install m1n1
+from upstream — that one will hang the M4 P-cores at
+`run_secondary` because it doesn't have the `-S` workaround.
 
 ```bash
-curl https://alx.sh | sh
+cd Bat_OS
+# m1n1 lives at external/m1n1 already; nothing to fetch.
+# Install Python deps:
+pip3 install pyserial construct
 ```
 
-This runs the Asahi Linux installer. When prompted:
-- Choose "m1n1 only (expert)" — we don't want Linux, just the bootloader
-- Allocate minimal disk space (1GB is enough)
-- Follow the prompts to completion
+## Step 3: Connect the machines
 
-After installation, you'll have a new boot option in macOS Startup Disk.
+1. Plug a USB-C cable from the dev machine into the M4. **Use the
+   left port** (closest to MagSafe) — some ports don't expose the
+   debug device.
+2. On the M4: hold the power button → boot picker → select **m1n1**.
+3. The screen goes black — that's normal, m1n1 is running headless.
 
-## Step 2: Set Up the Dev Machine
+## Step 4: Verify the serial link
 
-On your second computer (the one you'll control m1n1 from):
-
-```bash
-# Clone m1n1
-git clone --recursive https://github.com/AsahiLinux/m1n1.git
-cd m1n1
-
-# Install Python dependencies
-pip3 install pyserial construct serial
-```
-
-## Step 3: Connect the Machines
-
-1. Plug a USB-C cable from the dev machine to the M4 MacBook
-2. On the M4 MacBook: reboot and hold the power button to enter Startup Manager
-3. Select the "m1n1" boot volume
-4. The MacBook screen may go black — that's normal, m1n1 is running
-
-## Step 4: Verify Connection
-
-On the dev machine, check that m1n1's serial device appeared:
+On the dev machine, look for the m1n1 USB device:
 
 ```bash
-# macOS dev machine:
+# Linux
+ls /dev/ttyACM*               # should show /dev/ttyACM0 or similar
+
+# macOS
 ls /dev/tty.usbmodem*
-
-# Linux dev machine:
-ls /dev/ttyACM*
 ```
 
-You should see a new serial device. Test the connection:
+Test the connection:
 
 ```bash
-python3 proxyclient/tools/shell.py
+python3 external/m1n1/proxyclient/tools/shell.py
 ```
 
-If you see the m1n1 shell prompt, the connection is working.
+You should land in the m1n1 Python shell. If it hangs, double-check
+the cable + port and the boot picker selection.
 
-## Step 5: Deploy Bat_OS
+## Step 5: Build + chainload Bat_OS
 
-Copy `bat_os_apple.bin` from your build machine to the dev machine,
-then run:
+From the **build machine** (any system that can run `cargo build`,
+typically the Mac):
 
 ```bash
-# From the m1n1 directory on the dev machine:
-python3 proxyclient/tools/run_guest.py /path/to/bat_os_apple.bin
+make build
+# Produces:
+#   target/aarch64-unknown-none/release/bat_os       (ELF)
+#   target/aarch64-unknown-none/release/bat_os.bin   (flat Image)
 ```
 
-This sends the Bat_OS binary over USB to m1n1, which loads it into
-memory and jumps to it.
+Copy `bat_os.bin` to the **dev machine** (the one connected to the
+M4). Then chainload:
 
-You should see on the dev machine's terminal:
+```bash
+python3 external/m1n1/proxyclient/tools/chainload.py \
+    /path/to/bat_os.bin
+# (the -S / --skip-secondary-cpus flag is pre-applied in our vendored
+#  copy — see CLAUDE.md for why)
 ```
-Sending payload...
-Running guest at 0x810000000...
 
+This sends Bat_OS over USB to m1n1, which jumps to it. You should
+see on the dev machine's terminal:
+
+```
 ================================================
   BAT_OS — BARE METAL APPLE SILICON
   Running on REAL M4 hardware.
@@ -104,38 +142,36 @@ Running guest at 0x810000000...
 
 And on the MacBook's screen: the Bat_OS auth gate.
 
-## Step 6: Production Setup (No Dev Machine Needed)
+> **DO NOT use `run_guest.py`.** `run_guest.py` initializes a
+> hypervisor that writes `AMX_CONFIG_EL1`, which traps on M4 (no AMX
+> on M4 — Apple replaced it with SME on this generation). The
+> M1/M2-era guides all say `run_guest.py`; ignore them. Always use
+> `chainload.py`.
 
-Once Bat_OS is working, you can eliminate the dev machine entirely:
+## Step 6: Get back to macOS
 
-### Option A: USB Boot
-1. Put `bat_os_apple.bin` on a USB drive
-2. Configure m1n1 to auto-load from USB on boot
-3. Power on → m1n1 → loads from USB → Bat_OS
+m1n1 doesn't auto-fall-through to macOS. To go back:
 
-### Option B: Partition Boot
-1. Write `bat_os_apple.bin` to the allocated boot partition
-2. Configure m1n1 to chainload from that partition
-3. Power on → m1n1 → Bat_OS (no USB needed)
+1. Hold the power button for 10 seconds to force-shutdown.
+2. Hold power again until "Loading startup options" appears.
+3. Pick **Macintosh HD** (or your macOS volume).
 
-### m1n1 Auto-Boot Configuration
+## Step 7: Production setup (still WIP)
 
-Create a file on the EFI partition:
+The "no dev machine" path doesn't exist yet — m1n1 auto-boot from
+the EFI partition on M4 needs more work (boot.conf, payload
+signature handling, the kmutil chain). For now every boot is a
+chainload from the dev machine.
+
+When this lands, it'll look like:
 
 ```
-# /m1n1/boot.conf
-payload=/bat_os_apple.bin
+Power Button → Apple iBoot → m1n1 (auto-boot) → Bat_OS auth gate
 ```
 
-Or set via m1n1 shell:
-```python
-# In m1n1 proxy shell:
-p.smp_start_secondaries()
-u.mmu_shutdown()
-p.kboot_raw(open('bat_os_apple.bin', 'rb').read())
-```
+Tracking issue: see `docs/SESSION_JOURNAL.md` for the latest.
 
-## Boot Chain (Production)
+## Boot chain (current, real)
 
 ```
 Power Button
@@ -144,42 +180,69 @@ Power Button
 Apple iBoot (ROM)
     │
     ▼
-m1n1 bootloader (auto-boot mode)
-    │  Loads bat_os_apple.bin
+macOS boot picker  (hold power button)
+    │
     ▼
-Bat_OS Auth Gate
-    │  Passphrase + YubiKey
+m1n1 (chainloaded by kmutil configure-boot)
+    │
     ▼
-Bat_OS Desktop
+chainload.py over USB pushes bat_os.bin
+    │
+    ▼
+Bat_OS auth gate (passphrase, optional YubiKey [planned])
+    │
+    ▼
+Bat_OS desktop
 ```
-
-No macOS. No second machine. No network.
-Just you and the passphrase.
 
 ## Troubleshooting
 
 ### "No serial device found"
-- Try a different USB-C port (some ports don't support debug)
-- Use the LEFT USB-C port on the MacBook (closest to MagSafe)
-- Make sure the cable supports data (not charge-only)
 
-### "m1n1 not booting"
-- Hold power button for 10 seconds to enter recovery
-- Re-select the m1n1 boot volume
-- May need to re-install m1n1 if macOS updated firmware
+- Use the **LEFT** USB-C port on the M4 (closest to MagSafe).
+- Cable must support data, not just charging.
+- On Linux you may need `usermod -aG dialout $USER` + relogin to
+  read `/dev/ttyACM0` without sudo.
+- On Windows: it won't work at all without a vendor INF Apple
+  doesn't publish — switch to Linux. See `UBUNTU_QUICKSTART.md`.
+
+### "m1n1 boots but `chainload.py` hangs"
+
+- You probably installed upstream m1n1 instead of the vendored copy.
+  The upstream `chainload.py` doesn't have `-S` and the M4 P-cluster
+  SErrors on the RVBAR write. Use `external/m1n1/proxyclient/tools/
+  chainload.py` from this repo.
 
 ### "Bat_OS crashes immediately"
-- Check serial output for panic messages
-- MMIO addresses may differ on your specific M4 revision
-- Run `python3 proxyclient/tools/shell.py` to probe hardware
 
-## Security Notes
+- Check the serial output. Bat_OS prints a panic with the offending
+  EL/PC.
+- `docs/DEBUGGING_RUNBOOK.md` has known failure modes and fixes.
+- M4 MMIO addresses are NOT the same as M1's. Many references on
+  the Asahi wiki are M1-era and look plausible on M4 but aren't.
+  Always cross-check `docs/M4_GROUND_TRUTH.md`.
 
-- m1n1 has a USB serial debug interface — this is a development feature
-- In production, disable m1n1's USB debug mode
-- The auth gate runs BEFORE any data is decrypted
-- If someone steals the MacBook and boots it:
-  1. They see the passphrase prompt
-  2. Wrong password 5 times → all keys destroyed
-  3. Duress code → fake boot + silent wipe
-  4. No passphrase → dead man's switch expires → wipe
+### "I want to develop in QEMU instead"
+
+- See `QUICKSTART.md`. `make render-live` boots Bat_OS under
+  QEMU/HVF on the Mac with virtio-gpu, virtio-keyboard,
+  virtio-tablet, and (since STUMP #136) virtio-blk for persistent
+  BatFS. Way faster iteration than M4 chainload while developing.
+
+## Security notes
+
+- m1n1 has a USB serial debug interface. This is a development feature
+  — in a "production" deployment you'd want to either disable m1n1
+  USB or physically airgap the M4. Today: development-mode only.
+- The auth gate runs BEFORE any persistent data is decrypted (the
+  passphrase derives the BatFS master key).
+- Failure modes:
+  1. Wrong passphrase 5 times → all keys destroyed (`security/auth.rs`
+     MAX_ATTEMPTS).
+  2. Duress passphrase → silent wipe (`security/wipe.rs::Duress`).
+  3. No passphrase / deadman timer expires → wipe.
+- Secure Enclave integration (the docs claim "master keys never touch
+  RAM") is **not yet implemented** — `drivers/apple/sep.rs` doesn't
+  exist. Master key currently lives in `static mut MASTER_KEY` per
+  `src/fs/batfs.rs`. SEP work is a future STUMP. Don't trust the
+  "government-grade" framing literally until SEP lands.
