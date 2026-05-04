@@ -161,13 +161,11 @@ pub fn reset_for_cave_switch() {
         }
     }
     reset_pen();
-    // STUMP #147: flush the wipe to the framebuffer.
+    // STUMP #147: flush the SH-pane wipe to the framebuffer.
+    // Chrome redraw (for the CAVE indicator) is done separately by
+    // the caller AFTER `set_active(id)` runs, so the indicator
+    // reads the NEW cave name not the old one. See `cave::enter`.
     redraw_content();
-    // STUMP #147: also redraw the title-bar chrome so the "CAVE
-    // kernel" indicator updates to the new active-cave name.
-    // wm::draw_frame() is just FB writes — safe inside the
-    // cave::enter critical section.
-    crate::ui::wm::draw_frame();
 }
 
 /// STUMP #124: replay the scrollback buffer to the framebuffer.

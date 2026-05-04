@@ -709,6 +709,17 @@ pub fn enter(name: &str) -> Result<(), &'static str> {
             } else {
                 crate::batcave::linux::mmu::switch_to_primary();
             }
+
+            // STUMP #147: repaint the title-bar chrome NOW (after
+            // set_active(id) above). The CAVE indicator reads
+            // `active_name_str()` which now returns the new cave's
+            // name. Doing this earlier (e.g. inside
+            // console::reset_for_cave_switch) would have rendered
+            // the old cave's name because we always set
+            // ACTIVE_CAVE_ID = usize::MAX before the reset and only
+            // restore it after. wm::draw_frame is just FB writes —
+            // safe inside the IrqGuard'd critical section.
+            crate::ui::wm::draw_frame();
         }
         let _ = prev_active;
     }
