@@ -67,20 +67,18 @@ impl<'a> IpPacket<'a> {
 
 /// Send an IP packet.
 pub fn send(dst_ip: u32, protocol: u8, payload: &[u8]) -> Result<(), &'static str> {
-    // Secure pipeline: if VPN or Tor is active, wrap the payload
+    // STUMP #141: was a Tor(VPN(payload)) pipeline — `tor` deleted as
+    // part of the honest-naming pass (it was 3 layers of CTR with
+    // hardcoded keys, not real Tor), and `vpn` renamed to `psk_overlay`
+    // to reflect that it's a PSK-derived AES-CTR envelope, not real
+    // WireGuard. The PSK overlay path is preserved; Tor wrapping is
+    // gone until real onion routing is implemented.
     let mut secured = [0u8; 1400];
-    let (final_payload, final_len) = if super::tor::is_ready() {
-        // Full pipeline: Tor(VPN(payload))
-        let mut vpn_buf = [0u8; 1400];
-        let vpn_len = super::vpn::encrypt_packet(payload, &mut vpn_buf);
-        let tor_len = super::tor::onion_encrypt(&vpn_buf[..vpn_len], &mut secured);
-        (&secured[..], tor_len)
-    } else if super::vpn::is_active() {
-        // VPN only
-        let vpn_len = super::vpn::encrypt_packet(payload, &mut secured);
-        (&secured[..], vpn_len)
+    let (final_payload, final_len) = if super::psk_overlay::is_active() {
+        let n = super::psk_overlay::encrypt_packet(payload, &mut secured);
+        (&secured[..], n)
     } else {
-        // Direct — no encryption (or TLS handles it at TCP level)
+        // Direct — TLS handles confidentiality at the TCP layer.
         (payload, payload.len())
     };
     let payload = &final_payload[..final_len];
@@ -152,22 +150,15 @@ pub fn handle(data: &[u8]) {
             return;
         }
 
-        // Secure pipeline: decrypt inbound if VPN/Tor active
+        // STUMP #141: PSK-overlay decrypt path. Was Tor(VPN(...)); see
+        // the matching note in `send` above. Real onion routing is a
+        // future STUMP.
         let mut decrypted_payload = [0u8; 1400];
-        let decrypted_pkt = if super::tor::is_ready() {
-            // Peel Tor, then VPN
-            let mut tor_out = [0u8; 1400];
-            let tor_len = super::tor::onion_decrypt(pkt.payload, &mut tor_out);
-            let vpn_len = super::vpn::decrypt_packet(&tor_out[..tor_len], &mut decrypted_payload);
+        let decrypted_pkt = if super::psk_overlay::is_active() {
+            let n = super::psk_overlay::decrypt_packet(pkt.payload, &mut decrypted_payload);
             Some(IpPacket {
                 src: pkt.src, dst: pkt.dst, protocol: pkt.protocol, ttl: pkt.ttl,
-                payload: &decrypted_payload[..vpn_len],
-            })
-        } else if super::vpn::is_active() {
-            let vpn_len = super::vpn::decrypt_packet(pkt.payload, &mut decrypted_payload);
-            Some(IpPacket {
-                src: pkt.src, dst: pkt.dst, protocol: pkt.protocol, ttl: pkt.ttl,
-                payload: &decrypted_payload[..vpn_len],
+                payload: &decrypted_payload[..n],
             })
         } else {
             None

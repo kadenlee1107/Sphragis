@@ -1037,7 +1037,7 @@ fn reset_all_globals_for_cave_switch() {
     crate::batcave::linux::futex::reset_for_cave_switch();
     crate::batcave::linux::async_fds::reset_for_cave_switch();
     crate::batcave::linux::stdio_ring::reset_for_cave_switch();
-    crate::net::vpn::reset_for_cave_switch();
+    crate::net::psk_overlay::reset_for_cave_switch();
     crate::net::dns::reset_for_cave_switch();
     crate::drivers::display::chromium_blit::reset_for_cave_switch();
 
@@ -1051,10 +1051,12 @@ fn reset_all_globals_for_cave_switch() {
     // logged-out cave doesn't inherit the previous tenant's UI state.
     crate::browser::js::storage::reset_for_cave_switch();
 
-    // ROOT 2 V10-re-audit additions — Tor circuit keys, batpipe inter-tool
-    // buffer, and the loader's saved RA/SP (which were a cross-cave
-    // control-flow PIVOT — most severe item from the V10 sweep).
-    crate::net::tor::reset_for_cave_switch();
+    // ROOT 2 V10-re-audit additions — batpipe inter-tool buffer + the
+    // loader's saved RA/SP (which were a cross-cave control-flow PIVOT,
+    // most severe item from the V10 sweep). STUMP #141: removed the
+    // `tor::reset_for_cave_switch` call because tor.rs was deleted —
+    // it was 3 layers of CTR with hardcoded keys, not real Tor. When
+    // real onion routing lands its reset hook goes back here.
     crate::batcave::batpipe::reset_for_cave_switch();
     crate::batcave::linux::loader::reset_for_cave_switch();
 

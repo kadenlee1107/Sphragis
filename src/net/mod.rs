@@ -17,9 +17,14 @@ pub mod tls;
 pub mod tls_hybrid;
 pub mod tls_pinning;
 pub mod x509;
-pub mod tor;
 pub mod udp;
-pub mod vpn;
+// STUMP #141: was `tor` (3-layer CTR with hardcoded keys, NOT real
+// Tor — no directory consensus, no relay discovery) and `vpn`
+// (PSK-derived AES-CTR overlay, NOT WireGuard — no Noise IK, no
+// rekey). The audit caught both names as misleading. `tor` deleted
+// outright (would be re-added when real Tor work starts), and `vpn`
+// renamed to `psk_overlay` to honestly describe what it does.
+pub mod psk_overlay;
 
 use crate::drivers::virtio::net as netdev;
 
