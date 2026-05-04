@@ -132,14 +132,19 @@ static mut BM_COUNT: usize = 0;
 /// previous cave's browsing session. Leaving any of it readable is a
 /// direct history / DOM leak into the new cave.
 pub fn reset_for_cave_switch() {
+    use crate::drivers::uart;
     let _g = crate::kernel::sync::IrqGuard::new();
     unsafe {
+        uart::puts("[browser-reset] >> URL/PAGE bufs\n");
         // URL + page buffers
         for b in (&mut *core::ptr::addr_of_mut!(URL_BUF)).iter_mut() { *b = 0; }
         URL_LEN = 0;
         for b in (&mut *core::ptr::addr_of_mut!(PAGE_BUF)).iter_mut() { *b = 0; }
         PAGE_LEN = 0;
         for b in (&mut *core::ptr::addr_of_mut!(PAGE_STYLE)).iter_mut() { *b = 0; }
+        uart::puts("[browser-reset] << URL/PAGE bufs\n");
+
+        uart::puts("[browser-reset] >> LINKS/STATUS\n");
         // Links
         for entry in (&mut *core::ptr::addr_of_mut!(LINKS)).iter_mut() {
             for b in entry.iter_mut() { *b = 0; }
@@ -153,6 +158,9 @@ pub fn reset_for_cave_switch() {
         BYTES_LOADED = 0;
         LOADING_PROGRESS = 0;
         STATE = BrowserState::Idle;
+        uart::puts("[browser-reset] << LINKS/STATUS\n");
+
+        uart::puts("[browser-reset] >> TABS/BOOKMARKS\n");
         // Tabs + bookmarks
         for entry in (&mut *core::ptr::addr_of_mut!(TAB_TITLES)).iter_mut() {
             for b in entry.iter_mut() { *b = 0; }
@@ -166,9 +174,17 @@ pub fn reset_for_cave_switch() {
         }
         for l in (&mut *core::ptr::addr_of_mut!(BM_LENS)).iter_mut() { *l = 0; }
         BM_COUNT = 0;
-        // DOM + layout (fresh Document + LayoutTree)
+        uart::puts("[browser-reset] << TABS/BOOKMARKS\n");
+
+        uart::puts("[browser-reset] >> DOM_DOC = Document::new\n");
         DOM_DOC = crate::browser::dom::Document::new();
+        uart::puts("[browser-reset] << DOM_DOC = Document::new\n");
+
+        uart::puts("[browser-reset] >> LAYOUT_TREE = LayoutTree::new\n");
         LAYOUT_TREE = crate::browser::layout::LayoutTree::new();
+        uart::puts("[browser-reset] << LAYOUT_TREE = LayoutTree::new\n");
+
+        uart::puts("[browser-reset] >> HISTORY/USE_ENGINE\n");
         // V12 additions: browser HISTORY, the JS VM state (SEED is
         // reachable via Math.random and was acting as a cross-cave
         // timing oracle), and the engine-selector toggle.
@@ -179,9 +195,13 @@ pub fn reset_for_cave_switch() {
         HISTORY_POS = 0;
         HISTORY_COUNT = 0;
         USE_ENGINE = true;
+        uart::puts("[browser-reset] << HISTORY/USE_ENGINE\n");
+
+        uart::puts("[browser-reset] >> JS_VM = Vm::new (~size_of Vm bytes!)\n");
         // Fresh JS VM — wipes heap, string table, and builtin-PRNG state.
         JS_VM = crate::browser::js::vm::Vm::new();
         JS_VM_INITIALIZED = false;
+        uart::puts("[browser-reset] << JS_VM = Vm::new\n");
     }
 }
 
