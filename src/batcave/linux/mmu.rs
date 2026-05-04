@@ -213,29 +213,65 @@ pub fn free_cave_slot(slot: usize) {
     // still held the old tenant's L1. When this function then
     // zero-and-freed the L1 pages it clobbered the new tenant's page
     // tables, collapsing the sandbox to PRIMARY_L1.
+    //
+    // STUMP #145 fix (kernel-pool leak): previously this only freed
+    // L1[0] (l2_low) and L1[1] (l2_high). But `setup_cave_pagetable_at`
+    // also allocates l2_xhi (L1[2]), l2_xxhi (L1[3]), and l2_xxxhi
+    // (L1[4]) for the kernel identity 0x80000000..0x140000000 range
+    // — and `setup_native_cave_l1` allocates the same five tables
+    // for native caves. Walking only [0..=1] meant 3 frames per cave
+    // create→destroy cycle leaked back into the heap-side bitmap
+    // unfreed (12 KB per cycle out of the 128 MB kernel pool). The
+    // STUMP #3 audit caught this when STUMP #145 made the leak more
+    // visible by adding native-cave L1s. We now walk indices [0..=4]
+    // to free every L2 table that was ever populated by
+    // `setup_cave_pagetable_at` or `setup_native_cave_l1`.
     unsafe {
         let l1 = CAVE_L1[slot];
         if l1 != 0 {
-            // L1[0] -> L2_low ; L1[1] -> L2_high (see setup_cave_pagetable_at).
             // Mask off the descriptor flags to recover the table address.
-            let table_mask: u64 = !0xFFFu64; // page-aligned address
-            let l2_low_pte: u64;
-            let l2_high_pte: u64;
-            core::arch::asm!("ldr {v}, [{a}]", a = in(reg) l1, v = out(reg) l2_low_pte);
-            core::arch::asm!("ldr {v}, [{a}]", a = in(reg) l1 + 8, v = out(reg) l2_high_pte);
-            let l2_low = (l2_low_pte & table_mask) as usize;
-            let l2_high = (l2_high_pte & table_mask) as usize;
-            // Zero the page-table memory before returning to the pool.
-            for p in [l1, l2_low, l2_high] {
-                if p != 0 {
-                    for i in 0..(PAGE_SIZE / 8) {
-                        core::arch::asm!("str xzr, [{a}]",
-                            a = in(reg) p + i * 8,
-                            options(nostack, preserves_flags));
-                    }
-                    crate::kernel::mm::frame::free_frame(p);
+            let table_mask: u64 = !0xFFFu64;
+            // Read L1[0..=4] PTEs into an array so we can free them all.
+            // Indices match the layout established by setup_cave_pagetable_at
+            // and setup_native_cave_l1:
+            //   L1[0] → L2_low   (MMIO + maybe user window)
+            //   L1[1] → L2_high  (kernel identity 0x40000000..0x80000000)
+            //   L1[2] → L2_xhi   (kernel identity 0x80000000..0xC0000000)
+            //   L1[3] → L2_xxhi  (kernel identity 0xC0000000..0x100000000)
+            //   L1[4] → L2_xxxhi (kernel identity 0x100000000..0x140000000)
+            let mut l2_tables = [0usize; 5];
+            for i in 0..5 {
+                let pte: u64;
+                core::arch::asm!(
+                    "ldr {v}, [{a}]",
+                    a = in(reg) l1 + i * 8,
+                    v = out(reg) pte,
+                );
+                let entry = (pte & table_mask) as usize;
+                // PTE_VALID is bit 0; if the entry isn't valid the PTE
+                // is zero and `entry` is 0 — skip those.
+                if pte & 1 != 0 && entry != 0 {
+                    l2_tables[i] = entry;
                 }
             }
+            // Zero each L2 page-table memory before returning to the pool.
+            for &table in &l2_tables {
+                if table != 0 {
+                    for i in 0..(PAGE_SIZE / 8) {
+                        core::arch::asm!("str xzr, [{a}]",
+                            a = in(reg) table + i * 8,
+                            options(nostack, preserves_flags));
+                    }
+                    crate::kernel::mm::frame::free_frame(table);
+                }
+            }
+            // Zero + free the L1 itself.
+            for i in 0..(PAGE_SIZE / 8) {
+                core::arch::asm!("str xzr, [{a}]",
+                    a = in(reg) l1 + i * 8,
+                    options(nostack, preserves_flags));
+            }
+            crate::kernel::mm::frame::free_frame(l1);
         }
         CAVE_L1[slot] = 0;
         CAVE_PHYS_BASE[slot] = 0;
@@ -475,6 +511,19 @@ pub fn setup_cave_pagetable_at(
 /// any EL0 access from this cave faults. That's the desired posture
 /// for a native cave: there's no EL0 code today, but if anything
 /// tries to drop to EL0 by mistake, the MMU stops it.
+///
+/// **CRITICAL INVARIANT** (STUMP #145 step 6 audit): every cave L1
+/// MUST map the full kernel-reachable address range
+/// `[0x40000000, 0x140000000)`. The kernel itself runs through TTBR0
+/// (no TTBR1 split), so when a cave is active the kernel's `.text`,
+/// `.data`, heap, and any user-pool frame the kernel touches must
+/// translate cleanly. Bat_OS uses `frame::alloc_frame` for kernel
+/// allocations all over (heap-backing, virtio DMA buffers, etc.) and
+/// those frames can land anywhere up to 0x140000000 per `MEMORY_END`.
+/// L1[1..=4] covers exactly that range. Drop ANY of those four L2
+/// pointers and the kernel will translation-fault the moment a cave
+/// is active and the kernel touches a frame in the dropped range.
+/// Future cave-L1 builders must preserve this invariant.
 pub fn setup_native_cave_l1(cave_slot: usize) -> Result<usize, &'static str> {
     if cave_slot >= MAX_CAVE_PAGETABLES {
         return Err("too many cave page tables");

@@ -51,12 +51,38 @@
 
 ## Security Model (6 Layers)
 
-1. **Memory isolation** — each BatCave gets own page table. Hardware MMU enforced.
+1. **Memory isolation** — each BatCave gets its own L1 page table. Hardware MMU
+   enforced via `TTBR0_EL1` swap on `cave::enter` (STUMP #145). Every cave's L1
+   maps the kernel identity range `[0x40000000, 0x140000000)` (so kernel itself
+   stays reachable while a cave is active) plus MMIO; native caves have NO EL0
+   user window, so any drop-to-EL0 also faults. Cross-cave switches flush the
+   whole TLB via `tlbi vmalle1`. **Limitation:** today there's no ASID, so the
+   TLB flush is a sledgehammer (fine for single-CPU; revisit when SMP lands).
+   And since native caves have no EL0 code today, the practical security
+   benefit is TLB isolation, not preventing user-mode reads — those become
+   meaningful when WASM/scripted workloads land inside native caves.
+   Docker-backed caves keep relying on the Mac kernel's container isolation;
+   their `cave_l1_phys` stays 0 because adding our own L1 would be redundant.
 2. **Capability gate** — every syscall passes through microkernel capability check. No cap = no access.
-3. **Filesystem encryption** — per-BatCave derived encryption key. Destroy key = data unrecoverable.
-4. **Network firewall** — all traffic through allowlist firewall + secure pipeline. No backdoors.
-5. **Display sandbox** — GUI tools render to dedicated framebuffer region. Can't read other windows.
-6. **Destruction guarantee** — all wipe events (deadman, duress, panic) destroy all BatCave keys.
+   **Limitation:** as of the most recent audit, capability checks are wired at
+   one syscall site (net write/sendto). Most syscalls don't gate. Closing this
+   is queued as a future STUMP — the capability infrastructure (`cave::has_cap`,
+   `grant_cap`/`revoke_cap`) is solid; the call-site coverage isn't.
+3. **Filesystem encryption** — per-BatCave derived encryption key (HMAC-SHA256
+   of the BatFS master keyed by cave name, STUMP #111 audit C011). Destroy key
+   = data unrecoverable. Master is Argon2id-derived from the boot passphrase
+   (STUMP #138).
+4. **Network firewall** — all traffic through allowlist firewall + secure
+   pipeline. No backdoors. Per-cave egress allowlist (`net::cave_policy`) +
+   per-cave token-bucket shaper + SNI peek/reject all enforced on the cave
+   NAT path.
+5. **Display sandbox** — GUI tools render to dedicated framebuffer region.
+   Can't read other windows. **Limitation:** bounding-box clipping is real
+   (`cave.rs::alloc_display`) but cross-cave readback is not actively
+   prevented; future work for genuine output isolation.
+6. **Destruction guarantee** — all wipe events (deadman, duress, panic)
+   destroy all BatCave keys AND drop persisted manifests (STUMP #135) AND
+   free per-cave L1 frames (STUMP #145). No survivors.
 
 ## Shell Commands
 
@@ -138,12 +164,20 @@ Shows all BatCaves, status, type, installed tools, granted capabilities, active 
 
 ## The npm Attack Scenario
 
-A compromised package runs inside a BatCave:
-1. Tries to read host filesystem → **BLOCKED** (no host FS capability)
-2. Tries to connect to C2 server → **BLOCKED** (not in firewall allowlist)
-3. Tries to read another BatCave → **BLOCKED** (separate page table)
-4. Tries to keylog → **BLOCKED** (display sandbox)
-5. It's trapped. A brain in a jar.
+A compromised npm package runs inside a Docker-backed BatCave:
+1. Tries to read host filesystem → **BLOCKED** (no host FS capability + Mac
+   kernel container isolation).
+2. Tries to connect to C2 server → **BLOCKED** (not in `cave_policy`
+   allowlist; SNI peek + token-bucket shaper enforce this on the egress
+   NAT path).
+3. Tries to read another BatCave → **BLOCKED** for Docker caves (separate
+   container kernel namespace) and for native caves (separate `TTBR0_EL1`
+   per cave, STUMP #145; cross-cave TLB flush on every switch).
+4. Tries to keylog → bounding-box display clip is real (rendering can't
+   leak to neighbour caves' framebuffer regions); active readback
+   prevention is a future hardening pass.
+5. It's trapped. A brain in a jar — modulo the limitations enumerated in
+   the Security Model layers above.
 
 ## Decision Log
 
