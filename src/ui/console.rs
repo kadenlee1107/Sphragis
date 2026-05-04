@@ -135,6 +135,20 @@ pub fn init_in_window() {
 /// STUMP #124: also wipe the scrollback buffer so a logged-out cave
 /// doesn't leave its command output / typed input visible to the
 /// next tenant.
+///
+/// STUMP #147 (visual artifact fix): the buffer wipe alone left stale
+/// pixels on the framebuffer because the desktop only redraws the SH
+/// pane on tab-switch. When a `batcave enter <name>` ran from the
+/// shell, the new (empty) console buffer rendered the cave's prompt
+/// at row 0 while the bottom of the screen still showed the old
+/// `bat_os >` history that was on the framebuffer before the reset.
+/// Confused users into thinking input was going "to a new line above."
+/// Now we explicitly fill the active pane with BG and replay the
+/// (post-wipe, empty) buffer — which paints the cleared rect and
+/// leaves nothing behind. Almost-always on SH at cave-switch time so
+/// this fixes the SH artifact; if some other tab happens to be active
+/// the wrong pane gets cleared but the next tab-switch repaints it
+/// from the app's own state, so no permanent damage.
 pub fn reset_for_cave_switch() {
     CURSOR_X.store(0, Ordering::Release);
     CURSOR_Y.store(0, Ordering::Release);
@@ -147,6 +161,13 @@ pub fn reset_for_cave_switch() {
         }
     }
     reset_pen();
+    // STUMP #147: flush the wipe to the framebuffer.
+    redraw_content();
+    // STUMP #147: also redraw the title-bar chrome so the "CAVE
+    // kernel" indicator updates to the new active-cave name.
+    // wm::draw_frame() is just FB writes — safe inside the
+    // cave::enter critical section.
+    crate::ui::wm::draw_frame();
 }
 
 /// STUMP #124: replay the scrollback buffer to the framebuffer.
