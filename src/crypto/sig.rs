@@ -59,3 +59,166 @@ pub fn sha256_digest(msg: &[u8]) -> [u8; 32] {
     r.copy_from_slice(&out);
     r
 }
+
+/// SHA-384 digest. STUMP #140: ECDSA-P384 + RSA-PSS-SHA384 paths use this.
+pub fn sha384_digest(msg: &[u8]) -> [u8; 48] {
+    use sha2::{Sha384, Digest};
+    let mut h = Sha384::new();
+    h.update(msg);
+    let out = h.finalize();
+    let mut r = [0u8; 48];
+    r.copy_from_slice(&out);
+    r
+}
+
+/// SHA-512 digest. STUMP #140: RSA-PSS-SHA512 path uses this.
+pub fn sha512_digest(msg: &[u8]) -> [u8; 64] {
+    use sha2::{Sha512, Digest};
+    let mut h = Sha512::new();
+    h.update(msg);
+    let out = h.finalize();
+    let mut r = [0u8; 64];
+    r.copy_from_slice(&out);
+    r
+}
+
+/// Verify an ECDSA-P384 signature over an already-hashed message digest.
+/// STUMP #140: anchors under the ISRG Root X2 ECDSA P-384 root + TLS-1.3
+/// ecdsa_secp384r1_sha384 (sig scheme 0x0503).
+///
+/// `pubkey` — uncompressed SEC1 (0x04 || X || Y, 97 bytes) or compressed.
+/// `digest` — 48-byte SHA-384 digest of the signed bytes.
+/// `sig_der` — DER-encoded ECDSA signature.
+pub fn ecdsa_p384_verify(pubkey: &[u8], digest: &[u8; 48], sig_der: &[u8])
+    -> Result<(), &'static str>
+{
+    use p384::ecdsa::{VerifyingKey, Signature, signature::hazmat::PrehashVerifier};
+    use p384::EncodedPoint;
+
+    let ep = EncodedPoint::from_bytes(pubkey).map_err(|_| "ecdsa-p384 verify failed")?;
+    let vk = VerifyingKey::from_encoded_point(&ep).map_err(|_| "ecdsa-p384 verify failed")?;
+    let sig = Signature::from_der(sig_der).map_err(|_| "ecdsa-p384 verify failed")?;
+    vk.verify_prehash(digest, &sig).map_err(|_| "ecdsa-p384 verify failed")
+}
+
+/// Verify an RSA PKCS#1 v1.5 signature with SHA-256.
+/// STUMP #140: cert chains where the parent's signature uses the
+/// classic sha256WithRSAEncryption OID (1.2.840.113549.1.1.11) — most
+/// public CA self-signatures.
+///
+/// `pubkey_der` — DER-encoded RSAPublicKey (`SEQUENCE { n, e }`) — i.e.
+///                the bare RSA pubkey, not the SubjectPublicKeyInfo
+///                wrapper. Caller is responsible for stripping SPKI.
+/// `msg`        — bytes that were signed (this fn hashes them).
+/// `sig`        — raw signature bytes.
+pub fn rsa_pkcs1v15_sha256_verify(pubkey_der: &[u8], msg: &[u8], sig: &[u8])
+    -> Result<(), &'static str>
+{
+    use rsa::{RsaPublicKey, pkcs1::DecodeRsaPublicKey, pkcs1v15::Pkcs1v15Sign,
+              traits::SignatureScheme};
+    use sha2::{Sha256, Digest};
+
+    let pk = RsaPublicKey::from_pkcs1_der(pubkey_der)
+        .map_err(|_| "rsa pkcs1v15 verify: bad pubkey")?;
+    let mut h = Sha256::new();
+    h.update(msg);
+    let digest = h.finalize();
+    Pkcs1v15Sign::new::<Sha256>()
+        .verify(&pk, digest.as_slice(), sig)
+        .map_err(|_| "rsa pkcs1v15 sha256 verify failed")
+}
+
+/// RSA PKCS#1 v1.5 with SHA-384. STUMP #140.
+pub fn rsa_pkcs1v15_sha384_verify(pubkey_der: &[u8], msg: &[u8], sig: &[u8])
+    -> Result<(), &'static str>
+{
+    use rsa::{RsaPublicKey, pkcs1::DecodeRsaPublicKey, pkcs1v15::Pkcs1v15Sign,
+              traits::SignatureScheme};
+    use sha2::{Sha384, Digest};
+
+    let pk = RsaPublicKey::from_pkcs1_der(pubkey_der)
+        .map_err(|_| "rsa pkcs1v15 verify: bad pubkey")?;
+    let mut h = Sha384::new();
+    h.update(msg);
+    let digest = h.finalize();
+    Pkcs1v15Sign::new::<Sha384>()
+        .verify(&pk, digest.as_slice(), sig)
+        .map_err(|_| "rsa pkcs1v15 sha384 verify failed")
+}
+
+/// RSA PKCS#1 v1.5 with SHA-512. STUMP #140.
+pub fn rsa_pkcs1v15_sha512_verify(pubkey_der: &[u8], msg: &[u8], sig: &[u8])
+    -> Result<(), &'static str>
+{
+    use rsa::{RsaPublicKey, pkcs1::DecodeRsaPublicKey, pkcs1v15::Pkcs1v15Sign,
+              traits::SignatureScheme};
+    use sha2::{Sha512, Digest};
+
+    let pk = RsaPublicKey::from_pkcs1_der(pubkey_der)
+        .map_err(|_| "rsa pkcs1v15 verify: bad pubkey")?;
+    let mut h = Sha512::new();
+    h.update(msg);
+    let digest = h.finalize();
+    Pkcs1v15Sign::new::<Sha512>()
+        .verify(&pk, digest.as_slice(), sig)
+        .map_err(|_| "rsa pkcs1v15 sha512 verify failed")
+}
+
+/// Verify an RSA-PSS signature with SHA-256 / 384 / 512. STUMP #140:
+/// TLS-1.3 CertificateVerify uses these (rsa_pss_rsae_sha256 = 0x0804,
+/// rsa_pss_rsae_sha384 = 0x0805, rsa_pss_rsae_sha512 = 0x0806). Cert
+/// sigs that use OID 1.2.840.113549.1.1.10 (rsassa-pss) also land here.
+///
+/// PSS salt length defaults to "match hash output size" per RFC 8446,
+/// which is the modern interpretation that all real implementations
+/// produce.
+pub fn rsa_pss_sha256_verify(pubkey_der: &[u8], msg: &[u8], sig: &[u8])
+    -> Result<(), &'static str>
+{
+    use rsa::{RsaPublicKey, pkcs1::DecodeRsaPublicKey, pss::Pss,
+              traits::SignatureScheme};
+    use sha2::{Sha256, Digest};
+
+    let pk = RsaPublicKey::from_pkcs1_der(pubkey_der)
+        .map_err(|_| "rsa-pss verify: bad pubkey")?;
+    let mut h = Sha256::new();
+    h.update(msg);
+    let digest = h.finalize();
+    Pss::new::<Sha256>()
+        .verify(&pk, digest.as_slice(), sig)
+        .map_err(|_| "rsa-pss sha256 verify failed")
+}
+
+pub fn rsa_pss_sha384_verify(pubkey_der: &[u8], msg: &[u8], sig: &[u8])
+    -> Result<(), &'static str>
+{
+    use rsa::{RsaPublicKey, pkcs1::DecodeRsaPublicKey, pss::Pss,
+              traits::SignatureScheme};
+    use sha2::{Sha384, Digest};
+
+    let pk = RsaPublicKey::from_pkcs1_der(pubkey_der)
+        .map_err(|_| "rsa-pss verify: bad pubkey")?;
+    let mut h = Sha384::new();
+    h.update(msg);
+    let digest = h.finalize();
+    Pss::new::<Sha384>()
+        .verify(&pk, digest.as_slice(), sig)
+        .map_err(|_| "rsa-pss sha384 verify failed")
+}
+
+pub fn rsa_pss_sha512_verify(pubkey_der: &[u8], msg: &[u8], sig: &[u8])
+    -> Result<(), &'static str>
+{
+    use rsa::{RsaPublicKey, pkcs1::DecodeRsaPublicKey, pss::Pss,
+              traits::SignatureScheme};
+    use sha2::{Sha512, Digest};
+
+    let pk = RsaPublicKey::from_pkcs1_der(pubkey_der)
+        .map_err(|_| "rsa-pss verify: bad pubkey")?;
+    let mut h = Sha512::new();
+    h.update(msg);
+    let digest = h.finalize();
+    Pss::new::<Sha512>()
+        .verify(&pk, digest.as_slice(), sig)
+        .map_err(|_| "rsa-pss sha512 verify failed")
+}

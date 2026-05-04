@@ -27,6 +27,15 @@ ghash = { version = "0.5", default-features = false }
 # Both no_std with alloc-free verify paths.
 ed25519-compact = { version = "2", default-features = false }
 p256  = { version = "0.13", default-features = false, features = ["ecdsa"] }
+# STUMP #140: ECDSA P-384 verify for chains anchored under P-384 roots
+# (ISRG Root X2, etc.) and TLS-1.3 ecdsa_secp384r1_sha384 (0x0503).
+p384  = { version = "0.13", default-features = false, features = ["ecdsa"] }
+# STUMP #140: RSA PKCS#1 v1.5 + RSA-PSS verify for chains anchored under
+# RSA roots (most legacy public CAs) and TLS-1.3 rsa_pss_rsae_*. Without
+# this, three of the five embedded trust anchors (Amazon, DigiCert
+# Global Root CA, DigiCert Global Root G2) can only validate ECDSA-leaf
+# chains.
+rsa   = { version = "0.9", default-features = false, features = ["sha2"] }
 sha2  = { version = "0.10", default-features = false }
 # V4: full X.509 chain validation + heap allocator.
 x509-cert = { version = "0.2", default-features = false, features = ["pem"] }

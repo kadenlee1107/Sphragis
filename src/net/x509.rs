@@ -66,13 +66,13 @@ use x509_cert::der::{Decode, Encode};
 /// this five-entry set is enough to verify the most common chains and
 /// move the audit's "theater" verdict.
 ///
-/// **RSA support note:** as of STUMP #139, `verify_chain` still only
-/// supports ECDSA-P256/P384 leaf signatures (`crypto/sig.rs`). Three of
-/// these roots are RSA, so they only validate ECDSA-leaf chains today
-/// (LE issues both). RSA leaf signature verify is STUMP #140 — when
-/// that lands, this trust store gates real coverage. Until then,
-/// ECDSA-leaf chains under ISRG X1 / X2 work; pure RSA chains return
-/// `UnsupportedSigAlg` and fall through to pin-based defence.
+/// **Signature algorithm coverage** (STUMP #140):
+///   * Cert sigs: ECDSA-P256/P384, RSA-PKCS1v15 (SHA-256/384/512),
+///     RSA-PSS — covers self-sigs of every root above + the chains
+///     they typically anchor.
+///   * TLS-1.3 CertificateVerify: ECDSA-P256, ECDSA-P384, RSA-PSS
+///     (SHA-256/384/512). PKCS#1v1.5 is not valid for CertVerify per
+///     RFC 8446 §4.4.3 — it's only for cert chain sigs.
 ///
 /// Refresh procedure: each CA publishes their root cert via a stable
 /// URL listed below. Re-fetch, drop into `src/net/ca_certs/`, rebuild.
@@ -355,8 +355,22 @@ pub fn verify_chain(
     }
 }
 
-/// Verify that `parent` signed `child`.  Today: ECDSA P-256 + SHA-256 only;
-/// other algorithms return `UnsupportedSigAlg`.
+/// Verify that `parent` signed `child`.
+///
+/// STUMP #140: was ECDSA-P256-only. Now dispatches on the child's
+/// `signatureAlgorithm` OID (NOT just the parent's pubkey alg) and
+/// supports:
+///   * 1.2.840.10045.4.3.2  ecdsa-with-SHA256   (ECDSA P-256 leaf sigs)
+///   * 1.2.840.10045.4.3.3  ecdsa-with-SHA384   (ECDSA P-384 leaf sigs)
+///   * 1.2.840.113549.1.1.11 sha256WithRSAEncryption (PKCS#1 v1.5 RSA)
+///   * 1.2.840.113549.1.1.12 sha384WithRSAEncryption
+///   * 1.2.840.113549.1.1.13 sha512WithRSAEncryption
+///   * 1.2.840.113549.1.1.10 RSASSA-PSS         (RSA-PSS — caller picks
+///                                                hash from PSS params)
+///
+/// Other algorithms return `UnsupportedSigAlg`. This unlocks the three
+/// RSA roots embedded by STUMP #139 (Amazon, DigiCert ×2) plus the
+/// ECDSA-P384 ISRG Root X2.
 fn verify_signed_by(
     child: &Certificate,
     child_der: &[u8],
@@ -367,22 +381,71 @@ fn verify_signed_by(
     // TBS bytes to sign: re-encode the tbsCertificate field.
     let tbs = child.tbs_certificate.to_der().map_err(|_| VerifyError::Parse)?;
 
-    // Signature bytes from the child.
-    // `signature` field is BIT STRING in DER; re-decode via x509-cert so
-    // we don't hand-parse the outer Certificate ourselves.
+    // Re-decode the outer Certificate so we can read sigAlgo + sigBytes.
     let cert = parse_cert(child_der)?;
     let sig_bytes = cert.signature.raw_bytes();
+    let sig_oid_raw = cert.signature_algorithm.oid;
+    let sig_oid = sig_oid_raw.as_bytes();
 
-    let digest = crate::crypto::sig::sha256_digest(&tbs);
+    // Parent SPKI bytes — ECDSA paths take this raw, RSA paths need to
+    // strip the SPKI wrapper to get the inner RsaPublicKey.
+    let parent_spki = parent.tbs_certificate.subject_public_key_info
+        .subject_public_key.raw_bytes();
 
-    match pubkey_alg(parent) {
-        PubkeyAlg::EcdsaP256 => {
-            let parent_spki = parent.tbs_certificate.subject_public_key_info
-                .subject_public_key.raw_bytes();
-            crate::crypto::sig::ecdsa_p256_verify(parent_spki, &digest, sig_bytes)
-                .map_err(|_| VerifyError::BadSignature)
+    // OID numeric form for matching (avoids importing const_oid::db
+    // tables for every variant — these are short and stable).
+    // 1.2.840.10045.4.3.2  = 0x2A 0x86 0x48 0xCE 0x3D 0x04 0x03 0x02
+    // 1.2.840.10045.4.3.3  = 0x2A 0x86 0x48 0xCE 0x3D 0x04 0x03 0x03
+    // 1.2.840.113549.1.1.11 = 0x2A 0x86 0x48 0x86 0xF7 0x0D 0x01 0x01 0x0B
+    // 1.2.840.113549.1.1.12 = ... 0x0C
+    // 1.2.840.113549.1.1.13 = ... 0x0D
+    // 1.2.840.113549.1.1.10 = ... 0x0A  (RSASSA-PSS)
+    const ECDSA_SHA256: &[u8] = &[0x2A,0x86,0x48,0xCE,0x3D,0x04,0x03,0x02];
+    const ECDSA_SHA384: &[u8] = &[0x2A,0x86,0x48,0xCE,0x3D,0x04,0x03,0x03];
+    const RSA_PKCS1V15_SHA256: &[u8] =
+        &[0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x01,0x0B];
+    const RSA_PKCS1V15_SHA384: &[u8] =
+        &[0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x01,0x0C];
+    const RSA_PKCS1V15_SHA512: &[u8] =
+        &[0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x01,0x0D];
+    const RSA_PSS:           &[u8] =
+        &[0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x01,0x0A];
+
+    if sig_oid == ECDSA_SHA256 {
+        let digest = crate::crypto::sig::sha256_digest(&tbs);
+        crate::crypto::sig::ecdsa_p256_verify(parent_spki, &digest, sig_bytes)
+            .map_err(|_| VerifyError::BadSignature)
+    } else if sig_oid == ECDSA_SHA384 {
+        let digest = crate::crypto::sig::sha384_digest(&tbs);
+        crate::crypto::sig::ecdsa_p384_verify(parent_spki, &digest, sig_bytes)
+            .map_err(|_| VerifyError::BadSignature)
+    } else if sig_oid == RSA_PKCS1V15_SHA256 {
+        // RSA pubkey is wrapped in BIT STRING within SPKI; the inner
+        // bytes are the DER-encoded RSAPublicKey. `subject_public_key`
+        // already gave us the inner bytes.
+        crate::crypto::sig::rsa_pkcs1v15_sha256_verify(parent_spki, &tbs, sig_bytes)
+            .map_err(|_| VerifyError::BadSignature)
+    } else if sig_oid == RSA_PKCS1V15_SHA384 {
+        crate::crypto::sig::rsa_pkcs1v15_sha384_verify(parent_spki, &tbs, sig_bytes)
+            .map_err(|_| VerifyError::BadSignature)
+    } else if sig_oid == RSA_PKCS1V15_SHA512 {
+        crate::crypto::sig::rsa_pkcs1v15_sha512_verify(parent_spki, &tbs, sig_bytes)
+            .map_err(|_| VerifyError::BadSignature)
+    } else if sig_oid == RSA_PSS {
+        // PSS hash + salt are encoded in `signature_algorithm.parameters`.
+        // For the common case (which is what real CAs use), the hash is
+        // SHA-256 and salt-len = hash-len. Try SHA-256 first, then 384/512.
+        // A spec-strict impl would parse the parameters; we fall through.
+        if crate::crypto::sig::rsa_pss_sha256_verify(parent_spki, &tbs, sig_bytes).is_ok() {
+            return Ok(());
         }
-        _ => Err(VerifyError::UnsupportedSigAlg),
+        if crate::crypto::sig::rsa_pss_sha384_verify(parent_spki, &tbs, sig_bytes).is_ok() {
+            return Ok(());
+        }
+        crate::crypto::sig::rsa_pss_sha512_verify(parent_spki, &tbs, sig_bytes)
+            .map_err(|_| VerifyError::BadSignature)
+    } else {
+        Err(VerifyError::UnsupportedSigAlg)
     }
 }
 
@@ -408,12 +471,77 @@ pub fn tls13_verify_cert_verify(
     msg.push(0x00);
     msg.extend_from_slice(transcript_hash);
 
+    // STUMP #140: dispatch every standard TLS 1.3 SignatureScheme that
+    // a CA might issue a leaf cert with. Per RFC 8446 §4.4.3, ONLY the
+    // PSS schemes are valid for CertificateVerify (PKCS#1v1.5 was
+    // removed) — but cert chain validation in `verify_signed_by` still
+    // accepts PKCS#1v1.5 because that's how CAs sign certs themselves.
     match (pubkey_alg, tls_sig_scheme) {
         // ecdsa_secp256r1_sha256 = 0x0403
         (PubkeyAlg::EcdsaP256, 0x0403) => {
             let digest = crate::crypto::sig::sha256_digest(&msg);
             cert_verify_ecdsa_p256(pubkey_der, &digest, sig_bytes)
         }
+        // ecdsa_secp384r1_sha384 = 0x0503
+        (PubkeyAlg::EcdsaP384, 0x0503) => {
+            let digest = crate::crypto::sig::sha384_digest(&msg);
+            cert_verify_ecdsa_p384(pubkey_der, &digest, sig_bytes)
+        }
+        // rsa_pss_rsae_sha256 = 0x0804
+        (PubkeyAlg::Rsa, 0x0804) => {
+            cert_verify_rsa_pss_sha256(pubkey_der, &msg, sig_bytes)
+        }
+        // rsa_pss_rsae_sha384 = 0x0805
+        (PubkeyAlg::Rsa, 0x0805) => {
+            cert_verify_rsa_pss_sha384(pubkey_der, &msg, sig_bytes)
+        }
+        // rsa_pss_rsae_sha512 = 0x0806
+        (PubkeyAlg::Rsa, 0x0806) => {
+            cert_verify_rsa_pss_sha512(pubkey_der, &msg, sig_bytes)
+        }
         _ => Err(VerifyError::UnsupportedSigAlg),
     }
+}
+
+/// Helper: ECDSA P-384 prehash verify against an SPKI-wrapped pubkey.
+fn cert_verify_ecdsa_p384(spki_der: &[u8], digest: &[u8; 48], sig: &[u8])
+    -> Result<(), VerifyError>
+{
+    // Strip the SPKI wrapper to get the bare uncompressed point.
+    let spki = spki::SubjectPublicKeyInfoOwned::try_from(spki_der)
+        .map_err(|_| VerifyError::Parse)?;
+    let point = spki.subject_public_key.raw_bytes();
+    crate::crypto::sig::ecdsa_p384_verify(point, digest, sig)
+        .map_err(|_| VerifyError::BadSignature)
+}
+
+/// Helper: RSA-PSS verify (SHA-256) against an SPKI-wrapped RSA pubkey.
+fn cert_verify_rsa_pss_sha256(spki_der: &[u8], msg: &[u8], sig: &[u8])
+    -> Result<(), VerifyError>
+{
+    let spki = spki::SubjectPublicKeyInfoOwned::try_from(spki_der)
+        .map_err(|_| VerifyError::Parse)?;
+    let inner = spki.subject_public_key.raw_bytes();
+    crate::crypto::sig::rsa_pss_sha256_verify(inner, msg, sig)
+        .map_err(|_| VerifyError::BadSignature)
+}
+
+fn cert_verify_rsa_pss_sha384(spki_der: &[u8], msg: &[u8], sig: &[u8])
+    -> Result<(), VerifyError>
+{
+    let spki = spki::SubjectPublicKeyInfoOwned::try_from(spki_der)
+        .map_err(|_| VerifyError::Parse)?;
+    let inner = spki.subject_public_key.raw_bytes();
+    crate::crypto::sig::rsa_pss_sha384_verify(inner, msg, sig)
+        .map_err(|_| VerifyError::BadSignature)
+}
+
+fn cert_verify_rsa_pss_sha512(spki_der: &[u8], msg: &[u8], sig: &[u8])
+    -> Result<(), VerifyError>
+{
+    let spki = spki::SubjectPublicKeyInfoOwned::try_from(spki_der)
+        .map_err(|_| VerifyError::Parse)?;
+    let inner = spki.subject_public_key.raw_bytes();
+    crate::crypto::sig::rsa_pss_sha512_verify(inner, msg, sig)
+        .map_err(|_| VerifyError::BadSignature)
 }
