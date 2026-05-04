@@ -57,12 +57,22 @@ fn next_local_port() -> u16 {
 
 // DoH server (Cloudflare) — used when DoH is enabled
 const DOH_SERVER: u32 = 0x01010101; // 1.1.1.1
-const DOH_PORT: u16 = 80; // Use HTTP (port 80) since TLS handshake needs more work
-// When TLS is fully wired, switch to port 443
+// STUMP #143: was 80 (raw HTTP) with a comment "Use HTTP (port 80)
+// since TLS handshake needs more work". Now 443 — TLS-1.3 handshake
+// is wired (STUMP #140 added RSA + ECDSA-P384 verify, STUMP #139
+// populated TRUST_STORE with DigiCert + LE roots that anchor
+// Cloudflare's cert chain). DoH now actually authenticates the
+// resolver, which is the whole security premise of DoH.
+const DOH_PORT: u16 = 443;
 
-static DOH_ENABLED: AtomicBool = AtomicBool::new(false); // disabled until TLS handshake is complete
+// STUMP #143: default DoH ON. The audit caught plaintext-DNS-by-default
+// as a real leak — every hostname lookup sent in cleartext to the
+// QEMU/slirp gateway. With DoH enabled, lookups go encrypted +
+// authenticated to 1.1.1.1. Plaintext UDP stays as the fallback path
+// for when DoH fails (TLS handshake error, port 443 blocked, etc.).
+static DOH_ENABLED: AtomicBool = AtomicBool::new(true);
 
-/// Enable or disable DNS-over-HTTPS.
+/// Enable or disable DNS-over-HTTPS. Default is ON (STUMP #143).
 pub fn set_doh(enabled: bool) {
     DOH_ENABLED.store(enabled, Ordering::Relaxed);
 }
@@ -282,11 +292,16 @@ pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
     Err("DNS timeout")
 }
 
-/// Resolve via DNS-over-HTTPS (sends DNS wire format over HTTP POST).
-/// Falls back to plaintext if DoH fails.
+/// Resolve via DNS-over-HTTPS — TLS-wrapped POST to the DoH endpoint.
+/// STUMP #143: was raw HTTP on port 80 because TLS wasn't ready. Now
+/// uses the same TLS-1.3 stack that browser fetches use, with strict
+/// cert validation against the embedded TRUST_STORE (STUMP #139's
+/// DigiCert + Let's Encrypt + Amazon roots cover Cloudflare). On TLS
+/// failure we don't degrade to plaintext-DNS — the caller falls back,
+/// and the operator sees the audit-log warning.
 fn resolve_doh(hostname: &str) -> Result<u32, &'static str> {
     // Build the DNS wire-format query (same as plaintext).
-    // DoH runs over TCP so TXID spoofing is not the same threat, but we
+    // DoH runs over TCP+TLS so TXID spoofing isn't the threat, but we
     // still randomize it (no reason not to) and verify the response.
     let mut query = [0u8; 512];
     let txid = next_txid();
@@ -306,9 +321,24 @@ fn resolve_doh(hostname: &str) -> Result<u32, &'static str> {
     query[qlen..qlen + 2].copy_from_slice(&1u16.to_be_bytes()); qlen += 2; // Type A
     query[qlen..qlen + 2].copy_from_slice(&1u16.to_be_bytes()); qlen += 2; // Class IN
 
-    // TCP connect to DoH server
+    // TCP connect to DoH server (1.1.1.1:443).
     if super::tcp::connect(DOH_SERVER, DOH_PORT).is_err() {
         return Err("DoH connect failed");
+    }
+
+    // STUMP #143: TLS handshake against Cloudflare's `1.1.1.1` cert.
+    // Cloudflare's cert SAN list includes the bare IP `1.1.1.1`, so
+    // `tls::handshake("1.1.1.1")` validates correctly under our
+    // TRUST_STORE without needing research-mode relaxation. On
+    // failure we close TCP + audit-log so an operator can see why
+    // DoH degraded.
+    if let Err(e) = super::tls::handshake("1.1.1.1") {
+        super::tcp::close();
+        crate::security::audit::record(
+            crate::security::audit::Category::Cave,
+            b"DoH TLS handshake failed; falling back to plaintext DNS",
+        );
+        return Err(e);
     }
 
     // Build HTTP POST request
@@ -337,15 +367,18 @@ fn resolve_doh(hostname: &str) -> Result<u32, &'static str> {
     http[hlen..hlen + qlen].copy_from_slice(&query[..qlen]);
     hlen += qlen;
 
-    // Send HTTP request
-    if super::tcp::send_data(&http[..hlen]).is_err() {
+    // STUMP #143: send through TLS, not raw TCP.
+    if super::tls::send_app_data(&http[..hlen]).is_err() {
+        super::tls::close();
         super::tcp::close();
         return Err("DoH send failed");
     }
 
-    // Receive HTTP response
+    // Receive HTTP response (TLS-decrypted).
     let mut resp = [0u8; 1024];
-    match super::tcp::recv_data(&mut resp) {
+    let recv_result = super::tls::recv_app_data(&mut resp);
+    super::tls::close();
+    match recv_result {
         Ok(n) => {
             super::tcp::close();
 
