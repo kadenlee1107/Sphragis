@@ -38,17 +38,55 @@ use core::convert::TryFrom;
 use x509_cert::Certificate;
 use x509_cert::der::{Decode, Encode};
 
-/// Hard-coded trust anchors. Currently empty so fresh dev builds fall
-/// back to the pin-based defence. Populate with DER-encoded root certs
-/// to enable full chain validation.
+/// Hard-coded trust anchors — embedded DER bytes of curated major
+/// public CA roots.
 ///
-/// Layout of each entry: raw DER bytes of a self-signed CA certificate.
-/// The `TrustStore::contains` check compares the subject public-key
-/// bytes for the issuer lookup, so duplicates of the same CA with
-/// different extensions are treated as one.
+/// STUMP #139: This used to be empty, which made the audit's verdict
+/// ("TLS authentication is theater") literally true — chain validation
+/// always returned UntrustedRoot, so HTTPS got us encrypted-but-
+/// unauthenticated bytes vs an active MITM. Now populated with a
+/// minimal-but-meaningful starter set sourced from each CA's official
+/// publication endpoint:
+///
+///   * ISRG Root X1 — RSA 4096 — Let's Encrypt's primary root.
+///     Anchors a huge chunk of public HTTPS (Cloudflare-fronted sites,
+///     GitHub Pages, basically every site that auto-issues with LE).
+///   * ISRG Root X2 — ECDSA P-384 — Let's Encrypt's modern ECDSA
+///     root, used by sites that opted into ECDSA leaf certs.
+///   * Amazon Root CA 1 — RSA 2048 — anchors AWS-hosted services and
+///     anything fronted by Amazon.com.
+///   * DigiCert Global Root CA — RSA 2048 — anchors a large fraction
+///     of enterprise + financial sites.
+///   * DigiCert Global Root G2 — RSA 2048 — DigiCert's modern root,
+///     used by Google's intermediate CA chain among others.
+///
+/// `TrustStore::contains` compares subject public-key bytes for the
+/// issuer lookup, so this set covers a meaningful slice of the public
+/// web. A full Mozilla CA bundle (~150 roots) is a follow-up STUMP —
+/// this five-entry set is enough to verify the most common chains and
+/// move the audit's "theater" verdict.
+///
+/// **RSA support note:** as of STUMP #139, `verify_chain` still only
+/// supports ECDSA-P256/P384 leaf signatures (`crypto/sig.rs`). Three of
+/// these roots are RSA, so they only validate ECDSA-leaf chains today
+/// (LE issues both). RSA leaf signature verify is STUMP #140 — when
+/// that lands, this trust store gates real coverage. Until then,
+/// ECDSA-leaf chains under ISRG X1 / X2 work; pure RSA chains return
+/// `UnsupportedSigAlg` and fall through to pin-based defence.
+///
+/// Refresh procedure: each CA publishes their root cert via a stable
+/// URL listed below. Re-fetch, drop into `src/net/ca_certs/`, rebuild.
 pub static TRUST_STORE: &[&[u8]] = &[
-    // Populate with real DER-encoded root certs at deployment.
-    // Example: include_bytes!("../../security/roots/lets-encrypt-r11.der")
+    // https://letsencrypt.org/certs/isrgrootx1.der
+    include_bytes!("ca_certs/isrg_root_x1.der"),
+    // https://letsencrypt.org/certs/isrg-root-x2.der
+    include_bytes!("ca_certs/isrg_root_x2.der"),
+    // https://www.amazontrust.com/repository/AmazonRootCA1.cer
+    include_bytes!("ca_certs/amazon_root_ca1.der"),
+    // https://cacerts.digicert.com/DigiCertGlobalRootCA.crt
+    include_bytes!("ca_certs/digicert_global_root_ca.der"),
+    // https://cacerts.digicert.com/DigiCertGlobalRootG2.crt
+    include_bytes!("ca_certs/digicert_global_root_g2.der"),
 ];
 
 /// Outcome of chain validation.
