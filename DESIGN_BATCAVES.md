@@ -89,6 +89,45 @@ batcave seal <name>          # persistent → ephemeral (one-way, irreversible)
 - **Seal** (`batcave seal`): downgrades persistent → ephemeral. ONE-WAY. Cannot be reversed. Anti-coercion design.
 - **No limit** on concurrent BatCaves — hardware decides
 
+### Persistence implementation (STUMP #135)
+
+The "survives reboots" guarantee is implemented in `src/batcave/persist.rs`.
+Each Persistent cave is mirrored to BatFS as a `__cave__<name>` manifest
+file (encrypted by BatFS itself with the boot master key). The manifest
+captures the exact subset of `BatCave` state that needs to survive:
+
+- name, cave_type, backing (Native/Docker), image (for Docker)
+- granted capabilities, installed tools
+
+Fields that DO NOT persist (re-derived/re-allocated each boot):
+
+- `state` — caves wake up `Stopped`; running state is process-level
+- `fs_key` — deterministic from `(boot master_key, name)`, so the
+  cave's existing BatFS data still decrypts after restore
+- `display_x/y/w/h` — re-allocated by `batcave enter`
+
+Mutation hooks: `create`, `create_docker`, `grant_cap`, `revoke_cap`,
+`install_tool` all call `persist::save()` after they touch RAM. `seal`
+and `destroy` call `persist::delete()`. `destroy_all` (deadman / duress
+/ panic / wipe) deletes every manifest before zeroing the in-RAM table
+— a wipe must take out the registry too, otherwise the next boot
+resurrects everything.
+
+`cave::init` calls `persist::restore_all()` after `batfs::init`
+unlocks the filesystem with the operator passphrase. Each manifest
+that decrypts cleanly (Poly1305 tag matches) is reinstalled into a
+free `CAVES[]` slot. Tampered manifests are silently skipped — BatFS
+returns `INTEGRITY VIOLATION` and the entry stays out.
+
+### Anti-coercion property of seal
+
+Seal must hold across reboots, not just within a single boot. If a
+sealed cave's manifest survived to disk, an attacker who panicked the
+operator into sealing → rebooted the box would see the original
+Persistent cave reincarnate. `persist::delete(name)` inside `seal()`
+makes the ratchet permanent: once sealed, the cave is gone from disk
+forever.
+
 ## BatCave Manager (6th Desktop App)
 
 Shows all BatCaves, status, type, installed tools, granted capabilities, active sessions. Full visual management alongside terminal commands.

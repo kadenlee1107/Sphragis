@@ -233,6 +233,15 @@ pub fn active_has_cap(cap: &str) -> bool {
 
 pub fn init() {
     INITIALIZED.store(true, Ordering::Relaxed);
+
+    // STUMP #135: restore persistent caves from BatFS. Runs AFTER
+    // `fs::batfs::init` (see main.rs ordering) so the filesystem is
+    // already unlocked with the operator's passphrase. Each cave whose
+    // manifest survives the boot is reinstalled into CAVES[] in
+    // CaveState::Stopped — the operator brings it back up with
+    // `batcave enter <name>` if they want to attach.
+    let restored = crate::batcave::persist::restore_all();
+    CAVE_COUNT.store(restored as u8, Ordering::Relaxed);
 }
 
 /// Ensure an "ambient" BatCave is active for the shell-launched ELF runner
@@ -381,6 +390,12 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
             &buf[..p],
         );
 
+        // STUMP #135: write the cave manifest to BatFS so the registry
+        // entry survives reboot. No-op for Ephemeral caves. Native /
+        // Docker caves both go through this — `create_docker` re-saves
+        // afterwards with the upgraded backing+image fields.
+        crate::batcave::persist::save(&CAVES[slot]);
+
         Ok(slot)
     }
 }
@@ -413,6 +428,11 @@ pub fn create_docker(name: &str, image: &str, ephemeral: bool)
         name,
         alloc::vec::Vec::new(),
     );
+    // STUMP #135: re-save manifest now that backing=Docker + image are
+    // populated. The first save() inside create() captured a Native
+    // baseline; this overwrites with the docker-aware version so the
+    // cave wakes up correctly from disk.
+    unsafe { crate::batcave::persist::save(&CAVES[slot]); }
     Ok(slot)
 }
 
@@ -438,6 +458,9 @@ pub fn install_tool(name: &str, tool: &str) -> Result<(), &'static str> {
     t.name_len = len;
     cave.tool_count += 1;
 
+    // STUMP #135: refresh manifest so installed tools survive reboot.
+    crate::batcave::persist::save(cave);
+
     Ok(())
 }
 
@@ -461,6 +484,9 @@ pub fn grant_cap(name: &str, cap: &str) -> Result<(), &'static str> {
     c.name_len = len;
     cave.cap_count += 1;
 
+    // STUMP #135: refresh manifest so granted caps survive reboot.
+    crate::batcave::persist::save(cave);
+
     Ok(())
 }
 
@@ -471,6 +497,10 @@ pub fn revoke_cap(name: &str, cap: &str) -> Result<(), &'static str> {
     for i in 0..cave.cap_count {
         if cave.caps[i].active && cave.caps[i].name_str() == cap {
             cave.caps[i].active = false;
+            // STUMP #135: refresh manifest so revoked caps don't reappear
+            // on reboot. The caps slot stays in place (active=false) so
+            // existing code paths don't shift indices mid-iteration.
+            crate::batcave::persist::save(cave);
             return Ok(());
         }
     }
@@ -674,6 +704,15 @@ pub fn seal(name: &str) -> Result<(), &'static str> {
     let cave = find_mut(name)?;
     cave.fs_key = [0; 32];
     cave.cave_type = CaveType::Ephemeral;
+
+    // STUMP #135: a sealed cave is no longer Persistent — drop its
+    // manifest so it doesn't reincarnate as Persistent on next boot.
+    // The seal ratchet must hold across reboots too; otherwise an
+    // attacker who panics → coerces a seal → reboots the box would
+    // see the original Persistent cave back. Anti-coercion is the
+    // entire point of seal, so this delete is non-negotiable.
+    crate::batcave::persist::delete(name);
+
     Ok(())
 }
 
@@ -787,6 +826,11 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
         &buf[..p],
     );
 
+    // STUMP #135: drop the persisted manifest so the cave stays
+    // destroyed across reboots. Idempotent — silently does nothing if
+    // the cave was Ephemeral and never had a manifest.
+    crate::batcave::persist::delete(name);
+
     Ok(())
 }
 
@@ -828,6 +872,31 @@ pub fn destroy_all() {
                 crate::drivers::uart::puts(e);
                 crate::drivers::uart::puts(" (daemon unreachable?)\n");
             }
+        }
+    }
+
+    // STUMP #135: take down persisted manifests first, BEFORE we zero
+    // the in-RAM names. After the loop below `name_len = 0` so the
+    // names would be unrecoverable. Wipe events (deadman/duress/panic)
+    // must clear the manifests too — otherwise the next boot would
+    // resurrect every cave from disk and the wipe would have done
+    // nothing useful for the cave registry.
+    unsafe {
+        let mut name_buf = [[0u8; MAX_NAME]; MAX_CAVES];
+        let mut name_lens = [0usize; MAX_CAVES];
+        let mut count = 0usize;
+        for i in 0..MAX_CAVES {
+            if CAVES[i].state != CaveState::Free
+               && CAVES[i].cave_type == CaveType::Persistent {
+                let nl = CAVES[i].name_len.min(MAX_NAME);
+                name_buf[count][..nl].copy_from_slice(&CAVES[i].name[..nl]);
+                name_lens[count] = nl;
+                count += 1;
+            }
+        }
+        for i in 0..count {
+            let name = core::str::from_utf8_unchecked(&name_buf[i][..name_lens[i]]);
+            crate::batcave::persist::delete(name);
         }
     }
 

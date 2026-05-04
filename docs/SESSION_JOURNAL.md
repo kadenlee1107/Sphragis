@@ -11,6 +11,82 @@ end of a session.
 
 ---
 
+## 2026-05-04 — Mac — 🎯 STUMP #135: cave persistence (PERSISTENT now means persistent).
+
+User caught a real spec ↔ implementation mismatch while testing the
+Wave-4 BC redesign: `batcave create test` showed `TYPE PERSISTENT`,
+but the cave didn't survive a reboot. Their phrasing — "if we planned
+it it needs to be working" — set the bar.
+
+**Diagnosis:**
+
+`DESIGN_BATCAVES.md` line 87 says "Persistent (default): survives
+reboots, tools stay installed". But `CAVES: [BatCave; MAX_CAVES]` was
+a static-mut RAM array with no save/load wiring — every reboot
+started with an empty cave table. The encrypted BatFS data for each
+cave survived (per-cave `fs_key` is deterministic from boot
+master_key + name), but the registry that knew the caves existed
+didn't, so those files became orphans.
+
+**Implementation:**
+
+New module `src/batcave/persist.rs` — 280 lines. Each Persistent
+cave now mirrors to BatFS as `__cave__<name>` (encrypted by BatFS
+itself with the operator passphrase-derived master key). The
+manifest is a fixed 2048-byte binary blob with stable v1 offsets:
+
+- header (magic + version)
+- name (32) + backing (1) + image (64)
+- caps array (16 × 49) + tools array (32 × 33)
+- trailing reserved bytes for future v2 extensions
+
+Lifecycle hooks in `cave.rs`:
+
+- `create` / `create_docker` → `persist::save()`
+- `grant_cap` / `revoke_cap` / `install_tool` → `persist::save()`
+- `seal` → `persist::delete()` (anti-coercion: ratchet must hold
+  across reboots, otherwise an attacker who panicked the operator
+  into sealing → rebooted the box would see the original Persistent
+  cave reincarnate)
+- `destroy` → `persist::delete()`
+- `destroy_all` (deadman / duress / panic / wipe) → delete every
+  manifest BEFORE zeroing RAM
+- `init` → `restore_all()` after `batfs::init` unlocks the FS
+
+**Things that DO NOT persist** (re-derived per boot): `state` (caves
+wake Stopped), `fs_key` (deterministic from name + master), display
+sandbox (re-allocated by `batcave enter`).
+
+**Verification path for the user:**
+
+1. `batcave create test`
+2. `batcave grant test fs`
+3. Reboot Bat_OS
+4. Re-enter passphrase to unlock BatFS
+5. Open BC tab → `test` should be back with `[FS]` lit and `CAPS  FS`
+
+**Doc updates:**
+
+- `DESIGN_BATCAVES.md` got a "Persistence implementation" section
+  under Lifecycle Rules pointing at the module + hook list, plus a
+  call-out for the seal-across-reboot anti-coercion property.
+
+**State of the tree:**
+
+- Build clean (236 warnings, all pre-existing).
+- Wave 4 visual redesign + cave persistence both shipped. The whole
+  BatCave system now matches the spec end-to-end.
+
+**What's next:**
+
+User-facing: try the verification path above and confirm `test`
+survives a reboot. If anything's off (manifests not picked up,
+caps revert, etc.) the most likely culprit is `cave::init` running
+before BatFS is fully unlocked — but `main.rs` currently orders
+`batfs::init` before `cave::init`, so it should be fine.
+
+---
+
 ## 2026-04-30 — Mac — 🎯 STUMP #111 audit-fix sweep (35 vulnerabilities patched across 5 batches).
 
 Continuation of the prior session's adversarial audit. The audit
