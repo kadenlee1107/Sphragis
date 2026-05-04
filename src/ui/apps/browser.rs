@@ -1490,9 +1490,11 @@ pub fn render() {
         y += 24;
     }
 
-    // ═══════════════════════════════════════════
-    // BOOKMARKS BAR
-    // ═══════════════════════════════════════════
+    // STUMP #133: OLD bookmarks bar — replaced by the Wave-4
+    // bookmarks bar at the top of render(). Gated out so it
+    // doesn't paint a second strip of stale bookmarks below the
+    // new chrome.
+    #[cfg(any())]
     if y + 18 < ymax {
         gpu::fill_rect(x, y, content_w, 18, BOOKMARK_BG);
         gpu::fill_rect(x, y + 17, content_w, 1, BORDER);
@@ -1501,7 +1503,6 @@ pub fn render() {
             let mut bmx = x + 4;
             for i in 0..BM_COUNT.min(6) {
                 let bm = core::str::from_utf8_unchecked(&BOOKMARKS[i][..BM_LENS[i]]);
-                // Extract short domain name for display
                 let display = if let Some(start) = bm.find("://") {
                     let after = &bm[start + 3..];
                     let end = after.find('/').unwrap_or(after.len());
@@ -1510,10 +1511,8 @@ pub fn render() {
                     bm
                 };
                 let short = if display.len() > 14 { &display[..14] } else { display };
-
                 font::draw_str(fb, w, bmx, y + 1, short, DIM, BOOKMARK_BG);
                 bmx += (short.len() as u32) * 8 + 16;
-
                 if bmx > x + content_w - 40 { break; }
             }
         }
@@ -1527,19 +1526,31 @@ pub fn render() {
     // ─── Page Content ───
     unsafe {
         if STATE == BrowserState::Idle {
+            // STUMP #133: Wave-4 idle state — centered faint
+            // "[ enter a url to render ]" placeholder matching the
+            // FS / CM empty-state typography.
             if y + ln < ymax {
-                font::draw_str(fb, w, x + 8, y + 40, "BatBrowser v1.0", FG_HI, BG);
-                font::draw_str(fb, w, x + 8, y + 60, "Type a URL and press Enter", DIM, BG);
-                font::draw_str(fb, w, x + 8, y + 80, "e.g. http://example.com/", DIM, BG);
+                let msg = "[ enter a url to render ]";
+                let msg_w = msg.len() as u32 * 8;
+                let cx = x + (content_w.saturating_sub(msg_w)) / 2;
+                let cy = y + (ymax - y) / 2 - 8;
+                font::draw_str(fb, w, cx, cy, msg, DIM, BG);
             }
         } else if STATE == BrowserState::Loading {
             if y + ln < ymax {
-                font::draw_str(fb, w, x + 8, y + 40, "Loading...", FG_HI, BG);
+                let msg = "[ loading . framebuffer pending ]";
+                let msg_w = msg.len() as u32 * 8;
+                let cx = x + (content_w.saturating_sub(msg_w)) / 2;
+                let cy = y + (ymax - y) / 2 - 8;
+                font::draw_str(fb, w, cx, cy, msg, DIM, BG);
             }
         } else if STATE == BrowserState::Error {
             if y + ln < ymax {
                 let msg = core::str::from_utf8_unchecked(&STATUS_MSG[..STATUS_LEN]);
-                font::draw_str(fb, w, x + 8, y + 40, msg, RED, BG);
+                let msg_w = msg.len() as u32 * 8;
+                let cx = x + (content_w.saturating_sub(msg_w)) / 2;
+                let cy = y + (ymax - y) / 2 - 8;
+                font::draw_str(fb, w, cx, cy, msg, RED, BG);
             }
         } else if USE_ENGINE && (*core::ptr::addr_of!(LAYOUT_TREE)).box_count > 0
             && PAGE_LEN < 200 // Use Level 2 only for simple pages; Level 1 is better for complex ones
