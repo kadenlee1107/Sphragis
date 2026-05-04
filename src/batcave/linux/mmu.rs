@@ -443,6 +443,138 @@ pub fn setup_cave_pagetable_at(
     Ok(l1)
 }
 
+/// STUMP #145: build a per-cave L1 for a NATIVE BatCave (kernel-only,
+/// no user window, no EL0 code).
+///
+/// `setup_cave_pagetable_at` above is built for the Linux ELF runner —
+/// it maps a 400 MB EL0-RW user window in L2_low for the loaded ELF.
+/// Native caves don't load ELFs; they're tagged kernel-side workloads.
+/// We still want each native cave to have its own L1 so:
+///
+///   1. The audit's "memory isolation is fiction for native caves"
+///      verdict closes — every native cave gets a distinct TTBR0.
+///   2. TLB entries don't bleed between caves (every cave-switch
+///      flushes via `tlbi vmalle1`).
+///   3. When future work loads cave-specific code/data into native
+///      caves, the L1 is already plumbed.
+///
+/// Layout (kernel-only):
+///
+///   L1[0] → L2_low  (MMIO entries only, no user blocks)
+///   L1[1] → L2_high (kernel identity 0x40000000..0x80000000)
+///   L1[2] → L2_xhi  (kernel identity 0x80000000..0xC0000000)
+///   L1[3] → L2_xxhi (kernel identity 0xC0000000..0x100000000)
+///   L1[4] → L2_xxxhi(kernel identity 0x100000000..0x140000000)
+///
+/// MMIO must live in L2_low because UART (0x08000000) + virtio
+/// (0x0A000000..) are below 1 GB. Without this, a kernel UART write
+/// while a cave is active translation-faults. Existing
+/// setup_cave_pagetable_at handles MMIO the same way.
+///
+/// The user window (0..0x40000000 except MMIO) stays unmapped, so
+/// any EL0 access from this cave faults. That's the desired posture
+/// for a native cave: there's no EL0 code today, but if anything
+/// tries to drop to EL0 by mistake, the MMU stops it.
+pub fn setup_native_cave_l1(cave_slot: usize) -> Result<usize, &'static str> {
+    if cave_slot >= MAX_CAVE_PAGETABLES {
+        return Err("too many cave page tables");
+    }
+
+    // V2-001/V2-040: page-table frames come from the kernel-only pool
+    // so a future user mapping can never alias them.
+    let l1     = frame::alloc_kernel_frame().ok_or("oom for native cave L1")?;
+    let l2_low = frame::alloc_kernel_frame().ok_or("oom for native cave L2_low")?;
+    let l2_high  = frame::alloc_kernel_frame().ok_or("oom for native cave L2_high")?;
+    let l2_xhi   = frame::alloc_kernel_frame().ok_or("oom for native cave L2_xhi")?;
+    let l2_xxhi  = frame::alloc_kernel_frame().ok_or("oom for native cave L2_xxhi")?;
+    let l2_xxxhi = frame::alloc_kernel_frame().ok_or("oom for native cave L2_xxxhi")?;
+
+    // Zero every table.
+    for table in [l1, l2_low, l2_high, l2_xhi, l2_xxhi, l2_xxxhi] {
+        for i in 0..(PAGE_SIZE / 8) {
+            unsafe { core::arch::asm!("str xzr, [{a}]", a = in(reg) table + i * 8); }
+        }
+    }
+
+    // L1 entries.
+    write_pte(l1, 0, l2_low   as u64 | TABLE_DESC);
+    write_pte(l1, 1, l2_high  as u64 | TABLE_DESC);
+    write_pte(l1, 2, l2_xhi   as u64 | TABLE_DESC);
+    write_pte(l1, 3, l2_xxhi  as u64 | TABLE_DESC);
+    write_pte(l1, 4, l2_xxxhi as u64 | TABLE_DESC);
+
+    // MMIO into L2_low (matches setup_cave_pagetable_at's MMIO list).
+    // EL1 can read/write; EL0 faults (BLOCK_DEVICE has no EL0 AP bit).
+    for mmio in [0x08000000, 0x09000000, 0x0A000000, 0x0A200000, 0x0A400000] {
+        write_pte(l2_low, mmio / 0x200000, mmio as u64 | BLOCK_DEVICE);
+    }
+
+    // Kernel identity into L2_high..L2_xxxhi (mirror of setup_cave_pagetable_at).
+    let text_end = text_end_addr();
+    let kblk = |addr: u64| -> u64 {
+        if addr + 0x200000 <= text_end {
+            BLOCK_KERNEL_TEXT
+        } else {
+            PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL
+                | PTE_AP_EL1_RW | PTE_UXN
+        }
+    };
+    for block in 0..512 {
+        let addr = 0x40000000u64 + (block as u64) * 0x200000;
+        write_pte(l2_high, block, addr | kblk(addr));
+    }
+    for block in 0..512 {
+        let addr = 0x80000000u64 + (block as u64) * 0x200000;
+        write_pte(l2_xhi, block, addr | kblk(addr));
+    }
+    for block in 0..512 {
+        let addr = 0xC0000000u64 + (block as u64) * 0x200000;
+        write_pte(l2_xxhi, block, addr | kblk(addr));
+    }
+    for block in 0..512 {
+        let addr = 0x100000000u64 + (block as u64) * 0x200000;
+        write_pte(l2_xxxhi, block, addr | kblk(addr));
+    }
+
+    // STUMP #7 cache-flush — ensure the MMU walker sees what we wrote.
+    unsafe {
+        for pt in [l1, l2_low, l2_high, l2_xhi, l2_xxhi, l2_xxxhi] {
+            let base = pt as u64;
+            let mut line = base;
+            while line < base + PAGE_SIZE as u64 {
+                core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                line += 64;
+            }
+        }
+        core::arch::asm!("dsb sy");
+        core::arch::asm!("isb");
+    }
+
+    unsafe {
+        CAVE_L1[cave_slot] = l1;
+        CAVE_PHYS_BASE[cave_slot] = 0;        // no user phys window
+        CAVE_VIRT_BASE[cave_slot] = 0;        // no user virt window
+        CAVE_VIRT_EXTENT[cave_slot] = 0;
+    }
+
+    Ok(l1)
+}
+
+/// STUMP #145: try to find a free CAVE_L1 slot for a native cave.
+/// Returns None if all MAX_CAVE_PAGETABLES are in use. Pairs with
+/// `setup_native_cave_l1` — caller allocates the slot, then calls
+/// the setup helper with the slot number.
+pub fn alloc_native_cave_slot() -> Option<usize> {
+    unsafe {
+        for i in 0..MAX_CAVE_PAGETABLES {
+            if CAVE_L1[i] == 0 {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
 /// Returns the L1 phys of the FIRST registered cave (slot 0) —
 /// what the runner set up at cave creation time. Used by the
 /// arch exit handler to tell "this is the main process exiting,

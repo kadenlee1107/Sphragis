@@ -100,6 +100,21 @@ pub struct BatCave {
     /// `docker run` (e.g. "kalilinux/kali-rolling"). Empty for native.
     pub image: [u8; MAX_IMAGE],
     pub image_len: usize,
+    /// STUMP #145: per-cave L1 page-table physical address. 0 means
+    /// "no L1 built yet" — the cave shares the kernel's PRIMARY_L1
+    /// until first `enter()`. On first enter we lazy-allocate via
+    /// `mmu::setup_native_cave_l1`, then call `mmu::switch_to_cave`
+    /// to install it in TTBR0_EL1. Each cave's L1 maps kernel
+    /// identity but no user window (native caves have no EL0 code),
+    /// so the cave-switch's `tlbi vmalle1` gives TLB-level
+    /// isolation between caves even without ASIDs. Freed by
+    /// `mmu::free_cave_slot` on `destroy()`.
+    pub cave_l1_phys: usize,
+    /// CAVE_L1[] slot index — the index into linux::mmu's
+    /// MAX_CAVE_PAGETABLES=8 slot array. usize::MAX = "not assigned".
+    /// Stored separately from `cave_l1_phys` so destroy() can free
+    /// the slot without re-scanning to find which one we own.
+    pub cave_l1_slot: usize,
 }
 
 impl BatCave {
@@ -121,6 +136,8 @@ impl BatCave {
             backing: CaveBacking::Native,
             image: [0; MAX_IMAGE],
             image_len: 0,
+            cave_l1_phys: 0,             // STUMP #145: lazy-built on first enter
+            cave_l1_slot: usize::MAX,    // STUMP #145: "not assigned"
         }
     }
 
@@ -617,6 +634,40 @@ pub fn stop(name: &str) -> Result<(), &'static str> {
 pub fn enter(name: &str) -> Result<(), &'static str> {
     start(name)?;
     if let Some(id) = find_id(name) {
+        // STUMP #145: lazy-build the cave's L1 page table BEFORE the
+        // critical section. The setup helper allocates 6 frames + does
+        // a 6×512-entry initialization pass — too long to run with
+        // IRQs masked. Building outside the CS is safe because we
+        // store the result in CAVES[id] (atomic-by-being-static-mut +
+        // single-CPU) and re-read it inside the CS.
+        //
+        // Skip docker-backed caves: their isolation is the Mac
+        // kernel's container, not our MMU. Building a Bat_OS L1 for
+        // them would be wasted memory.
+        let needs_l1 = unsafe {
+            !CAVES[id].is_docker() && CAVES[id].cave_l1_phys == 0
+        };
+        if needs_l1 {
+            if let Some(slot) = crate::batcave::linux::mmu::alloc_native_cave_slot() {
+                if let Ok(l1) = crate::batcave::linux::mmu::setup_native_cave_l1(slot) {
+                    unsafe {
+                        CAVES[id].cave_l1_phys = l1;
+                        CAVES[id].cave_l1_slot = slot;
+                    }
+                }
+                // On allocation failure (frame-pool OOM, MAX_CAVE_PAGETABLES
+                // exhausted) we fall through with cave_l1_phys=0 — the cave
+                // still works using PRIMARY_L1, just without per-cave TLB
+                // isolation. Audit-log so the operator sees the regression.
+                if unsafe { CAVES[id].cave_l1_phys } == 0 {
+                    crate::security::audit::record(
+                        crate::security::audit::Category::Cave,
+                        b"WARN: cave L1 allocation failed; using primary TTBR0",
+                    );
+                }
+            }
+        }
+
         // V8-ROOT-1 fix: the entire park→reset→activate sequence is a
         // single critical section. V6's deferred-preempt scheduler could
         // fire a timer IRQ between any two steps here, letting another
@@ -639,6 +690,25 @@ pub fn enter(name: &str) -> Result<(), &'static str> {
             reset_all_globals_for_cave_switch();
             set_active(id);
             crate::batcave::linux::vfs::init_for_cave(id);
+
+            // STUMP #145: install the cave's L1 in TTBR0_EL1.
+            // `switch_to_cave` does the canonical pre-write `tlbi vmalle1
+            // ; dsb sy ; isb` → `msr ttbr0_el1, x` → `isb` → post-write
+            // `tlbi vmalle1 ; dsb sy ; isb` sequence. With this in place
+            // every native cave's TLB entries are isolated from every
+            // other cave's, closing the audit's "memory isolation is
+            // fiction" verdict for Layer 1.
+            //
+            // If lazy-allocation failed above (cave_l1_phys=0), we
+            // explicitly switch to PRIMARY_L1 so the previous cave's
+            // TTBR0 doesn't leak forward — better to share kernel L1
+            // than to keep a stale per-cave one active.
+            let l1 = unsafe { CAVES[id].cave_l1_phys };
+            if l1 != 0 {
+                crate::batcave::linux::mmu::switch_to_cave(l1);
+            } else {
+                crate::batcave::linux::mmu::switch_to_primary();
+            }
         }
         let _ = prev_active;
     }
@@ -742,9 +812,25 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
     // Wipe the cave's VFS instance (filesystem data)
     if let Some(id) = cave_id_for_reset {
         crate::batcave::linux::vfs::destroy_cave_vfs(id);
-        // If this was the active cave, clear active
+        // If this was the active cave, clear active. STUMP #145: also
+        // swap TTBR0 back to PRIMARY_L1 so the about-to-be-freed L1
+        // doesn't keep getting walked. `mmu::free_cave_slot` below
+        // tears down the L1 frames; running with a freed L1 in TTBR0
+        // is asking for a use-after-free in the page-table walker.
         if get_active() == id {
             set_active(usize::MAX);
+            crate::batcave::linux::mmu::switch_to_primary();
+        }
+        // STUMP #145: free this cave's L1/L2 frames + clear the slot
+        // so the next cave can claim it. Idempotent — safe even if
+        // cave_l1_slot was usize::MAX (the cave never entered).
+        unsafe {
+            let slot = CAVES[id].cave_l1_slot;
+            if slot != usize::MAX {
+                crate::batcave::linux::mmu::free_cave_slot(slot);
+                CAVES[id].cave_l1_slot = usize::MAX;
+                CAVES[id].cave_l1_phys = 0;
+            }
         }
     }
 
