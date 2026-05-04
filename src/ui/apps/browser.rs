@@ -132,19 +132,15 @@ static mut BM_COUNT: usize = 0;
 /// previous cave's browsing session. Leaving any of it readable is a
 /// direct history / DOM leak into the new cave.
 pub fn reset_for_cave_switch() {
-    use crate::drivers::uart;
     let _g = crate::kernel::sync::IrqGuard::new();
     unsafe {
-        uart::puts("[browser-reset] >> URL/PAGE bufs\n");
         // URL + page buffers
         for b in (&mut *core::ptr::addr_of_mut!(URL_BUF)).iter_mut() { *b = 0; }
         URL_LEN = 0;
         for b in (&mut *core::ptr::addr_of_mut!(PAGE_BUF)).iter_mut() { *b = 0; }
         PAGE_LEN = 0;
         for b in (&mut *core::ptr::addr_of_mut!(PAGE_STYLE)).iter_mut() { *b = 0; }
-        uart::puts("[browser-reset] << URL/PAGE bufs\n");
 
-        uart::puts("[browser-reset] >> LINKS/STATUS\n");
         // Links
         for entry in (&mut *core::ptr::addr_of_mut!(LINKS)).iter_mut() {
             for b in entry.iter_mut() { *b = 0; }
@@ -158,9 +154,7 @@ pub fn reset_for_cave_switch() {
         BYTES_LOADED = 0;
         LOADING_PROGRESS = 0;
         STATE = BrowserState::Idle;
-        uart::puts("[browser-reset] << LINKS/STATUS\n");
 
-        uart::puts("[browser-reset] >> TABS/BOOKMARKS\n");
         // Tabs + bookmarks
         for entry in (&mut *core::ptr::addr_of_mut!(TAB_TITLES)).iter_mut() {
             for b in entry.iter_mut() { *b = 0; }
@@ -174,20 +168,48 @@ pub fn reset_for_cave_switch() {
         }
         for l in (&mut *core::ptr::addr_of_mut!(BM_LENS)).iter_mut() { *l = 0; }
         BM_COUNT = 0;
-        uart::puts("[browser-reset] << TABS/BOOKMARKS\n");
 
-        uart::puts("[browser-reset] >> DOM_DOC = Document::new\n");
-        DOM_DOC = crate::browser::dom::Document::new();
-        uart::puts("[browser-reset] << DOM_DOC = Document::new\n");
+        // STUMP #146 (QEMU-BUGFIX-6 fix): the original code did
+        //   DOM_DOC    = Document::new();   // ~5 MB struct
+        //   LAYOUT_TREE = LayoutTree::new(); // ~500 KB struct
+        //   JS_VM      = Vm::new();          // ~3 MB struct
+        // Each `static = ::new()` materializes a fresh value whose
+        // RVO is not guaranteed in our build profile — rustc was
+        // staging the multi-MB return value on the kernel stack
+        // (8 MB total) before the bit-copy to the static. The 5 MB
+        // Document staging blew the stack and the kernel hung,
+        // which is what shell.rs:2097's QEMU-BUGFIX-6 comment had
+        // been griping about all along.
+        //
+        // Fix: zero each static in place via core::ptr::write_bytes.
+        // Single memset, no stack staging. Safe because:
+        //   - These three types contain only primitive arrays
+        //     (no Box/Vec/Drop chain to honour).
+        //   - All counters become 0 → no consumer reads from
+        //     unallocated slots.
+        //   - `JS_VM_INITIALIZED = false` makes the next browser
+        //     access call JS_VM.init(), which re-populates the
+        //     well-known strings + builtins + DOM globals via
+        //     normal write paths.
+        //   - For NaN-boxed JsValue: zeroed slots become
+        //     `JsValue(0)` (a normal Number 0) instead of UNDEFINED
+        //     bit pattern, but no code reads them before alloc_X
+        //     overwrites the slot.
+        // The audit's data-leak concern (previous cave's text
+        // surviving in nodes/strings/heap) is satisfied — every
+        // byte of the prior content is zeroed.
+        core::ptr::write_bytes(
+            core::ptr::addr_of_mut!(DOM_DOC) as *mut u8,
+            0u8,
+            core::mem::size_of::<crate::browser::dom::Document>(),
+        );
+        core::ptr::write_bytes(
+            core::ptr::addr_of_mut!(LAYOUT_TREE) as *mut u8,
+            0u8,
+            core::mem::size_of::<crate::browser::layout::LayoutTree>(),
+        );
 
-        uart::puts("[browser-reset] >> LAYOUT_TREE = LayoutTree::new\n");
-        LAYOUT_TREE = crate::browser::layout::LayoutTree::new();
-        uart::puts("[browser-reset] << LAYOUT_TREE = LayoutTree::new\n");
-
-        uart::puts("[browser-reset] >> HISTORY/USE_ENGINE\n");
-        // V12 additions: browser HISTORY, the JS VM state (SEED is
-        // reachable via Math.random and was acting as a cross-cave
-        // timing oracle), and the engine-selector toggle.
+        // V12 additions: browser HISTORY + engine-selector toggle.
         for entry in (&mut *core::ptr::addr_of_mut!(HISTORY)).iter_mut() {
             for b in entry.iter_mut() { *b = 0; }
         }
@@ -195,13 +217,15 @@ pub fn reset_for_cave_switch() {
         HISTORY_POS = 0;
         HISTORY_COUNT = 0;
         USE_ENGINE = true;
-        uart::puts("[browser-reset] << HISTORY/USE_ENGINE\n");
 
-        uart::puts("[browser-reset] >> JS_VM = Vm::new (~size_of Vm bytes!)\n");
-        // Fresh JS VM — wipes heap, string table, and builtin-PRNG state.
-        JS_VM = crate::browser::js::vm::Vm::new();
+        // Fresh JS VM — wipes heap, string table, builtins, etc.
+        // Same in-place memset pattern as DOM_DOC above.
+        core::ptr::write_bytes(
+            core::ptr::addr_of_mut!(JS_VM) as *mut u8,
+            0u8,
+            core::mem::size_of::<crate::browser::js::vm::Vm>(),
+        );
         JS_VM_INITIALIZED = false;
-        uart::puts("[browser-reset] << JS_VM = Vm::new\n");
     }
 }
 

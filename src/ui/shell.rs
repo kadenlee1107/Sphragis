@@ -2094,12 +2094,15 @@ fn parse_ip(s: &str) -> u32 {
 fn ensure_default_cave() {
     use crate::batcave::cave;
     if cave::get_active() == usize::MAX {
-        // QEMU-BUGFIX-6 workaround: `cave::enter()` hangs inside its
-        // `reset_all_globals_for_cave_switch()` critical section (one of
-        // the 20+ `reset_for_cave_switch` callees at cave.rs:623 doesn't
-        // return). For the ambient host-cave case we don't actually need
-        // the full state reset; `ensure_host_cave_active()` just creates
-        // the cave + `set_active(id)`. Same end state, no hang.
+        // STUMP #146: QEMU-BUGFIX-6 was the multi-MB stack-staged
+        // struct overwrites in `apps::browser::reset_for_cave_switch`
+        // (specifically `DOM_DOC = Document::new()`, ~5 MB) blowing
+        // the 8 MB kernel stack inside the IrqGuard critical section.
+        // Fixed by switching those to in-place `write_bytes(p, 0, 1)`
+        // memsets so no stack staging happens. `cave::enter` is now
+        // safe to call here too; we keep `ensure_host_cave_active`
+        // for the ambient-host case because it's still cheaper (no
+        // full state reset needed for the shell-host cave).
         //
         // ROOT-5: `proc` and `mem` are now real caps (no longer hard-
         // allowed); the shell-host cave is created with the full broad

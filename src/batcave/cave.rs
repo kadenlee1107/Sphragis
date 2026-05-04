@@ -1106,77 +1106,67 @@ fn find_mut(name: &str) -> Result<&'static mut BatCave, &'static str> {
 ///
 /// Caller must already hold a critical_section! / IrqGuard. Each callee
 /// also acquires its own IrqGuard, which is safe (IrqGuard is nestable).
-///
-/// STUMP #145 instrumentation (DIAGNOSTIC, will be removed once the
-/// QEMU-BUGFIX-6 hanger is identified): emit a UART tag before AND
-/// after every callee. The last tag printed before the kernel hangs
-/// names the broken subsystem. Once we know which one it is, fix that
-/// callee and revert the instrumentation.
 fn reset_all_globals_for_cave_switch() {
-    macro_rules! trace {
-        ($tag:literal, $call:expr) => {{
-            crate::drivers::uart::puts(concat!("[reset] >> ", $tag, "\n"));
-            $call;
-            crate::drivers::uart::puts(concat!("[reset] << ", $tag, "\n"));
-        }};
-    }
+    crate::batcave::linux::syscall::reset_cave_statics();
+    crate::net::tls::reset_all_sessions();
+    crate::batcave::linux::fd::reset_for_cave_switch();
+    crate::batcave::linux::sockets::reset_for_cave_switch();
+    crate::net::tcp::reset_for_cave_switch();
+    // STUMP #105 — Sprint 3.1: cookie jar wipe on cave switch so a
+    // logged-out cave doesn't inherit the previous tenant's session
+    // tokens.
+    crate::net::cookies::reset_for_cave_switch();
 
-    trace!("syscall::reset_cave_statics",
-           crate::batcave::linux::syscall::reset_cave_statics());
-    trace!("tls::reset_all_sessions",
-           crate::net::tls::reset_all_sessions());
-    trace!("fd::reset_for_cave_switch",
-           crate::batcave::linux::fd::reset_for_cave_switch());
-    trace!("sockets::reset_for_cave_switch",
-           crate::batcave::linux::sockets::reset_for_cave_switch());
-    trace!("tcp::reset_for_cave_switch",
-           crate::net::tcp::reset_for_cave_switch());
-    trace!("cookies::reset_for_cave_switch",
-           crate::net::cookies::reset_for_cave_switch());
-    trace!("epoll::reset_for_cave_switch",
-           crate::batcave::linux::epoll::reset_for_cave_switch());
-    trace!("futex::reset_for_cave_switch",
-           crate::batcave::linux::futex::reset_for_cave_switch());
-    trace!("async_fds::reset_for_cave_switch",
-           crate::batcave::linux::async_fds::reset_for_cave_switch());
-    trace!("stdio_ring::reset_for_cave_switch",
-           crate::batcave::linux::stdio_ring::reset_for_cave_switch());
-    trace!("psk_overlay::reset_for_cave_switch",
-           crate::net::psk_overlay::reset_for_cave_switch());
-    trace!("dns::reset_for_cave_switch",
-           crate::net::dns::reset_for_cave_switch());
-    trace!("chromium_blit::reset_for_cave_switch",
-           crate::drivers::display::chromium_blit::reset_for_cave_switch());
-    trace!("threads::reset_for_cave_switch",
-           crate::batcave::linux::threads::reset_for_cave_switch());
-    trace!("arp::reset_for_cave_switch",
-           crate::net::arp::reset_for_cave_switch());
-    trace!("js::interpreter::reset_for_cave_switch",
-           crate::browser::js::interpreter::reset_for_cave_switch());
-    trace!("js::dom_api::reset_for_cave_switch",
-           crate::browser::js::dom_api::reset_for_cave_switch());
-    trace!("js::storage::reset_for_cave_switch",
-           crate::browser::js::storage::reset_for_cave_switch());
-    trace!("batpipe::reset_for_cave_switch",
-           crate::batcave::batpipe::reset_for_cave_switch());
-    trace!("loader::reset_for_cave_switch",
-           crate::batcave::linux::loader::reset_for_cave_switch());
-    trace!("virtio::keyboard::reset_for_cave_switch",
-           crate::drivers::virtio::keyboard::reset_for_cave_switch());
-    trace!("apple::spi::reset_for_cave_switch",
-           crate::drivers::apple::spi::reset_for_cave_switch());
-    trace!("apps::comms::reset_for_cave_switch",
-           crate::ui::apps::comms::reset_for_cave_switch());
-    trace!("apps::browser::reset_for_cave_switch",
-           crate::ui::apps::browser::reset_for_cave_switch());
-    trace!("font::reset_for_cave_switch",
-           crate::ui::font::reset_for_cave_switch());
-    trace!("wm::reset_for_cave_switch",
-           crate::ui::wm::reset_for_cave_switch());
-    trace!("console::reset_for_cave_switch",
-           crate::ui::console::reset_for_cave_switch());
-    trace!("dom::reset_for_cave_switch",
-           crate::browser::dom::reset_for_cave_switch());
-    trace!("js::strings::reset_for_cave_switch",
-           crate::browser::js::strings::reset_for_cave_switch());
+    // ROOT 2 additions — previously missing, each one was a cross-cave
+    // information-leak surface.
+    crate::batcave::linux::epoll::reset_for_cave_switch();
+    crate::batcave::linux::futex::reset_for_cave_switch();
+    crate::batcave::linux::async_fds::reset_for_cave_switch();
+    crate::batcave::linux::stdio_ring::reset_for_cave_switch();
+    crate::net::psk_overlay::reset_for_cave_switch();
+    crate::net::dns::reset_for_cave_switch();
+    crate::drivers::display::chromium_blit::reset_for_cave_switch();
+
+    // ROOT 2 V9-re-audit additions — threads table, ARP cache, JS
+    // console/DOM. Each was a cross-cave leak the first pass missed.
+    crate::batcave::linux::threads::reset_for_cave_switch();
+    crate::net::arp::reset_for_cave_switch();
+    crate::browser::js::interpreter::reset_for_cave_switch();
+    crate::browser::js::dom_api::reset_for_cave_switch();
+    // STUMP #108 — Sprint 3.5: localStorage wipe on cave switch so a
+    // logged-out cave doesn't inherit the previous tenant's UI state.
+    crate::browser::js::storage::reset_for_cave_switch();
+
+    // ROOT 2 V10-re-audit additions — batpipe inter-tool buffer + the
+    // loader's saved RA/SP (which were a cross-cave control-flow PIVOT,
+    // most severe item from the V10 sweep). STUMP #141: removed the
+    // `tor::reset_for_cave_switch` call because tor.rs was deleted —
+    // it was 3 layers of CTR with hardcoded keys, not real Tor. When
+    // real onion routing lands its reset hook goes back here.
+    crate::batcave::batpipe::reset_for_cave_switch();
+    crate::batcave::linux::loader::reset_for_cave_switch();
+
+    // ROOT 2 V11-re-audit additions — keyboard-input leak (typed pass-
+    // phrases), comms session key + chat history, browser state (URL,
+    // page buffer, DOM, tabs, bookmarks), Blink heap (HTML residue),
+    // UI surface state (font clip + wm panes), and the Apple-SPI
+    // keyboard mirror. Last mechanical gaps from the V11 sweep.
+    crate::drivers::virtio::keyboard::reset_for_cave_switch();
+    crate::drivers::apple::spi::reset_for_cave_switch();
+    crate::ui::apps::comms::reset_for_cave_switch();
+    crate::ui::apps::browser::reset_for_cave_switch();
+    // NOTE: `blink_libc` currently lives outside the crate module tree
+    // (see comment in src/browser/html/mod.rs). When the Chromium build
+    // lands and blink_libc is re-enabled, chain its reset here.
+    crate::ui::font::reset_for_cave_switch();
+    crate::ui::wm::reset_for_cave_switch();
+    crate::ui::console::reset_for_cave_switch();
+
+    // STUMP #111 (audit M-FIRST-FAIL re-arm): re-arm one-shot
+    // saturation alarms in the DOM and JS string-intern subsystems
+    // so the next tenant's first overflow is audible. Pre-fix the
+    // alarms fired exactly once per boot, hiding flooding events
+    // from any cave but the first.
+    crate::browser::dom::reset_for_cave_switch();
+    crate::browser::js::strings::reset_for_cave_switch();
 }
