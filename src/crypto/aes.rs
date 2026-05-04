@@ -96,14 +96,45 @@ impl Aes256 {
 const NK128: usize = 4;
 const NR128: usize = 10;
 
+/// STUMP #142 — AES-128 backed by RustCrypto's fixsliced impl. Was
+/// previously a hand-rolled SBOX-lookup variant whose encrypt_block did
+/// `state[i][j] = SBOX[state[i][j] as usize]` — a textbook
+/// cache-timing leak (see V8-ROOT-11 for the same fix on AES-256).
+///
+/// Every TLS record path on the wire uses AES-128-GCM (per
+/// `tls.rs:502` we currently only accept TLS_AES_128_GCM_SHA256 +
+/// TLS_AES_256_GCM_SHA384, with most servers picking the 128 suite).
+/// That meant the audit's verdict — "AES-128 path is the *only* TLS
+/// cipher we accept on the wire, and it's not constant-time" — was
+/// literally true: every packet's AES rounds went through the
+/// vulnerable lookup.
+///
+/// Now: `aes::Aes128` from RustCrypto, fixsliced bitsliced
+/// implementation, cache-immune by construction. Same API surface
+/// (`new`, `encrypt_block`, `ctr_crypt`, `gcm_crypt`, `gcm_encrypt`,
+/// `gcm_decrypt`) so every call site keeps working unchanged. The
+/// higher-level GCM/CTR methods all funnel through `encrypt_block`,
+/// so swapping the block primitive is enough.
+///
+/// `round_keys` field retained as a zero-cost compatibility stub —
+/// some test code checked the field directly. Its bytes are never
+/// read by the new impl.
 pub struct Aes128 {
+    inner: aes::Aes128,
+    /// Retained for ABI compatibility with code that touched
+    /// `aes_obj.round_keys` directly. The field is never read by the
+    /// new constant-time path; `inner` holds the real key schedule.
     round_keys: [u32; 4 * (NR128 + 1)],
 }
 
 impl Aes128 {
     pub fn new(key: &[u8; 16]) -> Self {
+        use aes::cipher::KeyInit;
+        let ga = aes::cipher::generic_array::GenericArray::from_slice(key);
+        // Compute the round-key schedule via the legacy expansion too,
+        // so anyone reaching into `.round_keys` for diagnostics still
+        // sees something coherent. The new path never uses it.
         let mut rk = [0u32; 4 * (NR128 + 1)];
-        // Key expansion for AES-128
         for i in 0..NK128 {
             rk[i] = u32::from_be_bytes([key[4*i], key[4*i+1], key[4*i+2], key[4*i+3]]);
         }
@@ -114,23 +145,18 @@ impl Aes128 {
             }
             rk[i] = rk[i - NK128] ^ temp;
         }
-        Self { round_keys: rk }
+        Self {
+            inner: aes::Aes128::new(ga),
+            round_keys: rk,
+        }
     }
 
+    /// Encrypt a single 16-byte block in place. Constant-time; backed
+    /// by RustCrypto's fixsliced implementation.
     pub fn encrypt_block(&self, block: &mut [u8; 16]) {
-        let mut state = [[0u8; 4]; 4];
-        for i in 0..4 { for j in 0..4 { state[j][i] = block[i * 4 + j]; } }
-        add_round_key(&mut state, &self.round_keys, 0);
-        for round in 1..NR128 {
-            sub_bytes(&mut state);
-            shift_rows(&mut state);
-            mix_columns(&mut state);
-            add_round_key(&mut state, &self.round_keys, round);
-        }
-        sub_bytes(&mut state);
-        shift_rows(&mut state);
-        add_round_key(&mut state, &self.round_keys, NR128);
-        for i in 0..4 { for j in 0..4 { block[i * 4 + j] = state[j][i]; } }
+        use aes::cipher::BlockEncrypt;
+        let ga = aes::cipher::generic_array::GenericArray::from_mut_slice(block);
+        self.inner.encrypt_block(ga);
     }
 
     /// CTR mode encryption/decryption (counter starts at 0).
@@ -423,7 +449,19 @@ fn gmul(mut a: u8, mut b: u8) -> u8 {
 
 impl Drop for Aes128 {
     fn drop(&mut self) {
+        // STUMP #142: `inner` holds RustCrypto's fixsliced key schedule;
+        // RustCrypto zeroizes its key state on Drop when `zeroize`
+        // features are enabled. We also overwrite the legacy
+        // `round_keys` shim (which holds a redundant copy of the
+        // expanded keys for diagnostic compatibility) and best-effort-
+        // zero the `aes::Aes128` bytes so a cold-boot sweep can't
+        // recover the schedule even if zeroize is elided.
         crate::security::zeroize::zeroize_u32_slice(&mut self.round_keys);
+        let p = &self.inner as *const _ as *mut u8;
+        let sz = core::mem::size_of::<aes::Aes128>();
+        for i in 0..sz {
+            unsafe { core::ptr::write_volatile(p.add(i), 0); }
+        }
     }
 }
 
