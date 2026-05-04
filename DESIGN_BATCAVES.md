@@ -87,7 +87,11 @@ batcave seal <name>          # persistent → ephemeral (one-way, irreversible)
 - **Persistent** (default): survives reboots, tools stay installed
 - **Ephemeral** (`--ephemeral`): destroyed on shutdown, zero trace
 - **Seal** (`batcave seal`): downgrades persistent → ephemeral. ONE-WAY. Cannot be reversed. Anti-coercion design.
-- **No limit** on concurrent BatCaves — hardware decides
+- **Concurrent limit:** 32 caves (`MAX_CAVES` in `src/batcave/cave.rs`).
+  This is a static-array cap, not a fundamental design choice — easy
+  to bump when there's pressure (the constant is one number to
+  change). Earlier doc revisions said "no limit"; STUMP #144 corrected
+  that to match what the code actually enforces.
 
 ### Persistence implementation (STUMP #135)
 

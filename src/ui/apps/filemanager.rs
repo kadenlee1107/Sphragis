@@ -117,8 +117,9 @@ fn draw_header(x: u32, y: u32, w: u32) {
     font::draw_str(fb, sw, cx, text_y, "VAULT",     FAINT, BG); cx += 6 * CHAR_W;
     font::draw_str(fb, sw, cx, text_y, "ENCRYPTED", INK,   BG); cx += 10 * CHAR_W;
     font::draw_str(fb, sw, cx, text_y, ".",         FAINT, BG); cx += 2 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "AES-256-CTR", CYAN, BG); cx += 12 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "+ SHA-256 integrity", FAINT, BG);
+    // STUMP #144: BatFS is ChaCha20-Poly1305 AEAD now, not AES-CTR.
+    font::draw_str(fb, sw, cx, text_y, "CHACHA20-POLY1305", CYAN, BG); cx += 18 * CHAR_W;
+    font::draw_str(fb, sw, cx, text_y, "+ Merkle integrity", FAINT, BG);
 
     // Right: file count / MAX_FILES.
     let (count, _max) = batfs::stats();
@@ -249,10 +250,10 @@ fn draw_row(x: u32, y: u32, w: u32, name: &str, size: usize, encrypted: bool, se
     font::draw_str(fb, sw, val_x, text_y, size_str, INK, BG);
     font::draw_str(fb, sw, val_x + (s_n as u32 + 1) * CHAR_W, text_y, unit, DIM_TXT, BG);
 
-    // CIPHER.
+    // CIPHER. STUMP #144: ChaCha20-Poly1305 (was AES-256-CTR label).
     let cipher_x = size_x + COL_SIZE_W + 4;
     if encrypted {
-        font::draw_str(fb, sw, cipher_x, text_y, "AES-256-CTR", CYAN, BG);
+        font::draw_str(fb, sw, cipher_x, text_y, "CHACHA20", CYAN, BG);
     } else {
         font::draw_str(fb, sw, cipher_x, text_y, "-", DIM_TXT, BG);
     }

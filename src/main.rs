@@ -257,7 +257,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // Derive the BatFS key from the same passphrase we just prompted for.
     let master_key = derive_batfs_key(passphrase_slice);
     fs::batfs::init(&master_key);
-    drivers::uart::puts("  [fs] BatFS initialized (AES-256-CTR, key=KDF(passphrase))\n");
+    drivers::uart::puts("  [fs] BatFS initialized (ChaCha20-Poly1305 AEAD, Argon2id-derived master)\n");
 
     // Initialize BatCave runtime
     drivers::uart::puts("[boot] Initializing BatCave runtime...\n");

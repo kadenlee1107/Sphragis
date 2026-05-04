@@ -113,9 +113,12 @@ fn draw_security_kvs(p: &W::PanelInner) {
     let mode = crate::net::tls_pinning::current_mode();
     let _ = (mode, net_ok); // referenced if we expand the rows later
 
-    draw_kv_row(p.x, y,            label_w, "ENCRYPT",  "AES-256-CTR",                     State::Neutral, false); y += KV_ROW_H;
+    // STUMP #144: doc-drift fix. Was "AES-256-CTR / 16 ROUNDS pre-
+    // Argon2id" — but BatFS now uses ChaCha20-Poly1305 AEAD (V8-CRYPTO)
+    // and the KDF is real Argon2id (STUMP #138).
+    draw_kv_row(p.x, y,            label_w, "ENCRYPT",  "CHACHA20-POLY1305",               State::Neutral, false); y += KV_ROW_H;
     draw_kv_row(p.x, y,            label_w, "HASH",     "SHA-256",                         State::Neutral, false); y += KV_ROW_H;
-    draw_kv_row(p.x, y,            label_w, "KDF",      "16 ROUNDS . pre-Argon2id",        State::Plan,    false); y += KV_ROW_H;
+    draw_kv_row(p.x, y,            label_w, "KDF",      "ARGON2ID 8MiB . 3 PASS",          State::Ok,      false); y += KV_ROW_H;
     draw_kv_row(p.x, y,            label_w, "FIREWALL", "DENY ALL",                        State::Ok,      true);  y += KV_ROW_H;
     draw_kv_row(p.x, y,            label_w, "AUTH",     "PASSPHRASE",                      State::Neutral, false); y += KV_ROW_H;
     draw_kv_row(p.x, y,            label_w, "CAPS",     "ENFORCED",                        State::Ok,      false); y += KV_ROW_H;

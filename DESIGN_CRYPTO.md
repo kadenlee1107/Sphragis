@@ -36,8 +36,8 @@ salt) can run offline brute-force / dictionary attacks on GPUs/ASICs.
 |---|---|
 | Best primitive | **Argon2id**, m=256 MiB, t=3, p=1 |
 | Why | Memory-hard → GPU/ASIC cost is ~linear in memory. Best KDF since 2015 (winner of PHC). NIST SP 800-132 recommends it. |
-| Current state | 🟡 custom SHA-256 × N-rounds (16 rounds in boot, 1 round for per-cave). Comment in `security/auth.rs` literally says "Not Argon2 — that's the Phase B target". |
-| Gap | Add `argon2` crate (no_std compatible variant), replace `security::auth::kdf` + `cave::create`'s key derivation + BatFS master-key derivation. |
+| Current state | ✅ Argon2id at 8 MiB × 3 passes × 1 lane in BOTH the auth-gate KDF (`security/auth.rs::kdf`, salt `bat_os-auth-v2`) AND the BatFS master KDF (`main.rs::derive_batfs_key`, salt `bat_os-batfs-v3`, STUMP #138). Per-cave `fs_key` is HMAC-SHA256 keyed by the BatFS master (STUMP #111 audit C011) — cheap because it's not a passphrase derivation. |
+| Gap | The 256 MiB target is unreachable in our 32 MB kernel heap. Bumping the heap is a separate STUMP. 8 MiB still moves the bar by ~6 orders of magnitude vs the pre-#138 16-round SHA. Argon2id 256 MiB once we have heap space; "Phase B" target. |
 | PQ | N/A — symmetric, 256-bit output. |
 
 ---
@@ -51,8 +51,8 @@ Adversary has the raw encrypted blocks and wants to read / tamper.
 |---|---|
 | Best primitive | **AES-256-GCM-SIV** per file (nonce-misuse resistant) OR **XChaCha20-Poly1305** (longer nonce, no wraparound risk) |
 | Why | AEAD → confidentiality + authentication in one pass. GCM-SIV survives nonce-reuse (CTR mode does not). XChaCha20 with 192-bit nonces never reuses in practice. |
-| Current state | 🟡 AES-256-CTR + HMAC-SHA256 (encrypt-then-MAC). Correct construction, just verbose. Per-file derived key via `sha256::derive_key`. |
-| Gap | Migrate to ChaCha20-Poly1305 AEAD. Primary win: single-pass, hardware-independent constant time, cleaner code. Current CTR+HMAC is acceptable — this is a polish upgrade, not a security hole. |
+| Current state | ✅ ChaCha20-Poly1305 AEAD per file. Per-file key via `sha256::derive_key(MASTER_KEY, filename)`. AAD = filename so an attacker can't rename ciphertext to a different slot. Tag stored in the on-disk inode (since STUMP #136). _(Doc-drift caught by STUMP #144 audit; previous text said AES-256-CTR + HMAC, which described an even-earlier construction.)_ |
+| Gap | None at this layer. Memory-encryption + a per-file additional-data binding to the BatFS inode is a future hardening pass. |
 | PQ | Grover attack → effective 128-bit security. Still fine for 2040+. |
 
 ---
@@ -81,8 +81,8 @@ run, what targets, what stdout/stderr said).
 |---|---|
 | Best primitive | **ChaCha20-Poly1305** with counter nonce, or AES-256-GCM with counter nonce. Merkle-chain framing for tamper-evidence. |
 | Why | AEAD detects tampering, counter nonce prevents reuse, chain detects truncation. |
-| Current state | 🟡 AES-256-CTR with random 16-byte nonce per frame (daemon `batcaved.py`). Confidentiality ✅, integrity ❌, tamper-evident truncation ❌. |
-| Gap | Upgrade to Poly1305 MAC over each frame + previous-frame-tag chain. Will catch `xxd`-editing and entry deletion. |
+| Current state | ✅ ChaCha20-Poly1305 with prev-tag chained as AAD (`batcaved.py:386-444`). Confidentiality + integrity + tamper-evident truncation. _(STUMP #144 audit: previous text claimed AES-256-CTR; the daemon was already on AEAD with chained AAD.)_ |
+| Gap | None at this layer. Future: replicate to a remote witness for non-repudiation. |
 | PQ | Same as #2 — 128-bit Grover margin is ample. |
 
 ---
@@ -181,8 +181,8 @@ distinguishable "wipe everything" code.
 |---|---|
 | Best primitive | **One-time pad (OTP)** — legitimately! Plus **HMAC-SHA-256** authentication of the token. |
 | Why | Token is short (32 bytes), pre-distributable (print 10 on paper, tear off as used), never reused. Exactly the niche OTP was designed for. Combined with HMAC the signal is unforgeable by anyone without the pad. |
-| Current state | 🟡 duress code is a string compared via constant-time SHA-256 hash. Works but single-use semantics aren't enforced and there's no pre-distribution model. |
-| Gap | Design doc: implement a per-boot OTP strip (32 tokens × 32 bytes each, printed QR-style on first boot, or on-demand). Each token is single-use, verified against the in-memory strip which zeroes the token on use. Paper backup is the "sneakernet duress" channel. |
+| Current state | ✅ `security/otp.rs` ships: 8 duress tokens + 24 deadman tokens, RNDR-seeded, single-use enforced (zeroed on consume), constant-time scan (`otp.rs:130-173`). Discovered by STUMP #144 audit — earlier "🟡" entry was stale. |
+| Gap | Pre-distribution / paper-backup workflow not yet built — the strip lives in RAM only. Future STUMP: print QR strip on first-boot for offline backup. |
 | PQ | N/A — single-use info-theoretically secure. |
 
 ---
@@ -197,8 +197,8 @@ before operator can re-authenticate. Operator wants pre-generated
 |---|---|
 | Best primitive | **OTP-backed HMAC tokens** (operator keeps a small strip, sends one per day via offline channel — phone SMS, email, satellite) |
 | Why | Same argument as #11: short secrets, single-use, pre-distributable. OTP's info-theoretic security means even if the token is intercepted it can't forge future tokens. |
-| Current state | ❌ No such mechanism today. |
-| Gap | Implement alongside #11. |
+| Current state | ✅ The 24 deadman-arm tokens in `security/otp.rs` cover this — same OTP infrastructure as #11. STUMP #144 audit caught this entry as stale. |
+| Gap | Same as #11: paper / out-of-band distribution flow not built yet. Operator currently can't take a strip with them on travel. |
 
 ---
 
