@@ -67,14 +67,20 @@ ok "build complete"
 phase "Collecting artifacts"
 mkdir -p "$ARTIFACT_DIR/bin" "$ARTIFACT_DIR/lib" "$ARTIFACT_DIR/share"
 
-# Service binaries
-for svc in WebContent RequestServer ImageDecoder WebWorker; do
-    if [[ -f "$OUT_DIR/bin/$svc" ]]; then
-        cp -v "$OUT_DIR/bin/$svc" "$ARTIFACT_DIR/bin/"
-    elif [[ -f "$OUT_DIR/$svc" ]]; then
-        cp -v "$OUT_DIR/$svc" "$ARTIFACT_DIR/bin/"
+# js (the LibJS REPL) lives in bin/. Service binaries (WebContent,
+# RequestServer, ImageDecoder, WebWorker) land in libexec/ —
+# Ladybird's preset puts services there since they're spawned by
+# the UI process, not user-invoked. We pack everything into our
+# own bin/ in the initrd because Bat_OS doesn't distinguish.
+for src in "$OUT_DIR/bin/js" \
+           "$OUT_DIR/libexec/WebContent" \
+           "$OUT_DIR/libexec/RequestServer" \
+           "$OUT_DIR/libexec/ImageDecoder" \
+           "$OUT_DIR/libexec/WebWorker"; do
+    if [[ -f "$src" ]]; then
+        cp -v "$src" "$ARTIFACT_DIR/bin/"
     else
-        echo "WARN: $svc not found in $OUT_DIR — build may have skipped it" >&2
+        echo "WARN: $src not built — skipping" >&2
     fi
 done
 
