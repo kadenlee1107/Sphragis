@@ -446,6 +446,17 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::LANDLOCK_CREATE_RULESET => (SyscallCat::Always, sys_stub_enosys),
         nr::LANDLOCK_ADD_RULE       => (SyscallCat::Always, sys_stub_enosys),
         nr::LANDLOCK_RESTRICT_SELF  => (SyscallCat::Always, sys_stub_enosys),
+
+        // STUMP #160 iter 6: surfaced via the chromium-version smoke
+        // crash path. content_shell's base::FilePathWatcher tries to
+        // inotify_init1; not having it means watcher silently disables.
+        // fstatfs is called by glibc realpath/realpathat for filesystem
+        // type checks. Both safely return ENOSYS / a benign zero stat
+        // without breaking Chromium.
+        26 => (SyscallCat::FileIO, sys_stub_enosys),  // inotify_init1
+        27 => (SyscallCat::FileIO, sys_stub_zero),    // inotify_add_watch — return wd 0
+        28 => (SyscallCat::FileIO, sys_stub_zero),    // inotify_rm_watch
+        44 => (SyscallCat::FileIO, sys_fstatfs),      // fstatfs — return zero buf
         // NOTE: AArch64 syscall 222 is mmap (already routed via nr::MMAP),
         // 223 is fadvise64. 210 is shutdown (moved to Network block below).
         // Previously these were mislabeled as shmget/shmctl/shutdown-stub.
@@ -755,6 +766,27 @@ fn sys_statfs(args: [u64; 6]) -> i64 {
         // f_namelen @ 72 (8 bytes) — 255
         core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 72, v = in(reg) 255u64);
         // f_frsize @ 80 — 4096
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 80, v = in(reg) 4096u64);
+    }
+    0
+}
+
+// STUMP #160 iter 6: sys_fstatfs(fd, buf) — fill struct statfs same
+// shape as sys_statfs. Caller passes an fd; we don't actually use it
+// (our VFS doesn't track per-fd filesystem types), so return the same
+// synthetic-tmpfs values.
+fn sys_fstatfs(args: [u64; 6]) -> i64 {
+    let _fd = args[0] as i32;
+    let buf = args[1] as usize;
+    if buf == 0 { return EFAULT; }
+    if !user_zero(buf, 120) { return EFAULT; }
+    unsafe {
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf, v = in(reg) 0x01021994u64);
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 8, v = in(reg) 4096u64);
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 16, v = in(reg) 65536u64);
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 24, v = in(reg) 57344u64);
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 32, v = in(reg) 57344u64);
+        core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 72, v = in(reg) 255u64);
         core::arch::asm!("str {v}, [{a}]", a = in(reg) buf + 80, v = in(reg) 4096u64);
     }
     0

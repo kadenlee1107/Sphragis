@@ -137,6 +137,15 @@ fn execute(cmd: &str) {
         "v8" | "js" | "javascript" => cmd_run_elf("v8"),
         "blink" => cmd_run_elf("blink"),
         "chromium" | "chrome" => cmd_chromium(parts[1], parts[2], parts[3]),
+        // STUMP #160 iter 6: minimal-init test — content_shell --version
+        // should print "Content Shell N.N.N.N" and exit immediately,
+        // without spawning the renderer worker pool / URL loader threads
+        // that our partial pthread_cond impl can't keep cycling. If
+        // version output prints, our boot → ELF load → glibc init →
+        // ContentMain → printf → exit pipeline is fine; whatever's
+        // blocking dump-dom is in the renderer-specific code path.
+        // If version DOESN'T print, we have an even more basic problem.
+        "chromium-version" | "chrome-version" => cmd_chromium_version(),
         "dump-dom" | "dom" => cmd_dump_dom(parts[1]),
         "render" => cmd_render(parts[1], &parts),
         "tls-mode" => cmd_tls_mode(parts[1]),
@@ -3036,6 +3045,60 @@ fn cmd_run_elf(name: &str) {
 /// Positional: the URL. Because `split_cmd` yields only 4 slots, we
 /// accept up to three flag tokens; any extra flags go on the URL
 /// (Chromium is forgiving about stray `--foo` mid-argv).
+// STUMP #160 iter 6: minimal-init smoke. Runs content_shell with
+// `--version` only. content_shell parses --version in
+// content_main_runner_impl.cc::ContentMainRunnerImpl::Initialize()
+// extremely early — before SequenceManager bootstraps the worker
+// pool, before NetworkService init, before everything that's been
+// hanging dump-dom. If this prints "Content Shell N.N.N.N" we know
+// our pipeline (boot → ELF load → glibc init → ContentMain →
+// printf → _exit) is solid end-to-end; the dump-dom blocker is
+// renderer-specific. If THIS hangs, we have a much deeper problem.
+fn cmd_chromium_version() {
+    use crate::batcave::linux::runner;
+    use crate::kernel::mm::initrd;
+
+    if !initrd::is_present() {
+        console::puts("  error: no Chromium binary baked into this image.\n");
+        return;
+    }
+
+    let mut argv: [&str; 10] = [""; 10];
+    argv[0] = "/bin/content_shell";
+    argv[1] = "--version";
+    argv[2] = "--no-sandbox";
+    argv[3] = "--single-process";
+    argv[4] = "--enable-logging=stderr";
+    argv[5] = "--v=1";
+    // Even though --version SHOULD skip browser init, content_shell on
+    // this build calls GpuChannelManager::GetSharedContextState which
+    // dispatches through a GL-context vtable that's never installed
+    // (we have no real GL backend). --use-gl=stub gives Chromium a
+    // no-op GL impl so the vtable slots are populated and dispatch
+    // hits a real-but-do-nothing function instead of an UNREACHABLE
+    // guard.
+    argv[6] = "--use-gl=stub";
+    argv[7] = "--disable-gpu-compositing";
+    argv[8] = "--disable-gpu-rasterization";
+    argv[9] = "--in-process-gpu";
+
+    console::puts("  content_shell --version (minimal-init test)\n");
+
+    crate::batcave::linux::skip_log::reset();
+
+    // Pass an empty URL so the runner doesn't look one up. The
+    // run_chromium API takes a URL but content_shell ignores it
+    // entirely under --version.
+    match runner::run_chromium("", &argv[..10]) {
+        Ok(()) => crate::drivers::uart::puts("  chromium-version exited OK\n"),
+        Err(e) => {
+            crate::drivers::uart::puts("  chromium-version: ");
+            crate::drivers::uart::puts(e);
+            crate::drivers::uart::puts("\n");
+        }
+    }
+}
+
 fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     use crate::batcave::linux::runner;
     use crate::kernel::mm::initrd;
