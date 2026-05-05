@@ -954,6 +954,62 @@ pub fn selftest_server() -> Result<TcpServerSelftestReport, &'static str> {
     listen_close(TEST_PORT);
     passed += 1;
 
+    // 8. STUMP #148 step 7: listen_close drains pending PCBs cleanly.
+    //    Re-register, push 2 PCBs onto the accept queue, then close.
+    //    All PCBs in the queue should be freed. We can't easily verify
+    //    the RST went on the wire from a self-test (no ip_send mock),
+    //    but we CAN verify the PCB slots got freed.
+    let s3 = listen_register(TEST_PORT, 4, 0, TEST_FD)
+        .map_err(|_| "step 8 re-register failed")?;
+    let p_c = pcb_alloc().ok_or("step 8 pcb_alloc C failed")?;
+    let p_d = pcb_alloc().ok_or("step 8 pcb_alloc D failed")?;
+    {
+        let pc = pcb_mut(p_c);
+        pc.local_port = TEST_PORT;
+        pc.remote_ip = 0x0A0B0C0D;
+        pc.remote_port = 5005;
+        pc.state.store(STATE_ESTABLISHED, Ordering::Release);
+        pc.parent_listener_idx.store(s3 as u32, Ordering::Release);
+    }
+    {
+        let pd = pcb_mut(p_d);
+        pd.local_port = TEST_PORT;
+        pd.remote_ip = 0x0A0B0C0E;
+        pd.remote_port = 5006;
+        pd.state.store(STATE_ESTABLISHED, Ordering::Release);
+        pd.parent_listener_idx.store(s3 as u32, Ordering::Release);
+    }
+    listener_accept_push(s3, p_c)
+        .map_err(|_| "step 8 push C failed")?;
+    listener_accept_push(s3, p_d)
+        .map_err(|_| "step 8 push D failed")?;
+    passed += 1;
+    // Close the listener — should RST + free both pending PCBs.
+    listen_close(TEST_PORT);
+    assert_ok!(!pcb(p_c).in_use.load(Ordering::Acquire),
+               "listen_close left pending PCB C in use");
+    assert_ok!(!pcb(p_d).in_use.load(Ordering::Acquire),
+               "listen_close left pending PCB D in use");
+
+    // 9. STUMP #148 step 7: orphan SYN_RECEIVED PCBs are reaped.
+    //    Register a listener, allocate a PCB and put it in
+    //    SYN_RECEIVED with parent_listener_idx pointing at our slot,
+    //    then close the listener. The orphan PCB should be freed.
+    let s4 = listen_register(TEST_PORT, 4, 0, TEST_FD)
+        .map_err(|_| "step 9 re-register failed")?;
+    let p_e = pcb_alloc().ok_or("step 9 pcb_alloc E failed")?;
+    {
+        let pe = pcb_mut(p_e);
+        pe.local_port = TEST_PORT;
+        pe.remote_ip = 0x0A0B0C0F;
+        pe.remote_port = 5007;
+        pe.state.store(STATE_SYN_RECEIVED, Ordering::Release);
+        pe.parent_listener_idx.store(s4 as u32, Ordering::Release);
+    }
+    listen_close(TEST_PORT);
+    assert_ok!(!pcb(p_e).in_use.load(Ordering::Acquire),
+               "listen_close left orphan SYN_RECV PCB in use");
+
     // Count final state for the report.
     let mut listener_count: u32 = 0;
     for i in 0..MAX_LISTENERS {
