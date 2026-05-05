@@ -295,16 +295,283 @@ impl TcpPcb {
 
 static mut TCP_PCBS: [TcpPcb; MAX_PCBS] = [const { TcpPcb::empty() }; MAX_PCBS];
 
+// ─── STUMP #148: Server-side TCP — Listener table ─────────────────────
+//
+// A `Listener` represents a `(local_port, backlog)` pair waiting to
+// accept inbound connections. It owns:
+//   - the local port the operator bind()ed to + listen()ed on
+//   - the listening fd (so `epoll::mark_ready` can wake `epoll_wait`)
+//   - the cave that owns it (per-cave isolation when caves close)
+//   - an accept queue: a fixed-size ring of `pcb_id`s for connections
+//     that completed the 3-way handshake but haven't been `accept()`ed
+//     yet
+//   - `backlog` capping the accept queue depth
+//
+// The listener does NOT hold sequence/window state — it's purely an
+// accept-rendezvous. SYN_RECEIVED PCBs (allocated by the SYN-on-LISTEN
+// handler in `handle_incoming`) carry their own state and reference
+// their parent listener via `parent_listener_idx` for the third-ACK
+// completion path.
+//
+// Mixing listeners and connection PCBs in one table would force every
+// state-machine branch in `handle_incoming` to handle "LISTEN means
+// data fields are garbage" — separate tables keep both clean.
+
+pub const MAX_LISTENERS: usize = 16;
+pub const ACCEPT_QUEUE_DEPTH: usize = 16;
+
+pub struct Listener {
+    pub in_use: AtomicBool,
+    /// Local port we accept on (host byte order).
+    pub local_port: u16,
+    /// `backlog` from `listen(2)` — caps the accept queue.
+    pub backlog: u8,
+    /// Cave that owns this listener; cleared on cave-switch.
+    pub cave_id: u16,
+    /// Listening fd for `epoll_wait` readiness signaling. -1 if no fd.
+    pub fd: AtomicI32,
+    /// Accept queue: ring of pcb_ids for completed-handshake conns
+    /// awaiting `accept()`. Producer: SYN_RECEIVED→ESTABLISHED path.
+    /// Consumer: `sys_accept` / `accept_pop`.
+    pub accept_q: [u16; ACCEPT_QUEUE_DEPTH],
+    pub accept_head: AtomicUsize, // producer index (write)
+    pub accept_tail: AtomicUsize, // consumer index (read)
+    /// Closing-generation counter. Bumped by `listener_close` so a
+    /// concurrent accept() that already popped a pcb_id can detect
+    /// the listener went away mid-flight and refund.
+    pub close_gen: AtomicU32,
+}
+
+impl Listener {
+    const fn empty() -> Self {
+        Self {
+            in_use: AtomicBool::new(false),
+            local_port: 0,
+            backlog: 0,
+            cave_id: 0,
+            fd: AtomicI32::new(-1),
+            accept_q: [0u16; ACCEPT_QUEUE_DEPTH],
+            accept_head: AtomicUsize::new(0),
+            accept_tail: AtomicUsize::new(0),
+            close_gen: AtomicU32::new(0),
+        }
+    }
+
+    #[inline]
+    fn accept_count(&self) -> usize {
+        let h = self.accept_head.load(Ordering::Acquire);
+        let t = self.accept_tail.load(Ordering::Acquire);
+        h.wrapping_sub(t)
+    }
+}
+
+static mut LISTENERS: [Listener; MAX_LISTENERS] =
+    [const { Listener::empty() }; MAX_LISTENERS];
+
+#[inline]
+fn listener(idx: usize) -> &'static Listener {
+    unsafe {
+        let p = core::ptr::addr_of!(LISTENERS) as *const Listener;
+        &*p.add(idx)
+    }
+}
+
+#[inline]
+fn listener_mut(idx: usize) -> &'static mut Listener {
+    unsafe {
+        let p = core::ptr::addr_of_mut!(LISTENERS) as *mut Listener;
+        &mut *p.add(idx)
+    }
+}
+
+/// Look up a listener by port. Returns the slot index if any active
+/// listener owns `local_port`, else None.
+pub fn listener_lookup_by_port(local_port: u16) -> Option<usize> {
+    for i in 0..MAX_LISTENERS {
+        let l = listener(i);
+        if l.in_use.load(Ordering::Acquire) && l.local_port == local_port {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Register a new listener for `local_port`. Returns the slot index
+/// or one of:
+///   - `Err("EADDRINUSE")`  if any active listener or non-TIME_WAIT
+///                          PCB already owns this port
+///   - `Err("EMFILE")`      if all MAX_LISTENERS slots are full
+///
+/// `backlog` is clamped to `ACCEPT_QUEUE_DEPTH` (Linux's `somaxconn`
+/// equivalent for us).
+///
+/// Caller (sockets.rs::listen) is responsible for `bind()`ing the
+/// fd before calling — we don't validate the cave owns the fd.
+pub fn listen_register(
+    local_port: u16,
+    backlog: i32,
+    cave_id: u16,
+    fd: i32,
+) -> Result<usize, &'static str> {
+    if local_port == 0 { return Err("EINVAL: port 0"); }
+
+    alloc_lock();
+
+    // Port collision against existing listeners.
+    for i in 0..MAX_LISTENERS {
+        let l = listener(i);
+        if l.in_use.load(Ordering::Acquire) && l.local_port == local_port {
+            alloc_unlock();
+            return Err("EADDRINUSE");
+        }
+    }
+    // Port collision against active client connection PCBs that
+    // happen to use the same local_port (rare — outbound clients
+    // get random ephemeral ports — but possible with explicit bind).
+    // TIME_WAIT is excluded so SO_REUSEADDR can land in a future step.
+    unsafe {
+        for i in 0..MAX_PCBS {
+            let p = &TCP_PCBS[i];
+            if !p.in_use.load(Ordering::Acquire) { continue; }
+            if p.local_port != local_port { continue; }
+            let st = p.state.load(Ordering::Acquire);
+            if st != STATE_CLOSED && st != STATE_TIME_WAIT {
+                alloc_unlock();
+                return Err("EADDRINUSE");
+            }
+        }
+    }
+
+    // Find a free slot.
+    let mut slot = None;
+    for i in 0..MAX_LISTENERS {
+        let l = listener(i);
+        if !l.in_use.load(Ordering::Acquire) {
+            slot = Some(i);
+            break;
+        }
+    }
+    let slot = match slot {
+        Some(s) => s,
+        None => { alloc_unlock(); return Err("EMFILE"); }
+    };
+
+    // Populate the slot.
+    let l = listener_mut(slot);
+    l.local_port = local_port;
+    l.backlog = backlog.clamp(1, ACCEPT_QUEUE_DEPTH as i32) as u8;
+    l.cave_id = cave_id;
+    l.fd.store(fd, Ordering::Release);
+    l.accept_head.store(0, Ordering::Release);
+    l.accept_tail.store(0, Ordering::Release);
+    l.close_gen.fetch_add(1, Ordering::AcqRel);
+    l.in_use.store(true, Ordering::Release);
+
+    alloc_unlock();
+    Ok(slot)
+}
+
+/// Tear down a listener. Drains the accept queue (each pending PCB
+/// gets RST+free) and clears the slot. Idempotent — silent no-op if
+/// no listener exists for `local_port`.
+pub fn listen_close(local_port: u16) {
+    alloc_lock();
+    let slot = (0..MAX_LISTENERS).find(|&i| {
+        let l = listener(i);
+        l.in_use.load(Ordering::Acquire) && l.local_port == local_port
+    });
+    if let Some(i) = slot {
+        let l = listener_mut(i);
+        // Bump generation FIRST so any in-flight accept() sees the
+        // listener went away and refunds before we wipe state.
+        l.close_gen.fetch_add(1, Ordering::AcqRel);
+        // Drain the accept queue: each pcb_id was a fully-established
+        // connection that the operator never accept()ed. RST + free.
+        loop {
+            let h = l.accept_head.load(Ordering::Acquire);
+            let t = l.accept_tail.load(Ordering::Acquire);
+            if h == t { break; }
+            let pcb_id = l.accept_q[t % ACCEPT_QUEUE_DEPTH] as usize;
+            l.accept_tail.store(t.wrapping_add(1), Ordering::Release);
+            // Best-effort RST. Caller may have already closed the
+            // PCB via some other path; pcb_free is safe regardless.
+            if pcb_id < MAX_PCBS {
+                pcb_free(pcb_id);
+            }
+        }
+        // Wipe the slot.
+        l.local_port = 0;
+        l.backlog = 0;
+        l.cave_id = 0;
+        l.fd.store(-1, Ordering::Release);
+        l.in_use.store(false, Ordering::Release);
+    }
+    alloc_unlock();
+}
+
+/// Push a completed-handshake PCB onto the listener's accept queue.
+/// Called from the SYN_RECEIVED→ESTABLISHED transition in
+/// `handle_incoming`. Returns `Ok(())` if queued, `Err(())` if the
+/// queue is full (caller should RST and free the PCB).
+///
+/// On success, also signals epoll readiness on the listening fd so
+/// a parked `epoll_wait` returns with EPOLLIN.
+pub fn listener_accept_push(listener_idx: usize, pcb_id: usize) -> Result<(), ()> {
+    if listener_idx >= MAX_LISTENERS { return Err(()); }
+    let l = listener_mut(listener_idx);
+    if !l.in_use.load(Ordering::Acquire) { return Err(()); }
+    let h = l.accept_head.load(Ordering::Acquire);
+    let t = l.accept_tail.load(Ordering::Acquire);
+    if h.wrapping_sub(t) >= (l.backlog as usize) { return Err(()); }
+    l.accept_q[h % ACCEPT_QUEUE_DEPTH] = pcb_id as u16;
+    l.accept_head.store(h.wrapping_add(1), Ordering::Release);
+    // Wake epoll_wait on the listening fd.
+    let fd = l.fd.load(Ordering::Acquire);
+    if fd >= 0 {
+        crate::batcave::linux::epoll::mark_ready(fd, EPOLLIN);
+    }
+    Ok(())
+}
+
+/// Pop a completed-handshake PCB from the listener's accept queue.
+/// Called from `sys_accept[4]`. Returns `Some(pcb_id)` or None when
+/// the queue is empty (caller returns EAGAIN or blocks).
+pub fn listener_accept_pop(listener_idx: usize) -> Option<usize> {
+    if listener_idx >= MAX_LISTENERS { return None; }
+    let l = listener_mut(listener_idx);
+    if !l.in_use.load(Ordering::Acquire) { return None; }
+    let h = l.accept_head.load(Ordering::Acquire);
+    let t = l.accept_tail.load(Ordering::Acquire);
+    if h == t { return None; }
+    let pcb_id = l.accept_q[t % ACCEPT_QUEUE_DEPTH] as usize;
+    l.accept_tail.store(t.wrapping_add(1), Ordering::Release);
+    Some(pcb_id)
+}
+
+/// True iff `listener_idx` has at least one PCB ready to accept.
+pub fn listener_has_pending(listener_idx: usize) -> bool {
+    if listener_idx >= MAX_LISTENERS { return false; }
+    listener(listener_idx).accept_count() > 0
+}
+
 /// V6-XLAYER-005/006: clear every PCB on cave switch so a new tenant
 /// can't inherit (or hijack) the previous cave's TCP connections.
 ///
 /// V8-ROOT-1: IRQ-masked for duration. Same reasoning as sockets reset.
+///
+/// STUMP #148: also clear the LISTENERS table — a listening port owned
+/// by cave A must not stay open into cave B. (We can't do per-cave
+/// filtering here cheaply; the rare valid case where cave B has its
+/// own listener is handled by re-registration after enter.)
 pub fn reset_for_cave_switch() {
     let _g = crate::kernel::sync::IrqGuard::new();
     alloc_lock();
     unsafe {
         for i in 0..MAX_PCBS {
             TCP_PCBS[i] = TcpPcb::empty();
+        }
+        for i in 0..MAX_LISTENERS {
+            LISTENERS[i] = Listener::empty();
         }
     }
     alloc_unlock();

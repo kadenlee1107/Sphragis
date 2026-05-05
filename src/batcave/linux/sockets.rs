@@ -444,23 +444,60 @@ pub fn bind(fd: i32, addr: *const SockaddrIn, len: u32) -> i64 {
     }
 }
 
-/// listen(2) — inbound connections are NOT YET SUPPORTED by our TCP stack
-/// (it is client-only). We record the backlog and return success so that
-/// programs that listen-then-never-accept don't crash. accept4() will return
-/// EAGAIN forever.
+/// listen(2)
 ///
-/// TODO(tcp): add server-side listen queue in src/net/tcp.rs
+/// STUMP #148: real server-side listen wired through to
+/// `tcp::listen_register`. The Slot bookkeeping (status=Listening,
+/// backlog) stays — those drive sockopt/getsockname behavior and
+/// epoll readability checks — but now we ALSO register a `Listener`
+/// in the TCP stack so the SYN-on-LISTEN path in
+/// `tcp::handle_incoming` knows which port to accept on.
+///
+/// Errors:
+///   EOPNOTSUPP — non-TCP socket
+///   EINVAL     — socket not in Unbound/Bound state, or no port
+///                bound yet (listen requires bind first)
+///   EADDRINUSE — another listener already owns this port
+///   EMFILE     — kernel listener table full (MAX_LISTENERS=16)
 pub fn listen(fd: i32, backlog: i32) -> i64 {
-    match with_slot(fd, |s| {
+    // First validate + lock in the Slot side. Capture the port so we
+    // can call into the TCP stack OUTSIDE the with_slot lock (the
+    // listen_register call takes its own alloc_lock and we don't want
+    // nested lock acquisition).
+    let port = match with_slot(fd, |s| {
         if s.kind != SockKind::Tcp { return Err(EOPNOTSUPP); }
         if s.status != SockStatus::Bound && s.status != SockStatus::Unbound {
             return Err(EINVAL);
         }
+        // listen() requires a bound port. If the caller never bind()ed
+        // a port, this is EINVAL — Linux returns the same.
+        if s.local_port == 0 { return Err(EINVAL); }
         s.backlog = backlog.max(1);
-        s.status = SockStatus::Listening;
-        Ok(0i64)
+        // Don't flip status to Listening yet — only after the TCP
+        // listener registration succeeds. Otherwise a follow-up
+        // accept() on a "Listening" Slot with no kernel listener
+        // would EAGAIN forever.
+        Ok(s.local_port)
     }) {
-        Ok(r) => r, Err(e) => e,
+        Ok(port) => port,
+        Err(e) => return e,
+    };
+
+    // Register with the TCP stack. cave_id 0 is a placeholder until
+    // STUMP #148 step 6 wires per-cave inbound policy.
+    let cave_id = 0u16;
+    match crate::net::tcp::listen_register(port, backlog, cave_id, fd) {
+        Ok(_idx) => {
+            // TCP side accepted — flip Slot status to Listening.
+            let _ = with_slot(fd, |s| {
+                s.status = SockStatus::Listening;
+                Ok(0i64)
+            });
+            0
+        }
+        Err("EADDRINUSE") => EADDRINUSE,
+        Err("EMFILE")     => EMFILE,
+        Err(_)            => EINVAL,
     }
 }
 
