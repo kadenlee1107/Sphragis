@@ -66,6 +66,14 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
  && ln -sf /root/.cargo/bin/rustc  /usr/local/bin/rustc \
  && ln -sf /root/.cargo/bin/rustup /usr/local/bin/rustup
 
+# Google's `gn` build tool. Required by the vcpkg `skia` port —
+# Skia uses GN to generate ninja files, and vcpkg-gn (the cmake
+# wrapper) silently passes `None` for the gn binary path if it
+# can't find one. On Ubuntu the package is `generate-ninja`; the
+# binary is still named `gn`.
+RUN apt-get update && apt-get install -y --no-install-recommends generate-ninja \
+    && rm -rf /var/lib/apt/lists/*
+
 # Build user (matches chromium_port's `build` user). Ubuntu 24.04 ships
 # with a default `ubuntu` user at uid 1000; delete it first so our
 # `build` user can claim that uid.
