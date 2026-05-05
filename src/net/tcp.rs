@@ -556,6 +556,179 @@ pub fn listener_accept_pop(listener_idx: usize) -> Option<usize> {
     Some(pcb_id)
 }
 
+// ─── STUMP #148 step 5: SYN cookies ──────────────────────────────────
+//
+// RFC 4987 SYN cookies — DoS mitigation against SYN floods. Without
+// them, an attacker spraying SYNs from spoofed source IPs exhausts
+// MAX_PCBS=64 (each SYN allocates a SYN_RECEIVED PCB that never gets
+// the third ACK because the spoof source can't see our SYN+ACK).
+// Real users then get "no free PCBs" silently dropped.
+//
+// With cookies, we don't allocate ANY state for an inbound SYN when
+// the table is full. Instead we encode all the state we'll need
+// (MSS class + time window + MAC) into the ISN we send back. When
+// the third ACK arrives with `ack = cookie_isn + 1`, we re-derive
+// the MAC and verify it — if valid, the connection is "real" (the
+// peer must have received our SYN+ACK to know our ISN), so we
+// allocate the PCB at ESTABLISHED-time.
+//
+// Cookie ISN encoding (32 bits):
+//   bits 31..27 (5)  : MSS class (we only use 0..3 today)
+//   bits 26..24 (3)  : time window number (3 bits → 8 windows × 60s
+//                       = 8 minutes total cookie validity, but we
+//                       only accept current + previous = ~120s)
+//   bits 23..0  (24) : MAC = HMAC-SHA-256(secret, src_ip || src_port
+//                       || dst_port || mss_class || twin)[..3]
+//
+// The 24-bit MAC has a 1/16M forge probability per attempt. An
+// off-path attacker can't see our SYN+ACK so they have to guess
+// blind; 16M attempts at line rate is hours. The threat model
+// for SYN cookies is DoS, not authentication — anyone observing
+// our SYN+ACK could replay. Acceptable per the RFC.
+//
+// Cookies engage ONLY when pcb_alloc returns None (table full).
+// Normal operation = no cookies = full TCP options (window scaling,
+// SACK, etc.) preserved. The MSS-class downgrade only matters under
+// flood, which is the exact case we're trying to keep alive.
+
+const COOKIE_WINDOW_SECONDS: u64 = 60;
+const COOKIE_MSS_CLASSES: [u16; 4] = [536, 1220, 1380, 1460];
+
+fn cookie_secret() -> [u8; 32] {
+    // Per-boot secret keyed off boot_cookie. Same primitive used for
+    // ISN derivation; OK to share because the cookie input space
+    // (src_ip || src_port || dst_port || mss || twin) is disjoint
+    // from the ISN input space (pcb_id || remote_ip || remote_port).
+    let bc = boot_cookie();
+    let mut input = [0u8; 16];
+    input[..8].copy_from_slice(&bc.to_le_bytes());
+    input[8..].copy_from_slice(b"syn-cookie\0\0\0\0\0\0");
+    crate::crypto::sha256::hash(&input)
+}
+
+fn cookie_current_twin() -> u8 {
+    // Time window number from cntpct_el0 / freq / 60. Take low 3 bits.
+    let now: u64;
+    let freq: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) now);
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+    }
+    if freq == 0 { return 0; }
+    ((now / freq / COOKIE_WINDOW_SECONDS) & 0x07) as u8
+}
+
+fn cookie_mss_class_for(mss: u16) -> u8 {
+    // Pick the largest class <= mss. Falls through to class 0 (536).
+    let mut cls = 0u8;
+    for (i, &m) in COOKIE_MSS_CLASSES.iter().enumerate() {
+        if mss >= m { cls = i as u8; }
+    }
+    cls
+}
+
+/// Compute the 24-bit MAC over the 4-tuple + mss class + time window.
+/// Returns the cookie ISN with all bit fields packed.
+fn cookie_compute(
+    secret: &[u8; 32],
+    src_ip: u32,
+    src_port: u16,
+    dst_port: u16,
+    mss_class: u8,
+    twin: u8,
+) -> u32 {
+    let mut input = [0u8; 10];
+    input[0..4].copy_from_slice(&src_ip.to_be_bytes());
+    input[4..6].copy_from_slice(&src_port.to_be_bytes());
+    input[6..8].copy_from_slice(&dst_port.to_be_bytes());
+    input[8] = mss_class;
+    input[9] = twin;
+    let mac = crate::crypto::sha256::hmac(secret, &input);
+    let mac24 = ((mac[0] as u32) << 16) | ((mac[1] as u32) << 8) | (mac[2] as u32);
+    ((mss_class as u32 & 0x1F) << 27)
+        | ((twin as u32 & 0x07) << 24)
+        | (mac24 & 0x00FF_FFFF)
+}
+
+/// Validate a cookie carried by a third-ACK's `ack-1` value.
+/// Tries the current and previous time windows. On success returns
+/// `Some(mss_class)`; on failure returns None.
+fn cookie_validate(
+    secret: &[u8; 32],
+    src_ip: u32,
+    src_port: u16,
+    dst_port: u16,
+    cookie_isn: u32,
+) -> Option<u8> {
+    let mss_class = ((cookie_isn >> 27) & 0x1F) as u8;
+    let twin_in   = ((cookie_isn >> 24) & 0x07) as u8;
+    let mac_in    = cookie_isn & 0x00FF_FFFF;
+
+    if (mss_class as usize) >= COOKIE_MSS_CLASSES.len() { return None; }
+
+    // Accept current and previous time window (modular wrap-around
+    // because we only have 3 bits — drop windows that aren't within
+    // 1 of "now" mod 8).
+    let now = cookie_current_twin();
+    let prev = (now.wrapping_sub(1)) & 0x07;
+    if twin_in != now && twin_in != prev {
+        return None;
+    }
+
+    // Re-compute and constant-time compare the MAC.
+    let mut input = [0u8; 10];
+    input[0..4].copy_from_slice(&src_ip.to_be_bytes());
+    input[4..6].copy_from_slice(&src_port.to_be_bytes());
+    input[6..8].copy_from_slice(&dst_port.to_be_bytes());
+    input[8] = mss_class;
+    input[9] = twin_in;
+    let mac = crate::crypto::sha256::hmac(secret, &input);
+    let expected = ((mac[0] as u32) << 16) | ((mac[1] as u32) << 8) | (mac[2] as u32);
+    let mut diff = (mac_in ^ expected) as u8;
+    diff |= ((mac_in ^ expected) >> 8)  as u8;
+    diff |= ((mac_in ^ expected) >> 16) as u8;
+    if diff == 0 { Some(mss_class) } else { None }
+}
+
+/// Send a TCP segment without an associated PCB. Used by the SYN-cookie
+/// path where we deliberately don't allocate state for a SYN_RECEIVED
+/// half-open. Caller supplies the full 4-tuple, sequence numbers, and
+/// flags; we build the segment, compute the checksum, and ship it via
+/// `ip::send`.
+///
+/// `wnd` is the receive window we advertise. With cookies engaged the
+/// PCB doesn't exist yet so we use a fixed reasonable default.
+fn send_tcp_raw(
+    src_ip: u32, // our IP (network order); pass 0 to use ip::our_ip()
+    dst_ip: u32,
+    src_port: u16,
+    dst_port: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    wnd: u16,
+) {
+    let mut tcp = [0u8; TCP_HDR_SIZE];
+    tcp[0..2].copy_from_slice(&src_port.to_be_bytes());
+    tcp[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    tcp[4..8].copy_from_slice(&seq.to_be_bytes());
+    tcp[8..12].copy_from_slice(&ack.to_be_bytes());
+    tcp[12] = 0x50; // data offset 5 words, no options
+    tcp[13] = flags;
+    tcp[14..16].copy_from_slice(&wnd.to_be_bytes());
+
+    let our_ip_be = if src_ip == 0 { ip::our_ip() } else { src_ip };
+    let mut pseudo = [0u8; 12];
+    pseudo[0..4].copy_from_slice(&our_ip_be.to_be_bytes());
+    pseudo[4..8].copy_from_slice(&dst_ip.to_be_bytes());
+    pseudo[9] = 6;
+    pseudo[10..12].copy_from_slice(&(TCP_HDR_SIZE as u16).to_be_bytes());
+    let cksum = tcp_checksum(&pseudo, &tcp);
+    tcp[16..18].copy_from_slice(&cksum.to_be_bytes());
+
+    let _ = ip::send(dst_ip, 6, &tcp);
+}
+
 /// True iff `listener_idx` has at least one PCB ready to accept.
 pub fn listener_has_pending(listener_idx: usize) -> bool {
     if listener_idx >= MAX_LISTENERS { return false; }
@@ -1027,62 +1200,117 @@ pub fn handle_incoming(pkt: &IpPacket) {
     let id = match pcb_lookup(pkt.src, src_port, dst_port) {
         Some(i) => i,
         None => {
-            // STUMP #148 step 2: no PCB for this 4-tuple. If the
-            // packet is a bare SYN (no ACK, no RST — already caught
-            // above) AND there's a listener for `dst_port`, this is
-            // a new inbound connection: allocate a SYN_RECEIVED PCB,
-            // send SYN+ACK, wait for the third ACK to push onto the
-            // accept queue (step 3).
-            //
-            // Anything else (bare ACK, FIN, etc. with no PCB match)
-            // is silently dropped — no RST to keep the surface small.
-            if (flags & TCP_SYN) == 0 || (flags & TCP_ACK) != 0 {
+            // No PCB for this 4-tuple. Three sub-paths:
+            //   A) bare SYN + listener for dst_port → new connection
+            //      (steps 2 + 5 SYN-cookie fallback if PCB table full)
+            //   B) bare ACK + listener for dst_port + valid cookie →
+            //      reconstruct PCB at ESTABLISHED (step 5 second half)
+            //   C) anything else → silently drop
+            let listener_idx = listener_lookup_by_port(dst_port);
+
+            let is_bare_syn = (flags & TCP_SYN) != 0 && (flags & TCP_ACK) == 0;
+            let is_bare_ack = (flags & TCP_SYN) == 0 && (flags & TCP_ACK) != 0;
+
+            // Path B: bare ACK potentially carrying a SYN cookie.
+            if is_bare_ack {
+                let li = match listener_idx { Some(i) => i, None => return };
+                // The peer's third ACK has ack = our_isn + 1, where
+                // our_isn was the cookie we encoded.
+                let cookie_isn = ack.wrapping_sub(1);
+                let secret = cookie_secret();
+                let mss_class = match cookie_validate(
+                    &secret, pkt.src, src_port, dst_port, cookie_isn,
+                ) {
+                    Some(c) => c,
+                    None => return, // not a cookie we'd issue — drop
+                };
+
+                // Cookie validated. Allocate a real PCB now (the SYN
+                // flood that exhausted the table earlier may have
+                // eased; if alloc still fails the connection is lost
+                // but the peer can retry).
+                let new_id = match pcb_alloc() { Some(i) => i, None => return };
+                let np = pcb_mut(new_id);
+                np.local_port  = dst_port;
+                np.remote_ip   = pkt.src;
+                np.remote_port = src_port;
+                // We never tracked peer_seq + 1, so derive it from
+                // the third ACK: peer's `seq` is the byte after the
+                // SYN's seq, so peer_seq_original = received seq - 1
+                // and rcv_nxt = peer_seq_original + 1 = received seq.
+                np.rcv_nxt = seq;
+                np.snd_nxt = ack;             // peer ack'd cookie+1
+                np.snd_una = ack;
+                np.rcv_wnd = RX_BUF_SIZE as u16;
+                np.parent_listener_idx.store(li as u32, Ordering::Release);
+                np.state.store(STATE_ESTABLISHED, Ordering::Release);
+                let _ = mss_class; // future: clamp send-MSS
+
+                // Push onto accept queue + wake epoll on listening fd.
+                if listener_accept_push(li, new_id).is_err() {
+                    // Queue full — RST + free.
+                    send_tcp_pcb(new_id, TCP_RST, &[]);
+                    pcb_free(new_id);
+                }
                 return;
             }
-            let listener_idx = match listener_lookup_by_port(dst_port) {
-                Some(i) => i,
-                None => return,
-            };
 
-            // Allocate a SYN_RECEIVED PCB. If the table is full just
-            // drop — step 5 (SYN cookies) will give us a way to
-            // accept beyond MAX_PCBS by encoding state into the ISN.
-            let new_id = match pcb_alloc() {
-                Some(i) => i,
-                None => return,
-            };
+            // Path A: bare SYN to a listener.
+            if is_bare_syn {
+                let li = match listener_idx { Some(i) => i, None => return };
 
-            let np = pcb_mut(new_id);
-            np.local_port  = dst_port;
-            np.remote_ip   = pkt.src;
-            np.remote_port = src_port;
-            // RFC 793: rcv_nxt = peer's ISN + 1 (we'll ACK that).
-            np.rcv_nxt = seq.wrapping_add(1);
-            // Our ISN, derived deterministically from the 4-tuple +
-            // boot cookie + cntpct so an attacker can't predict it.
-            let isn = compute_isn(new_id, pkt.src, src_port);
-            np.snd_nxt = isn.wrapping_add(1);
-            np.snd_una = isn;
-            // Window we'll advertise to the peer.
-            np.rcv_wnd = RX_BUF_SIZE as u16;
-            // Back-pointer for step 3's accept-queue push.
-            np.parent_listener_idx.store(listener_idx as u32, Ordering::Release);
-            // State first, then send.
-            np.state.store(STATE_SYN_RECEIVED, Ordering::Release);
-            // Stamp time so the existing zombie-drainer expires
-            // SYN_RECEIVED PCBs that never get the third ACK
-            // (DoS half-open mitigation, also covers legit drops).
-            unsafe {
-                let now: u64;
-                core::arch::asm!("mrs {}, cntpct_el0", out(reg) now);
-                np.time_wait_entered.store(now, Ordering::Release);
+                // Try normal SYN_RECEIVED allocation first. If table
+                // is full, fall through to the SYN-cookie path that
+                // sends a SYN+ACK without keeping any state.
+                if let Some(new_id) = pcb_alloc() {
+                    let np = pcb_mut(new_id);
+                    np.local_port  = dst_port;
+                    np.remote_ip   = pkt.src;
+                    np.remote_port = src_port;
+                    np.rcv_nxt = seq.wrapping_add(1);
+                    let isn = compute_isn(new_id, pkt.src, src_port);
+                    np.snd_nxt = isn.wrapping_add(1);
+                    np.snd_una = isn;
+                    np.rcv_wnd = RX_BUF_SIZE as u16;
+                    np.parent_listener_idx.store(li as u32, Ordering::Release);
+                    np.state.store(STATE_SYN_RECEIVED, Ordering::Release);
+                    unsafe {
+                        let now: u64;
+                        core::arch::asm!("mrs {}, cntpct_el0", out(reg) now);
+                        np.time_wait_entered.store(now, Ordering::Release);
+                    }
+                    send_tcp_pcb(new_id, TCP_SYN | TCP_ACK, &[]);
+                } else {
+                    // STUMP #148 step 5: PCB table full. Don't drop —
+                    // fall back to a SYN cookie. We allocate ZERO
+                    // state; the cookie ISN we send back encodes
+                    // everything we need to validate the third ACK.
+                    let secret = cookie_secret();
+                    let twin = cookie_current_twin();
+                    // Default MSS class for an unknown peer (no MSS
+                    // option support yet — when we parse TCP options
+                    // we'll wire the real peer-advertised MSS here).
+                    let mss_class = cookie_mss_class_for(1460);
+                    let cookie_isn = cookie_compute(
+                        &secret, pkt.src, src_port, dst_port,
+                        mss_class, twin,
+                    );
+                    // SYN+ACK with seq=cookie_isn, ack=peer_seq+1.
+                    send_tcp_raw(
+                        0,             // our_ip — let send_tcp_raw fetch
+                        pkt.src,
+                        dst_port,
+                        src_port,
+                        cookie_isn,
+                        seq.wrapping_add(1),
+                        TCP_SYN | TCP_ACK,
+                        RX_BUF_SIZE as u16,
+                    );
+                }
+                return;
             }
 
-            // SYN+ACK back to the peer. send_tcp_pcb pulls
-            // local_port/remote/seq/ack from the PCB we just filled.
-            // It uses snd_nxt-1 for the SYN-bearing seq (ISN), which
-            // matches RFC 793.
-            send_tcp_pcb(new_id, TCP_SYN | TCP_ACK, &[]);
+            // Path C: drop (FIN/RST/etc. with no matching PCB).
             return;
         }
     };
