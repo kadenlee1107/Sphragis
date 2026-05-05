@@ -501,19 +501,121 @@ pub fn listen(fd: i32, backlog: i32) -> i64 {
     }
 }
 
-/// accept4(2) — stubbed: we always return EAGAIN because our TCP stack
-/// cannot accept. Non-blocking epoll users will park; blocking users would
-/// spin forever (we avoid blocking by returning EAGAIN regardless).
+/// accept4(2) — STUMP #148 step 4: real server-side accept.
 ///
-/// TODO(tcp): real server-side accept.
-pub fn accept4(fd: i32, _addr: *mut SockaddrIn, _len: *mut u32, _flags: i32) -> i64 {
-    match with_slot(fd, |s| {
+/// Validates the listening fd, looks up the matching kernel
+/// `Listener`, and pops a completed-handshake PCB off its accept
+/// queue. Returns a fresh socket fd whose Slot is bound to that PCB
+/// in the Connected state. The peer's address is written to
+/// `addr`/`*len` if non-null.
+///
+/// Blocking semantics: if the queue is empty AND the listening
+/// socket is blocking, spin-poll the network stack for up to 30s
+/// waiting for a SYN_RECV → ESTABLISHED transition to enqueue
+/// something. Non-blocking sockets get EAGAIN immediately.
+///
+/// Errors:
+///   EOPNOTSUPP — non-TCP fd
+///   EINVAL     — fd not in Listening state, or no kernel listener
+///                bound to it (shouldn't happen if listen() succeeded)
+///   EAGAIN     — non-blocking and queue empty
+///   EMFILE     — couldn't allocate a new socket Slot
+pub fn accept4(fd: i32, addr: *mut SockaddrIn, len: *mut u32, flags: i32) -> i64 {
+    // Validate listening + capture nonblock.
+    let nonblock_listener = match with_slot(fd, |s| {
         if s.kind != SockKind::Tcp { return Err(EOPNOTSUPP); }
         if s.status != SockStatus::Listening { return Err(EINVAL); }
-        Ok(EAGAIN)
+        Ok(s.nonblock)
     }) {
-        Ok(r) => r, Err(e) => e,
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    // Find the kernel Listener for this fd.
+    let listener_idx = match crate::net::tcp::listener_lookup_by_fd(fd) {
+        Some(i) => i,
+        None => return EINVAL, // sockets::listen succeeded but no kernel listener? shouldn't happen
+    };
+
+    // Pop a ready PCB. If none and we're blocking, spin-poll the
+    // network stack until one shows up or 30s elapses.
+    let pcb_id = if let Some(id) = crate::net::tcp::listener_accept_pop(listener_idx) {
+        id
+    } else if nonblock_listener {
+        return EAGAIN;
+    } else {
+        // Blocking accept: spin with a 30s deadline.
+        let start: u64;
+        let freq: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
+            core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+        }
+        let deadline = start + freq * 30;
+        let mut popped: Option<usize> = None;
+        loop {
+            crate::net::poll_once();
+            if let Some(id) = crate::net::tcp::listener_accept_pop(listener_idx) {
+                popped = Some(id);
+                break;
+            }
+            let now: u64;
+            unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+            if now > deadline { break; }
+            core::hint::spin_loop();
+        }
+        match popped {
+            Some(id) => id,
+            None => return EAGAIN, // 30s timeout — Linux uses ETIMEDOUT but EAGAIN is also valid here
+        }
+    };
+
+    // Allocate a new socket Slot for the accepted connection.
+    let new_slot = match alloc_slot() {
+        Some(i) => i,
+        None => {
+            // Couldn't allocate a Slot — RST the PCB so the peer's
+            // server doesn't think the conn is established.
+            crate::net::tcp::close_pcb(pcb_id);
+            return EMFILE;
+        }
+    };
+
+    let new_fd = SOCKET_FD_BASE + new_slot as i32;
+    let new_nonblock = (flags & SOCK_NONBLOCK) != 0;
+    let new_cloexec  = (flags & SOCK_CLOEXEC)  != 0;
+
+    // Populate the new Slot.
+    let _ = with_slot(new_fd, |s| {
+        s.kind = SockKind::Tcp;
+        s.status = SockStatus::Connected;
+        s.nonblock = new_nonblock;
+        s.cloexec = new_cloexec;
+        s.pcb_id = pcb_id as i32;
+        // local_port matches the listener's port (this PCB inherits
+        // the bound port from the SYN-on-LISTEN allocation).
+        let (rip, rport) = crate::net::tcp::pcb_remote(pcb_id);
+        s.local_port = 0; // server doesn't track its own port per-conn;
+                          // use the listener's port if needed via getsockname
+        s.peer_addr = rip;
+        s.peer_port = rport;
+        Ok(0i64)
+    });
+
+    // Tie the PCB to the new fd so future read/write/close from
+    // this fd reaches this PCB.
+    crate::net::tcp::pcb_bind_fd(pcb_id, new_fd);
+    crate::net::tcp::pcb_set_nonblocking(pcb_id, new_nonblock);
+
+    // Fill the caller's sockaddr_in if they passed one. POSIX:
+    // addr may be NULL meaning "don't care," in which case we
+    // skip the write entirely.
+    if !addr.is_null() && !len.is_null() {
+        let (rip, rport) = crate::net::tcp::pcb_remote(pcb_id);
+        let _ = write_sockaddr(addr, len, rip, rport);
     }
+
+    new_fd as i64
 }
 
 /// connect(2)

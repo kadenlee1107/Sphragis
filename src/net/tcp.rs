@@ -562,6 +562,32 @@ pub fn listener_has_pending(listener_idx: usize) -> bool {
     listener(listener_idx).accept_count() > 0
 }
 
+/// Look up an active listener by its associated fd. Returns the
+/// slot index, or None if no active listener owns this fd.
+/// Used by sys_accept[4] to find the right listener from the
+/// listening file descriptor.
+pub fn listener_lookup_by_fd(fd: i32) -> Option<usize> {
+    if fd < 0 { return None; }
+    for i in 0..MAX_LISTENERS {
+        let l = listener(i);
+        if l.in_use.load(Ordering::Acquire) && l.fd.load(Ordering::Acquire) == fd {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Read-only accessor for an established PCB's remote endpoint.
+/// Returns `(remote_ip_be, remote_port_host)` so sys_accept can
+/// fill the caller's `sockaddr_in` out-parameter. Returns
+/// `(0, 0)` if `id` is out of range or the PCB is unused.
+pub fn pcb_remote(id: usize) -> (u32, u16) {
+    if id >= MAX_PCBS { return (0, 0); }
+    let p = pcb(id);
+    if !p.in_use.load(Ordering::Acquire) { return (0, 0); }
+    (p.remote_ip, p.remote_port)
+}
+
 /// V6-XLAYER-005/006: clear every PCB on cave switch so a new tenant
 /// can't inherit (or hijack) the previous cave's TCP connections.
 ///
