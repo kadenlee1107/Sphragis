@@ -250,6 +250,13 @@ pub struct TcpPcb {
     /// `poll_once` scans all PCBs and transitions TIME_WAIT -> CLOSED
     /// once 30 s (2×MSL shortened) have elapsed.
     pub time_wait_entered: AtomicU64,
+
+    /// STUMP #148: for PCBs allocated by the SYN-on-LISTEN handler,
+    /// this is the parent listener's slot index in `LISTENERS[]`.
+    /// `u16::MAX` means "client-side connection, not from a listener."
+    /// Used by step 3's SYN_RECEIVED→ESTABLISHED transition to know
+    /// which listener's accept queue to push onto.
+    pub parent_listener_idx: AtomicU32,
 }
 
 impl TcpPcb {
@@ -277,6 +284,7 @@ impl TcpPcb {
             rx_shut: AtomicBool::new(false),
             tx_shut: AtomicBool::new(false),
             time_wait_entered: AtomicU64::new(0),
+            parent_listener_idx: AtomicU32::new(u32::MAX),
         }
     }
 
@@ -678,6 +686,8 @@ pub fn pcb_free(id: usize) {
     p.error.store(0, Ordering::Release);
     p.is_nonblocking.store(false, Ordering::Release);
     p.time_wait_entered.store(0, Ordering::Release);
+    // STUMP #148: clear parent-listener back-pointer.
+    p.parent_listener_idx.store(u32::MAX, Ordering::Release);
     alloc_unlock();
 }
 
@@ -825,7 +835,65 @@ pub fn handle_incoming(pkt: &IpPacket) {
 
     let id = match pcb_lookup(pkt.src, src_port, dst_port) {
         Some(i) => i,
-        None => return, // unmatched segment — ignore (no RST to keep it simple)
+        None => {
+            // STUMP #148 step 2: no PCB for this 4-tuple. If the
+            // packet is a bare SYN (no ACK, no RST — already caught
+            // above) AND there's a listener for `dst_port`, this is
+            // a new inbound connection: allocate a SYN_RECEIVED PCB,
+            // send SYN+ACK, wait for the third ACK to push onto the
+            // accept queue (step 3).
+            //
+            // Anything else (bare ACK, FIN, etc. with no PCB match)
+            // is silently dropped — no RST to keep the surface small.
+            if (flags & TCP_SYN) == 0 || (flags & TCP_ACK) != 0 {
+                return;
+            }
+            let listener_idx = match listener_lookup_by_port(dst_port) {
+                Some(i) => i,
+                None => return,
+            };
+
+            // Allocate a SYN_RECEIVED PCB. If the table is full just
+            // drop — step 5 (SYN cookies) will give us a way to
+            // accept beyond MAX_PCBS by encoding state into the ISN.
+            let new_id = match pcb_alloc() {
+                Some(i) => i,
+                None => return,
+            };
+
+            let np = pcb_mut(new_id);
+            np.local_port  = dst_port;
+            np.remote_ip   = pkt.src;
+            np.remote_port = src_port;
+            // RFC 793: rcv_nxt = peer's ISN + 1 (we'll ACK that).
+            np.rcv_nxt = seq.wrapping_add(1);
+            // Our ISN, derived deterministically from the 4-tuple +
+            // boot cookie + cntpct so an attacker can't predict it.
+            let isn = compute_isn(new_id, pkt.src, src_port);
+            np.snd_nxt = isn.wrapping_add(1);
+            np.snd_una = isn;
+            // Window we'll advertise to the peer.
+            np.rcv_wnd = RX_BUF_SIZE as u16;
+            // Back-pointer for step 3's accept-queue push.
+            np.parent_listener_idx.store(listener_idx as u32, Ordering::Release);
+            // State first, then send.
+            np.state.store(STATE_SYN_RECEIVED, Ordering::Release);
+            // Stamp time so the existing zombie-drainer expires
+            // SYN_RECEIVED PCBs that never get the third ACK
+            // (DoS half-open mitigation, also covers legit drops).
+            unsafe {
+                let now: u64;
+                core::arch::asm!("mrs {}, cntpct_el0", out(reg) now);
+                np.time_wait_entered.store(now, Ordering::Release);
+            }
+
+            // SYN+ACK back to the peer. send_tcp_pcb pulls
+            // local_port/remote/seq/ack from the PCB we just filled.
+            // It uses snd_nxt-1 for the SYN-bearing seq (ISN), which
+            // matches RFC 793.
+            send_tcp_pcb(new_id, TCP_SYN | TCP_ACK, &[]);
+            return;
+        }
     };
 
     let p = pcb_mut(id);
@@ -877,7 +945,33 @@ pub fn handle_incoming(pkt: &IpPacket) {
             if flags & TCP_ACK != 0 && ack == p.snd_nxt {
                 p.snd_una = ack;
                 p.state.store(STATE_ESTABLISHED, Ordering::Release);
+                // Clear the SYN_RECEIVED zombie-drain timestamp; the
+                // PCB is now a real connection and the existing
+                // ESTABLISHED reaping rules apply (idle timeouts,
+                // explicit close, etc.).
+                p.time_wait_entered.store(0, Ordering::Release);
                 notify_epoll(id, EPOLLOUT);
+
+                // STUMP #148 step 3: if this PCB came from a
+                // SYN-on-LISTEN allocation, push it onto the parent
+                // listener's accept queue so the next sys_accept
+                // returns this fd and epoll_wait wakes on the
+                // listening fd. parent_listener_idx == u32::MAX
+                // means this was a client-side simultaneous-open
+                // PCB, not a server-accept — leave it alone.
+                let parent = p.parent_listener_idx.load(Ordering::Acquire);
+                if parent != u32::MAX {
+                    let parent = parent as usize;
+                    match listener_accept_push(parent, id) {
+                        Ok(()) => { /* listener_accept_push handles epoll */ }
+                        Err(()) => {
+                            // Accept queue full or listener gone.
+                            // RST + free. The peer will see ECONNRESET.
+                            send_tcp_pcb(id, TCP_RST, &[]);
+                            pcb_free(id);
+                        }
+                    }
+                }
             }
         }
 
