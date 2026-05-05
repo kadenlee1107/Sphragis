@@ -491,27 +491,13 @@ pub fn futex_wake(uaddr: u64, max_wakers: u32) -> i64 {
     if !is_valid_uaddr(uaddr) {
         return EINVAL;
     }
-    // Diagnostic — log first 20 wakes so we can see whether Chromium's
-    // signal path ever fires. Used to confirm the IPC-livelock theory:
-    // if zero wakes happen, the producer side isn't running.
-    {
-        use core::sync::atomic::{AtomicU32, Ordering};
-        static WAKE_LOG_CNT: AtomicU32 = AtomicU32::new(0);
-        let n = WAKE_LOG_CNT.fetch_add(1, Ordering::Relaxed);
-        if n < 20 {
-            crate::drivers::uart::puts("[futex-wake #");
-            crate::kernel::mm::print_num(n as usize);
-            crate::drivers::uart::puts("] uaddr=0x");
-            let hex = b"0123456789abcdef";
-            for sh in (0..16).rev() {
-                crate::drivers::uart::putc(
-                    hex[((uaddr >> (sh * 4)) & 0xF) as usize]);
-            }
-            crate::drivers::uart::puts(" max=");
-            crate::kernel::mm::print_num(max_wakers as usize);
-            crate::drivers::uart::puts("\n");
-        }
-    }
+    // Diagnostic — track wake count + log a sample with the woken
+    // count appended so we can see which uaddrs are getting wakes
+    // that hit nothing (woken=0 → producer/consumer mismatch).
+    use core::sync::atomic::{AtomicU32, Ordering as DOrd};
+    static WAKE_LOG_CNT: AtomicU32 = AtomicU32::new(0);
+    let log_n = WAKE_LOG_CNT.fetch_add(1, DOrd::Relaxed);
+    let log_this = log_n < 200;
     let mut woken: i64 = 0;
 
     let g = crate::kernel::sync::IrqGuard::new();
@@ -546,6 +532,21 @@ pub fn futex_wake(uaddr: u64, max_wakers: u32) -> i64 {
         bucket_unlock(b);
     }
     drop(g);
+
+    if log_this {
+        crate::drivers::uart::puts("[futex-wake #");
+        crate::kernel::mm::print_num(log_n as usize);
+        crate::drivers::uart::puts("] uaddr=0x");
+        let hex = b"0123456789abcdef";
+        for sh in (0..16).rev() {
+            crate::drivers::uart::putc(hex[((uaddr >> (sh * 4)) & 0xF) as usize]);
+        }
+        crate::drivers::uart::puts(" max=");
+        crate::kernel::mm::print_num(max_wakers as usize);
+        crate::drivers::uart::puts(" woken=");
+        crate::kernel::mm::print_num(woken as usize);
+        crate::drivers::uart::puts("\n");
+    }
 
     woken
 }
