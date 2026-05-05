@@ -701,10 +701,22 @@ fn sys_gettimeofday(args: [u64; 6]) -> i64 {
 // 0x1 into PartitionAlloc-managed buffers. Fix: zero-fill, then write
 // minimal sane values (f_bsize=4096, f_blocks=large, f_bfree=large).
 fn sys_statfs(args: [u64; 6]) -> i64 {
-    let _path = args[0] as usize;
+    let path_ptr = args[0] as usize;
     let buf = args[1] as usize;
     if buf == 0 { return EFAULT; }
     if !user_zero(buf, 120) { return EFAULT; }
+
+    // STUMP #154: per-path fs cap. statfs takes a path arg even
+    // though we currently return synthetic values regardless of
+    // path; enforcing the cap here means a cave with no FS access
+    // can't even probe "is /etc mounted?" via statfs.
+    if path_ptr != 0 {
+        let mut path_buf = [0u8; 128];
+        let path_len = read_user_str(path_ptr, &mut path_buf);
+        if let Err(e) = check_fs_path_cap(&path_buf[..path_len], "statfs") {
+            return e;
+        }
+    }
     // struct statfs (aarch64): f_type, f_bsize, f_blocks, f_bfree, f_bavail,
     // f_files, f_ffree, f_fsid, f_namelen, f_frsize, f_flags, f_spare[4].
     // We write the most-consulted fields with conservative defaults.
@@ -2064,31 +2076,10 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
 
     let path_str = unsafe { core::str::from_utf8_unchecked(path) };
 
-    // STUMP #151: per-path FS cap enforcement. The dispatcher's broad
-    // `active_has_any_fs_cap` gate let us in (cave has SOMETHING fs-
-    // related); now check that this specific path is actually within
-    // the cave's grant. Caves with bare `fs` pass unconditionally;
-    // caves with `fs:/tmp` only pass for paths under /tmp.
-    //
-    // We only enforce this for ABSOLUTE paths. Relative paths come
-    // through a dirfd that the cave already opened, so the access
-    // check happened at that earlier open. The has_dotdot guard
-    // above prevents path-traversal escape from the dirfd's scope.
-    //
-    // TODO: extend this to other path-taking syscalls — stat, lstat,
-    // newfstatat, statx, access, faccessat, mkdir, mkdirat, unlink,
-    // unlinkat, rename, renameat[2], symlink[at], readlink[at],
-    // chmod, chown, fchmodat, fchownat, truncate, mknod[at]. Total
-    // ~20 syscalls. Each takes a path arg in a known position.
-    // Mechanical follow-up STUMP.
-    if path_str.starts_with('/')
-        && !cave::active_can_access_path(path_str)
-    {
-        uart::puts("[openat] BLOCKED by fs:<path> cap: ");
-        for &b in path { if b.is_ascii_graphic() || b == b'/' { uart::putc(b); } else { uart::putc(b'?'); } }
-        uart::puts("\n");
-        return EACCES;
-    }
+    // STUMP #151 + #154: per-path FS cap enforcement, factored into
+    // `check_fs_path_cap` so the same logic applies uniformly across
+    // all path-taking syscalls.
+    if let Err(e) = check_fs_path_cap(path, "openat") { return e; }
 
     // Handle /proc paths BEFORE VFS check — /proc is always available
     if path_str.starts_with("/proc/") {
@@ -4338,6 +4329,11 @@ fn sys_newfstatat(args: [u64; 6]) -> i64 {
     // FLv2-NEW-011: extend `..` guard to newfstatat.
     if has_dotdot(&path_buf[..path_len]) { return EACCES; }
 
+    // STUMP #154: per-path fs cap enforcement.
+    if let Err(e) = check_fs_path_cap(&path_buf[..path_len], "newfstatat") {
+        return e;
+    }
+
     if vfs::is_ready() {
         match vfs::resolve_path(&path_buf[..path_len]) {
             Ok(idx) => {
@@ -4392,6 +4388,45 @@ pub(crate) fn has_dotdot(path: &[u8]) -> bool {
 /// syscall (openat, faccessat, chdir, readlinkat, newfstatat, mkdirat,
 /// execve) a kernel-read primitive. We now refuse ptr == 0 or anything
 /// outside [0x1000, 0x4000_0000), and we truncate at the first byte that
+/// STUMP #154: per-path FS cap check for path-taking syscalls.
+///
+/// Extends STUMP #151 (which only enforced at sys_openat) to every
+/// syscall that takes an absolute path: stat, access, readlink,
+/// chdir, mkdir, statfs. Without this, an attacker with no `fs:`
+/// cap could `stat("/etc/passwd")` to fingerprint the FS even
+/// though they couldn't open it. Stat-leak is a real attack vector
+/// for exfil.
+///
+/// Returns Ok(()) if:
+///   - the path is relative (the dirfd it'll be resolved against
+///     was already cap-checked at its own open time, and the
+///     `has_dotdot` guard prevents traversal escape)
+///   - the cave has bare `fs` cap (full FS access)
+///   - the cave has a path-scoped `fs:<prefix>` that covers this path
+///
+/// Returns Err(EACCES) otherwise. UART-logs the block at the call
+/// site's chosen tag so audit can trace which syscall enforced it.
+fn check_fs_path_cap(path: &[u8], syscall_tag: &str) -> Result<(), i64> {
+    let path_str = unsafe { core::str::from_utf8_unchecked(path) };
+    if !path_str.starts_with('/') {
+        // Relative paths flow through a dirfd whose open was already
+        // cap-checked. has_dotdot guards in each caller stop "../"
+        // escapes.
+        return Ok(());
+    }
+    if cave::active_can_access_path(path_str) {
+        return Ok(());
+    }
+    uart::puts("[");
+    uart::puts(syscall_tag);
+    uart::puts("] BLOCKED by fs:<path> cap: ");
+    for &b in path {
+        if b.is_ascii_graphic() || b == b'/' { uart::putc(b); } else { uart::putc(b'?'); }
+    }
+    uart::puts("\n");
+    Err(EACCES)
+}
+
 /// falls outside userspace (treated as a de-facto NUL).
 fn read_user_str(ptr: usize, buf: &mut [u8]) -> usize {
     if ptr == 0 { return 0; }
@@ -4424,6 +4459,11 @@ fn sys_faccessat(args: [u64; 6]) -> i64 {
 
     // FLv2-NEW-011: extend `..` guard to faccessat (was openat-only).
     if has_dotdot(&path_buf[..path_len]) { return EACCES; }
+
+    // STUMP #154: per-path fs cap enforcement.
+    if let Err(e) = check_fs_path_cap(&path_buf[..path_len], "faccessat") {
+        return e;
+    }
 
     if vfs::is_ready() {
         match vfs::resolve_path(&path_buf[..path_len]) {
@@ -5527,6 +5567,13 @@ fn sys_readlinkat(args: [u64; 6]) -> i64 {
     // FLv2-NEW-011: extend `..` guard to readlinkat.
     if has_dotdot(&path_buf[..path_len]) { return EACCES; }
 
+    // STUMP #154: per-path fs cap. Note this fires BEFORE the
+    // /proc/self/exe special case below — caves without the right
+    // fs cap can't enumerate "what binary am I" via readlink either.
+    if let Err(e) = check_fs_path_cap(&path_buf[..path_len], "readlinkat") {
+        return e;
+    }
+
     // Handle /proc/self/exe — return path to the active EL0 binary.
     // Chromium reads this during startup to compute DIR_EXE / DIR_ASSETS
     // via realpath; without a sensible answer, various PathService
@@ -5670,6 +5717,14 @@ fn sys_chdir(args: [u64; 6]) -> i64 {
     // sandboxed cwd.
     if has_dotdot(&path_buf[..path_len]) { return EACCES; }
 
+    // STUMP #154: per-path fs cap. A cave with `fs:/tmp` can chdir
+    // into /tmp/foo but not into /etc — the chdir would then anchor
+    // subsequent relative-path syscalls into a directory the cave
+    // never had access to.
+    if let Err(e) = check_fs_path_cap(&path_buf[..path_len], "chdir") {
+        return e;
+    }
+
     if vfs::is_ready() {
         match vfs::resolve_path(&path_buf[..path_len]) {
             Ok(idx) => {
@@ -5776,6 +5831,11 @@ fn sys_mkdirat(args: [u64; 6]) -> i64 {
 
     // FLv2-NEW-011: extend `..` guard to mkdirat.
     if has_dotdot(&path_buf[..path_len]) { return EACCES; }
+
+    // STUMP #154: per-path fs cap.
+    if let Err(e) = check_fs_path_cap(&path_buf[..path_len], "mkdirat") {
+        return e;
+    }
 
     if vfs::is_ready() {
         match vfs::resolve_parent(&path_buf[..path_len]) {
