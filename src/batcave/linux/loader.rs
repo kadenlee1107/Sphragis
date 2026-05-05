@@ -25,7 +25,19 @@ static LOADED_USER_VA_BASE: AtomicUsize = AtomicUsize::new(0);
 static LOADED_TLS_PHYS: AtomicUsize = AtomicUsize::new(0);
 /// 4 KB pages reserved for the TLS block. 16 KB is enough for glibc's
 /// tcbhead_t plus a reasonable main-thread scratch area.
-pub const LOADED_TLS_PAGES: usize = 4;
+// STUMP #152: bumped from 4 (16 KB) to 64 (256 KB).
+//
+// Plan-agent audit of the 13 Chromium ELFs found total static TLS
+// requirements would exceed 16 KB once libc's pthread + libstdc++
+// thread_local globals + V8 isolate-thread state are summed. ld-linux
+// fails its `_dl_resize_dtv` / `_dl_allocate_tls_init` path silently
+// when the static TLS template is too small, ending up in a tight
+// loop or a SEGV before main runs.
+//
+// 256 KB is comfortable headroom for content_shell --version. Real
+// Chromium browser-side workloads with full V8/Blink state may need
+// more; tune via `audit_chromium_initmap.sh` summary if so.
+pub const LOADED_TLS_PAGES: usize = 64;
 
 /// One page for the init_array trampoline. Holds a tiny assembly stub
 /// that walks a terminated list of init function VAs, calls each, and
@@ -2314,6 +2326,32 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     // we don't supply. Keep it minimal.
     const AT_HWCAP_VALUE: u64 = 0x0000_0103;
 
+    // STUMP #152: extend auxv with the minimum-safe set glibc
+    // reads during startup. The entries marked NEW are required
+    // for `chromium --version` to print:
+    //
+    //   AT_CLKTCK (17): clock ticks/sec. glibc reads this for
+    //                   `sysconf(_SC_CLK_TCK)`. 100 = standard.
+    //   AT_UID (11) / AT_EUID (12) / AT_GID (13) / AT_EGID (14):
+    //                   process credentials. glibc reads these
+    //                   in `__libc_start_main`. 0 = root, but with
+    //                   AT_SECURE=0 below this isn't a sec issue.
+    //   AT_SECURE (23): "is this a setuid program" flag. 0 = no.
+    //                   Without this, glibc may take the
+    //                   secure-binary path and disable LD_*
+    //                   environment-var processing AND require
+    //                   non-zero UIDs to match.
+    //
+    // Deliberately STILL NOT INCLUDED (per the legacy comment
+    // above — these caused ld-linux NULL-deref at 0x1a4157d8 in
+    // an earlier attempt):
+    //   AT_HWCAP2 (26)  — wider feature bits
+    //   AT_PLATFORM (15) — string ptr to "aarch64"
+    //
+    // If `--version` still doesn't reach main, those are the next
+    // candidates, and the deref was likely because a feature bit
+    // we set in HWCAP needed PLATFORM to be valid first. Keep
+    // HWCAP minimal AND add PLATFORM together if revisiting.
     let auxv: &[(u64, u64)] = if running_interp {
         &[
             (0, 0),                      // AT_NULL (last — written first, grows up)
@@ -2324,10 +2362,19 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
             (7, interp_base),            // AT_BASE
             (6, 4096),                   // AT_PAGESZ
             (25, random_uva),            // AT_RANDOM
-            (16, AT_HWCAP_VALUE),        // AT_HWCAP — see comment above
+            (16, AT_HWCAP_VALUE),        // AT_HWCAP
+            (17, 100),                   // AT_CLKTCK            (NEW #152)
+            (23, 0),                     // AT_SECURE = 0        (NEW #152)
+            (11, 0),                     // AT_UID = 0           (NEW #152)
+            (12, 0),                     // AT_EUID = 0          (NEW #152)
+            (13, 0),                     // AT_GID = 0           (NEW #152)
+            (14, 0),                     // AT_EGID = 0          (NEW #152)
         ]
     } else {
-        &[(0, 0), (25, random_uva), (6, 4096), (16, AT_HWCAP_VALUE)]
+        &[
+            (0, 0), (25, random_uva), (6, 4096), (16, AT_HWCAP_VALUE),
+            (17, 100), (23, 0), (11, 0), (12, 0), (13, 0), (14, 0),
+        ]
     };
     for &(k, v) in auxv {
         sp -= 16;
