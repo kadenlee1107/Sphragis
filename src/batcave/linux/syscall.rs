@@ -369,7 +369,17 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
                 uart::putc(hex[((a >> (shift * 4)) & 0xF) as usize]);
             }
         }
-        uart::puts("]\n");
+        // STUMP #161 iter 16: print ELR_EL1 (the user PC at SVC entry,
+        // i.e. the instruction AFTER `svc #0`). Critical for finding
+        // which libc function called the syscall when /bin/js hangs
+        // in userland — without it we can't correlate to disassembly.
+        let elr: u64;
+        unsafe { core::arch::asm!("mrs {}, ELR_EL1", out(reg) elr); }
+        uart::puts("] elr=0x");
+        for sh in (0..16).rev() {
+            uart::putc(hex[((elr >> (sh*4)) & 0xF) as usize]);
+        }
+        uart::puts("\n");
     }
 
     // Classify the syscall

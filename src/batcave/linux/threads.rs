@@ -1747,12 +1747,46 @@ pub fn dump() {
 /// without needing to send a signal. Tune the divisor in handle_irq.
 pub fn auto_dump_if_idle() {
     static LAST_DUMP: AtomicU64 = AtomicU64::new(0);
-    let _count = LAST_DUMP.fetch_add(1, Ordering::Relaxed);
-    // Disabled — observed timer IRQ rate is ~1Hz on QEMU virt despite
-    // cntp_tval being set to freq/100. Either cntfrq_el0 reads larger
-    // than expected, or QEMU's GICv3 doesn't deliver via our v2 init.
-    // The kernel still works — cooperative-yield-every-4096-syscalls
-    // drives scheduling. Re-enable once IRQ rate is fixed.
+    let count = LAST_DUMP.fetch_add(1, Ordering::Relaxed);
+
+    // STUMP #161 iter 16: PC-sampler heartbeat. Timer IRQs fire at
+    // ~1 Hz on QEMU virt, so every 5 ticks ≈ 5 sec we dump:
+    //   - current tid
+    //   - ELR_EL1 (PC at exception entry — i.e. where userland was
+    //     when the IRQ fired)
+    //   - SPSR_EL1.M (which EL was running)
+    // This is the ONE diagnostic that catches purely-userland hangs
+    // (no syscalls, no diag dumps). Without it /bin/js can spin in
+    // a JIT loop or busy-wait for 120 sec and we'd never know where.
+    if count > 0 && count % 5 == 0 {
+        let elr: u64;
+        let spsr: u64;
+        let far: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, ELR_EL1",  out(reg) elr);
+            core::arch::asm!("mrs {}, SPSR_EL1", out(reg) spsr);
+            core::arch::asm!("mrs {}, FAR_EL1",  out(reg) far);
+        }
+        let mode = (spsr >> 0) & 0xF; // M[3:0]
+        crate::drivers::uart::puts("[heartbeat tick=");
+        crate::kernel::mm::print_num(count as usize);
+        crate::drivers::uart::puts(" tid=");
+        crate::kernel::mm::print_num(current_tid() as usize);
+        crate::drivers::uart::puts(" elr=0x");
+        let hex = b"0123456789abcdef";
+        for s in (0..16).rev() {
+            crate::drivers::uart::putc(hex[((elr >> (s*4)) & 0xF) as usize]);
+        }
+        crate::drivers::uart::puts(" mode=0x");
+        for s in (0..2).rev() {
+            crate::drivers::uart::putc(hex[((mode >> (s*4)) & 0xF) as usize]);
+        }
+        crate::drivers::uart::puts(" far=0x");
+        for s in (0..16).rev() {
+            crate::drivers::uart::putc(hex[((far >> (s*4)) & 0xF) as usize]);
+        }
+        crate::drivers::uart::puts("]\n");
+    }
 }
 
 // =============================================================================

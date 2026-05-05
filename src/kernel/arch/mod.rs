@@ -391,6 +391,13 @@ fn reset_timer() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
+    // STUMP #161 iter 16 marker
+    static IRQ_N_TEST: core::sync::atomic::AtomicU64 =
+        core::sync::atomic::AtomicU64::new(0);
+    let irq_idx_test = IRQ_N_TEST.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if irq_idx_test < 5 {
+        uart::puts_safe("STUMP161IRQ\n");
+    }
     // V8-ELR-WATCH: snapshot frame.elr at IRQ entry. After all the IRQ
     // work + potential context switches, if we end this function with
     // frame.elr in kernel range AND spsr.M=0 (eret target = EL0), the
@@ -446,6 +453,28 @@ fn handle_irq_inner(frame: *mut TrapFrame) {
 
     // Spurious (1023) means no IRQ pending — bail without EOI.
     if intid == 1023 { return; }
+
+    // STUMP #161 iter 16: count ALL IRQs, not just timer fires. We
+    // observed zero heartbeats during /bin/js userland-hang debugging,
+    // but couldn't tell whether (a) the timer wasn't firing or (b) the
+    // ctl & 0b100 check was failing. Sampling on every IRQ entry
+    // disambiguates and also catches userland hangs that only show
+    // up between timer fires (e.g. a tight loop that briefly yields
+    // CPU).
+    {
+        static IRQ_TICKS: core::sync::atomic::AtomicU64 =
+            core::sync::atomic::AtomicU64::new(0);
+        let n = IRQ_TICKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        // Print first 3 IRQs unconditionally so we can verify IRQs
+        // are reaching handle_irq at all.
+        if n < 3 {
+            uart::puts("[irq#");
+            crate::kernel::mm::print_num(n as usize);
+            uart::puts(" intid=");
+            crate::kernel::mm::print_num(intid as usize);
+            uart::puts("]\n");
+        }
+    }
 
     let ctl: u64;
     unsafe { core::arch::asm!("mrs {}, cntp_ctl_el0", out(reg) ctl); }
