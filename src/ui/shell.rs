@@ -4928,10 +4928,14 @@ fn cmd_tcp_listen(port_str: &str) {
         }
     };
 
-    // Print the peer's address.
-    let (rip_be, rport) = tcp::pcb_remote(pcb_id);
+    // Print the peer's address. Despite the field comment saying
+    // "big-endian," `pcb.remote_ip` is actually stored in host
+    // order (it's set from `IpPacket::parse`'s `from_be_bytes`,
+    // which returns host-order; and `send_tcp_pcb` then calls
+    // `.to_be_bytes()` to put it back on the wire). So no swap
+    // here — pull octets out left-to-right via the high bits.
+    let (rip, rport) = tcp::pcb_remote(pcb_id);
     console::puts("  connection from ");
-    let rip = u32::from_be(rip_be);
     crate::kernel::mm::print_num(((rip >> 24) & 0xFF) as usize);
     console::puts(".");
     crate::kernel::mm::print_num(((rip >> 16) & 0xFF) as usize);

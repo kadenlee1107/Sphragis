@@ -802,9 +802,13 @@ pub fn listener_lookup_by_fd(fd: i32) -> Option<usize> {
 }
 
 /// Read-only accessor for an established PCB's remote endpoint.
-/// Returns `(remote_ip_be, remote_port_host)` so sys_accept can
-/// fill the caller's `sockaddr_in` out-parameter. Returns
-/// `(0, 0)` if `id` is out of range or the PCB is unused.
+/// Returns `(remote_ip, remote_port)` both in HOST byte order
+/// (despite the `TcpPcb::remote_ip` field comment saying big-endian
+/// — that comment is wrong; the field is set from
+/// `IpPacket::parse`'s `from_be_bytes` which returns host-order,
+/// and `send_tcp_pcb` calls `.to_be_bytes()` to put it back on the
+/// wire). Returns `(0, 0)` if `id` is out of range or the PCB is
+/// unused.
 pub fn pcb_remote(id: usize) -> (u32, u16) {
     if id >= MAX_PCBS { return (0, 0); }
     let p = pcb(id);
