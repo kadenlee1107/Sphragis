@@ -2090,7 +2090,15 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             // addr2line lookup against ports/chromium_port/out/content_shell.
             let x0 = unsafe { (*frame).x[0] };
             let x1 = unsafe { (*frame).x[1] };
+            let x19 = unsafe { (*frame).x[19] };
             let x30 = unsafe { (*frame).x[30] };
+            // STUMP #160 iter 4: TPIDR_EL0 at BRK so we can correlate
+            // pthread_self mismatches (Chromium AssociatedThreadId BRK
+            // does `cmp x19, pthread_self()` — knowing both x19 and
+            // tpidr_el0 tells us if the bind happened on a different
+            // TLS pointer than current).
+            let tpidr: u64;
+            unsafe { core::arch::asm!("mrs {}, tpidr_el0", out(reg) tpidr); }
             uart::puts("[linux] exit (BRK from EL0) elr=0x");
             {
                 let hex = b"0123456789abcdef";
@@ -2111,9 +2119,17 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 for sh in (0..16).rev() {
                     uart::putc(hex[((x1 >> (sh * 4)) & 0xF) as usize]);
                 }
+                uart::puts(" x19=0x");
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((x19 >> (sh * 4)) & 0xF) as usize]);
+                }
                 uart::puts(" lr=0x");
                 for sh in (0..16).rev() {
                     uart::putc(hex[((x30 >> (sh * 4)) & 0xF) as usize]);
+                }
+                uart::puts(" tpidr=0x");
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((tpidr >> (sh * 4)) & 0xF) as usize]);
                 }
                 uart::puts("\n  instr@elr-8..elr+4: ");
                 for off in [-8i64, -4, 0, 4] {
