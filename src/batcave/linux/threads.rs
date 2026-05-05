@@ -844,11 +844,18 @@ fn real_fork(
     let parent_l1: u64;
     unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) parent_l1); }
     let parent_l1 = parent_l1 & !1u64;
+    // STUMP #160: when the parent's L1 isn't in CAVE_L1[] (e.g. an
+    // already-forked child re-forking — nested zygote pattern), fall
+    // back to the chromium runner's default user-window. The fork
+    // still succeeds; just the trace was misleading ("aborting" but
+    // nothing actually aborted), so soften the message.
     let (virt_base, virt_extent) = super::mmu::cave_bounds_for_l1(parent_l1)
-        .ok_or_else(|| {
-            uart::puts("[fork] parent L1 not registered, aborting\n");
-        })
-        .unwrap_or((0x10000000u64, (400 * 1024 * 1024) as u64)); // safe default
+        .unwrap_or_else(|| {
+            if super::skip_log::is_enabled() {
+                uart::puts("[fork] parent L1 not in cave registry — using runner-default bounds\n");
+            }
+            (0x10000000u64, (400 * 1024 * 1024) as u64)
+        });
     let parent_phys_base = super::mmu::cave_phys_base_for_l1(parent_l1)
         .unwrap_or(0);
 

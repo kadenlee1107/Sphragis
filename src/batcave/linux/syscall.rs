@@ -280,6 +280,18 @@ mod nr {
     pub const SCHED_GETAFFINITY: u64 = 123;
     pub const SCHED_SETAFFINITY: u64 = 122;
     pub const FADVISE64: u64 = 223;
+
+    // Linux 5.13+ Landlock sandboxing API. Chromium probes these once at
+    // startup to feature-detect the host's sandbox capability; we don't
+    // implement Landlock so all three return ENOSYS. They MUST be
+    // surfaced as named stubs (not the unknown-syscall fallback) because:
+    //   1. The fallback prints "[linux] unknown syscall 444" which is
+    //      noise — Chromium expects ENOSYS and handles it silently.
+    //   2. The fallback fires the BAT_OS_KEEP_GOING skip-log, polluting
+    //      the "actual unknown syscalls" list during Chromium init.
+    pub const LANDLOCK_CREATE_RULESET: u64 = 444;
+    pub const LANDLOCK_ADD_RULE:       u64 = 445;
+    pub const LANDLOCK_RESTRICT_SELF:  u64 = 446;
 }
 
 /// Handle a Linux syscall from a BatCave process.
@@ -425,6 +437,15 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         // x1=0x1 BRK we've been chasing.
         nr::SCHED_GETAFFINITY => (SyscallCat::Always, sys_sched_getaffinity),
         nr::SCHED_SETAFFINITY => (SyscallCat::Always, sys_stub_zero),
+
+        // STUMP #160: Landlock probes return ENOSYS quietly — Chromium
+        // feature-detects, gets ENOSYS, falls back to seccomp-bpf or
+        // "no sandbox" depending on the build flags. Without these
+        // explicit stubs, every Chromium boot logs three "unknown
+        // syscall NNN" lines that drown the real unknown-syscall list.
+        nr::LANDLOCK_CREATE_RULESET => (SyscallCat::Always, sys_stub_enosys),
+        nr::LANDLOCK_ADD_RULE       => (SyscallCat::Always, sys_stub_enosys),
+        nr::LANDLOCK_RESTRICT_SELF  => (SyscallCat::Always, sys_stub_enosys),
         // NOTE: AArch64 syscall 222 is mmap (already routed via nr::MMAP),
         // 223 is fadvise64. 210 is shutdown (moved to Network block below).
         // Previously these were mislabeled as shmget/shmctl/shutdown-stub.
