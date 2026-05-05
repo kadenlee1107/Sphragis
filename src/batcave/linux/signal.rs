@@ -557,12 +557,21 @@ pub const RESTORER_BYTES: [u8; 8] = [
 ];
 
 /// Fixed user VA where we plant the rt_sigreturn trampoline for the
-/// current cave. Chosen well below every library we load (content_shell
-/// at 0x11720000, libc around 0x14c00000, ld-linux at 0x1a400000)
-/// and away from V8's heap cage. User code only ever reaches this
-/// address via the x30 we pre-load at signal delivery time, so it
-/// doesn't need to sit in a "natural" mmap region.
-pub const RT_SIGRETURN_TRAMPOLINE_VA: u64 = 0x0080_0000;
+/// current cave. Chosen WELL above every library we load and away
+/// from V8's heap cage / Ladybird's mimalloc arena. User code only
+/// ever reaches this address via the x30 we pre-load at signal
+/// delivery time, so it doesn't need to sit in a "natural" mmap
+/// region.
+///
+/// History: 0x0080_0000 (8 MB) collided with Ladybird's
+/// LibJS/mimalloc, which writes a zero byte to 0x800000 during init
+/// (probably part of a fixed-base pointer-compression scheme that
+/// uses low-VA region for cell metadata). Moved to 0x0FFF_F000
+/// (just below the 256 MB cave_virt_base) — outside any pre-cave
+/// heap arena, outside the cave's library-loading region, outside
+/// the small-mmap region (0x70_xxxx_xxxx), and outside V8's typical
+/// 0x40_xxxx_xxxx and 0x30_xxxx_xxxx reservation hints.
+pub const RT_SIGRETURN_TRAMPOLINE_VA: u64 = 0x0FFF_F000;
 
 /// Allocate a fresh 4 KB frame, copy the restorer bytes into it, map
 /// it at `RT_SIGRETURN_TRAMPOLINE_VA` in the cave's L1 (passed in
