@@ -2125,6 +2125,19 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
     for sh in (0..8).rev() { uart::putc(hex[((flags >> (sh*4)) & 0xF) as usize]); }
     uart::puts("\n");
 
+    // STUMP #161 iter 15: one-shot trace trigger.
+    // The /bin/js init currently hangs after opening
+    // `/etc/nsswitch.conf` — the kernel diag dump fires every 1M
+    // syscalls, but iter 14 logs show ZERO diag dumps, meaning it's
+    // NOT in a syscall loop. Either it's in a futex-wait, an mmap
+    // size negotiation, or pure userspace busy-loop. Flip the
+    // syscall trace on as soon as we see this openat so the next
+    // smoke shows what comes next.
+    if path == b"/etc/nsswitch.conf" {
+        SYSCALL_TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+        uart::puts("[trace] enabling syscall trace after nsswitch.conf openat\n");
+    }
+
     if has_dotdot(path) { return EACCES; }
 
     let path_str = unsafe { core::str::from_utf8_unchecked(path) };

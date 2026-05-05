@@ -55,6 +55,20 @@ pub fn is_user_range(p: usize, size: usize) -> bool {
         if p >= active_start && end <= active_end {
             return true;
         }
+        // STUMP #161 iter 15: glibc-scratch zone at 0x800000–0x840000.
+        // signal::install_trampoline pre-maps 64 RW pages here in every
+        // cave because mimalloc/glibc init writes a zero byte to
+        // 0x800000 during startup. Once mimalloc claims the region as
+        // its first arena, glibc reads (e.g. /etc/nsswitch.conf) land
+        // here too — the buffer is a legit user pointer that just
+        // happens to live OUTSIDE the cave's L2 window. Without this
+        // case, sys_read returns EFAULT and glibc's NSS subsystem
+        // hangs/aborts.
+        const SCRATCH_LO: usize = 0x0080_0000;
+        const SCRATCH_HI: usize = 0x0084_0000;
+        if p >= SCRATCH_LO && end <= SCRATCH_HI {
+            return true;
+        }
         // CHROMIUM-PHASE-B: a syscall buffer can also legitimately
         // live inside a huge mmap reservation (V8 pointer compression
         // reserves 32 GB in the 0x28_00xx_xxxx range and lazily
