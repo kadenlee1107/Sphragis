@@ -2490,6 +2490,48 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                 Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
             }
         }
+        "ipc" => {
+            // STUMP #157: surface cave::create_ipc to the operator.
+            // Audit caught this as "machinery exists but no shell
+            // command invokes it." Now it does.
+            //
+            // Usage: batcave ipc <cave_a> <cave_b>
+            //
+            // Both caves must have granted each other the
+            // `ipc:<other>` capability before this works:
+            //   batcave grant alpha ipc:beta
+            //   batcave grant beta  ipc:alpha
+            //   batcave ipc alpha beta
+            //   → IPC channel established: id=N
+            //
+            // The returned channel id is the kernel IPC handle that
+            // either cave's syscall path can use to send/recv via
+            // `cave::get_ipc_channel`.
+            if arg1.is_empty() || arg2.is_empty() {
+                console::puts("  usage: batcave ipc <cave_a> <cave_b>\n");
+                console::puts("  (both caves must grant each other ipc:<other> first)\n");
+                return;
+            }
+            match cave::create_ipc(arg1, arg2) {
+                Ok(channel_id) => {
+                    console::puts("  IPC channel established between ");
+                    console::puts(arg1);
+                    console::puts(" and ");
+                    console::puts(arg2);
+                    console::puts(": id=");
+                    crate::kernel::mm::print_num(channel_id as usize);
+                    console::puts("\n");
+                }
+                Err(e) => {
+                    console::puts("  Error: ");
+                    console::puts(e);
+                    console::puts("\n");
+                    if e == "A lacks ipc cap" || e == "B lacks ipc cap" {
+                        console::puts("  hint: grant `ipc:<other_cave_name>` to BOTH caves first\n");
+                    }
+                }
+            }
+        }
         "seal" => {
             match cave::seal(arg1) {
                 Ok(()) => {
