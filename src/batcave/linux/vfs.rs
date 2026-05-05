@@ -713,6 +713,67 @@ pub fn remove_node(idx: u16) -> Result<(), i64> {
     Ok(())
 }
 
+/// Rename `oldpath` → `newpath` within the active VFS instance.
+///
+/// Semantics (best-effort POSIX `rename(2)`):
+///   - If oldpath doesn't exist  → ENOENT
+///   - If newpath's parent doesn't exist → ENOENT
+///   - If newpath exists and is a non-empty directory → ENOTEMPTY
+///   - If newpath exists and is a non-directory → atomically replaced
+///     (its node freed, source node re-parented + renamed)
+///   - Otherwise: source node has its `parent` and `name` fields
+///     overwritten to the new location
+///
+/// STUMP #160 iter 3: Chromium's LevelDB writes `MANIFEST.tmp`, then
+/// renames it to `CURRENT`. Pre-iter-3 our renameat was sys_stub_zero
+/// (returns success but does nothing) — the leveldb open path then
+/// failed reading `CURRENT` because nothing actually moved, and
+/// every leveldb-using subsystem (SharedDictionary, shared_proto_db,
+/// SimpleCache index) spent the rest of the run in a 200+ retry loop.
+pub fn rename_node(oldpath: &[u8], newpath: &[u8]) -> Result<(), i64> {
+    // 1. Find the source node.
+    let src_idx = resolve_path(oldpath)?;
+    if src_idx == 0 { return Err(-16); } // EBUSY — can't rename root
+
+    // 2. Find the destination parent + new name.
+    let (new_parent, new_name) = resolve_parent(newpath)?;
+    if new_name.is_empty() { return Err(-22); } // EINVAL
+    if new_name.len() > NAME_LEN { return Err(-36); } // ENAMETOOLONG
+
+    // 3. If destination exists, remove it. POSIX requires this be
+    //    atomic; for our single-threaded-VFS-with-IrqGuard this
+    //    is fine because we hold no lock points between unlink
+    //    and the parent/name update.
+    if let Some(existing) = find_child(new_parent, new_name) {
+        if existing == src_idx {
+            // Renaming to itself: no-op success.
+            return Ok(());
+        }
+        remove_node(existing)?;
+    }
+
+    // 4. Update src_idx's parent + name in place.
+    unsafe {
+        let ai = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
+        let nodes = &mut (*core::ptr::addr_of_mut!(INSTANCES))[ai].nodes;
+        let n = &mut nodes[src_idx as usize];
+        n.parent = new_parent;
+        // Rewrite the name buffer through volatile stores (matches
+        // create_node's idiom — the indexed-write path was observed
+        // miscompiling in release builds).
+        let name_ptr = core::ptr::addr_of_mut!(n.name) as *mut u8;
+        for i in 0..new_name.len() {
+            core::ptr::write_volatile(name_ptr.add(i), new_name[i]);
+        }
+        for i in new_name.len()..NAME_LEN {
+            core::ptr::write_volatile(name_ptr.add(i), 0);
+        }
+        n.name_len = new_name.len();
+    }
+
+    Ok(())
+}
+
 // ─── Rootfs Population ───
 
 fn populate_rootfs() {

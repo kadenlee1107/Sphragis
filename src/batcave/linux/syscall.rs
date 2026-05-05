@@ -452,7 +452,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::FADVISE64 => (SyscallCat::Always, sys_stub_zero),
         233 => (SyscallCat::Always, sys_madvise), // 🎯 STUMP #10c: PT-walking madvise (only zeros committed pages)
         262 => (SyscallCat::Always, sys_stub_zero),  // getrlimit equiv
-        276 => (SyscallCat::Always, sys_stub_zero),  // renameat2
+        276 => (SyscallCat::FileIO, sys_renameat),  // renameat2 — same impl, ignores flags arg
         279 => (SyscallCat::Memory, sys_memfd_create), // memfd_create — needs mem cap
         // 🎯 STUMP #11: fchown/lchown/chown — return success (no-op on our virtual fs).
         // Was: unknown syscall 55, returned 0 anyway, but with a stale "[linux] unknown
@@ -496,7 +496,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         34 => (SyscallCat::FileIO, sys_mkdirat),      // mkdirat
         35 => (SyscallCat::FileIO, sys_stub_zero),    // unlinkat
         37 => (SyscallCat::FileIO, sys_stub_zero),    // linkat — hardlinks; success-stub
-        38 => (SyscallCat::FileIO, sys_stub_zero),    // renameat — fontconfig cache .NEW→real; no-op OK
+        38 => (SyscallCat::FileIO, sys_renameat),     // renameat — STUMP #160 iter 3: real rename for leveldb MANIFEST→CURRENT
         43 => (SyscallCat::FileIO, sys_statfs),       // 🎯 STUMP #10d: real statfs fill (was leaking uninit buf)
         46 => (SyscallCat::FileIO, sys_ftruncate),    // ftruncate — must really set node size for shm
         47 => (SyscallCat::FileIO, sys_stub_zero),    // fallocate — Chromium uses for shmem pre-alloc; success-stub OK
@@ -5871,6 +5871,70 @@ fn sys_mkdirat(args: [u64; 6]) -> i64 {
         }
     } else {
         0
+    }
+}
+
+// STUMP #160 iter 3: real renameat / renameat2 instead of sys_stub_zero.
+//
+// Args (Linux aarch64 syscall 38 = renameat, 276 = renameat2):
+//   args[0] = olddirfd (i32)
+//   args[1] = oldpath  (ptr)
+//   args[2] = newdirfd (i32)
+//   args[3] = newpath  (ptr)
+//   args[4] = flags    (u32, only meaningful for renameat2 — we ignore)
+//
+// We support absolute paths and AT_FDCWD-relative paths (-100). For
+// per-fd-relative dirfds we'd need fd→path mapping; not used by
+// Chromium's leveldb/sqlite so deferred.
+//
+// Why this matters: leveldb writes `MANIFEST.tmp`, then renames it
+// to `CURRENT`. Pre-iter-3 our renameat returned 0 but didn't
+// actually move anything → next openat(`CURRENT`, O_RDONLY) hit
+// ENOENT → leveldb reported "Unable to create sequential file"
+// → SharedDictionary, shared_proto_db, SimpleCache index, all the
+// other LevelDB consumers spent the entire run in a 200+ retry loop.
+fn sys_renameat(args: [u64; 6]) -> i64 {
+    const AT_FDCWD: i32 = -100;
+    let olddirfd = args[0] as i32;
+    let oldpath_ptr = args[1] as usize;
+    let newdirfd = args[2] as i32;
+    let newpath_ptr = args[3] as usize;
+
+    if oldpath_ptr == 0 || newpath_ptr == 0 { return EINVAL; }
+
+    let mut oldpath = [0u8; 256];
+    let mut newpath = [0u8; 256];
+    let oldlen = read_user_str(oldpath_ptr, &mut oldpath);
+    let newlen = read_user_str(newpath_ptr, &mut newpath);
+    if oldlen == 0 || newlen == 0 { return EINVAL; }
+
+    // ..-traversal guard (STUMP #151 family).
+    if has_dotdot(&oldpath[..oldlen]) || has_dotdot(&newpath[..newlen]) {
+        return EACCES;
+    }
+
+    // STUMP #154: cap-check both source and destination paths.
+    if let Err(e) = check_fs_path_cap(&oldpath[..oldlen], "renameat-src") {
+        return e;
+    }
+    if let Err(e) = check_fs_path_cap(&newpath[..newlen], "renameat-dst") {
+        return e;
+    }
+
+    // Reject non-AT_FDCWD dirfds for now — Chromium uses AT_FDCWD.
+    if olddirfd != AT_FDCWD || newdirfd != AT_FDCWD {
+        // Rather than failing, log + treat as no-op so the caller
+        // doesn't see a hard ENOTDIR (which has cascaded badly in
+        // the past). The cap-check already gated the attempt.
+        uart::puts("[renameat] non-AT_FDCWD dirfd — falling through as no-op\n");
+        return 0;
+    }
+
+    if !vfs::is_ready() { return 0; }
+
+    match vfs::rename_node(&oldpath[..oldlen], &newpath[..newlen]) {
+        Ok(()) => 0,
+        Err(e) => e,
     }
 }
 
