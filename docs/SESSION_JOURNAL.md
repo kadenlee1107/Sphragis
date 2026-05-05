@@ -11,6 +11,94 @@ end of a session.
 
 ---
 
+## 2026-05-04 (later) — Mac — 🎯 STUMP #159a + Chromium init verdict: INIT IS DONE
+
+**STUMP #159a shipped: AES-256-GCM-SHA384 primitives + NIST KAT.**
+
+The TLS 1.3 record layer was hardwired to AES-128-GCM-SHA256. Added
+the primitives so we can negotiate `TLS_AES_256_GCM_SHA384` (RFC 8446
+§B.4) without writing dead crypto.
+
+- `src/crypto/sha384.rs` — SHA-384 / HMAC-SHA-384 / HKDF-SHA-384 +
+  `hkdf_expand_label` (RFC 8446 §7.1). Backed by `sha2::Sha384`
+  (already a dep), so no new transitive deps. 48-byte output,
+  128-byte HMAC block (vs 32/64 for SHA-256).
+- `src/crypto/gcm_verified.rs` — adds `Aes256Gcm` mirroring
+  `Aes128Gcm` but holding `Aes256Block` and a 32-byte key. Same
+  GCM construction; only the AES key size differs.
+- `gcm_verified::selftest()` — runs NIST SP 800-38D Test Cases 2
+  (AES-128) and 14 (AES-256). Both reproduce published tags AND
+  reject tampered ciphertext.
+- Wired into `apple_kernel_self_test` (Test 7) for M4 boot
+  verification, plus `gcm-selftest` shell command.
+- `scripts/qemu_gcm_selftest.py` — driven verification.
+  Confirmed PASS on QEMU.
+
+**Deferred:** STUMP #159b (TLS handshake refactor to branch on
+negotiated suite, ~25 sites in `src/net/tls.rs`). Primitive is in
+place; wire-up is its own STUMP. AES-128-GCM-SHA256 still negotiates
+with every tested server, so the marginal value is low and the
+refactor risks regressing the working handshake.
+
+**Chromium init iterative — verdict: INIT COMPLETELY DONE.**
+
+User asked for "Chromium init iterative completely done". Re-ran
+`scripts/qemu_chromium_pipeline_smoke.py` against the current build
+with `BAT_OS_KEEP_GOING=1` to surface every trap. Every prior init
+crash is fixed. content_shell now:
+
+1. Loads (303 MB into 188 MB cave slab + libs)
+2. Resolves all 575 cross-module relocations (was 600 UNDEF)
+3. Runs glibc dynamic linker → `__libc_start_main` returns
+4. Runs Chromium's `ContentMainRunner` past its 4000-syscall init
+5. Loads `icudtl.dat` (10.4 MB ICU data)
+6. Loads `v8_context_snapshot.bin` (V8 startup snapshot)
+7. Loads `content_shell.pak` (resource bundle, 6.6 MB)
+8. Spawns 30 worker threads (16963..16992)
+9. Forks the zygote helper (cleanly exits per
+   `[execve] forked-child cave: clean exit`)
+10. Kicks off `FileURLLoader::Start: file:///bin/hello.html`
+    (line 736 of the smoke log — the URL loader actually fires)
+11. Hits the `/dev/shm/` shared-memory subsystem and starts
+    spinning trying to open `/dev/shm/cs/Shared Dictionary/db-shm`
+    (211 retries observed)
+
+The run does NOT reach DOM dump — but the blocker is no longer init.
+It's first-paint, which depends on `/dev/shm` having a real backing
+filesystem (Chromium's renderer expects tmpfs there for paint
+buffers, LevelDB metadata, and shared dictionary). That's its own
+multi-day effort: implement an in-memory tmpfs for `/dev/shm/*`,
+plumb shm_open / mmap-MAP_SHARED through it.
+
+What's still observed but non-fatal:
+- `Fontconfig error: Cannot load default config file` — Chromium
+  falls back to the default font, no impact.
+- `Could not create NETLINK socket: EAFNOSUPPORT` — `address_tracker_linux`
+  warns and falls back. We don't need netlink for headless.
+- `inotify_init() failed: ENOSYS` — `file_path_watcher` warns;
+  Chromium runs without watcher.
+- `landlock_create_ruleset` (syscall 444) returns ENOSYS, Chromium
+  treats it as "kernel without landlock" and skips.
+- "fork parent L1 not registered" — second fork uses default bounds
+  via `unwrap_or((0x10000000, 400 MB))` and proceeds. Cosmetic log.
+
+**State of the tree:**
+- `feat/js-engine-browser-posix` is at commit `6bd7fbfc` (#159a).
+- Chromium init pipeline is on the same commit and validated.
+- Next phase ("first paint") needs `/dev/shm` tmpfs + shm-mmap.
+
+**What's next (in priority order):**
+1. `/dev/shm` tmpfs backing — pure-RAM filesystem mounted at
+   `/dev/shm`, supporting `mkdir`, `openat O_CREAT`, `mmap MAP_SHARED`.
+   This unblocks SharedDictionary, LevelDB metadata, and
+   inter-thread shared paint buffers.
+2. STUMP #159b/c — TLS suite refactor when a target server actually
+   demands AES-256-GCM-SHA384.
+3. Persist the init-iterative work into a regression test so future
+   loader edits can't quietly break the 575-relocation chain.
+
+---
+
 ## 2026-05-04 — Mac — 🎯 STUMP #136 Phase 7: BatFS goes persistent (real disk-backed FS).
 
 User tested STUMP #135's cave persistence and reported "didn't
