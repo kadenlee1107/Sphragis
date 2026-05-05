@@ -11,6 +11,77 @@ end of a session.
 
 ---
 
+## 2026-05-04 (evening) — Mac — 🎯 STUMP #160 iter 1+2: Chromium init iterative continues
+
+Picking up from earlier today's "INIT IS DONE" entry. Re-ran the
+chromium pipeline smoke and surfaced three concrete issues:
+
+1. `[linux] unknown syscall 444` printed thrice on every Chromium
+   boot — Chromium probes Landlock at startup, our unknown-syscall
+   fallback fires, polluting logs and the BAT_OS_KEEP_GOING skip
+   ring with three known-false-positives.
+2. `[fork] parent L1 not registered, aborting` — said "aborting"
+   but the fork actually proceeded with safe-default bounds.
+   Misleading on every multi-fork pattern.
+3. **Big one:** 18 USER_DATA_ABORT skip events per smoke run —
+   each killed a Chromium worker thread. All in V8/PartitionAlloc
+   reservation regions (FAR=0x40_xxxxxxxx). Faults were DFSC=0x0F
+   (permission fault, level 3), which `demand_page::try_handle`
+   declined to handle (it accepted only translation faults
+   0x04..=0x07 and instruction-abort permission faults).
+
+**iter 1 — STUMP #160 commit `59ed73a3`:**
+
+- `src/batcave/linux/syscall.rs`: registered nr::LANDLOCK_{
+  CREATE_RULESET, ADD_RULE, RESTRICT_SELF} (444/445/446) →
+  sys_stub_enosys. Chromium feature-detects, gets ENOSYS,
+  silently falls back to seccomp-bpf or "no sandbox".
+- `src/batcave/linux/threads.rs`: real_fork's "parent L1 not
+  registered" warning gated to BAT_OS_KEEP_GOING only and
+  rephrased ("not in cave registry — using runner-default
+  bounds"). Production path is silent and correct.
+
+**iter 2 — STUMP #160 commit `058cca9d`:**
+
+`demand_page::try_handle` now also accepts data-abort permission
+faults. New branch (after the existing inst-abort perm-fault one):
+
+- DFSC 0x0d/0x0e/0x0f (permission fault) on a data abort
+- L3 entry already valid → preserve frame addr + attr index
+- Replace AP/PXN/UXN/AF/SH bits with USER_PAGE_FLAGS (EL0 RW, NX)
+- TLB flush on the page VA, return true → ERET retries
+
+This matches the V8/PartitionAlloc "huge reserve, lazy commit"
+semantics we already pretend to honour. Gated to faults inside a
+registered reservation OR plausible-V8 VA range so legitimate
+PROT_NONE guard pages (stack red-zones, etc.) still trap.
+
+**Verification:** chromium smoke (BAT_OS_KEEP_GOING=1).
+- Pre-iter-2: 18 SKIP USER_DATA_ABORT, 18 thread retires.
+- Post-iter-2: 3 SKIP USER_DATA_ABORT (mostly outside reservations).
+- Both reach `FileURLLoader::Start: file:///bin/hello.html`.
+
+**Still NOT resolved (next iteration):**
+- After FileURLLoader::Start + openat /bin/hello.html, the renderer
+  thread spins in epoll_pwait (sc 22) while another worker tight-
+  loops on `read` syscalls. main exits 0 without producing the
+  rendered DOM. Likely cause: Mojo IPC delivery from URL loader
+  to renderer fails because `socketpair` returns ENOTSOCK on a
+  non-socket fd somewhere ("Socket operation on non-socket (88)"
+  in net/base/net_errors_posix.cc:127 warning).
+- `/dev/shm/cs/shared_proto_db/metadata/CURRENT` "Unable to
+  create sequential file" — Chromium's LevelDB metadata writes
+  fail. Non-fatal but contributes to "things never finalize."
+- These need a real `/dev/shm` tmpfs backing per the prior
+  journal entry, plus Mojo IPC pipe semantics that don't
+  return ENOTSOCK on Chromium-style internal pipes.
+
+**State of the tree:** `feat/js-engine-browser-posix` at commit
+`058cca9d` (iter 2). Two new commits (`59ed73a3`, `058cca9d`)
+ready to push.
+
+---
+
 ## 2026-05-04 (later) — Mac — 🎯 STUMP #159a + Chromium init verdict: INIT IS DONE
 
 **STUMP #159a shipped: AES-256-GCM-SHA384 primitives + NIST KAT.**
