@@ -802,7 +802,19 @@ fn apple_kernel_self_test() {
         uart::puts("FAIL\n");
     }
 
-    // Test 7: kernel state summary.
+    // Test 7: AES-128-GCM + AES-256-GCM known-answer vectors
+    // (NIST SP 800-38D). STUMP #159 brought AES-256-GCM in; this
+    // verifies both ciphers reproduce the published tags AND reject
+    // tampered ciphertext on real M4 silicon. Without this, a fault
+    // in the AES round constants or GHASH reduction wouldn't
+    // surface until a TLS server NACKs a ClientHello.
+    uart::puts("[selftest] gcm_verified::selftest ... ");
+    match crate::crypto::gcm_verified::selftest() {
+        Ok(()) => uart::puts("OK\n"),
+        Err(e) => { uart::puts("FAIL: "); uart::puts(e); uart::puts("\n"); }
+    }
+
+    // Test 8: kernel state summary.
     let (used, total) = kernel::mm::frame::stats();
     uart::puts("[selftest] frame pool: ");
     kernel::mm::print_num(used);

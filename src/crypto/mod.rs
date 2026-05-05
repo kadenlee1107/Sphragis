@@ -1,5 +1,6 @@
 pub mod aes;
 pub mod sha256;
+pub mod sha384;
 pub mod gcm_verified;
 pub mod pq_hybrid;
 pub mod pq_hybrid_sig;

@@ -176,6 +176,7 @@ fn execute(cmd: &str) {
         "pq-selftest" => cmd_pq_selftest(),
         "pq-sig-selftest" => cmd_pq_sig_selftest(),
         "ipc-selftest"    => cmd_ipc_selftest(),
+        "gcm-selftest"    => cmd_gcm_selftest(),
         "secure-ipc-selftest" => cmd_secure_ipc_selftest(),
         "secure-ipc-wire-selftest" => cmd_secure_ipc_wire_selftest(),
         "cave-policy-selftest" => cmd_cave_policy_selftest(),
@@ -1567,6 +1568,30 @@ fn cmd_secure_ipc_selftest() {
             console::puts("    round 2 match:  "); console::puts(if r.round_2_matched {"✓"} else {"✗"}); console::puts("\n");
             console::puts("    tamper rejected:"); console::puts(if r.tamper_rejected {"✓"} else {"✗"}); console::puts("\n");
             console::puts("    replay rejected:"); console::puts(if r.replay_rejected {"✓"} else {"✗"}); console::puts("\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
+        }
+    }
+}
+
+// STUMP #159: AES-128-GCM + AES-256-GCM NIST known-answer vectors.
+// Validates that the gcm_verified module reproduces NIST SP 800-38D
+// Test Cases 2 and 14 byte-for-byte AND rejects tampered ciphertext.
+// Without this, a fault in the AES round constants or GHASH reduction
+// wouldn't surface until a TLS server NACKs a ClientHello — the
+// failure mode there is opaque ("connection reset"), so we'd rather
+// fail loudly here at the shell.
+fn cmd_gcm_selftest() {
+    console::puts_hi("  AES-GCM KNOWN-ANSWER SELF-TEST\n");
+    console::puts("  AES-128-GCM (NIST Case 2) + AES-256-GCM (NIST Case 14)\n");
+    console::puts("  Encrypt → tag match → decrypt round-trip → tamper rejected\n");
+
+    match crate::crypto::gcm_verified::selftest() {
+        Ok(()) => {
+            console::puts("  ✓ PASS  both ciphers reproduce published tags\n");
+            console::puts("    Both TLS 1.3 cipher suites (TLS_AES_128_GCM_SHA256\n");
+            console::puts("    and TLS_AES_256_GCM_SHA384) safe to negotiate.\n");
         }
         Err(e) => {
             console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
