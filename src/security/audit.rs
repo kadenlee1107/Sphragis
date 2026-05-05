@@ -212,6 +212,35 @@ pub fn serialize(out: &mut [u8]) -> usize {
     pos
 }
 
+/// STUMP #156: flush the resident audit ring to BatFS as `/audit.log`.
+///
+/// Used by `cave::seal` and `cave::destroy` to lock the trail in
+/// place at security-sensitive transitions — without this, an
+/// attacker who panics/reboots between the seal/destroy and the
+/// operator's next `audit-flush` erases evidence. With this, every
+/// seal and destroy has its event trail durably committed.
+///
+/// Returns `Ok(bytes_written)` or `Err(reason)`. Callers ignore the
+/// result — failure here is "the trail isn't durable for this
+/// transition," not a reason to abort the lifecycle event itself.
+///
+/// Static 256K buffer to avoid stack-staging. Single-CPU + IrqGuard-
+/// scoped callers means no concurrent flush races.
+pub fn flush_to_batfs() -> Result<usize, &'static str> {
+    static mut FLUSH_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
+    unsafe {
+        let buf = &mut *core::ptr::addr_of_mut!(FLUSH_BUF);
+        let n = serialize(buf);
+        if n == 0 { return Ok(0); }
+        // Idempotent overwrite: delete-then-create. BatFS::create
+        // errors on duplicate name; we want every flush to replace
+        // the prior log (rotation policy is a future STUMP).
+        let _ = crate::fs::batfs::delete("audit.log");
+        crate::fs::batfs::create("audit.log", &buf[..n])?;
+        Ok(n)
+    }
+}
+
 /// STUMP #155: restore previously-persisted audit entries from a
 /// `serialize`-format buffer (typically the contents of `/audit.log`
 /// in BatFS, written by a prior boot's `audit-flush`).

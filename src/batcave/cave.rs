@@ -827,6 +827,12 @@ pub fn seal(name: &str) -> Result<(), &'static str> {
     // entire point of seal, so this delete is non-negotiable.
     crate::batcave::persist::delete(name);
 
+    // STUMP #156: persist the audit ring so the seal event itself
+    // (and everything before it) survives a panic-induced reboot.
+    // Pairs with the persist::delete above — if the attacker triggers
+    // a reboot to escape the trail, the trail is already on disk.
+    let _ = crate::security::audit::flush_to_batfs();
+
     Ok(())
 }
 
@@ -960,6 +966,10 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
     // destroyed across reboots. Idempotent — silently does nothing if
     // the cave was Ephemeral and never had a manifest.
     crate::batcave::persist::delete(name);
+
+    // STUMP #156: persist the audit ring so the destroy event is
+    // durable across reboot. Same anti-coercion reasoning as seal.
+    let _ = crate::security::audit::flush_to_batfs();
 
     Ok(())
 }
