@@ -146,6 +146,13 @@ fn execute(cmd: &str) {
         // blocking dump-dom is in the renderer-specific code path.
         // If version DOESN'T print, we have an even more basic problem.
         "chromium-version" | "chrome-version" => cmd_chromium_version(),
+        // STUMP #161 (port/ladybird): Ladybird browser as an alternative
+        // to Chromium. Same in-cave glibc dynamic-load pipeline; very
+        // different IPC + JS engine. `ladybird-js` runs the LibJS REPL
+        // (smallest possible Ladybird test). `ladybird` runs WebContent
+        // pointed at a URL.
+        "ladybird-js"           => cmd_ladybird_js(parts[1]),
+        "ladybird"              => cmd_ladybird(parts[1], parts[2], parts[3]),
         "dump-dom" | "dom" => cmd_dump_dom(parts[1]),
         "render" => cmd_render(parts[1], &parts),
         "tls-mode" => cmd_tls_mode(parts[1]),
@@ -3100,6 +3107,124 @@ fn cmd_chromium_version() {
         Ok(()) => crate::drivers::uart::puts("  chromium-version exited OK\n"),
         Err(e) => {
             crate::drivers::uart::puts("  chromium-version: ");
+            crate::drivers::uart::puts(e);
+            crate::drivers::uart::puts("\n");
+        }
+    }
+}
+
+// ──────────────────────── Ladybird (port/ladybird) ──────────────────
+//
+// STUMP #161: Ladybird browser as an alternative to the Chromium port.
+// Reuses the same in-cave dynamic-load pipeline (load_archive_multi
+// + per-cave page table + glibc TLS init), so most of the kernel-side
+// work the Chromium port shook out applies directly. What differs:
+//
+//   * Initrd content: ports/ladybird_port/out/ baked via
+//     tools/bake_ladybird_initrd.sh into ladybird_initrd.bin.
+//   * Argv shape: Ladybird CLIs take simple positional args, not the
+//     mountain of --feature-gate flags Chromium needs.
+//   * No V8 sandbox cage / no Mojo IPC, so we don't need
+//     --js-flags='--no-enable-sandbox' or --use-gl=stub equivalents.
+//
+// `ladybird-js <expr>` runs the LibJS CLI as a smoke test (smallest
+// possible Ladybird binary — exercises ELF load → glibc init → AK →
+// LibJS → printf → exit). If this prints "1\n" for `ladybird-js 1+0`,
+// our pipeline can host Ladybird's libs end-to-end.
+//
+// `ladybird <url>` runs WebContent pointed at the URL (TBD — needs
+// IPC plumbing to a UI process or headless mode flag).
+
+fn cmd_ladybird_js(expr_in: &str) {
+    use crate::batcave::linux::runner;
+    use crate::kernel::mm::initrd;
+
+    if !initrd::is_present() {
+        console::puts("  error: no Ladybird binary baked into this image.\n");
+        console::puts("  hint: run ports/ladybird_port/build.sh, then\n");
+        console::puts("        tools/bake_ladybird_initrd.sh to produce\n");
+        console::puts("        ladybird_initrd.bin.\n");
+        return;
+    }
+
+    // Default expression — a one-liner that exercises arithmetic +
+    // string output, both of which need LibJS's value coercion path.
+    let expr: &str = if expr_in.is_empty() { "console.log(1+1)" } else { expr_in };
+
+    // Ladybird's `js` CLI takes:
+    //   js -c <expr>         — evaluate <expr> and print result
+    //   js [-i] <file>       — interactive / file mode (we don't use)
+    let mut argv: [&str; 4] = [""; 4];
+    argv[0] = "/bin/js";
+    argv[1] = "-c";
+    argv[2] = expr;
+
+    console::puts("  ladybird-js: ");
+    console::puts(expr);
+    console::puts("\n");
+
+    crate::batcave::linux::skip_log::reset();
+
+    match runner::run_chromium("", &argv[..3]) {
+        Ok(()) => crate::drivers::uart::puts("  ladybird-js exited OK\n"),
+        Err(e) => {
+            crate::drivers::uart::puts("  ladybird-js: ");
+            crate::drivers::uart::puts(e);
+            crate::drivers::uart::puts("\n");
+        }
+    }
+}
+
+fn cmd_ladybird(a1: &str, a2: &str, a3: &str) {
+    use crate::batcave::linux::runner;
+    use crate::kernel::mm::initrd;
+
+    let mut url: &str = "";
+    let mut headless = true;
+    let mut dump_dom = false;
+
+    for tok in [a1, a2, a3].iter() {
+        if tok.is_empty() { continue; }
+        if *tok == "--dump-dom" { dump_dom = true; }
+        else if *tok == "--headed" { headless = false; }
+        else if !tok.starts_with("--") && url.is_empty() {
+            url = tok;
+        }
+    }
+
+    if url.is_empty() {
+        console::puts("  usage: ladybird [--dump-dom] <url>\n");
+        console::puts("         (e.g. `ladybird --dump-dom file:///bin/hello.html`)\n");
+        return;
+    }
+
+    if !initrd::is_present() {
+        console::puts("  error: no Ladybird binary baked into this image.\n");
+        return;
+    }
+
+    // Ladybird's WebContent service listens on a Unix-domain socket
+    // for IPC from the UI process. Without a UI process, it just
+    // sits there. For our headless smoke we'll prefer Tests/LibWeb's
+    // headless test runner if present, falling back to WebContent
+    // with a no-UI flag (TBD — depends on Ladybird's actual CLI).
+    let _ = headless;
+    let _ = dump_dom;
+
+    let mut argv: [&str; 6] = [""; 6];
+    argv[0] = "/bin/WebContent";
+    argv[1] = url;
+
+    console::puts("  ladybird on ");
+    console::puts(url);
+    console::puts("\n");
+
+    crate::batcave::linux::skip_log::reset();
+
+    match runner::run_chromium(url, &argv[..2]) {
+        Ok(()) => crate::drivers::uart::puts("  ladybird exited OK\n"),
+        Err(e) => {
+            crate::drivers::uart::puts("  ladybird: ");
             crate::drivers::uart::puts(e);
             crate::drivers::uart::puts("\n");
         }
