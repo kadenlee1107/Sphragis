@@ -212,6 +212,86 @@ pub fn serialize(out: &mut [u8]) -> usize {
     pos
 }
 
+/// STUMP #155: restore previously-persisted audit entries from a
+/// `serialize`-format buffer (typically the contents of `/audit.log`
+/// in BatFS, written by a prior boot's `audit-flush`).
+///
+/// Re-populates the RING with the parsed entries so the operator's
+/// `audit` command shows historical events. Each restored event has
+/// its `ts` re-set from the serialized timestamp; the `cat` byte
+/// matches by string name; the message bytes are copied verbatim
+/// up to MSG_LEN.
+///
+/// Returns the number of entries successfully restored.
+///
+/// Format (per `serialize` above): `<ts> <cat> <msg>\n` lines. Lines
+/// that fail to parse are skipped — we'd rather drop a corrupt entry
+/// than panic during boot.
+pub fn restore_from_persisted(buf: &[u8]) -> usize {
+    let mut restored = 0usize;
+    let mut start = 0usize;
+    for i in 0..buf.len() {
+        if buf[i] != b'\n' { continue; }
+        let line = &buf[start..i];
+        start = i + 1;
+        if line.is_empty() { continue; }
+
+        // Split: <ts> <cat> <msg>
+        let sp1 = match line.iter().position(|&b| b == b' ') { Some(p) => p, None => continue };
+        let rest = &line[sp1 + 1..];
+        let sp2 = match rest.iter().position(|&b| b == b' ') { Some(p) => p, None => continue };
+        let ts_bytes = &line[..sp1];
+        let cat_bytes = &rest[..sp2];
+        let msg_bytes = &rest[sp2 + 1..];
+
+        // Parse ts as decimal u64.
+        let mut ts: u64 = 0;
+        for &b in ts_bytes {
+            if !(b'0'..=b'9').contains(&b) { ts = 0; break; }
+            ts = ts.wrapping_mul(10).wrapping_add((b - b'0') as u64);
+        }
+
+        // Map cat name back to enum byte. The serialize side uses
+        // these short names; keep both sides in sync.
+        let cat = match cat_bytes {
+            b"fetch"  => Category::Fetch as u8,
+            b"script" => Category::Script as u8,
+            b"click"  => Category::Click as u8,
+            b"nav"    => Category::Nav as u8,
+            b"form"   => Category::FormSubmit as u8,
+            b"mode"   => Category::Mode as u8,
+            b"auth"   => Category::Auth as u8,
+            b"boot"   => Category::Boot as u8,
+            b"cave"   => Category::Cave as u8,
+            _ => continue,
+        };
+
+        // Find a slot. We want restored entries to APPEND to the
+        // existing ring so live events recorded post-boot don't
+        // collide. Take the next slot via fetch_add — same path
+        // `record` uses.
+        let h = HEAD.fetch_add(1, Ordering::Relaxed);
+        if h >= RING_CAP {
+            EVICTED.fetch_add(1, Ordering::Relaxed);
+        }
+        let slot = h % RING_CAP;
+        let copy = msg_bytes.len().min(MSG_LEN);
+        unsafe {
+            let e = &mut RING[slot];
+            e.ts = ts;
+            e.cat = cat;
+            e.mlen = copy as u8;
+            for j in 0..copy {
+                let b = msg_bytes[j];
+                e.msg[j] = if b >= 0x20 && b < 0x7F { b } else { b'?' };
+            }
+            if copy < MSG_LEN { e.msg[copy] = 0; }
+        }
+        restored += 1;
+    }
+    restored
+}
+
 fn copy_to(out: &mut [u8], src: &[u8]) -> usize {
     let n = src.len().min(out.len());
     out[..n].copy_from_slice(&src[..n]);

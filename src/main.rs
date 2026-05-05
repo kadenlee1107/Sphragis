@@ -259,6 +259,29 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     fs::batfs::init(&master_key);
     drivers::uart::puts("  [fs] BatFS initialized (ChaCha20-Poly1305 AEAD, Argon2id-derived master)\n");
 
+    // STUMP #155: restore audit ring from BatFS-persisted /audit.log
+    // (written by a prior boot's `audit-flush`). Lets the operator's
+    // `audit` command show historical events across reboots — without
+    // this, an attacker who panics post-exploit erases their tracks.
+    {
+        // Static buf to avoid stack-staging a 256K array.
+        static mut RESTORE_BUF: [u8; 256 * 1024] = [0; 256 * 1024];
+        unsafe {
+            let buf = &mut *core::ptr::addr_of_mut!(RESTORE_BUF);
+            match fs::batfs::read("audit.log", buf) {
+                Ok(n) if n > 0 => {
+                    let restored = security::audit::restore_from_persisted(&buf[..n]);
+                    drivers::uart::puts("  [audit] restored ");
+                    kernel::mm::print_num(restored);
+                    drivers::uart::puts(" entries from /audit.log\n");
+                }
+                _ => {
+                    drivers::uart::puts("  [audit] no persisted /audit.log (fresh ring)\n");
+                }
+            }
+        }
+    }
+
     // Initialize BatCave runtime
     drivers::uart::puts("[boot] Initializing BatCave runtime...\n");
     batcave::cave::init();
