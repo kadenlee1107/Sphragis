@@ -77,13 +77,20 @@ def main():
             time.sleep(0.3); c.sendline(b"batman")
             c.expect(PROMPT, timeout=30)
         c.sendline(b"ladybird-js 1+1")
-        # PASS markers: a line containing "2" between the command and
-        # the next prompt. Also accept "ladybird-js exited OK".
+        # STUMP #161 iter 17 fix: previously matched "ladybird-js: "
+        # AND \b2\b which both appear in normal kernel output (the
+        # latter in mmap "pages=2" lines). The cave was getting only
+        # ~ms of runtime before the smoke killed it. Wait for the
+        # CAVE to either: (a) print the literal js result with a
+        # leading newline ("\r\n2"), (b) the runner exit-OK marker,
+        # (c) a runner error message, or (d) the bat_os PROMPT
+        # reappearing (which only happens AFTER the cave exits).
         idx = c.expect([
-            rb"\b2\b",
+            rb"\r\n2\r\n",                # bare result line
             rb"ladybird-js exited OK",
-            rb"ladybird-js: ",
-            PROMPT,
+            rb"ladybird-js: chromium",    # runner error
+            rb"ladybird-js: no Ladybird",
+            PROMPT,                       # cave returned to shell
         ], timeout=120)
         match = c.match.group(0).decode() if c.match else "?"
         print(f"[ladybird-js] match: {match!r}")
