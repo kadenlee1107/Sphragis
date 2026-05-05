@@ -11,6 +11,87 @@ end of a session.
 
 ---
 
+## 2026-05-04 (later evening) — Mac — 🎯 STUMP #160 iter 3: real renameat — leveldb unblocked
+
+User said "lets keep grinding" after iter 1+2 entry. Pivoted to the
+iter-3 target: making the post-FileURLLoader leveldb cycle stop.
+
+**Root cause:** sys_renameat (syscall 38) and sys_renameat2 (276) were
+both `sys_stub_zero` — returned 0 but didn't actually move anything.
+LevelDB's standard write-MANIFEST-then-rename-to-CURRENT pattern
+silently broke. Every leveldb consumer (SharedDictionary,
+shared_proto_db, SimpleCache index) cycled in a 200+ retry loop
+trying to read CURRENT after the rename "succeeded" but did nothing.
+
+**iter 3 — STUMP #160 commit `0d993eac`:**
+
+- `src/batcave/linux/vfs.rs` adds `vfs::rename_node(old, new)`:
+  resolve_path on src, resolve_parent on dst, remove existing dst
+  if any (≠ src), then update src's parent + name in place.
+  Volatile name-buffer writes to dodge the create_node miscompile
+  pattern.
+
+- `src/batcave/linux/syscall.rs` adds `sys_renameat(args)` covering
+  both nr 38 and nr 276 (renameat2 ignores its flags arg —
+  Chromium doesn't use RENAME_NOREPLACE/EXCHANGE/WHITEOUT).
+  AT_FDCWD-only for now; Chromium's leveldb path always uses
+  AT_FDCWD.
+
+**Verification — chromium pipeline smoke:**
+
+- Pre-iter-3: `4× "leveldb_database.cc:124] Unable to open
+  .../metadata: IO error: ... CURRENT: Unable to create
+  sequential file (...NewSequentialFile::4)"`
+- Post-iter-3: `0` (entirely silent — leveldb working)
+- Trace now shows full leveldb sequence: write MANIFEST-000001,
+  rename MANIFEST.tmp→CURRENT, openat CURRENT (succeeds!),
+  openat MANIFEST-000001 (succeeds!), open log files, etc.
+
+**iter 4 — investigated but not fixed:**
+
+After leveldb works, content_shell hits a BRK from EL0 deeper in
+init. Decoded with llvm-addr2line:
+
+```
+elr=0x0000000014cef8ec  →  RVA 0x4cef8ec
+  → base::sequence_manager::internal::AssociatedThreadId::
+    AssertInSequenceWithCurrentThread()
+  ← TaskQueueImpl::RequiresTaskTiming()
+  ← SequenceManagerImpl::SelectNextTaskImpl()
+```
+
+Disassembly: the function is comparing `bound_thread_ref` (loaded
+into x19 from `this->bound_ref_`) to `webrtc::CurrentThreadRef()`
+(which is just a tail-call to `pthread_self@plt`). Mismatch → brk.
+
+So `pthread_self()` on the same logical thread is returning
+different values at bind time vs. assert time. We DO save/restore
+TPIDR_EL0 on context switch (threads.s line 281: `msr tpidr_el0,
+x3` from saved x[18]) and the loader sets the initial TPIDR_EL0
+to the cave's TLS_uva via `loader.rs:2427`. But somewhere along
+the way Chromium's task scheduler observes a thread-identity
+flip — likely a context-switch path that doesn't preserve x[18]
+correctly, or a TaskQueue posted from a non-main thread that
+the main thread tries to drain.
+
+This is a deep Chromium-threading-vs-our-scheduler interaction
+that needs base/sequence_manager source-level reasoning.
+Deferred. Marker for next iteration:
+
+  ELR  = 0x14cef8ec
+  RVA  = 0x4cef8ec
+  Symbol = AssociatedThreadId::AssertInSequenceWithCurrentThread
+  Frame: SelectNextTaskImpl → RequiresTaskTiming → assert
+
+**State of the tree:** `feat/js-engine-browser-posix` at
+`0d993eac`. Three new commits today (`59ed73a3`, `058cca9d`,
+`0d993eac`). Net effect: Chromium runs ~3× longer, leveldb
+fully working, V8 reservations partially working, 6× fewer
+phantom thread deaths, hits a real (not infrastructure) bug
+in pthread-identity preservation as the next blocker.
+
+---
+
 ## 2026-05-04 (evening) — Mac — 🎯 STUMP #160 iter 1+2: Chromium init iterative continues
 
 Picking up from earlier today's "INIT IS DONE" entry. Re-ran the
