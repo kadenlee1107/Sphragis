@@ -84,24 +84,70 @@ work, artifact_dir, primary, out = sys.argv[1:]
 
 # Build the (archive-name, host-path) list. Same convention as the
 # Chromium port: binaries under bin/, runtime libs under lib/.
+#
+# STUMP #161 v2: prefer a precomputed `js_closure.txt` if it exists.
+# The closure is the recursive DT_NEEDED set for the primary binary,
+# which is much smaller (~33 files for js) than the full ldd-of-
+# everything dump build.sh produces (~110 files including video
+# codec deps Skia pulls in but `js` never touches). The closure file
+# is one path-per-line, archive-relative (`bin/js`, `lib/libc.so.6`).
 files = []
-files.append((f"bin/{primary}", os.path.join(artifact_dir, "bin", primary)))
+USE_CLOSURE = False
+closure_path = os.path.join(artifact_dir, f"{primary}_closure.txt")
+if os.path.isfile(closure_path):
+    with open(closure_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line: continue
+            host = os.path.join(artifact_dir, line)
+            if os.path.exists(host):
+                files.append((line, host))
+    print(f"[bake-ladybird] using {primary}_closure.txt: {len(files)} files",
+          file=sys.stderr)
+    USE_CLOSURE = True
+else:
+    files.append((f"bin/{primary}", os.path.join(artifact_dir, "bin", primary)))
 
 # All bin/* binaries (so multi-process variants can reach each other
-# via /bin/<svc> at exec time).
-bin_dir = os.path.join(artifact_dir, "bin")
-for entry in sorted(os.listdir(bin_dir)) if os.path.isdir(bin_dir) else []:
-    full = os.path.join(bin_dir, entry)
-    if os.path.isfile(full) and entry != primary:
-        files.append((f"bin/{entry}", full))
+# via /bin/<svc> at exec time). Skipped when USE_CLOSURE: closure
+# mode means "ship only what the primary binary actually loads."
+if not USE_CLOSURE:
+    bin_dir = os.path.join(artifact_dir, "bin")
+    for entry in sorted(os.listdir(bin_dir)) if os.path.isdir(bin_dir) else []:
+        full = os.path.join(bin_dir, entry)
+        if os.path.isfile(full) and entry != primary:
+            files.append((f"bin/{entry}", full))
 
-# DT_NEEDED libs (Ladybird typically ships ~10 libs vs Chromium's ~13)
+# DT_NEEDED libs. Lagom ships each lib as a symlink chain
+# (liblagom-X.so → liblagom-X.so.0 → liblagom-X.so.0.1.0). Pack
+# only the SONAME entry (.so.0) — that's what the dynamic linker
+# looks up via DT_NEEDED. The .so.0.1.0 version comes through too
+# only when it IS the file we picked.
+#
+# We resolve symlinks via os.path.realpath so each lib's content
+# only lands once even though we use the SONAME name in the
+# archive. This cuts ~50% of the lib payload.
 lib_dir = os.path.join(artifact_dir, "lib")
-if os.path.isdir(lib_dir):
+seen_realpaths = {}  # realpath → archive_name we already used
+if os.path.isdir(lib_dir) and not USE_CLOSURE:
     for entry in sorted(os.listdir(lib_dir)):
         full = os.path.join(lib_dir, entry)
-        if os.path.isfile(full):
-            files.append((f"lib/{entry}", full))
+        if not (os.path.isfile(full) or os.path.islink(full)):
+            continue
+        # Pack only the canonical SONAME — drop the bare `liblagom-X.so`
+        # (developer convenience link with no version) AND the
+        # `liblagom-X.so.0.1.0` (the real file). The dynamic linker
+        # asks for `liblagom-X.so.0` per DT_NEEDED, which is what we
+        # ship.
+        is_dev_link = entry.endswith(".so") and ".so." not in entry
+        is_full_version = entry.count(".so.") >= 1 and entry.count(".") >= 4
+        if is_dev_link or is_full_version:
+            continue
+        real = os.path.realpath(full)
+        if real in seen_realpaths:
+            continue
+        seen_realpaths[real] = entry
+        files.append((f"lib/{entry}", real))
 
 # Default hello.html — drop it under bin/ so file:///bin/hello.html
 # resolves the same way it does for the Chromium port.
@@ -115,13 +161,52 @@ if os.path.isdir(share_fonts):
         if os.path.isfile(full) and entry.endswith((".ttf", ".otf")):
             files.append((f"share/fonts/{entry}", full))
 
-if len(files) > 16:
+# STUMP #161: runner.rs cap was bumped 16 → 64 to fit Ladybird's
+# ~30 lagom-* libs + ~12 system libs js needs at runtime.
+if len(files) > 64:
     print(f"[bake-ladybird] WARN: {len(files)} files exceeds runner.rs's "
-          f"16-file cap; trimming to 16 (drop fonts first)", file=sys.stderr)
+          f"64-file cap; trimming (drop fonts first, then non-essential libs)",
+          file=sys.stderr)
     bins   = [f for f in files if f[0].startswith("bin/")]
     libs   = [f for f in files if f[0].startswith("lib/")]
+    # Critical-first sort. Without ld-linux + libc + libstdc++ a glibc
+    # binary won't even start, so those MUST be in the 40 even if it
+    # means dropping a lagom-something. lagom comes before libavcodec
+    # / libavformat / etc which are video deps Skia pulls in but `js`
+    # never touches.
+    def lib_prio(name):
+        if "ld-linux" in name: return 0
+        if name.endswith("/libc.so.6"): return 1
+        if "libstdc++" in name: return 2
+        if "libgcc_s" in name: return 3
+        if name.endswith("/libm.so.6"): return 4
+        if "libcrypto" in name: return 5
+        if "libsimdjson" in name: return 6
+        # libcpptrace + its deps (libdwarf, libzstd, libelf) — ladybird
+        # links against cpptrace for stack traces. Without these the
+        # dynamic linker errors out before main() runs.
+        if "libcpptrace" in name: return 7
+        if "libdwarf" in name: return 8
+        if "libzstd" in name: return 9
+        if "libelf" in name: return 10
+        if "libpthread" in name: return 11
+        if "libdl" in name: return 12
+        if "libvulkan" in name: return 13
+        if "lagom-" in name: return 14
+        # Video/audio codecs come last — they're only needed by
+        # WebContent's media path, never by `js`.
+        if any(s in name for s in ("libav", "libsdl", "libpulse",
+                                    "libasound", "libFLAC", "libogg",
+                                    "libvorbis", "libtheora", "libvpx",
+                                    "libdav1d", "libaom", "libwebp",
+                                    "libavif", "libjxl", "libtiff",
+                                    "libjpeg", "libpng", "libgif",
+                                    "libtheora", "libdrm", "libGL")):
+            return 90
+        return 99
+    libs.sort(key=lambda f: lib_prio(f[0]))
     others = [f for f in files if not (f[0].startswith("bin/") or f[0].startswith("lib/"))]
-    files = (bins + libs + others)[:16]
+    files = (bins + libs + others)[:64]
 
 # Header: BATARCH\0  +  n_files (u32)  +  reserved (u32)
 ARCHIVE_MAGIC = b"BATARCH\0"

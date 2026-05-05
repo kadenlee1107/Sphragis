@@ -167,13 +167,34 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
     // undefined glibc/pthread/libm references to the real library bodies.
     // Falls back to the legacy single-ELF path for plain-blob initrds.
     let info = if initrd::is_archive() {
-        let shell = initrd::archive_file("bin/content_shell").ok_or("archive has no bin/content_shell")?;
+        // Pick the main binary. Chromium ships content_shell; Ladybird
+        // ships js / WebContent. Try Ladybird first (smaller/faster),
+        // fall back to Chromium.
+        //
+        // STUMP #161 (port/ladybird): bumped from 16 → 40 because
+        // Ladybird's `js` REPL needs ~19 libs at runtime (lagom-* +
+        // libcrypto + libsimdjson + libstdc++ + libc + ...) and
+        // WebContent needs more. Chromium fits comfortably in 16 but
+        // wasn't a hard ceiling — it was a "sized to fit current
+        // workload" pick.
+        let (main_name, shell): (&'static [u8], &[u8]) =
+            if let Some(b) = initrd::archive_file("bin/js") {
+                (b"bin/js", b)
+            } else if let Some(b) = initrd::archive_file("bin/WebContent") {
+                (b"bin/WebContent", b)
+            } else if let Some(b) = initrd::archive_file("bin/content_shell") {
+                (b"bin/content_shell", b)
+            } else {
+                return Err("archive has no main binary (js / WebContent / content_shell)");
+            };
         // Collect libs in the order they appear in the archive. Main exe
         // MUST be files[0] because load_archive_multi treats it as the
         // entry point and sets the loader globals from it.
-        let mut files: [(&[u8], &[u8]); 16] = [(&[], &[]); 16];
+        // STUMP #161: 40 was tight — Ladybird's `js` needs ~30 lagom-*
+        // libs + ~12 system libs. Bumped to 64.
+        let mut files: [(&[u8], &[u8]); 64] = [(&[], &[]); 64];
         let mut count = 0usize;
-        files[0] = (b"bin/content_shell", shell);
+        files[0] = (main_name, shell);
         count += 1;
         // Walk the archive header for every lib/* entry.
         initrd::archive_for_each(|name, _sz| {
