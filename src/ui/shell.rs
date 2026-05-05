@@ -144,6 +144,7 @@ fn execute(cmd: &str) {
         "audit" => cmd_audit(parts[1]),
         "audit-flush" => cmd_audit_flush(),
         "tcp-selftest" => cmd_tcp_selftest(),
+        "tcp-listen" => cmd_tcp_listen(parts[1]),
         "origin" => cmd_origin(parts[1]),
         "origin-allow" => cmd_origin_allow(parts[1], parts[2]),
         "origin-mode" => cmd_origin_mode(parts[1]),
@@ -4824,6 +4825,177 @@ fn cmd_tcp_selftest() {
             console::puts("\n");
         }
     }
+}
+
+/// STUMP #149: real-wire test harness for STUMP #148's TCP server-side.
+///
+/// Usage: `tcp-listen <port>`
+///
+/// Registers a kernel listener on the given port, blocks waiting for
+/// one inbound connection (~30s deadline), prints the peer's address
+/// when the third ACK lands, drains up to 256 bytes of received data
+/// to the console, sends back a "hello from bat_os\n" greeting, and
+/// closes. One-shot (handles a single connection then returns to the
+/// shell prompt).
+///
+/// Driving from the QEMU host:
+///
+///     # On Bat_OS:
+///     bat_os > tcp-listen 8080
+///       listening on port 8080... (one-shot, ~30s deadline)
+///
+///     # On the Mac host:
+///     $ nc -v 10.0.2.15 8080
+///     Connection to 10.0.2.15 8080 port [tcp/*] succeeded!
+///     hello world<Enter>
+///
+///     # Back on Bat_OS:
+///       connection from 10.0.2.2:54321
+///       recv (12 bytes): hello world
+///       sent greeting; closing
+fn cmd_tcp_listen(port_str: &str) {
+    use crate::net::tcp;
+
+    if port_str.is_empty() {
+        console::puts("  usage: tcp-listen <port>\n");
+        return;
+    }
+    let port: u16 = match port_str.parse() {
+        Ok(p) if p > 0 => p,
+        _ => {
+            console::puts("  invalid port: ");
+            console::puts(port_str);
+            console::puts("\n");
+            return;
+        }
+    };
+
+    // Sentinel fd that doesn't overlap the socket fd range
+    // (SOCKET_FD_BASE = 1024). 99 is well below that and not in use
+    // by any other subsystem.
+    const SENTINEL_FD: i32 = 99;
+
+    if let Err(e) = tcp::listen_register(port, 4, 0, SENTINEL_FD) {
+        console::puts("  listen_register failed: ");
+        console::puts(e);
+        console::puts("\n");
+        return;
+    }
+
+    let listener_idx = match tcp::listener_lookup_by_port(port) {
+        Some(i) => i,
+        None => {
+            console::puts("  internal error: listener disappeared\n");
+            return;
+        }
+    };
+
+    console::puts("  listening on port ");
+    crate::kernel::mm::print_num(port as usize);
+    console::puts("... (one-shot, ~30s deadline)\n");
+
+    // Spin polling for an inbound connection. Each iteration drives
+    // the network stack via poll_once so virtio-net packets actually
+    // get processed and reach handle_incoming. cntpct deadline at
+    // ~30s prevents the shell from hanging forever.
+    let start: u64;
+    let freq: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+    }
+    let deadline = start + freq * 30;
+
+    let mut pcb_id: Option<usize> = None;
+    loop {
+        crate::net::poll_once();
+        if let Some(id) = tcp::listener_accept_pop(listener_idx) {
+            pcb_id = Some(id);
+            break;
+        }
+        let now: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+        if now > deadline { break; }
+        core::hint::spin_loop();
+    }
+
+    let pcb_id = match pcb_id {
+        Some(id) => id,
+        None => {
+            console::puts("  timeout — no connection\n");
+            tcp::listen_close(port);
+            return;
+        }
+    };
+
+    // Print the peer's address.
+    let (rip_be, rport) = tcp::pcb_remote(pcb_id);
+    console::puts("  connection from ");
+    let rip = u32::from_be(rip_be);
+    crate::kernel::mm::print_num(((rip >> 24) & 0xFF) as usize);
+    console::puts(".");
+    crate::kernel::mm::print_num(((rip >> 16) & 0xFF) as usize);
+    console::puts(".");
+    crate::kernel::mm::print_num(((rip >> 8) & 0xFF) as usize);
+    console::puts(".");
+    crate::kernel::mm::print_num((rip & 0xFF) as usize);
+    console::puts(":");
+    crate::kernel::mm::print_num(rport as usize);
+    console::puts("\n");
+
+    // Drain received data (drive the stack a bit so the peer's data
+    // packets arrive) and print up to 256 bytes.
+    let mut buf = [0u8; 256];
+    let read_deadline = {
+        let now: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+        now + freq * 2 // 2-second window for the peer to send data
+    };
+    let mut total = 0usize;
+    loop {
+        crate::net::poll_once();
+        if let Ok(n) = tcp::recv_data_pcb(pcb_id, &mut buf[total..]) {
+            if n > 0 {
+                total += n;
+                if total >= buf.len() { break; }
+            }
+        }
+        let now: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+        if now > read_deadline { break; }
+        core::hint::spin_loop();
+    }
+
+    if total > 0 {
+        console::puts("  recv (");
+        crate::kernel::mm::print_num(total);
+        console::puts(" bytes): ");
+        // Print as ASCII, replacing non-printables with `.`
+        for i in 0..total {
+            let b = buf[i];
+            if (0x20..0x7F).contains(&b) || b == b'\n' || b == b'\r' {
+                console::putc(b);
+            } else {
+                console::putc(b'.');
+            }
+        }
+        console::puts("\n");
+    } else {
+        console::puts("  (peer sent no data within 2s window)\n");
+    }
+
+    // Send a greeting so the peer sees both directions work.
+    let greeting = b"hello from bat_os\n";
+    let _ = tcp::send_data_pcb(pcb_id, greeting);
+    // Drive a few more polls so the SYN+payload+ACK gets out.
+    for _ in 0..5_000_000u64 {
+        crate::net::poll_once();
+        core::hint::spin_loop();
+    }
+
+    console::puts("  sent greeting; closing\n");
+    tcp::close_pcb(pcb_id);
+    tcp::listen_close(port);
 }
 
 /// STUMP #103 — Sprint 2.3: dump recent audit-log entries.

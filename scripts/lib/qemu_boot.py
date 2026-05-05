@@ -188,7 +188,11 @@ def boot(*, log_prefix: str = "session", timeout: int = 120,
         # NATs to the host. Needed for the renderer to fetch real
         # `<link rel=stylesheet>` and remote `<img>` URLs.
         # `restrict=on` would block outbound — we WANT outbound, so off.
-        "-netdev", "user,id=net0",
+        #
+        # STUMP #149: hostfwd forwards inbound TCP from the Mac host
+        # at 127.0.0.1:8080 → Bat_OS guest at 10.0.2.15:8080 so the
+        # `tcp-listen 8080` shell command + `nc` smoke test can land.
+        "-netdev", "user,id=net0,hostfwd=tcp::8080-:8080",
         "-device", "virtio-net-device,netdev=net0",
         # STUMP #136: virtio-blk for persistent BatFS.
         "-drive", f"file={batfs_img},if=none,format=raw,id=batfs0",

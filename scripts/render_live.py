@@ -165,7 +165,13 @@ def main() -> int:
         "-serial", "mon:stdio",
         "-kernel", str(KERNEL_BIN),
         "-initrd", str(INITRD),
-        "-netdev", "user,id=net0",
+        # STUMP #149: hostfwd forwards inbound TCP from the Mac host
+        # at 127.0.0.1:8080 → Bat_OS guest at 10.0.2.15:8080. Without
+        # this, slirp's NAT only does outbound — `nc 10.0.2.15 8080`
+        # from the host can't reach a Bat_OS listener. The port can
+        # be anything; 8080 is a sensible default for the
+        # `tcp-listen 8080` shell command.
+        "-netdev", "user,id=net0,hostfwd=tcp::8080-:8080",
         "-device", "virtio-net-device,netdev=net0",
         # STUMP #110: QMP socket for the mouse-injection sidecar.
         # Cocoa drops both EV_ABS and EV_REL motion to virtio input
