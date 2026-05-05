@@ -3063,7 +3063,7 @@ fn cmd_chromium_version() {
         return;
     }
 
-    let mut argv: [&str; 10] = [""; 10];
+    let mut argv: [&str; 12] = [""; 12];
     argv[0] = "/bin/content_shell";
     argv[1] = "--version";
     argv[2] = "--no-sandbox";
@@ -3076,11 +3076,18 @@ fn cmd_chromium_version() {
     // (we have no real GL backend). --use-gl=stub gives Chromium a
     // no-op GL impl so the vtable slots are populated and dispatch
     // hits a real-but-do-nothing function instead of an UNREACHABLE
-    // guard.
+    // guard. (iter 7 also handles the case via brk-skip redirect.)
     argv[6] = "--use-gl=stub";
     argv[7] = "--disable-gpu-compositing";
     argv[8] = "--disable-gpu-rasterization";
     argv[9] = "--in-process-gpu";
+    // Same V8-sandbox-off flag as the dump-dom argv — V8 tries to
+    // reserve a 1 TB pointer-compression cage and our 39-bit VA
+    // window is 512 GB; sandbox init OOMs. Without this, the
+    // post-GL-bypass init path hits SegmentedTable::InitializeTable
+    // OOM in v8_initializer.cc:944.
+    argv[10] = "--js-flags=--no-enable-sandbox --no-enable-trusted-space";
+    argv[11] = "--disable-features=SharedDictionary,SharedDictionaryAPI,DIPS,LevelDBProto,UseDnsHttpsSvcb,WebGPU,Dawn,WebRTC,ServiceWorker,SharedStorageAPI,NotificationTriggers,BackForwardCache,IsolatedWebApps,WebOTP,WebHID,FedCm,DigitalGoodsApi,AttributionReporting,PrivateAggregationApi,HasNetworkService,UseChromeOSDirectVideoDecoder";
 
     console::puts("  content_shell --version (minimal-init test)\n");
 
@@ -3089,7 +3096,7 @@ fn cmd_chromium_version() {
     // Pass an empty URL so the runner doesn't look one up. The
     // run_chromium API takes a URL but content_shell ignores it
     // entirely under --version.
-    match runner::run_chromium("", &argv[..10]) {
+    match runner::run_chromium("", &argv[..12]) {
         Ok(()) => crate::drivers::uart::puts("  chromium-version exited OK\n"),
         Err(e) => {
             crate::drivers::uart::puts("  chromium-version: ");
