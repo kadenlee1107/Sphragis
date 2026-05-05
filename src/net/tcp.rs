@@ -682,38 +682,40 @@ pub fn selftest_server() -> Result<TcpServerSelftestReport, &'static str> {
     pcb_free(pcb_a);
     pcb_free(pcb_b);
 
-    // 5. Backlog enforcement: push backlog+2 PCBs, second-to-last
-    //    should fit, last should fail with Err(()).
+    // 5. Backlog enforcement: pre-fill the queue to backlog capacity,
+    //    then verify push fails with Err(()).
     //
-    //    backlog was 4 in step 1. We don't have 4 free PCBs
-    //    handy, so test by directly bumping the head/tail.
-    let l = listener_mut(slot);
-    l.accept_head.store(0, Ordering::Release);
-    l.accept_tail.store(0, Ordering::Release);
-    let backlog_n = l.backlog as usize;
-    for _ in 0..backlog_n {
-        l.accept_head.fetch_add(1, Ordering::AcqRel);
-    }
-    // DEBUG: dump actual values right before the assertion.
-    crate::drivers::uart::puts("[tcp-st] backlog=");
-    crate::kernel::mm::print_num(backlog_n);
-    crate::drivers::uart::puts(" head=");
-    crate::kernel::mm::print_num(l.accept_head.load(Ordering::Acquire));
-    crate::drivers::uart::puts(" tail=");
-    crate::kernel::mm::print_num(l.accept_tail.load(Ordering::Acquire));
-    crate::drivers::uart::puts("\n");
-    // Queue is now full at backlog=N.
+    //    The previous version of this test held a `let l =
+    //    listener_mut(slot);` reference across the test body AND
+    //    called `listener_accept_push(slot, 99)` which internally
+    //    creates its OWN `&'static mut Listener` to the same memory.
+    //    That's aliased &mut → UB, and rustc's optimizer assumed
+    //    `l` was exclusive, caching the head value in a register
+    //    and never re-reading it after the push. Tests printed
+    //    head=0 after 4 fetch_adds because the increments never
+    //    made it back to memory before the inner mut ref read it.
+    //
+    //    Fix: scope each `&mut` access tightly so no two refs are
+    //    live concurrently. The production code paths are immune
+    //    to this because each public fn gets its own fresh ref
+    //    and uses it in a short bounded sequence.
+    let backlog_n = {
+        let l = listener_mut(slot);
+        let n = l.backlog as usize;
+        l.accept_head.store(n, Ordering::Release);
+        l.accept_tail.store(0, Ordering::Release);
+        n
+    }; // <-- &mut released here, no aliasing when push acquires its own
     let push_result = listener_accept_push(slot, 99);
-    crate::drivers::uart::puts("[tcp-st] push returned ");
-    crate::drivers::uart::puts(if push_result.is_err() { "Err" } else { "Ok" });
-    crate::drivers::uart::puts(", post-push head=");
-    crate::kernel::mm::print_num(l.accept_head.load(Ordering::Acquire));
-    crate::drivers::uart::puts("\n");
     assert_ok!(push_result.is_err(),
                "listener_accept_push succeeded past backlog");
-    // Drain.
-    l.accept_head.store(0, Ordering::Release);
-    l.accept_tail.store(0, Ordering::Release);
+    // Drain (re-scoped &mut for the same UB-avoidance reason).
+    {
+        let l = listener_mut(slot);
+        l.accept_head.store(0, Ordering::Release);
+        l.accept_tail.store(0, Ordering::Release);
+    }
+    let _ = backlog_n; // suppress unused-binding lint if ever reorganized
 
     // 6. listen_close cleans up.
     listen_close(TEST_PORT);
