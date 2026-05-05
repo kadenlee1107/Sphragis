@@ -608,6 +608,43 @@ pub fn install_trampoline(l1_phys: u64) -> Result<(), &'static str> {
 
     install_l3_mapping(l1_phys, RT_SIGRETURN_TRAMPOLINE_VA, entry)?;
 
+    // STUMP #161 iter 11+12: Ladybird's glibc zero-fills a RANGE
+    // starting at 0x0080_0000 during init (observed via [dp/low-va]
+    // diagnostic — first attempt with one page caught 0x800000,
+    // second attempt saw 0x801000, ...). It's a hot loop that writes
+    // zeros to a hardcoded address.
+    //
+    // Pre-map 64 pages (256 KB) at 0x0080_0000 as RW zero-pages in
+    // every cave. If glibc's range exceeds 256 KB we'll see new
+    // [dp/low-va] events at 0x84_0000+ and can grow further; for now
+    // 256 KB is enough headroom for any plausible TLS-init or RSEQ
+    // setup scratch area without burning frames unnecessarily.
+    {
+        const SCRATCH_BASE: u64 = 0x0080_0000;
+        const SCRATCH_PAGES: usize = 64;  // 256 KB
+        const PAGE_AP_EL0_RW: u64 = 0b01 << 6;
+        const PAGE_UXN:       u64 = 1 << 54;
+        let scratch_flags = PAGE_VALID | PAGE_AF | PAGE_SH
+            | PAGE_AP_EL0_RW | PAGE_PXN | PAGE_UXN;
+        for i in 0..SCRATCH_PAGES {
+            let pg = frame::alloc_frame().ok_or("scratch: OOM")?;
+            unsafe {
+                let p = pg as *mut u8;
+                for j in 0..4096 {
+                    core::ptr::write_volatile(p.add(j), 0);
+                }
+            }
+            let pa = (pg as u64) & 0x0000_FFFF_FFFF_F000;
+            let entry = pa | scratch_flags;
+            install_l3_mapping(
+                l1_phys,
+                SCRATCH_BASE + (i as u64) * 4096,
+                entry,
+            )?;
+        }
+        uart::puts("[sig] glibc-scratch range 0x800000..0x840000 (256 KB RW)\n");
+    }
+
     // TLB sledgehammer; cave just switched TTBR0 anyway so this is
     // mostly for our own peace of mind.
     unsafe {
