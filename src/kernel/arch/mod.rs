@@ -1898,30 +1898,78 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     } else { false };
                     let is_unreachable_guard = is_uncond_branch && next_is_hlt;
                     if is_unreachable_guard {
-                        // The cave reached this brk via a corrupt
-                        // funcptr (BLR to bad address that happened
-                        // to land on the guard). Pre-#48 the brk-skip
-                        // path below "rescued" by resuming at LR, but
-                        // the caller would re-dispatch through the
-                        // same corrupt funcptr → BRK → loop until #42
-                        // livelock terminator after 32 iterations.
+                        // STUMP #160 iter 7: distinguish two flavors of
+                        // `b X; brk; hlt` UNREACHABLE-GUARD:
                         //
-                        // Per Agent A's directive (skips cause
-                        // downstream corruption), the right move is
-                        // to TERMINATE at the genuine fault site
-                        // instead of trying to rescue. Compiler-emit
-                        // `b X; brk; hlt` is a hard "this code is
-                        // unreachable" — if we get here, something
-                        // upstream is genuinely broken, and pretending
-                        // otherwise just amplifies the corruption.
-                        // Saves the 32 wasted iterations + livelock
-                        // dance and gives a clean kill.
+                        //   (a) "default switch case" — a LOCAL conditional
+                        //       branch (b.cond / b.ne / cbz) inside the same
+                        //       function targets the brk because the case
+                        //       wasn't expected to fire. The unconditional
+                        //       branch immediately above the brk goes to
+                        //       the function's own SAFE epilogue.
+                        //       In this case lr_now is INSIDE the same
+                        //       function as elr (same locality) — we can
+                        //       redirect ELR to the unconditional branch's
+                        //       target and the function's clean epilogue
+                        //       runs, returning whatever default value
+                        //       (NULL ptr, 0, etc.) was set up by the
+                        //       fallthrough case.
+                        //
+                        //   (b) "vtable miss" — a corrupt vtable slot
+                        //       points directly at the brk. lr_now is in
+                        //       a DIFFERENT function (the caller's BLR
+                        //       site). Redirecting ELR would resume the
+                        //       caller's vtable site → re-dispatch → BRK
+                        //       again → livelock. Must terminate.
+                        //
+                        // Heuristic: |lr_now - elr| < 64 KB → same fn → skip.
+                        // (Most Chromium functions are well under 64 KB.)
+                        //
+                        // Concrete instance unblocked by this: content_shell
+                        // gl::init::CreateGLContext at RVA 0x5eee15c. The
+                        // brk is the default switch case for "GL impl is
+                        // not Mock/Stub/Disabled". When --use-gl flags
+                        // don't propagate, gl_impl=0 (kNone) hits this.
+                        // Skipping to the unconditional-branch target
+                        // (the function's epilogue) returns NULL to
+                        // GpuChannelManager::GetSharedContextState,
+                        // which has a `cbz x0, fail_path` immediately
+                        // after the BL — clean failure, init continues.
+                        let same_fn = if lr_now > elr {
+                            lr_now - elr < 0x10000
+                        } else {
+                            elr - lr_now < 0x10000
+                        };
+                        if same_fn {
+                            // Decode the unconditional branch's target:
+                            //   B imm26 — opcode 0b000101 in [31:26],
+                            //   imm26 sign-extended × 4 added to PC.
+                            let imm26 = (prev_instr & 0x03FF_FFFF) as i32;
+                            // Sign-extend imm26 (26 bits) to i32.
+                            let signed = (imm26 << 6) >> 6;
+                            let offset = (signed as i64).wrapping_mul(4);
+                            let target = (prev_instr_addr as i64).wrapping_add(offset) as u64;
+                            uart::puts("[brk-skip] UNREACHABLE-GUARD elr=0x");
+                            let hex = b"0123456789abcdef";
+                            for sh in (0..16).rev() {
+                                uart::putc(hex[((elr >> (sh * 4)) & 0xF) as usize]);
+                            }
+                            uart::puts(" — local default case, redirecting to safe-path 0x");
+                            for sh in (0..16).rev() {
+                                uart::putc(hex[((target >> (sh * 4)) & 0xF) as usize]);
+                            }
+                            uart::puts("\n");
+                            unsafe { (*frame).elr = target; }
+                            return;
+                        }
+                        // Fall through: not same-fn → vtable miss →
+                        // terminate as before.
                         uart::puts("[brk-skip] UNREACHABLE-GUARD elr=0x");
                         let hex = b"0123456789abcdef";
                         for sh in (0..16).rev() {
                             uart::putc(hex[((elr >> (sh * 4)) & 0xF) as usize]);
                         }
-                        uart::puts(" — corrupt funcptr; terminating cave\n");
+                        uart::puts(" — corrupt funcptr (cross-fn lr); terminating cave\n");
                         crate::batcave::linux::signal::terminate_cave_fatal_with_lr(
                             crate::batcave::linux::signal::SIGSEGV,
                             elr, lr_now,
