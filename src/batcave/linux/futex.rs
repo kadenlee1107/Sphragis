@@ -459,6 +459,29 @@ pub fn futex_wait_bitset(uaddr: u64, val: u32, timeout_ns: u64, bitset: u32) -> 
 
 /// FUTEX_WAKE — wake up to `max_wakers` tasks waiting on uaddr.
 /// Returns the number woken.
+///
+/// 🎯 STUMP #160 iter 5: scan ALL buckets, not just `bucket_index(uaddr)`.
+/// The cross-bucket REQUEUE path leaves a slot in its ORIGINAL bucket
+/// but rewrites `s.uaddr` to the requeue target — see requeue_impl's
+/// "rewrite the key in the original slot" branch, which exists because
+/// we can't safely migrate a parked waiter's slot pointer.
+///
+/// Pre-iter-5: FUTEX_WAKE walked only `bucket(bucket_index(uaddr))`.
+/// After a cross-bucket pthread_cond_broadcast → CMP_REQUEUE, the
+/// requeued waiters were "lost" — their slots lived in the cond
+/// var's bucket but had `uaddr = mutex_addr`. The mutex_unlock's
+/// FUTEX_WAKE on mutex_addr looked in mutex_addr's bucket and
+/// found no slots, leaving the requeued waiters parked forever.
+/// That's the missed-wakeup that froze content_shell after
+/// FileURLLoader::Start (workers parked on a cond var post-
+/// rebuild and never resumed).
+///
+/// Cost: 64 buckets × 8 slots = 512 atomic reads per wake. For
+/// our cooperative single-process Chromium scale, that's fine —
+/// the previous bucket lookup was 8 reads per wake. The bucket
+/// machinery becomes purely an LOCK-PARTITIONING strategy
+/// (preventing false-sharing on the bucket lock); slot lookup
+/// is now unconditionally global.
 pub fn futex_wake(uaddr: u64, max_wakers: u32) -> i64 {
     if uaddr == 0 {
         return EINVAL;
@@ -489,73 +512,82 @@ pub fn futex_wake(uaddr: u64, max_wakers: u32) -> i64 {
             crate::drivers::uart::puts("\n");
         }
     }
-    let bi = bucket_index(uaddr);
-    let b = bucket(bi);
     let mut woken: i64 = 0;
 
     let g = crate::kernel::sync::IrqGuard::new();
-    bucket_lock(b);
-    for s in b.slots.iter() {
-        if woken as u32 >= max_wakers {
-            break;
+    // Scan EVERY bucket — see doc-comment for why. Lock each as we
+    // visit it so we don't observe a half-modified slot.
+    for bi in 0..NUM_BUCKETS {
+        if woken as u32 >= max_wakers { break; }
+        let b = bucket(bi);
+        bucket_lock(b);
+        for s in b.slots.iter() {
+            if woken as u32 >= max_wakers {
+                break;
+            }
+            if !s.in_use.load(Ordering::Acquire) {
+                continue;
+            }
+            if s.uaddr.load(Ordering::Relaxed) != uaddr {
+                continue;
+            }
+            if s.woken.load(Ordering::Relaxed) {
+                continue; // already flagged, waiter just hasn't reaped yet
+            }
+            // Mark woken first, THEN transition the waiter from Blocked to
+            // Runnable. Order matters: if we transitioned first, an IRQ
+            // could pick the waiter, run it through park_slot's bucket_lock
+            // before woken=true is visible, and re-block it forever.
+            s.woken.store(true, Ordering::Release);
+            let waiter_tid = s.tid.load(Ordering::Relaxed) as u32;
+            let _ = crate::batcave::linux::threads::wake_thread(waiter_tid);
+            woken += 1;
         }
-        if !s.in_use.load(Ordering::Acquire) {
-            continue;
-        }
-        if s.uaddr.load(Ordering::Relaxed) != uaddr {
-            continue;
-        }
-        if s.woken.load(Ordering::Relaxed) {
-            continue; // already flagged, waiter just hasn't reaped yet
-        }
-        // Mark woken first, THEN transition the waiter from Blocked to
-        // Runnable. Order matters: if we transitioned first, an IRQ
-        // could pick the waiter, run it through park_slot's bucket_lock
-        // before woken=true is visible, and re-block it forever.
-        s.woken.store(true, Ordering::Release);
-        let waiter_tid = s.tid.load(Ordering::Relaxed) as u32;
-        let _ = crate::batcave::linux::threads::wake_thread(waiter_tid);
-        woken += 1;
+        bucket_unlock(b);
     }
-    bucket_unlock(b);
     drop(g);
 
     woken
 }
 
 /// FUTEX_WAKE_BITSET — wake only waiters whose bitset intersects `bitset`.
+/// STUMP #160 iter 5: same all-buckets scan as `futex_wake` for the
+/// same reason — cross-bucket REQUEUE may have left waiters in
+/// "wrong" buckets with rewritten s.uaddr.
 pub fn futex_wake_bitset(uaddr: u64, max_wakers: u32, bitset: u32) -> i64 {
     if bitset == 0 {
         return EINVAL;
     }
-    let bi = bucket_index(uaddr);
-    let b = bucket(bi);
     let mut woken: i64 = 0;
 
     let g = crate::kernel::sync::IrqGuard::new();
-    bucket_lock(b);
-    for s in b.slots.iter() {
-        if woken as u32 >= max_wakers {
-            break;
+    for bi in 0..NUM_BUCKETS {
+        if woken as u32 >= max_wakers { break; }
+        let b = bucket(bi);
+        bucket_lock(b);
+        for s in b.slots.iter() {
+            if woken as u32 >= max_wakers {
+                break;
+            }
+            if !s.in_use.load(Ordering::Acquire) {
+                continue;
+            }
+            if s.uaddr.load(Ordering::Relaxed) != uaddr {
+                continue;
+            }
+            if s.woken.load(Ordering::Relaxed) {
+                continue;
+            }
+            if s.bitset.load(Ordering::Relaxed) & bitset == 0 {
+                continue;
+            }
+            s.woken.store(true, Ordering::Release);
+            let waiter_tid = s.tid.load(Ordering::Relaxed) as u32;
+            let _ = crate::batcave::linux::threads::wake_thread(waiter_tid);
+            woken += 1;
         }
-        if !s.in_use.load(Ordering::Acquire) {
-            continue;
-        }
-        if s.uaddr.load(Ordering::Relaxed) != uaddr {
-            continue;
-        }
-        if s.woken.load(Ordering::Relaxed) {
-            continue;
-        }
-        if s.bitset.load(Ordering::Relaxed) & bitset == 0 {
-            continue;
-        }
-        s.woken.store(true, Ordering::Release);
-        let waiter_tid = s.tid.load(Ordering::Relaxed) as u32;
-        let _ = crate::batcave::linux::threads::wake_thread(waiter_tid);
-        woken += 1;
+        bucket_unlock(b);
     }
-    bucket_unlock(b);
     drop(g);
 
     woken
