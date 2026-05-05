@@ -143,6 +143,7 @@ fn execute(cmd: &str) {
         "js-mode" => cmd_js_mode(parts[1]),
         "audit" => cmd_audit(parts[1]),
         "audit-flush" => cmd_audit_flush(),
+        "tcp-selftest" => cmd_tcp_selftest(),
         "origin" => cmd_origin(parts[1]),
         "origin-allow" => cmd_origin_allow(parts[1], parts[2]),
         "origin-mode" => cmd_origin_mode(parts[1]),
@@ -4787,6 +4788,41 @@ fn cmd_origin_mode(arg: &str) {
         "strict" | "enforce" => { crate::security::origin::set_strict(true); console::puts("  SOP mode -> strict\n"); }
         "permissive" | "warn" => { crate::security::origin::set_strict(false); console::puts("  SOP mode -> permissive (logs only)\n"); }
         _ => { console::puts("  unknown SOP mode: "); console::puts(arg); console::puts("\n"); }
+    }
+}
+
+/// STUMP #148: TCP server-side selftest.
+///
+/// Exercises the in-kernel listener-table + accept-queue mechanics
+/// (steps 1-4 of #148) without needing real wire-level packet flow.
+/// Tests:
+///   - listen_register port collision (EADDRINUSE)
+///   - listener_lookup_by_port + by_fd
+///   - listener_accept_push / pop FIFO ordering
+///   - backlog enforcement
+///   - listen_close cleanup + reuse
+///
+/// SYN-on-LISTEN dispatch + the third-ACK transition need real
+/// virtio-net traffic (e.g. `nc` from the QEMU host) — that's
+/// outside this command's scope.
+fn cmd_tcp_selftest() {
+    use crate::net::tcp;
+    match tcp::selftest_server() {
+        Ok(report) => {
+            console::puts("  tcp-selftest: PASS\n");
+            console::puts("    assertions passed: ");
+            crate::kernel::mm::print_num(report.assertions_passed as usize);
+            console::puts("\n    final listener count: ");
+            crate::kernel::mm::print_num(report.final_listener_count as usize);
+            console::puts("\n    final pcb count: ");
+            crate::kernel::mm::print_num(report.final_pcb_count as usize);
+            console::puts("\n");
+        }
+        Err(reason) => {
+            console::puts("  tcp-selftest: FAIL — ");
+            console::puts(reason);
+            console::puts("\n");
+        }
     }
 }
 

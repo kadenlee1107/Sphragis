@@ -588,6 +588,155 @@ pub fn pcb_remote(id: usize) -> (u32, u16) {
     (p.remote_ip, p.remote_port)
 }
 
+// ─── STUMP #148 selftest ──────────────────────────────────────────────
+//
+// Kernel-internal unit-style test for the server-side TCP machinery.
+// Wired as `tcp-selftest` shell command. Exercises the data-structure
+// code paths (listener_register, accept_push/pop, listen_close, port
+// collision, queue overflow) without needing real wire-level packet
+// flow — that's the operator's job to verify with `nc` from the
+// QEMU host once the in-kernel logic is locked down.
+//
+// Output is `Ok(report)` on full pass; `Err(reason)` on the first
+// failed assertion. The report counts how many assertions passed
+// so the operator can see partial progress.
+
+pub struct TcpServerSelftestReport {
+    pub assertions_passed: u32,
+    pub final_listener_count: u32,
+    pub final_pcb_count: u32,
+}
+
+pub fn selftest_server() -> Result<TcpServerSelftestReport, &'static str> {
+    let mut passed: u32 = 0;
+    macro_rules! assert_ok { ($cond:expr, $msg:literal) => {
+        if !($cond) { return Err($msg); }
+        passed += 1;
+    }; }
+
+    // Use a dedicated test port that won't clash with anything else.
+    const TEST_PORT: u16 = 0xBA70; // 47728 — well above ephemeral range
+    const TEST_FD:   i32 = 0x7E57; // 32343 — distinct sentinel for fd
+
+    // Make sure we start clean (idempotent — silent no-op if absent).
+    listen_close(TEST_PORT);
+
+    // 1. listen_register on a fresh port → Ok with a slot.
+    let slot = listen_register(TEST_PORT, 4, 0, TEST_FD)
+        .map_err(|_| "listen_register rejected fresh port")?;
+    assert_ok!(slot < MAX_LISTENERS, "listen_register slot out of range");
+    assert_ok!(listener_lookup_by_port(TEST_PORT) == Some(slot),
+               "listener_lookup_by_port mismatch");
+    assert_ok!(listener_lookup_by_fd(TEST_FD) == Some(slot),
+               "listener_lookup_by_fd mismatch");
+    assert_ok!(!listener_has_pending(slot),
+               "fresh listener should have empty accept queue");
+
+    // 2. Re-registering the same port → EADDRINUSE.
+    match listen_register(TEST_PORT, 4, 0, TEST_FD + 1) {
+        Err("EADDRINUSE") => passed += 1,
+        Ok(_)  => return Err("listen_register accepted duplicate port"),
+        Err(_) => return Err("listen_register wrong errno on duplicate port"),
+    }
+
+    // 3. Allocate two fake PCBs and push them onto the accept queue.
+    let pcb_a = pcb_alloc().ok_or("pcb_alloc failed (test pcb A)")?;
+    let pcb_b = pcb_alloc().ok_or("pcb_alloc failed (test pcb B)")?;
+    {
+        let pa = pcb_mut(pcb_a);
+        pa.local_port = TEST_PORT;
+        pa.remote_ip = 0x01020304;
+        pa.remote_port = 5001;
+        pa.state.store(STATE_ESTABLISHED, Ordering::Release);
+        pa.parent_listener_idx.store(slot as u32, Ordering::Release);
+    }
+    {
+        let pb = pcb_mut(pcb_b);
+        pb.local_port = TEST_PORT;
+        pb.remote_ip = 0x01020305;
+        pb.remote_port = 5002;
+        pb.state.store(STATE_ESTABLISHED, Ordering::Release);
+        pb.parent_listener_idx.store(slot as u32, Ordering::Release);
+    }
+
+    listener_accept_push(slot, pcb_a)
+        .map_err(|_| "listener_accept_push A unexpectedly failed")?;
+    passed += 1;
+    listener_accept_push(slot, pcb_b)
+        .map_err(|_| "listener_accept_push B unexpectedly failed")?;
+    passed += 1;
+    assert_ok!(listener_has_pending(slot),
+               "listener_has_pending false after pushes");
+
+    // 4. Pop both — order should be FIFO.
+    let p1 = listener_accept_pop(slot).ok_or("accept_pop returned None for A")?;
+    assert_ok!(p1 == pcb_a, "accept_pop FIFO order broken (1st)");
+    let p2 = listener_accept_pop(slot).ok_or("accept_pop returned None for B")?;
+    assert_ok!(p2 == pcb_b, "accept_pop FIFO order broken (2nd)");
+    assert_ok!(listener_accept_pop(slot).is_none(),
+               "accept_pop returned Some on empty queue");
+    assert_ok!(!listener_has_pending(slot),
+               "listener_has_pending true after draining");
+
+    // Free the test PCBs since we don't actually own them.
+    pcb_free(pcb_a);
+    pcb_free(pcb_b);
+
+    // 5. Backlog enforcement: push backlog+2 PCBs, second-to-last
+    //    should fit, last should fail with Err(()).
+    //
+    //    backlog was 4 in step 1. We don't have 4 free PCBs
+    //    handy, so test by directly bumping the head/tail.
+    let l = listener_mut(slot);
+    l.accept_head.store(0, Ordering::Release);
+    l.accept_tail.store(0, Ordering::Release);
+    for i in 0..(l.backlog as usize) {
+        l.accept_q[i] = i as u16;
+        l.accept_head.fetch_add(1, Ordering::AcqRel);
+    }
+    // Queue is now full at backlog=4.
+    assert_ok!(listener_accept_push(slot, 99).is_err(),
+               "listener_accept_push succeeded past backlog");
+    // Drain.
+    l.accept_head.store(0, Ordering::Release);
+    l.accept_tail.store(0, Ordering::Release);
+
+    // 6. listen_close cleans up.
+    listen_close(TEST_PORT);
+    assert_ok!(listener_lookup_by_port(TEST_PORT).is_none(),
+               "listen_close left lookup_by_port stale");
+    assert_ok!(listener_lookup_by_fd(TEST_FD).is_none(),
+               "listen_close left lookup_by_fd stale");
+
+    // 7. Re-register after close — should succeed (slot reusable).
+    let _slot2 = listen_register(TEST_PORT, 4, 0, TEST_FD)
+        .map_err(|_| "re-register after close failed")?;
+    listen_close(TEST_PORT);
+    passed += 1;
+
+    // Count final state for the report.
+    let mut listener_count: u32 = 0;
+    for i in 0..MAX_LISTENERS {
+        if listener(i).in_use.load(Ordering::Acquire) {
+            listener_count += 1;
+        }
+    }
+    let mut pcb_count: u32 = 0;
+    unsafe {
+        for i in 0..MAX_PCBS {
+            if TCP_PCBS[i].in_use.load(Ordering::Acquire) {
+                pcb_count += 1;
+            }
+        }
+    }
+
+    Ok(TcpServerSelftestReport {
+        assertions_passed: passed,
+        final_listener_count: listener_count,
+        final_pcb_count: pcb_count,
+    })
+}
+
 /// V6-XLAYER-005/006: clear every PCB on cave switch so a new tenant
 /// can't inherit (or hijack) the previous cave's TCP connections.
 ///
