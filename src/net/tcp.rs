@@ -690,12 +690,26 @@ pub fn selftest_server() -> Result<TcpServerSelftestReport, &'static str> {
     let l = listener_mut(slot);
     l.accept_head.store(0, Ordering::Release);
     l.accept_tail.store(0, Ordering::Release);
-    for i in 0..(l.backlog as usize) {
-        l.accept_q[i] = i as u16;
+    let backlog_n = l.backlog as usize;
+    for _ in 0..backlog_n {
         l.accept_head.fetch_add(1, Ordering::AcqRel);
     }
-    // Queue is now full at backlog=4.
-    assert_ok!(listener_accept_push(slot, 99).is_err(),
+    // DEBUG: dump actual values right before the assertion.
+    crate::drivers::uart::puts("[tcp-st] backlog=");
+    crate::kernel::mm::print_num(backlog_n);
+    crate::drivers::uart::puts(" head=");
+    crate::kernel::mm::print_num(l.accept_head.load(Ordering::Acquire));
+    crate::drivers::uart::puts(" tail=");
+    crate::kernel::mm::print_num(l.accept_tail.load(Ordering::Acquire));
+    crate::drivers::uart::puts("\n");
+    // Queue is now full at backlog=N.
+    let push_result = listener_accept_push(slot, 99);
+    crate::drivers::uart::puts("[tcp-st] push returned ");
+    crate::drivers::uart::puts(if push_result.is_err() { "Err" } else { "Ok" });
+    crate::drivers::uart::puts(", post-push head=");
+    crate::kernel::mm::print_num(l.accept_head.load(Ordering::Acquire));
+    crate::drivers::uart::puts("\n");
+    assert_ok!(push_result.is_err(),
                "listener_accept_push succeeded past backlog");
     // Drain.
     l.accept_head.store(0, Ordering::Release);
