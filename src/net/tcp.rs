@@ -483,38 +483,89 @@ pub fn listen_register(
 /// gets RST+free) and clears the slot. Idempotent — silent no-op if
 /// no listener exists for `local_port`.
 pub fn listen_close(local_port: u16) {
+    // Find the slot under the alloc_lock. We collect everything we
+    // need to RST inside the lock, then release the lock, then send
+    // the RSTs. send_tcp_pcb does ip::send → arp resolve → enqueue
+    // which can be slow; we don't want to hold alloc_lock for that.
     alloc_lock();
     let slot = (0..MAX_LISTENERS).find(|&i| {
         let l = listener(i);
         l.in_use.load(Ordering::Acquire) && l.local_port == local_port
     });
+    let pending: [usize; ACCEPT_QUEUE_DEPTH];
+    let pending_count: usize;
     if let Some(i) = slot {
         let l = listener_mut(i);
         // Bump generation FIRST so any in-flight accept() sees the
         // listener went away and refunds before we wipe state.
         l.close_gen.fetch_add(1, Ordering::AcqRel);
-        // Drain the accept queue: each pcb_id was a fully-established
-        // connection that the operator never accept()ed. RST + free.
+        // Snapshot the accept queue so we can RST outside the lock.
+        let mut buf = [0usize; ACCEPT_QUEUE_DEPTH];
+        let mut n = 0usize;
         loop {
             let h = l.accept_head.load(Ordering::Acquire);
             let t = l.accept_tail.load(Ordering::Acquire);
             if h == t { break; }
             let pcb_id = l.accept_q[t % ACCEPT_QUEUE_DEPTH] as usize;
             l.accept_tail.store(t.wrapping_add(1), Ordering::Release);
-            // Best-effort RST. Caller may have already closed the
-            // PCB via some other path; pcb_free is safe regardless.
-            if pcb_id < MAX_PCBS {
-                pcb_free(pcb_id);
+            if n < buf.len() {
+                buf[n] = pcb_id;
+                n += 1;
             }
         }
+        pending = buf;
+        pending_count = n;
         // Wipe the slot.
         l.local_port = 0;
         l.backlog = 0;
         l.cave_id = 0;
         l.fd.store(-1, Ordering::Release);
         l.in_use.store(false, Ordering::Release);
+    } else {
+        pending = [0usize; ACCEPT_QUEUE_DEPTH];
+        pending_count = 0;
     }
     alloc_unlock();
+
+    // STUMP #148 step 7: send RST + free for each pending PCB so
+    // the peer sees ECONNRESET instead of silent drop. Pre-fix did
+    // just `pcb_free` which leaks the connection from the peer's
+    // perspective until their own retransmit timer fires.
+    for i in 0..pending_count {
+        let pcb_id = pending[i];
+        if pcb_id < MAX_PCBS {
+            send_tcp_pcb(pcb_id, TCP_RST, &[]);
+            pcb_free(pcb_id);
+        }
+    }
+
+    // Also abort any SYN_RECEIVED PCBs whose parent_listener_idx
+    // was the listener we just closed. Without this they'd sit in
+    // the table for the zombie-drain timeout (~30s) wasting slots
+    // even though their parent is gone. We send RST so the peer
+    // (which thinks it's mid-handshake) gives up cleanly.
+    //
+    // We didn't store the listener_idx of the closing slot; instead
+    // we walk all PCBs and check whose parent_listener points at a
+    // listener slot that's NOT in_use. Cheap (64 PCBs).
+    unsafe {
+        for i in 0..MAX_PCBS {
+            let p = &TCP_PCBS[i];
+            if !p.in_use.load(Ordering::Acquire) { continue; }
+            let st = p.state.load(Ordering::Acquire);
+            if st != STATE_SYN_RECEIVED { continue; }
+            let parent = p.parent_listener_idx.load(Ordering::Acquire);
+            if parent == u32::MAX { continue; }
+            let parent = parent as usize;
+            if parent >= MAX_LISTENERS { continue; }
+            // Parent slot still in use? then this SYN_RECV belongs
+            // to a different (still-alive) listener — leave alone.
+            if listener(parent).in_use.load(Ordering::Acquire) { continue; }
+            // Parent slot was closed — kill the orphan.
+            send_tcp_pcb(i, TCP_RST, &[]);
+            pcb_free(i);
+        }
+    }
 }
 
 /// Push a completed-handshake PCB onto the listener's accept queue.
