@@ -11,6 +11,112 @@ end of a session.
 
 ---
 
+## 2026-05-04 (very late evening) — Mac — 🎯 STUMP #160 iter 5/5+: V8 sandbox off, futex wake correctness, hit cond_var predicate-cascade
+
+User said "keep grinding bro i really want this thing to work" after
+iter 4. Two more commits shipped + identified the actual bottleneck.
+
+**iter 5 — `b4f5a271`: futex_wake scans all buckets**
+
+Found a real correctness bug while reading `requeue_impl`. The
+cross-bucket REQUEUE branch (lines 671-703) calls `enqueue` on the
+destination bucket, immediately `release`s that slot, then rewrites
+`s.uaddr` in the ORIGINAL slot. Result: slot lives in bucket b1 but
+`s.uaddr` says `uaddr2`. Pre-iter-5, `futex_wake(uaddr2)` looked
+only in `bucket(bucket_index(uaddr2)) = b2` and found nothing.
+Post-iter-5: `futex_wake` and `futex_wake_bitset` scan EVERY bucket
+for slots with matching `s.uaddr`. Bucket index becomes purely a
+lock-partitioning strategy. Cost: 64 × 8 = 512 atomic reads per
+wake (was 8) — fine for our cooperative single-process scale.
+Real Linux semantics fix; matches the kernel's behavior where any
+FUTEX_WAKE on a uaddr can find any waiter on that uaddr regardless
+of how the waiter got enqueued.
+
+Smoke result: didn't unstick the livelock by itself. Means
+cross-bucket requeue wasn't the SOLE bug, but the fix is right.
+
+**iter 5+ — `862ced88`: V8 sandbox off + worker pool cap**
+
+Smoke gave a cleaner signal:
+
+```
+ERROR:third_party/blink/renderer/bindings/core/v8/v8_initializer.cc:944
+V8 process OOM (SegmentedTable::InitializeTable (subspace allocation))
+```
+
+V8's modern hardware sandbox tries to reserve a 1 TB pointer-
+compression cage. Our 39-bit user VA window is **512 GB**. We
+literally can't satisfy a 1 TB reservation. SegmentedTable then
+ENOMEMs on a sub-allocation and the renderer thread dies.
+
+Three argv changes in `src/ui/shell.rs::cmd_chromium`:
+
+  * `--js-flags='--no-enable-sandbox --no-enable-trusted-space'`
+    Tells V8 to skip the cage.
+  * `--renderer-process-limit=1`, `--num-raster-threads=1`,
+    `--blink-platform-log-channels=` — caps worker pool from
+    ~30 down to a handful.
+  * `--disable-features=` expanded to also kill: WebGPU, Dawn,
+    WebRTC, ServiceWorker, SharedStorageAPI, NotificationTriggers,
+    BackForwardCache, IsolatedWebApps, WebOTP, WebHID, FedCm,
+    DigitalGoodsApi, AttributionReporting, PrivateAggregationApi,
+    HasNetworkService, UseChromeOSDirectVideoDecoder. Each was
+    observed cycling on shm/leveldb during init.
+
+Result: V8 OOM line is GONE. Smoke reaches a steady state.
+
+**Bottleneck pinpointed (next session's STUMP):**
+
+With V8 sandbox off, the smoke now shows a CASCADE OF BLOCKED
+WORKERS:
+
+```
+tid 16974 (URL loader)         Blocked(FutexWait uaddr=0x70032540c0)
+tid 16968 (parent of 16974)    Blocked(FutexWait uaddr=0x70025f40c0)
+tid 16973                      Blocked(FutexWait uaddr=0x70030440c0)
+... ~25 more workers all Blocked on their own uaddrs
+```
+
+Wake events DID fire on those uaddrs (futex-wake #10, #18, #19
+in the diagnostic log all hit blocked uaddrs). So the wake
+mechanism works. But the threads re-block immediately after wake:
+
+  * Waker sets `s.woken=true`, calls `wake_thread` → Blocked→Runnable
+  * Waiter resumes from `schedule()`, sees `s.woken=true`, returns 0
+  * User code re-checks the cond_var predicate → fails →
+    enters futex_wait again → Blocked
+
+So our futex mechanism is mechanically correct — pthread_cond_wait
+keeps re-blocking because the PREDICATE (the user-side condition
+the cond_var is gating on) is never satisfied. The predicate
+depends on shared state updated by ANOTHER thread which is itself
+blocked on a different futex. Cascade.
+
+The real fix is: figure out which Chromium subsystem owns each
+futex's shared state, ensure the producer thread can run. Without
+source-level reasoning about Chromium's task scheduling, this is
+multi-day work.
+
+**State of the tree:** `feat/js-engine-browser-posix` at
+`862ced88`. Three new commits pushed today (`b4f5a271`,
+`6af5a08a` from iter 4 diagnostic, `862ced88`).
+
+**Next session:** the cond-var-predicate-cascade is the new
+canonical Chromium-init-blocker. To make progress without
+full Chromium source-level debugging, candidate next steps:
+
+  1. Implement REAL pthread_cond_wait predicate sequencing
+     (sequence numbers + atomic compare). Our partial impl
+     may be missing wake_all-via-broadcast semantics.
+  2. Force --process-per-site-instance off / disable taskscheduler
+     groups so fewer cross-thread cond_vars exist.
+  3. Patch content_shell to dump-DOM with --no-message-pump (if
+     such a flag exists) — synchronous layout instead of async.
+  4. Audit our pthread_mutex / pthread_cond stub coverage for
+     glibc 2.36+ semantics.
+
+---
+
 ## 2026-05-04 (later evening) — Mac — 🎯 STUMP #160 iter 3: real renameat — leveldb unblocked
 
 User said "lets keep grinding" after iter 1+2 entry. Pivoted to the
