@@ -476,6 +476,14 @@ pub fn listen_register(
     l.in_use.store(true, Ordering::Release);
 
     alloc_unlock();
+
+    // STUMP #150: install a per-listener firewall rule so inbound
+    // TCP to this dst_port is explicitly allowed. Today this is
+    // redundant with the boot-time wildcard inbound TCP rule, but it
+    // hardens the path for a future tightening pass that drops the
+    // wildcard. Rule survives until listen_close revokes it.
+    crate::net::firewall::allow_inbound_tcp_dst_port(local_port);
+
     Ok(slot)
 }
 
@@ -538,6 +546,12 @@ pub fn listen_close(local_port: u16) {
             pcb_free(pcb_id);
         }
     }
+
+    // STUMP #150: revoke the per-listener firewall rule.
+    // Idempotent — silent if no matching rule (e.g. the listener was
+    // already closed once and we're being called a second time, or
+    // the rule was somehow externally removed).
+    crate::net::firewall::revoke_inbound_tcp_dst_port(local_port);
 
     // Also abort any SYN_RECEIVED PCBs whose parent_listener_idx
     // was the listener we just closed. Without this they'd sit in
@@ -1297,7 +1311,7 @@ pub fn handle_incoming(pkt: &IpPacket) {
     // The pre-parse `allow_inbound` check only matched on src_ip + protocol;
     // a port-gated rule (e.g. "allow TCP from 10.0.0.1 port 443 only") would
     // otherwise let in any TCP port.
-    if !crate::net::firewall::allow_inbound_tcp(pkt.src, src_port) {
+    if !crate::net::firewall::allow_inbound_tcp(pkt.src, src_port, dst_port) {
         return;
     }
     let seq = u32::from_be_bytes([pkt.payload[4], pkt.payload[5], pkt.payload[6], pkt.payload[7]]);
