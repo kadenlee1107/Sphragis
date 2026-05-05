@@ -3125,7 +3125,7 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     // specifically wants a pre-set fd via base::i18n::SetIcuFile.
     // But passing a real path costs nothing and helps other PathService
     // lookups that cascade off argv[0].)
-    let mut argv: [&str; 20] = [""; 20];
+    let mut argv: [&str; 28] = [""; 28];
     let mut n = 0;
     argv[n] = "/bin/content_shell"; n += 1;
     if headless    { argv[n] = "--headless";     n += 1; }
@@ -3139,11 +3139,36 @@ fn cmd_chromium(a1: &str, a2: &str, a3: &str) {
     // currently keep open. Each Disable* feature here was observed
     // in the smoke logs as a source of unbounded retries that
     // prevented FileURLLoader::Start from completing.
-    argv[n] = "--disable-features=SharedDictionary,SharedDictionaryAPI,DIPS,LevelDBProto,UseDnsHttpsSvcb"; n += 1;
+    // STUMP #160 iter 5+: aggressively disable subsystems that spin on
+    // shm files / cross-thread cond_vars during init. WebGPU's Dawn cache
+    // (DawnWebGPUCache/DawnGraphiteCache) was observed in the post-iter-3
+    // trace cycling through dozens of CACHE-INDEX leveldb files even
+    // with --disable-gpu — it has its own init path independent of the
+    // GPU process. Service worker storage and similar cross-thread
+    // channels add cond-var sync that our partial pthread_cond impl
+    // doesn't always wake. Cutting them out lets the file load reach
+    // the renderer's in-process layout pump faster.
+    argv[n] = "--disable-features=SharedDictionary,SharedDictionaryAPI,DIPS,LevelDBProto,UseDnsHttpsSvcb,WebGPU,Dawn,WebRTC,ServiceWorker,SharedStorageAPI,NotificationTriggers,BackForwardCache,IsolatedWebApps,WebOTP,WebHID,FedCm,DigitalGoodsApi,AttributionReporting,PrivateAggregationApi,HasNetworkService,UseChromeOSDirectVideoDecoder"; n += 1;
     argv[n] = "--user-data-dir=/dev/shm/cs"; n += 1;
     argv[n] = "--no-startup-window";        n += 1;
     argv[n] = "--enable-logging=stderr";   n += 1;
     argv[n] = "--v=1";                     n += 1;
+    // STUMP #160 iter 5+: turn off V8's hardware sandbox — it tries
+    // to reserve a 1 TB pointer-compression cage at startup, which our
+    // 39-bit VA window (512 GB) literally cannot satisfy. SegmentedTable::
+    // InitializeTable then ENOMEMs on a sub-allocation. Disabling the
+    // sandbox makes V8 fall back to "untrusted-pointers OK" mode where
+    // it doesn't need the cage.
+    argv[n] = "--js-flags=--no-enable-sandbox --no-enable-trusted-space"; n += 1;
+    // STUMP #160 iter 5+: cap the renderer's worker pool so we don't
+    // spawn 30+ futex-waiting threads that mostly never get woken.
+    // Chromium defaults to ncpu * worker-multiplier; on our 4-vCPU QEMU
+    // that means a couple dozen background threads cycling through
+    // pthread_cond_wait. Capping at 2 cuts the live-thread count
+    // roughly in half and reduces missed-wake livelock surface.
+    argv[n] = "--renderer-process-limit=1"; n += 1;
+    argv[n] = "--num-raster-threads=1";    n += 1;
+    argv[n] = "--blink-platform-log-channels="; n += 1;
     // STUMP #35 honors V8's CodeRange hint, eliminating V8 OOM. New
     // ceiling: PA / MessagePumpEpoll crashes around 1.2K lines.
     argv[n] = size_arg_str;                n += 1;
