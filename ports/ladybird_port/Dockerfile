@@ -29,6 +29,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl git libtool nasm ninja-build pkg-config tar unzip zip \
         # Runtime deps the WebContent service links to
         libdrm-dev libgl1-mesa-dev libpulse-dev \
+        # Qt6 — Ladybird's CMakeLists.txt always tries to find_package(Qt6)
+        # for its UI/Qt subdir, even when we only build js / Services.
+        # Installing the dev package satisfies cmake configure; the
+        # binaries we actually use (js, WebContent) don't link to Qt.
+        qt6-base-dev qt6-tools-dev qt6-tools-dev-tools \
         # Fonts (Ladybird requires liberation fonts at runtime)
         fonts-liberation2 \
     && rm -rf /var/lib/apt/lists/*
@@ -58,13 +63,14 @@ RUN wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
  && ln -sf /usr/bin/clang++-21  /usr/bin/clang++ \
  && ln -sf /usr/bin/ld.lld-21   /usr/bin/ld.lld
 
-# Rust toolchain via rustup (Ladybird needs nightly-ish features in
-# its few Rust crates; pinned via rust-toolchain.toml in the source).
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-      sh -s -- -y --default-toolchain stable --profile minimal \
- && ln -sf /root/.cargo/bin/cargo  /usr/local/bin/cargo \
- && ln -sf /root/.cargo/bin/rustc  /usr/local/bin/rustc \
- && ln -sf /root/.cargo/bin/rustup /usr/local/bin/rustup
+# Rust toolchain. Ubuntu 24.04 ships rustc 1.75 + cargo 1.75 which is
+# new enough for Ladybird's small Rust corner. Avoid rustup-as-root —
+# its $HOME/.cargo isn't readable by the build user, and Ladybird's
+# CMake `find_program(RUST_CARGO cargo)` then fails. apt installs
+# system-wide into /usr/bin which is in PATH for any user.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        rustc cargo \
+    && rm -rf /var/lib/apt/lists/*
 
 # Google's `gn` build tool. Required by the vcpkg `skia` port —
 # Skia uses GN to generate ninja files, and vcpkg-gn (the cmake
