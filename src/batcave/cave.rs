@@ -190,6 +190,28 @@ impl BatCave {
         let check_str = unsafe { core::str::from_utf8_unchecked(&check[..3+plen]) };
         self.has_cap(check_str)
     }
+
+    /// STUMP #151: any-fs-cap test.
+    ///
+    /// Returns true if the cave has either bare `fs` (full FS access)
+    /// OR any path-scoped `fs:<path>` cap. The syscall dispatcher uses
+    /// this for the broad FileIO category gate so a cave granted only
+    /// `fs:/tmp` makes it past the dispatcher; the per-syscall path
+    /// check (via `can_access_path` at openat) then enforces the
+    /// path scope.
+    ///
+    /// Without this, a cave with only `fs:/tmp` failed the bare `fs`
+    /// check and got zero FS syscalls — so path-scoped caps were
+    /// purely decorative.
+    pub fn has_any_fs_cap(&self) -> bool {
+        for i in 0..self.cap_count {
+            if !self.caps[i].active { continue; }
+            let cap = self.caps[i].name_str();
+            if cap == "fs" { return true; }
+            if cap.starts_with("fs:") { return true; }
+        }
+        false
+    }
 }
 
 // Global registry
@@ -229,6 +251,17 @@ pub fn active_name_str() -> &'static str {
         if cave.state == CaveState::Free { return "kernel"; }
         cave.name_str()
     }
+}
+
+/// STUMP #151: true iff the active cave has any FS-related cap
+/// (bare `fs` for full access, or any `fs:<path>` for scoped). Used
+/// by the syscall dispatcher's FileIO gate so caves with only
+/// path-scoped caps don't get blocked at the broad-cap check before
+/// the per-syscall path check ever runs.
+pub fn active_has_any_fs_cap() -> bool {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return false; }
+    unsafe { CAVES[id].has_any_fs_cap() }
 }
 
 /// Check if the active cave can access a filesystem path.

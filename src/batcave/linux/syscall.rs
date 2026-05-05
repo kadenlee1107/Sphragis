@@ -566,7 +566,15 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         SyscallCat::Always  => true,
         SyscallCat::Process => cave_has_cap(cave_id, "proc"),
         SyscallCat::Memory  => cave_has_cap(cave_id, "mem"),
-        SyscallCat::FileIO  => cave_has_cap(cave_id, "fs"),
+        // STUMP #151: was `cave_has_cap("fs")`. That required EXACTLY
+        // the bare `fs` cap, which meant a cave granted only
+        // `fs:/tmp` got zero FS syscalls (path-scoped caps were
+        // purely decorative). Now we use `active_has_any_fs_cap` so
+        // caves with path-scoped caps make it past this broad gate;
+        // the per-syscall path check inside `sys_openat` (and other
+        // path-taking syscalls — see TODO at sys_openat for
+        // remaining sites) then enforces the actual path scope.
+        SyscallCat::FileIO  => cave::active_has_any_fs_cap(),
         SyscallCat::Network => cave_has_cap(cave_id, "net"),
         SyscallCat::RawNet  => cave_has_cap(cave_id, "raw"),
         SyscallCat::Display => cave_has_cap(cave_id, "display"),
@@ -2054,8 +2062,35 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
 
     if has_dotdot(path) { return EACCES; }
 
-    // Handle /proc paths BEFORE VFS check — /proc is always available
     let path_str = unsafe { core::str::from_utf8_unchecked(path) };
+
+    // STUMP #151: per-path FS cap enforcement. The dispatcher's broad
+    // `active_has_any_fs_cap` gate let us in (cave has SOMETHING fs-
+    // related); now check that this specific path is actually within
+    // the cave's grant. Caves with bare `fs` pass unconditionally;
+    // caves with `fs:/tmp` only pass for paths under /tmp.
+    //
+    // We only enforce this for ABSOLUTE paths. Relative paths come
+    // through a dirfd that the cave already opened, so the access
+    // check happened at that earlier open. The has_dotdot guard
+    // above prevents path-traversal escape from the dirfd's scope.
+    //
+    // TODO: extend this to other path-taking syscalls — stat, lstat,
+    // newfstatat, statx, access, faccessat, mkdir, mkdirat, unlink,
+    // unlinkat, rename, renameat[2], symlink[at], readlink[at],
+    // chmod, chown, fchmodat, fchownat, truncate, mknod[at]. Total
+    // ~20 syscalls. Each takes a path arg in a known position.
+    // Mechanical follow-up STUMP.
+    if path_str.starts_with('/')
+        && !cave::active_can_access_path(path_str)
+    {
+        uart::puts("[openat] BLOCKED by fs:<path> cap: ");
+        for &b in path { if b.is_ascii_graphic() || b == b'/' { uart::putc(b); } else { uart::putc(b'?'); } }
+        uart::puts("\n");
+        return EACCES;
+    }
+
+    // Handle /proc paths BEFORE VFS check — /proc is always available
     if path_str.starts_with("/proc/") {
         let mut test_buf = [0u8; 4];
         if proc_read(path_str, &mut test_buf) > 0 {
