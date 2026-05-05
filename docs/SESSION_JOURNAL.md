@@ -11,6 +11,74 @@ end of a session.
 
 ---
 
+## 2026-05-05 (early hours) — Mac — 🌟 NEW BRANCH `port/ladybird`: pivoting to Ladybird
+
+Kaden suggested Ladybird and Helium as alternatives after the Chromium
+Mojo wall. Helium is a Chromium fork — same wall. **Ladybird is a real
+alternative**: truly independent browser, BSD-2 licensed, ~32 MB C++ +
+2 MB Rust (vs Chromium's ~600 MB), uses LibIPC (Unix sockets) instead
+of Mojo, LibJS instead of V8 with no 1 TB sandbox cage requirement,
+and crucially — **its authors built it alongside SerenityOS**, an OS
+they were also writing themselves. That's literally our exact
+situation; they've already solved "make a browser portable to a brand-
+new OS."
+
+**State:** Created `port/ladybird` branch. Chromium work stays on
+`feat/js-engine-browser-posix` — this is parallel, not a replacement.
+
+**Scaffolding committed (4 commits on `port/ladybird`):**
+
+  `59779cb9` Ladybird port scaffolding — branch port/ladybird
+  `7586ee75` shell: add ladybird + ladybird-js commands
+  `37c130a7` scripts: ladybird-js smoke test
+  (plus the Docker rebuild fix that switched from debian:bookworm
+   to ubuntu:24.04 because Kitware's apt repo only serves Ubuntu)
+
+  ports/ladybird_port/
+    README.md     ← rationale + status table
+    Dockerfile    ← ubuntu:24.04 + clang-21 + cmake 3.30 + Rust
+    build.sh      ← drives Meta/ladybird.py, copies artifacts
+                    + ldd closure to /home/build/out/
+
+  tools/bake_ladybird_initrd.sh
+                  ← packs WebContent + helpers + DT_NEEDED libs
+                    into the same BATCHROM/BATARCH archive
+                    format the kernel already understands
+
+  src/ui/shell.rs:
+    cmd_ladybird_js(expr)  ← LibJS REPL via /bin/js -c <expr>
+    cmd_ladybird(url)      ← WebContent via /bin/WebContent <url>
+
+  scripts/qemu_ladybird_js.py
+                  ← smallest-possible Ladybird smoke (looks for
+                    output of `console.log(1+1)` = "2")
+
+**Strategy:** Build the LibJS REPL (`js`) FIRST as a baseline. It
+only needs ELF load → glibc init → AK → LibCrypto → LibJS → printf.
+If that runs, we know the cave's dynamic loader can host Ladybird's
+Lagom libs end-to-end. Then move to WebContent for the actual DOM
+render path.
+
+**State of the build:** Docker image `batos-ladybird-build:latest`
+built clean (1.67 GB on Ubuntu 24.04 base). Inside-container build
+(`build.sh`) is currently `git clone`-ing Ladybird's 3 GB source
+tree. Once that lands, `Meta/ladybird.py build --target WebContent
+RequestServer ImageDecoder WebWorker` runs (~30 min on M-series).
+
+**Next session pickup point:**
+- Container build finishes
+- `tools/bake_ladybird_initrd.sh ports/ladybird_port/out` to pack
+- `python3 scripts/qemu_ladybird_js.py` to verify
+- If LibJS runs: graduate to `ladybird --dump-dom file:///bin/hello.html`
+
+The Chromium work isn't wasted — `iter 1-8` improvements (Landlock
+stubs, demand_page perm-fault handler, real renameat, brk-skip
+same-fn redirect, futex-wake all-buckets scan, etc.) all apply to
+ANY Linux userspace, not just Chromium. Ladybird gets to ride on
+top of those for free.
+
+---
+
 ## 2026-05-04 (deep night) — Mac — 🎯 STUMP #160 iter 6/7: GL-init crash bypass (brk-skip same-fn redirect)
 
 User said "WAIT NO IM NOT READY TO SLEEP YET BRO CMONNN" after the

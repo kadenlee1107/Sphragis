@@ -48,15 +48,18 @@ export CXX=clang++-21
 # Use ld.lld for faster linking of the WebContent shared graph.
 export LDFLAGS="-fuse-ld=lld"
 
-# Skip the Qt UI build — we only need the Services. The WebContent
-# binary doesn't link to Qt at all; UI only matters for the Ladybird
-# desktop wrapper which we don't run inside Bat_OS.
+# Meta/ladybird.py syntax (verified via --help):
+#   ladybird.py build [--preset Release] [<target>] [<args>...]
+# Targets are positional. The build system understands `js`,
+# `WebContent`, `RequestServer`, `ImageDecoder`, `WebWorker`, etc.
 #
-# Meta/ladybird.py exposes a --target flag that takes a CMake target
-# name. The Lagom build defines `WebContent`, `RequestServer`,
-# `ImageDecoder`, `WebWorker` as separate targets.
-python3 Meta/ladybird.py build --preset Release \
-    --target WebContent RequestServer ImageDecoder WebWorker
+# We build js FIRST as a baseline (the LibJS REPL — smallest
+# possible Ladybird binary), then Services. Each invocation is
+# incremental after the first cmake configure.
+python3 Meta/ladybird.py build --preset Release js
+python3 Meta/ladybird.py build --preset Release WebContent
+python3 Meta/ladybird.py build --preset Release RequestServer
+python3 Meta/ladybird.py build --preset Release ImageDecoder
 
 ok "build complete"
 
