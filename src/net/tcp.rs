@@ -794,6 +794,55 @@ fn send_tcp_raw(
     let _ = ip::send(dst_ip, 6, &tcp);
 }
 
+/// STUMP #158: enumerate active listeners for the `tcp-list` shell
+/// command. Calls `f(local_port, backlog, fd, accept_count)` for each
+/// active listener slot. Cheap — walks MAX_LISTENERS=16 once.
+pub fn for_each_listener<F: FnMut(u16, u8, i32, usize)>(mut f: F) {
+    for i in 0..MAX_LISTENERS {
+        let l = listener(i);
+        if !l.in_use.load(Ordering::Acquire) { continue; }
+        let h = l.accept_head.load(Ordering::Acquire);
+        let t = l.accept_tail.load(Ordering::Acquire);
+        f(l.local_port, l.backlog, l.fd.load(Ordering::Acquire),
+          h.wrapping_sub(t));
+    }
+}
+
+/// STUMP #158: enumerate active connection PCBs for the `tcp-list`
+/// shell command. Calls `f(state, local_port, remote_ip_host, remote_port,
+/// fd)` for each non-CLOSED PCB. Cheap — walks MAX_PCBS=64 once.
+pub fn for_each_pcb<F: FnMut(u32, u16, u32, u16, i32)>(mut f: F) {
+    unsafe {
+        for i in 0..MAX_PCBS {
+            let p = &TCP_PCBS[i];
+            if !p.in_use.load(Ordering::Acquire) { continue; }
+            let st = p.state.load(Ordering::Acquire);
+            if st == STATE_CLOSED { continue; }
+            f(st, p.local_port, p.remote_ip, p.remote_port,
+              p.fd.load(Ordering::Acquire));
+        }
+    }
+}
+
+/// STUMP #158: human-readable name for a TCP state code. Used by
+/// `tcp-list` shell output.
+pub fn state_name(state: u32) -> &'static str {
+    match state {
+        STATE_CLOSED        => "CLOSED",
+        STATE_LISTEN        => "LISTEN",
+        STATE_SYN_SENT      => "SYN_SENT",
+        STATE_SYN_RECEIVED  => "SYN_RECV",
+        STATE_ESTABLISHED   => "ESTAB",
+        STATE_FIN_WAIT_1    => "FINW1",
+        STATE_FIN_WAIT_2    => "FINW2",
+        STATE_CLOSE_WAIT    => "CLOSEW",
+        STATE_CLOSING       => "CLOSING",
+        STATE_LAST_ACK      => "LAST_ACK",
+        STATE_TIME_WAIT     => "TWAIT",
+        _ => "?",
+    }
+}
+
 /// True iff `listener_idx` has at least one PCB ready to accept.
 pub fn listener_has_pending(listener_idx: usize) -> bool {
     if listener_idx >= MAX_LISTENERS { return false; }

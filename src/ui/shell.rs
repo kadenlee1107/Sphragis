@@ -145,6 +145,7 @@ fn execute(cmd: &str) {
         "audit-flush" => cmd_audit_flush(),
         "tcp-selftest" => cmd_tcp_selftest(),
         "tcp-listen" => cmd_tcp_listen(parts[1]),
+        "tcp-list" => cmd_tcp_list(),
         "origin" => cmd_origin(parts[1]),
         "origin-allow" => cmd_origin_allow(parts[1], parts[2]),
         "origin-mode" => cmd_origin_mode(parts[1]),
@@ -4831,6 +4832,76 @@ fn cmd_origin_mode(arg: &str) {
         "strict" | "enforce" => { crate::security::origin::set_strict(true); console::puts("  SOP mode -> strict\n"); }
         "permissive" | "warn" => { crate::security::origin::set_strict(false); console::puts("  SOP mode -> permissive (logs only)\n"); }
         _ => { console::puts("  unknown SOP mode: "); console::puts(arg); console::puts("\n"); }
+    }
+}
+
+/// STUMP #158: dump active TCP listeners + connections.
+///
+/// Operator visibility for STUMP #148's TCP server-side. Shows:
+///   - every active Listener slot with its port, backlog, fd, and
+///     pending-accept-queue depth
+///   - every active PCB with its state, 4-tuple, and bound fd
+///
+/// Useful for confirming `tcp-listen` actually registered, watching
+/// SYN_RECV → ESTABLISHED transitions during a real handshake, and
+/// verifying clean shutdown via `listen_close`.
+fn cmd_tcp_list() {
+    use crate::net::tcp;
+
+    console::puts("  LISTENERS:\n");
+    let mut listener_count = 0;
+    tcp::for_each_listener(|port, backlog, fd, pending| {
+        listener_count += 1;
+        console::puts("    port=");
+        crate::kernel::mm::print_num(port as usize);
+        console::puts(" backlog=");
+        crate::kernel::mm::print_num(backlog as usize);
+        console::puts(" fd=");
+        if fd >= 0 {
+            crate::kernel::mm::print_num(fd as usize);
+        } else {
+            console::puts("-1");
+        }
+        console::puts(" pending=");
+        crate::kernel::mm::print_num(pending);
+        console::puts("\n");
+    });
+    if listener_count == 0 {
+        console::puts("    (none)\n");
+    }
+
+    console::puts("  CONNECTIONS:\n");
+    let mut conn_count = 0;
+    tcp::for_each_pcb(|state, lport, rip, rport, fd| {
+        conn_count += 1;
+        console::puts("    ");
+        // Pad state name to fixed width for readability
+        let name = tcp::state_name(state);
+        console::puts(name);
+        // ASCII pad to 9 chars
+        for _ in name.len()..9 { console::putc(b' '); }
+        console::puts(" local:");
+        crate::kernel::mm::print_num(lport as usize);
+        console::puts(" peer=");
+        crate::kernel::mm::print_num(((rip >> 24) & 0xFF) as usize);
+        console::puts(".");
+        crate::kernel::mm::print_num(((rip >> 16) & 0xFF) as usize);
+        console::puts(".");
+        crate::kernel::mm::print_num(((rip >> 8) & 0xFF) as usize);
+        console::puts(".");
+        crate::kernel::mm::print_num((rip & 0xFF) as usize);
+        console::puts(":");
+        crate::kernel::mm::print_num(rport as usize);
+        console::puts(" fd=");
+        if fd >= 0 {
+            crate::kernel::mm::print_num(fd as usize);
+        } else {
+            console::puts("-1");
+        }
+        console::puts("\n");
+    });
+    if conn_count == 0 {
+        console::puts("    (none)\n");
     }
 }
 
