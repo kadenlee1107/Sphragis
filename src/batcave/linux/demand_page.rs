@@ -165,7 +165,25 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     // UXN off below by re-installing with the inst-abort flags.
     let is_perm_fault_inst_abort = is_inst_abort
         && matches!(dfsc, 0x0d..=0x0f);
-    if !is_translation_fault && !is_perm_fault_inst_abort { return false; }
+    // 🎯 STUMP #160 iter 2: data-abort permission faults inside a
+    // registered V8/PA reservation. Chromium reserves huge regions
+    // PROT_NONE then accesses them — sometimes BEFORE issuing an
+    // mprotect (PA's pool-init pre-touches header bytes for layout
+    // verification). The L3 entry exists (committed by an earlier
+    // demand_page) but with no-EL0-access perms. We're in a
+    // registered reservation OR in plausible-V8 VA range; upgrading
+    // the perms to RW matches the "huge reserve, lazy commit"
+    // semantics we already pretend to honour. Without this every
+    // V8 init access ends up as SIGSEGV → thread retire and the
+    // browser slowly bleeds threads.
+    let is_perm_fault_data_abort = is_data_abort
+        && matches!(dfsc, 0x0d..=0x0f);
+    if !is_translation_fault
+        && !is_perm_fault_inst_abort
+        && !is_perm_fault_data_abort
+    {
+        return false;
+    }
 
     // Find the active cave's L1 phys from TTBR0_EL1.
     let ttbr0: u64;
@@ -228,6 +246,51 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
         if (l3_ent & PAGE_VALID) != PAGE_VALID { return false; }
         // Clear UXN bit (bit 54).
         let new_ent = l3_ent & !PAGE_UXN;
+        unsafe {
+            core::ptr::write_volatile(l3_ent_addr as *mut u64, new_ent);
+            core::arch::asm!("dc civac, {a}", a = in(reg) l3_ent_addr);
+            core::arch::asm!("dsb ishst");
+            core::arch::asm!("tlbi vaae1is, {a}", a = in(reg) page_va >> 12);
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+        return true;
+    }
+
+    // 🎯 STUMP #160 iter 2: data-abort permission fault inside a
+    // V8/PA-style reservation. The L3 entry exists with restrictive
+    // perms (AP=0b00 EL1-only, or AP=0b11 EL0-RO when the access
+    // was a write). Upgrade to USER_PAGE_FLAGS (EL0 RW, no-exec)
+    // on the EXISTING phys frame — no new allocation, no data loss.
+    //
+    // Only do this when EITHER:
+    //   - hit_idx is Some (we're inside a registered reservation), OR
+    //   - the FAR is in plausible-V8 range (already vetted above).
+    // Otherwise we'd be silently widening permissions on legitimate
+    // PROT_NONE pages that the user explicitly wanted to be NOT
+    // accessible — breaking guard pages, stack red-zones, etc.
+    if is_perm_fault_data_abort {
+        let page_va = far & !0xFFFu64;
+        let l1_idx = ((page_va >> 30) & 0x1FF) as u64;
+        let l1_ent_addr = l1_phys + l1_idx * 8;
+        let l1_ent = unsafe { core::ptr::read_volatile(l1_ent_addr as *const u64) };
+        if (l1_ent & 0b11) != 0b11 { return false; }
+        let l2_phys = l1_ent & 0x0000_FFFF_FFFF_F000;
+        let l2_idx = ((page_va >> 21) & 0x1FF) as u64;
+        let l2_ent_addr = l2_phys + l2_idx * 8;
+        let l2_ent = unsafe { core::ptr::read_volatile(l2_ent_addr as *const u64) };
+        if (l2_ent & 0b11) != 0b11 { return false; }
+        let l3_phys = l2_ent & 0x0000_FFFF_FFFF_F000;
+        let l3_idx = ((page_va >> 12) & 0x1FF) as u64;
+        let l3_ent_addr = l3_phys + l3_idx * 8;
+        let l3_ent = unsafe { core::ptr::read_volatile(l3_ent_addr as *const u64) };
+        if (l3_ent & PAGE_VALID) != PAGE_VALID { return false; }
+        // Preserve the physical frame address; replace AP/PXN/UXN/AF/SH
+        // bits with the standard user-RW pattern.
+        const MASK_FRAME: u64 = 0x0000_FFFF_FFFF_F000;
+        const MASK_ATTR:  u64 = 0b111 << 2;
+        let kept = l3_ent & (MASK_FRAME | MASK_ATTR);
+        let new_ent = kept | USER_PAGE_FLAGS;
         unsafe {
             core::ptr::write_volatile(l3_ent_addr as *mut u64, new_ent);
             core::arch::asm!("dc civac, {a}", a = in(reg) l3_ent_addr);
