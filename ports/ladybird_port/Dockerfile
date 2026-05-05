@@ -63,14 +63,10 @@ RUN wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
  && ln -sf /usr/bin/clang++-21  /usr/bin/clang++ \
  && ln -sf /usr/bin/ld.lld-21   /usr/bin/ld.lld
 
-# Rust toolchain. Ubuntu 24.04 ships rustc 1.75 + cargo 1.75 which is
-# new enough for Ladybird's small Rust corner. Avoid rustup-as-root —
-# its $HOME/.cargo isn't readable by the build user, and Ladybird's
-# CMake `find_program(RUST_CARGO cargo)` then fails. apt installs
-# system-wide into /usr/bin which is in PATH for any user.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        rustc cargo \
-    && rm -rf /var/lib/apt/lists/*
+# Rust toolchain. Ubuntu 24.04's apt ships rustc 1.75 + cargo 1.75
+# which is too old — Ladybird's LibRegex Rust crate uses Cargo's
+# `edition2024` feature, stabilized in Rust 1.85+. Install rustup
+# below as the build user so ~/.cargo is readable.
 
 # Google's `gn` build tool. Required by the vcpkg `skia` port —
 # Skia uses GN to generate ninja files, and vcpkg-gn (the cmake
@@ -88,6 +84,14 @@ RUN userdel -r ubuntu 2>/dev/null || true && \
     echo "build ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/build
 USER build
 WORKDIR /home/build
+
+# Rust toolchain via rustup, installed AS THE BUILD USER so ~/.cargo
+# is owned by `build` and Ladybird's CMake can find cargo. Pin to
+# stable; Ladybird requires ≥1.85 for the edition2024 feature its
+# LibRegex Rust crate uses.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+      sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/home/build/.cargo/bin:${PATH}"
 
 # Persistent ccache to speed up rebuilds across container invocations
 ENV CCACHE_DIR=/home/build/.ccache

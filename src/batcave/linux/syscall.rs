@@ -2525,8 +2525,45 @@ fn sys_ioctl(args: [u64; 6]) -> i64 {
             }
             0
         }
-        0x540E => 0, // TIOCGPGRP — get process group
-        0x540F => 0, // TIOCSPGRP — set process group
+        0x540E => {
+            // TIOCGPGRP — return process group via the user-supplied
+            // int* pointer.
+            //
+            // STUMP #161 iter 14: previously returned 0 without writing
+            // the pgrp value, leaving the user's `pgrp` variable holding
+            // uninitialised stack data. glibc's tcgetpgrp wrappers
+            // sometimes loop until tcgetpgrp returns a specific value
+            // (e.g. matching getpgrp()), so an unwritten pgrp made
+            // /bin/js spin in tcgetpgrp+ioctl forever during glibc
+            // init. Write our standard pgrp = 1 (matches getpid).
+            let buf = args[2] as usize;
+            if buf != 0 {
+                if !uaccess::is_user_range(buf, 4) { return -(14i64); }
+                unsafe {
+                    core::arch::asm!("str {v:w}, [{a}]",
+                        a = in(reg) buf, v = in(reg) 1u32);
+                }
+            }
+            0
+        }
+        0x540F => {
+            // TIOCSPGRP — set process group. glibc's __tcsetpgrp /
+            // __tcgetpgrp wrappers pass a pointer to a local pgrp_t
+            // variable and READ it back after the ioctl returns; if
+            // we don't write to the pointer the value is uninitialized
+            // stack data and the caller may loop expecting the value
+            // to match getpid(). Write 1 (matches getpid for our
+            // single-process model). STUMP #161 iter 14.
+            let buf = args[2] as usize;
+            if buf != 0 {
+                if !uaccess::is_user_range(buf, 4) { return -(14i64); }
+                unsafe {
+                    core::arch::asm!("str {v:w}, [{a}]",
+                        a = in(reg) buf, v = in(reg) 1u32);
+                }
+            }
+            0
+        }
         _ => 0       // Unknown ioctls — return success
     }
 }
