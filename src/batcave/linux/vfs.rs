@@ -803,10 +803,14 @@ fn populate_rootfs() {
     }
 
 
-    // /usr/bin
+    // /usr/bin + /usr/share/fonts — fontconfig looks here for fonts
     if let Some(usr) = find_child(0, b"usr") {
         create_node(usr, b"bin", NodeType::Directory, 0o40755).ok();
         create_node(usr, b"sbin", NodeType::Directory, 0o40755).ok();
+        let _ = create_node(usr, b"share", NodeType::Directory, 0o40755);
+        if let Some(share) = find_child(usr, b"share") {
+            create_node(share, b"fonts", NodeType::Directory, 0o40755).ok();
+        }
     }
 
     // /var/tmp
@@ -967,23 +971,33 @@ pub fn populate_lib_from_archive() {
     };
     let bin_dir = find_child(0, b"bin");
 
+    // /usr/share/fonts directory for font archive entries
+    let fonts_dir = {
+        let usr = find_child(0, b"usr");
+        let share = usr.and_then(|u| find_child(u, b"share"));
+        share.and_then(|s| find_child(s, b"fonts"))
+    };
+
     let mut added_lib: usize = 0;
     let mut added_bin: usize = 0;
+    let mut added_fonts: usize = 0;
     initrd::archive_for_each(|name, _sz| {
-        // Route archive entries to /lib or /bin based on prefix.
+        // Route archive entries to /lib, /bin, or /share/fonts based on prefix.
         // SKIP `bin/content_shell` — the ELF loader owns it and a
         // VFS node would mask the busybox marker (symbolic, not a
         // real backing) that populate_rootfs already made.
-        let (parent_opt, leaf_bytes, prefix_len, is_lib) =
+        let (parent_opt, leaf_bytes, prefix_len, category) =
             if name.starts_with("lib/") {
-                (Some(lib_dir), name.as_bytes(), 4, true)
+                (Some(lib_dir), name.as_bytes(), 4, 0u8) // 0=lib
             } else if name == "bin/content_shell" {
                 // The ELF loader owns bin/content_shell. Putting a VFS
                 // node for it would mask the busybox placeholder that
                 // populate_rootfs already created under the same name.
                 return;
             } else if name.starts_with("bin/") {
-                (bin_dir, name.as_bytes(), 4, false)
+                (bin_dir, name.as_bytes(), 4, 1u8) // 1=bin
+            } else if name.starts_with("share/fonts/") {
+                (fonts_dir, name.as_bytes(), 12, 2u8) // 2=fonts
             } else {
                 return;
             };
@@ -1005,7 +1019,11 @@ pub fn populate_lib_from_archive() {
             n.data_addr = bytes.as_ptr() as usize;
             n.size = bytes.len();
         }
-        if is_lib { added_lib += 1; } else { added_bin += 1; }
+        match category {
+            0 => added_lib += 1,
+            1 => added_bin += 1,
+            _ => added_fonts += 1,
+        }
     });
 
     if added_lib > 0 {
@@ -1016,6 +1034,11 @@ pub fn populate_lib_from_archive() {
     if added_bin > 0 {
         uart::puts("  [vfs] /bin populated with ");
         crate::kernel::mm::print_num(added_bin);
+        uart::puts(" archive file(s)\n");
+    }
+    if added_fonts > 0 {
+        uart::puts("  [vfs] /usr/share/fonts populated with ");
+        crate::kernel::mm::print_num(added_fonts);
         uart::puts(" archive file(s)\n");
     }
 }

@@ -58,31 +58,35 @@ truth either way.
 
 ## Current iter
 
-**Iter 24** — Stub PageClient → real Page → set host_defined → unblock
-Document::create_for_fragment_parsing.
+**Iter 25** — FontPlugin needs fonts on a scannable path; fontconfig +
+getdents64 must return entries for `/usr/share/fonts/*.ttf`.
 
-**Concrete next step:** Implement a `HeadlessPageClient` in
-`ports/ladybird_port/patches/DumpDOM.cpp` per GPT's iter-23-followup advice
-(see "GPT consultations" below). Wire `Page::create(vm, *page_client)` and
-`realm->set_host_defined(PrincipalHostDefined::create(page))` before the
-`Document::create_for_fragment_parsing(realm)` call. Rebuild
-`dump-html-tokens` in container, copy out, rebake initrd, run smoke. Expect
-either step `[3/4]` to advance OR a NEW assert further inside Document ctor
-(FontComputer / StyleComputer / parse_css_stylesheet) — that becomes iter 25.
+**Concrete next step:** Debug why fontconfig's getdents64 on `/usr/share/fonts`
+returns zero entries even though 14 TTF files are registered in the VFS.
+Likely causes:
+1. `sys_getdents64` doesn't iterate child nodes correctly for dirs created
+   after `populate_rootfs` (ordering issue — fonts are added in
+   `populate_lib_from_archive` which runs after dir creation).
+2. `O_DIRECTORY` openat returns success but the fd isn't associated with a
+   VFS directory node (fd table entry doesn't store the dir index).
+3. Fontconfig reads `/etc/fonts/fonts.conf` first — if absent, it may skip
+   scanning even if the dirs exist.
 
-**Files to touch:**
-- `ports/ladybird_port/patches/DumpDOM.cpp` (add HeadlessPageClient class +
-  wire setup)
-- (No CMake changes; `LibWeb LibJS LibCore` already linked.)
+Debug by adding a trace inside `sys_getdents64` for the font dir fd, or by
+creating a minimal `/etc/fonts/fonts.conf` in VFS that points to
+`/usr/share/fonts`.
+
+**Files likely to touch:**
+- `src/batcave/linux/syscall.rs` (getdents64 debug / fix)
+- `src/batcave/linux/vfs.rs` (maybe `/etc/fonts/fonts.conf`)
 
 **Success criteria:**
-- Container build succeeds.
-- Smoke shows `[3/4]` line + `document ready` line, OR a new SIGSEGV/VERIFY
-  with a different fault address than `0x99e9_82a6_6d6d_ee18` (proving we
-  got past principal_host_defined_page).
+- FontPlugin constructor passes (no VERIFY crash).
+- Step `[3/5]` TraversableNavigable starts (may hit new wall inside it).
 
-**On failure:** Read the new fault location, decide whether it's iter 25's
-problem (commit progress + advance) or a regression (revert + investigate).
+**On failure:** If getdents64 is fundamentally broken for dynamic dirs, add
+a hacky `/etc/fonts/fonts.conf` that hardcodes the path and see if
+fontconfig picks it up.
 
 ---
 
@@ -90,8 +94,8 @@ problem (commit progress + advance) or a regression (revert + investigate).
 
 | Iter | Goal | Risk |
 |---|---|---|
-| 24 | HeadlessPageClient + real Page wired into realm.host_defined | Page ctor pulls in deps we haven't seen |
-| 25 | Document ctor's FontComputer init — needs FontDatabase | Bake fonts into initrd |
+| 24 | HeadlessPageClient + real Page wired into realm.host_defined ✓ | CMake needed LibGC LibGfx LibIPC |
+| 25 | FontPlugin needs fonts: fontconfig + getdents64 + VFS | fonts present but not scanned |
 | 26 | Document ctor's `parse_css_stylesheet("")` for view transitions | CSS parser may need more setup |
 | 27 | HTMLParser::create + parser->run() on real Document | Parser may want EventLoop tasks |
 | 28 | Walk Document tree, dump real Element + Text nodes | Likely just works once 27 works |
@@ -105,6 +109,7 @@ problem (commit progress + advance) or a regression (revert + investigate).
 
 | Iter | Date | Result | Commit |
 |---|---|---|---|
+| 24 | 2026-05-05 | HeadlessPageClient + Page + EventLoopPlugin + FontPlugin ✓ build; VFS /usr/share/fonts 14 TTFs; FontPlugin VERIFY crash at fontconfig scan (getdents64 returns 0 entries). | e18dfa45 |
 | 23 | 2026-05-05 | VM+Realm bootstrap ✓; Document SIGSEGVs in `principal_host_defined_page` (0x99e9_…). Need real Page. | 57e172e4 |
 | 22 | 2026-05-05 | Tree-style HTML token dump (extends iter 21). | 3a7506ed |
 | 21 | 2026-05-05 | dump-html-tokens binary built; HTMLTokenizer prints DOCTYPE/StartTag/Char/EndTag. | 53aafca7 |
@@ -142,6 +147,24 @@ don't return temporaries. Make sure PageClient outlives Page (probably both
 heap-allocated as JS::Cell anyway since PageClient inherits JS::Cell).
 
 No simpler entry point exists; have to satisfy `principal_host_defined_page`.
+
+### 2026-05-05 iter-24: exact Page/PageClient API for headless DOM
+
+**Q:** [What's the exact C++ interface for PageClient, Page::create, and
+PrincipalHostDefined in current Ladybird main (May 2026)?]
+
+**A (GPT-5.4):** Don't fabricate signatures — inspect the actual headers in
+the container. Key findings after inspection:
+- `PageClient` is a `JS::Cell` (line 367 of Page.h), needs
+  `GC_DECLARE_ALLOCATOR` + `GC_DEFINE_ALLOCATOR`.
+- `Page::create(JS::VM&, GC::Ref<PageClient>)` — takes a GC ref, not raw ptr.
+- `PrincipalHostDefined` is a struct needing `(ESO, Intrinsics, Page)` — NOT
+  constructible standalone. Use `TraversableNavigable::create_a_new_top_level_traversable`
+  instead, which bootstraps the whole chain.
+- SVGDecodedImageData::SVGPageClient is the reference implementation.
+- `EventLoopPlugin::install` and `FontPlugin::install` must be called before
+  TraversableNavigable creation.
+- CMakeLists.txt `lagom_utility` needs `LibGC LibGfx LibIPC` added.
 
 ---
 
