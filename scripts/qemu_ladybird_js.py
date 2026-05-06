@@ -76,7 +76,11 @@ def main():
         if idx == 0:
             time.sleep(0.3); c.sendline(b"batman")
             c.expect(PROMPT, timeout=30)
-        c.sendline(b"ladybird-js 1+1")
+        # `ladybird-js` with no args defaults to `console.log(1+1)` —
+        # explicitly invoking the print path so we see "2" on stdout.
+        # `ladybird-js 1+1` evaluates the expression but doesn't auto-
+        # print, so the smoke's "got '2'" check would never fire.
+        c.sendline(b"ladybird-js")
         # STUMP #161 iter 17 fix: previously matched "ladybird-js: "
         # AND \b2\b which both appear in normal kernel output (the
         # latter in mmap "pages=2" lines). The cave was getting only
