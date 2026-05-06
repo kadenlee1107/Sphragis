@@ -5,6 +5,33 @@ use super::loader;
 use crate::drivers::uart;
 use crate::kernel::mm::frame;
 
+// STUMP #161 iter 21: optional override for the runner's "primary
+// binary" pick. The shell can stash a static byte slice here before
+// calling run_chromium so e.g. dump-html-tokens runs instead of js.
+// AtomicPtr<u8> + length keep this lock-free.
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering as PrimOrd};
+static PRIMARY_OVERRIDE_PTR: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+static PRIMARY_OVERRIDE_LEN: AtomicUsize = AtomicUsize::new(0);
+
+pub fn primary_override_set(name: &'static [u8]) {
+    PRIMARY_OVERRIDE_LEN.store(name.len(), PrimOrd::Release);
+    PRIMARY_OVERRIDE_PTR.store(name.as_ptr() as *mut u8, PrimOrd::Release);
+}
+
+pub fn primary_override_clear() {
+    PRIMARY_OVERRIDE_PTR.store(core::ptr::null_mut(), PrimOrd::Release);
+    PRIMARY_OVERRIDE_LEN.store(0, PrimOrd::Release);
+}
+
+/// SAFETY: caller must guarantee the slice was stashed with a
+/// `&'static [u8]` (which `primary_override_set` enforces).
+pub(super) unsafe fn primary_override_get() -> Option<&'static [u8]> {
+    let ptr = PRIMARY_OVERRIDE_PTR.load(PrimOrd::Acquire);
+    let len = PRIMARY_OVERRIDE_LEN.load(PrimOrd::Acquire);
+    if ptr.is_null() || len == 0 { return None; }
+    Some(unsafe { core::slice::from_raw_parts(ptr, len) })
+}
+
 // Embedded test binaries
 static TEST_HELLO: &[u8] = include_bytes!("../../../test_binaries/hello_batcave.elf");
 static TEST_UNAME: &[u8] = include_bytes!("../../../test_binaries/uname_test.elf");
@@ -177,8 +204,23 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
         // WebContent needs more. Chromium fits comfortably in 16 but
         // wasn't a hard ceiling — it was a "sized to fit current
         // workload" pick.
+        // STUMP #161 iter 21: support an explicit primary-binary override
+        // via the static PRIMARY_OVERRIDE. Lets the shell pick e.g.
+        // bin/dump-html-tokens instead of the default bin/js.
+        let override_buf;
+        let override_str: Option<&'static [u8]> =
+            unsafe { primary_override_get() };
         let (main_name, shell): (&'static [u8], &[u8]) =
-            if let Some(b) = initrd::archive_file("bin/js") {
+            if let Some(name) = override_str {
+                let s = unsafe { core::str::from_utf8_unchecked(name) };
+                match initrd::archive_file(s) {
+                    Some(b) => {
+                        override_buf = name;
+                        (override_buf, b)
+                    }
+                    None => return Err("override primary not in archive"),
+                }
+            } else if let Some(b) = initrd::archive_file("bin/js") {
                 (b"bin/js", b)
             } else if let Some(b) = initrd::archive_file("bin/WebContent") {
                 (b"bin/WebContent", b)
@@ -192,7 +234,10 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
         // entry point and sets the loader globals from it.
         // STUMP #161: 40 was tight — Ladybird's `js` needs ~30 lagom-*
         // libs + ~12 system libs. Bumped to 64.
-        let mut files: [(&[u8], &[u8]); 64] = [(&[], &[]); 64];
+        // STUMP #161 iter 21: dump-html-tokens pulls in liblagom-web
+        // which has ~80 transitive lib deps (Skia, libavcodec, libfreetype,
+        // libharfbuzz, etc.). Bumped 64 → 128.
+        let mut files: [(&[u8], &[u8]); 128] = [(&[], &[]); 128];
         let mut count = 0usize;
         files[0] = (main_name, shell);
         count += 1;

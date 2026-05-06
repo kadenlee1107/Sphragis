@@ -152,6 +152,7 @@ fn execute(cmd: &str) {
         // (smallest possible Ladybird test). `ladybird` runs WebContent
         // pointed at a URL.
         "ladybird-js"           => cmd_ladybird_js(parts[1]),
+        "ladybird-dump"         => cmd_ladybird_dump(parts[1]),
         "ladybird"              => cmd_ladybird(parts[1], parts[2], parts[3]),
         "dump-dom" | "dom" => cmd_dump_dom(parts[1]),
         "render" => cmd_render(parts[1], &parts),
@@ -3169,6 +3170,46 @@ fn cmd_ladybird_js(expr_in: &str) {
         Ok(()) => crate::drivers::uart::puts("  ladybird-js exited OK\n"),
         Err(e) => {
             crate::drivers::uart::puts("  ladybird-js: ");
+            crate::drivers::uart::puts(e);
+            crate::drivers::uart::puts("\n");
+        }
+    }
+}
+
+// `ladybird-dump <html_string?>` runs the standalone dump-html-tokens
+// binary built from Ladybird's actual HTMLTokenizer. With no arg, the
+// binary's hardcoded "<!doctype html><html><body><h1>Hello, Bat_OS!"
+// gets tokenized. Output is one line per token: "[N] StartTag <body>"
+// etc. — proves Ladybird's HTML parser runs on Bat_OS, not just LibJS.
+fn cmd_ladybird_dump(html_in: &str) {
+    use crate::batcave::linux::runner;
+    use crate::kernel::mm::initrd;
+
+    if !initrd::is_present() {
+        console::puts("  error: no Ladybird binary baked into this image.\n");
+        return;
+    }
+    if initrd::archive_file("bin/dump-html-tokens").is_none() {
+        console::puts("  error: bin/dump-html-tokens not in archive.\n");
+        console::puts("  hint: build it via ports/ladybird_port/build.sh\n");
+        console::puts("        and re-run tools/bake_ladybird_initrd.sh.\n");
+        return;
+    }
+
+    let mut argv: [&str; 3] = [""; 3];
+    argv[0] = "/bin/dump-html-tokens";
+    let n = if html_in.is_empty() { 1 } else { argv[1] = html_in; 2 };
+
+    console::puts("  ladybird-dump: tokenizing\n");
+
+    runner::primary_override_set(b"bin/dump-html-tokens");
+    crate::batcave::linux::skip_log::reset();
+    let r = runner::run_chromium("", &argv[..n]);
+    runner::primary_override_clear();
+    match r {
+        Ok(()) => crate::drivers::uart::puts("  ladybird-dump exited OK\n"),
+        Err(e) => {
+            crate::drivers::uart::puts("  ladybird-dump: ");
             crate::drivers::uart::puts(e);
             crate::drivers::uart::puts("\n");
         }

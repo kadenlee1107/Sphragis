@@ -163,9 +163,9 @@ if os.path.isdir(share_fonts):
 
 # STUMP #161: runner.rs cap was bumped 16 → 64 to fit Ladybird's
 # ~30 lagom-* libs + ~12 system libs js needs at runtime.
-if len(files) > 64:
+if len(files) > 128:
     print(f"[bake-ladybird] WARN: {len(files)} files exceeds runner.rs's "
-          f"64-file cap; trimming (drop fonts first, then non-essential libs)",
+          f"128-file cap; trimming (drop fonts first, then non-essential libs)",
           file=sys.stderr)
     bins   = [f for f in files if f[0].startswith("bin/")]
     libs   = [f for f in files if f[0].startswith("lib/")]
@@ -206,7 +206,7 @@ if len(files) > 64:
         return 99
     libs.sort(key=lambda f: lib_prio(f[0]))
     others = [f for f in files if not (f[0].startswith("bin/") or f[0].startswith("lib/"))]
-    files = (bins + libs + others)[:64]
+    files = (bins + libs + others)[:128]
 
 # Header: BATARCH\0  +  n_files (u32)  +  reserved (u32)
 ARCHIVE_MAGIC = b"BATARCH\0"
