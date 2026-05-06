@@ -43,9 +43,13 @@
 #include <LibWeb/HTML/Parser/HTMLToken.h>
 #include <LibWeb/HTML/Parser/HTMLTokenizer.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
+#include <LibWeb/Layout/Box.h>
+#include <LibWeb/Layout/Node.h>
+#include <LibWeb/Layout/Viewport.h>
 #include <LibWeb/Loader/FileRequest.h>
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/Page/InputEvent.h>
+#include <LibWeb/Painting/PaintableBox.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
 #include <LibWeb/Platform/FontPlugin.h>
 #include <string.h>
@@ -153,6 +157,30 @@ static void dump_node_tree(Web::DOM::Node const& node, int depth)
     }
 }
 
+// ─── Layout tree dump ───────────────────────────────────────────
+
+static void dump_layout_node(Web::Layout::Node const& node, int depth)
+{
+    emit_indent(depth);
+    auto desc = node.debug_description();
+    if (is<Web::Layout::Box>(node)) {
+        auto const& box = static_cast<Web::Layout::Box const&>(node);
+        if (auto* paintable = box.paintable_box()) {
+            auto rect = paintable->absolute_rect();
+            outln("{} @ ({},{}) {}x{}", desc,
+                rect.x().to_float(), rect.y().to_float(),
+                rect.width().to_float(), rect.height().to_float());
+        } else {
+            outln("{} (no paintable_box yet)", desc);
+        }
+    } else {
+        outln("{}", desc);
+    }
+    for (auto* child = node.first_child(); child; child = child->next_sibling()) {
+        dump_layout_node(*child, depth + 1);
+    }
+}
+
 // ─── Token-only fallback (iter 21) ──────────────────────────────
 
 static int run_tokens_only(StringView html)
@@ -238,15 +266,21 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     auto& realm = navigable->active_document()->realm();
     outln("       traversable ready, realm @ {:p}", &realm);
 
-    // Step 4: create a temporary Document for fragment parsing.
-    // The realm now has PrincipalHostDefined with our Page, so
-    // Document's constructor can read principal_host_defined_page.
-    outln("[4/5] Document::create_for_fragment_parsing...");
-    auto document = Web::DOM::Document::create_for_fragment_parsing(realm);
-    document->set_document_type(Web::DOM::Document::Type::HTML);
+    // Step 4: use the navigable's active document, but REMOVE its
+    // existing about:blank children first. The navigable bootstrap
+    // creates a Document with <html><head></head><body></body></html>
+    // already populated; HTMLParser's doctype-append (line 717) MUSTs
+    // because a child already exists. Wiping the children gives us
+    // a clean document on the proper navigable lifecycle (so
+    // update_layout works).
+    outln("[4/5] use navigable active_document (cleared)...");
+    auto document = navigable->active_document();
     outln("       document ready @ {:p}", document.ptr());
+    while (auto* child = document->first_child()) {
+        document->remove_child(*child).release_value_but_fixme_should_propagate_errors();
+    }
 
-    // Step 5: parse + dump.
+    // Step 5: parse HTML into the live document.
     outln("[5/5] HTMLParser::create + run...");
     auto parser = Web::HTML::HTMLParser::create(*document, html,
         Web::HTML::ParserScriptingMode::Disabled, "UTF-8"sv);
@@ -260,6 +294,24 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         outln("(document has no root element — parse may have failed)");
     }
     outln("---");
-    outln("(parsed via Web::HTML::HTMLParser on Bat_OS)");
+
+    // Step 6 (iter 26): force a layout pass and walk the resulting
+    // Layout::Viewport tree. Each box gets its absolute rect printed.
+    outln("[6/6] update_layout + dump layout tree...");
+    // Give the navigable a real viewport size so layout has a width to
+    // wrap text against — without this everything stacks vertically at
+    // 0 width.
+    navigable->set_viewport_size(Web::CSSPixelSize { 800, 600 });
+    document->update_layout(Web::DOM::UpdateLayoutReason::Debugging);
+    if (auto* viewport = document->layout_node()) {
+        outln("       viewport @ {:p}", viewport);
+        outln("---");
+        dump_layout_node(*viewport, 0);
+        outln("---");
+        outln("(parsed + laid out via LibWeb on Bat_OS)");
+    } else {
+        outln("       (no layout_node — update_layout may have skipped)");
+        outln("(parsed via Web::HTML::HTMLParser on Bat_OS)");
+    }
     return 0;
 }
