@@ -25,8 +25,9 @@ truth either way.
    below. Act on the answer. Skip questions you can answer yourself by
    reading the codebase or recalling from this same session.
 
-3. **NEEDS HUMAN flag.** Write `> NEEDS HUMAN: <one-line question>` at the
-   top of "Current iter" and exit cleanly **only** for:
+3. **NEEDS HUMAN flag.** Write a line starting with `> NEEDS HUMAN:`
+   (markdown blockquote, this exact prefix) at the top of "Current iter"
+   and exit cleanly **only** for:
    - Hardware Kaden physically controls (M4 boot, USB, signing keys)
    - Secrets / credentials
    - Destructive operations: `git push --force` to main, `rm -rf` outside

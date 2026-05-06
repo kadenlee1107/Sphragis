@@ -103,10 +103,12 @@ while [[ $iter -lt $MAX_ITERS ]]; do
     log="$LOG_DIR/iter-${timestamp}.log"
     echo "[autopilot] === iter $iter at $timestamp — log: $log"
 
-    # Bail if NEEDS HUMAN was flagged.
-    if grep -q "NEEDS HUMAN:" "$DOC"; then
+    # Bail if NEEDS HUMAN was flagged. Match only lines starting with
+    # blockquote `>` so we don't false-positive on the rules-explanation
+    # text ("Write `> NEEDS HUMAN: ...`") that talks about the flag.
+    if grep -qE "^> NEEDS HUMAN:" "$DOC"; then
         echo "[autopilot] NEEDS HUMAN flag found — stopping."
-        grep "NEEDS HUMAN:" "$DOC" | head -3
+        grep -E "^> NEEDS HUMAN:" "$DOC" | head -3
         break
     fi
 
