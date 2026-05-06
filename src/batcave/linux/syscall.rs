@@ -1852,6 +1852,33 @@ fn sys_write(args: [u64; 6]) -> i64 {
                 written += chunk;
             }
             if let Some(e) = fd::get_mut(fd_num) { e.position += to_write; }
+            // STUMP #161 iter 28d: trigger a blit synchronously after the
+            // write lands. The chromium_blit kthread normally polls
+            // /batos/fb0's seq at ~60 Hz from a timer IRQ, but timer IRQs
+            // don't reliably fire under HVF, so the kthread effectively
+            // never runs while a cave is mounted. Calling tick() here
+            // means writes from the cave produce visible pixels even
+            // without scheduling.
+            //
+            // Switch to primary L1 first so the tick's reads (which use
+            // the FB phys as a VA) hit the kernel identity map, not the
+            // cave's TTBR0.
+            let saved_ttbr0: u64;
+            unsafe {
+                core::arch::asm!("mrs {}, ttbr0_el1", out(reg) saved_ttbr0);
+            }
+            super::mmu::switch_to_primary();
+            let (fb_base, _) = vfs::chromium_fb_region();
+            if fb_base != 0 {
+                let _ = crate::drivers::display::chromium_blit::tick(fb_base);
+            }
+            unsafe {
+                core::arch::asm!("msr ttbr0_el1, {}", in(reg) saved_ttbr0);
+                core::arch::asm!("isb");
+                core::arch::asm!("tlbi vmalle1");
+                core::arch::asm!("dsb sy");
+                core::arch::asm!("isb");
+            }
             return to_write as i64;
         }
 
