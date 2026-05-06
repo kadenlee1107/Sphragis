@@ -11,6 +11,103 @@ end of a session.
 
 ---
 
+## 2026-05-05 17:15 — Mac — 🎉 LADYBIRD LIBJS PRINTS "2" ON BAT_OS
+
+After 7 more iterations on `port/ladybird` (iters 14-20 of STUMP #161),
+**`console.log(1+1)` prints `2` end-to-end on Bat_OS**. That's
+glibc init → libcpptrace → liblagom-* → JS::VM construction → JS
+eval → fputs → write(stdout) → UART. The whole stack works.
+
+Smoke: `python3 scripts/qemu_ladybird_js.py` → `PASS — got '2' from LibJS`.
+
+**The seven fixes (commit `1577fe5e`..`196af1d8` on `port/ladybird`):**
+
+1. **iter 14** — TIOCGPGRP/TIOCSPGRP write pgrp=1 to user buffer, plus
+   binary-patch `tcgetpgrp` in libc.so.6 to immediate-ret. glibc's
+   `__tcsetpgrp` was looping forever waiting for the buffer's pgrp_t
+   to match getpid().
+
+2. **iter 15** — `is_user_range` accepts the 0x800000-0x840000 scratch
+   zone for active caves. mimalloc allocates from there during init,
+   and read() failed EFAULT when glibc tried to read /etc/nsswitch.conf
+   into a mimalloc-allocated buffer that fell outside the cave's
+   normal user-VA window.
+
+3. **iter 16** — diagnostics: heartbeat sampler in handle_irq + ELR
+   in syscall trace. Found that IRQs literally don't fire under HVF
+   on Apple Silicon (separate issue), so all our timing-based
+   debugging needs a different signal.
+
+4. **iter 17** — smoke pattern fix: was matching `ladybird-js: ` echo
+   instead of actual program output. Also enabled SYSCALL_TRACE from
+   runner entry to see every syscall during init.
+
+5. **iter 18** — sys_brk now alloc_frame + install_l3_mapping for
+   each newly-extended page. Was relying on demand_page lazy-commit,
+   but the kernel-side byte-zeroing loop ran BEFORE access, page-
+   faulting at EL1 when brk extended past our pre-mapped scratch.
+
+6. **iter 19** — anon MAP_FIXED force-overwrites L3 entries. The
+   prior file-mmap that initially loaded liblagom-js (R/O) covered
+   the whole memsz range; the subsequent `mmap(MAP_FIXED|MAP_ANON)`
+   for the BSS extension was walking and zeroing only EL1-RW pages,
+   skipping the R/O ones — so liblagom-js's BSS read FILE CONTENT
+   instead of zero, and JS::VM::create's `VERIFY(s_vm_count == 0)`
+   fired.
+
+7. **iter 20** — `is_user_writable` now distinguishes L2 BLOCK
+   descriptors (bits 1:0 = 0b01) from L3 PAGE entries (0b11). Cave
+   user-VA window is L2-block-mapped, so the prior `(pte & 0b11) != 0b11`
+   check incorrectly rejected every stack/heap pointer as
+   non-writable. That broke prlimit64 → pthread_getattr_np → AK
+   StackInfo VERIFY.
+
+Plus libc binary patches in `ports/ladybird_port/out/lib/libc.so.6`:
+- `__stack_chk_fail` → `ret` (iter 13)
+- `tcgetpgrp` prologue → `mov w0, #0; ret` (iter 14)
+- `tcgetattr` prologue → `mov w0, #0; ret` (iter 17)
+
+**The trace, end of run:**
+```
+[sc t16962] 64 (write) args=[fd=1, buf=0x82d980, count=2, ...]
+2
+[sc t16962] -> 0x2
+[sc t16962] 94 (exit_group) args=[0, ...]
+[linux] process exited with code 0
+```
+
+**State of the tree:**
+- `port/ladybird` HEAD: `196af1d8` (smoke default change to console.log)
+- One smoke target works end-to-end: `ladybird-js` (no args) →
+  `console.log(1+1)` → `2` → exit 0.
+- All Ladybird artifacts (33 libs in initrd) load + relocate cleanly.
+- Chromium work is parked on `feat/js-engine-browser-posix` — this
+  branch is independent.
+
+**What's next (priority order):**
+1. Try a multi-statement JS expression (`for (let i=0;i<10;i++) console.log(i)`)
+   to make sure the stack expansion + GC paths still work past iter 20.
+2. Build Ladybird's WebContent + ImageDecoder + RequestServer
+   binaries into the initrd (already in `Build/release/libexec/`)
+   and try a `dump-DOM` smoke against `bin/hello.html`.
+3. Wire IPC: WebContent talks to a UI process via Unix socket
+   (LibIPC). Bat_OS has Unix sockets via `socketpair` already; verify
+   the LibIPC init path works.
+4. Eventually: get the dump-DOM output through serial → screen capture
+   on real M4 hardware.
+
+**Open questions:**
+- The `tcgetattr` patch was a band-aid — somewhere between isatty
+  return and the first stderr write, glibc was looping. Worth
+  finding the root cause once IRQs deliver under HVF (we never
+  saw a single timer IRQ fire during 120s smoke runs, so PC
+  sampling didn't help).
+- IRQ delivery under HVF — do we need a different timer setup? Apple
+  Silicon's AIC vs QEMU virt's GIC mismatch may be the culprit even
+  with `-machine virt,gic-version=3`.
+
+---
+
 ## 2026-05-05 (early hours) — Mac — 🌟 NEW BRANCH `port/ladybird`: pivoting to Ladybird
 
 Kaden suggested Ladybird and Helium as alternatives after the Chromium
