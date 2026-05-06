@@ -10,6 +10,12 @@ secrets, or genuinely destructive ops.
 
 ## The Rules (autopilot reads this every fire)
 
+**Session continuity:** The autopilot pins every fire to a single
+`--session-id` UUID, so context accumulates. You SHOULD remember your own
+prior fixes from earlier iters in this session. If you don't (e.g. after
+auto-compaction), re-read this doc + recent commits. The doc is the ground
+truth either way.
+
 1. **Default: act, don't ask.** Read this file, do the next concrete step,
    commit + push, update this file. Don't editorialize about progress, don't
    suggest stopping, don't ask if anyone wants to keep going.
@@ -17,7 +23,7 @@ secrets, or genuinely destructive ops.
 2. **When you'd normally ask the user a question, ask GPT instead via
    `mcp__gpt__ask-gpt`.** Log the question + answer to "GPT consultations"
    below. Act on the answer. Skip questions you can answer yourself by
-   reading the codebase.
+   reading the codebase or recalling from this same session.
 
 3. **NEEDS HUMAN flag.** Write `> NEEDS HUMAN: <one-line question>` at the
    top of "Current iter" and exit cleanly **only** for:

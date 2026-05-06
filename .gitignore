@@ -48,3 +48,4 @@ macos_dump/SystemKernelExtensions.kc
 #       -v $(pwd)/ports/chromium_port/out:/out \
 #       alpine cp /src/src/out/BatOs/content_shell /out/content_shell
 /ports/chromium_port/out/
+.autopilot-session-id
