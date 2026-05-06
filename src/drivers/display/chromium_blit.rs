@@ -190,12 +190,26 @@ pub fn tick(base: usize) -> bool {
     let seq_ptr = (base + 24) as *const AtomicU32;
     let cur = unsafe { (*seq_ptr).load(Ordering::Acquire) };
     let last = LAST_SEQ.load(Ordering::Relaxed);
+    // STUMP #161 iter 28c: print one tick + seq value every 100 polls
+    // so we can confirm the kthread is alive AND see what seq it reads.
+    // Without this we can't tell "kthread isn't running" from "kthread
+    // running but seq stays 0".
+    {
+        static POLLS: AtomicU32 = AtomicU32::new(0);
+        let p = POLLS.fetch_add(1, Ordering::Relaxed);
+        if p % 100 == 0 && p < 5000 {
+            uart::puts("[chromium-blit] poll #");
+            crate::kernel::mm::print_num(p as usize);
+            uart::puts(" cur_seq=");
+            crate::kernel::mm::print_num(cur as usize);
+            uart::puts(" last=");
+            crate::kernel::mm::print_num(last as usize);
+            uart::puts("\n");
+        }
+    }
     if cur == last {
         return false;
     }
-    // STUMP #161 iter 28b: print every blit so we can confirm the kthread
-    // is seeing producer updates. Limit to first 5 events to avoid log
-    // spam if a producer goes wild.
     {
         static N: AtomicU32 = AtomicU32::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);

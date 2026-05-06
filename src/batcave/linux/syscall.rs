@@ -1792,14 +1792,64 @@ fn sys_write(args: [u64; 6]) -> i64 {
             if pos >= node.size { return 0; }
             let to_write = (node.size - pos).min(count);
             let dst = node.data_addr + pos;
-            for i in 0..to_write {
-                unsafe {
-                    let b: u32;
-                    core::arch::asm!("ldrb {v:w}, [{a}]",
-                        a = in(reg) buf + i, v = out(reg) b);
-                    core::arch::asm!("strb {v:w}, [{a}]",
-                        a = in(reg) dst + i, v = in(reg) b);
+            // STUMP #161 iter 28c: stage the write through a kernel
+            // buffer + primary L1. The cave's TTBR0 doesn't map the FB
+            // phys (0x5e_xxx_xxx range) cleanly — the L2 block at that
+            // VA either misses or aliases. Reading buf via cave TTBR0
+            // works (it's in the cave window). Writing dst via primary
+            // L1 works (kernel identity-maps phys). So: copy buf →
+            // small stack buffer first (cave context), then switch to
+            // primary, copy buffer → dst (kernel context), switch back.
+            const STAGE: usize = 4096;
+            let mut staging: [u8; STAGE] = [0; STAGE];
+            let mut written = 0usize;
+            while written < to_write {
+                let chunk = (to_write - written).min(STAGE);
+                // Phase 1: read from user buf in cave context.
+                for i in 0..chunk {
+                    unsafe {
+                        let b: u32;
+                        core::arch::asm!("ldrb {v:w}, [{a}]",
+                            a = in(reg) buf + written + i, v = out(reg) b);
+                        staging[i] = b as u8;
+                    }
                 }
+                // Phase 2: switch to primary L1, copy staging → dst,
+                // switch back to cave.
+                let saved_ttbr0: u64;
+                unsafe {
+                    core::arch::asm!("mrs {}, ttbr0_el1", out(reg) saved_ttbr0);
+                }
+                super::mmu::switch_to_primary();
+                let dst_chunk = dst + written;
+                for i in 0..chunk {
+                    unsafe {
+                        core::arch::asm!("strb {v:w}, [{a}]",
+                            a = in(reg) dst_chunk + i,
+                            v = in(reg) staging[i] as u32);
+                    }
+                }
+                // Cache + barrier to make the bytes visible to the
+                // chromium_blit kthread which reads with acquire
+                // semantics on the seq counter.
+                unsafe {
+                    let mut line = (dst_chunk & !63) as u64;
+                    let line_end = (dst_chunk + chunk + 63) as u64 & !63;
+                    while line < line_end {
+                        core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                        line += 64;
+                    }
+                    core::arch::asm!("dsb sy");
+                }
+                // Restore cave TTBR0.
+                unsafe {
+                    core::arch::asm!("msr ttbr0_el1, {}", in(reg) saved_ttbr0);
+                    core::arch::asm!("isb");
+                    core::arch::asm!("tlbi vmalle1");
+                    core::arch::asm!("dsb sy");
+                    core::arch::asm!("isb");
+                }
+                written += chunk;
             }
             if let Some(e) = fd::get_mut(fd_num) { e.position += to_write; }
             return to_write as i64;
