@@ -180,9 +180,21 @@ fn is_user_writable(p: usize, size: usize) -> bool {
         };
         // L2 BLOCK descriptor (0b01): identity-mapped 2 MB block.
         // L2 TABLE (0b11): walk L3.
+        // STUMP #161 iter 20: distinguish L2 BLOCK (0b01) from L3
+        // PAGE (0b11). Valid bit is bit 0; bit 1 = "table/page" (1)
+        // vs "block" (0) at this level. The cave's main user-VA
+        // window is mapped via L2 BLOCKS (0b01) — the previous
+        // `(pte & 0b11) != 0b11` check rejected those as "invalid",
+        // making is_user_writable falsely return EFAULT for every
+        // stack/heap pointer in the cave window. That broke
+        // prlimit64(old=...) → glibc's pthread_getattr_np → AK
+        // StackInfo VERIFY.
+        let is_block;
         let pte = if (l2e & 0b11) == 0b01 {
+            is_block = true;
             l2e
         } else if (l2e & 0b11) == 0b11 {
+            is_block = false;
             let l3_phys = l2e & 0x0000_FFFF_FFFF_F000;
             let l3_idx = (va >> 12) & 0x1FF;
             unsafe {
@@ -191,7 +203,14 @@ fn is_user_writable(p: usize, size: usize) -> bool {
         } else {
             return false;
         };
-        if (pte & 0b11) != 0b11 { return false; } // not valid
+        // For BLOCK: valid = bit 0 set, block-ness = bit 1 clear (which
+        // is already implied by the 0b01 match above).
+        // For PAGE (L3): valid descriptor uses bits 1:0 = 0b11.
+        if is_block {
+            if (pte & 0b1) != 0b1 { return false; }
+        } else {
+            if (pte & 0b11) != 0b11 { return false; }
+        }
         // AP[2:1] at bits 7:6. Only AP=0b01 means EL0 writable.
         let ap = (pte >> 6) & 0b11;
         if ap != 0b01 { return false; }
