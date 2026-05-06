@@ -307,11 +307,10 @@ pub fn run_chromium(url: &str, argv: &[&str]) -> Result<(), &'static str> {
         uart::puts("\n");
     }
 
-    // STUMP #161 iter 17: per-syscall tracing ON for the Ladybird debug
-    // loop. UART back-pressure adds runtime cost but we need every
-    // syscall logged to see what /bin/js is doing right before the
-    // userland-only hang. Toggle off when iter 17+ converges.
-    super::syscall::SYSCALL_TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+    // STUMP #161 iter 28: trace OFF — pipeline works, the noise on
+    // the serial console swamps the actual program output. Flip
+    // back to true if a future iter regresses.
+    super::syscall::SYSCALL_TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
 
     // Ensure the MMU is enabled with PRIMARY_L1 before we switch to
     // chromium's cave L1. The cave path assumes MMU is already up (see
