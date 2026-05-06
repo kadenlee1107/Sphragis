@@ -2702,24 +2702,67 @@ fn sys_brk(args: [u64; 6]) -> i64 {
     unsafe {
         if PRIMARY_BRK_HWM == 0 { PRIMARY_BRK_HWM = PRIMARY_BRK_BASE; }
         if requested > PRIMARY_BRK_HWM {
-            // Zero the newly-extended range so user reads can't see stale
-            // kernel data. We zero by USER VA (the cave's mapping makes
-            // EL1 reads via the same VA work).
             let from = PRIMARY_BRK_HWM;
             let to = requested;
             // Sanity: refuse insane growth (>256 MB in one call).
             if to.saturating_sub(from) > (256u64 << 20) {
                 return ENOMEM;
             }
-            let mut p = from;
-            while p < to {
-                core::ptr::write_volatile(p as *mut u8, 0);
-                p += 1;
-                // Yield occasionally so we don't pin the core for huge brks.
-                if (p & 0xFFFF) == 0 {
-                    super::threads::schedule();
+
+            // STUMP #161 iter 18: brk previously assumed the user VA range
+            // was already mapped (relied on the 256-KB scratch zone +
+            // demand-page lazy commit). For brk(0x844000) — which extends
+            // 4 KB BEYOND our 0x840000 scratch zone — the kernel's
+            // byte-by-byte zeroing loop hit an unmapped page, faulted at
+            // EL1 (ec=0x25), and crashed the cave. Now we explicitly
+            // alloc + install_l3_mapping for each newly-extended page.
+            //
+            // Page-align the range outward (rounddown from, roundup to).
+            let from_aligned = from & !0xFFFu64;
+            let to_aligned   = (to + 0xFFF) & !0xFFFu64;
+            // Find the active cave's L1 phys from TTBR0_EL1.
+            let ttbr0: u64;
+            core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0);
+            let l1_phys = ttbr0 & !1u64;
+            // EL0 RW + UXN + PXN flags (no exec).
+            const PAGE_VALID: u64 = 0b11;
+            const PAGE_AF:    u64 = 1 << 10;
+            const PAGE_SH:    u64 = 0b11 << 8;
+            const PAGE_AP_EL0_RW: u64 = 0b01 << 6;
+            const PAGE_PXN:   u64 = 1 << 53;
+            const PAGE_UXN:   u64 = 1 << 54;
+            let flags = PAGE_VALID | PAGE_AF | PAGE_SH
+                | PAGE_AP_EL0_RW | PAGE_PXN | PAGE_UXN;
+            let mut va = from_aligned;
+            while va < to_aligned {
+                // Skip pages that were already pre-mapped by
+                // signal::install_trampoline (the [0x800000, 0x840000)
+                // scratch zone). Re-mapping them would alloc an extra
+                // frame and leak.
+                if va >= 0x0080_0000 && va < 0x0084_0000 {
+                    va += 4096;
+                    continue;
                 }
+                let pg = match crate::kernel::mm::frame::alloc_frame() {
+                    Some(p) => p,
+                    None    => return ENOMEM,
+                };
+                // Zero the freshly-allocated frame so user reads can't
+                // see stale kernel pointers.
+                let p_ptr = pg as *mut u8;
+                for i in 0..4096 {
+                    core::ptr::write_volatile(p_ptr.add(i), 0);
+                }
+                let pa = (pg as u64) & 0x0000_FFFF_FFFF_F000;
+                let entry = pa | flags;
+                if super::demand_page::install_l3_mapping(
+                    l1_phys, va, pa, entry,
+                ).is_err() {
+                    return ENOMEM;
+                }
+                va += 4096;
             }
+
             PRIMARY_BRK_HWM = to;
         }
     }
