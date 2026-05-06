@@ -2826,13 +2826,57 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                     return EINVAL;
                 }
                 let base = node.data_addr + offset;
+                // STUMP #161 iter 28: install per-page L3 mappings for the
+                // entire FB region into the active cave's page table so EL0
+                // writes succeed across the full 5 MB region. Previously we
+                // returned `base` (a phys addr) without mapping; the first
+                // 1 MB happened to alias the cave's identity map but writes
+                // past that faulted.
+                let ttbr0: u64;
+                unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
+                let l1_phys = ttbr0 & !1u64;
+                const PAGE_VALID: u64 = 0b11;
+                const PAGE_AF:    u64 = 1 << 10;
+                const PAGE_SH:    u64 = 0b11 << 8;
+                const PAGE_AP_EL0_RW: u64 = 0b01 << 6;
+                const PAGE_PXN:   u64 = 1 << 53;
+                const PAGE_UXN:   u64 = 1 << 54;
+                let flags = PAGE_VALID | PAGE_AF | PAGE_SH
+                    | PAGE_AP_EL0_RW | PAGE_PXN | PAGE_UXN;
+                let start = base & !0xFFFusize;
+                let end = (base + len + 0xFFF) & !0xFFFusize;
+                let mut va = start;
+                let mut installed = 0u32;
+                let mut failed = 0u32;
+                while va < end {
+                    let pa = (va as u64) & 0x0000_FFFF_FFFF_F000;
+                    let entry = pa | flags;
+                    match super::demand_page::install_l3_mapping(
+                        l1_phys, va as u64, pa, entry,
+                    ) {
+                        Ok(()) => installed += 1,
+                        Err(_) => failed += 1,
+                    }
+                    va += 4096;
+                }
+                uart::puts("[mmap fb0] install_l3 ok=");
+                crate::kernel::mm::print_num(installed as usize);
+                uart::puts(" fail=");
+                crate::kernel::mm::print_num(failed as usize);
+                uart::puts("\n");
+                unsafe {
+                    core::arch::asm!("dsb ishst");
+                    core::arch::asm!("tlbi vmalle1");
+                    core::arch::asm!("dsb ish");
+                    core::arch::asm!("isb");
+                }
                 uart::puts("[mmap] /batos/fb0 → 0x");
                 let hex = b"0123456789abcdef";
                 for shift in (0..16).rev() {
                     let nibble = ((base >> (shift * 4)) & 0xF) as usize;
                     uart::putc(hex[nibble]);
                 }
-                uart::puts("\n");
+                uart::puts(" (mapped EL0 RW)\n");
                 return base as i64;
             }
         }

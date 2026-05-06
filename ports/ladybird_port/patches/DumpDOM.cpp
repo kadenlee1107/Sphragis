@@ -65,7 +65,10 @@ extern void batos_paint_into_surface(
 #include <LibWeb/Platform/FontPlugin.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/PaintingSurface.h>
+#include <fcntl.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 ErrorOr<int> ladybird_main(Main::Arguments arguments);
 
@@ -379,6 +382,82 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     }
     // Sample center pixel
     outln("       center (400,300) = 0x{:08x}", pixels[300 * W + 400]);
+
+    // Step 8 (iter 28): copy the painted bitmap into Bat_OS's
+    // /batos/fb0 shared framebuffer region. The kernel's
+    // chromium_blit kthread polls the seq counter and, when it
+    // changes, copies the damage rect to the virtio-gpu scanout —
+    // which appears in the QEMU window.
+    //
+    // Wire format (from src/batcave/linux/vfs.rs):
+    //   u32 magic        @ 0   ("BFB1")
+    //   u32 version      @ 4
+    //   u32 width        @ 8   (1280, fixed)
+    //   u32 height       @ 12  (1024, fixed)
+    //   u32 stride       @ 16  (5120 bytes)
+    //   u32 format       @ 20  (1 = BGRA8888)
+    //   u32 seq          @ 24  (bump on each new frame)
+    //   u32 last_seen    @ 28
+    //   u32 damage_x/y/w/h @ 32..47
+    //   ...
+    //   pixels           @ 128
+    outln("[8/8] copy bitmap → /batos/fb0...");
+    int fb_fd = open("/batos/fb0", O_RDWR);
+    if (fb_fd < 0) {
+        outln("       open(/batos/fb0) failed");
+        return 0;
+    }
+    constexpr size_t FB_W = 1280;
+    constexpr size_t FB_H = 1024;
+    constexpr size_t off_x = (FB_W - W) / 2;
+    constexpr size_t off_y = (FB_H - H) / 2;
+
+    // Build the full FB image in user RAM (1280x1024 BGRA = 5 MB),
+    // then write() it once. The kernel's ChromiumFb write handler
+    // copies byte-by-byte from our user buffer to the phys region.
+    // This avoids mmap (which can't install L3 entries underneath the
+    // cave's L2 BLOCKs covering the phys region).
+    static u32 fb_image[FB_W * FB_H];
+    // Fill background white.
+    for (size_t i = 0; i < FB_W * FB_H; ++i)
+        fb_image[i] = 0xFFFFFFFFu;
+    // Composite our painted bitmap (alpha-only black on transparent)
+    // onto white.
+    for (size_t y = 0; y < (size_t)H; ++y) {
+        for (size_t x = 0; x < (size_t)W; ++x) {
+            u32 src = pixels[y * W + x];
+            u32 a = (src >> 24) & 0xFF;
+            u8 v = 255 - (u8)a;
+            u32 dst = (0xFFu << 24) | ((u32)v << 16) | ((u32)v << 8) | (u32)v;
+            fb_image[(off_y + y) * FB_W + (off_x + x)] = dst;
+        }
+    }
+
+    // Write all pixel data first at offset 128.
+    lseek(fb_fd, 128, SEEK_SET);
+    ssize_t px_written = write(fb_fd, fb_image, FB_W * FB_H * 4);
+    outln("       pixels written: {} bytes (target {})",
+        px_written, FB_W * FB_H * 4);
+
+    // Update damage rect (offset 32..47, four u32s).
+    u32 damage[4] = { (u32)off_x, (u32)off_y, (u32)W, (u32)H };
+    lseek(fb_fd, 32, SEEK_SET);
+    write(fb_fd, damage, sizeof(damage));
+
+    // Bump the seq counter (offset 24, single u32). The kernel
+    // kthread polls seq with acquire semantics; any change triggers
+    // a damage-rect blit to the virtio-gpu scanout. We assume seq
+    // started at 0 (set by VFS init) and bump to 1.
+    u32 seq_val = 1;
+    lseek(fb_fd, 24, SEEK_SET);
+    write(fb_fd, &seq_val, 4);
+
+    outln("       seq bumped, damage ({},{}) {}x{}", off_x, off_y, W, H);
+    close(fb_fd);
+
+    outln("       /batos/fb0 update sent — kernel kthread should blit");
+    // Give the kthread a moment to pick up the frame before we exit.
+    sleep(2);
     outln("---");
     outln("(parsed + laid out + painted via LibWeb on Bat_OS)");
     return 0;
