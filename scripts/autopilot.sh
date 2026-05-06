@@ -117,6 +117,7 @@ while [[ $iter -lt $MAX_ITERS ]]; do
     # avoids prompts since this is unattended.
     if ! claude --print \
         --session-id "$SESSION_ID" \
+        --effort max \
         --dangerously-skip-permissions \
         --output-format text \
         "$ITER_PROMPT" >"$log" 2>&1; then
