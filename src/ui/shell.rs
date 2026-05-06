@@ -153,6 +153,7 @@ fn execute(cmd: &str) {
         // pointed at a URL.
         "ladybird-js"           => cmd_ladybird_js(parts[1]),
         "ladybird-dump"         => cmd_ladybird_dump(parts[1]),
+        "web"                   => cmd_web(parts[1]),
         "ladybird"              => cmd_ladybird(parts[1], parts[2], parts[3]),
         "dump-dom" | "dom" => cmd_dump_dom(parts[1]),
         "render" => cmd_render(parts[1], &parts),
@@ -3174,6 +3175,247 @@ fn cmd_ladybird_js(expr_in: &str) {
             crate::drivers::uart::puts("\n");
         }
     }
+}
+
+// `web <url>` — Bat_OS thin-client browser. Connects to the Mac-side
+// browser_proxy.py at 10.0.2.2:9100, sends POST /render with the URL,
+// receives BGRA bytes, writes them to /batos/fb0 so the chromium_blit
+// path shows them in the QEMU window.
+//
+// The actual rendering is done by headless Chromium on the Mac. Bat_OS
+// is the display surface — same architecture as a Chromebook talking to
+// a remote Chrome session.
+fn cmd_web(url: &str) {
+    use crate::batcave::linux::vfs;
+    use crate::drivers::display::chromium_blit;
+    use crate::net;
+
+    if url.is_empty() {
+        console::puts("  usage: web <url>\n");
+        console::puts("  e.g.   web https://example.com\n");
+        console::puts("         web https://www.google.com\n");
+        console::puts("  needs: scripts/browser_proxy.py running on Mac at :9100\n");
+        return;
+    }
+
+    // FB region — where we'll paint the result.
+    let (fb_base, fb_size) = vfs::chromium_fb_region();
+    if fb_base == 0 {
+        console::puts("  error: /batos/fb0 not initialised\n");
+        return;
+    }
+    const FB_W: usize = 1280;
+    const FB_H: usize = 1024;
+    const FB_HDR: usize = 128;
+    const FB_PIXELS: usize = FB_W * FB_H * 4; // 5,242,880
+    if fb_size < FB_HDR + FB_PIXELS {
+        console::puts("  error: /batos/fb0 too small\n");
+        return;
+    }
+
+    // Build POST body. The proxy expects:
+    //   POST /render HTTP/1.0
+    //   Host: 10.0.2.2:9100
+    //   Content-Type: application/json
+    //   Content-Length: N
+    //
+    //   {"url":"...","w":1280,"h":1024}
+    //
+    // 256 bytes is more than enough for the JSON.
+    static mut JSON_BUF: [u8; 256] = [0; 256];
+    let mut json_len = 0usize;
+    let json_prefix = b"{\"url\":\"";
+    let json_suffix = b"\",\"w\":1280,\"h\":1024}";
+    let total_json = json_prefix.len() + url.len() + json_suffix.len();
+    if total_json > 256 {
+        console::puts("  error: url too long\n");
+        return;
+    }
+    unsafe {
+        JSON_BUF[..json_prefix.len()].copy_from_slice(json_prefix);
+        json_len += json_prefix.len();
+        JSON_BUF[json_len..json_len + url.len()].copy_from_slice(url.as_bytes());
+        json_len += url.len();
+        JSON_BUF[json_len..json_len + json_suffix.len()].copy_from_slice(json_suffix);
+        json_len += json_suffix.len();
+    }
+
+    // Build request headers.
+    static mut REQ_BUF: [u8; 512] = [0; 512];
+    let mut req_len = 0usize;
+    unsafe {
+        let header_pre = b"POST /render HTTP/1.0\r\nHost: 10.0.2.2:9100\r\nContent-Type: application/json\r\nContent-Length: ";
+        REQ_BUF[..header_pre.len()].copy_from_slice(header_pre);
+        req_len += header_pre.len();
+        // Decimal-format the body length.
+        let mut tmp = [0u8; 12];
+        let mut t = json_len;
+        let mut i = tmp.len();
+        if t == 0 { i -= 1; tmp[i] = b'0'; }
+        while t > 0 { i -= 1; tmp[i] = b'0' + (t % 10) as u8; t /= 10; }
+        REQ_BUF[req_len..req_len + (tmp.len() - i)].copy_from_slice(&tmp[i..]);
+        req_len += tmp.len() - i;
+        let header_post = b"\r\n\r\n";
+        REQ_BUF[req_len..req_len + header_post.len()].copy_from_slice(header_post);
+        req_len += header_post.len();
+        REQ_BUF[req_len..req_len + json_len].copy_from_slice(&JSON_BUF[..json_len]);
+        req_len += json_len;
+    }
+
+    // Connect to 10.0.2.2:9100 (QEMU host gateway).
+    console::puts("  web: POST ");
+    console::puts(url);
+    console::puts(" → 10.0.2.2:9100\n");
+    let host_ip: u32 = (10u32 << 24) | (0u32 << 16) | (2u32 << 8) | 2u32;
+    if let Err(e) = net::tcp::connect(host_ip, 9100) {
+        console::puts("  web: tcp connect: ");
+        console::puts(e);
+        console::puts("\n");
+        return;
+    }
+    let req_slice = unsafe {
+        let p = core::ptr::addr_of!(REQ_BUF) as *const u8;
+        core::slice::from_raw_parts(p, req_len)
+    };
+    if let Err(e) = net::tcp::send_data(req_slice) {
+        console::puts("  web: tcp send: ");
+        console::puts(e);
+        console::puts("\n");
+        net::tcp::close();
+        return;
+    }
+
+    // Receive headers + body. The proxy returns Content-Length: 5242880
+    // followed by 5 MB of BGRA. Read into a static 6 MB pixel buffer
+    // (more than enough). We need to find the \r\n\r\n header/body split
+    // and start writing pixels from there.
+    static mut RX_BUF: [u8; FB_PIXELS_PLUS] = [0; FB_PIXELS_PLUS];
+    const FB_PIXELS_PLUS: usize = 5_500_000; // ~5 MB + header slack
+    let mut rx_total = 0usize;
+    let mut header_end: Option<usize> = None;
+    let mut content_len: usize = 0;
+
+    loop {
+        let mut chunk = [0u8; 8192];
+        match net::tcp::recv_data(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                if rx_total + n > FB_PIXELS_PLUS {
+                    console::puts("  web: response too large\n");
+                    break;
+                }
+                unsafe {
+                    RX_BUF[rx_total..rx_total + n].copy_from_slice(&chunk[..n]);
+                }
+                rx_total += n;
+
+                // If we haven't found the header end yet, look for it.
+                if header_end.is_none() {
+                    for i in 0..rx_total.saturating_sub(3) {
+                        unsafe {
+                            if RX_BUF[i] == b'\r' && RX_BUF[i+1] == b'\n'
+                                && RX_BUF[i+2] == b'\r' && RX_BUF[i+3] == b'\n'
+                            {
+                                header_end = Some(i + 4);
+                                // Also parse Content-Length from headers.
+                                let header_slice = &RX_BUF[..i];
+                                content_len = parse_content_length(header_slice);
+                                console::puts("  web: header end at ");
+                                print_num(i + 4);
+                                console::puts(", content-length=");
+                                print_num(content_len);
+                                console::puts("\n");
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Stop once we have all the bytes the server promised.
+                if let Some(h) = header_end {
+                    if content_len > 0 && rx_total >= h + content_len {
+                        break;
+                    }
+                }
+            }
+            Err(e) => {
+                console::puts("  web: recv: ");
+                console::puts(e);
+                console::puts("\n");
+                break;
+            }
+        }
+    }
+    net::tcp::close();
+
+    let h_end = match header_end {
+        Some(h) => h,
+        None => {
+            console::puts("  web: never found end of HTTP headers\n");
+            return;
+        }
+    };
+    let body_len = rx_total - h_end;
+    console::puts("  web: rx_total=");
+    print_num(rx_total);
+    console::puts(", body=");
+    print_num(body_len);
+    console::puts("\n");
+
+    if body_len < FB_PIXELS {
+        console::puts("  web: body shorter than 5 MB; partial frame\n");
+    }
+    let copy = body_len.min(FB_PIXELS);
+
+    // Write BGRA into the FB region right after the header.
+    let dst = fb_base + FB_HDR;
+    unsafe {
+        for i in 0..copy {
+            let b: u8 = RX_BUF[h_end + i];
+            core::ptr::write_volatile((dst + i) as *mut u8, b);
+        }
+        // Update damage rect: full screen.
+        core::ptr::write_volatile((fb_base + 32) as *mut u32, 0u32);
+        core::ptr::write_volatile((fb_base + 36) as *mut u32, 0u32);
+        core::ptr::write_volatile((fb_base + 40) as *mut u32, FB_W as u32);
+        core::ptr::write_volatile((fb_base + 44) as *mut u32, FB_H as u32);
+        // Bump seq.
+        let cur = core::ptr::read_volatile((fb_base + 24) as *const u32);
+        core::ptr::write_volatile((fb_base + 24) as *mut u32, cur.wrapping_add(1));
+    }
+    let _ = chromium_blit::tick(fb_base);
+    console::puts("  web: frame painted (");
+    print_num(copy);
+    console::puts(" bytes)\n");
+}
+
+fn parse_content_length(headers: &[u8]) -> usize {
+    let needle = b"Content-Length:";
+    let n_len = needle.len();
+    if headers.len() < n_len { return 0; }
+    let mut i = 0;
+    while i + n_len <= headers.len() {
+        let mut m = true;
+        for k in 0..n_len {
+            let a = headers[i + k];
+            let b = needle[k];
+            // Case-insensitive ASCII compare.
+            let al = if a.is_ascii_uppercase() { a + 32 } else { a };
+            let bl = if b.is_ascii_uppercase() { b + 32 } else { b };
+            if al != bl { m = false; break; }
+        }
+        if m {
+            let mut j = i + n_len;
+            while j < headers.len() && (headers[j] == b' ' || headers[j] == b'\t') { j += 1; }
+            let mut v: usize = 0;
+            while j < headers.len() && headers[j].is_ascii_digit() {
+                v = v * 10 + (headers[j] - b'0') as usize;
+                j += 1;
+            }
+            return v;
+        }
+        i += 1;
+    }
+    0
 }
 
 // `ladybird-dump <html_string?>` runs the standalone dump-html-tokens
