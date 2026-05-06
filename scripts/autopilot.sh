@@ -28,6 +28,7 @@ cd "$ROOT"
 DOC="docs/LADYBIRD_AUTOPILOT.md"
 LOG_DIR="logs/autopilot"
 SESSION_ID_FILE=".autopilot-session-id"
+SESSION_STARTED_FILE=".autopilot-session-started"
 mkdir -p "$LOG_DIR"
 
 ITER_DELAY_SECS="${AUTOPILOT_DELAY:-300}"   # 5 min default between fires
@@ -38,7 +39,11 @@ MAX_ITERS="${AUTOPILOT_MAX_ITERS:-50}"      # safety cap; bump if needed
 # autopilot.sh invocations (you can stop and resume the loop).
 if [[ -f "$SESSION_ID_FILE" ]]; then
     SESSION_ID="$(cat "$SESSION_ID_FILE")"
-    echo "[autopilot] resuming existing session: $SESSION_ID"
+    if [[ -f "$SESSION_STARTED_FILE" ]]; then
+        echo "[autopilot] resuming existing session: $SESSION_ID"
+    else
+        echo "[autopilot] session UUID exists but never started: $SESSION_ID"
+    fi
 else
     if command -v uuidgen >/dev/null 2>&1; then
         SESSION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
@@ -114,11 +119,18 @@ while [[ $iter -lt $MAX_ITERS ]]; do
 
     pre_sha="$(git rev-parse HEAD)"
 
-    # Drive claude with --session-id so this session keeps growing.
-    # --print exits after one response. --dangerously-skip-permissions
-    # avoids prompts since this is unattended.
+    # Use --session-id only to CREATE the session on the first fire.
+    # On all subsequent fires (in this run OR in any future re-run),
+    # use --resume which continues the existing session. claude refuses
+    # to reuse --session-id on a session that already exists.
+    if [[ -f "$SESSION_STARTED_FILE" ]]; then
+        SESSION_FLAG_NAME="--resume"
+    else
+        SESSION_FLAG_NAME="--session-id"
+    fi
+
     if ! claude --print \
-        --session-id "$SESSION_ID" \
+        "$SESSION_FLAG_NAME" "$SESSION_ID" \
         --effort max \
         --dangerously-skip-permissions \
         --output-format text \
@@ -132,6 +144,12 @@ while [[ $iter -lt $MAX_ITERS ]]; do
         fi
         sleep "$ITER_DELAY_SECS"
         continue
+    fi
+
+    # First successful fire — mark session as started so future fires
+    # use --resume instead of --session-id.
+    if [[ ! -f "$SESSION_STARTED_FILE" ]]; then
+        touch "$SESSION_STARTED_FILE"
     fi
 
     post_sha="$(git rev-parse HEAD)"
