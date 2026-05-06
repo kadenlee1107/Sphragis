@@ -193,6 +193,20 @@ pub fn tick(base: usize) -> bool {
     if cur == last {
         return false;
     }
+    // STUMP #161 iter 28b: print every blit so we can confirm the kthread
+    // is seeing producer updates. Limit to first 5 events to avoid log
+    // spam if a producer goes wild.
+    {
+        static N: AtomicU32 = AtomicU32::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        if n < 5 {
+            uart::puts("[chromium-blit] tick — seq ");
+            crate::kernel::mm::print_num(last as usize);
+            uart::puts(" → ");
+            crate::kernel::mm::print_num(cur as usize);
+            uart::puts("\n");
+        }
+    }
 
     // If we missed frames (cur > last + 1), count them as dropped. The
     // reader only ever catches up to the latest frame; intermediates are
