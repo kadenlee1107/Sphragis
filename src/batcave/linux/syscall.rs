@@ -3011,6 +3011,27 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         // pages that were RO from EL1 (DFSC=0x0F permission fault
         // inside the kernel).
         if fd_num < 0 {
+            uart::puts("[mmap-anon-fixed] addr=0x");
+            let hex = b"0123456789abcdef";
+            for sh in (0..16).rev() { uart::putc(hex[((addr >> (sh*4)) & 0xF) as usize]); }
+            uart::puts(" len=0x");
+            for sh in (0..16).rev() { uart::putc(hex[((len >> (sh*4)) & 0xF) as usize]); }
+            uart::puts("\n");
+            // STUMP #161 iter 19: MAP_FIXED|MAP_ANON must REPLACE any
+            // prior mapping with fresh zero pages, NOT just walk-and-
+            // zero already-writable pages. Iter 18 result showed
+            // liblagom-js's BSS extension at 0x70_0073_f000-0x70_0074_d690
+            // was being read with the initial-file-mmap's content
+            // (the lib's first 7.4 MB read-only mmap covered the full
+            // memsz). The walk-and-zero loop skipped these pages
+            // because AP[2]=1 (R/O from EL1), so file content remained
+            // and s_vm_count read 0x0d0055e0_0a000000 instead of 0 →
+            // VERIFY(s_vm_count == 0) fired in JS::VM::create.
+            //
+            // New behavior: for every page in the requested range,
+            // alloc + zero + install_l3_mapping with EL0 RW perms.
+            // The TLB flush at the end ensures the EL0 walker drops
+            // the old (R/O file-backed) entry on next access.
             let start = addr & !0xFFFusize;
             let end_raw = match addr.checked_add(len) {
                 Some(v) => v,
@@ -3020,58 +3041,116 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             let ttbr0: u64;
             unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
             let l1_phys = ttbr0 & !1u64;
-            let _g = crate::kernel::sync::IrqGuard::new();
+            const PAGE_VALID: u64 = 0b11;
+            const PAGE_AF:    u64 = 1 << 10;
+            const PAGE_SH:    u64 = 0b11 << 8;
+            const PAGE_AP_EL0_RW: u64 = 0b01 << 6;
+            const PAGE_PXN:   u64 = 1 << 53;
+            const PAGE_UXN:   u64 = 1 << 54;
+            let new_flags = PAGE_VALID | PAGE_AF | PAGE_SH
+                | PAGE_AP_EL0_RW | PAGE_PXN | PAGE_UXN;
+            // Walk page tables ourselves and FORCE-overwrite the L3
+            // entry. demand_page::install_l3_mapping has an idempotency
+            // guard that returns Ok without changing existing valid
+            // entries — for MAP_FIXED|MAP_ANON we explicitly want the
+            // OPPOSITE: replace any prior file-backed mapping with our
+            // fresh anon page.
             let mut va = start;
             while va < end {
-                let l1_idx = ((va >> 30) & 0x1FF) as u64;
+                // Walk: we need L1 valid (table), L2 valid (table) to
+                // get L3 phys. If any are missing, fall back to
+                // install_l3_mapping which builds tables.
+                let l1_idx = ((va as u64 >> 30) & 0x1FF) as u64;
                 let l1e: u64 = unsafe {
                     core::ptr::read_volatile((l1_phys + l1_idx * 8) as *const u64)
                 };
-                if (l1e & 0b11) != 0b11 {
-                    let next_l1 = ((va >> 30) + 1) << 30;
-                    va = next_l1;
-                    continue;
-                }
-                let l2_phys = l1e & 0x0000_FFFF_FFFF_F000;
-                let l2_idx = ((va >> 21) & 0x1FF) as u64;
-                let l2e: u64 = unsafe {
-                    core::ptr::read_volatile((l2_phys + l2_idx * 8) as *const u64)
-                };
-                if (l2e & 0b11) != 0b11 {
-                    // L2 BLOCK (cave's identity-mapped main window)
-                    // or invalid — skip the entire 2 MB.
-                    let next_l2 = ((va >> 21) + 1) << 21;
-                    va = next_l2;
-                    continue;
-                }
-                let l3_phys = l2e & 0x0000_FFFF_FFFF_F000;
-                let l3_idx = ((va >> 12) & 0x1FF) as u64;
-                let l3e: u64 = unsafe {
-                    core::ptr::read_volatile((l3_phys + l3_idx * 8) as *const u64)
-                };
-                // L3e bit[1:0] = 0b11 → page valid.
-                // AP[2] @ bit 7: 0 = R/W from EL1, 1 = R/O from EL1.
-                let valid    = (l3e & 0b11) == 0b11;
-                let writable = (l3e >> 7) & 1 == 0;
-                if valid && writable {
-                    unsafe {
-                        let mut p = va;
-                        let page_end = va + 4096;
-                        while p + 8 <= page_end {
-                            core::ptr::write_volatile(p as *mut u64, 0);
-                            p += 8;
+                let l3_phys_table: u64;
+                if (l1e & 0b11) == 0b11 {
+                    let l2_phys_table = l1e & 0x0000_FFFF_FFFF_F000;
+                    let l2_idx = ((va as u64 >> 21) & 0x1FF) as u64;
+                    let l2e: u64 = unsafe {
+                        core::ptr::read_volatile((l2_phys_table + l2_idx * 8) as *const u64)
+                    };
+                    if (l2e & 0b11) == 0b11 {
+                        l3_phys_table = l2e & 0x0000_FFFF_FFFF_F000;
+                    } else {
+                        // L2 entry missing or block — fall back to
+                        // install_l3_mapping so it builds tables.
+                        let pg = match crate::kernel::mm::frame::alloc_frame() {
+                            Some(p) => p,
+                            None    => return ENOMEM,
+                        };
+                        unsafe {
+                            let p_ptr = pg as *mut u8;
+                            for i in 0..4096 {
+                                core::ptr::write_volatile(p_ptr.add(i), 0);
+                            }
                         }
-                        let mut line = va as u64;
-                        let line_end = line + 4096;
-                        while line < line_end {
-                            core::arch::asm!("dc civac, {a}", a = in(reg) line);
-                            line += 64;
+                        let pa = (pg as u64) & 0x0000_FFFF_FFFF_F000;
+                        let entry = pa | new_flags;
+                        let _ = super::demand_page::install_l3_mapping(
+                            l1_phys, va as u64, pa, entry,
+                        );
+                        va += 4096;
+                        continue;
+                    }
+                } else {
+                    let pg = match crate::kernel::mm::frame::alloc_frame() {
+                        Some(p) => p,
+                        None    => return ENOMEM,
+                    };
+                    unsafe {
+                        let p_ptr = pg as *mut u8;
+                        for i in 0..4096 {
+                            core::ptr::write_volatile(p_ptr.add(i), 0);
                         }
                     }
+                    let pa = (pg as u64) & 0x0000_FFFF_FFFF_F000;
+                    let entry = pa | new_flags;
+                    let _ = super::demand_page::install_l3_mapping(
+                        l1_phys, va as u64, pa, entry,
+                    );
+                    va += 4096;
+                    continue;
+                }
+                // L3 page table exists. Force-write the entry.
+                let l3_idx = ((va as u64 >> 12) & 0x1FF) as u64;
+                let l3_ent_addr = l3_phys_table + l3_idx * 8;
+                let pg = match crate::kernel::mm::frame::alloc_frame() {
+                    Some(p) => p,
+                    None    => return ENOMEM,
+                };
+                unsafe {
+                    let p_ptr = pg as *mut u8;
+                    for i in 0..4096 {
+                        core::ptr::write_volatile(p_ptr.add(i), 0);
+                    }
+                    let mut line = pg as u64;
+                    let end_line = line + 4096;
+                    while line < end_line {
+                        core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                        line += 64;
+                    }
+                    core::arch::asm!("dsb ish");
+                }
+                let pa = (pg as u64) & 0x0000_FFFF_FFFF_F000;
+                let entry = pa | new_flags;
+                unsafe {
+                    core::ptr::write_volatile(l3_ent_addr as *mut u64, entry);
+                    core::arch::asm!("dc civac, {a}", a = in(reg) l3_ent_addr);
+                    core::arch::asm!("dsb ishst");
+                    core::arch::asm!("tlbi vaae1is, {a}", a = in(reg) (va as u64) >> 12);
                 }
                 va += 4096;
             }
-            unsafe { core::arch::asm!("dsb sy"); }
+            // Sledgehammer TLB flush so old entries (e.g. the initial
+            // file-backed R/O mapping that covered this VA) are dropped.
+            unsafe {
+                core::arch::asm!("dsb ishst");
+                core::arch::asm!("tlbi vmalle1");
+                core::arch::asm!("dsb ish");
+                core::arch::asm!("isb");
+            }
         }
         return addr as i64;
     }
