@@ -66,6 +66,10 @@ args = [
     "-initrd", str(INITRD),
     "-device", "virtio-gpu-device",
     "-device", "virtio-keyboard-device",
+    # Networking: QEMU user-mode slirp. 10.0.2.2 = Mac host, so the
+    # `web <url>` command can reach scripts/browser_proxy.py on :9100.
+    "-netdev", "user,id=net0",
+    "-device", "virtio-net-device,netdev=net0",
 ]
 
 print("[ladybird-window] launching QEMU with virtio-gpu")
