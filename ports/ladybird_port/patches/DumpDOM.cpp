@@ -43,15 +43,28 @@
 #include <LibWeb/HTML/Parser/HTMLToken.h>
 #include <LibWeb/HTML/Parser/HTMLTokenizer.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
+#include <LibWeb/HTML/PaintConfig.h>
 #include <LibWeb/Layout/Box.h>
 #include <LibWeb/Layout/Node.h>
 #include <LibWeb/Layout/Viewport.h>
 #include <LibWeb/Loader/FileRequest.h>
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/Page/InputEvent.h>
+#include <LibWeb/Painting/DisplayList.h>
 #include <LibWeb/Painting/PaintableBox.h>
+#include <LibWeb/Painting/ScrollFrame.h>
+#include <LibWeb/Painting/ViewportPaintable.h>
+
+// Defined in PaintShim.cpp (same compile unit can't link DisplayListPlayerSkia
+// because it has hidden visibility in liblagom-web.so).
+extern void batos_paint_into_surface(
+    Web::Painting::DisplayList&,
+    Web::Painting::ScrollStateSnapshot const&,
+    RefPtr<Gfx::PaintingSurface>);
 #include <LibWeb/Platform/EventLoopPlugin.h>
 #include <LibWeb/Platform/FontPlugin.h>
+#include <LibGfx/Bitmap.h>
+#include <LibGfx/PaintingSurface.h>
 #include <string.h>
 
 ErrorOr<int> ladybird_main(Main::Arguments arguments);
@@ -308,10 +321,65 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         outln("---");
         dump_layout_node(*viewport, 0);
         outln("---");
-        outln("(parsed + laid out via LibWeb on Bat_OS)");
     } else {
         outln("       (no layout_node — update_layout may have skipped)");
         outln("(parsed via Web::HTML::HTMLParser on Bat_OS)");
+        return 0;
     }
+
+    // Step 7 (iter 27): paint to a CPU Skia surface backed by a Bitmap,
+    // then count non-zero pixels as proof the paint actually happened.
+    outln("[7/7] record_display_list + DisplayListPlayerSkia.execute...");
+    constexpr int W = 800;
+    constexpr int H = 600;
+    auto bitmap = MUST(Gfx::Bitmap::create(Gfx::BitmapFormat::BGRA8888,
+        Gfx::AlphaType::Premultiplied, Gfx::IntSize { W, H }));
+    auto surface = Gfx::PaintingSurface::wrap_bitmap(*bitmap);
+
+    auto display_list = document->record_display_list(Web::HTML::PaintConfig {});
+    if (!display_list) {
+        outln("       (record_display_list returned null)");
+        return 0;
+    }
+    outln("       display list recorded");
+
+    Web::Painting::ScrollStateSnapshot scroll_state {};
+    batos_paint_into_surface(*display_list, scroll_state, surface);
+    outln("       paint complete");
+
+    // Count any non-zero pixels (alpha + RGB). Also sample a few
+    // specific points and the first non-zero one, so we can tell
+    // "wrap didn't bind" from "paint truly produced nothing".
+    size_t painted = 0;
+    size_t nonzero_alpha = 0;
+    u32 first_nonzero = 0;
+    int first_x = -1, first_y = -1;
+    auto* pixels = bitmap->begin();
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            u32 px = pixels[y * W + x];
+            if (px != 0) {
+                painted++;
+                if (first_x < 0) {
+                    first_x = x;
+                    first_y = y;
+                    first_nonzero = px;
+                }
+            }
+            if ((px & 0xFF000000) != 0) nonzero_alpha++;
+        }
+    }
+    outln("       any non-zero: {} / {}    alpha-set: {} / {}",
+        painted, W * H, nonzero_alpha, W * H);
+    if (first_x >= 0) {
+        outln("       first non-zero @ ({},{}) = 0x{:08x}",
+            first_x, first_y, first_nonzero);
+    } else {
+        outln("       (bitmap is fully zero — wrap didn't bind OR paint had no commands)");
+    }
+    // Sample center pixel
+    outln("       center (400,300) = 0x{:08x}", pixels[300 * W + 400]);
+    outln("---");
+    outln("(parsed + laid out + painted via LibWeb on Bat_OS)");
     return 0;
 }

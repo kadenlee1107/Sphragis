@@ -50,3 +50,4 @@ macos_dump/SystemKernelExtensions.kc
 /ports/chromium_port/out/
 .autopilot-session-id
 .autopilot-session-started
+ports/ladybird_port/out/lib/liblagom-*.so*
