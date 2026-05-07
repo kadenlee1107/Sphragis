@@ -328,8 +328,9 @@ pub fn content_rect_secondary() -> WindowRect { pane_rect(1) }
 ///   * Title bar 24px: brand block (132px) | tab strip (9 × 64px,
 ///     centered between brand and cave) | cave block (168px right).
 ///   * Content area: hairline top + bottom, apps own internal layout.
-///   * Status bar 28px: 5 live-state segments (ENCRYPTED · NET · TLS
-///     · JS · AUDIT) + right-aligned uptime.
+///   * Status bar 28px: 4 segments (ENCRYPTED · NET · TLS const ·
+///     AUDIT) + right-aligned uptime. TLS is a constant LOCK/PQ
+///     indicator per DESIGN_TLS_HARDENING.md.
 pub fn draw_frame() {
     let w = gpu::width();
     let h = gpu::height();
@@ -496,13 +497,10 @@ fn draw_status_bar(fb: *mut u32, w: u32, sy: u32) {
     let net_color = if net_ok { INK } else { RED };
     x = draw_status_segment(fb, w, x, sy, "NET", Some(net_value), net_color, None);
 
-    let mode = crate::net::tls_pinning::current_mode();
-    let (tls_label, tls_color) = match mode {
-        crate::net::tls_pinning::Mode::Lockdown => ("LOCKDOWN", CYAN),
-        crate::net::tls_pinning::Mode::Research => ("RESEARCH", AMBER),
-        crate::net::tls_pinning::Mode::Open     => ("OPEN",     RED),
-    };
-    x = draw_status_segment(fb, w, x, sy, "TLS", Some(tls_label), tls_color, None);
+    // TLS posture is a constant per DESIGN_TLS_HARDENING.md:
+    // chain-only strict, hybrid PQ on, no mode toggle.
+    let tls_label = "LOCK/PQ";
+    x = draw_status_segment(fb, w, x, sy, "TLS", Some(tls_label), CYAN, None);
 
     let audit_count = crate::security::audit::count();
     let mut audit_buf = [0u8; 24];
