@@ -1179,7 +1179,6 @@ fn reset_all_globals_for_cave_switch() {
     crate::batcave::linux::stdio_ring::reset_for_cave_switch();
     crate::net::psk_overlay::reset_for_cave_switch();
     crate::net::dns::reset_for_cave_switch();
-    crate::drivers::display::chromium_blit::reset_for_cave_switch();
 
     // ROOT 2 V9-re-audit additions — threads table, ARP cache.
     // Each was a cross-cave leak the first pass missed.

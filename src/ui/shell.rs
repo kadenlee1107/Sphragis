@@ -2977,59 +2977,6 @@ fn cmd_run_elf(name: &str) {
     }
 }
 
-/// `chromium [flags] <url>` — launch the baked content_shell blob.
-///
-/// Flags (all optional, all default on):
-///   --headless           run without any windowing backend
-///   --no-sandbox         disable the Linux sandbox (required — we
-///                        have no seccomp / userns to satisfy it)
-///   --disable-gpu        force SwRaster / SwiftShader path
-///   --window-size=WxH    default 1280x1024
-///
-/// Positional: the URL. Because `split_cmd` yields only 4 slots, we
-/// accept up to three flag tokens; any extra flags go on the URL
-/// (Chromium is forgiving about stray `--foo` mid-argv).
-// STUMP #160 iter 6: minimal-init smoke. Runs content_shell with
-// `--version` only. content_shell parses --version in
-// content_main_runner_impl.cc::ContentMainRunnerImpl::Initialize()
-// extremely early — before SequenceManager bootstraps the worker
-// pool, before NetworkService init, before everything that's been
-// hanging dump-dom. If this prints "Content Shell N.N.N.N" we know
-// our pipeline (boot → ELF load → glibc init → ContentMain →
-// printf → _exit) is solid end-to-end; the dump-dom blocker is
-// renderer-specific. If THIS hangs, we have a much deeper problem.
-
-// ──────────────────────── Ladybird (port/ladybird) ──────────────────
-//
-// STUMP #161: Ladybird browser as an alternative to the Chromium port.
-// Reuses the same in-cave dynamic-load pipeline (load_archive_multi
-// + per-cave page table + glibc TLS init), so most of the kernel-side
-// work the Chromium port shook out applies directly. What differs:
-//
-//   * Initrd content: ports/ladybird_port/out/ baked via
-//     tools/bake_ladybird_initrd.sh into ladybird_initrd.bin.
-//   * Argv shape: Ladybird CLIs take simple positional args, not the
-//     mountain of --feature-gate flags Chromium needs.
-//   * No V8 sandbox cage / no Mojo IPC, so we don't need
-//     --js-flags='--no-enable-sandbox' or --use-gl=stub equivalents.
-//
-// `ladybird-js <expr>` runs the LibJS CLI as a smoke test (smallest
-// possible Ladybird binary — exercises ELF load → glibc init → AK →
-// LibJS → printf → exit). If this prints "1\n" for `ladybird-js 1+0`,
-// our pipeline can host Ladybird's libs end-to-end.
-//
-// `ladybird <url>` runs WebContent pointed at the URL (TBD — needs
-// IPC plumbing to a UI process or headless mode flag).
-
-// `web <url>` — Bat_OS thin-client browser. Connects to the Mac-side
-// browser_proxy.py at 10.0.2.2:9100, sends POST /render with the URL,
-// receives BGRA bytes, writes them to /batos/fb0 so the chromium_blit
-// path shows them in the QEMU window.
-//
-// The actual rendering is done by headless Chromium on the Mac. Bat_OS
-// is the display surface — same architecture as a Chromebook talking to
-// a remote Chrome session.
-
 fn parse_content_length(headers: &[u8]) -> usize {
     let needle = b"Content-Length:";
     let n_len = needle.len();

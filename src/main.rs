@@ -332,10 +332,6 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
                 batcave::linux::vfs::init();
             }
 
-            // Chromium → kernel blit bridge. Idempotent; logs and skips if
-            // /batos/fb0 isn't present (e.g. VFS allocation failed).
-            drivers::display::chromium_blit::start();
-
             // ═══════════════════════════════════════
             // AUTHENTICATION GATE — must pass to proceed
             // ═══════════════════════════════════════
