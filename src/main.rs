@@ -5,7 +5,6 @@ extern crate alloc;
 
 mod batcave;
 mod boot;
-mod browser;
 mod crypto;
 mod drivers;
 mod fs;
