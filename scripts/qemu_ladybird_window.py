@@ -60,12 +60,34 @@ args = [
     "-machine", "virt,gic-version=3",
     "-cpu", "host",
     "-m", "4G",
-    "-display", f"{display},show-cursor=on",
+    # Windowed mode — cocoa fullscreen+zoom-to-fit appears to tile
+    # the virtio-gpu surface visually on some macOS configs (user
+    # reports doubled chrome on the WB tab even though the kernel
+    # only renders ONE pane). Sticking to windowed avoids that path
+    # entirely.
+    "-display", f"{display},show-cursor=on,full-screen=off",
+    # QMP socket so we can take screendumps from QEMU's POV (bypasses
+    # cocoa entirely) — useful for debugging "what's actually in the
+    # virtio-gpu surface" vs "what cocoa is showing on screen".
+    "-qmp", "unix:/tmp/batos-qmp.sock,server,nowait",
     "-serial", "mon:stdio",
     "-kernel", str(KERNEL_BIN),
     "-initrd", str(INITRD),
+    # No xres/yres override — let the kernel use whatever virtio-gpu
+    # advertises in DISPLAY_INFO. With xres=1920,yres=1080 we observed
+    # the kernel rendering at 1920×1080 layout while the actual
+    # virtio-gpu scanout was a smaller surface (QMP screendump returned
+    # 640×480), causing the visible doubled-chrome bug.
     "-device", "virtio-gpu-device",
     "-device", "virtio-keyboard-device",
+    # virtio-tablet: keyboard works (incl. arrows, Tab, Enter,
+    # Backspace), cursor stays visible, but mouse CLICKS don't fire
+    # on QEMU 10's cocoa display — we traced and saw zero EV_ABS or
+    # BTN_LEFT events. Trade-off: keyboard-driven navigation works
+    # cleanly. Iter 2 plan is a Mac-side input bridge (host Quartz
+    # → POST /click) to unblock real mouse interaction without
+    # touching cocoa's broken EV_ABS path.
+    "-device", "virtio-tablet-device",
     # Networking: QEMU user-mode slirp. 10.0.2.2 = Mac host, so the
     # `web <url>` command can reach scripts/browser_proxy.py on :9100.
     "-netdev", "user,id=net0",
