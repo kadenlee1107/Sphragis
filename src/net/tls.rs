@@ -991,66 +991,7 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
                                 uart::puts("[tls] cert chain ok (x509)\n");
                             }
                             crate::net::x509::VerifyOutcome::Err(e) => {
-                                let _ = e;
-                                // V5-CHAIN-001 / V5-CRYPTO-001: even on
-                                // chain failure, ALWAYS extract the leaf
-                                // SPKI so the CertificateVerify step can
-                                // check the peer actually holds the key.
-                                // Before this, fallback paths left
-                                // peer_spki_len=0 and CertificateVerify
-                                // was silently skipped = full MITM bypass.
-                                // V11-FRESH-EYES: use leaf_info_with_host so a
-                                // cert validly issued for host A cannot be
-                                // used against host B via the pin-only
-                                // fallback path. Previously the fallback
-                                // path didn't re-check hostname at all —
-                                // latent MITM risk if STRICT_MODE ever
-                                // flipped to false (e.g. dev builds).
-                                match crate::net::x509::leaf_info_with_host(leaf, host) {
-                                    Ok((spki, alg)) => {
-                                        sess.peer_spki_len = spki.len().min(sess.peer_spki.len());
-                                        sess.peer_spki[..sess.peer_spki_len]
-                                            .copy_from_slice(&spki[..sess.peer_spki_len]);
-                                        sess.peer_pubkey_alg = alg as u8;
-                                    }
-                                    Err(_) => {
-                                        return Err("TLS: leaf cert unparseable or hostname mismatch");
-                                    }
-                                }
-                                // V5-WEIRD uart-leak fix: do not distinguish
-                                // x509-fail vs pin-ok via log timing. Same
-                                // single log line for both outcomes.
-                                match crate::net::tls_pinning::check_cert(host, leaf) {
-                                    crate::net::tls_pinning::PinDecision::Match => {
-                                        tdbg("[tls] leaf accepted (pin)\n");
-                                    }
-                                    crate::net::tls_pinning::PinDecision::Mismatch => {
-                                        // STUMP #101: Open mode logs and proceeds on mismatch.
-                                        // Lockdown / Research both abort.
-                                        if crate::net::tls_pinning::current_mode()
-                                            == crate::net::tls_pinning::Mode::Open
-                                        {
-                                            uart::puts("[tls] WARN: cert pin MISMATCH but mode=Open — accepting anyway\n");
-                                        } else {
-                                            return Err("TLS: cert pin mismatch (MITM?)");
-                                        }
-                                    }
-                                    crate::net::tls_pinning::PinDecision::NoPin => {
-                                        // Lockdown rejects unpinned hosts. Research
-                                        // and Open allow them through with a log.
-                                        match crate::net::tls_pinning::current_mode() {
-                                            crate::net::tls_pinning::Mode::Lockdown => {
-                                                return Err("TLS: no pin / bad chain (lockdown)");
-                                            }
-                                            crate::net::tls_pinning::Mode::Research => {
-                                                tdbg("[tls] leaf accepted (no pin, mode=Research)\n");
-                                            }
-                                            crate::net::tls_pinning::Mode::Open => {
-                                                tdbg("[tls] leaf accepted (no pin, mode=Open)\n");
-                                            }
-                                        }
-                                    }
-                                }
+                                return Err(e.as_static_str());
                             }
                         }
                     }
