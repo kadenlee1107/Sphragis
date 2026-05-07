@@ -11,6 +11,146 @@ end of a session.
 
 ---
 
+## 2026-05-07 (later still) — Mac — 🔒 TLS HARDENING: chain-only strict, no mode toggles
+
+**Second thread of the day.** With the no-browser pivot landed in PR #1
+on `feat/js-engine-browser-posix` (squash commit `457c843c`), the
+priority list went: TLS X.509 wiring → scheduler → captures cleanup.
+Started TLS today.
+
+**Re-framing surprise.** The roadmap framed this as "validators imported
+but not wired into the live HTTPS path" — turned out to be wrong. The
+validators in `src/net/x509.rs` (`verify_chain`, 5 embedded CA roots,
+ECDSA-P256/P384 + RSA-PKCS1v15 + RSA-PSS, constant-time hostname
+check) were already wired into `tls.rs`. The actual gap was a
+**backdoor**: `fetch.rs::ResearchModeGuard::relax_for_renderer` flipped
+`Mode::Lockdown → Research` and disabled hybrid PQ for the duration of
+every HTTPS fetch, and `tls.rs`'s chain-fail branch fell back to
+`tls_pinning::check_cert` and **accepted unpinned hosts in
+Research/Open mode**. The live HTTPS path was structurally honest only
+when nothing called it; once a renderer triggered the guard the whole
+chain validation became a no-op.
+
+The no-browser pivot deleted every external HTTPS caller (`cmd_render`,
+`cmd_dump_dom`, `browser_proxy`, etc.). With zero live consumers and
+the alternate-trust apparatus exposed, the right move was to delete it
+all while it was still removable without breaking any caller.
+
+**Decisions locked in via brainstorming → spec → plan flow:**
+- Chain-only strict: `verify_chain` Err → handshake aborts with the
+  verifier's specific reason. No pin fallback.
+- HTTPS-only fetch surface: `fetch_url`, `fetch_http`, `fetch_post_url`,
+  `fetch_post_http` deleted. Plain HTTP becomes a deliberate non-feature.
+- Hybrid PQ on by default. `TLS_HYBRID_ENABLED_FLAG` already inits to
+  `true`; the `ResearchModeGuard` was the only thing flipping it.
+- No pinning machinery in tree. `tls_pinning.rs` deleted whole. The
+  `Mode` enum (Lockdown/Research/Open) ceases to be a kernel-wide concept.
+- WM TLS pill becomes a non-interactive constant `LOCK/PQ` indicator.
+
+**Strategy doc** (`DESIGN_TLS_HARDENING.md`, 268 lines, commit
+`fe981fcd`) and **plan doc** (`docs/PLAN_TLS_HARDENING.md`, 1,232 lines,
+commit `47b49c0b`) both committed before any deletion landed.
+
+### Tag for git revival
+
+Before any deletion landed: **`pre-tls-hardening-2026-05-07`** at commit
+`47b49c0b`. The full pre-deletion state (the entire `tls_pinning.rs`
+module, `ResearchModeGuard`, all four orphan fetch helpers, the
+mode-toggle UX) is recoverable from there forever.
+
+### Phases that ran
+
+Nine commits (`6c64b739`..`f506e4a2`) on `feat/tls-hardening`:
+
+1. **Phase 1** (`6c64b739`) — `VerifyError::as_static_str` added.
+   Maps each of 9 variants to a debug-friendly `"TLS: chain
+   validation failed: <reason>"` static string. Purely additive.
+2. **Phase 2** (`313930d0`) — `tls.rs`'s chain-fail block collapsed
+   from ~62 lines (leaf SPKI re-extract, `tls_pinning::check_cert`
+   cascade, mode-conditional Research/Open acceptance) to 3 lines:
+   `return Err(e.as_static_str());`. No fallback paths.
+3. **Phase 3** (`27532923`) — Deleted `ResearchModeGuard` (struct +
+   impls + Drop) and the four orphan fetch helpers (`fetch_url`,
+   `fetch_http`, `fetch_post_url`, `fetch_post_http`). Plan missed
+   that `fetch_https`/`fetch_post_https` themselves still called
+   `relax_for_renderer()` — those call sites cleaned up in the same
+   commit. Module-level comment refreshed to describe the new posture.
+4. **Phase 4** (`32eb8dda`) — `tls-mode` shell command + `cmd_tls_mode`
+   deleted (~41 LOC). With strict-only TLS, the user-toggleable
+   Lockdown/Research/Open switch loses meaning.
+5. **Phase 5** (`d5e1afb4`) — WM TLS pill: replaced the runtime
+   `match crate::net::tls_pinning::current_mode()` with a constant
+   `"LOCK/PQ"` label in CYAN. Status-bar comment updated to reflect
+   4 segments instead of the prior 5 (the JS pill went with the
+   browser).
+6. **Phase 6** (`437d7e20`) — `net/mod.rs` boot-status block: the
+   "TRUST_STORE empty + PINS empty = encrypted-but-not-authenticated"
+   warning replaced with a single line: `[tls] trust store: N CA
+   roots, chain-only auth, hybrid PQ on`. Empty-store case still
+   warns ("HTTPS will refuse all peers").
+7. **Phase 7** (`2d59409e`) — `git rm src/net/tls_pinning.rs` (167
+   LOC). `pub mod tls_pinning;` removed from `src/net/mod.rs`. The
+   final grep caught two zombie callers the plan had missed:
+   `src/ui/apps/security.rs` (a TLS-1.3 KV row with the same
+   3-mode match) and `src/ui/apps/dashboard.rs` (an orphaned `let
+   mode = current_mode()` followed by `let _ = (mode, net_ok)`);
+   both converted in this commit.
+8. **Phase 8** (`b776835a`) — `cmd_x509_selftest` added. Two
+   deterministic sub-tests: hostname-mismatch (trusted root with
+   wrong host → expect `Err(HostnameMismatch)`) and bad-bytes
+   (truncated DER → expect `Err(Parse)`). Each verifies the
+   `as_static_str` output contains the expected debug substring.
+   Wired via `"x509-selftest" => cmd_x509_selftest()` shell dispatch.
+9. **Phase 9** (`f506e4a2`) — `qemu_boot_smoke.py` gains a new
+   required marker for the boot-status line:
+   `[tls] trust store: \d+ CA roots, chain-only auth, hybrid PQ on`.
+   Smoke run against the post-hardening kernel: PASS. The new line
+   appeared as `  [tls] trust store: 5 CA roots, chain-only auth,
+   hybrid PQ on` in serial output.
+
+### Total damage
+
+**584 lines deleted, 126 added** across 9 commits (`pre-tls-
+hardening-2026-05-07..HEAD`). 1 file deleted (`tls_pinning.rs`), 7
+modified (`tls.rs`, `x509.rs`, `fetch.rs`, `net/mod.rs`, `wm.rs`,
+`shell.rs`, `qemu_boot_smoke.py`), plus 2 unanticipated zombie
+callers fixed alongside Phase 7 (`security.rs`, `dashboard.rs`).
+
+Warnings: 222 → 216 in release build, 185 → 179 in cargo check.
+
+### State of tree
+
+- `feat/tls-hardening` HEAD is `f506e4a2`. Branch ready for PR
+  against `feat/js-engine-browser-posix`.
+- HTTPS posture: strict X.509 chain validation against `TRUST_STORE`
+  (5 CA roots), hybrid PQ on, no mode toggle, no pin fallback. Any
+  `VerifyError` aborts the handshake with a specific reason.
+- Surviving fetch API: `fetch_https`, `fetch_post_https`. No HTTP
+  helpers, no URL dispatchers.
+- WM status bar: 4 segments (ENCRYPTED · NET · TLS const · AUDIT) +
+  uptime. TLS pill is constant `LOCK/PQ`.
+- Boot smoke: 5 required markers (BatCave, network, virtio-gpu,
+  BatFS, TLS trust-store). PASSES.
+- New shell command: `x509-selftest`. Manual run inside booted
+  Bat_OS validates hostname-mismatch + bad-bytes paths.
+
+### Acceptance grep
+
+```bash
+rg 'tls_pinning|cmd_tls_mode|fetch_url|fetch_http\b|fetch_post_url|fetch_post_http\b|ResearchModeGuard' src
+```
+Returns empty.
+
+### Next
+
+Per the priority order: scheduler `block_on()` (futex/epoll spin
+replacement), then captures cleanup. Both queued for follow-up
+threads after PR #2 (this work) merges.
+
+🦇
+
+---
+
 ## 2026-05-07 (later) — Mac — 🔥 NO-BROWSER PIVOT: hard-deleted ~30 KLOC + ~2.5 GB
 
 **The big call.** Kaden chose to redefine Bat_OS's identity:
