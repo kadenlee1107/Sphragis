@@ -1,26 +1,18 @@
-// Bat_OS — minimal HTTP/1.0 + HTTPS fetch helpers for the renderer.
-//
-// Used by `cmd_render` to resolve `<link rel="stylesheet" href="...">`
-// and remote `<img src="...">` references at render time, and to render
-// from a live URL directly.
+// Bat_OS — HTTPS fetch helpers (chain-only strict).
 //
 // API surface:
 //   parse_url(url) -> Option<(scheme, host, port, path)>
-//   fetch_url(url, out) -> Result<usize, &'static str>     // dispatches by scheme
-//   fetch_http(url, out) -> Result<usize, &'static str>    // plain HTTP
-//   fetch_https(url, out) -> Result<usize, &'static str>   // HTTPS (TLS 1.3)
+//   fetch_https(url, out) -> Result<usize, &'static str>
+//   fetch_post_https(url, body, out) -> Result<usize, &'static str>
+//
+// All HTTPS goes through fetch_https / fetch_post_https. Strict
+// chain validation against TRUST_STORE; hybrid PQ on; no fallback
+// trust paths. See DESIGN_TLS_HARDENING.md.
 //
 // Uses the legacy single-PCB TCP path (`net::tcp::connect / send_data /
 // recv_data / close`) which already does its own poll_once loop and
 // timeout. We do NOT keep state across calls — every fetch is one
-// connect / one (TLS hello +) GET / one drain / close.
-//
-// HTTPS note (STUMP #94): we run with `tls_pinning::is_strict()` set
-// to false for the duration of a renderer fetch, so unpinned hosts
-// (which is essentially everyone — PINS ships empty) connect anyway.
-// This means the HTTPS pipe is encrypted but NOT authenticated; the
-// renderer is opt-in best-effort, not a security boundary. Production
-// caves keep strict mode on.
+// connect / one TLS hello + GET (or POST) / one drain / close.
 
 use super::{dns, tcp, tls};
 
@@ -51,35 +43,6 @@ fn note_drain_capped(scheme: &str) {
             &buf[..p],
         );
         crate::drivers::uart::puts("[fetch] WARNING: 256 KB body cap reached - response truncated\n");
-    }
-}
-
-/// STUMP #111 (audit H019): RAII guard that restores
-/// `tls_pinning::Mode` + `tls::set_hybrid_enabled` on drop. Pre-fix,
-/// every fetch_https / fetch_post_https Err path manually called
-/// `set_mode(prev) + set_hybrid_enabled(prev)` — a panic in the
-/// middle would skip the restore and leave the kernel stuck in
-/// `Research` mode forever. With this guard, even a panic-unwind
-/// (when we get one) restores cleanly.
-struct ResearchModeGuard {
-    prev_mode: super::tls_pinning::Mode,
-    prev_hybrid: bool,
-}
-
-impl ResearchModeGuard {
-    fn relax_for_renderer() -> Self {
-        let prev_mode = super::tls_pinning::current_mode();
-        let prev_hybrid = tls::hybrid_enabled();
-        super::tls_pinning::set_mode(super::tls_pinning::Mode::Research);
-        tls::set_hybrid_enabled(false);
-        ResearchModeGuard { prev_mode, prev_hybrid }
-    }
-}
-
-impl Drop for ResearchModeGuard {
-    fn drop(&mut self) {
-        super::tls_pinning::set_mode(self.prev_mode);
-        tls::set_hybrid_enabled(self.prev_hybrid);
     }
 }
 
@@ -132,35 +95,6 @@ pub fn parse_url(url: &str) -> Option<(&'static str, &str, u16, &str)> {
     Some((scheme, host, port, path))
 }
 
-/// Scheme-dispatched fetch. Renderer call site.
-pub fn fetch_url(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
-    let (scheme, _, _, _) = parse_url(url).ok_or("bad URL")?;
-    let result = match scheme {
-        "https" => fetch_https(url, out),
-        _       => fetch_http(url, out),
-    };
-    // STUMP #103 — Sprint 2.3: log every URL fetch (success or fail)
-    // to the audit ring. Result tag is appended so the operator can
-    // see at a glance which URLs succeeded.
-    let mut buf = [0u8; 192];
-    let mut p = 0;
-    p += copy_audit(&mut buf[p..], b"GET ");
-    p += copy_audit(&mut buf[p..], url.as_bytes());
-    match &result {
-        Ok(n) => {
-            p += copy_audit(&mut buf[p..], b" OK ");
-            p += write_dec(&mut buf[p..], *n);
-            p += copy_audit(&mut buf[p..], b"B");
-        }
-        Err(e) => {
-            p += copy_audit(&mut buf[p..], b" FAIL ");
-            p += copy_audit(&mut buf[p..], e.as_bytes());
-        }
-    }
-    crate::security::audit::record(crate::security::audit::Category::Fetch, &buf[..p]);
-    result
-}
-
 fn copy_audit(dst: &mut [u8], src: &[u8]) -> usize {
     let n = src.len().min(dst.len());
     dst[..n].copy_from_slice(&src[..n]);
@@ -177,179 +111,6 @@ fn write_dec(dst: &mut [u8], mut v: usize) -> usize {
     n
 }
 
-/// Best-effort `GET <path> HTTP/1.0` fetch. Writes the response BODY
-/// (status + headers stripped) into `out`, returns the body length.
-///
-/// Caller-supplied buffer; the function will fill at most `out.len()`
-/// bytes and return the actual length. Anything beyond is dropped on
-/// the floor — for stylesheet/image use-cases we cap with the size of
-/// `doc.css_text` / the img_pool slot.
-///
-/// Errors are stringly-typed so the renderer can log them without
-/// pulling in a richer error type.
-pub fn fetch_http(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
-    let (scheme, host, port, path) = parse_url(url).ok_or("bad URL")?;
-    if scheme != "http" { return Err("fetch_http: not http URL"); }
-
-    // 10.0.2.2 + numeric IPs: skip DNS so the QEMU-user host loopback
-    // case ("http://10.0.2.2:8000/foo.css") works without any DNS server.
-    let ip = if let Some(numeric) = parse_numeric_ipv4(host) {
-        numeric
-    } else {
-        dns::resolve(host).map_err(|_| "DNS resolution failed")?
-    };
-
-    tcp::connect(ip, port).map_err(|_| "TCP connect failed")?;
-
-    // Build "GET <path> HTTP/1.0\r\nHost: <host>\r\nConnection: close\r\n\r\n".
-    // HTTP/1.0 + Connection: close means the server shuts down the TCP
-    // half on body end, so our recv loop terminates naturally.
-    // Sprint 3.1 (STUMP #105): if the cookie jar has anything for this
-    // host, splice in a Cookie: header before Connection: close.
-    let mut req = [0u8; 2048];
-    let mut pos = 0;
-    pos += copy_to(&mut req, pos, b"GET ");
-    pos += copy_to(&mut req, pos, path.as_bytes());
-    pos += copy_to(&mut req, pos, b" HTTP/1.0\r\nHost: ");
-    pos += copy_to(&mut req, pos, host.as_bytes());
-    pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\n");
-    let mut cookie_buf = [0u8; 1024];
-    let cookie_len = super::cookies::build_header(host.as_bytes(), &mut cookie_buf);
-    if cookie_len > 0 {
-        pos += copy_to(&mut req, pos, b"Cookie: ");
-        pos += copy_to(&mut req, pos, &cookie_buf[..cookie_len]);
-        pos += copy_to(&mut req, pos, b"\r\n");
-    }
-    pos += copy_to(&mut req, pos, b"Connection: close\r\n\r\n");
-    if pos > req.len() { tcp::close(); return Err("request too large"); }
-
-    if tcp::send_data(&req[..pos]).is_err() {
-        tcp::close();
-        return Err("send failed");
-    }
-
-    // Drain into a scratch buffer up to MAX_TOTAL bytes, then split off
-    // headers (\r\n\r\n) and copy body into `out`.
-    const MAX_TOTAL: usize = 256 * 1024; // 256 KB ceiling per fetch
-    static mut SCRATCH: [u8; MAX_TOTAL] = [0; MAX_TOTAL];
-    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
-    let mut total = 0usize;
-    loop {
-        if total >= scratch.len() { note_drain_capped("http"); break; }
-        match tcp::recv_data(&mut scratch[total..]) {
-            Ok(0) => break,
-            Ok(n) => total += n,
-            Err(_) => break, // timeout / FIN — done
-        }
-    }
-    tcp::close();
-
-    if total == 0 { return Err("empty response"); }
-
-    // Find header/body boundary.
-    let body_start = match find_double_crlf(&scratch[..total]) {
-        Some(i) => i + 4,
-        None    => return Err("no header/body boundary"),
-    };
-
-    // Reject obvious non-2xx without parsing the full status line.
-    if !scratch.starts_with(b"HTTP/1.") || scratch.len() < 12
-        || scratch[9] != b'2'
-    {
-        return Err("non-2xx response");
-    }
-
-    // STUMP #105: ingest Set-Cookie headers from the response. Done
-    // BEFORE we copy the body so the jar is up-to-date even if the
-    // body copy is short-circuited by a small `out` buffer.
-    super::cookies::ingest_response_headers(host.as_bytes(), &scratch[..body_start.saturating_sub(4)]);
-
-    let body_len = total - body_start;
-    let copy_len = body_len.min(out.len());
-    out[..copy_len].copy_from_slice(&scratch[body_start..body_start + copy_len]);
-    Ok(copy_len)
-}
-
-/// POST a `application/x-www-form-urlencoded` body to a URL. Same
-/// shape as fetch_url but with a method override and a request body.
-/// `scheme` chosen by URL prefix; HTTPS goes through fetch_post_https,
-/// HTTP through fetch_post_http. Used by the renderer's `<form>`
-/// submit path (Sprint 1.3 — STUMP #97).
-pub fn fetch_post_url(
-    url: &str,
-    body: &[u8],
-    out: &mut [u8],
-) -> Result<usize, &'static str> {
-    let (scheme, _, _, _) = parse_url(url).ok_or("bad URL")?;
-    let result = match scheme {
-        "https" => fetch_post_https(url, body, out),
-        _       => fetch_post_http(url, body, out),
-    };
-    // STUMP #103: log POSTs with the BODY SIZE only — never body
-    // contents (could be a passphrase, credit card, etc).
-    let mut buf = [0u8; 192];
-    let mut p = 0;
-    p += copy_audit(&mut buf[p..], b"POST ");
-    p += copy_audit(&mut buf[p..], url.as_bytes());
-    p += copy_audit(&mut buf[p..], b" body=");
-    p += write_dec(&mut buf[p..], body.len());
-    p += copy_audit(&mut buf[p..], b"B ");
-    match &result {
-        Ok(n) => {
-            p += copy_audit(&mut buf[p..], b"OK ");
-            p += write_dec(&mut buf[p..], *n);
-            p += copy_audit(&mut buf[p..], b"B");
-        }
-        Err(e) => {
-            p += copy_audit(&mut buf[p..], b"FAIL ");
-            p += copy_audit(&mut buf[p..], e.as_bytes());
-        }
-    }
-    crate::security::audit::record(crate::security::audit::Category::FormSubmit, &buf[..p]);
-    result
-}
-
-pub fn fetch_post_http(
-    url: &str,
-    body: &[u8],
-    out: &mut [u8],
-) -> Result<usize, &'static str> {
-    let (scheme, host, port, path) = parse_url(url).ok_or("bad URL")?;
-    if scheme != "http" { return Err("fetch_post_http: not http URL"); }
-    let ip = if let Some(numeric) = parse_numeric_ipv4(host) {
-        numeric
-    } else {
-        dns::resolve(host).map_err(|_| "DNS resolution failed")?
-    };
-    tcp::connect(ip, port).map_err(|_| "TCP connect failed")?;
-    let mut req = [0u8; 2048];
-    let mut pos = 0;
-    pos += copy_to(&mut req, pos, b"POST ");
-    pos += copy_to(&mut req, pos, path.as_bytes());
-    pos += copy_to(&mut req, pos, b" HTTP/1.0\r\nHost: ");
-    pos += copy_to(&mut req, pos, host.as_bytes());
-    pos += copy_to(&mut req, pos, b"\r\nUser-Agent: Bat_OS/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\n");
-    let mut cookie_buf = [0u8; 1024];
-    let cookie_len = super::cookies::build_header(host.as_bytes(), &mut cookie_buf);
-    if cookie_len > 0 {
-        pos += copy_to(&mut req, pos, b"Cookie: ");
-        pos += copy_to(&mut req, pos, &cookie_buf[..cookie_len]);
-        pos += copy_to(&mut req, pos, b"\r\n");
-    }
-    pos += copy_to(&mut req, pos, b"Content-Length: ");
-    let mut clen_buf = [0u8; 16];
-    let clen_len = write_usize_dec(body.len(), &mut clen_buf);
-    pos += copy_to(&mut req, pos, &clen_buf[..clen_len]);
-    pos += copy_to(&mut req, pos, b"\r\nConnection: close\r\n\r\n");
-    if pos + body.len() > req.len() { tcp::close(); return Err("request too large"); }
-    if tcp::send_data(&req[..pos]).is_err() { tcp::close(); return Err("send headers failed"); }
-    if !body.is_empty() && tcp::send_data(body).is_err() {
-        tcp::close();
-        return Err("send body failed");
-    }
-    drain_http_response_with_host(host, out)
-}
-
 pub fn fetch_post_https(
     url: &str,
     body: &[u8],
@@ -363,9 +124,6 @@ pub fn fetch_post_https(
         dns::resolve(host).map_err(|_| "DNS resolution failed")?
     };
     tcp::connect(ip, port).map_err(|_| "TCP connect failed")?;
-    // STUMP #111 (audit H019): RAII guard handles mode + hybrid
-    // restore on every exit path, including future panic-unwind.
-    let _mode_guard = ResearchModeGuard::relax_for_renderer();
     if let Err(e) = tls::handshake(host) {
         tcp::close();
         return Err(e);
@@ -489,19 +247,14 @@ fn write_usize_dec(n: usize, out: &mut [u8]) -> usize {
     len
 }
 
-/// HTTPS fetch (TLS 1.3 over TCP/443 by default). Same surface as
-/// fetch_http: writes the response body into `out`, returns body len.
+/// HTTPS fetch (TLS 1.3 over TCP/443 by default). Writes the response
+/// body into `out`, returns body length.
 ///
 /// Uses the kernel's existing TLS singleton: tcp::connect → tls::handshake
 /// → tls::send_app_data → tls::recv_app_data loop → tls::close.
 ///
-/// SECURITY (STUMP #94): briefly flips `tls_pinning::set_strict(false)`
-/// for the duration of the fetch so unpinned hostnames connect.
-/// The TLS bytes are encrypted but NOT authenticated against a CA chain
-/// (TRUST_STORE ships empty, PINS ships empty). Suitable for the
-/// demo renderer; NOT suitable for credential exchange. Restored to
-/// strict on every exit path so production code paths in the same
-/// process stay safe.
+/// Strict chain validation against TRUST_STORE; hybrid PQ on; failure
+/// aborts. See DESIGN_TLS_HARDENING.md.
 pub fn fetch_https(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     let (scheme, host, port, path) = parse_url(url).ok_or("bad URL")?;
     if scheme != "https" { return Err("fetch_https: not https URL"); }
@@ -513,14 +266,6 @@ pub fn fetch_https(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     };
 
     tcp::connect(ip, port).map_err(|_| "TCP connect failed")?;
-
-    // STUMP #94 + #111 (audit H019): relax pinning + disable PQ-hybrid
-    // for this fetch via the RAII ResearchModeGuard. Our hybrid
-    // key-derivation has a real-world bug against major HTTPS servers
-    // when they pick the hybrid group; plain X25519 handshakes
-    // cleanly. The guard's Drop restores the previous mode + hybrid
-    // setting on EVERY exit path including future panic-unwind.
-    let _mode_guard = ResearchModeGuard::relax_for_renderer();
 
     if let Err(e) = tls::handshake(host) {
         tcp::close();
@@ -556,10 +301,9 @@ pub fn fetch_https(url: &str, out: &mut [u8]) -> Result<usize, &'static str> {
     }
 
     // Drain into a scratch buffer up to MAX_TOTAL bytes, then split off
-    // headers (\r\n\r\n) and copy body into `out`. Reuse the same SCRATCH
-    // size as fetch_http — declared inside this function so we don't share
-    // state between concurrent fetches (we don't have any, single-threaded,
-    // but explicit > implicit).
+    // headers (\r\n\r\n) and copy body into `out`. Declared inside the
+    // function so we don't share state between concurrent fetches (we
+    // don't have any, single-threaded, but explicit > implicit).
     // STUMP #96: keep looping past Ok(0). recv_app_data returns Ok(0)
     // to mean "I just consumed a non-data record (NewSessionTicket,
     // ChangeCipherSpec, etc.) — try again for the next record." If
