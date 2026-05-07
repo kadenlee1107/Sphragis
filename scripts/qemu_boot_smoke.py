@@ -76,6 +76,8 @@ def main() -> int:
             (rb"\[net\] Network stack ready",   "network init"),
             (rb"\[gpu\] (Found at slot|Display: \d+x\d+)", "virtio-gpu init"),
             (rb"\[fs\] BatFS initialized",     "BatFS init"),
+            (rb"\[tls\] trust store: \d+ CA roots, chain-only auth, hybrid PQ on",
+             "tls trust-store boot status"),
         ]
         forbidden = [
             (rb"chromium_blit",  "deleted chromium_blit symbol"),
