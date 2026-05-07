@@ -1,11 +1,23 @@
 # DESIGN: Real Browser on Bat_OS (Project Gotham)
 
-> # ⚠️ STATUS: PARKED (as of 2026-05-05)
+> # ⚠️ SUPERSEDED (2026-05-07): Bat_OS no longer ships a browser.
 >
-> The Chromium-port effort hit a wall and is no longer the active
-> browser strategy. We pivoted to **Ladybird** (path 2 in
-> `DESIGN_BROWSER.md`) and added a **stream-client** thin-client
-> (path 3) as a pragmatic backstop.
+> The Chromium-port effort hit a wall on 2026-05-05 (Mojo IPC
+> livelock + V8 sandbox cage). We briefly pivoted to **Ladybird**
+> (path 2 in the prior `DESIGN_BROWSER.md`) and added a
+> **stream-client** thin-client (path 3). On 2026-05-07 we made
+> the harder call: Bat_OS doesn't ship a browser at all.
+>
+> See **`DESIGN_NO_BROWSER.md`** for the current strategy and
+> rationale, and tag `pre-no-browser-2026-05-07` for the last
+> commit that contained any browser code.
+>
+> The historical content below is preserved as reference for
+> the syscall coverage / libc gap analysis that informed the
+> Linux ELF runtime — those primitives still apply to running
+> non-browser ELFs (busybox, posix_test, cxx_test).
+>
+> Original PARKED notice (kept for trail):
 >
 > **Why parked.** Two compounding blockers, neither cheap to break:
 >

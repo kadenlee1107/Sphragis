@@ -1,5 +1,17 @@
 # BatBrowser Engine — Full Rendering Engine Plan
 
+> # ⚠️ SUPERSEDED (2026-05-07)
+>
+> Bat_OS no longer ships a browser. The native engine described
+> below has been deleted along with the Ladybird port and
+> stream-client. See **`DESIGN_NO_BROWSER.md`** for the current
+> strategy and rationale, and tag `pre-no-browser-2026-05-07` for
+> the last commit that contained any of this code.
+>
+> The content below is preserved for historical context only.
+>
+> ---
+
 > **Scope of this doc.** This describes the **native** BatBrowser engine
 > in `src/browser/` (~16K Rust, zero deps, bare metal). It is one of
 > three browser paths now coexisting on Bat_OS:
