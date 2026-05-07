@@ -131,7 +131,6 @@ fn execute(cmd: &str) {
         "threads" => cmd_run_elf("threads"),
         "posix" => cmd_run_elf("posix"),
         "cxx" | "c++" => cmd_run_elf("cxx"),
-        "tls-mode" => cmd_tls_mode(parts[1]),
         "audit" => cmd_audit(parts[1]),
         "audit-flush" => cmd_audit_flush(),
         "tcp-selftest" => cmd_tcp_selftest(),
@@ -199,6 +198,7 @@ fn execute(cmd: &str) {
         "nat-reply"   => cmd_nat_reply(),
         "nat-table"   => cmd_nat_table(),
         "nat-sync"    => cmd_nat_sync(),
+        "x509-selftest" => cmd_x509_selftest(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
         "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
@@ -531,6 +531,80 @@ fn cmd_batcave_fw_list() {
             console::puts(" entries\n");
         }
         Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
+/// X.509 chain validator selftest. Exercises the new `as_static_str`
+/// error mapping path with two deterministic inputs:
+///   1. Trusted root used as a "leaf" with a wrong hostname → expect
+///      VerifyOutcome::Err(HostnameMismatch).
+///   2. Truncated DER → expect VerifyOutcome::Err(Parse).
+///
+/// Verifies both that the verifier surfaces the right variant AND
+/// that as_static_str returns a debug-friendly string. See
+/// DESIGN_TLS_HARDENING.md.
+///
+/// `pub(crate)` so the boot-time selftest hook in `main.rs` (gated by
+/// the `selftest-on-boot` Cargo feature) can call this for headless
+/// verification in `scripts/qemu_x509_smoke.py`.
+pub(crate) fn cmd_x509_selftest() {
+    use crate::net::x509::{verify_chain, VerifyOutcome, VerifyError, TRUST_STORE};
+
+    console::puts_hi("  X.509 CHAIN VALIDATOR SELFTEST\n");
+
+    if TRUST_STORE.is_empty() {
+        console::puts("  [x509-selftest] FAIL: TRUST_STORE empty\n");
+        return;
+    }
+    let root_der: &[u8] = TRUST_STORE[0];
+
+    fn contains(hay: &[u8], needle: &[u8]) -> bool {
+        if needle.len() > hay.len() { return false; }
+        for i in 0..=(hay.len() - needle.len()) {
+            if &hay[i..i + needle.len()] == needle { return true; }
+        }
+        false
+    }
+
+    // Case 1: hostname mismatch.
+    match verify_chain(root_der, &[], b"wrong-host.example") {
+        VerifyOutcome::Err(VerifyError::HostnameMismatch) => {
+            let s = VerifyError::HostnameMismatch.as_static_str();
+            if contains(s.as_bytes(), b"hostname mismatch") {
+                console::puts("  [x509-selftest] PASS: hostname-mismatch\n");
+            } else {
+                console::puts("  [x509-selftest] FAIL: hostname-mismatch (string mismatch)\n");
+            }
+        }
+        VerifyOutcome::Err(other) => {
+            console::puts("  [x509-selftest] FAIL: hostname-mismatch (got wrong VerifyError variant: ");
+            console::puts(other.as_static_str());
+            console::puts(")\n");
+        }
+        VerifyOutcome::Ok { .. } => {
+            console::puts("  [x509-selftest] FAIL: hostname-mismatch (expected Err, got Ok)\n");
+        }
+    }
+
+    // Case 2: truncated DER → Parse.
+    let truncated = &root_der[..root_der.len().saturating_sub(5)];
+    match verify_chain(truncated, &[], b"any.example") {
+        VerifyOutcome::Err(VerifyError::Parse) => {
+            let s = VerifyError::Parse.as_static_str();
+            if contains(s.as_bytes(), b"parse error") {
+                console::puts("  [x509-selftest] PASS: bad-bytes\n");
+            } else {
+                console::puts("  [x509-selftest] FAIL: bad-bytes (string mismatch)\n");
+            }
+        }
+        VerifyOutcome::Err(other) => {
+            console::puts("  [x509-selftest] FAIL: bad-bytes (got wrong VerifyError variant: ");
+            console::puts(other.as_static_str());
+            console::puts(")\n");
+        }
+        VerifyOutcome::Ok { .. } => {
+            console::puts("  [x509-selftest] FAIL: bad-bytes (expected Err, got Ok)\n");
+        }
     }
 }
 
@@ -3040,47 +3114,6 @@ fn blit_render_to_gpu(
             }
         }
     }
-}
-
-/// STUMP #101 — Sprint 2.1: report or set the global TLS verification
-/// mode. Three modes:
-///   `lockdown` — only hosts in PINS may handshake (production default)
-///   `research` — pinned hosts must match; non-pinned allowed (renderer)
-///   `open`     — anything goes, even pin mismatches (debug only)
-fn cmd_tls_mode(arg: &str) {
-    use crate::net::tls_pinning::{Mode, current_mode, set_mode};
-    if arg.is_empty() {
-        console::puts("  current TLS mode: ");
-        console::puts(match current_mode() {
-            Mode::Lockdown => "lockdown",
-            Mode::Research => "research",
-            Mode::Open     => "open",
-        });
-        console::puts("\n  pinned hosts: ");
-        let n = crate::net::tls_pinning::PINS.len();
-        crate::kernel::mm::print_num(n);
-        console::puts("\n  usage: tls-mode <lockdown|research|open>\n");
-        return;
-    }
-    let new_mode = match arg {
-        "lockdown" | "strict"   => Mode::Lockdown,
-        "research" | "permissive" => Mode::Research,
-        "open"     | "debug"    => Mode::Open,
-        _ => {
-            console::puts("  unknown mode: ");
-            console::puts(arg);
-            console::puts(" (try lockdown / research / open)\n");
-            return;
-        }
-    };
-    set_mode(new_mode);
-    console::puts("  TLS mode → ");
-    console::puts(match new_mode {
-        Mode::Lockdown => "lockdown",
-        Mode::Research => "research",
-        Mode::Open     => "open",
-    });
-    console::puts("\n");
 }
 
 /// STUMP #105 — Sprint 3.1: dump or clear the cookie jar.

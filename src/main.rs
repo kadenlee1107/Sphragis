@@ -332,6 +332,17 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
                 batcave::linux::vfs::init();
             }
 
+            // X.509 selftest hook (gated by Cargo feature
+            // `selftest-on-boot`). Runs the same chain-validator
+            // selftest the `x509-selftest` shell command runs, before
+            // the auth gate, so a headless QEMU smoke can capture the
+            // PASS lines via serial. See DESIGN_TLS_HARDENING.md.
+            #[cfg(feature = "selftest-on-boot")]
+            {
+                drivers::uart::puts("[selftest] running x509-selftest before auth gate...\n");
+                ui::shell::cmd_x509_selftest();
+            }
+
             // ═══════════════════════════════════════
             // AUTHENTICATION GATE — must pass to proceed
             // ═══════════════════════════════════════
