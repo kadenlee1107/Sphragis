@@ -11,7 +11,240 @@ end of a session.
 
 ---
 
-## 2026-05-05 17:15 — Mac — 🎉 LADYBIRD LIBJS PRINTS "2" ON BAT_OS
+## 2026-05-07 — Mac — 🎨 LADYBIRD PIXELS ON SCREEN + 🌐 stream-client v0
+
+**Catch-up entry.** Last journal was the LibJS-prints-"2" milestone on
+2026-05-05 17:15. Since then, 16 commits landed on `port/ladybird`
+without a journal entry (iters 21–28 of STUMP #161 + autopilot
+self-improvements + stream-client v0). This is that catch-up.
+
+### Iters 21–28: native Ladybird renders to /batos/fb0
+
+Got Ladybird's full pipeline — HTMLParser → DOM → Style → Layout →
+Skia paint → BGRA bitmap — running in-process on Bat_OS, with the
+result blitted to the QEMU window via `/batos/fb0` → virtio-gpu.
+
+**The eight iters (commits `53aafca7`..`77f7d67d` on `port/ladybird`):**
+
+1. **iter 21** (`53aafca7`) — Wired Ladybird's `HTMLTokenizer` directly
+   into a `ladybird-dump` smoke binary. Tokens printed on Bat_OS.
+   Proof that LibWeb's parser front-end loads + runs end-to-end in a
+   cave (not just LibJS).
+
+2. **iter 22** (`3a7506ed`) — Walked the tokenizer state into a
+   tree-style DOM dump (open/close-tag indenting, text nodes shown).
+   Confirmed the cave can keep `Vector<Token>` allocations stable
+   across the parse.
+
+3. **iter 23** (`57e172e4`) — Tried to construct an actual `Document`
+   to drive layout. `JS::VM` + `JS::Realm` bootstrap worked, but
+   `Document::create` requires a `Navigable` requires a `Page`
+   requires a `PageClient`. Documented the dependency chain.
+
+4. **iter 24** (`75f38759`) — Wrote a minimal `HeadlessPageClient`
+   (~80 LOC), bootstrapped a `Page` + `Navigable`, mounted Lagom's
+   font directory through the Bat_OS VFS so fontconfig's
+   getdents64 sees real `.ttf` files.
+
+5. **iter 25** (`1a9457f3`) — `is_user_range` page-table fallback. The
+   bug: brk-extended pages (sys_brk maps EL0_RW from iter 18) weren't
+   in any tracked range, so getdents64 EFAULTed when fontconfig's
+   buffer landed in malloc-extended brk space. Fix: when the address
+   isn't in a known range, walk the cave's L1/L2/L3 page tables; if
+   the page is mapped EL0-readable, allow it. Same root cause as iter
+   15's scratch-zone fix, generalized.
+
+6. **iter 26** (`96e9babf`) — Real Layout tree from LibWeb. Switched
+   from `Document::create_for_fragment_parsing` (returns null
+   layout_node) to the navigable's `active_document`, set viewport
+   to 800×600, called `update_layout`, walked `Layout::Viewport`
+   recursively. Output is CSS-spec-correct: H1 37px tall, LI items
+   18px line-height, 6×6 marker boxes, 8px BODY margin, 40px UL
+   indent. Real layout, real fonts, real cascade.
+
+7. **iter 27** (`6f56e618`) — Skia paint to in-memory bitmap. Recorded
+   a `Painting::DisplayList` from the document, wrapped a 800×600
+   BGRA `Bitmap` in a `PaintingSurface`, ran
+   `DisplayListPlayerSkia.execute`. Required adding `WEB_API`
+   visibility to two LibWeb classes (`DisplayListPlayer`,
+   `DisplayListPlayerSkia`) and a small shim TU
+   (`PaintShim.cpp`) because the player has hidden ELF visibility.
+   Result: 5404 non-zero pixels — the H1 + body text + EM emphasis
+   + UL bullets, anti-aliased.
+
+8. **iter 28** (`6bc0f130`) — Final piece: bitmap → `/batos/fb0` →
+   virtio-gpu. Couldn't `mmap(/batos/fb0)` because the FB phys
+   address (~0x5e4f8000) sits under an L2 BLOCK in the cave's page
+   table, so install_l3 fails for all 1280 pages. Used the `write()`
+   syscall instead — kernel-side `ChromiumFb` write handler copies
+   user buf → phys via the kernel identity map.
+
+   Iter 28 then needed three follow-ups (`28b/c/d`):
+   - **28b** (`77205fa6`) — Logging in `chromium_blit::tick` to
+     verify the kthread actually sees the seq bump.
+   - **28c** (`08ea250d`) — Stage `ChromiumFb` writes through
+     primary L1. Inside the cave, EL1 syscalls' TTBR0 is the cave's
+     L1, which doesn't map FB phys cleanly (L2 BLOCK at wrong VA),
+     so `sys_write`'s `strb` was landing on aliased garbage. Fix:
+     copy user→4KB kernel staging buffer (under cave TTBR0), switch
+     to `PRIMARY_L1`, copy staging→FB-phys (with cache flush),
+     switch back + TLBI.
+   - **28d** (`00a8ce41`) — Synchronous blit on `/batos/fb0` write.
+     The blit kthread wasn't getting scheduled reliably — HVF
+     doesn't deliver the cave's EL1 timer IRQ consistently. Cheapest
+     fix: `sys_write` invokes `chromium_blit::tick()` synchronously
+     after the bytes land. Every write to `/batos/fb0` now produces
+     a blit immediately, no scheduling required.
+
+   Plus `77f7d67d` — disable `SYSCALL_TRACE` by default. Pipeline
+   works; the 1000s of `[sc tN]` lines were just drowning the actual
+   output.
+
+**End-to-end pipeline now working:**
+
+```
+HTML string → HTMLParser → Document → Layout → Skia paint
+  → BGRA bitmap → write(/batos/fb0) → ChromiumFb staging
+  → PRIMARY_L1 copy → chromium_blit::tick (sync)
+  → virtio-gpu scanout → QEMU window pixels
+```
+
+**To see it:**
+```
+python3 scripts/qemu_ladybird_window.py
+bat_os> ladybird-dump
+```
+
+`ladybird-dump` is now the real-Ladybird visual demo (`3d1835dc`).
+The Bat_OS built-in browser path (`render ... live=1`) still works
+but uses the older CSS-1.0-era native engine instead of LibWeb.
+
+### Autopilot self-improvements (made iters 21–28 possible)
+
+The autopilot got smarter in this stretch — five commits on top of
+the original loop:
+
+- **`5d5e2ed2`** state file + tmux-friendly loop driver
+- **`b7e1ed49`** `--session-id` for context continuity (Option B):
+  every fire pins the same session UUID so context accumulates
+  across iters
+- **`1d168690`** `--effort max` on every fire
+- **`8341f579`** tighten `NEEDS HUMAN` grep to `^> ` prefix (was
+  matching mid-output false positives)
+- **`4fcf867b`** `--session-id` only on the first fire, `--resume`
+  after (Claude's session-id semantics changed — first fire creates,
+  subsequent fires resume the existing session)
+
+Net effect: a single autopilot run can chain ~10 iters with shared
+context before needing human input. State lives in
+`docs/LADYBIRD_AUTOPILOT.md` (single source of truth for current
+iter step).
+
+### 🌐 stream-client v0 — pragmatic thin-client browser
+
+Two-piece system landed at the end of the session
+(`4f10d4f4` + `3d305b67`):
+
+1. **Mac side: `scripts/browser_proxy.py`** — runs headless
+   Chromium via Playwright. Listens on `:9100`. POST `/render`
+   with `{url, w, h}` returns raw BGRA bytes (`w*h*4`).
+
+2. **Bat_OS side: `cmd_web` in `src/ui/shell.rs`** — connects to
+   `10.0.2.2:9100` (Mac via QEMU slirp), POSTs URL, receives BGRA,
+   writes directly into `/batos/fb0`, bumps seq, triggers
+   `chromium_blit::tick` to push to virtio-gpu.
+
+`3d305b67` then attached `-netdev user` to `qemu_ladybird_window.py`
+so the cave's TCP SYN actually goes somewhere.
+
+Architecture is **thin-client**: Chrome on Mac does all rendering,
+Bat_OS displays the pixels. Same pattern as Chromebooks (originally),
+Citrix, VNC. **Pragmatic complement to native Ladybird:** that's the
+engineering achievement, this is the daily driver.
+
+Tested: example.com renders in 1.92 MB (800×600), google.com in
+5.24 MB (1280×1024). Chromium ready ~3 s, render ~0.9 s.
+
+### State of tree
+
+- `port/ladybird` HEAD: `3d305b67`
+- Three live browser paths now coexist:
+  1. Native engine (`src/browser/`, ~16K Rust) — works for static
+     pages, has done live Wikipedia HTTPS via `render`.
+  2. Ladybird (`port/ladybird`, iter 28) — real DOM + layout +
+     Skia, paints to fb0.
+  3. stream-client (`web <url>`) — Mac proxy → BGRA → fb0.
+- `chromium_blit::tick` is now synchronous on `/batos/fb0` write
+  (HVF timer IRQ unreliability worked around).
+- `is_user_range` falls back to a page-table walk when the address
+  isn't in any tracked range — no longer needs every brk/mmap to be
+  pre-registered.
+
+### In-flight uncommitted work — stream-client iter 1
+
+There's a **substantial uncommitted change** sitting on disk: 1,613
+insertions across 11 files. This is mid-build, not stale:
+
+```
+ scripts/browser_proxy.py        | 642 +++++  (input bridge, /key, /poll, mouse cap)
+ scripts/qemu_ladybird_window.py |  24 +
+ src/batcave/linux/vfs.rs        |  23 +
+ src/drivers/virtio/gpu.rs       |  87 +
+ src/drivers/virtio/keyboard.rs  |  10 +
+ src/drivers/virtio/tablet.rs    |  33 +
+ src/net/tcp.rs                  |   2 +-
+ src/ui/apps/browser.rs          | 240 +++  (REMOTE_MODE — render IN the WM Browser app)
+ src/ui/desktop.rs               |  56 +
+ src/ui/shell.rs                 | 647 +++  (cmd_web extended for keyboard/mouse forwarding)
+ src/ui/wm.rs                    |  24 +
+```
+
+What it adds (per code inspection):
+- `cmd_web` extended from one-shot screenshot → interactive loop:
+  keyboard fwd via POST `/key`, mouse fwd, frame polling via
+  `/poll`, ESC to exit.
+- `browser.rs` gets `REMOTE_MODE` + `REMOTE_BGRA` (8.3 MB buffer).
+  When user opens the Browser app, it computes its content rect
+  (excludes 40 px nav, 24 px bookmarks, 24 px status) and POSTs
+  `/render` at *that* size, blits BGRA into the app's content area
+  on each tick. Bridges fullscreen `web` → windowed `webwin <url>`.
+- Mac-side proxy gains `/key`, `/poll`, `/snapshot`, mouse cursor
+  capture via Quartz (since virtio-tablet is broken on cocoa).
+
+Next session pickup: validate the input bridge end-to-end, then
+commit as iter 1 of stream-client.
+
+### What's next (priority order)
+
+1. **Land the in-flight stream-client iter 1.** Test, commit,
+   journal it. Don't lose this work.
+2. **Decide which browser is "the" browser.** Three live paths is
+   one too many to maintain. Native is the engineering pride.
+   Ladybird is the engineering achievement. Stream-client is the
+   pragmatic daily driver. Pick a strategy, write it down.
+3. **Push iter 28 past static rendering.** Multi-page nav,
+   click events, form submission via Ladybird's real engine.
+4. **Refresh DESIGN docs.** `DESIGN_BROWSER.md` and
+   `DESIGN_CHROMIUM.md` describe a Chromium-first plan that no
+   longer holds. They're misleading to anyone reading them now.
+
+### Open questions / debt
+
+- HVF timer-IRQ delivery to caves is unreliable. Iter 28d worked
+  around it for the blit kthread by going synchronous. Other
+  kthreads / scheduler / timeouts inherit the same problem.
+- TLS chain validation is still cert-pinning-only despite
+  `x509-cert` / `spki` / `der` / `const-oid` being pulled in as
+  deps. Validators exist but aren't wired into the live HTTPS path.
+- Scheduler's `block_on()` is still TODO — futex/epoll waiters
+  spin. Chromium showed this scales badly.
+- 2,930 modified `captures/G*.png` files in `git status` are noise
+  (lagom build artifact regen, not real changes). Should be
+  `.gitignore`d or moved to a separate location.
+
+🦇
+
+---
 
 After 7 more iterations on `port/ladybird` (iters 14-20 of STUMP #161),
 **`console.log(1+1)` prints `2` end-to-end on Bat_OS**. That's
