@@ -543,7 +543,11 @@ fn cmd_batcave_fw_list() {
 /// Verifies both that the verifier surfaces the right variant AND
 /// that as_static_str returns a debug-friendly string. See
 /// DESIGN_TLS_HARDENING.md.
-fn cmd_x509_selftest() {
+///
+/// `pub(crate)` so the boot-time selftest hook in `main.rs` (gated by
+/// the `selftest-on-boot` Cargo feature) can call this for headless
+/// verification in `scripts/qemu_x509_smoke.py`.
+pub(crate) fn cmd_x509_selftest() {
     use crate::net::x509::{verify_chain, VerifyOutcome, VerifyError, TRUST_STORE};
 
     console::puts_hi("  X.509 CHAIN VALIDATOR SELFTEST\n");

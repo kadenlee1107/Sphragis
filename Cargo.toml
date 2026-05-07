@@ -17,6 +17,15 @@ layer-b-test = []
 # `--accel hvf -cpu host` for native speed).
 gicv3 = []
 
+# Run the X.509 chain validator selftest after net init, before the
+# auth gate, printing the same `[x509-selftest] PASS/FAIL` lines the
+# `x509-selftest` shell command produces. Lets a headless QEMU smoke
+# (scripts/qemu_x509_smoke.py) verify the verifier on every build
+# without needing virtio-keyboard injection. Narrow scope on purpose
+# — when more selftests want headless validation, this gets
+# generalized into a real harness. See DESIGN_TLS_HARDENING.md.
+selftest-on-boot = []
+
 [dependencies]
 # ROOT-4 crypto replacement — RustCrypto audited primitives.
 # All no_std-compatible, no heap needed with default-features=false.
