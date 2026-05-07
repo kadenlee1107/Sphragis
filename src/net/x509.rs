@@ -108,6 +108,25 @@ pub enum VerifyError {
     ChainIncomplete,
 }
 
+impl VerifyError {
+    /// Map a verifier failure to a debug-friendly static string.
+    /// Used by `tls.rs`'s chain-fail branch to abort the handshake with
+    /// a specific reason. See DESIGN_TLS_HARDENING.md.
+    pub fn as_static_str(&self) -> &'static str {
+        match self {
+            VerifyError::Parse              => "TLS: chain validation failed: certificate parse error",
+            VerifyError::EmptyChain         => "TLS: chain validation failed: empty chain",
+            VerifyError::UnsupportedSigAlg  => "TLS: chain validation failed: unsupported signature algorithm",
+            VerifyError::HostnameMismatch   => "TLS: chain validation failed: hostname mismatch",
+            VerifyError::NotYetValid        => "TLS: chain validation failed: certificate not yet valid",
+            VerifyError::Expired            => "TLS: chain validation failed: expired certificate",
+            VerifyError::BadSignature       => "TLS: chain validation failed: bad signature",
+            VerifyError::UntrustedRoot      => "TLS: chain validation failed: untrusted root",
+            VerifyError::ChainIncomplete    => "TLS: chain validation failed: chain incomplete",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PubkeyAlg {
     EcdsaP256,
