@@ -1208,10 +1208,6 @@ fn reset_all_globals_for_cave_switch() {
     crate::drivers::virtio::keyboard::reset_for_cave_switch();
     crate::drivers::apple::spi::reset_for_cave_switch();
     crate::ui::apps::comms::reset_for_cave_switch();
-    crate::ui::apps::browser::reset_for_cave_switch();
-    // NOTE: `blink_libc` currently lives outside the crate module tree
-    // (see comment in src/browser/html/mod.rs). When the Chromium build
-    // lands and blink_libc is re-enabled, chain its reset here.
     crate::ui::font::reset_for_cave_switch();
     crate::ui::wm::reset_for_cave_switch();
     crate::ui::console::reset_for_cave_switch();

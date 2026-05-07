@@ -166,9 +166,9 @@ pub fn run() -> ! {
                         continue;
                     }
                     let cur = wm::active_app();
-                    if cur == 8 {
+                    if cur == wm::APP_BATCAVE {
                         // Last app → tab onto the close button
-                        platform::serial_puts("[tab] cur=8 → focus_close_button\r\n");
+                        platform::serial_puts("[tab] cur=BATCAVE → focus_close_button\r\n");
                         wm::focus_close_button();
                         // Don't change active_app — keep it on 8 so the
                         // pane content stays visible behind the X.
@@ -254,10 +254,6 @@ pub fn run() -> ! {
                         }
                         _ => {}
                     }
-                }
-                wm::APP_BROWSER => {
-                    apps::browser::handle_key(c);
-                    render_current();
                 }
                 wm::APP_COMMS => {
                     apps::comms::handle_key(c);
@@ -349,7 +345,6 @@ fn render_app(app: u8) {
         wm::APP_EDITOR => apps::editor::render(),
         wm::APP_SECURITY => apps::security::render(),
         wm::APP_COMMS => apps::comms::render(),
-        wm::APP_BROWSER => apps::browser::render(),
         wm::APP_BATCAVE => apps::batcave_mgr::render(),
         _ => {}
     }
