@@ -198,6 +198,7 @@ fn execute(cmd: &str) {
         "nat-reply"   => cmd_nat_reply(),
         "nat-table"   => cmd_nat_table(),
         "nat-sync"    => cmd_nat_sync(),
+        "x509-selftest" => cmd_x509_selftest(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
         "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
@@ -530,6 +531,76 @@ fn cmd_batcave_fw_list() {
             console::puts(" entries\n");
         }
         Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
+/// X.509 chain validator selftest. Exercises the new `as_static_str`
+/// error mapping path with two deterministic inputs:
+///   1. Trusted root used as a "leaf" with a wrong hostname → expect
+///      VerifyOutcome::Err(HostnameMismatch).
+///   2. Truncated DER → expect VerifyOutcome::Err(Parse).
+///
+/// Verifies both that the verifier surfaces the right variant AND
+/// that as_static_str returns a debug-friendly string. See
+/// DESIGN_TLS_HARDENING.md.
+fn cmd_x509_selftest() {
+    use crate::net::x509::{verify_chain, VerifyOutcome, VerifyError, TRUST_STORE};
+
+    console::puts_hi("  X.509 CHAIN VALIDATOR SELFTEST\n");
+
+    if TRUST_STORE.is_empty() {
+        console::puts("  [x509-selftest] FAIL: TRUST_STORE empty\n");
+        return;
+    }
+    let root_der: &[u8] = TRUST_STORE[0];
+
+    fn contains(hay: &[u8], needle: &[u8]) -> bool {
+        if needle.len() > hay.len() { return false; }
+        for i in 0..=(hay.len() - needle.len()) {
+            if &hay[i..i + needle.len()] == needle { return true; }
+        }
+        false
+    }
+
+    // Case 1: hostname mismatch.
+    match verify_chain(root_der, &[], b"wrong-host.example") {
+        VerifyOutcome::Err(VerifyError::HostnameMismatch) => {
+            let s = VerifyError::HostnameMismatch.as_static_str();
+            if contains(s.as_bytes(), b"hostname mismatch") {
+                console::puts("  [x509-selftest] PASS: hostname-mismatch\n");
+            } else {
+                console::puts("  [x509-selftest] FAIL: hostname-mismatch (string mismatch)\n");
+            }
+        }
+        VerifyOutcome::Err(other) => {
+            console::puts("  [x509-selftest] FAIL: hostname-mismatch (got wrong VerifyError variant: ");
+            console::puts(other.as_static_str());
+            console::puts(")\n");
+        }
+        VerifyOutcome::Ok { .. } => {
+            console::puts("  [x509-selftest] FAIL: hostname-mismatch (expected Err, got Ok)\n");
+        }
+    }
+
+    // Case 2: truncated DER → Parse.
+    let truncated = &root_der[..root_der.len().saturating_sub(5)];
+    match verify_chain(truncated, &[], b"any.example") {
+        VerifyOutcome::Err(VerifyError::Parse) => {
+            let s = VerifyError::Parse.as_static_str();
+            if contains(s.as_bytes(), b"parse error") {
+                console::puts("  [x509-selftest] PASS: bad-bytes\n");
+            } else {
+                console::puts("  [x509-selftest] FAIL: bad-bytes (string mismatch)\n");
+            }
+        }
+        VerifyOutcome::Err(other) => {
+            console::puts("  [x509-selftest] FAIL: bad-bytes (got wrong VerifyError variant: ");
+            console::puts(other.as_static_str());
+            console::puts(")\n");
+        }
+        VerifyOutcome::Ok { .. } => {
+            console::puts("  [x509-selftest] FAIL: bad-bytes (expected Err, got Ok)\n");
+        }
     }
 }
 
