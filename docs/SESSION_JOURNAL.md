@@ -11,6 +11,140 @@ end of a session.
 
 ---
 
+## 2026-05-07 (later) — Mac — 🔥 NO-BROWSER PIVOT: hard-deleted ~30 KLOC + ~2.5 GB
+
+**The big call.** Kaden chose to redefine Bat_OS's identity:
+**Bat_OS is a secure workstation, not a secure laptop. Web browsing
+happens on the host.** Bat_OS never ships a browser.
+
+This was a step back from the three-paths state (native engine /
+Ladybird port / stream-client) documented in the earlier 2026-05-07
+journal entry. The principle: every browser architecture violates
+"every byte auditable" in some way. Native is pure-Rust but "Chrome
+parity" is a wrong target for a security-first OS. Ladybird drags
+~32 MB of unaudited C++ into the trust boundary. Stream-client makes
+us structurally dependent on a Mac's Chrome we can't audit. The
+Chromium-port hit a wall on 2026-05-05 already.
+
+**The strategy doc** (`DESIGN_NO_BROWSER.md`, 155 lines, commit
+`2af9cdd4`) captures the decision and the rationale. The
+**implementation plan** (`docs/PLAN_NO_BROWSER_DELETION.md`, 1,053
+lines, commit `6a2688f8`) walked through 10 phases of mechanical
+deletion. Both committed before any code went away so the "why" was
+on disk first.
+
+### Tag for git revival
+
+Before any deletion landed: **`pre-no-browser-2026-05-07`** at commit
+`6a2688f8`. The full pre-deletion state — native engine, Ladybird
+port, stream-client v0, ports/* (2.5 GB), the lot — is recoverable
+from there forever.
+
+### Phases that ran
+
+Seven commits (`6891f5e3`..`54757cf7`) on `port/ladybird`:
+
+1. **Phase 1** — discard the 1,613-LOC stream-client iter 1
+   work-in-progress. `git checkout HEAD --` for the surviving files;
+   no commit; left to die in working-tree limbo until Phase 7's
+   bulk delete swept the rest.
+2. **Phase 2** (`6891f5e3`) — remove shell command dispatch +
+   `cmd_*` functions: `web`, `webwin`, `ladybird*`, `chromium*`,
+   `dump-dom`, `render`, `js-mode`, plus the test-ELF dispatch arms
+   (`netsurf`, `freetype`, `png`, `v8`, `js`, `javascript`, `blink`).
+   Also stripped `runner::run_chromium`, the `primary_override_*`
+   plumbing, and the browser test-binary `include_bytes!` (NETSURF,
+   FREETYPE, PNG, V8, BLINK, CSS_TOKENIZER). ~1,500 LOC.
+3. **Phase 3** (`c2bb179b`) — rip out the WM Browser app:
+   `src/ui/apps/browser.rs` (2.4 KLOC), `APP_BROWSER` constant
+   (NUM_APPS 9→8, renumbered), the JS-pill in the WM status bar, the
+   `browse`/`open` shell commands, `apps::browser::*` calls in
+   `desktop.rs` and `cave.rs`. ~1,943 LOC.
+4. **Phase 4** (`5c623f8c`) — delete `src/browser/` entirely (~16K
+   LOC: html/, css/, js/ vm/parser/compiler/builtins/dom_api/storage/
+   strings/canvas, layout/, paint/, media/ jpeg/png/gzip, dom.rs).
+   Plus the 5 helper fns in shell.rs (`interactive_loop`,
+   `rerun_layout_and_repaint`, `handle_interactive_click`,
+   `repaint_to_render_fb`, `draw_cursor` — orphaned alongside
+   `cmd_render`) and the 5 `crate::browser::*::reset_for_cave_switch`
+   hooks in `cave.rs`.
+5. **Phase 5** (`379086b5`) — remove `ChromiumFb` VFS +
+   `chromium_blit` kthread: `src/drivers/display/chromium_blit.rs`
+   gone, the iter-28d sync-blit-on-write path in `sys_write` gone,
+   the `sys_read`/`sys_mmap` `ChromiumFb` branches gone, the entire
+   "Chromium framebuffer bridge" section of `vfs.rs` (FB_MAGIC, the
+   region statics, `chromium_fb_region/_node`, `is_chromium_fb`,
+   `create_chromium_fb`) gone. WM still uses `crate::drivers::virtio::
+   gpu` directly; no display regression for non-browser code.
+6. **Phase 6** (`d6cba349`) — `git rm -rf` on `ports/`: ~2.5 GB across
+   `ladybird_port/`, `chromium_port/`, `chromium/` (the gitignored
+   1.3 GB Chromium snapshot), `netsurf/` and every NetSurf component
+   lib (libcss, libdom, libhubbub, libnsfb, libparserutils,
+   libwapcaplet, libnsutils), `freetype-2.13.3`, `libpng-1.6.43`,
+   `zlib-1.3.1`, `skia`, `v8`, every loose `blink_*.cpp` /
+   `css_*.cpp` / `skia_*.cpp` / `v8_*.cpp` / `libblink*.a` / `libc.{c,o}` /
+   `*_test.c` test-stub. Plus `tests/{blink,css_tokenizer,freetype,
+   netsurf_css,netsurf,png,v8_exec,v8}_test` (the include_bytes targets
+   from Phase 2). 35,034 files removed in one commit. `.gitignore`
+   cleaned up — no more `/ports/chromium`, `/chromium-build`,
+   `/ports/chromium_port/out/`, `liblagom-*.so*` lines.
+7. **Phase 7** (`de4516e1`) — delete browser scripts + tools:
+   `scripts/{browser_proxy,dump_dom,mouse_bridge,qemu_chromium_*,
+   qemu_ladybird_*,render_*}.py`, `tools/{bake_*,run_chromium,
+   audit_chromium_initmap}.sh`, `docs/LADYBIRD_AUTOPILOT.md`. The
+   autopilot loop driver itself (`scripts/autopilot.sh`) survives —
+   it's reusable for future non-browser STUMP loops. Makefile slimmed
+   down: `render`, `render-live`, `dom`, `smoke`, `initrd` targets
+   gone; `build`, `clean`, `watch`, `info` stay.
+8. **Phase 8** — Cargo.toml dep cleanup: ran a manual usage audit
+   over every `[dependencies]` entry. All deps (aes, ghash, sha2,
+   chacha20poly1305, ed25519-compact, p256, p384, rsa, x509-cert,
+   spki, der, const-oid, ml-kem, ml-dsa, hybrid-array, x25519-dalek,
+   argon2, linked_list_allocator, rand_core) have active non-browser
+   usage. No-op. No commit.
+9. **Phase 9** (`54757cf7`) — `DESIGN_BROWSER.md` and
+   `DESIGN_CHROMIUM.md` got SUPERSEDED notices at the top pointing
+   to `DESIGN_NO_BROWSER.md` and the rescue tag.
+10. **Phase 10** (this entry) — final release build (`6.5 MB` kernel
+    binary, 222 release-build warnings, no errors), wrote
+    `scripts/qemu_boot_smoke.py` to replace the deleted browser
+    smokes, ran it: kernel boots, BatCave + network + virtio-gpu +
+    BatFS all init, no deleted-browser symbols leak through.
+
+### Total damage
+
+**`8,270,098` lines deleted** across the 7 commits between
+`pre-no-browser-2026-05-07..HEAD`. The bulk of that is the vendored
+ports tree (`ports/freetype`, `ports/skia`, `ports/v8`, etc.) — real
+Rust + browser code is more like ~30 KLOC.
+
+### State of tree
+
+- `port/ladybird` HEAD is now a bat_OS *without* a browser.
+- Surviving shell commands are: status, mem, whoami, uname, ls,
+  cat, write, rm, verify, net, ping, dns, fw, fetch, edit, screen,
+  audit, tcp-*, fw-*, cpol-*, cave-*, blk-*, batcave, secure-ipc-*,
+  pq-*, gcm-*, otp-*, posix, cxx — secure workstation surface, no
+  rendering surface.
+- WM apps: Term, Dash, File, Net, Edit, Sec, Chat, Cave (no Web).
+- TLS 1.3 + hybrid-PQ stack survives; HTTPS fetch still works for
+  machine-to-machine. Crypto stack untouched. BatFS untouched.
+- `scripts/autopilot.sh` survives. `tests/{posix,cxx,hello*}` survive.
+
+### Next
+
+The strategy doc names the obvious next moves:
+- Strengthen what's left: TLS X.509 chain validation (the validators
+  are pulled in but not wired into the live HTTPS path).
+- Scheduler `block_on()` instead of futex/epoll spin.
+- Audit where the deletions left dead imports / orphaned symbols
+  (222 release-build warnings is high; some are pre-existing
+  `dead_code` allows but a few are now-redundant after the cleanup).
+
+🦇
+
+---
+
 ## 2026-05-07 — Mac — 🎨 LADYBIRD PIXELS ON SCREEN + 🌐 stream-client v0
 
 **Catch-up entry.** Last journal was the LibJS-prints-"2" milestone on
