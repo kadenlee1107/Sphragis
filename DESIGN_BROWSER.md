@@ -1,18 +1,50 @@
 # BatBrowser Engine — Full Rendering Engine Plan
 
+> **Scope of this doc.** This describes the **native** BatBrowser engine
+> in `src/browser/` (~16K Rust, zero deps, bare metal). It is one of
+> three browser paths now coexisting on Bat_OS:
+>
+> 1. **BatBrowser (native)** — this doc. Pure-Rust engine. Engineering pride.
+> 2. **Ladybird port** — `port/ladybird` branch. BSD-licensed independent
+>    browser (LibWeb + Skia + LibJS). As of iter 28, real DOM → Layout →
+>    Skia paint → `/batos/fb0` works. Engineering achievement.
+> 3. **stream-client** — `cmd_web` shell command. Mac-side headless
+>    Chromium via Playwright (`scripts/browser_proxy.py`); Bat_OS receives
+>    BGRA. Pragmatic daily driver.
+>
+> Which becomes "the" Bat_OS browser is an open strategic question
+> (see `docs/SESSION_JOURNAL.md` 2026-05-07 entry). This doc is the
+> roadmap for path 1 only.
+
 ## The Mission
 Build a real web rendering engine from scratch inside Bat_OS.
 Pure Rust, zero dependencies, bare metal. Every byte auditable.
 
-## Current State (Level 0)
-- HTTP/HTTPS fetching (TLS 1.3 with AES-128-GCM) ✅
-- HTML tag stripping → plain text ✅
-- Link extraction + navigation ✅
+## Current State (as of 2026-05-07, port/ladybird branch)
+
+The native engine has reached **roughly Level 4** (Levels 1–3 done,
+Level 4 substantially done). Reality vs the original Level 0 plan:
+
+- HTTP/HTTPS fetching (TLS 1.3 — X25519/AES-256-GCM, hybrid PQ
+  X25519+ML-KEM-768 implemented but disabled by default) ✅
+- HTML parser → DOM tree (`src/browser/html/parser.rs`, ~855 LOC) ✅
+- CSS tokenizer + selector matching + cascade (`src/browser/css/`,
+  ~1,070 LOC) ✅
+- Block + inline + flex layout (`src/browser/layout/`, ~660 LOC) ✅
+- Paint to bitmap (`src/browser/paint/`, ~500 LOC) ✅
+- TrueType font rasterizer (`src/ui/truetype.rs`, `src/ui/font.rs`) ✅
+- PNG + JPEG + gzip decoders (`src/browser/media/`, ~1,360 LOC) ✅
+- JS engine — lexer + parser + bytecode compiler + VM (`src/browser/js/`,
+  ~5,800 LOC: vm.rs 1,900, compiler.rs 1,260, parser.rs 1,013,
+  builtins.rs 970, dom_api.rs 673) ✅
+- DOM API from JS (querySelector, classList, textContent, addEventListener) ✅
+- localStorage / sessionStorage ✅
 - Chrome-style UI (tabs, nav bar, bookmarks, status bar) ✅
+- Live HTTPS Wikipedia render (verified 2026-04-30) ✅
 
 ---
 
-## Level 1 — Styled Text Renderer
+## Level 1 — Styled Text Renderer ✅ DONE
 **Lines: ~300 | Time: 1 session**
 
 What it does:
@@ -32,7 +64,7 @@ What it looks like:
 
 ---
 
-## Level 2 — DOM Tree + Basic CSS
+## Level 2 — DOM Tree + Basic CSS ✅ DONE
 **Lines: ~5,000 | Time: 2-3 sessions**
 
 ### 2a: HTML Parser → DOM Tree
@@ -75,7 +107,7 @@ What it looks like:
 
 ---
 
-## Level 3 — Images + Fonts
+## Level 3 — Images + Fonts ✅ DONE
 **Lines: ~15,000 | Time: 2-3 weeks**
 
 ### 3a: PNG Decoder
@@ -118,8 +150,14 @@ What it looks like:
 
 ---
 
-## Level 4 — JavaScript Engine
+## Level 4 — JavaScript Engine 🟡 SUBSTANTIALLY DONE
 **Lines: ~50,000-100,000 | Time: 2-4 months**
+
+> **Reality check:** the native JS engine landed in ~5,800 LOC, far
+> below the original estimate, because we went **bytecode VM**
+> (lexer → AST → compiler → opcodes → VM) rather than tree-walking.
+> Standard library coverage is partial; AsyncAwait, generators, ES6
+> modules are stubbed/missing.
 
 ### 4a: Lexer
 - Tokenize JavaScript source into tokens
@@ -188,8 +226,15 @@ What it looks like:
 
 ---
 
-## Level 5 — Modern Web Platform
+## Level 5 — Modern Web Platform ⏳ PLANNED
 **Lines: ~1,000,000+ | Time: 1-2 years**
+
+> **Strategic note:** Level 5 is where the native engine cost gets
+> existential. The Ladybird port (path 2) gives us a Level-5-ish
+> renderer for "free" by reusing LibWeb. The strategic question is
+> whether the native engine continues past Level 4 or stops at "good
+> enough for static + simple JS sites" while Ladybird carries the
+> modern-web load.
 
 ### 5a: CSS Advanced Layout
 - Flexbox (flex-direction, justify-content, align-items, flex-grow/shrink)
@@ -383,7 +428,7 @@ src/browser/
 
 | # | Decision | Why |
 |---|----------|-----|
-| 1 | Tree-walking JS interpreter (not JIT) | Simpler, no machine code generation needed |
+| 1 | ~~Tree-walking JS interpreter~~ → **Bytecode VM** (lexer→AST→compiler→opcodes→VM) | AST walker was the original plan; bytecode landed simpler in practice and runs faster. Still no JIT. |
 | 2 | Block+inline layout first, flex/grid later | 90% of pages work with just block+inline |
 | 3 | PNG before JPEG | Simpler codec, more common for web graphics |
 | 4 | Monospace font fallback always available | Guaranteed readable even if TTF parsing fails |
