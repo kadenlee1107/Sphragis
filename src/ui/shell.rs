@@ -131,7 +131,6 @@ fn execute(cmd: &str) {
         "threads" => cmd_run_elf("threads"),
         "posix" => cmd_run_elf("posix"),
         "cxx" | "c++" => cmd_run_elf("cxx"),
-        "tls-mode" => cmd_tls_mode(parts[1]),
         "audit" => cmd_audit(parts[1]),
         "audit-flush" => cmd_audit_flush(),
         "tcp-selftest" => cmd_tcp_selftest(),
@@ -3040,47 +3039,6 @@ fn blit_render_to_gpu(
             }
         }
     }
-}
-
-/// STUMP #101 — Sprint 2.1: report or set the global TLS verification
-/// mode. Three modes:
-///   `lockdown` — only hosts in PINS may handshake (production default)
-///   `research` — pinned hosts must match; non-pinned allowed (renderer)
-///   `open`     — anything goes, even pin mismatches (debug only)
-fn cmd_tls_mode(arg: &str) {
-    use crate::net::tls_pinning::{Mode, current_mode, set_mode};
-    if arg.is_empty() {
-        console::puts("  current TLS mode: ");
-        console::puts(match current_mode() {
-            Mode::Lockdown => "lockdown",
-            Mode::Research => "research",
-            Mode::Open     => "open",
-        });
-        console::puts("\n  pinned hosts: ");
-        let n = crate::net::tls_pinning::PINS.len();
-        crate::kernel::mm::print_num(n);
-        console::puts("\n  usage: tls-mode <lockdown|research|open>\n");
-        return;
-    }
-    let new_mode = match arg {
-        "lockdown" | "strict"   => Mode::Lockdown,
-        "research" | "permissive" => Mode::Research,
-        "open"     | "debug"    => Mode::Open,
-        _ => {
-            console::puts("  unknown mode: ");
-            console::puts(arg);
-            console::puts(" (try lockdown / research / open)\n");
-            return;
-        }
-    };
-    set_mode(new_mode);
-    console::puts("  TLS mode → ");
-    console::puts(match new_mode {
-        Mode::Lockdown => "lockdown",
-        Mode::Research => "research",
-        Mode::Open     => "open",
-    });
-    console::puts("\n");
 }
 
 /// STUMP #105 — Sprint 3.1: dump or clear the cookie jar.
