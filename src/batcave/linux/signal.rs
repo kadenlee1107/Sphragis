@@ -557,12 +557,21 @@ pub const RESTORER_BYTES: [u8; 8] = [
 ];
 
 /// Fixed user VA where we plant the rt_sigreturn trampoline for the
-/// current cave. Chosen well below every library we load (content_shell
-/// at 0x11720000, libc around 0x14c00000, ld-linux at 0x1a400000)
-/// and away from V8's heap cage. User code only ever reaches this
-/// address via the x30 we pre-load at signal delivery time, so it
-/// doesn't need to sit in a "natural" mmap region.
-pub const RT_SIGRETURN_TRAMPOLINE_VA: u64 = 0x0080_0000;
+/// current cave. Chosen WELL above every library we load and away
+/// from V8's heap cage / Ladybird's mimalloc arena. User code only
+/// ever reaches this address via the x30 we pre-load at signal
+/// delivery time, so it doesn't need to sit in a "natural" mmap
+/// region.
+///
+/// History: 0x0080_0000 (8 MB) collided with Ladybird's
+/// LibJS/mimalloc, which writes a zero byte to 0x800000 during init
+/// (probably part of a fixed-base pointer-compression scheme that
+/// uses low-VA region for cell metadata). Moved to 0x0FFF_F000
+/// (just below the 256 MB cave_virt_base) — outside any pre-cave
+/// heap arena, outside the cave's library-loading region, outside
+/// the small-mmap region (0x70_xxxx_xxxx), and outside V8's typical
+/// 0x40_xxxx_xxxx and 0x30_xxxx_xxxx reservation hints.
+pub const RT_SIGRETURN_TRAMPOLINE_VA: u64 = 0x0FFF_F000;
 
 /// Allocate a fresh 4 KB frame, copy the restorer bytes into it, map
 /// it at `RT_SIGRETURN_TRAMPOLINE_VA` in the cave's L1 (passed in
@@ -598,6 +607,43 @@ pub fn install_trampoline(l1_phys: u64) -> Result<(), &'static str> {
     let entry = frame_pa_masked | flags;
 
     install_l3_mapping(l1_phys, RT_SIGRETURN_TRAMPOLINE_VA, entry)?;
+
+    // STUMP #161 iter 11+12: Ladybird's glibc zero-fills a RANGE
+    // starting at 0x0080_0000 during init (observed via [dp/low-va]
+    // diagnostic — first attempt with one page caught 0x800000,
+    // second attempt saw 0x801000, ...). It's a hot loop that writes
+    // zeros to a hardcoded address.
+    //
+    // Pre-map 64 pages (256 KB) at 0x0080_0000 as RW zero-pages in
+    // every cave. If glibc's range exceeds 256 KB we'll see new
+    // [dp/low-va] events at 0x84_0000+ and can grow further; for now
+    // 256 KB is enough headroom for any plausible TLS-init or RSEQ
+    // setup scratch area without burning frames unnecessarily.
+    {
+        const SCRATCH_BASE: u64 = 0x0080_0000;
+        const SCRATCH_PAGES: usize = 64;  // 256 KB
+        const PAGE_AP_EL0_RW: u64 = 0b01 << 6;
+        const PAGE_UXN:       u64 = 1 << 54;
+        let scratch_flags = PAGE_VALID | PAGE_AF | PAGE_SH
+            | PAGE_AP_EL0_RW | PAGE_PXN | PAGE_UXN;
+        for i in 0..SCRATCH_PAGES {
+            let pg = frame::alloc_frame().ok_or("scratch: OOM")?;
+            unsafe {
+                let p = pg as *mut u8;
+                for j in 0..4096 {
+                    core::ptr::write_volatile(p.add(j), 0);
+                }
+            }
+            let pa = (pg as u64) & 0x0000_FFFF_FFFF_F000;
+            let entry = pa | scratch_flags;
+            install_l3_mapping(
+                l1_phys,
+                SCRATCH_BASE + (i as u64) * 4096,
+                entry,
+            )?;
+        }
+        uart::puts("[sig] glibc-scratch range 0x800000..0x840000 (256 KB RW)\n");
+    }
 
     // TLB sledgehammer; cave just switched TTBR0 anyway so this is
     // mostly for our own peace of mind.

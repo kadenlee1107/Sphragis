@@ -11,6 +11,538 @@ end of a session.
 
 ---
 
+## 2026-05-07 (later) — Mac — 🔥 NO-BROWSER PIVOT: hard-deleted ~30 KLOC + ~2.5 GB
+
+**The big call.** Kaden chose to redefine Bat_OS's identity:
+**Bat_OS is a secure workstation, not a secure laptop. Web browsing
+happens on the host.** Bat_OS never ships a browser.
+
+This was a step back from the three-paths state (native engine /
+Ladybird port / stream-client) documented in the earlier 2026-05-07
+journal entry. The principle: every browser architecture violates
+"every byte auditable" in some way. Native is pure-Rust but "Chrome
+parity" is a wrong target for a security-first OS. Ladybird drags
+~32 MB of unaudited C++ into the trust boundary. Stream-client makes
+us structurally dependent on a Mac's Chrome we can't audit. The
+Chromium-port hit a wall on 2026-05-05 already.
+
+**The strategy doc** (`DESIGN_NO_BROWSER.md`, 155 lines, commit
+`2af9cdd4`) captures the decision and the rationale. The
+**implementation plan** (`docs/PLAN_NO_BROWSER_DELETION.md`, 1,053
+lines, commit `6a2688f8`) walked through 10 phases of mechanical
+deletion. Both committed before any code went away so the "why" was
+on disk first.
+
+### Tag for git revival
+
+Before any deletion landed: **`pre-no-browser-2026-05-07`** at commit
+`6a2688f8`. The full pre-deletion state — native engine, Ladybird
+port, stream-client v0, ports/* (2.5 GB), the lot — is recoverable
+from there forever.
+
+### Phases that ran
+
+Seven commits (`6891f5e3`..`54757cf7`) on `port/ladybird`:
+
+1. **Phase 1** — discard the 1,613-LOC stream-client iter 1
+   work-in-progress. `git checkout HEAD --` for the surviving files;
+   no commit; left to die in working-tree limbo until Phase 7's
+   bulk delete swept the rest.
+2. **Phase 2** (`6891f5e3`) — remove shell command dispatch +
+   `cmd_*` functions: `web`, `webwin`, `ladybird*`, `chromium*`,
+   `dump-dom`, `render`, `js-mode`, plus the test-ELF dispatch arms
+   (`netsurf`, `freetype`, `png`, `v8`, `js`, `javascript`, `blink`).
+   Also stripped `runner::run_chromium`, the `primary_override_*`
+   plumbing, and the browser test-binary `include_bytes!` (NETSURF,
+   FREETYPE, PNG, V8, BLINK, CSS_TOKENIZER). ~1,500 LOC.
+3. **Phase 3** (`c2bb179b`) — rip out the WM Browser app:
+   `src/ui/apps/browser.rs` (2.4 KLOC), `APP_BROWSER` constant
+   (NUM_APPS 9→8, renumbered), the JS-pill in the WM status bar, the
+   `browse`/`open` shell commands, `apps::browser::*` calls in
+   `desktop.rs` and `cave.rs`. ~1,943 LOC.
+4. **Phase 4** (`5c623f8c`) — delete `src/browser/` entirely (~16K
+   LOC: html/, css/, js/ vm/parser/compiler/builtins/dom_api/storage/
+   strings/canvas, layout/, paint/, media/ jpeg/png/gzip, dom.rs).
+   Plus the 5 helper fns in shell.rs (`interactive_loop`,
+   `rerun_layout_and_repaint`, `handle_interactive_click`,
+   `repaint_to_render_fb`, `draw_cursor` — orphaned alongside
+   `cmd_render`) and the 5 `crate::browser::*::reset_for_cave_switch`
+   hooks in `cave.rs`.
+5. **Phase 5** (`379086b5`) — remove `ChromiumFb` VFS +
+   `chromium_blit` kthread: `src/drivers/display/chromium_blit.rs`
+   gone, the iter-28d sync-blit-on-write path in `sys_write` gone,
+   the `sys_read`/`sys_mmap` `ChromiumFb` branches gone, the entire
+   "Chromium framebuffer bridge" section of `vfs.rs` (FB_MAGIC, the
+   region statics, `chromium_fb_region/_node`, `is_chromium_fb`,
+   `create_chromium_fb`) gone. WM still uses `crate::drivers::virtio::
+   gpu` directly; no display regression for non-browser code.
+6. **Phase 6** (`d6cba349`) — `git rm -rf` on `ports/`: ~2.5 GB across
+   `ladybird_port/`, `chromium_port/`, `chromium/` (the gitignored
+   1.3 GB Chromium snapshot), `netsurf/` and every NetSurf component
+   lib (libcss, libdom, libhubbub, libnsfb, libparserutils,
+   libwapcaplet, libnsutils), `freetype-2.13.3`, `libpng-1.6.43`,
+   `zlib-1.3.1`, `skia`, `v8`, every loose `blink_*.cpp` /
+   `css_*.cpp` / `skia_*.cpp` / `v8_*.cpp` / `libblink*.a` / `libc.{c,o}` /
+   `*_test.c` test-stub. Plus `tests/{blink,css_tokenizer,freetype,
+   netsurf_css,netsurf,png,v8_exec,v8}_test` (the include_bytes targets
+   from Phase 2). 35,034 files removed in one commit. `.gitignore`
+   cleaned up — no more `/ports/chromium`, `/chromium-build`,
+   `/ports/chromium_port/out/`, `liblagom-*.so*` lines.
+7. **Phase 7** (`de4516e1`) — delete browser scripts + tools:
+   `scripts/{browser_proxy,dump_dom,mouse_bridge,qemu_chromium_*,
+   qemu_ladybird_*,render_*}.py`, `tools/{bake_*,run_chromium,
+   audit_chromium_initmap}.sh`, `docs/LADYBIRD_AUTOPILOT.md`. The
+   autopilot loop driver itself (`scripts/autopilot.sh`) survives —
+   it's reusable for future non-browser STUMP loops. Makefile slimmed
+   down: `render`, `render-live`, `dom`, `smoke`, `initrd` targets
+   gone; `build`, `clean`, `watch`, `info` stay.
+8. **Phase 8** — Cargo.toml dep cleanup: ran a manual usage audit
+   over every `[dependencies]` entry. All deps (aes, ghash, sha2,
+   chacha20poly1305, ed25519-compact, p256, p384, rsa, x509-cert,
+   spki, der, const-oid, ml-kem, ml-dsa, hybrid-array, x25519-dalek,
+   argon2, linked_list_allocator, rand_core) have active non-browser
+   usage. No-op. No commit.
+9. **Phase 9** (`54757cf7`) — `DESIGN_BROWSER.md` and
+   `DESIGN_CHROMIUM.md` got SUPERSEDED notices at the top pointing
+   to `DESIGN_NO_BROWSER.md` and the rescue tag.
+10. **Phase 10** (this entry) — final release build (`6.5 MB` kernel
+    binary, 222 release-build warnings, no errors), wrote
+    `scripts/qemu_boot_smoke.py` to replace the deleted browser
+    smokes, ran it: kernel boots, BatCave + network + virtio-gpu +
+    BatFS all init, no deleted-browser symbols leak through.
+
+### Total damage
+
+**`8,270,098` lines deleted** across the 7 commits between
+`pre-no-browser-2026-05-07..HEAD`. The bulk of that is the vendored
+ports tree (`ports/freetype`, `ports/skia`, `ports/v8`, etc.) — real
+Rust + browser code is more like ~30 KLOC.
+
+### State of tree
+
+- `port/ladybird` HEAD is now a bat_OS *without* a browser.
+- Surviving shell commands are: status, mem, whoami, uname, ls,
+  cat, write, rm, verify, net, ping, dns, fw, fetch, edit, screen,
+  audit, tcp-*, fw-*, cpol-*, cave-*, blk-*, batcave, secure-ipc-*,
+  pq-*, gcm-*, otp-*, posix, cxx — secure workstation surface, no
+  rendering surface.
+- WM apps: Term, Dash, File, Net, Edit, Sec, Chat, Cave (no Web).
+- TLS 1.3 + hybrid-PQ stack survives; HTTPS fetch still works for
+  machine-to-machine. Crypto stack untouched. BatFS untouched.
+- `scripts/autopilot.sh` survives. `tests/{posix,cxx,hello*}` survive.
+
+### Next
+
+The strategy doc names the obvious next moves:
+- Strengthen what's left: TLS X.509 chain validation (the validators
+  are pulled in but not wired into the live HTTPS path).
+- Scheduler `block_on()` instead of futex/epoll spin.
+- Audit where the deletions left dead imports / orphaned symbols
+  (222 release-build warnings is high; some are pre-existing
+  `dead_code` allows but a few are now-redundant after the cleanup).
+
+🦇
+
+---
+
+## 2026-05-07 — Mac — 🎨 LADYBIRD PIXELS ON SCREEN + 🌐 stream-client v0
+
+**Catch-up entry.** Last journal was the LibJS-prints-"2" milestone on
+2026-05-05 17:15. Since then, 16 commits landed on `port/ladybird`
+without a journal entry (iters 21–28 of STUMP #161 + autopilot
+self-improvements + stream-client v0). This is that catch-up.
+
+### Iters 21–28: native Ladybird renders to /batos/fb0
+
+Got Ladybird's full pipeline — HTMLParser → DOM → Style → Layout →
+Skia paint → BGRA bitmap — running in-process on Bat_OS, with the
+result blitted to the QEMU window via `/batos/fb0` → virtio-gpu.
+
+**The eight iters (commits `53aafca7`..`77f7d67d` on `port/ladybird`):**
+
+1. **iter 21** (`53aafca7`) — Wired Ladybird's `HTMLTokenizer` directly
+   into a `ladybird-dump` smoke binary. Tokens printed on Bat_OS.
+   Proof that LibWeb's parser front-end loads + runs end-to-end in a
+   cave (not just LibJS).
+
+2. **iter 22** (`3a7506ed`) — Walked the tokenizer state into a
+   tree-style DOM dump (open/close-tag indenting, text nodes shown).
+   Confirmed the cave can keep `Vector<Token>` allocations stable
+   across the parse.
+
+3. **iter 23** (`57e172e4`) — Tried to construct an actual `Document`
+   to drive layout. `JS::VM` + `JS::Realm` bootstrap worked, but
+   `Document::create` requires a `Navigable` requires a `Page`
+   requires a `PageClient`. Documented the dependency chain.
+
+4. **iter 24** (`75f38759`) — Wrote a minimal `HeadlessPageClient`
+   (~80 LOC), bootstrapped a `Page` + `Navigable`, mounted Lagom's
+   font directory through the Bat_OS VFS so fontconfig's
+   getdents64 sees real `.ttf` files.
+
+5. **iter 25** (`1a9457f3`) — `is_user_range` page-table fallback. The
+   bug: brk-extended pages (sys_brk maps EL0_RW from iter 18) weren't
+   in any tracked range, so getdents64 EFAULTed when fontconfig's
+   buffer landed in malloc-extended brk space. Fix: when the address
+   isn't in a known range, walk the cave's L1/L2/L3 page tables; if
+   the page is mapped EL0-readable, allow it. Same root cause as iter
+   15's scratch-zone fix, generalized.
+
+6. **iter 26** (`96e9babf`) — Real Layout tree from LibWeb. Switched
+   from `Document::create_for_fragment_parsing` (returns null
+   layout_node) to the navigable's `active_document`, set viewport
+   to 800×600, called `update_layout`, walked `Layout::Viewport`
+   recursively. Output is CSS-spec-correct: H1 37px tall, LI items
+   18px line-height, 6×6 marker boxes, 8px BODY margin, 40px UL
+   indent. Real layout, real fonts, real cascade.
+
+7. **iter 27** (`6f56e618`) — Skia paint to in-memory bitmap. Recorded
+   a `Painting::DisplayList` from the document, wrapped a 800×600
+   BGRA `Bitmap` in a `PaintingSurface`, ran
+   `DisplayListPlayerSkia.execute`. Required adding `WEB_API`
+   visibility to two LibWeb classes (`DisplayListPlayer`,
+   `DisplayListPlayerSkia`) and a small shim TU
+   (`PaintShim.cpp`) because the player has hidden ELF visibility.
+   Result: 5404 non-zero pixels — the H1 + body text + EM emphasis
+   + UL bullets, anti-aliased.
+
+8. **iter 28** (`6bc0f130`) — Final piece: bitmap → `/batos/fb0` →
+   virtio-gpu. Couldn't `mmap(/batos/fb0)` because the FB phys
+   address (~0x5e4f8000) sits under an L2 BLOCK in the cave's page
+   table, so install_l3 fails for all 1280 pages. Used the `write()`
+   syscall instead — kernel-side `ChromiumFb` write handler copies
+   user buf → phys via the kernel identity map.
+
+   Iter 28 then needed three follow-ups (`28b/c/d`):
+   - **28b** (`77205fa6`) — Logging in `chromium_blit::tick` to
+     verify the kthread actually sees the seq bump.
+   - **28c** (`08ea250d`) — Stage `ChromiumFb` writes through
+     primary L1. Inside the cave, EL1 syscalls' TTBR0 is the cave's
+     L1, which doesn't map FB phys cleanly (L2 BLOCK at wrong VA),
+     so `sys_write`'s `strb` was landing on aliased garbage. Fix:
+     copy user→4KB kernel staging buffer (under cave TTBR0), switch
+     to `PRIMARY_L1`, copy staging→FB-phys (with cache flush),
+     switch back + TLBI.
+   - **28d** (`00a8ce41`) — Synchronous blit on `/batos/fb0` write.
+     The blit kthread wasn't getting scheduled reliably — HVF
+     doesn't deliver the cave's EL1 timer IRQ consistently. Cheapest
+     fix: `sys_write` invokes `chromium_blit::tick()` synchronously
+     after the bytes land. Every write to `/batos/fb0` now produces
+     a blit immediately, no scheduling required.
+
+   Plus `77f7d67d` — disable `SYSCALL_TRACE` by default. Pipeline
+   works; the 1000s of `[sc tN]` lines were just drowning the actual
+   output.
+
+**End-to-end pipeline now working:**
+
+```
+HTML string → HTMLParser → Document → Layout → Skia paint
+  → BGRA bitmap → write(/batos/fb0) → ChromiumFb staging
+  → PRIMARY_L1 copy → chromium_blit::tick (sync)
+  → virtio-gpu scanout → QEMU window pixels
+```
+
+**To see it:**
+```
+python3 scripts/qemu_ladybird_window.py
+bat_os> ladybird-dump
+```
+
+`ladybird-dump` is now the real-Ladybird visual demo (`3d1835dc`).
+The Bat_OS built-in browser path (`render ... live=1`) still works
+but uses the older CSS-1.0-era native engine instead of LibWeb.
+
+### Autopilot self-improvements (made iters 21–28 possible)
+
+The autopilot got smarter in this stretch — five commits on top of
+the original loop:
+
+- **`5d5e2ed2`** state file + tmux-friendly loop driver
+- **`b7e1ed49`** `--session-id` for context continuity (Option B):
+  every fire pins the same session UUID so context accumulates
+  across iters
+- **`1d168690`** `--effort max` on every fire
+- **`8341f579`** tighten `NEEDS HUMAN` grep to `^> ` prefix (was
+  matching mid-output false positives)
+- **`4fcf867b`** `--session-id` only on the first fire, `--resume`
+  after (Claude's session-id semantics changed — first fire creates,
+  subsequent fires resume the existing session)
+
+Net effect: a single autopilot run can chain ~10 iters with shared
+context before needing human input. State lives in
+`docs/LADYBIRD_AUTOPILOT.md` (single source of truth for current
+iter step).
+
+### 🌐 stream-client v0 — pragmatic thin-client browser
+
+Two-piece system landed at the end of the session
+(`4f10d4f4` + `3d305b67`):
+
+1. **Mac side: `scripts/browser_proxy.py`** — runs headless
+   Chromium via Playwright. Listens on `:9100`. POST `/render`
+   with `{url, w, h}` returns raw BGRA bytes (`w*h*4`).
+
+2. **Bat_OS side: `cmd_web` in `src/ui/shell.rs`** — connects to
+   `10.0.2.2:9100` (Mac via QEMU slirp), POSTs URL, receives BGRA,
+   writes directly into `/batos/fb0`, bumps seq, triggers
+   `chromium_blit::tick` to push to virtio-gpu.
+
+`3d305b67` then attached `-netdev user` to `qemu_ladybird_window.py`
+so the cave's TCP SYN actually goes somewhere.
+
+Architecture is **thin-client**: Chrome on Mac does all rendering,
+Bat_OS displays the pixels. Same pattern as Chromebooks (originally),
+Citrix, VNC. **Pragmatic complement to native Ladybird:** that's the
+engineering achievement, this is the daily driver.
+
+Tested: example.com renders in 1.92 MB (800×600), google.com in
+5.24 MB (1280×1024). Chromium ready ~3 s, render ~0.9 s.
+
+### State of tree
+
+- `port/ladybird` HEAD: `3d305b67`
+- Three live browser paths now coexist:
+  1. Native engine (`src/browser/`, ~16K Rust) — works for static
+     pages, has done live Wikipedia HTTPS via `render`.
+  2. Ladybird (`port/ladybird`, iter 28) — real DOM + layout +
+     Skia, paints to fb0.
+  3. stream-client (`web <url>`) — Mac proxy → BGRA → fb0.
+- `chromium_blit::tick` is now synchronous on `/batos/fb0` write
+  (HVF timer IRQ unreliability worked around).
+- `is_user_range` falls back to a page-table walk when the address
+  isn't in any tracked range — no longer needs every brk/mmap to be
+  pre-registered.
+
+### In-flight uncommitted work — stream-client iter 1
+
+There's a **substantial uncommitted change** sitting on disk: 1,613
+insertions across 11 files. This is mid-build, not stale:
+
+```
+ scripts/browser_proxy.py        | 642 +++++  (input bridge, /key, /poll, mouse cap)
+ scripts/qemu_ladybird_window.py |  24 +
+ src/batcave/linux/vfs.rs        |  23 +
+ src/drivers/virtio/gpu.rs       |  87 +
+ src/drivers/virtio/keyboard.rs  |  10 +
+ src/drivers/virtio/tablet.rs    |  33 +
+ src/net/tcp.rs                  |   2 +-
+ src/ui/apps/browser.rs          | 240 +++  (REMOTE_MODE — render IN the WM Browser app)
+ src/ui/desktop.rs               |  56 +
+ src/ui/shell.rs                 | 647 +++  (cmd_web extended for keyboard/mouse forwarding)
+ src/ui/wm.rs                    |  24 +
+```
+
+What it adds (per code inspection):
+- `cmd_web` extended from one-shot screenshot → interactive loop:
+  keyboard fwd via POST `/key`, mouse fwd, frame polling via
+  `/poll`, ESC to exit.
+- `browser.rs` gets `REMOTE_MODE` + `REMOTE_BGRA` (8.3 MB buffer).
+  When user opens the Browser app, it computes its content rect
+  (excludes 40 px nav, 24 px bookmarks, 24 px status) and POSTs
+  `/render` at *that* size, blits BGRA into the app's content area
+  on each tick. Bridges fullscreen `web` → windowed `webwin <url>`.
+- Mac-side proxy gains `/key`, `/poll`, `/snapshot`, mouse cursor
+  capture via Quartz (since virtio-tablet is broken on cocoa).
+
+Next session pickup: validate the input bridge end-to-end, then
+commit as iter 1 of stream-client.
+
+### What's next (priority order)
+
+1. **Land the in-flight stream-client iter 1.** Test, commit,
+   journal it. Don't lose this work.
+2. **Decide which browser is "the" browser.** Three live paths is
+   one too many to maintain. Native is the engineering pride.
+   Ladybird is the engineering achievement. Stream-client is the
+   pragmatic daily driver. Pick a strategy, write it down.
+3. **Push iter 28 past static rendering.** Multi-page nav,
+   click events, form submission via Ladybird's real engine.
+4. **Refresh DESIGN docs.** `DESIGN_BROWSER.md` and
+   `DESIGN_CHROMIUM.md` describe a Chromium-first plan that no
+   longer holds. They're misleading to anyone reading them now.
+
+### Open questions / debt
+
+- HVF timer-IRQ delivery to caves is unreliable. Iter 28d worked
+  around it for the blit kthread by going synchronous. Other
+  kthreads / scheduler / timeouts inherit the same problem.
+- TLS chain validation is still cert-pinning-only despite
+  `x509-cert` / `spki` / `der` / `const-oid` being pulled in as
+  deps. Validators exist but aren't wired into the live HTTPS path.
+- Scheduler's `block_on()` is still TODO — futex/epoll waiters
+  spin. Chromium showed this scales badly.
+- 2,930 modified `captures/G*.png` files in `git status` are noise
+  (lagom build artifact regen, not real changes). Should be
+  `.gitignore`d or moved to a separate location.
+
+🦇
+
+---
+
+After 7 more iterations on `port/ladybird` (iters 14-20 of STUMP #161),
+**`console.log(1+1)` prints `2` end-to-end on Bat_OS**. That's
+glibc init → libcpptrace → liblagom-* → JS::VM construction → JS
+eval → fputs → write(stdout) → UART. The whole stack works.
+
+Smoke: `python3 scripts/qemu_ladybird_js.py` → `PASS — got '2' from LibJS`.
+
+**The seven fixes (commit `1577fe5e`..`196af1d8` on `port/ladybird`):**
+
+1. **iter 14** — TIOCGPGRP/TIOCSPGRP write pgrp=1 to user buffer, plus
+   binary-patch `tcgetpgrp` in libc.so.6 to immediate-ret. glibc's
+   `__tcsetpgrp` was looping forever waiting for the buffer's pgrp_t
+   to match getpid().
+
+2. **iter 15** — `is_user_range` accepts the 0x800000-0x840000 scratch
+   zone for active caves. mimalloc allocates from there during init,
+   and read() failed EFAULT when glibc tried to read /etc/nsswitch.conf
+   into a mimalloc-allocated buffer that fell outside the cave's
+   normal user-VA window.
+
+3. **iter 16** — diagnostics: heartbeat sampler in handle_irq + ELR
+   in syscall trace. Found that IRQs literally don't fire under HVF
+   on Apple Silicon (separate issue), so all our timing-based
+   debugging needs a different signal.
+
+4. **iter 17** — smoke pattern fix: was matching `ladybird-js: ` echo
+   instead of actual program output. Also enabled SYSCALL_TRACE from
+   runner entry to see every syscall during init.
+
+5. **iter 18** — sys_brk now alloc_frame + install_l3_mapping for
+   each newly-extended page. Was relying on demand_page lazy-commit,
+   but the kernel-side byte-zeroing loop ran BEFORE access, page-
+   faulting at EL1 when brk extended past our pre-mapped scratch.
+
+6. **iter 19** — anon MAP_FIXED force-overwrites L3 entries. The
+   prior file-mmap that initially loaded liblagom-js (R/O) covered
+   the whole memsz range; the subsequent `mmap(MAP_FIXED|MAP_ANON)`
+   for the BSS extension was walking and zeroing only EL1-RW pages,
+   skipping the R/O ones — so liblagom-js's BSS read FILE CONTENT
+   instead of zero, and JS::VM::create's `VERIFY(s_vm_count == 0)`
+   fired.
+
+7. **iter 20** — `is_user_writable` now distinguishes L2 BLOCK
+   descriptors (bits 1:0 = 0b01) from L3 PAGE entries (0b11). Cave
+   user-VA window is L2-block-mapped, so the prior `(pte & 0b11) != 0b11`
+   check incorrectly rejected every stack/heap pointer as
+   non-writable. That broke prlimit64 → pthread_getattr_np → AK
+   StackInfo VERIFY.
+
+Plus libc binary patches in `ports/ladybird_port/out/lib/libc.so.6`:
+- `__stack_chk_fail` → `ret` (iter 13)
+- `tcgetpgrp` prologue → `mov w0, #0; ret` (iter 14)
+- `tcgetattr` prologue → `mov w0, #0; ret` (iter 17)
+
+**The trace, end of run:**
+```
+[sc t16962] 64 (write) args=[fd=1, buf=0x82d980, count=2, ...]
+2
+[sc t16962] -> 0x2
+[sc t16962] 94 (exit_group) args=[0, ...]
+[linux] process exited with code 0
+```
+
+**State of the tree:**
+- `port/ladybird` HEAD: `196af1d8` (smoke default change to console.log)
+- One smoke target works end-to-end: `ladybird-js` (no args) →
+  `console.log(1+1)` → `2` → exit 0.
+- All Ladybird artifacts (33 libs in initrd) load + relocate cleanly.
+- Chromium work is parked on `feat/js-engine-browser-posix` — this
+  branch is independent.
+
+**What's next (priority order):**
+1. Try a multi-statement JS expression (`for (let i=0;i<10;i++) console.log(i)`)
+   to make sure the stack expansion + GC paths still work past iter 20.
+2. Build Ladybird's WebContent + ImageDecoder + RequestServer
+   binaries into the initrd (already in `Build/release/libexec/`)
+   and try a `dump-DOM` smoke against `bin/hello.html`.
+3. Wire IPC: WebContent talks to a UI process via Unix socket
+   (LibIPC). Bat_OS has Unix sockets via `socketpair` already; verify
+   the LibIPC init path works.
+4. Eventually: get the dump-DOM output through serial → screen capture
+   on real M4 hardware.
+
+**Open questions:**
+- The `tcgetattr` patch was a band-aid — somewhere between isatty
+  return and the first stderr write, glibc was looping. Worth
+  finding the root cause once IRQs deliver under HVF (we never
+  saw a single timer IRQ fire during 120s smoke runs, so PC
+  sampling didn't help).
+- IRQ delivery under HVF — do we need a different timer setup? Apple
+  Silicon's AIC vs QEMU virt's GIC mismatch may be the culprit even
+  with `-machine virt,gic-version=3`.
+
+---
+
+## 2026-05-05 (early hours) — Mac — 🌟 NEW BRANCH `port/ladybird`: pivoting to Ladybird
+
+Kaden suggested Ladybird and Helium as alternatives after the Chromium
+Mojo wall. Helium is a Chromium fork — same wall. **Ladybird is a real
+alternative**: truly independent browser, BSD-2 licensed, ~32 MB C++ +
+2 MB Rust (vs Chromium's ~600 MB), uses LibIPC (Unix sockets) instead
+of Mojo, LibJS instead of V8 with no 1 TB sandbox cage requirement,
+and crucially — **its authors built it alongside SerenityOS**, an OS
+they were also writing themselves. That's literally our exact
+situation; they've already solved "make a browser portable to a brand-
+new OS."
+
+**State:** Created `port/ladybird` branch. Chromium work stays on
+`feat/js-engine-browser-posix` — this is parallel, not a replacement.
+
+**Scaffolding committed (4 commits on `port/ladybird`):**
+
+  `59779cb9` Ladybird port scaffolding — branch port/ladybird
+  `7586ee75` shell: add ladybird + ladybird-js commands
+  `37c130a7` scripts: ladybird-js smoke test
+  (plus the Docker rebuild fix that switched from debian:bookworm
+   to ubuntu:24.04 because Kitware's apt repo only serves Ubuntu)
+
+  ports/ladybird_port/
+    README.md     ← rationale + status table
+    Dockerfile    ← ubuntu:24.04 + clang-21 + cmake 3.30 + Rust
+    build.sh      ← drives Meta/ladybird.py, copies artifacts
+                    + ldd closure to /home/build/out/
+
+  tools/bake_ladybird_initrd.sh
+                  ← packs WebContent + helpers + DT_NEEDED libs
+                    into the same BATCHROM/BATARCH archive
+                    format the kernel already understands
+
+  src/ui/shell.rs:
+    cmd_ladybird_js(expr)  ← LibJS REPL via /bin/js -c <expr>
+    cmd_ladybird(url)      ← WebContent via /bin/WebContent <url>
+
+  scripts/qemu_ladybird_js.py
+                  ← smallest-possible Ladybird smoke (looks for
+                    output of `console.log(1+1)` = "2")
+
+**Strategy:** Build the LibJS REPL (`js`) FIRST as a baseline. It
+only needs ELF load → glibc init → AK → LibCrypto → LibJS → printf.
+If that runs, we know the cave's dynamic loader can host Ladybird's
+Lagom libs end-to-end. Then move to WebContent for the actual DOM
+render path.
+
+**State of the build:** Docker image `batos-ladybird-build:latest`
+built clean (1.67 GB on Ubuntu 24.04 base). Inside-container build
+(`build.sh`) is currently `git clone`-ing Ladybird's 3 GB source
+tree. Once that lands, `Meta/ladybird.py build --target WebContent
+RequestServer ImageDecoder WebWorker` runs (~30 min on M-series).
+
+**Next session pickup point:**
+- Container build finishes
+- `tools/bake_ladybird_initrd.sh ports/ladybird_port/out` to pack
+- `python3 scripts/qemu_ladybird_js.py` to verify
+- If LibJS runs: graduate to `ladybird --dump-dom file:///bin/hello.html`
+
+The Chromium work isn't wasted — `iter 1-8` improvements (Landlock
+stubs, demand_page perm-fault handler, real renameat, brk-skip
+same-fn redirect, futex-wake all-buckets scan, etc.) all apply to
+ANY Linux userspace, not just Chromium. Ladybird gets to ride on
+top of those for free.
+
+---
+
 ## 2026-05-04 (deep night) — Mac — 🎯 STUMP #160 iter 6/7: GL-init crash bypass (brk-skip same-fn redirect)
 
 User said "WAIT NO IM NOT READY TO SLEEP YET BRO CMONNN" after the

@@ -180,9 +180,21 @@ fn is_user_writable(p: usize, size: usize) -> bool {
         };
         // L2 BLOCK descriptor (0b01): identity-mapped 2 MB block.
         // L2 TABLE (0b11): walk L3.
+        // STUMP #161 iter 20: distinguish L2 BLOCK (0b01) from L3
+        // PAGE (0b11). Valid bit is bit 0; bit 1 = "table/page" (1)
+        // vs "block" (0) at this level. The cave's main user-VA
+        // window is mapped via L2 BLOCKS (0b01) — the previous
+        // `(pte & 0b11) != 0b11` check rejected those as "invalid",
+        // making is_user_writable falsely return EFAULT for every
+        // stack/heap pointer in the cave window. That broke
+        // prlimit64(old=...) → glibc's pthread_getattr_np → AK
+        // StackInfo VERIFY.
+        let is_block;
         let pte = if (l2e & 0b11) == 0b01 {
+            is_block = true;
             l2e
         } else if (l2e & 0b11) == 0b11 {
+            is_block = false;
             let l3_phys = l2e & 0x0000_FFFF_FFFF_F000;
             let l3_idx = (va >> 12) & 0x1FF;
             unsafe {
@@ -191,7 +203,14 @@ fn is_user_writable(p: usize, size: usize) -> bool {
         } else {
             return false;
         };
-        if (pte & 0b11) != 0b11 { return false; } // not valid
+        // For BLOCK: valid = bit 0 set, block-ness = bit 1 clear (which
+        // is already implied by the 0b01 match above).
+        // For PAGE (L3): valid descriptor uses bits 1:0 = 0b11.
+        if is_block {
+            if (pte & 0b1) != 0b1 { return false; }
+        } else {
+            if (pte & 0b11) != 0b11 { return false; }
+        }
         // AP[2:1] at bits 7:6. Only AP=0b01 means EL0 writable.
         let ap = (pte >> 6) & 0b11;
         if ap != 0b01 { return false; }
@@ -369,7 +388,17 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
                 uart::putc(hex[((a >> (shift * 4)) & 0xF) as usize]);
             }
         }
-        uart::puts("]\n");
+        // STUMP #161 iter 16: print ELR_EL1 (the user PC at SVC entry,
+        // i.e. the instruction AFTER `svc #0`). Critical for finding
+        // which libc function called the syscall when /bin/js hangs
+        // in userland — without it we can't correlate to disassembly.
+        let elr: u64;
+        unsafe { core::arch::asm!("mrs {}, ELR_EL1", out(reg) elr); }
+        uart::puts("] elr=0x");
+        for sh in (0..16).rev() {
+            uart::putc(hex[((elr >> (sh*4)) & 0xF) as usize]);
+        }
+        uart::puts("\n");
     }
 
     // Classify the syscall
@@ -1755,26 +1784,6 @@ fn sys_write(args: [u64; 6]) -> i64 {
         if node.node_type == vfs::NodeType::DevConsole {
             return write_to_uart(buf, count);
         }
-        // /batos/fb0 — ChromiumFb: write bytes into the shared region directly
-        // (bypasses the 256KB MAX_FILE_PAGES limit of regular files).
-        if node.node_type == vfs::NodeType::ChromiumFb {
-            let pos = entry.position;
-            if node.data_addr == 0 { return -5; } // EIO
-            if pos >= node.size { return 0; }
-            let to_write = (node.size - pos).min(count);
-            let dst = node.data_addr + pos;
-            for i in 0..to_write {
-                unsafe {
-                    let b: u32;
-                    core::arch::asm!("ldrb {v:w}, [{a}]",
-                        a = in(reg) buf + i, v = out(reg) b);
-                    core::arch::asm!("strb {v:w}, [{a}]",
-                        a = in(reg) dst + i, v = in(reg) b);
-                }
-            }
-            if let Some(e) = fd::get_mut(fd_num) { e.position += to_write; }
-            return to_write as i64;
-        }
 
         let pos = entry.position;
         match vfs::write_to_file(node_idx, pos, buf, count) {
@@ -2030,25 +2039,6 @@ fn sys_read(args: [u64; 6]) -> i64 {
         if node.node_type == vfs::NodeType::DevConsole {
             return sys_read([0, args[1], args[2], 0, 0, 0]); // redirect to stdin
         }
-        // /batos/fb0 — ChromiumFb: read raw bytes from the shared region.
-        // Useful for `hexdump /batos/fb0 | head` style debugging.
-        if node.node_type == vfs::NodeType::ChromiumFb {
-            if node.data_addr == 0 { return -5; } // EIO
-            if pos >= node.size { return 0; }
-            let to_read = (node.size - pos).min(count);
-            let src = node.data_addr + pos;
-            for i in 0..to_read {
-                unsafe {
-                    let b: u32;
-                    core::arch::asm!("ldrb {v:w}, [{a}]",
-                        a = in(reg) src + i, v = out(reg) b);
-                    core::arch::asm!("strb {v:w}, [{a}]",
-                        a = in(reg) buf + i, v = in(reg) b);
-                }
-            }
-            if let Some(e) = fd::get_mut(fd_num) { e.position += to_read; }
-            return to_read as i64;
-        }
 
         // Regular file
         match vfs::read_file_data(node_idx, pos, buf, count) {
@@ -2124,6 +2114,19 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
     let hex = b"0123456789abcdef";
     for sh in (0..8).rev() { uart::putc(hex[((flags >> (sh*4)) & 0xF) as usize]); }
     uart::puts("\n");
+
+    // STUMP #161 iter 15: one-shot trace trigger.
+    // The /bin/js init currently hangs after opening
+    // `/etc/nsswitch.conf` — the kernel diag dump fires every 1M
+    // syscalls, but iter 14 logs show ZERO diag dumps, meaning it's
+    // NOT in a syscall loop. Either it's in a futex-wait, an mmap
+    // size negotiation, or pure userspace busy-loop. Flip the
+    // syscall trace on as soon as we see this openat so the next
+    // smoke shows what comes next.
+    if path == b"/etc/nsswitch.conf" {
+        SYSCALL_TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+        uart::puts("[trace] enabling syscall trace after nsswitch.conf openat\n");
+    }
 
     if has_dotdot(path) { return EACCES; }
 
@@ -2525,8 +2528,45 @@ fn sys_ioctl(args: [u64; 6]) -> i64 {
             }
             0
         }
-        0x540E => 0, // TIOCGPGRP — get process group
-        0x540F => 0, // TIOCSPGRP — set process group
+        0x540E => {
+            // TIOCGPGRP — return process group via the user-supplied
+            // int* pointer.
+            //
+            // STUMP #161 iter 14: previously returned 0 without writing
+            // the pgrp value, leaving the user's `pgrp` variable holding
+            // uninitialised stack data. glibc's tcgetpgrp wrappers
+            // sometimes loop until tcgetpgrp returns a specific value
+            // (e.g. matching getpgrp()), so an unwritten pgrp made
+            // /bin/js spin in tcgetpgrp+ioctl forever during glibc
+            // init. Write our standard pgrp = 1 (matches getpid).
+            let buf = args[2] as usize;
+            if buf != 0 {
+                if !uaccess::is_user_range(buf, 4) { return -(14i64); }
+                unsafe {
+                    core::arch::asm!("str {v:w}, [{a}]",
+                        a = in(reg) buf, v = in(reg) 1u32);
+                }
+            }
+            0
+        }
+        0x540F => {
+            // TIOCSPGRP — set process group. glibc's __tcsetpgrp /
+            // __tcgetpgrp wrappers pass a pointer to a local pgrp_t
+            // variable and READ it back after the ioctl returns; if
+            // we don't write to the pointer the value is uninitialized
+            // stack data and the caller may loop expecting the value
+            // to match getpid(). Write 1 (matches getpid for our
+            // single-process model). STUMP #161 iter 14.
+            let buf = args[2] as usize;
+            if buf != 0 {
+                if !uaccess::is_user_range(buf, 4) { return -(14i64); }
+                unsafe {
+                    core::arch::asm!("str {v:w}, [{a}]",
+                        a = in(reg) buf, v = in(reg) 1u32);
+                }
+            }
+            0
+        }
         _ => 0       // Unknown ioctls — return success
     }
 }
@@ -2642,24 +2682,67 @@ fn sys_brk(args: [u64; 6]) -> i64 {
     unsafe {
         if PRIMARY_BRK_HWM == 0 { PRIMARY_BRK_HWM = PRIMARY_BRK_BASE; }
         if requested > PRIMARY_BRK_HWM {
-            // Zero the newly-extended range so user reads can't see stale
-            // kernel data. We zero by USER VA (the cave's mapping makes
-            // EL1 reads via the same VA work).
             let from = PRIMARY_BRK_HWM;
             let to = requested;
             // Sanity: refuse insane growth (>256 MB in one call).
             if to.saturating_sub(from) > (256u64 << 20) {
                 return ENOMEM;
             }
-            let mut p = from;
-            while p < to {
-                core::ptr::write_volatile(p as *mut u8, 0);
-                p += 1;
-                // Yield occasionally so we don't pin the core for huge brks.
-                if (p & 0xFFFF) == 0 {
-                    super::threads::schedule();
+
+            // STUMP #161 iter 18: brk previously assumed the user VA range
+            // was already mapped (relied on the 256-KB scratch zone +
+            // demand-page lazy commit). For brk(0x844000) — which extends
+            // 4 KB BEYOND our 0x840000 scratch zone — the kernel's
+            // byte-by-byte zeroing loop hit an unmapped page, faulted at
+            // EL1 (ec=0x25), and crashed the cave. Now we explicitly
+            // alloc + install_l3_mapping for each newly-extended page.
+            //
+            // Page-align the range outward (rounddown from, roundup to).
+            let from_aligned = from & !0xFFFu64;
+            let to_aligned   = (to + 0xFFF) & !0xFFFu64;
+            // Find the active cave's L1 phys from TTBR0_EL1.
+            let ttbr0: u64;
+            core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0);
+            let l1_phys = ttbr0 & !1u64;
+            // EL0 RW + UXN + PXN flags (no exec).
+            const PAGE_VALID: u64 = 0b11;
+            const PAGE_AF:    u64 = 1 << 10;
+            const PAGE_SH:    u64 = 0b11 << 8;
+            const PAGE_AP_EL0_RW: u64 = 0b01 << 6;
+            const PAGE_PXN:   u64 = 1 << 53;
+            const PAGE_UXN:   u64 = 1 << 54;
+            let flags = PAGE_VALID | PAGE_AF | PAGE_SH
+                | PAGE_AP_EL0_RW | PAGE_PXN | PAGE_UXN;
+            let mut va = from_aligned;
+            while va < to_aligned {
+                // Skip pages that were already pre-mapped by
+                // signal::install_trampoline (the [0x800000, 0x840000)
+                // scratch zone). Re-mapping them would alloc an extra
+                // frame and leak.
+                if va >= 0x0080_0000 && va < 0x0084_0000 {
+                    va += 4096;
+                    continue;
                 }
+                let pg = match crate::kernel::mm::frame::alloc_frame() {
+                    Some(p) => p,
+                    None    => return ENOMEM,
+                };
+                // Zero the freshly-allocated frame so user reads can't
+                // see stale kernel pointers.
+                let p_ptr = pg as *mut u8;
+                for i in 0..4096 {
+                    core::ptr::write_volatile(p_ptr.add(i), 0);
+                }
+                let pa = (pg as u64) & 0x0000_FFFF_FFFF_F000;
+                let entry = pa | flags;
+                if super::demand_page::install_l3_mapping(
+                    l1_phys, va, pa, entry,
+                ).is_err() {
+                    return ENOMEM;
+                }
+                va += 4096;
             }
+
             PRIMARY_BRK_HWM = to;
         }
     }
@@ -2675,46 +2758,6 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
     let offset = args[5] as usize;
 
     if len == 0 { return EINVAL; }
-
-    // ─── /batos/fb0 ChromiumFb: MAP_SHARED of the pre-allocated region ───
-    //
-    // Chromium's patched Ozone backend opens /batos/fb0, ftruncates, then
-    // calls mmap(NULL, 5 MiB, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0).
-    // We return the physical base of the region — it's identity-mapped in
-    // the kernel's flat address space, so the returned VA is directly
-    // accessible from both EL1 (kernel blit kthread) and EL0 (Chromium).
-    //
-    // Limitations (see ports/chromium_port/PHASE5_DISPLAY.md Risk #4):
-    //   - No per-process MMU view: all BatCave processes see the same VA.
-    //     Good enough for single-process content_shell (--single-process).
-    //   - MAP_PRIVATE on the fb would silently give Chromium a shared view
-    //     here; we accept that for v1 because content_shell uses MAP_SHARED.
-    //   - Offsets other than 0 are allowed (stride math), but we clamp to
-    //     the region size.
-    const MAP_SHARED: u32 = 0x01;
-    const MAP_PRIVATE: u32 = 0x02;
-    if fd_num >= 0 && (flags & (MAP_SHARED | MAP_PRIVATE)) != 0 {
-        if let Some(entry) = fd::get(fd_num as u32) {
-            let node = vfs::get_node(entry.node_idx);
-            if node.node_type == vfs::NodeType::ChromiumFb && node.data_addr != 0 {
-                if offset >= node.size { return EINVAL; }
-                let avail = node.size - offset;
-                if len > avail {
-                    uart::puts("[mmap] /batos/fb0 len exceeds region\n");
-                    return EINVAL;
-                }
-                let base = node.data_addr + offset;
-                uart::puts("[mmap] /batos/fb0 → 0x");
-                let hex = b"0123456789abcdef";
-                for shift in (0..16).rev() {
-                    let nibble = ((base >> (shift * 4)) & 0xF) as usize;
-                    uart::putc(hex[nibble]);
-                }
-                uart::puts("\n");
-                return base as i64;
-            }
-        }
-    }
 
     // For fixed-address mappings, return the requested address.
     //
@@ -2908,6 +2951,27 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         // pages that were RO from EL1 (DFSC=0x0F permission fault
         // inside the kernel).
         if fd_num < 0 {
+            uart::puts("[mmap-anon-fixed] addr=0x");
+            let hex = b"0123456789abcdef";
+            for sh in (0..16).rev() { uart::putc(hex[((addr >> (sh*4)) & 0xF) as usize]); }
+            uart::puts(" len=0x");
+            for sh in (0..16).rev() { uart::putc(hex[((len >> (sh*4)) & 0xF) as usize]); }
+            uart::puts("\n");
+            // STUMP #161 iter 19: MAP_FIXED|MAP_ANON must REPLACE any
+            // prior mapping with fresh zero pages, NOT just walk-and-
+            // zero already-writable pages. Iter 18 result showed
+            // liblagom-js's BSS extension at 0x70_0073_f000-0x70_0074_d690
+            // was being read with the initial-file-mmap's content
+            // (the lib's first 7.4 MB read-only mmap covered the full
+            // memsz). The walk-and-zero loop skipped these pages
+            // because AP[2]=1 (R/O from EL1), so file content remained
+            // and s_vm_count read 0x0d0055e0_0a000000 instead of 0 →
+            // VERIFY(s_vm_count == 0) fired in JS::VM::create.
+            //
+            // New behavior: for every page in the requested range,
+            // alloc + zero + install_l3_mapping with EL0 RW perms.
+            // The TLB flush at the end ensures the EL0 walker drops
+            // the old (R/O file-backed) entry on next access.
             let start = addr & !0xFFFusize;
             let end_raw = match addr.checked_add(len) {
                 Some(v) => v,
@@ -2917,58 +2981,116 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             let ttbr0: u64;
             unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0); }
             let l1_phys = ttbr0 & !1u64;
-            let _g = crate::kernel::sync::IrqGuard::new();
+            const PAGE_VALID: u64 = 0b11;
+            const PAGE_AF:    u64 = 1 << 10;
+            const PAGE_SH:    u64 = 0b11 << 8;
+            const PAGE_AP_EL0_RW: u64 = 0b01 << 6;
+            const PAGE_PXN:   u64 = 1 << 53;
+            const PAGE_UXN:   u64 = 1 << 54;
+            let new_flags = PAGE_VALID | PAGE_AF | PAGE_SH
+                | PAGE_AP_EL0_RW | PAGE_PXN | PAGE_UXN;
+            // Walk page tables ourselves and FORCE-overwrite the L3
+            // entry. demand_page::install_l3_mapping has an idempotency
+            // guard that returns Ok without changing existing valid
+            // entries — for MAP_FIXED|MAP_ANON we explicitly want the
+            // OPPOSITE: replace any prior file-backed mapping with our
+            // fresh anon page.
             let mut va = start;
             while va < end {
-                let l1_idx = ((va >> 30) & 0x1FF) as u64;
+                // Walk: we need L1 valid (table), L2 valid (table) to
+                // get L3 phys. If any are missing, fall back to
+                // install_l3_mapping which builds tables.
+                let l1_idx = ((va as u64 >> 30) & 0x1FF) as u64;
                 let l1e: u64 = unsafe {
                     core::ptr::read_volatile((l1_phys + l1_idx * 8) as *const u64)
                 };
-                if (l1e & 0b11) != 0b11 {
-                    let next_l1 = ((va >> 30) + 1) << 30;
-                    va = next_l1;
-                    continue;
-                }
-                let l2_phys = l1e & 0x0000_FFFF_FFFF_F000;
-                let l2_idx = ((va >> 21) & 0x1FF) as u64;
-                let l2e: u64 = unsafe {
-                    core::ptr::read_volatile((l2_phys + l2_idx * 8) as *const u64)
-                };
-                if (l2e & 0b11) != 0b11 {
-                    // L2 BLOCK (cave's identity-mapped main window)
-                    // or invalid — skip the entire 2 MB.
-                    let next_l2 = ((va >> 21) + 1) << 21;
-                    va = next_l2;
-                    continue;
-                }
-                let l3_phys = l2e & 0x0000_FFFF_FFFF_F000;
-                let l3_idx = ((va >> 12) & 0x1FF) as u64;
-                let l3e: u64 = unsafe {
-                    core::ptr::read_volatile((l3_phys + l3_idx * 8) as *const u64)
-                };
-                // L3e bit[1:0] = 0b11 → page valid.
-                // AP[2] @ bit 7: 0 = R/W from EL1, 1 = R/O from EL1.
-                let valid    = (l3e & 0b11) == 0b11;
-                let writable = (l3e >> 7) & 1 == 0;
-                if valid && writable {
-                    unsafe {
-                        let mut p = va;
-                        let page_end = va + 4096;
-                        while p + 8 <= page_end {
-                            core::ptr::write_volatile(p as *mut u64, 0);
-                            p += 8;
+                let l3_phys_table: u64;
+                if (l1e & 0b11) == 0b11 {
+                    let l2_phys_table = l1e & 0x0000_FFFF_FFFF_F000;
+                    let l2_idx = ((va as u64 >> 21) & 0x1FF) as u64;
+                    let l2e: u64 = unsafe {
+                        core::ptr::read_volatile((l2_phys_table + l2_idx * 8) as *const u64)
+                    };
+                    if (l2e & 0b11) == 0b11 {
+                        l3_phys_table = l2e & 0x0000_FFFF_FFFF_F000;
+                    } else {
+                        // L2 entry missing or block — fall back to
+                        // install_l3_mapping so it builds tables.
+                        let pg = match crate::kernel::mm::frame::alloc_frame() {
+                            Some(p) => p,
+                            None    => return ENOMEM,
+                        };
+                        unsafe {
+                            let p_ptr = pg as *mut u8;
+                            for i in 0..4096 {
+                                core::ptr::write_volatile(p_ptr.add(i), 0);
+                            }
                         }
-                        let mut line = va as u64;
-                        let line_end = line + 4096;
-                        while line < line_end {
-                            core::arch::asm!("dc civac, {a}", a = in(reg) line);
-                            line += 64;
+                        let pa = (pg as u64) & 0x0000_FFFF_FFFF_F000;
+                        let entry = pa | new_flags;
+                        let _ = super::demand_page::install_l3_mapping(
+                            l1_phys, va as u64, pa, entry,
+                        );
+                        va += 4096;
+                        continue;
+                    }
+                } else {
+                    let pg = match crate::kernel::mm::frame::alloc_frame() {
+                        Some(p) => p,
+                        None    => return ENOMEM,
+                    };
+                    unsafe {
+                        let p_ptr = pg as *mut u8;
+                        for i in 0..4096 {
+                            core::ptr::write_volatile(p_ptr.add(i), 0);
                         }
                     }
+                    let pa = (pg as u64) & 0x0000_FFFF_FFFF_F000;
+                    let entry = pa | new_flags;
+                    let _ = super::demand_page::install_l3_mapping(
+                        l1_phys, va as u64, pa, entry,
+                    );
+                    va += 4096;
+                    continue;
+                }
+                // L3 page table exists. Force-write the entry.
+                let l3_idx = ((va as u64 >> 12) & 0x1FF) as u64;
+                let l3_ent_addr = l3_phys_table + l3_idx * 8;
+                let pg = match crate::kernel::mm::frame::alloc_frame() {
+                    Some(p) => p,
+                    None    => return ENOMEM,
+                };
+                unsafe {
+                    let p_ptr = pg as *mut u8;
+                    for i in 0..4096 {
+                        core::ptr::write_volatile(p_ptr.add(i), 0);
+                    }
+                    let mut line = pg as u64;
+                    let end_line = line + 4096;
+                    while line < end_line {
+                        core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                        line += 64;
+                    }
+                    core::arch::asm!("dsb ish");
+                }
+                let pa = (pg as u64) & 0x0000_FFFF_FFFF_F000;
+                let entry = pa | new_flags;
+                unsafe {
+                    core::ptr::write_volatile(l3_ent_addr as *mut u64, entry);
+                    core::arch::asm!("dc civac, {a}", a = in(reg) l3_ent_addr);
+                    core::arch::asm!("dsb ishst");
+                    core::arch::asm!("tlbi vaae1is, {a}", a = in(reg) (va as u64) >> 12);
                 }
                 va += 4096;
             }
-            unsafe { core::arch::asm!("dsb sy"); }
+            // Sledgehammer TLB flush so old entries (e.g. the initial
+            // file-backed R/O mapping that covered this VA) are dropped.
+            unsafe {
+                core::arch::asm!("dsb ishst");
+                core::arch::asm!("tlbi vmalle1");
+                core::arch::asm!("dsb ish");
+                core::arch::asm!("isb");
+            }
         }
         return addr as i64;
     }

@@ -1,5 +1,4 @@
 pub mod batcave_mgr;
-pub mod browser;
 pub mod comms;
 pub mod dashboard;
 pub mod editor;

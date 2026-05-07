@@ -1,8 +1,6 @@
 #![allow(dead_code)]
 // Bat_OS — Display subsystem.
 //
-// Re-exports display-related bridges. Today: chromium_blit (the /batos/fb0
-// shared-memory → virtio-gpu scanout kthread). Future: Wayland-like
-// compositor glue, Apple DCP wiring.
-
-pub mod chromium_blit;
+// Reserved namespace. Today: empty (the chromium_blit shared-FB bridge
+// was removed alongside the browser deletion — see DESIGN_NO_BROWSER.md).
+// Future: Wayland-like compositor glue, Apple DCP wiring.

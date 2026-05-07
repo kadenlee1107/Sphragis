@@ -57,11 +57,10 @@ pub const APP_NETMON: u8 = 3;
 pub const APP_EDITOR: u8 = 4;
 pub const APP_SECURITY: u8 = 5;
 pub const APP_COMMS: u8 = 6;
-pub const APP_BROWSER: u8 = 7;
-pub const APP_BATCAVE: u8 = 8;
+pub const APP_BATCAVE: u8 = 7;
 
-const NUM_APPS: u8 = 9;
-const APP_NAMES: [&str; 9] = ["Term", "Dash", "File", "Net", "Edit", "Sec", "Chat", "Web", "Cave"];
+const NUM_APPS: u8 = 8;
+const APP_NAMES: [&str; 8] = ["Term", "Dash", "File", "Net", "Edit", "Sec", "Chat", "Cave"];
 
 static NEEDS_REDRAW: AtomicBool = AtomicBool::new(true);
 
@@ -504,11 +503,6 @@ fn draw_status_bar(fb: *mut u32, w: u32, sy: u32) {
         crate::net::tls_pinning::Mode::Open     => ("OPEN",     RED),
     };
     x = draw_status_segment(fb, w, x, sy, "TLS", Some(tls_label), tls_color, None);
-
-    let js_on = crate::browser::js::is_enabled();
-    x = draw_status_segment(fb, w, x, sy, "JS",
-        Some(if js_on { "ON" } else { "OFF" }),
-        if js_on { AMBER } else { INK }, None);
 
     let audit_count = crate::security::audit::count();
     let mut audit_buf = [0u8; 24];

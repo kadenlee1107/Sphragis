@@ -1179,17 +1179,11 @@ fn reset_all_globals_for_cave_switch() {
     crate::batcave::linux::stdio_ring::reset_for_cave_switch();
     crate::net::psk_overlay::reset_for_cave_switch();
     crate::net::dns::reset_for_cave_switch();
-    crate::drivers::display::chromium_blit::reset_for_cave_switch();
 
-    // ROOT 2 V9-re-audit additions — threads table, ARP cache, JS
-    // console/DOM. Each was a cross-cave leak the first pass missed.
+    // ROOT 2 V9-re-audit additions — threads table, ARP cache.
+    // Each was a cross-cave leak the first pass missed.
     crate::batcave::linux::threads::reset_for_cave_switch();
     crate::net::arp::reset_for_cave_switch();
-    crate::browser::js::interpreter::reset_for_cave_switch();
-    crate::browser::js::dom_api::reset_for_cave_switch();
-    // STUMP #108 — Sprint 3.5: localStorage wipe on cave switch so a
-    // logged-out cave doesn't inherit the previous tenant's UI state.
-    crate::browser::js::storage::reset_for_cave_switch();
 
     // ROOT 2 V10-re-audit additions — batpipe inter-tool buffer + the
     // loader's saved RA/SP (which were a cross-cave control-flow PIVOT,
@@ -1208,19 +1202,8 @@ fn reset_all_globals_for_cave_switch() {
     crate::drivers::virtio::keyboard::reset_for_cave_switch();
     crate::drivers::apple::spi::reset_for_cave_switch();
     crate::ui::apps::comms::reset_for_cave_switch();
-    crate::ui::apps::browser::reset_for_cave_switch();
-    // NOTE: `blink_libc` currently lives outside the crate module tree
-    // (see comment in src/browser/html/mod.rs). When the Chromium build
-    // lands and blink_libc is re-enabled, chain its reset here.
     crate::ui::font::reset_for_cave_switch();
     crate::ui::wm::reset_for_cave_switch();
     crate::ui::console::reset_for_cave_switch();
 
-    // STUMP #111 (audit M-FIRST-FAIL re-arm): re-arm one-shot
-    // saturation alarms in the DOM and JS string-intern subsystems
-    // so the next tenant's first overflow is audible. Pre-fix the
-    // alarms fired exactly once per boot, hiding flooding events
-    // from any cave but the first.
-    crate::browser::dom::reset_for_cave_switch();
-    crate::browser::js::strings::reset_for_cave_switch();
 }

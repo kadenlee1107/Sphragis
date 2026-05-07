@@ -9,20 +9,10 @@
 # to start fresh. Never commit user data.
 /state
 
-# Vendored Chromium source tree (~1.9 GB, contains a pack file over
-# GitHub's 100 MB limit). Re-clone upstream if you need it.
-/ports/chromium
-
-# Docker volumes / build artifacts from the Chromium container work.
-/chromium-build
 .DS_Store
 
 # Compressed logs from past sessions (regenerable).
 *.log
-
-# Render artifacts from `make render` — regenerable from the source HTML.
-logs/qemu-tests/render-*.png
-logs/qemu-tests/dumpdom-*.log
 
 # Claude Code / harness local state (not project state).
 /.claude
@@ -41,10 +31,8 @@ logs/qemu-tests/dumpdom-*.log
 macos_dump/kernelcache.mac16j.bin
 macos_dump/SystemKernelExtensions.kc
 
-# Chromium content_shell output — 293 MB PIE binary produced by
-# ports/chromium_port/build.sh (in Docker) + manually copied out of
-# the batos-chromium-src volume. Not source. Reproduce via:
-#   docker run --rm -v batos-chromium-src:/src \
-#       -v $(pwd)/ports/chromium_port/out:/out \
-#       alpine cp /src/src/out/BatOs/content_shell /out/content_shell
-/ports/chromium_port/out/
+# Autopilot harness state (the autopilot infrastructure survives the
+# no-browser pivot but no longer drives Ladybird; reusable for other
+# STUMP loops).
+.autopilot-session-id
+.autopilot-session-started

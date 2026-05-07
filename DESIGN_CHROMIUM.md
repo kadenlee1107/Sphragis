@@ -1,6 +1,66 @@
 # DESIGN: Real Browser on Bat_OS (Project Gotham)
 
-## Vision
+> # ⚠️ SUPERSEDED (2026-05-07): Bat_OS no longer ships a browser.
+>
+> The Chromium-port effort hit a wall on 2026-05-05 (Mojo IPC
+> livelock + V8 sandbox cage). We briefly pivoted to **Ladybird**
+> (path 2 in the prior `DESIGN_BROWSER.md`) and added a
+> **stream-client** thin-client (path 3). On 2026-05-07 we made
+> the harder call: Bat_OS doesn't ship a browser at all.
+>
+> See **`DESIGN_NO_BROWSER.md`** for the current strategy and
+> rationale, and tag `pre-no-browser-2026-05-07` for the last
+> commit that contained any browser code.
+>
+> The historical content below is preserved as reference for
+> the syscall coverage / libc gap analysis that informed the
+> Linux ELF runtime — those primitives still apply to running
+> non-browser ELFs (busybox, posix_test, cxx_test).
+>
+> Original PARKED notice (kept for trail):
+>
+> **Why parked.** Two compounding blockers, neither cheap to break:
+>
+> 1. **Mojo IPC livelock.** Chromium's process model (browser ↔ renderer
+>    ↔ GPU ↔ utility) talks over Mojo, which assumes Linux-specific
+>    primitives (sealed memfd, kcmp, pidfd, futex semantics) we only
+>    partially provide. After landing iters 1–8 of fixes (Landlock
+>    stubs, demand_page perm-fault, real renameat, brk-skip same-fn
+>    redirect, futex-wake all-buckets, MAP_FIXED L3 overwrite), Chromium
+>    reaches Mojo IPC setup and livelocks waiting on cross-process
+>    handles that don't transit our model.
+> 2. **V8 sandbox cage.** V8 wants a 1 TB virtual reservation for the
+>    pointer-compression cage. Disable-able with build flags, but every
+>    Mac-side `content_shell` we have was built with cage-on; rebuilding
+>    cage-off requires another full Chromium build (~6h on M-series in
+>    Docker) and does not address the Mojo issue.
+>
+> **What pivoted to.**
+> - **Ladybird (path 2)** — independent BSD-licensed browser, uses
+>   LibIPC over Unix sockets (not Mojo), uses LibJS (not V8, no
+>   sandbox cage). Built alongside SerenityOS so its authors already
+>   solved "make a browser portable to a brand-new OS." `port/ladybird`
+>   branch, iter 28 renders pixels.
+> - **stream-client (path 3)** — `cmd_web` shell command. Chromium
+>   stays on Mac (headless, via Playwright), Bat_OS displays BGRA
+>   pixels. Chromebook/VNC pattern.
+>
+> **What's still useful in this doc.** The kernel-side syscall coverage
+> notes, libc/pthreads gap analysis, and the layer-cake architecture
+> still apply to running *any* dynamic Linux ELF — Ladybird (Lagom)
+> and busybox both ride on the same primitives. iters 1–8 fixes from
+> the Chromium effort all carried over and apply to Ladybird.
+>
+> **What to read instead.**
+> - `DESIGN_BROWSER.md` — the active native engine + the three-path overview.
+> - `docs/SESSION_JOURNAL.md` 2026-05-05 entries — Chromium-wall debugging
+>   trail and pivot rationale.
+> - `ports/chromium_port/` — the parked artifacts; `content_shell` binary
+>   and bake scripts still exist if anyone tries this again.
+>
+> ---
+
+## Vision (as originally written)
 Run a full graphical web browser with proper CSS rendering on Bat_OS — 
 a bare-metal ARM64 OS with zero external dependencies. Start with NetSurf 
 (milestone 1), build toward Chromium (final milestone).

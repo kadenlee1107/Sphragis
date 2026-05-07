@@ -211,13 +211,39 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
         // cppgc heap that V8 chose without going through our
         // reserve-only mmap path.
         //
-        // Reject NULL+small, content_shell text/data/bss (where a
-        // fault is a real bug), kernel range, etc.
+        // Reject NULL+small, cave-main-window content (where a fault
+        // is a real bug), kernel range, etc.
         let far_plausible = far >= 0x2000_0000 && far < 0x80_0000_0000
             // Don't commit pages in cave's main window (those are
-            // either content_shell content or unmapped padding).
+            // either binary content or unmapped padding).
             && !(far >= 0x10000000 && far < 0x1c800000);
         if !far_plausible {
+            // STUMP #161: diagnostic for low-VA faults. If we're
+            // seeing repeated faults at the SAME low-VA, log the
+            // user PC (lr_at_fault) so we can identify which
+            // library/function is making the access. Limit to 5
+            // logs per boot to avoid log flood.
+            use core::sync::atomic::{AtomicU32, Ordering as DOrd};
+            static LOW_VA_LOG: AtomicU32 = AtomicU32::new(0);
+            let n = LOW_VA_LOG.fetch_add(1, DOrd::Relaxed);
+            if n < 5 && far < 0x10000000 {
+                let elr_now: u64;
+                unsafe {
+                    core::arch::asm!("mrs {}, elr_el1", out(reg) elr_now);
+                }
+                uart::puts("[dp/low-va #");
+                crate::kernel::mm::print_num(n as usize);
+                uart::puts("] far=0x");
+                let hex = b"0123456789abcdef";
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((far >> (sh * 4)) & 0xF) as usize]);
+                }
+                uart::puts(" elr=0x");
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((elr_now >> (sh * 4)) & 0xF) as usize]);
+                }
+                uart::puts("\n");
+            }
             return false;
         }
         // Treat as virtual-reservation hit: drop through to alloc

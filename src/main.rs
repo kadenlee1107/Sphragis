@@ -5,7 +5,6 @@ extern crate alloc;
 
 mod batcave;
 mod boot;
-mod browser;
 mod crypto;
 mod drivers;
 mod fs;
@@ -332,10 +331,6 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
             if !batcave::linux::vfs::is_ready() {
                 batcave::linux::vfs::init();
             }
-
-            // Chromium → kernel blit bridge. Idempotent; logs and skips if
-            // /batos/fb0 isn't present (e.g. VFS allocation failed).
-            drivers::display::chromium_blit::start();
 
             // ═══════════════════════════════════════
             // AUTHENTICATION GATE — must pass to proceed

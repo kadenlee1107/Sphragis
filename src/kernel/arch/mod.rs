@@ -391,6 +391,13 @@ fn reset_timer() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
+    // STUMP #161 iter 16 marker
+    static IRQ_N_TEST: core::sync::atomic::AtomicU64 =
+        core::sync::atomic::AtomicU64::new(0);
+    let irq_idx_test = IRQ_N_TEST.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if irq_idx_test < 5 {
+        uart::puts_safe("STUMP161IRQ\n");
+    }
     // V8-ELR-WATCH: snapshot frame.elr at IRQ entry. After all the IRQ
     // work + potential context switches, if we end this function with
     // frame.elr in kernel range AND spsr.M=0 (eret target = EL0), the
@@ -446,6 +453,28 @@ fn handle_irq_inner(frame: *mut TrapFrame) {
 
     // Spurious (1023) means no IRQ pending — bail without EOI.
     if intid == 1023 { return; }
+
+    // STUMP #161 iter 16: count ALL IRQs, not just timer fires. We
+    // observed zero heartbeats during /bin/js userland-hang debugging,
+    // but couldn't tell whether (a) the timer wasn't firing or (b) the
+    // ctl & 0b100 check was failing. Sampling on every IRQ entry
+    // disambiguates and also catches userland hangs that only show
+    // up between timer fires (e.g. a tight loop that briefly yields
+    // CPU).
+    {
+        static IRQ_TICKS: core::sync::atomic::AtomicU64 =
+            core::sync::atomic::AtomicU64::new(0);
+        let n = IRQ_TICKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        // Print first 3 IRQs unconditionally so we can verify IRQs
+        // are reaching handle_irq at all.
+        if n < 3 {
+            uart::puts("[irq#");
+            crate::kernel::mm::print_num(n as usize);
+            uart::puts(" intid=");
+            crate::kernel::mm::print_num(intid as usize);
+            uart::puts("]\n");
+        }
+    }
 
     let ctl: u64;
     unsafe { core::arch::asm!("mrs {}, cntp_ctl_el0", out(reg) ctl); }
@@ -1561,6 +1590,40 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 uart::puts("(unmapped)");
             }
             uart::puts("\n");
+            // STUMP #161 iter 13: dump 32 instructions BEFORE ELR + 16
+            // AFTER, so we can identify the function by its pattern.
+            // Especially useful when the PC isn't in any loaded library
+            // (suggesting JIT'd or kernel-aliased memory). 4 bytes per
+            // instr × 4 instr per line = 16 bytes per line.
+            uart::puts("  instr_window:\n");
+            let window_start = elr.wrapping_sub(128); // 32 instrs before
+            for line in 0..12u64 {
+                let line_pc = window_start.wrapping_add(line * 16);
+                if !page_is_mapped(line_pc) {
+                    uart::puts("    [unmapped]\n");
+                    continue;
+                }
+                uart::puts("    ");
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((line_pc >> (sh*4)) & 0xF) as usize]);
+                }
+                uart::puts(":");
+                for off in [0u64, 4, 8, 12] {
+                    let pc_in_line = line_pc.wrapping_add(off);
+                    if !page_is_mapped(pc_in_line) { uart::puts(" ????????"); continue; }
+                    let w: u32 = unsafe {
+                        let v: u32;
+                        core::arch::asm!("ldr {v:w}, [{a}]", a = in(reg) pc_in_line, v = out(reg) v);
+                        v
+                    };
+                    uart::puts(" ");
+                    for sh in (0..8).rev() {
+                        uart::putc(hex[((w >> (sh*4)) & 0xF) as usize]);
+                    }
+                    if pc_in_line == elr { uart::puts("←"); }
+                }
+                uart::puts("\n");
+            }
             // Track repeats so we can stop spamming and force-terminate
             // the cave instead of looping forever in this handler. Two
             // tries earlier landed the per-instruction skip approach,
@@ -2247,6 +2310,38 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     uart::putc(hex[((val >> (sh * 4)) & 0xF) as usize]);
                 }
                 uart::putc(b' ');
+            }
+            // STUMP #161 iter 13: fp-walk via x29 chain to find the
+            // first non-libc frame. abort() / __stack_chk_fail are in
+            // libc (range 0x70_17b0_xxxx); we want to know the user
+            // call that triggered them. Walk up to 12 frames or until
+            // we leave libc / land in unmapped memory.
+            let frame_x29 = unsafe { (*frame).x[29] };
+            uart::puts("\n  fp-walk (x29 chain):");
+            let mut fp = frame_x29;
+            for _ in 0..12 {
+                if fp == 0 || !page_is_mapped(fp) || (fp & 7) != 0 {
+                    uart::puts("\n    [end]"); break;
+                }
+                let next_fp: u64 = unsafe {
+                    let v: u64; core::arch::asm!("ldr {v}, [{a}]",
+                        a = in(reg) fp, v = out(reg) v); v
+                };
+                let saved_lr: u64 = unsafe {
+                    let v: u64; core::arch::asm!("ldr {v}, [{a}]",
+                        a = in(reg) fp + 8, v = out(reg) v); v
+                };
+                uart::puts("\n    fp=0x");
+                let hex = b"0123456789abcdef";
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((fp >> (sh*4)) & 0xF) as usize]);
+                }
+                uart::puts(" lr=0x");
+                for sh in (0..16).rev() {
+                    uart::putc(hex[((saved_lr >> (sh*4)) & 0xF) as usize]);
+                }
+                if next_fp == fp || next_fp < fp { break; } // loop / corrupt
+                fp = next_fp;
             }
             uart::puts("\n  → returning to desktop\n");
             unsafe {
