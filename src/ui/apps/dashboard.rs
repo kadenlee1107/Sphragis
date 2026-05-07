@@ -110,8 +110,7 @@ fn draw_security_kvs(p: &W::PanelInner) {
     let label_w: u32 = 96;
     let mut y = p.y;
     let net_ok = crate::drivers::virtio::net::is_ready();
-    let mode = crate::net::tls_pinning::current_mode();
-    let _ = (mode, net_ok); // referenced if we expand the rows later
+    let _ = net_ok; // referenced if we expand the rows later
 
     // STUMP #144: doc-drift fix. Was "AES-256-CTR / 16 ROUNDS pre-
     // Argon2id" — but BatFS now uses ChaCha20-Poly1305 AEAD (V8-CRYPTO)

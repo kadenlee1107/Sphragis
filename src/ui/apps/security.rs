@@ -106,13 +106,8 @@ fn draw_pipeline_kvs(p: &W::PanelInner) {
 
     draw_kv_row(p.x, y, label_w, "AES-256",  "ACTIVE",          State::Ok,      true); y += KV_ROW_H;
 
-    let mode = crate::net::tls_pinning::current_mode();
-    let (tls_label, tls_state) = match mode {
-        crate::net::tls_pinning::Mode::Lockdown => ("LOCKDOWN . 1 PIN", State::Neutral),
-        crate::net::tls_pinning::Mode::Research => ("RESEARCH",         State::Warn),
-        crate::net::tls_pinning::Mode::Open     => ("OPEN",             State::Fail),
-    };
-    draw_kv_row(p.x, y, label_w, "TLS 1.3", tls_label, tls_state, true); y += KV_ROW_H;
+    // TLS posture per DESIGN_TLS_HARDENING.md: chain-only strict, hybrid PQ on.
+    draw_kv_row(p.x, y, label_w, "TLS 1.3", "LOCK . PQ . CHAIN", State::Ok, true); y += KV_ROW_H;
 
     draw_kv_row(p.x, y, label_w, "VPN",     "STANDBY",         State::Plan,    true); y += KV_ROW_H;
     draw_kv_row(p.x, y, label_w, "Tor",     "3-HOP CIRCUIT",   State::Ok,      true); y += KV_ROW_H;

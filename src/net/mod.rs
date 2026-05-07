@@ -15,7 +15,6 @@ pub mod nat;
 pub mod tcp;
 pub mod tls;
 pub mod tls_hybrid;
-pub mod tls_pinning;
 pub mod x509;
 pub mod udp;
 // STUMP #141: was `tor` (3-layer CTR with hardcoded keys, NOT real
