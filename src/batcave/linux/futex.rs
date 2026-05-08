@@ -309,8 +309,15 @@ fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32) -> i64 {
         }
         // Mark self Blocked. Doesn't yield yet — that comes after we
         // drop the bucket lock so a parallel waker can take it.
+        // Phase 2 of the unification plan rewrites this whole loop to
+        // pass deadline_ticks through; for now construct with the
+        // current WaitSlot deadline so behavior is unchanged.
         crate::batcave::linux::threads::mark_current_blocked(
-            crate::batcave::linux::threads::BlockReason::FutexWait { uaddr, val },
+            crate::batcave::linux::threads::BlockReason::FutexWait {
+                uaddr,
+                val,
+                deadline_ticks: deadline,
+            },
         );
         bucket_unlock(b);
         drop(g);
