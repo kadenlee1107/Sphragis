@@ -704,83 +704,134 @@ pub static IS_HEADLESS: core::sync::atomic::AtomicBool =
 
 pub fn serial_shell() -> ! {
     use drivers::uart;
+    use ui::shell_history::{ArrowKey, EscState, FeedResult};
     uart::puts("bat_os > ");
 
     let mut buf = [0u8; 256];
     let mut len = 0usize;
+    let mut esc = EscState::default();
+
+    // Replace the currently-visible input line with a new byte slice.
+    // Erases via backspace+space+backspace (terminal-portable), then
+    // prints the new content. Caller updates `buf` and `len`.
+    let redraw = |old_len: usize, new_bytes: &[u8], new_len: &mut usize| {
+        for _ in 0..old_len {
+            uart::putc(0x08); uart::putc(b' '); uart::putc(0x08);
+        }
+        for &b in new_bytes {
+            uart::putc(b);
+        }
+        *new_len = new_bytes.len();
+    };
 
     loop {
-        if let Some(c) = uart::getc() {
-            match c {
-                b'\r' | b'\n' => {
-                    uart::puts("\n");
-                    if len > 0 {
-                        let cmd = unsafe { core::str::from_utf8_unchecked(&buf[..len]) };
-                        // 🎯 Dispatch to the full shell so headless smokes
-                        // can run `chromium`, `batcave`, and the rest of
-                        // the command set. Pre-#56 this serial_shell was
-                        // a stub with only help/mem/uname/whoami; the
-                        // QEMU smoke had to enable virtio-gpu/keyboard
-                        // just to get the GUI shell that registered
-                        // `chromium`. Routing through `ui::shell::execute_cmd`
-                        // unifies the command surface and lets us drop
-                        // those virtio devices for ~10-20% faster smokes.
-                        crate::ui::shell::execute_cmd(cmd);
-                        len = 0;
-                    }
-                    uart::puts("bat_os > ");
+        let Some(raw) = uart::getc() else {
+            core::hint::spin_loop();
+            continue;
+        };
+
+        // Drive the ANSI ESC-sequence parser first. Arrow keys arrive
+        // as ESC `[` `A`/`B`/`C`/`D` — without the parser, those
+        // three bytes would each get treated as a regular character.
+        let c = match esc.feed(raw) {
+            FeedResult::Consumed => continue,
+            FeedResult::Arrow(ArrowKey::Up) => {
+                if let Some(line) = ui::shell_history::prev() {
+                    let mut take = [0u8; 256];
+                    let n = line.len().min(255);
+                    take[..n].copy_from_slice(&line[..n]);
+                    redraw(len, &take[..n], &mut len);
+                    buf[..n].copy_from_slice(&take[..n]);
                 }
-                0x03 => {
-                    // Ctrl+C — discard the current line and reprompt.
-                    uart::puts("^C\nbat_os > ");
+                continue;
+            }
+            FeedResult::Arrow(ArrowKey::Down) => {
+                match ui::shell_history::next() {
+                    Some(line) => {
+                        let mut take = [0u8; 256];
+                        let n = line.len().min(255);
+                        take[..n].copy_from_slice(&line[..n]);
+                        redraw(len, &take[..n], &mut len);
+                        buf[..n].copy_from_slice(&take[..n]);
+                    }
+                    None => {
+                        // Stepped past newest — clear to live edit.
+                        redraw(len, &[], &mut len);
+                    }
+                }
+                continue;
+            }
+            FeedResult::Arrow(_) => continue, // left/right ignored for v1
+            FeedResult::Pass(b) => b,
+        };
+
+        match c {
+            b'\r' | b'\n' => {
+                uart::puts("\n");
+                if len > 0 {
+                    let cmd = unsafe { core::str::from_utf8_unchecked(&buf[..len]) };
+                    // Dispatch to the full shell so headless smokes can
+                    // run any command without virtio-gpu/keyboard. Pre
+                    // this consolidation, serial_shell was a stub with
+                    // help/mem/uname/whoami only.
+                    crate::ui::shell::execute_cmd(cmd);
+                    ui::shell_history::record(&buf[..len]);
                     len = 0;
                 }
-                0x08 | 0x7F => {
-                    if len > 0 {
-                        len -= 1;
-                        uart::putc(0x08);
-                        uart::putc(b' ');
-                        uart::putc(0x08);
-                    }
+                uart::puts("bat_os > ");
+            }
+            0x03 => {
+                // Ctrl+C — discard the current line and reprompt.
+                uart::puts("^C\nbat_os > ");
+                len = 0;
+                ui::shell_history::reset_cursor();
+            }
+            0x08 | 0x7F => {
+                if len > 0 {
+                    len -= 1;
+                    uart::putc(0x08);
+                    uart::putc(b' ');
+                    uart::putc(0x08);
+                    ui::shell_history::reset_cursor();
                 }
-                0x09 => {
-                    // Tab — autofill command name from shell_completion.
-                    // Only fires inside the first token (pre-space); the
-                    // arg-completion follow-up PR handles past-space.
-                    if !buf[..len].contains(&b' ') {
-                        let prefix = unsafe {
-                            core::str::from_utf8_unchecked(&buf[..len])
-                        };
-                        let r = ui::shell_completion::complete_command(prefix);
-                        let ext = r.extension_bytes();
-                        let take = ext.len().min(255usize.saturating_sub(len));
-                        for &b in &ext[..take] {
-                            buf[len] = b;
-                            len += 1;
+            }
+            0x09 => {
+                // Tab — autofill command name from shell_completion.
+                // Only fires inside the first token (pre-space); the
+                // arg-completion follow-up PR handles past-space.
+                if !buf[..len].contains(&b' ') {
+                    let prefix = unsafe {
+                        core::str::from_utf8_unchecked(&buf[..len])
+                    };
+                    let r = ui::shell_completion::complete_command(prefix);
+                    let ext = r.extension_bytes();
+                    let take = ext.len().min(255usize.saturating_sub(len));
+                    for &b in &ext[..take] {
+                        buf[len] = b;
+                        len += 1;
+                        uart::putc(b);
+                    }
+                    if r.match_count > 1 {
+                        uart::puts("\n");
+                        for &name in r.candidate_slice() {
+                            uart::puts(name);
+                            uart::puts("  ");
+                        }
+                        uart::puts("\nbat_os > ");
+                        for &b in &buf[..len] {
                             uart::putc(b);
                         }
-                        if r.match_count > 1 {
-                            uart::puts("\n");
-                            for &name in r.candidate_slice() {
-                                uart::puts(name);
-                                uart::puts("  ");
-                            }
-                            uart::puts("\nbat_os > ");
-                            for &b in &buf[..len] {
-                                uart::putc(b);
-                            }
-                        }
                     }
                 }
-                _ if c >= 0x20 && c <= 0x7E && len < 255 => {
-                    buf[len] = c;
-                    len += 1;
-                    uart::putc(c);
-                }
-                _ => {}
             }
+            _ if c >= 0x20 && c <= 0x7E && len < 255 => {
+                buf[len] = c;
+                len += 1;
+                uart::putc(c);
+                ui::shell_history::reset_cursor();
+            }
+            _ => {}
         }
-        core::hint::spin_loop();
     }
 }
 
