@@ -11,6 +11,173 @@ end of a session.
 
 ---
 
+## 2026-05-07 (later still × 2) — Mac — 🛏️ SCHEDULER BLOCK-ON: epoll + nanosleep park instead of spin
+
+**Third post-no-browser thread of the day.** Per the priority list
+locked in earlier: PR #1 (no-browser) → PR #2 (TLS hardening) → this
+(scheduler park-on-deadline). Captures cleanup is fourth and remains
+queued.
+
+**Re-framing surprise (again).** The earlier sweep characterized the
+gap as "futex/epoll currently spin instead of sleeping." Half wrong.
+Futex's `park_slot` already calls `mark_current_blocked` +
+`schedule()` and `FUTEX_WAKE` calls `wake_thread(tid)` — futex *blocks*.
+The actual gaps were:
+- **`epoll_pwait`** spun via `SPIN_PER_MS = 100` heuristic, calling
+  `cooperative_yield()` (which yielded but never parked) on every
+  empty drain.
+- **`sys_nanosleep`** read `cntpct_el0` in a tight loop, yielding
+  every 256 iterations. A 30-second sleep kept the core warm.
+- **No timer-tick wakeup pass** — `BlockReason::Nanosleep` was a
+  defined-but-never-constructed variant.
+- **A stale `TODO(sched)`** in `futex.rs` claimed the scheduler
+  didn't have a Blocked state. Untrue and misleading.
+
+**Decisions locked in via brainstorming:**
+- "Blocker marks blocked; waker marks runnable." No defensive
+  `mark_current_runnable()` on schedule resume.
+- Clock-source contract: **`cntpct_el0` absolute ticks everywhere**.
+- Sentinel: `deadline_ticks = 0` means "no deadline / infinite wait"
+  for epoll. Zero-timeout callers don't park at all.
+- New `linux::threads::wake_expired_deadlines()` walks the threads
+  table for Blocked threads with expired `deadline_ticks`. Called
+  from `kernel::scheduler::tick()` once per timer IRQ.
+- `mark_ready` calls `wake_all_epoll_waiters()` after flipping a
+  ready bit (any-epfd wake; false-positives re-park after one
+  drain_ready loop — costs cycles, never leaves anyone stuck).
+- **`park_current(reason)` primitive** with the loop invariant
+  "does not return while the current thread's state is Blocked."
+  Lock invariant: threads-table lock NOT held across `wfi`. IRQ
+  invariant: interrupts NOT masked across `wfi` (the timer IRQ
+  must fire to wake deadline sleepers).
+- Futex untouched. Its per-`WaitSlot` deadline is intentionally not
+  unified with the new wake pass — separate future thread if needed.
+
+**Strategy doc** (`DESIGN_SCHEDULER_BLOCK_ON.md`, 517 lines, commit
+`54dbd855`) and **plan doc** (`docs/PLAN_SCHEDULER_BLOCK_ON.md`, 1,644
+lines, commit `7d52f161`) both committed before any code change.
+
+### Tag for git revival
+
+**`pre-scheduler-block-on-2026-05-07`** at commit `7d52f161`. Pushed
+to origin.
+
+### Phases that ran (10 commits)
+
+`886540f3`..`a684b74c` on `feat/scheduler-block-on`:
+
+1. **Phase 1** (`886540f3`) — Time helpers (`cntpct_el0`,
+   `ms_to_ticks` with multiply-then-divide for sub-1000Hz precision,
+   `cntfrq_el0` private), `current_thread_blocked()` non-blocking
+   check, `park_current(reason)` primitive with full lock/IRQ
+   ordering documented in the doc-comment.
+2. **Phase 2+4 combined** (`09449666`) — `BlockReason::EpollWait::
+   timeout_ms → deadline_ticks` (u64; 0=infinite), `BlockReason::
+   Nanosleep::deadline_ns → deadline_ticks`. Diagnostic encoding at
+   threads.rs:~1291 updated; `epfd as i64 as u64` preserves sign.
+   Wakers `wake_expired_deadlines()` and `wake_epoll_waiters(epfd)`
+   added. Combined commit because the wakers reference renamed
+   fields — atomic landing avoids a transitional broken-build state.
+3. **Phase 3** (`b7411e32`) — One-line addition to `kernel::
+   scheduler::tick()`: call `wake_expired_deadlines()` between the
+   existing stdio_ring drain and `schedule()`.
+4. **Phase 5** (`c180a7a3`) — `sys_nanosleep` parks. Computes
+   `deadline_ticks = start + target_ticks` once, then loops
+   `park_current(Nanosleep{deadline_ticks})` while
+   `cntpct_el0() < deadline_ticks`. Spurious / forced wakes
+   (STUMP #63 force-wake-on-deadlock) re-park instead of returning
+   early.
+5. **Phase 6** (`e4bbb9fb`) — `epoll_pwait` parks + `mark_ready`
+   wakes. `timeout==0` polls and returns; `timeout<0` parks
+   indefinitely with `deadline_ticks=0`; `timeout>0` parks with
+   computed deadline. **Plan deviation:** plan said
+   `wake_epoll_waiters(epfd)` from `mark_ready`, but `mark_ready(fd,
+   ev)` only knows the watched fd, not the parked epfd. Cleanest
+   fix: added `wake_all_epoll_waiters()` (no epfd filter) for the
+   `mark_ready` call site; kept the per-epfd one for selftest. Also
+   removed `SPIN_PER_MS` constant, `cooperative_yield()` fn, and a
+   stale TODO in the limitations block.
+6. **Phase 7** (`780751df`) — Cleaned up three `TODO(sched)`
+   comments in `futex.rs` that claimed FUTEX_WAIT spins because
+   "the Linux runner doesn't mark tasks Blocked." All untrue.
+   Replaced with accurate descriptions of the existing block-and-
+   resume loop.
+7. **Phase 8** (`dfa0ea8d`) — Feature-gated test helpers
+   (`test_install_blocked`, `test_inspect_state`,
+   `test_release_slot`) in `linux::threads`. Operate only on Free
+   slots so real running threads are never touched. Gated by
+   `selftest-on-boot` to keep test infrastructure out of production.
+8. **Phase 9** (`83228720`) — `cmd_scheduler_selftest` with three
+   sub-tests: `wake-expired-deadlines-noop`, `nanosleep-deadline-
+   fires`, `epoll-event-wake`. Uses synthesized test slots, not
+   real `sys_nanosleep` / `epoll_pwait` calls.
+9. **Phase 10** (`e8ce2973`) — Two-line extension to `main.rs`:
+   `selftest-on-boot` now runs both `cmd_x509_selftest` and
+   `cmd_scheduler_selftest` before the auth gate.
+10. **Phase 11** (`a684b74c`) — `qemu_x509_smoke.py` →
+    `qemu_selftests_smoke.py`. Extends regex to match both
+    `[x509-selftest]` and `[scheduler-selftest]` PASS/FAIL lines.
+    Pass criterion: ≥2 unique x509 + ≥3 unique scheduler sub-tests
+    pass, zero FAIL lines.
+
+### Total damage
+
+**527 insertions, 242 deletions** across 10 commits
+(`pre-scheduler-block-on-2026-05-07..HEAD`). 7 modified files
+(`threads.rs`, `scheduler.rs`, `epoll.rs`, `futex.rs`, `syscall.rs`,
+`main.rs`, `shell.rs`), 1 renamed file
+(`qemu_x509_smoke.py` → `qemu_selftests_smoke.py`).
+
+Warnings: 216 → 216 in release build (no rise).
+
+### State of tree
+
+- `feat/scheduler-block-on` HEAD is `a684b74c`. Branch ready for PR
+  against `feat/js-engine-browser-posix`.
+- `epoll_pwait` parks on `BlockReason::EpollWait { epfd,
+  deadline_ticks }`. Loops on `drain_ready` + deadline check after
+  each park.
+- `sys_nanosleep` parks on `BlockReason::Nanosleep { deadline_ticks
+  }`. Loops on `cntpct_el0() < deadline_ticks` defending against
+  spurious wakes.
+- `kernel::scheduler::tick()` calls `wake_expired_deadlines()` once
+  per timer IRQ. Bounded O(MAX_THREADS=256).
+- `epoll::mark_ready(fd, ev)` flips ready bit + calls
+  `wake_all_epoll_waiters()` so parked waiters re-check.
+- `cmd_scheduler_selftest` available in `selftest-on-boot` builds.
+- Headless `qemu_selftests_smoke.py` PASSES with all 5 sub-tests.
+
+### Acceptance grep
+
+```bash
+rg 'SPIN_PER_MS|timeout_ms\b|deadline_ns\b' src/batcave/linux/{epoll,threads,syscall}.rs
+rg 'TODO\(sched\)' src/batcave/linux/futex.rs
+rg 'cooperative_yield' src/batcave/linux/epoll.rs
+```
+All three return empty.
+
+### Selftest output
+
+```
+[selftests-smoke]   x509 PASS: bad-bytes
+[selftests-smoke]   x509 PASS: hostname-mismatch
+[selftests-smoke]   scheduler PASS: epoll-event-wake
+[selftests-smoke]   scheduler PASS: nanosleep-deadline-fires
+[selftests-smoke]   scheduler PASS: wake-expired-deadlines-noop
+[selftests-smoke] PASS — all sub-tests reported PASS, no FAIL lines.
+```
+
+### Next
+
+Per the priority list: **captures cleanup** is the only remaining
+queued thread. Repo hygiene, not architectural — the 2,930
+regenerated `captures/G*.png` files in `git status` need a decision
+(revert vs commit-as-new) and a gitignore policy.
+
+🦇
+
+---
+
 ## 2026-05-07 (later still) — Mac — 🔒 TLS HARDENING: chain-only strict, no mode toggles
 
 **Second thread of the day.** With the no-browser pivot landed in PR #1
