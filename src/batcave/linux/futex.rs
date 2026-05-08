@@ -271,75 +271,60 @@ fn release(b: &Bucket, slot: usize) {
 // Block-and-resume: mark the current thread Blocked
 // (BlockReason::FutexWait), call schedule() to yield, re-check the woken
 // flag + deadline on each resume. FUTEX_WAKE flips matching slots'
-// woken bits and wakes their threads via wake_thread(tid).
-fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32) -> i64 {
+// woken bits and wakes their threads via wake_thread(tid). The timer-tick
+// wake_expired_deadlines pass also wakes us when our deadline expires
+// (via the FutexWait arm on BlockReason).
+//
+// Lock + IRQ ordering invariants (mirrors park_current in
+// linux::threads): the bucket lock is NEVER held across schedule() or
+// wfi; IrqGuard is NEVER held across schedule() or wfi.
+fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32, deadline_ticks: u64) -> i64 {
     let s = &b.slots[slot];
-    let deadline = s.deadline_ticks.load(Ordering::Relaxed);
-    let has_deadline = deadline != 0;
     let _ = val;
-
-    // Real block path. Mark self Blocked under the bucket lock so a
-    // racing futex_wake either:
-    //   (a) sees our Blocked state via wake_thread → transitions us to
-    //       Runnable, OR
-    //   (b) takes the lock first, sets woken=true, calls wake_thread on
-    //       our (still-Running) tid (no-op), then unlocks. We then
-    //       observe woken=true on the next check and never block.
-    //
-    // IRQ guard around the lock-and-state-mutation: if a timer IRQ fired
-    // between mark_blocked and bucket_unlock, the scheduler would skip us
-    // (Blocked), pick another thread, and that thread spinning on
-    // bucket_lock would deadlock — we'd never run again to release it.
     loop {
         let g = crate::kernel::sync::IrqGuard::new();
         bucket_lock(b);
-        // Fast-path check: did we already get our wake?
+        // Fast-path: already woken?
         if s.woken.load(Ordering::Acquire) {
             release(b, slot);
             bucket_unlock(b);
             drop(g);
             return 0;
         }
-        // Timeout expired?
-        if has_deadline && cntpct() >= deadline {
+        // Deadline expired?
+        if deadline_ticks != 0 && cntpct() >= deadline_ticks {
             release(b, slot);
             bucket_unlock(b);
             drop(g);
             return ETIMEDOUT;
         }
-        // Mark self Blocked. Doesn't yield yet — that comes after we
-        // drop the bucket lock so a parallel waker can take it.
-        // Phase 2 of the unification plan rewrites this whole loop to
-        // pass deadline_ticks through; for now construct with the
-        // current WaitSlot deadline so behavior is unchanged.
+        // Mark self Blocked with the deadline carried on BlockReason.
+        // The wake_expired_deadlines tick pass observes this and flips
+        // our state to Runnable when cntpct_el0 crosses deadline_ticks.
         crate::batcave::linux::threads::mark_current_blocked(
             crate::batcave::linux::threads::BlockReason::FutexWait {
                 uaddr,
                 val,
-                deadline_ticks: deadline,
+                deadline_ticks,
             },
         );
         bucket_unlock(b);
         drop(g);
-
-        // Yield. The IRQ scheduler skips Blocked threads, so this thread
-        // sleeps until either a futex_wake transitions us back to Runnable
-        // or the timeout expires (we'd need a periodic timer wakeup for
-        // that — see the wakeup loop below for the polling fallback).
+        // Yield. schedule() switches to another Runnable thread or
+        // returns immediately if there's no one else to run.
         crate::batcave::linux::threads::schedule();
-
-        // Resumed. Either:
-        //   * Waker called wake_thread + set woken=true → loop, see
-        //     woken=true, return 0.
-        //   * Spurious wake (timer IRQ that picked us anyway despite
-        //     Blocked? Shouldn't happen, but handle gracefully) → loop.
-        //   * Timeout fired and someone set us Runnable → loop, see
-        //     timeout, return ETIMEDOUT.
-        //
-        // mark_current_runnable resets state in case schedule() returned
-        // without going through wake_thread (e.g. someone manually
-        // Runnable'd us).
-        crate::batcave::linux::threads::mark_current_runnable();
+        // Resumed (or schedule() returned because no other Runnable):
+        //   * If a waker (FUTEX_WAKE → wake_thread, or
+        //     wake_expired_deadlines from the timer tick) flipped our
+        //     state, current_thread_blocked() returns false and we
+        //     loop to re-check the bucket.
+        //   * If we're still Blocked (single-thread cave with no
+        //     pending wake), wfi until any IRQ fires, then loop.
+        if !crate::batcave::linux::threads::current_thread_blocked() {
+            continue;
+        }
+        unsafe { core::arch::asm!("wfi"); }
+        // implicit loop continue → re-check
     }
 }
 
@@ -415,7 +400,7 @@ pub fn futex_wait(uaddr: u64, val: u32, timeout_ns: u64) -> i64 {
 
     // Release the bucket lock before blocking — park_slot re-acquires it
     // only for the short detach at the end.
-    park_slot(b, slot, uaddr, val)
+    park_slot(b, slot, uaddr, val, deadline)
 }
 
 /// FUTEX_WAIT_BITSET — same as WAIT but only wakeable by a matching bitset.
@@ -459,7 +444,7 @@ pub fn futex_wait_bitset(uaddr: u64, val: u32, timeout_ns: u64, bitset: u32) -> 
     bucket_unlock(b);
     drop(g);
 
-    park_slot(b, slot, uaddr, val)
+    park_slot(b, slot, uaddr, val, deadline)
 }
 
 /// FUTEX_WAKE — wake up to `max_wakers` tasks waiting on uaddr.
