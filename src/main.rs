@@ -730,12 +730,46 @@ pub fn serial_shell() -> ! {
                     }
                     uart::puts("bat_os > ");
                 }
+                0x03 => {
+                    // Ctrl+C — discard the current line and reprompt.
+                    uart::puts("^C\nbat_os > ");
+                    len = 0;
+                }
                 0x08 | 0x7F => {
                     if len > 0 {
                         len -= 1;
                         uart::putc(0x08);
                         uart::putc(b' ');
                         uart::putc(0x08);
+                    }
+                }
+                0x09 => {
+                    // Tab — autofill command name from shell_completion.
+                    // Only fires inside the first token (pre-space); the
+                    // arg-completion follow-up PR handles past-space.
+                    if !buf[..len].contains(&b' ') {
+                        let prefix = unsafe {
+                            core::str::from_utf8_unchecked(&buf[..len])
+                        };
+                        let r = ui::shell_completion::complete_command(prefix);
+                        let ext = r.extension_bytes();
+                        let take = ext.len().min(255usize.saturating_sub(len));
+                        for &b in &ext[..take] {
+                            buf[len] = b;
+                            len += 1;
+                            uart::putc(b);
+                        }
+                        if r.match_count > 1 {
+                            uart::puts("\n");
+                            for &name in r.candidate_slice() {
+                                uart::puts(name);
+                                uart::puts("  ");
+                            }
+                            uart::puts("\nbat_os > ");
+                            for &b in &buf[..len] {
+                                uart::putc(b);
+                            }
+                        }
                     }
                 }
                 _ if c >= 0x20 && c <= 0x7E && len < 255 => {
