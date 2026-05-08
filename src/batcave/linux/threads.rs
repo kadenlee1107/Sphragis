@@ -294,9 +294,9 @@ impl SavedRegs {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BlockReason {
-    FutexWait { uaddr: u64, val: u32 },
-    EpollWait { epfd: i32, deadline_ticks: u64 },  // 0 = infinite (epoll-only sentinel)
-    Nanosleep { deadline_ticks: u64 },             // always concrete; 0 = invalid
+    FutexWait { uaddr: u64, val: u32, deadline_ticks: u64 },  // 0 = no deadline
+    EpollWait { epfd: i32, deadline_ticks: u64 },              // 0 = infinite (epoll-only sentinel)
+    Nanosleep { deadline_ticks: u64 },                          // always concrete; 0 = invalid
     Join { target_tid: u32 },
     IoWait,
 }
@@ -1287,7 +1287,7 @@ pub fn schedule() {
                     });
                     if let Some((wtid, reason)) = woken {
                         let (a1, a2) = match reason {
-                            BlockReason::FutexWait { uaddr, val } => (uaddr, val as u64),
+                            BlockReason::FutexWait { uaddr, val, .. } => (uaddr, val as u64),
                             BlockReason::EpollWait { epfd, deadline_ticks } =>
                                 (deadline_ticks, epfd as i64 as u64),
                             BlockReason::Nanosleep { deadline_ticks } => (deadline_ticks, 0),
@@ -1661,6 +1661,8 @@ pub fn wake_expired_deadlines() {
                     if deadline_ticks != 0 && now >= deadline_ticks => true,
                 ThreadState::Blocked(BlockReason::Nanosleep { deadline_ticks })
                     if now >= deadline_ticks => true,
+                ThreadState::Blocked(BlockReason::FutexWait { deadline_ticks, .. })
+                    if deadline_ticks != 0 && now >= deadline_ticks => true,
                 _ => false,
             };
             if should_wake {
@@ -1736,7 +1738,7 @@ pub fn futex_wait_on(uaddr: u64, val: u32) -> i64 {
     // Re-check under IRQ-masked lock to close the wait/wake race.
     let current: u32 = unsafe { core::ptr::read_volatile(uaddr as *const u32) };
     if current != val { return EAGAIN; }
-    block_current_thread(BlockReason::FutexWait { uaddr, val });
+    block_current_thread(BlockReason::FutexWait { uaddr, val, deadline_ticks: 0 });
     0
 }
 
@@ -1855,7 +1857,7 @@ pub fn dump() {
                 ThreadState::Free       => uart::puts("Free"),
                 ThreadState::Runnable   => uart::puts("Runnable"),
                 ThreadState::Running    => uart::puts("Running"),
-                ThreadState::Blocked(BlockReason::FutexWait { uaddr, val }) => {
+                ThreadState::Blocked(BlockReason::FutexWait { uaddr, val, .. }) => {
                     uart::puts("Blocked(FutexWait uaddr=0x");
                     let hex = b"0123456789abcdef";
                     for sh in (0..16).rev() {

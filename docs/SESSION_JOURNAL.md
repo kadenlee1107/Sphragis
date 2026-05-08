@@ -11,6 +11,107 @@ end of a session.
 
 ---
 
+## 2026-05-08 (later) — Mac — 🧵 FUTEX DEADLINE UNIFIED: single source of truth on BlockReason
+
+**First of three follow-up cleanup threads** after the four-thread
+post-no-browser priority list closed. Per the plan: futex unification
+→ TLS PQ bug investigation → warning cleanup, then re-evaluate.
+
+### Context
+
+`DESIGN_SCHEDULER_BLOCK_ON.md` decision #5 explicitly out-of-scoped
+folding `futex.rs::WaitSlot::deadline_ticks` into
+`BlockReason::FutexWait`. PR #3 (scheduler block-on) shipped without
+it; this thread closes that gap.
+
+### Decisions
+
+- Move `deadline_ticks` to `BlockReason::FutexWait` (u64; 0 = no
+  deadline), matching `EpollWait` and `Nanosleep`.
+- `wake_expired_deadlines` gains a `FutexWait` arm — symmetric with
+  the existing two.
+- `park_slot` adopts the `park_current` loop shape: bucket-lock
+  dance preserved (still needed for the woken+blocked race);
+  defensive `mark_current_runnable()` after `schedule()` removed;
+  `wfi` added between resumes.
+- Diagnostic encoding intentionally asymmetric: `FutexWait` keeps
+  `(a1, a2) = (uaddr, val)` for SKIP-DEADLOCK log compat;
+  `EpollWait`/`Nanosleep` keep `deadline_ticks` in `a1`. Documented.
+- 4th scheduler selftest sub-test: `futex-deadline-fires`.
+
+### Tag
+
+`pre-futex-deadline-unification-2026-05-08` at commit `e6e1ed0b`.
+Pushed.
+
+### Phases (5 commits)
+
+`488348d2`..`6253c18a` on `feat/futex-unification`:
+
+1. **Phase 1** (`488348d2`) — `BlockReason::FutexWait` gets
+   `deadline_ticks: u64`. `wake_expired_deadlines` gains the
+   FutexWait arm. Existing pattern matches use `..` to ignore the
+   field where unused. `block_current_thread`'s internal
+   construction sets `deadline_ticks: 0`.
+2. **Phase 2** (`59ddc8e2`) — `park_slot` rewrite: `deadline_ticks`
+   passed as parameter; `mark_current_blocked` constructs
+   `FutexWait { uaddr, val, deadline_ticks }`; defensive
+   `mark_current_runnable()` removed; `wfi` added; lock/IRQ
+   ordering invariants documented inline.
+3. **Phase 3** (`c2d270e1`) — `WaitSlot::deadline_ticks` field
+   removed. `enqueue()` signature drops the param. Three call sites
+   updated (`futex_wait`, `futex_wait_bitset`, `requeue_impl`).
+   Single source of truth achieved.
+4. **Phase 4** (`fae32c28`) — `cmd_scheduler_selftest` gains a
+   4th sub-test using the same synthesized-slot pattern as
+   `nanosleep-deadline-fires`.
+5. **Phase 5** (`6253c18a`) — `qemu_selftests_smoke.py` threshold
+   3 → 4. Smoke run output:
+   ```
+   [selftests-smoke]   x509 PASS: bad-bytes
+   [selftests-smoke]   x509 PASS: hostname-mismatch
+   [selftests-smoke]   scheduler PASS: epoll-event-wake
+   [selftests-smoke]   scheduler PASS: futex-deadline-fires
+   [selftests-smoke]   scheduler PASS: nanosleep-deadline-fires
+   [selftests-smoke]   scheduler PASS: wake-expired-deadlines-noop
+   [selftests-smoke] PASS — all sub-tests reported PASS, no FAIL lines.
+   ```
+
+### Total damage
+
+**83 insertions, 65 deletions** across 5 commits. 4 modified files
+(`threads.rs`, `futex.rs`, `shell.rs`, `qemu_selftests_smoke.py`),
+zero new files. Warnings: 216 → 216 (unchanged).
+
+### State of tree
+
+- `feat/futex-unification` HEAD `6253c18a`. Branch ready for PR.
+- All blocker deadlines parametrize via `BlockReason`. The wake
+  pass handles all three blocker types symmetrically.
+- `park_slot` mirrors `park_current` invariants.
+- `WaitSlot` is one field smaller; `enqueue()` is one param
+  simpler.
+- 4 scheduler selftest sub-tests pass headless via
+  `qemu_selftests_smoke.py`.
+
+### Acceptance grep
+
+```bash
+grep -nE 's\.deadline_ticks|deadline_ticks: AtomicU64' src/batcave/linux/futex.rs
+```
+Empty.
+
+### What's next
+
+Per the trim decided this run: **TLS PQ handshake bug investigation**
+(item 2/3), then **warning cleanup pass** (item 3/3). Items 4 and 5
+of the original list (pinned HTTPS API, generalized selftest registry)
+were dropped as YAGNI without a concrete trigger.
+
+🦇
+
+---
+
 ## 2026-05-08 — Mac — 🧹 CAPTURES UNTRACKED: case-insensitivity bug diagnosed + fixed
 
 **Fourth and last post-no-browser thread.** Per the priority list:
