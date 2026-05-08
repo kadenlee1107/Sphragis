@@ -31,4 +31,24 @@ fn main() {
 
     // Blink library available as standalone test binary.
     // Deep kernel integration will be done via shared memory IPC.
+
+    // x509-hardening-a: bake the build host's current Unix epoch
+    // seconds into the binary so validity-period checks have a
+    // monotonic floor without a wall-clock RTC. Bat_OS is bare-metal
+    // and has no NTP/RTC; this is the lower bound the verifier uses
+    // to reject certs whose notBefore is in the future. Operators
+    // can override at runtime once a verified time source lands
+    // (out of scope for this PR).
+    let build_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        // 2026-01-01 floor — a clock-skewed build host must not
+        // accidentally produce a binary that accepts pre-2026 certs
+        // as "from the future".
+        .unwrap_or(1_735_689_600);
+    println!("cargo:rustc-env=BAT_OS_BUILD_UNIX={build_unix}");
+    // The env is implicit-input to the compile, so cargo doesn't know
+    // to rerun on time changes. Force a rerun whenever build.rs itself
+    // changes — that's the closest cheap signal.
+    println!("cargo:rerun-if-changed=build.rs");
 }

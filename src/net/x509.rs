@@ -112,6 +112,7 @@ pub enum VerifyError {
     BadSignature,
     UntrustedRoot,
     ChainIncomplete,
+    UnknownCriticalExtension,
 }
 
 impl VerifyError {
@@ -120,17 +121,113 @@ impl VerifyError {
     /// a specific reason. See DESIGN_TLS_HARDENING.md.
     pub fn as_static_str(&self) -> &'static str {
         match self {
-            VerifyError::Parse              => "TLS: chain validation failed: certificate parse error",
-            VerifyError::EmptyChain         => "TLS: chain validation failed: empty chain",
-            VerifyError::UnsupportedSigAlg  => "TLS: chain validation failed: unsupported signature algorithm",
-            VerifyError::HostnameMismatch   => "TLS: chain validation failed: hostname mismatch",
-            VerifyError::NotYetValid        => "TLS: chain validation failed: certificate not yet valid",
-            VerifyError::Expired            => "TLS: chain validation failed: expired certificate",
-            VerifyError::BadSignature       => "TLS: chain validation failed: bad signature",
-            VerifyError::UntrustedRoot      => "TLS: chain validation failed: untrusted root",
-            VerifyError::ChainIncomplete    => "TLS: chain validation failed: chain incomplete",
+            VerifyError::Parse                    => "TLS: chain validation failed: certificate parse error",
+            VerifyError::EmptyChain               => "TLS: chain validation failed: empty chain",
+            VerifyError::UnsupportedSigAlg        => "TLS: chain validation failed: unsupported signature algorithm",
+            VerifyError::HostnameMismatch         => "TLS: chain validation failed: hostname mismatch",
+            VerifyError::NotYetValid              => "TLS: chain validation failed: certificate not yet valid",
+            VerifyError::Expired                  => "TLS: chain validation failed: expired certificate",
+            VerifyError::BadSignature             => "TLS: chain validation failed: bad signature",
+            VerifyError::UntrustedRoot            => "TLS: chain validation failed: untrusted root",
+            VerifyError::ChainIncomplete          => "TLS: chain validation failed: chain incomplete",
+            VerifyError::UnknownCriticalExtension => "TLS: chain validation failed: unknown critical extension",
         }
     }
+}
+
+/// x509-hardening-a: build-time epoch floor for validity-period checks.
+///
+/// Bat_OS is bare-metal with no RTC/NTP, so we cannot ask "what time is
+/// it" the way userspace can. `BAT_OS_BUILD_UNIX` is set by build.rs at
+/// compile time from the build host's `SystemTime::now()`, so it tracks
+/// reality up to one rebuild old. The verifier uses this as a lower
+/// bound — a cert whose `notBefore` is *after* this value is rejected
+/// as `NotYetValid` (signed in the future relative to the build), and
+/// a cert whose `notAfter` is *before* this is rejected as `Expired`.
+///
+/// Caveats:
+/// * If the binary runs for months without a rebuild, `Expired` checks
+///   become permissive (kerned from a stale floor), and `NotYetValid`
+///   stays correct (a never-issued cert is never valid). This is the
+///   right failure mode for an offline kernel.
+/// * The fallback constant `1_735_689_600` (2025-01-01 UTC) is what
+///   ships if build.rs failed to set the env. Floor is the date below
+///   which we know the project did not exist.
+pub fn now_unix() -> i64 {
+    const FALLBACK_UNIX: i64 = 1_735_689_600; // 2025-01-01 UTC
+    match option_env!("BAT_OS_BUILD_UNIX") {
+        Some(s) => match s.parse::<i64>() {
+            Ok(v) if v >= FALLBACK_UNIX => v,
+            _ => FALLBACK_UNIX,
+        },
+        None => FALLBACK_UNIX,
+    }
+}
+
+/// Convert an x509-cert `Time` to Unix epoch seconds.
+fn time_to_unix(t: &x509_cert::time::Time) -> i64 {
+    t.to_unix_duration().as_secs() as i64
+}
+
+/// Reject a cert whose `notBefore` is in the future (relative to
+/// `now_unix`) or whose `notAfter` has passed. Spec: RFC 5280 §6.1.3(a)(2).
+///
+/// Constant-cost: this function does the same work for every cert
+/// regardless of outcome, so calling it on every chain cert does not
+/// leak which cert was the bad one via timing.
+fn check_validity(cert: &Certificate, now: i64) -> Result<(), VerifyError> {
+    let v = &cert.tbs_certificate.validity;
+    let nb = time_to_unix(&v.not_before);
+    let na = time_to_unix(&v.not_after);
+    if now < nb {
+        return Err(VerifyError::NotYetValid);
+    }
+    if now > na {
+        return Err(VerifyError::Expired);
+    }
+    Ok(())
+}
+
+/// OIDs the verifier knows how to handle when marked critical.
+///
+/// RFC 5280 §4.2: a relying party MUST reject a certificate carrying a
+/// critical extension whose semantics it does not recognize. Without
+/// this check, a CA could pin a constraint (e.g. NameConstraints) that
+/// we silently ignore — defeating the purpose of marking it critical.
+///
+/// Recognized = "we either enforce it elsewhere, or it is structurally
+/// safe to honor as informational." Unrecognized critical = hard fail.
+///
+/// PR-a (this PR) recognizes the OIDs that already appear in real
+/// public CA chains. PR-b (BasicConstraints / KeyUsage / EKU
+/// enforcement) will add real semantics behind the matching OIDs.
+const RECOGNIZED_CRITICAL_OIDS: &[const_oid::ObjectIdentifier] = &[
+    const_oid::db::rfc5280::ID_CE_BASIC_CONSTRAINTS,         // 2.5.29.19
+    const_oid::db::rfc5280::ID_CE_KEY_USAGE,                 // 2.5.29.15
+    const_oid::db::rfc5280::ID_CE_EXT_KEY_USAGE,             // 2.5.29.37
+    const_oid::db::rfc5280::ID_CE_SUBJECT_ALT_NAME,          // 2.5.29.17
+    const_oid::db::rfc5280::ID_CE_NAME_CONSTRAINTS,          // 2.5.29.30
+    const_oid::db::rfc5280::ID_CE_POLICY_CONSTRAINTS,        // 2.5.29.36
+    const_oid::db::rfc5280::ID_CE_INHIBIT_ANY_POLICY,        // 2.5.29.54
+    const_oid::db::rfc5280::ID_CE_CERTIFICATE_POLICIES,      // 2.5.29.32
+    const_oid::db::rfc5280::ID_CE_CRL_DISTRIBUTION_POINTS,   // 2.5.29.31
+];
+
+/// Walk the cert's extensions; reject if any extension is marked
+/// critical AND its OID is not in `RECOGNIZED_CRITICAL_OIDS`.
+fn check_critical_extensions(cert: &Certificate) -> Result<(), VerifyError> {
+    let Some(exts) = &cert.tbs_certificate.extensions else {
+        return Ok(());
+    };
+    for ext in exts.iter() {
+        if !ext.critical {
+            continue;
+        }
+        if !RECOGNIZED_CRITICAL_OIDS.iter().any(|oid| oid == &ext.extn_id) {
+            return Err(VerifyError::UnknownCriticalExtension);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -296,6 +393,29 @@ pub fn verify_chain(
     // hostname the client tried.
     let hostname_ok = check_hostname(&leaf, hostname);
 
+    // x509-hardening-a: validity-period and critical-extension checks
+    // run on every cert in the chain, accumulating into flags so the
+    // existing constant-cost abort discipline holds. These are cheap
+    // (no signature math), so they cost the same as one extra parse.
+    let now = now_unix();
+    let mut earliest_validity_err: Option<VerifyError> = None;
+    let mut critical_ext_ok = true;
+
+    let mut record_validity = |c: &Certificate| {
+        if earliest_validity_err.is_none() {
+            if let Err(e) = check_validity(c, now) {
+                earliest_validity_err = Some(e);
+            }
+        }
+    };
+    let mut record_critical = |c: &Certificate| {
+        if check_critical_extensions(c).is_err() {
+            critical_ext_ok = false;
+        }
+    };
+    record_validity(&leaf);
+    record_critical(&leaf);
+
     // 2. Walk the chain. For each (child, parent) pair, verify that
     // parent.pubkey validates child.signature over child.tbsCertificate.
     // Root must be in TRUST_STORE.
@@ -311,6 +431,9 @@ pub fn verify_chain(
                 break;
             }
         };
+
+        record_validity(&parent);
+        record_critical(&parent);
 
         if verify_signed_by(&current_cert, current_der, &parent).is_err() {
             chain_ok = false;
@@ -333,6 +456,12 @@ pub fn verify_chain(
     }
     if !chain_ok {
         return VerifyOutcome::Err(VerifyError::BadSignature);
+    }
+    if let Some(e) = earliest_validity_err {
+        return VerifyOutcome::Err(e);
+    }
+    if !critical_ext_ok {
+        return VerifyOutcome::Err(VerifyError::UnknownCriticalExtension);
     }
 
     // 3. Root in trust store? Three accept paths, walked in order of
