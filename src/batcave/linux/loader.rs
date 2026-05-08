@@ -1,5 +1,16 @@
 // Bat_OS — Production ELF Loader
 // Handles real-world static ARM64 Linux binaries (like busybox).
+//
+// File-level `allow(dead_code)`: this module carries two parallel
+// loader paths: a single-binary path (`load_elf` + `execute_with_args`
+// + `load_hello_elf`, all wired) and a multi-binary / dynamic-linking
+// path (`load_archive_multi` + `LoadedLib` + `resolve_cross_module` +
+// `build_init_trampoline` + `apply_relocs_cross`, currently dormant).
+// The multi-binary path is staged for when caves need to load
+// dependencies; deleting it would mean re-implementing dynamic linking
+// from scratch when that comes due. Kept intentionally.
+
+#![allow(dead_code)]
 
 use crate::kernel::mm::frame;
 use crate::drivers::uart;

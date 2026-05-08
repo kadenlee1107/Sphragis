@@ -1,6 +1,13 @@
 // Bat_OS — File Descriptor Table for BatCave Linux Processes
 // Maps Linux fd numbers to VFS node indices with read/write positions.
 // Fds 0/1/2 are hardwired to stdin/stdout/stderr (UART).
+//
+// File-level `allow(dead_code)`: the O_RDWR / O_TRUNC / O_APPEND /
+// O_CLOEXEC / AT_FDCWD constants are open(2) protocol flags. Caves
+// pass them by name when calling openat(2); we keep the full table
+// named regardless of which flags any current cave happens to use.
+
+#![allow(dead_code)]
 
 // CHROMIUM-PHASE-C: bumped from 64 to 256 — Chromium's Mojo IPC
 // and thread-pool each want a handful of fds; 64 was tight for a

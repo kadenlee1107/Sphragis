@@ -1,5 +1,13 @@
 // Bat_OS — POSIX signal delivery for BatCave Linux processes.
 //
+// File-level `allow(dead_code)`: the SIGHUP/SIGINT/SA_RESTART/etc.
+// constants are POSIX protocol numbers. Caves invoke rt_sigaction(2)
+// with these names; we keep the full table named even where Bat_OS
+// hasn't grown a default handler for the signal yet, because the
+// alternative (deleting and re-adding when each cave needs a new
+// signal) is just churn for protocol-stable identifiers.
+#![allow(dead_code)]
+
 // Chromium / V8 relies on in-process signal handlers for a number of
 // load-bearing features:
 // * WebAssembly bounds-check trap handlers (`udf #1` sentinel bytes

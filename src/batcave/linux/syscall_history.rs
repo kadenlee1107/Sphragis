@@ -12,10 +12,10 @@
 // UNHANDLED path calls `dump()`, we print the ring so the operator
 // can see (for each recent syscall):
 //
-//   tid    syscall    x0        x1        x8     x29        x30      sp       elr
-//   t1     98 futex   0x1bcff4  0x81      0x62   0x1bcff5   0x1c152  ...      ...
-//   t2     131 tgkill 0x0       0x2       0x83   ...        ...      ...      ...
-//   t1     (fault)    —         —         —      0x18001c   0x18001c ...      0x18001c
+//   tid    syscall    x0        x1        x29        x30      sp       elr
+//   t1     98 futex   0x1bcff4  0x81      0x1bcff5   0x1c152  ...      ...
+//   t2     131 tgkill 0x0       0x2       ...        ...      ...      ...
+//   t1     (fault)    —         —         0x18001c   0x18001c ...      0x18001c
 //
 // Reading down the ring shows:
 //   * What syscalls t1 was making just before the crash.
@@ -28,7 +28,7 @@
 // forensics; turn off via `set_enabled(false)` to disable in
 // production.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::drivers::uart;
 
@@ -43,7 +43,6 @@ pub struct Entry {
     pub x0:          u64,
     pub x1:          u64,
     pub x2:          u64,
-    pub x8:          u64,
     pub x29:         u64,
     pub x30:         u64,
     pub sp_el0:      u64,
@@ -54,7 +53,7 @@ impl Entry {
     const fn empty() -> Self {
         Self {
             tid: 0, _pad: 0, seq: 0, syscall_num: 0,
-            x0: 0, x1: 0, x2: 0, x8: 0,
+            x0: 0, x1: 0, x2: 0,
             x29: 0, x30: 0, sp_el0: 0, elr: 0,
         }
     }
@@ -65,18 +64,11 @@ const RING_SIZE: usize = 64;
 static mut RING: [Entry; RING_SIZE] = [Entry::empty(); RING_SIZE];
 static HEAD: AtomicU32 = AtomicU32::new(0);
 static SEQ:  AtomicU64 = AtomicU64::new(0);
-static ENABLED: AtomicBool = AtomicBool::new(true);
-
-/// Toggle history capture. Enabled by default — turn off in
-/// production if the static footprint matters.
-pub fn set_enabled(on: bool) { ENABLED.store(on, Ordering::Release); }
-
 /// Record a syscall-entry snapshot. Called from the SVC dispatcher
 /// in `arch/mod.rs` before the syscall runs so `x0..x5` reflect
 /// the *arguments* (not the return value) and `x30` reflects the
 /// caller's LR (what the post-svc `ret` will jump to).
 pub fn record(tid: u32, syscall_num: u64, regs: &[u64; 31], elr: u64) {
-    if !ENABLED.load(Ordering::Acquire) { return; }
     let seq = SEQ.fetch_add(1, Ordering::AcqRel);
     let idx = (HEAD.fetch_add(1, Ordering::AcqRel) as usize) % RING_SIZE;
     let sp_el0: u64;
@@ -91,7 +83,6 @@ pub fn record(tid: u32, syscall_num: u64, regs: &[u64; 31], elr: u64) {
         x0:  regs[0],
         x1:  regs[1],
         x2:  regs[2],
-        x8:  regs[8],
         x29: regs[29],
         x30: regs[30],
         sp_el0,
