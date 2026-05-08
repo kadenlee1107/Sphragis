@@ -341,6 +341,8 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
             {
                 drivers::uart::puts("[selftest] running x509-selftest before auth gate...\n");
                 ui::shell::cmd_x509_selftest();
+                drivers::uart::puts("[selftest] running scheduler-selftest before auth gate...\n");
+                ui::shell::cmd_scheduler_selftest();
             }
 
             // ═══════════════════════════════════════
