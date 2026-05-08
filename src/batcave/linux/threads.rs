@@ -1673,9 +1673,10 @@ pub fn wake_expired_deadlines() {
 /// Walk the threads table for any thread Blocked on EpollWait with the
 /// matching epfd; transition each to Runnable. Bounded O(MAX_THREADS).
 ///
-/// Called by epoll::mark_ready(epfd, ev) after flipping the ready bit,
-/// so a parked epoll_pwait waiter wakes promptly on a real FD event
-/// rather than waiting for the next deadline tick.
+/// Used by cmd_scheduler_selftest for deterministic per-epfd wake
+/// verification. `mark_ready` uses the broader `wake_all_epoll_waiters`
+/// because at the watched-fd layer we only know which epoll instance
+/// matched, not the epfd that the parked thread used.
 pub fn wake_epoll_waiters(epfd: i32) {
     with_table(|t| {
         for slot in t.iter_mut() {
@@ -1683,6 +1684,23 @@ pub fn wake_epoll_waiters(epfd: i32) {
                 if e == epfd {
                     slot.state = ThreadState::Runnable;
                 }
+            }
+        }
+    });
+}
+
+/// Wake every thread parked in BlockReason::EpollWait, regardless of
+/// epfd. Called by epoll::mark_ready after flipping a ready bit — at
+/// that layer we know an event arrived but not which epfd was parked
+/// on this instance. False-positive wakes (a thread waiting on a
+/// different epfd) re-park after one drain_ready loop, costing a few
+/// extra cycles but never leaving an event-wait waiter stuck forever.
+/// Bounded O(MAX_THREADS).
+pub fn wake_all_epoll_waiters() {
+    with_table(|t| {
+        for slot in t.iter_mut() {
+            if let ThreadState::Blocked(BlockReason::EpollWait { .. }) = slot.state {
+                slot.state = ThreadState::Runnable;
             }
         }
     });
