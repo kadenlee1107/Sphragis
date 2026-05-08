@@ -11,6 +11,113 @@ end of a session.
 
 ---
 
+## 2026-05-08 — Mac — 🧹 CAPTURES UNTRACKED: case-insensitivity bug diagnosed + fixed
+
+**Fourth and last post-no-browser thread.** Per the priority list:
+captures cleanup. Repo hygiene; not architectural. Smaller scope than
+the prior threads — no spec/plan docs needed, just diagnose + decide +
+execute.
+
+### Re-framing surprise (third one this run)
+
+The earlier sweep called this "2,930 modified `captures/G*.png` files
+in `git status`, possibly regenerated, possibly noise." Both wrong.
+
+The 2,930 modifications are **case-collision artifacts on macOS's
+case-insensitive APFS**, not regenerated content. The original 5-batch
+capture commit series:
+
+```
+595c5c77 captures: batch 1/5 — A* (2385 files)
+f39fa588 captures: batch 2/5 — B-Q* (~2200 files)
+16bbca05 captures: batch 3/5 — R* (909 files)
+08bafb7f captures: batch 4/5 — S-Z* (~1963 files)
+98f54cd9 captures: batch 5/5 — lowercase (~2930 files)
+```
+
+…added uppercase + lowercase versions of the same captures (e.g.
+`captures/G001.png` AND `captures/g001.png`). On a case-insensitive
+filesystem, these resolve to **the same file on disk** — only one set
+of bytes can exist. The git index believes there are 2 distinct blobs
+per pair; the filesystem can only show one. Git compares the on-disk
+content (lowercase blob) against the uppercase index entry (different
+blob) → "modified."
+
+**Verification:** the working-tree blob hash for `captures/G001.png`
+matched exactly the committed blob for `captures/g001.png`. macOS APFS
+inode test confirmed `/tmp/CaSeTest1.txt` and `/tmp/casetest1.txt`
+share inode 25721604.
+
+### The call
+
+Three options surfaced:
+1. Drop uppercase duplicates from index (smallest fix; mixed-case
+   naming after).
+2. Drop lowercase + restore uppercase content on disk (consistent
+   naming; rewrites 2,930 disk files; risks losing recent intent).
+3. **Gitignore captures/ + drop entire tree from index** (untracks
+   ~2.4 GB, captures stay local-only and in git history forever).
+
+Picked **option 3**:
+
+- Case-insensitivity will keep biting forever; options 1 and 2 leave
+  a landmine for future capture commits.
+- Historical evidence stays preserved in git history (5-batch series
+  unchanged). Recoverable via tag `pre-no-browser-2026-05-07` or any
+  earlier capture tag.
+- Bring-up phase is over; captures are working data now, not artifacts
+  of record. Local-only is the right scope.
+- Repo stops growing on every capture batch.
+
+### Phases that ran (2 commits)
+
+`b029d241`..`54ce2c3f` on `feat/captures-untrack`:
+
+1. **Gitignore** (`b029d241`) — added `/captures` to `.gitignore`.
+   Replaced the old "Bring-up research data now tracked" comment with
+   a note explaining the case-insensitivity bug and pointing at the
+   rescue tag.
+2. **Untrack** (`54ce2c3f`) — `git rm --cached -r captures/` removed
+   **10,740 index entries** (7,810 visible files + 2,930 lowercase
+   blob duplicates that were the actual cause of the phantom mods).
+   Working tree on-disk files unchanged. The 5-batch capture history
+   is preserved unchanged — this commit only modifies the index, not
+   past commits.
+
+### State of tree
+
+- `feat/captures-untrack` HEAD is `54ce2c3f`. Branch ready for PR
+  against `feat/js-engine-browser-posix`.
+- `git status` clean of capture noise: went from ~3,000 lines to ~126
+  (the residual tool-state files that have always been there).
+- Captures on-disk all still present (~7,810 files, 2.4 GB).
+- Future captures committed via add will land single-cased — the
+  gitignore prevents accidental re-tracking entirely until removed.
+
+### Total damage
+
+**11 lines added** (.gitignore comment + entry), **10,740 index
+entries removed** in a single `git rm --cached` commit. No code
+changes, no behavior changes, no acceptance grep needed.
+
+### What's next
+
+The post-no-browser priority list is **exhausted** as of this commit:
+
+| | thread | PR | merged |
+|---|---|---|---|
+| 1. | no-browser pivot | #1 | yes |
+| 2. | TLS hardening | #2 | yes |
+| 3. | Scheduler block-on | #3 | yes |
+| 4. | Captures cleanup | #4 (this) | pending |
+
+After #4 merges, the active task list is empty. Next priorities
+come from whatever Kaden surfaces next — no queued threads.
+
+🦇
+
+---
+
 ## 2026-05-07 (later still × 2) — Mac — 🛏️ SCHEDULER BLOCK-ON: epoll + nanosleep park instead of spin
 
 **Third post-no-browser thread of the day.** Per the priority list
