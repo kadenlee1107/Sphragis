@@ -73,7 +73,8 @@ impl Aes128Gcm {
             let mut i = 0;
             while i + 16 <= data.len() {
                 g.update(core::slice::from_ref(
-                    (&data[i..i + 16]).try_into().unwrap()));
+                    (&data[i..i + 16]).try_into()
+                        .expect("gcm: 16-byte slice → [u8; 16] is infallible")));
                 i += 16;
             }
             if i < data.len() {
@@ -225,7 +226,8 @@ impl Aes256Gcm {
             let mut i = 0;
             while i + 16 <= data.len() {
                 g.update(core::slice::from_ref(
-                    (&data[i..i + 16]).try_into().unwrap()));
+                    (&data[i..i + 16]).try_into()
+                        .expect("gcm: 16-byte slice → [u8; 16] is infallible")));
                 i += 16;
             }
             if i < data.len() {

@@ -1378,7 +1378,8 @@ fn ensure_ip_init() -> &'static mut Vec<IpBinding> {
     unsafe {
         let ptr = core::ptr::addr_of_mut!(IP_BINDINGS);
         if (*ptr).is_none() { *ptr = Some(Vec::new()); }
-        (*ptr).as_mut().unwrap()
+        // Just-set Some above; the option is never re-cleared.
+        (*ptr).as_mut().expect("nat::IP_BINDINGS just initialised")
     }
 }
 

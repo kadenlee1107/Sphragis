@@ -131,7 +131,8 @@ impl<'a> Adt<'a> {
         if end > self.blob.len() {
             return Err(AdtError::BadOffset);
         }
-        let bytes: [u8; 4] = self.blob[off..end].try_into().unwrap();
+        let bytes: [u8; 4] = self.blob[off..end].try_into()
+            .expect("adt: bounds-checked 4-byte slice → [u8; 4] is infallible");
         Ok(u32::from_le_bytes(bytes))
     }
 

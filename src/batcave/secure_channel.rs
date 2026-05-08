@@ -114,7 +114,8 @@ impl SecureChannel {
             return Err("secure_channel: frame too short");
         }
         let nonce = &frame[..12];
-        let seq = u64::from_be_bytes(frame[12..20].try_into().unwrap());
+        let seq = u64::from_be_bytes(frame[12..20].try_into()
+            .expect("secure_channel: 8-byte slice → [u8; 8] is infallible"));
 
         // Expected nonce against IN direction.
         let expected_nonce = make_nonce(self.dir_in_tag, seq);
@@ -134,12 +135,13 @@ impl SecureChannel {
         let aad = &frame[12..20];
         let ct_len = frame.len() - HEADER_LEN - TAG_LEN;
         let ct = &frame[HEADER_LEN..HEADER_LEN + ct_len];
-        let tag_bytes: [u8; 16] = frame[HEADER_LEN + ct_len..].try_into().unwrap();
+        let tag_bytes: [u8; 16] = frame[HEADER_LEN + ct_len..].try_into()
+            .expect("secure_channel: tail-of-frame is exactly TAG_LEN by length math above");
 
         let cipher = ChaCha20Poly1305::new(&self.key.into());
         let mut buf = ct.to_vec();
         cipher.decrypt_in_place_detached(
-                nonce.try_into().unwrap(),
+                nonce.try_into().expect("secure_channel: nonce slice is 12 bytes by construction"),
                 aad,
                 &mut buf,
                 (&tag_bytes).into(),
