@@ -38,7 +38,10 @@ pub const SIO_EP_AUDIO_OUT: u8 = 32;  // typical first service endpoint
 pub const SIO_EP_AUDIO_IN:  u8 = 33;
 
 /// Audio sample formats that the SIO firmware understands.
+/// `Le` suffix is meaningful protocol information (BE variants would
+/// be added by name later); not a clippy `enum_variant_names` smell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub enum AudioFormat {
     S16Le,        // 16-bit signed little-endian (most common)
     S24Le,

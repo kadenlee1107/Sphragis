@@ -3086,7 +3086,7 @@ fn cmd_run_elf(name: &str) {
 
     // BatCave EL0 runner — all static-PIE binaries go through here
     let batcave_names = ["posix", "cxx"];
-    let use_batcave = batcave_names.iter().any(|&n| n == name);
+    let use_batcave = batcave_names.contains(&name);
 
     if use_batcave {
         let data = match name {

@@ -245,8 +245,7 @@ pub fn parse_set_cookie(host: &[u8], header_value: &[u8]) -> bool {
     while j < header_value.len() {
         let b = header_value[j];
         if b == b'=' && eq.is_none() { eq = Some(j); }
-        else if b == b';' { semi = j; break; }
-        else if b == b'\r' || b == b'\n' { semi = j; break; }
+        else if b == b';' || b == b'\r' || b == b'\n' { semi = j; break; }
         j += 1;
     }
     let eq = match eq { Some(e) => e, None => return false };

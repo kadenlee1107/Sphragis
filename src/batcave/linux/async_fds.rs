@@ -61,7 +61,7 @@ pub struct Itimerspec {
 
 impl Timespec {
     #[inline]
-    fn to_ns(&self) -> i128 {
+    fn to_ns(self) -> i128 {
         (self.tv_sec as i128) * 1_000_000_000 + (self.tv_nsec as i128)
     }
     #[inline]

@@ -931,8 +931,20 @@ fn apple_kernel_self_test() {
     uart::puts("[selftest] replay complete\n");
 }
 
+/// Apple-silicon kernel entry. Called from the asm trampoline with
+/// `boot_args_ptr` provided by m1n1 (or by the Linux-bridge stub on
+/// the Apple HV path). The pointer is bounds- and revision-checked
+/// inside before any dereference.
+///
+/// # Safety
+///
+/// `boot_args_ptr` must point to a valid `m1n1` BootArgsRaw image:
+/// at least `mem::size_of::<BootArgsRaw>()` bytes of readable memory
+/// matching the m1n1 layout. The asm trampoline that supplies this
+/// pointer is the only legitimate caller; any other caller must
+/// uphold the same contract or we'll fault during boot.
 #[unsafe(no_mangle)]
-pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_args::BootArgsRaw) -> ! {
+pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_args::BootArgsRaw) -> ! {
     // Install the early VBAR at whichever EL we're at. m1n1 hands
     // off at EL2 on M4, but paths that enter at EL1 exist; cover
     // both. `adrp + :lo12:` is required because `adr` has only

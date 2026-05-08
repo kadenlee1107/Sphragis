@@ -1007,7 +1007,7 @@ fn handshake_inner(pcb_id: usize, hostname: &str) -> Result<(), &'static str> {
 
                         let host = &sess.expected_hostname[..sess.expected_hostname_len];
                         let leaf = certs[0];
-                        let intermediates: Vec<&[u8]> = certs[1..].iter().copied().collect();
+                        let intermediates: Vec<&[u8]> = certs[1..].to_vec();
                         match crate::net::x509::verify_chain(leaf, &intermediates, host) {
                             crate::net::x509::VerifyOutcome::Ok { pubkey_der, pubkey_algorithm } => {
                                 sess.peer_spki_len = pubkey_der.len().min(sess.peer_spki.len());

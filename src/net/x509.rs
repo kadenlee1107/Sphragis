@@ -516,7 +516,7 @@ pub fn tls13_verify_cert_verify(
 ) -> Result<(), VerifyError> {
     // Build the signed message.
     let mut msg: Vec<u8> = Vec::with_capacity(64 + 34 + 1 + transcript_hash.len());
-    for _ in 0..64 { msg.push(0x20); }
+    msg.extend(core::iter::repeat_n(0x20u8, 64));
     msg.extend_from_slice(b"TLS 1.3, server CertificateVerify");
     msg.push(0x00);
     msg.extend_from_slice(transcript_hash);

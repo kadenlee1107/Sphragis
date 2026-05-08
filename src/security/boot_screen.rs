@@ -111,10 +111,13 @@ const DOT_GAP: u32 = 8;
 /// `dx, dy` are the direction signs (-1 / +1) the L opens toward.
 fn draw_corner(x: u32, y: u32, dx: i32, dy: i32) {
     const S: u32 = 14;
+    // Horizontal arm starts left/right of the corner depending on dx,
+    // anchored at y. Vertical arm starts above/below depending on dy,
+    // anchored at x. So hy = y and vx = x regardless of direction.
     let hx = if dx > 0 { x } else { x.saturating_sub(S - 1) };
-    let hy = if dy > 0 { y } else { y };
+    let hy = y;
     let vy = if dy > 0 { y } else { y.saturating_sub(S - 1) };
-    let vx = if dx > 0 { x } else { x };
+    let vx = x;
     gpu::fill_rect(hx, hy, S, 1, HAIR_HI);
     gpu::fill_rect(vx, vy, 1, S, HAIR_HI);
 }
@@ -588,7 +591,7 @@ fn fake_boot_and_wipe(fb: *mut u32, w: u32, h: u32) {
     for progress in 0..bar_w {
         gpu::fill_rect(bar_x + 1, bar_y + 1, progress, bar_h - 2, INK);
         let pct = (progress * 100) / bar_w;
-        let mut pct_str = [b' ', b' ', b' ', b'%'];
+        let mut pct_str = *b"   %";
         if pct >= 100 { pct_str[0] = b'1'; pct_str[1] = b'0'; pct_str[2] = b'0'; }
         else if pct >= 10 { pct_str[1] = b'0' + (pct / 10) as u8; pct_str[2] = b'0' + (pct % 10) as u8; }
         else { pct_str[2] = b'0' + pct as u8; }

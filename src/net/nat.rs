@@ -1550,7 +1550,7 @@ pub fn parse_outbound(frame: &[u8]) -> Option<OutboundFlow> {
 
 /// If `frame` is Ethernet + IPv4 + TCP, return the TCP payload slice
 /// (everything past the TCP header). None if not TCP or no payload.
-fn tcp_payload<'a>(frame: &'a [u8]) -> Option<&'a [u8]> {
+fn tcp_payload(frame: &[u8]) -> Option<&[u8]> {
     if frame.len() < 14 + 20 + 20 { return None; }
     if &frame[12..14] != b"\x08\x00" { return None; }
     let ip_hdr_len = ((frame[14] & 0x0F) as usize) * 4;
@@ -1944,7 +1944,7 @@ fn build_fragment(id: u16, mf: bool, offset_units: u16, extra_bytes: usize) -> V
     v.extend_from_slice(&[192, 168, 77, 10]);      // src ip
     v.extend_from_slice(&[93, 184, 216, 34]);      // dst ip
     // Opaque fragment payload
-    for _ in 0..extra_bytes { v.push(0); }
+    v.extend(core::iter::repeat_n(0u8, extra_bytes));
     // Fill total_len
     let tl = v.len() - 14;
     v[total_slot]     = (tl >> 8) as u8;

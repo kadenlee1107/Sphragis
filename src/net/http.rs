@@ -323,7 +323,7 @@ fn find_crlfcrlf(buf: &[u8]) -> Option<usize> {
     None
 }
 
-fn eq_ci(a: u8, b: u8) -> bool { a.to_ascii_lowercase() == b.to_ascii_lowercase() }
+fn eq_ci(a: u8, b: u8) -> bool { a.eq_ignore_ascii_case(&b) }
 
 fn starts_with_ci(h: &[u8], n: &[u8]) -> bool {
     if h.len() < n.len() { return false; }

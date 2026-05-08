@@ -146,16 +146,10 @@ fn wipe_memory() {
     let (_used, _total) = frame::stats();
     let mut wiped = 0usize;
 
-    // Allocate and zero frames until we run out
-    // This overwrites all free memory with zeros
-    loop {
-        match frame::alloc_frame() {
-            Some(_addr) => {
-                // alloc_frame already zeros the page
-                wiped += 1;
-            }
-            None => break,
-        }
+    // Allocate and zero frames until we run out — alloc_frame already
+    // zeros each page on hand-out, so this overwrites all free memory.
+    while let Some(_addr) = frame::alloc_frame() {
+        wiped += 1;
     }
 
     if !WIPE_SILENT.load(Ordering::Relaxed) {
