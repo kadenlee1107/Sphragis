@@ -99,12 +99,12 @@ const BLOCK_USER_TEXT: u64 =
 const BLOCK_USER_DATA: u64 =
     PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL | PTE_AP_EL0_RW | PTE_UXN | PTE_PXN;
 
-/// Transitional: user page that is writable AND executable from EL0, no-exec
-/// from EL1. TODO: remove once the ELF loader parses PT_LOAD PF_X/PF_W flags
-/// and maps cave .text vs .data/.bss separately. Chromium/V8 needs JIT pages
-/// (W+X) to run, so until we have per-segment perms this is the only workable
-/// mapping for the whole cave window. W^X inside a cave is therefore NOT
-/// enforced yet; kernel W^X (via BLOCK_KERNEL_TEXT/DATA above) IS enforced.
+/// User page that is writable AND executable from EL0, no-exec from EL1.
+/// Until the ELF loader parses PT_LOAD PF_X/PF_W flags and maps cave
+/// .text vs .data/.bss separately, this is the only workable mapping
+/// for the whole cave window — W^X inside a cave is therefore NOT
+/// enforced. JIT-bearing caves (V8, WASM) require this. Kernel W^X
+/// (via BLOCK_KERNEL_TEXT/DATA above) IS enforced.
 const BLOCK_USER_RW_EXEC: u64 =
     PTE_VALID | PTE_AF | PTE_SH_INNER | PTE_ATTR_NORMAL | PTE_AP_EL0_RW | PTE_PXN;
 
@@ -1192,9 +1192,10 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     //
     // INITRD-FIX notes (both folded in here):
     // 1. Rust scatters executable code past __text_end into the rodata
-    // PT_LOAD, so the post-text blocks must stay EL1-exec. Transitional
-    // widen to EL1-RW + EL1-exec + UXN (loses EL1 W^X). TODO V9: revert
-    // once `.text.cold.*` lands inside the text segment reliably.
+    // PT_LOAD, so the post-text blocks must stay EL1-exec. We widen
+    // them to EL1-RW + EL1-exec + UXN, which loses EL1 W^X for the
+    // post-text region. Tightening this requires `.text.cold.*` to
+    // land inside the text segment reliably — known limitation.
     // 2. Real content_shell initrd lives at 0x48000000..~0x60000000 and
     // kernel-pool frames sit near 0xBFFFX000 — both past the old 256 MB
     // window. Extending to 2 GB via L2_xhi (L1[2]) keeps every kernel

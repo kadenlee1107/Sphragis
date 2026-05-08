@@ -624,15 +624,16 @@ pub fn accept4(fd: i32, addr: *mut SockaddrIn, len: *mut u32, flags: i32) -> i64
 /// (which internally polls with a timeout) and returns 0 on success.
 // /
 /// Non-blocking semantics: we mark the socket Connecting and return
-/// EINPROGRESS, but currently tcp::connect() is synchronous so we *do*
-/// actually block for the handshake in both cases. This is a GAP.
-// /
-/// TODO(tcp): non-blocking SYN — expose a tcp::connect_start() that returns
-/// immediately and a tcp::connect_poll() that returns Pending/Ok/Err.
-// /
-/// CRITICAL GAP: src/net/tcp.rs holds a single global connection. Opening a
-/// second socket and connect()ing will clobber the first. This layer guards
-/// against that by refusing a second concurrent TCP connect.
+/// EINPROGRESS, but currently `tcp::connect()` is synchronous so we
+/// actually block for the handshake regardless of `O_NONBLOCK`. True
+/// non-blocking SYN needs a cave-facing connect_start/connect_poll
+/// pair — partially scaffolded but not yet wired.
+///
+/// `src/net/tcp.rs` holds the legacy global PCB on slot 0. This
+/// layer guards against a second concurrent TCP connect on slot 0
+/// by refusing the second one. The HTTPS syscall (PR #8) added a
+/// per-PCB allocator (`tcp::pcb_alloc`); the cave socket layer is
+/// not yet on that allocator and stays single-PCB.
 pub fn connect(fd: i32, addr: *const SockaddrIn, len: u32) -> i64 {
     let (ip, port, family) = match read_sockaddr(addr, len) {
         Ok(v) => v, Err(e) => return e,
@@ -880,9 +881,10 @@ pub fn recvfrom(fd: i32, buf: *mut u8, len: usize, _flags: i32,
             }
         }
         SockKind::Udp => {
-            // TODO(udp): no per-socket receive queue. src/net/udp.rs dumps
-            // inbound into a syscall-layer ring (UDP_RX_BUF). Wiring that
-            // here requires plumbing we don't have yet.
+            // No per-socket receive queue: src/net/udp.rs dumps inbound
+            // into the syscall-layer ring; routing that into a
+            // per-socket queue is not yet wired, so UDP recv from a
+            // cave fd always reports no data.
             let _ = peer_ip; let _ = peer_port;
             EAGAIN
         }
@@ -1131,11 +1133,10 @@ pub fn getpeername(fd: i32, addr: *mut SockaddrIn, len: *mut u32) -> i64 {
     }
 }
 
-/// shutdown(2) — SHUT_RD is advisory (we can't half-close our TCP stack),
-/// SHUT_WR and SHUT_RDWR trigger a FIN via tcp::close() if this socket owns
-/// the global connection.
-// /
-/// TODO(tcp): real half-close semantics in src/net/tcp.rs.
+/// shutdown(2) — SHUT_RD is advisory (the underlying TCP stack
+/// doesn't support half-close), SHUT_WR and SHUT_RDWR trigger a FIN
+/// via tcp::close() if this socket owns the global connection.
+/// True half-close in src/net/tcp.rs is a known limitation.
 pub fn shutdown(fd: i32, how: i32) -> i64 {
     match with_slot(fd, |s| {
         if s.kind != SockKind::Tcp { return Err(EOPNOTSUPP); }

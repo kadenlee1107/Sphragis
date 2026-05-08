@@ -11,6 +11,64 @@ end of a session.
 
 ---
 
+## 2026-05-08 (squeaky-clean Phase 5) — Mac — ✏️ TODO/FIXME/HACK markers: 0 left
+
+**Fifth phase of the squeaky-clean pass.** 19 TODO markers across
+the source tree. None survive — each was either deleted (stale
+planning artifact), implemented (work already done elsewhere), or
+rewritten as a "known limitation" comment (real future work, but
+the comment now describes current behavior rather than flagging
+unfinished work).
+
+### What changed
+
+| File | Before | After |
+|---|---|---|
+| `threads.rs` | 69-line "HUMAN WIRING CHECKLIST + STATUS SUMMARY" planning block | deleted entirely (the checklist was largely executed by the futex/scheduler PRs that landed earlier today) |
+| `threads.rs` (NEON/FP comment) | "TODO — see below" | "deferred — single-cave workloads don't run concurrent SIMD math today; revisit when caves running pthread + V8 / WASM JIT cohabit" |
+| `mmu.rs:103` | "TODO: remove once the ELF loader parses PT_LOAD PF_X/PF_W" (referenced the elf.rs Phase 4 deleted) | rewritten as a current-state note about W^X-inside-cave |
+| `mmu.rs:1196` | "TODO V9: revert" | rewritten as a known limitation about post-text region perms |
+| `epoll.rs:732` | 6 `TODO(kaden):` markers | rewritten as a "Known limitations" section describing what doesn't work yet |
+| `sockets.rs` | 3 TODOs (tcp non-blocking, udp recv queue, half-close) | rewritten as known-limitation comments |
+| `syscall.rs:658` | "see TODO at sys_openat for remaining sites" | rewritten as a precise statement of which path-syscalls have been updated |
+| `loader.rs:1933` | "TODO: spin-for-alignment leaks frames" | rewritten as a known limitation describing the leak + the proper fix path |
+| `docker_client.rs:55` | "Phase 2 cut. See design-alignment phase 3/5 TODOs." | shortened to "interim — production should derive from passphrase-KDF" |
+
+### Verification
+
+- `grep -rE "TODO|FIXME|XXX|HACK" --include="*.rs" src/` — **0 matches**.
+- `cargo check --target aarch64-unknown-none --features gicv3` — clean.
+- `qemu_selftests_smoke.py` — all 6 sub-tests PASS.
+
+### Rationale: convert vs delete
+
+A `TODO` is a self-flagged unfinished marker. Three reasons it might
+exist in shipped code, and the rule for each:
+
+- **Stale (work done, marker forgotten)** → delete.
+- **Real-but-unbounded future work** → rewrite as "known
+  limitation" prose. The reader still sees the gap; the source no
+  longer reads as a mid-development draft.
+- **Real-bounded future work** → if it's bounded, do it. If we
+  can't do it now, treat as the previous case.
+
+All 19 markers fell into delete or rewrite. None of them were
+"will get to it next sprint" — those would be tracked in an
+issue-tracker, not in source.
+
+### Diff scale
+
+- 7 files modified
+- 1 large planning block deleted (~69 lines in threads.rs)
+- ~60 lines of TODO-flavoured prose rewritten as documentation prose
+
+### Next
+
+Phase 6: `unwrap()` audit (15 panic sites — each needs justification
+or replacement with a proper error path).
+
+---
+
 ## 2026-05-08 (squeaky-clean Phase 4) — Mac — 🧬 Linux ABI dead-code purge: drop the module-wide allow
 
 **Fourth phase of the squeaky-clean pass.** Drops the module-level

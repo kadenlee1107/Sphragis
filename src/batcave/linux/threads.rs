@@ -77,7 +77,9 @@
 // in `SavedRegs` below. On ARM64 the ABI only requires callee-saved
 // (x19-x30, sp, fp) to round-trip through a function call, but preemption
 // can steal the CPU at any instruction, so we must save ALL GPRs.
-// NEON/FP is deferred (TODO — see below).
+// NEON/FP register save (q0-q31, fpsr, fpcr) is deferred — single-cave
+// workloads don't run concurrent SIMD math today; revisit when caves
+// running pthread + V8 / WASM JIT cohabit.
 // * TLS: `tpidr_el0` holds the thread pointer. glibc/musl layouts place the
 // TCB at `tpidr_el0` and access TLS variables at negative or positive
 // offsets. CLONE_SETTLS provides the value. We store it per-thread and
@@ -1910,76 +1912,6 @@ pub fn auto_dump_if_idle() {
         crate::drivers::uart::puts("]\n");
     }
 }
-
-// =============================================================================
-// HUMAN WIRING CHECKLIST (what you need to do to make this actually run)
-// =============================================================================
-//
-// 1. In src/batcave/linux/syscall.rs::sys_clone_thread (line ~1631):
-// If flags matches CHROMIUM_THREAD_FLAGS (or at least CLONE_VM|CLONE_THREAD),
-// delegate to threads::clone(flags, child_stack, parent_tid_ptr,
-// child_tid_ptr, tls) and return its result.
-// Immediately after, call threads::set_child_resume(new_tid, elr_plus_4,
-// parent_sp) with ELR_EL1 read from the trap frame +4.
-// Leave the existing IN_CHILD path as the fallback for CLONE-without-
-// CLONE_THREAD (busybox), so nothing regresses.
-//
-// 2. Call threads::init_main_thread(entry_pc, initial_sp) from runner.rs
-// *only* for ELFs that are expected to use pthread (Chromium, v8_exec).
-// For hello_world/busybox, leave THREADING_ENABLED=false; schedule() and
-// on_tick() short-circuit and everything behaves exactly like today.
-//
-// 3. Implement the cooperative context switch in assembly. Suggested location:
-// src/batcave/linux/threads.s with a single extern "C" fn:
-// fn cxt_switch_cooperative(old: *mut SavedRegs, new: *const SavedRegs);
-// Replace the `uart::puts("[threads] schedule() TODO...")` in schedule()
-// with a call to it.
-//
-// 4. Hook on_tick() into the EL1 IRQ handler (arch/mod.rs or wherever the
-// timer fires). The handler already has a pointer to its own saved trap
-// frame (x0..x30, SP_EL0, ELR_EL1, SPSR_EL1 on the exception stack).
-// Treat that as a *mut SavedRegs, call on_tick(), and if it returns
-// Some(next_regs), memcpy(trap_frame, next_regs, sizeof SavedRegs) and
-// `msr tpidr_el0, <next.tls_ptr>` before eret. See the layout comments
-// on SavedRegs — ordering of x[0..31] / sp_el0 / elr_el1 / spsr_el1 must
-// match the trap frame exactly, OR you introduce a small shim struct.
-//
-// 5. Wire the futex syscall:
-// FUTEX_WAIT -> threads::futex_wait_on(uaddr, val) when is_enabled(),
-// else fall back to the existing EAGAIN stub.
-// FUTEX_WAKE -> threads::futex_wake_on(uaddr, n) as i64.
-//
-// 6. Wire set_tid_address/gettid to consult threads::current_tid() when
-// enabled.
-//
-// 7. FP/NEON state — Chromium will crash without q0-q31 save/restore once
-// multiple threads actually run math. Extend SavedRegs with:
-// pub q: [u128; 32], pub fpsr: u32, pub fpcr: u32
-// and extend the switch assembly to stp/ldp them.
-//
-// =============================================================================
-// STATUS SUMMARY
-// =============================================================================
-// Fully working (compiles, testable in isolation):
-// Flag constants and Chromium flag bundle
-// Thread struct, SavedRegs, ThreadState, BlockReason
-// Static thread table + IRQ-masked locking
-// clone() flag validation, TID allocation, slot allocation, TLS/tid
-// address recording, PARENT_SETTID write
-// block_current_thread / wake_thread / futex_wait_on / futex_wake_on
-// try_reap / exit_current
-// init_main_thread gate (does nothing until the runner opts in)
-// dump()
-//
-// Skeleton / TODO (marked inline):
-// Cooperative context switch assembly (schedule() logs and returns)
-// Trap-frame rewrite from on_tick() (returns the pointer but the IRQ
-// handler isn't wired to use it)
-// Contiguous stack allocation (relies on frame allocator quirk)
-// NEON/FP register save
-// stack free-on-exit
-//
-// Not wired into syscall.rs at all — that's for the human.
 
 // ─── Test helpers (feature-gated) ────────────────────────────────────────
 //

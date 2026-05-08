@@ -50,9 +50,9 @@ const DAEMON_PORT: u16 = 9999;
 /// override via `BATCAVED_TOKEN=foo cargo build`. Matches the
 /// `DEFAULT_TOKEN` in scripts/batcaved.py.
 ///
-/// SECURITY — Phase 2 cut. Production should derive this from the
+/// SECURITY — interim. Production should derive this from the
 /// passphrase-KDF (same path as BatFS), which couples daemon auth to
-/// the auth gate. See design-alignment phase 3/5 TODOs.
+/// the auth gate.
 const BUILD_TOKEN: Option<&str> = option_env!("BATCAVED_TOKEN");
 const FALLBACK_TOKEN: &str = "BATMAN-DEV-2026";
 

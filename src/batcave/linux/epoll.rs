@@ -30,7 +30,8 @@
 // Non-goals / known limitations (see bottom of file):
 //   * No heap — everything is static. 64 instances × 256 interests each.
 //   * Edge-triggered (EPOLLET) and EPOLLONESHOT are stored but the
-//     semantics are only partially enforced — see TODOs.
+//     semantics are only partially enforced (see "Known limitations"
+//     at bottom of file).
 //   * `sigmask` is ignored (we have no signal delivery yet).
 //   * `mark_ready` must be called from whichever subsystem owns the fd;
 //     there is no automatic poll integration yet.
@@ -729,26 +730,29 @@ pub fn active_instance_count() -> usize {
     n
 }
 
-// ─────────────────────── Known limitations / TODOs ───────────────────────
+// ─────────────────────── Known limitations ───────────────────────
 //
-// TODO(kaden): integrate `mark_ready` with:
-//   - src/net/tcp.rs recv/send paths          → EPOLLIN / EPOLLOUT
-//   - src/batcave/linux/vfs.rs pipe support   → EPOLLIN / EPOLLHUP
-//   - a future timerfd implementation         → EPOLLIN
+// Things this epoll implementation does not (yet) do — caves should
+// not depend on them:
 //
-// TODO(kaden): `notify_fd_closed(fd)` must be called from sys_close in
-// syscall.rs BEFORE fd::close() runs, otherwise we leak stale interests.
+//   * `mark_ready` integration with all event sources. Already wired:
+//     async_fds (eventfd/timerfd), sys_write to pipes. Not wired:
+//     net/tcp.rs recv/send paths (would deliver EPOLLIN/EPOLLOUT for
+//     socket fds), pipe HUP (EPOLLHUP), other future fd kinds.
 //
-// TODO(kaden): true edge-triggered semantics. Right now EPOLLET only
-// suppresses the post-delivery `ready` clear; a conformant impl also
-// tracks "last reported level" and only re-fires on a 0→1 transition.
+//   * `notify_fd_closed(fd)`. sys_close in syscall.rs prunes
+//     interests by calling this directly; if a future fd-close path
+//     forgets to, stale interests leak.
 //
-// TODO(kaden): EPOLLEXCLUSIVE, EPOLLWAKEUP — Chromium doesn't use them
-// but glibc's header defines them.
+//   * True edge-triggered semantics. EPOLLET currently only suppresses
+//     the post-delivery `ready` clear. A spec-conformant impl tracks
+//     "last reported level" and only re-fires on a 0→1 transition.
 //
-// TODO(kaden): nested epoll (epoll fds watching other epoll fds). The
-// browser's IPC layer sometimes does this. Would need a cycle check
-// in EPOLL_CTL_ADD.
+//   * EPOLLEXCLUSIVE, EPOLLWAKEUP. glibc defines them but no cave
+//     uses them today.
 //
-// TODO(kaden): signal mask handling in epoll_pwait once Bat_OS has
-// signals. Until then pwait == wait.
+//   * Nested epoll (epoll fds watching other epoll fds). Would need
+//     a cycle check in EPOLL_CTL_ADD.
+//
+//   * Signal-mask handling in epoll_pwait. Until Bat_OS grows real
+//     POSIX signals, pwait == wait.
