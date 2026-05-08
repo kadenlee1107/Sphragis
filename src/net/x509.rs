@@ -335,23 +335,48 @@ pub fn verify_chain(
         return VerifyOutcome::Err(VerifyError::BadSignature);
     }
 
-    // 3. Root in trust store?  We look the current (last) cert up by its
-    //    subject bytes and pubkey against TRUST_STORE entries.
+    // 3. Root in trust store? Three accept paths, walked in order of
+    //    cost. All three are spec-equivalent ways of saying "the chain
+    //    rooted at some entry in TRUST_STORE":
+    //
+    //    a. Current cert IS an anchor (server included its own root in
+    //       the chain — uncommon but legal).
+    //    b. Current cert and an anchor share the same SubjectPublicKey
+    //       (cross-signed root: the anchor we ship and the cert the
+    //       server sent are different DER blobs but represent the same
+    //       trust anchor — common, e.g. GTS Root R4 cross-signed by
+    //       GlobalSign).
+    //    c. Current cert is signed by an anchor (the typical real-world
+    //       case: the server sends [leaf, intermediate(s)] and stops
+    //       short of the root because RFC 5246 says clients should have
+    //       the root locally). Validates by treating the anchor as a
+    //       virtual parent and re-running the signature check.
+    //
+    //    Pre-fix the verifier only had (a) and (b), so chains from
+    //    Let's Encrypt / GTS-anchored sites that don't ship the root
+    //    failed at "untrusted root" even though the chain is valid.
     let mut trusted = false;
     for anchor_der in TRUST_STORE.iter() {
+        // Path (a): exact-bytes equality.
         if anchor_der == &current_der {
             trusted = true;
             break;
         }
-        // Also accept "root is reissuer of current's issuer" in a
-        // single-anchor setup — parse + compare subject pubkey.
-        if let Ok(anchor) = parse_cert(anchor_der) {
-            let ap = anchor.tbs_certificate.subject_public_key_info.subject_public_key.raw_bytes();
-            let cp = current_cert.tbs_certificate.subject_public_key_info.subject_public_key.raw_bytes();
-            if ap == cp {
-                trusted = true;
-                break;
-            }
+        let anchor = match parse_cert(anchor_der) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        // Path (b): same subject public key — cross-signed root.
+        let ap = anchor.tbs_certificate.subject_public_key_info.subject_public_key.raw_bytes();
+        let cp = current_cert.tbs_certificate.subject_public_key_info.subject_public_key.raw_bytes();
+        if ap == cp {
+            trusted = true;
+            break;
+        }
+        // Path (c): current cert signed by anchor.
+        if verify_signed_by(&current_cert, current_der, &anchor).is_ok() {
+            trusted = true;
+            break;
         }
     }
 
