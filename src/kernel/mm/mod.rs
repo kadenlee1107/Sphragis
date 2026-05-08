@@ -18,7 +18,7 @@ unsafe extern "C" {
 // QEMU-virt / Chromium host: 1 GiB RAM base + 4 GiB = 5 GiB top.
 // Apple Silicon path overrides this with boot_args-derived values.
 //
-// 🎯 STUMP #7: was `+ 2 * 1024 * 1024 * 1024` (= 0xC0000000), giving
+// was `+ 2 * 1024 * 1024 * 1024` (= 0xC0000000), giving
 // only 2 GiB of usable physical RAM (kernel + ~1.5 GB user). Chromium
 // content_shell with full thread pool + V8 cage + PartitionAlloc heap
 // hits 296k demand-page commits = 1.2 GB before exhausting frames and
@@ -29,16 +29,16 @@ unsafe extern "C" {
 // `src/batcave/linux/mmu.rs` (L1[3] + L1[4]) — otherwise kernel writes
 // to PAs above 0xC0000000 (where alloc_frame would now hand out
 // frames) would fault DATA ABORT DFSC=0x06.
-// 🎯 STUMP #7: 4 GiB to give Chromium enough working set.
+// 4 GiB to give Chromium enough working set.
 const QEMU_MEMORY_END: usize = 0x4000_0000 + 4 * 1024 * 1024 * 1024;
 
 pub fn init() {
     // V6-KMEM-001: order is
-    //   1. parse initrd (must run BEFORE heap so we know where blob ends)
-    //   2. compute heap base = (blob_end + 1 page); init heap there
-    //   3. init frame allocator over [past_heap, MEMORY_END)
-    //   4. reserve heap range in frame bitmap (frame::init already does
-    //      this for the heap range it's told about — see below)
+    // 1. parse initrd (must run BEFORE heap so we know where blob ends)
+    // 2. compute heap base = (blob_end + 1 page); init heap there
+    // 3. init frame allocator over [past_heap, MEMORY_END)
+    // 4. reserve heap range in frame bitmap (frame::init already does
+    // this for the heap range it's told about — see below)
     initrd::init();
 
     let kernel_end = core::ptr::addr_of!(__kernel_end) as usize;

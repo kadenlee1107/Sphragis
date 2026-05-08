@@ -5,11 +5,11 @@
 // No plaintext ever touches the wire.
 //
 // Features:
-//   - Connect to peer by IP:port
-//   - X25519 key exchange for session key
-//   - AES-256-CTR encrypted messages
-//   - Message log with timestamps
-//   - Compose + send from keyboard
+// Connect to peer by IP:port
+// X25519 key exchange for session key
+// AES-256-CTR encrypted messages
+// Message log with timestamps
+// Compose + send from keyboard
 
 use crate::ui::wm;
 use crate::ui::font;
@@ -209,8 +209,8 @@ pub fn reset_for_cave_switch() {
 }
 
 /// Render the comms client UI.
-///
-/// STUMP #129 — Claude-Design Wave-3 port. 32px header (COMMS
+// /
+/// Claude-Design Wave-3 port. 32px header (COMMS
 /// wordmark + connection pill + cipher/key pills), timeline body
 /// (12px message rows aligned in [HH:MM] | dir | sender | text
 /// columns + grey-prefixed system messages), 28px composer
@@ -304,7 +304,7 @@ pub fn render() {
             "(composer disabled . not connected)", W_FAINT, W_PANEL);
     } else {
         font::draw_str(fb, sw, typed_x, c_text_y, compose_text, W_INK, W_PANEL);
-        // STUMP #132: underscore cursor instead of a solid block —
+        // underscore cursor instead of a solid block —
         // keeps the typed text readable + stays visible after a space.
         let cur_x = typed_x + (compose_len as u32) * 8;
         let cell_top = composer_y + (composer_h - 16) / 2;

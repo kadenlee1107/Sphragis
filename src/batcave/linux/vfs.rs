@@ -187,15 +187,15 @@ pub fn switch_to_cave(cave_id: usize) {
 }
 
 /// Destroy a cave's VFS instance (wipe all data).
-///
+// /
 /// V11-FRESH-EYES: previously this only zeroed the node-metadata structs,
 /// leaking **physical frames** that each node's `data_addr` referenced.
 /// Two compounding bugs:
-///   (1) plaintext file contents persisted in those frames forever
-///   (because they were never returned to the frame allocator), and
-///   (2) the frame bitmap bits stayed set, yielding an unprivileged
-///   OOM-DoS primitive — any cave with the `mem` cap could exhaust
-///   physical memory by cycling create-write-destroy.
+/// (1) plaintext file contents persisted in those frames forever
+/// (because they were never returned to the frame allocator), and
+/// (2) the frame bitmap bits stayed set, yielding an unprivileged
+/// OOM-DoS primitive — any cave with the `mem` cap could exhaust
+/// physical memory by cycling create-write-destroy.
 /// Now we scrub and free each file-data frame before clearing the node.
 pub fn destroy_cave_vfs(cave_id: usize) {
     unsafe {
@@ -690,17 +690,17 @@ pub fn remove_node(idx: u16) -> Result<(), i64> {
 }
 
 /// Rename `oldpath` → `newpath` within the active VFS instance.
-///
+// /
 /// Semantics (best-effort POSIX `rename(2)`):
-///   - If oldpath doesn't exist  → ENOENT
-///   - If newpath's parent doesn't exist → ENOENT
-///   - If newpath exists and is a non-empty directory → ENOTEMPTY
-///   - If newpath exists and is a non-directory → atomically replaced
-///     (its node freed, source node re-parented + renamed)
-///   - Otherwise: source node has its `parent` and `name` fields
-///     overwritten to the new location
-///
-/// STUMP #160 iter 3: Chromium's LevelDB writes `MANIFEST.tmp`, then
+/// If oldpath doesn't exist → ENOENT
+/// If newpath's parent doesn't exist → ENOENT
+/// If newpath exists and is a non-empty directory → ENOTEMPTY
+/// If newpath exists and is a non-directory → atomically replaced
+/// (its node freed, source node re-parented + renamed)
+/// Otherwise: source node has its `parent` and `name` fields
+/// overwritten to the new location
+// /
+/// iter 3: Chromium's LevelDB writes `MANIFEST.tmp`, then
 /// renames it to `CURRENT`. Pre-iter-3 our renameat was sys_stub_zero
 /// (returns success but does nothing) — the leveldb open path then
 /// failed reading `CURRENT` because nothing actually moved, and
@@ -717,9 +717,9 @@ pub fn rename_node(oldpath: &[u8], newpath: &[u8]) -> Result<(), i64> {
     if new_name.len() > NAME_LEN { return Err(-36); } // ENAMETOOLONG
 
     // 3. If destination exists, remove it. POSIX requires this be
-    //    atomic; for our single-threaded-VFS-with-IrqGuard this
-    //    is fine because we hold no lock points between unlink
-    //    and the parent/name update.
+    // atomic; for our single-threaded-VFS-with-IrqGuard this
+    // is fine because we hold no lock points between unlink
+    // and the parent/name update.
     if let Some(existing) = find_child(new_parent, new_name) {
         if existing == src_idx {
             // Renaming to itself: no-op success.
@@ -905,19 +905,19 @@ fn populate_rootfs() {
 
 /// Register every `lib/*` entry in the BATARCH initrd as a VFS file
 /// under /lib so ld-linux's openat("/lib/libc.so.6") can find it.
-///
+// /
 /// Called from two places: (1) populate_rootfs() during normal VFS init,
 /// and (2) the Chromium runner right before execve of ld-linux (as a
 /// safety net — populate_rootfs has a pre-existing panic path on the
 /// `find_child(0, b"bin").unwrap()` line if it races with something,
 /// and we don't want to lose the /lib files when that fires).
-///
+// /
 /// The node's `data_addr` is the archive-memory pointer, NOT an
 /// allocator-owned frame. destroy_cave_vfs() must therefore skip these
 /// nodes during its free-frame walk — otherwise we'd try to free bytes
 /// the initrd owns. We mark them with a distinct mode bit to tell them
 /// apart from real files: 0o100444 (read-only regular file, world-readable).
-///
+// /
 /// Idempotent: calling twice is a no-op (find_child skips duplicates).
 pub fn populate_lib_from_archive() {
     use crate::kernel::mm::initrd;

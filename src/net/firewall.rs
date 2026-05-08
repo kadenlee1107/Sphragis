@@ -4,10 +4,10 @@
 // The previous version installed a wildcard "allow any inbound TCP/UDP/ICMP"
 // rule, which made the "DEFAULT DENY ALL" label meaningless. We now install
 // narrow allow rules for the protocols Bat_OS actually uses as a client:
-//   - ICMP echo reply (ping response)
-//   - TCP from port 443 (HTTPS responses)
-//   - TCP from port 80  (HTTP responses, DoH fallback)
-//   - UDP from port 53  (DNS responses)
+// ICMP echo reply (ping response)
+// TCP from port 443 (HTTPS responses)
+// TCP from port 80 (HTTP responses, DoH fallback)
+// UDP from port 53 (DNS responses)
 //
 // Rules match on direction + protocol + src_port (where relevant). Inbound
 // packets on any other 4-tuple are dropped and counted as blocked.
@@ -28,7 +28,7 @@ struct FirewallRule {
     /// Outbound rules: matches segment's dst_port (the remote end).
     /// 0 = any.
     port: u16,
-    /// STUMP #150: destination-port match for inbound rules.
+    /// destination-port match for inbound rules.
     /// Used by per-listener rules to allow inbound traffic only to
     /// ports a listener has been registered on. 0 = any (legacy
     /// wildcard behavior; use only for explicit defaults).
@@ -59,25 +59,25 @@ pub fn init() {
     add_rule(1, 0, 0, 0, 0);
 
     // Inbound narrow allows.
-    //   ICMP responses (ping replies are type 0). We don't filter by type
-    //   here; ICMP handler itself only replies to echo requests.
+    // ICMP responses (ping replies are type 0). We don't filter by type
+    // here; ICMP handler itself only replies to echo requests.
     add_rule(0, 1, 0, 0, 0);
-    //   TCP: allow any TCP *segment* inbound regardless of src_port so that
-    //   client-initiated connections receive their SYN/ACK and data. A real
-    //   server-side firewall would match on dst_port = our_ephemeral_range
-    //   but we don't plumb dst_port through yet. This is still narrower
-    //   than the old "allow everything" because we reject non-TCP/UDP/ICMP
-    //   protocols entirely.
+    // TCP: allow any TCP *segment* inbound regardless of src_port so that
+    // client-initiated connections receive their SYN/ACK and data. A real
+    // server-side firewall would match on dst_port = our_ephemeral_range
+    // but we don't plumb dst_port through yet. This is still narrower
+    // than the old "allow everything" because we reject non-TCP/UDP/ICMP
+    // protocols entirely.
     //
-    //   STUMP #150: this wildcard rule covers BOTH client-response traffic
-    //   (src_port=80/443/etc., dst_port=our_ephemeral) AND any incoming SYN
-    //   (dst_port=our_listener). When STUMP #150 hardens this, the wildcard
-    //   gets removed and per-listener rules added on `tcp::listen_register`.
-    //   For now: keep the wildcard for backward compat, AND have
-    //   listen_register install a per-port rule (defense in depth).
+    // this wildcard rule covers BOTH client-response traffic
+    // (src_port=80/443/etc., dst_port=our_ephemeral) AND any incoming SYN
+    // (dst_port=our_listener). When hardens this, the wildcard
+    // gets removed and per-listener rules added on `tcp::listen_register`.
+    // For now: keep the wildcard for backward compat, AND have
+    // listen_register install a per-port rule (defense in depth).
     add_rule(0, 6, 0, 0, 0);
-    //   UDP: only DNS responses (src_port = 53). This closes
-    //   ATTACK-NET-041 for any non-DNS port.
+    // UDP: only DNS responses (src_port = 53). This closes
+    // ATTACK-NET-041 for any non-DNS port.
     add_rule(0, 17, 0, 53, 0);
 
     let n = RULE_COUNT.load(Ordering::Relaxed);
@@ -99,14 +99,14 @@ fn add_rule(direction: u8, protocol: u8, ip: u32, port: u16, dst_port: u16) {
     }
 }
 
-/// STUMP #150: install an inbound TCP allow rule for a specific
+/// install an inbound TCP allow rule for a specific
 /// destination port. Called by `tcp::listen_register` when a listener
 /// comes up so traffic to that port is explicitly allowed.
-///
+// /
 /// Currently redundant with the wildcard inbound TCP rule above (which
 /// allows everything), but in defense-in-depth mode this rule survives
 /// when the wildcard is removed in a future hardening pass.
-///
+// /
 /// Idempotent: if a rule for (proto=TCP, dst_port=N) already exists,
 /// no-op. Returns false if the rule table is full.
 pub fn allow_inbound_tcp_dst_port(port: u16) -> bool {
@@ -126,7 +126,7 @@ pub fn allow_inbound_tcp_dst_port(port: u16) -> bool {
     true
 }
 
-/// STUMP #150: remove an inbound TCP allow rule installed by
+/// remove an inbound TCP allow rule installed by
 /// `allow_inbound_tcp_dst_port`. Called by `tcp::listen_close`.
 /// Idempotent — silent no-op if no matching rule exists.
 pub fn revoke_inbound_tcp_dst_port(port: u16) {
@@ -183,7 +183,7 @@ pub fn allow_inbound(src_ip: u32, _dst_ip: u32, protocol: u8) -> bool {
 }
 
 /// Transport-layer port check for TCP (called after parsing the header).
-///
+// /
 /// NET2-019 fix: the pre-parse `allow_inbound` only matches src_ip + protocol
 /// for TCP, so port-gated rules (e.g. "allow TCP from 10.0.0.1 port 443 only")
 /// would have let in any TCP port. TCP handler now re-checks via this helper.
@@ -193,7 +193,7 @@ pub fn allow_inbound_tcp(src_ip: u32, src_port: u16, dst_port: u16) -> bool {
     }
     unsafe {
         let ptr = core::ptr::addr_of!(RULES);
-        // STUMP #150: a rule matches if all THREE of (ip, src_port,
+        // a rule matches if all THREE of (ip, src_port,
         // dst_port) are compatible. A field of 0 in the rule means
         // "any" for that dimension. The pre-#150 logic only checked
         // src_port; dst_port was not plumbed through, so a rule like

@@ -1,6 +1,6 @@
 // Bat_OS — NM · Network Monitor
 //
-// STUMP #125 — Claude-Design port. Source artifacts in
+// Claude-Design port. Source artifacts in
 // `docs/design/apps-ds-nm-sk/` (jsx + spec sheet).
 //
 // Layout: 2-column grid for INTERFACE + FIREWALL (top, 280px tall),

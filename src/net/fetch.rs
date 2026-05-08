@@ -24,7 +24,7 @@ pub fn parse_url(url: &str) -> Option<(&'static str, &str, u16, &str)> {
         Some(i) => (&rest[..i], &rest[i..]),
         None    => (rest, "/"),
     };
-    // STUMP #111 (audit H003): reject URLs with embedded userinfo
+    // reject URLs with embedded userinfo
     // ("user@host" or "user:pass@host"). Pre-fix, parse_url accepted
     // `http://attacker@victim.com/` and treated `attacker@victim.com`
     // as the literal host. The Host: header sent to the server differs
@@ -39,7 +39,7 @@ pub fn parse_url(url: &str) -> Option<(&'static str, &str, u16, &str)> {
         None => (authority, default_port),
     };
     if host.is_empty() { return None; }
-    // STUMP #111 (audit M-url-crlf-injection): reject URLs whose host
+    // reject URLs whose host
     // or path contains CR / LF / NUL / any other control byte.
     for b in host.as_bytes() {
         if *b < 0x20 || *b == 0x7f || *b == b' ' { return None; }

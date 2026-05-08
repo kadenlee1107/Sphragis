@@ -28,7 +28,7 @@ pub enum CaveType {
 }
 
 /// What kind of isolation actually backs this cave.
-///
+// /
 /// NATIVE caves run user ELFs under Bat_OS's own MMU page tables via
 /// the `batcave::linux` loader. DOCKER caves live as Linux containers
 /// on the Mac host, orchestrated by the `batcaved` daemon over TCP
@@ -100,7 +100,7 @@ pub struct BatCave {
     /// `docker run` (e.g. "kalilinux/kali-rolling"). Empty for native.
     pub image: [u8; MAX_IMAGE],
     pub image_len: usize,
-    /// STUMP #145: per-cave L1 page-table physical address. 0 means
+    /// per-cave L1 page-table physical address. 0 means
     /// "no L1 built yet" — the cave shares the kernel's PRIMARY_L1
     /// until first `enter()`. On first enter we lazy-allocate via
     /// `mmu::setup_native_cave_l1`, then call `mmu::switch_to_cave`
@@ -136,8 +136,8 @@ impl BatCave {
             backing: CaveBacking::Native,
             image: [0; MAX_IMAGE],
             image_len: 0,
-            cave_l1_phys: 0,             // STUMP #145: lazy-built on first enter
-            cave_l1_slot: usize::MAX,    // STUMP #145: "not assigned"
+            cave_l1_phys: 0,             // lazy-built on first enter
+            cave_l1_slot: usize::MAX,    // "not assigned"
         }
     }
 
@@ -191,15 +191,15 @@ impl BatCave {
         self.has_cap(check_str)
     }
 
-    /// STUMP #151: any-fs-cap test.
-    ///
+    /// any-fs-cap test.
+    // /
     /// Returns true if the cave has either bare `fs` (full FS access)
     /// OR any path-scoped `fs:<path>` cap. The syscall dispatcher uses
     /// this for the broad FileIO category gate so a cave granted only
     /// `fs:/tmp` makes it past the dispatcher; the per-syscall path
     /// check (via `can_access_path` at openat) then enforces the
     /// path scope.
-    ///
+    // /
     /// Without this, a cave with only `fs:/tmp` failed the bare `fs`
     /// check and got zero FS syscalls — so path-scoped caps were
     /// purely decorative.
@@ -240,7 +240,7 @@ pub fn get_active() -> usize {
     ACTIVE_CAVE_ID.load(Ordering::Relaxed)
 }
 
-/// STUMP #120: name of the currently-active cave for UI display
+/// name of the currently-active cave for UI display
 /// (title-bar cave indicator). Returns "kernel" when no cave is
 /// active or the slot id is out of range.
 pub fn active_name_str() -> &'static str {
@@ -253,7 +253,7 @@ pub fn active_name_str() -> &'static str {
     }
 }
 
-/// STUMP #151: true iff the active cave has any FS-related cap
+/// true iff the active cave has any FS-related cap
 /// (bare `fs` for full access, or any `fs:<path>` for scoped). Used
 /// by the syscall dispatcher's FileIO gate so caves with only
 /// path-scoped caps don't get blocked at the broad-cap check before
@@ -284,7 +284,7 @@ pub fn active_has_cap(cap: &str) -> bool {
 pub fn init() {
     INITIALIZED.store(true, Ordering::Relaxed);
 
-    // STUMP #135: restore persistent caves from BatFS. Runs AFTER
+    // restore persistent caves from BatFS. Runs AFTER
     // `fs::batfs::init` (see main.rs ordering) so the filesystem is
     // already unlocked with the operator's passphrase. Each cave whose
     // manifest survives the boot is reinstalled into CAVES[] in
@@ -297,11 +297,11 @@ pub fn init() {
 /// Ensure an "ambient" BatCave is active for the shell-launched ELF runner
 /// paths (hello / libc / threads + the content_shell/netsurf/freetype/png/
 /// v8/blink binaries that `cmd_run_elf` spawns).
-///
+// /
 /// Without this, `cave::get_active()` returns `usize::MAX`, every
 /// capability check fails (because `active_has_cap` can't index a cave
 /// slot), and the ELF hits `EACCES` on the first `write`/`mmap`/... syscall.
-///
+// /
 /// We install a single ephemeral cave named `"shell-host"` with a broad cap
 /// set. This intentionally does NOT enforce isolation — it's the host
 /// process equivalent on a UNIX-like system. Production-sensitive workloads
@@ -333,7 +333,7 @@ pub fn ensure_host_cave_active() {
 /// Create a new BatCave.
 pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
     if name.len() > MAX_NAME {
-        // STUMP #111 (audit M-cave-create-no-audit): every cave-creation
+        // every cave-creation
         // attempt is operationally significant and worth logging — both
         // the success path AND every failure mode. Pre-fix the failure
         // paths returned silently. An attacker (or buggy script) trying
@@ -395,7 +395,7 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
         cave.tool_count = 0;
         cave.cap_count = 0;
 
-        // STUMP #111 (audit C011): pre-fix the per-cave fs_key was
+        // pre-fix the per-cave fs_key was
         // SHA256(`0xBA7CA7E0…` constant || cave_name). Both inputs
         // were trivially recoverable — the constant is in the kernel
         // binary, the name is in `info caves`/audit logs/IPC discovery.
@@ -422,7 +422,7 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
         let count = CAVE_COUNT.load(Ordering::Relaxed);
         CAVE_COUNT.store(count + 1, Ordering::Relaxed);
 
-        // STUMP #111 (audit M-cave-create-no-audit): success-path log.
+        // success-path log.
         // Pairs with the failure-path entries above so the audit ring
         // tells a complete cave-lifecycle story.
         let mut buf = [0u8; 192];
@@ -440,7 +440,7 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
             &buf[..p],
         );
 
-        // STUMP #135: write the cave manifest to BatFS so the registry
+        // write the cave manifest to BatFS so the registry
         // entry survives reboot. No-op for Ephemeral caves. Native /
         // Docker caves both go through this — `create_docker` re-saves
         // afterwards with the upgraded backing+image fields.
@@ -453,7 +453,7 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
 /// Create a docker-backed BatCave. Thin wrapper over `create` that also
 /// stores the image ref so `list` / `destroy` / `run` can route to the
 /// `batcaved` daemon via `docker_client`.
-///
+// /
 /// This function does NOT spin up the container — the shell handler is
 /// responsible for calling `docker_client::create` so a daemon-side
 /// failure can be surfaced BEFORE we've polluted the cave table.
@@ -478,7 +478,7 @@ pub fn create_docker(name: &str, image: &str, ephemeral: bool)
         name,
         alloc::vec::Vec::new(),
     );
-    // STUMP #135: re-save manifest now that backing=Docker + image are
+    // re-save manifest now that backing=Docker + image are
     // populated. The first save() inside create() captured a Native
     // baseline; this overwrites with the docker-aware version so the
     // cave wakes up correctly from disk.
@@ -508,7 +508,7 @@ pub fn install_tool(name: &str, tool: &str) -> Result<(), &'static str> {
     t.name_len = len;
     cave.tool_count += 1;
 
-    // STUMP #135: refresh manifest so installed tools survive reboot.
+    // refresh manifest so installed tools survive reboot.
     crate::batcave::persist::save(cave);
 
     Ok(())
@@ -534,7 +534,7 @@ pub fn grant_cap(name: &str, cap: &str) -> Result<(), &'static str> {
     c.name_len = len;
     cave.cap_count += 1;
 
-    // STUMP #135: refresh manifest so granted caps survive reboot.
+    // refresh manifest so granted caps survive reboot.
     crate::batcave::persist::save(cave);
 
     Ok(())
@@ -547,7 +547,7 @@ pub fn revoke_cap(name: &str, cap: &str) -> Result<(), &'static str> {
     for i in 0..cave.cap_count {
         if cave.caps[i].active && cave.caps[i].name_str() == cap {
             cave.caps[i].active = false;
-            // STUMP #135: refresh manifest so revoked caps don't reappear
+            // refresh manifest so revoked caps don't reappear
             // on reboot. The caps slot stays in place (active=false) so
             // existing code paths don't shift indices mid-iteration.
             crate::batcave::persist::save(cave);
@@ -658,7 +658,7 @@ pub fn stop(name: &str) -> Result<(), &'static str> {
 }
 
 /// Enter a BatCave (start + set up isolated VFS + mark active).
-///
+// /
 /// V5-XLAYER-001/002/003 fix: wipe all per-cave static state on every
 /// cave switch (not only on destroy). Previously the signal handler
 /// table, TLS key state, and fd table persisted across caves — one
@@ -667,7 +667,7 @@ pub fn stop(name: &str) -> Result<(), &'static str> {
 pub fn enter(name: &str) -> Result<(), &'static str> {
     start(name)?;
     if let Some(id) = find_id(name) {
-        // STUMP #145: lazy-build the cave's L1 page table BEFORE the
+        // lazy-build the cave's L1 page table BEFORE the
         // critical section. The setup helper allocates 6 frames + does
         // a 6×512-entry initialization pass — too long to run with
         // IRQs masked. Building outside the CS is safe because we
@@ -724,9 +724,9 @@ pub fn enter(name: &str) -> Result<(), &'static str> {
             set_active(id);
             crate::batcave::linux::vfs::init_for_cave(id);
 
-            // STUMP #145: install the cave's L1 in TTBR0_EL1.
+            // install the cave's L1 in TTBR0_EL1.
             // `switch_to_cave` does the canonical pre-write `tlbi vmalle1
-            // ; dsb sy ; isb` → `msr ttbr0_el1, x` → `isb` → post-write
+            // dsb sy ; isb` → `msr ttbr0_el1, x` → `isb` → post-write
             // `tlbi vmalle1 ; dsb sy ; isb` sequence. With this in place
             // every native cave's TLB entries are isolated from every
             // other cave's, closing the audit's "memory isolation is
@@ -743,7 +743,7 @@ pub fn enter(name: &str) -> Result<(), &'static str> {
                 crate::batcave::linux::mmu::switch_to_primary();
             }
 
-            // STUMP #147: repaint the title-bar chrome NOW (after
+            // repaint the title-bar chrome NOW (after
             // set_active(id) above). The CAVE indicator reads
             // `active_name_str()` which now returns the new cave's
             // name. Doing this earlier (e.g. inside
@@ -772,22 +772,22 @@ pub fn find_id(name: &str) -> Option<usize> {
 }
 
 /// Seal a persistent BatCave to ephemeral (one-way, irreversible).
-///
+// /
 /// Anti-coercion design per DESIGN_BATCAVES.md §"Seal": once an
 /// operator is facing duress and seals a cave, the persistent-state
 /// guarantees go away IMMEDIATELY — not at next-reboot. This means:
-///
-///   1. cave_type flips to Ephemeral (blocks future "already sealed"
-///      re-seals and will get swept by destroy_all like any ephemeral).
-///   2. fs_key is zeroed RIGHT NOW. Any BatFS blob that survives
-///      on disk becomes undecryptable — even to the operator, even
-///      with the passphrase. One-way ratchet.
-///   3. For Docker-backed caves: the daemon's encrypted APFS volume
-///      is destroyed. The bind-mount inside the container becomes
-///      inert — the container keeps running for its current session
-///      but has nothing persistent backing /data. On next wipe /
-///      reboot the remaining container state dies with the cave.
-///
+// /
+/// 1. cave_type flips to Ephemeral (blocks future "already sealed"
+/// re-seals and will get swept by destroy_all like any ephemeral).
+/// 2. fs_key is zeroed RIGHT NOW. Any BatFS blob that survives
+/// on disk becomes undecryptable — even to the operator, even
+/// with the passphrase. One-way ratchet.
+/// 3. For Docker-backed caves: the daemon's encrypted APFS volume
+/// is destroyed. The bind-mount inside the container becomes
+/// inert — the container keeps running for its current session
+/// but has nothing persistent backing /data. On next wipe /
+/// reboot the remaining container state dies with the cave.
+// /
 /// There is no `unseal`. Callers that get "already ephemeral" have
 /// either sealed this cave before OR created it as ephemeral; in
 /// either case the operator is not losing anything by the error.
@@ -819,7 +819,7 @@ pub fn seal(name: &str) -> Result<(), &'static str> {
     cave.fs_key = [0; 32];
     cave.cave_type = CaveType::Ephemeral;
 
-    // STUMP #135: a sealed cave is no longer Persistent — drop its
+    // a sealed cave is no longer Persistent — drop its
     // manifest so it doesn't reincarnate as Persistent on next boot.
     // The seal ratchet must hold across reboots too; otherwise an
     // attacker who panics → coerces a seal → reboots the box would
@@ -827,7 +827,7 @@ pub fn seal(name: &str) -> Result<(), &'static str> {
     // entire point of seal, so this delete is non-negotiable.
     crate::batcave::persist::delete(name);
 
-    // STUMP #156: persist the audit ring so the seal event itself
+    // persist the audit ring so the seal event itself
     // (and everything before it) survives a panic-induced reboot.
     // Pairs with the persist::delete above — if the attacker triggers
     // a reboot to escape the trail, the trail is already on disk.
@@ -837,7 +837,7 @@ pub fn seal(name: &str) -> Result<(), &'static str> {
 }
 
 /// Destroy a BatCave — secure wipe.
-///
+// /
 /// V2-NEW-009/019/031/032/033 + ESC-029/033: clear every `static mut`
 /// piece of per-cave state that survived into the next cave. Previously
 /// SIGNAL_HANDLERS (128 × u64 of attacker-controllable handler addresses),
@@ -862,7 +862,7 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
     // Wipe the cave's VFS instance (filesystem data)
     if let Some(id) = cave_id_for_reset {
         crate::batcave::linux::vfs::destroy_cave_vfs(id);
-        // If this was the active cave, clear active. STUMP #145: also
+        // If this was the active cave, clear active. also
         // swap TTBR0 back to PRIMARY_L1 so the about-to-be-freed L1
         // doesn't keep getting walked. `mmu::free_cave_slot` below
         // tears down the L1 frames; running with a freed L1 in TTBR0
@@ -871,7 +871,7 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
             set_active(usize::MAX);
             crate::batcave::linux::mmu::switch_to_primary();
         }
-        // STUMP #145: free this cave's L1/L2 frames + clear the slot
+        // free this cave's L1/L2 frames + clear the slot
         // so the next cave can claim it. Idempotent — safe even if
         // cave_l1_slot was usize::MAX (the cave never entered).
         unsafe {
@@ -887,7 +887,7 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
     let cave = match find_mut(name) {
         Ok(c) => c,
         Err(e) => {
-            // STUMP #111 (audit M-cave-create-no-audit, paired): every
+            // every
             // destroy attempt is logged regardless of outcome. The
             // failure path here is most often "operator typo" but it
             // ALSO covers a malicious destroy probe (someone scanning
@@ -945,7 +945,7 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
         crate::batcave::linux::quotas::reset(id);
     }
 
-    // STUMP #111 (audit M-cave-create-no-audit, paired): success-path
+    // success-path
     // log so the audit ring shows full lifecycle (create → use →
     // destroy) for every cave. Critical for post-incident review.
     let mut buf = [0u8; 192];
@@ -962,12 +962,12 @@ pub fn destroy(name: &str) -> Result<(), &'static str> {
         &buf[..p],
     );
 
-    // STUMP #135: drop the persisted manifest so the cave stays
+    // drop the persisted manifest so the cave stays
     // destroyed across reboots. Idempotent — silently does nothing if
     // the cave was Ephemeral and never had a manifest.
     crate::batcave::persist::delete(name);
 
-    // STUMP #156: persist the audit ring so the destroy event is
+    // persist the audit ring so the destroy event is
     // durable across reboot. Same anti-coercion reasoning as seal.
     let _ = crate::security::audit::flush_to_batfs();
 
@@ -1015,7 +1015,7 @@ pub fn destroy_all() {
         }
     }
 
-    // STUMP #135: take down persisted manifests first, BEFORE we zero
+    // take down persisted manifests first, BEFORE we zero
     // the in-RAM names. After the loop below `name_len = 0` so the
     // names would be unrecoverable. Wipe events (deadman/duress/panic)
     // must clear the manifests too — otherwise the next boot would
@@ -1097,13 +1097,13 @@ pub struct SealReport {
 }
 
 /// Pure in-kernel proof of the seal ratchet:
-///   1. Create a persistent cave with a non-zero fs_key (derived from
-///      the name).
-///   2. Inspect pre-state: type=Persistent, fs_key != 0.
-///   3. Call `seal()`.
-///   4. Inspect post-state: type=Ephemeral AND fs_key == [0;32].
-///   5. Call `seal()` again — must return "already ephemeral" (one-way).
-///   6. Destroy cave to clean up.
+/// 1. Create a persistent cave with a non-zero fs_key (derived from
+/// the name).
+/// 2. Inspect pre-state: type=Persistent, fs_key != 0.
+/// 3. Call `seal()`.
+/// 4. Inspect post-state: type=Ephemeral AND fs_key == [0;32].
+/// 5. Call `seal()` again — must return "already ephemeral" (one-way).
+/// 6. Destroy cave to clean up.
 pub fn seal_selftest() -> Result<SealReport, &'static str> {
     let name = "seal-selftest-cave";
     // Fresh slate in case a prior run left residue.
@@ -1157,7 +1157,7 @@ fn find_mut(name: &str) -> Result<&'static mut BatCave, &'static str> {
 /// state. Call this from cave::enter (and only from cave::enter) when
 /// switching the active cave. Adding a new subsystem with cave-local
 /// state requires updating exactly one place — here.
-///
+// /
 /// Caller must already hold a critical_section! / IrqGuard. Each callee
 /// also acquires its own IrqGuard, which is safe (IrqGuard is nestable).
 fn reset_all_globals_for_cave_switch() {
@@ -1166,7 +1166,7 @@ fn reset_all_globals_for_cave_switch() {
     crate::batcave::linux::fd::reset_for_cave_switch();
     crate::batcave::linux::sockets::reset_for_cave_switch();
     crate::net::tcp::reset_for_cave_switch();
-    // STUMP #105 — Sprint 3.1: cookie jar wipe on cave switch so a
+    // Sprint 3.1: cookie jar wipe on cave switch so a
     // logged-out cave doesn't inherit the previous tenant's session
     // tokens.
     crate::net::cookies::reset_for_cave_switch();
@@ -1187,7 +1187,7 @@ fn reset_all_globals_for_cave_switch() {
 
     // ROOT 2 V10-re-audit additions — batpipe inter-tool buffer + the
     // loader's saved RA/SP (which were a cross-cave control-flow PIVOT,
-    // most severe item from the V10 sweep). STUMP #141: removed the
+    // most severe item from the V10 sweep). removed the
     // `tor::reset_for_cave_switch` call because tor.rs was deleted —
     // it was 3 layers of CTR with hardcoded keys, not real Tor. When
     // real onion routing lands its reset hook goes back here.

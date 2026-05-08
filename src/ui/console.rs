@@ -7,7 +7,7 @@ use crate::ui::gpu;
 use super::font::{self, CHAR_W, CHAR_H};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-// STUMP #120: palette matches the WM chrome and lock screen.
+// palette matches the WM chrome and lock screen.
 const BG: u32 = 0xFF0A0A0A;
 const FG: u32 = 0xFFE5E7EB;     // INK
 const FG_HI: u32 = 0xFFE5E7EB;
@@ -17,7 +17,7 @@ const ACCENT_CYAN_DIM: u32 = 0xFF0E7490;
 const ACCENT_GREEN: u32 = 0xFF22C55E;
 const ACCENT_RED: u32 = 0xFFEF4444;
 
-// STUMP #124 — bumped MARGIN_Y from 16 (which sat *inside* the new
+// bumped MARGIN_Y from 16 (which sat *inside* the new
 // 24px title bar) to 32 (clears title bar + 8px inset) and
 // STATUS_BAR_H from 32 to 28 to match the redesigned wm chrome.
 const MARGIN_X: u32 = 16;
@@ -27,7 +27,7 @@ const STATUS_BAR_H: u32 = 28;
 static CURSOR_X: AtomicU32 = AtomicU32::new(0);
 static CURSOR_Y: AtomicU32 = AtomicU32::new(0);
 
-// ─── Scrollback buffer (STUMP #124) ───────────────────────────────────
+// ─── Scrollback buffer ───────────────────────────────────
 //
 // 2D cell grid that mirrors the visible console region. Every char
 // written via `putc` lands in BOTH the framebuffer and a Cell here, so
@@ -132,11 +132,11 @@ pub fn init_in_window() {
 }
 
 /// V12: reset console cursor on cave switch (minor UX / read-pointer leak).
-/// STUMP #124: also wipe the scrollback buffer so a logged-out cave
+/// also wipe the scrollback buffer so a logged-out cave
 /// doesn't leave its command output / typed input visible to the
 /// next tenant.
-///
-/// STUMP #147 (visual artifact fix): the buffer wipe alone left stale
+// /
+/// the buffer wipe alone left stale
 /// pixels on the framebuffer because the desktop only redraws the SH
 /// pane on tab-switch. When a `batcave enter <name>` ran from the
 /// shell, the new (empty) console buffer rendered the cave's prompt
@@ -161,14 +161,14 @@ pub fn reset_for_cave_switch() {
         }
     }
     reset_pen();
-    // STUMP #147: flush the SH-pane wipe to the framebuffer.
+    // flush the SH-pane wipe to the framebuffer.
     // Chrome redraw (for the CAVE indicator) is done separately by
     // the caller AFTER `set_active(id)` runs, so the indicator
     // reads the NEW cave name not the old one. See `cave::enter`.
     redraw_content();
 }
 
-/// STUMP #124: replay the scrollback buffer to the framebuffer.
+/// replay the scrollback buffer to the framebuffer.
 /// Called on every tab switch back to SH so the shell content
 /// survives the FB clear in `wm::draw_frame`.
 pub fn redraw_content() {
@@ -220,8 +220,8 @@ fn draw_status_bar() {
 }
 
 /// Print a character to the console.
-///
-/// STUMP #124: every char also lands in the scrollback buffer with
+// /
+/// every char also lands in the scrollback buffer with
 /// the current pen color so `redraw_content` can replay the screen
 /// after the WM clears the FB.
 pub fn putc(c: u8) {
@@ -305,8 +305,8 @@ pub fn puts(s: &str) {
 }
 
 /// Print a string in highlight color.
-///
-/// STUMP #124: route through `putc` so the cells land in the
+// /
+/// route through `putc` so the cells land in the
 /// scrollback buffer with the FG_HI color. Pre-fix this drew
 /// directly via `font::draw_char` and bypassed the buffer, so
 /// banner / prompt content vanished on tab switch.
@@ -326,8 +326,8 @@ pub fn puts_color(s: &str, color: u32) {
 }
 
 /// Print the shell prompt.
-///
-/// STUMP #124: switched from direct `font::draw_str` calls to
+// /
+/// switched from direct `font::draw_str` calls to
 /// `putc`-via-pen so the prompt cells land in the scrollback buffer.
 /// Without this the prompt vanished from the screen the moment the
 /// WM cleared the FB on tab switch.

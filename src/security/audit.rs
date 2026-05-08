@@ -1,4 +1,4 @@
-// Bat_OS — audit log (STUMP #103, Sprint 2.3).
+// Bat_OS — audit log (, Sprint 2.3).
 //
 // Append-only ring buffer for security-relevant events. Built so the
 // renderer's hot paths (every fetch, every click, every script run)
@@ -7,9 +7,9 @@
 // to BatFS as one encrypted blob with `audit-flush`.
 //
 // Format per entry:
-//   timestamp (u64 ticks from cntpct_el0)
-//   category  (Category enum, 1 byte)
-//   message   (up to MSG_LEN bytes of operator-readable detail)
+// timestamp (u64 ticks from cntpct_el0)
+// category (Category enum, 1 byte)
+// message (up to MSG_LEN bytes of operator-readable detail)
 //
 // Sensitive content (form bodies, passphrases, key material) MUST NOT
 // be passed in. The `record()` callers below redact body contents and
@@ -32,7 +32,7 @@ pub enum Category {
     Mode        = 6,  // tls-mode / js-mode flipped
     Auth        = 7,  // login / logout / failed attempt
     Boot        = 8,  // kernel boot, cave switch
-    /// STUMP #111 (audit M-cave-create-no-audit): cave-table mutations
+    /// cave-table mutations
     /// (create / destroy / failed attempts). Distinct from `Boot`
     /// (one-shot per power-on) so the operator can grep-filter cave
     /// lifecycle events without drowning in boot noise.
@@ -78,7 +78,7 @@ static mut RING: [Entry; RING_CAP] = [Entry::empty(); RING_CAP];
 /// gives the index of the oldest still-resident entry.
 static HEAD: AtomicUsize = AtomicUsize::new(0);
 
-/// STUMP #111 (audit C005): the ring silently overwrites the oldest
+/// the ring silently overwrites the oldest
 /// entries when full. An adversary who suspects a forensic dump is
 /// imminent can flood the log to evict their tracks. This counter
 /// records how many entries have been EVICTED (not just rolled over)
@@ -99,15 +99,15 @@ fn now_ticks() -> u64 {
 /// Record an event. Truncates `msg` to MSG_LEN bytes. Cheap — single
 /// store of an Entry into the ring + an atomic increment. Safe to call
 /// from any kernel context.
-///
-/// STUMP #111 (audit H024): non-printable bytes in `msg` are
+// /
+/// non-printable bytes in `msg` are
 /// rewritten as `?` before storage. Pre-fix, an attacker who could
 /// influence a logged URL/cookie name with embedded `\r` or `\x1B`
 /// (terminal escape) could overwrite earlier log lines visually
 /// when the operator ran `audit` — log-tampering by carriage-return.
 pub fn record(cat: Category, msg: &[u8]) {
     let h = HEAD.fetch_add(1, Ordering::Relaxed);
-    // STUMP #111 (audit C005): detect first wrap-around — that's
+    // detect first wrap-around — that's
     // the moment we stop being able to tell the operator about the
     // earliest events. Single one-time UART line so a live tail
     // sees it.
@@ -127,7 +127,7 @@ pub fn record(cat: Category, msg: &[u8]) {
         for i in 0..copy {
             let b = msg[i];
             // Allow printable ASCII + space; everything else → `?`.
-            // Includes the bullet 0xB7 from STUMP #70 by accident
+            // Includes the bullet 0xB7 from by accident
             // (>0x7E) — that's fine, audit log doesn't need bullets.
             e.msg[i] = if b >= 0x20 && b < 0x7F { b } else { b'?' };
         }
@@ -176,7 +176,7 @@ pub fn dump_tail(n: usize) {
 /// Total events recorded since boot.
 pub fn count() -> usize { HEAD.load(Ordering::Relaxed) }
 
-/// STUMP #111 (audit C005): how many entries have been overwritten
+/// how many entries have been overwritten
 /// (i.e. lost forever) since boot. Surfaces in the `audit` shell
 /// command so a forensic reviewer knows the log was potentially
 /// tampered with by flooding.
@@ -212,18 +212,18 @@ pub fn serialize(out: &mut [u8]) -> usize {
     pos
 }
 
-/// STUMP #156: flush the resident audit ring to BatFS as `/audit.log`.
-///
+/// flush the resident audit ring to BatFS as `/audit.log`.
+// /
 /// Used by `cave::seal` and `cave::destroy` to lock the trail in
 /// place at security-sensitive transitions — without this, an
 /// attacker who panics/reboots between the seal/destroy and the
 /// operator's next `audit-flush` erases evidence. With this, every
 /// seal and destroy has its event trail durably committed.
-///
+// /
 /// Returns `Ok(bytes_written)` or `Err(reason)`. Callers ignore the
 /// result — failure here is "the trail isn't durable for this
 /// transition," not a reason to abort the lifecycle event itself.
-///
+// /
 /// Static 256K buffer to avoid stack-staging. Single-CPU + IrqGuard-
 /// scoped callers means no concurrent flush races.
 pub fn flush_to_batfs() -> Result<usize, &'static str> {
@@ -241,18 +241,18 @@ pub fn flush_to_batfs() -> Result<usize, &'static str> {
     }
 }
 
-/// STUMP #155: restore previously-persisted audit entries from a
+/// restore previously-persisted audit entries from a
 /// `serialize`-format buffer (typically the contents of `/audit.log`
 /// in BatFS, written by a prior boot's `audit-flush`).
-///
+// /
 /// Re-populates the RING with the parsed entries so the operator's
 /// `audit` command shows historical events. Each restored event has
 /// its `ts` re-set from the serialized timestamp; the `cat` byte
 /// matches by string name; the message bytes are copied verbatim
 /// up to MSG_LEN.
-///
+// /
 /// Returns the number of entries successfully restored.
-///
+// /
 /// Format (per `serialize` above): `<ts> <cat> <msg>\n` lines. Lines
 /// that fail to parse are skipped — we'd rather drop a corrupt entry
 /// than panic during boot.

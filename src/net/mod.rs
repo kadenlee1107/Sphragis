@@ -18,7 +18,7 @@ pub mod tls;
 pub mod tls_hybrid;
 pub mod x509;
 pub mod udp;
-// STUMP #141: was `tor` (3-layer CTR with hardcoded keys, NOT real
+// was `tor` (3-layer CTR with hardcoded keys, NOT real
 // Tor — no directory consensus, no relay discovery) and `vpn`
 // (PSK-derived AES-CTR overlay, NOT WireGuard — no Noise IK, no
 // rekey). The audit caught both names as misleading. `tor` deleted

@@ -25,7 +25,7 @@ static LOADED_USER_VA_BASE: AtomicUsize = AtomicUsize::new(0);
 static LOADED_TLS_PHYS: AtomicUsize = AtomicUsize::new(0);
 /// 4 KB pages reserved for the TLS block. 16 KB is enough for glibc's
 /// tcbhead_t plus a reasonable main-thread scratch area.
-// STUMP #152: bumped from 4 (16 KB) to 64 (256 KB).
+// bumped from 4 (16 KB) to 64 (256 KB).
 //
 // Plan-agent audit of the 13 Chromium ELFs found total static TLS
 // requirements would exceed 16 KB once libc's pthread + libstdc++
@@ -54,7 +54,7 @@ static LOADED_TRAMPOLINE_VA: AtomicUsize = AtomicUsize::new(0);
 /// Fields populated by `load_archive_multi` so `execute_with_args`
 /// can build a glibc-compatible auxv when we eret to ld-linux
 /// rather than directly to the main exe's _start.
-///
+// /
 /// Non-zero `LOADED_INTERP_ENTRY` means "eret here, not to main"; it
 /// should be the cave VA of ld-linux's _start. The rest are the
 /// values auxv advertises so ld-linux can find content_shell
@@ -90,13 +90,13 @@ pub static HELLO_ORIG_ENTRY: AtomicUsize = AtomicUsize::new(0);
 /// Re-initialize a previously loaded ELF at the given phys_base.
 /// Re-copies all PT_LOAD segments and re-applies relocations.
 /// Does NOT allocate new pages — reuses existing allocation.
-///
+// /
 /// V5-PARSER-002 fix: match `load_elf_rebased` bounds discipline
 /// exactly. Previously this function lacked:
-///   * ELF magic check
-///   * vaddr + memsz overflow guard (→ write_bytes(ptr, 0, ~0) wiped RAM)
-///   * phys_addr >= phys_base guard (crafted vaddr<min_addr caused
-///     underflow, writing somewhere below phys_base)
+/// * ELF magic check
+/// * vaddr + memsz overflow guard (→ write_bytes(ptr, 0, ~0) wiped RAM)
+/// * phys_addr >= phys_base guard (crafted vaddr<min_addr caused
+/// underflow, writing somewhere below phys_base)
 pub fn reinit_elf(data: &[u8], phys_base: usize) {
     if data.len() < 64 { return; }
     if &data[0..4] != b"\x7fELF" { return; }
@@ -317,7 +317,7 @@ pub struct LoadedElfInfo {
 /// Entry in the multi-ELF loader's per-library table. Carries enough to
 /// (a) do a second-pass relocation walk with cross-module symbol lookup
 /// (b) run DT_INIT_ARRAY when we're ready to, and (c) dump diagnostics.
-///
+// /
 /// `data` is the pointer into the initrd blob for this library; the loader
 /// already copied the PT_LOADs to `phys_base`, so `data` is read-only
 /// reference material for relocation processing.
@@ -392,7 +392,7 @@ pub const MAX_LOADED_LIBS: usize = 16;
 /// Without this, ~150 MB of Chromium pages leaked permanently per cave
 /// teardown — caves got destroyed, the `Cave` struct cleared, but the
 /// underlying frames were never returned to the bitmap.
-///
+// /
 /// `frame::free_contig` zeroes each page on free, so the residue from
 /// the previous tenant is wiped before the frames re-enter the pool.
 pub fn free_loaded_elf(info: &LoadedElfInfo) {
@@ -402,7 +402,7 @@ pub fn free_loaded_elf(info: &LoadedElfInfo) {
 }
 
 /// Load a PIE ELF with virtual addresses rebased to `virt_base`.
-///
+// /
 /// Unlike `load_elf` (which treats phys = virt, identity-mapped), this
 /// function applies relocations so the binary's internal addresses
 /// reference the cave's VA window rather than raw physical addresses.
@@ -456,11 +456,11 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
     uart::puts("[loader] Rebased phys_base: 0x"); print_hex(phys_base as u64); uart::puts("\n");
 
     // Two offsets:
-    //   patch_offset — where we WRITE during load (physical, identity-mapped)
-    //   value_offset — what VALUE we write in relocations (the VA the binary
-    //                  will see at runtime, once switch_to_cave installs the
-    //                  cave's TTBR0 mapping virt_base..virt_base+total_size
-    //                  to phys_base..phys_base+total_size)
+    // patch_offset — where we WRITE during load (physical, identity-mapped)
+    // value_offset — what VALUE we write in relocations (the VA the binary
+    // will see at runtime, once switch_to_cave installs the
+    // cave's TTBR0 mapping virt_base..virt_base+total_size
+    // to phys_base..phys_base+total_size)
     let patch_offset: i64 = phys_base as i64 - min_addr as i64;
     let value_offset: i64 = virt_base as i64 - min_addr as i64;
 
@@ -522,13 +522,13 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
     }
 
     // Apply PT_DYNAMIC relocations.
-    //   R_AARCH64_RELATIVE (0x403): *R = addend + value_offset
-    //   R_AARCH64_GLOB_DAT  (0x401): *R = sym_value + addend + value_offset
-    //   R_AARCH64_IRELATIVE (0x408): treat like RELATIVE for now — real
-    //                                support requires calling the resolver;
-    //                                this makes a call through the GOT hit
-    //                                the resolver itself rather than 0x0.
-    //   R_AARCH64_ABS32    (0x101): narrow 32-bit variant of GLOB_DAT, rare.
+    // R_AARCH64_RELATIVE (0x403): *R = addend + value_offset
+    // R_AARCH64_GLOB_DAT (0x401): *R = sym_value + addend + value_offset
+    // R_AARCH64_IRELATIVE (0x408): treat like RELATIVE for now — real
+    // support requires calling the resolver;
+    // this makes a call through the GOT hit
+    // the resolver itself rather than 0x0.
+    // R_AARCH64_ABS32 (0x101): narrow 32-bit variant of GLOB_DAT, rare.
     //
     // Chromium content_shell has 539446 RELATIVE + 50 GLOB_DAT + 5 IRELATIVE
     // + 20 ABS32 entries. Skipping GLOB_DAT left GOT slots at their pre-link
@@ -727,7 +727,7 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
                         else               { applied_glob += 1; }
                     }
                     0x408 => {
-                        // 🎯 STUMP #12 ROOT: R_AARCH64_IRELATIVE — actually
+                        // ROOT: R_AARCH64_IRELATIVE — actually
                         // call the resolver at EL1 to get the resolved impl
                         // address. See the loader/multi handler above for
                         // the full root-cause writeup. Without this fix
@@ -828,18 +828,18 @@ pub fn load_elf_rebased(data: &[u8], virt_base: u64) -> Result<LoadedElfInfo, &'
 /// Multi-ELF cave loader. Loads content_shell plus any number of shared
 /// libraries into ONE contiguous physical region, placed so the cave's
 /// simple 1:1 (virt..virt+N → phys..phys+N) mapping covers everything.
-///
+// /
 /// This is a minimal in-kernel dynamic linker: after each ELF is loaded
 /// and has its R_AARCH64_RELATIVE applied, we do a second pass over
 /// every lib's GLOB_DAT / JUMP_SLOT / IRELATIVE entries — for any
 /// SHN_UNDEF symbol, we scan every other loaded lib's symbol table
 /// and write the real resolved address over the sentinel we left in
 /// place during the first pass.
-///
+// /
 /// No symbol versioning (DT_VERSYM / DT_VERNEED), no init_array
 /// execution, no TLS setup. This is only enough to get content_shell
 /// to reach its first real libc call and exercise the syscall surface.
-///
+// /
 /// Returns `LoadedElfInfo` for the FIRST entry in `files` — that's the
 /// main executable whose entry point the runner will eret to.
 pub fn load_archive_multi(
@@ -946,7 +946,7 @@ pub fn load_archive_multi(
         let _ = lib_virt_base;
     }
 
-    // --- First pass per lib: copy PT_LOADs + parse .dynamic ---
+    // First pass per lib: copy PT_LOADs + parse .dynamic ---
     for i in 0..lib_count {
         stage_copy_and_parse(&mut libs[i])?;
     }
@@ -975,7 +975,7 @@ pub fn load_archive_multi(
         }
     }
 
-    // --- Second pass per lib: apply relocations with cross-module lookup ---
+    // Second pass per lib: apply relocations with cross-module lookup ---
     for i in 0..lib_count {
         apply_relocs_cross(&libs, lib_count, i)?;
     }
@@ -1049,9 +1049,9 @@ pub fn load_archive_multi(
     // constructors run BEFORE _start — exactly what ld-linux does.
     //
     // Layout in the trampoline page:
-    //   0x00..0x20: code (8 instructions)
-    //   0x20..0x28: main_entry VA
-    //   0x28..:     init function VAs, terminated by 0
+    // 0x00..0x20: code (8 instructions)
+    // 0x20..0x28: main_entry VA
+    // 0x28..: init function VAs, terminated by 0
     // BAT_OS_DISABLE_INIT_TRAMPOLINE=1 at build time disables the
     // init_array trampoline. Useful while we iterate on TLS / rtld
     // setup — without the trampoline content_shell gets to V8 heap
@@ -1091,12 +1091,12 @@ pub fn load_archive_multi(
     // Initialize the TLS block per the aarch64 Variant I ABI.
     //
     // Layout (16 KB total, LOADED_TLS_PAGES pages):
-    //   [tp - 0]..[tp + 16):  tcbhead_t (dtv ptr, self, pad, pad)
-    //   [tp + 16)..:          per-module TLS data, packed in the order
-    //                         libs[0], libs[1], ... with each module's
-    //                         memsz rounded up to p_align. The file
-    //                         portion is copied verbatim from each
-    //                         lib's PT_TLS; bss portion is zero.
+    // [tp - 0]..[tp + 16): tcbhead_t (dtv ptr, self, pad, pad)
+    // [tp + 16)..: per-module TLS data, packed in the order
+    // libs[0], libs[1], ... with each module's
+    // memsz rounded up to p_align. The file
+    // portion is copied verbatim from each
+    // lib's PT_TLS; bss portion is zero.
     //
     // `lib.tls_tp_offset` is set to the offset-from-tp where that
     // module's data starts — this is the value TLS_TPREL64 relocs add
@@ -1449,23 +1449,23 @@ fn user_va_base_from_libs(libs: &[LoadedLib; MAX_LOADED_LIBS], idx: usize) -> u6
 /// ~32 bytes of aarch64 code followed by a main-entry slot and a
 /// null-terminated array of init function VAs (gathered from every
 /// loaded lib's DT_INIT_ARRAY).
-///
+// /
 /// Layout in the page:
-///   offset 0x00: adr x19, init_list       ; offset +0x28
-///          0x04: adr x20, main_slot       ; offset +0x1c
-///          0x08: loop: ldr x21, [x19], #8 ; post-indexed
-///          0x0c:       cbz x21, done      ; +3 words
-///          0x10:       blr x21
-///          0x14:       b loop             ; -3 words
-///          0x18: done: ldr x20, [x20]     ; deref slot
-///          0x1c:       br x20
-///          0x20: main_slot (u64)
-///          0x28: init_list:
-///                  .quad init_fn_0
-///                  .quad init_fn_1
-///                  ...
-///                  .quad 0
-///
+/// offset 0x00: adr x19, init_list ; offset +0x28
+/// 0x04: adr x20, main_slot ; offset +0x1c
+/// 0x08: loop: ldr x21, [x19], #8 ; post-indexed
+/// 0x0c: cbz x21, done ; +3 words
+/// 0x10: blr x21
+/// 0x14: b loop ; -3 words
+/// 0x18: done: ldr x20, [x20] ; deref slot
+/// 0x1c: br x20
+/// 0x20: main_slot (u64)
+/// 0x28: init_list:
+/// .quad init_fn_0
+/// .quad init_fn_1
+/// ...
+/// .quad 0
+// /
 /// Initialization order: we walk `libs[0..lib_count]` in archive
 /// order (matches the DT_NEEDED dependency pass: the main exe is
 /// files[0], then libs). ld-linux normally runs in reverse-dependency
@@ -1473,7 +1473,7 @@ fn user_va_base_from_libs(libs: &[LoadedLib; MAX_LOADED_LIBS], idx: usize) -> u6
 /// inits are idempotent and don't depend on each other's internal
 /// state. If that assumption breaks for specific apps, we'll
 /// iterate.
-///
+// /
 /// Returns the VA of the first instruction (the stub entry).
 fn build_init_trampoline(
     tramp_phys: usize,
@@ -1783,7 +1783,7 @@ fn apply_relocs_cross(
                     if r_type == 0x402 { applied_jump += 1; } else { applied_glob += 1; }
                 }
                 0x408 => {
-                    // 🎯 STUMP #12 ROOT: R_AARCH64_IRELATIVE — the GOT slot
+                    // ROOT: R_AARCH64_IRELATIVE — the GOT slot
                     // must hold the RESOLVED implementation address, not
                     // the resolver itself. Previously we wrote the resolver
                     // into the slot; the IPLT trampoline branched to the
@@ -1975,12 +1975,12 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
     uart::puts(" pages)\n");
 
     // `reloc_offset` is used in TWO distinct places:
-    //  (a) Where the kernel *writes* the patched bytes — must be a
-    //      physical address the kernel can access via its identity map.
-    //  (b) What gets stored into the relocation itself — a value the
-    //      EL0 binary will dereference. Since the primary cave maps
-    //      user VA 0..20 MB → phys_base..phys_base+20 MB, EL0 pointers
-    //      must be in the VA-0 space, not physical.
+    // (a) Where the kernel *writes* the patched bytes — must be a
+    // physical address the kernel can access via its identity map.
+    // (b) What gets stored into the relocation itself — a value the
+    // EL0 binary will dereference. Since the primary cave maps
+    // user VA 0..20 MB → phys_base..phys_base+20 MB, EL0 pointers
+    // must be in the VA-0 space, not physical.
     //
     // QEMU-BUGFIX-3 (continued): the old code folded both roles into
     // `phys_base - min_addr`, so every R_AARCH64_RELATIVE patched a
@@ -1990,10 +1990,10 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
     // netsurf/v8/blink/posix) crashed at the first GOT-backed load.
     //
     // Split into:
-    //   reloc_offset    — where kernel writes data during PT_LOAD copy
-    //                     (phys_base - min_addr)
-    //   va_reloc_offset — value written into R_RELATIVE slots
-    //                     (0 - min_addr, so EL0 sees user-VA pointers)
+    // reloc_offset — where kernel writes data during PT_LOAD copy
+    // (phys_base - min_addr)
+    // va_reloc_offset — value written into R_RELATIVE slots
+    // (0 - min_addr, so EL0 sees user-VA pointers)
     let reloc_offset = phys_base as i64 - min_addr as i64;
     let va_reloc_offset: i64 = 0i64 - min_addr as i64;
 
@@ -2208,7 +2208,7 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     // AT_RANDOM — 16 bytes glibc reads to seed the stack canary
     // (bytes 8-15) and the pointer-mangling cookie (bytes 0-7).
     //
-    // STUMP #161 iter 13: a tight cntpct_el0 loop only spans a few
+    // iter 13: a tight cntpct_el0 loop only spans a few
     // ticks of the 24 MHz counter, so 16 successive reads share most
     // of their high bits. Worse, the XOR-with-i pattern can produce
     // zero bytes in the canary slots. glibc's stack canary set from
@@ -2265,7 +2265,7 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
 
     // Write argv strings
     // Chromium content_shell passes 20-40 flags (--no-sandbox, --disable-gpu,
-    // --user-data-dir=..., --remote-debugging-port=..., etc.); bump from 16.
+    // user-data-dir=..., --remote-debugging-port=..., etc.); bump from 16.
     let mut arg_uvas = [0u64; 64];
     let argc = argv.len().min(32);
     for i in 0..argc {
@@ -2280,12 +2280,12 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
 
     // envp — push each entry string to the stack. glibc and ICU
     // read several of these during startup:
-    //   PATH=/bin              (basic $PATH)
-    //   TZ=UTC                 — lets ICU skip the filesystem-based
-    //                            timezone lookup that was crashing
-    //                            in getAliasTargetAsResourceBundle.
-    //   HOME=/root             (stops glibc from looking it up via getpw)
-    //   LANG=C.UTF-8           (UTF-8 locale, no collation lookup)
+    // PATH=/bin (basic $PATH)
+    // TZ=UTC — lets ICU skip the filesystem-based
+    // timezone lookup that was crashing
+    // in getAliasTargetAsResourceBundle.
+    // HOME=/root (stops glibc from looking it up via getpw)
+    // LANG=C.UTF-8 (UTF-8 locale, no collation lookup)
     sp -= 10;
     let env0_uva = to_uva(sp);
     for (j, &b) in b"PATH=/bin\0".iter().enumerate() {
@@ -2309,14 +2309,14 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
 
     sp = (sp - 256) & !0xF; // leave headroom for extended auxv
 
-    // 🎯 STUMP #32: ensure FINAL SP (process-entry SP) lands 16-byte
+    // ensure FINAL SP (process-entry SP) lands 16-byte
     // aligned regardless of argc. After this padding sp is 16-aligned.
     // Subsequent pushes are: auxv (multiples of 16), envp ptrs (40
     // bytes = 8 % 16), argv ptrs ((argc+1)*8 bytes), argc word (8).
     // Total non-aligned tail: 40 + (argc+1)*8 + 8 = 48 + (argc+1)*8.
     // For final to be 16-aligned: (48 + (argc+1)*8) % 16 == 0
-    //   → (argc+1)*8 % 16 == 0 (since 48 % 16 == 0)
-    //   → (argc+1) must be even → argc must be ODD
+    // → (argc+1)*8 % 16 == 0 (since 48 % 16 == 0)
+    // → (argc+1) must be even → argc must be ODD
     // If argc is EVEN, push 8 extra bytes here to swap parity.
     //
     // Without this fix, adding any extra command-line flag (going from
@@ -2331,12 +2331,12 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
 
     // auxv. When ld-linux is the interpreter we're eret'ing to, give it
     // enough to find the main exe:
-    //   AT_PHDR  (3) = main_virt_base + main_phoff
-    //   AT_PHENT (4) = sizeof(Elf64_Phdr) = 56
-    //   AT_PHNUM (5) = main's phnum
-    //   AT_ENTRY (9) = main exe's rebased entry VA
-    //   AT_BASE  (7) = ld-linux's load base (virt_base)
-    //   AT_PAGESZ(6), AT_RANDOM(25), AT_NULL(0)
+    // AT_PHDR (3) = main_virt_base + main_phoff
+    // AT_PHENT (4) = sizeof(Elf64_Phdr) = 56
+    // AT_PHNUM (5) = main's phnum
+    // AT_ENTRY (9) = main exe's rebased entry VA
+    // AT_BASE (7) = ld-linux's load base (virt_base)
+    // AT_PAGESZ(6), AT_RANDOM(25), AT_NULL(0)
     // When NOT running ld-linux (legacy single-ELF / old multi-ELF
     // path without an interpreter), only the original 3 entries are
     // emitted so existing binaries stay binary-compatible.
@@ -2349,7 +2349,7 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     let main_entry_va = user_va_base + (LOADED_ORIG_ENTRY.load(Ordering::Relaxed) as u64);
     let main_phdr_va  = user_va_base + main_phoff;
 
-    // 🎯 STUMP #13b: AT_HWCAP advertises CPU features. Without it,
+    // b: AT_HWCAP advertises CPU features. Without it,
     // glibc's `init_have_lse_atomics` calls `getauxval(AT_HWCAP)`,
     // sees 0, sets `__aarch64_have_lse_atomics = 0`, and ALL outline
     // atomics (used by PartitionAlloc's __aarch64_swp4_rel /
@@ -2362,9 +2362,9 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     // QEMU `-cpu max` exposes LSE atomics; advertise them. Keep the
     // value MINIMAL: just the bits PA's outline atomics actually
     // check, plus FP/ASIMD which glibc ld-linux assumes everywhere.
-    //   HWCAP_FP (1<<0)      = 0x001
-    //   HWCAP_ASIMD (1<<1)   = 0x002
-    //   HWCAP_ATOMICS (1<<8) = 0x100
+    // HWCAP_FP (1<<0) = 0x001
+    // HWCAP_ASIMD (1<<1) = 0x002
+    // HWCAP_ATOMICS (1<<8) = 0x100
     // = 0x103
     //
     // Earlier broader values (0x1DFFB inc. SHA, AES, FPHP, FCMA,
@@ -2374,27 +2374,27 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     // we don't supply. Keep it minimal.
     const AT_HWCAP_VALUE: u64 = 0x0000_0103;
 
-    // STUMP #152: extend auxv with the minimum-safe set glibc
+    // extend auxv with the minimum-safe set glibc
     // reads during startup. The entries marked NEW are required
     // for `chromium --version` to print:
     //
-    //   AT_CLKTCK (17): clock ticks/sec. glibc reads this for
-    //                   `sysconf(_SC_CLK_TCK)`. 100 = standard.
-    //   AT_UID (11) / AT_EUID (12) / AT_GID (13) / AT_EGID (14):
-    //                   process credentials. glibc reads these
-    //                   in `__libc_start_main`. 0 = root, but with
-    //                   AT_SECURE=0 below this isn't a sec issue.
-    //   AT_SECURE (23): "is this a setuid program" flag. 0 = no.
-    //                   Without this, glibc may take the
-    //                   secure-binary path and disable LD_*
-    //                   environment-var processing AND require
-    //                   non-zero UIDs to match.
+    // AT_CLKTCK (17): clock ticks/sec. glibc reads this for
+    // `sysconf(_SC_CLK_TCK)`. 100 = standard.
+    // AT_UID (11) / AT_EUID (12) / AT_GID (13) / AT_EGID (14):
+    // process credentials. glibc reads these
+    // in `__libc_start_main`. 0 = root, but with
+    // AT_SECURE=0 below this isn't a sec issue.
+    // AT_SECURE (23): "is this a setuid program" flag. 0 = no.
+    // Without this, glibc may take the
+    // secure-binary path and disable LD_*
+    // environment-var processing AND require
+    // non-zero UIDs to match.
     //
     // Deliberately STILL NOT INCLUDED (per the legacy comment
     // above — these caused ld-linux NULL-deref at 0x1a4157d8 in
     // an earlier attempt):
-    //   AT_HWCAP2 (26)  — wider feature bits
-    //   AT_PLATFORM (15) — string ptr to "aarch64"
+    // AT_HWCAP2 (26) — wider feature bits
+    // AT_PLATFORM (15) — string ptr to "aarch64"
     //
     // If `--version` still doesn't reach main, those are the next
     // candidates, and the deref was likely because a feature bit
@@ -2461,14 +2461,14 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
     //
     // Two paths now:
     // 1. Multi-ELF cave (`load_archive_multi`) has reserved a TLS page
-    //    INSIDE the cave window. Use its user VA — the cave's L2 maps
-    //    it, EL0 can both read and write it, and no kernel address ever
-    //    hits tpidr_el0. glibc's tcbhead_t goes at offset 0 of this
-    //    page; everything is zero-initialized.
+    // INSIDE the cave window. Use its user VA — the cave's L2 maps
+    // it, EL0 can both read and write it, and no kernel address ever
+    // hits tpidr_el0. glibc's tcbhead_t goes at offset 0 of this
+    // page; everything is zero-initialized.
     // 2. Legacy single-ELF path has no reserved TLS page. Keep the
-    //    pre-existing behaviour: zero tpidr_el0 and let the binary
-    //    fault if it touches TLS (busybox / hello / the small test
-    //    ELFs don't).
+    // pre-existing behaviour: zero tpidr_el0 and let the binary
+    // fault if it touches TLS (busybox / hello / the small test
+    // ELFs don't).
     let tls_phys_reserved = LOADED_TLS_PHYS.load(Ordering::Relaxed);
     if tls_phys_reserved != 0 {
         let tls_uva = to_uva(tls_phys_reserved);
@@ -2496,10 +2496,10 @@ pub fn execute_with_args(entry: u64, argv: &[&str]) -> Result<(), &'static str> 
         orig_entry
     } else {
         // Priority order for the multi-ELF cave:
-        //  1. Interp entry (ld-linux) — ld-linux does init/reloc itself.
-        //  2. Init trampoline — if we're running things ourselves
-        //     (no interp), chain through init_array constructors.
-        //  3. Plain `entry` — single-ELF-like fallback.
+        // 1. Interp entry (ld-linux) — ld-linux does init/reloc itself.
+        // 2. Init trampoline — if we're running things ourselves
+        // (no interp), chain through init_array constructors.
+        // 3. Plain `entry` — single-ELF-like fallback.
         let interp = LOADED_INTERP_ENTRY.load(Ordering::Relaxed) as u64;
         if interp != 0 { interp }
         else {

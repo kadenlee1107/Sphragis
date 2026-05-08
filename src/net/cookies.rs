@@ -1,20 +1,20 @@
 // Bat_OS — HTTP cookie jar.
 //
-// Sprint 3.1 / STUMP #105. The renderer can't keep state across
+// Sprint 3.1 / . The renderer can't keep state across
 // fetches without cookies — every login session, CSRF token, A/B test
 // bucket, etc. lives in a cookie. Without this jar, every page acts
 // like a brand-new visitor and any "stay signed in" flow breaks.
 //
 // Scope (intentionally small for the first pass):
-//   * Parse Set-Cookie response headers, store (host, name, value).
-//   * Send `Cookie: name1=v1; name2=v2` request header on subsequent
-//     fetches to the same host.
-//   * In-memory only; cleared on cave switch.
-//   * Ignored attributes: Domain, Path, Expires, Max-Age, Secure,
-//     HttpOnly, SameSite. Treat every cookie as host-only, session-
-//     scoped, all-paths. Compatibility with the most-common workflow
-//     (sign-in returns a session cookie, subsequent requests include
-//     it) is what matters.
+// * Parse Set-Cookie response headers, store (host, name, value).
+// * Send `Cookie: name1=v1; name2=v2` request header on subsequent
+// fetches to the same host.
+// * In-memory only; cleared on cave switch.
+// * Ignored attributes: Domain, Path, Expires, Max-Age, Secure,
+// HttpOnly, SameSite. Treat every cookie as host-only, session-
+// scoped, all-paths. Compatibility with the most-common workflow
+// (sign-in returns a session cookie, subsequent requests include
+// it) is what matters.
 //
 // Privacy / security: cookies are sensitive. Each Set-Cookie /
 // Cookie operation is audited (Category::Fetch, with the cookie NAME
@@ -27,7 +27,7 @@
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use crate::drivers::uart;
 
-/// STUMP #111 (audit M-FIRST-FAIL re-arm): the saturation alarm fires
+/// the saturation alarm fires
 /// once per boot. On a cave-switch the jar is wiped, so the *new*
 /// cave's first flood event would be silent. We expose this flag at
 /// module scope and re-arm it from `reset_for_cave_switch`.
@@ -66,7 +66,7 @@ impl Cookie {
 static mut JAR: [Cookie; MAX_COOKIES] = [Cookie::empty(); MAX_COOKIES];
 static SLOTS_USED: AtomicUsize = AtomicUsize::new(0);
 
-/// STUMP #111 (C004 cont.): ASCII-lowercase host bytes into a stack
+/// ASCII-lowercase host bytes into a stack
 /// buffer so callers compare hostnames case-insensitively. RFC 3986:
 /// hostnames are case-insensitive. Pre-fix, a cookie set on
 /// `EXAMPLE.com` was never sent to `example.com`.
@@ -95,10 +95,9 @@ fn find_or_alloc(host: &[u8], name: &[u8]) -> Option<usize> {
     }
 }
 
-/// Strip bytes that would break HTTP header semantics. STUMP #111 (audit
-/// finding C003): without this, a `Set-Cookie: a=v\r\nCookie: stolen=`
+/// Strip bytes that would break HTTP header semantics. without this, a `Set-Cookie: a=v\r\nCookie: stolen=`
 /// response value is spliced raw into the next outgoing `Cookie:` header
-/// — header-injection. Reject CR / LF / NUL / control chars in cookie
+/// header-injection. Reject CR / LF / NUL / control chars in cookie
 /// names and values; truncate at the first such byte.
 fn sanitize_in_place(bytes: &[u8]) -> usize {
     for (i, &b) in bytes.iter().enumerate() {
@@ -115,8 +114,8 @@ fn sanitize_in_place(bytes: &[u8]) -> usize {
 /// Store a (host, name, value) triple in the jar. Overwrites any
 /// existing cookie with the same (host, name). Drops silently if
 /// host/name/value exceed their fixed buffers.
-///
-/// STUMP #111: name/value/host are sanitized — bytes from the first
+// /
+/// name/value/host are sanitized — bytes from the first
 /// CR/LF/NUL/control char (or `;` in name/value) onward are dropped
 /// before storing. A cookie with `value="x\r\nCookie: stolen="` from a
 /// hostile Set-Cookie header is stored as `value="x"` only.
@@ -135,7 +134,7 @@ pub fn set(host: &[u8], name: &[u8], value: &[u8]) {
     let idx = match find_or_alloc(host, name) {
         Some(i) => i,
         None => {
-            // STUMP #111 (audit M-cookie-jar-full): silent drop on a
+            // silent drop on a
             // saturated jar lets a hostile origin flood us with 128
             // junk cookies so a real auth cookie from a later request
             // is dropped invisibly. One-shot audit + UART warning so
@@ -192,8 +191,8 @@ pub fn set(host: &[u8], name: &[u8], value: &[u8]) {
 /// `name1=v1; name2=v2; ...` into `out`, returns the byte count. If
 /// no cookies exist for the host, returns 0 and the caller should
 /// skip emitting the header.
-///
-/// STUMP #111: defense-in-depth — re-sanitize name/value as we
+// /
+/// defense-in-depth — re-sanitize name/value as we
 /// emit. If a stale cookie somehow contains CR/LF/NUL (it shouldn't,
 /// since `set` strips them), we still refuse to emit those bytes.
 pub fn build_header(host: &[u8], out: &mut [u8]) -> usize {
@@ -326,7 +325,7 @@ pub fn reset() {
 
 pub fn reset_for_cave_switch() {
     reset();
-    // STUMP #111: re-arm the saturation alarm so the next cave's
+    // re-arm the saturation alarm so the next cave's
     // first jar-full event is audible (otherwise the second cave
     // floods silently).
     JAR_FULL_FIRST_FAIL.store(false, Ordering::Release);

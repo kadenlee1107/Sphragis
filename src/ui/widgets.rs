@@ -1,4 +1,4 @@
-// Bat_OS — shared app widgets (STUMP #125).
+// Bat_OS — shared app widgets .
 //
 // Higher-level composites built on top of `ui::draw` + `ui::font`,
 // used by the DS / NM / SK apps (and likely the rest later). Lives
@@ -6,7 +6,7 @@
 // pixel-identical across apps without copy/paste drift.
 //
 // Source-of-truth for all dimensions / colors:
-//   docs/design/apps-ds-nm-sk/apps-specs.jsx
+// docs/design/apps-ds-nm-sk/apps-specs.jsx
 
 #![allow(dead_code)]
 
@@ -287,7 +287,7 @@ pub fn draw_caves_empty_row(x: u32, y: u32, w: u32, free: usize) {
 
 // ─── Flow diagram (NetMon SECURITY STACK) ───────────────────────────
 
-// STUMP #127 — bumped from 110 to 160. Spec called for 110 but
+// bumped from 110 to 160. Spec called for 110 but
 // at our 8x16 bitmap font that only fits 13 chars per sub-caption,
 // which truncated "3 PINS . 0 MISMATCH" to "3 PINS . 0 MI" and
 // "origin allowlist" to "origin allowl". 160px = 20 chars fits the
@@ -508,10 +508,10 @@ pub fn draw_bookmark_chip(x: u32, y: u32, host: &str) -> u32 {
 }
 
 /// Geometric BatCave glyph — 64×48 stylized container box. Renders:
-///   * outer container rectangle (1px stroke in `color`)
-///   * dashed inner seal rect
-///   * 4 corner notches (small L-shapes)
-///   * single center node (2x2 dot)
+/// * outer container rectangle (1px stroke in `color`)
+/// * dashed inner seal rect
+/// * 4 corner notches (small L-shapes)
+/// * single center node (2x2 dot)
 pub fn draw_cave_glyph(origin_x: u32, origin_y: u32, color: u32) {
     let dim = match color {
         c if c == CYAN  => CYAN_DIM,
@@ -554,7 +554,7 @@ pub fn draw_cave_glyph(origin_x: u32, origin_y: u32, color: u32) {
     gpu::fill_rect(origin_x + 31, origin_y + 23, 2, 2, color);
 }
 
-/// Action-hint line: "[shell] cmd  # comment". Used by BC's detail
+/// Action-hint line: "[shell] cmd # comment". Used by BC's detail
 /// panel. `danger` paints the cmd in amber instead of cyan (for
 /// irreversible actions like seal / destroy).
 pub fn draw_action_hint(x: u32, y: u32, w: u32, cmd: &str, comment: &str, danger: bool) {

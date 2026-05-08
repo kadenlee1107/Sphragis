@@ -35,7 +35,7 @@ pub fn puts(s: &str) {
     }
 }
 
-/// STUMP #111 (audit M-uart-untrusted): print a slice that may have
+/// print a slice that may have
 /// originated from page DOM / network traffic — i.e. attacker-
 /// influenced bytes. Replaces ANSI escapes / CR / NUL / other
 /// control bytes with `?` before emit, defeating the
@@ -72,10 +72,10 @@ pub fn getc() -> Option<u8> {
     if let Some(c) = crate::drivers::virtio::keyboard::getc() {
         return Some(c);
     }
-    // STUMP #112: QEMU's input multiplexer routes EV_KEY to virtio-
+    // QEMU's input multiplexer routes EV_KEY to virtio-
     // tablet / virtio-mouse when both keyboard AND a pointer device
     // are attached (the pointer-device model claims the key-event
-    // capability and steals it — this is the same bug STUMP #100b
+    // capability and steals it — this is the same bug b
     // fixed for the interactive loop, but uart::getc was never
     // updated, so the boot-screen passphrase prompt and the kernel
     // shell silently dropped GUI typing on Mac). Drain the tablet's

@@ -16,10 +16,10 @@ pub fn resume() -> ! {
     console::prompt();
 
     loop {
-        // STUMP #99: same dual-source read as desktop::run. Without
+        // same dual-source read as desktop::run. Without
         // this, after a cave exit the resumed shell wouldn't accept
         // QEMU-window keystrokes either.
-        // STUMP #112: ALSO drain tablet/mouse key ring — pointer
+        // ALSO drain tablet/mouse key ring — pointer
         // devices steal EV_KEY events on QEMU. See uart.rs for the
         // full explanation.
         crate::drivers::virtio::keyboard::poll();
@@ -65,7 +65,7 @@ pub fn resume() -> ! {
                             cmd_len -= 1;
                             console::putc(0x08);
                             platform::serial_putc(0x08); platform::serial_putc(b' '); platform::serial_putc(0x08);
-                            // STUMP #115: force fullscreen flush —
+                            // force fullscreen flush —
                             // small per-rect flushes don't reach
                             // QEMU's host display on Mac cocoa.
                             wm::flush_all();
@@ -76,7 +76,7 @@ pub fn resume() -> ! {
                         cmd_len += 1;
                         console::putc(c);
                         platform::serial_putc(c);
-                        wm::flush_all(); // STUMP #115
+                        wm::flush_all();
                     }
                     _ => {}
                 }
@@ -105,11 +105,11 @@ pub fn run() -> ! {
 
     loop {
         // Check for keyboard input from EITHER serial (host terminal)
-        // or virtio-keyboard (QEMU GUI window). STUMP #99: pre-fix
+        // or virtio-keyboard (QEMU GUI window). pre-fix
         // only serial was read, so a Mac user typing into the QEMU
         // window saw zero feedback. Pump virtio events first so they
         // land in the keystroke ring, then prefer serial.
-        // STUMP #112: drain tablet/mouse key ring too (QEMU pointer
+        // drain tablet/mouse key ring too (QEMU pointer
         // devices steal EV_KEY).
         crate::drivers::virtio::keyboard::poll();
         crate::drivers::virtio::tablet::poll();
@@ -233,7 +233,7 @@ pub fn run() -> ! {
                                 platform::serial_putc(0x08);
                                 platform::serial_putc(b' ');
                                 platform::serial_putc(0x08);
-                                // STUMP #115: small per-char rect
+                                // small per-char rect
                                 // flushes from console::putc don't
                                 // reliably propagate to QEMU's
                                 // virtio-gpu host display on Mac
@@ -250,7 +250,7 @@ pub fn run() -> ! {
                             cmd_len += 1;
                             console::putc(c);
                             platform::serial_putc(c);
-                            wm::flush_all(); // STUMP #115 — see above
+                            wm::flush_all(); // see above
                         }
                         _ => {}
                     }
@@ -260,7 +260,7 @@ pub fn run() -> ! {
                     render_current();
                 }
                 wm::APP_EDITOR => {
-                    // STUMP #130: editor is a real text buffer now.
+                    // editor is a real text buffer now.
                     // handle_key mutates the buffer + cursor; we
                     // repaint the whole pane so the new content +
                     // cursor land on screen.
@@ -268,13 +268,13 @@ pub fn run() -> ! {
                     render_current();
                 }
                 wm::APP_FILES => {
-                    // STUMP #131: arrow keys move row selection,
+                    // arrow keys move row selection,
                     // Enter loads the selected file into the editor.
                     apps::filemanager::handle_key(c);
                     render_current();
                 }
                 wm::APP_BATCAVE => {
-                    // STUMP #133: arrow keys move cave selection,
+                    // arrow keys move cave selection,
                     // detail panel re-renders for the new selection.
                     apps::batcave_mgr::handle_key(c);
                     render_current();
@@ -322,18 +322,18 @@ fn render_current() {
 fn render_app(app: u8) {
     match app {
         wm::APP_SHELL => {
-            // STUMP #124: real scrollback now lives in console.rs.
+            // real scrollback now lives in console.rs.
             // Order matters:
-            //   1. redraw_content clears the pane and replays every
-            //      buffered cell — that brings back the prompt,
-            //      command output, AND any in-progress typed input.
-            //   2. shell_banner re-paints the bat-glyph banner over
-            //      the cleared rows 0..3 (the banner is rendered
-            //      directly to the FB, not through the buffer).
-            //   3. shell_banner ends with set_cursor(0, 4) — but
-            //      that would clobber the cursor position the buffer
-            //      wants to keep (it's at the END of the user's last
-            //      typing). So save & restore around the banner call.
+            // 1. redraw_content clears the pane and replays every
+            // buffered cell — that brings back the prompt,
+            // command output, AND any in-progress typed input.
+            // 2. shell_banner re-paints the bat-glyph banner over
+            // the cleared rows 0..3 (the banner is rendered
+            // directly to the FB, not through the buffer).
+            // 3. shell_banner ends with set_cursor(0, 4) — but
+            // that would clobber the cursor position the buffer
+            // wants to keep (it's at the END of the user's last
+            // typing). So save & restore around the banner call.
             let (saved_cx, saved_cy) = console::cursor();
             console::redraw_content();
             shell_banner();
@@ -355,7 +355,7 @@ fn render_app(app: u8) {
 /// supervisor knows the halt is intentional (not a watchdog
 /// reset), then WFE forever. m1n1's HV stays alive in EL2; the
 /// guest just stops doing anything.
-///
+// /
 /// Useful now that the M4 ~118 s AP-watchdog is disabled (see
 /// SESSION_JOURNAL 2026-04-20 21:30) — the Mac will keep running
 /// until externally rebooted.
@@ -412,7 +412,7 @@ fn halt_bat_os() -> ! {
 }
 
 fn shell_banner() {
-    // STUMP #120: replace the old ASCII-art "BAT OS" letterforms with
+    // replace the old ASCII-art "BAT OS" letterforms with
     // the geometric bat glyph + a structured banner per the spec.
     // Layout below mirrors `docs/design/desktop-shell/desktop-shell.jsx`'s
     // ShellBanner component, painted directly to the FB so the
@@ -473,7 +473,7 @@ fn shell_banner() {
 
     let _ = CYAN_DIM; // reserved for future scrollback echo styling
 
-    // STUMP #124: position the console cursor below the banner using
+    // position the console cursor below the banner using
     // an explicit set_cursor instead of emitting `\n` chars (which
     // would write empty cells to the scrollback and shift cursor
     // arbitrarily relative to wherever it was).

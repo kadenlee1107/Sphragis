@@ -9,7 +9,7 @@ use super::font;
 use super::draw;
 use core::sync::atomic::{AtomicU8, AtomicBool, Ordering};
 
-// STUMP #120 — Claude-Design desktop chrome. Palette mirrors the
+// Claude-Design desktop chrome. Palette mirrors the
 // lock-screen + spec sheet so apps inherit a single visual language.
 const BG:        u32 = 0xFF0A0A0A;
 const PANEL:     u32 = 0xFF0E0E0E;
@@ -68,10 +68,10 @@ static NEEDS_REDRAW: AtomicBool = AtomicBool::new(true);
 // Each pane has: app_id, position (row, col in a grid)
 // Layout is defined by LAYOUT_ROWS × LAYOUT_COLS grid
 // Examples:
-//   1×1 = single pane       2×1 = 2 horizontal stacked
-//   1×2 = 2 vertical side   2×2 = 4 quad grid
-//   1×3 = 3 vertical cols   1×4 = 4 vertical cols
-//   4×1 = 4 horizontal rows
+// 1×1 = single pane 2×1 = 2 horizontal stacked
+// 1×2 = 2 vertical side 2×2 = 4 quad grid
+// 1×3 = 3 vertical cols 1×4 = 4 vertical cols
+// 4×1 = 4 horizontal rows
 
 const MAX_PANES: usize = 4;
 
@@ -322,15 +322,15 @@ pub fn pane_rect(idx: usize) -> WindowRect {
 pub fn content_rect_secondary() -> WindowRect { pane_rect(1) }
 
 /// Draw the full window frame (title bar, borders, status bar).
-///
-/// STUMP #120 — Claude-Design desktop-chrome port. Layout per
+// /
+/// Claude-Design desktop-chrome port. Layout per
 /// `docs/design/desktop-shell/shell-specs.jsx`:
-///   * Title bar 24px: brand block (132px) | tab strip (9 × 64px,
-///     centered between brand and cave) | cave block (168px right).
-///   * Content area: hairline top + bottom, apps own internal layout.
-///   * Status bar 28px: 4 segments (ENCRYPTED · NET · TLS const ·
-///     AUDIT) + right-aligned uptime. TLS is a constant LOCK/PQ
-///     indicator per DESIGN_TLS_HARDENING.md.
+/// * Title bar 24px: brand block (132px) | tab strip (9 × 64px,
+/// centered between brand and cave) | cave block (168px right).
+/// * Content area: hairline top + bottom, apps own internal layout.
+/// * Status bar 28px: 4 segments (ENCRYPTED · NET · TLS const ·
+/// AUDIT) + right-aligned uptime. TLS is a constant LOCK/PQ
+/// indicator per DESIGN_TLS_HARDENING.md.
 pub fn draw_frame() {
     let w = gpu::width();
     let h = gpu::height();

@@ -2,12 +2,12 @@
 //
 // Chromium / V8 relies on in-process signal handlers for a number of
 // load-bearing features:
-//   * WebAssembly bounds-check trap handlers (`udf #1` sentinel bytes
-//     in the V8 pointer-compression cage, caught as SIGILL, rerouted
-//     to the WASM trap-handler chain).
-//   * OOB-access trap handlers for the V8 sandbox.
-//   * Stack-overflow guard pages (SIGSEGV → stack-expansion / bailout).
-//   * Crash reporters for fatal signals.
+// * WebAssembly bounds-check trap handlers (`udf #1` sentinel bytes
+// in the V8 pointer-compression cage, caught as SIGILL, rerouted
+// to the WASM trap-handler chain).
+// * OOB-access trap handlers for the V8 sandbox.
+// * Stack-overflow guard pages (SIGSEGV → stack-expansion / bailout).
+// * Crash reporters for fatal signals.
 //
 // Without actually running the user-registered handlers, every
 // V8-internal fault becomes a hard kernel crash. This module plumbs
@@ -16,18 +16,18 @@
 // rt_sigreturn restore.
 //
 // Scope for the first pass:
-//   * SIGILL, SIGSEGV, SIGBUS, SIGFPE, SIGTRAP, SIGABRT.
-//   * SA_SIGINFO path (three-arg handler: int, siginfo_t*, ucontext_t*).
-//   * Basic ucontext with GPRs, SP, PC, PSTATE, and fault address.
-//   * Single-threaded signal delivery — the signal targets whichever
-//     thread caused the fault. Cross-thread tgkill wake-ups come
-//     later.
+// * SIGILL, SIGSEGV, SIGBUS, SIGFPE, SIGTRAP, SIGABRT.
+// * SA_SIGINFO path (three-arg handler: int, siginfo_t*, ucontext_t*).
+// * Basic ucontext with GPRs, SP, PC, PSTATE, and fault address.
+// * Single-threaded signal delivery — the signal targets whichever
+// thread caused the fault. Cross-thread tgkill wake-ups come
+// later.
 //
 // Not yet:
-//   * sigaltstack (SA_ONSTACK)
-//   * FP/NEON/SVE register save in ucontext
-//   * Real-time signal queuing
-//   * Signal masks enforcement during handler execution
+// * sigaltstack (SA_ONSTACK)
+// * FP/NEON/SVE register save in ucontext
+// * Real-time signal queuing
+// * Signal masks enforcement during handler execution
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -203,7 +203,7 @@ pub fn mask_unblock(remove: u64) -> u64 {
 /// safely dropped on the floor when delivered with SIG_DFL and no
 /// handler installed. All other signals trigger `terminate_cave_fatal`
 /// on SIG_DFL delivery.
-///
+// /
 /// Default "ignore": SIGCHLD (17), SIGURG (23), SIGWINCH (28),
 /// SIGCONT (18). SIGSTOP / SIGTSTP / SIGTTIN / SIGTTOU (19/20/21/22)
 /// default to "stop the process" which we treat as ignore for the
@@ -247,9 +247,9 @@ fn take_pending_unblocked() -> Option<u32> {
 /// Called on the way back to user mode (from the SVC exit path, or
 /// any other safe yield point). If a pending-and-unblocked signal is
 /// deliverable:
-///   * SIG_IGN  → clear and continue (no delivery).
-///   * SIG_DFL  → if fatal-by-default, tear the cave down; else drop.
-///   * Handler  → build an rt_sigframe and redirect the trap frame.
+/// * SIG_IGN → clear and continue (no delivery).
+/// * SIG_DFL → if fatal-by-default, tear the cave down; else drop.
+/// * Handler → build an rt_sigframe and redirect the trap frame.
 /// Returns `true` if the trap frame was mutated (caller should NOT
 /// overwrite x0 / ELR afterward); `false` if nothing happened or the
 /// signal was dropped silently.
@@ -385,7 +385,7 @@ pub static DELIVERIES: AtomicU64 = AtomicU64::new(0);
 /// trap frame has been rewritten so `eret` will enter it; `false` if
 /// no user handler is registered and the caller must fall through to
 /// the default (usually terminal) path.
-///
+// /
 /// `fault_addr` is whatever FAR_EL1 or equivalent the hardware gave us.
 /// `si_code` is the POSIX `si_code` classifier for the signal type.
 pub fn try_deliver_synchronous(
@@ -473,12 +473,12 @@ pub fn try_deliver_synchronous(
     }
 
     // Redirect the trap frame: eret lands in the handler.
-    //   x0 = signo
-    //   x1 = pointer to siginfo_t within the frame
-    //   x2 = pointer to ucontext_t within the frame
-    //   lr = restorer (our rt_sigreturn trampoline — planted in the frame)
-    //   sp = frame_base
-    //   pc = handler
+    // x0 = signo
+    // x1 = pointer to siginfo_t within the frame
+    // x2 = pointer to ucontext_t within the frame
+    // lr = restorer (our rt_sigreturn trampoline — planted in the frame)
+    // sp = frame_base
+    // pc = handler
     //
     // We don't have a vDSO to host the restorer, so we pre-load a
     // known user-space address with the return trampoline instead.
@@ -562,7 +562,7 @@ pub const RESTORER_BYTES: [u8; 8] = [
 /// ever reaches this address via the x30 we pre-load at signal
 /// delivery time, so it doesn't need to sit in a "natural" mmap
 /// region.
-///
+// /
 /// History: 0x0080_0000 (8 MB) collided with Ladybird's
 /// LibJS/mimalloc, which writes a zero byte to 0x800000 during init
 /// (probably part of a fixed-base pointer-compression scheme that
@@ -608,7 +608,7 @@ pub fn install_trampoline(l1_phys: u64) -> Result<(), &'static str> {
 
     install_l3_mapping(l1_phys, RT_SIGRETURN_TRAMPOLINE_VA, entry)?;
 
-    // STUMP #161 iter 11+12: Ladybird's glibc zero-fills a RANGE
+    // iter 11+12: Ladybird's glibc zero-fills a RANGE
     // starting at 0x0080_0000 during init (observed via [dp/low-va]
     // diagnostic — first attempt with one page caught 0x800000,
     // second attempt saw 0x801000, ...). It's a hot loop that writes
@@ -773,7 +773,7 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
     for sh in (0..16).rev() {
         uart::putc(hex[((fault_addr >> (sh * 4)) & 0xF) as usize]);
     }
-    // 🎯 STUMP #14: also print user PC (ELR_EL1) so we can addr2line
+    // also print user PC (ELR_EL1) so we can addr2line
     // the actual instruction that faulted. fault_addr is just the
     // dereferenced address (FAR) — without ELR we can't tell which
     // user-code function blew up.
@@ -791,13 +791,13 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
     }
     uart::puts(" — terminating cave, returning to shell\n");
 
-    // 🎯 STUMP #17: when ELR/LR are both garbage (e.g. =0x1, jumped via
+    // when ELR/LR are both garbage (e.g. =0x1, jumped via
     // bad function pointer), the only way to identify the culprit is
     // walking the user FP chain. Dump up to 16 saved (FP, LR) pairs
     // from the top of the user stack so we can see the genuine call
     // chain.
     //
-    // 🎯 STUMP #16: each load is gated by is_user_range so we don't
+    // each load is gated by is_user_range so we don't
     // recursively fault on an unmapped tail page (the cave's stack
     // mmap may end before sp+0x100). On reject, stop the dump.
     let sp_el0: u64;
@@ -813,7 +813,7 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
                 uart::puts("\n    [stops at unmapped page]");
                 break;
             }
-            // 🎯 STUMP #57: also check the page is actually MAPPED.
+            // also check the page is actually MAPPED.
             // is_user_range only validates the address falls in our
             // user VA window — the page itself can still be uncommitted
             // (e.g. demand-paged but not yet faulted in). Under TCG a
@@ -864,15 +864,15 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
 
     unsafe {
         // Mirror the exit-syscall path in `arch/mod.rs`:
-        //   1. Switch TTBR0 back to primary so no stray memory access
-        //      between here and `desktop::resume()` touches the dying
-        //      cave's page tables.
-        //   2. Restore the kernel SP the loader stashed in
-        //      KERNEL_SP_SAVE before the eret into EL0. Without this
-        //      we'd continue on the exception-entry kernel stack and
-        //      eventually blow it.
-        //   3. Jump to `desktop::resume()` — runs the shell prompt
-        //      forever. `-> !` means we never come back here.
+        // 1. Switch TTBR0 back to primary so no stray memory access
+        // between here and `desktop::resume()` touches the dying
+        // cave's page tables.
+        // 2. Restore the kernel SP the loader stashed in
+        // KERNEL_SP_SAVE before the eret into EL0. Without this
+        // we'd continue on the exception-entry kernel stack and
+        // eventually blow it.
+        // 3. Jump to `desktop::resume()` — runs the shell prompt
+        // forever. `-> !` means we never come back here.
         crate::batcave::linux::mmu::switch_to_primary();
         let save_addr = crate::kernel::arch::kernel_sp_save_addr();
         core::arch::asm!(
@@ -888,7 +888,7 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
     // during this run.
     super::skip_log::dump_summary();
 
-    // 🎯 STUMP #57b: in headless mode, `console`/`gpu` aren't
+    // b: in headless mode, `console`/`gpu` aren't
     // initialized, so calling desktop::resume() → console::prompt()
     // dereferences a NULL framebuffer pointer → re-enters this
     // handler → infinite loop ([abort] EL1 fault unrecoverable spam
@@ -903,16 +903,16 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
 
 /// Complete an rt_sigreturn: read the ucontext at the current user SP
 /// and restore the trap frame. Called from `sys_rt_sigreturn`.
-///
+// /
 /// The sequence is:
-///   1. User handler completes and `ret`s into the restorer (x30 =
-///      restorer).
-///   2. Restorer executes `svc #139` (mov x8,139 ; svc 0) with SP still
-///      pointing at the rt_sigframe we planted.
-///   3. Kernel enters this handler, reads the ucontext at SP, and
-///      rewrites the trap frame so eret picks up the pre-signal
-///      state.
-///
+/// 1. User handler completes and `ret`s into the restorer (x30 =
+/// restorer).
+/// 2. Restorer executes `svc #139` (mov x8,139 ; svc 0) with SP still
+/// pointing at the rt_sigframe we planted.
+/// 3. Kernel enters this handler, reads the ucontext at SP, and
+/// rewrites the trap frame so eret picks up the pre-signal
+/// state.
+// /
 /// Returns the value that should be put in x0 after restore. Per
 /// Linux, rt_sigreturn doesn't actually return a value — the syscall
 /// dispatcher should just rewrite the whole frame. We return

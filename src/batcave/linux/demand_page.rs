@@ -14,17 +14,17 @@
 //
 // Scope limits (deliberate, for tonight's cut):
 //
-// - No page ageing, no swap, no sharing across caves. Once committed,
-//   a page stays committed until the cave tears down.
-// - No mprotect honouring — all committed pages get
-//   `BLOCK_USER_RW_EXEC` like the legacy cave window does. Chromium's
-//   prot argument (the odd `0x14d82074` value we see in the trace) is
-//   ignored.
-// - No MAP_FIXED into a reserved range. The huge-reservation stub
-//   already rejects MAP_FIXED.
-// - Up to `MAX_RESERVATIONS` regions per boot (global, not per-cave).
-//   Chromium's two reservations + maybe a third for V8 code cages
-//   comfortably fit.
+// No page ageing, no swap, no sharing across caves. Once committed,
+// a page stays committed until the cave tears down.
+// No mprotect honouring — all committed pages get
+// `BLOCK_USER_RW_EXEC` like the legacy cave window does. Chromium's
+// prot argument (the odd `0x14d82074` value we see in the trace) is
+// ignored.
+// No MAP_FIXED into a reserved range. The huge-reservation stub
+// already rejects MAP_FIXED.
+// Up to `MAX_RESERVATIONS` regions per boot (global, not per-cave).
+// Chromium's two reservations + maybe a third for V8 code cages
+// comfortably fit.
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use crate::drivers::uart;
@@ -51,7 +51,7 @@ const PAGE_UXN: u64   = 1 << 54;
 /// abort, lower EL) instead of silently fetching garbage and limping
 /// along through a cascade of EC=0x19/0x1c/0x1d decoder-confusion
 /// faults.
-///
+// /
 /// Regions that *need* execute permission (V8 JIT code areas, PLT
 /// trampolines) must call `sys_mprotect` with `PROT_EXEC` to clear
 /// UXN. See `sys_mprotect` in syscall.rs.
@@ -130,16 +130,16 @@ pub fn register_reservation(start: u64, end: u64, l1_phys: u64) {
 /// fault we don't own.
 pub fn try_handle(far: u64, esr: u64) -> bool {
     // EC is bits 31:26. We accept:
-    //   0x24 — data abort from lower EL (user touched uncommitted page)
-    //   0x25 — data abort from current EL (kernel uaccess hit
-    //          uncommitted user page, e.g. pipe_buf::write copying
-    //          from a user iov whose backing page hasn't been
-    //          demand-committed yet)
-    //   0x20 — instruction abort from lower EL (user fetched code
-    //          from uncommitted page, e.g. V8 JIT'd code in cage area
-    //          that needs lazy executable commit)
-    //   0x21 — instruction abort from current EL (rare; treated same
-    //          as 0x20)
+    // 0x24 — data abort from lower EL (user touched uncommitted page)
+    // 0x25 — data abort from current EL (kernel uaccess hit
+    // uncommitted user page, e.g. pipe_buf::write copying
+    // from a user iov whose backing page hasn't been
+    // demand-committed yet)
+    // 0x20 — instruction abort from lower EL (user fetched code
+    // from uncommitted page, e.g. V8 JIT'd code in cage area
+    // that needs lazy executable commit)
+    // 0x21 — instruction abort from current EL (rare; treated same
+    // as 0x20)
     // We USED to also accept EC=0 with in-reservation FAR, but FAR
     // isn't reliably updated for EC=0, and that path caused a tight
     // infinite loop — the "data abort" FAR was actually stale from
@@ -150,7 +150,7 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     let is_data_abort = ec == 0x24 || ec == 0x25;
     let is_inst_abort = ec == 0x20 || ec == 0x21;
     if !is_data_abort && !is_inst_abort { return false; }
-    // 🎯 STUMP #7 follow-on: only handle TRANSLATION faults (page not
+    // follow-on: only handle TRANSLATION faults (page not
     // mapped). Permission faults (DFSC 0x0d/0x0e/0x0f) come from a page
     // that IS mapped but with wrong perms (e.g., kernel uaccess writing
     // to a page just mprotect'd to R/O). Allocating a fresh frame would
@@ -159,13 +159,13 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     // the same VA forever (820k loops observed before alloc_frame OOM).
     let dfsc = esr & 0x3F;
     let is_translation_fault = matches!(dfsc, 0x04..=0x07);
-    // 🎯 STUMP #25 helper: also accept permission faults (DFSC 0x0d/0x0e/0x0f)
+    // helper: also accept permission faults (DFSC 0x0d/0x0e/0x0f)
     // when they're instruction aborts. The page is already mapped (with UXN
     // set from a previous data-fault commit) but execution faults. Flip
     // UXN off below by re-installing with the inst-abort flags.
     let is_perm_fault_inst_abort = is_inst_abort
         && matches!(dfsc, 0x0d..=0x0f);
-    // 🎯 STUMP #160 iter 2: data-abort permission faults inside a
+    // iter 2: data-abort permission faults inside a
     // registered V8/PA reservation. Chromium reserves huge regions
     // PROT_NONE then accesses them — sometimes BEFORE issuing an
     // mprotect (PA's pool-init pre-touches header bytes for layout
@@ -218,7 +218,7 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
             // either binary content or unmapped padding).
             && !(far >= 0x10000000 && far < 0x1c800000);
         if !far_plausible {
-            // STUMP #161: diagnostic for low-VA faults. If we're
+            // diagnostic for low-VA faults. If we're
             // seeing repeated faults at the SAME low-VA, log the
             // user PC (lr_at_fault) so we can identify which
             // library/function is making the access. Limit to 5
@@ -250,7 +250,7 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
         // a frame and install_l3_mapping for this VA.
     }
 
-    // 🎯 STUMP #25 helper: for permission-fault instruction aborts,
+    // helper: for permission-fault instruction aborts,
     // the page is already mapped but with UXN set. Just flip UXN off
     // on the existing L3 entry — no new frame needed.
     if is_perm_fault_inst_abort {
@@ -283,15 +283,15 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
         return true;
     }
 
-    // 🎯 STUMP #160 iter 2: data-abort permission fault inside a
+    // iter 2: data-abort permission fault inside a
     // V8/PA-style reservation. The L3 entry exists with restrictive
     // perms (AP=0b00 EL1-only, or AP=0b11 EL0-RO when the access
     // was a write). Upgrade to USER_PAGE_FLAGS (EL0 RW, no-exec)
     // on the EXISTING phys frame — no new allocation, no data loss.
     //
     // Only do this when EITHER:
-    //   - hit_idx is Some (we're inside a registered reservation), OR
-    //   - the FAR is in plausible-V8 range (already vetted above).
+    // hit_idx is Some (we're inside a registered reservation), OR
+    // the FAR is in plausible-V8 range (already vetted above).
     // Otherwise we'd be silently widening permissions on legitimate
     // PROT_NONE pages that the user explicitly wanted to be NOT
     // accessible — breaking guard pages, stack red-zones, etc.
@@ -344,7 +344,7 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
             return false;
         }
     };
-    // DIAGNOSTIC RESULT (STUMP #29 investigation, run 230800):
+    // DIAGNOSTIC RESULT ( investigation, run 230800):
     // Tested with 0xA5 fill — cave died at 437 lines with
     // `fault=0xa5a5a5a5a5a5a5ad` from a deref of our 0xA5 pattern as
     // a pointer. This proves: cave reads OUR page contents, no
@@ -355,7 +355,7 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     unsafe {
         let p = frame as *mut u8;
         for i in 0..4096 { core::ptr::write_volatile(p.add(i), 0); }
-        // 🎯 STUMP #10c FINAL: clean every cache line we wrote to PoC.
+        // c FINAL: clean every cache line we wrote to PoC.
         // We zeroed via the kernel identity map (EL1). EL0 will read
         // the same physical frame via the user VA we're about to install.
         // ARM64 normal memory is supposed to be coherent in the inner-
@@ -373,7 +373,7 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     }
 
     let page_va = far & !0xFFFu64;
-    // 🎯 STUMP #24: when the fault is an instruction abort (EC=0x20/0x21),
+    // when the fault is an instruction abort (EC=0x20/0x21),
     // commit the page WITHOUT UXN so it can be executed. V8's JIT writes
     // code into a region and starts executing without an explicit mprotect
     // when the cage is allocated as a single big reservation. Letting the
@@ -391,7 +391,7 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
             uart::putc(hex[((page_va >> (sh * 4)) & 0xF) as usize]);
         }
         uart::puts(" reason: "); uart::puts(why);
-        // 🎯 STUMP #38 diagnostic: when alloc_kernel_frame returns None,
+        // diagnostic: when alloc_kernel_frame returns None,
         // print pool stats so we can tell whether it's actually exhausted
         // or whether the new top-down scan logic has a bug.
         let (used, total) = frame::stats();
@@ -447,7 +447,7 @@ pub(crate) fn install_l3_mapping(
     phys_page: u64,
     flags: u64,
 ) -> Result<(), &'static str> {
-    // 🎯 STUMP #9: hold IrqGuard across the entire walk-and-install so
+    // hold IrqGuard across the entire walk-and-install so
     // we can't be preempted mid-install. Without this, sys_mmap or
     // sys_mprotect calling install_l3_mapping (Stump #4 / Stump #8
     // paths) can be interrupted by a timer IRQ that schedules another
@@ -477,7 +477,7 @@ pub(crate) fn install_l3_mapping(
         }
         let desc = (t as u64) | TABLE_DESC;
         unsafe { core::ptr::write_volatile(l1_entry_ptr, desc); }
-        // 🎯 STUMP #7 follow-on: flush the L1 entry's cache line + the
+        // follow-on: flush the L1 entry's cache line + the
         // freshly-zeroed L2 table to PoC. Without this, the walker
         // can hit a stale (zero) cache line for L1[l1_idx] and re-fault
         // on the same VA → infinite alloc_frame loop → OOM.

@@ -253,7 +253,7 @@ static mut SOCKET_TABLE: [SocketState; MAX_SOCKETS] =
 
 /// V6-XLAYER-005/006: clear every socket slot on cave switch so the
 /// new tenant doesn't inherit socket bindings or live TCP PCB ids.
-///
+// /
 /// V8-ROOT-1: IRQ-masked for the duration. lock()/unlock() alone wasn't
 /// enough — an IRQ between lock and unlock could schedule another thread
 /// that observed the half-wiped table.
@@ -445,20 +445,20 @@ pub fn bind(fd: i32, addr: *const SockaddrIn, len: u32) -> i64 {
 }
 
 /// listen(2)
-///
-/// STUMP #148: real server-side listen wired through to
+// /
+/// real server-side listen wired through to
 /// `tcp::listen_register`. The Slot bookkeeping (status=Listening,
 /// backlog) stays — those drive sockopt/getsockname behavior and
 /// epoll readability checks — but now we ALSO register a `Listener`
 /// in the TCP stack so the SYN-on-LISTEN path in
 /// `tcp::handle_incoming` knows which port to accept on.
-///
+// /
 /// Errors:
-///   EOPNOTSUPP — non-TCP socket
-///   EINVAL     — socket not in Unbound/Bound state, or no port
-///                bound yet (listen requires bind first)
-///   EADDRINUSE — another listener already owns this port
-///   EMFILE     — kernel listener table full (MAX_LISTENERS=16)
+/// EOPNOTSUPP — non-TCP socket
+/// EINVAL — socket not in Unbound/Bound state, or no port
+/// bound yet (listen requires bind first)
+/// EADDRINUSE — another listener already owns this port
+/// EMFILE — kernel listener table full (MAX_LISTENERS=16)
 pub fn listen(fd: i32, backlog: i32) -> i64 {
     // First validate + lock in the Slot side. Capture the port so we
     // can call into the TCP stack OUTSIDE the with_slot lock (the
@@ -484,7 +484,7 @@ pub fn listen(fd: i32, backlog: i32) -> i64 {
     };
 
     // Register with the TCP stack. cave_id 0 is a placeholder until
-    // STUMP #148 step 6 wires per-cave inbound policy.
+    // step 6 wires per-cave inbound policy.
     let cave_id = 0u16;
     match crate::net::tcp::listen_register(port, backlog, cave_id, fd) {
         Ok(_idx) => {
@@ -501,25 +501,25 @@ pub fn listen(fd: i32, backlog: i32) -> i64 {
     }
 }
 
-/// accept4(2) — STUMP #148 step 4: real server-side accept.
-///
+/// accept4(2) — step 4: real server-side accept.
+// /
 /// Validates the listening fd, looks up the matching kernel
 /// `Listener`, and pops a completed-handshake PCB off its accept
 /// queue. Returns a fresh socket fd whose Slot is bound to that PCB
 /// in the Connected state. The peer's address is written to
 /// `addr`/`*len` if non-null.
-///
+// /
 /// Blocking semantics: if the queue is empty AND the listening
 /// socket is blocking, spin-poll the network stack for up to 30s
 /// waiting for a SYN_RECV → ESTABLISHED transition to enqueue
 /// something. Non-blocking sockets get EAGAIN immediately.
-///
+// /
 /// Errors:
-///   EOPNOTSUPP — non-TCP fd
-///   EINVAL     — fd not in Listening state, or no kernel listener
-///                bound to it (shouldn't happen if listen() succeeded)
-///   EAGAIN     — non-blocking and queue empty
-///   EMFILE     — couldn't allocate a new socket Slot
+/// EOPNOTSUPP — non-TCP fd
+/// EINVAL — fd not in Listening state, or no kernel listener
+/// bound to it (shouldn't happen if listen() succeeded)
+/// EAGAIN — non-blocking and queue empty
+/// EMFILE — couldn't allocate a new socket Slot
 pub fn accept4(fd: i32, addr: *mut SockaddrIn, len: *mut u32, flags: i32) -> i64 {
     // Validate listening + capture nonblock.
     let nonblock_listener = match with_slot(fd, |s| {
@@ -619,17 +619,17 @@ pub fn accept4(fd: i32, addr: *mut SockaddrIn, len: *mut u32, flags: i32) -> i64
 }
 
 /// connect(2)
-///
+// /
 /// Blocking semantics: drives our global TCP stack through a SYN handshake
 /// (which internally polls with a timeout) and returns 0 on success.
-///
+// /
 /// Non-blocking semantics: we mark the socket Connecting and return
 /// EINPROGRESS, but currently tcp::connect() is synchronous so we *do*
 /// actually block for the handshake in both cases. This is a GAP.
-///
+// /
 /// TODO(tcp): non-blocking SYN — expose a tcp::connect_start() that returns
 /// immediately and a tcp::connect_poll() that returns Pending/Ok/Err.
-///
+// /
 /// CRITICAL GAP: src/net/tcp.rs holds a single global connection. Opening a
 /// second socket and connect()ing will clobber the first. This layer guards
 /// against that by refusing a second concurrent TCP connect.
@@ -1134,7 +1134,7 @@ pub fn getpeername(fd: i32, addr: *mut SockaddrIn, len: *mut u32) -> i64 {
 /// shutdown(2) — SHUT_RD is advisory (we can't half-close our TCP stack),
 /// SHUT_WR and SHUT_RDWR trigger a FIN via tcp::close() if this socket owns
 /// the global connection.
-///
+// /
 /// TODO(tcp): real half-close semantics in src/net/tcp.rs.
 pub fn shutdown(fd: i32, how: i32) -> i64 {
     match with_slot(fd, |s| {

@@ -4,16 +4,16 @@
 // scattered across every pointer-bearing syscall. By funneling reads
 // and writes through a single validation + access primitive we:
 //
-//   1. Centralize the bounds check (today: coarse 0x1000..0x40000000
-//      via is_user_ptr_range; will tighten to exact walk of the cave's
-//      L2_low once runtime-probing lands).
+// 1. Centralize the bounds check (today: coarse 0x1000..0x40000000
+// via is_user_ptr_range; will tighten to exact walk of the cave's
+// L2_low once runtime-probing lands).
 //
-//   2. Make it structurally impossible for a new syscall to forget the
-//      guard — `copy_from_user<T>` does the check, returning EFAULT on
-//      failure.
+// 2. Make it structurally impossible for a new syscall to forget the
+// guard — `copy_from_user<T>` does the check, returning EFAULT on
+// failure.
 //
-//   3. Provide `T`-aware copy helpers so callers can read/write structs
-//      without reinventing byte-by-byte asm loops.
+// 3. Provide `T`-aware copy helpers so callers can read/write structs
+// without reinventing byte-by-byte asm loops.
 //
 // These are *not* a full Linux-style copy_from_user with page-fault
 // recovery — our BatCave has no page-fault handler yet. They're range
@@ -26,16 +26,16 @@ use core::mem::{size_of, MaybeUninit};
 const USER_MIN: usize = 0x1000;           // no NULL, no zero page
 const USER_MAX: usize = 0x4000_0000;      // below kernel RAM identity map
 
-/// STUMP #161 iter 25: page-table fallback for is_user_range. Walks
+/// iter 25: page-table fallback for is_user_range. Walks
 /// the active cave's L1→L2→L3 for the START and END pages of the
 /// requested range. Accepts if both are mapped with AP=EL0 R/W.
-///
+// /
 /// Used as a last resort when the static-zone checks (cave window,
 /// scratch zone, demand_page reservations) all reject. This covers
 /// dynamically-allocated user pages — currently the brk-extended
 /// region above 0x800000+0x40000 — which sys_brk installs with
 /// EL0_RW perms in iter 18 but doesn't register anywhere static.
-///
+// /
 /// Cost: ~6 memory loads in the worst case (L1+L2+L3 for start and
 /// end). Cheap enough to call on every is_user_range fallback.
 fn pages_are_user_accessible(start: usize, end: usize) -> bool {
@@ -99,14 +99,14 @@ fn page_is_el0_rw(l1_phys: u64, va: usize) -> bool {
 
 /// True if `[p, p+size)` is entirely inside the user-space range and
 /// doesn't wrap.
-///
+// /
 /// V3 / NEW-SYS-001: when a cave is actively mounted (mmu published a
 /// non-zero window), we tighten the check to the cave's actual virtual
 /// window instead of the coarse legacy range. This makes cross-cave
 /// pointer abuse impossible from the syscall layer — a cave with
 /// virt_base=0x10000000 cannot pass pointer 0x05000000 (legacy window)
 /// because it falls outside its own L2_low mapping.
-///
+// /
 /// Caves with no published window (primary/ash path) fall back to the
 /// legacy [0x1000, 0x4000_0000) window; they have no per-cave isolation
 /// to enforce.
@@ -126,7 +126,7 @@ pub fn is_user_range(p: usize, size: usize) -> bool {
         if p >= active_start && end <= active_end {
             return true;
         }
-        // STUMP #161 iter 15: glibc-scratch zone at 0x800000–0x840000.
+        // iter 15: glibc-scratch zone at 0x800000–0x840000.
         // signal::install_trampoline pre-maps 64 RW pages here in every
         // cave because mimalloc/glibc init writes a zero byte to
         // 0x800000 during startup. Once mimalloc claims the region as
@@ -151,7 +151,7 @@ pub fn is_user_range(p: usize, size: usize) -> bool {
         if crate::batcave::linux::demand_page::is_in_active_reservation(p, size) {
             return true;
         }
-        // STUMP #161 iter 25: brk-extended region (above the 0x800000
+        // iter 25: brk-extended region (above the 0x800000
         // scratch zone) and any other dynamically-allocated user
         // pages aren't in the cave window OR the scratch zone OR a
         // registered reservation. But they ARE valid user-RW pages —

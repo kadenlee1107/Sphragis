@@ -2,15 +2,15 @@
 // Pure Rust, zero dependencies. Used for HTTPS in the secure network pipeline.
 //
 // TLS 1.3 simplified flow:
-//   Client → ServerHello (with key_share)
-//   Server → ServerHello (with key_share) + encrypted extensions + certificate + finished
-//   Client → Finished
-//   → Application data encrypted with derived keys
+// Client → ServerHello (with key_share)
+// Server → ServerHello (with key_share) + encrypted extensions + certificate + finished
+// Client → Finished
+// → Application data encrypted with derived keys
 //
 // Crypto primitives:
-//   - X25519 for key exchange (Curve25519 ECDH)
-//   - HKDF-SHA256 for key derivation
-//   - AES-256-GCM for record encryption (using our existing AES)
+// X25519 for key exchange (Curve25519 ECDH)
+// HKDF-SHA256 for key derivation
+// AES-256-GCM for record encryption (using our existing AES)
 
 use crate::drivers::uart;
 
@@ -42,11 +42,11 @@ const X25519_MLKEM768: u16 = 0x11EC;
 /// classical X25519. When `true`, ClientHello includes BOTH entries
 /// and the server picks. When `false`, only X25519 is offered
 /// (identical to pre-integration behaviour).
-///
+// /
 /// Safe to flip — servers that don't understand 0x11EC MUST ignore it
 /// per RFC 8446's extensibility rules.
-///
-/// STUMP #94: was `const`. Promoted to AtomicBool so the renderer's
+// /
+/// was `const`. Promoted to AtomicBool so the renderer's
 /// fetch_https can disable the hybrid path for the duration of one
 /// fetch. Our hybrid key-derivation has a real-world bug that
 /// surfaces as "handshake record auth failed" against major HTTPS
@@ -247,7 +247,7 @@ fn session_mut(id: usize) -> &'static mut TlsSession {
 }
 
 /// Build a TLS 1.3 ClientHello message.
-///
+// /
 /// V8-ROOT-1 / V8-IRQ-#12: random + X25519 keypair + ClientHello write
 /// + session-state init are one critical section. Without IRQ mask, a
 /// timer preempt mid-init lets a concurrent recv_app_data observe a
@@ -386,11 +386,11 @@ pub fn build_client_hello(pcb_id: usize, hostname: &str, buf: &mut [u8]) -> usiz
     // Server picks one based on its supported_groups intersection.
     //
     // Size accounting (hybrid branch):
-    //   entry = 2 group + 2 len + 1216 payload = 1220 B per hybrid
-    //   X25519 entry      = 2 + 2 + 32 = 36 B
-    //   client_key_share  = 36 + 1220 = 1256 B
-    //   extension payload = 2 list_len + 1256 = 1258 B
-    //   extension         = 2 type + 2 len + 1258 = 1262 B
+    // entry = 2 group + 2 len + 1216 payload = 1220 B per hybrid
+    // X25519 entry = 2 + 2 + 32 = 36 B
+    // client_key_share = 36 + 1220 = 1256 B
+    // extension payload = 2 list_len + 1256 = 1258 B
+    // extension = 2 type + 2 len + 1258 = 1262 B
     //
     // This is why the ClientHello buffer in `handshake_inner` was bumped
     // from 512 → 4096.
@@ -469,13 +469,13 @@ pub fn process_server_hello(pcb_id: usize, data: &[u8]) -> Result<(), &'static s
     let msg_type = content[0];
     if msg_type == SERVER_HELLO {
         // ServerHello layout (after handshake header):
-        //   [0] msg_type (0x02)
-        //   [1..4] length (3 bytes)
-        //   [4..6] version (0x0303)
-        //   [6..38] server_random (32 bytes)
-        //   [38] session_id_length
-        //   [39..39+sid_len] session_id
-        //   then: cipher_suite (2), compression (1), extensions_length (2), extensions...
+        // [0] msg_type (0x02)
+        // [1..4] length (3 bytes)
+        // [4..6] version (0x0303)
+        // [6..38] server_random (32 bytes)
+        // [38] session_id_length
+        // [39..39+sid_len] session_id
+        // then: cipher_suite (2), compression (1), extensions_length (2), extensions...
 
         if content.len() < 39 { return Err("SH too short"); }
 
@@ -1252,7 +1252,7 @@ pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
 }
 
 /// Receive and decrypt application data from a TLS record.
-///
+// /
 /// NET2-006 / NEW-CRYPTO-023 fix: the previous implementation called
 /// `recv_app_data(buf)` recursively on ChangeCipherSpec records (and the
 /// 16 KB `record` / `decrypted` stack frames compounded with every call).
@@ -1357,9 +1357,9 @@ pub fn recv_app_data_pcb(pcb_id: usize, buf: &mut [u8]) -> Result<usize, &'stati
     // Decrypt with AUTHENTICATION (ROOT-4).
     //
     // TLS 1.3 AEAD additional_data is the 5-byte record header:
-    // type(1) || legacy_version(2) || length(2)  (RFC 8446 §5.2).
+    // type(1) || legacy_version(2) || length(2) (RFC 8446 §5.2).
     // The wire format for the ciphertext payload is
-    //   [ciphertext || 16-byte tag]
+    // [ciphertext || 16-byte tag]
     // where the LAST inner byte of the plaintext is the content type
     // (inner record type), optionally preceded by zero padding.
     //
@@ -1462,7 +1462,7 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
 /// slot 0) so a cave switch wipes session keys, SPKI, expected_hostname,
 /// and cert-pinning state inherited from a prior tenant. Called from
 /// cave::enter on every switch.
-///
+// /
 /// V8-ROOT-1: wrap the 64-session wipe in a critical section. A timer
 /// IRQ mid-loop would leave sessions 0..N cleared and N..64 live. The
 /// caller (cave::enter) already holds an IrqGuard, so this is nestable.
@@ -1500,7 +1500,7 @@ pub fn reset_all_sessions() {
 /// V8-ROOT-6: panic-handler-only secret wipe. Uses volatile writes so the
 /// compiler cannot DCE, no locks (panic handler may be holding them).
 /// Best-effort. Zeroes the derived secrets in every PCB session slot.
-///
+// /
 /// # Safety
 /// May only be called from the panic handler (via wipe::emergency_wipe).
 pub unsafe fn panic_wipe() {
@@ -1579,7 +1579,7 @@ pub fn close() {
 // ─── X25519 Key Exchange (Curve25519) ───
 
 /// Generate X25519 keypair via the SHA-chained DRBG.
-///
+// /
 /// NEW-CRYPTO-005: the previous implementation read `cntpct_el0` directly,
 /// giving a passive observer who could estimate boot time ~2^20 candidate
 /// scalars. The DRBG in `crate::crypto::rng` chains SHA-256 over 8 spaced
@@ -1837,7 +1837,7 @@ fn field_cswap(a: &mut Fe, b: &mut Fe, swap: u64) {
 }
 
 /// V8-ROOT-12: constant-time field reduction modulo p = 2^255 - 19.
-///
+// /
 /// The previous implementation had TWO timing leaks that directly expose
 /// private-scalar bits to a co-resident attacker (browser JS reading
 /// cntpct_el0): (1) nested if/else early-exit over the limb-by-limb

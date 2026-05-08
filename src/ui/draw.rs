@@ -1,7 +1,7 @@
 // Bat_OS — shared paint primitives.
 //
-// Extracted from `security/boot_screen.rs` (STUMP #116) so the desktop
-// chrome (STUMP #120) can re-use the same scanline polygon-fill + line
+// Extracted from `security/boot_screen.rs` so the desktop
+// chrome can re-use the same scanline polygon-fill + line
 // rasterizer for the title-bar bat glyph. Anything else that needs
 // vector-ish drawing on top of `gpu::fill_rect` should live here.
 

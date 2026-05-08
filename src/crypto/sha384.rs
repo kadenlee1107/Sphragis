@@ -1,11 +1,11 @@
 // Bat_OS — SHA-384 / HMAC-SHA-384 / HKDF-SHA-384
 //
-// STUMP #159: parallel module to `sha256.rs` for the TLS 1.3
+// parallel module to `sha256.rs` for the TLS 1.3
 // `TLS_AES_256_GCM_SHA384` cipher suite. Same API surface, but:
-//   - hash output: 48 bytes (vs 32 for SHA-256)
-//   - HMAC block:  128 bytes (vs 64 — SHA-384 inherits SHA-512's
-//                  block size)
-//   - HKDF-Extract / Expand-Label: produce 48-byte secrets
+// hash output: 48 bytes (vs 32 for SHA-256)
+// HMAC block: 128 bytes (vs 64 — SHA-384 inherits SHA-512's
+// block size)
+// HKDF-Extract / Expand-Label: produce 48-byte secrets
 //
 // Backed by RustCrypto's audited `sha2::Sha384`. We hand-roll HMAC
 // (standard ipad/opad construction) + HKDF (RFC 5869) on top so we
@@ -30,7 +30,7 @@ pub fn hash(data: &[u8]) -> [u8; 48] {
 }
 
 /// HMAC-SHA384(key, message) → 48 bytes.
-///
+// /
 /// Block size for SHA-384 is 128 bytes (same as SHA-512), so ipad/opad
 /// are 128-byte buffers. This is the only structural difference from
 /// HMAC-SHA-256 (which uses 64-byte ipad/opad).

@@ -79,7 +79,7 @@ static mut CTRL_HELD: bool = false;
 static mut SHIFT_HELD: bool = false;
 static mut ALT_HELD: bool = false;
 
-// STUMP #119: Caps Lock is a TOGGLE, not a held modifier. Each
+// Caps Lock is a TOGGLE, not a held modifier. Each
 // KEY_CAPSLOCK DOWN event flips the state. We expose `caps_active()`
 // so the lock screen can render an honest "CAPS ON / OFF" indicator
 // instead of the static label the design mocked up.
@@ -94,7 +94,7 @@ const KEY_LEFTALT: u16 = 56;
 const KEY_RIGHTALT: u16 = 100;
 const KEY_CAPSLOCK: u16 = 58;
 const KEY_TAB: u16 = 15;
-// STUMP #130: arrow keys aren't in KEYMAP (which only covers ASCII
+// arrow keys aren't in KEYMAP (which only covers ASCII
 // 32-126). Surface them as bytes 0x90..0x93 in the keystroke ring.
 // 0x80 was already taken by Option+Tab. Apps that want arrow nav
 // match these constants.
@@ -106,7 +106,7 @@ pub const KEY_ARROW_UP:    u8 = 0x90;
 pub const KEY_ARROW_DOWN:  u8 = 0x91;
 pub const KEY_ARROW_LEFT:  u8 = 0x92;
 pub const KEY_ARROW_RIGHT: u8 = 0x93;
-// STUMP #131: shift+arrow for selection extension.
+// shift+arrow for selection extension.
 pub const KEY_SHIFT_ARROW_UP:    u8 = 0x94;
 pub const KEY_SHIFT_ARROW_DOWN:  u8 = 0x95;
 pub const KEY_SHIFT_ARROW_LEFT:  u8 = 0x96;
@@ -207,7 +207,7 @@ pub fn poll() {
                     KEY_LEFTCTRL | KEY_RIGHTCTRL => { CTRL_HELD = value == 1; }
                     KEY_LEFTSHIFT | KEY_RIGHTSHIFT => { SHIFT_HELD = value == 1; }
                     KEY_LEFTALT | KEY_RIGHTALT => { ALT_HELD = value == 1; }
-                    // STUMP #119: caps-lock is a press-to-toggle key,
+                    // caps-lock is a press-to-toggle key,
                     // not held. Flip on DOWN only; ignore UP.
                     KEY_CAPSLOCK => {
                         if value == 1 { CAPS_LOCK_ON = !CAPS_LOCK_ON; }
@@ -228,7 +228,7 @@ pub fn poll() {
                         device.notify(0);
                         continue;
                     }
-                    // STUMP #130/#131: arrows → 0x90..0x93,
+                    // /#131: arrows → 0x90..0x93,
                     // shift+arrows → 0x94..0x97 (for selection).
                     let shifted = SHIFT_HELD;
                     let arrow = match code {
@@ -255,7 +255,7 @@ pub fn poll() {
                             if CTRL_HELD && ch >= b'a' && ch <= b'z' {
                                 ch = ch - b'a' + 1;
                             } else {
-                                // STUMP #119: caps lock XORs with shift
+                                // caps lock XORs with shift
                                 // for alpha keys (so caps+shift cancels
                                 // out, like every other OS). Number-row
                                 // symbols are SHIFT-only — caps lock

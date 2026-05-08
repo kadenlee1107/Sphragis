@@ -62,7 +62,7 @@ fn get_device() -> VirtioMmio {
 }
 
 fn gpu_cmd<T: Copy>(cmd: &T) -> u32 {
-    // 🎯 STUMP #61: bail if the GPU never initialized. Without this
+    // bail if the GPU never initialized. Without this
     // guard, callers like `console::putc` → `gpu::flush` → `gpu_cmd`
     // dereference a null Virtqueue pointer and the kernel does
     // millions of safe_read16/safe_write16 ops on garbage memory.
