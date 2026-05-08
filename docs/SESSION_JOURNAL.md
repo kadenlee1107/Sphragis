@@ -11,6 +11,54 @@ end of a session.
 
 ---
 
+## 2026-05-08 (squeaky-clean Phase 7) — Mac — 🎯 0 warnings, pinned nightly
+
+**Seventh phase of the squeaky-clean pass.** Pins a specific nightly
+toolchain so `-Zfixed-x18` is available. Drops the last unactionable
+build warning (the rust-lang/rust#116344 deprecation).
+
+### What changed
+
+- **`rust-toolchain.toml`** added, pinning to
+  `nightly-2026-05-06`. The pin includes a `# Bump procedure` note
+  in the file: don't auto-upgrade — every bump needs a smoke run.
+- **`.cargo/config.toml`** — `-C target-feature=+reserve-x18` →
+  `-Zfixed-x18`. The deprecated rustflag is gone.
+
+### Why nightly
+
+Two reasons, both pre-existing:
+
+1. `-Zfixed-x18` (the modern x18-reservation flag) is nightly-only.
+   Bat_OS uses `x18` for per-cave bookkeeping and must keep the
+   compiler off it; `+reserve-x18` was rust-deprecated.
+2. `[unstable] build-std = ["core", "alloc"]` in
+   `.cargo/config.toml` was already in use. On stable that worked
+   by accident; on nightly it's officially supported.
+
+The pin makes both explicit and reproducible.
+
+### Verification
+
+- `cargo build --release --target aarch64-unknown-none --features gicv3` — **0 warnings** (down from 1)
+- `cargo check --target aarch64-unknown-none --features gicv3` — 0 warnings
+- `qemu_selftests_smoke.py` — all 6 sub-tests PASS
+- `qemu_https_smoke.py` — `200 OK` from `pq.cloudflareresearch.com`,
+  hybrid PQ on, `body-bytes=6264`. Real HTTPS still works.
+
+### Diff scale
+
+- 1 file added (`rust-toolchain.toml`)
+- 1 file modified (`.cargo/config.toml` — single rustflag swap +
+  comment update)
+
+### Next
+
+Phase 8: clippy. Run `cargo clippy` and address what's worth
+addressing, allow what's stylistic.
+
+---
+
 ## 2026-05-08 (squeaky-clean Phase 6) — Mac — 💥 unwrap audit: every panic site has a reason
 
 **Sixth phase of the squeaky-clean pass.** 15 `.unwrap()` call

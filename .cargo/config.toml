@@ -2,13 +2,10 @@
 target = "aarch64-unknown-none"
 
 [target.aarch64-unknown-none]
-# `-C target-feature=+reserve-x18` is rust-deprecated (rust-lang#116344) in
-# favour of `-Zfixed-x18`, but `-Zfixed-x18` requires nightly. We're on stable
-# (rust-toolchain matches the system default — see rustup show), so we keep the
-# deprecated flag and accept the one warning rustc prints. Migrate when we move
-# to a nightly-pinned toolchain (separate effort: many `[unstable]` flags need
-# review at the same time).
-rustflags = ["-C", "link-arg=-Tlinker.ld", "-C", "target-feature=+reserve-x18"]
+# `-Zfixed-x18` (nightly only) replaces the rust-deprecated
+# `-C target-feature=+reserve-x18` per rust-lang/rust#116344. Bat_OS
+# pins a nightly via `rust-toolchain.toml`, so we get the modern flag.
+rustflags = ["-C", "link-arg=-Tlinker.ld", "-Zfixed-x18"]
 
 [unstable]
 build-std = ["core", "alloc"]
