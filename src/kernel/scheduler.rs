@@ -13,8 +13,11 @@ unsafe extern "C" {
 /// Called on every timer tick from the interrupt handler.
 pub fn tick() {
     // Drain up to DRAIN_CHUNK bytes from the BatCave stdio ring to the UART.
-    // Decouples Chromium's verbose stderr from PL011 back-pressure.
+    // Decouples verbose stderr from PL011 back-pressure.
     crate::batcave::linux::stdio_ring::drain_to_uart();
+    // Wake any thread whose deadline has passed. Bounded O(MAX_THREADS)
+    // per tick. See DESIGN_SCHEDULER_BLOCK_ON.md decision #4.
+    crate::batcave::linux::threads::wake_expired_deadlines();
     schedule();
 }
 

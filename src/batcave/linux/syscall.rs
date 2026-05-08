@@ -1076,22 +1076,16 @@ fn sys_nanosleep(args: [u64; 6]) -> i64 {
     let target_ticks = secs_capped.saturating_mul(freq)
         .saturating_add(nsecs_capped.saturating_mul(freq) / 1_000_000_000);
 
-    // NEW-DOS-010/014/016/019 fix: yield to the scheduler instead of burning
-    // CPU in a spin-loop. A cave that nanosleep()s for 30 s used to pin the
-    // core; now co-scheduled caves get a slice via threads::schedule().
-    // We still check the timer every ~100 iterations so wakeup latency stays
-    // sub-ms on a lightly loaded system.
-    let mut it = 0u32;
-    loop {
-        let now: u64;
-        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
-        if now.wrapping_sub(start) >= target_ticks { break; }
-        it = it.wrapping_add(1);
-        if it % 256 == 0 {
-            super::threads::schedule();
-        } else {
-            core::hint::spin_loop();
-        }
+    // Park-on-deadline: compute absolute cntpct_el0 deadline once, then
+    // mark blocked + schedule until the timer-tick wake pass observes
+    // our deadline has passed. Loop on the deadline check defends against
+    // spurious wakes (force-wake-on-deadlock STUMP #63, future signal
+    // delivery, etc.) — see DESIGN_SCHEDULER_BLOCK_ON.md.
+    let deadline_ticks = start.saturating_add(target_ticks);
+    while super::threads::cntpct_el0() < deadline_ticks {
+        super::threads::park_current(
+            super::threads::BlockReason::Nanosleep { deadline_ticks },
+        );
     }
     0
 }

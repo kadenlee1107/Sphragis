@@ -295,8 +295,8 @@ impl SavedRegs {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BlockReason {
     FutexWait { uaddr: u64, val: u32 },
-    EpollWait { epfd: i32, timeout_ms: i32 },
-    Nanosleep { deadline_ns: u64 },
+    EpollWait { epfd: i32, deadline_ticks: u64 },  // 0 = infinite (epoll-only sentinel)
+    Nanosleep { deadline_ticks: u64 },             // always concrete; 0 = invalid
     Join { target_tid: u32 },
     IoWait,
 }
@@ -1288,9 +1288,9 @@ pub fn schedule() {
                     if let Some((wtid, reason)) = woken {
                         let (a1, a2) = match reason {
                             BlockReason::FutexWait { uaddr, val } => (uaddr, val as u64),
-                            BlockReason::EpollWait { epfd, timeout_ms } =>
-                                (epfd as u64, timeout_ms as u64),
-                            BlockReason::Nanosleep { deadline_ns } => (deadline_ns, 0),
+                            BlockReason::EpollWait { epfd, deadline_ticks } =>
+                                (deadline_ticks, epfd as i64 as u64),
+                            BlockReason::Nanosleep { deadline_ticks } => (deadline_ticks, 0),
                             BlockReason::Join { target_tid } => (target_tid as u64, 0),
                             BlockReason::IoWait => (0, 0),
                         };
@@ -1558,6 +1558,152 @@ pub fn wake_thread(tid: u32) -> bool {
         }
         false
     })
+}
+
+// ─── Time helpers (cntpct_el0 / cntfrq_el0) ──────────────────────────────
+//
+// Bat_OS uses ARMv8 generic timer ticks as the canonical deadline unit.
+// All deadlines stored in BlockReason are absolute cntpct_el0 values.
+// See DESIGN_SCHEDULER_BLOCK_ON.md decision #2.
+
+/// Read the ARM generic timer's current physical count (EL0).
+/// Returns absolute ticks since boot (or wherever the firmware reset it).
+#[inline]
+pub fn cntpct_el0() -> u64 {
+    let v: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v); }
+    v
+}
+
+/// Read the ARM generic timer's frequency in Hz. Constant per boot.
+#[inline]
+fn cntfrq_el0() -> u64 {
+    let v: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) v); }
+    v
+}
+
+/// Convert milliseconds to cntpct_el0 ticks using cntfrq_el0.
+/// Multiply-then-divide preserves sub-1000Hz precision.
+/// Saturating mul prevents overflow panic on absurd inputs.
+#[inline]
+pub fn ms_to_ticks(ms: u32) -> u64 {
+    let freq = cntfrq_el0();
+    (ms as u64).saturating_mul(freq) / 1000
+}
+
+/// Returns `true` iff the current thread's slot in the table exists AND
+/// its state is ThreadState::Blocked(_). Reads under the table lock.
+/// Returns `false` (non-blocking) if the current slot is missing — the
+/// caller (park_current) treats that as "not blocked" and falls through
+/// gracefully rather than spinning forever.
+pub fn current_thread_blocked() -> bool {
+    let me = current_tid();
+    with_table(|t| {
+        let Some(idx) = slot_of(t, me) else { return false; };
+        matches!(t[idx].state, ThreadState::Blocked(_))
+    })
+}
+
+/// Park the current thread on `reason`. Does NOT return while the
+/// calling thread's state is ThreadState::Blocked(_). Loops between
+/// `schedule()` (which switches away if anyone is Runnable) and `wfi`
+/// (which idles until any interrupt fires; the timer IRQ runs
+/// wake_expired_deadlines, which may flip our state Blocked→Runnable).
+///
+/// Lock + IRQ ordering invariants (see DESIGN_SCHEDULER_BLOCK_ON.md
+/// decision #8):
+///
+///   - The threads-table lock is NEVER held across `wfi`.
+///     mark_current_blocked takes the lock briefly, releases it.
+///     schedule() takes its own lock internally. The wfi runs lock-free.
+///   - Interrupts are NEVER masked across `wfi`. mark_current_blocked
+///     may briefly take an IrqGuard for atomicity but releases it before
+///     schedule(). The wfi must execute with interrupts enabled or the
+///     timer IRQ can't fire and deadline-bearing sleepers never wake.
+pub fn park_current(reason: BlockReason) {
+    mark_current_blocked(reason);
+    loop {
+        // schedule() switches to another Runnable thread if any. When
+        // control returns here, either:
+        //   * Another thread ran, was eventually rescheduled away, and
+        //     a waker (event-driven via wake_thread / wake_epoll_waiters,
+        //     or deadline-driven via wake_expired_deadlines) flipped our
+        //     state Blocked→Runnable. We resume; check below exits loop.
+        //   * No other Runnable thread existed. schedule() returned
+        //     immediately. Our state is still Blocked. Drop to wfi and
+        //     wait for any interrupt; on resume re-check state.
+        schedule();
+        if !current_thread_blocked() { break; }
+        // Still blocked, no one else to run. Idle until the next IRQ.
+        // Interrupts must be enabled here (see invariant above).
+        unsafe { core::arch::asm!("wfi"); }
+    }
+}
+
+/// Walk the threads table for Blocked threads whose BlockReason carries
+/// an expired deadline_ticks; transition each to Runnable. Bounded
+/// O(MAX_THREADS=256) per call.
+///
+/// Called from kernel::scheduler::tick() once per timer IRQ. The pass
+/// is the only waker for sys_nanosleep and the deadline-driven half of
+/// epoll_pwait. (Event-driven epoll wakes go through wake_epoll_waiters.)
+///
+/// Futex's per-WaitSlot deadline lives in futex.rs, not BlockReason, so
+/// this pass does not see it. Futex's existing post-resume re-check loop
+/// handles its own timeouts (see DESIGN_SCHEDULER_BLOCK_ON.md decision #5).
+pub fn wake_expired_deadlines() {
+    let now = cntpct_el0();
+    with_table(|t| {
+        for slot in t.iter_mut() {
+            let should_wake = match slot.state {
+                ThreadState::Blocked(BlockReason::EpollWait { deadline_ticks, .. })
+                    if deadline_ticks != 0 && now >= deadline_ticks => true,
+                ThreadState::Blocked(BlockReason::Nanosleep { deadline_ticks })
+                    if now >= deadline_ticks => true,
+                _ => false,
+            };
+            if should_wake {
+                slot.state = ThreadState::Runnable;
+            }
+        }
+    });
+}
+
+/// Walk the threads table for any thread Blocked on EpollWait with the
+/// matching epfd; transition each to Runnable. Bounded O(MAX_THREADS).
+///
+/// Used by cmd_scheduler_selftest for deterministic per-epfd wake
+/// verification. `mark_ready` uses the broader `wake_all_epoll_waiters`
+/// because at the watched-fd layer we only know which epoll instance
+/// matched, not the epfd that the parked thread used.
+pub fn wake_epoll_waiters(epfd: i32) {
+    with_table(|t| {
+        for slot in t.iter_mut() {
+            if let ThreadState::Blocked(BlockReason::EpollWait { epfd: e, .. }) = slot.state {
+                if e == epfd {
+                    slot.state = ThreadState::Runnable;
+                }
+            }
+        }
+    });
+}
+
+/// Wake every thread parked in BlockReason::EpollWait, regardless of
+/// epfd. Called by epoll::mark_ready after flipping a ready bit — at
+/// that layer we know an event arrived but not which epfd was parked
+/// on this instance. False-positive wakes (a thread waiting on a
+/// different epfd) re-park after one drain_ready loop, costing a few
+/// extra cycles but never leaving an event-wait waiter stuck forever.
+/// Bounded O(MAX_THREADS).
+pub fn wake_all_epoll_waiters() {
+    with_table(|t| {
+        for slot in t.iter_mut() {
+            if let ThreadState::Blocked(BlockReason::EpollWait { .. }) = slot.state {
+                slot.state = ThreadState::Runnable;
+            }
+        }
+    });
 }
 
 /// Wake up to `n` threads blocked in FutexWait on `uaddr`. Returns count woken.
@@ -1858,3 +2004,49 @@ pub fn auto_dump_if_idle() {
 //   - stack free-on-exit
 //
 // Not wired into syscall.rs at all — that's for the human.
+
+// ─── Test helpers (feature-gated) ────────────────────────────────────────
+//
+// Operate only on Free slots so they never touch real running threads.
+// Used by cmd_scheduler_selftest in src/ui/shell.rs and exercised in
+// scripts/qemu_selftests_smoke.py. Not exposed in production builds.
+//
+// See DESIGN_SCHEDULER_BLOCK_ON.md "Test helpers" section.
+
+#[cfg(feature = "selftest-on-boot")]
+pub(crate) fn test_install_blocked(reason: BlockReason) -> Option<usize> {
+    // Find a Free slot, mark it Blocked with the given reason, return
+    // its index. None if the table is full.
+    //
+    // Snapshot/free invariant: this function operates ONLY on Free
+    // slots. It does NOT mutate any other slot's fields. test_release_slot
+    // restores the same Free invariant.
+    with_table(|t| {
+        for (i, slot) in t.iter_mut().enumerate() {
+            if slot.state == ThreadState::Free {
+                slot.state = ThreadState::Blocked(reason);
+                return Some(i);
+            }
+        }
+        None
+    })
+}
+
+#[cfg(feature = "selftest-on-boot")]
+pub(crate) fn test_inspect_state(slot: usize) -> Option<ThreadState> {
+    with_table(|t| {
+        if slot >= t.len() { return None; }
+        Some(t[slot].state)
+    })
+}
+
+#[cfg(feature = "selftest-on-boot")]
+pub(crate) fn test_release_slot(slot: usize) {
+    // Reset the slot to Free. Idempotent. Does not touch tid/regs/wait
+    // metadata — the slot was Free when test_install_blocked grabbed it,
+    // so those fields are already at Free defaults.
+    with_table(|t| {
+        if slot >= t.len() { return; }
+        t[slot].state = ThreadState::Free;
+    });
+}

@@ -30,19 +30,17 @@
 //   - All shared state uses `core::sync::atomic` types so the compiler will
 //     not reorder loads across publication.
 //
-// Blocking model (IMPORTANT TODO):
-//   Bat_OS does have a priority-preemptive scheduler (see kernel/scheduler.rs)
-//   but the Linux-compat runner currently does not mark tasks as Blocked /
-//   wake them via the scheduler. Until that integration lands, FUTEX_WAIT
-//   falls back to a "spin with arch-timer deadline + yield hint" loop:
-//     - we publish the waiter into the hash table,
-//     - we spin-read an atomic `woken` flag on the slot,
-//     - on each iteration we re-check the user's memory against `val` (so
-//       a missed FUTEX_WAKE doesn't livelock us),
-//     - we honour the timeout via cntpct_el0.
-//   When the scheduler gains a real Blocked state, replace the spin body in
-//   `park_slot` with `scheduler::block_on(slot)` and have `futex_wake` call
-//   `scheduler::unblock(tid)`.
+// Blocking model:
+//   FUTEX_WAIT publishes the waiter into the hash table, then enters a
+//   block-and-resume loop in `park_slot`: it marks the current thread
+//   Blocked (BlockReason::FutexWait), calls schedule() to yield, and
+//   re-checks the woken flag + deadline on each resume. FUTEX_WAKE
+//   transitions matching threads Runnable via wake_thread(tid).
+//
+//   Futex's deadline lives on its WaitSlot, not on BlockReason — the
+//   wake_expired_deadlines tick pass (DESIGN_SCHEDULER_BLOCK_ON.md)
+//   does not see it. Futex's resume-loop re-check handles its own
+//   timeouts; unifying that into BlockReason is a future thread.
 //
 // Error codes (Linux ABI):
 //   -EAGAIN    = -11   value at uaddr didn't match expected val
@@ -268,12 +266,12 @@ fn release(b: &Bucket, slot: usize) {
     s.bitset.store(0xFFFF_FFFF, Ordering::Relaxed);
 }
 
-// ─── Park loop (the actual "block") ──────────────────────────────────────
+// ─── Park loop ───────────────────────────────────────────────────────────
 //
-// TODO(sched): replace this spin with a real scheduler.block_on(slot) once
-// the Linux runner marks tasks Blocked and kicks them from futex_wake. The
-// current implementation is correct (no lost wakeups, honours timeout) but
-// wastes CPU.
+// Block-and-resume: mark the current thread Blocked
+// (BlockReason::FutexWait), call schedule() to yield, re-check the woken
+// flag + deadline on each resume. FUTEX_WAKE flips matching slots'
+// woken bits and wakes their threads via wake_thread(tid).
 fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32) -> i64 {
     let s = &b.slots[slot];
     let deadline = s.deadline_ticks.load(Ordering::Relaxed);
@@ -721,9 +719,11 @@ fn requeue_impl(
                     // the matching uaddr field. The enqueued shadow slot
                     // is immediately released.
                     //
-                    // TODO(sched): once waiters truly block in the
-                    // scheduler (not in the slot), migrate the blocked
-                    // task onto the new bucket's slot and release the old.
+                    // Future improvement: migrate the blocked task to the
+                    // new bucket's slot rather than relying on the shadow
+                    // entry. Out of scope for the block-on rewrite (the
+                    // current shadow approach is correct, just slightly
+                    // less efficient on FUTEX_REQUEUE-heavy workloads).
                     release(b2, _new_idx);
                     s.uaddr.store(uaddr2, Ordering::Release);
                     requeued += 1;

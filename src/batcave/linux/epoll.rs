@@ -478,19 +478,17 @@ pub fn epoll_pwait(
         None => return EBADF,
     };
 
-    // Cooperative spin loop. Each iteration: scan interests for ready
-    // bits, copy them out, return. If nothing is ready, yield and
-    // maybe loop (depending on timeout).
-    //
-    // With no timer subsystem we approximate `timeout_ms` by counting
-    // spin iterations — roughly 10µs each on the current runner. A
-    // proper implementation will block on a waitqueue once the
-    // scheduler grows timers.
-    const SPIN_PER_MS: i32 = 100;
-    let mut remaining: i64 = match timeout {
-        0 => 0,
-        t if t < 0 => i64::MAX, // indefinite
-        t => (t as i64) * SPIN_PER_MS as i64,
+    // Compute absolute deadline once. timeout==0 polls and returns
+    // (no park). timeout<0 sets deadline_ticks=0 (infinite sentinel).
+    // timeout>0 computes cntpct_el0 + ms_to_ticks(timeout).
+    // See DESIGN_SCHEDULER_BLOCK_ON.md.
+    let deadline_ticks: u64 = match timeout {
+        0 => {
+            return drain_ready(slot, events, maxevents as usize) as i64;
+        }
+        t if t < 0 => 0u64, // infinite
+        t => crate::batcave::linux::threads::cntpct_el0()
+            .saturating_add(crate::batcave::linux::threads::ms_to_ticks(t as u32)),
     };
 
     loop {
@@ -498,13 +496,21 @@ pub fn epoll_pwait(
         if n > 0 {
             return n as i64;
         }
-        if remaining <= 0 {
-            return 0; // timed out with no events
+        // deadline_ticks=0 means infinite — never times out.
+        if deadline_ticks != 0
+            && crate::batcave::linux::threads::cntpct_el0() >= deadline_ticks
+        {
+            return 0;
         }
-        // yield/wait hint — lets other cooperative tasks run and is a
-        // no-op on bare silicon if we're alone.
-        cooperative_yield();
-        remaining -= 1;
+        crate::batcave::linux::threads::park_current(
+            crate::batcave::linux::threads::BlockReason::EpollWait {
+                epfd,
+                deadline_ticks,
+            },
+        );
+        // park_current does not return while we're Blocked. On loop
+        // re-entry, drain_ready re-checks readiness and the deadline
+        // check above re-checks expiry.
     }
 }
 
@@ -630,6 +636,7 @@ pub fn mark_ready(fd: i32, new_events: u32) {
     if fd < 0 || new_events == 0 {
         return;
     }
+    let mut any_match = false;
     unsafe {
         let table = &mut *core::ptr::addr_of_mut!(INSTANCES);
         for inst in table.iter_mut() {
@@ -639,9 +646,16 @@ pub fn mark_ready(fd: i32, new_events: u32) {
             for entry in inst.interests.iter_mut() {
                 if entry.used && entry.fd == fd {
                     entry.ready |= new_events;
+                    any_match = true;
                 }
             }
         }
+    }
+    // Wake any parked epoll_pwait waiter so they re-check ready bits.
+    // False-positive wakes (different epfd) re-park after one
+    // drain_ready loop. See DESIGN_SCHEDULER_BLOCK_ON.md.
+    if any_match {
+        crate::batcave::linux::threads::wake_all_epoll_waiters();
     }
 }
 
@@ -689,19 +703,6 @@ pub fn notify_fd_closed(fd: i32) {
     }
 }
 
-// ─────────────────────── Low-level helpers ───────────────────────
-
-/// Cooperative yield. Calls into the BatCave thread scheduler so other
-/// runnable threads in this cave can make progress while we wait for
-/// an FD to become ready. Replaces the old asm-only `yield` hint which
-/// only nudged the CPU but did NOT switch threads — that meant a
-/// renderer thread spinning in epoll_pwait could starve the very
-/// browser thread that was supposed to write the eventfd that would
-/// wake it. Now each unsuccessful drain_ready hands the CPU back.
-#[inline(always)]
-fn cooperative_yield() {
-    crate::batcave::linux::threads::schedule();
-}
 
 // ─────────────────────── Debug / introspection ───────────────────────
 
@@ -737,10 +738,6 @@ pub fn active_instance_count() -> usize {
 //
 // TODO(kaden): `notify_fd_closed(fd)` must be called from sys_close in
 // syscall.rs BEFORE fd::close() runs, otherwise we leak stale interests.
-//
-// TODO(kaden): proper timeout support. Today we spin-count; once the
-// kernel grows a monotonic clock hook, read it at entry + compute a
-// real deadline instead of the SPIN_PER_MS heuristic.
 //
 // TODO(kaden): true edge-triggered semantics. Right now EPOLLET only
 // suppresses the post-delivery `ready` clear; a conformant impl also
