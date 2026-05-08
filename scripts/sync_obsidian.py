@@ -61,8 +61,14 @@ GEN    = VAULT / "_generated"
 # Scope: which trees to walk and how to treat them
 # ---------------------------------------------------------------------------
 
-# First-party trees — one .md per source file
+# First-party trees — one .md per source file (rich extraction)
 FIRST_PARTY_ROOTS = ["src", "scripts", "docs"]
+
+# Vendored trees — also one .md per source file, but with a lighter
+# template (path + role + "do not edit by hand" callout). Per the brief,
+# we keep coverage truly complete so search/backlinks resolve.
+# (ports/ was deleted in the no-browser pivot; remove if it returns.)
+VENDORED_PER_FILE_ROOTS = ["external", "boot_chain"]
 
 # Top-level files that become per-file notes under _generated/{group}/
 TOP_LEVEL = {
@@ -91,6 +97,19 @@ SKIP_DIRS = {
 }
 SKIP_FILES = {".DS_Store", ".autopilot-session-id", ".autopilot-session-started"}
 
+# Skip these extensions outright — build artifacts, binaries, images.
+# Keeping them out of the vault keeps search clean.
+SKIP_EXTS = {
+    ".d", ".o", ".obj", ".a", ".so", ".dylib", ".exe", ".dll",
+    ".rlib", ".rmeta", ".timestamp", ".pyc", ".pyo",
+    ".bin", ".img", ".dmg", ".iso",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
+    ".icns", ".ico",
+    ".woff", ".woff2", ".ttf", ".otf",
+    ".pdf", ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z",
+    ".mp4", ".mp3", ".wav",
+}
+
 # Source-file extensions we know how to introspect
 EXT_LANG = {
     ".rs":   "rust",
@@ -105,6 +124,15 @@ EXT_LANG = {
     ".yaml": "yaml",
     ".yml":  "yaml",
     ".json": "json",
+    ".c":    "c",
+    ".h":    "c-header",
+    ".cpp":  "cpp",
+    ".hpp":  "cpp-header",
+    ".cc":   "cpp",
+    ".hh":   "cpp-header",
+    ".xml":  "xml",
+    ".dts":  "device-tree",
+    ".dtsi": "device-tree",
 }
 
 # Anything else first-party gets a generic-file note (just metadata)
@@ -128,6 +156,7 @@ class FileFacts:
     related: list[str] = field(default_factory=list)  # cross-links to other repo files
     last_modified: str = ""     # iso date
     last_commit: str = ""       # short sha + message
+    vendored: bool = False      # if True, render with vendored template
 
 
 def _normalize_lede(s: str) -> str:
@@ -343,10 +372,75 @@ def extract_generic(text: str) -> dict:
     return {"lede": "", "public_api": [], "history": [], "related": []}
 
 
+def extract_c_like(text: str) -> dict:
+    """Lede extractor for C / C++ / asm / linker / device-tree.
+
+    Tries (in order):
+      1. Top-of-file ``/* ... */`` block — typical license/header banner
+      2. Consecutive ``//`` lines at top of file — modern C-family header
+      3. Leading ``# ... `` comment block — used by linker/device-tree (.dts)
+    """
+    facts: dict = {"lede": "", "public_api": [], "history": [], "related": []}
+
+    s = text.lstrip()
+    # 1. /* ... */ block
+    if s.startswith("/*"):
+        end = s.find("*/")
+        if end > 0:
+            block = s[2:end]
+            # strip leading ' * ' on each line
+            cleaned: list[str] = []
+            for ln in block.splitlines():
+                cleaned.append(ln.strip().lstrip("*").lstrip())
+            facts["lede"] = _normalize_lede("\n".join(cleaned))
+            return facts
+
+    # 2. consecutive // header
+    if s.startswith("//"):
+        header: list[str] = []
+        for line in s.splitlines():
+            ls = line.lstrip()
+            if ls.startswith("//"):
+                header.append(ls.lstrip("/").lstrip())
+                continue
+            if not ls.strip() and header:
+                header.append("")
+                continue
+            break
+        if header:
+            facts["lede"] = _normalize_lede("\n".join(header))
+            return facts
+
+    # 3. # banner (linker scripts, .dts)
+    if s.startswith("#") and not s.startswith("#!"):
+        header: list[str] = []
+        for line in s.splitlines():
+            ls = line.lstrip()
+            if ls.startswith("#"):
+                header.append(ls.lstrip("#").lstrip())
+                continue
+            if not ls.strip() and header:
+                header.append("")
+                continue
+            break
+        if header:
+            facts["lede"] = _normalize_lede("\n".join(header))
+            return facts
+
+    return facts
+
+
 EXTRACTORS = {
-    "rust":     extract_rust,
-    "python":   extract_python,
-    "markdown": extract_markdown,
+    "rust":           extract_rust,
+    "python":         extract_python,
+    "markdown":       extract_markdown,
+    "c":              extract_c_like,
+    "c-header":       extract_c_like,
+    "cpp":            extract_c_like,
+    "cpp-header":     extract_c_like,
+    "asm":            extract_c_like,
+    "linker-script":  extract_c_like,
+    "device-tree":    extract_c_like,
 }
 
 
@@ -363,26 +457,36 @@ def is_skipped(p: Path) -> bool:
     return False
 
 
+def _walk_tree(root: Path, vendored: bool, verbose: bool) -> list[FileFacts]:
+    """Walk one tree and return FileFacts for every file we want to note."""
+    out: list[FileFacts] = []
+    if not root.exists():
+        return out
+    for p in sorted(root.rglob("*")):
+        if not p.is_file() or is_skipped(p.relative_to(REPO)):
+            continue
+        ext = p.suffix.lower()
+        if ext in SKIP_EXTS:
+            continue
+        if ext == "":
+            # extension-less files: only allow well-known textual ones
+            if p.name not in {"Makefile", "Dockerfile", "LICENSE", "README"}:
+                continue
+        elif ext not in EXT_LANG:
+            # Unknown extension — skip rather than guess. Add to EXT_LANG to include.
+            continue
+        facts = build_facts(p)
+        facts.vendored = vendored
+        out.append(facts)
+    return out
+
+
 def collect_first_party(verbose: bool = False) -> list[FileFacts]:
     out: list[FileFacts] = []
 
-    # 1. recurse first-party roots
+    # 1. first-party trees (rich extraction)
     for root_name in FIRST_PARTY_ROOTS:
-        root = REPO / root_name
-        if not root.exists():
-            continue
-        for p in sorted(root.rglob("*")):
-            if not p.is_file() or is_skipped(p.relative_to(REPO)):
-                continue
-            ext = p.suffix.lower()
-            if ext not in EXT_LANG and ext != "":
-                continue
-            if ext == "":
-                # only allow Makefile and similar
-                if p.name not in {"Makefile"}:
-                    continue
-            facts = build_facts(p)
-            out.append(facts)
+        out.extend(_walk_tree(REPO / root_name, vendored=False, verbose=verbose))
 
     # 2. top-level explicit groups
     for group, names in TOP_LEVEL.items():
@@ -392,8 +496,15 @@ def collect_first_party(verbose: bool = False) -> list[FileFacts]:
                 facts = build_facts(p)
                 out.append(facts)
 
+    # 3. vendored trees — per-file but with vendored=True so render path
+    #    uses the lighter, "do not edit by hand" template.
+    for root_name in VENDORED_PER_FILE_ROOTS:
+        out.extend(_walk_tree(REPO / root_name, vendored=True, verbose=verbose))
+
     if verbose:
-        print(f"[obsidian-sync]   collected {len(out)} first-party files")
+        n_fp = sum(1 for f in out if not f.vendored)
+        n_v  = sum(1 for f in out if f.vendored)
+        print(f"[obsidian-sync]   collected {n_fp} first-party + {n_v} vendored files")
     return out
 
 
@@ -594,21 +705,32 @@ def fmt_related(facts: FileFacts, all_paths: set[Path]) -> str:
 def render_note(facts: FileFacts, all_paths: set[Path]) -> str:
     rel = facts.rel_path
     title = f"`{rel}`"
+    note_type = "vendored-file" if facts.vendored else "code-note"
     front = [
         "---",
-        "type: code-note",
+        f"type: {note_type}",
         f"path: {rel}",
         f"language: {facts.lang}",
         f"lines: {facts.line_count}",
         f"bytes: {facts.bytes_size}",
+        f"vendored: {str(facts.vendored).lower()}",
         f"generated: {datetime.now(timezone.utc).isoformat()}",
         "---",
         "",
         f"# {title}",
         "",
+    ]
+    if facts.vendored:
+        front.extend([
+            "> ⚠️ **Vendored snapshot — do not hand-edit.** This file came from "
+            "an upstream project and lives in the repo for reproducibility. "
+            "Upstream changes land via re-import, not in-place edits.",
+            "",
+        ])
+    front.extend([
         fmt_lede_editorial(facts),
         "",
-    ]
+    ])
     sections = [s for s in (
         fmt_public_api(facts),
         fmt_history(facts),
@@ -660,16 +782,8 @@ VENDORED_NOTES = {
         ),
         "do_not_edit": True,
     },
-    "ports": {
-        "title": "ports",
-        "what": "Vendored open-source libraries that pre-date the no-browser pivot (NetSurf, libcss, libdom, libhubbub, libnsfb, libnsutils, libparserutils, libwapcaplet).",
-        "why": (
-            "These were imported when the OS was going to ship its own browser. "
-            "After the no-browser pivot (2026-05-08, see `[[DESIGN_NO_BROWSER.md]]`), "
-            "this tree is dormant. It stays in-repo for archaeology — kernel does not link any of it."
-        ),
-        "do_not_edit": True,
-    },
+    # ports/ was deleted in the no-browser pivot. Stub left here so future
+    # imports can re-enable easily; the tree-renderer skips missing dirs.
     "boot_chain": {
         "title": "boot_chain",
         "what": "Boot-chain artifacts: m1n1 stage1 builds, kernel images, and the chainload scripts that move bytes from macOS Recovery into BAT OS's reset vector.",
