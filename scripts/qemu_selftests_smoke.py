@@ -129,9 +129,9 @@ def run_smoke() -> int:
             )
             print(f"[selftests-smoke] log: {LOG}", file=sys.stderr)
             return 1
-        if len(sched_pass) < 3:
+        if len(sched_pass) < 4:
             print(
-                f"[selftests-smoke] FAIL — expected 3 scheduler PASS sub-tests, got {len(sched_pass)}",
+                f"[selftests-smoke] FAIL — expected 4 scheduler PASS sub-tests, got {len(sched_pass)}",
                 file=sys.stderr,
             )
             print(f"[selftests-smoke] log: {LOG}", file=sys.stderr)
