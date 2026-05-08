@@ -129,19 +129,48 @@ pub fn run() -> ! {
                     console::prompt();
                 }
                 0x09 => {
-                    // Tab — autofill the command name. Only fires when
-                    // the cursor is still inside the first token (no
-                    // space typed yet); argument completion lands in a
-                    // follow-up PR.
-                    if cmd_buf[..cmd_len].contains(&b' ') {
-                        // Already past the command word; nothing to do
-                        // for v1.
+                    // Tab — autofill. Inside first token → command name;
+                    // past a space → argument completion based on
+                    // `arg_kind_for(cmd, arg_index)`.
+                    let line = unsafe {
+                        core::str::from_utf8_unchecked(&cmd_buf[..cmd_len])
+                    };
+                    let split = super::shell_completion::split_for_completion(line);
+                    if let Some((cmd, arg_index, current)) = split {
+                        let kind = super::shell_completion::arg_kind_for(cmd, arg_index);
+                        if kind != super::shell_completion::ArgKind::None {
+                            let r = super::shell_completion::complete_argument(kind, current);
+                            let ext = r.extension_bytes();
+                            let take = ext.len().min(MAX_CMD_LEN.saturating_sub(cmd_len + 1));
+                            for &b in &ext[..take] {
+                                cmd_buf[cmd_len] = b;
+                                cmd_len += 1;
+                                console::putc(b);
+                                platform::serial_putc(b);
+                            }
+                            if r.match_count > 1 {
+                                console::putc(b'\n');
+                                platform::serial_putc(b'\n');
+                                for i in 0..r.names_len as usize {
+                                    let name = r.name_at(i);
+                                    for &b in name {
+                                        console::putc(b);
+                                        platform::serial_putc(b);
+                                    }
+                                    console::puts("  ");
+                                    platform::serial_puts("  ");
+                                }
+                                console::putc(b'\n');
+                                platform::serial_putc(b'\n');
+                                console::prompt();
+                                for &b in &cmd_buf[..cmd_len] {
+                                    console::putc(b);
+                                    platform::serial_putc(b);
+                                }
+                            }
+                        }
                     } else {
-                        let prefix = unsafe {
-                            core::str::from_utf8_unchecked(&cmd_buf[..cmd_len])
-                        };
-                        let r = super::shell_completion::complete_command(prefix);
-                        // Extend the buffer + echo the appended bytes.
+                        let r = super::shell_completion::complete_command(line);
                         let ext = r.extension_bytes();
                         let take = ext.len().min(MAX_CMD_LEN.saturating_sub(cmd_len + 1));
                         for &b in &ext[..take] {
@@ -150,8 +179,6 @@ pub fn run() -> ! {
                             console::putc(b);
                             platform::serial_putc(b);
                         }
-                        // Multi-match: list candidates on a new line and
-                        // redraw the prompt with current input intact.
                         if r.match_count > 1 {
                             console::putc(b'\n');
                             platform::serial_putc(b'\n');

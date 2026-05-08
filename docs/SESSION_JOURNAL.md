@@ -11,6 +11,86 @@ end of a session.
 
 ---
 
+## 2026-05-08 (autofill C) — Mac — 📁 argument completion (files, caves, binaries)
+
+**Third and final autofill PR.** Past the first space, Tab now
+completes the argument from a runtime enumerator: BatFS files for
+`read`/`cat`/`rm`/`verify`/`edit`/`write`, registered cave names
+for the `cpol-*` and `cave-syscall-*` family, and the small
+hardcoded set of test binaries for `run`.
+
+### What landed
+
+- **`shell_completion::ArgKind`** — enum of completion sources
+  (`File`, `Cave`, `Binary`, `None`).
+- **`arg_kind_for(cmd, arg_index)`** — per-command lookup table
+  mapping a `(command, arg position)` pair to its argument kind.
+  Most commands only complete their first argument; multi-arg
+  grammars are hand-listed.
+- **`ArgCompletion`** — owned-bytes counterpart to `Completion`.
+  Stores the candidate list in a `[[u8; 64]; 32]` buffer (1.5 KB)
+  rather than borrowing `&'static str`, since runtime enumerators
+  hand back transient slices. Stack-allocated on the shell loop's
+  frame; fits.
+- **`complete_argument(kind, current)`** — calls the right
+  enumerator (`batfs::list`, `cave::list`, or the binary table),
+  filters by prefix, computes longest common extension.
+- **`split_for_completion(line)`** — tokenises the input buffer
+  into `(cmd, arg_index, current)`; returns `None` if the cursor
+  is still inside the command word (caller falls through to
+  `complete_command`).
+- Both shell input loops updated to consult `split_for_completion`
+  on Tab and route to the appropriate completion path.
+
+### Verification
+
+- `cargo build --release --target aarch64-unknown-none --features gicv3` — 0 warnings
+- `cargo clippy` — 0 warnings (one auto-fix for `'a` lifetime
+  elision)
+- New `scripts/qemu_shell_argcomplete_smoke.py` — pexpect harness
+  that creates 3 BatFS files via `write`, then drives 3 PASSes:
+  1. `read foob` + Tab → `read foobar` (unique)
+  2. `read fo` + Tab → lists `foobar` + `foozap` (multi)
+  3. `read ` + Tab → lists all files including `barbaz` (empty)
+- Regression: tab-completion smoke (PR A), history smoke (PR B),
+  selftest smoke — all PASS.
+
+### UX demo
+
+```
+bat_os > write foobar hello
+[fs] wrote 5 bytes to /foobar
+bat_os > write foozap world
+[fs] wrote 5 bytes to /foozap
+
+bat_os > read foob<TAB>
+bat_os > read foobar           ← unique completion
+
+bat_os > read fo<TAB>
+foobar  foozap
+bat_os > read foo              ← extended to common prefix
+```
+
+### Out of scope
+
+- SNI host name completion in `cpol-add-sni cave host port sni`
+  — would need an SNI enumerator from the policy table; deferred.
+- Anything inside arguments past the first space (e.g.,
+  `cpol-add-sni cave_name <Tab>` — only `cave_name` completes
+  in v1, not `host` etc.).
+
+### Total autofill scope (PRs A + B + C)
+
+The shell now has the three classic features:
+- **Tab** completes commands and known argument types.
+- **Up/Down arrow** walks history (16-entry ring, dedup'd, in-RAM).
+- **Ctrl+C** discards the current line.
+
+Plus a clean ANSI ESC parser (`shell_history::EscState`) that
+handles arrow-key sequences arriving as multi-byte serial reads.
+
+---
+
 ## 2026-05-08 (autofill B) — Mac — ⬆️⬇️ arrow-key history recall
 
 **Second of three autofill PRs.** Up arrow walks backward through

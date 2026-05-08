@@ -796,14 +796,41 @@ pub fn serial_shell() -> ! {
                 }
             }
             0x09 => {
-                // Tab — autofill command name from shell_completion.
-                // Only fires inside the first token (pre-space); the
-                // arg-completion follow-up PR handles past-space.
-                if !buf[..len].contains(&b' ') {
-                    let prefix = unsafe {
-                        core::str::from_utf8_unchecked(&buf[..len])
-                    };
-                    let r = ui::shell_completion::complete_command(prefix);
+                // Tab — autofill. Inside the first token: command-name
+                // completion. Past a space: argument completion driven
+                // by `arg_kind_for(cmd, arg_index)`.
+                let line = unsafe {
+                    core::str::from_utf8_unchecked(&buf[..len])
+                };
+                if let Some((cmd, arg_index, current)) =
+                    ui::shell_completion::split_for_completion(line)
+                {
+                    let kind = ui::shell_completion::arg_kind_for(cmd, arg_index);
+                    if kind != ui::shell_completion::ArgKind::None {
+                        let r = ui::shell_completion::complete_argument(kind, current);
+                        let ext = r.extension_bytes();
+                        let take = ext.len().min(255usize.saturating_sub(len));
+                        for &b in &ext[..take] {
+                            buf[len] = b;
+                            len += 1;
+                            uart::putc(b);
+                        }
+                        if r.match_count > 1 {
+                            uart::puts("\n");
+                            for i in 0..r.names_len as usize {
+                                let name = r.name_at(i);
+                                for &b in name { uart::putc(b); }
+                                uart::puts("  ");
+                            }
+                            uart::puts("\nbat_os > ");
+                            for &b in &buf[..len] {
+                                uart::putc(b);
+                            }
+                        }
+                    }
+                } else {
+                    // Inside the first token — command-name completion.
+                    let r = ui::shell_completion::complete_command(line);
                     let ext = r.extension_bytes();
                     let take = ext.len().min(255usize.saturating_sub(len));
                     for &b in &ext[..take] {

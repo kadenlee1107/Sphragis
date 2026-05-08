@@ -242,6 +242,212 @@ pub fn complete_command(prefix: &str) -> Completion {
     out
 }
 
+// ─── Argument completion ──────────────────────────────────────────────
+//
+// Past the first space the user is typing arguments, not a command
+// name. Different commands take different argument types: file names
+// (`read`, `cat`, `rm`, `verify`, `edit`, `write`), cave names
+// (`cpol-show`, `cpol-add-sni`, `cpol-clear`, `cave-syscall-*`,
+// `batcave-fw-*`), test-binary names (`run`), or nothing for v1.
+//
+// Candidates are runtime-enumerated (the file table or cave
+// registry), so this type owns its candidate bytes rather than
+// borrowing `&'static str` like `Completion` does.
+
+/// Per-name buffer width for the argument-candidate list. Sized for
+/// the longest realistic argument:
+/// - batfs filenames cap at `batfs::FILE_NAME_LEN` = 64 bytes
+/// - cave names cap at 32 bytes by `batcave::cave::MAX_NAME_LEN`
+const MAX_ARG_NAME: usize = 64;
+
+/// What kind of argument the next token of `cmd` expects. Drives
+/// which enumerator the shell should pull candidates from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ArgKind {
+    /// Command takes a file name from BatFS as its next argument.
+    File,
+    /// Command takes a cave name (registered via `cave_policy`) as
+    /// its next argument.
+    Cave,
+    /// Command takes a test-binary name from the small hardcoded
+    /// set the cave loader includes via `include_bytes!`.
+    Binary,
+    /// No completable argument (or out of v1 scope).
+    None,
+}
+
+/// Look up the argument kind for the next token of `cmd`. `arg_index`
+/// is 0 for the first argument, 1 for the second, etc. Most commands
+/// only complete their first argument; multi-arg grammars are
+/// hand-listed.
+pub fn arg_kind_for(cmd: &str, arg_index: usize) -> ArgKind {
+    match (cmd, arg_index) {
+        // File-taking commands.
+        ("read" | "cat" | "rm" | "delete" | "verify" | "edit", 0) => ArgKind::File,
+        // `write <name> <body>`: only the name (arg 0) completes from
+        // batfs; the body is free-form text.
+        ("write", 0) => ArgKind::File,
+        // Cave-taking commands. cpol-add-sni takes (cave host port sni)
+        // — only the cave is enumerable.
+        ("cpol-show" | "cpol-clear" | "cpol-sync" | "cpol-rate-show"
+            | "cpol-rate-clear" | "cpol-daemon-show", 0) => ArgKind::Cave,
+        ("cpol-add" | "cpol-add-sni" | "cpol-check"
+            | "cpol-rate" | "cpol-byte-rate" | "cpol-flow-rate", 0) => ArgKind::Cave,
+        ("cave-syscall-deny" | "cave-syscall-allow"
+            | "cave-syscall-list" | "cave-syscall-clear", 0) => ArgKind::Cave,
+        ("batcave-fw-allow" | "batcave-fw-deny", 0) => ArgKind::Cave,
+        // Test-binary names.
+        ("run", 0) => ArgKind::Binary,
+        _ => ArgKind::None,
+    }
+}
+
+/// Argument completion result. Same shape as `Completion` but the
+/// candidate list is owned (the byte buffer lives in this struct)
+/// rather than `&'static`, so it can hold runtime-enumerated names.
+#[derive(Clone, Copy)]
+pub struct ArgCompletion {
+    pub match_count: u8,
+    pub extension: [u8; MAX_EXTENSION_LEN],
+    pub extension_len: u8,
+    /// Up to MAX_CANDIDATES names. Each row is a flat byte buffer.
+    pub names: [[u8; MAX_ARG_NAME]; MAX_CANDIDATES],
+    pub name_lens: [u8; MAX_CANDIDATES],
+    pub names_len: u8,
+}
+
+impl ArgCompletion {
+    pub const fn empty() -> Self {
+        Self {
+            match_count: 0,
+            extension: [0; MAX_EXTENSION_LEN],
+            extension_len: 0,
+            names: [[0; MAX_ARG_NAME]; MAX_CANDIDATES],
+            name_lens: [0; MAX_CANDIDATES],
+            names_len: 0,
+        }
+    }
+
+    pub fn extension_bytes(&self) -> &[u8] {
+        &self.extension[..self.extension_len as usize]
+    }
+
+    /// Borrow a candidate's bytes by index.
+    pub fn name_at(&self, i: usize) -> &[u8] {
+        &self.names[i][..self.name_lens[i] as usize]
+    }
+
+    fn try_push(&mut self, name: &[u8]) {
+        if (self.names_len as usize) >= MAX_CANDIDATES { return; }
+        let n = name.len().min(MAX_ARG_NAME);
+        let row = self.names_len as usize;
+        self.names[row][..n].copy_from_slice(&name[..n]);
+        self.name_lens[row] = n as u8;
+        self.names_len += 1;
+    }
+}
+
+/// Run argument completion. Calls the right enumerator based on
+/// `kind`, filters by the `current` prefix, and computes the
+/// extension (unique completion or longest common prefix).
+pub fn complete_argument(kind: ArgKind, current: &str) -> ArgCompletion {
+    let mut out = ArgCompletion::empty();
+    let prefix = current.as_bytes();
+    let mut count: u32 = 0;
+    let prefix_for_filter = prefix; // Captured for closures.
+    let mut consider = |name: &[u8]| {
+        if name.starts_with(prefix_for_filter) {
+            count = count.saturating_add(1);
+            out.try_push(name);
+        }
+    };
+
+    match kind {
+        ArgKind::None => return out,
+        ArgKind::File => {
+            crate::fs::batfs::list(|name, _size, _enc| consider(name.as_bytes()));
+        }
+        ArgKind::Cave => {
+            crate::batcave::cave::list(|cv| consider(cv.name_str().as_bytes()));
+        }
+        ArgKind::Binary => {
+            // Hardcoded set the loader includes — keep in sync with
+            // ui::shell::execute()'s `cmd_run_elf` arms.
+            for name in &[b"hello".as_slice(), b"hello_libc", b"hello_threads",
+                          b"posix", b"cxx"] {
+                consider(name);
+            }
+        }
+    }
+    out.match_count = count.min(255) as u8;
+
+    if count == 0 {
+        return out;
+    }
+    if count == 1 {
+        // Unique — extension is name[prefix.len()..].
+        let row = out.name_lens[0] as usize;
+        let name_bytes = &out.names[0][..row];
+        let tail = &name_bytes[prefix.len()..];
+        let take = tail.len().min(MAX_EXTENSION_LEN);
+        out.extension[..take].copy_from_slice(&tail[..take]);
+        out.extension_len = take as u8;
+        return out;
+    }
+
+    // Common prefix across all visible candidates.
+    let n = out.names_len as usize;
+    let prefix_len = prefix.len();
+    let mut common = 0usize;
+    'outer: loop {
+        if common >= MAX_EXTENSION_LEN { break; }
+        let pos = prefix_len + common;
+        let first_len = out.name_lens[0] as usize;
+        if pos >= first_len { break; }
+        let want = out.names[0][pos];
+        for i in 1..n {
+            let cl = out.name_lens[i] as usize;
+            if pos >= cl || out.names[i][pos] != want {
+                break 'outer;
+            }
+        }
+        out.extension[common] = want;
+        common += 1;
+    }
+    out.extension_len = common as u8;
+    out
+}
+
+/// Parse the current input buffer and figure out:
+///   * whether the cursor is in the first token (command name) or
+///     past a space (argument)
+///   * if past a space, which command we're in and which argument
+///     index this is
+///
+/// Returns `None` for "still inside the command word" — caller falls
+/// through to `complete_command()`.
+pub fn split_for_completion(line: &str) -> Option<(&str, usize, &str)> {
+    let bytes = line.as_bytes();
+    let first_space = bytes.iter().position(|&b| b == b' ')?;
+    let cmd = &line[..first_space];
+    // Walk over space-separated args; index = how many full args
+    // already typed (i.e. the index of the current trailing token).
+    let rest = &line[first_space + 1..];
+    let mut idx = 0usize;
+    let mut last_token_start = 0usize;
+    let rest_bytes = rest.as_bytes();
+    for i in 0..rest_bytes.len() {
+        if rest_bytes[i] == b' ' {
+            // A space terminates the previous token. The character
+            // at i+1 is the start of the next token (if any).
+            idx += 1;
+            last_token_start = i + 1;
+        }
+    }
+    let current = &rest[last_token_start..];
+    Some((cmd, idx, current))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
