@@ -199,6 +199,8 @@ fn execute(cmd: &str) {
         "nat-table"   => cmd_nat_table(),
         "nat-sync"    => cmd_nat_sync(),
         "x509-selftest" => cmd_x509_selftest(),
+        #[cfg(feature = "selftest-on-boot")]
+        "scheduler-selftest" => cmd_scheduler_selftest(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
         "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
         "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
@@ -531,6 +533,95 @@ fn cmd_batcave_fw_list() {
             console::puts(" entries\n");
         }
         Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
+/// Scheduler selftest. Operates on synthesized Free→Blocked test
+/// slots — no real sys_nanosleep / epoll_pwait calls, no Linux-thread-
+/// context dependency. Three sub-tests exercise the wake helpers'
+/// correctness; the park_current loop invariant is verified by manual
+/// review (see DESIGN_SCHEDULER_BLOCK_ON.md acceptance criteria).
+///
+/// `pub(crate)` so the boot-time runner in main.rs (gated by
+/// selftest-on-boot) can call this for headless verification in
+/// scripts/qemu_selftests_smoke.py.
+#[cfg(feature = "selftest-on-boot")]
+pub(crate) fn cmd_scheduler_selftest() {
+    use crate::batcave::linux::threads::{
+        cntpct_el0, wake_expired_deadlines, wake_epoll_waiters,
+        test_install_blocked, test_inspect_state, test_release_slot,
+        BlockReason, ThreadState,
+    };
+
+    console::puts_hi("  SCHEDULER SELFTEST\n");
+
+    // Sub-test 1: wake-expired-deadlines is a noop when nothing is blocked
+    // on a deadline. Just shouldn't panic or corrupt state.
+    {
+        wake_expired_deadlines();
+        console::puts("  [scheduler-selftest] PASS: wake-expired-deadlines-noop\n");
+    }
+
+    // Sub-test 2: nanosleep deadline fires — install a Blocked slot with
+    // already-past deadline, run the wake pass, observe Runnable, release.
+    {
+        let now = cntpct_el0();
+        let past = now.saturating_sub(1);
+        let slot = match test_install_blocked(BlockReason::Nanosleep { deadline_ticks: past }) {
+            Some(s) => s,
+            None => {
+                console::puts("  [scheduler-selftest] FAIL: nanosleep-deadline-fires (table full)\n");
+                return;
+            }
+        };
+        wake_expired_deadlines();
+        match test_inspect_state(slot) {
+            Some(ThreadState::Runnable) => {
+                console::puts("  [scheduler-selftest] PASS: nanosleep-deadline-fires\n");
+            }
+            _ => {
+                console::puts("  [scheduler-selftest] FAIL: nanosleep-deadline-fires (wrong state)\n");
+            }
+        }
+        test_release_slot(slot);
+    }
+
+    // Sub-test 3: epoll event-driven wake. Install two slots with
+    // different epfds; wake one; observe the other stays Blocked.
+    {
+        let s1 = match test_install_blocked(BlockReason::EpollWait { epfd: 123, deadline_ticks: 0 }) {
+            Some(s) => s,
+            None => {
+                console::puts("  [scheduler-selftest] FAIL: epoll-event-wake (table full A)\n");
+                return;
+            }
+        };
+        let s2 = match test_install_blocked(BlockReason::EpollWait { epfd: 456, deadline_ticks: 0 }) {
+            Some(s) => s,
+            None => {
+                console::puts("  [scheduler-selftest] FAIL: epoll-event-wake (table full B)\n");
+                test_release_slot(s1);
+                return;
+            }
+        };
+        wake_epoll_waiters(123);
+        let s1_state = test_inspect_state(s1);
+        let s2_state = test_inspect_state(s2);
+        let ok_first = matches!(s1_state, Some(ThreadState::Runnable));
+        let ok_second_still_blocked = matches!(s2_state, Some(ThreadState::Blocked(_)));
+        if ok_first && ok_second_still_blocked {
+            wake_epoll_waiters(456);
+            let s2_after = test_inspect_state(s2);
+            if matches!(s2_after, Some(ThreadState::Runnable)) {
+                console::puts("  [scheduler-selftest] PASS: epoll-event-wake\n");
+            } else {
+                console::puts("  [scheduler-selftest] FAIL: epoll-event-wake (epfd 456 wake didn't fire)\n");
+            }
+        } else {
+            console::puts("  [scheduler-selftest] FAIL: epoll-event-wake (selective wake broken)\n");
+        }
+        test_release_slot(s1);
+        test_release_slot(s2);
     }
 }
 
