@@ -69,6 +69,49 @@ pub fn run() -> ! {
                     cmd_len = 0;
                     console::prompt();
                 }
+                0x09 => {
+                    // Tab — autofill the command name. Only fires when
+                    // the cursor is still inside the first token (no
+                    // space typed yet); argument completion lands in a
+                    // follow-up PR.
+                    if cmd_buf[..cmd_len].contains(&b' ') {
+                        // Already past the command word; nothing to do
+                        // for v1.
+                    } else {
+                        let prefix = unsafe {
+                            core::str::from_utf8_unchecked(&cmd_buf[..cmd_len])
+                        };
+                        let r = super::shell_completion::complete_command(prefix);
+                        // Extend the buffer + echo the appended bytes.
+                        let ext = r.extension_bytes();
+                        let take = ext.len().min(MAX_CMD_LEN.saturating_sub(cmd_len + 1));
+                        for &b in &ext[..take] {
+                            cmd_buf[cmd_len] = b;
+                            cmd_len += 1;
+                            console::putc(b);
+                            platform::serial_putc(b);
+                        }
+                        // Multi-match: list candidates on a new line and
+                        // redraw the prompt with current input intact.
+                        if r.match_count > 1 {
+                            console::putc(b'\n');
+                            platform::serial_putc(b'\n');
+                            for &name in r.candidate_slice() {
+                                console::puts(name);
+                                console::puts("  ");
+                                platform::serial_puts(name);
+                                platform::serial_puts("  ");
+                            }
+                            console::putc(b'\n');
+                            platform::serial_putc(b'\n');
+                            console::prompt();
+                            for &b in &cmd_buf[..cmd_len] {
+                                console::putc(b);
+                                platform::serial_putc(b);
+                            }
+                        }
+                    }
+                }
                 _ => {
                     if cmd_len < MAX_CMD_LEN - 1 && c >= 0x20 && c <= 0x7E {
                         cmd_buf[cmd_len] = c;

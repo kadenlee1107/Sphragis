@@ -11,6 +11,63 @@ end of a session.
 
 ---
 
+## 2026-05-08 (autofill A) — Mac — ⌨️ Tab completion in the shell
+
+**First of three autofill PRs.** User wanted tab completion + history
+recall + argument completion in the shell. This PR ships tab
+completion of command names.
+
+### What landed
+
+- New module `src/ui/shell_completion.rs` with:
+  - `COMMAND_NAMES: &[&str]` — sorted canonical list of every command
+    name `ui::shell::execute()` accepts (96 entries, including
+    aliases like `ls`/`files`, `cat`/`read`).
+  - `complete_command(prefix) -> Completion` — returns
+    match count + extension bytes + candidate list.
+    Fixed-size struct, no heap.
+  - 5 inline tests covering empty prefix, unique, multi-match
+    common-prefix extension, no-match, and sort-order invariant.
+- Tab handler (`0x09`) wired into both shell input loops:
+  - `main::serial_shell` (active, headless path).
+  - `ui::shell::run` (GUI shell, currently dormant but keeps
+    the same behavior for when it's wired back).
+- Ctrl+C handler added to `main::serial_shell` (was previously
+  silent — pressing Ctrl+C did nothing).
+- `scripts/qemu_shell_autofill_smoke.py` — pexpect harness that
+  drives the real shell over QEMU serial. Two assertions:
+  1. `pq-i` + Tab completes to `pq-interop` (unique prefix)
+  2. `pq-` + Tab lists `pq-interop`, `pq-selftest`, `pq-sig-selftest`,
+     `pq-tls-selftest` and extends to common prefix (multi-match)
+
+### Verification
+
+- `cargo build --release --target aarch64-unknown-none --features gicv3` — 0 warnings
+- `cargo clippy` — 0 warnings (auto-fix replaced 2 `iter().any()` with `contains()`)
+- `qemu_shell_autofill_smoke.py` — both PASS lines
+- `qemu_selftests_smoke.py` — no regressions
+
+### UX
+
+`pq-i<TAB>` → completes to `pq-interop`.
+
+`pq-<TAB>` → prints:
+```
+pq-interop  pq-selftest  pq-sig-selftest  pq-tls-selftest
+bat_os > pq-
+```
+
+(buffer extended to common prefix `pq-`; user types one more letter then Tab again.)
+
+### Out of scope (lands in B + C)
+
+- Up/down arrow history (PR B).
+- Argument completion: `read <Tab>` listing batfs files,
+  `cpol-add-sni <Tab>` listing caves, etc. (PR C).
+- Inline ghost-text suggestions (intentionally skipped per scope check).
+
+---
+
 ## 2026-05-08 (squeaky-clean Phases 9-11) — Mac — 🪒 whole-repo OCD pass: docs, scripts, tests
 
 **Three more cleanup phases beyond the Rust-source pass.** User
