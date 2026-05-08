@@ -85,8 +85,9 @@ directly. You coordinate by committing to GitHub and each reading
 2. **Update `docs/M4_GROUND_TRUTH.md`** if you observed new M4
    hardware facts. This is the long-term truth; session journal is
    the timeline.
-3. **Push to origin** (`feat/js-engine-browser-posix` is the default
-   branch).
+3. **Push to origin** (`main` is the default branch; renamed
+   2026-05-08 from `feat/js-engine-browser-posix` after the
+   no-browser pivot).
 
 ## The user
 
