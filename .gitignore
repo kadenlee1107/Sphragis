@@ -22,10 +22,17 @@
 **/.claude-flow/
 **/__pycache__/
 
-# Bring-up research data now tracked (private repo, Kaden's personal tool).
-# Previously ignored: /captures, firmware/, macos_dump/.
-# Big files in macos_dump/ (>100 MB) are split into .partNN chunks;
-# see macos_dump/README.md for reassembly.
+# Bring-up research data: macos_dump/ stays tracked (split into .partNN
+# chunks; see macos_dump/README.md for reassembly).
+#
+# captures/ went the other way: re-untracked on 2026-05-08 after the
+# case-insensitive APFS bug was diagnosed. The original 5-batch commit
+# series (A-Z + lowercase) created blob-level duplicates that show up as
+# 2,930 phantom modifications because uppercase G001.png and lowercase
+# g001.png resolve to the same on-disk file. The historical captures
+# stay in git history (recoverable via tag pre-no-browser-2026-05-07);
+# new captures live local-only.
+/captures
 
 # Split-file parts — don't track source files if they're already split.
 macos_dump/kernelcache.mac16j.bin
