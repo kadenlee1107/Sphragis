@@ -11,6 +11,72 @@ end of a session.
 
 ---
 
+## 2026-05-08 (autofill B) — Mac — ⬆️⬇️ arrow-key history recall
+
+**Second of three autofill PRs.** Up arrow walks backward through
+recently-typed commands, down arrow walks forward; typing any
+printable char or backspace drops back to live edit.
+
+### What landed
+
+- New module `src/ui/shell_history.rs`:
+  - 16-entry ring buffer (`HISTORY_SIZE × MAX_LINE_LEN` = 16 × 256 =
+    4 KB static, no heap).
+  - `record(line)` on every Enter — de-duped vs the most-recent
+    entry (common shell convention).
+  - `prev()` / `next()` with a "browse cursor" model — None means
+    live-editing, `Some(i)` means recalled from index `i`.
+  - `EscState::feed(byte) -> FeedResult` — three-state ANSI parser
+    detects `ESC [ A/B/C/D` arrow sequences across the 3 reads
+    they arrive in.
+  - 5 inline tests (record + walk back, dedup, down-returns-to-
+    live-edit, ESC parser, lone-ESC pass-through).
+- Both shell input loops updated:
+  - Drive every byte through `EscState::feed()` first.
+  - Up/Down call `prev()`/`next()` and redraw the visible line via
+    backspace+space+backspace + reprint.
+  - Enter calls `record()` so the line is browsable on the next
+    Up.
+  - Backspace and printable-char input call `reset_cursor()` so
+    further Up starts fresh from newest.
+- `scripts/qemu_shell_history_smoke.py` — pexpect harness driving
+  real ANSI arrow bytes (`\x1b[A`, `\x1b[B`) over QEMU serial.
+  Four assertions covering up-most-recent, up-older,
+  down-forward, down-past-newest.
+
+### Verification
+
+- `cargo build --release --target aarch64-unknown-none --features gicv3` — 0 warnings
+- `cargo clippy` — 0 warnings (one Edition-2024 inner-unsafe block fix in `entry_bytes`)
+- `qemu_shell_history_smoke.py` — all 4 PASS
+- `qemu_shell_autofill_smoke.py` (regression) — both PASS
+- `qemu_selftests_smoke.py` — all 6 sub-tests PASS
+
+### UX
+
+```
+bat_os > uname
+[uname output]
+bat_os > whoami
+[whoami output]
+bat_os > <UP>
+bat_os > whoami        ← recalled most recent
+<UP>
+bat_os > uname         ← went older
+<DOWN>
+bat_os > whoami        ← back forward
+<DOWN>
+bat_os >               ← past newest = live edit
+```
+
+### Out of scope
+
+- Argument completion (PR C).
+- Search inside history (Ctrl+R-style). Could be a future polish.
+- Persistence across reboots — ring is in-RAM only.
+
+---
+
 ## 2026-05-08 (autofill A) — Mac — ⌨️ Tab completion in the shell
 
 **First of three autofill PRs.** User wanted tab completion + history

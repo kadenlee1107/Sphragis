@@ -33,10 +33,66 @@ pub fn run() -> ! {
 
     console::prompt();
 
+    use super::shell_history::{ArrowKey, EscState, FeedResult};
+    let mut esc = EscState::default();
+
+    // Replace the currently-visible input line with `new_bytes`.
+    // Mirrors to both the GUI console and host serial.
+    let redraw = |old_len: usize, new_bytes: &[u8], new_len: &mut usize,
+                  cmd_buf: &mut [u8; MAX_CMD_LEN]| {
+        for _ in 0..old_len {
+            console::putc(0x08); console::putc(b' '); console::putc(0x08);
+            platform::serial_putc(0x08); platform::serial_putc(b' ');
+            platform::serial_putc(0x08);
+        }
+        for &b in new_bytes {
+            console::putc(b);
+            platform::serial_putc(b);
+        }
+        let n = new_bytes.len().min(MAX_CMD_LEN);
+        cmd_buf[..n].copy_from_slice(&new_bytes[..n]);
+        *new_len = n;
+    };
+
     loop {
         smc_keepalive_tick();
-        if let Some(c) = platform::serial_getc() {
-            match c {
+        let Some(raw) = platform::serial_getc() else {
+            core::hint::spin_loop();
+            continue;
+        };
+
+        // Run every byte through the ANSI ESC-sequence parser before
+        // dispatch — arrow keys arrive as ESC `[` `A`/`B`/`C`/`D`.
+        let c = match esc.feed(raw) {
+            FeedResult::Consumed => continue,
+            FeedResult::Arrow(ArrowKey::Up) => {
+                if let Some(line) = super::shell_history::prev() {
+                    let mut take = [0u8; MAX_CMD_LEN];
+                    let n = line.len().min(MAX_CMD_LEN);
+                    take[..n].copy_from_slice(&line[..n]);
+                    redraw(cmd_len, &take[..n], &mut cmd_len, &mut cmd_buf);
+                }
+                continue;
+            }
+            FeedResult::Arrow(ArrowKey::Down) => {
+                match super::shell_history::next() {
+                    Some(line) => {
+                        let mut take = [0u8; MAX_CMD_LEN];
+                        let n = line.len().min(MAX_CMD_LEN);
+                        take[..n].copy_from_slice(&line[..n]);
+                        redraw(cmd_len, &take[..n], &mut cmd_len, &mut cmd_buf);
+                    }
+                    None => {
+                        redraw(cmd_len, &[], &mut cmd_len, &mut cmd_buf);
+                    }
+                }
+                continue;
+            }
+            FeedResult::Arrow(_) => continue, // left/right ignored for v1
+            FeedResult::Pass(b) => b,
+        };
+
+        match c {
                 b'\r' | b'\n' => {
                     // Execute command
                     console::putc(b'\n');
@@ -47,6 +103,7 @@ pub fn run() -> ! {
                             core::str::from_utf8_unchecked(&cmd_buf[..cmd_len])
                         };
                         execute(cmd);
+                        super::shell_history::record(&cmd_buf[..cmd_len]);
                         cmd_len = 0;
                     }
 
@@ -60,6 +117,7 @@ pub fn run() -> ! {
                         platform::serial_putc(0x08);
                         platform::serial_putc(b' ');
                         platform::serial_putc(0x08);
+                        super::shell_history::reset_cursor();
                     }
                 }
                 0x03 => {
@@ -67,6 +125,7 @@ pub fn run() -> ! {
                     console::puts("^C\n");
                     platform::serial_puts("^C\n");
                     cmd_len = 0;
+                    super::shell_history::reset_cursor();
                     console::prompt();
                 }
                 0x09 => {
@@ -118,11 +177,10 @@ pub fn run() -> ! {
                         cmd_len += 1;
                         console::putc(c);
                         platform::serial_putc(c);
+                        super::shell_history::reset_cursor();
                     }
                 }
             }
-        }
-        core::hint::spin_loop();
     }
 }
 

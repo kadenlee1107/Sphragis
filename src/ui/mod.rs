@@ -5,6 +5,7 @@ pub mod font;
 pub mod gpu;
 pub mod shell;
 pub mod shell_completion;
+pub mod shell_history;
 pub mod truetype;
 pub mod widgets;
 pub mod wm;
