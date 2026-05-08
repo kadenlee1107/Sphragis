@@ -246,18 +246,18 @@ fn check_critical_extensions(cert: &Certificate) -> Result<(), VerifyError> {
 ///   Missing BC on an intermediate = pre-fix behavior, where any cert
 ///   in the bundle could be presented as an intermediate.
 ///
-/// **Deliberately not enforced here**: `pathLenConstraint`. Real-world
-/// chains routinely include a cross-signed root cert below an
-/// intermediate whose `pathLen` is 0 (e.g. ISRG E1 → DST X3 cross-sign,
-/// shipped for legacy compatibility). Strict pathLen counting flags
-/// these as violations even though browsers and the spec's intent
-/// treat the cross-signed root as the trust anchor. A correct
-/// implementation needs anchor-aware counting (don't count certs that
-/// match a trust anchor by SPKI as path intermediates) and is its
-/// own follow-up.
+/// x509-hardening-c: `pathLenConstraint` is now enforced — but with
+/// **anchor-aware counting**. RFC 5280 §4.2.1.9 reads "non-self-issued
+/// intermediate certificates that may follow this certificate"; a cert
+/// in the chain that matches a TRUST_STORE entry by SPKI is the anchor
+/// presented in chain form (cross-sign or duplicate self-sign), not an
+/// intermediate. The caller computes `intermediates_below` excluding
+/// such anchor-equivalent certs, so chains like Let's Encrypt's
+/// E1 → DST X3 cross-sign no longer false-positive against `pathLen=0`.
 fn check_basic_constraints(
     cert: &Certificate,
     is_leaf: bool,
+    intermediates_below: usize,
 ) -> Result<(), VerifyError> {
     use x509_cert::ext::pkix::BasicConstraints;
     let exts = match &cert.tbs_certificate.extensions {
@@ -281,8 +281,15 @@ fn check_basic_constraints(
             if bc.ca {
                 return Err(VerifyError::BasicConstraintsViolation);
             }
-        } else if !bc.ca {
-            return Err(VerifyError::BasicConstraintsViolation);
+        } else {
+            if !bc.ca {
+                return Err(VerifyError::BasicConstraintsViolation);
+            }
+            if let Some(pl) = bc.path_len_constraint {
+                if intermediates_below > pl as usize {
+                    return Err(VerifyError::BasicConstraintsViolation);
+                }
+            }
         }
         return Ok(());
     }
@@ -547,9 +554,9 @@ pub fn verify_chain(
             critical_ext_ok = false;
         }
     };
-    let mut record_bc = |c: &Certificate, is_leaf: bool| {
+    let mut record_bc = |c: &Certificate, is_leaf: bool, below: usize| {
         if bc_violation.is_none() {
-            if let Err(e) = check_basic_constraints(c, is_leaf) {
+            if let Err(e) = check_basic_constraints(c, is_leaf, below) {
                 bc_violation = Some(e);
             }
         }
@@ -560,10 +567,43 @@ pub fn verify_chain(
         }
     };
 
+    // x509-hardening-c: precompute which chain certs are anchor-equivalent
+    // (share an SPKI with a TRUST_STORE entry). For pathLen counting these
+    // are NOT real intermediates — they are the trust anchor presented in
+    // chain form (cross-sign or duplicate self-sign). Counting them as
+    // intermediates is what tripped strict pathLen against real-world
+    // Let's Encrypt and Cloudflare chains in PR-b.
+    let trust_spkis: Vec<Vec<u8>> = TRUST_STORE
+        .iter()
+        .filter_map(|der| parse_cert(der).ok())
+        .map(|c| {
+            c.tbs_certificate
+                .subject_public_key_info
+                .subject_public_key
+                .raw_bytes()
+                .to_vec()
+        })
+        .collect();
+    let chain_is_anchor: Vec<bool> = chain_ders
+        .iter()
+        .map(|der| match parse_cert(der) {
+            Ok(c) => {
+                let spki = c
+                    .tbs_certificate
+                    .subject_public_key_info
+                    .subject_public_key
+                    .raw_bytes();
+                trust_spkis.iter().any(|t| t.as_slice() == spki)
+            }
+            Err(_) => false,
+        })
+        .collect();
+
     record_validity(&leaf);
     record_critical(&leaf);
-    // Leaf-only checks.
-    record_bc(&leaf, true);
+    // Leaf-only checks. intermediates_below is irrelevant for leaves
+    // (the leaf is the path terminus on the subject end).
+    record_bc(&leaf, true, 0);
     if check_eku_server_auth(&leaf).is_err() {
         eku_ok = false;
     }
@@ -575,7 +615,7 @@ pub fn verify_chain(
     let mut current_der: &[u8] = leaf_der;
     let mut chain_ok = true;
 
-    for int_der in chain_ders.iter() {
+    for (i, int_der) in chain_ders.iter().enumerate() {
         let parent = match parse_cert(int_der) {
             Ok(c) => c,
             Err(_) => {
@@ -586,8 +626,15 @@ pub fn verify_chain(
 
         record_validity(&parent);
         record_critical(&parent);
-        // Intermediates: BasicConstraints must say cA:TRUE.
-        record_bc(&parent, false);
+        // Intermediates: BasicConstraints must say cA:TRUE; if pathLen
+        // is set, count the *real* intermediates below this cert in the
+        // chain — anchor-equivalent certs (same SPKI as a trust anchor)
+        // don't count, they are the anchor presented in chain form.
+        let real_intermediates_below = chain_is_anchor[i + 1..]
+            .iter()
+            .filter(|&&is_anchor| !is_anchor)
+            .count();
+        record_bc(&parent, false, real_intermediates_below);
         // KeyUsage with keyCertSign required if KU extension is present.
         record_ku(&parent);
 
