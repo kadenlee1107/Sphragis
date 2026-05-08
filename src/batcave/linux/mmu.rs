@@ -8,6 +8,16 @@
 // L3: 1 entry = 4KB
 //
 // We use 2MB block mappings for simplicity.
+//
+// File-level `allow(dead_code)`: ENTRIES_PER_TABLE + the
+// `setup_cave_pagetable_*` family are page-table-isolation primitives
+// staged for true per-cave address-space separation. The current cave
+// model runs caves in the same TTBR0 with cooperative scheduling, so
+// the per-cave-l1 + setup_cave_pagetable path isn't wired yet —
+// keeping the code costs nothing and saves rebuilding it from scratch
+// when isolation lands.
+
+#![allow(dead_code)]
 
 use crate::kernel::mm::frame;
 use crate::drivers::uart;

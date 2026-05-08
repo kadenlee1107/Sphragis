@@ -78,6 +78,9 @@ pub fn set_hybrid_enabled(v: bool) {
 /// hybrid group rather than silently falling back to plain X25519 —
 /// without that check the smoke would pass even if the hybrid wire
 /// format were broken, since the classical group always succeeds.
+/// Cfg-gated caller, so the lint only sees it as unused under the
+/// default feature set.
+#[cfg_attr(not(feature = "pq-interop-test"), allow(dead_code))]
 #[inline]
 pub fn last_handshake_used_hybrid() -> bool {
     session_mut(LEGACY_TLS_PCB).hybrid_used

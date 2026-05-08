@@ -71,31 +71,6 @@ pub fn run_busybox_cmd(argv: &[&str]) -> Result<(), &'static str> {
     loader::execute_with_args(entry, argv)
 }
 
-/// We need a `&'static [u8]` for each lib name so the multi-ELF loader
-/// can record it in `LoadedLib::name_bytes`. Returning a reference into
-/// the archive's header region would work but would require preserving
-/// pointers through `archive_for_each`. A fixed match for the libs
-/// `tools/bake_chromium_archive.sh` actually packs is simpler and makes
-/// new libs explicit (you have to add a branch here when you add one to
-/// the bake).
-fn match_known_lib_name(name: &str) -> &'static [u8] {
-    match name {
-        "lib/ld-linux-aarch64.so.1" => b"lib/ld-linux-aarch64.so.1",
-        "lib/libc.so.6"             => b"lib/libc.so.6",
-        "lib/libdl.so.2"            => b"lib/libdl.so.2",
-        "lib/libexpat.so.1"         => b"lib/libexpat.so.1",
-        "lib/libgcc_s.so.1"         => b"lib/libgcc_s.so.1",
-        "lib/libm.so.6"             => b"lib/libm.so.6",
-        "lib/libnspr4.so"           => b"lib/libnspr4.so",
-        "lib/libnss3.so"            => b"lib/libnss3.so",
-        "lib/libnssutil3.so"        => b"lib/libnssutil3.so",
-        "lib/libplc4.so"            => b"lib/libplc4.so",
-        "lib/libplds4.so"           => b"lib/libplds4.so",
-        "lib/libpthread.so.0"       => b"lib/libpthread.so.0",
-        _ => b"",
-    }
-}
-
 /// Run a small test ELF (single-segment, simple format).
 fn run_small_elf(elf_data: &[u8], name: &str) -> Result<(), &'static str> {
     uart::puts("[runner] Loading ");

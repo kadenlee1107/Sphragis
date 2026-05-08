@@ -104,7 +104,6 @@ const ENOMEM: i64 = -12;   // Out of memory
 const ENOENT: i64 = -2;    // No such file or directory
 const EINVAL: i64 = -22;   // Invalid argument
 const EFAULT: i64 = -14;   // Bad address
-const ECHILD: i64 = -10;   // No child processes
 const EAGAIN: i64 = -11;   // Try again
 const EPERM: i64 = -1;     // Operation not permitted
 
@@ -220,8 +219,12 @@ fn is_user_writable(p: usize, size: usize) -> bool {
     true
 }
 
-// Syscall categories for capability checking
+// Syscall categories for capability checking. RawNet is reserved
+// for syscalls that hand a cave raw network access (AF_PACKET etc.);
+// none are wired today, but the variant stays so the dispatcher
+// match doesn't have to distinguish present-vs-future when one lands.
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 enum SyscallCat {
     Always,   // Always allowed (getpid, uname, etc.)
     FileIO,   // Needs fs capability
@@ -233,6 +236,11 @@ enum SyscallCat {
 }
 
 /// Linux syscall numbers (ARM64)
+// Linux AArch64 syscall numbers. The full table stays named because
+// caves invoke these by name (CLONE, EXECVE, etc.); we keep entries
+// even where Bat_OS hasn't grown a handler yet — adding the constant
+// when the handler lands is just churn for protocol-stable IDs.
+#[allow(dead_code)]
 mod nr {
     pub const GETCWD: u64 = 17;
     pub const IOCTL: u64 = 29;
@@ -721,7 +729,6 @@ fn sys_getuid(_args: [u64; 6]) -> i64 { 0 } // root
 fn sys_getgid(_args: [u64; 6]) -> i64 { 0 }
 fn sys_stub_zero(_args: [u64; 6]) -> i64 { 0 }
 fn sys_stub_enosys(_args: [u64; 6]) -> i64 { ENOSYS }
-fn sys_stub_enoent(_args: [u64; 6]) -> i64 { ENOENT }
 
 /// Helper: zero `len` bytes at user pointer `buf` (no-op if buf==0).
 /// Returns false on bounds-check failure so the caller can EFAULT.
@@ -4344,127 +4351,6 @@ fn sys_recvfrom(args: [u64; 6]) -> i64 {
     sys_read(args)
 }
 
-/// Get pointer to next write slot in UDP RX queue.
-fn udp_rx_alloc() -> (usize, usize) {
-    unsafe {
-        let slot = UDP_RX_HEAD % UDP_RX_SLOTS;
-        let ptr = core::ptr::addr_of_mut!(UDP_RX_BUF) as usize + slot * 512;
-        (slot, ptr)
-    }
-}
-
-/// Commit a write to the UDP RX queue.
-fn udp_rx_commit(slot: usize, len: usize) {
-    unsafe {
-        UDP_RX_LEN[slot] = len;
-        UDP_RX_HEAD += 1;
-        UDP_RX_READY = true;
-    }
-}
-
-/// Build a DNS A-record response from a query and resolved IP.
-fn build_dns_response(query: &[u8], ip: u32) {
-    let (slot, buf_ptr) = udp_rx_alloc();
-    unsafe {
-        let mut pos = 0;
-
-        // Copy transaction ID from query (2 bytes)
-        for i in 0..2.min(query.len()) {
-            core::arch::asm!("strb {v:w}, [{a}]",
-                a = in(reg) buf_ptr + pos, v = in(reg) query[i] as u32);
-            pos += 1;
-        }
-        // Flags: 0x8180 (response, recursion available, no error)
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + 2, v = in(reg) 0x81u32);
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + 3, v = in(reg) 0x80u32);
-        // QDCOUNT = 1
-        core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf_ptr + 4);
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + 5, v = in(reg) 1u32);
-        // ANCOUNT = 1
-        core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf_ptr + 6);
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + 7, v = in(reg) 1u32);
-        // NSCOUNT = 0, ARCOUNT = 0
-        for i in 8..12 {
-            core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf_ptr + i);
-        }
-        pos = 12;
-
-        // Copy question section from query
-        let q_start = 12;
-        let mut q_end = 12;
-        while q_end < query.len() && query[q_end] != 0 { q_end += 1; }
-        q_end += 5; // null + qtype(2) + qclass(2)
-        let q_len = q_end.min(query.len()) - q_start;
-        for i in 0..q_len {
-            let idx = q_start + i;
-            if idx < query.len() {
-                core::arch::asm!("strb {v:w}, [{a}]",
-                    a = in(reg) buf_ptr + pos, v = in(reg) query[idx] as u32);
-            }
-            pos += 1;
-        }
-
-        // Answer: name pointer (0xC00C = pointer to offset 12 = question name)
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + pos, v = in(reg) 0xC0u32); pos += 1;
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + pos, v = in(reg) 0x0Cu32); pos += 1;
-        // Type A (1)
-        core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf_ptr + pos); pos += 1;
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + pos, v = in(reg) 1u32); pos += 1;
-        // Class IN (1)
-        core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf_ptr + pos); pos += 1;
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + pos, v = in(reg) 1u32); pos += 1;
-        // TTL (300 seconds)
-        core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf_ptr + pos); pos += 1;
-        core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf_ptr + pos); pos += 1;
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + pos, v = in(reg) 1u32); pos += 1;
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + pos, v = in(reg) 0x2Cu32); pos += 1;
-        // RDLENGTH = 4 (IPv4)
-        core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf_ptr + pos); pos += 1;
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + pos, v = in(reg) 4u32); pos += 1;
-        // RDATA = IP address (network byte order = big-endian)
-        // ip from dns::resolve() is already host-order u32 where (ip >> 24) = first octet
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + pos, v = in(reg) ((ip >> 24) & 0xFF) as u32); pos += 1;
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + pos, v = in(reg) ((ip >> 16) & 0xFF) as u32); pos += 1;
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + pos, v = in(reg) ((ip >> 8) & 0xFF) as u32); pos += 1;
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + pos, v = in(reg) (ip & 0xFF) as u32); pos += 1;
-
-        udp_rx_commit(slot, pos);
-    }
-}
-
-/// Build a DNS NXDOMAIN/empty response.
-fn build_dns_nxdomain(query: &[u8]) {
-    let (slot, buf_ptr) = udp_rx_alloc();
-    unsafe {
-        // Copy transaction ID
-        for i in 0..2.min(query.len()) {
-            core::arch::asm!("strb {v:w}, [{a}]",
-                a = in(reg) buf_ptr + i, v = in(reg) query[i] as u32);
-        }
-        // Flags: 0x8183 (response, NXDOMAIN)
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + 2, v = in(reg) 0x81u32);
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + 3, v = in(reg) 0x83u32);
-        // QDCOUNT=1, ANCOUNT=0, NSCOUNT=0, ARCOUNT=0
-        core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf_ptr + 4);
-        core::arch::asm!("strb {v:w}, [{a}]", a = in(reg) buf_ptr + 5, v = in(reg) 1u32);
-        for i in 6..12 {
-            core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf_ptr + i);
-        }
-        // Copy question section
-        let q_start = 12;
-        let mut q_end = 12;
-        while q_end < query.len() && query[q_end] != 0 { q_end += 1; }
-        q_end += 5;
-        let mut pos = 12;
-        for i in q_start..q_end.min(query.len()) {
-            core::arch::asm!("strb {v:w}, [{a}]",
-                a = in(reg) buf_ptr + pos, v = in(reg) query[i] as u32);
-            pos += 1;
-        }
-        udp_rx_commit(slot, pos);
-    }
-}
-
 fn print_ip(ip: u32) {
     crate::kernel::mm::print_num(((ip >> 24) & 0xFF) as usize);
     uart::putc(b'.');
@@ -6410,13 +6296,14 @@ fn sys_sysinfo(args: [u64; 6]) -> i64 {
 // #5: SIGNAL HANDLING — SIGCHLD, SIGTERM, rt_sigaction, rt_sigprocmask
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Signal numbers (Linux ARM64)
-const _SIGHUP: u32 = 1;
-const _SIGINT: u32 = 2;
+/// Signal numbers (Linux ARM64). Full set named so the kill-path
+/// match arms can be filled in by name as Bat_OS grows handlers.
+#[allow(dead_code)] const SIGHUP: u32 = 1;
+#[allow(dead_code)] const SIGINT: u32 = 2;
+#[allow(dead_code)] const SIGABRT: u32 = 6;
 const SIGKILL: u32 = 9;
-const SIGABRT: u32 = 6;
-const SIGTERM: u32 = 15;
-const _SIGCHLD: u32 = 17;
+#[allow(dead_code)] const SIGTERM: u32 = 15;
+#[allow(dead_code)] const SIGCHLD: u32 = 17;
 const SIGSTOP: u32 = 19;
 const MAX_SIG: usize = 64;
 
@@ -6736,34 +6623,9 @@ fn sys_sigaltstack(args: [u64; 6]) -> i64 {
     0
 }
 
-/// Check for deliverable pending signals
-pub fn check_pending_signal() -> Option<u32> {
-    unsafe {
-        let deliverable = SIGNAL_PENDING & !SIGNAL_MASK;
-        if deliverable == 0 { return None; }
-        let sig = deliverable.trailing_zeros();
-        SIGNAL_PENDING &= !(1u64 << sig);
-        Some(sig)
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
-// #8: SHARED MEMORY — memfd_create, shmget stubs
+// #8: SHARED MEMORY — memfd_create
 // ═══════════════════════════════════════════════════════════════════════════
-
-/// shmget — create shared memory segment (returns fd to anonymous mmap region)
-fn sys_shmget(args: [u64; 6]) -> i64 {
-    let size = args[1] as usize;
-    if size == 0 || size > 16 * 1024 * 1024 { return EINVAL; }
-    if let Ok(tmp) = vfs::resolve_path(b"/tmp") {
-        if let Ok(node_idx) = vfs::create_node(tmp, b"shm_anon", vfs::NodeType::File, 0o100666) {
-            if let Ok(fdi) = fd::alloc_fd(node_idx, 0) {
-                return fdi as i64;
-            }
-        }
-    }
-    ENOMEM
-}
 
 /// memfd_create — create anonymous file backed by memory.
 /// NEW-SYS-049: now charges Resource::Fds and goes through the cap layer

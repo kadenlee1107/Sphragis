@@ -97,20 +97,6 @@ static mut INSTANCES: [VfsInstance; MAX_VFS_INSTANCES] = {
 };
 static mut ACTIVE_INSTANCE: usize = 0;
 
-// Helper: get the active VFS instance
-fn active() -> &'static VfsInstance {
-    unsafe {
-        let idx = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
-        &(*core::ptr::addr_of!(INSTANCES))[idx]
-    }
-}
-fn active_mut() -> &'static mut VfsInstance {
-    unsafe {
-        let idx = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
-        &mut (*core::ptr::addr_of_mut!(INSTANCES))[idx]
-    }
-}
-
 // Legacy compatibility statics — redirect to active instance
 static mut VFS_READY: bool = false;
 
@@ -171,19 +157,6 @@ pub fn init_for_cave(cave_id: usize) {
         crate::kernel::mm::print_num(cave_id);
     }
     uart::puts(")\n");
-}
-
-/// Switch to a specific cave's VFS instance.
-pub fn switch_to_cave(cave_id: usize) {
-    unsafe {
-        let instances = &*core::ptr::addr_of!(INSTANCES);
-        for i in 0..MAX_VFS_INSTANCES {
-            if instances[i].cave_id == cave_id && instances[i].ready {
-                core::ptr::write_volatile(core::ptr::addr_of_mut!(ACTIVE_INSTANCE), i);
-                return;
-            }
-        }
-    }
 }
 
 /// Destroy a cave's VFS instance (wipe all data).

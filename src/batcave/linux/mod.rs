@@ -1,13 +1,11 @@
-// Linux-ABI compatibility shim for caves. Many syscalls/constants are
-// staged ahead of the cave that exercises them — keeping a complete
-// Linux table cuts review churn when a new cave needs a syscall we
-// hadn't wired yet. dead_code is silenced module-wide since
-// individual #[allow] tags would just clutter every file.
-#![allow(dead_code)]
+// Linux-ABI compatibility shim for caves. Constants and helpers
+// here back the syscall surface caves see; only items with a concrete
+// caller stay. Items the squeaky-clean Phase 4 pass found unused
+// were deleted outright — not silenced — so the shim's surface
+// matches what we actually implement, not what we might one day.
 
 pub mod async_fds;
 pub mod demand_page;
-pub mod elf;
 pub mod epoll;
 pub mod fd;
 pub mod futex;

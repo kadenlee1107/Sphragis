@@ -84,21 +84,6 @@ fn unlock() {
     LOCK.store(false, Ordering::Release);
 }
 
-/// One-shot initializer — force every slot into the "free" state.
-/// Chromium's 256-thread clone experiment showed that our release
-/// builds occasionally fail to apply const-initializers to statics;
-/// this hand-reset eliminates that class of surprise.
-pub fn init() {
-    lock();
-    unsafe {
-        let table = &mut *core::ptr::addr_of_mut!(PAIRS);
-        for p in table.iter_mut() {
-            *p = PairBuf::empty();
-        }
-    }
-    unlock();
-}
-
 /// Allocate a new pair. Returns the slot index (0..MAX_PAIRS) or
 /// None if the pool is exhausted. The two fds that share this slot
 /// should be marked with `side = 0` and `side = 1` respectively via

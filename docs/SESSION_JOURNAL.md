@@ -11,6 +11,83 @@ end of a session.
 
 ---
 
+## 2026-05-08 (squeaky-clean Phase 4) — Mac — 🧬 Linux ABI dead-code purge: drop the module-wide allow
+
+**Fourth phase of the squeaky-clean pass.** Drops the module-level
+`#![allow(dead_code)]` on `src/batcave/linux/mod.rs` — the 100+ items
+it was hiding had to be triaged one by one.
+
+### Approach
+
+For each dead item:
+- **Delete outright** if it was post-no-browser leftover or
+  Chromium-era cruft (no-caller, not protocol-spec, not staged for
+  any concrete future feature).
+- **Keep with file-level `#![allow(dead_code)]`** if the file is
+  genuinely a protocol-spec table (`signal.rs` SIGHUP/SA_*,
+  `fd.rs` O_RDWR/AT_FDCWD/etc.) or staged scaffolding (`mmu.rs`
+  per-cave page-table isolation, `loader.rs` multi-binary
+  dynamic-linking path).
+- **Per-item `#[allow(dead_code)]`** for one-off cases (the `mod nr`
+  syscall-number table, `SyscallCat` enum, individual `SIG*`
+  constants, `tls::last_handshake_used_hybrid` which has a
+  cfg-gated caller).
+
+### Deleted (no caller, not staged)
+
+- **`src/batcave/linux/elf.rs`** — the entire file, 383 lines. Zero
+  external callers; the loader.rs ELF path uses different machinery.
+- **In `syscall.rs`**: `sys_stub_enoent`, `udp_rx_alloc/commit`,
+  `build_dns_response`, `build_dns_nxdomain`, `check_pending_signal`,
+  `sys_shmget`, `ECHILD` constant.
+- **In `vfs.rs`**: `active`, `active_mut`, `switch_to_cave` (a
+  separate cave-switch-VFS path that nothing called — the real
+  cave switch goes through `mmu::switch_to_cave`).
+- **In `pipe_buf.rs`**: `init` (one-shot reset that nothing
+  triggered).
+- **In `runner.rs`**: `match_known_lib_name` (Chromium-bake
+  hardcoded lib-name table).
+- **In `syscall_history.rs`**: the `x8` field of every `Entry`
+  (logged but never read by the dump path), `set_enabled` toggle
+  (never called) plus its `ENABLED` static + load guard.
+
+### Allowed at file or item level (intentional)
+
+- `signal.rs` — POSIX signal numbers + sigaction flags. Caves
+  invoke by name; full table stays.
+- `fd.rs` — Linux open(2) / openat(2) flag constants. Same
+  protocol-table reasoning.
+- `loader.rs` — multi-binary / dynamic-linking path
+  (`load_archive_multi`, `LoadedLib`, `resolve_cross_module`,
+  `apply_relocs_cross`, etc.) is staged for when caves load
+  dependencies. Single-binary path stays wired.
+- `mmu.rs` — `setup_cave_pagetable_*` family is staged for true
+  per-cave address-space isolation.
+
+### Verification
+
+- `cargo check --target aarch64-unknown-none --features gicv3` —
+  0 dead_code warnings (down from 101 after dropping the
+  module-wide allow). Only 1 functional warning remains: the
+  unactionable rustc `reserve-x18` deprecation (Phase 7's job).
+- `qemu_selftests_smoke.py` — all 6 sub-tests still PASS. No
+  regressions.
+
+### Diff scale
+
+- 1 file deleted (`elf.rs`, 383 lines)
+- ~150 lines deleted across syscall.rs, vfs.rs, pipe_buf.rs,
+  runner.rs, syscall_history.rs
+- 4 file-level `#![allow(dead_code)]` added (with rationale comments)
+- ~10 per-item `#[allow(dead_code)]` added
+
+### Next
+
+Phase 5: TODO/FIXME/HACK markers (19 + 53 = 72 sites of unfinished
+work to either implement, document, or delete).
+
+---
+
 ## 2026-05-08 (squeaky-clean Phase 3) — Mac — 🧹 414 STUMP archaeology refs stripped
 
 **Third phase of the squeaky-clean pass.** Strips audit-tracker
