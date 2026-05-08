@@ -2004,3 +2004,49 @@ pub fn auto_dump_if_idle() {
 //   - stack free-on-exit
 //
 // Not wired into syscall.rs at all — that's for the human.
+
+// ─── Test helpers (feature-gated) ────────────────────────────────────────
+//
+// Operate only on Free slots so they never touch real running threads.
+// Used by cmd_scheduler_selftest in src/ui/shell.rs and exercised in
+// scripts/qemu_selftests_smoke.py. Not exposed in production builds.
+//
+// See DESIGN_SCHEDULER_BLOCK_ON.md "Test helpers" section.
+
+#[cfg(feature = "selftest-on-boot")]
+pub(crate) fn test_install_blocked(reason: BlockReason) -> Option<usize> {
+    // Find a Free slot, mark it Blocked with the given reason, return
+    // its index. None if the table is full.
+    //
+    // Snapshot/free invariant: this function operates ONLY on Free
+    // slots. It does NOT mutate any other slot's fields. test_release_slot
+    // restores the same Free invariant.
+    with_table(|t| {
+        for (i, slot) in t.iter_mut().enumerate() {
+            if slot.state == ThreadState::Free {
+                slot.state = ThreadState::Blocked(reason);
+                return Some(i);
+            }
+        }
+        None
+    })
+}
+
+#[cfg(feature = "selftest-on-boot")]
+pub(crate) fn test_inspect_state(slot: usize) -> Option<ThreadState> {
+    with_table(|t| {
+        if slot >= t.len() { return None; }
+        Some(t[slot].state)
+    })
+}
+
+#[cfg(feature = "selftest-on-boot")]
+pub(crate) fn test_release_slot(slot: usize) {
+    // Reset the slot to Free. Idempotent. Does not touch tid/regs/wait
+    // metadata — the slot was Free when test_install_blocked grabbed it,
+    // so those fields are already at Free defaults.
+    with_table(|t| {
+        if slot >= t.len() { return; }
+        t[slot].state = ThreadState::Free;
+    });
+}
