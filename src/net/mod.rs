@@ -9,6 +9,7 @@ pub mod ethernet;
 pub mod fetch;
 pub mod firewall;
 pub mod http;
+pub mod https;
 pub mod icmp;
 pub mod ip;
 pub mod nat;

@@ -11,6 +11,93 @@ end of a session.
 
 ---
 
+## 2026-05-08 (post-cleanup) — Mac — 🌐 HTTPS WORKS: kernel-mediated, gated by cpol, real GET / 200 OK
+
+**New feature work** after the post-no-browser cleanup-thread queue
+closed. Branch: `feat/https-syscall` off `feat/js-engine-browser-posix`.
+Tag `pre-https-syscall-2026-05-08` marks the pre-feature HEAD.
+
+### Context
+
+After the no-browser pivot (PR #1) the OS had a working TLS protocol
+stack but no consumer — `fetch_https` was orphaned and PR #7 deleted
+it. The user explicitly wanted HTTPS available **to processes** (caves)
+so a future cave can fetch update manifests, package indexes, etc.
+
+Two design options were on the table:
+
+- **A. Linux-style** — caves use `socket()/connect()` and bundle their
+  own TLS library. Standard ABI but every cave can ship broken or
+  validation-skipping TLS.
+- **B. Kernel-mediated** — caves call a Bat_OS-private syscall;
+  kernel runs TLS; caves see plaintext over an fd. One audited TLS
+  per cave; uniform `cave_policy` enforcement; smaller binaries.
+
+User picked **B** with **default-deny** policy gating. cave_policy's
+existing `check_with_sni` is already default-deny (no-rules = Drop),
+so no new policy infrastructure needed.
+
+### What landed
+
+`DESIGN_HTTPS_SYSCALL.md` describes the contract end-to-end. New
+syscall `bat_https_open(host, host_len, port, flags) -> fd | -errno`
+at syscall_no `0x4001` (well above any Linux number). Returned fd
+supports `read/write/close` via the existing Linux ABI; kernel
+transparently runs TLS underneath.
+
+### Phases
+
+1. **TLS slot-parameterized API.** `tls::handshake_pcb`,
+   `send_app_data_pcb`, `recv_app_data_pcb`, `close_pcb` take an
+   explicit slot id. Existing legacy single-PCB fns are now thin
+   wrappers around `_pcb(LEGACY_TLS_PCB)`. Same for TCP:
+   `connect_blocking_pcb`, `send_data_blocking_pcb`,
+   `recv_data_blocking_pcb`. Existing callers (dns selftest etc) keep
+   working unchanged.
+2. **Kernel function** `net::https::open_kernel(host, port)`. Allocates
+   a fresh TCP PCB, resolves DNS, `connect_blocking_pcb`,
+   `tls::handshake_pcb`. Returns the slot id. Frees both slots on
+   any failure.
+3. **fd kind.** New `FdKind::TlsSocket(u16)` carrying the TLS/TCP slot.
+   New `fd::alloc_fd_tls(pcb, flags)` and `fd::tls_pcb(fd)`.
+4. **Syscall** `sys_bat_https_open`: user-pointer validation,
+   CRLF/control-char host check, cave_policy gate (default-deny via
+   `check_with_sni`), https::open_kernel, fd::alloc_fd_tls. Errors
+   map to standard errno.
+5. **read/write/close routing.** sys_read / sys_write / sys_close
+   gain a TlsSocket arm: route through `net::https::read/write/
+   close_pcb`. TlsSocket counts against the Sockets quota.
+6. **Boot smoke.** New Cargo feature `https-smoke-test` + boot hook
+   that runs an actual HTTPS round-trip. New
+   `scripts/qemu_https_smoke.py` headless harness.
+7. **Latent bug caught + fixed.**
+   - `tls.rs` decrypted-record buffer was 4 KB. amazon.com sent
+     a 4.3 KB cert chain → kernel panic. Bumped to 17 408 (matches
+     `recv_app_data`'s shape).
+   - The X.509 verifier requires the server to include a cert whose
+     SPKI matches a trust anchor — servers that send only
+     `[leaf, intermediate]` fail at "untrusted root". Separate STUMP
+     (verifier needs a "last intermediate signed by a trust anchor"
+     path) — flagged for the squeaky-clean pass.
+
+### Verification
+
+- **`scripts/qemu_https_smoke.py`** — PASS. Real HTTPS request:
+  `[https-smoke] PASS http-status=200 body-bytes=65536` against a
+  trust-anchor-friendly host. **The OS can fetch HTTPS for real.**
+- **`scripts/qemu_selftests_smoke.py`** — all 6 sub-tests still
+  PASS (2 x509 + 4 scheduler). No regressions.
+
+### Out of scope (follow-ups, picked up by squeaky-clean pass)
+
+- **Cave-side ABI smoke.** A test cave that exercises
+  `sys_bat_https_open` end-to-end. Needs a runnable test cave.
+- **Verifier improvement** — accept chains that don't include the
+  root cert. Most real-world servers ship `[leaf, intermediate]` only.
+- **Async handshake** — current syscall blocks the cave 50–200 ms.
+
+---
+
 ## 2026-05-08 (even later) — Mac — 🔐 TLS HYBRID PQ FIXED + INTEROP-VERIFIED vs Cloudflare
 
 **Second of three follow-up cleanup threads.** Continuation of the

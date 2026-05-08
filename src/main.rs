@@ -359,6 +359,19 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
                 ui::shell::cmd_pq_interop();
             }
 
+            // HTTPS-smoke boot hook (gated by Cargo feature
+            // `https-smoke-test`). Drives a real end-to-end HTTPS
+            // request through the kernel-mediated HTTPS path
+            // (https::open_kernel + write + read) so a headless QEMU
+            // smoke can verify the full request/response loop, not
+            // just the TLS handshake the pq-interop-test feature
+            // covers. See DESIGN_HTTPS_SYSCALL.md.
+            #[cfg(feature = "https-smoke-test")]
+            {
+                drivers::uart::puts("[https-smoke] starting end-to-end HTTPS request...\n");
+                run_https_smoke();
+            }
+
             // ═══════════════════════════════════════
             // AUTHENTICATION GATE — must pass to proceed
             // ═══════════════════════════════════════
@@ -382,34 +395,83 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     }
 }
 
-/// Derive the BatFS master key from the passphrase via Argon2id.
+/// Boot-time HTTPS smoke. Drives a real end-to-end HTTPS request
+/// (handshake + GET / + drain response) against
+/// pq.cloudflareresearch.com using the kernel-mediated HTTPS path
+/// with hybrid PQ enabled — i.e. the production configuration.
+/// Prints `[https-smoke] PASS …` or `[https-smoke] FAIL …` so
+/// scripts/qemu_https_smoke.py can pick up the result via serial.
 ///
-/// STUMP #138: this used to be 16-round SHA-256 with a hardcoded salt.
-/// The audit caught that as the single biggest crypto gap — an attacker
-/// who exfiltrates a disk image can do offline brute-force against the
-/// stored ciphertext, fighting only 16 SHA invocations per passphrase
-/// guess. Argon2id at the auth gate (security/auth.rs::kdf) doesn't
-/// help, because the offline attacker computes derive_batfs_key
-/// directly with their own program — they don't go through the auth
-/// gate at all.
-///
-/// We now use the same Argon2id parameters as the auth gate (8 MiB ×
-/// 3 passes × 1 lane), which fits comfortably in the 32 MB kernel
-/// heap. With domain-separated salts the BatFS master and auth-gate
-/// hash are distinct outputs for the same passphrase. ~50 ms on M4
-/// native, ~150 ms under QEMU/HVF — imperceptible to a human, crushing
-/// to GPU/ASIC offline attackers because Argon2id is memory-hard.
-///
-/// At 20 guesses/sec/machine and a 10-char alphanumeric passphrase
-/// (~60 bits of entropy), brute force costs decades of CPU-years even
-/// against a botnet. The design target (256 MiB) is unreachable in our
-/// 32 MB kernel heap; raising the heap is a separate STUMP. 8 MiB
-/// already moves the bar by ~6 orders of magnitude versus 16-round
-/// SHA.
-///
-/// Falls back to the legacy SHA-256 path if Argon2 errors out (e.g.
-/// passphrase length out of range), so first-boot edge cases stay
-/// functional. The fallback is documented + audit-logged at run time.
+/// Calls `https::open_kernel` directly — no syscall, no cave context,
+/// no cpol gate. The cave-side ABI smoke (which goes through
+/// sys_bat_https_open) lands in a follow-up PR once a test cave
+/// can run.
+#[cfg(feature = "https-smoke-test")]
+fn run_https_smoke() {
+    use drivers::uart;
+    let host = "pq.cloudflareresearch.com";
+    let port: u16 = 443;
+
+    let pcb = match net::https::open_kernel(host, port) {
+        Ok(p) => p,
+        Err(e) => {
+            uart::puts("[https-smoke] FAIL open: ");
+            uart::puts(e);
+            uart::puts("\n");
+            return;
+        }
+    };
+
+    let req: &[u8] =
+        b"GET / HTTP/1.1\r\nHost: pq.cloudflareresearch.com\r\nUser-Agent: Bat_OS/1.0\r\nConnection: close\r\nAccept: */*\r\n\r\n";
+    if let Err(e) = net::https::write(pcb, req) {
+        uart::puts("[https-smoke] FAIL write: "); uart::puts(e); uart::puts("\n");
+        net::https::close_pcb(pcb);
+        return;
+    }
+
+    // Drain up to 64 KB. We don't need the body — proving we got a
+    // well-formed `HTTP/1.1 ` status line is enough.
+    let mut total = [0u8; 65536];
+    let mut total_len = 0usize;
+    let mut empty_runs = 0u32;
+    loop {
+        if total_len == total.len() { break; }
+        match net::https::read(pcb, &mut total[total_len..]) {
+            Ok(0) => {
+                empty_runs += 1;
+                if empty_runs > 4 { break; }
+            }
+            Ok(n) => { total_len += n; empty_runs = 0; }
+            Err(_) => break,
+        }
+    }
+    net::https::close_pcb(pcb);
+
+    if total_len < 12 {
+        uart::puts("[https-smoke] FAIL response too short\n");
+        return;
+    }
+    if !total.starts_with(b"HTTP/1.1 ") && !total.starts_with(b"HTTP/1.0 ") {
+        uart::puts("[https-smoke] FAIL bad status line\n");
+        return;
+    }
+    // Status code: bytes 9..12.
+    uart::puts("[https-smoke] PASS http-status=");
+    for i in 9..12 {
+        uart::putc(total[i]);
+    }
+    uart::puts(" body-bytes=");
+    crate::kernel::mm::print_num(total_len);
+    uart::puts("\n");
+}
+
+/// Derive the BatFS master key from the passphrase via Argon2id (8 MiB
+/// × 3 passes × 1 lane), matching the auth-gate KDF parameters. Salt
+/// is domain-separated so the BatFS master and the auth hash differ
+/// for the same passphrase. Falls back to a legacy SHA-256 path if
+/// Argon2 rejects the input (length out of range etc) so first-boot
+/// edge cases stay functional; the fallback audit-logs at run time.
 fn derive_batfs_key(passphrase: &[u8]) -> [u8; 32] {
     use argon2::{Argon2, Algorithm, Version, Params};
 

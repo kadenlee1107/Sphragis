@@ -2092,12 +2092,16 @@ fn ensure_legacy_pcb() {
     }
 }
 
-/// Legacy blocking connect (netsurf_test path). Uses PCB 0.
-pub fn connect(dst_ip: u32, dst_port: u16) -> Result<(), &'static str> {
-    ensure_legacy_pcb();
-    // Force blocking.
-    pcb(LEGACY_PCB).is_nonblocking.store(false, Ordering::Relaxed);
-    let rc = connect_start(LEGACY_PCB, dst_ip, dst_port);
+/// Blocking connect on a specific PCB. Drives `connect_start +
+/// connect_poll` to completion (30 s timeout). The HTTPS syscall
+/// uses this on a freshly-allocated PCB; the legacy `connect`
+/// wrapper calls this against `LEGACY_PCB` for backwards compat.
+pub fn connect_blocking_pcb(pcb_id: usize, dst_ip: u32, dst_port: u16)
+    -> Result<(), &'static str>
+{
+    // Force blocking on this PCB.
+    pcb(pcb_id).is_nonblocking.store(false, Ordering::Relaxed);
+    let rc = connect_start(pcb_id, dst_ip, dst_port);
     if rc != 0 && rc != E_INPROGRESS {
         return Err("connect_start failed");
     }
@@ -2123,7 +2127,7 @@ pub fn connect(dst_ip: u32, dst_port: u16) -> Result<(), &'static str> {
 
     loop {
         super::poll_once();
-        match connect_poll(LEGACY_PCB) {
+        match connect_poll(pcb_id) {
             ConnectStatus::Established => return Ok(()),
             ConnectStatus::Failed(_)   => return Err("connect failed"),
             ConnectStatus::InProgress  => {}
@@ -2140,15 +2144,25 @@ pub fn connect(dst_ip: u32, dst_port: u16) -> Result<(), &'static str> {
         core::hint::spin_loop();
     }
 
-    pcb(LEGACY_PCB).state.store(STATE_CLOSED, Ordering::Release);
+    pcb(pcb_id).state.store(STATE_CLOSED, Ordering::Release);
     Err("connection timed out")
 }
 
-/// Legacy synchronous send (PCB 0).
-pub fn send_data(data: &[u8]) -> Result<(), &'static str> {
+/// Legacy blocking connect (netsurf_test path). Uses PCB 0. Thin
+/// wrapper around `connect_blocking_pcb`.
+pub fn connect(dst_ip: u32, dst_port: u16) -> Result<(), &'static str> {
+    ensure_legacy_pcb();
+    connect_blocking_pcb(LEGACY_PCB, dst_ip, dst_port)
+}
+
+/// Blocking send to a specific PCB. Loops over `send_data_pcb` until
+/// `data` is fully written or the connection errors. The kernel TLS
+/// stack uses this on its own PCB; the legacy `send_data` calls this
+/// against `LEGACY_PCB` for backwards compat.
+pub fn send_data_blocking_pcb(pcb: usize, data: &[u8]) -> Result<(), &'static str> {
     let mut off = 0;
     while off < data.len() {
-        match send_data_pcb(LEGACY_PCB, &data[off..]) {
+        match send_data_pcb(pcb, &data[off..]) {
             Ok(0) => return Err("send: no progress"),
             Ok(n) => off += n,
             Err(_) => return Err("send failed"),
@@ -2157,8 +2171,11 @@ pub fn send_data(data: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Legacy synchronous recv (PCB 0) — blocks up to 5 seconds.
-pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
+/// Blocking recv on a specific PCB — blocks up to 5 seconds.
+/// Same shape as the legacy `recv_data` but parameterised by PCB so
+/// concurrent TLS sessions (https_open syscall) can each block on
+/// their own connection.
+pub fn recv_data_blocking_pcb(pcb: usize, buf: &mut [u8]) -> Result<usize, &'static str> {
     let start: u64;
     let freq: u64;
     unsafe {
@@ -2168,7 +2185,7 @@ pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     let timeout = freq * 5;
     loop {
         super::poll_once();
-        if data_ready(LEGACY_PCB) {
+        if data_ready(pcb) {
             // Coalesce briefly.
             let coalesce_start: u64;
             unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) coalesce_start); }
@@ -2180,7 +2197,7 @@ pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
                 if cn - coalesce_start > coalesce_timeout { break; }
                 core::hint::spin_loop();
             }
-            return match recv_data_pcb(LEGACY_PCB, buf) {
+            return match recv_data_pcb(pcb, buf) {
                 Ok(n) => Ok(n),
                 Err(_) => Err("recv failed"),
             };
@@ -2191,6 +2208,19 @@ pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
         core::hint::spin_loop();
     }
     Err("receive timeout")
+}
+
+/// Legacy synchronous send (PCB 0). Thin wrapper around
+/// `send_data_blocking_pcb` for backwards compat with callers that
+/// only know about the legacy single-PCB shape.
+pub fn send_data(data: &[u8]) -> Result<(), &'static str> {
+    send_data_blocking_pcb(LEGACY_PCB, data)
+}
+
+/// Legacy synchronous recv (PCB 0). Thin wrapper around
+/// `recv_data_blocking_pcb`.
+pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
+    recv_data_blocking_pcb(LEGACY_PCB, buf)
 }
 
 /// Legacy zero-arg data_ready() — PCB 0.

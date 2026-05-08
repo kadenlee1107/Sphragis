@@ -253,9 +253,9 @@ fn session_mut(id: usize) -> &'static mut TlsSession {
 /// timer preempt mid-init lets a concurrent recv_app_data observe a
 /// half-initialized session (state=Initial but client_random already
 /// fresh) and could make decisions on it.
-pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
+pub fn build_client_hello(pcb_id: usize, hostname: &str, buf: &mut [u8]) -> usize {
     let _g = crate::kernel::sync::IrqGuard::new();
-    let sess = session_mut(LEGACY_TLS_PCB);
+    let sess = session_mut(pcb_id);
     sess.state = TlsState::Initial;
     sess.client_seq = 0;
     sess.server_seq = 0;
@@ -456,10 +456,10 @@ pub fn build_client_hello(hostname: &str, buf: &mut [u8]) -> usize {
 }
 
 /// Process a TLS ServerHello message.
-pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
+pub fn process_server_hello(pcb_id: usize, data: &[u8]) -> Result<(), &'static str> {
     if data.len() < 5 { return Err("too short"); }
 
-    let sess = session_mut(LEGACY_TLS_PCB);
+    let sess = session_mut(pcb_id);
 
     // Skip record header (5 bytes)
     let content = &data[5..];
@@ -633,29 +633,40 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
     }
 }
 
-/// Perform the full TLS 1.3 handshake over an established TCP connection.
-/// Sends ClientHello, receives ServerHello, derives keys, handles encrypted handshake.
-pub fn handshake(hostname: &str) -> Result<(), &'static str> {
-    let result = handshake_inner(hostname);
+/// Perform the full TLS 1.3 handshake over an established TCP connection
+/// on a specific PCB. The HTTPS syscall uses this on a freshly-allocated
+/// PCB; the legacy `handshake` calls this against `LEGACY_TLS_PCB`.
+/// Sends ClientHello, receives ServerHello, derives keys, handles encrypted
+/// handshake.
+pub fn handshake_pcb(pcb_id: usize, hostname: &str) -> Result<(), &'static str> {
+    let result = handshake_inner(pcb_id, hostname);
     if result.is_err() {
         // V8-ROOT-6: zero every derived secret on any handshake failure so
         // the static session-pool slot doesn't leak partial key material to
         // the next caller who reuses this PCB.
-        session_mut(LEGACY_TLS_PCB).zeroize_secrets();
+        session_mut(pcb_id).zeroize_secrets();
     }
     result
 }
 
-fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
-    let sess = session_mut(LEGACY_TLS_PCB);
+/// Legacy single-PCB handshake — thin wrapper over `handshake_pcb` against
+/// `LEGACY_TLS_PCB`. Existing callers (fetch debug helpers, dns selftest)
+/// keep working unchanged.
+pub fn handshake(hostname: &str) -> Result<(), &'static str> {
+    handshake_pcb(LEGACY_TLS_PCB, hostname)
+}
+
+fn handshake_inner(pcb_id: usize, hostname: &str) -> Result<(), &'static str> {
+    let sess = session_mut(pcb_id);
     sess.leftover_len = 0; // Reset leftover buffer for new session
 
     // Step 1: Send ClientHello
     // Bumped from 512 → 4096 to accommodate the optional hybrid
     // key_share entry (X25519+ML-KEM-768 adds ~1220 B).
     let mut ch_buf = [0u8; 4096];
-    let ch_len = build_client_hello(hostname, &mut ch_buf);
-    crate::net::tcp::send_data(&ch_buf[..ch_len]).map_err(|_| "send ClientHello failed")?;
+    let ch_len = build_client_hello(pcb_id, hostname, &mut ch_buf);
+    crate::net::tcp::send_data_blocking_pcb(pcb_id, &ch_buf[..ch_len])
+        .map_err(|_| "send ClientHello failed")?;
     tdbg("[tls] ClientHello sent\n");
 
     // Keep transcript hash of all handshake messages
@@ -670,7 +681,7 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
     // Read multiple chunks until we have all handshake data
     for _ in 0..10 {
         let mut chunk = [0u8; 4096];
-        match crate::net::tcp::recv_data(&mut chunk) {
+        match crate::net::tcp::recv_data_blocking_pcb(pcb_id, &mut chunk) {
             Ok(n) if n > 0 => {
                 let copy = n.min(all_buf.len() - all_len);
                 all_buf[all_len..all_len + copy].copy_from_slice(&chunk[..copy]);
@@ -696,7 +707,7 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
     // Parse first record (ServerHello)
     let sh_rec_len = ((all_buf[3] as usize) << 8) | all_buf[4] as usize;
     let sh_end = (5 + sh_rec_len).min(all_len);
-    process_server_hello(&all_buf[..sh_end])?;
+    process_server_hello(pcb_id, &all_buf[..sh_end])?;
 
     // Add ServerHello handshake to transcript (skip 5-byte record header)
     transcript.update(&all_buf[5..sh_end]);
@@ -732,7 +743,7 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
         }
         if need_more {
             let mut chunk = [0u8; 4096];
-            match crate::net::tcp::recv_data(&mut chunk) {
+            match crate::net::tcp::recv_data_blocking_pcb(pcb_id, &mut chunk) {
                 Ok(n) if n > 0 => {
                     let copy = n.min(all_buf.len() - all_len);
                     all_buf[all_len..all_len + copy].copy_from_slice(&chunk[..copy]);
@@ -833,7 +844,10 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
                 all_buf[pos + 3], all_buf[pos + 4],
             ];
 
-            let mut decrypted = [0u8; 4096];
+            // 17408 = 16 KB max TLS record + 1 KB headroom (matches the
+            // recv_app_data side). 4 KB was tight: amazon.com's cert
+            // chain runs ~4.3 KB and overflowed.
+            let mut decrypted = [0u8; 17408];
             decrypted[..payload_len].copy_from_slice(&all_buf[pos + 5..rec_end]);
 
             let plaintext_len = match hs_gcm.decrypt_inplace(
@@ -1083,7 +1097,7 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
 
     // Step 5: Send ChangeCipherSpec (compatibility) + client Finished
     let ccs = [0x14, 0x03, 0x03, 0x00, 0x01, 0x01];
-    crate::net::tcp::send_data(&ccs).ok();
+    crate::net::tcp::send_data_blocking_pcb(pcb_id, &ccs).ok();
 
     // Compute and send client Finished
     let finished_transcript = transcript.clone().finalize();
@@ -1133,7 +1147,7 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
     fin_record[3] = (enc_len >> 8) as u8;
     fin_record[4] = enc_len as u8;
     fin_record[5..5 + enc_len].copy_from_slice(&fin_buf[..enc_len]);
-    crate::net::tcp::send_data(&fin_record[..5 + enc_len]).ok();
+    crate::net::tcp::send_data_blocking_pcb(pcb_id, &fin_record[..5 + enc_len]).ok();
 
     tdbg("[tls] Client Finished sent\n");
 
@@ -1176,9 +1190,11 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Encrypt and send application data as a TLS record.
-pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
-    let sess = session_mut(LEGACY_TLS_PCB);
+/// Encrypt and send application data as a TLS record on a specific PCB.
+/// The HTTPS syscall path uses this directly with the cave's allocated
+/// PCB; the legacy `send_app_data` is a thin wrapper.
+pub fn send_app_data_pcb(pcb_id: usize, data: &[u8]) -> Result<(), &'static str> {
+    let sess = session_mut(pcb_id);
     if sess.state != TlsState::Established { return Err("not established"); }
 
     // Build nonce: IV XOR sequence number
@@ -1226,7 +1242,13 @@ pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
     record[5..5 + enc_len].copy_from_slice(&ct_and_tag[..enc_len]);
 
     tdbg("[tls] send_app_data\n");
-    crate::net::tcp::send_data(&record[..5 + enc_len])
+    crate::net::tcp::send_data_blocking_pcb(pcb_id, &record[..5 + enc_len])
+}
+
+/// Legacy `send_app_data` — thin wrapper over `send_app_data_pcb` for the
+/// `LEGACY_TLS_PCB` slot. Existing single-session callers keep working.
+pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
+    send_app_data_pcb(LEGACY_TLS_PCB, data)
 }
 
 /// Receive and decrypt application data from a TLS record.
@@ -1236,8 +1258,8 @@ pub fn send_app_data(data: &[u8]) -> Result<(), &'static str> {
 /// 16 KB `record` / `decrypted` stack frames compounded with every call).
 /// A server that streamed CCS records could overflow the kernel stack.
 /// We now loop up to 8 times for CCS skipping instead of recursing.
-pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
-    let sess = session_mut(LEGACY_TLS_PCB);
+pub fn recv_app_data_pcb(pcb_id: usize, buf: &mut [u8]) -> Result<usize, &'static str> {
+    let sess = session_mut(pcb_id);
     if sess.state != TlsState::Established { return Err("not established"); }
 
     let mut record = [0u8; 17408]; // 16KB max TLS record + 1KB header/overhead
@@ -1256,7 +1278,7 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
         sess.leftover_len = 0;
     } else {
         tdbg("[tls] waiting for record...\n");
-        n = crate::net::tcp::recv_data(&mut record).map_err(|e| {
+        n = crate::net::tcp::recv_data_blocking_pcb(pcb_id, &mut record).map_err(|e| {
             tdbg("[tls] recv error\n");
             let _ = e; // do not echo transport error string
             e
@@ -1277,7 +1299,7 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
             if rec_len + 5 <= n { break; }
             let space = record.len() - n;
             if space == 0 { break; }
-            match crate::net::tcp::recv_data(&mut record[n..n + space]) {
+            match crate::net::tcp::recv_data_blocking_pcb(pcb_id, &mut record[n..n + space]) {
                 Ok(got) if got > 0 => { n += got; }
                 Err(_e) => { break; }
                 _ => { break; }
@@ -1430,6 +1452,12 @@ pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     } // end loop
 }
 
+/// Legacy `recv_app_data` — thin wrapper over `recv_app_data_pcb` for the
+/// `LEGACY_TLS_PCB` slot.
+pub fn recv_app_data(buf: &mut [u8]) -> Result<usize, &'static str> {
+    recv_app_data_pcb(LEGACY_TLS_PCB, buf)
+}
+
 /// V5-XLAYER-001 fix: reset every TLS_STATES entry (not just the legacy
 /// slot 0) so a cave switch wipes session keys, SPKI, expected_hostname,
 /// and cert-pinning state inherited from a prior tenant. Called from
@@ -1506,10 +1534,12 @@ pub unsafe fn panic_wipe() {
     }
 }
 
-/// Close TLS session.
-pub fn close() {
+/// Close a TLS session on a specific PCB. Wipes all secret-bearing fields
+/// and marks the slot Closed. Does NOT close the underlying TCP PCB —
+/// that's the caller's job (e.g. `tcp::close_pcb`).
+pub fn close_pcb(pcb_id: usize) {
     use crate::security::zeroize::zeroize;
-    let sess = session_mut(LEGACY_TLS_PCB);
+    let sess = session_mut(pcb_id);
     sess.state = TlsState::Closed;
     sess.client_seq = 0;
     sess.server_seq = 0;
@@ -1539,6 +1569,12 @@ pub fn close() {
     sess.expected_hostname_len = 0;
     sess.finished_seen = false;
 }
+
+/// Legacy `close()` — thin wrapper over `close_pcb` for `LEGACY_TLS_PCB`.
+pub fn close() {
+    close_pcb(LEGACY_TLS_PCB);
+}
+
 
 // ─── X25519 Key Exchange (Curve25519) ───
 

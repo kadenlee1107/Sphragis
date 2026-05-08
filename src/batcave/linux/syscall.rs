@@ -311,6 +311,15 @@ mod nr {
     pub const LANDLOCK_CREATE_RULESET: u64 = 444;
     pub const LANDLOCK_ADD_RULE:       u64 = 445;
     pub const LANDLOCK_RESTRICT_SELF:  u64 = 446;
+
+    // Bat_OS-private syscalls. Numbered well above the Linux AArch64
+    // range (which tops out around 463 today) so they never collide
+    // with a future Linux number we might want to honour.
+    //
+    // 0x4001 — bat_https_open(host_ptr, host_len, port, flags) -> fd | -errno
+    // The kernel runs TLS itself; the returned fd is plaintext from the
+    // cave's perspective. See DESIGN_HTTPS_SYSCALL.md.
+    pub const BAT_HTTPS_OPEN: u64 = 0x4001;
 }
 
 /// Handle a Linux syscall from a BatCave process.
@@ -585,6 +594,11 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::SETSOCKOPT => (SyscallCat::Network, sys_setsockopt),
         nr::GETSOCKOPT => (SyscallCat::Network, sys_getsockopt),
         nr::SHUTDOWN => (SyscallCat::Network, sys_shutdown),
+
+        // Bat_OS-private network syscall: kernel-mediated HTTPS.
+        // Treated as Network for capability/cpol purposes. See
+        // DESIGN_HTTPS_SYSCALL.md.
+        nr::BAT_HTTPS_OPEN => (SyscallCat::Network, sys_bat_https_open),
 
         _ => {
             // Unknown syscall — log and return ENOSYS.
@@ -1654,6 +1668,27 @@ fn sys_write(args: [u64; 6]) -> i64 {
     // below because we need is_user_ptr anyway.
     if count > 0 && !is_user_ptr(buf, count) { return EFAULT; }
 
+    // TLS-backed fd (from bat_https_open): copy the cave's plaintext
+    // bytes into a kernel buffer, then push through the kernel TLS
+    // session. The cave never sees the encrypted records.
+    if let Some(pcb) = fd::tls_pcb(fd_num) {
+        if count == 0 { return 0; }
+        let mut tmp = [0u8; 4096];
+        let take = count.min(tmp.len());
+        for i in 0..take {
+            let b: u32;
+            unsafe {
+                core::arch::asm!("ldrb {v:w}, [{a}]",
+                    a = in(reg) buf + i, v = out(reg) b);
+            }
+            tmp[i] = b as u8;
+        }
+        match crate::net::https::write(pcb, &tmp[..take]) {
+            Ok(()) => return take as i64,
+            Err(_) => return -5, // EIO
+        }
+    }
+
     // Eventfd write: must be exactly 8 bytes; value is added to
     // the slot's counter (saturating at u64::MAX-1, blocking when
     // the slot can't accept more — but we don't have a wait queue,
@@ -1803,6 +1838,28 @@ fn sys_read(args: [u64; 6]) -> i64 {
 
     // Reject pointer-to-kernel attacks before any dereference.
     if count > 0 && !is_user_ptr(buf, count) { return EFAULT; }
+
+    // TLS-backed fd (from bat_https_open): pull plaintext bytes from
+    // the kernel TLS session into the cave's user buffer. The kernel
+    // owns the TLS slot; the cave just sees plaintext.
+    if let Some(pcb) = fd::tls_pcb(fd_num) {
+        if count == 0 { return 0; }
+        let mut tmp = [0u8; 4096];
+        let take = count.min(tmp.len());
+        match crate::net::https::read(pcb, &mut tmp[..take]) {
+            Ok(n) => {
+                for i in 0..n {
+                    let b = tmp[i] as u32;
+                    unsafe {
+                        core::arch::asm!("strb {v:w}, [{a}]",
+                            a = in(reg) buf + i, v = in(reg) b);
+                    }
+                }
+                return n as i64;
+            }
+            Err(_) => return -5, // EIO
+        }
+    }
 
     // Eventfd read: must be exactly 8 bytes; result is the slot's
     // counter as a u64 LE. Mirrors Linux eventfd_read semantics.
@@ -2319,6 +2376,19 @@ fn sys_close(args: [u64; 6]) -> i64 {
         handled_special = true;
     }
 
+    // TLS-backed fd (bat_https_open): tear down the kernel TLS slot
+    // and the underlying TCP PCB, then continue to the generic fd
+    // table close so the entry itself is freed and the Sockets quota
+    // is refunded (TLS sockets count against the same Sockets pool as
+    // raw sockets — they're a stricter sub-kind, not a separate quota).
+    if !handled_special {
+        if let Some(pcb) = fd::tls_pcb(fd_num) {
+            crate::net::https::close_pcb(pcb);
+            // Fall through — the generic close below frees the fd entry
+            // and picks the right refund resource via the entry's kind.
+        }
+    }
+
     if !handled_special {
         // Fall through to standard fd-table close, picking refund class
         // by node type. Eventfd / timerfd fds carry their slot via the
@@ -2330,6 +2400,7 @@ fn sys_close(args: [u64; 6]) -> i64 {
             Some(entry) => match entry.kind {
                 fd::FdKind::Eventfd(_) => Some(super::quotas::Resource::Eventfds),
                 fd::FdKind::Timerfd(_) => Some(super::quotas::Resource::Timerfds),
+                fd::FdKind::TlsSocket(_) => Some(super::quotas::Resource::Sockets),
                 _ => {
                     let node = vfs::get_node(entry.node_idx);
                     if node.node_type == vfs::NodeType::Socket {
@@ -3913,6 +3984,109 @@ fn sys_connect(args: [u64; 6]) -> i64 {
             SOCK_LOCAL_PORT += 1;
         }
         0
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Bat_OS-private HTTPS syscall (no Linux equivalent).
+//
+// bat_https_open(host_ptr, host_len, port, flags) -> fd | -errno
+//
+// Hands back a TLS-backed fd. Cave reads/writes plaintext; the kernel runs
+// TLS underneath. cave_policy gates which (host, port) the cave is allowed
+// to reach; default-deny — a cave with no rules gets -EACCES.
+//
+// Errors map to standard Linux errno values so caves with libc-style
+// errno-checking still work:
+//   -EACCES (-13)   cave_policy denied this destination
+//   -EFAULT (-14)   host_ptr / host_len out of cave's user range
+//   -EINVAL (-22)   bad host string (CRLF / control chars), bad port (0),
+//                   non-zero flags (reserved)
+//   -ENOMEM (-12)   no free TLS PCB slot
+//   -EIO    (-5)    DNS / TCP connect / TLS handshake failed (generic;
+//                   the kernel UART log carries the specific reason)
+// ────────────────────────────────────────────────────────────────────────
+fn sys_bat_https_open(args: [u64; 6]) -> i64 {
+    const EIO: i64 = -5;
+    let host_ptr = args[0] as usize;
+    let host_len = args[1] as usize;
+    let port = args[2] as u16;
+    let flags = args[3] as u32;
+
+    if flags != 0 { return EINVAL; }
+    if port == 0 { return EINVAL; }
+    if host_len == 0 || host_len > 253 { return EINVAL; }
+    if !is_user_ptr(host_ptr, host_len) { return EFAULT; }
+
+    // Copy host bytes into a kernel buffer. 256 covers RFC 1035 max
+    // hostname length (253) plus headroom; rejects anything longer.
+    let mut host_buf = [0u8; 256];
+    unsafe {
+        for i in 0..host_len {
+            let mut b: u32 = 0;
+            core::arch::asm!(
+                "ldrb {v:w}, [{a}]",
+                a = in(reg) host_ptr + i, v = out(reg) b,
+            );
+            host_buf[i] = b as u8;
+        }
+    }
+    // Reject control chars (CRLF injection class) and non-ASCII.
+    for &b in &host_buf[..host_len] {
+        if b < 0x20 || b == 0x7f { return EINVAL; }
+        if b == b' ' || b == b'@' { return EINVAL; }
+    }
+    let host = match core::str::from_utf8(&host_buf[..host_len]) {
+        Ok(s) => s,
+        Err(_) => return EINVAL,
+    };
+
+    // Resolve caller cave → CaveId for the cpol check. `current_cave_slot`
+    // gives a 0..NUM_CAVES slot; `cave::active_name_str` gives the name;
+    // cave_policy::cave_id_from_name converts that to the [u8; 16]
+    // CaveId the policy table is keyed by. If we can't determine the
+    // caller cave (slot=0 / "kernel"), fall through to default-deny too —
+    // that path is for the boot smoke, which calls https::open_kernel
+    // directly, NOT this syscall.
+    let cave_name = crate::batcave::cave::active_name_str();
+    let cave_id = crate::net::cave_policy::cave_id_from_name(cave_name);
+    let verdict = crate::net::cave_policy::check_with_sni(
+        &cave_id, host, port, /* TCP */ 6, Some(host),
+    );
+    if verdict == crate::net::cave_policy::Verdict::Drop {
+        crate::drivers::uart::puts("[https] EACCES cave=");
+        crate::drivers::uart::puts(cave_name);
+        crate::drivers::uart::puts(" host=");
+        crate::drivers::uart::puts(host);
+        crate::drivers::uart::puts("\n");
+        crate::security::audit::record(
+            crate::security::audit::Category::Fetch,
+            b"bat_https_open denied by cave_policy",
+        );
+        return EACCES;
+    }
+
+    // Run the dance. Kernel function returns slot id == TCP PCB id.
+    let pcb = match crate::net::https::open_kernel(host, port) {
+        Ok(p) => p,
+        Err(e) => {
+            crate::drivers::uart::puts("[https] open failed: ");
+            crate::drivers::uart::puts(e);
+            crate::drivers::uart::puts("\n");
+            // Map "no free TCP PCB" to ENOMEM, everything else to EIO.
+            if e.contains("no free") { return ENOMEM; }
+            return EIO;
+        }
+    };
+
+    // Wrap the slot in an fd. On allocation failure, tear the session
+    // down so we don't leak the TLS slot.
+    match fd::alloc_fd_tls(pcb as u16, 0) {
+        Ok(fd) => fd as i64,
+        Err(e) => {
+            crate::net::https::close_pcb(pcb);
+            e
+        }
     }
 }
 

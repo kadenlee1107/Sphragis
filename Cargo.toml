@@ -36,6 +36,14 @@ selftest-on-boot = []
 # sides run the same code. See DESIGN_TLS_PQ_FIX.md.
 pq-interop-test = []
 
+# Drive a real end-to-end HTTPS request via the kernel-mediated HTTPS
+# path (https::open_kernel + read + write) after net init, before the
+# auth gate. Prints `[https-smoke] PASS` / `FAIL <reason>` so a
+# headless QEMU smoke (scripts/qemu_https_smoke.py) can verify the
+# full request/response loop, not just the TLS handshake (which the
+# pq-interop-test feature already covers). See DESIGN_HTTPS_SYSCALL.md.
+https-smoke-test = []
+
 [dependencies]
 # ROOT-4 crypto replacement — RustCrypto audited primitives.
 # All no_std-compatible, no heap needed with default-features=false.
