@@ -21,7 +21,9 @@
 // Design:
 //   - Fixed-size hash table of `NUM_BUCKETS` buckets, keyed by (uaddr >> 3).
 //   - Each bucket has a fixed array of `WAITERS_PER_BUCKET` slots.
-//   - Each slot stores: { in_use, uaddr, tid, woken_flag, deadline_ticks }.
+//   - Each slot stores: { in_use, uaddr, tid, woken_flag, bitset }.
+//     (Deadlines live on BlockReason::FutexWait, not on the slot —
+//      see DESIGN_FUTEX_DEADLINE_UNIFICATION.md.)
 //   - Entire table guarded by a single `AtomicBool` spinlock per bucket — fine
 //     grained enough to avoid global contention, coarse enough to fit in a
 //     no_std kernel without a real lock implementation.
@@ -92,9 +94,9 @@ struct WaitSlot {
     tid: AtomicUsize,
     // Set to true by FUTEX_WAKE. The waiter polls this.
     woken: AtomicBool,
-    // Deadline in cntpct_el0 ticks. 0 == no deadline.
-    deadline_ticks: AtomicU64,
     // Bitset for FUTEX_WAIT_BITSET / FUTEX_WAKE_BITSET. Default 0xFFFFFFFF.
+    // (Deadline lives on BlockReason::FutexWait, not on the slot — see
+    //  DESIGN_FUTEX_DEADLINE_UNIFICATION.md.)
     bitset: AtomicU32,
 }
 
@@ -105,7 +107,6 @@ impl WaitSlot {
             uaddr: AtomicU64::new(0),
             tid: AtomicUsize::new(0),
             woken: AtomicBool::new(false),
-            deadline_ticks: AtomicU64::new(0),
             bitset: AtomicU32::new(0xFFFF_FFFF),
         }
     }
@@ -238,12 +239,11 @@ fn current_tid() -> usize {
 
 // Find a free slot in the bucket, claim it, and populate it. Returns the
 // slot index on success. Caller must hold the bucket lock.
-fn enqueue(b: &Bucket, uaddr: u64, tid: usize, deadline_ticks: u64, bitset: u32) -> Option<usize> {
+fn enqueue(b: &Bucket, uaddr: u64, tid: usize, bitset: u32) -> Option<usize> {
     for (i, s) in b.slots.iter().enumerate() {
         if !s.in_use.load(Ordering::Relaxed) {
             s.uaddr.store(uaddr, Ordering::Relaxed);
             s.tid.store(tid, Ordering::Relaxed);
-            s.deadline_ticks.store(deadline_ticks, Ordering::Relaxed);
             s.bitset.store(bitset, Ordering::Relaxed);
             s.woken.store(false, Ordering::Relaxed);
             // Publish in_use last so a concurrent waker seeing in_use=true
@@ -262,7 +262,6 @@ fn release(b: &Bucket, slot: usize) {
     s.uaddr.store(0, Ordering::Relaxed);
     s.tid.store(0, Ordering::Relaxed);
     s.woken.store(false, Ordering::Relaxed);
-    s.deadline_ticks.store(0, Ordering::Relaxed);
     s.bitset.store(0xFFFF_FFFF, Ordering::Relaxed);
 }
 
@@ -386,7 +385,7 @@ pub fn futex_wait(uaddr: u64, val: u32, timeout_ns: u64) -> i64 {
         return EAGAIN;
     }
 
-    let slot = match enqueue(b, uaddr, current_tid(), deadline, 0xFFFF_FFFF) {
+    let slot = match enqueue(b, uaddr, current_tid(), 0xFFFF_FFFF) {
         Some(s) => s,
         None => {
             bucket_unlock(b);
@@ -433,7 +432,7 @@ pub fn futex_wait_bitset(uaddr: u64, val: u32, timeout_ns: u64, bitset: u32) -> 
         drop(g);
         return EAGAIN;
     }
-    let slot = match enqueue(b, uaddr, current_tid(), deadline, bitset) {
+    let slot = match enqueue(b, uaddr, current_tid(), bitset) {
         Some(s) => s,
         None => {
             bucket_unlock(b);
@@ -697,7 +696,6 @@ fn requeue_impl(
                 b2,
                 uaddr2,
                 s.tid.load(Ordering::Relaxed),
-                s.deadline_ticks.load(Ordering::Relaxed),
                 s.bitset.load(Ordering::Relaxed),
             ) {
                 Some(_new_idx) => {
