@@ -1,0 +1,19 @@
+# Bat_OS pins to a specific nightly so:
+#
+# 1. `-Zfixed-x18` is available (the nightly-only replacement for the
+#    rust-deprecated `-C target-feature=+reserve-x18`, see
+#    rust-lang/rust#116344). The kernel uses x18 for per-cave
+#    bookkeeping and must keep the compiler off it.
+#
+# 2. `[unstable] build-std = ["core", "alloc"]` in `.cargo/config.toml`
+#    has a stable, supported toolchain to run against. build-std is
+#    nightly-only; on stable it works by accident on some channel
+#    versions and not on others.
+#
+# Bump procedure: pick a recent nightly that matches a stable rustup
+# channel snapshot, drop the date in here, run the smokes, commit.
+# Don't auto-upgrade — the OS is sensitive enough to compiler-version
+# behaviour that we want every bump reviewed.
+[toolchain]
+channel = "nightly-2026-05-06"
+components = ["rust-src"]
