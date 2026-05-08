@@ -9,10 +9,10 @@
 // Register offsets and protocol ported from
 // `external/m1n1/src/dockchannel_uart.c`:
 //
-//   DATA_TX8       = 0x4004  (write byte to TX FIFO)
-//   DATA_TX_FREE   = 0x4014  (u32: bytes free in TX FIFO — wait for >0)
-//   DATA_RX8       = 0x401c  (u32: RX byte in bits [15:8])
-//   DATA_RX_COUNT  = 0x402c  (u32: bytes available in RX FIFO)
+// DATA_TX8 = 0x4004 (write byte to TX FIFO)
+// DATA_TX_FREE = 0x4014 (u32: bytes free in TX FIFO — wait for >0)
+// DATA_RX8 = 0x401c (u32: RX byte in bits [15:8])
+// DATA_RX_COUNT = 0x402c (u32: bytes available in RX FIFO)
 //
 // m1n1 guarantees the block is already clocked and configured when
 // it hands off, so we don't need an explicit `init()` — just respect
@@ -45,13 +45,13 @@ pub fn init() {}
 /// kernel. The upper cap is generous — ~a million iterations is
 /// microseconds on real hardware but a hundred ms or so at M4's slow
 /// pre-cpufreq boot clock.
-///
+// /
 /// Mirrors every byte into the on-screen `fb_console` so char-level
 /// emitters like `kernel::mm::print_num` (which drives this via
 /// `platform::serial_putc`) also show up on the Mac's display, not
 /// just in the void of the dockchannel MMIO.
 pub fn putc(c: u8) {
-    // 🎯 STUMP #60 (HVF cleanup): on QEMU we MUST NOT touch the
+    // 🎯 on QEMU we MUST NOT touch the
     // dockchannel UART MMIO — it lives at PA 0x3_8812_8000 which is
     // unmapped on QEMU virt and any read faults. The platform layer
     // routes serial_putc to the right driver based on

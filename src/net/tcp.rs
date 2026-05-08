@@ -4,36 +4,33 @@
 // Designed to unblock Chromium's subresource fetch parallelism.
 //
 // Design summary
-// --------------
-//   * Replace the single `CONN_STATE` / `REMOTE_IP` / ... globals with a
-//     fixed-size [TcpPcb; MAX_PCBS] table. No heap.
-//   * PCB fields are plain non-atomic where they are only mutated under the
-//     single-threaded packet-dispatch & connect path. Shared-visibility flags
-//     (state, in_use, error, nonblocking, ring head/tail) use atomics so that
-//     epoll/poll callers and the RX dispatch path can coordinate.
-//   * Non-blocking connect: `connect_start()` + `connect_poll()`. The legacy
-//     synchronous `connect()` wraps these using PCB 0 so the existing
-//     netsurf_test keeps working.
-//   * Per-PCB rx/tx rings (8 KiB each) — enough for one in-flight TCP segment
-//     with window room; Chromium's HTTP/1.1 pipelines fit.
-//   * epoll integration: when rx_buf gains data, the PCB transitions to
-//     ESTABLISHED, or tx_buf drains, we call `epoll::mark_ready(fd, ...)`.
-//   * Half-close: `shutdown_write` sends a FIN but keeps RX open;
-//     `shutdown_read` drops further incoming data.
-//   * State machine: full 11-state table with the transitions noted in the
-//     task. TIME_WAIT 2MSL timeout is a best-effort counter, not wall-clock.
+// * Replace the single `CONN_STATE` / `REMOTE_IP` / ... globals with a
+// fixed-size [TcpPcb; MAX_PCBS] table. No heap.
+// * PCB fields are plain non-atomic where they are only mutated under the
+// single-threaded packet-dispatch & connect path. Shared-visibility flags
+// (state, in_use, error, nonblocking, ring head/tail) use atomics so that
+// epoll/poll callers and the RX dispatch path can coordinate.
+// * Non-blocking connect: `connect_start()` + `connect_poll()`. The legacy
+// synchronous `connect()` wraps these using PCB 0 so the existing
+// netsurf_test keeps working.
+// * Per-PCB rx/tx rings (8 KiB each) — enough for one in-flight TCP segment
+// with window room; Chromium's HTTP/1.1 pipelines fit.
+// * epoll integration: when rx_buf gains data, the PCB transitions to
+// ESTABLISHED, or tx_buf drains, we call `epoll::mark_ready(fd, ...)`.
+// * Half-close: `shutdown_write` sends a FIN but keeps RX open;
+// `shutdown_read` drops further incoming data.
+// * State machine: full 11-state table with the transitions noted in the
+// task. TIME_WAIT 2MSL timeout is a best-effort counter, not wall-clock.
 
 use super::ip::{self, IpPacket};
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-// ---------------------------------------------------------------------------
 // ISN randomization (ATTACK-NET-009)
-// ---------------------------------------------------------------------------
 //
 // The previous scheme was `1000 + pcb_id * 997`, which is deterministic and
 // allows blind RST / data injection as soon as the attacker observes a single
 // handshake. We now derive the ISN from
-//     hash(cntpct_el0 ^ remote_ip ^ remote_port ^ pcb_id ^ boot_cookie)
+// hash(cntpct_el0 ^ remote_ip ^ remote_port ^ pcb_id ^ boot_cookie)
 // where boot_cookie is a one-shot 64-bit value seeded from the timer the
 // first time it is read. This is still not RFC 6528 (needs a real CSPRNG
 // and per-4-tuple hash key) but it defeats the "read one ISN, predict all
@@ -113,9 +110,7 @@ fn compute_isn(pcb_id: usize, remote_ip: u32, remote_port: u16) -> u32 {
     h as u32
 }
 
-// ---------------------------------------------------------------------------
 // Constants
-// ---------------------------------------------------------------------------
 
 const TCP_HDR_SIZE: usize = 20;
 pub const TCP_FIN: u8 = 0x01;
@@ -161,8 +156,8 @@ pub const TX_BUF_SIZE: usize = 8192;
 const LEGACY_PCB: usize = 0;
 
 /// Ephemeral local-port allocator. Starts at 49152 and wraps around 65535.
-///
-/// STUMP #88: previously a single `AtomicU32::fetch_add(1)`. On Apple
+// /
+/// previously a single `AtomicU32::fetch_add(1)`. On Apple
 /// Silicon (and on QEMU/HVF here) the kernel runs with the MMU
 /// disabled, so the backing memory is treated as Device-nGnRnE and
 /// LDXR/STXR have unpredictable behavior — STXR always fails, so
@@ -206,9 +201,7 @@ fn alloc_local_port() -> u16 {
     }
 }
 
-// ---------------------------------------------------------------------------
 // PCB (TCB)
-// ---------------------------------------------------------------------------
 
 /// Per-connection TCP control block.
 pub struct TcpPcb {
@@ -255,7 +248,7 @@ pub struct TcpPcb {
     /// once 30 s (2×MSL shortened) have elapsed.
     pub time_wait_entered: AtomicU64,
 
-    /// STUMP #148: for PCBs allocated by the SYN-on-LISTEN handler,
+    /// for PCBs allocated by the SYN-on-LISTEN handler,
     /// this is the parent listener's slot index in `LISTENERS[]`.
     /// `u16::MAX` means "client-side connection, not from a listener."
     /// Used by step 3's SYN_RECEIVED→ESTABLISHED transition to know
@@ -307,17 +300,17 @@ impl TcpPcb {
 
 static mut TCP_PCBS: [TcpPcb; MAX_PCBS] = [const { TcpPcb::empty() }; MAX_PCBS];
 
-// ─── STUMP #148: Server-side TCP — Listener table ─────────────────────
+// ─── Server-side TCP — Listener table ─────────────────────
 //
 // A `Listener` represents a `(local_port, backlog)` pair waiting to
 // accept inbound connections. It owns:
-//   - the local port the operator bind()ed to + listen()ed on
-//   - the listening fd (so `epoll::mark_ready` can wake `epoll_wait`)
-//   - the cave that owns it (per-cave isolation when caves close)
-//   - an accept queue: a fixed-size ring of `pcb_id`s for connections
-//     that completed the 3-way handshake but haven't been `accept()`ed
-//     yet
-//   - `backlog` capping the accept queue depth
+// the local port the operator bind()ed to + listen()ed on
+// the listening fd (so `epoll::mark_ready` can wake `epoll_wait`)
+// the cave that owns it (per-cave isolation when caves close)
+// an accept queue: a fixed-size ring of `pcb_id`s for connections
+// that completed the 3-way handshake but haven't been `accept()`ed
+// yet
+// `backlog` capping the accept queue depth
 //
 // The listener does NOT hold sequence/window state — it's purely an
 // accept-rendezvous. SYN_RECEIVED PCBs (allocated by the SYN-on-LISTEN
@@ -410,13 +403,13 @@ pub fn listener_lookup_by_port(local_port: u16) -> Option<usize> {
 
 /// Register a new listener for `local_port`. Returns the slot index
 /// or one of:
-///   - `Err("EADDRINUSE")`  if any active listener or non-TIME_WAIT
-///                          PCB already owns this port
-///   - `Err("EMFILE")`      if all MAX_LISTENERS slots are full
-///
+/// `Err("EADDRINUSE")` if any active listener or non-TIME_WAIT
+/// PCB already owns this port
+/// `Err("EMFILE")` if all MAX_LISTENERS slots are full
+// /
 /// `backlog` is clamped to `ACCEPT_QUEUE_DEPTH` (Linux's `somaxconn`
 /// equivalent for us).
-///
+// /
 /// Caller (sockets.rs::listen) is responsible for `bind()`ing the
 /// fd before calling — we don't validate the cave owns the fd.
 pub fn listen_register(
@@ -481,7 +474,7 @@ pub fn listen_register(
 
     alloc_unlock();
 
-    // STUMP #150: install a per-listener firewall rule so inbound
+    // install a per-listener firewall rule so inbound
     // TCP to this dst_port is explicitly allowed. Today this is
     // redundant with the boot-time wildcard inbound TCP rule, but it
     // hardens the path for a future tightening pass that drops the
@@ -539,7 +532,7 @@ pub fn listen_close(local_port: u16) {
     }
     alloc_unlock();
 
-    // STUMP #148 step 7: send RST + free for each pending PCB so
+    // step 7: send RST + free for each pending PCB so
     // the peer sees ECONNRESET instead of silent drop. Pre-fix did
     // just `pcb_free` which leaks the connection from the peer's
     // perspective until their own retransmit timer fires.
@@ -551,7 +544,7 @@ pub fn listen_close(local_port: u16) {
         }
     }
 
-    // STUMP #150: revoke the per-listener firewall rule.
+    // revoke the per-listener firewall rule.
     // Idempotent — silent if no matching rule (e.g. the listener was
     // already closed once and we're being called a second time, or
     // the rule was somehow externally removed).
@@ -590,7 +583,7 @@ pub fn listen_close(local_port: u16) {
 /// Called from the SYN_RECEIVED→ESTABLISHED transition in
 /// `handle_incoming`. Returns `Ok(())` if queued, `Err(())` if the
 /// queue is full (caller should RST and free the PCB).
-///
+// /
 /// On success, also signals epoll readiness on the listening fd so
 /// a parked `epoll_wait` returns with EPOLLIN.
 pub fn listener_accept_push(listener_idx: usize, pcb_id: usize) -> Result<(), ()> {
@@ -625,7 +618,7 @@ pub fn listener_accept_pop(listener_idx: usize) -> Option<usize> {
     Some(pcb_id)
 }
 
-// ─── STUMP #148 step 5: SYN cookies ──────────────────────────────────
+// ─── step 5: SYN cookies ──────────────────────────────────
 //
 // RFC 4987 SYN cookies — DoS mitigation against SYN floods. Without
 // them, an attacker spraying SYNs from spoofed source IPs exhausts
@@ -642,12 +635,12 @@ pub fn listener_accept_pop(listener_idx: usize) -> Option<usize> {
 // allocate the PCB at ESTABLISHED-time.
 //
 // Cookie ISN encoding (32 bits):
-//   bits 31..27 (5)  : MSS class (we only use 0..3 today)
-//   bits 26..24 (3)  : time window number (3 bits → 8 windows × 60s
-//                       = 8 minutes total cookie validity, but we
-//                       only accept current + previous = ~120s)
-//   bits 23..0  (24) : MAC = HMAC-SHA-256(secret, src_ip || src_port
-//                       || dst_port || mss_class || twin)[..3]
+// bits 31..27 (5) : MSS class (we only use 0..3 today)
+// bits 26..24 (3) : time window number (3 bits → 8 windows × 60s
+// = 8 minutes total cookie validity, but we
+// only accept current + previous = ~120s)
+// bits 23..0 (24) : MAC = HMAC-SHA-256(secret, src_ip || src_port
+// || dst_port || mss_class || twin)[..3]
 //
 // The 24-bit MAC has a 1/16M forge probability per attempt. An
 // off-path attacker can't see our SYN+ACK so they have to guess
@@ -764,7 +757,7 @@ fn cookie_validate(
 /// half-open. Caller supplies the full 4-tuple, sequence numbers, and
 /// flags; we build the segment, compute the checksum, and ship it via
 /// `ip::send`.
-///
+// /
 /// `wnd` is the receive window we advertise. With cookies engaged the
 /// PCB doesn't exist yet so we use a fixed reasonable default.
 fn send_tcp_raw(
@@ -798,7 +791,7 @@ fn send_tcp_raw(
     let _ = ip::send(dst_ip, 6, &tcp);
 }
 
-/// STUMP #158: enumerate active listeners for the `tcp-list` shell
+/// enumerate active listeners for the `tcp-list` shell
 /// command. Calls `f(local_port, backlog, fd, accept_count)` for each
 /// active listener slot. Cheap — walks MAX_LISTENERS=16 once.
 pub fn for_each_listener<F: FnMut(u16, u8, i32, usize)>(mut f: F) {
@@ -812,7 +805,7 @@ pub fn for_each_listener<F: FnMut(u16, u8, i32, usize)>(mut f: F) {
     }
 }
 
-/// STUMP #158: enumerate active connection PCBs for the `tcp-list`
+/// enumerate active connection PCBs for the `tcp-list`
 /// shell command. Calls `f(state, local_port, remote_ip_host, remote_port,
 /// fd)` for each non-CLOSED PCB. Cheap — walks MAX_PCBS=64 once.
 pub fn for_each_pcb<F: FnMut(u32, u16, u32, u16, i32)>(mut f: F) {
@@ -828,7 +821,7 @@ pub fn for_each_pcb<F: FnMut(u32, u16, u32, u16, i32)>(mut f: F) {
     }
 }
 
-/// STUMP #158: human-readable name for a TCP state code. Used by
+/// human-readable name for a TCP state code. Used by
 /// `tcp-list` shell output.
 pub fn state_name(state: u32) -> &'static str {
     match state {
@@ -871,7 +864,7 @@ pub fn listener_lookup_by_fd(fd: i32) -> Option<usize> {
 /// Read-only accessor for an established PCB's remote endpoint.
 /// Returns `(remote_ip, remote_port)` both in HOST byte order
 /// (despite the `TcpPcb::remote_ip` field comment saying big-endian
-/// — that comment is wrong; the field is set from
+/// that comment is wrong; the field is set from
 /// `IpPacket::parse`'s `from_be_bytes` which returns host-order,
 /// and `send_tcp_pcb` calls `.to_be_bytes()` to put it back on the
 /// wire). Returns `(0, 0)` if `id` is out of range or the PCB is
@@ -883,7 +876,7 @@ pub fn pcb_remote(id: usize) -> (u32, u16) {
     (p.remote_ip, p.remote_port)
 }
 
-// ─── STUMP #148 selftest ──────────────────────────────────────────────
+// ─── selftest ──────────────────────────────────────────────
 //
 // Kernel-internal unit-style test for the server-side TCP machinery.
 // Wired as `tcp-selftest` shell command. Exercises the data-structure
@@ -978,22 +971,22 @@ pub fn selftest_server() -> Result<TcpServerSelftestReport, &'static str> {
     pcb_free(pcb_b);
 
     // 5. Backlog enforcement: pre-fill the queue to backlog capacity,
-    //    then verify push fails with Err(()).
+    // then verify push fails with Err(()).
     //
-    //    The previous version of this test held a `let l =
-    //    listener_mut(slot);` reference across the test body AND
-    //    called `listener_accept_push(slot, 99)` which internally
-    //    creates its OWN `&'static mut Listener` to the same memory.
-    //    That's aliased &mut → UB, and rustc's optimizer assumed
-    //    `l` was exclusive, caching the head value in a register
-    //    and never re-reading it after the push. Tests printed
-    //    head=0 after 4 fetch_adds because the increments never
-    //    made it back to memory before the inner mut ref read it.
+    // The previous version of this test held a `let l =
+    // listener_mut(slot);` reference across the test body AND
+    // called `listener_accept_push(slot, 99)` which internally
+    // creates its OWN `&'static mut Listener` to the same memory.
+    // That's aliased &mut → UB, and rustc's optimizer assumed
+    // `l` was exclusive, caching the head value in a register
+    // and never re-reading it after the push. Tests printed
+    // head=0 after 4 fetch_adds because the increments never
+    // made it back to memory before the inner mut ref read it.
     //
-    //    Fix: scope each `&mut` access tightly so no two refs are
-    //    live concurrently. The production code paths are immune
-    //    to this because each public fn gets its own fresh ref
-    //    and uses it in a short bounded sequence.
+    // Fix: scope each `&mut` access tightly so no two refs are
+    // live concurrently. The production code paths are immune
+    // to this because each public fn gets its own fresh ref
+    // and uses it in a short bounded sequence.
     let backlog_n = {
         let l = listener_mut(slot);
         let n = l.backlog as usize;
@@ -1025,11 +1018,11 @@ pub fn selftest_server() -> Result<TcpServerSelftestReport, &'static str> {
     listen_close(TEST_PORT);
     passed += 1;
 
-    // 8. STUMP #148 step 7: listen_close drains pending PCBs cleanly.
-    //    Re-register, push 2 PCBs onto the accept queue, then close.
-    //    All PCBs in the queue should be freed. We can't easily verify
-    //    the RST went on the wire from a self-test (no ip_send mock),
-    //    but we CAN verify the PCB slots got freed.
+    // 8. step 7: listen_close drains pending PCBs cleanly.
+    // Re-register, push 2 PCBs onto the accept queue, then close.
+    // All PCBs in the queue should be freed. We can't easily verify
+    // the RST went on the wire from a self-test (no ip_send mock),
+    // but we CAN verify the PCB slots got freed.
     let s3 = listen_register(TEST_PORT, 4, 0, TEST_FD)
         .map_err(|_| "step 8 re-register failed")?;
     let p_c = pcb_alloc().ok_or("step 8 pcb_alloc C failed")?;
@@ -1062,10 +1055,10 @@ pub fn selftest_server() -> Result<TcpServerSelftestReport, &'static str> {
     assert_ok!(!pcb(p_d).in_use.load(Ordering::Acquire),
                "listen_close left pending PCB D in use");
 
-    // 9. STUMP #148 step 7: orphan SYN_RECEIVED PCBs are reaped.
-    //    Register a listener, allocate a PCB and put it in
-    //    SYN_RECEIVED with parent_listener_idx pointing at our slot,
-    //    then close the listener. The orphan PCB should be freed.
+    // 9. step 7: orphan SYN_RECEIVED PCBs are reaped.
+    // Register a listener, allocate a PCB and put it in
+    // SYN_RECEIVED with parent_listener_idx pointing at our slot,
+    // then close the listener. The orphan PCB should be freed.
     let s4 = listen_register(TEST_PORT, 4, 0, TEST_FD)
         .map_err(|_| "step 9 re-register failed")?;
     let p_e = pcb_alloc().ok_or("step 9 pcb_alloc E failed")?;
@@ -1106,10 +1099,10 @@ pub fn selftest_server() -> Result<TcpServerSelftestReport, &'static str> {
 
 /// V6-XLAYER-005/006: clear every PCB on cave switch so a new tenant
 /// can't inherit (or hijack) the previous cave's TCP connections.
-///
+// /
 /// V8-ROOT-1: IRQ-masked for duration. Same reasoning as sockets reset.
-///
-/// STUMP #148: also clear the LISTENERS table — a listening port owned
+// /
+/// also clear the LISTENERS table — a listening port owned
 /// by cave A must not stay open into cave B. (We can't do per-cave
 /// filtering here cheaply; the rare valid case where cave B has its
 /// own listener is handled by re-registration after enter.)
@@ -1151,9 +1144,7 @@ pub fn pcb(id: usize) -> &'static TcpPcb {
     }
 }
 
-// ---------------------------------------------------------------------------
 // PCB allocation / free
-// ---------------------------------------------------------------------------
 
 /// Allocate a free PCB slot. Returns the pcb_id or None if the table is full.
 pub fn pcb_alloc() -> Option<usize> {
@@ -1194,12 +1185,12 @@ pub fn pcb_alloc() -> Option<usize> {
 }
 
 /// Free a PCB slot. Caller must have already closed or reset the connection.
-///
+// /
 /// V11-state-sweep: previously only state/in_use/fd were updated, leaving
 /// the 16 KiB rx/tx buffers full of the prior connection's plaintext
 /// (HTTP bodies, mail, whatever) for the next `pcb_alloc` tenant to
 /// observe. Also leaked the 4-tuple (local_port, remote_ip, remote_port)
-/// — a fingerprint of the prior peer. Now we scrub everything.
+/// a fingerprint of the prior peer. Now we scrub everything.
 pub fn pcb_free(id: usize) {
     if id >= MAX_PCBS { return; }
     alloc_lock();
@@ -1228,7 +1219,7 @@ pub fn pcb_free(id: usize) {
     p.error.store(0, Ordering::Release);
     p.is_nonblocking.store(false, Ordering::Release);
     p.time_wait_entered.store(0, Ordering::Release);
-    // STUMP #148: clear parent-listener back-pointer.
+    // clear parent-listener back-pointer.
     p.parent_listener_idx.store(u32::MAX, Ordering::Release);
     alloc_unlock();
 }
@@ -1249,9 +1240,7 @@ pub fn pcb_state(id: usize) -> u32 {
     pcb(id).state.load(Ordering::Acquire)
 }
 
-// ---------------------------------------------------------------------------
 // epoll notify helper
-// ---------------------------------------------------------------------------
 
 fn notify_epoll(id: usize, events: u32) {
     let fd = pcb(id).fd.load(Ordering::Acquire);
@@ -1260,7 +1249,6 @@ fn notify_epoll(id: usize, events: u32) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Drain zombie PCBs: any non-ESTABLISHED, non-LISTEN PCB that has been in
 // its current transient state longer than the per-state limit transitions
 // to CLOSED and releases its slot.
@@ -1269,7 +1257,6 @@ fn notify_epoll(id: usize, events: u32) {
 // that dropped our SYN silently (or sent FIN and then vanished) would
 // pin the PCB in SYN_SENT / FIN_WAIT_* until reboot — 64 such hangs
 // drained the whole TCP table.
-// ---------------------------------------------------------------------------
 const TIME_WAIT_NS_2MSL:  u64 = 30_000_000_000;  // 30 s (2×MSL shortened)
 const SYN_SENT_NS:        u64 = 60_000_000_000;  // 60 s connect deadline
 const FIN_WAIT_NS:        u64 = 60_000_000_000;  // 60 s for peer FIN/ACK
@@ -1316,9 +1303,7 @@ fn drain_time_wait() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Incoming packet dispatch
-// ---------------------------------------------------------------------------
 
 /// Find the PCB owning (remote_ip, remote_port, local_port).
 fn pcb_lookup(remote_ip: u32, remote_port: u16, local_port: u16) -> Option<usize> {
@@ -1379,11 +1364,11 @@ pub fn handle_incoming(pkt: &IpPacket) {
         Some(i) => i,
         None => {
             // No PCB for this 4-tuple. Three sub-paths:
-            //   A) bare SYN + listener for dst_port → new connection
-            //      (steps 2 + 5 SYN-cookie fallback if PCB table full)
-            //   B) bare ACK + listener for dst_port + valid cookie →
-            //      reconstruct PCB at ESTABLISHED (step 5 second half)
-            //   C) anything else → silently drop
+            // A) bare SYN + listener for dst_port → new connection
+            // (steps 2 + 5 SYN-cookie fallback if PCB table full)
+            // B) bare ACK + listener for dst_port + valid cookie →
+            // reconstruct PCB at ESTABLISHED (step 5 second half)
+            // C) anything else → silently drop
             let listener_idx = listener_lookup_by_port(dst_port);
 
             let is_bare_syn = (flags & TCP_SYN) != 0 && (flags & TCP_ACK) == 0;
@@ -1459,7 +1444,7 @@ pub fn handle_incoming(pkt: &IpPacket) {
                     }
                     send_tcp_pcb(new_id, TCP_SYN | TCP_ACK, &[]);
                 } else {
-                    // STUMP #148 step 5: PCB table full. Don't drop —
+                    // step 5: PCB table full. Don't drop —
                     // fall back to a SYN cookie. We allocate ZERO
                     // state; the cookie ISN we send back encodes
                     // everything we need to validate the third ACK.
@@ -1549,7 +1534,7 @@ pub fn handle_incoming(pkt: &IpPacket) {
                 p.time_wait_entered.store(0, Ordering::Release);
                 notify_epoll(id, EPOLLOUT);
 
-                // STUMP #148 step 3: if this PCB came from a
+                // step 3: if this PCB came from a
                 // SYN-on-LISTEN allocation, push it onto the parent
                 // listener's accept queue so the next sys_accept
                 // returns this fd and epoll_wait wakes on the
@@ -1698,9 +1683,7 @@ fn seq_leq(a: u32, b: u32) -> bool {
     (b.wrapping_sub(a) as i32) >= 0
 }
 
-// ---------------------------------------------------------------------------
 // Segment transmit
-// ---------------------------------------------------------------------------
 
 fn send_tcp_pcb(id: usize, flags: u8, payload: &[u8]) {
     let p = pcb_mut(id);
@@ -1804,9 +1787,7 @@ fn verify_tcp_checksum(pkt: &IpPacket) -> bool {
     (!(sum as u16)) == 0
 }
 
-// ---------------------------------------------------------------------------
 // Unit tests (run on the host, not the kernel target)
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod checksum_tests {
@@ -1866,9 +1847,7 @@ mod checksum_tests {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Non-blocking connect
-// ---------------------------------------------------------------------------
 
 pub enum ConnectStatus {
     InProgress,
@@ -1931,9 +1910,7 @@ pub fn connect_poll(id: usize) -> ConnectStatus {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Per-PCB I/O
-// ---------------------------------------------------------------------------
 
 /// Send data on an established PCB. Returns bytes accepted or errno (positive).
 pub fn send_data_pcb(id: usize, data: &[u8]) -> Result<usize, i32> {
@@ -2001,9 +1978,7 @@ pub fn can_write(id: usize) -> bool {
     s == STATE_ESTABLISHED || s == STATE_CLOSE_WAIT
 }
 
-// ---------------------------------------------------------------------------
 // Half-close
-// ---------------------------------------------------------------------------
 
 pub fn shutdown_write(id: usize) {
     if id >= MAX_PCBS { return; }

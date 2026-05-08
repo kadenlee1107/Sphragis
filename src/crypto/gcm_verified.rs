@@ -5,7 +5,7 @@
 // pentest-flagged `Aes128::gcm_crypt` which was pure XOR stream with
 // no authentication — an MITM could flip any plaintext bit.
 //
-// AES-256-GCM (`Aes256Gcm`) added in STUMP #159 to support the TLS
+// AES-256-GCM (`Aes256Gcm`) added in to support the TLS
 // 1.3 `TLS_AES_256_GCM_SHA384` cipher suite. Same GCM construction;
 // only the AES key size + block primitive differ.
 //
@@ -94,18 +94,18 @@ impl Aes128Gcm {
     }
 
     /// Decrypt a GCM ciphertext, verifying the 16-byte tag.
-    ///
+    // /
     /// Input:
-    ///   nonce  — 12 bytes
-    ///   aad    — additional authenticated data (may be empty)
-    ///   ct_and_tag — the wire bytes: ciphertext concatenated with the
-    ///                16-byte tag at the end
-    ///
+    /// nonce — 12 bytes
+    /// aad — additional authenticated data (may be empty)
+    /// ct_and_tag — the wire bytes: ciphertext concatenated with the
+    /// 16-byte tag at the end
+    // /
     /// Returns Ok(plaintext_len) if the tag verifies (in which case
     /// the first `ct_and_tag.len() - 16` bytes of `ct_and_tag` have
     /// been overwritten in-place with plaintext), or Err("tag
     /// mismatch") if authentication fails.
-    ///
+    // /
     /// Uses constant-time comparison on the tag — no timing oracle.
     pub fn decrypt_inplace(
         &self,
@@ -174,7 +174,7 @@ impl Aes128Gcm {
 /// agnostic to AES key size — it just uses E_K as a black box), but
 /// holds an `Aes256Block` instead of `Aes128Block`. Used by the TLS
 /// 1.3 `TLS_AES_256_GCM_SHA384` cipher suite.
-///
+// /
 /// The method bodies are intentionally identical to `Aes128Gcm`'s —
 /// `encrypt_block` is provided by the `BlockEncrypt` trait that both
 /// AES variants implement. We don't share a generic impl because the
@@ -306,13 +306,13 @@ impl Aes256Gcm {
 /// round-trip and that the GHASH+CTR construction reproduces the
 /// published tags.
 pub fn selftest() -> Result<(), &'static str> {
-    // ---- AES-128-GCM, NIST Test Case 2 ----------------------------
-    // K  = 00..00 (16 zero bytes)
+    // AES-128-GCM, NIST Test Case 2 ----------------------------
+    // K = 00..00 (16 zero bytes)
     // IV = 00..00 (12 zero bytes)
-    // A  = empty
-    // P  = 00..00 (16 zero bytes)
-    // C  = 0388dace60b6a392f328c2b971b2fe78
-    // T  = ab6e47d42cec13bdf53a67b21257bddf
+    // A = empty
+    // P = 00..00 (16 zero bytes)
+    // C = 0388dace60b6a392f328c2b971b2fe78
+    // T = ab6e47d42cec13bdf53a67b21257bddf
     {
         let key = [0u8; 16];
         let nonce = [0u8; 12];
@@ -345,13 +345,13 @@ pub fn selftest() -> Result<(), &'static str> {
         }
     }
 
-    // ---- AES-256-GCM, NIST Test Case 14 ---------------------------
-    // K  = 00..00 (32 zero bytes)
+    // AES-256-GCM, NIST Test Case 14 ---------------------------
+    // K = 00..00 (32 zero bytes)
     // IV = 00..00 (12 zero bytes)
-    // A  = empty
-    // P  = 00..00 (16 zero bytes)
-    // C  = cea7403d4d606b6e074ec5d3baf39d18
-    // T  = d0d1c8a799996bf0265b98b5d48ab919
+    // A = empty
+    // P = 00..00 (16 zero bytes)
+    // C = cea7403d4d606b6e074ec5d3baf39d18
+    // T = d0d1c8a799996bf0265b98b5d48ab919
     {
         let key = [0u8; 32];
         let nonce = [0u8; 12];

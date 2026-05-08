@@ -1,6 +1,6 @@
 // Bat_OS — Secure Boot Screen
 //
-// STUMP #116 — Claude-Design boot-screen redesign (April 2026).
+// Claude-Design boot-screen redesign (April 2026).
 // The previous version was a bare bat sprite + a single passphrase
 // box on a black field. The new design (terminal-cyberpunk meets
 // operator-tactical) was generated in Claude Design from a prompt
@@ -8,25 +8,25 @@
 // `docs/design/lock-screen/` (jsx + spec sheet).
 //
 // Visual contract (matches `docs/design/lock-screen/specs.jsx`):
-//   * 16-color palette anchored on near-black panels and cyan accent.
-//   * Status pill row across the top with real subsystem state.
-//   * Centered stack: geometric bat glyph + BAT_OS wordmark + version
-//     line + passphrase field + helper hint row.
-//   * Bottom-left: last 4 boot-log lines.
-//   * Bottom-right: clock + attempts-remaining pill.
-//   * Crosshair corner marks at all four corners.
-//   * Three states: idle, typing, denied.
+// * 16-color palette anchored on near-black panels and cyan accent.
+// * Status pill row across the top with real subsystem state.
+// * Centered stack: geometric bat glyph + BAT_OS wordmark + version
+// line + passphrase field + helper hint row.
+// * Bottom-left: last 4 boot-log lines.
+// * Bottom-right: clock + attempts-remaining pill.
+// * Crosshair corner marks at all four corners.
+// * Three states: idle, typing, denied.
 //
 // What's deliberately NOT in this port (for follow-up STUMPs):
-//   * 1Hz cursor blink — needs a wall-clock timer hook.
-//   * 1-pixel scanline overlay — easy to add but ~340k pixel writes
-//     per repaint; defer until we know we want the cost.
-//   * TrueType wordmark — `ui/truetype.rs` exists but isn't wired
-//     into the WM yet; we use the existing 8x16 bitmap font, which
-//     looks chunkier than the spec's JetBrains Mono but is honest
-//     about what we render today.
+// * 1Hz cursor blink — needs a wall-clock timer hook.
+// * 1-pixel scanline overlay — easy to add but ~340k pixel writes
+// per repaint; defer until we know we want the cost.
+// * TrueType wordmark — `ui/truetype.rs` exists but isn't wired
+// into the WM yet; we use the existing 8x16 bitmap font, which
+// looks chunkier than the spec's JetBrains Mono but is honest
+// about what we render today.
 //
-// CRITICAL color note: per STUMP #67, the QEMU framebuffer is
+// CRITICAL color note: per , the QEMU framebuffer is
 // FORMAT_B8G8R8A8 and we write u32s in `(A<<24)|(R<<16)|(G<<8)|B`
 // form so the LE store lands as B,G,R,A in memory. That means
 // hex literals like 0xFF22D3EE map directly to "alpha=FF, R=22,
@@ -105,7 +105,7 @@ const FIELD_H: u32 = 56;
 const DOT_PX:  u32 = 8; // each masking dot is 8x8
 const DOT_GAP: u32 = 8;
 
-// Bat glyph + drawing primitives now live in ui::draw — see STUMP #120.
+// Bat glyph + drawing primitives now live in ui::draw — see .
 
 /// Draw a 14×14 L-shape crosshair mark at one of the four corners.
 /// `dx, dy` are the direction signs (-1 / +1) the L opens toward.
@@ -370,7 +370,7 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
 
     // Helper hint row beneath the field.
     //
-    // STUMP #119: dropped the design's "ESC TO WIPE" and "F2 KEYMAP"
+    // dropped the design's "ESC TO WIPE" and "F2 KEYMAP"
     // labels — neither is wired (and ESC-to-wipe would be a footgun
     // anyway: a stray ESC press shouldn't nuke the system without
     // confirmation). Wipe is reachable via the duress passphrase,
@@ -483,7 +483,7 @@ pub fn run() {
         let mut len = 0usize;
 
         loop {
-            // STUMP #99 + #112 keyboard plumbing — drain serial,
+            // + #112 keyboard plumbing — drain serial,
             // virtio-keyboard, AND the pointer-device's mis-routed
             // EV_KEY ring.
             crate::drivers::virtio::keyboard::poll();

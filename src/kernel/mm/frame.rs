@@ -5,7 +5,7 @@
 use core::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 
 pub const PAGE_SIZE: usize = 4096;
-// 🎯 STUMP #7 (paired with QEMU_MEMORY_END = 0x140000000): bitmap now
+// 🎯 bitmap now
 // covers 4 GiB of frames so alloc_kernel_frame can find frames at the
 // top of physical RAM. Was 524288 (= 2 GiB) — when QEMU_MEMORY_END
 // got bumped to 4 GiB, the kernel-pool scan from total-1 downward
@@ -81,7 +81,7 @@ pub fn alloc_frame() -> Option<usize> {
     let start = MEMORY_START.load(Ordering::Relaxed);
     let user_cap = total.saturating_sub(KERNEL_RESERVED_FRAMES);
 
-    // 🎯 STUMP #38: skip the kernel-pool window so user pool can't poach
+    // skip the kernel-pool window so user pool can't poach
     // the kernel-reachable PAs that `alloc_kernel_frame` needs for L1/L2/
     // L3 page tables. Without this, deep Chromium runs (~50K demand-page
     // commits) would fill user-pool frames from index 0 upward, eventually
@@ -139,7 +139,7 @@ pub fn alloc_frame() -> Option<usize> {
                     addr = in(reg) target,
                 );
             }
-            // 🎯 STUMP #13: dc civac to PoC. The caller may map this
+            // dc civac to PoC. The caller may map this
             // frame into a different cave VA; any stale dirty cache
             // lines (from a previous EL1-side use of this PA) would
             // shadow our fresh zeros.
@@ -159,18 +159,18 @@ pub fn alloc_frame() -> Option<usize> {
 
 /// Kernel-reserved frames at the top of the memory range. Never returned
 /// by `alloc_frame`, so cave user-window mappings cannot alias into them.
-///
+// /
 /// HISTORY: was 512 (= 2 MB) sized for cave L1/L2 tables only. Once
 /// demand_page::install_l3_mapping started lazily allocating L2/L3 tables
 /// (Stump #3 + Stump #4 fixes), and Chromium spread its 30+ thread stacks
 /// + many small_mmap regions across hundreds of distinct 2-MB pages,
 /// 512 frames blew through ~2300 demand-page commits and threw
 /// `oom for L3 table`.
-///
+// /
 /// 4096 frames = 16 MB on a 4 GB system (0.4%). Plenty for any
 /// reasonable cave + small_mmap workload, including 32 caves of
 /// content_shell-class binaries with their full thread/cage layouts.
-// 🎯 STUMP #23: bumped 4096 → 16384 → 32768 (16 MB → 64 MB → 128 MB)
+// bumped 4096 → 16384 → 32768 (16 MB → 64 MB → 128 MB)
 // Even at 64 MB we OOM at ~22K-line runs ("install_l3 failed
 // va=0x14e200000 reason: demand_page: oom for L3 table"). The
 // deep runs map many L3 tables for V8 cages + content_shell text +
@@ -181,7 +181,7 @@ pub const KERNEL_RESERVED_FRAMES: usize = 32768;
 /// V2-001/V2-040 fix: allocate a frame from the kernel-reserved pool.
 /// Used by `setup_cave_pagetable` / `setup_cave_pagetable_at` so a cave's
 /// own L1 / L2 tables can never be remapped into the cave's user window.
-///
+// /
 /// Returns None if the kernel pool is exhausted; callers should surface
 /// this as "too many caves" rather than falling back to alloc_frame.
 pub fn alloc_kernel_frame() -> Option<usize> {
@@ -192,7 +192,7 @@ pub fn alloc_kernel_frame() -> Option<usize> {
     let start = MEMORY_START.load(Ordering::Relaxed);
     if total < 1 { return None; }
 
-    // 🎯 STUMP #7: cap kernel frames at PA < 0xC0000000. The cave's
+    // cap kernel frames at PA < 0xC0000000. The cave's
     // identity map only covers L2_high+L2_xhi (0x40000000–0xC0000000)
     // for kernel access; tables placed at higher PAs are direct-PA-
     // writable but the MMU walker can't reach them after MMU-enable
@@ -207,7 +207,7 @@ pub fn alloc_kernel_frame() -> Option<usize> {
     if cap_index == 0 { return None; }
     let scan_top = cap_index;
 
-    // 🎯 STUMP #38: scan the ENTIRE range below KERNEL_FRAME_PA_CAP
+    // scan the ENTIRE range below KERNEL_FRAME_PA_CAP
     // top-down rather than capping at `KERNEL_RESERVED_FRAMES` iterations.
     //
     // Symptom this fixes: deep Chromium runs (~20K lines) hit
@@ -270,7 +270,7 @@ pub fn alloc_kernel_frame() -> Option<usize> {
 /// Allocate `n_pages` physically-contiguous, zero-filled 4 KiB frames.
 /// Returns the base address of the first frame, or None if no such
 /// run exists.
-///
+// /
 /// V-ASAHI-3.2: needed by DART TRANSLATE to allocate 16 KiB (4-page)
 /// page-table root blocks that must be contiguous in physical RAM.
 pub fn alloc_contig(n_pages: usize) -> Option<usize> {
@@ -283,7 +283,7 @@ pub fn alloc_contig(n_pages: usize) -> Option<usize> {
     let user_cap = total.saturating_sub(KERNEL_RESERVED_FRAMES);
     if user_cap < n_pages { return None; }
 
-    // 🎯 STUMP #38: skip the kernel-pool window — see the comment in
+    // skip the kernel-pool window — see the comment in
     // `alloc_frame`. If a contiguous run would straddle the window,
     // bump `frame_idx` past the window and resume.
     const KERNEL_FRAME_PA_CAP_LOCAL: usize = 0xC000_0000;
@@ -343,7 +343,7 @@ pub fn alloc_contig(n_pages: usize) -> Option<usize> {
                     a = in(reg) base + i * 8,
                     options(nostack, preserves_flags));
             }
-            // 🎯 STUMP #13: dc civac to PoC (see alloc_frame).
+            // dc civac to PoC (see alloc_frame).
             let mut line = base as u64;
             let end_line = line + (n_pages * PAGE_SIZE) as u64;
             while line < end_line {
@@ -392,8 +392,8 @@ pub fn free_frame(addr: usize) {
                 a = in(reg) addr + i * 8,
                 options(nostack, preserves_flags));
         }
-        // 🎯 STUMP #13: dc civac to PoC after zeroing on free. Same
-        // root cause family as STUMP #10c demand_page fix: when this
+        // dc civac to PoC after zeroing on free. Same
+        // root cause family as c demand_page fix: when this
         // frame is later reallocated to a NEW user VA via demand-page,
         // the user might read via that new VA and see stale (cached
         // dirty) data instead of the zeros we just wrote. PartitionAlloc
@@ -419,7 +419,7 @@ pub fn free_frame(addr: usize) {
 /// user-supplied length. Without this, a cave could munmap a tiny
 /// real region with a huge `length` and saturating-sub its memory
 /// quota to zero.
-///
+// /
 /// Free a run of `count` contiguous physical pages starting at `base`.
 /// Convenience wrapper over `free_frame`, used by the loader and munmap
 /// paths that allocated large contiguous regions (e.g. 38k pages for a

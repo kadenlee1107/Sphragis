@@ -6,49 +6,49 @@
 // std::condition_variable, etc. — on top of FUTEX_WAIT / FUTEX_WAKE.
 //
 // Contract (summary):
-//   FUTEX_WAIT(uaddr, val, timeout):
-//       atomically: if *uaddr != val -> return -EAGAIN,
-//                   else enqueue caller and block until FUTEX_WAKE,
-//                   timeout, or signal.
-//   FUTEX_WAKE(uaddr, n):
-//       wake up to n waiters enqueued on uaddr. Return number woken.
-//   FUTEX_REQUEUE(uaddr, uaddr2, wake_n, req_n):
-//       wake wake_n waiters on uaddr, then requeue up to req_n more to uaddr2.
-//   FUTEX_CMP_REQUEUE(uaddr, uaddr2, val, wake_n, req_n):
-//       same as REQUEUE but first check *uaddr == val (EAGAIN otherwise).
-//       Used by glibc's pthread_cond_broadcast to avoid thundering herd.
+// FUTEX_WAIT(uaddr, val, timeout):
+// atomically: if *uaddr != val -> return -EAGAIN,
+// else enqueue caller and block until FUTEX_WAKE,
+// timeout, or signal.
+// FUTEX_WAKE(uaddr, n):
+// wake up to n waiters enqueued on uaddr. Return number woken.
+// FUTEX_REQUEUE(uaddr, uaddr2, wake_n, req_n):
+// wake wake_n waiters on uaddr, then requeue up to req_n more to uaddr2.
+// FUTEX_CMP_REQUEUE(uaddr, uaddr2, val, wake_n, req_n):
+// same as REQUEUE but first check *uaddr == val (EAGAIN otherwise).
+// Used by glibc's pthread_cond_broadcast to avoid thundering herd.
 //
 // Design:
-//   - Fixed-size hash table of `NUM_BUCKETS` buckets, keyed by (uaddr >> 3).
-//   - Each bucket has a fixed array of `WAITERS_PER_BUCKET` slots.
-//   - Each slot stores: { in_use, uaddr, tid, woken_flag, bitset }.
-//     (Deadlines live on BlockReason::FutexWait, not on the slot —
-//      see DESIGN_FUTEX_DEADLINE_UNIFICATION.md.)
-//   - Entire table guarded by a single `AtomicBool` spinlock per bucket — fine
-//     grained enough to avoid global contention, coarse enough to fit in a
-//     no_std kernel without a real lock implementation.
-//   - No heap. All state lives in `static mut` arrays, accessed under the
-//     per-bucket spinlock.
-//   - All shared state uses `core::sync::atomic` types so the compiler will
-//     not reorder loads across publication.
+// Fixed-size hash table of `NUM_BUCKETS` buckets, keyed by (uaddr >> 3).
+// Each bucket has a fixed array of `WAITERS_PER_BUCKET` slots.
+// Each slot stores: { in_use, uaddr, tid, woken_flag, bitset }.
+// (Deadlines live on BlockReason::FutexWait, not on the slot —
+// see DESIGN_FUTEX_DEADLINE_UNIFICATION.md.)
+// Entire table guarded by a single `AtomicBool` spinlock per bucket — fine
+// grained enough to avoid global contention, coarse enough to fit in a
+// no_std kernel without a real lock implementation.
+// No heap. All state lives in `static mut` arrays, accessed under the
+// per-bucket spinlock.
+// All shared state uses `core::sync::atomic` types so the compiler will
+// not reorder loads across publication.
 //
 // Blocking model:
-//   FUTEX_WAIT publishes the waiter into the hash table, then enters a
-//   block-and-resume loop in `park_slot`: it marks the current thread
-//   Blocked (BlockReason::FutexWait), calls schedule() to yield, and
-//   re-checks the woken flag + deadline on each resume. FUTEX_WAKE
-//   transitions matching threads Runnable via wake_thread(tid).
+// FUTEX_WAIT publishes the waiter into the hash table, then enters a
+// block-and-resume loop in `park_slot`: it marks the current thread
+// Blocked (BlockReason::FutexWait), calls schedule() to yield, and
+// re-checks the woken flag + deadline on each resume. FUTEX_WAKE
+// transitions matching threads Runnable via wake_thread(tid).
 //
-//   Futex's deadline lives on its WaitSlot, not on BlockReason — the
-//   wake_expired_deadlines tick pass (DESIGN_SCHEDULER_BLOCK_ON.md)
-//   does not see it. Futex's resume-loop re-check handles its own
-//   timeouts; unifying that into BlockReason is a future thread.
+// Futex's deadline lives on its WaitSlot, not on BlockReason — the
+// wake_expired_deadlines tick pass (DESIGN_SCHEDULER_BLOCK_ON.md)
+// does not see it. Futex's resume-loop re-check handles its own
+// timeouts; unifying that into BlockReason is a future thread.
 //
 // Error codes (Linux ABI):
-//   -EAGAIN    = -11   value at uaddr didn't match expected val
-//   -EINVAL    = -22   bad arguments (unaligned uaddr, etc.)
-//   -ETIMEDOUT = -110  timeout expired before wake
-//   -ENOSPC    = -28   wait queue full (Bat_OS-specific fallback)
+// EAGAIN = -11 value at uaddr didn't match expected val
+// EINVAL = -22 bad arguments (unaligned uaddr, etc.)
+// ETIMEDOUT = -110 timeout expired before wake
+// ENOSPC = -28 wait queue full (Bat_OS-specific fallback)
 
 #![allow(dead_code)]
 
@@ -96,7 +96,7 @@ struct WaitSlot {
     woken: AtomicBool,
     // Bitset for FUTEX_WAIT_BITSET / FUTEX_WAKE_BITSET. Default 0xFFFFFFFF.
     // (Deadline lives on BlockReason::FutexWait, not on the slot — see
-    //  DESIGN_FUTEX_DEADLINE_UNIFICATION.md.)
+    // DESIGN_FUTEX_DEADLINE_UNIFICATION.md.)
     bitset: AtomicU32,
 }
 
@@ -313,12 +313,12 @@ fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32, deadline_ticks: u64)
         // returns immediately if there's no one else to run.
         crate::batcave::linux::threads::schedule();
         // Resumed (or schedule() returned because no other Runnable):
-        //   * If a waker (FUTEX_WAKE → wake_thread, or
-        //     wake_expired_deadlines from the timer tick) flipped our
-        //     state, current_thread_blocked() returns false and we
-        //     loop to re-check the bucket.
-        //   * If we're still Blocked (single-thread cave with no
-        //     pending wake), wfi until any IRQ fires, then loop.
+        // * If a waker (FUTEX_WAKE → wake_thread, or
+        // wake_expired_deadlines from the timer tick) flipped our
+        // state, current_thread_blocked() returns false and we
+        // loop to re-check the bucket.
+        // * If we're still Blocked (single-thread cave with no
+        // pending wake), wfi until any IRQ fires, then loop.
         if !crate::batcave::linux::threads::current_thread_blocked() {
             continue;
         }
@@ -331,9 +331,9 @@ fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32, deadline_ticks: u64)
 
 /// FUTEX_WAIT — atomically check *uaddr == val, then block until woken or
 /// the timeout (in ns; 0 = infinite) expires.
-///
+// /
 /// Return 0 on wake, -EAGAIN on value mismatch, -ETIMEDOUT on timeout,
-/// -ENOSPC if the wait queue is full.
+/// ENOSPC if the wait queue is full.
 pub fn futex_wait(uaddr: u64, val: u32, timeout_ns: u64) -> i64 {
     if uaddr == 0 || (uaddr & 0x3) != 0 {
         return EINVAL;
@@ -344,7 +344,7 @@ pub fn futex_wait(uaddr: u64, val: u32, timeout_ns: u64) -> i64 {
         return EINVAL;
     }
 
-    // 🎯 STUMP #63 livelock-breaker: under BAT_OS_KEEP_GOING, cap any
+    // livelock-breaker: under BAT_OS_KEEP_GOING, cap any
     // infinite-timeout wait at 100ms. Chromium's worker pool parks
     // threads with `pthread_cond_wait`-style infinite waits that
     // never get signaled in our partial impl — capping forces them
@@ -448,13 +448,13 @@ pub fn futex_wait_bitset(uaddr: u64, val: u32, timeout_ns: u64, bitset: u32) -> 
 
 /// FUTEX_WAKE — wake up to `max_wakers` tasks waiting on uaddr.
 /// Returns the number woken.
-///
-/// 🎯 STUMP #160 iter 5: scan ALL buckets, not just `bucket_index(uaddr)`.
+// /
+/// iter 5: scan ALL buckets, not just `bucket_index(uaddr)`.
 /// The cross-bucket REQUEUE path leaves a slot in its ORIGINAL bucket
 /// but rewrites `s.uaddr` to the requeue target — see requeue_impl's
 /// "rewrite the key in the original slot" branch, which exists because
 /// we can't safely migrate a parked waiter's slot pointer.
-///
+// /
 /// Pre-iter-5: FUTEX_WAKE walked only `bucket(bucket_index(uaddr))`.
 /// After a cross-bucket pthread_cond_broadcast → CMP_REQUEUE, the
 /// requeued waiters were "lost" — their slots lived in the cond
@@ -464,7 +464,7 @@ pub fn futex_wait_bitset(uaddr: u64, val: u32, timeout_ns: u64, bitset: u32) -> 
 /// That's the missed-wakeup that froze content_shell after
 /// FileURLLoader::Start (workers parked on a cond var post-
 /// rebuild and never resumed).
-///
+// /
 /// Cost: 64 buckets × 8 slots = 512 atomic reads per wake. For
 /// our cooperative single-process Chromium scale, that's fine —
 /// the previous bucket lookup was 8 reads per wake. The bucket
@@ -541,7 +541,7 @@ pub fn futex_wake(uaddr: u64, max_wakers: u32) -> i64 {
 }
 
 /// FUTEX_WAKE_BITSET — wake only waiters whose bitset intersects `bitset`.
-/// STUMP #160 iter 5: same all-buckets scan as `futex_wake` for the
+/// iter 5: same all-buckets scan as `futex_wake` for the
 /// same reason — cross-bucket REQUEUE may have left waiters in
 /// "wrong" buckets with rewritten s.uaddr.
 pub fn futex_wake_bitset(uaddr: u64, max_wakers: u32, bitset: u32) -> i64 {
@@ -585,7 +585,7 @@ pub fn futex_wake_bitset(uaddr: u64, max_wakers: u32, bitset: u32) -> i64 {
 
 /// FUTEX_REQUEUE — wake up to `wake_count` waiters on uaddr, then move up
 /// to `requeue_count` remaining waiters to uaddr2 (without waking them).
-///
+// /
 /// Returns total number of waiters woken + requeued.
 pub fn futex_requeue(uaddr: u64, uaddr2: u64, wake_count: u32, requeue_count: u32) -> i64 {
     requeue_impl(uaddr, uaddr2, wake_count, requeue_count, None)

@@ -3,31 +3,31 @@
 // V4: replaces the pin-only interim defence with real PKI validation.
 //
 // Scope:
-//   * Parse leaf + intermediate certs from the TLS Certificate message
-//     (ASN.1 DER via `x509-cert`).
-//   * Extract SubjectPublicKeyInfo and surface pubkey for the
-//     CertificateVerify check.
-//   * Verify the signature chain leaf ← intermediate ← ... ← root
-//     where root lives in TRUST_STORE (hard-coded pinned CA certs).
-//   * Check notBefore / notAfter against a (static) boot time — we don't
-//     have wall-clock yet so we implement a lower bound (reject certs
-//     issued in the future) but accept slightly-expired ones and log a
-//     warning. Operator can pin time via KNOWN_GOOD_TIME.
-//   * Hostname match against SAN dNSName entries (CN fallback).
+// * Parse leaf + intermediate certs from the TLS Certificate message
+// (ASN.1 DER via `x509-cert`).
+// * Extract SubjectPublicKeyInfo and surface pubkey for the
+// CertificateVerify check.
+// * Verify the signature chain leaf ← intermediate ← ... ← root
+// where root lives in TRUST_STORE (hard-coded pinned CA certs).
+// * Check notBefore / notAfter against a (static) boot time — we don't
+// have wall-clock yet so we implement a lower bound (reject certs
+// issued in the future) but accept slightly-expired ones and log a
+// warning. Operator can pin time via KNOWN_GOOD_TIME.
+// * Hostname match against SAN dNSName entries (CN fallback).
 //
 // What we DO NOT do:
-//   * Revocation (OCSP / CRL) — operator's job for high-security envs.
-//   * RSA verify — we only wire ECDSA P-256 / P-384 today.  Adding RSA is
-//     a `rsa = "0.9"` dep away but every mainstream TLS-for-HTTPS cert
-//     we care about (LE ECDSA, Cloudflare ECDSA) is P-256 or P-384.
-//   * Name constraints / EKU — can add per-cert flags when needed.
+// * Revocation (OCSP / CRL) — operator's job for high-security envs.
+// * RSA verify — we only wire ECDSA P-256 / P-384 today. Adding RSA is
+// a `rsa = "0.9"` dep away but every mainstream TLS-for-HTTPS cert
+// we care about (LE ECDSA, Cloudflare ECDSA) is P-256 or P-384.
+// * Name constraints / EKU — can add per-cert flags when needed.
 //
 // All-pass path:
-//   1. `verify_chain(leaf_der, chain_ders, hostname, now_unix)` returns
-//      `Ok(subject_pubkey_der)`.
-//   2. Caller hands `subject_pubkey_der` to
-//      `cert_verify_signature(pubkey_der, signed_bytes, sig_der)` to
-//      validate TLS-1.3 CertificateVerify.
+// 1. `verify_chain(leaf_der, chain_ders, hostname, now_unix)` returns
+// `Ok(subject_pubkey_der)`.
+// 2. Caller hands `subject_pubkey_der` to
+// `cert_verify_signature(pubkey_der, signed_bytes, sig_der)` to
+// validate TLS-1.3 CertificateVerify.
 
 #![allow(dead_code)]
 
@@ -40,44 +40,44 @@ use x509_cert::der::{Decode, Encode};
 
 /// Hard-coded trust anchors — embedded DER bytes of curated major
 /// public CA roots.
-///
-/// STUMP #139: This used to be empty, which made the audit's verdict
+// /
+/// This used to be empty, which made the audit's verdict
 /// ("TLS authentication is theater") literally true — chain validation
 /// always returned UntrustedRoot, so HTTPS got us encrypted-but-
 /// unauthenticated bytes vs an active MITM. Now populated with a
 /// minimal-but-meaningful starter set sourced from each CA's official
 /// publication endpoint:
-///
-///   * ISRG Root X1 — RSA 4096 — Let's Encrypt's primary root.
-///     Anchors a huge chunk of public HTTPS (Cloudflare-fronted sites,
-///     GitHub Pages, basically every site that auto-issues with LE).
-///   * ISRG Root X2 — ECDSA P-384 — Let's Encrypt's modern ECDSA
-///     root, used by sites that opted into ECDSA leaf certs.
-///   * Amazon Root CA 1 — RSA 2048 — anchors AWS-hosted services and
-///     anything fronted by Amazon.com.
-///   * DigiCert Global Root CA — RSA 2048 — anchors a large fraction
-///     of enterprise + financial sites.
-///   * DigiCert Global Root G2 — RSA 2048 — DigiCert's modern root,
-///     used by Google's intermediate CA chain among others.
-///   * GTS Root R4 — ECDSA P-384 — Google Trust Services' modern
-///     ECDSA root. Anchors a growing slice of public HTTPS as Google
-///     migrates leaves from GlobalSign to its own PKI; required for
-///     pq.cloudflareresearch.com (used by our PQ-interop smoke).
-///
+// /
+/// * ISRG Root X1 — RSA 4096 — Let's Encrypt's primary root.
+/// Anchors a huge chunk of public HTTPS (Cloudflare-fronted sites,
+/// GitHub Pages, basically every site that auto-issues with LE).
+/// * ISRG Root X2 — ECDSA P-384 — Let's Encrypt's modern ECDSA
+/// root, used by sites that opted into ECDSA leaf certs.
+/// * Amazon Root CA 1 — RSA 2048 — anchors AWS-hosted services and
+/// anything fronted by Amazon.com.
+/// * DigiCert Global Root CA — RSA 2048 — anchors a large fraction
+/// of enterprise + financial sites.
+/// * DigiCert Global Root G2 — RSA 2048 — DigiCert's modern root,
+/// used by Google's intermediate CA chain among others.
+/// * GTS Root R4 — ECDSA P-384 — Google Trust Services' modern
+/// ECDSA root. Anchors a growing slice of public HTTPS as Google
+/// migrates leaves from GlobalSign to its own PKI; required for
+/// pq.cloudflareresearch.com (used by our PQ-interop smoke).
+// /
 /// `TrustStore::contains` compares subject public-key bytes for the
 /// issuer lookup, so this set covers a meaningful slice of the public
 /// web. A full Mozilla CA bundle (~150 roots) is a follow-up STUMP —
 /// this six-entry set is enough to verify the most common chains and
 /// move the audit's "theater" verdict.
-///
-/// **Signature algorithm coverage** (STUMP #140):
-///   * Cert sigs: ECDSA-P256/P384, RSA-PKCS1v15 (SHA-256/384/512),
-///     RSA-PSS — covers self-sigs of every root above + the chains
-///     they typically anchor.
-///   * TLS-1.3 CertificateVerify: ECDSA-P256, ECDSA-P384, RSA-PSS
-///     (SHA-256/384/512). PKCS#1v1.5 is not valid for CertVerify per
-///     RFC 8446 §4.4.3 — it's only for cert chain sigs.
-///
+// /
+/// **Signature algorithm coverage** :
+/// * Cert sigs: ECDSA-P256/P384, RSA-PKCS1v15 (SHA-256/384/512),
+/// RSA-PSS — covers self-sigs of every root above + the chains
+/// they typically anchor.
+/// * TLS-1.3 CertificateVerify: ECDSA-P256, ECDSA-P384, RSA-PSS
+/// (SHA-256/384/512). PKCS#1v1.5 is not valid for CertVerify per
+/// RFC 8446 §4.4.3 — it's only for cert chain sigs.
+// /
 /// Refresh procedure: each CA publishes their root cert via a stable
 /// URL listed below. Re-fetch, drop into `src/net/ca_certs/`, rebuild.
 pub static TRUST_STORE: &[&[u8]] = &[
@@ -91,7 +91,7 @@ pub static TRUST_STORE: &[&[u8]] = &[
     include_bytes!("ca_certs/digicert_global_root_ca.der"),
     // https://cacerts.digicert.com/DigiCertGlobalRootG2.crt
     include_bytes!("ca_certs/digicert_global_root_g2.der"),
-    // https://i.pki.goog/r4.crt  (sha256 34:9D:FA:40:58:C5:E2:63:12:3B:39:8A:E7:95:57:3C:4E:13:13:C8:3F:E6:8F:93:55:6C:D5:E8:03:1B:3C:7D)
+    // https://i.pki.goog/r4.crt (sha256 34:9D:FA:40:58:C5:E2:63:12:3B:39:8A:E7:95:57:3C:4E:13:13:C8:3F:E6:8F:93:55:6C:D5:E8:03:1B:3C:7D)
     include_bytes!("ca_certs/gts_root_r4.der"),
 ];
 
@@ -251,7 +251,7 @@ fn hostname_matches(pattern: &[u8], hostname: &[u8]) -> bool {
 }
 
 /// Verify an ECDSA signature (P-256 only in this minimal build) over
-/// `signed_bytes` using the pubkey DER taken from a cert.  `signed_bytes`
+/// `signed_bytes` using the pubkey DER taken from a cert. `signed_bytes`
 /// is already hashed by the caller when calling TLS-style prehash.
 pub fn cert_verify_ecdsa_p256(pubkey_der: &[u8], digest: &[u8; 32], sig_der: &[u8])
     -> Result<(), VerifyError>
@@ -268,13 +268,13 @@ pub fn cert_verify_ecdsa_p256(pubkey_der: &[u8], digest: &[u8; 32], sig_der: &[u
 }
 
 /// Full chain validation.
-///
+// /
 /// `leaf_der`: the server's certificate.
 /// `chain_ders`: intermediate certs in order (leaf-issuer, then its
-///               issuer, …). May be empty if leaf is directly signed by
-///               a root in TRUST_STORE.
+/// issuer, …). May be empty if leaf is directly signed by
+/// a root in TRUST_STORE.
 /// `hostname`: the hostname the client expects (from SNI / URL).
-///
+// /
 /// Returns the leaf's SPKI DER on success so the caller can then verify
 /// the TLS CertificateVerify signature with it.
 pub fn verify_chain(
@@ -292,13 +292,13 @@ pub fn verify_chain(
     // does NOT distinguish "wrong hostname" from "wrong signature".
     // V5 returned early on hostname mismatch BEFORE doing chain
     // verify, leaving a 30-50× timing delta between the two outcomes
-    // — an off-path observer measuring the abort time learned which
+    // an off-path observer measuring the abort time learned which
     // hostname the client tried.
     let hostname_ok = check_hostname(&leaf, hostname);
 
     // 2. Walk the chain. For each (child, parent) pair, verify that
-    //    parent.pubkey validates child.signature over child.tbsCertificate.
-    //    Root must be in TRUST_STORE.
+    // parent.pubkey validates child.signature over child.tbsCertificate.
+    // Root must be in TRUST_STORE.
     let mut current_cert = leaf.clone();
     let mut current_der: &[u8] = leaf_der;
     let mut chain_ok = true;
@@ -336,25 +336,25 @@ pub fn verify_chain(
     }
 
     // 3. Root in trust store? Three accept paths, walked in order of
-    //    cost. All three are spec-equivalent ways of saying "the chain
-    //    rooted at some entry in TRUST_STORE":
+    // cost. All three are spec-equivalent ways of saying "the chain
+    // rooted at some entry in TRUST_STORE":
     //
-    //    a. Current cert IS an anchor (server included its own root in
-    //       the chain — uncommon but legal).
-    //    b. Current cert and an anchor share the same SubjectPublicKey
-    //       (cross-signed root: the anchor we ship and the cert the
-    //       server sent are different DER blobs but represent the same
-    //       trust anchor — common, e.g. GTS Root R4 cross-signed by
-    //       GlobalSign).
-    //    c. Current cert is signed by an anchor (the typical real-world
-    //       case: the server sends [leaf, intermediate(s)] and stops
-    //       short of the root because RFC 5246 says clients should have
-    //       the root locally). Validates by treating the anchor as a
-    //       virtual parent and re-running the signature check.
+    // a. Current cert IS an anchor (server included its own root in
+    // the chain — uncommon but legal).
+    // b. Current cert and an anchor share the same SubjectPublicKey
+    // (cross-signed root: the anchor we ship and the cert the
+    // server sent are different DER blobs but represent the same
+    // trust anchor — common, e.g. GTS Root R4 cross-signed by
+    // GlobalSign).
+    // c. Current cert is signed by an anchor (the typical real-world
+    // case: the server sends [leaf, intermediate(s)] and stops
+    // short of the root because RFC 5246 says clients should have
+    // the root locally). Validates by treating the anchor as a
+    // virtual parent and re-running the signature check.
     //
-    //    Pre-fix the verifier only had (a) and (b), so chains from
-    //    Let's Encrypt / GTS-anchored sites that don't ship the root
-    //    failed at "untrusted root" even though the chain is valid.
+    // Pre-fix the verifier only had (a) and (b), so chains from
+    // Let's Encrypt / GTS-anchored sites that don't ship the root
+    // failed at "untrusted root" even though the chain is valid.
     let mut trusted = false;
     for anchor_der in TRUST_STORE.iter() {
         // Path (a): exact-bytes equality.
@@ -406,20 +406,20 @@ pub fn verify_chain(
 }
 
 /// Verify that `parent` signed `child`.
-///
-/// STUMP #140: was ECDSA-P256-only. Now dispatches on the child's
+// /
+/// was ECDSA-P256-only. Now dispatches on the child's
 /// `signatureAlgorithm` OID (NOT just the parent's pubkey alg) and
 /// supports:
-///   * 1.2.840.10045.4.3.2  ecdsa-with-SHA256   (ECDSA P-256 leaf sigs)
-///   * 1.2.840.10045.4.3.3  ecdsa-with-SHA384   (ECDSA P-384 leaf sigs)
-///   * 1.2.840.113549.1.1.11 sha256WithRSAEncryption (PKCS#1 v1.5 RSA)
-///   * 1.2.840.113549.1.1.12 sha384WithRSAEncryption
-///   * 1.2.840.113549.1.1.13 sha512WithRSAEncryption
-///   * 1.2.840.113549.1.1.10 RSASSA-PSS         (RSA-PSS — caller picks
-///                                                hash from PSS params)
-///
+/// * 1.2.840.10045.4.3.2 ecdsa-with-SHA256 (ECDSA P-256 leaf sigs)
+/// * 1.2.840.10045.4.3.3 ecdsa-with-SHA384 (ECDSA P-384 leaf sigs)
+/// * 1.2.840.113549.1.1.11 sha256WithRSAEncryption (PKCS#1 v1.5 RSA)
+/// * 1.2.840.113549.1.1.12 sha384WithRSAEncryption
+/// * 1.2.840.113549.1.1.13 sha512WithRSAEncryption
+/// * 1.2.840.113549.1.1.10 RSASSA-PSS (RSA-PSS — caller picks
+/// hash from PSS params)
+// /
 /// Other algorithms return `UnsupportedSigAlg`. This unlocks the three
-/// RSA roots embedded by STUMP #139 (Amazon, DigiCert ×2) plus the
+/// RSA roots embedded by plus the
 /// ECDSA-P384 ISRG Root X2.
 fn verify_signed_by(
     child: &Certificate,
@@ -444,12 +444,12 @@ fn verify_signed_by(
 
     // OID numeric form for matching (avoids importing const_oid::db
     // tables for every variant — these are short and stable).
-    // 1.2.840.10045.4.3.2  = 0x2A 0x86 0x48 0xCE 0x3D 0x04 0x03 0x02
-    // 1.2.840.10045.4.3.3  = 0x2A 0x86 0x48 0xCE 0x3D 0x04 0x03 0x03
+    // 1.2.840.10045.4.3.2 = 0x2A 0x86 0x48 0xCE 0x3D 0x04 0x03 0x02
+    // 1.2.840.10045.4.3.3 = 0x2A 0x86 0x48 0xCE 0x3D 0x04 0x03 0x03
     // 1.2.840.113549.1.1.11 = 0x2A 0x86 0x48 0x86 0xF7 0x0D 0x01 0x01 0x0B
     // 1.2.840.113549.1.1.12 = ... 0x0C
     // 1.2.840.113549.1.1.13 = ... 0x0D
-    // 1.2.840.113549.1.1.10 = ... 0x0A  (RSASSA-PSS)
+    // 1.2.840.113549.1.1.10 = ... 0x0A (RSASSA-PSS)
     const ECDSA_SHA256: &[u8] = &[0x2A,0x86,0x48,0xCE,0x3D,0x04,0x03,0x02];
     const ECDSA_SHA384: &[u8] = &[0x2A,0x86,0x48,0xCE,0x3D,0x04,0x03,0x03];
     const RSA_PKCS1V15_SHA256: &[u8] =
@@ -500,11 +500,11 @@ fn verify_signed_by(
 }
 
 /// Verify TLS-1.3 CertificateVerify signature.
-///
+// /
 /// Per RFC 8446 §4.4.3 the signed bytes are:
-///   64 × 0x20 || "TLS 1.3, server CertificateVerify" || 0x00 || transcript_hash
+/// 64 × 0x20 || "TLS 1.3, server CertificateVerify" || 0x00 || transcript_hash
 /// with a total length of 98 + transcript_hash bytes.
-///
+// /
 /// `alg` is the signature algorithm from the CertificateVerify's
 /// SignatureScheme (2-byte TLS code), e.g. 0x0403 = ecdsa_secp256r1_sha256.
 pub fn tls13_verify_cert_verify(
@@ -521,7 +521,7 @@ pub fn tls13_verify_cert_verify(
     msg.push(0x00);
     msg.extend_from_slice(transcript_hash);
 
-    // STUMP #140: dispatch every standard TLS 1.3 SignatureScheme that
+    // dispatch every standard TLS 1.3 SignatureScheme that
     // a CA might issue a leaf cert with. Per RFC 8446 §4.4.3, ONLY the
     // PSS schemes are valid for CertificateVerify (PKCS#1v1.5 was
     // removed) — but cert chain validation in `verify_signed_by` still

@@ -1,4 +1,4 @@
-// src/batcave/persist.rs — STUMP #135
+// src/batcave/persist.rs —
 //
 // Cave registry persistence.
 //
@@ -15,19 +15,19 @@
 // caps, tools, and (for docker-backed caves) image reference.
 //
 // What does NOT persist (re-derived/re-allocated at boot):
-//   - state              caves wake up Stopped
-//   - fs_key             deterministic from (boot master_key, name)
-//   - display_x/y/w/h    re-allocated by `batcave enter`
+// state caves wake up Stopped
+// fs_key deterministic from (boot master_key, name)
+// display_x/y/w/h re-allocated by `batcave enter`
 //
 // Lifecycle hooks — every cave-state mutation goes through one of:
-//   cave::create()          → save() if Persistent
-//   cave::create_docker()   → save() (re-saves with image)
-//   cave::grant_cap()       → save() (refresh manifest)
-//   cave::revoke_cap()      → save()
-//   cave::install_tool()    → save()
-//   cave::seal()            → delete() (no longer Persistent)
-//   cave::destroy()         → delete()
-//   cave::init()            → restore_all() (re-populate CAVES[])
+// cave::create() → save() if Persistent
+// cave::create_docker() → save() (re-saves with image)
+// cave::grant_cap() → save() (refresh manifest)
+// cave::revoke_cap() → save()
+// cave::install_tool() → save()
+// cave::seal() → delete() (no longer Persistent)
+// cave::destroy() → delete()
+// cave::init() → restore_all() (re-populate CAVES[])
 //
 // The manifest is encrypted by BatFS itself (ChaCha20-Poly1305 AEAD,
 // keyed off the boot master_key + filename). It's just a regular BatFS
@@ -47,21 +47,21 @@ use crate::crypto::sha256;
 // future v2 can extend the trailing reserved region without breaking
 // existing manifests on disk.
 //
-// Offset    Size  Field
-// 0         4     magic = b"CAVE"
-// 4         1     version = 1
-// 5         3     reserved (zero)
-// 8         1     name_len
-// 9         32    name (zero-padded, MAX_NAME = 32)
-// 41        1     backing (0=Native, 1=Docker)
-// 42        1     image_len (MAX_IMAGE = 64 fits in u8)
-// 43        64    image (zero-padded)
-// 107       1     cap_count
-// 108       784   caps[16] × { 1 byte len + 48 bytes name } = 16 × 49
-// 892       1     tool_count
-// 893       1056  tools[32] × { 1 byte len + 32 bytes name } = 32 × 33
-// 1949      99    reserved (zero) — room for created_ms, fs_quota, etc.
-// 2048      —     end
+// Offset Size Field
+// 0 4 magic = b"CAVE"
+// 4 1 version = 1
+// 5 3 reserved (zero)
+// 8 1 name_len
+// 9 32 name (zero-padded, MAX_NAME = 32)
+// 41 1 backing (0=Native, 1=Docker)
+// 42 1 image_len (MAX_IMAGE = 64 fits in u8)
+// 43 64 image (zero-padded)
+// 107 1 cap_count
+// 108 784 caps[16] × { 1 byte len + 48 bytes name } = 16 × 49
+// 892 1 tool_count
+// 893 1056 tools[32] × { 1 byte len + 32 bytes name } = 32 × 33
+// 1949 99 reserved (zero) — room for created_ms, fs_quota, etc.
+// 2048 — end
 
 const MANIFEST_PREFIX:  &str = "__cave__";
 const MANIFEST_MAGIC:   [u8; 4] = *b"CAVE";
@@ -251,7 +251,7 @@ pub fn delete(name: &str) {
 
 /// Scan BatFS for "__cave__*" manifests, deserialize each, and install
 /// it into a free CAVES[] slot. Returns the number of caves restored.
-///
+// /
 /// Called once during `cave::init()` after `batfs::init()` has unlocked
 /// the filesystem with the operator's passphrase.
 pub fn restore_all() -> usize {

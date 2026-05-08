@@ -1,25 +1,25 @@
 #![allow(dead_code)]
 // Bat_OS — VirtIO tablet (absolute pointer) driver.
 //
-// Sprint 1.5 (STUMP #98). Mirrors `keyboard.rs`. QEMU exposes the
+// Sprint 1.5 . Mirrors `keyboard.rs`. QEMU exposes the
 // tablet at the same `virtio-input` device-type as the keyboard, so
 // we probe ALL input devices and take the SECOND one — the contract
 // is that QEMU is launched with `-device virtio-keyboard-device
-// -device virtio-tablet-device` in that order. (See
+// device virtio-tablet-device` in that order. (See
 // scripts/render_live.py.)
 //
 // Wire format is the standard 8-byte Linux evdev event:
-//   u16 type, u16 code, u32 value
+// u16 type, u16 code, u32 value
 // The events we care about:
-//   * EV_ABS (3) + ABS_X (0)/ABS_Y (1): absolute position in
-//     0..=device_max (default 32767 for QEMU). We rescale to the
-//     virtio-gpu framebuffer dimensions before exposing to callers.
-//   * EV_KEY (1) + BTN_LEFT (0x110): left mouse button. value=1 down,
-//     value=0 up. (BTN_RIGHT/BTN_MIDDLE plumbed but never fire in our
-//     flows yet.)
-//   * EV_SYN (0) + SYN_REPORT (0): end of event group; we use this
-//     as the commit point and emit a single `Move` (or `ButtonDown`/
-//     `ButtonUp` if the group also crossed a button-state edge).
+// * EV_ABS (3) + ABS_X (0)/ABS_Y (1): absolute position in
+// 0..=device_max (default 32767 for QEMU). We rescale to the
+// virtio-gpu framebuffer dimensions before exposing to callers.
+// * EV_KEY (1) + BTN_LEFT (0x110): left mouse button. value=1 down,
+// value=0 up. (BTN_RIGHT/BTN_MIDDLE plumbed but never fire in our
+// flows yet.)
+// * EV_SYN (0) + SYN_REPORT (0): end of event group; we use this
+// as the commit point and emit a single `Move` (or `ButtonDown`/
+// `ButtonUp` if the group also crossed a button-state edge).
 
 use super::mmio::{self, VirtioMmio};
 use super::virtqueue::Virtqueue;
@@ -64,7 +64,7 @@ static PENDING_X: AtomicI32 = AtomicI32::new(0);
 static PENDING_Y: AtomicI32 = AtomicI32::new(0);
 static PENDING_BTN: AtomicI32 = AtomicI32::new(-1); // -1 = no edge, 0/1 = up/down
 
-// STUMP #100b: QEMU routes ALL keyboard input to virtio-tablet when
+// b: QEMU routes ALL keyboard input to virtio-tablet when
 // the tablet device is attached (the tablet model claims the key-
 // event capability and steals it from virtio-keyboard). So this
 // driver also has to decode EV_KEY events into ASCII and surface
@@ -77,7 +77,7 @@ static mut KEY_TAIL: usize = 0;
 static mut CTRL_HELD: bool = false;
 static mut SHIFT_HELD: bool = false;
 static mut ALT_HELD: bool = false;
-// STUMP #119: caps lock toggle, mirrored from keyboard.rs because
+// caps lock toggle, mirrored from keyboard.rs because
 // QEMU's input multiplexer routes EV_KEY to whichever device claimed
 // the capability first — caps-lock presses can land here on Mac
 // cocoa just like alpha keys do.
@@ -90,7 +90,7 @@ const KEY_RIGHTSHIFT: u16 = 54;
 const KEY_LEFTALT: u16 = 56;
 const KEY_RIGHTALT: u16 = 100;
 const KEY_CAPSLOCK: u16 = 58;
-// STUMP #130: arrow keys, mirroring keyboard.rs.
+// arrow keys, mirroring keyboard.rs.
 const KEY_UP_C:    u16 = 103;
 const KEY_DOWN_C:  u16 = 108;
 const KEY_LEFT_C:  u16 = 105;
@@ -240,7 +240,7 @@ pub fn poll() {
                 }
             }
             EV_REL => {
-                // STUMP #109 — relative motion from virtio-mouse-device.
+                // relative motion from virtio-mouse-device.
                 // QEMU cocoa drops EV_ABS events to virtio-tablet on Mac
                 // (host cursor hides + motion never fires) but virtio-
                 // mouse uses a different code path that DOES deliver REL
@@ -262,7 +262,7 @@ pub fn poll() {
                 } else if code == BTN_RIGHT || code == BTN_MIDDLE {
                     // Plumbed but not surfaced.
                 } else {
-                    // STUMP #100b: alphanumeric / control key — QEMU
+                    // b: alphanumeric / control key — QEMU
                     // mis-routed it to us instead of virtio-keyboard.
                     // Decode and stash so the interactive loop can
                     // pick it up via tablet::getc_key().
@@ -271,7 +271,7 @@ pub fn poll() {
                             KEY_LEFTCTRL | KEY_RIGHTCTRL  => CTRL_HELD  = value == 1,
                             KEY_LEFTSHIFT | KEY_RIGHTSHIFT => SHIFT_HELD = value == 1,
                             KEY_LEFTALT | KEY_RIGHTALT   => ALT_HELD   = value == 1,
-                            // STUMP #119: caps-lock toggles on DOWN.
+                            // caps-lock toggles on DOWN.
                             KEY_CAPSLOCK => {
                                 if value == 1 { CAPS_LOCK_ON = !CAPS_LOCK_ON; }
                             }
@@ -279,7 +279,7 @@ pub fn poll() {
                         }
                     }
                     if value == 1 {
-                        // STUMP #130/#131: arrows → 0x90..0x93,
+                        // /#131: arrows → 0x90..0x93,
                         // shift+arrows → 0x94..0x97 (for selection).
                         let shifted = unsafe {
                             core::ptr::read_volatile(core::ptr::addr_of!(SHIFT_HELD))
@@ -308,7 +308,7 @@ pub fn poll() {
                                     if CTRL_HELD && ch >= b'a' && ch <= b'z' {
                                         ch = ch - b'a' + 1;
                                     } else {
-                                        // STUMP #119: caps XOR shift on alpha;
+                                        // caps XOR shift on alpha;
                                         // shift-only on number-row symbols.
                                         let alpha_upper = SHIFT_HELD ^ CAPS_LOCK_ON;
                                         if alpha_upper && ch >= b'a' && ch <= b'z' {
@@ -400,7 +400,7 @@ pub fn reset_for_cave_switch() {
     PENDING_X.store(0, Ordering::Relaxed);
     PENDING_Y.store(0, Ordering::Relaxed);
     PENDING_BTN.store(-1, Ordering::Relaxed);
-    // STUMP #119: reset modifier + caps-lock state too.
+    // reset modifier + caps-lock state too.
     unsafe {
         core::ptr::write_volatile(core::ptr::addr_of_mut!(CTRL_HELD), false);
         core::ptr::write_volatile(core::ptr::addr_of_mut!(SHIFT_HELD), false);

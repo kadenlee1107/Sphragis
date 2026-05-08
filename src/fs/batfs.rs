@@ -87,7 +87,7 @@ static NONCE_COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomic
 // FL-027 / NEW-CRYPTO-007 fix: per-boot random 4-byte prefix mixed into
 // every CTR nonce. Without this, re-encrypting the same filename across
 // boots gave the same (key, IV) — a crib-drag on recurring files. The
-// persistent-across-reboot path (STUMP #136 Phase 7 / `batfs_disk.rs`)
+// persistent-across-reboot path ( Phase 7 / `batfs_disk.rs`)
 // stores the per-file `nonce` in the inode on disk, so recurring files
 // keep their original nonce across reboots; the BOOT_NONCE_PREFIX only
 // affects NEW files created after mount, where it still guarantees no
@@ -102,7 +102,7 @@ static mut INITIALIZED: bool = false;
 const MERKLE_NODES: usize = MAX_FILES * 2;
 static mut MERKLE_TREE: [[u8; 32]; MERKLE_NODES] = [[0u8; 32]; MERKLE_NODES];
 
-/// STUMP #111 (audit C011): expose the per-boot master key for
+/// expose the per-boot master key for
 /// per-cave fs_key derivation. Volatile read so the compiler can't
 /// dead-store-eliminate a sensitive value in some future refactor.
 pub fn master_key() -> [u8; 32] {
@@ -161,14 +161,14 @@ pub fn verify_all_integrity() -> bool {
 }
 
 /// Initialize the filesystem with a master encryption key.
-///
+// /
 /// FL-027 / NEW-CRYPTO-007: each boot gets a fresh 4-byte random nonce
 /// prefix so re-encrypting the same filename under the same derived key
 /// produces a different CTR stream than the previous boot did. The
 /// counter itself still restarts at 1; prefix + counter is the full
 /// unique value.
-///
-/// STUMP #136 (Phase 7): if a virtio-blk device is attached, this also
+// /
+/// if a virtio-blk device is attached, this also
 /// mounts the on-disk format from sector 0 (or freshly formats it if
 /// the disk is blank). Inodes + ciphertext are restored from disk into
 /// `FILES[]` and per-file RAM pages. With no disk, we run as before
@@ -197,13 +197,13 @@ pub fn init(master_key: &[u8; 32]) {
         }
     }
 
-    // STUMP #136: try to mount/format the on-disk BatFS. Outside the
+    // try to mount/format the on-disk BatFS. Outside the
     // critical_section above because virtio-blk uses MMIO + DMA + IRQ
     // and shouldn't run with IRQs masked the whole time.
     init_disk(master_key);
 }
 
-/// STUMP #136 (Phase 7): mount the on-disk BatFS layout, or format it
+/// mount the on-disk BatFS layout, or format it
 /// fresh if the disk is blank / a different layout. Restores the inode
 /// table + per-file ciphertext into `FILES[]` and RAM pages.
 fn init_disk(master_key: &[u8; 32]) {
@@ -354,7 +354,7 @@ fn derive_file_key(filename: &str) -> [u8; 32] {
 /// kernel write primitive could update both and pass verification.
 /// HMAC under the master key means the tag is only forgeable by someone
 /// who holds the master key (i.e. the user with the passphrase).
-///
+// /
 /// Computed incrementally so we don't need a 64 KB stack buffer.
 fn compute_file_mac(name: &str, nonce: &[u8; 12], ciphertext: &[u8]) -> [u8; 32] {
     let mut key = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(MASTER_KEY)) };
@@ -417,15 +417,15 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         }
 
         // DESIGN_CRYPTO.md #2: ChaCha20-Poly1305 AEAD.
-        //   * Key — sha256::derive_key(master, filename). Unchanged.
-        //   * Nonce — 12 bytes, file-unique (AEAD allows nonce reuse
-        //     only to break confidentiality, not integrity — still
-        //     fatal, so we use our monotonic next_nonce pattern).
-        //   * AAD — filename bytes. Binds ciphertext to its filename;
-        //     an attacker can't rename a file to an accessible slot
-        //     and reuse the ciphertext.
-        //   * Output — ciphertext (same length as plaintext) + 16-byte
-        //     Poly1305 authentication tag stored in entry.hash[..16].
+        // * Key — sha256::derive_key(master, filename). Unchanged.
+        // * Nonce — 12 bytes, file-unique (AEAD allows nonce reuse
+        // only to break confidentiality, not integrity — still
+        // fatal, so we use our monotonic next_nonce pattern).
+        // * AAD — filename bytes. Binds ciphertext to its filename;
+        // an attacker can't rename a file to an accessible slot
+        // and reuse the ciphertext.
+        // * Output — ciphertext (same length as plaintext) + 16-byte
+        // Poly1305 authentication tag stored in entry.hash[..16].
         let file_key = derive_file_key(name);
         let cipher = ChaCha20Poly1305::new(&file_key.into());
         let nonce_full = next_nonce();
@@ -462,7 +462,7 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
 
         FILE_COUNT += 1;
 
-        // STUMP #136 (Phase 7): write the ciphertext + inode through to
+        // write the ciphertext + inode through to
         // disk. Order matters for crash consistency — data first, then
         // inode (the metadata write is the commit point). If we crash
         // between the two, the slot's old inode still references its
@@ -513,10 +513,10 @@ pub fn read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
         core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), entry.size);
 
         // DESIGN_CRYPTO.md #2: ChaCha20-Poly1305 AEAD decrypt.
-        //   - AAD is the filename (binds ciphertext to file slot).
-        //   - Tag is the first 16 bytes of entry.hash (stored at write).
-        //   - decrypt_in_place_detached returns Err on tag mismatch;
-        //     Poly1305 is a constant-time MAC so no timing leak.
+        // AAD is the filename (binds ciphertext to file slot).
+        // Tag is the first 16 bytes of entry.hash (stored at write).
+        // decrypt_in_place_detached returns Err on tag mismatch;
+        // Poly1305 is a constant-time MAC so no timing leak.
         let file_key = derive_file_key(name);
         let cipher = ChaCha20Poly1305::new(&file_key.into());
         let tag_bytes: [u8; 16] = match entry.hash[..16].try_into() {
@@ -537,7 +537,7 @@ pub fn read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
 
 /// Delete a file — zeroes the encrypted data before freeing.
 pub fn delete(name: &str) -> Result<(), &'static str> {
-    // STUMP #136: find the slot index up front so we can target the
+    // find the slot index up front so we can target the
     // disk wipe at exactly that slot's sector range.
     let slot = unsafe {
         let mut found: Option<usize> = None;
@@ -570,7 +570,7 @@ pub fn delete(name: &str) -> Result<(), &'static str> {
         FILE_COUNT -= 1;
     }
 
-    // STUMP #136 (Phase 7): wipe the slot's data sectors and clear the
+    // wipe the slot's data sectors and clear the
     // inode on disk. Order: data sectors first (so a crash mid-delete
     // leaves the inode pointing at zeroed ciphertext, which AEAD will
     // reject anyway), inode commit second.
@@ -605,7 +605,7 @@ pub fn stats() -> (usize, usize) {
 /// the compiler cannot DCE. No locks. Best-effort: if we panic mid-write
 /// the first N bytes are still zeroed, which already degrades an
 /// attacker's recovered key.
-///
+// /
 /// # Safety
 /// May only be called from the panic handler (via wipe::emergency_wipe).
 /// After this runs BatFS read/write WILL fail; the kernel is halting.

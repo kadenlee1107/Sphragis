@@ -1,12 +1,10 @@
-// src/fs/batfs_disk.rs — STUMP #136 (Phase 7)
-//
-// On-disk persistence layer for BatFS.
+// src/fs/batfs_disk.rs — on-disk persistence layer for BatFS.
 //
 // Until this module landed, BatFS was a pure in-RAM filesystem
 // (`batfs.rs:90` even called the persistence gap out: "the persistent-
 // across-reboot fix requires NVMe (Phase 7); for in-memory use, fresh
 // random at boot is enough"). Every reboot wiped FILES[] and any data
-// the user had written. STUMP #135 built cave-registry persistence on
+// the user had written. built cave-registry persistence on
 // top of BatFS, but that was moot until BatFS itself survived a reboot.
 //
 // This module is the substrate: it owns the on-disk format and exposes
@@ -18,31 +16,31 @@
 //
 // ─── On-disk layout ─────────────────────────────────────────────────
 //
-//  Sector 0           (512B):  Superblock
-//                              - magic "BATFS\0\0\0", version, layout
-//                                constants, FS UUID, FS salt, boot
-//                                counter, HMAC-SHA256 over the rest.
+// Sector 0 (512B): Superblock
+// magic "BATFS\0\0\0", version, layout
+// constants, FS UUID, FS salt, boot
+// counter, HMAC-SHA256 over the rest.
 //
-//  Sectors 1..64      (32KB):  Inode table
-//                              - 128 entries × 256B each.
-//                              - Plaintext metadata (name, size,
-//                                nonce, AEAD tag, state).
+// Sectors 1..64 (32KB): Inode table
+// 128 entries × 256B each.
+// Plaintext metadata (name, size,
+// nonce, AEAD tag, state).
 //
-//  Sectors 65..16448  (~8MB):  Per-slot data region
-//                              - File slot `i` owns sectors
-//                                [DATA_START + i*SLOT_SECTORS,
-//                                 DATA_START + (i+1)*SLOT_SECTORS).
-//                              - Fixed-slot allocation (no free list,
-//                                no fragmentation, no compaction).
-//                                MAX_FILE_SIZE = 64KB = 128 sectors.
-//                              - Slot data is the existing AEAD
-//                                ciphertext, written through verbatim.
+// Sectors 65..16448 (~8MB): Per-slot data region
+// File slot `i` owns sectors
+// [DATA_START + i*SLOT_SECTORS,
+// DATA_START + (i+1)*SLOT_SECTORS).
+// Fixed-slot allocation (no free list,
+// no fragmentation, no compaction).
+// MAX_FILE_SIZE = 64KB = 128 sectors.
+// Slot data is the existing AEAD
+// ciphertext, written through verbatim.
 //
 // ─── Crash consistency ─────────────────────────────────────────────
 //
 // We don't journal. The trick is shadow-style ordering:
-//   1. write_data() writes ciphertext sectors first, then flush()
-//   2. write_inode() writes the inode sector last, then flush()
+// 1. write_data() writes ciphertext sectors first, then flush()
+// 2. write_inode() writes the inode sector last, then flush()
 //
 // virtio-blk guarantees per-sector atomicity (each 512-byte write is
 // either all-old or all-new on the device). So if a power loss happens
@@ -57,12 +55,12 @@
 //
 // ─── What this module does NOT do ──────────────────────────────────
 //
-// - Encryption of the inode table (filenames are plaintext on disk).
-//   Adding metadata encryption is a Phase 7b follow-up.
-// - Free-block reuse beyond per-slot (deleted file's sectors stay
-//   zero until the slot is reused).
-// - Multi-disk / partition / RAID. Single virtio-blk device only.
-// - Filesystem checking / scrub / repair.
+// Encryption of the inode table (filenames are plaintext on disk).
+// Adding metadata encryption is a Phase 7b follow-up.
+// Free-block reuse beyond per-slot (deleted file's sectors stay
+// zero until the slot is reused).
+// Multi-disk / partition / RAID. Single virtio-blk device only.
+// Filesystem checking / scrub / repair.
 
 use crate::drivers::virtio::blk;
 use crate::crypto::{rng, sha256};

@@ -35,7 +35,7 @@ static RCON: [u8; 11] = [0x00,0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36]
 /// did a byte-indexed SBOX[] lookup and leaked key bits through L1d
 /// cache-line access patterns to any attacker with a timing side-channel
 /// (browser JS → hardware cntpct_el0 was that channel, post-ATTACK-CT-001).
-///
+// /
 /// The struct keeps the same API surface — `new`, `encrypt_block`,
 /// `ctr_crypt` — so every call site (batfs::create/read, test code)
 /// continues to compile unchanged.
@@ -96,11 +96,11 @@ impl Aes256 {
 const NK128: usize = 4;
 const NR128: usize = 10;
 
-/// STUMP #142 — AES-128 backed by RustCrypto's fixsliced impl. Was
+/// AES-128 backed by RustCrypto's fixsliced impl. Was
 /// previously a hand-rolled SBOX-lookup variant whose encrypt_block did
 /// `state[i][j] = SBOX[state[i][j] as usize]` — a textbook
 /// cache-timing leak (see V8-ROOT-11 for the same fix on AES-256).
-///
+// /
 /// Every TLS record path on the wire uses AES-128-GCM (per
 /// `tls.rs:502` we currently only accept TLS_AES_128_GCM_SHA256 +
 /// TLS_AES_256_GCM_SHA384, with most servers picking the 128 suite).
@@ -108,14 +108,14 @@ const NR128: usize = 10;
 /// cipher we accept on the wire, and it's not constant-time" — was
 /// literally true: every packet's AES rounds went through the
 /// vulnerable lookup.
-///
+// /
 /// Now: `aes::Aes128` from RustCrypto, fixsliced bitsliced
 /// implementation, cache-immune by construction. Same API surface
 /// (`new`, `encrypt_block`, `ctr_crypt`, `gcm_crypt`, `gcm_encrypt`,
 /// `gcm_decrypt`) so every call site keeps working unchanged. The
 /// higher-level GCM/CTR methods all funnel through `encrypt_block`,
 /// so swapping the block primitive is enough.
-///
+// /
 /// `round_keys` field retained as a zero-cost compatibility stub —
 /// some test code checked the field directly. Its bytes are never
 /// read by the new impl.
@@ -165,7 +165,7 @@ impl Aes128 {
     }
 
     /// GCM mode encryption/decryption (counter starts at 2 per RFC 5116).
-    ///
+    // /
     /// NEW-CRYPTO-001 / DEPRECATED: this is the pure-XOR-stream path with
     /// no tag — callers that want real GCM must use
     /// `crate::crypto::gcm_verified::Aes128Gcm` instead. Kept only for
@@ -176,7 +176,7 @@ impl Aes128 {
     }
 
     /// Full AES-128-GCM encrypt: encrypts data in place AND computes 16-byte auth tag.
-    ///
+    // /
     /// NEW-CRYPTO-002 / DEPRECATED: prefer `gcm_verified::Aes128Gcm::encrypt_inplace`
     /// which writes ciphertext + tag contiguously and uses audited RustCrypto GHASH.
     /// This implementation stays for callers pinned to the legacy split-tag
@@ -264,10 +264,10 @@ impl Aes128 {
 
 /// Compute GHASH over AAD and ciphertext.
 /// GHASH(H, A, C) = X_m+n+1 where:
-///   X_0 = 0
-///   X_i = (X_{i-1} XOR A_i) * H  for AAD blocks
-///   X_j = (X_{j-1} XOR C_j) * H  for ciphertext blocks
-///   X_final = (X XOR len_block) * H
+/// X_0 = 0
+/// X_i = (X_{i-1} XOR A_i) * H for AAD blocks
+/// X_j = (X_{j-1} XOR C_j) * H for ciphertext blocks
+/// X_final = (X XOR len_block) * H
 fn ghash_compute(h: &[u8; 16], aad: &[u8], ciphertext: &[u8]) -> [u8; 16] {
     let mut x = [0u8; 16];
 
@@ -449,7 +449,7 @@ fn gmul(mut a: u8, mut b: u8) -> u8 {
 
 impl Drop for Aes128 {
     fn drop(&mut self) {
-        // STUMP #142: `inner` holds RustCrypto's fixsliced key schedule;
+        // `inner` holds RustCrypto's fixsliced key schedule;
         // RustCrypto zeroizes its key state on Drop when `zeroize`
         // features are enabled. We also overwrite the legacy
         // `round_keys` shim (which holds a redundant copy of the

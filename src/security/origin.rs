@@ -1,10 +1,10 @@
 // Bat_OS — origin tracker + same-origin policy enforcement.
 //
-// Sprint 2.2 / STUMP #104. The renderer fetches the main HTML page,
+// Sprint 2.2 / . The renderer fetches the main HTML page,
 // then walks the DOM looking for sub-resources to fetch:
-//   - <link rel="stylesheet" href="...">
-//   - <img src="...">
-//   - (eventually <script src="...">, <iframe>, fetch() in JS)
+// <link rel="stylesheet" href="...">
+// <img src="...">
+// (eventually <script src="...">, <iframe>, fetch() in JS)
 //
 // Without same-origin policy enforcement, a page from origin A can
 // embed `<img src="https://attacker.com/track?...">` which causes the
@@ -66,7 +66,7 @@ impl Origin {
 
     pub fn from_url(url: &str) -> Self {
         let mut o = Self::empty();
-        // STUMP #111 (H017): synthetic "file" origin so file:// pages
+        // synthetic "file" origin so file:// pages
         // get SOP enforcement against external sub-resources. Any
         // file:// URL collapses to scheme=file, host="" so two
         // file:// pages are same-origin to each other but distinct
@@ -86,7 +86,7 @@ impl Origin {
             None => return o,
         };
         let (scheme, host, port, _path) = parsed;
-        // STUMP #111 (C004): lower-case host and scheme on intake so
+        // lower-case host and scheme on intake so
         // `Example.com` and `example.com` compare equal — RFC 3986
         // says hostnames are case-insensitive. Pre-fix, an SOP
         // allowlist for `example.com` did not cover requests to
@@ -173,7 +173,7 @@ pub fn set_main_origin(url: &str) {
         let p = core::ptr::addr_of_mut!(MAIN_ORIGIN);
         let prev = core::ptr::read(p);
         core::ptr::write(p, new_origin);
-        // STUMP #111 (audit C014): cross-origin navigation drops the
+        // cross-origin navigation drops the
         // current origin's session state. Cookies bound to the prior
         // host stay in the jar (host-keyed) — we don't dump them — but
         // localStorage and the JS engine's heap are cave-scoped and
@@ -184,7 +184,7 @@ pub fn set_main_origin(url: &str) {
         if prev.valid && !prev.matches(&new_origin) {
             uart::puts("[origin] cross-origin transition\n");
         }
-        // STUMP #111 (audit H010): always log on every set, not just
+        // always log on every set, not just
         // on cross-origin transitions. Pre-fix the very first
         // navigation after boot was silent (`prev.valid==false`),
         // letting an attacker set up the renderer's first page
@@ -220,7 +220,7 @@ pub fn current_main_origin() -> Origin {
     unsafe { core::ptr::read(core::ptr::addr_of!(MAIN_ORIGIN)) }
 }
 
-// STUMP #111 (audit H026/H027): Acquire/Release for security
+// Acquire/Release for security
 // policy flags. Future SMP schedulers must not observe stale views
 // of `strict` after a policy flip.
 pub fn is_strict() -> bool { SOP_ENFORCE.load(Ordering::Acquire) }
@@ -276,7 +276,7 @@ pub fn check_subresource(url: &str) -> Result<(), &'static str> {
 
 /// Add an entry to the allowlist. Idempotent — a duplicate add is a no-op.
 pub fn allow(main_host: &str, other_host: &str) -> Result<(), &'static str> {
-    // STUMP #111 (C004): lowercase on intake. Operator typing
+    // lowercase on intake. Operator typing
     // `origin-allow Example.com cdn.Example.com` should match traffic
     // to lowercase variants too.
     let mut mh_buf = [0u8; 128];
@@ -309,9 +309,9 @@ pub fn allow(main_host: &str, other_host: &str) -> Result<(), &'static str> {
                 e.other_host[..on].copy_from_slice(&oh[..on]);
                 e.other_host_len = on as u16;
                 e.active = true;
-                // STUMP #111 (audit M-allowlist-no-audit): adding an
+                // adding an
                 // SOP allowlist entry is a security-relevant operation
-                // — it extends the perimeter for cross-origin fetches.
+                // it extends the perimeter for cross-origin fetches.
                 // Audit-log every add so the operator (or post-incident
                 // reviewer) can reconstruct the allowlist's history.
                 let mut buf = [0u8; 192];
@@ -384,7 +384,7 @@ pub fn clear_allowlist() {
             *e = AllowEntry::empty();
         }
     }
-    // STUMP #111: wiping the SOP allowlist is a security-relevant
+    // wiping the SOP allowlist is a security-relevant
     // operation — caves that were depending on a cross-origin entry
     // suddenly can't fetch their CDN any more. Audit so the change
     // shows up in the timeline alongside the rest of the policy

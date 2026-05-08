@@ -1,6 +1,6 @@
 // Bat_OS — DS · System Dashboard
 //
-// STUMP #125 — Claude-Design port. Source artifacts in
+// Claude-Design port. Source artifacts in
 // `docs/design/apps-ds-nm-sk/` (jsx + spec sheet).
 //
 // Layout: 2-column grid for SYSTEM + SECURITY (top, 360px tall),
@@ -112,9 +112,9 @@ fn draw_security_kvs(p: &W::PanelInner) {
     let net_ok = crate::drivers::virtio::net::is_ready();
     let _ = net_ok; // referenced if we expand the rows later
 
-    // STUMP #144: doc-drift fix. Was "AES-256-CTR / 16 ROUNDS pre-
+    // doc-drift fix. Was "AES-256-CTR / 16 ROUNDS pre-
     // Argon2id" — but BatFS now uses ChaCha20-Poly1305 AEAD (V8-CRYPTO)
-    // and the KDF is real Argon2id (STUMP #138).
+    // and the KDF is real Argon2id .
     draw_kv_row(p.x, y,            label_w, "ENCRYPT",  "CHACHA20-POLY1305",               State::Neutral, false); y += KV_ROW_H;
     draw_kv_row(p.x, y,            label_w, "HASH",     "SHA-256",                         State::Neutral, false); y += KV_ROW_H;
     draw_kv_row(p.x, y,            label_w, "KDF",      "ARGON2ID 8MiB . 3 PASS",          State::Ok,      false); y += KV_ROW_H;
@@ -131,7 +131,7 @@ fn draw_architecture(p: &W::PanelInner) {
     let fb = gpu::framebuffer();
     let w = gpu::width();
     let mut y = p.y;
-    // Headline: "Bat_OS  v0.5.0-DEV"
+    // Headline: "Bat_OS v0.5.0-DEV"
     font::draw_str(fb, w, p.x, y, "Bat_OS  ", INK, BG);
     font::draw_str(fb, w, p.x + 8 * 8, y, "v0.5.0-DEV", CYAN, BG);
     y += 18;

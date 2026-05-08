@@ -1,6 +1,6 @@
 // Bat_OS — BC · BatCave Manager
 //
-// STUMP #133 — Claude-Design Wave-4 port. Source artifacts in
+// Claude-Design Wave-4 port. Source artifacts in
 // `docs/design/apps-wb-bc/`. The manager is split into a 60%
 // caves table (left) and a 40% detail panel (right), with an
 // app-scoped bottom status strip that summarizes counts and a
@@ -29,7 +29,7 @@ const CHAR_H: u32 = 16;
 const HEADER_H: u32 = 32;
 const FOOTER_H: u32 = 28;
 
-// STUMP #133: which cave row is selected. Up/down arrows move it,
+// which cave row is selected. Up/down arrows move it,
 // Enter is consumed by render (we just re-render to pick it up).
 static mut SELECTED_CAVE: usize = 0;
 static mut CAVE_COUNT_CACHE: usize = 0;

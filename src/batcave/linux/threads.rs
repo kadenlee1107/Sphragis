@@ -2,7 +2,6 @@
 // =============================================================================
 //
 // PURPOSE
-// -----------------------------------------------------------------------------
 // This module is the foundation for running multi-threaded ELF binaries under
 // the BatCave Linux runner. The immediate motivator is Chromium, which even in
 // single-process mode spawns ~30 POSIX threads (V8 GC/parser/compiler,
@@ -18,91 +17,86 @@
 // PART 1: ANALYSIS
 // =============================================================================
 //
-// 1.1  How the current `sys_clone_thread` works (syscall.rs:1631)
-// -----------------------------------------------------------------------------
+// 1.1 How the current `sys_clone_thread` works (syscall.rs:1631)
 // The existing implementation is a clever single-thread simulation:
-//   * Global `IN_CHILD` flag gates re-entry. If the "child" is running,
-//     another clone() is rejected with -1. There is only ever ONE logical
-//     child on the CPU at a time.
-//   * On clone():
-//       - A new TID is minted and stashed in `LAST_CHILD_TID` for the parent
-//         to read back on its return.
-//       - `CLONE_CHILD_STACK` / `IS_THREAD_CHILD` are globals read by the SVC
-//         exception handler just before `eret`. The handler patches the trap
-//         frame so that the returning "child" actually resumes on `child_stack`
-//         with x0 = 0 (the clone() return value for children).
-//       - `CURRENT_TID` is flipped to the child's TID.
-//   * When the child calls exit/exit_group, `restore_parent_tid()` flips
-//     `CURRENT_TID` back to 1 and the parent's syscall return path delivers
-//     the child's TID as clone()'s return value.
-//   * `forkjmp.s` (fork_save/fork_restore) is a setjmp/longjmp-style helper
-//     kept around for fork-like semantics (busybox applets that share the
-//     parent stack). It captures x19-x30 + sp and restores them so the parent
-//     thread of execution can be "un-forked" after the child returns.
+// * Global `IN_CHILD` flag gates re-entry. If the "child" is running,
+// another clone() is rejected with -1. There is only ever ONE logical
+// child on the CPU at a time.
+// * On clone():
+// A new TID is minted and stashed in `LAST_CHILD_TID` for the parent
+// to read back on its return.
+// `CLONE_CHILD_STACK` / `IS_THREAD_CHILD` are globals read by the SVC
+// exception handler just before `eret`. The handler patches the trap
+// frame so that the returning "child" actually resumes on `child_stack`
+// with x0 = 0 (the clone() return value for children).
+// `CURRENT_TID` is flipped to the child's TID.
+// * When the child calls exit/exit_group, `restore_parent_tid()` flips
+// `CURRENT_TID` back to 1 and the parent's syscall return path delivers
+// the child's TID as clone()'s return value.
+// * `forkjmp.s` (fork_save/fork_restore) is a setjmp/longjmp-style helper
+// kept around for fork-like semantics (busybox applets that share the
+// parent stack). It captures x19-x30 + sp and restores them so the parent
+// thread of execution can be "un-forked" after the child returns.
 //
-// 1.2  What limits it to one thread at a time
-// -----------------------------------------------------------------------------
-//   * Single pair of globals (`CLONE_CHILD_STACK`, `IS_THREAD_CHILD`,
-//     `IN_CHILD`, `CURRENT_TID`) — no table, so we can't describe N threads.
-//   * No scheduler entry points for user threads. The kernel's scheduler
-//     (`src/kernel/scheduler.rs`) schedules *kernel* tasks only; user-space
-//     execution is a single blr from `runner.rs` that never returns to the
-//     scheduler until the ELF `exit`s.
-//   * No per-thread saved register state. The exception handler writes child
-//     state directly into the *current* trap frame rather than to a saved
-//     thread record.
-//   * No TLS management. `tpidr_el0` is never set, so `__errno_location`,
-//     stack-canary reads, and any `__thread` variable in musl/glibc would
-//     crash. Chromium relies heavily on TLS.
-//   * `futex` is a stub that returns EAGAIN/0 to coerce callers into a
-//     cooperative spin. That works for busybox but falls over under Chromium
-//     where threads *must* block (e.g. ThreadPool worker waiting on a queue).
+// 1.2 What limits it to one thread at a time
+// * Single pair of globals (`CLONE_CHILD_STACK`, `IS_THREAD_CHILD`,
+// `IN_CHILD`, `CURRENT_TID`) — no table, so we can't describe N threads.
+// * No scheduler entry points for user threads. The kernel's scheduler
+// (`src/kernel/scheduler.rs`) schedules *kernel* tasks only; user-space
+// execution is a single blr from `runner.rs` that never returns to the
+// scheduler until the ELF `exit`s.
+// * No per-thread saved register state. The exception handler writes child
+// state directly into the *current* trap frame rather than to a saved
+// thread record.
+// * No TLS management. `tpidr_el0` is never set, so `__errno_location`,
+// stack-canary reads, and any `__thread` variable in musl/glibc would
+// crash. Chromium relies heavily on TLS.
+// * `futex` is a stub that returns EAGAIN/0 to coerce callers into a
+// cooperative spin. That works for busybox but falls over under Chromium
+// where threads *must* block (e.g. ThreadPool worker waiting on a queue).
 //
-// 1.3  Required scheduler changes
-// -----------------------------------------------------------------------------
+// 1.3 Required scheduler changes
 // Model: cooperative + timer-preemptive round-robin across user threads of
 // the single BatCave process. We keep it simple:
 //
-//   * Single address space (CLONE_VM is always set by Chromium's thread
-//     spawn path), so "context switch" is register state only — no TTBR0
-//     swap, no TLB shootdown.
-//   * Round-robin over Runnable entries in THREADS[].
-//   * Preemption hook from the EL1 timer IRQ calls `threads::on_tick()`.
-//     If more than one thread is Runnable, the handler triggers a context
-//     switch on its way back to EL0 by rewriting the trap frame's SP_EL0,
-//     ELR_EL1, SPSR_EL1, and x0-x30 from the next thread's saved regs.
-//   * Cooperative yield via `schedule()` for blocking syscalls (futex wait,
-//     epoll_pwait, nanosleep, read-on-empty-pipe).
-//   * No priorities for now — Chromium threads are largely symmetric. We can
-//     layer that in later by copying the kernel scheduler's priority field.
+// * Single address space (CLONE_VM is always set by Chromium's thread
+// spawn path), so "context switch" is register state only — no TTBR0
+// swap, no TLB shootdown.
+// * Round-robin over Runnable entries in THREADS[].
+// * Preemption hook from the EL1 timer IRQ calls `threads::on_tick()`.
+// If more than one thread is Runnable, the handler triggers a context
+// switch on its way back to EL0 by rewriting the trap frame's SP_EL0,
+// ELR_EL1, SPSR_EL1, and x0-x30 from the next thread's saved regs.
+// * Cooperative yield via `schedule()` for blocking syscalls (futex wait,
+// epoll_pwait, nanosleep, read-on-empty-pipe).
+// * No priorities for now — Chromium threads are largely symmetric. We can
+// layer that in later by copying the kernel scheduler's priority field.
 //
-// 1.4  Per-thread register/TLS/stack layout
-// -----------------------------------------------------------------------------
-//   * Saved regs: full GPR set x0-x30 + SP_EL0 + ELR_EL1 + SPSR_EL1. Stored
-//     in `SavedRegs` below. On ARM64 the ABI only requires callee-saved
-//     (x19-x30, sp, fp) to round-trip through a function call, but preemption
-//     can steal the CPU at any instruction, so we must save ALL GPRs.
-//     NEON/FP is deferred (TODO — see below).
-//   * TLS: `tpidr_el0` holds the thread pointer. glibc/musl layouts place the
-//     TCB at `tpidr_el0` and access TLS variables at negative or positive
-//     offsets. CLONE_SETTLS provides the value. We store it per-thread and
-//     restore on switch via `msr tpidr_el0, x?`.
-//   * Stack: either user-provided (`child_stack`, the pthread case — glibc
-//     mmaps 8MB, passes us the top) or we allocate a default 64KB stack from
-//     the frame allocator and return that. Chromium always provides its own
-//     stacks, so the allocation path is a fallback for lazy callers.
-//   * Shared memory: since CLONE_VM is set, all threads share one page table.
-//     We never flip TTBR0_EL1 between user threads. The kernel's own page
-//     tables are unaffected.
+// 1.4 Per-thread register/TLS/stack layout
+// * Saved regs: full GPR set x0-x30 + SP_EL0 + ELR_EL1 + SPSR_EL1. Stored
+// in `SavedRegs` below. On ARM64 the ABI only requires callee-saved
+// (x19-x30, sp, fp) to round-trip through a function call, but preemption
+// can steal the CPU at any instruction, so we must save ALL GPRs.
+// NEON/FP is deferred (TODO — see below).
+// * TLS: `tpidr_el0` holds the thread pointer. glibc/musl layouts place the
+// TCB at `tpidr_el0` and access TLS variables at negative or positive
+// offsets. CLONE_SETTLS provides the value. We store it per-thread and
+// restore on switch via `msr tpidr_el0, x?`.
+// * Stack: either user-provided (`child_stack`, the pthread case — glibc
+// mmaps 8MB, passes us the top) or we allocate a default 64KB stack from
+// the frame allocator and return that. Chromium always provides its own
+// stacks, so the allocation path is a fallback for lazy callers.
+// * Shared memory: since CLONE_VM is set, all threads share one page table.
+// We never flip TTBR0_EL1 between user threads. The kernel's own page
+// tables are unaffected.
 //
-// 1.5  Stack switching
-// -----------------------------------------------------------------------------
+// 1.5 Stack switching
 // On context switch we:
-//     1. stash current x0-x30 + SP_EL0 + ELR + SPSR into THIS thread's
-//        `SavedRegs` slot
-//     2. load NEXT thread's `SavedRegs` into x0-x30 and the special regs
-//     3. `msr tpidr_el0, <next.tls_ptr>`
-//     4. `eret` (when coming from an exception) or `br x30` (cooperative)
+// 1. stash current x0-x30 + SP_EL0 + ELR + SPSR into THIS thread's
+// `SavedRegs` slot
+// 2. load NEXT thread's `SavedRegs` into x0-x30 and the special regs
+// 3. `msr tpidr_el0, <next.tls_ptr>`
+// 4. `eret` (when coming from an exception) or `br x30` (cooperative)
 // When the switch is cooperative (from inside a syscall handler) we're on
 // the kernel stack; only x19-x30 + sp + lr need round-tripping through
 // `SavedRegs`. When it's preemptive (from IRQ) the trap frame already has
@@ -118,9 +112,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use crate::kernel::mm::frame;
 use crate::drivers::uart;
 
-// -----------------------------------------------------------------------------
 // Linux clone() flag bits — subset we honor
-// -----------------------------------------------------------------------------
 pub const CLONE_VM:              u64 = 0x0000_0100;
 pub const CLONE_FS:              u64 = 0x0000_0200;
 pub const CLONE_FILES:           u64 = 0x0000_0400;
@@ -144,19 +136,15 @@ pub const CHROMIUM_THREAD_FLAGS: u64 =
     CLONE_THREAD | CLONE_SETTLS | CLONE_PARENT_SETTID |
     CLONE_CHILD_CLEARTID | CLONE_SYSVSEM;
 
-// -----------------------------------------------------------------------------
 // Errno constants used locally
-// -----------------------------------------------------------------------------
 const EAGAIN: i64 = -11;
 const ENOMEM: i64 = -12;
 const EINVAL: i64 = -22;
 
-// -----------------------------------------------------------------------------
 // Thread table
-// -----------------------------------------------------------------------------
 // CHROMIUM-PHASE-C: bumped from 64 to 256 to match DEFAULT_THREADS
 // quota. Chromium content_shell creates 30+ threads even in
-// --single-process mode and pthread_create was EAGAIN'ing after
+// single-process mode and pthread_create was EAGAIN'ing after
 // hitting the 64-slot ceiling.
 pub const MAX_THREADS: usize = 256;
 const DEFAULT_STACK_PAGES: usize = 16; // 64 KiB fallback
@@ -172,7 +160,7 @@ const DEFAULT_STACK_PAGES: usize = 16; // 64 KiB fallback
 /// → unmapped, EL1 data abort, abort-handler-loops-then-cave-terminates.
 /// 8 KiB gives headroom: even when SP starts at the very top of an
 /// 8-KiB region, sp+0xf8 stays inside.
-// 🎯 STUMP #20: bumped from 2 to 8 pages (32 KB). Each nested
+// bumped from 2 to 8 pages (32 KB). Each nested
 // exception eats 272 bytes of SP_EL1, and our pa-skip / pc-skip
 // unwinders can chain several before the cave terminates. 8 KB
 // allowed ~30 nestings; 32 KB allows ~120 — should never run out
@@ -194,9 +182,9 @@ const PAGE_SIZE: usize = 4096;
 // into its original caller.
 //
 // Parameters (AAPCS64):
-//   x0: old_ptr  — save callee-saved regs of the outgoing thread here
-//   x1: new_ptr  — load user x0..x30, elr_el1, spsr_el1, kernel sp, tpidr from here
-//   x2: user_sp  — sp_el0 at eret (user-space stack pointer)
+// x0: old_ptr — save callee-saved regs of the outgoing thread here
+// x1: new_ptr — load user x0..x30, elr_el1, spsr_el1, kernel sp, tpidr from here
+// x2: user_sp — sp_el0 at eret (user-space stack pointer)
 unsafe extern "C" {
     fn cxt_switch_first_run(
         old: *mut SavedRegs,
@@ -219,7 +207,7 @@ pub static PARENT_SYSCALL_SPSR: AtomicU64 = AtomicU64::new(0);
 /// pointer in x10 and the arg in x12 before svc, then branches via
 /// `blr x10` / `mov x0, x12` in the child path. The kernel must
 /// preserve those across the child's first return to EL0.
-///
+// /
 /// Populated by the arch dispatcher on svc #220 entry; consumed by
 /// sys_clone_thread's set_child_resume call.
 pub static PARENT_SYSCALL_REGS: [AtomicU64; 31] = [
@@ -388,19 +376,17 @@ impl Thread {
     }
 }
 
-// -----------------------------------------------------------------------------
 // Global thread table. `static mut` — protected by THREADS_LOCK.
 // We use a spinlock over a single bool rather than a mutex to stay #![no_std]
 // and avoid heap. On a single-core ARM64 we only need to disable IRQs while
 // the table is touched, which we do in with_table().
-// -----------------------------------------------------------------------------
 static mut THREADS: [Thread; MAX_THREADS] = [Thread::empty(); MAX_THREADS];
 static THREADS_LOCK: AtomicBool = AtomicBool::new(false);
 
 /// TID of the thread currently executing on the CPU. Distinct from
 /// CURRENT_TID in syscall.rs (the legacy single-thread TID) — we will
 /// eventually subsume that, but the switchover is the human's wiring job.
-// 🎯 STUMP #10c: boss tid=1 was inconsistent with getpid=0x4242.
+// c: boss tid=1 was inconsistent with getpid=0x4242.
 // In Linux, gettid()==getpid() for the main thread; many libc /
 // PartitionAlloc paths assume this and use them interchangeably.
 // PID/TID derivation cookies stored in PartitionAlloc slot-spans
@@ -419,7 +405,7 @@ pub static FAKE_CHILD_PID: AtomicU32 = AtomicU32::new(0);
 
 /// Per-fork counter used to allocate a unique stack VA region for
 /// fork-as-thread children. Stack VAs are at
-///   0x0000_0060_0000_0000 + (FORK_COUNTER * 0x100_0000)
+/// 0x0000_0060_0000_0000 + (FORK_COUNTER * 0x100_0000)
 /// (see `clone()`), giving 16 MB per fork — enough for any sane
 /// thread, and sized so the first 256 forks fit in 4 GB of unused
 /// VA space below the kernel-half boundary.
@@ -441,7 +427,7 @@ pub fn init_main_thread(main_entry_pc: u64, main_sp_el0: u64) {
         }
 
         t[0] = Thread::empty();
-        // 🎯 STUMP #11: boss thread table entry MUST match RUNNING_TID, or
+        // boss thread table entry MUST match RUNNING_TID, or
         // schedule()/on_tick()'s `slot_of(t, current_tid())` returns None
         // → "no runnable thread" deadlock-diag fires AND no context
         // switches happen. Workers spawned via clone() never get the CPU
@@ -473,7 +459,7 @@ pub fn init_main_thread(main_entry_pc: u64, main_sp_el0: u64) {
     // lands as 0 in release builds sometimes (same family as the
     // CAVE_QUOTAS / THREADS-table flake). Explicitly reset to 2 so
     // `fetch_add(1)` returns 2 on the first clone — not 0.
-    // 🎯 STUMP #10c: keep boss tid in sync with getpid (0x4242).
+    // c: keep boss tid in sync with getpid (0x4242).
     NEXT_TID.store(0x4243, Ordering::Release);
     RUNNING_TID.store(0x4242, Ordering::Release);
     THREADING_ENABLED.store(true, Ordering::Release);
@@ -501,10 +487,8 @@ pub fn reset_for_cave_switch() {
     PREEMPT_REQUESTED.store(false, Ordering::Release);
 }
 
-// -----------------------------------------------------------------------------
 // Table-locking helper. Disables IRQs while the closure runs so the timer
 // can't preempt us mid-mutation. Single-core assumption.
-// -----------------------------------------------------------------------------
 fn with_table<R>(f: impl FnOnce(&mut [Thread; MAX_THREADS]) -> R) -> R {
     // Save+disable IRQs
     let daif: u64;
@@ -537,14 +521,12 @@ fn slot_of(t: &[Thread; MAX_THREADS], tid: u32) -> Option<usize> {
     None
 }
 
-// -----------------------------------------------------------------------------
 // PART 2 — clone() implementation
-// -----------------------------------------------------------------------------
 /// Linux clone() with the ARM64 argument ordering:
-///   long clone(unsigned long flags, void *stack,
-///              int *parent_tid, unsigned long tls, int *child_tid);
+/// long clone(unsigned long flags, void *stack,
+/// int *parent_tid, unsigned long tls, int *child_tid);
 /// We accept the 5-arg form the human's syscall shim will pass.
-///
+// /
 /// Returns: new TID (>=2) on success in the caller (parent) context, or a
 /// negative errno. The child return value (0) is delivered by the scheduler
 /// when it first picks up this thread, by setting saved_regs.x[0] = 0 here.
@@ -578,12 +560,12 @@ pub fn clone(flags: u64,
     // FORK-AS-THREAD (2026-04-24): when the caller is doing a fork-
     // style clone (no CLONE_VM), we re-interpret it as a thread
     // clone with VM/files/sighand shared. The child gets:
-    //   * a fresh user stack (Chromium passes child_stack=NULL)
-    //   * a fresh kernel stack
-    //   * the parent's TLS pointer (TPIDR_EL0) — glibc fork
-    //     doesn't pass CLONE_SETTLS so we'd otherwise zero it
-    //   * the parent's full GPR snapshot (set_child_resume) with
-    //     x0 = 0 to signal "you are the child"
+    // * a fresh user stack (Chromium passes child_stack=NULL)
+    // * a fresh kernel stack
+    // * the parent's TLS pointer (TPIDR_EL0) — glibc fork
+    // doesn't pass CLONE_SETTLS so we'd otherwise zero it
+    // * the parent's full GPR snapshot (set_child_resume) with
+    // x0 = 0 to signal "you are the child"
     //
     // What we DON'T do: copy the parent's address space. Memory
     // is shared. For Chromium's zygote pattern that's acceptable:
@@ -741,10 +723,10 @@ pub fn clone(flags: u64,
         // the explicit fields here populate the rest of the bootstrap
         // state cxt_switch_first_run needs:
         //
-        //   saved_regs.x[18]   → tpidr_el0 (TLS base)
-        //   saved_regs.elr_el1 → user_pc   (patched by set_child_resume)
-        //   saved_regs.spsr_el1 → EL0t, IRQs on
-        //   saved_regs.sp_el0  → kernel SP_EL1 for this thread
+        // saved_regs.x[18] → tpidr_el0 (TLS base)
+        // saved_regs.elr_el1 → user_pc (patched by set_child_resume)
+        // saved_regs.spsr_el1 → EL0t, IRQs on
+        // saved_regs.sp_el0 → kernel SP_EL1 for this thread
         //
         // User SP comes through as a separate arg to cxt_switch_first_run
         // (see Thread.stack_top). We do NOT overload x[19..22] any more.
@@ -810,21 +792,21 @@ pub fn clone(flags: u64,
 
 /// REAL FORK (2026-04-24): create a new process with its own
 /// address space.
-///
+// /
 /// Called from `clone()` when the caller passes fork-style flags
 /// (no CLONE_VM). Steps:
-///   1. Look up the parent's user-window bounds.
-///   2. `mmu::fork_cave_pagetable` — eager-copy parent's user
-///      pages into a fresh L1.
-///   3. `mmu::record_forked_cave` — register the child's L1 in
-///      the per-cave table so `is_user_range` works for it.
-///   4. Allocate a thread slot, kernel stack, and seed
-///      saved_regs so the cooperative-switch asm activates
-///      child_l1 on first run.
-///   5. Return new TID. set_child_resume (called from the
-///      arch SVC dispatcher) will fill in the parent's GPR
-///      snapshot with x0=0 for the child.
-///
+/// 1. Look up the parent's user-window bounds.
+/// 2. `mmu::fork_cave_pagetable` — eager-copy parent's user
+/// pages into a fresh L1.
+/// 3. `mmu::record_forked_cave` — register the child's L1 in
+/// the per-cave table so `is_user_range` works for it.
+/// 4. Allocate a thread slot, kernel stack, and seed
+/// saved_regs so the cooperative-switch asm activates
+/// child_l1 on first run.
+/// 5. Return new TID. set_child_resume (called from the
+/// arch SVC dispatcher) will fill in the parent's GPR
+/// snapshot with x0=0 for the child.
+// /
 /// Memory: the parent's user-window contents are duplicated into
 /// fresh physical frames. Fork is therefore O(parent's mapped
 /// memory) — typically 50-200 ms for Chromium-sized caves. We
@@ -844,7 +826,7 @@ fn real_fork(
     let parent_l1: u64;
     unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) parent_l1); }
     let parent_l1 = parent_l1 & !1u64;
-    // STUMP #160: when the parent's L1 isn't in CAVE_L1[] (e.g. an
+    // when the parent's L1 isn't in CAVE_L1[] (e.g. an
     // already-forked child re-forking — nested zygote pattern), fall
     // back to the chromium runner's default user-window. The fork
     // still succeeds; just the trace was misleading ("aborting" but
@@ -1010,8 +992,8 @@ pub fn set_child_resume(tid: u32, resume_pc: u64, _parent_sp: u64) {
                     .load(Ordering::Acquire);
             }
             // Child-specific overrides:
-            //   x[0] = 0    (clone() returns 0 in child)
-            //   x[19]       (elr_el1 after eret — set here)
+            // x[0] = 0 (clone() returns 0 in child)
+            // x[19] (elr_el1 after eret — set here)
             // x[18] we leave as whatever the parent had — TLS is
             // sourced from saved_regs.x[18] by cxt_switch_first_run
             // to set tpidr_el0, and we already wrote tls_val in
@@ -1050,7 +1032,7 @@ pub fn set_child_resume(tid: u32, resume_pc: u64, _parent_sp: u64) {
                 }
                 // Walk the saved-FP chain. We only relocate slots
                 // whose ORIGINAL value was a valid frame pointer
-                // — i.e., the relocated target lands inside the
+                // i.e., the relocated target lands inside the
                 // copied region. This stops the walker from
                 // rewriting garbage values (uninitialised stack
                 // slots that happen to contain a non-zero qword)
@@ -1087,8 +1069,8 @@ pub fn set_child_resume(tid: u32, resume_pc: u64, _parent_sp: u64) {
 
 /// Helper for the stack fallback path. Allocates contiguous 4 KiB frames
 /// and returns (base, top). 16-byte aligned top.
-///
-/// 🎯 STUMP #10 FIX: previously called `frame::alloc_frame()` in a loop,
+// /
+/// FIX: previously called `frame::alloc_frame()` in a loop,
 /// which DOES NOT guarantee contiguity — `alloc_frame` just returns the
 /// lowest clear bit. With heavy fragmentation (many threads, demand-page
 /// commits), `pages` sequential calls return scattered frames. Code then
@@ -1097,7 +1079,7 @@ pub fn set_child_resume(tid: u32, resume_pc: u64, _parent_sp: u64) {
 /// allocations — thread stack writes silently clobbered PartitionAlloc /
 /// V8 / TLS data sitting in those frames. Symptom:
 /// `PartitionAlloc::DoubleFreeOrCorruptionDetected` with `x1=0x1`.
-///
+// /
 /// Fix: use `alloc_contig(pages)` so the returned run is guaranteed
 /// physically contiguous. Boundary check still applies to the LAST page.
 fn alloc_stack(pages: usize) -> Option<(u64, u64)> {
@@ -1130,9 +1112,7 @@ fn alloc_stack(pages: usize) -> Option<(u64, u64)> {
     None
 }
 
-// -----------------------------------------------------------------------------
 // PART 3 — Thread table accessors (for syscall.rs integration)
-// -----------------------------------------------------------------------------
 pub fn thread_count() -> usize {
     with_table(|t| {
         let mut n = 0;
@@ -1157,7 +1137,7 @@ pub fn runnable_count() -> usize {
 
 /// Mark current thread Exited and schedule something else. Fires the
 /// CLONE_CHILD_CLEARTID futex wake so joiners can proceed.
-///
+// /
 /// V4 process-destroy: previously the thread slot was marked Exited but
 /// its backing stack + TLS frames were never freed. A cave that spawned
 /// 16 threads then waited for them to exit leaked 16 × stack_pages
@@ -1209,18 +1189,16 @@ pub fn exit_current(code: i32) -> ! {
     loop { unsafe { core::arch::asm!("wfi"); } }
 }
 
-// -----------------------------------------------------------------------------
 // PART 4 — Scheduler integration
-// -----------------------------------------------------------------------------
 /// Pick the next Runnable thread (round-robin after current) and context
 /// switch to it. Called cooperatively from blocking syscalls, and from
 /// on_tick() during timer IRQ.
-///
+// /
 /// COOPERATIVE PATH: we are on the kernel stack inside a syscall. We save
 /// x19-x30+sp+lr into the current thread slot and longjmp-style restore
 /// the target. When control returns here (later, when we're rescheduled),
 /// the syscall completes normally.
-///
+// /
 /// PREEMPTIVE PATH: on_tick() rewrites the trap frame directly; schedule()
 /// itself isn't called from the IRQ.
 pub fn schedule() {
@@ -1234,7 +1212,7 @@ pub fn schedule() {
     // with_table reads stale SavedRegs.
     //
     // The ASM `cxt_switch_cooperative` itself does NOT need IRQs masked
-    // — it's a save-restore that must be allowed to be preempted (the
+    // it's a save-restore that must be allowed to be preempted (the
     // newly-restored thread can take an interrupt at any instruction).
     // So we drop the guard immediately before the call.
     let (next_tid, old_ptr, new_ptr) = {
@@ -1261,7 +1239,7 @@ pub fn schedule() {
             // have a real deadlock — every BatCave thread is parked
             // and nobody can wake anyone.
             //
-            // 🎯 STUMP #63: under BAT_OS_KEEP_GOING, instead of just
+            // under BAT_OS_KEEP_GOING, instead of just
             // dumping and stalling, force-wake the FIRST blocked
             // thread we find (lowest slot index = oldest worker, most
             // likely a missed signal). Log a parser-friendly
@@ -1362,7 +1340,7 @@ pub fn schedule() {
             // own stack; and (b) the call uses `br` not `bl`, so x30
             // stays as schedule's caller-LR (park_slot / ppoll / etc.),
             // which cxt_switch_first_run saves as OLD.saved_regs.x[30]
-            // — the address OLD's eventual `ret` from the next
+            // the address OLD's eventual `ret` from the next
             // cooperative switch should land on.
             //
             // The frame-pop size (`add sp, sp, #{frame}`) must match
@@ -1370,8 +1348,8 @@ pub fn schedule() {
             // expose this symbolically, so we spell it out. If the
             // prologue ever changes we'll SEGV and know to update.
             // Current observed layout (release build, Apr 2026):
-            //     stp x30, x21, [sp, #-0x20]!
-            //     stp x20, x19, [sp, #0x10]
+            // stp x30, x21, [sp, #-0x20]!
+            // stp x20, x19, [sp, #0x10]
             // → 0x20 bytes, with x30 at sp+0 pre-pop.
             core::arch::asm!(
                 // Restore the two callee-saved pairs schedule spilled.
@@ -1442,7 +1420,7 @@ pub fn on_tick(current_trap_frame: *mut SavedRegs) -> Option<*const SavedRegs> {
 
     // 1. Snapshot the trap frame's user-mode state into the current
     // thread's slot. TrapFrame (arch/mod.rs) has layout:
-    //   x[0..31] @ 0..248, elr @ 248, spsr @ 256.
+    // x[0..31] @ 0..248, elr @ 248, spsr @ 256.
     // SavedRegs has DIFFERENT layout — direct struct copy would
     // misalign elr_el1 (which lives at offset 256 in SavedRegs but
     // 248 in TrapFrame). So copy field-by-field and pull SP_EL0 /
@@ -1494,7 +1472,7 @@ pub fn on_tick(current_trap_frame: *mut SavedRegs) -> Option<*const SavedRegs> {
     RUNNING_TID.store(next_tid, Ordering::Release);
 
     // 3. Hand back a pointer to the next thread's saved regs so the IRQ
-    //    handler can blit it into the trap frame (and msr tpidr_el0).
+    // handler can blit it into the trap frame (and msr tpidr_el0).
     //
     // SAFETY: caller guarantees to finish reading before the next IRQ /
     // before any call that could remap THREADS. This is a pointer into
@@ -1505,9 +1483,7 @@ pub fn on_tick(current_trap_frame: *mut SavedRegs) -> Option<*const SavedRegs> {
     })
 }
 
-// -----------------------------------------------------------------------------
 // PART 5 — Block / wake primitives
-// -----------------------------------------------------------------------------
 /// Park the current thread. Caller provides the reason; the scheduler will
 /// not resume this thread until wake_thread() or a matching futex/epoll
 /// wake. Yields the CPU immediately.
@@ -1610,29 +1586,29 @@ pub fn current_thread_blocked() -> bool {
 /// `schedule()` (which switches away if anyone is Runnable) and `wfi`
 /// (which idles until any interrupt fires; the timer IRQ runs
 /// wake_expired_deadlines, which may flip our state Blocked→Runnable).
-///
+// /
 /// Lock + IRQ ordering invariants (see DESIGN_SCHEDULER_BLOCK_ON.md
 /// decision #8):
-///
-///   - The threads-table lock is NEVER held across `wfi`.
-///     mark_current_blocked takes the lock briefly, releases it.
-///     schedule() takes its own lock internally. The wfi runs lock-free.
-///   - Interrupts are NEVER masked across `wfi`. mark_current_blocked
-///     may briefly take an IrqGuard for atomicity but releases it before
-///     schedule(). The wfi must execute with interrupts enabled or the
-///     timer IRQ can't fire and deadline-bearing sleepers never wake.
+// /
+/// The threads-table lock is NEVER held across `wfi`.
+/// mark_current_blocked takes the lock briefly, releases it.
+/// schedule() takes its own lock internally. The wfi runs lock-free.
+/// Interrupts are NEVER masked across `wfi`. mark_current_blocked
+/// may briefly take an IrqGuard for atomicity but releases it before
+/// schedule(). The wfi must execute with interrupts enabled or the
+/// timer IRQ can't fire and deadline-bearing sleepers never wake.
 pub fn park_current(reason: BlockReason) {
     mark_current_blocked(reason);
     loop {
         // schedule() switches to another Runnable thread if any. When
         // control returns here, either:
-        //   * Another thread ran, was eventually rescheduled away, and
-        //     a waker (event-driven via wake_thread / wake_epoll_waiters,
-        //     or deadline-driven via wake_expired_deadlines) flipped our
-        //     state Blocked→Runnable. We resume; check below exits loop.
-        //   * No other Runnable thread existed. schedule() returned
-        //     immediately. Our state is still Blocked. Drop to wfi and
-        //     wait for any interrupt; on resume re-check state.
+        // * Another thread ran, was eventually rescheduled away, and
+        // a waker (event-driven via wake_thread / wake_epoll_waiters,
+        // or deadline-driven via wake_expired_deadlines) flipped our
+        // state Blocked→Runnable. We resume; check below exits loop.
+        // * No other Runnable thread existed. schedule() returned
+        // immediately. Our state is still Blocked. Drop to wfi and
+        // wait for any interrupt; on resume re-check state.
         schedule();
         if !current_thread_blocked() { break; }
         // Still blocked, no one else to run. Idle until the next IRQ.
@@ -1644,11 +1620,11 @@ pub fn park_current(reason: BlockReason) {
 /// Walk the threads table for Blocked threads whose BlockReason carries
 /// an expired deadline_ticks; transition each to Runnable. Bounded
 /// O(MAX_THREADS=256) per call.
-///
+// /
 /// Called from kernel::scheduler::tick() once per timer IRQ. The pass
 /// is the only waker for sys_nanosleep and the deadline-driven half of
 /// epoll_pwait. (Event-driven epoll wakes go through wake_epoll_waiters.)
-///
+// /
 /// Futex's per-WaitSlot deadline lives in futex.rs, not BlockReason, so
 /// this pass does not see it. Futex's existing post-resume re-check loop
 /// handles its own timeouts (see DESIGN_SCHEDULER_BLOCK_ON.md decision #5).
@@ -1674,7 +1650,7 @@ pub fn wake_expired_deadlines() {
 
 /// Walk the threads table for any thread Blocked on EpollWait with the
 /// matching epfd; transition each to Runnable. Bounded O(MAX_THREADS).
-///
+// /
 /// Used by cmd_scheduler_selftest for deterministic per-epfd wake
 /// verification. `mark_ready` uses the broader `wake_all_epoll_waiters`
 /// because at the watched-fd layer we only know which epoll instance
@@ -1746,13 +1722,13 @@ pub fn futex_wait_on(uaddr: u64, val: u32) -> i64 {
 /// current thread (parent_tid == me). If found, reap it: free its
 /// kernel stack, free its forked cave (page tables), and clear the
 /// thread slot. Returns (child_tid, exit_code) or None.
-///
+// /
 /// `target_pid` selects which child to reap:
-///   * -1 → any child
-///   * >0 → that specific child TID (POSIX waitpid semantics)
-///   * 0 / <-1 → process-group filtering (we don't have process groups,
-///     so treat as "any" too)
-///
+/// * -1 → any child
+/// * >0 → that specific child TID (POSIX waitpid semantics)
+/// * 0 / <-1 → process-group filtering (we don't have process groups,
+/// so treat as "any" too)
+// /
 /// Caller is responsible for stuffing the exit code into the user's
 /// status_ptr (Linux wait status format) and returning the child TID
 /// to user space.
@@ -1840,9 +1816,7 @@ pub fn try_reap(tid: u32) -> Option<i32> {
     Some(code)
 }
 
-// -----------------------------------------------------------------------------
 // Diagnostics
-// -----------------------------------------------------------------------------
 pub fn dump() {
     uart::puts("[threads] table:\n");
     with_table(|t| {
@@ -1897,12 +1871,12 @@ pub fn auto_dump_if_idle() {
     static LAST_DUMP: AtomicU64 = AtomicU64::new(0);
     let count = LAST_DUMP.fetch_add(1, Ordering::Relaxed);
 
-    // STUMP #161 iter 16: PC-sampler heartbeat. Timer IRQs fire at
+    // iter 16: PC-sampler heartbeat. Timer IRQs fire at
     // ~1 Hz on QEMU virt, so every 5 ticks ≈ 5 sec we dump:
-    //   - current tid
-    //   - ELR_EL1 (PC at exception entry — i.e. where userland was
-    //     when the IRQ fired)
-    //   - SPSR_EL1.M (which EL was running)
+    // current tid
+    // ELR_EL1 (PC at exception entry — i.e. where userland was
+    // when the IRQ fired)
+    // SPSR_EL1.M (which EL was running)
     // This is the ONE diagnostic that catches purely-userland hangs
     // (no syscalls, no diag dumps). Without it /bin/js can spin in
     // a JIT loop or busy-wait for 120 sec and we'd never know where.
@@ -1942,68 +1916,68 @@ pub fn auto_dump_if_idle() {
 // =============================================================================
 //
 // 1. In src/batcave/linux/syscall.rs::sys_clone_thread (line ~1631):
-//    - If flags matches CHROMIUM_THREAD_FLAGS (or at least CLONE_VM|CLONE_THREAD),
-//      delegate to threads::clone(flags, child_stack, parent_tid_ptr,
-//                                  child_tid_ptr, tls) and return its result.
-//    - Immediately after, call threads::set_child_resume(new_tid, elr_plus_4,
-//      parent_sp) with ELR_EL1 read from the trap frame +4.
-//    - Leave the existing IN_CHILD path as the fallback for CLONE-without-
-//      CLONE_THREAD (busybox), so nothing regresses.
+// If flags matches CHROMIUM_THREAD_FLAGS (or at least CLONE_VM|CLONE_THREAD),
+// delegate to threads::clone(flags, child_stack, parent_tid_ptr,
+// child_tid_ptr, tls) and return its result.
+// Immediately after, call threads::set_child_resume(new_tid, elr_plus_4,
+// parent_sp) with ELR_EL1 read from the trap frame +4.
+// Leave the existing IN_CHILD path as the fallback for CLONE-without-
+// CLONE_THREAD (busybox), so nothing regresses.
 //
 // 2. Call threads::init_main_thread(entry_pc, initial_sp) from runner.rs
-//    *only* for ELFs that are expected to use pthread (Chromium, v8_exec).
-//    For hello_world/busybox, leave THREADING_ENABLED=false; schedule() and
-//    on_tick() short-circuit and everything behaves exactly like today.
+// *only* for ELFs that are expected to use pthread (Chromium, v8_exec).
+// For hello_world/busybox, leave THREADING_ENABLED=false; schedule() and
+// on_tick() short-circuit and everything behaves exactly like today.
 //
 // 3. Implement the cooperative context switch in assembly. Suggested location:
-//    src/batcave/linux/threads.s with a single extern "C" fn:
-//        fn cxt_switch_cooperative(old: *mut SavedRegs, new: *const SavedRegs);
-//    Replace the `uart::puts("[threads] schedule() TODO...")` in schedule()
-//    with a call to it.
+// src/batcave/linux/threads.s with a single extern "C" fn:
+// fn cxt_switch_cooperative(old: *mut SavedRegs, new: *const SavedRegs);
+// Replace the `uart::puts("[threads] schedule() TODO...")` in schedule()
+// with a call to it.
 //
 // 4. Hook on_tick() into the EL1 IRQ handler (arch/mod.rs or wherever the
-//    timer fires). The handler already has a pointer to its own saved trap
-//    frame (x0..x30, SP_EL0, ELR_EL1, SPSR_EL1 on the exception stack).
-//    Treat that as a *mut SavedRegs, call on_tick(), and if it returns
-//    Some(next_regs), memcpy(trap_frame, next_regs, sizeof SavedRegs) and
-//    `msr tpidr_el0, <next.tls_ptr>` before eret. See the layout comments
-//    on SavedRegs — ordering of x[0..31] / sp_el0 / elr_el1 / spsr_el1 must
-//    match the trap frame exactly, OR you introduce a small shim struct.
+// timer fires). The handler already has a pointer to its own saved trap
+// frame (x0..x30, SP_EL0, ELR_EL1, SPSR_EL1 on the exception stack).
+// Treat that as a *mut SavedRegs, call on_tick(), and if it returns
+// Some(next_regs), memcpy(trap_frame, next_regs, sizeof SavedRegs) and
+// `msr tpidr_el0, <next.tls_ptr>` before eret. See the layout comments
+// on SavedRegs — ordering of x[0..31] / sp_el0 / elr_el1 / spsr_el1 must
+// match the trap frame exactly, OR you introduce a small shim struct.
 //
 // 5. Wire the futex syscall:
-//    FUTEX_WAIT -> threads::futex_wait_on(uaddr, val) when is_enabled(),
-//                  else fall back to the existing EAGAIN stub.
-//    FUTEX_WAKE -> threads::futex_wake_on(uaddr, n) as i64.
+// FUTEX_WAIT -> threads::futex_wait_on(uaddr, val) when is_enabled(),
+// else fall back to the existing EAGAIN stub.
+// FUTEX_WAKE -> threads::futex_wake_on(uaddr, n) as i64.
 //
 // 6. Wire set_tid_address/gettid to consult threads::current_tid() when
-//    enabled.
+// enabled.
 //
 // 7. FP/NEON state — Chromium will crash without q0-q31 save/restore once
-//    multiple threads actually run math. Extend SavedRegs with:
-//        pub q: [u128; 32], pub fpsr: u32, pub fpcr: u32
-//    and extend the switch assembly to stp/ldp them.
+// multiple threads actually run math. Extend SavedRegs with:
+// pub q: [u128; 32], pub fpsr: u32, pub fpcr: u32
+// and extend the switch assembly to stp/ldp them.
 //
 // =============================================================================
 // STATUS SUMMARY
 // =============================================================================
 // Fully working (compiles, testable in isolation):
-//   - Flag constants and Chromium flag bundle
-//   - Thread struct, SavedRegs, ThreadState, BlockReason
-//   - Static thread table + IRQ-masked locking
-//   - clone() flag validation, TID allocation, slot allocation, TLS/tid
-//     address recording, PARENT_SETTID write
-//   - block_current_thread / wake_thread / futex_wait_on / futex_wake_on
-//   - try_reap / exit_current
-//   - init_main_thread gate (does nothing until the runner opts in)
-//   - dump()
+// Flag constants and Chromium flag bundle
+// Thread struct, SavedRegs, ThreadState, BlockReason
+// Static thread table + IRQ-masked locking
+// clone() flag validation, TID allocation, slot allocation, TLS/tid
+// address recording, PARENT_SETTID write
+// block_current_thread / wake_thread / futex_wait_on / futex_wake_on
+// try_reap / exit_current
+// init_main_thread gate (does nothing until the runner opts in)
+// dump()
 //
 // Skeleton / TODO (marked inline):
-//   - Cooperative context switch assembly (schedule() logs and returns)
-//   - Trap-frame rewrite from on_tick() (returns the pointer but the IRQ
-//     handler isn't wired to use it)
-//   - Contiguous stack allocation (relies on frame allocator quirk)
-//   - NEON/FP register save
-//   - stack free-on-exit
+// Cooperative context switch assembly (schedule() logs and returns)
+// Trap-frame rewrite from on_tick() (returns the pointer but the IRQ
+// handler isn't wired to use it)
+// Contiguous stack allocation (relies on frame allocator quirk)
+// NEON/FP register save
+// stack free-on-exit
 //
 // Not wired into syscall.rs at all — that's for the human.
 

@@ -11,6 +11,60 @@ end of a session.
 
 ---
 
+## 2026-05-08 (squeaky-clean Phase 3) — Mac — 🧹 414 STUMP archaeology refs stripped
+
+**Third phase of the squeaky-clean pass.** Strips audit-tracker
+prefixes from inline comments. The rationale stays; the dead
+audit-handles go.
+
+### Why
+
+`STUMP #N` was an audit/sprint tracker handle: useful mid-development
+as a "find me the rationale" pointer, but at this point the
+rationale lives in the comment text itself. The prefix is just
+museum-piece noise — readers don't have a STUMP system anymore, so
+"STUMP #115: force fullscreen flush" reads as 7 dead bytes followed
+by the actual reason.
+
+### What ran
+
+`/tmp/stump_strip.py` — pattern-matched 8 distinct STUMP-anchor
+shapes (`(STUMP #N)`, `STUMP #N: `, `STUMP #N — `, `🎯 STUMP #N: `,
+`STUMP #N (audit foo): `, etc.) and stripped them. Idempotent —
+running twice is a no-op.
+
+After the strip:
+- 414 anchors removed
+- 51 fully-stripped comment lines auto-deleted (they were just
+  STUMP-N tags with no content)
+- 2 inline orphan empty comments (`code; // `) cleaned by hand
+- 54 files touched
+
+Net diff: 1 667 insertions, 1 722 deletions across 54 files. The
+deltas are mostly `// STUMP #N: …` → `// …` rewrites (so each line
+shows as -/+ even though the rationale is preserved).
+
+### Verification
+
+- 0 STUMP-N references remain in `src/**/*.rs`
+- `cargo check --target aarch64-unknown-none --features gicv3`
+  clean
+- `qemu_selftests_smoke.py` PASS (all 6 sub-tests)
+- Spot-check on a few files showed the cleanups read sensibly
+
+### Out of scope (acceptable noise)
+
+A few comments now start with a lowercase word ("same dual-source
+read…", "ALSO drain…") because the strip removed a leading capital
+clause. The grammar is still parseable but slightly awkward. Not
+worth fixing 50+ sites by hand for cosmetic capitalization.
+
+### Next
+
+Phase 4: Linux ABI shim dead-code purge.
+
+---
+
 ## 2026-05-08 (squeaky-clean Phase 2) — Mac — 🔐 X.509 verifier accepts intermediate-signed-by-anchor chains
 
 **Second phase of the squeaky-clean pass.** Real engineering, not

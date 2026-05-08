@@ -10,7 +10,7 @@ use crate::drivers::virtio::net as netdev;
 use super::ethernet;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-/// STUMP #111 (audit M-arp-unsolicited-silent): count + one-shot audit
+/// count + one-shot audit
 /// for unsolicited (gratuitous) ARP replies. Pre-fix the existing code
 /// silently dropped them — a textbook ARP-spoof attack tried to claim
 /// the gateway and left zero trace in the audit ring. We still drop
@@ -151,7 +151,7 @@ pub fn handle_arp(data: &[u8]) {
                 return;
             }
             if !pending_take(sender_ip) {
-                // Unsolicited — drop. STUMP #111: also bump a counter
+                // Unsolicited — drop. also bump a counter
                 // and audit-log the first occurrence so the operator
                 // can see the attempt. We don't audit every drop —
                 // that would let an attacker flood the audit ring with
@@ -186,7 +186,7 @@ pub fn reset_for_cave_switch() {
         let ticks = &mut *core::ptr::addr_of_mut!(LAST_UPDATE_TICK);
         for slot in ticks.iter_mut() { *slot = 0; }
     }
-    // STUMP #111: re-arm the unsolicited-reply alarm + counter so the
+    // re-arm the unsolicited-reply alarm + counter so the
     // next cave starts with a clean slate. Otherwise a cave that ran
     // long enough to see one spoof attempt would silence the warning
     // for every subsequent cave on this boot.

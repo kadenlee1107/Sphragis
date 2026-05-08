@@ -67,7 +67,7 @@ impl<'a> IpPacket<'a> {
 
 /// Send an IP packet.
 pub fn send(dst_ip: u32, protocol: u8, payload: &[u8]) -> Result<(), &'static str> {
-    // STUMP #141: was a Tor(VPN(payload)) pipeline — `tor` deleted as
+    // was a Tor(VPN(payload)) pipeline — `tor` deleted as
     // part of the honest-naming pass (it was 3 layers of CTR with
     // hardcoded keys, not real Tor), and `vpn` renamed to `psk_overlay`
     // to reflect that it's a PSK-derived AES-CTR envelope, not real
@@ -150,7 +150,7 @@ pub fn handle(data: &[u8]) {
             return;
         }
 
-        // STUMP #141: PSK-overlay decrypt path. Was Tor(VPN(...)); see
+        // PSK-overlay decrypt path. Was Tor(VPN(...)); see
         // the matching note in `send` above. Real onion routing is a
         // future STUMP.
         let mut decrypted_payload = [0u8; 1400];

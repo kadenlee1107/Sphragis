@@ -107,7 +107,7 @@ fn execute(cmd: &str) {
         "uptime" => cmd_uptime(),
         "ls" | "files" => cmd_ls(),
         "write" => {
-            // STUMP #132: take everything after the filename verbatim
+            // take everything after the filename verbatim
             // so `write hello "test contents"` writes the whole quoted
             // string, not just the first space-delimited chunk.
             let after_cmd = cmd.trim_start()
@@ -547,7 +547,7 @@ fn cmd_batcave_fw_list() {
 /// context dependency. Three sub-tests exercise the wake helpers'
 /// correctness; the park_current loop invariant is verified by manual
 /// review (see DESIGN_SCHEDULER_BLOCK_ON.md acceptance criteria).
-///
+// /
 /// `pub(crate)` so the boot-time runner in main.rs (gated by
 /// selftest-on-boot) can call this for headless verification in
 /// scripts/qemu_selftests_smoke.py.
@@ -659,14 +659,14 @@ pub(crate) fn cmd_scheduler_selftest() {
 
 /// X.509 chain validator selftest. Exercises the new `as_static_str`
 /// error mapping path with two deterministic inputs:
-///   1. Trusted root used as a "leaf" with a wrong hostname → expect
-///      VerifyOutcome::Err(HostnameMismatch).
-///   2. Truncated DER → expect VerifyOutcome::Err(Parse).
-///
+/// 1. Trusted root used as a "leaf" with a wrong hostname → expect
+/// VerifyOutcome::Err(HostnameMismatch).
+/// 2. Truncated DER → expect VerifyOutcome::Err(Parse).
+// /
 /// Verifies both that the verifier surfaces the right variant AND
 /// that as_static_str returns a debug-friendly string. See
 /// DESIGN_TLS_HARDENING.md.
-///
+// /
 /// `pub(crate)` so the boot-time selftest hook in `main.rs` (gated by
 /// the `selftest-on-boot` Cargo feature) can call this for headless
 /// verification in `scripts/qemu_x509_smoke.py`.
@@ -869,12 +869,12 @@ fn cmd_cave_policy_selftest() {
 // Followup #3b: shell drivers for the per-cave policy store.
 //
 // `cpol-list` prints every cave the kernel knows about + rule count.
-// `cpol-show  <name>` dumps the full rule list for a cave.
-// `cpol-add   <name> <host> <port> <proto>` appends one allow rule.
-//   proto: "tcp", "udp", "any".  port: 0 = any.
+// `cpol-show <name>` dumps the full rule list for a cave.
+// `cpol-add <name> <host> <port> <proto>` appends one allow rule.
+// proto: "tcp", "udp", "any". port: 0 = any.
 // `cpol-check <name> <host> <port> <proto>` runs the decision path
-//   and prints ALLOW / DROP — useful for verifying the kernel sees
-//   the same policy the daemon advertises.
+// and prints ALLOW / DROP — useful for verifying the kernel sees
+// the same policy the daemon advertises.
 // `cpol-clear <name>` drops the cave's entry entirely.
 
 fn cpol_parse_proto(s: &str) -> Option<u8> {
@@ -1795,7 +1795,7 @@ fn cmd_secure_ipc_selftest() {
     }
 }
 
-// STUMP #159: AES-128-GCM + AES-256-GCM NIST known-answer vectors.
+// AES-128-GCM + AES-256-GCM NIST known-answer vectors.
 // Validates that the gcm_verified module reproduces NIST SP 800-38D
 // Test Cases 2 and 14 byte-for-byte AND rejects tampered ciphertext.
 // Without this, a fault in the AES round constants or GHASH reduction
@@ -2342,7 +2342,7 @@ fn parse_ip(s: &str) -> u32 {
 fn ensure_default_cave() {
     use crate::batcave::cave;
     if cave::get_active() == usize::MAX {
-        // STUMP #146: QEMU-BUGFIX-6 was the multi-MB stack-staged
+        // QEMU-BUGFIX-6 was the multi-MB stack-staged
         // struct overwrites in `apps::browser::reset_for_cave_switch`
         // (specifically `DOM_DOC = Document::new()`, ~5 MB) blowing
         // the 8 MB kernel stack inside the IrqGuard critical section.
@@ -2489,13 +2489,13 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
         }
         "create" => {
             // Parse flags. Supported:
-            //   --ephemeral           — destroyed on wipe, no persistent state
-            //   --kit:<name>          — pre-install a tool bundle
-            //   --docker:<image>      — docker-backed cave (Phase 6 of the
-            //                           design-alignment plan). Image passed
-            //                           through to docker_client / batcaved.
-            //   --caps:<csv>          — only meaningful with --docker; Linux
-            //                           capabilities to pass via --cap-add
+            // ephemeral — destroyed on wipe, no persistent state
+            // kit:<name> — pre-install a tool bundle
+            // docker:<image> — docker-backed cave (Phase 6 of the
+            // design-alignment plan). Image passed
+            // through to docker_client / batcaved.
+            // caps:<csv> — only meaningful with --docker; Linux
+            // capabilities to pass via --cap-add
             //
             // Scan all parts from [3..) so flag order doesn't matter.
             let mut ephemeral = false;
@@ -2737,7 +2737,7 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
             }
         }
         "ipc" => {
-            // STUMP #157: surface cave::create_ipc to the operator.
+            // surface cave::create_ipc to the operator.
             // Audit caught this as "machinery exists but no shell
             // command invokes it." Now it does.
             //
@@ -2745,10 +2745,10 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
             //
             // Both caves must have granted each other the
             // `ipc:<other>` capability before this works:
-            //   batcave grant alpha ipc:beta
-            //   batcave grant beta  ipc:alpha
-            //   batcave ipc alpha beta
-            //   → IPC channel established: id=N
+            // batcave grant alpha ipc:beta
+            // batcave grant beta ipc:alpha
+            // batcave ipc alpha beta
+            // → IPC channel established: id=N
             //
             // The returned channel id is the kernel IPC handle that
             // either cave's syscall path can use to send/recv via
@@ -3223,9 +3223,9 @@ fn cmd_run_elf(name: &str) {
     }
 }
 
-/// STUMP #105 — Sprint 3.1: dump or clear the cookie jar.
-///   `cookies`        → print all cookies (host + name only, values redacted)
-///   `cookies clear`  → wipe the jar
+/// Sprint 3.1: dump or clear the cookie jar.
+/// `cookies` → print all cookies (host + name only, values redacted)
+/// `cookies clear` → wipe the jar
 fn cmd_cookies(arg: &str) {
     if arg == "clear" {
         crate::net::cookies::reset();
@@ -3288,7 +3288,7 @@ fn cmd_kbd_stats() {
     console::puts("\n");
 }
 
-/// STUMP #131: load a BatFS file into the editor's active tab and
+/// load a BatFS file into the editor's active tab and
 /// switch to ED. `edit foo.txt` from the shell.
 fn cmd_edit(name: &str) {
     if name.is_empty() {
@@ -3312,7 +3312,7 @@ fn cmd_edit(name: &str) {
     }
 }
 
-/// STUMP #104 — Sprint 2.2: print current main origin + allowlist.
+/// Sprint 2.2: print current main origin + allowlist.
 fn cmd_origin(_arg: &str) {
     let main = crate::security::origin::current_main_origin();
     if main.valid {
@@ -3330,7 +3330,7 @@ fn cmd_origin(_arg: &str) {
     crate::security::origin::dump_allowlist();
 }
 
-/// STUMP #104: append a (main_host, other_host) pair to the SOP
+/// append a (main_host, other_host) pair to the SOP
 /// allowlist. Both args required. After this, the renderer will fetch
 /// sub-resources from `other_host` even when the main page is from
 /// `main_host`.
@@ -3355,7 +3355,7 @@ fn cmd_origin_allow(main_host: &str, other_host: &str) {
     }
 }
 
-/// STUMP #104: flip SOP enforcement strict/permissive.
+/// flip SOP enforcement strict/permissive.
 fn cmd_origin_mode(arg: &str) {
     if arg.is_empty() {
         console::puts("  current SOP mode: ");
@@ -3370,13 +3370,13 @@ fn cmd_origin_mode(arg: &str) {
     }
 }
 
-/// STUMP #158: dump active TCP listeners + connections.
-///
-/// Operator visibility for STUMP #148's TCP server-side. Shows:
-///   - every active Listener slot with its port, backlog, fd, and
-///     pending-accept-queue depth
-///   - every active PCB with its state, 4-tuple, and bound fd
-///
+/// dump active TCP listeners + connections.
+// /
+/// Operator visibility for 's TCP server-side. Shows:
+/// every active Listener slot with its port, backlog, fd, and
+/// pending-accept-queue depth
+/// every active PCB with its state, 4-tuple, and bound fd
+// /
 /// Useful for confirming `tcp-listen` actually registered, watching
 /// SYN_RECV → ESTABLISHED transitions during a real handshake, and
 /// verifying clean shutdown via `listen_close`.
@@ -3440,17 +3440,17 @@ fn cmd_tcp_list() {
     }
 }
 
-/// STUMP #148: TCP server-side selftest.
-///
+/// TCP server-side selftest.
+// /
 /// Exercises the in-kernel listener-table + accept-queue mechanics
 /// (steps 1-4 of #148) without needing real wire-level packet flow.
 /// Tests:
-///   - listen_register port collision (EADDRINUSE)
-///   - listener_lookup_by_port + by_fd
-///   - listener_accept_push / pop FIFO ordering
-///   - backlog enforcement
-///   - listen_close cleanup + reuse
-///
+/// listen_register port collision (EADDRINUSE)
+/// listener_lookup_by_port + by_fd
+/// listener_accept_push / pop FIFO ordering
+/// backlog enforcement
+/// listen_close cleanup + reuse
+// /
 /// SYN-on-LISTEN dispatch + the third-ACK transition need real
 /// virtio-net traffic (e.g. `nc` from the QEMU host) — that's
 /// outside this command's scope.
@@ -3475,32 +3475,32 @@ fn cmd_tcp_selftest() {
     }
 }
 
-/// STUMP #149: real-wire test harness for STUMP #148's TCP server-side.
-///
+/// real-wire test harness for 's TCP server-side.
+// /
 /// Usage: `tcp-listen <port>`
-///
+// /
 /// Registers a kernel listener on the given port, blocks waiting for
 /// one inbound connection (~30s deadline), prints the peer's address
 /// when the third ACK lands, drains up to 256 bytes of received data
 /// to the console, sends back a "hello from bat_os\n" greeting, and
 /// closes. One-shot (handles a single connection then returns to the
 /// shell prompt).
-///
+// /
 /// Driving from the QEMU host:
-///
-///     # On Bat_OS:
-///     bat_os > tcp-listen 8080
-///       listening on port 8080... (one-shot, ~30s deadline)
-///
-///     # On the Mac host:
-///     $ nc -v 10.0.2.15 8080
-///     Connection to 10.0.2.15 8080 port [tcp/*] succeeded!
-///     hello world<Enter>
-///
-///     # Back on Bat_OS:
-///       connection from 10.0.2.2:54321
-///       recv (12 bytes): hello world
-///       sent greeting; closing
+// /
+/// # On Bat_OS:
+/// bat_os > tcp-listen 8080
+/// listening on port 8080... (one-shot, ~30s deadline)
+// /
+/// # On the Mac host:
+/// $ nc -v 10.0.2.15 8080
+/// Connection to 10.0.2.15 8080 port [tcp/*] succeeded!
+/// hello world<Enter>
+// /
+/// # Back on Bat_OS:
+/// connection from 10.0.2.2:54321
+/// recv (12 bytes): hello world
+/// sent greeting; closing
 fn cmd_tcp_listen(port_str: &str) {
     use crate::net::tcp;
 
@@ -3650,10 +3650,10 @@ fn cmd_tcp_listen(port_str: &str) {
     tcp::listen_close(port);
 }
 
-/// STUMP #103 — Sprint 2.3: dump recent audit-log entries.
-/// `audit`        → last 32 entries
-/// `audit <N>`    → last N entries
-/// `audit all`    → everything resident in the ring (≤ 1024)
+/// Sprint 2.3: dump recent audit-log entries.
+/// `audit` → last 32 entries
+/// `audit <N>` → last N entries
+/// `audit all` → everything resident in the ring (≤ 1024)
 fn cmd_audit(arg: &str) {
     let n = if arg.is_empty() {
         32
@@ -3669,7 +3669,7 @@ fn cmd_audit(arg: &str) {
         }
     };
     crate::security::audit::dump_tail(n);
-    // STUMP #111 (audit C005): if the ring has overflowed,
+    // if the ring has overflowed,
     // surface the evicted-count so the reviewer knows entries
     // were silently dropped (potentially flood-eviction).
     let evicted = crate::security::audit::evicted();
@@ -3680,7 +3680,7 @@ fn cmd_audit(arg: &str) {
     }
 }
 
-/// STUMP #103: serialize the audit ring and write it to BatFS as
+/// serialize the audit ring and write it to BatFS as
 /// /audit-<count>.log. Persists what we have. Cheap O(N) walk +
 /// one BatFS create call. (Append-only is the next milestone — for
 /// now we overwrite the same path with the latest dump.)

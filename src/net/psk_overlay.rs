@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 // Bat_OS — Pre-shared-key network overlay
 //
-// STUMP #141: previously named `vpn.rs` and described as "WireGuard-
+// previously named `vpn.rs` and described as "WireGuard-
 // inspired". The audit caught this as a misleading-name issue:
 //
-//   - There is NO Noise IK handshake.
-//   - There is NO real WireGuard protocol on the wire.
-//   - There are NO peer ephemeral keys, no rekey, no roaming.
+// There is NO Noise IK handshake.
+// There is NO real WireGuard protocol on the wire.
+// There are NO peer ephemeral keys, no rekey, no roaming.
 //
 // What this module actually is: a PSK-derived AES-256-CTR overlay.
 // `configure(server_ip, port, psk)` SHA-256-derives static send and

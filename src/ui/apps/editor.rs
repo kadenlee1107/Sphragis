@@ -1,17 +1,17 @@
 #![allow(dead_code)]
 // Bat_OS — ED · Code Editor
 //
-// STUMP #129 (Wave 3) shipped a pure-demo Editor that painted a
-// hardcoded sample of kernel_main.rs. STUMP #130 makes it
+// shipped a pure-demo Editor that painted a
+// hardcoded sample of kernel_main.rs. makes it
 // actually editable: real text buffer, real cursor, arrow-key
 // navigation, character insertion / deletion / Enter, on-the-fly
 // Rust syntax tokenization for color.
 //
 // Still missing (intentionally — separate STUMPs):
-//   * Save / load to BatFS (use shell `write` / `read` for now)
-//   * Multi-tab buffers (the 3 tabs are visual; only one is real)
-//   * Scrolling past the visible region (buffer caps at visible)
-//   * Selection / copy / paste
+// * Save / load to BatFS (use shell `write` / `read` for now)
+// * Multi-tab buffers (the 3 tabs are visual; only one is real)
+// * Scrolling past the visible region (buffer caps at visible)
+// * Selection / copy / paste
 
 use crate::ui::wm;
 use crate::ui::gpu;
@@ -83,7 +83,7 @@ impl Buffer {
     }
 }
 
-// ─── Clipboard (STUMP #131) ─────────────────────────────────────────
+// ─── Clipboard ─────────────────────────────────────────
 //
 // 4KB scratch + length. Multi-line copies are stored with embedded
 // '\n' separators; paste replays them as line splits.
@@ -274,7 +274,7 @@ pub fn handle_key(c: u8) {
         KEY_ARROW_DOWN  => { clear_selection(); move_cursor_down(); }
         KEY_ARROW_LEFT  => { clear_selection(); move_cursor_left(); }
         KEY_ARROW_RIGHT => { clear_selection(); move_cursor_right(); }
-        // STUMP #131: shift+arrow extends selection. Anchor is set
+        // shift+arrow extends selection. Anchor is set
         // on first shift+arrow if there's no active selection.
         KEY_SHIFT_ARROW_UP    => { ensure_selection_anchor(); move_cursor_up(); }
         KEY_SHIFT_ARROW_DOWN  => { ensure_selection_anchor(); move_cursor_down(); }
@@ -426,7 +426,7 @@ fn render_selection() -> Option<(usize, usize, usize, usize)> {
     ordered_selection()
 }
 
-// ─── Save / load (STUMP #131) ────────────────────────────────────────
+// ─── Save / load ────────────────────────────────────────
 
 /// Serialize the current buffer to bytes (lines joined with '\n')
 /// then push to BatFS via `create` after deleting the previous copy
@@ -737,7 +737,7 @@ fn draw_gutter_and_code(x: u32, y: u32, w: u32, h: u32) {
         }
 
         if is_cur {
-            // STUMP #132: underscore cursor (7px wide × 2px tall at
+            // underscore cursor (7px wide × 2px tall at
             // the bottom of the cell). The previous solid block
             // overpainted the current char and was invisible after a
             // space. Underscore keeps the char readable and stays

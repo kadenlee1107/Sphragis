@@ -17,7 +17,7 @@ static mut SAVED_BUSYBOX_SP: u64 = 0;
 /// Kernel SP save slot used by `batcave::linux::loader::execute_with_args`
 /// before erets to EL0, and read back by the exit-syscall + brk paths below
 /// so the shell can resume after a user ELF exits.
-///
+// /
 /// Lives in kernel BSS so it's guaranteed writable (unlike the previous
 /// hardcoded `0x40000100`/`0x40001000` addresses which both sat inside the
 /// Linux arm64 Image header region and were mapped R-X by the kernel MMU).
@@ -50,19 +50,19 @@ pub struct TrapFrame {
 /// Walk the active cave's L1→L2→L3 to verify a user VA has a valid
 /// L3 entry. Returns true if the page is mapped (and therefore safe
 /// to read from EL1 without triggering a translation fault).
-///
+// /
 /// This is conservative: if any of the L1/L2/L3 reads themselves
 /// might fault, we return false. Used in the diagnostic dump path
 /// to avoid recursive aborts when the original fault left us with
 /// a partially-committed reservation.
-///
+// /
 /// EL0-writable scratch page for pa-skip-data's fake Alloc returns.
 /// Mmap'd lazily on first call into the small_mmap user-VA region
 /// at a fixed address so it's stable across the cave's lifetime.
 /// Multiple "fake allocs" all share this single page (intentional
-/// — the cave is in degraded state by the time we synthesize, so
+/// the cave is in degraded state by the time we synthesize, so
 /// shared garbage is preferable to NULL-deref).
-///
+// /
 /// Returns 0 if init failed (alloc OOM or install_l3 failed).
 static SCRATCH_UVA: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
@@ -173,13 +173,13 @@ pub fn init_exceptions() {
         // the syscall boundary where we can add noise/resolution caps.
         //
         // Bits in CNTKCTL_EL1:
-        //   EL0PCTEN (bit 0) = 1 enables EL0 access to cntpct_el0
-        //   EL0VCTEN (bit 1) = 1 enables EL0 access to cntvct_el0
-        //   EVNTEN   (bit 2)
-        //   EVNTDIR  (bit 3)
-        //   EVNTI    (bits 7:4)
-        //   EL0VTEN  (bit 8)
-        //   EL0PTEN  (bit 9)
+        // EL0PCTEN (bit 0) = 1 enables EL0 access to cntpct_el0
+        // EL0VCTEN (bit 1) = 1 enables EL0 access to cntvct_el0
+        // EVNTEN (bit 2)
+        // EVNTDIR (bit 3)
+        // EVNTI (bits 7:4)
+        // EL0VTEN (bit 8)
+        // EL0PTEN (bit 9)
         // Setting to 0 denies all EL0 timer register access.
         core::arch::asm!("msr cntkctl_el1, xzr");
         core::arch::asm!("isb");
@@ -195,8 +195,8 @@ pub(crate) static GIC_VERSION: core::sync::atomic::AtomicU8 =
     core::sync::atomic::AtomicU8::new(0);
 
 /// QEMU virt machine GIC layout:
-///   gic-version=2: GICD @ 0x0800_0000, GICC @ 0x0801_0000
-///   gic-version=3: GICD @ 0x0800_0000, GICR @ 0x080A_0000 (per-CPU)
+/// gic-version=2: GICD @ 0x0800_0000, GICC @ 0x0801_0000
+/// gic-version=3: GICD @ 0x0800_0000, GICR @ 0x080A_0000 (per-CPU)
 /// Both share GICD_PIDR2 at GICD_BASE+0xFFE8 with arch_rev in bits[7:4].
 const GICD_BASE: usize = 0x0800_0000;
 const GICD_PIDR2: usize = GICD_BASE + 0xFFE8;
@@ -210,7 +210,7 @@ const GICR_BASE: usize = 0x080A_0000;
 /// QEMU virt smoke (`-machine virt,gic-version=2`). Build with
 /// `cargo build --release --features gicv3` to flip to the v3 path
 /// for HVF acceleration on Apple Silicon hosts.
-///
+// /
 /// We do NOT runtime-probe via GICD_PIDR2 because on v2 QEMU only
 /// maps the first 4 KB of GICD, so reading the PIDR registers at
 /// offset 0xFFE8 faults. A safer probe would parse the DTB
@@ -231,8 +231,8 @@ fn init_gicv3() {
     // Distributor MMIO offsets
     const GICD_CTLR:  usize = GICD_BASE + 0x000;
     // Redistributor for CPU 0:
-    //   GICR_RD_BASE  = GICR_BASE          (control + WAKER + IDREGs)
-    //   GICR_SGI_BASE = GICR_BASE + 0x10000 (SGI/PPI control)
+    // GICR_RD_BASE = GICR_BASE (control + WAKER + IDREGs)
+    // GICR_SGI_BASE = GICR_BASE + 0x10000 (SGI/PPI control)
     const GICR_WAKER:       usize = GICR_BASE + 0x0014;
     const GICR_SGI_BASE:    usize = GICR_BASE + 0x10000;
     const GICR_ISENABLER0:  usize = GICR_SGI_BASE + 0x100;
@@ -241,12 +241,12 @@ fn init_gicv3() {
 
     unsafe {
         // 1. Distributor: enable Group 1 NS + Affinity Routing.
-        //    GICD_CTLR.EnableGrp1NS = bit 1, GICD_CTLR.ARE_NS = bit 4.
-        //    (DS=0 disables security, simplifies — we don't have EL3.)
+        // GICD_CTLR.EnableGrp1NS = bit 1, GICD_CTLR.ARE_NS = bit 4.
+        // (DS=0 disables security, simplifies — we don't have EL3.)
         core::ptr::write_volatile(GICD_CTLR as *mut u32, (1 << 1) | (1 << 4));
 
         // 2. Wake the redistributor: clear ProcessorSleep (bit 1),
-        //    then poll until ChildrenAsleep (bit 2) clears.
+        // then poll until ChildrenAsleep (bit 2) clears.
         let mut waker = core::ptr::read_volatile(GICR_WAKER as *const u32);
         waker &= !(1u32 << 1); // clear ProcessorSleep
         core::ptr::write_volatile(GICR_WAKER as *mut u32, waker);
@@ -259,7 +259,7 @@ fn init_gicv3() {
         }
 
         // 3. Per-CPU SGI/PPI config: put PPI 30 (timer) in Group 1,
-        //    set its priority, enable it.
+        // set its priority, enable it.
         let mut grp = core::ptr::read_volatile(GICR_IGROUPR0 as *const u32);
         grp |= 1u32 << 30;  // bit 30 = INTID 30 in group 1
         core::ptr::write_volatile(GICR_IGROUPR0 as *mut u32, grp);
@@ -274,24 +274,24 @@ fn init_gicv3() {
         core::ptr::write_volatile(GICR_ISENABLER0 as *mut u32, 1u32 << 30);
 
         // 4. ICC_* system registers — CPU interface. SRE bit MUST
-        //    be set BEFORE any other ICC_*_EL1 access; on GICv2 this
-        //    register doesn't exist. We accept that — a v2-only host
-        //    would never have entered init_gicv3 since detection
-        //    via PIDR2 said v2.
-        //    ICC_SRE_EL1 = 1 << 0 (SRE)
+        // be set BEFORE any other ICC_*_EL1 access; on GICv2 this
+        // register doesn't exist. We accept that — a v2-only host
+        // would never have entered init_gicv3 since detection
+        // via PIDR2 said v2.
+        // ICC_SRE_EL1 = 1 << 0 (SRE)
         core::arch::asm!("msr S3_0_C12_C12_5, {}", in(reg) 1u64);
         core::arch::asm!("isb");
 
-        //    ICC_PMR_EL1 = 0xff (allow all priorities)
+        // ICC_PMR_EL1 = 0xff (allow all priorities)
         core::arch::asm!("msr S3_0_C4_C6_0, {}", in(reg) 0xffu64);
 
-        //    ICC_BPR1_EL1 = 0 (max preemption granularity)
+        // ICC_BPR1_EL1 = 0 (max preemption granularity)
         core::arch::asm!("msr S3_0_C12_C12_3, {}", in(reg) 0u64);
 
-        //    ICC_CTLR_EL1 = 0 (EOImode=0 — single drop+deactivate)
+        // ICC_CTLR_EL1 = 0 (EOImode=0 — single drop+deactivate)
         core::arch::asm!("msr S3_0_C12_C12_4, {}", in(reg) 0u64);
 
-        //    ICC_IGRPEN1_EL1 = 1 (enable group 1 IRQs)
+        // ICC_IGRPEN1_EL1 = 1 (enable group 1 IRQs)
         core::arch::asm!("msr S3_0_C12_C12_7, {}", in(reg) 1u64);
 
         core::arch::asm!("isb");
@@ -300,10 +300,10 @@ fn init_gicv3() {
 }
 
 /// Minimal GICv2 init for QEMU virt. The "virt" machine wires:
-///   GIC Distributor (GICD)  @ 0x0800_0000
-///   GIC CPU Interface (GICC)@ 0x0801_0000
+/// GIC Distributor (GICD) @ 0x0800_0000
+/// GIC CPU Interface (GICC)@ 0x0801_0000
 /// Physical-timer IRQ is PPI #14 → INTID 30.
-///
+// /
 /// We need: enable the distributor, enable the CPU interface,
 /// set PMR (priority mask) to accept all priorities, enable
 /// INTID 30 in GICD's ISENABLER. Without this the timer fires
@@ -391,7 +391,7 @@ fn reset_timer() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
-    // STUMP #161 iter 16 marker
+    // iter 16 marker
     static IRQ_N_TEST: core::sync::atomic::AtomicU64 =
         core::sync::atomic::AtomicU64::new(0);
     let irq_idx_test = IRQ_N_TEST.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -433,8 +433,8 @@ fn handle_irq_inner(frame: *mut TrapFrame) {
 
     // QEMU virt path: ARM Generic Timer wired directly via the GIC.
     // Branches on GIC_VERSION (set by init_timer):
-    //   v2: MMIO ack via GICC_IAR (0x0801000C), EOI via GICC_EOIR.
-    //   v3: system register ack via ICC_IAR1_EL1, EOI via ICC_EOIR1_EL1.
+    // v2: MMIO ack via GICC_IAR (0x0801000C), EOI via GICC_EOIR.
+    // v3: system register ack via ICC_IAR1_EL1, EOI via ICC_EOIR1_EL1.
     // Without ack+EOI the GIC keeps the IRQ active and stops delivering.
     const GICC_IAR:  usize = 0x0801_0000 + 0x00C;
     const GICC_EOIR: usize = 0x0801_0000 + 0x010;
@@ -454,7 +454,7 @@ fn handle_irq_inner(frame: *mut TrapFrame) {
     // Spurious (1023) means no IRQ pending — bail without EOI.
     if intid == 1023 { return; }
 
-    // STUMP #161 iter 16: count ALL IRQs, not just timer fires. We
+    // iter 16: count ALL IRQs, not just timer fires. We
     // observed zero heartbeats during /bin/js userland-hang debugging,
     // but couldn't tell whether (a) the timer wasn't firing or (b) the
     // ctl & 0b100 check was failing. Sampling on every IRQ entry
@@ -504,13 +504,13 @@ fn handle_irq_inner(frame: *mut TrapFrame) {
         // For EL0 IRQs we call schedule() directly. schedule() picks
         // the next runnable thread and invokes cxt_switch_cooperative,
         // which:
-        //   * saves OUR (current thread's) callee-saved regs + SP +
-        //     SP_EL0 + TTBR0 into our slot — that's enough state to
-        //     resume us later;
-        //   * restores the new thread's callee-saved + SP + SP_EL0 +
-        //     TTBR0;
-        //   * rets to the new thread's saved x30 (back into ITS prior
-        //     schedule() / handle_irq call site).
+        // * saves OUR (current thread's) callee-saved regs + SP +
+        // SP_EL0 + TTBR0 into our slot — that's enough state to
+        // resume us later;
+        // * restores the new thread's callee-saved + SP + SP_EL0 +
+        // TTBR0;
+        // * rets to the new thread's saved x30 (back into ITS prior
+        // schedule() / handle_irq call site).
         //
         // The trap frame stays parked at the top of OUR kernel stack
         // while we're switched out — perfectly safe, nothing else
@@ -1201,7 +1201,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                                 "msr elr_el1, {elr}",
                                 "msr spsr_el1, {spsr}",
                                 // Use only LDR (not LDP) to avoid alignment faults
-                                // — trap frame may not be 16-byte aligned
+                                // trap frame may not be 16-byte aligned
                                 "mov x16, {fp}",
                                 "ldr x1, [x16, #8]",
                                 "ldr x2, [x16, #16]",
@@ -1543,7 +1543,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         break;
                     }
                 }
-                // 🎯 STUMP #57: validate page is mapped before deref.
+                // validate page is mapped before deref.
                 // Pre-fix the diagnostic FP-walk did `ldr [fp]` raw,
                 // assuming the page-table walk would either succeed
                 // or trap-and-recover. Under TCG that holds; under
@@ -1573,7 +1573,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             // V8-DABT-DIAG: also dump the bytes around ELR so we know
             // which load/store instruction faulted (helps identify
             // which Xn was used to compute FAR).
-            // STUMP #57: gate on page_is_mapped — same reason as above.
+            // gate on page_is_mapped — same reason as above.
             uart::puts("  instr@elr: ");
             if page_is_mapped(elr) {
                 let instr: u32 = unsafe {
@@ -1588,7 +1588,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 uart::puts("(unmapped)");
             }
             uart::puts("\n");
-            // STUMP #161 iter 13: dump 32 instructions BEFORE ELR + 16
+            // iter 13: dump 32 instructions BEFORE ELR + 16
             // AFTER, so we can identify the function by its pattern.
             // Especially useful when the PC isn't in any loaded library
             // (suggesting JIT'd or kernel-aliased memory). 4 bytes per
@@ -1655,7 +1655,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             let in_child = crate::batcave::linux::syscall::IN_CHILD
                 .load(core::sync::atomic::Ordering::Relaxed);
 
-            // 🎯 STUMP #15b: PartitionAlloc's noreturn-abort BRKs.
+            // b: PartitionAlloc's noreturn-abort BRKs.
             // PA's three crash points (CorruptionDetected,
             // FreelistCorruptionDetected, and the body of
             // DoubleFreeOrCorruptionDetected) are reached from
@@ -1670,9 +1670,9 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             // return there as if PA::Free completed normally.
             //
             // KNOWN ABORT ELRs (this build of content_shell):
-            //   0x14d73000 = CorruptionDetected
-            //   0x14d73298 = DFOCD body fault after partial skip
-            //   0x14d777ac = FreelistCorruptionDetected
+            // 0x14d73000 = CorruptionDetected
+            // 0x14d73298 = DFOCD body fault after partial skip
+            // 0x14d777ac = FreelistCorruptionDetected
             // PA libchrome text region is roughly 0x14000000-0x1B000000;
             // PA::Free itself is at 0x11a630c0 so we test for "still
             // inside PA::Free" by looking for LR < 0x12000000 (not in
@@ -1714,7 +1714,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     };
                     let in_pa_free = (0x11a63000..=0x11a6a800).contains(&saved_lr);
                     let in_pa_libchrome = (0x14d70000..=0x14da0000).contains(&saved_lr);
-                    // 🎯 STUMP #38: also filter logging::LogMessage::*
+                    // also filter logging::LogMessage::*
                     // code. When PA's CHECKs fire under a LOG(FATAL),
                     // the call chain is `user → ~LogMessage → Flush →
                     // HandleFatal → BRK`. Skipping HandleFatal's BRK
@@ -1725,7 +1725,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // fp + 16). Flush then reads garbage stack-
                     // relative locals, calls operator delete with a
                     // bogus pointer, and PA fires DoubleFreeDetected
-                    // — but the FP chain is now corrupt and the
+                    // but the FP chain is now corrupt and the
                     // unwinder can't escape, terminating the cave.
                     // Fix: include logging code as a filtered range
                     // so the walk passes through both Flush and the
@@ -1735,10 +1735,10 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // C1/C2/D0/D1/D2,...} cluster at
                     // 0x14ca2e00..0x14ca40ac.
                     let in_logging = (0x14ca2e00..=0x14ca4100).contains(&saved_lr);
-                    // 🎯 STUMP #21: restrict to content_shell TEXT.
+                    // restrict to content_shell TEXT.
                     let in_text_range = saved_lr >= 0x11720000
                         && saved_lr < 0x19910000;
-                    // STUMP #31 (reverted): function-start filter pushed
+                    // function-start filter pushed
                     // pa-skip one frame deeper but landed inside V8's
                     // ReportOOMFailure which itself crashes — walking
                     // up the stack from inside the OOM chain just lands
@@ -1758,7 +1758,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // Synthesize "PA::Free returned normally": restore
                     // SP to past PA::Free's frame, set elr to user's LR.
                     //
-                    // STUMP #34 attempt (REVERTED): tried to set x1 to
+                    // attempt (REVERTED): tried to set x1 to
                     // scratch when found_lr == V8Initializer start to
                     // avoid the NULL+0x17 deref. Result: V8Initializer
                     // proceeded further but caves HUNG (timed out)
@@ -1766,7 +1766,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // outcome — the partially-init isolate deadlocked
                     // somewhere downstream. Keeping known-good logic.
                     //
-                    // 🎯 STUMP #46 (2026-04-28 PM): SP-resume was wrong.
+                    // 🎯 SP-resume was wrong.
                     // Pre-fix: sp_el0 = fp + 16, x[29] = fp. fp is the
                     // FP of the LAST PA frame before user code (e.g.
                     // BufferFree's x29). Setting sp to fp+16 lands
@@ -1836,7 +1836,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 return;
             }
 
-            // 🎯 STUMP #38: V8 sandbox-pointer DCHECK fires inside
+            // V8 sandbox-pointer DCHECK fires inside
             // `HeapObject::InitSelfIndirectPointerField` at PC 0x11a54538.
             // This is the `b.lo BRK` form of `CHECK(OutsideSandbox(ptr))`
             // in `TrustedPointerTable::Validate` (saelo, V8 src
@@ -1860,12 +1860,12 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             // which then runs through autiasp + ret cleanly.
             //
             // Function layout (file VMA — cave VMA is +0x10000000):
-            //   0x1a542c4: paciasp + prologue (saves x19..x29, x30 to sp+0x10..0x48)
-            //   0x1a54538: brk #0 (this trap)
-            //   0x1a54494: epilogue start (ldp x20, x19, [sp, #0x40])
-            //   0x1a544a4: ldp x29, x30, [sp], #0x50
-            //   0x1a544a8: autiasp
-            //   0x1a544ac: ret
+            // 0x1a542c4: paciasp + prologue (saves x19..x29, x30 to sp+0x10..0x48)
+            // 0x1a54538: brk #0 (this trap)
+            // 0x1a54494: epilogue start (ldp x20, x19, [sp, #0x40])
+            // 0x1a544a4: ldp x29, x30, [sp], #0x50
+            // 0x1a544a8: autiasp
+            // 0x1a544ac: ret
             //
             // The prologue's saved x19..x26 still contain the caller's
             // values at trap time, so the epilogue restores them
@@ -1896,7 +1896,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 return;
             }
 
-            // 🎯 STUMP #27 (extended in #39): BRK from chrome text where
+            // 🎯 BRK from chrome text where
             // the previous instruction is a `b` (tail call) OR `bl`
             // (regular call) to a function that wasn't supposed to
             // return but did (because we pa-skipped its internal CHECK).
@@ -1930,7 +1930,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // BL opcode top 6 bits = 100101.
                     let is_bl = (prev_instr >> 26) == 0b100101;
 
-                    // 🎯 STUMP #48: detect compiler "unreachable guard"
+                    // detect compiler "unreachable guard"
                     // sequences `b X; brk #0; hlt #0`. clang emits this
                     // after an unconditional branch that the optimiser
                     // proved would always be taken — the brk+hlt is dead
@@ -1942,7 +1942,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // but LR is the BLR's return address — execution
                     // loops back into the caller's struct, dispatches
                     // through the corrupt funcptr again, and we BRK
-                    // again. STUMP #42 catches the resulting livelock
+                    // again. catches the resulting livelock
                     // after 32 iterations and terminates the cave;
                     // detecting the guard pattern up front saves the
                     // 32 wasted skips and gives a cleaner termination.
@@ -1959,29 +1959,29 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     } else { false };
                     let is_unreachable_guard = is_uncond_branch && next_is_hlt;
                     if is_unreachable_guard {
-                        // STUMP #160 iter 7: distinguish two flavors of
+                        // iter 7: distinguish two flavors of
                         // `b X; brk; hlt` UNREACHABLE-GUARD:
                         //
-                        //   (a) "default switch case" — a LOCAL conditional
-                        //       branch (b.cond / b.ne / cbz) inside the same
-                        //       function targets the brk because the case
-                        //       wasn't expected to fire. The unconditional
-                        //       branch immediately above the brk goes to
-                        //       the function's own SAFE epilogue.
-                        //       In this case lr_now is INSIDE the same
-                        //       function as elr (same locality) — we can
-                        //       redirect ELR to the unconditional branch's
-                        //       target and the function's clean epilogue
-                        //       runs, returning whatever default value
-                        //       (NULL ptr, 0, etc.) was set up by the
-                        //       fallthrough case.
+                        // (a) "default switch case" — a LOCAL conditional
+                        // branch (b.cond / b.ne / cbz) inside the same
+                        // function targets the brk because the case
+                        // wasn't expected to fire. The unconditional
+                        // branch immediately above the brk goes to
+                        // the function's own SAFE epilogue.
+                        // In this case lr_now is INSIDE the same
+                        // function as elr (same locality) — we can
+                        // redirect ELR to the unconditional branch's
+                        // target and the function's clean epilogue
+                        // runs, returning whatever default value
+                        // (NULL ptr, 0, etc.) was set up by the
+                        // fallthrough case.
                         //
-                        //   (b) "vtable miss" — a corrupt vtable slot
-                        //       points directly at the brk. lr_now is in
-                        //       a DIFFERENT function (the caller's BLR
-                        //       site). Redirecting ELR would resume the
-                        //       caller's vtable site → re-dispatch → BRK
-                        //       again → livelock. Must terminate.
+                        // (b) "vtable miss" — a corrupt vtable slot
+                        // points directly at the brk. lr_now is in
+                        // a DIFFERENT function (the caller's BLR
+                        // site). Redirecting ELR would resume the
+                        // caller's vtable site → re-dispatch → BRK
+                        // again → livelock. Must terminate.
                         //
                         // Heuristic: |lr_now - elr| < 64 KB → same fn → skip.
                         // (Most Chromium functions are well under 64 KB.)
@@ -2003,8 +2003,8 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         };
                         if same_fn {
                             // Decode the unconditional branch's target:
-                            //   B imm26 — opcode 0b000101 in [31:26],
-                            //   imm26 sign-extended × 4 added to PC.
+                            // B imm26 — opcode 0b000101 in [31:26],
+                            // imm26 sign-extended × 4 added to PC.
                             let imm26 = (prev_instr & 0x03FF_FFFF) as i32;
                             // Sign-extend imm26 (26 bits) to i32.
                             let signed = (imm26 << 6) >> 6;
@@ -2038,7 +2038,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     }
 
                     if is_uncond_branch && lr_now > 0x1000 {
-                        // 🎯 STUMP #42: detect brk-skip livelock. If
+                        // detect brk-skip livelock. If
                         // we keep skipping the same (elr, lr) pair, we're
                         // in an infinite loop (cave returns to caller,
                         // caller calls noreturn function again, BRK
@@ -2201,7 +2201,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             let x1 = unsafe { (*frame).x[1] };
             let x19 = unsafe { (*frame).x[19] };
             let x30 = unsafe { (*frame).x[30] };
-            // STUMP #160 iter 4: TPIDR_EL0 at BRK so we can correlate
+            // iter 4: TPIDR_EL0 at BRK so we can correlate
             // pthread_self mismatches (Chromium AssociatedThreadId BRK
             // does `cmp x19, pthread_self()` — knowing both x19 and
             // tpidr_el0 tells us if the bind happened on a different
@@ -2243,7 +2243,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 uart::puts("\n  instr@elr-8..elr+4: ");
                 for off in [-8i64, -4, 0, 4] {
                     let pc = (elr as i64 + off) as u64;
-                    // STUMP #57: validate before deref (HVF can't
+                    // validate before deref (HVF can't
                     // syndrome the resulting translation fault).
                     if !page_is_mapped(pc) {
                         uart::puts("???????? ");
@@ -2261,7 +2261,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     uart::putc(b' ');
                 }
             }
-            // 🎯 STUMP #10b deep-dive: dump the user-stack saved LRs.
+            // b deep-dive: dump the user-stack saved LRs.
             // CorruptionDetected's prologue stores x29/x30 at SP+0x10. The
             // CALLER of CorruptionDetected has its LR there. Walking
             // a few frames up reveals which Chromium subsystem called
@@ -2289,7 +2289,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     uart::putc(hex[off & 0xF]);
                     uart::puts(": ");
                 }
-                // STUMP #57: validate before deref. HVF asserts on
+                // validate before deref. HVF asserts on
                 // unsyndromed translation faults; under TCG the read
                 // would silently return garbage. Either way, "????" is
                 // a more useful diagnostic than crashing the dump.
@@ -2309,7 +2309,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 }
                 uart::putc(b' ');
             }
-            // STUMP #161 iter 13: fp-walk via x29 chain to find the
+            // iter 13: fp-walk via x29 chain to find the
             // first non-libc frame. abort() / __stack_chk_fail are in
             // libc (range 0x70_17b0_xxxx); we want to know the user
             // call that triggered them. Walk up to 12 frames or until
@@ -2484,7 +2484,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             uart::puts("  FAR=0x"); print_hex(far);
             uart::puts("\n");
             // Look up the L2_low entry for ELR and read phys bytes directly.
-            // 🎯 STUMP #18 v2: skip this whole manual walk if ELR is
+            // v2: skip this whole manual walk if ELR is
             // outside the cave's identity-mapped low window
             // (0..0x4000_0000) — for high-VA elr (0x70_xxxx_xxxx etc.)
             // the L1[0]/L2 dance gives garbage that's likely to
@@ -2526,7 +2526,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             uart::puts("  code around ELR:");
             for off in [-12i64, -8, -4, 0, 4, 8].iter() {
                 let addr = (elr as i64 + off) as usize;
-                // 🎯 STUMP #18: gate the read through is_user_range so
+                // gate the read through is_user_range so
                 // we don't recursively fault when ELR is near the end
                 // of a sparsely-committed cave reservation. Without this
                 // the diagnostic dump triggers another exception, the
@@ -2619,11 +2619,11 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             // signal so user-registered handlers (V8's WASM trap
             // handler, libc assertions, etc.) get a chance to
             // recover. EC → signal mapping:
-            //   0x20 / 0x21 (instruction abort)     → SIGSEGV
-            //   0x22       (PC alignment)           → SIGBUS
-            //   0x24 / 0x25 (data abort)            → SIGSEGV
-            //   0x26       (SP alignment)           → SIGBUS
-            //   0x2C / 0x2D (FP trap)               → SIGFPE
+            // 0x20 / 0x21 (instruction abort) → SIGSEGV
+            // 0x22 (PC alignment) → SIGBUS
+            // 0x24 / 0x25 (data abort) → SIGSEGV
+            // 0x26 (SP alignment) → SIGBUS
+            // 0x2C / 0x2D (FP trap) → SIGFPE
             // Everything else falls through to the UNHANDLED dump.
             {
                 let (signo, si_code): (u32, i32) = match ec {
@@ -2852,7 +2852,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // abort that masks the entire crash dump.
                     if v > 0x10000004 && v < 0x1f000000 && (v & 3) == 0 {
                         let pc = v.wrapping_sub(4);
-                        // 🎯 STUMP #18: gate via is_user_range AND
+                        // gate via is_user_range AND
                         // page_is_mapped — see helper for why.
                         if !crate::batcave::linux::uaccess::is_user_range(pc as usize, 4)
                             || !page_is_mapped(pc)
@@ -2960,7 +2960,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     }
                     uart::puts("\n");
                 }
-                // STUMP #3: dump 64 bytes at x24 + walk page tables for x24's
+                // dump 64 bytes at x24 + walk page tables for x24's
                 // page. PartitionAlloc::SlowPathAlloc reads x24 as a
                 // SlotSpanMetadata*; we want to know whether x24's page is
                 // mapped at all, and if so, whether the metadata bytes
@@ -3131,8 +3131,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 let lr = unsafe { (*frame).x[30] };
                 let elr_now = unsafe { (*frame).elr };
 
-                // 🎯 STUMP #29 (extended in #37, generalized in #41):
-                // LSE atomic on small/Smi-tagged "this". V8's MemoryPool
+                // 🎯 // LSE atomic on small/Smi-tagged "this". V8's MemoryPool
                 // stores Smi-tagged values in the same field as refcounted
                 // pointers. When V8 calls Release() on a pool entry that's
                 // actually a Smi (e.g. 0xd, 0x70, 0x17 small numerics),
@@ -3158,8 +3157,8 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         };
                         // LSE w-reg LDADD/LDSET/SWP/LDCLR/LDEOR/LDSMAX/etc:
                         // top byte 0xb8, specific bits.
-                        // 32-bit ops:  0xb820..0xb83f variants
-                        // 64-bit ops:  0xf820..0xf83f variants
+                        // 32-bit ops: 0xb820..0xb83f variants
+                        // 64-bit ops: 0xf820..0xf83f variants
                         // We accept top 12 bits = 0xb82 or 0xf82.
                         let high12 = instr >> 20;
                         let is_lse = high12 == 0xb82 || high12 == 0xf82
@@ -3196,7 +3195,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     return;
                 }
 
-                // 🎯 STUMP #15c: PA NULL-deref skip. PartitionAlloc's
+                // c: PA NULL-deref skip. PartitionAlloc's
                 // SlowPathAlloc / SlotAddressAndSize::From / friends
                 // can race on the V8 cage (slot span partially init,
                 // freelist not yet linked) and load NULL at a small
@@ -3222,7 +3221,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 let _ = skip_count;
                 // Use a higher cap since each iteration is bounded by
                 // the FP-walk failing (16 hops max).
-                // 🎯 STUMP #17: also catch the signo=7 elr=lr=fault=0x1
+                // also catch the signo=7 elr=lr=fault=0x1
                 // pattern (Rehash chain bad-funcptr). EC=0x22 = PC
                 // alignment fault, ELR < 0x1000 = jumped to a small
                 // numeric (likely Smi tag or freed-pointer sentinel).
@@ -3232,7 +3231,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 let is_pa_data_fault = (ec == 0x24 || ec == 0x21)
                     && far_now < 0x1000
                     && (0x14000000..=0x1c000000).contains(&elr_now);
-                // 🎯 STUMP #40: V8 cage instruction abort. Cave's PC
+                // V8 cage instruction abort. Cave's PC
                 // jumped to a V8-internal address (e.g. 0x4020113c)
                 // that isn't backed by executable memory. Common when
                 // a Mojo IPC callback resolves to a stale V8 builtin
@@ -3264,7 +3263,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 // with ELR < 0x1000 means a corrupt-pointer indirect
                 // branch (Smi tag, NULL+offset, etc.).
                 //
-                // 🎯 STUMP #25: also catch ELR == FAR == LR ≥ 0x1000
+                // also catch ELR == FAR == LR ≥ 0x1000
                 // pattern. The cave called BLR Xn where Xn was a
                 // garbage value (e.g. 0x4000, 0x2c00537400). The CPU
                 // jumped to that address, faulted on instruction fetch
@@ -3277,7 +3276,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     && unsafe { (*frame).x[30] } == elr_now;
                 let is_bad_pc_fault = (ec == 0x20 || ec == 0x21 || ec == 0x22)
                     && (elr_now < 0x1000 || bad_pc_match_lr_far);
-                // 🎯 STUMP #43: PCheck sret-write fault. The instruction
+                // PCheck sret-write fault. The instruction
                 // at file VMA 0x4c929dc (cave VMA 0x14c929dc) is
                 // `str x19, [x20]` inside
                 // `logging::CheckNoreturnError::PCheck(base::Location const&)`.
@@ -3306,7 +3305,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 {
                     // 🎯 Diagnostic: emit a single-line trace so log readers
                     // can tell that we entered the pa-skip-data block AT ALL
-                    // — the heavyweight dump above runs UNCONDITIONALLY for
+                    // the heavyweight dump above runs UNCONDITIONALLY for
                     // every fault, so seeing "UNHANDLED SYNC EXCEPTION" in
                     // the log doesn't mean recovery failed. This line says
                     // "we got here, and we're about to try recovery."
@@ -3376,26 +3375,26 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         // PA's libchrome-side wrappers + allocator_shim
                         // span 0x14d70000..0x14da0000 — cover all of it.
                         let in_pa_libchrome = (0x14d70000..=0x14da0000).contains(&saved_lr);
-                        // 🎯 STUMP #21: restrict saved-LR to content_shell
+                        // restrict saved-LR to content_shell
                         // TEXT (0x11720000..0x19910000) — accepting
                         // BSS/data addrs leads to bad-instruction-fetch
                         // after the cave 'returns' there.
                         let in_text_range = saved_lr >= 0x11720000
                             && saved_lr < 0x19910000;
-                        // 🎯 STUMP #43: when the trap is the PCheck-sret
+                        // when the trap is the PCheck-sret
                         // pattern, also filter out the Free + lambda +
                         // PCheck call chain that lives in chrome text but
                         // is part of the broken frame we're trying to
                         // escape. Returning into any of these would just
                         // re-enter the broken context. The chain spans:
-                        //   PCheck    @ 0x14c92964..0x14c929f4
-                        //   Lambda    @ 0x14c9e3f8..0x14c9e444
-                        //   Free      @ 0x14c9e394..0x14c9e3f8
-                        //   D2 dtor   @ 0x14c92948..0x14c92964
+                        // PCheck @ 0x14c92964..0x14c929f4
+                        // Lambda @ 0x14c9e3f8..0x14c9e444
+                        // Free @ 0x14c9e394..0x14c9e3f8
+                        // D2 dtor @ 0x14c92948..0x14c92964
                         // So skip 0x14c92900..0x14c9e500 inclusive.
                         let in_pcheck_chain = is_pcheck_sret_fault
                             && (0x14c92900..=0x14c9e500).contains(&saved_lr);
-                        // STUMP #31 reverted (see pa_abort_skip walk).
+                        // reverted (see pa_abort_skip walk).
                         if !in_pa_free && !in_pa_libchrome && !in_pcheck_chain
                             && saved_lr != 0
                             && saved_lr > 0x1000 && in_text_range
@@ -3440,7 +3439,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             };
                             // Want: a code address (0x10000000..0x1f000000),
                             // not in PA's libchrome range, 4-byte aligned.
-                            // 🎯 STUMP #21: restrict LR candidate to
+                            // restrict LR candidate to
                             // content_shell's TEXT range (0x11720000
                             // .. 0x1990ab00) — picking up BSS/data
                             // addresses (0x1a050040..0x1a224e58) led
@@ -3461,7 +3460,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         }
                     }
                     if found_lr != 0 {
-                        // 🎯 STUMP #22: detect repeated-same-elr loops
+                        // detect repeated-same-elr loops
                         // and abort the cave instead of spinning. The
                         // 85K-line ChromeRootStoreData loop spun 7 times
                         // at the SAME elr (0x152df784) returning to the
@@ -3475,7 +3474,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             core::sync::atomic::AtomicU64::new(0);
                         static SAME_SKIP_COUNT: core::sync::atomic::AtomicU32 =
                             core::sync::atomic::AtomicU32::new(0);
-                        // 🎯 STUMP #26: when loop is detected, instead of
+                        // when loop is detected, instead of
                         // terminating immediately, try to ESCAPE by
                         // walking further up the FP chain. Skip the
                         // first ESCAPE_DEPTH valid LRs to land in the
@@ -3489,14 +3488,14 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         let mut loop_detected = false;
                         if same_pair {
                             let cnt = SAME_SKIP_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
-                            // 🎯 STUMP #26 tuning: lowered 32 → 8 so
+                            // tuning: lowered 32 → 8 so
                             // escape kicks in sooner. Saving 24 wasted
                             // skip iterations means the escape attempt
                             // happens before the cave's other threads
                             // race ahead and create more zombie state.
                             if cnt > 8 {
                                 let depth = ESCAPE_DEPTH.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
-                                // 🎯 STUMP #26 v3: bumped 5 → 16. The 35K
+                                // v3: bumped 5 → 16. The 35K
                                 // run got into Chromium's task scheduler
                                 // (TaskQueueImpl::OnWakeUp,
                                 // SequenceManagerImpl::SelectNextTask,
@@ -3561,7 +3560,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                                         LAST_SKIP_ELR.store(elr_now, core::sync::atomic::Ordering::Relaxed);
                                         LAST_SKIP_LR.store(found_e, core::sync::atomic::Ordering::Relaxed);
                                         // Restore scratch substitute on escape
-                                        // — the grand-caller's "I just got
+                                        // the grand-caller's "I just got
                                         // back from a callee" expects x0
                                         // to be a return value, and a zeroed
                                         // scratch (readable as zero pointer
@@ -3575,7 +3574,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                                             if scratch != 0 {
                                                 (*frame).x[0] = scratch;
                                             }
-                                            // 🎯 STUMP #46: was `fp_e + 16`.
+                                            // was `fp_e + 16`.
                                             // fp_e here is already the
                                             // CALLER'S saved-x29 (we did
                                             // `fp_e = nfp` at the find
@@ -3584,7 +3583,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                                             // (assuming simple prologue).
                                             // The +16 was placing SP into
                                             // the caller's caller's frame
-                                            // — same class of bug as the
+                                            // same class of bug as the
                                             // brk-skip resume.
                                             core::arch::asm!("msr sp_el0, {a}",
                                                 a = in(reg) fp_e);
@@ -3614,7 +3613,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         // result; with a real writable buffer they
                         // succeed instead of NULL-derefing.
                         //
-                        // 🎯 STUMP #22 extension: also substitute
+                        // extension: also substitute
                         // scratch when the caller is in chrome text
                         // (0x14000000..0x1c000000) and the fault
                         // address is small (NULL+small offset). This
@@ -3634,7 +3633,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                                 unsafe { (*frame).x[0] = scratch; }
                             }
                         }
-                        // 🎯 STUMP #46: same SP fix as the brk-skip
+                        // same SP fix as the brk-skip
                         // path. `fp` is the FP of the deepest non-PA
                         // frame in the chain (i.e. the FRAME WHOSE
                         // saved-LR we'll resume at). The CALLER's
@@ -3654,7 +3653,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             (*frame).x[30] = found_lr;
                             core::arch::asm!("msr sp_el0, {a}",
                                 a = in(reg) caller_x29);
-                            // 🎯 STUMP #55: zero callee-saved regs
+                            // zero callee-saved regs
                             // (x19-x28) on pa-skip resume. The inner
                             // function we BRK-skipped never ran its
                             // epilogue, so x19-x28 in register hold
@@ -3671,7 +3670,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             // confused dangling-pointer crash. If the
                             // resumed function uses x19 as a saved
                             // `this`, NULL-deref kills the cave fast
-                            // — which is BETTER than letting the
+                            // which is BETTER than letting the
                             // corruption propagate through more
                             // function calls. (Restoring the actual
                             // saved values requires per-function

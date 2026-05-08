@@ -1,6 +1,6 @@
 // Bat_OS — SK · Security
 //
-// STUMP #125 — Claude-Design port. Source artifacts in
+// Claude-Design port. Source artifacts in
 // `docs/design/apps-ds-nm-sk/` (jsx + spec sheet).
 //
 // Layout: top row is the full-width ACTIVE BATCAVES table,
@@ -172,7 +172,7 @@ fn draw_integrity(p: &W::PanelInner) {
     draw_kv_row(p.x, y, label_w, "OPEN PORTS", "0 . invisible-by-design", State::Ok,   true); y += KV_ROW_H;
     draw_kv_row(p.x, y, label_w, "WIPE",       "ARMED",                   State::Warn, true); y += KV_ROW_H;
 
-    // 3. Audit mini-strip — STUMP #128: was anchored to the panel
+    // 3. Audit mini-strip — was anchored to the panel
     // bottom which left a huge empty gap below WIPE. Now drawn
     // inline right after the WIPE row with a small separator.
     y += 8;

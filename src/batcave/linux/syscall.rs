@@ -6,9 +6,9 @@
 // No capability → EACCES. No exceptions.
 //
 // ARM64 Linux syscall convention:
-//   x8 = syscall number
-//   x0-x5 = arguments
-//   x0 = return value (negative = -errno)
+// x8 = syscall number
+// x0-x5 = arguments
+// x0 = return value (negative = -errno)
 
 use crate::drivers::uart;
 use crate::batcave::cave;
@@ -25,7 +25,7 @@ pub static SYSCALL_TRACE: core::sync::atomic::AtomicBool =
 
 /// Best-effort decode of an AArch64 Linux syscall number into its name.
 /// Only covers the ones we're likely to see from content_shell's startup
-/// — anything else shows up as "?".
+/// anything else shows up as "?".
 pub fn syscall_name(n: u64) -> &'static str {
     match n {
         17  => "getcwd",
@@ -109,15 +109,15 @@ const EAGAIN: i64 = -11;   // Try again
 const EPERM: i64 = -1;     // Operation not permitted
 
 /// Returns true if `p` + `size` is plausibly inside the cave's user-space.
-///
+// /
 /// After ROOT-1 (per-cave page tables) lands this becomes an exact check
 /// against the caller's page-table VA range. Today the cave and the
 /// kernel share one identity-mapped VA, so the best we can do is reject
 /// obvious kernel addresses: NULL, low-page nulls, and anywhere inside
 /// the kernel RAM identity map (0x4000_0000..0x8000_0000 on QEMU virt).
-///
+// /
 /// Returns `false` on overflow, NULL, low pages, or kernel-range pointers.
-///
+// /
 /// V8-ROOT-8 (regression fix): delegate to `uaccess::is_user_range` so the
 /// cave's own user-window bounds (set at `enter()` time) are consulted,
 /// not just the static legacy window. Any cave with virt_base != 0
@@ -127,16 +127,16 @@ fn is_user_ptr(p: usize, size: usize) -> bool {
     uaccess::is_user_range(p, size)
 }
 
-/// 🎯 STUMP #36: walk the page tables to verify a user pointer is
+/// walk the page tables to verify a user pointer is
 /// WRITABLE (not just mapped). Used by syscalls that emulate Linux
 /// behavior of returning EFAULT when the user-supplied buffer is
 /// read-only or unmapped (e.g. `getrlimit` from `CheckMemoryReadOnly`).
-///
+// /
 /// AP[2:1] in L3 PTE (bits 7:6):
-///   0b00: EL1 R/W, no EL0 access
-///   0b01: EL1 R/W, EL0 R/W   ← user-writable
-///   0b10: EL1 R/O, no EL0 access
-///   0b11: EL1 R/O, EL0 R/O
+/// 0b00: EL1 R/W, no EL0 access
+/// 0b01: EL1 R/W, EL0 R/W ← user-writable
+/// 0b10: EL1 R/O, no EL0 access
+/// 0b11: EL1 R/O, EL0 R/O
 fn is_user_writable(p: usize, size: usize) -> bool {
     if !uaccess::is_user_range(p, size) { return false; }
     let ttbr0: u64;
@@ -153,7 +153,7 @@ fn is_user_writable(p: usize, size: usize) -> bool {
         let l1e: u64 = unsafe {
             core::ptr::read_volatile((l1_phys + l1_idx * 8) as *const u64)
         };
-        // 🎯 STUMP #53: pages in an active demand-page reservation
+        // pages in an active demand-page reservation
         // count as writable even if they aren't yet committed —
         // the next access will demand-page them in with EL0 R/W
         // perms (USER_PAGE_FLAGS). Without this, every check on a
@@ -180,7 +180,7 @@ fn is_user_writable(p: usize, size: usize) -> bool {
         };
         // L2 BLOCK descriptor (0b01): identity-mapped 2 MB block.
         // L2 TABLE (0b11): walk L3.
-        // STUMP #161 iter 20: distinguish L2 BLOCK (0b01) from L3
+        // iter 20: distinguish L2 BLOCK (0b01) from L3
         // PAGE (0b11). Valid bit is bit 0; bit 1 = "table/page" (1)
         // vs "block" (0) at this level. The cave's main user-VA
         // window is mapped via L2 BLOCKS (0b01) — the previous
@@ -304,10 +304,10 @@ mod nr {
     // startup to feature-detect the host's sandbox capability; we don't
     // implement Landlock so all three return ENOSYS. They MUST be
     // surfaced as named stubs (not the unknown-syscall fallback) because:
-    //   1. The fallback prints "[linux] unknown syscall 444" which is
-    //      noise — Chromium expects ENOSYS and handles it silently.
-    //   2. The fallback fires the BAT_OS_KEEP_GOING skip-log, polluting
-    //      the "actual unknown syscalls" list during Chromium init.
+    // 1. The fallback prints "[linux] unknown syscall 444" which is
+    // noise — Chromium expects ENOSYS and handles it silently.
+    // 2. The fallback fires the BAT_OS_KEEP_GOING skip-log, polluting
+    // the "actual unknown syscalls" list during Chromium init.
     pub const LANDLOCK_CREATE_RULESET: u64 = 444;
     pub const LANDLOCK_ADD_RULE:       u64 = 445;
     pub const LANDLOCK_RESTRICT_SELF:  u64 = 446;
@@ -397,7 +397,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
                 uart::putc(hex[((a >> (shift * 4)) & 0xF) as usize]);
             }
         }
-        // STUMP #161 iter 16: print ELR_EL1 (the user PC at SVC entry,
+        // iter 16: print ELR_EL1 (the user PC at SVC entry,
         // i.e. the instruction AFTER `svc #0`). Critical for finding
         // which libc function called the syscall when /bin/js hangs
         // in userland — without it we can't correlate to disassembly.
@@ -430,7 +430,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         99 => (SyscallCat::Always, sys_stub_zero),   // set_robust_list
         100 => (SyscallCat::Always, sys_stub_zero),  // get_robust_list
         101 => (SyscallCat::Always, sys_nanosleep),  // nanosleep
-        102 => (SyscallCat::Always, sys_getitimer),  // 🎯 STUMP #10d: zero-fill struct itimerval
+        102 => (SyscallCat::Always, sys_getitimer),  // d: zero-fill struct itimerval
         103 => (SyscallCat::Always, sys_stub_zero),  // setitimer (no out-buffer; 0 OK)
         131 => (SyscallCat::Always, sys_tgkill),       // tgkill
         132 => (SyscallCat::Always, sys_sigaltstack),  // sigaltstack
@@ -441,11 +441,11 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         139 => (SyscallCat::Always, sys_rt_sigreturn), // rt_sigreturn
         144 => (SyscallCat::Always, sys_stub_zero),  // setgid
         146 => (SyscallCat::Always, sys_stub_zero),  // setuid
-        153 => (SyscallCat::Always, sys_times),      // 🎯 STUMP #10d: real ticks + zero-fill tms
+        153 => (SyscallCat::Always, sys_times),      // d: real ticks + zero-fill tms
         154 => (SyscallCat::Always, sys_stub_zero),  // setpgid
         155 => (SyscallCat::Always, sys_stub_zero),  // getpgid
         157 => (SyscallCat::Always, sys_stub_zero),  // sched_getscheduler
-        158 => (SyscallCat::Always, sys_sched_getparam), // 🎯 STUMP #10d: zero-fill struct sched_param
+        158 => (SyscallCat::Always, sys_sched_getparam), // d: zero-fill struct sched_param
         140 => (SyscallCat::Always, sys_stub_zero),  // setpriority — glibc
                                                      // pthread_create tunes
                                                      // nice level; stub accepts
@@ -458,7 +458,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
                                                      // stub 0 keeps glibc
                                                      // happy for PR_SET_NAME,
                                                      // PR_SET_DUMPABLE, etc.
-        169 => (SyscallCat::Always, sys_gettimeofday), // 🎯 STUMP #10d: real timeval write
+        169 => (SyscallCat::Always, sys_gettimeofday), // d: real timeval write
         170 => (SyscallCat::Always, sys_stub_zero),  // getpgrp/setpgid
         171 => (SyscallCat::Always, sys_sigaltstack), // sigaltstack (compat)
         178 => (SyscallCat::Always, sys_gettid),      // gettid
@@ -466,7 +466,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         // NOTE: on AArch64, syscall 204 is getsockname (not sched_getaffinity).
         // getsockname is routed below via nr::GETSOCKNAME in the network block.
         // True sched_getaffinity is 123 (AArch64), sched_setaffinity is 122.
-        // 🎯 STUMP #10b: real sched_getaffinity. Was sys_stub_zero, returning 0
+        // b: real sched_getaffinity. Was sys_stub_zero, returning 0
         // and writing nothing to the user mask. glibc's _SC_NPROCESSORS_ONLN /
         // CPU_COUNT(mask) then walked uninitialized memory; Chromium uses this
         // value to size lock-free freelists, sharded counters, and worker pools.
@@ -476,7 +476,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::SCHED_GETAFFINITY => (SyscallCat::Always, sys_sched_getaffinity),
         nr::SCHED_SETAFFINITY => (SyscallCat::Always, sys_stub_zero),
 
-        // STUMP #160: Landlock probes return ENOSYS quietly — Chromium
+        // Landlock probes return ENOSYS quietly — Chromium
         // feature-detects, gets ENOSYS, falls back to seccomp-bpf or
         // "no sandbox" depending on the build flags. Without these
         // explicit stubs, every Chromium boot logs three "unknown
@@ -485,7 +485,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::LANDLOCK_ADD_RULE       => (SyscallCat::Always, sys_stub_enosys),
         nr::LANDLOCK_RESTRICT_SELF  => (SyscallCat::Always, sys_stub_enosys),
 
-        // STUMP #160 iter 6: surfaced via the chromium-version smoke
+        // iter 6: surfaced via the chromium-version smoke
         // crash path. content_shell's base::FilePathWatcher tries to
         // inotify_init1; not having it means watcher silently disables.
         // fstatfs is called by glibc realpath/realpathat for filesystem
@@ -499,16 +499,16 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         // 223 is fadvise64. 210 is shutdown (moved to Network block below).
         // Previously these were mislabeled as shmget/shmctl/shutdown-stub.
         nr::FADVISE64 => (SyscallCat::Always, sys_stub_zero),
-        233 => (SyscallCat::Always, sys_madvise), // 🎯 STUMP #10c: PT-walking madvise (only zeros committed pages)
+        233 => (SyscallCat::Always, sys_madvise), // c: PT-walking madvise (only zeros committed pages)
         262 => (SyscallCat::Always, sys_stub_zero),  // getrlimit equiv
         276 => (SyscallCat::FileIO, sys_renameat),  // renameat2 — same impl, ignores flags arg
         279 => (SyscallCat::Memory, sys_memfd_create), // memfd_create — needs mem cap
-        // 🎯 STUMP #11: fchown/lchown/chown — return success (no-op on our virtual fs).
+        // fchown/lchown/chown — return success (no-op on our virtual fs).
         // Was: unknown syscall 55, returned 0 anyway, but with a stale "[linux] unknown
         // syscall 55" warning that suggested something was wrong. Stub-zero matches
         // semantics: our VFS doesn't track owner/group, no-op is correct.
         55 => (SyscallCat::Always, sys_stub_zero),  // fchown
-        // 🎯 STUMP #11: clock_nanosleep — alias to sys_nanosleep. The clockid_t arg
+        // clock_nanosleep — alias to sys_nanosleep. The clockid_t arg
         // (x0) is ignored; we treat it as CLOCK_MONOTONIC since cntpct_el0 is
         // monotonic. Linux's clock_nanosleep with TIMER_ABSTIME would need
         // different handling but we don't see that in practice.
@@ -545,8 +545,8 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         34 => (SyscallCat::FileIO, sys_mkdirat),      // mkdirat
         35 => (SyscallCat::FileIO, sys_stub_zero),    // unlinkat
         37 => (SyscallCat::FileIO, sys_stub_zero),    // linkat — hardlinks; success-stub
-        38 => (SyscallCat::FileIO, sys_renameat),     // renameat — STUMP #160 iter 3: real rename for leveldb MANIFEST→CURRENT
-        43 => (SyscallCat::FileIO, sys_statfs),       // 🎯 STUMP #10d: real statfs fill (was leaking uninit buf)
+        38 => (SyscallCat::FileIO, sys_renameat),     // renameat —  iter 3: real rename for leveldb MANIFEST→CURRENT
+        43 => (SyscallCat::FileIO, sys_statfs),       // d: real statfs fill (was leaking uninit buf)
         46 => (SyscallCat::FileIO, sys_ftruncate),    // ftruncate — must really set node size for shm
         47 => (SyscallCat::FileIO, sys_stub_zero),    // fallocate — Chromium uses for shmem pre-alloc; success-stub OK
         48 => (SyscallCat::FileIO, sys_faccessat),    // faccessat
@@ -641,7 +641,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         SyscallCat::Always  => true,
         SyscallCat::Process => cave_has_cap(cave_id, "proc"),
         SyscallCat::Memory  => cave_has_cap(cave_id, "mem"),
-        // STUMP #151: was `cave_has_cap("fs")`. That required EXACTLY
+        // was `cave_has_cap("fs")`. That required EXACTLY
         // the bare `fs` cap, which meant a cave granted only
         // `fs:/tmp` got zero FS syscalls (path-scoped caps were
         // purely decorative). Now we use `active_has_any_fs_cap` so
@@ -702,7 +702,7 @@ fn cave_has_cap(_cave_id: usize, cap: &str) -> bool {
 
 // ─── Syscall Implementations ───
 
-// 🎯 STUMP #10b: PID was hardcoded to 1. PartitionAlloc / glibc / V8
+// b: PID was hardcoded to 1. PartitionAlloc / glibc / V8
 // use getpid() as a random-seed input to per-thread cache slot indices,
 // hash table seeds, and `cookie` / `brp_cookie` fields stored in slot-
 // span metadata. With pid=1, several derived "tags" stored into slot
@@ -713,7 +713,7 @@ fn cave_has_cap(_cave_id: usize, cap: &str) -> bool {
 // zygote-host expectations. Picked to be both non-1 and to make the
 // derived bit pattern obviously not a stale read.
 fn sys_getpid(_args: [u64; 6]) -> i64 { 0x4242 }
-// 🎯 STUMP #10c: getppid was 1 (which I just changed from 0). 1 is
+// c: getppid was 1 (which I just changed from 0). 1 is
 // just as suspect as the original getpid=1. Use 0x100 so PartitionAlloc
 // doesn't get a literal-1 from PID derivation in any code path.
 fn sys_getppid(_args: [u64; 6]) -> i64 { 0x100 }
@@ -734,7 +734,7 @@ fn user_zero(buf: usize, len: usize) -> bool {
     true
 }
 
-// 🎯 STUMP #10d: gettimeofday(tv, tz). The previous stub returned 0 but
+// d: gettimeofday(tv, tz). The previous stub returned 0 but
 // did NOT write the user's struct timeval — glibc / Chromium then read
 // whatever uninitialized stack memory was at *tv. PartitionAlloc seeds
 // per-thread random state from gettimeofday during early init; a stale
@@ -769,7 +769,7 @@ fn sys_gettimeofday(args: [u64; 6]) -> i64 {
     0
 }
 
-// 🎯 STUMP #10d: statfs(path, buf). The previous stub returned 0 without
+// d: statfs(path, buf). The previous stub returned 0 without
 // touching `buf`. struct statfs is 120 bytes on aarch64 Linux; Chromium's
 // disk_cache backend uses f_bsize and f_bfree to size in-memory freelist
 // shards. Reading uninit residual stack at *buf could surface a literal
@@ -781,7 +781,7 @@ fn sys_statfs(args: [u64; 6]) -> i64 {
     if buf == 0 { return EFAULT; }
     if !user_zero(buf, 120) { return EFAULT; }
 
-    // STUMP #154: per-path fs cap. statfs takes a path arg even
+    // per-path fs cap. statfs takes a path arg even
     // though we currently return synthetic values regardless of
     // path; enforcing the cap here means a cave with no FS access
     // can't even probe "is /etc mounted?" via statfs.
@@ -814,7 +814,7 @@ fn sys_statfs(args: [u64; 6]) -> i64 {
     0
 }
 
-// STUMP #160 iter 6: sys_fstatfs(fd, buf) — fill struct statfs same
+// iter 6: sys_fstatfs(fd, buf) — fill struct statfs same
 // shape as sys_statfs. Caller passes an fd; we don't actually use it
 // (our VFS doesn't track per-fd filesystem types), so return the same
 // synthetic-tmpfs values.
@@ -835,7 +835,7 @@ fn sys_fstatfs(args: [u64; 6]) -> i64 {
     0
 }
 
-// 🎯 STUMP #10d: getitimer(which, curr_value). Linux fills struct
+// d: getitimer(which, curr_value). Linux fills struct
 // itimerval (32 bytes: 2× struct timeval). Stub returning 0 with no
 // write leaks uninit stack to caller. Zero-fill is correct — "no
 // timer armed" maps to all-zero itimerval.
@@ -845,7 +845,7 @@ fn sys_getitimer(args: [u64; 6]) -> i64 {
     0
 }
 
-// 🎯 STUMP #10d: sched_getparam(pid, param). Linux fills struct
+// d: sched_getparam(pid, param). Linux fills struct
 // sched_param (just `int sched_priority` = 4 bytes; padded to 16
 // in some glibc versions — zero 16 to be safe). Returning 0 without
 // writing leaks uninit; freelist sizing keyed on garbage priority.
@@ -855,7 +855,7 @@ fn sys_sched_getparam(args: [u64; 6]) -> i64 {
     0
 }
 
-// 🎯 STUMP #10d: times(buf). Linux fills struct tms (4× clock_t = 32
+// d: times(buf). Linux fills struct tms (4× clock_t = 32
 // bytes) AND returns clock_t (real ticks, not 0). Returning 0 plus
 // uninit buf has been confirmed to leak literal 0x1 into Chromium's
 // base/time scratch storage in some configs. Zero-fill + return a
@@ -876,7 +876,7 @@ fn sys_times(args: [u64; 6]) -> i64 {
 
 // ─── lseek (62) — file seek ───
 //
-// STUMP #10 fix: previously stubbed to return 0. PartitionAlloc / SQLite /
+// fix: previously stubbed to return 0. PartitionAlloc / SQLite /
 // LevelDB use `lseek(fd, 0, SEEK_END)` to size files for slot-span
 // computation; getting 0 means "file is empty" → slot_count = 0 → freelist
 // head walked into uninit memory and surfaced as `0x1` slot-pointer BRK.
@@ -906,7 +906,7 @@ fn sys_lseek(args: [u64; 6]) -> i64 {
     new_pos
 }
 
-// 🎯 STUMP #10b: sched_getaffinity(pid, cpusetsize, mask). Linux ABI:
+// b: sched_getaffinity(pid, cpusetsize, mask). Linux ABI:
 // returns the SIZE OF THE CPUSET WRITTEN (≥ 8 bytes for one CPU), and
 // populates the user `mask` buffer with the affinity bitmap. We're
 // single-CPU, so write byte 0 = 0x01 (CPU 0 online), zero the rest,
@@ -945,7 +945,7 @@ fn sys_sched_getaffinity(args: [u64; 6]) -> i64 {
     core::cmp::min(cpusetsize, 8) as i64
 }
 
-// 🎯 STUMP #10c FIX (replaces previous Stump #11 madvise impl):
+// c FIX (replaces previous Stump #11 madvise impl):
 // madvise(MADV_DONTNEED) now ONLY zeroes pages that are ALREADY committed
 // (have a valid L3 entry). Skips uncommitted pages — they'll demand-page
 // to fresh zeros on first access, which IS the MADV_DONTNEED contract.
@@ -965,7 +965,7 @@ fn sys_madvise(args: [u64; 6]) -> i64 {
     if len == 0 { return 0; }
     if advice != MADV_DONTNEED { return 0; }
 
-    // 🎯 STUMP #12 BISECT: temporarily make MADV_DONTNEED a no-op (just
+    // BISECT: temporarily make MADV_DONTNEED a no-op (just
     // return 0 success). If PartitionAlloc was BRK'ing because madvise
     // was clearing slot metadata behind PA's back, this lets us prove
     // it. Real Linux madvise(DONTNEED) zeros pages, but most callers
@@ -1050,7 +1050,7 @@ fn sys_madvise(args: [u64; 6]) -> i64 {
     0
 }
 
-// 🎯 STUMP #11: clock_nanosleep — alias to nanosleep. Ignores the
+// clock_nanosleep — alias to nanosleep. Ignores the
 // clockid_t arg (x0) and the TIMER_ABSTIME flag (x1); we treat the
 // timespec at x2 as a relative duration on cntpct_el0 (monotonic).
 fn sys_clock_nanosleep_compat(args: [u64; 6]) -> i64 {
@@ -1093,7 +1093,7 @@ fn sys_nanosleep(args: [u64; 6]) -> i64 {
     // Park-on-deadline: compute absolute cntpct_el0 deadline once, then
     // mark blocked + schedule until the timer-tick wake pass observes
     // our deadline has passed. Loop on the deadline check defends against
-    // spurious wakes (force-wake-on-deadlock STUMP #63, future signal
+    // spurious wakes (force-wake-on-deadlock , future signal
     // delivery, etc.) — see DESIGN_SCHEDULER_BLOCK_ON.md.
     let deadline_ticks = start.saturating_add(target_ticks);
     while super::threads::cntpct_el0() < deadline_ticks {
@@ -1137,7 +1137,7 @@ fn sys_munmap(args: [u64; 6]) -> i64 {
     // V6-XLAYER-003: refund based on the number of pages actually
     // freed (frames that were in-use in the bitmap), NOT the user-
     // supplied length. Without this, a cave can call
-    //   munmap(real_4kb_alloc, 1GB)
+    // munmap(real_4kb_alloc, 1GB)
     // and saturating-sub its memory quota to zero, then mmap fresh
     // pages past its real cap.
     let freed_pages = crate::kernel::mm::frame::free_contig(addr, pages);
@@ -1202,10 +1202,10 @@ fn sys_mprotect(args: [u64; 6]) -> i64 {
     const BITS_UXN:   u64 = 1 << 54;
 
     // AP[2:1] at bits [7:6]:
-    //   0b00: EL1 R/W, no EL0 access
-    //   0b01: EL1 R/W, EL0 R/W
-    //   0b10: EL1 R/O, no EL0 access
-    //   0b11: EL1 R/O, EL0 R/O
+    // 0b00: EL1 R/W, no EL0 access
+    // 0b01: EL1 R/W, EL0 R/W
+    // 0b10: EL1 R/O, no EL0 access
+    // 0b11: EL1 R/O, EL0 R/O
     let ap_bits: u64 = if (prot & PROT_WRITE) != 0 {
         0b01 << 6  // EL0 R/W
     } else if (prot & PROT_READ) != 0 {
@@ -1249,12 +1249,12 @@ fn sys_mprotect(args: [u64; 6]) -> i64 {
         };
         // L3 entry must be a valid PAGE descriptor (lower 2 bits = 0b11).
         if (l3_ent & 0b11) != 0b11 {
-            // 🎯 STUMP #8: materialize missing pages with the requested
+            // materialize missing pages with the requested
             // perms so future user writes see the right AP bits.
             // Avoids the symptom where mprotect skips unmapped pages
             // and a later access demand-pages with default RW (which
             // is right for RW intent, but wrong for R+X / R/O / NONE
-            // — and on a FIXED-high-VA path that mprotects the whole
+            // and on a FIXED-high-VA path that mprotects the whole
             // segment to R+X, the BSS pages past filesz inherit R+X
             // and break ld-linux's first BSS write).
             if super::demand_page::is_in_active_reservation(va as usize, 4096) {
@@ -1298,7 +1298,7 @@ fn sys_mprotect(args: [u64; 6]) -> i64 {
         }
     }
 
-    // 🎯 STUMP #33: when adding PROT_EXEC, do `dc cvau` + `ic ivau`
+    // when adding PROT_EXEC, do `dc cvau` + `ic ivau`
     // for each cache line in the affected range. ARM64 D-cache and
     // I-cache are separate; a JIT engine that writes code (D-cache),
     // mprotects RX, and then executes will I-fetch stale data unless
@@ -1474,11 +1474,11 @@ fn sys_prlimit64(args: [u64; 6]) -> i64 {
     let old_limit = args[3] as usize;
 
     // Bounds-check both rlimit pointers before we deref them. A struct
-    // rlimit64 is 16 bytes (two u64).  Reject any pointer into the
-    // kernel identity map.  NULL is legal for both args ("don't write"
+    // rlimit64 is 16 bytes (two u64). Reject any pointer into the
+    // kernel identity map. NULL is legal for both args ("don't write"
     // / "no new limits"), so skip those.
     //
-    // 🎯 STUMP #36: old_limit must be WRITABLE (not just mapped).
+    // old_limit must be WRITABLE (not just mapped).
     // Chromium's `base::CheckMemoryReadOnly` calls `getrlimit64(...)`
     // with a deliberately read-only address as `old_limit` and expects
     // the syscall to return -1 with EFAULT (proving the addr is RO).
@@ -1491,15 +1491,15 @@ fn sys_prlimit64(args: [u64; 6]) -> i64 {
     // CHROMIUM-PHASE-C: return resource-specific sane defaults when
     // `old_limit` is non-null. The previous stub returned
     // `rlim_cur = rlim_max = 0x7FFFFFFFFFFFFFFF` for every resource
-    // — pthread_create(3) computes `stacksize = rlim_cur * 2` (or
+    // pthread_create(3) computes `stacksize = rlim_cur * 2` (or
     // clamps to 32 MB), overflows, and mmap's an 8 EB stack that
     // our kernel ENOMEM's. Using a BSD-ish 8 MB cap for STACK keeps
     // glibc happy.
     //
     // RLIMIT_STACK = 3
-    // RLIMIT_AS    = 9
+    // RLIMIT_AS = 9
     // RLIMIT_NOFILE= 7
-    // RLIMIT_CORE  = 4
+    // RLIMIT_CORE = 4
     // (See asm-generic/resource.h. On arm64 these match generic.)
     if old_limit != 0 {
         const RLIMIT_STACK: u32 = 3;
@@ -1589,7 +1589,7 @@ fn sys_exit(args: [u64; 6]) -> i64 {
 
 fn sys_uname(args: [u64; 6]) -> i64 {
     // struct utsname: 5 fields of 65 bytes each = 325 bytes (+padding
-    // rounds to 390 on Linux).  Validate the full span to block writes
+    // rounds to 390 on Linux). Validate the full span to block writes
     // into kernel memory.
     let buf = args[0] as usize;
     if buf == 0 { return EINVAL; }
@@ -1629,15 +1629,15 @@ fn write_to_uart(buf: usize, count: usize) -> i64 {
 
 /// Route stdout/stderr writes through the async ring buffer when it is live.
 /// Falls back to synchronous UART if the ring is not yet initialised (early
-/// boot before stdio_ring::init() runs).  Chromium content_shell's verbose
-/// --enable-logging=stderr output would otherwise stall on UART back-pressure.
+/// boot before stdio_ring::init() runs). Chromium content_shell's verbose
+/// enable-logging=stderr output would otherwise stall on UART back-pressure.
 fn write_stdio(buf: usize, count: usize) -> i64 {
     if !stdio_ring::is_ready() {
         return write_to_uart(buf, count);
     }
     // Copy the userspace buffer out a byte at a time (same ldrb trick as
     // write_to_uart — these pointers come from guest x1 and are not
-    // guaranteed to be naturally aligned).  We chunk through a small stack
+    // guaranteed to be naturally aligned). We chunk through a small stack
     // scratch to amortise push_slice overhead.
     const CHUNK: usize = 128;
     let mut scratch = [0u8; CHUNK];
@@ -1747,7 +1747,7 @@ fn sys_write(args: [u64; 6]) -> i64 {
         }
         // V8-PIPE-EPOLL: wake any epoll watching the read end of this
         // pipe. Without this, content_shell's Mojo IPC blocks forever
-        // — browser thread writes a request, renderer thread is in
+        // browser thread writes a request, renderer thread is in
         // epoll_pwait spinning on the read end, never sees the bits.
         if total > 0 {
             if let Some(peer) = fd::pipe_peer_fd(slot, side) {
@@ -2166,7 +2166,7 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
     for sh in (0..8).rev() { uart::putc(hex[((flags >> (sh*4)) & 0xF) as usize]); }
     uart::puts("\n");
 
-    // STUMP #161 iter 15: one-shot trace trigger.
+    // iter 15: one-shot trace trigger.
     // The /bin/js init currently hangs after opening
     // `/etc/nsswitch.conf` — the kernel diag dump fires every 1M
     // syscalls, but iter 14 logs show ZERO diag dumps, meaning it's
@@ -2183,7 +2183,7 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
 
     let path_str = unsafe { core::str::from_utf8_unchecked(path) };
 
-    // STUMP #151 + #154: per-path FS cap enforcement, factored into
+    // + #154: per-path FS cap enforcement, factored into
     // `check_fs_path_cap` so the same logic applies uniformly across
     // all path-taking syscalls.
     if let Err(e) = check_fs_path_cap(path, "openat") { return e; }
@@ -2274,7 +2274,7 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
         Err(_) => {
             // O_CREAT: create the file
             if flags & fd::O_CREAT != 0 {
-                // 🎯 STUMP #47: real Chromium expects its profile dirs
+                // real Chromium expects its profile dirs
                 // (/tmp/.config/content_shell/{Local Storage,Shared
                 // Dictionary,shared_proto_db,...}/) to be pre-created
                 // by the installer. Our cave starts with only a few
@@ -2312,9 +2312,9 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
     }
 }
 
-/// 🎯 STUMP #47 helper: walk `path` left-to-right and create each
+/// helper: walk `path` left-to-right and create each
 /// missing intermediate directory. Stops at the LAST `/` (so the basename
-/// — which the caller will create as a file — is not touched). Best-
+/// which the caller will create as a file — is not touched). Best-
 /// effort: silently swallows create errors (a competing thread or an
 /// already-existing slot is fine).
 fn ensure_parent_dirs(path: &[u8]) {
@@ -2440,7 +2440,7 @@ fn sys_close(args: [u64; 6]) -> i64 {
             }
             0
         }
-        // 🎯 STUMP #49: idempotent close. base::ScopedFD's destructor
+        // idempotent close. base::ScopedFD's destructor
         // asserts close() == 0 (`scoped_file.cc:45`); a stale fd close
         // returns EBADF and trips a FATAL CHECK that takes the cave
         // down with "Check failed: . : Bad file descriptor (9)".
@@ -2480,7 +2480,7 @@ fn fill_stat(buf: usize, mode: u32, size: u64, ino: u64, nlink: u32) {
         unsafe { core::arch::asm!("strb wzr, [{a}]", a = in(reg) buf + i); }
     }
     unsafe {
-        // 🎯 STUMP #10b: st_dev was 1. PartitionAlloc / V8 use (st_dev,
+        // b: st_dev was 1. PartitionAlloc / V8 use (st_dev,
         // st_ino) as a cache key for shmem-backed memory pools. With
         // st_dev==1, the key is effectively just st_ino, and stale
         // bytes containing the literal 1 can collide and produce
@@ -2505,7 +2505,7 @@ fn sys_fstat(args: [u64; 6]) -> i64 {
     let fd_num = args[0] as u32;
     let buf = args[1] as usize;
     if buf == 0 { return EINVAL; }
-    // struct stat on aarch64 is 144 bytes.  fill_stat writes up to
+    // struct stat on aarch64 is 144 bytes. fill_stat writes up to
     // offset 56 + 8; the caller ABI reads the whole struct, so
     // validate the full width.
     if !is_user_ptr(buf, 144) { return EFAULT; }
@@ -2538,7 +2538,7 @@ fn sys_getcwd(args: [u64; 6]) -> i64 {
     let size = args[1] as usize;
     if buf == 0 || size < 2 { return EINVAL; }
     // We may write up to `size` bytes into buf; bounds-check the full
-    // range.  A huge size is also what the attacker uses to flip one
+    // range. A huge size is also what the attacker uses to flip one
     // kernel byte, so catching this check here kills that primitive.
     if !is_user_ptr(buf, size) { return EFAULT; }
 
@@ -2597,7 +2597,7 @@ fn sys_ioctl(args: [u64; 6]) -> i64 {
             // TIOCGPGRP — return process group via the user-supplied
             // int* pointer.
             //
-            // STUMP #161 iter 14: previously returned 0 without writing
+            // iter 14: previously returned 0 without writing
             // the pgrp value, leaving the user's `pgrp` variable holding
             // uninitialised stack data. glibc's tcgetpgrp wrappers
             // sometimes loop until tcgetpgrp returns a specific value
@@ -2621,7 +2621,7 @@ fn sys_ioctl(args: [u64; 6]) -> i64 {
             // we don't write to the pointer the value is uninitialized
             // stack data and the caller may loop expecting the value
             // to match getpid(). Write 1 (matches getpid for our
-            // single-process model). STUMP #161 iter 14.
+            // single-process model). iter 14.
             let buf = args[2] as usize;
             if buf != 0 {
                 if !uaccess::is_user_range(buf, 4) { return -(14i64); }
@@ -2754,7 +2754,7 @@ fn sys_brk(args: [u64; 6]) -> i64 {
                 return ENOMEM;
             }
 
-            // STUMP #161 iter 18: brk previously assumed the user VA range
+            // iter 18: brk previously assumed the user VA range
             // was already mapped (relied on the 256-KB scratch zone +
             // demand-page lazy commit). For brk(0x844000) — which extends
             // 4 KB BEYOND our 0x840000 scratch zone — the kernel's
@@ -2874,7 +2874,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                     if addr >= va_end || addr < va_start {
                         let bytes_available = node.size.saturating_sub(offset);
                         let to_copy = bytes_available.min(len);
-                        // 🎯 STUMP #7 follow-on: pre-mprotect the range
+                        // follow-on: pre-mprotect the range
                         // to RW so the touch-each-page loop can write
                         // even if a previous FIXED-high-VA call mprotected
                         // overlapping pages to R+X (which sets AP=11 =
@@ -2904,7 +2904,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                             for i in to_copy..len {
                                 core::ptr::write_volatile(dst.add(i), 0);
                             }
-                            // 🎯 STUMP #12: dc civac (PoC) instead of
+                            // dc civac (PoC) instead of
                             // dc cvau (PoU) so the freshly-copied bytes
                             // hit main memory and are visible through
                             // any future EL0 mapping. ic ivau still
@@ -2919,7 +2919,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                             core::arch::asm!("dsb sy");
                             core::arch::asm!("isb");
                         }
-                        // 🎯 STUMP #8: only apply user's prot to the
+                        // only apply user's prot to the
                         // FILE-CONTENT portion (rounded up to page).
                         // The tail past `to_copy` is .bss-equivalent
                         // memory that the user (ld-linux) expects to
@@ -2980,7 +2980,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                         for i in to_copy..len {
                             core::ptr::write_volatile(dst.add(i), 0);
                         }
-                        // 🎯 STUMP #12: dc civac (PoC) — also handles
+                        // dc civac (PoC) — also handles
                         // the data side. Was dc cvau (PoU) which only
                         // synchronizes D↔I within a core. PoC ensures
                         // the bytes hit main memory.
@@ -2998,10 +2998,10 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                 }
             }
         }
-        // 🎯 STUMP #51: anonymous MAP_FIXED must return ZERO pages.
+        // anonymous MAP_FIXED must return ZERO pages.
         // PA's `DecommitAndZeroSystemPages` is implemented as
-        //   madvise(addr, len, MADV_DONTNEED);
-        //   mmap(addr, len, PROT_NONE, MAP_FIXED|MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
+        // madvise(addr, len, MADV_DONTNEED);
+        // mmap(addr, len, PROT_NONE, MAP_FIXED|MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
         // and assumes the MAP_FIXED step makes future accesses see
         // ZERO (per POSIX: MAP_FIXED removes prior mappings, so the
         // next fault re-maps fresh zero pages). Confirmed against
@@ -3022,7 +3022,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             uart::puts(" len=0x");
             for sh in (0..16).rev() { uart::putc(hex[((len >> (sh*4)) & 0xF) as usize]); }
             uart::puts("\n");
-            // STUMP #161 iter 19: MAP_FIXED|MAP_ANON must REPLACE any
+            // iter 19: MAP_FIXED|MAP_ANON must REPLACE any
             // prior mapping with fresh zero pages, NOT just walk-and-
             // zero already-writable pages. Iter 18 result showed
             // liblagom-js's BSS extension at 0x70_0073_f000-0x70_0074_d690
@@ -3201,16 +3201,16 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         // instead. V8's pointer compression just wants SOME base with
         // matching alignment; it doesn't hard-require the specific
         // value. Addresses we've seen V8 ask for:
-        //   0x28_00000000  — 32 GB pointer-compression cage ≤ 39-bit OK
-        //   0x4a_11810000  — 16 GB trusted-sandbox ≥ 39-bit NOT OK
-        //   0x400_00000000 — 8 EB hardware sandbox ≥ 39-bit NOT OK
+        // 0x28_00000000 — 32 GB pointer-compression cage ≤ 39-bit OK
+        // 0x4a_11810000 — 16 GB trusted-sandbox ≥ 39-bit NOT OK
+        // 0x400_00000000 — 8 EB hardware sandbox ≥ 39-bit NOT OK
         const VA_LIMIT: u64 = 1u64 << 39;         // our T0SZ=25 ceiling
         const LOW_REDIRECT_BASE: usize = 0x30_0000_0000; // 192 GB (in-range)
         static REDIRECT_CURSOR: core::sync::atomic::AtomicUsize =
             core::sync::atomic::AtomicUsize::new(LOW_REDIRECT_BASE);
         let hint_in_range = (addr as u64) < VA_LIMIT
             && ((addr as u64).saturating_add(len as u64)) <= VA_LIMIT;
-        // 🎯 STUMP #54: hints are honored ONLY if `len`-aligned. PA's
+        // hints are honored ONLY if `len`-aligned. PA's
         // `PartitionAddressSpace::Init` calls
         // `AllocPages(N GiB, N GiB-align, kInaccessible)` and uses
         // `(address & ~(N - 1)) == pool_base` for IsInPool checks.
@@ -3242,13 +3242,13 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             use core::sync::atomic::Ordering as Ord2;
             let mut base = REDIRECT_CURSOR.load(Ord2::Relaxed);
             loop {
-                // 🎯 STUMP #52: align BASE to power-of-two of
+                // align BASE to power-of-two of
                 // `aligned_len`. PA's `PartitionAddressSpace::Init`
                 // calls `AllocPages(32 GiB size, 32 GiB alignment,
                 // kInaccessible)` for the glued regular+BRP pool,
                 // and uses a fixed bitmask test for "is this address
                 // in BRP pool":
-                //   (address & ~(core_pool_size - 1)) == brp_pool_base
+                // (address & ~(core_pool_size - 1)) == brp_pool_base
                 // If PA's pool base isn't `core_pool_size`-aligned
                 // (16 GiB-aligned for our build, 32 GiB-aligned
                 // accounting for the glued layout), the mask test
@@ -3306,7 +3306,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         for shift in (0..16).rev() {
             uart::putc(hex[((reserved >> (shift * 4)) & 0xF) as usize]);
         }
-        // 🎯 STUMP #54-prep: log prot + alignment for PA-pool detection.
+        // prep: log prot + alignment for PA-pool detection.
         // PROT_NONE huge reservations are almost certainly PA's pool
         // init (it calls mmap(PROT_NONE) for the regular+BRP glued
         // pool, then uses MAP_FIXED to carve SuperPages). If the
@@ -3427,7 +3427,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
     {
         let aligned_len = (len + 0xFFF) & !0xFFFusize;
         use core::sync::atomic::Ordering as Ord2;
-        // 🎯 STUMP #58: under HVF the static initializer for
+        // under HVF the static initializer for
         // SMALL_MMAP_CURSOR (= SMALL_MMAP_BASE = 0x70_0000_0000)
         // is observed as 0 — possibly a section/init quirk. Hard-fix:
         // unconditionally promote any below-BASE cursor to BASE
@@ -3480,7 +3480,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             uart::puts("\n");
         }
 
-        // 🎯 STUMP #35: V8's CodeRange mmap passes hint=0xF0000000
+        // V8's CodeRange mmap passes hint=0xF0000000
         // (4 GB) for 256 MiB. Our small_mmap region is at 0x70_xxxx
         // (484 GB+) — too far from V8's expected location, V8 logs
         // OOM. Honor low-hint large allocations by returning the hint
@@ -3509,7 +3509,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             uart::puts("\n");
             return addr as i64;
         }
-        // 🎯 STUMP #30: align large allocations to 16 MiB. V8's CodeRange
+        // align large allocations to 16 MiB. V8's CodeRange
         // (256 MiB) and similar large-region reservations expect a
         // strongly-aligned base; if our cursor lands at an arbitrary
         // 4 KiB boundary V8 rejects with "Failed to reserve virtual
@@ -3518,7 +3518,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
         const LARGE_THRESHOLD: usize = 64 * 1024 * 1024; // 64 MiB
         const LARGE_ALIGN: usize = 16 * 1024 * 1024;     // 16 MiB
         let needs_large_align = aligned_len >= LARGE_THRESHOLD;
-        // 🎯 STUMP #58: cmpxchg-based bump allocation observed broken
+        // cmpxchg-based bump allocation observed broken
         // under HVF — even when cur_now matched the expected value
         // microseconds before, compare_exchange returned Err with a
         // bogus current. Diagnostic showed base/next correct,
@@ -3589,7 +3589,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                 uart::puts(" (16M-aligned)");
             }
             uart::puts("\n");
-            // 🎯 STUMP #28 v2: pre-commit ALL anonymous private
+            // v2: pre-commit ALL anonymous private
             // mappings, not just 2 MiB-aligned PA super-pages.
             // PartitionAlloc / V8 / Blink heap allocators assume
             // newly mapped span memory is fully present and zeroed.
@@ -3648,8 +3648,8 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
             // NEW-DOS-014: yield to the scheduler every 64 pages so a
             // cave that mmap's 1 GiB doesn't pin the core for seconds.
             //
-            // 🎯 STUMP #12: dc civac after zeroing each page. Same root
-            // cause as STUMP #10c demand_page fix: alloc_contig may
+            // dc civac after zeroing each page. Same root
+            // cause as c demand_page fix: alloc_contig may
             // return a frame whose previous EL1-side use left dirty
             // cache lines that PartitionAlloc's InSlotMetadata refcount
             // check (`ldar w8, [x24]; cmp w27, #0x1`) reads as stale,
@@ -3709,7 +3709,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                             let src = (node.data_addr + offset) as *const u8;
                             let dst = base as *mut u8;
                             core::ptr::copy_nonoverlapping(src, dst, to_copy);
-                            // 🎯 STUMP #12: D-cache + I-cache maintenance.
+                            // D-cache + I-cache maintenance.
                             // dc civac (clean+invalidate to PoC) for data
                             // visibility — was previously dc cvau (PoU)
                             // which only synchronizes between D-cache and
@@ -3751,7 +3751,7 @@ fn sys_mmap(args: [u64; 6]) -> i64 {
                 }
             };
             if end > USER_WINDOW_SIZE {
-                // 🎯 STUMP #4 FIX: alloc_contig returned frames outside
+                // FIX: alloc_contig returned frames outside
                 // the cave's identity-mapped window. This used to be a
                 // hard ENOMEM — fine when the cave window happened to
                 // include unreserved frames (the Stump #3 aliasing bug),
@@ -3998,13 +3998,13 @@ fn sys_connect(args: [u64; 6]) -> i64 {
 //
 // Errors map to standard Linux errno values so caves with libc-style
 // errno-checking still work:
-//   -EACCES (-13)   cave_policy denied this destination
-//   -EFAULT (-14)   host_ptr / host_len out of cave's user range
-//   -EINVAL (-22)   bad host string (CRLF / control chars), bad port (0),
-//                   non-zero flags (reserved)
-//   -ENOMEM (-12)   no free TLS PCB slot
-//   -EIO    (-5)    DNS / TCP connect / TLS handshake failed (generic;
-//                   the kernel UART log carries the specific reason)
+// EACCES (-13) cave_policy denied this destination
+// EFAULT (-14) host_ptr / host_len out of cave's user range
+// EINVAL (-22) bad host string (CRLF / control chars), bad port (0),
+// non-zero flags (reserved)
+// ENOMEM (-12) no free TLS PCB slot
+// EIO (-5) DNS / TCP connect / TLS handshake failed (generic;
+// the kernel UART log carries the specific reason)
 // ────────────────────────────────────────────────────────────────────────
 fn sys_bat_https_open(args: [u64; 6]) -> i64 {
     const EIO: i64 = -5;
@@ -4573,7 +4573,7 @@ fn sys_writev(args: [u64; 6]) -> i64 {
                     core::arch::asm!("ldr {v}, [{a}]", a = in(reg) iov_ptr + i * 16 + 8, v = out(reg) iov_len);
                 }
                 // NEW-SYS-046: even the file-redirect path needs the gate
-                // — sys_write doesn't re-check the buffer.
+                // sys_write doesn't re-check the buffer.
                 if iov_len > 0 && !uaccess::is_user_range(iov_base as usize, iov_len as usize) {
                     return -(14i64);
                 }
@@ -4672,7 +4672,7 @@ fn sys_newfstatat(args: [u64; 6]) -> i64 {
     // FLv2-NEW-011: extend `..` guard to newfstatat.
     if has_dotdot(&path_buf[..path_len]) { return EACCES; }
 
-    // STUMP #154: per-path fs cap enforcement.
+    // per-path fs cap enforcement.
     if let Err(e) = check_fs_path_cap(&path_buf[..path_len], "newfstatat") {
         return e;
     }
@@ -4705,7 +4705,7 @@ fn write_str(s: &str) {
 /// unlinkat, mkdirat, readlinkat, newfstatat, statx, execve) so a cave
 /// can no longer escape its base directory by passing `../foo` through
 /// the syscalls that the V1 `..` guard didn't cover.
-///
+// /
 /// Coarser than POSIX realpath-normalization (which would resolve
 /// symlinks before checking) but catches the obvious attack with zero
 /// extra state. Symlink-target rejection is handled in vfs::resolve_path.
@@ -4725,28 +4725,28 @@ pub(crate) fn has_dotdot(path: &[u8]) -> bool {
 }
 
 /// Read a null-terminated string from userspace memory.
-///
+// /
 /// NEW-SYS-028 / ATTACK-SYS-034/035 fix: before this patch the loop did a
 /// raw `ldrb` at `ptr + i` with no range check, giving every path-taking
 /// syscall (openat, faccessat, chdir, readlinkat, newfstatat, mkdirat,
 /// execve) a kernel-read primitive. We now refuse ptr == 0 or anything
 /// outside [0x1000, 0x4000_0000), and we truncate at the first byte that
-/// STUMP #154: per-path FS cap check for path-taking syscalls.
-///
-/// Extends STUMP #151 (which only enforced at sys_openat) to every
+/// per-path FS cap check for path-taking syscalls.
+// /
+/// Extends to every
 /// syscall that takes an absolute path: stat, access, readlink,
 /// chdir, mkdir, statfs. Without this, an attacker with no `fs:`
 /// cap could `stat("/etc/passwd")` to fingerprint the FS even
 /// though they couldn't open it. Stat-leak is a real attack vector
 /// for exfil.
-///
+// /
 /// Returns Ok(()) if:
-///   - the path is relative (the dirfd it'll be resolved against
-///     was already cap-checked at its own open time, and the
-///     `has_dotdot` guard prevents traversal escape)
-///   - the cave has bare `fs` cap (full FS access)
-///   - the cave has a path-scoped `fs:<prefix>` that covers this path
-///
+/// the path is relative (the dirfd it'll be resolved against
+/// was already cap-checked at its own open time, and the
+/// `has_dotdot` guard prevents traversal escape)
+/// the cave has bare `fs` cap (full FS access)
+/// the cave has a path-scoped `fs:<prefix>` that covers this path
+// /
 /// Returns Err(EACCES) otherwise. UART-logs the block at the call
 /// site's chosen tag so audit can trace which syscall enforced it.
 fn check_fs_path_cap(path: &[u8], syscall_tag: &str) -> Result<(), i64> {
@@ -4803,7 +4803,7 @@ fn sys_faccessat(args: [u64; 6]) -> i64 {
     // FLv2-NEW-011: extend `..` guard to faccessat (was openat-only).
     if has_dotdot(&path_buf[..path_len]) { return EACCES; }
 
-    // STUMP #154: per-path fs cap enforcement.
+    // per-path fs cap enforcement.
     if let Err(e) = check_fs_path_cap(&path_buf[..path_len], "faccessat") {
         return e;
     }
@@ -4823,11 +4823,11 @@ fn sys_faccessat(args: [u64; 6]) -> i64 {
 
 fn sys_ppoll(args: [u64; 6]) -> i64 {
     // ppoll(fds, nfds, timeout, sigmask)
-    //   struct pollfd { fd: i32, events: i16, revents: i16 } — 8 bytes
-    //   timeout == NULL  → block indefinitely
-    //   timeout->tv_*=0  → non-blocking; return immediately with
-    //                      whatever's already ready (possibly 0)
-    //   timeout > 0      → wait up to that duration
+    // struct pollfd { fd: i32, events: i16, revents: i16 } — 8 bytes
+    // timeout == NULL → block indefinitely
+    // timeout->tv_*=0 → non-blocking; return immediately with
+    // whatever's already ready (possibly 0)
+    // timeout > 0 → wait up to that duration
     let fds_ptr     = args[0] as usize;
     let nfds        = args[1] as usize;
     let timeout_ptr = args[2] as usize;
@@ -5077,12 +5077,12 @@ fn sys_futex(args: [u64; 6]) -> i64 {
     let uaddr2 = args[4];
     let val3 = args[5] as u32;
 
-    // STUMP #44 — Linux's futex(2) overloads `args[3]` based on the op:
-    //   * FUTEX_WAIT / FUTEX_WAIT_BITSET / FUTEX_LOCK_PI:
-    //       args[3] is `const struct timespec *utime` (a pointer).
-    //   * FUTEX_REQUEUE / FUTEX_CMP_REQUEUE / FUTEX_WAKE_OP:
-    //       args[3] is `val2` — an INTEGER count (nr_requeue), not a pointer.
-    //   * FUTEX_WAKE / FUTEX_WAKE_BITSET / FUTEX_FD: args[3] is unused.
+    // Linux's futex(2) overloads `args[3]` based on the op:
+    // * FUTEX_WAIT / FUTEX_WAIT_BITSET / FUTEX_LOCK_PI:
+    // args[3] is `const struct timespec *utime` (a pointer).
+    // * FUTEX_REQUEUE / FUTEX_CMP_REQUEUE / FUTEX_WAKE_OP:
+    // args[3] is `val2` — an INTEGER count (nr_requeue), not a pointer.
+    // * FUTEX_WAKE / FUTEX_WAKE_BITSET / FUTEX_FD: args[3] is unused.
     //
     // Pre-fix bug: args[3] was unconditionally treated as a timeout pointer
     // and gated through `is_user_ptr`. For pthread_cond_broadcast (which uses
@@ -5785,11 +5785,11 @@ fn sys_getrandom(args: [u64; 6]) -> i64 {
     // better than single-counter-read-per-byte.
     //
     // State is seeded from:
-    //   - multiple cntpct_el0 reads across nanosecond-scale delays
-    //   - the previous output (carried in PRNG_STATE)
-    //   - the frame allocator's current "free bitmap" fingerprint
-    //     (indirect system-state entropy — varies with uptime, load,
-    //      previous allocations)
+    // multiple cntpct_el0 reads across nanosecond-scale delays
+    // the previous output (carried in PRNG_STATE)
+    // the frame allocator's current "free bitmap" fingerprint
+    // (indirect system-state entropy — varies with uptime, load,
+    // previous allocations)
     //
     // Output is SHA-256(state || counter) chunked into 32-byte blocks.
 
@@ -5906,7 +5906,7 @@ fn sys_readlinkat(args: [u64; 6]) -> i64 {
     // FLv2-NEW-011: extend `..` guard to readlinkat.
     if has_dotdot(&path_buf[..path_len]) { return EACCES; }
 
-    // STUMP #154: per-path fs cap. Note this fires BEFORE the
+    // per-path fs cap. Note this fires BEFORE the
     // /proc/self/exe special case below — caves without the right
     // fs cap can't enumerate "what binary am I" via readlink either.
     if let Err(e) = check_fs_path_cap(&path_buf[..path_len], "readlinkat") {
@@ -6056,7 +6056,7 @@ fn sys_chdir(args: [u64; 6]) -> i64 {
     // sandboxed cwd.
     if has_dotdot(&path_buf[..path_len]) { return EACCES; }
 
-    // STUMP #154: per-path fs cap. A cave with `fs:/tmp` can chdir
+    // per-path fs cap. A cave with `fs:/tmp` can chdir
     // into /tmp/foo but not into /etc — the chdir would then anchor
     // subsequent relative-path syscalls into a directory the cave
     // never had access to.
@@ -6171,7 +6171,7 @@ fn sys_mkdirat(args: [u64; 6]) -> i64 {
     // FLv2-NEW-011: extend `..` guard to mkdirat.
     if has_dotdot(&path_buf[..path_len]) { return EACCES; }
 
-    // STUMP #154: per-path fs cap.
+    // per-path fs cap.
     if let Err(e) = check_fs_path_cap(&path_buf[..path_len], "mkdirat") {
         return e;
     }
@@ -6192,14 +6192,14 @@ fn sys_mkdirat(args: [u64; 6]) -> i64 {
     }
 }
 
-// STUMP #160 iter 3: real renameat / renameat2 instead of sys_stub_zero.
+// iter 3: real renameat / renameat2 instead of sys_stub_zero.
 //
 // Args (Linux aarch64 syscall 38 = renameat, 276 = renameat2):
-//   args[0] = olddirfd (i32)
-//   args[1] = oldpath  (ptr)
-//   args[2] = newdirfd (i32)
-//   args[3] = newpath  (ptr)
-//   args[4] = flags    (u32, only meaningful for renameat2 — we ignore)
+// args[0] = olddirfd (i32)
+// args[1] = oldpath (ptr)
+// args[2] = newdirfd (i32)
+// args[3] = newpath (ptr)
+// args[4] = flags (u32, only meaningful for renameat2 — we ignore)
 //
 // We support absolute paths and AT_FDCWD-relative paths (-100). For
 // per-fd-relative dirfds we'd need fd→path mapping; not used by
@@ -6226,12 +6226,12 @@ fn sys_renameat(args: [u64; 6]) -> i64 {
     let newlen = read_user_str(newpath_ptr, &mut newpath);
     if oldlen == 0 || newlen == 0 { return EINVAL; }
 
-    // ..-traversal guard (STUMP #151 family).
+    // ..-traversal guard ( family).
     if has_dotdot(&oldpath[..oldlen]) || has_dotdot(&newpath[..newlen]) {
         return EACCES;
     }
 
-    // STUMP #154: cap-check both source and destination paths.
+    // cap-check both source and destination paths.
     if let Err(e) = check_fs_path_cap(&oldpath[..oldlen], "renameat-src") {
         return e;
     }
@@ -6339,7 +6339,7 @@ fn sys_timerfd_gettime(args: [u64; 6]) -> i64 {
 fn sys_sysinfo(args: [u64; 6]) -> i64 {
     let buf = args[0] as usize;
     if buf == 0 { return EINVAL; }
-    // struct sysinfo is 112 bytes on 64-bit Linux.  Validate before we
+    // struct sysinfo is 112 bytes on 64-bit Linux. Validate before we
     // fill it — otherwise any attacker-supplied pointer would receive
     // 112 zero-fill strb's + structured kernel-chosen values.
     if !is_user_ptr(buf, 112) { return EFAULT; }
@@ -6666,9 +6666,9 @@ fn sys_rt_sigprocmask(args: [u64; 6]) -> i64 {
 fn sys_rt_sigreturn(_args: [u64; 6]) -> i64 { 0 }
 
 /// tgkill — send signal to a thread (tgkill(tgid, tid, sig)).
-///
+// /
 /// V6-XLAYER-009 fix: previously the tgid/tid args were ignored entirely
-/// — any cave could call `tgkill(other_cave_tgid, *, SIGKILL)` and the
+/// any cave could call `tgkill(other_cave_tgid, *, SIGKILL)` and the
 /// signal got OR'd into the GLOBAL SIGNAL_PENDING bitmap, killing
 /// whoever was active when the signal next checked. Now we restrict
 /// tgkill to "self" (the calling cave/process); cross-process signals
@@ -6814,9 +6814,9 @@ pub fn proc_read(path: &str, buf: &mut [u8]) -> usize {
             // reject as not-its-binary.
             //
             // Layout:
-            //   0x10000000-0x29000000  r-xp  cave window (Chromium binary)
-            //   0x70_0000_0000+        rw-p  small-mmap region (anon stacks)
-            //   0xff_ff00_0000+        rw-p  user stack
+            // 0x10000000-0x29000000 r-xp cave window (Chromium binary)
+            // 0x70_0000_0000+ rw-p small-mmap region (anon stacks)
+            // 0xff_ff00_0000+ rw-p user stack
             b"10000000-29000000 r-xp 00000000 00:00 0  /bin/content_shell\n7000000000-7008000000 rw-p 00000000 00:00 0  [stack]\n7000000000-7100000000 rw-p 00000000 00:00 0  [heap]\nffffff000000-ffffff100000 rw-p 00000000 00:00 0  [stack]\n",
         "/proc/self/stat" | "/proc/1/stat" =>
             b"1 (bat_process) R 0 1 1 0 -1 4194304 100 0 0 0 10 5 0 0 20 0 1 0 100 4194304 512 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0\n",

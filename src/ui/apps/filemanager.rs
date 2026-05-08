@@ -1,6 +1,6 @@
 // Bat_OS — FS · File Manager
 //
-// STUMP #129 — Claude-Design Wave-3 port. Source artifacts in
+// Claude-Design Wave-3 port. Source artifacts in
 // `docs/design/apps-fs-ed-cm/` (jsx + spec sheet).
 //
 // Layout: 32px header strip ("ENCRYPTED VAULT · cipher info" +
@@ -21,7 +21,7 @@ use crate::ui::widgets::{
 use crate::fs::batfs;
 use crate::drivers::virtio::keyboard::{KEY_ARROW_UP, KEY_ARROW_DOWN};
 
-// STUMP #131: which row the user has highlighted. Up/down arrows
+// which row the user has highlighted. Up/down arrows
 // move it; Enter opens the selected file in the editor.
 static mut SELECTED_ROW: usize = 0;
 static mut ROW_COUNT_CACHE: usize = 0;
@@ -115,7 +115,7 @@ fn draw_header(x: u32, y: u32, w: u32) {
     font::draw_str(fb, sw, cx, text_y, "VAULT",     FAINT, BG); cx += 6 * CHAR_W;
     font::draw_str(fb, sw, cx, text_y, "ENCRYPTED", INK,   BG); cx += 10 * CHAR_W;
     font::draw_str(fb, sw, cx, text_y, ".",         FAINT, BG); cx += 2 * CHAR_W;
-    // STUMP #144: BatFS is ChaCha20-Poly1305 AEAD now, not AES-CTR.
+    // BatFS is ChaCha20-Poly1305 AEAD now, not AES-CTR.
     font::draw_str(fb, sw, cx, text_y, "CHACHA20-POLY1305", CYAN, BG); cx += 18 * CHAR_W;
     font::draw_str(fb, sw, cx, text_y, "+ Merkle integrity", FAINT, BG);
 
@@ -248,7 +248,7 @@ fn draw_row(x: u32, y: u32, w: u32, name: &str, size: usize, encrypted: bool, se
     font::draw_str(fb, sw, val_x, text_y, size_str, INK, BG);
     font::draw_str(fb, sw, val_x + (s_n as u32 + 1) * CHAR_W, text_y, unit, DIM_TXT, BG);
 
-    // CIPHER. STUMP #144: ChaCha20-Poly1305 (was AES-256-CTR label).
+    // CIPHER. ChaCha20-Poly1305 (was AES-256-CTR label).
     let cipher_x = size_x + COL_SIZE_W + 4;
     if encrypted {
         font::draw_str(fb, sw, cipher_x, text_y, "CHACHA20", CYAN, BG);

@@ -50,7 +50,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     if is_qemu {
         drivers::uart::enable();
     }
-    // 🎯 STUMP #60: belt-and-suspenders — explicitly set the platform
+    // belt-and-suspenders — explicitly set the platform
     // discriminator to QemuVirt so any later `is_apple_silicon()`
     // check returns false. The static is `AtomicU8::new(0)` =
     // QemuVirt by default, but pre-MMU BSS state might be observed
@@ -201,7 +201,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     const BUILD_DURESS: Option<&str> = option_env!("BAT_OS_DURESS");
 
     let passphrase_slice: &[u8] = if let Some(s) = BUILD_PASSPHRASE {
-        // STUMP #111 (audit C001): the BUILD_PASSPHRASE is baked into
+        // the BUILD_PASSPHRASE is baked into
         // the kernel binary as a plaintext literal — `strings bat_os`
         // recovers it. This is convenient for development but
         // catastrophic for production. Loud red banner so the operator
@@ -243,7 +243,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // Slow enough to blunt brute force against the binary alone, but
     // still deterministic per (passphrase, kernel_hash_seed) so the
     // same build + passphrase produces the same key across reboots.
-    // STUMP #136 (Phase 7): virtio-blk MUST init before BatFS so that
+    // virtio-blk MUST init before BatFS so that
     // BatFS can mount its on-disk format from sector 0. Without a disk
     // BatFS still works — it falls back to in-RAM-only mode and warns —
     // but with one attached, BatFS will persist across reboots.
@@ -258,7 +258,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     fs::batfs::init(&master_key);
     drivers::uart::puts("  [fs] BatFS initialized (ChaCha20-Poly1305 AEAD, Argon2id-derived master)\n");
 
-    // STUMP #155: restore audit ring from BatFS-persisted /audit.log
+    // restore audit ring from BatFS-persisted /audit.log
     // (written by a prior boot's `audit-flush`). Lets the operator's
     // `audit` command show historical events across reboots — without
     // this, an attacker who panics post-exploit erases their tracks.
@@ -310,7 +310,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
         None => drivers::uart::puts("  [kbd] Serial input only\n"),
     }
 
-    // Sprint 1.5 (STUMP #98): virtio-tablet for absolute mouse input.
+    // Sprint 1.5 : virtio-tablet for absolute mouse input.
     // Skipped silently when no second virtio-input device is attached
     // (every QEMU run that doesn't pass `-device virtio-tablet-device`).
     drivers::uart::puts("[boot] Initializing tablet...\n");
@@ -401,7 +401,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
 /// with hybrid PQ enabled — i.e. the production configuration.
 /// Prints `[https-smoke] PASS …` or `[https-smoke] FAIL …` so
 /// scripts/qemu_https_smoke.py can pick up the result via serial.
-///
+// /
 /// Calls `https::open_kernel` directly — no syscall, no cave context,
 /// no cpol gate. The cave-side ABI smoke (which goes through
 /// sys_bat_https_open) lands in a follow-up PR once a test cave
@@ -477,7 +477,7 @@ fn derive_batfs_key(passphrase: &[u8]) -> [u8; 32] {
 
     // Distinct from auth.rs's "bat_os-auth-v2" so the two derivations
     // produce different outputs for the same passphrase — domain
-    // separation. STUMP #138 bumps the version tag so anyone migrating
+    // separation. bumps the version tag so anyone migrating
     // from the pre-Argon2 master key sees a clean break.
     const SALT: &[u8; 16] = b"bat_os-batfs-v3\0";
     const MEM_KIB: u32 = 8_192;       // 8 MiB
@@ -593,7 +593,7 @@ fn compute_kernel_text_hash() -> [u8; 32] {
 /// Prompt the user for a passphrase over the QEMU UART with echo suppressed.
 /// Returns the number of bytes written to `buf`. Line-terminated by \r or \n.
 /// Backspace (0x08 / 0x7f) erases the last byte.
-///
+// /
 /// Two-second timeout: if nothing arrives the caller falls back to the dev
 /// default so unattended QEMU runs still boot.
 fn read_passphrase_from_uart(buf: &mut [u8]) -> usize {
@@ -622,7 +622,7 @@ fn read_passphrase_from_uart(buf: &mut [u8]) -> usize {
         }
 
         if let Some(ch) = drivers::uart::getc() {
-            // STUMP #111 (audit M-passphrase-echo) revisited: the
+            // revisited: the
             // earlier rule "never echo, UART observers can count
             // chars" is correct for production hardware where a
             // pin-header attacker can sniff serial. On QEMU the
@@ -757,8 +757,8 @@ pub fn serial_shell() -> ! {
 global_asm!(include_str!("arch/aarch64/apple/boot.s"));
 
 // (diag band helper removed — bisection confirmed mm / process /
-//  scheduler / ipc / arch_exceptions / aic / bring_up_all all reach
-//  cleanly on M4 after the WDT-disable + DWC3/BCM skips landed.)
+// scheduler / ipc / arch_exceptions / aic / bring_up_all all reach
+// cleanly on M4 after the WDT-disable + DWC3/BCM skips landed.)
 
 // Early-boot exception vectors. m1n1 clears VBAR during chainload,
 // so until `kernel::arch::init_exceptions()` installs the real
@@ -802,18 +802,18 @@ fn apple_run_cmd(line: &str) {
 /// create+read round-trip (which also reaches `batfs::next_nonce`,
 /// the new `NONCE_COUNTER` load+store, and AES-CTR + HMAC-SHA256
 /// MAC verification).
-///
+// /
 /// Layered in two halves:
-///   1. a focused direct-API self-test (same as before)
-///   2. a replay of real shell commands via `apple_shell_dispatch`
-///      so every command registered in the shell gets exercised too
-///
+/// 1. a focused direct-API self-test (same as before)
+/// 2. a replay of real shell commands via `apple_shell_dispatch`
+/// so every command registered in the shell gets exercised too
+// /
 /// All output goes through `drivers::apple::uart::puts`, which tees
 /// into `drivers::apple::fb_console::puts` — so each line is both
 /// shipped out the dockchannel UART and rendered to the M4 display
 /// for camera-visible verification. Doesn't loop; returns so the
 /// shell can still start afterwards.
-///
+// /
 /// Currently dormant — the call site in `kernel_main_apple` is
 /// commented out so a real M4 chainload doesn't spend 70+ s
 /// self-testing before the operator gets a prompt. Kept as staged
@@ -897,7 +897,7 @@ fn apple_kernel_self_test() {
     }
 
     // Test 7: AES-128-GCM + AES-256-GCM known-answer vectors
-    // (NIST SP 800-38D). STUMP #159 brought AES-256-GCM in; this
+    // (NIST SP 800-38D). brought AES-256-GCM in; this
     // verifies both ciphers reproduce the published tags AND reject
     // tampered ciphertext on real M4 silicon. Without this, a fault
     // in the AES round constants or GHASH reduction wouldn't
@@ -1071,10 +1071,10 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
     // V-APPLE-AUTH-1: passphrase resolution — same priority order as
     // the QEMU path, so `BAT_OS_PASSPHRASE=<plaintext>` at build time
     // works identically on both targets:
-    //   1. BAT_OS_PASSPHRASE (option_env!) — baked at build time
-    //   2. read_passphrase_apple (non-blocking UART prompt) if we
-    //      actually got bytes
-    //   3. dev_fallback (SHA-256 over kernel-image hash — same as QEMU)
+    // 1. BAT_OS_PASSPHRASE (option_env!) — baked at build time
+    // 2. read_passphrase_apple (non-blocking UART prompt) if we
+    // actually got bytes
+    // 3. dev_fallback (SHA-256 over kernel-image hash — same as QEMU)
     const BUILD_PASSPHRASE_APPLE: Option<&str> = option_env!("BAT_OS_PASSPHRASE");
     const BUILD_DURESS_APPLE: Option<&str> = option_env!("BAT_OS_DURESS");
     let mut passphrase_buf = [0u8; 128];
@@ -1128,10 +1128,10 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         }
 
         // V-APPLE-AUTH-2: real auth gate. Same flow as QEMU:
-        //   1. auth::init with the resolved passphrase + duress code.
-        //   2. boot_screen::run() — renders login, blocks on input,
-        //      verifies. Returns only on SUCCESS (Duress triggers
-        //      silent wipe + noreturn; LockedOut halts).
+        // 1. auth::init with the resolved passphrase + duress code.
+        // 2. boot_screen::run() — renders login, blocks on input,
+        // verifies. Returns only on SUCCESS (Duress triggers
+        // silent wipe + noreturn; LockedOut halts).
         //
         // Input route: platform::serial_getc() on Apple returns SPI
         // first (None under HV) then dockchannel UART. Under the
@@ -1139,7 +1139,7 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
         // → /dev/ttyACM2 → m1n1 vuart hook → guest RX ring → getc.
         //
         // Override the compiled-in passphrase at build time:
-        //   BAT_OS_PASSPHRASE=mypass bash build_apple.sh
+        // BAT_OS_PASSPHRASE=mypass bash build_apple.sh
         let passphrase_str_apple = core::str::from_utf8(passphrase_slice)
             .unwrap_or("");
         let duress_str_apple = match BUILD_DURESS_APPLE {
@@ -1173,7 +1173,7 @@ pub extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple::boot_a
 /// Interactive shell for the M4 path: reads a command line from the
 /// dockchannel UART, dispatches into real kernel ops (memory stats,
 /// BatFS, ...), and prints results back over the same UART.
-///
+// /
 /// Note: with m1n1 replaced by our payload, the Mac's USB-CDC
 /// endpoint is gone — so Ubuntu can't read/write this serial until
 /// Bat_OS gets its own USB-CDC class driver. Until then this runs

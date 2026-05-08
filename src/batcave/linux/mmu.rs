@@ -2,10 +2,10 @@
 // Creates a virtual address mapping so PIE binaries see their expected addresses.
 //
 // ARM64 4KB granule, 4-level page tables:
-//   L0: 1 entry = 512GB
-//   L1: 1 entry = 1GB
-//   L2: 1 entry = 2MB (block mapping)
-//   L3: 1 entry = 4KB
+// L0: 1 entry = 512GB
+// L1: 1 entry = 1GB
+// L2: 1 entry = 2MB (block mapping)
+// L3: 1 entry = 4KB
 //
 // We use 2MB block mappings for simplicity.
 
@@ -121,7 +121,7 @@ static mut PRIMARY_L1: usize = 0; // the primary (ash) page table
 
 // V3 — per-cave user-window bounds, tracked so `is_user_range` can refuse
 // pointers outside the actively-mounted cave's window (NEW-SYS-001 +
-// related cross-cave pointer abuse).  Indexed by cave_slot.
+// related cross-cave pointer abuse). Indexed by cave_slot.
 static mut CAVE_VIRT_BASE: [usize; MAX_CAVE_PAGETABLES] = [0; MAX_CAVE_PAGETABLES];
 static mut CAVE_VIRT_EXTENT: [usize; MAX_CAVE_PAGETABLES] = [0; MAX_CAVE_PAGETABLES];
 
@@ -135,7 +135,7 @@ static ACTIVE_WIN_END:   AtomicUsize = AtomicUsize::new(0);
 /// Returns the active cave's user-VA window as (start, end). When no cave
 /// is mounted this returns (0, 0); callers should treat that as "use the
 /// legacy default window" (0x1000..0x4000_0000).
-///
+// /
 /// V5-TOCTOU-001 fix: reads a single packed u64 atomic so readers never
 /// see an inconsistent (start, end) pair split across two stores.
 pub fn active_user_window() -> (usize, usize) {
@@ -172,7 +172,7 @@ static CAVE_SLOT_USED: AtomicU8 = AtomicU8::new(0);
 
 /// Allocate a free cave page-table slot. Returns Some(index) or None if
 /// all MAX_CAVE_PAGETABLES are in use.
-///
+// /
 /// V5-TOCTOU-011 fix: CAS-per-bit instead of load-then-fetch_or. The
 /// old path could race: thread A loads used, sees bit i is 0; thread B
 /// also loads used and sees bit i is 0; both fetch_or(bit i) and both
@@ -198,7 +198,7 @@ pub fn alloc_cave_slot() -> Option<usize> {
 
 /// Release a cave slot. Also clears CAVE_L1[slot] so subsequent
 /// `get_cave_l1(slot)` returns the primary table.
-///
+// /
 /// FLv2-NEW-018 fix: also releases the cave's L1 + L2_low + L2_high
 /// kernel-pool frames back to `frame::alloc_kernel_frame`. Walks the L1
 /// to find the L2_low / L2_high pointers before clearing CAVE_L1[slot].
@@ -214,15 +214,15 @@ pub fn free_cave_slot(slot: usize) {
     // zero-and-freed the L1 pages it clobbered the new tenant's page
     // tables, collapsing the sandbox to PRIMARY_L1.
     //
-    // STUMP #145 fix (kernel-pool leak): previously this only freed
+    // fix (kernel-pool leak): previously this only freed
     // L1[0] (l2_low) and L1[1] (l2_high). But `setup_cave_pagetable_at`
     // also allocates l2_xhi (L1[2]), l2_xxhi (L1[3]), and l2_xxxhi
     // (L1[4]) for the kernel identity 0x80000000..0x140000000 range
-    // — and `setup_native_cave_l1` allocates the same five tables
+    // and `setup_native_cave_l1` allocates the same five tables
     // for native caves. Walking only [0..=1] meant 3 frames per cave
     // create→destroy cycle leaked back into the heap-side bitmap
     // unfreed (12 KB per cycle out of the 128 MB kernel pool). The
-    // STUMP #3 audit caught this when STUMP #145 made the leak more
+    // audit caught this when made the leak more
     // visible by adding native-cave L1s. We now walk indices [0..=4]
     // to free every L2 table that was ever populated by
     // `setup_cave_pagetable_at` or `setup_native_cave_l1`.
@@ -234,11 +234,11 @@ pub fn free_cave_slot(slot: usize) {
             // Read L1[0..=4] PTEs into an array so we can free them all.
             // Indices match the layout established by setup_cave_pagetable_at
             // and setup_native_cave_l1:
-            //   L1[0] → L2_low   (MMIO + maybe user window)
-            //   L1[1] → L2_high  (kernel identity 0x40000000..0x80000000)
-            //   L1[2] → L2_xhi   (kernel identity 0x80000000..0xC0000000)
-            //   L1[3] → L2_xxhi  (kernel identity 0xC0000000..0x100000000)
-            //   L1[4] → L2_xxxhi (kernel identity 0x100000000..0x140000000)
+            // L1[0] → L2_low (MMIO + maybe user window)
+            // L1[1] → L2_high (kernel identity 0x40000000..0x80000000)
+            // L1[2] → L2_xhi (kernel identity 0x80000000..0xC0000000)
+            // L1[3] → L2_xxhi (kernel identity 0xC0000000..0x100000000)
+            // L1[4] → L2_xxxhi (kernel identity 0x100000000..0x140000000)
             let mut l2_tables = [0usize; 5];
             for i in 0..5 {
                 let pte: u64;
@@ -291,9 +291,9 @@ pub fn get_cave_l1(cave_slot: usize) -> usize {
 
 /// Set up a separate page table for a new BatCave.
 /// The cave's page table maps ONLY:
-///   - Its own busybox code/data (different phys_base from primary)
-///   - MMIO (needed for I/O)
-///   - Kernel RAM (identity, needed for syscall handling)
+/// Its own busybox code/data (different phys_base from primary)
+/// MMIO (needed for I/O)
+/// Kernel RAM (identity, needed for syscall handling)
 /// It does NOT map the primary busybox or other caves.
 pub fn setup_cave_pagetable(cave_slot: usize, phys_base: usize) -> Result<usize, &'static str> {
     setup_cave_pagetable_at(cave_slot, phys_base, 0)
@@ -304,7 +304,7 @@ pub fn setup_cave_pagetable(cave_slot: usize, phys_base: usize) -> Result<usize,
 /// `virt_base = 0x10000000` to place cave user code ABOVE MMIO so a
 /// Chromium-sized (150 MB) binary doesn't collide with UART/virtio at
 /// physical/virtual blocks 64/72/80/81/82.
-///
+// /
 /// Legacy callers pass `virt_base = 0` — MMIO overlap remains their
 /// problem, but test binaries that never grow past 128 MB of VA don't
 /// actually hit the hole.
@@ -330,7 +330,7 @@ pub fn setup_cave_pagetable_at(
     // can land past 0x50000000) via the kernel identity map while syscalls
     // run under the cave's TTBR0.
     let l2_xhi = frame::alloc_kernel_frame().ok_or("oom for cave L2_xhi (kernel pool)")?;
-    // 🎯 STUMP #7 FIX: extend identity map to cover the full 4 GiB
+    // FIX: extend identity map to cover the full 4 GiB
     // physical RAM (paired with QEMU_MEMORY_END bump in mm/mod.rs).
     // L2_xxhi covers [0xC0000000, 0x100000000); L2_xxxhi covers
     // [0x100000000, 0x140000000). Without these, alloc_frame would
@@ -356,7 +356,7 @@ pub fn setup_cave_pagetable_at(
     write_pte(l1, 4, l2_xxxhi as u64 | TABLE_DESC);
 
     // L2_low: map THIS cave's user-space binary (400 MB window starting
-    // at `virt_base`).  With `virt_base = 0x10000000` the user blocks
+    // at `virt_base`). With `virt_base = 0x10000000` the user blocks
     // live at L2 indices 128..327 — above MMIO (indices 64/72/80/81/82),
     // so real content_shell (280 MB today, may grow) fits with headroom.
     //
@@ -371,16 +371,16 @@ pub fn setup_cave_pagetable_at(
         write_pte(l2_low, block_idx, phys_block as u64 | BLOCK_USER_RW_EXEC);
     }
 
-    // 🎯 STUMP #3 ROOT CAUSE FIX (PartitionAlloc CorruptionDetected):
+    // ROOT CAUSE FIX (PartitionAlloc CorruptionDetected):
     //
     // The cave's user-VA window above maps phys_base..phys_base+400 MB
     // into virt_base..virt_base+400 MB via L2 BLOCK descriptors. But the
     // loader only RESERVES (in the frame bitmap) the actual loaded ELF +
     // stacks portion (~188 MB for content_shell). The remaining ~212 MB
     // of physical frames were:
-    //   1. Mapped into the cave's user VA window (writable from EL0 +
-    //      kernel via the L2 BLOCK PTEs we just wrote).
-    //   2. Marked FREE in the frame bitmap.
+    // 1. Mapped into the cave's user VA window (writable from EL0 +
+    // kernel via the L2 BLOCK PTEs we just wrote).
+    // 2. Marked FREE in the frame bitmap.
     //
     // Any later alloc_frame() (sys_brk worker, demand_page::try_handle,
     // sys_mmap anon contig, anything else) would scan the bitmap from
@@ -402,7 +402,7 @@ pub fn setup_cave_pagetable_at(
 
     // MMIO identity mappings — EL1 can read/write MMIO during syscall
     // handling while the cave's TTBR0 is active; EL0 gets a fault (AP
-    // forbids EL0 on BLOCK_DEVICE).  Required so the exception handler
+    // forbids EL0 on BLOCK_DEVICE). Required so the exception handler
     // can still reach UART / virtio while a cave is mounted.
     //
     // If the cave's user window and MMIO addresses overlap (legacy
@@ -446,7 +446,7 @@ pub fn setup_cave_pagetable_at(
         write_pte(l2_xxxhi, block, addr | kblk(addr));
     }
 
-    // 🎯 STUMP #7: clean every PT page we just wrote to PoC so that
+    // clean every PT page we just wrote to PoC so that
     // when the walker activates (after switch_to_cave) it sees the
     // entries instead of stale zeros. Without this, accesses through
     // any of the new tables fault L2-translation despite the entries
@@ -479,40 +479,40 @@ pub fn setup_cave_pagetable_at(
     Ok(l1)
 }
 
-/// STUMP #145: build a per-cave L1 for a NATIVE BatCave (kernel-only,
+/// build a per-cave L1 for a NATIVE BatCave (kernel-only,
 /// no user window, no EL0 code).
-///
+// /
 /// `setup_cave_pagetable_at` above is built for the Linux ELF runner —
 /// it maps a 400 MB EL0-RW user window in L2_low for the loaded ELF.
 /// Native caves don't load ELFs; they're tagged kernel-side workloads.
 /// We still want each native cave to have its own L1 so:
-///
-///   1. The audit's "memory isolation is fiction for native caves"
-///      verdict closes — every native cave gets a distinct TTBR0.
-///   2. TLB entries don't bleed between caves (every cave-switch
-///      flushes via `tlbi vmalle1`).
-///   3. When future work loads cave-specific code/data into native
-///      caves, the L1 is already plumbed.
-///
+// /
+/// 1. The audit's "memory isolation is fiction for native caves"
+/// verdict closes — every native cave gets a distinct TTBR0.
+/// 2. TLB entries don't bleed between caves (every cave-switch
+/// flushes via `tlbi vmalle1`).
+/// 3. When future work loads cave-specific code/data into native
+/// caves, the L1 is already plumbed.
+// /
 /// Layout (kernel-only):
-///
-///   L1[0] → L2_low  (MMIO entries only, no user blocks)
-///   L1[1] → L2_high (kernel identity 0x40000000..0x80000000)
-///   L1[2] → L2_xhi  (kernel identity 0x80000000..0xC0000000)
-///   L1[3] → L2_xxhi (kernel identity 0xC0000000..0x100000000)
-///   L1[4] → L2_xxxhi(kernel identity 0x100000000..0x140000000)
-///
+// /
+/// L1[0] → L2_low (MMIO entries only, no user blocks)
+/// L1[1] → L2_high (kernel identity 0x40000000..0x80000000)
+/// L1[2] → L2_xhi (kernel identity 0x80000000..0xC0000000)
+/// L1[3] → L2_xxhi (kernel identity 0xC0000000..0x100000000)
+/// L1[4] → L2_xxxhi(kernel identity 0x100000000..0x140000000)
+// /
 /// MMIO must live in L2_low because UART (0x08000000) + virtio
 /// (0x0A000000..) are below 1 GB. Without this, a kernel UART write
 /// while a cave is active translation-faults. Existing
 /// setup_cave_pagetable_at handles MMIO the same way.
-///
+// /
 /// The user window (0..0x40000000 except MMIO) stays unmapped, so
 /// any EL0 access from this cave faults. That's the desired posture
 /// for a native cave: there's no EL0 code today, but if anything
 /// tries to drop to EL0 by mistake, the MMU stops it.
-///
-/// **CRITICAL INVARIANT** (STUMP #145 step 6 audit): every cave L1
+// /
+/// **CRITICAL INVARIANT** ( step 6 audit): every cave L1
 /// MUST map the full kernel-reachable address range
 /// `[0x40000000, 0x140000000)`. The kernel itself runs through TTBR0
 /// (no TTBR1 split), so when a cave is active the kernel's `.text`,
@@ -585,7 +585,7 @@ pub fn setup_native_cave_l1(cave_slot: usize) -> Result<usize, &'static str> {
         write_pte(l2_xxxhi, block, addr | kblk(addr));
     }
 
-    // STUMP #7 cache-flush — ensure the MMU walker sees what we wrote.
+    // cache-flush — ensure the MMU walker sees what we wrote.
     unsafe {
         for pt in [l1, l2_low, l2_high, l2_xhi, l2_xxhi, l2_xxxhi] {
             let base = pt as u64;
@@ -609,7 +609,7 @@ pub fn setup_native_cave_l1(cave_slot: usize) -> Result<usize, &'static str> {
     Ok(l1)
 }
 
-/// STUMP #145: try to find a free CAVE_L1 slot for a native cave.
+/// try to find a free CAVE_L1 slot for a native cave.
 /// Returns None if all MAX_CAVE_PAGETABLES are in use. Pairs with
 /// `setup_native_cave_l1` — caller allocates the slot, then calls
 /// the setup helper with the slot number.
@@ -640,7 +640,7 @@ pub fn host_cave_l1() -> usize {
 /// per-cave structures (FD table, signal handlers, …) so they can
 /// look up the right per-process state without every caller
 /// having to plumb cave_id through.
-///
+// /
 /// Returns 0 (the host cave) if no cave matches — that's the
 /// pre-fork single-cave path and the safe default for any thread
 /// that started before the fork machinery exists.
@@ -708,21 +708,21 @@ pub fn cave_phys_base_for_l1(l1_phys: u64) -> Option<usize> {
 }
 
 /// Real-fork (eager-copy) page table duplication.
-///
+// /
 /// Allocates a fresh L1 + L2 set for the child cave and copies the
 /// parent's user-window mappings into it page-by-page. Kernel
 /// mappings (L2_high, L2_xhi) and MMIO entries are shared verbatim
-/// — they're identical for every cave anyway. User pages get fresh
+/// they're identical for every cave anyway. User pages get fresh
 /// physical frames + memcpy of the parent's data so post-fork
 /// writes from one process don't bleed into the other.
-///
+// /
 /// This is the one-shot "real fork" primitive that gives us proper
 /// process semantics (separate address spaces). It costs ~1 frame
 /// allocation + page copy per touched user page, and a 2 MB
 /// contiguous alloc + memcpy per pre-mapped block. Slow at fork
 /// time (~50-200 ms for a 100 MB Chromium cave) but correct, and
 /// happens at most a handful of times per browser launch.
-///
+// /
 /// Caller must register the returned L1 + per-cave bookkeeping
 /// via `record_forked_cave` (below) so `switch_to_cave(child_l1)`
 /// finds the right user-window bounds when the child is scheduled.
@@ -739,7 +739,7 @@ pub fn fork_cave_pagetable(
     let child_l2_low  = frame::alloc_kernel_frame().ok_or("fork: oom L2_low")?;
     let child_l2_high = frame::alloc_kernel_frame().ok_or("fork: oom L2_high")?;
     let child_l2_xhi  = frame::alloc_kernel_frame().ok_or("fork: oom L2_xhi")?;
-    // 🎯 STUMP #7: kernel identity-map extended into L1[3]+L1[4].
+    // kernel identity-map extended into L1[3]+L1[4].
     let child_l2_xxhi  = frame::alloc_kernel_frame().ok_or("fork: oom L2_xxhi")?;
     let child_l2_xxxhi = frame::alloc_kernel_frame().ok_or("fork: oom L2_xxxhi")?;
     for t in [child_l1, child_l2_low, child_l2_high, child_l2_xhi, child_l2_xxhi, child_l2_xxxhi] {
@@ -759,8 +759,8 @@ pub fn fork_cave_pagetable(
     write_pte(child_l1, 4, child_l2_xxxhi as u64 | TABLE_DESC);
 
     // 3. L2_high + L2_xhi + L2_xxhi + L2_xxxhi: copy verbatim
-    //    (kernel identity mappings, same for every cave; never
-    //    written to from EL0).
+    // (kernel identity mappings, same for every cave; never
+    // written to from EL0).
     let parent_l2_high  = unsafe {
         core::ptr::read_volatile((parent_l1 + 8)  as *const u64)
     } & 0x0000_FFFF_FFFF_F000;
@@ -799,14 +799,14 @@ pub fn fork_cave_pagetable(
     }
 
     // 4. L1[5..512]: V8 cage and other high-VA user mappings live
-    //    here (e.g. L1 idx 0x60 for VA 0x18_0000_0000). Demand
-    //    paging populates them lazily as the parent touches new
-    //    addresses. Walk each L1 entry; if it points to a user
-    //    L2, deep-copy that L2's L3 pages (cage allocations are
-    //    page-granular L3 entries, never 2 MB blocks).
+    // here (e.g. L1 idx 0x60 for VA 0x18_0000_0000). Demand
+    // paging populates them lazily as the parent touches new
+    // addresses. Walk each L1 entry; if it points to a user
+    // L2, deep-copy that L2's L3 pages (cage allocations are
+    // page-granular L3 entries, never 2 MB blocks).
     //
-    //    🎯 STUMP #7: changed lower bound from 3 to 5 because L1[3]+L1[4]
-    //    are now kernel identity mappings (handled verbatim above).
+    // changed lower bound from 3 to 5 because L1[3]+L1[4]
+    // are now kernel identity mappings (handled verbatim above).
     for l1_idx in 5..512usize {
         let parent_l1_pte = unsafe {
             core::ptr::read_volatile(
@@ -1078,10 +1078,10 @@ pub fn switch_to_primary() {
 
 /// Set up page tables and enable MMU.
 /// Maps:
-///   0x00000000 - 0x001FFFFF → phys_base (busybox code, 2MB block)
-///   0x08000000 - 0x0BFFFFFF → identity (MMIO: UART, virtio)
-///   0x40000000 - 0x4FFFFFFF → identity (kernel RAM, 256MB)
-///
+/// 0x00000000 - 0x001FFFFF → phys_base (busybox code, 2MB block)
+/// 0x08000000 - 0x0BFFFFFF → identity (MMIO: UART, virtio)
+/// 0x40000000 - 0x4FFFFFFF → identity (kernel RAM, 256MB)
+// /
 /// **Idempotent** (V2-NEW-026 fix): if the MMU is already enabled (SCTLR.M==1),
 /// this function is a no-op. The previous behavior re-allocated all tables and
 /// reset `TTBR0_EL1 = PRIMARY_L1` unconditionally; when called from the cave
@@ -1113,13 +1113,13 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     // initrd spans ~280 MB starting around 0x48000000 — both past the old
     // 256 MB (0x40000000..0x50000000) identity window. We now map the full
     // 2 GB frame pool with two more L2 tables:
-    //   L1[1] → L2_high  covers 0x40000000..0x7FFFFFFF (1 GB)
-    //   L1[2] → L2_xhi   covers 0x80000000..0xBFFFFFFF (1 GB)
+    // L1[1] → L2_high covers 0x40000000..0x7FFFFFFF (1 GB)
+    // L1[2] → L2_xhi covers 0x80000000..0xBFFFFFFF (1 GB)
     // Without L2_xhi every write to a kernel frame above 0x80000000 —
     // including ELF loader copies to the rebased cave's phys_base+ELF
     // image — faults DATA ABORT DFSC=0x06.
     let l2_xhi = frame::alloc_kernel_frame().ok_or("oom for primary L2 xhi")?;
-    // 🎯 STUMP #7: extend identity map to cover the full 4 GiB physical
+    // extend identity map to cover the full 4 GiB physical
     // RAM (paired with QEMU_MEMORY_END = 0x140000000). Without these,
     // alloc_frame would hand out frames in [0xC0000000, 0x140000000)
     // but kernel writes there would DATA ABORT.
@@ -1143,7 +1143,7 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     write_pte(l1, 0, l2_low as u64 | TABLE_DESC);
     // L1[1] → L2_high (covers 0x40000000 - 0x7FFFFFFF)
     write_pte(l1, 1, l2_high as u64 | TABLE_DESC);
-    // L1[2] → L2_xhi  (covers 0x80000000 - 0xBFFFFFFF)
+    // L1[2] → L2_xhi (covers 0x80000000 - 0xBFFFFFFF)
     write_pte(l1, 2, l2_xhi as u64 | TABLE_DESC);
     // L1[3] → L2_xxhi (covers 0xC0000000 - 0xFFFFFFFF)
     write_pte(l1, 3, l2_xxhi as u64 | TABLE_DESC);
@@ -1181,14 +1181,14 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     // (0x40000000 - 0xBFFFFFFF) with the same W^X split at __text_end.
     //
     // INITRD-FIX notes (both folded in here):
-    //  1. Rust scatters executable code past __text_end into the rodata
-    //     PT_LOAD, so the post-text blocks must stay EL1-exec. Transitional
-    //     widen to EL1-RW + EL1-exec + UXN (loses EL1 W^X). TODO V9: revert
-    //     once `.text.cold.*` lands inside the text segment reliably.
-    //  2. Real content_shell initrd lives at 0x48000000..~0x60000000 and
-    //     kernel-pool frames sit near 0xBFFFX000 — both past the old 256 MB
-    //     window. Extending to 2 GB via L2_xhi (L1[2]) keeps every kernel
-    //     write reachable through TTBR0 after MMU-enable.
+    // 1. Rust scatters executable code past __text_end into the rodata
+    // PT_LOAD, so the post-text blocks must stay EL1-exec. Transitional
+    // widen to EL1-RW + EL1-exec + UXN (loses EL1 W^X). TODO V9: revert
+    // once `.text.cold.*` lands inside the text segment reliably.
+    // 2. Real content_shell initrd lives at 0x48000000..~0x60000000 and
+    // kernel-pool frames sit near 0xBFFFX000 — both past the old 256 MB
+    // window. Extending to 2 GB via L2_xhi (L1[2]) keeps every kernel
+    // write reachable through TTBR0 after MMU-enable.
     let text_end = text_end_addr();
     let kernel_blk_flags = |addr: u64| -> u64 {
         if addr + 0x200000 <= text_end {
@@ -1208,7 +1208,7 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
         let addr = 0x80000000u64 + (block as u64) * 0x200000;
         write_pte(l2_xhi, block, addr | kernel_blk_flags(addr));
     }
-    // 🎯 STUMP #7: identity-map [0xC0000000, 0x140000000). No kernel
+    // identity-map [0xC0000000, 0x140000000). No kernel
     // text lives here, so always EL1-RW + UXN + PXN-implicit (the
     // kernel_blk_flags closure will return non-text flags for these
     // addresses since they're past text_end_addr()).
@@ -1247,7 +1247,7 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
         // string-copy-ish code deep in content_shell startup. With
         // TBI0 enabled the CPU strips the top byte for translation,
         // matching Linux's default ARM64 config.
-        // 🎯 STUMP #7: TCR.IPS = 0b010 (40-bit IPA, 1 TB) so PAs above
+        // TCR.IPS = 0b010 (40-bit IPA, 1 TB) so PAs above
         // 4 GiB (= 0x100000000) translate. Default IPS=0 = 32-bit max
         // = 4 GiB, and any walker output >= 0x100000000 is silently
         // invalidated → DFSC=0x02 (L2 translation fault) on the first
@@ -1275,7 +1275,7 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
         uart::puts("[mmu] TLB flushed, enabling MMU...\n");
 
         // Enable MMU via SCTLR_EL1.
-        // 🎯 STUMP #59: caches must be ON. With C=0, atomic exclusive
+        // caches must be ON. With C=0, atomic exclusive
         // accesses (LDXR/STXR/CAS) targeting cacheable memory have
         // UNPREDICTABLE behavior per ARM ARM C5.2.4 — observed under
         // HVF/M4 as fetch_add/cmpxchg returning the old value but
@@ -1289,7 +1289,7 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
         sctlr |= 1 << 2;     // C bit  = enable D-cache (REQUIRED for atomics on M4/HVF)
         sctlr |= 1 << 12;    // I bit  = enable I-cache
 
-        // 🎯 STUMP #7: clean every page-table page we just wrote to PoC.
+        // clean every page-table page we just wrote to PoC.
         // The walker reads PT entries with TCR attributes (inner-
         // shareable, write-back); our pre-MMU writes need to be
         // visible after turn-on. Without this, the walker hits stale
