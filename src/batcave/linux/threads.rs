@@ -1560,6 +1560,87 @@ pub fn wake_thread(tid: u32) -> bool {
     })
 }
 
+// ─── Time helpers (cntpct_el0 / cntfrq_el0) ──────────────────────────────
+//
+// Bat_OS uses ARMv8 generic timer ticks as the canonical deadline unit.
+// All deadlines stored in BlockReason are absolute cntpct_el0 values.
+// See DESIGN_SCHEDULER_BLOCK_ON.md decision #2.
+
+/// Read the ARM generic timer's current physical count (EL0).
+/// Returns absolute ticks since boot (or wherever the firmware reset it).
+#[inline]
+pub fn cntpct_el0() -> u64 {
+    let v: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v); }
+    v
+}
+
+/// Read the ARM generic timer's frequency in Hz. Constant per boot.
+#[inline]
+fn cntfrq_el0() -> u64 {
+    let v: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) v); }
+    v
+}
+
+/// Convert milliseconds to cntpct_el0 ticks using cntfrq_el0.
+/// Multiply-then-divide preserves sub-1000Hz precision.
+/// Saturating mul prevents overflow panic on absurd inputs.
+#[inline]
+pub fn ms_to_ticks(ms: u32) -> u64 {
+    let freq = cntfrq_el0();
+    (ms as u64).saturating_mul(freq) / 1000
+}
+
+/// Returns `true` iff the current thread's slot in the table exists AND
+/// its state is ThreadState::Blocked(_). Reads under the table lock.
+/// Returns `false` (non-blocking) if the current slot is missing — the
+/// caller (park_current) treats that as "not blocked" and falls through
+/// gracefully rather than spinning forever.
+pub fn current_thread_blocked() -> bool {
+    let me = current_tid();
+    with_table(|t| {
+        let Some(idx) = slot_of(t, me) else { return false; };
+        matches!(t[idx].state, ThreadState::Blocked(_))
+    })
+}
+
+/// Park the current thread on `reason`. Does NOT return while the
+/// calling thread's state is ThreadState::Blocked(_). Loops between
+/// `schedule()` (which switches away if anyone is Runnable) and `wfi`
+/// (which idles until any interrupt fires; the timer IRQ runs
+/// wake_expired_deadlines, which may flip our state Blocked→Runnable).
+///
+/// Lock + IRQ ordering invariants (see DESIGN_SCHEDULER_BLOCK_ON.md
+/// decision #8):
+///
+///   - The threads-table lock is NEVER held across `wfi`.
+///     mark_current_blocked takes the lock briefly, releases it.
+///     schedule() takes its own lock internally. The wfi runs lock-free.
+///   - Interrupts are NEVER masked across `wfi`. mark_current_blocked
+///     may briefly take an IrqGuard for atomicity but releases it before
+///     schedule(). The wfi must execute with interrupts enabled or the
+///     timer IRQ can't fire and deadline-bearing sleepers never wake.
+pub fn park_current(reason: BlockReason) {
+    mark_current_blocked(reason);
+    loop {
+        // schedule() switches to another Runnable thread if any. When
+        // control returns here, either:
+        //   * Another thread ran, was eventually rescheduled away, and
+        //     a waker (event-driven via wake_thread / wake_epoll_waiters,
+        //     or deadline-driven via wake_expired_deadlines) flipped our
+        //     state Blocked→Runnable. We resume; check below exits loop.
+        //   * No other Runnable thread existed. schedule() returned
+        //     immediately. Our state is still Blocked. Drop to wfi and
+        //     wait for any interrupt; on resume re-check state.
+        schedule();
+        if !current_thread_blocked() { break; }
+        // Still blocked, no one else to run. Idle until the next IRQ.
+        // Interrupts must be enabled here (see invariant above).
+        unsafe { core::arch::asm!("wfi"); }
+    }
+}
+
 /// Wake up to `n` threads blocked in FutexWait on `uaddr`. Returns count woken.
 pub fn futex_wake_on(uaddr: u64, n: u32) -> u32 {
     let mut woken = 0u32;
