@@ -623,6 +623,32 @@ pub(crate) fn cmd_scheduler_selftest() {
         test_release_slot(s1);
         test_release_slot(s2);
     }
+
+    // Sub-test 4: futex deadline fires — install a Blocked slot with
+    // already-past FutexWait deadline, run the wake pass, observe Runnable.
+    {
+        let now = cntpct_el0();
+        let past = now.saturating_sub(1);
+        let slot = match test_install_blocked(
+            BlockReason::FutexWait { uaddr: 0, val: 0, deadline_ticks: past }
+        ) {
+            Some(s) => s,
+            None => {
+                console::puts("  [scheduler-selftest] FAIL: futex-deadline-fires (table full)\n");
+                return;
+            }
+        };
+        wake_expired_deadlines();
+        match test_inspect_state(slot) {
+            Some(ThreadState::Runnable) => {
+                console::puts("  [scheduler-selftest] PASS: futex-deadline-fires\n");
+            }
+            _ => {
+                console::puts("  [scheduler-selftest] FAIL: futex-deadline-fires (wrong state)\n");
+            }
+        }
+        test_release_slot(slot);
+    }
 }
 
 /// X.509 chain validator selftest. Exercises the new `as_static_str`
