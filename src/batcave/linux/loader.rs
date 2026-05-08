@@ -1929,11 +1929,11 @@ pub fn load_elf(data: &[u8]) -> Result<u64, &'static str> {
     let total_size = (max_addr - min_addr) as usize;
     let total_pages = (total_size + PAGE_SIZE - 1) / PAGE_SIZE;
 
-    // Allocate 2MB-aligned for MMU block mapping.
-    // TODO: spin-for-alignment leaks frames (up to 511 per load after pool
-    // fragmentation). Replace with a real `frame::alloc_aligned(pages, 2MB)`
-    // helper once frame.rs grows one. For now, verify each subsequent alloc
-    // is contiguous so we crash loudly instead of corrupting random memory.
+    // Allocate 2MB-aligned for MMU block mapping. Spin-for-alignment
+    // leaks frames (up to 511 per load after pool fragmentation) —
+    // a real `frame::alloc_aligned(pages, 2MB)` helper is the proper
+    // fix; until then we verify each subsequent alloc is contiguous
+    // so we crash loudly rather than corrupt random memory.
     let mut phys_base = frame::alloc_frame().ok_or("oom")?;
     while phys_base & 0x1FFFFF != 0 {
         phys_base = frame::alloc_frame().ok_or("oom")?;

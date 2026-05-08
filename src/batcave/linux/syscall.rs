@@ -655,8 +655,9 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         // purely decorative). Now we use `active_has_any_fs_cap` so
         // caves with path-scoped caps make it past this broad gate;
         // the per-syscall path check inside `sys_openat` (and other
-        // path-taking syscalls — see TODO at sys_openat for
-        // remaining sites) then enforces the actual path scope.
+        // path-taking syscalls — sys_openat carries the canonical
+        // check; other path-taking syscalls have not yet been
+        // updated to consult it) then enforces the actual path scope.
         SyscallCat::FileIO  => cave::active_has_any_fs_cap(),
         SyscallCat::Network => cave_has_cap(cave_id, "net"),
         SyscallCat::RawNet  => cave_has_cap(cave_id, "raw"),
