@@ -295,8 +295,8 @@ impl SavedRegs {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BlockReason {
     FutexWait { uaddr: u64, val: u32 },
-    EpollWait { epfd: i32, timeout_ms: i32 },
-    Nanosleep { deadline_ns: u64 },
+    EpollWait { epfd: i32, deadline_ticks: u64 },  // 0 = infinite (epoll-only sentinel)
+    Nanosleep { deadline_ticks: u64 },             // always concrete; 0 = invalid
     Join { target_tid: u32 },
     IoWait,
 }
@@ -1288,9 +1288,9 @@ pub fn schedule() {
                     if let Some((wtid, reason)) = woken {
                         let (a1, a2) = match reason {
                             BlockReason::FutexWait { uaddr, val } => (uaddr, val as u64),
-                            BlockReason::EpollWait { epfd, timeout_ms } =>
-                                (epfd as u64, timeout_ms as u64),
-                            BlockReason::Nanosleep { deadline_ns } => (deadline_ns, 0),
+                            BlockReason::EpollWait { epfd, deadline_ticks } =>
+                                (deadline_ticks, epfd as i64 as u64),
+                            BlockReason::Nanosleep { deadline_ticks } => (deadline_ticks, 0),
                             BlockReason::Join { target_tid } => (target_tid as u64, 0),
                             BlockReason::IoWait => (0, 0),
                         };
@@ -1639,6 +1639,53 @@ pub fn park_current(reason: BlockReason) {
         // Interrupts must be enabled here (see invariant above).
         unsafe { core::arch::asm!("wfi"); }
     }
+}
+
+/// Walk the threads table for Blocked threads whose BlockReason carries
+/// an expired deadline_ticks; transition each to Runnable. Bounded
+/// O(MAX_THREADS=256) per call.
+///
+/// Called from kernel::scheduler::tick() once per timer IRQ. The pass
+/// is the only waker for sys_nanosleep and the deadline-driven half of
+/// epoll_pwait. (Event-driven epoll wakes go through wake_epoll_waiters.)
+///
+/// Futex's per-WaitSlot deadline lives in futex.rs, not BlockReason, so
+/// this pass does not see it. Futex's existing post-resume re-check loop
+/// handles its own timeouts (see DESIGN_SCHEDULER_BLOCK_ON.md decision #5).
+pub fn wake_expired_deadlines() {
+    let now = cntpct_el0();
+    with_table(|t| {
+        for slot in t.iter_mut() {
+            let should_wake = match slot.state {
+                ThreadState::Blocked(BlockReason::EpollWait { deadline_ticks, .. })
+                    if deadline_ticks != 0 && now >= deadline_ticks => true,
+                ThreadState::Blocked(BlockReason::Nanosleep { deadline_ticks })
+                    if now >= deadline_ticks => true,
+                _ => false,
+            };
+            if should_wake {
+                slot.state = ThreadState::Runnable;
+            }
+        }
+    });
+}
+
+/// Walk the threads table for any thread Blocked on EpollWait with the
+/// matching epfd; transition each to Runnable. Bounded O(MAX_THREADS).
+///
+/// Called by epoll::mark_ready(epfd, ev) after flipping the ready bit,
+/// so a parked epoll_pwait waiter wakes promptly on a real FD event
+/// rather than waiting for the next deadline tick.
+pub fn wake_epoll_waiters(epfd: i32) {
+    with_table(|t| {
+        for slot in t.iter_mut() {
+            if let ThreadState::Blocked(BlockReason::EpollWait { epfd: e, .. }) = slot.state {
+                if e == epfd {
+                    slot.state = ThreadState::Runnable;
+                }
+            }
+        }
+    });
 }
 
 /// Wake up to `n` threads blocked in FutexWait on `uaddr`. Returns count woken.
