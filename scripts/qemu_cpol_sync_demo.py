@@ -16,7 +16,11 @@ Flow:
 
 Exit 0 iff every step's expected substring appears in its output.
 """
-import pexpect, re, signal, subprocess, sys, time
+import pexpect
+import re
+import subprocess
+import sys
+import time
 from pathlib import Path
 from datetime import datetime
 

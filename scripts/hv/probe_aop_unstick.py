@@ -17,7 +17,11 @@ and watch for INBOX drain:
   - AOP+0x810/+0x814 (near 0x818)
   - AOP+0x1008/+0x100c/+0x1010 (doorbell neighborhood besides 0x1004/0x1014)
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

@@ -13,7 +13,11 @@ stack → daemon → Docker → container stdout → daemon → Bat_OS → user.
 Phases 3 (encrypted rootfs), 4 (net pipeline), 5 (deadman), 7 (seal)
 are scaffolded but not yet implemented.
 """
-import pexpect, re, time, subprocess, threading, atexit
+import pexpect
+import re
+import time
+import subprocess
+import atexit
 from pathlib import Path
 from datetime import datetime
 

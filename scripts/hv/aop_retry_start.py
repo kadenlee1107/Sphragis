@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """AOP is now at CS=0x4c (ready) from +0x818 probing. Retry aop.start()."""
-import os, pathlib, sys, time
+import os
+import pathlib
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

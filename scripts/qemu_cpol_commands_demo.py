@@ -15,7 +15,10 @@ Boots Bat_OS, authenticates, then runs:
 Each step's raw output is echoed. Exit code 0 iff every expected
 ALLOW/DROP matches, nonzero otherwise.
 """
-import pexpect, re, sys, time
+import pexpect
+import re
+import sys
+import time
 from pathlib import Path
 from datetime import datetime
 

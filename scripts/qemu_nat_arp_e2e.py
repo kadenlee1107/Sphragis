@@ -22,7 +22,14 @@ PASS iff reply #1 has correct shape and no reply #2 observed
 within a 1s window, and nat-stats shows arp-replies=1 +
 arp-ignored=1.
 """
-import pexpect, re, socket, struct, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 

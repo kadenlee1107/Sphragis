@@ -9,7 +9,7 @@ Strategy:
      we'll build a map. If the FIRST SError wedges the proxy, we
      stop right there and move to Plan B.
 """
-import sys, pathlib, time
+import sys
 sys.path.insert(0, "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient")
 from m1n1.setup import *
 

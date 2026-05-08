@@ -41,7 +41,6 @@ session gets the signal and terminates cleanly.
 """
 import os
 import pathlib
-import signal
 import subprocess
 import sys
 import time
@@ -139,7 +138,7 @@ def _chainload() -> bool:
     ok = "Proxy is alive again" in r.stdout
     if not ok:
         tail = r.stdout.splitlines()[-6:]
-        _log(f"chainload: FAILED, tail=")
+        _log("chainload: FAILED, tail=")
         for ln in tail:
             _log(f"  {ln}")
     return ok

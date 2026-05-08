@@ -8,7 +8,10 @@ and observe.
 Run order: this is EXPERIMENT 1. Run boot_aop.py baseline separately
 (it fails) — this minimal tests if OUR staging is the cause.
 """
-import os, pathlib, sys, time
+import os
+import pathlib
+import sys
+import time
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 

@@ -223,8 +223,8 @@ def main():
             print(f"  __TEXT[+{probe_off:#x}] iBoot={actual.hex()} "
                   f"macho={expected.hex()} [{status}]")
             if actual != expected and not args.force_text:
-                print(f"  ABORT: iBoot didn't stage the expected __TEXT. "
-                      f"Re-run with --force-text to try overwriting anyway.")
+                print("  ABORT: iBoot didn't stage the expected __TEXT. "
+                      "Re-run with --force-text to try overwriting anyway.")
                 return 1
 
     print("\nStaging...")

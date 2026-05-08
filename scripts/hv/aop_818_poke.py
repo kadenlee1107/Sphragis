@@ -8,7 +8,10 @@ Evidence so far:
 
 So FW actively state-machines through low bits. Document the transitions.
 """
-import os, pathlib, sys, time
+import os
+import pathlib
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
@@ -32,7 +35,11 @@ def snap(tag):
     ib = p.read32(AOP + 0x8110)
     ob = p.read32(AOP + 0x8114)
     b14 = p.read32(AOP + 0xb14)
-    print(f"[{tag}] CC={cc:#x} CS={cs:#x} +0x40={u40:#x} +0x818={r818:#x} IB={ib:#x} OB={ob:#x} b14={b14:#x}", flush=True)
+    print(
+        f"[{tag}] CC={cc:#x} CS={cs:#x} +0x40={u40:#x} +0x818={r818:#x} "
+        f"IB={ib:#x} OB={ob:#x} b14={b14:#x}",
+        flush=True,
+    )
 
 
 snap("initial")

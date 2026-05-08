@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Probe DART-AOP state after our boot_aop.py to see if our
 dart.initialize() wiped iBoot's mappings."""
-import os, pathlib, sys
+import os
+import pathlib
+import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 os.environ.setdefault("M1N1DEVICE", "/dev/ttyACM1")

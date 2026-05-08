@@ -7,7 +7,9 @@ twice with a known wall-clock delay so we can see:
 
 Run against stock m1n1 only.
 """
-import sys, pathlib, time
+import sys
+import pathlib
+import time
 M1N1 = pathlib.Path(__file__).resolve().parents[2] / "external/m1n1/proxyclient"
 sys.path.insert(0, str(M1N1))
 from m1n1.setup import *

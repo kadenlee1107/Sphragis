@@ -16,7 +16,10 @@ words). We scale 10-bit channels down to 8-bit for the PNG.
 Usage:
   sg dialout -c "/usr/bin/python3 scripts/hv/m4_screenshot.py"
 """
-import sys, pathlib, time, subprocess
+import sys
+import pathlib
+import time
+import subprocess
 
 M1N1_ROOT = pathlib.Path(__file__).resolve().parents[2] / "external/m1n1"
 sys.path.insert(0, str(M1N1_ROOT / "proxyclient"))

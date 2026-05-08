@@ -21,7 +21,14 @@ PASS iff:
   - Total payload bytes across all fragments == original 1880 B
   - frag-refragd counter ≥ 1
 """
-import pexpect, re, socket, struct, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -137,8 +144,6 @@ def main():
 
         kali_mac=[0x02,0xAA,0,0,0,0x10]
         nic1_mac=[0x52,0x54,0,0x12,0x34,0x57]
-        nic0_mac=[0x52,0x54,0,0x12,0x34,0x56]
-        gw_mac  =[0x52,0x55,0x0A,0x00,0x02,0x02]
         cave_ip=ip_int("192.168.77.10"); dst_ip=ip_int("93.184.216.34")
 
         # Build a 1900-byte L4 (TCP header + 1880 B data). After
@@ -200,7 +205,10 @@ def main():
                 mf_offsets.append((mf,offset,payload))
                 srcs.add(int.from_bytes(f[14+12:14+16],"big"))
                 total_payload += payload
-            details.append(f"  ids={ids}  shapes={mf_offsets}  srcs={[hex(s) for s in srcs]}  total_payload={total_payload}")
+            details.append(
+                f"  ids={ids}  shapes={mf_offsets}  "
+                f"srcs={[hex(s) for s in srcs]}  total_payload={total_payload}"
+            )
             # Same id, last has MF=0, all have nic 0 src.
             ok = (len(ids)==1
                   and any(mf for mf,_,_ in mf_offsets)

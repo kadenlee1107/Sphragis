@@ -81,7 +81,7 @@ def main():
     # dockchannel-mtp (MTP host transport)
     try:
         dc = u.adt["/arm-io/dockchannel-mtp"]
-        print(f"\ndockchannel-mtp:")
+        print("\ndockchannel-mtp:")
         for i in range(6):
             try:
                 r = dc.get_reg(i)

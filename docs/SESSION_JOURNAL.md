@@ -11,6 +11,113 @@ end of a session.
 
 ---
 
+## 2026-05-08 (squeaky-clean Phases 9-11) — Mac — 🪒 whole-repo OCD pass: docs, scripts, tests
+
+**Three more cleanup phases beyond the Rust-source pass.** User
+asked: "wait the entire codebase not just today's work?" Today's
+work was scoped to `src/`. These phases extend the cleanup to the
+docs at the repo root, the Python harness scripts, and the test
+binaries.
+
+### Phase 9: stale doc purge (10 files, ~4 200 lines deleted)
+
+**Root deletes (post-no-browser leftovers):**
+- `BROWSER.md` (238L) — pre-pivot in-tree-browser plan.
+- `CHROMIUM_PORT_PLAN.md` (545L) — pre-pivot Chromium-as-cave plan.
+- `DESIGN_BROWSER.md` (449L) — explicitly marked SUPERSEDED.
+- `DESIGN_CHROMIUM.md` (485L) — explicitly marked SUPERSEDED.
+
+**Root deletes (single-PR session-artifact specs whose rationale
+now lives in commit messages + journal entries):**
+- `DESIGN_FUTEX_DEADLINE_UNIFICATION.md` — PR #5 merged.
+- `DESIGN_TLS_PQ_FIX.md` — PR #6 merged.
+
+**`docs/` deletes (post-merge plans + superseded handoffs):**
+- `HANDOFF_KEYBOARD_INPUT.md` — superseded by `HV_TRACE_HANDOFF.md`.
+- `HANDOFF_PROMPT.md` — meta-template; `M4_CHICKEN_HUNT.md` is
+  the canonical M4 handoff.
+- `PLAN_FUTEX_DEADLINE_UNIFICATION.md` (918L) — PR #5's plan, merged.
+- `PLAN_NO_BROWSER_DELETION.md` (1 053L) — PR #1's plan, merged
+  long ago.
+
+**Dangling references fixed:**
+- `CLAUDE.md` — pointed at `DESIGN_BROWSER.md` / `DESIGN_CHROMIUM.md`;
+  re-pointed to `DESIGN_NO_BROWSER.md` / `DESIGN_TLS_HARDENING.md`
+  / `DESIGN_HTTPS_SYSCALL.md`.
+- `DESIGN_NO_BROWSER.md` — `**Supersedes:**` line referenced now-
+  deleted files; rewrote as a "history" note pointing to git.
+- `Cargo.toml`, `src/main.rs`, `src/batcave/linux/futex.rs` — three
+  inline doc references to deleted spec files; comments shortened.
+
+**Kept at root** (architecture-level, ongoing reference): `DESIGN.md`,
+`DESIGN_BATCAVES.md`, `DESIGN_CRYPTO.md`, `DESIGN_HTTPS_SYSCALL.md`,
+`DESIGN_NO_BROWSER.md`, `DESIGN_PACKET_PIPELINE.md`,
+`DESIGN_SCHEDULER_BLOCK_ON.md`, `DESIGN_TLS_HARDENING.md`.
+
+### Phase 10: scripts/ Python lint (1 732 → 0)
+
+`pyproject.toml` added at repo root with `[tool.ruff]` config:
+- `target-version = "py311"`, `line-length = 120`
+- `select = ["E", "F", "W"]` (ruff default: errors, pyflakes, warnings)
+- `ignore = [E701, E702, E402, F403, F405, E722, E741]` — proxy-script
+  / M4-RE-script idioms (one-line if/while statements, semicolon
+  separators, `from m1n1 import *`, bare except in interactive
+  helpers, single-letter variable names in instruction-decoding
+  scripts). Each ignore is documented inline.
+
+Then:
+- `ruff check --fix` auto-fixed 189 sites (unused imports,
+  multiple-imports-on-one-line, f-strings without placeholders).
+- `ruff check --fix --unsafe-fixes` cleaned 11 more (8 unused
+  variables + 2 `x == True/False` comparisons + 1 misc).
+- 4 line-length sites (>120) fixed by hand by wrapping the
+  long format-string lines.
+
+End: `ruff check` reports `All checks passed!` across 52 Python
+files.
+
+### Phase 11: tests/ + tools/ + security/ survey
+
+- **`tools/`**: 2 shell scripts. Already clean.
+- **`security/`**: 74 `PENTEST_*.md` audit files spanning V1-V9.
+  Intentional permanent audit archive — left as-is.
+- **`tests/`**: cleanup pass:
+  - Deleted 4 `.o` intermediate object files (compile artifacts;
+    the loader uses the linked binaries via `include_bytes!`,
+    not the objects).
+  - Deleted `hello_mini`, `hello_mini.c`, `hello_mini.o`,
+    `hello_shm.c` — orphaned test sources with no caller in
+    `runner.rs` or anywhere else.
+  - Added `tests/*.o` to `.gitignore` so future builds don't
+    re-track them.
+
+### Verification
+
+- `cargo build --release --target aarch64-unknown-none --features gicv3` — 0 warnings
+- `cargo clippy --target aarch64-unknown-none --features gicv3` — 0 warnings
+- `ruff check` — 0 errors across 52 Python files
+- `qemu_selftests_smoke.py` — all 6 sub-tests PASS
+- All dangling doc references fixed; build + smoke confirm no
+  inline reference broke a load-bearing comment.
+
+### End state, ENTIRE repo
+
+| Surface | State |
+|---|---|
+| `src/**/*.rs` (145 files) | 0 warnings, 0 clippy, 0 STUMPs, 0 TODOs, 0 unjustified unwraps |
+| `scripts/**/*.py` (52 files) | 0 ruff errors |
+| Top-level `.md` docs | 12 architecture/onboarding/quickstart docs; no orphans |
+| `docs/*.md` | 7 active references; no stale handoffs/plans |
+| `security/*.md` | 74 PENTEST audit files (intentional archive) |
+| `tools/` | 2 shell scripts; clean |
+| `tests/` | 11 test-binary sources + linked ELFs; no orphan .o files |
+| `git status` | empty |
+
+This is the state after PR #16. The codebase is OCD-clean
+end-to-end, not just in `src/`.
+
+---
+
 ## 2026-05-08 (squeaky-clean Phase 8) — Mac — 🧊 0 clippy warnings, OCD-clean
 
 **Eighth and final phase of the squeaky-clean pass.** The codebase

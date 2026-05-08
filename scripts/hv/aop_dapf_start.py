@@ -4,7 +4,10 @@
 2. Send SetIOPPower.
 3. Poll OUTBOX thoroughly.
 """
-import os, pathlib, sys, time
+import os
+import pathlib
+import sys
+import time
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 os.environ.setdefault("M1N1DEVICE", "/dev/ttyACM1")

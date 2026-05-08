@@ -25,7 +25,11 @@ IRQ_EN / CPU_STATUS clarification from v3:
     So FW IS running and FIQ was taken. Reset happens while FW handler
     runs → DART miss was the likely cause.
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

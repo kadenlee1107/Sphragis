@@ -10,7 +10,9 @@ Strategy:
      with likely MMIO-range addresses).
   5. Dump findings — function addresses and disassembly.
 """
-import sys, pathlib, argparse
+import sys
+import pathlib
+import argparse
 try:
     import lief
 except ImportError:

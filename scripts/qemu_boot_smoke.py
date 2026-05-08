@@ -17,7 +17,6 @@ Pass: exit 0. Fail: exit non-zero with the captured serial log path.
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 import time
 from datetime import datetime
@@ -52,7 +51,11 @@ QEMU_ARGS = [
 def main() -> int:
     if not KERNEL.exists():
         print(f"[smoke] kernel not found: {KERNEL}", file=sys.stderr)
-        print("[smoke] run `cargo build --release --target aarch64-unknown-none --features gicv3` first.", file=sys.stderr)
+        print(
+            "[smoke] run `cargo build --release --target aarch64-unknown-none "
+            "--features gicv3` first.",
+            file=sys.stderr,
+        )
         return 2
 
     print(f"[smoke] booting kernel ({KERNEL.stat().st_size:,} bytes)...")

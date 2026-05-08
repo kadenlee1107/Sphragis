@@ -8,7 +8,9 @@ Exercises:
   3. otp-consume <tok> — consume a deadman token, verify stats decrement
   4. otp-consume <dur> — consume a duress token, verify WIPE fires
 """
-import pexpect, re, time
+import pexpect
+import re
+import time
 from pathlib import Path
 from datetime import datetime
 

@@ -26,7 +26,11 @@ reads PAC reg values directly via pacga instruction. But the
 first-boot path doesn't go through such a check (verified by
 disasm).
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
@@ -231,20 +235,6 @@ def main():
     # Originally: `b #0x1000244` then 31 UDFs (dead vector padding).
     # Replace with: clear SCTLR.EnIA/EnIB/EnDA/EnDB + branch to 0x1000244.
     log("\n=== PATCH: disable PAC enforcement before FW boot ===")
-    patch_src = """
-        mrs  x1, sctlr_el1
-        bic  x1, x1, #0x80000000     // clear bit 31 EnIA
-        bic  x1, x1, #0x40000000     // clear bit 30 EnIB
-        bic  x1, x1, #0x08000000     // clear bit 27 EnDA
-        bic  x1, x1, #0x00002000     // clear bit 13 EnDB
-        msr  sctlr_el1, x1
-        isb
-        b    #0x234                  // 0x1000000+0x234 = 0x1000234? NO wait,
-                                     // target is 0x1000244. From position 0x1000020
-                                     // (last insn addr), 0x1000244 - 0x1000020 = 0x224
-                                     // Actually this b is AT 0x100001c (insn #7),
-                                     // branch offset = 0x1000244 - 0x100001c = 0x228
-    """
     # The asm branch offset math is tricky; easier to compute the bytes manually.
     # Each insn is 4 bytes. 8 insns at 0x1000000..0x100001f. The `b` is at 0x100001c.
     # Target = 0x1000244. Offset in bytes = 0x228 = 552. As imm26 = 0x228 >> 2 = 0x8A.

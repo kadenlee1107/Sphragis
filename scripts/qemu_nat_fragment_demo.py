@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """3c-gap-fragments: classifier distinguishes frags from parse errors."""
-import pexpect, re, socket, subprocess, sys, time
+import pexpect
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 from datetime import datetime
 

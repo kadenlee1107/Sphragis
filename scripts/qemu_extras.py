@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Extra QEMU checks: `screen` capture, `clear`, `browse`, interactive quirks."""
-import pexpect, re, time
+import pexpect
+import re
+import time
 from pathlib import Path
 from datetime import datetime
 

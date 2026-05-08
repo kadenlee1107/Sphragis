@@ -2,7 +2,8 @@
 """Read AOP ASC state directly from stock m1n1 proxy — CPU control,
 mailbox control, any pending message — so we can understand why
 rtkit_boot failed."""
-import sys, pathlib
+import sys
+import pathlib
 M1N1 = pathlib.Path(__file__).resolve().parents[2] / "external/m1n1/proxyclient"
 sys.path.insert(0, str(M1N1))
 from m1n1.setup import *
@@ -27,7 +28,7 @@ print(f"I2A_CONTROL @ 0x{MBOX_BASE + ASC_MBOX_I2A_CTRL:x} = 0x{p.read32(MBOX_BAS
 SMC_BASE = u.adt["/arm-io/smc"].get_reg(0)[0]
 SMC_MBOX = SMC_BASE + 0x8000
 print()
-print(f"--- SMC for comparison ---")
+print("--- SMC for comparison ---")
 print(f"SMC ASC base = 0x{SMC_BASE:x}")
 print(f"CPU_CONTROL @ 0x{SMC_BASE + CPU_CTRL:x} = 0x{p.read32(SMC_BASE + CPU_CTRL):08x}")
 print(f"A2I_CONTROL @ 0x{SMC_MBOX + ASC_MBOX_A2I_CTRL:x} = 0x{p.read32(SMC_MBOX + ASC_MBOX_A2I_CTRL):08x}")

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Dump all ADT properties of /arm-io/aop and /arm-io/aop/iop-aop-nub
 for clues about M4's boot protocol."""
-import os, pathlib, sys
+import os
+import pathlib
+import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 os.environ.setdefault("M1N1DEVICE", "/dev/ttyACM1")
@@ -26,7 +28,7 @@ def dump(path):
             continue
         try:
             v = getattr(n, attr)
-        except Exception as e:
+        except Exception:
             continue
         if callable(v): continue
         if isinstance(v, bytes):

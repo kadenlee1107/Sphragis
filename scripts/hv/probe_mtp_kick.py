@@ -1,6 +1,8 @@
 """FW read first INBOX message then stopped. Try: clear +0x0b14 (suspected
 RPTR/status latch), poke different regs, see what triggers FW to consume more."""
-import sys, os, time
+import sys
+import os
+import time
 sys.path.insert(0, "external/m1n1/proxyclient")
 os.environ["M1N1DEVICE"] = "/dev/ttyACM1"
 from m1n1.proxy import M1N1Proxy, UartInterface

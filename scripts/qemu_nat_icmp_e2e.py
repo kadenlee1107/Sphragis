@@ -15,7 +15,14 @@ Full bidirectional proof:
   5. Bat_OS reverse-NATs: identifier back to 0x1234, dst=192.168.77.10.
   6. Python cave sees Echo Reply with original id.
 """
-import pexpect, re, socket, struct, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -159,7 +166,7 @@ def main():
             details.append("no ICMP frame forwarded to nic 0")
         else:
             src_ip_fwd = int.from_bytes(fwd[14+12:14+16], "big")
-            ip_cksum = int.from_bytes(fwd[14+10:14+12], "big")
+            int.from_bytes(fwd[14+10:14+12], "big")
             icmp_start = 34
             typ = fwd[icmp_start]
             ident = int.from_bytes(fwd[icmp_start+4:icmp_start+6], "big")

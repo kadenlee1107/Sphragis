@@ -14,7 +14,11 @@ v8: boot SMC to Hello via the m1n1 SMCClient (known-working from
 boot_mtp_dartmap.py), then try AOP. If SMC-up unsticks AOP's
 handler, Hello will appear.
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
@@ -255,8 +259,8 @@ def main():
 
     log("\npoll OUTBOX 10 s (w/ SMC up)...")
     msgs, crashed = poll(p, 10.0, "AOP")
-    log(f"\n=== SUMMARY ===")
-    log(f"  SMC booted: yes" if 'smc' in dir() else "  SMC boot skipped")
+    log("\n=== SUMMARY ===")
+    log("  SMC booted: yes" if 'smc' in dir() else "  SMC boot skipped")
     log(f"  AOP msgs: {len(msgs)}")
     for m0, m1 in msgs:
         log(f"    m0={m0:#x} m1={m1:#x} TYPE={(m0>>52)&0xff:#x}")

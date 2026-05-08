@@ -41,7 +41,7 @@ def recv_until_eof(buf, sock):
 def main():
     # Pick a fresh port so we don't collide with a pre-running daemon.
     port = 9998 if len(sys.argv) < 2 else int(sys.argv[1])
-    proxy_port = port + 100  # arbitrary; we don't drive proxy here
+    port + 100  # arbitrary; we don't drive proxy here
     print(f"[unit] spawning batcaved on :{port}")
     proc = subprocess.Popen(
         ["python3", str(BATCAVED), "--port", str(port)],

@@ -11,7 +11,8 @@ Usage:
 Must be run against stock (un-chainloaded) m1n1 — patched m1n1
 under HV owns the proxy and this script won't attach.
 """
-import os, sys, pathlib
+import sys
+import pathlib
 M1N1 = pathlib.Path(__file__).resolve().parents[2] / "external/m1n1/proxyclient"
 sys.path.insert(0, str(M1N1))
 from m1n1.setup import *  # brings in p, u, iface, u.adt

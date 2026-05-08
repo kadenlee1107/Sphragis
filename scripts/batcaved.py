@@ -56,13 +56,11 @@ USAGE
   ./scripts/batcaved.py --addr 0.0.0.0    # bind externally (NOT recommended)
 """
 import argparse
-import json
 import re
 import shlex
 import socket
 import socketserver
 import subprocess
-import sys
 import threading
 import time
 import uuid
@@ -227,7 +225,8 @@ def start_egress_proxy():
     Every CONNECT checks FW_ALLOWLIST. Non-HTTPS proxies not supported
     (CONNECT only — GET/POST tunneled requests out of scope here, and
     HTTPS is what most Kali tools default to)."""
-    import socket, select
+    import socket
+    import select
     def handle(conn: socket.socket, addr):
         try:
             conn.settimeout(30)
@@ -278,7 +277,7 @@ def start_egress_proxy():
             try:
                 upstream = socket.create_connection((host, int(port)), timeout=15)
             except Exception as e:
-                conn.sendall(f"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
+                conn.sendall("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
                              .encode())
                 log(f"[fw] upstream fail {target}: {e}")
                 return

@@ -35,9 +35,7 @@ is torn down on exit.
 """
 import subprocess
 import sys
-import time
 import uuid
-import shlex
 from pathlib import Path
 from datetime import datetime
 
@@ -183,12 +181,12 @@ def main():
         step(f"batcave network create {net}  (isolated bridge)")
         ensure_network(net)
 
-        step(f"batcave create webtarget --image httpd:alpine  (the victim)")
+        step("batcave create webtarget --image httpd:alpine  (the victim)")
         target.create()
         print(f"   → container {target.name} running on {net}")
 
-        step(f"batcave create kali-recon --image kalilinux/kali-rolling \\")
-        print(f"                            --cap-add NET_RAW --cap-add NET_ADMIN")
+        step("batcave create kali-recon --image kalilinux/kali-rolling \\")
+        print("                            --cap-add NET_RAW --cap-add NET_ADMIN")
         attacker.create()
         print(f"   → container {attacker.name} running on {net}")
 
@@ -240,16 +238,16 @@ def main():
 
     finally:
         banner("TEARDOWN")
-        step(f"batcave destroy kali-recon")
+        step("batcave destroy kali-recon")
         attacker.destroy()
-        step(f"batcave destroy webtarget")
+        step("batcave destroy webtarget")
         target.destroy()
         step(f"batcave network rm {net}")
         destroy_network(net)
 
     banner("DONE")
     print("  Every container is torn down. No host changes. No internet contact.")
-    print(f"  Kali image cached locally for re-runs: docker images kalilinux/kali-rolling")
+    print("  Kali image cached locally for re-runs: docker images kalilinux/kali-rolling")
 
 if __name__ == "__main__":
     sys.exit(main())

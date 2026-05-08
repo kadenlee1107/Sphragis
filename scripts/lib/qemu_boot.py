@@ -23,7 +23,6 @@ This module wraps that. Callers do:
 """
 from __future__ import annotations
 
-import os
 import shutil
 import socket
 import subprocess

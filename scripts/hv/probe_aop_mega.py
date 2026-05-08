@@ -11,7 +11,11 @@ Priority ordered for information-density:
   7. Try AOP boot and capture INBOX-CTRL bit-level state
   8. If AOP stalls, send multiple EP messages (0, 1, 2, 8, 0x20)
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

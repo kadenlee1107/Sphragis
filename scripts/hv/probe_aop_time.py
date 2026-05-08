@@ -9,7 +9,11 @@ or stops writing at a specific point (→ that's the stall).
 Also track reg[0]+0x818 — changed 0x40001 → 0x40000 in mega2. And
 +0x444, +0xb00, +0xb10 for completeness.
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
@@ -205,12 +209,12 @@ def main():
         time.sleep(0.5)
 
     log(f"\nFinal: first_change_t={first_change_t}, stable_since={stable_since}")
-    log(f"Pointer count history:")
+    log("Pointer count history:")
     for t, n in pointer_count_history[:30]:
         log(f"  t={t:.2f}s nptr={n}")
     # Dump final seed region (256 bytes)
     final = iface.readmem(seed_phys, 256)
-    log(f"\nFinal __DATA+0x498 (256 bytes):")
+    log("\nFinal __DATA+0x498 (256 bytes):")
     for i in range(0, 256, 16):
         if any(b != 0 for b in final[i:i+16]):
             log(f"  +{i:#04x}: {final[i:i+16].hex()}")

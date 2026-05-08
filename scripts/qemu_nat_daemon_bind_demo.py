@@ -8,7 +8,12 @@
 3. In shell: `nat-sync` (daemon → kernel).
 4. `nat-bindings` must list both with correct cave names.
 """
-import pexpect, re, socket, subprocess, sys, time
+import pexpect
+import re
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 from datetime import datetime
 

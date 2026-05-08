@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Phase 5/6 — PQ hybrid self-test live from Bat_OS shell."""
-import pexpect, re, time
+import pexpect
+import re
+import time
 from pathlib import Path
 from datetime import datetime
 

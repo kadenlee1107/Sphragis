@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """ADT walk for CPU cluster bases + current PSTATE register state
 on M4. Needed to add T8132 support to m1n1's cpufreq_fixup."""
-import sys, pathlib
+import sys
+import pathlib
 M1N1 = pathlib.Path(__file__).resolve().parents[2] / "external/m1n1/proxyclient"
 sys.path.insert(0, str(M1N1))
 from m1n1.setup import *

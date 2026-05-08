@@ -34,7 +34,10 @@ Examples:
     inject_keys.py ctrl+q                  # Ctrl+Q (close pane)
     inject_keys.py tab tab tab tab tab tab tab tab tab enter
 """
-import sys, os, time, termios
+import sys
+import os
+import time
+import termios
 
 DEV = os.environ.get("BATOS_VUART", "/dev/ttyACM2")
 DELAY_S = float(os.environ.get("INJECT_DELAY", "0.08"))

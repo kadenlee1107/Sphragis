@@ -14,11 +14,12 @@ verified, not aspirational. Nobody else in the open-source world has booted a
 non-Apple OS on M4 yet (as of April 2026); Asahi Linux installer
 explicitly refuses to install on M4.
 
-See `DESIGN.md`, `DESIGN_BATCAVES.md`, `DESIGN_BROWSER.md`,
-`DESIGN_CHROMIUM.md` for the project-level vision. The short version:
-security-first microkernel with isolated user "caves" (processes),
-bring-your-own-Chromium browser, TLS-enforced networking, BatFS
-encrypted filesystem.
+See `DESIGN.md`, `DESIGN_BATCAVES.md`, `DESIGN_NO_BROWSER.md`,
+`DESIGN_TLS_HARDENING.md`, `DESIGN_HTTPS_SYSCALL.md` for the
+project-level vision. The short version: security-first
+microkernel with isolated user "caves" (processes), no in-tree
+browser (browsing is done on the host), TLS-enforced networking
+with kernel-mediated HTTPS for caves, BatFS encrypted filesystem.
 
 ## Which Claude are you?
 

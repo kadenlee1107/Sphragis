@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Baseline: does `batcave run <applet>` actually work today?"""
-import pexpect, re, time
+import pexpect
+import re
+import time
 from pathlib import Path
 from datetime import datetime
 

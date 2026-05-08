@@ -15,7 +15,11 @@ The bootargs blob is what our previous StandardASC attempt missed.
 FW wouldn't even consume our INBOX msg because it hadn't initialized
 past reading bootargs.
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

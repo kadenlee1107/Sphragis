@@ -10,7 +10,11 @@ iBoot's DART mappings and faults FW DMA. Instead pass the DART
 instance without initialize() — iBoot's mappings survive, and
 AOPClient's own machinery handles any iomap needs.
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

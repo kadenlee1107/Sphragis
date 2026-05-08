@@ -10,7 +10,9 @@ PMGR PS reg format: bits 0-3 = target state, 4-7 = desired,
 and bit 8/13 are status. Stock m1n1 sets target=0xf and spins
 until desired=0xf. We'll replicate that via raw read32/write32.
 """
-import sys, pathlib, time
+import sys
+import pathlib
+import time
 M1N1 = pathlib.Path("/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient")
 sys.path.insert(0, str(M1N1))
 from m1n1.setup import *

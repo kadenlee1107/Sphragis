@@ -29,7 +29,14 @@ After all attacks: ONE legitimate request to the allowlisted dest.
 That should go through — which proves the defender isn't just a
 big "drop everything" filter.
 """
-import pexpect, re, socket, struct, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -498,7 +505,7 @@ def main():
             print(f"  Combined rate drops: {drop_rate}.")
             print()
             print("Layer 4 — SNI pinning:")
-            print(f"  TLS domain-fronting attack (SNI=attacker.com) caught by")
+            print("  TLS domain-fronting attack (SNI=attacker.com) caught by")
             print(f"  cave_policy's pinned-SNI rule. drop-sni = {drop_sni}.")
             print()
             print("One legitimate SYN still went through (handshake phase —")

@@ -27,7 +27,13 @@ with stimulus built in.
 This version is SELF-CONTAINED: it runs batos_hv_interactive's HV
 setup, fires 'screen\\r', and reads the dump from the same process.
 """
-import sys, os, time, termios, pathlib, re, struct, threading
+import sys
+import os
+import time
+import termios
+import pathlib
+import re
+import threading
 
 M1N1_ROOT = pathlib.Path(__file__).resolve().parents[2] / "external/m1n1"
 sys.path.insert(0, str(M1N1_ROOT / "proxyclient"))
