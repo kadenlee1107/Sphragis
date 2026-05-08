@@ -55,7 +55,7 @@ impl PageFlags {
         Self { writable: true, user: false, executable: false, device: true }
     }
 
-    fn to_pte_flags(&self) -> u64 {
+    fn to_pte_flags(self) -> u64 {
         let mut flags = PT_VALID | PT_PAGE | PT_AF | PT_INNER_SHAREABLE;
 
         if self.device {

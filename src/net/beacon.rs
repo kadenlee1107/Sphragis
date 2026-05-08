@@ -110,7 +110,7 @@ fn is_periodic(intervals: &[u64]) -> Option<u64> {
     if mean < min_mean_ticks() { return None; }
     let mut var_sum: u64 = 0;
     for &x in intervals {
-        let d = if x > mean { x - mean } else { mean - x };
+        let d = x.abs_diff(mean);
         var_sum = var_sum.saturating_add(d.saturating_mul(d));
     }
     let var = var_sum / n as u64;

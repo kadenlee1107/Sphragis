@@ -588,7 +588,8 @@ pub fn clone(flags: u64,
         // pages.
         return real_fork(flags, parent_tid, child_tid);
     }
-    let child_stack = child_stack; // (no rewrite path for thread-clone)
+    // No stack-rewrite for the thread-clone path; child_stack is used
+    // as-is.
 
     // V8-ROOT-1 / V8-IRQ-#3: charge-Threads + charge-Mem must be atomic
     // w.r.t. preempt — otherwise a racing syscall could see Threads
@@ -1428,7 +1429,7 @@ pub fn on_tick(current_trap_frame: *mut SavedRegs) -> Option<*const SavedRegs> {
     // 248 in TrapFrame). So copy field-by-field and pull SP_EL0 /
     // TPIDR_EL0 / TTBR0_EL1 from the live MSRs.
     unsafe {
-        let tf_x: [u64; 31] = (*(current_trap_frame as *const [u64; 31])).clone();
+        let tf_x: [u64; 31] = *(current_trap_frame as *const [u64; 31]);
         let tf_elr: u64 = *((current_trap_frame as *const u8).add(248) as *const u64);
         let tf_spsr: u64 = *((current_trap_frame as *const u8).add(256) as *const u64);
         let cur_sp_el0: u64;

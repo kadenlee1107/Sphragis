@@ -110,7 +110,7 @@ pub fn init() -> Option<()> {
         for slot in devices.iter() { if slot.is_some() { out[n] = *slot; n += 1; } }
         // Reverse the first `n` entries so the highest MMIO slot is first.
         for i in 0..n/2 {
-            let tmp = out[i]; out[i] = out[n - 1 - i]; out[n - 1 - i] = tmp;
+            out.swap(i, n - 1 - i);
         }
         out
     };

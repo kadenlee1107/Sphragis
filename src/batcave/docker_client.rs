@@ -177,7 +177,7 @@ fn create_full(
         cmd.push_str(c);
         first = false;
     }
-    if caps.is_empty() { cmd.push_str("-"); } // daemon treats - / empty as no caps
+    if caps.is_empty() { cmd.push('-'); } // daemon treats - / empty as no caps
 
     // Phase 3: append the per-cave key as hex (64 chars) when provided.
     // Key is sent over the LOCAL loopback-only TCP channel to the daemon;

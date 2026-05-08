@@ -22,9 +22,8 @@ static CONSOLE_FOUND: AtomicBool = AtomicBool::new(false);
 
 /// ECAM config space address for a PCI device
 fn ecam_addr(bus: u8, device: u8, function: u8, offset: u16) -> usize {
-    PCI_ECAM_BASE +
-        ((bus as usize) << 20) |
-        ((device as usize) << 15) |
+    (PCI_ECAM_BASE +
+        ((bus as usize) << 20)) | ((device as usize) << 15) |
         ((function as usize) << 12) |
         (offset as usize)
 }

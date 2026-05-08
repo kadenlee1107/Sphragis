@@ -1536,7 +1536,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 if fp == 0 { break; }
                 // Refuse to deref obviously-bad frame pointers.
                 if fp < 0x40000000 || fp >= 0xc0000000 {
-                    if fp >= 0x10000000 && fp < 0x80000000_0000 {
+                    if fp >= 0x10000000 && fp < 0x8000_0000_0000 {
                         // user-VA range, OK to read
                     } else {
                         uart::puts("    (fp=0x"); print_hex(fp); uart::puts(" — out of range)\n");
@@ -2338,7 +2338,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 for sh in (0..16).rev() {
                     uart::putc(hex[((saved_lr >> (sh*4)) & 0xF) as usize]);
                 }
-                if next_fp == fp || next_fp < fp { break; } // loop / corrupt
+                if next_fp <= fp { break; } // loop / corrupt
                 fp = next_fp;
             }
             uart::puts("\n  → returning to desktop\n");
@@ -2382,7 +2382,6 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 uart::puts(" n="); crate::kernel::mm::print_num(n as usize);
                 uart::puts("\n");
             }
-            return;
         }
         0x00 => {
             // Unknown/undefined instruction — might be HVF-unsupported atomics
@@ -2862,7 +2861,14 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         let ins: u32 = core::ptr::read_volatile(pc as *const u32);
                         let top6 = (ins >> 26) & 0x3F;
                         let is_bl = top6 == 0x25;
-                        let is_blr = (ins & 0xFFFE0000) == 0xD63F0000;
+                        // ARMv8 A64 BLR encoding: bits 31-21 = 11010110001,
+                        // bits 20-16 = 11111, bits 15-10 = 000000, Rn in 9-5,
+                        // bits 4-0 = 0. Mask the fixed bits, leave Rn wildcarded.
+                        // (Pre-fix, the mask was 0xFFFE0000 which zeroes bit 17
+                        // but the pattern 0xD63F0000 has bit 17 set — clippy's
+                        // `incompatible_bit_mask` correctly flagged it as a
+                        // never-matching check.)
+                        let is_blr = (ins & 0xFFFFFC1F) == 0xD63F0000;
                         if is_bl || is_blr {
                             uart::puts("\n    [sp+0x");
                             let off = i * 8;

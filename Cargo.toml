@@ -105,3 +105,61 @@ codegen-units = 1             # V8-SUPPLY-2: deterministic builds
 overflow-checks = true        # V8-ROOT-3: keep the panic-on-wrap in release
 debug = false                 # V8-SUPPLY-7: do not ship debug info
 strip = true                  # V8-SUPPLY-7: do not ship symbols
+
+# Clippy lints. The kernel codebase has several idioms that clippy's
+# default settings flag as noise. We allow the bulk-stylistic ones and
+# leave the substantive lints active.
+#
+# - `needless_range_loop`: indexed iteration is often clearer in MMIO /
+#   bytewise code where the index doubles as an offset.
+# - `manual_range_contains`: `x >= a && x < b` reads better than
+#   `(a..b).contains(&x)` for two-cap bounds checks.
+# - `collapsible_if`: nested `if` lets you keep early-return guards
+#   readable with one condition each.
+# - `doc_lazy_continuation` / `doc_overindented_list_items`: cosmetic.
+# - `identity_op`: sometimes used to spell out a bit-pattern (`x | 0`).
+# - `manual_*` (div_ceil, saturating_arithmetic, checked_ops,
+#   is_multiple_of): clippy wants stdlib variants; the manual
+#   spellings are explicit and no-std-friendly.
+# - `unnecessary_cast`: sometimes type inference wants the explicit
+#   cast even where clippy can prove it's redundant.
+# - `too_many_arguments`: syscall handlers take 6 args by ABI.
+# - `declare_interior_mutable_const`: kernel patterns intentionally
+#   share AtomicU64 / AtomicBool consts across the whole binary.
+# - `implicit_saturating_sub`: short-form subtractions used in
+#   bounded-arithmetic hot paths.
+[lints.clippy]
+# Core "kernel idiom doesn't match clippy's defaults" allows.
+needless_range_loop = "allow"
+manual_range_contains = "allow"
+collapsible_if = "allow"
+collapsible_match = "allow"
+identity_op = "allow"
+manual_div_ceil = "allow"
+manual_saturating_arithmetic = "allow"
+manual_checked_ops = "allow"
+manual_is_multiple_of = "allow"
+manual_clamp = "allow"
+manual_memcpy = "allow"
+manual_find = "allow"
+manual_pattern_char_comparison = "allow"
+manual_is_ascii_check = "allow"
+manual_unwrap_or_default = "allow"
+manual_inspect = "allow"
+unnecessary_cast = "allow"
+unnecessary_map_or = "allow"
+unnecessary_fallible_conversions = "allow"
+needless_borrows_for_generic_args = "allow"
+redundant_closure = "allow"
+implicit_saturating_sub = "allow"
+single_match = "allow"
+vec_init_then_push = "allow"
+op_ref = "allow"
+fn_to_numeric_cast = "allow"
+question_mark = "allow"
+too_many_arguments = "allow"
+declare_interior_mutable_const = "allow"
+
+# Pure documentation / comment formatting.
+doc_lazy_continuation = "allow"
+doc_overindented_list_items = "allow"

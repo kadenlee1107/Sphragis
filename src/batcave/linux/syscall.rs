@@ -2197,7 +2197,7 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
     if let Err(e) = check_fs_path_cap(path, "openat") { return e; }
 
     // Handle /proc paths BEFORE VFS check — /proc is always available
-    if path_str.starts_with("/proc/") {
+    if let Some(rel) = path_str.strip_prefix("/proc/") {
         let mut test_buf = [0u8; 4];
         if proc_read(path_str, &mut test_buf) > 0 {
             // Try VFS-backed approach
@@ -2208,7 +2208,7 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
             };
 
             if let Some(proc_parent) = proc_idx {
-                let rel = &path_str[6..]; // strip "/proc/"
+                // strip "/proc/"
                 let mut parent = proc_parent;
                 let mut last_slash = 0;
                 let rel_bytes = rel.as_bytes();
@@ -5390,7 +5390,7 @@ fn sys_execve(args: [u64; 6]) -> i64 {
                     let dpath = &argv_strs[1][..argv_lens[1]];
                     match vfs::resolve_path(dpath) {
                         Ok(idx) => {
-                            if let Err(_) = vfs::remove_node(idx) {
+                            if vfs::remove_node(idx).is_err() {
                                 write_str("rmdir: can't remove '");
                                 write_str(unsafe { core::str::from_utf8_unchecked(dpath) });
                                 write_str("': Directory not empty\n");

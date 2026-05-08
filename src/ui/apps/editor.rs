@@ -635,12 +635,12 @@ fn draw_tabs(x: u32, y: u32, w: u32) {
     for i in 0..NUM_TABS {
         let b = unsafe { &(*core::ptr::addr_of!(BUFS))[i] };
         let name = if b.name_len == 0 {
-            let default = match i {
+            
+            match i {
                 0 => "untitled-1.rs",
                 1 => "untitled-2.rs",
                 _ => "untitled-3.rs",
-            };
-            default
+            }
         } else {
             unsafe { core::str::from_utf8_unchecked(&b.name[..b.name_len]) }
         };

@@ -367,7 +367,7 @@ fn sub_word(w: u32) -> u32 {
 }
 
 fn rot_word(w: u32) -> u32 {
-    (w << 8) | (w >> 24)
+    w.rotate_left(8)
 }
 
 fn sub_bytes(state: &mut [[u8; 4]; 4]) {
