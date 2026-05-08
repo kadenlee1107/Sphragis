@@ -345,6 +345,20 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
                 ui::shell::cmd_scheduler_selftest();
             }
 
+            // PQ-INTEROP boot hook (gated by Cargo feature
+            // `pq-interop-test`). Drives a real TLS 1.3 + X25519MLKEM768
+            // hybrid PQ handshake against pq.cloudflareresearch.com so
+            // a headless QEMU smoke (scripts/qemu_pq_interop_smoke.py)
+            // can verify our IETF draft-ietf-tls-ecdhe-mlkem-04 wire
+            // layout interops with a real third-party server. Closed-
+            // loop selftests can't catch wire-format regressions when
+            // both sides run the same code. See DESIGN_TLS_PQ_FIX.md.
+            #[cfg(feature = "pq-interop-test")]
+            {
+                drivers::uart::puts("[pq-interop] running hybrid PQ handshake vs pq.cloudflareresearch.com...\n");
+                ui::shell::cmd_pq_interop();
+            }
+
             // ═══════════════════════════════════════
             // AUTHENTICATION GATE — must pass to proceed
             // ═══════════════════════════════════════

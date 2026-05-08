@@ -74,6 +74,17 @@ pub fn set_hybrid_enabled(v: bool) {
     TLS_HYBRID_ENABLED_FLAG.store(v, TlsOrdering::Relaxed);
 }
 
+/// Did the most recent handshake on the legacy TLS PCB actually
+/// negotiate the hybrid PQ group (X25519MLKEM768)? Used by the
+/// `pq-interop-test` boot hook to assert that the server picked the
+/// hybrid group rather than silently falling back to plain X25519 —
+/// without that check the smoke would pass even if the hybrid wire
+/// format were broken, since the classical group always succeeds.
+#[inline]
+pub fn last_handshake_used_hybrid() -> bool {
+    session_mut(LEGACY_TLS_PCB).hybrid_used
+}
+
 /// NET2-016 / NEW-CRYPTO-026 / debug-fingerprint scrub: TLS-internal debug
 /// prints are gated behind this flag. The default is `false` so production
 /// builds emit no per-record metadata over the UART (sequence numbers,
@@ -111,7 +122,12 @@ pub struct TlsSession {
     our_private: [u8; 32],
     our_public: [u8; 32],
     peer_public: [u8; 32],
-    shared_secret: [u8; 32],
+    // (EC)DHE input for the TLS 1.3 key schedule. 32 bytes for classical
+    // X25519; 64 bytes for hybrid X25519MLKEM768 (ml_kem_ss || x25519_ss
+    // per draft-ietf-tls-ecdhe-mlkem-04 §3). shared_secret_len tracks the
+    // active size; HKDF-Extract reads &shared_secret[..shared_secret_len].
+    shared_secret: [u8; 64],
+    shared_secret_len: usize,
     // Derived keys
     client_key: [u8; 32],
     server_key: [u8; 32],
@@ -171,7 +187,8 @@ impl TlsSession {
     /// caller resets them separately.
     pub fn zeroize_secrets(&mut self) {
         self.our_private   = [0; 32];
-        self.shared_secret = [0; 32];
+        self.shared_secret = [0; 64];
+        self.shared_secret_len = 0;
         self.client_key    = [0; 32];
         self.server_key    = [0; 32];
         self.client_iv     = [0; 12];
@@ -196,7 +213,8 @@ const EMPTY_TLS_SESSION: TlsSession = TlsSession {
     our_private: [0; 32],
     our_public: [0; 32],
     peer_public: [0; 32],
-    shared_secret: [0; 32],
+    shared_secret: [0; 64],
+    shared_secret_len: 0,
     client_key: [0; 32],
     server_key: [0; 32],
     client_iv: [0; 12],
@@ -573,7 +591,11 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
                             &sess.hybrid_x25519_sk, dk_bytes, ct_blob)
                         {
                             Ok(ss) => {
+                                // 64-byte hybrid SS: ml_kem_ss || x25519_ss
+                                // per draft-ietf-tls-ecdhe-mlkem-04 §3.
+                                // Both halves go into the (EC)DHE input.
                                 sess.shared_secret.copy_from_slice(&ss);
+                                sess.shared_secret_len = 64;
                                 sess.hybrid_used = true;
                                 saw_key_share = true;
                                 uart::puts("[tls] server selected X25519+ML-KEM-768 hybrid — decap OK\n");
@@ -613,11 +635,14 @@ pub fn process_server_hello(data: &[u8]) -> Result<(), &'static str> {
                 uart::puts("[tls] rejected low-order X25519 peer public\n");
                 return Err("X25519 peer public key has small order");
             }
-            x25519_scalar_mult(&sess.our_private, &sess.peer_public, &mut sess.shared_secret);
-            if sess.shared_secret.iter().all(|&b| b == 0) {
+            let mut classical_ss = [0u8; 32];
+            x25519_scalar_mult(&sess.our_private, &sess.peer_public, &mut classical_ss);
+            if classical_ss.iter().all(|&b| b == 0) {
                 uart::puts("[tls] shared_secret is all-zero — abort\n");
                 return Err("X25519 shared secret is zero");
             }
+            sess.shared_secret[..32].copy_from_slice(&classical_ss);
+            sess.shared_secret_len = 32;
         }
 
         sess.state = TlsState::ServerHelloReceived;
@@ -748,7 +773,10 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
     let empty_hash = crate::crypto::sha256::hash(&[]);
     let early_secret = crate::crypto::sha256::hkdf_extract(&[0u8; 32], &[0u8; 32]);
     let derived_secret = crate::crypto::sha256::hkdf_expand_label(&early_secret, b"derived", &empty_hash, 32);
-    let handshake_secret = crate::crypto::sha256::hkdf_extract(&derived_secret, &sess.shared_secret);
+    let handshake_secret = crate::crypto::sha256::hkdf_extract(
+        &derived_secret,
+        &sess.shared_secret[..sess.shared_secret_len],
+    );
 
     // Clone transcript for handshake key derivation (original continues for app keys)
     let transcript_hash = transcript.clone().finalize();
@@ -843,7 +871,8 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
                     sess.server_key = [0u8; 32];
                     sess.client_iv  = [0u8; 12];
                     sess.server_iv  = [0u8; 12];
-                    sess.shared_secret = [0u8; 32];
+                    sess.shared_secret = [0u8; 64];
+                    sess.shared_secret_len = 0;
                     sess.our_private   = [0u8; 32];
                     return Err("TLS handshake record authentication failed");
                 }
@@ -1444,6 +1473,7 @@ pub fn reset_all_sessions() {
             s.expected_hostname_len = 0;
             s.finished_seen = false;
             zeroize(&mut s.shared_secret);
+            s.shared_secret_len = 0;
             zeroize(&mut s.client_key);
             zeroize(&mut s.server_key);
             zeroize(&mut s.our_private);
@@ -1478,9 +1508,12 @@ pub unsafe fn panic_wipe() {
         let si = core::ptr::addr_of_mut!((*s).server_iv) as *mut u8;
         for j in 0..32 {
             core::ptr::write_volatile(pv.add(j), 0);
-            core::ptr::write_volatile(ss.add(j), 0);
             core::ptr::write_volatile(ck.add(j), 0);
             core::ptr::write_volatile(sk.add(j), 0);
+        }
+        // shared_secret grew to 64 bytes for the hybrid PQ path; wipe all 64.
+        for j in 0..64 {
+            core::ptr::write_volatile(ss.add(j), 0);
         }
         for j in 0..12 {
             core::ptr::write_volatile(ci.add(j), 0);
@@ -1500,6 +1533,7 @@ pub fn close() {
     // just the three keys the old impl touched. Cold-boot / HVF
     // snapshot / DMA can recover anything we leave behind.
     zeroize(&mut sess.shared_secret);
+    sess.shared_secret_len = 0;
     zeroize(&mut sess.client_key);
     zeroize(&mut sess.server_key);
     zeroize(&mut sess.our_private);

@@ -7,9 +7,9 @@
 //! its successor drafts, converging on RFC-track codepoint 0x11EC for
 //! `X25519MLKEM768`) uses the SAME wire format but swaps the group in
 //! `supported_groups` and the payload in `key_share` for a hybrid
-//! blob = `ML-KEM-768 encap_pub || X25519 pub` or
-//!         `X25519 pub || ML-KEM-768 encap_pub` (draft disagrees per
-//!          revision; we use the latter per -04).
+//! blob = `ML-KEM-768 encap_pub || X25519 pub` per
+//! draft-ietf-tls-ecdhe-mlkem-04 §3 (ML-KEM first, X25519 second —
+//! same ordering on the response leg and inside the derived SS).
 //!
 //! TLS operates the KEM in "client-as-recipient" mode:
 //!   * Client generates a hybrid keypair, sends public half in
@@ -60,18 +60,20 @@ impl ClientHybridState {
     }
 
     /// Payload for the ClientHello `key_share` extension entry for this
-    /// group — our hybrid PUBLIC key (X25519 || ML-KEM-768 encap_pub).
-    /// Length = X25519_PUB_LEN + MLKEM_PK_LEN = 1216 bytes.
+    /// group — our hybrid PUBLIC key (ML-KEM-768 encap_pub || X25519 pub)
+    /// per draft-ietf-tls-ecdhe-mlkem-04 §3 (codepoint 0x11EC).
+    /// Length = MLKEM_PK_LEN + X25519_PUB_LEN = 1216 bytes.
     pub fn client_key_share_payload(&self) -> Vec<u8> {
         self.keypair.public_bytes()
     }
 
     /// Parse the server's responding key_share payload — the hybrid
-    /// KEM ciphertext = X25519 ephemeral pub || ML-KEM-768 ct.
-    /// Length = X25519_PUB_LEN + MLKEM_CT_LEN = 1120 bytes.
-    /// Returns the derived shared secret (32 bytes).
+    /// KEM ciphertext = ML-KEM-768 ct (1088 B) || X25519 ephemeral pub (32 B)
+    /// per draft-ietf-tls-ecdhe-mlkem-04 §3 (codepoint 0x11EC).
+    /// Length = MLKEM_CT_LEN + X25519_PUB_LEN = 1120 bytes.
+    /// Returns the 64-byte derived shared secret (ml_kem_ss || x25519_ss).
     pub fn process_server_key_share(&self, server_ct: &[u8])
-        -> Result<[u8; 32], &'static str>
+        -> Result<[u8; 64], &'static str>
     {
         if server_ct.len() != HYBRID_CT_LEN {
             return Err("tls-hybrid: server key_share wrong length");
@@ -83,11 +85,12 @@ impl ClientHybridState {
 /// Server-side: given a client's hybrid public key, produce the ciphertext
 /// to return in ServerHello + the matching shared secret. For tests /
 /// fake-servers / a future Bat_OS TLS server; client-only deployments
-/// don't need this path.
+/// don't need this path. Per draft-ietf-tls-ecdhe-mlkem-04, the SS is
+/// 64 bytes (ml_kem_ss || x25519_ss).
 pub fn server_process_client_key_share(client_pub: &[u8])
-    -> Result<([u8; 32], Vec<u8>), &'static str>
+    -> Result<([u8; 64], Vec<u8>), &'static str>
 {
-    if client_pub.len() != X25519_PUB_LEN + MLKEM_PK_LEN {
+    if client_pub.len() != MLKEM_PK_LEN + X25519_PUB_LEN {
         return Err("tls-hybrid: client key_share wrong length");
     }
     pq_hybrid::encapsulate(client_pub)
@@ -121,8 +124,9 @@ pub fn parse_server_key_share_entry(entry: &[u8])
 }
 
 /// End-to-end self-test: exercise the client + fake-server dance. Proves
-/// the wire layout round-trips and both sides derive the same 32-byte
-/// shared secret. Exposed as `pq-tls-selftest`.
+/// the wire layout round-trips per draft-ietf-tls-ecdhe-mlkem-04 §3 and
+/// both sides derive the same 64-byte shared secret. Exposed as
+/// `pq-tls-selftest`.
 pub fn selftest() -> Result<SelfTestReport, &'static str> {
     // 1. Client: generate hybrid keypair + encode its ClientHello entry.
     let client = ClientHybridState::new();
@@ -132,10 +136,20 @@ pub fn selftest() -> Result<SelfTestReport, &'static str> {
     if grp != NAMED_GROUP_X25519_MLKEM768 {
         return Err("tls-hybrid: emitted entry has wrong group");
     }
+    // Spec-pinned wire size: ML-KEM-768 ek (1184) + X25519 pub (32) = 1216.
+    if payload.len() != MLKEM_PK_LEN + X25519_PUB_LEN {
+        return Err("tls-hybrid: client key_share payload not 1216 bytes");
+    }
+    // ML-KEM half lives in the FIRST MLKEM_PK_LEN bytes per -04 §3.
+    // We don't have a public oracle here, but the byte split must round-trip
+    // through the server's encapsulate, which expects this exact ordering.
 
     // 2. Server: receives client's public, encapsulates, produces
     //    ServerHello key_share ciphertext.
     let (server_ss, server_ct) = server_process_client_key_share(payload)?;
+    if server_ct.len() != HYBRID_CT_LEN {
+        return Err("tls-hybrid: server key_share payload not 1120 bytes");
+    }
 
     // 3. Wrap the server response in a TLS 1.3 key_share entry the way
     //    a real ServerHello would.
@@ -151,6 +165,11 @@ pub fn selftest() -> Result<SelfTestReport, &'static str> {
     }
     let client_ss = client.process_server_key_share(sct)?;
 
+    // Spec-pinned: SS is 64 B = ml_kem_ss (32) || x25519_ss (32),
+    // raw concat — fed straight into HKDF-Extract.
+    if client_ss.len() != 64 {
+        return Err("tls-hybrid: derived SS not 64 bytes");
+    }
     if client_ss != server_ss {
         return Err("tls-hybrid: shared secrets disagree");
     }

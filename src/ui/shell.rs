@@ -758,6 +758,54 @@ fn cmd_pq_tls_selftest() {
     }
 }
 
+// PQ-interop boot hook: drive a real TLS 1.3 + X25519MLKEM768 hybrid
+// handshake against pq.cloudflareresearch.com and assert the server
+// picked the hybrid group (not silent fallback to classical X25519).
+// Headless QEMU smoke (scripts/qemu_pq_interop_smoke.py) keys off the
+// `[pq-interop] PASS` / `[pq-interop] FAIL <reason>` lines.
+#[cfg(feature = "pq-interop-test")]
+pub(crate) fn cmd_pq_interop() {
+    use crate::drivers::uart;
+    let host = "pq.cloudflareresearch.com";
+
+    // Make sure the global hybrid toggle is on (default is true, but
+    // be explicit so the smoke doesn't depend on prior shell state).
+    crate::net::tls::set_hybrid_enabled(true);
+
+    let ip = match crate::net::dns::resolve(host) {
+        Ok(ip) => ip,
+        Err(_) => {
+            uart::puts("[pq-interop] FAIL dns-resolve\n");
+            return;
+        }
+    };
+
+    if let Err(_e) = crate::net::tcp::connect(ip, 443) {
+        uart::puts("[pq-interop] FAIL tcp-connect\n");
+        return;
+    }
+
+    let hs_result = crate::net::tls::handshake(host);
+    let used_hybrid = crate::net::tls::last_handshake_used_hybrid();
+    crate::net::tls::close();
+    crate::net::tcp::close();
+
+    match hs_result {
+        Err(e) => {
+            uart::puts("[pq-interop] FAIL handshake: ");
+            uart::puts(e);
+            uart::puts("\n");
+        }
+        Ok(()) => {
+            if !used_hybrid {
+                uart::puts("[pq-interop] FAIL classical-fallback (server did not pick hybrid)\n");
+            } else {
+                uart::puts("[pq-interop] PASS hybrid-pq-handshake-ok\n");
+            }
+        }
+    }
+}
+
 // Followup #2: handshake-over-wire + AEAD IPC proof (secure_ipc module).
 fn cmd_secure_ipc_wire_selftest() {
     console::puts_hi("  SECURE-IPC WIRE-LEVEL SELF-TEST\n");

@@ -59,11 +59,15 @@ use x509_cert::der::{Decode, Encode};
 ///     of enterprise + financial sites.
 ///   * DigiCert Global Root G2 — RSA 2048 — DigiCert's modern root,
 ///     used by Google's intermediate CA chain among others.
+///   * GTS Root R4 — ECDSA P-384 — Google Trust Services' modern
+///     ECDSA root. Anchors a growing slice of public HTTPS as Google
+///     migrates leaves from GlobalSign to its own PKI; required for
+///     pq.cloudflareresearch.com (used by our PQ-interop smoke).
 ///
 /// `TrustStore::contains` compares subject public-key bytes for the
 /// issuer lookup, so this set covers a meaningful slice of the public
 /// web. A full Mozilla CA bundle (~150 roots) is a follow-up STUMP —
-/// this five-entry set is enough to verify the most common chains and
+/// this six-entry set is enough to verify the most common chains and
 /// move the audit's "theater" verdict.
 ///
 /// **Signature algorithm coverage** (STUMP #140):
@@ -87,6 +91,8 @@ pub static TRUST_STORE: &[&[u8]] = &[
     include_bytes!("ca_certs/digicert_global_root_ca.der"),
     // https://cacerts.digicert.com/DigiCertGlobalRootG2.crt
     include_bytes!("ca_certs/digicert_global_root_g2.der"),
+    // https://i.pki.goog/r4.crt  (sha256 34:9D:FA:40:58:C5:E2:63:12:3B:39:8A:E7:95:57:3C:4E:13:13:C8:3F:E6:8F:93:55:6C:D5:E8:03:1B:3C:7D)
+    include_bytes!("ca_certs/gts_root_r4.der"),
 ];
 
 /// Outcome of chain validation.
