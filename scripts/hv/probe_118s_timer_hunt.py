@@ -23,7 +23,10 @@ re-chainload first:
        /usr/bin/python3 external/m1n1/proxyclient/tools/chainload.py \
        -S external/m1n1/build/m1n1.macho
 """
-import sys, os, time, pathlib
+import sys
+import os
+import time
+import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
@@ -79,7 +82,7 @@ def main():
     bootstrap_port(iface, p)
     u = ProxyUtils(p, heap_size=128 * 1024 * 1024)
 
-    print(f"[hunt] proxy alive", flush=True)
+    print("[hunt] proxy alive", flush=True)
 
     # Call hv.init() to ARM the 118 s timer (per today's findings).
     # Skip with HUNT_SKIP_HV_INIT=1 to do the hunt in stock m1n1 for

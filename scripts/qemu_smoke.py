@@ -4,7 +4,6 @@
 Quick sanity check that the binary boots, auth accepts 'batman',
 and we reach the shell. Full test suite is qemu_test_suite.py."""
 import pexpect
-import sys
 import time
 from pathlib import Path
 
@@ -60,7 +59,7 @@ def main():
                 # Trim to last 500 chars for display
                 print("    " + out[-500:].replace("\n", "\n    "))
             except pexpect.TIMEOUT:
-                print(f"    [timeout]")
+                print("    [timeout]")
                 break
 
         print("[smoke] done")

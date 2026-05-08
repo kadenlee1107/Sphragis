@@ -1,4 +1,4 @@
-import sys, pathlib
+import sys
 sys.path.insert(0, "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient")
 from m1n1.setup import *
 # First confirm proxy alive with a safe read

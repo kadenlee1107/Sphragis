@@ -3,7 +3,8 @@
 firmware binary, segment table, region spans, etc. AOP rtkit_boot
 timed out in the first attempt so we need to load FW ourselves.
 """
-import sys, pathlib
+import sys
+import pathlib
 M1N1 = pathlib.Path(__file__).resolve().parents[2] / "external/m1n1/proxyclient"
 sys.path.insert(0, str(M1N1))
 from m1n1.setup import *

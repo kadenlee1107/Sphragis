@@ -10,7 +10,11 @@ Hello autonomously (like Apple's kernel driver sees RTBuddy(AOP)
 'Resuming...' before MTP Hello). We may have been writing INBOX
 prematurely, competing with FW's own Hello path.
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
@@ -218,7 +222,7 @@ def main():
                 cs = p.read32(AOP + CPU_STATUS)
                 oc = p.read32(AOP + OUTBOX_CTRL)
                 ic = p.read32(AOP + INBOX_CTRL)
-            except Exception as e:
+            except Exception:
                 break
             state = (cs, oc, ic)
             if state != last:

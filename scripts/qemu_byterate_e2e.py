@@ -12,7 +12,14 @@ way over 8000 burst.
 Expected: a few get through (whatever fits in the byte burst),
 rest get DropRate. drop-policy stays 0.
 """
-import pexpect, re, socket, struct, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 

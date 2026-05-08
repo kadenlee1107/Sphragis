@@ -7,7 +7,12 @@ In-kernel proof that:
   - inbound replies get reverse-NAT: dst→cave_ip, port→cave_src_port
   - IPv4 + TCP checksums recomputed correctly
 """
-import pexpect, re, socket, subprocess, sys, time
+import pexpect
+import re
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 from datetime import datetime
 

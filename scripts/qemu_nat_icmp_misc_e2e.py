@@ -15,7 +15,14 @@ Three sub-cases driven against the same Bat_OS session:
   C. Source Quench (type 4) — actively dropped; `icmp-squench-drp`
      increments.
 """
-import pexpect, re, socket, struct, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -227,7 +234,10 @@ def main():
             inner_start = 14 + p["ihl"] + 8
             inner_src = int.from_bytes(back[inner_start+12:inner_start+16],"big") if inner_start+20<=len(back) else 0
             ok_pp = (p["dst"] == cave_ip and p["type"] == 12 and inner_src == cave_ip)
-            details.append(f"ParamProblem: dst=0x{p['dst']:08x} type={p['type']} inner_src=0x{inner_src:08x}  {'OK' if ok_pp else 'MISMATCH'}")
+            details.append(
+                f"ParamProblem: dst=0x{p['dst']:08x} type={p['type']} "
+                f"inner_src=0x{inner_src:08x}  {'OK' if ok_pp else 'MISMATCH'}"
+            )
         else:
             details.append("ParamProblem: no frame delivered")
 

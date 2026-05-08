@@ -22,8 +22,7 @@
 // Fixed-size hash table of `NUM_BUCKETS` buckets, keyed by (uaddr >> 3).
 // Each bucket has a fixed array of `WAITERS_PER_BUCKET` slots.
 // Each slot stores: { in_use, uaddr, tid, woken_flag, bitset }.
-// (Deadlines live on BlockReason::FutexWait, not on the slot —
-// see DESIGN_FUTEX_DEADLINE_UNIFICATION.md.)
+// Deadlines live on BlockReason::FutexWait, not on the slot.
 // Entire table guarded by a single `AtomicBool` spinlock per bucket — fine
 // grained enough to avoid global contention, coarse enough to fit in a
 // no_std kernel without a real lock implementation.
@@ -95,8 +94,7 @@ struct WaitSlot {
     // Set to true by FUTEX_WAKE. The waiter polls this.
     woken: AtomicBool,
     // Bitset for FUTEX_WAIT_BITSET / FUTEX_WAKE_BITSET. Default 0xFFFFFFFF.
-    // (Deadline lives on BlockReason::FutexWait, not on the slot — see
-    // DESIGN_FUTEX_DEADLINE_UNIFICATION.md.)
+    // Deadline lives on BlockReason::FutexWait, not on the slot.
     bitset: AtomicU32,
 }
 

@@ -3,7 +3,11 @@
 
 Skip SMC enumeration (caused SYNC fault last time). Keep tight.
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
@@ -131,7 +135,6 @@ def main():
     # ========== Probe 2: AOP reg[0]+0x1000..0x2000 scan ==========
     # The doorbell area; likely has more config regs
     log("\n=== P2: AOP reg[0]+0x1000..0x1200 (MMIO scan 128 regs) ===")
-    prev = None
     interesting = []
     for off in range(0x1000, 0x1200, 4):
         try:
@@ -220,7 +223,7 @@ def main():
         try:
             dump = iface.readmem(phys, 32)
             log(f"  VA={va_off:#x} phys={phys:#x}: {dump.hex()}")
-        except Exception as e:
+        except Exception:
             log(f"  VA={va_off:#x}: err")
 
     # ========== update bootargs + RUN ==========
@@ -267,7 +270,7 @@ def main():
     log("\n=== P7: AOP __DATA+0x498 POST-STALL (compare to pre-RUN) ===")
     try:
         seed2 = iface.readmem(seed_phys, 64)
-        log(f"  post-RUN __DATA+0x498:")
+        log("  post-RUN __DATA+0x498:")
         for i in range(0, 64, 16):
             log(f"    +{i:#04x}: {seed2[i:i+16].hex()}")
     except Exception as e:

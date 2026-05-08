@@ -7,7 +7,9 @@ Strategy:
   2. Snap same for MTP reg[0] (since MTP advances past first msg)
   3. Report non-matching offsets
 """
-import os, pathlib, sys
+import os
+import pathlib
+import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 

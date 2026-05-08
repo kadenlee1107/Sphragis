@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Pure in-kernel selftest for the token-bucket cave_shaper."""
-import pexpect, re, socket, subprocess, sys, time
+import pexpect
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 from datetime import datetime
 

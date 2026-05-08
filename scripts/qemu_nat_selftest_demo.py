@@ -5,7 +5,12 @@ Boots, authenticates, runs the synthetic-frame NAT classifier test.
 Expected: 2 allow / 2 drop-policy / 1 drop-unknown / 1 drop-parse,
 2 IP bindings installed.
 """
-import pexpect, re, socket, subprocess, sys, time
+import pexpect
+import re
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 from datetime import datetime
 

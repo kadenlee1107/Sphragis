@@ -34,7 +34,11 @@ IMPORTANT: does NOT write 0xffffffff to SMC panic-scratch regs
 (0x3882B8008 / 802C / 8020). Per wdt.c fix those corrupt SMC.
 The patched m1n1 at chainload time zeros 0x3882BC224 already.
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
@@ -163,7 +167,7 @@ def try_pmgr_write(p, val, tag, timeout=0.5):
             log(f"    read-back: {r:#010x}  {decode_pmgr(r)}")
             best = r
         if ((r >> 4) & 0xf) == 0xf:
-            log(f"    *** ACTUAL=0xf reached ***")
+            log("    *** ACTUAL=0xf reached ***")
             return True, r
         time.sleep(0.02)
     return False, best

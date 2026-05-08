@@ -1,0 +1,49 @@
+# Bat_OS Python tooling config.
+#
+# We don't ship a Python package — the only Python in this repo is the
+# QEMU smoke harnesses + M4 proxy/RE scripts under `scripts/`. This file
+# exists for `ruff` configuration so the lint result is reproducible.
+
+[tool.ruff]
+target-version = "py311"
+# 120 — wider than PEP 8's 79/99 because the M4 RE scripts under
+# scripts/hv/ build long hex-formatted log lines that don't break
+# cleanly. 120 is a common compromise for tooling Python.
+line-length = 120
+
+# Lint scope: scripts/ is ours. Anywhere else we hold (external/m1n1's
+# Python tooling) is upstream and not our style problem.
+include = ["scripts/**/*.py"]
+extend-exclude = [
+    "scripts/__pycache__/**",
+    "scripts/**/__pycache__/**",
+]
+
+[tool.ruff.lint]
+# Default rule set + a few targeted picks. We deliberately allow the
+# proxy-script idioms (one-line if/elif/while colon-statements,
+# semicolon statement separators, bare except in interactive REPL
+# helpers) because the M4 RE scripts under `scripts/hv/` and
+# `scripts/macos/` are written that way intentionally — they pattern-
+# match the upstream m1n1 proxy style.
+select = ["E", "F", "W"]
+ignore = [
+    # Proxy-script / RE-script style — colon and semicolon statement
+    # packing is a deliberate stylistic choice in the M4 tooling.
+    "E701",  # multiple-statements-on-one-line-colon
+    "E702",  # multiple-statements-on-one-line-semicolon
+    # Many scripts manipulate sys.path before importing m1n1; the
+    # imports legitimately follow the path setup.
+    "E402",  # module-import-not-at-top-of-file
+    # m1n1's Python API uses `from .foo import *` extensively; we
+    # follow that convention for proxy-style scripts.
+    "F403",  # undefined-local-with-import-star
+    "F405",  # may-be-undefined-from-star-imports
+    # Bare `except:` is sometimes intentional in the M4 RE scripts
+    # (e.g., USB-link teardown after a kernel panic).
+    "E722",  # bare-except
+    # Single-letter variable names like `l`, `I`, `O` are common in
+    # the M4 RE / instruction-decoding scripts where the math is the
+    # point and renaming would make the formulas unreadable.
+    "E741",  # ambiguous-variable-name
+]

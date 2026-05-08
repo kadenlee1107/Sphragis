@@ -26,7 +26,13 @@ Flow:
 
 Run:  sudo python3 scripts/qemu_vmnet_scapy_e2e.py
 """
-import atexit, os, re, socket, subprocess, sys, time
+import atexit
+import os
+import re
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -240,17 +246,17 @@ print(f"[e2e] attack #1: SYN to {example_ip}:443 (allowed)")
 send_syn(example_ip, 443, 51234)
 time.sleep(0.3)
 
-print(f"[e2e] attack #2: SYN to 203.0.113.66:4444 (C2 callback, should drop)")
+print("[e2e] attack #2: SYN to 203.0.113.66:4444 (C2 callback, should drop)")
 for i in range(3):
     send_syn("203.0.113.66", 4444, 52000 + i)
 time.sleep(0.3)
 
-print(f"[e2e] attack #3: 40-SYN burst to allowed dst (shaper should cap)")
+print("[e2e] attack #3: 40-SYN burst to allowed dst (shaper should cap)")
 for i in range(40):
     send_syn(example_ip, 443, 53000 + i)
 time.sleep(0.5)
 
-print(f"[e2e] attack #4: TLS ClientHello SNI=attacker.com on allowed IP")
+print("[e2e] attack #4: TLS ClientHello SNI=attacker.com on allowed IP")
 # First clear the rate so the ClientHello doesn't get dropped on the rate path.
 run_cmd(c, "cpol-rate-clear vmnet-kali")
 bad_ch = tls_client_hello("attacker.com")

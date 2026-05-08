@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Wide scan: look for non-zero/interesting regs across AOP reg[0] 0..0x80000
 to see if ascwrap-v6 has alt mailbox or boot regs at nonstandard offsets."""
-import os, pathlib, sys
+import os
+import pathlib
+import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 os.environ.setdefault("M1N1DEVICE", "/dev/ttyACM1")

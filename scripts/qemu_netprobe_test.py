@@ -148,7 +148,7 @@ def main():
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/self-test") as r:
             _ = r.read()
-        print(f"[mac]  server self-test: OK  (Mac-local loopback confirmed)")
+        print("[mac]  server self-test: OK  (Mac-local loopback confirmed)")
     except Exception as e:
         print(f"[mac]  server self-test FAILED: {e}")
         return
@@ -233,13 +233,13 @@ def main():
     print("=" * 72)
     ok = HITS and any(PROBE_ID in h["path"] for h in HITS)
     if ok:
-        print(f"  ✅ PASS")
-        print(f"     Bat_OS (inside a capability-gated BatCave) originated a")
-        print(f"     TCP connection that the external HTTP server on the Mac")
-        print(f"     received, parsed, and logged.")
+        print("  ✅ PASS")
+        print("     Bat_OS (inside a capability-gated BatCave) originated a")
+        print("     TCP connection that the external HTTP server on the Mac")
+        print("     received, parsed, and logged.")
         print(f"     Probe ID {PROBE_ID} round-tripped verbatim.")
     else:
-        print(f"  ❌ FAIL")
+        print("  ❌ FAIL")
         print(f"     No hit matching probe ID {PROBE_ID}")
 
     print()

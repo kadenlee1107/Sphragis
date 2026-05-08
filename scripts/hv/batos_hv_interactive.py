@@ -42,7 +42,15 @@ Output:
   * Our host-side status lines are prefixed `[host]` / `[vuart]`
     and go to stderr so they don't pollute captured logs.
 """
-import sys, os, time, termios, tty, threading, pathlib, select, signal
+import sys
+import os
+import time
+import termios
+import tty
+import threading
+import pathlib
+import select
+import signal
 
 M1N1_ROOT = pathlib.Path(__file__).resolve().parents[2] / "external/m1n1"
 sys.path.insert(0, str(M1N1_ROOT / "proxyclient"))
@@ -312,7 +320,7 @@ def _mtp_kbd_probe(iface, p, u, vuart):
     from m1n1.hw.dockchannel import DockChannel
     from m1n1.fw.smc import SMCClient
     from m1n1.fw.mtp import (
-        MTPProtocol, MTPKeyboardInterface, RXMessage,
+        MTPProtocol, MTPKeyboardInterface,
     )
 
     bridge = os.environ.get("BATOS_HV_MTP_BRIDGE_TO_VUART", "0") == "1"
@@ -736,7 +744,6 @@ def chainload_inline(iface, p, u, macho_path):
     from m1n1.macho import MachO
     from m1n1.tgtypes import BootArgs_r1, BootArgs_r2, BootArgs_r3
     from m1n1 import asm
-    from m1n1.proxy import IODEV
     from m1n1.utils import align
 
     new_base = u.base

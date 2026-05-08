@@ -2,7 +2,8 @@
 """Isolated probe: what parts of PCPU cluster MMIO @ 0x211e00000
 are actually mapped on M4? Start with the simplest register then
 walk outward to see where the valid region ends."""
-import sys, pathlib
+import sys
+import pathlib
 M1N1 = pathlib.Path(__file__).resolve().parents[2] / "external/m1n1/proxyclient"
 sys.path.insert(0, str(M1N1))
 from m1n1.setup import *

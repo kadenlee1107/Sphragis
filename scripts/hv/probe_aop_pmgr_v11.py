@@ -24,7 +24,11 @@ v11 plan:
   6. DO NOT ring doorbell (FIQ kills normal flow)
   7. Poll OUTBOX for 10s
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

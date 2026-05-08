@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """AOP FW woke and acked our INBOX via +0x818 bit 3, but standard OUTBOX
 stays empty. Scan broader for where FW might have written a reply."""
-import os, pathlib, sys
+import os
+import pathlib
+import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 os.environ.setdefault("M1N1DEVICE", "/dev/ttyACM1")

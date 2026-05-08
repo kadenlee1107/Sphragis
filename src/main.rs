@@ -352,7 +352,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
             // can verify our IETF draft-ietf-tls-ecdhe-mlkem-04 wire
             // layout interops with a real third-party server. Closed-
             // loop selftests can't catch wire-format regressions when
-            // both sides run the same code. See DESIGN_TLS_PQ_FIX.md.
+            // both sides run the same code.
             #[cfg(feature = "pq-interop-test")]
             {
                 drivers::uart::puts("[pq-interop] running hybrid PQ handshake vs pq.cloudflareresearch.com...\n");

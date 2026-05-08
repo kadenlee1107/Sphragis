@@ -18,7 +18,10 @@ Candidate offsets to try (based on M1/M2 ASC + intuition for v6):
   +0x0800..0x081c (boot marker region)
   +0x0b10 / 0xb14 (we know +b14 is progress)
 """
-import os, pathlib, sys, time
+import os
+import pathlib
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

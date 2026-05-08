@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """AOP is alive at CS=0x6c. Try proper AOPClient flow with full polling.
 Skip dart.initialize() to preserve iBoot DART config."""
-import os, pathlib, sys, time
+import os
+import pathlib
+import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 os.environ.setdefault("M1N1DEVICE", "/dev/ttyACM1")

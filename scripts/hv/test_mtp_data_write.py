@@ -25,7 +25,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 
 from m1n1.proxy import M1N1Proxy, UartInterface
-from m1n1.proxyutils import ProxyUtils, bootstrap_port
+from m1n1.proxyutils import bootstrap_port
 
 
 TESTS = [
@@ -74,7 +74,7 @@ def main():
         except Exception as e:
             dt = time.time() - t0
             print(f"  write FAILED in {dt*1000:.0f} ms: {e!r}")
-            print(f"  >>> m1n1 proxy likely wedged; aborting further tests <<<")
+            print("  >>> m1n1 proxy likely wedged; aborting further tests <<<")
             return 2
         try:
             after = p.read32(addr)

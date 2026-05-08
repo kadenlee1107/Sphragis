@@ -23,7 +23,14 @@ PASS iff:
   - dst=192.168.77.10 (cave), dst_port=51234 (cave orig).
   - frag-reassembled counter ≥ 2 (one frag accepted, one completed).
 """
-import pexpect, re, socket, struct, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -219,7 +226,7 @@ def main():
             details.append(f"back: len={len(back)} total_len={total_len} MF={mf} "
                            f"offset={offset} dst=0x{dst_out:08x} dport={dport}")
             ok = (total_len == 440  # 20 + 20 + 400
-                  and mf == False and offset == 0
+                  and not mf and offset == 0
                   and dst_out == cave_ip
                   and dport == 51234
                   and back[0:6] == bytes(kali_mac))

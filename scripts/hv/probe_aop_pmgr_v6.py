@@ -7,7 +7,11 @@ v5 showed: RUN alone, no INBOX, no doorbell → FW stays IDLE.
 Does FW poll INBOX on its own timer? Or does it strictly require
 a FIQ wake? Write INBOX only; wait 15s; no doorbell.
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

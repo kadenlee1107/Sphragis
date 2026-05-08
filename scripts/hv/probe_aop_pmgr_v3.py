@@ -27,7 +27,11 @@ This script:
 
 NO SMC panic-scratch writes.
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
@@ -284,7 +288,7 @@ def boot_mtp(p, u, iface):
     dc = DockChannel(u, irq_base, fifo_base, 1)
     while dc.rx_count:
         dc.read(dc.rx_count)
-    log(f"  DockChannel ready")
+    log("  DockChannel ready")
 
     # MTP ASC - try our doorbell-based flow instead of StandardASC.start()
     snap(p, MTP, "mtp pre")

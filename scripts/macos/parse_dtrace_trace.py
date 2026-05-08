@@ -19,7 +19,7 @@ import argparse
 import pathlib
 import re
 import sys
-from typing import List, Tuple, Optional
+from typing import List, Optional
 
 # --- event regexes ---------------------------------------------------
 
@@ -223,7 +223,7 @@ def emit_replay(events: List[Event]) -> str:
         elif ev.kind == "mapFirmware":
             addr = ev.args["addr"]
             lines.append(f"print('[{ev.ts}] NOTE: macOS mapped firmware at 0x{addr:x}')")
-            lines.append(f"# firmware staging — already handled by boot_mtp_dartmap.py")
+            lines.append("# firmware staging — already handled by boot_mtp_dartmap.py")
         elif ev.kind in ("enableOutbox", "enableInboxIRQ", "enableOutboxIRQ",
                          "disableAllIRQ", "generateNMI", "ext_doorbell",
                          "start", "startCPU"):

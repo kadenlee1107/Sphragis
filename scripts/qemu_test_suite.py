@@ -12,7 +12,6 @@ Usage:
   python3 scripts/qemu_test_suite.py
 """
 import pexpect
-import sys
 import re
 import time
 from pathlib import Path

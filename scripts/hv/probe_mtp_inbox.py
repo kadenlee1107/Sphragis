@@ -1,4 +1,6 @@
-import sys, os, time
+import sys
+import os
+import time
 sys.path.insert(0, "external/m1n1/proxyclient")
 os.environ["M1N1DEVICE"] = "/dev/ttyACM1"
 from m1n1.proxy import M1N1Proxy, UartInterface
@@ -33,7 +35,6 @@ for off in range(0x8100, 0x8180, 16):
     print(f"  [+{off:#06x}] {' '.join(row)}")
 
 # Send a test message to INBOX manually and watch for response
-import struct
 print("\n=== Sending Mgmt_Ping (type=3) manually ===")
 # Mgmt_Ping body = 0, TYPE=3, EP=0
 # mgmt messages use the upper bits for TYPE, lower for fields

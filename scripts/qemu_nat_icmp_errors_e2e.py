@@ -25,7 +25,14 @@ Flow:
   Also try a Destination Unreachable (type 3) to confirm both error
   types go through.
 """
-import pexpect, re, socket, struct, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 

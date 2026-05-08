@@ -258,7 +258,7 @@ def main():
     TARGET = "10.0.2.2"  # QEMU slirp alias for the Mac
     CHAIN = [
         ("uname -a",                       "target identification"),
-        (f"nslookup example.com",          "DNS recon (public domain)"),
+        ("nslookup example.com",          "DNS recon (public domain)"),
         (f"ping -c 2 {TARGET}",            "ICMP reachability"),
         (f"traceroute {TARGET}",           "path discovery"),
         (f"wget -qO- http://{TARGET}:{port}{PROBE_PATH}",

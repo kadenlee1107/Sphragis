@@ -36,7 +36,11 @@ This script tries:
   9. Send SetIOPPower via M3 INBOX (reg[0]+0x60).
  10. Poll reg[0]+0xa0 for I2A response (Hello etc).
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

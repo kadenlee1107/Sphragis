@@ -29,7 +29,11 @@ Strategy:
   6. ** RING DOORBELL: +0x1004=0x10, +0x1014=1 **
   7. poll +0x8830 for FW Hello / IOPPowerAck
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

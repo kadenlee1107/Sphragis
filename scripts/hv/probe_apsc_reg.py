@@ -2,7 +2,8 @@
 """Probe the APSC-region register at cluster_base + 0x200f8 on both
 ECPU and PCPU. If the reads work, the address is mapped. Write
 attempt is what we need to test — but read is safe."""
-import sys, pathlib, time
+import sys
+import pathlib
 M1N1 = pathlib.Path(__file__).resolve().parents[2] / "external/m1n1/proxyclient"
 sys.path.insert(0, str(M1N1))
 from m1n1.setup import *

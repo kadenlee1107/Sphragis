@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Drive nat-beacon-selftest inside QEMU."""
-import pexpect, re, socket, subprocess, sys, time
+import pexpect
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 from datetime import datetime
 ROOT = Path(__file__).resolve().parent.parent

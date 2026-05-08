@@ -1,7 +1,11 @@
 # DESIGN: Bat_OS Has No Browser
 
 **Status:** Active strategy as of 2026-05-07.
-**Supersedes:** `DESIGN_BROWSER.md`, `DESIGN_CHROMIUM.md`.
+**History:** This decision superseded two prior browser-engine designs
+(an in-kernel Rust engine and a Chromium-as-cave port). Both prior
+docs were deleted on 2026-05-08 once it was clear the no-browser
+direction was permanent — recoverable from git history (search for
+`BROWSER.md` / `DESIGN_CHROMIUM.md`).
 
 ## The decision
 

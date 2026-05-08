@@ -17,7 +17,10 @@ Run while Mac is at stock m1n1:
 
 If reads SError, the proxy will hang and we'll see no diff output.
 """
-import sys, os, time, pathlib
+import sys
+import os
+import time
+import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
@@ -65,7 +68,7 @@ def main():
     iface = UartInterface()
     p = M1N1Proxy(iface, debug=False)
     bootstrap_port(iface, p)
-    u = ProxyUtils(p, heap_size=128 * 1024 * 1024)
+    ProxyUtils(p, heap_size=128 * 1024 * 1024)
     print("[scan] proxy alive", flush=True)
 
     blocks = [

@@ -24,7 +24,14 @@ Expected:
   5. nat-pump drains nic 1 and reports:
        drained 4, allow=2, drop-policy=1, drop-unk-src=1, drop-parse=0
 """
-import pexpect, re, socket, struct, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 

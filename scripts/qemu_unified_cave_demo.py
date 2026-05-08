@@ -5,7 +5,11 @@ Unified BatCave demo — phases 5, 6, 7 all exercised.
 Proves `batcave list/destroy/run/seal` work identically on native AND
 docker-backed caves, and that the wipe path reaches both.
 """
-import pexpect, re, time, subprocess, atexit
+import pexpect
+import re
+import time
+import subprocess
+import atexit
 from pathlib import Path
 from datetime import datetime
 

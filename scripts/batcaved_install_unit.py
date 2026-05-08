@@ -9,7 +9,10 @@ INSTALL_TOOL kali curl through the protocol and verifies:
   4. A bogus package name returns ERR.
 Runs without QEMU/Bat_OS — exercises the daemon layer directly.
 """
-import socket, subprocess, sys, time
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent

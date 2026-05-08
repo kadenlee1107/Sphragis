@@ -3,7 +3,11 @@
 MTP may boot more fully than AOP since journal said it at least consumed
 1 INBOX message. Simpler endpoint set likely needs fewer init calls.
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 from m1n1.proxy import M1N1Proxy, UartInterface

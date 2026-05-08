@@ -33,7 +33,7 @@ selftest-on-boot = []
 # implementation interops with a real third-party server. Used to prove
 # the IETF draft-ietf-tls-ecdhe-mlkem-04 wire layout fix end-to-end —
 # closed-loop selftests can't catch wire-format regressions if both
-# sides run the same code. See DESIGN_TLS_PQ_FIX.md.
+# sides run the same code.
 pq-interop-test = []
 
 # Drive a real end-to-end HTTPS request via the kernel-mediated HTTPS

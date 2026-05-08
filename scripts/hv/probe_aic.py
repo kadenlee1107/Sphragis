@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """One-shot: probe ADT for /arm-io/aic + AOP/MTP interrupts to plan AIC mask."""
-import os, pathlib, sys, struct
+import os
+import pathlib
+import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 

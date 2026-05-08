@@ -26,7 +26,14 @@ Python nic 0 peer MUST see ONE unfragmented packet with:
 
 Also verifies `nat-stats` frag-reassembled >= 1.
 """
-import pexpect, re, socket, struct, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -209,7 +216,7 @@ def main():
             details.append(f"out: len={len(out)} total_len={total_len} MF={mf} offset={offset} "
                            f"src=0x{src_ip:08x}:{sport} dst=0x{dst_ip_out:08x}:{dport}")
             ok = (total_len == 140  # 20 + 20 + 100
-                  and mf == False and offset == 0
+                  and not mf and offset == 0
                   and src_ip == ip_int("10.0.2.15")
                   and dst_ip_out == dst_ip
                   and dport == 443 and sport >= 50000

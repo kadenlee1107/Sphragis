@@ -1,7 +1,8 @@
 """Check dart-mtp error / status registers for translation faults.
 The FW is hung post-SetIOPPower. If it faulted on a DART translation,
 the DART hw latches the fault info — iova, stream, type."""
-import sys, os
+import sys
+import os
 sys.path.insert(0, "external/m1n1/proxyclient")
 os.environ["M1N1DEVICE"] = "/dev/ttyACM1"
 from m1n1.proxy import M1N1Proxy, UartInterface
@@ -55,7 +56,7 @@ for off in range(0x200, 0x240, 4):
 
 # Also check the MTP ASC's own IRQ status
 mtp_base = 0x394600000
-print(f"\n=== MTP IRQ/status (non-mailbox) ===")
+print("\n=== MTP IRQ/status (non-mailbox) ===")
 for off, name in [(0x0, "IRQ_CTRL"), (0x4, "IRQ_STATUS"), (0x8, "IRQ_MASK"),
                   (0xc, "IRQ_ack"), (0x50, "?"), (0x54, "?"),
                   (0x444, "IMPL_0x444"), (0x450, "?")]:

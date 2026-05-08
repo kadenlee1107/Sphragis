@@ -19,7 +19,11 @@ Steps:
  7. MTP StandardASC.boot + mgmt.start with 15s wait
  8. If boot completes, attach keyboard
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path("/home/kaden-lee/code/Bat_OS")
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

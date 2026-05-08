@@ -10,7 +10,11 @@ Differences from boot_mtp_full.py:
 Goal: replicate the M1/M2-working sequence as closely as possible
 and see if the ascwrap-v6 FW boots under those conditions.
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
@@ -130,7 +134,7 @@ def main():
         p.write32(0x3882B8008, 0xffffffff)
         p.write32(0x3882B802C, 0xffffffff)
         p.write32(0x3882B8020, 0xffffffff)
-        log(f"  WDT regs zapped")
+        log("  WDT regs zapped")
     except Exception as e:
         log(f"  WDT disable err: {e!r}")
 

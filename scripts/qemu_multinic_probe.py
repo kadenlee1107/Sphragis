@@ -10,7 +10,13 @@ Launches QEMU with TWO virtio-net devices:
 
 Expected: `nic-status` reports 2 NICs, both ready, two different MACs.
 """
-import pexpect, re, signal, socket, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -85,7 +91,7 @@ def main():
         "-kernel", str(KERNEL),
     ]
 
-    print(f"[multinic] launching QEMU with two NICs")
+    print("[multinic] launching QEMU with two NICs")
     fp = open(LOG, "wb")
     c = pexpect.spawn(qemu_args[0], qemu_args[1:], timeout=90, logfile=fp, encoding=None)
     verdict = "FAIL"

@@ -2,7 +2,8 @@
 Both are ascwrap-v6 on M4. AOP is always-on, booted by iBoot before
 we arrive. MTP is what we've been trying to bring up.
 """
-import sys, os
+import sys
+import os
 sys.path.insert(0, "external/m1n1/proxyclient")
 os.environ["M1N1DEVICE"] = "/dev/ttyACM1"
 from m1n1.proxy import M1N1Proxy, UartInterface

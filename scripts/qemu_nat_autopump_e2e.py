@@ -6,7 +6,14 @@ but NO `nat-forward` / `nat-reply` shell commands between sends.
 The desktop's idle loop is expected to call `nat::tick()` on every
 iteration, catching + forwarding each frame within a few ms.
 """
-import pexpect, re, socket, struct, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 

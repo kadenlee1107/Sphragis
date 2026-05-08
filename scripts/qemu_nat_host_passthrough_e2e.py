@@ -18,7 +18,14 @@ Flow:
      falls through to `net::dispatch_host_frame`, counter bumps.
   4. `nat-stats`: host-frames-pass >= 1.
 """
-import pexpect, re, socket, struct, subprocess, sys, threading, time
+import pexpect
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 

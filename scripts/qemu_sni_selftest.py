@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Drive cpol-sni-selftest (in-kernel TLS ClientHello parser + match)."""
-import pexpect, re, socket, subprocess, sys, time
+import pexpect
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 from datetime import datetime
 

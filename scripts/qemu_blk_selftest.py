@@ -5,7 +5,13 @@ Creates a tiny raw disk image, attaches it to QEMU as virtio-blk,
 boots Bat_OS, drives `blk-selftest` which writes a pattern to
 sector 42 then reads it back.
 """
-import os, pexpect, re, socket, subprocess, sys, tempfile, time
+import os
+import pexpect
+import socket
+import subprocess
+import sys
+import tempfile
+import time
 from pathlib import Path
 from datetime import datetime
 

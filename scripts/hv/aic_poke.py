@@ -7,7 +7,9 @@ Assumes AOP already booted from prior script and is sitting at CS=0x48
   2. If asserted, try AIC MASK_SET → does CS bit 2 toggle?
   3. Drain AIC EVENT — see what events are queued.
 """
-import os, pathlib, sys, time
+import os
+import pathlib
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))

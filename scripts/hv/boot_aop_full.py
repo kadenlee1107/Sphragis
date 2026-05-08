@@ -14,7 +14,11 @@ that could reset state):
   9. If nothing: try other TYPEs + different doorbell values
   10. Try writing to +0x8118/+0x811c and +0x8158
 """
-import os, pathlib, struct, sys, time
+import os
+import pathlib
+import struct
+import sys
+import time
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 from m1n1.proxy import M1N1Proxy, UartInterface
@@ -261,7 +265,7 @@ def main():
         snap(p, "post-send")
         got = wait_outbox(p, 2, name)
         if got:
-            log(f"  *** FW replied! ***")
+            log("  *** FW replied! ***")
             snap(p, "got-reply")
             os._exit(0)
 

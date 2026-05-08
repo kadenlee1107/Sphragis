@@ -7,7 +7,11 @@ or in DRAM via DART.
 Strategy: hash all major FW-writable regions BEFORE sending Ping,
 then AFTER, and diff. Any changed bytes ARE FW's response footprint.
 """
-import os, pathlib, struct, sys, time, hashlib
+import os
+import pathlib
+import struct
+import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
@@ -218,7 +222,7 @@ def main():
     # AFTER
     a818 = p.read32(AOP + 0x818)
     aob = p.read32(AOP + 0x8114)
-    log(f"\n=== AFTER ping ===")
+    log("\n=== AFTER ping ===")
     log(f"  +0x818 = {a818:#x} (delta {a818-b818:+#x})  OB_CTRL = {aob:#x}")
 
     log("\ndiffing regions:")

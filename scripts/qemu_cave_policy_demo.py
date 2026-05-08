@@ -50,9 +50,9 @@ def main():
         # Grab a bit more after to print the bookkeeping numbers
         try:
             child.expect(rb"bat_os\s*>\s*", timeout=5)
-            tail = child.before.decode("utf-8", "replace")
+            child.before.decode("utf-8", "replace")
         except pexpect.TIMEOUT:
-            tail = ""
+            pass
 
         print(f"[cave-policy] verdict: {verdict}")
         print("--- self-test output ---")
