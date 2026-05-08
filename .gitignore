@@ -14,6 +14,18 @@
 # Compressed logs from past sessions (regenerable).
 *.log
 
+# Per-session QEMU smoke output, screenshots, capture noise.
+# Everything under logs/ is regenerable by running the smoke scripts.
+# Same case-insensitive APFS / case-sensitive git collision that hit
+# /captures (296 phantom log entries here from old A-Z capture batches);
+# untracked together on 2026-05-08.
+/logs
+
+# Agent-orchestration tooling (claude-flow / hive-mind / swarm) leaks
+# state into the working tree when those features run. Not project state.
+/.hive-mind
+/.swarm
+
 # Claude Code / harness local state (not project state).
 /.claude
 /.claude-flow

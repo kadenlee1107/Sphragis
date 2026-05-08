@@ -11,6 +11,65 @@ end of a session.
 
 ---
 
+## 2026-05-08 (squeaky-clean Phase 1) — Mac — 🧼 logs/ untracked, .gitignore tightened
+
+**First phase of the squeaky-clean pass.** User wants the codebase
+"OCD-level nice no matter how long it takes." Spec to follow lays out
+9 phases — Phase 1 is the smallest + highest visible win: stop
+shipping per-session noise inside the repo.
+
+### Tag
+
+`pre-squeaky-clean-2026-05-08` at trunk HEAD `64a27ca8` (post PR #6 +
+#7 + #8 merges, all rebased + landed earlier this session).
+
+### What landed
+
+- **`/logs` untracked.** 296 files removed from the index. They were
+  the same case-collision phantom-modification class of files PR #4
+  fixed for `/captures`: APFS is case-insensitive, git is case-
+  sensitive, so `Acap.log` and `acap.log` resolve to the same on-disk
+  file but git tracks them as two separate blobs — every `git status`
+  reported phantom modifications. Same root-cause fix.
+- **`.gitignore` tightened.** Added `/logs`, `/.hive-mind`, `/.swarm`.
+  The first stops re-tracking smoke output / screenshots / capture
+  log noise. The other two stop agent-orchestration tooling state
+  from leaking into the repo.
+- **`logs/ucap.log` perpetual `M` cleared.** That entry was case-
+  conflict noise that showed `M logs/ucap.log` on every `git status`.
+  Now the directory is gitignored entirely.
+
+### Verification
+
+- `cargo check --target aarch64-unknown-none --features gicv3` clean.
+- `qemu_selftests_smoke.py` PASS (no regressions; 2 x509 + 4
+  scheduler sub-tests).
+- `git status -s` after the change: only `.gitignore` modification +
+  the 296 deletions queued for commit. After commit: clean.
+
+### Diff scale
+
+- 296 files deleted from index (all empty case-collision phantoms)
+- 1 file modified (`.gitignore`)
+- 25 092 line deletions (mostly the empty-file `_log_at_filename_X.log`
+  trailing newlines × 296)
+
+### Next
+
+PR #9 → `cleanup/phase1-repo-hygiene`. After that:
+
+- Phase 2: X.509 verifier fix (accept chains where the last
+  intermediate is signed by a trust anchor).
+- Phase 3: STUMP archaeology cleanup (418 inline references).
+- Phase 4: Linux ABI shim dead-code purge (drop the
+  module-level `#![allow(dead_code)]`).
+- Phase 5: TODO/FIXME/HACK pass.
+- Phase 6: `unwrap()` audit.
+- Phase 7: Pinned nightly toolchain → `-Zfixed-x18` → 0 warnings.
+- Phase 8: Clippy clean.
+
+---
+
 ## 2026-05-08 (post-cleanup) — Mac — 🌐 HTTPS WORKS: kernel-mediated, gated by cpol, real GET / 200 OK
 
 **New feature work** after the post-no-browser cleanup-thread queue
