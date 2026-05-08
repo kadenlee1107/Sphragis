@@ -237,8 +237,8 @@ pub fn check_subresource(url: &str) -> Result<(), &'static str> {
     if main.matches(&sub) { return Ok(()); }
 
     // Cross-origin. Check allowlist.
-    let main_host = unsafe { &main.host[..main.host_len as usize] };
-    let sub_host  = unsafe { &sub.host[..sub.host_len as usize] };
+    let main_host = &main.host[..main.host_len as usize];
+    let sub_host  = &sub.host[..sub.host_len as usize];
     let allowed = unsafe {
         let list = &*core::ptr::addr_of!(ALLOWLIST);
         list.iter().any(|e| {

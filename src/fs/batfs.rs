@@ -612,7 +612,7 @@ pub fn stats() -> (usize, usize) {
 pub unsafe fn panic_wipe() {
     let key_ptr = core::ptr::addr_of_mut!(MASTER_KEY) as *mut u8;
     for i in 0..32 {
-        core::ptr::write_volatile(key_ptr.add(i), 0);
+        unsafe { core::ptr::write_volatile(key_ptr.add(i), 0); }
     }
 }
 

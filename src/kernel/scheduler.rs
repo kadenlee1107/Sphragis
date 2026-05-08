@@ -10,17 +10,6 @@ unsafe extern "C" {
     fn switch_context(old: *mut CpuContext, new: *const CpuContext);
 }
 
-/// Called on every timer tick from the interrupt handler.
-pub fn tick() {
-    // Drain up to DRAIN_CHUNK bytes from the BatCave stdio ring to the UART.
-    // Decouples verbose stderr from PL011 back-pressure.
-    crate::batcave::linux::stdio_ring::drain_to_uart();
-    // Wake any thread whose deadline has passed. Bounded O(MAX_THREADS)
-    // per tick. See DESIGN_SCHEDULER_BLOCK_ON.md decision #4.
-    crate::batcave::linux::threads::wake_expired_deadlines();
-    schedule();
-}
-
 /// Pick the highest-priority ready task and switch to it.
 pub fn schedule() {
     let current_id = process::current_id();

@@ -24,7 +24,7 @@ unsafe extern "C" {
 fn text_end_addr() -> u64 {
     // SAFETY: `__text_end` is a symbol defined by the linker; we only take its
     // address, never dereference.
-    (unsafe { core::ptr::addr_of!(__text_end) }) as u64
+    core::ptr::addr_of!(__text_end) as u64
 }
 
 const PAGE_SIZE: usize = 4096;

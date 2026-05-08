@@ -107,6 +107,110 @@ combiner, or SS length is caught two ways:
 
 ---
 
+## 2026-05-08 (latest) — Mac — 🧹 WARNING SWEEP: 216 → 1, build is clean
+
+**Third (and final) of three follow-up cleanup threads.** Closes the
+post-no-browser priority list: futex unification → TLS PQ fix →
+**warning cleanup**. Branch: `cleanup/warnings` off
+`feat/js-engine-browser-posix`.
+
+### Context
+
+Pre-cleanup `cargo check --target aarch64-unknown-none --features
+gicv3` emitted 216 warnings, dominated by:
+
+- 148 `dead_code` (Linux-ABI staging + post-no-browser leftovers)
+- 38 unsafe-block warnings (Edition 2024 makes inner `unsafe`
+  ops in `unsafe fn` require explicit blocks; emitted as warnings
+  pending the hard-error transition).
+- 27 unused {imports, variables, mut, assignments, unsafe blocks,
+  macros, doc comments}.
+- 1 rustc-side deprecation about `-Ctarget-feature=+reserve-x18`
+  (unactionable on stable rust — see below).
+
+### Phases
+
+1. **Phase A — Edition 2024 unsafe-block warnings (38 → 0)**
+   Wrapped each unsafe op inside `unsafe fn` in a discrete `unsafe
+   { ... }` block. Touched `src/fs/batfs.rs`, `src/kernel/mm/heap.rs`,
+   `src/net/tcp.rs`, `src/net/tls.rs::panic_wipe`,
+   `src/security/auth.rs::panic_wipe`. No behavioural change —
+   forward-prep for the rustc rolling lint becoming a hard error.
+
+2. **Phase B — Mechanical (27 → 0)**
+   Deleted 6 unused imports, removed/underscored 9 unused vars,
+   reverted `let mut → let` for 3 vars, removed 4 unnecessary
+   `unsafe { }` wrappers, deleted 2 unused vfs macros + 1 dangling
+   doc comment, fixed `assigned-but-never-read` patterns
+   (`has_stdin` / `total` / `sctlr` — last one got the missing
+   `print_hex(sctlr)` debug line added that was clearly meant to
+   exist).
+
+3. **Phase C — `dead_code` (148 → 0)**, per user's "delete obvious,
+   allow staged" rule:
+   - Module-level `#![allow(dead_code)]` on `src/batcave/linux/
+     mod.rs`: silences 100 sites in the Linux-ABI compatibility
+     shim, where syscalls and constants are deliberately staged
+     ahead of the cave that exercises them.
+   - **Deletions** (post-no-browser leftovers):
+     `src/net/fetch.rs` 407 → ~50 lines: dropped `fetch_https`,
+     `fetch_post_https`, and 8 helpers; kept only `parse_url`.
+     `src/net/tls.rs`: deleted unused TLS protocol constants
+     (TLS_APPLICATION_DATA, TLS_VERSION_12/13,
+     ENCRYPTED_EXTENSIONS, CERTIFICATE, CERTIFICATE_VERIFY,
+     FINISHED, TLS_CHACHA20_POLY1305_SHA256, all EXT_*); deleted
+     `tdbg_byte`, `session_ref`, `SESSION_ptr`, `is_established`,
+     `store_le_u64`.
+     `src/ui/shell.rs`: deleted browser-era HTTP helpers
+     (`parse_content_length`, `blit_render_to_gpu`, `url_encode`,
+     `emit_b64_dump`).
+     Also `fs::batfs_disk::boot_counter`,
+     `kernel::scheduler::tick`, `ui::gpu::set_pixel{,_raw}`,
+     `ui::apps::filemanager::row_count` + `COL_NAME_X`,
+     `boot_screen::STATUS_ROW_H`,
+     unused `AtomicUsize` and `vec`-macro imports.
+   - **`#[allow(dead_code)]` for staged items**:
+     `tls::set_hybrid_enabled` (used by PR #6's pq-interop hook —
+     compatible with either merge order),
+     `arp::unsolicited_count` (staged for `info net` shell cmd),
+     `ui::shell::run` (GUI shell entrypoint awaiting wiring),
+     `main::apple_run_cmd` + `apple_kernel_self_test` (M4 boot
+     path, currently commented at single call site),
+     `boot_screen::run_dev_preview` (Apple HV preview),
+     `AlignedStack` tuple-field in shell.rs.
+
+4. **Phase D — Verify**
+   - Release build: clean, only the rustc-side reserve-x18
+     deprecation remains.
+   - `scripts/qemu_selftests_smoke.py`: all 6 sub-tests still
+     PASS (2 x509 + 4 scheduler). No regressions.
+
+### `reserve-x18` deprecation: known followup
+
+Tried switching `.cargo/config.toml` to `-Zfixed-x18`, hit
+`error: 1 nightly option were parsed` because we're on stable
+rust 1.94.1. Reverted to `+reserve-x18` with a comment marking it
+as a deferred migration (couples with other `[unstable]` flags
+that need toolchain review at the same time). One unfixable
+warning is acceptable; documented inline in `.cargo/config.toml`.
+
+### Diff scale
+
+- 216 warnings → 1 (the unactionable rustc deprecation)
+- ~750 lines deleted (browser leftovers, dead TLS constants,
+  fetch.rs body)
+- 8 `#[allow(dead_code)]` per-item annotations
+- 1 module-level `#![allow(dead_code)]` (Linux-ABI shim)
+
+### Next
+
+- PR #7 to merge `cleanup/warnings` into
+  `feat/js-engine-browser-posix`.
+- Post-merge: the post-no-browser cleanup-thread queue is empty.
+  Re-evaluate priorities.
+
+---
+
 ## 2026-05-08 (later) — Mac — 🧵 FUTEX DEADLINE UNIFIED: single source of truth on BlockReason
 
 **First of three follow-up cleanup threads** after the four-thread

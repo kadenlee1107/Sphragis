@@ -1147,9 +1147,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // handler's stack. The regular syscall dispatcher
                     // can't see the frame, so short-circuit it here.
                     let result: i64 = if syscall_num == 139 {
-                        let sf = unsafe {
-                            &mut *(frame as *mut crate::batcave::linux::signal::TrapFrame)
-                        };
+                        let sf = &mut *(frame as *mut crate::batcave::linux::signal::TrapFrame);
                         crate::batcave::linux::signal::complete_rt_sigreturn(sf)
                         // NB: do NOT overwrite f.x[0] below — every
                         // register has just been restored from the
@@ -2482,6 +2480,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             }
             uart::puts("  ESR_full=0x"); print_hex(esr);
             uart::puts("  TTBR0=0x"); print_hex(ttbr0);
+            uart::puts("  SCTLR=0x"); print_hex(sctlr);
             uart::puts("  FAR=0x"); print_hex(far);
             uart::puts("\n");
             // Look up the L2_low entry for ELR and read phys bytes directly.

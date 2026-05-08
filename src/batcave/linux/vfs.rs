@@ -111,20 +111,6 @@ fn active_mut() -> &'static mut VfsInstance {
     }
 }
 
-// Compatibility: access nodes through active instance
-macro_rules! NODES {
-    () => { unsafe {
-        let idx = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
-        &(*core::ptr::addr_of!(INSTANCES))[idx].nodes
-    } };
-}
-macro_rules! NODES_MUT {
-    () => { unsafe {
-        let idx = core::ptr::read_volatile(core::ptr::addr_of!(ACTIVE_INSTANCE));
-        &mut (*core::ptr::addr_of_mut!(INSTANCES))[idx].nodes
-    } };
-}
-
 // Legacy compatibility statics — redirect to active instance
 static mut VFS_READY: bool = false;
 

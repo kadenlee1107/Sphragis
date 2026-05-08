@@ -352,7 +352,7 @@ fn draw_disconnected_empty(
 }
 
 fn draw_timeline(
-    x: u32, y: u32, w: u32, h: u32,
+    x: u32, y: u32, _w: u32, h: u32,
     sw: u32, fb: *mut u32,
     dim: u32, ink: u32, mid: u32, green: u32, cyan: u32, bg: u32,
 ) {

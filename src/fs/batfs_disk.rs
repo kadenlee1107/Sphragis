@@ -482,8 +482,3 @@ pub fn flush() -> Result<(), &'static str> {
     blk::flush().map_err(|_| "blk flush failed")
 }
 
-/// Boot counter from the active superblock — used by audit logs.
-pub fn boot_counter() -> u64 {
-    if !is_mounted() { return 0; }
-    unsafe { ACTIVE_SB.boot_counter }
-}

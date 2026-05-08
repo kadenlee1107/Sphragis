@@ -33,7 +33,6 @@
 
 extern crate alloc;
 use alloc::vec::Vec;
-use alloc::vec;
 
 use chacha20poly1305::{
     aead::{AeadInPlace, KeyInit},

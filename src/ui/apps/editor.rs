@@ -439,12 +439,6 @@ pub fn save_current() {
         b.name[..default.len()].copy_from_slice(default);
         b.name_len = default.len();
     }
-    // Total size = sum of line lens + (line_count - 1) newlines.
-    let mut total: usize = 0;
-    for r in 0..b.line_count {
-        total += b.line_lens[r] as usize;
-        if r + 1 < b.line_count { total += 1; }
-    }
     // Stage into a single contiguous buffer so we can hand it to
     // BatFS in one call.
     static mut SAVE_TMP: [u8; MAX_LINES * MAX_LINE_LEN] = [0u8; MAX_LINES * MAX_LINE_LEN];
