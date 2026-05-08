@@ -108,7 +108,7 @@ pub fn set_rate_full(cave: CaveId, pps: u32, burst: u32,
         }
         let now = now_ticks();
         if let Some(i) = find(&cave) {
-            let b = (*t)[i].as_mut().unwrap();
+            let b = (*t)[i].as_mut().expect("cave_shaper::find returned valid index pointing at Some bucket");
             b.tokens_per_sec = pps;
             b.burst = burst;
             b.tokens_scaled = (burst as u64) * TICK_SCALE;
@@ -182,7 +182,7 @@ pub fn check_and_debit_sized(cave: &CaveId, frame_bytes: usize) -> RateVerdict {
     let tps = ticks_per_sec();
     unsafe {
         let t = core::ptr::addr_of_mut!(BUCKETS);
-        let b = (*t)[idx].as_mut().unwrap();
+        let b = (*t)[idx].as_mut().expect("cave_shaper::find returned valid index pointing at Some bucket");
         // Refill both axes based on elapsed ticks.
         let elapsed = now.saturating_sub(b.last_refill_ticks);
         if elapsed > 0 {
@@ -240,7 +240,7 @@ pub fn check_and_debit(cave: &CaveId) -> RateVerdict {
     let tps = ticks_per_sec();
     unsafe {
         let t = core::ptr::addr_of_mut!(BUCKETS);
-        let b = (*t)[idx].as_mut().unwrap();
+        let b = (*t)[idx].as_mut().expect("cave_shaper::find returned valid index pointing at Some bucket");
         // Refill.
         let elapsed = now.saturating_sub(b.last_refill_ticks);
         if elapsed > 0 {

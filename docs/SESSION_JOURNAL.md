@@ -11,6 +11,67 @@ end of a session.
 
 ---
 
+## 2026-05-08 (squeaky-clean Phase 6) — Mac — 💥 unwrap audit: every panic site has a reason
+
+**Sixth phase of the squeaky-clean pass.** 15 `.unwrap()` call
+sites in `src/`, each one a potential kernel panic. Audit + replace
+with `.expect("reason")` so a panic message tells you which
+invariant broke instead of just `panicked at .unwrap()`.
+
+### What survived the audit
+
+13 production unwraps + 2 `#[test]`-block unwraps. The test ones are
+idiomatic and stay; the production ones all turned out to be
+infallible-by-construction:
+
+| Site | Why it can't actually fire | Replacement |
+|---|---|---|
+| `gcm_verified.rs` × 2 | 16-byte slice from a `while i + 16 <= data.len()` loop | `.expect("gcm: 16-byte slice → [u8; 16] is infallible")` |
+| `nat::ensure_ip_init` | Option just set to Some on the line above | `.expect("nat::IP_BINDINGS just initialised")` |
+| `cave_policy::ensure_init` | Option just set to Some on the line above | `.expect("cave_policy::POLICIES just initialised")` |
+| `cave_shaper.rs` × 3 | `find(cave)` returned a valid index pointing at a Some bucket | `.expect("cave_shaper::find returned valid index pointing at Some bucket")` |
+| `adt.rs:134` | bounds-checked 4-byte slice → `[u8; 4]` | `.expect("adt: bounds-checked 4-byte slice → [u8; 4] is infallible")` |
+| `secure_channel.rs` × 3 | 8-byte / 16-byte / 12-byte slices from length-checked frame splits | per-site `.expect("secure_channel: …")` |
+
+Every conversion is byte-for-byte identical at runtime — just better
+debug output if the assumed invariant ever breaks.
+
+### Remaining `.unwrap()` calls
+
+- 2 in `#[test]` blocks in `adt.rs` (test assertions; idiomatic).
+- 2 string-only references inside comments in `vfs.rs` (historical
+  notes; not actual call sites).
+
+### Why this matters
+
+Each `.unwrap()` in kernel code is a potential `panic!()`. In a kernel
+that's a hard halt. The actual panic-on-impossible-state cases are
+genuinely impossible — but if a refactor ever changes the surrounding
+code so the invariant breaks, `panicked at .unwrap()` is useless;
+`.expect("nat::IP_BINDINGS just initialised")` tells the reviewer
+exactly which invariant they invalidated.
+
+### Verification
+
+- `cargo check --target aarch64-unknown-none --features gicv3` — clean
+- `qemu_selftests_smoke.py` — all 6 sub-tests PASS
+- `grep -rE "\.unwrap\(\)" --include="*.rs" src/` — 4 matches (2 in
+  tests, 2 in comments)
+
+### Diff scale
+
+- 7 files modified
+- ~13 `.unwrap()` → `.expect("reason")` conversions
+- ~0 lines net delta
+
+### Next
+
+Phase 7: pinned nightly toolchain → `-Zfixed-x18` → literal **0
+warnings**. The last unactionable warning was the rustc-side
+`reserve-x18` deprecation; this phase migrates the rustflag.
+
+---
+
 ## 2026-05-08 (squeaky-clean Phase 5) — Mac — ✏️ TODO/FIXME/HACK markers: 0 left
 
 **Fifth phase of the squeaky-clean pass.** 19 TODO markers across

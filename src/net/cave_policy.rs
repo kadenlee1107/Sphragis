@@ -153,7 +153,8 @@ fn ensure_init() -> &'static mut Vec<CavePolicy> {
         if (*ptr).is_none() {
             *ptr = Some(Vec::new());
         }
-        (*ptr).as_mut().unwrap()
+        // Just-set Some above; never re-cleared.
+        (*ptr).as_mut().expect("cave_policy::POLICIES just initialised")
     }
 }
 
