@@ -11,6 +11,80 @@ end of a session.
 
 ---
 
+## 2026-05-08 (squeaky-clean Phase 2) — Mac — 🔐 X.509 verifier accepts intermediate-signed-by-anchor chains
+
+**Second phase of the squeaky-clean pass.** Real engineering, not
+cleanup: closes a verifier limitation that blocked any HTTPS host
+not shipping its own root cert in the chain.
+
+### The bug
+
+`x509::verify_chain` had two ways to mark a chain trusted:
+- (a) the last cert in the chain matches a trust anchor by exact bytes
+- (b) the last cert and an anchor share the same SubjectPublicKey
+  (cross-signed root case — different DER, same trust)
+
+It did NOT have:
+- **(c) the last cert is signed by an anchor** — i.e. the typical
+  real-world case where the server sends `[leaf, intermediate(s)]`
+  and stops short of the root because RFC 5246 says clients should
+  have the root locally.
+
+Result: chains rooted at any major Let's Encrypt-style anchor failed
+at "untrusted root" even though the chain is valid. PR #8's HTTPS
+smoke had to pin to `pq.cloudflareresearch.com` because that server
+happens to include the cross-signed GTS Root R4 in its reply. Most
+real-world hosts don't.
+
+### Fix
+
+`x509::verify_chain` now walks all three accept paths in order. For
+each anchor in `TRUST_STORE`:
+1. Path (a): exact-bytes equality vs anchor.
+2. Path (b): same SubjectPublicKey as anchor.
+3. Path (c): `verify_signed_by(current_cert, current_der, anchor)`
+   succeeds — the anchor is a virtual parent and its signature
+   over the last cert verifies.
+
+Any one of the three marks the chain trusted. All three are spec-
+equivalent ways of saying "the chain rooted at some entry in
+TRUST_STORE."
+
+### Verification
+
+- **Letsencrypt.org chain (path c)**: temporary smoke flip showed
+  `[tls] cert chain ok (x509)` and `[tls] CertificateVerify ok`
+  against `letsencrypt.org`'s `[leaf, E7]` chain (no root sent;
+  E7 signed by ISRG Root X1 in our trust store). Pre-fix this
+  failed at "untrusted root". Post-fix it validates.
+- **pq.cloudflareresearch.com (path b)**: production smoke restored,
+  passes — `200 OK`, hybrid PQ on, `body-bytes=6264`. Cross-signed
+  root path still works.
+- **selftests-smoke**: all 6 sub-tests still PASS (2 x509 + 4
+  scheduler). No regressions.
+
+### Out of scope
+
+`letsencrypt.org` smoke under hybrid PQ surfaces a SEPARATE bug:
+the server picks X25519MLKEM768, decap reports OK, then handshake-
+record auth fails. The verifier path is not at fault — chain
+validation never gets reached. Filed for a later phase.
+
+### Diff scale
+
+- 1 file modified (`src/net/x509.rs`)
+- ~40 lines added (the path-c arm + comments)
+- Verifier surface unchanged from the caller's perspective: same
+  `verify_chain` signature, same `VerifyOutcome` variants. Strictly
+  more permissive — chains that used to fail at UntrustedRoot now
+  validate; chains that used to validate still do.
+
+### Next
+
+Phase 3: STUMP archaeology cleanup (418 inline references).
+
+---
+
 ## 2026-05-08 (squeaky-clean Phase 1) — Mac — 🧼 logs/ untracked, .gitignore tightened
 
 **First phase of the squeaky-clean pass.** User wants the codebase
