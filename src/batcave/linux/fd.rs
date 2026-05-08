@@ -33,6 +33,9 @@ pub enum FdKind {
     Pipe(u16),      // (slot<<1)|side — see pipe_buf.rs
     Eventfd(u16),   // async_fds::EVENTFDS slot index
     Timerfd(u16),   // async_fds::TIMERFDS slot index
+    TlsSocket(u16), // tcp::MAX_PCBS / tls::TLS_MAX_PCBS slot id (1:1 paired);
+                    // backs the fd returned by `bat_https_open` syscall.
+                    // sys_read/sys_write/sys_close route through net::https.
 }
 
 #[derive(Clone, Copy)]
@@ -405,6 +408,48 @@ pub fn eventfd_slot(fd: u32) -> Option<usize> {
 pub fn timerfd_slot(fd: u32) -> Option<usize> {
     match get(fd)?.kind {
         FdKind::Timerfd(slot) => Some(slot as usize),
+        _ => None,
+    }
+}
+
+/// Allocate an fd backed by a TLS socket. Used by `bat_https_open(2)`.
+/// `pcb` is the TLS slot id (== TCP PCB id) returned by
+/// `https::open_kernel`; the fd kind tag carries this so sys_read /
+/// sys_write / sys_close can route through `net::https`.
+pub fn alloc_fd_tls(pcb: u16, flags: u32) -> Result<u32, i64> {
+    use core::sync::atomic::Ordering;
+    let table = current_table();
+    let cursor = current_cursor();
+    let cur = cursor.fetch_add(1, Ordering::AcqRel);
+    if cur < MAX_FDS && !table[cur].active {
+        table[cur] = FdEntry {
+            active: true,
+            node_idx: 0,
+            position: 0,
+            flags,
+            kind: FdKind::TlsSocket(pcb),
+        };
+        return Ok(cur as u32);
+    }
+    for i in 3..MAX_FDS {
+        if !table[i].active {
+            table[i] = FdEntry {
+                active: true,
+                node_idx: 0,
+                position: 0,
+                flags,
+                kind: FdKind::TlsSocket(pcb),
+            };
+            return Ok(i as u32);
+        }
+    }
+    Err(-24)
+}
+
+/// If this fd is a TLS socket, return its PCB slot id. Else None.
+pub fn tls_pcb(fd: u32) -> Option<usize> {
+    match get(fd)?.kind {
+        FdKind::TlsSocket(pcb) => Some(pcb as usize),
         _ => None,
     }
 }
