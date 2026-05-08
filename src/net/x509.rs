@@ -113,6 +113,9 @@ pub enum VerifyError {
     UntrustedRoot,
     ChainIncomplete,
     UnknownCriticalExtension,
+    BasicConstraintsViolation,
+    KeyUsageViolation,
+    EkuViolation,
 }
 
 impl VerifyError {
@@ -121,16 +124,19 @@ impl VerifyError {
     /// a specific reason. See DESIGN_TLS_HARDENING.md.
     pub fn as_static_str(&self) -> &'static str {
         match self {
-            VerifyError::Parse                    => "TLS: chain validation failed: certificate parse error",
-            VerifyError::EmptyChain               => "TLS: chain validation failed: empty chain",
-            VerifyError::UnsupportedSigAlg        => "TLS: chain validation failed: unsupported signature algorithm",
-            VerifyError::HostnameMismatch         => "TLS: chain validation failed: hostname mismatch",
-            VerifyError::NotYetValid              => "TLS: chain validation failed: certificate not yet valid",
-            VerifyError::Expired                  => "TLS: chain validation failed: expired certificate",
-            VerifyError::BadSignature             => "TLS: chain validation failed: bad signature",
-            VerifyError::UntrustedRoot            => "TLS: chain validation failed: untrusted root",
-            VerifyError::ChainIncomplete          => "TLS: chain validation failed: chain incomplete",
-            VerifyError::UnknownCriticalExtension => "TLS: chain validation failed: unknown critical extension",
+            VerifyError::Parse                     => "TLS: chain validation failed: certificate parse error",
+            VerifyError::EmptyChain                => "TLS: chain validation failed: empty chain",
+            VerifyError::UnsupportedSigAlg         => "TLS: chain validation failed: unsupported signature algorithm",
+            VerifyError::HostnameMismatch          => "TLS: chain validation failed: hostname mismatch",
+            VerifyError::NotYetValid               => "TLS: chain validation failed: certificate not yet valid",
+            VerifyError::Expired                   => "TLS: chain validation failed: expired certificate",
+            VerifyError::BadSignature              => "TLS: chain validation failed: bad signature",
+            VerifyError::UntrustedRoot             => "TLS: chain validation failed: untrusted root",
+            VerifyError::ChainIncomplete           => "TLS: chain validation failed: chain incomplete",
+            VerifyError::UnknownCriticalExtension  => "TLS: chain validation failed: unknown critical extension",
+            VerifyError::BasicConstraintsViolation => "TLS: chain validation failed: BasicConstraints violation",
+            VerifyError::KeyUsageViolation         => "TLS: chain validation failed: KeyUsage missing keyCertSign",
+            VerifyError::EkuViolation              => "TLS: chain validation failed: leaf EKU missing serverAuth",
         }
     }
 }
@@ -226,6 +232,130 @@ fn check_critical_extensions(cert: &Certificate) -> Result<(), VerifyError> {
         if !RECOGNIZED_CRITICAL_OIDS.iter().any(|oid| oid == &ext.extn_id) {
             return Err(VerifyError::UnknownCriticalExtension);
         }
+    }
+    Ok(())
+}
+
+/// x509-hardening-b: BasicConstraints enforcement (RFC 5280 §4.2.1.9).
+///
+/// Per spec:
+/// * The leaf cert must NOT assert `cA: TRUE`. A CA-marked leaf could
+///   issue arbitrary certs for any name; that's the original
+///   "you have a leaf for evil.com but it's also a CA" footgun.
+/// * Every intermediate MUST have BasicConstraints with `cA: TRUE`.
+///   Missing BC on an intermediate = pre-fix behavior, where any cert
+///   in the bundle could be presented as an intermediate.
+///
+/// **Deliberately not enforced here**: `pathLenConstraint`. Real-world
+/// chains routinely include a cross-signed root cert below an
+/// intermediate whose `pathLen` is 0 (e.g. ISRG E1 → DST X3 cross-sign,
+/// shipped for legacy compatibility). Strict pathLen counting flags
+/// these as violations even though browsers and the spec's intent
+/// treat the cross-signed root as the trust anchor. A correct
+/// implementation needs anchor-aware counting (don't count certs that
+/// match a trust anchor by SPKI as path intermediates) and is its
+/// own follow-up.
+fn check_basic_constraints(
+    cert: &Certificate,
+    is_leaf: bool,
+) -> Result<(), VerifyError> {
+    use x509_cert::ext::pkix::BasicConstraints;
+    let exts = match &cert.tbs_certificate.extensions {
+        Some(e) => e,
+        // No extensions at all: legal for leaves (BC absent ⇒ end-entity).
+        // Illegal for intermediates — without BC:CA=TRUE a cert MUST NOT
+        // sign other certs.
+        None => return if is_leaf { Ok(()) } else { Err(VerifyError::BasicConstraintsViolation) },
+    };
+
+    for ext in exts.iter() {
+        if ext.extn_id != const_oid::db::rfc5280::ID_CE_BASIC_CONSTRAINTS {
+            continue;
+        }
+        let bc = match BasicConstraints::from_der(ext.extn_value.as_bytes()) {
+            Ok(v) => v,
+            Err(_) => return Err(VerifyError::BasicConstraintsViolation),
+        };
+        if is_leaf {
+            // Leaf with cA:TRUE = banned (would let leaf sign other certs).
+            if bc.ca {
+                return Err(VerifyError::BasicConstraintsViolation);
+            }
+        } else if !bc.ca {
+            return Err(VerifyError::BasicConstraintsViolation);
+        }
+        return Ok(());
+    }
+    // Reached here ⇒ no BasicConstraints extension found.
+    // Leaves may omit BC (RFC 5280 §4.2.1.9); intermediates may not.
+    if is_leaf { Ok(()) } else { Err(VerifyError::BasicConstraintsViolation) }
+}
+
+/// x509-hardening-b: KeyUsage enforcement for cert-signing certs
+/// (RFC 5280 §4.2.1.3).
+///
+/// If a cert that is being used as an intermediate carries a KeyUsage
+/// extension, that extension MUST include the `keyCertSign` bit.
+/// Without `keyCertSign` the cert is not authorized to sign other
+/// certificates, regardless of what BasicConstraints says.
+///
+/// KeyUsage absent ⇒ no constraint per RFC. We only fail if the
+/// extension is present and the bit is missing.
+fn check_key_usage_for_signing(cert: &Certificate) -> Result<(), VerifyError> {
+    use x509_cert::ext::pkix::{KeyUsage, KeyUsages};
+    let exts = match &cert.tbs_certificate.extensions {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+    for ext in exts.iter() {
+        if ext.extn_id != const_oid::db::rfc5280::ID_CE_KEY_USAGE {
+            continue;
+        }
+        let ku = match KeyUsage::from_der(ext.extn_value.as_bytes()) {
+            Ok(v) => v,
+            Err(_) => return Err(VerifyError::KeyUsageViolation),
+        };
+        if !ku.0.contains(KeyUsages::KeyCertSign) {
+            return Err(VerifyError::KeyUsageViolation);
+        }
+        return Ok(());
+    }
+    Ok(())
+}
+
+/// x509-hardening-b: ExtendedKeyUsage enforcement on the leaf
+/// (RFC 5280 §4.2.1.12 + CA/Browser Forum BR §7.1.2.7.10).
+///
+/// For TLS server certs: if the leaf carries an EKU extension, that
+/// extension MUST include either `id-kp-serverAuth` (1.3.6.1.5.5.7.3.1)
+/// or `anyExtendedKeyUsage` (2.5.29.37.0). A code-signing-only cert,
+/// for example, is not allowed to authenticate a TLS server even if
+/// its chain otherwise validates.
+///
+/// EKU absent on the leaf ⇒ no constraint per RFC. We only fail if
+/// EKU is present and serverAuth/anyEKU is missing.
+fn check_eku_server_auth(leaf: &Certificate) -> Result<(), VerifyError> {
+    use x509_cert::ext::pkix::ExtendedKeyUsage;
+    let exts = match &leaf.tbs_certificate.extensions {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+    // anyExtendedKeyUsage: 2.5.29.37.0 — sentinel meaning "any usage allowed".
+    let any_eku = const_oid::ObjectIdentifier::new_unwrap("2.5.29.37.0");
+    let server_auth = const_oid::db::rfc5280::ID_KP_SERVER_AUTH;
+    for ext in exts.iter() {
+        if ext.extn_id != const_oid::db::rfc5280::ID_CE_EXT_KEY_USAGE {
+            continue;
+        }
+        let eku = match ExtendedKeyUsage::from_der(ext.extn_value.as_bytes()) {
+            Ok(v) => v,
+            Err(_) => return Err(VerifyError::EkuViolation),
+        };
+        let ok = eku.0.iter().any(|oid| *oid == server_auth || *oid == any_eku);
+        if !ok {
+            return Err(VerifyError::EkuViolation);
+        }
+        return Ok(());
     }
     Ok(())
 }
@@ -393,13 +523,17 @@ pub fn verify_chain(
     // hostname the client tried.
     let hostname_ok = check_hostname(&leaf, hostname);
 
-    // x509-hardening-a: validity-period and critical-extension checks
-    // run on every cert in the chain, accumulating into flags so the
-    // existing constant-cost abort discipline holds. These are cheap
-    // (no signature math), so they cost the same as one extra parse.
+    // x509-hardening-a + b: cheap RFC-5280 conformance checks.
+    // Each runs on every relevant cert in the chain and accumulates into
+    // a flag — same constant-cost abort discipline as V6-SIDE-002. These
+    // do no signature math, so they cost the same as a few extra parses.
     let now = now_unix();
     let mut earliest_validity_err: Option<VerifyError> = None;
     let mut critical_ext_ok = true;
+    // x509-hardening-b: BasicConstraints / KeyUsage / EKU enforcement.
+    let mut bc_violation: Option<VerifyError> = None;
+    let mut ku_ok = true;
+    let mut eku_ok = true;
 
     let mut record_validity = |c: &Certificate| {
         if earliest_validity_err.is_none() {
@@ -413,8 +547,26 @@ pub fn verify_chain(
             critical_ext_ok = false;
         }
     };
+    let mut record_bc = |c: &Certificate, is_leaf: bool| {
+        if bc_violation.is_none() {
+            if let Err(e) = check_basic_constraints(c, is_leaf) {
+                bc_violation = Some(e);
+            }
+        }
+    };
+    let mut record_ku = |c: &Certificate| {
+        if check_key_usage_for_signing(c).is_err() {
+            ku_ok = false;
+        }
+    };
+
     record_validity(&leaf);
     record_critical(&leaf);
+    // Leaf-only checks.
+    record_bc(&leaf, true);
+    if check_eku_server_auth(&leaf).is_err() {
+        eku_ok = false;
+    }
 
     // 2. Walk the chain. For each (child, parent) pair, verify that
     // parent.pubkey validates child.signature over child.tbsCertificate.
@@ -423,7 +575,7 @@ pub fn verify_chain(
     let mut current_der: &[u8] = leaf_der;
     let mut chain_ok = true;
 
-    for (i, int_der) in chain_ders.iter().enumerate() {
+    for int_der in chain_ders.iter() {
         let parent = match parse_cert(int_der) {
             Ok(c) => c,
             Err(_) => {
@@ -434,6 +586,10 @@ pub fn verify_chain(
 
         record_validity(&parent);
         record_critical(&parent);
+        // Intermediates: BasicConstraints must say cA:TRUE.
+        record_bc(&parent, false);
+        // KeyUsage with keyCertSign required if KU extension is present.
+        record_ku(&parent);
 
         if verify_signed_by(&current_cert, current_der, &parent).is_err() {
             chain_ok = false;
@@ -445,7 +601,6 @@ pub fn verify_chain(
         }
         current_cert = parent;
         current_der = int_der;
-        let _ = i;
     }
 
     // Only AFTER the (constant-cost) chain walk do we examine the
@@ -462,6 +617,15 @@ pub fn verify_chain(
     }
     if !critical_ext_ok {
         return VerifyOutcome::Err(VerifyError::UnknownCriticalExtension);
+    }
+    if let Some(e) = bc_violation {
+        return VerifyOutcome::Err(e);
+    }
+    if !ku_ok {
+        return VerifyOutcome::Err(VerifyError::KeyUsageViolation);
+    }
+    if !eku_ok {
+        return VerifyOutcome::Err(VerifyError::EkuViolation);
     }
 
     // 3. Root in trust store? Three accept paths, walked in order of
