@@ -58,7 +58,7 @@ use ml_kem::kem::{Encapsulate, Decapsulate};
 use ml_kem::array::Array;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519Public, StaticSecret};
 
-use crate::crypto::{rng, sha256};
+use crate::crypto::rng;
 
 /// Classical X25519 public-key size.
 pub const X25519_PUB_LEN: usize = 32;
@@ -66,11 +66,17 @@ pub const X25519_PUB_LEN: usize = 32;
 pub const MLKEM_CT_LEN: usize = 1088;
 /// ML-KEM-768 encapsulation (public) key size.
 pub const MLKEM_PK_LEN: usize = 1184;
-/// Combined hybrid ciphertext (X25519 ephemeral pub || ML-KEM ct).
-pub const HYBRID_CT_LEN: usize = X25519_PUB_LEN + MLKEM_CT_LEN;
+/// Combined hybrid ciphertext: ML-KEM ct || X25519 ephemeral pub.
+/// Order matches draft-ietf-tls-ecdhe-mlkem-04 §3 for codepoint
+/// X25519MLKEM768 (0x11EC). DO NOT reorder — interop break.
+pub const HYBRID_CT_LEN: usize = MLKEM_CT_LEN + X25519_PUB_LEN;
 
-/// Output size of the combined shared secret.
-pub const SHARED_LEN: usize = 32;
+/// Output size of the combined shared secret per
+/// draft-ietf-tls-ecdhe-mlkem-04 §3: raw concatenation of the
+/// ML-KEM-768 SS (32 B) and the X25519 SS (32 B), in that order.
+/// 64 bytes total. Fed directly into TLS 1.3 HKDF-Extract as the
+/// (EC)DHE input.
+pub const SHARED_LEN: usize = 64;
 
 // ── rand_core adapter so the PQ crates can use our RNDR-backed CSPRNG ──
 //
@@ -124,12 +130,14 @@ impl HybridKeyPair {
     }
 
     /// Serialize the public half for transmission to a peer.
-    /// Layout: X25519 pub (32 B) || ML-KEM-768 encap key (1184 B).
+    /// Layout per draft-ietf-tls-ecdhe-mlkem-04 §3 for X25519MLKEM768:
+    /// ML-KEM-768 encap key (1184 B) || X25519 pub (32 B). DO NOT
+    /// reorder — interop break.
     pub fn public_bytes(&self) -> Vec<u8> {
-        let mut out = vec![0u8; X25519_PUB_LEN + MLKEM_PK_LEN];
-        out[..X25519_PUB_LEN].copy_from_slice(&self.x25519_pk);
+        let mut out = vec![0u8; MLKEM_PK_LEN + X25519_PUB_LEN];
         let ek = self.mlkem_ek.as_bytes();
-        out[X25519_PUB_LEN..].copy_from_slice(ek.as_slice());
+        out[..MLKEM_PK_LEN].copy_from_slice(ek.as_slice());
+        out[MLKEM_PK_LEN..].copy_from_slice(&self.x25519_pk);
         out
     }
 
@@ -150,27 +158,24 @@ impl HybridKeyPair {
 
 /// Sender-side hybrid KEM. Given a recipient's hybrid public key (as
 /// produced by `HybridKeyPair::public_bytes`), produce (shared_secret,
-/// on-wire ciphertext blob) to send. The blob is
-/// `ephemeral_x25519_pub || mlkem_ct` = HYBRID_CT_LEN bytes.
+/// on-wire ciphertext blob) to send.
+///
+/// Wire layout per draft-ietf-tls-ecdhe-mlkem-04 §3 for X25519MLKEM768:
+///   * recipient_public: ML-KEM-768 encap key (1184 B) || X25519 pub (32 B)
+///   * output blob:      ML-KEM-768 ciphertext (1088 B) || X25519 ephemeral pub (32 B)
+///   * shared secret:    ML-KEM-768 SS (32 B) || X25519 SS (32 B) = 64 B raw concat
+///                       (no hash, no domain separator — fed directly into
+///                       TLS 1.3 HKDF-Extract as the (EC)DHE input)
 pub fn encapsulate(recipient_public: &[u8])
     -> Result<([u8; SHARED_LEN], Vec<u8>), &'static str>
 {
-    if recipient_public.len() != X25519_PUB_LEN + MLKEM_PK_LEN {
+    if recipient_public.len() != MLKEM_PK_LEN + X25519_PUB_LEN {
         return Err("hybrid: bad recipient public length");
     }
 
-    // ── Classical half: X25519 ephemeral → static recipient ──
-    let mut rng_local = BatRng;
-    let eph_sk = EphemeralSecret::random_from_rng(&mut rng_local);
-    let eph_pk: [u8; 32] = X25519Public::from(&eph_sk).to_bytes();
-    let mut rp = [0u8; 32];
-    rp.copy_from_slice(&recipient_public[..X25519_PUB_LEN]);
-    let recip_pk = X25519Public::from(rp);
-    let ss_c = eph_sk.diffie_hellman(&recip_pk);
-
     // ── PQ half: ML-KEM-768 encap against recipient's encap key ──
     type MlKemEk = <MlKem768 as KemCore>::EncapsulationKey;
-    let ek_bytes: &[u8] = &recipient_public[X25519_PUB_LEN..];
+    let ek_bytes: &[u8] = &recipient_public[..MLKEM_PK_LEN];
     let ek_arr: Encoded<MlKemEk> = Array::try_from(ek_bytes)
         .map_err(|_| "hybrid: ML-KEM encap key byte length mismatch")?;
     let recip_ek = <MlKemEk as EncodedSizeUser>::from_bytes(&ek_arr);
@@ -179,20 +184,24 @@ pub fn encapsulate(recipient_public: &[u8])
     let (ct_arr, ss_pq_arr) = recip_ek.encapsulate(&mut r)
         .map_err(|_| "hybrid: ML-KEM encapsulate failed")?;
 
-    // Combined secret = HKDF-SHA256 over ss_c || ss_pq with a
-    // domain-separation label.
-    let mut combined_in = [0u8; 64 + 16];
-    combined_in[..32].copy_from_slice(ss_c.as_bytes());
-    combined_in[32..64].copy_from_slice(ss_pq_arr.as_slice());
-    combined_in[64..].copy_from_slice(b"BATOS-PQ-HYBRID\x00");
-    let mut shared = [0u8; SHARED_LEN];
-    let h = sha256::hash(&combined_in);
-    shared.copy_from_slice(&h);
+    // ── Classical half: X25519 ephemeral → recipient's static X25519 pub ──
+    let mut rng_local = BatRng;
+    let eph_sk = EphemeralSecret::random_from_rng(&mut rng_local);
+    let eph_pk: [u8; 32] = X25519Public::from(&eph_sk).to_bytes();
+    let mut rp = [0u8; 32];
+    rp.copy_from_slice(&recipient_public[MLKEM_PK_LEN..]);
+    let recip_pk = X25519Public::from(rp);
+    let ss_c = eph_sk.diffie_hellman(&recip_pk);
 
-    // On-wire: eph_x25519_pub || mlkem_ct
+    // Combined SS per spec: ml_kem_ss || x25519_ss (raw concat, no hash).
+    let mut shared = [0u8; SHARED_LEN];
+    shared[..32].copy_from_slice(ss_pq_arr.as_slice());
+    shared[32..].copy_from_slice(ss_c.as_bytes());
+
+    // On-wire blob per spec: ml_kem_ct || eph_x25519_pub.
     let mut out = vec![0u8; HYBRID_CT_LEN];
-    out[..X25519_PUB_LEN].copy_from_slice(&eph_pk);
-    out[X25519_PUB_LEN..].copy_from_slice(ct_arr.as_slice());
+    out[..MLKEM_CT_LEN].copy_from_slice(ct_arr.as_slice());
+    out[MLKEM_CT_LEN..].copy_from_slice(&eph_pk);
     Ok((shared, out))
 }
 
@@ -206,8 +215,10 @@ pub fn encapsulate(recipient_public: &[u8])
 ///                          (2400 bytes per NIST FIPS 203)
 ///   * `ciphertext_blob`  — 1120-byte wire blob: eph_x25519_pub || ml_kem_ct
 ///
-/// Output: 32-byte combined shared secret identical to what
+/// Output: 64-byte combined shared secret identical to what
 /// `decapsulate(HybridKeyPair, blob)` would produce.
+/// Layout per draft-ietf-tls-ecdhe-mlkem-04 §3:
+///   ml_kem_ss (32 B) || x25519_ss (32 B) — raw concatenation.
 pub fn decapsulate_from_bytes(
     x25519_sk_bytes: &[u8; X25519_PUB_LEN],
     mlkem_dk_bytes: &[u8],
@@ -217,36 +228,33 @@ pub fn decapsulate_from_bytes(
         return Err("hybrid: bad ciphertext length");
     }
 
-    // ── Classical half ──
-    let mut eph_pk_bytes = [0u8; 32];
-    eph_pk_bytes.copy_from_slice(&ciphertext_blob[..X25519_PUB_LEN]);
-    let eph_pk = X25519Public::from(eph_pk_bytes);
-    let my_sk = StaticSecret::from(*x25519_sk_bytes);
-    let ss_c = my_sk.diffie_hellman(&eph_pk);
-
-    // ── PQ half ──
+    // ── PQ half — ML-KEM ct lives in the first MLKEM_CT_LEN bytes ──
     type MlKemDk = <MlKem768 as KemCore>::DecapsulationKey;
     let dk_arr: Encoded<MlKemDk> = Array::try_from(mlkem_dk_bytes)
         .map_err(|_| "hybrid: ML-KEM decap key length mismatch")?;
     let dk = <MlKemDk as EncodedSizeUser>::from_bytes(&dk_arr);
-    let ct_bytes: &[u8] = &ciphertext_blob[X25519_PUB_LEN..];
+    let ct_bytes: &[u8] = &ciphertext_blob[..MLKEM_CT_LEN];
     let ct_arr: ml_kem::Ciphertext<MlKem768> = Array::try_from(ct_bytes)
         .map_err(|_| "hybrid: ML-KEM ciphertext length mismatch")?;
     let ss_pq_arr = dk.decapsulate(&ct_arr)
         .map_err(|_| "hybrid: ML-KEM decapsulate failed")?;
 
-    let mut combined_in = [0u8; 64 + 16];
-    combined_in[..32].copy_from_slice(ss_c.as_bytes());
-    combined_in[32..64].copy_from_slice(ss_pq_arr.as_slice());
-    combined_in[64..].copy_from_slice(b"BATOS-PQ-HYBRID\x00");
+    // ── Classical half — eph X25519 pub lives in the last X25519_PUB_LEN bytes ──
+    let mut eph_pk_bytes = [0u8; 32];
+    eph_pk_bytes.copy_from_slice(&ciphertext_blob[MLKEM_CT_LEN..]);
+    let eph_pk = X25519Public::from(eph_pk_bytes);
+    let my_sk = StaticSecret::from(*x25519_sk_bytes);
+    let ss_c = my_sk.diffie_hellman(&eph_pk);
+
+    // Combined SS per spec: ml_kem_ss || x25519_ss (raw concat).
     let mut shared = [0u8; SHARED_LEN];
-    let h = sha256::hash(&combined_in);
-    shared.copy_from_slice(&h);
+    shared[..32].copy_from_slice(ss_pq_arr.as_slice());
+    shared[32..].copy_from_slice(ss_c.as_bytes());
     Ok(shared)
 }
 
 /// Recipient-side hybrid decap. Given our keypair and the sender's
-/// blob, recover the shared secret.
+/// blob, recover the shared secret. See `decapsulate_from_bytes`.
 pub fn decapsulate(me: &HybridKeyPair, ciphertext_blob: &[u8])
     -> Result<[u8; SHARED_LEN], &'static str>
 {
@@ -254,26 +262,22 @@ pub fn decapsulate(me: &HybridKeyPair, ciphertext_blob: &[u8])
         return Err("hybrid: bad ciphertext length");
     }
 
-    let mut eph_pk_bytes = [0u8; 32];
-    eph_pk_bytes.copy_from_slice(&ciphertext_blob[..X25519_PUB_LEN]);
-    let eph_pk = X25519Public::from(eph_pk_bytes);
-    let ss_c = me.x25519_sk.diffie_hellman(&eph_pk);
-
-    let ct_bytes: &[u8] = &ciphertext_blob[X25519_PUB_LEN..];
-    // Ciphertext is Array<u8, CiphertextSize>. Build via try_from + the
-    // KEM's CiphertextSize typenum, exposed as Ciphertext<MlKem768>.
+    // PQ half first per spec ordering.
+    let ct_bytes: &[u8] = &ciphertext_blob[..MLKEM_CT_LEN];
     let ct_arr: ml_kem::Ciphertext<MlKem768> = Array::try_from(ct_bytes)
         .map_err(|_| "hybrid: ML-KEM ciphertext length mismatch")?;
     let ss_pq_arr = me.mlkem_dk.decapsulate(&ct_arr)
         .map_err(|_| "hybrid: ML-KEM decapsulate failed")?;
 
-    let mut combined_in = [0u8; 64 + 16];
-    combined_in[..32].copy_from_slice(ss_c.as_bytes());
-    combined_in[32..64].copy_from_slice(ss_pq_arr.as_slice());
-    combined_in[64..].copy_from_slice(b"BATOS-PQ-HYBRID\x00");
+    // Classical half second.
+    let mut eph_pk_bytes = [0u8; 32];
+    eph_pk_bytes.copy_from_slice(&ciphertext_blob[MLKEM_CT_LEN..]);
+    let eph_pk = X25519Public::from(eph_pk_bytes);
+    let ss_c = me.x25519_sk.diffie_hellman(&eph_pk);
+
     let mut shared = [0u8; SHARED_LEN];
-    let h = sha256::hash(&combined_in);
-    shared.copy_from_slice(&h);
+    shared[..32].copy_from_slice(ss_pq_arr.as_slice());
+    shared[32..].copy_from_slice(ss_c.as_bytes());
     Ok(shared)
 }
 

@@ -26,6 +26,16 @@ gicv3 = []
 # generalized into a real harness. See DESIGN_TLS_HARDENING.md.
 selftest-on-boot = []
 
+# Drive a real TLS 1.3 + X25519MLKEM768 hybrid PQ handshake against
+# pq.cloudflareresearch.com after net init, before the auth gate.
+# Prints `[pq-interop] PASS` / `FAIL <reason>` so a headless QEMU smoke
+# (scripts/qemu_pq_interop_smoke.py) can verify our hybrid PQ
+# implementation interops with a real third-party server. Used to prove
+# the IETF draft-ietf-tls-ecdhe-mlkem-04 wire layout fix end-to-end —
+# closed-loop selftests can't catch wire-format regressions if both
+# sides run the same code. See DESIGN_TLS_PQ_FIX.md.
+pq-interop-test = []
+
 [dependencies]
 # ROOT-4 crypto replacement — RustCrypto audited primitives.
 # All no_std-compatible, no heap needed with default-features=false.

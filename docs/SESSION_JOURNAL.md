@@ -11,6 +11,102 @@ end of a session.
 
 ---
 
+## 2026-05-08 (even later) — Mac — 🔐 TLS HYBRID PQ FIXED + INTEROP-VERIFIED vs Cloudflare
+
+**Second of three follow-up cleanup threads.** Continuation of the
+post-no-browser priority list: futex unification → **TLS PQ fix**
+→ warning cleanup.
+
+### Context
+
+A code-review pass on `src/crypto/pq_hybrid.rs` and
+`src/net/tls_hybrid.rs` found the hybrid PQ wire format had three
+independent bugs that all cancelled in the closed-loop selftest
+(both sides ran the same broken code so it round-tripped):
+
+1. Wrong byte ordering: emitted `X25519 || ML-KEM` when
+   draft-ietf-tls-ecdhe-mlkem-04 §3 says `ML-KEM || X25519`.
+2. Custom SS combiner: hashed `SHA256(... || "BATOS-PQ-HYBRID")`
+   for a 32 B output. Spec is **raw concat**, no hash.
+3. Wrong SS length: returned 32 B (SHA-256 output) instead of 64 B
+   (raw concat of two 32 B halves).
+
+The user was explicit: **"fix it and verify it all the way, no
+bs or tricks."** That ruled out KAT-only verification (the draft
+doesn't publish official KATs anyway) and meant the correctness
+proof had to be a real handshake against a real third-party PQ-TLS
+server.
+
+### Tag
+
+`pre-tls-pq-fix-2026-05-08` at the pre-fix HEAD.
+
+### Phases
+
+1. **Phase 1** — `src/crypto/pq_hybrid.rs` rewrite: ML-KEM-first
+   ordering on both keys and ciphertexts; raw-concat SS; SHA-256
+   combiner and `"BATOS-PQ-HYBRID"` domain separator deleted;
+   `SHARED_LEN` 32 → 64.
+2. **Phase 2** — Downstream callers fixed.
+   `tls_hybrid::process_server_key_share` and
+   `server_process_client_key_share` return `[u8; 64]` instead of
+   `[u8; 32]`. `TlsSession.shared_secret` grew to `[u8; 64]` plus
+   new `shared_secret_len: usize` so the classical X25519 path
+   (writes 32 B, sets len=32) and hybrid path (writes 64 B, sets
+   len=64) coexist cleanly. HKDF-Extract reads
+   `&shared_secret[..shared_secret_len]`. All zeroize / panic-wipe
+   / close paths updated to clear all 64 B.
+3. **Phase 3** — Closed-loop selftest now asserts spec-pinned wire
+   sizes (1216 B client payload, 1120 B server payload, 64 B SS).
+4. **Phase 4** — New `pq-interop-test` Cargo feature gates
+   `cmd_pq_interop` boot hook in `src/main.rs` (after net init,
+   before auth gate). Drives a real TLS 1.3 + X25519MLKEM768
+   handshake to `pq.cloudflareresearch.com:443` and asserts the
+   server actually picked the hybrid group via new
+   `tls::last_handshake_used_hybrid()` accessor — guards against
+   silent classical fallback masking a wire-format bug.
+5. **Phase 5** — `scripts/qemu_pq_interop_smoke.py` headless
+   harness: `qemu-system-aarch64 -machine virt` with virtio-net
+   user-mode networking, scans serial for the PASS line.
+6. **Phase 6** — Real-server interop. First run failed at chain
+   validation (`untrusted root`) because the cert chain anchors at
+   GTS Root R4, which we didn't ship. Added GTS Root R4 (ECDSA
+   P-384, SHA-256
+   `34:9D:FA:40:58:C5:E2:63:12:3B:39:8A:E7:95:57:3C:4E:13:13:C8:3F:E6:8F:93:55:6C:D5:E8:03:1B:3C:7D`,
+   from `https://i.pki.goog/r4.crt`) to `TRUST_STORE` as
+   `src/net/ca_certs/gts_root_r4.der`. Re-ran:
+   `[pq-interop-smoke] PASS — real-world hybrid PQ TLS handshake
+   succeeded.` Trust store grew 5 → 6 roots as a useful side
+   effect.
+7. **Phase 7** — `DESIGN_TLS_PQ_FIX.md` spec doc, this journal
+   entry, and PR.
+
+### Verification
+
+- `pq-interop-test` smoke: PASS (real Cloudflare PQ endpoint
+  accepts ClientHello, picks hybrid group, hybrid SS derives,
+  chain validates, ApplicationData reached).
+- `selftest-on-boot` smoke (regression): all 6 existing sub-tests
+  still PASS — 2 x509 + 4 scheduler.
+
+### What this proves
+
+The IETF draft-ietf-tls-ecdhe-mlkem-04 wire format is implemented
+correctly end-to-end. Any future regression on byte ordering, SS
+combiner, or SS length is caught two ways:
+
+- Closed-loop assertions in `tls_hybrid::selftest()` (build-time-
+  cheap).
+- `qemu_pq_interop_smoke.py` against a real third-party server
+  (covers the case where both ends move together).
+
+### Next
+
+- PR #6 to merge `feat/tls-pq-fix` into `feat/js-engine-browser-posix`.
+- Then: warning cleanup thread (third of the three).
+
+---
+
 ## 2026-05-08 (later) — Mac — 🧵 FUTEX DEADLINE UNIFIED: single source of truth on BlockReason
 
 **First of three follow-up cleanup threads** after the four-thread
