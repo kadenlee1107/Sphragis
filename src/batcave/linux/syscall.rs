@@ -3847,7 +3847,7 @@ fn sys_socket(args: [u64; 6]) -> i64 {
 }
 
 fn sys_connect(args: [u64; 6]) -> i64 {
-    let fd_num = args[0] as u32;
+    let _fd_num = args[0] as u32;
     let addr_ptr = args[1] as usize;
     let addr_len = args[2] as usize;
 
@@ -4386,7 +4386,7 @@ fn sys_writev(args: [u64; 6]) -> i64 {
     if iovcnt > 0 && !is_user_ptr(iov_ptr, array_bytes) { return EFAULT; }
 
     // Check if redirected
-    let mut is_uart = fd_num == 1 || fd_num == 2;
+    let is_uart = fd_num == 1 || fd_num == 2;
     if let Some(entry) = fd::get(fd_num) {
         if entry.node_idx != 0 {
             // Redirected to a file — write each iovec via sys_write
@@ -4683,7 +4683,6 @@ fn sys_ppoll(args: [u64; 6]) -> i64 {
     // each iteration of the wait loop.
     let mut poll_fds    = [0i32; 8];
     let mut poll_events = [0u16; 8];
-    let mut has_stdin   = false;
     let mut has_socket  = false;
     for i in 0..n {
         unsafe {
@@ -4695,7 +4694,6 @@ fn sys_ppoll(args: [u64; 6]) -> i64 {
             core::arch::asm!("ldrh {v:w}, [{a}]",
                 a = in(reg) fds_ptr + i * 8 + 4, v = out(reg) ev);
             poll_events[i] = ev as u16;
-            if fd == 0 { has_stdin = true; }
             if let Some(entry) = fd::get(fd) {
                 let node = vfs::get_node(entry.node_idx);
                 if node.node_type == vfs::NodeType::Socket { has_socket = true; }
@@ -5382,11 +5380,9 @@ fn sys_execve(args: [u64; 6]) -> i64 {
                 true
             }
             "mv" => {
-                // Simple mv: cp + rm
+                // Simple mv: cp + rm — real mv needs VFS rename support, not
+                // yet wired. We don't even read argv[1]/argv[2] until then.
                 if argc > 2 && vfs::is_ready() {
-                    let src = &argv_strs[1][..argv_lens[1]];
-                    let dst = &argv_strs[2][..argv_lens[2]];
-                    // For now, just report — real mv needs VFS rename support
                     write_str("mv: not yet supported\n");
                 }
                 true

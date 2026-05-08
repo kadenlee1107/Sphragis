@@ -91,7 +91,6 @@ const RED_DIM:   u32 = 0xFF7F1D1D;
 
 const MARGIN_X:    u32 = 56;
 const MARGIN_Y:    u32 = 24;
-const STATUS_ROW_H: u32 = 28;
 const HAIRLINE_Y:   u32 = 64;
 const CHAR_W:       u32 = 8;
 const CHAR_H:       u32 = 16;
@@ -442,6 +441,7 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
 /// Dev helper: paint the login screen exactly once, then return after a
 /// fixed delay. Lets the operator screenshot the auth UI without needing
 /// a real passphrase. Kept for the Apple HV preview path.
+#[allow(dead_code)]
 pub fn run_dev_preview(hold_ms: u64) {
     let w = gpu::width();
     let h = gpu::height();

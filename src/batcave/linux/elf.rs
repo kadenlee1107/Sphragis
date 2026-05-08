@@ -228,8 +228,7 @@ pub fn load(data: &[u8]) -> Result<LoadedElf, &'static str> {
         let page_end = mem_top & !(PAGE_SIZE - 1);
         let num_pages = (page_end - page_start) / PAGE_SIZE;
 
-        for p in 0..num_pages {
-            let page_addr = page_start + p * PAGE_SIZE;
+        for _p in 0..num_pages {
             // Allocate frame and identity-map it
             // (In a full implementation, we'd use the BatCave's address space)
             let _frame = frame::alloc_frame().ok_or("out of memory loading ELF")?;

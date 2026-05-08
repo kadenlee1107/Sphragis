@@ -32,8 +32,6 @@
 // of reading OOB — critical because iBoot's ADT lands in memory the
 // attacker could theoretically scribble on before we parse it.
 
-use core::mem::size_of;
-
 // ─── Error type ─────────────────────────────────────────────────────
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

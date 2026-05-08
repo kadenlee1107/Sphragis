@@ -15,7 +15,7 @@ use crate::ui::font;
 use crate::ui::draw;
 use crate::ui::widgets::{
     self as W, draw_strip, draw_seg_separator, draw_kv_row,
-    draw_caves_header, draw_caves_row, draw_caves_empty_row,
+    draw_caves_header, draw_caves_row,
     draw_audit_strip, draw_cave_glyph, draw_action_hint, AuditLine,
     State, KV_ROW_H, CAVES_HEADER_H, CAVES_ROW_H,
     BG, INK, MID, DIM_TXT, FAINT, CYAN, CYAN_DIM,

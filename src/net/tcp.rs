@@ -175,19 +175,23 @@ static mut NEXT_LOCAL_PORT: u16 = 49152;
 #[inline(always)]
 unsafe fn irq_save() -> u64 {
     let prev: u64;
-    core::arch::asm!(
-        "mrs {p}, daif",
-        "msr daifset, #0x2",
-        p = out(reg) prev,
-        options(nostack, preserves_flags),
-    );
+    unsafe {
+        core::arch::asm!(
+            "mrs {p}, daif",
+            "msr daifset, #0x2",
+            p = out(reg) prev,
+            options(nostack, preserves_flags),
+        );
+    }
     prev
 }
 
 #[inline(always)]
 unsafe fn irq_restore(prev: u64) {
-    core::arch::asm!("msr daif, {p}", p = in(reg) prev,
-        options(nostack, preserves_flags));
+    unsafe {
+        core::arch::asm!("msr daif, {p}", p = in(reg) prev,
+            options(nostack, preserves_flags));
+    }
 }
 
 fn alloc_local_port() -> u16 {

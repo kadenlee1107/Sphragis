@@ -1,3 +1,10 @@
+// Linux-ABI compatibility shim for caves. Many syscalls/constants are
+// staged ahead of the cave that exercises them — keeping a complete
+// Linux table cuts review churn when a new cave needs a syscall we
+// hadn't wired yet. dead_code is silenced module-wide since
+// individual #[allow] tags would just clutter every file.
+#![allow(dead_code)]
+
 pub mod async_fds;
 pub mod demand_page;
 pub mod elf;

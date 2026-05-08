@@ -21,6 +21,9 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 static UNSOL_REPLIES: AtomicUsize = AtomicUsize::new(0);
 static UNSOL_FIRST_FAIL: AtomicBool = AtomicBool::new(false);
 
+// Staged for the shell `info net` command; no caller while the GUI shell
+// is dormant.
+#[allow(dead_code)]
 pub fn unsolicited_count() -> usize { UNSOL_REPLIES.load(Ordering::Relaxed) }
 
 const ARP_HW_ETHERNET: u16 = 1;

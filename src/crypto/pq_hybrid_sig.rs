@@ -35,8 +35,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use alloc::vec;
 
-use ml_dsa::{KeyGen, MlDsa65, SigningKey, VerifyingKey, EncodedVerifyingKey,
-    Signature as MlDsaSignature, B32};
+use ml_dsa::{KeyGen, MlDsa65, SigningKey, Signature as MlDsaSignature, B32};
 
 use crate::crypto::rng;
 

@@ -14,7 +14,7 @@ use crate::ui::gpu;
 use crate::ui::font;
 use crate::ui::draw;
 use crate::ui::widgets::{
-    self as W, draw_strip, draw_seg_separator, State,
+    draw_strip, draw_seg_separator,
     BG, INK, MID, DIM_TXT, FAINT, CYAN, CYAN_DIM, GREEN, GREEN_DIM,
     AMBER, AMBER_DIM, HAIR,
 };
@@ -27,7 +27,6 @@ static mut SELECTED_ROW: usize = 0;
 static mut ROW_COUNT_CACHE: usize = 0;
 
 #[inline] fn selected_row() -> usize { unsafe { SELECTED_ROW } }
-#[inline] fn row_count() -> usize { unsafe { ROW_COUNT_CACHE } }
 
 /// Public dispatch — desktop::run forwards APP_FILES keystrokes here.
 pub fn handle_key(c: u8) {
@@ -72,7 +71,6 @@ const CHAR_H: u32 = 16;
 
 // Column geometry — 1248px inner width after 16px L/R margin.
 const COL_STATUS_W:   u32 = 120;
-const COL_NAME_X:     u32 = 136;   // 16 + 120
 const COL_SIZE_W:     u32 = 120;
 const COL_CIPHER_W:   u32 = 160;
 const COL_MERKLE_W:   u32 = 110;

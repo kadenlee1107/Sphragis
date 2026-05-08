@@ -721,6 +721,10 @@ _bat_os_early_fault:
 /// Run one scripted shell command through `apple_shell_dispatch`
 /// with a `bat_os>` prompt echoed first — visually identical to
 /// what happens when a human types at the (future USB-CDC) shell.
+/// Currently only invoked from `apple_kernel_self_test`, which is
+/// commented out at its single call site (kernel_main_apple). Kept
+/// as staged tooling for the M4 boot path.
+#[allow(dead_code)]
 fn apple_run_cmd(line: &str) {
     use drivers::apple::uart;
     uart::puts("bat_os> ");
@@ -747,6 +751,12 @@ fn apple_run_cmd(line: &str) {
 /// shipped out the dockchannel UART and rendered to the M4 display
 /// for camera-visible verification. Doesn't loop; returns so the
 /// shell can still start afterwards.
+///
+/// Currently dormant — the call site in `kernel_main_apple` is
+/// commented out so a real M4 chainload doesn't spend 70+ s
+/// self-testing before the operator gets a prompt. Kept as staged
+/// tooling; uncomment to re-enable.
+#[allow(dead_code)]
 fn apple_kernel_self_test() {
     use drivers::apple::uart;
 

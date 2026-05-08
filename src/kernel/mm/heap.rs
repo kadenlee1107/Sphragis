@@ -61,45 +61,49 @@ unsafe impl Sync for KernelAllocator {}
 #[inline(always)]
 unsafe fn irq_save() -> u64 {
     let prev: u64;
-    core::arch::asm!(
-        "mrs {p}, daif",
-        "msr daifset, #0x2",   // mask IRQ (DAIF.I)
-        p = out(reg) prev,
-        options(nostack, preserves_flags),
-    );
+    unsafe {
+        core::arch::asm!(
+            "mrs {p}, daif",
+            "msr daifset, #0x2",   // mask IRQ (DAIF.I)
+            p = out(reg) prev,
+            options(nostack, preserves_flags),
+        );
+    }
     prev
 }
 
 #[inline(always)]
 unsafe fn irq_restore(prev: u64) {
-    core::arch::asm!("msr daif, {p}", p = in(reg) prev,
-        options(nostack, preserves_flags));
+    unsafe {
+        core::arch::asm!("msr daif, {p}", p = in(reg) prev,
+            options(nostack, preserves_flags));
+    }
 }
 
 unsafe impl GlobalAlloc for KernelAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let saved = irq_save();
-        let heap = &mut *self.inner.get();
+        let saved = unsafe { irq_save() };
+        let heap = unsafe { &mut *self.inner.get() };
         let result = match heap.allocate_first_fit(layout) {
             Ok(p) => p.as_ptr(),
             Err(_) => ptr::null_mut(),
         };
-        irq_restore(saved);
+        unsafe { irq_restore(saved); }
         result
     }
     unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
         if !p.is_null() {
             // V5-KMEM-002: scrub before returning memory to the free list.
             for i in 0..layout.size() {
-                core::ptr::write_volatile(p.add(i), 0);
+                unsafe { core::ptr::write_volatile(p.add(i), 0); }
             }
         }
-        let saved = irq_save();
+        let saved = unsafe { irq_save() };
         if let Some(nn) = core::ptr::NonNull::new(p) {
-            let heap = &mut *self.inner.get();
-            heap.deallocate(nn, layout);
+            let heap = unsafe { &mut *self.inner.get() };
+            unsafe { heap.deallocate(nn, layout); }
         }
-        irq_restore(saved);
+        unsafe { irq_restore(saved); }
     }
 }
 

@@ -14,35 +14,28 @@
 
 use crate::drivers::uart;
 
-// TLS 1.3 constants
+// TLS 1.3 record types (RFC 8446 §5.1). Only the ones we actually
+// emit/parse are named — others (TLS_APPLICATION_DATA, etc.) are
+// matched against literals at the few sites that need them.
 const TLS_HANDSHAKE: u8 = 22;
-const TLS_APPLICATION_DATA: u8 = 23;
-const TLS_CHANGE_CIPHER_SPEC: u8 = 20;
-const TLS_VERSION_12: u16 = 0x0303; // TLS 1.2 in record layer (backwards compat)
-const TLS_VERSION_13: u16 = 0x0304;
 
-// Handshake message types
+// Handshake message types we send or recognise. Other RFC 8446
+// types (ENCRYPTED_EXTENSIONS, CERTIFICATE, CERTIFICATE_VERIFY,
+// FINISHED) are matched as literals inside the encrypted-handshake
+// dispatch rather than imported as named constants here.
 const CLIENT_HELLO: u8 = 1;
 const SERVER_HELLO: u8 = 2;
-const ENCRYPTED_EXTENSIONS: u8 = 8;
-const CERTIFICATE: u8 = 11;
-const CERTIFICATE_VERIFY: u8 = 15;
-const FINISHED: u8 = 20;
 
-// Cipher suites
+// Cipher suites we offer. ChaCha20-Poly1305 is not advertised — both
+// AES-GCM suites pass FIPS-140 ciphers and are universally supported.
 const TLS_AES_256_GCM_SHA384: u16 = 0x1302;
 const TLS_AES_128_GCM_SHA256: u16 = 0x1301;
-const TLS_CHACHA20_POLY1305_SHA256: u16 = 0x1303;
 
-// Extensions
-const EXT_SUPPORTED_VERSIONS: u16 = 43;
-const EXT_KEY_SHARE: u16 = 51;
-const EXT_SIGNATURE_ALGORITHMS: u16 = 13;
-const EXT_SERVER_NAME: u16 = 0;
-
-// Named groups
+// Named groups. Extension codepoints (supported_versions=43,
+// key_share=51, signature_algorithms=13, server_name=0) appear as
+// literals at their single emit/parse sites — extracting them here
+// would only help if more of the extension table got named.
 const X25519: u16 = 29;
-// IETF-assigned codepoint for hybrid X25519+ML-KEM-768 (RFC-in-progress).
 const X25519_MLKEM768: u16 = 0x11EC;
 
 /// Toggle advertising of post-quantum hybrid key_share alongside
@@ -69,6 +62,11 @@ pub fn hybrid_enabled() -> bool {
     TLS_HYBRID_ENABLED_FLAG.load(TlsOrdering::Relaxed)
 }
 
+// Kept as a public toggle: callers that need to force-disable hybrid
+// for one handshake (post-quantum interop debugging, mostly) flip this
+// before tls::handshake() and restore it after. No in-tree caller on
+// main; PR #6's pq-interop boot hook uses it explicitly.
+#[allow(dead_code)]
 #[inline]
 pub fn set_hybrid_enabled(v: bool) {
     TLS_HYBRID_ENABLED_FLAG.store(v, TlsOrdering::Relaxed);
@@ -100,11 +98,6 @@ fn tdbg(s: &str) {
 fn tdbg_num(n: usize) {
     if TLS_DEBUG { crate::kernel::mm::print_num(n); }
 }
-#[inline(always)]
-fn tdbg_byte(b: u8) {
-    if TLS_DEBUG { uart::putc(b); }
-}
-
 /// TLS connection state
 #[derive(Clone, Copy, PartialEq)]
 enum TlsState {
@@ -252,19 +245,6 @@ fn session_mut(id: usize) -> &'static mut TlsSession {
         &mut *ptr.add(idx)
     }
 }
-
-#[inline]
-fn session_ref(id: usize) -> &'static TlsSession {
-    let idx = if id < TLS_MAX_PCBS { id } else { LEGACY_TLS_PCB };
-    unsafe {
-        let ptr = core::ptr::addr_of!(TLS_STATES) as *const TlsSession;
-        &*ptr.add(idx)
-    }
-}
-
-// Back-compat shim: the legacy global is now slot 0 of the array.
-#[allow(non_snake_case)]
-fn SESSION_ptr() -> *mut TlsSession { session_mut(LEGACY_TLS_PCB) as *mut _ }
 
 /// Build a TLS 1.3 ClientHello message.
 ///
@@ -722,7 +702,7 @@ fn handshake_inner(hostname: &str) -> Result<(), &'static str> {
     transcript.update(&all_buf[5..sh_end]);
 
     // Remaining bytes after ServerHello contain more records
-    let mut remaining_start = sh_end;
+    let remaining_start = sh_end;
 
     // Check if we have the complete encrypted handshake record
     // If not, keep reading until we do
@@ -1498,26 +1478,30 @@ pub fn reset_all_sessions() {
 pub unsafe fn panic_wipe() {
     let base = core::ptr::addr_of_mut!(TLS_STATES) as *mut TlsSession;
     for i in 0..TLS_MAX_PCBS {
-        let s = base.add(i);
+        let s = unsafe { base.add(i) };
         // Write each secret byte volatile so the compiler preserves it.
-        let pv = core::ptr::addr_of_mut!((*s).our_private) as *mut u8;
-        let ss = core::ptr::addr_of_mut!((*s).shared_secret) as *mut u8;
-        let ck = core::ptr::addr_of_mut!((*s).client_key) as *mut u8;
-        let sk = core::ptr::addr_of_mut!((*s).server_key) as *mut u8;
-        let ci = core::ptr::addr_of_mut!((*s).client_iv) as *mut u8;
-        let si = core::ptr::addr_of_mut!((*s).server_iv) as *mut u8;
+        let pv = unsafe { core::ptr::addr_of_mut!((*s).our_private) } as *mut u8;
+        let ss = unsafe { core::ptr::addr_of_mut!((*s).shared_secret) } as *mut u8;
+        let ck = unsafe { core::ptr::addr_of_mut!((*s).client_key) } as *mut u8;
+        let sk = unsafe { core::ptr::addr_of_mut!((*s).server_key) } as *mut u8;
+        let ci = unsafe { core::ptr::addr_of_mut!((*s).client_iv) } as *mut u8;
+        let si = unsafe { core::ptr::addr_of_mut!((*s).server_iv) } as *mut u8;
         for j in 0..32 {
-            core::ptr::write_volatile(pv.add(j), 0);
-            core::ptr::write_volatile(ck.add(j), 0);
-            core::ptr::write_volatile(sk.add(j), 0);
+            unsafe {
+                core::ptr::write_volatile(pv.add(j), 0);
+                core::ptr::write_volatile(ck.add(j), 0);
+                core::ptr::write_volatile(sk.add(j), 0);
+            }
         }
         // shared_secret grew to 64 bytes for the hybrid PQ path; wipe all 64.
         for j in 0..64 {
-            core::ptr::write_volatile(ss.add(j), 0);
+            unsafe { core::ptr::write_volatile(ss.add(j), 0); }
         }
         for j in 0..12 {
-            core::ptr::write_volatile(ci.add(j), 0);
-            core::ptr::write_volatile(si.add(j), 0);
+            unsafe {
+                core::ptr::write_volatile(ci.add(j), 0);
+                core::ptr::write_volatile(si.add(j), 0);
+            }
         }
     }
 }
@@ -1554,11 +1538,6 @@ pub fn close() {
     zeroize(&mut sess.expected_hostname);
     sess.expected_hostname_len = 0;
     sess.finished_seen = false;
-}
-
-/// Check if TLS session is established.
-pub fn is_established() -> bool {
-    unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*SESSION_ptr()).state)) == TlsState::Established }
 }
 
 // ─── X25519 Key Exchange (Curve25519) ───
@@ -1660,7 +1639,7 @@ fn x25519_scalar_mult(scalar: &[u8; 32], point: &[u8; 32], result: &mut [u8; 32]
     pt[31] &= 127;
 
     let u = decode_u_coordinate(&pt);
-    let mut x_1 = u;
+    let x_1 = u;
     let mut x_2 = field_one();
     let mut z_2 = field_zero();
     let mut x_3 = u;
@@ -1924,8 +1903,3 @@ fn load_le_u64(bytes: &[u8]) -> u64 {
     v
 }
 
-fn store_le_u64(bytes: &mut [u8], val: u64) {
-    for i in 0..8.min(bytes.len()) {
-        bytes[i] = (val >> (i * 8)) as u8;
-    }
-}

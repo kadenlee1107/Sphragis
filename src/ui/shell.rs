@@ -9,6 +9,12 @@ use crate::net;
 
 const MAX_CMD_LEN: usize = 256;
 
+// GUI shell entrypoint. Today no boot path invokes it (display goes
+// to ui::desktop::run; headless goes to main::serial_shell). Kept as
+// staged code for an admin/recovery launcher and for individual
+// cmd_* helpers reachable via the selftest-on-boot/pq-interop-test
+// hooks.
+#[allow(dead_code)]
 pub fn run() -> ! {
     console::init();
 
@@ -3142,6 +3148,7 @@ fn cmd_run_elf(name: &str) {
             // launch. argc/argv/envp/auxv plus any user-stack contents
             // from the prior execution linger here. Zero before reuse.
             #[repr(align(16))]
+            #[allow(dead_code)]
             struct AlignedStack([u8; 65536]);
             static mut ELF_STACK: AlignedStack = AlignedStack([0u8; 65536]);
             let sb = core::ptr::addr_of_mut!(ELF_STACK) as usize; // 16-byte aligned
@@ -3212,71 +3219,6 @@ fn cmd_run_elf(name: &str) {
             platform::serial_puts("[shell] ELF load failed: ");
             platform::serial_puts(e);
             platform::serial_puts("\n");
-        }
-    }
-}
-
-fn parse_content_length(headers: &[u8]) -> usize {
-    let needle = b"Content-Length:";
-    let n_len = needle.len();
-    if headers.len() < n_len { return 0; }
-    let mut i = 0;
-    while i + n_len <= headers.len() {
-        let mut m = true;
-        for k in 0..n_len {
-            let a = headers[i + k];
-            let b = needle[k];
-            // Case-insensitive ASCII compare.
-            let al = if a.is_ascii_uppercase() { a + 32 } else { a };
-            let bl = if b.is_ascii_uppercase() { b + 32 } else { b };
-            if al != bl { m = false; break; }
-        }
-        if m {
-            let mut j = i + n_len;
-            while j < headers.len() && (headers[j] == b' ' || headers[j] == b'\t') { j += 1; }
-            let mut v: usize = 0;
-            while j < headers.len() && headers[j].is_ascii_digit() {
-                v = v * 10 + (headers[j] - b'0') as usize;
-                j += 1;
-            }
-            return v;
-        }
-        i += 1;
-    }
-    0
-}
-
-// `ladybird-dump <html_string?>` runs the standalone dump-html-tokens
-// binary built from Ladybird's actual HTMLTokenizer. With no arg, the
-// binary's hardcoded "<!doctype html><html><body><h1>Hello, Bat_OS!"
-// gets tokenized. Output is one line per token: "[N] StartTag <body>"
-// etc. — proves Ladybird's HTML parser runs on Bat_OS, not just LibJS.
-
-/// Sprint 1.5: copy our private render framebuffer into the real
-/// virtio-gpu framebuffer, centered horizontally. The destination's
-/// row stride is `real_w` pixels; the source's is `src_w`. Areas
-/// outside the page are filled with `bg_word`.
-fn blit_render_to_gpu(
-    src_fb: *mut u32, src_w: u32,
-    copy_w: u32, copy_h: u32,
-    dst_fb: *mut u32, dst_w: u32,
-    x_off: usize, y_off: usize,
-    bg_word: u32,
-) {
-    crate::drivers::virtio::gpu::fill_screen(bg_word);
-    for row in 0..copy_h as usize {
-        let src_row_start = row * src_w as usize;
-        let dst_row_start = (y_off + row) * dst_w as usize + x_off;
-        for col in 0..copy_w as usize {
-            let pixel = unsafe {
-                core::ptr::read_volatile(src_fb.add(src_row_start + col))
-            };
-            unsafe {
-                core::ptr::write_volatile(
-                    dst_fb.add(dst_row_start + col),
-                    pixel,
-                );
-            }
         }
     }
 }
@@ -3764,63 +3706,3 @@ fn cmd_audit_flush() {
     }
 }
 
-/// STUMP #97: write `application/x-www-form-urlencoded` octets into
-/// `out`, returning the number written. Only writes printable bytes
-/// directly; other bytes are escaped as `%XX`. Caller must size `out`
-/// to ≥ 3 × input length.
-fn url_encode(input: &[u8], out: &mut [u8]) -> usize {
-    let mut n = 0usize;
-    for &b in input {
-        let safe = matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~');
-        if safe {
-            if n < out.len() { out[n] = b; n += 1; }
-        } else if b == b' ' {
-            if n < out.len() { out[n] = b'+'; n += 1; }
-        } else {
-            if n + 2 < out.len() {
-                let h = b"0123456789ABCDEF";
-                out[n] = b'%';
-                out[n + 1] = h[(b >> 4) as usize];
-                out[n + 2] = h[(b & 0xF) as usize];
-                n += 3;
-            }
-        }
-    }
-    n
-}
-
-/// STUMP #89: base64 raw-BGRA dumper extracted so the paginated
-/// renderer can call it once per page. 76 base64 chars per line
-/// (= 57 raw bytes), `read_volatile` per byte so the optimizer can't
-/// hoist the framebuffer reads outside the loop.
-fn emit_b64_dump(fb_ptr: *mut u32, rw: u32, rh: u32) {
-    use crate::drivers::uart;
-    static B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let total_bytes: usize = (rw * rh) as usize * 4;
-    let mut col = 0usize;
-    let raw_ptr = fb_ptr as *const u8;
-    let mut i = 0usize;
-    while i < total_bytes {
-        let b0 = unsafe { core::ptr::read_volatile(raw_ptr.add(i)) };
-        let b1 = if i + 1 < total_bytes { unsafe { core::ptr::read_volatile(raw_ptr.add(i + 1)) } } else { 0 };
-        let b2 = if i + 2 < total_bytes { unsafe { core::ptr::read_volatile(raw_ptr.add(i + 2)) } } else { 0 };
-        uart::putc(B64[((b0 >> 2) & 0x3F) as usize]);
-        uart::putc(B64[(((b0 << 4) | (b1 >> 4)) & 0x3F) as usize]);
-        col += 2;
-        if i + 1 < total_bytes {
-            uart::putc(B64[(((b1 << 2) | (b2 >> 6)) & 0x3F) as usize]);
-            col += 1;
-        } else {
-            uart::putc(b'='); col += 1;
-        }
-        if i + 2 < total_bytes {
-            uart::putc(B64[(b2 & 0x3F) as usize]);
-            col += 1;
-        } else {
-            uart::putc(b'='); col += 1;
-        }
-        i += 3;
-        if col >= 76 { uart::putc(b'\n'); col = 0; }
-    }
-    if col != 0 { uart::putc(b'\n'); }
-}

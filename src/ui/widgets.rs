@@ -167,7 +167,7 @@ pub const KV_ROW_H: u32 = 22;
 /// (ink, scaled-2x for prominence) middle, `unit` (dim) below.
 /// Optional left-of-label status dot.
 pub fn draw_tile(
-    x: u32, y: u32, w: u32, h: u32,
+    x: u32, y: u32, _w: u32, h: u32,
     label: &str, value: &str, unit: &str,
     dot: Option<State>,
 ) {

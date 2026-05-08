@@ -210,8 +210,10 @@ pub unsafe fn panic_wipe() {
     let pass_ptr = core::ptr::addr_of_mut!(PASSPHRASE_HASH) as *mut u8;
     let duress_ptr = core::ptr::addr_of_mut!(DURESS_HASH) as *mut u8;
     for i in 0..32 {
-        core::ptr::write_volatile(pass_ptr.add(i), 0);
-        core::ptr::write_volatile(duress_ptr.add(i), 0);
+        unsafe {
+            core::ptr::write_volatile(pass_ptr.add(i), 0);
+            core::ptr::write_volatile(duress_ptr.add(i), 0);
+        }
     }
 }
 

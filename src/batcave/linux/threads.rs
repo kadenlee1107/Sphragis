@@ -114,7 +114,7 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use crate::kernel::mm::frame;
 use crate::drivers::uart;
 
@@ -181,22 +181,22 @@ const DEFAULT_STACK_PAGES: usize = 16; // 64 KiB fallback
 const KERNEL_STACK_PAGES: usize = 8;
 const PAGE_SIZE: usize = 4096;
 
-/// Assembly helper (threads.s) that saves the OLD thread's regs and
-/// erets to EL0 with the NEW thread's user-mode state. Used for the
-/// very first dispatch of a freshly-cloned thread — where we do NOT
-/// have a previously-saved kernel continuation to `ret` into, so the
-/// normal cxt_switch_cooperative path can't be used. Never returns.
-///
-/// The caller must **tail-call** (branch, not bl) into this helper
-/// after popping its own stack frame and restoring x30 to its
-/// caller-LR. The helper snapshots the current x30/SP into OLD's
-/// saved_regs — so on a later cooperative resume OLD `ret`s back
-/// into its original caller.
-///
-/// Parameters (AAPCS64):
-///   x0: old_ptr  — save callee-saved regs of the outgoing thread here
-///   x1: new_ptr  — load user x0..x30, elr_el1, spsr_el1, kernel sp, tpidr from here
-///   x2: user_sp  — sp_el0 at eret (user-space stack pointer)
+// Assembly helper (threads.s) that saves the OLD thread's regs and
+// erets to EL0 with the NEW thread's user-mode state. Used for the
+// very first dispatch of a freshly-cloned thread — where we do NOT
+// have a previously-saved kernel continuation to `ret` into, so the
+// normal cxt_switch_cooperative path can't be used. Never returns.
+//
+// The caller must **tail-call** (branch, not bl) into this helper
+// after popping its own stack frame and restoring x30 to its
+// caller-LR. The helper snapshots the current x30/SP into OLD's
+// saved_regs — so on a later cooperative resume OLD `ret`s back
+// into its original caller.
+//
+// Parameters (AAPCS64):
+//   x0: old_ptr  — save callee-saved regs of the outgoing thread here
+//   x1: new_ptr  — load user x0..x30, elr_el1, spsr_el1, kernel sp, tpidr from here
+//   x2: user_sp  — sp_el0 at eret (user-space stack pointer)
 unsafe extern "C" {
     fn cxt_switch_first_run(
         old: *mut SavedRegs,
