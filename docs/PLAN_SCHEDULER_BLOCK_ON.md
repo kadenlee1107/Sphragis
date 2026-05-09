@@ -6,7 +6,7 @@
 
 **Architecture:** Bottom-up. Add helpers and wakers first (`Phase 1-2`, additive). Hook the tick pass into the existing `kernel::scheduler::tick()` (`Phase 3`, one line). Atomic field rename + diagnostic update (`Phase 4`) — only the threads.rs:~1290 site references the old names today, so the rename has no other consumer fallout. Rewrite `sys_nanosleep` (`Phase 5`) and `epoll_pwait` (`Phase 6`) to use `park_current` and construct the new `BlockReason` variants. Comment cleanup (`Phase 7`). Test infrastructure (`Phase 8-11`). Final acceptance (`Phase 12`).
 
-Each phase ends with `cargo check --target aarch64-unknown-none --release`. The branch is `feat/scheduler-block-on`, branched from `feat/js-engine-browser-posix` immediately after PR #2 merged.
+Each phase ends with `cargo check --target aarch64-unknown-none --release`. The branch is `feat/scheduler-block-on`, branched from `main` (the default branch was renamed from `feat/js-engine-browser-posix` to `main` on 2026-05-08 after the no-browser pivot — see commit `95d31371`).
 
 **Tech Stack:** Rust + Cargo, bare-metal `aarch64-unknown-none`, nightly toolchain, single-binary kernel. ARMv8 generic timer (`cntpct_el0`, `cntfrq_el0`) is the clock source for all deadlines. WFI primitive is the kernel's idle-wait. No `cargo test` — verification is `cargo check` + `qemu_boot_smoke.py` (regression) + the new `qemu_selftests_smoke.py` (real proof of behavior).
 
@@ -30,7 +30,7 @@ Expected: `54dbd855... 🎯 DESIGN_SCHEDULER_BLOCK_ON: park-on-deadline for epol
 - [ ] **Step 2: Verify branch is `feat/scheduler-block-on`**
 
 Run: `git branch --show-current`
-Expected: `feat/scheduler-block-on`. If it says `feat/js-engine-browser-posix`, STOP and create the feature branch first: `git switch -c feat/scheduler-block-on`.
+Expected: `feat/scheduler-block-on`. If it says `main` (or any other branch), STOP and create the feature branch first: `git switch -c feat/scheduler-block-on`.
 
 - [ ] **Step 3: Create the rescue tag**
 
@@ -1619,7 +1619,7 @@ Expected: tag confirmation or `up to date`.
 
 - [ ] **Step 1: Invoke the skill**
 
-Use the `superpowers:finishing-a-development-branch` skill. Recommended: **Push and create a Pull Request** against `feat/js-engine-browser-posix` (matches the no-browser and TLS-hardening threads).
+Use the `superpowers:finishing-a-development-branch` skill. Recommended: **Push and create a Pull Request** against `main` (matches the no-browser and TLS-hardening threads — PRs #18-#24).
 
 PR title: `scheduler-block-on: park-on-deadline for epoll + nanosleep`
 
