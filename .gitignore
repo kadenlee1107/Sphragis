@@ -46,6 +46,11 @@
 # new captures live local-only.
 /captures
 
+# LoRA training dataset built by scripts/build_lora_dataset.py from
+# source + audit markers + vault notes + design docs + commit log.
+# Regenerable; ~4 MB and changes every commit, so we don't track.
+/out
+
 # Split-file parts — don't track source files if they're already split.
 macos_dump/kernelcache.mac16j.bin
 macos_dump/SystemKernelExtensions.kc
