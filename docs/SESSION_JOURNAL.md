@@ -11,6 +11,107 @@ end of a session.
 
 ---
 
+## 2026-05-08 (AI agent design + LoRA training kickoff) — Mac — our own LLM
+
+**Goal:** Stop relying on cloud LLMs. Stand up a Bat_OS-specific
+domain assistant that's fast, knows our codebase cold, refuses
+nothing legitimate, and lives entirely on operator-controlled
+hardware. Same project rules apply: no AGPL deps, no hallucination
+flooring, audit every interaction.
+
+### Decisions locked in
+
+- **Base model:** `Qwen/Qwen2.5-Coder-7B-Instruct` (Apache-2.0).
+  Code-specialized, sm_120 / Blackwell compatible, 32K context.
+  Gemma 4 E4B (April 2026, Apache-2.0, native function calling, 256K
+  context) is the obvious v2 candidate if v1 underwhelms — same
+  dataset works since records are model-agnostic.
+- **Fine-tune method:** QLoRA. 4-bit nf4 + double-quant, bf16
+  compute, LoRA rank 16 / alpha 32, 7 target modules
+  (q/k/v/o/gate/up/down), gradient checkpointing (non-reentrant),
+  paged 8-bit AdamW, cosine LR + warmup. ~3 epochs, eff. batch 16,
+  max_len 1536.
+- **Inference host:** RTX 5070 (12 GB) on Windows + WSL2. ollama
+  serves the merged GGUF as `bat-os-coder`. Caddy fronts with
+  TLS; cert SHA-256 pinned in Bat_OS source. The 1660 Ti stays
+  free for the desktop.
+- **Agent layer:** native Rust `src/ai/` module. Mandatory tool
+  use (6 read-only tools: `read_file`, `grep_source`,
+  `query_audit_ring`, `suggest_command`, `read_concept_note`,
+  `list_caves`). Hand-rolled BM25 RAG over Concept notes +
+  `DESIGN_*.md`, embedded at compile-time via `include_str!`.
+- **Network path:** kernel-mediated HTTPS via existing
+  `https::open_kernel`. No new primitive, no `tokio`. Pinned cert,
+  default-deny except via the agent's single cave-policy entry.
+- **Audit:** new `Category::Ai = 10`. One entry on session start,
+  one per tool call, one on session end (token count + ok flag).
+  Sealed under master-key AEAD same as every other audit category.
+- **Personality:** terse, technical, never refuses legitimate
+  questions. The system prompt explicitly instructs no
+  safety-theater refusals.
+
+### What landed today (committed locally + pushed)
+
+- `DESIGN_AI_AGENT.md` (320 lines) — the spec.
+- `docs/PLAN_AI_AGENT.md` (2,294 lines) — 17-phase implementation
+  plan, bite-sized tasks, every step has the actual code/command.
+  Branch `feat/ai-agent-design` pushed to origin.
+- `scripts/build_lora_dataset.py` — collects 5 corpora into one
+  JSONL: 1,241 source-fn pairs (every `pub fn` -> body), 79
+  audit-marker pairs (`V8-ROOT-1` -> comment context), 10
+  Concept notes, 11 `DESIGN_*.md` + `docs/PLAN_*.md`, 782 commit
+  messages. **Total: 2,123 records, 4.16 MB.** Committed.
+- `scripts/train_lora.py` — QLoRA training driver. Pinned to
+  `cuda:0` so the 1660 Ti stays free.
+
+### Windows training rig — what it took
+
+This is documented properly so future-Claude doesn't repeat the pain:
+
+- WSL2 + Ubuntu 24.04 + systemd (had to add `[boot]/systemd=true`
+  to `/etc/wsl.conf`).
+- PyTorch **2.11.0+cu128** — earlier 2.6.0+cu124 doesn't compile
+  for sm_120 (Blackwell RTX 5070). The cu128 wheel index has it.
+- `bitsandbytes 0.49.2` works with cu128.
+- HF cache pinned at `/mnt/d/ai/.cache/huggingface` so the C: drive
+  doesn't bloat.
+- All training data + model cache on `D:` drive via `~/.ollama ->
+  /mnt/d/ai/.ollama` symlink.
+- **Hidden Windows footgun:** `UNATTENDSLEEP` (System unattended
+  sleep timeout) defaults to 120s. SSH connections don't count as
+  user activity, so the host slept twice during long downloads
+  even with `STANDBYIDLE=0`. Fix: unhide via `powercfg
+  -attributes` and zero it. Full lockdown will go in
+  `docs/AI_TRAINING_RUNBOOK.md`.
+
+### License posture (recurring)
+
+Hard line: **no AGPL/GPL deps.** Warp integration was rejected
+on this basis earlier today — even with process-isolation
+workarounds, the answer was no. Qwen2.5 (Apache-2.0), Gemma 4
+(Apache-2.0), ollama (MIT), bitsandbytes (MIT), peft (Apache-2.0),
+transformers (Apache-2.0), trl (Apache-2.0), datasets (Apache-2.0),
+caddy (Apache-2.0). Clean.
+
+### What's next
+
+1. Wait for v1 training to complete (~5h budget). Eval set is being
+   written in parallel so we can grade it the moment it lands.
+2. Scaffold `src/ai/` per Phase 2 of the plan.
+3. Merge LoRA adapter, convert to GGUF Q4_K_M, register with
+   ollama as `bat-os-coder`.
+4. Stand up caddy TLS in front of ollama, pin SHA-256 in
+   `src/net/tls_pinning.rs`.
+5. First end-to-end shell command: `bat_os > ai "what does
+   bat_https_open do?"` — should grep our source live, cite the
+   file, never invent a function.
+
+If v1 underwhelms (eval pass-rate < 50%, hallucinations on named
+things), v2 is Gemma 4 E4B with sample-packing + DoRA + NEFTune.
+Same dataset, ~1.5h training, expected meaningful jump.
+
+---
+
 ## 2026-05-08 (autofill C) — Mac — 📁 argument completion (files, caves, binaries)
 
 **Third and final autofill PR.** Past the first space, Tab now
