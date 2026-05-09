@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+mod ai;
 mod batcave;
 mod boot;
 mod crypto;

@@ -37,6 +37,10 @@ pub enum Category {
     /// (one-shot per power-on) so the operator can grep-filter cave
     /// lifecycle events without drowning in boot noise.
     Cave        = 9,
+    /// ai-agent activity: session start / tool call / session end.
+    /// Per-session scope so a forensic reviewer can replay one
+    /// conversation without untangling it from system noise.
+    Ai          = 10,
 }
 
 impl Category {
@@ -51,6 +55,7 @@ impl Category {
             Category::Auth       => "auth",
             Category::Boot       => "boot",
             Category::Cave       => "cave",
+            Category::Ai         => "ai",
         }
     }
 }
@@ -292,6 +297,7 @@ pub fn restore_from_persisted(buf: &[u8]) -> usize {
             b"auth"   => Category::Auth as u8,
             b"boot"   => Category::Boot as u8,
             b"cave"   => Category::Cave as u8,
+            b"ai"     => Category::Ai as u8,
             _ => continue,
         };
 
