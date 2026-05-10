@@ -169,7 +169,7 @@ def main():
 
     trainer = Trainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         args=args,
         train_dataset=tokenized,
         data_collator=collator,
