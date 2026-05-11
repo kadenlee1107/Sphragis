@@ -1,0 +1,2 @@
+# Secret keys must never be committed. Public key goes here for verifiers.
+*.sec
