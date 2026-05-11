@@ -270,6 +270,8 @@ fn execute(cmd: &str) {
         "audit-chain" => cmd_audit_chain(),
         "dmesg" => cmd_dmesg(parts[1]),
         "sec-status" | "secstatus" => cmd_sec_status(),
+        "pin" => cmd_pin(parts[1], parts[2]),
+        "crl" => cmd_crl(parts[1], parts[2], parts[3]),
         "ai" => {
             // Everything after "ai " is the question, including spaces.
             let q = cmd.trim_start()
@@ -4029,5 +4031,128 @@ fn cmd_sec_status() {
     console::puts("                        ML-DSA-65, HOTP, TOTP\n");
 
     console::puts("\n== end ==\n");
+}
+
+/// Per-host SPKI cert pin admin.
+///   pin list                              — dump all pins
+///   pin add <host> <spki-sha256-hex>      — register a pin
+fn cmd_pin(sub: &str, arg2: &str) {
+    use crate::net::cert_pin;
+    match sub {
+        "" | "list" => {
+            let pins = cert_pin::list_pins();
+            if pins.is_empty() {
+                console::puts("  pin: no per-host pins configured\n");
+                return;
+            }
+            for (host, hashes) in pins.iter() {
+                console::puts("  ");
+                console::puts(host);
+                console::puts("\n");
+                for h in hashes.iter() {
+                    console::puts("    ");
+                    console::puts(h);
+                    console::puts("\n");
+                }
+            }
+        }
+        "add" => {
+            let host_then_hex = arg2;
+            let (host, hex) = match host_then_hex.split_once(' ') {
+                Some((h, x)) => (h.trim(), x.trim()),
+                None => {
+                    console::puts("  pin add <host> <spki-sha256-hex>\n");
+                    return;
+                }
+            };
+            if hex.len() != 64 {
+                console::puts("  pin add: hex must be exactly 64 chars (32-byte SHA-256)\n");
+                return;
+            }
+            let mut bytes = [0u8; 32];
+            let raw = hex.as_bytes();
+            for i in 0..32 {
+                let hi = hexnib(raw[i * 2]);
+                let lo = hexnib(raw[i * 2 + 1]);
+                if hi == 0xff || lo == 0xff {
+                    console::puts("  pin add: invalid hex\n");
+                    return;
+                }
+                bytes[i] = (hi << 4) | lo;
+            }
+            match cert_pin::add_pin(host, &bytes) {
+                Ok(()) => console::puts("  pin add: ok\n"),
+                Err(_) => console::puts("  pin add: error (table full or host name too long)\n"),
+            }
+        }
+        _ => console::puts("  pin {list|add <host> <spki-sha256-hex>}\n"),
+    }
+}
+
+/// CRL revocation admin.
+///   crl stats                            — issuer + serial counts
+///   crl add <issuer-spki-hex> <serial>   — manually mark revoked
+fn cmd_crl(sub: &str, arg2: &str, arg3: &str) {
+    use crate::net::crl;
+    match sub {
+        "" | "stats" => {
+            let (issuers, serials) = crl::stats();
+            console::puts("  crl issuers: ");
+            crate::kernel::mm::print_num(issuers);
+            console::puts("   revoked serials: ");
+            crate::kernel::mm::print_num(serials);
+            console::puts("\n");
+        }
+        "add" => {
+            let issuer_hex = arg2;
+            let serial_hex = arg3;
+            if issuer_hex.len() != 64 {
+                console::puts("  crl add: issuer hex must be exactly 64 chars (32-byte SHA-256)\n");
+                return;
+            }
+            if serial_hex.is_empty() || serial_hex.len() % 2 != 0 || serial_hex.len() > 40 {
+                console::puts("  crl add: serial hex must be even-length, ≤ 40 chars (20 bytes)\n");
+                return;
+            }
+            let mut issuer = [0u8; 32];
+            let raw = issuer_hex.as_bytes();
+            for i in 0..32 {
+                let hi = hexnib(raw[i * 2]);
+                let lo = hexnib(raw[i * 2 + 1]);
+                if hi == 0xff || lo == 0xff {
+                    console::puts("  crl add: invalid issuer hex\n");
+                    return;
+                }
+                issuer[i] = (hi << 4) | lo;
+            }
+            let mut serial = [0u8; 20];
+            let slen = serial_hex.len() / 2;
+            let sraw = serial_hex.as_bytes();
+            for i in 0..slen {
+                let hi = hexnib(sraw[i * 2]);
+                let lo = hexnib(sraw[i * 2 + 1]);
+                if hi == 0xff || lo == 0xff {
+                    console::puts("  crl add: invalid serial hex\n");
+                    return;
+                }
+                serial[i] = (hi << 4) | lo;
+            }
+            match crl::add_revocation(&issuer, &serial[..slen]) {
+                Ok(()) => console::puts("  crl add: ok\n"),
+                Err(_) => console::puts("  crl add: error (issuer table full or serial too long)\n"),
+            }
+        }
+        _ => console::puts("  crl {stats|add <issuer-spki-hex> <serial-hex>}\n"),
+    }
+}
+
+#[inline]
+fn hexnib(b: u8) -> u8 {
+    match b {
+        b'0'..=b'9' => b - b'0',
+        b'a'..=b'f' => b - b'a' + 10,
+        b'A'..=b'F' => b - b'A' + 10,
+        _ => 0xff,
+    }
 }
 
