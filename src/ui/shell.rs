@@ -272,6 +272,7 @@ fn execute(cmd: &str) {
         "sec-status" | "secstatus" => cmd_sec_status(),
         "pin" => cmd_pin(parts[1], parts[2]),
         "crl" => cmd_crl(parts[1], parts[2], parts[3]),
+        "hash" => cmd_hash(parts[1], parts[2]),
         "ai" => {
             // Everything after "ai " is the question, including spaces.
             let q = cmd.trim_start()
@@ -4144,6 +4145,60 @@ fn cmd_crl(sub: &str, arg2: &str, arg3: &str) {
         }
         _ => console::puts("  crl {stats|add <issuer-spki-hex> <serial-hex>}\n"),
     }
+}
+
+/// Hash a BatFS file with one of the supported algorithms. The
+/// crypto stack additions from cluster A are surfaced here so the
+/// operator can sanity-check file integrity.
+///
+///   hash <algo> <file>
+///
+/// algos: sha256, sha384, sha3-256, sha3-384, sha3-512, blake3
+fn cmd_hash(algo: &str, path: &str) {
+    use crate::crypto;
+    if algo.is_empty() || path.is_empty() {
+        console::puts("  hash <sha256|sha384|sha3-256|sha3-384|sha3-512|blake3> <file>\n");
+        return;
+    }
+    let mut file_buf = [0u8; 65536];
+    let n = match crate::fs::batfs::read(path, &mut file_buf) {
+        Ok(n) => n,
+        Err(e) => {
+            console::puts("  hash: read failed: ");
+            console::puts(e);
+            console::puts("\n");
+            return;
+        }
+    };
+    let body = &file_buf[..n];
+
+    let digest: alloc::vec::Vec<u8> = match algo {
+        "sha256"   => crypto::sha256::hash(body).to_vec(),
+        "sha384"   => crypto::sha384::hash(body).to_vec(),
+        "sha3-256" => crypto::sha3::sha3_256(body).to_vec(),
+        "sha3-384" => crypto::sha3::sha3_384(body).to_vec(),
+        "sha3-512" => crypto::sha3::sha3_512(body).to_vec(),
+        "blake3"   => crypto::blake3::hash(body).to_vec(),
+        _ => {
+            console::puts("  hash: unknown algorithm; valid: sha256, sha384, sha3-256, sha3-384, sha3-512, blake3\n");
+            return;
+        }
+    };
+
+    console::puts("  ");
+    console::puts(algo);
+    console::puts(":");
+    let pad = 12usize.saturating_sub(algo.len());
+    for _ in 0..pad { console::puts(" "); }
+    for &b in digest.iter() {
+        let hi = (b >> 4) & 0x0f;
+        let lo = b & 0x0f;
+        let hc = if hi < 10 { (b'0' + hi) as char } else { (b'a' + hi - 10) as char };
+        let lc = if lo < 10 { (b'0' + lo) as char } else { (b'a' + lo - 10) as char };
+        let pair = [hc as u8, lc as u8];
+        console::puts(core::str::from_utf8(&pair).unwrap_or("?"));
+    }
+    console::puts("\n");
 }
 
 #[inline]
