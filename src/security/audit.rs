@@ -90,6 +90,34 @@ pub unsafe fn raw_ring() -> &'static [Entry; RING_CAP] {
     unsafe { &*core::ptr::addr_of!(RING) }
 }
 
+/// Copy the most-recent `n` entries (capped at RING_CAP) into the
+/// caller's buffer. Returns how many were actually written. The
+/// AI agent's `query_audit_ring` tool dispatch calls this — it's
+/// the one piece of audit-side state the model is allowed to read
+/// at inference time.
+///
+/// SAFETY: single-writer assumption matches `record()`. The copy
+/// is best-effort; a concurrent record() could overwrite an entry
+/// we're in the middle of reading. The model gets a torn read at
+/// worst; acceptable because the audit ring's job is to record
+/// truths, not to be a synchronization primitive.
+pub fn recent(buf: &mut [Entry]) -> usize {
+    let head = HEAD.load(Ordering::Relaxed);
+    if head == 0 || buf.is_empty() {
+        return 0;
+    }
+    let resident = if head < RING_CAP { head } else { RING_CAP };
+    let take = if buf.len() < resident { buf.len() } else { resident };
+    let start = head - take;
+    for i in 0..take {
+        let slot = (start + i) % RING_CAP;
+        // SAFETY: addr_of! avoids creating a &mut to the static.
+        let entry = unsafe { (*core::ptr::addr_of!(RING))[slot] };
+        buf[i] = entry;
+    }
+    take
+}
+
 /// the ring silently overwrites the oldest
 /// entries when full. An adversary who suspects a forensic dump is
 /// imminent can flood the log to evict their tracks. This counter
