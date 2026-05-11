@@ -45,8 +45,8 @@ DATASET    = "/mnt/d/ai/training/bat_os_lora_dataset_v2.jsonl"
 OUT_DIR    = "/mnt/d/ai/training/output_v2"
 MAX_LEN    = 2048
 
-LORA_RANK    = 64
-LORA_ALPHA   = 128
+LORA_RANK    = 32
+LORA_ALPHA   = 64
 LORA_DROPOUT = 0.05
 LORA_TARGETS = [
     "q_proj", "k_proj", "v_proj", "o_proj",
@@ -102,6 +102,11 @@ def main():
     model.config.use_cache = False
     model = prepare_model_for_kbit_training(model)
 
+    # Note 2026-05-10: dropped use_dora=True after a 50-minute step-0
+    # hang under bnb 4-bit + rank 64 + packing on the 5070. DoRA's
+    # column-wise normalization appears to deadlock against the
+    # quantized weights. Rank 32 + plain LoRA still gives us 2x v1
+    # capacity (v1 was rank 16) without the failure mode.
     lora = LoraConfig(
         r=LORA_RANK,
         lora_alpha=LORA_ALPHA,
@@ -109,7 +114,6 @@ def main():
         lora_dropout=LORA_DROPOUT,
         bias="none",
         task_type="CAUSAL_LM",
-        use_dora=True,
     )
 
     ds = load_dataset()
@@ -134,7 +138,11 @@ def main():
         dataloader_num_workers=2,
         ddp_find_unused_parameters=False,
         max_length=MAX_LEN,
-        packing=True,
+        # Disabled 2026-05-10: packing + gradient_checkpointing + bnb
+        # 4-bit + SFTTrainer hangs at step 0 (GPU 100% util at 50W,
+        # no progress). Without packing we lose the throughput win but
+        # actually train. Revisit when trl > 1.4 ships the fix.
+        packing=False,
         neftune_noise_alpha=NEFTUNE_ALPHA,
     )
 
