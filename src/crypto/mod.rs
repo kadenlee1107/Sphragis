@@ -1,8 +1,12 @@
 pub mod aes;
-pub mod sha256;
-pub mod sha384;
+pub mod aes_xts;
+pub mod blake3;
 pub mod gcm_verified;
 pub mod pq_hybrid;
 pub mod pq_hybrid_sig;
 pub mod rng;
+pub mod sha256;
+pub mod sha3;
+pub mod sha384;
 pub mod sig;
+pub mod xchacha20poly1305;

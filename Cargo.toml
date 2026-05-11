@@ -92,6 +92,23 @@ hybrid-array = { version = "0.4", default-features = false }
 # to the dedicated crate gives us clean interop.
 x25519-dalek = { version = "2", default-features = false, features = ["static_secrets"] }
 rand_core = { version = "0.6", default-features = false }
+# Cluster A — crypto agility surface (2026-05-10).
+# SHA-3 family (FIPS 202) for use-cases the SHA-2 family doesn't cover
+# (KMAC, SHAKE128/256 XOF, alternate hash for protocol that mandates it).
+sha3 = { version = "0.10", default-features = false }
+# BLAKE3 keyed/parallel hash. Much faster than SHA-256 on modern CPUs.
+# Useful as a content-addressed identifier for the SBOM + RAG corpus,
+# and as a high-throughput MAC alternative. `pure` disables the NEON
+# C intrinsics path which can't link on aarch64-unknown-none (no libc
+# headers for assert.h etc.); the pure-Rust path is still plenty fast.
+blake3 = { version = "1.5", default-features = false, features = ["pure"] }
+# AES-XTS for block-level disk/sector encryption (BatFS extents and the
+# eventual NVMe block layer). XTS is the standard for full-disk crypto;
+# GCM is not appropriate for random-access blocks.
+xts-mode = { version = "0.5", default-features = false }
+# CMAC over AES-128/256 — needed for FIPS-validated approved-mode
+# constructions and as a fallback MAC when HMAC-SHA2 isn't acceptable.
+cmac = { version = "0.7", default-features = false }
 
 [profile.dev]
 panic = "abort"
