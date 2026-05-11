@@ -4,6 +4,7 @@ pub mod cave_policy;
 pub mod cave_shaper;
 pub mod cert_pin;
 pub mod crl;
+pub mod ct_logs;
 pub mod dot;
 pub mod cookies;
 pub mod dns;
