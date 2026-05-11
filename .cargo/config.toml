@@ -5,7 +5,28 @@ target = "aarch64-unknown-none"
 # `-Zfixed-x18` (nightly only) replaces the rust-deprecated
 # `-C target-feature=+reserve-x18` per rust-lang/rust#116344. Bat_OS
 # pins a nightly via `rust-toolchain.toml`, so we get the modern flag.
-rustflags = ["-C", "link-arg=-Tlinker.ld", "-Zfixed-x18"]
+#
+# Exploit-mitigation flags landed 2026-05-10 (cluster G). Verified
+# present in the built binary by `scripts/audit_canaries.sh`.
+#
+#   stack-protector=all  — emit __stack_chk_guard prologue/epilogue
+#                          on EVERY function, not just ones with
+#                          large stack allocations. Catches ROP from
+#                          contained stack overflows.
+#   target-feature=+pauth,+bti — enable the ARMv8.3 (PAC) and ARMv8.5
+#                          (BTI) instruction families. M4 supports both.
+#   branch-protection=bti+pac-ret — actually emit `bti` markers at
+#                          indirect-branch targets and `paciasp`/
+#                          `autiasp` sign/verify return addresses.
+#                          Without this flag the +pauth/+bti
+#                          target-features alone don't change codegen.
+rustflags = [
+    "-C", "link-arg=-Tlinker.ld",
+    "-Zfixed-x18",
+    "-Z", "stack-protector=all",
+    "-C", "target-feature=+paca,+pacg,+bti",
+    "-Z", "branch-protection=bti,pac-ret",
+]
 
 [unstable]
 build-std = ["core", "alloc"]
