@@ -11,6 +11,143 @@ end of a session.
 
 ---
 
+## 2026-05-10 — Mac — v1 LoRA shipped + voice pipeline live
+
+**Session goal:** Take yesterday's training run end-to-end through
+merge -> quantize -> ollama -> eval, and (parallel track) stand up a
+real-time TTS pipeline so the assistant can actually talk.
+
+### LoRA training -> ollama -> eval
+
+Training finished overnight at 00:39 PDT: 5,583 sec, 3 epochs,
+final loss 1.001, 161 MB adapter at `/mnt/d/ai/training/output/final`.
+
+End-to-end pipeline:
+
+  1. `scripts/merge_lora_to_gguf.sh` merges the adapter into the bf16
+     base, runs `llama.cpp/convert_hf_to_gguf.py` to f16 (15.2 GB), then
+     `llama-quantize` to Q4_K_M (4.68 GB, 4.91 bpw).
+  2. `scripts/register_with_ollama.sh` writes a Modelfile with the
+     Qwen2.5 chat template + system prompt and runs `ollama create
+     bat-os-coder`.
+  3. `evals/run_evals.py` scores the model against the 46 hand-written
+     Q+A in `evals/bat_os_evals.jsonl`.
+
+**Eval result: 21/46 = 46 percent pass.**
+
+      audit           6/8  ( 75.0%)
+      concept         5/10 ( 50.0%)
+      personality     2/5  ( 40.0%)
+      hallucination   2/5  ( 40.0%)
+      architecture    3/8  ( 37.5%)
+      function        3/10 ( 30.0%)
+
+Honest read: model learned the vocabulary (V-markers at 75%) but
+**hallucinates file paths and function signatures** when it has to
+recall them from memory alone. Sample fail: asked where the audit
+recorder lives, model invented `src/batcave/linux/audit.rs` which
+does not exist (real path is `src/security/audit.rs`).
+
+The diagnosis is the case for RAG. Phase 8 of `docs/PLAN_AI_AGENT.md`
+ships compile-time-bundled BM25 over Concept notes + DESIGN docs.
+That single change probably bumps the pass rate to 70%+ without
+retraining. Tool dispatch (Phase 7) on top of that bumps it further
+because the model can grep the real source instead of guessing.
+
+### Yak-shaves we now know about
+
+  * **Blackwell sm_120**: torch 2.6.0+cu124 (pinned by chatterbox-tts
+    and many others) does not have kernels for RTX 5070. Every venv on
+    the inference host needs `pip install --index-url
+    https://download.pytorch.org/whl/cu128 torch ...` after the initial
+    install. Documented in `scripts/deploy_chatterbox.sh`.
+  * **WSL2 + SSH-spawned tmux dies**: long-running unattended jobs on
+    the Windows box do NOT survive an `ssh kaden@host 'tmux new -d ...'`
+    after the SSH connection closes. The fix that works is registering
+    the job as a Windows scheduled task (`schtasks /Create`) — Task
+    Scheduler is its own session, immune to SSH lifecycle. Used for
+    training, merge, quantize, eval, chatterbox install, chatterbox
+    server. Two batch wrappers live at `D:/ai/training/*.bat`.
+  * **Windows host sleep**: triple defense — `powercfg
+    STANDBYIDLE/UNATTENDSLEEP/HIBERNATEIDLE=0`, `powercfg /h off`, and a
+    `BatOSStayAwake` scheduled task running PowerShell with
+    `SetThreadExecutionState(ES_CONTINUOUS|ES_SYSTEM_REQUIRED|ES_AWAYMODE_REQUIRED)`
+    in a loop, registered as SYSTEM. Cured the 2-hour-into-training
+    sleeps from 2026-05-08.
+  * **HF anonymous rate limit**: ~22 KB/s on Qwen2.5-Coder-7B without
+    auth (would take a week to download). HF_TOKEN unlocks ~4 MB/s.
+    Token is in WSL `~/.bashrc` AND `predl_and_train.sh`. **Revoke
+    after v2 training.**
+  * **Trainer kwarg rename**: transformers >= 4.46 renamed
+    `Trainer(tokenizer=...)` to `processing_class`. Old form raises
+    `TypeError`. Caught only after 90 minutes of training loaded the
+    model + dataset.
+
+### Voice pipeline (parallel track)
+
+Goal: assistant speaks responses in real-time as text appears in
+Claude Code.
+
+Tried three TTS models before landing on the right one:
+
+  * **Kokoro 82M (Apache 2.0)**: too small, sounds robotic.
+  * **Sesame CSM-1B (Apache 2.0)**: the open weights are the BASE
+    generation model, not the fine-tuned Maya/Miles variants from
+    sesame.com/voicedemo. Honest: cannot match the demo quality with
+    public weights + any reference clip.
+  * **Chatterbox 500M (Resemble AI, MIT)**: winner. Voice clones
+    from a 5-10 sec reference. Default voice was effeminate by user
+    feedback; **fixed by using a Kokoro `am_michael` rendering as the
+    reference clip** — Chatterbox takes timbre from the reference and
+    re-neuralizes prosody, so the robotic Kokoro source doesn't
+    transfer through.
+
+End-to-end pipeline:
+
+  1. **Server**: `scripts/deploy_chatterbox.sh` stands up a FastAPI
+     daemon on `:5005` of the 5070 box. Two endpoints: `POST /tts`
+     (one-shot WAV) and `WS /stream` (sentence-by-sentence int16 PCM).
+     Model loaded once, kept warm in VRAM (3.75 GB). Sub-second
+     inference per sentence on the 5070.
+  2. **Voice reference**: `/mnt/d/ai/tts/refs/default.wav` is a 9.4 sec
+     Kokoro `am_michael` rendering. Drop a new file there to swap
+     voices.
+  3. **Mac client**: `scripts/voice_claude.py` reads stdin, splits into
+     sentences, opens a WebSocket to the server, plays returned PCM
+     through `sounddevice` continuously so the audio queue never gaps.
+  4. **Auto-watcher**: `scripts/watch_and_speak.py` tails the active
+     Claude Code session JSONL at
+     `~/.claude/projects/-Users-kadenlee-Bat-OS/`. For every
+     `type=="assistant"` entry, it pulls out the text blocks, strips
+     non-speakable Markdown (code fences, tables, link syntax,
+     asterisks), and pipes them to `voice_claude.py`.
+
+Connect with one tunnel from the Mac:
+
+      ssh -i ~/.ssh/bayerflow_win -f -N -L 5005:127.0.0.1:5005 kaden@<host>
+      python3 scripts/watch_and_speak.py &
+
+Done. Every assistant response speaks within a couple seconds of
+appearing in the chat window. Voice can be swapped at any time by
+replacing `default.wav` on the server.
+
+### What's next
+
+  1. **RAG layer (Phase 8 of PLAN_AI_AGENT)** — biggest leverage. Build
+     a corpus from `~/BAT_OS_VAULT/Concepts/*.md` + `DESIGN_*.md`,
+     compile-time bundle via `include_str!`, BM25 with k1=1.2/b=0.75,
+     inject top-k results as system prompt context. Expected: eval
+     bumps from 46% to ~70%.
+  2. **Tool dispatch (Phase 7)** — wire up the 6 read-only tools the
+     design specifies. Model can grep the real source instead of
+     recalling from training. Expected: eval bumps to 85%+.
+  3. **v2 training run with the lessons learned** — sample packing
+     (3x more efficient on our short records), DoRA, NEFTune, possibly
+     a bigger base (Gemma 4 E4B). Defer until RAG + tools demonstrate
+     the ceiling.
+
+---
+
 ## 2026-05-08 (AI agent design + LoRA training kickoff) — Mac — our own LLM
 
 **Goal:** Stop relying on cloud LLMs. Stand up a Bat_OS-specific

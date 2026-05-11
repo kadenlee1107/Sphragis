@@ -29,7 +29,7 @@ if [ ! -d "$ADAPTER" ]; then
 fi
 
 echo "[merge] step 1/3 — merge LoRA adapter into base model (bf16)"
-HF_HOME="$HF_HOME" python3 - <<'PYEOF'
+HF_HOME="$HF_HOME" "$HOME/ai-venv/bin/python" - <<'PYEOF'
 import os, sys
 from pathlib import Path
 import torch
@@ -58,7 +58,10 @@ if [ ! -d "$LLAMA_CPP" ]; then
     echo "[merge] cloning llama.cpp to $LLAMA_CPP"
     git clone --depth 1 https://github.com/ggerganov/llama.cpp "$LLAMA_CPP"
 fi
-python3 "$LLAMA_CPP/convert_hf_to_gguf.py" "$MERGED" \
+# llama.cpp's convert script needs gguf and a few transformers bits;
+# ensure they're in the venv.
+"$HOME/ai-venv/bin/pip" install -q gguf sentencepiece protobuf 2>&1 | tail -3 || true
+"$HOME/ai-venv/bin/python" "$LLAMA_CPP/convert_hf_to_gguf.py" "$MERGED" \
     --outfile "$GGUF_DIR/bat-os-coder.f16.gguf" \
     --outtype f16
 

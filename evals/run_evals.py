@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import sys
 import time
@@ -52,14 +53,21 @@ def ask_model(host: str, port: int, model: str, question: str, timeout: int) -> 
         "stream": False,
         "temperature": 0.2,
     }).encode("utf-8")
-    req = urllib.request.Request(
-        f"http://{host}:{port}/v1/chat/completions",
-        data=body,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        payload = json.loads(resp.read())
-    return payload["choices"][0]["message"]["content"]
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(
+                f"http://{host}:{port}/v1/chat/completions",
+                data=body,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read())
+            return payload["choices"][0]["message"]["content"]
+        except (urllib.error.URLError, OSError, http.client.RemoteDisconnected) as e:
+            last_err = e
+            time.sleep(2 + attempt * 3)
+    raise last_err if last_err else RuntimeError("ask_model failed without exception")
 
 
 def grade(rec: dict, answer: str) -> tuple[bool, str]:
@@ -117,8 +125,8 @@ def main() -> int:
     for rec in rows:
         try:
             answer = ask_model(args.host, args.port, args.model, rec["question"], args.timeout)
-        except (urllib.error.URLError, TimeoutError, KeyError) as e:
-            answer = f"[NETWORK ERROR] {e}"
+        except Exception as e:
+            answer = f"[ASK_MODEL ERROR] {type(e).__name__}: {e}"
 
         ok, reason = grade(rec, answer)
         marker = "PASS" if ok else "FAIL"
