@@ -11,6 +11,120 @@ end of a session.
 
 ---
 
+## 2026-05-11 — Mac — v2 + v3 LoRA iterations, eval at 65% with v3
+
+**Goal:** Take the v2 training run that finished overnight through
+the merge → ollama → eval pipeline, measure against v1's 54%, and
+react to whatever the result was. Spoiler: v2 regressed on two
+categories badly enough that we built and shipped a v3 corrective
+training run in the same session.
+
+### v2 result
+
+54% → **52%** with RAG. Per-category was the more interesting
+picture:
+
+  * function:      20% → **40%** ✓ (doubled — exactly the gap v2
+                                    was supposed to fix)
+  * audit:         75% → **87.5%** ✓
+  * architecture:  63% → **75%** ✓
+  * concept:       60% → 60% (flat)
+  * personality:   80% → **20%** ✗ (model became terse, refuses to
+                                    converse — gives signature
+                                    dumps when prose is wanted)
+  * hallucination: 40% → **0%** ✗ (model confidently invents file
+                                    paths for fake symbols — the
+                                    "show me the signature" pattern
+                                    bled across into things that
+                                    don't exist)
+
+Diagnosis: the v2 dataset was 82% same-template source-fn pairs
+(5,956 of 7,244 records all in the "here's the signature + path"
+format). That single dominant format trained a one-shape-fits-all
+response style.
+
+### v3 — the corrective iteration
+
+  * `scripts/build_lora_dataset_v3.py` — diluted source-fn pairs
+    to 2 per fn (was 5), added 290 synthetic hallucination
+    examples ("what does <fake_function> do" → "X does not exist,
+    you may be thinking of Y"), added 18 hand-crafted personality
+    examples replicated 4× for weight (72 total), kept the v2 wins
+    (audit-marker pairs, concept-note paraphrases, tool-call
+    examples, commit-msg pairs).
+  * Total: 4,152 records (vs v2's 7,244) — smaller but more balanced.
+    Source-fn dominance dropped 82% → 64%.
+  * `scripts/train_lora_v3.py` — same hyperparams as v2 (rank 32,
+    alpha 64, NEFTune α=5, packing OFF, DoRA OFF — both still
+    deadlock with bnb-4bit). 780 effective steps.
+
+Mid-training: hit a transient `CUDA error: unknown error` at
+step ~165 (driver glitch — power.draw was fine, just a one-off).
+Clean restart from step 0. Total wall: 109 minutes.
+
+Final stats: avg train_loss 0.797 (v2: 0.576), mean_token_accuracy
+92-94%. Higher loss than v2 doesn't mean worse — v3's dataset is
+deliberately harder targets (hallucination "doesn't exist"
+responses, conversational personality answers).
+
+### v3 result
+
+**65/100 = 65.2% pass rate** on the same 46-question eval with
+the same `--rag` enabled. **+11 points over v1+RAG, +13 over
+v2+RAG.** Every category at 40% or above; no more 0% bottoms.
+
+| category      | v1+RAG | v2+RAG | **v3+RAG** | v3 Δ |
+|---            |---     |---     |---         |---   |
+| function      | 20%    | 40%    | **40%**    | held |
+| audit         | 75%    | 87.5%  | 75%        | -12.5 |
+| concept       | 60%    | 60%    | **80%**    | **+20** |
+| architecture  | 63%    | 75%    | **75%**    | held |
+| personality   | 80%    | 20%    | **60%**    | recovered |
+| hallucination | 40%    | 0%     | **60%**    | **fixed +60** |
+
+Hallucination 0 → 60: the +290 corrective examples worked. Model
+now properly says "X does not exist" + suggests the nearest real
+symbol instead of inventing a file path. Personality 20 → 60: the
+4×-weighted conversational examples brought the soft skills back
+without losing the v2 function-category gains. Concept 60 → 80
+was an unexpected bonus — diversifying the training format made
+the model better at prose explanations too.
+
+Audit went 87.5 → 75 — small regression, almost certainly from
+diluting source-fn density (2/fn vs 5/fn cut the volume of
+"this symbol is at this path" repetition). Acceptable cost.
+
+Inference time on the eval also dropped from v1's 3,186 sec to
+v3's 50.8 sec — the model is much more concise now. Same or
+better content, much less wall time.
+
+### Shipping v3 as the default
+
+Re-pointing the `bat-os-coder:latest` tag at v3 so the agent code
+in `src/ai/` doesn't have to track a moving target. v2 is kept
+around as `bat-os-coder-v2:latest` if we ever want to A/B against
+it. v3 is the live model.
+
+### What's NEXT
+
+v4 candidates if we keep iterating:
+
+  * Restore audit pair density without re-introducing the source-
+    fn template dominance — possibly by phrasing audit-marker
+    questions in 3-4 different ways rather than just "what does X
+    refer to."
+  * Targeted function-category lift: function still at 40%. The
+    grader needs specific tokens (close_pcb, src/fs, Category::Cave)
+    that v3 doesn't always include — augment the synthetic Q&A
+    with stricter "include this literal token" answers.
+  * Gemma 4 E4B baseline: same dataset, native function-calling
+    support — could close the tool-use gap without our prompt-based
+    workaround.
+
+For now, v3 is shipped.
+
+---
+
 ## 2026-05-10 (cont.) — Mac — feature-gap audit + 7 of 8 weekly clusters
 
 **Goal:** While v2 LoRA training runs, ship as much of the
