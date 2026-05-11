@@ -267,6 +267,14 @@ fn execute(cmd: &str) {
         "cxx" | "c++" => cmd_run_elf("cxx"),
         "audit" => cmd_audit(parts[1]),
         "audit-flush" => cmd_audit_flush(),
+        "audit-chain" => cmd_audit_chain(),
+        "dmesg" => cmd_dmesg(parts[1]),
+        "ai" => {
+            // Everything after "ai " is the question, including spaces.
+            let q = cmd.trim_start()
+                .split_once(' ').map(|(_, r)| r.trim()).unwrap_or("");
+            cmd_ai(q);
+        }
         "tcp-selftest" => cmd_tcp_selftest(),
         "tcp-listen" => cmd_tcp_listen(parts[1]),
         "tcp-list" => cmd_tcp_list(),
@@ -3832,5 +3840,118 @@ fn cmd_audit_flush() {
             console::puts("\n");
         }
     }
+}
+
+/// Verify the tamper-evident chain over the resident audit ring.
+/// On success: prints OK and the current chain head (32-byte SHA-256
+/// hex). On detection: prints the absolute index of the first mismatch.
+fn cmd_audit_chain() {
+    use crate::security::audit_chain::{verify_chain, chain_head, VerifyOutcome};
+    match verify_chain() {
+        VerifyOutcome::Ok => {
+            console::puts("  audit-chain: OK\n  head: ");
+            let h = chain_head();
+            for &b in h.iter() {
+                let hi = (b >> 4) & 0x0f;
+                let lo = b & 0x0f;
+                let hc = if hi < 10 { (b'0' + hi) as char } else { (b'a' + hi - 10) as char };
+                let lc = if lo < 10 { (b'0' + lo) as char } else { (b'a' + lo - 10) as char };
+                let pair = [hc as u8, lc as u8, 0];
+                console::puts(core::str::from_utf8(&pair[..2]).unwrap_or("?"));
+            }
+            console::puts("\n");
+        }
+        VerifyOutcome::FirstMismatchAt(idx) => {
+            console::puts("  audit-chain: TAMPER DETECTED at index ");
+            crate::kernel::mm::print_num(idx);
+            console::puts("\n  every entry from this index onward must be considered suspect\n");
+        }
+    }
+}
+
+/// Dump the kmsg ring (kernel messages, not security events).
+/// `dmesg`     → last 32 lines
+/// `dmesg all` → up to RING_CAP (512) lines
+fn cmd_dmesg(arg: &str) {
+    use crate::kernel::kmsg;
+    let n = if arg.is_empty() {
+        32
+    } else if arg == "all" {
+        512
+    } else {
+        arg.parse::<usize>().unwrap_or(32)
+    };
+    kmsg::recent(n, |line| {
+        let sev = match line.sev {
+            0 => "TRACE", 1 => "DEBUG", 2 => "INFO",
+            3 => "WARN",  4 => "ERROR", _ => "?",
+        };
+        console::puts("  [");
+        console::puts(sev);
+        console::puts("] ");
+        let mlen = line.mlen as usize;
+        let msg = core::str::from_utf8(&line.msg[..mlen]).unwrap_or("<binary>");
+        console::puts(msg);
+        console::puts("\n");
+    });
+}
+
+/// Ask the on-device AI agent a question. Today this opens an
+/// AgentSession, fires `ask()`, and polls the streaming response
+/// for text events. The actual inference happens on the operator-
+/// configured remote host (see DESIGN_AI_AGENT.md §Inference host).
+fn cmd_ai(question: &str) {
+    use crate::ai::{AgentSession, StreamEvent, AgentError};
+    if question.is_empty() {
+        console::puts("  usage: ai <question>\n");
+        return;
+    }
+    let mut session = match AgentSession::new() {
+        Ok(s) => s,
+        Err(e) => {
+            console::puts("  ai: failed to start session: ");
+            console::puts(match e {
+                AgentError::Network(s)      => s,
+                AgentError::Protocol(s)     => s,
+                AgentError::Tool(s)         => s,
+                AgentError::PolicyDenied    => "policy denied",
+                AgentError::Interrupted     => "interrupted",
+                AgentError::TokenBudget     => "token budget",
+            });
+            console::puts("\n");
+            return;
+        }
+    };
+    let mut response = session.ask(question);
+    loop {
+        match response.poll() {
+            StreamEvent::Text(t) => {
+                console::puts(&t);
+            }
+            StreamEvent::ToolCall { name } => {
+                console::puts("\n  [tool: ");
+                console::puts(name);
+                console::puts("]\n");
+            }
+            StreamEvent::Done => {
+                console::puts("\n");
+                break;
+            }
+            StreamEvent::Error(e) => {
+                console::puts("\n  ai: error: ");
+                console::puts(match e {
+                    AgentError::Network(s)      => s,
+                    AgentError::Protocol(s)     => s,
+                    AgentError::Tool(s)         => s,
+                    AgentError::PolicyDenied    => "policy denied",
+                    AgentError::Interrupted     => "interrupted",
+                    AgentError::TokenBudget     => "token budget",
+                });
+                console::puts("\n");
+                break;
+            }
+        }
+    }
+    session.close();
 }
 
