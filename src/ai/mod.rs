@@ -31,6 +31,7 @@ pub mod policy;
 pub mod prompt;
 pub mod protocol;
 pub mod rag;
+pub(crate) mod rag_corpus;
 pub mod stream;
 pub mod tools;
 

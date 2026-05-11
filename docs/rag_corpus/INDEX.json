@@ -1,0 +1,128 @@
+[
+  {
+    "slug": "concept_audit_ring_contract",
+    "title": "Audit Ring Contract",
+    "kind": "concept",
+    "source": "BAT_OS_VAULT/Concepts/Audit Ring Contract.md",
+    "bytes": 3912
+  },
+  {
+    "slug": "concept_cave_isolation_model",
+    "title": "Cave Isolation Model",
+    "kind": "concept",
+    "source": "BAT_OS_VAULT/Concepts/Cave Isolation Model.md",
+    "bytes": 4183
+  },
+  {
+    "slug": "concept_constant_cost_abort_discipline",
+    "title": "Constant-Cost Abort Discipline",
+    "kind": "concept",
+    "source": "BAT_OS_VAULT/Concepts/Constant-Cost Abort Discipline.md",
+    "bytes": 5613
+  },
+  {
+    "slug": "concept_cryptography_stack",
+    "title": "Cryptography Stack",
+    "kind": "concept",
+    "source": "BAT_OS_VAULT/Concepts/Cryptography Stack.md",
+    "bytes": 5538
+  },
+  {
+    "slug": "concept_m4_boot_path",
+    "title": "M4 Boot Path",
+    "kind": "concept",
+    "source": "BAT_OS_VAULT/Concepts/M4 Boot Path.md",
+    "bytes": 4481
+  },
+  {
+    "slug": "concept_post_no_browser_pivot",
+    "title": "Post-no-browser Pivot",
+    "kind": "concept",
+    "source": "BAT_OS_VAULT/Concepts/Post-no-browser Pivot.md",
+    "bytes": 4568
+  },
+  {
+    "slug": "concept_six_trust_anchors",
+    "title": "Six Trust Anchors",
+    "kind": "concept",
+    "source": "BAT_OS_VAULT/Concepts/Six Trust Anchors.md",
+    "bytes": 7352
+  },
+  {
+    "slug": "concept_tls_hardening_journey",
+    "title": "TLS Hardening Journey",
+    "kind": "concept",
+    "source": "BAT_OS_VAULT/Concepts/TLS Hardening Journey.md",
+    "bytes": 5810
+  },
+  {
+    "slug": "concept_time_without_a_clock",
+    "title": "Time Without a Clock",
+    "kind": "concept",
+    "source": "BAT_OS_VAULT/Concepts/Time Without a Clock.md",
+    "bytes": 7077
+  },
+  {
+    "slug": "concept_v_incident_vocabulary",
+    "title": "V-Incident Vocabulary",
+    "kind": "concept",
+    "source": "BAT_OS_VAULT/Concepts/V-Incident Vocabulary.md",
+    "bytes": 6711
+  },
+  {
+    "slug": "design_design_ai_agent",
+    "title": "DESIGN_AI_AGENT",
+    "kind": "design",
+    "source": "DESIGN_AI_AGENT.md",
+    "bytes": 21724
+  },
+  {
+    "slug": "design_design_batcaves",
+    "title": "DESIGN_BATCAVES",
+    "kind": "design",
+    "source": "DESIGN_BATCAVES.md",
+    "bytes": 10539
+  },
+  {
+    "slug": "design_design_crypto",
+    "title": "DESIGN_CRYPTO",
+    "kind": "design",
+    "source": "DESIGN_CRYPTO.md",
+    "bytes": 13472
+  },
+  {
+    "slug": "design_design_https_syscall",
+    "title": "DESIGN_HTTPS_SYSCALL",
+    "kind": "design",
+    "source": "DESIGN_HTTPS_SYSCALL.md",
+    "bytes": 7300
+  },
+  {
+    "slug": "design_design_no_browser",
+    "title": "DESIGN_NO_BROWSER",
+    "kind": "design",
+    "source": "DESIGN_NO_BROWSER.md",
+    "bytes": 7125
+  },
+  {
+    "slug": "design_design_packet_pipeline",
+    "title": "DESIGN_PACKET_PIPELINE",
+    "kind": "design",
+    "source": "DESIGN_PACKET_PIPELINE.md",
+    "bytes": 13122
+  },
+  {
+    "slug": "design_design_scheduler_block_on",
+    "title": "DESIGN_SCHEDULER_BLOCK_ON",
+    "kind": "design",
+    "source": "DESIGN_SCHEDULER_BLOCK_ON.md",
+    "bytes": 21446
+  },
+  {
+    "slug": "design_design_tls_hardening",
+    "title": "DESIGN_TLS_HARDENING",
+    "kind": "design",
+    "source": "DESIGN_TLS_HARDENING.md",
+    "bytes": 11709
+  }
+]

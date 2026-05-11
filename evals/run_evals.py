@@ -43,12 +43,14 @@ def load_evals() -> list[dict]:
     return rows
 
 
-def ask_model(host: str, port: int, model: str, question: str, timeout: int) -> str:
+def ask_model(host: str, port: int, model: str, question: str, timeout: int,
+              rag_context: str = "") -> str:
+    user_content = (rag_context + question) if rag_context else question
     body = json.dumps({
         "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": question},
+            {"role": "user", "content": user_content},
         ],
         "stream": False,
         "temperature": 0.2,
@@ -109,11 +111,19 @@ def main() -> int:
     p.add_argument("--filter", default="", help="run only IDs starting with this prefix")
     p.add_argument("--show-answers", action="store_true",
                    help="print full answers, not just pass/fail")
+    p.add_argument("--rag", action="store_true",
+                   help="prepend top-3 BM25 retrieval from docs/rag_corpus before each question")
     args = p.parse_args()
 
     rows = load_evals()
     if args.filter:
         rows = [r for r in rows if r["id"].startswith(args.filter)]
+
+    corpus = None
+    if args.rag:
+        from rag import Corpus
+        corpus = Corpus.load()
+        print(f"[evals] RAG enabled: {corpus.n} docs, {len(corpus.df)} terms")
 
     print(f"[evals] running {len(rows)} questions against {args.host}:{args.port}/{args.model}")
     print()
@@ -123,8 +133,10 @@ def main() -> int:
     t0 = time.time()
 
     for rec in rows:
+        rag_ctx = corpus.context_block(rec["question"], k=3) if corpus else ""
         try:
-            answer = ask_model(args.host, args.port, args.model, rec["question"], args.timeout)
+            answer = ask_model(args.host, args.port, args.model,
+                               rec["question"], args.timeout, rag_context=rag_ctx)
         except Exception as e:
             answer = f"[ASK_MODEL ERROR] {type(e).__name__}: {e}"
 
