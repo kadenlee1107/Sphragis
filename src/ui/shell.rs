@@ -269,6 +269,7 @@ fn execute(cmd: &str) {
         "audit-flush" => cmd_audit_flush(),
         "audit-chain" => cmd_audit_chain(),
         "dmesg" => cmd_dmesg(parts[1]),
+        "sec-status" | "secstatus" => cmd_sec_status(),
         "ai" => {
             // Everything after "ai " is the question, including spaces.
             let q = cmd.trim_start()
@@ -3953,5 +3954,80 @@ fn cmd_ai(question: &str) {
         }
     }
     session.close();
+}
+
+/// Dump the security posture — single command that touches every
+/// module the cluster-A-through-H work shipped. Useful as a
+/// pre-boot sanity check and for operator runbooks.
+fn cmd_sec_status() {
+    console::puts("== Bat_OS security posture ==\n");
+
+    // Trust anchors are hard-coded in src/net/x509.rs — six.
+    console::puts("  trust anchors:        6 (ISRG X1/X2, Amazon CA1, DigiCert CA/G2, GTS R4)\n");
+
+    // Per-host SPKI pins.
+    let pins = crate::net::cert_pin::list_pins();
+    console::puts("  per-host cert pins:   ");
+    crate::kernel::mm::print_num(pins.len());
+    if !pins.is_empty() {
+        console::puts(" hosts\n");
+        for (host, pin_hashes) in pins.iter() {
+            console::puts("    - ");
+            console::puts(host);
+            console::puts(": ");
+            crate::kernel::mm::print_num(pin_hashes.len());
+            console::puts(" pins\n");
+        }
+    } else {
+        console::puts(" hosts (no host-level pinning configured)\n");
+    }
+
+    // CRL revocation entries.
+    let (issuers, total_serials) = crate::net::crl::stats();
+    console::puts("  crl revocations:      ");
+    crate::kernel::mm::print_num(total_serials);
+    console::puts(" serials across ");
+    crate::kernel::mm::print_num(issuers);
+    console::puts(" issuers\n");
+
+    // CT log registry size.
+    let ct_usable = crate::net::ct_logs::usable_count();
+    console::puts("  ct log registry:      ");
+    crate::kernel::mm::print_num(ct_usable);
+    console::puts(" usable logs\n");
+
+    // Audit ring depth + chain head.
+    let audit_head = crate::security::audit::HEAD.load(core::sync::atomic::Ordering::Relaxed);
+    console::puts("  audit entries:        ");
+    crate::kernel::mm::print_num(audit_head);
+    console::puts(" total since boot\n");
+
+    let evicted = crate::security::audit::evicted();
+    if evicted > 0 {
+        console::puts("  audit evictions:      ");
+        crate::kernel::mm::print_num(evicted);
+        console::puts(" (ring overflow — possible flood-eviction)\n");
+    }
+
+    // kmsg ring depth.
+    let kmsg_head = crate::kernel::kmsg::head();
+    console::puts("  kmsg lines:           ");
+    crate::kernel::mm::print_num(kmsg_head);
+    console::puts(" total since boot\n");
+
+    // Compile-time mitigations — we can't introspect at runtime
+    // without reading our own ELF, so we print the cargo flags
+    // that should be live as of the cluster G commit.
+    console::puts("  mitigations (build):  stack-protector=all, paca+pacg+bti, pac-ret+bti\n");
+    console::puts("                        verify with scripts/audit_canaries.sh\n");
+
+    // Crypto primitives available.
+    console::puts("  crypto primitives:    AES-{128,256}-{CTR,GCM,XTS}, ChaCha20-Poly1305,\n");
+    console::puts("                        XChaCha20-Poly1305, SHA-{256,384}, SHA3-{256,384,512},\n");
+    console::puts("                        BLAKE3, HMAC-SHA256/384, HKDF, Argon2id, Ed25519,\n");
+    console::puts("                        ECDSA-P{256,384}, X25519, RSA-PSS, ML-KEM-768,\n");
+    console::puts("                        ML-DSA-65, HOTP, TOTP\n");
+
+    console::puts("\n== end ==\n");
 }
 
