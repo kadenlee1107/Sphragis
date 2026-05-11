@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod audit_chain;
 pub mod auth;
 pub mod boot_screen;
 pub mod deadman;

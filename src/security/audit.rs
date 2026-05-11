@@ -60,8 +60,8 @@ impl Category {
     }
 }
 
-const MSG_LEN: usize = 192;
-const RING_CAP: usize = 1024;
+pub const MSG_LEN: usize = 192;
+pub const RING_CAP: usize = 1024;
 
 #[derive(Clone, Copy)]
 pub struct Entry {
@@ -81,7 +81,14 @@ static mut RING: [Entry; RING_CAP] = [Entry::empty(); RING_CAP];
 /// Monotonically-increasing event counter. `RING[head % RING_CAP]` is
 /// the next slot to write. We never decrement so `count - RING_CAP`
 /// gives the index of the oldest still-resident entry.
-static HEAD: AtomicUsize = AtomicUsize::new(0);
+pub static HEAD: AtomicUsize = AtomicUsize::new(0);
+
+/// Read-only view of the underlying ring storage. Used by the
+/// audit_chain verifier to recompute hashes against the live data.
+/// SAFETY: caller must not alias mutably with `record()`.
+pub unsafe fn raw_ring() -> &'static [Entry; RING_CAP] {
+    unsafe { &*core::ptr::addr_of!(RING) }
+}
 
 /// the ring silently overwrites the oldest
 /// entries when full. An adversary who suspects a forensic dump is

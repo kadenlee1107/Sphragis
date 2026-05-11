@@ -1,6 +1,7 @@
 pub mod arch;
 pub mod capability;
 pub mod ipc;
+pub mod kmsg;
 pub mod mm;
 pub mod process;
 pub mod scheduler;
