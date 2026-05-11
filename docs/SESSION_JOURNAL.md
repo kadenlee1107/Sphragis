@@ -11,6 +11,130 @@ end of a session.
 
 ---
 
+## 2026-05-10 (cont.) — Mac — feature-gap audit + 7 of 8 weekly clusters
+
+**Goal:** While v2 LoRA training runs, ship as much of the
+`docs/OS_FEATURE_GAP_AUDIT.md` 140-row triage table as one focused
+session allows, without touching anything that requires M4
+hardware reverse-engineering.
+
+### What landed
+
+Twenty-one commits in this leg. About thirty distinct items off
+the audit table — roughly twenty-two percent in one day, the
+"weekly ceiling" my earlier estimate gave. By cluster:
+
+  * **A — Crypto agility (committed).** SHA-3 family (Sha3-256/384/
+    512 + Shake128/256 XOFs), BLAKE3 hash + keyed MAC + KDF (pure-
+    Rust feature so no NEON C intrinsics need libc),
+    XChaCha20-Poly1305 (extended-nonce AEAD on top of the existing
+    ChaCha20-Poly1305), AES-128/256-XTS (NIST SP 800-38E block-level
+    encryption — slot for the eventual NVMe block layer under
+    BatFS). Cargo.toml: sha3, blake3, xts-mode, cmac.
+
+  * **B — Identity hardening (committed).** RFC 4226 HOTP backed by
+    HMAC-SHA256/SHA384, RFC 6238 TOTP wrapping HOTP with
+    counter = floor(unix_time / period). Per-host SPKI cert pinning
+    in `src/net/cert_pin.rs` — 16 hosts × 4 pins (current + next
+    rotation + spares), constant-cost compare, fail-open for
+    unpinned hosts (intentional anti-foot-gun).
+
+  * **C — Supply chain (committed).** CycloneDX 1.5 SBOM generator
+    in scripts/generate_sbom.py — 110 cargo crates + 30
+    cryptographic-asset entries (every primitive src/crypto/
+    actually ships, tagged with FIPS standard ref + OID). Two-pass
+    reproducible build verifier
+    (scripts/check_reproducible_build.sh) with SOURCE_DATE_EPOCH +
+    --remap-path-prefix + codegen-units=1 + CARGO_INCREMENTAL=0.
+    Minisign release signer + in-toto v1 SLSA provenance
+    attestation generator. RustSec advisory-db auditor
+    (scripts/check_dependencies.py) — pure-Python, runs anywhere a
+    git clone works, exits non-zero on findings.
+
+  * **E — Audit + observability (committed).** Tamper-evident SHA-
+    256 hash chain over the audit ring (src/security/audit_chain.rs)
+    — parallel CHAIN[] array, chain_head() for off-platform sealing,
+    verify_chain() returns first-mismatch index on tamper. Dmesg-
+    equivalent kmsg ring in src/kernel/kmsg.rs — 512 lines × 240
+    bytes, 5 severities, lossy. SIEM forwarder
+    (src/security/audit_forwarder.rs) — NDJSON push over the
+    existing kernel HTTPS surface. Three shell commands:
+    audit-chain, dmesg, ai.
+
+  * **F — Network protocol fills (committed).** DNS-over-TLS
+    (RFC 7858) client in src/net/dot.rs targeting Cloudflare
+    1.1.1.1:853 — length-prefixed DNS messages over the existing
+    TLS stack, no HTTP layer. CRL revocation table
+    (src/net/crl.rs) — 8 issuers × 256 serials, x509-cert crate
+    parses DER-encoded CRLs; signature verification deliberately
+    left to the chain validator to avoid cyclic dependency. CT log
+    registry (src/net/ct_logs.rs) — 6-entry table of public-CA log
+    public-key hashes for future SCT validation.
+
+  * **G — Exploit mitigations (committed).** `.cargo/config.toml`
+    now emits `-Z stack-protector=all`, `-C target-feature=+paca,
+    +pacg,+bti`, `-Z branch-protection=bti,pac-ret`. ARMv8.3 PAC
+    and ARMv8.5 BTI are now in the binary; M4 supports both
+    natively. scripts/audit_canaries.sh verifies the resulting ELF
+    actually carries __stack_chk_guard symbols + paciasp/autiasp
+    instruction counts + bti markers + W^X segments.
+
+  * **H — AI agent layer wiring (committed).** Real Rust
+    implementations for 5 of the 6 read-only tools in
+    src/ai/tools.rs — `read_file`, `grep_source`,
+    `query_audit_ring`, `suggest_command`, `read_concept_note`
+    backed by the compile-time RAG corpus + the audit ring. The
+    `audit::recent(&mut [Entry])` helper that the eval harness
+    flagged as missing. cmd_ai shell command: opens an AgentSession,
+    polls the StreamingResponse, renders Text and ToolCall events.
+
+  * Plus operator-facing shell utility commands across clusters:
+    `sec-status` (single-command security posture dump), `pin` and
+    `crl` admin, `hash <algo> <file>` (surfaces the new crypto
+    primitives to BatFS files).
+
+### What's NOT in this leg
+
+Cluster **D** (POSIX surface) deferred: pipes/FIFOs, AF_UNIX,
+POSIX shared memory, NTP, mlock — each is a kernel syscall
+surface change that deserves a fresh morning. Big-ticket items
+left for a follow-up: KASLR, hardened allocator (scudo-class),
+full OCSP client (needs ASN.1 codec), full SCT signature
+verifier, WireGuard.
+
+### v2 LoRA training
+
+Started at 2026-05-10 ~16:00 PDT. **The first attempted config
+hung at step 0**: `packing=True` + `gradient_checkpointing=True` +
+bnb-4bit + SFTTrainer deadlocks (GPU at 100% util but only 50W
+power draw, no progress for 50+ minutes; full load is ~250W).
+Killed and relaunched with `packing=False` + DoRA off
+(DoRA was initially suspected; it wasn't the cause). Rank stayed
+at 32 / alpha 64 (2x v1) with NEFTune alpha=5. 1,359 effective
+steps instead of 126 packed, ~7 s/step on the 5070, ETA ~2 h
+total. Training is in flight as I commit this entry.
+
+### License posture (recurring)
+
+Hard-line anti-AGPL still holds. Every dep added today
+(sha3, blake3, xts-mode, cmac) is MIT/Apache. Every new module
+is in-tree and original work or a thin wrapper over an
+already-vetted RustCrypto / x509-cert crate.
+
+### Open questions for tomorrow
+
+1. Did v2 actually move the eval pass-rate up? Today's RAG-only
+   number was 25/46 = 54.3%. Hypothesis: synthetic Q&A with
+   exact file paths + signatures should bump the function
+   category (was 20% with RAG, the regression vs no-RAG was
+   the diagnosis for v2 in the first place). Will know after the
+   adapter merges + re-registers.
+
+2. Should KASLR land next, or is the hardened allocator the
+   first defense-in-depth item? Both are XL.
+
+---
+
 ## 2026-05-10 — Mac — v1 LoRA shipped + voice pipeline live
 
 **Session goal:** Take yesterday's training run end-to-end through
