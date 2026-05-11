@@ -43,18 +43,8 @@ def load_evals() -> list[dict]:
     return rows
 
 
-def ask_model(host: str, port: int, model: str, question: str, timeout: int,
-              rag_context: str = "") -> str:
-    user_content = (rag_context + question) if rag_context else question
-    body = json.dumps({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        "stream": False,
-        "temperature": 0.2,
-    }).encode("utf-8")
+def _post(host: str, port: int, body: bytes, timeout: int) -> dict:
+    """One HTTP POST with retries on transient disconnect."""
     last_err: Exception | None = None
     for attempt in range(3):
         try:
@@ -64,12 +54,69 @@ def ask_model(host: str, port: int, model: str, question: str, timeout: int,
                 headers={"Content-Type": "application/json"},
             )
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                payload = json.loads(resp.read())
-            return payload["choices"][0]["message"]["content"]
+                return json.loads(resp.read())
         except (urllib.error.URLError, OSError, http.client.RemoteDisconnected) as e:
             last_err = e
             time.sleep(2 + attempt * 3)
-    raise last_err if last_err else RuntimeError("ask_model failed without exception")
+    raise last_err if last_err else RuntimeError("post failed without exception")
+
+
+def ask_model(host: str, port: int, model: str, question: str, timeout: int,
+              rag_context: str = "",
+              tool_specs: list | None = None,
+              tool_dispatch=None,
+              max_tool_calls: int = 3) -> str:
+    """Ask the model. If `tool_specs` and `tool_dispatch` are given,
+    run a ReAct-style loop: model emits tool_calls -> we execute ->
+    feed results back -> repeat until model returns plain text.
+    Bounded by max_tool_calls so runaway loops can't hang the eval."""
+    user_content = (rag_context + question) if rag_context else question
+    messages: list[dict] = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+    payload_base: dict = {
+        "model": model,
+        "stream": False,
+        "temperature": 0.2,
+    }
+    if tool_specs:
+        payload_base["tools"] = tool_specs
+        payload_base["tool_choice"] = "auto"
+
+    for _hop in range(max_tool_calls + 1):
+        body = json.dumps({**payload_base, "messages": messages}).encode("utf-8")
+        resp = _post(host, port, body, timeout)
+        choice = resp["choices"][0]
+        msg = choice.get("message", {})
+        finish = choice.get("finish_reason", "")
+        tool_calls = msg.get("tool_calls") or []
+
+        if tool_calls and tool_dispatch:
+            # Append the assistant turn that requested the calls, then
+            # dispatch each call and append the result as a tool msg.
+            messages.append({
+                "role": "assistant",
+                "content": msg.get("content") or "",
+                "tool_calls": tool_calls,
+            })
+            for call in tool_calls:
+                fn = call.get("function", {})
+                name = fn.get("name", "")
+                args = fn.get("arguments", "{}")
+                result = tool_dispatch(name, args)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id", ""),
+                    "name": name,
+                    "content": result,
+                })
+            continue
+
+        # Plain text response — we're done.
+        return msg.get("content") or ""
+
+    return msg.get("content") or "[NETWORK ERROR] tool loop exceeded max_tool_calls"
 
 
 def grade(rec: dict, answer: str) -> tuple[bool, str]:
@@ -113,6 +160,8 @@ def main() -> int:
                    help="print full answers, not just pass/fail")
     p.add_argument("--rag", action="store_true",
                    help="prepend top-3 BM25 retrieval from docs/rag_corpus before each question")
+    p.add_argument("--tools", action="store_true",
+                   help="enable tool-use loop (read_file, grep_source, read_concept_note)")
     args = p.parse_args()
 
     rows = load_evals()
@@ -125,6 +174,14 @@ def main() -> int:
         corpus = Corpus.load()
         print(f"[evals] RAG enabled: {corpus.n} docs, {len(corpus.df)} terms")
 
+    tool_specs = None
+    tool_dispatch = None
+    if args.tools:
+        from tools import TOOL_SPECS, dispatch as _dispatch
+        tool_specs = TOOL_SPECS
+        tool_dispatch = _dispatch
+        print(f"[evals] tools enabled: {[t['function']['name'] for t in tool_specs]}")
+
     print(f"[evals] running {len(rows)} questions against {args.host}:{args.port}/{args.model}")
     print()
 
@@ -136,7 +193,10 @@ def main() -> int:
         rag_ctx = corpus.context_block(rec["question"], k=3) if corpus else ""
         try:
             answer = ask_model(args.host, args.port, args.model,
-                               rec["question"], args.timeout, rag_context=rag_ctx)
+                               rec["question"], args.timeout,
+                               rag_context=rag_ctx,
+                               tool_specs=tool_specs,
+                               tool_dispatch=tool_dispatch)
         except Exception as e:
             answer = f"[ASK_MODEL ERROR] {type(e).__name__}: {e}"
 
