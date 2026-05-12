@@ -74,8 +74,33 @@ pub fn schedule() {
 
     // Context switch
     let next = process::get(next_id);
+    let next_cave_id = next.cave_id;
     next.state = TaskState::Running;
     process::set_current(next_id);
+
+    // sys-caves Arc 1 — when this swap crosses a cave boundary,
+    // also swap the TTBR0_EL1 user window so the new task sees the
+    // L1 of its owning cave. Tasks tagged cave_id == 0 (kernel
+    // namespace) stay on PRIMARY_L1; tasks tagged with a real
+    // cave id that has a built L1 get switched. If the target
+    // cave has no L1 built yet (cave_l1_phys == 0), we leave
+    // TTBR0_EL1 alone — same effective behavior as today, no
+    // regression risk.
+    //
+    // SAFETY DISCIPLINE: TLB invalidate + DSB + ISB are inside
+    // `mmu::switch_to_cave`. We call it from the kernel context
+    // here, BEFORE the userspace-level `switch_context` jumps to
+    // the new task's PC — so by the time the new task's code
+    // runs, the user-window mappings are already in effect.
+    let cur_cave_id = process::get(current_id).cave_id;
+    if next_cave_id != cur_cave_id {
+        if let Some(target_l1) = crate::batcave::cave::get_cave_l1_phys(next_cave_id) {
+            crate::batcave::linux::mmu::switch_to_cave(target_l1);
+        }
+        // No `else` branch — if the next cave has no L1 yet (created
+        // but not yet entered) leaving TTBR0 alone is correct: the
+        // task wasn't going to access cave-scoped user VAs anyway.
+    }
 
     // Switch
     let old_ctx = &mut process::get(current_id).context as *mut CpuContext;

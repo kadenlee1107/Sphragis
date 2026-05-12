@@ -11,6 +11,65 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — sys-caves Arc 1: scheduler-driven per-cave MMU switch
+
+**Context:** `DESIGN_SYS_CAVES.md` committed yesterday locked the
+architecture. Arc 1 wires the one piece that turns capability
+isolation into hardware-MMU-enforced isolation between caves:
+the scheduler must swap TTBR0_EL1 on task transitions that cross
+a cave boundary.
+
+### What shipped (this commit)
+
+**Merged earlier branches first** so main is at a clean baseline:
+  - `feat/audit-refresh` (gap-audit Part 4.5 status updates) →
+    main at `b43c0d12`
+  - `feat/sys-caves-design` (DESIGN_SYS_CAVES.md) → main at
+    `efa0013e`, merged as `f7912471`
+
+**Arc 1 changes (`feat/cave-mmu-on-swap`):**
+
+  * `cave::get_cave_l1_phys(cave_id: u16) -> Option<usize>` — new
+    helper. Returns the cave's L1 page-table physical address if
+    the cave is active and its L1 has been built (via
+    `cave::enter` → `mmu::setup_native_cave_l1`). None when the
+    id is out of range, the slot is Free, or the L1 isn't built
+    yet.
+  * `scheduler::schedule()` — added a check between
+    "next task picked" and "switch_context fires." If the next
+    task's `cave_id` differs from the current task's, look up
+    the target L1; if present, call `mmu::switch_to_cave` to
+    swap TTBR0_EL1 + flush TLBs. The MMU machinery (TLB
+    invalidate, DSB, ISB) is inside `switch_to_cave` already.
+    No-op when the target has no L1 — fall back to whatever
+    TTBR0 was pointing at. Boot-survival risk approaches zero
+    because no task on the default boot path has a non-zero
+    `cave_id` yet.
+
+### Deliberately deferred to Arc 2
+
+Auto-tagging of new tasks with the active cave's id at
+`process::create_kernel_task` time. Doing it in Arc 1 would make
+the scheduler hook fire on every boot-time task creation, and
+boot creates tasks in contexts where the "active cave" cycles
+through values — risky for first wire-up. Arc 2 will tag tasks
+*explicitly* when spawning sys-* caves at boot.
+
+### Boot verified
+
+Headless QEMU boot reaches `[bs] paint done — input loop` with
+no hang, no panic. Scheduler hook compiles, links, and is
+dormant on the default path (no task has `cave_id != 0`).
+
+### Branch status
+
+  * `feat/wireguard-phase1` (`89d46870`) — pushed, not yet
+    merged. Will be relocated into sys-wg cave service in Arc 3.
+  * `feat/cave-mmu-on-swap` (this batch) — pending push.
+  * main at `f7912471`.
+
+---
+
 ## 2026-05-11 — Mac — sys-* caves design + WireGuard Phase 1
 
 **Context:** Two threads in one batch.

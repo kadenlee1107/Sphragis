@@ -381,6 +381,28 @@ pub fn for_each_quota<F: FnMut(&str, u32, u32)>(mut f: F) {
     }
 }
 
+/// Look up a cave's L1 page-table physical address by id.
+/// Returns None if the id is out of range, the cave is Free, or
+/// the L1 hasn't been built yet (cave_l1_phys == 0 — cave was
+/// created but never entered). Callers use this to decide whether
+/// to call `mmu::switch_to_cave` on a task transition.
+///
+/// `sys-caves arc 1`: scheduler hook reads this on every
+/// context switch where the next task's cave_id differs from the
+/// current task's. None means "no MMU switch needed, the kernel's
+/// PRIMARY_L1 still services this task's user-window accesses
+/// (which is safe because all kernel-mode tasks share VA)."
+pub fn get_cave_l1_phys(cave_id: u16) -> Option<usize> {
+    let i = cave_id as usize;
+    if i >= MAX_CAVES { return None; }
+    unsafe {
+        let c = &(*core::ptr::addr_of!(CAVES))[i];
+        if c.state == CaveState::Free { return None; }
+        if c.cave_l1_phys == 0 { return None; }
+        Some(c.cave_l1_phys)
+    }
+}
+
 /// Bump the active cave's CPU-tick counter. Called by the
 /// scheduler on each context switch with the cntpct delta the
 /// just-descheduled task accumulated. Observability only — no
