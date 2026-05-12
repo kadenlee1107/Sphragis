@@ -11,6 +11,76 @@ end of a session.
 
 ---
 
+## 2026-05-11 — Mac — sys-* caves design + WireGuard Phase 1
+
+**Context:** Two threads in one batch.
+
+1. **WireGuard Phase 1** (commit `89d46870` on `feat/wireguard-phase1`)
+   — real Noise IK handshake + transport encryption + in-kernel
+   selftest. BLAKE2s primitive added (separate from BLAKE3); HMAC-
+   BLAKE2s with proper RFC 2104 ipad/opad; KDF_n chain; full DH
+   ladder (eph×rstatic → istatic×rstatic → ieph×reph → istatic×reph)
+   matching the WireGuard whitepaper byte-for-byte. `wg-selftest`
+   exercises both halves in-process; key consistency + bidirectional
+   transport verified. NOT yet wired to UDP — that's Phase 2.
+
+2. **Strategy pivot — sys-* cave architecture** (this batch's main
+   work, commit lands as `DESIGN_SYS_CAVES.md`).
+
+   A second AI reviewed Bat_OS's network stack and pitched a Qubes-
+   OS-style Type-1 hypervisor architecture. The diagnosis was right
+   ("today the network stack is monolithic inside the kernel") but
+   the prescription was wrong for Bat_OS — Xen/seL4 underneath
+   doubles the codebase to audit and gives up the "tiny auditable
+   kernel" premise.
+
+   **Adopted middle path:** use BatCaves the way Qubes uses domains.
+   Per-cave authenticated IPC (`ipc_session`, already shipped) +
+   per-cave page tables (already prepared, not yet auto-switched on
+   task swap) + per-cave capability sets ⇒ same defense-in-depth
+   security claim ("WG key compromise requires breaking sys-wg") as
+   Qubes, without a hypervisor underneath.
+
+   `DESIGN_SYS_CAVES.md` lands the contract:
+     - Cave roster: sys-net (NIC driver), sys-wg (WG keys + state),
+       sys-tor (deferred XL) / sys-socks5 (interim), app caves.
+     - IPC API surfaces between them.
+     - Honest claims and non-claims (no defense against ring-0
+       compromise; no DMA defense until per-NIC DART).
+     - Implementation arcs in order: per-cave MMU switching on
+       task swap → boot-time sys-* cave bring-up → move WG into
+       sys-wg → sys-net when NIC driver lands → sys-socks5 →
+       native sys-tor.
+
+   Audit of what's already in tree confirms most of the primitives
+   are there: cave page-table slots, `mmu::switch_to_cave`,
+   authenticated IPC, per-cave fs keys, cave-policy egress firewall,
+   per-cave memory quotas, PID + mount namespace pieces. The one
+   real gap is `scheduler::schedule` not calling `switch_to_cave`
+   on task transitions across caves — ~20 LOC change but high risk
+   (TLB discipline + boot-survival). Next batch.
+
+### Implementation order locked
+
+| Arc | Status |
+|-----|--------|
+| 0 — design doc + survey | this batch |
+| 1 — per-cave MMU switching on task swap | next batch |
+| 2 — boot-time sys-* cave bring-up with frozen caps | mid-arc |
+| 3 — WG moves into sys-wg cave service | after Arc 2 |
+| 4 — sys-net when first NIC driver lands (gap-audit 019) | hardware-blocked |
+| 5 — sys-socks5 (external Tor relay) | small follow-up |
+| 6 — native sys-tor | distant, XL |
+
+### Branch status
+
+`feat/wireguard-phase1` at `89d46870` (pushed, not merged — waits
+on sys-caves alignment).
+`feat/sys-caves-design` (this batch) — pending push.
+`main` at `af5235a9` (pkg-manager merged).
+
+---
+
 ## 2026-05-11 — Mac — package manager (gap-audit item 033 — last open P0)
 
 **Context:** With the L items resolved and the quota work broadened
