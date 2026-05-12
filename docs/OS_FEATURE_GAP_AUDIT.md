@@ -1052,6 +1052,95 @@ might expand each P0 row to 5-10 sub-rows.
 
 ---
 
+## Part 4.5 — Status updates since 2026-05-10
+
+The triage table in Part 4 was a snapshot. This section captures
+items resolved (or reclassified as non-goals / already-present)
+since that date, with commit refs. Leave the historical table
+untouched so the audit-as-of-snapshot stays diff-able.
+
+### Closed P0 items
+
+| # | Item | Resolution | Where |
+|---|------|------------|-------|
+| 025 | AF_UNIX domain sockets | Shipped: SOCK_STREAM, abstract namespace, accept queue, 5 syscalls (`SYS_SOCKET`..`SYS_ACCEPT`). SOCK_DGRAM + fs paths deferred. | `src/kernel/unix_sock.rs`, commit `470c97c3` |
+| 026 | pipes / FIFOs | Shipped: per-task fd table, 32 pipes × 4 KiB ring buffers, SYS_PIPE/READ/WRITE/CLOSE, blocking read/write with EOF + EPIPE. FIFOs need BatFS FIFO inode type — deferred. | `src/kernel/pipe.rs`, commit `21453b46` |
+| 027 | POSIX shared memory | Shipped: 32 regions × ≤16 KiB, `shm_open`/size/ptr/close syscalls, `FdKind::Shm`. Memory-quota enforced (item 030). | `src/kernel/shm.rs`, commit `8f6faaec` |
+| 028 | Wall clock + NTP | Shipped: PL031 RTC anchor at boot + HTTPS-Date sync via TLS-pinned path (`time-sync-https`). Plaintext NTP intentionally skipped. | `src/kernel/time.rs`, `src/drivers/rtc.rs`, commits `90dfb8df` + `8f6faaec` |
+| 029 | Time zones | Shipped: `time::set_tz_offset_secs(±14h)` + `tz` shell command. tzdata blob not needed for single-offset UX. | commit `492294de` |
+| 030 | Per-cave CPU/memory/IO quotas | **Partial.** Memory quota enforced at shm + pipe (`cave::active_charge_pages`); CPU + net are observability counters (no enforcement until preemptive timer scheduling re-enabled — see deferred list). | commits `6715c827` + `18890477` |
+| 031 | PID namespace | Shipped: `cave_id` on `Task`, `process::list_for_cave`, `procs` shell cmd with `procs all` admin view. | commit `492294de` |
+| 032 | Mount namespace | Shipped: `cave::active_mount_prefix` + `mount-ns` shell command. Auto-application across all 42 `batfs::*` callers is a follow-up; today the prefix is opt-in via the `mount-ns` cmd. | commit `492294de` |
+| 033 | Package manager | Shipped: BPKG signed-bundle format + `scripts/pkg_pack.py` + `scripts/pkg_serve.py` + `src/kernel/pkg.rs` + `pkg stage/install/list/remove`. End-to-end verified on QEMU: install + tamper-rejection both work. | commits `95f2e161` + `af5235a9` |
+| 034 | Signed releases | Shipped: `release_sign.py` keygen/sign + `BAT_OS_RELEASE_PUBKEY` baked at build time + `release-verify` shell command. No fallback test key. | commit `492294de` |
+| 035 | dmesg ring | Was already present in `src/kernel/kmsg.rs`. Boot breadcrumb emitters wired into every major init step so `dmesg` shows useful history. | commit `8f6faaec` |
+| 036 | /proc-equivalent | **Partial.** Shell commands `caps [tid]`, `fds [tid]`, `task <tid>` replace 90% of /proc use-cases. A real pseudo-file filesystem is deferred — wants BatFS pseudo-file infrastructure that other features (`/sys`-equivalent) would also use. | commit `6715c827` |
+| 037 | libc / libc-compat shim | **Non-goal.** Documented in `DESIGN.md` decision log #14. Security model favors purpose-built no-libc Rust workloads; shim would import the C-ecosystem attack surface. | commit `18890477` |
+
+**Net P0 status:** every row 025-037 is closed, partially closed
+with documented deferral, or explicitly reclassified as a non-goal.
+
+### Closed P1 items (verified present after audit refresh)
+
+The original Part-4 table listed several items as "missing" that
+were already implemented when the audit was written but the
+inventory pass missed them. Confirmed present:
+
+| # | Item | Where |
+|---|------|-------|
+| 046 | Argon2id password hashing | `src/security/auth.rs`, `src/kernel/mm/heap.rs`, used in BatFS key derivation |
+| 047 | AES-XTS for disk encryption | `src/crypto/aes_xts.rs` (`xts-mode` crate) |
+| 048 | SHA-3 family | `src/crypto/sha3.rs` |
+| 049 | BLAKE2/3 | `src/crypto/blake3.rs` |
+| 050 | XChaCha20-Poly1305 | `src/crypto/xchacha20poly1305.rs` |
+| 052 | CRL revocation | `src/net/crl.rs` (CRL); OCSP still deferred — different RFC, different on-wire shape |
+| 053 | Certificate Transparency SCT validation | `src/net/ct_logs.rs` |
+
+### Open follow-ups (deferred work, documented elsewhere)
+
+These are tracked but not yet implemented; commit refs point at the
+journal entry or DESIGN.md decision-log entry that owns the
+deferral rationale:
+
+  * **Preemptive timer scheduling re-enable** — infra exists in
+    `arch::init_timer` / `arch::handle_irq` but currently disabled
+    at boot (hangs mid-fire). Unblocks real CPU-quota enforcement
+    on item 030. See DESIGN.md decision #15.
+  * **Memory quota across all allocators** — today enforced at
+    shm + pipe. `mm::frame::alloc_frame`, page tables, audit ring,
+    and the kernel heap still bypass the cave-charge API. See
+    journal entry 2026-05-11 cave-quotas batch.
+  * **Mount-namespace auto-application** — `cave::active_mount_prefix`
+    exists but the 42 `batfs::*` callers don't apply it
+    automatically. Demo command `mount-ns` proves the primitive.
+  * **Apple M4 RTC backend** — `drivers::rtc::read_apple()` is a
+    stub. Needs SMC keypath access from EL1.
+  * **PQ-comms wire deployment** — `pq-comms-selftest` exercises
+    the full handshake in-process. Real over-the-wire deployment
+    waits on a PQ-capable peer (a second Bat_OS instance is the
+    natural candidate).
+  * **Package manager v2** — current cut is single-namespace
+    install, no dependencies, no update path, ≤1 MiB bundles.
+    All four deferrals are real engineering arcs of their own.
+
+### Genuinely-open P1 items (not implemented, not deferred)
+
+After this refresh, the still-open P1 list narrows to:
+
+  * 038 init system / service manager (`main.rs` IS the init today)
+  * 039 shell `|` job control / pipes (needs output-capture refactor)
+  * 040 Unicode / locale / IME
+  * 041 Accessibility services
+  * 042 HTTP/2 + HTTP/3
+  * 043 WireGuard
+  * 044 VLAN (802.1Q)
+  * 045 conntrack-class stateful firewall (we're stateless)
+  * 051 constant-time bignum (RustCrypto crates provide this; verify their security claims rather than rebuilding)
+  * 052b OCSP revocation (CRL is shipped; OCSP is the parallel real-time path)
+  * 054-058 sensor / camera / touch / hypervisor / OCI drivers — all need real M4 hardware
+
+---
+
 ## Part 5 — Threat Model Coverage
 
 The gaps above leave us exposed to specific adversary classes. Brief
