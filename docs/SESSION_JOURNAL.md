@@ -11,6 +11,105 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — sys-caves Arc 3 slice 2: peer-table-keyed wrap/unwrap
+
+**Context:** Slice 1 put the WG static keypair behind the
+sys-wg module-privacy boundary and wired a `with_sys_wg_cave`
+trampoline. Slice 2 makes that boundary multi-peer: sys-wg holds
+a fixed-size peer table, drives the responder side of the WG
+handshake on the caller's behalf, and exposes `wrap(peer_id,
+plaintext)` / `unwrap(peer_id, counter, ct)` against the
+session keys *that never leave the peer slot*.
+
+### What shipped
+
+  * `src/batcave/sys_wg_service.rs` extensions:
+    - `PeerId(u8)` opaque newtype, `MAX_PEERS = 8`.
+    - `PEERS: [Option<PeerState>; MAX_PEERS]` — module-private
+      static. Each `PeerState` holds the peer's pinned
+      `static_pk` + an optional `TransportKeys`. No `pub` getter
+      returns the keys.
+    - `SysWgError` (NoSlot, DuplicatePeer, UnknownPeer,
+      NoSession, Wg(WgError)) — covers slot-management failures
+      without leaking the underlying WG primitive's vocabulary
+      directly.
+    - `register_peer(static_pk) -> Result<PeerId>` — allocates a
+      slot, rejects duplicate pubkeys with `DuplicatePeer`.
+    - `close_peer(peer_id)` — drops the slot + its session keys.
+    - `peer_has_session(peer_id)` / `peer_count()` —
+      introspection without exposing key material.
+    - `complete_handshake_as_responder(peer_id, init_eph_pk,
+      enc_static, enc_timestamp) -> ResponderWire` — sys-wg
+      plays the responder side of WG Noise IK using a peer's
+      InitMsg, installs the resulting responder-side
+      `TransportKeys` inside the slot, returns just the wire
+      bytes the caller has to send back. **Pinned-key check:**
+      if the decrypted `initiator_static_pk` doesn't match the
+      pubkey the caller pinned at `register_peer` time, the
+      handshake fails — pinning is enforced end-to-end, not
+      decorative.
+    - `wrap(peer_id, pt)` / `unwrap(peer_id, counter, ct)` —
+      AEAD send/recv against the slot's keys, run inside the
+      `with_sys_wg_cave` trampoline so the work executes with
+      sys-wg's cave_id + TTBR0 installed.
+  * `wireguard::WgError` now derives `Clone + Copy + PartialEq + Eq`
+    so callers (the new `SysWgError::Wg`) can match on it.
+  * Selftest extension (`sys-wg-selftest`) covers slice 2:
+    register_peer, duplicate rejection, peer_has_session
+    transitions on handshake, wrap/unwrap with caller decrypting
+    via its own initiator-side keys, sys-wg accepting caller-
+    encrypted bytes via `unwrap`, and close_peer dropping the
+    slot.
+  * Headless harness (`scripts/qemu_sys_wg_selftest.py`) now
+    expects the slice-2 terminal success marker. Boot tag updated
+    to "Arc 3 slices 1+2".
+
+### Verification
+
+```
+✓ register_peer assigned PeerId=0 (peer_count=1)
+✓ duplicate register_peer rejected (DuplicatePeer)
+✓ complete_handshake_as_responder installed session keys in slot
+✓ wrap(peer_id, ...) -> caller decrypted via initiator recv_key
+✓ unwrap(peer_id, ...) accepted caller-encrypted bytes
+✓ close_peer + wrap rejected with UnknownPeer
+✓ Arc-3 slice-1 sys-wg service boundary verified
+✓ Arc-3 slice-2 peer-table-keyed wrap/unwrap verified
+```
+
+Boot-smoke + sys-caves Arc-2 round trip both still pass.
+
+### Security claim today (slices 1 + 2)
+
+  * **No caller-visible keys.** Neither the static secret nor any
+    peer's TransportKeys are reachable from outside this module.
+    Selftest verifies wrap/unwrap work without `&mut TransportKeys`
+    ever crossing the boundary.
+  * **Pinned-key enforcement at the protocol level.** The
+    responder-side handshake re-decrypts the initiator's
+    `static_pk` inside the encrypted InitMsg payload and refuses
+    the handshake if it doesn't match what the caller pinned.
+  * **Cave-context execution.** Every public entry point (incl.
+    register/close/wrap/unwrap) runs under `with_sys_wg_cave`, so
+    today's module-privacy boundary becomes a hardware-MMU
+    boundary the moment the kernel boots with translation on.
+
+### What slices 1+2 still don't claim
+
+  * Caller and sys-wg still share an address space at runtime
+    (kernel boots MMU-off in the serial-shell path). Slice 3 is
+    gated on flipping that on at boot.
+  * No service task / IPC mailbox yet — the API is direct Rust
+    calls. Slice 3 turns sys-wg into a real EL0 task reading
+    requests off a pipe.
+
+### Branch status
+
+`feat/sys-wg-service` (slice 1 already committed as `18c12ab4`).
+Will commit slice 2 as a follow-up on the same branch and push.
+
+---
+
 ## 2026-05-12 — Mac — sys-caves Arc 3 slice 1: sys-wg service boundary
 
 **Context:** Arcs 1 + 2 + 2.5 verified the per-cave MMU swap. Arc 3

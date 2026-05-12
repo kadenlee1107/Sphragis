@@ -2933,8 +2933,9 @@ fn cmd_sys_wg_service_selftest() {
     use crate::net::wireguard::WgKeypair;
     use crate::kernel::process;
 
-    console::puts_hi("  SYS-WG SERVICE SELF-TEST (Arc 3 slice 1)\n");
-    console::puts("  Verifies sys-wg owns the WG keypair behind a privacy boundary.\n");
+    console::puts_hi("  SYS-WG SERVICE SELF-TEST (Arc 3 slices 1+2)\n");
+    console::puts("  Verifies sys-wg owns the WG keypair behind a privacy boundary,\n");
+    console::puts("  and exposes a peer-table-keyed wrap/unwrap API.\n");
 
     // 1. Pinned pubkey is reachable.
     let sys_wg_pk = match sys_wg_service::service_pubkey() {
@@ -3022,7 +3023,170 @@ fn cmd_sys_wg_service_selftest() {
     print_num(msg.len());
     console::puts(" bytes through sys-wg cave\n");
 
+    // ── Slice 2: peer-table-keyed API ───────────────────────────
+    //
+    // What this exercises:
+    //   - register_peer(peer.static_pk) returns a PeerId.
+    //   - Duplicate registration of the same pubkey is rejected.
+    //   - The peer starts with no session.
+    //   - The caller drives an InitMsg, sys-wg consumes it via
+    //     complete_handshake_as_responder, and sys-wg's slot now
+    //     reports has_session == true (keys are installed inside the
+    //     slot; caller never sees them).
+    //   - wrap(peer_id, pt) returns ct that the caller decrypts
+    //     locally using its initiator-side TransportKeys (mirror of
+    //     sys-wg's responder send_key).
+    //   - Caller-encrypted ct is accepted by unwrap(peer_id, 0, ct).
+    //   - close_peer drops the slot; wrap fails with UnknownPeer.
+    console::puts("\n  ── slice 2: peer-table API ──\n");
+
+    use crate::batcave::sys_wg_service::SysWgError;
+    use crate::net::wireguard;
+
+    let peer2 = WgKeypair::generate();
+    let peer_id = match sys_wg_service::register_peer(peer2.static_pk) {
+        Ok(id) => id,
+        Err(_) => {
+            console::puts("  ✗ FAIL: register_peer returned error\n");
+            return;
+        }
+    };
+    console::puts("  ✓ register_peer assigned PeerId=");
+    print_num(peer_id.as_u8() as usize);
+    console::puts(" (peer_count=");
+    print_num(sys_wg_service::peer_count());
+    console::puts(")\n");
+
+    if sys_wg_service::peer_has_session(peer_id) {
+        console::puts("  ✗ FAIL: fresh peer should not have a session yet\n");
+        return;
+    }
+
+    // Reject duplicate registration of the same pubkey.
+    match sys_wg_service::register_peer(peer2.static_pk) {
+        Err(SysWgError::DuplicatePeer) => {
+            console::puts("  ✓ duplicate register_peer rejected (DuplicatePeer)\n");
+        }
+        Err(_) => {
+            console::puts("  ✗ FAIL: duplicate register_peer returned wrong error\n");
+            return;
+        }
+        Ok(_) => {
+            console::puts("  ✗ FAIL: duplicate register_peer succeeded (should've failed)\n");
+            return;
+        }
+    }
+
+    // Drive a real handshake. Caller (playing initiator) builds
+    // InitMsg targeting sys-wg's pubkey; sys-wg consumes it,
+    // installs responder TransportKeys in the slot.
+    let timestamp = [0u8; wireguard::TIMESTAMP_LEN];
+    let (mut init_state, init_eph_pk, enc_static, enc_ts) =
+        match wireguard::initiator_send_init(&peer2, &sys_wg_pk, &timestamp) {
+            Ok(v) => v,
+            Err(_) => {
+                console::puts("  ✗ FAIL: initiator_send_init errored\n");
+                return;
+            }
+        };
+    let resp_wire = match sys_wg_service::complete_handshake_as_responder(
+        peer_id, &init_eph_pk, &enc_static, &enc_ts,
+    ) {
+        Ok(w) => w,
+        Err(_) => {
+            console::puts("  ✗ FAIL: complete_handshake_as_responder errored\n");
+            return;
+        }
+    };
+    if resp_wire.initiator_timestamp != timestamp {
+        console::puts("  ✗ FAIL: responder returned wrong initiator timestamp\n");
+        return;
+    }
+    if !sys_wg_service::peer_has_session(peer_id) {
+        console::puts("  ✗ FAIL: peer should have session after handshake completion\n");
+        return;
+    }
+    console::puts("  ✓ complete_handshake_as_responder installed session keys in slot\n");
+
+    // Caller finishes its side of the handshake to mirror the
+    // responder keys sys-wg now holds.
+    let mut caller_keys = match wireguard::initiator_finish_handshake(
+        &peer2, &mut init_state, &resp_wire.responder_eph_pk, &resp_wire.enc_empty,
+    ) {
+        Ok(k) => k,
+        Err(_) => {
+            console::puts("  ✗ FAIL: initiator_finish_handshake errored\n");
+            return;
+        }
+    };
+
+    // wrap: sys-wg encrypts under responder send_key, caller
+    // decrypts locally with initiator recv_key.
+    let msg2 = b"slice 2 sys-wg-keyed";
+    let ct = match sys_wg_service::wrap(peer_id, msg2) {
+        Ok(ct) => ct,
+        Err(_) => {
+            console::puts("  ✗ FAIL: wrap(peer_id, ...) errored\n");
+            return;
+        }
+    };
+    let pt = match wireguard::transport_recv(&mut caller_keys, 0, &ct) {
+        Ok(pt) => pt,
+        Err(_) => {
+            console::puts("  ✗ FAIL: caller transport_recv could not decrypt sys-wg's ct\n");
+            return;
+        }
+    };
+    if pt.as_slice() != msg2 {
+        console::puts("  ✗ FAIL: caller-side decrypt produced wrong plaintext\n");
+        return;
+    }
+    console::puts("  ✓ wrap(peer_id, ...) -> caller decrypted via initiator recv_key\n");
+
+    // unwrap: caller encrypts under initiator send_key, sys-wg
+    // decrypts under responder recv_key.
+    let msg3 = b"caller -> sys-wg via peer_id";
+    let ct2 = match wireguard::transport_send(&mut caller_keys, msg3) {
+        Ok(ct) => ct,
+        Err(_) => {
+            console::puts("  ✗ FAIL: caller transport_send errored\n");
+            return;
+        }
+    };
+    let pt2 = match sys_wg_service::unwrap(peer_id, 0, &ct2) {
+        Ok(pt) => pt,
+        Err(_) => {
+            console::puts("  ✗ FAIL: unwrap(peer_id, ...) errored\n");
+            return;
+        }
+    };
+    if pt2.as_slice() != msg3 {
+        console::puts("  ✗ FAIL: sys-wg unwrap produced wrong plaintext\n");
+        return;
+    }
+    console::puts("  ✓ unwrap(peer_id, ...) accepted caller-encrypted bytes\n");
+
+    // close_peer + wrap-after-close.
+    if sys_wg_service::close_peer(peer_id).is_err() {
+        console::puts("  ✗ FAIL: close_peer returned error\n");
+        return;
+    }
+    match sys_wg_service::wrap(peer_id, b"after close") {
+        Err(SysWgError::UnknownPeer) => {
+            console::puts("  ✓ close_peer + wrap rejected with UnknownPeer\n");
+        }
+        Err(_) => {
+            console::puts("  ✗ FAIL: wrap after close returned wrong error\n");
+            return;
+        }
+        Ok(_) => {
+            console::puts("  ✗ FAIL: wrap after close succeeded (should've failed)\n");
+            return;
+        }
+    }
+
     console::puts("  ✓ Arc-3 slice-1 sys-wg service boundary verified\n");
+    console::puts("  ✓ Arc-3 slice-2 peer-table-keyed wrap/unwrap verified\n");
 }
 
 /// Selftest for the scheduler's block_on async-bridge primitive.

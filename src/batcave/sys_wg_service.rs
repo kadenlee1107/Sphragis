@@ -1,9 +1,10 @@
-//! sys-wg service — Arc 3 first slice.
+//! sys-wg service — Arc 3 slices 1 & 2.
 //!
-//! Encapsulates WireGuard state (static keypair, per-session transport
+//! Encapsulates WireGuard state (static keypair, per-peer transport
 //! keys) inside the sys-wg cave's module privacy boundary. Public
 //! callers operate the WG state machine only through this module's
-//! API; the keypair is never exposed.
+//! API; neither the static secret nor any peer's session keys are
+//! exposed.
 //!
 //! Each public entry point runs its actual work via `with_sys_wg_cave`,
 //! which:
@@ -22,13 +23,16 @@
 //! L1, because the closure's execution happens with sys-wg's L1
 //! installed.
 //!
-//! Phase plan (not all in this slice):
-//!   * Slice 1 (this commit): single-session in-process API.
-//!     `init()` lazy-creates the WgKeypair; `handshake_local_round_trip`
+//! Phase plan:
+//!   * Slice 1: single-session in-process API.
+//!     `init()` lazy-creates the WgKeypair; `debug_local_round_trip`
 //!     runs an Arc-3 selftest that proves the keys never escape.
-//!   * Slice 2 (next): a peer table keyed by `peer_static_pk`.
-//!     `wrap(peer_id, plaintext)` and `unwrap(peer_id, ct, counter)`
-//!     accept multiple concurrent peers.
+//!   * Slice 2 (this commit): peer-table-keyed API.
+//!     `register_peer(static_pk) -> PeerId`,
+//!     `complete_handshake_as_responder(peer_id, init_msg) -> wire`,
+//!     `wrap(peer_id, pt)`, `unwrap(peer_id, counter, ct)`. The
+//!     responder-side TransportKeys live inside sys-wg's peer table
+//!     and never escape to the caller.
 //!   * Slice 3 (after the kernel-boot MMU enable lands): the actual
 //!     IPC mailbox + service task so the boundary is hardware-enforced,
 //!     not just module-private.
@@ -221,4 +225,219 @@ pub fn unwrap_with_keys(keys: &mut TransportKeys, counter: u64, ct: &[u8])
     -> Result<Vec<u8>, WgError>
 {
     with_sys_wg_cave(|| wireguard::transport_recv(keys, counter, ct))
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Slice 2: peer table + per-peer wrap/unwrap.
+//
+// Each peer slot pins the peer's static pubkey at `register_peer`
+// time. When `complete_handshake_as_responder` finishes the Noise IK
+// handshake driven from the peer's InitMsg, the resulting
+// TransportKeys are stashed inside the slot. Subsequent
+// `wrap(peer_id, pt)` / `unwrap(peer_id, counter, ct)` calls look up
+// the slot, run the AEAD inside `with_sys_wg_cave`, and never expose
+// the keys to the caller.
+// ─────────────────────────────────────────────────────────────────
+
+/// Maximum concurrent peers. Small fixed array — Bat_OS is single-
+/// machine, single-operator; even a handful is plenty for slice 2.
+/// Bumping this is one constant change + a longer scan in
+/// `register_peer`.
+pub const MAX_PEERS: usize = 8;
+
+/// Opaque handle returned by `register_peer`. The numeric value is
+/// the slot index; we wrap it so callers can't fabricate one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerId(u8);
+
+impl PeerId {
+    pub fn as_u8(self) -> u8 { self.0 }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SysWgError {
+    /// `register_peer` ran out of peer slots.
+    NoSlot,
+    /// `register_peer` was given a pubkey already pinned in another
+    /// slot. Caller should reuse the existing PeerId rather than
+    /// asking for a new one.
+    DuplicatePeer,
+    /// PeerId doesn't correspond to a live slot (slot is None, or
+    /// out of range, or the slot was closed).
+    UnknownPeer,
+    /// Operation needs a completed handshake (transport keys
+    /// installed) but the slot has none yet.
+    NoSession,
+    /// WireGuard primitive itself returned an error — AEAD failed,
+    /// timestamp mismatched, etc.
+    Wg(WgError),
+}
+
+impl From<WgError> for SysWgError {
+    fn from(e: WgError) -> Self { Self::Wg(e) }
+}
+
+/// Per-peer state. `static_pk` is set at `register_peer`; `keys` is
+/// set by `complete_handshake_as_responder` and cleared by
+/// `close_peer`.
+struct PeerState {
+    static_pk: [u8; wireguard::KEY_LEN],
+    /// Responder-side TransportKeys, populated after handshake.
+    keys: Option<TransportKeys>,
+}
+
+static mut PEERS: [Option<PeerState>; MAX_PEERS] = [
+    None, None, None, None, None, None, None, None,
+];
+
+/// Snapshot of the wire bytes the responder side has to send back
+/// to the initiator after `complete_handshake_as_responder`.
+/// Production callers pass these to whatever UDP-shaped transport
+/// they're using (Phase-2 work) — slice 2 returns them to the
+/// selftest so the caller can drive `initiator_finish_handshake`
+/// locally and finalize its own side of the session.
+pub struct ResponderWire {
+    pub responder_eph_pk: [u8; wireguard::KEY_LEN],
+    pub enc_empty: Vec<u8>,
+    pub initiator_timestamp: [u8; wireguard::TIMESTAMP_LEN],
+}
+
+/// Pin a peer's static pubkey and allocate a session slot for it.
+/// Idempotent on the pubkey: a second registration of the same key
+/// returns `Err(DuplicatePeer)` so the caller doesn't accidentally
+/// create two slots tracking the same peer.
+///
+/// The pubkey is the only piece of public state we store. Once the
+/// handshake completes, the slot will also hold session
+/// `TransportKeys` — those never leave the slot.
+pub fn register_peer(peer_static_pk: [u8; wireguard::KEY_LEN])
+    -> Result<PeerId, SysWgError>
+{
+    ensure_init();
+    with_sys_wg_cave(|| -> Result<PeerId, SysWgError> {
+        let peers = unsafe { &mut *core::ptr::addr_of_mut!(PEERS) };
+        for slot in peers.iter() {
+            if let Some(p) = slot.as_ref() {
+                if p.static_pk == peer_static_pk {
+                    return Err(SysWgError::DuplicatePeer);
+                }
+            }
+        }
+        for (i, slot) in peers.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(PeerState { static_pk: peer_static_pk, keys: None });
+                return Ok(PeerId(i as u8));
+            }
+        }
+        Err(SysWgError::NoSlot)
+    })
+}
+
+/// Forget a peer. Clears its slot and any installed session keys.
+/// Returns `UnknownPeer` if the slot was already empty.
+pub fn close_peer(peer_id: PeerId) -> Result<(), SysWgError> {
+    with_sys_wg_cave(|| -> Result<(), SysWgError> {
+        let peers = unsafe { &mut *core::ptr::addr_of_mut!(PEERS) };
+        let slot = peers.get_mut(peer_id.0 as usize).ok_or(SysWgError::UnknownPeer)?;
+        if slot.is_none() { return Err(SysWgError::UnknownPeer); }
+        *slot = None;
+        Ok(())
+    })
+}
+
+/// True if the peer slot is live and has a completed handshake
+/// (TransportKeys installed). Exposed for the selftest to assert
+/// session state without exposing the keys themselves.
+pub fn peer_has_session(peer_id: PeerId) -> bool {
+    let peers = unsafe { &*core::ptr::addr_of!(PEERS) };
+    match peers.get(peer_id.0 as usize).and_then(|s| s.as_ref()) {
+        Some(p) => p.keys.is_some(),
+        None => false,
+    }
+}
+
+/// Number of currently-registered peers (live slots, with or without
+/// completed handshakes).
+pub fn peer_count() -> usize {
+    let peers = unsafe { &*core::ptr::addr_of!(PEERS) };
+    peers.iter().filter(|s| s.is_some()).count()
+}
+
+/// Consume an InitMsg from `peer_id`, derive the same `(c, h)` chain
+/// the initiator produced, build the ResponseMsg wire bytes, and
+/// stash the resulting responder-side `TransportKeys` inside the
+/// peer slot. After this call, `wrap(peer_id, ...)` and
+/// `unwrap(peer_id, ...)` work.
+///
+/// The peer-side WgKeypair is NOT passed in — we only need its
+/// pubkey, which the peer included as `initiator_static_pk` inside
+/// the encrypted InitMsg payload. The handshake validates that the
+/// payload's static_pk matches what we pinned at `register_peer`
+/// time; mismatches fail with `WgError::BadLen` (matches the
+/// existing wireguard.rs error vocabulary).
+pub fn complete_handshake_as_responder(
+    peer_id: PeerId,
+    initiator_eph_pk: &[u8; wireguard::KEY_LEN],
+    enc_static: &[u8],
+    enc_timestamp: &[u8],
+) -> Result<ResponderWire, SysWgError> {
+    ensure_init();
+    with_sys_wg_cave(|| -> Result<ResponderWire, SysWgError> {
+        let peers = unsafe { &mut *core::ptr::addr_of_mut!(PEERS) };
+        let slot = peers.get_mut(peer_id.0 as usize).ok_or(SysWgError::UnknownPeer)?;
+        let peer = slot.as_mut().ok_or(SysWgError::UnknownPeer)?;
+
+        let kp = unsafe { (*core::ptr::addr_of!(KEYPAIR)).as_ref().unwrap() };
+
+        let (mut resp_state, ts_back) = wireguard::responder_consume_init(
+            kp, initiator_eph_pk, enc_static, enc_timestamp,
+        )?;
+        if resp_state.initiator_static_pk != peer.static_pk {
+            // Pinned key mismatch — refuse the handshake.
+            return Err(SysWgError::Wg(WgError::BadLen));
+        }
+
+        let (enc_empty, responder_eph_pk, transport_keys) =
+            wireguard::responder_send_response(&mut resp_state, initiator_eph_pk)?;
+
+        peer.keys = Some(transport_keys);
+
+        Ok(ResponderWire {
+            responder_eph_pk,
+            enc_empty,
+            initiator_timestamp: ts_back,
+        })
+    })
+}
+
+/// AEAD-encrypt `plaintext` under the peer slot's responder-side
+/// `send_key`, then bump the slot's `send_counter`. Returns the
+/// ciphertext for the caller to forward over its transport.
+pub fn wrap(peer_id: PeerId, plaintext: &[u8]) -> Result<Vec<u8>, SysWgError> {
+    with_sys_wg_cave(|| -> Result<Vec<u8>, SysWgError> {
+        let peers = unsafe { &mut *core::ptr::addr_of_mut!(PEERS) };
+        let peer = peers.get_mut(peer_id.0 as usize)
+            .and_then(|s| s.as_mut())
+            .ok_or(SysWgError::UnknownPeer)?;
+        let keys = peer.keys.as_mut().ok_or(SysWgError::NoSession)?;
+        let ct = wireguard::transport_send(keys, plaintext)?;
+        Ok(ct)
+    })
+}
+
+/// AEAD-decrypt `ciphertext` under the peer slot's responder-side
+/// `recv_key` with the given counter (set by the peer). Updates the
+/// slot's strict-monotonic recv counter on success.
+pub fn unwrap(peer_id: PeerId, counter: u64, ciphertext: &[u8])
+    -> Result<Vec<u8>, SysWgError>
+{
+    with_sys_wg_cave(|| -> Result<Vec<u8>, SysWgError> {
+        let peers = unsafe { &mut *core::ptr::addr_of_mut!(PEERS) };
+        let peer = peers.get_mut(peer_id.0 as usize)
+            .and_then(|s| s.as_mut())
+            .ok_or(SysWgError::UnknownPeer)?;
+        let keys = peer.keys.as_mut().ok_or(SysWgError::NoSession)?;
+        let pt = wireguard::transport_recv(keys, counter, ciphertext)?;
+        Ok(pt)
+    })
 }
