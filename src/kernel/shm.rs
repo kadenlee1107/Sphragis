@@ -124,6 +124,13 @@ pub fn create(name: &[u8], size: usize) -> Result<u16, &'static str> {
         return Err("name taken");
     }
 
+    // Gap-audit item 030 first slice — charge the active cave's
+    // memory quota *before* allocating. Skipped when no cave is
+    // active (kernel/admin context). Charge is rolled back if any
+    // later step fails.
+    let pages_needed = ((size + 4095) / 4096) as u32;
+    crate::batcave::cave::active_charge_pages(pages_needed)?;
+
     let owner = process::current_id();
 
     // Find a free slot.
@@ -136,13 +143,20 @@ pub fn create(name: &[u8], size: usize) -> Result<u16, &'static str> {
             }
         }
     }
-    let slot = slot.ok_or("no free region")?;
+    let slot = match slot {
+        Some(s) => s,
+        None => {
+            crate::batcave::cave::active_release_pages(pages_needed);
+            return Err("no free region");
+        }
+    };
 
     // Allocate backing storage. Vec::with_capacity + resize_with
     // gives us zero-initialized bytes without using `vec![0u8; N]`
     // which can fail silently on alloc failure in no_std contexts.
     let mut v: Vec<u8> = Vec::new();
     if v.try_reserve_exact(size).is_err() {
+        crate::batcave::cave::active_release_pages(pages_needed);
         return Err("out of memory");
     }
     v.resize(size, 0);
@@ -160,10 +174,11 @@ pub fn create(name: &[u8], size: usize) -> Result<u16, &'static str> {
     let fd = match task.fd_alloc(FdEntry { kind: FdKind::Shm { id: slot as u16 } }) {
         Some(fd) => fd,
         None => {
-            // Roll back the region.
+            // Roll back the region + quota charge.
             r.active = false;
             r.data = None;
             r.refs = 0;
+            crate::batcave::cave::active_release_pages(pages_needed);
             return Err("fd table full");
         }
     };
@@ -213,6 +228,7 @@ pub fn release(id: u16) {
     if r.refs == 0 {
         // Wipe storage before dropping so a future allocator reuse
         // doesn't leak this region's contents into another path.
+        let pages_held = r.data.as_ref().map(|v| ((v.len() + 4095) / 4096) as u32).unwrap_or(0);
         if let Some(buf) = r.data.as_mut() {
             for b in buf.iter_mut() {
                 unsafe { core::ptr::write_volatile(b as *mut u8, 0); }
@@ -221,6 +237,13 @@ pub fn release(id: u16) {
         r.data = None;
         r.active = false;
         r.name_len = 0;
+        // Refund the cave's quota charge from create-time. Safe even
+        // if the active cave at release-time differs from the
+        // creator — saturates at zero and the worst case is a tiny
+        // bookkeeping drift bounded by the original charge.
+        if pages_held > 0 {
+            crate::batcave::cave::active_release_pages(pages_held);
+        }
     }
 }
 

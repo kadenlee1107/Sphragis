@@ -340,7 +340,12 @@ fn execute(cmd: &str) {
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
         "procs" | "ps"        => cmd_procs(parts[1]),
+        "caps"                => cmd_caps(parts[1]),
+        "fds"                 => cmd_fds(parts[1]),
+        "task"                => cmd_task(parts[1]),
         "mount-ns"            => cmd_mount_ns(parts[1], parts[2], parts[3]),
+        "cave-quota"          => cmd_cave_quota(parts[1], parts[2]),
+        "cave-usage"          => cmd_cave_usage(),
         "pipe-selftest"       => cmd_pipe_selftest(),
         "unix-sock-selftest"  => cmd_unix_sock_selftest(),
         "date"                => cmd_date(),
@@ -2011,6 +2016,99 @@ fn cmd_gcm_selftest() {
 }
 
 // DESIGN_CRYPTO.md #10+#13: Noise-style IPC session handshake self-test.
+/// `cave-usage` — gap-audit item 030 observability. Shows per-cave
+/// memory pages used, CPU cntpct-ticks consumed, and net TX/RX
+/// bytes. Memory has a quota; CPU and net are observability-only
+/// today (no enforcement until preemptive timer scheduling lands).
+fn cmd_cave_usage() {
+    use crate::batcave::cave;
+    console::puts_hi("  PER-CAVE RESOURCE USAGE\n");
+    console::puts("  CAVE        MEM(used/quota)        CPU TICKS       TX BYTES      RX BYTES\n");
+    let mut count = 0;
+    cave::for_each_usage(|name, used, quota, cpu, tx, rx| {
+        console::puts("  ");
+        console::puts(name);
+        for _ in name.len()..12 { console::putc(b' '); }
+        print_num(used as usize); console::putc(b'/'); print_num(quota as usize);
+        let mw = 24usize.saturating_sub(num_width(used as usize) + 1 + num_width(quota as usize));
+        for _ in 0..mw { console::putc(b' '); }
+        print_num(cpu as usize);
+        let cw = 16usize.saturating_sub(num_width(cpu as usize));
+        for _ in 0..cw { console::putc(b' '); }
+        print_num(tx as usize);
+        let tw = 14usize.saturating_sub(num_width(tx as usize));
+        for _ in 0..tw { console::putc(b' '); }
+        print_num(rx as usize);
+        console::puts("\n");
+        count += 1;
+    });
+    if count == 0 {
+        console::puts("  (no active caves)\n");
+    }
+}
+
+fn num_width(n: usize) -> usize {
+    if n == 0 { return 1; }
+    let mut w = 0;
+    let mut v = n;
+    while v > 0 { w += 1; v /= 10; }
+    w
+}
+
+/// `cave-quota` — gap-audit item 030 first slice. Per-cave memory
+/// quota: page counts charged to a cave and the limit it can't
+/// exceed. Today enforced only at `shm::create`; other allocators
+/// will adopt the same API in follow-up batches.
+///   cave-quota                  show all caves' used/quota pairs
+///   cave-quota <name> <pages>   set <name>'s quota in pages (4 KiB each)
+fn cmd_cave_quota(name: &str, pages_str: &str) {
+    use crate::batcave::cave;
+    if name.is_empty() {
+        console::puts("  CAVE        USED (pages)   QUOTA (pages)   MEMORY (MiB)\n");
+        let mut count = 0;
+        cave::for_each_quota(|nm, used, quota| {
+            console::puts("  ");
+            console::puts(nm);
+            for _ in nm.len()..12 { console::putc(b' '); }
+            print_num(used as usize);
+            let uw = if used < 10 { 13 } else if used < 100 { 12 } else if used < 1000 { 11 } else { 10 };
+            for _ in 0..uw { console::putc(b' '); }
+            print_num(quota as usize);
+            let qw = if quota < 10 { 15 } else if quota < 100 { 14 }
+                else if quota < 1000 { 13 } else if quota < 10000 { 12 } else { 11 };
+            for _ in 0..qw { console::putc(b' '); }
+            print_num((quota / 256) as usize);  // 256 pages = 1 MiB
+            console::puts("\n");
+            count += 1;
+        });
+        if count == 0 {
+            console::puts("  (no active caves)\n");
+        }
+        return;
+    }
+    if pages_str.is_empty() {
+        console::puts("  usage: cave-quota <name> <pages>\n");
+        console::puts("  (or `cave-quota` with no args to list)\n");
+        return;
+    }
+    let pages: u32 = match pages_str.parse() {
+        Ok(n) => n,
+        Err(_) => { console::puts("  bad page count\n"); return; }
+    };
+    match cave::set_quota_by_name(name, pages) {
+        Ok(()) => {
+            console::puts("  ok — set ");
+            console::puts(name);
+            console::puts(" quota to ");
+            print_num(pages as usize);
+            console::puts(" pages (");
+            print_num((pages / 256) as usize);
+            console::puts(" MiB)\n");
+        }
+        Err(e) => { console::puts("  err: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
 /// `mount-ns` — gap-audit item 032 mount namespace. Demonstrates
 /// per-cave file name scoping by prefixing the active cave's name
 /// onto BatFS operations. Subcommands:
@@ -2131,6 +2229,131 @@ fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
             console::puts("  usage: mount-ns ls | write <n> <d> | read <n> | rm <n>\n");
         }
     }
+}
+
+/// `caps [tid]` — show the capability set of a task (default: current).
+/// Replaces the /proc/<pid>/status capability lines without needing
+/// a procfs pseudo-file infrastructure.
+fn cmd_caps(arg: &str) {
+    use crate::kernel::process::{self, TaskId};
+    let tid: u16 = if arg.is_empty() {
+        process::current_id().0
+    } else {
+        match arg.parse() { Ok(n) => n, Err(_) => { console::puts("  bad tid\n"); return; } }
+    };
+    if tid as usize >= process::MAX_TASKS {
+        console::puts("  tid out of range\n");
+        return;
+    }
+    let task = process::get(TaskId(tid));
+    console::puts("  task ");
+    print_num(tid as usize);
+    console::puts(" (");
+    console::puts(task.name_str());
+    console::puts(") capabilities:\n");
+    let mut printed = 0;
+    task.capabilities.for_each(|cap_type, target| {
+        console::puts("    ");
+        console::puts(cap_type.label());
+        console::puts(" -> ");
+        print_num(target as usize);
+        console::puts("\n");
+        printed += 1;
+    });
+    if printed == 0 {
+        console::puts("    (no capabilities held)\n");
+    }
+}
+
+/// `fds [tid]` — show the file-descriptor table for a task. The
+/// fd-based equivalent of /proc/<pid>/fd.
+fn cmd_fds(arg: &str) {
+    use crate::kernel::process::{self, FdKind, PipeEnd, SocketRole, TaskId, MAX_FDS_PER_TASK};
+    let tid: u16 = if arg.is_empty() {
+        process::current_id().0
+    } else {
+        match arg.parse() { Ok(n) => n, Err(_) => { console::puts("  bad tid\n"); return; } }
+    };
+    if tid as usize >= process::MAX_TASKS {
+        console::puts("  tid out of range\n");
+        return;
+    }
+    let task = process::get(TaskId(tid));
+    console::puts("  task ");
+    print_num(tid as usize);
+    console::puts(" (");
+    console::puts(task.name_str());
+    console::puts(") fds:\n");
+    let mut count = 0;
+    for fd in 0..MAX_FDS_PER_TASK {
+        if let Some(e) = task.fds[fd] {
+            console::puts("    fd ");
+            print_num(fd);
+            console::puts(" -> ");
+            match e.kind {
+                FdKind::Pipe { id, end } => {
+                    console::puts("Pipe id="); print_num(id as usize);
+                    console::puts(match end {
+                        PipeEnd::Read => " end=read", PipeEnd::Write => " end=write",
+                    });
+                }
+                FdKind::Socket { id, role } => {
+                    console::puts("Socket id="); print_num(id as usize);
+                    console::puts(match role {
+                        SocketRole::Unbound   => " role=unbound",
+                        SocketRole::Listener  => " role=listener",
+                        SocketRole::Connected => " role=connected",
+                    });
+                }
+                FdKind::Shm { id } => {
+                    console::puts("Shm id="); print_num(id as usize);
+                }
+            }
+            console::puts("\n");
+            count += 1;
+        }
+    }
+    if count == 0 {
+        console::puts("    (no open fds)\n");
+    }
+}
+
+/// `task <tid>` — combined view: state, priority, cave, name, fds,
+/// caps. The /proc/<pid>/ summary in one shell command.
+fn cmd_task(arg: &str) {
+    use crate::kernel::process::{self, TaskId, TaskState};
+    if arg.is_empty() {
+        console::puts("  usage: task <tid>\n");
+        return;
+    }
+    let tid: u16 = match arg.parse() { Ok(n) => n, Err(_) => { console::puts("  bad tid\n"); return; } };
+    if tid as usize >= process::MAX_TASKS {
+        console::puts("  tid out of range\n");
+        return;
+    }
+    let task = process::get(TaskId(tid));
+    console::puts_hi("  TASK ");
+    print_num(tid as usize);
+    console::puts("\n");
+    console::puts("    name:     "); console::puts(task.name_str()); console::puts("\n");
+    console::puts("    state:    ");
+    console::puts(match task.state {
+        TaskState::Free => "free", TaskState::Ready => "ready",
+        TaskState::Running => "running", TaskState::Blocked => "blocked",
+        TaskState::Dead => "dead",
+    });
+    console::puts("\n    priority: "); print_num(task.priority as usize); console::puts("\n");
+    console::puts("    cave_id:  "); print_num(task.cave_id as usize); console::puts("\n");
+    console::puts("    stack:    0x");
+    let hex = b"0123456789abcdef";
+    let sb = task.stack_base;
+    for i in (0..8).rev() {
+        let nib = ((sb >> (i * 4)) & 0xf) as usize;
+        console::putc(hex[nib]);
+    }
+    console::puts("\n");
+    cmd_fds(arg);
+    cmd_caps(arg);
 }
 
 /// `procs` / `ps` — list tasks visible from the active cave's PID

@@ -10,8 +10,29 @@ unsafe extern "C" {
     fn switch_context(old: *mut CpuContext, new: *const CpuContext);
 }
 
+/// cntpct timestamp from the last context-switch. Used to attribute
+/// elapsed ticks to the just-descheduled task's cave (gap-audit
+/// item 030 CPU slice, observability only — no enforcement yet).
+static LAST_SWITCH_TICK: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+#[inline]
+fn cntpct_now() -> u64 {
+    let v: u64;
+    unsafe { core::arch::asm!("mrs {0}, cntpct_el0", out(reg) v); }
+    v
+}
+
 /// Pick the highest-priority ready task and switch to it.
 pub fn schedule() {
+    // Charge the active cave for the time it just spent on-CPU,
+    // before we pick a new task.
+    let now = cntpct_now();
+    let prev = LAST_SWITCH_TICK.swap(now, core::sync::atomic::Ordering::Relaxed);
+    if prev > 0 && now > prev {
+        crate::batcave::cave::active_add_cpu_ticks(now - prev);
+    }
+
     let current_id = process::current_id();
     let current = process::get(current_id);
 

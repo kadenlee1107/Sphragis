@@ -2189,13 +2189,23 @@ pub fn recv_data_blocking_pcb(pcb: usize, buf: &mut [u8]) -> Result<usize, &'sta
 /// `send_data_blocking_pcb` for backwards compat with callers that
 /// only know about the legacy single-PCB shape.
 pub fn send_data(data: &[u8]) -> Result<(), &'static str> {
-    send_data_blocking_pcb(LEGACY_PCB, data)
+    let r = send_data_blocking_pcb(LEGACY_PCB, data);
+    if r.is_ok() {
+        // Gap-audit item 030 IO slice — attribute bytes to the
+        // active cave for observability. No enforcement yet.
+        crate::batcave::cave::active_add_tx_bytes(data.len() as u64);
+    }
+    r
 }
 
 /// Legacy synchronous recv (PCB 0). Thin wrapper around
 /// `recv_data_blocking_pcb`.
 pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
-    recv_data_blocking_pcb(LEGACY_PCB, buf)
+    let r = recv_data_blocking_pcb(LEGACY_PCB, buf);
+    if let Ok(n) = r {
+        crate::batcave::cave::active_add_rx_bytes(n as u64);
+    }
+    r
 }
 
 /// Legacy zero-arg data_ready() — PCB 0.

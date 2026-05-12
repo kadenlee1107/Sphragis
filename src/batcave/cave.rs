@@ -115,6 +115,26 @@ pub struct BatCave {
     /// Stored separately from `cave_l1_phys` so destroy() can free
     /// the slot without re-scanning to find which one we own.
     pub cave_l1_slot: usize,
+    /// Memory quota (gap-audit item 030, first slice). Pages this
+    /// cave is allowed to hold across all of its tracked allocations.
+    /// Currently enforced at the shm::create path; other allocators
+    /// will adopt the same `cave::charge_pages/release_pages` API in
+    /// follow-up batches. 0 means "no quota set" — charging always
+    /// succeeds. Default at cave-create time: 16384 pages (64 MiB).
+    pub mem_quota_pages: u32,
+    /// Pages currently charged to this cave. AtomicU32 so the alloc
+    /// hot path can fetch-add without taking the cave-table lock.
+    pub mem_used_pages: core::sync::atomic::AtomicU32,
+    /// Cumulative cntpct-tick count attributed to this cave's tasks
+    /// (observability, item 030 CPU slice). Bumped from
+    /// `scheduler::schedule()` when leaving a cave-tagged task.
+    /// No quota enforcement yet — needs preemptive timer scheduling.
+    pub cpu_ticks: core::sync::atomic::AtomicU64,
+    /// Cumulative network bytes sent / received attributed to this
+    /// cave (observability, item 030 IO slice). Bumped from
+    /// `net::tcp::send_data*` and `recv_data*`.
+    pub net_tx_bytes: core::sync::atomic::AtomicU64,
+    pub net_rx_bytes: core::sync::atomic::AtomicU64,
 }
 
 impl BatCave {
@@ -138,6 +158,11 @@ impl BatCave {
             image_len: 0,
             cave_l1_phys: 0,             // lazy-built on first enter
             cave_l1_slot: usize::MAX,    // "not assigned"
+            mem_quota_pages: 0,          // 0 = no quota; set at create()
+            mem_used_pages: core::sync::atomic::AtomicU32::new(0),
+            cpu_ticks: core::sync::atomic::AtomicU64::new(0),
+            net_tx_bytes: core::sync::atomic::AtomicU64::new(0),
+            net_rx_bytes: core::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -219,10 +244,7 @@ impl BatCave {
 // Phase 6: made `pub` so the shell can read per-cave backing/image
 // via `cave::CAVES[id].is_docker()` when routing `batcave run/destroy`.
 // All mutation still goes through the pub fns in this file.
-pub static mut CAVES: [BatCave; MAX_CAVES] = {
-    const EMPTY: BatCave = BatCave::empty();
-    [EMPTY; MAX_CAVES]
-};
+pub static mut CAVES: [BatCave; MAX_CAVES] = [const { BatCave::empty() }; MAX_CAVES];
 
 static CAVE_COUNT: AtomicU8 = AtomicU8::new(0);
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -279,6 +301,130 @@ pub fn active_mount_prefix(out: &mut [u8; 80]) -> usize {
     out[..nlen].copy_from_slice(&name.as_bytes()[..nlen]);
     out[nlen] = b':';
     nlen + 1
+}
+
+/// Charge `pages` against the active cave's memory quota. Returns
+/// `Err("cave: memory quota exceeded")` if the charge would push
+/// the cave past its limit. No-op (Ok) when no cave is active.
+///
+/// Gap-audit item 030 first slice. Currently called from
+/// `kernel::shm::create`; other allocators adopt the same API in
+/// follow-up batches.
+pub fn active_charge_pages(pages: u32) -> Result<(), &'static str> {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return Ok(()); }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    if cave.mem_quota_pages == 0 { return Ok(()); }
+    let used = cave.mem_used_pages.load(Ordering::Relaxed);
+    if used.saturating_add(pages) > cave.mem_quota_pages {
+        return Err("cave: memory quota exceeded");
+    }
+    cave.mem_used_pages.fetch_add(pages, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Release `pages` previously charged via `active_charge_pages`.
+/// Safe to over-call slightly — saturates at zero.
+pub fn active_release_pages(pages: u32) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    let mut cur = cave.mem_used_pages.load(Ordering::Relaxed);
+    loop {
+        let new = cur.saturating_sub(pages);
+        match cave.mem_used_pages.compare_exchange_weak(
+            cur, new, Ordering::Relaxed, Ordering::Relaxed,
+        ) {
+            Ok(_) => return,
+            Err(observed) => cur = observed,
+        }
+    }
+}
+
+/// Read the active cave's (used, quota) page counts. Returns
+/// (0, 0) when no cave is active.
+pub fn active_quota_status() -> (u32, u32) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return (0, 0); }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    (cave.mem_used_pages.load(Ordering::Relaxed), cave.mem_quota_pages)
+}
+
+/// Set a cave's memory quota by name. Used by the `cave-quota`
+/// shell command.
+pub fn set_quota_by_name(name: &str, pages: u32) -> Result<(), &'static str> {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            if (*core::ptr::addr_of!(CAVES))[i].state != CaveState::Free
+                && (*core::ptr::addr_of!(CAVES))[i].name_str() == name
+            {
+                let cave = &mut (*core::ptr::addr_of_mut!(CAVES))[i];
+                cave.mem_quota_pages = pages;
+                return Ok(());
+            }
+        }
+    }
+    Err("no such cave")
+}
+
+/// Iterate over active caves with (name, used, quota). Used by
+/// the `cave-quota` shell command for the no-arg listing.
+pub fn for_each_quota<F: FnMut(&str, u32, u32)>(mut f: F) {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            let cave = &(*core::ptr::addr_of!(CAVES))[i];
+            if cave.state == CaveState::Free { continue; }
+            f(cave.name_str(),
+              cave.mem_used_pages.load(Ordering::Relaxed),
+              cave.mem_quota_pages);
+        }
+    }
+}
+
+/// Bump the active cave's CPU-tick counter. Called by the
+/// scheduler on each context switch with the cntpct delta the
+/// just-descheduled task accumulated. Observability only — no
+/// enforcement.
+pub fn active_add_cpu_ticks(delta: u64) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    cave.cpu_ticks.fetch_add(delta, Ordering::Relaxed);
+}
+
+/// Bump the active cave's net TX byte counter. Called by
+/// `net::tcp::send_data*`.
+pub fn active_add_tx_bytes(n: u64) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    cave.net_tx_bytes.fetch_add(n, Ordering::Relaxed);
+}
+
+/// Bump the active cave's net RX byte counter. Called by
+/// `net::tcp::recv_data*`.
+pub fn active_add_rx_bytes(n: u64) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    cave.net_rx_bytes.fetch_add(n, Ordering::Relaxed);
+}
+
+/// Iterate over active caves with full quota + observability
+/// counters: (name, mem_used, mem_quota, cpu_ticks, tx, rx).
+pub fn for_each_usage<F: FnMut(&str, u32, u32, u64, u64, u64)>(mut f: F) {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            let cave = &(*core::ptr::addr_of!(CAVES))[i];
+            if cave.state == CaveState::Free { continue; }
+            f(cave.name_str(),
+              cave.mem_used_pages.load(Ordering::Relaxed),
+              cave.mem_quota_pages,
+              cave.cpu_ticks.load(Ordering::Relaxed),
+              cave.net_tx_bytes.load(Ordering::Relaxed),
+              cave.net_rx_bytes.load(Ordering::Relaxed));
+        }
+    }
 }
 
 pub fn active_can_access_path(path: &str) -> bool {
@@ -434,6 +580,13 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
         // the backing + stores the image name after this returns.
         cave.backing = CaveBacking::Native;
         cave.image_len = 0;
+
+        // Gap-audit item 030 first slice — default memory quota.
+        // 16384 pages × 4 KiB = 64 MiB. Generous for the demo
+        // workloads we run (shells, comms, ai); the operator can
+        // tighten via `cave-quota <name> <pages>`.
+        cave.mem_quota_pages = 16384;
+        cave.mem_used_pages.store(0, Ordering::Relaxed);
 
         let count = CAVE_COUNT.load(Ordering::Relaxed);
         CAVE_COUNT.store(count + 1, Ordering::Relaxed);

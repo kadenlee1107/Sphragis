@@ -14,6 +14,21 @@ pub enum CapType {
     DeviceMmio, // Can access a specific MMIO range
 }
 
+impl CapType {
+    /// Short human-readable name for `caps` shell output and
+    /// audit log entries.
+    pub fn label(self) -> &'static str {
+        match self {
+            CapType::None       => "none",
+            CapType::IpcSend    => "ipc-send",
+            CapType::IpcRecv    => "ipc-recv",
+            CapType::Memory     => "memory",
+            CapType::Interrupt  => "interrupt",
+            CapType::DeviceMmio => "device-mmio",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Capability {
     pub cap_type: CapType,
@@ -92,5 +107,13 @@ impl CapabilitySet {
 
     pub fn count(&self) -> usize {
         self.count
+    }
+
+    /// Iterate over every held capability — used by the `caps`
+    /// shell command and the `/proc`-equivalent task viewer.
+    pub fn for_each<F: FnMut(CapType, u64)>(&self, mut f: F) {
+        for c in &self.caps[..self.count] {
+            f(c.cap_type, c.target);
+        }
     }
 }
