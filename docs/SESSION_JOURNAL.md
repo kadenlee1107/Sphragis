@@ -11,6 +11,444 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — EL1 probe-mode fault handler: runtime carve-out proof
+
+**Context:** The cave-pool carve-out arc proved the table state
+("PRIMARY_L1 has no kernel-identity mapping for the cave-pool
+PA range") via `pte_lookup` walks. The remaining work was to
+verify the *runtime* behavior — that a kernel-ns access to the
+carve-out VA or PA actually faults at the MMU walker. Before
+this commit, trying to dereference such an address from
+kernel-ns either hung the walker or hit the demand-page rejection
+and panicked. Neither is useful for a selftest.
+
+This commit installs a probe-mode primitive so the test can
+*attempt* a cross-boundary read and observe the fault cleanly.
+
+### What shipped
+
+  * `mmu::probe_read_u64(va) -> Option<u64>` — new public API.
+    Sets `mmu::PROBE_ACTIVE`, issues an `ldr` to `va`, returns
+    `Some(value)` if it succeeds or `None` if the access faults.
+    Single-threaded contract (no nesting); Bat_OS today is
+    cooperative single-CPU so the global-state implementation
+    is sufficient.
+  * `mmu::PROBE_ACTIVE` / `mmu::PROBE_FAULTED` (AtomicBool).
+    Coordination flags between the probe and the EL1 sync-
+    exception handler.
+  * `kernel::arch::handle_sync_exception_inner`: gains a pre-
+    dispatch hook. If `PROBE_ACTIVE` is set and the EC is a data
+    or instruction abort (0x24/0x25/0x20/0x21), the handler
+    sets `PROBE_FAULTED`, advances `(*frame).elr` by 4 (past the
+    faulting `ldr`), and returns. The probe sees the flag on
+    resume and returns None instead of the would-be value.
+  * `cave-private-selftest` selftest extension. New runtime
+    assertions on top of the existing table-walk proofs:
+    - `probe_read(cave_private_va)` from kernel-ns context →
+      expect None (the VA is unmapped in PRIMARY_L1).
+    - `probe_read(cave_private_pa via identity VA)` from
+      kernel-ns context → expect None (the PA's identity VA is
+      carved out of PRIMARY_L1).
+    - `probe_read(sys_wg_l1)` (a known-mapped kernel VA) →
+      expect Some (probe sanity — handler doesn't break normal
+      reads).
+    Terminal success marker is now `probe-mode fault handler
+    observed faults instead of hanging`.
+
+### Verification
+
+```
+✓ probe_read(cave_private_va) faulted (as expected)
+✓ probe_read(cave_private_pa via identity VA) faulted (as expected)
+✓ probe_read on a known-mapped VA returned Some (probe sanity)
+✓ in-cave write/read round-trip preserved the magic value
+✓ ensure_page is idempotent — same VA returned on re-call
+✓ per-cave L1 restriction slice-1 verified
+✓ cave-pool PA carve-out verified
+✓ probe-mode fault handler observed faults instead of hanging
+```
+
+Full sweep: boot-smoke, sys-caves-selftest, sys-wg-selftest, and
+cave-private-selftest — all PASS.
+
+### What this earns
+
+The cave-private boundary is now PROVEN at runtime, not just on
+paper. A kernel-ns code path that tries to read a cave-private
+address — by VA or by PA — fails at the hardware MMU walker.
+The selftest demonstrates this on every boot.
+
+The probe-mode handler is also generally useful: any future
+kernel code that needs to "check whether a VA is reachable
+without crashing if it isn't" can call `mmu::probe_read_u64`.
+
+### Known limitations
+
+  * Single-threaded contract — no nested probes, no
+    concurrent probes from different CPUs. Bat_OS is
+    cooperative single-CPU; SMP will need per-CPU
+    probe state.
+  * Probe-mode swallows ALL EL1 faults at the data/inst-abort
+    classes while active. That's intentional for the contract
+    ("if reading would fault at all, return None") but means
+    a genuine kernel bug inside the probe call would be hidden.
+    Mitigation: probes are tiny — just the `ldr` — so the only
+    fault they can produce is the one we're testing for.
+
+### Branch status
+
+`feat/per-cave-l1-restrict` (carve-out arc committed as
+`08c1488f`; this lands as the final follow-up — the runtime
+fault handler). Will commit + push.
+
+---
+
+## 2026-05-12 — Mac — cave-pool PA carve-out: closes the kernel-identity leak
+
+**Context:** With sys-wg's state already living at a cave-private
+VA (slice 2 of the L1 restriction arc), the residual gap was that
+the *physical* frames behind those VAs were still in the kernel
+pool, and PRIMARY_L1's `L1[1..=4]` identity map covered all of it.
+An attacker who learned a cave-private PA could still reach the
+bytes via kernel identity. This arc carves a dedicated PA range
+out of every L1's kernel-identity map so the only path to those
+frames is through the owning cave's per-page mapping.
+
+### What shipped
+
+  * `src/kernel/mm/cave_pool.rs` (new). Dedicated allocator for
+    cave-private frames over the PA range
+    `0xB000_0000..0xC000_0000` (256 MiB at the top of the kernel
+    pool). Independent bitmap (1024 `AtomicU64` words). Returns
+    PAs without zeroing — see "subtle issue" below.
+  * `kernel::mm::cave_pool::init()` runs from `mm::init()` right
+    after `frame::init`, calls `frame::reserve_range` to mark the
+    carve-out PAs in-use in the general bitmap so
+    `alloc_frame`/`alloc_kernel_frame` never hand out a page
+    inside the window.
+  * `mmu::setup_and_enable` + `mmu::setup_native_cave_l1` +
+    `mmu::setup_cave_pagetable_at`: all three L1 builders skip
+    blocks 384..512 of their L2_xhi tables (covering
+    `0xB000_0000..0xC000_0000`). With this in place, *no* L1 the
+    kernel builds has a kernel-identity mapping covering the
+    cave-pool range — proven by `pte_lookup`.
+  * `cave_private::ensure_page` now allocates from `cave_pool`
+    rather than the general kernel pool, installs the cave-
+    private mapping in the owning cave's L1, *then* zeros the
+    page through that mapping under `with_cave_active`. This
+    order matters — see below.
+  * `demand_page::try_handle` gained a carve-out guard: any
+    EL1 fault whose `FAR_EL1` falls inside
+    `0xB000_0000..0xC000_0000` is rejected outright with a
+    `[demand_page] REFUSED` log. Without this, a stray kernel-ns
+    access to a cave-pool VA would be silently shadowed by a
+    fresh demand-page mapping, defeating the carve-out.
+  * `cave-private-selftest` shell command + headless harness
+    extended: decodes the PA from the cave's leaf PTE,
+    asserts `pte_lookup(PRIMARY_L1, pa)` returns None, and
+    reports `✓ cave-pool PA carve-out verified`. The previous
+    slice-1 selftest stayed; the new assertion is gated on
+    knowing the PA, which the slice-1 walk supplies.
+
+### The subtle issue we hit and fixed
+
+First attempt to verify the carve-out reported `✗ FAIL:
+PRIMARY_L1 identity-maps cave-private PA`. Diagnostic walks
+showed PRIMARY_L1's `L2_xhi[384]` started out 0 at setup_and_enable
+time but contained a TABLE descriptor by the time the selftest
+ran. The descriptor pointed at sys-wg's L2_xxxhi page — an L3
+position installed by an unknown writer.
+
+Root cause: `cave_pool::alloc_page` initially zeroed the new
+page via `str xzr, [pa]` from kernel-ns context. With the
+carve-out in place, that VA was unmapped in PRIMARY_L1; the
+store data-aborted; the kernel's `demand_page` handler caught
+it and **installed a real mapping in PRIMARY_L1's L2_xhi[384]**
+to "fix" the fault — undoing the carve-out the next instruction
+after it was put in place.
+
+Fix has two parts: (1) `cave_pool::alloc_page` no longer zeroes
+the page — that work moves to `cave_private::ensure_page`, which
+zeroes *after* installing the mapping in the cave's L1, under
+`with_cave_active` so the VA translates; (2) `demand_page` now
+explicitly refuses to install mappings for FARs inside the
+carve-out range, as defence-in-depth against any future
+kernel-ns stray that hits this VA range.
+
+### Verification
+
+```
+cave-private-selftest:
+  ✓ allocated cave-private VA: 0x0000000140001000
+  ✓ sys-wg L1 maps VA — leaf PTE = 0x00600000b0000703
+  ✓ PRIMARY_L1 does NOT map this VA (kernel-ns can't reach it)
+  cave-private PA: 0x00000000b0000000
+  ✓ PRIMARY_L1 has NO kernel-identity mapping for this PA
+    (carve-out succeeds: attacker who knows PA still can't reach)
+  ✓ in-cave write/read round-trip preserved the magic value
+  ✓ ensure_page is idempotent — same VA returned on re-call
+  ✓ per-cave L1 restriction slice-1 verified
+  ✓ cave-pool PA carve-out verified
+```
+
+Full sweep: boot-smoke, sys-caves-selftest (Arc-2 round trip),
+sys-wg-selftest (slices 1+2+3 + state-in-cave-private), and
+cave-private-selftest — all PASS.
+
+### Security boundary today
+
+Four layers around cave-private state, in order of strength:
+
+  1. **Module privacy** — no `pub` getter for the secret.
+  2. **VA-level MMU isolation** — cave-private VA unmapped in
+     PRIMARY_L1; proved at runtime by `pte_lookup`.
+  3. **PA-level isolation** — cave-pool PA range unmapped in
+     PRIMARY_L1's kernel-identity window; also proved by
+     `pte_lookup`. Even an attacker who knows the PA cannot
+     reach the bytes through kernel identity.
+  4. **Defence-in-depth** — `demand_page` refuses to install
+     mappings for FARs in the carve-out range, blocking the
+     "stray kernel-ns store creates a shadow mapping" failure
+     mode.
+
+### What this commit explicitly DOES NOT close
+
+  * No EL1 sync-exception handler that turns walker faults into
+    clean error reports. Today an out-of-cave dereference hangs
+    the walker (or hits the demand-pager, which now correctly
+    refuses inside the carve-out and bubbles up to panic). The
+    next arc installs a real handler so tests can attempt
+    cross-cave probes and observe the fault rather than hang.
+
+### Branch status
+
+`feat/per-cave-l1-restrict` (slice 1 + slice 2 already committed
+as `95688b00` + `6e866173`; this lands as the follow-up slice 3
+for the carve-out). Will commit + push.
+
+---
+
+## 2026-05-12 — Mac — sys-wg state relocation: KEYPAIR + PEERS in cave-private page
+
+**Context:** Slice 1 of the per-cave L1 restriction arc shipped a
+`cave_private` allocator + verified the "VA mapped in cave L1,
+unmapped in PRIMARY_L1" property. This commit actually relocates
+sys-wg's `KEYPAIR` + `PEERS` into that cave-private page so the
+boundary protecting them becomes "MMU walker would fault" instead
+of "Rust visibility says no."
+
+### What shipped
+
+  * `src/batcave/sys_wg_service.rs` rewritten around a single
+    `#[repr(C)]` `PrivateState` struct placed at `cave_private_va(
+    sys_wg_id) = 0x140001000`. Fields are plain bytes (X25519 seed
+    + pubkey + parallel SoA arrays for the peer table) so the
+    layout is deterministic and there are no Drop concerns.
+  * `static STATE_VA: AtomicUsize` is the only kernel-ns-visible
+    handle into the protected state — it holds the VA itself
+    (which is unmapped in PRIMARY_L1), not a pointer to anything
+    actually dereferenceable from outside the cave.
+  * `init()` runs the keypair generation on the kernel-ns stack,
+    then `with_cave_active(sys_wg_id, ||)` populates the
+    PrivateState fields field-by-field (so the secret seed never
+    materialises as a whole-struct value on the kernel-ns stack)
+    and finally publishes `STATE_VA`. The local seed copy is
+    zeroed on the way out (best-effort; compiler may have spilled).
+  * Every public entry point (`service_pubkey`, `register_peer`,
+    `close_peer`, `peer_has_session`, `peer_count`,
+    `complete_handshake_as_responder`, `wrap`, `unwrap`,
+    `debug_local_round_trip`, `wrap_with_keys`, `unwrap_with_keys`,
+    `read_ttbr0_inside_sys_wg`) goes through
+    `cave::with_cave_active(sys_wg_id, ...)`. Anything that tries
+    to read the state from outside the cave hits the MMU walker.
+  * `WgKeypair::from_seed(seed: [u8; 32])` (new in
+    `src/net/wireguard.rs`) — the cave-private page stores only
+    the 32-byte X25519 seed; sys-wg reconstructs the full
+    `WgKeypair` on the cave stack for the duration of a handshake.
+  * sys-wg-selftest extended (slice-3 verification): explicitly
+    asserts `cave_private::has_page(sys_wg_id) == true`,
+    `pte_lookup(sys_wg_l1, priv_va)` is `Some(...)`, and
+    `pte_lookup(PRIMARY_L1, priv_va)` is `None`. Prints the
+    private VA for human verification.
+  * Boot tag updated: "Arc 3 slices 1+2+3; state in cave-private
+    page."
+
+### Verification
+
+```
+sys-wg-selftest:
+  sys-wg static pubkey: 6461fcfc017f0d8ba3996b14bcbdfd02...
+  ✓ KEYPAIR + PEERS live in cave-private page at 0x0000000140001000
+    (unmapped in PRIMARY_L1)
+  ✓ trampoline restored cave_id (0) on return
+  ✓ handshake completed; transport keys are mirror-consistent
+  ✓ wrap/unwrap round-tripped through sys-wg cave
+  ✓ register_peer / DuplicatePeer / complete_handshake_as_responder /
+    wrap / unwrap / close + UnknownPeer all PASS
+  ✓ Arc-3 slice-1+2+3 verified
+```
+
+Full sweep: boot-smoke, sys-caves-selftest (Arc-2 round trip),
+cave-private-selftest, sys-wg-selftest — all PASS.
+
+### Security boundary today
+
+Three layers of defence around sys-wg state, in order of strength:
+
+  1. **Module privacy.** No `pub` getter returns the secret bytes.
+     Compile-time enforcement.
+  2. **VA-level MMU isolation.** The cave-private VA where the
+     state lives is unmapped in PRIMARY_L1 (proved at runtime by
+     `pte_lookup`). A kernel-ns access to `0x140001000` would
+     fault at the MMU walker.
+  3. *(future)* **PA-level isolation.** The cave-private page is
+     still a kernel-pool frame, which PRIMARY_L1's `L1[1..=4]`
+     identity map covers. An attacker who already knows the PA
+     can reach the bytes via kernel identity. Closing this
+     requires a frame-allocator carve-out reserving a separate
+     PA range, mapped only via per-cave L1s. Tracked as a
+     follow-up arc.
+
+### What this commit explicitly does NOT do
+
+  * No PA-level isolation yet (see above).
+  * No EL1 sync-exception handler that turns walker faults into
+    clean error reports. Today an out-of-cave dereference would
+    hang the walker; the runtime contract is "callers MUST go
+    through with_cave_active." A future arc installs the handler.
+  * Peer transport-counters are written through-the-cave each
+    call, no batching. Fine for sub-Mbps shell usage; real WG
+    traffic at line rate would benefit from a batched update.
+
+### Branch status
+
+`feat/per-cave-l1-restrict` (slice 1 already committed as
+`95688b00`; this lands as the follow-up slice 2). Will commit +
+push.
+
+---
+
+## 2026-05-12 — Mac — per-cave L1 restriction (slice 1): cave-private memory
+
+**Context:** Kernel-boot MMU enable from the previous batch made
+per-cave TTBR0 swaps real hardware operations. But every cave's
+L1 still maps the full kernel identity range
+`[0x40000000, 0x140000000)` — so code running with cave A's L1
+active could still reach every byte of kernel memory at EL1,
+including state owned by cave B. This slice introduces a per-cave
+private memory region OUTSIDE the identity range, mapped only in
+the owning cave's L1 — closing one concrete leak.
+
+### What shipped
+
+  * `src/batcave/cave_private.rs` (new). One 4 KiB page per cave
+    at a fixed VA computed from `cave_id`:
+    `CAVE_PRIVATE_VA_BASE + cave_id * 0x1000 = 0x140000000 +
+    cave_id * 0x1000`. That base sits ONE L1 entry (1 GiB) above
+    the top of kernel identity, so no PRIMARY_L1 mapping covers
+    it.
+    - `ensure_page(cave_id)` — idempotent. Allocates a kernel-pool
+      frame via `frame::alloc_kernel_frame`, installs an L2 + L3
+      table if missing, writes the 4 KiB leaf PTE into the cave's
+      L1, issues `tlbi vae1` for the new VA, records the PA for
+      future reuse.
+    - `cave_private_va(cave_id)` / `has_page(cave_id)` —
+      introspection without exposing the PA.
+    - Flags: EL1-RW + normal WB cacheable + inner-shareable +
+      AF preset + PXN + UXN (no execute either level — data-only).
+  * `src/batcave/linux/mmu.rs` extensions:
+    - `pub fn pte_lookup(l1_phys, va) -> Option<u64>` — walks any
+      L1 down through L2 (block leaf) or L2→L3 (page leaf) and
+      returns the leaf PTE if mapped at any level. Returns None
+      on the first invalid descriptor. Lets the selftest *prove*
+      "mapped in sys-wg's L1, unmapped in PRIMARY_L1."
+    - `pub fn map_4k_in_l1(l1_phys, va, pa, flags) -> Result<(),&str>`
+      — installs a 4 KiB page descriptor, allocating intermediate
+      L2/L3 tables from `frame::alloc_kernel_frame` on demand,
+      cache-cleaning each new page-table page to PoC.
+    - `read_pte(table, idx)` and the existing `write_pte` are now
+      used by both `setup_*` paths and the new mapper.
+  * `src/batcave/cave.rs`: new `with_cave_active<R>(cave_id, f)`
+    helper — generalizes what `sys_wg_service::with_sys_wg_cave`
+    was doing privately. Saves caller `cave_id` + `TTBR0`,
+    switches both to the target cave around the closure, restores
+    on return. `sys_wg_service::with_sys_wg_cave` now delegates
+    to this generic helper.
+  * `cave-private-selftest` shell command — slice-1 selftest:
+    1. `ensure_page(sys_wg_id)` succeeds; returns the expected VA.
+    2. `pte_lookup(sys_wg_l1, va)` returns Some with PTE_VALID set.
+    3. `pte_lookup(PRIMARY_L1, va)` returns None (cross-cave
+       isolation property — kernel-ns can't reach the page).
+    4. Inside `with_cave_active(sys_wg_id, f)`: write a magic
+       value to `*va`, dsb, read back — preserved.
+    5. Second `ensure_page` call returns the same VA (idempotency).
+  * `scripts/qemu_cave_private_selftest.py` — headless harness.
+
+### Verification
+
+```
+PRIMARY_L1=0x00000000bfffe000   sys-wg L1=0x00000000bfff8000
+✓ allocated cave-private VA: 0x0000000140001000
+✓ sys-wg L1 maps VA — leaf PTE = 0x00600000bfff2703
+✓ PRIMARY_L1 does NOT map this VA (kernel-ns can't reach it)
+✓ in-cave write/read round-trip preserved the magic value
+✓ ensure_page is idempotent — same VA returned on re-call
+✓ per-cave L1 restriction slice-1 verified
+```
+
+PTE decode: bottom 12 bits `0x703` = AF + SH_INNER + VALID+TABLE
+(L3 page descriptor); high bits `0x600...` = PXN+UXN; PA portion
+`0xbfff2000` = kernel-pool frame. Exactly the
+`CAVE_PRIVATE_PTE_FLAGS` we configured.
+
+Plus boot-smoke, sys-caves-selftest (Arc-2 round trip), and
+sys-wg-selftest (Arc-3 slices 1+2) all still pass.
+
+### What slice 1 earns
+
+A *verified, observable* cross-cave memory isolation primitive.
+Any future state we move into cave-private memory becomes
+unreachable at EL1 from any context that doesn't first call
+`with_cave_active(owning_cave_id, ...)`. The MMU walker would
+fault on access from the wrong context — proven by the table
+walk, not just claimed.
+
+### What slice 1 explicitly DOES NOT do
+
+  * Sys-wg's existing static keypair (`KEYPAIR`) + peer table
+    (`PEERS`) still live in `.bss`, which is in the kernel
+    identity range. They're protected today by *module privacy*
+    + the `with_sys_wg_cave` trampoline, but a kernel bug that
+    walks kernel-identity memory could still reach them. Slice 2
+    relocates them into a cave-private page so the protection
+    becomes "MMU walker would fault" rather than "Rust visibility
+    rules say no."
+  * No fault handler installs are present yet, so a kernel-ns
+    access to a cave-private VA today hangs the walker rather
+    than reporting the fault to user code. That's acceptable for
+    a selftest that proves the table state, not the runtime
+    behavior under faults. A real EL1 sync-exception handler
+    that turns walker faults into reporting (rather than hangs)
+    is a separate arc.
+
+### Risk
+
+Small change, well-isolated. cave_private is opt-in (no caller
+hits it unless they call `ensure_page`). The MMU helpers are
+additive (`pte_lookup`, `map_4k_in_l1`) and reused from
+`cave_private` only — existing `setup_native_cave_l1` /
+`setup_and_enable` paths are unchanged. The `with_cave_active`
+refactor in sys_wg_service preserves behavior (delegate to
+generic helper); selftests confirm.
+
+### Branch status
+
+`feat/per-cave-l1-restrict` (current, branched from main at
+`0f14db24` after the sys-wg-service + kernel-MMU merge). Ready
+to commit + push.
+
+---
+
 ## 2026-05-12 — Mac — kernel-boot MMU enable: soft → hard cave boundary
 
 **Context:** Arc 3 slices 1+2 put WG state behind a sys-wg module

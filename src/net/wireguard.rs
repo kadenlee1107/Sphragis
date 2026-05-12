@@ -146,6 +146,14 @@ impl WgKeypair {
     pub fn generate() -> Self {
         let mut seed = [0u8; KEY_LEN];
         crate::crypto::rng::fill_bytes(&mut seed);
+        Self::from_seed(seed)
+    }
+
+    /// Reconstruct a `WgKeypair` from its 32-byte X25519 seed. Pairs
+    /// with `seed_bytes()`. Used by storage layers that keep only
+    /// the raw seed in protected memory (e.g. sys-wg's cave-private
+    /// region) and reconstruct the full keypair on demand.
+    pub fn from_seed(seed: [u8; KEY_LEN]) -> Self {
         let sk = StaticSecret::from(seed);
         let pk = X25519Public::from(&sk).to_bytes();
         Self { static_sk: sk, static_pk: pk }

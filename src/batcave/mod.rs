@@ -1,6 +1,7 @@
 pub mod batkits;
 pub mod batpipe;
 pub mod cave;
+pub mod cave_private;
 pub mod docker_client;
 pub mod ipc_session;
 pub mod linux;

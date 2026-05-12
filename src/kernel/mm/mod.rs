@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+pub mod cave_pool;
 pub mod frame;
 pub mod heap;
 pub mod initrd;
@@ -84,6 +85,15 @@ pub fn init() {
     let frame_start = (frame_start + 0xFFF) & !0xFFF;
 
     frame::init(frame_start, memory_end);
+
+    // Reserve the cave-pool PA range (0xB000_0000..0xC000_0000) so
+    // frame::alloc_frame / alloc_kernel_frame never hand out pages
+    // inside it. Cave-private allocations go through
+    // `kernel::mm::cave_pool::alloc_page()` instead. Must run
+    // BEFORE setup_and_enable so no L1/L2/L3 table lands inside the
+    // carve-out and gets unmapped.
+    cave_pool::init();
+    platform::serial_puts("  [mm] cave-pool reserved (256 MiB at 0xB000_0000)\n");
 
     // BUG-2026-04-23: when the initrd is delivered via QEMU `-initrd`
     // instead of appended-to-kernel, its actual phys address (e.g.

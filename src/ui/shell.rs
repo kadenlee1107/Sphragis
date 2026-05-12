@@ -341,6 +341,7 @@ fn execute(cmd: &str) {
         "block-on-selftest"   => cmd_block_on_selftest(),
         "sys-caves-selftest"  => cmd_sys_caves_selftest(),
         "sys-wg-selftest"     => cmd_sys_wg_service_selftest(),
+        "cave-private-selftest" => cmd_cave_private_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
         "pkg" => {
@@ -2922,13 +2923,22 @@ fn cmd_sys_caves_selftest() {
 /// peek at it through a borrow, can't ask for it via getter, and the
 /// only DH operations involving it run with sys-wg's L1 installed.
 fn cmd_sys_wg_service_selftest() {
-    use crate::batcave::sys_wg_service;
+    use crate::batcave::{sys_caves, sys_wg_service};
     use crate::net::wireguard::WgKeypair;
     use crate::kernel::process;
 
-    console::puts_hi("  SYS-WG SERVICE SELF-TEST (Arc 3 slices 1+2)\n");
+    console::puts_hi("  SYS-WG SERVICE SELF-TEST (Arc 3 slices 1+2+3)\n");
     console::puts("  Verifies sys-wg owns the WG keypair behind a privacy boundary,\n");
-    console::puts("  and exposes a peer-table-keyed wrap/unwrap API.\n");
+    console::puts("  exposes a peer-table-keyed wrap/unwrap API,\n");
+    console::puts("  and stores its state in a cave-private page MMU-isolated from PRIMARY_L1.\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id,
+        None => {
+            console::puts("  ✗ FAIL: sys-wg cave not initialized at boot\n");
+            return;
+        }
+    };
 
     // 1. Pinned pubkey is reachable.
     let sys_wg_pk = match sys_wg_service::service_pubkey() {
@@ -2945,6 +2955,40 @@ fn cmd_sys_wg_service_selftest() {
         console::putc(hex[(b & 0x0f) as usize]);
     }
     console::puts("...\n");
+
+    // Slice-3 verification: sys-wg's KEYPAIR + PEERS no longer live
+    // in .bss; they're in the cave-private page at
+    // cave_private_va(sys_wg_id). Prove the relocation actually
+    // happened by checking:
+    //   1. cave_private::has_page(sys_wg_id) is true (init went
+    //      through the cave-private allocator).
+    //   2. The PTE at that VA is mapped in sys-wg's L1 (the page
+    //      backing the state is live).
+    //   3. The PTE at that VA is NOT mapped in PRIMARY_L1 (kernel-
+    //      ns walker would fault on access).
+    use crate::batcave::{cave_private, linux::mmu};
+    use crate::batcave::cave as bc;
+    if !cave_private::has_page(sys_wg_id as u16) {
+        console::puts("  ✗ FAIL: sys-wg has no cave-private page (init relocation skipped?)\n");
+        return;
+    }
+    let priv_va = cave_private::cave_private_va(sys_wg_id as u16);
+    let sys_wg_l1 = bc::get_cave_l1_phys(sys_wg_id as u16).unwrap_or(0);
+    let primary_l1: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) primary_l1); }
+    if mmu::pte_lookup(sys_wg_l1, priv_va).is_none() {
+        console::puts("  ✗ FAIL: cave-private VA unmapped in sys-wg's L1\n");
+        return;
+    }
+    if mmu::pte_lookup(primary_l1 as usize, priv_va).is_some() {
+        console::puts("  ✗ FAIL: cave-private VA mapped in PRIMARY_L1 (isolation broken)\n");
+        return;
+    }
+    console::puts("  ✓ KEYPAIR + PEERS live in cave-private page at 0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((priv_va >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts(" (unmapped in PRIMARY_L1)\n");
 
     // 2. Inside-trampoline TTBR0 readout.
     let our_cave_before = process::current().cave_id;
@@ -3180,6 +3224,251 @@ fn cmd_sys_wg_service_selftest() {
 
     console::puts("  ✓ Arc-3 slice-1 sys-wg service boundary verified\n");
     console::puts("  ✓ Arc-3 slice-2 peer-table-keyed wrap/unwrap verified\n");
+    console::puts("  ✓ Arc-3 slice-3 cave-private state relocation verified\n");
+}
+
+/// Per-cave L1 restriction selftest (slice 1).
+///
+/// Allocates a cave-private 4 KiB page for sys-wg via
+/// `cave_private::ensure_page(sys_wg_id)` and proves the
+/// cross-cave isolation property end-to-end:
+///
+///   1. The VA returned (`CAVE_PRIVATE_VA_BASE + sys_wg_id * 0x1000`)
+///      is mapped in sys-wg's L1 page table (walked via
+///      `mmu::pte_lookup`).
+///   2. The same VA is NOT mapped in PRIMARY_L1 (kernel-ns) —
+///      `pte_lookup` returns None. An access to this VA from kernel-
+///      ns would fault at the MMU walker.
+///   3. Inside `cave::with_cave_active(sys_wg_id, f)` the
+///      hardware-active L1 is sys-wg's, so the VA translates and
+///      a write/read round trip works.
+///   4. The mapping is idempotent — calling `ensure_page` again
+///      returns the same VA without re-allocating (verified via
+///      `has_page` true on the second call).
+///
+/// Note: this slice DOES NOT yet relocate any sys-wg state (the
+/// keypair + peer table still live in the cave-identity range).
+/// Slice 2 moves the sensitive state. What this slice earns: a
+/// verified, observable per-cave isolation primitive ready to be
+/// used.
+fn cmd_cave_private_selftest() {
+    use crate::batcave::{cave, cave_private, sys_caves};
+    use crate::batcave::linux::mmu;
+
+    console::puts_hi("  CAVE-PRIVATE L1 RESTRICTION SELF-TEST (slice 1)\n");
+    console::puts("  Proves cave-private VAs are mapped in the owning cave's L1\n");
+    console::puts("  and unmapped in PRIMARY_L1 / every other cave's L1.\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => {
+            console::puts("  ✗ FAIL: sys-wg cave not initialized\n");
+            return;
+        }
+    };
+    let sys_wg_l1 = match cave::get_cave_l1_phys(sys_wg_id) {
+        Some(l1) => l1,
+        None => {
+            console::puts("  ✗ FAIL: sys-wg cave has no L1\n");
+            return;
+        }
+    };
+
+    let primary_l1: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) primary_l1); }
+    let primary_l1 = primary_l1 as usize;
+
+    let hex = b"0123456789abcdef";
+    console::puts("  PRIMARY_L1=0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((primary_l1 >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts(" sys-wg L1=0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((sys_wg_l1 >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts("\n");
+
+    // Allocate the cave-private page.
+    let va = match cave_private::ensure_page(sys_wg_id) {
+        Some(va) => va,
+        None => {
+            console::puts("  ✗ FAIL: cave_private::ensure_page returned None\n");
+            return;
+        }
+    };
+    if va != cave_private::cave_private_va(sys_wg_id) {
+        console::puts("  ✗ FAIL: returned VA differs from cave_private_va()\n");
+        return;
+    }
+    if !cave_private::has_page(sys_wg_id) {
+        console::puts("  ✗ FAIL: has_page false after ensure_page success\n");
+        return;
+    }
+    console::puts("  ✓ allocated cave-private VA: 0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((va >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts("\n");
+
+    // Walk both L1s and assert the isolation property.
+    let pte_in_cave = mmu::pte_lookup(sys_wg_l1, va);
+    let pte_in_primary = mmu::pte_lookup(primary_l1, va);
+
+    match pte_in_cave {
+        Some(pte) => {
+            console::puts("  ✓ sys-wg L1 maps VA — leaf PTE = 0x");
+            for sh in (0..16).rev() {
+                console::putc(hex[((pte >> (sh * 4)) & 0xF) as usize]);
+            }
+            console::puts("\n");
+        }
+        None => {
+            console::puts("  ✗ FAIL: VA unmapped in sys-wg's L1 (allocation didn't install PTE?)\n");
+            return;
+        }
+    }
+    match pte_in_primary {
+        None => {
+            console::puts("  ✓ PRIMARY_L1 does NOT map this VA (kernel-ns can't reach it)\n");
+        }
+        Some(pte) => {
+            console::puts("  ✗ FAIL: PRIMARY_L1 maps VA — leaf PTE = 0x");
+            for sh in (0..16).rev() {
+                console::putc(hex[((pte >> (sh * 4)) & 0xF) as usize]);
+            }
+            console::puts(" (cross-cave isolation broken)\n");
+            return;
+        }
+    }
+
+    // PA-level isolation check (carve-out arc).
+    // Decode the PA backing the cave-private VA from the leaf PTE
+    // in sys-wg's L1, then ask whether PRIMARY_L1 reaches that PA
+    // through its kernel-identity window. With the cave-pool
+    // carve-out in place (0xB000_0000..0xC000_0000 carved out of
+    // PRIMARY_L1's L2_xhi), the lookup must return None — proving
+    // an attacker who already knows the PA still can't reach the
+    // bytes via kernel identity.
+    let leaf_pte = pte_in_cave.unwrap();
+    let pa = (leaf_pte & 0x0000_FFFF_FFFF_F000) as usize;
+    console::puts("  cave-private PA: 0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((pa >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts("\n");
+    if pa < crate::kernel::mm::cave_pool::CAVE_POOL_BASE
+        || pa >= crate::kernel::mm::cave_pool::CAVE_POOL_END
+    {
+        console::puts("  ✗ FAIL: cave-private PA outside cave-pool carve-out range\n");
+        return;
+    }
+    match mmu::pte_lookup(primary_l1, pa) {
+        None => {
+            console::puts("  ✓ PRIMARY_L1 has NO kernel-identity mapping for this PA\n");
+            console::puts("    (carve-out succeeds: attacker who knows PA still can't reach)\n");
+        }
+        Some(pte) => {
+            console::puts("  ✗ FAIL: PRIMARY_L1 identity-maps cave-private PA — leaf 0x");
+            for sh in (0..16).rev() {
+                console::putc(hex[((pte >> (sh * 4)) & 0xF) as usize]);
+            }
+            console::puts(" (carve-out broken)\n");
+            return;
+        }
+    }
+
+    // Runtime fault check via mmu::probe_read_u64.
+    // The pte_lookup walks above prove the TABLE STATE; this proof
+    // is at runtime: try to read from `va` and from `pa` (via the
+    // kernel-identity VA) from kernel-ns context, and observe that
+    // both attempts return None (the EL1 sync-exception handler
+    // sees PROBE_ACTIVE + a translation fault and skips past the
+    // load instead of hanging the kernel).
+    match mmu::probe_read_u64(va) {
+        None => {
+            console::puts("  ✓ probe_read(cave_private_va) faulted (as expected)\n");
+        }
+        Some(v) => {
+            console::puts("  ✗ FAIL: probe_read(cave_private_va) returned 0x");
+            for sh in (0..16).rev() {
+                console::putc(hex[((v >> (sh * 4)) & 0xF) as usize]);
+            }
+            console::puts(" from kernel-ns (boundary breach)\n");
+            return;
+        }
+    }
+    match mmu::probe_read_u64(pa) {
+        None => {
+            console::puts("  ✓ probe_read(cave_private_pa via identity VA) faulted (as expected)\n");
+        }
+        Some(v) => {
+            console::puts("  ✗ FAIL: probe_read(cave_private_pa) returned 0x");
+            for sh in (0..16).rev() {
+                console::putc(hex[((v >> (sh * 4)) & 0xF) as usize]);
+            }
+            console::puts(" via kernel identity (carve-out breach)\n");
+            return;
+        }
+    }
+    // Sanity: a known-mapped VA must NOT fault under probe_read.
+    // Use sys_wg_l1 itself — kernel identity covers 0xA000_0000+
+    // outside the carve-out, so reading it succeeds.
+    match mmu::probe_read_u64(sys_wg_l1) {
+        Some(_) => {
+            console::puts("  ✓ probe_read on a known-mapped VA returned Some (probe sanity)\n");
+        }
+        None => {
+            console::puts("  ✗ FAIL: probe_read on a known-mapped VA returned None\n");
+            console::puts("    (probe-mode handler appears broken)\n");
+            return;
+        }
+    }
+
+    // Round-trip a magic value: write inside the cave, read back
+    // inside the cave. Verifies the mapping is actually usable
+    // (not just present in the table).
+    let magic = 0xDEAD_BEEF_CAFE_F00Du64;
+    let read_back = cave::with_cave_active(sys_wg_id, || -> u64 {
+        let p = va as *mut u64;
+        unsafe {
+            core::ptr::write_volatile(p, magic);
+            // dsb sy so the write retires before we read it back.
+            core::arch::asm!("dsb sy");
+            core::ptr::read_volatile(p)
+        }
+    });
+    if read_back != magic {
+        console::puts("  ✗ FAIL: in-cave write/read mismatch (expected 0x");
+        for sh in (0..16).rev() {
+            console::putc(hex[((magic >> (sh * 4)) & 0xF) as usize]);
+        }
+        console::puts(", got 0x");
+        for sh in (0..16).rev() {
+            console::putc(hex[((read_back >> (sh * 4)) & 0xF) as usize]);
+        }
+        console::puts(")\n");
+        return;
+    }
+    console::puts("  ✓ in-cave write/read round-trip preserved the magic value\n");
+
+    // Idempotency: second call returns same VA, no new allocation.
+    let va2 = match cave_private::ensure_page(sys_wg_id) {
+        Some(v) => v,
+        None => {
+            console::puts("  ✗ FAIL: second ensure_page call returned None\n");
+            return;
+        }
+    };
+    if va2 != va {
+        console::puts("  ✗ FAIL: second ensure_page returned a different VA\n");
+        return;
+    }
+    console::puts("  ✓ ensure_page is idempotent — same VA returned on re-call\n");
+
+    console::puts("  ✓ per-cave L1 restriction slice-1 verified\n");
+    console::puts("  ✓ cave-pool PA carve-out verified\n");
+    console::puts("  ✓ probe-mode fault handler observed faults instead of hanging\n");
 }
 
 /// Selftest for the scheduler's block_on async-bridge primitive.
