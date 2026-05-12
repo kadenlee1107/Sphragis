@@ -181,13 +181,24 @@ pub struct ResponderState {
 }
 
 /// Derived transport keys — used by `transport_send` / `transport_recv`
-/// after handshake completes.
-#[derive(Clone)]
+/// after handshake completes. `recv_counter` here is the window TOP
+/// (highest accepted counter); `recv_window_bits` is the
+/// sliding-window bitmap where bit `i` indicates "counter (top - i)
+/// has been accepted." Together they implement the §5.4.6 anti-
+/// replay window with a 64-packet history.
+///
+/// First-packet case: `recv_counter == 0 && recv_window_bits == 0`
+/// means "no packet accepted yet" — any counter is accepted on the
+/// first call (no replay history exists). On a real WG session
+/// counter 0 *is* a valid first packet, and `recv_window_bits` set
+/// to 1 after first accept marks counter-zero seen.
+#[derive(Clone, Copy)]
 pub struct TransportKeys {
     pub send_key: [u8; KEY_LEN],
     pub recv_key: [u8; KEY_LEN],
     pub send_counter: u64,
     pub recv_counter: u64,
+    pub recv_window_bits: u64,
 }
 
 /// Build the initial handshake-prologue state both sides share
@@ -357,6 +368,7 @@ pub fn responder_send_response(
             recv_key: parts[0],
             send_counter: 0,
             recv_counter: 0,
+            recv_window_bits: 0,
         },
     ))
 }
@@ -393,7 +405,62 @@ pub fn initiator_finish_handshake(
         recv_key: parts[1],
         send_counter: 0,
         recv_counter: 0,
+        recv_window_bits: 0,
     })
+}
+
+/// Width of the replay-window history, in packets. WireGuard's spec
+/// (§5.4.6) sets a minimum of 64; some implementations widen to 128
+/// or 8192. 64 fits in a single `u64` and is enough for the typical
+/// reorder distance on a WAN.
+pub const REPLAY_WINDOW_WIDTH: u64 = 64;
+
+/// Check whether `counter` should be accepted given the current
+/// `(recv_counter top, recv_window_bits)` state, without mutating
+/// it. Pure function — the actual advance happens in
+/// `transport_recv` only after the AEAD tag verifies (we don't want
+/// an attacker spamming junk packets to slide our window past
+/// legitimate ones).
+fn replay_window_accepts(top: u64, bits: u64, counter: u64) -> bool {
+    // First-ever packet (no history). Accept.
+    if top == 0 && bits == 0 { return true; }
+
+    if counter > top {
+        // Ahead of the window — always accept (window will slide).
+        return true;
+    }
+    let dist = top - counter;
+    if dist >= REPLAY_WINDOW_WIDTH {
+        return false; // too old, falls out of the window
+    }
+    // Within the window: accept iff this counter hasn't been seen
+    // yet. Bit 0 corresponds to `top`; bit `dist` to `top - dist`.
+    (bits & (1u64 << dist)) == 0
+}
+
+/// Update `(recv_counter, recv_window_bits)` to mark `counter` as
+/// accepted. Caller has already verified `replay_window_accepts`
+/// and the AEAD tag; this only manipulates the bitmap.
+fn replay_window_advance(top: &mut u64, bits: &mut u64, counter: u64) {
+    if *top == 0 && *bits == 0 {
+        // First-ever packet — initialise.
+        *top = counter;
+        *bits = 1;
+        return;
+    }
+    if counter > *top {
+        let shift = counter - *top;
+        if shift >= REPLAY_WINDOW_WIDTH {
+            *bits = 0;
+        } else {
+            *bits <<= shift;
+        }
+        *bits |= 1;
+        *top = counter;
+    } else {
+        let dist = *top - counter;
+        *bits |= 1u64 << dist;
+    }
 }
 
 /// Transport-data send — counter-nonce ChaCha20-Poly1305 over the
@@ -407,17 +474,24 @@ pub fn transport_send(keys: &mut TransportKeys, payload: &[u8])
 }
 
 /// Transport-data recv — verifies the AEAD tag, decrypts, returns
-/// the plaintext. Replay protection (sliding-window of recv_counter)
-/// is added in Phase 2 alongside the real socket; today we only do
-/// monotonic strict-counter checks.
+/// the plaintext. Phase-2.6 replay protection: a 64-packet
+/// sliding window (`recv_counter` = window top, `recv_window_bits`
+/// = bitmap). Rejects counters that are
+///   - more than `REPLAY_WINDOW_WIDTH` packets below the top
+///     (clearly an old replay), or
+///   - within the window but already accepted.
+/// Out-of-order legit packets (any unseen counter <= top within
+/// the window) are accepted. The window only advances on
+/// successful AEAD verification — junk packets can't slide our
+/// view past real ones.
 pub fn transport_recv(keys: &mut TransportKeys, counter: u64, ciphertext: &[u8])
     -> Result<Vec<u8>, WgError>
 {
-    if counter < keys.recv_counter {
-        return Err(WgError::BadLen); // replay
+    if !replay_window_accepts(keys.recv_counter, keys.recv_window_bits, counter) {
+        return Err(WgError::BadMac); // replay or pre-window
     }
     let pt = aead_open(&keys.recv_key, counter, ciphertext, &[])?;
-    keys.recv_counter = counter.wrapping_add(1);
+    replay_window_advance(&mut keys.recv_counter, &mut keys.recv_window_bits, counter);
     Ok(pt)
 }
 
@@ -695,6 +769,125 @@ pub fn parse_transport_msg(bytes: &[u8]) -> Result<ParsedTransport<'_>, WgError>
         counter,
         ct_with_tag: &bytes[TRANSPORT_HDR_LEN..],
     })
+}
+
+/// Phase-2.6 replay-window selftest. Drives the spec scenarios:
+///   1. Forward progress: counters 0..=3 accepted in order.
+///   2. Strict replay: re-receive counter 1 → reject.
+///   3. Out-of-order within the window: jump top to 10, then
+///      receive counter 5 (unseen + within 64-wide window) →
+///      accept; replay of 5 → reject.
+///   4. Forward jump: counter 100 → accept (window shifts).
+///   5. Below window: counter 5 (now far below top) → reject.
+///   6. Forged ciphertext at an unseen counter → reject without
+///      advancing the window (so a flood of bad packets can't
+///      slide the view past legit ones).
+///
+/// All seven scenarios go through the actual `transport_send` +
+/// `transport_recv` paths with arbitrary `send_counter` values
+/// (we mutate `keys.send_counter` between sends to drive the
+/// receiver through specific counter values).
+///
+/// Returns true if every scenario behaved as expected.
+pub fn selftest_replay_window() -> Result<bool, WgError> {
+    let initiator = WgKeypair::generate();
+    let responder = WgKeypair::generate();
+    let timestamp = [0u8; TIMESTAMP_LEN];
+
+    // Bring up a session via the standard handshake.
+    let (mut init_state, init_eph_pk, enc_static, enc_ts) =
+        initiator_send_init(&initiator, &responder.static_pk, &timestamp)?;
+    let (mut resp_state, _) = responder_consume_init(
+        &responder, &init_eph_pk, &enc_static, &enc_ts,
+    )?;
+    let (enc_empty, resp_eph_pk, mut resp_keys) =
+        responder_send_response(&mut resp_state, &init_eph_pk)?;
+    let mut init_keys = initiator_finish_handshake(
+        &initiator, &mut init_state, &resp_eph_pk, &enc_empty,
+    )?;
+
+    // Convenience: produce a ciphertext encoded under `init_keys`
+    // with a specific counter. `transport_send` consumes the
+    // sender's counter monotonically, so we just override it.
+    let send_at = |k: &mut TransportKeys, c: u64, msg: &[u8]| -> Result<Vec<u8>, WgError> {
+        k.send_counter = c;
+        let ct = transport_send(k, msg)?;
+        // transport_send bumps send_counter; reset for next override.
+        Ok(ct)
+    };
+
+    // 1. Forward progress: counters 0..=3 all accept.
+    for c in 0u64..=3 {
+        let ct = send_at(&mut init_keys, c, b"hello")?;
+        let pt = transport_recv(&mut resp_keys, c, &ct)?;
+        if pt.as_slice() != b"hello" { return Ok(false); }
+    }
+    // After forward progress, top=3, bits has 0,1,2,3 set (low 4
+    // bits = 0b1111).
+    if resp_keys.recv_counter != 3 { return Ok(false); }
+    if resp_keys.recv_window_bits & 0xF != 0xF { return Ok(false); }
+
+    // 2. Strict replay: re-send counter 1 (re-encrypt with the
+    // same nonce — AEAD will succeed because nonce is part of the
+    // input). Replay window should reject before AEAD runs.
+    let replay_ct = send_at(&mut init_keys, 1, b"hello")?;
+    match transport_recv(&mut resp_keys, 1, &replay_ct) {
+        Err(WgError::BadMac) => {} // expected (replay rejection)
+        _ => return Ok(false),
+    }
+
+    // 3. Out-of-order within window: send counter 10, then 5.
+    let ct10 = send_at(&mut init_keys, 10, b"hello")?;
+    transport_recv(&mut resp_keys, 10, &ct10)?;
+    if resp_keys.recv_counter != 10 { return Ok(false); }
+
+    let ct5 = send_at(&mut init_keys, 5, b"hello")?;
+    let pt5 = transport_recv(&mut resp_keys, 5, &ct5)?;
+    if pt5.as_slice() != b"hello" { return Ok(false); }
+    // bit (10 - 5 = 5) should now be set.
+    if resp_keys.recv_window_bits & (1u64 << 5) == 0 { return Ok(false); }
+
+    // Replay of 5 → reject.
+    let replay_ct5 = send_at(&mut init_keys, 5, b"hello")?;
+    match transport_recv(&mut resp_keys, 5, &replay_ct5) {
+        Err(WgError::BadMac) => {} // expected
+        _ => return Ok(false),
+    }
+
+    // 4. Forward jump: counter 100 (well past the window width).
+    let ct100 = send_at(&mut init_keys, 100, b"hello")?;
+    transport_recv(&mut resp_keys, 100, &ct100)?;
+    if resp_keys.recv_counter != 100 { return Ok(false); }
+    // The window shifted out everything before top - 64 = 36.
+    // bit 0 = counter 100, and that's the only one set.
+    if resp_keys.recv_window_bits != 1 { return Ok(false); }
+
+    // 5. Below window: counter 5 is now top - 95 < 0 (would need
+    // negative distance; we treat this as "too old" → reject).
+    let ct5_again = send_at(&mut init_keys, 5, b"hello")?;
+    match transport_recv(&mut resp_keys, 5, &ct5_again) {
+        Err(WgError::BadMac) => {} // expected (pre-window)
+        _ => return Ok(false),
+    }
+
+    // 6. Forged ciphertext at an unseen counter (within the
+    // window). The AEAD should reject; the window should NOT
+    // advance / set the bit.
+    let pre_top = resp_keys.recv_counter;
+    let pre_bits = resp_keys.recv_window_bits;
+    let forged_counter = 99u64; // top - 1, within window, unseen
+    // Build "ciphertext" that's deliberately wrong (just zeros of
+    // the right size). transport_recv must reject before touching
+    // the window state.
+    let bogus = alloc::vec![0u8; 16 + 5]; // 5-byte plaintext + 16-byte tag
+    match transport_recv(&mut resp_keys, forged_counter, &bogus) {
+        Err(WgError::AeadFail) => {} // expected
+        _ => return Ok(false),
+    }
+    if resp_keys.recv_counter != pre_top { return Ok(false); }
+    if resp_keys.recv_window_bits != pre_bits { return Ok(false); }
+
+    Ok(true)
 }
 
 /// Phase-2 wire-framing selftest: drives a full handshake through

@@ -74,6 +74,11 @@ struct PrivateState {
     peer_recv_key: [[u8; 32]; MAX_PEERS],
     peer_send_counter: [u64; MAX_PEERS],
     peer_recv_counter: [u64; MAX_PEERS],
+    /// Replay-window bitmap per peer (whitepaper §5.4.6). Bit `i`
+    /// indicates "counter (peer_recv_counter - i) has been
+    /// accepted." Paired with `peer_recv_counter` (which acts as
+    /// the window top). Width fixed at `REPLAY_WINDOW_WIDTH = 64`.
+    peer_recv_window_bits: [u64; MAX_PEERS],
 }
 
 /// VA where `PrivateState` lives, set on successful `init()`. 0
@@ -307,6 +312,7 @@ pub fn register_peer(peer_static_pk: [u8; wireguard::KEY_LEN])
                 s.peer_has_session[i] = 0;
                 s.peer_send_counter[i] = 0;
                 s.peer_recv_counter[i] = 0;
+                s.peer_recv_window_bits[i] = 0;
                 // Wipe any stale key bytes from a previous occupant.
                 s.peer_send_key[i] = [0u8; 32];
                 s.peer_recv_key[i] = [0u8; 32];
@@ -333,6 +339,7 @@ pub fn close_peer(peer_id: PeerId) -> Result<(), SysWgError> {
         s.peer_recv_key[i] = [0u8; 32];
         s.peer_send_counter[i] = 0;
         s.peer_recv_counter[i] = 0;
+        s.peer_recv_window_bits[i] = 0;
         Ok(())
     })
 }
@@ -401,6 +408,7 @@ pub fn complete_handshake_as_responder(
         s.peer_recv_key[i] = transport_keys.recv_key;
         s.peer_send_counter[i] = transport_keys.send_counter;
         s.peer_recv_counter[i] = transport_keys.recv_counter;
+        s.peer_recv_window_bits[i] = transport_keys.recv_window_bits;
         s.peer_has_session[i] = 1;
 
         Ok(ResponderWire {
@@ -432,6 +440,7 @@ pub fn wrap(peer_id: PeerId, plaintext: &[u8]) -> Result<Vec<u8>, SysWgError> {
             recv_key: s.peer_recv_key[i],
             send_counter: s.peer_send_counter[i],
             recv_counter: s.peer_recv_counter[i],
+            recv_window_bits: s.peer_recv_window_bits[i],
         };
         let ct = wireguard::transport_send(&mut keys, plaintext)?;
         s.peer_send_counter[i] = keys.send_counter;
@@ -458,9 +467,11 @@ pub fn unwrap(peer_id: PeerId, counter: u64, ciphertext: &[u8])
             recv_key: s.peer_recv_key[i],
             send_counter: s.peer_send_counter[i],
             recv_counter: s.peer_recv_counter[i],
+            recv_window_bits: s.peer_recv_window_bits[i],
         };
         let pt = wireguard::transport_recv(&mut keys, counter, ciphertext)?;
         s.peer_recv_counter[i] = keys.recv_counter;
+        s.peer_recv_window_bits[i] = keys.recv_window_bits;
         Ok(pt)
     })
 }

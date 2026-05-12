@@ -11,6 +11,80 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — WireGuard Phase 2.6: sliding-window replay protection
+
+**Context:** Phase 1 `transport_recv` used strict-monotonic counter
+enforcement — any counter ≤ the last accepted one was rejected.
+That meant ONE out-of-order legitimate packet would tear down the
+session even on a perfectly clean network. Per WG whitepaper §5.4.6
+the responder is supposed to maintain a 64-packet sliding window
+that tolerates reorder while still rejecting replays. This commit
+ships that.
+
+### What shipped
+
+  * `src/net/wireguard.rs`:
+    - `TransportKeys` gains `recv_window_bits: u64` alongside the
+      existing `recv_counter` (now interpreted as the window TOP).
+      Bit `i` of `recv_window_bits` marks "counter (top - i) has
+      been accepted." First-ever packet detected as
+      `top == 0 && bits == 0`.
+    - `REPLAY_WINDOW_WIDTH = 64` constant (spec minimum).
+    - `replay_window_accepts(top, bits, counter) -> bool` —
+      pure helper. Returns true if the counter is ahead of
+      `top`, or within `[top - 63, top]` and unseen. False if
+      below the window or already-seen-within-window.
+    - `replay_window_advance(top, bits, counter)` — caller runs
+      this only after AEAD verification. Shifts the bitmap when
+      counter > top; OR-s in the new bit otherwise. Junk
+      packets that fail AEAD can't move the window past
+      legitimate ones.
+    - `transport_recv` now calls `replay_window_accepts` first
+      (returns `BadMac` on reject), runs the AEAD, and only
+      then advances the window. The error code changed from
+      `BadLen` to `BadMac` for replays — they're not malformed,
+      they're authenticatable-but-rejected.
+    - `selftest_replay_window()` exercises six scenarios:
+      forward progress, strict replay rejection, out-of-order
+      within window + replay-of-that, forward jump past window
+      width, below-window rejection, and forged-ciphertext at
+      an unseen counter (must reject without advancing).
+  * `src/batcave/sys_wg_service.rs`:
+    - `PrivateState` gains `peer_recv_window_bits: [u64;
+      MAX_PEERS]`. Stored in the cave-private page like the rest
+      of the per-peer state.
+    - `register_peer` / `close_peer` zero the new field.
+    - `complete_handshake_as_responder` initialises it from
+      `transport_keys.recv_window_bits` (=0).
+    - `wrap` / `unwrap` materialise `TransportKeys.recv_window_bits`
+      from the SoA, then write the bumped value back. The window
+      survives across IPC calls.
+  * `wg-replay-selftest` shell command + headless harness:
+    six per-scenario `✓` lines on success, terminal marker
+    `✓ Phase-2.6 replay window verified`.
+
+### Verification
+
+```
+✓ forward progress (counters 0..=3 accepted)
+✓ strict replay rejected (BadMac)
+✓ out-of-order within window accepted; subsequent replay rejected
+✓ forward jump shifted window correctly
+✓ below-window counter rejected
+✓ forged ciphertext rejected WITHOUT advancing window
+✓ Phase-2.6 replay window verified
+```
+
+Full sweep: boot-smoke, sys-caves, cave-private, sys-wg, wg-wire,
+wg-replay — all PASS.
+
+### Branch status
+
+`feat/wireguard-phase2.6-replay-window` (current, branched from
+main at `8dc85d43`). Ready to commit + push.
+
+---
+
 ## 2026-05-12 — Mac — WireGuard Phase 2: wire framing + mac1 verification
 
 **Context:** Phase 1 (merged earlier today) shipped the Noise IK

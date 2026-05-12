@@ -337,6 +337,7 @@ fn execute(cmd: &str) {
         "pq-comms-selftest"   => cmd_pq_comms_selftest(),
         "wg-selftest"         => cmd_wg_selftest(),
         "wg-wire-selftest"    => cmd_wg_wire_selftest(),
+        "wg-replay-selftest"  => cmd_wg_replay_selftest(),
         "shm-selftest"        => cmd_shm_selftest(),
         "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
@@ -3817,6 +3818,40 @@ fn cmd_wg_wire_selftest() {
         }
         Err(_) => {
             console::puts("  ✗ FAIL: wire round-trip handshake error\n");
+        }
+    }
+}
+
+/// WireGuard Phase 2.6 sliding-window replay-protection selftest.
+/// Drives `wireguard::selftest_replay_window` which exercises six
+/// spec scenarios (whitepaper §5.4.6):
+///   1. forward progress (counters 0..=3 all accept)
+///   2. strict replay rejected
+///   3. out-of-order within window accepted; replay of it rejected
+///   4. forward jump past window width slides view
+///   5. counter below shifted window rejected
+///   6. forged-AEAD at unseen counter rejected WITHOUT advancing
+///      the window (junk-flood can't slide view past legit packets)
+fn cmd_wg_replay_selftest() {
+    use crate::net::wireguard;
+    console::puts_hi("  WIREGUARD PHASE-2.6 REPLAY-WINDOW SELF-TEST\n");
+    console::puts("  Six scenarios per WG whitepaper §5.4.6.\n");
+    match wireguard::selftest_replay_window() {
+        Ok(true) => {
+            console::puts("  ✓ forward progress (counters 0..=3 accepted)\n");
+            console::puts("  ✓ strict replay rejected (BadMac)\n");
+            console::puts("  ✓ out-of-order within window accepted; subsequent replay rejected\n");
+            console::puts("  ✓ forward jump shifted window correctly\n");
+            console::puts("  ✓ below-window counter rejected\n");
+            console::puts("  ✓ forged ciphertext rejected WITHOUT advancing window\n");
+            console::puts("  ✓ Phase-2.6 replay window verified\n");
+        }
+        Ok(false) => {
+            console::puts("  ✗ FAIL: selftest scenario returned wrong state\n");
+            console::puts("    (some assertion inside selftest_replay_window failed)\n");
+        }
+        Err(_) => {
+            console::puts("  ✗ FAIL: handshake or AEAD error inside selftest\n");
         }
     }
 }
