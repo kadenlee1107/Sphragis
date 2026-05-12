@@ -11,6 +11,98 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — EL1 probe-mode fault handler: runtime carve-out proof
+
+**Context:** The cave-pool carve-out arc proved the table state
+("PRIMARY_L1 has no kernel-identity mapping for the cave-pool
+PA range") via `pte_lookup` walks. The remaining work was to
+verify the *runtime* behavior — that a kernel-ns access to the
+carve-out VA or PA actually faults at the MMU walker. Before
+this commit, trying to dereference such an address from
+kernel-ns either hung the walker or hit the demand-page rejection
+and panicked. Neither is useful for a selftest.
+
+This commit installs a probe-mode primitive so the test can
+*attempt* a cross-boundary read and observe the fault cleanly.
+
+### What shipped
+
+  * `mmu::probe_read_u64(va) -> Option<u64>` — new public API.
+    Sets `mmu::PROBE_ACTIVE`, issues an `ldr` to `va`, returns
+    `Some(value)` if it succeeds or `None` if the access faults.
+    Single-threaded contract (no nesting); Bat_OS today is
+    cooperative single-CPU so the global-state implementation
+    is sufficient.
+  * `mmu::PROBE_ACTIVE` / `mmu::PROBE_FAULTED` (AtomicBool).
+    Coordination flags between the probe and the EL1 sync-
+    exception handler.
+  * `kernel::arch::handle_sync_exception_inner`: gains a pre-
+    dispatch hook. If `PROBE_ACTIVE` is set and the EC is a data
+    or instruction abort (0x24/0x25/0x20/0x21), the handler
+    sets `PROBE_FAULTED`, advances `(*frame).elr` by 4 (past the
+    faulting `ldr`), and returns. The probe sees the flag on
+    resume and returns None instead of the would-be value.
+  * `cave-private-selftest` selftest extension. New runtime
+    assertions on top of the existing table-walk proofs:
+    - `probe_read(cave_private_va)` from kernel-ns context →
+      expect None (the VA is unmapped in PRIMARY_L1).
+    - `probe_read(cave_private_pa via identity VA)` from
+      kernel-ns context → expect None (the PA's identity VA is
+      carved out of PRIMARY_L1).
+    - `probe_read(sys_wg_l1)` (a known-mapped kernel VA) →
+      expect Some (probe sanity — handler doesn't break normal
+      reads).
+    Terminal success marker is now `probe-mode fault handler
+    observed faults instead of hanging`.
+
+### Verification
+
+```
+✓ probe_read(cave_private_va) faulted (as expected)
+✓ probe_read(cave_private_pa via identity VA) faulted (as expected)
+✓ probe_read on a known-mapped VA returned Some (probe sanity)
+✓ in-cave write/read round-trip preserved the magic value
+✓ ensure_page is idempotent — same VA returned on re-call
+✓ per-cave L1 restriction slice-1 verified
+✓ cave-pool PA carve-out verified
+✓ probe-mode fault handler observed faults instead of hanging
+```
+
+Full sweep: boot-smoke, sys-caves-selftest, sys-wg-selftest, and
+cave-private-selftest — all PASS.
+
+### What this earns
+
+The cave-private boundary is now PROVEN at runtime, not just on
+paper. A kernel-ns code path that tries to read a cave-private
+address — by VA or by PA — fails at the hardware MMU walker.
+The selftest demonstrates this on every boot.
+
+The probe-mode handler is also generally useful: any future
+kernel code that needs to "check whether a VA is reachable
+without crashing if it isn't" can call `mmu::probe_read_u64`.
+
+### Known limitations
+
+  * Single-threaded contract — no nested probes, no
+    concurrent probes from different CPUs. Bat_OS is
+    cooperative single-CPU; SMP will need per-CPU
+    probe state.
+  * Probe-mode swallows ALL EL1 faults at the data/inst-abort
+    classes while active. That's intentional for the contract
+    ("if reading would fault at all, return None") but means
+    a genuine kernel bug inside the probe call would be hidden.
+    Mitigation: probes are tiny — just the `ldr` — so the only
+    fault they can produce is the one we're testing for.
+
+### Branch status
+
+`feat/per-cave-l1-restrict` (carve-out arc committed as
+`08c1488f`; this lands as the final follow-up — the runtime
+fault handler). Will commit + push.
+
+---
+
 ## 2026-05-12 — Mac — cave-pool PA carve-out: closes the kernel-identity leak
 
 **Context:** With sys-wg's state already living at a cave-private

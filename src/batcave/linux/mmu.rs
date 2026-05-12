@@ -655,6 +655,68 @@ pub fn setup_native_cave_l1(cave_slot: usize) -> Result<usize, &'static str> {
 ///   bits [29:21] = L2 index (9 bits)
 ///   bits [20:12] = L3 index (9 bits)
 ///   bits [11:0]  = byte offset
+/// Probe-read primitive: attempt to read a u64 at `va` and return
+/// `Some(value)` on success, `None` if the access would fault.
+///
+/// How it works:
+///   - `PROBE_ACTIVE` is set before issuing the load.
+///   - If the load translates cleanly, the asm completes and we
+///     fall through to clearing the flag + returning `Some(value)`.
+///   - If the load faults (translation, permission, anything that
+///     would normally panic the kernel), the EL1 sync-exception
+///     handler in `kernel::arch::handle_sync_exception_inner` sees
+///     `PROBE_ACTIVE == true`, records the fault via
+///     `PROBE_FAULTED`, advances `ELR_EL1` past the faulting
+///     instruction (4 bytes), and `eret`s. We resume on the next
+///     statement, observe the flag, return `None`.
+///
+/// Single-threaded contract: callers must not nest `probe_read_u64`
+/// calls. Bat_OS today is cooperative single-CPU, so this is
+/// sufficient; a future SMP arc replaces the globals with per-CPU
+/// state.
+///
+/// Used by per-cave isolation selftests that need to *demonstrate*
+/// the MMU fault on a cross-cave access without hanging the kernel.
+/// Production code should rarely need this — most kernel paths
+/// have known-valid VAs.
+pub fn probe_read_u64(va: usize) -> Option<u64> {
+    use core::sync::atomic::Ordering;
+    PROBE_ACTIVE.store(true, Ordering::Release);
+    PROBE_FAULTED.store(false, Ordering::Release);
+
+    // Pre-initialise so an asm that doesn't actually write the
+    // output register (because the load faulted and ELR skipped
+    // past it) leaves a defined value here — we won't return it
+    // (PROBE_FAULTED will be set), but Rust's `inout(reg)` requires
+    // a defined input.
+    let mut value: u64 = 0;
+    unsafe {
+        core::arch::asm!(
+            "ldr {v}, [{a}]",
+            a = in(reg) va,
+            v = inout(reg) value,
+            options(nostack, preserves_flags),
+        );
+    }
+    PROBE_ACTIVE.store(false, Ordering::Release);
+    if PROBE_FAULTED.load(Ordering::Acquire) {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+/// True while `probe_read_u64` is mid-flight. The sync-exception
+/// handler reads this to decide whether to recover from a fault
+/// or panic.
+pub static PROBE_ACTIVE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Set by the sync-exception handler if it recovers from a fault
+/// inside a `probe_read_u64`. Cleared on each new probe call.
+pub static PROBE_FAULTED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 pub fn pte_lookup(l1_phys: usize, va: usize) -> Option<u64> {
     if l1_phys == 0 { return None; }
     let l1_idx = (va >> 30) & 0x1FF;

@@ -3378,18 +3378,56 @@ fn cmd_cave_private_selftest() {
         }
     }
 
+    // Runtime fault check via mmu::probe_read_u64.
+    // The pte_lookup walks above prove the TABLE STATE; this proof
+    // is at runtime: try to read from `va` and from `pa` (via the
+    // kernel-identity VA) from kernel-ns context, and observe that
+    // both attempts return None (the EL1 sync-exception handler
+    // sees PROBE_ACTIVE + a translation fault and skips past the
+    // load instead of hanging the kernel).
+    match mmu::probe_read_u64(va) {
+        None => {
+            console::puts("  ✓ probe_read(cave_private_va) faulted (as expected)\n");
+        }
+        Some(v) => {
+            console::puts("  ✗ FAIL: probe_read(cave_private_va) returned 0x");
+            for sh in (0..16).rev() {
+                console::putc(hex[((v >> (sh * 4)) & 0xF) as usize]);
+            }
+            console::puts(" from kernel-ns (boundary breach)\n");
+            return;
+        }
+    }
+    match mmu::probe_read_u64(pa) {
+        None => {
+            console::puts("  ✓ probe_read(cave_private_pa via identity VA) faulted (as expected)\n");
+        }
+        Some(v) => {
+            console::puts("  ✗ FAIL: probe_read(cave_private_pa) returned 0x");
+            for sh in (0..16).rev() {
+                console::putc(hex[((v >> (sh * 4)) & 0xF) as usize]);
+            }
+            console::puts(" via kernel identity (carve-out breach)\n");
+            return;
+        }
+    }
+    // Sanity: a known-mapped VA must NOT fault under probe_read.
+    // Use sys_wg_l1 itself — kernel identity covers 0xA000_0000+
+    // outside the carve-out, so reading it succeeds.
+    match mmu::probe_read_u64(sys_wg_l1) {
+        Some(_) => {
+            console::puts("  ✓ probe_read on a known-mapped VA returned Some (probe sanity)\n");
+        }
+        None => {
+            console::puts("  ✗ FAIL: probe_read on a known-mapped VA returned None\n");
+            console::puts("    (probe-mode handler appears broken)\n");
+            return;
+        }
+    }
+
     // Round-trip a magic value: write inside the cave, read back
     // inside the cave. Verifies the mapping is actually usable
     // (not just present in the table).
-    // DEBUG: read sys_wg_l1[5] BEFORE the closure.
-    let before_closure: u64;
-    unsafe {
-        core::arch::asm!("ldr {v}, [{a}]",
-            a = in(reg) sys_wg_l1 + 5 * 8, v = out(reg) before_closure);
-    }
-    console::puts("  [DEBUG] sys_wg_l1[5] BEFORE closure = ");
-    print_num(before_closure as usize);
-    console::puts("\n");
     let magic = 0xDEAD_BEEF_CAFE_F00Du64;
     let read_back = cave::with_cave_active(sys_wg_id, || -> u64 {
         let p = va as *mut u64;
@@ -3400,14 +3438,6 @@ fn cmd_cave_private_selftest() {
             core::ptr::read_volatile(p)
         }
     });
-    let after_closure: u64;
-    unsafe {
-        core::arch::asm!("ldr {v}, [{a}]",
-            a = in(reg) sys_wg_l1 + 5 * 8, v = out(reg) after_closure);
-    }
-    console::puts("  [DEBUG] sys_wg_l1[5] AFTER closure = ");
-    print_num(after_closure as usize);
-    console::puts("\n");
     if read_back != magic {
         console::puts("  ✗ FAIL: in-cave write/read mismatch (expected 0x");
         for sh in (0..16).rev() {
@@ -3438,6 +3468,7 @@ fn cmd_cave_private_selftest() {
 
     console::puts("  ✓ per-cave L1 restriction slice-1 verified\n");
     console::puts("  ✓ cave-pool PA carve-out verified\n");
+    console::puts("  ✓ probe-mode fault handler observed faults instead of hanging\n");
 }
 
 /// Selftest for the scheduler's block_on async-bridge primitive.

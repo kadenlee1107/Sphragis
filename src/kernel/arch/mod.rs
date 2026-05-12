@@ -635,7 +635,20 @@ pub extern "C" fn handle_sync_exception(frame: *mut TrapFrame) {
 }
 
 fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
-
+    // PROBE-MODE RECOVERY (must run before any other dispatch).
+    // If a `mmu::probe_read_u64` is mid-flight (PROBE_ACTIVE) and we
+    // hit a fault, advance ELR past the faulting `ldr` (4 bytes) and
+    // set PROBE_FAULTED so the probe returns None instead of hanging
+    // the kernel. We accept any EL1 fault here — translation,
+    // permission, alignment, etc. — because the probe contract is
+    // "if reading would have any problem at all, return None."
+    if crate::batcave::linux::mmu::PROBE_ACTIVE.load(core::sync::atomic::Ordering::Acquire)
+        && (ec == 0x24 || ec == 0x25 || ec == 0x20 || ec == 0x21)
+    {
+        crate::batcave::linux::mmu::PROBE_FAULTED.store(true, core::sync::atomic::Ordering::Release);
+        unsafe { (*frame).elr = (*frame).elr.wrapping_add(4); }
+        return;
+    }
 
     match ec {
         0x15 => {
