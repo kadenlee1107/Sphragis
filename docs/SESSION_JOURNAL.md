@@ -11,6 +11,93 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — WireGuard Phase 2: wire framing + mac1 verification
+
+**Context:** Phase 1 (merged earlier today) shipped the Noise IK
+crypto + transport AEAD as a library API. Phase 2 wraps that in
+the byte layout WireGuard peers transmit over UDP, so the path to
+real `wg-quick` interop is now framing-complete on our side. UDP
+plumbing + replay-protection sliding-window are Phase 2.5/2.6 —
+this commit is just the wire encoders/parsers + mac1.
+
+### What shipped
+
+  * `src/net/wireguard.rs` Phase-2 section (~250 lines):
+    - Constants: `MSG_TYPE_INIT/RESPONSE/COOKIE/TRANSPORT`,
+      `INIT_MSG_LEN = 148`, `RESPONSE_MSG_LEN = 92`,
+      `COOKIE_MSG_LEN = 64`, `TRANSPORT_HDR_LEN = 16` — all per
+      whitepaper §5.4.
+    - `mac1_key_for(static_pk)` derives the keyed-MAC key as
+      `BLAKE2s(LABEL_MAC1 || static_pk)` (§5.4.4). mac1 protects
+      against trivially-spoofed messages that don't even know
+      which peer they're trying to talk to — cheap rejection at
+      parse time before the expensive X25519/AEAD work.
+    - `encode_init_msg / parse_init_msg` build/verify the
+      148-byte Handshake Initiation. mac1 is computed against
+      the responder's static pubkey (encoder) and constant-time
+      compared against the bytes (parser). mac2 left zero —
+      Phase 2 minimum; peers accept zero mac2 unless under DoS
+      pressure (cookie path is a later arc).
+    - `encode_response_msg / parse_response_msg` build/verify
+      the 92-byte Handshake Response, mac1 against the
+      initiator's static pubkey.
+    - `encode_transport_msg / parse_transport_msg` build/parse
+      the 16-byte transport header (type + reserved + receiver
+      index + counter) wrapped around an already-AEAD-ciphertext
+      payload.
+    - `ParsedInit / ParsedResponse / ParsedTransport<'_>` —
+      decoded views the caller dispatches into the existing
+      `responder_consume_init` / `initiator_finish_handshake` /
+      `transport_recv` API.
+    - `selftest_wire_round_trip` — full Init -> Response
+      handshake through wire encoders + parsers, plus one
+      transport round trip wrapped in `encode_transport_msg` /
+      `parse_transport_msg`. Validates parsed fields match what
+      the encoder produced, and that derived TransportKeys are
+      mirror-consistent.
+  * `wg-wire-selftest` shell command runs the wire-framing
+    round trip AND a mac1 tamper-detection test: encode an init,
+    flip a bit in the mac1 field, confirm parse_init_msg
+    rejects with `WgError::BadMac`. Terminal success marker:
+    `✓ Phase-2 wire framing verified`.
+  * `scripts/qemu_wg_wire_selftest.py` headless harness.
+
+### Verification
+
+```
+init send_key prefix:  3cc3414d0dbb516f
+resp recv_key prefix:  3cc3414d0dbb516f
+✓ keys consistent after wire round trip
+✓ transport msg encode/parse + AEAD round trip
+✓ mac1 tamper rejected with BadMac
+✓ Phase-2 wire framing verified
+```
+
+Plus boot-smoke, sys-caves, cave-private, sys-wg selftests — all
+PASS.
+
+### What this DOESN'T claim
+
+  * No UDP plumbing yet. The encoded bytes are returned by the
+    encoder; nothing transmits them. Phase 2.5 hooks
+    `udp::handle` to route inbound WG-port packets through
+    `parse_init_msg` / `parse_response_msg` / `parse_transport_msg`
+    and re-encodes responses via `udp::send`.
+  * No replay-protection sliding window. `transport_recv` today
+    only enforces a strict-monotonic recv counter (Phase 1
+    leftover). Phase 2.6 adds the WG-spec sliding window so
+    out-of-order legitimate packets aren't dropped.
+  * No cookie / DoS path (mac2). Encoder writes zero mac2;
+    parser doesn't check it. Acceptable per §5.4.7 unless the
+    responder is rate-limiting.
+
+### Branch status
+
+`feat/wireguard-phase2-wire-framing` (current, branched from
+main at `932e228d`). Ready to commit + push.
+
+---
+
 ## 2026-05-12 — Mac — EL1 probe-mode fault handler: runtime carve-out proof
 
 **Context:** The cave-pool carve-out arc proved the table state

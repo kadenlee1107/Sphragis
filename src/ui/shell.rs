@@ -336,6 +336,7 @@ fn execute(cmd: &str) {
         "ipc-selftest"        => cmd_ipc_selftest(),
         "pq-comms-selftest"   => cmd_pq_comms_selftest(),
         "wg-selftest"         => cmd_wg_selftest(),
+        "wg-wire-selftest"    => cmd_wg_wire_selftest(),
         "shm-selftest"        => cmd_shm_selftest(),
         "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
@@ -3741,6 +3742,81 @@ fn cmd_wg_selftest() {
         }
         Err(_) => {
             console::puts("  ✗ FAIL: handshake error\n");
+        }
+    }
+}
+
+/// WireGuard Phase 2 wire-framing selftest. Runs the full handshake
+/// + a transport round trip *through* the on-wire encoders/parsers
+/// (Init = 148 B, Response = 92 B, Transport = 16 B hdr + AEAD ct).
+/// mac1 verification is enforced — bytes that pass `parse_init_msg`
+/// / `parse_response_msg` are byte-for-byte valid against the spec
+/// (whitepaper §5.4) for the chosen peer identities.
+fn cmd_wg_wire_selftest() {
+    use crate::net::wireguard;
+    console::puts_hi("  WIREGUARD PHASE-2 WIRE-FRAMING SELF-TEST\n");
+    console::puts("  Handshake bytes pass through encode_init_msg / parse_init_msg,\n");
+    console::puts("  encode_response_msg / parse_response_msg, and the transport\n");
+    console::puts("  message header. mac1 is computed + verified on both sides.\n");
+
+    match wireguard::selftest_wire_round_trip() {
+        Ok((init_pref, resp_recv_pref, keys_consistent, transport_ok)) => {
+            let hex = b"0123456789abcdef";
+            console::puts("    init send_key prefix:  ");
+            for &b in &init_pref {
+                console::putc(hex[(b >> 4) as usize]);
+                console::putc(hex[(b & 0x0f) as usize]);
+            }
+            console::puts("\n    resp recv_key prefix:  ");
+            for &b in &resp_recv_pref {
+                console::putc(hex[(b >> 4) as usize]);
+                console::putc(hex[(b & 0x0f) as usize]);
+            }
+            console::puts("\n");
+            if !keys_consistent {
+                console::puts("  ✗ FAIL  initiator.send_key != responder.recv_key\n");
+                return;
+            }
+            console::puts("  ✓ keys consistent after wire round trip\n");
+            if !transport_ok {
+                console::puts("  ✗ FAIL  transport wire round trip\n");
+                return;
+            }
+            console::puts("  ✓ transport msg encode/parse + AEAD round trip\n");
+
+            // Negative test: mac1 tamper detection. Flip a bit in
+            // the init msg's mac1 field and confirm parse_init_msg
+            // rejects with BadMac.
+            let resp_keypair = wireguard::WgKeypair::generate();
+            let init_keypair = wireguard::WgKeypair::generate();
+            let timestamp = [0u8; wireguard::TIMESTAMP_LEN];
+            if let Ok((_, init_eph_pk, enc_static, enc_ts)) =
+                wireguard::initiator_send_init(&init_keypair, &resp_keypair.static_pk, &timestamp)
+            {
+                if let Ok(mut wire) = wireguard::encode_init_msg(
+                    1, &init_eph_pk, &enc_static, &enc_ts, &resp_keypair.static_pk,
+                ) {
+                    wire[120] ^= 0x01; // flip a bit inside mac1
+                    match wireguard::parse_init_msg(&wire, &resp_keypair.static_pk) {
+                        Err(wireguard::WgError::BadMac) => {
+                            console::puts("  ✓ mac1 tamper rejected with BadMac\n");
+                        }
+                        Err(_) => {
+                            console::puts("  ✗ FAIL: tampered mac1 returned wrong error\n");
+                            return;
+                        }
+                        Ok(_) => {
+                            console::puts("  ✗ FAIL: tampered mac1 accepted (mac1 not enforced)\n");
+                            return;
+                        }
+                    }
+                }
+            }
+
+            console::puts("  ✓ Phase-2 wire framing verified\n");
+        }
+        Err(_) => {
+            console::puts("  ✗ FAIL: wire round-trip handshake error\n");
         }
     }
 }
