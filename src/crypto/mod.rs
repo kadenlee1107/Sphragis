@@ -1,5 +1,6 @@
 pub mod aes;
 pub mod aes_xts;
+pub mod blake2s;
 pub mod blake3;
 pub mod chacha20poly1305;
 pub mod gcm_verified;

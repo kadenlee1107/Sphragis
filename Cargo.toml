@@ -102,6 +102,10 @@ sha3 = { version = "0.10", default-features = false }
 # C intrinsics path which can't link on aarch64-unknown-none (no libc
 # headers for assert.h etc.); the pure-Rust path is still plenty fast.
 blake3 = { version = "1.5", default-features = false, features = ["pure"] }
+# BLAKE2s — WireGuard's spec-mandated hash. Different from BLAKE3 (variable
+# output, different IV constants); we need both. RustCrypto's `blake2`
+# crate is the canonical implementation.
+blake2 = { version = "0.10", default-features = false }
 # AES-XTS for block-level disk/sector encryption (BatFS extents and the
 # eventual NVMe block layer). XTS is the standard for full-disk crypto;
 # GCM is not appropriate for random-access blocks.
