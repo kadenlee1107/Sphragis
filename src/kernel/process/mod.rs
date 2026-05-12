@@ -110,6 +110,11 @@ pub struct Task {
     pub name: [u8; 32],
     pub name_len: usize,
     pub fds: [Option<FdEntry>; MAX_FDS_PER_TASK],
+    /// PID-namespace tag (gap-audit item 031). 0 = kernel namespace
+    /// (always visible). Non-zero = cave id, only listed by
+    /// `list_for_cave(cave_id)`. process::set_cave() updates this
+    /// for a task; create_kernel_task tags new tasks 0 by default.
+    pub cave_id: u16,
 }
 
 impl Task {
@@ -125,6 +130,7 @@ impl Task {
             name: [0u8; 32],
             name_len: 0,
             fds: [None; MAX_FDS_PER_TASK],
+            cave_id: 0,
         }
     }
 
@@ -249,6 +255,32 @@ fn set_task_name(task: &mut Task, name: &str) {
     let len = name.len().min(32);
     task.name[..len].copy_from_slice(&name.as_bytes()[..len]);
     task.name_len = len;
+}
+
+/// Tag a task with a PID-namespace cave id. Tasks tagged 0 are
+/// visible from every namespace (kernel idle, system services);
+/// tasks tagged with a non-zero cave id are only listed from the
+/// matching cave's view.
+pub fn set_cave(id: TaskId, cave_id: u16) {
+    let task = get(id);
+    task.cave_id = cave_id;
+}
+
+/// Iterate over tasks visible to the given cave. If cave_id == 0,
+/// returns every active task (the global "root" view used by the
+/// kernel for diagnostics). Otherwise filters to tasks whose
+/// cave_id matches `cave_id` plus the always-visible kernel tasks
+/// (cave_id == 0).
+pub fn list_for_cave<F: FnMut(&Task)>(cave_id: u16, mut f: F) {
+    unsafe {
+        for i in 0..MAX_TASKS {
+            let task = &(*core::ptr::addr_of!(TASKS))[i];
+            if task.state == TaskState::Free { continue; }
+            if cave_id == 0 || task.cave_id == 0 || task.cave_id == cave_id {
+                f(task);
+            }
+        }
+    }
 }
 
 /// Count of ready/running tasks (for scheduler).

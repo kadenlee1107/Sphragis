@@ -265,6 +265,22 @@ pub fn active_has_any_fs_cap() -> bool {
 }
 
 /// Check if the active cave can access a filesystem path.
+/// Active cave's mount-namespace prefix (gap-audit item 032).
+/// Returns `<cave-name>:` for an active cave, or empty for the
+/// kernel/admin context (no cave attached). Used by
+/// `fs::batfs::ns_*` to scope file names per cave so two caves
+/// can't see each other's filenames even though they share the
+/// same BatFS storage.
+pub fn active_mount_prefix(out: &mut [u8; 80]) -> usize {
+    let id = get_active();
+    if id == usize::MAX { return 0; }
+    let name = unsafe { (*core::ptr::addr_of!(CAVES))[id].name_str() };
+    let nlen = name.len().min(out.len() - 1);
+    out[..nlen].copy_from_slice(&name.as_bytes()[..nlen]);
+    out[nlen] = b':';
+    nlen + 1
+}
+
 pub fn active_can_access_path(path: &str) -> bool {
     let id = get_active();
     if id == usize::MAX || id >= MAX_CAVES { return false; }

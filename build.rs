@@ -19,6 +19,13 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BAT_OS_ALLOW_UNSIGNED_INITRD");
     println!("cargo:rerun-if-env-changed=BAT_OS_DISABLE_INIT_TRAMPOLINE");
 
+    // Gap-audit item 034: build-time release-engineer Ed25519 pubkey
+    // (64 hex chars). Used by the `release-verify` shell command to
+    // check signed kernel images / packages. Generated via
+    // `scripts/release_sign.py keygen`. Absent in dev builds — the
+    // verifier refuses to run without it.
+    println!("cargo:rerun-if-env-changed=BAT_OS_RELEASE_PUBKEY");
+
     // STUMP #87: cargo doesn't natively re-link when linker.ld changes
     // because the script is consumed by rustc via -Tlinker.ld in
     // .cargo/config.toml — Cargo treats it as opaque. Hint here so a

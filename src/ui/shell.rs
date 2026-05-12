@@ -337,9 +337,14 @@ fn execute(cmd: &str) {
         "pq-comms-selftest"   => cmd_pq_comms_selftest(),
         "shm-selftest"        => cmd_shm_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
+        "release-verify"      => cmd_release_verify(parts[1], parts[2]),
+        "release-pubkey"      => cmd_release_pubkey(),
+        "procs" | "ps"        => cmd_procs(parts[1]),
+        "mount-ns"            => cmd_mount_ns(parts[1], parts[2], parts[3]),
         "pipe-selftest"       => cmd_pipe_selftest(),
         "unix-sock-selftest"  => cmd_unix_sock_selftest(),
         "date"                => cmd_date(),
+        "tz"                  => cmd_tz(parts[1]),
         "time-selftest"       => cmd_time_selftest(),
         "time-sync-https"     => cmd_time_sync_https(parts[1]),
         "gcm-selftest"    => cmd_gcm_selftest(),
@@ -2006,6 +2011,276 @@ fn cmd_gcm_selftest() {
 }
 
 // DESIGN_CRYPTO.md #10+#13: Noise-style IPC session handshake self-test.
+/// `mount-ns` — gap-audit item 032 mount namespace. Demonstrates
+/// per-cave file name scoping by prefixing the active cave's name
+/// onto BatFS operations. Subcommands:
+///   mount-ns                         show current prefix + scoped files
+///   mount-ns ls                      list files in the active prefix
+///   mount-ns write <name> <data>     create scoped file
+///   mount-ns read  <name>            read scoped file
+///   mount-ns rm    <name>            delete scoped file
+///
+/// Not wired into the default batfs::* path yet (42 callers, doing it
+/// silently is risky for a single batch). This command proves the
+/// scoping is sound; a follow-up batch flips the BatFS API to apply
+/// the prefix everywhere.
+fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
+    use crate::batcave::cave;
+    use crate::fs::batfs;
+
+    let mut prefix_buf = [0u8; 80];
+    let plen = cave::active_mount_prefix(&mut prefix_buf);
+    let prefix = unsafe { core::str::from_utf8_unchecked(&prefix_buf[..plen]) };
+
+    if sub.is_empty() {
+        console::puts("  active mount prefix: ");
+        if plen == 0 {
+            console::puts("(none — kernel/admin context)\n");
+        } else {
+            console::puts(prefix);
+            console::puts("\n");
+        }
+        console::puts("  usage: mount-ns ls | write <n> <d> | read <n> | rm <n>\n");
+        return;
+    }
+
+    if plen == 0 {
+        console::puts("  no active cave — mount-ns has nothing to scope\n");
+        console::puts("  attach a cave first via `batcave enter <name>`\n");
+        return;
+    }
+
+    let mut full = [0u8; 144];
+    let make_full = |name: &str, full: &mut [u8; 144]| -> Option<usize> {
+        if name.is_empty() || plen + name.len() > full.len() {
+            return None;
+        }
+        full[..plen].copy_from_slice(&prefix_buf[..plen]);
+        full[plen..plen + name.len()].copy_from_slice(name.as_bytes());
+        Some(plen + name.len())
+    };
+
+    match sub {
+        "ls" => {
+            console::puts("  scoped files (prefix: ");
+            console::puts(prefix);
+            console::puts("):\n");
+            let mut shown = 0usize;
+            batfs::list(|name, size, _enc| {
+                if name.starts_with(prefix) {
+                    let visible = &name[prefix.len()..];
+                    console::puts("    ");
+                    console::puts(visible);
+                    console::puts("  (");
+                    print_num(size);
+                    console::puts(" bytes)\n");
+                    shown += 1;
+                }
+            });
+            console::puts("  ---\n  ");
+            print_num(shown);
+            console::puts(" file(s) in this namespace\n");
+        }
+        "write" => {
+            let n = match make_full(arg1, &mut full) {
+                Some(n) => n,
+                None => { console::puts("  bad name (empty or too long)\n"); return; }
+            };
+            let full_name = unsafe { core::str::from_utf8_unchecked(&full[..n]) };
+            match batfs::create(full_name, arg2.as_bytes()) {
+                Ok(()) => {
+                    console::puts("  ok — wrote ");
+                    console::puts(full_name);
+                    console::puts(" (");
+                    print_num(arg2.len());
+                    console::puts(" bytes)\n");
+                }
+                Err(e) => { console::puts("  err: "); console::puts(e); console::puts("\n"); }
+            }
+        }
+        "read" => {
+            let n = match make_full(arg1, &mut full) {
+                Some(n) => n,
+                None => { console::puts("  bad name\n"); return; }
+            };
+            let full_name = unsafe { core::str::from_utf8_unchecked(&full[..n]) };
+            let mut buf = [0u8; 4096];
+            match batfs::read(full_name, &mut buf) {
+                Ok(len) => {
+                    console::puts("  ");
+                    for &b in &buf[..len] {
+                        console::putc(if (0x20..=0x7e).contains(&b) || b == b'\n' { b } else { b'?' });
+                    }
+                    console::puts("\n");
+                }
+                Err(e) => { console::puts("  err: "); console::puts(e); console::puts("\n"); }
+            }
+        }
+        "rm" => {
+            let n = match make_full(arg1, &mut full) {
+                Some(n) => n,
+                None => { console::puts("  bad name\n"); return; }
+            };
+            let full_name = unsafe { core::str::from_utf8_unchecked(&full[..n]) };
+            match batfs::delete(full_name) {
+                Ok(()) => console::puts("  deleted\n"),
+                Err(e) => { console::puts("  err: "); console::puts(e); console::puts("\n"); }
+            }
+        }
+        _ => {
+            console::puts("  usage: mount-ns ls | write <n> <d> | read <n> | rm <n>\n");
+        }
+    }
+}
+
+/// `procs` / `ps` — list tasks visible from the active cave's PID
+/// namespace. Use `procs all` to see every task across namespaces
+/// (admin view).
+fn cmd_procs(arg: &str) {
+    use crate::kernel::process::{self, TaskState};
+    let admin = arg == "all";
+    let cave_id = if admin { 0 } else {
+        crate::batcave::cave::get_active() as u16
+    };
+    console::puts_hi(if admin {
+        "  ALL TASKS (admin view across PID namespaces)\n"
+    } else {
+        "  TASKS IN THIS CAVE\n"
+    });
+    console::puts("  TID  CAVE  PRI  STATE     NAME\n");
+    let mut shown = 0usize;
+    process::list_for_cave(cave_id, |t| {
+        let state_str = match t.state {
+            TaskState::Free    => "free",
+            TaskState::Ready   => "ready",
+            TaskState::Running => "running",
+            TaskState::Blocked => "blocked",
+            TaskState::Dead    => "dead",
+        };
+        console::puts("  ");
+        print_num(t.id.0 as usize);
+        // pad: TID 1-3 digits → spaces
+        let id_w = if t.id.0 < 10 { 4 } else if t.id.0 < 100 { 3 } else { 2 };
+        for _ in 0..id_w { console::putc(b' '); }
+        print_num(t.cave_id as usize);
+        let cv_w = if t.cave_id < 10 { 5 } else if t.cave_id < 100 { 4 } else { 3 };
+        for _ in 0..cv_w { console::putc(b' '); }
+        print_num(t.priority as usize);
+        let pr_w = if t.priority < 10 { 4 } else if t.priority < 100 { 3 } else { 2 };
+        for _ in 0..pr_w { console::putc(b' '); }
+        console::puts(state_str);
+        for _ in state_str.len()..10 { console::putc(b' '); }
+        console::puts(t.name_str());
+        console::puts("\n");
+        shown += 1;
+    });
+    console::puts("  ---\n  ");
+    print_num(shown);
+    console::puts(" task(s) visible\n");
+}
+
+/// Build-time pinned release-engineer Ed25519 pubkey. Set via
+/// `BAT_OS_RELEASE_PUBKEY=<hex>` at build time (see build.rs +
+/// scripts/release_sign.py). When None, the verifier refuses to
+/// run — there's no fallback "default test key" that an attacker
+/// could exploit.
+const RELEASE_PUBKEY_HEX: Option<&str> = option_env!("BAT_OS_RELEASE_PUBKEY");
+
+fn cmd_release_pubkey() {
+    match RELEASE_PUBKEY_HEX {
+        Some(hex) => {
+            console::puts("  release-engineer pubkey (baked at build time):\n  ");
+            console::puts(hex);
+            console::puts("\n");
+            crate::ui::clipboard::set(hex.as_bytes());
+            console::puts("  -> copied to clipboard\n");
+        }
+        None => {
+            console::puts("  no release pubkey baked in this build.\n");
+            console::puts("  to enable signed-release verification:\n");
+            console::puts("    python3 scripts/release_sign.py keygen\n");
+            console::puts("    export BAT_OS_RELEASE_PUBKEY=<hex>\n");
+            console::puts("    cargo build --release ...\n");
+        }
+    }
+}
+
+/// `release-verify <batfs-file> <sig-hex>` — verify an Ed25519
+/// signature over a file in BatFS, against the build-time-pinned
+/// release-engineer pubkey. Prints PASS/FAIL with the file's
+/// SHA-256.
+fn cmd_release_verify(name: &str, sig_hex: &str) {
+    use crate::crypto::{sha256, sig};
+    use crate::fs::batfs;
+
+    if name.is_empty() || sig_hex.is_empty() {
+        console::puts("  usage: release-verify <batfs-file> <sig-hex-128chars>\n");
+        return;
+    }
+
+    let pubkey_hex = match RELEASE_PUBKEY_HEX {
+        Some(h) if h.len() == 64 => h,
+        _ => {
+            console::puts("  no release pubkey baked into this build — run `release-pubkey` for instructions\n");
+            return;
+        }
+    };
+    let pubkey = match parse_hex32(pubkey_hex) {
+        Some(p) => p,
+        None => { console::puts("  invalid baked pubkey hex (corrupt build?)\n"); return; }
+    };
+
+    if sig_hex.len() != 128 {
+        console::puts("  signature must be 128 hex chars (64 bytes Ed25519)\n");
+        return;
+    }
+    let mut sig_bytes = [0u8; 64];
+    let bytes = sig_hex.as_bytes();
+    for i in 0..64 {
+        let hi = hex_nibble(bytes[i * 2]);
+        let lo = hex_nibble(bytes[i * 2 + 1]);
+        if hi == 0xff || lo == 0xff {
+            console::puts("  signature contains non-hex characters\n");
+            return;
+        }
+        sig_bytes[i] = (hi << 4) | lo;
+    }
+
+    // Read the file. Cap at 1 MiB for the on-device verifier — bigger
+    // bundles need the off-device verifier (signed manifest of chunk
+    // hashes is the right shape but out of scope for this command).
+    let mut file_buf = [0u8; 1024 * 1024];
+    let file_len = match batfs::read(name, &mut file_buf) {
+        Ok(n) => n,
+        Err(e) => { console::puts("  file read failed: "); console::puts(e); console::puts("\n"); return; }
+    };
+    let file = &file_buf[..file_len];
+
+    console::puts("  file:   ");
+    console::puts(name);
+    console::puts("\n  size:   ");
+    print_num(file_len);
+    console::puts(" bytes\n  sha256: ");
+    let digest = sha256::hash(file);
+    let hex_table = b"0123456789abcdef";
+    for &b in &digest {
+        console::putc(hex_table[(b >> 4) as usize]);
+        console::putc(hex_table[(b & 0x0f) as usize]);
+    }
+    console::puts("\n");
+
+    match sig::ed25519_verify(&pubkey, &sig_bytes, file) {
+        Ok(()) => {
+            console::puts("  ✓ VERIFIED — signature is valid under the baked release pubkey\n");
+        }
+        Err(_) => {
+            console::puts("  ✗ FAILED — signature does NOT verify\n");
+            console::puts("  possible causes: tampered file, wrong sig, mismatched pubkey,\n");
+            console::puts("                   or you signed with a different key than was baked\n");
+        }
+    }
+}
+
 /// Selftest for the scheduler's block_on async-bridge primitive.
 fn cmd_block_on_selftest() {
     console::puts_hi("  SCHEDULER block_on() SELF-TEST\n");
@@ -2239,6 +2514,93 @@ fn cmd_date() {
     console::puts("  unix=");
     print_num(now_utc as usize);
     console::puts("\n");
+}
+
+/// `tz [offset]` — show or set the local time-zone offset.
+///   tz              → show current offset
+///   tz <±HH:MM>     → set (e.g., -08:00 for PST, +05:30 for IST)
+///   tz utc          → clear back to UTC (offset 0)
+/// Stored as a single AtomicI32 in seconds east of UTC; persists
+/// for the cave session.
+fn cmd_tz(arg: &str) {
+    use crate::kernel::time;
+    if arg.is_empty() {
+        let off = time::tz_offset_secs();
+        let sign = if off < 0 { '-' } else { '+' };
+        let abs = off.unsigned_abs();
+        let hh = abs / 3600;
+        let mm = (abs / 60) % 60;
+        console::puts("  current tz offset: ");
+        console::putc(sign as u8);
+        if hh < 10 { console::putc(b'0'); }
+        print_num(hh as usize);
+        console::putc(b':');
+        if mm < 10 { console::putc(b'0'); }
+        print_num(mm as usize);
+        console::puts(" (");
+        print_num(off.unsigned_abs() as usize);
+        console::puts(" seconds ");
+        console::puts(if off >= 0 { "east of UTC" } else { "west of UTC" });
+        console::puts(")\n");
+
+        if time::is_synced() {
+            let secs = time::realtime_secs();
+            let local = if off >= 0 {
+                secs.saturating_add(off as u64)
+            } else {
+                secs.saturating_sub((-off) as u64)
+            };
+            let (y, m, d, h, mi, s) = time::split_unix(local);
+            let mut buf = [0u8; 20];
+            let n = time::format_human(&mut buf, y, m, d, h, mi, s);
+            console::puts("  local time: ");
+            for &b in &buf[..n] { console::putc(b); }
+            console::puts("\n");
+        }
+        return;
+    }
+
+    if arg == "utc" || arg == "UTC" || arg == "0" {
+        time::set_tz_offset_secs(0);
+        console::puts("  tz: UTC (offset 0)\n");
+        return;
+    }
+
+    // Parse ±HH:MM
+    let bytes = arg.as_bytes();
+    if bytes.len() < 5 {
+        console::puts("  usage: tz                  (show)\n");
+        console::puts("         tz <±HH:MM>         (e.g., -08:00, +05:30)\n");
+        console::puts("         tz utc              (reset to UTC)\n");
+        return;
+    }
+    let sign = match bytes[0] {
+        b'+' => 1i32,
+        b'-' => -1i32,
+        _ => {
+            console::puts("  invalid format (expected ±HH:MM)\n");
+            return;
+        }
+    };
+    if bytes[3] != b':' {
+        console::puts("  invalid format (expected ±HH:MM)\n");
+        return;
+    }
+    let hh = match arg[1..3].parse::<i32>() { Ok(n) => n, Err(_) => { console::puts("  bad HH\n"); return; } };
+    let mm = match arg[4..].parse::<i32>()  { Ok(n) => n, Err(_) => { console::puts("  bad MM\n"); return; } };
+    if hh > 14 || mm > 59 {
+        console::puts("  offset out of range (max ±14:00)\n");
+        return;
+    }
+    let offset = sign * (hh * 3600 + mm * 60);
+    time::set_tz_offset_secs(offset);
+    console::puts("  tz set to ");
+    console::puts(arg);
+    console::puts(" (");
+    print_num(offset.unsigned_abs() as usize);
+    console::puts(" seconds ");
+    console::puts(if offset >= 0 { "east" } else { "west" });
+    console::puts(")\n");
 }
 
 /// `time-sync-https [host]` — sync wall clock against the `Date:`
