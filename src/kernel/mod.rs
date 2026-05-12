@@ -5,6 +5,7 @@ pub mod kmsg;
 pub mod mm;
 pub mod stack_chk;
 pub mod pipe;
+pub mod pkg;
 pub mod process;
 pub mod scheduler;
 pub mod shm;

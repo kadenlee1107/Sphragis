@@ -340,6 +340,23 @@ fn execute(cmd: &str) {
         "block-on-selftest"   => cmd_block_on_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
+        "pkg" => {
+            // pkg install <bundle-in-batfs>
+            // pkg list
+            // pkg remove <name>
+            match parts[1] {
+                "install" => cmd_pkg_install(parts[2]),
+                "list"    => cmd_pkg_list(),
+                "remove" | "rm" => cmd_pkg_remove(parts[2]),
+                _ => {
+                    console::puts("  usage: pkg install <bundle.bpkg>\n");
+                    console::puts("         pkg list\n");
+                    console::puts("         pkg remove <name>\n");
+                    console::puts("  build bundles with scripts/pkg_pack.py\n");
+                    console::puts("  (signed by the release-engineer Ed25519 key)\n");
+                }
+            }
+        }
         "procs" | "ps"        => cmd_procs(parts[1]),
         "caps"                => cmd_caps(parts[1]),
         "fds"                 => cmd_fds(parts[1]),
@@ -2401,6 +2418,114 @@ fn cmd_procs(arg: &str) {
     console::puts("  ---\n  ");
     print_num(shown);
     console::puts(" task(s) visible\n");
+}
+
+/// `pkg install <bundle.bpkg>` — read a BPKG bundle from BatFS,
+/// verify signature against the baked release pubkey, sha-256 each
+/// payload, then unpack into BatFS. Gap-audit item 033.
+fn cmd_pkg_install(bundle_name: &str) {
+    use crate::kernel::pkg;
+    if bundle_name.is_empty() {
+        console::puts("  usage: pkg install <bundle-in-batfs>\n");
+        return;
+    }
+    let pubkey_hex = match RELEASE_PUBKEY_HEX {
+        Some(h) if h.len() == 64 => h,
+        _ => {
+            console::puts("  no release pubkey baked into this build — run `release-pubkey` for instructions\n");
+            return;
+        }
+    };
+    let pubkey = match parse_hex32(pubkey_hex) {
+        Some(p) => p,
+        None => { console::puts("  invalid baked pubkey hex\n"); return; }
+    };
+
+    // Read the bundle from BatFS.
+    let mut buf = [0u8; pkg::MAX_BUNDLE];
+    let n = match crate::fs::batfs::read(bundle_name, &mut buf) {
+        Ok(n) => n,
+        Err(e) => { console::puts("  bundle read failed: "); console::puts(e); console::puts("\n"); return; }
+    };
+
+    let bundle = match pkg::parse_and_verify(&buf[..n], &pubkey) {
+        Ok(b) => b,
+        Err(e) => {
+            console::puts("  ✗ verify failed: ");
+            console::puts(e.as_str());
+            console::puts("\n");
+            return;
+        }
+    };
+    console::puts("  ✓ signature verified\n  package: ");
+    console::puts(bundle.name);
+    console::puts("\n  version: ");
+    console::puts(bundle.version);
+    console::puts("\n  files:   ");
+    print_num(bundle.files.len());
+    console::puts("\n");
+
+    match pkg::install(&bundle) {
+        Ok(()) => {
+            console::puts("  ✓ installed\n");
+            for f in &bundle.files {
+                console::puts("    + ");
+                console::puts(f.path);
+                console::puts(" (");
+                print_num(f.content.len());
+                console::puts(" bytes)\n");
+            }
+        }
+        Err(e) => {
+            console::puts("  ✗ install failed: ");
+            console::puts(e.as_str());
+            console::puts("\n");
+        }
+    }
+}
+
+fn cmd_pkg_list() {
+    use crate::kernel::pkg;
+    console::puts_hi("  INSTALLED PACKAGES\n");
+    console::puts("  NAME             VERSION      FILES\n");
+    let mut count = 0;
+    pkg::for_each_installed(|name, ver, paths| {
+        console::puts("  ");
+        console::puts(name);
+        for _ in name.len()..17 { console::putc(b' '); }
+        console::puts(ver);
+        for _ in ver.len()..13 { console::putc(b' '); }
+        // Files come tab-separated; emit them space-separated for
+        // display. Just print everything verbatim with tabs replaced.
+        for b in paths.bytes() {
+            console::putc(if b == b'\t' { b' ' } else { b });
+        }
+        console::puts("\n");
+        count += 1;
+    });
+    if count == 0 {
+        console::puts("  (no packages installed)\n");
+    }
+}
+
+fn cmd_pkg_remove(name: &str) {
+    use crate::kernel::pkg;
+    if name.is_empty() {
+        console::puts("  usage: pkg remove <name>\n");
+        return;
+    }
+    match pkg::remove(name) {
+        Ok(()) => {
+            console::puts("  ✓ removed ");
+            console::puts(name);
+            console::puts("\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ remove failed: ");
+            console::puts(e.as_str());
+            console::puts("\n");
+        }
+    }
 }
 
 /// Build-time pinned release-engineer Ed25519 pubkey. Set via
