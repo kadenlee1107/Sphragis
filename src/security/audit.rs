@@ -41,6 +41,11 @@ pub enum Category {
     /// Per-session scope so a forensic reviewer can replay one
     /// conversation without untangling it from system noise.
     Ai          = 10,
+    /// pipe lifecycle: create/close. Read/write are too high-frequency
+    /// to log per-call — only the open and close ends are recorded so
+    /// a reviewer can reconstruct which task owned which fd at which
+    /// point without drowning the ring in byte-level traffic.
+    Pipe        = 11,
 }
 
 impl Category {
@@ -56,6 +61,7 @@ impl Category {
             Category::Boot       => "boot",
             Category::Cave       => "cave",
             Category::Ai         => "ai",
+            Category::Pipe       => "pipe",
         }
     }
 }

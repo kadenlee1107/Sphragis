@@ -149,6 +149,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     kernel::process::init();
     kernel::scheduler::init();
     kernel::ipc::init();
+    kernel::pipe::init();
     kernel::arch::init_exceptions();
     // (init_timer + GICv2 init removed — IRQ-driven preemption
     // hangs boot somewhere after the timer fires the first time.
@@ -374,6 +375,13 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
             }
 
             // ═══════════════════════════════════════
+            // PRE-AUTH KERNEL SELFTESTS (feature-gated).
+            // `pipe-selftest` is also available from the shell.
+            // ═══════════════════════════════════════
+            #[cfg(feature = "selftest-on-boot")]
+            pipe_selftest_uart();
+
+            // ═══════════════════════════════════════
             // AUTHENTICATION GATE — must pass to proceed
             // ═══════════════════════════════════════
             drivers::uart::puts("[security] Launching auth gate...\n");
@@ -407,6 +415,96 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
 /// no cpol gate. The cave-side ABI smoke (which goes through
 /// sys_bat_https_open) lands in a follow-up PR once a test cave
 /// can run.
+/// Anonymous-pipe round trip exercised over UART so the serial
+/// log shows pass/fail without needing keyboard input through the
+/// auth gate. Verifies the same create/write/read/EOF/EPIPE path
+/// the shell `pipe-selftest` runs. Behind `selftest-on-boot` so
+/// production builds skip it.
+#[cfg(feature = "selftest-on-boot")]
+fn pipe_selftest_uart() {
+    use drivers::uart;
+    use kernel::pipe;
+    use kernel::process::{self, FdKind, PipeEnd};
+
+    uart::puts("[pipe-selftest] start\n");
+    let (rfd, wfd) = match pipe::create() {
+        Ok(p) => p,
+        Err(e) => {
+            uart::puts("[pipe-selftest] FAIL create: "); uart::puts(e); uart::puts("\n");
+            return;
+        }
+    };
+
+    let id_for = |fd: u16, want_read: bool| -> Option<u16> {
+        let entry = process::current().fd_get(fd)?;
+        match entry.kind {
+            FdKind::Pipe { id, end } => {
+                let ok = matches!((end, want_read), (PipeEnd::Read, true) | (PipeEnd::Write, false));
+                if ok { Some(id) } else { None }
+            }
+        }
+    };
+
+    let wid = match id_for(wfd, false) {
+        Some(id) => id,
+        None => { uart::puts("[pipe-selftest] FAIL: wfd shape\n"); return; }
+    };
+    let rid = match id_for(rfd, true) {
+        Some(id) => id,
+        None => { uart::puts("[pipe-selftest] FAIL: rfd shape\n"); return; }
+    };
+
+    let payload: &[u8] = b"the bat signal is up";
+    match pipe::write(wid, payload) {
+        Ok(n) if n == payload.len() => {}
+        Ok(_) | Err(_) => {
+            uart::puts("[pipe-selftest] FAIL: write\n"); return;
+        }
+    }
+
+    let mut buf = [0u8; 32];
+    let n = match pipe::read(rid, &mut buf) {
+        Ok(n) => n,
+        Err(e) => { uart::puts("[pipe-selftest] FAIL read: "); uart::puts(e); uart::puts("\n"); return; }
+    };
+    if n != payload.len() || &buf[..n] != payload {
+        uart::puts("[pipe-selftest] FAIL: payload mismatch\n");
+        return;
+    }
+    uart::puts("[pipe-selftest] ok  write/read round trip\n");
+
+    let _ = process::current().fd_take(wfd);
+    pipe::release_end(wid, PipeEnd::Write);
+    match pipe::read(rid, &mut buf) {
+        Ok(0) => uart::puts("[pipe-selftest] ok  EOF after writer close\n"),
+        Ok(_) => { uart::puts("[pipe-selftest] FAIL: expected EOF\n"); return; }
+        Err(_) => { uart::puts("[pipe-selftest] FAIL: EOF read err\n"); return; }
+    }
+    let _ = process::current().fd_take(rfd);
+    pipe::release_end(rid, PipeEnd::Read);
+
+    let (rfd2, wfd2) = match pipe::create() {
+        Ok(p) => p,
+        Err(e) => { uart::puts("[pipe-selftest] FAIL 2nd create: "); uart::puts(e); uart::puts("\n"); return; }
+    };
+    let rid2 = id_for(rfd2, true).unwrap_or(u16::MAX);
+    let wid2 = id_for(wfd2, false).unwrap_or(u16::MAX);
+    if rid2 == u16::MAX || wid2 == u16::MAX {
+        uart::puts("[pipe-selftest] FAIL: 2nd shape\n"); return;
+    }
+    let _ = process::current().fd_take(rfd2);
+    pipe::release_end(rid2, PipeEnd::Read);
+    match pipe::write(wid2, b"x") {
+        Err(e) if e == "EPIPE" => uart::puts("[pipe-selftest] ok  EPIPE after reader close\n"),
+        Ok(_) => { uart::puts("[pipe-selftest] FAIL: expected EPIPE\n"); return; }
+        Err(_) => { uart::puts("[pipe-selftest] FAIL: wrong write err\n"); return; }
+    }
+    let _ = process::current().fd_take(wfd2);
+    pipe::release_end(wid2, PipeEnd::Write);
+
+    uart::puts("[pipe-selftest] PASS\n");
+}
+
 #[cfg(feature = "https-smoke-test")]
 fn run_https_smoke() {
     use drivers::uart;
@@ -1169,6 +1267,7 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
     kernel::process::init();
     kernel::scheduler::init();
     kernel::ipc::init();
+    kernel::pipe::init();
     kernel::arch::init_exceptions();
 
     // V-HV-GUEST-3: Under m1n1's hypervisor (EL1), the AIC, DART, DWC3

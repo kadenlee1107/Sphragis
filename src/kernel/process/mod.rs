@@ -9,6 +9,23 @@ use crate::kernel::capability::CapabilitySet;
 
 pub const MAX_TASKS: usize = 64;
 const TASK_STACK_PAGES: usize = 4; // 16KB stack per task
+pub const MAX_FDS_PER_TASK: usize = 16;
+
+/// Kind-tagged file descriptor. Pipes are the only consumer in
+/// Phase 2; File / Socket variants are reserved so BatFS and TCP
+/// can plug in later without changing the Task layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FdKind {
+    Pipe { id: u16, end: PipeEnd },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PipeEnd { Read, Write }
+
+#[derive(Clone, Copy, Debug)]
+pub struct FdEntry {
+    pub kind: FdKind,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TaskState {
@@ -70,6 +87,7 @@ pub struct Task {
     pub capabilities: CapabilitySet,
     pub name: [u8; 32],
     pub name_len: usize,
+    pub fds: [Option<FdEntry>; MAX_FDS_PER_TASK],
 }
 
 impl Task {
@@ -84,11 +102,37 @@ impl Task {
             capabilities: CapabilitySet::empty(),
             name: [0u8; 32],
             name_len: 0,
+            fds: [None; MAX_FDS_PER_TASK],
         }
     }
 
     pub fn name_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(&self.name[..self.name_len]) }
+    }
+
+    /// Allocate the lowest-numbered free fd slot. Returns the fd
+    /// number on success, or None if the task has run out.
+    pub fn fd_alloc(&mut self, entry: FdEntry) -> Option<u16> {
+        for i in 0..MAX_FDS_PER_TASK {
+            if self.fds[i].is_none() {
+                self.fds[i] = Some(entry);
+                return Some(i as u16);
+            }
+        }
+        None
+    }
+
+    pub fn fd_get(&self, fd: u16) -> Option<FdEntry> {
+        let i = fd as usize;
+        if i < MAX_FDS_PER_TASK { self.fds[i] } else { None }
+    }
+
+    /// Clear an fd slot and return its previous entry. Caller is
+    /// responsible for any kind-specific refcount work (e.g.
+    /// `pipe::release_end`) — this only forgets the mapping.
+    pub fn fd_take(&mut self, fd: u16) -> Option<FdEntry> {
+        let i = fd as usize;
+        if i < MAX_FDS_PER_TASK { self.fds[i].take() } else { None }
     }
 }
 
@@ -163,6 +207,7 @@ pub fn create_kernel_task(
         task.priority = priority;
         task.stack_base = stack_base;
         task.capabilities = CapabilitySet::empty();
+        task.fds = [None; MAX_FDS_PER_TASK];
 
         // Set up context so the scheduler can "resume" into this task
         task.context = CpuContext::zero();

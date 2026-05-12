@@ -296,6 +296,7 @@ fn execute(cmd: &str) {
         "pq-selftest" => cmd_pq_selftest(),
         "pq-sig-selftest" => cmd_pq_sig_selftest(),
         "ipc-selftest"    => cmd_ipc_selftest(),
+        "pipe-selftest"   => cmd_pipe_selftest(),
         "gcm-selftest"    => cmd_gcm_selftest(),
         "secure-ipc-selftest" => cmd_secure_ipc_selftest(),
         "secure-ipc-wire-selftest" => cmd_secure_ipc_wire_selftest(),
@@ -1990,6 +1991,130 @@ fn cmd_ipc_selftest() {
             console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
         }
     }
+}
+
+// Anonymous-pipe round trip: create → write → read → EOF on close →
+// EPIPE on dead reader. Single-task path so nothing actually blocks.
+fn cmd_pipe_selftest() {
+    use crate::kernel::pipe;
+    use crate::kernel::process::{self, FdKind, PipeEnd};
+
+    console::puts_hi("  ANONYMOUS PIPE SELF-TEST\n");
+    console::puts("  create + write + read + EOF + EPIPE round trip\n");
+
+    let (rfd, wfd) = match pipe::create() {
+        Ok(p) => p,
+        Err(e) => {
+            console::puts("  ✗ FAIL: create: "); console::puts(e); console::puts("\n");
+            return;
+        }
+    };
+
+    let payload = b"the bat signal is up";
+    let id = match process::current().fd_get(wfd).map(|e| e.kind) {
+        Some(FdKind::Pipe { id, end: PipeEnd::Write }) => id,
+        _ => {
+            console::puts("  ✗ FAIL: wfd not a write-end pipe fd\n");
+            return;
+        }
+    };
+
+    match pipe::write(id, payload) {
+        Ok(n) if n == payload.len() => {}
+        Ok(n) => {
+            console::puts("  ✗ FAIL: short write: ");
+            print_num(n); console::puts("/"); print_num(payload.len());
+            console::puts("\n"); return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: write: "); console::puts(e); console::puts("\n");
+            return;
+        }
+    }
+
+    let mut buf = [0u8; 32];
+    let rid = match process::current().fd_get(rfd).map(|e| e.kind) {
+        Some(FdKind::Pipe { id, end: PipeEnd::Read }) => id,
+        _ => {
+            console::puts("  ✗ FAIL: rfd not a read-end pipe fd\n");
+            return;
+        }
+    };
+    let read_n = match pipe::read(rid, &mut buf) {
+        Ok(n) => n,
+        Err(e) => {
+            console::puts("  ✗ FAIL: read: "); console::puts(e); console::puts("\n");
+            return;
+        }
+    };
+    if read_n != payload.len() || &buf[..read_n] != payload {
+        console::puts("  ✗ FAIL: read returned ");
+        print_num(read_n); console::puts(" bytes, payload mismatch\n");
+        return;
+    }
+    console::puts("  ✓ write/read round trip OK (");
+    print_num(read_n); console::puts(" bytes)\n");
+
+    // Close the write end. Subsequent read on empty + no writers = EOF.
+    let _ = process::current().fd_take(wfd);
+    pipe::release_end(id, PipeEnd::Write);
+    match pipe::read(rid, &mut buf) {
+        Ok(0) => console::puts("  ✓ EOF after writer close\n"),
+        Ok(n) => {
+            console::puts("  ✗ FAIL: expected EOF, got ");
+            print_num(n); console::puts(" bytes\n");
+            return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: EOF read: "); console::puts(e); console::puts("\n");
+            return;
+        }
+    }
+    // Tidy: close the read end too.
+    let _ = process::current().fd_take(rfd);
+    pipe::release_end(rid, PipeEnd::Read);
+
+    // EPIPE check: fresh pipe, close reader, expect write to fail.
+    let (rfd2, wfd2) = match pipe::create() {
+        Ok(p) => p,
+        Err(e) => {
+            console::puts("  ✗ FAIL: 2nd create: "); console::puts(e); console::puts("\n");
+            return;
+        }
+    };
+    let id2 = match process::current().fd_get(wfd2).map(|e| e.kind) {
+        Some(FdKind::Pipe { id, end: PipeEnd::Write }) => id,
+        _ => {
+            console::puts("  ✗ FAIL: 2nd wfd not a write-end pipe fd\n");
+            return;
+        }
+    };
+    // Close the read end.
+    let rid2 = match process::current().fd_get(rfd2).map(|e| e.kind) {
+        Some(FdKind::Pipe { id, end: PipeEnd::Read }) => id,
+        _ => {
+            console::puts("  ✗ FAIL: 2nd rfd not a read-end pipe fd\n");
+            return;
+        }
+    };
+    let _ = process::current().fd_take(rfd2);
+    pipe::release_end(rid2, PipeEnd::Read);
+    match pipe::write(id2, b"x") {
+        Err(e) if e == "EPIPE" => console::puts("  ✓ EPIPE after reader close\n"),
+        Ok(n) => {
+            console::puts("  ✗ FAIL: expected EPIPE, wrote ");
+            print_num(n); console::puts(" bytes\n");
+            return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: EPIPE write: "); console::puts(e); console::puts("\n");
+            return;
+        }
+    }
+    let _ = process::current().fd_take(wfd2);
+    pipe::release_end(id2, PipeEnd::Write);
+
+    console::puts("  ✓ ALL PIPE TESTS PASSED\n");
 }
 
 // DESIGN_CRYPTO.md #6: post-quantum hybrid signature self-test.

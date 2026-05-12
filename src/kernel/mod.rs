@@ -4,6 +4,7 @@ pub mod ipc;
 pub mod kmsg;
 pub mod mm;
 pub mod stack_chk;
+pub mod pipe;
 pub mod process;
 pub mod scheduler;
 pub mod sync;
