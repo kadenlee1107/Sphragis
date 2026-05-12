@@ -51,6 +51,191 @@ const SB_EMPTY: Cell = Cell { ch: 0, fg: 0 };
 
 static mut SB_BUF: [[Cell; SB_COLS]; SB_ROWS] = [[SB_EMPTY; SB_COLS]; SB_ROWS];
 
+// ── Visual selection mode (row-based) ─────────────────────────────
+//
+// Keyboard-driven scrollback selection. Triggered by Ctrl+S on the
+// SH tab. While active, arrow keys move a single-row cursor through
+// the scrollback; Shift+arrow extends the selection; Enter copies
+// the selected rows (joined by newlines) to the system clipboard;
+// Esc exits without copying.
+//
+// Row-based, not cell-based — keeps the rendering simple (just
+// inverse-video the highlighted rows) while still giving the
+// operator a real "highlight what I want on screen" UX. Cell-level
+// selection (drag a rectangle) is a future upgrade once mouse
+// support is wired in.
+static mut SELECT_MODE: bool = false;
+static mut SEL_ANCHOR: u16 = 0;
+static mut SEL_CURSOR: u16 = 0;
+const SELECT_BG: u32 = 0xFF2A2A2A;
+const SELECT_FG: u32 = 0xFFFFFFFF;
+
+pub fn select_mode_active() -> bool {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(SELECT_MODE)) }
+}
+
+/// Enter selection mode. Anchor + cursor land on the last *output*
+/// row — skipping past the empty prompt row at the bottom so the
+/// user doesn't accidentally copy `bat_os >` along with their
+/// content. Arrow-down lands on the prompt row if you actually want
+/// it; arrow-up walks back through history.
+pub fn enter_select_mode() {
+    let start = find_last_output_row();
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SEL_ANCHOR), start);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SEL_CURSOR), start);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SELECT_MODE), true);
+    }
+}
+
+/// Find the bottom-most row that is NOT a bare prompt. Searches up
+/// from the actual bottom; if every row matches "bat_os > " or is
+/// empty, falls back to bottom.
+fn find_last_output_row() -> u16 {
+    let bottom = find_bottom_row();
+    unsafe {
+        let buf = &*core::ptr::addr_of!(SB_BUF);
+        let mut r = bottom as i32;
+        while r >= 0 {
+            if !row_is_prompt_only(&buf[r as usize]) {
+                return r as u16;
+            }
+            r -= 1;
+        }
+    }
+    bottom
+}
+
+/// True if a scrollback row contains nothing but the prompt
+/// "bat_os > " (plus trailing nulls / spaces). Used to skip prompt
+/// rows when positioning the initial select cursor.
+fn row_is_prompt_only(row: &[Cell; SB_COLS]) -> bool {
+    let prompt = b"bat_os > ";
+    if row.len() < prompt.len() { return false; }
+    for (i, &want) in prompt.iter().enumerate() {
+        if row[i].ch != want { return false; }
+    }
+    // Everything after the prompt should be empty (null) or space.
+    for i in prompt.len()..SB_COLS {
+        let c = row[i].ch;
+        if c != 0 && c != b' ' { return false; }
+    }
+    true
+}
+
+pub fn exit_select_mode() {
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SELECT_MODE), false);
+    }
+}
+
+/// Move the selection cursor. `extend=false` drags the anchor along
+/// (single-row cursor); `extend=true` keeps the anchor and grows
+/// the range.
+pub fn sel_move_up(extend: bool) {
+    unsafe {
+        let cur = core::ptr::read_volatile(core::ptr::addr_of!(SEL_CURSOR));
+        let new = cur.saturating_sub(1);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SEL_CURSOR), new);
+        if !extend {
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(SEL_ANCHOR), new);
+        }
+    }
+}
+
+pub fn sel_move_down(extend: bool) {
+    unsafe {
+        let cur = core::ptr::read_volatile(core::ptr::addr_of!(SEL_CURSOR));
+        let bottom = find_bottom_row();
+        let new = (cur + 1).min(bottom);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SEL_CURSOR), new);
+        if !extend {
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(SEL_ANCHOR), new);
+        }
+    }
+}
+
+/// Copy selected rows to the system clipboard, joined by '\n'.
+/// Returns the number of bytes copied. Trailing whitespace on each
+/// row is trimmed so an unfilled scrollback row doesn't pad pasted
+/// output with spaces.
+pub fn sel_copy_to_clipboard() -> usize {
+    let (lo, hi) = unsafe {
+        let a = core::ptr::read_volatile(core::ptr::addr_of!(SEL_ANCHOR));
+        let c = core::ptr::read_volatile(core::ptr::addr_of!(SEL_CURSOR));
+        (a.min(c) as usize, a.max(c) as usize)
+    };
+    let mut out = [0u8; crate::ui::clipboard::CLIPBOARD_CAP];
+    let mut off = 0;
+    unsafe {
+        let buf = &*core::ptr::addr_of!(SB_BUF);
+        for r in lo..=hi {
+            if r >= SB_ROWS { break; }
+            // Find right edge of content on this row.
+            let mut right = SB_COLS;
+            while right > 0 && buf[r][right - 1].ch == 0 { right -= 1; }
+            for c in 0..right {
+                if off >= out.len() { break; }
+                let ch = buf[r][c].ch;
+                out[off] = if ch == 0 { b' ' } else { ch };
+                off += 1;
+            }
+            if r < hi && off < out.len() {
+                out[off] = b'\n';
+                off += 1;
+            }
+        }
+    }
+    crate::ui::clipboard::set(&out[..off]);
+    off
+}
+
+/// Find the lowest scrollback row that has any non-empty cell.
+/// Used to clamp the selection cursor to actual content.
+fn find_bottom_row() -> u16 {
+    unsafe {
+        let buf = &*core::ptr::addr_of!(SB_BUF);
+        for r in (0..SB_ROWS).rev() {
+            for c in 0..SB_COLS {
+                if buf[r][c].ch != 0 {
+                    return r as u16;
+                }
+            }
+        }
+    }
+    0
+}
+
+/// Copy the last `n` non-empty rows of scrollback into the
+/// clipboard, joined by '\n'. Used by the `clip yank-back N` shell
+/// command. Returns bytes copied.
+pub fn yank_last_rows(n: usize) -> usize {
+    let bottom = find_bottom_row() as usize;
+    let lo = bottom.saturating_sub(n.saturating_sub(1));
+    let mut out = [0u8; crate::ui::clipboard::CLIPBOARD_CAP];
+    let mut off = 0;
+    unsafe {
+        let buf = &*core::ptr::addr_of!(SB_BUF);
+        for r in lo..=bottom {
+            if r >= SB_ROWS { break; }
+            let mut right = SB_COLS;
+            while right > 0 && buf[r][right - 1].ch == 0 { right -= 1; }
+            for c in 0..right {
+                if off >= out.len() { break; }
+                let ch = buf[r][c].ch;
+                out[off] = if ch == 0 { b' ' } else { ch };
+                off += 1;
+            }
+            if r < bottom && off < out.len() {
+                out[off] = b'\n';
+                off += 1;
+            }
+        }
+    }
+    crate::ui::clipboard::set(&out[..off]);
+    off
+}
+
 /// Current "pen" color used by the next `putc` write. Callers swap
 /// it with `set_pen()` to color sections of output (e.g. the prompt's
 /// "bat_os" in INK, " > " in CYAN). Defaults to FG.
@@ -223,10 +408,29 @@ pub fn redraw_content() {
     // Clear the pane content rect so we paint over a clean slate.
     gpu::fill_rect(pr.x, pr.y, pr.w, pr.h, BG);
 
+    // Selection range (when in select mode), expressed inclusive.
+    let sel: Option<(usize, usize)> = if select_mode_active() {
+        unsafe {
+            let a = core::ptr::read_volatile(core::ptr::addr_of!(SEL_ANCHOR)) as usize;
+            let c = core::ptr::read_volatile(core::ptr::addr_of!(SEL_CURSOR)) as usize;
+            Some((a.min(c), a.max(c)))
+        }
+    } else { None };
+
     // Replay every non-empty cell at its absolute (MARGIN_X+col*W, MARGIN_Y+row*H).
     unsafe {
         let buf = &*core::ptr::addr_of!(SB_BUF);
         for cy in 0..SB_ROWS {
+            let row_is_selected = sel.map_or(false, |(lo, hi)| cy >= lo && cy <= hi);
+
+            // Paint the row-wide highlight strip first if selected.
+            if row_is_selected {
+                let py = MARGIN_Y + (cy as u32) * CHAR_H;
+                if py >= pr.y && py + CHAR_H <= pr.y + pr.h {
+                    gpu::fill_rect(pr.x, py, pr.w, CHAR_H, SELECT_BG);
+                }
+            }
+
             for cx in 0..SB_COLS {
                 let cell = buf[cy][cx];
                 if cell.ch == 0 { continue; }
@@ -236,7 +440,12 @@ pub fn redraw_content() {
                     && px + CHAR_W <= pr.x + pr.w
                     && py + CHAR_H <= pr.y + pr.h
                 {
-                    font::draw_char(fb, w, px, py, cell.ch, cell.fg, BG);
+                    let (fg, bg) = if row_is_selected {
+                        (SELECT_FG, SELECT_BG)
+                    } else {
+                        (cell.fg, BG)
+                    };
+                    font::draw_char(fb, w, px, py, cell.ch, fg, bg);
                 }
             }
         }

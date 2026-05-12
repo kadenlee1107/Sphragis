@@ -5,6 +5,7 @@ pub mod docker_client;
 pub mod ipc_session;
 pub mod linux;
 pub mod persist;
+pub mod pq_comms_session;
 pub mod secure_channel;
 pub mod secure_ipc;
 pub mod syscall_filter;

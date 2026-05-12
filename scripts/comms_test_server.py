@@ -56,6 +56,32 @@ TAG_LEN        = 16
 KEY_DIR_C2S    = b"BAT_OS-COMMS-c2s-v1"
 KEY_DIR_S2C    = b"BAT_OS-COMMS-s2c-v1"
 IDENTITY_PATH  = "comms_server.key"
+ALLOWLIST_PATH = "comms_clients.allowlist"
+
+
+def load_allowlist() -> set[bytes] | None:
+    """Read comms_clients.allowlist (one hex pubkey per line).
+    Returns None when the file doesn't exist (TOFU mode — accept all);
+    returns a set of 32-byte pubkeys when the file exists. Empty file
+    -> empty set -> nobody is allowed.
+    """
+    if not os.path.exists(ALLOWLIST_PATH):
+        return None
+    pks: set[bytes] = set()
+    with open(ALLOWLIST_PATH, "r") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if len(line) != 64:
+                print(f"[srv] allowlist: bad line (length {len(line)}, "
+                      f"want 64 hex chars): {line[:32]}...", flush=True)
+                continue
+            try:
+                pks.add(bytes.fromhex(line))
+            except ValueError:
+                print(f"[srv] allowlist: bad hex: {line[:32]}...", flush=True)
+    return pks
 
 
 def load_or_create_identity() -> Ed25519PrivateKey:
@@ -152,15 +178,30 @@ def recv_frame(conn: socket.socket, aead: ChaCha20Poly1305,
 
 
 def handle(conn: socket.socket, addr: tuple[str, int],
-           id_sk: Ed25519PrivateKey) -> None:
+           id_sk: Ed25519PrivateKey,
+           allowlist: set[bytes] | None) -> None:
     peer = f"{addr[0]}:{addr[1]}"
     print(f"[srv] {peer} connected", flush=True)
     try:
         # ── 1. Read client offer ────────────────────────────────────
         client_offer = recv_exact(conn, OFFER_LEN)
         client_eph_pk, client_id_pk = verify_offer(client_offer)
-        print(f"[srv] {peer} client_id={client_id_pk.hex()[:16]}... verified",
+        print(f"[srv] {peer} client_id={client_id_pk.hex()[:16]}... sig OK",
               flush=True)
+
+        # ── 1b. Allowlist check (mutual auth) ───────────────────────
+        if allowlist is not None:
+            if client_id_pk not in allowlist:
+                print(f"[srv] {peer} client_id NOT in allowlist; rejecting",
+                      flush=True)
+                # Don't reply — leave the handshake half-open so the
+                # client sees a clean TCP close rather than a partial
+                # offer they'd try to parse.
+                return
+            print(f"[srv] {peer} client allowed", flush=True)
+        else:
+            print(f"[srv] {peer} (TOFU: no allowlist file -> accepting all)",
+                  flush=True)
 
         # ── 2. Generate our ephemeral, send our offer ───────────────
         server_eph_sk = X25519PrivateKey.generate()
@@ -208,12 +249,21 @@ def main() -> int:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9100
     id_sk = load_or_create_identity()
     id_pk_hex = id_pub_bytes(id_sk).hex()
+    allowlist = load_allowlist()
     print("===========================================================")
     print(f"[srv] Bat_OS comms server (Ed25519 + X25519 + ChaCha20-Poly1305)")
     print(f"[srv] listening on 0.0.0.0:{port}")
     print(f"[srv] identity pubkey: {id_pk_hex}")
-    print(f"[srv] pin this in Bat_OS:")
-    print(f"[srv]   comms connect 10.0.2.2:{port} {id_pk_hex}")
+    if allowlist is None:
+        print(f"[srv] allowlist: ABSENT (TOFU mode — accepting all clients)")
+        print(f"[srv]   to enforce mutual auth, create comms_clients.allowlist")
+        print(f"[srv]   (one hex pubkey per line; comment lines start with #)")
+    else:
+        print(f"[srv] allowlist: {len(allowlist)} client(s) authorized")
+        if not allowlist:
+            print(f"[srv]   WARNING: empty allowlist -> nobody can connect")
+    print(f"[srv] pin this on the Bat_OS side:")
+    print(f"[srv]   comms identify 10.0.2.2:{port}    (then comms pin <Ctrl+V>)")
     print("===========================================================",
           flush=True)
 
@@ -225,7 +275,8 @@ def main() -> int:
     try:
         while True:
             conn, addr = s.accept()
-            t = threading.Thread(target=handle, args=(conn, addr, id_sk),
+            t = threading.Thread(target=handle,
+                                 args=(conn, addr, id_sk, allowlist),
                                  daemon=True)
             t.start()
     except KeyboardInterrupt:

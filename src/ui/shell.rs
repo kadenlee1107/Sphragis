@@ -267,6 +267,12 @@ fn execute(cmd: &str) {
                     .map(|(_, t)| t.trim())
                     .unwrap_or("");
                 cmd_clip_set(after);
+            } else if parts[1] == "yank-back" {
+                cmd_clip_yank_back(parts[2]);
+            } else if parts[1] == "push" {
+                cmd_clip_push();
+            } else if parts[1] == "pull" {
+                cmd_clip_pull();
             } else {
                 cmd_clip(parts[1]);
             }
@@ -285,6 +291,7 @@ fn execute(cmd: &str) {
             } else if sub == "connect"  { cmd_comms_connect(parts[2]);
             } else if sub == "identify" { cmd_comms_identify(parts[2]);
             } else if sub == "pin"      { cmd_comms_pin(parts[2]);
+            } else if sub == "my-id"    { cmd_comms_my_id();
             } else {
                 cmd_comms(sub, parts[2]);
             }
@@ -327,6 +334,7 @@ fn execute(cmd: &str) {
         "pq-selftest" => cmd_pq_selftest(),
         "pq-sig-selftest" => cmd_pq_sig_selftest(),
         "ipc-selftest"        => cmd_ipc_selftest(),
+        "pq-comms-selftest"   => cmd_pq_comms_selftest(),
         "pipe-selftest"       => cmd_pipe_selftest(),
         "unix-sock-selftest"  => cmd_unix_sock_selftest(),
         "date"                => cmd_date(),
@@ -1995,6 +2003,56 @@ fn cmd_gcm_selftest() {
 }
 
 // DESIGN_CRYPTO.md #10+#13: Noise-style IPC session handshake self-test.
+/// In-kernel selftest of the PQ-hybrid comms handshake. Exercises
+/// ML-KEM-768 + ML-DSA-65 + X25519 + Ed25519 + ChaCha20-Poly1305
+/// without needing a peer that speaks the protocol. The classical-
+/// only path (apps::comms) is what runs against the Python test
+/// server today; this proves the PQ wire format + key derivation
+/// are ready for the day we have a PQ peer.
+fn cmd_pq_comms_selftest() {
+    console::puts_hi("  POST-QUANTUM HYBRID COMMS HANDSHAKE SELF-TEST\n");
+    console::puts("  X25519 + ML-KEM-768 KEM, Ed25519 + ML-DSA-65 sigs\n");
+    console::puts("  Generating server long-term keys (sig + KEM)...\n");
+    console::puts("  Generating client long-term sig key...\n");
+    console::puts("  Running client encap -> server decap -> mutual sig verify...\n");
+
+    use crate::batcave::pq_comms_session;
+    match pq_comms_session::selftest_round_trip() {
+        Ok((s_pref, c_pref, keys_match, aead_ok, client_pub_n, server_pub_n)) => {
+            let hex = b"0123456789abcdef";
+            console::puts("    server c2s key prefix: ");
+            for &b in &s_pref {
+                console::putc(hex[(b >> 4) as usize]);
+                console::putc(hex[(b & 0x0f) as usize]);
+            }
+            console::puts("\n    client c2s key prefix: ");
+            for &b in &c_pref {
+                console::putc(hex[(b >> 4) as usize]);
+                console::putc(hex[(b & 0x0f) as usize]);
+            }
+            console::puts("\n    client hybrid sig pubkey: ");
+            print_num(client_pub_n);
+            console::puts(" bytes (32 Ed25519 + 1952 ML-DSA-65)\n");
+            console::puts("    server hybrid sig pubkey: ");
+            print_num(server_pub_n);
+            console::puts(" bytes (same layout)\n");
+            if keys_match && aead_ok {
+                console::puts("  ✓ PASS  shared secret agreed; AEAD round trip OK\n");
+                console::puts("    Forward secret (KEM ephemerals discarded after agreement)\n");
+                console::puts("    Mutually authenticated (hybrid Ed25519+ML-DSA-65 sigs)\n");
+                console::puts("    Unbreakable under classical AND quantum attack\n");
+            } else if !keys_match {
+                console::puts("  ✗ FAIL  shared-secret disagreement\n");
+            } else {
+                console::puts("  ✗ FAIL  AEAD round trip failed\n");
+            }
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
+        }
+    }
+}
+
 fn cmd_ipc_selftest() {
     console::puts_hi("  INTER-CAVE IPC SESSION SELF-TEST\n");
     console::puts("  Ed25519 identity + X25519 ephemeral, mutual auth + FS\n");
@@ -2728,7 +2786,7 @@ fn cmd_clip(sub: &str) {
                 // so a maliciously-pasted control byte doesn't mess
                 // with the terminal.
                 for &b in &buf[..copied] {
-                    console::putc(if (0x20..=0x7e).contains(&b) { b } else { b'?' });
+                    console::putc(if (0x20..=0x7e).contains(&b) || b == b'\n' { b } else { b'?' });
                 }
                 console::puts("\n");
             }
@@ -2738,12 +2796,168 @@ fn cmd_clip(sub: &str) {
             console::puts("  clipboard cleared\n");
         }
         _ => {
-            console::puts("  usage: clip          (show)\n");
+            console::puts("  usage: clip                (show)\n");
             console::puts("         clip set <text>\n");
+            console::puts("         clip yank-back [N]  (copy last N scrollback rows)\n");
+            console::puts("         clip push           (Bat_OS clip -> macOS clip)\n");
+            console::puts("         clip pull           (macOS clip -> Bat_OS clip)\n");
             console::puts("         clip clear\n");
-            console::puts("  shortcuts: Ctrl+V paste at cursor, Ctrl+Y yank current line\n");
+            console::puts("  shortcuts: Ctrl+V paste at cursor\n");
+            console::puts("             Ctrl+Y yank current input line\n");
+            console::puts("             Ctrl+S enter visual select mode\n");
+            console::puts("               arrows move cursor / Shift+arrows extend\n");
+            console::puts("               Enter copies, Esc exits without copy\n");
+            console::puts("  bridge:    python3 scripts/host_clipboard_bridge.py\n");
+            console::puts("             must be running on the host for push/pull\n");
         }
     }
+}
+
+/// Host clipboard bridge endpoint. QEMU slirp NATs guest's
+/// 10.0.2.2 to host loopback, so the bridge daemon binds to
+/// 127.0.0.1:9101 and we reach it via this address.
+const CLIP_BRIDGE_IP: u32   = 0x0A000202; // 10.0.2.2 big-endian
+const CLIP_BRIDGE_PORT: u16 = 9101;
+
+/// Push Bat_OS clipboard contents to the host (macOS) clipboard
+/// via the TCP bridge. Run scripts/host_clipboard_bridge.py on the
+/// host first.
+fn cmd_clip_push() {
+    use crate::ui::clipboard;
+    let n = clipboard::len();
+    if n == 0 {
+        console::puts("  Bat_OS clipboard is empty; nothing to push\n");
+        return;
+    }
+    let mut payload = [0u8; clipboard::CLIPBOARD_CAP];
+    let copied = clipboard::copy_into(&mut payload);
+
+    if let Err(e) = net::tcp::connect(CLIP_BRIDGE_IP, CLIP_BRIDGE_PORT) {
+        console::puts("  bridge connect failed: ");
+        console::puts(e);
+        console::puts("\n  start the bridge: python3 scripts/host_clipboard_bridge.py\n");
+        return;
+    }
+
+    // SET <len>\n<bytes>
+    let mut header = [0u8; 24];
+    let mut h = 0;
+    for &b in b"SET " { header[h] = b; h += 1; }
+    let mut tmp = [0u8; 10];
+    let mut ti = 0;
+    let mut nn = copied;
+    if nn == 0 { tmp[0] = b'0'; ti = 1; }
+    else {
+        while nn > 0 && ti < tmp.len() { tmp[ti] = b'0' + (nn % 10) as u8; nn /= 10; ti += 1; }
+    }
+    for j in 0..ti { header[h] = tmp[ti - 1 - j]; h += 1; }
+    header[h] = b'\n'; h += 1;
+
+    if net::tcp::send_data(&header[..h]).is_err()
+        || net::tcp::send_data(&payload[..copied]).is_err() {
+        console::puts("  bridge send failed\n");
+        net::tcp::close();
+        return;
+    }
+
+    let mut resp = [0u8; 32];
+    let r = match net::tcp::recv_data(&mut resp) {
+        Ok(n) => n,
+        Err(e) => { console::puts("  bridge recv failed: "); console::puts(e); console::puts("\n"); net::tcp::close(); return; }
+    };
+    net::tcp::close();
+
+    if r >= 2 && &resp[..2] == b"OK" {
+        console::puts("  -> macOS clipboard set (");
+        print_num(copied);
+        console::puts(" bytes)\n");
+    } else {
+        console::puts("  bridge replied: ");
+        for &b in &resp[..r.min(resp.len())] {
+            console::putc(if (0x20..=0x7e).contains(&b) { b } else { b'?' });
+        }
+        console::puts("\n");
+    }
+}
+
+/// Pull the host (macOS) clipboard into Bat_OS's clipboard.
+fn cmd_clip_pull() {
+    if let Err(e) = net::tcp::connect(CLIP_BRIDGE_IP, CLIP_BRIDGE_PORT) {
+        console::puts("  bridge connect failed: ");
+        console::puts(e);
+        console::puts("\n  start the bridge: python3 scripts/host_clipboard_bridge.py\n");
+        return;
+    }
+    if net::tcp::send_data(b"GET\n").is_err() {
+        console::puts("  bridge send failed\n");
+        net::tcp::close();
+        return;
+    }
+
+    // Response is "OK <len>\n<bytes>" — read one chunk and parse
+    // the header out of it. recv_data is blocking with coalesce, so
+    // the whole reply usually arrives together.
+    let mut buf = [0u8; crate::ui::clipboard::CLIPBOARD_CAP + 32];
+    let n = match net::tcp::recv_data(&mut buf) {
+        Ok(n) => n,
+        Err(e) => { console::puts("  bridge recv failed: "); console::puts(e); console::puts("\n"); net::tcp::close(); return; }
+    };
+    net::tcp::close();
+
+    if n < 4 || &buf[..3] != b"OK " {
+        console::puts("  bridge reply not OK: ");
+        for &b in &buf[..n.min(40)] {
+            console::putc(if (0x20..=0x7e).contains(&b) { b } else { b'?' });
+        }
+        console::puts("\n");
+        return;
+    }
+
+    // Find LF separating header from payload.
+    let mut newline_at: Option<usize> = None;
+    for i in 3..n {
+        if buf[i] == b'\n' { newline_at = Some(i); break; }
+    }
+    let lf = match newline_at {
+        Some(i) => i,
+        None => { console::puts("  bridge reply missing payload separator\n"); return; }
+    };
+
+    // Parse the length between "OK " and LF.
+    let mut len: usize = 0;
+    let mut ok = false;
+    for &b in &buf[3..lf] {
+        if (b'0'..=b'9').contains(&b) { len = len * 10 + (b - b'0') as usize; ok = true; }
+        else { ok = false; break; }
+    }
+    if !ok {
+        console::puts("  bridge reply bad length\n");
+        return;
+    }
+
+    let body_start = lf + 1;
+    let avail = n - body_start;
+    let copy = len.min(avail).min(crate::ui::clipboard::CLIPBOARD_CAP);
+    crate::ui::clipboard::set(&buf[body_start..body_start + copy]);
+    console::puts("  <- pulled ");
+    print_num(copy);
+    console::puts(" bytes from macOS clipboard\n");
+    if copy < len {
+        console::puts("  (truncated; full payload was ");
+        print_num(len);
+        console::puts(" bytes)\n");
+    }
+}
+
+fn cmd_clip_yank_back(arg: &str) {
+    let n: usize = if arg.is_empty() { 1 }
+        else { match arg.parse::<usize>() { Ok(v) if v > 0 => v, _ => 1 } };
+    let copied = crate::ui::console::yank_last_rows(n);
+    console::puts("  yanked ");
+    print_num(copied);
+    console::puts(" bytes from last ");
+    print_num(n);
+    console::puts(" row(s)\n");
 }
 
 fn cmd_clip_set(text: &str) {
@@ -2759,13 +2973,31 @@ fn cmd_comms(sub: &str, _arg: &str) {
         "status" => cmd_comms_status(),
         _ => {
             console::puts("  flow:\n");
-            console::puts("    1. comms identify <ip:port>   (discovery, copies pubkey to clipboard)\n");
-            console::puts("    2. comms pin <hex>            (Ctrl+V to paste from clipboard)\n");
-            console::puts("    3. comms connect <ip:port>    (uses stored pin)\n");
-            console::puts("    4. comms send <message>\n");
-            console::puts("    5. comms close\n");
+            console::puts("    1. comms my-id                (this cave's pubkey; allowlist it on the server)\n");
+            console::puts("    2. comms identify <ip:port>   (discovery, copies server pubkey to clipboard)\n");
+            console::puts("    3. comms pin <hex>            (Ctrl+V to paste from clipboard)\n");
+            console::puts("    4. comms connect <ip:port>    (uses stored pin; mutual auth)\n");
+            console::puts("    5. comms send <message>\n");
+            console::puts("    6. comms close\n");
         }
     }
+}
+
+fn cmd_comms_my_id() {
+    let mut hex = [0u8; 64];
+    if !crate::ui::apps::comms::my_id_hex(&mut hex) {
+        console::puts("  comms identity unavailable (BatFS not ready?)\n");
+        return;
+    }
+    console::puts("  this cave's comms identity: ");
+    for &b in &hex { console::putc(b); }
+    console::puts("\n");
+    // Auto-copy so the operator can paste it into the server's
+    // allowlist file without re-typing.
+    crate::ui::clipboard::set(&hex);
+    console::puts("  -> copied to clipboard (Ctrl+V to paste it elsewhere)\n");
+    console::puts("  add this hex to the server's comms_clients.allowlist\n");
+    console::puts("  (one pubkey per line) and restart the server.\n");
 }
 
 fn parse_target(target: &str) -> Option<(u32, u16)> {

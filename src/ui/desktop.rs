@@ -106,6 +106,13 @@ pub fn run() -> ! {
     // empty buffer state.
     macro_rules! clear_input {
         () => {
+            // If the user was mid-selection on SH, bailing out of
+            // the tab implicitly cancels the selection — without
+            // this, SELECT_MODE persists across tab switches and
+            // confuses the next return to SH.
+            if console::select_mode_active() {
+                console::exit_select_mode();
+            }
             for _ in 0..cmd_len {
                 console::putc(0x08);
                 platform::serial_putc(0x08);
@@ -257,6 +264,43 @@ pub fn run() -> ! {
             let active = wm::active_app();
             match active {
                 wm::APP_SHELL => {
+                    // ── Visual selection mode override ─────────────
+                    // While selection mode is active, arrows move
+                    // the row cursor / extend the range, Enter
+                    // commits to clipboard, Esc bails. Plain typing
+                    // is suppressed so the user doesn't accidentally
+                    // pollute the input buffer while highlighting.
+                    if console::select_mode_active() {
+                        use crate::drivers::virtio::keyboard::{
+                            KEY_ARROW_UP, KEY_ARROW_DOWN,
+                            KEY_SHIFT_ARROW_UP, KEY_SHIFT_ARROW_DOWN,
+                        };
+                        match c {
+                            KEY_ARROW_UP        => { console::sel_move_up(false); render_current(); }
+                            KEY_ARROW_DOWN      => { console::sel_move_down(false); render_current(); }
+                            KEY_SHIFT_ARROW_UP  => { console::sel_move_up(true);  render_current(); }
+                            KEY_SHIFT_ARROW_DOWN=> { console::sel_move_down(true); render_current(); }
+                            b'\r' | b'\n' => {
+                                let n = console::sel_copy_to_clipboard();
+                                console::exit_select_mode();
+                                render_current();
+                                console::puts("\n  -> copied ");
+                                if n < 10 { console::putc(b'0' + n as u8); }
+                                else { let mut tmp = [0u8; 8]; let mut i = 0; let mut nn = n;
+                                       while nn > 0 && i < 8 { tmp[i] = b'0' + (nn % 10) as u8; nn /= 10; i += 1; }
+                                       for j in 0..i { console::putc(tmp[i - 1 - j]); } }
+                                console::puts(" bytes to clipboard (Ctrl+V to paste)\n");
+                                console::prompt();
+                                wm::flush_all();
+                            }
+                            0x1B => {
+                                console::exit_select_mode();
+                                render_current();
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
                     // Shell input
                     match c {
                         b'\r' | b'\n' => {
@@ -298,6 +342,14 @@ pub fn run() -> ! {
                         // line stays visible and editable.
                         0x19 => {
                             super::clipboard::set(&cmd_buf[..cmd_len]);
+                        }
+                        // Ctrl+S — enter visual selection mode.
+                        // Wipes the partial input so the highlight
+                        // doesn't overlay a half-typed prompt.
+                        0x13 => {
+                            clear_input!();
+                            console::enter_select_mode();
+                            render_current();
                         }
                         _ if c >= 0x20 && c <= 0x7E && cmd_len < 255 => {
                             cmd_buf[cmd_len] = c;

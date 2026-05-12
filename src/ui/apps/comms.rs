@@ -94,6 +94,81 @@ const OFFER_LEN: usize = 32 + 32 + 64;
 const KEY_DIR_C2S: &[u8] = b"BAT_OS-COMMS-c2s-v1";
 const KEY_DIR_S2C: &[u8] = b"BAT_OS-COMMS-s2c-v1";
 
+/// BatFS path for our persistent per-cave Ed25519 identity. 32-byte
+/// raw seed. Persisting it across boots is what makes server-side
+/// allowlists meaningful — without persistence, each session's
+/// "identity" would be ephemeral and the server couldn't pin us.
+const IDENTITY_PATH: &str = "comms_identity.key";
+
+/// Lazy-loaded session identity. Generated + persisted to BatFS on
+/// first call; reused for subsequent sessions in the same cave.
+/// On cave switch the cached value is cleared via
+/// `reset_for_cave_switch` so the new tenant doesn't inherit the
+/// previous cave's identity.
+static mut MY_IDENTITY_PK: [u8; 32] = [0; 32];
+static mut MY_IDENTITY_SK: [u8; 64] = [0; 64];
+static mut MY_IDENTITY_LOADED: bool = false;
+
+/// Return our persistent identity, lazy-loading from BatFS (or
+/// generating + persisting on first use). Returns the secret-key
+/// blob (64 bytes per ed25519-compact layout) and the public key.
+fn my_identity() -> Result<(SecretKey, [u8; 32]), &'static str> {
+    unsafe {
+        if core::ptr::read_volatile(core::ptr::addr_of!(MY_IDENTITY_LOADED)) {
+            let sk_bytes = core::ptr::read_volatile(core::ptr::addr_of!(MY_IDENTITY_SK));
+            let pk       = core::ptr::read_volatile(core::ptr::addr_of!(MY_IDENTITY_PK));
+            let sk = SecretKey::from_slice(&sk_bytes)
+                .map_err(|_| "cached identity sk is corrupt")?;
+            return Ok((sk, pk));
+        }
+
+        // Try to load from BatFS first.
+        let mut seed = [0u8; 32];
+        let kp = match crate::fs::batfs::read(IDENTITY_PATH, &mut seed) {
+            Ok(n) if n == 32 => KeyPair::from_seed(Seed::new(seed)),
+            _ => {
+                // Generate + persist. Seed from RNDR (with fallback
+                // inside rng::fill_bytes), then write the raw seed
+                // to BatFS for future loads.
+                crate::crypto::rng::fill_bytes(&mut seed);
+                let kp = KeyPair::from_seed(Seed::new(seed));
+                let _ = crate::fs::batfs::create(IDENTITY_PATH, &seed);
+                kp
+            }
+        };
+
+        // Cache via raw pointer writes to avoid taking a &mut to the static.
+        let sk_ptr = core::ptr::addr_of_mut!(MY_IDENTITY_SK) as *mut u8;
+        for i in 0..64 {
+            core::ptr::write_volatile(sk_ptr.add(i), kp.sk[i]);
+        }
+        let pk_ptr = core::ptr::addr_of_mut!(MY_IDENTITY_PK) as *mut u8;
+        for i in 0..32 {
+            core::ptr::write_volatile(pk_ptr.add(i), kp.pk[i]);
+        }
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(MY_IDENTITY_LOADED), true);
+
+        let pk_out = core::ptr::read_volatile(core::ptr::addr_of!(MY_IDENTITY_PK));
+        Ok((kp.sk, pk_out))
+    }
+}
+
+/// Hex-encode our identity pubkey for `comms my-id`. Returns false
+/// if the identity can't be loaded.
+pub fn my_id_hex(out: &mut [u8; 64]) -> bool {
+    match my_identity() {
+        Ok((_, pk)) => {
+            let hex = b"0123456789abcdef";
+            for i in 0..32 {
+                out[i * 2]     = hex[(pk[i] >> 4) as usize];
+                out[i * 2 + 1] = hex[(pk[i] & 0x0f) as usize];
+            }
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 // Compose buffer
 static mut COMPOSE_BUF: [u8; MAX_MSG_LEN] = [0; MAX_MSG_LEN];
 static mut COMPOSE_LEN: usize = 0;
@@ -153,18 +228,17 @@ pub fn identify(ip: u32, port: u16) -> Result<[u8; 32], &'static str> {
     crate::net::tcp::connect(ip, port)?;
 
     // Same offer as a real connect — server has no way to tell
-    // discovery from connect, which is on purpose.
-    let mut id_seed = [0u8; 32];
-    crate::crypto::rng::fill_bytes(&mut id_seed);
-    let id_kp = KeyPair::from_seed(Seed::new(id_seed));
-    let id_pk_bytes: [u8; 32] = *id_kp.pk;
+    // discovery from connect, which is on purpose. We use the
+    // persistent identity so the server's allowlist check sees the
+    // same key during discovery and at real connect.
+    let (id_sk, id_pk_bytes) = my_identity()?;
 
     let mut rng = crate::crypto::pq_hybrid::BatRng;
     let eph_sk = EphemeralSecret::random_from_rng(&mut rng);
     let eph_pk_bytes: [u8; 32] = X25519Public::from(&eph_sk).to_bytes();
-    drop(eph_sk); // we throw this away — discovery has no transport
+    drop(eph_sk); // discovery has no transport
 
-    let offer = build_offer(&id_kp.sk, &id_pk_bytes, &eph_pk_bytes);
+    let offer = build_offer(&id_sk, &id_pk_bytes, &eph_pk_bytes);
     crate::net::tcp::send_data(&offer)?;
 
     let mut srv_offer = [0u8; OFFER_LEN];
@@ -192,6 +266,21 @@ pub fn connect(ip: u32, port: u16) -> Result<(), &'static str> {
         p
     };
 
+    // If we're already connected (or half-connected from a prior
+    // attempt) the legacy TCP PCB still holds the previous session's
+    // socket. tcp::connect would quietly reuse it and our fresh
+    // handshake offer would land mid-AEAD-stream on the server,
+    // which can't parse it -> server hangs up -> we recv-timeout.
+    // Tear the previous session down first.
+    if unsafe { STATE } != CommState::Disconnected {
+        disconnect();
+    } else {
+        // Even Disconnected state may leak a stale PCB if the user
+        // hit an Err mid-handshake on the previous try. Free-close
+        // is idempotent on an unopened PCB.
+        crate::net::tcp::close();
+    }
+
     unsafe {
         STATE = CommState::Connecting;
         PEER_IP = ip;
@@ -206,12 +295,16 @@ pub fn connect(ip: u32, port: u16) -> Result<(), &'static str> {
         return Err(e);
     }
 
-    // ── 1. Generate ephemeral X25519 + per-session Ed25519 identity ─
-    let mut id_seed = [0u8; 32];
-    crate::crypto::rng::fill_bytes(&mut id_seed);
-    let id_kp = KeyPair::from_seed(Seed::new(id_seed));
-    let id_sk: SecretKey = id_kp.sk;
-    let id_pk_bytes: [u8; 32] = *id_kp.pk;
+    // ── 1. Load our persistent identity + fresh ephemeral X25519 ──
+    let (id_sk, id_pk_bytes) = match my_identity() {
+        Ok(v) => v,
+        Err(e) => {
+            unsafe { STATE = CommState::Error; }
+            crate::net::tcp::close();
+            add_system_msg("Couldn't load comms identity.");
+            return Err(e);
+        }
+    };
 
     let mut rng = crate::crypto::pq_hybrid::BatRng;
     let eph_sk = EphemeralSecret::random_from_rng(&mut rng);
@@ -482,6 +575,13 @@ pub fn reset_for_cave_switch() {
         RECV_CTR = 0;
         PINNED_SERVER_ID = [0; 32];
         PIN_SET = false;
+        // Wipe the cached identity — the new cave will lazy-load
+        // its own from BatFS (or generate one) on first comms use.
+        // Without this, the new cave would inherit the prior tenant's
+        // identity, defeating cave isolation for comms.
+        MY_IDENTITY_PK = [0; 32];
+        MY_IDENTITY_SK = [0; 64];
+        MY_IDENTITY_LOADED = false;
         PEER_IP = 0;
         PEER_PORT = 0;
         MSG_COUNT = 0;
