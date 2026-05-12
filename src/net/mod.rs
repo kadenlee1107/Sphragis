@@ -29,6 +29,10 @@ pub mod udp;
 // outright (would be re-added when real Tor work starts), and `vpn`
 // renamed to `psk_overlay` to honestly describe what it does.
 pub mod psk_overlay;
+// Gap-audit 043 phase 1 — real WireGuard. Spec-mandated Noise IK
+// over X25519 + ChaCha20-Poly1305 + BLAKE2s; no UDP transport yet
+// (phase 2). Self-tested end-to-end via `wg-selftest`.
+pub mod wireguard;
 
 use crate::drivers::virtio::net as netdev;
 

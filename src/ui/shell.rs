@@ -335,6 +335,7 @@ fn execute(cmd: &str) {
         "pq-sig-selftest" => cmd_pq_sig_selftest(),
         "ipc-selftest"        => cmd_ipc_selftest(),
         "pq-comms-selftest"   => cmd_pq_comms_selftest(),
+        "wg-selftest"         => cmd_wg_selftest(),
         "shm-selftest"        => cmd_shm_selftest(),
         "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
@@ -2963,6 +2964,50 @@ fn cmd_shm_selftest() {
     shm::release(id3);
 
     console::puts("  ✓ ALL SHM TESTS PASSED\n");
+}
+
+/// WireGuard Phase-1 selftest. Runs the full Noise IK handshake +
+/// transport-data round trip in process (no UDP yet). Proves the
+/// spec-compliant cryptographic core works end-to-end against
+/// itself; Phase 2 wires it to a real `wg-quick` peer.
+fn cmd_wg_selftest() {
+    use crate::net::wireguard;
+    console::puts_hi("  WIREGUARD PHASE-1 SELF-TEST\n");
+    console::puts("  Noise IK / X25519 / ChaCha20-Poly1305 / BLAKE2s\n");
+    console::puts("  Running initiator <-> responder handshake + bidirectional transport ...\n");
+
+    match wireguard::selftest_round_trip() {
+        Ok((init_pref, resp_recv_pref, keys_consistent, transport_ok)) => {
+            let hex = b"0123456789abcdef";
+            console::puts("    init send_key prefix:  ");
+            for &b in &init_pref {
+                console::putc(hex[(b >> 4) as usize]);
+                console::putc(hex[(b & 0x0f) as usize]);
+            }
+            console::puts("\n    resp recv_key prefix:  ");
+            for &b in &resp_recv_pref {
+                console::putc(hex[(b >> 4) as usize]);
+                console::putc(hex[(b & 0x0f) as usize]);
+            }
+            console::puts("\n");
+            if !keys_consistent {
+                console::puts("  ✗ FAIL  initiator.send_key != responder.recv_key\n");
+                return;
+            }
+            console::puts("  ✓ key derivation consistent both sides\n");
+            if !transport_ok {
+                console::puts("  ✗ FAIL  transport round trip\n");
+                return;
+            }
+            console::puts("  ✓ transport round trip (init->resp + resp->init)\n");
+            console::puts("  ✓ ALL WIREGUARD TESTS PASSED\n");
+            console::puts("    next: phase 2 wires this to UDP for over-the-wire interop\n");
+            console::puts("    with `wg-quick` on the host.\n");
+        }
+        Err(_) => {
+            console::puts("  ✗ FAIL: handshake error\n");
+        }
+    }
 }
 
 /// In-kernel selftest of the PQ-hybrid comms handshake. Exercises
