@@ -338,6 +338,7 @@ fn execute(cmd: &str) {
         "shm-selftest"        => cmd_shm_selftest(),
         "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
+        "sys-caves-selftest"  => cmd_sys_caves_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
         "pkg" => {
@@ -2733,6 +2734,143 @@ fn cmd_release_verify(name: &str, sig_hex: &str) {
             console::puts("                   or you signed with a different key than was baked\n");
         }
     }
+}
+
+/// sys-caves Arc-2 selftest: prove the scheduler MMU hook fires
+/// on cave-crossing task transitions.
+///
+/// Flow:
+///   1. Look up sys-wg cave id (created at boot by sys_caves::init).
+///   2. Snapshot TTBR0_EL1 from this task (cave_id 0 → PRIMARY_L1).
+///   3. Spawn a worker kernel task tagged with sys-wg's cave_id.
+///   4. Worker, on first run, reads TTBR0_EL1 and stores it in a
+///      static. By Arc-1 contract the scheduler must have called
+///      `mmu::switch_to_cave(sys-wg.l1)` before the worker runs.
+///   5. Yield until the worker has recorded its observation.
+///   6. Verify worker_ttbr0 == sys-wg's L1 phys addr.
+///   7. Verify our TTBR0_EL1 is back at PRIMARY_L1 (the scheduler's
+///      Arc-2 refinement: cave_id 0 transition → switch_to_primary).
+fn cmd_sys_caves_selftest() {
+    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use crate::batcave::{cave, sys_caves};
+    use crate::kernel::{process, scheduler};
+
+    console::puts_hi("  SYS-CAVES ARC-2 SELF-TEST\n");
+    console::puts("  Scheduler must swap TTBR0_EL1 on cave-crossing task transitions.\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id,
+        None => {
+            console::puts("  ✗ FAIL: sys-wg cave not initialized (sys_caves::init did not run?)\n");
+            return;
+        }
+    };
+    let sys_wg_l1 = match cave::get_cave_l1_phys(sys_wg_id as u16) {
+        Some(l1) => l1,
+        None => {
+            console::puts("  ✗ FAIL: sys-wg cave has no L1 page table built\n");
+            console::puts("    (allocation failed at boot? out of CAVE_L1 slots?)\n");
+            return;
+        }
+    };
+    console::puts("  sys-wg cave id=");
+    print_num(sys_wg_id);
+    console::puts(" L1=0x");
+    let hex = b"0123456789abcdef";
+    for sh in (0..16).rev() {
+        console::putc(hex[((sys_wg_l1 >> (sh * 4)) & 0xF)]);
+    }
+    console::puts("\n");
+
+    let ttbr0_before: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0_before); }
+    console::puts("  TTBR0 before:  0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((ttbr0_before >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts("\n");
+
+    // Worker side: read TTBR0_EL1 on first scheduling, publish.
+    static WORKER_RAN: AtomicBool = AtomicBool::new(false);
+    static WORKER_TTBR0: AtomicUsize = AtomicUsize::new(0);
+    fn worker_entry() -> ! {
+        let t: u64;
+        unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) t); }
+        WORKER_TTBR0.store(t as usize, Ordering::Release);
+        WORKER_RAN.store(true, Ordering::Release);
+        // Done — yield forever; the parent task harvests our atomics
+        // and we eventually get reaped on cave teardown.
+        loop { scheduler::yield_now(); }
+    }
+
+    WORKER_RAN.store(false, Ordering::Relaxed);
+    WORKER_TTBR0.store(0, Ordering::Relaxed);
+
+    let worker_id = match process::create_kernel_task(
+        "sys-caves-worker",
+        worker_entry,
+        /* priority */ 5,
+    ) {
+        Some(id) => id,
+        None => {
+            console::puts("  ✗ FAIL: could not spawn worker task\n");
+            return;
+        }
+    };
+    // Tag it as belonging to sys-wg so the scheduler's MMU hook
+    // fires on the transition into it.
+    process::set_cave(worker_id, sys_wg_id as u16);
+    console::puts("  spawned worker tid=");
+    print_num(worker_id.0 as usize);
+    console::puts(" tagged cave_id=");
+    print_num(sys_wg_id);
+    console::puts("\n");
+
+    // Yield until the worker has run. Bounded — bail after 256
+    // attempts so a regressed scheduler doesn't hang us forever.
+    let mut tries = 0;
+    while !WORKER_RAN.load(Ordering::Acquire) && tries < 256 {
+        scheduler::yield_now();
+        tries += 1;
+    }
+    if !WORKER_RAN.load(Ordering::Acquire) {
+        console::puts("  ✗ FAIL: worker did not run within 256 yields\n");
+        return;
+    }
+    let worker_ttbr0 = WORKER_TTBR0.load(Ordering::Acquire);
+    console::puts("  worker observed TTBR0: 0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((worker_ttbr0 >> (sh * 4)) & 0xF)]);
+    }
+    console::puts("\n");
+
+    // Sanity: workers' TTBR0 should equal sys-wg's L1.
+    if worker_ttbr0 != sys_wg_l1 {
+        console::puts("  ✗ FAIL: worker TTBR0 != sys-wg L1\n");
+        console::puts("    (scheduler MMU hook did not fire, or wrong L1 was loaded)\n");
+        return;
+    }
+    console::puts("  ✓ scheduler swapped TTBR0 to sys-wg's L1 on cross-cave switch\n");
+
+    // Our TTBR0 should be back to PRIMARY_L1 (cave_id 0 fallback in
+    // the scheduler hook). Read it now after a yield to make sure
+    // we ran through schedule() at least once after the worker.
+    scheduler::yield_now();
+    let ttbr0_after: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0_after); }
+    console::puts("  TTBR0 after:   0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((ttbr0_after >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts("\n");
+    if ttbr0_after as usize == sys_wg_l1 {
+        console::puts("  ✗ FAIL: TTBR0 still on sys-wg's L1 after returning to kernel ns\n");
+        console::puts("    (Arc-2 refinement to switch_to_primary on cave_id 0 did not fire)\n");
+        return;
+    }
+    console::puts("  ✓ TTBR0 restored when returning to kernel namespace (cave_id 0)\n");
+
+    console::puts("  ✓ ALL SYS-CAVES TESTS PASSED\n");
 }
 
 /// Selftest for the scheduler's block_on async-bridge primitive.

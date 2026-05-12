@@ -94,12 +94,21 @@ pub fn schedule() {
     // runs, the user-window mappings are already in effect.
     let cur_cave_id = process::get(current_id).cave_id;
     if next_cave_id != cur_cave_id {
-        if let Some(target_l1) = crate::batcave::cave::get_cave_l1_phys(next_cave_id) {
+        if next_cave_id == 0 {
+            // Transitioning back to the kernel namespace — restore
+            // PRIMARY_L1 so TTBR0 cleanly reflects "no cave-scoped
+            // user window active." Without this, the previous
+            // cave's L1 would linger in TTBR0 across transitions
+            // to kernel-ns tasks. Harmless in Phase 2 (kernel-only
+            // tasks don't access user VAs) but cleaner semantics,
+            // and matters the moment we add real EL0 tasks.
+            crate::batcave::linux::mmu::switch_to_primary();
+        } else if let Some(target_l1) = crate::batcave::cave::get_cave_l1_phys(next_cave_id) {
             crate::batcave::linux::mmu::switch_to_cave(target_l1);
         }
-        // No `else` branch — if the next cave has no L1 yet (created
-        // but not yet entered) leaving TTBR0 alone is correct: the
-        // task wasn't going to access cave-scoped user VAs anyway.
+        // No `else` for the "target cave but no L1 built yet" case
+        // — leaving TTBR0 alone is correct then: the task wasn't
+        // going to access cave-scoped user VAs anyway.
     }
 
     // Switch
