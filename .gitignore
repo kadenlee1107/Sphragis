@@ -73,3 +73,6 @@ macos_dump/SystemKernelExtensions.kc
 tests/*.o
 /.advisory_db_cache
 comms_clients.allowlist
+release.key
+demo-pkg-*.bpkg
+*.bpkg

@@ -344,16 +344,19 @@ fn execute(cmd: &str) {
             // pkg install <bundle-in-batfs>
             // pkg list
             // pkg remove <name>
+            // pkg stage <name> <ip:port>     (transfer from pkg_serve.py)
             match parts[1] {
                 "install" => cmd_pkg_install(parts[2]),
                 "list"    => cmd_pkg_list(),
                 "remove" | "rm" => cmd_pkg_remove(parts[2]),
+                "stage"   => cmd_pkg_stage(parts[2], parts[3]),
                 _ => {
-                    console::puts("  usage: pkg install <bundle.bpkg>\n");
+                    console::puts("  usage: pkg stage <name> <ip:port>\n");
+                    console::puts("         pkg install <bundle.bpkg>\n");
                     console::puts("         pkg list\n");
                     console::puts("         pkg remove <name>\n");
-                    console::puts("  build bundles with scripts/pkg_pack.py\n");
-                    console::puts("  (signed by the release-engineer Ed25519 key)\n");
+                    console::puts("  bundles built with scripts/pkg_pack.py,\n");
+                    console::puts("  served via scripts/pkg_serve.py <bundle.bpkg>\n");
                 }
             }
         }
@@ -2418,6 +2421,108 @@ fn cmd_procs(arg: &str) {
     console::puts("  ---\n  ");
     print_num(shown);
     console::puts(" task(s) visible\n");
+}
+
+/// `pkg stage <name> <ip:port>` — connect to a `pkg_serve.py`
+/// instance, read the 4-byte length prefix + bundle bytes, and
+/// write the result into BatFS at `name`. Bridges the
+/// host-built bundle into BatFS so `pkg install` can verify it.
+fn cmd_pkg_stage(name: &str, target: &str) {
+    use crate::net;
+    if name.is_empty() || target.is_empty() {
+        console::puts("  usage: pkg stage <name> <ip:port>\n");
+        console::puts("  e.g.:  pkg stage demo-1.0.bpkg 10.0.2.2:9102\n");
+        return;
+    }
+    let (ip, port) = match target.rsplit_once(':') {
+        Some((i, p)) => {
+            let ip = parse_ip(i);
+            let port: u16 = match p.parse() { Ok(v) if v > 0 => v, _ => 0 };
+            if ip == 0 || port == 0 {
+                console::puts("  invalid target (expected ip:port)\n"); return;
+            }
+            (ip, port)
+        }
+        None => { console::puts("  invalid target (expected ip:port)\n"); return; }
+    };
+
+    if let Err(e) = net::tcp::connect(ip, port) {
+        console::puts("  connect failed: "); console::puts(e); console::puts("\n");
+        return;
+    }
+
+    // Read 4-byte BE length first.
+    let mut len_buf = [0u8; 4];
+    let mut got = 0;
+    while got < 4 {
+        match net::tcp::recv_data(&mut len_buf[got..]) {
+            Ok(0) => break,
+            Ok(n) => got += n,
+            Err(e) => {
+                console::puts("  length recv failed: "); console::puts(e); console::puts("\n");
+                net::tcp::close();
+                return;
+            }
+        }
+    }
+    if got != 4 {
+        console::puts("  truncated length header\n");
+        net::tcp::close();
+        return;
+    }
+    let total = u32::from_be_bytes(len_buf) as usize;
+    if total == 0 || total > crate::kernel::pkg::MAX_BUNDLE {
+        console::puts("  bundle length out of range: ");
+        print_num(total);
+        console::puts("\n");
+        net::tcp::close();
+        return;
+    }
+    console::puts("  receiving ");
+    print_num(total);
+    console::puts(" bytes from ");
+    console::puts(target);
+    console::puts(" ...\n");
+
+    let mut buf = [0u8; crate::kernel::pkg::MAX_BUNDLE];
+    let mut off = 0usize;
+    while off < total {
+        match net::tcp::recv_data(&mut buf[off..total]) {
+            Ok(0) => break,
+            Ok(n) => off += n,
+            Err(e) => {
+                console::puts("  body recv failed at "); print_num(off);
+                console::puts(": "); console::puts(e); console::puts("\n");
+                net::tcp::close();
+                return;
+            }
+        }
+    }
+    net::tcp::close();
+    if off != total {
+        console::puts("  short read: got "); print_num(off);
+        console::puts(" of "); print_num(total); console::puts("\n");
+        return;
+    }
+
+    // Delete any prior staged file with this name so re-staging is
+    // idempotent. (BatFS::create refuses to overwrite.)
+    let _ = crate::fs::batfs::delete(name);
+    match crate::fs::batfs::create(name, &buf[..off]) {
+        Ok(()) => {
+            console::puts("  ✓ staged ");
+            console::puts(name);
+            console::puts(" (");
+            print_num(off);
+            console::puts(" bytes)\n  next: pkg install ");
+            console::puts(name);
+            console::puts("\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ batfs::create failed: ");
+            console::puts(e); console::puts("\n");
+        }
+    }
 }
 
 /// `pkg install <bundle.bpkg>` — read a BPKG bundle from BatFS,
