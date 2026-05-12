@@ -476,3 +476,305 @@ pub fn selftest_round_trip()
 
     Ok((a, b, keys_consistent, transport_ok))
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Phase 2: WireGuard wire framing.
+//
+// The Phase 1 API exposed handshake state machine fields directly to
+// callers; Phase 2 wraps them in the byte layout WireGuard peers
+// transmit over UDP, so we can interop with stock `wg-quick`. Wire
+// format references whitepaper §5.4.2 (Init) and §5.4.3 (Response).
+// MAC1 is a keyed BLAKE2s MAC; MAC2 is the same construction over a
+// cookie value. Phase 2 minimum leaves MAC2 as zero — peers accept
+// that unless they're under DoS pressure (mac2 enforcement kicks in
+// only when the responder sets the "rate-limited" bit, which is its
+// own arc).
+// ─────────────────────────────────────────────────────────────────
+
+use crate::crypto::blake2s as blake2s_mod;
+
+/// WireGuard message-type constants (whitepaper §5.4.2 message
+/// header). One byte at offset 0 of every wire message.
+pub const MSG_TYPE_INIT:      u8 = 1;
+pub const MSG_TYPE_RESPONSE:  u8 = 2;
+pub const MSG_TYPE_COOKIE:    u8 = 3;
+pub const MSG_TYPE_TRANSPORT: u8 = 4;
+
+/// Wire sizes per whitepaper §5.4.
+pub const INIT_MSG_LEN:      usize = 148;
+pub const RESPONSE_MSG_LEN:  usize = 92;
+pub const COOKIE_MSG_LEN:    usize = 64;
+/// Transport messages have a 16-byte header (type + reserved +
+/// receiver_index + counter) + payload + 16-byte AEAD tag.
+pub const TRANSPORT_HDR_LEN: usize = 16;
+
+/// Decoded InitMsg fields. The mac1 has already been verified by
+/// `parse_init_msg`; the caller plugs the encrypted blobs into
+/// `responder_consume_init` to finish the protocol-state side.
+pub struct ParsedInit {
+    pub sender_index: u32,
+    pub eph_pk: [u8; KEY_LEN],
+    pub enc_static: [u8; KEY_LEN + TAG_LEN],
+    pub enc_timestamp: [u8; TIMESTAMP_LEN + TAG_LEN],
+}
+
+/// Decoded ResponseMsg fields.
+pub struct ParsedResponse {
+    pub sender_index: u32,
+    pub receiver_index: u32,
+    pub eph_pk: [u8; KEY_LEN],
+    pub enc_empty: [u8; TAG_LEN],
+}
+
+/// `mac1` key derived from the peer's static pubkey
+/// (whitepaper §5.4.4). The MAC1 protects against trivially-spoofed
+/// messages that don't even know which peer they're trying to talk
+/// to — cheap rejection at parse time before the expensive
+/// X25519/AEAD work.
+fn mac1_key_for(static_pk: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
+    blake2s_mod::hash2(LABEL_MAC1, static_pk)
+}
+
+/// Encode an InitMsg into its 148-byte wire form. The caller plugs
+/// in the cryptographic outputs from `initiator_send_init` plus the
+/// responder's pinned static pubkey (so we can compute mac1).
+///
+/// mac2 is left as 16 zero bytes — Phase-2-minimum behavior.
+pub fn encode_init_msg(
+    sender_index: u32,
+    eph_pk: &[u8; KEY_LEN],
+    enc_static: &[u8],
+    enc_timestamp: &[u8],
+    responder_static_pk: &[u8; KEY_LEN],
+) -> Result<[u8; INIT_MSG_LEN], WgError> {
+    if enc_static.len() != KEY_LEN + TAG_LEN { return Err(WgError::BadLen); }
+    if enc_timestamp.len() != TIMESTAMP_LEN + TAG_LEN { return Err(WgError::BadLen); }
+
+    let mut msg = [0u8; INIT_MSG_LEN];
+    msg[0] = MSG_TYPE_INIT;
+    // bytes 1..4: reserved (already zero).
+    msg[4..8].copy_from_slice(&sender_index.to_le_bytes());
+    msg[8..40].copy_from_slice(eph_pk);
+    msg[40..88].copy_from_slice(enc_static);
+    msg[88..116].copy_from_slice(enc_timestamp);
+    let key = mac1_key_for(responder_static_pk);
+    let mac1 = blake2s_mod::mac16(&key, &msg[..116]);
+    msg[116..132].copy_from_slice(&mac1);
+    // bytes 132..148: mac2 (left zero).
+    Ok(msg)
+}
+
+/// Decode + mac1-verify an InitMsg. Returns `BadLen` if the message
+/// isn't exactly 148 bytes or the header is malformed; `BadMac` if
+/// the mac1 doesn't match what we'd compute with our static pubkey.
+pub fn parse_init_msg(
+    bytes: &[u8],
+    our_static_pk: &[u8; KEY_LEN],
+) -> Result<ParsedInit, WgError> {
+    if bytes.len() != INIT_MSG_LEN { return Err(WgError::BadLen); }
+    if bytes[0] != MSG_TYPE_INIT { return Err(WgError::BadLen); }
+    if bytes[1] != 0 || bytes[2] != 0 || bytes[3] != 0 { return Err(WgError::BadLen); }
+
+    let key = mac1_key_for(our_static_pk);
+    let expected_mac1 = blake2s_mod::mac16(&key, &bytes[..116]);
+    // Constant-time comparison.
+    let mut diff = 0u8;
+    for i in 0..16 { diff |= expected_mac1[i] ^ bytes[116 + i]; }
+    if diff != 0 { return Err(WgError::BadMac); }
+
+    let mut sb = [0u8; 4];
+    sb.copy_from_slice(&bytes[4..8]);
+    let sender_index = u32::from_le_bytes(sb);
+
+    let mut eph_pk = [0u8; KEY_LEN];
+    eph_pk.copy_from_slice(&bytes[8..40]);
+    let mut enc_static = [0u8; KEY_LEN + TAG_LEN];
+    enc_static.copy_from_slice(&bytes[40..88]);
+    let mut enc_timestamp = [0u8; TIMESTAMP_LEN + TAG_LEN];
+    enc_timestamp.copy_from_slice(&bytes[88..116]);
+
+    Ok(ParsedInit { sender_index, eph_pk, enc_static, enc_timestamp })
+}
+
+/// Encode a ResponseMsg into its 92-byte wire form. mac1 is computed
+/// against the *initiator's* static pubkey so the initiator can
+/// validate the response is destined for it.
+pub fn encode_response_msg(
+    sender_index: u32,
+    receiver_index: u32,
+    eph_pk: &[u8; KEY_LEN],
+    enc_empty: &[u8],
+    initiator_static_pk: &[u8; KEY_LEN],
+) -> Result<[u8; RESPONSE_MSG_LEN], WgError> {
+    if enc_empty.len() != TAG_LEN { return Err(WgError::BadLen); }
+
+    let mut msg = [0u8; RESPONSE_MSG_LEN];
+    msg[0] = MSG_TYPE_RESPONSE;
+    msg[4..8].copy_from_slice(&sender_index.to_le_bytes());
+    msg[8..12].copy_from_slice(&receiver_index.to_le_bytes());
+    msg[12..44].copy_from_slice(eph_pk);
+    msg[44..60].copy_from_slice(enc_empty);
+    let key = mac1_key_for(initiator_static_pk);
+    let mac1 = blake2s_mod::mac16(&key, &msg[..60]);
+    msg[60..76].copy_from_slice(&mac1);
+    // bytes 76..92: mac2 (zero).
+    Ok(msg)
+}
+
+/// Decode + mac1-verify a ResponseMsg.
+pub fn parse_response_msg(
+    bytes: &[u8],
+    initiator_static_pk: &[u8; KEY_LEN],
+) -> Result<ParsedResponse, WgError> {
+    if bytes.len() != RESPONSE_MSG_LEN { return Err(WgError::BadLen); }
+    if bytes[0] != MSG_TYPE_RESPONSE { return Err(WgError::BadLen); }
+    if bytes[1] != 0 || bytes[2] != 0 || bytes[3] != 0 { return Err(WgError::BadLen); }
+
+    let key = mac1_key_for(initiator_static_pk);
+    let expected_mac1 = blake2s_mod::mac16(&key, &bytes[..60]);
+    let mut diff = 0u8;
+    for i in 0..16 { diff |= expected_mac1[i] ^ bytes[60 + i]; }
+    if diff != 0 { return Err(WgError::BadMac); }
+
+    let mut sb = [0u8; 4];
+    sb.copy_from_slice(&bytes[4..8]);
+    let sender_index = u32::from_le_bytes(sb);
+    let mut rb = [0u8; 4];
+    rb.copy_from_slice(&bytes[8..12]);
+    let receiver_index = u32::from_le_bytes(rb);
+
+    let mut eph_pk = [0u8; KEY_LEN];
+    eph_pk.copy_from_slice(&bytes[12..44]);
+    let mut enc_empty = [0u8; TAG_LEN];
+    enc_empty.copy_from_slice(&bytes[44..60]);
+
+    Ok(ParsedResponse { sender_index, receiver_index, eph_pk, enc_empty })
+}
+
+/// Encode a Transport message into wire form: header + payload-AEAD.
+/// `payload` here is the AEAD ciphertext (already includes the
+/// 16-byte tag); `counter` is the sender's monotonic counter
+/// (whitepaper §5.4.6).
+pub fn encode_transport_msg(
+    receiver_index: u32,
+    counter: u64,
+    ct_with_tag: &[u8],
+    out: &mut [u8],
+) -> Result<usize, WgError> {
+    let total = TRANSPORT_HDR_LEN + ct_with_tag.len();
+    if out.len() < total { return Err(WgError::BadLen); }
+    out[0] = MSG_TYPE_TRANSPORT;
+    out[1] = 0; out[2] = 0; out[3] = 0;
+    out[4..8].copy_from_slice(&receiver_index.to_le_bytes());
+    out[8..16].copy_from_slice(&counter.to_le_bytes());
+    out[16..total].copy_from_slice(ct_with_tag);
+    Ok(total)
+}
+
+/// Decoded transport message. The caller calls `transport_recv` (or
+/// the cave-private equivalent in `sys_wg_service`) with `counter`
+/// and `ct_with_tag` to authenticate + decrypt.
+pub struct ParsedTransport<'a> {
+    pub receiver_index: u32,
+    pub counter: u64,
+    pub ct_with_tag: &'a [u8],
+}
+
+pub fn parse_transport_msg(bytes: &[u8]) -> Result<ParsedTransport<'_>, WgError> {
+    if bytes.len() < TRANSPORT_HDR_LEN + TAG_LEN { return Err(WgError::BadLen); }
+    if bytes[0] != MSG_TYPE_TRANSPORT { return Err(WgError::BadLen); }
+    if bytes[1] != 0 || bytes[2] != 0 || bytes[3] != 0 { return Err(WgError::BadLen); }
+    let mut rb = [0u8; 4];
+    rb.copy_from_slice(&bytes[4..8]);
+    let receiver_index = u32::from_le_bytes(rb);
+    let mut cb = [0u8; 8];
+    cb.copy_from_slice(&bytes[8..16]);
+    let counter = u64::from_le_bytes(cb);
+    Ok(ParsedTransport {
+        receiver_index,
+        counter,
+        ct_with_tag: &bytes[TRANSPORT_HDR_LEN..],
+    })
+}
+
+/// Phase-2 wire-framing selftest: drives a full handshake through
+/// the wire encoders + parsers and a single transport round trip.
+/// Returns the same shape as `selftest_round_trip` so the shell
+/// command can compare both flows uniformly.
+pub fn selftest_wire_round_trip()
+    -> Result<([u8; 8], [u8; 8], bool, bool), WgError>
+{
+    let initiator = WgKeypair::generate();
+    let responder = WgKeypair::generate();
+    let timestamp = [0u8; TIMESTAMP_LEN];
+
+    // 1. Initiator: build state + InitMsg payloads + encode wire.
+    let (mut init_state, init_eph_pk, enc_static, enc_ts) =
+        initiator_send_init(&initiator, &responder.static_pk, &timestamp)?;
+    let init_wire = encode_init_msg(
+        /* sender_index */ 0x11223344,
+        &init_eph_pk, &enc_static, &enc_ts,
+        &responder.static_pk,
+    )?;
+
+    // 2. Responder: parse wire (mac1 verified internally), consume
+    //    the handshake, build ResponseMsg state, encode wire.
+    let parsed_init = parse_init_msg(&init_wire, &responder.static_pk)?;
+    if parsed_init.eph_pk != init_eph_pk { return Err(WgError::BadLen); }
+    if parsed_init.sender_index != 0x11223344 { return Err(WgError::BadLen); }
+    if parsed_init.enc_static != enc_static.as_slice() { return Err(WgError::BadLen); }
+
+    let (mut resp_state, ts_back) = responder_consume_init(
+        &responder,
+        &parsed_init.eph_pk,
+        &parsed_init.enc_static,
+        &parsed_init.enc_timestamp,
+    )?;
+    if ts_back != timestamp { return Err(WgError::BadLen); }
+    let (enc_empty, resp_eph_pk, mut resp_tx_keys) =
+        responder_send_response(&mut resp_state, &parsed_init.eph_pk)?;
+    let resp_wire = encode_response_msg(
+        /* sender_index */ 0xAABBCCDD,
+        parsed_init.sender_index,
+        &resp_eph_pk,
+        &enc_empty,
+        &initiator.static_pk,
+    )?;
+
+    // 3. Initiator: parse response wire (mac1 verified), finish.
+    let parsed_resp = parse_response_msg(&resp_wire, &initiator.static_pk)?;
+    if parsed_resp.eph_pk != resp_eph_pk { return Err(WgError::BadLen); }
+    if parsed_resp.receiver_index != 0x11223344 { return Err(WgError::BadLen); }
+    if parsed_resp.sender_index != 0xAABBCCDD { return Err(WgError::BadLen); }
+    if parsed_resp.enc_empty != enc_empty.as_slice() { return Err(WgError::BadLen); }
+
+    let mut init_tx_keys = initiator_finish_handshake(
+        &initiator, &mut init_state,
+        &parsed_resp.eph_pk,
+        &parsed_resp.enc_empty,
+    )?;
+
+    let keys_consistent =
+        init_tx_keys.send_key == resp_tx_keys.recv_key
+        && init_tx_keys.recv_key == resp_tx_keys.send_key;
+
+    // 4. Transport round trip — also through wire framing.
+    let mut transport_ok = true;
+    let payload = b"bat_os over wireguard (phase-2 wire)";
+    let ct = transport_send(&mut init_tx_keys, payload)?;
+    let mut t_wire = alloc::vec![0u8; TRANSPORT_HDR_LEN + ct.len()];
+    encode_transport_msg(
+        parsed_resp.sender_index, 0, &ct, &mut t_wire,
+    )?;
+    let parsed_t = parse_transport_msg(&t_wire)?;
+    if parsed_t.receiver_index != 0xAABBCCDD { transport_ok = false; }
+    if parsed_t.counter != 0 { transport_ok = false; }
+    let pt = transport_recv(&mut resp_tx_keys, parsed_t.counter, parsed_t.ct_with_tag)?;
+    if pt.as_slice() != payload { transport_ok = false; }
+
+    let mut a = [0u8; 8];
+    let mut b = [0u8; 8];
+    a.copy_from_slice(&init_tx_keys.send_key[..8]);
+    b.copy_from_slice(&resp_tx_keys.recv_key[..8]);
+    Ok((a, b, keys_consistent, transport_ok))
+}
