@@ -29,6 +29,7 @@ pub fn handle(pkt: &IpPacket) {
     }
 
     let src_port = u16::from_be_bytes([pkt.payload[0], pkt.payload[1]]);
+    let dst_port = u16::from_be_bytes([pkt.payload[2], pkt.payload[3]]);
 
     // Narrow firewall check: only UDP src_ports explicitly allowed by the
     // firewall rules get through. With the default-deny config this is
@@ -42,6 +43,35 @@ pub fn handle(pkt: &IpPacket) {
     // Route to DNS handler if it's a DNS response (src port 53)
     if src_port == 53 {
         super::dns::handle_response(payload);
+    }
+
+    // Route inbound WireGuard datagrams. The default listen port
+    // is 51820; if a packet arrives there with a WG-shaped first
+    // byte, route through wg_dispatch and transmit any reply back
+    // to the sender via udp::send (swapping src/dst). Packets the
+    // dispatcher rejects fall through silently — matches WG's
+    // "drop, don't respond" discipline (whitepaper §5.4.7).
+    if dst_port == super::wg_dispatch::WG_LISTEN_PORT {
+        use super::wg_dispatch::{dispatch_wire, WgDispatchResult};
+        match dispatch_wire(payload) {
+            WgDispatchResult::Reply(reply) => {
+                // Send reply back to the originator. We're the
+                // responder; their src_port becomes our dst_port,
+                // dst_port stays (listening on the same port).
+                let _ = send(pkt.src, dst_port, src_port, &reply);
+            }
+            WgDispatchResult::InboundPacket(_pt) => {
+                // Phase 2.5 has no upstream IP forwarding yet —
+                // decrypted plaintext is dropped here. A future
+                // arc routes it to the inner IP stack (the cave
+                // policy enforcer + per-cave routing decisions).
+            }
+            WgDispatchResult::Nothing | WgDispatchResult::Err(_) => {
+                // Drop silently per WG spec.
+            }
+        }
+        return; // WG-port packets aren't also stored in the
+                // generic UDP RX buffer (they aren't user-data).
     }
 
     // Store in generic UDP RX buffer for syscall layer

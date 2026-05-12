@@ -11,6 +11,104 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — WireGuard Phase 2.5: UDP dispatch layer
+
+**Context:** Phase 2 (wire framing) and Phase 2.6 (replay window)
+gave us all the byte-shaped machinery to talk WireGuard. This
+commit wires it together with a single `dispatch_wire(bytes)`
+entry point that takes a raw WG message off the wire, routes it
+through `sys_wg_service`, and returns either reply bytes (for an
+Init we should respond to) or decrypted plaintext (for an inbound
+Transport). The actual `udp::handle` hook is a one-line follow-up;
+this commit is the dispatch core + a synthetic end-to-end
+selftest that proves the path.
+
+### What shipped
+
+  * `src/net/wg_dispatch.rs` (new). Single-entry-point dispatcher:
+    - `dispatch_wire(bytes) -> WgDispatchResult` inspects the
+      first byte, routes by `MSG_TYPE_*`.
+    - `MSG_TYPE_INIT` path: `parse_init_msg` (mac1 verified
+      against sys-wg's pubkey) → iterate registered peers via
+      `sys_wg_service::peer_slot_in_use` → call
+      `complete_handshake_as_responder` on each until one
+      accepts (the pinned-key check inside sys-wg rejects peers
+      whose pubkey doesn't match the embedded `enc_static`). On
+      success, allocate `our_sender_index` (atomic seq), install
+      a `SessionEntry`, encode + return Response wire bytes.
+    - `MSG_TYPE_TRANSPORT` path: `parse_transport_msg` →
+      `session_by_our_index(parsed.receiver_index)` → look up
+      `peer_id` → `sys_wg_service::unwrap(peer_id, counter,
+      ciphertext)` → return decrypted plaintext.
+    - `MSG_TYPE_RESPONSE` / `MSG_TYPE_COOKIE`: not implemented
+      yet (we don't initiate handshakes, and the cookie/DoS
+      path is its own arc). Cookies return `Nothing`; stray
+      Responses return `Err(BadLen)`.
+    - `SESSIONS: [SessionEntry; MAX_SESSIONS=8]` — sender-index
+      → peer-id map; lives in plain kernel memory (no
+      cave-private, since index numbers aren't sensitive).
+      IrqGuard-discipline for the install/lookup.
+    - `debug_clear_sessions()` for selftest fixtures.
+    - `selftest()` runs the full path: register a peer, build
+      InitMsg wire, `dispatch_wire(init)` → reply, parse reply,
+      finish handshake initiator-side, encrypt + wrap a payload,
+      `dispatch_wire(transport)` → plaintext, assert it matches.
+  * `src/batcave/sys_wg_service.rs` new helpers required by the
+    dispatcher:
+    - `impl From<u8> for PeerId` — constructs a `PeerId` from a
+      raw slot index (dispatcher uses this when iterating).
+    - `peer_slot_in_use(peer_id) -> bool` — true if the slot is
+      registered (with or without a session yet).
+    - `peer_static_pk(peer_id) -> Option<[u8; 32]>` — exposes
+      the pinned public key (non-secret) so the dispatcher can
+      compute response-mac1.
+    - `find_peer_by_pk(static_pk) -> Option<PeerId>` and
+      `close_peer_by_static_pk` — convenience for selftests
+      that want a clean slate without remembering the PeerId.
+  * `wg-dispatch-selftest` shell command + headless harness.
+
+### Verification
+
+```
+✓ Init handshake replied with valid Response
+✓ Transport msg through dispatch_wire returned the expected plaintext
+✓ Phase-2.5 dispatch path verified
+```
+
+Full sweep: boot-smoke, sys-wg, wg-wire, wg-replay, and the new
+wg-dispatch — all PASS.
+
+### Earned property
+
+We can now process a wire-format WireGuard message arriving as
+raw bytes (from anywhere — Phase 2.5.1 will hook it to
+`udp::handle`, but the dispatch layer is testable in isolation
+TODAY) and produce a wire-format reply or decrypted plaintext.
+The path through sys-wg's cave-private state, the wire codec,
+the replay window, and the sender-index map all compose cleanly.
+
+### What this DOESN'T do yet
+
+  * `udp::handle` doesn't call `dispatch_wire` yet. The selftest
+    drives it directly. Hooking it in `udp::handle` is a small
+    follow-up (route inbound UDP with `dst_port = WG_LISTEN_PORT`
+    through `dispatch_wire`, transmit `Reply` via `udp::send`).
+  * No initiator role. We accept Init+reply with Response, but
+    can't open a connection to another peer ourselves. That's a
+    separate "WG connect-out" arc that needs config (peer
+    endpoint, our preshared key, etc.).
+  * No `mac2` / cookie / DoS path. WG accepts that unless the
+    receiver explicitly rate-limits (which we don't).
+  * Session table doesn't evict — full table just drops new
+    inits. Future arc: LRU.
+
+### Branch status
+
+`feat/wireguard-phase2.5-udp-dispatch` (current, branched from
+main at `1991c5a0` after the 2.6 merge). Ready to commit + push.
+
+---
+
 ## 2026-05-12 — Mac — WireGuard Phase 2.6: sliding-window replay protection
 
 **Context:** Phase 1 `transport_recv` used strict-monotonic counter

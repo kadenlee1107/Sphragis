@@ -338,6 +338,7 @@ fn execute(cmd: &str) {
         "wg-selftest"         => cmd_wg_selftest(),
         "wg-wire-selftest"    => cmd_wg_wire_selftest(),
         "wg-replay-selftest"  => cmd_wg_replay_selftest(),
+        "wg-dispatch-selftest" => cmd_wg_dispatch_selftest(),
         "shm-selftest"        => cmd_shm_selftest(),
         "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
@@ -3852,6 +3853,42 @@ fn cmd_wg_replay_selftest() {
         }
         Err(_) => {
             console::puts("  ✗ FAIL: handshake or AEAD error inside selftest\n");
+        }
+    }
+}
+
+/// WireGuard Phase 2.5 UDP-dispatch selftest. Drives the full
+/// inbound path: synthetic InitMsg wire bytes -> `dispatch_wire`
+/// -> Response wire bytes -> initiator finishes handshake ->
+/// initiator builds TransportMsg wire bytes -> `dispatch_wire`
+/// -> decrypted plaintext. End to end with the receiver-side
+/// peer table managed by `sys_wg_service` and the
+/// sender-index map managed by `net::wg_dispatch`.
+fn cmd_wg_dispatch_selftest() {
+    use crate::net::wg_dispatch;
+    console::puts_hi("  WIREGUARD PHASE-2.5 UDP-DISPATCH SELF-TEST\n");
+    console::puts("  Synthetic Init -> dispatch_wire -> Response,\n");
+    console::puts("  then encrypt + dispatch_wire -> plaintext.\n");
+
+    match wg_dispatch::selftest() {
+        Ok((handshake_ok, transport_ok)) => {
+            if handshake_ok {
+                console::puts("  ✓ Init handshake replied with valid Response\n");
+            } else {
+                console::puts("  ✗ FAIL: handshake reply missing or wrong\n");
+                return;
+            }
+            if transport_ok {
+                console::puts("  ✓ Transport msg through dispatch_wire returned\n");
+                console::puts("    the expected plaintext\n");
+            } else {
+                console::puts("  ✗ FAIL: transport plaintext mismatch\n");
+                return;
+            }
+            console::puts("  ✓ Phase-2.5 dispatch path verified\n");
+        }
+        Err(_) => {
+            console::puts("  ✗ FAIL: dispatch selftest errored\n");
         }
     }
 }
