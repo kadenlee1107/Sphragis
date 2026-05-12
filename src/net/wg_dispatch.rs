@@ -40,8 +40,14 @@ use alloc::vec::Vec;
 use crate::batcave::sys_wg_service::{self, PeerId, SysWgError};
 use crate::net::wireguard::{
     self, MSG_TYPE_INIT, MSG_TYPE_RESPONSE, MSG_TYPE_TRANSPORT, MSG_TYPE_COOKIE,
-    WgError, KEY_LEN, TAG_LEN, REPLAY_WINDOW_WIDTH,
+    WgError, KEY_LEN,
 };
+
+/// Default WireGuard UDP listen port — matches what `wg-quick`
+/// uses unless explicitly configured. The kernel's UDP handler
+/// routes packets with `dst_port == WG_LISTEN_PORT` through
+/// `dispatch_wire`.
+pub const WG_LISTEN_PORT: u16 = 51820;
 
 pub enum WgDispatchResult {
     /// Send these bytes back to the sender over UDP.
