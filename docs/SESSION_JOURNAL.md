@@ -11,6 +11,106 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — sys-wg state relocation: KEYPAIR + PEERS in cave-private page
+
+**Context:** Slice 1 of the per-cave L1 restriction arc shipped a
+`cave_private` allocator + verified the "VA mapped in cave L1,
+unmapped in PRIMARY_L1" property. This commit actually relocates
+sys-wg's `KEYPAIR` + `PEERS` into that cave-private page so the
+boundary protecting them becomes "MMU walker would fault" instead
+of "Rust visibility says no."
+
+### What shipped
+
+  * `src/batcave/sys_wg_service.rs` rewritten around a single
+    `#[repr(C)]` `PrivateState` struct placed at `cave_private_va(
+    sys_wg_id) = 0x140001000`. Fields are plain bytes (X25519 seed
+    + pubkey + parallel SoA arrays for the peer table) so the
+    layout is deterministic and there are no Drop concerns.
+  * `static STATE_VA: AtomicUsize` is the only kernel-ns-visible
+    handle into the protected state — it holds the VA itself
+    (which is unmapped in PRIMARY_L1), not a pointer to anything
+    actually dereferenceable from outside the cave.
+  * `init()` runs the keypair generation on the kernel-ns stack,
+    then `with_cave_active(sys_wg_id, ||)` populates the
+    PrivateState fields field-by-field (so the secret seed never
+    materialises as a whole-struct value on the kernel-ns stack)
+    and finally publishes `STATE_VA`. The local seed copy is
+    zeroed on the way out (best-effort; compiler may have spilled).
+  * Every public entry point (`service_pubkey`, `register_peer`,
+    `close_peer`, `peer_has_session`, `peer_count`,
+    `complete_handshake_as_responder`, `wrap`, `unwrap`,
+    `debug_local_round_trip`, `wrap_with_keys`, `unwrap_with_keys`,
+    `read_ttbr0_inside_sys_wg`) goes through
+    `cave::with_cave_active(sys_wg_id, ...)`. Anything that tries
+    to read the state from outside the cave hits the MMU walker.
+  * `WgKeypair::from_seed(seed: [u8; 32])` (new in
+    `src/net/wireguard.rs`) — the cave-private page stores only
+    the 32-byte X25519 seed; sys-wg reconstructs the full
+    `WgKeypair` on the cave stack for the duration of a handshake.
+  * sys-wg-selftest extended (slice-3 verification): explicitly
+    asserts `cave_private::has_page(sys_wg_id) == true`,
+    `pte_lookup(sys_wg_l1, priv_va)` is `Some(...)`, and
+    `pte_lookup(PRIMARY_L1, priv_va)` is `None`. Prints the
+    private VA for human verification.
+  * Boot tag updated: "Arc 3 slices 1+2+3; state in cave-private
+    page."
+
+### Verification
+
+```
+sys-wg-selftest:
+  sys-wg static pubkey: 6461fcfc017f0d8ba3996b14bcbdfd02...
+  ✓ KEYPAIR + PEERS live in cave-private page at 0x0000000140001000
+    (unmapped in PRIMARY_L1)
+  ✓ trampoline restored cave_id (0) on return
+  ✓ handshake completed; transport keys are mirror-consistent
+  ✓ wrap/unwrap round-tripped through sys-wg cave
+  ✓ register_peer / DuplicatePeer / complete_handshake_as_responder /
+    wrap / unwrap / close + UnknownPeer all PASS
+  ✓ Arc-3 slice-1+2+3 verified
+```
+
+Full sweep: boot-smoke, sys-caves-selftest (Arc-2 round trip),
+cave-private-selftest, sys-wg-selftest — all PASS.
+
+### Security boundary today
+
+Three layers of defence around sys-wg state, in order of strength:
+
+  1. **Module privacy.** No `pub` getter returns the secret bytes.
+     Compile-time enforcement.
+  2. **VA-level MMU isolation.** The cave-private VA where the
+     state lives is unmapped in PRIMARY_L1 (proved at runtime by
+     `pte_lookup`). A kernel-ns access to `0x140001000` would
+     fault at the MMU walker.
+  3. *(future)* **PA-level isolation.** The cave-private page is
+     still a kernel-pool frame, which PRIMARY_L1's `L1[1..=4]`
+     identity map covers. An attacker who already knows the PA
+     can reach the bytes via kernel identity. Closing this
+     requires a frame-allocator carve-out reserving a separate
+     PA range, mapped only via per-cave L1s. Tracked as a
+     follow-up arc.
+
+### What this commit explicitly does NOT do
+
+  * No PA-level isolation yet (see above).
+  * No EL1 sync-exception handler that turns walker faults into
+    clean error reports. Today an out-of-cave dereference would
+    hang the walker; the runtime contract is "callers MUST go
+    through with_cave_active." A future arc installs the handler.
+  * Peer transport-counters are written through-the-cave each
+    call, no batching. Fine for sub-Mbps shell usage; real WG
+    traffic at line rate would benefit from a batched update.
+
+### Branch status
+
+`feat/per-cave-l1-restrict` (slice 1 already committed as
+`95688b00`; this lands as the follow-up slice 2). Will commit +
+push.
+
+---
+
 ## 2026-05-12 — Mac — per-cave L1 restriction (slice 1): cave-private memory
 
 **Context:** Kernel-boot MMU enable from the previous batch made

@@ -57,7 +57,7 @@ def main() -> int:
 
         c.sendline("sys-wg-selftest")
         idx = c.expect([
-            rb"\xe2\x9c\x93 Arc-3 slice-2 peer-table-keyed wrap/unwrap verified",
+            rb"\xe2\x9c\x93 Arc-3 slice-3 cave-private state relocation verified",
             rb"\xe2\x9c\x97 FAIL:",
         ], timeout=30)
         if idx == 1:

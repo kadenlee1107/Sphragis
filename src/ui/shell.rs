@@ -2923,13 +2923,22 @@ fn cmd_sys_caves_selftest() {
 /// peek at it through a borrow, can't ask for it via getter, and the
 /// only DH operations involving it run with sys-wg's L1 installed.
 fn cmd_sys_wg_service_selftest() {
-    use crate::batcave::sys_wg_service;
+    use crate::batcave::{sys_caves, sys_wg_service};
     use crate::net::wireguard::WgKeypair;
     use crate::kernel::process;
 
-    console::puts_hi("  SYS-WG SERVICE SELF-TEST (Arc 3 slices 1+2)\n");
+    console::puts_hi("  SYS-WG SERVICE SELF-TEST (Arc 3 slices 1+2+3)\n");
     console::puts("  Verifies sys-wg owns the WG keypair behind a privacy boundary,\n");
-    console::puts("  and exposes a peer-table-keyed wrap/unwrap API.\n");
+    console::puts("  exposes a peer-table-keyed wrap/unwrap API,\n");
+    console::puts("  and stores its state in a cave-private page MMU-isolated from PRIMARY_L1.\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id,
+        None => {
+            console::puts("  ✗ FAIL: sys-wg cave not initialized at boot\n");
+            return;
+        }
+    };
 
     // 1. Pinned pubkey is reachable.
     let sys_wg_pk = match sys_wg_service::service_pubkey() {
@@ -2946,6 +2955,40 @@ fn cmd_sys_wg_service_selftest() {
         console::putc(hex[(b & 0x0f) as usize]);
     }
     console::puts("...\n");
+
+    // Slice-3 verification: sys-wg's KEYPAIR + PEERS no longer live
+    // in .bss; they're in the cave-private page at
+    // cave_private_va(sys_wg_id). Prove the relocation actually
+    // happened by checking:
+    //   1. cave_private::has_page(sys_wg_id) is true (init went
+    //      through the cave-private allocator).
+    //   2. The PTE at that VA is mapped in sys-wg's L1 (the page
+    //      backing the state is live).
+    //   3. The PTE at that VA is NOT mapped in PRIMARY_L1 (kernel-
+    //      ns walker would fault on access).
+    use crate::batcave::{cave_private, linux::mmu};
+    use crate::batcave::cave as bc;
+    if !cave_private::has_page(sys_wg_id as u16) {
+        console::puts("  ✗ FAIL: sys-wg has no cave-private page (init relocation skipped?)\n");
+        return;
+    }
+    let priv_va = cave_private::cave_private_va(sys_wg_id as u16);
+    let sys_wg_l1 = bc::get_cave_l1_phys(sys_wg_id as u16).unwrap_or(0);
+    let primary_l1: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) primary_l1); }
+    if mmu::pte_lookup(sys_wg_l1, priv_va).is_none() {
+        console::puts("  ✗ FAIL: cave-private VA unmapped in sys-wg's L1\n");
+        return;
+    }
+    if mmu::pte_lookup(primary_l1 as usize, priv_va).is_some() {
+        console::puts("  ✗ FAIL: cave-private VA mapped in PRIMARY_L1 (isolation broken)\n");
+        return;
+    }
+    console::puts("  ✓ KEYPAIR + PEERS live in cave-private page at 0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((priv_va >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts(" (unmapped in PRIMARY_L1)\n");
 
     // 2. Inside-trampoline TTBR0 readout.
     let our_cave_before = process::current().cave_id;
@@ -3181,6 +3224,7 @@ fn cmd_sys_wg_service_selftest() {
 
     console::puts("  ✓ Arc-3 slice-1 sys-wg service boundary verified\n");
     console::puts("  ✓ Arc-3 slice-2 peer-table-keyed wrap/unwrap verified\n");
+    console::puts("  ✓ Arc-3 slice-3 cave-private state relocation verified\n");
 }
 
 /// Per-cave L1 restriction selftest (slice 1).

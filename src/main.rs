@@ -337,7 +337,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // WireGuard static keypair behind a module-privacy boundary
     // before any caller can request a handshake.
     batcave::sys_wg_service::init();
-    drivers::uart::puts("  [sys-wg] service ready (Arc 3 slices 1+2)\n");
+    drivers::uart::puts("  [sys-wg] service ready (Arc 3 slices 1+2+3; state in cave-private page)\n");
 
     // Initialize networking
     drivers::uart::puts("[boot] Initializing network...\n");
