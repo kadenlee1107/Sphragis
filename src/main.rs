@@ -311,6 +311,12 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // + per-peer transport state). See DESIGN_SYS_CAVES.md.
     batcave::sys_caves::init();
 
+    // Arc 3 slice 1: bring up the sys-wg service so it owns the
+    // WireGuard static keypair behind a module-privacy boundary
+    // before any caller can request a handshake.
+    batcave::sys_wg_service::init();
+    drivers::uart::puts("  [sys-wg] service ready (Arc 3 slice 1)\n");
+
     // Initialize networking
     drivers::uart::puts("[boot] Initializing network...\n");
     match drivers::virtio::net::init() {

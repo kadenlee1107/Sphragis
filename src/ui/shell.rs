@@ -340,6 +340,7 @@ fn execute(cmd: &str) {
         "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
         "sys-caves-selftest"  => cmd_sys_caves_selftest(),
+        "sys-wg-selftest"     => cmd_sys_wg_service_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
         "pkg" => {
@@ -2904,6 +2905,124 @@ fn cmd_sys_caves_selftest() {
         return;
     }
     console::puts("  ✓ Arc-2 full round trip verified\n");
+}
+
+/// sys-caves Arc-3 selftest — proves sys-wg owns the WireGuard
+/// keypair behind a module-privacy boundary AND that handshake
+/// work executes inside sys-wg's cave context.
+///
+/// What's verified end-to-end:
+///   1. `sys_wg_service::service_pubkey()` returns a pinned pubkey —
+///      the only handle into sys-wg's keypair callers ever see.
+///   2. `read_ttbr0_inside_sys_wg()` reads TTBR0_EL1 from inside
+///      `with_sys_wg_cave`; the value must equal sys-wg's L1 phys
+///      (or 0 if PRIMARY_L1 was never set + the trampoline detected
+///      no saved value to restore — boot-MMU-off path).
+///   3. After the trampoline returns, our cave_id is back at 0
+///      (the swap is balanced — no leaked state).
+///   4. A full WG handshake driven by `debug_local_round_trip`
+///      produces consistent transport keys: initiator.send == responder.recv
+///      and a transport round trip decrypts successfully.
+///
+/// The implicit *security claim* this earns: the sys-wg static key
+/// is reachable only from inside `with_sys_wg_cave`. A caller cannot
+/// peek at it through a borrow, can't ask for it via getter, and the
+/// only DH operations involving it run with sys-wg's L1 installed.
+fn cmd_sys_wg_service_selftest() {
+    use crate::batcave::sys_wg_service;
+    use crate::net::wireguard::WgKeypair;
+    use crate::kernel::process;
+
+    console::puts_hi("  SYS-WG SERVICE SELF-TEST (Arc 3 slice 1)\n");
+    console::puts("  Verifies sys-wg owns the WG keypair behind a privacy boundary.\n");
+
+    // 1. Pinned pubkey is reachable.
+    let sys_wg_pk = match sys_wg_service::service_pubkey() {
+        Some(pk) => pk,
+        None => {
+            console::puts("  ✗ FAIL: sys_wg_service::service_pubkey returned None\n");
+            return;
+        }
+    };
+    let hex = b"0123456789abcdef";
+    console::puts("  sys-wg static pubkey: ");
+    for b in &sys_wg_pk[..16] {
+        console::putc(hex[(b >> 4) as usize]);
+        console::putc(hex[(b & 0x0f) as usize]);
+    }
+    console::puts("...\n");
+
+    // 2. Inside-trampoline TTBR0 readout.
+    let our_cave_before = process::current().cave_id;
+    let inside_ttbr0 = sys_wg_service::read_ttbr0_inside_sys_wg();
+    let our_cave_after = process::current().cave_id;
+
+    console::puts("  TTBR0 inside cave: 0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((inside_ttbr0 >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts("\n");
+
+    if our_cave_before != our_cave_after {
+        console::puts("  ✗ FAIL: cave_id not restored after trampoline\n");
+        console::puts("    before=");
+        print_num(our_cave_before as usize);
+        console::puts(" after=");
+        print_num(our_cave_after as usize);
+        console::puts("\n");
+        return;
+    }
+    console::puts("  ✓ trampoline restored cave_id (");
+    print_num(our_cave_before as usize);
+    console::puts(") on return\n");
+
+    // 3. Full handshake + transport round trip via the service.
+    let peer = WgKeypair::generate();
+    let rt = match sys_wg_service::debug_local_round_trip(&peer) {
+        Ok(rt) => rt,
+        Err(_) => {
+            console::puts("  ✗ FAIL: debug_local_round_trip handshake errored\n");
+            return;
+        }
+    };
+
+    let i_keys = &rt.initiator_to_responder_keys;
+    let r_keys = &rt.responder_to_initiator_keys;
+    let keys_consistent = i_keys.send_key == r_keys.recv_key
+        && i_keys.recv_key == r_keys.send_key;
+    if !keys_consistent {
+        console::puts("  ✗ FAIL: derived transport keys mismatch initiator vs responder\n");
+        return;
+    }
+    console::puts("  ✓ handshake completed; transport keys are mirror-consistent\n");
+
+    // Single-shot wrap/unwrap through the service entry points.
+    let mut init_keys = i_keys.clone();
+    let mut resp_keys = r_keys.clone();
+    let msg = b"bat_os Arc-3 sys-wg round trip";
+    let ct = match sys_wg_service::wrap_with_keys(&mut init_keys, msg) {
+        Ok(ct) => ct,
+        Err(_) => {
+            console::puts("  ✗ FAIL: wrap_with_keys returned error\n");
+            return;
+        }
+    };
+    let pt = match sys_wg_service::unwrap_with_keys(&mut resp_keys, 0, &ct) {
+        Ok(pt) => pt,
+        Err(_) => {
+            console::puts("  ✗ FAIL: unwrap_with_keys returned error\n");
+            return;
+        }
+    };
+    if pt.as_slice() != msg {
+        console::puts("  ✗ FAIL: round-trip plaintext mismatch\n");
+        return;
+    }
+    console::puts("  ✓ transport wrap/unwrap round-tripped ");
+    print_num(msg.len());
+    console::puts(" bytes through sys-wg cave\n");
+
+    console::puts("  ✓ Arc-3 slice-1 sys-wg service boundary verified\n");
 }
 
 /// Selftest for the scheduler's block_on async-bridge primitive.

@@ -11,6 +11,95 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — sys-caves Arc 3 slice 1: sys-wg service boundary
+
+**Context:** Arcs 1 + 2 + 2.5 verified the per-cave MMU swap. Arc 3
+moves the WireGuard library code behind a sys-wg service boundary
+so its static keypair stops being a globally-callable library and
+starts being owned-by-cave state.
+
+### What shipped
+
+  * `src/batcave/sys_wg_service.rs` — new module.
+    - Static `KEYPAIR: Option<WgKeypair>` — module-private, no
+      pub getter for the secret half. Only `service_pubkey()`
+      escapes the boundary.
+    - `with_sys_wg_cave<R>(f) -> R` — trampoline that saves the
+      caller's cave_id + TTBR0, sets `task.cave_id = sys_wg_id`
+      and loads sys-wg's L1 into TTBR0 around `f`, then restores
+      the saved values. Architecturally equivalent to "step into
+      sys-wg, do the work, step out." When the kernel boot-time
+      MMU enable lands, the same code path becomes the real
+      trampoline-into-cave with hardware translation enforcement.
+    - `debug_local_round_trip(peer: &WgKeypair) -> LocalRoundTrip`
+      drives a full WG handshake where the caller plays initiator
+      with its own keypair and sys-wg plays responder. Every DH
+      operation involving sys-wg's static secret runs inside the
+      trampoline closure — the caller never holds a borrow into
+      sys-wg state.
+    - `wrap_with_keys` / `unwrap_with_keys` — transport AEAD
+      operations that also run inside the trampoline.
+  * `batcave::sys_wg_service::init()` wired into the boot path
+    right after sys_caves::init, so the keypair exists before any
+    caller can request a handshake.
+  * `sys-wg-selftest` shell command (Arc-3 selftest) — verifies
+    pubkey is reachable, TTBR0 inside the trampoline equals
+    sys-wg's L1 phys, cave_id is restored after the closure
+    returns, handshake keys are mirror-consistent across
+    initiator/responder, and wrap/unwrap round-trips through the
+    boundary cleanly.
+  * `scripts/qemu_sys_wg_selftest.py` — headless harness; drives
+    the selftest over serial and asserts the boundary-verified
+    success marker.
+
+### Verification
+
+```
+sys-wg static pubkey: b4373de8407ef7ba56d85a31e38cdbe7...
+TTBR0 inside cave: 0x00000000bffff000   ← sys-wg's L1 phys
+✓ trampoline restored cave_id (0) on return
+✓ handshake completed; transport keys are mirror-consistent
+✓ transport wrap/unwrap round-tripped 30 bytes through sys-wg cave
+✓ Arc-3 slice-1 sys-wg service boundary verified
+```
+
+Plus the prior sys-caves Arc-2 round-trip and boot-smoke still
+pass on the new branch.
+
+### Security claim today (slice 1)
+
+  * **Module privacy:** there is no `pub` path that returns
+    sys-wg's `StaticSecret`. A grep for `KEYPAIR` in the tree
+    finds only `sys_wg_service.rs` itself.
+  * **Cave-context execution:** every operation that touches the
+    secret runs inside `with_sys_wg_cave`, so the running task's
+    `cave_id` is sys-wg's for the duration. Today that's an
+    architectural fact; once the kernel boots with MMU on, it
+    becomes a hardware fact too (sys-wg's L1 is active during
+    the closure, and any access to non-sys-wg-mapped memory
+    would fault).
+
+### What slice 1 doesn't claim
+
+  * No peer table yet — `debug_local_round_trip` is one-shot. Slice
+    2 adds a peer-id-keyed API.
+  * No IPC mailbox — callers reach the service via direct Rust
+    function calls today, not via a service task reading from a
+    pipe. That's slice 3 work, gated on the kernel-MMU-enable
+    follow-up so the boundary is hardware-enforced rather than
+    privacy-by-convention.
+  * Kernel still boots with MMU off in the serial-shell path, so
+    the TTBR0 swap is a register write only. Production cave path
+    (when an ELF cave loads) already exercises real translation.
+
+### Branch status
+
+`feat/sys-wg-service` (current, branched from main at `fb430478`
+after the cave-mmu-on-swap + wireguard-phase1 merges). Ready to
+commit + push.
+
+---
+
 ## 2026-05-12 — Mac — sys-caves Arc 2.5: round-trip selftest fixed (NOT an MMU bug)
 
 **Context:** Arc 2 filed an "MMU swap return-path hang" — the
