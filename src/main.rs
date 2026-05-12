@@ -150,6 +150,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     kernel::scheduler::init();
     kernel::ipc::init();
     kernel::pipe::init();
+    kernel::unix_sock::init();
     kernel::time::init_from_pl031();
     kernel::arch::init_exceptions();
     // (init_timer + GICv2 init removed — IRQ-driven preemption
@@ -377,11 +378,15 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
 
             // ═══════════════════════════════════════
             // PRE-AUTH KERNEL SELFTESTS (feature-gated).
-            // `pipe-selftest` / `time-selftest` are also available
-            // from the shell.
+            // `pipe-selftest` / `unix-sock-selftest` / `time-selftest`
+            // are also available from the shell.
             // ═══════════════════════════════════════
             #[cfg(feature = "selftest-on-boot")]
-            { pipe_selftest_uart(); time_selftest_uart(); }
+            {
+                pipe_selftest_uart();
+                unix_sock_selftest_uart();
+                time_selftest_uart();
+            }
 
             // ═══════════════════════════════════════
             // AUTHENTICATION GATE — must pass to proceed
@@ -444,6 +449,7 @@ fn pipe_selftest_uart() {
                 let ok = matches!((end, want_read), (PipeEnd::Read, true) | (PipeEnd::Write, false));
                 if ok { Some(id) } else { None }
             }
+            FdKind::Socket { .. } => None,
         }
     };
 
@@ -505,6 +511,98 @@ fn pipe_selftest_uart() {
     pipe::release_end(wid2, PipeEnd::Write);
 
     uart::puts("[pipe-selftest] PASS\n");
+}
+
+/// Boot-side AF_UNIX SOCK_STREAM selftest. Mirrors the shell command
+/// of the same name but emits UART lines so a headless QEMU smoke can
+/// verify the round trip without driving the auth gate.
+#[cfg(feature = "selftest-on-boot")]
+fn unix_sock_selftest_uart() {
+    use drivers::uart;
+    use kernel::unix_sock as us;
+    use kernel::process::{self, FdKind, SocketRole};
+
+    uart::puts("[unix-sock-selftest] start\n");
+
+    let server_fd = match us::create() {
+        Ok(fd) => fd,
+        Err(e) => { uart::puts("[unix-sock-selftest] FAIL server create: "); uart::puts(e); uart::puts("\n"); return; }
+    };
+    let server_sid = match process::current().fd_get(server_fd).map(|e| e.kind) {
+        Some(FdKind::Socket { id, .. }) => id,
+        _ => { uart::puts("[unix-sock-selftest] FAIL: server fd shape\n"); return; }
+    };
+
+    let name: &[u8] = b"bat-test-sock-boot";
+    if us::bind(server_sid, name).is_err() {
+        uart::puts("[unix-sock-selftest] FAIL bind\n"); return;
+    }
+    if us::listen(server_sid).is_err() {
+        uart::puts("[unix-sock-selftest] FAIL listen\n"); return;
+    }
+
+    let client_fd = match us::create() {
+        Ok(fd) => fd,
+        Err(_) => { uart::puts("[unix-sock-selftest] FAIL client create\n"); return; }
+    };
+    let client_sid = match process::current().fd_get(client_fd).map(|e| e.kind) {
+        Some(FdKind::Socket { id, .. }) => id,
+        _ => { uart::puts("[unix-sock-selftest] FAIL: client fd shape\n"); return; }
+    };
+    if us::connect(client_sid, name).is_err() {
+        uart::puts("[unix-sock-selftest] FAIL connect\n"); return;
+    }
+    uart::puts("[unix-sock-selftest] ok  bind+listen+connect\n");
+
+    let accept_fd = match us::accept(server_sid) {
+        Ok(fd) => fd,
+        Err(_) => { uart::puts("[unix-sock-selftest] FAIL accept\n"); return; }
+    };
+    let server_conn_sid = match process::current().fd_get(accept_fd).map(|e| e.kind) {
+        Some(FdKind::Socket { id, role: SocketRole::Connected }) => id,
+        _ => { uart::puts("[unix-sock-selftest] FAIL: accept fd shape\n"); return; }
+    };
+
+    let to_server: &[u8] = b"ping from client";
+    if us::write(client_sid, to_server).is_err() {
+        uart::puts("[unix-sock-selftest] FAIL c->s write\n"); return;
+    }
+    let mut rxbuf = [0u8; 64];
+    let n = match us::read(server_conn_sid, &mut rxbuf) {
+        Ok(n) => n,
+        Err(_) => { uart::puts("[unix-sock-selftest] FAIL s read\n"); return; }
+    };
+    if &rxbuf[..n] != to_server {
+        uart::puts("[unix-sock-selftest] FAIL c->s payload\n"); return;
+    }
+    uart::puts("[unix-sock-selftest] ok  client -> server\n");
+
+    let to_client: &[u8] = b"pong from server";
+    if us::write(server_conn_sid, to_client).is_err() {
+        uart::puts("[unix-sock-selftest] FAIL s->c write\n"); return;
+    }
+    let n = match us::read(client_sid, &mut rxbuf) {
+        Ok(n) => n,
+        Err(_) => { uart::puts("[unix-sock-selftest] FAIL c read\n"); return; }
+    };
+    if &rxbuf[..n] != to_client {
+        uart::puts("[unix-sock-selftest] FAIL s->c payload\n"); return;
+    }
+    uart::puts("[unix-sock-selftest] ok  server -> client\n");
+
+    let _ = process::current().fd_take(client_fd);
+    us::close(client_sid);
+    match us::read(server_conn_sid, &mut rxbuf) {
+        Ok(0) => uart::puts("[unix-sock-selftest] ok  EOF after client close\n"),
+        _    => { uart::puts("[unix-sock-selftest] FAIL EOF\n"); return; }
+    }
+
+    let _ = process::current().fd_take(accept_fd);
+    us::close(server_conn_sid);
+    let _ = process::current().fd_take(server_fd);
+    us::close(server_sid);
+
+    uart::puts("[unix-sock-selftest] PASS\n");
 }
 
 /// Boot-side wall-clock selftest. Runs only with `selftest-on-boot`
@@ -1303,6 +1401,7 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
     kernel::scheduler::init();
     kernel::ipc::init();
     kernel::pipe::init();
+    kernel::unix_sock::init();
     kernel::time::init_from_apple();
     kernel::arch::init_exceptions();
 

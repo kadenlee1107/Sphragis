@@ -46,6 +46,11 @@ pub enum Category {
     /// a reviewer can reconstruct which task owned which fd at which
     /// point without drowning the ring in byte-level traffic.
     Pipe        = 11,
+    /// AF_UNIX socket lifecycle: bind/connect/accept/close. Same
+    /// rate-limit philosophy as `Pipe` — byte-stream traffic is not
+    /// logged, only the addressing events that a forensic reviewer
+    /// needs to reconstruct who-talked-to-whom.
+    Socket      = 12,
 }
 
 impl Category {
@@ -62,6 +67,7 @@ impl Category {
             Category::Cave       => "cave",
             Category::Ai         => "ai",
             Category::Pipe       => "pipe",
+            Category::Socket     => "sock",
         }
     }
 }

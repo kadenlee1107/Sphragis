@@ -295,10 +295,11 @@ fn execute(cmd: &str) {
         "otp-consume" => cmd_otp_consume(parts[1]),
         "pq-selftest" => cmd_pq_selftest(),
         "pq-sig-selftest" => cmd_pq_sig_selftest(),
-        "ipc-selftest"    => cmd_ipc_selftest(),
-        "pipe-selftest"   => cmd_pipe_selftest(),
-        "date"            => cmd_date(),
-        "time-selftest"   => cmd_time_selftest(),
+        "ipc-selftest"        => cmd_ipc_selftest(),
+        "pipe-selftest"       => cmd_pipe_selftest(),
+        "unix-sock-selftest"  => cmd_unix_sock_selftest(),
+        "date"                => cmd_date(),
+        "time-selftest"       => cmd_time_selftest(),
         "gcm-selftest"    => cmd_gcm_selftest(),
         "secure-ipc-selftest" => cmd_secure_ipc_selftest(),
         "secure-ipc-wire-selftest" => cmd_secure_ipc_wire_selftest(),
@@ -2065,6 +2066,107 @@ fn cmd_time_selftest() {
     for &b in &buf[..n] { console::putc(b); }
     console::puts(" UTC\n");
     console::puts("  ✓ ALL TIME TESTS PASSED\n");
+}
+
+// AF_UNIX SOCK_STREAM round trip: bind+listen on server, connect from
+// client, accept, two-way write/read, then EOF on close.
+// Single-task; accept won't block because connect() pre-fills the queue.
+fn cmd_unix_sock_selftest() {
+    use crate::kernel::unix_sock as us;
+    use crate::kernel::process::{self, FdKind, SocketRole};
+
+    console::puts_hi("  AF_UNIX SOCK_STREAM SELF-TEST\n");
+    console::puts("  bind + listen + connect + accept + 2-way IO + EOF\n");
+
+    let server_fd = match us::create() {
+        Ok(fd) => fd,
+        Err(e) => { console::puts("  ✗ FAIL server create: "); console::puts(e); console::puts("\n"); return; }
+    };
+    let server_sid = match process::current().fd_get(server_fd).map(|e| e.kind) {
+        Some(FdKind::Socket { id, .. }) => id,
+        _ => { console::puts("  ✗ FAIL: server fd not a socket\n"); return; }
+    };
+
+    let name: &[u8] = b"bat-test-sock";
+    if let Err(e) = us::bind(server_sid, name) {
+        console::puts("  ✗ FAIL bind: "); console::puts(e); console::puts("\n"); return;
+    }
+    if let Err(e) = us::listen(server_sid) {
+        console::puts("  ✗ FAIL listen: "); console::puts(e); console::puts("\n"); return;
+    }
+
+    let client_fd = match us::create() {
+        Ok(fd) => fd,
+        Err(e) => { console::puts("  ✗ FAIL client create: "); console::puts(e); console::puts("\n"); return; }
+    };
+    let client_sid = match process::current().fd_get(client_fd).map(|e| e.kind) {
+        Some(FdKind::Socket { id, .. }) => id,
+        _ => { console::puts("  ✗ FAIL: client fd not a socket\n"); return; }
+    };
+    if let Err(e) = us::connect(client_sid, name) {
+        console::puts("  ✗ FAIL connect: "); console::puts(e); console::puts("\n"); return;
+    }
+    console::puts("  ✓ bind+listen+connect ok (name=");
+    for &b in name { console::putc(b); }
+    console::puts(")\n");
+
+    let accept_fd = match us::accept(server_sid) {
+        Ok(fd) => fd,
+        Err(e) => { console::puts("  ✗ FAIL accept: "); console::puts(e); console::puts("\n"); return; }
+    };
+    let server_conn_sid = match process::current().fd_get(accept_fd).map(|e| e.kind) {
+        Some(FdKind::Socket { id, role: SocketRole::Connected }) => id,
+        _ => { console::puts("  ✗ FAIL: accept fd not Connected\n"); return; }
+    };
+    console::puts("  ✓ accept returned Connected fd\n");
+
+    // Client → Server
+    let to_server: &[u8] = b"ping from client";
+    match us::write(client_sid, to_server) {
+        Ok(n) if n == to_server.len() => {}
+        _ => { console::puts("  ✗ FAIL client→server write\n"); return; }
+    }
+    let mut rxbuf = [0u8; 64];
+    let n = match us::read(server_conn_sid, &mut rxbuf) {
+        Ok(n) => n,
+        Err(e) => { console::puts("  ✗ FAIL server read: "); console::puts(e); console::puts("\n"); return; }
+    };
+    if &rxbuf[..n] != to_server {
+        console::puts("  ✗ FAIL: client→server payload mismatch\n"); return;
+    }
+    console::puts("  ✓ client → server: "); print_num(n); console::puts(" bytes\n");
+
+    // Server → Client
+    let to_client: &[u8] = b"pong from server";
+    match us::write(server_conn_sid, to_client) {
+        Ok(n) if n == to_client.len() => {}
+        _ => { console::puts("  ✗ FAIL server→client write\n"); return; }
+    }
+    let n = match us::read(client_sid, &mut rxbuf) {
+        Ok(n) => n,
+        Err(e) => { console::puts("  ✗ FAIL client read: "); console::puts(e); console::puts("\n"); return; }
+    };
+    if &rxbuf[..n] != to_client {
+        console::puts("  ✗ FAIL: server→client payload mismatch\n"); return;
+    }
+    console::puts("  ✓ server → client: "); print_num(n); console::puts(" bytes\n");
+
+    // EOF on close.
+    let _ = process::current().fd_take(client_fd);
+    us::close(client_sid);
+    match us::read(server_conn_sid, &mut rxbuf) {
+        Ok(0) => console::puts("  ✓ EOF on server-side read after client close\n"),
+        Ok(_) => { console::puts("  ✗ FAIL: expected EOF\n"); return; }
+        Err(e) => { console::puts("  ✗ FAIL EOF read: "); console::puts(e); console::puts("\n"); return; }
+    }
+
+    // Tidy.
+    let _ = process::current().fd_take(accept_fd);
+    us::close(server_conn_sid);
+    let _ = process::current().fd_take(server_fd);
+    us::close(server_sid);
+
+    console::puts("  ✓ ALL UNIX-SOCK TESTS PASSED\n");
 }
 
 // Anonymous-pipe round trip: create → write → read → EOF on close →

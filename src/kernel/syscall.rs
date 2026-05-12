@@ -12,10 +12,15 @@ pub const SYS_SEND:  u16 = 1;
 pub const SYS_RECV:  u16 = 2;
 pub const SYS_PRINT: u16 = 3; // Debug only — will be removed in hardened build
 pub const SYS_EXIT:  u16 = 4;
-pub const SYS_PIPE:  u16 = 5;
-pub const SYS_READ:  u16 = 6;
-pub const SYS_WRITE: u16 = 7;
-pub const SYS_CLOSE: u16 = 8;
+pub const SYS_PIPE:    u16 = 5;
+pub const SYS_READ:    u16 = 6;
+pub const SYS_WRITE:   u16 = 7;
+pub const SYS_CLOSE:   u16 = 8;
+pub const SYS_SOCKET:  u16 = 9;  // AF_UNIX SOCK_STREAM
+pub const SYS_BIND:    u16 = 10;
+pub const SYS_LISTEN:  u16 = 11;
+pub const SYS_CONNECT: u16 = 12;
+pub const SYS_ACCEPT:  u16 = 13;
 
 /// Negative return values are -errno encoded as a two's-complement u64
 /// so the caller can branch on `(x0 as i64) < 0`.
@@ -25,6 +30,9 @@ const EPIPE:  i64 = 32;
 const EINVAL: i64 = 22;
 const ENFILE: i64 = 23;
 const EFAULT: i64 = 14;
+const EADDRINUSE: i64 = 98;
+const ECONNREFUSED: i64 = 111;
+const EAGAIN: i64 = 11;
 
 pub fn handle(num: u16, frame: &mut TrapFrame) {
     match num {
@@ -60,49 +68,14 @@ pub fn handle(num: u16, frame: &mut TrapFrame) {
             let fd  = frame.x[0] as u16;
             let ptr = frame.x[1] as usize;
             let len = frame.x[2] as usize;
-            frame.x[0] = match resolve_pipe_fd(fd, true) {
-                Some(id) => {
-                    if ptr == 0 {
-                        err(EFAULT)
-                    } else if len == 0 {
-                        0
-                    } else {
-                        let out = unsafe {
-                            core::slice::from_raw_parts_mut(ptr as *mut u8, len)
-                        };
-                        match crate::kernel::pipe::read(id, out) {
-                            Ok(n)  => n as u64,
-                            Err(_) => err(EPIPE),
-                        }
-                    }
-                }
-                None => err(EBADF),
-            };
+            frame.x[0] = do_read(fd, ptr, len);
         }
         SYS_WRITE => {
             // x0 = fd, x1 = buf ptr, x2 = len.
             let fd  = frame.x[0] as u16;
             let ptr = frame.x[1] as usize;
             let len = frame.x[2] as usize;
-            frame.x[0] = match resolve_pipe_fd(fd, false) {
-                Some(id) => {
-                    if ptr == 0 {
-                        err(EFAULT)
-                    } else if len == 0 {
-                        0
-                    } else {
-                        let buf = unsafe {
-                            core::slice::from_raw_parts(ptr as *const u8, len)
-                        };
-                        match crate::kernel::pipe::write(id, buf) {
-                            Ok(n) => n as u64,
-                            Err(e) if e == "EPIPE" => err(EPIPE),
-                            Err(_) => err(EINVAL),
-                        }
-                    }
-                }
-                None => err(EBADF),
-            };
+            frame.x[0] = do_write(fd, ptr, len);
         }
         SYS_CLOSE => {
             let fd = frame.x[0] as u16;
@@ -113,6 +86,9 @@ pub fn handle(num: u16, frame: &mut TrapFrame) {
                         crate::kernel::process::FdKind::Pipe { id, end } => {
                             crate::kernel::pipe::release_end(id, end);
                         }
+                        crate::kernel::process::FdKind::Socket { id, .. } => {
+                            crate::kernel::unix_sock::close(id);
+                        }
                     }
                     frame.x[0] = 0;
                 }
@@ -120,6 +96,50 @@ pub fn handle(num: u16, frame: &mut TrapFrame) {
                     frame.x[0] = err(EBADF);
                 }
             }
+        }
+        SYS_SOCKET => {
+            // No arguments today: AF_UNIX SOCK_STREAM is implicit.
+            frame.x[0] = match crate::kernel::unix_sock::create() {
+                Ok(fd)  => fd as u64,
+                Err(_)  => err(ENFILE),
+            };
+        }
+        SYS_BIND => {
+            // x0 = fd, x1 = name ptr, x2 = name len.
+            let fd  = frame.x[0] as u16;
+            let ptr = frame.x[1] as usize;
+            let len = frame.x[2] as usize;
+            frame.x[0] = sock_op_with_name(fd, ptr, len, |sid, name| {
+                crate::kernel::unix_sock::bind(sid, name)
+            });
+        }
+        SYS_LISTEN => {
+            let fd = frame.x[0] as u16;
+            frame.x[0] = match resolve_sock_fd(fd) {
+                Some(sid) => match crate::kernel::unix_sock::listen(sid) {
+                    Ok(()) => 0,
+                    Err(_) => err(EINVAL),
+                },
+                None => err(EBADF),
+            };
+        }
+        SYS_CONNECT => {
+            let fd  = frame.x[0] as u16;
+            let ptr = frame.x[1] as usize;
+            let len = frame.x[2] as usize;
+            frame.x[0] = sock_op_with_name(fd, ptr, len, |sid, name| {
+                crate::kernel::unix_sock::connect(sid, name)
+            });
+        }
+        SYS_ACCEPT => {
+            let fd = frame.x[0] as u16;
+            frame.x[0] = match resolve_sock_fd(fd) {
+                Some(sid) => match crate::kernel::unix_sock::accept(sid) {
+                    Ok(new_fd) => new_fd as u64,
+                    Err(_)     => err(EINVAL),
+                },
+                None => err(EBADF),
+            };
         }
         _ => {
             uart::puts("[syscall] Unknown syscall: ");
@@ -130,19 +150,94 @@ pub fn handle(num: u16, frame: &mut TrapFrame) {
     }
 }
 
-/// Resolve `fd` to a pipe id, requiring the end matches the operation.
-/// Returns None if the fd is unmapped or points at the wrong end.
-fn resolve_pipe_fd(fd: u16, for_read: bool) -> Option<u16> {
-    use crate::kernel::process::{FdKind, PipeEnd};
+/// Resolve `fd` to a socket id. Returns None if the fd is unmapped
+/// or not a Socket kind.
+fn resolve_sock_fd(fd: u16) -> Option<u16> {
+    use crate::kernel::process::FdKind;
     let task = crate::kernel::process::current();
     let entry = task.fd_get(fd)?;
     match entry.kind {
-        FdKind::Pipe { id, end } => {
-            let ok = match end {
-                PipeEnd::Read  => for_read,
-                PipeEnd::Write => !for_read,
-            };
-            if ok { Some(id) } else { None }
+        FdKind::Socket { id, .. } => Some(id),
+        _ => None,
+    }
+}
+
+/// SYS_BIND / SYS_CONNECT helper: validate the buffer, copy the name
+/// out, run the socket op, and encode the errno.
+fn sock_op_with_name<F>(fd: u16, ptr: usize, len: usize, op: F) -> u64
+where F: FnOnce(u16, &[u8]) -> Result<(), &'static str>
+{
+    if ptr == 0 { return err(EFAULT); }
+    if len == 0 || len > crate::kernel::unix_sock::SOCK_NAME_MAX {
+        return err(EINVAL);
+    }
+    let sid = match resolve_sock_fd(fd) {
+        Some(s) => s,
+        None    => return err(EBADF),
+    };
+    let name = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
+    match op(sid, name) {
+        Ok(())  => 0,
+        Err(e)  => match e {
+            "name in use"            => err(EADDRINUSE),
+            "no such name"           => err(ECONNREFUSED),
+            "backlog full"           => err(EAGAIN),
+            _                        => err(EINVAL),
+        },
+    }
+}
+
+/// Combined READ dispatch: pipe-read for FdKind::Pipe(Read end),
+/// socket-read for FdKind::Socket(Connected).
+fn do_read(fd: u16, ptr: usize, len: usize) -> u64 {
+    use crate::kernel::process::{FdKind, PipeEnd, SocketRole};
+    if ptr == 0 { return err(EFAULT); }
+    if len == 0 { return 0; }
+    let task = crate::kernel::process::current();
+    let Some(entry) = task.fd_get(fd) else { return err(EBADF); };
+    let out = unsafe { core::slice::from_raw_parts_mut(ptr as *mut u8, len) };
+    match entry.kind {
+        FdKind::Pipe { id, end: PipeEnd::Read } => {
+            match crate::kernel::pipe::read(id, out) {
+                Ok(n)  => n as u64,
+                Err(_) => err(EPIPE),
+            }
         }
+        FdKind::Pipe { .. } => err(EBADF),
+        FdKind::Socket { id, role: SocketRole::Connected } => {
+            match crate::kernel::unix_sock::read(id, out) {
+                Ok(n)  => n as u64,
+                Err(_) => err(EPIPE),
+            }
+        }
+        FdKind::Socket { .. } => err(EBADF),
+    }
+}
+
+/// Combined WRITE dispatch: mirror of `do_read`.
+fn do_write(fd: u16, ptr: usize, len: usize) -> u64 {
+    use crate::kernel::process::{FdKind, PipeEnd, SocketRole};
+    if ptr == 0 { return err(EFAULT); }
+    if len == 0 { return 0; }
+    let task = crate::kernel::process::current();
+    let Some(entry) = task.fd_get(fd) else { return err(EBADF); };
+    let buf = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
+    match entry.kind {
+        FdKind::Pipe { id, end: PipeEnd::Write } => {
+            match crate::kernel::pipe::write(id, buf) {
+                Ok(n) => n as u64,
+                Err(e) if e == "EPIPE" => err(EPIPE),
+                Err(_) => err(EINVAL),
+            }
+        }
+        FdKind::Pipe { .. } => err(EBADF),
+        FdKind::Socket { id, role: SocketRole::Connected } => {
+            match crate::kernel::unix_sock::write(id, buf) {
+                Ok(n) => n as u64,
+                Err(e) if e == "EPIPE" => err(EPIPE),
+                Err(_) => err(EINVAL),
+            }
+        }
+        FdKind::Socket { .. } => err(EBADF),
     }
 }

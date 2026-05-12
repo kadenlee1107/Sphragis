@@ -11,16 +11,34 @@ pub const MAX_TASKS: usize = 64;
 const TASK_STACK_PAGES: usize = 4; // 16KB stack per task
 pub const MAX_FDS_PER_TASK: usize = 16;
 
-/// Kind-tagged file descriptor. Pipes are the only consumer in
-/// Phase 2; File / Socket variants are reserved so BatFS and TCP
-/// can plug in later without changing the Task layout.
+/// Kind-tagged file descriptor. Pipe and Socket are the live kinds
+/// today; File variant slots in later when BatFS exposes inode-based
+/// open(). The Task layout doesn't change across kinds — only the
+/// payload of FdEntry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FdKind {
     Pipe { id: u16, end: PipeEnd },
+    /// AF_UNIX socket fd. `id` indexes into the kernel socket table;
+    /// `role` distinguishes listener fds (which `accept()` consumes)
+    /// from connected stream fds (which `read`/`write` use).
+    Socket { id: u16, role: SocketRole },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PipeEnd { Read, Write }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SocketRole {
+    /// Fresh socket created by `socket()`; not yet bound or
+    /// connected. `bind`/`connect` transitions it.
+    Unbound,
+    /// `listen()` was called; `accept()` pulls a connected fd off
+    /// this socket's backlog.
+    Listener,
+    /// One end of an established AF_UNIX stream pair. `read`/`write`
+    /// move bytes; `close` decrements the peer pair's refcount.
+    Connected,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct FdEntry {
