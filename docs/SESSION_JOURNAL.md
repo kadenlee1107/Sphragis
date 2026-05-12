@@ -11,6 +11,97 @@ end of a session.
 
 ---
 
+## 2026-05-11 — Mac — gap-audit batch: dmesg breadcrumbs, POSIX shm, HTTPS-Date sync, block_on
+
+**Context:** User said "im ready for them" — back to the gap audit
+after the clipboard/comms detour. Pulled four pending items in one
+focused batch.
+
+### What shipped
+
+**Item 035 — dmesg ring.** The ring + `dmesg` command already
+existed in `src/kernel/kmsg.rs`; the gap was content. Added
+`kmsg::info()` calls at every major boot init point (mm, process,
+scheduler, ipc, pipe, unix_sock, shm, time, arch). Operators
+running `dmesg` post-boot now see real history instead of an empty
+ring.
+
+**Item 027 — POSIX shared memory.** New `src/kernel/shm.rs`:
+
+  * 32 named regions × up to 16 KiB each, heap-backed `Vec<u8>`.
+  * `FdKind::Shm { id }` joins Pipe + Socket on the fd table.
+  * 3 new syscalls: SYS_SHM_OPEN=14, SYS_SHM_SIZE=15, SYS_SHM_PTR=16.
+    read/write on a shm fd return EBADF — POSIX-ish semantics
+    route through SYS_SHM_PTR which returns a kernel pointer
+    (Phase 2 reality; Phase 3 will replace with page-table mapping).
+  * Refcounted close; storage zeroed on free.
+  * audit::Category::Shm logs create/open/close.
+  * Cave isolation: reset_for_cave_switch wipes the table.
+  * `shm-selftest` shell command — create + write + open second fd
+    + read-back + double-close + zero-on-reuse.
+
+**Item 028 follow-up — HTTPS-Date time sync.** NTP intentionally
+skipped (plaintext, DDoS-amp risk). Wall clock now syncs from the
+`Date:` header returned by our existing PQ-TLS-validated HTTPS
+path. New in `src/kernel/time.rs`:
+
+  * `days_from_civil` (inverse of the existing `civil_from_days`).
+  * `parse_imf_fixdate` — strict RFC 7231 §7.1.1.1 parser.
+  * `sync_from_https(host)` — opens HTTPS, HEAD request, scans
+    response for `Date:`, updates the time anchor.
+  * `time-sync-https [host]` shell command (defaults to
+    www.cloudflare.com).
+
+**Post-no-browser roadmap — scheduler `block_on`.** Formalized
+the "poll a closure, yield, retry until success or timeout"
+pattern that pipes/sockets/TCP recv were already hand-rolling:
+
+  * `scheduler::block_on<F, T>(f, timeout_us) -> Result<T,
+    BlockError>`. timeout_us == 0 means wait forever.
+  * Callers can now write `block_on(|| pipe::try_read(id, buf),
+    5_000_000)` instead of duplicating the loop.
+  * `block_on_selftest` covers both paths (success + timeout).
+  * `block-on-selftest` shell command.
+
+### Already done (noted in journal so we don't double-promise)
+
+The post-no-browser roadmap's "TLS X.509 chain validation" is
+fully implemented in `src/net/x509.rs::verify_chain` — hostname
+check with constant-time abort discipline, RFC 5280 validity
+periods, BasicConstraints/KeyUsage/EKU enforcement, trust anchor
+handling. That roadmap item is effectively closed.
+
+### Boot-test verified
+
+Headless smoke confirmed `[shm] POSIX shared memory table
+initialized` lands at the right point in boot, and the prior
+scheduler-selftest still passes. Build clean (only the prior
+`seed_from_rng` dead-code warning).
+
+### Remaining P0 candidates
+
+From the gap audit:
+  * 025 AF_UNIX domain sockets — **done** (prior batch)
+  * 026 pipes / FIFOs — **done** (prior batch)
+  * 027 POSIX shared memory — **done** (this batch)
+  * 028 Wall clock + NTP — **done** + HTTPS-Date follow-up here
+  * 029 Time zones — **trivial knob already exists** (`set_tz_offset_secs`)
+  * 030 Per-cave CPU/memory/io quotas (cgroups v2 equivalent) — pending
+  * 031 PID namespace — pending
+  * 032 Mount namespace — pending
+  * 033 Package manager — pending (XL)
+  * 034 Signed releases — pending
+  * 035 dmesg ring — **done** (ring existed, content added this batch)
+  * 036 /proc-equivalent — pending
+  * 037 libc / libc-compat shim — pending (XL)
+
+### Branch status
+
+`feat/ai-agent-design` now has 9 commits beyond `main`. Worth
+a merge soon — branch name has nothing to do with what's on it.
+
+---
+
 ## 2026-05-11 — Mac — mutual pin, visual selection, PQ selftest, host clipboard bridge
 
 **Context:** Follow-up to the prior "clipboard + real comms" entry.
