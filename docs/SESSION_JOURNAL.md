@@ -11,6 +11,83 @@ end of a session.
 
 ---
 
+## 2026-05-11 — Mac — merge to main + S+M batch + L-item eval
+
+**Context:** User wanted to clear the dangling branch and keep
+chewing gap-audit items. Plan: merge → small items → medium items
+→ feasibility eval for the large ones.
+
+### Merged
+
+`feat/ai-agent-design` (43 commits ahead of main, accumulated since
+2026-05-08) fast-forwarded into `main`, pushed. main now at
+`9caeb9fa`. Future work goes on `feat/os-gap-fixes` — name actually
+matches the diff now.
+
+### What shipped on feat/os-gap-fixes
+
+One commit, `492294de`.
+
+**S — item 029 Time zones.** New `tz` shell command wrapping the
+existing `time::set_tz_offset_secs` knob. Show current offset,
+parse `±HH:MM`, `tz utc` resets to 0.
+
+**M — item 034 Signed releases.**
+
+  * `scripts/release_sign.py keygen|sign` — generates an Ed25519
+    keypair (`./release.key`), signs files.
+  * `build.rs` reads `BAT_OS_RELEASE_PUBKEY` (64 hex chars) and
+    bakes it as `const RELEASE_PUBKEY_HEX: Option<&str>`. No
+    fallback test key — when env unset, the verifier refuses to
+    run.
+  * `release-verify <batfs-file> <sig-hex>` — reads from BatFS,
+    displays SHA-256, verifies Ed25519 against the baked pubkey.
+    Caps at 1 MiB for the on-device path.
+  * `release-pubkey` — prints + clipboards the baked pubkey.
+
+**M — item 031 PID namespace.** `cave_id: u16` on the Task struct
+(0 = kernel namespace, always visible; non-zero = scoped). New
+`process::set_cave` setter, `process::list_for_cave` filtered
+iterator. `procs` / `ps` shell command shows tasks visible from the
+active cave's namespace; `procs all` is the admin view.
+
+**M — item 032 Mount namespace.** `cave::active_mount_prefix(out)`
+returns the active cave's name + ":" as a prefix. `mount-ns` shell
+command demonstrates per-cave file-name scoping with `ls`/`write`/
+`read`/`rm` subcommands that apply the prefix transparently. NOT
+wired into the default `batfs::*` API yet — 42 callers, doing it
+silently in one batch is risky. The primitive is sound; a follow-up
+batch will flip `batfs::create/read/delete/list` to auto-apply.
+
+**L — eval (`docs/L_ITEM_EVAL.md`).** Honest feasibility/scope
+notes for the three remaining big items:
+
+  * 030 cgroups-equivalent: recommend three focused mini-PRs (CPU
+    quota → memory quota → IO quota), starting with memory.
+    Estimated ~450 LOC total. Real work, not shallow plumbing —
+    every allocator and scheduler tick gets a new check.
+  * 036 procfs-equivalent: defer the filesystem version; add
+    `caps`/`fds`/`task <tid>` shell commands first (~150 LOC) which
+    cover 90% of the actual use case. Real procfs wants pseudo-file
+    infra in BatFS — worth building once we have other reasons.
+  * 037 libc shim (XL, listed for context): recommend documenting
+    as a non-goal — security model doesn't want it.
+
+### What's left on the P0 gap-audit list
+
+Closed: 025, 026, 027, 028, 029, 031, 032, 034, 035.
+Open: 030 (L), 033 (XL, package manager), 036 (L), 037 (XL).
+
+P1+ items haven't been audited in this session — that's a separate
+pass.
+
+### Branch status
+
+`feat/os-gap-fixes` has 1 commit on top of main. Ready to merge as
+soon as the user confirms the namespaces feel right.
+
+---
+
 ## 2026-05-11 — Mac — gap-audit batch: dmesg breadcrumbs, POSIX shm, HTTPS-Date sync, block_on
 
 **Context:** User said "im ready for them" — back to the gap audit
