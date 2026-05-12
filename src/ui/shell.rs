@@ -335,10 +335,13 @@ fn execute(cmd: &str) {
         "pq-sig-selftest" => cmd_pq_sig_selftest(),
         "ipc-selftest"        => cmd_ipc_selftest(),
         "pq-comms-selftest"   => cmd_pq_comms_selftest(),
+        "shm-selftest"        => cmd_shm_selftest(),
+        "block-on-selftest"   => cmd_block_on_selftest(),
         "pipe-selftest"       => cmd_pipe_selftest(),
         "unix-sock-selftest"  => cmd_unix_sock_selftest(),
         "date"                => cmd_date(),
         "time-selftest"       => cmd_time_selftest(),
+        "time-sync-https"     => cmd_time_sync_https(parts[1]),
         "gcm-selftest"    => cmd_gcm_selftest(),
         "secure-ipc-selftest" => cmd_secure_ipc_selftest(),
         "secure-ipc-wire-selftest" => cmd_secure_ipc_wire_selftest(),
@@ -2003,6 +2006,133 @@ fn cmd_gcm_selftest() {
 }
 
 // DESIGN_CRYPTO.md #10+#13: Noise-style IPC session handshake self-test.
+/// Selftest for the scheduler's block_on async-bridge primitive.
+fn cmd_block_on_selftest() {
+    console::puts_hi("  SCHEDULER block_on() SELF-TEST\n");
+    console::puts("  success path (closure flips after 3 polls)\n");
+    console::puts("  timeout path (closure never flips; expect Err+elapsed >= deadline)\n");
+
+    match crate::kernel::scheduler::block_on_selftest() {
+        Ok((success_ok, timeout_ok, elapsed_us)) => {
+            if success_ok {
+                console::puts("  ✓ success path: closure resolved within budget\n");
+            } else {
+                console::puts("  ✗ FAIL: success path did not resolve\n");
+                return;
+            }
+            if timeout_ok {
+                console::puts("  ✓ timeout path: bailed at deadline (elapsed=");
+                print_num(elapsed_us as usize);
+                console::puts(" µs)\n");
+            } else {
+                console::puts("  ✗ FAIL: timeout path returned wrong error or finished early\n");
+                return;
+            }
+            console::puts("  ✓ block_on works as the sync ⇆ pollable-subsystem bridge\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
+        }
+    }
+}
+
+/// POSIX shared-memory selftest. Exercises create + write + open
+/// (second fd) + read-back through the second fd + double-close +
+/// reuse-after-free. All within one task — proves the shared region
+/// is the same backing storage between two fds.
+fn cmd_shm_selftest() {
+    use crate::kernel::shm;
+    use crate::kernel::process::{self, FdKind};
+
+    console::puts_hi("  POSIX SHARED MEMORY SELF-TEST\n");
+    console::puts("  create + write + open(second fd) + read-back + close + reuse\n");
+
+    let name: &[u8] = b"bat-shm-selftest";
+    let fd1 = match shm::create(name, 256) {
+        Ok(fd) => fd,
+        Err(e) => { console::puts("  ✗ FAIL create: "); console::puts(e); console::puts("\n"); return; }
+    };
+    let id1 = match process::current().fd_get(fd1).map(|e| e.kind) {
+        Some(FdKind::Shm { id }) => id,
+        _ => { console::puts("  ✗ FAIL: fd1 not Shm\n"); return; }
+    };
+
+    // Write a marker.
+    {
+        let bytes = match shm::region_bytes_mut(id1) {
+            Some(b) => b,
+            None => { console::puts("  ✗ FAIL: region_bytes_mut\n"); return; }
+        };
+        let payload = b"bat_os_shm_marker_v1";
+        bytes[..payload.len()].copy_from_slice(payload);
+    }
+
+    // Open a second fd on the same region.
+    let fd2 = match shm::open(name) {
+        Ok(fd) => fd,
+        Err(e) => { console::puts("  ✗ FAIL open: "); console::puts(e); console::puts("\n"); return; }
+    };
+    let id2 = match process::current().fd_get(fd2).map(|e| e.kind) {
+        Some(FdKind::Shm { id }) => id,
+        _ => { console::puts("  ✗ FAIL: fd2 not Shm\n"); return; }
+    };
+    if id1 != id2 {
+        console::puts("  ✗ FAIL: open returned a different region id\n");
+        return;
+    }
+    console::puts("  ✓ second open returned same region id\n");
+
+    // Read back through fd2 (different fd, same region).
+    {
+        let bytes = match shm::region_bytes_mut(id2) {
+            Some(b) => b,
+            None => { console::puts("  ✗ FAIL: read-back region_bytes_mut\n"); return; }
+        };
+        let expected = b"bat_os_shm_marker_v1";
+        if &bytes[..expected.len()] != expected {
+            console::puts("  ✗ FAIL: marker mismatch through second fd\n");
+            return;
+        }
+    }
+    console::puts("  ✓ marker visible through second fd (shared backing storage)\n");
+
+    // Close both fds — region should be reclaimed when refcount = 0.
+    let _ = process::current().fd_take(fd1);
+    shm::release(id1);
+    let _ = process::current().fd_take(fd2);
+    shm::release(id2);
+    if shm::region_bytes_mut(id1).is_some() {
+        console::puts("  ✗ FAIL: region still active after both closes\n");
+        return;
+    }
+    console::puts("  ✓ region reclaimed after both fds closed\n");
+
+    // Reusing the name should now work (no orphan).
+    let fd3 = match shm::create(name, 64) {
+        Ok(fd) => fd,
+        Err(e) => { console::puts("  ✗ FAIL reuse-after-free: "); console::puts(e); console::puts("\n"); return; }
+    };
+    let id3 = match process::current().fd_get(fd3).map(|e| e.kind) {
+        Some(FdKind::Shm { id }) => id,
+        _ => { console::puts("  ✗ FAIL: fd3 not Shm\n"); return; }
+    };
+    // Confirm storage is zeroed after reuse.
+    let bytes = shm::region_bytes_mut(id3).unwrap();
+    let mut all_zero = true;
+    for &b in bytes.iter() { if b != 0 { all_zero = false; break; } }
+    if !all_zero {
+        console::puts("  ✗ FAIL: recycled storage not zeroed\n");
+        return;
+    }
+    console::puts("  ✓ recycled region is zero-initialized\n");
+
+    // Tidy.
+    let _ = process::current().fd_take(fd3);
+    shm::release(id3);
+
+    console::puts("  ✓ ALL SHM TESTS PASSED\n");
+}
+
 /// In-kernel selftest of the PQ-hybrid comms handshake. Exercises
 /// ML-KEM-768 + ML-DSA-65 + X25519 + Ed25519 + ChaCha20-Poly1305
 /// without needing a peer that speaks the protocol. The classical-
@@ -2109,6 +2239,35 @@ fn cmd_date() {
     console::puts("  unix=");
     print_num(now_utc as usize);
     console::puts("\n");
+}
+
+/// `time-sync-https [host]` — sync wall clock against the `Date:`
+/// header from a pinned HTTPS server. NTP-free; the trust path is
+/// our PQ-TLS chain validation. Defaults to `www.cloudflare.com`.
+fn cmd_time_sync_https(host_arg: &str) {
+    let host = if host_arg.is_empty() { "www.cloudflare.com" } else { host_arg };
+    console::puts_hi("  TIME SYNC VIA HTTPS DATE HEADER\n");
+    console::puts("  trust source: PQ-TLS chain validated against trust store\n");
+    console::puts("  contacting ");
+    console::puts(host);
+    console::puts(":443 ...\n");
+    match crate::kernel::time::sync_from_https(host) {
+        Ok(secs) => {
+            console::puts("  ✓ wall clock anchored to ");
+            print_num(secs as usize);
+            console::puts(" (Unix seconds)\n  current: ");
+            let (y, m, d, h, mm, s) = crate::kernel::time::split_unix(secs);
+            let mut buf = [0u8; 20];
+            let n = crate::kernel::time::format_human(&mut buf, y, m, d, h, mm, s);
+            for &b in &buf[..n] { console::putc(b); }
+            console::puts(" UTC\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ sync failed: ");
+            console::puts(e);
+            console::puts("\n");
+        }
+    }
 }
 
 /// `time-selftest` — verify the time module is sane:

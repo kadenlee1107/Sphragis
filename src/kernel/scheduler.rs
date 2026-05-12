@@ -73,3 +73,76 @@ pub fn yield_now() {
 pub fn init() {
     uart::puts("  [sched] Scheduler initialized (priority preemptive)\n");
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockError {
+    /// `block_on` exceeded the caller-supplied deadline.
+    Timeout,
+}
+
+/// Block until `f` returns `Some(T)` or the deadline expires.
+/// Yields between polls so other ready tasks get a turn.
+///
+/// This is the synchronous bridge into pollable subsystems —
+/// pipes, sockets, the TCP recv path, and (eventually) any future
+/// async-shaped surface. Lets a caller write
+/// `block_on(|| pipe::try_read(id, buf), 5_000_000)` instead of
+/// hand-rolling the same loop everywhere.
+///
+/// Pass `0` for `timeout_us` to wait forever — the loop ignores
+/// the deadline check. Useful for shell prompts where we genuinely
+/// have no upper bound.
+pub fn block_on<F, T>(mut f: F, timeout_us: u64) -> Result<T, BlockError>
+where F: FnMut() -> Option<T>
+{
+    let start = crate::kernel::time::monotonic_us();
+    loop {
+        if let Some(v) = f() {
+            return Ok(v);
+        }
+        if timeout_us != 0 {
+            let now = crate::kernel::time::monotonic_us();
+            if now.saturating_sub(start) >= timeout_us {
+                return Err(BlockError::Timeout);
+            }
+        }
+        yield_now();
+    }
+}
+
+/// In-process selftest of the block_on primitive. Validates both
+/// the success path (closure flips after a few yields → Ok) and
+/// the timeout path (closure never flips → Err(Timeout) within
+/// the expected wall-clock window). Used by `block-on-selftest`.
+pub fn block_on_selftest() -> Result<(bool, bool, u64), &'static str> {
+    use core::cell::Cell;
+
+    // ── Success path: closure becomes ready after 3 polls. ─────
+    let counter = Cell::new(0usize);
+    let success_ok = match block_on(
+        || {
+            counter.set(counter.get() + 1);
+            if counter.get() >= 3 { Some(counter.get()) } else { None }
+        },
+        1_000_000, // 1 second timeout
+    ) {
+        Ok(v) if v == 3 => true,
+        _ => false,
+    };
+
+    // ── Timeout path: closure never returns Some; verify we
+    //    bail with Err(Timeout) and that the wall-clock elapsed
+    //    is at least the timeout we asked for. 10 ms is enough
+    //    to be observable without slowing the boot path.
+    let t0 = crate::kernel::time::monotonic_us();
+    let timeout_us = 10_000;
+    let timeout_ok = matches!(
+        block_on::<_, ()>(|| None, timeout_us),
+        Err(BlockError::Timeout)
+    );
+    let t1 = crate::kernel::time::monotonic_us();
+    let elapsed = t1.saturating_sub(t0);
+    let elapsed_meets_deadline = elapsed >= timeout_us;
+
+    Ok((success_ok, timeout_ok && elapsed_meets_deadline, elapsed))
+}

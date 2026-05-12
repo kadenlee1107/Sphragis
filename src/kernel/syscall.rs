@@ -21,6 +21,9 @@ pub const SYS_BIND:    u16 = 10;
 pub const SYS_LISTEN:  u16 = 11;
 pub const SYS_CONNECT: u16 = 12;
 pub const SYS_ACCEPT:  u16 = 13;
+pub const SYS_SHM_OPEN: u16 = 14;  // POSIX-ish shm_open
+pub const SYS_SHM_SIZE: u16 = 15;
+pub const SYS_SHM_PTR:  u16 = 16;  // kernel-address into the region
 
 /// Negative return values are -errno encoded as a two's-complement u64
 /// so the caller can branch on `(x0 as i64) < 0`.
@@ -89,6 +92,9 @@ pub fn handle(num: u16, frame: &mut TrapFrame) {
                         crate::kernel::process::FdKind::Socket { id, .. } => {
                             crate::kernel::unix_sock::close(id);
                         }
+                        crate::kernel::process::FdKind::Shm { id } => {
+                            crate::kernel::shm::release(id);
+                        }
                     }
                     frame.x[0] = 0;
                 }
@@ -141,12 +147,74 @@ pub fn handle(num: u16, frame: &mut TrapFrame) {
                 None => err(EBADF),
             };
         }
+        SYS_SHM_OPEN => {
+            // x0 = name_ptr, x1 = name_len, x2 = size_or_zero
+            //   (size > 0 → create; size == 0 → open existing)
+            let name_ptr = frame.x[0] as usize;
+            let name_len = frame.x[1] as usize;
+            let size     = frame.x[2] as usize;
+            frame.x[0] = if name_ptr == 0 || name_len == 0
+                || name_len > crate::kernel::shm::MAX_NAME_LEN {
+                err(EINVAL)
+            } else {
+                let name = unsafe {
+                    core::slice::from_raw_parts(name_ptr as *const u8, name_len)
+                };
+                let res = if size > 0 {
+                    crate::kernel::shm::create(name, size)
+                } else {
+                    crate::kernel::shm::open(name)
+                };
+                match res {
+                    Ok(fd) => fd as u64,
+                    Err(e) => match e {
+                        "name taken"   => err(EADDRINUSE),
+                        "no such name" => err(ECONNREFUSED),
+                        "fd table full" | "no free region" | "out of memory"
+                                       => err(ENFILE),
+                        _              => err(EINVAL),
+                    }
+                }
+            };
+        }
+        SYS_SHM_SIZE => {
+            let fd = frame.x[0] as u16;
+            frame.x[0] = match resolve_shm_fd(fd) {
+                Some(id) => crate::kernel::shm::region_size(id)
+                    .map(|n| n as u64).unwrap_or(err(EBADF)),
+                None => err(EBADF),
+            };
+        }
+        SYS_SHM_PTR => {
+            // Returns the kernel-address pointer to the region's
+            // bytes. Safe in Phase 2 (all tasks share kernel
+            // address space). Phase 3 will replace this with
+            // proper page-table mapping.
+            let fd = frame.x[0] as u16;
+            frame.x[0] = match resolve_shm_fd(fd) {
+                Some(id) => crate::kernel::shm::region_bytes_mut(id)
+                    .map(|b| b.as_mut_ptr() as u64).unwrap_or(err(EBADF)),
+                None => err(EBADF),
+            };
+        }
         _ => {
             uart::puts("[syscall] Unknown syscall: ");
             uart::putc(b'0' + (num / 10) as u8);
             uart::putc(b'0' + (num % 10) as u8);
             uart::puts("\n");
         }
+    }
+}
+
+/// Resolve `fd` to a shm region id. Returns None if the fd is
+/// unmapped or not a Shm kind.
+fn resolve_shm_fd(fd: u16) -> Option<u16> {
+    use crate::kernel::process::FdKind;
+    let task = crate::kernel::process::current();
+    let entry = task.fd_get(fd)?;
+    match entry.kind {
+        FdKind::Shm { id } => Some(id),
+        _ => None,
     }
 }
 
@@ -211,6 +279,7 @@ fn do_read(fd: u16, ptr: usize, len: usize) -> u64 {
             }
         }
         FdKind::Socket { .. } => err(EBADF),
+        FdKind::Shm { .. } => err(EBADF),  // use SYS_SHM_PTR + SYS_SHM_SIZE
     }
 }
 
@@ -239,5 +308,6 @@ fn do_write(fd: u16, ptr: usize, len: usize) -> u64 {
             }
         }
         FdKind::Socket { .. } => err(EBADF),
+        FdKind::Shm { .. } => err(EBADF),  // use SYS_SHM_PTR + SYS_SHM_SIZE
     }
 }

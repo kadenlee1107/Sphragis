@@ -146,13 +146,23 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // Initialize kernel
     drivers::uart::puts("[boot] Initializing kernel...\n");
     kernel::mm::init();
+    kernel::kmsg::info(b"mm: frame allocator initialized");
     kernel::process::init();
+    kernel::kmsg::info(b"process: task table initialized");
     kernel::scheduler::init();
+    kernel::kmsg::info(b"scheduler: priority-preemptive ready");
     kernel::ipc::init();
+    kernel::kmsg::info(b"ipc: channel table initialized");
     kernel::pipe::init();
+    kernel::kmsg::info(b"pipe: anonymous pipe table initialized");
     kernel::unix_sock::init();
+    kernel::kmsg::info(b"unix_sock: AF_UNIX SOCK_STREAM table initialized");
+    kernel::shm::init();
+    kernel::kmsg::info(b"shm: POSIX shared memory table initialized");
     kernel::time::init_from_pl031();
+    kernel::kmsg::info(b"time: anchored from PL031 RTC");
     kernel::arch::init_exceptions();
+    kernel::kmsg::info(b"arch: exception vectors installed");
     // (init_timer + GICv2 init removed — IRQ-driven preemption
     // hangs boot somewhere after the timer fires the first time.
     // GIC init is correct for the QEMU virt machine layout but
@@ -450,6 +460,7 @@ fn pipe_selftest_uart() {
                 if ok { Some(id) } else { None }
             }
             FdKind::Socket { .. } => None,
+            FdKind::Shm { .. } => None,
         }
     };
 
@@ -1402,6 +1413,7 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
     kernel::ipc::init();
     kernel::pipe::init();
     kernel::unix_sock::init();
+    kernel::shm::init();
     kernel::time::init_from_apple();
     kernel::arch::init_exceptions();
 

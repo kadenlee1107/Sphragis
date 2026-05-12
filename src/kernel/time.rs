@@ -146,6 +146,94 @@ pub fn set_realtime_anchor(unix_secs: u64) {
     SYNCED.store(true, Ordering::Release);
 }
 
+/// Sync wall clock against the authoritative `Date:` header of a
+/// pinned HTTPS server. Skips NTP entirely — the entire trust path
+/// rides on our existing PQ-TLS chain validation, which is what we
+/// already trust for cert checks. No DDoS-amp vector (TCP only,
+/// authenticated handshake), no need for a separate time-server
+/// keyset, and the resulting clock has the same provenance as
+/// everything else our HTTPS stack does.
+///
+/// Returns the new Unix-seconds anchor on success.
+pub fn sync_from_https(host: &str) -> Result<u64, &'static str> {
+    use crate::net::https;
+    use crate::drivers::uart;
+
+    uart::puts("  [time] sync-from-https: opening ");
+    uart::puts(host);
+    uart::puts(":443 ...\n");
+
+    let pcb = https::open_kernel(host, 443)?;
+
+    // Build a minimal HEAD request. We only need the response
+    // headers; the body is irrelevant.
+    let mut req = [0u8; 256];
+    let mut p = 0;
+    let head = b"HEAD / HTTP/1.1\r\nHost: ";
+    req[p..p + head.len()].copy_from_slice(head); p += head.len();
+    let hb = host.as_bytes();
+    let hn = hb.len().min(req.len() - p - 32);
+    req[p..p + hn].copy_from_slice(&hb[..hn]); p += hn;
+    let tail = b"\r\nConnection: close\r\nUser-Agent: bat_os/0.5\r\n\r\n";
+    req[p..p + tail.len()].copy_from_slice(tail); p += tail.len();
+
+    if let Err(e) = https::write(pcb, &req[..p]) {
+        https::close_pcb(pcb);
+        return Err(e);
+    }
+
+    // Read a small slice of the response — Date: lands in the
+    // first few hundred bytes for every server I've tested. 2 KiB
+    // is generous and bounds memory use.
+    let mut resp = [0u8; 2048];
+    let n = match https::read(pcb, &mut resp) {
+        Ok(n) => n,
+        Err(e) => { https::close_pcb(pcb); return Err(e); }
+    };
+    https::close_pcb(pcb);
+
+    let secs = scan_date_header(&resp[..n])
+        .ok_or("time: no usable Date: header in response")?;
+
+    set_realtime_anchor(secs);
+    uart::puts("  [time] sync OK from https: ");
+    print_unix_human(secs, 0);
+    uart::puts(" UTC\n");
+    Ok(secs)
+}
+
+/// Scan an HTTP response buffer for a case-insensitive `Date:`
+/// header and parse its IMF-fixdate value.
+fn scan_date_header(buf: &[u8]) -> Option<u64> {
+    let mut i = 0;
+    while i + 6 < buf.len() {
+        // Match start-of-line "Date:" case-insensitively. Header
+        // lines are separated by CRLF; the very first line is the
+        // status line, then headers follow.
+        let lower_match = (buf[i] == b'd' || buf[i] == b'D')
+            && (buf[i + 1] == b'a' || buf[i + 1] == b'A')
+            && (buf[i + 2] == b't' || buf[i + 2] == b'T')
+            && (buf[i + 3] == b'e' || buf[i + 3] == b'E')
+            && buf[i + 4] == b':';
+        let at_line_start = i == 0
+            || (i >= 2 && buf[i - 2] == b'\r' && buf[i - 1] == b'\n');
+
+        if lower_match && at_line_start {
+            // Walk forward over optional leading whitespace.
+            let mut j = i + 5;
+            while j < buf.len() && (buf[j] == b' ' || buf[j] == b'\t') { j += 1; }
+            // Find CRLF terminating the header value.
+            let mut k = j;
+            while k + 1 < buf.len() && !(buf[k] == b'\r' && buf[k + 1] == b'\n') {
+                k += 1;
+            }
+            return parse_imf_fixdate(&buf[j..k]);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Seed from the QEMU virt PL031 RTC.
 pub fn init_from_pl031() {
     if let Some(secs) = crate::drivers::rtc::read_pl031() {
@@ -235,6 +323,76 @@ pub fn print_unix_human(unix_secs: u64, tz_offset: i32) {
     for &b in &buf[..n] {
         uart::putc(b);
     }
+}
+
+/// Inverse of `civil_from_days` — Howard Hinnant's `days_from_civil`.
+/// Returns days-since-1970 for the given Gregorian (year, month, day).
+fn days_from_civil(y: i64, m: u8, d: u8) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64; // [0, 399]
+    let mp = if m > 2 { (m as u64) - 3 } else { (m as u64) + 9 };
+    let doy = (153 * mp + 2) / 5 + (d as u64) - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146097 + doe as i64 - 719_468
+}
+
+/// Parse an HTTP IMF-fixdate header value (RFC 7231 §7.1.1.1):
+/// "Sun, 06 Nov 1994 08:49:37 GMT". Returns Unix seconds, or None
+/// on any parse failure. Strict — RFC 850 / asctime variants are
+/// rejected (they're SHOULD-NOT in HTTP/1.1 and modern servers
+/// don't emit them).
+pub fn parse_imf_fixdate(s: &[u8]) -> Option<u64> {
+    // Expect length 29: "Sun, 06 Nov 1994 08:49:37 GMT"
+    //                    0    5  8   12   17 20 23
+    if s.len() < 29 { return None; }
+    let day  = parse_u2(&s[5..7])? as u8;
+    let mon  = parse_month(&s[8..11])?;
+    let year = parse_u4(&s[12..16])? as i64;
+    if s[16] != b' ' { return None; }
+    let hh = parse_u2(&s[17..19])? as u32;
+    if s[19] != b':' { return None; }
+    let mm = parse_u2(&s[20..22])? as u32;
+    if s[22] != b':' { return None; }
+    let ss = parse_u2(&s[23..25])? as u32;
+    if &s[25..29] != b" GMT" { return None; }
+
+    if mon == 0 || mon > 12 || day == 0 || day > 31 { return None; }
+    if hh >= 24 || mm >= 60 || ss >= 60 { return None; }
+
+    let days = days_from_civil(year, mon, day);
+    if days < 0 { return None; } // pre-1970
+    let secs = (days as u64) * SECS_PER_DAY
+        + (hh as u64) * 3600
+        + (mm as u64) * 60
+        + (ss as u64);
+    Some(secs)
+}
+
+fn parse_u2(s: &[u8]) -> Option<u32> {
+    if s.len() != 2 { return None; }
+    let d0 = if (b'0'..=b'9').contains(&s[0]) { (s[0] - b'0') as u32 } else { return None; };
+    let d1 = if (b'0'..=b'9').contains(&s[1]) { (s[1] - b'0') as u32 } else { return None; };
+    Some(d0 * 10 + d1)
+}
+
+fn parse_u4(s: &[u8]) -> Option<u32> {
+    if s.len() != 4 { return None; }
+    let mut v = 0u32;
+    for &b in s {
+        if !(b'0'..=b'9').contains(&b) { return None; }
+        v = v * 10 + (b - b'0') as u32;
+    }
+    Some(v)
+}
+
+fn parse_month(s: &[u8]) -> Option<u8> {
+    Some(match s {
+        b"Jan" => 1,  b"Feb" => 2,  b"Mar" => 3,  b"Apr" => 4,
+        b"May" => 5,  b"Jun" => 6,  b"Jul" => 7,  b"Aug" => 8,
+        b"Sep" => 9,  b"Oct" => 10, b"Nov" => 11, b"Dec" => 12,
+        _ => return None,
+    })
 }
 
 /// Format `YYYY-MM-DD HH:MM:SS` into `buf`. Returns bytes written

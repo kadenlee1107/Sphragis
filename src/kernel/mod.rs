@@ -7,6 +7,7 @@ pub mod stack_chk;
 pub mod pipe;
 pub mod process;
 pub mod scheduler;
+pub mod shm;
 pub mod sync;
 pub mod syscall;
 pub mod time;

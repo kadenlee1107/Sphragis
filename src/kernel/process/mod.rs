@@ -22,6 +22,10 @@ pub enum FdKind {
     /// `role` distinguishes listener fds (which `accept()` consumes)
     /// from connected stream fds (which `read`/`write` use).
     Socket { id: u16, role: SocketRole },
+    /// POSIX shared-memory region fd. `id` indexes into the shm
+    /// table. Read/write go directly to the region's bytes via
+    /// `kernel::shm::region_bytes_mut`.
+    Shm { id: u16 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

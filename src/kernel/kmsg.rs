@@ -88,6 +88,15 @@ pub fn info (msg: &[u8]) { log(Severity::Info,  msg); }
 pub fn warn (msg: &[u8]) { log(Severity::Warn,  msg); }
 pub fn error(msg: &[u8]) { log(Severity::Error, msg); }
 
+/// Mirror a kernel-info line to UART AND the kmsg ring. Used by
+/// the boot path so a post-boot `dmesg` shows the same lines the
+/// operator watched over serial. Without this the ring stays
+/// empty on a clean boot — defeating the point of having a ring.
+pub fn boot(msg: &str) {
+    crate::drivers::uart::puts(msg);
+    info(msg.trim_end_matches('\n').as_bytes());
+}
+
 /// Number of lines ever recorded.
 pub fn head() -> usize { HEAD.load(Ordering::Relaxed) }
 

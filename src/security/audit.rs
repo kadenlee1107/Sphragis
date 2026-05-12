@@ -51,6 +51,10 @@ pub enum Category {
     /// logged, only the addressing events that a forensic reviewer
     /// needs to reconstruct who-talked-to-whom.
     Socket      = 12,
+    /// POSIX shm lifecycle: create/open/close. Bulk reads/writes
+    /// against the region's bytes are not logged for the same
+    /// rate-limit reason.
+    Shm         = 13,
 }
 
 impl Category {
@@ -68,6 +72,7 @@ impl Category {
             Category::Ai         => "ai",
             Category::Pipe       => "pipe",
             Category::Socket     => "sock",
+            Category::Shm        => "shm",
         }
     }
 }
