@@ -11,6 +11,100 @@ end of a session.
 
 ---
 
+## 2026-05-11 — Mac — gap-audit cluster: stack canaries, POSIX pipes, wall clock
+
+**Context:** Earlier in the day we shipped the v3 LoRA + chat_with_v3
+REPL (see previous entry). After live-test handoff, pivoted to
+working down the `docs/OS_FEATURE_GAP_AUDIT.md` P0 list.
+
+### What shipped (three commits on `feat/ai-agent-design`)
+
+**1. `src/kernel/stack_chk.rs`** — Cluster G's hardening flags added
+`-Z stack-protector=all` to RUSTFLAGS but never provided the symbols
+the codegen emits, so the kernel had stopped linking. Now defines:
+
+  * `__stack_chk_guard` — 64-bit static, default-sentinel today.
+    `seed_from_rng()` is ready (RNDR + cntpct fallback) but not yet
+    called from `kernel_main`; one-line wire-up is a future task.
+  * `__stack_chk_fail` — UART print "STACK CANARY FAILURE" + WFE
+    halt. Deliberately no cleanup — a smashed canary means memory
+    corruption has already happened.
+
+**2. POSIX anonymous pipes (gap item 026).** Existing
+`kernel/ipc.rs` is cap-checked message-passing — wrong shape for
+POSIX byte streams. Pipes sit alongside it as a distinct primitive:
+
+  * Per-task fd table on `Task` (16 slots, `FdKind::Pipe { id, end }`).
+    Generic so File/Socket variants slot in later without changing
+    Task layout.
+  * `src/kernel/pipe.rs` — 32 pipes × 4 KiB ring buffers. Blocking
+    read/write via `TaskState::Blocked` + `scheduler::yield_now()`.
+    EOF on empty+no-writers; EPIPE on no-readers; refcounted close
+    reclaims the pipe when both ends reach zero.
+  * 4 syscalls: SYS_PIPE/READ/WRITE/CLOSE with -errno encoding.
+  * `Category::Pipe = 11` in audit ring (create/close only — per-byte
+    traffic would drown it).
+  * `pipe-selftest` shell command + boot-side `pipe_selftest_uart`
+    behind `selftest-on-boot` (so headless QEMU smoke can verify
+    without virtio-keyboard injection through the auth gate).
+  * Verified on real boot: write/read round trip, EOF after writer
+    close, EPIPE after reader close.
+
+  Deferred: FIFOs need BatFS FIFO inode type. Shell `|` operator
+  needs an output-capture refactor — commands write to
+  `console::puts` directly today.
+
+**3. Wall-clock time (gap item 028).** Only had monotonic ticks
+(`cntpct_el0`); every cert NotBefore/NotAfter check, audit
+timestamp, CRL window, deadman timer was using elapsed-since-boot
+instead of civil time.
+
+  * `src/drivers/rtc.rs` — PL031 read at 0x09010000 (QEMU virt
+    standard map). Sanity-gated post-2020/pre-2100 so open-bus
+    zeros don't pass for time. Apple-side `read_apple()` is a
+    stub today — needs SMC keypath access from EL1.
+  * `src/kernel/time.rs` — `realtime_secs` / `realtime_us` /
+    `monotonic_us`. RTC anchors a one-shot offset at boot
+    (BOOT_REALTIME_SECS + BOOT_TICK + FREQ_HZ); subsequent reads
+    are pure cntpct arithmetic, so we never re-enter the RTC chip
+    and never drift relative to the generic timer. Civil-time
+    conversion via Howard Hinnant's days-from-civil algorithm —
+    no tzdata blob.
+  * `set_tz_offset_secs(±14h max)` — single atomic that collapses
+    gap item 029 (time zones) to one setter.
+  * `date` + `time-selftest` shell commands.
+
+  Verified on QEMU boot — host clock and kernel anchor agree to
+  the second; selftest 2 s later reads correct delta.
+
+  Deferred:
+  - **NTP intentionally skipped.** Plaintext NTP is a DDoS-amp
+    vector and unauthenticated. The future path is to sync from
+    the `Date:` header of our existing TLS-pinned + PQ-secured
+    HTTPS path so the time source inherits the same trust roots
+    as everything else.
+  - Apple M4 RTC: stub, needs SMC.
+
+### Up next
+
+P0 gap-audit items still pending in `OS_FEATURE_GAP_AUDIT.md`:
+
+  * 025 AF_UNIX domain sockets — natural follow-on, reuses the FD
+    table we just built; same read/write/close surface, new
+    socket/bind/connect/accept verbs + a path namespace in BatFS.
+  * 027 POSIX shared memory.
+  * 035 dmesg ring — pure quick win, ~80 LOC, mirror the audit
+    ring shape for non-security kernel messages.
+  * Post-no-browser roadmap (from memory): TLS X.509 chain
+    validation → scheduler `block_on()` → captures cleanup.
+
+Branch `feat/ai-agent-design` is becoming a misnomer (carries AI
+agent work + the stack-canary fix + pipes + wall clock). When this
+batch lands on `main` we should probably split future gap-audit
+work onto `feat/os-gap-fixes` so the branch name matches the diff.
+
+---
+
 ## 2026-05-11 — Mac — v2 + v3 LoRA iterations, eval at 65% with v3
 
 **Goal:** Take the v2 training run that finished overnight through
