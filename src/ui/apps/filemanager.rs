@@ -90,17 +90,34 @@ pub fn render() {
     let col_y = r.y + 32;
     draw_column_header(r.x, col_y, r.w);
 
-    // ── DATA ROWS ─────────────────────────────────────────────────
-    let body_y = col_y + ROW_H;
+    // ── EMBEDDED SHELL STRIP — bottom 40% of body ─────────────────
+    // Lets the operator type `write foo "bar"`, `rm foo`, etc. without
+    // swapping to the SH tab. Shared scrollback with SH — the
+    // command runs in the same cave context, so cap/audit isolation
+    // is whatever the active cave already enforces.
     let footer_y = r.y + r.h - 28;
-    let body_h = footer_y.saturating_sub(body_y);
+    let body_y = col_y + ROW_H;
+    let body_total_h = footer_y.saturating_sub(body_y);
+    let shell_h = (body_total_h * 2 / 5).max(96);  // 40% of body, min 96px (~6 rows)
+    let shell_y = footer_y - shell_h - 1;
+    let body_h = shell_y.saturating_sub(body_y);
 
+    // 1px hairline separator between list and shell strip.
+    gpu::fill_rect(r.x, shell_y, r.w, 1, crate::ui::widgets::HAIR);
+
+    // ── DATA ROWS ─────────────────────────────────────────────────
     let (count, _max) = batfs::stats();
     if count == 0 {
         draw_empty(r.x, body_y, r.w, body_h);
     } else {
         draw_rows(r.x, body_y, r.w, body_h);
     }
+
+    // ── SHELL STRIP ──────────────────────────────────────────────
+    crate::ui::console::redraw_in_rect(wm::WindowRect {
+        x: r.x + 8, y: shell_y + 4,
+        w: r.w.saturating_sub(16), h: shell_h.saturating_sub(8),
+    });
 
     // ── FOOTER STRIP (28px) ───────────────────────────────────────
     draw_strip(r.x, footer_y, r.w, 28, true, false);
@@ -304,7 +321,7 @@ fn draw_footer(x: u32, y: u32, w: u32, count: usize) {
     font::draw_str(fb, sw, cx, text_y, "VERIFIED", GREEN, BG);
 
     // Right hint.
-    let hint = "Ctrl+1 to manage in shell";
+    let hint = "type commands below . Enter runs (or opens row if blank)";
     let hint_w = hint.len() as u32 * CHAR_W;
     if w > hint_w + 16 {
         font::draw_str(fb, sw, x + w - 16 - hint_w, text_y, hint, DIM_TXT, BG);

@@ -3,6 +3,11 @@
 # Cargo build artifacts — reproducible via `cargo build`.
 /target
 
+# Test-server private identity (Ed25519 secret key). Generated on
+# first run of scripts/comms_test_server.py and reused across runs
+# so the operator's pinned pubkey stays stable. Never commit.
+/comms_server.key
+
 # STUMP #136 (Phase 7): persistent BatFS disk image and any other
 # host-side state files Bat_OS needs across QEMU invocations. The
 # image is auto-created on first boot — wipe with `rm state/batfs.img`

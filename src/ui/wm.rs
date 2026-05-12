@@ -357,7 +357,7 @@ pub fn draw_frame() {
     // 2) Tab strip — 9 × 64px = 576px, centered between brand and cave.
     let tabs_total = NUM_APPS as u32 * TAB_W;
     let tabs_start = (w - tabs_total) / 2;
-    let labels = ["SH", "DS", "FS", "NM", "ED", "SK", "CM", "WB", "BC"];
+    let labels = ["SH", "DS", "FS", "NM", "ED", "SK", "CM", "BC"];
     let pane_count_now = unsafe { PANE_COUNT };
     let split_app = unsafe { if pane_count_now > 1 { PANES[1].app as usize } else { usize::MAX } };
     let focus = unsafe { FOCUSED_PANE };

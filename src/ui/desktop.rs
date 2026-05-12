@@ -97,6 +97,46 @@ pub fn run() -> ! {
     let mut cmd_buf = [0u8; 256];
     let mut cmd_len: usize = 0;
 
+    // Partial-input scrubber. Called at every tab-switch site so the
+    // user can't carry a half-typed command from one tab into another
+    // (the buffer is shared between SH/FS/CM/BC; without this it was
+    // possible to start typing on FS, switch to SH, and see your FS
+    // partial sitting at the new prompt). The visible characters get
+    // backspaced from scrollback so what the user sees matches the
+    // empty buffer state.
+    macro_rules! clear_input {
+        () => {
+            for _ in 0..cmd_len {
+                console::putc(0x08);
+                platform::serial_putc(0x08);
+                platform::serial_putc(b' ');
+                platform::serial_putc(0x08);
+            }
+            cmd_len = 0;
+        };
+    }
+
+    // Inject clipboard bytes into the current input as if the user
+    // had typed them. Each printable byte goes through the same
+    // putc + serial-echo path as a real keystroke; non-printable
+    // bytes are skipped (clipboard bytes injected as keystrokes
+    // shouldn't be able to deliver a hidden Ctrl-something).
+    macro_rules! paste_at_input {
+        () => {
+            let n = super::clipboard::len();
+            for i in 0..n {
+                let b = super::clipboard::byte_at(i).unwrap_or(0);
+                if b >= 0x20 && b <= 0x7E && cmd_len < 255 {
+                    cmd_buf[cmd_len] = b;
+                    cmd_len += 1;
+                    console::putc(b);
+                    platform::serial_putc(b);
+                }
+            }
+            wm::flush_all();
+        };
+    }
+
     // Draw initial shell prompt
     console::init_in_window();
     shell_banner();
@@ -132,8 +172,8 @@ pub fn run() -> ! {
 
             match c {
                 // Ctrl+A through Ctrl+E for app switching
-                0x01 => { switch_to(wm::APP_SHELL); in_shell = true; continue; }
-                0x02 => { switch_to(wm::APP_DASHBOARD); in_shell = false; continue; }
+                0x01 => { clear_input!(); switch_to(wm::APP_SHELL); in_shell = true; continue; }
+                0x02 => { clear_input!(); switch_to(wm::APP_DASHBOARD); in_shell = false; continue; }
                 0x03 => { // Ctrl+C — if in shell, cancel line; otherwise switch to files
                     if in_shell && cmd_len > 0 {
                         console::puts("^C\n");
@@ -142,13 +182,14 @@ pub fn run() -> ! {
                         wm::flush_all();
                         continue;
                     } else if !in_shell {
+                        clear_input!();
                         switch_to(wm::APP_FILES);
                         in_shell = false;
                         continue;
                     }
                 }
-                0x04 => { switch_to(wm::APP_NETMON); in_shell = false; continue; }
-                0x05 => { switch_to(wm::APP_EDITOR); in_shell = false; continue; }
+                0x04 => { clear_input!(); switch_to(wm::APP_NETMON); in_shell = false; continue; }
+                0x05 => { clear_input!(); switch_to(wm::APP_EDITOR); in_shell = false; continue; }
 
                 // Tab key — cycle app in focused pane.
                 // 2026-04-20 21:45: cycle goes 0..8 → close-button-X → 0
@@ -157,6 +198,7 @@ pub fn run() -> ! {
                     if wm::is_close_focused() {
                         // Currently on the X — wrap back to app 0
                         platform::serial_puts("[tab] unfocus+switch_app(0)\r\n");
+                        clear_input!();
                         wm::unfocus_close_button();
                         wm::switch_app(wm::APP_SHELL);
                         in_shell = true;
@@ -169,6 +211,7 @@ pub fn run() -> ! {
                     if cur == wm::APP_BATCAVE {
                         // Last app → tab onto the close button
                         platform::serial_puts("[tab] cur=BATCAVE → focus_close_button\r\n");
+                        clear_input!();
                         wm::focus_close_button();
                         // Don't change active_app — keep it on 8 so the
                         // pane content stays visible behind the X.
@@ -180,6 +223,7 @@ pub fn run() -> ! {
                     }
                     let next = cur + 1;
                     platform::serial_puts("[tab] switching to next app\r\n");
+                    clear_input!();
                     wm::switch_app(next);
                     in_shell = next == wm::APP_SHELL;
                     platform::serial_puts("[tab] calling render_current\r\n");
@@ -245,6 +289,16 @@ pub fn run() -> ! {
                                 wm::flush_all();
                             }
                         }
+                        // Ctrl+V — paste from system clipboard.
+                        0x16 => {
+                            paste_at_input!();
+                        }
+                        // Ctrl+Y — yank current input line into
+                        // clipboard. Doesn't clear the input; the
+                        // line stays visible and editable.
+                        0x19 => {
+                            super::clipboard::set(&cmd_buf[..cmd_len]);
+                        }
                         _ if c >= 0x20 && c <= 0x7E && cmd_len < 255 => {
                             cmd_buf[cmd_len] = c;
                             cmd_len += 1;
@@ -255,9 +309,71 @@ pub fn run() -> ! {
                         _ => {}
                     }
                 }
-                wm::APP_COMMS => {
-                    apps::comms::handle_key(c);
-                    render_current();
+                wm::APP_FILES | wm::APP_COMMS | wm::APP_BATCAVE => {
+                    // These three tabs embed a shell strip at the
+                    // bottom of their page so the operator can run
+                    // commands without swapping to SH. Routing:
+                    //   - arrows / special keys (0x80+) → app widget
+                    //   - printable + Backspace → shared shell input
+                    //   - Enter → execute command if input non-empty,
+                    //             otherwise the app's default (open
+                    //             file / enter cave / etc.)
+                    let is_widget_key = c >= 0x80 || c == 0x1B;
+                    let is_enter      = c == b'\r' || c == b'\n';
+                    if is_widget_key {
+                        // Arrow keys, etc. — go to the widget.
+                        match active {
+                            wm::APP_FILES   => apps::filemanager::handle_key(c),
+                            wm::APP_COMMS   => apps::comms::handle_key(c),
+                            wm::APP_BATCAVE => apps::batcave_mgr::handle_key(c),
+                            _ => {}
+                        }
+                        render_current();
+                    } else if is_enter && cmd_len == 0 {
+                        // Empty input: defer to the app's default
+                        // Enter handler (open file, enter cave, etc.).
+                        match active {
+                            wm::APP_FILES   => apps::filemanager::handle_key(c),
+                            wm::APP_COMMS   => apps::comms::handle_key(c),
+                            wm::APP_BATCAVE => apps::batcave_mgr::handle_key(c),
+                            _ => {}
+                        }
+                        render_current();
+                    } else if is_enter {
+                        // Execute the typed command. Output lands in
+                        // shared scrollback, which the embedded strip
+                        // re-renders on the next pass.
+                        console::putc(b'\n');
+                        platform::serial_puts("\r\n");
+                        let cmd = unsafe { core::str::from_utf8_unchecked(&cmd_buf[..cmd_len]) };
+                        super::shell::execute_cmd(cmd);
+                        cmd_len = 0;
+                        console::prompt();
+                        render_current();
+                    } else if c == 0x08 || c == 0x7F {
+                        if cmd_len > 0 {
+                            cmd_len -= 1;
+                            console::putc(0x08);
+                            platform::serial_putc(0x08);
+                            platform::serial_putc(b' ');
+                            platform::serial_putc(0x08);
+                            render_current();
+                        }
+                    } else if c == 0x16 {
+                        // Ctrl+V — paste clipboard into the
+                        // embedded shell strip.
+                        paste_at_input!();
+                        render_current();
+                    } else if c == 0x19 {
+                        // Ctrl+Y — yank current input line.
+                        super::clipboard::set(&cmd_buf[..cmd_len]);
+                    } else if c >= 0x20 && c <= 0x7E && cmd_len < 255 {
+                        cmd_buf[cmd_len] = c;
+                        cmd_len += 1;
+                        console::putc(c);
+                        platform::serial_putc(c);
+                        render_current();
+                    }
                 }
                 wm::APP_EDITOR => {
                     // editor is a real text buffer now.
@@ -265,18 +381,6 @@ pub fn run() -> ! {
                     // repaint the whole pane so the new content +
                     // cursor land on screen.
                     apps::editor::handle_key(c);
-                    render_current();
-                }
-                wm::APP_FILES => {
-                    // arrow keys move row selection,
-                    // Enter loads the selected file into the editor.
-                    apps::filemanager::handle_key(c);
-                    render_current();
-                }
-                wm::APP_BATCAVE => {
-                    // arrow keys move cave selection,
-                    // detail panel re-renders for the new selection.
-                    apps::batcave_mgr::handle_key(c);
                     render_current();
                 }
                 _ => {
@@ -454,7 +558,7 @@ fn shell_banner() {
     // Row 2: tab hint with chord codes.
     let r2 = by + 18;
     font::draw_str(fb, w, tx, r2,
-        "tab to switch apps  .  ^1:SH ^2:DS ^3:FS ^4:NM ^5:ED ^6:SK ^7:CM ^8:WB ^9:BC",
+        "tab to switch apps  .  ^1:SH ^2:DS ^3:FS ^4:NM ^5:ED ^6:SK ^7:CM ^8:BC",
         DIM_TXT, BG);
 
     // Row 3: command call-outs (cyan keywords, dim glue).

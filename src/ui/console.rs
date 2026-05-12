@@ -168,6 +168,50 @@ pub fn reset_for_cave_switch() {
     redraw_content();
 }
 
+/// Paint the *tail* of the scrollback buffer into an arbitrary rect.
+/// Used by apps that embed a shell view at the bottom of their pane
+/// (FS, CM, BC) so the operator can type shell commands in context
+/// without swapping to the SH tab.
+///
+/// We show the last `rect.h / CHAR_H` rows, clipped to `rect.w /
+/// CHAR_W` columns. The buffer itself is left untouched.
+pub fn redraw_in_rect(rect: crate::ui::wm::WindowRect) {
+    let fb = gpu::framebuffer();
+    let w = gpu::width();
+
+    // Clear the strip first so we paint over a clean slate.
+    gpu::fill_rect(rect.x, rect.y, rect.w, rect.h, BG);
+
+    let visible_rows = (rect.h / CHAR_H) as usize;
+    let visible_cols = (rect.w / CHAR_W) as usize;
+    if visible_rows == 0 || visible_cols == 0 { return; }
+
+    // Find the highest non-empty row in the buffer so we know what
+    // "the tail" actually is — otherwise we'd waste pixels on
+    // never-touched blank rows below the cursor.
+    let cur_y = CURSOR_Y.load(Ordering::Relaxed) as usize;
+    let last_row = cur_y.min(SB_ROWS.saturating_sub(1));
+    let take_rows = visible_rows.min(last_row + 1);
+    let start_row = last_row + 1 - take_rows;
+    let take_cols = visible_cols.min(SB_COLS);
+
+    unsafe {
+        let buf = &*core::ptr::addr_of!(SB_BUF);
+        for i in 0..take_rows {
+            let src_y = start_row + i;
+            let py = rect.y + (i as u32) * CHAR_H;
+            if py + CHAR_H > rect.y + rect.h { break; }
+            for cx in 0..take_cols {
+                let cell = buf[src_y][cx];
+                if cell.ch == 0 { continue; }
+                let px = rect.x + (cx as u32) * CHAR_W;
+                if px + CHAR_W > rect.x + rect.w { break; }
+                font::draw_char(fb, w, px, py, cell.ch, cell.fg, BG);
+            }
+        }
+    }
+}
+
 /// replay the scrollback buffer to the framebuffer.
 /// Called on every tab switch back to SH so the shell content
 /// survives the FB clear in `wm::draw_frame`.

@@ -10,11 +10,10 @@
 use crate::ui::wm;
 use crate::ui::gpu;
 use crate::ui::font;
-use crate::ui::draw;
 use crate::ui::widgets::{
     self as W, draw_panel, draw_kv_row, draw_tile,
     KV_ROW_H, State,
-    BG, INK, MID, DIM_TXT, FAINT, CYAN, CYAN_DIM, GREEN,
+    BG, INK, MID, DIM_TXT, FAINT, CYAN,
 };
 
 pub fn render() {
@@ -142,16 +141,6 @@ fn draw_architecture(p: &W::PanelInner) {
     font::draw_str(fb, w, p.x, y, "Built 20260502.a3f1c . signed", DIM_TXT, BG);
     y += 18;
     font::draw_str(fb, w, p.x, y, "compiled with rustc 1.81-nightly . target aarch64-unknown-none-softfloat", FAINT, BG);
-
-    // Decorative bat at right edge — 36x24 simplified glyph.
-    if p.w > 200 {
-        let bat_x = p.x + p.w - 40;
-        let bat_y = p.y + (p.h.saturating_sub(24)) / 2;
-        draw::draw_bat_mini_full(bat_x as i32, bat_y as i32, CYAN);
-        // Subtle dim accent line under it.
-        gpu::fill_rect(bat_x, bat_y + 28, 36, 1, CYAN_DIM);
-    }
-    let _ = GREEN;
 }
 
 // ── helpers ───────────────────────────────────────────────────────

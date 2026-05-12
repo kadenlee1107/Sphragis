@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""Bat_OS comms test server with real Ed25519 + X25519 + ChaCha20-Poly1305.
+
+Wire protocol (matches src/ui/apps/comms.rs):
+
+  1. After TCP connect, both sides send a 128-byte HANDSHAKE OFFER:
+        eph_pub(32) || id_pub(32) || ed25519_sig(eph || label by id_sk)(64)
+     label = b"BAT_OS-COMMS-v1"
+
+  2. After exchanging offers, both compute:
+        shared    = X25519(my_eph_sk, peer_eph_pk)
+        c2s_key   = SHA-256(b"BAT_OS-COMMS-c2s-v1" || shared
+                            || client_eph_pk || server_eph_pk)
+        s2c_key   = SHA-256(b"BAT_OS-COMMS-s2c-v1" || shared
+                            || client_eph_pk || server_eph_pk)
+
+  3. Transport frames:
+        len(4 BE) || nonce(12) || ciphertext || tag(16)
+     where len = 12 + ciphertext_len + 16, nonce = u64 counter big-endian
+     padded to 12 bytes. Separate counters per direction starting at 0.
+
+The server keeps a stable Ed25519 identity in `./comms_server.key` so the
+public-key fingerprint we hand the operator stays the same between runs.
+The fingerprint is what the Bat_OS shell pins via:
+
+    comms connect 10.0.2.2:9100 <SERVER_PUBKEY_HEX>
+
+Usage:
+    python3 scripts/comms_test_server.py             # listens on 9100
+    python3 scripts/comms_test_server.py 9200        # custom port
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import socket
+import struct
+import sys
+import threading
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey, Ed25519PublicKey,
+)
+from cryptography.hazmat.primitives.asymmetric.x25519 import (
+    X25519PrivateKey, X25519PublicKey,
+)
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives import serialization
+from cryptography.exceptions import InvalidSignature, InvalidTag
+
+
+LABEL          = b"BAT_OS-COMMS-v1"
+OFFER_LEN      = 32 + 32 + 64       # 128
+NONCE_LEN      = 12
+TAG_LEN        = 16
+KEY_DIR_C2S    = b"BAT_OS-COMMS-c2s-v1"
+KEY_DIR_S2C    = b"BAT_OS-COMMS-s2c-v1"
+IDENTITY_PATH  = "comms_server.key"
+
+
+def load_or_create_identity() -> Ed25519PrivateKey:
+    if os.path.exists(IDENTITY_PATH):
+        with open(IDENTITY_PATH, "rb") as f:
+            raw = f.read()
+        return Ed25519PrivateKey.from_private_bytes(raw)
+    sk = Ed25519PrivateKey.generate()
+    raw = sk.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    with open(IDENTITY_PATH, "wb") as f:
+        f.write(raw)
+    os.chmod(IDENTITY_PATH, 0o600)
+    return sk
+
+
+def id_pub_bytes(sk: Ed25519PrivateKey) -> bytes:
+    return sk.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+
+
+def x25519_pub_bytes(sk: X25519PrivateKey) -> bytes:
+    return sk.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+
+
+def recv_exact(conn: socket.socket, n: int) -> bytes:
+    out = b""
+    while len(out) < n:
+        chunk = conn.recv(n - len(out))
+        if not chunk:
+            raise ConnectionError("peer closed mid-message")
+        out += chunk
+    return out
+
+
+def build_offer(eph_pub: bytes, id_sk: Ed25519PrivateKey) -> bytes:
+    msg = eph_pub + LABEL
+    sig = id_sk.sign(msg)
+    return eph_pub + id_pub_bytes(id_sk) + sig
+
+
+def verify_offer(offer: bytes) -> tuple[bytes, bytes]:
+    """Returns (peer_eph_pub, peer_id_pub) on success, raises on failure."""
+    if len(offer) != OFFER_LEN:
+        raise ValueError(f"bad offer length {len(offer)}")
+    eph, id_pub, sig = offer[:32], offer[32:64], offer[64:]
+    pk = Ed25519PublicKey.from_public_bytes(id_pub)
+    pk.verify(sig, eph + LABEL)  # raises InvalidSignature on tamper
+    return eph, id_pub
+
+
+def derive_keys(shared: bytes, client_eph_pk: bytes, server_eph_pk: bytes
+                ) -> tuple[bytes, bytes]:
+    h = hashlib.sha256
+    suffix = shared + client_eph_pk + server_eph_pk
+    c2s = h(KEY_DIR_C2S + suffix).digest()
+    s2c = h(KEY_DIR_S2C + suffix).digest()
+    return c2s, s2c
+
+
+def make_nonce(counter: int) -> bytes:
+    # u64 BE counter + 4 zero bytes = 12-byte ChaCha20-Poly1305 nonce.
+    return struct.pack(">Q", counter) + b"\x00\x00\x00\x00"
+
+
+def send_frame(conn: socket.socket, aead: ChaCha20Poly1305,
+               counter: int, plaintext: bytes) -> None:
+    nonce = make_nonce(counter)
+    ct_tag = aead.encrypt(nonce, plaintext, None)  # tag is appended
+    body = nonce + ct_tag
+    conn.sendall(struct.pack(">I", len(body)) + body)
+
+
+def recv_frame(conn: socket.socket, aead: ChaCha20Poly1305,
+               counter: int) -> bytes:
+    header = recv_exact(conn, 4)
+    body_len = struct.unpack(">I", header)[0]
+    if body_len < NONCE_LEN + TAG_LEN or body_len > 16 * 1024:
+        raise ValueError(f"bad frame length {body_len}")
+    body = recv_exact(conn, body_len)
+    nonce, ct_tag = body[:NONCE_LEN], body[NONCE_LEN:]
+    expected_nonce = make_nonce(counter)
+    if nonce != expected_nonce:
+        raise ValueError(f"nonce drift: expected ctr={counter}")
+    return aead.decrypt(nonce, ct_tag, None)
+
+
+def handle(conn: socket.socket, addr: tuple[str, int],
+           id_sk: Ed25519PrivateKey) -> None:
+    peer = f"{addr[0]}:{addr[1]}"
+    print(f"[srv] {peer} connected", flush=True)
+    try:
+        # ── 1. Read client offer ────────────────────────────────────
+        client_offer = recv_exact(conn, OFFER_LEN)
+        client_eph_pk, client_id_pk = verify_offer(client_offer)
+        print(f"[srv] {peer} client_id={client_id_pk.hex()[:16]}... verified",
+              flush=True)
+
+        # ── 2. Generate our ephemeral, send our offer ───────────────
+        server_eph_sk = X25519PrivateKey.generate()
+        server_eph_pk = x25519_pub_bytes(server_eph_sk)
+        conn.sendall(build_offer(server_eph_pk, id_sk))
+
+        # ── 3. Derive directional keys ──────────────────────────────
+        peer_eph = X25519PublicKey.from_public_bytes(client_eph_pk)
+        shared = server_eph_sk.exchange(peer_eph)
+        c2s_key, s2c_key = derive_keys(shared, client_eph_pk, server_eph_pk)
+        c2s = ChaCha20Poly1305(c2s_key)
+        s2c = ChaCha20Poly1305(s2c_key)
+        print(f"[srv] {peer} handshake complete; "
+              f"c2s_key={c2s_key.hex()[:16]}... s2c_key={s2c_key.hex()[:16]}...",
+              flush=True)
+
+        # ── 4. Echo loop with framed AEAD ───────────────────────────
+        recv_ctr = 0
+        send_ctr = 0
+        while True:
+            try:
+                plaintext = recv_frame(conn, c2s, recv_ctr)
+            except ConnectionError:
+                break
+            recv_ctr += 1
+            print(f"[srv] {peer} <- {len(plaintext)} B plaintext: "
+                  f"{plaintext[:60]!r}", flush=True)
+            send_frame(conn, s2c, send_ctr, plaintext)
+            send_ctr += 1
+    except (InvalidSignature, InvalidTag) as e:
+        print(f"[srv] {peer} CRYPTO FAILURE: {e}", flush=True)
+    except ConnectionError as e:
+        print(f"[srv] {peer} {e}", flush=True)
+    except Exception as e:
+        print(f"[srv] {peer} ERROR: {type(e).__name__}: {e}", flush=True)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        print(f"[srv] {peer} disconnected", flush=True)
+
+
+def main() -> int:
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 9100
+    id_sk = load_or_create_identity()
+    id_pk_hex = id_pub_bytes(id_sk).hex()
+    print("===========================================================")
+    print(f"[srv] Bat_OS comms server (Ed25519 + X25519 + ChaCha20-Poly1305)")
+    print(f"[srv] listening on 0.0.0.0:{port}")
+    print(f"[srv] identity pubkey: {id_pk_hex}")
+    print(f"[srv] pin this in Bat_OS:")
+    print(f"[srv]   comms connect 10.0.2.2:{port} {id_pk_hex}")
+    print("===========================================================",
+          flush=True)
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("0.0.0.0", port))
+    s.listen(8)
+
+    try:
+        while True:
+            conn, addr = s.accept()
+            t = threading.Thread(target=handle, args=(conn, addr, id_sk),
+                                 daemon=True)
+            t.start()
+    except KeyboardInterrupt:
+        print("\n[srv] shutting down", flush=True)
+    finally:
+        s.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -258,6 +258,37 @@ fn execute(cmd: &str) {
         "ifconfig" | "net" => cmd_ifconfig(),
         "fw" | "firewall" => cmd_firewall(),
         "fetch" => cmd_fetch(parts[1]),
+        "clip" => {
+            // `clip set <text>` takes the rest of the line verbatim.
+            if parts[1] == "set" {
+                let after = cmd.trim_start()
+                    .split_once(' ')
+                    .and_then(|(_, r)| r.trim_start().split_once(' '))
+                    .map(|(_, t)| t.trim())
+                    .unwrap_or("");
+                cmd_clip_set(after);
+            } else {
+                cmd_clip(parts[1]);
+            }
+        }
+        "comms" => {
+            // `comms send` takes its message verbatim; `connect` /
+            // `identify` / `pin` use parts[].
+            let sub = parts[1];
+            if sub == "send" {
+                let after_send = cmd.trim_start()
+                    .split_once(' ')
+                    .and_then(|(_, r)| r.trim_start().split_once(' '))
+                    .map(|(_, msg)| msg.trim())
+                    .unwrap_or("");
+                cmd_comms_send(after_send);
+            } else if sub == "connect"  { cmd_comms_connect(parts[2]);
+            } else if sub == "identify" { cmd_comms_identify(parts[2]);
+            } else if sub == "pin"      { cmd_comms_pin(parts[2]);
+            } else {
+                cmd_comms(sub, parts[2]);
+            }
+        }
         "batcave" => cmd_batcave(parts[1], parts[2], parts[3], &parts),
         "panic" => cmd_panic(),
         "hello" => cmd_run_elf("hello"),
@@ -2676,6 +2707,236 @@ fn cmd_firewall() {
     console::puts("  Blocked:  ");
     print_num(blocked as usize);
     console::puts(" packets\n");
+}
+
+/// Dispatch for `comms <sub> [arg]` — connect, close, status.
+/// `send` is handled separately because it needs the raw message
+/// tail (with spaces) rather than the space-split parts.
+fn cmd_clip(sub: &str) {
+    use crate::ui::clipboard;
+    match sub {
+        "" | "show" => {
+            let n = clipboard::len();
+            console::puts("  clipboard: ");
+            print_num(n);
+            console::puts(" bytes\n");
+            if n > 0 {
+                let mut buf = [0u8; clipboard::CLIPBOARD_CAP];
+                let copied = clipboard::copy_into(&mut buf);
+                console::puts("  > ");
+                // Print printable-only, marking non-printable as '?'
+                // so a maliciously-pasted control byte doesn't mess
+                // with the terminal.
+                for &b in &buf[..copied] {
+                    console::putc(if (0x20..=0x7e).contains(&b) { b } else { b'?' });
+                }
+                console::puts("\n");
+            }
+        }
+        "clear" => {
+            clipboard::clear();
+            console::puts("  clipboard cleared\n");
+        }
+        _ => {
+            console::puts("  usage: clip          (show)\n");
+            console::puts("         clip set <text>\n");
+            console::puts("         clip clear\n");
+            console::puts("  shortcuts: Ctrl+V paste at cursor, Ctrl+Y yank current line\n");
+        }
+    }
+}
+
+fn cmd_clip_set(text: &str) {
+    crate::ui::clipboard::set(text.as_bytes());
+    console::puts("  clipboard set (");
+    print_num(text.len());
+    console::puts(" bytes)\n");
+}
+
+fn cmd_comms(sub: &str, _arg: &str) {
+    match sub {
+        "close" | "disconnect" => cmd_comms_close(),
+        "status" => cmd_comms_status(),
+        _ => {
+            console::puts("  flow:\n");
+            console::puts("    1. comms identify <ip:port>   (discovery, copies pubkey to clipboard)\n");
+            console::puts("    2. comms pin <hex>            (Ctrl+V to paste from clipboard)\n");
+            console::puts("    3. comms connect <ip:port>    (uses stored pin)\n");
+            console::puts("    4. comms send <message>\n");
+            console::puts("    5. comms close\n");
+        }
+    }
+}
+
+fn parse_target(target: &str) -> Option<(u32, u16)> {
+    let (ip_str, port_str) = target.rsplit_once(':')?;
+    let ip = parse_ip(ip_str);
+    if ip == 0 { return None; }
+    let port: u16 = port_str.parse().ok()?;
+    if port == 0 { return None; }
+    Some((ip, port))
+}
+
+fn cmd_comms_identify(target: &str) {
+    if target.is_empty() {
+        console::puts("  usage: comms identify <ip:port>\n");
+        return;
+    }
+    let (ip, port) = match parse_target(target) {
+        Some(p) => p,
+        None => { console::puts("  invalid target (expected ip:port)\n"); return; }
+    };
+    console::puts("  Discovering ");
+    console::puts(target);
+    console::puts(" ...\n");
+    match crate::ui::apps::comms::identify(ip, port) {
+        Ok(srv_id) => {
+            // Hex-encode and print + auto-copy to clipboard.
+            let mut hex = [0u8; 64];
+            let table = b"0123456789abcdef";
+            for i in 0..32 {
+                hex[i * 2]     = table[(srv_id[i] >> 4) as usize];
+                hex[i * 2 + 1] = table[(srv_id[i] & 0x0f) as usize];
+            }
+            console::puts("  server pubkey: ");
+            for &b in &hex {
+                console::putc(b);
+            }
+            console::puts("\n");
+            crate::ui::clipboard::set(&hex);
+            console::puts("  -> copied to clipboard (Ctrl+V to paste)\n");
+            console::puts("  next: type `comms pin ` then Ctrl+V then Enter\n");
+            console::puts("  WARNING: identify is NOT authenticated.\n");
+            console::puts("           Confirm the hex matches what the server's\n");
+            console::puts("           operator told you out-of-band before pinning.\n");
+        }
+        Err(e) => {
+            console::puts("  identify failed: ");
+            console::puts(e);
+            console::puts("\n");
+        }
+    }
+}
+
+fn cmd_comms_pin(hex: &str) {
+    if hex.is_empty() {
+        console::puts("  usage: comms pin <hex-64chars>\n");
+        console::puts("  (Ctrl+V to paste from clipboard if you just ran `comms identify`)\n");
+        return;
+    }
+    let id = match parse_hex32(hex) {
+        Some(p) => p,
+        None => {
+            console::puts("  invalid hex (need 64 hex chars = 32 bytes, got ");
+            print_num(hex.len());
+            console::puts(")\n");
+            return;
+        }
+    };
+    crate::ui::apps::comms::pin(&id);
+    console::puts("  pinned. now: `comms connect <ip:port>`\n");
+}
+
+fn cmd_comms_connect(target: &str) {
+    if target.is_empty() {
+        console::puts("  usage: comms connect <ip:port>\n");
+        console::puts("  (run `comms identify` then `comms pin` first if no pin yet)\n");
+        return;
+    }
+    if !crate::ui::apps::comms::pin_is_set() {
+        console::puts("  no server identity pinned. flow:\n");
+        console::puts("    comms identify ");
+        console::puts(target);
+        console::puts("\n    comms pin <Ctrl+V>\n    comms connect ");
+        console::puts(target);
+        console::puts("\n");
+        return;
+    }
+    let (ip, port) = match parse_target(target) {
+        Some(p) => p,
+        None => { console::puts("  invalid target (expected ip:port)\n"); return; }
+    };
+    console::puts("  Opening session to ");
+    console::puts(target);
+    console::puts(" (using stored pin)\n");
+    match crate::ui::apps::comms::connect(ip, port) {
+        Ok(()) => {
+            console::puts("  handshake OK\n");
+            cmd_comms_status();
+        }
+        Err(e) => {
+            console::puts("  handshake failed: ");
+            console::puts(e);
+            console::puts("\n");
+        }
+    }
+}
+
+/// Parse a 64-char hex string into 32 bytes. Returns None on any
+/// non-hex char or wrong length.
+fn parse_hex32(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 { return None; }
+    let bytes = s.as_bytes();
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        let hi = hex_nibble(bytes[i * 2]);
+        let lo = hex_nibble(bytes[i * 2 + 1]);
+        if hi == 0xff || lo == 0xff { return None; }
+        out[i] = (hi << 4) | lo;
+    }
+    Some(out)
+}
+
+fn cmd_comms_send(msg: &str) {
+    if msg.is_empty() {
+        console::puts("  usage: comms send <message>\n");
+        return;
+    }
+    if crate::ui::apps::comms::state() != crate::ui::apps::comms::CommState::Connected {
+        console::puts("  not connected — run `comms connect <ip:port> <hex>` first\n");
+        return;
+    }
+    match crate::ui::apps::comms::send_message(msg.as_bytes()) {
+        Ok(()) => {
+            console::puts("  -> sent ");
+            print_num(msg.len());
+            console::puts(" bytes encrypted; awaiting echo...\n");
+        }
+        Err(e) => {
+            console::puts("  send failed: ");
+            console::puts(e);
+            console::puts("\n");
+            return;
+        }
+    }
+    // Drain one response frame so the message lands in the CM
+    // timeline. Server's job is to AEAD-encrypt the echo under
+    // s2c_key with its own counter nonce; our recv path verifies
+    // both the nonce ordering and the Poly1305 tag.
+    let got = crate::ui::apps::comms::recv_message();
+    if got {
+        console::puts("  <- received echo (verified tag + nonce; see CM timeline)\n");
+    } else {
+        console::puts("  <- no response yet; poll with `comms status` or try again\n");
+    }
+}
+
+fn cmd_comms_close() {
+    crate::ui::apps::comms::disconnect();
+    console::puts("  comms: disconnected\n");
+}
+
+fn cmd_comms_status() {
+    use crate::ui::apps::comms::{self as c, CommState};
+    let s = c::state();
+    console::puts("  comms: ");
+    console::puts(match s {
+        CommState::Disconnected => "disconnected",
+        CommState::Connecting   => "connecting",
+        CommState::Connected    => "CONNECTED (ChaCha20-Poly1305, Ed25519 pinned, FS)",
+        CommState::Error        => "ERROR",
+    });
+    console::puts("\n");
 }
 
 fn cmd_fetch(host: &str) {

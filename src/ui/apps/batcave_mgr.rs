@@ -63,7 +63,13 @@ pub fn render() {
     // ── BODY (split 60/40 table | detail) ─────────────────────────
     let body_y = r.y + HEADER_H;
     let footer_y = r.y + r.h - FOOTER_H;
-    let body_h = footer_y.saturating_sub(body_y);
+    // Embedded shell strip at the bottom of the body — gives the
+    // operator `batcave create / enter / destroy` etc. without
+    // leaving the BC page.
+    let body_total_h = footer_y.saturating_sub(body_y);
+    let shell_h = (body_total_h * 7 / 20).max(96);  // ~35% of body
+    let shell_y = footer_y - shell_h - 1;
+    let body_h = shell_y.saturating_sub(body_y);
     let table_w = (r.w * 60) / 100;
     let detail_x = r.x + table_w;
     let detail_w = r.w - table_w;
@@ -73,6 +79,13 @@ pub fn render() {
 
     draw_table(r.x, body_y, table_w, body_h);
     draw_detail(detail_x + 1, body_y, detail_w - 1, body_h);
+
+    // ── EMBEDDED SHELL STRIP ──────────────────────────────────────
+    gpu::fill_rect(r.x, shell_y, r.w, 1, HAIR);
+    crate::ui::console::redraw_in_rect(wm::WindowRect {
+        x: r.x + 8, y: shell_y + 4,
+        w: r.w.saturating_sub(16), h: shell_h.saturating_sub(8),
+    });
 
     // ── FOOTER ────────────────────────────────────────────────────
     draw_strip(r.x, footer_y, r.w, FOOTER_H, true, false);

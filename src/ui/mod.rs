@@ -1,4 +1,5 @@
 pub mod apps;
+pub mod clipboard;
 pub mod console;
 pub mod draw;
 pub mod font;
