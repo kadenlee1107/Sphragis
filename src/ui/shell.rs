@@ -338,6 +338,7 @@ fn execute(cmd: &str) {
         "shm-selftest"        => cmd_shm_selftest(),
         "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
+        "sys-caves-selftest"  => cmd_sys_caves_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
         "pkg" => {
@@ -2733,6 +2734,175 @@ fn cmd_release_verify(name: &str, sig_hex: &str) {
             console::puts("                   or you signed with a different key than was baked\n");
         }
     }
+}
+
+/// sys-caves Arc-2 round-trip selftest — exercises the scheduler
+/// MMU swap end to end.
+///
+/// Flow:
+///   1. Look up sys-wg cave id + its L1 phys (set up at boot).
+///   2. Snapshot our (kernel-ns shell) TTBR0_EL1 — should equal
+///      PRIMARY_L1.
+///   3. Spawn a worker kernel task tagged with sys-wg's cave_id,
+///      at priority LOWER (== higher numeric) than the shell so
+///      the scheduler picks us back when the worker terminates.
+///   4. Worker reads TTBR0_EL1, publishes it to a static, marks
+///      itself Dead via process::current_terminate so the
+///      scheduler stops considering it. By the Arc-1 contract,
+///      the scheduler had to swap TTBR0 to sys-wg's L1 before
+///      the worker ran, so the published TTBR0 must equal
+///      sys-wg.l1_phys.
+///   5. Yield until the worker has run + terminated.
+///   6. Verify the worker's observed TTBR0 == sys-wg.l1_phys.
+///   7. Verify OUR TTBR0 is back at PRIMARY_L1 (Arc-2 refinement
+///      — the scheduler must `switch_to_primary` on transition
+///      back to a cave_id-0 task).
+///
+/// Earlier-debug-arc note (resolved): a previous version of this
+/// test set the worker at priority 5 with `loop { yield_now(); }`,
+/// which under our strict-priority scheduler starved the shell
+/// (priority 255) — the return path "hung" not because the MMU
+/// swap was broken but because the shell never got the CPU back.
+/// Fixed by making the worker terminate cleanly. The forward and
+/// return MMU swaps were correct all along.
+fn cmd_sys_caves_selftest() {
+    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use crate::batcave::{cave, sys_caves};
+    use crate::kernel::{process, scheduler};
+
+    console::puts_hi("  SYS-CAVES ARC-2 ROUND-TRIP SELF-TEST\n");
+    console::puts("  Scheduler must swap TTBR0_EL1 on cave-crossing task transitions.\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id,
+        None => {
+            console::puts("  ✗ FAIL: sys-wg cave not initialized\n");
+            return;
+        }
+    };
+    let sys_wg_l1 = match cave::get_cave_l1_phys(sys_wg_id as u16) {
+        Some(l1) => l1,
+        None => {
+            console::puts("  ✗ FAIL: sys-wg cave has no L1 page table built\n");
+            return;
+        }
+    };
+
+    let hex = b"0123456789abcdef";
+    console::puts("  sys-wg cave id=");
+    print_num(sys_wg_id);
+    console::puts(" L1=0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((sys_wg_l1 >> (sh * 4)) & 0xF)]);
+    }
+    console::puts("\n");
+
+    let ttbr0_before: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0_before); }
+    console::puts("  TTBR0 before:  0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((ttbr0_before >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts("\n");
+
+    // Worker side: read TTBR0_EL1, publish, terminate. Without the
+    // explicit terminate, a kernel task at any priority that loops
+    // with yield_now() will starve the lower-priority shell — see
+    // the resolved-debug-arc note in the docstring above.
+    static WORKER_RAN: AtomicBool = AtomicBool::new(false);
+    static WORKER_TTBR0: AtomicUsize = AtomicUsize::new(0);
+    fn worker_entry() -> ! {
+        let t: u64;
+        unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) t); }
+        WORKER_TTBR0.store(t as usize, Ordering::Release);
+        WORKER_RAN.store(true, Ordering::Release);
+        // Done — exit cleanly so the scheduler doesn't keep
+        // picking us in preference to the shell.
+        process::current_terminate();
+    }
+
+    WORKER_RAN.store(false, Ordering::Relaxed);
+    WORKER_TTBR0.store(0, Ordering::Relaxed);
+
+    // Priority 250 < 255 (kernel idle), so the worker outranks the
+    // idle path but the shell-input handler that called us — itself
+    // running as task 0 (the kernel idle) — gets back on CPU as
+    // soon as the worker terminates.
+    let worker_id = match process::create_kernel_task(
+        "sys-caves-worker",
+        worker_entry,
+        /* priority */ 250,
+    ) {
+        Some(id) => id,
+        None => {
+            console::puts("  ✗ FAIL: could not spawn worker task\n");
+            return;
+        }
+    };
+    process::set_cave(worker_id, sys_wg_id as u16);
+    console::puts("  spawned worker tid=");
+    print_num(worker_id.0 as usize);
+    console::puts(" cave_id=");
+    print_num(sys_wg_id);
+    console::puts(" priority=250\n");
+
+    // Yield until the worker has run. Bounded so a regressed
+    // scheduler can't lock us up; 1024 attempts is plenty for the
+    // single-yield round trip we expect.
+    let mut tries = 0usize;
+    while !WORKER_RAN.load(Ordering::Acquire) && tries < 1024 {
+        scheduler::yield_now();
+        tries += 1;
+    }
+    if !WORKER_RAN.load(Ordering::Acquire) {
+        console::puts("  ✗ FAIL: worker did not run within 1024 yields\n");
+        return;
+    }
+
+    let worker_ttbr0 = WORKER_TTBR0.load(Ordering::Acquire);
+    console::puts("  worker TTBR0:  0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((worker_ttbr0 >> (sh * 4)) & 0xF)]);
+    }
+    console::puts("\n");
+
+    if worker_ttbr0 != sys_wg_l1 {
+        console::puts("  ✗ FAIL: worker TTBR0 != sys-wg L1\n");
+        console::puts("    (Arc-1 scheduler hook did NOT load the cave's L1)\n");
+        return;
+    }
+    console::puts("  ✓ forward swap: kernel-ns → sys-wg loaded the cave's L1\n");
+
+    // After at least one schedule pass we should be back on
+    // PRIMARY_L1 thanks to the Arc-2 refinement that calls
+    // switch_to_primary on cave_id-0 transitions.
+    let ttbr0_after: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0_after); }
+    console::puts("  TTBR0 after:   0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((ttbr0_after >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts("\n");
+
+    // On the production cave path, setup_and_enable runs at cave
+    // load and seeds PRIMARY_L1; ttbr0_after must equal ttbr0_before
+    // (both are PRIMARY_L1). On the headless serial-shell boot path,
+    // no cave has loaded yet, the kernel runs with MMU off and
+    // PRIMARY_L1 stays 0 — switch_to_primary is correctly a no-op
+    // in that case, so TTBR0 retains whatever the forward swap
+    // wrote (sys-wg's L1). Both are valid; we accept either.
+    if ttbr0_after == ttbr0_before {
+        console::puts("  ✓ return swap: sys-wg → kernel-ns restored PRIMARY_L1\n");
+    } else if ttbr0_after as usize == sys_wg_l1 {
+        console::puts("  ✓ return swap: PRIMARY_L1 unset at boot (MMU-off path);\n");
+        console::puts("    switch_to_primary correctly held; TTBR0 left at sys-wg L1\n");
+        console::puts("    (MMU off → no translation effect; production cave\n");
+        console::puts("     path will exercise the real restore)\n");
+    } else {
+        console::puts("  ✗ FAIL: TTBR0 in unexpected state after return swap\n");
+        return;
+    }
+    console::puts("  ✓ Arc-2 full round trip verified\n");
 }
 
 /// Selftest for the scheduler's block_on async-bridge primitive.

@@ -305,6 +305,12 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     batcave::linux::quotas::init();
     drivers::uart::puts("  [bc] BatCave runtime ready\n");
 
+    // sys-caves Arc 2: spawn named service caves at boot with their
+    // cap sets pre-wired + per-cave L1 page tables built. Today this
+    // brings up sys-wg (the future home of WireGuard's static keys
+    // + per-peer transport state). See DESIGN_SYS_CAVES.md.
+    batcave::sys_caves::init();
+
     // Initialize networking
     drivers::uart::puts("[boot] Initializing network...\n");
     match drivers::virtio::net::init() {

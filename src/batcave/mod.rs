@@ -8,4 +8,5 @@ pub mod persist;
 pub mod pq_comms_session;
 pub mod secure_channel;
 pub mod secure_ipc;
+pub mod sys_caves;
 pub mod syscall_filter;

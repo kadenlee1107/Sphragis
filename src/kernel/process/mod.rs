@@ -266,6 +266,31 @@ pub fn set_cave(id: TaskId, cave_id: u16) {
     task.cave_id = cave_id;
 }
 
+/// Voluntarily terminate the current kernel task. Marks the task
+/// Dead (so the scheduler stops considering it Ready) and yields,
+/// which forces a reschedule onto a different ready task.
+///
+/// Called by short-lived helper threads (e.g. the sys-caves
+/// selftest worker) after they finish their work — without this,
+/// a high-priority looping worker would starve the lower-priority
+/// shell task it was supposed to hand control back to.
+///
+/// Diverges: by definition the dead task is never picked again,
+/// so we never return from `yield_now`. Caller's stack and Task
+/// slot live until the next reaper pass (not implemented yet —
+/// for now they leak; the M4 has 4 GiB of RAM and tasks are
+/// rare). Marked `-> !` so callers can use it in `fn() -> !`
+/// task entry points.
+pub fn current_terminate() -> ! {
+    current().state = TaskState::Dead;
+    loop {
+        crate::kernel::scheduler::yield_now();
+        // Defensive: if a buggy scheduler ever picks a Dead task,
+        // re-mark and yield again rather than running forward.
+        current().state = TaskState::Dead;
+    }
+}
+
 /// Iterate over tasks visible to the given cave. If cave_id == 0,
 /// returns every active task (the global "root" view used by the
 /// kernel for diagnostics). Otherwise filters to tasks whose

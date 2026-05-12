@@ -41,14 +41,20 @@ pub fn schedule() {
         current.state = TaskState::Ready;
     }
 
-    // Find highest priority (lowest number) ready task
+    // Find highest priority (lowest number) ready task. `best`
+    // starts as 256 (u16) so even priority 255 (kernel idle) is
+    // strictly less than the initial bar — without that widening,
+    // task 0 was unselectable, and a self-terminating helper task
+    // could leave the runqueue with NO eligible Ready task, which
+    // caused schedule() to return without switching and trap the
+    // helper in its own current_terminate yield loop.
     let mut best_id: Option<TaskId> = None;
-    let mut best_priority: u8 = 255;
+    let mut best_priority: u16 = 256;
 
     for i in 0..MAX_TASKS {
         let task = process::get(TaskId(i as u16));
-        if task.state == TaskState::Ready && task.priority < best_priority {
-            best_priority = task.priority;
+        if task.state == TaskState::Ready && (task.priority as u16) < best_priority {
+            best_priority = task.priority as u16;
             best_id = Some(task.id);
         }
     }
@@ -74,8 +80,42 @@ pub fn schedule() {
 
     // Context switch
     let next = process::get(next_id);
+    let next_cave_id = next.cave_id;
     next.state = TaskState::Running;
     process::set_current(next_id);
+
+    // sys-caves Arc 1 — when this swap crosses a cave boundary,
+    // also swap the TTBR0_EL1 user window so the new task sees the
+    // L1 of its owning cave. Tasks tagged cave_id == 0 (kernel
+    // namespace) stay on PRIMARY_L1; tasks tagged with a real
+    // cave id that has a built L1 get switched. If the target
+    // cave has no L1 built yet (cave_l1_phys == 0), we leave
+    // TTBR0_EL1 alone — same effective behavior as today, no
+    // regression risk.
+    //
+    // SAFETY DISCIPLINE: TLB invalidate + DSB + ISB are inside
+    // `mmu::switch_to_cave`. We call it from the kernel context
+    // here, BEFORE the userspace-level `switch_context` jumps to
+    // the new task's PC — so by the time the new task's code
+    // runs, the user-window mappings are already in effect.
+    let cur_cave_id = process::get(current_id).cave_id;
+    if next_cave_id != cur_cave_id {
+        if next_cave_id == 0 {
+            // Transitioning back to the kernel namespace — restore
+            // PRIMARY_L1 so TTBR0 cleanly reflects "no cave-scoped
+            // user window active." Without this, the previous
+            // cave's L1 would linger in TTBR0 across transitions
+            // to kernel-ns tasks. Harmless in Phase 2 (kernel-only
+            // tasks don't access user VAs) but cleaner semantics,
+            // and matters the moment we add real EL0 tasks.
+            crate::batcave::linux::mmu::switch_to_primary();
+        } else if let Some(target_l1) = crate::batcave::cave::get_cave_l1_phys(next_cave_id) {
+            crate::batcave::linux::mmu::switch_to_cave(target_l1);
+        }
+        // No `else` for the "target cave but no L1 built yet" case
+        // — leaving TTBR0 alone is correct then: the task wasn't
+        // going to access cave-scoped user VAs anyway.
+    }
 
     // Switch
     let old_ctx = &mut process::get(current_id).context as *mut CpuContext;
