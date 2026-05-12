@@ -403,6 +403,51 @@ pub fn get_cave_l1_phys(cave_id: u16) -> Option<usize> {
     }
 }
 
+/// Run `f` "inside" the cave identified by `cave_id`. Saves the
+/// current task's `cave_id` and `TTBR0_EL1`, switches both to the
+/// target cave around the closure body, and restores the saved
+/// values before returning. The scheduler MMU hook (`Arc 1`) keeps
+/// the cave's L1 active across any yields that happen while `f`
+/// is running, so this works correctly even when `f` itself
+/// yields.
+///
+/// If the target cave has no built L1 (`get_cave_l1_phys` returns
+/// None) we fall through to running `f` in the caller's context.
+/// The cave_id tag is still applied — any caller that depends on
+/// the `cave_id` for routing (audit ring, BatFS key selection,
+/// etc.) still sees the right tag, just without MMU enforcement
+/// on this particular run. Same fallback shape as
+/// `sys_wg_service::with_sys_wg_cave` before it was extracted up
+/// to this generic helper.
+///
+/// Caller-side preconditions:
+///   - The kernel boot path has enabled the MMU (otherwise the
+///     TTBR0 writes are register-only). On a successfully-booted
+///     kernel that is guaranteed; the boot path panics on MMU
+///     enable failure.
+///   - `cave_id` corresponds to a live cave registered via
+///     `cave::create` or one of the boot-time sys-* caves.
+pub fn with_cave_active<R>(cave_id: u16, f: impl FnOnce() -> R) -> R {
+    let task_id = crate::kernel::process::current_id();
+    let saved_cave = crate::kernel::process::get(task_id).cave_id;
+
+    let saved_ttbr0: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) saved_ttbr0); }
+
+    crate::kernel::process::set_cave(task_id, cave_id);
+    if let Some(target_l1) = get_cave_l1_phys(cave_id) {
+        crate::batcave::linux::mmu::switch_to_cave(target_l1);
+    }
+
+    let out = f();
+
+    crate::kernel::process::set_cave(task_id, saved_cave);
+    if saved_ttbr0 != 0 {
+        crate::batcave::linux::mmu::switch_to_cave(saved_ttbr0 as usize);
+    }
+    out
+}
+
 /// Bump the active cave's CPU-tick counter. Called by the
 /// scheduler on each context switch with the cntpct delta the
 /// just-descheduled task accumulated. Observability only — no

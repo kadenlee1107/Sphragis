@@ -43,7 +43,6 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use crate::batcave::{cave, sys_caves};
-use crate::kernel::process;
 use crate::net::wireguard::{
     self, InitiatorState, ResponderState, TransportKeys, WgKeypair, WgError,
 };
@@ -95,33 +94,12 @@ fn ensure_init() {
 /// caller's context and the security-claim is degraded to "module-
 /// private state only." That's still correct — just not MMU-enforced.
 fn with_sys_wg_cave<R>(f: impl FnOnce() -> R) -> R {
-    let task_id = process::current_id();
-    let saved_cave = process::get(task_id).cave_id;
-
-    let sys_wg_id = match sys_caves::sys_wg_id() {
-        Some(id) => id as u16,
-        None => {
-            // sys-wg never came up at boot. Run f in the caller's
-            // context; the module-privacy boundary is still upheld.
-            return f();
-        }
-    };
-
-    let saved_ttbr0: u64;
-    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) saved_ttbr0); }
-
-    process::set_cave(task_id, sys_wg_id);
-    if let Some(target_l1) = cave::get_cave_l1_phys(sys_wg_id) {
-        crate::batcave::linux::mmu::switch_to_cave(target_l1);
+    match sys_caves::sys_wg_id() {
+        // sys-wg never came up at boot. Run f in the caller's
+        // context; the module-privacy boundary is still upheld.
+        None => f(),
+        Some(id) => cave::with_cave_active(id as u16, f),
     }
-
-    let out = f();
-
-    process::set_cave(task_id, saved_cave);
-    if saved_ttbr0 != 0 {
-        crate::batcave::linux::mmu::switch_to_cave(saved_ttbr0 as usize);
-    }
-    out
 }
 
 /// Diagnostic — read TTBR0_EL1 *from inside* the sys-wg cave context.

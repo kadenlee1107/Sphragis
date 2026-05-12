@@ -619,6 +619,135 @@ pub fn setup_native_cave_l1(cave_slot: usize) -> Result<usize, &'static str> {
     Ok(l1)
 }
 
+/// Walk a 3-level page-table starting at `l1_phys` and return the
+/// leaf PTE that maps `va`, or `None` if any level along the walk
+/// has `PTE_VALID == 0`. Used by tests that need to verify a VA is
+/// mapped in one cave's L1 but unmapped in another (cave-private
+/// memory isolation proof — see `cave_private` module).
+///
+/// Recognises both block-level (L2 → 2 MB block) and page-level
+/// (L3 → 4 KB) leaves, since `setup_native_cave_l1` uses 2 MB
+/// blocks for kernel identity while `cave_private` uses 4 KB pages
+/// for private regions. Returns the leaf descriptor in either case.
+///
+/// 39-bit VA layout (matches the kernel's T0SZ=25 config):
+///   bits [38:30] = L1 index (9 bits, 512 entries)
+///   bits [29:21] = L2 index (9 bits)
+///   bits [20:12] = L3 index (9 bits)
+///   bits [11:0]  = byte offset
+pub fn pte_lookup(l1_phys: usize, va: usize) -> Option<u64> {
+    if l1_phys == 0 { return None; }
+    let l1_idx = (va >> 30) & 0x1FF;
+    let l2_idx = (va >> 21) & 0x1FF;
+    let l3_idx = (va >> 12) & 0x1FF;
+
+    let l1_pte = read_pte(l1_phys, l1_idx);
+    if l1_pte & PTE_VALID == 0 { return None; }
+    // L1 always points to an L2 table in our layout.
+    let l2_phys = (l1_pte as usize) & 0x0000_FFFF_FFFF_F000;
+
+    let l2_pte = read_pte(l2_phys, l2_idx);
+    if l2_pte & PTE_VALID == 0 { return None; }
+    // L2 is either a block (2 MB) leaf or a table descriptor.
+    // PTE_TABLE bit (1 << 1) distinguishes; on a block entry it's 0.
+    if (l2_pte & PTE_TABLE) == 0 {
+        // 2 MB block leaf — common for kernel identity mappings.
+        return Some(l2_pte);
+    }
+    let l3_phys = (l2_pte as usize) & 0x0000_FFFF_FFFF_F000;
+
+    let l3_pte = read_pte(l3_phys, l3_idx);
+    if l3_pte & PTE_VALID == 0 { return None; }
+    Some(l3_pte)
+}
+
+/// Install a 4 KB leaf mapping `va -> pa` with the given attribute
+/// flags in `l1_phys`'s page table, allocating any intermediate L2
+/// / L3 tables that don't yet exist (from `frame::alloc_kernel_frame`
+/// so the new page-table frames inherit the kernel-only constraint).
+///
+/// Cache-cleans every page-table page it touches to PoC so the MMU
+/// walker sees the updates after subsequent TLB invalidation.
+///
+/// Caller is responsible for issuing TLBI for `va` (or vmalle1) and
+/// the appropriate barriers. We don't issue them here because
+/// callers usually batch multiple maps before flushing.
+pub fn map_4k_in_l1(l1_phys: usize, va: usize, pa: usize, flags: u64)
+    -> Result<(), &'static str>
+{
+    if l1_phys == 0 { return Err("map_4k_in_l1: l1_phys is 0"); }
+    let l1_idx = (va >> 30) & 0x1FF;
+    let l2_idx = (va >> 21) & 0x1FF;
+    let l3_idx = (va >> 12) & 0x1FF;
+
+    let mut new_tables = [0usize; 2];
+    let mut new_table_count = 0usize;
+
+    let l1_pte = read_pte(l1_phys, l1_idx);
+    let l2_phys = if l1_pte & PTE_VALID == 0 {
+        let new_l2 = frame::alloc_kernel_frame().ok_or("oom for cave-private L2")?;
+        // Zero the new table.
+        for i in 0..(PAGE_SIZE / 8) {
+            unsafe { core::arch::asm!("str xzr, [{a}]", a = in(reg) new_l2 + i * 8); }
+        }
+        write_pte(l1_phys, l1_idx, new_l2 as u64 | TABLE_DESC);
+        new_tables[new_table_count] = new_l2;
+        new_table_count += 1;
+        new_l2
+    } else {
+        (l1_pte as usize) & 0x0000_FFFF_FFFF_F000
+    };
+
+    let l2_pte = read_pte(l2_phys, l2_idx);
+    let l3_phys = if l2_pte & PTE_VALID == 0 {
+        let new_l3 = frame::alloc_kernel_frame().ok_or("oom for cave-private L3")?;
+        for i in 0..(PAGE_SIZE / 8) {
+            unsafe { core::arch::asm!("str xzr, [{a}]", a = in(reg) new_l3 + i * 8); }
+        }
+        write_pte(l2_phys, l2_idx, new_l3 as u64 | TABLE_DESC);
+        new_tables[new_table_count] = new_l3;
+        new_table_count += 1;
+        new_l3
+    } else if (l2_pte & PTE_TABLE) == 0 {
+        // L2 is currently a block — refuse rather than silently
+        // shadowing a 2 MB region with a 4 KB page.
+        return Err("map_4k_in_l1: L2 holds block desc; can't subdivide");
+    } else {
+        (l2_pte as usize) & 0x0000_FFFF_FFFF_F000
+    };
+
+    // L3 leaf — bit 1 (PTE_TABLE) must be SET for 4KB page descriptors
+    // at level 3 per ARM ARM D5.3.1 ("Page descriptor"); without it
+    // the walker treats the entry as invalid.
+    write_pte(l3_phys, l3_idx, (pa as u64 & 0x0000_FFFF_FFFF_F000) | flags | PTE_TABLE);
+
+    // Cache-clean the page-table pages we touched.
+    unsafe {
+        for pt in &new_tables[..new_table_count] {
+            let base = *pt as u64;
+            let mut line = base;
+            while line < base + PAGE_SIZE as u64 {
+                core::arch::asm!("dc civac, {a}", a = in(reg) line);
+                line += 64;
+            }
+        }
+        // Also clean the L3 entry we just wrote.
+        let l3_entry_addr = (l3_phys + l3_idx * 8) as u64;
+        core::arch::asm!("dc civac, {a}", a = in(reg) l3_entry_addr);
+        core::arch::asm!("dsb sy");
+        core::arch::asm!("isb");
+    }
+    Ok(())
+}
+
+#[inline]
+fn read_pte(table: usize, index: usize) -> u64 {
+    let addr = table + index * 8;
+    let v: u64;
+    unsafe { core::arch::asm!("ldr {v}, [{a}]", a = in(reg) addr, v = out(reg) v); }
+    v
+}
+
 /// try to find a free CAVE_L1 slot for a native cave.
 /// Returns None if all MAX_CAVE_PAGETABLES are in use. Pairs with
 /// `setup_native_cave_l1` — caller allocates the slot, then calls

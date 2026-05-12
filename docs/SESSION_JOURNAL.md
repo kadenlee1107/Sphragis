@@ -11,6 +11,127 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — per-cave L1 restriction (slice 1): cave-private memory
+
+**Context:** Kernel-boot MMU enable from the previous batch made
+per-cave TTBR0 swaps real hardware operations. But every cave's
+L1 still maps the full kernel identity range
+`[0x40000000, 0x140000000)` — so code running with cave A's L1
+active could still reach every byte of kernel memory at EL1,
+including state owned by cave B. This slice introduces a per-cave
+private memory region OUTSIDE the identity range, mapped only in
+the owning cave's L1 — closing one concrete leak.
+
+### What shipped
+
+  * `src/batcave/cave_private.rs` (new). One 4 KiB page per cave
+    at a fixed VA computed from `cave_id`:
+    `CAVE_PRIVATE_VA_BASE + cave_id * 0x1000 = 0x140000000 +
+    cave_id * 0x1000`. That base sits ONE L1 entry (1 GiB) above
+    the top of kernel identity, so no PRIMARY_L1 mapping covers
+    it.
+    - `ensure_page(cave_id)` — idempotent. Allocates a kernel-pool
+      frame via `frame::alloc_kernel_frame`, installs an L2 + L3
+      table if missing, writes the 4 KiB leaf PTE into the cave's
+      L1, issues `tlbi vae1` for the new VA, records the PA for
+      future reuse.
+    - `cave_private_va(cave_id)` / `has_page(cave_id)` —
+      introspection without exposing the PA.
+    - Flags: EL1-RW + normal WB cacheable + inner-shareable +
+      AF preset + PXN + UXN (no execute either level — data-only).
+  * `src/batcave/linux/mmu.rs` extensions:
+    - `pub fn pte_lookup(l1_phys, va) -> Option<u64>` — walks any
+      L1 down through L2 (block leaf) or L2→L3 (page leaf) and
+      returns the leaf PTE if mapped at any level. Returns None
+      on the first invalid descriptor. Lets the selftest *prove*
+      "mapped in sys-wg's L1, unmapped in PRIMARY_L1."
+    - `pub fn map_4k_in_l1(l1_phys, va, pa, flags) -> Result<(),&str>`
+      — installs a 4 KiB page descriptor, allocating intermediate
+      L2/L3 tables from `frame::alloc_kernel_frame` on demand,
+      cache-cleaning each new page-table page to PoC.
+    - `read_pte(table, idx)` and the existing `write_pte` are now
+      used by both `setup_*` paths and the new mapper.
+  * `src/batcave/cave.rs`: new `with_cave_active<R>(cave_id, f)`
+    helper — generalizes what `sys_wg_service::with_sys_wg_cave`
+    was doing privately. Saves caller `cave_id` + `TTBR0`,
+    switches both to the target cave around the closure, restores
+    on return. `sys_wg_service::with_sys_wg_cave` now delegates
+    to this generic helper.
+  * `cave-private-selftest` shell command — slice-1 selftest:
+    1. `ensure_page(sys_wg_id)` succeeds; returns the expected VA.
+    2. `pte_lookup(sys_wg_l1, va)` returns Some with PTE_VALID set.
+    3. `pte_lookup(PRIMARY_L1, va)` returns None (cross-cave
+       isolation property — kernel-ns can't reach the page).
+    4. Inside `with_cave_active(sys_wg_id, f)`: write a magic
+       value to `*va`, dsb, read back — preserved.
+    5. Second `ensure_page` call returns the same VA (idempotency).
+  * `scripts/qemu_cave_private_selftest.py` — headless harness.
+
+### Verification
+
+```
+PRIMARY_L1=0x00000000bfffe000   sys-wg L1=0x00000000bfff8000
+✓ allocated cave-private VA: 0x0000000140001000
+✓ sys-wg L1 maps VA — leaf PTE = 0x00600000bfff2703
+✓ PRIMARY_L1 does NOT map this VA (kernel-ns can't reach it)
+✓ in-cave write/read round-trip preserved the magic value
+✓ ensure_page is idempotent — same VA returned on re-call
+✓ per-cave L1 restriction slice-1 verified
+```
+
+PTE decode: bottom 12 bits `0x703` = AF + SH_INNER + VALID+TABLE
+(L3 page descriptor); high bits `0x600...` = PXN+UXN; PA portion
+`0xbfff2000` = kernel-pool frame. Exactly the
+`CAVE_PRIVATE_PTE_FLAGS` we configured.
+
+Plus boot-smoke, sys-caves-selftest (Arc-2 round trip), and
+sys-wg-selftest (Arc-3 slices 1+2) all still pass.
+
+### What slice 1 earns
+
+A *verified, observable* cross-cave memory isolation primitive.
+Any future state we move into cave-private memory becomes
+unreachable at EL1 from any context that doesn't first call
+`with_cave_active(owning_cave_id, ...)`. The MMU walker would
+fault on access from the wrong context — proven by the table
+walk, not just claimed.
+
+### What slice 1 explicitly DOES NOT do
+
+  * Sys-wg's existing static keypair (`KEYPAIR`) + peer table
+    (`PEERS`) still live in `.bss`, which is in the kernel
+    identity range. They're protected today by *module privacy*
+    + the `with_sys_wg_cave` trampoline, but a kernel bug that
+    walks kernel-identity memory could still reach them. Slice 2
+    relocates them into a cave-private page so the protection
+    becomes "MMU walker would fault" rather than "Rust visibility
+    rules say no."
+  * No fault handler installs are present yet, so a kernel-ns
+    access to a cave-private VA today hangs the walker rather
+    than reporting the fault to user code. That's acceptable for
+    a selftest that proves the table state, not the runtime
+    behavior under faults. A real EL1 sync-exception handler
+    that turns walker faults into reporting (rather than hangs)
+    is a separate arc.
+
+### Risk
+
+Small change, well-isolated. cave_private is opt-in (no caller
+hits it unless they call `ensure_page`). The MMU helpers are
+additive (`pte_lookup`, `map_4k_in_l1`) and reused from
+`cave_private` only — existing `setup_native_cave_l1` /
+`setup_and_enable` paths are unchanged. The `with_cave_active`
+refactor in sys_wg_service preserves behavior (delegate to
+generic helper); selftests confirm.
+
+### Branch status
+
+`feat/per-cave-l1-restrict` (current, branched from main at
+`0f14db24` after the sys-wg-service + kernel-MMU merge). Ready
+to commit + push.
+
+---
+
 ## 2026-05-12 — Mac — kernel-boot MMU enable: soft → hard cave boundary
 
 **Context:** Arc 3 slices 1+2 put WG state behind a sys-wg module
