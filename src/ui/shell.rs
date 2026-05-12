@@ -2886,24 +2886,17 @@ fn cmd_sys_caves_selftest() {
     }
     console::puts("\n");
 
-    // On the production cave path, setup_and_enable runs at cave
-    // load and seeds PRIMARY_L1; ttbr0_after must equal ttbr0_before
-    // (both are PRIMARY_L1). On the headless serial-shell boot path,
-    // no cave has loaded yet, the kernel runs with MMU off and
-    // PRIMARY_L1 stays 0 — switch_to_primary is correctly a no-op
-    // in that case, so TTBR0 retains whatever the forward swap
-    // wrote (sys-wg's L1). Both are valid; we accept either.
-    if ttbr0_after == ttbr0_before {
-        console::puts("  ✓ return swap: sys-wg → kernel-ns restored PRIMARY_L1\n");
-    } else if ttbr0_after as usize == sys_wg_l1 {
-        console::puts("  ✓ return swap: PRIMARY_L1 unset at boot (MMU-off path);\n");
-        console::puts("    switch_to_primary correctly held; TTBR0 left at sys-wg L1\n");
-        console::puts("    (MMU off → no translation effect; production cave\n");
-        console::puts("     path will exercise the real restore)\n");
-    } else {
-        console::puts("  ✗ FAIL: TTBR0 in unexpected state after return swap\n");
+    // After the Arc-2 round trip, TTBR0_EL1 should be restored to
+    // its pre-test value (PRIMARY_L1, seeded at kernel boot by
+    // mmu::setup_and_enable). The kernel boot panics if MMU enable
+    // fails, so reaching this point with PRIMARY_L1 == 0 would mean
+    // the panic path was bypassed somehow — flag it.
+    if ttbr0_after != ttbr0_before {
+        console::puts("  ✗ FAIL: TTBR0 not restored to its pre-test value\n");
+        console::puts("    (Arc-2 switch_to_primary on cave_id 0 did not fire)\n");
         return;
     }
+    console::puts("  ✓ return swap: sys-wg → kernel-ns restored PRIMARY_L1\n");
     console::puts("  ✓ Arc-2 full round trip verified\n");
 }
 

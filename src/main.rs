@@ -147,6 +147,28 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     drivers::uart::puts("[boot] Initializing kernel...\n");
     kernel::mm::init();
     kernel::kmsg::info(b"mm: frame allocator initialized");
+
+    // Arc-3 MMU prerequisite: enable the MMU at kernel boot so the
+    // with_sys_wg_cave trampoline (and every future per-cave MMU
+    // swap) operates against a real TTBR0 instead of a register
+    // that translation hardware ignores. We reuse the existing
+    // setup_and_enable with phys_base = 0; the EL0 "primary cave"
+    // user window it paints into L2_low blocks 0..9 ends up
+    // pointing at sub-RAM PAs that no task at boot will touch, and
+    // future cave loaders (which use setup_native_cave_l1 for their
+    // own L1) are unaffected because setup_and_enable is idempotent
+    // — it returns early once SCTLR.M==1. Failure here is fatal:
+    // we explicitly fall back to MMU-off only by panicking, since
+    // any subsequent kernel run with bogus TTBR0 state would be
+    // worse than a clean halt.
+    if let Err(e) = batcave::linux::mmu::setup_and_enable(0) {
+        drivers::uart::puts("[boot] FATAL: kernel-boot MMU enable failed: ");
+        drivers::uart::puts(e);
+        drivers::uart::puts("\n");
+        loop { core::hint::spin_loop(); }
+    }
+    kernel::kmsg::info(b"mmu: kernel-boot enable ok (PRIMARY_L1 live)");
+
     kernel::process::init();
     kernel::kmsg::info(b"process: task table initialized");
     kernel::scheduler::init();

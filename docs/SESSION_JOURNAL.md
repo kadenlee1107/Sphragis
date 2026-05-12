@@ -11,6 +11,97 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — kernel-boot MMU enable: soft → hard cave boundary
+
+**Context:** Arc 3 slices 1+2 put WG state behind a sys-wg module
+boundary and built the `with_sys_wg_cave` trampoline that swaps
+`task.cave_id` + `TTBR0_EL1` to sys-wg around every public entry.
+Until this commit the kernel boot path (serial-shell) never
+enabled the MMU — `setup_and_enable` only ran lazily when an ELF
+cave loaded. That left the trampoline as a register-write-only
+mechanism: `TTBR0_EL1` got written but no hardware translation
+happened, because the MMU was off. The boundary was a Rust
+privacy boundary, not a hardware boundary.
+
+This commit flips the MMU on at kernel boot.
+
+### What shipped
+
+  * `src/main.rs` boot path: right after `kernel::mm::init()`
+    (which sets up the frame allocator we need for page tables),
+    we call `batcave::linux::mmu::setup_and_enable(0)`. Failure
+    is fatal — we spin-loop with a `[boot] FATAL` print rather
+    than continue with bogus TTBR0 state.
+  * `phys_base = 0` is intentional: the EL0 "primary cave" user
+    window painted into L2_low blocks 0..9 ends up pointing at
+    sub-RAM PAs that no task at boot will touch. Kernel runs
+    entirely off the L1[1..=4] identity map of
+    `[0x40000000, 0x140000000)`. Cave loaders that subsequently
+    call `setup_and_enable(real_phys_base)` hit the early-return
+    branch (`SCTLR.M == 1` → idempotent skip) and proceed to
+    build their own L1 via `setup_native_cave_l1` like before.
+  * `cmd_sys_caves_selftest` tightened: the "PRIMARY_L1 unset"
+    graceful-degradation branch is gone. With kernel-boot MMU
+    enable, that branch is unreachable on a successfully-booted
+    kernel, so reaching it would mean the FATAL panic above was
+    bypassed somehow — we now flag it as a failure rather than
+    treating it as expected.
+
+### Verification
+
+```
+sys-caves-selftest (Arc-2 round trip):
+  TTBR0 before:  0x00000000bfffe000   ← PRIMARY_L1 (kernel-boot)
+  worker TTBR0:  0x00000000bfff8000   ← sys-wg L1 (forward swap)
+  TTBR0 after:   0x00000000bfffe000   ← restored (return swap)
+  ✓ forward swap: kernel-ns → sys-wg loaded the cave's L1
+  ✓ return swap: sys-wg → kernel-ns restored PRIMARY_L1
+  ✓ Arc-2 full round trip verified
+
+sys-wg-selftest (Arc-3 trampoline):
+  TTBR0 inside cave: 0x00000000bfff8000   ← sys-wg L1 (real translation)
+  ✓ trampoline restored cave_id (0) on return
+  ✓ ... (all slice-1 + slice-2 assertions pass)
+```
+
+Plus boot-smoke + shell-history-smoke pass unchanged. The kernel
+boots cleanly with real hardware translation from the very first
+instruction after `mm::init`.
+
+### Security upgrade
+
+Sys-wg's boundary moved from "module-private at compile time" to
+"module-private at compile time **and MMU-enforced at runtime.**"
+Inside `with_sys_wg_cave`, the running task's `TTBR0_EL1` points
+at sys-wg's L1 — accesses to memory not mapped in sys-wg's L1
+would now trap. The static keypair and per-peer session keys
+live in kernel-pool frames that *are* mapped (kernel identity),
+but the architectural boundary is now real, and the moment we
+restrict what each cave's L1 maps (a future arc), violations
+become hardware faults.
+
+This also unblocks Arc-3 slice 3 — the real EL0 service task +
+IPC mailbox — because the boundary the slice will run on is now
+hardware-real.
+
+### Risk assessment
+
+The change is small (~20 LOC in main.rs) and only adds a call
+that already had a tested implementation. The cave-loader path's
+existing `setup_and_enable(cave_phys_base)` call becomes a no-op
+on the second invocation (idempotent), so cave loading is
+unaffected. The user-window mapping at L2_low blocks 0..9 with
+`phys_base = 0` paints into sub-RAM PAs — those mappings are
+inaccessible from EL1 anyway (BLOCK_USER_RW_EXEC denies EL1
+access via PXN) and no EL0 task runs at boot.
+
+### Branch status
+
+`feat/sys-wg-service` (kernel-boot MMU enable folded into the
+slice-1+2 branch). Will commit + push.
+
+---
+
 ## 2026-05-12 — Mac — sys-caves Arc 3 slice 2: peer-table-keyed wrap/unwrap
 
 **Context:** Slice 1 put the WG static keypair behind the
