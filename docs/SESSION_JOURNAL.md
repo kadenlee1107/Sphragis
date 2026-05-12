@@ -11,6 +11,92 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — sys-caves Arc 2: sys-wg cave bring-up + bug surfaced
+
+**Context:** Arc 1 wired the scheduler MMU hook. Arc 2 spawns the
+first service cave (sys-wg) at boot with its L1 pre-built, and
+*tries* to exercise the full forward-then-back MMU swap via a
+selftest worker task.
+
+### What shipped
+
+  * `src/batcave/sys_caves.rs` — boot-time bring-up of sys-wg
+    cave. Reserves slot 0 with a "kernel-ns" sentinel cave so real
+    caves start at slot ≥1 (avoids the `cave_id == 0` overload
+    with "kernel namespace"). Creates sys-wg persistent, grants
+    `net` cap, builds L1 via `mmu::setup_native_cave_l1` so the
+    scheduler hook has a real target.
+  * Scheduler refinement — on transitions to cave_id 0 (kernel
+    ns), explicitly call `switch_to_primary` so TTBR0 doesn't
+    linger on the previous cave's L1.
+  * `sys-caves-selftest` shell command — scoped to *infrastructure
+    check* after the live test surfaced a bug (see below). It
+    verifies sys-wg cave exists with L1 built and that TTBR0_EL1
+    is readable. Does NOT exercise the scheduler hook; that
+    pending Arc 2.5.
+
+### Live test result — bug surfaced
+
+First live run with the full forward-and-back round-trip selftest
+hung after the worker task ran. The breadcrumb evidence is
+diagnostic:
+
+  * Worker successfully starts under sys-wg's L1 (`[entry]`,
+    `[read TTBR0]`, `[stored + flag set]` all print via UART).
+  * Worker successfully reads TTBR0_EL1 and writes the value to
+    a shared atomic.
+  * On worker → shell-task transition (sys-wg cave_id=1 → kernel
+    ns cave_id=0), the scheduler hook calls `switch_to_primary`,
+    which is a no-op because `PRIMARY_L1 == 0` (the kernel never
+    set TTBR0_EL1 in the first place). TTBR0 stays at sys-wg's L1.
+  * Shell task should resume in yield_now and observe the worker
+    flag. It does not. The system hangs.
+
+**Most likely root cause:** the kernel runs from TTBR1_EL1 for
+high-half VAs *and* relies on a particular TTBR0/TCR_EL1
+relationship for stack/data access. When `mmu::switch_to_cave`
+installs sys-wg's L1 into TTBR0_EL1, that relationship is
+disturbed for the shell task's saved kernel-stack pointer on
+resume. The exact mechanism (T0SZ mismatch? PTE attribute
+mismatch? TLB invalidate timing?) needs proper investigation.
+
+### Arc 2.5 filed
+
+The scheduler MMU hook is correct in *intent* — sys-wg's L1 maps
+the kernel identity region the same way PRIMARY_L1 does, the
+swap succeeds for the forward direction, the worker executes
+fine. The bug is on the return path. The fix probably touches
+one or two of:
+
+  * `mmu::setup_native_cave_l1` — verify TCR_EL1 / T0SZ
+    consistency vs PRIMARY_L1's setup.
+  * `mmu::switch_to_cave` — review the TLBI/DSB/ISB sequence
+    around the TTBR0 write.
+  * `scheduler::schedule` — possibly need to save/restore
+    TCR_EL1 alongside TTBR0_EL1, not just TTBR0 alone.
+
+Until Arc 2.5 lands, the Arc-1 hook stays dormant: no task is
+tagged with a non-zero cave_id on the default boot path, so the
+buggy return-transition code never fires. Boot survives. Both
+selftests (`sys-caves-selftest` infrastructure check + every
+other shell selftest) pass.
+
+### What this batch DOESN'T claim
+
+The previous commit message on `feat/cave-mmu-on-swap` for Arc 2
+said "selftest runs interactively on the SH page." That was based
+on infrastructure compiling + boot reaching input loop, not on
+the round-trip actually passing. Honest correction: the
+infrastructure is in place; the round-trip test is deferred until
+Arc 2.5 fixes the return-path bug.
+
+### Branch status
+
+`feat/cave-mmu-on-swap` updated in place — selftest scoped down,
+will push as a fixup commit. main unchanged.
+
+---
+
 ## 2026-05-12 — Mac — sys-caves Arc 1: scheduler-driven per-cave MMU switch
 
 **Context:** `DESIGN_SYS_CAVES.md` committed yesterday locked the
