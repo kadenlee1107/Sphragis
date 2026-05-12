@@ -11,6 +11,115 @@ end of a session.
 
 ---
 
+## 2026-05-11 — Mac — mutual pin, visual selection, PQ selftest, host clipboard bridge
+
+**Context:** Follow-up to the prior "clipboard + real comms" entry.
+User said "lets do it all except for the gap audit THEN we will
+continue gap audit" — meaning my proposed follow-ups: selection-
+on-screen, PQ hybrid, mutual pinning. Plus they wanted real
+host↔guest clipboard sharing ("copy and paste doesnt persist
+between our os and macos") — that fell out as a separate piece.
+
+### What shipped (one commit + this journal)
+
+**Mutual pinning (`comms` now mutual-auth):**
+
+  * Bat_OS gets a per-cave Ed25519 identity persisted to BatFS as
+    `comms_identity.key`. Lazy-loaded on first use, cached, wiped
+    on cave switch.
+  * `comms my-id` shell command — prints the cave's pubkey hex
+    and auto-copies it to the system clipboard.
+  * Server reads `comms_clients.allowlist` (one hex pubkey per
+    line). When present, handshake rejects any client whose
+    id_pub isn't in the set. When absent, server stays in TOFU
+    mode and logs a warning.
+  * `comms connect` refuses to run with no pin set; auto-tears
+    down any prior session before opening a new one (fixed a
+    reconnect-timeout bug where the legacy PCB lingered).
+
+**Visual select mode (Ctrl+S on SH):**
+
+  * Row-based scrollback selection in `console.rs`. Ctrl+S enters,
+    arrow up/down moves cursor, Shift+arrow extends, Enter copies
+    selected rows joined by `\n` to clipboard, Esc cancels.
+  * Initial cursor lands on the last *output* row, skipping bare
+    "bat_os > " prompt rows so the user doesn't accidentally copy
+    the prompt.
+  * Tab-switch out of SH while in select mode auto-exits select
+    mode.
+  * `clip yank-back [N]` shell command — copy last N scrollback
+    rows without entering select mode. Quick alternative.
+
+**PQ-hybrid comms handshake (Bat_OS-side, selftest only):**
+
+  * New `src/batcave/pq_comms_session.rs` — ML-KEM-768 + X25519
+    KEM, Ed25519 + ML-DSA-65 hybrid signatures, ChaCha20-Poly1305
+    transport. Wire format documented in the module header
+    (6477-byte offer).
+  * `pq-comms-selftest` shell command runs the full handshake
+    in-process: client encapsulates to server's hybrid KEM pub,
+    signs with its hybrid sig key; server verifies + decapsulates;
+    both derive matching c2s/s2c keys; AEAD round trip in both
+    directions. Mirrors the `ipc_session::selftest_round_trip`
+    pattern.
+  * Deliberately NOT wired over the wire yet. Python's
+    `cryptography` lib doesn't speak ML-KEM/ML-DSA, and a wire
+    path where one side is classical-only defeats hybrid's point
+    (the whole idea is BOTH halves have to break). Real
+    deployment waits until we have a PQ peer — second Bat_OS
+    instance via two QEMU VMs is the obvious candidate.
+
+**Host clipboard bridge:**
+
+  * Bat_OS clipboard was isolated from macOS clipboard. User's
+    pain: `comms my-id` puts hex into Bat_OS clipboard but the
+    operator can't paste it into a Mac terminal to write the
+    allowlist file. They asked for real cross-host clipboard.
+  * `scripts/host_clipboard_bridge.py` — TCP daemon on
+    127.0.0.1:9101 (loopback only; QEMU slirp NATs guest's
+    10.0.2.2 to host loopback). Line-oriented protocol with
+    GET / SET / PING; SET pipes to pbcopy, GET runs pbpaste.
+  * `clip push` / `clip pull` shell commands in Bat_OS — push
+    sends Bat_OS clipboard to macOS via SET; pull fetches macOS
+    clipboard via GET.
+
+### End-to-end verified on QEMU
+
+Bridge round trip (user-tested):
+```
+clip set hello from bat_os    # 17 bytes
+clip push                     # -> macOS clipboard set (17 bytes)
+# (Mac pbpaste now returns "hello from bat_os")
+clip pull                     # <- pulled 15 bytes from macOS clipboard
+```
+
+Full mutual-auth flow (user-tested):
+```
+comms my-id                   # 64-char hex, auto-clipboarded
+clip push                     # hex now in Mac clipboard
+# (Mac: pbpaste > comms_clients.allowlist, restart server)
+comms identify 10.0.2.2:9100  # server pubkey -> clipboard
+comms pin <Ctrl+V>            # pin server identity
+comms connect 10.0.2.2:9100   # "handshake OK"
+                              # state CONNECTED, ChaCha20-Poly1305, Ed25519 pinned, FS
+comms send hello              # sent 5 bytes encrypted
+                              # received echo (verified tag + nonce)
+```
+
+Negative case (also user-tested):
+  * After tampering with the allowlist (wrong hex), reconnect
+    timed out client-side; server log: `client_id NOT in
+    allowlist; rejecting` × 2.
+
+### Branch status
+
+`feat/ai-agent-design` now has 6 commits of post-AI-agent work.
+Next batch is back to the gap audit (item 027 POSIX shm, item
+035 dmesg ring, NTP via Date: header, scheduler block_on,
+TLS X.509 chain validation, etc.).
+
+---
+
 ## 2026-05-11 — Mac — clipboard, embedded shells, real comms crypto
 
 **Context:** After the gap-audit cluster (see next entry), user wanted
