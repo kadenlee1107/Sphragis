@@ -11,6 +11,46 @@ end of a session.
 
 ---
 
+## 2026-05-11 — Mac — quota broaden: pipes + selftest + non-goal docs
+
+**Context:** Follow-up to the cave-quotas batch. Merged to main,
+then three small wins:
+
+  * Memory-quota now charges `pipe::create` too (4 KiB / pipe).
+    Refunded on every rollback path and on `release_end` when both
+    ends close.
+  * `quota-selftest` shell command proves the rejection path works.
+    Tightens current cave's quota to used+1, asserts an 8 KiB shm
+    create returns `cave: memory quota exceeded`, restores quota,
+    asserts retry succeeds.
+  * DESIGN.md decision-log entries 14 + 15:
+    - 14: **libc shim documented as non-goal.** Importing the
+      C-ecosystem attack surface (printf format, FILE*, dlopen)
+      works against the security posture. Purpose-built no-libc
+      Rust workloads stay the model.
+    - 15: **Preemptive scheduling deferred** behind its own focused
+      debug arc. The infra exists (`arch::init_timer`,
+      `arch::handle_irq`, GIC, EL0-only preempt path) but is
+      disabled at boot because re-enabling it hangs the kernel
+      mid-fire. CPU-quota enforcement is observability-only
+      until that lands.
+
+### Gap-audit P0 — current state
+
+Closed: 025, 026, 027, 028, 029, 030 (memory enforced at shm+pipe;
+cpu/io observed), 031, 032, 034, 035, 036.
+
+Documented as non-goals: 037 libc shim.
+
+Still open: 033 (XL — package manager). Real follow-up arc.
+
+### Branch status
+
+`feat/quota-broaden` at `18890477` + journal. main at the
+prior batch's merge.
+
+---
+
 ## 2026-05-11 — Mac — cave quotas + introspection (items 030 + 036)
 
 **Context:** Per the L-item eval committed earlier in the day, took
