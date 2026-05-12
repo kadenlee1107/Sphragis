@@ -11,6 +11,130 @@ end of a session.
 
 ---
 
+## 2026-05-11 — Mac — clipboard, embedded shells, real comms crypto
+
+**Context:** After the gap-audit cluster (see next entry), user wanted
+to actually interact with the OS and immediately found UX rough spots
+that turned into real features.
+
+### What shipped (one commit)
+
+**Tab strip cleanup.** Labels were `SH DS FS NM ED SK CM WB BC` for an
+8-app array — WB was a leftover from the pre-no-browser era at index
+7 (which actually mapped to APP_BATCAVE), and the trailing BC was
+dead. Strip is now `SH DS FS NM ED SK CM BC` matching what's real.
+
+**Bat logo gone from DS.** Decorative `draw_bat_mini_full` glyph in
+the ARCHITECTURE panel removed at user request.
+
+**Embedded shells (FS / CM / BC).** Three tabs that had "use shell to
+manage" hints in their UI now have an actual shell strip embedded at
+the bottom of their content rect (~35-40% of body). Routing:
+
+  * Arrow keys / Esc still go to the widget (FS file list, BC cave
+    table, CM message timeline).
+  * Printable chars + Backspace go to the shared shell input buffer.
+  * Enter executes if input is non-empty; otherwise falls back to
+    the widget's default (open file / connect comms / enter cave).
+  * Console rendering: new `console::redraw_in_rect(rect)` helper
+    paints the tail of the scrollback into an arbitrary rect.
+
+  Tradeoff: single shared shell across SH + the three embedded
+  views, NOT per-tab shells. Same scrollback everywhere, same input
+  buffer. User explicitly asked for this — security comes from cave
+  isolation, not from N separate in-cave shells.
+
+**Partial-input scrubber.** Once shells were shared, half-typed
+commands carried across tabs (start typing on FS, switch to SH, the
+partial sits on SH's prompt). Fixed: every tab-switch site now
+backspaces over the in-progress input and resets cmd_len. Macro
+`clear_input!` keeps the 6 switch sites DRY.
+
+**System clipboard (`src/ui/clipboard.rs`).** 1 KiB single-slot
+buffer with set/get/clear; wiped on cave switch.
+
+  * Ctrl+V (0x16) at any shell input streams clipboard bytes into
+    cmd_buf as if they were keystrokes (printable-only filter —
+    pasted bytes can't deliver a hidden Ctrl-something).
+  * Ctrl+Y (0x19) yanks the current input line into the clipboard.
+  * `clip` / `clip set <text>` / `clip clear` shell commands.
+
+**Comms: real E2E.** The big one. CM had `apps::comms::connect/send/
+recv` since the no-browser pivot but the crypto was demo-grade:
+AES-256-CTR with a session key derived locally from
+`(peer_ip || port || cntpct_el0)` and never exchanged with the
+peer. CTR being symmetric, an echo server appeared to "work" only
+because we were talking to ourselves through a relay.
+
+  Replaced with:
+
+  * 128-byte handshake offer: `eph_pub(32) || id_pub(32) ||
+    ed25519_sig(eph || "BAT_OS-COMMS-v1")(64)`. Same shape as
+    `batcave::ipc_session::build_offer`.
+  * X25519 ECDH on the ephemerals; directional session keys via
+    `SHA-256(label || shared || client_eph_pk || server_eph_pk)`.
+    Separate c2s / s2c keys.
+  * Length-prefixed transport frames:
+    `len(4 BE) || nonce(12) || ChaCha20-Poly1305 ct+tag(16)`.
+    Counter nonce per direction (u64 BE + 4 zero bytes).
+  * New `crypto::chacha20poly1305` wrapper alongside the existing
+    XChaCha variant — 12-byte nonce for counter-discipline use.
+
+  Pinning: connect() refuses to run without a previously-stored
+  server identity. Three-step flow:
+
+    comms identify 10.0.2.2:9100    # discovery; prints + clipboards
+                                    # the server's claimed id_pub
+    comms pin <Ctrl+V>              # store the pin (paste hex)
+    comms connect 10.0.2.2:9100     # real handshake; AEAD transport
+
+  TOFU is explicit: `comms identify` is not authenticated, and the
+  command emits a warning telling the operator to confirm the hex
+  out-of-band before pinning.
+
+**Test server (`scripts/comms_test_server.py`).** Implements the
+same protocol using Python's `cryptography` library. Stable Ed25519
+identity in `./comms_server.key` (gitignored). Echoes received
+plaintext back AEAD-encrypted under s2c_key with its own counter
+nonce; Bat_OS verifies the tag + nonce ordering on every received
+frame.
+
+### Verified end-to-end on QEMU
+
+  1. Server: `python3 scripts/comms_test_server.py 9100` →
+     printed identity pubkey
+  2. Bat_OS: `comms identify 10.0.2.2:9100` → pubkey printed,
+     clipboard auto-populated
+  3. `comms pin ` + Ctrl+V → pin stored
+  4. `comms connect 10.0.2.2:9100` → handshake OK; CM page state
+     pill flips to CONNECTED; cipher pill shows "ChaCha20-Poly1305"
+  5. `comms send hello world` → server log: ciphertext received +
+     echoed; Bat_OS: tag verified, plaintext in CM timeline
+
+User report: "all of it worked exactly like you said."
+
+### What's still demo-grade
+
+  * Discovery is unauthenticated (TOFU). A real production flow
+    would distribute server pubkeys out-of-band (QR / business card /
+    signed bundle), not learn them from the wire.
+  * Server identity is the only one pinned; client identity is
+    ephemeral per session. Server can't restrict who connects.
+    Mutual-pin would need client identity persistence per cave.
+  * Selection-on-screen for copy: not yet built. Today clipboard
+    is populated programmatically (by commands like `comms identify`)
+    or by Ctrl+Y on the current input line.
+
+### Branch status
+
+`feat/ai-agent-design` now has 5 commits of post-AI-agent work
+(stack-canary handler, pipes, wall clock, AF_UNIX, this UX +
+comms cluster). Name is fully misleading — when this lands on
+main, future work should split onto `feat/os-gap-fixes` or
+similar.
+
+---
+
 ## 2026-05-11 — Mac — gap-audit cluster: canaries, pipes, wall clock, AF_UNIX
 
 **Context:** Earlier in the day we shipped the v3 LoRA + chat_with_v3
