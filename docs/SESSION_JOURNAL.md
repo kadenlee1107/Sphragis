@@ -11,13 +11,13 @@ end of a session.
 
 ---
 
-## 2026-05-11 — Mac — gap-audit cluster: stack canaries, POSIX pipes, wall clock
+## 2026-05-11 — Mac — gap-audit cluster: canaries, pipes, wall clock, AF_UNIX
 
 **Context:** Earlier in the day we shipped the v3 LoRA + chat_with_v3
 REPL (see previous entry). After live-test handoff, pivoted to
 working down the `docs/OS_FEATURE_GAP_AUDIT.md` P0 list.
 
-### What shipped (three commits on `feat/ai-agent-design`)
+### What shipped (four commits on `feat/ai-agent-design`)
 
 **1. `src/kernel/stack_chk.rs`** — Cluster G's hardening flags added
 `-Z stack-protector=all` to RUSTFLAGS but never provided the symbols
@@ -85,23 +85,57 @@ instead of civil time.
     as everything else.
   - Apple M4 RTC: stub, needs SMC.
 
+**4. AF_UNIX SOCK_STREAM (gap item 025).** Reuses the FD table from
+the pipes commit; adds a Socket variant to `FdKind` with role
+{Unbound, Listener, Connected}. Same byte-stream semantics as
+pipes, but with named endpoints + listen/accept so two arbitrary
+tasks find each other without sharing a pipe at birth.
+
+  * `src/kernel/unix_sock.rs` — 64 sockets × 4 KiB rx ring, depth-8
+    accept queue. Abstract namespace only (string keys up to 64
+    bytes); no filesystem-backed paths (deferred until BatFS gets
+    a SOCKET inode type, same pattern as FIFOs).
+  * 5 new syscalls: SYS_SOCKET, SYS_BIND, SYS_LISTEN, SYS_CONNECT,
+    SYS_ACCEPT. SYS_READ / SYS_WRITE / SYS_CLOSE now dispatch on
+    FdKind and handle Connected sockets via the same shape they
+    use for pipes.
+  * `Category::Socket = 12` logs bind/connect/accept/close with the
+    bound name (non-printable bytes sanitized).
+  * `unix-sock-selftest` shell command + `selftest-on-boot` UART
+    variant. Verifies bind → listen → connect → accept → 2-way
+    write/read → EOF on close.
+
+  Verified on QEMU boot:
+  ```
+  [unix-sock-selftest] ok  bind+listen+connect
+  [unix-sock-selftest] ok  client -> server
+  [unix-sock-selftest] ok  server -> client
+  [unix-sock-selftest] ok  EOF after client close
+  [unix-sock-selftest] PASS
+  ```
+
+  Deferred: SOCK_DGRAM, filesystem-backed paths, fd passing
+  (SO_PEERCRED / SCM_RIGHTS — meaty security surface, needs its
+  own design pass).
+
 ### Up next
 
 P0 gap-audit items still pending in `OS_FEATURE_GAP_AUDIT.md`:
 
-  * 025 AF_UNIX domain sockets — natural follow-on, reuses the FD
-    table we just built; same read/write/close surface, new
-    socket/bind/connect/accept verbs + a path namespace in BatFS.
   * 027 POSIX shared memory.
   * 035 dmesg ring — pure quick win, ~80 LOC, mirror the audit
     ring shape for non-security kernel messages.
+  * 028's NTP follow-up — sync wall clock from the `Date:` header
+    of our existing TLS-pinned + PQ-secured HTTPS path so the time
+    source inherits the same trust roots as everything else.
   * Post-no-browser roadmap (from memory): TLS X.509 chain
     validation → scheduler `block_on()` → captures cleanup.
 
-Branch `feat/ai-agent-design` is becoming a misnomer (carries AI
-agent work + the stack-canary fix + pipes + wall clock). When this
-batch lands on `main` we should probably split future gap-audit
-work onto `feat/os-gap-fixes` so the branch name matches the diff.
+Branch `feat/ai-agent-design` is now seriously misnamed (carries AI
+agent work + stack-canary fix + pipes + wall clock + AF_UNIX
+sockets). When this batch lands on `main` we should split future
+gap-audit work onto `feat/os-gap-fixes` so the branch name matches
+the diff.
 
 ---
 
