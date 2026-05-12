@@ -336,6 +336,7 @@ fn execute(cmd: &str) {
         "ipc-selftest"        => cmd_ipc_selftest(),
         "pq-comms-selftest"   => cmd_pq_comms_selftest(),
         "shm-selftest"        => cmd_shm_selftest(),
+        "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -2532,6 +2533,109 @@ fn cmd_block_on_selftest() {
             console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
         }
     }
+}
+
+/// Cave memory-quota enforcement selftest. Proves the quota
+/// actually rejects allocations past the limit, without depending
+/// on a specific cave being active (uses whatever's running).
+///   1. Snapshot current cave's quota + usage.
+///   2. Tighten the quota to (used + 1 page).
+///   3. shm::create(8 KiB = 2 pages) — should fail with the right error.
+///   4. Restore the original quota.
+///   5. shm::create(8 KiB) — should succeed now.
+///   6. Clean up.
+fn cmd_quota_selftest() {
+    use crate::batcave::cave;
+    use crate::kernel::shm;
+
+    console::puts_hi("  CAVE MEMORY-QUOTA ENFORCEMENT SELF-TEST\n");
+
+    let active = cave::get_active();
+    if active == usize::MAX {
+        console::puts("  no active cave — nothing to enforce against\n");
+        console::puts("  attach via `batcave enter <name>` and re-run\n");
+        return;
+    }
+
+    let (used, original_quota) = cave::active_quota_status();
+    console::puts("  baseline: used=");
+    print_num(used as usize);
+    console::puts(" pages, quota=");
+    print_num(original_quota as usize);
+    console::puts(" pages\n");
+
+    // Tighten the quota by name. Need the cave name.
+    let mut cave_name = [0u8; 64];
+    let mut cave_name_len = 0;
+    cave::for_each_quota(|name, _used, _quota| {
+        if cave_name_len == 0 && name == cave::active_name_str() {
+            let n = name.len().min(cave_name.len());
+            cave_name[..n].copy_from_slice(&name.as_bytes()[..n]);
+            cave_name_len = n;
+        }
+    });
+    let name_str = unsafe { core::str::from_utf8_unchecked(&cave_name[..cave_name_len]) };
+
+    let tight = used + 1;
+    if let Err(e) = cave::set_quota_by_name(name_str, tight) {
+        console::puts("  ✗ FAIL set_quota_by_name: ");
+        console::puts(e); console::puts("\n");
+        return;
+    }
+    console::puts("  tightened quota to ");
+    print_num(tight as usize);
+    console::puts(" pages (used+1)\n");
+
+    // Should fail: 8 KiB = 2 pages, exceeds tight by 1.
+    match shm::create(b"quota-selftest", 8192) {
+        Err(e) if e == "cave: memory quota exceeded" => {
+            console::puts("  ✓ rejected: shm::create exceeded quota as expected\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error: ");
+            console::puts(e); console::puts("\n");
+            let _ = cave::set_quota_by_name(name_str, original_quota);
+            return;
+        }
+        Ok(fd) => {
+            console::puts("  ✗ FAIL: allocation succeeded despite tight quota\n");
+            if let Some(id) = match crate::kernel::process::current().fd_get(fd).map(|e| e.kind) {
+                Some(crate::kernel::process::FdKind::Shm { id }) => Some(id),
+                _ => None,
+            } {
+                shm::release(id);
+            }
+            let _ = cave::set_quota_by_name(name_str, original_quota);
+            return;
+        }
+    }
+
+    // Restore quota; alloc should now succeed.
+    let _ = cave::set_quota_by_name(name_str, original_quota);
+    console::puts("  restored quota to ");
+    print_num(original_quota as usize);
+    console::puts(" pages\n");
+
+    let fd = match shm::create(b"quota-selftest", 8192) {
+        Ok(fd) => fd,
+        Err(e) => {
+            console::puts("  ✗ FAIL: post-restore alloc rejected: ");
+            console::puts(e); console::puts("\n");
+            return;
+        }
+    };
+    console::puts("  ✓ post-restore alloc succeeded\n");
+
+    // Cleanup.
+    if let Some(id) = match crate::kernel::process::current().fd_get(fd).map(|e| e.kind) {
+        Some(crate::kernel::process::FdKind::Shm { id }) => Some(id),
+        _ => None,
+    } {
+        let _ = crate::kernel::process::current().fd_take(fd);
+        shm::release(id);
+    }
+
+    console::puts("  ✓ ALL QUOTA TESTS PASSED\n");
 }
 
 /// POSIX shared-memory selftest. Exercises create + write + open

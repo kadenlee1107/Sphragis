@@ -86,6 +86,12 @@ fn pipe_mut(id: u16) -> Option<&'static mut Pipe> {
 pub fn create() -> Result<(u16, u16), &'static str> {
     let caller_id = process::current_id();
 
+    // Gap-audit item 030 first slice — charge the active cave's
+    // quota before grabbing a slot. Pipe ring buffer is one page
+    // (4 KiB). Refunded on any rollback path below + on release_end
+    // when both ends close.
+    crate::batcave::cave::active_charge_pages(1)?;
+
     // Find a free pipe slot.
     let mut slot = None;
     unsafe {
@@ -96,7 +102,13 @@ pub fn create() -> Result<(u16, u16), &'static str> {
             }
         }
     }
-    let slot = slot.ok_or("no free pipe")?;
+    let slot = match slot {
+        Some(s) => s,
+        None => {
+            crate::batcave::cave::active_release_pages(1);
+            return Err("no free pipe");
+        }
+    };
 
     // Mark active before installing fds so a concurrent caller can't
     // claim the same slot. (Single-threaded today, but cheap.)
@@ -120,6 +132,7 @@ pub fn create() -> Result<(u16, u16), &'static str> {
             p.active = false;
             p.readers = 0;
             p.writers = 0;
+            crate::batcave::cave::active_release_pages(1);
             return Err("fd table full");
         }
     };
@@ -132,6 +145,7 @@ pub fn create() -> Result<(u16, u16), &'static str> {
             p.active = false;
             p.readers = 0;
             p.writers = 0;
+            crate::batcave::cave::active_release_pages(1);
             return Err("fd table full");
         }
     };
@@ -188,6 +202,11 @@ pub fn release_end(id: u16, end: PipeEnd) {
         p.len = 0;
         p.head = 0;
         p.tail = 0;
+        // Refund the page charge from create-time. Same drift caveat
+        // as shm — release happens against the *active* cave at
+        // close-time, which may differ from the creator. Bounded by
+        // the original charge so the books eventually balance.
+        crate::batcave::cave::active_release_pages(1);
     }
 }
 
