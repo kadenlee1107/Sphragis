@@ -150,6 +150,23 @@ pub fn try_handle(far: u64, esr: u64) -> bool {
     let is_data_abort = ec == 0x24 || ec == 0x25;
     let is_inst_abort = ec == 0x20 || ec == 0x21;
     if !is_data_abort && !is_inst_abort { return false; }
+
+    // CAVE-POOL CARVE-OUT GUARD: refuse to install mappings for VAs
+    // inside the cave-pool PA range. Those VAs are intentionally
+    // unmapped in PRIMARY_L1 (and every cave's L1 except the
+    // owning cave) so cave-private frames are unreachable from the
+    // wrong context. If we demand-paged here we would silently
+    // shadow the carve-out and break the cross-cave isolation
+    // property the cave_private allocator claims to provide.
+    // Bailing returns the fault up to the panic handler, which
+    // surfaces a clear error rather than a security regression.
+    const CAVE_POOL_BASE: u64 = 0xB000_0000;
+    const CAVE_POOL_END:  u64 = 0xC000_0000;
+    if far >= CAVE_POOL_BASE && far < CAVE_POOL_END {
+        crate::drivers::uart::puts(
+            "[demand_page] REFUSED: FAR is inside cave-pool carve-out (0xB0..0xC0)\n");
+        return false;
+    }
     // follow-on: only handle TRANSLATION faults (page not
     // mapped). Permission faults (DFSC 0x0d/0x0e/0x0f) come from a page
     // that IS mapped but with wrong perms (e.g., kernel uaccess writing

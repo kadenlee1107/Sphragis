@@ -40,6 +40,16 @@ fn text_end_addr() -> u64 {
 const PAGE_SIZE: usize = 4096;
 const ENTRIES_PER_TABLE: usize = 512;
 
+/// Cave-pool PA carve-out. Frames in this range are reserved for
+/// `cave_private` allocations only — no kernel L1 (PRIMARY_L1 nor
+/// any cave's L1) installs identity mappings covering this range,
+/// so the cave-private VA → cave-pool PA mapping is the ONLY path
+/// to these frames. Mirrors `kernel::mm::cave_pool::CAVE_POOL_BASE`
+/// / `CAVE_POOL_END`; declared as u64 here because the
+/// setup_*_l1 loops do their range checks in u64.
+const CAVE_POOL_BASE_U64: u64 = 0xB000_0000;
+const CAVE_POOL_END_U64:  u64 = 0xC000_0000;
+
 /// Cave user-window size in 2 MB blocks. 400 MB = 200 × 2 MB, large enough
 /// for a real Chromium content_shell (~280 MB today) plus headroom for
 /// future growth. Each cave maps `CAVE_BLOCKS` × 2 MB starting at its
@@ -445,6 +455,7 @@ pub fn setup_cave_pagetable_at(
     }
     for block in 0..512 {
         let addr = 0x80000000u64 + (block as u64) * 0x200000;
+        if (CAVE_POOL_BASE_U64..CAVE_POOL_END_U64).contains(&addr) { continue; }
         write_pte(l2_xhi, block, addr | kblk(addr));
     }
     for block in 0..512 {
@@ -584,6 +595,15 @@ pub fn setup_native_cave_l1(cave_slot: usize) -> Result<usize, &'static str> {
     }
     for block in 0..512 {
         let addr = 0x80000000u64 + (block as u64) * 0x200000;
+        // CAVE-POOL CARVE-OUT: skip 0xB000_0000..0xC000_0000.
+        // Cave-private frames live in this PA range; leaving the
+        // L1[2]/L2_xhi blocks invalid here makes the carve-out
+        // unreachable through this cave's L1 too. The only path
+        // into this PA range is the cave's own per-page mappings
+        // installed by cave_private::ensure_page, which target
+        // VAs at 0x140000000+ (different L1 entry, different
+        // table) — not the kernel identity range.
+        if (CAVE_POOL_BASE_U64..CAVE_POOL_END_U64).contains(&addr) { continue; }
         write_pte(l2_xhi, block, addr | kblk(addr));
     }
     for block in 0..512 {
@@ -720,6 +740,7 @@ pub fn map_4k_in_l1(l1_phys: usize, va: usize, pa: usize, flags: u64)
     // at level 3 per ARM ARM D5.3.1 ("Page descriptor"); without it
     // the walker treats the entry as invalid.
     write_pte(l3_phys, l3_idx, (pa as u64 & 0x0000_FFFF_FFFF_F000) | flags | PTE_TABLE);
+
 
     // Cache-clean the page-table pages we touched.
     unsafe {
@@ -1346,6 +1367,12 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
     }
     for block in 0..512 {
         let addr = 0x80000000u64 + (block as u64) * 0x200000;
+        // CAVE-POOL CARVE-OUT: skip 0xB000_0000..0xC000_0000 so
+        // PRIMARY_L1 has no kernel-identity mapping covering the
+        // PA range used for cave-private frames. An attacker who
+        // already knows the PA of a cave-private page cannot
+        // dereference it through PRIMARY_L1; the walker faults.
+        if (CAVE_POOL_BASE_U64..CAVE_POOL_END_U64).contains(&addr) { continue; }
         write_pte(l2_xhi, block, addr | kernel_blk_flags(addr));
     }
     // identity-map [0xC0000000, 0x140000000). No kernel

@@ -59,10 +59,16 @@ def main() -> int:
 
         c.sendline("cave-private-selftest")
         idx = c.expect([
-            rb"\xe2\x9c\x93 per-cave L1 restriction slice-1 verified",
-            rb"\xe2\x9c\x97 FAIL:",
+            rb"\xe2\x9c\x93 cave-pool PA carve-out verified",
+            rb"\xe2\x9c\x97 FAIL: \S+",
         ], timeout=30)
         if idx == 1:
+            # Drain the full FAIL line + a bit more so the log captures
+            # the detailed message instead of cutting at "FAIL:".
+            try:
+                c.expect(rb"bat_os > ", timeout=5)
+            except Exception:
+                pass
             print("[cave-private] FAIL — selftest reported a failure", file=sys.stderr)
             print(f"[cave-private] log: {LOG}", file=sys.stderr)
             return 1

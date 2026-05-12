@@ -11,6 +11,131 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — cave-pool PA carve-out: closes the kernel-identity leak
+
+**Context:** With sys-wg's state already living at a cave-private
+VA (slice 2 of the L1 restriction arc), the residual gap was that
+the *physical* frames behind those VAs were still in the kernel
+pool, and PRIMARY_L1's `L1[1..=4]` identity map covered all of it.
+An attacker who learned a cave-private PA could still reach the
+bytes via kernel identity. This arc carves a dedicated PA range
+out of every L1's kernel-identity map so the only path to those
+frames is through the owning cave's per-page mapping.
+
+### What shipped
+
+  * `src/kernel/mm/cave_pool.rs` (new). Dedicated allocator for
+    cave-private frames over the PA range
+    `0xB000_0000..0xC000_0000` (256 MiB at the top of the kernel
+    pool). Independent bitmap (1024 `AtomicU64` words). Returns
+    PAs without zeroing — see "subtle issue" below.
+  * `kernel::mm::cave_pool::init()` runs from `mm::init()` right
+    after `frame::init`, calls `frame::reserve_range` to mark the
+    carve-out PAs in-use in the general bitmap so
+    `alloc_frame`/`alloc_kernel_frame` never hand out a page
+    inside the window.
+  * `mmu::setup_and_enable` + `mmu::setup_native_cave_l1` +
+    `mmu::setup_cave_pagetable_at`: all three L1 builders skip
+    blocks 384..512 of their L2_xhi tables (covering
+    `0xB000_0000..0xC000_0000`). With this in place, *no* L1 the
+    kernel builds has a kernel-identity mapping covering the
+    cave-pool range — proven by `pte_lookup`.
+  * `cave_private::ensure_page` now allocates from `cave_pool`
+    rather than the general kernel pool, installs the cave-
+    private mapping in the owning cave's L1, *then* zeros the
+    page through that mapping under `with_cave_active`. This
+    order matters — see below.
+  * `demand_page::try_handle` gained a carve-out guard: any
+    EL1 fault whose `FAR_EL1` falls inside
+    `0xB000_0000..0xC000_0000` is rejected outright with a
+    `[demand_page] REFUSED` log. Without this, a stray kernel-ns
+    access to a cave-pool VA would be silently shadowed by a
+    fresh demand-page mapping, defeating the carve-out.
+  * `cave-private-selftest` shell command + headless harness
+    extended: decodes the PA from the cave's leaf PTE,
+    asserts `pte_lookup(PRIMARY_L1, pa)` returns None, and
+    reports `✓ cave-pool PA carve-out verified`. The previous
+    slice-1 selftest stayed; the new assertion is gated on
+    knowing the PA, which the slice-1 walk supplies.
+
+### The subtle issue we hit and fixed
+
+First attempt to verify the carve-out reported `✗ FAIL:
+PRIMARY_L1 identity-maps cave-private PA`. Diagnostic walks
+showed PRIMARY_L1's `L2_xhi[384]` started out 0 at setup_and_enable
+time but contained a TABLE descriptor by the time the selftest
+ran. The descriptor pointed at sys-wg's L2_xxxhi page — an L3
+position installed by an unknown writer.
+
+Root cause: `cave_pool::alloc_page` initially zeroed the new
+page via `str xzr, [pa]` from kernel-ns context. With the
+carve-out in place, that VA was unmapped in PRIMARY_L1; the
+store data-aborted; the kernel's `demand_page` handler caught
+it and **installed a real mapping in PRIMARY_L1's L2_xhi[384]**
+to "fix" the fault — undoing the carve-out the next instruction
+after it was put in place.
+
+Fix has two parts: (1) `cave_pool::alloc_page` no longer zeroes
+the page — that work moves to `cave_private::ensure_page`, which
+zeroes *after* installing the mapping in the cave's L1, under
+`with_cave_active` so the VA translates; (2) `demand_page` now
+explicitly refuses to install mappings for FARs inside the
+carve-out range, as defence-in-depth against any future
+kernel-ns stray that hits this VA range.
+
+### Verification
+
+```
+cave-private-selftest:
+  ✓ allocated cave-private VA: 0x0000000140001000
+  ✓ sys-wg L1 maps VA — leaf PTE = 0x00600000b0000703
+  ✓ PRIMARY_L1 does NOT map this VA (kernel-ns can't reach it)
+  cave-private PA: 0x00000000b0000000
+  ✓ PRIMARY_L1 has NO kernel-identity mapping for this PA
+    (carve-out succeeds: attacker who knows PA still can't reach)
+  ✓ in-cave write/read round-trip preserved the magic value
+  ✓ ensure_page is idempotent — same VA returned on re-call
+  ✓ per-cave L1 restriction slice-1 verified
+  ✓ cave-pool PA carve-out verified
+```
+
+Full sweep: boot-smoke, sys-caves-selftest (Arc-2 round trip),
+sys-wg-selftest (slices 1+2+3 + state-in-cave-private), and
+cave-private-selftest — all PASS.
+
+### Security boundary today
+
+Four layers around cave-private state, in order of strength:
+
+  1. **Module privacy** — no `pub` getter for the secret.
+  2. **VA-level MMU isolation** — cave-private VA unmapped in
+     PRIMARY_L1; proved at runtime by `pte_lookup`.
+  3. **PA-level isolation** — cave-pool PA range unmapped in
+     PRIMARY_L1's kernel-identity window; also proved by
+     `pte_lookup`. Even an attacker who knows the PA cannot
+     reach the bytes through kernel identity.
+  4. **Defence-in-depth** — `demand_page` refuses to install
+     mappings for FARs in the carve-out range, blocking the
+     "stray kernel-ns store creates a shadow mapping" failure
+     mode.
+
+### What this commit explicitly DOES NOT close
+
+  * No EL1 sync-exception handler that turns walker faults into
+    clean error reports. Today an out-of-cave dereference hangs
+    the walker (or hits the demand-pager, which now correctly
+    refuses inside the carve-out and bubbles up to panic). The
+    next arc installs a real handler so tests can attempt
+    cross-cave probes and observe the fault rather than hang.
+
+### Branch status
+
+`feat/per-cave-l1-restrict` (slice 1 + slice 2 already committed
+as `95688b00` + `6e866173`; this lands as the follow-up slice 3
+for the carve-out). Will commit + push.
+
+---
+
 ## 2026-05-12 — Mac — sys-wg state relocation: KEYPAIR + PEERS in cave-private page
 
 **Context:** Slice 1 of the per-cave L1 restriction arc shipped a

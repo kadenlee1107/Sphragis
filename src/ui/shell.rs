@@ -3342,9 +3342,54 @@ fn cmd_cave_private_selftest() {
         }
     }
 
+    // PA-level isolation check (carve-out arc).
+    // Decode the PA backing the cave-private VA from the leaf PTE
+    // in sys-wg's L1, then ask whether PRIMARY_L1 reaches that PA
+    // through its kernel-identity window. With the cave-pool
+    // carve-out in place (0xB000_0000..0xC000_0000 carved out of
+    // PRIMARY_L1's L2_xhi), the lookup must return None — proving
+    // an attacker who already knows the PA still can't reach the
+    // bytes via kernel identity.
+    let leaf_pte = pte_in_cave.unwrap();
+    let pa = (leaf_pte & 0x0000_FFFF_FFFF_F000) as usize;
+    console::puts("  cave-private PA: 0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((pa >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts("\n");
+    if pa < crate::kernel::mm::cave_pool::CAVE_POOL_BASE
+        || pa >= crate::kernel::mm::cave_pool::CAVE_POOL_END
+    {
+        console::puts("  ✗ FAIL: cave-private PA outside cave-pool carve-out range\n");
+        return;
+    }
+    match mmu::pte_lookup(primary_l1, pa) {
+        None => {
+            console::puts("  ✓ PRIMARY_L1 has NO kernel-identity mapping for this PA\n");
+            console::puts("    (carve-out succeeds: attacker who knows PA still can't reach)\n");
+        }
+        Some(pte) => {
+            console::puts("  ✗ FAIL: PRIMARY_L1 identity-maps cave-private PA — leaf 0x");
+            for sh in (0..16).rev() {
+                console::putc(hex[((pte >> (sh * 4)) & 0xF) as usize]);
+            }
+            console::puts(" (carve-out broken)\n");
+            return;
+        }
+    }
+
     // Round-trip a magic value: write inside the cave, read back
     // inside the cave. Verifies the mapping is actually usable
     // (not just present in the table).
+    // DEBUG: read sys_wg_l1[5] BEFORE the closure.
+    let before_closure: u64;
+    unsafe {
+        core::arch::asm!("ldr {v}, [{a}]",
+            a = in(reg) sys_wg_l1 + 5 * 8, v = out(reg) before_closure);
+    }
+    console::puts("  [DEBUG] sys_wg_l1[5] BEFORE closure = ");
+    print_num(before_closure as usize);
+    console::puts("\n");
     let magic = 0xDEAD_BEEF_CAFE_F00Du64;
     let read_back = cave::with_cave_active(sys_wg_id, || -> u64 {
         let p = va as *mut u64;
@@ -3355,6 +3400,14 @@ fn cmd_cave_private_selftest() {
             core::ptr::read_volatile(p)
         }
     });
+    let after_closure: u64;
+    unsafe {
+        core::arch::asm!("ldr {v}, [{a}]",
+            a = in(reg) sys_wg_l1 + 5 * 8, v = out(reg) after_closure);
+    }
+    console::puts("  [DEBUG] sys_wg_l1[5] AFTER closure = ");
+    print_num(after_closure as usize);
+    console::puts("\n");
     if read_back != magic {
         console::puts("  ✗ FAIL: in-cave write/read mismatch (expected 0x");
         for sh in (0..16).rev() {
@@ -3384,6 +3437,7 @@ fn cmd_cave_private_selftest() {
     console::puts("  ✓ ensure_page is idempotent — same VA returned on re-call\n");
 
     console::puts("  ✓ per-cave L1 restriction slice-1 verified\n");
+    console::puts("  ✓ cave-pool PA carve-out verified\n");
 }
 
 /// Selftest for the scheduler's block_on async-bridge primitive.

@@ -138,7 +138,8 @@ pub fn init() {
     // the cave's L1 active so the VA translates.
     cave::with_cave_active(sys_wg_id, || unsafe {
         let p = va as *mut PrivateState;
-        // The frame allocator zeroed this page, so we only need to
+        // The frame allocator zeroed this page (via the in-cave
+        // path in cave_private::ensure_page), so we only need to
         // populate the fields we care about. Use field-by-field
         // writes (rather than ptr::write of the whole struct) so
         // the secret seed lives only in the cave-private page; a

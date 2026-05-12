@@ -27,7 +27,7 @@
 #![allow(dead_code)]
 
 use crate::batcave::{cave, linux::mmu};
-use crate::kernel::mm::frame;
+use crate::kernel::mm::cave_pool;
 
 /// Base VA for cave-private regions. Sits one full L1 entry (1 GiB)
 /// above the top of the kernel identity range, so it never collides
@@ -75,15 +75,20 @@ pub fn ensure_page(cave_id: u16) -> Option<usize> {
     }
 
     let l1_phys = cave::get_cave_l1_phys(cave_id)?;
-    let page_pa = frame::alloc_kernel_frame()?;
+    // Allocate from the carved-out cave-pool — these PAs are NOT
+    // covered by any cave L1's kernel-identity map, so even an
+    // attacker who learns the PA can't reach the bytes through
+    // PRIMARY_L1 or any other cave's L1. cave_pool::alloc_page
+    // intentionally does NOT zero the page — kernel-ns can't reach
+    // the PA, so any zero-store via the identity VA would
+    // data-abort and the demand-pager would shadow the carve-out.
+    // We zero through the cave-private VA below instead.
+    let page_pa = cave_pool::alloc_page()?;
 
     let va = cave_private_va(cave_id);
     if mmu::map_4k_in_l1(l1_phys, va, page_pa, CAVE_PRIVATE_PTE_FLAGS).is_err() {
-        // Couldn't install the mapping — release the frame to avoid
-        // a leak. Frame allocator doesn't currently expose a free()
-        // entry point for kernel-pool frames; this leaks one page
-        // on rare error paths (acceptable for now — same hygiene as
-        // every other kernel allocator in tree).
+        // Couldn't install the mapping — leak the frame for now
+        // (rare error path; cave_pool has no free entry point yet).
         return None;
     }
 
@@ -91,9 +96,9 @@ pub fn ensure_page(cave_id: u16) -> Option<usize> {
         (*core::ptr::addr_of_mut!(PRIVATE_PA))[idx] = Some(page_pa);
     }
 
-    // Invalidate any stale TLB entry for this VA. Without this, the
-    // first access from inside the cave hits the walker against a
-    // possibly-cached "no-mapping" entry and faults.
+    // Invalidate any stale TLB entry for this VA, then zero the page
+    // through the just-installed cave-private mapping. Must run
+    // under `with_cave_active(cave_id)` so the VA translates.
     unsafe {
         core::arch::asm!(
             "tlbi vae1, {a}",
@@ -102,6 +107,9 @@ pub fn ensure_page(cave_id: u16) -> Option<usize> {
             a = in(reg) (va >> 12) as u64,
         );
     }
+    cave::with_cave_active(cave_id, || {
+        cave_pool::zero_via_cave_va(va);
+    });
 
     Some(va)
 }
