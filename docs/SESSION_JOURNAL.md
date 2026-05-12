@@ -11,6 +11,93 @@ end of a session.
 
 ---
 
+## 2026-05-11 — Mac — package manager (gap-audit item 033 — last open P0)
+
+**Context:** With the L items resolved and the quota work broadened
+to pipes, the last open P0 in the gap audit was item 033 (package
+manager, XL). Took it.
+
+### What shipped (commit `95f2e161`)
+
+**BPKG v1 binary bundle format** (little-endian):
+
+  * Magic `"BPKG"` + version byte
+  * name + version strings (u16-prefixed)
+  * file_count: u16
+  * per file: path (u16-len), size (u32), sha256 (32), content
+  * trailing 64-byte Ed25519 signature over all preceding bytes
+
+Per-file sha256 inside the bundle gives forensic re-verification of
+individual entries without re-running the bundle-wide sig check.
+Body-then-signature layout matches the existing release-verify
+pattern.
+
+**`scripts/pkg_pack.py`** builds + signs bundles using
+`./release.key` (the same Ed25519 key as `release_sign.py`). Caps
+bundles at 1 MiB to match BatFS read-buffer constraints on the
+verifier side.
+
+**`src/kernel/pkg.rs`** is the kernel-side surface:
+
+  * `parse_and_verify(bundle, &pubkey)` — signature FIRST against
+    the build-time-baked `BAT_OS_RELEASE_PUBKEY`, then walks the
+    body computing per-file sha256 cross-checks against embedded
+    hashes. TOCTOU-safe parse order (no body byte is trusted
+    until the sig has passed).
+  * `install(&bundle)` — refuses already-installed; pre-flight
+    checks no path collides with an unrelated BatFS file; writes
+    every entry + appends to `installed_packages` TSV DB.
+  * `for_each_installed` / `is_installed` / `remove`.
+
+**Shell:**
+
+  * `pkg install <bundle>` — read from BatFS, verify, install
+  * `pkg list` — installed packages with name/version/files
+  * `pkg remove <name>` — delete recorded files + rewrite DB
+
+**Trust model — no unsigned path:** `parse_and_verify` takes a
+pubkey by reference; the shell supplies the build-time-pinned
+hex. When `BAT_OS_RELEASE_PUBKEY` was unset at build time, install
+refuses to run. No `--allow-untrusted` flag, no fallback test key.
+
+### Limitations (deferred)
+
+  * No dependency resolution. Each package is independent.
+  * No update path — `pkg remove` then re-install.
+  * All files land in BatFS root (single flat namespace).
+    Hierarchical install paths need BatFS directory support.
+  * 1 MiB per-bundle cap. Larger payloads need a chunked layout
+    with a manifest-of-chunk-hashes.
+
+### Gap-audit P0 — FINAL STATE
+
+| Item | Status |
+|------|--------|
+| 025 AF_UNIX                | done |
+| 026 pipes / FIFOs          | done |
+| 027 POSIX shm              | done |
+| 028 Wall clock + NTP       | done (HTTPS-Date sync) |
+| 029 Time zones             | done |
+| 030 cgroups-equiv          | done (mem enforced at shm+pipe; cpu/io observed) |
+| 031 PID namespace          | done |
+| 032 Mount namespace        | done (mount-ns cmd; auto-wire batfs is follow-up) |
+| 033 Package manager        | **done (this commit)** |
+| 034 Signed releases        | done |
+| 035 dmesg ring             | done |
+| 036 procfs-equiv           | done (caps/fds/task shell cmds) |
+| 037 libc shim              | non-goal (documented in DESIGN.md #14) |
+
+**Every P0 from `docs/OS_FEATURE_GAP_AUDIT.md` is now closed or
+documented.** P1+ items haven't been audited in this run — that's
+a separate pass when the operator's ready.
+
+### Branch status
+
+`feat/pkg-manager` at `95f2e161` + journal. main at the prior
+batch's merge.
+
+---
+
 ## 2026-05-11 — Mac — quota broaden: pipes + selftest + non-goal docs
 
 **Context:** Follow-up to the cave-quotas batch. Merged to main,
