@@ -11,6 +11,285 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — kernel-boot MMU enable: soft → hard cave boundary
+
+**Context:** Arc 3 slices 1+2 put WG state behind a sys-wg module
+boundary and built the `with_sys_wg_cave` trampoline that swaps
+`task.cave_id` + `TTBR0_EL1` to sys-wg around every public entry.
+Until this commit the kernel boot path (serial-shell) never
+enabled the MMU — `setup_and_enable` only ran lazily when an ELF
+cave loaded. That left the trampoline as a register-write-only
+mechanism: `TTBR0_EL1` got written but no hardware translation
+happened, because the MMU was off. The boundary was a Rust
+privacy boundary, not a hardware boundary.
+
+This commit flips the MMU on at kernel boot.
+
+### What shipped
+
+  * `src/main.rs` boot path: right after `kernel::mm::init()`
+    (which sets up the frame allocator we need for page tables),
+    we call `batcave::linux::mmu::setup_and_enable(0)`. Failure
+    is fatal — we spin-loop with a `[boot] FATAL` print rather
+    than continue with bogus TTBR0 state.
+  * `phys_base = 0` is intentional: the EL0 "primary cave" user
+    window painted into L2_low blocks 0..9 ends up pointing at
+    sub-RAM PAs that no task at boot will touch. Kernel runs
+    entirely off the L1[1..=4] identity map of
+    `[0x40000000, 0x140000000)`. Cave loaders that subsequently
+    call `setup_and_enable(real_phys_base)` hit the early-return
+    branch (`SCTLR.M == 1` → idempotent skip) and proceed to
+    build their own L1 via `setup_native_cave_l1` like before.
+  * `cmd_sys_caves_selftest` tightened: the "PRIMARY_L1 unset"
+    graceful-degradation branch is gone. With kernel-boot MMU
+    enable, that branch is unreachable on a successfully-booted
+    kernel, so reaching it would mean the FATAL panic above was
+    bypassed somehow — we now flag it as a failure rather than
+    treating it as expected.
+
+### Verification
+
+```
+sys-caves-selftest (Arc-2 round trip):
+  TTBR0 before:  0x00000000bfffe000   ← PRIMARY_L1 (kernel-boot)
+  worker TTBR0:  0x00000000bfff8000   ← sys-wg L1 (forward swap)
+  TTBR0 after:   0x00000000bfffe000   ← restored (return swap)
+  ✓ forward swap: kernel-ns → sys-wg loaded the cave's L1
+  ✓ return swap: sys-wg → kernel-ns restored PRIMARY_L1
+  ✓ Arc-2 full round trip verified
+
+sys-wg-selftest (Arc-3 trampoline):
+  TTBR0 inside cave: 0x00000000bfff8000   ← sys-wg L1 (real translation)
+  ✓ trampoline restored cave_id (0) on return
+  ✓ ... (all slice-1 + slice-2 assertions pass)
+```
+
+Plus boot-smoke + shell-history-smoke pass unchanged. The kernel
+boots cleanly with real hardware translation from the very first
+instruction after `mm::init`.
+
+### Security upgrade
+
+Sys-wg's boundary moved from "module-private at compile time" to
+"module-private at compile time **and MMU-enforced at runtime.**"
+Inside `with_sys_wg_cave`, the running task's `TTBR0_EL1` points
+at sys-wg's L1 — accesses to memory not mapped in sys-wg's L1
+would now trap. The static keypair and per-peer session keys
+live in kernel-pool frames that *are* mapped (kernel identity),
+but the architectural boundary is now real, and the moment we
+restrict what each cave's L1 maps (a future arc), violations
+become hardware faults.
+
+This also unblocks Arc-3 slice 3 — the real EL0 service task +
+IPC mailbox — because the boundary the slice will run on is now
+hardware-real.
+
+### Risk assessment
+
+The change is small (~20 LOC in main.rs) and only adds a call
+that already had a tested implementation. The cave-loader path's
+existing `setup_and_enable(cave_phys_base)` call becomes a no-op
+on the second invocation (idempotent), so cave loading is
+unaffected. The user-window mapping at L2_low blocks 0..9 with
+`phys_base = 0` paints into sub-RAM PAs — those mappings are
+inaccessible from EL1 anyway (BLOCK_USER_RW_EXEC denies EL1
+access via PXN) and no EL0 task runs at boot.
+
+### Branch status
+
+`feat/sys-wg-service` (kernel-boot MMU enable folded into the
+slice-1+2 branch). Will commit + push.
+
+---
+
+## 2026-05-12 — Mac — sys-caves Arc 3 slice 2: peer-table-keyed wrap/unwrap
+
+**Context:** Slice 1 put the WG static keypair behind the
+sys-wg module-privacy boundary and wired a `with_sys_wg_cave`
+trampoline. Slice 2 makes that boundary multi-peer: sys-wg holds
+a fixed-size peer table, drives the responder side of the WG
+handshake on the caller's behalf, and exposes `wrap(peer_id,
+plaintext)` / `unwrap(peer_id, counter, ct)` against the
+session keys *that never leave the peer slot*.
+
+### What shipped
+
+  * `src/batcave/sys_wg_service.rs` extensions:
+    - `PeerId(u8)` opaque newtype, `MAX_PEERS = 8`.
+    - `PEERS: [Option<PeerState>; MAX_PEERS]` — module-private
+      static. Each `PeerState` holds the peer's pinned
+      `static_pk` + an optional `TransportKeys`. No `pub` getter
+      returns the keys.
+    - `SysWgError` (NoSlot, DuplicatePeer, UnknownPeer,
+      NoSession, Wg(WgError)) — covers slot-management failures
+      without leaking the underlying WG primitive's vocabulary
+      directly.
+    - `register_peer(static_pk) -> Result<PeerId>` — allocates a
+      slot, rejects duplicate pubkeys with `DuplicatePeer`.
+    - `close_peer(peer_id)` — drops the slot + its session keys.
+    - `peer_has_session(peer_id)` / `peer_count()` —
+      introspection without exposing key material.
+    - `complete_handshake_as_responder(peer_id, init_eph_pk,
+      enc_static, enc_timestamp) -> ResponderWire` — sys-wg
+      plays the responder side of WG Noise IK using a peer's
+      InitMsg, installs the resulting responder-side
+      `TransportKeys` inside the slot, returns just the wire
+      bytes the caller has to send back. **Pinned-key check:**
+      if the decrypted `initiator_static_pk` doesn't match the
+      pubkey the caller pinned at `register_peer` time, the
+      handshake fails — pinning is enforced end-to-end, not
+      decorative.
+    - `wrap(peer_id, pt)` / `unwrap(peer_id, counter, ct)` —
+      AEAD send/recv against the slot's keys, run inside the
+      `with_sys_wg_cave` trampoline so the work executes with
+      sys-wg's cave_id + TTBR0 installed.
+  * `wireguard::WgError` now derives `Clone + Copy + PartialEq + Eq`
+    so callers (the new `SysWgError::Wg`) can match on it.
+  * Selftest extension (`sys-wg-selftest`) covers slice 2:
+    register_peer, duplicate rejection, peer_has_session
+    transitions on handshake, wrap/unwrap with caller decrypting
+    via its own initiator-side keys, sys-wg accepting caller-
+    encrypted bytes via `unwrap`, and close_peer dropping the
+    slot.
+  * Headless harness (`scripts/qemu_sys_wg_selftest.py`) now
+    expects the slice-2 terminal success marker. Boot tag updated
+    to "Arc 3 slices 1+2".
+
+### Verification
+
+```
+✓ register_peer assigned PeerId=0 (peer_count=1)
+✓ duplicate register_peer rejected (DuplicatePeer)
+✓ complete_handshake_as_responder installed session keys in slot
+✓ wrap(peer_id, ...) -> caller decrypted via initiator recv_key
+✓ unwrap(peer_id, ...) accepted caller-encrypted bytes
+✓ close_peer + wrap rejected with UnknownPeer
+✓ Arc-3 slice-1 sys-wg service boundary verified
+✓ Arc-3 slice-2 peer-table-keyed wrap/unwrap verified
+```
+
+Boot-smoke + sys-caves Arc-2 round trip both still pass.
+
+### Security claim today (slices 1 + 2)
+
+  * **No caller-visible keys.** Neither the static secret nor any
+    peer's TransportKeys are reachable from outside this module.
+    Selftest verifies wrap/unwrap work without `&mut TransportKeys`
+    ever crossing the boundary.
+  * **Pinned-key enforcement at the protocol level.** The
+    responder-side handshake re-decrypts the initiator's
+    `static_pk` inside the encrypted InitMsg payload and refuses
+    the handshake if it doesn't match what the caller pinned.
+  * **Cave-context execution.** Every public entry point (incl.
+    register/close/wrap/unwrap) runs under `with_sys_wg_cave`, so
+    today's module-privacy boundary becomes a hardware-MMU
+    boundary the moment the kernel boots with translation on.
+
+### What slices 1+2 still don't claim
+
+  * Caller and sys-wg still share an address space at runtime
+    (kernel boots MMU-off in the serial-shell path). Slice 3 is
+    gated on flipping that on at boot.
+  * No service task / IPC mailbox yet — the API is direct Rust
+    calls. Slice 3 turns sys-wg into a real EL0 task reading
+    requests off a pipe.
+
+### Branch status
+
+`feat/sys-wg-service` (slice 1 already committed as `18c12ab4`).
+Will commit slice 2 as a follow-up on the same branch and push.
+
+---
+
+## 2026-05-12 — Mac — sys-caves Arc 3 slice 1: sys-wg service boundary
+
+**Context:** Arcs 1 + 2 + 2.5 verified the per-cave MMU swap. Arc 3
+moves the WireGuard library code behind a sys-wg service boundary
+so its static keypair stops being a globally-callable library and
+starts being owned-by-cave state.
+
+### What shipped
+
+  * `src/batcave/sys_wg_service.rs` — new module.
+    - Static `KEYPAIR: Option<WgKeypair>` — module-private, no
+      pub getter for the secret half. Only `service_pubkey()`
+      escapes the boundary.
+    - `with_sys_wg_cave<R>(f) -> R` — trampoline that saves the
+      caller's cave_id + TTBR0, sets `task.cave_id = sys_wg_id`
+      and loads sys-wg's L1 into TTBR0 around `f`, then restores
+      the saved values. Architecturally equivalent to "step into
+      sys-wg, do the work, step out." When the kernel boot-time
+      MMU enable lands, the same code path becomes the real
+      trampoline-into-cave with hardware translation enforcement.
+    - `debug_local_round_trip(peer: &WgKeypair) -> LocalRoundTrip`
+      drives a full WG handshake where the caller plays initiator
+      with its own keypair and sys-wg plays responder. Every DH
+      operation involving sys-wg's static secret runs inside the
+      trampoline closure — the caller never holds a borrow into
+      sys-wg state.
+    - `wrap_with_keys` / `unwrap_with_keys` — transport AEAD
+      operations that also run inside the trampoline.
+  * `batcave::sys_wg_service::init()` wired into the boot path
+    right after sys_caves::init, so the keypair exists before any
+    caller can request a handshake.
+  * `sys-wg-selftest` shell command (Arc-3 selftest) — verifies
+    pubkey is reachable, TTBR0 inside the trampoline equals
+    sys-wg's L1 phys, cave_id is restored after the closure
+    returns, handshake keys are mirror-consistent across
+    initiator/responder, and wrap/unwrap round-trips through the
+    boundary cleanly.
+  * `scripts/qemu_sys_wg_selftest.py` — headless harness; drives
+    the selftest over serial and asserts the boundary-verified
+    success marker.
+
+### Verification
+
+```
+sys-wg static pubkey: b4373de8407ef7ba56d85a31e38cdbe7...
+TTBR0 inside cave: 0x00000000bffff000   ← sys-wg's L1 phys
+✓ trampoline restored cave_id (0) on return
+✓ handshake completed; transport keys are mirror-consistent
+✓ transport wrap/unwrap round-tripped 30 bytes through sys-wg cave
+✓ Arc-3 slice-1 sys-wg service boundary verified
+```
+
+Plus the prior sys-caves Arc-2 round-trip and boot-smoke still
+pass on the new branch.
+
+### Security claim today (slice 1)
+
+  * **Module privacy:** there is no `pub` path that returns
+    sys-wg's `StaticSecret`. A grep for `KEYPAIR` in the tree
+    finds only `sys_wg_service.rs` itself.
+  * **Cave-context execution:** every operation that touches the
+    secret runs inside `with_sys_wg_cave`, so the running task's
+    `cave_id` is sys-wg's for the duration. Today that's an
+    architectural fact; once the kernel boots with MMU on, it
+    becomes a hardware fact too (sys-wg's L1 is active during
+    the closure, and any access to non-sys-wg-mapped memory
+    would fault).
+
+### What slice 1 doesn't claim
+
+  * No peer table yet — `debug_local_round_trip` is one-shot. Slice
+    2 adds a peer-id-keyed API.
+  * No IPC mailbox — callers reach the service via direct Rust
+    function calls today, not via a service task reading from a
+    pipe. That's slice 3 work, gated on the kernel-MMU-enable
+    follow-up so the boundary is hardware-enforced rather than
+    privacy-by-convention.
+  * Kernel still boots with MMU off in the serial-shell path, so
+    the TTBR0 swap is a register write only. Production cave path
+    (when an ELF cave loads) already exercises real translation.
+
+### Branch status
+
+`feat/sys-wg-service` (current, branched from main at `fb430478`
+after the cave-mmu-on-swap + wireguard-phase1 merges). Ready to
+commit + push.
+
+---
+
 ## 2026-05-12 — Mac — sys-caves Arc 2.5: round-trip selftest fixed (NOT an MMU bug)
 
 **Context:** Arc 2 filed an "MMU swap return-path hang" — the

@@ -49,7 +49,7 @@ pub const NOISE_IDENTIFIER:   &[u8] = b"WireGuard v1 zx2c4 Jason@zx2c4.com";
 pub const LABEL_MAC1:         &[u8] = b"mac1----";
 pub const LABEL_COOKIE:       &[u8] = b"cookie--";
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WgError {
     AeadFail,
     BadMac,
