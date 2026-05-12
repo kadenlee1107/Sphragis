@@ -33,6 +33,7 @@ pub mod psk_overlay;
 // over X25519 + ChaCha20-Poly1305 + BLAKE2s; no UDP transport yet
 // (phase 2). Self-tested end-to-end via `wg-selftest`.
 pub mod wireguard;
+pub mod wg_dispatch;
 
 use crate::drivers::virtio::net as netdev;
 

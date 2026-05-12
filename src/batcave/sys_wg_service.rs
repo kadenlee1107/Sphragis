@@ -270,6 +270,13 @@ impl PeerId {
     pub fn as_u8(self) -> u8 { self.0 }
 }
 
+impl From<u8> for PeerId {
+    fn from(v: u8) -> Self { PeerId(v) }
+}
+
+impl PeerId {
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SysWgError {
     NoSlot,
@@ -369,6 +376,60 @@ pub fn peer_count() -> usize {
         }
         n
     })
+}
+
+/// True if the given peer slot is live (registered but possibly
+/// without a session yet). Used by the WG dispatcher to walk all
+/// registered peers when an InitMsg arrives.
+pub fn peer_slot_in_use(peer_id: PeerId) -> bool {
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => return false,
+    };
+    cave::with_cave_active(sys_wg_id, || unsafe {
+        let s = match state_ref() { Some(s) => s, None => return false };
+        let i = peer_id.0 as usize;
+        i < MAX_PEERS && s.peer_in_use[i] != 0
+    })
+}
+
+/// Return the pinned static pubkey for a peer slot, or None if the
+/// slot is empty. Public-key bytes are not sensitive — sys-wg
+/// exposes them so the dispatch layer can build outgoing
+/// ResponseMsg wire bytes (mac1 keyed on the initiator's pubkey).
+pub fn peer_static_pk(peer_id: PeerId) -> Option<[u8; wireguard::KEY_LEN]> {
+    let sys_wg_id = sys_caves::sys_wg_id()? as u16;
+    cave::with_cave_active(sys_wg_id, || unsafe {
+        let s = state_ref()?;
+        let i = peer_id.0 as usize;
+        if i >= MAX_PEERS || s.peer_in_use[i] == 0 { return None; }
+        Some(s.peer_static_pk[i])
+    })
+}
+
+/// Look up a peer slot by pinned static pubkey. Returns the
+/// `PeerId` if a slot is using that pubkey, else None.
+pub fn find_peer_by_pk(static_pk: &[u8; wireguard::KEY_LEN]) -> Option<PeerId> {
+    let sys_wg_id = sys_caves::sys_wg_id()? as u16;
+    cave::with_cave_active(sys_wg_id, || unsafe {
+        let s = state_ref()?;
+        for i in 0..MAX_PEERS {
+            if s.peer_in_use[i] != 0 && s.peer_static_pk[i] == *static_pk {
+                return Some(PeerId(i as u8));
+            }
+        }
+        None
+    })
+}
+
+/// Convenience: tear down whatever peer slot pins `static_pk`.
+/// No-op if no slot matches. Useful for selftests that want a
+/// clean slate without remembering the PeerId.
+pub fn close_peer_by_static_pk(static_pk: &[u8; wireguard::KEY_LEN]) -> Result<(), SysWgError> {
+    match find_peer_by_pk(static_pk) {
+        Some(id) => close_peer(id),
+        None => Ok(()),
+    }
 }
 
 /// Consume an InitMsg, derive `(c, h)`, install responder
