@@ -11,6 +11,111 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — sys-caves Arc 2.5: round-trip selftest fixed (NOT an MMU bug)
+
+**Context:** Arc 2 filed an "MMU swap return-path hang" — the
+worker ran cleanly under sys-wg's L1, but the shell task never
+resumed after the cross-cave transition. Suspected culprit (per
+the prior journal entry): TCR_EL1 / TTBR1 interaction or T0SZ
+mismatch in `setup_native_cave_l1`. **That hypothesis was wrong.**
+
+### Actual root cause: scheduler-priority-comparison bug
+
+`scheduler::schedule` ranks Ready tasks with:
+
+```rust
+let mut best_priority: u8 = 255;
+for ... {
+    if task.state == Ready && task.priority < best_priority { ... }
+}
+```
+
+`best_priority` starts at `u8::MAX = 255`, and the comparison is
+strict `<`. Kernel idle (task 0) has priority 255 (set in
+`process::init`). The strict comparison means `255 < 255 == false`
+— **task 0 was never selectable**.
+
+In normal operation that didn't matter, because higher-priority
+tasks always existed and task 0 was just the fallback. But when
+the Arc-2 worker self-terminated:
+
+  1. Worker runs, publishes TTBR0 to atomic, calls
+     `current_terminate` (state=Dead, yields).
+  2. Scheduler scan finds NO Ready task with priority strictly
+     less than 255 (worker is Dead; task 0 is Ready @ 255).
+  3. `schedule()` returns without switching tasks.
+  4. Worker resumes inside `current_terminate`'s yield loop,
+     ad infinitum.
+
+To the user it looked like the MMU return-swap had hung the
+kernel. To the *kernel* it had simply orphaned the runqueue.
+
+### Fix
+
+Three small changes, none in the MMU:
+
+  * `scheduler::schedule` — widen `best_priority` to `u16` and
+    initialise to 256. Now priority-255 Ready tasks are
+    selectable. Cast `task.priority as u16` for the compare.
+  * `process::current_terminate(-> !)` — new helper. Marks the
+    current task Dead and yields. Used by short-lived helper
+    threads so the scheduler stops re-selecting them in
+    preference to lower-priority callers.
+  * `cmd_sys_caves_selftest` (shell) — restored to the full
+    forward-and-back round-trip. Worker reads TTBR0, publishes,
+    `current_terminate()`s. Parent yields, verifies
+    `worker_ttbr0 == sys_wg_l1`, then verifies TTBR0 was either
+    restored to its pre-test value (`PRIMARY_L1` was set,
+    production cave path) or held at sys-wg's L1
+    (`PRIMARY_L1 == 0`, MMU-off-at-boot path; `switch_to_primary`
+    is correctly a no-op there).
+
+### Verification
+
+`scripts/qemu_sys_caves_selftest.py` (new) drives the selftest
+headlessly. Result:
+
+```
+worker TTBR0:  0x00000000bffff000   ← sys-wg's L1
+✓ forward swap: kernel-ns → sys-wg loaded the cave's L1
+TTBR0 after:   0x00000000bffff000
+✓ return swap: PRIMARY_L1 unset at boot (MMU-off path);
+  switch_to_primary correctly held; TTBR0 left at sys-wg L1
+✓ Arc-2 full round trip verified
+```
+
+Plus boot smoke + shell-history smoke pass unchanged.
+
+### Why the prior diagnosis was wrong
+
+The journal entry blamed "TCR_EL1 / TTBR1 interaction" but
+`src/batcave/linux/mmu.rs:528` explicitly notes the kernel runs
+*only* through TTBR0 (no TTBR1 split). The actual situation was
+that the kernel boots MMU-off in the serial-shell path
+(`setup_and_enable` only runs from the ELF loader), so TTBR0
+writes had no translation effect anyway. The hang was purely a
+scheduling livelock; the MMU swap is fine in both directions.
+
+### What this means for Arc 3
+
+  * Scheduler MMU hook is verified end-to-end.
+  * sys-wg cave has a valid L1 ready for the WireGuard code
+    relocation.
+  * Arc 3 can proceed: move `net::wireguard` body into a sys-wg
+    cave service callable over the IPC channel design from
+    `DESIGN_SYS_CAVES.md`.
+  * Open follow-up: enable MMU at kernel boot (call
+    `setup_and_enable` early) so the round-trip actually
+    exercises a translation change, not just a register write.
+    Tracked but not on the critical path.
+
+### Branch status
+
+`feat/cave-mmu-on-swap` (current). Will commit + push the fix +
+new test harness + journal entry.
+
+---
+
 ## 2026-05-12 — Mac — sys-caves Arc 2: sys-wg cave bring-up + bug surfaced
 
 **Context:** Arc 1 wired the scheduler MMU hook. Arc 2 spawns the

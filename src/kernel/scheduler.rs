@@ -41,14 +41,20 @@ pub fn schedule() {
         current.state = TaskState::Ready;
     }
 
-    // Find highest priority (lowest number) ready task
+    // Find highest priority (lowest number) ready task. `best`
+    // starts as 256 (u16) so even priority 255 (kernel idle) is
+    // strictly less than the initial bar — without that widening,
+    // task 0 was unselectable, and a self-terminating helper task
+    // could leave the runqueue with NO eligible Ready task, which
+    // caused schedule() to return without switching and trap the
+    // helper in its own current_terminate yield loop.
     let mut best_id: Option<TaskId> = None;
-    let mut best_priority: u8 = 255;
+    let mut best_priority: u16 = 256;
 
     for i in 0..MAX_TASKS {
         let task = process::get(TaskId(i as u16));
-        if task.state == TaskState::Ready && task.priority < best_priority {
-            best_priority = task.priority;
+        if task.state == TaskState::Ready && (task.priority as u16) < best_priority {
+            best_priority = task.priority as u16;
             best_id = Some(task.id);
         }
     }
