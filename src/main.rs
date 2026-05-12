@@ -150,6 +150,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     kernel::scheduler::init();
     kernel::ipc::init();
     kernel::pipe::init();
+    kernel::time::init_from_pl031();
     kernel::arch::init_exceptions();
     // (init_timer + GICv2 init removed — IRQ-driven preemption
     // hangs boot somewhere after the timer fires the first time.
@@ -376,10 +377,11 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
 
             // ═══════════════════════════════════════
             // PRE-AUTH KERNEL SELFTESTS (feature-gated).
-            // `pipe-selftest` is also available from the shell.
+            // `pipe-selftest` / `time-selftest` are also available
+            // from the shell.
             // ═══════════════════════════════════════
             #[cfg(feature = "selftest-on-boot")]
-            pipe_selftest_uart();
+            { pipe_selftest_uart(); time_selftest_uart(); }
 
             // ═══════════════════════════════════════
             // AUTHENTICATION GATE — must pass to proceed
@@ -503,6 +505,39 @@ fn pipe_selftest_uart() {
     pipe::release_end(wid2, PipeEnd::Write);
 
     uart::puts("[pipe-selftest] PASS\n");
+}
+
+/// Boot-side wall-clock selftest. Runs only with `selftest-on-boot`
+/// so a headless QEMU smoke can verify the RTC anchor before the
+/// auth gate consumes serial input. Prints `[time-selftest] PASS`
+/// or a specific FAIL reason.
+#[cfg(feature = "selftest-on-boot")]
+fn time_selftest_uart() {
+    use drivers::uart;
+    use kernel::time;
+
+    uart::puts("[time-selftest] start\n");
+    let m0 = time::monotonic_us();
+    let m1 = time::monotonic_us();
+    if m1 < m0 {
+        uart::puts("[time-selftest] FAIL: monotonic backwards\n");
+        return;
+    }
+    uart::puts("[time-selftest] ok  monotonic non-decreasing\n");
+
+    if !time::is_synced() {
+        uart::puts("[time-selftest] FAIL: realtime not synced (RTC missing?)\n");
+        return;
+    }
+    let r = time::realtime_secs();
+    if r < 1_735_689_600 {
+        uart::puts("[time-selftest] FAIL: realtime pre-2025\n");
+        return;
+    }
+    uart::puts("[time-selftest] ok  realtime >= 2025; now=");
+    time::print_unix_human(r, 0);
+    uart::puts(" UTC\n");
+    uart::puts("[time-selftest] PASS\n");
 }
 
 #[cfg(feature = "https-smoke-test")]
@@ -1268,6 +1303,7 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
     kernel::scheduler::init();
     kernel::ipc::init();
     kernel::pipe::init();
+    kernel::time::init_from_apple();
     kernel::arch::init_exceptions();
 
     // V-HV-GUEST-3: Under m1n1's hypervisor (EL1), the AIC, DART, DWC3

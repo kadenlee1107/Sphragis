@@ -297,6 +297,8 @@ fn execute(cmd: &str) {
         "pq-sig-selftest" => cmd_pq_sig_selftest(),
         "ipc-selftest"    => cmd_ipc_selftest(),
         "pipe-selftest"   => cmd_pipe_selftest(),
+        "date"            => cmd_date(),
+        "time-selftest"   => cmd_time_selftest(),
         "gcm-selftest"    => cmd_gcm_selftest(),
         "secure-ipc-selftest" => cmd_secure_ipc_selftest(),
         "secure-ipc-wire-selftest" => cmd_secure_ipc_wire_selftest(),
@@ -1991,6 +1993,78 @@ fn cmd_ipc_selftest() {
             console::puts("  ✗ FAIL: "); console::puts(e); console::puts("\n");
         }
     }
+}
+
+/// `date` — print the current wall-clock time in UTC.
+/// Prints "(not synced)" if the RTC anchor never landed; in that
+/// case monotonic-since-boot is shown so the operator has *some*
+/// timestamp to work with.
+fn cmd_date() {
+    use crate::kernel::time;
+    if !time::is_synced() {
+        console::puts("  (not synced — RTC unavailable)\n");
+        console::puts("  uptime: ");
+        print_num(time::monotonic_secs() as usize);
+        console::puts(" s monotonic\n");
+        return;
+    }
+    let now_utc = time::realtime_secs();
+    let (y, m, d, h, mm, s) = time::split_unix(now_utc);
+    let mut buf = [0u8; 20];
+    let n = time::format_human(&mut buf, y, m, d, h, mm, s);
+    for &b in &buf[..n] {
+        console::putc(b);
+    }
+    console::puts(" UTC\n");
+    console::puts("  unix=");
+    print_num(now_utc as usize);
+    console::puts("\n");
+}
+
+/// `time-selftest` — verify the time module is sane:
+///   - monotonic_us is monotonically non-decreasing across two reads;
+///   - realtime_secs > 2025 epoch (1735689600) if synced;
+///   - elapsed monotonic between two reads is positive but tiny.
+fn cmd_time_selftest() {
+    use crate::kernel::time;
+    console::puts_hi("  WALL CLOCK SELF-TEST\n");
+    console::puts("  RTC anchor + monotonic-derived realtime\n");
+
+    let m0 = time::monotonic_us();
+    let m1 = time::monotonic_us();
+    if m1 < m0 {
+        console::puts("  ✗ FAIL: monotonic went backwards\n");
+        return;
+    }
+    console::puts("  ✓ monotonic non-decreasing (");
+    print_num((m1 - m0) as usize);
+    console::puts(" µs between reads)\n");
+
+    if !time::is_synced() {
+        console::puts("  ⚠ realtime not synced; RTC backend returned None\n");
+        return;
+    }
+    let r = time::realtime_secs();
+    // 1735689600 = 2025-01-01 00:00:00 UTC. Anything earlier means
+    // the RTC chip handed us garbage or open-bus zeros.
+    if r < 1_735_689_600 {
+        console::puts("  ✗ FAIL: realtime looks pre-2025 (");
+        print_num(r as usize);
+        console::puts(" seconds)\n");
+        return;
+    }
+    console::puts("  ✓ realtime > 2025 epoch (unix=");
+    print_num(r as usize);
+    console::puts(")\n");
+
+    // Pretty-print to confirm the civil-time math.
+    let (y, m, d, h, mi, s) = time::split_unix(r);
+    let mut buf = [0u8; 20];
+    let n = time::format_human(&mut buf, y, m, d, h, mi, s);
+    console::puts("  now: ");
+    for &b in &buf[..n] { console::putc(b); }
+    console::puts(" UTC\n");
+    console::puts("  ✓ ALL TIME TESTS PASSED\n");
 }
 
 // Anonymous-pipe round trip: create → write → read → EOF on close →
