@@ -476,6 +476,8 @@ fn execute_inner(cmd: &str) {
         "audit-wipe"          => cmd_audit_wipe(),
         "mls-declassify"      => cmd_mls_declassify(parts[1], parts[2], parts[3]),
         "tpi-wired-ops-selftest" => cmd_tpi_wired_ops_selftest(),
+        "heap-stats"          => cmd_heap_stats(),
+        "heap-guard-selftest" => cmd_heap_guard_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -10224,6 +10226,127 @@ fn cmd_tpi_wired_ops_selftest() {
     cleanup_declassify(sys_wg_id);
     tpi::reset_for_test();
     console::puts("  ✓ TPI gates audit-wipe + mls-declassify end-to-end\n");
+}
+
+/// `heap-stats` — print the heap-guard counters (alloc / free /
+/// corruption). Quick post-incident pulse-check; production
+/// dashboards should sample these periodically.
+fn cmd_heap_stats() {
+    use crate::kernel::mm::guard;
+    let (a, f, c) = guard::stats();
+    console::puts("  heap-guard: alloc=");
+    print_num(a as usize);
+    console::puts(" free=");
+    print_num(f as usize);
+    console::puts(" corruption=");
+    print_num(c as usize);
+    console::puts("\n");
+}
+
+/// `heap-guard-selftest` — exercises the heap-guard detection
+/// path without taking the kernel down. Allocates a small block,
+/// deliberately corrupts each canary in turn, confirms the
+/// inspector reports the right fault, then restores the canary
+/// and frees normally.
+///
+/// Selftest design: we use `alloc::alloc::alloc` so we get the
+/// real global allocator (canaries are emitted), and we use the
+/// non-destructive `guard::inspect_user_ptr` to check the
+/// detection logic without triggering the production panic path.
+/// `guard::repair_for_test` puts the canary back so the eventual
+/// `alloc::alloc::dealloc` call sees an intact frame.
+fn cmd_heap_guard_selftest() {
+    use core::alloc::Layout;
+    use crate::kernel::mm::guard::{self, VerifyFault};
+    extern crate alloc;
+    console::puts_hi("  HEAP GUARD SELF-TEST\n");
+
+    // 64-byte payload, 8-byte align — typical kernel allocation.
+    let layout = match Layout::from_size_align(64, 8) {
+        Ok(l) => l,
+        Err(_) => { console::puts("  ✗ FAIL: bad layout\n"); return; }
+    };
+    let p = unsafe { alloc::alloc::alloc(layout) };
+    if p.is_null() {
+        console::puts("  ✗ FAIL: alloc returned null\n"); return;
+    }
+
+    // 1. Intact canaries verify Ok.
+    match unsafe { guard::inspect_user_ptr(p, 64) } {
+        Ok(()) => console::puts("  ✓ fresh allocation: both canaries valid\n"),
+        Err(_) => {
+            console::puts("  ✗ FAIL: fresh canaries didn't verify\n");
+            unsafe { alloc::alloc::dealloc(p, layout); }
+            return;
+        }
+    }
+
+    // 2. Corrupt the back canary (heap overflow simulation).
+    unsafe { core::ptr::write_volatile(p.add(64), 0xCC); }
+    match unsafe { guard::inspect_user_ptr(p, 64) } {
+        Err(VerifyFault::Overflow) => {
+            console::puts("  ✓ back-canary tamper -> Overflow detected\n");
+        }
+        other => {
+            console::puts("  ✗ FAIL: overflow not detected, got ");
+            print_fault(other);
+            unsafe { guard::repair_for_test(p, 64); }
+            unsafe { alloc::alloc::dealloc(p, layout); }
+            return;
+        }
+    }
+    unsafe { guard::repair_for_test(p, 64); }
+
+    // 3. Corrupt the front canary (heap underflow / alien ptr).
+    unsafe { core::ptr::write_volatile(p.sub(1), 0xDD); }
+    match unsafe { guard::inspect_user_ptr(p, 64) } {
+        Err(VerifyFault::UnderflowOrAlien) => {
+            console::puts("  ✓ front-canary tamper -> UnderflowOrAlien detected\n");
+        }
+        other => {
+            console::puts("  ✗ FAIL: underflow not detected, got ");
+            print_fault(other);
+            unsafe { guard::repair_for_test(p, 64); }
+            unsafe { alloc::alloc::dealloc(p, layout); }
+            return;
+        }
+    }
+    unsafe { guard::repair_for_test(p, 64); }
+
+    // 4. Overwrite the front canary with POISON to simulate the
+    //    post-free state, then re-inspect for DoubleFree.
+    let poison = *b"POISONPOISON1107";
+    unsafe { core::ptr::copy_nonoverlapping(poison.as_ptr(), p.sub(16), 16); }
+    match unsafe { guard::inspect_user_ptr(p, 64) } {
+        Err(VerifyFault::DoubleFree) => {
+            console::puts("  ✓ POISON canary -> DoubleFree detected\n");
+        }
+        other => {
+            console::puts("  ✗ FAIL: double-free not detected, got ");
+            print_fault(other);
+            unsafe { guard::repair_for_test(p, 64); }
+            unsafe { alloc::alloc::dealloc(p, layout); }
+            return;
+        }
+    }
+    unsafe { guard::repair_for_test(p, 64); }
+
+    // 5. Normal free path — verify-and-unwrap succeeds, block is
+    //    poisoned for subsequent double-free detection.
+    unsafe { alloc::alloc::dealloc(p, layout); }
+    console::puts("  ✓ heap-guard-selftest PASS\n");
+}
+
+fn print_fault(r: Result<(), crate::kernel::mm::guard::VerifyFault>) {
+    use crate::kernel::mm::guard::VerifyFault;
+    let msg = match r {
+        Ok(())                                  => "Ok",
+        Err(VerifyFault::DoubleFree)            => "DoubleFree",
+        Err(VerifyFault::UnderflowOrAlien)      => "UnderflowOrAlien",
+        Err(VerifyFault::Overflow)              => "Overflow",
+    };
+    console::puts(msg);
+    console::puts("\n");
 }
 
 fn cleanup_declassify(sys_wg_id: u16) {

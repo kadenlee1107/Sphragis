@@ -80,26 +80,70 @@ unsafe fn irq_restore(prev: u64) {
     }
 }
 
+/// Inner layout for guarded allocations: payload + 2 * GUARD_SIZE,
+/// aligned to at least GUARD_SIZE so the canary frames sit at 16-
+/// byte boundaries inside the block. Falls back to `None` when
+/// the caller's alignment exceeds GUARD_SIZE — those allocations
+/// skip the guard wrapper (rare in this kernel).
+fn guarded_layout(layout: Layout) -> Option<Layout> {
+    use crate::kernel::mm::guard::{FRAME_OVERHEAD, GUARD_SIZE};
+    if layout.align() > GUARD_SIZE { return None; }
+    let new_size = layout.size().checked_add(FRAME_OVERHEAD)?;
+    Layout::from_size_align(new_size, GUARD_SIZE).ok()
+}
+
 unsafe impl GlobalAlloc for KernelAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let saved = unsafe { irq_save() };
         let heap = unsafe { &mut *self.inner.get() };
-        let result = match heap.allocate_first_fit(layout) {
-            Ok(p) => p.as_ptr(),
-            Err(_) => ptr::null_mut(),
+        let result = if let Some(inner) = guarded_layout(layout) {
+            match heap.allocate_first_fit(inner) {
+                Ok(p) => {
+                    // SAFETY: heap just gave us a block of `inner.size()`
+                    // bytes (= layout.size() + 2*GUARD_SIZE). wrap_alloc
+                    // writes both canaries and returns inner_ptr+GUARD_SIZE.
+                    unsafe { crate::kernel::mm::guard::wrap_alloc(p.as_ptr(), layout.size()) }
+                }
+                Err(_) => ptr::null_mut(),
+            }
+        } else {
+            // High-alignment path: skip canaries entirely.
+            match heap.allocate_first_fit(layout) {
+                Ok(p) => p.as_ptr(),
+                Err(_) => ptr::null_mut(),
+            }
         };
         unsafe { irq_restore(saved); }
         result
     }
     unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
-        if !p.is_null() {
-            // V5-KMEM-002: scrub before returning memory to the free list.
-            for i in 0..layout.size() {
-                unsafe { core::ptr::write_volatile(p.add(i), 0); }
-            }
+        if p.is_null() { return; }
+        // V5-KMEM-002: scrub before returning memory to the free list.
+        for i in 0..layout.size() {
+            unsafe { core::ptr::write_volatile(p.add(i), 0); }
         }
         let saved = unsafe { irq_save() };
-        if let Some(nn) = core::ptr::NonNull::new(p) {
+        if let Some(inner) = guarded_layout(layout) {
+            // SAFETY: paired with the wrap_alloc above — same payload size,
+            // same user_ptr that came back from alloc. verify_and_unwrap
+            // checks both canaries and poisons the front canary so a
+            // second free of this address fires the corruption detector.
+            match unsafe { crate::kernel::mm::guard::verify_and_unwrap(p, layout.size()) } {
+                Ok(inner_ptr) => {
+                    if let Some(nn) = core::ptr::NonNull::new(inner_ptr) {
+                        let heap = unsafe { &mut *self.inner.get() };
+                        unsafe { heap.deallocate(nn, inner); }
+                    }
+                }
+                Err(fault) => {
+                    // Re-enable IRQs before panicking so the panic
+                    // handler doesn't deadlock waiting on a sub-system
+                    // that wants IRQs.
+                    unsafe { irq_restore(saved); }
+                    crate::kernel::mm::guard::panic_on_fault(fault, p as usize);
+                }
+            }
+        } else if let Some(nn) = core::ptr::NonNull::new(p) {
             let heap = unsafe { &mut *self.inner.get() };
             unsafe { heap.deallocate(nn, layout); }
         }
