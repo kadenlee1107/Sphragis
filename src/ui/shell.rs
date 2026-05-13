@@ -470,6 +470,7 @@ fn execute_inner(cmd: &str) {
         "secmark-recv-selftest" => cmd_secmark_recv_selftest(),
         "te-obj-selftest"     => cmd_te_obj_selftest(),
         "calipso-selftest"    => cmd_calipso_selftest(),
+        "mls-ipc-binding-selftest" => cmd_mls_ipc_binding_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -9675,6 +9676,108 @@ fn cmd_calipso_selftest() {
     console::puts("  ✓ CALIPSO: RFC 5570 encode/parse + checksum + DOI gate verified\n");
 }
 
+/// `mls-ipc-binding-selftest` — gov-grade §3.2 hardening: the MLS
+/// IPC mailbox now AEAD-binds every message under
+/// (sender, sensitivity, integrity) as AAD. A memory-corrupting
+/// attacker who flips any of those fields invalidates the
+/// Poly1305 tag, so `recv` returns `MlsIpcError::AeadFail`
+/// instead of delivering the body under a downgraded label.
+///
+///   1. sys-wg at Secret/SystemTrusted sends a message to itself.
+///   2. recv clean -> ALLOW.
+///   3. Send again, tamper the sensitivity byte from S to U at
+///      rest, recv -> AeadFail. The cave's BLP/Biba checks
+///      would have permitted the (now U) message; AEAD catches
+///      the tamper anyway.
+///   4. Send again, tamper one byte of the body, recv -> AeadFail.
+fn cmd_mls_ipc_binding_selftest() {
+    use crate::batcave::cave::{self, Integrity, Sensitivity};
+    use crate::batcave::mls_ipc::{self, MlsIpcError};
+    use crate::batcave::sys_caves;
+
+    console::puts_hi("  MLS-IPC AEAD-BINDING SELF-TEST\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => { console::puts("  ✗ FAIL: sys-wg not initialised\n"); return; }
+    };
+
+    let cleanup = |sys_wg_id: u16| {
+        mls_ipc::drain(sys_wg_id);
+        let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+        let _ = cave::set_integrity_by_name("sys-wg",   Integrity::Untrusted);
+    };
+
+    cleanup(sys_wg_id);
+    let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Secret);
+    let _ = cave::set_integrity_by_name("sys-wg",   Integrity::SystemTrusted);
+
+    // (1) Clean send + recv.
+    if let Err(e) = mls_ipc::send(sys_wg_id, sys_wg_id, b"label-bound-msg") {
+        console::puts("  ✗ FAIL: clean send: "); print_err(e);
+        cleanup(sys_wg_id); return;
+    }
+    let mut buf = [0u8; 64];
+    match mls_ipc::recv(sys_wg_id, &mut buf) {
+        Ok((_src, lvl, n))
+            if Sensitivity::from_u8(lvl) == Sensitivity::Secret
+            && &buf[..n] == b"label-bound-msg" => {
+            console::puts("  ✓ clean send + recv round trip\n");
+        }
+        _ => {
+            console::puts("  ✗ FAIL: clean recv didn't return plaintext\n");
+            cleanup(sys_wg_id); return;
+        }
+    }
+
+    // (2) Send again, tamper the sensitivity from S (2) to U (0).
+    if let Err(e) = mls_ipc::send(sys_wg_id, sys_wg_id, b"will-be-tampered") {
+        console::puts("  ✗ FAIL: send: "); print_err(e);
+        cleanup(sys_wg_id); return;
+    }
+    unsafe { mls_ipc::tamper_test_flip_sensitivity(sys_wg_id,
+        Sensitivity::Unclassified as u8); }
+    match mls_ipc::recv(sys_wg_id, &mut buf) {
+        Err(MlsIpcError::AeadFail) => {
+            console::puts("  ✓ sensitivity tamper (S -> U) -> AeadFail\n");
+        }
+        Ok(_) => {
+            console::puts("  ✗ FAIL: tamper bypassed AEAD\n");
+            cleanup(sys_wg_id); return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error: "); print_err(e);
+            cleanup(sys_wg_id); return;
+        }
+    }
+    // Drain the still-queued tampered message so it doesn't leak
+    // into the next case.
+    mls_ipc::drain(sys_wg_id);
+
+    // (3) Send again, tamper one body byte.
+    if let Err(e) = mls_ipc::send(sys_wg_id, sys_wg_id, b"will-be-body-tampered") {
+        console::puts("  ✗ FAIL: send: "); print_err(e);
+        cleanup(sys_wg_id); return;
+    }
+    unsafe { mls_ipc::tamper_test_flip_body(sys_wg_id, 3); }
+    match mls_ipc::recv(sys_wg_id, &mut buf) {
+        Err(MlsIpcError::AeadFail) => {
+            console::puts("  ✓ body tamper -> AeadFail\n");
+        }
+        Ok(_) => {
+            console::puts("  ✗ FAIL: body tamper bypassed AEAD\n");
+            cleanup(sys_wg_id); return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error on body tamper: "); print_err(e);
+            cleanup(sys_wg_id); return;
+        }
+    }
+
+    cleanup(sys_wg_id);
+    console::puts("  ✓ MLS-IPC AEAD-bound: sensitivity + body tamper both rejected\n");
+}
+
 fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
     use crate::batcave::mls_ipc::MlsIpcError;
     console::puts(match e {
@@ -9685,6 +9788,7 @@ fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
         MlsIpcError::Empty     => "Empty\n",
         MlsIpcError::BadId     => "BadId\n",
         MlsIpcError::TooLong   => "TooLong\n",
+        MlsIpcError::AeadFail  => "AeadFail\n",
     });
 }
 
