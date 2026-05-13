@@ -96,6 +96,12 @@ static mut FILES: [FileEntry; MAX_FILES] = {
     [EMPTY; MAX_FILES]
 };
 
+/// Per-file taint bitmap (gov-grade §3.2 information-flow slice).
+/// Parallel to FILES — indexed the same way. Each file carries 32
+/// orthogonal taint sources; reads/writes propagate them between
+/// caves and files. See `cave.rs` for the propagation model.
+static mut FILE_TAINT: [u32; MAX_FILES] = [0u32; MAX_FILES];
+
 static mut FILE_COUNT: usize = 0;
 static mut MASTER_KEY: [u8; 32] = [0u8; 32];
 // V5-CRYPTO-002 fix: NONCE_COUNTER is now atomic. The old `static mut
@@ -457,7 +463,18 @@ pub fn ns_create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         }
     };
     match create(full_name, data) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            // Information-flow propagation on write: the newly-
+            // created file inherits every taint bit the writer
+            // cave currently carries. Admin / kernel context
+            // contributes 0 — same passive shape as the rest of
+            // the cave-context-aware paths.
+            let cave_t = crate::batcave::cave::active_taint();
+            if cave_t != 0 {
+                add_file_taint(full_name, cave_t);
+            }
+            Ok(())
+        }
         Err(e) => {
             crate::batcave::cave::active_release_pages(pages);
             Err(e)
@@ -508,7 +525,81 @@ pub fn ns_read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
             return Err("te-obj: read denied by policy");
         }
     }
-    read(full_name, buf)
+    let result = read(full_name, buf);
+    // Information-flow propagation: on successful read the active
+    // cave inherits every taint bit the file carried. No-op when
+    // file_taint is 0 (the common case) so the hot path stays
+    // cheap. Admin / kernel context (no active cave) silently
+    // discards the propagation — same shape as the MLS/Biba
+    // checks above.
+    if result.is_ok() {
+        let t = file_taint(full_name);
+        if t != 0 {
+            crate::batcave::cave::active_add_taint(t);
+        }
+    }
+    result
+}
+
+/// Look up the taint bitmap for `full_name` (already mount-prefix
+/// composed). Returns 0 for unknown files — fail-open at lookup
+/// time matches BatFS's "no entry = no policy" shape used by
+/// labels and object types.
+pub fn file_taint(full_name: &str) -> u32 {
+    unsafe {
+        for i in 0..MAX_FILES {
+            if FILES[i].state == FileState::Active
+                && FILES[i].name_str() == full_name
+            {
+                return FILE_TAINT[i];
+            }
+        }
+    }
+    0
+}
+
+/// Set the taint bitmap on `full_name`. Used by the
+/// `taint-stamp` admin path so an operator can mark a file as
+/// PII / compliance-restricted / etc. before it ever gets read.
+pub fn set_file_taint(full_name: &str, bits: u32) -> Result<(), &'static str> {
+    unsafe {
+        for i in 0..MAX_FILES {
+            if FILES[i].state == FileState::Active
+                && FILES[i].name_str() == full_name
+            {
+                FILE_TAINT[i] = bits;
+                return Ok(());
+            }
+        }
+    }
+    Err("taint: no such file")
+}
+
+/// OR `bits` into `full_name`'s existing taint. Idempotent —
+/// repeated calls with the same bits leave the bitmap unchanged.
+/// Used by `ns_create` to inherit the writer cave's taint.
+pub fn add_file_taint(full_name: &str, bits: u32) {
+    unsafe {
+        for i in 0..MAX_FILES {
+            if FILES[i].state == FileState::Active
+                && FILES[i].name_str() == full_name
+            {
+                FILE_TAINT[i] |= bits;
+                return;
+            }
+        }
+    }
+}
+
+/// Zero the taint of every file. Used by selftests + the
+/// `taint-reset-all` admin operation.
+pub fn clear_all_file_taints() {
+    unsafe {
+        let ptr = core::ptr::addr_of_mut!(FILE_TAINT);
+        for i in 0..MAX_FILES {
+            (*ptr)[i] = 0;
+        }
+    }
 }
 
 /// Like `obj_type_of` but takes a fully-composed (already prefixed)
@@ -966,6 +1057,10 @@ pub fn delete(name: &str) -> Result<(), &'static str> {
 
         entry.state = FileState::Deleted;
         FILE_COUNT -= 1;
+        // Clear the slot's taint bitmap so a future file that
+        // reuses this slot starts at 0 instead of inheriting the
+        // deleted file's taint set.
+        FILE_TAINT[slot] = 0;
     }
 
     // wipe the slot's data sectors and clear the

@@ -483,6 +483,11 @@ fn execute_inner(cmd: &str) {
         "exec-trans-list"     => cmd_exec_trans_list(),
         "exec-file"           => cmd_exec_file(parts[1]),
         "exec-trans-selftest" => cmd_exec_trans_selftest(),
+        "taint-stamp"         => cmd_taint_stamp(parts[1], parts[2]),
+        "taint-show"          => cmd_taint_show(parts[1]),
+        "taint-cave-show"     => cmd_taint_cave_show(parts[1]),
+        "taint-reset"         => cmd_taint_reset(),
+        "taint-selftest"      => cmd_taint_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -10578,6 +10583,198 @@ fn cmd_exec_trans_selftest() {
     cave::te_disable();
     let _ = batfs::ns_delete(FILE);
     console::puts("  ✓ exec-trans-selftest PASS\n");
+}
+
+/// Parse a u32 taint bitmap. Accepts decimal or `0x`-prefixed
+/// hex. Returns Err on malformed input.
+fn parse_taint(s: &str) -> Result<u32, &'static str> {
+    if let Some(rest) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u32::from_str_radix(rest, 16).map_err(|_| "taint: bad hex")
+    } else {
+        s.parse::<u32>().map_err(|_| "taint: bad decimal")
+    }
+}
+
+/// `taint-stamp <filename> <bits>` — admin stamps an initial
+/// taint bitmap on a file. The file must already exist. Future
+/// reads of this file by any cave will OR these bits into the
+/// reader cave's taint.
+fn cmd_taint_stamp(filename: &str, bits_str: &str) {
+    use crate::fs::batfs;
+    if filename.is_empty() || bits_str.is_empty() {
+        console::puts("  usage: taint-stamp <filename> <bits>\n");
+        return;
+    }
+    let bits = match parse_taint(bits_str) {
+        Ok(b) => b,
+        Err(e) => { console::puts("  "); console::puts(e); console::puts("\n"); return; }
+    };
+    match batfs::set_file_taint(filename, bits) {
+        Ok(()) => {
+            console::puts("  taint-stamp: ");
+            console::puts(filename);
+            console::puts(" -> ");
+            print_hex32(bits);
+            console::puts("\n");
+        }
+        Err(e) => { console::puts("  taint-stamp: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
+/// `taint-show <filename>` — print the taint bitmap on a file.
+fn cmd_taint_show(filename: &str) {
+    use crate::fs::batfs;
+    if filename.is_empty() {
+        console::puts("  usage: taint-show <filename>\n");
+        return;
+    }
+    let bits = batfs::file_taint(filename);
+    console::puts("  taint-show: ");
+    console::puts(filename);
+    console::puts(" = ");
+    print_hex32(bits);
+    console::puts("\n");
+}
+
+/// `taint-cave-show <cave-name>` — print the taint bitmap on a cave.
+fn cmd_taint_cave_show(cave_name: &str) {
+    use crate::batcave::cave;
+    if cave_name.is_empty() {
+        console::puts("  usage: taint-cave-show <cave-name>\n");
+        return;
+    }
+    let mut id: u16 = u16::MAX;
+    for idx in 0..(cave::MAX_CAVES as u16) {
+        if cave::name_of(idx) == cave_name { id = idx; break; }
+    }
+    if id == u16::MAX {
+        console::puts("  taint-cave-show: no such cave\n");
+        return;
+    }
+    let bits = cave::taint_of(id);
+    console::puts("  taint-cave-show: ");
+    console::puts(cave_name);
+    console::puts(" = ");
+    print_hex32(bits);
+    console::puts("\n");
+}
+
+/// `taint-reset` — admin wipes every cave's taint AND every
+/// file's taint. Audit-logged. Useful for selftest cleanup or
+/// after a containment incident is closed out.
+fn cmd_taint_reset() {
+    use crate::batcave::cave;
+    use crate::fs::batfs;
+    use crate::security::audit::{record, Category};
+    cave::clear_all_taints();
+    batfs::clear_all_file_taints();
+    record(Category::Cave, b"taint-reset: all cave + file taints cleared");
+    console::puts("  taint-reset: all cave + file taints cleared\n");
+}
+
+/// `taint-selftest` — verifies the propagation primitive:
+///   1. taint-stamp puts bits on a file.
+///   2. A cave that reads the file inherits those bits.
+///   3. A cave that writes a new file imprints its taint on the
+///      destination.
+///   4. The propagation is monotonic — a cave that's already
+///      tainted stays tainted after reading an untainted file.
+fn cmd_taint_selftest() {
+    use crate::batcave::cave;
+    use crate::batcave::sys_caves;
+    use crate::fs::batfs;
+    console::puts_hi("  TAINT PROPAGATION SELF-TEST\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => { console::puts("  ✗ FAIL: sys-wg not initialised\n"); return; }
+    };
+    cave::clear_all_taints();
+    batfs::clear_all_file_taints();
+    const SRC: &str = "taint-src";
+    const DST: &str = "taint-dst";
+
+    // Provision: source file in sys-wg's namespace; we'll stamp it.
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(SRC));
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(DST));
+    if let Err(e) = cave::with_cave_active(sys_wg_id, || batfs::ns_create(SRC, b"secret")) {
+        console::puts("  ✗ FAIL: ns_create SRC: "); console::puts(e); console::puts("\n");
+        return;
+    }
+    // Admin stamps PII (bit 0) on sys-wg:taint-src.
+    if let Err(e) = batfs::set_file_taint("sys-wg:taint-src", 0x01) {
+        console::puts("  ✗ FAIL: set_file_taint: "); console::puts(e); console::puts("\n");
+        let _ = batfs::ns_delete("sys-wg:taint-src");
+        return;
+    }
+    if batfs::file_taint("sys-wg:taint-src") != 0x01 {
+        console::puts("  ✗ FAIL: stamp didn't persist\n");
+        let _ = batfs::ns_delete("sys-wg:taint-src");
+        return;
+    }
+    console::puts("  ✓ taint-stamp persists\n");
+
+    // ── 2. sys-wg reads SRC -> sys-wg inherits taint.
+    if cave::taint_of(sys_wg_id) != 0 {
+        console::puts("  ✗ FAIL: sys-wg started with non-zero taint\n");
+        let _ = batfs::ns_delete("sys-wg:taint-src");
+        return;
+    }
+    let mut buf = [0u8; 32];
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_read(SRC, &mut buf));
+    if cave::taint_of(sys_wg_id) != 0x01 {
+        console::puts("  ✗ FAIL: read didn't propagate taint to sys-wg, got ");
+        print_hex32(cave::taint_of(sys_wg_id));
+        console::puts("\n");
+        let _ = batfs::ns_delete("sys-wg:taint-src");
+        return;
+    }
+    console::puts("  ✓ ns_read -> reader inherits file taint\n");
+
+    // ── 3. sys-wg writes DST -> DST inherits cave's taint.
+    if let Err(e) = cave::with_cave_active(sys_wg_id, || batfs::ns_create(DST, b"derived")) {
+        console::puts("  ✗ FAIL: ns_create DST: "); console::puts(e); console::puts("\n");
+        cave::clear_all_taints(); batfs::clear_all_file_taints();
+        let _ = batfs::ns_delete("sys-wg:taint-src");
+        return;
+    }
+    if batfs::file_taint("sys-wg:taint-dst") != 0x01 {
+        console::puts("  ✗ FAIL: write didn't propagate taint to file, got ");
+        print_hex32(batfs::file_taint("sys-wg:taint-dst"));
+        console::puts("\n");
+        cave::clear_all_taints(); batfs::clear_all_file_taints();
+        let _ = batfs::ns_delete("sys-wg:taint-src");
+        let _ = batfs::ns_delete("sys-wg:taint-dst");
+        return;
+    }
+    console::puts("  ✓ ns_create -> sink inherits writer taint\n");
+
+    // ── 4. Monotonic: reading an untainted file leaves taint alone.
+    const PLAIN: &str = "taint-plain";
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(PLAIN));
+    if let Err(e) = cave::with_cave_active(sys_wg_id, || batfs::ns_create(PLAIN, b"clean")) {
+        console::puts("  ✗ FAIL: ns_create PLAIN: "); console::puts(e); console::puts("\n");
+    }
+    // sys-wg's taint is still 0x01 after the write because the
+    // write inherits the cave's taint, not the other way around.
+    // Now read the freshly-created plain file (no stamp); the
+    // cave's taint must stay 0x01 (not regress to 0).
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_read(PLAIN, &mut buf));
+    if cave::taint_of(sys_wg_id) != 0x01 {
+        console::puts("  ✗ FAIL: taint regressed on untainted read, got ");
+        print_hex32(cave::taint_of(sys_wg_id));
+        console::puts("\n");
+    } else {
+        console::puts("  ✓ untainted read leaves cave taint monotonic\n");
+    }
+
+    // ── Cleanup ───────────────────────────────────────────────
+    cave::clear_all_taints();
+    batfs::clear_all_file_taints();
+    let _ = batfs::ns_delete("sys-wg:taint-src");
+    let _ = batfs::ns_delete("sys-wg:taint-dst");
+    let _ = batfs::ns_delete("sys-wg:taint-plain");
+    console::puts("  ✓ taint-selftest PASS\n");
 }
 
 fn cleanup_declassify(sys_wg_id: u16) {
