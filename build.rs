@@ -46,14 +46,26 @@ fn main() {
     // to reject certs whose notBefore is in the future. Operators
     // can override at runtime once a verified time source lands
     // (out of scope for this PR).
-    let build_unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        // 2026-01-01 floor — a clock-skewed build host must not
-        // accidentally produce a binary that accepts pre-2026 certs
-        // as "from the future".
-        .unwrap_or(1_735_689_600);
+    // Gov-grade §3.11 (reproducible builds): respect SOURCE_DATE_EPOCH
+    // (de-facto convention popularised by reproducible-builds.org) so
+    // a third party running `scripts/repro_build.sh` against the same
+    // git rev produces a bit-identical kernel. Falls back to
+    // SystemTime::now() in interactive dev builds where the env var
+    // isn't set.
+    let build_unix: i64 = std::env::var("SOURCE_DATE_EPOCH")
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                // 2026-01-01 floor — a clock-skewed build host must
+                // not accidentally produce a binary that accepts
+                // pre-2026 certs as "from the future".
+                .unwrap_or(1_735_689_600)
+        });
     println!("cargo:rustc-env=BAT_OS_BUILD_UNIX={build_unix}");
+    println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
     // The env is implicit-input to the compile, so cargo doesn't know
     // to rerun on time changes. Force a rerun whenever build.rs itself
     // changes — that's the closest cheap signal.
