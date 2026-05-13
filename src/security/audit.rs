@@ -275,6 +275,32 @@ pub fn count() -> usize { HEAD.load(Ordering::Relaxed) }
 /// tampered with by flooding.
 pub fn evicted() -> usize { EVICTED.load(Ordering::Relaxed) }
 
+/// Zero every audit ring entry + reset HEAD/EVICTED counters.
+/// Designed to be a TPI-gated privileged op (`audit-wipe` shell
+/// command). Sole exposure of mutating the ring outside of
+/// `record()`. Doesn't touch `audit_chain::CHAIN` — the chain
+/// table is reset implicitly because all entries it covers are
+/// gone, so a fresh `verify_chain` walks zero entries.
+///
+/// SAFETY: must not race with a concurrent `record()` or
+/// `audit_chain::append_chain` — cooperative single-CPU makes
+/// this trivial; the privileged caller holds the shell input
+/// path and no other writer exists.
+pub unsafe fn wipe_ring() {
+    unsafe {
+        let ring_ptr = core::ptr::addr_of_mut!(RING);
+        for i in 0..RING_CAP {
+            (*ring_ptr)[i] = Entry::empty();
+        }
+    }
+    HEAD.store(0, Ordering::Relaxed);
+    EVICTED.store(0, Ordering::Relaxed);
+    FIRST_OVERFLOW_WARNED.store(false, Ordering::Relaxed);
+    // Also reset the chain table so verify_chain over the empty
+    // ring doesn't find dangling hashes.
+    crate::security::audit_chain::reset_for_test();
+}
+
 /// Serialize the whole resident ring (oldest-first) into `out` as
 /// newline-delimited records. Returns the number of bytes written.
 /// Used by `audit-flush` to push the buffer into BatFS as one file.
