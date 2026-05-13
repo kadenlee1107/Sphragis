@@ -1128,7 +1128,7 @@ deferral rationale:
 After this refresh, the still-open P1 list narrows to:
 
   * 038 init system / service manager (`main.rs` IS the init today)
-  * 039 shell `|` job control / pipes (needs output-capture refactor)
+  * 039 shell `|` job control / pipes — **output-capture refactor shipped.** `console::begin_capture` / `end_capture` redirect writes to a 32 KiB buffer (serial mirror retained); shell `parse_redirect` is quote-aware so `cmd > /file` captures and `write hello "world > foo"` doesn't. `redirect-selftest` proves the round trip ends in BatFS via `ns_create` + `ns_read`. Real `|` pipes (commands that consume a buffer-input shape) are the next slice this primitive unblocks.
   * 040 Unicode / locale / IME
   * 041 Accessibility services
   * 042 HTTP/2 + HTTP/3
