@@ -20,8 +20,12 @@
 *.log
 # Supply-chain transparency log is the EXCEPTION — it's the
 # committed audit trail of every signed release (§3.11). Not
-# regenerable, must be in source control.
+# regenerable, must be in source control. Same for the
+# Rekor-compatible Merkle log + signed tree head under `rekor/`.
 !transparency.log
+!rekor/
+!rekor/log
+!rekor/sth
 
 # Per-session QEMU smoke output, screenshots, capture noise.
 # Everything under logs/ is regenerable by running the smoke scripts.
