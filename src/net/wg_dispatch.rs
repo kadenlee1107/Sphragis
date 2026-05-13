@@ -199,29 +199,11 @@ pub fn send_transport(peer_id: PeerId, plaintext: &[u8]) -> Result<(), WgError> 
         None => return Err(WgError::BadLen),
     };
 
-    // Look up the session's their_sender_index (= the
-    // receiver_index field we put in outbound transport
-    // frames). Also collect our own send_counter via a wrap
-    // call — that's encapsulated inside sys-wg, but the
-    // returned ciphertext already has the AEAD applied; for
-    // the wire framing we just need the receiver_index +
-    // counter we used. The counter comes back as part of the
-    // wrap; we need our send_counter that was used. sys-wg
-    // bumps it internally, so we don't actually need to know
-    // — but encode_transport_msg DOES need a counter for the
-    // wire field, and sys-wg's transport_send uses
-    // keys.send_counter and bumps it. We mirror that here by
-    // tracking the per-session counter externally too — for
-    // a request-response single-packet test this can be 0.
-    //
-    // For real WG you need to KNOW which counter sys-wg used.
-    // Simplest is a new IPC opcode that returns (ct, counter)
-    // jointly. For this slice we punt: counter 0, single
-    // packet. A future arc returns (ct, counter) from the
-    // wrap IPC.
-    let counter: u64 = 0;
-    let ct = match sys_wg_ipc::request_wrap(peer_id.as_u8(), plaintext) {
-        Some(c) => c,
+    // OP_WRAP now returns (counter, ciphertext) — the counter
+    // is the AEAD nonce sys-wg used, which is what the wire
+    // transport message's counter field needs.
+    let (counter, ct) = match sys_wg_ipc::request_wrap_full(peer_id.as_u8(), plaintext) {
+        Some(pair) => pair,
         None => return Err(WgError::KdfFail),
     };
 
