@@ -107,6 +107,22 @@ pub unsafe fn raw_ring() -> &'static [Entry; RING_CAP] {
     unsafe { &*core::ptr::addr_of!(RING) }
 }
 
+/// Test-only: flip one byte of an entry's `msg` field so the chain
+/// verifier has something to detect. Used by `audit-chain-selftest`
+/// to prove tamper detection actually fires. SAFETY: must not race
+/// with a concurrent `record()` — the cooperative single-CPU model
+/// makes this trivial for the selftest path.
+#[allow(dead_code)]
+pub unsafe fn tamper_test_flip_msg_byte(absolute_index: usize, msg_offset: usize) {
+    let slot = absolute_index % RING_CAP;
+    if msg_offset >= MSG_LEN { return; }
+    unsafe {
+        let p = core::ptr::addr_of_mut!(RING) as *mut Entry;
+        let entry = &mut *p.add(slot);
+        entry.msg[msg_offset] ^= 0xFF;
+    }
+}
+
 /// Copy the most-recent `n` entries (capped at RING_CAP) into the
 /// caller's buffer. Returns how many were actually written. The
 /// AI agent's `query_audit_ring` tool dispatch calls this — it's
@@ -189,6 +205,26 @@ pub fn record(cat: Category, msg: &[u8]) {
             e.msg[i] = if b >= 0x20 && b < 0x7F { b } else { b'?' };
         }
         if copy < MSG_LEN { e.msg[copy] = 0; }
+
+        // Tamper-evident chain (§3.7 of the gap audit). Hash this
+        // entry against the prior chain link, store in
+        // `audit_chain::CHAIN[slot]`. A later `verify_chain` walks
+        // the ring from start..head and recomputes — any silent
+        // edit to an entry's canonical bytes turns into a hash
+        // mismatch at that entry's index.
+        //
+        // `append_chain` takes `head` = the absolute index of THIS
+        // entry (the OLD count, before fetch_add returned). So we
+        // pass `h`, not `h + 1`. `prev_slot = (h - 1) % RING_CAP`
+        // inside append_chain then points at the previous entry's
+        // chain hash for h > 0 (and falls back to the all-zero
+        // genesis for h == 0).
+        //
+        // Single-writer assumption is the same one `audit::record`
+        // already makes: HEAD is a fetch_add atomic + slot writes
+        // are not concurrent across CPUs in our cooperative single-
+        // CPU model. The `unsafe` here piggybacks on that.
+        crate::security::audit_chain::append_chain(slot, &RING[slot], h);
     }
 }
 
