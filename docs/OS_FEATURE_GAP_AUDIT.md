@@ -615,7 +615,15 @@ syscall filter). Default-deny posture. **Two-axis MLS lattice (2026-05-12)**:
     `integ-show`. Selftests: `mls-selftest`, `mls-ipc-selftest`,
     `biba-selftest`.
 ❌ Missing:
-- Labeled networking (no SECMARK / CALIPSO / CIPSO).
+- Labeled networking is partial — **CIPSO IP option emit + parse
+  shipped (2026-05-13)**: `ip::send` injects a CIPSO option
+  carrying the active cave's sensitivity byte whenever it's
+  non-Unclassified (DOI = "BBOS" = 0x42424F53);
+  `ip::parse_cipso_sensitivity` extracts the level for
+  receiver-side checks. Still missing: receiver-side enforcement
+  (today the byte is on the wire, but a receiving Bat_OS
+  doesn't gate delivery on it), CALIPSO (IPv6 equivalent),
+  SECMARK rule integration.
 - Type enforcement à la SELinux (we have BLP + Biba confidentiality
   & integrity; no domain transitions, no rich type matrix).
 - Compartments / categories (we have linear lattices; CC needs

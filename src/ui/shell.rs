@@ -458,6 +458,8 @@ fn execute_inner(cmd: &str) {
         "integ-show"          => cmd_integ_show(),
         "biba-selftest"       => cmd_biba_selftest(),
         "mls-binding-selftest" => cmd_mls_binding_selftest(),
+        "secmark-test-send"   => cmd_secmark_test_send(parts[1], parts[2]),
+        "secmark-selftest"    => cmd_secmark_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -8946,6 +8948,161 @@ fn cmd_mls_binding_selftest() {
 
     cleanup(sys_wg_id);
     console::puts("  ✓ MLS labels AEAD-bound: tamper on sens OR integ rejected at decrypt\n");
+}
+
+/// `secmark-test-send <ip:port> <u|c|s|ts>` — gov-grade §3.2
+/// SECMARK slice driver. Sets sys-wg's sensitivity to the
+/// supplied level, runs an outbound UDP packet from within
+/// `with_cave_active(sys_wg_id, ...)` so the active sensitivity
+/// at `udp::send` time matches, and emits a single 1-byte UDP
+/// datagram to the target. The host-side harness captures the
+/// packet and asserts the CIPSO option carries the expected
+/// sensitivity byte.
+fn cmd_secmark_test_send(target: &str, level: &str) {
+    use crate::batcave::cave::{self, Sensitivity};
+    use crate::batcave::sys_caves;
+
+    if target.is_empty() || level.is_empty() {
+        console::puts("  usage: secmark-test-send <ip:port> <u|c|s|ts>\n");
+        return;
+    }
+    let (ip_s, port_s) = match target.rsplit_once(':') {
+        Some(p) => p,
+        None => { console::puts("  bad target (expected ip:port)\n"); return; }
+    };
+    let ip = parse_ip(ip_s);
+    if ip == 0 { console::puts("  invalid ip\n"); return; }
+    let port: u16 = match port_s.parse() {
+        Ok(v) if v > 0 => v,
+        _ => { console::puts("  invalid port\n"); return; }
+    };
+    let sens = match Sensitivity::parse(level) {
+        Some(s) => s,
+        None => { console::puts("  bad level — try u/c/s/ts\n"); return; }
+    };
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => { console::puts("  ✗ FAIL: sys-wg not initialised\n"); return; }
+    };
+
+    let _ = cave::set_sensitivity_by_name("sys-wg", sens);
+    console::puts_hi("  SECMARK TEST SEND\n");
+    console::puts("  cave: sys-wg ("); console::puts(sens.as_str());
+    console::puts("), target: "); console::puts(target); console::puts("\n");
+
+    let r = cave::with_cave_active(sys_wg_id, || {
+        crate::net::udp::send(ip, 53210, port, b"\x00")
+    });
+    let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+    match r {
+        Ok(()) => {
+            console::puts("  ✓ SECMARK-SENT (CIPSO sens=");
+            console::puts(sens.as_str()); console::puts(")\n");
+        }
+        Err(e) => { console::puts("  ✗ udp::send: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
+/// `secmark-selftest` — drives `ip::send`'s CIPSO emission +
+/// `ip::parse_cipso_sensitivity` against three scenarios entirely
+/// in-kernel (no host-side capture required):
+///
+///   1. Default sensitivity (Unclassified): the captured IP wire
+///      bytes have IHL=5 (no options).
+///   2. Sensitivity raised to Secret: IHL=8 (32-byte header), the
+///      CIPSO type byte 0x86 lives at offset 20, and
+///      `parse_cipso_sensitivity` extracts the right level.
+///   3. Wrong DOI: a synthetic packet with a different DOI is
+///      rejected by the parser (returns None).
+///
+/// Captures wire bytes via a `build_test_packet` helper added
+/// alongside `ip::send` so the test doesn't need a real NIC.
+fn cmd_secmark_selftest() {
+    use crate::batcave::cave::{self, Sensitivity};
+    use crate::batcave::sys_caves;
+    use crate::net::ip;
+
+    console::puts_hi("  SECMARK CIPSO-EMIT + PARSE SELF-TEST\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => { console::puts("  ✗ FAIL: sys-wg not initialised\n"); return; }
+    };
+
+    // (1) Default (Unclassified): no IP options.
+    let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+    let mut pkt = [0u8; 1500];
+    let n = cave::with_cave_active(sys_wg_id, ||
+        ip::build_test_packet(0x0A_00_02_02, 17, b"X", &mut pkt)
+    );
+    if n == 0 {
+        console::puts("  ✗ FAIL: build_test_packet returned 0 (U path)\n"); return;
+    }
+    let ihl_u = (pkt[0] & 0x0F) as usize * 4;
+    if ihl_u != 20 {
+        console::puts("  ✗ FAIL: U sensitivity packet had non-5 IHL: ");
+        print_num(ihl_u); console::puts("\n"); return;
+    }
+    if ip::parse_cipso_sensitivity(&pkt[..n]).is_some() {
+        console::puts("  ✗ FAIL: U-sensitivity packet had CIPSO option\n"); return;
+    }
+    console::puts("  ✓ Unclassified sender -> IHL=5, no CIPSO\n");
+
+    // (2) Secret sender: IHL=8, CIPSO present, parser extracts byte.
+    let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Secret);
+    let n = cave::with_cave_active(sys_wg_id, ||
+        ip::build_test_packet(0x0A_00_02_02, 17, b"X", &mut pkt)
+    );
+    if n == 0 {
+        console::puts("  ✗ FAIL: build_test_packet returned 0 (S path)\n");
+        let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+        return;
+    }
+    let ihl_s = (pkt[0] & 0x0F) as usize * 4;
+    if ihl_s != 32 {
+        console::puts("  ✗ FAIL: S sensitivity packet had wrong IHL: ");
+        print_num(ihl_s); console::puts(" (expected 32)\n");
+        let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+        return;
+    }
+    if pkt[20] != 0x86 {
+        console::puts("  ✗ FAIL: byte at offset 20 != CIPSO type 0x86 (got 0x");
+        // hex print 1 byte
+        let hex = b"0123456789abcdef";
+        console::putc(hex[((pkt[20] >> 4) & 0xF) as usize]);
+        console::putc(hex[((pkt[20]) & 0xF) as usize]);
+        console::puts(")\n");
+        let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+        return;
+    }
+    match ip::parse_cipso_sensitivity(&pkt[..n]) {
+        Some(b) if b == Sensitivity::Secret as u8 => {
+            console::puts("  ✓ Secret sender -> IHL=8, CIPSO at off 20, sens byte = S\n");
+        }
+        Some(b) => {
+            console::puts("  ✗ FAIL: parse_cipso_sensitivity returned wrong byte: ");
+            print_num(b as usize); console::puts("\n");
+            let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+            return;
+        }
+        None => {
+            console::puts("  ✗ FAIL: parse_cipso_sensitivity returned None on labeled pkt\n");
+            let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+            return;
+        }
+    }
+
+    // (3) Wrong DOI: corrupt the DOI bytes, parser should ignore.
+    pkt[22] ^= 0xFF; // first byte of DOI
+    if ip::parse_cipso_sensitivity(&pkt[..n]).is_some() {
+        console::puts("  ✗ FAIL: parser accepted wrong-DOI packet\n");
+        let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+        return;
+    }
+    console::puts("  ✓ wrong-DOI packet ignored by parser\n");
+
+    let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+    console::puts("  ✓ SECMARK: CIPSO emit + parse + DOI-filter verified\n");
 }
 
 fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
