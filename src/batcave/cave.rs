@@ -430,11 +430,18 @@ pub fn get_cave_l1_phys(cave_id: u16) -> Option<usize> {
 pub fn with_cave_active<R>(cave_id: u16, f: impl FnOnce() -> R) -> R {
     let task_id = crate::kernel::process::current_id();
     let saved_cave = crate::kernel::process::get(task_id).cave_id;
+    let saved_active = ACTIVE_CAVE_ID.load(Ordering::Relaxed);
 
     let saved_ttbr0: u64;
     unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) saved_ttbr0); }
 
     crate::kernel::process::set_cave(task_id, cave_id);
+    // `ACTIVE_CAVE_ID` is the source of truth for `cave::active_*`
+    // queries (capability checks, mount-prefix, quota charge). The
+    // trampoline must update it too — otherwise queries from inside
+    // the closure still see the OUTER cave's identity (or "kernel"
+    // when called from the shell), defeating the trampoline.
+    ACTIVE_CAVE_ID.store(cave_id as usize, Ordering::Relaxed);
     if let Some(target_l1) = get_cave_l1_phys(cave_id) {
         crate::batcave::linux::mmu::switch_to_cave(target_l1);
     }
@@ -442,6 +449,7 @@ pub fn with_cave_active<R>(cave_id: u16, f: impl FnOnce() -> R) -> R {
     let out = f();
 
     crate::kernel::process::set_cave(task_id, saved_cave);
+    ACTIVE_CAVE_ID.store(saved_active, Ordering::Relaxed);
     if saved_ttbr0 != 0 {
         crate::batcave::linux::mmu::switch_to_cave(saved_ttbr0 as usize);
     }

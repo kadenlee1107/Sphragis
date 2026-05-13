@@ -47,7 +47,9 @@ pub fn handle_key(c: u8) {
             let mut name_buf = [0u8; 64];
             let mut name_len = 0usize;
             let mut row_i = 0usize;
-            batfs::list(|name, _size, _enc| {
+            // gap-audit 032: ns_list — the file manager only shows
+            // (and only opens) files in the active cave's namespace.
+            batfs::ns_list(|name, _size, _enc| {
                 if row_i == idx {
                     let n = name.len().min(name_buf.len());
                     name_buf[..n].copy_from_slice(&name.as_bytes()[..n]);
@@ -106,7 +108,7 @@ pub fn render() {
     gpu::fill_rect(r.x, shell_y, r.w, 1, crate::ui::widgets::HAIR);
 
     // ── DATA ROWS ─────────────────────────────────────────────────
-    let (count, _max) = batfs::stats();
+    let (count, _max) = batfs::ns_stats();
     if count == 0 {
         draw_empty(r.x, body_y, r.w, body_h);
     } else {
@@ -136,8 +138,8 @@ fn draw_header(x: u32, y: u32, w: u32) {
     font::draw_str(fb, sw, cx, text_y, "CHACHA20-POLY1305", CYAN, BG); cx += 18 * CHAR_W;
     font::draw_str(fb, sw, cx, text_y, "+ Merkle integrity", FAINT, BG);
 
-    // Right: file count / MAX_FILES.
-    let (count, _max) = batfs::stats();
+    // Right: file count / MAX_FILES (scoped to active cave's namespace).
+    let (count, _max) = batfs::ns_stats();
     let mut buf = [0u8; 32];
     let n = format_file_metric(count, &mut buf);
     let s = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
@@ -195,8 +197,9 @@ fn draw_rows(x: u32, y: u32, w: u32, h: u32) {
     let max_rows = (h / ROW_H) as usize;
     // First pass: count the rows so SELECTED_ROW can be clamped if
     // the table shrunk (file deleted while FS was the active pane).
+    // gap-audit 032: ns_list — file manager scopes to active cave.
     let mut total = 0usize;
-    batfs::list(|_n, _s, _e| { total += 1; });
+    batfs::ns_list(|_n, _s, _e| { total += 1; });
     unsafe {
         ROW_COUNT_CACHE = total;
         if SELECTED_ROW >= total && total > 0 { SELECTED_ROW = total - 1; }
@@ -205,7 +208,7 @@ fn draw_rows(x: u32, y: u32, w: u32, h: u32) {
     let sel = selected_row();
     // Second pass: paint.
     let mut row_idx = 0usize;
-    batfs::list(|name, size, encrypted| {
+    batfs::ns_list(|name, size, encrypted| {
         if row_idx >= max_rows { return; }
         let ry = y + (row_idx as u32) * ROW_H;
         draw_row(x, ry, w, name, size, encrypted, row_idx == sel);

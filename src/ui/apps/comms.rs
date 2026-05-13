@@ -123,8 +123,11 @@ fn my_identity() -> Result<(SecretKey, [u8; 32]), &'static str> {
         }
 
         // Try to load from BatFS first.
+        // gap-audit 032: ns_* — each cave gets its own comms identity
+        // (sys-wg's identity ≠ desktop's identity, even though the
+        // file name is the same in the cave's view).
         let mut seed = [0u8; 32];
-        let kp = match crate::fs::batfs::read(IDENTITY_PATH, &mut seed) {
+        let kp = match crate::fs::batfs::ns_read(IDENTITY_PATH, &mut seed) {
             Ok(n) if n == 32 => KeyPair::from_seed(Seed::new(seed)),
             _ => {
                 // Generate + persist. Seed from RNDR (with fallback
@@ -132,7 +135,7 @@ fn my_identity() -> Result<(SecretKey, [u8; 32]), &'static str> {
                 // to BatFS for future loads.
                 crate::crypto::rng::fill_bytes(&mut seed);
                 let kp = KeyPair::from_seed(Seed::new(seed));
-                let _ = crate::fs::batfs::create(IDENTITY_PATH, &seed);
+                let _ = crate::fs::batfs::ns_create(IDENTITY_PATH, &seed);
                 kp
             }
         };

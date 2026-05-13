@@ -457,8 +457,10 @@ pub fn save_current() {
     let name = unsafe { core::str::from_utf8_unchecked(&b.name[..b.name_len]) };
     // Delete-then-create. delete returns Err if file doesn't exist —
     // that's fine, just the first save.
-    let _ = crate::fs::batfs::delete(name);
-    let result = crate::fs::batfs::create(name, &tmp[..p]);
+    // gap-audit 032: ns_* routes through the active cave's mount
+    // namespace, so caves can't see each other's editor saves.
+    let _ = crate::fs::batfs::ns_delete(name);
+    let result = crate::fs::batfs::ns_create(name, &tmp[..p]);
     unsafe {
         SAVE_FLASH_TICKS = 90; // ~3 frames of full-render flash
         SAVE_FLASH_OK = result.is_ok();
@@ -479,7 +481,7 @@ pub fn save_current() {
 pub fn load_from_batfs(name: &str) -> Result<(), &'static str> {
     static mut LOAD_TMP: [u8; 8192] = [0u8; 8192];
     let tmp = unsafe { &mut *core::ptr::addr_of_mut!(LOAD_TMP) };
-    let n = crate::fs::batfs::read(name, tmp)?;
+    let n = crate::fs::batfs::ns_read(name, tmp)?;
     load_text(&tmp[..n], name);
     Ok(())
 }

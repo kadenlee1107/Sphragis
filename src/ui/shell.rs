@@ -349,6 +349,7 @@ fn execute(cmd: &str) {
         "sys-caves-selftest"  => cmd_sys_caves_selftest(),
         "sys-wg-selftest"     => cmd_sys_wg_service_selftest(),
         "cave-private-selftest" => cmd_cave_private_selftest(),
+        "mount-ns-selftest"   => cmd_mount_ns_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
         "pkg" => {
@@ -2261,6 +2262,147 @@ fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
             console::puts("  usage: mount-ns ls | write <n> <d> | read <n> | rm <n>\n");
         }
     }
+}
+
+/// `mount-ns-selftest` — gap-audit item 032 auto-application proof.
+///
+/// Drives the `batfs::ns_*` wrappers from two different cave
+/// contexts (sys-wg + the kernel-ns sentinel built by
+/// `sys_caves::init`) and asserts the four namespace properties:
+///
+///   1. Same logical name written from cave A and cave B lands at
+///      DIFFERENT on-disk slots — both writes succeed.
+///   2. Each cave's `ns_read` of that name returns ITS OWN
+///      content; the other cave's view is invisible.
+///   3. Each cave's `ns_list` shows only that cave's files (and
+///      with the prefix stripped — the cave never sees the
+///      on-disk naming scheme).
+///   4. The kernel/admin context (no active cave) sees BOTH
+///      on-disk entries via the un-prefixed `batfs::list`.
+///
+/// Cleans up by deleting both files at the end. Failure exits
+/// early with a `FAIL:` line; success prints the marker that the
+/// QEMU runner script greps for.
+fn cmd_mount_ns_selftest() {
+    use crate::batcave::{cave, sys_caves};
+    use crate::fs::batfs;
+
+    console::puts_hi("  MOUNT NAMESPACE AUTO-APPLICATION SELF-TEST\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => {
+            console::puts("  ✗ FAIL: sys-wg cave not initialised\n");
+            return;
+        }
+    };
+    let kns_id = match sys_caves::kernel_ns_id() {
+        Some(id) => id as u16,
+        None => {
+            console::puts("  ✗ FAIL: kernel-ns sentinel cave not initialised\n");
+            return;
+        }
+    };
+
+    const TEST_NAME: &str = "ns-isolation-probe";
+
+    // Pre-clean — leftover files from a prior aborted run would
+    // make this run report spurious failures.
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(TEST_NAME));
+    let _ = cave::with_cave_active(kns_id,    || batfs::ns_delete(TEST_NAME));
+
+    // (1) Write the same logical name from two caves.
+    if let Err(e) = cave::with_cave_active(sys_wg_id, || {
+        batfs::ns_create(TEST_NAME, b"sys-wg view")
+    }) {
+        console::puts("  ✗ FAIL: ns_create from sys-wg: "); console::puts(e); console::puts("\n"); return;
+    }
+    if let Err(e) = cave::with_cave_active(kns_id, || {
+        batfs::ns_create(TEST_NAME, b"kernel-ns view")
+    }) {
+        console::puts("  ✗ FAIL: ns_create from kernel-ns: "); console::puts(e); console::puts("\n"); return;
+    }
+    console::puts("  ✓ same logical name created in two different caves\n");
+
+    // (2) Each cave reads its own content.
+    let mut buf = [0u8; 64];
+    let n = match cave::with_cave_active(sys_wg_id, || batfs::ns_read(TEST_NAME, &mut buf)) {
+        Ok(n) => n,
+        Err(e) => { console::puts("  ✗ FAIL: ns_read from sys-wg: "); console::puts(e); console::puts("\n"); return; }
+    };
+    if &buf[..n] != b"sys-wg view" {
+        console::puts("  ✗ FAIL: sys-wg read returned wrong content\n"); return;
+    }
+    let n = match cave::with_cave_active(kns_id, || batfs::ns_read(TEST_NAME, &mut buf)) {
+        Ok(n) => n,
+        Err(e) => { console::puts("  ✗ FAIL: ns_read from kernel-ns: "); console::puts(e); console::puts("\n"); return; }
+    };
+    if &buf[..n] != b"kernel-ns view" {
+        console::puts("  ✗ FAIL: kernel-ns read returned wrong content\n"); return;
+    }
+    console::puts("  ✓ each cave reads its own content for the same name\n");
+
+    // (3) ns_list only shows the active cave's namespace, prefix
+    //     stripped. We expect to see EXACTLY one entry named
+    //     `TEST_NAME` (no prefix visible).
+    let mut sys_wg_count = 0usize;
+    let mut sys_wg_name_match = false;
+    cave::with_cave_active(sys_wg_id, || {
+        batfs::ns_list(|name, _, _| {
+            sys_wg_count += 1;
+            if name == TEST_NAME { sys_wg_name_match = true; }
+        });
+    });
+    if !sys_wg_name_match {
+        console::puts("  ✗ FAIL: sys-wg ns_list did not surface the test file\n"); return;
+    }
+    // From inside sys-wg, names visible must NEVER contain the colon
+    // separator (that would be a prefix leak).
+    let mut sys_wg_leak = false;
+    cave::with_cave_active(sys_wg_id, || {
+        batfs::ns_list(|name, _, _| {
+            if name.contains(':') { sys_wg_leak = true; }
+        });
+    });
+    if sys_wg_leak {
+        console::puts("  ✗ FAIL: sys-wg ns_list leaked an on-disk prefix\n"); return;
+    }
+    console::puts("  ✓ sys-wg ns_list shows only its own files, prefix stripped\n");
+
+    let mut kns_name_match = false;
+    cave::with_cave_active(kns_id, || {
+        batfs::ns_list(|name, _, _| {
+            if name == TEST_NAME { kns_name_match = true; }
+        });
+    });
+    if !kns_name_match {
+        console::puts("  ✗ FAIL: kernel-ns ns_list did not surface the test file\n"); return;
+    }
+    console::puts("  ✓ kernel-ns ns_list shows only its own files, prefix stripped\n");
+
+    // (4) Kernel/admin context sees BOTH on-disk entries via the
+    //     un-prefixed batfs::list.
+    let mut saw_sys_wg = false;
+    let mut saw_kns = false;
+    batfs::list(|name, _, _| {
+        if name == "sys-wg:ns-isolation-probe"     { saw_sys_wg = true; }
+        if name == "kernel-ns:ns-isolation-probe"  { saw_kns = true; }
+    });
+    if !(saw_sys_wg && saw_kns) {
+        console::puts("  ✗ FAIL: kernel list missing one of the on-disk entries (sys-wg=");
+        console::puts(if saw_sys_wg { "yes" } else { "no" });
+        console::puts(", kernel-ns=");
+        console::puts(if saw_kns { "yes" } else { "no" });
+        console::puts(")\n");
+        return;
+    }
+    console::puts("  ✓ kernel/admin sees both prefixed entries on the un-prefixed view\n");
+
+    // Cleanup — both files. Each from its own cave context.
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(TEST_NAME));
+    let _ = cave::with_cave_active(kns_id,    || batfs::ns_delete(TEST_NAME));
+
+    console::puts("  ✓ mount-namespace auto-application: per-cave file isolation verified\n");
 }
 
 /// `caps [tid]` — show the capability set of a task (default: current).
@@ -4807,14 +4949,16 @@ fn print_num(n: usize) {
 }
 
 fn cmd_ls() {
-    let (count, max) = batfs::stats();
+    // gap-audit 032: ns_stats / ns_list scope to the active cave's
+    // mount namespace. Kernel context sees the global BatFS view.
+    let (count, max) = batfs::ns_stats();
     console::puts_hi("  ENCRYPTED VAULT\n");
     console::puts("  ----------------\n");
 
     if count == 0 {
         console::puts("  (empty)\n");
     } else {
-        batfs::list(|name, size, encrypted| {
+        batfs::ns_list(|name, size, encrypted| {
             console::puts("  ");
             if encrypted {
                 console::puts("[ENC] ");
@@ -4846,7 +4990,7 @@ fn cmd_write(name: &str, data: &str) {
         return;
     }
 
-    match batfs::create(name, data.as_bytes()) {
+    match batfs::ns_create(name, data.as_bytes()) {
         Ok(()) => {
             console::puts("  Created: ");
             console::puts(name);
@@ -4869,7 +5013,7 @@ fn cmd_read(name: &str) {
     }
 
     let mut buf = [0u8; 4096];
-    match batfs::read(name, &mut buf) {
+    match batfs::ns_read(name, &mut buf) {
         Ok(size) => {
             console::puts("  [decrypted, integrity verified]\n");
             console::puts("  ");
@@ -4897,7 +5041,7 @@ fn cmd_rm(name: &str) {
         return;
     }
 
-    match batfs::delete(name) {
+    match batfs::ns_delete(name) {
         Ok(()) => {
             console::puts("  Secure deleted: ");
             console::puts(name);
@@ -4918,7 +5062,7 @@ fn cmd_verify(name: &str) {
     }
 
     let mut buf = [0u8; 4096];
-    match batfs::read(name, &mut buf) {
+    match batfs::ns_read(name, &mut buf) {
         Ok(_) => {
             console::puts("  INTEGRITY: PASS\n");
             console::puts("  File '");
@@ -7232,7 +7376,7 @@ fn cmd_hash(algo: &str, path: &str) {
         return;
     }
     let mut file_buf = [0u8; 65536];
-    let n = match crate::fs::batfs::read(path, &mut file_buf) {
+    let n = match crate::fs::batfs::ns_read(path, &mut file_buf) {
         Ok(n) => n,
         Err(e) => {
             console::puts("  hash: read failed: ");

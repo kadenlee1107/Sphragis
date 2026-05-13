@@ -381,6 +381,94 @@ fn compute_file_mac(name: &str, nonce: &[u8; 12], ciphertext: &[u8]) -> [u8; 32]
     outer.finalize()
 }
 
+/// Compose `<active-mount-prefix><name>` for a namespaced operation.
+/// Returns the composed `&str` slice borrowing from `out`. When no
+/// cave is active (kernel/admin context), returns `name` unchanged
+/// — admin operates on the un-prefixed namespace.
+///
+/// Gap-audit item 032 (mount-namespace auto-application). The
+/// existing un-prefixed `create` / `read` / `delete` / `list` stay
+/// in place for kernel-administered files (audit.log, signed pkg
+/// bundles, etc.); the `ns_*` wrappers below route cave-visible
+/// operations through this composer.
+fn ns_compose<'a>(name: &str, out: &'a mut [u8; MAX_FILENAME]) -> Result<&'a str, &'static str> {
+    if name.is_empty() {
+        return Err("filename empty");
+    }
+    let mut prefix_buf = [0u8; 80];
+    let plen = crate::batcave::cave::active_mount_prefix(&mut prefix_buf);
+    if plen + name.len() > MAX_FILENAME {
+        return Err("filename too long");
+    }
+    out[..plen].copy_from_slice(&prefix_buf[..plen]);
+    out[plen..plen + name.len()].copy_from_slice(name.as_bytes());
+    Ok(unsafe { core::str::from_utf8_unchecked(&out[..plen + name.len()]) })
+}
+
+/// Mount-namespace aware [`create`]. Prepends the active cave's
+/// mount prefix to `name` before delegating; kernel/admin context
+/// (no active cave) is identical to the un-prefixed `create`.
+pub fn ns_create(name: &str, data: &[u8]) -> Result<(), &'static str> {
+    let mut full = [0u8; MAX_FILENAME];
+    let full_name = ns_compose(name, &mut full)?;
+    create(full_name, data)
+}
+
+/// Mount-namespace aware [`read`].
+pub fn ns_read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
+    let mut full = [0u8; MAX_FILENAME];
+    let full_name = ns_compose(name, &mut full)?;
+    read(full_name, buf)
+}
+
+/// Mount-namespace aware [`delete`].
+pub fn ns_delete(name: &str) -> Result<(), &'static str> {
+    let mut full = [0u8; MAX_FILENAME];
+    let full_name = ns_compose(name, &mut full)?;
+    delete(full_name)
+}
+
+/// Mount-namespace aware [`list`]. From inside a cave, callers see
+/// only files whose on-disk name begins with the cave's prefix,
+/// and the prefix is stripped before invoking the callback —
+/// the cave never learns the on-disk naming scheme. From kernel/
+/// admin context (no active cave), the entire BatFS namespace is
+/// visible (same as the un-prefixed `list`).
+pub fn ns_list<F: FnMut(&str, usize, bool)>(mut callback: F) {
+    let mut prefix_buf = [0u8; 80];
+    let plen = crate::batcave::cave::active_mount_prefix(&mut prefix_buf);
+    if plen == 0 {
+        list(callback);
+        return;
+    }
+    let prefix = unsafe { core::str::from_utf8_unchecked(&prefix_buf[..plen]) };
+    list(|name, size, enc| {
+        if let Some(visible) = name.strip_prefix(prefix) {
+            callback(visible, size, enc);
+        }
+        // else: belongs to another namespace — invisible to this cave.
+    });
+}
+
+/// Mount-namespace aware [`stats`]. Returns `(visible_count, MAX_FILES)`
+/// where `visible_count` is the number of files reachable in the
+/// caller's mount namespace.
+pub fn ns_stats() -> (usize, usize) {
+    let mut prefix_buf = [0u8; 80];
+    let plen = crate::batcave::cave::active_mount_prefix(&mut prefix_buf);
+    if plen == 0 {
+        return stats();
+    }
+    let prefix = unsafe { core::str::from_utf8_unchecked(&prefix_buf[..plen]) };
+    let mut count = 0usize;
+    list(|name, _, _| {
+        if name.starts_with(prefix) {
+            count += 1;
+        }
+    });
+    (count, MAX_FILES)
+}
+
 /// Create a new file with the given name and plaintext content.
 /// Content is encrypted with a per-file derived key.
 pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {

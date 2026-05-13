@@ -365,7 +365,10 @@ pub fn complete_argument(kind: ArgKind, current: &str) -> ArgCompletion {
     match kind {
         ArgKind::None => return out,
         ArgKind::File => {
-            crate::fs::batfs::list(|name, _size, _enc| consider(name.as_bytes()));
+            // gap-audit 032: tab completion scopes to the active
+            // cave's mount namespace — completing `cat <TAB>` from
+            // inside a cave only suggests that cave's files.
+            crate::fs::batfs::ns_list(|name, _size, _enc| consider(name.as_bytes()));
         }
         ArgKind::Cave => {
             crate::batcave::cave::list(|cv| consider(cv.name_str().as_bytes()));
