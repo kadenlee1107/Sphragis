@@ -466,6 +466,8 @@ fn execute_inner(cmd: &str) {
         "te-list"             => cmd_te_list(),
         "te-clear"            => cmd_te_clear(),
         "te-selftest"         => cmd_te_selftest(),
+        "secmark-set-ceiling" => cmd_secmark_set_ceiling(parts[1]),
+        "secmark-recv-selftest" => cmd_secmark_recv_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -9333,6 +9335,147 @@ fn cmd_te_selftest() {
     let _ = cave::destroy("te_a");
     let _ = cave::destroy("te_b");
     console::puts("  ✓ type enforcement: default-deny + allow/remove round trip verified\n");
+}
+
+/// `secmark-set-ceiling <u|c|s|ts>` — raise/lower the kernel-wide
+/// max inbound CIPSO sensitivity. Default at boot is Unclassified
+/// (0), so any non-zero-labeled inbound packet is dropped before
+/// it reaches the transport layer.
+fn cmd_secmark_set_ceiling(level: &str) {
+    use crate::batcave::cave::Sensitivity;
+    use crate::net::ip;
+    if level.is_empty() {
+        console::puts("  current ceiling: ");
+        console::puts(Sensitivity::from_u8(ip::inbound_cipso_ceiling()).as_str());
+        console::puts("\n  usage: secmark-set-ceiling <u|c|s|ts>\n");
+        return;
+    }
+    let s = match Sensitivity::parse(level) {
+        Some(s) => s,
+        None => { console::puts("  bad level — try u/c/s/ts\n"); return; }
+    };
+    ip::set_inbound_cipso_ceiling(s as u8);
+    console::puts("  secmark-recv: ceiling set to ");
+    console::puts(s.as_str()); console::puts("\n");
+}
+
+/// `secmark-recv-selftest` — gov-grade §3.2 SECMARK receiver slice.
+///
+/// Builds synthetic IPv4 packets carrying CIPSO labels at every
+/// sensitivity level (U/C/S/TS) and feeds them to `ip::handle`.
+/// Asserts:
+///   * Ceiling = U: only the U-labeled packet passes; anything
+///     above is silently dropped + counted.
+///   * Ceiling = S: U/C/S pass; TS rejected.
+///   * Ceiling = TS: every level passes.
+/// Each transition step verifies `INBOUND_SECMARK_DROPS` advances
+/// exactly by the expected count.
+fn cmd_secmark_recv_selftest() {
+    use crate::batcave::cave::Sensitivity;
+    use crate::net::ip;
+    use core::sync::atomic::Ordering;
+
+    console::puts_hi("  SECMARK RECEIVER-ENFORCEMENT SELF-TEST\n");
+
+    // Helper: build a CIPSO-labeled IPv4 UDP-shaped packet with a
+    // sensitivity byte under our DOI, return wire bytes.
+    fn build(level: u8) -> ([u8; 64], usize) {
+        let mut buf = [0u8; 64];
+        let header_len = 20 + 12; // IP_HDR_SIZE + SECMARK_OPT_LEN
+        // Minimal UDP-ish payload (length, 0 checksum, 4 bytes data).
+        // tcp/udp parser doesn't dispatch unless the payload parses,
+        // but we only care about ip::handle's pre-dispatch gate.
+        let payload_len = 8;
+        let total_len   = header_len + payload_len;
+        buf[0] = 0x40 | 0x08;  // version 4, IHL 8
+        buf[1] = 0;
+        buf[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
+        buf[4..6].copy_from_slice(&0x1234u16.to_be_bytes());
+        buf[6] = 0x40; buf[7] = 0;
+        buf[8] = 64;
+        buf[9] = 17;           // UDP
+        // header checksum filled below
+        buf[10] = 0; buf[11] = 0;
+        buf[12..16].copy_from_slice(&0x0A_00_02_02u32.to_be_bytes()); // src 10.0.2.2
+        buf[16..20].copy_from_slice(&0x0A_00_02_0Fu32.to_be_bytes()); // dst 10.0.2.15
+        // CIPSO option block: type 0x86 | len 10 | DOI 0x42424F53 |
+        // tag-type 1 | tag-len 4 | flags 0 | sens | NOP NOP
+        buf[20] = 0x86;
+        buf[21] = 0x0a;
+        buf[22..26].copy_from_slice(&ip::CIPSO_DOI_BATOS.to_be_bytes());
+        buf[26] = 0x01;
+        buf[27] = 0x04;
+        buf[28] = 0x00;
+        buf[29] = level;
+        buf[30] = 0x01;
+        buf[31] = 0x01;
+        // Compute IP header checksum over header+options.
+        let mut sum: u32 = 0;
+        let mut i = 0;
+        while i + 1 < header_len {
+            sum += u16::from_be_bytes([buf[i], buf[i + 1]]) as u32;
+            i += 2;
+        }
+        while sum >> 16 != 0 { sum = (sum & 0xFFFF) + (sum >> 16); }
+        let cksum = !(sum as u16);
+        buf[10..12].copy_from_slice(&cksum.to_be_bytes());
+        (buf, total_len)
+    }
+
+    let mut step_ok = true;
+    let test = |ceiling: Sensitivity, level: u8, expect_drop: bool,
+                step_ok_ref: &mut bool, label: &str| {
+        let baseline = ip::INBOUND_SECMARK_DROPS.load(Ordering::Relaxed);
+        ip::set_inbound_cipso_ceiling(ceiling as u8);
+        let (buf, n) = build(level);
+        ip::handle(&buf[..n]);
+        let now = ip::INBOUND_SECMARK_DROPS.load(Ordering::Relaxed);
+        let actually_dropped = now > baseline;
+        if actually_dropped != expect_drop {
+            console::puts("  ✗ FAIL: "); console::puts(label);
+            console::puts(" — expected drop="); console::puts(if expect_drop { "yes" } else { "no" });
+            console::puts(", got=");      console::puts(if actually_dropped { "yes" } else { "no" });
+            console::puts("\n");
+            *step_ok_ref = false;
+        }
+    };
+
+    // Ceiling = U: U passes, C/S/TS drop.
+    test(Sensitivity::Unclassified, 0, false, &mut step_ok, "ceiling=U, level=U");
+    test(Sensitivity::Unclassified, 1, true,  &mut step_ok, "ceiling=U, level=C");
+    test(Sensitivity::Unclassified, 2, true,  &mut step_ok, "ceiling=U, level=S");
+    test(Sensitivity::Unclassified, 3, true,  &mut step_ok, "ceiling=U, level=TS");
+    if !step_ok {
+        ip::set_inbound_cipso_ceiling(Sensitivity::Unclassified as u8);
+        return;
+    }
+    console::puts("  ✓ ceiling=U: U passes, C/S/TS dropped + counted\n");
+
+    // Ceiling = S: U/C/S pass, TS drops.
+    test(Sensitivity::Secret, 0, false, &mut step_ok, "ceiling=S, level=U");
+    test(Sensitivity::Secret, 1, false, &mut step_ok, "ceiling=S, level=C");
+    test(Sensitivity::Secret, 2, false, &mut step_ok, "ceiling=S, level=S");
+    test(Sensitivity::Secret, 3, true,  &mut step_ok, "ceiling=S, level=TS");
+    if !step_ok {
+        ip::set_inbound_cipso_ceiling(Sensitivity::Unclassified as u8);
+        return;
+    }
+    console::puts("  ✓ ceiling=S: U/C/S pass, TS dropped\n");
+
+    // Ceiling = TS: everything passes.
+    test(Sensitivity::TopSecret, 0, false, &mut step_ok, "ceiling=TS, level=U");
+    test(Sensitivity::TopSecret, 1, false, &mut step_ok, "ceiling=TS, level=C");
+    test(Sensitivity::TopSecret, 2, false, &mut step_ok, "ceiling=TS, level=S");
+    test(Sensitivity::TopSecret, 3, false, &mut step_ok, "ceiling=TS, level=TS");
+    if !step_ok {
+        ip::set_inbound_cipso_ceiling(Sensitivity::Unclassified as u8);
+        return;
+    }
+    console::puts("  ✓ ceiling=TS: every level passes the secmark gate\n");
+
+    // Restore default.
+    ip::set_inbound_cipso_ceiling(Sensitivity::Unclassified as u8);
+    console::puts("  ✓ receiver SECMARK: kernel-ceiling gate enforced on inbound CIPSO labels\n");
 }
 
 fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {

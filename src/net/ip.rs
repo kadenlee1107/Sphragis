@@ -268,9 +268,45 @@ pub fn build_test_packet(dst_ip: u32, protocol: u8, payload: &[u8], out: &mut [u
     total_len
 }
 
+/// Kernel-wide ceiling on inbound CIPSO-labeled packets — gov-grade
+/// §3.2 SECMARK receiver slice. A packet whose CIPSO sensitivity
+/// byte exceeds this value is dropped at `ip::handle` before any
+/// transport handler sees it. Default at boot: Unclassified (0),
+/// meaning we reject any inbound packet that carries a non-zero
+/// label. Admins raise the ceiling via `secmark-set-ceiling <level>`.
+pub static INBOUND_CIPSO_CEILING: core::sync::atomic::AtomicU8 =
+    core::sync::atomic::AtomicU8::new(0);
+pub static INBOUND_SECMARK_DROPS: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
+/// Read the current inbound CIPSO ceiling.
+pub fn inbound_cipso_ceiling() -> u8 {
+    INBOUND_CIPSO_CEILING.load(Ordering::Relaxed)
+}
+
+/// Set the ceiling. Used by the `secmark-set-ceiling` shell command.
+pub fn set_inbound_cipso_ceiling(level: u8) {
+    INBOUND_CIPSO_CEILING.store(level, Ordering::Relaxed);
+}
+
 /// Handle an incoming IP packet.
 pub fn handle(data: &[u8]) {
     if let Some(pkt) = IpPacket::parse(data) {
+        // Receiver-side SECMARK enforcement (§3.2). If the packet
+        // carries a CIPSO label, gate delivery on the kernel-wide
+        // ceiling. A sensitivity above the ceiling means "this
+        // information is too classified to land in our caves" — drop
+        // before any transport handler can see the payload. The
+        // ceiling defaults to Unclassified (0) so unlabeled traffic
+        // (the common case today) still flows, but anything tagged
+        // gets refused until an admin opts in.
+        if let Some(level) = parse_cipso_sensitivity(data) {
+            let ceiling = inbound_cipso_ceiling();
+            if level > ceiling {
+                INBOUND_SECMARK_DROPS.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
         // Check firewall
         if !super::firewall::allow_inbound(pkt.src, pkt.dst, pkt.protocol) {
             // Debug: show blocked packets during TCP connect
