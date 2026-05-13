@@ -445,6 +445,7 @@ fn execute_inner(cmd: &str) {
         "ocsp-selftest"       => cmd_ocsp_selftest(),
         "conntrack-selftest"  => cmd_conntrack_selftest(),
         "fw-hardening-selftest" => cmd_fw_hardening_selftest(),
+        "audit-chain-selftest" => cmd_audit_chain_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -7935,6 +7936,102 @@ fn cmd_audit_flush() {
             console::puts("\n");
         }
     }
+}
+
+/// `audit-chain-selftest` — gov-grade §3.7 (audit & forensics).
+///
+/// Pins down the tamper-evident hash chain that
+/// `audit::record` -> `audit_chain::append_chain` now maintains:
+///
+///   1. Record three known audit events. `verify_chain` must
+///      return Ok and `chain_head` advances.
+///   2. Tamper with the middle entry's `msg` bytes via the
+///      test-only `tamper_test_flip_msg_byte` accessor.
+///      `verify_chain` must now report `FirstMismatchAt(idx)`
+///      pointing at THAT entry.
+///   3. Restore the byte. `verify_chain` must return Ok again
+///      (proves the detection isn't sticky — it tracks the
+///      live data).
+///
+/// Goal: demonstrate that any silent edit to a past audit
+/// entry's canonical bytes turns into a hash mismatch the
+/// verifier can find. Operators can chain the verifier with an
+/// off-platform seal of `chain_head()` to extend auditability
+/// past one ring cycle.
+fn cmd_audit_chain_selftest() {
+    use crate::security::audit::{self, Category};
+    use crate::security::audit_chain::{verify_chain, chain_head, VerifyOutcome};
+
+    console::puts_hi("  AUDIT-CHAIN TAMPER-DETECTION SELF-TEST\n");
+
+    let head_before = audit::count();
+
+    audit::record(Category::Boot, b"audit-chain-selftest:entry-1");
+    audit::record(Category::Boot, b"audit-chain-selftest:entry-2");
+    audit::record(Category::Boot, b"audit-chain-selftest:entry-3");
+
+    let head_after = audit::count();
+    if head_after != head_before + 3 {
+        console::puts("  ✗ FAIL: record() did not bump HEAD by 3\n");
+        return;
+    }
+    console::puts("  ✓ recorded 3 audit entries (head ");
+    print_num(head_before); console::puts(" -> ");
+    print_num(head_after); console::puts(")\n");
+
+    match verify_chain() {
+        VerifyOutcome::Ok => {}
+        VerifyOutcome::FirstMismatchAt(idx) => {
+            console::puts("  ✗ FAIL: verify_chain reports mismatch at ");
+            print_num(idx); console::puts(" on clean ring\n");
+            return;
+        }
+    }
+    let clean_head_hash = chain_head();
+    if clean_head_hash == [0u8; 32] {
+        console::puts("  ✗ FAIL: chain_head is all-zero (chain not advancing)\n");
+        return;
+    }
+    console::puts("  ✓ verify_chain OK on clean ring; chain_head non-zero\n");
+
+    // Tamper with the middle entry (absolute index head_after-2).
+    let tamper_idx = head_after - 2;
+    unsafe { audit::tamper_test_flip_msg_byte(tamper_idx, 5); }
+
+    match verify_chain() {
+        VerifyOutcome::FirstMismatchAt(idx) if idx == tamper_idx => {
+            console::puts("  ✓ verify_chain detected tamper at index ");
+            print_num(idx); console::puts("\n");
+        }
+        VerifyOutcome::FirstMismatchAt(idx) => {
+            console::puts("  ✗ FAIL: detected at wrong index ");
+            print_num(idx); console::puts(" (expected ");
+            print_num(tamper_idx); console::puts(")\n");
+            // Restore before returning so we leave the ring clean.
+            unsafe { audit::tamper_test_flip_msg_byte(tamper_idx, 5); }
+            return;
+        }
+        VerifyOutcome::Ok => {
+            console::puts("  ✗ FAIL: tamper went undetected\n");
+            unsafe { audit::tamper_test_flip_msg_byte(tamper_idx, 5); }
+            return;
+        }
+    }
+
+    // Restore the tampered byte and re-verify.
+    unsafe { audit::tamper_test_flip_msg_byte(tamper_idx, 5); }
+    match verify_chain() {
+        VerifyOutcome::Ok => {
+            console::puts("  ✓ post-restore verify_chain back to Ok\n");
+        }
+        VerifyOutcome::FirstMismatchAt(idx) => {
+            console::puts("  ✗ FAIL: chain still mismatches at ");
+            print_num(idx); console::puts(" after restore\n");
+            return;
+        }
+    }
+
+    console::puts("  ✓ audit-chain tamper-detection: verify finds the edit, recovers on restore\n");
 }
 
 /// Verify the tamper-evident chain over the resident audit ring.

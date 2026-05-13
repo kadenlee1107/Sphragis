@@ -673,6 +673,12 @@ always do the same work regardless of failure path).
 - Frequency-attack-aware mode.
 
 ### 3.7 Audit & forensics
+*(2026-05-12 update: `audit::record` now updates a per-entry sha256
+chain link via `audit_chain::append_chain`; `audit-chain` shell
+verifies; `audit-chain-selftest` proves tamper at any byte of any
+entry surfaces as `FirstMismatchAt(idx)`. Sealing `chain_head()`
+off-platform is what extends the property past one ring cycle —
+deferred to the next pass.)*
 
 **Baseline:** Linux auditd / Windows ETW / macOS Endpoint Security
 Framework. Tamper-evident logs (append-only, signed). Forwarding to

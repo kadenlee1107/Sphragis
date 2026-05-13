@@ -56,9 +56,14 @@ fn canonical_bytes(entry: &Entry, out: &mut [u8; 32 + MSG_LEN]) -> usize {
 }
 
 /// Update the chain hash for an entry at slot `slot` after a record.
-/// Called from `audit::record` after the entry is in place. The
-/// `slot` is `head % RING_CAP` where `head` is the new monotonic
-/// counter value (so `head - 1` indexes the previous entry).
+/// Called from `audit::record` after the entry is in place.
+///
+/// `head` is the **absolute index** of THIS entry — for the n-th
+/// entry recorded since boot, `head == n`. This is the value
+/// `HEAD.fetch_add(1)` returns (i.e. the OLD count, before the
+/// increment landed). Concretely: the first entry passes
+/// `head == 0` and inherits the all-zero genesis hash; the second
+/// entry passes `head == 1` and chains off `CHAIN[0]`.
 ///
 /// SAFETY: caller must hold the same exclusion the audit ring assumes
 /// (currently: single-writer in main thread).
