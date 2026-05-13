@@ -450,6 +450,7 @@ fn execute_inner(cmd: &str) {
         "mls-show"            => cmd_mls_show(),
         "mls-check"           => cmd_mls_check(parts[1], parts[2], parts[3]),
         "mls-selftest"        => cmd_mls_selftest(),
+        "mls-ipc-selftest"    => cmd_mls_ipc_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -8269,6 +8270,161 @@ fn cmd_mls_selftest() {
     let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Unclassified);
 
     console::puts("  ✓ MLS lattice + BatFS file-label no-read-up enforcement verified\n");
+}
+
+/// `mls-ipc-selftest` — gov-grade §3.2 labeled IPC slice.
+///
+/// Drives `batcave::mls_ipc` through the four Bell-LaPadula
+/// reference flows for cave-to-cave messaging:
+///
+///   1. U → S send (write-up):  ALLOWED. Receiver at S reads OK.
+///   2. S → U send (write-down): REJECTED with `WriteDown` before
+///      the message touches the mailbox.
+///   3. Receiver-side runtime demotion: send U→S succeeds; then the
+///      S receiver demotes to U; `recv` finds the stale S message
+///      and rejects with `ReadUp` (belt-and-suspenders for the
+///      class of attack where the receiver was downgraded between
+///      send and recv).
+///   4. Equal-level S → S send + recv: ALLOWED end-to-end.
+///
+/// Cleanup restores both caves to Unclassified.
+fn cmd_mls_ipc_selftest() {
+    use crate::batcave::cave::{self, Sensitivity};
+    use crate::batcave::mls_ipc::{self, MlsIpcError};
+    use crate::batcave::sys_caves;
+
+    console::puts_hi("  MLS LABELED-IPC SELF-TEST\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => { console::puts("  ✗ FAIL: sys-wg not initialised\n"); return; }
+    };
+    let kns_id = match sys_caves::kernel_ns_id() {
+        Some(id) => id as u16,
+        None => { console::puts("  ✗ FAIL: kernel-ns not initialised\n"); return; }
+    };
+
+    // Reset to known state.
+    mls_ipc::drain(sys_wg_id);
+    mls_ipc::drain(kns_id);
+    let _ = cave::set_sensitivity_by_name("sys-wg",   Sensitivity::Secret);
+    let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Unclassified);
+
+    // (1) U -> S send (kernel-ns at U sends to sys-wg at S).
+    match mls_ipc::send(kns_id, sys_wg_id, b"write-up:U->S") {
+        Ok(_) => console::puts("  ✓ U -> S send (write-up) -> ALLOW\n"),
+        Err(e) => {
+            console::puts("  ✗ FAIL: U -> S rejected with "); print_err(e);
+            mls_cleanup(sys_wg_id, kns_id); return;
+        }
+    }
+
+    // (2) S -> U send (sys-wg at S to kernel-ns at U) — must reject.
+    match mls_ipc::send(sys_wg_id, kns_id, b"write-down:S->U") {
+        Err(MlsIpcError::WriteDown) => {
+            console::puts("  ✓ S -> U send (write-down) -> DENY (*-property)\n");
+        }
+        Ok(_) => {
+            console::puts("  ✗ FAIL: write-down was permitted\n");
+            mls_cleanup(sys_wg_id, kns_id); return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error on write-down: "); print_err(e);
+            mls_cleanup(sys_wg_id, kns_id); return;
+        }
+    }
+
+    // Receiver-at-S reads the queued U-message — read-down is OK.
+    let mut buf = [0u8; 64];
+    match mls_ipc::recv(sys_wg_id, &mut buf) {
+        Ok((_src, lvl, n)) if &buf[..n] == b"write-up:U->S" => {
+            if Sensitivity::from_u8(lvl) != Sensitivity::Unclassified {
+                console::puts("  ✗ FAIL: received message lost its U label\n");
+                mls_cleanup(sys_wg_id, kns_id); return;
+            }
+            console::puts("  ✓ S receiver consumes queued U message (read-down) -> ALLOW\n");
+        }
+        _ => {
+            console::puts("  ✗ FAIL: recv didn't return the U message\n");
+            mls_cleanup(sys_wg_id, kns_id); return;
+        }
+    }
+
+    // (3) Runtime-demotion: U sender writes UP to S; S receiver
+    // demotes to U; recv must now refuse the queued S-labeled
+    // message (read-up).
+    // Need to make the queued message S, so first put a message
+    // sent FROM S to S (sys-wg -> sys-wg, write-equal allowed).
+    if let Err(e) = mls_ipc::send(sys_wg_id, sys_wg_id, b"S->S:secret") {
+        console::puts("  ✗ FAIL: S -> S send unexpectedly rejected: "); print_err(e);
+        mls_cleanup(sys_wg_id, kns_id); return;
+    }
+    // Demote sys-wg's receiver label to U; the queued S message is
+    // now above the receiver.
+    let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+    match mls_ipc::recv(sys_wg_id, &mut buf) {
+        Err(MlsIpcError::ReadUp) => {
+            console::puts("  ✓ recv against runtime-demoted receiver -> DENY (read-up)\n");
+        }
+        Ok(_) => {
+            console::puts("  ✗ FAIL: runtime read-up was permitted\n");
+            mls_cleanup(sys_wg_id, kns_id); return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error on runtime read-up: "); print_err(e);
+            mls_cleanup(sys_wg_id, kns_id); return;
+        }
+    }
+
+    // (4) Equal-level S -> S round trip. Re-elevate sys-wg + drain
+    // first so we start clean.
+    mls_ipc::drain(sys_wg_id);
+    let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Secret);
+    if let Err(e) = mls_ipc::send(sys_wg_id, sys_wg_id, b"S->S:equal") {
+        console::puts("  ✗ FAIL: equal-level send rejected: "); print_err(e);
+        mls_cleanup(sys_wg_id, kns_id); return;
+    }
+    match mls_ipc::recv(sys_wg_id, &mut buf) {
+        Ok((_src, lvl, n))
+            if Sensitivity::from_u8(lvl) == Sensitivity::Secret
+            && &buf[..n] == b"S->S:equal" =>
+        {
+            console::puts("  ✓ S -> S equal-level round trip ALLOWED\n");
+        }
+        _ => {
+            console::puts("  ✗ FAIL: equal-level round trip didn't deliver\n");
+            mls_cleanup(sys_wg_id, kns_id); return;
+        }
+    }
+
+    let (sends, recvs, rwd, rru) = mls_ipc::stats();
+    console::puts("  ✓ counters: sends="); print_num(sends);
+    console::puts(", recvs="); print_num(recvs);
+    console::puts(", rej_write_down="); print_num(rwd);
+    console::puts(", rej_read_up="); print_num(rru); console::puts("\n");
+
+    mls_cleanup(sys_wg_id, kns_id);
+    console::puts("  ✓ MLS labeled-IPC: BLP write-down + read-up enforcement verified\n");
+}
+
+fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
+    use crate::batcave::mls_ipc::MlsIpcError;
+    console::puts(match e {
+        MlsIpcError::WriteDown => "WriteDown\n",
+        MlsIpcError::ReadUp => "ReadUp\n",
+        MlsIpcError::Empty => "Empty\n",
+        MlsIpcError::BadId => "BadId\n",
+        MlsIpcError::TooLong => "TooLong\n",
+    });
+}
+
+fn mls_cleanup(sys_wg_id: u16, kns_id: u16) {
+    use crate::batcave::cave::{self, Sensitivity};
+    use crate::batcave::mls_ipc;
+    mls_ipc::drain(sys_wg_id);
+    mls_ipc::drain(kns_id);
+    let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+    let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Unclassified);
 }
 
 /// Verify the tamper-evident chain over the resident audit ring.
