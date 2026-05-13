@@ -742,6 +742,84 @@ pub fn for_each_exec_transition<F: FnMut(&str, u16)>(mut f: F) {
     }
 }
 
+// ── Information-flow taint propagation (gov-grade §3.2 IFC slice).
+//
+// Each cave carries a 32-bit taint set — a bitmap of independent
+// taint sources (e.g. bit 0 = PII, bit 1 = compliance-restricted,
+// bit 2 = trade-secret). Files in BatFS carry their own taint set.
+//
+// Propagation rules:
+//   - ns_read:  cave.taint |= file.taint  (reader inherits source's taints)
+//   - ns_write: file.taint |= cave.taint  (sink accumulates author's taints)
+//
+// The bitmap is monotonically OR-ing — taint only grows. Reset is
+// an explicit admin operation (`cave-taint-clear`), audit-logged.
+// This matches the conservative IFC model: once an artifact is
+// tainted, every downstream consumer is presumed tainted too,
+// even if it's "obvious" the consumer doesn't actually retain
+// the data.
+//
+// Why a side-table (and not a `BatCave` field): grouping taint
+// state next to its semantic neighbors (cave-quota, cave-cpu)
+// keeps the struct narrow for cold-path scans and lets us evolve
+// the bitmap width independently of the BatCave layout.
+
+use core::sync::atomic::AtomicU32;
+
+const CAVE_TAINT_INIT: AtomicU32 = AtomicU32::new(0);
+static CAVE_TAINT: [AtomicU32; MAX_CAVES] = [CAVE_TAINT_INIT; MAX_CAVES];
+
+/// Current taint bitmap for `cave_id`. Returns 0 for out-of-range
+/// ids — same defensive shape as `name_of`.
+pub fn taint_of(cave_id: u16) -> u32 {
+    let i = cave_id as usize;
+    if i >= MAX_CAVES { return 0; }
+    CAVE_TAINT[i].load(Ordering::Acquire)
+}
+
+/// OR `bits` into `cave_id`'s taint. Idempotent — same bits
+/// re-applied is a no-op (bitwise OR semantics). Out-of-range
+/// ids are silently ignored.
+pub fn add_taint(cave_id: u16, bits: u32) {
+    let i = cave_id as usize;
+    if i >= MAX_CAVES { return; }
+    CAVE_TAINT[i].fetch_or(bits, Ordering::AcqRel);
+}
+
+/// Set `cave_id`'s taint exactly — used by the
+/// `cave-taint-set/clear` admin paths. Clobbers previous bits;
+/// most callers want `add_taint` instead.
+pub fn set_taint(cave_id: u16, bits: u32) {
+    let i = cave_id as usize;
+    if i >= MAX_CAVES { return; }
+    CAVE_TAINT[i].store(bits, Ordering::Release);
+}
+
+/// Taint of the currently-active cave. Returns 0 from kernel /
+/// admin context (no cave active).
+pub fn active_taint() -> u32 {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return 0; }
+    CAVE_TAINT[id].load(Ordering::Acquire)
+}
+
+/// OR `bits` into the currently-active cave's taint. Called from
+/// `batfs::ns_read` after a successful read, so the reader's cave
+/// inherits the file's taints.
+pub fn active_add_taint(bits: u32) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return; }
+    CAVE_TAINT[id].fetch_or(bits, Ordering::AcqRel);
+}
+
+/// Zero every cave's taint bitmap. Selftest hook + the
+/// `cave-taint-reset-all` admin operation.
+pub fn clear_all_taints() {
+    for i in 0..MAX_CAVES {
+        CAVE_TAINT[i].store(0, Ordering::Release);
+    }
+}
+
 impl BatCave {
     pub const fn empty() -> Self {
         Self {
