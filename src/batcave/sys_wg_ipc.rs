@@ -41,6 +41,7 @@ use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 use crate::batcave::{sys_caves, sys_wg_service};
 use crate::kernel::{process, scheduler};
+use crate::kernel::process::TaskId;
 use crate::net::wireguard;
 
 /// Maximum request payload bytes (request_data buffer). Picked
@@ -84,28 +85,86 @@ static RSP_STATUS: AtomicI32 = AtomicI32::new(STATUS_PENDING);
 static RSP_LEN: AtomicU32 = AtomicU32::new(0);
 static mut RSP_DATA: [u8; RSP_DATA_MAX] = [0u8; RSP_DATA_MAX];
 
-/// Service task entry. Runs in a kernel task tagged with
-/// `cave_id = sys_wg_id` (set by the client before spawn — see
-/// `dispatch_one_shot`). Reads the request, calls into the cave-
-/// private API, writes the response, terminates via
-/// `process::current_terminate`.
+/// Long-running service task tagged with `cave_id = sys_wg_id`.
+/// Blocks until a client wakes it via `process::wake`, then
+/// dispatches the request, posts the response, releases
+/// `IPC_BUSY`, and blocks again. One persistent task — no
+/// create_kernel_task overhead per request.
+///
+/// The earlier slice-3 model spawned a fresh task per request
+/// and terminated it after one cycle. That established the
+/// architectural property ("sys-wg work runs in a task tagged
+/// with sys-wg's cave_id") but cost a full task setup +
+/// teardown per call. With `current_block` + `wake` primitives
+/// in `process`, we collapse to one long-running service.
 fn service_main() -> ! {
-    let op = REQ_OP.load(Ordering::Acquire);
-    match op {
-        OP_PUBKEY    => handle_pubkey(),
-        OP_HANDSHAKE => handle_handshake(),
-        OP_WRAP      => handle_wrap(),
-        OP_UNWRAP    => handle_unwrap(),
-        _ => {
-            RSP_STATUS.store(STATUS_ERR_OP, Ordering::Release);
+    loop {
+        // Check the mailbox FIRST. If a request was posted by a
+        // client that woke us (or that arrived before we first
+        // ran), process it. Only block if there's nothing to do.
+        // Doing this in the opposite order (block first) is
+        // wrong: a client's wake is a no-op when we're already
+        // Ready, so an early wake before our first block would
+        // be lost.
+        let op = REQ_OP.load(Ordering::Acquire);
+        if op == OP_NONE {
+            process::current_block();
+            continue;
         }
+        match op {
+            OP_PUBKEY    => handle_pubkey(),
+            OP_HANDSHAKE => handle_handshake(),
+            OP_WRAP      => handle_wrap(),
+            OP_UNWRAP    => handle_unwrap(),
+            _ => RSP_STATUS.store(STATUS_ERR_OP, Ordering::Release),
+        }
+        // Mark the request consumed before releasing IPC_BUSY,
+        // otherwise a fast follow-up client could see our OP
+        // field still set to the previous op and (incorrectly)
+        // skip the block step thinking work is pending.
+        REQ_OP.store(OP_NONE, Ordering::Release);
+        core::sync::atomic::fence(Ordering::Release);
+        IPC_BUSY.store(false, Ordering::Release);
     }
-    // Reset busy flag so the next client can acquire. Order
-    // matters: response status MUST commit before busy clears,
-    // otherwise a fast follow-up client might see the old response.
-    core::sync::atomic::fence(Ordering::Release);
-    IPC_BUSY.store(false, Ordering::Release);
-    process::current_terminate();
+}
+
+/// Task id of the long-running service task. Set once by
+/// `init()`. Clients call `process::wake(SERVICE_TASK_ID)`
+/// after posting a request.
+static SERVICE_TASK_ID: core::sync::atomic::AtomicU32
+    = core::sync::atomic::AtomicU32::new(u32::MAX);
+
+/// Boot-time bring-up of the long-running service. Must run
+/// AFTER `sys_caves::init` (we need sys-wg's cave_id to tag the
+/// task with). Failure is non-fatal — falls back to the
+/// degraded "no IPC" mode; the direct `sys_wg_service::*` API
+/// still works.
+pub fn init() {
+    if SERVICE_TASK_ID.load(Ordering::Acquire) != u32::MAX {
+        return; // already up
+    }
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => {
+            crate::drivers::uart::puts(
+                "  [sys-wg/ipc] sys-wg cave missing; long-running service NOT spawned\n");
+            return;
+        }
+    };
+    let task_id = match process::create_kernel_task(
+        "sys-wg-ipc-svc", service_main, /* priority */ 5,
+    ) {
+        Some(id) => id,
+        None => {
+            crate::drivers::uart::puts(
+                "  [sys-wg/ipc] create_kernel_task failed; service NOT spawned\n");
+            return;
+        }
+    };
+    process::set_cave(task_id, sys_wg_id);
+    SERVICE_TASK_ID.store(task_id.0 as u32, Ordering::Release);
+    crate::drivers::uart::puts(
+        "  [sys-wg/ipc] long-running service task spawned (cave_id=sys_wg)\n");
 }
 
 fn handle_pubkey() {
@@ -287,19 +346,19 @@ fn handle_unwrap() {
     }
 }
 
-/// Client-side helper. Acquires the mailbox, sets up the request,
-/// spawns a fresh service task tagged with sys-wg's cave_id, and
-/// yields until a response arrives. Returns the response data on
-/// success, `None` on any error.
+/// Client-side helper. Acquires the mailbox, sets up the
+/// request, wakes the long-running service task, yields until
+/// the response is posted, returns the response slice.
 ///
-/// Single-threaded contract — IPC_BUSY guards against concurrent
-/// callers. A second caller racing in will spin-yield until the
-/// first finishes; since Bat_OS is cooperative single-CPU, in
-/// practice this can't happen unless the client yields explicitly
-/// before completing.
+/// Single-threaded contract — `IPC_BUSY` guards against
+/// concurrent callers. A second caller racing in spin-yields
+/// until the first finishes; cooperative single-CPU means this
+/// can't actually race unless a client yields between acquire
+/// and release.
 fn dispatch_one_shot(op: u32, req: &[u8]) -> Option<&'static [u8]> {
     if req.len() > REQ_DATA_MAX { return None; }
-    let sys_wg_id = sys_caves::sys_wg_id()? as u16;
+    let svc_id_raw = SERVICE_TASK_ID.load(Ordering::Acquire);
+    if svc_id_raw == u32::MAX { return None; } // service not up
 
     // Acquire the mailbox.
     while IPC_BUSY.compare_exchange(false, true, Ordering::Acquire, Ordering::Acquire).is_err() {
@@ -319,27 +378,16 @@ fn dispatch_one_shot(op: u32, req: &[u8]) -> Option<&'static [u8]> {
     // Publish op last so the service-side load+Acquire sees a
     // fully-populated request.
     REQ_OP.store(op, Ordering::Release);
+    // Memory fence ensures all the request bytes commit before
+    // the service task observes them.
+    core::sync::atomic::fence(Ordering::Release);
 
-    // Spawn the service task. Priority 5 (higher than the
-    // calling shell, which is task 0 @ 255), so as soon as we
-    // yield the service is picked.
-    let svc_id = match process::create_kernel_task(
-        "sys-wg-svc", service_main, /* priority */ 5,
-    ) {
-        Some(id) => id,
-        None => {
-            IPC_BUSY.store(false, Ordering::Release);
-            return None;
-        }
-    };
-    // Tag with sys-wg's cave id. From this point until the
-    // task terminates, the scheduler MMU hook will swap TTBR0
-    // to sys-wg's L1 every time this task is scheduled.
-    process::set_cave(svc_id, sys_wg_id);
+    // Wake the service task.
+    let svc_id = TaskId(svc_id_raw as u16);
+    process::wake(svc_id);
 
-    // Wait for response. Bounded by a generous loop limit so a
-    // regressed scheduler can't lock us up; 1024 yields is far
-    // more than the single yield we expect.
+    // Yield until response is posted. Bounded so a regressed
+    // service can't lock us up.
     let mut tries = 0usize;
     while RSP_STATUS.load(Ordering::Acquire) == STATUS_PENDING && tries < 1024 {
         scheduler::yield_now();
@@ -349,11 +397,6 @@ fn dispatch_one_shot(op: u32, req: &[u8]) -> Option<&'static [u8]> {
         return None;
     }
 
-    // Read response bytes. Returning `&'static [u8]` is sound:
-    // RSP_DATA is a static; the caller copies bytes out before
-    // releasing IPC_BUSY (the service task already released
-    // before terminating, but we hold it again here for the
-    // window between this return and the caller's copy).
     let len = RSP_LEN.load(Ordering::Acquire) as usize;
     let ptr = unsafe { core::ptr::addr_of!(RSP_DATA) as *const u8 };
     Some(unsafe { core::slice::from_raw_parts(ptr, len) })

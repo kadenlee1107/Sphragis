@@ -339,6 +339,14 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     batcave::sys_wg_service::init();
     drivers::uart::puts("  [sys-wg] service ready (Arc 3 slices 1+2+3; state in cave-private page)\n");
 
+    // Spawn the long-running IPC service task. Must run AFTER
+    // sys_wg_service::init (which initialises the cave-private
+    // keypair) and AFTER sys_caves::init (which created the
+    // sys-wg cave). Failure is non-fatal — the direct
+    // sys_wg_service API still works; only the IPC mailbox path
+    // degrades.
+    batcave::sys_wg_ipc::init();
+
     // Initialize networking
     drivers::uart::puts("[boot] Initializing network...\n");
     match drivers::virtio::net::init() {
