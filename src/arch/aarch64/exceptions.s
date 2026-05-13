@@ -50,6 +50,14 @@
     ldp     x28, x29, [sp, #224]
     ldr     x30, [sp, #240]
     add     sp, sp, #272
+    // Spectre v1/v2/BHB barrier on EL1->EL0 exception return.
+    // FEAT_SB (ARMv8.5) speculation barrier — `sb` mnemonic;
+    // emitted as the universal 32-bit hint `0xd50330ff` so older
+    // assemblers (and cores without FEAT_SB, which decode it as
+    // NOP) accept it. Stops transient execution that began under
+    // kernel state (e.g. kernel-only memory reads still in the
+    // load buffer) from retiring after the `eret` lands at EL0.
+    .inst   0xd50330ff
     eret
 .endm
 

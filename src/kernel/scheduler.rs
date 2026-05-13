@@ -121,7 +121,15 @@ pub fn schedule() {
     let old_ctx = &mut process::get(current_id).context as *mut CpuContext;
     let new_ctx = &process::get(next_id).context as *const CpuContext;
 
+    // Cross-task Spectre barrier — emit `sb` (FEAT_SB, ARMv8.5;
+    // NOP on older cores) before swapping CPU context so transient
+    // execution started under the old task's PSTATE/PC can't
+    // retire against the new task's register file. Paired with
+    // the TTBR0-barrier in `mmu::switch_to_cave` (also fired above
+    // when caves differ). Cheap on cores without FEAT_SB and a
+    // real mitigation on cores that have it.
     unsafe {
+        core::arch::asm!(".inst 0xd50330ff");
         switch_context(old_ctx, new_ctx);
     }
 }
