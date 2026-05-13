@@ -44,6 +44,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::batcave::{cave, cave_private, sys_caves};
 use crate::net::wireguard::{self, TransportKeys, WgKeypair, WgError};
+use x25519_dalek::StaticSecret;
 
 /// Maximum concurrent peers. Small fixed array — Bat_OS is single-
 /// machine, single-operator; even a handful is plenty.
@@ -79,6 +80,29 @@ struct PrivateState {
     /// accepted." Paired with `peer_recv_counter` (which acts as
     /// the window top). Width fixed at `REPLAY_WINDOW_WIDTH = 64`.
     peer_recv_window_bits: [u64; MAX_PEERS],
+
+    /// Initiator-side handshake-in-progress storage (per peer).
+    /// `peer_init_active[i] = 1` means we've called start_handshake
+    /// for peer `i` and are waiting for the responder's Response.
+    /// The other fields below are valid only when `peer_init_active[i] == 1`.
+    peer_init_active: [u32; MAX_PEERS],
+    /// Our chosen sender_index for the in-progress handshake.
+    /// Becomes the `receiver_index` field in the Response we
+    /// expect back. Also used as a "session id" the wg_dispatch
+    /// session table keys on.
+    peer_init_our_sender_index: [u32; MAX_PEERS],
+    /// Per-peer initiator state, mirroring `wireguard::InitiatorState`
+    /// but split into the byte-arrays that are #[repr(C)]-friendly.
+    /// `eph_sk_seed` is the X25519 ephemeral private-key seed; we
+    /// reconstruct `StaticSecret::from(seed)` on demand to drive
+    /// `initiator_finish_handshake` (mirrors the same trick the
+    /// static keypair uses).
+    peer_init_eph_sk_seed: [[u8; 32]; MAX_PEERS],
+    peer_init_eph_pk: [[u8; 32]; MAX_PEERS],
+    /// Running chaining-key + handshake-hash from the Noise IK
+    /// half-handshake we drove with `initiator_send_init`.
+    peer_init_c: [[u8; 32]; MAX_PEERS],
+    peer_init_h: [[u8; 32]; MAX_PEERS],
 }
 
 /// VA where `PrivateState` lives, set on successful `init()`. 0
@@ -320,6 +344,12 @@ pub fn register_peer(peer_static_pk: [u8; wireguard::KEY_LEN])
                 s.peer_send_counter[i] = 0;
                 s.peer_recv_counter[i] = 0;
                 s.peer_recv_window_bits[i] = 0;
+                s.peer_init_active[i] = 0;
+                s.peer_init_our_sender_index[i] = 0;
+                s.peer_init_eph_sk_seed[i] = [0u8; 32];
+                s.peer_init_eph_pk[i] = [0u8; 32];
+                s.peer_init_c[i] = [0u8; 32];
+                s.peer_init_h[i] = [0u8; 32];
                 // Wipe any stale key bytes from a previous occupant.
                 s.peer_send_key[i] = [0u8; 32];
                 s.peer_recv_key[i] = [0u8; 32];
@@ -347,6 +377,12 @@ pub fn close_peer(peer_id: PeerId) -> Result<(), SysWgError> {
         s.peer_send_counter[i] = 0;
         s.peer_recv_counter[i] = 0;
         s.peer_recv_window_bits[i] = 0;
+        s.peer_init_active[i] = 0;
+        s.peer_init_our_sender_index[i] = 0;
+        s.peer_init_eph_sk_seed[i] = [0u8; 32];
+        s.peer_init_eph_pk[i] = [0u8; 32];
+        s.peer_init_c[i] = [0u8; 32];
+        s.peer_init_h[i] = [0u8; 32];
         Ok(())
     })
 }
@@ -430,6 +466,204 @@ pub fn close_peer_by_static_pk(static_pk: &[u8; wireguard::KEY_LEN]) -> Result<(
         Some(id) => close_peer(id),
         None => Ok(()),
     }
+}
+
+/// End-to-end initiator-role selftest. Caller plays the
+/// RESPONDER side (using its own keypair), sys-wg plays the
+/// INITIATOR side. Validates:
+///   - sys-wg's start_handshake produces wire-valid InitMsg bytes.
+///   - mac1 against the responder's static_pk verifies.
+///   - Responder side can drive responder_consume_init +
+///     responder_send_response with sys-wg's bytes.
+///   - sys-wg's finish_handshake correctly consumes the
+///     response and installs session keys.
+///   - A wrap/unwrap round trip through sys-wg uses those keys.
+///
+/// Returns `(handshake_ok, transport_ok)`.
+pub fn selftest_initiator() -> Option<(bool, bool)> {
+    // We need a peer with sys-wg's pubkey = our actual pubkey
+    // (sys-wg's static pubkey, which we PIN against an initiator
+    // we generated). For the initiator path, peer.static_pk is
+    // the RESPONDER's pubkey from sys-wg's POV, so we register a
+    // peer keyed on a RESPONDER keypair the test owns.
+    let responder = WgKeypair::generate();
+
+    // Clean any prior registration of this pubkey, then register.
+    let _ = close_peer_by_static_pk(&responder.static_pk);
+    let peer_id = match register_peer(responder.static_pk) {
+        Ok(id) => id,
+        Err(_) => return None,
+    };
+
+    // Pick our_sender_index (in the real flow, wg_dispatch picks
+    // it; for this direct-API selftest we pick locally).
+    let our_idx: u32 = 0xCAFEC0DE;
+
+    let wire = start_handshake_as_initiator(peer_id, our_idx).ok()?;
+
+    // Responder side: parse + verify mac1 against the responder
+    // pubkey it owns.
+    let parsed = wireguard::parse_init_msg(&wire.init_wire, &responder.static_pk).ok()?;
+    if parsed.sender_index != our_idx { return None; }
+
+    // Drive responder_consume_init + responder_send_response.
+    let (mut resp_state, _ts) = wireguard::responder_consume_init(
+        &responder, &parsed.eph_pk, &parsed.enc_static, &parsed.enc_timestamp,
+    ).ok()?;
+    let (enc_empty, responder_eph_pk, mut responder_tx_keys) =
+        wireguard::responder_send_response(&mut resp_state, &parsed.eph_pk).ok()?;
+
+    // sys-wg's finish_handshake consumes the response bytes.
+    finish_handshake_as_initiator(peer_id, &responder_eph_pk, &enc_empty).ok()?;
+    let handshake_ok = peer_has_session(peer_id);
+
+    // Wrap/unwrap round trip using sys-wg's installed keys.
+    let pt = b"initiator wins";
+    let ct = wrap(peer_id, pt).ok()?;
+    let recovered = wireguard::transport_recv(&mut responder_tx_keys, 0, &ct).ok()?;
+    let transport_ok = recovered.as_slice() == pt;
+
+    let _ = close_peer(peer_id);
+    Some((handshake_ok, transport_ok))
+}
+
+/// Output of `start_handshake_as_initiator`: the InitMsg wire
+/// bytes (148 B per WG whitepaper §5.4.2) the caller transmits
+/// to the peer, plus the `our_sender_index` field we picked. The
+/// caller registers `(our_sender_index, peer_id)` in the
+/// `wg_dispatch` session table so an incoming Response can be
+/// routed back to this peer.
+pub struct InitiatorWire {
+    pub init_wire: [u8; wireguard::INIT_MSG_LEN],
+    pub our_sender_index: u32,
+}
+
+/// Build a new InitMsg targeting `peer_id`. Generates a fresh
+/// ephemeral keypair (seed stored in cave-private), runs Noise
+/// IK half-handshake, stashes `(eph_sk_seed, c, h)` in the
+/// cave-private peer slot, and emits 148 bytes of wire-format
+/// InitMsg the caller can hand to `udp::send` (or any other
+/// transport).
+///
+/// Pre-conditions:
+///   - `peer_id` must be a registered peer (its `static_pk`
+///     is the responder we're targeting).
+///   - No in-progress initiator handshake for this peer (we
+///     reject if `peer_init_active != 0` — call `close_peer` to
+///     reset first if you really want to abandon a pending one).
+///
+/// `our_sender_index` is provided by the caller (since
+/// `wg_dispatch` owns the sender-index allocator); we just
+/// record it for later validation in `finish_handshake_as_initiator`.
+pub fn start_handshake_as_initiator(
+    peer_id: PeerId,
+    our_sender_index: u32,
+) -> Result<InitiatorWire, SysWgError> {
+    let sys_wg_id = sys_caves::sys_wg_id().ok_or(SysWgError::UnknownPeer)? as u16;
+    cave::with_cave_active(sys_wg_id, || -> Result<InitiatorWire, SysWgError> {
+        let s = unsafe { state_mut().ok_or(SysWgError::UnknownPeer)? };
+        if s.initialized == 0 { return Err(SysWgError::UnknownPeer); }
+        let i = peer_id.0 as usize;
+        if i >= MAX_PEERS || s.peer_in_use[i] == 0 {
+            return Err(SysWgError::UnknownPeer);
+        }
+        if s.peer_init_active[i] != 0 {
+            // A previous start_handshake is still waiting for
+            // its Response. Caller should call close_peer +
+            // register_peer to fully reset, or finish the
+            // pending one. We refuse to silently overwrite.
+            return Err(SysWgError::Wg(WgError::KdfFail));
+        }
+
+        let kp = wireguard::WgKeypair::from_seed(s.static_sk_seed);
+        let responder_static_pk = s.peer_static_pk[i];
+
+        // Generate eph seed.
+        let mut eph_seed = [0u8; wireguard::KEY_LEN];
+        crate::crypto::rng::fill_bytes(&mut eph_seed);
+
+        let timestamp = [0u8; wireguard::TIMESTAMP_LEN];
+        let (state, eph_pk, enc_static, enc_ts) =
+            wireguard::initiator_send_init_with_seed(
+                &kp, &responder_static_pk, &timestamp, eph_seed,
+            )?;
+
+        // Encode wire bytes (148 B).
+        let init_wire = wireguard::encode_init_msg(
+            our_sender_index, &eph_pk, &enc_static, &enc_ts,
+            &responder_static_pk,
+        )?;
+
+        // Stash the chaining state in cave-private. We need
+        // `eph_sk_seed`, `c`, `h` to drive
+        // `initiator_finish_handshake` on Response arrival.
+        s.peer_init_active[i] = 1;
+        s.peer_init_our_sender_index[i] = our_sender_index;
+        s.peer_init_eph_sk_seed[i] = eph_seed;
+        s.peer_init_eph_pk[i] = eph_pk;
+        s.peer_init_c[i] = state.c;
+        s.peer_init_h[i] = state.h;
+
+        Ok(InitiatorWire { init_wire, our_sender_index })
+    })
+}
+
+/// Consume a Response on the initiator side. Reconstructs the
+/// `InitiatorState` saved at `start_handshake_as_initiator` time,
+/// runs `initiator_finish_handshake`, installs the resulting
+/// `TransportKeys` in the peer slot, clears the in-progress
+/// flag.
+///
+/// `their_sender_index` is the responder's chosen sender_index
+/// (the `sender_index` field of the Response message). We
+/// record it implicitly via the wg_dispatch session table the
+/// caller is expected to update — sys-wg doesn't need it for
+/// the AEAD math, only for routing future outbound packets,
+/// which the caller does.
+pub fn finish_handshake_as_initiator(
+    peer_id: PeerId,
+    responder_eph_pk: &[u8; wireguard::KEY_LEN],
+    enc_empty: &[u8],
+) -> Result<(), SysWgError> {
+    if enc_empty.len() != wireguard::TAG_LEN { return Err(SysWgError::Wg(WgError::BadLen)); }
+    let sys_wg_id = sys_caves::sys_wg_id().ok_or(SysWgError::UnknownPeer)? as u16;
+    cave::with_cave_active(sys_wg_id, || -> Result<(), SysWgError> {
+        let s = unsafe { state_mut().ok_or(SysWgError::UnknownPeer)? };
+        let i = peer_id.0 as usize;
+        if i >= MAX_PEERS || s.peer_in_use[i] == 0 || s.peer_init_active[i] == 0 {
+            return Err(SysWgError::UnknownPeer);
+        }
+
+        // Rebuild keypair + initiator state from cave-private.
+        let kp = wireguard::WgKeypair::from_seed(s.static_sk_seed);
+        let eph_sk = StaticSecret::from(s.peer_init_eph_sk_seed[i]);
+
+        let mut state = wireguard::InitiatorState {
+            eph_sk,
+            eph_pk: s.peer_init_eph_pk[i],
+            responder_static_pk: s.peer_static_pk[i],
+            c: s.peer_init_c[i],
+            h: s.peer_init_h[i],
+        };
+        let tx_keys = wireguard::initiator_finish_handshake(
+            &kp, &mut state, responder_eph_pk, enc_empty,
+        )?;
+
+        // Install transport keys + clear init-in-progress state.
+        s.peer_send_key[i] = tx_keys.send_key;
+        s.peer_recv_key[i] = tx_keys.recv_key;
+        s.peer_send_counter[i] = tx_keys.send_counter;
+        s.peer_recv_counter[i] = tx_keys.recv_counter;
+        s.peer_recv_window_bits[i] = tx_keys.recv_window_bits;
+        s.peer_has_session[i] = 1;
+
+        s.peer_init_active[i] = 0;
+        s.peer_init_eph_sk_seed[i] = [0u8; 32];  // wipe seed
+        s.peer_init_c[i] = [0u8; 32];
+        s.peer_init_h[i] = [0u8; 32];
+
+        Ok(())
+    })
 }
 
 /// Consume an InitMsg, derive `(c, h)`, install responder

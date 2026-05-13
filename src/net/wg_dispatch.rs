@@ -139,6 +139,37 @@ fn session_by_our_index(our_idx: u32) -> Option<PeerId> {
         .map(|s| s.peer_id)
 }
 
+/// Update the `their_sender_index` field on an existing session.
+/// Called by `dispatch_response` once the responder's index is
+/// known (it wasn't at start_handshake time — we'd only allocated
+/// our own). No-op if the session slot doesn't exist.
+fn update_their_index(our_idx: u32, their_idx: u32) {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    let sessions = unsafe { &mut *core::ptr::addr_of_mut!(SESSIONS) };
+    for slot in sessions.iter_mut() {
+        if slot.in_use && slot.our_sender_index == our_idx {
+            slot.their_sender_index = their_idx;
+            return;
+        }
+    }
+}
+
+/// Initiator-side: build an InitMsg for `peer_id` and remember
+/// the session in our table. Returns the wire bytes + the
+/// `our_sender_index` we picked. Caller transmits the bytes to
+/// the peer's UDP endpoint; the eventual Response is routed
+/// back via `dispatch_response` keyed on `our_sender_index`.
+pub fn start_outbound_handshake(peer_id: PeerId)
+    -> Option<[u8; wireguard::INIT_MSG_LEN]>
+{
+    let our_idx = alloc_sender_index();
+    let wire = sys_wg_ipc::request_start_handshake(peer_id.as_u8(), our_idx)?;
+    // Install the session with placeholder their_sender_index =
+    // 0; dispatch_response fills it in when the Response arrives.
+    install_session(our_idx, 0, peer_id);
+    Some(wire)
+}
+
 /// Drop all session entries — for selftests to start from a known
 /// state. NOT exposed publicly outside of selftests.
 pub fn debug_clear_sessions() {
@@ -158,11 +189,7 @@ pub fn dispatch_wire(bytes: &[u8]) -> WgDispatchResult {
     match bytes[0] {
         MSG_TYPE_INIT => dispatch_init(bytes),
         MSG_TYPE_TRANSPORT => dispatch_transport(bytes),
-        MSG_TYPE_RESPONSE => {
-            // We don't initiate handshakes yet, so an inbound
-            // Response we didn't ask for is a stray packet.
-            WgDispatchResult::Err(WgError::BadLen)
-        }
+        MSG_TYPE_RESPONSE => dispatch_response(bytes),
         MSG_TYPE_COOKIE => {
             // Cookie / DoS path not implemented; spec allows
             // dropping cookies as long as we don't rate-limit.
@@ -244,6 +271,37 @@ fn dispatch_init(bytes: &[u8]) -> WgDispatchResult {
     }
 }
 
+fn dispatch_response(bytes: &[u8]) -> WgDispatchResult {
+    // We need the matching peer to validate mac1 against the
+    // initiator's static_pk (= our static_pk from the
+    // responder's POV, but here from OUR POV — we are the
+    // initiator — it's sys-wg's static_pk).
+    let our_pk = match sys_wg_ipc::request_pubkey() {
+        Some(pk) => pk,
+        None => return WgDispatchResult::Err(WgError::KdfFail),
+    };
+    let parsed = match wireguard::parse_response_msg(bytes, &our_pk) {
+        Ok(p) => p,
+        Err(e) => return WgDispatchResult::Err(e),
+    };
+    // receiver_index = OUR sender_index that we picked at
+    // start_outbound_handshake.
+    let peer_id = match session_by_our_index(parsed.receiver_index) {
+        Some(p) => p,
+        None => return WgDispatchResult::Err(WgError::BadLen),
+    };
+    // Finish the initiator-side handshake via IPC.
+    if sys_wg_ipc::request_finish_handshake(
+        peer_id.as_u8(), &parsed.eph_pk, &parsed.enc_empty,
+    ).is_none() {
+        return WgDispatchResult::Err(WgError::KdfFail);
+    }
+    // Record their sender_index so outbound Transport frames
+    // can target it.
+    update_their_index(parsed.receiver_index, parsed.sender_index);
+    WgDispatchResult::Nothing
+}
+
 fn dispatch_transport(bytes: &[u8]) -> WgDispatchResult {
     let parsed = match wireguard::parse_transport_msg(bytes) {
         Ok(p) => p,
@@ -263,6 +321,68 @@ fn dispatch_transport(bytes: &[u8]) -> WgDispatchResult {
         Some(pt) => WgDispatchResult::InboundPacket(pt),
         None => WgDispatchResult::Err(WgError::BadMac),
     }
+}
+
+/// Initiator-role end-to-end selftest. We (sys-wg) initiate, the
+/// test plays responder over loopback wire bytes.
+///   1. Register a peer keyed on a responder keypair the test owns.
+///   2. `start_outbound_handshake(peer_id)` -> InitMsg wire.
+///   3. Responder side: parse_init_msg + responder_consume_init +
+///      responder_send_response + encode_response_msg.
+///   4. Feed the Response bytes to `dispatch_wire`. Returns
+///      Nothing on success (initiator side internally completed).
+///   5. The session must now exist; transport_send via
+///      `dispatch_wire` round-trips a plaintext.
+///
+/// Returns `(handshake_ok, transport_ok)`.
+pub fn selftest_initiator_role() -> Option<(bool, bool)> {
+    use wireguard::{WgKeypair, TIMESTAMP_LEN};
+
+    debug_clear_sessions();
+    let responder_kp = WgKeypair::generate();
+
+    let _ = sys_wg_service::close_peer_by_static_pk(&responder_kp.static_pk);
+    let peer_id = sys_wg_service::register_peer(responder_kp.static_pk).ok()?;
+
+    // sys-wg builds the InitMsg.
+    let init_wire = start_outbound_handshake(peer_id)?;
+
+    // Responder side: parse + consume + build Response.
+    let parsed_init = wireguard::parse_init_msg(&init_wire, &responder_kp.static_pk).ok()?;
+    let (mut resp_state, _ts) = wireguard::responder_consume_init(
+        &responder_kp, &parsed_init.eph_pk,
+        &parsed_init.enc_static, &parsed_init.enc_timestamp,
+    ).ok()?;
+    let (enc_empty, responder_eph_pk, mut responder_tx_keys) =
+        wireguard::responder_send_response(&mut resp_state, &parsed_init.eph_pk).ok()?;
+    // Encode response wire bytes. Responder picks its own
+    // sender_index; receiver_index = the initiator's
+    // sender_index from the parsed Init.
+    let responder_sender_idx = 0x9999_AAAA_u32;
+    let resp_wire = wireguard::encode_response_msg(
+        responder_sender_idx, parsed_init.sender_index,
+        &responder_eph_pk, &enc_empty,
+        // mac1 for Response keys on the INITIATOR's pubkey =
+        // sys-wg's pubkey from the responder's POV.
+        &sys_wg_ipc::request_pubkey()?,
+    ).ok()?;
+
+    // Feed Response into dispatch_wire (mimics receipt over UDP).
+    let handshake_ok = matches!(
+        dispatch_wire(&resp_wire),
+        WgDispatchResult::Nothing,
+    );
+    if !handshake_ok { return Some((false, false)); }
+
+    // Transport round trip. sys-wg wraps a plaintext; we
+    // verify the responder side can decrypt it.
+    let pt = b"initiator-role e2e via dispatch_wire";
+    let ct = sys_wg_ipc::request_wrap(peer_id.as_u8(), pt)?;
+    let recovered = wireguard::transport_recv(&mut responder_tx_keys, 0, &ct).ok()?;
+    let transport_ok = recovered.as_slice() == pt;
+
+    let _ = sys_wg_service::close_peer(peer_id);
+    Some((handshake_ok, transport_ok))
 }
 
 /// Synthetic end-to-end selftest. Walks through:

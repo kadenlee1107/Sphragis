@@ -58,10 +58,11 @@ pub const RSP_DATA_MAX: usize = 1600;
 // ── Opcodes ─────────────────────────────────────────────────────
 pub const OP_NONE:   u32 = 0;
 pub const OP_PUBKEY: u32 = 1;
-// Reserved for future slices (declared so opcode space is stable):
-pub const OP_HANDSHAKE: u32 = 2;
+pub const OP_HANDSHAKE: u32 = 2;       // responder-side: consume Init -> emit Response
 pub const OP_WRAP:      u32 = 3;
 pub const OP_UNWRAP:    u32 = 4;
+pub const OP_START_HANDSHAKE:  u32 = 5; // initiator-side: build Init wire bytes
+pub const OP_FINISH_HANDSHAKE: u32 = 6; // initiator-side: consume Response -> install session
 
 // ── Response status ─────────────────────────────────────────────
 pub const STATUS_PENDING: i32 =  0;
@@ -112,10 +113,12 @@ fn service_main() -> ! {
             continue;
         }
         match op {
-            OP_PUBKEY    => handle_pubkey(),
-            OP_HANDSHAKE => handle_handshake(),
-            OP_WRAP      => handle_wrap(),
-            OP_UNWRAP    => handle_unwrap(),
+            OP_PUBKEY           => handle_pubkey(),
+            OP_HANDSHAKE        => handle_handshake(),
+            OP_WRAP             => handle_wrap(),
+            OP_UNWRAP           => handle_unwrap(),
+            OP_START_HANDSHAKE  => handle_start_handshake(),
+            OP_FINISH_HANDSHAKE => handle_finish_handshake(),
             _ => RSP_STATUS.store(STATUS_ERR_OP, Ordering::Release),
         }
         // Mark the request consumed before releasing IPC_BUSY,
@@ -238,6 +241,77 @@ fn handle_handshake() {
                 }
             }
             RSP_LEN.store(HS_RSP_LEN as u32, Ordering::Release);
+            RSP_STATUS.store(STATUS_OK, Ordering::Release);
+        }
+        Err(_) => RSP_STATUS.store(STATUS_ERR_SVC, Ordering::Release),
+    }
+}
+
+/// OP_START_HANDSHAKE request layout in `REQ_DATA` (8 bytes):
+///   byte  0    : peer_id (u8)
+///   bytes 1..4 : reserved (zero)
+///   bytes 4..8 : our_sender_index (u32 LE)
+///
+/// Response layout in `RSP_DATA`: 148 bytes of InitMsg wire
+/// ready for UDP send.
+const SH_REQ_LEN: usize = 8;
+const SH_RSP_LEN: usize = wireguard::INIT_MSG_LEN;
+
+fn handle_start_handshake() {
+    let req_len = REQ_LEN.load(Ordering::Acquire) as usize;
+    if req_len != SH_REQ_LEN {
+        RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
+        return;
+    }
+    let (peer_id_raw, our_idx) = unsafe {
+        let src = core::ptr::addr_of!(REQ_DATA) as *const u8;
+        let peer_id_raw = core::ptr::read_volatile(src);
+        let mut idx_bytes = [0u8; 4];
+        for i in 0..4 { idx_bytes[i] = core::ptr::read_volatile(src.add(4 + i)); }
+        (peer_id_raw, u32::from_le_bytes(idx_bytes))
+    };
+    let peer_id = sys_wg_service::PeerId::from(peer_id_raw);
+    match sys_wg_service::start_handshake_as_initiator(peer_id, our_idx) {
+        Ok(wire) => unsafe {
+            let dst = core::ptr::addr_of_mut!(RSP_DATA) as *mut u8;
+            for i in 0..SH_RSP_LEN {
+                core::ptr::write_volatile(dst.add(i), wire.init_wire[i]);
+            }
+            RSP_LEN.store(SH_RSP_LEN as u32, Ordering::Release);
+            RSP_STATUS.store(STATUS_OK, Ordering::Release);
+        },
+        Err(_) => RSP_STATUS.store(STATUS_ERR_SVC, Ordering::Release),
+    }
+}
+
+/// OP_FINISH_HANDSHAKE request layout in `REQ_DATA` (52 bytes):
+///   byte  0     : peer_id (u8)
+///   bytes 1..4  : reserved (zero)
+///   bytes 4..36 : responder_eph_pk ([u8; 32])
+///   bytes 36..52: enc_empty ([u8; 16] AEAD tag)
+///
+/// Response: empty body, just STATUS_OK or STATUS_ERR_SVC.
+const FH_REQ_LEN: usize = 52;
+
+fn handle_finish_handshake() {
+    let req_len = REQ_LEN.load(Ordering::Acquire) as usize;
+    if req_len != FH_REQ_LEN {
+        RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
+        return;
+    }
+    let (peer_id_raw, resp_eph_pk, enc_empty) = unsafe {
+        let src = core::ptr::addr_of!(REQ_DATA) as *const u8;
+        let peer_id_raw = core::ptr::read_volatile(src);
+        let mut eph = [0u8; wireguard::KEY_LEN];
+        for i in 0..wireguard::KEY_LEN { eph[i] = core::ptr::read_volatile(src.add(4 + i)); }
+        let mut tag = [0u8; wireguard::TAG_LEN];
+        for i in 0..wireguard::TAG_LEN { tag[i] = core::ptr::read_volatile(src.add(36 + i)); }
+        (peer_id_raw, eph, tag)
+    };
+    let peer_id = sys_wg_service::PeerId::from(peer_id_raw);
+    match sys_wg_service::finish_handshake_as_initiator(peer_id, &resp_eph_pk, &enc_empty) {
+        Ok(()) => {
+            RSP_LEN.store(0, Ordering::Release);
             RSP_STATUS.store(STATUS_OK, Ordering::Release);
         }
         Err(_) => RSP_STATUS.store(STATUS_ERR_SVC, Ordering::Release),
@@ -413,6 +487,43 @@ pub fn request_pubkey() -> Option<[u8; wireguard::KEY_LEN]> {
     let mut out = [0u8; wireguard::KEY_LEN];
     out.copy_from_slice(&bytes[..wireguard::KEY_LEN]);
     Some(out)
+}
+
+/// IPC client for OP_START_HANDSHAKE. sys-wg generates an
+/// ephemeral keypair, drives the Noise IK half-handshake against
+/// the peer's pinned static_pk, returns 148-byte InitMsg wire
+/// bytes ready for UDP transmission. `our_sender_index` is the
+/// caller's choice — typically `wg_dispatch::alloc_sender_index`.
+pub fn request_start_handshake(
+    peer_id: u8,
+    our_sender_index: u32,
+) -> Option<[u8; wireguard::INIT_MSG_LEN]> {
+    let mut req = [0u8; SH_REQ_LEN];
+    req[0] = peer_id;
+    req[4..8].copy_from_slice(&our_sender_index.to_le_bytes());
+    let bytes = dispatch_one_shot(OP_START_HANDSHAKE, &req)?;
+    if bytes.len() != SH_RSP_LEN { return None; }
+    let mut out = [0u8; wireguard::INIT_MSG_LEN];
+    out.copy_from_slice(&bytes[..wireguard::INIT_MSG_LEN]);
+    Some(out)
+}
+
+/// IPC client for OP_FINISH_HANDSHAKE. Caller has parsed a
+/// Response wire message (`parse_response_msg`) and extracted
+/// the responder's ephemeral pubkey + enc_empty tag; this
+/// completes the handshake on sys-wg's side.
+pub fn request_finish_handshake(
+    peer_id: u8,
+    responder_eph_pk: &[u8; wireguard::KEY_LEN],
+    enc_empty: &[u8],
+) -> Option<()> {
+    if enc_empty.len() != wireguard::TAG_LEN { return None; }
+    let mut req = [0u8; FH_REQ_LEN];
+    req[0] = peer_id;
+    req[4..36].copy_from_slice(responder_eph_pk);
+    req[36..52].copy_from_slice(enc_empty);
+    let _ = dispatch_one_shot(OP_FINISH_HANDSHAKE, &req)?;
+    Some(())
 }
 
 /// Parsed responder side of a handshake completed via the IPC
