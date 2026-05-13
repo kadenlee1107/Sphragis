@@ -589,21 +589,32 @@ packets per source category). Cross-Domain Solutions for TS ↔ S
 movement.
 
 ✅ Have: cave isolation as a coarse compartment (per-cave audit, firewall,
-syscall filter). Default-deny posture. **Bell-LaPadula sensitivity lattice
-in tree (2026-05-12)**: `cave::Sensitivity` (U / C / S / TS) per cave;
-`cave::can_flow(subject, object, op)` for no-read-up / no-write-down;
-`batfs::ns_create` stamps the active cave's label onto each file;
-`batfs::ns_read` enforces the simple security property with `Err("mls:
-no read-up")`. Operator API: `mls-set`, `mls-show`, `mls-check`.
-`mls-selftest` covers the full lattice + the BatFS enforcement.
+syscall filter). Default-deny posture. **Two-axis MLS lattice (2026-05-12)**:
+  - Bell-LaPadula confidentiality: `cave::Sensitivity` (U/C/S/TS) +
+    `can_flow(subject, object, op)` for no-read-up / no-write-down.
+  - Biba integrity: `cave::Integrity` (U/SB/ST/HI) +
+    `can_flow_integrity(subject, object, op)` for no-read-down /
+    no-write-up. Dual to BLP — high-integrity caves refuse low-integrity
+    input even when BLP would allow it.
+  - Both labels propagate: `batfs::ns_create` stamps creator's
+    `(sens, integ)` onto the file; `batfs::ns_read` enforces both
+    properties (`Err("mls: no read-up")` / `Err("mls: no read-down")`).
+  - `batcave::mls_ipc` labeled mailbox: enforces BLP write-down +
+    Biba write-up on send, BLP read-up + Biba read-down on recv
+    (belt-and-suspenders for runtime label changes between
+    send and recv).
+  - Operator API: `mls-set`, `mls-show`, `mls-check`, `integ-set`,
+    `integ-show`. Selftests: `mls-selftest`, `mls-ipc-selftest`,
+    `biba-selftest`.
 ❌ Missing:
-- No labels on sockets / IPC messages (lattice exists; the IPC + net
-  hooks are the next slice).
-- No type enforcement à la SELinux (we have BLP confidentiality only;
-  no Biba integrity yet, no domain transitions).
-- No labeled networking (no SECMARK / CALIPSO / CIPSO).
-- No compartments / categories (we have a linear lattice; CC needs
+- Labeled networking (no SECMARK / CALIPSO / CIPSO).
+- Type enforcement à la SELinux (we have BLP + Biba confidentiality
+  & integrity; no domain transitions, no rich type matrix).
+- Compartments / categories (we have linear lattices; CC needs
   lattice + categories for SCI handling).
+- Cryptographic binding between MLS labels and the data they label
+  (a future pass would AEAD-bind the labels so a race attacker
+  can't smuggle one body under another's label).
 
 ### 3.3 Trusted computing / attestation
 
