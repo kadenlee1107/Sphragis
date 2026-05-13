@@ -313,7 +313,26 @@ pub fn active_mount_prefix(out: &mut [u8; 80]) -> usize {
 pub fn active_charge_pages(pages: u32) -> Result<(), &'static str> {
     let id = get_active();
     if id == usize::MAX || id >= MAX_CAVES { return Ok(()); }
-    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    charge_pages_for(id as u16, pages)
+}
+
+/// Release `pages` previously charged via `active_charge_pages`.
+/// Safe to over-call slightly — saturates at zero.
+pub fn active_release_pages(pages: u32) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return; }
+    release_pages_for(id as u16, pages);
+}
+
+/// Explicit-cave charge — for allocators that know the target
+/// cave_id directly (e.g. `cave_private::ensure_page(cave_id)`
+/// allocates one frame for cave_id, regardless of which cave is
+/// active when it runs). Same semantics as `active_charge_pages`:
+/// quota 0 means unlimited; over-quota returns Err.
+pub fn charge_pages_for(cave_id: u16, pages: u32) -> Result<(), &'static str> {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return Ok(()); }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[idx] };
     if cave.mem_quota_pages == 0 { return Ok(()); }
     let used = cave.mem_used_pages.load(Ordering::Relaxed);
     if used.saturating_add(pages) > cave.mem_quota_pages {
@@ -323,12 +342,11 @@ pub fn active_charge_pages(pages: u32) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Release `pages` previously charged via `active_charge_pages`.
-/// Safe to over-call slightly — saturates at zero.
-pub fn active_release_pages(pages: u32) {
-    let id = get_active();
-    if id == usize::MAX || id >= MAX_CAVES { return; }
-    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+/// Release `pages` previously charged via `charge_pages_for`.
+pub fn release_pages_for(cave_id: u16, pages: u32) {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[idx] };
     let mut cur = cave.mem_used_pages.load(Ordering::Relaxed);
     loop {
         let new = cur.saturating_sub(pages);
@@ -339,6 +357,17 @@ pub fn active_release_pages(pages: u32) {
             Err(observed) => cur = observed,
         }
     }
+}
+
+/// Read a specific cave's `(used, quota)` page counts. Mirrors
+/// `active_quota_status` for cases where the caller knows the
+/// target cave_id directly (e.g. selftests asserting a charge
+/// landed on the right cave).
+pub fn quota_status_for(cave_id: u16) -> (u32, u32) {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return (0, 0); }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[idx] };
+    (cave.mem_used_pages.load(Ordering::Relaxed), cave.mem_quota_pages)
 }
 
 /// Read the active cave's (used, quota) page counts. Returns

@@ -82,7 +82,21 @@ fn run_small_elf(elf_data: &[u8], name: &str) -> Result<(), &'static str> {
     let code_offset = 120;
     let code_size = elf_data.len() - code_offset;
 
-    let code_page = frame::alloc_frame().ok_or("out of memory")?;
+    // gap-audit 030 expansion: ELF execution allocates 1 code page
+    // + 4 stack pages on behalf of the active cave. Charge the
+    // cave's quota up front. Quota 0 = unlimited, so default
+    // caves are unaffected; an admin-tightened cave that's over
+    // its limit gets the same `cave: memory quota exceeded`
+    // error string shm / pipe / batfs already use.
+    crate::batcave::cave::active_charge_pages(5)?;
+
+    let code_page = match frame::alloc_frame() {
+        Some(p) => p,
+        None => {
+            crate::batcave::cave::active_release_pages(5);
+            return Err("out of memory");
+        }
+    };
 
     for i in 0..code_size {
         let byte = elf_data[code_offset + i];
@@ -92,7 +106,13 @@ fn run_small_elf(elf_data: &[u8], name: &str) -> Result<(), &'static str> {
         }
     }
 
-    let stack_base = frame::alloc_frame().ok_or("out of memory")?;
+    let stack_base = match frame::alloc_frame() {
+        Some(p) => p,
+        None => {
+            crate::batcave::cave::active_release_pages(5);
+            return Err("out of memory");
+        }
+    };
     for _ in 0..3 { frame::alloc_frame(); }
     let stack_top = stack_base + 4 * 4096;
 
