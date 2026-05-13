@@ -3497,9 +3497,81 @@ fn cmd_cave_private_selftest() {
     }
     console::puts("  ✓ ensure_page is idempotent — same VA returned on re-call\n");
 
+    // Per-cave kernel data partitioning: cross-cave isolation.
+    // The kernel-ns sentinel cave now also has its L1 built (per
+    // sys_caves::init). Allocate cave-private for it too, then
+    // walk BOTH cave L1s to prove neither cave can reach the
+    // other's cave-private VA through the MMU walker.
+    let kns_id = match sys_caves::kernel_ns_id() {
+        Some(id) => id as u16,
+        None => {
+            console::puts("  ✗ FAIL: kernel-ns sentinel cave not initialized\n");
+            return;
+        }
+    };
+    let kns_l1 = match cave::get_cave_l1_phys(kns_id) {
+        Some(l1) => l1,
+        None => {
+            console::puts("  ✗ FAIL: kernel-ns sentinel cave has no L1 built\n");
+            return;
+        }
+    };
+    let kns_priv_va = match cave_private::ensure_page(kns_id) {
+        Some(v) => v,
+        None => {
+            console::puts("  ✗ FAIL: cave_private::ensure_page failed for kernel-ns sentinel\n");
+            return;
+        }
+    };
+    console::puts("  ✓ allocated cave-private for kernel-ns at 0x");
+    for sh in (0..16).rev() {
+        console::putc(hex[((kns_priv_va >> (sh * 4)) & 0xF) as usize]);
+    }
+    console::puts("\n");
+
+    // Cross-cave property:
+    //   sys-wg's cave-private VA (va, the one above) must be
+    //     UNMAPPED in kernel-ns's L1 — otherwise cave_id=0 code
+    //     would inherit sys-wg's private state.
+    //   kernel-ns's cave-private VA (kns_priv_va) must be
+    //     UNMAPPED in sys-wg's L1 — sys-wg can't reach kernel-ns
+    //     state either.
+    match mmu::pte_lookup(kns_l1, va) {
+        None => {
+            console::puts("  ✓ sys-wg cave-private VA NOT mapped in kernel-ns L1\n");
+        }
+        Some(_) => {
+            console::puts("  ✗ FAIL: sys-wg VA reachable from kernel-ns L1\n");
+            return;
+        }
+    }
+    match mmu::pte_lookup(sys_wg_l1, kns_priv_va) {
+        None => {
+            console::puts("  ✓ kernel-ns cave-private VA NOT mapped in sys-wg L1\n");
+        }
+        Some(_) => {
+            console::puts("  ✗ FAIL: kernel-ns VA reachable from sys-wg L1\n");
+            return;
+        }
+    }
+
+    // Runtime probe inside sys-wg's cave: probe-read kernel-ns's
+    // cave-private VA. The walker traverses sys-wg's L1, hits
+    // L3[0] (kernel-ns's l3_idx) which is unset → fault →
+    // probe_read returns None.
+    let kns_probe_in_sys_wg = cave::with_cave_active(sys_wg_id, || -> Option<u64> {
+        mmu::probe_read_u64(kns_priv_va)
+    });
+    if kns_probe_in_sys_wg.is_some() {
+        console::puts("  ✗ FAIL: probe_read from sys-wg context reached kernel-ns VA\n");
+        return;
+    }
+    console::puts("  ✓ probe_read of kernel-ns VA from sys-wg cave faulted\n");
+
     console::puts("  ✓ per-cave L1 restriction slice-1 verified\n");
     console::puts("  ✓ cave-pool PA carve-out verified\n");
     console::puts("  ✓ probe-mode fault handler observed faults instead of hanging\n");
+    console::puts("  ✓ per-cave kernel data partitioning: cross-cave isolation verified\n");
 }
 
 /// Selftest for the scheduler's block_on async-bridge primitive.
