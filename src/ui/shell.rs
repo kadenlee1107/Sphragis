@@ -433,7 +433,7 @@ fn execute_inner(cmd: &str) {
         "wg-initiator-selftest" => cmd_wg_initiator_selftest(),
         "wg-initiator-e2e-selftest" => cmd_wg_initiator_e2e_selftest(),
         "wg-endpoint-selftest" => cmd_wg_endpoint_selftest(),
-        "wg-test-outbound"    => cmd_wg_test_outbound(parts[1]),
+        "wg-test-outbound"    => cmd_wg_test_outbound(parts[1], parts[2]),
         "shm-selftest"        => cmd_shm_selftest(),
         "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
@@ -5034,24 +5034,30 @@ fn cmd_wg_endpoint_selftest() {
     }
 }
 
-/// `wg-test-outbound <ip:port>` — gap-audit item 043 "real-peer
-/// interop" partial slice. Registers a fresh fake peer, points
-/// its endpoint at the given UDP destination, then calls
-/// `wg_dispatch::initiate_connect` to fire a real WireGuard
-/// Init message through virtio-net.
+/// `wg-test-outbound <ip:port> [peer-pubkey-hex]` — drives real
+/// WireGuard outbound traffic through virtio-net.
 ///
-/// Used by `scripts/qemu_wg_real_peer_e2e.py`: the harness binds
-/// a UDP socket on the host (QEMU user-net 10.0.2.2 maps to
-/// the host's loopback), runs this command, and asserts that the
-/// Init packet actually traverses the wire and lands at the
-/// listener with valid Phase-2 framing.
-fn cmd_wg_test_outbound(target: &str) {
+/// Two modes:
+///   * No pubkey arg: registers a fresh RANDOM peer keypair, fires
+///     Init, prints `WG-OUTBOUND-SENT`. Used by the
+///     `qemu_wg_real_peer_e2e.py` smoke that just verifies the
+///     Init wire bytes show up at a host UDP listener.
+///   * With a 64-hex-char peer pubkey: registers the peer with
+///     that pubkey (so the mac1 in the Init is keyed by it, which
+///     a real Noise IK responder can verify). After sending Init,
+///     polls the dispatch SESSIONS table for up to ~3 s — if a
+///     Response arrives in that window, `their_sender_index`
+///     becomes non-zero and the command prints
+///     `WG-SESSION-ESTABLISHED`. Used by
+///     `qemu_wg_full_handshake_e2e.py` whose Python responder
+///     closes the handshake.
+fn cmd_wg_test_outbound(target: &str, peer_pubkey_hex: &str) {
     use crate::net::wg_dispatch;
     use crate::batcave::sys_wg_service;
     use crate::net::wireguard::WgKeypair;
 
     if target.is_empty() {
-        console::puts("  usage: wg-test-outbound <ip:port>\n");
+        console::puts("  usage: wg-test-outbound <ip:port> [peer-pubkey-hex]\n");
         return;
     }
     let (ip_s, port_s) = match target.rsplit_once(':') {
@@ -5073,9 +5079,26 @@ fn cmd_wg_test_outbound(target: &str) {
     console::puts("\n");
 
     wg_dispatch::debug_clear_sessions();
-    let fake_peer = WgKeypair::generate();
-    let _ = sys_wg_service::close_peer_by_static_pk(&fake_peer.static_pk);
-    let peer_id = match sys_wg_service::register_peer(fake_peer.static_pk) {
+
+    let peer_static_pk: [u8; 32] = if peer_pubkey_hex.is_empty() {
+        let fake_peer = WgKeypair::generate();
+        fake_peer.static_pk
+    } else {
+        if peer_pubkey_hex.len() != 64 {
+            console::puts("  ✗ peer-pubkey-hex must be 64 chars (32 bytes)\n");
+            return;
+        }
+        match parse_hex32(peer_pubkey_hex) {
+            Some(pk) => pk,
+            None => {
+                console::puts("  ✗ peer-pubkey-hex contained non-hex bytes\n");
+                return;
+            }
+        }
+    };
+
+    let _ = sys_wg_service::close_peer_by_static_pk(&peer_static_pk);
+    let peer_id = match sys_wg_service::register_peer(peer_static_pk) {
         Ok(pid) => pid,
         Err(_) => { console::puts("  ✗ register_peer failed\n"); return; }
     };
@@ -5096,6 +5119,40 @@ fn cmd_wg_test_outbound(target: &str) {
         }
         Err(_) => {
             console::puts("  ✗ initiate_connect failed (udp::send refused?)\n");
+            let _ = sys_wg_service::close_peer(peer_id);
+            return;
+        }
+    }
+
+    // If the caller supplied a real responder pubkey, the Python
+    // harness on the other end will compute a valid Response.
+    // Poll the session table for up to ~3 s — net::poll_once
+    // drives the inbound packet path including dispatch_response.
+    if !peer_pubkey_hex.is_empty() {
+        let freq: u64;
+        let start: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+            core::arch::asm!("mrs {}, cntpct_el0", out(reg) start);
+        }
+        let deadline = start + freq * 3;
+        let mut handshaked = false;
+        loop {
+            crate::net::poll_once();
+            if wg_dispatch::peer_handshake_established(peer_id) {
+                handshaked = true;
+                break;
+            }
+            let now: u64;
+            unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now); }
+            if now > deadline { break; }
+            core::hint::spin_loop();
+        }
+        if handshaked {
+            console::puts("  ✓ Response received; session.their_sender_index != 0\n");
+            console::puts("  ✓ WG-SESSION-ESTABLISHED\n");
+        } else {
+            console::puts("  ✗ no Response within deadline — session stayed half-open\n");
         }
     }
 
