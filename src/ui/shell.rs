@@ -451,6 +451,9 @@ fn execute_inner(cmd: &str) {
         "mls-check"           => cmd_mls_check(parts[1], parts[2], parts[3]),
         "mls-selftest"        => cmd_mls_selftest(),
         "mls-ipc-selftest"    => cmd_mls_ipc_selftest(),
+        "audit-seal"          => cmd_audit_seal(),
+        "audit-seal-verify"   => cmd_audit_seal_verify(),
+        "audit-seal-selftest" => cmd_audit_seal_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -8405,6 +8408,204 @@ fn cmd_mls_ipc_selftest() {
 
     mls_cleanup(sys_wg_id, kns_id);
     console::puts("  ✓ MLS labeled-IPC: BLP write-down + read-up enforcement verified\n");
+}
+
+/// `audit-seal` — write the current chain head + entry count to
+/// BatFS as a 40-byte sealed-checkpoint file. Operator runs this
+/// on a cadence (e.g. before every shutdown) so a full-ring rewrite
+/// becomes detectable on the next boot when `audit-seal-verify`
+/// recomputes the live chain against the seal.
+fn cmd_audit_seal() {
+    use crate::security::audit_chain;
+    let seal = audit_chain::current_seal();
+    let bytes = seal.encode();
+    // Admin-context write via the un-prefixed BatFS path — the seal
+    // is global, not per-cave.
+    let _ = crate::fs::batfs::delete("audit-chain.seal");
+    match crate::fs::batfs::create("audit-chain.seal", &bytes) {
+        Ok(()) => {
+            console::puts("  audit-seal: wrote seal (count=");
+            print_num(seal.count); console::puts(", hash=");
+            for b in seal.hash.iter().take(8) {
+                let hi = (b >> 4) & 0x0f; let lo = b & 0x0f;
+                let hc = if hi < 10 { (b'0' + hi) as char } else { (b'a' + hi - 10) as char };
+                let lc = if lo < 10 { (b'0' + lo) as char } else { (b'a' + lo - 10) as char };
+                let pair = [hc as u8, lc as u8];
+                console::puts(unsafe { core::str::from_utf8_unchecked(&pair) });
+            }
+            console::puts("...) -> audit-chain.seal\n");
+        }
+        Err(e) => { console::puts("  audit-seal: ");
+                    console::puts(e); console::puts("\n"); }
+    }
+}
+
+/// `audit-seal-verify` — read `audit-chain.seal` back from BatFS
+/// and verify it against the live audit ring. Reports Ok,
+/// Mismatch, Truncated, or one of the boundary cases.
+fn cmd_audit_seal_verify() {
+    use crate::security::audit_chain::{verify_seal, ChainSeal, SealVerify};
+    let mut buf = [0u8; 64];
+    let n = match crate::fs::batfs::read("audit-chain.seal", &mut buf) {
+        Ok(n) => n,
+        Err(e) => {
+            console::puts("  audit-seal-verify: no seal on file (");
+            console::puts(e); console::puts(")\n  hint: run `audit-seal` first\n");
+            return;
+        }
+    };
+    let seal = match ChainSeal::decode(&buf[..n]) {
+        Some(s) => s,
+        None => {
+            console::puts("  audit-seal-verify: malformed seal (wrong length)\n");
+            return;
+        }
+    };
+    match verify_seal(&seal) {
+        SealVerify::Ok => {
+            console::puts("  audit-seal-verify: OK (seal matches live chain at count=");
+            print_num(seal.count); console::puts(")\n");
+        }
+        SealVerify::Mismatch => {
+            console::puts("  audit-seal-verify: TAMPER — chain bytes disagree at count=");
+            print_num(seal.count); console::puts("\n");
+        }
+        SealVerify::Truncated { missing } => {
+            console::puts("  audit-seal-verify: TRUNCATED — ");
+            print_num(missing); console::puts(" entries missing since seal\n");
+        }
+        SealVerify::SealAboveRingTail => {
+            console::puts("  audit-seal-verify: seal predates oldest resident entry (ring rolled over)\n");
+        }
+        SealVerify::SealAheadOfHead => {
+            console::puts("  audit-seal-verify: seal is from a future run — ring is shorter than seal claims\n");
+        }
+    }
+}
+
+/// `audit-seal-selftest` — gov-grade §3.7 (audit & forensics).
+///
+/// Proves the off-platform seal closes the gap left by
+/// `audit-chain` alone: even if an attacker rewrites every entry
+/// AND its corresponding chain hash in CHAIN[], the seal's frozen
+/// `count + hash` from a past checkpoint still detects the
+/// substitution.
+///
+///   1. Record N audit events. Capture a seal.
+///   2. `verify_seal` against the live ring -> Ok.
+///   3. Tamper with one entry's bytes. `verify_seal` -> Mismatch.
+///   4. Restore. `verify_seal` -> Ok again.
+fn cmd_audit_seal_selftest() {
+    use crate::security::audit::{self, Category};
+    use crate::security::audit_chain::{current_seal, verify_seal, SealVerify};
+
+    console::puts_hi("  AUDIT-SEAL OFF-PLATFORM CHECKPOINT SELF-TEST\n");
+
+    audit::record(Category::Boot, b"audit-seal-selftest:e1");
+    audit::record(Category::Boot, b"audit-seal-selftest:e2");
+    audit::record(Category::Boot, b"audit-seal-selftest:e3");
+    audit::record(Category::Boot, b"audit-seal-selftest:e4");
+
+    let seal = current_seal();
+    if seal.count < 4 {
+        console::puts("  ✗ FAIL: seal count below 4 after 4 records\n");
+        return;
+    }
+    console::puts("  ✓ captured seal at count=");
+    print_num(seal.count); console::puts("\n");
+
+    match verify_seal(&seal) {
+        SealVerify::Ok => console::puts("  ✓ verify_seal Ok on clean ring\n"),
+        v => {
+            console::puts("  ✗ FAIL: verify_seal not Ok on clean ring: ");
+            print_seal_verdict(v);
+            return;
+        }
+    }
+
+    // Tamper with the 2nd-to-last entry. The seal hash captures
+    // a state that the new tampered chain can't match — even if
+    // attacker rebuilds CHAIN, the seal hash itself won't budge.
+    let tamper_idx = seal.count - 2;
+    unsafe { audit::tamper_test_flip_msg_byte(tamper_idx, 3); }
+
+    // Manually rebuild CHAIN for tamper_idx onward to simulate a
+    // resourceful attacker. Easiest way: call `verify_chain`,
+    // which will fail at tamper_idx, and treat that as proof the
+    // ring-only chain catches the edit. The seal's job is to
+    // catch this same edit even if CHAIN HAD been rebuilt.
+    //
+    // To prove the seal's additional power: re-compute CHAIN at
+    // tamper_idx in place (= attacker who fixed the chain too)
+    // and verify the SEAL alone still says Mismatch.
+    use crate::security::audit_chain;
+    // Re-run append_chain at tamper_idx with the current entry
+    // — same call path audit::record uses.
+    unsafe {
+        let entry = &audit::raw_ring()[tamper_idx % audit::RING_CAP];
+        audit_chain::append_chain(tamper_idx % audit::RING_CAP, entry, tamper_idx);
+    }
+    // Walk forward repairing the chain from tamper_idx+1 .. seal.count
+    // so the live CHAIN is internally consistent again.
+    for i in (tamper_idx + 1)..seal.count {
+        unsafe {
+            let entry = &audit::raw_ring()[i % audit::RING_CAP];
+            audit_chain::append_chain(i % audit::RING_CAP, entry, i);
+        }
+    }
+
+    // Now the in-ring chain validates. But the seal's hash was
+    // captured BEFORE the tamper — it should still flag mismatch.
+    match verify_seal(&seal) {
+        SealVerify::Mismatch => {
+            console::puts("  ✓ verify_seal detected attacker-rebuilt chain (Mismatch)\n");
+        }
+        v => {
+            console::puts("  ✗ FAIL: seal didn't catch the resourceful attacker: ");
+            print_seal_verdict(v);
+            // Restore byte so other tests are unaffected.
+            unsafe { audit::tamper_test_flip_msg_byte(tamper_idx, 3); }
+            for i in tamper_idx..seal.count {
+                unsafe {
+                    let entry = &audit::raw_ring()[i % audit::RING_CAP];
+                    audit_chain::append_chain(i % audit::RING_CAP, entry, i);
+                }
+            }
+            return;
+        }
+    }
+
+    // Restore the byte + rebuild CHAIN; verify_seal should recover.
+    unsafe { audit::tamper_test_flip_msg_byte(tamper_idx, 3); }
+    for i in tamper_idx..seal.count {
+        unsafe {
+            let entry = &audit::raw_ring()[i % audit::RING_CAP];
+            audit_chain::append_chain(i % audit::RING_CAP, entry, i);
+        }
+    }
+    match verify_seal(&seal) {
+        SealVerify::Ok => {
+            console::puts("  ✓ post-restore verify_seal Ok\n");
+        }
+        v => {
+            console::puts("  ✗ FAIL: post-restore: ");
+            print_seal_verdict(v);
+            return;
+        }
+    }
+
+    console::puts("  ✓ audit-seal: full-ring-rewrite attack detected via frozen checkpoint hash\n");
+}
+
+fn print_seal_verdict(v: crate::security::audit_chain::SealVerify) {
+    use crate::security::audit_chain::SealVerify;
+    console::puts(match v {
+        SealVerify::Ok => "Ok\n",
+        SealVerify::Mismatch => "Mismatch\n",
+        SealVerify::Truncated { .. } => "Truncated\n",
+        SealVerify::SealAboveRingTail => "SealAboveRingTail\n",
+        SealVerify::SealAheadOfHead => "SealAheadOfHead\n",
+    });
 }
 
 fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
