@@ -717,6 +717,34 @@ pub static PROBE_ACTIVE: core::sync::atomic::AtomicBool =
 pub static PROBE_FAULTED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
+/// Probe-write primitive — mirror of `probe_read_u64`. Attempt to
+/// store `value` at `va`. Returns `true` if the store completed,
+/// `false` if it would have faulted (translation, permission, etc.).
+///
+/// Use cases:
+///   - verify a mapping is writable from the current context;
+///   - prove a read-only mapping rejects writes;
+///   - prove a cross-cave VA traps on writes (mirror of the read
+///     side proof in the cave-private selftest).
+///
+/// Same single-threaded contract as `probe_read_u64`: no nesting,
+/// no concurrent probes from other CPUs.
+pub fn probe_write_u64(va: usize, value: u64) -> bool {
+    use core::sync::atomic::Ordering;
+    PROBE_ACTIVE.store(true, Ordering::Release);
+    PROBE_FAULTED.store(false, Ordering::Release);
+    unsafe {
+        core::arch::asm!(
+            "str {v}, [{a}]",
+            a = in(reg) va,
+            v = in(reg) value,
+            options(nostack, preserves_flags),
+        );
+    }
+    PROBE_ACTIVE.store(false, Ordering::Release);
+    !PROBE_FAULTED.load(Ordering::Acquire)
+}
+
 pub fn pte_lookup(l1_phys: usize, va: usize) -> Option<u64> {
     if l1_phys == 0 { return None; }
     let l1_idx = (va >> 30) & 0x1FF;

@@ -37,7 +37,8 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::batcave::sys_wg_service::{self, PeerId, SysWgError};
+use crate::batcave::sys_wg_ipc;
+use crate::batcave::sys_wg_service::{self, PeerId};
 use crate::net::wireguard::{
     self, MSG_TYPE_INIT, MSG_TYPE_RESPONSE, MSG_TYPE_TRANSPORT, MSG_TYPE_COOKIE,
     WgError, KEY_LEN,
@@ -88,14 +89,27 @@ static mut SESSIONS: [SessionEntry; MAX_SESSIONS] = [SessionEntry {
 static SENDER_INDEX_SEQ: core::sync::atomic::AtomicU32
     = core::sync::atomic::AtomicU32::new(1);
 
+/// Round-robin cursor for session eviction. When all slots are
+/// `in_use`, `install_session` overwrites `SESSIONS[NEXT_EVICT %
+/// MAX_SESSIONS]` and bumps the cursor. Crude but bounded — under
+/// normal traffic we don't fill the table, and under attack we'd
+/// rather drop the oldest tracked session than refuse the newest.
+static NEXT_EVICT: core::sync::atomic::AtomicU32
+    = core::sync::atomic::AtomicU32::new(0);
+
 fn alloc_sender_index() -> u32 {
     SENDER_INDEX_SEQ.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
 }
 
-fn install_session(our_idx: u32, their_idx: u32, peer_id: PeerId) -> bool {
+/// Install a new session. Prefers a free slot; falls back to
+/// round-robin eviction of an existing slot if all are in use.
+/// Returns `(slot_index, evicted_old)` — `evicted_old == true`
+/// means we overwrote a live session and the audit log should
+/// note it.
+fn install_session(our_idx: u32, their_idx: u32, peer_id: PeerId) -> (usize, bool) {
     let _g = crate::kernel::sync::IrqGuard::new();
     let sessions = unsafe { &mut *core::ptr::addr_of_mut!(SESSIONS) };
-    for slot in sessions.iter_mut() {
+    for (i, slot) in sessions.iter_mut().enumerate() {
         if !slot.in_use {
             *slot = SessionEntry {
                 in_use: true,
@@ -103,10 +117,19 @@ fn install_session(our_idx: u32, their_idx: u32, peer_id: PeerId) -> bool {
                 their_sender_index: their_idx,
                 peer_id,
             };
-            return true;
+            return (i, false);
         }
     }
-    false
+    // All slots in use — round-robin evict.
+    let cursor = NEXT_EVICT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let i = (cursor as usize) % MAX_SESSIONS;
+    sessions[i] = SessionEntry {
+        in_use: true,
+        our_sender_index: our_idx,
+        their_sender_index: their_idx,
+        peer_id,
+    };
+    (i, true)
 }
 
 fn session_by_our_index(our_idx: u32) -> Option<PeerId> {
@@ -150,7 +173,9 @@ pub fn dispatch_wire(bytes: &[u8]) -> WgDispatchResult {
 }
 
 fn dispatch_init(bytes: &[u8]) -> WgDispatchResult {
-    let our_pk = match sys_wg_service::service_pubkey() {
+    // Public-key lookup goes through IPC — sys-wg returns the
+    // pubkey without ever exposing the static seed.
+    let our_pk = match sys_wg_ipc::request_pubkey() {
         Some(pk) => pk,
         None => return WgDispatchResult::Err(WgError::KdfFail),
     };
@@ -159,10 +184,13 @@ fn dispatch_init(bytes: &[u8]) -> WgDispatchResult {
         Err(e) => return WgDispatchResult::Err(e),
     };
 
-    // Try each registered peer until one accepts (pinned-key
-    // check inside `complete_handshake_as_responder` will reject
-    // peers whose pinned static_pk doesn't match what the
-    // initiator embedded in `enc_static`).
+    // Peer registration is a control-plane operation that lives in
+    // `sys_wg_service::peer_*` (read-only introspection is
+    // information-only); the actual handshake-complete state-
+    // mutation runs entirely inside the service task via
+    // OP_HANDSHAKE. Walk registered peers, ask sys-wg to try the
+    // handshake against each (pinned-key mismatch is benign — the
+    // initiator was probably aimed at a different peer of ours).
     let peer_count = sys_wg_service::peer_count();
     if peer_count == 0 {
         return WgDispatchResult::Err(WgError::BadLen);
@@ -172,19 +200,15 @@ fn dispatch_init(bytes: &[u8]) -> WgDispatchResult {
     for slot in 0u8..(sys_wg_service::MAX_PEERS as u8) {
         let peer_id = PeerId::from(slot);
         if !sys_wg_service::peer_slot_in_use(peer_id) { continue; }
-        match sys_wg_service::complete_handshake_as_responder(
-            peer_id, &parsed.eph_pk, &parsed.enc_static, &parsed.enc_timestamp,
+        match sys_wg_ipc::request_handshake(
+            peer_id.as_u8(),
+            &parsed.eph_pk, &parsed.enc_static, &parsed.enc_timestamp,
         ) {
-            Ok(resp_wire) => {
-                session_for = Some((peer_id, resp_wire.responder_eph_pk, resp_wire.enc_empty));
+            Some(hs) => {
+                session_for = Some((peer_id, hs.responder_eph_pk, hs.enc_empty.to_vec()));
                 break;
             }
-            // Pinned mismatch — try next peer. Anything else is
-            // a hard error (we leave the door open for legitimate
-            // retries of the same init in case of state cleanup).
-            Err(SysWgError::Wg(WgError::BadLen)) => continue,
-            Err(SysWgError::Wg(other)) => return WgDispatchResult::Err(other),
-            Err(_) => continue,
+            None => continue, // mismatch or service-side error
         }
     }
 
@@ -194,16 +218,17 @@ fn dispatch_init(bytes: &[u8]) -> WgDispatchResult {
     };
 
     let our_idx = alloc_sender_index();
-    if !install_session(our_idx, parsed.sender_index, peer_id) {
-        // Session table full — for now we just drop and let the
-        // initiator retry. A real implementation would evict
-        // oldest.
-        return WgDispatchResult::Err(WgError::KdfFail);
+    let (_slot, evicted_old) = install_session(our_idx, parsed.sender_index, peer_id);
+    if evicted_old {
+        crate::security::audit::record(
+            crate::security::audit::Category::Cave,
+            b"wg_dispatch: round-robin session eviction",
+        );
     }
 
-    // We need the INITIATOR's static_pk for the response's mac1
-    // computation. That's pinned at register_peer time, exposed
-    // via sys_wg_service::peer_static_pk.
+    // mac1 on the response packet keys on the INITIATOR's static
+    // pubkey. That key is non-secret (sys-wg pinned it at
+    // register_peer time); we read it via the introspection API.
     let initiator_pk = match sys_wg_service::peer_static_pk(peer_id) {
         Some(pk) => pk,
         None => return WgDispatchResult::Err(WgError::KdfFail),
@@ -230,10 +255,13 @@ fn dispatch_transport(bytes: &[u8]) -> WgDispatchResult {
         Some(p) => p,
         None => return WgDispatchResult::Err(WgError::BadLen),
     };
-    match sys_wg_service::unwrap(peer_id, parsed.counter, parsed.ct_with_tag) {
-        Ok(pt) => WgDispatchResult::InboundPacket(pt),
-        Err(SysWgError::Wg(e)) => WgDispatchResult::Err(e),
-        Err(_) => WgDispatchResult::Err(WgError::BadMac),
+    // Decrypt via the IPC mailbox — sys-wg performs the AEAD
+    // inside the service task; we never see the recv_key.
+    match sys_wg_ipc::request_unwrap(
+        peer_id.as_u8(), parsed.counter, parsed.ct_with_tag,
+    ) {
+        Some(pt) => WgDispatchResult::InboundPacket(pt),
+        None => WgDispatchResult::Err(WgError::BadMac),
     }
 }
 
@@ -264,8 +292,7 @@ pub fn selftest() -> Result<(bool, bool), WgError> {
     let _ = sys_wg_service::close_peer_by_static_pk(&initiator.static_pk);
     let peer_id = match sys_wg_service::register_peer(initiator.static_pk) {
         Ok(id) => id,
-        Err(SysWgError::DuplicatePeer) => {
-            // Already pinned from a prior selftest run — fine.
+        Err(sys_wg_service::SysWgError::DuplicatePeer) => {
             sys_wg_service::find_peer_by_pk(&initiator.static_pk)
                 .ok_or(WgError::KdfFail)?
         }
