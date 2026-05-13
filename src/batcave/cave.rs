@@ -607,6 +607,141 @@ pub fn for_each_transition_rule<F: FnMut(u16, u16)>(mut f: F) {
     }
 }
 
+// ── Exec-time domain auto-transition (gov-grade §3.2 TE slice,
+//    SELinux `domain_auto_trans` equivalent).
+//
+// Each binary (referenced by its BatFS filename) can be tagged with a
+// `target_cave` id. When the operator runs the binary via
+// `exec-file`, the kernel checks whether the active cave is
+// policy-allow-listed to transition to that target via the existing
+// `(from, to)` allow table, and if so swaps the active cave for the
+// duration of the run. If TE is disabled the auto-transition is
+// silently honored without a policy check (matches the existing
+// `cave::enter` semantics).
+//
+// We keep the table on the side instead of widening `FileEntry`
+// because BatFS persistence layers (`fs::batfs_disk`) are byte-
+// stable on the existing struct shape; growing the entry would mean
+// a coordinated on-disk format bump. The side-table model is also
+// how SELinux itself models `domain_auto_trans` — the policy lives
+// in the policy database, not on the file.
+//
+// `MAX_FILENAME` matches `fs::batfs::MAX_FILENAME` (96). Keeping our
+// own constant here so this module stays self-contained.
+const EXEC_TRANS_MAX_NAME: usize = 96;
+const MAX_EXEC_TRANS_RULES: usize = 32;
+
+#[derive(Copy, Clone)]
+struct ExecTransRule {
+    in_use: bool,
+    name: [u8; EXEC_TRANS_MAX_NAME],
+    name_len: usize,
+    target_cave: u16,
+}
+
+static mut EXEC_TRANS_RULES: [ExecTransRule; MAX_EXEC_TRANS_RULES] = [ExecTransRule {
+    in_use: false, name: [0u8; EXEC_TRANS_MAX_NAME], name_len: 0, target_cave: 0,
+}; MAX_EXEC_TRANS_RULES];
+
+/// Register an auto-transition: when the binary `filename` is run
+/// via `exec-file`, the active cave should switch to `target_cave`
+/// (subject to TE policy if enforced). Idempotent — re-registering
+/// the same filename overwrites the target.
+pub fn set_exec_transition(filename: &str, target_cave: u16) -> Result<(), &'static str> {
+    if filename.is_empty() || filename.len() > EXEC_TRANS_MAX_NAME {
+        return Err("exec-trans: bad filename");
+    }
+    unsafe {
+        let ptr = core::ptr::addr_of_mut!(EXEC_TRANS_RULES);
+        // Update existing.
+        for i in 0..MAX_EXEC_TRANS_RULES {
+            let r = &mut (*ptr)[i];
+            if r.in_use && r.name_len == filename.len()
+                && &r.name[..r.name_len] == filename.as_bytes()
+            {
+                r.target_cave = target_cave;
+                return Ok(());
+            }
+        }
+        // Insert new.
+        for i in 0..MAX_EXEC_TRANS_RULES {
+            let r = &mut (*ptr)[i];
+            if !r.in_use {
+                r.in_use = true;
+                r.name_len = filename.len();
+                r.name[..r.name_len].copy_from_slice(filename.as_bytes());
+                r.target_cave = target_cave;
+                return Ok(());
+            }
+        }
+    }
+    Err("exec-trans: table full")
+}
+
+/// Remove an auto-transition for `filename`. Returns true if a
+/// rule was present and got removed.
+pub fn clear_exec_transition(filename: &str) -> bool {
+    unsafe {
+        let ptr = core::ptr::addr_of_mut!(EXEC_TRANS_RULES);
+        for i in 0..MAX_EXEC_TRANS_RULES {
+            let r = &mut (*ptr)[i];
+            if r.in_use && r.name_len == filename.len()
+                && &r.name[..r.name_len] == filename.as_bytes()
+            {
+                r.in_use = false;
+                r.name_len = 0;
+                r.target_cave = 0;
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Look up the auto-transition target for `filename`. Returns
+/// `None` if no rule is registered.
+pub fn lookup_exec_transition(filename: &str) -> Option<u16> {
+    unsafe {
+        let ptr = core::ptr::addr_of!(EXEC_TRANS_RULES);
+        for i in 0..MAX_EXEC_TRANS_RULES {
+            let r = &(*ptr)[i];
+            if r.in_use && r.name_len == filename.len()
+                && &r.name[..r.name_len] == filename.as_bytes()
+            {
+                return Some(r.target_cave);
+            }
+        }
+    }
+    None
+}
+
+/// Wipe the exec-transition table. Used by selftests + the
+/// `exec-trans-clear` shell command.
+pub fn clear_all_exec_transitions() {
+    unsafe {
+        let ptr = core::ptr::addr_of_mut!(EXEC_TRANS_RULES);
+        for i in 0..MAX_EXEC_TRANS_RULES {
+            (*ptr)[i].in_use = false;
+            (*ptr)[i].name_len = 0;
+            (*ptr)[i].target_cave = 0;
+        }
+    }
+}
+
+/// Iterate every exec-transition rule for shell display.
+pub fn for_each_exec_transition<F: FnMut(&str, u16)>(mut f: F) {
+    unsafe {
+        let ptr = core::ptr::addr_of!(EXEC_TRANS_RULES);
+        for i in 0..MAX_EXEC_TRANS_RULES {
+            let r = &(*ptr)[i];
+            if r.in_use {
+                let name = core::str::from_utf8(&r.name[..r.name_len]).unwrap_or("");
+                f(name, r.target_cave);
+            }
+        }
+    }
+}
+
 impl BatCave {
     pub const fn empty() -> Self {
         Self {
