@@ -444,6 +444,7 @@ fn execute_inner(cmd: &str) {
         "batfs-quota-selftest" => cmd_batfs_quota_selftest(),
         "ocsp-selftest"       => cmd_ocsp_selftest(),
         "conntrack-selftest"  => cmd_conntrack_selftest(),
+        "fw-hardening-selftest" => cmd_fw_hardening_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -2888,6 +2889,115 @@ fn cmd_conntrack_selftest() {
     print_num(misses as usize);
     console::puts("\n");
     console::puts("  ✓ conntrack lifecycle (register → lookup → upgrade → release) verified\n");
+}
+
+/// `fw-hardening-selftest` — gap-audit item 045 hardening pass.
+///
+/// Pins down the new stateful inbound-TCP policy: the wildcard
+/// inbound TCP allow rule is gone, and `firewall::allow_inbound_tcp`
+/// now consults conntrack + the listener registry. Three cases:
+///
+///   1. Unsolicited SYN to a random ephemeral port (no flow, no
+///      listener) — must be DROPPED. This is the class of packet
+///      the old wildcard was letting through.
+///   2. Inbound segment whose 4-tuple matches a registered
+///      conntrack flow — must be ALLOWED (it's reply traffic for
+///      a Bat_OS-initiated connection).
+///   3. Inbound SYN to a port with a registered listener — must
+///      be ALLOWED (server-side handshake path).
+///
+/// The selftest pokes `allow_inbound_tcp` directly with synthetic
+/// 4-tuples, registers/releases conntrack flows + TCP listeners
+/// itself, and cleans up so the test is fully self-contained and
+/// re-runnable.
+fn cmd_fw_hardening_selftest() {
+    use crate::net::{conntrack, firewall, tcp};
+
+    console::puts_hi("  STATEFUL FIREWALL HARDENING SELF-TEST\n");
+
+    const REMOTE_IP: u32 = 0x08_08_08_08; // 8.8.8.8
+    const REMOTE_PORT: u16 = 443;
+    const LOCAL_EPHEMERAL: u16 = 49_152;
+    const SERVER_PORT: u16 = 18_080;
+    const ATTACKER_IP: u32 = 0xCC_CC_CC_CC; // 204.204.204.204
+    const ATTACKER_PORT: u16 = 31_337;
+
+    // Pre-clean so a prior aborted run doesn't poison the result.
+    let _ = conntrack::release_local_port(LOCAL_EPHEMERAL);
+    tcp::listen_close(SERVER_PORT);
+
+    // (1) Unsolicited SYN — no flow, no listener. Must drop.
+    if firewall::allow_inbound_tcp(ATTACKER_IP, ATTACKER_PORT, LOCAL_EPHEMERAL) {
+        console::puts("  ✗ FAIL: unsolicited SYN to ephemeral port was ALLOWED\n");
+        return;
+    }
+    console::puts("  ✓ unsolicited SYN to unused ephemeral port -> DROPPED\n");
+
+    // (2) Reply traffic for a Bat_OS-initiated connection: register
+    //     the outbound flow in conntrack and confirm the inbound
+    //     side of the same 4-tuple now passes.
+    if conntrack::register_outbound(
+        6, REMOTE_IP, REMOTE_PORT, LOCAL_EPHEMERAL, conntrack::State::New,
+    ).is_none() {
+        console::puts("  ✗ FAIL: conntrack register_outbound returned None\n");
+        return;
+    }
+    if !firewall::allow_inbound_tcp(REMOTE_IP, REMOTE_PORT, LOCAL_EPHEMERAL) {
+        console::puts("  ✗ FAIL: reply traffic for registered outbound flow was DROPPED\n");
+        let _ = conntrack::release_local_port(LOCAL_EPHEMERAL);
+        return;
+    }
+    console::puts("  ✓ reply traffic on registered outbound 4-tuple -> ALLOWED\n");
+
+    // The SAME conntrack flow must not authorise a DIFFERENT remote
+    // — a flow to 8.8.8.8 doesn't license inbound from 204.204.204.204
+    // even on the same local port.
+    if firewall::allow_inbound_tcp(ATTACKER_IP, ATTACKER_PORT, LOCAL_EPHEMERAL) {
+        console::puts("  ✗ FAIL: conntrack flow leaked to unrelated remote\n");
+        let _ = conntrack::release_local_port(LOCAL_EPHEMERAL);
+        return;
+    }
+    console::puts("  ✓ conntrack flow doesn't leak to unrelated remote 4-tuple\n");
+
+    // (3) Listener-registered server port: register a listener,
+    //     confirm inbound SYNs to that port now pass even with no
+    //     conntrack flow.
+    match tcp::listen_register(SERVER_PORT, 4, 0, -1) {
+        Ok(_) => {}
+        Err(e) => {
+            console::puts("  ✗ FAIL: listen_register: ");
+            console::puts(e); console::puts("\n");
+            let _ = conntrack::release_local_port(LOCAL_EPHEMERAL);
+            return;
+        }
+    }
+    if !firewall::allow_inbound_tcp(ATTACKER_IP, ATTACKER_PORT, SERVER_PORT) {
+        console::puts("  ✗ FAIL: SYN to registered listener port was DROPPED\n");
+        tcp::listen_close(SERVER_PORT);
+        let _ = conntrack::release_local_port(LOCAL_EPHEMERAL);
+        return;
+    }
+    console::puts("  ✓ inbound to registered listener port -> ALLOWED\n");
+
+    // Teardown: closing the listener must revoke the allow, so a
+    // subsequent inbound SYN to the old port is back to DROPPED.
+    tcp::listen_close(SERVER_PORT);
+    if firewall::allow_inbound_tcp(ATTACKER_IP, ATTACKER_PORT, SERVER_PORT) {
+        console::puts("  ✗ FAIL: listen_close did not revoke the per-port allow\n");
+        let _ = conntrack::release_local_port(LOCAL_EPHEMERAL);
+        return;
+    }
+    console::puts("  ✓ listen_close revoked the per-port allow rule\n");
+
+    // Same teardown check for the conntrack side.
+    let _ = conntrack::release_local_port(LOCAL_EPHEMERAL);
+    if firewall::allow_inbound_tcp(REMOTE_IP, REMOTE_PORT, LOCAL_EPHEMERAL) {
+        console::puts("  ✗ FAIL: release_local_port did not drop the flow allow\n");
+        return;
+    }
+    console::puts("  ✓ release_local_port revoked the conntrack-derived allow\n");
+
+    console::puts("  ✓ stateful firewall hardening: unsolicited SYN drop + flow/listener gating verified\n");
 }
 
 /// `redirect-selftest` — gap-audit item 039 (shell pipes / job
