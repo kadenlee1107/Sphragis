@@ -253,8 +253,49 @@ pub fn allow_inbound_tcp(src_ip: u32, src_port: u16, dst_port: u16) -> bool {
     false
 }
 
-/// Transport-layer port check for UDP (called after parsing the header).
-/// Returns true iff an inbound UDP rule permits traffic from `src_port`.
+/// Transport-layer port check for UDP. Same stateful posture as
+/// the TCP path (gap-audit 045 hardening): the firewall permits an
+/// inbound UDP datagram iff
+///
+///   (a) `conntrack::lookup_inbound` finds a matching outbound flow
+///       — we recently sent UDP to (src_ip, src_port) from
+///       `dst_port`, so this is its reply.
+///   (b) An explicit per-src_port rule matches (currently only
+///       the DNS allow `src_port = 53` installed by `init`).
+///
+/// The caller (the UDP handler) supplies `dst_port` so the
+/// conntrack lookup can match on the full 4-tuple. Pre-NET-045
+/// callers that only knew `src_ip + src_port` get a backward-
+/// compat shim below.
+pub fn allow_inbound_udp_full(src_ip: u32, src_port: u16, dst_port: u16) -> bool {
+    if !FIREWALL_ENABLED.load(Ordering::Relaxed) {
+        return true;
+    }
+
+    // (a) Outbound-initiated flow — udp::send registered it.
+    if crate::net::conntrack::lookup_inbound(17, src_ip, src_port, dst_port).is_some() {
+        return true;
+    }
+
+    // (b) Explicit rules (init installs DNS allow at src_port=53).
+    unsafe {
+        let ptr = core::ptr::addr_of!(RULES);
+        for i in 0..MAX_RULES {
+            let rule = &(*ptr)[i];
+            if !rule.active { continue; }
+            if rule.direction != 0 || rule.protocol != 17 { continue; }
+            let ip_ok = rule.ip == 0 || rule.ip == src_ip;
+            let port_ok = rule.port == 0 || rule.port == src_port;
+            if ip_ok && port_ok { return true; }
+        }
+    }
+    false
+}
+
+/// Backward-compat wrapper for the original `(src_ip, src_port)`
+/// shape. Conntrack lookup is skipped (no dst_port available) so
+/// only the explicit-rule path can match. The caller usually has
+/// dst_port available — prefer `allow_inbound_udp_full`.
 pub fn allow_inbound_udp(src_ip: u32, src_port: u16) -> bool {
     if !FIREWALL_ENABLED.load(Ordering::Relaxed) {
         return true;

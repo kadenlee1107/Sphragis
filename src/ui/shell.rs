@@ -2997,6 +2997,51 @@ fn cmd_fw_hardening_selftest() {
     }
     console::puts("  ✓ release_local_port revoked the conntrack-derived allow\n");
 
+    // ── UDP slice (gap-audit 045 hardening, UDP) ──
+    // Same posture: unsolicited UDP from an unrelated remote on a
+    // random local port -> DROP; reply matching a conntrack flow
+    // we registered via udp::send -> ALLOW.
+    const UDP_LOCAL: u16 = 49_500;
+    let _ = conntrack::release_local_port(UDP_LOCAL);
+
+    if firewall::allow_inbound_udp_full(ATTACKER_IP, ATTACKER_PORT, UDP_LOCAL) {
+        console::puts("  ✗ FAIL: unsolicited UDP datagram was ALLOWED\n");
+        return;
+    }
+    console::puts("  ✓ unsolicited UDP to unused local port -> DROPPED\n");
+
+    // Register an outbound UDP flow the way `udp::send` would have.
+    if conntrack::register_outbound(
+        17, REMOTE_IP, REMOTE_PORT, UDP_LOCAL, conntrack::State::New,
+    ).is_none() {
+        console::puts("  ✗ FAIL: UDP conntrack register_outbound returned None\n");
+        return;
+    }
+    if !firewall::allow_inbound_udp_full(REMOTE_IP, REMOTE_PORT, UDP_LOCAL) {
+        console::puts("  ✗ FAIL: UDP reply for registered flow was DROPPED\n");
+        let _ = conntrack::release_local_port(UDP_LOCAL);
+        return;
+    }
+    console::puts("  ✓ UDP reply on registered outbound 4-tuple -> ALLOWED\n");
+
+    if firewall::allow_inbound_udp_full(ATTACKER_IP, ATTACKER_PORT, UDP_LOCAL) {
+        console::puts("  ✗ FAIL: UDP conntrack flow leaked to unrelated remote\n");
+        let _ = conntrack::release_local_port(UDP_LOCAL);
+        return;
+    }
+    console::puts("  ✓ UDP flow doesn't leak to unrelated remote 4-tuple\n");
+
+    // The boot-time DNS allow (src_port=53) must still pass via
+    // the rule-table fallback even with no conntrack flow.
+    if !firewall::allow_inbound_udp_full(ATTACKER_IP, 53, UDP_LOCAL) {
+        console::puts("  ✗ FAIL: DNS-rule fallback (src_port=53) dropped\n");
+        let _ = conntrack::release_local_port(UDP_LOCAL);
+        return;
+    }
+    console::puts("  ✓ DNS-rule fallback (src_port=53) still passes\n");
+
+    let _ = conntrack::release_local_port(UDP_LOCAL);
+
     console::puts("  ✓ stateful firewall hardening: unsolicited SYN drop + flow/listener gating verified\n");
 }
 

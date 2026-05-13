@@ -31,10 +31,11 @@ pub fn handle(pkt: &IpPacket) {
     let src_port = u16::from_be_bytes([pkt.payload[0], pkt.payload[1]]);
     let dst_port = u16::from_be_bytes([pkt.payload[2], pkt.payload[3]]);
 
-    // Narrow firewall check: only UDP src_ports explicitly allowed by the
-    // firewall rules get through. With the default-deny config this is
-    // src_port = 53 (DNS).
-    if !super::firewall::allow_inbound_udp(pkt.src, src_port) {
+    // gap-audit 045 hardening (UDP slice): stateful check with the
+    // full 4-tuple — accepts replies for outbound flows we just
+    // registered in conntrack via `udp::send`, plus the narrow
+    // src_port=53 rule for DNS.
+    if !super::firewall::allow_inbound_udp_full(pkt.src, src_port, dst_port) {
         return;
     }
 
@@ -131,7 +132,19 @@ fn store_udp_response(data: &[u8]) {
 }
 
 /// Send a UDP packet.
+///
+/// gap-audit 045 hardening pass (UDP slice): register the
+/// (remote_ip, remote_port, local_port) flow in conntrack so
+/// `firewall::allow_inbound_udp` can recognise the reply traffic
+/// without needing a per-port wildcard. Registration is a no-op
+/// when the same 4-tuple is already known (idempotent update),
+/// so the per-packet cost is one table scan.
 pub fn send(dst_ip: u32, src_port: u16, dst_port: u16, payload: &[u8]) -> Result<(), &'static str> {
+    crate::net::conntrack::register_outbound(
+        17, dst_ip, dst_port, src_port,
+        crate::net::conntrack::State::New,
+    );
+
     let total = UDP_HDR_SIZE + payload.len();
     let mut udp = [0u8; 1400];
 
