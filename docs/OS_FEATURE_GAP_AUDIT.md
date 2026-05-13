@@ -599,6 +599,14 @@ syscall filter). Default-deny posture. **Two-axis MLS lattice (2026-05-12)**:
   - Both labels propagate: `batfs::ns_create` stamps creator's
     `(sens, integ)` onto the file; `batfs::ns_read` enforces both
     properties (`Err("mls: no read-up")` / `Err("mls: no read-down")`).
+  - **Labels are AEAD-bound** (2026-05-13): the file's
+    sensitivity + integrity bytes are part of the ChaCha20-Poly1305
+    AAD at encrypt time. A byte-flip on either label at rest is
+    rejected at decrypt time with `INTEGRITY VIOLATION — file
+    tampered or label flipped` — a memory-corrupting attacker
+    can't downgrade a file's label to bypass the lattice checks
+    without also re-encrypting (which needs the file key).
+    `mls-binding-selftest` proves the property.
   - `batcave::mls_ipc` labeled mailbox: enforces BLP write-down +
     Biba write-up on send, BLP read-up + Biba read-down on recv
     (belt-and-suspenders for runtime label changes between

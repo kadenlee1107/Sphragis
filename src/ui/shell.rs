@@ -457,6 +457,7 @@ fn execute_inner(cmd: &str) {
         "integ-set"           => cmd_integ_set(parts[1], parts[2]),
         "integ-show"          => cmd_integ_show(),
         "biba-selftest"       => cmd_biba_selftest(),
+        "mls-binding-selftest" => cmd_mls_binding_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -8800,6 +8801,151 @@ fn cmd_biba_selftest() {
 
     cleanup_biba(sys_wg_id, kns_id);
     console::puts("  ✓ Biba lattice: BatFS no-read-down + IPC no-write-up / no-read-down verified\n");
+}
+
+/// `mls-binding-selftest` — gov-grade §3.2 hardening. The MLS
+/// labels stored in `batfs::FileEntry.sensitivity / .integrity`
+/// are AEAD-bound into the file's ciphertext (AAD = filename ||
+/// sens || integ). A byte-flip on either label at rest no longer
+/// lets an attacker downgrade a file to bypass `ns_read`'s BLP /
+/// Biba checks — the AEAD will refuse to decrypt because the AAD
+/// at read time differs from the AAD used at encrypt time.
+///
+///   1. sys-wg at (Secret, SystemTrusted) creates a file.
+///   2. Clean read succeeds.
+///   3. Flip sensitivity from Secret to Unclassified (a downgrade
+///      that would normally let any cave read). Re-read at
+///      sys-wg's labels: the cave's BLP check now sees U so
+///      passes (cave is S, file allegedly U), but the AEAD fails
+///      with the tampered-or-label-flipped error string.
+///   4. Restore sensitivity, tamper integrity (HI -> Untrusted).
+///      Re-read: same AEAD failure.
+///   5. Restore both, re-read succeeds.
+fn cmd_mls_binding_selftest() {
+    use crate::batcave::cave::{self, Integrity, Sensitivity};
+    use crate::batcave::sys_caves;
+    use crate::fs::batfs;
+
+    console::puts_hi("  MLS LABEL-AEAD-BINDING SELF-TEST\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => { console::puts("  ✗ FAIL: sys-wg not initialised\n"); return; }
+    };
+
+    const FILE: &str = "mls-bind-probe";
+    let cleanup = |sys_wg_id: u16| {
+        let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE));
+        let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+        let _ = cave::set_integrity_by_name("sys-wg",   Integrity::Untrusted);
+    };
+
+    // Set distinct labels so any tamper produces a visible diff.
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE));
+    let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Secret);
+    let _ = cave::set_integrity_by_name("sys-wg",   Integrity::SystemTrusted);
+
+    if let Err(e) = cave::with_cave_active(sys_wg_id, ||
+        batfs::ns_create(FILE, b"label-bound-payload")
+    ) {
+        console::puts("  ✗ FAIL: ns_create: "); console::puts(e); console::puts("\n");
+        cleanup(sys_wg_id); return;
+    }
+    console::puts("  ✓ created (S/ST)-labeled file\n");
+
+    let mut buf = [0u8; 64];
+    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+        Ok(n) if &buf[..n] == b"label-bound-payload" => {
+            console::puts("  ✓ clean ns_read returned plaintext\n");
+        }
+        _ => {
+            console::puts("  ✗ FAIL: clean read didn't return plaintext\n");
+            cleanup(sys_wg_id); return;
+        }
+    }
+
+    // Sensitivity tamper. Stored label goes from Secret (2) to
+    // Unclassified (0). MLS check at read time still uses the
+    // stored value; the cave at S would normally satisfy the new
+    // U file's no-read-up (S >= U). The AEAD then fires.
+    let orig_sens  = Sensitivity::Secret as u8;
+    let orig_integ = Integrity::SystemTrusted as u8;
+    unsafe {
+        batfs::tamper_test_flip_labels(
+            // The full on-disk name is "sys-wg:mls-bind-probe"
+            // because of the mount-ns prefix.
+            "sys-wg:mls-bind-probe",
+            Sensitivity::Unclassified as u8, orig_integ,
+        );
+    }
+    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+        Err("INTEGRITY VIOLATION — file tampered or label flipped") => {
+            console::puts("  ✓ sensitivity tamper -> AEAD refused decrypt\n");
+        }
+        Ok(_) => {
+            console::puts("  ✗ FAIL: downgrade succeeded — labels not AEAD-bound\n");
+            unsafe { batfs::tamper_test_flip_labels(
+                "sys-wg:mls-bind-probe", orig_sens, orig_integ); }
+            cleanup(sys_wg_id); return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error on sensitivity tamper: ");
+            console::puts(e); console::puts("\n");
+            unsafe { batfs::tamper_test_flip_labels(
+                "sys-wg:mls-bind-probe", orig_sens, orig_integ); }
+            cleanup(sys_wg_id); return;
+        }
+    }
+    // Restore.
+    unsafe { batfs::tamper_test_flip_labels(
+        "sys-wg:mls-bind-probe", orig_sens, orig_integ); }
+
+    // Integrity tamper. Drop the file's integ from ST (2) to
+    // Untrusted (0). Now Biba says cave(ST=2) > file(U=0) which
+    // ALSO violates no-read-down — but the AEAD fires first
+    // anyway since the AAD diverged. (We re-elevate the cave to
+    // HI so the BLP/Biba checks specifically don't catch this and
+    // the AEAD has to do the work.)
+    //
+    // Actually simpler: drop file.integ to HI (3). Cave at ST=2
+    // reads down-to-up? No — cave_integ <= file_integ for Read:
+    // 2 <= 3 -> OK. So MLS check passes. AEAD must reject.
+    unsafe { batfs::tamper_test_flip_labels(
+        "sys-wg:mls-bind-probe", orig_sens, Integrity::HighIntegrity as u8); }
+    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+        Err("INTEGRITY VIOLATION — file tampered or label flipped") => {
+            console::puts("  ✓ integrity tamper -> AEAD refused decrypt\n");
+        }
+        Ok(_) => {
+            console::puts("  ✗ FAIL: integrity upgrade succeeded — labels not AEAD-bound\n");
+            unsafe { batfs::tamper_test_flip_labels(
+                "sys-wg:mls-bind-probe", orig_sens, orig_integ); }
+            cleanup(sys_wg_id); return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error on integ tamper: ");
+            console::puts(e); console::puts("\n");
+            unsafe { batfs::tamper_test_flip_labels(
+                "sys-wg:mls-bind-probe", orig_sens, orig_integ); }
+            cleanup(sys_wg_id); return;
+        }
+    }
+    unsafe { batfs::tamper_test_flip_labels(
+        "sys-wg:mls-bind-probe", orig_sens, orig_integ); }
+
+    // After full restore, the read recovers.
+    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+        Ok(n) if &buf[..n] == b"label-bound-payload" => {
+            console::puts("  ✓ post-restore ns_read recovered plaintext\n");
+        }
+        _ => {
+            console::puts("  ✗ FAIL: post-restore read didn't recover\n");
+            cleanup(sys_wg_id); return;
+        }
+    }
+
+    cleanup(sys_wg_id);
+    console::puts("  ✓ MLS labels AEAD-bound: tamper on sens OR integ rejected at decrypt\n");
 }
 
 fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
