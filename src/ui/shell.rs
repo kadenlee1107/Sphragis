@@ -472,6 +472,7 @@ fn execute_inner(cmd: &str) {
         "calipso-selftest"    => cmd_calipso_selftest(),
         "mls-ipc-binding-selftest" => cmd_mls_ipc_binding_selftest(),
         "tpi-selftest"        => cmd_tpi_selftest(),
+        "audit-seal-tpi-selftest" => cmd_audit_seal_tpi_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -8436,7 +8437,21 @@ fn cmd_mls_ipc_selftest() {
 /// becomes detectable on the next boot when `audit-seal-verify`
 /// recomputes the live chain against the seal.
 fn cmd_audit_seal() {
-    use crate::security::audit_chain;
+    use crate::security::{audit_chain, tpi};
+    // TPI gate (gov-grade §3.23). Once any (audit ⊕ crypto)
+    // officer pair has been provisioned via `tpi-register-officer`,
+    // `audit-seal` becomes a privileged op that requires a fresh
+    // M-of-2 quorum approval. Legacy single-operator mode (no
+    // officers registered) bypasses the gate so the existing
+    // `audit-seal-selftest` keeps working unchanged.
+    let now = crate::kernel::time::realtime_secs();
+    if !tpi::consume_approval(tpi::OpId::AuditSealFlush, now) {
+        console::puts("  audit-seal: TPI quorum required (no fresh approval consumed)\n");
+        console::puts("  next steps:\n");
+        console::puts("    operator A: tpi-propose audit-seal-flush <nonce-hex> <ts> <sig>\n");
+        console::puts("    operator B: tpi-cosign audit-seal-flush <nonce-hex> <sig>\n");
+        return;
+    }
     let seal = audit_chain::current_seal();
     let bytes = seal.encode();
     // Admin-context write via the un-prefixed BatFS path — the seal
@@ -9902,6 +9917,118 @@ fn cmd_tpi_selftest() {
 
     tpi::reset_for_test();
     console::puts("  ✓ TPI: M-of-2 quorum + role separation + replay-resistant + TTL verified\n");
+}
+
+/// `audit-seal-tpi-selftest` — gov-grade §3.23 + §3.7.
+///
+/// Proves the TPI primitive is now LOAD-BEARING for a real
+/// privileged op: writing the audit chain seal. Sequence:
+///
+///   1. Register one audit + one crypto officer.
+///   2. `audit-seal` with no fresh approval -> rejected with the
+///      "TPI quorum required" message; the seal file is NOT
+///      created (or its prior contents are unchanged).
+///   3. Operator A signs `audit-seal-flush || nonce || ts` with
+///      the audit-officer key.
+///   4. Operator B signs the same bytes with the crypto-officer
+///      key.
+///   5. After cosign succeeds, `audit-seal` consumes the approval
+///      and writes the seal file successfully.
+///   6. Immediately running `audit-seal` AGAIN fails — the
+///      one-shot approval was consumed by step 5. Replay-
+///      resistance verified.
+fn cmd_audit_seal_tpi_selftest() {
+    use crate::security::tpi::{
+        self, canonical_bytes, OpId, Role,
+    };
+    use ed25519_compact::{KeyPair, Seed};
+
+    console::puts_hi("  AUDIT-SEAL TPI-WIRED SELF-TEST\n");
+
+    // Start clean — no carry-over from earlier tests.
+    tpi::reset_for_test();
+    let _ = crate::fs::batfs::delete("audit-chain.seal");
+
+    let mut seed_a = [0u8; 32];
+    let mut seed_b = [0u8; 32];
+    crate::crypto::rng::fill_bytes(&mut seed_a);
+    crate::crypto::rng::fill_bytes(&mut seed_b);
+    let kp_audit  = KeyPair::from_seed(Seed::new(seed_a));
+    let kp_crypto = KeyPair::from_seed(Seed::new(seed_b));
+    let mut pk_audit  = [0u8; 32]; pk_audit.copy_from_slice(&*kp_audit.pk);
+    let mut pk_crypto = [0u8; 32]; pk_crypto.copy_from_slice(&*kp_crypto.pk);
+
+    if tpi::register_officer(Role::AuditOfficer, pk_audit).is_err()
+        || tpi::register_officer(Role::CryptoOfficer, pk_crypto).is_err()
+    {
+        console::puts("  ✗ FAIL: officer registration\n"); return;
+    }
+    if !tpi::enforcement_active() {
+        console::puts("  ✗ FAIL: enforcement_active should be true after registering both roles\n");
+        tpi::reset_for_test(); return;
+    }
+    console::puts("  ✓ enforcement_active after registering audit+crypto officers\n");
+
+    // (2) No approval yet -> cmd_audit_seal should refuse.
+    // We detect "refused" by checking that the BatFS file
+    // `audit-chain.seal` was NOT created.
+    let _ = crate::fs::batfs::delete("audit-chain.seal");
+    cmd_audit_seal();
+    // If the file exists now, the gate didn't fire.
+    let mut tmp = [0u8; 64];
+    if crate::fs::batfs::read("audit-chain.seal", &mut tmp).is_ok() {
+        console::puts("  ✗ FAIL: audit-seal wrote seal without TPI approval\n");
+        tpi::reset_for_test(); return;
+    }
+    console::puts("  ✓ audit-seal without approval -> blocked (no seal file created)\n");
+
+    // (3+4) Full propose + cosign at a synthetic "now".
+    let now = crate::kernel::time::realtime_secs();
+    let op    = OpId::AuditSealFlush;
+    let nonce: u64 = 0x5EA1_C0DE_1234_5678;
+    let ts    = now;
+    let msg   = canonical_bytes(op, nonce, ts);
+    let sig_a = kp_audit.sk.sign(&msg, None);
+    let sig_b = kp_crypto.sk.sign(&msg, None);
+    let mut sa = [0u8; 64]; sa.copy_from_slice(&*sig_a);
+    let mut sb = [0u8; 64]; sb.copy_from_slice(&*sig_b);
+    if tpi::propose_op(op, nonce, ts, sa).is_err() {
+        console::puts("  ✗ FAIL: propose_op rejected\n"); tpi::reset_for_test(); return;
+    }
+    if tpi::cosign_op(op, nonce, ts, sb).is_err() {
+        console::puts("  ✗ FAIL: cosign_op rejected\n"); tpi::reset_for_test(); return;
+    }
+    if tpi::pending_grant_count() != 1 {
+        console::puts("  ✗ FAIL: expected exactly 1 pending grant after cosign\n");
+        tpi::reset_for_test(); return;
+    }
+    console::puts("  ✓ quorum approved; 1 pending grant in ring\n");
+
+    // (5) audit-seal should now succeed — consumes the grant.
+    let _ = crate::fs::batfs::delete("audit-chain.seal");
+    cmd_audit_seal();
+    if crate::fs::batfs::read("audit-chain.seal", &mut tmp).is_err() {
+        console::puts("  ✗ FAIL: audit-seal didn't write seal after TPI approval\n");
+        tpi::reset_for_test(); return;
+    }
+    if tpi::pending_grant_count() != 0 {
+        console::puts("  ✗ FAIL: grant not consumed after audit-seal ran\n");
+        tpi::reset_for_test(); return;
+    }
+    console::puts("  ✓ audit-seal ran with TPI approval; seal file present; grant consumed\n");
+
+    // (6) Second audit-seal must fail — grant was one-shot.
+    let _ = crate::fs::batfs::delete("audit-chain.seal");
+    cmd_audit_seal();
+    if crate::fs::batfs::read("audit-chain.seal", &mut tmp).is_ok() {
+        console::puts("  ✗ FAIL: second audit-seal succeeded without fresh quorum\n");
+        tpi::reset_for_test(); return;
+    }
+    console::puts("  ✓ second audit-seal -> blocked; grants are one-shot\n");
+
+    tpi::reset_for_test();
+    let _ = crate::fs::batfs::delete("audit-chain.seal");
+    console::puts("  ✓ TPI is load-bearing for audit-seal: quorum required, one-shot consume\n");
 }
 
 fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {

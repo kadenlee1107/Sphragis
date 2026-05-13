@@ -123,6 +123,121 @@ static PENDING_COUNT: AtomicUsize = AtomicUsize::new(0);
 static APPROVED_COUNT: AtomicUsize = AtomicUsize::new(0);
 static REJECTED_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+/// One-shot approval ring: when `cosign_op` succeeds, the
+/// resulting (op_id, granted_ts) lands here. A privileged code
+/// path calls `consume_approval(op_id, now)` and either gets the
+/// approval (removing it from the ring) or fails closed. Same
+/// shape as a Kerberos ticket: short-lived, single-use, bound to
+/// a specific action.
+#[derive(Clone, Copy)]
+struct Grant {
+    in_use: bool,
+    op_id: u8,
+    granted_ts: u64,
+}
+
+const MAX_GRANTS: usize = 4;
+/// How long an approval is valid before `consume_approval` rejects
+/// it as stale. 60 s is the gov-grade default; long enough for an
+/// operator to type the privileged command after co-signing,
+/// short enough that a stale grant in a forgotten terminal can't
+/// be replayed days later.
+pub const GRANT_TTL_SECS: u64 = 60;
+static mut GRANTS: [Grant; MAX_GRANTS] = [Grant {
+    in_use: false, op_id: 0, granted_ts: 0,
+}; MAX_GRANTS];
+static GRANT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static CONSUMED_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Record a fresh approval. Internal — only called from
+/// `cosign_op` on success. Evicts oldest grant if the ring is
+/// full so a TPI flood can't block legitimate later approvals.
+fn record_approval(op_id: u8, granted_ts: u64) {
+    unsafe {
+        let grants = &mut *core::ptr::addr_of_mut!(GRANTS);
+        let slot = match grants.iter().position(|g| !g.in_use) {
+            Some(i) => i,
+            None => {
+                for i in 1..MAX_GRANTS { grants[i - 1] = grants[i]; }
+                MAX_GRANTS - 1
+            }
+        };
+        grants[slot] = Grant { in_use: true, op_id, granted_ts };
+        let n = GRANT_COUNT.load(Ordering::Relaxed);
+        if n < MAX_GRANTS {
+            GRANT_COUNT.store(n + 1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// True iff at least one audit + crypto officer have been
+/// registered. Privileged ops in legacy environments where TPI
+/// hasn't been provisioned keep working unchanged; ops that have
+/// seen even one officer per role MUST go through quorum.
+pub fn enforcement_active() -> bool {
+    let n = OFFICER_COUNT.load(Ordering::Relaxed);
+    if n < 2 { return false; }
+    let (mut has_audit, mut has_crypto) = (false, false);
+    unsafe {
+        for i in 0..n {
+            let o = &(*core::ptr::addr_of!(OFFICERS))[i];
+            if !o.in_use { continue; }
+            if o.role == 0 { has_audit  = true; }
+            if o.role == 1 { has_crypto = true; }
+        }
+    }
+    has_audit && has_crypto
+}
+
+/// Privileged-op gate. Returns true if a fresh approval for
+/// `op_id` exists in the ring AND removes it (one-shot). Returns
+/// false in legacy mode where TPI hasn't been provisioned —
+/// the caller treats that as "skip the gate". Caller passes
+/// the current time so the selftest can drive the TTL deterministically.
+pub fn consume_approval(op_id: OpId, current_time_secs: u64) -> bool {
+    if !enforcement_active() {
+        // No officers registered ⇒ legacy single-operator mode.
+        // Privileged ops keep working unchanged.
+        return true;
+    }
+    unsafe {
+        let grants = &mut *core::ptr::addr_of_mut!(GRANTS);
+        for g in grants.iter_mut() {
+            if !g.in_use { continue; }
+            if g.op_id != op_id as u8 { continue; }
+            let drift = if current_time_secs > g.granted_ts {
+                current_time_secs - g.granted_ts
+            } else {
+                g.granted_ts - current_time_secs
+            };
+            if drift > GRANT_TTL_SECS {
+                // Stale — drain and keep looking.
+                g.in_use = false;
+                continue;
+            }
+            g.in_use = false;
+            CONSUMED_COUNT.fetch_add(1, Ordering::Relaxed);
+            audit::record(Category::Auth,
+                b"tpi: approval consumed by privileged op");
+            return true;
+        }
+    }
+    false
+}
+
+/// Diagnostic — observable in `tpi-status`. Doesn't expose any
+/// signature bytes.
+pub fn pending_grant_count() -> usize {
+    let mut n = 0usize;
+    unsafe {
+        let grants = &*core::ptr::addr_of!(GRANTS);
+        for g in grants.iter() {
+            if g.in_use { n += 1; }
+        }
+    }
+    n
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum TpiError {
     UnknownRole,
@@ -170,7 +285,7 @@ pub fn register_officer(role: Role, pubkey: [u8; 32]) -> Result<(), TpiError> {
     Ok(())
 }
 
-/// Test-only: clear all officers + pending state.
+/// Test-only: clear all officers + pending state + grants.
 pub fn reset_for_test() {
     unsafe {
         OFFICERS = [OfficerSlot { in_use: false, role: 0, pubkey: [0u8; 32] };
@@ -178,9 +293,12 @@ pub fn reset_for_test() {
         PENDING  = [Pending { in_use: false, op_id: 0, nonce: 0,
                               timestamp: 0, proposer_role: 0, sig_a: [0u8; 64] };
                     MAX_PENDING];
+        GRANTS   = [Grant { in_use: false, op_id: 0, granted_ts: 0 };
+                    MAX_GRANTS];
     }
     OFFICER_COUNT.store(0, Ordering::Relaxed);
     PENDING_COUNT.store(0, Ordering::Relaxed);
+    GRANT_COUNT.store(0, Ordering::Relaxed);
 }
 
 /// Canonical bytes a TPI signature covers:
@@ -328,9 +446,12 @@ pub fn cosign_op(
         return Err(TpiError::SameRoleCosign);
     }
 
-    // Approved. Consume the slot — replay of either signature
-    // can't approve the op a second time without a fresh nonce.
+    // Approved. Consume the proposal slot — replay of either
+    // signature can't approve the op a second time without a
+    // fresh nonce. Drop a one-shot grant into the approval ring
+    // so the privileged code path can pick it up next.
     unsafe { PENDING[slot].in_use = false; }
+    record_approval(op_id as u8, current_time_secs);
     APPROVED_COUNT.fetch_add(1, Ordering::Relaxed);
     audit::record(Category::Auth, b"tpi: op APPROVED (M-of-2 quorum)");
     Ok(())
