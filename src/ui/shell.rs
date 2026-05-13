@@ -471,6 +471,7 @@ fn execute_inner(cmd: &str) {
         "te-obj-selftest"     => cmd_te_obj_selftest(),
         "calipso-selftest"    => cmd_calipso_selftest(),
         "mls-ipc-binding-selftest" => cmd_mls_ipc_binding_selftest(),
+        "tpi-selftest"        => cmd_tpi_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -9776,6 +9777,131 @@ fn cmd_mls_ipc_binding_selftest() {
 
     cleanup(sys_wg_id);
     console::puts("  ✓ MLS-IPC AEAD-bound: sensitivity + body tamper both rejected\n");
+}
+
+/// `tpi-selftest` — gov-grade §3.23 two-person integrity.
+///
+/// Drives `security::tpi` through the full quorum lifecycle for
+/// a `AuditSealFlush` op:
+///
+///   1. Register two officers — one Audit, one Crypto — each with
+///      a fresh Ed25519 keypair generated in-kernel.
+///   2. Single-role attempts must fail (BadSignature when no
+///      registered key matches; SameRoleCosign when both sigs
+///      come from officers of the same role).
+///   3. Valid (audit ⊕ crypto) quorum approves the op.
+///   4. Replay of the same (op_id, nonce) after approval must
+///      fail — slot is consumed.
+///   5. Expired proposals (timestamp drift > OP_TTL_SECS) are
+///      refused.
+fn cmd_tpi_selftest() {
+    use crate::security::tpi::{
+        self, canonical_bytes, OpId, Role, TpiError,
+    };
+    use ed25519_compact::{KeyPair, Seed};
+
+    console::puts_hi("  TWO-PERSON INTEGRITY (TPI) SELF-TEST\n");
+
+    tpi::reset_for_test();
+
+    // Generate two distinct ed25519 keypairs — one per role.
+    let mut seed_a = [0u8; 32];
+    let mut seed_b = [0u8; 32];
+    let mut seed_c = [0u8; 32];  // imposter, never registered
+    crate::crypto::rng::fill_bytes(&mut seed_a);
+    crate::crypto::rng::fill_bytes(&mut seed_b);
+    crate::crypto::rng::fill_bytes(&mut seed_c);
+    let kp_audit  = KeyPair::from_seed(Seed::new(seed_a));
+    let kp_crypto = KeyPair::from_seed(Seed::new(seed_b));
+    let kp_imp    = KeyPair::from_seed(Seed::new(seed_c));
+
+    let mut pk_audit  = [0u8; 32]; pk_audit.copy_from_slice(&*kp_audit.pk);
+    let mut pk_crypto = [0u8; 32]; pk_crypto.copy_from_slice(&*kp_crypto.pk);
+
+    if tpi::register_officer(Role::AuditOfficer,  pk_audit).is_err() {
+        console::puts("  ✗ FAIL: register audit officer\n"); return;
+    }
+    if tpi::register_officer(Role::CryptoOfficer, pk_crypto).is_err() {
+        console::puts("  ✗ FAIL: register crypto officer\n"); return;
+    }
+    console::puts("  ✓ registered 1 audit + 1 crypto officer\n");
+
+    let op   = OpId::AuditSealFlush;
+    let nonce: u64 = 0xABCD_EF12_3456_7890;
+    let ts:    u64 = 1_715_000_000;
+    let msg = canonical_bytes(op, nonce, ts);
+
+    // ── case: unknown signer rejected at propose_op ──
+    let sig_imp = kp_imp.sk.sign(&msg, None);
+    let mut sig_imp_arr = [0u8; 64];
+    sig_imp_arr.copy_from_slice(&*sig_imp);
+    match tpi::propose_op(op, nonce, ts, sig_imp_arr) {
+        Err(TpiError::BadSignature) => {
+            console::puts("  ✓ unknown-signer proposal -> BadSignature\n");
+        }
+        _ => { console::puts("  ✗ FAIL: unknown signer was accepted\n"); return; }
+    }
+
+    // ── valid proposal by audit officer ──
+    let sig_a = kp_audit.sk.sign(&msg, None);
+    let mut sig_a_arr = [0u8; 64]; sig_a_arr.copy_from_slice(&*sig_a);
+    if tpi::propose_op(op, nonce, ts, sig_a_arr).is_err() {
+        console::puts("  ✗ FAIL: valid proposal rejected\n"); return;
+    }
+
+    // ── same-role co-sign rejected ──
+    // Re-sign with the SAME audit key + try to co-sign.
+    let sig_a2 = kp_audit.sk.sign(&msg, None);
+    let mut sig_a2_arr = [0u8; 64]; sig_a2_arr.copy_from_slice(&*sig_a2);
+    match tpi::cosign_op(op, nonce, ts, sig_a2_arr) {
+        Err(TpiError::SameRoleCosign) => {
+            console::puts("  ✓ same-role co-sign -> SameRoleCosign\n");
+        }
+        _ => { console::puts("  ✗ FAIL: same-role co-sign was accepted\n"); return; }
+    }
+
+    // ── valid co-sign by crypto officer -> APPROVED ──
+    let sig_b = kp_crypto.sk.sign(&msg, None);
+    let mut sig_b_arr = [0u8; 64]; sig_b_arr.copy_from_slice(&*sig_b);
+    if tpi::cosign_op(op, nonce, ts, sig_b_arr).is_err() {
+        console::puts("  ✗ FAIL: valid cross-role cosign rejected\n"); return;
+    }
+    console::puts("  ✓ valid quorum (audit ⊕ crypto) -> APPROVED\n");
+
+    // ── replay: cosign_op of the same nonce after approval ──
+    let sig_b2 = kp_crypto.sk.sign(&msg, None);
+    let mut sig_b2_arr = [0u8; 64]; sig_b2_arr.copy_from_slice(&*sig_b2);
+    match tpi::cosign_op(op, nonce, ts, sig_b2_arr) {
+        Err(TpiError::NoSuchProposal) => {
+            console::puts("  ✓ replay after approval -> NoSuchProposal\n");
+        }
+        _ => { console::puts("  ✗ FAIL: replay was accepted\n"); return; }
+    }
+
+    // ── TTL expiry: propose with old timestamp, cosign WAY later ──
+    let stale_ts: u64 = 1_700_000_000; // 173 days ago
+    let stale_msg = canonical_bytes(op, nonce + 1, stale_ts);
+    let s1 = kp_audit.sk.sign(&stale_msg, None);
+    let mut s1a = [0u8; 64]; s1a.copy_from_slice(&*s1);
+    let _ = tpi::propose_op(op, nonce + 1, stale_ts, s1a);
+    let s2 = kp_crypto.sk.sign(&stale_msg, None);
+    let mut s2a = [0u8; 64]; s2a.copy_from_slice(&*s2);
+    match tpi::cosign_op(op, nonce + 1, ts /* "now", far ahead */, s2a) {
+        Err(TpiError::ProposalExpired) => {
+            console::puts("  ✓ stale proposal -> ProposalExpired\n");
+        }
+        _ => { console::puts("  ✗ FAIL: stale proposal was accepted\n"); return; }
+    }
+
+    let (officers, pending, approved, rejected) = tpi::stats();
+    console::puts("  ✓ counters: officers="); print_num(officers);
+    console::puts(", pending="); print_num(pending);
+    console::puts(", approved="); print_num(approved);
+    console::puts(", rejected="); print_num(rejected);
+    console::puts("\n");
+
+    tpi::reset_for_test();
+    console::puts("  ✓ TPI: M-of-2 quorum + role separation + replay-resistant + TTL verified\n");
 }
 
 fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
