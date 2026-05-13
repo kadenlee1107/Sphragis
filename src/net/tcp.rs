@@ -1888,6 +1888,17 @@ pub fn connect_start(id: usize, ip_be: u32, port: u16) -> i32 {
 
     send_tcp_pcb(id, TCP_SYN, &[]);
 
+    // gap-audit item 045: register the flow in conntrack so the
+    // inbound side can recognise reply packets as belonging to a
+    // Bat_OS-initiated connection. Wildcard inbound TCP allow rule
+    // still exists; conntrack here is defense-in-depth + foundation
+    // for a future hardening pass that removes the wildcard.
+    crate::net::conntrack::register_outbound(
+        6, // TCP
+        ip_be, port, lport,
+        crate::net::conntrack::State::New,
+    );
+
     if p.is_nonblocking.load(Ordering::Acquire) {
         E_INPROGRESS
     } else {
@@ -2025,6 +2036,7 @@ pub fn close_pcb(id: usize) {
         core::hint::spin_loop();
     }
     let p = pcb(id);
+    let local_port = p.local_port;
     p.state.store(STATE_CLOSED, Ordering::Release);
     // QEMU-BUGFIX: release the PCB so `ensure_legacy_pcb()` will
     // re-initialize it on the next `connect()`. Without this, the
@@ -2034,6 +2046,12 @@ pub fn close_pcb(id: usize) {
     // with "send: no progress". Symptom: first docker-* command
     // works, second one returns "send failed".
     p.in_use.store(false, Ordering::Release);
+    // gap-audit 045: the local ephemeral port is about to be
+    // reclaimed; flush any conntrack flows that referenced it so
+    // a future PCB on the same port can't inherit stale state.
+    if local_port != 0 {
+        let _ = crate::net::conntrack::release_local_port(local_port);
+    }
 }
 
 // ===========================================================================
@@ -2103,7 +2121,17 @@ pub fn connect_blocking_pcb(pcb_id: usize, dst_ip: u32, dst_port: u16)
     loop {
         super::poll_once();
         match connect_poll(pcb_id) {
-            ConnectStatus::Established => return Ok(()),
+            ConnectStatus::Established => {
+                // gap-audit 045: SYN-ACK received -> flow is now
+                // Established. Connection-tracker semantics: from
+                // this point on, inbound segments on this 4-tuple
+                // are recognised as legitimate response traffic.
+                let p = pcb(pcb_id);
+                crate::net::conntrack::mark_established(
+                    6, p.remote_ip, p.remote_port, p.local_port,
+                );
+                return Ok(());
+            }
             ConnectStatus::Failed(_)   => return Err("connect failed"),
             ConnectStatus::InProgress  => {}
         }
