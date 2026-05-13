@@ -11,6 +11,109 @@ end of a session.
 
 ---
 
+## 2026-05-13 — Mac — Autonomous gov-grade batch: TPI wired-ops, heap canaries, Spectre barriers, exec-time domain transitions, taint propagation
+
+Six merges landed today, all zero-budget software hardening. Each
+followed the same pattern: implement in a feature branch, ship a
+headless QEMU selftest, run a multi-test regression sweep in
+parallel, then merge to main and push.
+
+**1. TPI wired to audit-wipe + mls-declassify** (`feat/tpi-wired-ops`)
+- `audit-wipe` now zeroes the audit ring + chain hashes only after a
+  fresh M-of-2 quorum (audit officer + crypto officer Ed25519 cosign).
+- `mls-declassify <file> <sens> <integ>` re-AEADs a BatFS file under
+  new labels (AAD = filename || sens || integ) only after a quorum.
+- New code: `audit::wipe_ring`, `audit_chain::reset_for_test`,
+  `batfs::declassify`. `cmd_audit_wipe`, `cmd_mls_declassify`, and
+  `cmd_tpi_wired_ops_selftest` in `src/ui/shell.rs`.
+- Selftest design note: `cmd_mls_declassify` runs in kernel/admin
+  context (not inside `with_cave_active`) because puts() inside a
+  TTBR0-switched cave faults on the framebuffer write. **fb-mapping
+  in cave L1 is a known follow-up arc** — flagged in commit msg.
+
+**2. Heap guard canaries** (`feat/heap-guard`)
+- Per-allocation 16-byte canary frame on each side of payload.
+- Canary = sha256(boot-random KEY || addr || size)[..16]. KEY seeded
+  from RNDR+SHA-chain DRBG inside `mm::init` BEFORE `heap::init` so
+  the very first Box/Vec gets a randomised canary.
+- Detects heap overflow (back canary), underflow (front canary),
+  and double-free (POISON pattern on freed slot).
+- New module: `src/kernel/mm/guard.rs`. `wrap_alloc` /
+  `verify_and_unwrap` called from the GlobalAlloc impl in `heap.rs`.
+- Selftest uses non-destructive `inspect_user_ptr` + `repair_for_test`
+  so the test exercises detection without panicking the kernel.
+
+**3. Spectre v1/v2/BHB barriers** (`feat/spectre-barriers`)
+- FEAT_SB (`sb`, ARMv8.5; NOP on older cores via the universal hint
+  `0xd50330ff`) at three cross-domain boundaries:
+  1. `RESTORE_REGS` macro in `src/arch/aarch64/exceptions.s` — before
+     every `eret`, stops kernel-state speculation leaking into EL0.
+  2. `scheduler::schedule` — before `switch_context`, stops cross-task
+     speculation.
+  3. `mmu::switch_to_cave` — after the TTBR0 swap, stops cross-cave
+     speculation against the new translation regime.
+- Verified the binary contains 8 `sb` instructions at the expected
+  addresses (6 from inlined `RESTORE_REGS` + 2 from sched/mmu).
+
+**4. Exec-time domain auto-transitions** (`feat/exec-domain-trans`)
+- SELinux `domain_auto_trans` equivalent. A BatFS filename can be
+  tagged with a target cave id; running it via `exec-file` swaps the
+  active cave to that target, gated by the existing TE allow-list.
+- File LOOKUP is in the caller's namespace (matches execve), the
+  TRANSITION fires after lookup succeeds.
+- Side-table `EXEC_TRANS_RULES` in `cave.rs` — keeps the rule off
+  FileEntry so BatFS persistence stays byte-stable (same model
+  SELinux uses — policy DB, not inodes).
+- Commands: `exec-trans-set/clear/list`, `exec-file`,
+  `exec-trans-selftest`.
+
+**5. Taint propagation primitive** (`feat/taint-propagation`)
+- 32-bit taint bitmap per cave + per file with monotonic OR
+  propagation:
+  - `ns_read` OR's file → cave taint
+  - `ns_create` OR's cave → file taint
+  - `ns_delete` zeroes the slot's taint so reused slots start at 0
+- Operator-defined bit semantics (e.g. bit 0 = PII).
+- Egress enforcement is a follow-up arc — this batch is the
+  load-bearing primitive only.
+- Commands: `taint-stamp/show/reset`, `taint-cave-show`,
+  `taint-selftest`.
+
+**State of the tree:**
+- main contains 5 new feature merges on top of `121702cc Merge
+  feat/tpi-wired-audit-seal`.
+- Every batch has a headless QEMU selftest in `scripts/qemu_*.py`.
+- Regression sweep on every batch hits boot-smoke, mount-ns, mls,
+  mls-binding, tpi, audit-chain, audit-seal-tpi, batfs-quota, plus
+  the new selftest — all PASS.
+
+**Known follow-up arcs (filed in commit messages):**
+- Framebuffer mapping in cave-private L1 — puts() inside `with_cave_active`
+  faults today. Selftests that need cave-context printing have to
+  flatten themselves into kernel-context form.
+- Heap quarantine ring — current canaries detect overflow / underflow
+  / double-free but not UAF on still-alive blocks.
+- Size-class segregation + XOR'd freelist pointers — natural next
+  hardened-malloc arc after quarantine.
+- Network egress enforcement on tainted caves — natural next IFC arc.
+
+**What's next:**
+- Remaining gov-grade roadmap items require either hardware
+  (HSM / TPM / Apple SE for off-platform seals) or money
+  (FIPS / Common Criteria certification fees, CVE feed subscription,
+  etc.). User said to stop when those walls hit — that's where we are.
+- Software arcs still doable on zero budget: fb-in-cave-L1 mapping,
+  heap quarantine, network egress on tainted caves, CALIPSO
+  RECEIVE-side enforcement (separate from the encode/parse we
+  already shipped).
+
+**What I didn't touch:**
+- M4 hardware bring-up (PMGR, ATC PHY, AIC2, SPI keyboard) — that's
+  Ubuntu Claude's territory, with the real M4 hardware available.
+- Browser/WASM — out of scope after the no-browser pivot.
+
+---
+
 ## 2026-05-12 — Mac — Arc 3 slice 3: sys-wg IPC mailbox (request-scoped service task)
 
 **Context:** Until this slice, every call into sys-wg went
