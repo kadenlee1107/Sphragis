@@ -26,6 +26,11 @@
 !rekor/
 !rekor/log
 !rekor/sth
+# Per-step in-toto attestations binding each build step's
+# materials -> products. Verified by `scripts/intoto_attest.py
+# verify-all`.
+!attestations/
+!attestations/*.intoto.json
 
 # Per-session QEMU smoke output, screenshots, capture noise.
 # Everything under logs/ is regenerable by running the smoke scripts.
