@@ -468,6 +468,7 @@ fn execute_inner(cmd: &str) {
         "te-selftest"         => cmd_te_selftest(),
         "secmark-set-ceiling" => cmd_secmark_set_ceiling(parts[1]),
         "secmark-recv-selftest" => cmd_secmark_recv_selftest(),
+        "te-obj-selftest"     => cmd_te_obj_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -9476,6 +9477,120 @@ fn cmd_secmark_recv_selftest() {
     // Restore default.
     ip::set_inbound_cipso_ceiling(Sensitivity::Unclassified as u8);
     console::puts("  ✓ receiver SECMARK: kernel-ceiling gate enforced on inbound CIPSO labels\n");
+}
+
+/// `te-obj-selftest` — gov-grade §3.2 TE-on-objects slice. Drives
+/// the per-cave (cave_id, obj_type, op) DENY matrix through the
+/// full lifecycle:
+///
+///   1. sys-wg creates `te-obj-probe`, retag to obj_type=42.
+///   2. Default policy: sys-wg ns_read succeeds (no DENY rule).
+///   3. `deny_object_op(sys_wg, 42, Read)` — sys-wg's next read
+///      now fails with `te-obj: read denied by policy`.
+///   4. `allow_object_op(sys_wg, 42)` — read succeeds again.
+///   5. Admin context bypasses the policy even when sys-wg is
+///      explicitly denied (admin is always trusted).
+fn cmd_te_obj_selftest() {
+    use crate::batcave::cave::{self, ObjOp};
+    use crate::batcave::sys_caves;
+    use crate::fs::batfs;
+
+    console::puts_hi("  TE-ON-OBJECTS POLICY SELF-TEST\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => { console::puts("  ✗ FAIL: sys-wg not initialised\n"); return; }
+    };
+
+    const FILE: &str = "te-obj-probe";
+    const OBJ_TYPE: u8 = 42;
+
+    let cleanup = |sys_wg_id: u16| {
+        let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE));
+        cave::clear_object_rules();
+    };
+
+    cave::clear_object_rules();
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE));
+
+    // (1) Create file, retag it.
+    if let Err(e) = cave::with_cave_active(sys_wg_id, ||
+        batfs::ns_create(FILE, b"obj-typed-payload")
+    ) {
+        console::puts("  ✗ FAIL: ns_create: "); console::puts(e); console::puts("\n");
+        cleanup(sys_wg_id); return;
+    }
+    let tagged = cave::with_cave_active(sys_wg_id, || batfs::set_obj_type(FILE, OBJ_TYPE));
+    if !tagged {
+        console::puts("  ✗ FAIL: set_obj_type returned false\n");
+        cleanup(sys_wg_id); return;
+    }
+    let read_back = cave::with_cave_active(sys_wg_id, || batfs::obj_type_of(FILE));
+    if read_back != Some(OBJ_TYPE) {
+        console::puts("  ✗ FAIL: obj_type round trip\n");
+        cleanup(sys_wg_id); return;
+    }
+    console::puts("  ✓ file created + tagged with obj_type=42\n");
+
+    // (2) Default policy: read OK.
+    let mut buf = [0u8; 64];
+    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+        Ok(n) if &buf[..n] == b"obj-typed-payload" => {
+            console::puts("  ✓ default policy: sys-wg ns_read passed\n");
+        }
+        _ => {
+            console::puts("  ✗ FAIL: default read failed\n");
+            cleanup(sys_wg_id); return;
+        }
+    }
+
+    // (3) deny_object_op + read should now fail.
+    if let Err(e) = cave::deny_object_op(sys_wg_id, OBJ_TYPE, ObjOp::Read) {
+        console::puts("  ✗ FAIL: deny_object_op: "); console::puts(e); console::puts("\n");
+        cleanup(sys_wg_id); return;
+    }
+    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+        Err("te-obj: read denied by policy") => {
+            console::puts("  ✓ deny rule: sys-wg ns_read -> DENY (te-obj policy)\n");
+        }
+        Ok(_) => {
+            console::puts("  ✗ FAIL: deny was bypassed\n");
+            cleanup(sys_wg_id); return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error: "); console::puts(e); console::puts("\n");
+            cleanup(sys_wg_id); return;
+        }
+    }
+
+    // (4) Admin context (u16::MAX) bypasses the policy directly
+    // via `can_access_object`. We exercise the API call rather
+    // than going through ns_read because admin's mount-prefix is
+    // empty, so it can't address files inside sys-wg's namespace
+    // anyway — the policy check is what we care about.
+    if !cave::can_access_object(u16::MAX, OBJ_TYPE, ObjOp::Read) {
+        console::puts("  ✗ FAIL: admin (u16::MAX) was denied by te-obj policy\n");
+        cleanup(sys_wg_id); return;
+    }
+    // sys-wg is still denied (deny rule still in place).
+    if cave::can_access_object(sys_wg_id, OBJ_TYPE, ObjOp::Read) {
+        console::puts("  ✗ FAIL: sys-wg should still be denied\n");
+        cleanup(sys_wg_id); return;
+    }
+    console::puts("  ✓ admin bypasses te-obj policy; sys-wg still denied\n");
+
+    // (5) allow_object_op restores access.
+    cave::allow_object_op(sys_wg_id, OBJ_TYPE);
+    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE, &mut buf)) {
+        Ok(_) => console::puts("  ✓ allow_object_op restored sys-wg read access\n"),
+        Err(e) => {
+            console::puts("  ✗ FAIL: post-allow read: "); console::puts(e); console::puts("\n");
+            cleanup(sys_wg_id); return;
+        }
+    }
+
+    cleanup(sys_wg_id);
+    console::puts("  ✓ TE-on-objects: (cave, obj_type, op) DENY matrix + admin bypass verified\n");
 }
 
 fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
