@@ -98,6 +98,129 @@ pub fn chain_head() -> [u8; 32] {
     unsafe { CHAIN[slot] }
 }
 
+/// On-platform seal record. 32-byte chain head + the absolute
+/// entry count at the moment of the seal. Serialized as a 40-byte
+/// blob (8-byte big-endian count + 32-byte hash) into the
+/// BatFS-backed "audit-chain.seal" file.
+///
+/// Verification: read the seal, walk the live ring from
+/// `(seal.count - resident_count) .. seal.count`, recompute, and
+/// assert the final hash == `seal.hash`. If the live ring is
+/// shorter than expected, `truncation_at` reports how many
+/// entries are missing.
+pub struct ChainSeal {
+    pub count: usize,
+    pub hash:  [u8; 32],
+}
+
+impl ChainSeal {
+    /// Encode as 8B big-endian count || 32B hash (40 bytes total).
+    pub fn encode(&self) -> [u8; 40] {
+        let mut out = [0u8; 40];
+        out[..8].copy_from_slice(&(self.count as u64).to_be_bytes());
+        out[8..40].copy_from_slice(&self.hash);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != 40 { return None; }
+        let mut c = [0u8; 8];
+        c.copy_from_slice(&bytes[..8]);
+        let mut h = [0u8; 32];
+        h.copy_from_slice(&bytes[8..]);
+        Some(ChainSeal { count: u64::from_be_bytes(c) as usize, hash: h })
+    }
+}
+
+/// Verification result for a seal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SealVerify {
+    /// Seal matches the live ring's chain head at `seal.count`.
+    Ok,
+    /// Live ring has fewer entries than the seal recorded — the
+    /// tail has been truncated by `missing` entries since the seal.
+    Truncated { missing: usize },
+    /// Hash mismatch even though counts match — somebody rewrote a
+    /// past entry without updating CHAIN. `seal.count`-th entry's
+    /// recomputed link doesn't match the seal.
+    Mismatch,
+    /// Seal's recorded count is BELOW any entry still resident — we
+    /// can't verify it against the in-memory ring (the seal predates
+    /// every entry the ring still holds).
+    SealAboveRingTail,
+    /// Seal's count is AHEAD of HEAD — either the seal is from a
+    /// future run we never reached, or there's clock-skew between
+    /// seal and ring.
+    SealAheadOfHead,
+}
+
+/// Verify a seal against the live ring. Walks
+/// `start .. seal.count`, recomputing each chain link, and
+/// asserts the final hash equals `seal.hash`. `start` is the
+/// oldest absolute index that's still resident, derived as
+/// `head.saturating_sub(RING_CAP)`.
+pub fn verify_seal(seal: &ChainSeal) -> SealVerify {
+    let head = HEAD.load(Ordering::Relaxed);
+    if seal.count > head {
+        return SealVerify::SealAheadOfHead;
+    }
+    let ring_tail = head.saturating_sub(RING_CAP);
+    if seal.count < ring_tail {
+        return SealVerify::SealAboveRingTail;
+    }
+    if seal.count == 0 {
+        // Genesis seal: hash should equal the all-zero chain
+        // (no entries recorded yet).
+        return if seal.hash == [0u8; 32] { SealVerify::Ok }
+               else { SealVerify::Mismatch };
+    }
+    // Recompute the chain from `ring_tail .. seal.count`. The
+    // starting prev_hash is the stored chain at the slot just
+    // before ring_tail (or zeros if ring_tail == 0).
+    let mut prev = if ring_tail == 0 {
+        [0u8; 32]
+    } else {
+        let prev_slot = (ring_tail - 1) % RING_CAP;
+        unsafe { CHAIN[prev_slot] }
+    };
+    for i in ring_tail..seal.count {
+        let slot = i % RING_CAP;
+        let entry = unsafe { &crate::security::audit::raw_ring()[slot] };
+        let mut canon = [0u8; 32 + MSG_LEN];
+        let n = canonical_bytes(entry, &mut canon);
+        let mut buf = [0u8; 32 + 32 + MSG_LEN];
+        buf[..32].copy_from_slice(&prev);
+        buf[32..32 + n].copy_from_slice(&canon[..n]);
+        prev = sha256::hash(&buf[..32 + n]);
+    }
+    if prev == seal.hash {
+        // Independent witness: if `head > seal.count`, the head we
+        // just recomputed should land on the entry one before the
+        // last new one. We don't fail on that; the seal is a
+        // checkpoint, not the live tip.
+        SealVerify::Ok
+    } else if head > seal.count {
+        // Tail moved forward; the recomputed prev is the hash at
+        // index seal.count - 1, which IS what the seal claims.
+        // If still doesn't match, somebody edited a past entry.
+        SealVerify::Mismatch
+    } else {
+        // head == seal.count and the recomputed final hash
+        // doesn't match.
+        SealVerify::Mismatch
+    }
+}
+
+/// Build a fresh seal capturing the current chain head + entry
+/// count. Caller persists the bytes off-platform (BatFS today;
+/// TPM / Apple SE in a future arc).
+pub fn current_seal() -> ChainSeal {
+    ChainSeal {
+        count: HEAD.load(Ordering::Relaxed),
+        hash:  chain_head(),
+    }
+}
+
 /// Verification result for one entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerifyOutcome {
