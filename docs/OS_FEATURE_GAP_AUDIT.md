@@ -768,13 +768,22 @@ attestation chains. Sigstore Rekor transparency log. Hardware Root of
 Trust (HRoT) for signing. Verifiable build environment (gitian-class).
 Anti-typosquat dependency review.
 
-✅ Have: cargo.lock pinning, vendored dependencies in `external/`.
+✅ Have: cargo.lock pinning, vendored dependencies in `external/`,
+**CycloneDX SBOM** generator (`scripts/gen_sbom.py`),
+**reproducible builds** verified bit-identical via
+`scripts/repro_build.sh`, **Ed25519 signatures** on every
+release artifact (`scripts/sign_release_artifacts.py sign`)
+with sidecar `.sig` files, **tamper-evident transparency log**
+(`transparency.log` — each entry chains via sha256(prev_entry)
+so an attacker can't silently rewrite past releases).
 ❌ Missing:
-- No SBOM generation.
-- No reproducible build proof.
-- No signed releases.
-- No transparency log.
-- No in-toto attestation.
+- Real Sigstore Rekor integration (we have a LOCAL hash-linked
+  log; a public log with inclusion proofs is the next
+  escalation).
+- In-toto attestations on the build steps themselves
+  (we attest the OUTPUT artifacts, not each step).
+- Hardware Root of Trust for signing (the signing key is a
+  file on the build host; HSM/Yubikey backing is the next pass).
 
 ### 3.12 Insider threat / Data Loss Prevention
 
