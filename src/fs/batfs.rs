@@ -490,6 +490,27 @@ pub fn ns_read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
     read(full_name, buf)
 }
 
+/// Test-only: flip the on-disk MLS labels of a file without
+/// re-running the AEAD. Used by `mls-binding-selftest` to prove
+/// that label tampering causes `ns_read` to fail with the AEAD
+/// integrity error rather than silently honour the downgraded
+/// label. SAFETY: caller must not race with `create`/`read` on
+/// the same file (cooperative single-CPU makes this trivial in
+/// selftest paths).
+#[allow(dead_code)]
+pub unsafe fn tamper_test_flip_labels(name: &str, new_sens: u8, new_integ: u8) -> bool {
+    unsafe {
+        for i in 0..MAX_FILES {
+            if FILES[i].state == FileState::Active && FILES[i].name_str() == name {
+                FILES[i].sensitivity = new_sens;
+                FILES[i].integrity   = new_integ;
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Look up a file's stored MLS labels by name. Returns `None` if
 /// no active file matches. Returns `(sensitivity, integrity)`.
 fn file_labels(name: &str) -> Option<(u8, u8)> {
@@ -597,9 +618,18 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         // * Nonce — 12 bytes, file-unique (AEAD allows nonce reuse
         // only to break confidentiality, not integrity — still
         // fatal, so we use our monotonic next_nonce pattern).
-        // * AAD — filename bytes. Binds ciphertext to its filename;
-        // an attacker can't rename a file to an accessible slot
-        // and reuse the ciphertext.
+        // * AAD — filename bytes || MLS sensitivity || MLS integrity.
+        // The filename binding (already present pre-MLS) prevents an
+        // attacker who can swap data_addr from reusing ciphertext
+        // under a different name. The MLS label binding (gov-grade
+        // §3.2 hardening, 2026-05-13) makes the in-memory
+        // `entry.sensitivity` and `entry.integrity` bytes
+        // cryptographically load-bearing: a byte-flip on either
+        // field at rest causes the AAD at decrypt time to differ
+        // from encrypt time, so AEAD verification fails. Without
+        // this binding, an attacker who can corrupt RAM could
+        // downgrade a file's label to bypass `ns_read`'s
+        // Bell-LaPadula / Biba checks.
         // * Output — ciphertext (same length as plaintext) + 16-byte
         // Poly1305 authentication tag stored in entry.hash[..16].
         let file_key = derive_file_key(name);
@@ -609,13 +639,24 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         let mut nonce: [u8; 12] = [0; 12];
         nonce.copy_from_slice(&nonce_full[..12]);
 
+        // Snapshot the labels the file is about to inherit; they
+        // become both the on-disk metadata AND part of the AAD
+        // bound into the ciphertext.
+        let sens_byte  = crate::batcave::cave::active_sensitivity() as u8;
+        let integ_byte = crate::batcave::cave::active_integrity()   as u8;
+        let mut aad = [0u8; MAX_FILENAME + 2];
+        aad[..name.len()].copy_from_slice(name.as_bytes());
+        aad[name.len()]     = sens_byte;
+        aad[name.len() + 1] = integ_byte;
+        let aad_slice = &aad[..name.len() + 2];
+
         // Copy plaintext into allocated memory, then encrypt in place.
         let dest = data_addr as *mut u8;
         core::ptr::copy_nonoverlapping(data.as_ptr(), dest, data.len());
         let slice_mut = core::slice::from_raw_parts_mut(dest, data.len());
 
         let tag = match cipher.encrypt_in_place_detached(
-                (&nonce).into(), name.as_bytes(), slice_mut) {
+                (&nonce).into(), aad_slice, slice_mut) {
             Ok(t) => t,
             Err(_) => return Err("encryption failed (AEAD)"),
         };
@@ -635,12 +676,13 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         entry.nonce = nonce;
         entry.hash = hash;
         entry.encrypted = true;
-        // MLS stamp (§3.2): the file inherits both lattice labels
-        // from the creating cave. Admin/kernel context defaults to
-        // Unclassified/Untrusted. `ns_read` later enforces
-        // no-read-up (BLP) AND no-read-down (Biba) against these.
-        entry.sensitivity = crate::batcave::cave::active_sensitivity() as u8;
-        entry.integrity   = crate::batcave::cave::active_integrity()   as u8;
+        // MLS stamp (§3.2): bake the same labels we just AAD-bound
+        // into the ciphertext into the on-disk entry. `ns_read`
+        // checks these against the active cave's labels (BLP +
+        // Biba); the AEAD then re-verifies they haven't been
+        // tampered since write.
+        entry.sensitivity = sens_byte;
+        entry.integrity   = integ_byte;
 
         FILE_COUNT += 1;
 
@@ -695,10 +737,14 @@ pub fn read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
         core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), entry.size);
 
         // DESIGN_CRYPTO.md #2: ChaCha20-Poly1305 AEAD decrypt.
-        // AAD is the filename (binds ciphertext to file slot).
-        // Tag is the first 16 bytes of entry.hash (stored at write).
-        // decrypt_in_place_detached returns Err on tag mismatch;
-        // Poly1305 is a constant-time MAC so no timing leak.
+        // AAD layout matches `create` byte-for-byte:
+        //   filename || sensitivity_byte || integrity_byte
+        // The labels come from the live entry — if an attacker has
+        // flipped either byte at rest, the AAD here differs from
+        // the encrypt-time AAD and decrypt_in_place_detached
+        // returns Err. The MLS labels are therefore
+        // cryptographically bound: tamper-and-bypass requires the
+        // file key (which would also let them just decrypt).
         let file_key = derive_file_key(name);
         let cipher = ChaCha20Poly1305::new(&file_key.into());
         let tag_bytes: [u8; 16] = match entry.hash[..16].try_into() {
@@ -706,12 +752,17 @@ pub fn read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
             Err(_) => return Err("internal: tag slice"),
         };
         let tag: &chacha20poly1305::Tag = (&tag_bytes).into();
+        let mut aad = [0u8; MAX_FILENAME + 2];
+        aad[..name.len()].copy_from_slice(name.as_bytes());
+        aad[name.len()]     = entry.sensitivity;
+        aad[name.len() + 1] = entry.integrity;
+        let aad_slice = &aad[..name.len() + 2];
         cipher.decrypt_in_place_detached(
                 (&entry.nonce).into(),
-                name.as_bytes(),
+                aad_slice,
                 &mut buf[..entry.size],
                 tag,
-            ).map_err(|_| "INTEGRITY VIOLATION — file tampered")?;
+            ).map_err(|_| "INTEGRITY VIOLATION — file tampered or label flipped")?;
 
         Ok(entry.size)
     }
