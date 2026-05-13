@@ -2,6 +2,7 @@ pub mod arp;
 pub mod beacon;
 pub mod cave_policy;
 pub mod cave_shaper;
+pub mod calipso;
 pub mod cert_pin;
 pub mod conntrack;
 pub mod crl;
