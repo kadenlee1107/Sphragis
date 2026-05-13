@@ -3951,14 +3951,36 @@ fn cmd_sys_wg_ipc_selftest() {
                 return;
             }
             console::puts("  ✓ IPC OP_PUBKEY returned the same bytes as the direct API\n");
-            console::puts("  ✓ Arc-3 slice-3 IPC mailbox path verified\n");
         }
         None => {
-            console::puts("  ✗ FAIL: IPC selftest returned None\n");
+            console::puts("  ✗ FAIL: IPC OP_PUBKEY selftest returned None\n");
             console::puts("    (mailbox unreachable, service-task spawn failed,\n");
             console::puts("     or service-side error)\n");
+            return;
         }
     }
+
+    // OP_WRAP / OP_UNWRAP round trip.
+    match sys_wg_ipc::selftest_wrap_unwrap() {
+        Some((wrap_ok, unwrap_ok)) => {
+            if !wrap_ok {
+                console::puts("  ✗ FAIL: IPC OP_WRAP round trip — caller decrypt mismatch\n");
+                return;
+            }
+            console::puts("  ✓ IPC OP_WRAP: sys-wg encrypted, caller decrypted to expected pt\n");
+            if !unwrap_ok {
+                console::puts("  ✗ FAIL: IPC OP_UNWRAP round trip — sys-wg decrypt mismatch\n");
+                return;
+            }
+            console::puts("  ✓ IPC OP_UNWRAP: caller encrypted, sys-wg decrypted to expected pt\n");
+        }
+        None => {
+            console::puts("  ✗ FAIL: IPC wrap/unwrap selftest returned None\n");
+            return;
+        }
+    }
+
+    console::puts("  ✓ Arc-3 slice-3 IPC mailbox path verified\n");
 }
 
 /// In-kernel selftest of the PQ-hybrid comms handshake. Exercises

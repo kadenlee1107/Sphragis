@@ -44,9 +44,10 @@ use crate::kernel::{process, scheduler};
 use crate::net::wireguard;
 
 /// Maximum request payload bytes (request_data buffer). Picked
-/// to fit our largest expected opcode argument: handshake
-/// 148-byte InitMsg + a little headroom (future slices).
-pub const REQ_DATA_MAX: usize = 192;
+/// to fit the largest expected opcode argument: an OP_UNWRAP
+/// with a full-size WG transport ciphertext (~1500 IP MTU + 16
+/// AEAD tag) plus the 16-byte opcode header. 2 KiB headroom.
+pub const REQ_DATA_MAX: usize = 2048;
 
 /// Maximum response payload bytes. Picked to fit a Response
 /// wire message (92 B) or a typical transport plaintext
@@ -92,6 +93,8 @@ fn service_main() -> ! {
     let op = REQ_OP.load(Ordering::Acquire);
     match op {
         OP_PUBKEY => handle_pubkey(),
+        OP_WRAP   => handle_wrap(),
+        OP_UNWRAP => handle_unwrap(),
         _ => {
             RSP_STATUS.store(STATUS_ERR_OP, Ordering::Release);
         }
@@ -117,6 +120,108 @@ fn handle_pubkey() {
         None => {
             RSP_STATUS.store(STATUS_ERR_SVC, Ordering::Release);
         }
+    }
+}
+
+/// OP_WRAP request layout in `REQ_DATA`:
+///   byte  0    : peer_id (u8)
+///   bytes 1..4 : reserved (zero)
+///   bytes 4..8 : plaintext_len (u32 LE)
+///   bytes 8..  : plaintext_len bytes of plaintext
+///
+/// Response: ciphertext bytes (with 16-byte AEAD tag) in
+/// `RSP_DATA`; `RSP_LEN` set to ct.len().
+fn handle_wrap() {
+    let req_len = REQ_LEN.load(Ordering::Acquire) as usize;
+    if req_len < 8 {
+        RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
+        return;
+    }
+    let (peer_id_raw, pt_len) = unsafe {
+        let src = core::ptr::addr_of!(REQ_DATA) as *const u8;
+        let peer_id_raw = core::ptr::read_volatile(src);
+        let mut len_bytes = [0u8; 4];
+        for i in 0..4 { len_bytes[i] = core::ptr::read_volatile(src.add(4 + i)); }
+        (peer_id_raw, u32::from_le_bytes(len_bytes) as usize)
+    };
+    if 8usize.saturating_add(pt_len) > req_len || 8usize.saturating_add(pt_len) > REQ_DATA_MAX {
+        RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
+        return;
+    }
+    let plaintext: &[u8] = unsafe {
+        let p = (core::ptr::addr_of!(REQ_DATA) as *const u8).add(8);
+        core::slice::from_raw_parts(p, pt_len)
+    };
+    let peer_id = sys_wg_service::PeerId::from(peer_id_raw);
+    match sys_wg_service::wrap(peer_id, plaintext) {
+        Ok(ct) => {
+            if ct.len() > RSP_DATA_MAX {
+                RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
+                return;
+            }
+            unsafe {
+                let dst = core::ptr::addr_of_mut!(RSP_DATA) as *mut u8;
+                for i in 0..ct.len() {
+                    core::ptr::write_volatile(dst.add(i), ct[i]);
+                }
+            }
+            RSP_LEN.store(ct.len() as u32, Ordering::Release);
+            RSP_STATUS.store(STATUS_OK, Ordering::Release);
+        }
+        Err(_) => RSP_STATUS.store(STATUS_ERR_SVC, Ordering::Release),
+    }
+}
+
+/// OP_UNWRAP request layout in `REQ_DATA`:
+///   byte   0     : peer_id (u8)
+///   bytes  1..4  : reserved (zero)
+///   bytes  4..12 : counter (u64 LE)
+///   bytes 12..16 : ct_len (u32 LE)
+///   bytes 16..   : ct_len bytes of ciphertext+tag
+///
+/// Response: plaintext bytes in `RSP_DATA`; `RSP_LEN` set.
+fn handle_unwrap() {
+    let req_len = REQ_LEN.load(Ordering::Acquire) as usize;
+    if req_len < 16 {
+        RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
+        return;
+    }
+    let (peer_id_raw, counter, ct_len) = unsafe {
+        let src = core::ptr::addr_of!(REQ_DATA) as *const u8;
+        let peer_id_raw = core::ptr::read_volatile(src);
+        let mut counter_bytes = [0u8; 8];
+        for i in 0..8 { counter_bytes[i] = core::ptr::read_volatile(src.add(4 + i)); }
+        let mut ct_len_bytes = [0u8; 4];
+        for i in 0..4 { ct_len_bytes[i] = core::ptr::read_volatile(src.add(12 + i)); }
+        (peer_id_raw,
+         u64::from_le_bytes(counter_bytes),
+         u32::from_le_bytes(ct_len_bytes) as usize)
+    };
+    if 16usize.saturating_add(ct_len) > req_len || 16usize.saturating_add(ct_len) > REQ_DATA_MAX {
+        RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
+        return;
+    }
+    let ct: &[u8] = unsafe {
+        let p = (core::ptr::addr_of!(REQ_DATA) as *const u8).add(16);
+        core::slice::from_raw_parts(p, ct_len)
+    };
+    let peer_id = sys_wg_service::PeerId::from(peer_id_raw);
+    match sys_wg_service::unwrap(peer_id, counter, ct) {
+        Ok(pt) => {
+            if pt.len() > RSP_DATA_MAX {
+                RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
+                return;
+            }
+            unsafe {
+                let dst = core::ptr::addr_of_mut!(RSP_DATA) as *mut u8;
+                for i in 0..pt.len() {
+                    core::ptr::write_volatile(dst.add(i), pt[i]);
+                }
+            }
+            RSP_LEN.store(pt.len() as u32, Ordering::Release);
+            RSP_STATUS.store(STATUS_OK, Ordering::Release);
+        }
+        Err(_) => RSP_STATUS.store(STATUS_ERR_SVC, Ordering::Release),
     }
 }
 
@@ -205,6 +310,36 @@ pub fn request_pubkey() -> Option<[u8; wireguard::KEY_LEN]> {
     Some(out)
 }
 
+/// IPC client for OP_WRAP. Encrypts `plaintext` under the peer
+/// slot's responder send_key (via the service task, never
+/// touching the keys directly). Returns the ciphertext (with
+/// 16-byte AEAD tag).
+pub fn request_wrap(peer_id: u8, plaintext: &[u8]) -> Option<alloc::vec::Vec<u8>> {
+    if 8 + plaintext.len() > REQ_DATA_MAX { return None; }
+    let mut req = alloc::vec![0u8; 8 + plaintext.len()];
+    req[0] = peer_id;
+    req[4..8].copy_from_slice(&(plaintext.len() as u32).to_le_bytes());
+    req[8..].copy_from_slice(plaintext);
+    let bytes = dispatch_one_shot(OP_WRAP, &req)?;
+    Some(bytes.to_vec())
+}
+
+/// IPC client for OP_UNWRAP. Decrypts `ct_with_tag` under the
+/// peer slot's responder recv_key at the given counter (via the
+/// service task). Returns the plaintext.
+pub fn request_unwrap(peer_id: u8, counter: u64, ct_with_tag: &[u8])
+    -> Option<alloc::vec::Vec<u8>>
+{
+    if 16 + ct_with_tag.len() > REQ_DATA_MAX { return None; }
+    let mut req = alloc::vec![0u8; 16 + ct_with_tag.len()];
+    req[0] = peer_id;
+    req[4..12].copy_from_slice(&counter.to_le_bytes());
+    req[12..16].copy_from_slice(&(ct_with_tag.len() as u32).to_le_bytes());
+    req[16..].copy_from_slice(ct_with_tag);
+    let bytes = dispatch_one_shot(OP_UNWRAP, &req)?;
+    Some(bytes.to_vec())
+}
+
 /// Selftest used by `sys-wg-ipc-selftest` to verify the IPC path
 /// returns the same value as the direct API. Returns
 /// `(direct_pk_prefix, ipc_pk_prefix, equal)` so the shell
@@ -218,4 +353,65 @@ pub fn selftest() -> Option<([u8; 8], [u8; 8], bool)> {
     a.copy_from_slice(&direct[..8]);
     b.copy_from_slice(&via_ipc[..8]);
     Some((a, b, equal))
+}
+
+/// IPC wrap/unwrap round-trip selftest.
+///   1. Generate an initiator keypair caller-side.
+///   2. Register it with sys-wg → `peer_id`.
+///   3. Drive a Noise IK handshake directly (NOT through IPC —
+///      that's OP_HANDSHAKE, future slice). Both sides end up
+///      with mirror TransportKeys; caller holds its half on the
+///      stack, sys-wg holds the responder half in the cave-
+///      private peer slot.
+///   4. `request_wrap(peer_id, "hello")` → ciphertext (sys-wg
+///      encrypts with the responder's send_key, which equals
+///      our recv_key).
+///   5. Caller `transport_recv` the ciphertext → expect "hello".
+///   6. Caller `transport_send` "world" → ct2.
+///   7. `request_unwrap(peer_id, 0, &ct2)` → expect "world".
+///
+/// Returns `(wrap_ok, unwrap_ok)`.
+pub fn selftest_wrap_unwrap() -> Option<(bool, bool)> {
+    use crate::net::wireguard::{
+        self, WgKeypair, TIMESTAMP_LEN, TransportKeys,
+    };
+
+    let our_pk = sys_wg_service::service_pubkey()?;
+    let initiator = WgKeypair::generate();
+
+    // Register (or reuse existing slot).
+    let peer_id = match sys_wg_service::register_peer(initiator.static_pk) {
+        Ok(id) => id,
+        Err(sys_wg_service::SysWgError::DuplicatePeer) => {
+            sys_wg_service::find_peer_by_pk(&initiator.static_pk)?
+        }
+        Err(_) => return None,
+    };
+
+    // Drive a handshake.
+    let timestamp = [0u8; TIMESTAMP_LEN];
+    let (mut init_state, init_eph_pk, enc_static, enc_ts) =
+        wireguard::initiator_send_init(&initiator, &our_pk, &timestamp).ok()?;
+    let resp_wire = sys_wg_service::complete_handshake_as_responder(
+        peer_id, &init_eph_pk, &enc_static, &enc_ts,
+    ).ok()?;
+    let mut caller_keys: TransportKeys = wireguard::initiator_finish_handshake(
+        &initiator, &mut init_state,
+        &resp_wire.responder_eph_pk,
+        &resp_wire.enc_empty,
+    ).ok()?;
+
+    // OP_WRAP through IPC: sys-wg encrypts; caller decrypts.
+    let plaintext = b"hello-via-ipc-wrap";
+    let ct = request_wrap(peer_id.as_u8(), plaintext)?;
+    let pt = wireguard::transport_recv(&mut caller_keys, 0, &ct).ok()?;
+    let wrap_ok = pt.as_slice() == plaintext;
+
+    // OP_UNWRAP through IPC: caller encrypts; sys-wg decrypts.
+    let plaintext2 = b"world-via-ipc-unwrap";
+    let ct2 = wireguard::transport_send(&mut caller_keys, plaintext2).ok()?;
+    let pt2 = request_unwrap(peer_id.as_u8(), 0, &ct2)?;
+    let unwrap_ok = pt2.as_slice() == plaintext2;
+
+    Some((wrap_ok, unwrap_ok))
 }
