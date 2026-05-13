@@ -401,8 +401,11 @@ fn handle_get_endpoint() {
 ///   bytes 4..8 : plaintext_len (u32 LE)
 ///   bytes 8..  : plaintext_len bytes of plaintext
 ///
-/// Response: ciphertext bytes (with 16-byte AEAD tag) in
-/// `RSP_DATA`; `RSP_LEN` set to ct.len().
+/// Response layout in `RSP_DATA`:
+///   bytes 0..8 : counter (u64 LE) — the AEAD nonce counter
+///                sys-wg used. Caller puts this in the wire
+///                transport message's counter field.
+///   bytes 8..  : ciphertext + 16-byte AEAD tag.
 fn handle_wrap() {
     let req_len = REQ_LEN.load(Ordering::Acquire) as usize;
     if req_len < 8 {
@@ -425,19 +428,21 @@ fn handle_wrap() {
         core::slice::from_raw_parts(p, pt_len)
     };
     let peer_id = sys_wg_service::PeerId::from(peer_id_raw);
-    match sys_wg_service::wrap(peer_id, plaintext) {
-        Ok(ct) => {
-            if ct.len() > RSP_DATA_MAX {
+    match sys_wg_service::wrap_full(peer_id, plaintext) {
+        Ok((ct, counter)) => {
+            if 8 + ct.len() > RSP_DATA_MAX {
                 RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
                 return;
             }
             unsafe {
                 let dst = core::ptr::addr_of_mut!(RSP_DATA) as *mut u8;
+                let cb = counter.to_le_bytes();
+                for i in 0..8 { core::ptr::write_volatile(dst.add(i), cb[i]); }
                 for i in 0..ct.len() {
-                    core::ptr::write_volatile(dst.add(i), ct[i]);
+                    core::ptr::write_volatile(dst.add(8 + i), ct[i]);
                 }
             }
-            RSP_LEN.store(ct.len() as u32, Ordering::Release);
+            RSP_LEN.store((8 + ct.len()) as u32, Ordering::Release);
             RSP_STATUS.store(STATUS_OK, Ordering::Release);
         }
         Err(_) => RSP_STATUS.store(STATUS_ERR_SVC, Ordering::Release),
@@ -665,18 +670,32 @@ pub fn request_handshake(
     Some(HandshakeResult { responder_eph_pk, enc_empty, initiator_timestamp })
 }
 
-/// IPC client for OP_WRAP. Encrypts `plaintext` under the peer
-/// slot's responder send_key (via the service task, never
-/// touching the keys directly). Returns the ciphertext (with
-/// 16-byte AEAD tag).
+/// IPC client for OP_WRAP. Returns just the ciphertext (with
+/// tag) — for callers that don't need the counter (e.g.
+/// loopback selftests where both sides know they start at 0).
+/// New callers should prefer `request_wrap_full`.
 pub fn request_wrap(peer_id: u8, plaintext: &[u8]) -> Option<alloc::vec::Vec<u8>> {
+    request_wrap_full(peer_id, plaintext).map(|(_c, ct)| ct)
+}
+
+/// IPC client for OP_WRAP with counter exposed. Returns the
+/// `(counter, ciphertext)` pair. `counter` is what the caller
+/// must put in the wire transport message's counter field.
+pub fn request_wrap_full(peer_id: u8, plaintext: &[u8])
+    -> Option<(u64, alloc::vec::Vec<u8>)>
+{
     if 8 + plaintext.len() > REQ_DATA_MAX { return None; }
     let mut req = alloc::vec![0u8; 8 + plaintext.len()];
     req[0] = peer_id;
     req[4..8].copy_from_slice(&(plaintext.len() as u32).to_le_bytes());
     req[8..].copy_from_slice(plaintext);
     let bytes = dispatch_one_shot(OP_WRAP, &req)?;
-    Some(bytes.to_vec())
+    if bytes.len() < 8 { return None; }
+    let mut cb = [0u8; 8];
+    cb.copy_from_slice(&bytes[..8]);
+    let counter = u64::from_le_bytes(cb);
+    let ct = bytes[8..].to_vec();
+    Some((counter, ct))
 }
 
 /// IPC client for OP_UNWRAP. Decrypts `ct_with_tag` under the
@@ -760,10 +779,18 @@ pub fn selftest_wrap_unwrap() -> Option<(bool, bool)> {
     ).ok()?;
 
     // OP_WRAP through IPC: sys-wg encrypts; caller decrypts.
+    // Use request_wrap_full so we can also assert the counter
+    // value advances (0 -> 1) between successive sends.
     let plaintext = b"hello-via-ipc-wrap";
-    let ct = request_wrap(peer_id.as_u8(), plaintext)?;
-    let pt = wireguard::transport_recv(&mut caller_keys, 0, &ct).ok()?;
+    let (counter_a, ct) = request_wrap_full(peer_id.as_u8(), plaintext)?;
+    if counter_a != 0 { return None; }
+    let pt = wireguard::transport_recv(&mut caller_keys, counter_a, &ct).ok()?;
     let wrap_ok = pt.as_slice() == plaintext;
+
+    // A second wrap should advance the counter to 1.
+    let plaintext_b = b"second-wrap-bumps-counter";
+    let (counter_b, _ct_b) = request_wrap_full(peer_id.as_u8(), plaintext_b)?;
+    let counter_bump_ok = counter_b == 1;
 
     // OP_UNWRAP through IPC: caller encrypts; sys-wg decrypts.
     let plaintext2 = b"world-via-ipc-unwrap";
@@ -771,5 +798,5 @@ pub fn selftest_wrap_unwrap() -> Option<(bool, bool)> {
     let pt2 = request_unwrap(peer_id.as_u8(), 0, &ct2)?;
     let unwrap_ok = pt2.as_slice() == plaintext2;
 
-    Some((wrap_ok, unwrap_ok))
+    Some((wrap_ok && counter_bump_ok, unwrap_ok))
 }

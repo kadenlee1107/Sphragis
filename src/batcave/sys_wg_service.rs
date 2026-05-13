@@ -762,9 +762,22 @@ pub fn complete_handshake_as_responder(
 }
 
 /// AEAD-encrypt under the peer slot's responder send_key.
+/// Returns just the ciphertext (with tag). Use `wrap_full` if
+/// you need the counter that was used for wire framing.
 pub fn wrap(peer_id: PeerId, plaintext: &[u8]) -> Result<Vec<u8>, SysWgError> {
+    wrap_full(peer_id, plaintext).map(|(ct, _)| ct)
+}
+
+/// AEAD-encrypt with counter exposed. Returns `(ciphertext, counter)`
+/// where `counter` is the value sys-wg's send-counter held at the
+/// instant of the AEAD seal (i.e., the value the caller must put
+/// in the wire transport message's counter field). sys-wg's
+/// internal counter is bumped to `counter + 1` afterwards.
+pub fn wrap_full(peer_id: PeerId, plaintext: &[u8])
+    -> Result<(Vec<u8>, u64), SysWgError>
+{
     let sys_wg_id = sys_caves::sys_wg_id().ok_or(SysWgError::UnknownPeer)? as u16;
-    cave::with_cave_active(sys_wg_id, || -> Result<Vec<u8>, SysWgError> {
+    cave::with_cave_active(sys_wg_id, || -> Result<(Vec<u8>, u64), SysWgError> {
         let s = unsafe { state_mut().ok_or(SysWgError::UnknownPeer)? };
         let i = peer_id.0 as usize;
         if i >= MAX_PEERS || s.peer_in_use[i] == 0 {
@@ -773,10 +786,6 @@ pub fn wrap(peer_id: PeerId, plaintext: &[u8]) -> Result<Vec<u8>, SysWgError> {
         if s.peer_has_session[i] == 0 {
             return Err(SysWgError::NoSession);
         }
-        // Reconstruct a TransportKeys on the cave stack, run the
-        // AEAD, write the bumped counter back. The keys never leave
-        // the cave-private page; we hold them on the stack only for
-        // the duration of the call.
         let mut keys = TransportKeys {
             send_key: s.peer_send_key[i],
             recv_key: s.peer_recv_key[i],
@@ -784,9 +793,10 @@ pub fn wrap(peer_id: PeerId, plaintext: &[u8]) -> Result<Vec<u8>, SysWgError> {
             recv_counter: s.peer_recv_counter[i],
             recv_window_bits: s.peer_recv_window_bits[i],
         };
+        let counter_used = keys.send_counter;
         let ct = wireguard::transport_send(&mut keys, plaintext)?;
         s.peer_send_counter[i] = keys.send_counter;
-        Ok(ct)
+        Ok((ct, counter_used))
     })
 }
 
