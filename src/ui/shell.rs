@@ -353,6 +353,7 @@ fn execute(cmd: &str) {
         "mount-ns-selftest"   => cmd_mount_ns_selftest(),
         "batfs-quota-selftest" => cmd_batfs_quota_selftest(),
         "ocsp-selftest"       => cmd_ocsp_selftest(),
+        "conntrack-selftest"  => cmd_conntrack_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
         "pkg" => {
@@ -2663,6 +2664,139 @@ fn cmd_ocsp_selftest() {
     print_num(issuers); console::puts(" issuer(s), ");
     print_num(entries); console::puts(" recorded entry(ies)\n");
     console::puts("  ✓ OCSP DER ingest + status lookup + fresh-response override verified\n");
+}
+
+/// `conntrack-selftest` — gap-audit item 045. Drives the conntrack
+/// flow table through its full lifecycle (register → lookup →
+/// upgrade → release) without depending on a real TCP exchange.
+/// Verifies:
+///
+///   1. `register_outbound` allocates a slot for a fresh 4-tuple
+///      with state `New`.
+///   2. `lookup_inbound` from the perspective of the remote (src_ip
+///      = remote_ip, src_port = remote_port, dst_port = local_port)
+///      returns `New`.
+///   3. `mark_established` transitions the slot to `Established`;
+///      a re-register on the same 4-tuple is idempotent (slot
+///      count doesn't grow).
+///   4. A lookup for a non-existent 4-tuple returns `None`.
+///   5. `release_local_port` evacuates every flow bound to that
+///      local port; subsequent lookups for those flows return `None`.
+fn cmd_conntrack_selftest() {
+    use crate::net::conntrack::{self, State};
+
+    console::puts_hi("  CONNTRACK STATE-TRACKER SELF-TEST\n");
+
+    const PROTO_TCP: u8 = 6;
+    let remote_ip: u32 = 0x0A_00_02_02;   // 10.0.2.2 (QEMU gateway)
+    let remote_port: u16 = 443;
+    let local_port: u16 = 32_768;
+    let other_local_port: u16 = 32_769;
+
+    // Clear any leftover state from prior boot tests (idempotent).
+    let _ = conntrack::release_local_port(local_port);
+    let _ = conntrack::release_local_port(other_local_port);
+    let (active_before, _, _, _) = conntrack::stats();
+
+    if conntrack::register_outbound(
+        PROTO_TCP, remote_ip, remote_port, local_port, State::New,
+    ).is_none() {
+        console::puts("  ✗ FAIL: register_outbound returned None (table full?)\n");
+        return;
+    }
+    console::puts("  ✓ register_outbound recorded a flow with state=New\n");
+
+    match conntrack::lookup_inbound(PROTO_TCP, remote_ip, remote_port, local_port) {
+        Some(State::New) => console::puts("  ✓ lookup_inbound returned New for the registered flow\n"),
+        s => {
+            console::puts("  ✗ FAIL: expected New, got ");
+            console::puts(match s {
+                Some(State::Established) => "Established",
+                Some(State::Closed)      => "Closed",
+                Some(State::New)         => "New",
+                None                     => "None",
+            });
+            console::puts("\n");
+            let _ = conntrack::release_local_port(local_port);
+            return;
+        }
+    }
+
+    conntrack::mark_established(PROTO_TCP, remote_ip, remote_port, local_port);
+    match conntrack::lookup_inbound(PROTO_TCP, remote_ip, remote_port, local_port) {
+        Some(State::Established) => console::puts("  ✓ mark_established transitioned state to Established\n"),
+        _ => {
+            console::puts("  ✗ FAIL: mark_established did not stick\n");
+            let _ = conntrack::release_local_port(local_port);
+            return;
+        }
+    }
+
+    // Idempotency: re-register on the same 4-tuple shouldn't grow
+    // the active count.
+    let (active_now, _, _, _) = conntrack::stats();
+    let _ = conntrack::register_outbound(
+        PROTO_TCP, remote_ip, remote_port, local_port, State::Established,
+    );
+    let (active_after_repeat, _, _, _) = conntrack::stats();
+    if active_after_repeat != active_now {
+        console::puts("  ✗ FAIL: re-register grew active count by ");
+        print_num((active_after_repeat - active_now) as usize);
+        console::puts("\n");
+        let _ = conntrack::release_local_port(local_port);
+        return;
+    }
+    console::puts("  ✓ re-register on same 4-tuple is idempotent\n");
+
+    // Negative case: a lookup against a 4-tuple we never recorded.
+    let other_remote_ip: u32 = 0x08_08_08_08;  // 8.8.8.8
+    if conntrack::lookup_inbound(PROTO_TCP, other_remote_ip, 80, local_port).is_some() {
+        console::puts("  ✗ FAIL: lookup of unrecorded 4-tuple returned Some\n");
+        let _ = conntrack::release_local_port(local_port);
+        return;
+    }
+    console::puts("  ✓ lookup of unrecorded 4-tuple returned None\n");
+
+    // Add a second flow on a different local port to verify
+    // `release_local_port` only evacuates flows bound to its arg.
+    let _ = conntrack::register_outbound(
+        PROTO_TCP, remote_ip, remote_port, other_local_port, State::New,
+    );
+
+    let dropped = conntrack::release_local_port(local_port);
+    if dropped == 0 {
+        console::puts("  ✗ FAIL: release_local_port did not drop any flows\n");
+        let _ = conntrack::release_local_port(other_local_port);
+        return;
+    }
+    if conntrack::lookup_inbound(PROTO_TCP, remote_ip, remote_port, local_port).is_some() {
+        console::puts("  ✗ FAIL: released flow still visible to lookup\n");
+        let _ = conntrack::release_local_port(other_local_port);
+        return;
+    }
+    if conntrack::lookup_inbound(PROTO_TCP, remote_ip, remote_port, other_local_port).is_none() {
+        console::puts("  ✗ FAIL: unrelated local_port flow was also dropped\n");
+        let _ = conntrack::release_local_port(other_local_port);
+        return;
+    }
+    console::puts("  ✓ release_local_port evacuated only the matching flow\n");
+
+    let _ = conntrack::release_local_port(other_local_port);
+    let (active_end, lifetime_reg, hits, misses) = conntrack::stats();
+    if active_end != active_before {
+        console::puts("  ✗ FAIL: cleanup left ");
+        print_num((active_end - active_before) as usize);
+        console::puts(" leftover flow(s)\n");
+        return;
+    }
+    console::puts("  ✓ counters: lifetime_registers=");
+    print_num(lifetime_reg as usize);
+    console::puts(", lookup_hits=");
+    print_num(hits as usize);
+    console::puts(", lookup_misses=");
+    print_num(misses as usize);
+    console::puts("\n");
+    console::puts("  ✓ conntrack lifecycle (register → lookup → upgrade → release) verified\n");
 }
 
 /// `caps [tid]` — show the capability set of a task (default: current).

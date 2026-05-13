@@ -3,6 +3,7 @@ pub mod beacon;
 pub mod cave_policy;
 pub mod cave_shaper;
 pub mod cert_pin;
+pub mod conntrack;
 pub mod crl;
 pub mod ct_logs;
 pub mod ocsp;
