@@ -342,6 +342,7 @@ fn execute(cmd: &str) {
         "sys-wg-ipc-selftest" => cmd_sys_wg_ipc_selftest(),
         "wg-initiator-selftest" => cmd_wg_initiator_selftest(),
         "wg-initiator-e2e-selftest" => cmd_wg_initiator_e2e_selftest(),
+        "wg-endpoint-selftest" => cmd_wg_endpoint_selftest(),
         "shm-selftest"        => cmd_shm_selftest(),
         "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
@@ -4056,6 +4057,37 @@ fn cmd_wg_initiator_e2e_selftest() {
         }
         None => {
             console::puts("  ✗ FAIL: e2e selftest returned None\n");
+        }
+    }
+}
+
+/// WG peer endpoint configuration + outbound connect selftest.
+/// Validates the IPC opcodes OP_SET_ENDPOINT / OP_GET_ENDPOINT
+/// and the `wg_dispatch::initiate_connect` plumbing (build
+/// InitMsg + udp::send to peer endpoint). Doesn't require a
+/// real peer to listen — just proves the send path is wired.
+fn cmd_wg_endpoint_selftest() {
+    use crate::net::wg_dispatch;
+    console::puts_hi("  WG ENDPOINT-CONFIG + OUTBOUND-CONNECT SELF-TEST\n");
+    console::puts("  Set/get endpoint via IPC; initiate_connect builds InitMsg\n");
+    console::puts("  via OP_START_HANDSHAKE and queues it on udp::send to the\n");
+    console::puts("  configured peer endpoint.\n");
+    match wg_dispatch::selftest_outbound_endpoint() {
+        Some((set_get_ok, connect_ok)) => {
+            if !set_get_ok {
+                console::puts("  ✗ FAIL: set_endpoint -> get_endpoint round trip mismatched\n");
+                return;
+            }
+            console::puts("  ✓ set_endpoint + get_endpoint round-tripped (127.0.0.1:51820)\n");
+            if !connect_ok {
+                console::puts("  ✗ FAIL: initiate_connect didn't install a session\n");
+                return;
+            }
+            console::puts("  ✓ initiate_connect built InitMsg + invoked udp::send\n");
+            console::puts("  ✓ WG endpoint config + outbound-connect plumbing verified\n");
+        }
+        None => {
+            console::puts("  ✗ FAIL: selftest returned None\n");
         }
     }
 }
