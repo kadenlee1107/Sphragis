@@ -469,6 +469,7 @@ fn execute_inner(cmd: &str) {
         "secmark-set-ceiling" => cmd_secmark_set_ceiling(parts[1]),
         "secmark-recv-selftest" => cmd_secmark_recv_selftest(),
         "te-obj-selftest"     => cmd_te_obj_selftest(),
+        "calipso-selftest"    => cmd_calipso_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -9591,6 +9592,87 @@ fn cmd_te_obj_selftest() {
 
     cleanup(sys_wg_id);
     console::puts("  ✓ TE-on-objects: (cave, obj_type, op) DENY matrix + admin bypass verified\n");
+}
+
+/// `calipso-selftest` — gov-grade §3.2 IPv6 SECMARK format work
+/// (RFC 5570 CALIPSO).
+///
+/// IPv6 isn't yet in tree, so we can't put a CALIPSO option in a
+/// live IPv6 Hop-by-Hop header. But the option encoding itself is
+/// independent — this selftest exercises the encoder + parser
+/// pair so the format work is done for when v6 lands:
+///
+///   1. encode(level=S) -> 10-byte buffer with DOI=BBOS, level=2,
+///      cmpt-len=0, valid checksum.
+///   2. parse(buf) -> Some(S). Round trip.
+///   3. Flip the level byte to TS — checksum invalidates,
+///      `parse` returns None.
+///   4. Restore level, flip the DOI bytes — `parse` returns None
+///      (wrong-DOI rejected).
+fn cmd_calipso_selftest() {
+    use crate::batcave::cave::Sensitivity;
+    use crate::net::calipso;
+
+    console::puts_hi("  CALIPSO (IPv6 SECMARK) FORMAT SELF-TEST\n");
+
+    let mut buf = [0u8; 16];
+    let n = calipso::encode(Sensitivity::Secret as u8, &mut buf);
+    if n != calipso::MIN_CALIPSO_LEN {
+        console::puts("  ✗ FAIL: encode returned wrong length: ");
+        print_num(n); console::puts("\n");
+        return;
+    }
+    if buf[0] != calipso::CALIPSO_OPT_TYPE {
+        console::puts("  ✗ FAIL: encoded option type != 0x07\n"); return;
+    }
+    console::puts("  ✓ encode(level=S) produced 10-byte buffer\n");
+
+    match calipso::parse(&buf[..n]) {
+        Some(b) if b == Sensitivity::Secret as u8 => {
+            console::puts("  ✓ parse(buf) -> Some(S) — round trip OK\n");
+        }
+        Some(b) => {
+            console::puts("  ✗ FAIL: wrong sensitivity: ");
+            print_num(b as usize); console::puts("\n");
+            return;
+        }
+        None => {
+            console::puts("  ✗ FAIL: parse returned None on valid buf\n");
+            return;
+        }
+    }
+
+    // (3) Tamper the level byte. Checksum now invalid; parser rejects.
+    let saved = buf[6];
+    buf[6] = Sensitivity::TopSecret as u8;
+    if calipso::parse(&buf[..n]).is_some() {
+        console::puts("  ✗ FAIL: level-tamper bypassed checksum\n"); return;
+    }
+    console::puts("  ✓ level tamper -> checksum invalid, parser rejects\n");
+    buf[6] = saved;
+
+    // (4) Re-encode (recompute checksum), then flip the DOI bytes.
+    // `parse` should reject on DOI mismatch even with a valid
+    // checksum, because the DOI gate runs first.
+    calipso::encode(Sensitivity::Secret as u8, &mut buf);
+    buf[2] ^= 0xFF;
+    // Reinsert checksum so the only thing wrong is the DOI.
+    buf[8] = 0; buf[9] = 0;
+    let mut sum: u32 = 0;
+    let mut i = 0;
+    while i + 1 < n {
+        sum += u16::from_be_bytes([buf[i], buf[i + 1]]) as u32;
+        i += 2;
+    }
+    while sum >> 16 != 0 { sum = (sum & 0xFFFF) + (sum >> 16); }
+    let cksum = !(sum as u16);
+    buf[8..10].copy_from_slice(&cksum.to_be_bytes());
+    if calipso::parse(&buf[..n]).is_some() {
+        console::puts("  ✗ FAIL: wrong-DOI option accepted\n"); return;
+    }
+    console::puts("  ✓ wrong-DOI rejected even with valid checksum\n");
+
+    console::puts("  ✓ CALIPSO: RFC 5570 encode/parse + checksum + DOI gate verified\n");
 }
 
 fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
