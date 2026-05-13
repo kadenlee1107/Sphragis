@@ -476,6 +476,129 @@ pub fn can_transition(from_cave_id: usize, to_cave_id: u16) -> bool {
     false
 }
 
+// ── TE on objects (gov-grade §3.2 object-type slice)
+//
+// SELinux distinguishes subject-domains (which we already model as
+// cave IDs) from object-types (file_type_t, socket_type_t, etc.).
+// This module adds the object-type axis: each BatFS file carries
+// an `obj_type: u8`, and a per-cave rule matrix says which
+// (cave_domain, obj_type, op) tuples are permitted. The default
+// is to permit any access (so existing caves with `obj_type=0`
+// untyped files keep working); rules add explicit DENY entries
+// for high-privilege types.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjOp { Read, Write }
+
+const MAX_OBJ_RULES: usize = 64;
+
+#[derive(Clone, Copy)]
+struct ObjRule {
+    in_use: bool,
+    cave_id: u16,
+    obj_type: u8,
+    /// Bit 0 = deny-read, bit 1 = deny-write.
+    deny_mask: u8,
+}
+
+impl ObjRule {
+    const fn empty() -> Self {
+        Self { in_use: false, cave_id: 0, obj_type: 0, deny_mask: 0 }
+    }
+}
+
+static mut OBJ_RULES: [ObjRule; MAX_OBJ_RULES] = [ObjRule::empty(); MAX_OBJ_RULES];
+static OBJ_RULE_COUNT: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+fn obj_op_bit(op: ObjOp) -> u8 {
+    match op { ObjOp::Read => 0b01, ObjOp::Write => 0b10 }
+}
+
+/// Add a (cave, obj_type) DENY rule for one op. Idempotent —
+/// re-adding the same triple just merges bits into the existing
+/// rule's deny_mask.
+pub fn deny_object_op(cave_id: u16, obj_type: u8, op: ObjOp) -> Result<(), &'static str> {
+    let bit = obj_op_bit(op);
+    unsafe {
+        let n = OBJ_RULE_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if OBJ_RULES[i].in_use
+                && OBJ_RULES[i].cave_id == cave_id
+                && OBJ_RULES[i].obj_type == obj_type
+            {
+                OBJ_RULES[i].deny_mask |= bit;
+                return Ok(());
+            }
+        }
+        if n >= MAX_OBJ_RULES { return Err("te-obj: table full"); }
+        OBJ_RULES[n] = ObjRule {
+            in_use: true, cave_id, obj_type, deny_mask: bit,
+        };
+        OBJ_RULE_COUNT.store(n + 1, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// Remove all (cave, obj_type) deny entries.
+pub fn allow_object_op(cave_id: u16, obj_type: u8) {
+    unsafe {
+        let n = OBJ_RULE_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if OBJ_RULES[i].in_use
+                && OBJ_RULES[i].cave_id == cave_id
+                && OBJ_RULES[i].obj_type == obj_type
+            {
+                if i + 1 < n {
+                    OBJ_RULES[i] = OBJ_RULES[n - 1];
+                }
+                OBJ_RULES[n - 1] = ObjRule::empty();
+                OBJ_RULE_COUNT.store(n - 1, Ordering::Relaxed);
+                return;
+            }
+        }
+    }
+}
+
+pub fn clear_object_rules() {
+    unsafe { OBJ_RULES = [ObjRule::empty(); MAX_OBJ_RULES]; }
+    OBJ_RULE_COUNT.store(0, Ordering::Relaxed);
+}
+
+/// Policy decision: may `cave_id` perform `op` on an object of
+/// `obj_type`? Default ALLOW unless an explicit DENY rule applies.
+/// Admin / kernel context (`cave_id == usize::MAX as u16`) always
+/// passes — the operator's the trusted subject in our model.
+pub fn can_access_object(cave_id: u16, obj_type: u8, op: ObjOp) -> bool {
+    if cave_id == u16::MAX { return true; }
+    let bit = obj_op_bit(op);
+    unsafe {
+        let n = OBJ_RULE_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if OBJ_RULES[i].in_use
+                && OBJ_RULES[i].cave_id == cave_id
+                && OBJ_RULES[i].obj_type == obj_type
+                && (OBJ_RULES[i].deny_mask & bit) != 0
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Walk every active rule for display / persistence.
+pub fn for_each_object_rule<F: FnMut(u16, u8, u8)>(mut f: F) {
+    unsafe {
+        let n = OBJ_RULE_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if OBJ_RULES[i].in_use {
+                f(OBJ_RULES[i].cave_id, OBJ_RULES[i].obj_type, OBJ_RULES[i].deny_mask);
+            }
+        }
+    }
+}
+
 /// Iterate every rule for shell display / persistence.
 pub fn for_each_transition_rule<F: FnMut(u16, u16)>(mut f: F) {
     unsafe {

@@ -50,6 +50,14 @@ pub struct FileEntry {
     /// `cave.integ > file.integ` (no read-DOWN — a high-integrity
     /// subject must not be tainted by low-integrity input).
     pub integrity: u8,
+    /// SELinux-style object type (gov-grade §3.2 TE-on-objects
+    /// slice). Free-form 1-byte tag the operator assigns to
+    /// distinguish file classes (e.g. `system_config`,
+    /// `user_data`, `audit_log`, `crypto_material`, `tmp`).
+    /// Default = 0 = `untyped`. Cross-cave reads are gated by
+    /// `cave::can_read_object_type(cave_id, obj_type)` from
+    /// `ns_read`.
+    pub obj_type: u8,
 }
 
 impl FileEntry {
@@ -65,6 +73,7 @@ impl FileEntry {
             encrypted: false,
             sensitivity: 0,
             integrity: 0,
+            obj_type: 0,
         }
     }
 
@@ -487,7 +496,74 @@ pub fn ns_read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
             return Err("mls: no read-down");
         }
     }
+    // SELinux-style TE on objects (gov-grade §3.2 TE slice).
+    // Consult the per-cave object-type DENY matrix. Admin /
+    // kernel context always passes (cave_id == u16::MAX); cave
+    // context fails fast with the policy-specific error string.
+    if let Some(obj_t) = obj_type_for_full_name(full_name) {
+        use crate::batcave::cave::{self, ObjOp};
+        let active = cave::get_active();
+        let active_id = if active == usize::MAX { u16::MAX } else { active as u16 };
+        if !cave::can_access_object(active_id, obj_t, ObjOp::Read) {
+            return Err("te-obj: read denied by policy");
+        }
+    }
     read(full_name, buf)
+}
+
+/// Like `obj_type_of` but takes a fully-composed (already prefixed)
+/// name — saves the double mount-namespace prefix when ns_read has
+/// already done it.
+fn obj_type_for_full_name(full_name: &str) -> Option<u8> {
+    unsafe {
+        for i in 0..MAX_FILES {
+            if FILES[i].state == FileState::Active
+                && FILES[i].name_str() == full_name
+            {
+                return Some(FILES[i].obj_type);
+            }
+        }
+    }
+    None
+}
+
+/// Retag a file's SELinux-style object type. Doesn't re-encrypt
+/// (type isn't bound into the AEAD's AAD today — only sens +
+/// integ are). Returns `false` if no matching active file exists.
+/// Admin operation: caller is expected to be in admin context.
+pub fn set_obj_type(name: &str, obj_type: u8) -> bool {
+    let mut full = [0u8; MAX_FILENAME];
+    let full_name = match ns_compose(name, &mut full) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    unsafe {
+        for i in 0..MAX_FILES {
+            if FILES[i].state == FileState::Active
+                && FILES[i].name_str() == full_name
+            {
+                FILES[i].obj_type = obj_type;
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Look up a file's stored object type. None if no matching file.
+pub fn obj_type_of(name: &str) -> Option<u8> {
+    let mut full = [0u8; MAX_FILENAME];
+    let full_name = ns_compose(name, &mut full).ok()?;
+    unsafe {
+        for i in 0..MAX_FILES {
+            if FILES[i].state == FileState::Active
+                && FILES[i].name_str() == full_name
+            {
+                return Some(FILES[i].obj_type);
+            }
+        }
+    }
+    None
 }
 
 /// Test-only: flip the on-disk MLS labels of a file without
@@ -683,6 +759,10 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         // tampered since write.
         entry.sensitivity = sens_byte;
         entry.integrity   = integ_byte;
+        // Object-type defaults to "untyped" (0). Operators retag
+        // via the future `batfs::ns_create_typed` API + the
+        // `te-obj-tag` shell command.
+        entry.obj_type = 0;
 
         FILE_COUNT += 1;
 
