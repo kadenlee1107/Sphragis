@@ -88,14 +88,27 @@ static mut SESSIONS: [SessionEntry; MAX_SESSIONS] = [SessionEntry {
 static SENDER_INDEX_SEQ: core::sync::atomic::AtomicU32
     = core::sync::atomic::AtomicU32::new(1);
 
+/// Round-robin cursor for session eviction. When all slots are
+/// `in_use`, `install_session` overwrites `SESSIONS[NEXT_EVICT %
+/// MAX_SESSIONS]` and bumps the cursor. Crude but bounded — under
+/// normal traffic we don't fill the table, and under attack we'd
+/// rather drop the oldest tracked session than refuse the newest.
+static NEXT_EVICT: core::sync::atomic::AtomicU32
+    = core::sync::atomic::AtomicU32::new(0);
+
 fn alloc_sender_index() -> u32 {
     SENDER_INDEX_SEQ.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
 }
 
-fn install_session(our_idx: u32, their_idx: u32, peer_id: PeerId) -> bool {
+/// Install a new session. Prefers a free slot; falls back to
+/// round-robin eviction of an existing slot if all are in use.
+/// Returns `(slot_index, evicted_old)` — `evicted_old == true`
+/// means we overwrote a live session and the audit log should
+/// note it.
+fn install_session(our_idx: u32, their_idx: u32, peer_id: PeerId) -> (usize, bool) {
     let _g = crate::kernel::sync::IrqGuard::new();
     let sessions = unsafe { &mut *core::ptr::addr_of_mut!(SESSIONS) };
-    for slot in sessions.iter_mut() {
+    for (i, slot) in sessions.iter_mut().enumerate() {
         if !slot.in_use {
             *slot = SessionEntry {
                 in_use: true,
@@ -103,10 +116,19 @@ fn install_session(our_idx: u32, their_idx: u32, peer_id: PeerId) -> bool {
                 their_sender_index: their_idx,
                 peer_id,
             };
-            return true;
+            return (i, false);
         }
     }
-    false
+    // All slots in use — round-robin evict.
+    let cursor = NEXT_EVICT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let i = (cursor as usize) % MAX_SESSIONS;
+    sessions[i] = SessionEntry {
+        in_use: true,
+        our_sender_index: our_idx,
+        their_sender_index: their_idx,
+        peer_id,
+    };
+    (i, true)
 }
 
 fn session_by_our_index(our_idx: u32) -> Option<PeerId> {
@@ -194,11 +216,15 @@ fn dispatch_init(bytes: &[u8]) -> WgDispatchResult {
     };
 
     let our_idx = alloc_sender_index();
-    if !install_session(our_idx, parsed.sender_index, peer_id) {
-        // Session table full — for now we just drop and let the
-        // initiator retry. A real implementation would evict
-        // oldest.
-        return WgDispatchResult::Err(WgError::KdfFail);
+    let (_slot, evicted_old) = install_session(our_idx, parsed.sender_index, peer_id);
+    if evicted_old {
+        // Audit the eviction so a forensic reviewer can correlate
+        // "session N was overwritten before its peer cleanly
+        // closed" to the timeline.
+        crate::security::audit::record(
+            crate::security::audit::Category::Cave,
+            b"wg_dispatch: round-robin session eviction",
+        );
     }
 
     // We need the INITIATOR's static_pk for the response's mac1
