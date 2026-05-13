@@ -291,6 +291,41 @@ pub fn current_terminate() -> ! {
     }
 }
 
+/// Park the current task in `Blocked` state and yield. The
+/// scheduler ignores Blocked tasks when picking, so the caller
+/// stays off-CPU until some other task calls `process::wake(id)`
+/// to flip the state back to Ready.
+///
+/// Used by long-running service tasks (e.g. `sys_wg_ipc`'s
+/// service_main) that have nothing to do until a client posts
+/// a request and wakes them.
+pub fn current_block() {
+    loop {
+        current().state = TaskState::Blocked;
+        crate::kernel::scheduler::yield_now();
+        // On resume the scheduler's prologue runs with our state
+        // == Ready (a wake flipped it before pick); the prologue
+        // then flips Ready->Running. If somehow we resumed while
+        // still Blocked (shouldn't happen with the current
+        // scheduler), re-block.
+        if current().state == TaskState::Running { break; }
+    }
+}
+
+/// Flip a task from `Blocked` back to `Ready` so the scheduler
+/// can pick it. No-op if the task is already Ready/Running or
+/// Dead/Free.
+///
+/// Caller is responsible for any happens-before discipline the
+/// woken task needs (e.g. posting a request payload to shared
+/// memory + memory barrier before calling `wake`).
+pub fn wake(id: TaskId) {
+    let task = get(id);
+    if task.state == TaskState::Blocked {
+        task.state = TaskState::Ready;
+    }
+}
+
 /// Iterate over tasks visible to the given cave. If cave_id == 0,
 /// returns every active task (the global "root" view used by the
 /// kernel for diagnostics). Otherwise filters to tasks whose
