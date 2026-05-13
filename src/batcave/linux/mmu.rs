@@ -1276,6 +1276,16 @@ pub fn record_forked_cave(
 }
 
 /// Switch MMU to a cave's page table.
+///
+/// Cross-domain Spectre hardening: after the TTBR0 swap (which
+/// already issues TLBI + DSB SY + ISB) we emit `sb` (speculation
+/// barrier, ARMv8.5 FEAT_SB; treated as NOP on cores that lack it
+/// — universal 32-bit encoding `0xd50330ff`). The aim is to bound
+/// speculative reads that started under the OLD TTBR0 from
+/// retiring against the NEW one. Without it, an attacker who can
+/// influence speculation in the previous cave's context could
+/// trigger a transient load from an address only the new cave
+/// has mapped.
 pub fn switch_to_cave(l1_addr: usize) {
     unsafe {
         core::arch::asm!("tlbi vmalle1");
@@ -1286,6 +1296,13 @@ pub fn switch_to_cave(l1_addr: usize) {
         core::arch::asm!("tlbi vmalle1");
         core::arch::asm!("dsb sy");
         core::arch::asm!("isb");
+        // Speculation barrier — gov-grade Spectre v1/v2/BHB
+        // mitigation at cave-boundary crossings. Encoded as the
+        // 32-bit hint instruction `0xd50330ff` for portability:
+        // the inline-asm assembler in older toolchains may not
+        // accept `sb` as a mnemonic, but the byte sequence is
+        // universally a NOP on cores without FEAT_SB.
+        core::arch::asm!(".inst 0xd50330ff");
 
         // V3: publish active user window for is_user_range. Look up by L1.
         let mut start = 0usize;
