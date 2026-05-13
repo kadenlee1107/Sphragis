@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 pub mod cave_pool;
 pub mod frame;
+pub mod guard;
 pub mod heap;
 pub mod initrd;
 pub mod mmu_el2;
@@ -79,6 +80,19 @@ pub fn init() {
     } else {
         QEMU_MEMORY_END
     };
+
+    // Seed the heap-guard canary key BEFORE init so the very first
+    // allocation gets a randomised canary. probe_hw_rng + fill_bytes
+    // are pure register/stack operations and do not allocate, so
+    // running them before heap::init is safe. If RNDR is unavailable
+    // we still get the SHA-chain DRBG output, which is enough for a
+    // per-boot canary key — see src/kernel/mm/guard.rs.
+    crate::crypto::rng::probe_hw_rng();
+    let mut seed = [0u8; 32];
+    crate::crypto::rng::fill_bytes(&mut seed);
+    guard::init(&seed);
+    // Wipe the local copy of the seed before it leaves scope.
+    for b in seed.iter_mut() { unsafe { core::ptr::write_volatile(b, 0); } }
 
     heap::init(heap_base);
     let frame_start = heap_base + heap::kernel_heap_size();
