@@ -352,6 +352,7 @@ fn execute(cmd: &str) {
         "cave-private-selftest" => cmd_cave_private_selftest(),
         "mount-ns-selftest"   => cmd_mount_ns_selftest(),
         "batfs-quota-selftest" => cmd_batfs_quota_selftest(),
+        "ocsp-selftest"       => cmd_ocsp_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
         "pkg" => {
@@ -2543,6 +2544,125 @@ fn cmd_batfs_quota_selftest() {
     }
     console::puts("  ✓ cleanup restored quota counter to baseline\n");
     console::puts("  ✓ batfs quota-enforcement: charge + release verified\n");
+}
+
+/// `ocsp-selftest` — gap-audit item 052b. Exercises the OCSP
+/// revocation cache end-to-end:
+///
+///   1. Two pre-generated DER fixtures (Python `cryptography`
+///      builder, see `scripts/gen_ocsp_fixture.py`) are parsed via
+///      `ocsp::ingest_basic_response` — one carries a Good status
+///      for serial 0x01, the other a Revoked status for serial
+///      0x02. Both are signed by the SAME test CA, so they share
+///      one `issuer_key_hash`.
+///   2. `ocsp::status(issuer_key_hash, serial)` returns the right
+///      verdict for each of the two recorded entries.
+///   3. A third serial (0x03) that's NOT in either response is
+///      queried — must return None (cache-miss policy decision is
+///      the caller's, not ours).
+///   4. `record_status` directly: write a Good then Revoked
+///      override on the same (issuer, serial) — the second write
+///      replaces the first (a fresh OCSP response is always
+///      authoritative over a stale cached one).
+fn cmd_ocsp_selftest() {
+    use crate::net::ocsp::{self, Status};
+    use crate::net::ocsp_fixtures as fx;
+
+    console::puts_hi("  OCSP REVOCATION CACHE SELF-TEST\n");
+
+    let recorded_good = match ocsp::ingest_basic_response(fx::TEST_OCSP_GOOD_DER) {
+        Ok(n) => n,
+        Err(_) => {
+            console::puts("  ✗ FAIL: ingest_basic_response(good.der) returned Err\n");
+            return;
+        }
+    };
+    if recorded_good != 1 {
+        console::puts("  ✗ FAIL: expected 1 entry from good.der, got ");
+        print_num(recorded_good); console::puts("\n");
+        return;
+    }
+    let recorded_revoked = match ocsp::ingest_basic_response(fx::TEST_OCSP_REVOKED_DER) {
+        Ok(n) => n,
+        Err(_) => {
+            console::puts("  ✗ FAIL: ingest_basic_response(revoked.der) returned Err\n");
+            return;
+        }
+    };
+    if recorded_revoked != 1 {
+        console::puts("  ✗ FAIL: expected 1 entry from revoked.der, got ");
+        print_num(recorded_revoked); console::puts("\n");
+        return;
+    }
+    console::puts("  ✓ ingested 2 SingleResponse entries from DER fixtures\n");
+
+    match ocsp::status(&fx::ISSUER_KEY_HASH, fx::SERIAL_GOOD) {
+        Some(Status::Good) => console::puts("  ✓ status(serial=0x01) -> Good\n"),
+        s => {
+            console::puts("  ✗ FAIL: status(0x01) expected Good, got ");
+            console::puts(match s {
+                Some(Status::Revoked) => "Revoked",
+                Some(Status::Unknown) => "Unknown",
+                Some(Status::Good)    => "Good",  // unreachable
+                None                  => "None",
+            });
+            console::puts("\n");
+            return;
+        }
+    }
+    match ocsp::status(&fx::ISSUER_KEY_HASH, fx::SERIAL_REVOKED) {
+        Some(Status::Revoked) => console::puts("  ✓ status(serial=0x02) -> Revoked\n"),
+        s => {
+            console::puts("  ✗ FAIL: status(0x02) expected Revoked, got ");
+            console::puts(match s {
+                Some(Status::Good)    => "Good",
+                Some(Status::Unknown) => "Unknown",
+                Some(Status::Revoked) => "Revoked",
+                None                  => "None",
+            });
+            console::puts("\n");
+            return;
+        }
+    }
+
+    let unknown_serial: &[u8] = &[0x03];
+    if ocsp::status(&fx::ISSUER_KEY_HASH, unknown_serial).is_some() {
+        console::puts("  ✗ FAIL: status(0x03) should be None (not cached)\n");
+        return;
+    }
+    console::puts("  ✓ status(serial=0x03 uncached) -> None\n");
+
+    // Fresh-response override: record Good, then Revoked, then
+    // query. Second write must win.
+    let override_serial: &[u8] = &[0xAA, 0xBB];
+    if ocsp::record_status(&fx::ISSUER_KEY_HASH, override_serial, Status::Good).is_err() {
+        console::puts("  ✗ FAIL: record_status(Good) returned Err\n");
+        return;
+    }
+    if ocsp::record_status(&fx::ISSUER_KEY_HASH, override_serial, Status::Revoked).is_err() {
+        console::puts("  ✗ FAIL: record_status(Revoked) returned Err\n");
+        return;
+    }
+    match ocsp::status(&fx::ISSUER_KEY_HASH, override_serial) {
+        Some(Status::Revoked) => console::puts("  ✓ fresh-response override: Good -> Revoked\n"),
+        s => {
+            console::puts("  ✗ FAIL: override should be Revoked, got ");
+            console::puts(match s {
+                Some(Status::Good)    => "Good",
+                Some(Status::Unknown) => "Unknown",
+                Some(Status::Revoked) => "Revoked",
+                None                  => "None",
+            });
+            console::puts("\n");
+            return;
+        }
+    }
+
+    let (issuers, entries) = ocsp::stats();
+    console::puts("  ✓ OCSP cache: ");
+    print_num(issuers); console::puts(" issuer(s), ");
+    print_num(entries); console::puts(" recorded entry(ies)\n");
+    console::puts("  ✓ OCSP DER ingest + status lookup + fresh-response override verified\n");
 }
 
 /// `caps [tid]` — show the capability set of a task (default: current).

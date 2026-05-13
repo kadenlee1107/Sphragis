@@ -1136,7 +1136,7 @@ After this refresh, the still-open P1 list narrows to:
   * 044 VLAN (802.1Q)
   * 045 conntrack-class stateful firewall (we're stateless)
   * 051 constant-time bignum (RustCrypto crates provide this; verify their security claims rather than rebuilding)
-  * 052b OCSP revocation (CRL is shipped; OCSP is the parallel real-time path)
+  * 052b OCSP revocation — **shipped.** `src/net/ocsp.rs` adds a constant-cost (issuer_key_hash, serial) → Status cache + DER `OCSPResponse` ingest via the `x509-ocsp` crate; `ocsp-selftest` proves DER parse + Good/Revoked recording + fresh-response override against two Python-`cryptography`-generated fixtures.
   * 054-058 sensor / camera / touch / hypervisor / OCI drivers — all need real M4 hardware
 
 ---
