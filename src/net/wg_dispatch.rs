@@ -132,6 +132,18 @@ fn install_session(our_idx: u32, their_idx: u32, peer_id: PeerId) -> (usize, boo
     (i, true)
 }
 
+/// Public probe used by `wg-test-outbound`: returns `true` once a
+/// session for `peer_id` has `their_sender_index != 0` — set by
+/// `dispatch_response` when the responder's reply lands. Lets the
+/// shell command tell "Init queued" apart from "Response arrived,
+/// handshake complete" without exposing the SESSIONS table layout.
+pub fn peer_handshake_established(peer_id: PeerId) -> bool {
+    let sessions = unsafe { &*core::ptr::addr_of!(SESSIONS) };
+    sessions.iter().any(|s|
+        s.in_use && s.peer_id == peer_id && s.their_sender_index != 0
+    )
+}
+
 fn session_by_our_index(our_idx: u32) -> Option<PeerId> {
     let sessions = unsafe { &*core::ptr::addr_of!(SESSIONS) };
     sessions.iter()
