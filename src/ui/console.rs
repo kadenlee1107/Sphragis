@@ -5,7 +5,7 @@
 
 use crate::ui::gpu;
 use super::font::{self, CHAR_W, CHAR_H};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 // palette matches the WM chrome and lock screen.
 const BG: u32 = 0xFF0A0A0A;
@@ -478,6 +478,16 @@ fn draw_status_bar() {
 /// the current pen color so `redraw_content` can replay the screen
 /// after the WM clears the FB.
 pub fn putc(c: u8) {
+    // Output-capture short-circuit: redirect to the capture buffer
+    // and skip framebuffer + scrollback paint. Serial mirror still
+    // runs so test harnesses and dev observers see the bytes.
+    if CAPTURE_ACTIVE.load(Ordering::Acquire) {
+        capture_push(core::slice::from_ref(&c));
+        if matches!(crate::platform::current(), crate::platform::Platform::QemuVirt) {
+            crate::drivers::uart::putc(c);
+        }
+        return;
+    }
     let mut cx = CURSOR_X.load(Ordering::Relaxed);
     let mut cy = CURSOR_Y.load(Ordering::Relaxed);
     let max_cols = cols();
@@ -549,8 +559,74 @@ fn mirror_to_serial(s: &str) {
     }
 }
 
+// ===========================================================================
+// Output-capture mode — gap-audit item 039 (shell pipes / job control).
+//
+// `begin_capture()` swaps console output from the framebuffer +
+// scrollback to a fixed-size byte buffer. Serial mirror still runs
+// (so test harnesses + dev debug keep working). `end_capture()`
+// returns the buffered bytes and restores normal sink behaviour.
+//
+// This is the load-bearing primitive behind the shell's `>`
+// redirect operator: the shell's `execute` checks for ` > <file>`,
+// wraps the inner command in begin/end_capture, then writes the
+// captured bytes to BatFS via `batfs::ns_create`.
+//
+// Future `|` pipes will use the same buffer as the donor of the
+// left side and feed it as input to the right side; a handful of
+// commands need a buffer-input shape for that to work (hash, etc.)
+// — that's the follow-up arc this primitive unblocks.
+// ===========================================================================
+
+const CAPTURE_CAP: usize = 32 * 1024;
+static mut CAPTURE_BUF: [u8; CAPTURE_CAP] = [0u8; CAPTURE_CAP];
+static CAPTURE_LEN:    AtomicUsize = AtomicUsize::new(0);
+static CAPTURE_ACTIVE: AtomicBool  = AtomicBool::new(false);
+
+/// Begin capturing console output. While active, `puts` / `putc`
+/// writes go to the capture buffer instead of the framebuffer +
+/// scrollback. Serial mirror is unchanged (debug visibility kept).
+/// Idempotent: re-calling resets the buffer but keeps capture on.
+pub fn begin_capture() {
+    CAPTURE_LEN.store(0, Ordering::Relaxed);
+    CAPTURE_ACTIVE.store(true, Ordering::Release);
+}
+
+/// End capture; return the captured bytes as a `'static` slice.
+/// The slice remains valid until the next `begin_capture`.
+pub fn end_capture() -> &'static [u8] {
+    CAPTURE_ACTIVE.store(false, Ordering::Release);
+    let n = CAPTURE_LEN.load(Ordering::Relaxed).min(CAPTURE_CAP);
+    unsafe {
+        let p = core::ptr::addr_of!(CAPTURE_BUF) as *const u8;
+        core::slice::from_raw_parts(p, n)
+    }
+}
+
+/// True iff capture mode is currently active.
+pub fn capture_active() -> bool {
+    CAPTURE_ACTIVE.load(Ordering::Acquire)
+}
+
+fn capture_push(s: &[u8]) {
+    let mut head = CAPTURE_LEN.load(Ordering::Relaxed);
+    if head >= CAPTURE_CAP { return; }
+    let take = s.len().min(CAPTURE_CAP - head);
+    unsafe {
+        let dst = core::ptr::addr_of_mut!(CAPTURE_BUF) as *mut u8;
+        core::ptr::copy_nonoverlapping(s.as_ptr(), dst.add(head), take);
+    }
+    head += take;
+    CAPTURE_LEN.store(head, Ordering::Relaxed);
+}
+
 /// Print a string to the console.
 pub fn puts(s: &str) {
+    if CAPTURE_ACTIVE.load(Ordering::Acquire) {
+        capture_push(s.as_bytes());
+        mirror_to_serial(s);
+        return;
+    }
     for b in s.bytes() {
         putc(b);
     }
