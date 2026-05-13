@@ -39,6 +39,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+# Local Rekor-compatible Merkle log (gov-grade §3.11 step 3).
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from rekor_local import RekorLog
+
 # Order matters: the artifact list is part of the log entry, so both
 # sign + verify must agree byte-for-byte on which files go in and in
 # what order.
@@ -139,6 +143,17 @@ def do_sign() -> int:
         f.write(json.dumps(log_entry, sort_keys=True, separators=(",", ":")))
         f.write("\n")
     print(f"[sign] appended log entry; chain hash now {chain_hash[:16]}...")
+
+    # Append to the Rekor-compatible Merkle log + refresh the
+    # signed tree head. Verifiers reconstruct the root from
+    # `rekor/log` themselves and check both (a) every inclusion
+    # proof and (b) the STH signature. Same shape as real
+    # Sigstore Rekor, hosted locally.
+    rekor = RekorLog(REPO_ROOT)
+    log_index, leaf_hex = rekor.append(log_entry)
+    sth = rekor.write_sth(sk)
+    print(f"[sign] rekor: logIndex={log_index}, leaf={leaf_hex[:16]}..., "
+          f"treeSize={sth['treeSize']}, root={sth['rootHash'][:16]}...")
     print(f"[sign] pubkey: {pubkey_hex}")
     return 0
 
@@ -213,6 +228,24 @@ def do_verify() -> int:
                   file=sys.stderr)
             return 1
         print(f"[verify]   {rec['path']}: sha256={rec['sha256'][:16]}... + sig OK")
+
+    # ── Rekor: signed tree head + inclusion proofs for every entry ──
+    rekor = RekorLog(REPO_ROOT)
+    if rekor.tree_size() > 0:
+        if not rekor.verify_signed_tree_head(pk):
+            print(f"[err] rekor: signed-tree-head verification failed", file=sys.stderr)
+            return 1
+        sth = rekor.read_sth()
+        for i in range(rekor.tree_size()):
+            proof = rekor.inclusion_proof(i)
+            if not rekor.verify_inclusion_proof(proof):
+                print(f"[err] rekor: inclusion proof failed at logIndex={i}",
+                      file=sys.stderr)
+                return 1
+        print(f"[verify] rekor: STH signed; {rekor.tree_size()} inclusion proof(s) verified")
+        print(f"[verify]   root={sth['rootHash'][:16]}...")
+    else:
+        print(f"[verify] rekor: log empty (no entries to prove inclusion of)")
 
     print(f"[verify] PASS — {len(head['artifacts'])} artifact(s) signed by {pk_hex[:16]}...")
     return 0
