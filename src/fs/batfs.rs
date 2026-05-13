@@ -405,13 +405,42 @@ fn ns_compose<'a>(name: &str, out: &'a mut [u8; MAX_FILENAME]) -> Result<&'a str
     Ok(unsafe { core::str::from_utf8_unchecked(&out[..plen + name.len()]) })
 }
 
+/// Pages a write of `data_len` bytes will occupy on disk. Matches
+/// the rounding in `create`: at least one page even for empty
+/// files.
+fn pages_for(data_len: usize) -> u32 {
+    let p = (data_len + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    if p == 0 { 1 } else { p as u32 }
+}
+
 /// Mount-namespace aware [`create`]. Prepends the active cave's
 /// mount prefix to `name` before delegating; kernel/admin context
 /// (no active cave) is identical to the un-prefixed `create`.
+///
+/// Gap-audit item 030 (memory-quota across allocators): the
+/// data pages are charged against the active cave's quota BEFORE
+/// the encryption/allocation work — quota-exceeded callers fail
+/// fast without dragging frames through AEAD. On any downstream
+/// error, the charge is released so the cave is not penalised
+/// for a failed write.
 pub fn ns_create(name: &str, data: &[u8]) -> Result<(), &'static str> {
+    let pages = pages_for(data.len());
+    crate::batcave::cave::active_charge_pages(pages)?;
     let mut full = [0u8; MAX_FILENAME];
-    let full_name = ns_compose(name, &mut full)?;
-    create(full_name, data)
+    let full_name = match ns_compose(name, &mut full) {
+        Ok(s) => s,
+        Err(e) => {
+            crate::batcave::cave::active_release_pages(pages);
+            return Err(e);
+        }
+    };
+    match create(full_name, data) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            crate::batcave::cave::active_release_pages(pages);
+            Err(e)
+        }
+    }
 }
 
 /// Mount-namespace aware [`read`].
@@ -421,11 +450,17 @@ pub fn ns_read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
     read(full_name, buf)
 }
 
-/// Mount-namespace aware [`delete`].
+/// Mount-namespace aware [`delete`]. Releases the same number of
+/// quota pages the matching `ns_create` charged.
 pub fn ns_delete(name: &str) -> Result<(), &'static str> {
     let mut full = [0u8; MAX_FILENAME];
     let full_name = ns_compose(name, &mut full)?;
-    delete(full_name)
+    let pages = file_size(full_name).map(pages_for);
+    delete(full_name)?;
+    if let Some(p) = pages {
+        crate::batcave::cave::active_release_pages(p);
+    }
+    Ok(())
 }
 
 /// Mount-namespace aware [`list`]. From inside a cave, callers see
@@ -687,6 +722,20 @@ pub fn list<F: FnMut(&str, usize, bool)>(mut callback: F) {
 /// Get filesystem stats.
 pub fn stats() -> (usize, usize) {
     unsafe { (FILE_COUNT, MAX_FILES) }
+}
+
+/// Look up a file's plaintext size without decrypting. Returns
+/// `None` if no active file with that name exists. Used by the
+/// `ns_delete` wrapper to know how many quota pages to release.
+pub fn file_size(name: &str) -> Option<usize> {
+    unsafe {
+        for i in 0..MAX_FILES {
+            if FILES[i].state == FileState::Active && FILES[i].name_str() == name {
+                return Some(FILES[i].size);
+            }
+        }
+    }
+    None
 }
 
 /// V8-ROOT-6: panic-handler-only master-key wipe. Uses volatile writes so

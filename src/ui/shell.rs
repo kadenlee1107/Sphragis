@@ -350,6 +350,7 @@ fn execute(cmd: &str) {
         "sys-wg-selftest"     => cmd_sys_wg_service_selftest(),
         "cave-private-selftest" => cmd_cave_private_selftest(),
         "mount-ns-selftest"   => cmd_mount_ns_selftest(),
+        "batfs-quota-selftest" => cmd_batfs_quota_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
         "pkg" => {
@@ -2403,6 +2404,144 @@ fn cmd_mount_ns_selftest() {
     let _ = cave::with_cave_active(kns_id,    || batfs::ns_delete(TEST_NAME));
 
     console::puts("  ✓ mount-namespace auto-application: per-cave file isolation verified\n");
+}
+
+/// `batfs-quota-selftest` — gap-audit item 030 second slice.
+///
+/// Proves the cave memory quota is enforced on the BatFS write
+/// path (via `batfs::ns_create`) in addition to the shm path:
+///
+///   1. Drive into sys-wg via `with_cave_active`, tighten its
+///      quota to baseline + 2 pages.
+///   2. `ns_create` a 1-page file — succeeds (used = +1).
+///   3. `ns_create` another 1-page file — succeeds (used = +2).
+///   4. `ns_create` a third 1-page file — rejected with
+///      `cave: memory quota exceeded`.
+///   5. `ns_delete` the first file — releases 1 page.
+///   6. `ns_create` succeeds again (used = +2).
+///   7. Cleanup: delete both remaining files, restore the quota
+///      to its original value, and confirm `used` returned to the
+///      baseline.
+///
+/// The whole test runs under `with_cave_active(sys_wg_id, ...)`,
+/// which (per the mount-ns-auto-apply fix) also rebinds
+/// `ACTIVE_CAVE_ID` so the charge/release calls inside the
+/// closure act on sys-wg, not on the kernel-shell context.
+fn cmd_batfs_quota_selftest() {
+    use crate::batcave::{cave, sys_caves};
+    use crate::fs::batfs;
+
+    console::puts_hi("  BATFS QUOTA-ENFORCEMENT SELF-TEST (cave: sys-wg)\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => {
+            console::puts("  ✗ FAIL: sys-wg cave not initialised\n");
+            return;
+        }
+    };
+
+    // Names short enough to fit alongside `sys-wg:` (7-byte prefix).
+    const FILES: [&str; 3] = ["bq-a", "bq-b", "bq-c"];
+
+    // Pre-clean any leftovers from a prior aborted run.
+    for f in FILES.iter() {
+        let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(f));
+    }
+
+    // Baseline + tightened quota.
+    let (base_used, original_quota) =
+        cave::with_cave_active(sys_wg_id, || cave::active_quota_status());
+    console::puts("  baseline: used=");
+    print_num(base_used as usize);
+    console::puts(", quota=");
+    print_num(original_quota as usize);
+    console::puts("\n");
+    let tight = base_used + 2;
+    if let Err(e) = cave::set_quota_by_name("sys-wg", tight) {
+        console::puts("  ✗ FAIL set_quota: "); console::puts(e); console::puts("\n");
+        return;
+    }
+    console::puts("  tightened quota to baseline+2 (");
+    print_num(tight as usize);
+    console::puts(")\n");
+
+    // Helper: restore quota + cleanup files on any exit path.
+    let restore = |files: &[&str]| {
+        for f in files.iter() {
+            let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(f));
+        }
+        let _ = cave::set_quota_by_name("sys-wg", original_quota);
+    };
+
+    // Step 2 + 3: two 1-page creates succeed.
+    for f in FILES.iter().take(2) {
+        if let Err(e) = cave::with_cave_active(sys_wg_id, || batfs::ns_create(f, b"x")) {
+            console::puts("  ✗ FAIL: ns_create("); console::puts(f);
+            console::puts(") within quota: "); console::puts(e); console::puts("\n");
+            restore(&FILES);
+            return;
+        }
+    }
+    console::puts("  ✓ two within-quota creates succeeded\n");
+
+    // Step 4: third create exceeds quota.
+    match cave::with_cave_active(sys_wg_id, || batfs::ns_create(FILES[2], b"x")) {
+        Err(e) if e == "cave: memory quota exceeded" => {
+            console::puts("  ✓ third create rejected with `cave: memory quota exceeded`\n");
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error on quota exceed: ");
+            console::puts(e); console::puts("\n");
+            restore(&FILES);
+            return;
+        }
+        Ok(()) => {
+            console::puts("  ✗ FAIL: third create succeeded despite tight quota\n");
+            restore(&FILES);
+            return;
+        }
+    }
+
+    // Step 5: delete releases the page.
+    if let Err(e) = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILES[0])) {
+        console::puts("  ✗ FAIL: ns_delete(bq-a): ");
+        console::puts(e); console::puts("\n");
+        restore(&FILES);
+        return;
+    }
+    let after_del = cave::with_cave_active(sys_wg_id, || cave::active_quota_status());
+    if after_del.0 != base_used + 1 {
+        console::puts("  ✗ FAIL: used not -1 after delete (used=");
+        print_num(after_del.0 as usize); console::puts(")\n");
+        restore(&FILES);
+        return;
+    }
+    console::puts("  ✓ delete released 1 quota page (used now baseline+1)\n");
+
+    // Step 6: post-release create succeeds.
+    if let Err(e) = cave::with_cave_active(sys_wg_id, || batfs::ns_create(FILES[2], b"x")) {
+        console::puts("  ✗ FAIL: post-release ns_create rejected: ");
+        console::puts(e); console::puts("\n");
+        restore(&FILES);
+        return;
+    }
+    console::puts("  ✓ post-release create succeeded\n");
+
+    // Step 7: cleanup + restore + verify baseline.
+    restore(&FILES);
+    let final_used =
+        cave::with_cave_active(sys_wg_id, || cave::active_quota_status()).0;
+    if final_used != base_used {
+        console::puts("  ✗ FAIL: cleanup left used=");
+        print_num(final_used as usize);
+        console::puts(" (expected baseline ");
+        print_num(base_used as usize);
+        console::puts(")\n");
+        return;
+    }
+    console::puts("  ✓ cleanup restored quota counter to baseline\n");
+    console::puts("  ✓ batfs quota-enforcement: charge + release verified\n");
 }
 
 /// `caps [tid]` — show the capability set of a task (default: current).
