@@ -454,6 +454,9 @@ fn execute_inner(cmd: &str) {
         "audit-seal"          => cmd_audit_seal(),
         "audit-seal-verify"   => cmd_audit_seal_verify(),
         "audit-seal-selftest" => cmd_audit_seal_selftest(),
+        "integ-set"           => cmd_integ_set(parts[1], parts[2]),
+        "integ-show"          => cmd_integ_show(),
+        "biba-selftest"       => cmd_biba_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -8400,11 +8403,13 @@ fn cmd_mls_ipc_selftest() {
         }
     }
 
-    let (sends, recvs, rwd, rru) = mls_ipc::stats();
+    let (sends, recvs, rwd, rru, rwu, rrd) = mls_ipc::stats();
     console::puts("  ✓ counters: sends="); print_num(sends);
     console::puts(", recvs="); print_num(recvs);
     console::puts(", rej_write_down="); print_num(rwd);
-    console::puts(", rej_read_up="); print_num(rru); console::puts("\n");
+    console::puts(", rej_read_up="); print_num(rru);
+    console::puts(", rej_write_up="); print_num(rwu);
+    console::puts(", rej_read_down="); print_num(rrd); console::puts("\n");
 
     mls_cleanup(sys_wg_id, kns_id);
     console::puts("  ✓ MLS labeled-IPC: BLP write-down + read-up enforcement verified\n");
@@ -8608,14 +8613,205 @@ fn print_seal_verdict(v: crate::security::audit_chain::SealVerify) {
     });
 }
 
+/// `integ-set <cave> <u|sb|st|hi>` — set a cave's Biba integrity.
+fn cmd_integ_set(name: &str, level: &str) {
+    use crate::batcave::cave::{set_integrity_by_name, Integrity};
+    if name.is_empty() || level.is_empty() {
+        console::puts("  usage: integ-set <cave> <u|sb|st|hi>\n");
+        return;
+    }
+    let i = match Integrity::parse(level) {
+        Some(i) => i,
+        None => {
+            console::puts("  bad level — try u / sb / st / hi\n");
+            return;
+        }
+    };
+    match set_integrity_by_name(name, i) {
+        Ok(()) => {
+            console::puts("  integ-set: "); console::puts(name);
+            console::puts(" -> "); console::puts(i.as_str()); console::puts("\n");
+        }
+        Err(e) => { console::puts("  err: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
+/// `integ-show` — print every cave's MLS sensitivity AND integrity.
+fn cmd_integ_show() {
+    use crate::batcave::cave::{self, Integrity, Sensitivity};
+    console::puts_hi("  CAVE MLS LABELS (sens / integ)\n");
+    cave::list(|cv| {
+        let s = Sensitivity::from_u8(cv.sensitivity);
+        let i = Integrity::from_u8(cv.integrity);
+        console::puts("  ");
+        console::puts(cv.name_str());
+        console::puts(" -> sens=");
+        console::puts(s.as_str());
+        console::puts(", integ=");
+        console::puts(i.as_str());
+        console::puts("\n");
+    });
+}
+
+/// `biba-selftest` — gov-grade §3.2 Biba integrity dual lattice.
+///
+/// Pins down:
+///   * `can_flow_integrity` returns the right verdict for all four
+///     reference cases + the two equal-level cases (6 total).
+///   * End-to-end BatFS: sys-wg labeled SystemTrusted (S/ST)
+///     creates a file (stamped ST). kernel-ns at SystemTrusted
+///     reads it OK; kernel-ns elevated to HighIntegrity then
+///     refuses to read the ST file with `mls: no read-down`.
+///   * IPC: write-up rejected with `WriteUp`; read-down rejected
+///     with `ReadDown` when receiver was elevated after the
+///     message arrived.
+fn cmd_biba_selftest() {
+    use crate::batcave::cave::{self, can_flow_integrity, Integrity, MlsOp, Sensitivity};
+    use crate::batcave::mls_ipc::{self, MlsIpcError};
+    use crate::batcave::sys_caves;
+    use crate::fs::batfs;
+
+    console::puts_hi("  BIBA INTEGRITY LATTICE SELF-TEST\n");
+
+    // ── (1) Pure-lattice round trip ──
+    let pairs = [
+        (Integrity::HighIntegrity, Integrity::Untrusted,     MlsOp::Read,  false), // no read-down
+        (Integrity::Untrusted,     Integrity::HighIntegrity, MlsOp::Read,  true),  // read-up OK
+        (Integrity::HighIntegrity, Integrity::Untrusted,     MlsOp::Write, true),  // write-down OK
+        (Integrity::Untrusted,     Integrity::HighIntegrity, MlsOp::Write, false), // no write-up
+        (Integrity::SystemTrusted, Integrity::SystemTrusted, MlsOp::Read,  true),
+        (Integrity::SystemTrusted, Integrity::SystemTrusted, MlsOp::Write, true),
+    ];
+    for (i, &(s, o, op, want)) in pairs.iter().enumerate() {
+        let got = can_flow_integrity(s, o, op);
+        if got != want {
+            console::puts("  ✗ FAIL: can_flow_integrity case "); print_num(i); console::puts("\n");
+            return;
+        }
+    }
+    console::puts("  ✓ Biba lattice: 6/6 cases (no read-down, no write-up, equal levels)\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => { console::puts("  ✗ FAIL: sys-wg not initialised\n"); return; }
+    };
+    let kns_id = match sys_caves::kernel_ns_id() {
+        Some(id) => id as u16,
+        None => { console::puts("  ✗ FAIL: kernel-ns not initialised\n"); return; }
+    };
+
+    // Reset to a known state. sys-wg + kns: U sensitivity, ST integrity.
+    let cleanup_biba = |sys_wg_id: u16, kns_id: u16| {
+        let _ = cave::set_sensitivity_by_name("sys-wg",   Sensitivity::Unclassified);
+        let _ = cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Unclassified);
+        let _ = cave::set_integrity_by_name("sys-wg",   Integrity::Untrusted);
+        let _ = cave::set_integrity_by_name("kernel-ns", Integrity::Untrusted);
+        mls_ipc::drain(sys_wg_id);
+        mls_ipc::drain(kns_id);
+    };
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete("biba-probe"));
+    let _ = cave::with_cave_active(kns_id,    || batfs::ns_delete("biba-probe"));
+    let _ = cave::set_integrity_by_name("sys-wg",   Integrity::SystemTrusted);
+    let _ = cave::set_integrity_by_name("kernel-ns", Integrity::SystemTrusted);
+
+    // ── (2) BatFS: ST cave creates ST file; reading at HI denied ──
+    if let Err(e) = cave::with_cave_active(sys_wg_id, ||
+        batfs::ns_create("biba-probe", b"system-data")
+    ) {
+        console::puts("  ✗ FAIL: ST ns_create: "); console::puts(e); console::puts("\n");
+        cleanup_biba(sys_wg_id, kns_id);
+        return;
+    }
+    console::puts("  ✓ sys-wg (ST) created biba-probe (stamped ST)\n");
+
+    let mut buf = [0u8; 64];
+    match cave::with_cave_active(sys_wg_id, || batfs::ns_read("biba-probe", &mut buf)) {
+        Ok(n) if &buf[..n] == b"system-data" => {
+            console::puts("  ✓ sys-wg (ST) reads its own ST file (read-equal) -> ALLOW\n");
+        }
+        _ => {
+            console::puts("  ✗ FAIL: sys-wg can't read own file\n");
+            cleanup_biba(sys_wg_id, kns_id); return;
+        }
+    }
+
+    // Elevate sys-wg to HighIntegrity, try to read its OWN ST file
+    // — must reject with no-read-down.
+    let _ = cave::set_integrity_by_name("sys-wg", Integrity::HighIntegrity);
+    match cave::with_cave_active(sys_wg_id, || batfs::ns_read("biba-probe", &mut buf)) {
+        Err("mls: no read-down") => {
+            console::puts("  ✓ sys-wg (HI) reads its own ST file -> DENY (no read-down)\n");
+        }
+        Ok(_) => {
+            console::puts("  ✗ FAIL: HI cave read ST file (read-down was permitted)\n");
+            cleanup_biba(sys_wg_id, kns_id); return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error: "); console::puts(e); console::puts("\n");
+            cleanup_biba(sys_wg_id, kns_id); return;
+        }
+    }
+    // Restore for cleanup.
+    let _ = cave::set_integrity_by_name("sys-wg", Integrity::SystemTrusted);
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete("biba-probe"));
+
+    // ── (3) IPC: Untrusted -> SystemTrusted send is WriteUp ──
+    let _ = cave::set_integrity_by_name("kernel-ns", Integrity::Untrusted);
+    let _ = cave::set_integrity_by_name("sys-wg",   Integrity::SystemTrusted);
+    match mls_ipc::send(kns_id, sys_wg_id, b"taint:U->ST") {
+        Err(MlsIpcError::WriteUp) => {
+            console::puts("  ✓ U -> ST send -> DENY (Biba *-property write-up)\n");
+        }
+        Ok(_) => {
+            console::puts("  ✗ FAIL: Biba write-up was permitted\n");
+            cleanup_biba(sys_wg_id, kns_id); return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error on Biba write-up: "); print_err(e);
+            cleanup_biba(sys_wg_id, kns_id); return;
+        }
+    }
+
+    // ── (4) IPC: ST -> U send OK, then receiver elevated to HI ──
+    // recv must reject with ReadDown (the queued message is from a
+    // lower-integrity source than the (just-elevated) receiver).
+    match mls_ipc::send(sys_wg_id, kns_id, b"good:ST->U") {
+        Ok(_) => console::puts("  ✓ ST -> U send (write-down) -> ALLOW\n"),
+        Err(e) => {
+            console::puts("  ✗ FAIL: ST -> U rejected: "); print_err(e);
+            cleanup_biba(sys_wg_id, kns_id); return;
+        }
+    }
+    // Elevate the receiver between send and recv.
+    let _ = cave::set_integrity_by_name("kernel-ns", Integrity::HighIntegrity);
+    match mls_ipc::recv(kns_id, &mut buf) {
+        Err(MlsIpcError::ReadDown) => {
+            console::puts("  ✓ recv on runtime-elevated receiver -> DENY (no read-down)\n");
+        }
+        Ok(_) => {
+            console::puts("  ✗ FAIL: Biba read-down was permitted\n");
+            cleanup_biba(sys_wg_id, kns_id); return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error on Biba read-down: "); print_err(e);
+            cleanup_biba(sys_wg_id, kns_id); return;
+        }
+    }
+
+    cleanup_biba(sys_wg_id, kns_id);
+    console::puts("  ✓ Biba lattice: BatFS no-read-down + IPC no-write-up / no-read-down verified\n");
+}
+
 fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
     use crate::batcave::mls_ipc::MlsIpcError;
     console::puts(match e {
         MlsIpcError::WriteDown => "WriteDown\n",
-        MlsIpcError::ReadUp => "ReadUp\n",
-        MlsIpcError::Empty => "Empty\n",
-        MlsIpcError::BadId => "BadId\n",
-        MlsIpcError::TooLong => "TooLong\n",
+        MlsIpcError::ReadUp    => "ReadUp\n",
+        MlsIpcError::WriteUp   => "WriteUp\n",
+        MlsIpcError::ReadDown  => "ReadDown\n",
+        MlsIpcError::Empty     => "Empty\n",
+        MlsIpcError::BadId     => "BadId\n",
+        MlsIpcError::TooLong   => "TooLong\n",
     });
 }
 

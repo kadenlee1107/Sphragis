@@ -30,7 +30,7 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::batcave::cave::{self, MlsOp, Sensitivity};
+use crate::batcave::cave::{self, Integrity, MlsOp, Sensitivity};
 
 /// Per-cave mailbox depth. 16 messages × N caves = bounded memory.
 pub const MAX_PER_CAVE: usize = 16;
@@ -43,6 +43,7 @@ pub struct LabeledMsg {
     pub in_use: bool,
     pub sender_id: u16,
     pub sensitivity: u8,
+    pub integrity:   u8,
     pub len: u16,
     pub body: [u8; MAX_PAYLOAD],
 }
@@ -50,7 +51,7 @@ pub struct LabeledMsg {
 impl LabeledMsg {
     pub const fn empty() -> Self {
         Self {
-            in_use: false, sender_id: 0, sensitivity: 0,
+            in_use: false, sender_id: 0, sensitivity: 0, integrity: 0,
             len: 0, body: [0u8; MAX_PAYLOAD],
         }
     }
@@ -68,15 +69,26 @@ static SEND_COUNT:   AtomicUsize = AtomicUsize::new(0);
 static RECV_COUNT:   AtomicUsize = AtomicUsize::new(0);
 static REJECT_WRITE_DOWN: AtomicUsize = AtomicUsize::new(0);
 static REJECT_READ_UP:    AtomicUsize = AtomicUsize::new(0);
+static REJECT_WRITE_UP:   AtomicUsize = AtomicUsize::new(0);
+static REJECT_READ_DOWN:  AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MlsIpcError {
-    /// Bell-LaPadula *-property violation (sender's label is
+    /// Bell-LaPadula *-property violation (sender's sensitivity is
     /// strictly above the receiver's).
     WriteDown,
-    /// Bell-LaPadula simple-security violation (the message we
-    /// found in the mailbox is labeled above the receiver).
+    /// Bell-LaPadula simple-security violation (the queued message
+    /// is sensitivity-labeled above the receiver — covers runtime
+    /// demotion between send and recv).
     ReadUp,
+    /// Biba *-integrity violation (sender's integrity is strictly
+    /// BELOW the receiver's — would taint a higher-integrity
+    /// destination with low-integrity data).
+    WriteUp,
+    /// Biba simple-integrity violation (queued message is from a
+    /// lower-integrity source than the receiver — covers runtime
+    /// elevation between send and recv).
+    ReadDown,
     /// Receiver mailbox is empty.
     Empty,
     /// Cave id out of range.
@@ -98,11 +110,17 @@ pub fn send(sender_id: u16, receiver_id: u16, body: &[u8]) -> Result<usize, MlsI
     if body.len() > MAX_PAYLOAD {
         return Err(MlsIpcError::TooLong);
     }
-    let s_level = cave::sensitivity_of(sender_id);
-    let r_level = cave::sensitivity_of(receiver_id);
-    if !cave::can_flow(s_level, r_level, MlsOp::Write) {
+    let s_sens  = cave::sensitivity_of(sender_id);
+    let r_sens  = cave::sensitivity_of(receiver_id);
+    if !cave::can_flow(s_sens, r_sens, MlsOp::Write) {
         REJECT_WRITE_DOWN.fetch_add(1, Ordering::Relaxed);
         return Err(MlsIpcError::WriteDown);
+    }
+    let s_integ = cave::integrity_of(sender_id);
+    let r_integ = cave::integrity_of(receiver_id);
+    if !cave::can_flow_integrity(s_integ, r_integ, MlsOp::Write) {
+        REJECT_WRITE_UP.fetch_add(1, Ordering::Relaxed);
+        return Err(MlsIpcError::WriteUp);
     }
 
     // Find a free slot in receiver's inbox; if all are in_use,
@@ -122,7 +140,8 @@ pub fn send(sender_id: u16, receiver_id: u16, body: &[u8]) -> Result<usize, MlsI
         let m = &mut inbox[slot];
         m.in_use = true;
         m.sender_id = sender_id;
-        m.sensitivity = s_level as u8;
+        m.sensitivity = s_sens as u8;
+        m.integrity   = s_integ as u8;
         m.len = body.len() as u16;
         m.body[..body.len()].copy_from_slice(body);
     }
@@ -139,7 +158,8 @@ pub fn send(sender_id: u16, receiver_id: u16, body: &[u8]) -> Result<usize, MlsI
 pub fn recv(receiver_id: u16, out: &mut [u8]) -> Result<(u16, u8, usize), MlsIpcError> {
     let r_idx = receiver_id as usize;
     if r_idx >= MAX_BOXES { return Err(MlsIpcError::BadId); }
-    let r_level = cave::sensitivity_of(receiver_id);
+    let r_sens  = cave::sensitivity_of(receiver_id);
+    let r_integ = cave::integrity_of(receiver_id);
 
     unsafe {
         let inbox = &mut (*core::ptr::addr_of_mut!(INBOX))[r_idx];
@@ -148,10 +168,15 @@ pub fn recv(receiver_id: u16, out: &mut [u8]) -> Result<(u16, u8, usize), MlsIpc
             Some(i) => i,
             None => return Err(MlsIpcError::Empty),
         };
-        let m_level = Sensitivity::from_u8(inbox[slot].sensitivity);
-        if !cave::can_flow(r_level, m_level, MlsOp::Read) {
+        let m_sens  = Sensitivity::from_u8(inbox[slot].sensitivity);
+        let m_integ = Integrity::from_u8(inbox[slot].integrity);
+        if !cave::can_flow(r_sens, m_sens, MlsOp::Read) {
             REJECT_READ_UP.fetch_add(1, Ordering::Relaxed);
             return Err(MlsIpcError::ReadUp);
+        }
+        if !cave::can_flow_integrity(r_integ, m_integ, MlsOp::Read) {
+            REJECT_READ_DOWN.fetch_add(1, Ordering::Relaxed);
+            return Err(MlsIpcError::ReadDown);
         }
         let m = inbox[slot];
         // Drain the slot.
@@ -163,13 +188,15 @@ pub fn recv(receiver_id: u16, out: &mut [u8]) -> Result<(u16, u8, usize), MlsIpc
     }
 }
 
-/// `(sends, recvs, rejected_write_down, rejected_read_up)`
-pub fn stats() -> (usize, usize, usize, usize) {
+/// `(sends, recvs, rej_write_down, rej_read_up, rej_write_up, rej_read_down)`
+pub fn stats() -> (usize, usize, usize, usize, usize, usize) {
     (
         SEND_COUNT.load(Ordering::Relaxed),
         RECV_COUNT.load(Ordering::Relaxed),
         REJECT_WRITE_DOWN.load(Ordering::Relaxed),
         REJECT_READ_UP.load(Ordering::Relaxed),
+        REJECT_WRITE_UP.load(Ordering::Relaxed),
+        REJECT_READ_DOWN.load(Ordering::Relaxed),
     )
 }
 

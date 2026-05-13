@@ -143,6 +143,19 @@ pub struct BatCave {
     /// write-down). Default at create() is `Unclassified` (0);
     /// admins raise the label via `cave::set_sensitivity`.
     pub sensitivity: u8,
+    /// Biba integrity label (gov-grade §3.2 dual lattice).
+    /// 0 = Untrusted (default), 1 = Sandboxed, 2 = SystemTrusted,
+    /// 3 = HighIntegrity. Bell-LaPadula reversed for INTEGRITY:
+    /// a cave at level I_s can read objects at I_o only when
+    /// I_s <= I_o (no read-DOWN — don't trust low-integrity
+    /// sources), and can write objects at I_o only when
+    /// I_s >= I_o (no write-UP — don't pollute high-integrity
+    /// destinations with low-integrity data). BLP and Biba are
+    /// orthogonal — a cave can be Secret/Untrusted (knows
+    /// secrets, can't be trusted to write them safely) or
+    /// Unclassified/HighIntegrity (no secret access, but its
+    /// output is trustworthy).
+    pub integrity: u8,
 }
 
 /// MLS sensitivity label. Bell-LaPadula lattice: 0 = Unclassified,
@@ -203,6 +216,73 @@ pub enum MlsOp {
     Write,
 }
 
+/// Biba integrity label. The DUAL of `Sensitivity`: higher numeric
+/// value == more trustworthy / harder to corrupt. Default at
+/// create() is `Untrusted` (0).
+///
+/// Biba's rules are Bell-LaPadula's mirrored:
+///   * Subject I_s can Read object I_o only if I_s <= I_o
+///     (no read-DOWN — don't trust low-integrity input).
+///   * Subject I_s can Write object I_o only if I_s >= I_o
+///     (no write-UP — don't pollute high-integrity destinations).
+///
+/// BLP and Biba are independent dimensions. A cave can be
+/// Secret/Untrusted (cleared for secrets but can't be trusted to
+/// produce signed artefacts), or Unclassified/HighIntegrity (no
+/// secret access, but emits artefacts the kernel signs as
+/// authoritative).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum Integrity {
+    Untrusted      = 0,
+    Sandboxed      = 1,
+    SystemTrusted  = 2,
+    HighIntegrity  = 3,
+}
+
+impl Integrity {
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut buf = [0u8; 24];
+        let n = s.len().min(buf.len());
+        for i in 0..n { buf[i] = s.as_bytes()[i].to_ascii_lowercase(); }
+        let lower = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
+        match lower {
+            "u" | "untrusted"      => Some(Integrity::Untrusted),
+            "sb" | "sandboxed"     => Some(Integrity::Sandboxed),
+            "st" | "system" | "system-trusted" => Some(Integrity::SystemTrusted),
+            "hi" | "high" | "high-integrity"   => Some(Integrity::HighIntegrity),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Integrity::Untrusted      => "U",
+            Integrity::Sandboxed      => "SB",
+            Integrity::SystemTrusted  => "ST",
+            Integrity::HighIntegrity  => "HI",
+        }
+    }
+    pub fn from_u8(b: u8) -> Integrity {
+        match b {
+            1 => Integrity::Sandboxed,
+            2 => Integrity::SystemTrusted,
+            3 => Integrity::HighIntegrity,
+            _ => Integrity::Untrusted,
+        }
+    }
+}
+
+/// Biba policy decision. `subject_level` is the cave/subject's
+/// integrity; `object_level` is the resource it's trying to touch.
+///   * `Read`  requires `subject <= object` (no read-down).
+///   * `Write` requires `subject >= object` (no write-up).
+pub fn can_flow_integrity(subject_level: Integrity, object_level: Integrity, op: MlsOp) -> bool {
+    match op {
+        MlsOp::Read  => subject_level <= object_level,
+        MlsOp::Write => subject_level >= object_level,
+    }
+}
+
 /// Decide whether a flow at level `subject_level` may operate on
 /// an object at level `object_level` under Bell-LaPadula.
 ///
@@ -256,6 +336,43 @@ pub fn set_sensitivity_by_name(name: &str, level: Sensitivity) -> Result<(), &'s
     Err("no such cave")
 }
 
+/// Active cave's Biba integrity label. Returns `Untrusted` when no
+/// cave is active — kernel/admin context defaults to the bottom of
+/// the integrity lattice. (The admin can still freely write-down
+/// because, under our shell-admin model, the operator IS the
+/// trusted subject; the lattice doesn't constrain them. Cave-level
+/// code IS constrained.)
+pub fn active_integrity() -> Integrity {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return Integrity::Untrusted; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    Integrity::from_u8(cave.integrity)
+}
+
+/// Look up a specific cave's integrity by id.
+pub fn integrity_of(cave_id: u16) -> Integrity {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return Integrity::Untrusted; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[idx] };
+    Integrity::from_u8(cave.integrity)
+}
+
+/// Set a cave's Biba integrity label by name. Idempotent.
+pub fn set_integrity_by_name(name: &str, level: Integrity) -> Result<(), &'static str> {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            if (*core::ptr::addr_of!(CAVES))[i].state != CaveState::Free
+                && (*core::ptr::addr_of!(CAVES))[i].name_str() == name
+            {
+                let cave = &mut (*core::ptr::addr_of_mut!(CAVES))[i];
+                cave.integrity = level as u8;
+                return Ok(());
+            }
+        }
+    }
+    Err("no such cave")
+}
+
 impl BatCave {
     pub const fn empty() -> Self {
         Self {
@@ -283,6 +400,7 @@ impl BatCave {
             net_tx_bytes: core::sync::atomic::AtomicU64::new(0),
             net_rx_bytes: core::sync::atomic::AtomicU64::new(0),
             sensitivity: Sensitivity::Unclassified as u8,
+            integrity: Integrity::Untrusted as u8,
         }
     }
 
