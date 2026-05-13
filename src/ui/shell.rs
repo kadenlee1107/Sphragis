@@ -339,6 +339,7 @@ fn execute(cmd: &str) {
         "wg-wire-selftest"    => cmd_wg_wire_selftest(),
         "wg-replay-selftest"  => cmd_wg_replay_selftest(),
         "wg-dispatch-selftest" => cmd_wg_dispatch_selftest(),
+        "sys-wg-ipc-selftest" => cmd_sys_wg_ipc_selftest(),
         "shm-selftest"        => cmd_shm_selftest(),
         "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
@@ -3889,6 +3890,49 @@ fn cmd_wg_dispatch_selftest() {
         }
         Err(_) => {
             console::puts("  ✗ FAIL: dispatch selftest errored\n");
+        }
+    }
+}
+
+/// sys-wg IPC mailbox selftest (Arc 3 slice 3). Proves the IPC
+/// path produces the same answer as the direct API for
+/// `service_pubkey`. Spawns a fresh service task tagged with
+/// sys-wg's cave_id; the task reads the mailbox request, calls
+/// into `sys_wg_service::service_pubkey` (still under
+/// `with_cave_active`), writes the 32-byte pubkey response,
+/// terminates via `process::current_terminate`. Client polls for
+/// the response and returns.
+fn cmd_sys_wg_ipc_selftest() {
+    use crate::batcave::sys_wg_ipc;
+    console::puts_hi("  SYS-WG IPC SELF-TEST (Arc 3 slice 3)\n");
+    console::puts("  Request OP_PUBKEY via mailbox; service task with cave_id=sys_wg\n");
+    console::puts("  reads, dispatches, writes response. Compare to direct API.\n");
+
+    match sys_wg_ipc::selftest() {
+        Some((direct_pref, ipc_pref, equal)) => {
+            let hex = b"0123456789abcdef";
+            console::puts("    direct pubkey prefix: ");
+            for &b in &direct_pref {
+                console::putc(hex[(b >> 4) as usize]);
+                console::putc(hex[(b & 0x0f) as usize]);
+            }
+            console::puts("\n    ipc    pubkey prefix: ");
+            for &b in &ipc_pref {
+                console::putc(hex[(b >> 4) as usize]);
+                console::putc(hex[(b & 0x0f) as usize]);
+            }
+            console::puts("\n");
+            if !equal {
+                console::puts("  ✗ FAIL: IPC pubkey != direct pubkey\n");
+                return;
+            }
+            console::puts("  ✓ IPC OP_PUBKEY returned the same bytes as the direct API\n");
+            console::puts("  ✓ Arc-3 slice-3 IPC mailbox path verified\n");
+        }
+        None => {
+            console::puts("  ✗ FAIL: IPC selftest returned None\n");
+            console::puts("    (mailbox unreachable, service-task spawn failed,\n");
+            console::puts("     or service-side error)\n");
         }
     }
 }
