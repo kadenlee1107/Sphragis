@@ -92,9 +92,10 @@ static mut RSP_DATA: [u8; RSP_DATA_MAX] = [0u8; RSP_DATA_MAX];
 fn service_main() -> ! {
     let op = REQ_OP.load(Ordering::Acquire);
     match op {
-        OP_PUBKEY => handle_pubkey(),
-        OP_WRAP   => handle_wrap(),
-        OP_UNWRAP => handle_unwrap(),
+        OP_PUBKEY    => handle_pubkey(),
+        OP_HANDSHAKE => handle_handshake(),
+        OP_WRAP      => handle_wrap(),
+        OP_UNWRAP    => handle_unwrap(),
         _ => {
             RSP_STATUS.store(STATUS_ERR_OP, Ordering::Release);
         }
@@ -120,6 +121,67 @@ fn handle_pubkey() {
         None => {
             RSP_STATUS.store(STATUS_ERR_SVC, Ordering::Release);
         }
+    }
+}
+
+/// OP_HANDSHAKE request layout in `REQ_DATA` (108 bytes total):
+///   byte   0     : peer_id (u8)
+///   bytes  1..4  : reserved (zero)
+///   bytes  4..36 : initiator_eph_pk ([u8; 32])
+///   bytes 36..84 : enc_static ([u8; 48] = 32 plain + 16 tag)
+///   bytes 84..112: enc_timestamp ([u8; 28] = 12 plain + 16 tag)
+///
+/// Response layout in `RSP_DATA` (76 bytes):
+///   bytes  0..32 : responder_eph_pk
+///   bytes 32..48 : enc_empty (AEAD tag — 0 plaintext + 16 tag)
+///   bytes 48..60 : initiator_timestamp (echoed back from the
+///                  decrypted InitMsg, for the client to sanity-
+///                  check timestamp continuity)
+const HS_REQ_LEN: usize = 112;
+const HS_RSP_LEN: usize = 60;
+
+fn handle_handshake() {
+    let req_len = REQ_LEN.load(Ordering::Acquire) as usize;
+    if req_len != HS_REQ_LEN {
+        RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
+        return;
+    }
+    let (peer_id_raw, eph_pk, enc_static, enc_ts) = unsafe {
+        let src = core::ptr::addr_of!(REQ_DATA) as *const u8;
+        let peer_id_raw = core::ptr::read_volatile(src);
+        let mut eph_pk = [0u8; wireguard::KEY_LEN];
+        for i in 0..wireguard::KEY_LEN { eph_pk[i] = core::ptr::read_volatile(src.add(4 + i)); }
+        let mut enc_static = [0u8; wireguard::KEY_LEN + wireguard::TAG_LEN];
+        for i in 0..enc_static.len() { enc_static[i] = core::ptr::read_volatile(src.add(36 + i)); }
+        let mut enc_ts = [0u8; wireguard::TIMESTAMP_LEN + wireguard::TAG_LEN];
+        for i in 0..enc_ts.len() { enc_ts[i] = core::ptr::read_volatile(src.add(84 + i)); }
+        (peer_id_raw, eph_pk, enc_static, enc_ts)
+    };
+    let peer_id = sys_wg_service::PeerId::from(peer_id_raw);
+    match sys_wg_service::complete_handshake_as_responder(
+        peer_id, &eph_pk, &enc_static, &enc_ts,
+    ) {
+        Ok(wire) => {
+            if wire.enc_empty.len() != wireguard::TAG_LEN {
+                RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
+                return;
+            }
+            unsafe {
+                let dst = core::ptr::addr_of_mut!(RSP_DATA) as *mut u8;
+                for i in 0..wireguard::KEY_LEN {
+                    core::ptr::write_volatile(dst.add(i), wire.responder_eph_pk[i]);
+                }
+                for i in 0..wireguard::TAG_LEN {
+                    core::ptr::write_volatile(dst.add(32 + i), wire.enc_empty[i]);
+                }
+                for i in 0..wireguard::TIMESTAMP_LEN {
+                    core::ptr::write_volatile(dst.add(48 + i), wire.initiator_timestamp[i]);
+                }
+            }
+            RSP_LEN.store(HS_RSP_LEN as u32, Ordering::Release);
+            RSP_STATUS.store(STATUS_OK, Ordering::Release);
+        }
+        Err(_) => RSP_STATUS.store(STATUS_ERR_SVC, Ordering::Release),
     }
 }
 
@@ -310,6 +372,45 @@ pub fn request_pubkey() -> Option<[u8; wireguard::KEY_LEN]> {
     Some(out)
 }
 
+/// Parsed responder side of a handshake completed via the IPC
+/// mailbox.
+pub struct HandshakeResult {
+    pub responder_eph_pk: [u8; wireguard::KEY_LEN],
+    pub enc_empty: [u8; wireguard::TAG_LEN],
+    pub initiator_timestamp: [u8; wireguard::TIMESTAMP_LEN],
+}
+
+/// IPC client for OP_HANDSHAKE. Submits an initiator's InitMsg
+/// payload (eph_pk + enc_static + enc_timestamp) to sys-wg via
+/// the mailbox; sys-wg validates the pinned peer pubkey, runs
+/// the responder side, installs session keys in the cave-private
+/// peer slot, and returns the bytes the caller needs to build a
+/// ResponseMsg wire packet + finish its own initiator-side
+/// derivation (`initiator_finish_handshake`).
+pub fn request_handshake(
+    peer_id: u8,
+    initiator_eph_pk: &[u8; wireguard::KEY_LEN],
+    enc_static: &[u8],
+    enc_timestamp: &[u8],
+) -> Option<HandshakeResult> {
+    if enc_static.len() != wireguard::KEY_LEN + wireguard::TAG_LEN { return None; }
+    if enc_timestamp.len() != wireguard::TIMESTAMP_LEN + wireguard::TAG_LEN { return None; }
+    let mut req = [0u8; HS_REQ_LEN];
+    req[0] = peer_id;
+    req[4..36].copy_from_slice(initiator_eph_pk);
+    req[36..84].copy_from_slice(enc_static);
+    req[84..112].copy_from_slice(enc_timestamp);
+    let bytes = dispatch_one_shot(OP_HANDSHAKE, &req)?;
+    if bytes.len() != HS_RSP_LEN { return None; }
+    let mut responder_eph_pk = [0u8; wireguard::KEY_LEN];
+    responder_eph_pk.copy_from_slice(&bytes[..32]);
+    let mut enc_empty = [0u8; wireguard::TAG_LEN];
+    enc_empty.copy_from_slice(&bytes[32..48]);
+    let mut initiator_timestamp = [0u8; wireguard::TIMESTAMP_LEN];
+    initiator_timestamp.copy_from_slice(&bytes[48..60]);
+    Some(HandshakeResult { responder_eph_pk, enc_empty, initiator_timestamp })
+}
+
 /// IPC client for OP_WRAP. Encrypts `plaintext` under the peer
 /// slot's responder send_key (via the service task, never
 /// touching the keys directly). Returns the ciphertext (with
@@ -388,17 +489,20 @@ pub fn selftest_wrap_unwrap() -> Option<(bool, bool)> {
         Err(_) => return None,
     };
 
-    // Drive a handshake.
+    // Drive a handshake — through OP_HANDSHAKE so the entire
+    // responder side runs in the service task. The caller never
+    // touches `sys_wg_service` directly.
     let timestamp = [0u8; TIMESTAMP_LEN];
     let (mut init_state, init_eph_pk, enc_static, enc_ts) =
         wireguard::initiator_send_init(&initiator, &our_pk, &timestamp).ok()?;
-    let resp_wire = sys_wg_service::complete_handshake_as_responder(
-        peer_id, &init_eph_pk, &enc_static, &enc_ts,
-    ).ok()?;
+    let hs = request_handshake(
+        peer_id.as_u8(), &init_eph_pk, &enc_static, &enc_ts,
+    )?;
+    if hs.initiator_timestamp != timestamp { return None; }
     let mut caller_keys: TransportKeys = wireguard::initiator_finish_handshake(
         &initiator, &mut init_state,
-        &resp_wire.responder_eph_pk,
-        &resp_wire.enc_empty,
+        &hs.responder_eph_pk,
+        &hs.enc_empty,
     ).ok()?;
 
     // OP_WRAP through IPC: sys-wg encrypts; caller decrypts.

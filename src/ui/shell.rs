@@ -3960,9 +3960,14 @@ fn cmd_sys_wg_ipc_selftest() {
         }
     }
 
-    // OP_WRAP / OP_UNWRAP round trip.
+    // OP_HANDSHAKE + OP_WRAP / OP_UNWRAP round trip. The handshake
+    // goes through the mailbox first (sys-wg runs the responder
+    // side entirely in the service task), then the transport
+    // ops exercise the wrap/unwrap opcodes against the session
+    // keys sys-wg installed in its cave-private peer slot.
     match sys_wg_ipc::selftest_wrap_unwrap() {
         Some((wrap_ok, unwrap_ok)) => {
+            console::puts("  ✓ IPC OP_HANDSHAKE: sys-wg consumed Init + installed session keys\n");
             if !wrap_ok {
                 console::puts("  ✗ FAIL: IPC OP_WRAP round trip — caller decrypt mismatch\n");
                 return;
@@ -3975,7 +3980,7 @@ fn cmd_sys_wg_ipc_selftest() {
             console::puts("  ✓ IPC OP_UNWRAP: caller encrypted, sys-wg decrypted to expected pt\n");
         }
         None => {
-            console::puts("  ✗ FAIL: IPC wrap/unwrap selftest returned None\n");
+            console::puts("  ✗ FAIL: IPC handshake/wrap/unwrap selftest returned None\n");
             return;
         }
     }
