@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Headless smoke for `mls-selftest` — gov-grade §3.2 (Bell-LaPadula
+MLS / Mandatory Access Control).
+
+Boots Bat_OS in QEMU virt, clears the empty-passphrase auth gate,
+runs `mls-selftest` at the shell, and asserts:
+
+  - `cave::can_flow` returns the right verdict for all four
+    Bell-LaPadula reference combinations (low→read→high DENY,
+    high→read→low ALLOW, low→write→high ALLOW, high→write→low DENY).
+  - End-to-end through BatFS: sys-wg labeled Secret creates a file
+    (stamped S); kernel-ns labeled U tries to read it via its OWN
+    namespace mapping → fails with `mls: no read-up`. Same cave
+    after elevation succeeds, demonstrating the label is what
+    gates the read, not just the namespace.
+
+Pass: exit 0. Fail: exit non-zero with serial log path.
+"""
+from __future__ import annotations
+
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+import pexpect
+
+ROOT = Path(__file__).resolve().parent.parent
+KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+LOG = (
+    ROOT
+    / f"logs/qemu-tests/mls-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+)
+LOG.parent.mkdir(parents=True, exist_ok=True)
+
+QEMU_ARGS = [
+    "qemu-system-aarch64",
+    "-machine", "virt",
+    "-cpu", "max",
+    "-m", "2G",
+    "-display", "none",
+    "-netdev", "user,id=net0",
+    "-device", "virtio-net-device,netdev=net0",
+    "-serial", "mon:stdio",
+    "-kernel", str(KERNEL),
+]
+
+
+def main() -> int:
+    if not KERNEL.exists():
+        print(f"[mls] kernel not found: {KERNEL}", file=sys.stderr)
+        return 2
+
+    print(f"[mls] booting kernel ({KERNEL.stat().st_size:,} bytes)...")
+    fp = open(LOG, "wb")
+    c = pexpect.spawn(QEMU_ARGS[0], QEMU_ARGS[1:], timeout=120, logfile=fp, encoding=None)
+    try:
+        c.expect(rb"Enter passphrase", timeout=60)
+        c.sendline("")
+        c.expect(rb"bat_os > ", timeout=90)
+        time.sleep(0.5)
+
+        c.sendline("mls-selftest")
+        idx = c.expect([
+            rb"\xe2\x9c\x93 MLS lattice \+ BatFS file-label no-read-up enforcement verified",
+            rb"\xe2\x9c\x97 FAIL: \S+",
+        ], timeout=30)
+        if idx == 1:
+            try:
+                c.expect(rb"bat_os > ", timeout=5)
+            except Exception:
+                pass
+            print("[mls] FAIL — selftest reported a failure", file=sys.stderr)
+            print(f"[mls] log: {LOG}", file=sys.stderr)
+            return 1
+
+        c.expect(rb"bat_os > ", timeout=10)
+        print("[mls] PASS — Bell-LaPadula lattice + BatFS no-read-up verified")
+        print(f"[mls] log: {LOG}")
+        return 0
+
+    except pexpect.TIMEOUT:
+        print("[mls] FAIL — timeout waiting for selftest output", file=sys.stderr)
+        print(f"[mls] log: {LOG}", file=sys.stderr)
+        return 1
+    finally:
+        try:
+            c.close(force=True)
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -589,15 +589,21 @@ packets per source category). Cross-Domain Solutions for TS ↔ S
 movement.
 
 ✅ Have: cave isolation as a coarse compartment (per-cave audit, firewall,
-syscall filter). Default-deny posture.
+syscall filter). Default-deny posture. **Bell-LaPadula sensitivity lattice
+in tree (2026-05-12)**: `cave::Sensitivity` (U / C / S / TS) per cave;
+`cave::can_flow(subject, object, op)` for no-read-up / no-write-down;
+`batfs::ns_create` stamps the active cave's label onto each file;
+`batfs::ns_read` enforces the simple security property with `Err("mls:
+no read-up")`. Operator API: `mls-set`, `mls-show`, `mls-check`.
+`mls-selftest` covers the full lattice + the BatFS enforcement.
 ❌ Missing:
-- No security labels on objects (files, sockets, IPC).
-- No information-flow enforcement (a cave can not be told "this came
-  from TS context, do not write to S context").
-- No MLS lattice.
-- No type enforcement à la SELinux.
-- No labeled IPC.
+- No labels on sockets / IPC messages (lattice exists; the IPC + net
+  hooks are the next slice).
+- No type enforcement à la SELinux (we have BLP confidentiality only;
+  no Biba integrity yet, no domain transitions).
 - No labeled networking (no SECMARK / CALIPSO / CIPSO).
+- No compartments / categories (we have a linear lattice; CC needs
+  lattice + categories for SCI handling).
 
 ### 3.3 Trusted computing / attestation
 

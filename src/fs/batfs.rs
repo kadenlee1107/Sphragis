@@ -39,6 +39,12 @@ pub struct FileEntry {
     pub nonce: [u8; 12],        // CTR nonce (unique per file)
     pub hash: [u8; 32],         // SHA-256 of plaintext (integrity)
     pub encrypted: bool,
+    /// MLS sensitivity label (gov-grade §3.2). Stamped at ns_create
+    /// time from the active cave's `cave.sensitivity`. Bell-LaPadula
+    /// `ns_read` rejects when `cave.sens < file.sens` (no read-up).
+    /// 0 = Unclassified, 1 = Confidential, 2 = Secret, 3 = TopSecret.
+    /// Files created via the un-prefixed admin path inherit 0.
+    pub sensitivity: u8,
 }
 
 impl FileEntry {
@@ -52,6 +58,7 @@ impl FileEntry {
             nonce: [0u8; 12],
             hash: [0u8; 32],
             encrypted: false,
+            sensitivity: 0,
         }
     }
 
@@ -444,10 +451,40 @@ pub fn ns_create(name: &str, data: &[u8]) -> Result<(), &'static str> {
 }
 
 /// Mount-namespace aware [`read`].
+///
+/// Adds the Bell-LaPadula simple security property (gov-grade
+/// §3.2): if the file carries an MLS sensitivity, the active
+/// cave's sensitivity must be >= the file's, else the read is
+/// rejected with `Err("mls: no read-up")` instead of returning
+/// plaintext. Admin/kernel context (no active cave) defaults to
+/// Unclassified and so cannot read Confidential+ files via the
+/// un-prefixed path either — admins set their own cave label
+/// (e.g. via a "su"-style elevation) if they need higher reads.
 pub fn ns_read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
     let mut full = [0u8; MAX_FILENAME];
     let full_name = ns_compose(name, &mut full)?;
+    if let Some(file_sens_u8) = file_sensitivity(full_name) {
+        let cave_sens = crate::batcave::cave::active_sensitivity();
+        let file_sens = crate::batcave::cave::Sensitivity::from_u8(file_sens_u8);
+        if !crate::batcave::cave::can_flow(cave_sens, file_sens,
+            crate::batcave::cave::MlsOp::Read) {
+            return Err("mls: no read-up");
+        }
+    }
     read(full_name, buf)
+}
+
+/// Look up a file's stored MLS sensitivity by name. Returns `None`
+/// if no active file matches. Mirrors `file_size`.
+fn file_sensitivity(name: &str) -> Option<u8> {
+    unsafe {
+        for i in 0..MAX_FILES {
+            if FILES[i].state == FileState::Active && FILES[i].name_str() == name {
+                return Some(FILES[i].sensitivity);
+            }
+        }
+    }
+    None
 }
 
 /// Mount-namespace aware [`delete`]. Releases the same number of
@@ -582,6 +619,10 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         entry.nonce = nonce;
         entry.hash = hash;
         entry.encrypted = true;
+        // MLS stamp (§3.2): the file inherits the creating cave's
+        // sensitivity. Admin/kernel context creates Unclassified
+        // files. `ns_read` later enforces no-read-up against this.
+        entry.sensitivity = crate::batcave::cave::active_sensitivity() as u8;
 
         FILE_COUNT += 1;
 
