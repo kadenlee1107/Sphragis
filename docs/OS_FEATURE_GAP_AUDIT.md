@@ -1132,7 +1132,7 @@ After this refresh, the still-open P1 list narrows to:
   * 040 Unicode / locale / IME
   * 041 Accessibility services
   * 042 HTTP/2 + HTTP/3
-  * 043 WireGuard
+  * 043 WireGuard — **partial.** In-process WG stack complete (handshake both roles, wire framing, replay window, IPC mailbox, endpoint config); outbound Init now verified to traverse virtio-net to a real host UDP listener via `qemu_wg_real_peer_e2e.py`. Full peer interop (real Python Noise IK responder closing the handshake + transport round trip) is the next slice.
   * 044 VLAN (802.1Q)
   * 045 conntrack-class stateful firewall (we're stateless)
   * 051 constant-time bignum (RustCrypto crates provide this; verify their security claims rather than rebuilding)
