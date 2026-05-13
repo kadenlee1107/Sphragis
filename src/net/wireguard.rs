@@ -226,13 +226,26 @@ pub fn initiator_send_init(
     responder_static_pk: &[u8; KEY_LEN],
     timestamp: &[u8; TIMESTAMP_LEN],
 ) -> Result<(InitiatorState, [u8; KEY_LEN], Vec<u8>, Vec<u8>), WgError> {
+    let mut seed = [0u8; KEY_LEN];
+    crate::crypto::rng::fill_bytes(&mut seed);
+    initiator_send_init_with_seed(initiator, responder_static_pk, timestamp, seed)
+}
+
+/// Like `initiator_send_init` but takes the ephemeral private-key
+/// seed externally so the caller can record it for resumption.
+/// Used by `sys_wg_service::start_handshake`, which keeps the seed
+/// in the cave-private peer slot — we need it again on Response
+/// arrival to drive `initiator_finish_handshake`'s DH3 + DH4.
+pub fn initiator_send_init_with_seed(
+    initiator: &WgKeypair,
+    responder_static_pk: &[u8; KEY_LEN],
+    timestamp: &[u8; TIMESTAMP_LEN],
+    eph_seed: [u8; KEY_LEN],
+) -> Result<(InitiatorState, [u8; KEY_LEN], Vec<u8>, Vec<u8>), WgError> {
     let (mut c, mut h) = initial_state();
     mix_hash(&mut h, responder_static_pk);
 
-    // Generate ephemeral keypair.
-    let mut seed = [0u8; KEY_LEN];
-    crate::crypto::rng::fill_bytes(&mut seed);
-    let eph_sk = StaticSecret::from(seed);
+    let eph_sk = StaticSecret::from(eph_seed);
     let eph_pk: [u8; KEY_LEN] = X25519Public::from(&eph_sk).to_bytes();
 
     mix_hash(&mut h, &eph_pk);

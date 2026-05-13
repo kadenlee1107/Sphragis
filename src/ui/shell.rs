@@ -340,6 +340,7 @@ fn execute(cmd: &str) {
         "wg-replay-selftest"  => cmd_wg_replay_selftest(),
         "wg-dispatch-selftest" => cmd_wg_dispatch_selftest(),
         "sys-wg-ipc-selftest" => cmd_sys_wg_ipc_selftest(),
+        "wg-initiator-selftest" => cmd_wg_initiator_selftest(),
         "shm-selftest"        => cmd_shm_selftest(),
         "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
@@ -3986,6 +3987,42 @@ fn cmd_sys_wg_ipc_selftest() {
     }
 
     console::puts("  ✓ Arc-3 slice-3 IPC mailbox path verified\n");
+}
+
+/// WireGuard initiator-role selftest. sys-wg plays initiator,
+/// the test plays responder. Verifies:
+///   1. start_handshake_as_initiator produces a wire-valid
+///      InitMsg (mac1 verifies against the responder's pubkey).
+///   2. The responder side (the test) can drive
+///      responder_consume_init + responder_send_response on
+///      sys-wg's bytes.
+///   3. finish_handshake_as_initiator consumes the response
+///      and installs session keys in the peer slot.
+///   4. wrap(peer_id, pt) via sys-wg succeeds; responder
+///      decrypts to the original plaintext.
+fn cmd_wg_initiator_selftest() {
+    use crate::batcave::sys_wg_service;
+    console::puts_hi("  WIREGUARD INITIATOR-ROLE SELF-TEST\n");
+    console::puts("  sys-wg plays initiator; test plays responder.\n");
+    match sys_wg_service::selftest_initiator() {
+        Some((handshake_ok, transport_ok)) => {
+            if !handshake_ok {
+                console::puts("  ✗ FAIL: finish_handshake_as_initiator did not install session\n");
+                return;
+            }
+            console::puts("  ✓ start_handshake -> wire InitMsg accepted by responder\n");
+            console::puts("  ✓ finish_handshake consumed Response + installed session keys\n");
+            if !transport_ok {
+                console::puts("  ✗ FAIL: transport round trip — responder decrypt mismatch\n");
+                return;
+            }
+            console::puts("  ✓ wrap via sys-wg decrypts cleanly on responder side\n");
+            console::puts("  ✓ WG initiator-role direct API verified\n");
+        }
+        None => {
+            console::puts("  ✗ FAIL: selftest returned None (handshake or AEAD error)\n");
+        }
+    }
 }
 
 /// In-kernel selftest of the PQ-hybrid comms handshake. Exercises
