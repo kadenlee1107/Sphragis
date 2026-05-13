@@ -75,6 +75,17 @@ pub fn ensure_page(cave_id: u16) -> Option<usize> {
     }
 
     let l1_phys = cave::get_cave_l1_phys(cave_id)?;
+
+    // gap-audit 030 expansion: charge the cave's memory quota
+    // BEFORE the cave_pool allocation. Cave-private is the only
+    // remaining cave-attributable allocator that wasn't quota-
+    // metered (shm / pipe / batfs already charge). Quota 0 means
+    // unlimited, so default-quota caves are unaffected. On any
+    // downstream failure below we release back.
+    if cave::charge_pages_for(cave_id, 1).is_err() {
+        return None;
+    }
+
     // Allocate from the carved-out cave-pool — these PAs are NOT
     // covered by any cave L1's kernel-identity map, so even an
     // attacker who learns the PA can't reach the bytes through
@@ -83,12 +94,21 @@ pub fn ensure_page(cave_id: u16) -> Option<usize> {
     // the PA, so any zero-store via the identity VA would
     // data-abort and the demand-pager would shadow the carve-out.
     // We zero through the cave-private VA below instead.
-    let page_pa = cave_pool::alloc_page()?;
+    let page_pa = match cave_pool::alloc_page() {
+        Some(pa) => pa,
+        None => {
+            cave::release_pages_for(cave_id, 1);
+            return None;
+        }
+    };
 
     let va = cave_private_va(cave_id);
     if mmu::map_4k_in_l1(l1_phys, va, page_pa, CAVE_PRIVATE_PTE_FLAGS).is_err() {
         // Couldn't install the mapping — leak the frame for now
-        // (rare error path; cave_pool has no free entry point yet).
+        // (rare error path; cave_pool has no free entry point yet),
+        // but DO release the quota charge so the cave isn't
+        // penalised for an installer failure.
+        cave::release_pages_for(cave_id, 1);
         return None;
     }
 

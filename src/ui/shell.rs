@@ -4399,6 +4399,28 @@ fn cmd_cave_private_selftest() {
     }
     console::puts("\n");
 
+    // gap-audit 030 expansion: cave_private::ensure_page now
+    // charges the cave's memory quota. Both kernel-ns and sys-wg
+    // must report at least 1 page used (kns from the call we
+    // just made; sys-wg from boot-time `sys_wg_service::init`).
+    let kns_used = cave::quota_status_for(kns_id).0;
+    let sys_wg_used = cave::quota_status_for(sys_wg_id).0;
+    if kns_used < 1 {
+        console::puts("  ✗ FAIL: kernel-ns mem_used_pages = ");
+        print_num(kns_used as usize);
+        console::puts(" (expected >= 1 after cave_private::ensure_page)\n");
+        return;
+    }
+    if sys_wg_used < 1 {
+        console::puts("  ✗ FAIL: sys-wg mem_used_pages = ");
+        print_num(sys_wg_used as usize);
+        console::puts(" (expected >= 1 from boot-time cave-private)\n");
+        return;
+    }
+    console::puts("  ✓ cave_private::ensure_page charged the cave's quota (kns=");
+    print_num(kns_used as usize); console::puts(", sys-wg=");
+    print_num(sys_wg_used as usize); console::puts(")\n");
+
     // Cross-cave property:
     //   sys-wg's cave-private VA (va, the one above) must be
     //     UNMAPPED in kernel-ns's L1 — otherwise cave_id=0 code
