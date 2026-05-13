@@ -343,6 +343,7 @@ fn execute(cmd: &str) {
         "wg-initiator-selftest" => cmd_wg_initiator_selftest(),
         "wg-initiator-e2e-selftest" => cmd_wg_initiator_e2e_selftest(),
         "wg-endpoint-selftest" => cmd_wg_endpoint_selftest(),
+        "wg-test-outbound"    => cmd_wg_test_outbound(parts[1]),
         "shm-selftest"        => cmd_shm_selftest(),
         "quota-selftest"      => cmd_quota_selftest(),
         "block-on-selftest"   => cmd_block_on_selftest(),
@@ -4443,6 +4444,75 @@ fn cmd_wg_endpoint_selftest() {
             console::puts("  ✗ FAIL: selftest returned None\n");
         }
     }
+}
+
+/// `wg-test-outbound <ip:port>` — gap-audit item 043 "real-peer
+/// interop" partial slice. Registers a fresh fake peer, points
+/// its endpoint at the given UDP destination, then calls
+/// `wg_dispatch::initiate_connect` to fire a real WireGuard
+/// Init message through virtio-net.
+///
+/// Used by `scripts/qemu_wg_real_peer_e2e.py`: the harness binds
+/// a UDP socket on the host (QEMU user-net 10.0.2.2 maps to
+/// the host's loopback), runs this command, and asserts that the
+/// Init packet actually traverses the wire and lands at the
+/// listener with valid Phase-2 framing.
+fn cmd_wg_test_outbound(target: &str) {
+    use crate::net::wg_dispatch;
+    use crate::batcave::sys_wg_service;
+    use crate::net::wireguard::WgKeypair;
+
+    if target.is_empty() {
+        console::puts("  usage: wg-test-outbound <ip:port>\n");
+        return;
+    }
+    let (ip_s, port_s) = match target.rsplit_once(':') {
+        Some(p) => p,
+        None => { console::puts("  bad target (expected ip:port)\n"); return; }
+    };
+    let ip = parse_ip(ip_s);
+    if ip == 0 {
+        console::puts("  invalid ip\n"); return;
+    }
+    let port: u16 = match port_s.parse() {
+        Ok(v) if v > 0 => v,
+        _ => { console::puts("  invalid port\n"); return; }
+    };
+
+    console::puts_hi("  WG REAL-PEER OUTBOUND TEST\n");
+    console::puts("  target: ");
+    console::puts(target);
+    console::puts("\n");
+
+    wg_dispatch::debug_clear_sessions();
+    let fake_peer = WgKeypair::generate();
+    let _ = sys_wg_service::close_peer_by_static_pk(&fake_peer.static_pk);
+    let peer_id = match sys_wg_service::register_peer(fake_peer.static_pk) {
+        Ok(pid) => pid,
+        Err(_) => { console::puts("  ✗ register_peer failed\n"); return; }
+    };
+
+    if crate::batcave::sys_wg_ipc::request_set_endpoint(peer_id.as_u8(), ip, port).is_none() {
+        console::puts("  ✗ set_endpoint failed\n");
+        let _ = sys_wg_service::close_peer(peer_id);
+        return;
+    }
+    console::puts("  ✓ peer registered + endpoint configured\n");
+
+    match wg_dispatch::initiate_connect(peer_id) {
+        Ok(()) => {
+            console::puts("  ✓ Init queued on virtio-net tx ring -> ");
+            console::puts(target);
+            console::puts("\n");
+            console::puts("  ✓ WG-OUTBOUND-SENT\n");
+        }
+        Err(_) => {
+            console::puts("  ✗ initiate_connect failed (udp::send refused?)\n");
+        }
+    }
+
+    // Cleanup so re-running is idempotent.
+    let _ = sys_wg_service::close_peer(peer_id);
 }
 
 /// In-kernel selftest of the PQ-hybrid comms handshake. Exercises
