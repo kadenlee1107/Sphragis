@@ -29,11 +29,26 @@ use crate::kernel::kmsg;
 /// run and the cave has been created.
 static mut SYS_WG_ID: usize = usize::MAX;
 
+/// Resolved id of the kernel-ns sentinel cave. `usize::MAX` until
+/// `init()` has run. Used by per-cave-isolation selftests that
+/// need a SECOND cave with its own L1 built to demonstrate that
+/// cave A literally cannot reach cave B's cave-private memory.
+static mut KERNEL_NS_ID: usize = usize::MAX;
+
 /// Return the resolved sys-wg cave id, or None if init hasn't run
 /// (or the create failed at boot — see warnings in `init`).
 pub fn sys_wg_id() -> Option<usize> {
     unsafe {
         let v = core::ptr::read_volatile(core::ptr::addr_of!(SYS_WG_ID));
+        if v == usize::MAX { None } else { Some(v) }
+    }
+}
+
+/// Return the resolved kernel-ns sentinel cave id, or None if it
+/// wasn't created (degraded boot path).
+pub fn kernel_ns_id() -> Option<usize> {
+    unsafe {
+        let v = core::ptr::read_volatile(core::ptr::addr_of!(KERNEL_NS_ID));
         if v == usize::MAX { None } else { Some(v) }
     }
 }
@@ -57,10 +72,34 @@ pub fn init() {
     //    start at slot 1+. Failure is non-fatal: it just means
     //    sys-wg might still land at slot 0 (in which case the MMU
     //    hook is degenerate for sys-wg, but other caves work).
-    if let Err(e) = cave::create("kernel-ns", /* ephemeral */ true) {
-        uart::puts("  [sys-caves] WARN: kernel-ns sentinel create failed: ");
-        uart::puts(e);
-        uart::puts("\n");
+    let kns_id = match cave::create("kernel-ns", /* ephemeral */ true) {
+        Ok(id) => Some(id),
+        Err(e) => {
+            uart::puts("  [sys-caves] WARN: kernel-ns sentinel create failed: ");
+            uart::puts(e);
+            uart::puts("\n");
+            None
+        }
+    };
+
+    // Build the kernel-ns sentinel's L1 too. The scheduler never
+    // switches to it (cave_id == 0 means "use PRIMARY_L1" in the
+    // MMU hook), but having an L1 lets the per-cave isolation
+    // selftest walk it as a SECOND cave's L1, proving cave A
+    // literally cannot reach cave B's cave-private memory.
+    if let Some(id) = kns_id {
+        if let Some(slot) = crate::batcave::linux::mmu::alloc_native_cave_slot() {
+            if let Ok(l1) = crate::batcave::linux::mmu::setup_native_cave_l1(slot) {
+                unsafe {
+                    let ptr = core::ptr::addr_of_mut!(crate::batcave::cave::CAVES);
+                    (*ptr)[id].cave_l1_phys = l1;
+                    (*ptr)[id].cave_l1_slot = slot;
+                }
+            }
+        }
+        unsafe {
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(KERNEL_NS_ID), id);
+        }
     }
 
     // 1. Create the cave. `create(name, ephemeral=false)` registers

@@ -59,7 +59,7 @@ def main() -> int:
 
         c.sendline("cave-private-selftest")
         idx = c.expect([
-            rb"\xe2\x9c\x93 probe-mode fault handler observed faults instead of hanging",
+            rb"\xe2\x9c\x93 per-cave kernel data partitioning: cross-cave isolation verified",
             rb"\xe2\x9c\x97 FAIL: \S+",
         ], timeout=30)
         if idx == 1:
