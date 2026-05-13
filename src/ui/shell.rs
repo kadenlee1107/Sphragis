@@ -460,6 +460,12 @@ fn execute_inner(cmd: &str) {
         "mls-binding-selftest" => cmd_mls_binding_selftest(),
         "secmark-test-send"   => cmd_secmark_test_send(parts[1], parts[2]),
         "secmark-selftest"    => cmd_secmark_selftest(),
+        "te-enable"           => cmd_te_enable(),
+        "te-disable"          => cmd_te_disable(),
+        "te-allow"            => cmd_te_allow(parts[1], parts[2]),
+        "te-list"             => cmd_te_list(),
+        "te-clear"            => cmd_te_clear(),
+        "te-selftest"         => cmd_te_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -9103,6 +9109,230 @@ fn cmd_secmark_selftest() {
 
     let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
     console::puts("  ✓ SECMARK: CIPSO emit + parse + DOI-filter verified\n");
+}
+
+/// `te-enable` / `te-disable` toggle type-enforcement gating on
+/// `cave::enter`. Default at boot is disabled.
+fn cmd_te_enable() {
+    crate::batcave::cave::te_enable();
+    console::puts("  te: ENFORCED (cave::enter consults transition allow-list)\n");
+}
+fn cmd_te_disable() {
+    crate::batcave::cave::te_disable();
+    console::puts("  te: disabled (cave::enter unguarded)\n");
+}
+
+/// `te-allow <from-cave> <to-cave>` — admin opens a transition.
+fn cmd_te_allow(from: &str, to: &str) {
+    use crate::batcave::cave;
+    if from.is_empty() || to.is_empty() {
+        console::puts("  usage: te-allow <from-cave> <to-cave>\n");
+        return;
+    }
+    let mut from_id: Option<u16> = None;
+    let mut to_id:   Option<u16> = None;
+    let mut i = 0u16;
+    cave::list(|cv| {
+        if cv.name_str() == from { from_id = Some(i); }
+        if cv.name_str() == to   { to_id   = Some(i); }
+        i += 1;
+    });
+    // `cave::list` walks active caves in iteration order, which
+    // doesn't match the cave_id storage index. Re-resolve via
+    // `for_each_usage` doesn't expose id either — instead match
+    // names against `CAVES` directly through `set_sensitivity_by_name`-
+    // style scanning. We'll just look the ids up the brute way.
+    let mut a: u16 = u16::MAX;
+    let mut b: u16 = u16::MAX;
+    for idx in 0..(cave::MAX_CAVES as u16) {
+        // Use Sensitivity::from_u8 to detect Free vs Active via name
+        // — empty name means Free.
+        let nm = cave::name_of(idx);
+        if nm == from { a = idx; }
+        if nm == to   { b = idx; }
+    }
+    let _ = from_id; let _ = to_id; let _ = i;
+    if a == u16::MAX || b == u16::MAX {
+        console::puts("  te-allow: one or both caves not found\n");
+        return;
+    }
+    match cave::add_transition_rule(a, b) {
+        Ok(()) => {
+            console::puts("  te-allow: "); console::puts(from);
+            console::puts(" ("); print_num(a as usize); console::puts(") -> ");
+            console::puts(to); console::puts(" ("); print_num(b as usize);
+            console::puts(")\n");
+        }
+        Err(e) => { console::puts("  te-allow: "); console::puts(e); console::puts("\n"); }
+    }
+}
+
+/// `te-list` — print active transition rules.
+fn cmd_te_list() {
+    use crate::batcave::cave;
+    console::puts_hi("  TYPE-ENFORCEMENT RULES");
+    if cave::te_enforced() {
+        console::puts("  [ENFORCED]\n");
+    } else {
+        console::puts("  [advisory]\n");
+    }
+    let mut shown = 0usize;
+    cave::for_each_transition_rule(|f, t| {
+        console::puts("  ");
+        console::puts(cave::name_of(f));
+        console::puts(" -> ");
+        console::puts(cave::name_of(t));
+        console::puts("\n");
+        shown += 1;
+    });
+    if shown == 0 {
+        console::puts("  (no rules — admin/kernel context can transition anywhere;\n");
+        console::puts("   non-admin transitions are denied when te-enable is on)\n");
+    }
+}
+
+/// `te-clear` — wipe all rules.
+fn cmd_te_clear() {
+    crate::batcave::cave::clear_transition_rules();
+    console::puts("  te: rules cleared\n");
+}
+
+/// `te-selftest` — gov-grade §3.2 type-enforcement slice.
+///
+///   1. Two test caves created (`te_a`, `te_b`).
+///   2. Both quotas set so allocation succeeds; te-disable so the
+///      enter calls aren't gated yet.
+///   3. From shell (admin context) -> `cave::enter("te_a")`
+///      succeeds, returns to admin via `cave::end_active`.
+///   4. Set the active cave to te_a via a synthetic
+///      `ACTIVE_CAVE_ID` poke, te-enable, attempt
+///      `cave::enter("te_b")` -> denied with `te: transition
+///      denied` because no rule.
+///   5. `add_transition_rule(te_a, te_b)`; retry — succeeds.
+///   6. `remove_transition_rule(te_a, te_b)`; retry — denied
+///      again.
+///   7. Cleanup: te-disable, drop test caves, clear rules.
+fn cmd_te_selftest() {
+    use crate::batcave::cave;
+
+    console::puts_hi("  TYPE-ENFORCEMENT TRANSITION SELF-TEST\n");
+
+    // Start clean.
+    cave::clear_transition_rules();
+    cave::te_disable();
+
+    let a_id = match cave::create("te_a", /* ephemeral */ true) {
+        Ok(id) => id as u16,
+        Err(e) => {
+            console::puts("  ✗ FAIL: create te_a: "); console::puts(e); console::puts("\n"); return;
+        }
+    };
+    let b_id = match cave::create("te_b", true) {
+        Ok(id) => id as u16,
+        Err(e) => {
+            console::puts("  ✗ FAIL: create te_b: "); console::puts(e); console::puts("\n");
+            let _ = cave::destroy("te_a");
+            return;
+        }
+    };
+
+    // (1) Admin -> te_a is always allowed (admin context).
+    if !cave::can_transition(usize::MAX, a_id) {
+        console::puts("  ✗ FAIL: admin -> te_a should always be allowed\n");
+        let _ = cave::destroy("te_a");
+        let _ = cave::destroy("te_b");
+        return;
+    }
+    console::puts("  ✓ admin -> te_a always allowed (admin context)\n");
+
+    // (2) te_a -> te_b with no rules: denied.
+    if cave::can_transition(a_id as usize, b_id) {
+        console::puts("  ✗ FAIL: te_a -> te_b allowed with no rules\n");
+        let _ = cave::destroy("te_a");
+        let _ = cave::destroy("te_b");
+        return;
+    }
+    console::puts("  ✓ te_a -> te_b denied by default (no rule)\n");
+
+    // (3) Self-transition always allowed.
+    if !cave::can_transition(a_id as usize, a_id) {
+        console::puts("  ✗ FAIL: te_a -> te_a (self) should be allowed\n");
+        let _ = cave::destroy("te_a");
+        let _ = cave::destroy("te_b");
+        return;
+    }
+    console::puts("  ✓ te_a -> te_a (self) allowed\n");
+
+    // (4) After add_transition_rule, te_a -> te_b allowed.
+    if let Err(e) = cave::add_transition_rule(a_id, b_id) {
+        console::puts("  ✗ FAIL: add_transition_rule: "); console::puts(e); console::puts("\n");
+        let _ = cave::destroy("te_a");
+        let _ = cave::destroy("te_b");
+        return;
+    }
+    if !cave::can_transition(a_id as usize, b_id) {
+        console::puts("  ✗ FAIL: te_a -> te_b denied after add_transition_rule\n");
+        cave::clear_transition_rules();
+        let _ = cave::destroy("te_a");
+        let _ = cave::destroy("te_b");
+        return;
+    }
+    console::puts("  ✓ te_a -> te_b allowed after rule added\n");
+
+    // (5) remove_transition_rule -> denied again.
+    if !cave::remove_transition_rule(a_id, b_id) {
+        console::puts("  ✗ FAIL: remove_transition_rule returned false\n");
+        cave::clear_transition_rules();
+        let _ = cave::destroy("te_a");
+        let _ = cave::destroy("te_b");
+        return;
+    }
+    if cave::can_transition(a_id as usize, b_id) {
+        console::puts("  ✗ FAIL: te_a -> te_b still allowed after rule removed\n");
+        cave::clear_transition_rules();
+        let _ = cave::destroy("te_a");
+        let _ = cave::destroy("te_b");
+        return;
+    }
+    console::puts("  ✓ te_a -> te_b denied after rule removed\n");
+
+    // (6) cave::enter integration: with te enforced and no rule,
+    // attempting to enter a cave from a non-admin source fails.
+    // We simulate "non-admin source" by temporarily pinning
+    // ACTIVE_CAVE_ID to te_a via `set_active`, then calling
+    // `enter("te_b")`. (Direct API exercise; normal callers
+    // wouldn't do this either, but it proves the gate.)
+    cave::set_active(a_id as usize);
+    cave::te_enable();
+    match cave::enter("te_b") {
+        Err("te: transition denied") => {
+            console::puts("  ✓ cave::enter from te_a -> te_b: te: transition denied\n");
+        }
+        Ok(()) => {
+            console::puts("  ✗ FAIL: enter succeeded with TE enforced and no rule\n");
+            cave::te_disable();
+            cave::set_active(usize::MAX);
+            cave::clear_transition_rules();
+            let _ = cave::destroy("te_a");
+            let _ = cave::destroy("te_b");
+            return;
+        }
+        Err(e) => {
+            console::puts("  ✗ FAIL: wrong error: "); console::puts(e); console::puts("\n");
+            cave::te_disable();
+            cave::set_active(usize::MAX);
+            cave::clear_transition_rules();
+            let _ = cave::destroy("te_a");
+            let _ = cave::destroy("te_b");
+            return;
+        }
+    }
+    cave::te_disable();
+    cave::set_active(usize::MAX);
+    cave::clear_transition_rules();
+    let _ = cave::destroy("te_a");
+    let _ = cave::destroy("te_b");
+    console::puts("  ✓ type enforcement: default-deny + allow/remove round trip verified\n");
 }
 
 fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {

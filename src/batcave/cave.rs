@@ -373,6 +373,117 @@ pub fn set_integrity_by_name(name: &str, level: Integrity) -> Result<(), &'stati
     Err("no such cave")
 }
 
+// ── Domain transitions / type enforcement (gov-grade §3.2 TE slice)
+//
+// SELinux's third dimension on top of BLP+Biba: every subject is in
+// a "domain", and the policy whitelists which (from_domain,
+// to_domain) transitions are permitted. We map domains 1:1 to
+// cave IDs — the cave IS the domain. The TE policy is a small
+// table of (from_cave_id, to_cave_id) pairs added at boot or via
+// the `te-allow` shell command.
+//
+// `cave::enter` consults `can_transition(get_active(), target)`
+// before swapping the active cave. The trampoline
+// `with_cave_active` deliberately bypasses TE because it's
+// kernel-internal — the kernel knows what it's doing and tests use
+// it directly. Operator-facing transitions go through `enter`.
+
+const MAX_TRANSITION_RULES: usize = 32;
+static mut TRANSITION_RULES: [(u16, u16); MAX_TRANSITION_RULES] =
+    [(0, 0); MAX_TRANSITION_RULES];
+static TRANSITION_COUNT: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+static TE_ENFORCED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Enable type-enforcement gating on `cave::enter`. Disabled at
+/// boot so existing flows keep working until an admin opts in
+/// (avoids back-compat breakage in the wild). Idempotent.
+pub fn te_enable() { TE_ENFORCED.store(true, Ordering::Relaxed); }
+pub fn te_disable() { TE_ENFORCED.store(false, Ordering::Relaxed); }
+pub fn te_enforced() -> bool { TE_ENFORCED.load(Ordering::Relaxed) }
+
+/// Allow a `(from -> to)` transition. Idempotent. Returns
+/// `Err("te: table full")` if `MAX_TRANSITION_RULES` is reached.
+pub fn add_transition_rule(from: u16, to: u16) -> Result<(), &'static str> {
+    unsafe {
+        let n = TRANSITION_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if TRANSITION_RULES[i] == (from, to) { return Ok(()); }
+        }
+        if n >= MAX_TRANSITION_RULES { return Err("te: table full"); }
+        TRANSITION_RULES[n] = (from, to);
+        TRANSITION_COUNT.store(n + 1, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// Remove a `(from -> to)` allowance. Returns false if no
+/// matching rule existed.
+pub fn remove_transition_rule(from: u16, to: u16) -> bool {
+    unsafe {
+        let n = TRANSITION_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if TRANSITION_RULES[i] == (from, to) {
+                // Compact: move last into this slot.
+                if i + 1 < n {
+                    TRANSITION_RULES[i] = TRANSITION_RULES[n - 1];
+                }
+                TRANSITION_RULES[n - 1] = (0, 0);
+                TRANSITION_COUNT.store(n - 1, Ordering::Relaxed);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Look up a cave's name by id. Returns empty string for invalid
+/// / free slots — keeps shell display paths simple.
+pub fn name_of(cave_id: u16) -> &'static str {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return ""; }
+    unsafe {
+        let c = &(*core::ptr::addr_of!(CAVES))[idx];
+        if c.state == CaveState::Free { return ""; }
+        c.name_str()
+    }
+}
+
+/// Wipe every TE rule. Used by selftests + `te-clear` shell command.
+pub fn clear_transition_rules() {
+    unsafe { TRANSITION_RULES = [(0, 0); MAX_TRANSITION_RULES]; }
+    TRANSITION_COUNT.store(0, Ordering::Relaxed);
+}
+
+/// TE policy decision for `from -> to`. `from = usize::MAX` means
+/// kernel / admin context, which can transition to anything
+/// (admin is always trusted to launch any cave). Same-target
+/// (no-op transition) is always permitted. Otherwise the rule
+/// must appear in the allow-list.
+pub fn can_transition(from_cave_id: usize, to_cave_id: u16) -> bool {
+    if from_cave_id == usize::MAX { return true; }
+    let from_u16 = from_cave_id as u16;
+    if from_u16 == to_cave_id { return true; }
+    unsafe {
+        let n = TRANSITION_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if TRANSITION_RULES[i] == (from_u16, to_cave_id) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Iterate every rule for shell display / persistence.
+pub fn for_each_transition_rule<F: FnMut(u16, u16)>(mut f: F) {
+    unsafe {
+        let n = TRANSITION_COUNT.load(Ordering::Relaxed);
+        for i in 0..n { f(TRANSITION_RULES[i].0, TRANSITION_RULES[i].1); }
+    }
+}
+
 impl BatCave {
     pub const fn empty() -> Self {
         Self {
@@ -1176,6 +1287,20 @@ pub fn stop(name: &str) -> Result<(), &'static str> {
 /// cave could install a handler, exit, and a later cave would inherit
 /// it. Same for TLS session keys on PCBs the previous tenant opened.
 pub fn enter(name: &str) -> Result<(), &'static str> {
+    // Gov-grade §3.2 TE: when type enforcement is enabled, only
+    // transitions explicitly allow-listed via `add_transition_rule`
+    // (or originated from kernel/admin context) get past this gate.
+    // Default is disabled so existing flows keep working; ops opt
+    // in via the `te-enable` shell command.
+    if te_enforced() {
+        let target = match find_id(name) {
+            Some(id) => id as u16,
+            None => return Err("te: no such cave"),
+        };
+        if !can_transition(get_active(), target) {
+            return Err("te: transition denied");
+        }
+    }
     start(name)?;
     if let Some(id) = find_id(name) {
         // lazy-build the cave's L1 page table BEFORE the

@@ -624,8 +624,17 @@ syscall filter). Default-deny posture. **Two-axis MLS lattice (2026-05-12)**:
   (today the byte is on the wire, but a receiving Bat_OS
   doesn't gate delivery on it), CALIPSO (IPv6 equivalent),
   SECMARK rule integration.
-- Type enforcement à la SELinux (we have BLP + Biba confidentiality
-  & integrity; no domain transitions, no rich type matrix).
+- Type enforcement: **transition allow-list shipped (2026-05-13)**.
+  Each cave acts as its own domain; `cave::can_transition(from, to)`
+  + `add_transition_rule(from, to)` form a default-deny matrix.
+  `cave::enter` consults it when `te-enable` is on. Admin/kernel
+  context can transition anywhere; non-admin transitions require
+  explicit allow-list entries. Shell API: `te-enable`,
+  `te-allow <from> <to>`, `te-list`, `te-clear`. `te-selftest`
+  proves the policy round trip. Still missing vs. real SELinux:
+  domain-typed objects (we have BLP+Biba for objects but not
+  domain types), rich rule predicates (operation classes,
+  permissions), policy compilation toolchain.
 - Compartments / categories (we have linear lattices; CC needs
   lattice + categories for SCI handling).
 - Cryptographic binding between MLS labels and the data they label
