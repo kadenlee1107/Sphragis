@@ -62,20 +62,22 @@ pub fn init() {
     // ICMP responses (ping replies are type 0). We don't filter by type
     // here; ICMP handler itself only replies to echo requests.
     add_rule(0, 1, 0, 0, 0);
-    // TCP: allow any TCP *segment* inbound regardless of src_port so that
-    // client-initiated connections receive their SYN/ACK and data. A real
-    // server-side firewall would match on dst_port = our_ephemeral_range
-    // but we don't plumb dst_port through yet. This is still narrower
-    // than the old "allow everything" because we reject non-TCP/UDP/ICMP
-    // protocols entirely.
+    // gap-audit 045 hardening pass: the old wildcard
+    //   `add_rule(0, 6, 0, 0, 0)`
+    // (any inbound TCP) is GONE. Inbound TCP now passes only if
+    // ONE of these is true (see `allow_inbound_tcp`):
+    //   (a) `conntrack::lookup_inbound` finds an outbound-recorded
+    //       flow matching the 4-tuple — reply traffic to a
+    //       Bat_OS-initiated connection.
+    //   (b) `tcp::listener_lookup_by_port(dst_port)` says a
+    //       server is listening on that port — server-side
+    //       handshake / cookie-recovery path.
+    //   (c) An explicit per-port rule installed via
+    //       `allow_inbound_tcp_dst_port` (defense in depth — still
+    //       used by `listen_register`).
+    // Unsolicited SYNs to random ephemeral ports get dropped at
+    // the firewall before tcp::handle sees them.
     //
-    // this wildcard rule covers BOTH client-response traffic
-    // (src_port=80/443/etc., dst_port=our_ephemeral) AND any incoming SYN
-    // (dst_port=our_listener). When hardens this, the wildcard
-    // gets removed and per-listener rules added on `tcp::listen_register`.
-    // For now: keep the wildcard for backward compat, AND have
-    // listen_register install a per-port rule (defense in depth).
-    add_rule(0, 6, 0, 0, 0);
     // UDP: only DNS responses (src_port = 53). This closes
     // ATTACK-NET-041 for any non-DNS port.
     add_rule(0, 17, 0, 53, 0);
@@ -83,7 +85,7 @@ pub fn init() {
     let n = RULE_COUNT.load(Ordering::Relaxed);
     uart::puts("  [firewall] default-deny installed; ");
     crate::kernel::mm::print_num(n as usize);
-    uart::puts(" allow rules active (out:any, in:ICMP, in:TCP*, in:UDP/53)\n");
+    uart::puts(" allow rules active (out:any, in:ICMP, in:UDP/53; in:TCP gated on conntrack+listener)\n");
 }
 
 fn add_rule(direction: u8, protocol: u8, ip: u32, port: u16, dst_port: u16) {
@@ -183,27 +185,52 @@ pub fn allow_inbound(src_ip: u32, _dst_ip: u32, protocol: u8) -> bool {
 }
 
 /// Transport-layer port check for TCP (called after parsing the header).
-// /
-/// NET2-019 fix: the pre-parse `allow_inbound` only matches src_ip + protocol
-/// for TCP, so port-gated rules (e.g. "allow TCP from 10.0.0.1 port 443 only")
-/// would have let in any TCP port. TCP handler now re-checks via this helper.
+///
+/// Stateful policy (gap-audit 045 hardening pass). The wildcard
+/// inbound TCP rule from `init` is gone; this function now permits
+/// a segment iff ONE of these holds:
+///
+///   (a) `conntrack::lookup_inbound` finds a flow matching the
+///       4-tuple — i.e. Bat_OS already initiated this connection
+///       and the inbound packet is reply traffic.
+///   (b) `tcp::listener_lookup_by_port(dst_port)` reports a
+///       registered listener — i.e. we're a server expecting
+///       inbound SYNs / cookie-recovery ACKs on this port.
+///   (c) An explicit per-IP/per-port rule was installed (e.g.
+///       `allow_inbound_tcp_dst_port` from `listen_register`).
+///       Defense in depth: the rule scan still happens last so
+///       admin overrides keep working.
+///
+/// Unsolicited SYNs to ephemeral ports — the class of packet the
+/// old wildcard let through — get dropped here.
 pub fn allow_inbound_tcp(src_ip: u32, src_port: u16, dst_port: u16) -> bool {
     if !FIREWALL_ENABLED.load(Ordering::Relaxed) {
         return true;
     }
+
+    // (a) Outbound-initiated flow — connect_start registered it in
+    // conntrack as State::New, connect_blocking_pcb upgraded it to
+    // Established on SYN-ACK. Either state is good enough to let
+    // reply traffic through.
+    if crate::net::conntrack::lookup_inbound(6, src_ip, src_port, dst_port).is_some() {
+        return true;
+    }
+
+    // (b) Server-side: a listener is registered on this dst_port,
+    // so inbound segments (SYN, ACK-with-cookie) are part of an
+    // anticipated handshake. tcp::handle decides if the segment
+    // is well-formed; firewall just opens the door.
+    if crate::net::tcp::listener_lookup_by_port(dst_port).is_some() {
+        return true;
+    }
+
+    // (c) Fall-through: explicit rules. Two-pass so port-specific
+    // rules win over pure wildcards. With the inbound-TCP
+    // wildcard gone from `init` this set is small, but
+    // `allow_inbound_tcp_dst_port` still installs per-port
+    // rules at listen_register time (and admin can add more).
     unsafe {
         let ptr = core::ptr::addr_of!(RULES);
-        // a rule matches if all THREE of (ip, src_port,
-        // dst_port) are compatible. A field of 0 in the rule means
-        // "any" for that dimension. The pre-#150 logic only checked
-        // src_port; dst_port was not plumbed through, so a rule like
-        // "allow inbound to dst_port=8080" couldn't be expressed.
-        //
-        // Two-pass to honor explicit-port-specific rules over wildcards:
-        // first pass requires the rule to have at least one port-specific
-        // match field (port or dst_port non-zero AND it actually matches);
-        // second pass accepts pure wildcards (rule.port == 0 AND
-        // rule.dst_port == 0) as fallback.
         for want_specific in [true, false] {
             for i in 0..MAX_RULES {
                 let rule = &(*ptr)[i];
