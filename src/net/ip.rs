@@ -33,6 +33,41 @@ pub struct IpPacket<'a> {
     pub ttl: u8,
 }
 
+/// Walk an IPv4 header's options field looking for a CIPSO label
+/// (gov-grade §3.2 SECMARK slice). Returns the level byte from the
+/// first CIPSO option found, or `None` if the packet carries no
+/// label (or the DOI doesn't match Bat_OS's). Receivers can feed
+/// this into Bell-LaPadula / Biba checks against the destination
+/// cave's labels before delivering the payload.
+pub fn parse_cipso_sensitivity(data: &[u8]) -> Option<u8> {
+    if data.len() < IP_HDR_SIZE { return None; }
+    let ihl = (data[0] & 0x0F) as usize * 4;
+    if ihl <= IP_HDR_SIZE || ihl > data.len() { return None; }
+    let mut i = IP_HDR_SIZE;
+    while i + 2 <= ihl {
+        let opt_type = data[i];
+        // End-of-options-list (0x00) and NOP (0x01) are single-byte.
+        if opt_type == 0x00 { break; }
+        if opt_type == 0x01 { i += 1; continue; }
+        let opt_len = data[i + 1] as usize;
+        if opt_len < 2 || i + opt_len > ihl { return None; }
+        if opt_type == CIPSO_OPT_TYPE && opt_len >= 10 {
+            // DOI 4 bytes BE, tag-type at +6, taglen at +7, sens at +9.
+            let doi = u32::from_be_bytes(
+                [data[i + 2], data[i + 3], data[i + 4], data[i + 5]]
+            );
+            if doi == CIPSO_DOI_BATOS
+                && data[i + 6] == 0x01
+                && data[i + 7] >= 4
+            {
+                return Some(data[i + 9]);
+            }
+        }
+        i += opt_len;
+    }
+    None
+}
+
 impl<'a> IpPacket<'a> {
     pub fn parse(data: &'a [u8]) -> Option<Self> {
         if data.len() < IP_HDR_SIZE { return None; }
@@ -65,7 +100,38 @@ impl<'a> IpPacket<'a> {
     }
 }
 
+/// CIPSO Domain of Interpretation we use to brand outbound packets
+/// (gov-grade §3.2 SECMARK slice). IANA reserves the DOI value
+/// space; we pick a Bat_OS-internal one (0x42_42_4F_53 = "BBOS")
+/// rather than a real IANA-registered DOI because no router on
+/// today's path actually inspects it — the field is purely for
+/// internal info-flow accounting between Bat_OS instances.
+pub const CIPSO_DOI_BATOS: u32 = 0x42_42_4F_53;
+/// CIPSO IP option type byte (RFC 2828 / Trusted-Solaris CIPSO).
+const CIPSO_OPT_TYPE:   u8 = 0x86;
+/// IP option NOP (used for 4-byte alignment padding).
+const IP_OPT_NOP:       u8 = 0x01;
+/// Total bytes of IP option (CIPSO + NOP padding) we emit. 10
+/// bytes CIPSO + 2 NOPs = 12 bytes, padding IHL to 8 words (32B
+/// total header).
+const SECMARK_OPT_LEN:  usize = 12;
+
 /// Send an IP packet.
+///
+/// Gov-grade §3.2 SECMARK slice: when the active cave's MLS
+/// sensitivity label is non-Unclassified, we emit a CIPSO IP
+/// option carrying the level byte into the IP header. The
+/// receiving peer (or a downstream Bat_OS) can pick up
+/// `parse_cipso_sensitivity` and refuse to accept the packet
+/// into a lower-cleared receiver. The wire bytes look like:
+///
+///     [type=0x86][len=10][DOI 4B="BBOS"][tag=1][taglen=4]
+///       [align=0][sens] [NOP][NOP]
+///
+/// Admin / kernel context (`active_sensitivity() == Unclassified`)
+/// keeps the historical no-options IHL=5 header — every existing
+/// test passes unchanged, and routers that drop packets with IP
+/// options stay happy in the default path.
 pub fn send(dst_ip: u32, protocol: u8, payload: &[u8]) -> Result<(), &'static str> {
     // was a Tor(VPN(payload)) pipeline — `tor` deleted as
     // part of the honest-naming pass (it was 3 layers of CTR with
@@ -86,11 +152,21 @@ pub fn send(dst_ip: u32, protocol: u8, payload: &[u8]) -> Result<(), &'static st
     let src_ip = our_ip();
     let id = IP_ID.load(Ordering::Relaxed); IP_ID.store(id.wrapping_add(1), Ordering::Relaxed);
 
+    // SECMARK decision: emit CIPSO only when the active cave has
+    // raised its sensitivity above Unclassified. Otherwise the
+    // header stays at IHL=5 / 20 bytes (no behavioural change).
+    use crate::batcave::cave::Sensitivity;
+    let active_sens = crate::batcave::cave::active_sensitivity();
+    let emit_cipso  = active_sens != Sensitivity::Unclassified;
+    let opt_bytes   = if emit_cipso { SECMARK_OPT_LEN } else { 0 };
+    let header_len  = IP_HDR_SIZE + opt_bytes;
+    let ihl_words   = (header_len / 4) as u8;
+
     // Build IP header
-    let total_len = (IP_HDR_SIZE + payload.len()) as u16;
+    let total_len = (header_len + payload.len()) as u16;
     let mut ip_pkt = [0u8; 1500];
 
-    ip_pkt[0] = 0x45; // Version 4, IHL 5
+    ip_pkt[0] = 0x40 | ihl_words; // Version 4, IHL
     ip_pkt[1] = 0;    // DSCP/ECN
     ip_pkt[2..4].copy_from_slice(&total_len.to_be_bytes());
     ip_pkt[4..6].copy_from_slice(&id.to_be_bytes());
@@ -102,11 +178,25 @@ pub fn send(dst_ip: u32, protocol: u8, payload: &[u8]) -> Result<(), &'static st
     ip_pkt[12..16].copy_from_slice(&src_ip.to_be_bytes());
     ip_pkt[16..20].copy_from_slice(&dst_ip.to_be_bytes());
 
-    // Copy payload
-    ip_pkt[IP_HDR_SIZE..IP_HDR_SIZE + payload.len()].copy_from_slice(payload);
+    // CIPSO option block (when emitting).
+    if emit_cipso {
+        let o = IP_HDR_SIZE;
+        ip_pkt[o]       = CIPSO_OPT_TYPE;
+        ip_pkt[o + 1]   = 0x0a;             // option length = 10
+        ip_pkt[o + 2..o + 6].copy_from_slice(&CIPSO_DOI_BATOS.to_be_bytes());
+        ip_pkt[o + 6]   = 0x01;             // tag type = 1 (restrictive bitmap)
+        ip_pkt[o + 7]   = 0x04;             // tag length = 4 bytes
+        ip_pkt[o + 8]   = 0x00;             // alignment flags
+        ip_pkt[o + 9]   = active_sens as u8;
+        ip_pkt[o + 10]  = IP_OPT_NOP;
+        ip_pkt[o + 11]  = IP_OPT_NOP;
+    }
 
-    // Compute header checksum
-    let cksum = checksum(&ip_pkt[..IP_HDR_SIZE]);
+    // Copy payload after the header (+ options if present).
+    ip_pkt[header_len..header_len + payload.len()].copy_from_slice(payload);
+
+    // Compute header checksum across header + any options.
+    let cksum = checksum(&ip_pkt[..header_len]);
     ip_pkt[10..12].copy_from_slice(&cksum.to_be_bytes());
 
     // Determine next-hop MAC
@@ -128,6 +218,54 @@ pub fn send(dst_ip: u32, protocol: u8, payload: &[u8]) -> Result<(), &'static st
     );
 
     netdev::send(&frame[..frame_len])
+}
+
+/// Test-only: build the same IPv4 wire bytes `send` would emit
+/// (header + CIPSO option per active cave + payload) into `out`,
+/// returning the number of bytes written. No psk-overlay, no ARP,
+/// no NIC — useful for selftests that need to inspect the
+/// SECMARK CIPSO emission without owning a real NIC. Returns 0 on
+/// any sizing error.
+pub fn build_test_packet(dst_ip: u32, protocol: u8, payload: &[u8], out: &mut [u8]) -> usize {
+    use crate::batcave::cave::Sensitivity;
+    let active_sens = crate::batcave::cave::active_sensitivity();
+    let emit_cipso  = active_sens != Sensitivity::Unclassified;
+    let opt_bytes   = if emit_cipso { SECMARK_OPT_LEN } else { 0 };
+    let header_len  = IP_HDR_SIZE + opt_bytes;
+    let total_len   = header_len + payload.len();
+    if total_len > out.len() { return 0; }
+    let ihl_words   = (header_len / 4) as u8;
+
+    let src_ip = our_ip();
+    let id = IP_ID.load(Ordering::Relaxed); IP_ID.store(id.wrapping_add(1), Ordering::Relaxed);
+
+    out[0] = 0x40 | ihl_words;
+    out[1] = 0;
+    out[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
+    out[4..6].copy_from_slice(&id.to_be_bytes());
+    out[6] = 0x40;
+    out[7] = 0;
+    out[8] = 64;
+    out[9] = protocol;
+    out[10] = 0; out[11] = 0;
+    out[12..16].copy_from_slice(&src_ip.to_be_bytes());
+    out[16..20].copy_from_slice(&dst_ip.to_be_bytes());
+    if emit_cipso {
+        let o = IP_HDR_SIZE;
+        out[o]      = CIPSO_OPT_TYPE;
+        out[o + 1]  = 0x0a;
+        out[o + 2..o + 6].copy_from_slice(&CIPSO_DOI_BATOS.to_be_bytes());
+        out[o + 6]  = 0x01;
+        out[o + 7]  = 0x04;
+        out[o + 8]  = 0x00;
+        out[o + 9]  = active_sens as u8;
+        out[o + 10] = IP_OPT_NOP;
+        out[o + 11] = IP_OPT_NOP;
+    }
+    out[header_len..header_len + payload.len()].copy_from_slice(payload);
+    let cksum = checksum(&out[..header_len]);
+    out[10..12].copy_from_slice(&cksum.to_be_bytes());
+    total_len
 }
 
 /// Handle an incoming IP packet.
