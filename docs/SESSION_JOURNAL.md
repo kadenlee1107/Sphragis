@@ -11,6 +11,137 @@ end of a session.
 
 ---
 
+## 2026-05-12 — Mac — Arc 3 slice 3: sys-wg IPC mailbox (request-scoped service task)
+
+**Context:** Until this slice, every call into sys-wg went
+through the synchronous `with_cave_active(sys_wg_id, ...)`
+trampoline — the caller's task briefly assumed sys-wg's cave_id +
+TTBR0 to do the work. Security-wise that already gave us MMU-
+enforced isolation of cave-private state. Architecturally it
+still meant "the caller's task does the work inside sys-wg's
+address space." Slice 3 moves the work onto a dedicated kernel
+task that has `cave_id = sys_wg_id` for its entire lifetime.
+Clients now interact with sys-wg only by posting bytes into a
+mailbox; they never assume sys-wg's identity themselves.
+
+### Scope of this slice
+
+Tight, deliberate — establishes the pattern with one opcode:
+
+  * **One opcode:** `OP_PUBKEY`. Returns the 32-byte X25519
+    static pubkey. Future slices wire OP_HANDSHAKE / OP_WRAP /
+    OP_UNWRAP through the same mechanism.
+  * **Request-scoped service task:** each `request_pubkey()`
+    call spawns a fresh kernel task tagged with sys-wg's
+    cave_id, runs one cycle of "read request → dispatch → write
+    response → terminate." A long-running service task (with
+    proper block/wake semantics) is a future arc gated on
+    richer scheduler primitives.
+  * **Single-threaded contract:** one outstanding request at a
+    time, guarded by `IPC_BUSY: AtomicBool`. A second caller
+    spin-yields until the first finishes (in cooperative
+    single-CPU Bat_OS this races only if a client itself
+    yields between acquire and release).
+
+### What shipped
+
+  * `src/batcave/sys_wg_ipc.rs` (new):
+    - Opcode constants: `OP_NONE`, `OP_PUBKEY`, plus reserved
+      slots `OP_HANDSHAKE / OP_WRAP / OP_UNWRAP` for future
+      slices (declared so the opcode space is stable).
+    - Status constants: `STATUS_PENDING`, `STATUS_OK`,
+      `STATUS_ERR_OP`, `STATUS_ERR_SVC`, `STATUS_ERR_LEN`.
+    - Mailbox: `IPC_BUSY: AtomicBool` + `REQ_OP / REQ_LEN /
+      REQ_DATA[192]` + `RSP_STATUS / RSP_LEN /
+      RSP_DATA[1600]`. Lives in regular kernel `.bss` —
+      opcodes/pubkeys/ciphertexts aren't sensitive, only the
+      cave-private state behind them is.
+    - `service_main() -> !` — entry function for the per-
+      request task. Reads `REQ_OP`, dispatches, writes
+      response, clears `IPC_BUSY`, terminates via
+      `process::current_terminate`.
+    - `handle_pubkey()` — internal: calls
+      `sys_wg_service::service_pubkey()` (which still goes
+      through `with_cave_active`, nested but cheap when
+      cave_id matches), copies bytes into RSP_DATA.
+    - `dispatch_one_shot(op, req) -> Option<&[u8]>` — client
+      side. Acquires `IPC_BUSY` (spin-yield), populates
+      mailbox, spawns the service task via
+      `process::create_kernel_task` + `process::set_cave(...,
+      sys_wg_id)` to tag with the cave identity. Yields up to
+      1024 times waiting for `RSP_STATUS != PENDING`. Returns
+      the response slice on success.
+    - `request_pubkey() -> Option<[u8; 32]>` — public client
+      API; thin wrapper over `dispatch_one_shot(OP_PUBKEY, &[])`
+      with response decoding.
+    - `selftest()` — compares the IPC path's result against
+      `sys_wg_service::service_pubkey()` (direct API). Returns
+      the prefixes of each + an `equal` flag for the shell
+      command to render.
+  * `sys-wg-ipc-selftest` shell command + `scripts/
+    qemu_sys_wg_ipc_selftest.py` headless harness.
+
+### Why request-scoped instead of long-running
+
+The cooperative scheduler today has no proper block/wake: a long-
+running service task either spins (wasting CPU) or sets itself
+Dead (which we already exploit for short-lived helpers via
+`current_terminate`). The request-scoped pattern fits cleanly
+into the existing primitives — each request creates a fresh task
+that lives just long enough to process one opcode. The
+architectural property the slice cares about ("sys-wg work runs
+in a task tagged with sys-wg's cave_id, isolated from the
+caller's identity") holds either way.
+
+When proper wait/wake primitives land (a future scheduler arc),
+the same `service_main` body can move into an outer `loop { ...
+wait_for_request(); ... }` and the IPC client side stays
+unchanged.
+
+### Verification
+
+```
+direct pubkey prefix: c1b54ff3a847c9a9
+ipc    pubkey prefix: c1b54ff3a847c9a9
+✓ IPC OP_PUBKEY returned the same bytes as the direct API
+✓ Arc-3 slice-3 IPC mailbox path verified
+```
+
+Full sweep: boot-smoke, sys-caves, cave-private, sys-wg, wg-
+dispatch — all PASS.
+
+### Earned property
+
+Compromised callers can now only emit IPC bytes into the
+mailbox. They never call into sys-wg's cave context directly;
+the service task is the sole holder of `cave_id = sys_wg_id`
+for the duration of its work. Combined with the previous five
+layers (module privacy + VA-isolation + PA-carve-out +
+demand-page guard + probe handler), this completes the
+Qubes-style "every sensitive subsystem is its own process"
+architecture for sys-wg.
+
+### What this slice DOESN'T do
+
+  * Only one opcode (OP_PUBKEY). Adding OP_HANDSHAKE / OP_WRAP /
+    OP_UNWRAP follows the same pattern — encode args into
+    REQ_DATA, decode in service_main, dispatch to existing
+    `sys_wg_service` API. Future slices.
+  * Request-scoped, not long-running. New task per call adds
+    create_kernel_task overhead — fine for the boundary demo,
+    not for line-rate WG traffic. Future scheduler arc.
+  * `dispatch_wire` (Phase 2.5) still calls `sys_wg_service`
+    directly, not via this mailbox. Future arc routes Phase
+    2.5 through the mailbox too so the WG fast path also lives
+    in the service task.
+
+### Branch status
+
+`feat/sys-wg-ipc-mailbox` (current, branched from main at
+`4ea923ea`). Ready to commit + push.
+
+---
+
 ## 2026-05-12 — Mac — WireGuard Phase 2.5: UDP dispatch layer
 
 **Context:** Phase 2 (wire framing) and Phase 2.6 (replay window)
