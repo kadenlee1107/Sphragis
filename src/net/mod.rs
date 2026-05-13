@@ -5,6 +5,8 @@ pub mod cave_shaper;
 pub mod cert_pin;
 pub mod crl;
 pub mod ct_logs;
+pub mod ocsp;
+pub mod ocsp_fixtures;
 pub mod dot;
 pub mod cookies;
 pub mod dns;
