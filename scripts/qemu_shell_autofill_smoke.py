@@ -6,11 +6,11 @@ default empty passphrase, then types partial commands followed by Tab
 and asserts the shell completes correctly:
 
   Test 1 — unique-prefix completion:
-    Type `pq-i` then Tab → expect `pq-interop` to appear in serial.
+    Type `pq-c` then Tab → expect `pq-comms-selftest` to appear in serial.
 
   Test 2 — multi-match listing:
     Type `pq-` then Tab → expect at least four `pq-…` candidates listed
-    on a new line (pq-interop, pq-selftest, pq-sig-selftest,
+    on a new line (pq-comms-selftest, pq-selftest, pq-sig-selftest,
     pq-tls-selftest).
 
 Pass: both assertions hold.
@@ -88,28 +88,29 @@ def run() -> int:
         time.sleep(0.5)
 
         # ── Test 1: unique-prefix completion ──
-        c.send(b"pq-i")
+        c.send(b"pq-c")
         time.sleep(0.2)
         c.send(b"\t")
-        # After Tab, the shell should have written `nterop` (the rest
-        # of `pq-interop`). Wait for the full token to appear in serial.
-        c.expect(rb"pq-interop", timeout=10)
+        # After Tab, the shell should have written `omms-selftest` (the
+        # rest of `pq-comms-selftest`). Wait for the full token to
+        # appear in serial.
+        c.expect(rb"pq-comms-selftest", timeout=10)
         # Cancel this line — Ctrl+C resets the prompt.
         c.send(b"\x03")
         c.expect(rb"bat_os > ", timeout=10)
-        print("[autofill-smoke]   PASS unique: 'pq-i' + Tab → 'pq-interop'")
+        print("[autofill-smoke]   PASS unique: 'pq-c' + Tab → 'pq-comms-selftest'")
 
         # ── Test 2: multi-match listing ──
         c.send(b"pq-")
         time.sleep(0.2)
         c.send(b"\t")
         # Should see all the pq-* candidates on the listing line.
-        c.expect(rb"pq-interop", timeout=10)
+        c.expect(rb"pq-comms-selftest", timeout=10)
         c.expect(rb"pq-selftest", timeout=5)
         c.expect(rb"pq-sig-selftest", timeout=5)
         c.expect(rb"pq-tls-selftest", timeout=5)
         c.send(b"\x03")
-        print("[autofill-smoke]   PASS multi: 'pq-' + Tab listed pq-interop/selftest/sig/tls")
+        print("[autofill-smoke]   PASS multi: 'pq-' + Tab listed pq-comms/selftest/sig/tls")
 
         print("[autofill-smoke] PASS — tab autofill works for unique + multi-match")
         print(f"[autofill-smoke] log: {LOG}")

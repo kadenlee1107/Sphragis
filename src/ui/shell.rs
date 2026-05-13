@@ -135,9 +135,12 @@ pub fn run() -> ! {
                     let line = unsafe {
                         core::str::from_utf8_unchecked(&cmd_buf[..cmd_len])
                     };
-                    let split = super::shell_completion::split_for_completion(line);
-                    if let Some((cmd, arg_index, current)) = split {
-                        let kind = super::shell_completion::arg_kind_for(cmd, arg_index);
+                    let split = super::shell_completion::split_for_completion_parts(line);
+                    if let Some(info) = split {
+                        let kind = super::shell_completion::arg_kind_for_parts(
+                            &info.parts[..info.parts_len], info.arg_index,
+                        );
+                        let current = info.current;
                         if kind != super::shell_completion::ArgKind::None {
                             let r = super::shell_completion::complete_argument(kind, current);
                             let ext = r.extension_bytes();

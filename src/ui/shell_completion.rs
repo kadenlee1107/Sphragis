@@ -26,24 +26,34 @@
 /// keeping it sorted makes it trivial to grep + diff.
 pub static COMMAND_NAMES: &[&str] = &[
     "audit",
+    "audit-chain",
     "audit-flush",
     "batcave",
     "batcave-fw-allow",
     "batcave-fw-deny",
     "batcave-fw-list",
+    "batfs-quota-selftest",
     "blk-selftest",
     "blk-status",
+    "block-on-selftest",
     "c++",
+    "caps",
     "cat",
     "cave-policy-selftest",
+    "cave-private-selftest",
+    "cave-quota",
     "cave-seal-selftest",
     "cave-syscall-allow",
     "cave-syscall-clear",
     "cave-syscall-deny",
     "cave-syscall-list",
     "cave-syscall-selftest",
+    "cave-usage",
     "clear",
+    "clip",
     "cls",
+    "comms",
+    "conntrack-selftest",
     "cookies",
     "cpol-add",
     "cpol-add-sni",
@@ -64,14 +74,18 @@ pub static COMMAND_NAMES: &[&str] = &[
     "cpol-sni-selftest",
     "cpol-sync",
     "cxx",
+    "date",
     "delete",
+    "dmesg",
     "dns",
     "edit",
+    "fds",
     "fetch",
     "files",
     "firewall",
     "fw",
     "gcm-selftest",
+    "hash",
     "hello",
     "help",
     "ifconfig",
@@ -82,15 +96,28 @@ pub static COMMAND_NAMES: &[&str] = &[
     "ls",
     "mem",
     "memory",
+    "mount-ns",
+    "mount-ns-selftest",
     "nat-beacon-reset",
     "nat-beacon-selftest",
     "nat-beacons",
+    "nat-bind",
+    "nat-bindings",
+    "nat-forward",
+    "nat-frag-selftest",
     "nat-gc-force",
     "nat-gc-selftest",
+    "nat-pump",
+    "nat-reply",
+    "nat-reset",
     "nat-rewrite-selftest",
     "nat-selftest",
+    "nat-stats",
+    "nat-sync",
+    "nat-table",
     "net",
     "nic-status",
+    "ocsp-selftest",
     "origin",
     "origin-allow",
     "origin-mode",
@@ -99,26 +126,52 @@ pub static COMMAND_NAMES: &[&str] = &[
     "otp-stats",
     "panic",
     "ping",
+    "pipe-selftest",
+    "pkg",
     "posix",
-    "pq-interop",
+    "pq-comms-selftest",
     "pq-selftest",
     "pq-sig-selftest",
     "pq-tls-selftest",
+    "procs",
+    "ps",
+    "quota-selftest",
     "read",
+    "redirect-selftest",
+    "release-pubkey",
+    "release-verify",
     "resolve",
     "rm",
     "scheduler-selftest",
     "screen",
+    "secstatus",
     "secure-ipc-selftest",
     "secure-ipc-wire-selftest",
+    "shm-selftest",
     "status",
+    "sys-caves-selftest",
+    "sys-wg-ipc-selftest",
+    "sys-wg-selftest",
+    "task",
     "tcp-list",
     "tcp-listen",
     "tcp-selftest",
     "threads",
+    "time-selftest",
+    "time-sync-https",
+    "tz",
     "uname",
+    "unix-sock-selftest",
     "uptime",
     "verify",
+    "wg-dispatch-selftest",
+    "wg-endpoint-selftest",
+    "wg-initiator-e2e-selftest",
+    "wg-initiator-selftest",
+    "wg-replay-selftest",
+    "wg-selftest",
+    "wg-test-outbound",
+    "wg-wire-selftest",
     "whoami",
     "write",
     "x509-selftest",
@@ -272,34 +325,147 @@ pub enum ArgKind {
     /// Command takes a test-binary name from the small hardcoded
     /// set the cave loader includes via `include_bytes!`.
     Binary,
+    /// Argument is one of a fixed list of literal keywords — a
+    /// subcommand (`pkg <install|list|...>`), a small enum
+    /// (`kbd-trace <on|off>`), or a common-path suggestion list
+    /// (`tz <-8|-5|+0|...>`).
+    Literal(&'static [&'static str]),
     /// No completable argument (or out of v1 scope).
     None,
 }
 
-/// Look up the argument kind for the next token of `cmd`. `arg_index`
-/// is 0 for the first argument, 1 for the second, etc. Most commands
-/// only complete their first argument; multi-arg grammars are
-/// hand-listed.
-pub fn arg_kind_for(cmd: &str, arg_index: usize) -> ArgKind {
-    match (cmd, arg_index) {
-        // File-taking commands.
-        ("read" | "cat" | "rm" | "delete" | "verify" | "edit", 0) => ArgKind::File,
-        // `write <name> <body>`: only the name (arg 0) completes from
-        // batfs; the body is free-form text.
-        ("write", 0) => ArgKind::File,
-        // Cave-taking commands. cpol-add-sni takes (cave host port sni)
-        // — only the cave is enumerable.
-        ("cpol-show" | "cpol-clear" | "cpol-sync" | "cpol-rate-show"
-            | "cpol-rate-clear" | "cpol-daemon-show", 0) => ArgKind::Cave,
-        ("cpol-add" | "cpol-add-sni" | "cpol-check"
-            | "cpol-rate" | "cpol-byte-rate" | "cpol-flow-rate", 0) => ArgKind::Cave,
-        ("cave-syscall-deny" | "cave-syscall-allow"
-            | "cave-syscall-list" | "cave-syscall-clear", 0) => ArgKind::Cave,
-        ("batcave-fw-allow" | "batcave-fw-deny", 0) => ArgKind::Cave,
-        // Test-binary names.
-        ("run", 0) => ArgKind::Binary,
+// ── Subcommand keyword tables ────────────────────────────────────────
+//
+// One table per multi-arm command. These drive both the subcommand
+// completion at `arg_index == 0` and the dispatch into
+// `arg_kind_for` for the next argument (`arg_index >= 1`).
+
+/// `pkg <install|list|remove|stage>`
+const SUB_PKG: &[&str] = &["install", "list", "remove", "stage"];
+
+/// `comms <connect|send|identify|pin|my-id>`
+const SUB_COMMS: &[&str] = &["connect", "identify", "my-id", "pin", "send"];
+
+/// `mount-ns <ls|write|read|rm>` (cave-scoped BatFS view).
+const SUB_MOUNT_NS: &[&str] = &["ls", "read", "rm", "write"];
+
+/// `clip <set|yank-back|push|pull|clear|show>`
+const SUB_CLIP: &[&str] = &["clear", "pull", "push", "set", "show", "yank-back"];
+
+/// `audit` (only `all` is a literal — numeric N is free-form).
+const SUB_AUDIT: &[&str] = &["all"];
+
+/// `cookies <clear>` (bare `cookies` dumps the jar).
+const SUB_COOKIES: &[&str] = &["clear"];
+
+/// `kbd-trace <on|off>`
+const SUB_KBD_TRACE: &[&str] = &["off", "on"];
+
+/// `screen <scale>` — typical zoom levels for the FB dump.
+const SUB_SCREEN: &[&str] = &["1", "2", "4", "8", "16"];
+
+/// `tz <offset>` — common UTC offsets with sign.
+const SUB_TZ: &[&str] = &[
+    "-10", "-8", "-7", "-6", "-5", "-4", "-3",
+    "+0", "+1", "+2", "+3", "+4", "+5:30", "+8", "+9", "+10",
+];
+
+/// `hash <algo> <file>` — first arg is the algorithm.
+const SUB_HASH_ALGO: &[&str] = &[
+    "blake3", "sha256", "sha384", "sha3-256", "sha3-384", "sha3-512",
+];
+
+/// `batcave <enter|stop|...>` — keep alphabetised for easy diff.
+const SUB_BATCAVE: &[&str] = &[
+    "bb",       "busybox",       "create",        "destroy",
+    "display",  "docker-create", "docker-destroy", "docker-list",
+    "docker-ping", "docker-run", "enter",         "grant",
+    "gui",      "install",       "ipc",           "kits",
+    "list",     "mkdir",         "pipe",          "revoke",
+    "run",      "seal",          "stop",          "test",
+    "uname",
+];
+
+/// Look up the argument kind for the next token of `parts[0]`.
+/// `parts` is the line's tokens parsed left-to-right, where
+/// `parts[0]` is the command and `parts[1..arg_index]` are the
+/// already-typed prior arguments. `arg_index` is the index of the
+/// token currently being completed.
+///
+/// Returning `ArgKind::Literal(slice)` for a subcommand position
+/// gives `complete_argument` a static candidate list to filter.
+pub fn arg_kind_for_parts(parts: &[&str], arg_index: usize) -> ArgKind {
+    let cmd = parts.first().copied().unwrap_or("");
+    let sub = parts.get(1).copied().unwrap_or("");
+
+    // ── First-arg subcommand keyword tables ──
+    if arg_index == 0 {
+        match cmd {
+            "pkg"        => return ArgKind::Literal(SUB_PKG),
+            "comms"      => return ArgKind::Literal(SUB_COMMS),
+            "mount-ns"   => return ArgKind::Literal(SUB_MOUNT_NS),
+            "clip"       => return ArgKind::Literal(SUB_CLIP),
+            "audit"      => return ArgKind::Literal(SUB_AUDIT),
+            "cookies"    => return ArgKind::Literal(SUB_COOKIES),
+            "kbd-trace"  => return ArgKind::Literal(SUB_KBD_TRACE),
+            "screen"     => return ArgKind::Literal(SUB_SCREEN),
+            "tz"         => return ArgKind::Literal(SUB_TZ),
+            "hash"       => return ArgKind::Literal(SUB_HASH_ALGO),
+            "batcave"    => return ArgKind::Literal(SUB_BATCAVE),
+            _ => {}
+        }
+    }
+
+    match (cmd, sub, arg_index) {
+        // ── File-taking first arguments ──
+        ("read"|"cat"|"rm"|"delete"|"verify"|"edit"|"write", _, 0) => ArgKind::File,
+
+        // ── Cave-taking first arguments ──
+        ("cpol-show"|"cpol-clear"|"cpol-sync"|"cpol-rate-show"
+            |"cpol-rate-clear"|"cpol-daemon-show", _, 0) => ArgKind::Cave,
+        ("cpol-add"|"cpol-add-sni"|"cpol-check"
+            |"cpol-rate"|"cpol-byte-rate"|"cpol-flow-rate", _, 0) => ArgKind::Cave,
+        ("cave-syscall-deny"|"cave-syscall-allow"
+            |"cave-syscall-list"|"cave-syscall-clear", _, 0) => ArgKind::Cave,
+        ("batcave-fw-allow"|"batcave-fw-deny", _, 0) => ArgKind::Cave,
+
+        // ── Binary-taking first arguments ──
+        ("run", _, 0) => ArgKind::Binary,
+
+        // ── Multi-arg dispatch: (cmd, subcommand) -> next arg's kind ──
+        // `pkg install <bundle.bpkg>` and `pkg remove <bundle>` —
+        // both are BatFS files. `pkg stage <name> <ip:port>` is a
+        // fresh filename, no completion. `pkg list` takes nothing.
+        ("pkg", "install"|"remove", 1) => ArgKind::File,
+
+        // `mount-ns <read|rm|write> <file>` — all three target a
+        // file in the active cave's mount namespace.
+        ("mount-ns", "read"|"rm"|"write", 1) => ArgKind::File,
+
+        // `batcave <enter|stop|destroy|grant|revoke|seal|gui
+        // |display|uname|test|run|kits|install|pipe|ipc|bb
+        // |busybox|mkdir> <cave>` — second token is a cave name.
+        ("batcave",
+            "enter"|"stop"|"destroy"|"grant"|"revoke"|"seal"
+            |"gui"|"display"|"uname"|"test"|"run"|"kits"
+            |"install"|"pipe"|"ipc"|"bb"|"busybox"|"mkdir"
+            |"docker-destroy"|"docker-run"|"docker-ping", 1) => ArgKind::Cave,
+
+        // `hash <algo> <file>` — algo is arg 0 (Literal above);
+        // arg 1 is the file in BatFS.
+        ("hash", _, 1) => ArgKind::File,
+
         _ => ArgKind::None,
     }
+}
+
+/// Backward-compat alias for callers that only know the
+/// `(cmd, arg_index)` shape. Routes through `arg_kind_for_parts`
+/// with `parts = [cmd]`, so subcommand-aware dispatch only kicks in
+/// at `arg_index == 0`. New callers should pass the full parts
+/// slice via `arg_kind_for_parts`.
+pub fn arg_kind_for(cmd: &str, arg_index: usize) -> ArgKind {
+    arg_kind_for_parts(&[cmd], arg_index)
 }
 
 /// Argument completion result. Same shape as `Completion` but the
@@ -381,6 +547,14 @@ pub fn complete_argument(kind: ArgKind, current: &str) -> ArgCompletion {
                 consider(name);
             }
         }
+        ArgKind::Literal(words) => {
+            // Subcommand keywords / small enum literals / common-path
+            // suggestions. The candidate set is `'static` so we read
+            // straight from the slice without an extra enumerator.
+            for w in words.iter() {
+                consider(w.as_bytes());
+            }
+        }
     }
     out.match_count = count.min(255) as u8;
 
@@ -449,6 +623,74 @@ pub fn split_for_completion(line: &str) -> Option<(&str, usize, &str)> {
     }
     let current = &rest[last_token_start..];
     Some((cmd, idx, current))
+}
+
+/// Maximum prior-arg tokens we surface to the dispatcher. Larger
+/// grammars (`batcave docker-create <name> <image> <caps-csv>`) cap
+/// at this width; beyond it the new arg falls through to `None`.
+pub const MAX_PRIOR_PARTS: usize = 8;
+
+/// Result of `split_for_completion_parts`. Carries a small array of
+/// fully-typed tokens (parts[0] = command, parts[1..arg_index] =
+/// prior args), the current partial token at `parts[arg_index]`,
+/// and the count of populated slots.
+pub struct SplitParts<'a> {
+    pub parts: [&'a str; MAX_PRIOR_PARTS],
+    pub parts_len: usize,
+    pub arg_index: usize,
+    pub current: &'a str,
+}
+
+/// Extended companion to `split_for_completion` that also exposes
+/// the prior arguments. Required by `arg_kind_for_parts` to make
+/// subcommand-aware dispatch decisions (e.g. `pkg install <TAB>`
+/// has to know about `install` to pick `ArgKind::File`).
+///
+/// Returns `None` for "still inside the command word" — caller
+/// falls through to `complete_command()`.
+pub fn split_for_completion_parts(line: &str) -> Option<SplitParts> {
+    let first_space = line.bytes().position(|b| b == b' ')?;
+    let cmd = &line[..first_space];
+    let rest = &line[first_space + 1..];
+
+    let mut info = SplitParts {
+        parts: [""; MAX_PRIOR_PARTS],
+        parts_len: 1,
+        arg_index: 0,
+        current: "",
+    };
+    info.parts[0] = cmd;
+
+    // Walk `rest`, splitting on each space. `idx` counts spaces
+    // seen so the trailing token (parts[arg_index]) is the one
+    // the user is currently typing.
+    let mut tok_start = 0usize;
+    let mut idx = 0usize;
+    let rest_bytes = rest.as_bytes();
+    for i in 0..rest_bytes.len() {
+        if rest_bytes[i] == b' ' {
+            let tok = &rest[tok_start..i];
+            // Record into parts[1 + idx] if there's room.
+            if 1 + idx < MAX_PRIOR_PARTS {
+                info.parts[1 + idx] = tok;
+                info.parts_len = (1 + idx + 1).max(info.parts_len);
+            }
+            idx += 1;
+            tok_start = i + 1;
+        }
+    }
+    let current = &rest[tok_start..];
+    info.current = current;
+    info.arg_index = idx;
+    // The trailing-token slot (where the user is typing now) also
+    // belongs in parts so callers can include it in dispatch if
+    // they need to. arg_index is the index into parts AFTER
+    // accounting for the leading command at parts[0].
+    if 1 + idx < MAX_PRIOR_PARTS {
+        info.parts[1 + idx] = current;
+        info.parts_len = (1 + idx + 1).max(info.parts_len);
+    }
+    Some(info)
 }
 
 #[cfg(test)]
