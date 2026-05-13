@@ -63,6 +63,8 @@ pub const OP_WRAP:      u32 = 3;
 pub const OP_UNWRAP:    u32 = 4;
 pub const OP_START_HANDSHAKE:  u32 = 5; // initiator-side: build Init wire bytes
 pub const OP_FINISH_HANDSHAKE: u32 = 6; // initiator-side: consume Response -> install session
+pub const OP_SET_ENDPOINT:     u32 = 7; // configure peer's UDP endpoint
+pub const OP_GET_ENDPOINT:     u32 = 8; // read peer's UDP endpoint
 
 // ── Response status ─────────────────────────────────────────────
 pub const STATUS_PENDING: i32 =  0;
@@ -119,6 +121,8 @@ fn service_main() -> ! {
             OP_UNWRAP           => handle_unwrap(),
             OP_START_HANDSHAKE  => handle_start_handshake(),
             OP_FINISH_HANDSHAKE => handle_finish_handshake(),
+            OP_SET_ENDPOINT     => handle_set_endpoint(),
+            OP_GET_ENDPOINT     => handle_get_endpoint(),
             _ => RSP_STATUS.store(STATUS_ERR_OP, Ordering::Release),
         }
         // Mark the request consumed before releasing IPC_BUSY,
@@ -318,6 +322,79 @@ fn handle_finish_handshake() {
     }
 }
 
+/// OP_SET_ENDPOINT request layout in `REQ_DATA` (10 bytes):
+///   byte  0    : peer_id (u8)
+///   bytes 1..4 : reserved (zero)
+///   bytes 4..8 : ip (u32 LE, host byte order)
+///   bytes 8..10: port (u16 LE, host byte order)
+///
+/// Response: empty body (STATUS_OK or STATUS_ERR_SVC).
+const SE_REQ_LEN: usize = 10;
+
+fn handle_set_endpoint() {
+    let req_len = REQ_LEN.load(Ordering::Acquire) as usize;
+    if req_len != SE_REQ_LEN {
+        RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
+        return;
+    }
+    let (peer_id_raw, ip, port) = unsafe {
+        let src = core::ptr::addr_of!(REQ_DATA) as *const u8;
+        let peer_id_raw = core::ptr::read_volatile(src);
+        let mut ip_bytes = [0u8; 4];
+        for i in 0..4 { ip_bytes[i] = core::ptr::read_volatile(src.add(4 + i)); }
+        let mut port_bytes = [0u8; 2];
+        for i in 0..2 { port_bytes[i] = core::ptr::read_volatile(src.add(8 + i)); }
+        (peer_id_raw,
+         u32::from_le_bytes(ip_bytes),
+         u16::from_le_bytes(port_bytes))
+    };
+    let peer_id = sys_wg_service::PeerId::from(peer_id_raw);
+    match sys_wg_service::set_peer_endpoint(peer_id, ip, port) {
+        Ok(()) => {
+            RSP_LEN.store(0, Ordering::Release);
+            RSP_STATUS.store(STATUS_OK, Ordering::Release);
+        }
+        Err(_) => RSP_STATUS.store(STATUS_ERR_SVC, Ordering::Release),
+    }
+}
+
+/// OP_GET_ENDPOINT request layout in `REQ_DATA` (4 bytes):
+///   byte  0    : peer_id (u8)
+///   bytes 1..4 : reserved
+///
+/// Response layout in `RSP_DATA` (6 bytes):
+///   bytes 0..4 : ip (u32 LE)
+///   bytes 4..6 : port (u16 LE)
+///
+/// STATUS_ERR_SVC if no endpoint is configured for that peer.
+const GE_REQ_LEN: usize = 4;
+const GE_RSP_LEN: usize = 6;
+
+fn handle_get_endpoint() {
+    let req_len = REQ_LEN.load(Ordering::Acquire) as usize;
+    if req_len != GE_REQ_LEN {
+        RSP_STATUS.store(STATUS_ERR_LEN, Ordering::Release);
+        return;
+    }
+    let peer_id_raw = unsafe {
+        let src = core::ptr::addr_of!(REQ_DATA) as *const u8;
+        core::ptr::read_volatile(src)
+    };
+    let peer_id = sys_wg_service::PeerId::from(peer_id_raw);
+    match sys_wg_service::get_peer_endpoint(peer_id) {
+        Some((ip, port)) => unsafe {
+            let dst = core::ptr::addr_of_mut!(RSP_DATA) as *mut u8;
+            let ipb = ip.to_le_bytes();
+            for i in 0..4 { core::ptr::write_volatile(dst.add(i), ipb[i]); }
+            let pb = port.to_le_bytes();
+            for i in 0..2 { core::ptr::write_volatile(dst.add(4 + i), pb[i]); }
+            RSP_LEN.store(GE_RSP_LEN as u32, Ordering::Release);
+            RSP_STATUS.store(STATUS_OK, Ordering::Release);
+        },
+        None => RSP_STATUS.store(STATUS_ERR_SVC, Ordering::Release),
+    }
+}
+
 /// OP_WRAP request layout in `REQ_DATA`:
 ///   byte  0    : peer_id (u8)
 ///   bytes 1..4 : reserved (zero)
@@ -487,6 +564,29 @@ pub fn request_pubkey() -> Option<[u8; wireguard::KEY_LEN]> {
     let mut out = [0u8; wireguard::KEY_LEN];
     out.copy_from_slice(&bytes[..wireguard::KEY_LEN]);
     Some(out)
+}
+
+/// IPC client for OP_SET_ENDPOINT.
+pub fn request_set_endpoint(peer_id: u8, ip: u32, port: u16) -> Option<()> {
+    let mut req = [0u8; SE_REQ_LEN];
+    req[0] = peer_id;
+    req[4..8].copy_from_slice(&ip.to_le_bytes());
+    req[8..10].copy_from_slice(&port.to_le_bytes());
+    let _ = dispatch_one_shot(OP_SET_ENDPOINT, &req)?;
+    Some(())
+}
+
+/// IPC client for OP_GET_ENDPOINT.
+pub fn request_get_endpoint(peer_id: u8) -> Option<(u32, u16)> {
+    let mut req = [0u8; GE_REQ_LEN];
+    req[0] = peer_id;
+    let bytes = dispatch_one_shot(OP_GET_ENDPOINT, &req)?;
+    if bytes.len() != GE_RSP_LEN { return None; }
+    let mut ipb = [0u8; 4];
+    ipb.copy_from_slice(&bytes[..4]);
+    let mut pb = [0u8; 2];
+    pb.copy_from_slice(&bytes[4..6]);
+    Some((u32::from_le_bytes(ipb), u16::from_le_bytes(pb)))
 }
 
 /// IPC client for OP_START_HANDSHAKE. sys-wg generates an

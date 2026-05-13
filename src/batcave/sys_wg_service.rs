@@ -91,6 +91,14 @@ struct PrivateState {
     /// expect back. Also used as a "session id" the wg_dispatch
     /// session table keys on.
     peer_init_our_sender_index: [u32; MAX_PEERS],
+    /// Per-peer UDP endpoint (the IPv4 address + port the peer's
+    /// WG socket listens on). 0/0 means "not set" — outbound
+    /// connect-out is refused. Stored in cave-private so a
+    /// compromised non-sys-wg caller can't learn or rewrite the
+    /// endpoint without going through the IPC mailbox.
+    peer_endpoint_ip:   [u32; MAX_PEERS],
+    peer_endpoint_port: [u16; MAX_PEERS],
+    _peer_endpoint_pad: [u16; MAX_PEERS],  // 16-byte align next field
     /// Per-peer initiator state, mirroring `wireguard::InitiatorState`
     /// but split into the byte-arrays that are #[repr(C)]-friendly.
     /// `eph_sk_seed` is the X25519 ephemeral private-key seed; we
@@ -350,6 +358,8 @@ pub fn register_peer(peer_static_pk: [u8; wireguard::KEY_LEN])
                 s.peer_init_eph_pk[i] = [0u8; 32];
                 s.peer_init_c[i] = [0u8; 32];
                 s.peer_init_h[i] = [0u8; 32];
+                s.peer_endpoint_ip[i] = 0;
+                s.peer_endpoint_port[i] = 0;
                 // Wipe any stale key bytes from a previous occupant.
                 s.peer_send_key[i] = [0u8; 32];
                 s.peer_recv_key[i] = [0u8; 32];
@@ -383,7 +393,44 @@ pub fn close_peer(peer_id: PeerId) -> Result<(), SysWgError> {
         s.peer_init_eph_pk[i] = [0u8; 32];
         s.peer_init_c[i] = [0u8; 32];
         s.peer_init_h[i] = [0u8; 32];
+        s.peer_endpoint_ip[i] = 0;
+        s.peer_endpoint_port[i] = 0;
         Ok(())
+    })
+}
+
+/// Set the UDP endpoint (`ip:port`) for a registered peer. Used
+/// before `start_handshake_as_initiator` so the eventual
+/// outbound transmission knows where to go. Both arguments are
+/// in host byte order; `udp::send` handles the to_be wire
+/// conversion. Pass `(0, 0)` to clear.
+pub fn set_peer_endpoint(peer_id: PeerId, ip: u32, port: u16) -> Result<(), SysWgError> {
+    let sys_wg_id = sys_caves::sys_wg_id().ok_or(SysWgError::UnknownPeer)? as u16;
+    cave::with_cave_active(sys_wg_id, || -> Result<(), SysWgError> {
+        let s = unsafe { state_mut().ok_or(SysWgError::UnknownPeer)? };
+        let i = peer_id.0 as usize;
+        if i >= MAX_PEERS || s.peer_in_use[i] == 0 {
+            return Err(SysWgError::UnknownPeer);
+        }
+        s.peer_endpoint_ip[i] = ip;
+        s.peer_endpoint_port[i] = port;
+        Ok(())
+    })
+}
+
+/// Read the UDP endpoint for a registered peer. Returns
+/// `Some((ip, port))` if set, `None` if the peer is unknown or
+/// no endpoint has been configured.
+pub fn get_peer_endpoint(peer_id: PeerId) -> Option<(u32, u16)> {
+    let sys_wg_id = sys_caves::sys_wg_id()? as u16;
+    cave::with_cave_active(sys_wg_id, || unsafe {
+        let s = state_ref()?;
+        let i = peer_id.0 as usize;
+        if i >= MAX_PEERS || s.peer_in_use[i] == 0 { return None; }
+        let ip = s.peer_endpoint_ip[i];
+        let port = s.peer_endpoint_port[i];
+        if ip == 0 && port == 0 { return None; }
+        Some((ip, port))
     })
 }
 
