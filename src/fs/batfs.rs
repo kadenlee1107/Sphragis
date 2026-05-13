@@ -527,6 +527,91 @@ fn obj_type_for_full_name(full_name: &str) -> Option<u8> {
     None
 }
 
+/// Trusted-subject declassification (gov-grade §3.23 MLS
+/// downgrade path). Re-stamps a file with new sens + integ
+/// labels AND re-runs AEAD encryption so the new labels are
+/// AAD-bound. Use only from privileged code that's already
+/// passed a TPI quorum check — the kernel doesn't enforce that
+/// here, the shell command wrapper does.
+///
+/// Returns Ok with the new (sens, integ) bytes on success.
+pub fn declassify(name: &str, new_sens: u8, new_integ: u8) -> Result<(u8, u8), &'static str> {
+    let mut full = [0u8; MAX_FILENAME];
+    let full_name = ns_compose(name, &mut full)?;
+    // Decrypt under current labels, re-encrypt under new ones.
+    // Doing this in two passes via `read` + `delete` + `create`
+    // would lose the AEAD-bound metadata; instead poke the
+    // FileEntry directly and recompute the tag.
+    let mut buf = [0u8; MAX_FILE_SIZE];
+    let plain_len = {
+        let mut found = None;
+        unsafe {
+            for i in 0..MAX_FILES {
+                if FILES[i].state == FileState::Active && FILES[i].name_str() == full_name {
+                    found = Some(i);
+                    break;
+                }
+            }
+        }
+        let slot = match found {
+            Some(s) => s,
+            None => return Err("declassify: file not found"),
+        };
+        // Decrypt with current labels into local buffer.
+        let entry = unsafe { &FILES[slot] };
+        let src = entry.data_addr as *const u8;
+        unsafe { core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), entry.size); }
+        let file_key = derive_file_key(full_name);
+        let cipher = ChaCha20Poly1305::new(&file_key.into());
+        let mut tag_bytes = [0u8; 16];
+        tag_bytes.copy_from_slice(&entry.hash[..16]);
+        let tag: &chacha20poly1305::Tag = (&tag_bytes).into();
+        let mut aad_old = [0u8; MAX_FILENAME + 2];
+        aad_old[..full_name.len()].copy_from_slice(full_name.as_bytes());
+        aad_old[full_name.len()]     = entry.sensitivity;
+        aad_old[full_name.len() + 1] = entry.integrity;
+        cipher.decrypt_in_place_detached(
+            (&entry.nonce).into(),
+            &aad_old[..full_name.len() + 2],
+            &mut buf[..entry.size],
+            tag,
+        ).map_err(|_| "declassify: current AEAD verify failed")?;
+        let plain_len = entry.size;
+
+        // Re-encrypt with new labels under a fresh nonce.
+        let new_nonce_full = next_nonce();
+        let mut new_nonce = [0u8; 12];
+        new_nonce.copy_from_slice(&new_nonce_full[..12]);
+        let mut aad_new = [0u8; MAX_FILENAME + 2];
+        aad_new[..full_name.len()].copy_from_slice(full_name.as_bytes());
+        aad_new[full_name.len()]     = new_sens;
+        aad_new[full_name.len() + 1] = new_integ;
+        let new_tag = cipher.encrypt_in_place_detached(
+            (&new_nonce).into(),
+            &aad_new[..full_name.len() + 2],
+            &mut buf[..plain_len],
+        ).map_err(|_| "declassify: re-encrypt failed")?;
+
+        // Commit: write ciphertext back to its frame, update
+        // metadata fields.
+        unsafe {
+            let dst = entry.data_addr as *mut u8;
+            core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, plain_len);
+            let e = &mut FILES[slot];
+            e.nonce = new_nonce;
+            let mut hash = [0u8; 32];
+            hash[..16].copy_from_slice(&new_tag);
+            e.hash = hash;
+            e.sensitivity = new_sens;
+            e.integrity   = new_integ;
+        }
+        plain_len
+    };
+    rebuild_merkle();
+    let _ = plain_len; // silence unused-binding warning in release builds
+    Ok((new_sens, new_integ))
+}
+
 /// Retag a file's SELinux-style object type. Doesn't re-encrypt
 /// (type isn't bound into the AEAD's AAD today — only sens +
 /// integ are). Returns `false` if no matching active file exists.

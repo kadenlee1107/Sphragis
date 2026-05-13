@@ -85,6 +85,19 @@ pub unsafe fn append_chain(slot: usize, entry: &Entry, head: usize) {
     unsafe { CHAIN[slot] = h; }
 }
 
+/// Zero the chain table. Called from `audit::wipe_ring` so the
+/// chain doesn't carry hashes pointing at the (now-zeroed)
+/// entries. SAFETY: same single-writer assumption as the rest
+/// of the chain module; never call from a concurrent record path.
+pub fn reset_for_test() {
+    unsafe {
+        let ptr = core::ptr::addr_of_mut!(CHAIN);
+        for i in 0..RING_CAP {
+            (*ptr)[i] = [0u8; 32];
+        }
+    }
+}
+
 /// Return the current chain head — the hash of the most recently
 /// recorded entry. Operators should seal this externally on a
 /// regular cadence (every N entries, every M seconds, etc.) so

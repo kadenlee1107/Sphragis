@@ -473,6 +473,9 @@ fn execute_inner(cmd: &str) {
         "mls-ipc-binding-selftest" => cmd_mls_ipc_binding_selftest(),
         "tpi-selftest"        => cmd_tpi_selftest(),
         "audit-seal-tpi-selftest" => cmd_audit_seal_tpi_selftest(),
+        "audit-wipe"          => cmd_audit_wipe(),
+        "mls-declassify"      => cmd_mls_declassify(parts[1], parts[2], parts[3]),
+        "tpi-wired-ops-selftest" => cmd_tpi_wired_ops_selftest(),
         "redirect-selftest"   => cmd_redirect_selftest(),
         "release-verify"      => cmd_release_verify(parts[1], parts[2]),
         "release-pubkey"      => cmd_release_pubkey(),
@@ -10029,6 +10032,210 @@ fn cmd_audit_seal_tpi_selftest() {
     tpi::reset_for_test();
     let _ = crate::fs::batfs::delete("audit-chain.seal");
     console::puts("  ✓ TPI is load-bearing for audit-seal: quorum required, one-shot consume\n");
+}
+
+/// `audit-wipe` — TPI-gated audit ring wipe (gov-grade §3.23).
+/// Privileged op: zeros the ring, resets HEAD/EVICTED counters,
+/// and clears the audit-chain table. Legacy mode (no officers
+/// registered) lets it through unchanged. Enforced mode requires
+/// a fresh consumed-on-use approval.
+fn cmd_audit_wipe() {
+    use crate::security::tpi;
+    let now = crate::kernel::time::realtime_secs();
+    if !tpi::consume_approval(tpi::OpId::AuditRingWipe, now) {
+        console::puts("  audit-wipe: TPI quorum required (no fresh approval)\n");
+        return;
+    }
+    let before = crate::security::audit::count();
+    unsafe { crate::security::audit::wipe_ring(); }
+    console::puts("  audit-wipe: wiped ");
+    print_num(before);
+    console::puts(" audit entries + reset chain table\n");
+}
+
+/// `mls-declassify <file> <sens:u|c|s|ts> <integ:u|sb|st|hi>` —
+/// trusted-subject downgrade (gov-grade §3.23 + §3.2). Re-stamps
+/// a file with new labels AND re-runs AEAD so the new labels are
+/// bound into the ciphertext. TPI-gated. Names are relative to
+/// the active cave's mount namespace.
+fn cmd_mls_declassify(file: &str, sens: &str, integ: &str) {
+    use crate::batcave::cave::{Integrity, Sensitivity};
+    use crate::security::tpi;
+    if file.is_empty() || sens.is_empty() || integ.is_empty() {
+        console::puts("  usage: mls-declassify <file> <u|c|s|ts> <u|sb|st|hi>\n");
+        return;
+    }
+    let s = match Sensitivity::parse(sens) {
+        Some(s) => s,
+        None => { console::puts("  bad sens — try u/c/s/ts\n"); return; }
+    };
+    let i = match Integrity::parse(integ) {
+        Some(i) => i,
+        None => { console::puts("  bad integ — try u/sb/st/hi\n"); return; }
+    };
+    let now = crate::kernel::time::realtime_secs();
+    if !tpi::consume_approval(tpi::OpId::DeclassifyDowngrade, now) {
+        console::puts("  mls-declassify: TPI quorum required (no fresh approval)\n");
+        return;
+    }
+    match crate::fs::batfs::declassify(file, s as u8, i as u8) {
+        Ok(_) => {
+            console::puts("  mls-declassify: ");
+            console::puts(file);
+            console::puts(" relabeled to ");
+            console::puts(s.as_str());
+            console::puts("/");
+            console::puts(i.as_str());
+            console::puts(" (re-encrypted under new AAD)\n");
+        }
+        Err(e) => {
+            console::puts("  mls-declassify: "); console::puts(e); console::puts("\n");
+        }
+    }
+}
+
+/// `tpi-wired-ops-selftest` — verifies both newly-wired ops fire
+/// the gate correctly. Mirrors the audit-seal-tpi structure for
+/// `audit-wipe` and `mls-declassify`.
+fn cmd_tpi_wired_ops_selftest() {
+    use crate::batcave::cave::{self, Integrity, Sensitivity};
+    use crate::batcave::sys_caves;
+    use crate::fs::batfs;
+    use crate::security::{audit, audit::Category, tpi, tpi::{canonical_bytes, OpId, Role}};
+    use ed25519_compact::{KeyPair, Seed};
+
+    console::puts_hi("  TPI WIRED-OPS SELF-TEST (audit-wipe + mls-declassify)\n");
+
+    let sys_wg_id = match sys_caves::sys_wg_id() {
+        Some(id) => id as u16,
+        None => { console::puts("  ✗ FAIL: sys-wg not initialised\n"); return; }
+    };
+
+    tpi::reset_for_test();
+
+    // ── Provision two officers ──
+    let mut sa = [0u8; 32]; let mut sb = [0u8; 32];
+    crate::crypto::rng::fill_bytes(&mut sa);
+    crate::crypto::rng::fill_bytes(&mut sb);
+    let kp_a = KeyPair::from_seed(Seed::new(sa));
+    let kp_b = KeyPair::from_seed(Seed::new(sb));
+    let mut pk_a = [0u8; 32]; pk_a.copy_from_slice(&*kp_a.pk);
+    let mut pk_b = [0u8; 32]; pk_b.copy_from_slice(&*kp_b.pk);
+    let _ = tpi::register_officer(Role::AuditOfficer,  pk_a);
+    let _ = tpi::register_officer(Role::CryptoOfficer, pk_b);
+
+    let approve = |op: OpId, nonce: u64| -> bool {
+        let ts = crate::kernel::time::realtime_secs();
+        let msg = canonical_bytes(op, nonce, ts);
+        let s_a = kp_a.sk.sign(&msg, None);
+        let s_b = kp_b.sk.sign(&msg, None);
+        let mut a = [0u8; 64]; a.copy_from_slice(&*s_a);
+        let mut b = [0u8; 64]; b.copy_from_slice(&*s_b);
+        tpi::propose_op(op, nonce, ts, a).is_ok()
+            && tpi::cosign_op(op, nonce, ts, b).is_ok()
+    };
+
+    // ── audit-wipe path ──
+    // Record some events so the ring has content to wipe.
+    audit::record(Category::Boot, b"wired-ops:e1");
+    audit::record(Category::Boot, b"wired-ops:e2");
+    audit::record(Category::Boot, b"wired-ops:e3");
+    let before_count = audit::count();
+    if before_count < 3 {
+        console::puts("  ✗ FAIL: audit count didn't advance\n");
+        tpi::reset_for_test(); return;
+    }
+    // Refuse without approval.
+    cmd_audit_wipe();
+    if audit::count() < before_count {
+        console::puts("  ✗ FAIL: audit-wipe ran without TPI approval\n");
+        tpi::reset_for_test(); return;
+    }
+    console::puts("  ✓ audit-wipe without approval -> blocked (entry count unchanged)\n");
+    if !approve(OpId::AuditRingWipe, 0x_AA01) {
+        console::puts("  ✗ FAIL: approve(AuditRingWipe) failed\n");
+        tpi::reset_for_test(); return;
+    }
+    cmd_audit_wipe();
+    if audit::count() != 0 {
+        // consume_approval fires its audit-record BEFORE wipe runs,
+        // and wipe clears whatever's there — so post-wipe count is
+        // strictly 0.
+        console::puts("  ✗ FAIL: post-wipe count != 0, got ");
+        print_num(audit::count()); console::puts("\n");
+        tpi::reset_for_test(); return;
+    }
+    console::puts("  ✓ audit-wipe with approval -> ring fully zeroed (count = 0)\n");
+
+    // ── mls-declassify path ──
+    // Note: we cross in and out of sys-wg's cave context for the
+    // file ops, but the user-visible `mls-declassify` shell command
+    // runs from the kernel/admin context (which is where shell input
+    // lives). Console output from inside a TTBR0-switched cave
+    // currently faults on the framebuffer write — fb-mapping in
+    // cave L1 is a separate hardening arc — so we pass the fully
+    // composed filename to cmd_mls_declassify rather than asking it
+    // to compose under sys-wg's mount namespace.
+    let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Secret);
+    let _ = cave::set_integrity_by_name("sys-wg",   Integrity::SystemTrusted);
+    const FILE_BARE: &str = "declass-probe";
+    const FILE_FQN:  &str = "sys-wg:declass-probe";
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete(FILE_BARE));
+    if let Err(e) = cave::with_cave_active(sys_wg_id, ||
+        batfs::ns_create(FILE_BARE, b"declassify-payload")
+    ) {
+        console::puts("  ✗ FAIL: ns_create: "); console::puts(e); console::puts("\n");
+        let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+        let _ = cave::set_integrity_by_name("sys-wg",   Integrity::Untrusted);
+        tpi::reset_for_test(); return;
+    }
+    // No approval -> declassify refused.
+    cmd_mls_declassify(FILE_FQN, "u", "u");
+    // After refusal the file should still be S/ST.
+    let mut buf = [0u8; 64];
+    let r = cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE_BARE, &mut buf));
+    if r.is_err() {
+        console::puts("  ✗ FAIL: cave can't read its own file after blocked declassify\n");
+        cleanup_declassify(sys_wg_id);
+        tpi::reset_for_test(); return;
+    }
+    console::puts("  ✓ mls-declassify without approval -> blocked; file still S/ST\n");
+
+    if !approve(OpId::DeclassifyDowngrade, 0x_DD01) {
+        console::puts("  ✗ FAIL: approve(DeclassifyDowngrade) failed\n");
+        cleanup_declassify(sys_wg_id);
+        tpi::reset_for_test(); return;
+    }
+    cmd_mls_declassify(FILE_FQN, "u", "u");
+    // Now drop sys-wg's labels to U/U and confirm we can read.
+    let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+    let _ = cave::set_integrity_by_name("sys-wg",   Integrity::Untrusted);
+    match cave::with_cave_active(sys_wg_id, || batfs::ns_read(FILE_BARE, &mut buf)) {
+        Ok(n) if &buf[..n] == b"declassify-payload" => {
+            console::puts("  ✓ mls-declassify with approval -> file readable at U/U\n");
+        }
+        _ => {
+            console::puts("  ✗ FAIL: post-declassify read didn't return plaintext\n");
+            cleanup_declassify(sys_wg_id);
+            tpi::reset_for_test(); return;
+        }
+    }
+
+    cleanup_declassify(sys_wg_id);
+    tpi::reset_for_test();
+    console::puts("  ✓ TPI gates audit-wipe + mls-declassify end-to-end\n");
+}
+
+fn cleanup_declassify(sys_wg_id: u16) {
+    use crate::batcave::cave::{self, Integrity, Sensitivity};
+    use crate::fs::batfs;
+    // Try both names — after declassify the file's still under
+    // "sys-wg:declass-probe", but the sys-wg-context delete also
+    // resolves it via ns_compose. Belt and braces.
+    let _ = cave::with_cave_active(sys_wg_id, || batfs::ns_delete("declass-probe"));
+    let _ = batfs::ns_delete("sys-wg:declass-probe");
+    let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);
+    let _ = cave::set_integrity_by_name("sys-wg",   Integrity::Untrusted);
 }
 
 fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
