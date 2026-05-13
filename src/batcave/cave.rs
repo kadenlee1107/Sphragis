@@ -135,6 +135,125 @@ pub struct BatCave {
     /// `net::tcp::send_data*` and `recv_data*`.
     pub net_tx_bytes: core::sync::atomic::AtomicU64,
     pub net_rx_bytes: core::sync::atomic::AtomicU64,
+    /// MLS sensitivity label (gov-grade §3.2). Bell-LaPadula
+    /// lattice: 0 = Unclassified, 1 = Confidential, 2 = Secret,
+    /// 3 = TopSecret. A cave at level L_s can read objects at
+    /// level L_o only when L_s >= L_o (no read-up), and can
+    /// write objects at level L_o only when L_s <= L_o (no
+    /// write-down). Default at create() is `Unclassified` (0);
+    /// admins raise the label via `cave::set_sensitivity`.
+    pub sensitivity: u8,
+}
+
+/// MLS sensitivity label. Bell-LaPadula lattice: 0 = Unclassified,
+/// 1 = Confidential, 2 = Secret, 3 = TopSecret. Ordering matters
+/// — higher numeric value == more restrictive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum Sensitivity {
+    Unclassified = 0,
+    Confidential = 1,
+    Secret       = 2,
+    TopSecret    = 3,
+}
+
+impl Sensitivity {
+    /// Parse from operator-supplied label text. Accepts both the
+    /// short codes (`u`, `c`, `s`, `ts`) and the long form
+    /// (`unclassified`, etc.). Case-insensitive.
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut buf = [0u8; 16];
+        let n = s.len().min(buf.len());
+        for i in 0..n { buf[i] = s.as_bytes()[i].to_ascii_lowercase(); }
+        let lower = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
+        match lower {
+            "u" | "unclassified" => Some(Sensitivity::Unclassified),
+            "c" | "confidential" => Some(Sensitivity::Confidential),
+            "s" | "secret"       => Some(Sensitivity::Secret),
+            "ts" | "topsecret" | "top-secret" => Some(Sensitivity::TopSecret),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Sensitivity::Unclassified => "U",
+            Sensitivity::Confidential => "C",
+            Sensitivity::Secret       => "S",
+            Sensitivity::TopSecret    => "TS",
+        }
+    }
+    pub fn from_u8(b: u8) -> Sensitivity {
+        match b {
+            1 => Sensitivity::Confidential,
+            2 => Sensitivity::Secret,
+            3 => Sensitivity::TopSecret,
+            _ => Sensitivity::Unclassified,
+        }
+    }
+}
+
+/// MLS operation classes. Bell-LaPadula has two reference rules:
+///   * Simple security property (no read-up): subject at L_s can
+///     Read object at L_o only if L_s >= L_o.
+///   * *-property (no write-down): subject at L_s can Write object
+///     at L_o only if L_s <= L_o.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MlsOp {
+    Read,
+    Write,
+}
+
+/// Decide whether a flow at level `subject_level` may operate on
+/// an object at level `object_level` under Bell-LaPadula.
+///
+/// `Read` requires `subject_level >= object_level` (the subject is
+/// cleared at least as high as the object — no read-up).
+/// `Write` requires `subject_level <= object_level` (the subject
+/// is at most as classified as the destination — no write-down).
+pub fn can_flow(subject_level: Sensitivity, object_level: Sensitivity, op: MlsOp) -> bool {
+    match op {
+        MlsOp::Read  => subject_level >= object_level,
+        MlsOp::Write => subject_level <= object_level,
+    }
+}
+
+/// The active cave's MLS label. Returns `Unclassified` when no cave
+/// is active — kernel/admin context defaults to the bottom of the
+/// lattice, so `can_flow` permits the admin to write anywhere
+/// (admins NEED write-up; that's how they file initial data).
+/// Admins SHOULD be read-restricted from classified material under
+/// strict BLP, but in our shell-admin model we let the operator
+/// see everything (otherwise the system is untestable).
+pub fn active_sensitivity() -> Sensitivity {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return Sensitivity::Unclassified; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    Sensitivity::from_u8(cave.sensitivity)
+}
+
+/// Look up the sensitivity of a specific cave by id.
+pub fn sensitivity_of(cave_id: u16) -> Sensitivity {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return Sensitivity::Unclassified; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[idx] };
+    Sensitivity::from_u8(cave.sensitivity)
+}
+
+/// Set a cave's MLS label by name. Idempotent. Returns
+/// `Err("no such cave")` if no cave matches.
+pub fn set_sensitivity_by_name(name: &str, level: Sensitivity) -> Result<(), &'static str> {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            if (*core::ptr::addr_of!(CAVES))[i].state != CaveState::Free
+                && (*core::ptr::addr_of!(CAVES))[i].name_str() == name
+            {
+                let cave = &mut (*core::ptr::addr_of_mut!(CAVES))[i];
+                cave.sensitivity = level as u8;
+                return Ok(());
+            }
+        }
+    }
+    Err("no such cave")
 }
 
 impl BatCave {
@@ -163,6 +282,7 @@ impl BatCave {
             cpu_ticks: core::sync::atomic::AtomicU64::new(0),
             net_tx_bytes: core::sync::atomic::AtomicU64::new(0),
             net_rx_bytes: core::sync::atomic::AtomicU64::new(0),
+            sensitivity: Sensitivity::Unclassified as u8,
         }
     }
 
