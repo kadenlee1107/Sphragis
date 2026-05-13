@@ -18,6 +18,10 @@
 
 # Compressed logs from past sessions (regenerable).
 *.log
+# Supply-chain transparency log is the EXCEPTION — it's the
+# committed audit trail of every signed release (§3.11). Not
+# regenerable, must be in source control.
+!transparency.log
 
 # Per-session QEMU smoke output, screenshots, capture noise.
 # Everything under logs/ is regenerable by running the smoke scripts.
