@@ -102,8 +102,64 @@ def run() -> int:
         c.expect(rb"foobar", timeout=10)
         c.expect(rb"barbaz", timeout=10)
         print("[argcomplete-smoke]   PASS empty: 'read ' + Tab listed all files")
+        c.send(b"\x03")
+        c.expect(rb"bat_os > ", timeout=10)
 
-        print("[argcomplete-smoke] PASS — argument completion works for files")
+        # Test 4: subcommand completion — `pkg <Tab>` lists the four
+        # pkg subcommands (`install / list / remove / stage`).
+        c.send(b"pkg ")
+        time.sleep(0.2)
+        c.send(b"\t")
+        c.expect(rb"install", timeout=10)
+        c.expect(rb"stage", timeout=10)
+        print("[argcomplete-smoke]   PASS subcmd: 'pkg ' + Tab listed pkg subcommands")
+        c.send(b"\x03")
+        c.expect(rb"bat_os > ", timeout=10)
+
+        # Test 5: unique-prefix subcommand — `pkg in<Tab>` extends to
+        # `pkg install`.
+        c.send(b"pkg in")
+        time.sleep(0.2)
+        c.send(b"\t")
+        c.expect(rb"pkg install", timeout=10)
+        print("[argcomplete-smoke]   PASS subcmd-unique: 'pkg in' + Tab -> 'pkg install'")
+        c.send(b"\x03")
+        c.expect(rb"bat_os > ", timeout=10)
+
+        # Test 6: subcommand-aware arg — `pkg install fo<Tab>` should
+        # complete from BatFS files (the (cmd, subcommand) lookup
+        # picks ArgKind::File at arg_index=1).
+        c.send(b"pkg install fo")
+        time.sleep(0.2)
+        c.send(b"\t")
+        c.expect(rb"foobar", timeout=10)
+        c.expect(rb"foozap", timeout=10)
+        print("[argcomplete-smoke]   PASS subcmd-arg: 'pkg install fo' + Tab listed batfs files")
+        c.send(b"\x03")
+        c.expect(rb"bat_os > ", timeout=10)
+
+        # Test 7: common-path enum — `tz <Tab>` lists the curated
+        # offset suggestions (+8, -5, etc.).
+        c.send(b"tz ")
+        time.sleep(0.2)
+        c.send(b"\t")
+        c.expect(rb"-5", timeout=10)
+        c.expect(rb"\+8", timeout=10)
+        print("[argcomplete-smoke]   PASS common-path: 'tz ' + Tab listed offset suggestions")
+        c.send(b"\x03")
+        c.expect(rb"bat_os > ", timeout=10)
+
+        # Test 8: kbd-trace on/off — `kbd-trace o<Tab>` is ambiguous
+        # between `on` and `off`. The candidate list comes back in
+        # alphabetical order so we expect `off` first, then `on`.
+        c.send(b"kbd-trace o")
+        time.sleep(0.2)
+        c.send(b"\t")
+        c.expect(rb"off", timeout=10)
+        c.expect(rb"on", timeout=10)
+        print("[argcomplete-smoke]   PASS common-path: 'kbd-trace o' + Tab listed off/on")
+
+        print("[argcomplete-smoke] PASS — argument + subcommand + common-path completion verified")
         print(f"[argcomplete-smoke] log: {LOG}")
         return 0
     except pexpect.TIMEOUT:

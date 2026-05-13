@@ -1087,10 +1087,13 @@ pub fn serial_shell() -> ! {
                 let line = unsafe {
                     core::str::from_utf8_unchecked(&buf[..len])
                 };
-                if let Some((cmd, arg_index, current)) =
-                    ui::shell_completion::split_for_completion(line)
+                if let Some(info) =
+                    ui::shell_completion::split_for_completion_parts(line)
                 {
-                    let kind = ui::shell_completion::arg_kind_for(cmd, arg_index);
+                    let kind = ui::shell_completion::arg_kind_for_parts(
+                        &info.parts[..info.parts_len], info.arg_index,
+                    );
+                    let current = info.current;
                     if kind != ui::shell_completion::ArgKind::None {
                         let r = ui::shell_completion::complete_argument(kind, current);
                         let ext = r.extension_bytes();
