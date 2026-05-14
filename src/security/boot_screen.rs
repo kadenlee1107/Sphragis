@@ -61,7 +61,7 @@ const BG:       u32 = 0xFF0D0D10; // background
 const PANEL:    u32 = 0xFF18181C; // field panel
 const HAIRLINE: u32 = 0xFF2A2A30; // field border
 const INK:      u32 = 0xFFE5E7EB; // primary text + glyph
-const MID:      u32 = 0xFF6B7280; // reserved (unused in v1; see spec)
+const MID:      u32 = 0xFF6B7280; // reserved (unused in paint_lock_screen; see spec)
 
 // ─── Layout constants (1280x800 native; scales with the FB size) ──────
 
@@ -171,12 +171,17 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, _attempts: 
         _ => 0,
     };
     if dots > 0 {
-        // Center the dot strip horizontally inside the field.
-        let strip_w = (dots as u32) * DOT_PX + (dots.saturating_sub(1) as u32) * DOT_GAP;
+        // Cap dots to what fits inside FIELD_W (each dot occupies DOT_PX + DOT_GAP
+        // px, minus one gap for the last dot). 128-char passphrases would otherwise
+        // overflow the field and underflow `FIELD_W - strip_w` — panics on
+        // overflow-checks builds.
+        const MAX_DOTS: u32 = (FIELD_W + DOT_GAP) / (DOT_PX + DOT_GAP);
+        let dots = (dots as u32).min(MAX_DOTS);
+        let strip_w = dots * DOT_PX + dots.saturating_sub(1) * DOT_GAP;
         let dots_x = field_x + (FIELD_W - strip_w) / 2;
         let dots_y = field_y + (FIELD_H - DOT_PX) / 2;
         for i in 0..dots {
-            let dx = dots_x + (i as u32) * (DOT_PX + DOT_GAP);
+            let dx = dots_x + i * (DOT_PX + DOT_GAP);
             gpu::fill_rect(dx, dots_y, DOT_PX, DOT_PX, INK);
         }
     }
