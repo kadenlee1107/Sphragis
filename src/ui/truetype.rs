@@ -709,14 +709,22 @@ impl TrueTypeFont {
                     edge_count = Self::flatten_bezier(mid_x, mid_y, sx0, sy0, sx1, sy1, edges, edge_count, 0);
                     i += 1;
                 } else {
-                    // off -> off: implicit on-curve midpoint between them
+                    // off -> off: two consecutive off-curve control points.
+                    // TrueType specifies an implicit on-curve point between
+                    // any two adjacent off-curve points; the Bezier from this
+                    // iteration runs from mid(prev, p0) through p0 (as the
+                    // control) to mid(p0, p1).
+                    let prev_idx = contour_start + ((i + n - 1) % n);
+                    let pp = points[prev_idx];
+                    let prev_sx = pp.x as f32 * scale + offset_x;
+                    let prev_sy = offset_y - pp.y as f32 * scale;
+                    let mid0_x = (prev_sx + sx0) * 0.5;
+                    let mid0_y = (prev_sy + sy0) * 0.5;
                     let sx1 = p1.x as f32 * scale + offset_x;
                     let sy1 = offset_y - p1.y as f32 * scale;
-                    let _mid0_x = (sx0 + offset_x) * 0.5; // midpoint before p0
-                    let _mid0_y = (sy0 + offset_y) * 0.5;
                     let mid1_x = (sx0 + sx1) * 0.5;
                     let mid1_y = (sy0 + sy1) * 0.5;
-                    edge_count = Self::flatten_bezier(mid1_x, mid1_y, sx0, sy0, mid1_x, mid1_y, edges, edge_count, 0);
+                    edge_count = Self::flatten_bezier(mid0_x, mid0_y, sx0, sy0, mid1_x, mid1_y, edges, edge_count, 0);
                     i += 1;
                 }
             }
@@ -733,6 +741,11 @@ impl TrueTypeFont {
 
     /// Rasterize edges into a bitmap using scanline fill (even-odd rule).
     /// bitmap is row-major, one byte per pixel (0 = empty, 255 = filled).
+    ///
+    /// Vertical anti-aliasing: each output row samples SAMPLES scanlines
+    /// at evenly-spaced sub-row positions and averages coverage. This
+    /// produces smooth diagonal/curved edges instead of the stepped
+    /// "ladder" appearance you get with one sample per row.
     fn scanline_fill(
         edges: &[Edge; MAX_EDGES],
         edge_count: usize,
@@ -740,79 +753,93 @@ impl TrueTypeFont {
         bmp_w: usize,
         bmp_h: usize,
     ) {
+        const SAMPLES: usize = 4;
         let mut crossings = [0.0f32; MAX_CROSSINGS];
 
+        // Per-pixel accumulator for one output row. We accumulate u32
+        // contributions across SAMPLES sub-rows, then divide by SAMPLES
+        // for the final byte.
+        let mut row_accum = [0u32; MAX_GLYPH_SIZE];
+
         for y in 0..bmp_h {
-            let scanline_y = y as f32 + 0.5; // sample at pixel center
-            let mut num_crossings = 0usize;
-
-            // Find all edge crossings with this scanline
-            for ei in 0..edge_count {
-                let e = &edges[ei];
-                let (y_min, y_max) = if e.y0 < e.y1 { (e.y0, e.y1) } else { (e.y1, e.y0) };
-
-                // Edge crosses this scanline?
-                if scanline_y < y_min || scanline_y >= y_max { continue; }
-
-                // Compute x at the crossing
-                let dy = e.y1 - e.y0;
-                if dy.abs() < 0.0001 { continue; } // horizontal edge
-                let t = (scanline_y - e.y0) / dy;
-                let x = e.x0 + t * (e.x1 - e.x0);
-
-                if num_crossings < MAX_CROSSINGS {
-                    crossings[num_crossings] = x;
-                    num_crossings += 1;
-                }
+            // Reset the row accumulator.
+            for px in 0..bmp_w {
+                row_accum[px] = 0;
             }
 
-            // Sort crossings (insertion sort -- small N)
-            for i in 1..num_crossings {
-                let val = crossings[i];
-                let mut j = i;
-                while j > 0 && crossings[j - 1] > val {
-                    crossings[j] = crossings[j - 1];
-                    j -= 1;
-                }
-                crossings[j] = val;
-            }
+            for s in 0..SAMPLES {
+                let scanline_y = y as f32 + (s as f32 + 0.5) / SAMPLES as f32;
+                let mut num_crossings = 0usize;
 
-            // Fill between pairs of crossings (even-odd rule)
-            let mut ci = 0;
-            while ci + 1 < num_crossings {
-                let x_start = crossings[ci];
-                let x_end = crossings[ci + 1];
-
-                let px_start = (x_start as i32).max(0) as usize;
-                let px_end = ((x_end as i32) + 1).min(bmp_w as i32) as usize;
-
-                for px in px_start..px_end {
-                    if px < bmp_w {
-                        let idx = y * bmp_w + px;
-                        if idx < bitmap.len() {
-                            // Basic coverage: fully inside = 255
-                            let frac_x = px as f32;
-                            if frac_x >= x_start && frac_x + 1.0 <= x_end {
-                                bitmap[idx] = 255;
-                            } else {
-                                // Partial coverage for anti-aliasing at edges
-                                let coverage = if frac_x < x_start {
-                                    ((frac_x + 1.0 - x_start) * 255.0) as u8
-                                } else if frac_x + 1.0 > x_end {
-                                    ((x_end - frac_x) * 255.0) as u8
-                                } else {
-                                    255
-                                };
-                                // Blend with existing value (max)
-                                if coverage > bitmap[idx] {
-                                    bitmap[idx] = coverage;
-                                }
-                            }
-                        }
+                // Find all edge crossings with this scanline.
+                for ei in 0..edge_count {
+                    let e = &edges[ei];
+                    let (y_min, y_max) = if e.y0 < e.y1 { (e.y0, e.y1) } else { (e.y1, e.y0) };
+                    if scanline_y < y_min || scanline_y >= y_max { continue; }
+                    let dy = e.y1 - e.y0;
+                    if dy.abs() < 0.0001 { continue; }
+                    let t = (scanline_y - e.y0) / dy;
+                    let x = e.x0 + t * (e.x1 - e.x0);
+                    if num_crossings < MAX_CROSSINGS {
+                        crossings[num_crossings] = x;
+                        num_crossings += 1;
                     }
                 }
 
-                ci += 2;
+                // Sort crossings (insertion sort — small N).
+                for i in 1..num_crossings {
+                    let val = crossings[i];
+                    let mut j = i;
+                    while j > 0 && crossings[j - 1] > val {
+                        crossings[j] = crossings[j - 1];
+                        j -= 1;
+                    }
+                    crossings[j] = val;
+                }
+
+                // Fill between pairs of crossings (even-odd rule).
+                let mut ci = 0;
+                while ci + 1 < num_crossings {
+                    let x_start = crossings[ci];
+                    let x_end = crossings[ci + 1];
+
+                    let px_start = (x_start as i32).max(0) as usize;
+                    let px_end = ((x_end as i32) + 1).min(bmp_w as i32) as usize;
+
+                    for px in px_start..px_end {
+                        if px >= bmp_w { continue; }
+                        let frac_x = px as f32;
+                        // Per-sample contribution: 255/SAMPLES for fully
+                        // inside the span, scaled at the edge by horizontal
+                        // partial coverage.
+                        let per_sample = 255u32 / SAMPLES as u32;
+                        let coverage: u32 = if frac_x >= x_start && frac_x + 1.0 <= x_end {
+                            per_sample
+                        } else if frac_x < x_start {
+                            (((frac_x + 1.0 - x_start) * (per_sample as f32)) as u32).min(per_sample)
+                        } else if frac_x + 1.0 > x_end {
+                            (((x_end - frac_x) * (per_sample as f32)) as u32).min(per_sample)
+                        } else {
+                            per_sample
+                        };
+                        row_accum[px] = row_accum[px].saturating_add(coverage);
+                    }
+
+                    ci += 2;
+                }
+            }
+
+            // Write the averaged row coverage to the bitmap. Use max() with
+            // any existing pixel value so multiple contours don't reduce
+            // brightness (the bitmap is pre-cleared by render_char, so this
+            // is effectively just a write; the max() defends against future
+            // callers that don't pre-clear).
+            for px in 0..bmp_w {
+                let v = row_accum[px].min(255) as u8;
+                let idx = y * bmp_w + px;
+                if idx < bitmap.len() && v > bitmap[idx] {
+                    bitmap[idx] = v;
+                }
             }
         }
     }
