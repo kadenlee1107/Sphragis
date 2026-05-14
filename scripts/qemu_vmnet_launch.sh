@@ -35,7 +35,7 @@ KERNEL="${ROOT}/target/aarch64-unknown-none/release/sphragis"
 
 if [ ! -f "$KERNEL" ]; then
     echo "kernel missing: $KERNEL"
-    echo "build with:  SPHRAGIS_PASSPHRASE=batman cargo build --release"
+    echo "build with:  SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release"
     exit 1
 fi
 

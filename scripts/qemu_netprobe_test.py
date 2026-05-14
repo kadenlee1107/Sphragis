@@ -173,7 +173,7 @@ def main():
 
     child.expect(rb"\[bs\] flush done .+ entering input loop", timeout=60)
     time.sleep(0.3)
-    child.sendline(b"batman")
+    child.sendline(b"sphragis-dev")
     child.expect(PROMPT, timeout=30)
     print("[qemu] shell ready — ambient Cave active\n")
 

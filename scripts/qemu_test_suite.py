@@ -8,7 +8,7 @@ Two phases:
 Both phases skip Chromium per user directive.
 
 Usage:
-  SPHRAGIS_PASSPHRASE=batman cargo build --release   # ensure fresh kernel
+  SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release   # ensure fresh kernel
   python3 scripts/qemu_test_suite.py
 """
 import pexpect
@@ -109,7 +109,7 @@ def wait_for_shell(child):
     """Boot → auth → shell prompt."""
     child.expect(rb"\[bs\] flush done .+ entering input loop", timeout=60)
     time.sleep(0.4)
-    child.sendline(b"batman")
+    child.sendline(b"sphragis-dev")
     child.expect(PROMPT, timeout=30)
 
 

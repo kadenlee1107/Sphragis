@@ -31,7 +31,7 @@ def main():
     verdict = "FAIL"
     try:
         c.expect(rb"\[bs\] flush done .+ entering input loop", timeout=60)
-        time.sleep(0.3); c.sendline(b"batman")
+        time.sleep(0.3); c.sendline(b"sphragis-dev")
         c.expect(PROMPT, timeout=30)
         c.sendline(b"nat-gc-selftest")
         c.expect([b"PASS", b"FAIL"], timeout=10)

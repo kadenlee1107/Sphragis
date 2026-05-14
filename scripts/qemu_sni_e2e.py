@@ -137,7 +137,7 @@ def main():
     verdict="FAIL"; details=[]
     try:
         c.expect(rb"\[bs\] flush done .+ entering input loop",timeout=60)
-        time.sleep(0.3); c.sendline(b"batman")
+        time.sleep(0.3); c.sendline(b"sphragis-dev")
         c.expect(PROMPT,timeout=60)
         for _ in range(60):
             if h["conn"] and v["conn"]: break

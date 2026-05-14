@@ -187,7 +187,7 @@ except pexpect.TIMEOUT:
     print("ERROR: Sphragis never reached auth prompt")
     sys.exit(1)
 time.sleep(0.5)
-c.sendline(b"batman")
+c.sendline(b"sphragis-dev")
 try:
     c.expect(PROMPT, timeout=45)
 except pexpect.TIMEOUT:

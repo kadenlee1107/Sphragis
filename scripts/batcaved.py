@@ -68,7 +68,7 @@ from pathlib import Path
 from datetime import datetime
 
 # ── Config ─────────────────────────────────────────────────────
-DEFAULT_TOKEN = "BATMAN-DEV-2026"   # trivially replaceable via --token
+DEFAULT_TOKEN = "SPHRAGIS-DEV-2026"   # trivially replaceable via --token
 DEFAULT_ADDR  = "127.0.0.1"
 DEFAULT_PORT  = 9999
 CAVE_PREFIX   = "caves-"          # all managed containers are named caves-<name>

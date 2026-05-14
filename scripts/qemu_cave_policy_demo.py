@@ -38,7 +38,7 @@ def main():
         print("[cave-policy] wait for auth gate input loop...")
         child.expect(rb"\[bs\] flush done .+ entering input loop", timeout=60)
         time.sleep(0.3)
-        child.sendline(b"batman")
+        child.sendline(b"sphragis-dev")
 
         print("[cave-policy] wait for shell prompt...")
         child.expect(rb"sphragis\s*>\s*", timeout=30)

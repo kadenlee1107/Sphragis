@@ -14,7 +14,7 @@ make build
 Equivalent to:
 
 ```
-SPHRAGIS_ALLOW_UNSIGNED_INITRD=1 SPHRAGIS_PASSPHRASE=batman SPHRAGIS_KEEP_GOING=1 \
+SPHRAGIS_ALLOW_UNSIGNED_INITRD=1 SPHRAGIS_PASSPHRASE=sphragis-dev SPHRAGIS_KEEP_GOING=1 \
     cargo build --release --features gicv3
 ```
 
@@ -108,7 +108,7 @@ logs/qemu-tests/          all generated logs + PNGs
 | Var                              | Default | Purpose                                                   |
 | -------------------------------- | ------- | --------------------------------------------------------- |
 | `SPHRAGIS_ALLOW_UNSIGNED_INITRD`   | `1`     | Skip initrd signature check during dev                    |
-| `SPHRAGIS_PASSPHRASE`              | `batman`| Build-time passphrase for BatFS / auth                    |
+| `SPHRAGIS_PASSPHRASE`              | `sphragis-dev`| Build-time passphrase for BatFS / auth                    |
 | `SPHRAGIS_KEEP_GOING`              | `1`     | Skip-and-log on cave-fatal events instead of teardown     |
 | `URL` (Make var)                 | `file:///bin/hello.html` | Target for `make render` / `make dom` |
 

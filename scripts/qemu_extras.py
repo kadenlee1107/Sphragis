@@ -36,7 +36,7 @@ def main():
                           timeout=90, logfile=log_fp, encoding=None)
 
     child.expect(rb"\[bs\] flush done .+ entering input loop", timeout=60)
-    time.sleep(0.3); child.sendline(b"batman")
+    time.sleep(0.3); child.sendline(b"sphragis-dev")
     child.expect(PROMPT, timeout=30)
     print("[extras] shell ready\n")
 

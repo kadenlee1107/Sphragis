@@ -17,7 +17,7 @@ say_info(){ printf '  \033[36mi\033[0m %s\n' "$*"; }
 echo "[preflight] Sphragis packet-pipeline vmnet recipe"
 echo
 
-# 1. Kernel built with SPHRAGIS_PASSPHRASE=batman
+# 1. Kernel built with SPHRAGIS_PASSPHRASE=sphragis-dev
 if [ -f "$KERNEL" ]; then
     age=$(stat -f %m "$KERNEL")
     now=$(date +%s)
@@ -29,7 +29,7 @@ if [ -f "$KERNEL" ]; then
     fi
 else
     say_bad "kernel missing: $KERNEL"
-    say_info "build with:  SPHRAGIS_PASSPHRASE=batman cargo build --release"
+    say_info "build with:  SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release"
 fi
 
 # 2. QEMU present + vmnet backend compiled in
