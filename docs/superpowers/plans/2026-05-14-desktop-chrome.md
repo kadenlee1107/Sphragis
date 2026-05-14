@@ -1,86 +1,83 @@
-# Desktop Chrome + App Launcher (Wave 2) Implementation Plan
+# Desktop Chrome + App Launcher Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the current pane-based cyberpunk desktop with a quiet-canvas + floating multi-window experience per `docs/superpowers/specs/2026-05-14-desktop-chrome-design.md`.
+**Goal:** Implement Wave 2 — quiet canvas + floating multi-window WM + 8-app launcher overlay + customizable top-bar status strip — per `docs/superpowers/specs/2026-05-14-desktop-chrome-design.md`.
 
-**Architecture:** New `src/ui/wm.rs` is a floating window manager (windows with x/y/w/h, drag-to-move, drag-corner-to-resize, click-to-focus, z-ordered). New `src/ui/topbar.rs` paints the top status strip and handles its click targets. Rewritten `src/ui/desktop.rs` runs a state machine (LAUNCHER / ACTIVE / OVERLAY) and dispatches events to the WM, top bar, and launcher overlay. The lock cycle becomes a real loop in `main.rs` so workspace state can persist across re-locks. App internals (the 8 apps in `src/ui/apps/`) are NOT modified — Wave 2 wraps them in window chrome and routes input; their visuals stay cyberpunk until Wave 3+.
+**Architecture:** Replace the current pane-tiling WM (`src/ui/wm.rs`) and single-app desktop loop (`src/ui/desktop.rs`) with a floating-window WM that holds an `[Option<Window>; 16]` array and a state-machine event loop. Add a new `src/ui/topbar.rs` for the top status strip. Apps register through a static `AppDescriptor` table; each descriptor carries an `AppId`, a label, and a paint callback. Lock/unlock becomes a cycle in `main.rs` rather than a `-> !` terminal call, so the workspace persists across lock-and-unlock.
 
-**Tech Stack:** Rust 2024 edition, `aarch64-unknown-none` (no_std, alloc-OK). Build: `cargo build --release --target aarch64-unknown-none --features gicv3`. Verification: QEMU `-machine virt -cpu max -display cocoa`. No `cargo test` harness in this crate — verification contract is "build + clippy clean under `-D warnings`" + the QEMU walkthrough in Task 9.
+**Tech Stack:** Rust 2024 edition, `aarch64-unknown-none` target (no-std, alloc available via linked-list allocator). Build: `cargo build --release --target aarch64-unknown-none --features gicv3`. Verification: QEMU with `-display cocoa` + virtio-keyboard + virtio-tablet.
 
-**Verification reality check.** Same as Wave 1: the kernel is `#![no_std] #![no_main]` with no test runner. Every task's verification step is build + clippy + (for visible changes) a QEMU eyeball check. No unit tests because there's no harness to run them in.
-
----
-
-## File structure
-
-| File | Responsibility | Status |
-|------|----------------|--------|
-| `src/ui/wm.rs` | Floating WM: window storage, focus, paint, drag/resize | **rewritten** (current is pane-based) |
-| `src/ui/desktop.rs` | State machine, event loop, repaint orchestration | **rewritten** |
-| `src/ui/topbar.rs` | Top status strip paint + click | **new** |
-| `src/ui/launcher.rs` | 8-app launcher overlay + dimmed-grid paint | **new** |
-| `src/ui/apps_registry.rs` | Static `AppId` enum + per-app metadata (name, icon-paint, open-fn) | **new** |
-| `src/ui/mod.rs` | Register new modules | modify |
-| `src/main.rs` | Wrap boot_screen + desktop in a re-entrant loop | modify (substantive) |
-| `src/ui/apps/*` (8 app files) | App internals (unchanged in this wave) | untouched |
+**Verification reality check.** Same as Wave 1: this crate is `#![no_std] #![no_main]`, no `lib.rs`, no test harness. `cargo test` doesn't run kernel code. Every task's verification is "build is clean (no clippy warnings under `-D warnings`)" plus a QEMU walk-through against the spec at the end. There is no unit-test step. The QEMU walk-through is Task 11.
 
 ---
 
 ## Pre-flight
 
-- [ ] **Step 0a: Branch + clean state.**
+- [ ] **Step 0a: Confirm clean working tree and create the feature branch.**
 
 ```bash
 cd /Users/kadenlee/Sphragis
 git status --short
 git checkout -b feat/desktop-chrome
 ```
-Expected: clean working tree before, on `feat/desktop-chrome` after.
+Expected: working tree clean before checkout; on branch `feat/desktop-chrome` after.
 
-- [ ] **Step 0b: Sanity-check the baseline builds.**
+- [ ] **Step 0b: Confirm the current build is clean before any edits.**
 
 ```bash
 SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -3
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
 ```
-Expected: `Finished release profile`. If the baseline doesn't build, fix that first — every later task assumes a clean baseline.
+Expected: both clean. If not, fix before proceeding — every later task depends on a clean baseline.
 
 ---
 
-### Task 1: App registry — central app metadata
+## File structure
 
-Defines the contract Wave 2's WM uses to launch apps. Wave 2 wraps the existing 7 app modules (caves_mgr, comms, dashboard/security/editor/filemanager/netmon — note the spec collapses dashboard into SECURITY for now) plus a stubbed AGENT. The registry exposes each app's name, icon-paint, and `open()` function. Apps themselves aren't modified; the registry is a thin static table that calls into them.
+This plan creates and modifies the following files. Each new module has one clear responsibility.
+
+| File | Status | Responsibility |
+|------|--------|----------------|
+| `src/ui/apps_registry.rs` | **NEW** | Static `AppId` enum + `AppDescriptor` table. The "what apps exist" table. |
+| `src/ui/wm.rs` | **REPLACED** | Floating-window manager: `Window` struct, fixed-size store, focus, drag, resize, paint. |
+| `src/ui/topbar.rs` | **NEW** | Top status strip: paint, click handling, config sheet. |
+| `src/ui/topbar_config.rs` | **NEW** | Badge enable/order state, BatFS persistence. |
+| `src/ui/launcher.rs` | **NEW** | 8-app launcher overlay: paint, click handling. |
+| `src/ui/desktop.rs` | **REPLACED** | State machine (LAUNCHER / ACTIVE / OVERLAY) + event loop. `run() -> LockReason`. |
+| `src/ui/mod.rs` | **MODIFY** | Register new modules. |
+| `src/main.rs` | **MODIFY** | Wrap `boot_screen::run()` + `desktop::run()` in a lock/unlock cycle. |
+
+The existing `src/ui/apps/*` modules are **not modified** — their internal cyberpunk look stays for Wave 2 and gets refreshed in Wave 3+. Each app exposes its existing paint entry; the new WM wraps it with chrome. Small Wave-2 shims may be needed in each app to adapt their existing paint signature to `fn(WindowRect)`.
+
+---
+
+## Task 1: App registry
+
+Create the static "what apps exist" table. Every later task references `AppId` and `APPS`, so this is the foundation.
 
 **Files:**
 - Create: `src/ui/apps_registry.rs`
 - Modify: `src/ui/mod.rs`
+- Modify (Wave-2 shims): each `src/ui/apps/*.rs` and `src/ui/shell.rs` as needed
 
 - [ ] **Step 1: Create `src/ui/apps_registry.rs`.**
 
 ```rust
-//! Static registry of every app the launcher shows.
+//! App registry — the static table of apps the launcher can show.
 //!
-//! Each app entry has:
-//!   * a stable `AppId` (used by the WM to identify which app a
-//!     window is hosting),
-//!   * a UPPERCASE display name (rendered as the launcher tile label
-//!     and as the window title chrome),
-//!   * an icon-paint function (Wave 2 uses a placeholder 22×22 rounded
-//!     square; Wave 3+ replaces per-app),
-//!   * an `open()` function that the WM calls when the user picks the
-//!     tile. `open()` returns the window dimensions it wants and the
-//!     paint callback the WM should dispatch to.
-//!
-//! Wave 2 does NOT modify any app's internals. Apps get the new chrome
-//! because the WM owns the chrome — the apps' own paint code runs
-//! inside the window body region.
+//! Each `AppDescriptor` carries the identity, the label rendered on
+//! the launcher tile, the chrome title, and a paint callback. The
+//! paint callback takes a `WindowRect` (the body region inside the
+//! window's chrome) and is responsible for drawing the app's
+//! contents into that rect. Apps are stateful — most of them keep
+//! state in their own `static`s; this registry just wires up the
+//! draw entry points.
 
 #![allow(dead_code)]
 
-use crate::ui::gpu;
+use crate::ui::wm::WindowRect;
 
-/// Stable identifier for each launchable app. Order matches the 4×2
-/// launcher grid (CAVES top-left, AGENT bottom-right).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum AppId {
     Caves,
@@ -93,82 +90,129 @@ pub enum AppId {
     Agent,
 }
 
-impl AppId {
-    /// Display name shown on launcher tiles and in window chrome.
-    pub const fn name(self) -> &'static str {
-        match self {
-            AppId::Caves    => "CAVES",
-            AppId::Files    => "FILES",
-            AppId::Net      => "NET",
-            AppId::Security => "SECURITY",
-            AppId::Shell    => "SHELL",
-            AppId::Editor   => "EDITOR",
-            AppId::Comms    => "COMMS",
-            AppId::Agent    => "AGENT",
-        }
-    }
-
-    /// Default window size when the app is first opened, in pixels.
-    /// Apps that want a different default size override here.
-    pub const fn default_size(self) -> (u32, u32) {
-        match self {
-            // Shell wants a wider window because it shows monospace
-            // text-mode content; the others get a balanced default.
-            AppId::Shell => (760, 480),
-            _            => (560, 400),
-        }
-    }
-
-    /// Iteration helper: every AppId in launcher-grid order.
-    pub const fn all() -> [AppId; 8] {
-        [AppId::Caves, AppId::Files, AppId::Net, AppId::Security,
-         AppId::Shell, AppId::Editor, AppId::Comms, AppId::Agent]
-    }
+pub struct AppDescriptor {
+    pub id: AppId,
+    pub label: &'static str,
+    pub title: &'static str,
+    pub paint: fn(WindowRect),
 }
 
-/// Wave-2 placeholder icon: a 22×22 rounded square in the given color.
-/// `x, y` are the top-left of the 22×22 slot. Wave 3+ replaces this
-/// with per-app icons (each app's redesign wave introduces its own
-/// real icon paint).
-pub fn paint_placeholder_icon(_id: AppId, x: u32, y: u32, color: u32) {
-    // No rounding in v1 — just a flat 22×22 square. Rounding would
-    // need a tiny corner-mask helper; YAGNI for the placeholder.
-    gpu::fill_rect(x, y, 22, 22, color);
+pub static APPS: [AppDescriptor; 8] = [
+    AppDescriptor { id: AppId::Caves,    label: "CAVES",    title: "CAVES",    paint: paint_caves },
+    AppDescriptor { id: AppId::Files,    label: "FILES",    title: "FILES",    paint: paint_files },
+    AppDescriptor { id: AppId::Net,      label: "NET",      title: "NET",      paint: paint_net },
+    AppDescriptor { id: AppId::Security, label: "SECURITY", title: "SECURITY", paint: paint_security },
+    AppDescriptor { id: AppId::Shell,    label: "SHELL",    title: "SHELL",    paint: paint_shell },
+    AppDescriptor { id: AppId::Editor,   label: "EDITOR",   title: "EDITOR",   paint: paint_editor },
+    AppDescriptor { id: AppId::Comms,    label: "COMMS",    title: "COMMS",    paint: paint_comms },
+    AppDescriptor { id: AppId::Agent,    label: "AGENT",    title: "AGENT",    paint: paint_agent },
+];
+
+pub fn descriptor(id: AppId) -> &'static AppDescriptor {
+    APPS.iter().find(|d| d.id == id).expect("AppId always in APPS")
+}
+
+// ── Paint callbacks ──────────────────────────────────────────────
+
+fn paint_caves(rect: WindowRect)    { crate::ui::apps::caves_mgr::paint(rect); }
+fn paint_files(rect: WindowRect)    { crate::ui::apps::filemanager::paint(rect); }
+fn paint_net(rect: WindowRect)      { crate::ui::apps::netmon::paint(rect); }
+fn paint_security(rect: WindowRect) { crate::ui::apps::security::paint(rect); }
+fn paint_shell(rect: WindowRect)    { crate::ui::shell::paint(rect); }
+fn paint_editor(rect: WindowRect)   { crate::ui::apps::editor::paint(rect); }
+fn paint_comms(rect: WindowRect)    { crate::ui::apps::comms::paint(rect); }
+
+fn paint_agent(rect: WindowRect) {
+    use crate::ui::font;
+    let msg = "AGENT - coming soon";
+    let cx = rect.x + rect.w / 2;
+    let cy = rect.y + rect.h / 2;
+    let tx = cx.saturating_sub((msg.len() as u32 * 8) / 2);
+    let ty = cy.saturating_sub(8);
+    font::draw_str(
+        crate::ui::gpu::framebuffer(),
+        crate::ui::gpu::width(),
+        tx, ty,
+        msg,
+        0xFFE5E7EB,
+        0xFF0D0D10,
+    );
 }
 ```
 
-- [ ] **Step 2: Wire the module in.**
+- [ ] **Step 2: Register the module in `src/ui/mod.rs`.**
 
-In `src/ui/mod.rs`, add `pub mod apps_registry;` next to the other `pub mod` declarations (after `pub mod apps;` is fine).
+Open `src/ui/mod.rs` and add `pub mod apps_registry;` alphabetically.
 
-- [ ] **Step 3: Build + clippy.**
+- [ ] **Step 3: Build to identify missing `paint(WindowRect)` entries.**
 
 ```bash
-cd /Users/kadenlee/Sphragis
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -25
+```
+
+The build will fail because the existing apps don't all expose a `paint(rect: WindowRect)` function with that exact signature. For each missing function, add a thin Wave-2 shim in that app's file. Example for an app whose existing render path is `render()`:
+
+```rust
+// Append to src/ui/apps/dashboard.rs (or equivalent):
+
+/// Wave 2 shim — adapts the existing render path to the new WM's
+/// `fn(WindowRect)` contract. Refresh in Wave 3+ when the app gets
+/// its own redesign.
+pub fn paint(rect: crate::ui::wm::WindowRect) {
+    // Delegate to existing render; the existing path probably writes
+    // full-screen, which is fine as a Wave-2 stub — apps get clipped
+    // by the WM's chrome and z-order. Wave 3+ rewrites apps to
+    // respect `rect` properly.
+    let _ = rect;
+    render();
+}
+```
+
+For the SHELL specifically: don't try to wedge the 11k-line console into a Wave-2 window. Add a stub:
+
+```rust
+// Append to src/ui/shell.rs:
+
+pub fn paint(rect: crate::ui::wm::WindowRect) {
+    use crate::ui::font;
+    let msg = "SHELL - integrating in Wave 5";
+    let tx = rect.x + 12;
+    let ty = rect.y + 12;
+    font::draw_str(
+        crate::ui::gpu::framebuffer(),
+        crate::ui::gpu::width(),
+        tx, ty, msg,
+        0xFFE5E7EB, 0xFF0D0D10,
+    );
+}
+```
+
+Mark every Wave-2 shim with the comment `// Wave 2 shim — refresh in Wave 3+`.
+
+- [ ] **Step 4: Build + clippy clean.**
+
+```bash
 SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -3
 SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
 ```
-Expected: clean. The new module is `#![allow(dead_code)]` so the unused functions don't trip the lint.
+Expected: both clean.
 
-- [ ] **Step 4: Commit.**
+- [ ] **Step 5: Commit.**
 
 ```bash
-git add src/ui/apps_registry.rs src/ui/mod.rs
+git add src/ui/apps_registry.rs src/ui/mod.rs src/ui/apps/ src/ui/shell.rs
 git commit -m "$(cat <<'EOF'
-ui: add apps_registry — central AppId enum + per-app metadata
+apps_registry: static AppId + AppDescriptor table for Wave 2
 
-Defines the contract Wave 2's new WM uses to find every launchable
-app. Wave 2 ships:
-  * AppId enum: Caves, Files, Net, Security, Shell, Editor, Comms,
-    Agent (matches the 4×2 launcher grid in spec).
-  * AppId::name() — uppercase display name for tile labels + window
-    titles.
-  * AppId::default_size() — initial floating-window size per app.
-  * paint_placeholder_icon — 22×22 MID-color square, used until each
-    app's own Wave 3+ pass introduces a real icon.
+Wires 8 apps (CAVES, FILES, NET, SECURITY, SHELL, EDITOR, COMMS,
+AGENT) into a static APPS table. Each descriptor carries identity,
+launcher label, chrome title, and a paint(rect: WindowRect)
+callback. App internals are not refactored; thin Wave-2 shims
+adapt each existing paint path to the rect-receiving signature.
 
-App modules in src/ui/apps/* are untouched. This registry is purely
-the metadata table the WM reads.
+AGENT and SHELL paint stubs in place; both get real integrations in
+later waves (AGENT depends on DESIGN_AI_AGENT.md, SHELL depends on
+Wave 5 console palette refresh).
 
 Co-Authored-By: claude-flow <ruv@ruv.net>
 EOF
@@ -177,646 +221,222 @@ EOF
 
 ---
 
-### Task 2: Window struct + WM core (open/close/focus/paint)
+## Task 2: Window struct + WM core (open / close / focus)
 
-Replace the pane-based WM with a floating WM. Every open app is a `Window` with position, size, focus state, optional cave name. The WM stores up to 8 windows (matches the 8 apps; reasonable cap for v1). Paint walks back-to-front so the focused window draws last (on top).
+Replace the pane-tiling WM with a floating-window WM. This task does the data model + open/close/focus; window paint comes in Task 3, drag/resize in Task 4.
 
 **Files:**
-- Modify: `src/ui/wm.rs` (rewrites the bulk of the file; preserves only constants the rest of the kernel imports — see the `Constants and external API contract` section below)
+- Replace: `src/ui/wm.rs`
 
-#### Constants and external API contract
+- [ ] **Step 1: Replace `src/ui/wm.rs` entirely.**
 
-Before rewriting wm.rs, check what other files import from it. The current wm.rs exposes `APP_SHELL`, `APP_DASHBOARD`, `APP_NETMON`, `APP_EDITOR`, `flush_all`, `active_app`, `switch_app`, `request_redraw`, `reset_for_cave_switch`, `content_rect`, `pane_count`, etc.
-
-```bash
-cd /Users/kadenlee/Sphragis
-rg 'wm::' src/ --type rust | grep -v 'src/ui/wm.rs' | awk -F'wm::' '{print $2}' | awk '{print $1}' | sort -u
-```
-
-Whatever symbols come back, we must either re-provide them or update each caller. For Wave 2's scope, we **keep callers compiling** by exposing thin shims: `reset_for_cave_switch`, `flush_all`, `request_redraw` stay as functions (no-ops or simple repaint triggers in the new model). The pane-specific symbols (`APP_*`, `switch_app`, `active_app`, `content_rect`, `pane_count`) get migrated by Task 6's desktop rewrite, which is the only consumer.
-
-- [ ] **Step 1: Snapshot the old wm.rs callers, then rewrite wm.rs.**
-
-```bash
-cd /Users/kadenlee/Sphragis
-rg 'wm::' src/ --type rust | grep -v 'src/ui/wm.rs' > /tmp/old-wm-callers.txt
-wc -l /tmp/old-wm-callers.txt
-```
-
-Expected: a handful of caller sites in `desktop.rs`, possibly `console.rs`, possibly `shell.rs`. Glance through to know what shims you need to keep.
-
-- [ ] **Step 2: Replace `src/ui/wm.rs` with the new floating WM.**
-
-Replace the entire file contents with:
+Delete the current contents and write:
 
 ```rust
-//! Floating window manager — Wave 2.
+//! Wave 2 floating-window manager.
 //!
-//! Replaces the pane-based WM. Up to MAX_WINDOWS app windows are
-//! stored as `Option<Window>` slots. Windows are kept in z-order;
-//! `Z_ORDER[0]` is back-most, `Z_ORDER[count-1]` is front-most /
-//! focused. Paint walks in z-order so the focused window draws last.
-//!
-//! Mouse and keyboard event handling is upstream (in desktop.rs);
-//! this module exposes the queries and mutators they call.
+//! Holds a fixed-size store of windows ([Option<Window>; 16]),
+//! tracks z-order implicitly (window order in the array — back-most
+//! first, focused window last), tracks focus by Option<WindowId>,
+//! exposes open/close/focus/cycle/iter API. Paint and event handling
+//! live alongside the data model in subsequent tasks.
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
-use crate::ui::gpu;
-use crate::ui::draw;
-use crate::ui::font;
 use crate::ui::apps_registry::AppId;
 
-/// Maximum simultaneously-open app windows. 8 = one of each app
-/// (matches the launcher grid). Beyond that, the WM rejects opens.
-pub const MAX_WINDOWS: usize = 8;
+pub const MAX_WINDOWS: usize = 16;
 
-/// Window chrome height in pixels — matches the lock-screen and
-/// top-bar visual language.
-pub const CHROME_H: u32 = 22;
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct WindowId(pub u32);
 
-/// Resize hit zone in pixels at each corner.
-pub const RESIZE_GRAB: u32 = 12;
+#[derive(Copy, Clone, Debug)]
+pub struct WindowRect {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
 
-/// Minimum window size — below this the chrome runs out of room.
-pub const MIN_W: u32 = 280;
-pub const MIN_H: u32 = 160;
-
-// Palette inherited from Wave 1 — duplicated here so wm.rs doesn't
-// need to depend on the security::boot_screen module. Source of truth
-// is the spec; if Wave 1 ever moves these into ui::palette, update.
-const BG:       u32 = 0xFF0D0D10;
-const PANEL:    u32 = 0xFF18181C;
-const HAIRLINE: u32 = 0xFF2A2A30;
-const INK:      u32 = 0xFFE5E7EB;
-const MID:      u32 = 0xFF6B7280;
-
-/// One open window.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Window {
-    pub app:        AppId,
-    pub x:          i32,
-    pub y:          i32,
-    pub w:          u32,
-    pub h:          u32,
-    /// Optional cave context this window's app is running inside.
-    /// Renders in the chrome as `TITLE · cave_name`. Set at open
-    /// time by the caller (caves manager fills it in when opening a
-    /// shell into a specific cave). None = the window runs in the
-    /// host context.
-    pub cave_name:  Option<&'static str>,
+    pub id: WindowId,
+    pub app: AppId,
+    pub rect: WindowRect,
+    pub cave_name: Option<[u8; 16]>,
 }
 
-/// Window-slot storage. `None` = empty slot.
 static mut WINDOWS: [Option<Window>; MAX_WINDOWS] = [None; MAX_WINDOWS];
+static mut NEXT_ID: u32 = 1;
+static mut FOCUSED: Option<WindowId> = None;
 
-/// Z-order: front-most last. Each entry is an index into WINDOWS.
-/// Length tracked by `Z_COUNT` because we're no-std.
-static mut Z_ORDER: [usize; MAX_WINDOWS] = [0; MAX_WINDOWS];
-static mut Z_COUNT: usize = 0;
-
-/// True when the WM needs a full repaint (any window change).
-static NEEDS_REDRAW: AtomicBool = AtomicBool::new(true);
-
-/// Open a new window for `app`. Returns the slot index, or None if
-/// all slots are full. Position is the canonical "next-window" offset
-/// (stack each new window down-right of the last so they don't
-/// stack identically).
-pub fn open(app: AppId, cave_name: Option<&'static str>) -> Option<usize> {
-    let (w, h) = app.default_size();
-    // Find a free slot.
-    let slot = unsafe {
-        let mut found = None;
-        for i in 0..MAX_WINDOWS {
-            if WINDOWS[i].is_none() {
-                found = Some(i);
-                break;
-            }
-        }
-        found
-    }?;
-    // Cascade offset: 32 px down-right per existing window.
-    let n = unsafe { Z_COUNT } as i32;
-    let x = 120 + n * 32;
-    let y = 80  + n * 32;
-    unsafe {
-        WINDOWS[slot] = Some(Window { app, x, y, w, h, cave_name });
-        Z_ORDER[Z_COUNT] = slot;
-        Z_COUNT += 1;
-    }
-    NEEDS_REDRAW.store(true, Ordering::Relaxed);
-    Some(slot)
-}
-
-/// Close a window by slot index. Quietly does nothing if the slot is
-/// already empty. Returns the new front-most slot (if any) so callers
-/// can re-focus.
-pub fn close(slot: usize) -> Option<usize> {
-    if slot >= MAX_WINDOWS { return current_focus(); }
-    unsafe {
-        if WINDOWS[slot].is_none() { return current_focus(); }
-        WINDOWS[slot] = None;
-        // Remove from z-order.
-        let mut i = 0;
-        while i < Z_COUNT {
-            if Z_ORDER[i] == slot {
-                for j in i..Z_COUNT - 1 {
-                    Z_ORDER[j] = Z_ORDER[j + 1];
-                }
-                Z_COUNT -= 1;
-                break;
-            }
-            i += 1;
-        }
-    }
-    NEEDS_REDRAW.store(true, Ordering::Relaxed);
-    current_focus()
-}
-
-/// The front-most window's slot, or None if no windows are open.
-pub fn current_focus() -> Option<usize> {
-    unsafe {
-        if Z_COUNT == 0 { None } else { Some(Z_ORDER[Z_COUNT - 1]) }
-    }
-}
-
-/// True when at least one window is open.
-pub fn any_open() -> bool {
-    unsafe { Z_COUNT > 0 }
-}
-
-/// Number of open windows.
 pub fn count() -> usize {
-    unsafe { Z_COUNT }
+    unsafe { WINDOWS.iter().filter(|w| w.is_some()).count() }
 }
 
-/// Bring the given slot to the front of the z-order.
-pub fn focus(slot: usize) {
+pub fn focused() -> Option<WindowId> {
+    unsafe { FOCUSED }
+}
+
+pub fn iter() -> impl Iterator<Item = Window> {
+    unsafe { WINDOWS.iter().filter_map(|w| *w).collect::<alloc::vec::Vec<_>>().into_iter() }
+}
+
+pub fn get(id: WindowId) -> Option<Window> {
     unsafe {
-        let mut found = None;
-        for i in 0..Z_COUNT {
-            if Z_ORDER[i] == slot { found = Some(i); break; }
-        }
-        if let Some(i) = found {
-            // Slide everything after `i` down by one, then put slot
-            // at the top.
-            for j in i..Z_COUNT - 1 {
-                Z_ORDER[j] = Z_ORDER[j + 1];
-            }
-            Z_ORDER[Z_COUNT - 1] = slot;
-        }
+        WINDOWS.iter().find_map(|w| match w {
+            Some(x) if x.id == id => Some(*x),
+            _ => None,
+        })
     }
-    NEEDS_REDRAW.store(true, Ordering::Relaxed);
 }
 
-/// Cycle focus to the next window (back-most → front). Used by ⌘TAB.
-pub fn cycle_focus() {
+pub fn open(app: AppId, cave_name: Option<&str>) -> Option<WindowId> {
+    let id = unsafe {
+        let i = NEXT_ID;
+        NEXT_ID = NEXT_ID.wrapping_add(1);
+        WindowId(i)
+    };
+    let cave = cave_name.map(|s| {
+        let mut buf = [0u8; 16];
+        let bytes = s.as_bytes();
+        let n = bytes.len().min(16);
+        buf[..n].copy_from_slice(&bytes[..n]);
+        buf
+    });
+    let i = count() as u32;
+    let rect = WindowRect {
+        x: 80 + i * 24,
+        y: 60 + i * 24,
+        w: 720,
+        h: 480,
+    };
+    let window = Window { id, app, rect, cave_name: cave };
+
     unsafe {
-        if Z_COUNT < 2 { return; }
-        // The current front becomes the back; everyone shifts up.
-        let new_back = Z_ORDER[Z_COUNT - 1];
-        for i in (1..Z_COUNT).rev() {
-            Z_ORDER[i] = Z_ORDER[i - 1];
-        }
-        Z_ORDER[0] = new_back;
-    }
-    NEEDS_REDRAW.store(true, Ordering::Relaxed);
-}
-
-/// Read-only snapshot of a window. None if slot is empty.
-pub fn get(slot: usize) -> Option<Window> {
-    if slot >= MAX_WINDOWS { return None; }
-    unsafe { WINDOWS[slot] }
-}
-
-/// Move a window's top-left by (dx, dy). Clamps so the window stays
-/// at least partly on-screen.
-pub fn move_by(slot: usize, dx: i32, dy: i32, screen_w: u32, screen_h: u32) {
-    if slot >= MAX_WINDOWS { return; }
-    unsafe {
-        if let Some(ref mut win) = WINDOWS[slot] {
-            win.x = (win.x + dx).max(-((win.w as i32) - 60))
-                                .min(screen_w as i32 - 60);
-            win.y = (win.y + dy).max(0)
-                                .min(screen_h as i32 - CHROME_H as i32);
-        }
-    }
-    NEEDS_REDRAW.store(true, Ordering::Relaxed);
-}
-
-/// Resize a window by dragging the bottom-right corner. Clamps to
-/// MIN_W/MIN_H.
-pub fn resize_to(slot: usize, new_w: u32, new_h: u32) {
-    if slot >= MAX_WINDOWS { return; }
-    unsafe {
-        if let Some(ref mut win) = WINDOWS[slot] {
-            win.w = new_w.max(MIN_W);
-            win.h = new_h.max(MIN_H);
-        }
-    }
-    NEEDS_REDRAW.store(true, Ordering::Relaxed);
-}
-
-/// Paint every window back-to-front. Caller is responsible for
-/// painting the canvas + watermark beforehand and the top bar
-/// afterwards.
-pub fn paint_all(fb: *mut u32, screen_w: u32, screen_h: u32) {
-    let z = unsafe { Z_ORDER };
-    let n = unsafe { Z_COUNT };
-    for i in 0..n {
-        let slot = z[i];
-        let focused = i == n - 1;
-        if let Some(win) = get(slot) {
-            paint_window(fb, screen_w, screen_h, &win, focused);
-        }
-    }
-}
-
-/// Paint a single window — chrome + body region (body is empty in
-/// Wave 2; the app paint pass runs after this in desktop.rs).
-fn paint_window(
-    _fb: *mut u32,
-    screen_w: u32,
-    _screen_h: u32,
-    win: &Window,
-    focused: bool,
-) {
-    // Off-screen clip
-    if win.x + win.w as i32 <= 0 { return; }
-    if win.x >= screen_w as i32   { return; }
-
-    let ux = win.x.max(0) as u32;
-    let uy = win.y.max(0) as u32;
-
-    // Body background — fills the whole window rect; the chrome
-    // overpaints the top CHROME_H pixels.
-    gpu::fill_rect(ux, uy, win.w, win.h, BG);
-
-    // Border (1 px hairline) — top, bottom, left, right.
-    draw::draw_border(ux, uy, win.w, win.h, HAIRLINE);
-
-    // Chrome strip.
-    gpu::fill_rect(ux, uy, win.w, CHROME_H, PANEL);
-    // Chrome bottom hairline.
-    gpu::fill_rect(ux, uy + CHROME_H - 1, win.w, 1, HAIRLINE);
-
-    // Close glyph — 8×8 ring at the far-left.
-    let cg_x = ux + 8;
-    let cg_y = uy + (CHROME_H - 8) / 2;
-    draw::draw_border(cg_x, cg_y, 8, 8, MID);
-
-    // Title text. "APP" if no cave, "APP · cave_name" if caved.
-    let title_color = if focused { INK } else { MID };
-    let title_x = ux + 24;
-    let title_y = uy + (CHROME_H - 16) / 2 + 4; // baseline-ish
-    font::draw_str(_fb, screen_w, title_x, title_y, win.app.name(), title_color, PANEL);
-    if let Some(cave) = win.cave_name {
-        let app_len = win.app.name().len() as u32;
-        let sep_x = title_x + app_len * 8 + 4;
-        font::draw_str(_fb, screen_w, sep_x, title_y, "·", MID, PANEL);
-        font::draw_str(_fb, screen_w, sep_x + 12, title_y, cave, title_color, PANEL);
-    }
-}
-
-/// True if (x, y) is over the chrome of the focused window. Used by
-/// desktop.rs to start a drag-move.
-pub fn focused_chrome_hit(x: i32, y: i32) -> Option<usize> {
-    let slot = current_focus()?;
-    let win = get(slot)?;
-    if x >= win.x + 16 && x < win.x + win.w as i32
-        && y >= win.y && y < win.y + CHROME_H as i32 { Some(slot) } else { None }
-}
-
-/// True if (x, y) is over the close glyph of the focused window.
-pub fn focused_close_hit(x: i32, y: i32) -> Option<usize> {
-    let slot = current_focus()?;
-    let win = get(slot)?;
-    let cg_x = win.x + 8;
-    let cg_y = win.y + (CHROME_H as i32 - 8) / 2;
-    if x >= cg_x && x < cg_x + 8 && y >= cg_y && y < cg_y + 8 { Some(slot) } else { None }
-}
-
-/// True if (x, y) is over the bottom-right resize corner of the
-/// focused window.
-pub fn focused_resize_hit(x: i32, y: i32) -> Option<usize> {
-    let slot = current_focus()?;
-    let win = get(slot)?;
-    let cx = win.x + win.w as i32;
-    let cy = win.y + win.h as i32;
-    if x >= cx - RESIZE_GRAB as i32 && x < cx
-        && y >= cy - RESIZE_GRAB as i32 && y < cy { Some(slot) } else { None }
-}
-
-/// Topmost window slot under (x, y), or None.
-pub fn slot_at(x: i32, y: i32) -> Option<usize> {
-    let z = unsafe { Z_ORDER };
-    let n = unsafe { Z_COUNT };
-    for i in (0..n).rev() {
-        let slot = z[i];
-        if let Some(win) = get(slot) {
-            if x >= win.x && x < win.x + win.w as i32
-                && y >= win.y && y < win.y + win.h as i32 {
-                return Some(slot);
+        for slot in WINDOWS.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(window);
+                FOCUSED = Some(id);
+                return Some(id);
             }
         }
     }
     None
 }
 
-/// Mark the WM as needing a full repaint.
-pub fn request_redraw() {
-    NEEDS_REDRAW.store(true, Ordering::Relaxed);
-}
-
-/// Read-and-clear "needs redraw" flag.
-pub fn take_redraw() -> bool {
-    NEEDS_REDRAW.swap(false, Ordering::Relaxed)
-}
-
-/// Force a full-frame flush — equivalent to the old `flush_all`. Kept
-/// because shell.rs and console.rs call it after every keystroke; the
-/// new WM model still needs the same fullscreen flush semantics.
-pub fn flush_all() {
-    let w = gpu::width();
-    let h = gpu::height();
-    gpu::flush(0, 0, w, h);
-}
-
-/// Reset all WM state — called when a cave is exited so we don't
-/// leak window state into the resumed host context. Wave 2 wipes
-/// everything; future waves may persist host-context windows across
-/// cave-switch.
-pub fn reset_for_cave_switch() {
+pub fn close(id: WindowId) {
     unsafe {
-        for i in 0..MAX_WINDOWS { WINDOWS[i] = None; }
-        Z_COUNT = 0;
-    }
-    NEEDS_REDRAW.store(true, Ordering::Relaxed);
-}
-```
-
-- [ ] **Step 3: Update consumers that imported the old pane API.**
-
-Run the caller probe again:
-
-```bash
-cd /Users/kadenlee/Sphragis
-rg 'wm::APP_|wm::switch_app|wm::active_app|wm::content_rect|wm::pane_count|wm::split_|wm::active_cave_indicator|wm::draw_frame|wm::set_render_target|wm::pane_app|wm::pane_rect|wm::is_close_focused|wm::focus_close_button|wm::unfocus_close_button|wm::init_panes_pub' src/ --type rust | grep -v 'src/ui/wm.rs'
-```
-
-For every match, the file needs an update. Task 6 (desktop rewrite) eliminates the bulk of these. For each non-desktop caller, comment out the call temporarily with a `// TODO Wave 2: switch to new WM API` and let Task 6 sweep them. Specifically expect: `src/ui/shell.rs` and `src/ui/console.rs` may reference `flush_all` (kept) and possibly status-bar functions (drop).
-
-- [ ] **Step 4: Build + clippy.**
-
-```bash
-SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -10
-SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -5
-```
-
-Expected: clean build. Likely call-site errors will be in `desktop.rs` (which we're rewriting in Task 6 anyway), `shell.rs`, `console.rs`. Resolve each by either keeping a compatibility shim in `wm.rs` (preferred for things shell and console rely on) or commenting at the call site.
-
-- [ ] **Step 5: Commit.**
-
-```bash
-git add src/ui/wm.rs
-git commit -m "$(cat <<'EOF'
-wm: rewrite as floating window manager
-
-Replaces the pane-based model with a floating one: up to 8 Window
-slots (app, x, y, w, h, optional cave_name), Z_ORDER tracking the
-front-most last, paint walks back-to-front so the focused window
-draws on top.
-
-Public API: open / close / focus / cycle_focus / move_by /
-resize_to / paint_all / slot_at + chrome/close/resize hit-tests.
-
-flush_all and reset_for_cave_switch kept as compatibility shims so
-shell.rs and console.rs don't break in this commit; Tasks 6+
-rewrite their consumers properly.
-
-Wave 2 covers the WM only — apps are unmodified and don't yet paint
-into the body region. Task 6's desktop rewrite hooks the app paint
-pass in.
-
-Co-Authored-By: claude-flow <ruv@ruv.net>
-EOF
-)"
-```
-
----
-
-### Task 3: Top bar — paint + click handling
-
-A new file. Renders the 22-px-tall top strip: "SPHRAGIS" wordmark on the left, customizable badges on the right, ending with `⋯` (config trigger) and `⏻` (lock). Customization persistence comes in Task 8; Task 3 just ships the hardcoded default set so the visual lands.
-
-**Files:**
-- Create: `src/ui/topbar.rs`
-- Modify: `src/ui/mod.rs`
-
-- [ ] **Step 1: Create `src/ui/topbar.rs`.**
-
-```rust
-//! Desktop top status bar.
-//!
-//! 22 px tall, spans the full screen width. Left = "SPHRAGIS"
-//! wordmark (click = launcher overlay). Right = customizable status
-//! badges + `⋯` config trigger + `⏻` lock glyph.
-//!
-//! Wave 2 ships the default badge set hardcoded. Task 8 layers the
-//! BatFS-persisted user customization on top.
-
-#![allow(dead_code)]
-
-use crate::ui::gpu;
-use crate::ui::draw;
-use crate::ui::font;
-
-pub const TOPBAR_H: u32 = 22;
-
-// Palette (mirrors Wave 1 / wm.rs). See note in wm.rs about
-// eventually centralizing.
-const BG:       u32 = 0xFF0D0D10;
-const PANEL:    u32 = 0xFF18181C;
-const HAIRLINE: u32 = 0xFF2A2A30;
-const INK:      u32 = 0xFFE5E7EB;
-const MID:      u32 = 0xFF6B7280;
-const FAINT:    u32 = 0xFF4B5563;
-
-/// Badge identifiers — the union of every status item the user can
-/// add to the top-right strip.
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub enum BadgeId {
-    NetMode,    // "NET ISOLATED" / "NET ROUTED"
-    Deadman,    // "DEADMAN HH:MM"
-    Clock,      // "HH:MM"
-    CavesCount, // "n CAVES"
-    Attempts,   // "n ATTEMPTS" (warning only when low)
-}
-
-/// Default badge order shipped out of the box.
-pub const DEFAULT_BADGES: &[BadgeId] = &[
-    BadgeId::NetMode,
-    BadgeId::Deadman,
-    BadgeId::Clock,
-];
-
-/// Click target identification — returned by `hit_test`.
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub enum TopbarHit {
-    Brand,
-    Gear,
-    Lock,
-    None,
-}
-
-/// Paint the top bar. `screen_w` is the framebuffer width; badges
-/// are the live list (DEFAULT_BADGES in v1, user-configured later).
-pub fn paint(fb: *mut u32, screen_w: u32, badges: &[BadgeId]) {
-    // Strip background — 60 % opaque PANEL over the canvas. We can't
-    // do true alpha in a u32-RGB framebuffer cheaply, so we paint
-    // a solid color one step toward the canvas. (Refine to true
-    // alpha after the rasterizer fix in Wave 5.)
-    gpu::fill_rect(0, 0, screen_w, TOPBAR_H, PANEL);
-    gpu::fill_rect(0, TOPBAR_H - 1, screen_w, 1, HAIRLINE);
-
-    // Brand wordmark — left.
-    let brand_x: u32 = 12;
-    let brand_y: u32 = (TOPBAR_H - 16) / 2 + 4;
-    font::draw_str(fb, screen_w, brand_x, brand_y, "SPHRAGIS", INK, PANEL);
-
-    // Status strip — right, painted right-to-left so the badges'
-    // widths don't need to be measured ahead.
-    let mut cursor: i32 = screen_w as i32 - 12;
-
-    // ⏻ glyph (always present, far right).
-    let lock_label = "⏻";
-    let lock_w = utf8_width_px(lock_label);
-    cursor -= lock_w as i32;
-    draw_label(fb, screen_w, cursor as u32, brand_y, lock_label, MID);
-    cursor -= 12;
-
-    // ⋯ glyph (always present, just left of lock).
-    let gear_label = "⋯";
-    let gear_w = utf8_width_px(gear_label);
-    cursor -= gear_w as i32;
-    draw_label(fb, screen_w, cursor as u32, brand_y, gear_label, FAINT);
-    cursor -= 14;
-
-    // User badges, right-to-left.
-    for badge in badges.iter().rev() {
-        let (label, warn) = badge_text(*badge);
-        let lw = label.len() as u32 * 8;
-        cursor -= lw as i32;
-        let color = if warn { INK } else { MID };
-        font::draw_str(fb, screen_w, cursor as u32, brand_y, &label, color, PANEL);
-        cursor -= 12;
+        for slot in WINDOWS.iter_mut() {
+            if slot.map(|w| w.id) == Some(id) {
+                *slot = None;
+                if FOCUSED == Some(id) {
+                    FOCUSED = WINDOWS.iter().rev().find_map(|w| w.map(|x| x.id));
+                }
+                return;
+            }
+        }
     }
 }
 
-/// Hit-test a click against the top bar. Returns the hit target or
-/// `None` if the click was elsewhere in the top bar.
-pub fn hit_test(x: u32, y: u32, screen_w: u32) -> TopbarHit {
-    if y >= TOPBAR_H { return TopbarHit::None; }
-    // Brand: 8 chars × 8 px + a few px padding either side.
-    if x >= 8 && x < 8 + 8 * 8 + 8 { return TopbarHit::Brand; }
-    // Lock: rightmost ~12 px.
-    if x >= screen_w - 20 && x < screen_w - 8 { return TopbarHit::Lock; }
-    // Gear: just left of lock, ~14 px window.
-    if x >= screen_w - 38 && x < screen_w - 24 { return TopbarHit::Gear; }
-    TopbarHit::None
+pub fn focus(id: WindowId) {
+    unsafe {
+        let mut taken: Option<Window> = None;
+        for slot in WINDOWS.iter_mut() {
+            if slot.map(|w| w.id) == Some(id) {
+                taken = slot.take();
+                break;
+            }
+        }
+        if let Some(w) = taken {
+            let mut compacted: [Option<Window>; MAX_WINDOWS] = [None; MAX_WINDOWS];
+            let mut j = 0;
+            for slot in WINDOWS.iter() {
+                if let Some(x) = slot {
+                    compacted[j] = Some(*x);
+                    j += 1;
+                }
+            }
+            compacted[j] = Some(w);
+            WINDOWS = compacted;
+            FOCUSED = Some(id);
+        }
+    }
 }
 
-/// Bitmap-font width of an ASCII or single-glyph label in pixels.
-fn utf8_width_px(s: &str) -> u32 {
-    // The bitmap font is 8 px monospace; non-ASCII glyphs are
-    // currently drawn as `?` so their width is also 8.
-    s.chars().count() as u32 * 8
+pub fn cycle_focus() {
+    let ids: alloc::vec::Vec<WindowId> = iter().map(|w| w.id).collect();
+    if ids.len() < 2 { return; }
+    let cur = focused();
+    let next_idx = match cur {
+        Some(id) => {
+            let idx = ids.iter().position(|x| *x == id).unwrap_or(0);
+            (idx + 1) % ids.len()
+        }
+        None => 0,
+    };
+    focus(ids[next_idx]);
 }
 
-fn draw_label(fb: *mut u32, screen_w: u32, x: u32, y: u32, label: &str, color: u32) {
-    font::draw_str(fb, screen_w, x, y, label, color, PANEL);
+pub fn set_rect(id: WindowId, rect: WindowRect) {
+    unsafe {
+        for slot in WINDOWS.iter_mut() {
+            if slot.map(|w| w.id) == Some(id) {
+                if let Some(w) = slot.as_mut() { w.rect = rect; }
+                return;
+            }
+        }
+    }
 }
 
-/// Resolve a badge to its current text + whether it should highlight
-/// as a warning (INK color).
-fn badge_text(b: BadgeId) -> (heapless::String<32>, bool) {
-    use core::fmt::Write;
-    let mut s: heapless::String<32> = heapless::String::new();
-    match b {
-        BadgeId::NetMode => {
-            // Wave 2 doesn't yet wire to a live net-mode source;
-            // hardcode ISOLATED. Net module exposes
-            // `crate::net::is_isolated() -> bool` once the wiring
-            // lands (Wave 3+).
-            let _ = write!(s, "NET ISOLATED");
-            (s, false)
-        }
-        BadgeId::Deadman => {
-            // `crate::security::deadman::remaining_ms() -> u64`
-            // exists (boot_screen calls deadman::refresh on grant).
-            // Wave 2 stubs the read as a fixed string to keep the
-            // visual landing; live read added with the rest of the
-            // dynamic-badge work in Task 8.
-            let _ = write!(s, "DEADMAN 47:12");
-            (s, false)
-        }
-        BadgeId::Clock => {
-            let _ = write!(s, "14:22");
-            (s, false)
-        }
-        BadgeId::CavesCount => {
-            let _ = write!(s, "0 CAVES");
-            (s, false)
-        }
-        BadgeId::Attempts => {
-            let _ = write!(s, "5 ATTEMPTS");
-            (s, false)
-        }
+/// Reset all WM state. Only called by security::wipe — NOT by the
+/// lock/unlock cycle (which preserves the workspace).
+pub fn reset_all() {
+    unsafe {
+        WINDOWS = [None; MAX_WINDOWS];
+        FOCUSED = None;
     }
 }
 ```
 
-**NOTE:** This depends on the `heapless` crate. If `Cargo.toml` doesn't already include it, add it:
+- [ ] **Step 2: Build to find consumers of the old WM API.**
 
-- [ ] **Step 2: Add `heapless` to Cargo.toml dependencies.**
-
-Open `Cargo.toml` and add to `[dependencies]`:
-
-```toml
-heapless = { version = "0.8", default-features = false }
+```bash
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -30
 ```
 
-If `heapless` is already present at any version, skip this step.
+The old `wm.rs` exposed `pane_rect`, `split_vertical`, `switch_app`, `active_app`, `draw_frame`, etc. Anywhere these are called will fail. **Don't** patch every call site now — the desktop rewrite in Task 7 replaces them all. For each compile error in a file other than `wm.rs`:
 
-- [ ] **Step 3: Wire the module in.**
+- Comment out the offending line, prefix the comment with `// XXX Wave-2-temp:` followed by the original code.
+- At the top of any file you edited, add a 1-line tracking comment: `// XXX Wave-2-temp: <N> old-WM call sites commented out, restored in Task 7.`
 
-In `src/ui/mod.rs`, add `pub mod topbar;` next to the other module declarations.
-
-- [ ] **Step 4: Build + clippy.**
+- [ ] **Step 3: Build clean.**
 
 ```bash
 SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -3
 SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
 ```
+Expected: clean. If clippy flags dead-code on the new WM functions, add `#[allow(dead_code)]` per-function — never file-level.
 
-Expected: clean.
-
-- [ ] **Step 5: Commit.**
+- [ ] **Step 4: Commit.**
 
 ```bash
-git add src/ui/topbar.rs src/ui/mod.rs Cargo.toml Cargo.lock
+git add src/ui/wm.rs src/ui/desktop.rs src/main.rs
 git commit -m "$(cat <<'EOF'
-ui: add topbar module — paint + hit-test
+wm: floating-window WM core (open/close/focus/cycle/set_rect)
 
-22-px top strip: SPHRAGIS wordmark on the left, status badges on
-the right ending with ⋯ (config trigger) and ⏻ (lock). Wave 2
-ships the default badge set (NET MODE, DEADMAN, CLOCK) with
-hardcoded values; Task 8 wires real values + BatFS-persisted
-customization.
+Replaces the pane-tiling WM with a floating-window model:
+* Window struct (id, app, rect, optional cave_name).
+* Fixed-size store [Option<Window>; 16].
+* Z-order implicit in array order; focused window last-most.
+* Public API: open / close / focus / cycle_focus / set_rect / iter
+  / count / get / focused / reset_all.
+* reset_all() is only called by security::wipe — lock/unlock cycle
+  preserves workspace state.
 
-Adds heapless dep for no-alloc small-string formatting.
+Paint, drag, and resize land in subsequent commits. Old-WM call
+sites that won't compile are tagged with `// XXX Wave-2-temp` and
+get replaced in the desktop rewrite (Task 7).
 
 Co-Authored-By: claude-flow <ruv@ruv.net>
 EOF
@@ -825,9 +445,646 @@ EOF
 
 ---
 
-### Task 4: Launcher overlay — paint + click
+## Task 3: Window paint (chrome + body + drop shadow)
 
-New file. Paints the 8-app grid: in LAUNCHER state at full opacity (interactive), in ACTIVE state at 22 % opacity (decorative, click-through), in OVERLAY state at full opacity over open windows.
+Add the paint pass for windows.
+
+**Files:**
+- Modify: `src/ui/wm.rs`
+
+- [ ] **Step 1: Append paint code to `src/ui/wm.rs`.**
+
+```rust
+// ── Palette (matches Wave 1) ──────────────────────────────────────
+
+const BG:        u32 = 0xFF0D0D10;
+const PANEL:     u32 = 0xFF18181C;
+const HAIRLINE:  u32 = 0xFF2A2A30;
+const INK:       u32 = 0xFFE5E7EB;
+const MID:       u32 = 0xFF6B7280;
+const SHADOW:    u32 = 0xFF040408;
+
+const CHROME_H:        u32 = 22;
+const SHADOW_OFFSET_X: i32 = 4;
+const SHADOW_OFFSET_Y: i32 = 6;
+
+/// Paint all open windows in z-order (back-most first → focused last).
+pub fn paint_all() {
+    use crate::ui::apps_registry::descriptor;
+    use crate::ui::draw;
+    use crate::ui::font;
+    use crate::ui::gpu;
+
+    let screen_w = gpu::width();
+    let focused = focused();
+    let snapshot: alloc::vec::Vec<Window> = iter().collect();
+
+    for window in snapshot.iter() {
+        let r = window.rect;
+        let is_focused = Some(window.id) == focused;
+
+        // Drop shadow.
+        let sx = (r.x as i32 + SHADOW_OFFSET_X).max(0) as u32;
+        let sy = (r.y as i32 + SHADOW_OFFSET_Y).max(0) as u32;
+        gpu::fill_rect(sx, sy, r.w, r.h, SHADOW);
+
+        // Body fill.
+        gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
+
+        // Chrome strip.
+        gpu::fill_rect(r.x, r.y, r.w, CHROME_H, PANEL);
+
+        // 1-px border.
+        draw::draw_border(r.x, r.y, r.w, r.h, HAIRLINE);
+
+        // Chrome/body separator.
+        gpu::fill_rect(r.x, r.y + CHROME_H, r.w, 1, HAIRLINE);
+
+        // 8x8 open circle (close glyph).
+        let cx0 = r.x + 10;
+        let cy0 = r.y + (CHROME_H - 8) / 2;
+        for dy in 0..8u32 {
+            for dx in 0..8u32 {
+                let fx = dx as i32 - 4;
+                let fy = dy as i32 - 4;
+                let d2 = fx * fx + fy * fy;
+                if d2 >= 6 && d2 <= 13 {
+                    gpu::fill_rect(cx0 + dx, cy0 + dy, 1, 1, MID);
+                }
+            }
+        }
+
+        // Title text.
+        let desc = descriptor(window.app);
+        let title_color = if is_focused { INK } else { MID };
+        let title_x = r.x + 28;
+        let title_y = r.y + (CHROME_H - 16) / 2;
+        font::draw_str(
+            gpu::framebuffer(),
+            screen_w,
+            title_x, title_y,
+            desc.title,
+            title_color, PANEL,
+        );
+
+        // Optional cave-name suffix.
+        if let Some(cave) = window.cave_name {
+            let n = cave.iter().position(|&b| b == 0).unwrap_or(16);
+            let cave_str = unsafe { core::str::from_utf8_unchecked(&cave[..n]) };
+            let sep_x = title_x + desc.title.len() as u32 * 8 + 8;
+            font::draw_str(gpu::framebuffer(), screen_w, sep_x, title_y, "*", MID, PANEL);
+            font::draw_str(gpu::framebuffer(), screen_w, sep_x + 16, title_y, cave_str, MID, PANEL);
+        }
+
+        // Body rect → app's paint callback.
+        let body = WindowRect {
+            x: r.x + 1,
+            y: r.y + CHROME_H + 1,
+            w: r.w.saturating_sub(2),
+            h: r.h.saturating_sub(CHROME_H + 2),
+        };
+        (desc.paint)(body);
+    }
+}
+```
+
+- [ ] **Step 2: Build + clippy clean.**
+
+```bash
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -3
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
+```
+Expected: clean.
+
+- [ ] **Step 3: Commit.**
+
+```bash
+git add src/ui/wm.rs
+git commit -m "$(cat <<'EOF'
+wm: paint_all() — chrome + border + drop shadow + body dispatch
+
+For each window in z-order: shadow rectangle, body BG fill, chrome
+strip, 1-px HAIRLINE border, chrome/body separator, 8x8 open-ring
+close glyph, title (INK if focused / MID if not), optional
+'* cave_name' suffix, then dispatch the app's paint callback with
+the body rect.
+
+No drag/resize yet — Task 4. No top bar yet — Task 5.
+
+Co-Authored-By: claude-flow <ruv@ruv.net>
+EOF
+)"
+```
+
+---
+
+## Task 4: Window drag-to-move + drag-to-resize + click-to-close
+
+Pointer-event handling for window manipulation.
+
+**Files:**
+- Modify: `src/ui/wm.rs`
+
+- [ ] **Step 1: Append drag/resize/hit-test code to `src/ui/wm.rs`.**
+
+```rust
+// ── Drag/resize state + hit testing ──────────────────────────────
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Corner { TL, TR, BL, BR }
+
+#[derive(Copy, Clone)]
+enum DragKind {
+    Move,
+    Resize(Corner),
+}
+
+#[derive(Copy, Clone)]
+struct DragState {
+    window: WindowId,
+    kind: DragKind,
+    start_mouse_x: i32,
+    start_mouse_y: i32,
+    start_rect: WindowRect,
+}
+
+static mut DRAG: Option<DragState> = None;
+
+const RESIZE_HIT: u32 = 12;
+const MIN_W: u32 = 280;
+const MIN_H: u32 = 160;
+
+pub enum Hit {
+    CloseGlyph(WindowId),
+    Corner(WindowId, Corner),
+    Chrome(WindowId),
+    Body(WindowId),
+    None,
+}
+
+pub fn hit_test(mx: i32, my: i32) -> Hit {
+    let snapshot: alloc::vec::Vec<Window> = iter().collect();
+    for window in snapshot.iter().rev() {
+        let r = window.rect;
+        let rx0 = r.x as i32;
+        let ry0 = r.y as i32;
+        let rx1 = rx0 + r.w as i32;
+        let ry1 = ry0 + r.h as i32;
+        if mx < rx0 || mx >= rx1 || my < ry0 || my >= ry1 { continue; }
+
+        let cgx0 = rx0 + 10;
+        let cgy0 = ry0 + ((CHROME_H - 8) / 2) as i32;
+        if mx >= cgx0 && mx < cgx0 + 8 && my >= cgy0 && my < cgy0 + 8 {
+            return Hit::CloseGlyph(window.id);
+        }
+
+        let rh = RESIZE_HIT as i32;
+        if mx < rx0 + rh && my < ry0 + rh { return Hit::Corner(window.id, Corner::TL); }
+        if mx >= rx1 - rh && my < ry0 + rh { return Hit::Corner(window.id, Corner::TR); }
+        if mx < rx0 + rh && my >= ry1 - rh { return Hit::Corner(window.id, Corner::BL); }
+        if mx >= rx1 - rh && my >= ry1 - rh { return Hit::Corner(window.id, Corner::BR); }
+
+        if my < ry0 + CHROME_H as i32 { return Hit::Chrome(window.id); }
+
+        return Hit::Body(window.id);
+    }
+    Hit::None
+}
+
+/// Begin a drag (or close, on CloseGlyph hit). Returns true if a
+/// repaint is needed.
+pub fn begin_drag(mx: i32, my: i32) -> bool {
+    match hit_test(mx, my) {
+        Hit::CloseGlyph(id) => { close(id); true }
+        Hit::Corner(id, corner) => {
+            focus(id);
+            if let Some(w) = get(id) {
+                unsafe {
+                    DRAG = Some(DragState {
+                        window: id, kind: DragKind::Resize(corner),
+                        start_mouse_x: mx, start_mouse_y: my,
+                        start_rect: w.rect,
+                    });
+                }
+            }
+            true
+        }
+        Hit::Chrome(id) => {
+            focus(id);
+            if let Some(w) = get(id) {
+                unsafe {
+                    DRAG = Some(DragState {
+                        window: id, kind: DragKind::Move,
+                        start_mouse_x: mx, start_mouse_y: my,
+                        start_rect: w.rect,
+                    });
+                }
+            }
+            true
+        }
+        Hit::Body(id) => { focus(id); true }
+        Hit::None => false,
+    }
+}
+
+pub fn update_drag(mx: i32, my: i32) -> bool {
+    let drag = unsafe { DRAG };
+    let Some(d) = drag else { return false; };
+    let dx = mx - d.start_mouse_x;
+    let dy = my - d.start_mouse_y;
+    let r0 = d.start_rect;
+    let new_rect = match d.kind {
+        DragKind::Move => WindowRect {
+            x: (r0.x as i32 + dx).max(0) as u32,
+            y: (r0.y as i32 + dy).max(0) as u32,
+            w: r0.w, h: r0.h,
+        },
+        DragKind::Resize(corner) => {
+            let mut x = r0.x as i32;
+            let mut y = r0.y as i32;
+            let mut w = r0.w as i32;
+            let mut h = r0.h as i32;
+            match corner {
+                Corner::TL => { x += dx; y += dy; w -= dx; h -= dy; }
+                Corner::TR => {          y += dy; w += dx; h -= dy; }
+                Corner::BL => { x += dx;          w -= dx; h += dy; }
+                Corner::BR => {                   w += dx; h += dy; }
+            }
+            if (w as u32) < MIN_W { w = MIN_W as i32; }
+            if (h as u32) < MIN_H { h = MIN_H as i32; }
+            WindowRect {
+                x: x.max(0) as u32, y: y.max(0) as u32,
+                w: w as u32,        h: h as u32,
+            }
+        }
+    };
+    set_rect(d.window, new_rect);
+    true
+}
+
+pub fn end_drag() {
+    unsafe { DRAG = None; }
+}
+
+pub fn is_dragging() -> bool {
+    unsafe { DRAG.is_some() }
+}
+```
+
+- [ ] **Step 2: Build + clippy clean.**
+
+```bash
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -3
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
+```
+Expected: clean.
+
+- [ ] **Step 3: Commit.**
+
+```bash
+git add src/ui/wm.rs
+git commit -m "$(cat <<'EOF'
+wm: drag-to-move + drag-to-resize + click-to-close hit testing
+
+hit_test returns CloseGlyph / Corner / Chrome / Body / None for a
+point. begin_drag initiates a drag or closes the window on
+CloseGlyph hit. update_drag applies move/resize delta, enforcing
+MIN_W=280 / MIN_H=160 floors. end_drag clears state. One drag at
+a time.
+
+Resize honors a 12-px corner hit zone on all four corners.
+
+Co-Authored-By: claude-flow <ruv@ruv.net>
+EOF
+)"
+```
+
+---
+
+## Task 5: Top bar + config storage
+
+The 22-px top strip with brand wordmark, customizable badges, config trigger, and lock glyph.
+
+**Files:**
+- Create: `src/ui/topbar.rs`
+- Create: `src/ui/topbar_config.rs`
+- Modify: `src/ui/mod.rs`
+
+- [ ] **Step 1: Create `src/ui/topbar_config.rs`.**
+
+```rust
+//! Top-bar badge config: which badges to show, in what order.
+//! Persists to /system/desktop/topbar.cfg in BatFS as a one-line
+//! ASCII letter sequence ("NDC" = NET, DEADMAN, CLOCK).
+
+#![allow(dead_code)]
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Badge {
+    NetMode,
+    Deadman,
+    Clock,
+    Caves,
+    Attempts,
+    Memory,
+    Cpu,
+    Audit,
+    CaveFocus,
+}
+
+fn badge_letter(b: Badge) -> u8 {
+    match b {
+        Badge::NetMode   => b'N',
+        Badge::Deadman   => b'D',
+        Badge::Clock     => b'C',
+        Badge::Caves     => b'V',
+        Badge::Attempts  => b'A',
+        Badge::Memory    => b'M',
+        Badge::Cpu       => b'P',
+        Badge::Audit     => b'U',
+        Badge::CaveFocus => b'F',
+    }
+}
+
+fn letter_badge(c: u8) -> Option<Badge> {
+    Some(match c {
+        b'N' => Badge::NetMode,
+        b'D' => Badge::Deadman,
+        b'C' => Badge::Clock,
+        b'V' => Badge::Caves,
+        b'A' => Badge::Attempts,
+        b'M' => Badge::Memory,
+        b'P' => Badge::Cpu,
+        b'U' => Badge::Audit,
+        b'F' => Badge::CaveFocus,
+        _ => return None,
+    })
+}
+
+pub const MAX_BADGES: usize = 9;
+
+static mut BADGES: [Option<Badge>; MAX_BADGES] = [
+    Some(Badge::NetMode),
+    Some(Badge::Deadman),
+    Some(Badge::Clock),
+    None, None, None, None, None, None,
+];
+
+const CONFIG_FILE: &str = "/system/desktop/topbar.cfg";
+
+pub fn iter() -> impl Iterator<Item = Badge> {
+    unsafe { BADGES.iter().filter_map(|b| *b).collect::<alloc::vec::Vec<_>>().into_iter() }
+}
+
+pub fn toggle(badge: Badge) {
+    unsafe {
+        for slot in BADGES.iter_mut() {
+            if *slot == Some(badge) {
+                *slot = None;
+                let mut compacted: [Option<Badge>; MAX_BADGES] = [None; MAX_BADGES];
+                let mut j = 0;
+                for s in BADGES.iter() {
+                    if let Some(b) = s { compacted[j] = Some(*b); j += 1; }
+                }
+                BADGES = compacted;
+                save();
+                return;
+            }
+        }
+        for slot in BADGES.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(badge);
+                save();
+                return;
+            }
+        }
+    }
+}
+
+fn save() {
+    let mut buf = [0u8; MAX_BADGES + 1];
+    let mut n = 0;
+    for b in iter() {
+        buf[n] = badge_letter(b);
+        n += 1;
+    }
+    buf[n] = b'\n';
+    n += 1;
+    let _ = crate::fs::batfs::create(CONFIG_FILE, &buf[..n]);
+}
+
+pub fn load() {
+    let mut buf = [0u8; MAX_BADGES + 1];
+    if let Ok(n) = crate::fs::batfs::read(CONFIG_FILE, &mut buf) {
+        let mut new_badges: [Option<Badge>; MAX_BADGES] = [None; MAX_BADGES];
+        let mut j = 0;
+        for &c in &buf[..n] {
+            if c == b'\n' { break; }
+            if let Some(b) = letter_badge(c) {
+                new_badges[j] = Some(b);
+                j += 1;
+                if j >= MAX_BADGES { break; }
+            }
+        }
+        if j > 0 {
+            unsafe { BADGES = new_badges; }
+        }
+    }
+}
+```
+
+- [ ] **Step 2: Create `src/ui/topbar.rs`.**
+
+```rust
+//! Wave-2 top bar (22-px strip).
+
+#![allow(dead_code)]
+
+use crate::ui::draw;
+use crate::ui::font;
+use crate::ui::gpu;
+use crate::ui::topbar_config::{self, Badge};
+
+pub const TOPBAR_H: u32 = 22;
+
+const PANEL:    u32 = 0xFF18181C;
+const HAIRLINE: u32 = 0xFF2A2A30;
+const INK:      u32 = 0xFFE5E7EB;
+const MID:      u32 = 0xFF9CA3AF;
+const DIM:      u32 = 0xFF6B7280;
+
+const PAD_X:     u32 = 12;
+const BADGE_GAP: u32 = 12;
+
+pub enum TopBarHit {
+    BrandClick,
+    ConfigClick,
+    LockClick,
+    None,
+}
+
+pub fn paint() {
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    gpu::fill_rect(0, 0, screen_w, TOPBAR_H, PANEL);
+    gpu::fill_rect(0, TOPBAR_H - 1, screen_w, 1, HAIRLINE);
+
+    let brand = "SPHRAGIS";
+    font::draw_str(fb, screen_w, PAD_X, (TOPBAR_H - 16) / 2 + 4, brand, INK, PANEL);
+
+    let mut items: alloc::vec::Vec<(alloc::string::String, u32)> = alloc::vec::Vec::new();
+    for b in topbar_config::iter() {
+        let text = render_badge(b);
+        let color = if badge_is_alert(b) { INK } else { MID };
+        items.push((text, color));
+    }
+    items.push((alloc::string::String::from("..."), DIM));
+    items.push((alloc::string::String::from("[L]"), DIM));
+
+    let mut total_w = 0u32;
+    for (text, _) in &items {
+        total_w += text.len() as u32 * 8 + BADGE_GAP;
+    }
+    if total_w > 0 { total_w -= BADGE_GAP; }
+    let mut x = screen_w.saturating_sub(PAD_X).saturating_sub(total_w);
+    for (text, color) in &items {
+        font::draw_str(fb, screen_w, x, (TOPBAR_H - 16) / 2 + 4, text, *color, PANEL);
+        x += text.len() as u32 * 8 + BADGE_GAP;
+    }
+}
+
+pub fn hit_test(mx: i32, my: i32) -> TopBarHit {
+    if my < 0 || (my as u32) >= TOPBAR_H { return TopBarHit::None; }
+    let screen_w = gpu::width() as i32;
+
+    let brand_w = 8 * 8;
+    if mx >= PAD_X as i32 && mx < (PAD_X as i32) + brand_w {
+        return TopBarHit::BrandClick;
+    }
+
+    let lock_w = 3 * 8;
+    let lock_x1 = screen_w - PAD_X as i32;
+    let lock_x0 = lock_x1 - lock_w;
+    if mx >= lock_x0 && mx < lock_x1 { return TopBarHit::LockClick; }
+
+    let config_w = 3 * 8;
+    let config_x1 = lock_x0 - BADGE_GAP as i32;
+    let config_x0 = config_x1 - config_w;
+    if mx >= config_x0 && mx < config_x1 { return TopBarHit::ConfigClick; }
+
+    TopBarHit::None
+}
+
+fn render_badge(b: Badge) -> alloc::string::String {
+    use alloc::format;
+    match b {
+        Badge::NetMode => {
+            if crate::net::is_isolated() {
+                format!("NET ISOLATED")
+            } else {
+                format!("NET ROUTED")
+            }
+        }
+        Badge::Deadman => {
+            let secs = crate::security::deadman::seconds_remaining();
+            format!("DEADMAN {:02}:{:02}", secs / 60, secs % 60)
+        }
+        Badge::Clock => {
+            let secs = uptime_seconds();
+            format!("{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60)
+        }
+        Badge::Caves    => format!("CAVES {}", crate::caves::count()),
+        Badge::Attempts => format!("ATTEMPTS {}", crate::security::auth::attempts_remaining()),
+        Badge::Memory   => format!("MEM --"),
+        Badge::Cpu      => format!("CPU --"),
+        Badge::Audit    => format!("AUDIT --"),
+        Badge::CaveFocus => {
+            let cave = crate::ui::wm::focused()
+                .and_then(crate::ui::wm::get)
+                .and_then(|w| w.cave_name);
+            match cave {
+                Some(bytes) => {
+                    let n = bytes.iter().position(|&b| b == 0).unwrap_or(16);
+                    format!("CAVE {}", unsafe { core::str::from_utf8_unchecked(&bytes[..n]) })
+                }
+                None => format!("CAVE --"),
+            }
+        }
+    }
+}
+
+fn badge_is_alert(b: Badge) -> bool {
+    match b {
+        Badge::Deadman  => crate::security::deadman::seconds_remaining() < 300,
+        Badge::Attempts => crate::security::auth::attempts_remaining() < 3,
+        _ => false,
+    }
+}
+
+fn uptime_seconds() -> u64 {
+    let now: u64; let freq: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) now);
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+    }
+    if freq == 0 { 0 } else { now / freq }
+}
+```
+
+- [ ] **Step 3: Register both modules in `src/ui/mod.rs`.**
+
+Add `pub mod topbar;` and `pub mod topbar_config;` alphabetically.
+
+- [ ] **Step 4: Build to find missing function references.**
+
+```bash
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -20
+```
+
+The build may fail on:
+- `crate::net::is_isolated()` — stub if missing: `pub fn is_isolated() -> bool { true }` in `src/net/mod.rs`. Mark `// Wave 2 stub`.
+- `crate::caves::count()` — stub if missing: `pub fn count() -> u8 { 0 }` in `src/caves/mod.rs`. Mark `// Wave 2 stub`.
+- `crate::security::deadman::seconds_remaining()` — stub if missing: `pub fn seconds_remaining() -> u64 { 0 }`. Mark `// Wave 2 stub`.
+
+- [ ] **Step 5: Build + clippy clean.**
+
+```bash
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -3
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
+```
+Expected: clean.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add src/ui/topbar.rs src/ui/topbar_config.rs src/ui/mod.rs src/net/ src/caves/ src/security/
+git commit -m "$(cat <<'EOF'
+topbar: 22-px status strip + customizable badges + BatFS persist
+
+* topbar.rs paints brand wordmark + badge list + '...' config
+  trigger + '[L]' lock glyph. hit_test routes clicks to one of
+  BrandClick / ConfigClick / LockClick / None.
+* topbar_config.rs holds badge order in a fixed-size array,
+  serializes to /system/desktop/topbar.cfg as a one-line ASCII
+  letter sequence (e.g. "NDC" = NET, DEADMAN, CLOCK), loads on
+  startup, silently falls back to default on missing/malformed.
+* Default badges: NetMode, Deadman, Clock. Optional: Caves,
+  Attempts, Memory, Cpu, Audit, CaveFocus.
+
+Stubs net::is_isolated / caves::count / deadman::seconds_remaining
+when missing — marked Wave-2-stub.
+
+Co-Authored-By: claude-flow <ruv@ruv.net>
+EOF
+)"
+```
+
+---
+
+## Task 6: Launcher overlay
+
+8-app grid that paints over windows when summoned.
 
 **Files:**
 - Create: `src/ui/launcher.rs`
@@ -836,113 +1093,104 @@ New file. Paints the 8-app grid: in LAUNCHER state at full opacity (interactive)
 - [ ] **Step 1: Create `src/ui/launcher.rs`.**
 
 ```rust
-//! 8-app launcher grid.
-//!
-//! Renders the 4×2 grid of apps in any of three modes:
-//!   * Full opacity, interactive (LAUNCHER state — no windows open).
-//!   * Dimmed to ~22 % opacity, non-interactive (ACTIVE state —
-//!     visible behind windows but clicks fall through).
-//!   * Full opacity, interactive, overlaid on top of windows
-//!     (OVERLAY state — summoned by ⌘K / brand click).
+//! Launcher overlay — 8-app grid summoned by ⌘K or click on the
+//! SPHRAGIS brand. Paints on top of the desktop in OVERLAY state
+//! and also IS the desktop in LAUNCHER state (no dim, no windows
+//! behind).
 
 #![allow(dead_code)]
 
-use crate::ui::gpu;
+use crate::ui::apps_registry::{AppId, APPS};
 use crate::ui::font;
-use crate::ui::apps_registry::{AppId, paint_placeholder_icon};
+use crate::ui::gpu;
 use crate::ui::topbar::TOPBAR_H;
 
-const INK_FULL: u32 = 0xFFE5E7EB;
-const INK_DIM:  u32 = 0xFF1F2024; // ~22% INK on BG — derived constant
-const MID_FULL: u32 = 0xFF6B7280;
-const MID_DIM:  u32 = 0xFF18191B; // ~22% MID on BG
+const BG:      u32 = 0xFF0D0D10;
+const INK:     u32 = 0xFFE5E7EB;
+const MID:     u32 = 0xFF9CA3AF;
+const TILE_BG: u32 = 0xFF9CA3AF;
 
-/// Painted modes.
+const COLS: u32 = 4;
+const ROWS: u32 = 2;
+const TILE_W: u32 = 22;
+const TILE_H: u32 = 22;
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum LauncherMode {
-    /// Full opacity, interactive. The whole grid is clickable.
-    Interactive,
-    /// Dim, decorative behind windows.
-    Dimmed,
+    Background,
+    Overlay,
+    Canvas,
 }
 
-/// Paint the launcher grid centered on the body region (below the
-/// top bar).
-pub fn paint(fb: *mut u32, screen_w: u32, screen_h: u32, mode: LauncherMode) {
-    // Grid geometry — matches the mockup proportions:
-    //   horizontal padding = 12 % of width
-    //   top padding = 26 % of (screen_h - TOPBAR_H)
-    //   bottom padding = 14 %
-    //   4 columns × 2 rows, 14 px gutter
-    let body_top = TOPBAR_H;
-    let body_h = screen_h - TOPBAR_H;
+pub fn paint(mode: LauncherMode) {
+    let screen_w = gpu::width();
+    let screen_h = gpu::height();
 
-    let pad_x = screen_w * 12 / 100;
-    let grid_top = body_top + body_h * 26 / 100;
-    let grid_h = body_h * 60 / 100;
+    if mode == LauncherMode::Overlay {
+        gpu::fill_rect(0, TOPBAR_H, screen_w, screen_h - TOPBAR_H, BG);
+    }
 
-    let col_w = (screen_w - 2 * pad_x - 3 * 14) / 4;
-    let row_h = (grid_h - 14) / 2;
+    let inset_x = (screen_w * 12) / 100;
+    let inset_y = TOPBAR_H + (screen_h - TOPBAR_H) * 4 / 100;
+    let grid_w = screen_w.saturating_sub(2 * inset_x);
+    let grid_h = (screen_h - TOPBAR_H) * 70 / 100;
+    let cell_w = grid_w / COLS;
+    let cell_h = grid_h / ROWS;
 
-    let (icon_color, label_color) = match mode {
-        LauncherMode::Interactive => (MID_FULL, MID_FULL),
-        LauncherMode::Dimmed       => (MID_DIM,  MID_DIM),
-    };
+    let label_color = if mode == LauncherMode::Background { MID } else { INK };
+    let tile_color  = if mode == LauncherMode::Background { 0xFF3a3b3f } else { TILE_BG };
 
-    for (i, app) in AppId::all().iter().enumerate() {
-        let col = (i % 4) as u32;
-        let row = (i / 4) as u32;
-        let cell_x = pad_x + col * (col_w + 14);
-        let cell_y = grid_top + row * (row_h + 14);
+    for (i, app) in APPS.iter().enumerate() {
+        let col = (i as u32) % COLS;
+        let row = (i as u32) / COLS;
+        let cell_x = inset_x + col * cell_w;
+        let cell_y = inset_y + row * cell_h;
+        let cx = cell_x + cell_w / 2;
+        let cy = cell_y + cell_h / 2;
 
-        // Center the 22-px icon + label inside the cell.
-        let icon_x = cell_x + (col_w - 22) / 2;
-        let icon_y = cell_y + (row_h / 2) - 22;
-        paint_placeholder_icon(*app, icon_x, icon_y, icon_color);
+        let tile_x = cx - TILE_W / 2;
+        let tile_y = cy - TILE_H / 2 - 6;
+        gpu::fill_rect(tile_x, tile_y, TILE_W, TILE_H, tile_color);
 
-        // Label below the icon. 8-px font.
-        let label = app.name();
-        let label_w = label.len() as u32 * 8;
-        let label_x = cell_x + (col_w.saturating_sub(label_w)) / 2;
-        let label_y = icon_y + 22 + 8;
-        font::draw_str(fb, screen_w, label_x, label_y, label, label_color, 0xFF0D0D10);
+        let label = app.label;
+        let lbl_x = cx - (label.len() as u32 * 8) / 2;
+        let lbl_y = tile_y + TILE_H + 8;
+        font::draw_str(gpu::framebuffer(), screen_w, lbl_x, lbl_y, label, label_color, BG);
     }
 }
 
-/// Hit-test a click against the launcher grid. Returns the AppId of
-/// the tile the user hit, or None.
-pub fn hit_test(x: u32, y: u32, screen_w: u32, screen_h: u32) -> Option<AppId> {
-    let body_top = TOPBAR_H;
-    let body_h = screen_h - TOPBAR_H;
-    let pad_x = screen_w * 12 / 100;
-    let grid_top = body_top + body_h * 26 / 100;
-    let grid_h = body_h * 60 / 100;
-    let col_w = (screen_w - 2 * pad_x - 3 * 14) / 4;
-    let row_h = (grid_h - 14) / 2;
+pub fn hit_test(mx: i32, my: i32) -> Option<AppId> {
+    let screen_w = gpu::width();
+    let screen_h = gpu::height();
+    if my < TOPBAR_H as i32 { return None; }
 
-    if y < grid_top || y >= grid_top + 2 * (row_h + 14) { return None; }
-    if x < pad_x || x >= screen_w - pad_x { return None; }
+    let inset_x = (screen_w * 12) / 100;
+    let inset_y = TOPBAR_H + (screen_h - TOPBAR_H) * 4 / 100;
+    let grid_w = screen_w.saturating_sub(2 * inset_x);
+    let grid_h = (screen_h - TOPBAR_H) * 70 / 100;
+    let cell_w = grid_w / COLS;
+    let cell_h = grid_h / ROWS;
 
-    let col = (x - pad_x) / (col_w + 14);
-    let row = (y - grid_top) / (row_h + 14);
-    if col >= 4 || row >= 2 { return None; }
-    let idx = (row * 4 + col) as usize;
-    if idx >= 8 { return None; }
-    Some(AppId::all()[idx])
+    if (mx as u32) < inset_x || (mx as u32) >= inset_x + grid_w { return None; }
+    if (my as u32) < inset_y || (my as u32) >= inset_y + grid_h { return None; }
+
+    let col = ((mx as u32) - inset_x) / cell_w;
+    let row = ((my as u32) - inset_y) / cell_h;
+    let idx = (row * COLS + col) as usize;
+    APPS.get(idx).map(|d| d.id)
 }
 ```
 
-- [ ] **Step 2: Wire the module in.**
+- [ ] **Step 2: Register module in `src/ui/mod.rs`.**
 
-In `src/ui/mod.rs`, add `pub mod launcher;`.
+Add `pub mod launcher;` alphabetically.
 
-- [ ] **Step 3: Build + clippy.**
+- [ ] **Step 3: Build + clippy clean.**
 
 ```bash
 SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -3
 SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
 ```
-
 Expected: clean.
 
 - [ ] **Step 4: Commit.**
@@ -950,14 +1198,16 @@ Expected: clean.
 ```bash
 git add src/ui/launcher.rs src/ui/mod.rs
 git commit -m "$(cat <<'EOF'
-ui: add launcher module — 4×2 app grid paint + hit-test
+launcher: 8-app grid overlay (Background / Overlay / Canvas modes)
 
-Two render modes: Interactive (full opacity, clicks open the app)
-and Dimmed (~22% opacity, decorative behind open windows). Hit-test
-maps a (x, y) click to the AppId of the tile under the cursor.
+paint(mode) draws a 4x2 grid of solid silhouette icons + labels.
+Overlay paints a solid BG scrim first; Background dims tile + label
+colors; Canvas is full opacity over the bare desktop. hit_test
+returns Some(AppId) for clicks landing on a tile cell, None
+otherwise.
 
-Uses apps_registry::paint_placeholder_icon — Wave 2 placeholder
-22×22 squares. Wave 3+ replaces per-app.
+Tile size, gap, and inset are derived from screen dims so the grid
+scales to any resolution.
 
 Co-Authored-By: claude-flow <ruv@ruv.net>
 EOF
@@ -966,134 +1216,59 @@ EOF
 
 ---
 
-### Task 5: Watermark Σ paint helper
+## Task 7: Desktop state machine + run loop
 
-Reuses the Wave 1 baked Σ bitmap. Centered behind everything, large, low alpha. Small wrapper because every desktop repaint needs this.
+Replace `src/ui/desktop.rs` with the new state-machine event loop.
 
 **Files:**
-- Modify: `src/ui/draw.rs` (add `paint_centered_watermark`)
+- Replace: `src/ui/desktop.rs`
 
-- [ ] **Step 1: Add the helper to `src/ui/draw.rs`.**
+- [ ] **Step 1: Check for `PointerEvent` + `next_pointer_event()` in tablet driver.**
 
-Append this function near the bottom of the file (after `blit_alpha_bitmap`):
+```bash
+grep -nE 'pub fn next_pointer_event|pub enum PointerEvent' /Users/kadenlee/Sphragis/src/drivers/virtio/tablet.rs
+```
+
+If either is missing, add the stubs to `src/drivers/virtio/tablet.rs`:
 
 ```rust
-/// Paint the Σ watermark centered on screen, at a large size with a
-/// soft-on-near-black tint. Used by the desktop canvas behind every-
-/// thing else. Reuses Wave 1's baked Σ bitmap, scaled by simple
-/// nearest-neighbor blow-up — fine for a watermark.
-pub fn paint_sigma_watermark(fb: *mut u32, screen_w: u32, screen_h: u32) {
-    use crate::ui::sigma_bitmap::{SIGMA_BITMAP_96, SIGMA_BITMAP_W, SIGMA_BITMAP_H};
-    // Scale: 4× of the 96×96 source = 384×384, sized for desktop.
-    const SCALE: u32 = 4;
-    let target_w = SIGMA_BITMAP_W * SCALE;
-    let target_h = SIGMA_BITMAP_H * SCALE;
-    let origin_x = ((screen_w as i32) - target_w as i32) / 2;
-    let origin_y = ((screen_h as i32) - target_h as i32) / 2;
-    // Soft mark tint — slightly above BG, well below INK.
-    const WATERMARK: u32 = 0xFF1C1D22;
-    for row in 0..target_h as i32 {
-        for col in 0..target_w as i32 {
-            let src_row = (row as u32 / SCALE) as usize;
-            let src_col = (col as u32 / SCALE) as usize;
-            let cov = SIGMA_BITMAP_96[src_row * SIGMA_BITMAP_W as usize + src_col] as u32;
-            if cov == 0 { continue; }
-            let sx = origin_x + col;
-            let sy = origin_y + row;
-            if sx < 0 || sx >= screen_w as i32 { continue; }
-            if sy < 0 || sy >= screen_h as i32 { continue; }
-            let fb_idx = (sy as u32 * screen_w + sx as u32) as usize;
-            unsafe {
-                let dst = core::ptr::read_volatile(fb.add(fb_idx));
-                let dr = (dst >> 16) & 0xFF;
-                let dg = (dst >> 8) & 0xFF;
-                let db = dst & 0xFF;
-                let wr = (WATERMARK >> 16) & 0xFF;
-                let wg = (WATERMARK >> 8) & 0xFF;
-                let wb = WATERMARK & 0xFF;
-                // Quarter-strength blend toward the watermark color
-                // even when coverage is full — keeps the Σ subtle.
-                let alpha = cov / 4;
-                let r = (dr + (((wr - dr) * alpha) / 255)).min(255);
-                let g = (dg + (((wg - dg) * alpha) / 255)).min(255);
-                let b = (db + (((wb - db) * alpha) / 255)).min(255);
-                core::ptr::write_volatile(
-                    fb.add(fb_idx),
-                    0xFF000000 | (r << 16) | (g << 8) | b,
-                );
-            }
-        }
-    }
+#[derive(Copy, Clone)]
+pub enum PointerEvent {
+    Down(i32, i32),
+    Move(i32, i32),
+    Up(i32, i32),
 }
+
+/// Wave 2 stub — wires real pointer-event decoding from the
+/// virtio-tablet stream in Wave 3+. Returning None means the
+/// desktop runs keyboard-only on existing kernels.
+pub fn next_pointer_event() -> Option<PointerEvent> { None }
 ```
 
-- [ ] **Step 2: Build + clippy.**
+Mark the stubs `// Wave 2 stub`.
 
-```bash
-SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -3
-SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
-```
-
-Expected: clean.
-
-- [ ] **Step 3: Commit.**
-
-```bash
-git add src/ui/draw.rs
-git commit -m "$(cat <<'EOF'
-draw: add paint_sigma_watermark — desktop background mark
-
-4× scaled nearest-neighbor blow-up of the Wave 1 baked Σ bitmap,
-quarter-strength alpha blend over the canvas. Subtle behind-
-everything brand mark for the new desktop.
-
-Co-Authored-By: claude-flow <ruv@ruv.net>
-EOF
-)"
-```
-
----
-
-### Task 6: Desktop state machine + event loop
-
-Rewrite `src/ui/desktop.rs` end-to-end. Replaces the Ctrl+1-5 single-app switcher with the LAUNCHER / ACTIVE / OVERLAY state machine. Returns to caller on lock (`⌘L` or ⏻ click) so `main.rs` can re-enter the lock screen.
-
-**Files:**
-- Modify: `src/ui/desktop.rs`
-
-- [ ] **Step 1: Replace `src/ui/desktop.rs` with the new state-machine version.**
+- [ ] **Step 2: Replace `src/ui/desktop.rs` end-to-end.**
 
 ```rust
-//! Desktop environment — Wave 2.
-//!
-//! State machine:
-//!
-//!     LAUNCHER ──click app──> ACTIVE ──close last window──> LAUNCHER
-//!                                │
-//!                                └── ⌘K / brand click ──> OVERLAY
-//!                                                            │
-//!                                                  click app │ click outside / Esc
-//!                                                            ▼
-//!                                                        ACTIVE
-//!
-//! `run()` returns `LockReason` to its caller (main.rs) when the
-//! user presses ⌘L or clicks ⏻. main.rs is responsible for the
-//! re-enter cycle.
-//!
-//! WM state persists across the run/exit cycle because it lives in
-//! `wm.rs` module statics — locking doesn't reset windows.
+//! Wave 2 desktop. State machine + event loop.
+
+#![allow(dead_code)]
 
 use crate::platform;
-use crate::ui::{wm, topbar, launcher, draw, gpu};
-use crate::ui::apps_registry::AppId;
-use crate::ui::topbar::{TOPBAR_H, BadgeId, DEFAULT_BADGES, TopbarHit};
-use crate::ui::launcher::LauncherMode;
+use crate::ui::draw;
+use crate::ui::gpu;
+use crate::ui::launcher::{self, LauncherMode};
+use crate::ui::sigma_bitmap::{SIGMA_BITMAP_96, SIGMA_BITMAP_W, SIGMA_BITMAP_H};
+use crate::ui::topbar::{self, TopBarHit};
+use crate::ui::topbar_config;
+use crate::ui::wm;
 
-/// Why `run()` returned. Currently only "user requested lock"; future
-/// expansions (panic, system shutdown) get new variants.
-#[derive(Copy, Clone, PartialEq, Eq)]
+const BG:        u32 = 0xFF0D0D10;
+const WATERMARK: u32 = 0xFF1C1D22;
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum LockReason {
-    UserLocked,
+    UserRequest,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -1103,790 +1278,180 @@ enum State {
     Overlay,
 }
 
-const BG: u32 = 0xFF0D0D10;
+static mut OVERLAY_OPEN: bool = false;
 
-/// Modifier-key state. Updated as the input loop sees Ctrl/⌘ events.
-struct Mods {
-    cmd: bool,
+pub fn init() {
+    topbar_config::load();
 }
 
-/// Drag state — None when no drag in progress; otherwise the kind
-/// + the slot being dragged.
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum Drag {
-    None,
-    Move(usize, i32, i32), // slot, last-x, last-y
-    Resize(usize),          // slot — corner drag
-}
-
-/// Run the desktop event loop until the user locks. Returns the
-/// reason so main.rs can decide what to do next.
 pub fn run() -> LockReason {
-    let mut state = if wm::any_open() { State::Active } else { State::Launcher };
-    let mut mods = Mods { cmd: false };
-    let mut drag = Drag::None;
-    let mut pointer_x: i32 = 0;
-    let mut pointer_y: i32 = 0;
-    let mut need_repaint = true;
-
     loop {
-        // ── repaint ──────────────────────────────────────────────
-        if need_repaint || wm::take_redraw() {
-            paint_full(state);
-            need_repaint = false;
+        let state = current_state();
+        paint(state);
+        gpu::flush(0, 0, gpu::width(), gpu::height());
+
+        match poll_event() {
+            Event::Lock => return LockReason::UserRequest,
+            Event::Repaint => continue,
+            Event::None => { core::hint::spin_loop(); }
         }
-
-        // ── drain input ──────────────────────────────────────────
-        crate::drivers::virtio::keyboard::poll();
-        crate::drivers::virtio::tablet::poll();
-
-        // Keyboard
-        let key = platform::serial_getc()
-            .or_else(crate::drivers::virtio::keyboard::getc)
-            .or_else(crate::drivers::virtio::tablet::getc_key);
-        if let Some(c) = key {
-            if let Some(reason) = handle_key(c, &mut state, &mods) {
-                return reason;
-            }
-            need_repaint = true;
-        }
-
-        // Pointer events from the tablet driver. Wave 2 reads a simple
-        // (x, y, button) snapshot each tick; the tablet module
-        // already maintains this state.
-        if let Some((px, py, btn)) =
-            crate::drivers::virtio::tablet::pointer_state()
-        {
-            pointer_x = px;
-            pointer_y = py;
-            if handle_pointer(px, py, btn, &mut state, &mut drag) {
-                need_repaint = true;
-            }
-        }
-
-        // Cooperative yield so other kernel work runs.
-        core::hint::spin_loop();
-
-        // Suppress the unused-mut warning for `pointer_x/y` — these
-        // are intentionally tracked for future hover-state work but
-        // not yet read.
-        let _ = (pointer_x, pointer_y);
     }
 }
 
-/// Paint a full frame for the given state.
-fn paint_full(state: State) {
+fn current_state() -> State {
+    if unsafe { OVERLAY_OPEN } { return State::Overlay; }
+    if wm::count() == 0 { return State::Launcher; }
+    State::Active
+}
+
+fn paint(state: State) {
     let w = gpu::width();
     let h = gpu::height();
-    let fb = gpu::framebuffer();
 
-    // 1. canvas BG.
-    gpu::fill_screen(BG);
+    gpu::fill_rect(0, 0, w, h, BG);
 
-    // 2. watermark Σ.
-    draw::paint_sigma_watermark(fb, w, h);
+    let glyph_x = (w / 2) as i32 - (SIGMA_BITMAP_W as i32) / 2;
+    let glyph_y = (h / 2) as i32 - (SIGMA_BITMAP_H as i32) / 2;
+    draw::blit_alpha_bitmap(
+        gpu::framebuffer(),
+        w, h,
+        glyph_x, glyph_y,
+        &SIGMA_BITMAP_96,
+        SIGMA_BITMAP_W, SIGMA_BITMAP_H,
+        WATERMARK,
+    );
 
-    // 3. launcher grid — dimmed if ACTIVE, full opacity otherwise.
-    let mode = match state {
-        State::Launcher => LauncherMode::Interactive,
-        State::Active   => LauncherMode::Dimmed,
-        State::Overlay  => LauncherMode::Interactive,
-    };
-    launcher::paint(fb, w, h, mode);
-
-    // 4. all windows (back-to-front). Skipped in Launcher state
-    //    (there are none) and behind the overlay in Overlay state.
-    if state == State::Active || state == State::Overlay {
-        wm::paint_all(fb, w, h);
+    match state {
+        State::Launcher => launcher::paint(LauncherMode::Canvas),
+        State::Active   => { launcher::paint(LauncherMode::Background); wm::paint_all(); }
+        State::Overlay  => { wm::paint_all(); launcher::paint(LauncherMode::Overlay); }
     }
 
-    // 5. overlay grid (if Overlay) — on top of windows.
-    if state == State::Overlay {
-        launcher::paint(fb, w, h, LauncherMode::Interactive);
-    }
-
-    // 6. top bar on top.
-    topbar::paint(fb, w, DEFAULT_BADGES);
-
-    gpu::flush(0, 0, w, h);
+    topbar::paint();
 }
 
-/// Handle a single keyboard event. Returns `Some(LockReason)` if the
-/// user pressed ⌘L (or otherwise requested a lock).
-fn handle_key(c: u8, state: &mut State, mods: &Mods) -> Option<LockReason> {
-    // The kernel's keyboard pipe doesn't currently expose modifier
-    // chords as separate events; we treat plain ASCII for the
-    // bindings the keyboard driver delivers when ⌘ + letter is
-    // pressed: ⌘K=0x0B, ⌘L=0x0C, ⌘W=0x17. These are
-    // the ctrl-modified ASCII codes virtio-keyboard delivers when
-    // Ctrl+K/L/W is pressed.
-    match c {
-        0x0B => { // ⌘K — toggle launcher overlay
-            *state = match *state {
-                State::Active   => State::Overlay,
-                State::Overlay  => State::Active,
-                State::Launcher => State::Launcher,
-            };
-            None
-        }
-        0x0C => Some(LockReason::UserLocked), // ⌘L
-        0x17 => { // ⌘W — close focused window
-            if let Some(slot) = wm::current_focus() {
-                wm::close(slot);
-                if !wm::any_open() { *state = State::Launcher; }
-            }
-            None
-        }
-        0x1B => { // Esc — dismiss overlay
-            if *state == State::Overlay { *state = State::Active; }
-            None
-        }
-        0x09 => { // Tab — cycle focus (treated as ⌘TAB for simplicity)
-            wm::cycle_focus();
-            None
-        }
-        _ => {
-            // Plain text goes to the focused window's app. Wave 2's
-            // apps don't yet have an input hook through the WM, so
-            // we route keystrokes to the legacy single-app path:
-            // shell. Future waves wire each app properly.
-            if let Some(slot) = wm::current_focus() {
-                if let Some(win) = wm::get(slot) {
-                    route_keystroke_to_app(win.app, c);
+enum Event { None, Repaint, Lock }
+
+fn poll_event() -> Event {
+    crate::drivers::virtio::keyboard::poll();
+    crate::drivers::virtio::tablet::poll();
+
+    if let Some(pe) = crate::drivers::virtio::tablet::next_pointer_event() {
+        return handle_pointer(pe);
+    }
+
+    if let Some(c) = platform::serial_getc()
+        .or_else(crate::drivers::virtio::keyboard::getc)
+        .or_else(crate::drivers::virtio::tablet::getc_key)
+    {
+        return handle_key(c);
+    }
+
+    Event::None
+}
+
+fn handle_pointer(pe: crate::drivers::virtio::tablet::PointerEvent) -> Event {
+    use crate::drivers::virtio::tablet::PointerEvent;
+    match pe {
+        PointerEvent::Down(x, y) => {
+            if (y as u32) < topbar::TOPBAR_H {
+                match topbar::hit_test(x, y) {
+                    TopBarHit::BrandClick  => { unsafe { OVERLAY_OPEN = true; } }
+                    TopBarHit::ConfigClick => { /* Task 10 */ }
+                    TopBarHit::LockClick   => return Event::Lock,
+                    TopBarHit::None        => {}
                 }
+                return Event::Repaint;
             }
-            let _ = mods;
-            None
+
+            if unsafe { OVERLAY_OPEN } {
+                match launcher::hit_test(x, y) {
+                    Some(id) => {
+                        unsafe { OVERLAY_OPEN = false; }
+                        wm::open(id, None);
+                    }
+                    None => unsafe { OVERLAY_OPEN = false; }
+                }
+                return Event::Repaint;
+            }
+
+            if wm::count() == 0 {
+                if let Some(id) = launcher::hit_test(x, y) {
+                    wm::open(id, None);
+                    return Event::Repaint;
+                }
+                return Event::None;
+            }
+
+            if wm::begin_drag(x, y) { Event::Repaint } else { Event::None }
+        }
+        PointerEvent::Move(x, y) => {
+            if wm::is_dragging() && wm::update_drag(x, y) { Event::Repaint }
+            else { Event::None }
+        }
+        PointerEvent::Up(_, _) => {
+            wm::end_drag();
+            Event::Repaint
         }
     }
 }
 
-/// Forward a keystroke to a specific app. Wave 2 stub — each app
-/// gets its own real handler in its own redesign wave.
-fn route_keystroke_to_app(app: AppId, c: u8) {
-    if app == AppId::Shell {
-        // Existing shell input pipe.
-        let _ = c;
-        // crate::ui::shell::feed_byte(c); — to wire once shell is
-        // refactored to expose a per-byte hook. Wave 2 stub.
+fn handle_key(c: u8) -> Event {
+    // Full keyboard shortcut table lands in Task 9. Esc handled here
+    // so the overlay can be dismissed before then.
+    if c == 0x1B && unsafe { OVERLAY_OPEN } {
+        unsafe { OVERLAY_OPEN = false; }
+        return Event::Repaint;
     }
-}
-
-/// Handle a pointer state snapshot. Returns true if the frame needs
-/// repaint.
-fn handle_pointer(
-    px: i32,
-    py: i32,
-    pressed: bool,
-    state: &mut State,
-    drag: &mut Drag,
-) -> bool {
-    let w = gpu::width();
-    let h = gpu::height();
-
-    // Released? End any drag.
-    if !pressed {
-        if *drag != Drag::None { *drag = Drag::None; return true; }
-        return false;
-    }
-
-    // Pressed — figure out what was hit, in priority order: top bar
-    // first, then overlay/launcher grid (when interactive), then
-    // window chrome/close/resize/body.
-
-    // ── Top bar ──────────────────────────────────────────────────
-    if py >= 0 && (py as u32) < TOPBAR_H {
-        match topbar::hit_test(px as u32, py as u32, w) {
-            TopbarHit::Brand => {
-                *state = match *state {
-                    State::Launcher => State::Launcher,
-                    State::Active   => State::Overlay,
-                    State::Overlay  => State::Active,
-                };
-                return true;
-            }
-            TopbarHit::Lock => {
-                // Treat like ⌘L — handled by the run loop reading
-                // this as a LockReason. For simplicity, set a
-                // module-level "wants lock" flag here.
-                LOCK_REQUESTED.store(true, core::sync::atomic::Ordering::Relaxed);
-                return true;
-            }
-            TopbarHit::Gear => {
-                // Task 8 wires the config sheet here; Wave 2 ships
-                // with no-op gear so the click visibly does nothing.
-                return false;
-            }
-            TopbarHit::None => return false,
-        }
-    }
-
-    // ── Overlay or Launcher (interactive) ────────────────────────
-    if matches!(*state, State::Launcher | State::Overlay) {
-        if let Some(app) = launcher::hit_test(px as u32, py as u32, w, h) {
-            // Open the app (no cave context from the launcher;
-            // caves manager will use a different open path).
-            let _ = wm::open(app, None);
-            *state = State::Active;
-            return true;
-        }
-        // In OVERLAY, click-outside dismisses.
-        if *state == State::Overlay {
-            *state = State::Active;
-            return true;
-        }
-        return false;
-    }
-
-    // ── Window interactions (state == Active) ─────────────────────
-    // Resize corner first (priority over chrome / body).
-    if let Some(slot) = wm::focused_resize_hit(px, py) {
-        *drag = Drag::Resize(slot);
-        return true;
-    }
-    // Close button.
-    if let Some(slot) = wm::focused_close_hit(px, py) {
-        wm::close(slot);
-        if !wm::any_open() { *state = State::Launcher; }
-        return true;
-    }
-    // Chrome → start a move drag.
-    if let Some(slot) = wm::focused_chrome_hit(px, py) {
-        *drag = Drag::Move(slot, px, py);
-        return true;
-    }
-    // Body → focus the window under the cursor.
-    if let Some(slot) = wm::slot_at(px, py) {
-        wm::focus(slot);
-        return true;
-    }
-
-    false
-}
-
-/// Lock-request flag for the ⏻ button (which can't directly return
-/// from `handle_pointer`).
-static LOCK_REQUESTED: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
-
-#[allow(dead_code)]
-pub fn lock_requested() -> bool {
-    LOCK_REQUESTED.swap(false, core::sync::atomic::Ordering::Relaxed)
-}
-
-/// Legacy entry — kept compiling for now. The old caller in main.rs
-/// uses `run() -> !`; Task 7 changes the call site to use the new
-/// `run() -> LockReason`. Until then, `resume()` and the old
-/// `!`-returning fallback live in the call-site comment, not here.
-#[allow(dead_code)]
-pub fn resume() -> LockReason {
-    run()
+    Event::None
 }
 ```
 
-**NOTE:** This task assumes `crate::drivers::virtio::tablet::pointer_state()` exists and returns `Option<(i32, i32, bool)>` for (x, y, button_pressed). If it doesn't, see the next step.
-
-- [ ] **Step 2: Confirm `tablet::pointer_state()` exists, or add a thin shim.**
+- [ ] **Step 3: Remove old desktop callers from `main.rs`.**
 
 ```bash
-cd /Users/kadenlee/Sphragis
-grep -n 'pub fn pointer_state\|pub fn cursor\|pub fn xy\|pub fn last_position\|pub fn position\|pub fn read_pointer' src/drivers/virtio/tablet.rs 2>/dev/null
+grep -n 'desktop::resume\|desktop::run' /Users/kadenlee/Sphragis/src/main.rs
 ```
 
-If a function returning the cursor state already exists with a different name, adjust the call in `handle_pointer`. If none exists, add this near the top of `src/drivers/virtio/tablet.rs`:
+Delete any reference to `desktop::resume()` (the function no longer exists). For `desktop::run()` calls, leave them in place — Task 8 wraps them in a loop.
 
-```rust
-/// Snapshot the current pointer state (x, y, button_pressed) or None
-/// if no pointer has reported yet. Wave 2's WM polls this every tick.
-pub fn pointer_state() -> Option<(i32, i32, bool)> {
-    // The tablet driver already tracks cursor position internally.
-    // If it doesn't expose getters yet, replace the bodies below
-    // with reads of the appropriate private statics.
-    None  // placeholder — replace with the real read
-}
-```
-
-If `pointer_state` had to be a placeholder, that's a known limitation: pointer-driven drag/resize won't work in QEMU until the tablet driver is properly wired. Keyboard shortcuts still work. Note this in the commit.
-
-- [ ] **Step 3: Update `src/main.rs` for the new return type.**
-
-Find the call site:
+Also remove any `// XXX Wave-2-temp` tags introduced in Task 2 if their tagged code is no longer reachable; verify by searching:
 
 ```bash
-grep -n 'ui::desktop::run' /Users/kadenlee/Sphragis/src/main.rs
+grep -rn 'Wave-2-temp' /Users/kadenlee/Sphragis/src
 ```
 
-The current line (around 453) reads `ui::desktop::run();` and assumes `-> !`. Replace it with the lock-loop:
+For each surviving tag, replace the commented-out call with the new equivalent if one exists, or delete the comment entirely. Be conservative — if you don't know what a tag was tracking, leave it and document the unknown in the commit.
 
-```rust
-        // Lock cycle: alternate between the lock screen and the
-        // desktop. WM state persists across cycles because wm.rs
-        // holds it in module statics.
-        loop {
-            security::boot_screen::run();
-            match ui::desktop::run() {
-                ui::desktop::LockReason::UserLocked => continue,
-            }
-        }
-```
-
-Replace whatever code follows the existing `boot_screen::run()` + `desktop::run()` calls so the loop wraps both.
-
-- [ ] **Step 4: Build + clippy.**
+- [ ] **Step 4: Build + clippy clean.**
 
 ```bash
 SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -10
-SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -5
-```
-
-Expected: clean. Likely fixes needed: callers of the old `desktop::resume()` returning `!`, callers of removed pane-API helpers. Resolve each by matching the new return-type signature.
-
-- [ ] **Step 5: Commit.**
-
-```bash
-git add src/ui/desktop.rs src/main.rs src/drivers/virtio/tablet.rs
-git commit -m "$(cat <<'EOF'
-desktop: state machine + lock-cycle loop
-
-Rewrites the desktop event loop end-to-end against the Wave 2 spec.
-LAUNCHER / ACTIVE / OVERLAY states; ⌘K toggles overlay; ⌘L locks;
-⌘W closes; ⌘TAB cycles. Brand-click and ⏻ click also trigger the
-state transitions. Pointer events route to chrome drag, corner
-resize, close button, or window-body focus.
-
-main.rs now wraps boot_screen + desktop in a re-entrant loop so
-locking returns to the lock screen and re-unlocking resumes the
-same workspace (WM state is module-static and survives the cycle).
-
-Per-window app paint + per-window keystroke routing are
-stubbed — each app's redesign wave wires its own paint + input
-hook. The chrome itself draws.
-
-Co-Authored-By: claude-flow <ruv@ruv.net>
-EOF
-)"
-```
-
----
-
-### Task 7: App-body paint pass — call each app's paint into its window region
-
-The WM owns chrome; apps own body. Wave 2 connects them. Each existing app has its own paint function (already living in `src/ui/apps/*`); we add an `AppId::dispatch_paint(rect)` thin wrapper that calls the right one.
-
-**Files:**
-- Modify: `src/ui/apps_registry.rs`
-- Modify: `src/ui/wm.rs`
-
-- [ ] **Step 1: Audit each app's existing paint function.**
-
-```bash
-cd /Users/kadenlee/Sphragis
-for f in src/ui/apps/*.rs; do
-    name=$(basename "$f" .rs)
-    [ "$name" = "mod" ] && continue
-    echo "== $name =="
-    grep -nE '^pub fn (paint|render|draw)' "$f" | head -3
-done
-```
-
-Expected: each app exposes some kind of `render` or `paint` function. Note the function names — you'll dispatch to them in the next step.
-
-- [ ] **Step 2: Add `paint_body` to `AppId` in apps_registry.rs.**
-
-Append to the `impl AppId` block:
-
-```rust
-    /// Dispatch to the app's body-paint function. Each app's paint
-    /// runs inside the window-body rect (chrome already drawn by
-    /// the WM). Apps that don't yet have a Wave 2-compatible paint
-    /// callback fall back to a placeholder.
-    pub fn paint_body(self, body_x: u32, body_y: u32, body_w: u32, body_h: u32) {
-        // Set the GPU clip to the body region so the app can't paint
-        // outside its window (apps were written assuming full-screen
-        // access; clipping is the simplest way to constrain them
-        // without rewriting each one).
-        crate::ui::font::set_clip(body_x, body_y, body_w, body_h);
-        match self {
-            AppId::Caves    => crate::ui::apps::caves_mgr::render(),
-            AppId::Files    => crate::ui::apps::filemanager::render(),
-            AppId::Net      => crate::ui::apps::netmon::render(),
-            AppId::Security => crate::ui::apps::security::render(),
-            AppId::Editor   => crate::ui::apps::editor::render(),
-            AppId::Comms    => crate::ui::apps::comms::render(),
-            AppId::Shell    => {
-                // Shell paint lives in src/ui/shell.rs; Wave 3 wires
-                // it cleanly. Wave 2 leaves the body blank with a
-                // small placeholder string.
-                paint_app_stub(body_x, body_y, "shell — wave 3 wire-up");
-            }
-            AppId::Agent    => {
-                paint_app_stub(body_x, body_y, "agent — design pending");
-            }
-        }
-        crate::ui::font::clear_clip();
-    }
-}
-
-fn paint_app_stub(body_x: u32, body_y: u32, msg: &str) {
-    // Use the bitmap font's draw_str on the framebuffer.
-    let w = crate::ui::gpu::width();
-    let fb = crate::ui::gpu::framebuffer();
-    crate::ui::font::draw_str(
-        fb, w,
-        body_x + 16, body_y + 16,
-        msg, 0xFF6B7280, 0xFF0D0D10,
-    );
-}
-```
-
-**NOTE:** This step assumes each app exposes a no-arg `render()` function. If the real names from Step 1 differ, update each match arm accordingly. If any app has a different signature (e.g., takes a `WindowRect`), adapt.
-
-- [ ] **Step 3: Call `paint_body` from the WM's paint_window.**
-
-In `src/ui/wm.rs`, find `paint_window` (currently ends after rendering the title text). Append the body-paint call just before the closing `}`:
-
-```rust
-    // Body paint — call the app's paint, clipped to the body region.
-    let body_x = ux;
-    let body_y = uy + CHROME_H;
-    let body_w = win.w;
-    let body_h = win.h.saturating_sub(CHROME_H);
-    win.app.paint_body(body_x, body_y, body_w, body_h);
-```
-
-- [ ] **Step 4: Build + clippy.**
-
-```bash
-SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -5
 SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
 ```
-
-Expected: clean. If any app's render function has a different signature, the build fails with a clear mismatch error — adapt the match arm.
-
-- [ ] **Step 5: Commit.**
-
-```bash
-git add src/ui/apps_registry.rs src/ui/wm.rs
-git commit -m "$(cat <<'EOF'
-ui: dispatch each app's body paint into its window region
-
-Adds AppId::paint_body which the WM calls for each open window.
-Apps with pre-existing render() functions get clip-set, render
-called, then clip-cleared so cyberpunk-styled apps can't paint
-outside their window box. Shell and Agent get placeholder
-strings — they'll wire their real paint in Wave 3 and beyond.
-
-Co-Authored-By: claude-flow <ruv@ruv.net>
-EOF
-)"
-```
-
----
-
-### Task 8: Top-bar customization sheet + BatFS persistence
-
-Layer the config sheet on top of the static default-badges code. Open via `⋯` click; lists every BadgeId with toggle + reorder; saves to `/system/desktop/topbar.cfg` in BatFS.
-
-**Files:**
-- Modify: `src/ui/topbar.rs`
-- Modify: `src/ui/desktop.rs`
-
-- [ ] **Step 1: Add the config-sheet UI to `src/ui/topbar.rs`.**
-
-Append to topbar.rs:
-
-```rust
-// ─── Config sheet ─────────────────────────────────────────────────
-//
-// A small modal overlay that opens when the user clicks ⋯. Lists
-// every BadgeId with an on/off toggle. The user enables/disables
-// + drags to reorder; the desktop event loop owns the modal-mode
-// state and forwards clicks here.
-
-const CONFIG_PATH: &str = "/system/desktop/topbar.cfg";
-
-/// All badges in canonical order. The user's active list is a subset
-/// of these, persisted to BatFS as a byte sequence of indices.
-pub const ALL_BADGES: &[BadgeId] = &[
-    BadgeId::NetMode,
-    BadgeId::Deadman,
-    BadgeId::Clock,
-    BadgeId::CavesCount,
-    BadgeId::Attempts,
-];
-
-impl BadgeId {
-    pub const fn as_byte(self) -> u8 {
-        match self {
-            BadgeId::NetMode    => 0,
-            BadgeId::Deadman    => 1,
-            BadgeId::Clock      => 2,
-            BadgeId::CavesCount => 3,
-            BadgeId::Attempts   => 4,
-        }
-    }
-
-    pub const fn from_byte(b: u8) -> Option<BadgeId> {
-        match b {
-            0 => Some(BadgeId::NetMode),
-            1 => Some(BadgeId::Deadman),
-            2 => Some(BadgeId::Clock),
-            3 => Some(BadgeId::CavesCount),
-            4 => Some(BadgeId::Attempts),
-            _ => None,
-        }
-    }
-}
-
-/// Active-badge list, persisted to BatFS. Up to 8 active badges.
-static mut ACTIVE: [Option<BadgeId>; 8] = [
-    Some(BadgeId::NetMode),
-    Some(BadgeId::Deadman),
-    Some(BadgeId::Clock),
-    None, None, None, None, None,
-];
-
-/// Read the active badge list. Used by paint().
-pub fn active_badges() -> [Option<BadgeId>; 8] {
-    unsafe { ACTIVE }
-}
-
-/// Replace the active list and persist to BatFS.
-pub fn set_active(new_active: [Option<BadgeId>; 8]) {
-    unsafe { ACTIVE = new_active; }
-    persist_to_disk(&new_active);
-}
-
-fn persist_to_disk(active: &[Option<BadgeId>; 8]) {
-    let mut bytes = [0u8; 8];
-    let mut n = 0usize;
-    for slot in active.iter() {
-        if let Some(b) = slot {
-            bytes[n] = b.as_byte();
-            n += 1;
-        }
-    }
-    // BatFS doesn't expose update — delete-then-create.
-    let _ = crate::fs::batfs::delete(CONFIG_PATH);
-    let _ = crate::fs::batfs::create(CONFIG_PATH, &bytes[..n]);
-}
-
-/// Load the active list from BatFS. Called once at boot. Falls back
-/// to DEFAULT_BADGES if the file doesn't exist or is malformed.
-pub fn load_from_disk() {
-    let mut buf = [0u8; 8];
-    match crate::fs::batfs::read(CONFIG_PATH, &mut buf) {
-        Ok(n) if n > 0 && n <= 8 => {
-            let mut new_active: [Option<BadgeId>; 8] = [None; 8];
-            for (i, &b) in buf[..n].iter().enumerate() {
-                if let Some(badge) = BadgeId::from_byte(b) {
-                    new_active[i] = Some(badge);
-                }
-            }
-            unsafe { ACTIVE = new_active; }
-        }
-        _ => {
-            // First boot or corrupt — leave defaults in place.
-        }
-    }
-}
-
-/// Whether the config sheet is currently visible. Toggled by clicks
-/// on the ⋯ glyph (handled in desktop.rs); paint() consults this.
-static SHEET_VISIBLE: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
-
-pub fn toggle_sheet() {
-    SHEET_VISIBLE.fetch_xor(true, core::sync::atomic::Ordering::Relaxed);
-}
-
-pub fn sheet_visible() -> bool {
-    SHEET_VISIBLE.load(core::sync::atomic::Ordering::Relaxed)
-}
-
-pub fn close_sheet() {
-    SHEET_VISIBLE.store(false, core::sync::atomic::Ordering::Relaxed);
-}
-
-/// Paint the config sheet, centered on the screen. Wave 2 ships the
-/// minimal viable form: a vertical list of every BadgeId with the
-/// active ones marked. Click a row to toggle.
-pub fn paint_sheet(fb: *mut u32, screen_w: u32, screen_h: u32) {
-    if !sheet_visible() { return; }
-    let w: u32 = 280;
-    let h: u32 = 200;
-    let x = (screen_w - w) / 2;
-    let y = (screen_h - h) / 2;
-    gpu::fill_rect(x, y, w, h, PANEL);
-    draw::draw_border(x, y, w, h, HAIRLINE);
-    font::draw_str(fb, screen_w, x + 16, y + 16, "STATUS STRIP", INK, PANEL);
-    let active = active_badges();
-    let row_h: u32 = 22;
-    for (i, badge) in ALL_BADGES.iter().enumerate() {
-        let row_y = y + 44 + (i as u32) * row_h;
-        let on = active.iter().flatten().any(|a| a == badge);
-        let mark = if on { "[x]" } else { "[ ]" };
-        font::draw_str(fb, screen_w, x + 16, row_y, mark, MID, PANEL);
-        let label = badge_name(*badge);
-        font::draw_str(fb, screen_w, x + 48, row_y, label, INK, PANEL);
-    }
-    font::draw_str(fb, screen_w, x + 16, y + h - 24, "CLICK ROW TO TOGGLE  ·  ESC TO CLOSE", FAINT, PANEL);
-}
-
-const fn badge_name(b: BadgeId) -> &'static str {
-    match b {
-        BadgeId::NetMode    => "NET MODE",
-        BadgeId::Deadman    => "DEADMAN",
-        BadgeId::Clock      => "CLOCK",
-        BadgeId::CavesCount => "CAVES COUNT",
-        BadgeId::Attempts   => "ATTEMPTS",
-    }
-}
-
-/// Hit-test a click against the open sheet. Returns the BadgeId the
-/// user clicked, or None.
-pub fn sheet_hit_test(x: u32, y: u32, screen_w: u32, screen_h: u32) -> Option<BadgeId> {
-    if !sheet_visible() { return None; }
-    let w: u32 = 280;
-    let h: u32 = 200;
-    let sx = (screen_w - w) / 2;
-    let sy = (screen_h - h) / 2;
-    if x < sx || x >= sx + w || y < sy || y >= sy + h { return None; }
-    let row_h: u32 = 22;
-    let local_y = y - sy;
-    if local_y < 44 { return None; }
-    let row = (local_y - 44) / row_h;
-    if row as usize >= ALL_BADGES.len() { return None; }
-    Some(ALL_BADGES[row as usize])
-}
-
-/// Toggle a badge in the active list, then persist. Inserts at the
-/// end if not present; removes if present.
-pub fn toggle_badge(b: BadgeId) {
-    let mut active = active_badges();
-    // Already on? Remove.
-    for slot in active.iter_mut() {
-        if *slot == Some(b) {
-            *slot = None;
-            compact(&mut active);
-            set_active(active);
-            return;
-        }
-    }
-    // Not on — append.
-    for slot in active.iter_mut() {
-        if slot.is_none() { *slot = Some(b); break; }
-    }
-    set_active(active);
-}
-
-fn compact(active: &mut [Option<BadgeId>; 8]) {
-    let mut write = 0;
-    for read in 0..8 {
-        if active[read].is_some() {
-            if write != read { active[write] = active[read]; active[read] = None; }
-            write += 1;
-        }
-    }
-}
-```
-
-- [ ] **Step 2: Update `topbar::paint` to use the live active list.**
-
-Find the existing `pub fn paint(fb, screen_w, badges: &[BadgeId])` and change the signature + implementation to use `active_badges()` directly (so callers no longer have to thread the list through):
-
-Replace the `pub fn paint(fb: *mut u32, screen_w: u32, badges: &[BadgeId])` signature with:
-
-```rust
-pub fn paint(fb: *mut u32, screen_w: u32) {
-```
-
-…and change the body's `for badge in badges.iter().rev()` to:
-
-```rust
-    let active = active_badges();
-    for slot in active.iter().rev() {
-        if let Some(badge) = slot {
-            let (label, warn) = badge_text(*badge);
-            let lw = label.len() as u32 * 8;
-            cursor -= lw as i32;
-            let color = if warn { INK } else { MID };
-            font::draw_str(fb, screen_w, cursor as u32, brand_y, &label, color, PANEL);
-            cursor -= 12;
-        }
-    }
-```
-
-- [ ] **Step 3: Update desktop.rs to use the new paint signature + sheet.**
-
-In `src/ui/desktop.rs`:
-
-- Change `topbar::paint(fb, w, DEFAULT_BADGES);` to `topbar::paint(fb, w);`.
-- After the topbar paint in `paint_full`, add:
-  ```rust
-  // Config sheet — overlays on top of everything when open.
-  topbar::paint_sheet(fb, w, h);
-  ```
-- In `handle_pointer`'s `TopbarHit::Gear` arm, change the no-op to:
-  ```rust
-  TopbarHit::Gear => {
-      topbar::toggle_sheet();
-      return true;
-  }
-  ```
-- Add new dispatch BEFORE the top-bar hit_test block to handle clicks against the open sheet:
-  ```rust
-  // Config sheet — if visible, swallow all clicks. Clicks on a row
-  // toggle the badge; clicks outside the sheet close it.
-  if topbar::sheet_visible() {
-      if let Some(badge) = topbar::sheet_hit_test(px as u32, py as u32, w, h) {
-          topbar::toggle_badge(badge);
-          return true;
-      }
-      // Click outside → close.
-      topbar::close_sheet();
-      return true;
-  }
-  ```
-- In `handle_key`, after the existing `0x1B` (Esc) arm, allow Esc to close the sheet too:
-  ```rust
-  0x1B => {
-      if topbar::sheet_visible() { topbar::close_sheet(); }
-      else if *state == State::Overlay { *state = State::Active; }
-      None
-  }
-  ```
-- Call `topbar::load_from_disk()` once at the start of `run()`:
-  ```rust
-  pub fn run() -> LockReason {
-      topbar::load_from_disk();
-      // ... existing body
-  }
-  ```
-
-- [ ] **Step 4: Build + clippy.**
-
-```bash
-SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -5
-SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
-```
-
 Expected: clean.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add src/ui/topbar.rs src/ui/desktop.rs
+git add src/ui/desktop.rs src/drivers/virtio/tablet.rs src/main.rs
 git commit -m "$(cat <<'EOF'
-topbar: customization sheet + BatFS-persisted active list
+desktop: state-machine event loop (Launcher / Active / Overlay)
 
-Click ⋯ opens a centered sheet with every available BadgeId as a
-toggle. Click a row to add/remove. Active list persists to
-/system/desktop/topbar.cfg in BatFS; loaded once at desktop::run()
-entry.
+* `run() -> LockReason` (was -> !); main.rs wraps in a lock/unlock
+  cycle in the next commit.
+* Paint pass: BG → watermark Σ (baked alpha bitmap from Wave 1) →
+  launcher (current mode) → WM windows → topbar (always on top).
+* Event loop polls keyboard + tablet per iteration. Top-bar clicks
+  route to brand / config / lock. Overlay-mode launcher clicks
+  open a new window. ACTIVE state clicks go to WM.
+* Esc dismisses the overlay; full keyboard shortcut table in Task 9.
 
-paint() now reads the live active list (drops the `badges`
-parameter); desktop.rs updated accordingly.
+Stubs PointerEvent + next_pointer_event() in virtio/tablet if
+missing — Wave 3+ wires real pointer decoding.
+
+Wave-2-temp tags from Task 2 cleaned up; any survivor still in
+tree is intentional and documented.
 
 Co-Authored-By: claude-flow <ruv@ruv.net>
 EOF
@@ -1895,11 +1460,321 @@ EOF
 
 ---
 
-### Task 9: QEMU walkthrough — visual verification
+## Task 8: main.rs lock/unlock cycle
 
-No code changes. Boot the kernel under QEMU and confirm every state + interaction works.
+Wrap boot_screen + desktop in a loop so the workspace persists across lock.
 
-- [ ] **Step 1: Build + launch.**
+**Files:**
+- Modify: `src/main.rs`
+
+- [ ] **Step 1: Find call sites.**
+
+```bash
+grep -nE 'boot_screen::run|desktop::run|batfs::init|batfs::mount' /Users/kadenlee/Sphragis/src/main.rs
+```
+
+Note every `boot_screen::run` and `desktop::run` line. Note the BatFS init/mount line — `desktop::init()` goes immediately after it.
+
+- [ ] **Step 2: Add `desktop::init()` after BatFS mount.**
+
+Locate the line where BatFS is initialized/mounted in `main.rs`. Add immediately after:
+
+```rust
+ui::desktop::init();
+```
+
+If the BatFS init line doesn't obviously exist, add `ui::desktop::init();` early in the boot sequence, after platform init but before the first `boot_screen::run()`. It's idempotent enough to be safe.
+
+- [ ] **Step 3: Wrap boot_screen + desktop in a loop.**
+
+For every `security::boot_screen::run();` followed by `ui::desktop::run();` pattern, replace with:
+
+```rust
+loop {
+    security::boot_screen::run();
+    let _reason = ui::desktop::run();
+    // _reason is LockReason::UserRequest today; ignored. Loop body
+    // re-enters boot_screen::run() which blocks until next unlock.
+    // WM state is module-level static so workspace persists.
+}
+```
+
+If a call site is at the end of a function that returns `!`, the `loop {}` form is correct (it never falls through). If the function is finite, you'll need to adjust based on the call's role.
+
+- [ ] **Step 4: Build + clippy clean.**
+
+```bash
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -5
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
+```
+Expected: clean.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add src/main.rs
+git commit -m "$(cat <<'EOF'
+main: lock/unlock cycle wraps boot_screen + desktop
+
+`desktop::run()` now returns LockReason. main.rs wraps boot_screen +
+desktop in a loop so the workspace persists across the lock/unlock
+cycle (WM state is module-level static and is not reset by lock).
+
+`desktop::init()` is called once at boot, after BatFS is mounted, to
+load the topbar badge config from /system/desktop/topbar.cfg.
+
+Co-Authored-By: claude-flow <ruv@ruv.net>
+EOF
+)"
+```
+
+---
+
+## Task 9: Keyboard shortcuts
+
+⌘K / ⌘TAB / ⌘L / ⌘W / Esc.
+
+**Files:**
+- Modify: `src/ui/desktop.rs`
+
+- [ ] **Step 1: Replace the `handle_key` stub.**
+
+In `src/ui/desktop.rs`, find `fn handle_key(c: u8) -> Event` and replace its body:
+
+```rust
+fn handle_key(c: u8) -> Event {
+    // The kernel's keyboard layer translates Ctrl+letter into ASCII
+    // control codes (Ctrl+K = 0x0B, Ctrl+W = 0x17, Ctrl+L = 0x0C).
+    // ⌘ on Mac maps to Ctrl through QEMU's HID forwarding, so the
+    // brainstormed ⌘K / ⌘L / ⌘W work as documented on both QEMU
+    // and the M4 path.
+    match c {
+        0x0B => { // Ctrl+K — toggle overlay
+            unsafe { OVERLAY_OPEN = !OVERLAY_OPEN; }
+            Event::Repaint
+        }
+        0x09 => { // Tab — cycle window focus
+            wm::cycle_focus();
+            Event::Repaint
+        }
+        0x0C => Event::Lock, // Ctrl+L
+        0x17 => { // Ctrl+W — close focused
+            if let Some(id) = wm::focused() { wm::close(id); }
+            Event::Repaint
+        }
+        0x1B => { // Esc
+            if unsafe { OVERLAY_OPEN } {
+                unsafe { OVERLAY_OPEN = false; }
+                Event::Repaint
+            } else {
+                Event::None
+            }
+        }
+        _ => Event::None,
+    }
+}
+```
+
+- [ ] **Step 2: Build + clippy clean.**
+
+```bash
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -3
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
+```
+Expected: clean.
+
+- [ ] **Step 3: Commit.**
+
+```bash
+git add src/ui/desktop.rs
+git commit -m "$(cat <<'EOF'
+desktop: wire keyboard shortcuts (Ctrl+K/W/L, Tab, Esc)
+
+* Ctrl+K toggles the launcher overlay.
+* Tab cycles window focus.
+* Ctrl+L returns LockReason::UserRequest (main.rs cycles back to
+  boot_screen::run()).
+* Ctrl+W closes the focused window.
+* Esc dismisses the overlay.
+
+Co-Authored-By: claude-flow <ruv@ruv.net>
+EOF
+)"
+```
+
+---
+
+## Task 10: Topbar config sheet
+
+Modal overlay for toggling badges. v1 ships toggle-only.
+
+**Files:**
+- Modify: `src/ui/topbar.rs`
+- Modify: `src/ui/desktop.rs`
+
+- [ ] **Step 1: Append config-sheet code to `src/ui/topbar.rs`.**
+
+```rust
+// ── Config sheet (modal) ─────────────────────────────────────────
+
+static mut CONFIG_SHEET_OPEN: bool = false;
+
+pub fn config_sheet_open()  -> bool { unsafe { CONFIG_SHEET_OPEN } }
+pub fn open_config_sheet()           { unsafe { CONFIG_SHEET_OPEN = true; } }
+pub fn close_config_sheet()          { unsafe { CONFIG_SHEET_OPEN = false; } }
+
+const BG: u32 = 0xFF0D0D10;
+const ALL_BADGES: &[(Badge, &str)] = &[
+    (Badge::NetMode,   "NET MODE"),
+    (Badge::Deadman,   "DEADMAN"),
+    (Badge::Clock,     "CLOCK"),
+    (Badge::Caves,     "CAVES COUNT"),
+    (Badge::Attempts,  "ATTEMPTS"),
+    (Badge::Memory,    "MEMORY"),
+    (Badge::Cpu,       "CPU"),
+    (Badge::Audit,     "AUDIT TAIL"),
+    (Badge::CaveFocus, "CAVE FOCUS"),
+];
+
+pub fn paint_config_sheet() {
+    if !config_sheet_open() { return; }
+
+    let screen_w = gpu::width();
+    let screen_h = gpu::height();
+    let fb = gpu::framebuffer();
+
+    gpu::fill_rect(0, TOPBAR_H, screen_w, screen_h - TOPBAR_H, BG);
+
+    let panel_w: u32 = 360;
+    let row_h: u32 = 24;
+    let panel_h = (ALL_BADGES.len() as u32) * row_h + 50;
+    let px = (screen_w - panel_w) / 2;
+    let py = (screen_h - panel_h) / 2;
+    gpu::fill_rect(px, py, panel_w, panel_h, PANEL);
+    draw::draw_border(px, py, panel_w, panel_h, HAIRLINE);
+
+    font::draw_str(fb, screen_w, px + 14, py + 10, "TOP BAR BADGES", INK, PANEL);
+
+    for (i, (badge, name)) in ALL_BADGES.iter().enumerate() {
+        let ry = py + 40 + (i as u32) * row_h;
+        let enabled = topbar_config::iter().any(|b| b == *badge);
+        let marker = if enabled { "[x]" } else { "[ ]" };
+        let color = if enabled { INK } else { DIM };
+        font::draw_str(fb, screen_w, px + 14, ry,                 marker, color, PANEL);
+        font::draw_str(fb, screen_w, px + 14 + 4 * 8, ry,         name,   color, PANEL);
+    }
+
+    font::draw_str(fb, screen_w, px + 14, py + panel_h - 16, "ESC TO CLOSE", DIM, PANEL);
+}
+
+/// Returns true if a repaint is needed.
+pub fn config_sheet_click(mx: i32, my: i32) -> bool {
+    if !config_sheet_open() { return false; }
+    let screen_w = gpu::width();
+    let screen_h = gpu::height();
+
+    let panel_w: u32 = 360;
+    let row_h: u32 = 24;
+    let panel_h = (ALL_BADGES.len() as u32) * row_h + 50;
+    let px = (screen_w - panel_w) / 2;
+    let py = (screen_h - panel_h) / 2;
+
+    if (mx as u32) < px || (mx as u32) >= px + panel_w { return false; }
+    if (my as u32) < py + 40 || (my as u32) >= py + 40 + (ALL_BADGES.len() as u32) * row_h {
+        return false;
+    }
+
+    let row_idx = (((my as u32) - py - 40) / row_h) as usize;
+    if row_idx < ALL_BADGES.len() {
+        topbar_config::toggle(ALL_BADGES[row_idx].0);
+        return true;
+    }
+    false
+}
+```
+
+- [ ] **Step 2: Wire the config sheet into `desktop.rs`.**
+
+In `src/ui/desktop.rs`'s `paint()`, append after `topbar::paint();`:
+
+```rust
+    topbar::paint_config_sheet();
+```
+
+In `handle_pointer`'s `Down(x, y)` arm, add a pre-pass BEFORE the existing top-bar hit-test:
+
+```rust
+        PointerEvent::Down(x, y) => {
+            // Config sheet absorbs all clicks when open.
+            if topbar::config_sheet_open() {
+                if topbar::config_sheet_click(x, y) {
+                    return Event::Repaint;
+                }
+                topbar::close_config_sheet();
+                return Event::Repaint;
+            }
+            // ... existing top-bar pre-pass below ...
+```
+
+Replace the `TopBarHit::ConfigClick` arm:
+
+```rust
+                    TopBarHit::ConfigClick => { topbar::open_config_sheet(); }
+```
+
+In `handle_key`'s Esc branch, give the config sheet priority:
+
+```rust
+        0x1B => { // Esc
+            if topbar::config_sheet_open() {
+                topbar::close_config_sheet();
+                return Event::Repaint;
+            }
+            if unsafe { OVERLAY_OPEN } {
+                unsafe { OVERLAY_OPEN = false; }
+                Event::Repaint
+            } else {
+                Event::None
+            }
+        }
+```
+
+- [ ] **Step 3: Build + clippy clean.**
+
+```bash
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -3
+SPHRAGIS_PASSPHRASE=sphragis-dev cargo clippy --release --target aarch64-unknown-none --features gicv3 -- -D warnings 2>&1 | tail -3
+```
+Expected: clean.
+
+- [ ] **Step 4: Commit.**
+
+```bash
+git add src/ui/topbar.rs src/ui/desktop.rs
+git commit -m "$(cat <<'EOF'
+topbar: modal config sheet for toggling badges
+
+Click '...' opens a modal listing all 9 badges with a [x]/[ ]
+marker; clicking a row toggles the badge (persisted to BatFS).
+Esc or click-outside dismisses. Drag-reorder is a follow-up — v1
+ships toggle-only; re-ordering happens by toggling off + on again
+at the new end position.
+
+Sheet wires into desktop.rs as a top-priority click pre-pass and
+the top-priority Esc target.
+
+Co-Authored-By: claude-flow <ruv@ruv.net>
+EOF
+)"
+```
+
+---
+
+## Task 11: QEMU walk-through
+
+Manual visual confirmation of the entire Wave 2 surface. **No commit.**
+
+- [ ] **Step 1: Rebuild + relaunch QEMU with virtio-tablet.**
 
 ```bash
 cd /Users/kadenlee/Sphragis
@@ -1917,69 +1792,74 @@ qemu-system-aarch64 \
   -kernel target/aarch64-unknown-none/release/sphragis &
 ```
 
-Expected: lock screen appears (Wave 1 unchanged), unlock with `sphragis-dev`.
+Unlock with `sphragis-dev`.
 
-- [ ] **Step 2: LAUNCHER state.**
+- [ ] **Step 2: Verify LAUNCHER state.**
 
-After unlock, confirm:
-- Top bar shows "SPHRAGIS" on the left, "NET ISOLATED · DEADMAN 47:12 · 14:22 ⋯ ⏻" on the right.
-- The 8-app grid is visible at full opacity (CAVES, FILES, NET, SECURITY, SHELL, EDITOR, COMMS, AGENT).
-- Σ watermark is faintly visible behind everything.
+After unlock:
+- Background near-black.
+- Watermark Σ visible (soft, center).
+- Top bar: "SPHRAGIS" on the left, `NET ISOLATED · DEADMAN MM:SS · HH:MM · ... · [L]` on the right.
+- 8-app grid centered (CAVES, FILES, NET, SECURITY, SHELL, EDITOR, COMMS, AGENT).
 
-- [ ] **Step 3: Open a window (ACTIVE state).**
+- [ ] **Step 3: Verify ACTIVE state.**
 
-- Click the CAVES tile.
-- Confirm a floating window appears with `CAVES` in the chrome.
-- Grid behind it should dim to ~22 %.
-- App body shows whatever caves_mgr renders (cyberpunk styling — that's expected, redesign is Wave 3).
+Click CAVES (or whichever tile if pointer events are stubbed — fall through to keyboard path: open the launcher via Ctrl+K, then on next iteration the kernel may need pointer events. If pointer remains stubbed in this build, **the click path can't be visually tested** until Wave 3+ wires real pointer decoding. Note this in the verification result; the keyboard path is still testable below).
 
-- [ ] **Step 4: Open a second window.**
+Pointer-path checks (if working):
+- Floating window with hairline border, drop shadow, 22-px chrome.
+- Title "CAVES" in INK.
+- Open-circle close glyph at the left of the chrome.
+- Launcher grid dims to ~22 % opacity behind the window.
 
-- Press `⌘K` (or click "SPHRAGIS") to open the launcher overlay over the open window.
-- Click NET. A second window appears, offset down-right from the first.
-- Press `⌘TAB` — focus should cycle.
+Open a second window. The first dims to MID title.
 
-- [ ] **Step 5: Drag, resize, close.**
+Drag the focused chrome — window should move with pointer. Drag a corner — window resizes, clamped at 280×160.
 
-- Drag the CAVES window's chrome — it should follow the cursor.
-- Drag the bottom-right corner — it should resize, capped at the minimum.
-- Click the close circle on each window — they should close.
-- After closing the last, screen returns to LAUNCHER state automatically.
+Click the open circle on a window — it closes.
 
-- [ ] **Step 6: Config sheet.**
+- [ ] **Step 4: Verify OVERLAY state.**
 
-- Click the `⋯` in the top-right.
-- Sheet appears with all 5 badges; the 3 default ones marked `[x]`.
-- Click `CAVES COUNT` — it should mark `[x]` and `0 CAVES` should appear in the top-right after closing.
-- Click outside the sheet or press Esc — it closes.
+Press Ctrl+K → launcher overlay appears over windows. Click an app or press Esc to dismiss.
 
-- [ ] **Step 7: Lock + unlock.**
+Click "SPHRAGIS" wordmark — overlay also opens.
 
-- Press `⌘L` (or click the `⏻` glyph in the top-right).
-- Lock screen returns.
-- Unlock with `sphragis-dev`.
-- Desktop reappears with the same workspace state (open windows in same positions; topbar badges preserved).
+- [ ] **Step 5: Verify keyboard shortcuts.**
 
-- [ ] **Step 8: Cleanup.**
+- `Tab` — focus cycles through open windows.
+- `Ctrl+W` — closes focused window.
+- `Ctrl+L` — drops back to the Wave 1 lock screen. Unlock again — **the workspace (any windows still open) reappears as left**.
+
+- [ ] **Step 6: Verify topbar config sheet.**
+
+Click the `...` glyph — modal sheet appears listing all 9 badges + markers. Click "CAVES COUNT" → marker flips to `[x]`. Press Esc → sheet dismisses. Top-right strip now includes CAVES badge.
+
+Lock with Ctrl+L. Re-unlock. Badge config persists.
+
+- [ ] **Step 7: Kill QEMU.**
 
 ```bash
-pkill -9 -f 'qemu-system-aarch64' 2>/dev/null
+pkill -9 -f 'qemu-system-aarch64'
 ```
 
-- [ ] **Step 9: No commit. Verification only.**
+- [ ] **Step 8: No commit.**
+
+If any step surfaced a defect, return to the relevant earlier task.
 
 ---
 
-### Task 10: Push the branch and finish
+## Task 12: Push + finishing-a-development-branch
 
-- [ ] **Step 1: Push.**
+- [ ] **Step 1: Push to origin.**
 
 ```bash
 cd /Users/kadenlee/Sphragis
 git push -u origin feat/desktop-chrome
 ```
 
-- [ ] **Step 2: Use the `superpowers:finishing-a-development-branch` skill** to verify (build/clippy clean) and merge back to main.
+- [ ] **Step 2: Invoke `superpowers:finishing-a-development-branch`.**
+
+That skill verifies the build is clean, then presents merge / PR / keep / discard options. Recommended choice for this branch is "merge back to main locally" — same pattern as Wave 1.
 
 ---
 
@@ -1987,35 +1867,36 @@ git push -u origin feat/desktop-chrome
 
 | Spec section | Implemented by |
 |--------------|---------------|
-| Goal — quiet canvas + multi-window | Task 6 (state machine) + Task 5 (watermark) |
-| Mental model — A+C hybrid | Task 4 + Task 6 |
-| Visual palette | Task 2 (WM constants) + Task 3 (topbar constants) — single source of truth deferred |
-| Typography — bitmap font in top bar / chrome | Tasks 2, 3, 4, 8 (all use `font::draw_str`) |
-| Top bar — brand left, customizable right | Task 3 (paint) + Task 8 (customization) |
-| Default badges (NET MODE / DEADMAN / CLOCK) | Task 3 (DEFAULT_BADGES) + Task 8 (ACTIVE default) |
-| App grid — 4×2, 8 apps | Task 4 |
-| Solid silhouette placeholder icons | Task 1 (`paint_placeholder_icon`) |
-| Window struct (position, size, cave_name) | Task 2 |
-| Floating, drag-move, drag-resize, click-to-focus | Task 2 + Task 6 (`handle_pointer`) |
-| Multi-cave reading (`SHELL · cave_name`) | Task 2 (chrome paint includes cave_name) |
-| Drop shadow under windows | Not yet (no_std friendly drop-shadow is non-trivial); deferred — captured below |
-| State machine LAUNCHER / ACTIVE / OVERLAY | Task 6 |
-| ⌘K, ⌘TAB, ⌘L, ⌘W, Esc | Task 6 (`handle_key`) |
-| Click SPHRAGIS = launcher | Task 6 (`TopbarHit::Brand`) |
-| ⏻ click = lock | Task 6 + Task 8 |
-| Lock cycle persists windows | Task 6 (`main.rs` re-entrant loop, WM state static) |
-| Customizable badges + BatFS persistence | Task 8 |
-| Apps untouched | Whole plan — only `apps_registry.rs` references each app's `render()` |
-
-### Known gaps from the spec
-
-- **Drop shadow under floating windows** is in the spec but not implemented in this plan. Drawing a true soft shadow on a no_std framebuffer is non-trivial (no alpha-compositing primitives); the WM ships windows with the 1-px hairline border only. Filed as a Wave-2-followup or rolled into Wave 5 alongside the rasterizer fix.
-- **Live badge values** (real net mode, real deadman, real clock) are stubbed with fixed strings in Task 3. The badges' wiring to live sources is a one-step follow-up: replace the stubs in `badge_text` with reads from `crate::net::is_isolated`, `crate::security::deadman::remaining_ms`, and `cntpct_el0`. Not blocking the Wave 2 ship.
-- **`⌘TAB` only cycles to the next window in z-order**, not "back to where you were last" — simple model; refine if user feedback says so.
+| Mental model — quiet canvas + Σ watermark + floating WM + customizable top bar | Tasks 2, 3, 5, 7 |
+| Palette inheritance from Wave 1 (5 colors + WATERMARK + SHADOW) | Tasks 3, 5, 7 |
+| Top bar — SPHRAGIS brand left, customizable badges right, ⋯ + ⏻ at end | Task 5 |
+| Default badges: NetMode, Deadman, Clock | Task 5 (`topbar_config::BADGES` initializer) |
+| Customizable badges with config sheet + BatFS persistence | Tasks 5 (storage) + 10 (sheet UI) |
+| 4×2 app grid, 8 apps named in spec | Tasks 1 + 6 |
+| Solid silhouette icon placeholders | Task 6 |
+| Launcher modes: Background / Overlay / Canvas | Tasks 6, 7 |
+| Floating multi-window WM, max 16 windows | Task 2 |
+| Window chrome: hairline border, 22-px chrome, open-circle close, INK/MID title | Task 3 |
+| `SHELL · kali-recon`-style cave-name in chrome | Tasks 2 (struct) + 3 (paint) |
+| Drag chrome to move, drag corner (12 px) to resize, 280×160 min | Task 4 |
+| Z-order, click body to focus | Tasks 2 + 4 |
+| 4-state machine (Launcher / Active / Overlay / [Lock]) | Task 7 |
+| ⌘K / Tab / ⌘L / ⌘W / Esc | Task 9 |
+| Workspace persists across lock/unlock | Task 8 + WM state being static |
+| System alerts via badge brightness (no popups) | Task 5 (`badge_is_alert`) |
+| NOT in v1: dock, taskbar, virtual desktops, snap-to-edge, theme, multi-monitor | Out of scope — not implemented |
+| Verification = QEMU walk-through | Task 11 |
 
 ## Out-of-scope reminders
 
-- Per-app internal redesign (Wave 3+).
-- Real per-app icons (Wave 3+).
-- Shell + console palette refresh (Wave 5).
-- Virtual desktops, snap-to-edge, dock, taskbar (out of all current waves).
+Do **not** drift into these while executing the plan:
+- Per-app internal redesign — Wave 3+.
+- Real app icons — Wave 3+ (each app's wave covers its own).
+- Shell + console palette refresh — Wave 5.
+- TrueType rasterizer fix (carried from Wave 1) — Wave 5.
+- AGENT app real implementation — depends on `DESIGN_AI_AGENT.md`.
+- Drag-to-reorder in the topbar config sheet — follow-up after v1.
+- Real wall-clock — depends on RTC plumbing.
+- Real pointer-event decoding in `virtio/tablet.rs` — stubbed; Wave 3+.
+
+If you find yourself touching any of these, stop and ask. The wave system only works if each wave produces working, testable software on its own.
