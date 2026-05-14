@@ -86,53 +86,68 @@ pub fn draw_border(x: u32, y: u32, w: u32, h: u32, color: u32) {
     gpu::fill_rect(x + w - 1, y, 1, h, color);
 }
 
-// ─── Lock-screen project glyph (120×72 wordmark) ────────────────────────
+// ─── Lock-screen project glyph (120×72 Σ monogram) ────────────────────────
 //
-// Renders the "SPHRAGIS" wordmark using the existing 8×16 bitmap
-// font at scale 2 = 16×32 per glyph. 8 letters × 16 = 128 wide,
-// 32 tall. Centered in the 120×72 slot (slight horizontal overflow
-// of 4px each side — visually acceptable, the surrounding lock
-// screen is monochrome and the wordmark sits in the upper-mid
-// region with plenty of headroom).
+// Renders a large Σ (Greek sigma — first letter of σφραγίς, "the seal")
+// as the project monogram. The kernel's bitmap font is ASCII-only, so
+// we rasterize Σ directly from two horizontal bars + two diagonal
+// parallelograms, using the same `fill_polygon` primitive that used
+// to draw the bat silhouette.
 //
-// Replaced the earlier bat-silhouette polygon raster as part of the
-// Tier 3 brand cleanup (no Batman-adjacent visual identity).
+// Glyph is 64×64 pixels, centered in the 120×72 slot
+// (28 px horizontal padding, 4 px vertical padding).
+// Stroke width: 8 px.
 
 pub const PROJECT_GLYPH_FULL_W: u32 = 120;
 pub const PROJECT_GLYPH_FULL_H: u32 = 72;
 
-const WORDMARK: &[u8] = b"SPHRAGIS";
-const WORDMARK_SCALE: u32 = 2;
+const SIGMA_W:      u32 = 64;
+const SIGMA_H:      u32 = 64;
+const SIGMA_STROKE: u32 = 8;
 
-/// Draw the lock-screen "SPHRAGIS" wordmark.
-/// `accent` is the foreground; `bg` is the surrounding background
-/// (rendered as the per-pixel "off" color so the wordmark composes
-/// cleanly onto a freshly cleared screen).
-/// `_dim` is unused for the wordmark layout but kept in the
-/// signature so the boot-screen caller's color-palette plumbing
-/// stays unchanged.
-pub fn draw_project_glyph_full(origin_x: i32, origin_y: i32, accent: u32, _dim: u32, bg: u32) {
-    let char_w_scaled = crate::ui::font::CHAR_W * WORDMARK_SCALE;
-    let char_h_scaled = crate::ui::font::CHAR_H * WORDMARK_SCALE;
-    let wordmark_w    = char_w_scaled * (WORDMARK.len() as u32);
-    let wordmark_h    = char_h_scaled;
+// Σ has two diagonal strokes meeting at the right-center. We render
+// each diagonal as a parallelogram so the stroke has constant
+// horizontal width along its length.
+//
+// Coordinate frame: Σ's top-left at (0, 0), 64×64 box.
+//   Top bar:    y=0..8        (filled as a rectangle, not in this list)
+//   Upper diag: (0, 8)  →  (32, 32)  — 8px-wide parallelogram
+//   Lower diag: (32, 32) →  (0, 56)  — 8px-wide parallelogram
+//   Bottom bar: y=56..64      (filled as a rectangle)
+const SIGMA_UPPER_DIAG: &[(i32, i32)] = &[
+    ( 0,  8),
+    ( 8,  8),
+    (32, 32),
+    (24, 32),
+];
+const SIGMA_LOWER_DIAG: &[(i32, i32)] = &[
+    (24, 32),
+    (32, 32),
+    ( 8, 56),
+    ( 0, 56),
+];
 
-    // Center horizontally (allow up to 4px overflow each side at
-    // scale 2 — the surrounding background is the same color so it
-    // composes cleanly) and vertically inside the glyph slot.
-    let x0 = origin_x + (PROJECT_GLYPH_FULL_W as i32 - wordmark_w as i32) / 2;
-    let y0 = origin_y + (PROJECT_GLYPH_FULL_H as i32 - wordmark_h as i32) / 2;
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    for (i, &ch) in WORDMARK.iter().enumerate() {
-        let cx_signed = x0 + (i as i32) * (char_w_scaled as i32);
-        // Clamp negative cx to 0 — draw_char_scaled clips to screen_w
-        // on the right; left-side underflow we just skip.
-        if cx_signed < 0 || y0 < 0 { continue; }
-        crate::ui::font::draw_char_scaled(
-            fb, sw, cx_signed as u32, y0 as u32, ch, accent, bg, WORDMARK_SCALE,
-        );
-    }
+/// Draw the lock-screen Σ monogram in `accent` color.
+/// `_dim` and `_bg` are unused (Σ is a single-color solid mark) but
+/// kept in the signature so the boot-screen caller's color-palette
+/// plumbing stays unchanged.
+pub fn draw_project_glyph_full(origin_x: i32, origin_y: i32, accent: u32, _dim: u32, _bg: u32) {
+    // Center the 64×64 Σ inside the 120×72 slot.
+    let pad_x = (PROJECT_GLYPH_FULL_W - SIGMA_W) as i32 / 2;
+    let pad_y = (PROJECT_GLYPH_FULL_H - SIGMA_H) as i32 / 2;
+    let cx = origin_x + pad_x;
+    let cy = origin_y + pad_y;
+    if cx < 0 || cy < 0 { return; }
+    let ux = cx as u32;
+    let uy = cy as u32;
+
+    // Top bar.
+    gpu::fill_rect(ux, uy, SIGMA_W, SIGMA_STROKE, accent);
+    // Bottom bar.
+    gpu::fill_rect(ux, uy + SIGMA_H - SIGMA_STROKE, SIGMA_W, SIGMA_STROKE, accent);
+    // Two diagonals as parallelograms.
+    fill_polygon(SIGMA_UPPER_DIAG, cx, cy, accent);
+    fill_polygon(SIGMA_LOWER_DIAG, cx, cy, accent);
 }
 
 // ─── Title-bar mini glyph (18×12 stylized "S") ──────────────────────

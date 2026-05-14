@@ -96,8 +96,8 @@ const CHAR_W:       u32 = 8;
 const CHAR_H:       u32 = 16;
 
 // Project glyph rasterizes into a 120x72 native viewport via ui::draw.
-const BAT_W: u32 = draw::PROJECT_GLYPH_FULL_W;
-const BAT_H: u32 = draw::PROJECT_GLYPH_FULL_H;
+const GLYPH_W: u32 = draw::PROJECT_GLYPH_FULL_W;
+const GLYPH_H: u32 = draw::PROJECT_GLYPH_FULL_H;
 
 // Field geometry: 480x56, centered horizontally, ~50px above vertical center.
 const FIELD_W: u32 = 480;
@@ -276,7 +276,7 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
     };
 
     // Project glyph centered, ~180px above vertical mid.
-    let glyph_x = cx - BAT_W / 2;
+    let glyph_x = cx - GLYPH_W / 2;
     let glyph_y = cy.saturating_sub(180);
     draw::draw_project_glyph_full(glyph_x as i32, glyph_y as i32, accent, accent_dim, BG);
 
@@ -284,10 +284,8 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
     // visually smaller than the mock, but the layout works.
     let wordmark = "SPHRAGIS";
     let word_x = cx - (wordmark.len() as u32 * CHAR_W) / 2;
-    let word_y = glyph_y + BAT_H + 24;
-    font::draw_str(fb, w, word_x, word_y, "BAT", INK, BG);
-    font::draw_str(fb, w, word_x + 3 * CHAR_W, word_y, "_", accent, BG);
-    font::draw_str(fb, w, word_x + 4 * CHAR_W, word_y, "OS", INK, BG);
+    let word_y = glyph_y + GLYPH_H + 24;
+    font::draw_str(fb, w, word_x, word_y, wordmark, INK, BG);
 
     let version = "V0.5.0-DEV  .  BUILD 20260502.A3F1C  .  SIGNED";
     let ver_x = cx - (version.len() as u32 * CHAR_W) / 2;
