@@ -214,3 +214,95 @@ pub fn reset_all() {
         core::ptr::write_volatile(core::ptr::addr_of_mut!(FOCUSED), None);
     }
 }
+
+// ── Palette (matches Wave 1) ──────────────────────────────────────
+
+const BG:        u32 = 0xFF0D0D10;
+const PANEL:     u32 = 0xFF18181C;
+const HAIRLINE:  u32 = 0xFF2A2A30;
+const INK:       u32 = 0xFFE5E7EB;
+const MID:       u32 = 0xFF6B7280;
+const SHADOW:    u32 = 0xFF040408;
+
+const CHROME_H:        u32 = 22;
+const SHADOW_OFFSET_X: i32 = 4;
+const SHADOW_OFFSET_Y: i32 = 6;
+
+/// Paint all open windows in z-order (back-most first → focused last).
+pub fn paint_all() {
+    use crate::ui::apps_registry::descriptor;
+    use crate::ui::draw;
+    use crate::ui::font;
+    use crate::ui::gpu;
+
+    let screen_w = gpu::width();
+    let focused = focused();
+    let snapshot: alloc::vec::Vec<Window> = iter().collect();
+
+    for window in snapshot.iter() {
+        let r = window.rect;
+        let is_focused = Some(window.id) == focused;
+
+        // Drop shadow.
+        let sx = (r.x as i32 + SHADOW_OFFSET_X).max(0) as u32;
+        let sy = (r.y as i32 + SHADOW_OFFSET_Y).max(0) as u32;
+        gpu::fill_rect(sx, sy, r.w, r.h, SHADOW);
+
+        // Body fill.
+        gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
+
+        // Chrome strip.
+        gpu::fill_rect(r.x, r.y, r.w, CHROME_H, PANEL);
+
+        // 1-px border.
+        draw::draw_border(r.x, r.y, r.w, r.h, HAIRLINE);
+
+        // Chrome/body separator.
+        gpu::fill_rect(r.x, r.y + CHROME_H, r.w, 1, HAIRLINE);
+
+        // 8x8 open circle (close glyph).
+        let cx0 = r.x + 10;
+        let cy0 = r.y + (CHROME_H - 8) / 2;
+        for dy in 0..8u32 {
+            for dx in 0..8u32 {
+                let fx = dx as i32 - 4;
+                let fy = dy as i32 - 4;
+                let d2 = fx * fx + fy * fy;
+                if d2 >= 6 && d2 <= 13 {
+                    gpu::fill_rect(cx0 + dx, cy0 + dy, 1, 1, MID);
+                }
+            }
+        }
+
+        // Title text.
+        let desc = descriptor(window.app);
+        let title_color = if is_focused { INK } else { MID };
+        let title_x = r.x + 28;
+        let title_y = r.y + (CHROME_H - 16) / 2;
+        font::draw_str(
+            gpu::framebuffer(),
+            screen_w,
+            title_x, title_y,
+            desc.title,
+            title_color, PANEL,
+        );
+
+        // Optional cave-name suffix.
+        if let Some(cave) = window.cave_name {
+            let n = cave.iter().position(|&b| b == 0).unwrap_or(16);
+            let cave_str = unsafe { core::str::from_utf8_unchecked(&cave[..n]) };
+            let sep_x = title_x + desc.title.len() as u32 * 8 + 8;
+            font::draw_str(gpu::framebuffer(), screen_w, sep_x, title_y, "*", MID, PANEL);
+            font::draw_str(gpu::framebuffer(), screen_w, sep_x + 16, title_y, cave_str, MID, PANEL);
+        }
+
+        // Body rect → app's paint callback.
+        let body = WindowRect {
+            x: r.x + 1,
+            y: r.y + CHROME_H + 1,
+            w: r.w.saturating_sub(2),
+            h: r.h.saturating_sub(CHROME_H + 2),
+        };
+        (desc.paint)(body);
+    }
+}
