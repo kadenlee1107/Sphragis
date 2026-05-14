@@ -228,6 +228,12 @@ const CHROME_H:        u32 = 22;
 const SHADOW_OFFSET_X: i32 = 4;
 const SHADOW_OFFSET_Y: i32 = 6;
 
+// Close-glyph geometry shared between paint_all (Task 3) and
+// hit_test (Task 4). If anyone tweaks one site without the other,
+// the glyph appears correctly but clicks fall through.
+const CLOSE_GLYPH_X_OFFSET: u32 = 10;
+const CLOSE_GLYPH_SIZE:     u32 = 8;
+
 /// Paint all open windows in z-order (back-most first → focused last).
 pub fn paint_all() {
     use crate::ui::apps_registry::descriptor;
@@ -260,13 +266,15 @@ pub fn paint_all() {
         // Chrome/body separator.
         gpu::fill_rect(r.x, r.y + CHROME_H, r.w, 1, HAIRLINE);
 
-        // 8x8 open circle (close glyph).
-        let cx0 = r.x + 10;
-        let cy0 = r.y + (CHROME_H - 8) / 2;
-        for dy in 0..8u32 {
-            for dx in 0..8u32 {
-                let fx = dx as i32 - 4;
-                let fy = dy as i32 - 4;
+        // Open-circle close glyph (size CLOSE_GLYPH_SIZE × CLOSE_GLYPH_SIZE).
+        let cx0 = r.x + CLOSE_GLYPH_X_OFFSET;
+        let cy0 = r.y + (CHROME_H - CLOSE_GLYPH_SIZE) / 2;
+        for dy in 0..CLOSE_GLYPH_SIZE {
+            for dx in 0..CLOSE_GLYPH_SIZE {
+                let fx = dx as i32 - (CLOSE_GLYPH_SIZE / 2) as i32;
+                let fy = dy as i32 - (CLOSE_GLYPH_SIZE / 2) as i32;
+                // d2 thresholds stay magic — they're an annulus
+                // tuning (inner/outer radius), not a size.
                 let d2 = fx * fx + fy * fy;
                 if d2 >= 6 && d2 <= 13 {
                     gpu::fill_rect(cx0 + dx, cy0 + dy, 1, 1, MID);
@@ -355,9 +363,10 @@ pub fn hit_test(mx: i32, my: i32) -> Hit {
         let ry1 = ry0 + r.h as i32;
         if mx < rx0 || mx >= rx1 || my < ry0 || my >= ry1 { continue; }
 
-        let cgx0 = rx0 + 10;
-        let cgy0 = ry0 + ((CHROME_H - 8) / 2) as i32;
-        if mx >= cgx0 && mx < cgx0 + 8 && my >= cgy0 && my < cgy0 + 8 {
+        let cgx0 = rx0 + CLOSE_GLYPH_X_OFFSET as i32;
+        let cgy0 = ry0 + ((CHROME_H - CLOSE_GLYPH_SIZE) / 2) as i32;
+        let cgs  = CLOSE_GLYPH_SIZE as i32;
+        if mx >= cgx0 && mx < cgx0 + cgs && my >= cgy0 && my < cgy0 + cgs {
             return Hit::CloseGlyph(window.id);
         }
 
