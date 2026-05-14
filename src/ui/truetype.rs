@@ -1117,3 +1117,167 @@ pub fn text_width(text: &[u8], size_px: u16) -> i32 {
     }
     width
 }
+
+// ---------------------------------------------------------------------------
+// Multi-face Unicode draw API
+// ---------------------------------------------------------------------------
+
+/// Which embedded font face to draw with.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum FontFace {
+    /// IBM Plex Serif Italic — used for the lock-screen Σ glyph.
+    PlexSerifItalic,
+    /// IBM Plex Sans Medium — used for the lock-screen wordmark.
+    PlexSansMedium,
+}
+
+static EMBEDDED_PLEX_SERIF_ITALIC: &[u8] =
+    include_bytes!("../../fonts/ibm-plex-serif-italic.ttf");
+static EMBEDDED_PLEX_SANS_MEDIUM: &[u8] =
+    include_bytes!("../../fonts/ibm-plex-sans-medium.ttf");
+
+static mut PLEX_SERIF_CACHE: Option<TrueTypeFont> = None;
+static mut PLEX_SERIF_INIT: bool = false;
+static mut PLEX_SANS_CACHE: Option<TrueTypeFont> = None;
+static mut PLEX_SANS_INIT: bool = false;
+
+/// Get a parsed TrueType font for the given face. Parses on first call,
+/// caches thereafter. Returns None if the embedded blob is corrupt
+/// (which means the build is broken; treat as a hard error at use site).
+fn get_font_face(face: FontFace) -> Option<&'static TrueTypeFont> {
+    unsafe {
+        match face {
+            FontFace::PlexSerifItalic => {
+                if !core::ptr::read_volatile(core::ptr::addr_of!(PLEX_SERIF_INIT)) {
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!(PLEX_SERIF_INIT), true);
+                    let parsed = TrueTypeFont::parse(EMBEDDED_PLEX_SERIF_ITALIC);
+                    core::ptr::write(core::ptr::addr_of_mut!(PLEX_SERIF_CACHE), parsed);
+                }
+                let cache_ptr = core::ptr::addr_of!(PLEX_SERIF_CACHE);
+                (*cache_ptr).as_ref()
+            }
+            FontFace::PlexSansMedium => {
+                if !core::ptr::read_volatile(core::ptr::addr_of!(PLEX_SANS_INIT)) {
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!(PLEX_SANS_INIT), true);
+                    let parsed = TrueTypeFont::parse(EMBEDDED_PLEX_SANS_MEDIUM);
+                    core::ptr::write(core::ptr::addr_of_mut!(PLEX_SANS_CACHE), parsed);
+                }
+                let cache_ptr = core::ptr::addr_of!(PLEX_SANS_CACHE);
+                (*cache_ptr).as_ref()
+            }
+        }
+    }
+}
+
+/// Draw a single Unicode codepoint at (x, y) into the framebuffer.
+/// Returns the glyph's advance width in pixels (so callers can chain calls
+/// to lay out text). Returns 0 if the codepoint isn't in this face's
+/// embedded subset (e.g., asking PlexSans for a Greek capital sigma).
+pub fn draw_glyph(
+    fb: *mut u32,
+    screen_w: u32,
+    x: i32,
+    y: i32,
+    codepoint: u32,
+    face: FontFace,
+    size_px: u16,
+    color: u32,
+) -> i32 {
+    let font = match get_font_face(face) {
+        Some(f) => f,
+        None => return 0,
+    };
+    let glyph_id = font.glyph_index(codepoint);
+    if glyph_id == 0 { return 0; }
+
+    let mut bitmap = [0u8; MAX_GLYPH_SIZE * MAX_GLYPH_SIZE];
+    // Pass the codepoint to render_char directly (it takes char).
+    let ch = match char::from_u32(codepoint) {
+        Some(c) => c,
+        None    => return 0,
+    };
+    let (gw, gh, advance) = font.render_char(ch, size_px, &mut bitmap);
+
+    let cr = ((color >> 16) & 0xFF) as u32;
+    let cg = ((color >> 8) & 0xFF) as u32;
+    let cb = (color & 0xFF) as u32;
+
+    for row in 0..gh as i32 {
+        let sy = y + row;
+        if sy < 0 { continue; }
+        for col in 0..gw as i32 {
+            let sx = x + col;
+            if sx < 0 || sx >= screen_w as i32 { continue; }
+
+            let coverage = bitmap[(row as usize) * (gw as usize) + (col as usize)] as u32;
+            if coverage == 0 { continue; }
+
+            let fb_idx = (sy as u32 * screen_w + sx as u32) as usize;
+            unsafe {
+                let dst = core::ptr::read_volatile(fb.add(fb_idx));
+                let dr = (dst >> 16) & 0xFF;
+                let dg = (dst >> 8) & 0xFF;
+                let db = dst & 0xFF;
+                let r = (dr as i32 + (((cr as i32 - dr as i32) * coverage as i32) / 255))
+                    .clamp(0, 255) as u32;
+                let g = (dg as i32 + (((cg as i32 - dg as i32) * coverage as i32) / 255))
+                    .clamp(0, 255) as u32;
+                let b = (db as i32 + (((cb as i32 - db as i32) * coverage as i32) / 255))
+                    .clamp(0, 255) as u32;
+                core::ptr::write_volatile(
+                    fb.add(fb_idx),
+                    0xFF000000 | (r << 16) | (g << 8) | b,
+                );
+            }
+        }
+    }
+
+    advance as i32
+}
+
+/// Advance width of a single codepoint in `face` at `size_px`, in pixels.
+/// Returns 0 if the codepoint isn't in this face's subset.
+pub fn glyph_advance(codepoint: u32, face: FontFace, size_px: u16) -> i32 {
+    let font = match get_font_face(face) {
+        Some(f) => f,
+        None => return 0,
+    };
+    let glyph_id = font.glyph_index(codepoint);
+    if glyph_id == 0 { return 0; }
+    let ch = match char::from_u32(codepoint) {
+        Some(c) => c,
+        None    => return 0,
+    };
+    let mut dummy = [0u8; 4];
+    let (_, _, advance) = font.render_char(ch, size_px, &mut dummy);
+    advance as i32
+}
+
+/// Total advance width of a string in `face` at `size_px`. Used by the
+/// lock screen to center the wordmark.
+pub fn text_advance(text: &str, face: FontFace, size_px: u16) -> i32 {
+    let mut w = 0i32;
+    for ch in text.chars() {
+        w += glyph_advance(ch as u32, face, size_px);
+    }
+    w
+}
+
+/// Draw a UTF-8 string at (x, y) in `face`. Returns total advance.
+/// Used by the lock screen for the "SPHRAGIS" wordmark.
+pub fn draw_text(
+    fb: *mut u32,
+    screen_w: u32,
+    x: i32,
+    y: i32,
+    text: &str,
+    face: FontFace,
+    size_px: u16,
+    color: u32,
+) -> i32 {
+    let mut cursor_x = x;
+    for ch in text.chars() {
+        cursor_x += draw_glyph(fb, screen_w, cursor_x, y, ch as u32, face, size_px, color);
+    }
+    cursor_x - x
+}
