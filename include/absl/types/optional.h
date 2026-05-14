@@ -1,4 +1,4 @@
-// Minimal Abseil optional stub for V8 compilation on Bat_OS
+// Minimal Abseil optional stub for V8 compilation on Sphragis
 // Aliases to std::optional (C++17)
 
 #ifndef ABSL_TYPES_OPTIONAL_H_

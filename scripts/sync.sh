@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bat_OS — quick git sync helper for Mac↔Ubuntu handoff.
+# Sphragis — quick git sync helper for Mac↔Ubuntu handoff.
 #
 # Usage:
 #   ./scripts/sync.sh pull     # fetch + merge remote changes

@@ -7,7 +7,7 @@
 #   Qwen/Qwen2.5-Coder-7B-Instruct (HF cache) — base model
 # Outputs:
 #   /mnt/d/ai/training/merged_v3/               — bf16 merged HF model
-#   /mnt/d/ai/training/gguf/bat-os-coder-v3.Q4_K_M.gguf
+#   /mnt/d/ai/training/gguf/sphragis-coder-v3.Q4_K_M.gguf
 #
 # Run:
 #   bash scripts/merge_lora_to_gguf.sh
@@ -16,7 +16,7 @@ set -euo pipefail
 ADAPTER=/mnt/d/ai/training/output_v3/final
 MERGED=/mnt/d/ai/training/merged_v3
 GGUF_DIR=/mnt/d/ai/training/gguf
-GGUF_OUT="$GGUF_DIR/bat-os-coder-v3.Q4_K_M.gguf"
+GGUF_OUT="$GGUF_DIR/sphragis-coder-v3.Q4_K_M.gguf"
 LLAMA_CPP="${LLAMA_CPP:-$HOME/llama.cpp}"
 HF_HOME="${HF_HOME:-/mnt/d/ai/.cache/huggingface}"
 
@@ -62,7 +62,7 @@ fi
 # ensure they're in the venv.
 "$HOME/ai-venv/bin/pip" install -q gguf sentencepiece protobuf 2>&1 | tail -3 || true
 "$HOME/ai-venv/bin/python" "$LLAMA_CPP/convert_hf_to_gguf.py" "$MERGED" \
-    --outfile "$GGUF_DIR/bat-os-coder-v3.f16.gguf" \
+    --outfile "$GGUF_DIR/sphragis-coder-v3.f16.gguf" \
     --outtype f16
 
 echo "[merge] step 3/3 — quantize f16 -> Q4_K_M"
@@ -72,7 +72,7 @@ if [ ! -x "$LLAMA_CPP/build/bin/llama-quantize" ]; then
     cmake --build "$LLAMA_CPP/build" --target llama-quantize -j
 fi
 "$LLAMA_CPP/build/bin/llama-quantize" \
-    "$GGUF_DIR/bat-os-coder-v3.f16.gguf" \
+    "$GGUF_DIR/sphragis-coder-v3.f16.gguf" \
     "$GGUF_OUT" \
     Q4_K_M
 

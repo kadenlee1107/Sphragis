@@ -116,13 +116,10 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
 
     drivers::uart::puts("\n");
     drivers::uart::puts("================================================\n");
-    drivers::uart::puts("      ___       _      ___  ___               \n");
-    drivers::uart::puts("     | _ ) __ _| |_   / _ \\/ __|              \n");
-    drivers::uart::puts("     | _ \\/ _` |  _| | (_) \\__ \\              \n");
-    drivers::uart::puts("     |___/\\__,_|\\__|  \\___/|___/              \n");
-    drivers::uart::puts("                                              \n");
+    drivers::uart::puts("                  S P H R A G I S               \n");
+    drivers::uart::puts("            sigil  ·  seal  ·  signet           \n");
     drivers::uart::puts("================================================\n");
-    drivers::uart::puts("  BAT_OS v0.3.0\n");
+    drivers::uart::puts("  SPHRAGIS v0.3.0\n");
     drivers::uart::puts("  Security: Zero dependencies. Zero trust.\n");
     drivers::uart::puts("================================================\n\n");
 
@@ -132,14 +129,14 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // tampered kernel produces a different hash.
     print_kernel_hash();
 
-    // BAT_OS_KEEP_GOING — when set at build time, the kernel records
+    // SPHRAGIS_KEEP_GOING — when set at build time, the kernel records
     // every cave-fatal event (non-zero exit, unknown syscall, EL0
     // fault) into a structured ring and continues running instead of
     // tearing down at the first failure. One smoke run then maps the
     // entire failure tree of content_shell / ld-linux / glibc setup
     // so we can dispatch parallel fixers per distinct failure
     // signature. See `src/batcave/linux/skip_log.rs`.
-    if option_env!("BAT_OS_KEEP_GOING").is_some() {
+    if option_env!("SPHRAGIS_KEEP_GOING").is_some() {
         batcave::linux::skip_log::enable();
     }
 
@@ -212,7 +209,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // the kernel binary, which meant every shipped image derived the same
     // master key and anyone with the ELF could recover it offline in
     // microseconds. We now read the passphrase from the UART at boot.
-    // If the build is explicitly marked dev (BAT_OS_DEV_PASSPHRASE env at
+    // If the build is explicitly marked dev (SPHRAGIS_DEV_PASSPHRASE env at
     // build time, wired via build.rs) we fall back to "batman" so QEMU
     // smoke tests still work without user interaction.
     drivers::uart::puts("[security] Initializing auth system...\n");
@@ -229,25 +226,25 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     let mut duress_buf = [0u8; 16];
     let duress = derive_secret_string(DURESS_LABEL, &mut duress_buf);
 
-    // V8-ROOT-5: prefer the build-time BAT_OS_PASSPHRASE / BAT_OS_DURESS
+    // V8-ROOT-5: prefer the build-time SPHRAGIS_PASSPHRASE / SPHRAGIS_DURESS
     // env vars when set. Wired via build.rs so cargo re-runs the compile
     // on env change. If unset we fall back to the UART prompt + derived
     // dev/duress strings — same behavior as before.
-    const BUILD_PASSPHRASE: Option<&str> = option_env!("BAT_OS_PASSPHRASE");
-    const BUILD_DURESS: Option<&str> = option_env!("BAT_OS_DURESS");
+    const BUILD_PASSPHRASE: Option<&str> = option_env!("SPHRAGIS_PASSPHRASE");
+    const BUILD_DURESS: Option<&str> = option_env!("SPHRAGIS_DURESS");
 
     let passphrase_slice: &[u8] = if let Some(s) = BUILD_PASSPHRASE {
         // the BUILD_PASSPHRASE is baked into
-        // the kernel binary as a plaintext literal — `strings bat_os`
+        // the kernel binary as a plaintext literal — `strings sphragis`
         // recovers it. This is convenient for development but
         // catastrophic for production. Loud red banner so the operator
         // can never miss that this binary should not ship.
         drivers::uart::puts("\n");
         drivers::uart::puts("================================================================\n");
-        drivers::uart::puts("  WARNING: this kernel was built with BAT_OS_PASSPHRASE baked in.\n");
-        drivers::uart::puts("  Anyone with `strings bat_os` recovers the passphrase in seconds.\n");
+        drivers::uart::puts("  WARNING: this kernel was built with SPHRAGIS_PASSPHRASE baked in.\n");
+        drivers::uart::puts("  Anyone with `strings sphragis` recovers the passphrase in seconds.\n");
         drivers::uart::puts("  DO NOT ship this binary. Build production with:\n");
-        drivers::uart::puts("      unset BAT_OS_PASSPHRASE && cargo build --release\n");
+        drivers::uart::puts("      unset SPHRAGIS_PASSPHRASE && cargo build --release\n");
         drivers::uart::puts("================================================================\n\n");
         s.as_bytes()
     } else if passphrase_len == 0 {
@@ -381,7 +378,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
         Some(()) => {
             drivers::uart::puts("[boot] GPU ready\n\n");
 
-            // Bring up the default VFS so /batos/fb0 exists for the blit
+            // Bring up the default VFS so /sphragis/fb0 exists for the blit
             // bridge. BatCave processes later swap to their own VFS slot;
             // the fb0 region is a physical-memory handle, not tied to slot.
             if !batcave::linux::vfs::is_ready() {
@@ -708,7 +705,7 @@ fn run_https_smoke() {
     };
 
     let req: &[u8] =
-        b"GET / HTTP/1.1\r\nHost: pq.cloudflareresearch.com\r\nUser-Agent: Bat_OS/1.0\r\nConnection: close\r\nAccept: */*\r\n\r\n";
+        b"GET / HTTP/1.1\r\nHost: pq.cloudflareresearch.com\r\nUser-Agent: Sphragis/1.0\r\nConnection: close\r\nAccept: */*\r\n\r\n";
     if let Err(e) = net::https::write(pcb, req) {
         uart::puts("[https-smoke] FAIL write: "); uart::puts(e); uart::puts("\n");
         net::https::close_pcb(pcb);
@@ -760,11 +757,11 @@ fn run_https_smoke() {
 fn derive_batfs_key(passphrase: &[u8]) -> [u8; 32] {
     use argon2::{Argon2, Algorithm, Version, Params};
 
-    // Distinct from auth.rs's "bat_os-auth-v2" so the two derivations
+    // Distinct from auth.rs's "sphragis-auth-v2" so the two derivations
     // produce different outputs for the same passphrase — domain
     // separation. bumps the version tag so anyone migrating
     // from the pre-Argon2 master key sees a clean break.
-    const SALT: &[u8; 16] = b"bat_os-batfs-v3\0";
+    const SALT: &[u8; 18] = b"sphragis-batfs-v3\0";
     const MEM_KIB: u32 = 8_192;       // 8 MiB
     const TIME_COST: u32 = 3;
     const PARALLELISM: u32 = 1;
@@ -828,13 +825,13 @@ fn derive_batfs_key_sha_fallback(passphrase: &[u8]) -> [u8; 32] {
 // other — an attacker who learns the dev fallback gains nothing about
 // the duress code. The downside is the values change between builds,
 // which is fine because the operator should pick their own at first
-// boot (BAT_OS_PASSPHRASE / BAT_OS_DURESS env vars wired via build.rs).
+// boot (SPHRAGIS_PASSPHRASE / SPHRAGIS_DURESS env vars wired via build.rs).
 //
 // For unattended QEMU smoke tests we fall through to a deterministic
 // build-time derivation so the test harness can compute the same
 // strings.
-const DEV_FALLBACK_LABEL: &[u8] = b"batos-dev-fallback-v1";
-const DURESS_LABEL:       &[u8] = b"batos-duress-code-v1";
+const DEV_FALLBACK_LABEL: &[u8] = b"sphragis-dev-fallback-v1";
+const DURESS_LABEL:       &[u8] = b"sphragis-duress-code-v1";
 
 /// Derive the dev-passphrase fallback. Returns the bytes in `buf`.
 /// Truncates to 8 base32-ish characters so the operator can re-type it.
@@ -990,7 +987,7 @@ pub static IS_HEADLESS: core::sync::atomic::AtomicBool =
 pub fn serial_shell() -> ! {
     use drivers::uart;
     use ui::shell_history::{ArrowKey, EscState, FeedResult};
-    uart::puts("bat_os > ");
+    uart::puts("sphragis > ");
 
     let mut buf = [0u8; 256];
     let mut len = 0usize;
@@ -1063,7 +1060,7 @@ pub fn serial_shell() -> ! {
                     ui::shell_history::record(&buf[..len]);
                     len = 0;
                 }
-                uart::puts("bat_os > ");
+                uart::puts("sphragis > ");
             }
             0x03 => {
                 // Ctrl+C — discard the current line and reprompt.
@@ -1169,19 +1166,19 @@ global_asm!(include_str!("arch/aarch64/apple/boot.s"));
 global_asm!(r#"
 .section .text.apple_boot
 .balign 2048
-.global _bat_os_early_vbar
-_bat_os_early_vbar:
+.global _sphragis_early_vbar
+_sphragis_early_vbar:
 .rept 16
-    b   _bat_os_early_fault
+    b   _sphragis_early_fault
     .balign 128
 .endr
-_bat_os_early_fault:
+_sphragis_early_fault:
 1:  wfe
     b   1b
 "#);
 
 /// Run one scripted shell command through `apple_shell_dispatch`
-/// with a `bat_os>` prompt echoed first — visually identical to
+/// with a `sphragis>` prompt echoed first — visually identical to
 /// what happens when a human types at the (future USB-CDC) shell.
 /// Currently only invoked from `apple_kernel_self_test`, which is
 /// commented out at its single call site (kernel_main_apple). Kept
@@ -1189,7 +1186,7 @@ _bat_os_early_fault:
 #[allow(dead_code)]
 fn apple_run_cmd(line: &str) {
     use drivers::apple::uart;
-    uart::puts("bat_os> ");
+    uart::puts("sphragis> ");
     uart::puts(line);
     uart::puts("\n");
     apple_shell_dispatch(line);
@@ -1243,7 +1240,7 @@ fn apple_kernel_self_test() {
     // Test 2: BatFS create (exercises rng::fill_bytes → sha256 KDF
     // → AES-CTR encrypt → HMAC-SHA256 tag → NONCE_COUNTER advance).
     const NAME: &str = "selftest.txt";
-    const PLAINTEXT: &[u8] = b"Hello from Bat_OS on real Apple M4 silicon.";
+    const PLAINTEXT: &[u8] = b"Hello from Sphragis on real Apple M4 silicon.";
     uart::puts("[selftest] batfs::create(\""); uart::puts(NAME); uart::puts("\") ... ");
     match fs::batfs::create(NAME, PLAINTEXT) {
         Ok(()) => uart::puts("OK\n"),
@@ -1352,8 +1349,8 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
     unsafe {
         core::arch::asm!(
             "mrs   x1, CurrentEL",
-            "adrp  x0, _bat_os_early_vbar",
-            "add   x0, x0, #:lo12:_bat_os_early_vbar",
+            "adrp  x0, _sphragis_early_vbar",
+            "add   x0, x0, #:lo12:_sphragis_early_vbar",
             "cmp   x1, #0x8",
             "b.ne  1f",
             "msr   vbar_el2, x0",
@@ -1390,9 +1387,9 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
     unsafe { drivers::apple::boot_args::stash(boot_args_ptr); }
     // V-HV-GUEST-2 / V-HV-SCREEN: Under m1n1's HV (EL1), the FB may
     // or may not still be valid depending on whether run_guest.py's
-    // Python half called `fb_shutdown(True)`. When `BATOS_KEEP_FB=1`
+    // Python half called `fb_shutdown(True)`. When `SPHRAGIS_KEEP_FB=1`
     // is set on the host, the FB memory stays live and DCP keeps
-    // scanning it out, so Bat_OS writes to boot_args->video.base show
+    // scanning it out, so Sphragis writes to boot_args->video.base show
     // up on the Mac's internal LCD and can be captured via
     // scripts/hv/m4_screenshot.py. When the FB is freed, writes would
     // clobber m1n1's heap.
@@ -1400,7 +1397,7 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
     // We can't detect the host's choice from inside the guest, so
     // trust boot_args: if video.base is non-zero, populate soc FB
     // info and let the FB paths render. Operators who don't set
-    // BATOS_KEEP_FB get the previous "no FB under HV" behaviour only
+    // SPHRAGIS_KEEP_FB get the previous "no FB under HV" behaviour only
     // by manually patching run_guest to clear video.base; with the
     // default run_guest.py behaviour (fb_shutdown + keep passing
     // video.base through), this call will fill soc's FB info and the
@@ -1432,7 +1429,7 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
     drivers::apple::uart::init();
     drivers::apple::uart::puts("\n");
     drivers::apple::uart::puts("================================================\n");
-    drivers::apple::uart::puts("  BAT_OS — BARE METAL APPLE SILICON\n");
+    drivers::apple::uart::puts("  SPHRAGIS — BARE METAL APPLE SILICON\n");
     drivers::apple::uart::puts("  Running on REAL M4 hardware.\n");
     drivers::apple::uart::puts("================================================\n\n");
 
@@ -1485,14 +1482,14 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
     }
 
     // V-APPLE-AUTH-1: passphrase resolution — same priority order as
-    // the QEMU path, so `BAT_OS_PASSPHRASE=<plaintext>` at build time
+    // the QEMU path, so `SPHRAGIS_PASSPHRASE=<plaintext>` at build time
     // works identically on both targets:
-    // 1. BAT_OS_PASSPHRASE (option_env!) — baked at build time
+    // 1. SPHRAGIS_PASSPHRASE (option_env!) — baked at build time
     // 2. read_passphrase_apple (non-blocking UART prompt) if we
     // actually got bytes
     // 3. dev_fallback (SHA-256 over kernel-image hash — same as QEMU)
-    const BUILD_PASSPHRASE_APPLE: Option<&str> = option_env!("BAT_OS_PASSPHRASE");
-    const BUILD_DURESS_APPLE: Option<&str> = option_env!("BAT_OS_DURESS");
+    const BUILD_PASSPHRASE_APPLE: Option<&str> = option_env!("SPHRAGIS_PASSPHRASE");
+    const BUILD_DURESS_APPLE: Option<&str> = option_env!("SPHRAGIS_DURESS");
     let mut passphrase_buf = [0u8; 128];
     let passphrase_len = read_passphrase_apple(&mut passphrase_buf);
     let mut dev_fallback_buf_apple = [0u8; 16];
@@ -1501,7 +1498,7 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
     let mut duress_buf_apple = [0u8; 16];
     let duress_apple_bytes = derive_secret_string(DURESS_LABEL, &mut duress_buf_apple);
     let passphrase_slice: &[u8] = if let Some(s) = BUILD_PASSPHRASE_APPLE {
-        drivers::apple::uart::puts("  [auth] using BAT_OS_PASSPHRASE (build-time)\n");
+        drivers::apple::uart::puts("  [auth] using SPHRAGIS_PASSPHRASE (build-time)\n");
         s.as_bytes()
     } else if passphrase_len == 0 {
         drivers::apple::uart::puts("  (empty — dev fallback)\n");
@@ -1518,7 +1515,7 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
     if drivers::apple::dcp::init_simple_fb() {
         drivers::apple::uart::puts("[boot] Display ready -- drawing splash\n");
         // V-ASAHI-2.1: render the boot splash so the operator sees on
-        // the actual display (not just over USB serial) that Bat_OS
+        // the actual display (not just over USB serial) that Sphragis
         // owns the M4. Fills the framebuffer m1n1 set up.
         drivers::apple::dcp::boot_splash();
         // Enable the on-screen mirror of `apple::uart::puts`. This
@@ -1551,11 +1548,11 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
         //
         // Input route: platform::serial_getc() on Apple returns SPI
         // first (None under HV) then dockchannel UART. Under the
-        // batos_hv_interactive.py script, keystrokes from Ubuntu
+        // sphragis_hv_interactive.py script, keystrokes from Ubuntu
         // → /dev/ttyACM2 → m1n1 vuart hook → guest RX ring → getc.
         //
         // Override the compiled-in passphrase at build time:
-        // BAT_OS_PASSPHRASE=mypass bash build_apple.sh
+        // SPHRAGIS_PASSPHRASE=mypass bash build_apple.sh
         let passphrase_str_apple = core::str::from_utf8(passphrase_slice)
             .unwrap_or("");
         let duress_str_apple = match BUILD_DURESS_APPLE {
@@ -1592,7 +1589,7 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
 // /
 /// Note: with m1n1 replaced by our payload, the Mac's USB-CDC
 /// endpoint is gone — so Ubuntu can't read/write this serial until
-/// Bat_OS gets its own USB-CDC class driver. Until then this runs
+/// Sphragis gets its own USB-CDC class driver. Until then this runs
 /// silently (getc() returns None), but the shell itself is fully
 /// functional: once a real byte stream arrives it will parse
 /// commands and execute against the live kernel.
@@ -1600,7 +1597,7 @@ fn apple_serial_shell() -> ! {
     use drivers::apple::uart;
 
     uart::puts("\n");
-    uart::puts("bat_os> ");
+    uart::puts("sphragis> ");
 
     let mut buf = [0u8; 128];
     let mut len: usize = 0;
@@ -1633,7 +1630,7 @@ fn apple_serial_shell() -> ! {
                     apple_shell_dispatch(cmd);
                     len = 0;
                 }
-                uart::puts("bat_os> ");
+                uart::puts("sphragis> ");
             }
             0x08 | 0x7F => {
                 if len > 0 {
@@ -1684,7 +1681,7 @@ fn apple_shell_dispatch(line: &str) {
             uart::puts("  halt           — WFE loop\n");
         }
         "uname" => {
-            uart::puts("Bat_OS aarch64 (Apple M4 / T8132 Donan)\n");
+            uart::puts("Sphragis aarch64 (Apple M4 / T8132 Donan)\n");
         }
         "cpuid" => {
             let midr: u64; let ctr: u64; let cur_el: u64;
@@ -1724,7 +1721,7 @@ fn apple_shell_dispatch(line: &str) {
                 None => { uart::puts("FAIL (out of memory)\n"); return; }
             }
             const SELFT_NAME: &str = "selftest.txt";
-            const SELFT_PT: &[u8] = b"Hello from Bat_OS on real Apple M4 silicon under HV.";
+            const SELFT_PT: &[u8] = b"Hello from Sphragis on real Apple M4 silicon under HV.";
             uart::puts("[selftest] batfs::create ... ");
             match fs::batfs::create(SELFT_NAME, SELFT_PT) {
                 Ok(()) => uart::puts("OK\n"),
@@ -1913,7 +1910,7 @@ fn apple_shell_dispatch(line: &str) {
             uart::puts("  RNDR nibble:      0x"); uart::puthex32(rndr_nibble as u32); uart::puts("\n");
             uart::puts("  RNDR available:   ");
             uart::puts(if rndr_nibble >= 1 { "yes\n" } else { "no\n" });
-            uart::puts("  Bat_OS HW RNG:    ");
+            uart::puts("  Sphragis HW RNG:    ");
             uart::puts(if crypto::rng::have_rndr() { "enabled\n" } else { "disabled (SHA-chain only)\n" });
             // Also report SHA2 crypto extension availability.
             let sha2_nibble = (isar0 >> 12) & 0xf;

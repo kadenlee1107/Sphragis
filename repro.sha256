@@ -1,4 +1,4 @@
 git_sha:           c6b170e1d388
 source_date_epoch: 1778651258
-rustflags:         -C link-arg=-Tlinker.ld -Zfixed-x18 -Z stack-protector=all -C target-feature=+paca,+pacg,+bti -Z branch-protection=bti,pac-ret --remap-path-prefix=/Users/kadenlee/Bat_OS=/build
+rustflags:         -C link-arg=-Tlinker.ld -Zfixed-x18 -Z stack-protector=all -C target-feature=+paca,+pacg,+bti -Z branch-protection=bti,pac-ret --remap-path-prefix=/Users/kadenlee/Sphragis=/build
 kernel_sha256:     e3c18b183c2643f3c1462bff8efb591ae1dde2a22796364b0bb2584a2bb7def1

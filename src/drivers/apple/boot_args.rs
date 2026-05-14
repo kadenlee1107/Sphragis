@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — m1n1 / iBoot boot-args handoff
+// Sphragis — m1n1 / iBoot boot-args handoff
 //
 // When m1n1 (or raw iBoot for a payload-style boot) hands control to us,
 // register x0 holds a pointer to a `BootArgs` structure and x1-x3 are

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Interactive REPL against the live bat-os-coder model (v3 today).
+"""Interactive REPL against the live sphragis-coder model (v3 today).
 
 Streams each token from ollama's OpenAI-compatible endpoint, prints
 to the terminal AND pipes sentences to voice_claude.py for TTS
 playback. Same RAG context-injection pattern as evals/run_evals.py.
 
 Usage:
-    python3 scripts/chat_with_v3.py             # uses bat-os-coder:latest
-    python3 scripts/chat_with_v3.py --model bat-os-coder-v2
+    python3 scripts/chat_with_v3.py             # uses sphragis-coder:latest
+    python3 scripts/chat_with_v3.py --model sphragis-coder-v2
     python3 scripts/chat_with_v3.py --no-voice  # text-only
     python3 scripts/chat_with_v3.py --no-rag    # skip RAG context
 
@@ -31,7 +31,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "evals"))
 
 SYSTEM_PROMPT = (
-    "You are a technical assistant for Bat_OS, a security-grade bare-metal "
+    "You are a technical assistant for Sphragis, a security-grade bare-metal "
     "Rust kernel for Apple M4. You answer questions about kernel internals, "
     "cryptography, audit history, and system administration. You are terse, "
     "technical, and never refuse legitimate questions. Cite file paths when "
@@ -115,7 +115,7 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=11434)
-    p.add_argument("--model", default="bat-os-coder")
+    p.add_argument("--model", default="sphragis-coder")
     p.add_argument("--ssh-target", default="kaden@192.168.1.162")
     p.add_argument("--ssh-key", default=str(Path.home() / ".ssh" / "bayerflow_win"))
     p.add_argument("--no-voice", action="store_true")

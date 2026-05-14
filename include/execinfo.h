@@ -1,4 +1,4 @@
-// Bat_OS — execinfo.h stub (no backtrace support)
+// Sphragis — execinfo.h stub (no backtrace support)
 #ifndef _EXECINFO_H
 #define _EXECINFO_H
 

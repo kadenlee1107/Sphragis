@@ -1,4 +1,4 @@
-// Minimal Abseil int128 stub for V8 compilation on Bat_OS
+// Minimal Abseil int128 stub for V8 compilation on Sphragis
 // Uses compiler __int128 intrinsic (supported on ARM64)
 
 #ifndef ABSL_NUMERIC_INT128_H_

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bat_OS — grab a frame from the Elgato capture card.
+# Sphragis — grab a frame from the Elgato capture card.
 #
 # Assumes HDMI from the M4 (via USB-C → HDMI adapter) is connected
 # into an Elgato USB capture card, which enumerates as a V4L2 device.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Build LoRA training dataset from Bat_OS source + docs + vault.
+"""Build LoRA training dataset from Sphragis source + docs + vault.
 
-Produces a JSONL file at out/bat_os_lora_dataset.jsonl with one
+Produces a JSONL file at out/sphragis_lora_dataset.jsonl with one
 {"instruction": ..., "input": ..., "output": ...} record per line.
 Intended for HuggingFace SFTTrainer or trl's LoRA fine-tune flow.
 
@@ -20,8 +20,8 @@ import sys
 from pathlib import Path
 
 REPO  = Path(__file__).resolve().parent.parent
-VAULT = Path.home() / "BAT_OS_VAULT"
-OUT   = REPO / "out" / "bat_os_lora_dataset.jsonl"
+VAULT = Path.home() / "SPHRAGIS_VAULT"
+OUT   = REPO / "out" / "sphragis_lora_dataset.jsonl"
 
 AUDIT_RE = re.compile(r'(V\d+-[A-Z]+(?:-\d+)?|STUMP\s*#\s*\d+)')
 RUST_FN_RE = re.compile(
@@ -42,7 +42,7 @@ def collect_source_pairs() -> list[dict]:
             body = text[start:body_end]
             rel = p.relative_to(REPO)
             out.append({
-                "instruction": "In Bat_OS, what does the following function do?",
+                "instruction": "In Sphragis, what does the following function do?",
                 "input": sig,
                 "output": f"From `{rel}`:\n\n```rust\n{body}\n```",
             })
@@ -63,7 +63,7 @@ def collect_audit_pairs() -> list[dict]:
             ctx = text[max(0, m.start() - 200): m.end() + 600]
             rel = p.relative_to(REPO)
             out.append({
-                "instruction": f"What does the audit marker {marker} refer to in Bat_OS?",
+                "instruction": f"What does the audit marker {marker} refer to in Sphragis?",
                 "input": "",
                 "output": f"From `{rel}`:\n\n{ctx}",
             })
@@ -79,7 +79,7 @@ def collect_concept_pairs() -> list[dict]:
         text = p.read_text(encoding="utf-8")
         title = p.stem
         out.append({
-            "instruction": f"Explain the Bat_OS concept '{title}'.",
+            "instruction": f"Explain the Sphragis concept '{title}'.",
             "input": "",
             "output": text,
         })
@@ -92,14 +92,14 @@ def collect_design_pairs() -> list[dict]:
     for p in REPO.glob("DESIGN_*.md"):
         text = p.read_text(encoding="utf-8")
         out.append({
-            "instruction": f"Summarize the Bat_OS design doc {p.name}.",
+            "instruction": f"Summarize the Sphragis design doc {p.name}.",
             "input": "",
             "output": text,
         })
     for p in (REPO / "docs").glob("PLAN_*.md"):
         text = p.read_text(encoding="utf-8")
         out.append({
-            "instruction": f"What is the Bat_OS implementation plan in {p.name}?",
+            "instruction": f"What is the Sphragis implementation plan in {p.name}?",
             "input": "",
             "output": text,
         })
@@ -125,7 +125,7 @@ def collect_commit_pairs() -> list[dict]:
         if not subject or not body:
             continue
         out.append({
-            "instruction": "Expand on this Bat_OS commit subject.",
+            "instruction": "Expand on this Sphragis commit subject.",
             "input": subject,
             "output": body,
         })

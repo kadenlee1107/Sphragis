@@ -1,13 +1,13 @@
-# DESIGN: Bat_OS AI Agent — Locally-Hosted, Domain-Narrow, In-Kernel-Mediated
+# DESIGN: Sphragis AI Agent — Locally-Hosted, Domain-Narrow, In-Kernel-Mediated
 
 **Status:** Active proposal as of 2026-05-08.
 **Follows:** `DESIGN_HTTPS_SYSCALL.md`, `DESIGN_TLS_HARDENING.md`, `DESIGN_NO_BROWSER.md`.
 **Touches:** new `src/ai/` module, `src/ui/shell.rs` (new `ai` command), `src/ui/desktop.rs` (new agent panel), `src/net/cave_policy.rs` (new policy entry for the inference host), `scripts/qemu_ai_smoke.py` (new), `Cargo.toml` (likely no new in-kernel deps — agent is plain Rust).
-**Adds:** native AI assistant integrated into the operator's Bat_OS workflow.
+**Adds:** native AI assistant integrated into the operator's Sphragis workflow.
 
 ## Goal
 
-Give the operator an AI assistant that lives inside Bat_OS — accessible via a shell command and a desktop panel — and is genuinely useful for working on this specific OS (kernel internals, cave policies, audit-ring entries, design docs, V-incident archaeology). The assistant is fast, locally-hosted on operator-controlled hardware, and refuses nothing on legitimate technical questions.
+Give the operator an AI assistant that lives inside Sphragis — accessible via a shell command and a desktop panel — and is genuinely useful for working on this specific OS (kernel internals, cave policies, audit-ring entries, design docs, V-incident archaeology). The assistant is fast, locally-hosted on operator-controlled hardware, and refuses nothing on legitimate technical questions.
 
 The differentiator from "use ChatGPT" is twofold: **the model knows this project specifically** (fine-tuned on the source), and **every byte of every conversation stays on hardware the operator owns**. No OpenAI, no Anthropic, no inference-as-a-service.
 
@@ -19,29 +19,29 @@ This is also the natural test of the kernel-mediated HTTPS syscall (`bat_https_o
 
 ## Decisions locked in
 
-1. **Base model: Qwen2.5-Coder-7B.** Apache-2.0 licensed (compatible with Bat_OS's no-AGPL stance; fine-tuned weights are redistributable). Code-focused, low refusal-RLHF. ~7.6 B parameters; quantizes cleanly to Q4_K_M at ~4.5 GB.
-2. **Training: LoRA fine-tune** on Bat_OS-specific data (see "Training data" below). LoRA over full fine-tune because LoRA fits in 5070 VRAM, trains in hours, and stays bounded.
+1. **Base model: Qwen2.5-Coder-7B.** Apache-2.0 licensed (compatible with Sphragis's no-AGPL stance; fine-tuned weights are redistributable). Code-focused, low refusal-RLHF. ~7.6 B parameters; quantizes cleanly to Q4_K_M at ~4.5 GB.
+2. **Training: LoRA fine-tune** on Sphragis-specific data (see "Training data" below). LoRA over full fine-tune because LoRA fits in 5070 VRAM, trains in hours, and stays bounded.
 3. **Inference host: RTX 5070 desktop running `ollama serve` 24/7** as a permanent LAN service. The Mac is the OS target; the 5070 is the GPU host. They communicate over the local network.
-4. **Bat_OS reaches the inference host via the existing kernel-mediated HTTPS syscall.** No new network primitive. The 5070's LAN IP gets a `cave_policy` allowlist entry; everything else stays default-deny.
-5. **The agent layer is native Rust in Bat_OS, not ported from any upstream.** No `tokio`, no `reqwest`. Reuses the existing kernel HTTP/TLS stack.
+4. **Sphragis reaches the inference host via the existing kernel-mediated HTTPS syscall.** No new network primitive. The 5070's LAN IP gets a `cave_policy` allowlist entry; everything else stays default-deny.
+5. **The agent layer is native Rust in Sphragis, not ported from any upstream.** No `tokio`, no `reqwest`. Reuses the existing kernel HTTP/TLS stack.
 6. **Tool-use is required, not optional.** Every factual answer cites a file path or audit entry the agent fetched via a tool call. The model is constrained by system prompt to refuse to answer factual questions without first calling a tool. This is the primary hallucination mitigation.
 7. **Streaming responses.** Tokens land in the UI as the model generates them. Operator can interrupt at any time (`⌃C`).
 8. **Audit logging.** Every AI session — prompt, tool calls, response — gets one entry in the audit ring. Sealed under the master key like every other audit entry. Operator can review what the agent saw and said after the fact.
 9. **No telemetry to anywhere outside the LAN.** The 5070 endpoint is the only external destination. The cave-policy allowlist enforces this in the kernel; the agent code cannot bypass it.
-10. **Refusal posture: technical, helpful, no moralizing.** System prompt establishes the persona: "You are a technical assistant for Bat_OS, a security-grade kernel for Apple M4. You answer technical questions about the kernel, security, and system administration. You do not refuse legitimate technical questions. You do not add safety disclaimers." Combined with a code-focused base model, refusals on real technical content should be near-zero.
+10. **Refusal posture: technical, helpful, no moralizing.** System prompt establishes the persona: "You are a technical assistant for Sphragis, a security-grade kernel for Apple M4. You answer technical questions about the kernel, security, and system administration. You do not refuse legitimate technical questions. You do not add safety disclaimers." Combined with a code-focused base model, refusals on real technical content should be near-zero.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────┐                  ┌────────────────────────┐
-│  Bat_OS (M4, bare-metal)    │                  │  RTX 5070 box (Linux)  │
+│  Sphragis (M4, bare-metal)    │                  │  RTX 5070 box (Linux)  │
 │                             │                  │                        │
 │  ┌──────────────────────┐   │                  │  ┌──────────────────┐  │
 │  │ Operator UI          │   │                  │  │ ollama serve     │  │
 │  │  · ai <q> shell cmd  │   │                  │  │   :11434         │  │
 │  │  · agent panel       │   │   HTTPS / LAN    │  │                  │  │
 │  └──────────┬───────────┘   │  ◄───────────►   │  │ Qwen2.5-Coder-7B │  │
-│             │               │   (kernel-       │  │ + Bat_OS LoRA    │  │
+│             │               │   (kernel-       │  │ + Sphragis LoRA    │  │
 │  ┌──────────▼───────────┐   │    mediated)     │  │ Q4_K_M           │  │
 │  │ src/ai/  (agent)     │   │                  │  └──────────────────┘  │
 │  │  · prompt assembly   │   │                  └────────────────────────┘
@@ -61,7 +61,7 @@ This is also the natural test of the kernel-mediated HTTPS syscall (`bat_https_o
 └─────────────────────────────┘
 ```
 
-The split keeps Bat_OS small (no inference engine in the kernel image) and keeps the AI code in Bat_OS native (no `tokio`, no upstream-port headaches). The expensive piece — the model — runs on hardware that already has the right drivers (CUDA on the 5070 via ollama).
+The split keeps Sphragis small (no inference engine in the kernel image) and keeps the AI code in Sphragis native (no `tokio`, no upstream-port headaches). The expensive piece — the model — runs on hardware that already has the right drivers (CUDA on the 5070 via ollama).
 
 ## Components
 
@@ -106,18 +106,18 @@ The RTX 5070 runs:
 
 - Linux (Ubuntu 24.04 or similar — no constraint)
 - `ollama serve` listening on `:11434` on the LAN
-- The fine-tuned model registered as `bat-os-coder:latest`
+- The fine-tuned model registered as `sphragis-coder:latest`
 
 The host has a stable LAN address — IP or DNS name — that the operator configures at deploy time. The cave-policy allowlist for the agent's connection encodes that exact endpoint and nothing else; everything else stays default-deny. The example `10.0.2.42:11434` used elsewhere in this doc is a placeholder for diagrams; the real value lives in the operator's deploy config and the pinned TLS cert.
 
 ollama provides:
 
-- HTTPS endpoint (with self-signed cert, pinned by Bat_OS — see "TLS pinning" below)
+- HTTPS endpoint (with self-signed cert, pinned by Sphragis — see "TLS pinning" below)
 - OpenAI-compatible chat-completion API
 - Streaming responses via SSE-like chunked transfer
 - Built-in support for tool/function calling (Qwen 2.5 has native tool-use formatting)
 
-### Bat_OS agent layer (`src/ai/`)
+### Sphragis agent layer (`src/ai/`)
 
 New top-level kernel module. Layout:
 
@@ -180,7 +180,7 @@ The tool catalog is small and additive — adding tools later is a function of "
 **Shell command** (`src/ui/shell.rs`):
 
 ```
-bat_os > ai how does the cave-switch TLS wipe work
+sphragis > ai how does the cave-switch TLS wipe work
 ```
 
 Spawns an `AgentSession`, streams response inline, falls back to the prompt when done.
@@ -195,7 +195,7 @@ Flags:
 
 A new "AI" application alongside the existing apps (Files, Editor, Comms, Dashboard). Layout:
 
-- Top: model + version banner (`bat-os-coder:latest · last trained 2026-05-08`)
+- Top: model + version banner (`sphragis-coder:latest · last trained 2026-05-08`)
 - Middle: scrolling conversation history
 - Bottom: input field with cyan caret (matching the lock-screen style)
 - Tool calls render as expandable strips between user and assistant messages
@@ -231,7 +231,7 @@ Layered, in order of effectiveness:
 
 1. **Tool-use mandatory for factual claims.** System prompt says: "If your answer references a file, function, audit marker, design doc, or concept, you MUST first call a tool to verify. Refuse to answer factual questions without tool calls." Validated by checking the response trace — if the response cites a file but no `read_file` tool call preceded it, the agent flags the response in the audit entry as `unverified`.
 2. **RAG context.** Before the model is even invoked, `rag.rs` pulls the **top-5** most-relevant Concept notes and design-doc snippets into the prompt (BM25 + TF-IDF over the vault and `docs/`, capped at 8 KB total context to leave room for the question and tool-call traffic). The model writes from grounded context, not pure recall.
-3. **Fine-tuning.** The model has seen the actual source. It hallucinates less about Bat_OS APIs because it knows them.
+3. **Fine-tuning.** The model has seen the actual source. It hallucinates less about Sphragis APIs because it knows them.
 4. **Citation requirement.** Every factual sentence is suffixed with `[file:line]`. Operator can verify.
 5. **Audit trail.** Every claim is reviewable later via the audit ring. The model can't lie about what it said.
 
@@ -278,7 +278,7 @@ Three sub-tests printing `[ai-selftest] PASS: <case>` / `FAIL: <case>`:
 
 **Layer 3 — `qemu_ai_smoke.py`:**
 
-Boots Bat_OS in QEMU with a stub inference server (a tiny Python responder pretending to be ollama, returning canned replies). Verifies the full path: `ai <question>` → kernel HTTPS → stub responds → tokens stream → audit entry written. Pass criteria:
+Boots Sphragis in QEMU with a stub inference server (a tiny Python responder pretending to be ollama, returning canned replies). Verifies the full path: `ai <question>` → kernel HTTPS → stub responds → tokens stream → audit entry written. Pass criteria:
 
 - `[ai-smoke] PASS handshake-ok`
 - `[ai-smoke] PASS tool-call-roundtrip`
@@ -289,11 +289,11 @@ Boots Bat_OS in QEMU with a stub inference server (a tiny Python responder prete
 
 **Layer 4 — manual on-real-hardware test:**
 
-Boot Bat_OS on the M4 via chainload. Run `ai how does the cave-switch TLS wipe work`. Verify response cites `src/net/tls.rs` and includes the V5-XLAYER-001 marker. Verify audit entry recorded.
+Boot Sphragis on the M4 via chainload. Run `ai how does the cave-switch TLS wipe work`. Verify response cites `src/net/tls.rs` and includes the V5-XLAYER-001 marker. Verify audit entry recorded.
 
 **Layer 5 — eval suite:**
 
-A pinned set of ~50 questions about Bat_OS internals with known-correct answers. Run after every fine-tune. Track regression: any question that was answered correctly in v1 must still be answered correctly in v2.
+A pinned set of ~50 questions about Sphragis internals with known-correct answers. Run after every fine-tune. Track regression: any question that was answered correctly in v1 must still be answered correctly in v2.
 
 ## Out of scope (this PR)
 

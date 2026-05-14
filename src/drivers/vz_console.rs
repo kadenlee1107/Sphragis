@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Virtualization.framework Console Output
+// Sphragis — Virtualization.framework Console Output
 // VZ VMs use virtio-console over PCI, but we don't know where.
 //
 // Strategy: VZLinuxBootLoader passes a device tree (DTB) in x0.

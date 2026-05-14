@@ -68,7 +68,7 @@ for d in "${TARGET_DIRS[@]}"; do
             tail -20 "$d.log"
             exit 1
         }
-    BIN="$d/aarch64-unknown-none/release/bat_os"
+    BIN="$d/aarch64-unknown-none/release/sphragis"
     if [[ ! -f "$BIN" ]]; then
         echo "[repro] $BIN missing after build"
         exit 1

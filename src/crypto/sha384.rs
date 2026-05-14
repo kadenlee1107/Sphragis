@@ -1,4 +1,4 @@
-// Bat_OS — SHA-384 / HMAC-SHA-384 / HKDF-SHA-384
+// Sphragis — SHA-384 / HMAC-SHA-384 / HKDF-SHA-384
 //
 // parallel module to `sha256.rs` for the TLS 1.3
 // `TLS_AES_256_GCM_SHA384` cipher suite. Same API surface, but:

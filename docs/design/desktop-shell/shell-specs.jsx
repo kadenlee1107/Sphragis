@@ -1,4 +1,4 @@
-// Spec sheet for the Bat_OS desktop chrome + shell pane.
+// Spec sheet for the Sphragis desktop chrome + shell pane.
 
 const dsSpecColors = {
   bg: "#0A0A0A", panel: "#0E0E0E",
@@ -42,7 +42,7 @@ const ShellSpecs = () => (
       fontSize: 11, letterSpacing: 3, color: dsSpecColors.cyan,
       textTransform: "uppercase", marginBottom: 8,
     }}>
-      [spec] bat_os · desktop chrome + shell pane · v0.5.0-dev
+      [spec] sphragis · desktop chrome + shell pane · v0.5.0-dev
     </div>
     <div style={{ fontSize: 24, letterSpacing: 2, marginBottom: 4 }}>
       Implementation reference
@@ -82,7 +82,7 @@ const ShellSpecs = () => (
         <DSRow k="Width" v="132px (fixed)" />
         <DSRow k="Padding" v="14px L/R · 0 T/B" />
         <DSRow k="Bat glyph" v="18×12 · #22D3EE · simplified mark" />
-        <DSRow k="Wordmark" v="12px / 700 / tracking 2px · 'BAT_OS'" />
+        <DSRow k="Wordmark" v="12px / 700 / tracking 2px · 'SPHRAGIS'" />
         <DSRow k="Underscore" v="cyan #22D3EE (only the '_')" />
         <DSRow k="Right border" v="1px #1A1A1A" />
       </DSBlock>
@@ -154,11 +154,11 @@ const ShellSpecs = () => (
         <DSRow k="Wrap" v="hard wrap at column · indent continuation 2 spaces" />
       </DSBlock>
       <DSBlock title="Prompt typography">
-        <DSRow k="'bat_os'" v="#E5E7EB ink · regular weight" />
+        <DSRow k="'sphragis'" v="#E5E7EB ink · regular weight" />
         <DSRow k="' > '" v="cyan #22D3EE · 6px L/R padding" />
         <DSRow k="Typed text" v="#E5E7EB ink" />
         <DSRow k="Cursor" v="8×14 solid block · cyan #22D3EE · 1Hz blink" />
-        <DSRow k="Echo prefix (history)" v="'bat_os' #4B5563 dim · '>' #0E7490 cyanDim — visually receded" />
+        <DSRow k="Echo prefix (history)" v="'sphragis' #4B5563 dim · '>' #0E7490 cyanDim — visually receded" />
       </DSBlock>
     </div>
     <div style={{ marginBottom: 32 }}>

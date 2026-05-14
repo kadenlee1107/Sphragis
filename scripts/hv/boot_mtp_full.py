@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Full MTP ASC bring-up: stage firmware + init deps + boot.
 
-Sequence (matches batos_hv_interactive.py's _mtp_kbd_probe, with
+Sequence (matches sphragis_hv_interactive.py's _mtp_kbd_probe, with
 firmware staging prepended — test_mtp_data_write.py confirmed we
 can stage __DATA/__OS_LOG even though __TEXT is iBoot-locked):
 
@@ -44,7 +44,7 @@ LC_SEGMENT_64 = 0x19
 
 def chainload_patched_m1n1(iface, p, u):
     """Chainload our patched m1n1.macho over the existing proxy session.
-    Mirrors batos_hv_interactive.chainload_inline. The patched m1n1 has
+    Mirrors sphragis_hv_interactive.chainload_inline. The patched m1n1 has
     the 118s-watchdog-disable fix (commit 72c606f4) which may matter if
     macOS's watchdog is triggering on MTP ASC boot attempts. After this,
     the same iface/p are valid against the new m1n1.
@@ -242,9 +242,9 @@ def main():
 
     # Chainload our patched m1n1 (has 118s watchdog disable + other fixes).
     # The stock kmutil-installed bcee7f2 may have quirks that make MTP
-    # ASC init fail. On BATOS_SKIP_BOOTSTRAP=1 skip (e.g., when patched
+    # ASC init fail. On SPHRAGIS_SKIP_BOOTSTRAP=1 skip (e.g., when patched
     # m1n1 is already running from a previous session in same power-cycle).
-    if os.environ.get("BATOS_SKIP_BOOTSTRAP", "0") != "1":
+    if os.environ.get("SPHRAGIS_SKIP_BOOTSTRAP", "0") != "1":
         log("chainloading patched m1n1...")
         if chainload_patched_m1n1(iface, p, u):
             log("patched m1n1 running — rebuilding proxy utils")
@@ -472,7 +472,7 @@ if __name__ == "__main__":
     rc = main()
     # Skip pyserial cleanup — closing the CDC-ACM fd drops DTR and
     # wedges m1n1's proxy loop (see 12:45 and 13:45 journal entries).
-    # Same pattern as batos_hv_interactive.py's loop mode.
+    # Same pattern as sphragis_hv_interactive.py's loop mode.
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(rc if rc is not None else 0)

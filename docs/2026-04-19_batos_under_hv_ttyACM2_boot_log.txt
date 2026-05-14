@@ -1,6 +1,6 @@
 
 ================================================
-  BAT_OS — BARE METAL APPLE SILICON
+  SPHRAGIS — BARE METAL APPLE SILICON
   Running on REAL M4 hardware.
 ================================================
 
@@ -20,4 +20,4 @@
 [boot] No display — serial shell
 
 
-bat_os> 
+sphragis> 

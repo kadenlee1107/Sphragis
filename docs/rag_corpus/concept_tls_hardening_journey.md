@@ -51,7 +51,7 @@ The smoke that protects this is [[_generated/scripts/qemu_pq_interop_smoke.py]] 
 
 The most recent slice. Two RFC 5280-required checks that the verifier had explicitly skipped (its own header at [[_generated/src/net/x509.rs]] lines 12-23 flagged both):
 
-- **Validity period** (`notBefore` / `notAfter`): rejects expired or not-yet-valid certs. `BAT_OS_BUILD_UNIX` is baked at compile time via [[_generated/build.rs]] since Bat_OS has no RTC.
+- **Validity period** (`notBefore` / `notAfter`): rejects expired or not-yet-valid certs. `SPHRAGIS_BUILD_UNIX` is baked at compile time via [[_generated/build.rs]] since Sphragis has no RTC.
 - **Critical-extension reject**: a cert with an unrecognized critical extension is rejected. Without this, a CA's pinned semantic (e.g. `NameConstraints`) gets silently ignored — defeating the point of the critical bit.
 
 Both follow the V6-SIDE-002 constant-cost pattern. New error variant: `UnknownCriticalExtension`.

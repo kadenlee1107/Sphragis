@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-"""Receive a Bat_OS `screen` command dump on /dev/ttyACM2 and
+"""Receive a Sphragis `screen` command dump on /dev/ttyACM2 and
 reconstruct it as a PNG.
 
-Works mid-HV-session: sit listening on the vuart, tell the Bat_OS
+Works mid-HV-session: sit listening on the vuart, tell the Sphragis
 shell to `screen <scale>`, parse the SCREEN_BEGIN header + hex pixel
 rows + SCREEN_END, decode ARGB2101010 → RGB888, save to
-/tmp/batos_screen.png.
+/tmp/sphragis_screen.png.
 
-Expects the shell session (batos_hv_interactive.py with BATOS_KEEP_FB=1)
+Expects the shell session (sphragis_hv_interactive.py with SPHRAGIS_KEEP_FB=1)
 to be running and holding the vuart open via DTR. This script is a
 passive reader on the same /dev/ttyACM2.
 
 Usage:
-  # terminal 1 — start Bat_OS with KEEP_FB (holds ttyACM1 + ttyACM2):
-  BATOS_KEEP_FB=1 BATOS_HV_STIMULUS='screen 4' sg dialout -c \\
-      "/usr/bin/python3 scripts/hv/batos_hv_interactive.py" \\
+  # terminal 1 — start Sphragis with KEEP_FB (holds ttyACM1 + ttyACM2):
+  SPHRAGIS_KEEP_FB=1 SPHRAGIS_HV_STIMULUS='screen 4' sg dialout -c \\
+      "/usr/bin/python3 scripts/hv/sphragis_hv_interactive.py" \\
       > /tmp/hv.log 2>&1 &
   # terminal 2 — catch the dump on the same vuart:
   sg dialout -c "/usr/bin/python3 scripts/hv/m4_screen_dump.py"
 
 Because only one reader can open /dev/ttyACM2 at a time, the more
-robust flow is: run batos_hv_interactive.py WITHOUT the vuart reader
-side (set BATOS_HV_NO_READER=1 TBD) OR just run this script directly
+robust flow is: run sphragis_hv_interactive.py WITHOUT the vuart reader
+side (set SPHRAGIS_HV_NO_READER=1 TBD) OR just run this script directly
 with stimulus built in.
 
-This version is SELF-CONTAINED: it runs batos_hv_interactive's HV
+This version is SELF-CONTAINED: it runs sphragis_hv_interactive's HV
 setup, fires 'screen\\r', and reads the dump from the same process.
 """
 import sys
@@ -44,11 +44,11 @@ from m1n1.proxyutils import *
 from m1n1.utils import *
 from m1n1.hv import HV
 
-BAT_OS_BINARY = pathlib.Path(__file__).resolve().parents[2] / \
-    "target/bat_os_apple.bin"
+SPHRAGIS_BINARY = pathlib.Path(__file__).resolve().parents[2] / \
+    "target/sphragis_apple.bin"
 
 SCALE = int(os.environ.get("M4_SCREEN_SCALE", "4"))
-OUT_PNG = pathlib.Path(os.environ.get("M4_SCREEN_OUT", "/tmp/batos_screen.png"))
+OUT_PNG = pathlib.Path(os.environ.get("M4_SCREEN_OUT", "/tmp/sphragis_screen.png"))
 OUT_PPM = OUT_PNG.with_suffix(".ppm")
 
 
@@ -98,7 +98,7 @@ def parser_thread(vuart, result, done, ready_event):
                 else:
                     sys.stdout.buffer.write(line + b"\n")
                     sys.stdout.flush()
-                    # Trigger the stimulator once Bat_OS's self-test
+                    # Trigger the stimulator once Sphragis's self-test
                     # replay completes and the real prompt is next.
                     if b"launching apple shell" in line \
                        or b"[selftest] replay complete" in line \
@@ -162,10 +162,10 @@ def main():
     u = ProxyUtils(p, heap_size=128 * 1024 * 1024)
     hv = HV(iface, p, u)
     hv.init()
-    print(f"[dump] loading {BAT_OS_BINARY}", flush=True)
-    hv.load_raw(BAT_OS_BINARY.read_bytes(), 0)
+    print(f"[dump] loading {SPHRAGIS_BINARY}", flush=True)
+    hv.load_raw(SPHRAGIS_BINARY.read_bytes(), 0)
 
-    # Schedule the screen command AFTER the parser sees Bat_OS reach
+    # Schedule the screen command AFTER the parser sees Sphragis reach
     # the interactive shell (post self-test replay).
     def stimulate():
         print("[dump] waiting for 'replay complete' marker...", flush=True)

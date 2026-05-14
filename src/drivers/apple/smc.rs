@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple SMC (System Management Controller) driver skeleton
+// Sphragis — Apple SMC (System Management Controller) driver skeleton
 //
 // SMC is Apple's "everything else" coprocessor. On M-series Macs it
 // handles:

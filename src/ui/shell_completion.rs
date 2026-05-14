@@ -1,4 +1,4 @@
-//! Tab completion for the Bat_OS shell.
+//! Tab completion for the Sphragis shell.
 //!
 //! Both `main::serial_shell` and `ui::shell::run` read keystrokes one
 //! byte at a time. When the user presses Tab (`0x09`) we want to

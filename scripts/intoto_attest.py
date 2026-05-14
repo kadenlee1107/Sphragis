@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""In-toto v0.9 attestations for Bat_OS build steps — gov-grade §3.11.
+"""In-toto v0.9 attestations for Sphragis build steps — gov-grade §3.11.
 
 `sign_release_artifacts.py` attests the OUTPUT artifacts. This
 script goes a level deeper: each step of the supply chain

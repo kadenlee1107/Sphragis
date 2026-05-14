@@ -1,4 +1,4 @@
-// Bat_OS — ARP (Address Resolution Protocol)
+// Sphragis — ARP (Address Resolution Protocol)
 // Resolves IPv4 addresses to MAC addresses on the local network.
 //
 // ATTACK-NET-001 hardening: we only cache ARP replies whose sender_ip is in

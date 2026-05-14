@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — ED · Code Editor
+// Sphragis — ED · Code Editor
 //
 // shipped a pure-demo Editor that painted a
 // hardcoded sample of kernel_main.rs. makes it

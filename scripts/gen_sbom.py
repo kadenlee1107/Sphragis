@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit a CycloneDX 1.5 SBOM for the Bat_OS build — gov-grade §3.11
+"""Emit a CycloneDX 1.5 SBOM for the Sphragis build — gov-grade §3.11
 supply-chain hygiene.
 
 Walks `Cargo.lock` (the single source of truth for what actually
@@ -160,16 +160,16 @@ def main() -> int:
             "timestamp": now,
             "tools": [
                 {
-                    "vendor": "Bat_OS",
+                    "vendor": "Sphragis",
                     "name": "scripts/gen_sbom.py",
                     "version": "1.0",
                 }
             ],
             "component": {
                 "type": "operating-system",
-                "name": "bat_os",
+                "name": "sphragis",
                 "version": git_short_sha(),
-                "purl": f"pkg:generic/bat_os@{git_short_sha()}",
+                "purl": f"pkg:generic/sphragis@{git_short_sha()}",
             },
         },
         "components": components,

@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — VirtIO Virtqueue Implementation (HVF-safe)
+// Sphragis — VirtIO Virtqueue Implementation (HVF-safe)
 // All memory reads/writes use inline asm to ensure simple ldr/str
 // instructions that set ISV for Apple Hypervisor.framework.
 

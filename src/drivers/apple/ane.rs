@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple Neural Engine (ANE) driver (skeleton only)
+// Sphragis — Apple Neural Engine (ANE) driver (skeleton only)
 //
 // ANE is Apple's on-SoC AI/ML accelerator. Dedicated matrix/convolution
 // engine; massively parallel for inference workloads. Every M-series

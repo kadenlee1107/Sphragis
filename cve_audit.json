@@ -6,7 +6,7 @@
       "aliases": [],
       "crate": "rsa",
       "id": "RUSTSEC-2023-0071",
-      "ignore_rationale": "Marvin attack on rsa crate. Affects RSA PRIVATE-key decrypt timing side channel. Bat_OS only uses the rsa crate for X.509 certificate signature VERIFICATION (public-key op) in src/net/x509.rs \u2014 no private-key decrypt anywhere in tree. Reconfirm at every Cargo.lock bump of the rsa crate.",
+      "ignore_rationale": "Marvin attack on rsa crate. Affects RSA PRIVATE-key decrypt timing side channel. Sphragis only uses the rsa crate for X.509 certificate signature VERIFICATION (public-key op) in src/net/x509.rs \u2014 no private-key decrypt anywhere in tree. Reconfirm at every Cargo.lock bump of the rsa crate.",
       "ignored_under": "RUSTSEC-2023-0071",
       "summary": "",
       "version": "0.9.10"

@@ -1,4 +1,4 @@
-// Bat_OS — 8x16 Bitmap Font Renderer
+// Sphragis — 8x16 Bitmap Font Renderer
 // Monospace font for terminal/shell rendering.
 // Each character is 8 pixels wide, 16 pixels tall.
 // Stored as 16 bytes per character (1 bit per pixel, 8 bits per row).

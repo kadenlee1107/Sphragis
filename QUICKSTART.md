@@ -1,4 +1,4 @@
-# Bat_OS Quickstart
+# Sphragis Quickstart
 
 Fast path to running the things this repo can do today.
 
@@ -14,7 +14,7 @@ make build
 Equivalent to:
 
 ```
-BAT_OS_ALLOW_UNSIGNED_INITRD=1 BAT_OS_PASSPHRASE=batman BAT_OS_KEEP_GOING=1 \
+SPHRAGIS_ALLOW_UNSIGNED_INITRD=1 SPHRAGIS_PASSPHRASE=batman SPHRAGIS_KEEP_GOING=1 \
     cargo build --release --features gicv3
 ```
 
@@ -37,7 +37,7 @@ make render URL=file:///bin/showcase.html      # the showcase page
 ```
 
 Output: `logs/qemu-tests/render-<timestamp>.png` — open with `open …`.
-The runner boots Bat_OS under QEMU + HVF, sends `render <url>` to the
+The runner boots Sphragis under QEMU + HVF, sends `render <url>` to the
 shell, captures the base64-encoded BGRA dump on the serial port, and
 writes a PNG.
 
@@ -64,8 +64,8 @@ make dom URL=file:///bin/showcase.html
 
 ## Run the Chromium pipeline smoke
 
-Boots Bat_OS, runs `chromium --dump-dom file:///bin/hello.html`,
-captures every `[SKIP …]` event with `BAT_OS_KEEP_GOING=1` so you can
+Boots Sphragis, runs `chromium --dump-dom file:///bin/hello.html`,
+captures every `[SKIP …]` event with `SPHRAGIS_KEEP_GOING=1` so you can
 see exactly where Chromium is currently failing.
 
 ```bash
@@ -107,15 +107,15 @@ logs/qemu-tests/          all generated logs + PNGs
 
 | Var                              | Default | Purpose                                                   |
 | -------------------------------- | ------- | --------------------------------------------------------- |
-| `BAT_OS_ALLOW_UNSIGNED_INITRD`   | `1`     | Skip initrd signature check during dev                    |
-| `BAT_OS_PASSPHRASE`              | `batman`| Build-time passphrase for BatFS / auth                    |
-| `BAT_OS_KEEP_GOING`              | `1`     | Skip-and-log on cave-fatal events instead of teardown     |
+| `SPHRAGIS_ALLOW_UNSIGNED_INITRD`   | `1`     | Skip initrd signature check during dev                    |
+| `SPHRAGIS_PASSPHRASE`              | `batman`| Build-time passphrase for BatFS / auth                    |
+| `SPHRAGIS_KEEP_GOING`              | `1`     | Skip-and-log on cave-fatal events instead of teardown     |
 | `URL` (Make var)                 | `file:///bin/hello.html` | Target for `make render` / `make dom` |
 
 Override on the command line:
 
 ```bash
-make build BAT_OS_KEEP_GOING=                 # production-style build
+make build SPHRAGIS_KEEP_GOING=                 # production-style build
 make render URL=file:///bin/showcase.html
 ```
 

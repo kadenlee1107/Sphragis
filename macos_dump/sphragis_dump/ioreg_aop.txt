@@ -1,0 +1,110 @@
++-o aop@90600000  <class AppleARMIODevice, id 0x100000385, registered, matched, active, busy 0 (331 ms), retain 9>
+  | {
+  |   "IOInterruptSpecifiers" = (<b2010000>,<b1010000>,<b4010000>,<b3010000>)
+  |   "aot-power" = <01000000>
+  |   "iop-version" = <01000000>
+  |   "clock-gates" = <>
+  |   "AAPL,phandle" = <df000000>
+  |   "IODeviceMemory" = (({"address"=0x390600000,"length"=0x88000}),({"address"=0x390050000,"length"=0x4000}),({"address"=0x390c00000,"length"=0x1e0000}),({"address"=0x3882a8000,"length"=0x8}),({"address"=0x39062c000,"length"=0x3c008}))
+  |   "IOReportLegendPublic" = Yes
+  |   "ext-irq-reg-index" = <04000000>
+  |   "segment-names" = <5f5f544558543b5f5f444154413b5f5f45544558543b5f5f4f535f4c4f4700>
+  |   "iommu-parent" = <e8000000>
+  |   "function-pll_off_mode" = <ee0000004d4c4c500100000000000000>
+  |   "IOInterruptControllers" = ("IOInterruptController000000D4","IOInterruptController000000D4","IOInterruptController000000D4","IOInterruptController000000D4")
+  |   "name" = <616f7000>
+  |   "interrupt-parent" = <d4000000>
+  |   "compatible" = <696f702c617363777261702d763600>
+  |   "interrupts" = <b2010000b1010000b4010000b3010000>
+  |   "clock-ids" = <>
+  |   "role" = <414f5000>
+  |   "IOReportLegend" = ({"IOReportGroupName"="Interrupt Statistics (by index)","IOReportChannels"=((0x496e747200020000,0x100020001,"               First Level Interrupt Handler Count"),(0x496e747200020001,0x100020001,"              Second Level Interrupt Handler Count"),(0x496e747200020002,0x100020001,"        First Level Interrupt Handler Time (MATUs)"),(0x496e747200020003,0x100020001,"   Second Level Interrupt Handler CPU Time (MATUs)"),(0x496e747200020004,0x100020001,"Second Level Interrupt Handler System Time (MATUs)")),"IOReportChannelInfo"={"IOReportChannelUnit"=0x0},"IOReportSubGroupName"="aop 2"},{"IOReportGroupName"="Interrupt Statistics (by index)","IOReportChannels"=((0x496e747200010000,0x100020001,"               First Level Interrupt Handler Count"),(0x496e747200010001,0x100020001,"              Second Level Interrupt Handler Count"),(0x496e747200010002,0x100020001,"        First Level Interrupt Handler Time (MATUs)"),(0x496e747200010003,0x100020001,"   Second Level Interrupt Handler CPU Time (MATUs)"),(0x496e747200010004,0x100020001,"Second Level Interrupt Handler System Time (MATUs)")),"IOReportChannelInfo"={"IOReportChannelUnit"=0x0},"IOReportSubGroupName"="aop 1"})
+  |   "device_type" = <616f7000>
+  |   "power-gates" = <>
+  |   "reg" = <00006090010000000080080000000000000005900100000000400000000000000000c0900100000000001e000000000000802a8801000000080000000000000000c062900100000008c0030000000000>
+  |   "segment-ranges" = <0000c0900300000000000001000000000000c0900300000000d00c000300000000d0cc900300000000d00c010000000000d0cc900300000000900f000600000000c0ac000001000000601c0100000000000000000001000000600100010000000040b70c00010000000000fd000000000040b70c0001000000a002000a000000>
+  | }
+  | 
+  +-o AppleASCWrapV6  <class AppleASCWrapV6, id 0x10000044a, !registered, !matched, active, busy 0 (148 ms), retain 5>
+    +-o iop-aop-nub  <class AppleA7IOPNub, id 0x100000536, registered, matched, active, busy 0 (148 ms), retain 14>
+      +-o AppleSPUTimesyncV2  <class AppleSPUTimesyncV2, id 0x100000538, registered, matched, active, busy 0 (0 ms), retain 18>
+      +-o RTBuddy(AOP)  <class RTBuddy, id 0x100000539, registered, matched, active, busy 0 (147 ms), retain 51>
+        +-o RTBuddyService  <class RTBuddyService, id 0x10000053c, registered, matched, active, busy 0 (13 ms), retain 6>
+        | +-o AppleSPUFirmwareService  <class AppleSPUFirmwareService, id 0x10000053e, registered, matched, active, busy 0 (13 ms), retain 5>
+        +-o RTBuddyIOReportingEndpoint  <class RTBuddyIOReportingEndpoint, id 0x10000054e, registered, matched, active, busy 0 (0 ms), retain 7>
+        +-o AOPEndpoint1  <class RTBuddyEndpointService, id 0x10000054f, registered, matched, active, busy 0 (32 ms), retain 7>
+        | +-o AppleSPU@10000000  <class AppleSPU, id 0x10000056a, registered, matched, active, busy 0 (24 ms), retain 8>
+        |   +-o SPUApp  <class AppleSPUAppInterface, id 0x10000071c, registered, matched, active, busy 0 (24 ms), retain 9>
+        |     +-o AppleSPUAppDriver  <class AppleSPUAppDriver, id 0x100000753, registered, matched, active, busy 0 (16 ms), retain 7>
+        |       +-o AppleSPUProfileDriver  <class AppleSPUProfileDriver, id 0x100000775, registered, matched, active, busy 0 (1 ms), retain 5>
+        +-o AOPEndpoint2  <class RTBuddyEndpointService, id 0x100000550, registered, matched, active, busy 0 (89 ms), retain 7>
+        | +-o AppleSPU@10000001  <class AppleSPU, id 0x10000055c, registered, matched, active, busy 0 (86 ms), retain 8>
+        |   +-o wakehint  <class AppleSPUHIDInterface, id 0x100000715, registered, matched, active, busy 0 (82 ms), retain 9>
+        |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000728, registered, matched, active, busy 0 (73 ms), retain 8>
+        |       +-o IOHIDInterface  <class IOHIDInterface, id 0x1000007c1, registered, matched, active, busy 0 (56 ms), retain 8>
+        |       | +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x100000827, registered, matched, active, busy 0 (37 ms), retain 10>
+        |       |   +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c0f, !registered, !matched, active, busy 0, retain 6>
+        |       |   +-o AppleSPUHIDDriverUserClient  <class AppleSPUHIDDriverUserClient, id 0x100000cb2, !registered, !matched, active, busy 0, retain 5>
+        |       +-o AppleSPUHIDDeviceUserClient  <class AppleSPUHIDDeviceUserClient, id 0x100000cb3, !registered, !matched, active, busy 0, retain 6>
+        +-o AOPEndpoint3  <class RTBuddyEndpointService, id 0x100000551, registered, matched, active, busy 0 (29 ms), retain 7>
+        | +-o AppleSPU@1000000a  <class AppleSPU, id 0x10000055f, registered, matched, active, busy 0 (27 ms), retain 8>
+        |   +-o aop-audio  <class AppleSPUAppInterface, id 0x10000071e, registered, matched, active, busy 0 (27 ms), retain 11>
+        |     +-o AOPAudioService  <class AOPAudioService, id 0x10000074f, registered, matched, active, busy 0 (3 ms), retain 10>
+        +-o AOPEndpoint4  <class RTBuddyEndpointService, id 0x100000552, registered, matched, active, busy 0 (32 ms), retain 7>
+        | +-o AppleSPU@1000000c  <class AppleSPU, id 0x10000056c, registered, matched, active, busy 0 (23 ms), retain 8>
+        |   +-o aop-voicetrigger  <class AppleSPUAppInterface, id 0x100000720, registered, matched, active, busy 0 (23 ms), retain 11>
+        |     +-o AOPVoiceTriggerService  <class AOPAudioService, id 0x100000759, registered, matched, active, busy 0 (19 ms), retain 10>
+        +-o AOPEndpoint5  <class RTBuddyEndpointService, id 0x100000553, registered, matched, active, busy 0 (100 ms), retain 7>
+        | +-o AppleSPU@10000004  <class AppleSPU, id 0x100000563, registered, matched, active, busy 0 (95 ms), retain 8>
+        |   +-o accel  <class AppleSPUHIDInterface, id 0x100000716, registered, matched, active, busy 0 (95 ms), retain 10>
+        |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000729, registered, matched, active, busy 0 (92 ms), retain 7>
+        |       +-o IOHIDInterface  <class IOHIDInterface, id 0x10000087f, registered, matched, active, busy 0 (47 ms), retain 8>
+        |         +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x1000008bb, registered, matched, active, busy 0 (26 ms), retain 9>
+        |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c0c, !registered, !matched, active, busy 0, retain 6>
+        +-o AOPEndpoint6  <class RTBuddyEndpointService, id 0x100000554, registered, matched, active, busy 0 (29 ms), retain 7>
+        | +-o AppleSPU@10000005  <class AppleSPU, id 0x100000574, registered, matched, active, busy 0 (19 ms), retain 8>
+        |   +-o gyro  <class AppleSPUHIDInterface, id 0x100000717, registered, matched, active, busy 0 (19 ms), retain 10>
+        |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000740, registered, matched, active, busy 0 (15 ms), retain 7>
+        |       +-o IOHIDInterface  <class IOHIDInterface, id 0x100000762, registered, matched, active, busy 0 (14 ms), retain 8>
+        |         +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x10000076a, registered, matched, active, busy 0 (7 ms), retain 9>
+        |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c13, !registered, !matched, active, busy 0, retain 6>
+        +-o AOPEndpoint7  <class RTBuddyEndpointService, id 0x100000555, registered, matched, active, busy 0 (89 ms), retain 7>
+        | +-o AppleSPU@600  <class AppleSPU, id 0x100000566, registered, matched, active, busy 0 (82 ms), retain 8>
+        |   +-o las  <class AppleSPUHIDInterface, id 0x100000718, registered, matched, active, busy 0 (82 ms), retain 9>
+        |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000749, registered, matched, active, busy 0 (58 ms), retain 7>
+        |       +-o IOHIDInterface  <class IOHIDInterface, id 0x10000087e, registered, matched, active, busy 0 (34 ms), retain 8>
+        |         +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x1000008b7, registered, matched, active, busy 0 (13 ms), retain 9>
+        |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c0d, !registered, !matched, active, busy 0, retain 6>
+        +-o AOPEndpoint8  <class RTBuddyEndpointService, id 0x100000556, registered, matched, active, busy 0 (79 ms), retain 7>
+        | +-o AppleSPU@1000000e  <class AppleSPU, id 0x10000057c, registered, matched, active, busy 0 (66 ms), retain 8>
+        |   +-o als  <class AppleSPUHIDInterface, id 0x100000719, registered, matched, active, busy 0 (55 ms), retain 10>
+        |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000750, registered, matched, active, busy 0 (49 ms), retain 7>
+        |       +-o IOHIDInterface  <class IOHIDInterface, id 0x100000774, registered, matched, active, busy 0 (24 ms), retain 8>
+        |         +-o AppleSPUVD6286  <class AppleSPUVD6286, id 0x1000007a2, registered, matched, active, busy 0 (14 ms), retain 9>
+        |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c12, !registered, !matched, active, busy 0, retain 6>
+        +-o AOPEndpoint9  <class RTBuddyEndpointService, id 0x100000557, registered, matched, active, busy 0 (72 ms), retain 7>
+        | +-o AppleSPU@1000000f  <class AppleSPU, id 0x10000057a, registered, matched, active, busy 0 (61 ms), retain 8>
+        |   +-o cma  <class AppleSPUHIDInterface, id 0x10000071a, registered, matched, active, busy 0 (61 ms), retain 9>
+        |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000747, registered, matched, active, busy 0 (40 ms), retain 7>
+        |       +-o IOHIDInterface  <class IOHIDInterface, id 0x10000078e, registered, matched, active, busy 0 (38 ms), retain 8>
+        |         +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x100000826, registered, matched, active, busy 0 (14 ms), retain 10>
+        |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c11, !registered, !matched, active, busy 0, retain 6>
+        |           +-o AppleSPUHIDDriverUserClient  <class AppleSPUHIDDriverUserClient, id 0x100000d40, !registered, !matched, active, busy 0, retain 5>
+        +-o AOPEndpoint10  <class RTBuddyEndpointService, id 0x100000558, registered, matched, active, busy 0 (102 ms), retain 7>
+        | +-o AppleSPU@10000010  <class AppleSPU, id 0x100000580, registered, matched, active, busy 0 (88 ms), retain 8>
+        |   +-o devmotion6  <class AppleSPUHIDInterface, id 0x10000071d, registered, matched, active, busy 0 (85 ms), retain 9>
+        |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x100000746, registered, matched, active, busy 0 (63 ms), retain 7>
+        |       +-o IOHIDInterface  <class IOHIDInterface, id 0x1000007b9, registered, matched, active, busy 0 (60 ms), retain 8>
+        |         +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x10000088d, registered, matched, active, busy 0 (3 ms), retain 9>
+        |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c0b, !registered, !matched, active, busy 0, retain 6>
+        +-o AOPEndpoint11  <class RTBuddyEndpointService, id 0x100000559, registered, matched, active, busy 0 (110 ms), retain 7>
+        | +-o AppleSPU@10000007  <class AppleSPU, id 0x100000579, registered, matched, active, busy 0 (80 ms), retain 8>
+        |   +-o als-temp  <class AppleSPUHIDInterface, id 0x10000071b, registered, matched, active, busy 0 (65 ms), retain 9>
+        |     +-o AppleSPUHIDDevice  <class AppleSPUHIDDevice, id 0x10000074e, registered, matched, active, busy 0 (38 ms), retain 7>
+        |       +-o IOHIDInterface  <class IOHIDInterface, id 0x100000870, registered, matched, active, busy 0 (19 ms), retain 8>
+        |         +-o AppleSPUHIDDriver  <class AppleSPUHIDDriver, id 0x10000088b, registered, matched, active, busy 0 (3 ms), retain 9>
+        |           +-o IOHIDEventServiceUserClient  <class IOHIDEventServiceUserClient, id 0x100000c0e, !registered, !matched, active, busy 0, retain 6>
+        +-o AOPEndpoint12  <class RTBuddyEndpointService, id 0x10000055a, registered, matched, active, busy 0 (15 ms), retain 7>
+          +-o AppleSPU@1000000b  <class AppleSPU, id 0x10000056e, registered, matched, active, busy 0 (6 ms), retain 8>
+            +-o aop-audprov  <class AppleSPUAppInterface, id 0x10000071f, registered, matched, active, busy 0 (6 ms), retain 7>
+

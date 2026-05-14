@@ -46,7 +46,7 @@ use crate::batcave::{cave, cave_private, sys_caves};
 use crate::net::wireguard::{self, TransportKeys, WgKeypair, WgError};
 use x25519_dalek::StaticSecret;
 
-/// Maximum concurrent peers. Small fixed array — Bat_OS is single-
+/// Maximum concurrent peers. Small fixed array — Sphragis is single-
 /// machine, single-operator; even a handful is plenty.
 pub const MAX_PEERS: usize = 8;
 

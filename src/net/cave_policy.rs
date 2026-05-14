@@ -6,19 +6,19 @@
 //! `FW_ALLOWLIST` table. A container hits the HTTP CONNECT proxy on
 //! port 9998, batcaved.py reads the CONNECT, checks its dict, and
 //! either dials out or returns 403. The policy brain is in Python on
-//! the host — Bat_OS never sees it.
+//! the host — Sphragis never sees it.
 //!
 //! That was fine as an MVP, but DESIGN_BATCAVES.md is explicit that
 //! the kernel is supposed to be the authority for every packet a cave
 //! emits. The eventual tap-device path (Followup #3c) will forward
-//! cave frames through a vmnet-backed netdev into Bat_OS's IP stack,
-//! and Bat_OS will make the allow/drop call at packet time. To do
+//! cave frames through a vmnet-backed netdev into Sphragis's IP stack,
+//! and Sphragis will make the allow/drop call at packet time. To do
 //! that it needs somewhere to LOOK — a kernel-side table keyed by
 //! cave id.
 //!
 //! This module is that table. It intentionally lives beside
 //! `net::firewall` but is semantically different:
-//!   - `firewall` filters Bat_OS's OWN packets (IP + transport port
+//!   - `firewall` filters Sphragis's OWN packets (IP + transport port
 //!     at packet time).
 //!   - `cave_policy` decides whether a cave is PERMITTED to reach a
 //!     given host:port at all. The check is by hostname (string) +
@@ -297,7 +297,7 @@ pub fn rules_for(cave: &CaveId) -> Vec<EgressRule> {
 pub fn cave_id_from_name(name: &str) -> CaveId {
     use sha2::{Sha256, Digest};
     let mut h = Sha256::new();
-    h.update(b"batos-cave-id-v1\0");
+    h.update(b"sphragis-cave-id-v1\0");
     h.update(name.as_bytes());
     let full = h.finalize();
     let mut out = [0u8; 16];

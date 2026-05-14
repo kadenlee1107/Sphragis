@@ -1,8 +1,8 @@
-# Bat_OS syscall fuzzer
+# Sphragis syscall fuzzer
 
 Static-linked ARM64 Linux ELF that runs as a BatCave guest, issues every
 wired syscall with a curated set of hostile argument tuples, and logs each
-call to stdout. Because Bat_OS shares one VA space between kernel and
+call to stdout. Because Sphragis shares one VA space between kernel and
 guest, a crash is terminal — the last "TRY sys=..." line before UART
 silence identifies the faulting input.
 
@@ -18,9 +18,9 @@ or
 
 Emits `syscall_fuzz` (fully static, no dynamic linker needed).
 
-## Run inside Bat_OS
+## Run inside Sphragis
 
-Copy the binary into the Bat_OS image (same path as `chromium`) and
+Copy the binary into the Sphragis image (same path as `chromium`) and
 launch it the same way:
 
     batcave run /bin/syscall_fuzz

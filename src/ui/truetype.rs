@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS -- Minimal TrueType Font Rasterizer
+// Sphragis -- Minimal TrueType Font Rasterizer
 // Parses TTF files, maps Unicode to glyphs, reads outlines, and rasterizes
 // using scanline fill. No alloc, no std -- all fixed-size buffers.
 //

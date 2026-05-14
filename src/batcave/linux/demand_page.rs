@@ -1,4 +1,4 @@
-// Bat_OS — Demand paging for rebased-cave large mmap reservations.
+// Sphragis — Demand paging for rebased-cave large mmap reservations.
 //
 // Chromium / V8 asks for huge VA reservations at startup (32 GB for
 // pointer-compression, 16 GB for trusted-sandbox). `sys_mmap`'s

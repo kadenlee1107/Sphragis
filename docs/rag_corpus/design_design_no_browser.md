@@ -1,4 +1,4 @@
-# DESIGN: Bat_OS Has No Browser
+# DESIGN: Sphragis Has No Browser
 
 **Status:** Active strategy as of 2026-05-07.
 **History:** This decision superseded two prior browser-engine designs
@@ -9,8 +9,8 @@ direction was permanent — recoverable from git history (search for
 
 ## The decision
 
-Bat_OS is **a secure workstation, not a secure laptop**. Web browsing
-happens on the host. Bat_OS never ships a browser.
+Sphragis is **a secure workstation, not a secure laptop**. Web browsing
+happens on the host. Sphragis never ships a browser.
 
 The 30K+ lines of browser code currently in tree (native engine,
 Ladybird port, stream-client) are deleted.
@@ -30,7 +30,7 @@ sane scope:
   the security posture of. Even sandboxed in a cave, the cave is your
   attack surface, not theirs.
 - **Stream-client-style** (Mac-side Chromium displaying pixels in
-  Bat_OS) makes you structurally dependent on a Mac you cannot audit.
+  Sphragis) makes you structurally dependent on a Mac you cannot audit.
   Whatever Chrome's CVE list is for the month, that's your CVE list,
   except the bug runs on hardware outside your control.
 - **Native pure-Rust engine** is the only browser that fits the
@@ -44,7 +44,7 @@ The implicit target — "Chrome but secure" — is wrong. A government /
 private-client user on a security-first workstation does not need to
 render TikTok. The web they actually need (banking portals,
 internal dashboards, mail clients, document viewers) can be opened
-on their Mac. Bat_OS's purpose is the things the Mac *can't* be
+on their Mac. Sphragis's purpose is the things the Mac *can't* be
 trusted with.
 
 ### Scope discipline > feature creep
@@ -55,9 +55,9 @@ unclear product identity, not three good options. Removing the
 browser collapses the ambiguity and lets the OS focus on what it
 *does* uniquely well.
 
-## What Bat_OS is instead
+## What Sphragis is instead
 
-Bat_OS is a **secure workstation / personal HSM**:
+Sphragis is a **secure workstation / personal HSM**:
 
 - **Cryptographic operations** — keys never leave the OS. Argon2id,
   Ed25519, P-384, RSA-PSS, ML-KEM-768, ML-DSA. Already in tree.
@@ -71,7 +71,7 @@ Bat_OS is a **secure workstation / personal HSM**:
   the user explicitly trusts. Not arbitrary code from the internet.
 
 Web browsing is **explicitly delegated to the host**. The user has a
-Mac (or Linux box, or whatever); they browse there. Bat_OS occupies
+Mac (or Linux box, or whatever); they browse there. Sphragis occupies
 the slot of "the trusted device next to the laptop," not "the laptop."
 
 ## What gets removed
@@ -103,7 +103,7 @@ Concretely:
   other STUMPs.)
 - The current 1,613-LOC uncommitted stream-client iter 1 work — **not
   committed**. Discarded as part of this decision.
-- `/batos/fb0` ChromiumFb VFS node + `chromium_blit` kthread in
+- `/sphragis/fb0` ChromiumFb VFS node + `chromium_blit` kthread in
   `src/drivers/virtio/gpu.rs` — the path was specifically for browser
   rendering. WM still uses virtio-gpu directly without the blit-on-
   write path.

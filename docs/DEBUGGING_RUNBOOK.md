@@ -1,4 +1,4 @@
-# Bat_OS debugging runbook
+# Sphragis debugging runbook
 
 Every failure mode we've hit, with the exact recovery step. Check here
 before guessing — most of these are already solved.
@@ -8,7 +8,7 @@ before guessing — most of these are already solved.
 - [1. m1n1 won't reach "Running proxy..."](#1-m1n1-wont-reach-running-proxy)
 - [2. `chainload.py` can't find the serial port](#2-chainloadpy-cant-find-the-serial-port)
 - [3. Mac spontaneously reboots mid-chainload](#3-mac-spontaneously-reboots-mid-chainload)
-- [4. Bat_OS resets silently on entry](#4-bat_os-resets-silently-on-entry)
+- [4. Sphragis resets silently on entry](#4-sphragis-resets-silently-on-entry)
 - [5. `run_guest.py` crashes with AMX SYNC exception](#5-run_guestpy-crashes-with-amx-sync-exception)
 - [6. Exception loop stuck on SYNC from EL2h](#6-exception-loop-stuck-on-sync-from-el2h)
 - [7. USB CDC device not enumerating on Windows](#7-usb-cdc-device-not-enumerating-on-windows)
@@ -72,13 +72,13 @@ writes at `0x210xx` succeed; P-cluster writes at `0x211xx` SError.
 ```bash
 sudo M1N1DEVICE=/dev/ttyACM0 python3 proxyclient/tools/chainload.py \
     --raw --entry-point 0 -S \
-    bat_os_apple.bin
+    sphragis_apple.bin
 ```
 
 Our vendored `external/m1n1/proxyclient/tools/chainload.py` has this
 flag pre-added.
 
-## 4. Bat_OS resets silently on entry
+## 4. Sphragis resets silently on entry
 
 **Symptom:** chainload completes ("Jumping to entry point"), serial
 goes silent, iBoot sequence restarts from scratch.
@@ -93,11 +93,11 @@ there, so first deref faulted.
 **Fix (already applied):** `apple/boot.s` is in `.text.apple_boot`
 section which `linker_apple.ld` places BEFORE `.text.boot`. Verify:
 ```bash
-xxd target/bat_os_apple.bin | head -2
+xxd target/sphragis_apple.bin | head -2
 # first bytes should be `f4 03 00 aa` (mov x20, x0) — start of _apple_start
 # NOT `... 41 52 4d 64 ...` ("ARM\x64" magic)
 
-file target/bat_os_apple.bin
+file target/sphragis_apple.bin
 # should say 'data', NOT 'Linux kernel ARM64 boot executable Image'
 ```
 
@@ -117,7 +117,7 @@ in `hv/__init__.py` around line 1435 at `self.u.msr(AMX_CONFIG_EL1, ...)`.
 `AMX_CONFIG_EL1` on M4 traps.
 
 **Fix:** Don't use `run_guest.py`. Use `chainload.py` — it doesn't init
-the HV and therefore never touches AMX_CONFIG_EL1. We want Bat_OS
+the HV and therefore never touches AMX_CONFIG_EL1. We want Sphragis
 to run as the actual OS, not inside a hypervisor, so this is the right
 choice anyway.
 
@@ -173,7 +173,7 @@ CARGO_FLAGS and drops the build-std flag.
 
 ## 9. Chromium Docker container killed (exit 137)
 
-**Symptom:** `docker ps -a` shows the batos-chromium-build container
+**Symptom:** `docker ps -a` shows the sphragis-chromium-build container
 as `Exited (137)`.
 
 **Cause:** Memory pressure. Usually triggered when we run other
@@ -182,13 +182,13 @@ heavy jobs (QEMU HVF, multi-agent Claude work) on the same Mac.
 **Fix:** Just restart it. ninja is incremental; it resumes from the
 last completed object file.
 ```bash
-docker start batos-chromium-build
-docker logs --tail 3 batos-chromium-build
+docker start sphragis-chromium-build
+docker logs --tail 3 sphragis-chromium-build
 ```
 
 If many resumes happen, snapshot the container state periodically:
 ```bash
-docker commit batos-chromium-build batos-chromium-build:snap-$(date +%Y%m%d-%H%M)
+docker commit sphragis-chromium-build sphragis-chromium-build:snap-$(date +%Y%m%d-%H%M)
 ```
 
 ## 10. Docker Chromium build restarted from [1/N] after resume
@@ -201,15 +201,15 @@ again instead of resuming where it left off.
 or gn's config changed forcing a regen.
 
 **Fix:**
-- Always use `docker start batos-chromium-build` (not `docker run`).
+- Always use `docker start sphragis-chromium-build` (not `docker run`).
 - Roll back to a snapshot that had progress:
   ```bash
-  docker stop batos-chromium-build
-  docker rm batos-chromium-build
-  docker run -d --name batos-chromium-build \
+  docker stop sphragis-chromium-build
+  docker rm sphragis-chromium-build
+  docker run -d --name sphragis-chromium-build \
     --memory=14g --memory-swap=20g --cpus=8 \
-    batos-chromium-build:<last-good-snapshot-tag> \
-    bash -c "cd /home/build/chromium/src && exec ninja -C out/BatOs -j2 content_shell"
+    sphragis-chromium-build:<last-good-snapshot-tag> \
+    bash -c "cd /home/build/chromium/src && exec ninja -C out/Sphragis -j2 content_shell"
   ```
 
 ## 11. GitHub push rejected due to >100 MB file

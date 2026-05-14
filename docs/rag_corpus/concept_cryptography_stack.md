@@ -5,7 +5,7 @@ topic: crypto
 
 # Cryptography stack
 
-> Every primitive in Bat_OS is from RustCrypto, audited, and used at the syscall boundary or below. This note is the catalog: what each primitive is for, where it lives, and what's deliberate about the choice.
+> Every primitive in Sphragis is from RustCrypto, audited, and used at the syscall boundary or below. This note is the catalog: what each primitive is for, where it lives, and what's deliberate about the choice.
 
 ## The full set
 

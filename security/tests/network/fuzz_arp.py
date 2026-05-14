@@ -39,7 +39,7 @@ def attack_001_poison_gateway():
     for _ in range(10):
         sendp(pkt, iface=IFACE, verbose=False)
         time.sleep(0.2)
-    print("    SENT 10x gratuitous ARP replies. Check Bat_OS UART for ARP cache state.")
+    print("    SENT 10x gratuitous ARP replies. Check Sphragis UART for ARP cache state.")
 
 
 def attack_002_flood_cache():

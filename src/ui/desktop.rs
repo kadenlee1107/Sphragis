@@ -1,4 +1,4 @@
-// Bat_OS — Desktop Environment
+// Sphragis — Desktop Environment
 // Main event loop. Handles keyboard input, app switching, rendering.
 // Ctrl+1-5 switches between apps.
 
@@ -238,12 +238,12 @@ pub fn run() -> ! {
                     platform::serial_puts("[tab] render_current done\r\n");
                     continue;
                 }
-                // Enter key — if close button is focused, halt Bat_OS.
+                // Enter key — if close button is focused, halt Sphragis.
                 // CR (0x0D) and LF (0x0A) both treated as Enter here.
                 0x0D | 0x0A if wm::is_close_focused() => {
-                    platform::serial_puts("[enter] close focused — calling halt_bat_os\r\n");
-                    halt_bat_os();
-                    // halt_bat_os never returns
+                    platform::serial_puts("[enter] close focused — calling halt_sphragis\r\n");
+                    halt_sphragis();
+                    // halt_sphragis never returns
                 }
 
                 // Ctrl+L — vertical split (left | right)
@@ -506,7 +506,7 @@ fn render_app(app: u8) {
     }
 }
 
-/// Clean Bat_OS shutdown — paint a "Shutdown" banner over the
+/// Clean Sphragis shutdown — paint a "Shutdown" banner over the
 /// framebuffer, write a marker on the serial UART so the host
 /// supervisor knows the halt is intentional (not a watchdog
 /// reset), then WFE forever. m1n1's HV stays alive in EL2; the
@@ -515,7 +515,7 @@ fn render_app(app: u8) {
 /// Useful now that the M4 ~118 s AP-watchdog is disabled (see
 /// SESSION_JOURNAL 2026-04-20 21:30) — the Mac will keep running
 /// until externally rebooted.
-fn halt_bat_os() -> ! {
+fn halt_sphragis() -> ! {
     use crate::ui::{font, gpu};
 
     platform::serial_puts("[halt] enter\r\n");
@@ -531,7 +531,7 @@ fn halt_bat_os() -> ! {
     platform::serial_puts("[halt] fill_screen done\r\n");
     let cx = w / 2;
     let cy = h / 2;
-    font::draw_str(fb, w, cx - 96, cy - 16, "BAT_OS HALTED", 0xFFFFFFFF, 0xFF000000);
+    font::draw_str(fb, w, cx - 96, cy - 16, "SPHRAGIS HALTED", 0xFFFFFFFF, 0xFF000000);
     platform::serial_puts("[halt] draw1 done\r\n");
     font::draw_str(fb, w, cx - 144, cy + 8,  "(close pressed; m1n1 retains control)",
                    0xFF707070, 0xFF000000);
@@ -543,7 +543,7 @@ fn halt_bat_os() -> ! {
     platform::serial_puts("[halt] flush_all done\r\n");
 
     // Serial marker — supervisor + interactive driver can grep for this
-    platform::serial_puts("\r\n[BATOS] halt requested via UI close button — entering wfe loop\r\n");
+    platform::serial_puts("\r\n[SPHRAGIS] halt requested via UI close button — entering wfe loop\r\n");
 
     // Clean HV exit — Apple impdef CYC_OVRD_EL1 (S3_5_C15_C5_0) bit 0
     // (CYC_OVRD_DISABLE_WFI_RET). Upstream m1n1's HV handle_sync treats a
@@ -600,7 +600,7 @@ fn shell_banner() {
 
     // Wordmark + version + hint lines beside the bat.
     let tx = bx + 50;
-    // Row 1: BAT_OS · version · "Microkernel Shell"
+    // Row 1: SPHRAGIS · version · "Microkernel Shell"
     font::draw_str(fb, w, tx,                      by + 0,  "BAT", INK, BG);
     font::draw_str(fb, w, tx + 3 * 8,              by + 0,  "_",   CYAN, BG);
     font::draw_str(fb, w, tx + 4 * 8,              by + 0,  "OS",  INK, BG);

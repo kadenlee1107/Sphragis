@@ -1,12 +1,12 @@
-# Bat_OS AI Agent — Implementation Plan
+# Sphragis AI Agent — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Land a Bat_OS-native AI assistant accessible via shell command and desktop panel, backed by a fine-tuned Qwen2.5-Coder-7B model running on the operator's RTX 5070, with mandatory tool-use, RAG, and per-session audit-ring entries.
+**Goal:** Land a Sphragis-native AI assistant accessible via shell command and desktop panel, backed by a fine-tuned Qwen2.5-Coder-7B model running on the operator's RTX 5070, with mandatory tool-use, RAG, and per-session audit-ring entries.
 
-**Architecture:** Two-host split. The 5070 runs `ollama serve` permanently with the fine-tuned model; Bat_OS reaches it via the existing kernel-mediated HTTPS syscall (`https::open_kernel`) under a single dedicated cave-policy egress entry. The Bat_OS-side agent is native Rust under `src/ai/` — no `tokio`, no `reqwest`, no `async`. Tool calls are mandatory for any factual claim, and the agent cites the file:line every claim came from. Streaming responses render token-by-token into the operator's UI.
+**Architecture:** Two-host split. The 5070 runs `ollama serve` permanently with the fine-tuned model; Sphragis reaches it via the existing kernel-mediated HTTPS syscall (`https::open_kernel`) under a single dedicated cave-policy egress entry. The Sphragis-side agent is native Rust under `src/ai/` — no `tokio`, no `reqwest`, no `async`. Tool calls are mandatory for any factual claim, and the agent cites the file:line every claim came from. Streaming responses render token-by-token into the operator's UI.
 
-**Tech Stack:** Rust no_std (Bat_OS side), Python 3 + transformers + peft + bitsandbytes (training side), ollama (inference serving), QEMU + pexpect (smoke testing), the kernel's existing TLS 1.3 stack with the post-PR-#24 X.509 hardening, the existing audit-ring AEAD.
+**Tech Stack:** Rust no_std (Sphragis side), Python 3 + transformers + peft + bitsandbytes (training side), ollama (inference serving), QEMU + pexpect (smoke testing), the kernel's existing TLS 1.3 stack with the post-PR-#24 X.509 hardening, the existing audit-ring AEAD.
 
 **Reference spec:** `DESIGN_AI_AGENT.md` (root). Read it before starting. This document is the *how*.
 
@@ -76,7 +76,7 @@ Run: `git push -u origin feat/ai-agent`
 
 ## Phase 1: External infrastructure (training + inference host)
 
-This phase is **operator-driven** — most steps happen on the RTX 5070 box, not in the Bat_OS source tree. The deliverables of this phase are: (a) the LoRA adapter weights merged into a quantized GGUF available via ollama, (b) `scripts/build_lora_dataset.py` committed to the repo, (c) `docs/AI_AGENT_DEPLOY.md` operator setup guide.
+This phase is **operator-driven** — most steps happen on the RTX 5070 box, not in the Sphragis source tree. The deliverables of this phase are: (a) the LoRA adapter weights merged into a quantized GGUF available via ollama, (b) `scripts/build_lora_dataset.py` committed to the repo, (c) `docs/AI_AGENT_DEPLOY.md` operator setup guide.
 
 ### Task 1.1: Write `scripts/build_lora_dataset.py`
 
@@ -89,9 +89,9 @@ The script walks the repo + the Obsidian vault, builds instruction-pair training
 
 ```python
 #!/usr/bin/env python3
-"""Build LoRA training dataset from Bat_OS source + docs + vault.
+"""Build LoRA training dataset from Sphragis source + docs + vault.
 
-Produces a JSONL file at out/bat_os_lora_dataset.jsonl with one
+Produces a JSONL file at out/sphragis_lora_dataset.jsonl with one
 {"instruction": ..., "input": ..., "output": ...} record per line.
 Intended for HuggingFace SFTTrainer or trl's LoRA fine-tune flow.
 
@@ -110,8 +110,8 @@ import sys
 from pathlib import Path
 
 REPO  = Path(__file__).resolve().parent.parent
-VAULT = Path.home() / "BAT_OS_VAULT"
-OUT   = REPO / "out" / "bat_os_lora_dataset.jsonl"
+VAULT = Path.home() / "SPHRAGIS_VAULT"
+OUT   = REPO / "out" / "sphragis_lora_dataset.jsonl"
 
 AUDIT_RE = re.compile(r'(V\d+-[A-Z]+(?:-\d+)?|STUMP\s*#\s*\d+)')
 RUST_FN_RE = re.compile(r'^(///[^\n]*\n)*\s*(pub\s+(?:async\s+|unsafe\s+|const\s+)*fn\s+\w+[^{]+)\{', re.MULTILINE)
@@ -129,7 +129,7 @@ def collect_source_pairs() -> list[dict]:
             body = text[start:body_end]
             rel = p.relative_to(REPO)
             out.append({
-                "instruction": f"In Bat_OS, what does the following function do?",
+                "instruction": f"In Sphragis, what does the following function do?",
                 "input": sig,
                 "output": f"From `{rel}`:\n\n```rust\n{body}\n```",
             })
@@ -149,7 +149,7 @@ def collect_audit_pairs() -> list[dict]:
             ctx = text[max(0, m.start() - 200): m.end() + 600]
             rel = p.relative_to(REPO)
             out.append({
-                "instruction": f"What does the audit marker {marker} refer to in Bat_OS?",
+                "instruction": f"What does the audit marker {marker} refer to in Sphragis?",
                 "input": "",
                 "output": f"From `{rel}`:\n\n{ctx}",
             })
@@ -164,7 +164,7 @@ def collect_concept_pairs() -> list[dict]:
         text = p.read_text(encoding="utf-8")
         title = p.stem
         out.append({
-            "instruction": f"Explain the Bat_OS concept '{title}'.",
+            "instruction": f"Explain the Sphragis concept '{title}'.",
             "input": "",
             "output": text,
         })
@@ -186,7 +186,7 @@ def collect_commit_pairs() -> list[dict]:
         subject, body = subject.strip(), body.strip()
         if not subject or not body: continue
         out.append({
-            "instruction": "Expand on this Bat_OS commit subject.",
+            "instruction": "Expand on this Sphragis commit subject.",
             "input": subject,
             "output": body,
         })
@@ -215,12 +215,12 @@ if __name__ == "__main__":
 chmod +x scripts/build_lora_dataset.py
 python3 scripts/build_lora_dataset.py
 ```
-Expected: `[lora-dataset] wrote NNNN pairs to out/bat_os_lora_dataset.jsonl` where NNNN is in the low thousands.
+Expected: `[lora-dataset] wrote NNNN pairs to out/sphragis_lora_dataset.jsonl` where NNNN is in the low thousands.
 
 - [ ] **Step 3: Spot-check the output**
 
 ```sh
-head -3 out/bat_os_lora_dataset.jsonl | python3 -c "import json,sys; [print(json.dumps(json.loads(l), indent=2)) for l in sys.stdin]"
+head -3 out/sphragis_lora_dataset.jsonl | python3 -c "import json,sys; [print(json.dumps(json.loads(l), indent=2)) for l in sys.stdin]"
 ```
 Expected: three valid JSON records with `instruction`, `input`, `output` fields, each making sense as a training pair.
 
@@ -273,10 +273,10 @@ reachable from the M4 Mac over the LAN.
 3. **Generate the training dataset (on the Mac)**
 
    ```sh
-   cd /Users/kadenlee/Bat_OS
+   cd /Users/kadenlee/Sphragis
    python3 scripts/build_lora_dataset.py
-   # Copy out/bat_os_lora_dataset.jsonl to the 5070
-   scp out/bat_os_lora_dataset.jsonl 5070-host:/tmp/
+   # Copy out/sphragis_lora_dataset.jsonl to the 5070
+   scp out/sphragis_lora_dataset.jsonl 5070-host:/tmp/
    ```
 
 4. **Train the LoRA (on the 5070)**
@@ -303,15 +303,15 @@ reachable from the M4 Mac over the LAN.
    # Quantize via llama.cpp:
    git clone https://github.com/ggerganov/llama.cpp
    cd llama.cpp && make
-   ./convert-hf-to-gguf.py ../out/merged --outfile ../out/bat-os-coder.gguf
-   ./quantize ../out/bat-os-coder.gguf ../out/bat-os-coder-q4.gguf Q4_K_M
+   ./convert-hf-to-gguf.py ../out/merged --outfile ../out/sphragis-coder.gguf
+   ./quantize ../out/sphragis-coder.gguf ../out/sphragis-coder-q4.gguf Q4_K_M
    ```
 
 6. **Register with ollama**
 
    ```sh
    cat > /tmp/Modelfile <<EOF
-   FROM /path/to/bat-os-coder-q4.gguf
+   FROM /path/to/sphragis-coder-q4.gguf
    TEMPLATE """{{ .System }}
    <|im_start|>user
    {{ .Prompt }}<|im_end|>
@@ -320,22 +320,22 @@ reachable from the M4 Mac over the LAN.
    PARAMETER temperature 0.7
    PARAMETER num_ctx 8192
    EOF
-   ollama create bat-os-coder -f /tmp/Modelfile
-   ollama run bat-os-coder "test"
+   ollama create sphragis-coder -f /tmp/Modelfile
+   ollama run sphragis-coder "test"
    ```
 
 7. **Set up TLS for ollama**
 
-   ollama by default serves plain HTTP. Bat_OS reaches it via TLS, so
+   ollama by default serves plain HTTP. Sphragis reaches it via TLS, so
    put a TLS terminator (caddy / nginx / a small Rust proxy) in front
    of ollama:
 
    ```sh
    # caddy example
    cat > /etc/caddy/Caddyfile <<EOF
-   ai.bat-os.local {
+   ai.sphragis.local {
      reverse_proxy localhost:11434
-     tls /etc/ssl/bat-os-ai.crt /etc/ssl/bat-os-ai.key
+     tls /etc/ssl/sphragis-ai.crt /etc/ssl/sphragis-ai.key
    }
    EOF
    sudo systemctl reload caddy
@@ -352,7 +352,7 @@ From the Mac:
 curl -k https://10.0.2.42:443/api/tags
 ```
 
-Should list `bat-os-coder` among the available models.
+Should list `sphragis-coder` among the available models.
 
 ## Retraining cadence
 
@@ -362,7 +362,7 @@ Cheap (~6h on the 5070); can be cron'd weekly.
 ## Backup / rollback
 
 The base Qwen2.5-Coder-7B GGUF stays in `~/.ollama/models/blobs/` — if
-the fine-tuned `bat-os-coder` model produces bad outputs, fall back to
+the fine-tuned `sphragis-coder` model produces bad outputs, fall back to
 plain `qwen2.5-coder:7b` by changing the Modelfile.
 ```
 
@@ -384,7 +384,7 @@ This is **manual operator work**, not engineer work. The plan tracks it as a che
 - [ ] Operator stands up TLS-fronted ollama on the LAN.
 - [ ] Operator verifies `curl -k https://<host>/api/tags` returns the model list.
 
-The Bat_OS-side phases (2 onwards) can begin in parallel with operator deploy work. They depend on operator deploy only at the smoke-test phase.
+The Sphragis-side phases (2 onwards) can begin in parallel with operator deploy work. They depend on operator deploy only at the smoke-test phase.
 
 ---
 
@@ -445,7 +445,7 @@ Expected: error like `couldn't find module 'ai' in main.rs context`. That's expe
 - [ ] **Step 1: Create the directory + skeleton mod.rs**
 
 ```rust
-//! Bat_OS AI agent — locally-hosted, domain-narrow, kernel-mediated.
+//! Sphragis AI agent — locally-hosted, domain-narrow, kernel-mediated.
 //!
 //! See DESIGN_AI_AGENT.md for the why.
 //! See docs/PLAN_AI_AGENT.md for the how.
@@ -573,7 +573,7 @@ use alloc::vec::Vec;
 /// Chat-completion request body sent to ollama.
 #[derive(Debug, Clone)]
 pub struct ChatRequest {
-    pub model: String,                  // e.g. "bat-os-coder"
+    pub model: String,                  // e.g. "sphragis-coder"
     pub messages: Vec<ChatMessage>,
     pub tools: Vec<ToolDef>,
     pub tool_choice: ToolChoice,
@@ -1118,7 +1118,7 @@ use alloc::vec::Vec;
 
 use super::protocol::{ChatMessage, ChatRequest, Role, ToolDef, ToolChoice};
 
-pub const SYSTEM_PROMPT: &str = r#"You are a technical assistant for Bat_OS, a security-grade bare-metal Rust kernel for Apple M4 silicon.
+pub const SYSTEM_PROMPT: &str = r#"You are a technical assistant for Sphragis, a security-grade bare-metal Rust kernel for Apple M4 silicon.
 
 You answer technical questions about:
 - the kernel (architecture, drivers, boot path, scheduler)
@@ -1138,7 +1138,7 @@ Be terse. The operator dislikes long-winded responses. Match the project's voice
 
 /// Build the chat-completion request for one user question.
 ///
-/// `model_name` is the ollama model tag (e.g. "bat-os-coder").
+/// `model_name` is the ollama model tag (e.g. "sphragis-coder").
 /// `rag_snippets` is the top-K Concept notes / design-doc snippets pulled
 /// by `super::rag`. Each snippet gets formatted as a header + body block.
 /// `tool_defs` is the catalog from `super::tools::catalog()`.
@@ -1276,12 +1276,12 @@ pub fn catalog() -> Vec<ToolDef> {
     let mut out = Vec::with_capacity(6);
     out.push(ToolDef {
         name: "read_file".to_string(),
-        description: "Read a file from the Bat_OS source tree. Read-only. Path is relative to the repo root.".to_string(),
+        description: "Read a file from the Sphragis source tree. Read-only. Path is relative to the repo root.".to_string(),
         parameters_json: r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#.to_string(),
     });
     out.push(ToolDef {
         name: "grep_source".to_string(),
-        description: "Search the Bat_OS source tree with a regex pattern. Returns matching file:line:content rows.".to_string(),
+        description: "Search the Sphragis source tree with a regex pattern. Returns matching file:line:content rows.".to_string(),
         parameters_json: r#"{"type":"object","properties":{"pattern":{"type":"string"},"path_glob":{"type":"string"}},"required":["pattern"]}"#.to_string(),
     });
     out.push(ToolDef {
@@ -1291,7 +1291,7 @@ pub fn catalog() -> Vec<ToolDef> {
     });
     out.push(ToolDef {
         name: "suggest_command".to_string(),
-        description: "Suggest a Bat_OS shell command for a given context. Operator must confirm before running.".to_string(),
+        description: "Suggest a Sphragis shell command for a given context. Operator must confirm before running.".to_string(),
         parameters_json: r#"{"type":"object","properties":{"context":{"type":"string"}},"required":["context"]}"#.to_string(),
     });
     out.push(ToolDef {
@@ -1459,7 +1459,7 @@ struct CorpusEntry {
 }
 
 static CORPUS: &[CorpusEntry] = &[
-    // Concept notes from ~/BAT_OS_VAULT/Concepts/ — bundled at build time
+    // Concept notes from ~/SPHRAGIS_VAULT/Concepts/ — bundled at build time
     CorpusEntry {
         title: "M4 Boot Path",
         body: include_str!("../../docs/concept_notes/m4_boot_path.md"),
@@ -1541,7 +1541,7 @@ Create `scripts/build_rag_corpus.sh`:
 set -euo pipefail
 
 REPO="$(git rev-parse --show-toplevel)"
-VAULT="${HOME}/BAT_OS_VAULT"
+VAULT="${HOME}/SPHRAGIS_VAULT"
 OUT="$REPO/docs/concept_notes"
 
 mkdir -p "$OUT"
@@ -1704,7 +1704,7 @@ git commit -m "ai-agent: audit.rs — session-start, tool-call, session-end audi
 //! `src/ai/policy.rs` — cave policy entry construction for the AI agent.
 //!
 //! At deploy time the operator configures the inference host's address
-//! via a build-time env var (`BAT_OS_AI_INFERENCE_HOST`). This entry is
+//! via a build-time env var (`SPHRAGIS_AI_INFERENCE_HOST`). This entry is
 //! the only egress allowance the agent's connection has; everything
 //! else stays default-deny.
 
@@ -1714,11 +1714,11 @@ pub const DEFAULT_AI_INFERENCE_HOST: &str = "10.0.2.42";
 pub const DEFAULT_AI_INFERENCE_PORT: u16 = 443;
 
 pub fn inference_host() -> &'static str {
-    option_env!("BAT_OS_AI_INFERENCE_HOST").unwrap_or(DEFAULT_AI_INFERENCE_HOST)
+    option_env!("SPHRAGIS_AI_INFERENCE_HOST").unwrap_or(DEFAULT_AI_INFERENCE_HOST)
 }
 
 pub fn inference_port() -> u16 {
-    match option_env!("BAT_OS_AI_INFERENCE_PORT") {
+    match option_env!("SPHRAGIS_AI_INFERENCE_PORT") {
         Some(s) => s.parse().unwrap_or(DEFAULT_AI_INFERENCE_PORT),
         None    => DEFAULT_AI_INFERENCE_PORT,
     }
@@ -1730,8 +1730,8 @@ pub fn inference_port() -> u16 {
 Edit `build.rs`. After existing `cargo:rerun-if-env-changed=…` lines, add:
 
 ```rust
-    println!("cargo:rerun-if-env-changed=BAT_OS_AI_INFERENCE_HOST");
-    println!("cargo:rerun-if-env-changed=BAT_OS_AI_INFERENCE_PORT");
+    println!("cargo:rerun-if-env-changed=SPHRAGIS_AI_INFERENCE_HOST");
+    println!("cargo:rerun-if-env-changed=SPHRAGIS_AI_INFERENCE_PORT");
 ```
 
 - [ ] **Step 3: cargo check + commit**
@@ -1754,7 +1754,7 @@ git commit -m "ai-agent: policy.rs — inference-host config via build-time env"
 - [ ] **Step 1: Replace the skeleton with the real orchestrator**
 
 ```rust
-//! Bat_OS AI agent — locally-hosted, domain-narrow, kernel-mediated.
+//! Sphragis AI agent — locally-hosted, domain-narrow, kernel-mediated.
 //!
 //! See DESIGN_AI_AGENT.md for the why; docs/PLAN_AI_AGENT.md for the how.
 
@@ -1787,7 +1787,7 @@ pub enum AgentError {
     PolicyDenied,
 }
 
-const MODEL_NAME: &str = "bat-os-coder";
+const MODEL_NAME: &str = "sphragis-coder";
 
 pub struct AgentSession {
     client: AgentClient,
@@ -2125,7 +2125,7 @@ Each task is its own commit.
 
 Listens on localhost:11434 (or port from env). Responds to
 POST /v1/chat/completions with a fixed canned streaming response so
-the smoke test can verify the Bat_OS-side end-to-end path without a
+the smoke test can verify the Sphragis-side end-to-end path without a
 real model running.
 """
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -2182,7 +2182,7 @@ git commit -m "ai-agent: serve_stub_ollama.py — stub responder for QEMU smoke"
 
 Mirror `scripts/qemu_pq_interop_smoke.py` structure. The smoke:
 1. Starts the stub ollama responder on `127.0.0.1:11434`
-2. Builds Bat_OS with `--features gicv3,selftest-on-boot,ai-stub-host` (the `ai-stub-host` Cargo feature points policy.rs at the stub instead of the LAN host)
+2. Builds Sphragis with `--features gicv3,selftest-on-boot,ai-stub-host` (the `ai-stub-host` Cargo feature points policy.rs at the stub instead of the LAN host)
 3. Boots in QEMU with user-mode networking that maps host:11434 to guest's 10.0.2.2:11434
 4. Reads serial output for `[ai-selftest] PASS:` lines
 5. Asserts ≥3 sub-test PASSes, 0 FAILs, no panic
@@ -2202,7 +2202,7 @@ pub fn inference_host() -> &'static str {
     if cfg!(feature = "ai-stub-host") {
         "10.0.2.2"   // QEMU's default user-net host alias
     } else {
-        option_env!("BAT_OS_AI_INFERENCE_HOST").unwrap_or(DEFAULT_AI_INFERENCE_HOST)
+        option_env!("SPHRAGIS_AI_INFERENCE_HOST").unwrap_or(DEFAULT_AI_INFERENCE_HOST)
     }
 }
 ```
@@ -2225,7 +2225,7 @@ git commit -m "ai-agent: qemu_ai_smoke.py — end-to-end smoke against stub resp
 ### Task 15.1: Build the pinned eval set
 
 **Files:**
-- Create: `scripts/ai_eval_set.json` (50 Q+A pairs about Bat_OS)
+- Create: `scripts/ai_eval_set.json` (50 Q+A pairs about Sphragis)
 - Create: `scripts/ai_eval.py` (runs the eval against the live 5070)
 
 This is operator-curated content. The plan only sketches scope; engineer judgment + collaboration with operator drives the actual content.
@@ -2239,7 +2239,7 @@ This is operator-curated content. The plan only sketches scope; engineer judgmen
 
 ## Phase 16: Real-hardware acceptance
 
-- [ ] Task 16.1: Boot Bat_OS on M4 via chainload.
+- [ ] Task 16.1: Boot Sphragis on M4 via chainload.
 - [ ] Task 16.2: Run `ai how does the cave-switch TLS wipe work` against the live 5070. Verify response cites `src/net/tls.rs` and includes the V5-XLAYER-001 marker.
 - [ ] Task 16.3: Run `ai-selftest` interactively.
 - [ ] Task 16.4: Verify audit ring shows the AI session entries (`audit Ai`).
@@ -2287,7 +2287,7 @@ Per design §"Out of scope":
 - Voice input.
 - Cloud fallback.
 - Multi-tenant / multi-operator sessions.
-- Model versioning UI in Bat_OS.
+- Model versioning UI in Sphragis.
 
 If any of these surface during implementation, they spawn their own thread; do not let scope creep collapse this PR.
 

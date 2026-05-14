@@ -37,7 +37,7 @@ def now_utc() -> datetime:
 
 def make_self_signed_ca() -> tuple[x509.Certificate, rsa.RSAPrivateKey]:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(x509_oid.NameOID.COMMON_NAME, "Bat_OS OCSP Test CA")])
+    name = x509.Name([x509.NameAttribute(x509_oid.NameOID.COMMON_NAME, "Sphragis OCSP Test CA")])
     cert = (
         x509.CertificateBuilder()
         .subject_name(name)
@@ -54,7 +54,7 @@ def make_self_signed_ca() -> tuple[x509.Certificate, rsa.RSAPrivateKey]:
 
 def make_subject_cert(serial: int, ca_cert: x509.Certificate, ca_key: rsa.RSAPrivateKey) -> x509.Certificate:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(x509_oid.NameOID.COMMON_NAME, f"Bat_OS OCSP Test Cert #{serial}")])
+    name = x509.Name([x509.NameAttribute(x509_oid.NameOID.COMMON_NAME, f"Sphragis OCSP Test Cert #{serial}")])
     return (
         x509.CertificateBuilder()
         .subject_name(name)

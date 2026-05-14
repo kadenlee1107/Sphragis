@@ -1,4 +1,4 @@
-# Bat_OS Python tooling config.
+# Sphragis Python tooling config.
 #
 # We don't ship a Python package — the only Python in this repo is the
 # QEMU smoke harnesses + M4 proxy/RE scripts under `scripts/`. This file

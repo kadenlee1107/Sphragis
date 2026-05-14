@@ -1,4 +1,4 @@
-// Bat_OS — C program with printf, malloc, string ops
+// Sphragis — C program with printf, malloc, string ops
 // Uses minilib.h (our own libc replacement — no musl needed)
 
 #include "minilib.h"
@@ -11,7 +11,7 @@ int fibonacci(int n) {
 }
 
 int main(int argc, char *argv[]) {
-    printf("=== Bat_OS libc Test ===\n");
+    printf("=== Sphragis libc Test ===\n");
     printf("Hello from C with printf!\n");
     printf("argc = %d\n", argc);
 

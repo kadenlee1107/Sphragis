@@ -20,7 +20,7 @@ AOP interrupts = [434, 433, 436, 435]
 MTP interrupts = [1114, 1113, 1116, 1115]
 dart-aop irq   = [457]
 
-Variation modes (env BATOS_AOP_VAR):
+Variation modes (env SPHRAGIS_AOP_VAR):
   0 = baseline (same as boot_aop.py, no AIC fiddle)
   1 = AIC_MASK_SET all AOP IRQs before aop.start()
   2 = variation 1 + drain AIC EVENT reg before aop.start()
@@ -173,7 +173,7 @@ def snap_asc(p, base, tag):
 
 
 def main():
-    var = int(os.environ.get("BATOS_AOP_VAR", "1"))
+    var = int(os.environ.get("SPHRAGIS_AOP_VAR", "1"))
     log(f"variant={var}  (0=baseline 1=mask-aop 2=mask+drain 3=+dart)")
 
     os.environ.setdefault("M1N1DEVICE", "/dev/ttyACM1")
@@ -182,7 +182,7 @@ def main():
     bootstrap_port(iface, p)
     u = ProxyUtils(p, heap_size=128 * 1024 * 1024)
 
-    if os.environ.get("BATOS_SKIP_BOOTSTRAP", "0") != "1":
+    if os.environ.get("SPHRAGIS_SKIP_BOOTSTRAP", "0") != "1":
         log("chainloading patched m1n1...")
         chainload(iface, p, u)
         u = ProxyUtils(p, heap_size=128 * 1024 * 1024)

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 #![allow(unused_assignments)]
-// Bat_OS — Apple Device Tree Parser
+// Sphragis — Apple Device Tree Parser
 // When iBoot loads us, it passes a device tree (ADT) in x0.
 // The ADT contains the ACTUAL hardware addresses for this specific
 // machine — UART base, framebuffer address, memory map, etc.

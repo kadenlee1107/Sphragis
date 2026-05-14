@@ -1,4 +1,4 @@
-// Bat_OS — AES-128-GCM AND AES-256-GCM with proper tag verification.
+// Sphragis — AES-128-GCM AND AES-256-GCM with proper tag verification.
 //
 // Built on RustCrypto's audited `aes` (constant-time AES block) and
 // `ghash` (constant-time GF(2^128)) primitives. This replaces the

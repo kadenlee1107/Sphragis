@@ -1,4 +1,4 @@
-/* Bat_OS Linker Script — Apple Silicon bare metal */
+/* Sphragis Linker Script — Apple Silicon bare metal */
 /* m1n1 loads the kernel image at a high address in DRAM */
 /* The actual load address is determined by m1n1, but we */
 /* link at a reasonable default and let m1n1 relocate if needed. */

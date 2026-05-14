@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG_DIR = ROOT / "logs/qemu-tests"; LOG_DIR.mkdir(parents=True, exist_ok=True)
 STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 LOG = LOG_DIR / f"extras-{STAMP}.log"
@@ -17,7 +17,7 @@ QEMU_ARGS = ["qemu-system-aarch64","-machine","virt","-cpu","max","-m","2G",
     "-display","none","-device","virtio-gpu-device","-device","virtio-keyboard-device",
     "-netdev","user,id=net0","-device","virtio-net-device,netdev=net0",
     "-serial","mon:stdio","-kernel",str(KERNEL)]
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 def clean(b): return ANSI.sub(b"", b or b"").decode("utf-8","replace").strip()
 

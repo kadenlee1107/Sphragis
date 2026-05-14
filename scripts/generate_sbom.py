@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a CycloneDX 1.5 SBOM for the Bat_OS kernel build.
+"""Generate a CycloneDX 1.5 SBOM for the Sphragis kernel build.
 
 CycloneDX (over SPDX) chosen for:
   * Stronger tooling support in the Rust ecosystem (cargo-cyclonedx).
@@ -40,7 +40,7 @@ OUT  = REPO / "out" / "sbom.json"
 
 PURL_TPL = "pkg:cargo/{name}@{version}"
 
-# Bat_OS kernel-side cryptographic component manifest. Matches what
+# Sphragis kernel-side cryptographic component manifest. Matches what
 # `src/crypto/` actually exposes. Keep in sync when adding primitives.
 CRYPTO_COMPONENTS = [
     # name,                 implements,                                 oid_or_id
@@ -157,8 +157,8 @@ def main() -> int:
 
     root = {
         "type": "operating-system",
-        "bom-ref": "bat-os",
-        "name": "bat_os",
+        "bom-ref": "sphragis",
+        "name": "sphragis",
         "version": "0.1.0",
         "description": "Security-grade bare-metal Rust kernel for Apple M4.",
     }
@@ -171,7 +171,7 @@ def main() -> int:
         "metadata": {
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "tools": [{
-                "vendor": "bat_os",
+                "vendor": "sphragis",
                 "name": "generate_sbom.py",
                 "version": "1.0",
             }],

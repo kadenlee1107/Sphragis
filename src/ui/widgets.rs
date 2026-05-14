@@ -1,4 +1,4 @@
-// Bat_OS — shared app widgets .
+// Sphragis — shared app widgets .
 //
 // Higher-level composites built on top of `ui::draw` + `ui::font`,
 // used by the DS / NM / SK apps (and likely the rest later). Lives

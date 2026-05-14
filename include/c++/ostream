@@ -1,5 +1,5 @@
-#ifndef _BAT_OSTREAM
-#define _BAT_OSTREAM
+#ifndef _SPHRAGIS_OSTREAM
+#define _SPHRAGIS_OSTREAM
 
 #include <cstdio>
 #include <cstddef>

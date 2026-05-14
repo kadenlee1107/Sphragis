@@ -1,8 +1,8 @@
-//! Bat_OS — kernel-mediated HTTPS for caves.
+//! Sphragis — kernel-mediated HTTPS for caves.
 //!
 //! See DESIGN_HTTPS_SYSCALL.md.
 //!
-//! HTTPS is a Bat_OS-specific syscall (not a Linux ABI emulation): caves
+//! HTTPS is a Sphragis-specific syscall (not a Linux ABI emulation): caves
 //! call `bat_https_open(host, port)` and get back a TLS-backed fd. Plain
 //! `read(fd, ...)` / `write(fd, ...)` then move plaintext through a
 //! kernel-run TLS session — caves never see network bytes in plaintext

@@ -2,7 +2,7 @@
 """
 fuzz_http.py — ATTACK-NET-042, 045, 046
 
-Runs as a malicious HTTP server. Bat_OS must initiate the connection,
+Runs as a malicious HTTP server. Sphragis must initiate the connection,
 so point the browser at http://<host>:<port>/.
 
 042: response splitting — Location header with CRLF injection.

@@ -156,7 +156,7 @@ pub fn derive_session_key(
     input.extend_from_slice(shared.as_bytes());
     input.extend_from_slice(id_lo);
     input.extend_from_slice(id_hi);
-    input.extend_from_slice(b"BATOS-IPC-SESSION-V1");
+    input.extend_from_slice(b"SPHRAGIS-IPC-SESSION-V1");
     let n = label.len().min(40);
     input.extend_from_slice(&label[..n]);
     let h = sha256::hash(&input);
@@ -172,7 +172,7 @@ pub fn derive_session_key(
 /// match) — the prefixes should be identical (and match == true) on
 /// success.
 pub fn selftest_round_trip() -> Result<([u8; 8], [u8; 8], bool), &'static str> {
-    let label = b"batos-selftest-session";
+    let label = b"sphragis-selftest-session";
 
     // Create two cave identities
     let alice = IpcIdentity::generate();

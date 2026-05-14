@@ -1,4 +1,4 @@
-bat_os> 
+sphragis> 
 [vuart] >>> b'self-test\r'
 self-test
 
@@ -9,7 +9,7 @@ self-test
 [selftest] batfs::merkle_root = 0x9df709e343530442f2480afc372e8f77fde25021da4c0580d6633404bb58bb04
 [selftest] batfs::verify_all_integrity ... OK
 [selftest] all PASS
-bat_os> TTY> HV alive t=1s
+sphragis> TTY> HV alive t=1s
 TTY> HV alive t=2s
 TTY> HV alive t=3s
 TTY> HV alive t=4s

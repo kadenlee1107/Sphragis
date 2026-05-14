@@ -6,7 +6,7 @@
 
 ## Goal
 
-Make Bat_OS's HTTPS posture honest end-to-end. Strict X.509 chain
+Make Sphragis's HTTPS posture honest end-to-end. Strict X.509 chain
 validation is the **only** path to a trusted handshake. Hybrid PQ TLS
 is on. No mode toggles, no pin fallback, no dormant trust machinery.
 
@@ -227,7 +227,7 @@ trust store, which contorts the code for one test).
   the post-no-browser baseline.
 - ✅ `scripts/qemu_boot_smoke.py` PASSES with the additional markers.
 - ✅ `cmd_x509_selftest` prints PASS for both cases and no FAIL lines
-  when run inside booted Bat_OS shell.
+  when run inside booted Sphragis shell.
 - ✅ The grep
   ```bash
   rg 'tls_pinning|cmd_tls_mode|fetch_url|fetch_http\b|fetch_post_url|fetch_post_http\b|ResearchModeGuard' src

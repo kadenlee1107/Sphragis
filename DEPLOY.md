@@ -1,4 +1,4 @@
-# Bat_OS — Deployment Guide: Real M4 MacBook
+# Sphragis — Deployment Guide: Real M4 MacBook
 
 > **STUMP #137 update.** The original DEPLOY.md was written before the
 > M4 reverse-engineering work and described an M1-era flow. Following
@@ -26,8 +26,8 @@
 │  (Linux)    │   serial debug    │  (running m1n1) │
 │             │                   │                 │
 │ Sends:      │                   │ Receives:       │
-│ bat_os ELF  │ ────────────────► │ Loads + runs    │
-│             │                   │ Bat_OS!         │
+│ sphragis ELF  │ ────────────────► │ Loads + runs    │
+│             │                   │ Sphragis!         │
 └─────────────┘                   └─────────────────┘
 ```
 
@@ -73,7 +73,7 @@ from upstream — that one will hang the M4 P-cores at
 `run_secondary` because it doesn't have the `-S` workaround.
 
 ```bash
-cd Bat_OS
+cd Sphragis
 # m1n1 lives at external/m1n1 already; nothing to fetch.
 # Install Python deps:
 pip3 install pyserial construct
@@ -108,7 +108,7 @@ python3 external/m1n1/proxyclient/tools/shell.py
 You should land in the m1n1 Python shell. If it hangs, double-check
 the cable + port and the boot picker selection.
 
-## Step 5: Build + chainload Bat_OS
+## Step 5: Build + chainload Sphragis
 
 From the **build machine** (any system that can run `cargo build`,
 typically the Mac):
@@ -116,31 +116,31 @@ typically the Mac):
 ```bash
 make build
 # Produces:
-#   target/aarch64-unknown-none/release/bat_os       (ELF)
-#   target/aarch64-unknown-none/release/bat_os.bin   (flat Image)
+#   target/aarch64-unknown-none/release/sphragis       (ELF)
+#   target/aarch64-unknown-none/release/sphragis.bin   (flat Image)
 ```
 
-Copy `bat_os.bin` to the **dev machine** (the one connected to the
+Copy `sphragis.bin` to the **dev machine** (the one connected to the
 M4). Then chainload:
 
 ```bash
 python3 external/m1n1/proxyclient/tools/chainload.py \
-    /path/to/bat_os.bin
+    /path/to/sphragis.bin
 # (the -S / --skip-secondary-cpus flag is pre-applied in our vendored
 #  copy — see CLAUDE.md for why)
 ```
 
-This sends Bat_OS over USB to m1n1, which jumps to it. You should
+This sends Sphragis over USB to m1n1, which jumps to it. You should
 see on the dev machine's terminal:
 
 ```
 ================================================
-  BAT_OS — BARE METAL APPLE SILICON
+  SPHRAGIS — BARE METAL APPLE SILICON
   Running on REAL M4 hardware.
 ================================================
 ```
 
-And on the MacBook's screen: the Bat_OS auth gate.
+And on the MacBook's screen: the Sphragis auth gate.
 
 > **DO NOT use `run_guest.py`.** `run_guest.py` initializes a
 > hypervisor that writes `AMX_CONFIG_EL1`, which traps on M4 (no AMX
@@ -166,7 +166,7 @@ chainload from the dev machine.
 When this lands, it'll look like:
 
 ```
-Power Button → Apple iBoot → m1n1 (auto-boot) → Bat_OS auth gate
+Power Button → Apple iBoot → m1n1 (auto-boot) → Sphragis auth gate
 ```
 
 Tracking issue: see `docs/SESSION_JOURNAL.md` for the latest.
@@ -186,13 +186,13 @@ macOS boot picker  (hold power button)
 m1n1 (chainloaded by kmutil configure-boot)
     │
     ▼
-chainload.py over USB pushes bat_os.bin
+chainload.py over USB pushes sphragis.bin
     │
     ▼
-Bat_OS auth gate (passphrase, optional YubiKey [planned])
+Sphragis auth gate (passphrase, optional YubiKey [planned])
     │
     ▼
-Bat_OS desktop
+Sphragis desktop
 ```
 
 ## Troubleshooting
@@ -213,9 +213,9 @@ Bat_OS desktop
   SErrors on the RVBAR write. Use `external/m1n1/proxyclient/tools/
   chainload.py` from this repo.
 
-### "Bat_OS crashes immediately"
+### "Sphragis crashes immediately"
 
-- Check the serial output. Bat_OS prints a panic with the offending
+- Check the serial output. Sphragis prints a panic with the offending
   EL/PC.
 - `docs/DEBUGGING_RUNBOOK.md` has known failure modes and fixes.
 - M4 MMIO addresses are NOT the same as M1's. Many references on
@@ -224,7 +224,7 @@ Bat_OS desktop
 
 ### "I want to develop in QEMU instead"
 
-- See `QUICKSTART.md`. `make render-live` boots Bat_OS under
+- See `QUICKSTART.md`. `make render-live` boots Sphragis under
   QEMU/HVF on the Mac with virtio-gpu, virtio-keyboard,
   virtio-tablet, and (since STUMP #136) virtio-blk for persistent
   BatFS. Way faster iteration than M4 chainload while developing.

@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — TCP Layer (Multi-PCB)
+// Sphragis — TCP Layer (Multi-PCB)
 // Supports up to 64 concurrent TCP connections via a static TCB (PCB) table.
 // Designed to unblock Chromium's subresource fetch parallelism.
 //
@@ -1890,7 +1890,7 @@ pub fn connect_start(id: usize, ip_be: u32, port: u16) -> i32 {
 
     // gap-audit item 045: register the flow in conntrack so the
     // inbound side can recognise reply packets as belonging to a
-    // Bat_OS-initiated connection. Wildcard inbound TCP allow rule
+    // Sphragis-initiated connection. Wildcard inbound TCP allow rule
     // still exists; conntrack here is defense-in-depth + foundation
     // for a future hardening pass that removes the wildcard.
     crate::net::conntrack::register_outbound(

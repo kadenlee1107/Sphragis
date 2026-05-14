@@ -1,12 +1,12 @@
 /*
  * mem_bomb.c — DoS stress: memory exhaustion.
  *
- * Guest-side harness for Bat_OS BatCave Linux runner. Intended to be
+ * Guest-side harness for Sphragis BatCave Linux runner. Intended to be
  * cross-compiled for aarch64-linux-musl and loaded by the ELF loader.
  *
  * Covers:
  *   ATTACK-DOS-001  mmap storm  (4 KiB allocations until ENOMEM)
- *   ATTACK-DOS-002  mmap/munmap silent leak (munmap is a no-op in Bat_OS)
+ *   ATTACK-DOS-002  mmap/munmap silent leak (munmap is a no-op in Sphragis)
  *   ATTACK-DOS-005  huge MAP_STACK (1 GiB single alloc)
  *
  * Usage (inside a cave):
@@ -35,7 +35,7 @@ static void mem_bomb_small(void) {
                     count, errno);
             return;
         }
-        /* Touch every page so lazy-fault kernels still commit. Bat_OS
+        /* Touch every page so lazy-fault kernels still commit. Sphragis
            commits eagerly so this is redundant but cheap. */
         memset(p, 0xA5, 4096);
         count++;
@@ -45,7 +45,7 @@ static void mem_bomb_small(void) {
 }
 
 static void mem_bomb_leak(void) {
-    /* Because sys_munmap is a no-op in Bat_OS, this loop drains the
+    /* Because sys_munmap is a no-op in Sphragis, this loop drains the
        frame pool while *looking* well-behaved. */
     unsigned long count = 0;
     for (;;) {
@@ -57,7 +57,7 @@ static void mem_bomb_leak(void) {
             return;
         }
         ((volatile char*)p)[0] = 1;
-        /* Pretend to clean up. Bat_OS silently does nothing. */
+        /* Pretend to clean up. Sphragis silently does nothing. */
         munmap(p, 4096);
         count++;
         if ((count & 0xFFF) == 0)

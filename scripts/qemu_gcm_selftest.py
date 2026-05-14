@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """STUMP #159: AES-128-GCM + AES-256-GCM NIST vector check on QEMU.
 
-Boots Bat_OS, auths via the splash gate, runs `gcm-selftest`. PASS
+Boots Sphragis, auths via the splash gate, runs `gcm-selftest`. PASS
 if both NIST vectors (Test Case 2 + Test Case 14) reproduce their
 published tags AND the tamper-detection rejects flipped ciphertext.
 """
@@ -12,10 +12,10 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = ROOT / f"logs/qemu-tests/gcm-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 QEMU_ARGS = [
     "qemu-system-aarch64",
@@ -57,7 +57,7 @@ def main():
         if i >= 0:
             tail = raw[i:]
             # Stop at the next prompt to keep output focused.
-            j = tail.find("bat_os >", len(marker))
+            j = tail.find("sphragis >", len(marker))
             print(tail[: j if j > 0 else 1500])
     except pexpect.TIMEOUT:
         print("[gcm] TIMEOUT")

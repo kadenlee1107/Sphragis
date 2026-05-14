@@ -1,4 +1,4 @@
-# Bat_OS — Ubuntu Live-USB Quickstart
+# Sphragis — Ubuntu Live-USB Quickstart
 
 Because Ubuntu live USB is tmpfs (RAM-only), every power loss wipes the
 environment. This file is the paste-and-go ritual to get back to
@@ -9,7 +9,7 @@ environment. This file is the paste-and-go ritual to get back to
 Copy these two things over (USB drive, scp, whatever):
 
 1. `external/m1n1/` — the whole tree (already pre-patched with `-S`)
-2. `target/bat_os_apple.bin` — latest build
+2. `target/sphragis_apple.bin` — latest build
 
 ## On Ubuntu, one-time setup per boot
 
@@ -33,12 +33,12 @@ cd ~/m1n1/proxyclient    # or wherever you copied external/m1n1 to
 3. Actually, if m1n1 is set as boot object (it is), just turn it on
    normally. Should auto-boot into m1n1 and reach "Running proxy..."
 
-## Chainload Bat_OS
+## Chainload Sphragis
 
 ```bash
 sudo M1N1DEVICE=/dev/ttyACM0 python3 tools/chainload.py \
     --raw --entry-point 0 -S \
-    /path/to/bat_os_apple.bin
+    /path/to/sphragis_apple.bin
 ```
 
 The `-S` flag is critical on M4 — skips the P-cluster RVBAR writes
@@ -67,7 +67,7 @@ ACM0 or ACM1. Try both if the first doesn't work.
 | `ModuleNotFoundError: No module named 'construct'` | apt packages not installed | `sudo apt install python3-construct python3-serial` |
 | `... executing as aarch64-linux-gnu-as not found` | gcc-aarch64 missing | `sudo apt install gcc-aarch64-linux-gnu` |
 | Mac spontaneously reboots during chainload | m1n1 RVBAR SError on M4 | Use `-S` flag |
-| Mac resets at jump to payload | Wrong payload format / entry | Confirm with `file bat_os_apple.bin` says `data` (NOT `Linux kernel ARM64 Image`) |
+| Mac resets at jump to payload | Wrong payload format / entry | Confirm with `file sphragis_apple.bin` says `data` (NOT `Linux kernel ARM64 Image`) |
 | Stuck in exception loop | Previous crash, serial link dead | Power-cycle the Mac, wait for "Running proxy..." |
 
 ## Current known issue on M4

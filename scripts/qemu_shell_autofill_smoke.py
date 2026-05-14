@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless tab-autofill smoke for the Bat_OS shell.
+"""Headless tab-autofill smoke for the Sphragis shell.
 
 Builds the kernel, boots in QEMU virt, drives the auth gate with the
 default empty passphrase, then types partial commands followed by Tab
@@ -35,7 +35,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/shell-autofill-smoke-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -84,7 +84,7 @@ def run() -> int:
         # Empty passphrase falls through to dev default.
         c.sendline("")
         # Auth eventually times out / falls through to the serial shell.
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         # ── Test 1: unique-prefix completion ──
@@ -97,7 +97,7 @@ def run() -> int:
         c.expect(rb"pq-comms-selftest", timeout=10)
         # Cancel this line — Ctrl+C resets the prompt.
         c.send(b"\x03")
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[autofill-smoke]   PASS unique: 'pq-c' + Tab → 'pq-comms-selftest'")
 
         # ── Test 2: multi-match listing ──

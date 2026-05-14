@@ -1,4 +1,4 @@
-// Bat_OS — TLS 1.3 Implementation
+// Sphragis — TLS 1.3 Implementation
 // Pure Rust, zero dependencies. Used for HTTPS in the secure network pipeline.
 //
 // TLS 1.3 simplified flow:

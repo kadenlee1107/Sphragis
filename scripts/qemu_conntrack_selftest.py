@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Headless smoke for `conntrack-selftest` — gap-audit item 045.
 
-Boots Bat_OS in QEMU virt, clears the empty-passphrase auth gate,
+Boots Sphragis in QEMU virt, clears the empty-passphrase auth gate,
 runs `conntrack-selftest` at the shell, and asserts the stateful
 flow-table lifecycle:
 
@@ -25,7 +25,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/conntrack-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -56,7 +56,7 @@ def main() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         c.sendline("conntrack-selftest")
@@ -66,14 +66,14 @@ def main() -> int:
         ], timeout=30)
         if idx == 1:
             try:
-                c.expect(rb"bat_os > ", timeout=5)
+                c.expect(rb"sphragis > ", timeout=5)
             except Exception:
                 pass
             print("[conntrack] FAIL — selftest reported a failure", file=sys.stderr)
             print(f"[conntrack] log: {LOG}", file=sys.stderr)
             return 1
 
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[conntrack] PASS — conntrack flow-table lifecycle verified")
         print(f"[conntrack] log: {LOG}")
         return 0

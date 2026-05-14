@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Headless smoke for the per-cave L1 restriction selftest (slice 1).
 
-Boots Bat_OS in QEMU virt, clears the empty-passphrase auth gate,
+Boots Sphragis in QEMU virt, clears the empty-passphrase auth gate,
 runs `cave-private-selftest` at the shell, and asserts:
 
   - cave_private::ensure_page allocated the page + installed a PTE
@@ -23,7 +23,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/cave-private-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -54,7 +54,7 @@ def main() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         c.sendline("cave-private-selftest")
@@ -66,14 +66,14 @@ def main() -> int:
             # Drain the full FAIL line + a bit more so the log captures
             # the detailed message instead of cutting at "FAIL:".
             try:
-                c.expect(rb"bat_os > ", timeout=5)
+                c.expect(rb"sphragis > ", timeout=5)
             except Exception:
                 pass
             print("[cave-private] FAIL — selftest reported a failure", file=sys.stderr)
             print(f"[cave-private] log: {LOG}", file=sys.stderr)
             return 1
 
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[cave-private] PASS — per-cave L1 isolation property verified")
         print(f"[cave-private] log: {LOG}")
         return 0

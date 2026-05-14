@@ -1,10 +1,10 @@
-# Bat_OS dev architecture — the machines and how they fit
+# Sphragis dev architecture — the machines and how they fit
 
 ## The three pieces
 
 ```
 ┌──────────────────────────────────────────────┐
-│  GitHub (kadenlee1107/Bat_OS, private)       │
+│  GitHub (kadenlee1107/Sphragis, private)       │
 │  • Source of truth for everything            │
 │  • Both Claudes pull/push                    │
 │  • Survives any single-machine failure       │
@@ -22,12 +22,12 @@
 │  • `cargo build`    │        │  • Drives m1n1       │
 │    produces         │        │    chainload via     │
 │    target/          │        │    /dev/ttyACM0      │
-│    bat_os_apple.bin │        │  • Captures serial   │
+│    sphragis_apple.bin │        │  • Captures serial   │
 │                     │        │    to logfile        │
 │  In m1n1 mode:      │        │  • Captures screen   │
 │  • iBoot → m1n1 →   │        │    via Elgato (USB)  │
 │    chainloaded      │        │  • Can run cargo     │
-│    Bat_OS           │        │    too (rebuilds    │
+│    Sphragis           │        │    too (rebuilds    │
 │  • macOS NOT active │        │    without round-    │
 │  • Mac Claude       │ USB-C  │    trip to Mac)      │
 │    CANNOT run here  │───────▶│                      │
@@ -43,8 +43,8 @@
 
 | Operation | Where it happens |
 |---|---|
-| Edit Bat_OS Rust source | Mac or Ubuntu (either can) |
-| Build `bat_os_apple.bin` | Mac (primary), Ubuntu (possible after `rustup` install) |
+| Edit Sphragis Rust source | Mac or Ubuntu (either can) |
+| Build `sphragis_apple.bin` | Mac (primary), Ubuntu (possible after `rustup` install) |
 | Build/patch m1n1 | Mac (already done) |
 | Run `chainload.py` | Ubuntu only (Windows can't; Mac isn't the host, it's the target) |
 | Receive serial output | Ubuntu (via USB-CDC-ACM on /dev/ttyACM0) |
@@ -58,9 +58,9 @@
 **Mac can be in macOS XOR m1n1, never both.** This is the fundamental
 constraint that shaped the whole workflow:
 
-- When the Mac is in **macOS**: Bat_OS is NOT running. Mac Claude
+- When the Mac is in **macOS**: Sphragis is NOT running. Mac Claude
   is available. Build, code, commit here.
-- When the Mac is in **m1n1**: Bat_OS might be running. Mac Claude
+- When the Mac is in **m1n1**: Sphragis might be running. Mac Claude
   is unavailable. Ubuntu Claude drives the proxy, captures output.
 
 The Claudes don't overlap in time but they share state via GitHub.
@@ -109,9 +109,9 @@ Tailscale VPN. Example session:
 ```
 Mac Claude: "let's rebuild and reboot"
   → cargo build --release (on Mac)
-  → scp target/bat_os_apple.bin ubuntu:~/batos/latest.bin
-  → ssh ubuntu 'cd ~/batos && ./scripts/chainload.sh latest.bin'
-  → ssh ubuntu 'tail -100 ~/batos/serial.log'
+  → scp target/sphragis_apple.bin ubuntu:~/sphragis/latest.bin
+  → ssh ubuntu 'cd ~/sphragis && ./scripts/chainload.sh latest.bin'
+  → ssh ubuntu 'tail -100 ~/sphragis/serial.log'
   → reads the serial log in the chat, diagnoses
 ```
 
@@ -122,8 +122,8 @@ during the brief window when the Mac is in m1n1 mode.
 ## File layout at a glance
 
 ```
-/Users/kadenlee/Bat_OS/                    (Mac side)
-~/bat_os/                                  (Ubuntu side, after clone)
+/Users/kadenlee/Sphragis/                    (Mac side)
+~/sphragis/                                  (Ubuntu side, after clone)
 ├── CLAUDE.md                 ← Claude onboarding (both sides)
 ├── UBUNTU_QUICKSTART.md      ← Paste-and-go for Ubuntu
 ├── docs/
@@ -133,7 +133,7 @@ during the brief window when the Mac is in m1n1 mode.
 │   ├── DEBUGGING_RUNBOOK.md  ← known failure modes
 │   ├── UBUNTU_SETUP.md       ← persistent Ubuntu setup
 │   └── photos/               ← screen photos (historical)
-├── src/                      ← Bat_OS kernel source
+├── src/                      ← Sphragis kernel source
 ├── external/m1n1/            ← pre-patched m1n1 (with -S flag)
 ├── scripts/                  ← Ubuntu-side automation
 │   ├── setup.sh              ← one-time Ubuntu env setup

@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple Device Tree (ADT) parser
+// Sphragis — Apple Device Tree (ADT) parser
 //
 // Apple's firmware (iBoot, then m1n1 when chainloading) hands the OS a
 // binary device-tree blob describing every hardware register map on the

@@ -1,9 +1,9 @@
 /*
- * Bat_OS — sys/mman.h stub for NetSurf
+ * Sphragis — sys/mman.h stub for NetSurf
  * Memory mapping declarations.
  */
-#ifndef _BATOS_SYS_MMAN_H
-#define _BATOS_SYS_MMAN_H
+#ifndef _SPHRAGIS_SYS_MMAN_H
+#define _SPHRAGIS_SYS_MMAN_H
 
 #include <stddef.h>
 #include <sys/types.h>
@@ -35,4 +35,4 @@ int   munmap(void *addr, size_t length);
 int   mprotect(void *addr, size_t len, int prot);
 int   msync(void *addr, size_t length, int flags);
 
-#endif /* _BATOS_SYS_MMAN_H */
+#endif /* _SPHRAGIS_SYS_MMAN_H */

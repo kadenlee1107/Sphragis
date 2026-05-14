@@ -14,14 +14,14 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT   = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOGDIR = ROOT / "logs/qemu-tests"; LOGDIR.mkdir(parents=True, exist_ok=True)
 STAMP  = datetime.now().strftime("%Y%m%d-%H%M%S")
 QLOG   = LOGDIR / f"unified-{STAMP}.log"
 DLOG   = LOGDIR / f"batcaved-unified-{STAMP}.log"
 
 ANSI   = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 
 def dedup(s):
@@ -43,7 +43,7 @@ def clean_lines(raw):
             "[firewall]", "[net]", "[boot]", "[chromium", "[bs]",
             "[auth]", "[ipc]", "[arch]", "[rng]", "[sched]", "[mm]",
             "[security]", "[initrd]", "[dtb]", "[mmap]", "[docker]",
-            "[tcp]", "bat_os >", "Microkernel", "Ctrl+")
+            "[tcp]", "sphragis >", "Microkernel", "Ctrl+")
     out = []
     for line in raw.splitlines():
         s = dedup(line.rstrip())
@@ -87,7 +87,7 @@ def main():
     print("[qemu] shell ready\n")
 
     def run(cmd, wait=30, label=None):
-        print(f"\nbat_os > {cmd}")
+        print(f"\nsphragis > {cmd}")
         if label: print(f"         ({label})")
         child.sendline(cmd.encode())
         try:
@@ -135,7 +135,7 @@ def main():
     # we can call destroy-all through the wipe mechanism. Use `panic` which
     # goes through security::wipe which calls cave::destroy_all which now
     # fans out to docker_client::destroy_all.
-    # Actually panic halts Bat_OS; use explicit unified `destroy` instead
+    # Actually panic halts Sphragis; use explicit unified `destroy` instead
     # to exercise the same docker-cleanup code path from cave::destroy.
     run("batcave destroy kali-recon", 30,
         "unified destroy → docker container rm AND cave key zero")

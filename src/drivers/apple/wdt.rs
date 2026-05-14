@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple Watchdog driver.
+// Sphragis — Apple Watchdog driver.
 //
 // Simple port of external/m1n1/src/wdt.c. Apple SoCs expose the
 // system watchdog via three 32-bit registers at the WDT block:

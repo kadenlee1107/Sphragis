@@ -1,4 +1,4 @@
-// Bat_OS — BC · BatCave Manager
+// Sphragis — BC · BatCave Manager
 //
 // Claude-Design Wave-4 port. Source artifacts in
 // `docs/design/apps-wb-bc/`. The manager is split into a 60%

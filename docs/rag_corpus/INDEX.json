@@ -3,70 +3,70 @@
     "slug": "concept_audit_ring_contract",
     "title": "Audit Ring Contract",
     "kind": "concept",
-    "source": "BAT_OS_VAULT/Concepts/Audit Ring Contract.md",
+    "source": "SPHRAGIS_VAULT/Concepts/Audit Ring Contract.md",
     "bytes": 3912
   },
   {
     "slug": "concept_cave_isolation_model",
     "title": "Cave Isolation Model",
     "kind": "concept",
-    "source": "BAT_OS_VAULT/Concepts/Cave Isolation Model.md",
+    "source": "SPHRAGIS_VAULT/Concepts/Cave Isolation Model.md",
     "bytes": 4183
   },
   {
     "slug": "concept_constant_cost_abort_discipline",
     "title": "Constant-Cost Abort Discipline",
     "kind": "concept",
-    "source": "BAT_OS_VAULT/Concepts/Constant-Cost Abort Discipline.md",
+    "source": "SPHRAGIS_VAULT/Concepts/Constant-Cost Abort Discipline.md",
     "bytes": 5613
   },
   {
     "slug": "concept_cryptography_stack",
     "title": "Cryptography Stack",
     "kind": "concept",
-    "source": "BAT_OS_VAULT/Concepts/Cryptography Stack.md",
+    "source": "SPHRAGIS_VAULT/Concepts/Cryptography Stack.md",
     "bytes": 5538
   },
   {
     "slug": "concept_m4_boot_path",
     "title": "M4 Boot Path",
     "kind": "concept",
-    "source": "BAT_OS_VAULT/Concepts/M4 Boot Path.md",
+    "source": "SPHRAGIS_VAULT/Concepts/M4 Boot Path.md",
     "bytes": 4481
   },
   {
     "slug": "concept_post_no_browser_pivot",
     "title": "Post-no-browser Pivot",
     "kind": "concept",
-    "source": "BAT_OS_VAULT/Concepts/Post-no-browser Pivot.md",
+    "source": "SPHRAGIS_VAULT/Concepts/Post-no-browser Pivot.md",
     "bytes": 4568
   },
   {
     "slug": "concept_six_trust_anchors",
     "title": "Six Trust Anchors",
     "kind": "concept",
-    "source": "BAT_OS_VAULT/Concepts/Six Trust Anchors.md",
+    "source": "SPHRAGIS_VAULT/Concepts/Six Trust Anchors.md",
     "bytes": 7352
   },
   {
     "slug": "concept_tls_hardening_journey",
     "title": "TLS Hardening Journey",
     "kind": "concept",
-    "source": "BAT_OS_VAULT/Concepts/TLS Hardening Journey.md",
+    "source": "SPHRAGIS_VAULT/Concepts/TLS Hardening Journey.md",
     "bytes": 5810
   },
   {
     "slug": "concept_time_without_a_clock",
     "title": "Time Without a Clock",
     "kind": "concept",
-    "source": "BAT_OS_VAULT/Concepts/Time Without a Clock.md",
+    "source": "SPHRAGIS_VAULT/Concepts/Time Without a Clock.md",
     "bytes": 7077
   },
   {
     "slug": "concept_v_incident_vocabulary",
     "title": "V-Incident Vocabulary",
     "kind": "concept",
-    "source": "BAT_OS_VAULT/Concepts/V-Incident Vocabulary.md",
+    "source": "SPHRAGIS_VAULT/Concepts/V-Incident Vocabulary.md",
     "bytes": 6711
   },
   {

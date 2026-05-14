@@ -1,9 +1,9 @@
 /*
- * Bat_OS — sys/param.h stub for NetSurf
+ * Sphragis — sys/param.h stub for NetSurf
  * Common constants and utility macros.
  */
-#ifndef _BATOS_SYS_PARAM_H
-#define _BATOS_SYS_PARAM_H
+#ifndef _SPHRAGIS_SYS_PARAM_H
+#define _SPHRAGIS_SYS_PARAM_H
 
 #include <limits.h>
 
@@ -39,4 +39,4 @@
 #define roundup(x, y) ((((x) + ((y) - 1)) / (y)) * (y))
 #endif
 
-#endif /* _BATOS_SYS_PARAM_H */
+#endif /* _SPHRAGIS_SYS_PARAM_H */

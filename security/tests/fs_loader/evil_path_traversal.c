@@ -4,7 +4,7 @@
  * FL-017, FL-018).
  *
  * This is a Linux userspace program intended to be compiled for AArch64
- * and run under a Bat_OS cave (via busybox or direct ELF loader).
+ * and run under a Sphragis cave (via busybox or direct ELF loader).
  *
  *   aarch64-linux-gnu-gcc -static -Os -o evil_path_traversal \
  *       evil_path_traversal.c

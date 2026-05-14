@@ -3,7 +3,7 @@
 
 Starts batcaved in a subprocess, connects over TCP, exercises the
 CPOL_PUSH / CPOL_SHOW / CPOL_CLEAR / CPOL_LIST commands directly.
-Does NOT need Bat_OS running — this is pure daemon-side coverage so
+Does NOT need Sphragis running — this is pure daemon-side coverage so
 we can iterate on the protocol before wiring the full kernel path.
 """
 import socket

@@ -4,7 +4,7 @@
 //! CALIPSO rides inside an IPv6 Hop-by-Hop Options header
 //! (next-header = 0). This module is the pure-function half:
 //! encode an option block given a DOI + sensitivity level, and
-//! parse one out of a candidate options buffer. The Bat_OS IP
+//! parse one out of a candidate options buffer. The Sphragis IP
 //! stack today is v4-only — wiring CALIPSO into a `send6` /
 //! `handle6` mirror of `ip.rs` waits on v6 landing in tree.
 //!
@@ -33,10 +33,10 @@
 /// IPv6 Hop-by-Hop option type for CALIPSO. RFC 5570 §5.1.
 pub const CALIPSO_OPT_TYPE: u8 = 0x07;
 
-/// Bat_OS DOI. We pick a private value (same byte string as our
-/// CIPSO DOI so a single trusted-Bat_OS-network policy applies to
+/// Sphragis DOI. We pick a private value (same byte string as our
+/// CIPSO DOI so a single trusted-Sphragis-network policy applies to
 /// both v4 and v6 traffic in a future mixed deployment).
-pub const CALIPSO_DOI_BATOS: u32 = 0x42_42_4F_53;
+pub const CALIPSO_DOI_SPHRAGIS: u32 = 0x42_42_4F_53;
 
 /// Smallest CALIPSO encoding (no compartments): 2 (TLV) + 8
 /// (DOI/level/cmpt-len/checksum) = 10 bytes.
@@ -49,7 +49,7 @@ pub fn encode(level: u8, out: &mut [u8]) -> usize {
     if out.len() < MIN_CALIPSO_LEN { return 0; }
     out[0] = CALIPSO_OPT_TYPE;
     out[1] = (MIN_CALIPSO_LEN - 2) as u8; // option data length = 8
-    out[2..6].copy_from_slice(&CALIPSO_DOI_BATOS.to_be_bytes());
+    out[2..6].copy_from_slice(&CALIPSO_DOI_SPHRAGIS.to_be_bytes());
     out[6] = level;
     out[7] = 0;          // compartment-length = 0 octets
     out[8] = 0; out[9] = 0; // checksum placeholder
@@ -61,7 +61,7 @@ pub fn encode(level: u8, out: &mut [u8]) -> usize {
 /// Parse a CALIPSO option from `data` (which must begin with the
 /// 2-byte TLV header — caller's responsibility to find it inside
 /// the Hop-by-Hop options header). Returns the sensitivity byte
-/// if the DOI matches Bat_OS's and the checksum verifies;
+/// if the DOI matches Sphragis's and the checksum verifies;
 /// otherwise `None`. Defensive about lengths so a crafted option
 /// can't overrun.
 pub fn parse(data: &[u8]) -> Option<u8> {
@@ -71,7 +71,7 @@ pub fn parse(data: &[u8]) -> Option<u8> {
     let total = 2 + opt_data_len;
     if total > data.len() || total < MIN_CALIPSO_LEN { return None; }
     let doi = u32::from_be_bytes([data[2], data[3], data[4], data[5]]);
-    if doi != CALIPSO_DOI_BATOS { return None; }
+    if doi != CALIPSO_DOI_SPHRAGIS { return None; }
     let level    = data[6];
     let cmpt_len = data[7] as usize * 4;
     // total includes the 2-byte TLV header. Option data is

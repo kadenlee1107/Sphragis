@@ -1,6 +1,6 @@
 # M4 Chicken Hunt — pick up here
 
-You are continuing the work to lift Bat_OS's per-cycle session
+You are continuing the work to lift Sphragis's per-cycle session
 ceiling on M4 from ~60-96 s to multi-minute. The supervisor at
 `scripts/hv/run_hv_forever.sh` already makes resets controllable;
 this doc is for the deeper fix that removes the reset itself.
@@ -160,7 +160,7 @@ enable. Could go either way; only experiment tells us.
 # 1. Use the existing dump_pmgr.py against stock m1n1:
 sg dialout -c "M1N1DEVICE=/dev/ttyACM1 \
   /usr/bin/python3 \
-  /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/dump_pmgr.py" \
+  /home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/tools/dump_pmgr.py" \
   > /tmp/pmgr_dump.txt
 # Read the output — it lists every PMGR PS (power-state) device.
 # Look for entries named "ecpu", "pcpu", "cpu_cluster",
@@ -170,7 +170,7 @@ sg dialout -c "M1N1DEVICE=/dev/ttyACM1 \
 #    associated ADT node:
 sg dialout -c "M1N1DEVICE=/dev/ttyACM1 /usr/bin/python3 -c \"
 import sys, pathlib
-sys.path.insert(0, '/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient')
+sys.path.insert(0, '/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient')
 from m1n1.setup import *
 for dev in u.adt['/arm-io/pmgr'].devices:
     if any(k in dev.name.lower() for k in ('cpu','clu','acc','pmp')):
@@ -183,7 +183,7 @@ for dev in u.adt['/arm-io/pmgr'].devices:
 cat > /tmp/probe_pcpu_wake.py <<'PY'
 import sys, pathlib, time
 sys.path.insert(0,
-  '/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient')
+  '/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient')
 from m1n1.setup import *
 
 PCPU_BASE = 0x211e00000
@@ -244,8 +244,8 @@ become an optimization for later.
 
 ```
 scripts/hv/run_hv_forever.sh         # supervisor — already shipped
-scripts/hv/batos_hv_supervisor.py    # the auto-recovery loop
-scripts/hv/batos_hv_interactive.py   # one-shot HV session driver
+scripts/hv/sphragis_hv_supervisor.py    # the auto-recovery loop
+scripts/hv/sphragis_hv_interactive.py   # one-shot HV session driver
 scripts/hv/probe_m4_watchdogs.py     # ADT walk for wdt-like nodes
 scripts/hv/probe_m4_wdt_rates.py     # WDT counter-rate probe
 scripts/hv/probe_aop_firmware.py     # /arm-io/aop subtree dump

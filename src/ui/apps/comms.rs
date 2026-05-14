@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Comms Client (8th Desktop App)
+// Sphragis — Comms Client (8th Desktop App)
 //
 // Real end-to-end encrypted peer-to-peer messaging over TCP. Wire
 // protocol matches `scripts/comms_test_server.py`:
@@ -9,9 +9,9 @@
 //      `batcave::ipc_session::build_offer`.
 //   2. Both compute X25519(my_eph_sk, peer_eph_pub) and derive
 //      directional keys via SHA-256:
-//         c2s_key = SHA-256(b"BAT_OS-COMMS-c2s-v1" || shared
+//         c2s_key = SHA-256(b"SPHRAGIS-COMMS-c2s-v1" || shared
 //                           || client_eph_pk || server_eph_pk)
-//         s2c_key = SHA-256(b"BAT_OS-COMMS-s2c-v1" || shared ...)
+//         s2c_key = SHA-256(b"SPHRAGIS-COMMS-s2c-v1" || shared ...)
 //   3. Transport frames: len(4 BE) || nonce(12) || ct || tag(16).
 //      ChaCha20-Poly1305. Separate counter per direction starting at 0.
 //
@@ -89,10 +89,10 @@ static mut PEER_PORT: u16 = 0;
 // against, and the protocol degrades to TOFU at best.
 static mut PINNED_SERVER_ID: [u8; 32] = [0; 32];
 
-const LABEL: &[u8] = b"BAT_OS-COMMS-v1";
+const LABEL: &[u8] = b"SPHRAGIS-COMMS-v1";
 const OFFER_LEN: usize = 32 + 32 + 64;
-const KEY_DIR_C2S: &[u8] = b"BAT_OS-COMMS-c2s-v1";
-const KEY_DIR_S2C: &[u8] = b"BAT_OS-COMMS-s2c-v1";
+const KEY_DIR_C2S: &[u8] = b"SPHRAGIS-COMMS-c2s-v1";
+const KEY_DIR_S2C: &[u8] = b"SPHRAGIS-COMMS-s2c-v1";
 
 /// BatFS path for our persistent per-cave Ed25519 identity. 32-byte
 /// raw seed. Persisting it across boots is what makes server-side
@@ -511,7 +511,7 @@ unsafe fn nonce_from_ctr(ctr: u64) -> [u8; 12] {
 }
 
 /// Read exactly `buf.len()` bytes from the TCP connection. Loops over
-/// recv_data because Bat_OS's blocking recv returns whatever's
+/// recv_data because Sphragis's blocking recv returns whatever's
 /// available, not a fixed length.
 fn recv_exact(buf: &mut [u8]) -> Result<(), &'static str> {
     let mut off = 0;

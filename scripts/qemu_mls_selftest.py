@@ -2,7 +2,7 @@
 """Headless smoke for `mls-selftest` — gov-grade §3.2 (Bell-LaPadula
 MLS / Mandatory Access Control).
 
-Boots Bat_OS in QEMU virt, clears the empty-passphrase auth gate,
+Boots Sphragis in QEMU virt, clears the empty-passphrase auth gate,
 runs `mls-selftest` at the shell, and asserts:
 
   - `cave::can_flow` returns the right verdict for all four
@@ -26,7 +26,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/mls-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -57,7 +57,7 @@ def main() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         c.sendline("mls-selftest")
@@ -67,14 +67,14 @@ def main() -> int:
         ], timeout=30)
         if idx == 1:
             try:
-                c.expect(rb"bat_os > ", timeout=5)
+                c.expect(rb"sphragis > ", timeout=5)
             except Exception:
                 pass
             print("[mls] FAIL — selftest reported a failure", file=sys.stderr)
             print(f"[mls] log: {LOG}", file=sys.stderr)
             return 1
 
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[mls] PASS — Bell-LaPadula lattice + BatFS no-read-up verified")
         print(f"[mls] log: {LOG}")
         return 0

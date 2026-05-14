@@ -1,4 +1,4 @@
-// Bat_OS — User-space access helpers (ROOT-2).
+// Sphragis — User-space access helpers (ROOT-2).
 //
 // These wrap the raw ldrb/strb inline asm that syscall.rs previously
 // scattered across every pointer-bearing syscall. By funneling reads

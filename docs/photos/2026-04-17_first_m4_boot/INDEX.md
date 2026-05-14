@@ -1,6 +1,6 @@
-# First Bat_OS boot on M4 — 2026-04-17
+# First Sphragis boot on M4 — 2026-04-17
 
-Phone photos of the M4 display captured during the session where Bat_OS
+Phone photos of the M4 display captured during the session where Sphragis
 first booted end-to-end on real M4 hardware via m1n1 chainload. Power
 went out before the Ubuntu session could save anything; these photos
 are the durable record of what worked.
@@ -13,7 +13,7 @@ text conflicts with what you see here, the photo is authoritative.
 
 | File | Contents |
 |---|---|
-| `IMG_7118.jpg` | Bat_OS microkernel shell rendered on M4 display. `bat_os >` prompt, keybindings, "ENCRYPTED \| OFFLINE \| FW:DENY_ALL" status bar. **Proof of full boot.** |
+| `IMG_7118.jpg` | Sphragis microkernel shell rendered on M4 display. `sphragis >` prompt, keybindings, "ENCRYPTED \| OFFLINE \| FW:DENY_ALL" status bar. **Proof of full boot.** |
 | `IMG_7141.jpg` | `[usb] DWC3 bring-up: usb-control_nodes:` — three DWC3 controllers (drd0/1/3) with SNPSID, HCSPARAMS. |
 | `IMG_7150.jpg` | XHCI bring-up output — `dwc3=OK dart=OK halt=OK reset=OK buf=OK start=OK portrst=OK`, USBSTS/PORTSC values. |
 | `IMG_7157.jpg` | `[adt-scan] input devices:` — spi2/mesa biosensor, spi4/dp855 parade bridge, all three usb-drd controllers. |

@@ -1,4 +1,4 @@
-// Minimal Abseil FunctionRef stub for V8 compilation on Bat_OS
+// Minimal Abseil FunctionRef stub for V8 compilation on Sphragis
 // Non-owning callable reference (like std::function_ref from C++26)
 
 #ifndef ABSL_FUNCTIONAL_FUNCTION_REF_H_

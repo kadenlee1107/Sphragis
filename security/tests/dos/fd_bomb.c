@@ -86,7 +86,7 @@ static void fd_bomb_epoll(void) {
         for (int i = 0; i < 256; i++) {
             struct epoll_event ev = { .events = EPOLLIN, .data.u64 = i };
             /* Linux forbids duplicate fd registration, so use dup to get
-               distinct-but-cheap fds. In Bat_OS dup slot share behavior
+               distinct-but-cheap fds. In Sphragis dup slot share behavior
                may differ — adjust if the cap trips early. */
             int t = dup(target);
             if (t < 0) break;

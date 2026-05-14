@@ -1,4 +1,4 @@
-bat_os> 
+sphragis> 
 [vuart] >>> b'help\r'
 help
   help           — list commands
@@ -15,23 +15,23 @@ help
   batfs create <name> <plaintext>
   batfs read <name>
   halt           — WFE loop
-bat_os> TTY> HV alive t=1s
+sphragis> TTY> HV alive t=1s
 
 [vuart] >>> b'rng\r'
 rng
   ID_AA64ISAR0_EL1: 0x0221100110212120
   RNDR nibble:      0x00000000
   RNDR available:   no
-  Bat_OS HW RNG:    disabled (SHA-chain only)
+  Sphragis HW RNG:    disabled (SHA-chain only)
   SHA2 ext nibble:  0x00000002
   AES ext nibble:   0x00000002
-bat_os> 
+sphragis> 
 [vuart] >>> b'rand 16\r'
 TTY> HV alive t=2s
 rand 16
   bytes: 16
   hex: d728847501b8c6ebb3ff266e755c1241
-bat_os> 
+sphragis> 
 [vuart] >>> b'cpuid\r'
 cpuid
   MIDR_EL1:   0x00000000611f0531
@@ -41,7 +41,7 @@ cpuid
   AIDR_EL1:   0x000000d168699696
   MIDR.PART:  0x00000053
   -> M4 Donan (P core)
-bat_os> TTY> HV alive t=3s
+sphragis> TTY> HV alive t=3s
 TTY> HV alive t=4s
 TTY> HV alive t=5s
 TTY> HV alive t=6s

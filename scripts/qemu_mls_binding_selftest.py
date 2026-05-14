@@ -14,7 +14,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/mls-binding-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -39,18 +39,18 @@ def main() -> int:
     c = pexpect.spawn(QEMU_ARGS[0], QEMU_ARGS[1:], timeout=120, logfile=fp, encoding=None)
     try:
         c.expect(rb"Enter passphrase", timeout=60); c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90); time.sleep(0.5)
+        c.expect(rb"sphragis > ", timeout=90); time.sleep(0.5)
         c.sendline("mls-binding-selftest")
         idx = c.expect([
             rb"\xe2\x9c\x93 MLS labels AEAD-bound: tamper on sens OR integ rejected at decrypt",
             rb"\xe2\x9c\x97 FAIL: \S+",
         ], timeout=30)
         if idx == 1:
-            try: c.expect(rb"bat_os > ", timeout=5)
+            try: c.expect(rb"sphragis > ", timeout=5)
             except Exception: pass
             print("[mls-bind] FAIL — selftest reported a failure", file=sys.stderr)
             print(f"[mls-bind] log: {LOG}", file=sys.stderr); return 1
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[mls-bind] PASS — MLS labels are AEAD-bound; tamper rejected at decrypt")
         print(f"[mls-bind] log: {LOG}"); return 0
     except pexpect.TIMEOUT:

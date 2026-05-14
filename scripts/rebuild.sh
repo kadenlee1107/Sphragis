@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bat_OS — build the Apple Silicon binary.
+# Sphragis — build the Apple Silicon binary.
 #
 # Works on both Mac and Ubuntu. Runs `cargo build --release` with
 # the Apple linker script, then objcopy to raw binary.
@@ -26,15 +26,15 @@ fi
 
 # --qemu: build for QEMU virt (for Layer A/B/C HVF testing)
 if [ "${1:-}" = "--qemu" ]; then
-    log "Building QEMU-virt bat_os (default linker.ld)"
+    log "Building QEMU-virt sphragis (default linker.ld)"
     cargo build --release
-    SIZE=$(du -h target/aarch64-unknown-none/release/bat_os | cut -f1)
-    log "Built: target/aarch64-unknown-none/release/bat_os ($SIZE)"
+    SIZE=$(du -h target/aarch64-unknown-none/release/sphragis | cut -f1)
+    log "Built: target/aarch64-unknown-none/release/sphragis ($SIZE)"
     exit 0
 fi
 
 # Default: Apple Silicon build.
-log "Building bat_os_apple.bin (linker_apple.ld)"
+log "Building sphragis_apple.bin (linker_apple.ld)"
 RUSTFLAGS="-C link-arg=-Tlinker_apple.ld" cargo build --release
 
 log "Producing raw binary"
@@ -50,15 +50,15 @@ else
 fi
 
 $OBJCOPY --strip-all -O binary \
-    target/aarch64-unknown-none/release/bat_os \
-    target/bat_os_apple.bin
+    target/aarch64-unknown-none/release/sphragis \
+    target/sphragis_apple.bin
 
-SIZE=$(du -h target/bat_os_apple.bin | cut -f1)
-log "Built: target/bat_os_apple.bin ($SIZE)"
+SIZE=$(du -h target/sphragis_apple.bin | cut -f1)
+log "Built: target/sphragis_apple.bin ($SIZE)"
 
 # Sanity check: first 4 bytes should be 0xaa0003f4 (mov x20, x0).
 # If they're not, the boot-stub collision is back.
-FIRST=$(xxd -l 4 -p target/bat_os_apple.bin)
+FIRST=$(xxd -l 4 -p target/sphragis_apple.bin)
 if [ "$FIRST" = "f40300aa" ]; then
     log "Entry check: OK (starts with mov x20, x0 — _apple_start at offset 0)"
 else

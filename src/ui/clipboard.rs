@@ -1,4 +1,4 @@
-//! Bat_OS — system clipboard.
+//! Sphragis — system clipboard.
 //!
 //! Single-slot byte buffer with set/get/clear. The shell uses it for
 //! Ctrl+V (paste) and Ctrl+Y (yank current line). Commands that need

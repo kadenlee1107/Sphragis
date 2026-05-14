@@ -223,30 +223,30 @@ Fetching ADT (0x00084000 bytes)...
 === STEP 7: OUTBOX poll 8 s ===
 [v3]   AOP-OB t= 0.00s IE=0x40 OB_CTRL=0xa0001
 Traceback (most recent call last):
-  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v3.py", line 403, in <module>
+  File "/home/kaden-lee/code/Sphragis/scripts/hv/probe_aop_pmgr_v3.py", line 403, in <module>
     main()
-  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v3.py", line 381, in main
+  File "/home/kaden-lee/code/Sphragis/scripts/hv/probe_aop_pmgr_v3.py", line 381, in main
     msgs = poll_outbox(p, AOP, 8.0, "AOP-OB")
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v3.py", line 224, in poll_outbox
+  File "/home/kaden-lee/code/Sphragis/scripts/hv/probe_aop_pmgr_v3.py", line 224, in poll_outbox
     oc = p.read32(base + OUTBOX_CTRL)
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 817, in read32
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 817, in read32
     return self.request(self.P_READ32, addr)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 707, in request
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 707, in request
     return self._request(opcode, *args2, **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 671, in _request
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 671, in _request
     reply = self.iface.proxyreq(req, reboot=reboot, no_reply=no_reply, pre_reply=None)
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 387, in proxyreq
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 387, in proxyreq
     return self.reply(self.REQ_PROXY)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 258, in reply
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 258, in reply
     reply += self.readfull(1)
              ^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 195, in readfull
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 195, in readfull
     block = self.dev.read(size - len(d))
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/usr/lib/python3/dist-packages/serial/serialposix.py", line 595, in read

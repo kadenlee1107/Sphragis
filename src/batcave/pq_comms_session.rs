@@ -3,7 +3,7 @@
 //! Future-mode for `apps::comms`. The classical-only handshake we
 //! ship today uses X25519 + Ed25519 (matches the Python test server
 //! exactly). This module implements the PQ-hybrid version that
-//! Bat_OS would actually want to run in production: every primitive
+//! Sphragis would actually want to run in production: every primitive
 //! is doubled with its NIST PQC counterpart, so an adversary has to
 //! break BOTH the classical curve AND the PQ lattice scheme to
 //! recover a session or forge a server identity.
@@ -22,7 +22,7 @@
 //!     PQ-secure but where one side is classical-only — the whole
 //!     point of hybrid is that BOTH halves enforce. So the wire
 //!     deployment waits until we have a real PQ peer (a second
-//!     Bat_OS instance is the obvious candidate).
+//!     Sphragis instance is the obvious candidate).
 //!   * The handshake logic itself we can validate today, via
 //!     `selftest_round_trip` below. It runs the full client+server
 //!     halves in-process and asserts both sides agree on the
@@ -51,8 +51,8 @@
 //!
 //!   KEY DERIVATION (both sides):
 //!     shared = ML-KEM-SS(32) || X25519-SS(32)  (per draft-ietf-tls-ecdhe-mlkem-04)
-//!     c2s_key = SHA-256(b"BAT_OS-PQ-COMMS-c2s-v1" || shared)
-//!     s2c_key = SHA-256(b"BAT_OS-PQ-COMMS-s2c-v1" || shared)
+//!     c2s_key = SHA-256(b"SPHRAGIS-PQ-COMMS-c2s-v1" || shared)
+//!     s2c_key = SHA-256(b"SPHRAGIS-PQ-COMMS-s2c-v1" || shared)
 //!
 //!   TRANSPORT: same as classical path —
 //!     len(4 BE) || nonce(12) || ChaCha20-Poly1305 ct+tag(16)
@@ -62,7 +62,7 @@
 
 use crate::crypto::{chacha20poly1305 as cp, pq_hybrid, pq_hybrid_sig, sha256};
 
-pub const LABEL: &[u8] = b"BAT_OS-PQ-COMMS-v1";
+pub const LABEL: &[u8] = b"SPHRAGIS-PQ-COMMS-v1";
 
 /// Per-direction key derivation. Mirrors the classical
 /// `derive_directional_keys` but takes a 64-byte hybrid shared
@@ -71,12 +71,12 @@ pub fn derive_directional_keys(shared: &[u8; pq_hybrid::SHARED_LEN])
     -> ([u8; 32], [u8; 32])
 {
     let mut c2s_in = [0u8; 22 + pq_hybrid::SHARED_LEN];
-    c2s_in[..22].copy_from_slice(b"BAT_OS-PQ-COMMS-c2s-v1");
+    c2s_in[..22].copy_from_slice(b"SPHRAGIS-PQ-COMMS-c2s-v1");
     c2s_in[22..].copy_from_slice(shared);
     let c2s = sha256::hash(&c2s_in);
 
     let mut s2c_in = [0u8; 22 + pq_hybrid::SHARED_LEN];
-    s2c_in[..22].copy_from_slice(b"BAT_OS-PQ-COMMS-s2c-v1");
+    s2c_in[..22].copy_from_slice(b"SPHRAGIS-PQ-COMMS-s2c-v1");
     s2c_in[22..].copy_from_slice(shared);
     let s2c = sha256::hash(&s2c_in);
 

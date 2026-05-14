@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Red-team vs Bat_OS — cave_policy as the defender.
+"""Red-team vs Sphragis — cave_policy as the defender.
 
 Scenario: a BatCave named `kali` got compromised. The attacker now
 has shell inside it and is trying every standard Kali-toolkit move
 to pivot out to the internet. The cave's allowlist permits exactly
 one destination — example.com:443 (so the user's "normal" traffic
 keeps working). Everything else — C2 callbacks, scans, tunnels,
-exfil — must get dropped at Bat_OS's nic 1 classifier.
+exfil — must get dropped at Sphragis's nic 1 classifier.
 
 Attack vectors (all at the packet level — this is EXACTLY what real
 Kali tools put on the wire):
@@ -41,12 +41,12 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT   = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 STAMP  = datetime.now().strftime('%Y%m%d-%H%M%S')
 LOG    = ROOT / f"logs/qemu-tests/redteam-{STAMP}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 ANSI   = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 # ─── Frame building (identical output to nmap -sS / msfvenom / etc) ─────────
 
@@ -236,14 +236,14 @@ def main():
             time.sleep(0.2)
         if not (h["conn"] and v["conn"]): raise RuntimeError("nic sockets")
 
-        banner("BAT_OS — Red Team vs cave_policy", char="═")
+        banner("SPHRAGIS — Red Team vs cave_policy", char="═")
         print()
         print("Scenario:")
         print("  A BatCave called 'kali' has been compromised. The attacker")
         print("  is inside and has full shell access. They will now try")
         print("  every standard post-exploitation move to pivot out.")
         print()
-        print("Bat_OS policy for cave 'kali':")
+        print("Sphragis policy for cave 'kali':")
         print("  allow tcp  93.184.216.34:443   (example.com HTTPS — operator's work)")
         print("  deny  everything else           (default-deny in cave_policy)")
 
@@ -355,7 +355,7 @@ def main():
         # can't dodge cave_policy by using the one allowed host as
         # a tunnel, because the shaper will cap burst rate.
         section("Attack #7: Exfil burst through the allowed channel (cave_shaper)")
-        print("   Clever attacker: 'Bat_OS allows example.com:443 — I'll just")
+        print("   Clever attacker: 'Sphragis allows example.com:443 — I'll just")
         print("   pump 100 SYNs at it and ride that one legit flow.'")
         print("   → token bucket (cpol-rate) caps burst to 10, refills slowly.")
         run_cmd(c, "cpol-rate kali 5 10")
@@ -429,7 +429,7 @@ def main():
             kali_mac, nic1_mac, cave_ip, ip_int("93.184.216.34"),
             56000, 443, flags=0x02))
         print("   sent 1 legitimate SYN to 93.184.216.34:443")
-        # Give Bat_OS's main-loop auto-pump several ticks to classify +
+        # Give Sphragis's main-loop auto-pump several ticks to classify +
         # forward. We keep recv_frame going until something arrives on
         # nic 0 matching our target, or we time out.
         time.sleep(1.0)
@@ -476,7 +476,7 @@ def main():
         bullet("allow" if allow >= 1 else "drop",
                f"example.com:443   (kernel allow={allow}, {wire_note})")
         print()
-        print("Bat_OS kernel counters:")
+        print("Sphragis kernel counters:")
         print(f"  drop-policy:  {drop_policy}   (expected ≥ {total_policy_attacks} — off-allowlist traffic)")
         print(f"  drop-rate:    {drop_rate}    (expected ≥ {rate_attack_packets - 40} — aggregate + per-flow shaper)")
         print(f"  drop-sni:     {drop_sni}     (expected ≥ {sni_attack_packets} — TLS domain-fronting)")

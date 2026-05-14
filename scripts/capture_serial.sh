@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Bat_OS — passively capture m1n1 / Bat_OS serial output to a log.
+# Sphragis — passively capture m1n1 / Sphragis serial output to a log.
 #
 # Use this when you want to just WATCH what's happening over serial
-# (e.g. after Bat_OS has already been chainloaded and you want to see
+# (e.g. after Sphragis has already been chainloaded and you want to see
 # its subsequent output), without running the proxy protocol.
 #
 # Note: chainload.sh already tees its own output to logs/. This script

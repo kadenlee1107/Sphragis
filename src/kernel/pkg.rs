@@ -1,11 +1,11 @@
-//! Bat_OS package manager.
+//! Sphragis package manager.
 //!
 //! Gap-audit item 033. Installs signed BPKG bundles into BatFS,
 //! tracks what's installed, lets the operator remove packages.
 //!
 //! Trust model: every bundle is signed with the release-engineer
 //! Ed25519 key whose public half is baked into the kernel at build
-//! time (`BAT_OS_RELEASE_PUBKEY`). An unsigned-bundle install path
+//! time (`SPHRAGIS_RELEASE_PUBKEY`). An unsigned-bundle install path
 //! does not exist — there is no `--allow-untrusted` flag. The
 //! kernel refuses to run without a baked pubkey (same posture as
 //! `release-verify`).
@@ -77,7 +77,7 @@ impl PkgError {
             PkgError::BadFormat        => "bundle structure invalid",
             PkgError::Truncated        => "bundle truncated",
             PkgError::SizeOverflow     => "bundle exceeds size limit",
-            PkgError::NoPubkey         => "no BAT_OS_RELEASE_PUBKEY baked at build time",
+            PkgError::NoPubkey         => "no SPHRAGIS_RELEASE_PUBKEY baked at build time",
             PkgError::SigVerifyFailed  => "signature does not verify",
             PkgError::Sha256Mismatch   => "per-file sha256 mismatch (tampered payload)",
             PkgError::AlreadyInstalled => "package already installed (remove first)",

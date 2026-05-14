@@ -16,7 +16,7 @@ This script:
   8. If still silent, send Hello OURSELVES + ring (try reverse protocol)
   9. Process Hello → HelloAck → EPMap(s) → Ack → SetAPPower → boot complete
 
-If boot completes, launch BATOS_HV_MTP_BRIDGE_TO_VUART path.
+If boot completes, launch SPHRAGIS_HV_MTP_BRIDGE_TO_VUART path.
 """
 import os
 import pathlib

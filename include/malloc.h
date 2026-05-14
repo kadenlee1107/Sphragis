@@ -1,4 +1,4 @@
-// Bat_OS — malloc.h (GNU extension header)
+// Sphragis — malloc.h (GNU extension header)
 #ifndef _MALLOC_H
 #define _MALLOC_H
 

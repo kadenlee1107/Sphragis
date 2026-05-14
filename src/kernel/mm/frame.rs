@@ -1,4 +1,4 @@
-// Bat_OS — Page Frame Allocator
+// Sphragis — Page Frame Allocator
 // Manages physical memory in 4KB pages using a bitmap.
 // Simple, predictable, no external dependencies.
 

@@ -2,10 +2,10 @@
 """3c-gap-arp: containers need ARP to resolve the caves gateway.
 
 Flow:
-  1. Boot Bat_OS, two NICs; nic 1 = socket peer at :25562.
+  1. Boot Sphragis, two NICs; nic 1 = socket peer at :25562.
   2. Python sends an ARP request: "who has 192.168.77.1? tell
      192.168.77.10" from a kali-like MAC.
-  3. Bat_OS's main-loop tick() pulls the frame, `try_handle_arp`
+  3. Sphragis's main-loop tick() pulls the frame, `try_handle_arp`
      recognises the request for the gateway, builds a reply with
      nic 1's MAC as sender-HW.
   4. Python reads the reply and verifies:
@@ -34,13 +34,13 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 STAMP = datetime.now().strftime('%Y%m%d-%H%M%S')
 LOG = ROOT / f"logs/qemu-tests/arp-{STAMP}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 def build_arp_request(sender_mac, sender_ip, target_ip):
     """Standard ARP-who-has on Ethernet/IPv4. Target HW is zero."""

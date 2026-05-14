@@ -1,14 +1,14 @@
 /*
- * Bat_OS — png.h stub for NetSurf
- * Bat_OS has its own PNG decoder; this satisfies #include only.
+ * Sphragis — png.h stub for NetSurf
+ * Sphragis has its own PNG decoder; this satisfies #include only.
  */
-#ifndef _BATOS_PNG_H
-#define _BATOS_PNG_H
+#ifndef _SPHRAGIS_PNG_H
+#define _SPHRAGIS_PNG_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-#define PNG_LIBPNG_VER_STRING "1.6.0-batos-stub"
+#define PNG_LIBPNG_VER_STRING "1.6.0-sphragis-stub"
 #define PNG_LIBPNG_VER        10600
 
 /* Color type masks */
@@ -119,4 +119,4 @@ void        png_set_progressive_read_fn(png_structp png_ptr, void *progressive_p
 void        png_process_data(png_structp png_ptr, png_infop info_ptr,
                               png_bytep buffer, png_size_t buffer_size);
 
-#endif /* _BATOS_PNG_H */
+#endif /* _SPHRAGIS_PNG_H */

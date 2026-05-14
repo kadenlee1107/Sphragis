@@ -1,4 +1,4 @@
-// Bat_OS — Priority Preemptive Scheduler
+// Sphragis — Priority Preemptive Scheduler
 // Lower priority number = higher priority.
 // Timer tick causes reschedule — highest priority ready task runs.
 // Security services always preempt non-critical tasks.

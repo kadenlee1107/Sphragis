@@ -1,4 +1,4 @@
-// Three Bat_OS apps: DS · NM · SK
+// Three Sphragis apps: DS · NM · SK
 // Each is a 1280×748 pane intended to sit inside the desktop chrome.
 
 // — DS · DASHBOARD —————————————————————————————————————————
@@ -42,7 +42,7 @@ const DashboardPane = ({ narrow = false }) => {
         }}>
           <div style={{ fontSize: 13, lineHeight: "20px", whiteSpace: "pre" }}>
             <div style={{ color: appColors.ink, letterSpacing: 1 }}>
-              Bat_OS  <span style={{ color: appColors.cyan }}>v0.5.0-DEV</span>
+              Sphragis  <span style={{ color: appColors.cyan }}>v0.5.0-DEV</span>
             </div>
             <div style={{ color: appColors.mid }}>
               Bare-metal AArch64 microkernel · zero external deps
@@ -128,7 +128,7 @@ const NetMonPane = ({ narrow = false }) => {
             display: "grid", gridTemplateColumns: "repeat(3, 1fr)",
             gap: 16, padding: 12, flex: 1,
           }}>
-            <FlowBox label="APP"      sub="bat_os shell"        state="ok" />
+            <FlowBox label="APP"      sub="sphragis shell"        state="ok" />
             <FlowBox label="TLS 1.3"  sub="LOCKDOWN"            state="ok" />
             <FlowBox label="PIN VRFY" sub="3 PINS · 0 MISMATCH" state="ok" />
             <FlowBox label="SOP"      sub="origin allowlist"    state="ok" />
@@ -137,7 +137,7 @@ const NetMonPane = ({ narrow = false }) => {
           </div>
         ) : (
           <Flow steps={[
-            { label: "APP",      sub: "bat_os shell",         state: "ok" },
+            { label: "APP",      sub: "sphragis shell",         state: "ok" },
             { label: "TLS 1.3",  sub: "LOCKDOWN",             state: "ok" },
             { label: "PIN VRFY", sub: "3 PINS · 0 MISMATCH",  state: "ok" },
             { label: "SOP",      sub: "origin allowlist",     state: "ok" },

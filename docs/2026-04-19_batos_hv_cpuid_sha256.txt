@@ -1,4 +1,4 @@
-bat_os> 
+sphragis> 
 [vuart] >>> b'help\r'
 help
   help           — list commands
@@ -12,7 +12,7 @@ help
   batfs create <name> <plaintext>
   batfs read <name>
   halt           — WFE loop
-bat_os> 
+sphragis> 
 [vuart] >>> b'cpuid\r'
 cpuid
   MIDR_EL1:   0x00000000611f0531
@@ -22,16 +22,16 @@ cpuid
   AIDR_EL1:   0x000000d168699696
   MIDR.PART:  0x00000053
   -> M4 Donan (P core)
-bat_os> 
-[vuart] >>> b'sha256 bat_os_m4_hypervisor\r'
-sha256 bat_os_m4_hypervisor
-  input: bat_os_m4_hypervisor
+sphragis> 
+[vuart] >>> b'sha256 sphragis_m4_hypervisor\r'
+sha256 sphragis_m4_hypervisor
+  input: sphragis_m4_hypervisor
   bytes: 20
   sha256: 625342c6436aa8a9f96bd5d9667337df435bbc8c04afd4afa9e48ce11952cac0
-bat_os> 
+sphragis> 
 [vuart] >>> b'sha256 hello\r'
 sha256 hello
   input: hello
   bytes: 5
   sha256: 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
-bat_os> 
+sphragis> 

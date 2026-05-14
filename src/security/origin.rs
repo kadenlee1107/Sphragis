@@ -1,4 +1,4 @@
-// Bat_OS — origin tracker + same-origin policy enforcement.
+// Sphragis — origin tracker + same-origin policy enforcement.
 //
 // Sprint 2.2 / . The renderer fetches the main HTML page,
 // then walks the DOM looking for sub-resources to fetch:

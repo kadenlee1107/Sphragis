@@ -1,4 +1,4 @@
-// Bat_OS — Minimal pipe buffer pool for socketpair() and pipe2().
+// Sphragis — Minimal pipe buffer pool for socketpair() and pipe2().
 //
 // Chromium's Mojo IPC in --single-process still uses socketpair(2) as
 // the wake-up channel between its main thread and various worker

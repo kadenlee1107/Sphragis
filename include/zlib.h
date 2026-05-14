@@ -1,14 +1,14 @@
 /*
- * Bat_OS — zlib.h stub for NetSurf
- * Bat_OS has its own DEFLATE implementation; this satisfies #include only.
+ * Sphragis — zlib.h stub for NetSurf
+ * Sphragis has its own DEFLATE implementation; this satisfies #include only.
  */
-#ifndef _BATOS_ZLIB_H
-#define _BATOS_ZLIB_H
+#ifndef _SPHRAGIS_ZLIB_H
+#define _SPHRAGIS_ZLIB_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-#define ZLIB_VERSION "1.2.13-batos-stub"
+#define ZLIB_VERSION "1.2.13-sphragis-stub"
 #define ZLIB_VERNUM  0x12d0
 
 /* zlib basic types */
@@ -155,4 +155,4 @@ int           compress(unsigned char *dest, unsigned long *destLen,
 int           uncompress(unsigned char *dest, unsigned long *destLen,
                          const unsigned char *source, unsigned long sourceLen);
 
-#endif /* _BATOS_ZLIB_H */
+#endif /* _SPHRAGIS_ZLIB_H */

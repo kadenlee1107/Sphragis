@@ -5,7 +5,7 @@ topic: security · timing
 
 # Constant-cost abort discipline
 
-> The single most-cited invariant in the Bat_OS codebase. It came out of one specific incident, V6-SIDE-002, but it has shaped the shape of every check that's been added to the verifier since. This note is the pattern, the incident, and the ongoing discipline.
+> The single most-cited invariant in the Sphragis codebase. It came out of one specific incident, V6-SIDE-002, but it has shaped the shape of every check that's been added to the verifier since. This note is the pattern, the incident, and the ongoing discipline.
 
 ## The pattern
 

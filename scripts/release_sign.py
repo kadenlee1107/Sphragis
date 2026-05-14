@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Release signing helper for Bat_OS.
+"""Release signing helper for Sphragis.
 
 The kernel embeds a release-engineer Ed25519 pubkey at build time
-(via `BAT_OS_RELEASE_PUBKEY=<hex>`) and the `release-verify` shell
+(via `SPHRAGIS_RELEASE_PUBKEY=<hex>`) and the `release-verify` shell
 command checks signatures against it. This script generates the
 keypair and signs files with the secret half.
 
@@ -13,10 +13,10 @@ Usage:
         → reads ./release.key, prints (hash, sig) hex pair
 
 Bake the pubkey in the kernel build:
-    export BAT_OS_RELEASE_PUBKEY=<pubkey-hex>
+    export SPHRAGIS_RELEASE_PUBKEY=<pubkey-hex>
     cargo build --release ...
 
-Verify on Bat_OS (shell):
+Verify on Sphragis (shell):
     release-verify <batfs-file> <sig-hex>
 """
 from __future__ import annotations
@@ -66,7 +66,7 @@ def keygen() -> int:
     print(f"[ok] wrote {KEY_PATH} (0600)")
     print(f"[ok] pubkey: {pub_hex(sk)}")
     print(f"     bake it into the kernel:")
-    print(f"     export BAT_OS_RELEASE_PUBKEY={pub_hex(sk)}")
+    print(f"     export SPHRAGIS_RELEASE_PUBKEY={pub_hex(sk)}")
     print(f"     cargo build --release ...")
     return 0
 
@@ -85,7 +85,7 @@ def sign(path: str) -> int:
     print(f"[ok] sha-256: {sha256}")
     print(f"[ok] sig:     {sig.hex()}")
     print(f"     pubkey:  {pub_hex(sk)}")
-    print(f"     verify on Bat_OS:")
+    print(f"     verify on Sphragis:")
     print(f"       release-verify <batfs-filename> {sig.hex()}")
     return 0
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 5/6 — PQ hybrid self-test live from Bat_OS shell."""
+"""Phase 5/6 — PQ hybrid self-test live from Sphragis shell."""
 import pexpect
 import re
 import time
@@ -7,12 +7,12 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT   = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG    = ROOT / f"logs/qemu-tests/pq-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 def main():
     fp = open(LOG, "wb")
@@ -29,14 +29,14 @@ def main():
     c.expect(PROMPT, timeout=30)
     print("[qemu] shell ready\n")
 
-    print("bat_os > pq-selftest")
+    print("sphragis > pq-selftest")
     c.sendline(b"pq-selftest")
     c.expect(PROMPT, timeout=30)
     out = ANSI.sub(b"", c.before or b"").decode("utf-8", "replace")
     for line in out.splitlines():
         s = line.rstrip()
         if not s.strip(): continue
-        if s.strip().startswith(("[docker]", "[tcp]", "bat_os >", "pq-selftest", "[shell]")): continue
+        if s.strip().startswith(("[docker]", "[tcp]", "sphragis >", "pq-selftest", "[shell]")): continue
         # Dedup doubled-letter echo cosmetic
         d = sum(1 for i in range(0, len(s)-1, 2) if s[i].isalpha() and s[i] == s[i+1])
         if d*2 > len(s)*0.5:

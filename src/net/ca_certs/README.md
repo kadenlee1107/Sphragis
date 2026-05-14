@@ -1,6 +1,6 @@
-# Bat_OS embedded CA roots
+# Sphragis embedded CA roots
 
-Curated DER-encoded root certs that Bat_OS's `x509::TRUST_STORE`
+Curated DER-encoded root certs that Sphragis's `x509::TRUST_STORE`
 ships with as of STUMP #139. Each file is the raw DER bytes of a
 self-signed root CA certificate fetched from the CA's official
 publication endpoint.

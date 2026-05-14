@@ -1,4 +1,4 @@
-// Bat_OS lock screen — single artboard renderer, accepts a `state` prop.
+// Sphragis lock screen — single artboard renderer, accepts a `state` prop.
 // state: "idle" | "typing" | "denied"
 
 const lockColors = {

@@ -1,9 +1,9 @@
 /*
- * Bat_OS — librosprite.h stub for NetSurf
- * RISC OS sprite format — not applicable to Bat_OS.
+ * Sphragis — librosprite.h stub for NetSurf
+ * RISC OS sprite format — not applicable to Sphragis.
  */
-#ifndef _BATOS_LIBROSPRITE_H
-#define _BATOS_LIBROSPRITE_H
+#ifndef _SPHRAGIS_LIBROSPRITE_H
+#define _SPHRAGIS_LIBROSPRITE_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -40,4 +40,4 @@ void           rosprite_destroy_mem_context(void *ctx);
 void           rosprite_destroy_area(rosprite_area *area);
 
 typedef int rosprite_mem_reader;
-#endif /* _BATOS_LIBROSPRITE_H */
+#endif /* _SPHRAGIS_LIBROSPRITE_H */

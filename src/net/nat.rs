@@ -1,10 +1,10 @@
 //! Followup 3c-nat: kernel-side NAT + packet-layer cave_policy gate.
 //!
-//! This module is what turns Bat_OS's per-cave policy from a
+//! This module is what turns Sphragis's per-cave policy from a
 //! connect-time check at the daemon proxy into a per-packet check in
 //! the kernel. Containers on the caves segment send Ethernet frames
 //! that arrive on nic 1 (virtio-net, from `-netdev vmnet-host` or
-//! `-netdev socket`); Bat_OS parses each frame, looks up which cave
+//! `-netdev socket`); Sphragis parses each frame, looks up which cave
 //! owns the source IP, consults `net::cave_policy`, and either drops
 //! the frame or forwards it out nic 0 (slirp path to the host).
 //!
@@ -52,7 +52,7 @@ static ICMP_ECHO_DELIVERED: AtomicU32 = AtomicU32::new(0);
 /// whose flow they refer to.
 static ICMP_ERROR_DELIVERED: AtomicU32 = AtomicU32::new(0);
 /// ICMP Redirect frames we dropped on the nic 0 path. Caves route
-/// through Bat_OS by design; a redirect would tell them to ARP a
+/// through Sphragis by design; a redirect would tell them to ARP a
 /// gateway we don't control, breaking the policy boundary.
 static ICMP_REDIRECT_DROPPED: AtomicU32 = AtomicU32::new(0);
 /// ICMP Source Quench drops. The type is deprecated per RFC 6633
@@ -89,7 +89,7 @@ static FRAG_REASSEMBLED: AtomicU32 = AtomicU32::new(0);
 /// Fragment contexts evicted without completing (TTL expired).
 static FRAG_TIMEOUT: AtomicU32 = AtomicU32::new(0);
 
-/// IPv4 address Bat_OS advertises as the caves-side gateway. Used in
+/// IPv4 address Sphragis advertises as the caves-side gateway. Used in
 /// ARP replies and as the default source when we originate traffic on
 /// nic 1 (e.g. ICMP time-exceeded, not wired yet).
 pub const CAVES_GATEWAY_IP: u32 = 0xC0A8_4D01; // 192.168.77.1
@@ -1438,7 +1438,7 @@ pub const ICMP_TYPE_PARAMETER_PROBLEM: u8 = 12;
 /// ICMP types we explicitly DROP rather than forward:
 ///   4  = Source Quench (deprecated per RFC 6633, 2012)
 ///   5  = Redirect (routers telling senders to use a different gateway).
-///         Caves route through Bat_OS by construction — honouring
+///         Caves route through Sphragis by construction — honouring
 ///         upstream redirects would subvert our policy.
 pub const ICMP_TYPE_SOURCE_QUENCH:    u8 = 4;
 pub const ICMP_TYPE_REDIRECT:         u8 = 5;

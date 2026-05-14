@@ -21,7 +21,7 @@ REPO_ROOT="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel 2>/dev/null)"
 }
 HOOKS_DIR="$REPO_ROOT/.git/hooks"
 SYNC_SCRIPT="scripts/sync_obsidian.py"
-MARKER="# bat_os/obsidian-sync"
+MARKER="# sphragis/obsidian-sync"
 
 mkdir -p "$HOOKS_DIR"
 
@@ -39,7 +39,7 @@ write_hook() {
     cat > "$path" <<EOF
 #!/usr/bin/env bash
 $MARKER
-# Auto-installed by scripts/install_hooks.sh — regenerates the BAT_OS_VAULT
+# Auto-installed by scripts/install_hooks.sh — regenerates the SPHRAGIS_VAULT
 # Obsidian vault after a $name event. Idempotent + only writes changed notes.
 
 # Don't run if we're in the middle of a rebase / cherry-pick / etc.

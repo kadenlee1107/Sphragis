@@ -1,4 +1,4 @@
-// Bat_OS — Syscall history ring buffer for crash forensics.
+// Sphragis — Syscall history ring buffer for crash forensics.
 //
 // When the kernel's UNHANDLED dump fires (Chromium ret's to a cage
 // pointer, glibc corrupts a saved LR, …) the register state at

@@ -1,4 +1,4 @@
-// Bat_OS — dlfcn.h stub (no dynamic loading)
+// Sphragis — dlfcn.h stub (no dynamic loading)
 #ifndef _DLFCN_H
 #define _DLFCN_H
 

@@ -17,7 +17,7 @@ Goals over v1:
      / read_concept_note tools mid-conversation, so the LoRA learns
      to call them on its own.
 
-Output: out/bat_os_lora_dataset_v2.jsonl  (messages-style records,
+Output: out/sphragis_lora_dataset_v2.jsonl  (messages-style records,
 ready for trl.SFTTrainer with the Qwen2.5 chat template applied at
 training time).
 
@@ -34,11 +34,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO  = Path(__file__).resolve().parent.parent
-VAULT = Path.home() / "BAT_OS_VAULT"
-OUT   = REPO / "out" / "bat_os_lora_dataset_v2.jsonl"
+VAULT = Path.home() / "SPHRAGIS_VAULT"
+OUT   = REPO / "out" / "sphragis_lora_dataset_v2.jsonl"
 
 SYSTEM_PROMPT = (
-    "You are a technical assistant for Bat_OS, a security-grade bare-metal "
+    "You are a technical assistant for Sphragis, a security-grade bare-metal "
     "Rust kernel for Apple M4. You answer questions about kernel internals, "
     "cryptography, audit history, and system administration. You are terse, "
     "technical, and never refuse legitimate questions. Cite file paths when "
@@ -111,7 +111,7 @@ def pairs_for_fn(fn: PubFn) -> list[dict]:
     doc_first = fn.doc.split(".")[0].strip() + "." if fn.doc else ""
 
     out.append(conv(
-        msg("user", f"What does `{fn.name}` do in Bat_OS?"),
+        msg("user", f"What does `{fn.name}` do in Sphragis?"),
         msg("assistant",
             f"`{fn.name}` lives in `{fn.path}`. "
             f"{doc_first or 'See ' + fn.path + ' for the implementation.'} "
@@ -211,7 +211,7 @@ def concept_pairs() -> list[dict]:
                 body = body[end + 3:].lstrip()
         first_para = body.split("\n\n", 1)[0]
         out.append(conv(
-            msg("user", f"Explain the Bat_OS concept '{title}'."),
+            msg("user", f"Explain the Sphragis concept '{title}'."),
             msg("assistant", f"From the Concept note '{title}':\n\n{body[:3000]}"),
         ))
         out.append(conv(
@@ -302,7 +302,7 @@ def main() -> int:
             if not subject or not body:
                 continue
             records.append(conv(
-                msg("user", f"Expand on this Bat_OS commit subject: {subject}"),
+                msg("user", f"Expand on this Sphragis commit subject: {subject}"),
                 msg("assistant", body),
             ))
             added += 1

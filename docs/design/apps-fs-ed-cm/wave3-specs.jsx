@@ -42,7 +42,7 @@ const Wave3Specs = () => (
       fontSize: 11, letterSpacing: 3, color: w3Colors.cyan,
       textTransform: "uppercase", marginBottom: 8,
     }}>
-      [spec] bat_os · fs · ed · cm · v0.5.0-dev
+      [spec] sphragis · fs · ed · cm · v0.5.0-dev
     </div>
     <div style={{ fontSize: 24, letterSpacing: 2, marginBottom: 4 }}>
       Implementation reference (wave 3)

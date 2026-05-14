@@ -1,9 +1,9 @@
 /*
- * Bat_OS — sys/socket.h stub for NetSurf
+ * Sphragis — sys/socket.h stub for NetSurf
  * BSD-style socket declarations.
  */
-#ifndef _BATOS_SYS_SOCKET_H
-#define _BATOS_SYS_SOCKET_H
+#ifndef _SPHRAGIS_SYS_SOCKET_H
+#define _SPHRAGIS_SYS_SOCKET_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -121,4 +121,4 @@ int    shutdown(int sockfd, int how);
 int    getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 int    getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 
-#endif /* _BATOS_SYS_SOCKET_H */
+#endif /* _SPHRAGIS_SYS_SOCKET_H */

@@ -6,12 +6,12 @@
 
 ## Why this exists
 
-A second AI evaluated Bat_OS's network stack and pitched a full
+A second AI evaluated Sphragis's network stack and pitched a full
 Qubes-OS-style architecture: Type-1 hypervisor underneath, each
 network layer in its own VM (`sys-net`, `sys-wireguard`,
 `sys-whonix`), hardware-IOMMU-isolated. The diagnosis was right —
 *today the network stack is monolithic inside the kernel* — but the
-prescription was wrong for Bat_OS's premise:
+prescription was wrong for Sphragis's premise:
 
 * **Qubes requires Xen-class hypervisor underneath.** No public Xen
   port to Apple M4. Writing our own Type-1 hypervisor is months of
@@ -20,7 +20,7 @@ prescription was wrong for Bat_OS's premise:
 * **N per-domain kernels means N kernel attack surfaces** instead
   of one well-audited microkernel.
 
-Bat_OS already has the right structural primitives — BatCaves are a
+Sphragis already has the right structural primitives — BatCaves are a
 microkernel-process-with-isolation, the same abstraction Qubes
 domains provide via a hypervisor. The fix is to *use* that
 abstraction for the network stack: every sensitive piece of
@@ -212,7 +212,7 @@ When Arcs 1-3 land:
   address space (i.e. an exploit that gets ring-0 privilege itself,
   not just compromise within a single cave's L1). Real Qubes
   defends against that via the hypervisor; we don't. The mitigation
-  is the same as Bat_OS's existing posture: keep the kernel small,
+  is the same as Sphragis's existing posture: keep the kernel small,
   audit it hard, defense-in-depth via cap isolation.
 * This doesn't fix DMA attacks until we put each NIC behind its
   own DART (Apple's IOMMU). M4 DART support is partial in tree;

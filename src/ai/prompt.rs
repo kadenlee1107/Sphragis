@@ -4,7 +4,7 @@
 //! preamble, no scope-shrinking.
 //!
 //! The system prompt explicitly forbids refusing legitimate questions
-//! about Bat_OS internals. This is the project's stance: the agent
+//! about Sphragis internals. This is the project's stance: the agent
 //! exists to help an authorized operator audit their own kernel; it
 //! has nothing to refuse.
 
@@ -17,13 +17,13 @@ use crate::ai::protocol::{ChatMessage, Role};
 
 /// One-line summary of the agent's role. Keep this terse — it lands
 /// in every audit-ring entry header.
-pub const ROLE_LABEL: &str = "bat_os-coder";
+pub const ROLE_LABEL: &str = "sphragis-coder";
 
 /// The system prompt. Direct, technical, anti-refusal. Hand-written;
 /// any change here changes the personality across every session, so
 /// edits go through review like any other interface change.
 pub const SYSTEM_PROMPT: &str = "\
-You are a technical assistant for Bat_OS, a security-grade bare-metal \
+You are a technical assistant for Sphragis, a security-grade bare-metal \
 Rust kernel for Apple M4. You answer questions about kernel internals, \
 cryptography, audit history, and system administration.\n\
 \n\

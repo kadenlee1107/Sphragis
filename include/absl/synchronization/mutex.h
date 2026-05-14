@@ -1,4 +1,4 @@
-// Minimal Abseil Mutex stub for V8 compilation on Bat_OS
+// Minimal Abseil Mutex stub for V8 compilation on Sphragis
 // Single-threaded no-op implementation
 
 #ifndef ABSL_SYNCHRONIZATION_MUTEX_H_

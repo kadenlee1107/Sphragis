@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple ANS NVMe driver (Phase 3.3c)
+// Sphragis — Apple ANS NVMe driver (Phase 3.3c)
 //
 // ANS = "Apple NVMe Storage". Apple took the standard NVMe spec and:
 //   1. Replaced the PCIe transport with MMIO behind a DART.

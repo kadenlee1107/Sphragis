@@ -1,6 +1,6 @@
 //! Followup #2: wrap `kernel::ipc` with handshake + AEAD framing.
 //!
-//! `kernel::ipc` is Bat_OS's synchronous message bus: caves send/recv
+//! `kernel::ipc` is Sphragis's synchronous message bus: caves send/recv
 //! fixed-size `Message` structs through capability-gated channels.
 //! The bytes are plaintext over the wire — any cave holding the
 //! channel's recv-cap reads them clear.
@@ -154,7 +154,7 @@ impl SecurePeer {
 ///   8. Tamper bit flip → Bob's second-channel open rejects
 pub fn selftest() -> Result<Report, &'static str> {
     let mut bus = MockIpc::new();
-    let label = b"batos-secure-ipc-followup";
+    let label = b"sphragis-secure-ipc-followup";
 
     let alice = SecurePeer::new(IpcIdentity::generate(), label);
     let bob   = SecurePeer::new(IpcIdentity::generate(), label);

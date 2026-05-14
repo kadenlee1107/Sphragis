@@ -1,4 +1,4 @@
-// Bat_OS — semaphore.h stub
+// Sphragis — semaphore.h stub
 #ifndef _SEMAPHORE_H
 #define _SEMAPHORE_H
 

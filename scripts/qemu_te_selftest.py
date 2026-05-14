@@ -10,7 +10,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/te-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -35,18 +35,18 @@ def main() -> int:
     c = pexpect.spawn(QEMU_ARGS[0], QEMU_ARGS[1:], timeout=120, logfile=fp, encoding=None)
     try:
         c.expect(rb"Enter passphrase", timeout=60); c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90); time.sleep(0.5)
+        c.expect(rb"sphragis > ", timeout=90); time.sleep(0.5)
         c.sendline("te-selftest")
         idx = c.expect([
             rb"\xe2\x9c\x93 type enforcement: default-deny \+ allow/remove round trip verified",
             rb"\xe2\x9c\x97 FAIL: \S+",
         ], timeout=30)
         if idx == 1:
-            try: c.expect(rb"bat_os > ", timeout=5)
+            try: c.expect(rb"sphragis > ", timeout=5)
             except Exception: pass
             print("[te] FAIL — selftest reported a failure", file=sys.stderr)
             print(f"[te] log: {LOG}", file=sys.stderr); return 1
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[te] PASS — type-enforcement default-deny + add/remove verified")
         print(f"[te] log: {LOG}"); return 0
     except pexpect.TIMEOUT:

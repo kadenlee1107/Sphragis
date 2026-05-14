@@ -2,7 +2,7 @@
 """virtio-blk round-trip test.
 
 Creates a tiny raw disk image, attaches it to QEMU as virtio-blk,
-boots Bat_OS, drives `blk-selftest` which writes a pattern to
+boots Sphragis, drives `blk-selftest` which writes a pattern to
 sector 42 then reads it back.
 """
 import os
@@ -16,14 +16,14 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = ROOT / f"logs/qemu-tests/blk-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 def main():
     # Create a 4 MiB raw disk image (enough for sector 42 + headroom).
-    tf = tempfile.NamedTemporaryFile(prefix="batos-blk-", suffix=".img",
+    tf = tempfile.NamedTemporaryFile(prefix="sphragis-blk-", suffix=".img",
                                      delete=False)
     tf.close()
     img = tf.name
@@ -41,8 +41,8 @@ def main():
             "-device", "virtio-gpu-device", "-device", "virtio-keyboard-device",
             "-netdev", "user,id=net0", "-device", "virtio-net-device,netdev=net0",
             # virtio-blk backed by our temp image.
-            "-drive", f"file={img},if=none,format=raw,id=batosdisk",
-            "-device", "virtio-blk-device,drive=batosdisk",
+            "-drive", f"file={img},if=none,format=raw,id=sphragisdisk",
+            "-device", "virtio-blk-device,drive=sphragisdisk",
             "-serial", "mon:stdio", "-kernel", str(KERNEL)]
     fp = open(LOG, "wb")
     c = pexpect.spawn(args[0], args[1:], timeout=90, logfile=fp, encoding=None)
@@ -65,7 +65,7 @@ def main():
         idx = raw.find("BLK SELF-TEST")
         if idx >= 0:
             chunk = raw[idx:]
-            end = chunk.find("bat_os >", 40)
+            end = chunk.find("sphragis >", 40)
             print(chunk[: end if end > 0 else 1200])
     except pexpect.TIMEOUT:
         print("[blk] TIMEOUT")

@@ -143,7 +143,7 @@ Tight, deliberate — establishes the pattern with one opcode:
   * **Single-threaded contract:** one outstanding request at a
     time, guarded by `IPC_BUSY: AtomicBool`. A second caller
     spin-yields until the first finishes (in cooperative
-    single-CPU Bat_OS this races only if a client itself
+    single-CPU Sphragis this races only if a client itself
     yields between acquire and release).
 
 ### What shipped
@@ -523,7 +523,7 @@ This commit installs a probe-mode primitive so the test can
   * `mmu::probe_read_u64(va) -> Option<u64>` — new public API.
     Sets `mmu::PROBE_ACTIVE`, issues an `ldr` to `va`, returns
     `Some(value)` if it succeeds or `None` if the access faults.
-    Single-threaded contract (no nesting); Bat_OS today is
+    Single-threaded contract (no nesting); Sphragis today is
     cooperative single-CPU so the global-state implementation
     is sufficient.
   * `mmu::PROBE_ACTIVE` / `mmu::PROBE_FAULTED` (AtomicBool).
@@ -578,7 +578,7 @@ without crashing if it isn't" can call `mmu::probe_read_u64`.
 ### Known limitations
 
   * Single-threaded contract — no nested probes, no
-    concurrent probes from different CPUs. Bat_OS is
+    concurrent probes from different CPUs. Sphragis is
     cooperative single-CPU; SMP will need per-CPU
     probe state.
   * Probe-mode swallows ALL EL1 faults at the data/inst-abort
@@ -1487,10 +1487,10 @@ dormant on the default path (no task has `cave_id != 0`).
 2. **Strategy pivot — sys-* cave architecture** (this batch's main
    work, commit lands as `DESIGN_SYS_CAVES.md`).
 
-   A second AI reviewed Bat_OS's network stack and pitched a Qubes-
+   A second AI reviewed Sphragis's network stack and pitched a Qubes-
    OS-style Type-1 hypervisor architecture. The diagnosis was right
    ("today the network stack is monolithic inside the kernel") but
-   the prescription was wrong for Bat_OS — Xen/seL4 underneath
+   the prescription was wrong for Sphragis — Xen/seL4 underneath
    doubles the codebase to audit and gives up the "tiny auditable
    kernel" premise.
 
@@ -1570,7 +1570,7 @@ verifier side.
 **`src/kernel/pkg.rs`** is the kernel-side surface:
 
   * `parse_and_verify(bundle, &pubkey)` — signature FIRST against
-    the build-time-baked `BAT_OS_RELEASE_PUBKEY`, then walks the
+    the build-time-baked `SPHRAGIS_RELEASE_PUBKEY`, then walks the
     body computing per-file sha256 cross-checks against embedded
     hashes. TOCTOU-safe parse order (no body byte is trusted
     until the sig has passed).
@@ -1587,7 +1587,7 @@ verifier side.
 
 **Trust model — no unsigned path:** `parse_and_verify` takes a
 pubkey by reference; the shell supplies the build-time-pinned
-hex. When `BAT_OS_RELEASE_PUBKEY` was unset at build time, install
+hex. When `SPHRAGIS_RELEASE_PUBKEY` was unset at build time, install
 refuses to run. No `--allow-untrusted` flag, no fallback test key.
 
 ### Limitations (deferred)
@@ -1772,7 +1772,7 @@ parse `±HH:MM`, `tz utc` resets to 0.
 
   * `scripts/release_sign.py keygen|sign` — generates an Ed25519
     keypair (`./release.key`), signs files.
-  * `build.rs` reads `BAT_OS_RELEASE_PUBKEY` (64 hex chars) and
+  * `build.rs` reads `SPHRAGIS_RELEASE_PUBKEY` (64 hex chars) and
     bakes it as `const RELEASE_PUBKEY_HEX: Option<&str>`. No
     fallback test key — when env unset, the verifier refuses to
     run.
@@ -1928,7 +1928,7 @@ between our os and macos") — that fell out as a separate piece.
 
 **Mutual pinning (`comms` now mutual-auth):**
 
-  * Bat_OS gets a per-cave Ed25519 identity persisted to BatFS as
+  * Sphragis gets a per-cave Ed25519 identity persisted to BatFS as
     `comms_identity.key`. Lazy-loaded on first use, cached, wiped
     on cave switch.
   * `comms my-id` shell command — prints the cave's pubkey hex
@@ -1947,14 +1947,14 @@ between our os and macos") — that fell out as a separate piece.
     arrow up/down moves cursor, Shift+arrow extends, Enter copies
     selected rows joined by `\n` to clipboard, Esc cancels.
   * Initial cursor lands on the last *output* row, skipping bare
-    "bat_os > " prompt rows so the user doesn't accidentally copy
+    "sphragis > " prompt rows so the user doesn't accidentally copy
     the prompt.
   * Tab-switch out of SH while in select mode auto-exits select
     mode.
   * `clip yank-back [N]` shell command — copy last N scrollback
     rows without entering select mode. Quick alternative.
 
-**PQ-hybrid comms handshake (Bat_OS-side, selftest only):**
+**PQ-hybrid comms handshake (Sphragis-side, selftest only):**
 
   * New `src/batcave/pq_comms_session.rs` — ML-KEM-768 + X25519
     KEM, Ed25519 + ML-DSA-65 hybrid signatures, ChaCha20-Poly1305
@@ -1970,30 +1970,30 @@ between our os and macos") — that fell out as a separate piece.
     `cryptography` lib doesn't speak ML-KEM/ML-DSA, and a wire
     path where one side is classical-only defeats hybrid's point
     (the whole idea is BOTH halves have to break). Real
-    deployment waits until we have a PQ peer — second Bat_OS
+    deployment waits until we have a PQ peer — second Sphragis
     instance via two QEMU VMs is the obvious candidate.
 
 **Host clipboard bridge:**
 
-  * Bat_OS clipboard was isolated from macOS clipboard. User's
-    pain: `comms my-id` puts hex into Bat_OS clipboard but the
+  * Sphragis clipboard was isolated from macOS clipboard. User's
+    pain: `comms my-id` puts hex into Sphragis clipboard but the
     operator can't paste it into a Mac terminal to write the
     allowlist file. They asked for real cross-host clipboard.
   * `scripts/host_clipboard_bridge.py` — TCP daemon on
     127.0.0.1:9101 (loopback only; QEMU slirp NATs guest's
     10.0.2.2 to host loopback). Line-oriented protocol with
     GET / SET / PING; SET pipes to pbcopy, GET runs pbpaste.
-  * `clip push` / `clip pull` shell commands in Bat_OS — push
-    sends Bat_OS clipboard to macOS via SET; pull fetches macOS
+  * `clip push` / `clip pull` shell commands in Sphragis — push
+    sends Sphragis clipboard to macOS via SET; pull fetches macOS
     clipboard via GET.
 
 ### End-to-end verified on QEMU
 
 Bridge round trip (user-tested):
 ```
-clip set hello from bat_os    # 17 bytes
+clip set hello from sphragis    # 17 bytes
 clip push                     # -> macOS clipboard set (17 bytes)
-# (Mac pbpaste now returns "hello from bat_os")
+# (Mac pbpaste now returns "hello from sphragis")
 clip pull                     # <- pulled 15 bytes from macOS clipboard
 ```
 
@@ -2082,7 +2082,7 @@ because we were talking to ourselves through a relay.
   Replaced with:
 
   * 128-byte handshake offer: `eph_pub(32) || id_pub(32) ||
-    ed25519_sig(eph || "BAT_OS-COMMS-v1")(64)`. Same shape as
+    ed25519_sig(eph || "SPHRAGIS-COMMS-v1")(64)`. Same shape as
     `batcave::ipc_session::build_offer`.
   * X25519 ECDH on the ephemerals; directional session keys via
     `SHA-256(label || shared || client_eph_pk || server_eph_pk)`.
@@ -2109,20 +2109,20 @@ because we were talking to ourselves through a relay.
 same protocol using Python's `cryptography` library. Stable Ed25519
 identity in `./comms_server.key` (gitignored). Echoes received
 plaintext back AEAD-encrypted under s2c_key with its own counter
-nonce; Bat_OS verifies the tag + nonce ordering on every received
+nonce; Sphragis verifies the tag + nonce ordering on every received
 frame.
 
 ### Verified end-to-end on QEMU
 
   1. Server: `python3 scripts/comms_test_server.py 9100` →
      printed identity pubkey
-  2. Bat_OS: `comms identify 10.0.2.2:9100` → pubkey printed,
+  2. Sphragis: `comms identify 10.0.2.2:9100` → pubkey printed,
      clipboard auto-populated
   3. `comms pin ` + Ctrl+V → pin stored
   4. `comms connect 10.0.2.2:9100` → handshake OK; CM page state
      pill flips to CONNECTED; cipher pill shows "ChaCha20-Poly1305"
   5. `comms send hello world` → server log: ciphertext received +
-     echoed; Bat_OS: tag verified, plaintext in CM timeline
+     echoed; Sphragis: tag verified, plaintext in CM timeline
 
 User report: "all of it worked exactly like you said."
 
@@ -2365,9 +2365,9 @@ better content, much less wall time.
 
 ### Shipping v3 as the default
 
-Re-pointing the `bat-os-coder:latest` tag at v3 so the agent code
+Re-pointing the `sphragis-coder:latest` tag at v3 so the agent code
 in `src/ai/` doesn't have to track a moving target. v2 is kept
-around as `bat-os-coder-v2:latest` if we ever want to A/B against
+around as `sphragis-coder-v2:latest` if we ever want to A/B against
 it. v3 is the live model.
 
 ### What's NEXT
@@ -2532,9 +2532,9 @@ End-to-end pipeline:
      `llama-quantize` to Q4_K_M (4.68 GB, 4.91 bpw).
   2. `scripts/register_with_ollama.sh` writes a Modelfile with the
      Qwen2.5 chat template + system prompt and runs `ollama create
-     bat-os-coder`.
+     sphragis-coder`.
   3. `evals/run_evals.py` scores the model against the 46 hand-written
-     Q+A in `evals/bat_os_evals.jsonl`.
+     Q+A in `evals/sphragis_evals.jsonl`.
 
 **Eval result: 21/46 = 46 percent pass.**
 
@@ -2637,7 +2637,7 @@ replacing `default.wav` on the server.
 ### What's next
 
   1. **RAG layer (Phase 8 of PLAN_AI_AGENT)** — biggest leverage. Build
-     a corpus from `~/BAT_OS_VAULT/Concepts/*.md` + `DESIGN_*.md`,
+     a corpus from `~/SPHRAGIS_VAULT/Concepts/*.md` + `DESIGN_*.md`,
      compile-time bundle via `include_str!`, BM25 with k1=1.2/b=0.75,
      inject top-k results as system prompt context. Expected: eval
      bumps from 46% to ~70%.
@@ -2653,7 +2653,7 @@ replacing `default.wav` on the server.
 
 ## 2026-05-08 (AI agent design + LoRA training kickoff) — Mac — our own LLM
 
-**Goal:** Stop relying on cloud LLMs. Stand up a Bat_OS-specific
+**Goal:** Stop relying on cloud LLMs. Stand up a Sphragis-specific
 domain assistant that's fast, knows our codebase cold, refuses
 nothing legitimate, and lives entirely on operator-controlled
 hardware. Same project rules apply: no AGPL deps, no hallucination
@@ -2672,8 +2672,8 @@ flooring, audit every interaction.
   paged 8-bit AdamW, cosine LR + warmup. ~3 epochs, eff. batch 16,
   max_len 1536.
 - **Inference host:** RTX 5070 (12 GB) on Windows + WSL2. ollama
-  serves the merged GGUF as `bat-os-coder`. Caddy fronts with
-  TLS; cert SHA-256 pinned in Bat_OS source. The 1660 Ti stays
+  serves the merged GGUF as `sphragis-coder`. Caddy fronts with
+  TLS; cert SHA-256 pinned in Sphragis source. The 1660 Ti stays
   free for the desktop.
 - **Agent layer:** native Rust `src/ai/` module. Mandatory tool
   use (6 read-only tools: `read_file`, `grep_source`,
@@ -2739,10 +2739,10 @@ caddy (Apache-2.0). Clean.
    written in parallel so we can grade it the moment it lands.
 2. Scaffold `src/ai/` per Phase 2 of the plan.
 3. Merge LoRA adapter, convert to GGUF Q4_K_M, register with
-   ollama as `bat-os-coder`.
+   ollama as `sphragis-coder`.
 4. Stand up caddy TLS in front of ollama, pin SHA-256 in
    `src/net/tls_pinning.rs`.
-5. First end-to-end shell command: `bat_os > ai "what does
+5. First end-to-end shell command: `sphragis > ai "what does
    bat_https_open do?"` — should grep our source live, cite the
    file, never invent a function.
 
@@ -2799,17 +2799,17 @@ hardcoded set of test binaries for `run`.
 ### UX demo
 
 ```
-bat_os > write foobar hello
+sphragis > write foobar hello
 [fs] wrote 5 bytes to /foobar
-bat_os > write foozap world
+sphragis > write foozap world
 [fs] wrote 5 bytes to /foozap
 
-bat_os > read foob<TAB>
-bat_os > read foobar           ← unique completion
+sphragis > read foob<TAB>
+sphragis > read foobar           ← unique completion
 
-bat_os > read fo<TAB>
+sphragis > read fo<TAB>
 foobar  foozap
-bat_os > read foo              ← extended to common prefix
+sphragis > read foo              ← extended to common prefix
 ```
 
 ### Out of scope
@@ -2876,18 +2876,18 @@ printable char or backspace drops back to live edit.
 ### UX
 
 ```
-bat_os > uname
+sphragis > uname
 [uname output]
-bat_os > whoami
+sphragis > whoami
 [whoami output]
-bat_os > <UP>
-bat_os > whoami        ← recalled most recent
+sphragis > <UP>
+sphragis > whoami        ← recalled most recent
 <UP>
-bat_os > uname         ← went older
+sphragis > uname         ← went older
 <DOWN>
-bat_os > whoami        ← back forward
+sphragis > whoami        ← back forward
 <DOWN>
-bat_os >               ← past newest = live edit
+sphragis >               ← past newest = live edit
 ```
 
 ### Out of scope
@@ -2941,7 +2941,7 @@ completion of command names.
 `pq-<TAB>` → prints:
 ```
 pq-interop  pq-selftest  pq-sig-selftest  pq-tls-selftest
-bat_os > pq-
+sphragis > pq-
 ```
 
 (buffer extended to common prefix `pq-`; user types one more letter then Tab again.)
@@ -3188,7 +3188,7 @@ build warning (the rust-lang/rust#116344 deprecation).
 Two reasons, both pre-existing:
 
 1. `-Zfixed-x18` (the modern x18-reservation flag) is nightly-only.
-   Bat_OS uses `x18` for per-cave bookkeeping and must keep the
+   Sphragis uses `x18` for per-cave bookkeeping and must keep the
    compiler off it; `+reserve-x18` was rust-deprecated.
 2. `[unstable] build-std = ["core", "alloc"]` in
    `.cargo/config.toml` was already in use. On stable that worked
@@ -3618,7 +3618,7 @@ Two design options were on the table:
 - **A. Linux-style** — caves use `socket()/connect()` and bundle their
   own TLS library. Standard ABI but every cave can ship broken or
   validation-skipping TLS.
-- **B. Kernel-mediated** — caves call a Bat_OS-private syscall;
+- **B. Kernel-mediated** — caves call a Sphragis-private syscall;
   kernel runs TLS; caves see plaintext over an fd. One audited TLS
   per cave; uniform `cave_policy` enforcement; smaller binaries.
 
@@ -4383,7 +4383,7 @@ Warnings: 222 → 216 in release build, 185 → 179 in cargo check.
 - Boot smoke: 5 required markers (BatCave, network, virtio-gpu,
   BatFS, TLS trust-store). PASSES.
 - New shell command: `x509-selftest`. Manual run inside booted
-  Bat_OS validates hostname-mismatch + bad-bytes paths.
+  Sphragis validates hostname-mismatch + bad-bytes paths.
 
 ### Acceptance grep
 
@@ -4404,9 +4404,9 @@ threads after PR #2 (this work) merges.
 
 ## 2026-05-07 (later) — Mac — 🔥 NO-BROWSER PIVOT: hard-deleted ~30 KLOC + ~2.5 GB
 
-**The big call.** Kaden chose to redefine Bat_OS's identity:
-**Bat_OS is a secure workstation, not a secure laptop. Web browsing
-happens on the host.** Bat_OS never ships a browser.
+**The big call.** Kaden chose to redefine Sphragis's identity:
+**Sphragis is a secure workstation, not a secure laptop. Web browsing
+happens on the host.** Sphragis never ships a browser.
 
 This was a step back from the three-paths state (native engine /
 Ladybird port / stream-client) documented in the earlier 2026-05-07
@@ -4546,13 +4546,13 @@ self-improvements + stream-client v0). This is that catch-up.
 ### Iters 21–28: native Ladybird renders to /batos/fb0
 
 Got Ladybird's full pipeline — HTMLParser → DOM → Style → Layout →
-Skia paint → BGRA bitmap — running in-process on Bat_OS, with the
+Skia paint → BGRA bitmap — running in-process on Sphragis, with the
 result blitted to the QEMU window via `/batos/fb0` → virtio-gpu.
 
 **The eight iters (commits `53aafca7`..`77f7d67d` on `port/ladybird`):**
 
 1. **iter 21** (`53aafca7`) — Wired Ladybird's `HTMLTokenizer` directly
-   into a `ladybird-dump` smoke binary. Tokens printed on Bat_OS.
+   into a `ladybird-dump` smoke binary. Tokens printed on Sphragis.
    Proof that LibWeb's parser front-end loads + runs end-to-end in a
    cave (not just LibJS).
 
@@ -4568,7 +4568,7 @@ result blitted to the QEMU window via `/batos/fb0` → virtio-gpu.
 
 4. **iter 24** (`75f38759`) — Wrote a minimal `HeadlessPageClient`
    (~80 LOC), bootstrapped a `Page` + `Navigable`, mounted Lagom's
-   font directory through the Bat_OS VFS so fontconfig's
+   font directory through the Sphragis VFS so fontconfig's
    getdents64 sees real `.ttf` files.
 
 5. **iter 25** (`1a9457f3`) — `is_user_range` page-table fallback. The
@@ -4637,11 +4637,11 @@ HTML string → HTMLParser → Document → Layout → Skia paint
 **To see it:**
 ```
 python3 scripts/qemu_ladybird_window.py
-bat_os> ladybird-dump
+sphragis> ladybird-dump
 ```
 
 `ladybird-dump` is now the real-Ladybird visual demo (`3d1835dc`).
-The Bat_OS built-in browser path (`render ... live=1`) still works
+The Sphragis built-in browser path (`render ... live=1`) still works
 but uses the older CSS-1.0-era native engine instead of LibWeb.
 
 ### Autopilot self-improvements (made iters 21–28 possible)
@@ -4674,7 +4674,7 @@ Two-piece system landed at the end of the session
    Chromium via Playwright. Listens on `:9100`. POST `/render`
    with `{url, w, h}` returns raw BGRA bytes (`w*h*4`).
 
-2. **Bat_OS side: `cmd_web` in `src/ui/shell.rs`** — connects to
+2. **Sphragis side: `cmd_web` in `src/ui/shell.rs`** — connects to
    `10.0.2.2:9100` (Mac via QEMU slirp), POSTs URL, receives BGRA,
    writes directly into `/batos/fb0`, bumps seq, triggers
    `chromium_blit::tick` to push to virtio-gpu.
@@ -4683,7 +4683,7 @@ Two-piece system landed at the end of the session
 so the cave's TCP SYN actually goes somewhere.
 
 Architecture is **thin-client**: Chrome on Mac does all rendering,
-Bat_OS displays the pixels. Same pattern as Chromebooks (originally),
+Sphragis displays the pixels. Same pattern as Chromebooks (originally),
 Citrix, VNC. **Pragmatic complement to native Ladybird:** that's the
 engineering achievement, this is the daily driver.
 
@@ -4772,7 +4772,7 @@ commit as iter 1 of stream-client.
 ---
 
 After 7 more iterations on `port/ladybird` (iters 14-20 of STUMP #161),
-**`console.log(1+1)` prints `2` end-to-end on Bat_OS**. That's
+**`console.log(1+1)` prints `2` end-to-end on Sphragis**. That's
 glibc init → libcpptrace → liblagom-* → JS::VM construction → JS
 eval → fputs → write(stdout) → UART. The whole stack works.
 
@@ -4849,7 +4849,7 @@ Plus libc binary patches in `ports/ladybird_port/out/lib/libc.so.6`:
    binaries into the initrd (already in `Build/release/libexec/`)
    and try a `dump-DOM` smoke against `bin/hello.html`.
 3. Wire IPC: WebContent talks to a UI process via Unix socket
-   (LibIPC). Bat_OS has Unix sockets via `socketpair` already; verify
+   (LibIPC). Sphragis has Unix sockets via `socketpair` already; verify
    the LibIPC init path works.
 4. Eventually: get the dump-DOM output through serial → screen capture
    on real M4 hardware.
@@ -5241,7 +5241,7 @@ chromium pipeline smoke and surfaced three concrete issues:
 
 1. `[linux] unknown syscall 444` printed thrice on every Chromium
    boot — Chromium probes Landlock at startup, our unknown-syscall
-   fallback fires, polluting logs and the BAT_OS_KEEP_GOING skip
+   fallback fires, polluting logs and the SPHRAGIS_KEEP_GOING skip
    ring with three known-false-positives.
 2. `[fork] parent L1 not registered, aborting` — said "aborting"
    but the fork actually proceeded with safe-default bounds.
@@ -5260,7 +5260,7 @@ chromium pipeline smoke and surfaced three concrete issues:
   sys_stub_enosys. Chromium feature-detects, gets ENOSYS,
   silently falls back to seccomp-bpf or "no sandbox".
 - `src/batcave/linux/threads.rs`: real_fork's "parent L1 not
-  registered" warning gated to BAT_OS_KEEP_GOING only and
+  registered" warning gated to SPHRAGIS_KEEP_GOING only and
   rephrased ("not in cave registry — using runner-default
   bounds"). Production path is silent and correct.
 
@@ -5279,7 +5279,7 @@ semantics we already pretend to honour. Gated to faults inside a
 registered reservation OR plausible-V8 VA range so legitimate
 PROT_NONE guard pages (stack red-zones, etc.) still trap.
 
-**Verification:** chromium smoke (BAT_OS_KEEP_GOING=1).
+**Verification:** chromium smoke (SPHRAGIS_KEEP_GOING=1).
 - Pre-iter-2: 18 SKIP USER_DATA_ABORT, 18 thread retires.
 - Post-iter-2: 3 SKIP USER_DATA_ABORT (mostly outside reservations).
 - Both reach `FileURLLoader::Start: file:///bin/hello.html`.
@@ -5338,7 +5338,7 @@ refactor risks regressing the working handshake.
 
 User asked for "Chromium init iterative completely done". Re-ran
 `scripts/qemu_chromium_pipeline_smoke.py` against the current build
-with `BAT_OS_KEEP_GOING=1` to surface every trap. Every prior init
+with `SPHRAGIS_KEEP_GOING=1` to surface every trap. Every prior init
 crash is fixed. content_shell now:
 
 1. Loads (303 MB into 188 MB cave slab + libs)
@@ -5478,7 +5478,7 @@ The QEMU path is what unblocks the user's interactive testing today.
 
 1. `batcave create test`
 2. `batcave grant test fs`
-3. Reboot Bat_OS (Ctrl-A X then re-launch)
+3. Reboot Sphragis (Ctrl-A X then re-launch)
 4. Re-enter passphrase
 5. Open BC → `test` is back, FS pill cyan, CAPS=FS
 
@@ -5549,7 +5549,7 @@ sandbox (re-allocated by `batcave enter`).
 
 1. `batcave create test`
 2. `batcave grant test fs`
-3. Reboot Bat_OS
+3. Reboot Sphragis
 4. Re-enter passphrase to unlock BatFS
 5. Open BC tab → `test` should be back with `[FS]` lit and `CAPS  FS`
 
@@ -5643,7 +5643,7 @@ audit items):
 
 After landing Sprint 1's interactive event loop the day before, two more sprints in one push.
 
-**Sprint 2 — Bat_OS-specific security model (4/4):**
+**Sprint 2 — Sphragis-specific security model (4/4):**
 
 - **STUMP #101 / Sprint 2.1 — TLS Lockdown/Research/Open modes.** Replaced the AtomicBool from #94 with a tri-state mode. `Lockdown` (production default): only hosts in `tls_pinning::PINS` may handshake. `Research` (renderer): pinned hosts must match, non-pinned allowed. `Open` (debug): even mismatches accepted with WARN log. `tls-mode <mode>` toggles at runtime.
 
@@ -5699,7 +5699,7 @@ New: `scripts/render_live.py` + `make render-live URL=...` — boots QEMU with t
 
 **What Sprint 1 unlocks:** the renderer is no longer a screenshot generator — it's a browser that responds to clicks, follows links, submits forms, and (with `render-live`) puts pixels on the real screen. The PNG dump path stays intact for regression testing and screenshot-driven debugging.
 
-**Up next (per the strategic plan):** Sprint 2 is the Bat_OS-specific security model — per-origin BatCaves, TLS allowlist mode (we already promoted the strict-mode flag to runtime AtomicBool in #94), audit log to BatFS, no-JS toggle. That's what makes "Kaden's secure OS has its own native browser" meaningful vs. "Bat_OS happens to ship Chromium-class polish."
+**Up next (per the strategic plan):** Sprint 2 is the Sphragis-specific security model — per-origin BatCaves, TLS allowlist mode (we already promoted the strict-mode flag to runtime AtomicBool in #94), audit log to BatFS, no-JS toggle. That's what makes "Kaden's secure OS has its own native browser" meaningful vs. "Sphragis happens to ship Chromium-class polish."
 
 15 stumps shipped today (#86–#97).
 
@@ -5803,7 +5803,7 @@ Continuation of the same day. Two more stumps after the tier-3 sprint shipped:
 - `make render URL=http://example.com/` → 528 bytes fetched, 17 nodes parsed, screenshot shows "Example Domain" heading, the standard paragraph, and the "Learn more" link in blue.
 - `make render URL=http://info.cern.ch/` → 646 bytes fetched, 36 nodes parsed, screenshot shows the original 1991 WWW page with its bullet-point links rendered in blue.
 
-This is the first time Bat_OS's native renderer has produced a screenshot from the actual public internet. ARP, TCP, HTTP, DNS (the host alias 10.0.2.2 is bypassed by the numeric-IP shortcut, but real DNS via 10.0.2.3 is exercised by the public hostnames), HTML parser, CSS sheet matcher, layout, paint — every layer in the pipeline working against a real, never-seen-before document.
+This is the first time Sphragis's native renderer has produced a screenshot from the actual public internet. ARP, TCP, HTTP, DNS (the host alias 10.0.2.2 is bypassed by the numeric-IP shortcut, but real DNS via 10.0.2.3 is exercised by the public hostnames), HTML parser, CSS sheet matcher, layout, paint — every layer in the pipeline working against a real, never-seen-before document.
 
 **STUMP #93 — three things, all interlocking:**
 1. **JS method-call this/argv.** The compiler was emitting `OP_CALL` with `argc = num_real_args + 1` for method calls, counting the receiver as arg[0]. Native callees that read `vm.stack[args_start]` saw the receiver instead of the user's first argument — `console.log("hello from JS")` printed `[object Object] hello from JS`. Fix: introduced `OP_METHOD_CALL` (opcode 0x64). Stack on entry is `[func, this, arg0, arg1, ...]` with `argc` being the count of real args only. Runtime dispatch (`call_method`) extracts `this` from `stack[func_pos+1]` and passes `args_start = func_pos+2` to native callees so the receiver doesn't leak. User-defined function calls inherit `this` into the new CallFrame and copy args from the post-`this` slots into local-param slots. Compile-side: `obj.method(args)` now emits `OP_METHOD_CALL` instead of `OP_CALL` and excludes `this` from `argc`. Verified: `console.log("hello from JS")` prints exactly `hello from JS`.
@@ -5900,7 +5900,7 @@ Working: every static-page-rendering primitive a real website uses — headings,
 
 Not working: JavaScript execution (engine has compile-time hang), real network fetch for remote `<link>`/`<img>`, scrolling beyond 1900px, form interactivity, `position: sticky`, multiple font faces.
 
-Verdict: at this point Bat_OS's native renderer can produce a faithful screenshot of any reasonable static webpage that doesn't depend on JS to construct its content. Eighteen stumps shipped today (#68-85, minus #75 from yesterday).
+Verdict: at this point Sphragis's native renderer can produce a faithful screenshot of any reasonable static webpage that doesn't depend on JS to construct its content. Eighteen stumps shipped today (#68-85, minus #75 from yesterday).
 
 `make render URL=file:///bin/everything.html` is the canonical demo.
 
@@ -5935,11 +5935,11 @@ After the basic render-to-PNG path landed, Kaden asked "what else can we work on
 
 `make render URL=…` produces a real-looking page render for any HTML you bake.
 
-## 2026-04-30 14:35 — Mac — 🎯🎯🎯 BADASS RENDERING — actual PNG output of HTML pages by Bat_OS's native engine.
+## 2026-04-30 14:35 — Mac — 🎯🎯🎯 BADASS RENDERING — actual PNG output of HTML pages by Sphragis's native engine.
 
 **Final form of the user's "lets paint this thing into existence" wish.**
 
-`python3 scripts/render_to_png.py file:///bin/hello.html` produces a 800×600 PNG showing the rendered page. Verdana TrueType glyphs ("Hello from Bat_OS"), real text content, dark theme. All from Bat_OS's own DOM + layout + paint pipeline. No Chromium involved.
+`python3 scripts/render_to_png.py file:///bin/hello.html` produces a 800×600 PNG showing the rendered page. Verdana TrueType glyphs ("Hello from Sphragis"), real text content, dark theme. All from Sphragis's own DOM + layout + paint pipeline. No Chromium involved.
 
 Pipeline:
 ```
@@ -5962,7 +5962,7 @@ Visible bug: layout's vertical flow stacks lines on top of each other instead of
 - `src/ui/apps/browser.rs` — `DOM_DOC` + `LAYOUT_TREE` made `pub(crate)` so the shell can share the visual browser's BSS arenas.
 - `src/ui/shell.rs` — `render <url>` shell command. Parse, layout, paint, base64 over UART with `RENDER-BEGIN`/`END` markers.
 - `src/ui/truetype.rs` — fixed `attempt to subtract with overflow` in alpha-blend math (signed i32 + clamp).
-- `scripts/render_to_png.py` — host decoder. Boots Bat_OS via QEMU-HVF, sends `render <url>`, captures the base64 dump, decodes BGRA→RGBA, hand-rolls a PNG (no PIL).
+- `scripts/render_to_png.py` — host decoder. Boots Sphragis via QEMU-HVF, sends `render <url>`, captures the base64 dump, decodes BGRA→RGBA, hand-rolls a PNG (no PIL).
 - `ports/chromium_port/out/showcase.html` — fancier test page.
 
 **End-of-session run-rate (22 commits today!):**
@@ -5972,21 +5972,21 @@ Visible bug: layout's vertical flow stacks lines on top of each other instead of
 - STUMP #59 — D-cache + I-cache enable (the actual HVF root cause)
 - STUMP #60 — apple/uart platform gate
 - STUMP #61 — gpu_cmd null-deref guard
-- STUMP #62 — BAT_OS_KEEP_GOING infrastructure (Kaden's idea)
+- STUMP #62 — SPHRAGIS_KEEP_GOING infrastructure (Kaden's idea)
 - STUMP #63 — futex deadlock auto-skip + livelock cap
 - STUMP #64 — push past FileURLLoader to HarfBuzz text layout
 - flock stub + diagnostics
 - 🎯 First native DOM render (12 nodes from hello.html)
-- 🎯🎯🎯 First PNG render of HTML by Bat_OS engine
+- 🎯🎯🎯 First PNG render of HTML by Sphragis engine
 
 That's the path from "HVF won't even atomic-load correctly" at session start to "PNG output of real HTML rendered by our own browser" by end. One day.
 
-## 2026-04-30 13:30 — Mac — 🎯🎯🎯 FIRST DOM RENDER. `dump-dom file:///bin/hello.html` produces a 12-node tree from Bat_OS's own HTML parser.
+## 2026-04-30 13:30 — Mac — 🎯🎯🎯 FIRST DOM RENDER. `dump-dom file:///bin/hello.html` produces a 12-node tree from Sphragis's own HTML parser.
 
 **The output the project has been chasing:**
 
 ```
-bat_os > dump-dom file:///bin/hello.html
+sphragis > dump-dom file:///bin/hello.html
   dump-dom: read 258 bytes from bin/hello.html
   dump-dom: parsed 12 node(s)
 === DOM ===
@@ -5994,12 +5994,12 @@ bat_os > dump-dom file:///bin/hello.html
   <html>
     <head>
       <title>
-        "Bat_OS First Render"
+        "Sphragis First Render"
       </title>
     </head>
     <body>
       <h1>
-        "Hello from Bat_OS"
+        "Hello from Sphragis"
       </h1>
       <p>
         "If you see this, Blink parsed HTML on a bare-metal Rust kernel for Apple M4."
@@ -6014,14 +6014,14 @@ bat_os > dump-dom file:///bin/hello.html
 
 **The pivot.** Chromium's content_shell got DEEP today — past libc init, into V8, through the worker thread pool, all the way to `FileURLLoader::Start: file:///bin/hello.html`. But it livelocks in Chromium's internal Mojo IPC pump because the producer side of the IPC isn't wired. Implementing eventfd-as-semaphore signaling + Mojo channel transport would be days of work.
 
-So instead: render with Bat_OS's OWN HTML parser. We already had `browser::html::parser::parse()` and `browser::dom::Document` (used by the visual `BatBrowser` app). Wired a new `dump-dom <url>` shell command that:
+So instead: render with Sphragis's OWN HTML parser. We already had `browser::html::parser::parse()` and `browser::dom::Document` (used by the visual `BatBrowser` app). Wired a new `dump-dom <url>` shell command that:
 
 1. Strips `file://` and leading `/` to get an archive-relative path
 2. Pulls bytes from the initrd archive via `initrd::archive_file()`
 3. Parses with our parser into the existing `DOM_DOC` static (made `pub(crate)` for cross-module access — Box::new(Document::new()) overflows the kernel stack because Document is multi-MB)
 4. Walks the tree, printing each element + its attributes + text children
 
-Result: **first DOM rendered by Bat_OS, on M4 silicon under HVF acceleration**. Not via Chromium, but by a kernel that boots from scratch.
+Result: **first DOM rendered by Sphragis, on M4 silicon under HVF acceleration**. Not via Chromium, but by a kernel that boots from scratch.
 
 **Files (commit 473fc535):**
 - `src/ui/apps/browser.rs` — DOM_DOC made `pub(crate)`
@@ -6034,7 +6034,7 @@ Result: **first DOM rendered by Bat_OS, on M4 silicon under HVF acceleration**. 
 - STUMP #59: enable D-cache + I-cache after MMU
 - STUMP #60: apple/uart platform gate
 - STUMP #61: gpu_cmd null-deref guard
-- STUMP #62: BAT_OS_KEEP_GOING infrastructure (Kaden's idea)
+- STUMP #62: SPHRAGIS_KEEP_GOING infrastructure (Kaden's idea)
 - STUMP #63: futex deadlock auto-skip + livelock cap
 - **🎯 First DOM render via native parser**
 
@@ -6092,9 +6092,9 @@ no-runnable branch, and added the timeout cap to
   which avoids the multi-thread Mojo pump entirely. That's the
   fastest path to first DOM render.
 
-## 2026-04-30 10:30 — Mac — 🎯 STUMP #62: BAT_OS_KEEP_GOING + skip ring → Chromium reaches FileURLLoader::Start on /bin/hello.html. Real subsystems initializing.
+## 2026-04-30 10:30 — Mac — 🎯 STUMP #62: SPHRAGIS_KEEP_GOING + skip ring → Chromium reaches FileURLLoader::Start on /bin/hello.html. Real subsystems initializing.
 
-**TL;DR.** Kaden's idea: instead of fixing one fault per smoke run, build a "skip-and-log" mode that keeps going past every fatal so ONE run maps the entire failure tree. Implemented as `BAT_OS_KEEP_GOING=1` build-time env var plus three skip sites:
+**TL;DR.** Kaden's idea: instead of fixing one fault per smoke run, build a "skip-and-log" mode that keeps going past every fatal so ONE run maps the entire failure tree. Implemented as `SPHRAGIS_KEEP_GOING=1` build-time env var plus three skip sites:
 
 1. `sys_exit_group` with non-zero code → log + `exit_current(0)` the failing thread, leave siblings alive.
 2. Unknown syscall → log + return ENOSYS as before.
@@ -6127,7 +6127,7 @@ The cave is genuinely *trying to render*. The thread pool is running, the file l
 - `src/batcave/linux/syscall.rs` — exit-skip + unknown-syscall log
 - `src/kernel/arch/mod.rs` — EL0 abort skip
 - `src/batcave/linux/signal.rs` + `src/ui/shell.rs` — summary hooks
-- `src/main.rs` — `BAT_OS_KEEP_GOING` env-var detection
+- `src/main.rs` — `SPHRAGIS_KEEP_GOING` env-var detection
 
 Next session priorities:
 - Trace the FAR=0x8 deref at content_shell+0x11ae8c3c (real bug in Chromium-side or a missing kernel feature)
@@ -6138,9 +6138,9 @@ Next session priorities:
 
 **TL;DR.** Tracked the post-exit kernel data abort to the headless serial shell printing chromium runner messages through `console::puts` → `gpu::flush` → `gpu_cmd` → `Virtqueue::poll_used` on a Virtqueue whose `QUEUE_STORAGE` was never set (gpu::init returned None on QEMU virt with no -device virtio-gpu). Null-pointer deref through the descriptor ring landed at `safe_read16(used_base + 2)` whose computed PA started looking like ELF magic bytes — that's why the FAR pattern `0x00010102464c5002` was so eye-catching. The fix is one early-return guard at the top of `gpu_cmd`.
 
-**Disassembly identification:** Built once with `RUSTFLAGS="-C link-arg=-Tlinker.ld -C target-feature=+reserve-x18 -C debuginfo=2 -C strip=none"` (must keep the linker.ld arg or rust-lld can't find `__bss_start` etc.). Then `llvm-objdump -d --demangle` resolved the fault PC to `bat_os::drivers::virtio::virtqueue::Virtqueue::poll_used`.
+**Disassembly identification:** Built once with `RUSTFLAGS="-C link-arg=-Tlinker.ld -C target-feature=+reserve-x18 -C debuginfo=2 -C strip=none"` (must keep the linker.ld arg or rust-lld can't find `__bss_start` etc.). Then `llvm-objdump -d --demangle` resolved the fault PC to `sphragis::drivers::virtio::virtqueue::Virtqueue::poll_used`.
 
-**Result:** smoke completes, no kernel data aborts, cave exits with 127 (from one of Chromium's spawned children — probably a posix_spawn helper failing on /dev/null dup2 or similar). Pipeline reaches `bat_os >` prompt cleanly. 281 lines of log (vs 437 in the previous fault-spam version).
+**Result:** smoke completes, no kernel data aborts, cave exits with 127 (from one of Chromium's spawned children — probably a posix_spawn helper failing on /dev/null dup2 or similar). Pipeline reaches `sphragis >` prompt cleanly. 281 lines of log (vs 437 in the previous fault-spam version).
 
 **Files changed (commit 8d5af615):**
 - `src/drivers/virtio/gpu.rs` — early-return when QUEUE_STORAGE==0
@@ -6293,7 +6293,7 @@ Two persistent issues, in priority order:
 
 The cave is **genuinely rendering hello.html**. We're one infra
 step (M4 hardware boot) away from `--dump-dom` actually printing
-`<html><body>Hello from Bat_OS</body></html>`.
+`<html><body>Hello from Sphragis</body></html>`.
 
 ---
 
@@ -6920,7 +6920,7 @@ Cave depth journey today:
 - Post-#47: deepest 30,295 alive, multiple runs reach Blink DOM.
 
 We are one or two stumps from `--dump-dom file:///bin/hello.html`
-actually printing `<html><body>Hello from Bat_OS</body></html>`.
+actually printing `<html><body>Hello from Sphragis</body></html>`.
 
 ---
 
@@ -7145,7 +7145,7 @@ limp past this with stale-frame restoration.
 **Don't fix OnEpollEvent. Fix the Rehash funcptr.**
 
 Investigation path:
-1. Build with `BAT_OS_NO_SKIPS=1` (would need to add — gate the
+1. Build with `SPHRAGIS_NO_SKIPS=1` (would need to add — gate the
    pa-skip-data block on an env var) so the cave dies at the FIRST
    fault instead of limping. Confirms the Rehash trampoline is
    genuinely the entry point.
@@ -7602,7 +7602,7 @@ ICU bug at line ~620.
 **Conclusion.** Our argv/envp/auxv stack-layout has an off-by-one
 or alignment-sensitive bug when arg count changes. The corrupting
 write IS deterministic-w-r-t-arg-count, not flag-content. This is
-a Bat_OS loader bug, not a Chromium issue.
+a Sphragis loader bug, not a Chromium issue.
 
 **Bonus discovery.** Even with `--js-flags=--jitless` applied, V8
 still logs `V8 process OOM (Failed to reserve virtual memory for
@@ -9544,7 +9544,7 @@ follow never appears. Smoke times out 12 minutes later.
    KiB) shifted the linker's `__stack_start` symbol by 64 KiB. Stack
    pointer set at boot is now 64 KiB higher. If something downstream
    computed an offset from `__bss_end` and assumed the old size,
-   could miscompute. Verify via `nm target/.../bat_os | grep stack`.
+   could miscompute. Verify via `nm target/.../sphragis | grep stack`.
 
 **State of the tree:**
 - `src/kernel/mm/mod.rs` — `QEMU_MEMORY_END` reverted to 2 GiB
@@ -9838,7 +9838,7 @@ missing it, fan out.
 
 **State of the tree:**
 - `src/batcave/linux/mmu.rs` — cave-window reservation added (uncommitted).
-- Build env: `BAT_OS_ALLOW_UNSIGNED_INITRD=1 BAT_OS_PASSPHRASE=batman
+- Build env: `SPHRAGIS_ALLOW_UNSIGNED_INITRD=1 SPHRAGIS_PASSPHRASE=batman
   cargo build --release`.
 - v37 verdict: PIPELINE-REACHED. PartitionAlloc CorruptionDetected
   eliminated. New ceiling: ICU (icudtl.dat) file-backed mmap fails
@@ -9953,8 +9953,8 @@ Each run is a different lottery ticket. The pragmatic next steps:
 
 **State of the tree:**
 - `src/kernel/arch/mod.rs` — instrumentation + ELR bound-check (uncommitted as of journal time).
-- Build env required: `BAT_OS_ALLOW_UNSIGNED_INITRD=1
-  BAT_OS_PASSPHRASE=batman cargo build --release`. Plain
+- Build env required: `SPHRAGIS_ALLOW_UNSIGNED_INITRD=1
+  SPHRAGIS_PASSPHRASE=batman cargo build --release`. Plain
   `cargo build --release` produces a binary that rejects the smoke's
   "batman" password (auth gate falls through to dev default).
 - Smoke verdict: PIPELINE-REACHED across all post-fix runs.
@@ -9997,7 +9997,7 @@ fn current_tid() -> usize {
 }
 ```
 
-Rebuilt with `BAT_OS_ALLOW_UNSIGNED_INITRD=1 BAT_OS_PASSPHRASE=batman
+Rebuilt with `SPHRAGIS_ALLOW_UNSIGNED_INITRD=1 SPHRAGIS_PASSPHRASE=batman
 cargo build --release` (env vars matter — without PASSPHRASE the
 auth gate uses the dev default and rejects "batman").
 
@@ -10051,7 +10051,7 @@ was inspecting the wake/wait code, not the trivially-named
 
 **State of the tree:**
 - `src/batcave/linux/futex.rs` — current_tid fixed.
-- Build: `BAT_OS_ALLOW_UNSIGNED_INITRD=1 BAT_OS_PASSPHRASE=batman
+- Build: `SPHRAGIS_ALLOW_UNSIGNED_INITRD=1 SPHRAGIS_PASSPHRASE=batman
   cargo build --release` → 15.8 MB binary, clean.
 - Smoke verdict: `PIPELINE-REACHED` (script's success bar is
   "got past load and trapped"; we did).
@@ -10202,7 +10202,7 @@ Verified end-to-end:
 ```
 [abort] EL1 fault unrecoverable — terminating cave
 [sig] fatal signo=7 fault=0x00000000c0000000 — terminating cave, returning to shell
-bat_os >
+sphragis >
 ```
 4 DATA ABORTs total before clean termination, instead of 50K. The
 `0xc0000000` fault at PC=`0x4020114c` (kernel rodata, not text) is
@@ -10728,7 +10728,7 @@ the IRQ rate fixed before it's useful.
 2. **Deadlock diagnosis.** Once the timer rate is right the
    auto-dump will tell us what every thread is parked on. If the
    timer fix is hard, add a stdin-triggered `dump_threads` shell
-   command to the bat_os shell instead.
+   command to the sphragis shell instead.
 
 ### Final commit log — 22 commits this session
 
@@ -11576,11 +11576,11 @@ was doing for us). The legacy scheduler is now invoked only via
 explicit `yield_now()` calls from chromium-blit.
 
 **2. The smoke test's `batman` passphrase hangs unless built with
-`BAT_OS_PASSPHRASE=batman`.** The dev fallback is now derived from the
+`SPHRAGIS_PASSPHRASE=batman`.** The dev fallback is now derived from the
 kernel hash (V6-WEIRD-002), so `batman` is no longer the dev default for
 arbitrary builds. The smoke test script's header already documents the
-required env, but it's worth flagging: `BAT_OS_ALLOW_UNSIGNED_INITRD=1
-BAT_OS_PASSPHRASE=batman cargo build --release`.
+required env, but it's worth flagging: `SPHRAGIS_ALLOW_UNSIGNED_INITRD=1
+SPHRAGIS_PASSPHRASE=batman cargo build --release`.
 
 ### Smoke test result
 
@@ -11588,7 +11588,7 @@ BAT_OS_PASSPHRASE=batman cargo build --release`.
 Verdict: PIPELINE-REACHED
 Threads spawned: t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 (+ t64 kthread)
 Syscalls: 2677
-Final state: clean shell prompt (`bat_os >`)
+Final state: clean shell prompt (`sphragis >`)
 Last syscall: t10 epoll_ctl(epfd=0x22, ADD, fd=0x3) → EBADF
 Exit cause: Chromium CHECK assertion fired (brk from EL0)
 ```
@@ -12218,9 +12218,9 @@ on the zygote path for now.
 ### Smoke-test invocation
 
 ```
-BAT_OS_PASSPHRASE=batman \
-BAT_OS_DURESS=duress \
-BAT_OS_ALLOW_UNSIGNED_INITRD=1 \
+SPHRAGIS_PASSPHRASE=batman \
+SPHRAGIS_DURESS=duress \
+SPHRAGIS_ALLOW_UNSIGNED_INITRD=1 \
 cargo build --release --target aarch64-unknown-none
 
 python3 scripts/qemu_chromium_pipeline_smoke.py
@@ -13055,7 +13055,7 @@ then dc cvau + ic ivau for I-cache coherence.
 
 ### 3. icudtl.dat + hello.html bundled + /bin VFS serves them
 - `tools/bake_chromium_archive.sh` picks up icudtl.dat from the
-  Chromium output dir and any *.html / bat_os_* data files next
+  Chromium output dir and any *.html / sphragis_* data files next
   to the shell binary. Materializes a default hello.html if
   missing so the archive always ships a test page.
 - `vfs::populate_lib_from_archive` now also walks `bin/` entries
@@ -13174,7 +13174,7 @@ Commits this session (b30288aa..d46466d7):
 
 **Milestone.** content_shell now reaches CHROMIUM'S OWN CODE. The
 very first line of Chromium-side logging we've ever produced from
-Bat_OS:
+Sphragis:
 
 ```
 [1:0:0101/000000.000000:ERROR:base/i18n/icu_util.cc:232]
@@ -13243,7 +13243,7 @@ flies past.
   write its logs to a file next to the binary. We could either
   add a writable VFS file for it, or redirect logs to /dev/null.
 - `--single-process`: Chromium's sandbox expects a zygote parent
-  process. Bat_OS doesn't have fork/exec chains. Need to either
+  process. Sphragis doesn't have fork/exec chains. Need to either
   inject `--no-sandbox` or run with a shim that skips the zygote.
 
 ---
@@ -13339,7 +13339,7 @@ Files touched:
 
 ## 2026-04-23 21:00 — Mac — hello_dyn prints "hello from dyn-linked elf!" 🎉
 
-**Milestone.** A real dynamically-linked ELF ran end-to-end on Bat_OS
+**Milestone.** A real dynamically-linked ELF ran end-to-end on Sphragis
 with the **real glibc ld-linux-aarch64.so.1** as the interpreter.
 `hello_dyn` (67 KB, `gcc -pie`, links against libc.so.6) printed its
 string via `write(1, ...)` and exited with code 42. Every
@@ -13443,7 +13443,7 @@ exit_group(42)
   This is a PACKAGING mismatch — the content_shell binary was
   linked against newer lib versions than what tools/bake_
   chromium_archive.sh scoops out of ports/chromium_port/out/
-  lib_runtime. Bat_OS is NOT the bug here; ld-linux's error
+  lib_runtime. Sphragis is NOT the bug here; ld-linux's error
   reporting is working correctly. Fix is in the bake step:
   either rebuild content_shell against the same libs we package,
   or rsync content_shell's actual link-time libs into lib_runtime.
@@ -13462,7 +13462,7 @@ Kept pushing past 18:30. Shipped three more commits (b2fb74a3,
    12 libs in Chromium's DT_NEEDED set), BLRs each, then BRs to the
    real main entry. ADR / LDR post-indexed / CBZ / B / LDR unsigned /
    BR encoders implemented just enough for this loop. Controlled
-   via `BAT_OS_DISABLE_INIT_TRAMPOLINE` env flag.
+   via `SPHRAGIS_DISABLE_INIT_TRAMPOLINE` env flag.
 
 2. **PT_TLS layout + TLS_TPREL64 relocs**: each lib's PT_TLS is
    parsed; combined TLS block is laid out per-lib at tp+offset
@@ -14078,7 +14078,7 @@ musl. To execute, we need one of:
   tagged images (~21 GB reclaim) or offload to Ubuntu dev host
   (currently unreachable — Tailscale timed out). **Recommended.**
 - **(B) Kernel-side libc stubs** — implement the 567 symbols in
-  Bat_OS. Compiler-rt helpers (`__divti3` etc.) ~50 symbols, maybe
+  Sphragis. Compiler-rt helpers (`__divti3` etc.) ~50 symbols, maybe
   a day. Pthread is 2–4 weeks minimum (futex, clone, signals, TLS).
 
 Updated `ports/chromium_port/STATE_2026-04-23.md` with the full
@@ -14089,7 +14089,7 @@ decision doc. Extracted content_shell from the Docker volume to
 Next action (when disk is available): kick off the musl-static
 rebuild overnight. In the meantime, the kernel side is finished —
 the moment a static content_shell exists, the smoke test will
-either run clean or fault on the first un-implemented Bat_OS
+either run clean or fault on the first un-implemented Sphragis
 syscall (Phase 4).
 
 ---
@@ -14125,14 +14125,14 @@ Specific fixes this session (all in one commit):
    fetch. Transitional widen marks past-text blocks EL1-RW + exec +
    UXN; `linker.ld` also gathers `.text.cold.*` etc. explicitly so
    a future rustc bump may let us revert the widen. Tracked as V9.
-5. **`BAT_OS_ALLOW_UNSIGNED_INITRD` env flag** gates the dev-only
+5. **`SPHRAGIS_ALLOW_UNSIGNED_INITRD` env flag** gates the dev-only
    unsigned-blob path (`runner::run_chromium`). Plumbed via
    `option_env!` + `build.rs` rerun-if-env-changed so the operator
    doesn't need `cargo clean` when flipping it.
 6. **`initrd::probe` off-by-one fix** — `head + 16 >= ceiling` was
    refusing blobs that sit exactly against the ceiling. Changed to
    `head + 16 > ceiling` (and same for the tail-magic check).
-7. **Smoke test** now objcopies the kernel to a flat `bat_os.bin`
+7. **Smoke test** now objcopies the kernel to a flat `sphragis.bin`
    and boots `-kernel <flat> -initrd <blob>` so QEMU honours the
    ARM64 Linux boot protocol (DTB delivered in x0) — this is what
    lets `/chosen/linux,initrd-*` reach `initrd::set_range`.
@@ -14179,7 +14179,7 @@ container would produce.
     40× burst to example.com:443 (flood)
     3× TLS ClientHello SNI=attacker.com (domain-front)
 
-  Bat_OS nat-stats after:
+  Sphragis nat-stats after:
     allow       = 11   (1 legit + 10 burst tokens)
     drop-policy =  3   (C2 callbacks)
     drop-rate   = 30   (burst beyond budget)
@@ -14294,7 +14294,7 @@ earlier has either shipped or been explicitly not-worth-doing-today.
 
 Kaden: "lets fix those known gaps". Four more commits; the packet
 pipeline now has everything a real Docker container needs to go
-through Bat_OS.
+through Sphragis.
 
 | commit | piece |
 |---|---|
@@ -14327,7 +14327,7 @@ Commits this gap-closure burst: 4 + regression + docs update.
 ## 2026-04-22 21:25 — Mac — Followup #3c shipped end-to-end: kernel is a NAT router
 
 Kaden: "lets move onto 3c bro … we can push ultra hard on this next
-one." 8 more commits landed; Bat_OS now polices per-cave egress at
+one." 8 more commits landed; Sphragis now polices per-cave egress at
 the packet layer, not just at the daemon's HTTP CONNECT proxy.
 
 **What shipped:**
@@ -14416,7 +14416,7 @@ multi-day; split into sub-phases to ship incremental value:
   targets only granted to cave B. Unit test 8/8.
 
 **What's still pending in Followup #3:** the tap-device packet
-pipeline itself (vmnet-backed netdev + Bat_OS as NAT router). That
+pipeline itself (vmnet-backed netdev + Sphragis as NAT router). That
 remains multi-day and is the outstanding capstone. Everything short
 of real packet-level intercept is now in place and tested.
 
@@ -14503,14 +14503,14 @@ QEMU is done. Return focus to M4:
     stands; we didn't touch that this session)
   - All 5 bug fixes apply to M4 as well — any Ubuntu Claude run of
     netsurf/v8/freetype on M4 HV should now work too. Worth a quick
-    validation pass next time Bat_OS is chainloaded.
+    validation pass next time Sphragis is chainloaded.
   - Apple M4 also benefits: the address-mismatch and cave-active bugs
     would have bitten there too. Nobody had tested big-ELF-on-M4 yet.
 
 ### Repro
 
 ```bash
-BAT_OS_PASSPHRASE=batman cargo build --release
+SPHRAGIS_PASSPHRASE=batman cargo build --release
 python3 scripts/qemu_test_suite.py
 # 40/40 OK expected, ~2 minutes wall clock
 ```
@@ -14520,7 +14520,7 @@ python3 scripts/qemu_test_suite.py
 ## 2026-04-22 15:30 — Mac — QEMU full-feature exercise + 4 root-cause fixes
 
 **Context.** Kaden came back after 4 days and said: "let's nail QEMU first,
-then come back to M4". So I wrote a QEMU test harness, drove Bat_OS
+then come back to M4". So I wrote a QEMU test harness, drove Sphragis
 through every shell command + every desktop app + every ELF binary
 (except Chromium per user), and fixed every root-cause bug I hit along
 the way.
@@ -14660,7 +14660,7 @@ simpler but wastes memory.
 ### Repro
 
 ```bash
-BAT_OS_PASSPHRASE=batman cargo build --release
+SPHRAGIS_PASSPHRASE=batman cargo build --release
 python3 scripts/qemu_test_suite.py
 # logs in logs/qemu-tests/
 ```
@@ -15205,7 +15205,7 @@ physical power button.
 3. **SEPFW / ticket mismatch**. We re-staged SEPFW at new address but
    the ticket XNU was booted with refers to the original phys addr.
 4. **Missing BATOS_LINKALIAS-style translation for XNU pages**. We
-   forced BATOS_LINKALIAS=0 since XNU≠Bat_OS, but maybe XNU's early
+   forced BATOS_LINKALIAS=0 since XNU≠Sphragis, but maybe XNU's early
    boot touches an address we didn't map.
 5. **Missing platform-expert init**. iBoot does more than hand a
    bootargs pointer; it primes a bunch of state XNU assumes.
@@ -15617,7 +15617,7 @@ known — M4 macOS 26.3 is new ground.
 
 ### Recommendation
 
-For the Bat_OS demo use case (internal keyboard), **ship with
+For the Sphragis demo use case (internal keyboard), **ship with
 external USB keyboard** (already works). The HV-trace path has
 pushed past many layers that looked impossible a week ago, but the
 APIA-key wall is different in kind — it needs hardware / SEP, not
@@ -16075,7 +16075,7 @@ reasons:
 
 ### Keyboard path — external USB
 
-Given this wall, the keyboard for Bat_OS demos stays on external USB
+Given this wall, the keyboard for Sphragis demos stays on external USB
 via the existing USB stack. Demo loop already works without internal
 keyboard. When Asahi Linux eventually supports M4, or when we have
 1-2 days for full HV-trace setup (boot macOS as HV guest and log
@@ -16094,9 +16094,9 @@ every MMIO touch during enablePower), we can revisit.
 
 ### Status
 
-Bat_OS demo loop functional with external USB keyboard. AOP/MTP
+Sphragis demo loop functional with external USB keyboard. AOP/MTP
 keyboard via ascwrap-v6 documented as unsolved within raw-proxy
-RE scope. Doesn't block any current Bat_OS work.
+RE scope. Doesn't block any current Sphragis work.
 
 ---
 
@@ -16201,7 +16201,7 @@ setup) that establish AP-side infrastructure FW expects.
 
 3. **Accept and move on** (pragmatic):
    - External USB keyboard already works for demos
-   - Bat_OS demo loop unaffected by AOP
+   - Sphragis demo loop unaffected by AOP
    - Internal keyboard/trackpad/sensors via AOP = nice-to-have
    - AOP boot RE can be revisited when someone (Asahi Linux) ships
      M4 AOP support in their mainline
@@ -16209,7 +16209,7 @@ setup) that establish AP-side infrastructure FW expects.
 ### Recommendation
 
 **Option 3 for now, option 1 later.** The effort-to-value for
-option 1 is poor given Bat_OS is functional without AOP. We've
+option 1 is poor given Sphragis is functional without AOP. We've
 made massive progress (docs will help Asahi team if/when they
 tackle M4) and proved this is genuinely beyond raw-proxy RE.
 
@@ -16324,7 +16324,7 @@ we can't replicate from raw m1n1 proxy. Options:
      concrete MMIO/IOKit equivalents
   3. Accept: AOP boot on M4 ascwrap-v6 requires full macOS IOKit,
      can't be done from raw proxy; use external USB keyboard for
-     Bat_OS demos (already works)
+     Sphragis demos (already works)
 
 ### Scripts shipped this segment
 
@@ -16674,7 +16674,7 @@ AP→AOP writes directly.
    format difference — compare our 51-key layout vs macOS's actual
    bootargs via dump.
 
-### Status on Bat_OS
+### Status on Sphragis
 
 Demo loop still works; keyboard via MTP/AOP still blocked. External
 USB keyboard unaffected.
@@ -17050,19 +17050,19 @@ works through the existing USB stack. Demo loop unaffected.
 
 Two wins + one blocker cleared this pass.
 
-### Win 1: 2-cycle Bat_OS loop WORKING end-to-end
+### Win 1: 2-cycle Sphragis loop WORKING end-to-end
 
 Canonical demo ran cleanly:
 
 ```
 iter 0: AUTH PASSED (L313) → halt via UI close (L449) → hv returned
         (L456) → chainload fresh m1n1 (L460)
-iter 1: fresh m1n1 (L595) → Bat_OS loaded (L627) → AUTH PASSED (L800)
+iter 1: fresh m1n1 (L595) → Sphragis loaded (L627) → AUTH PASSED (L800)
         → halt (L936) → hv returned (L943) → hit LOOP_MAX=2 (L947)
         → detaching via os._exit(0) (L948)
 ```
 
-Full 2-cycle Bat_OS demo in a single Python invocation, no
+Full 2-cycle Sphragis demo in a single Python invocation, no
 power-cycle between iters. Two fixes made it work:
 
   a. **AP watchdog disable in Python (not just hv_init)**. The
@@ -17172,11 +17172,11 @@ OR: find the actual CPU reset mechanism for ascwrap-v6 — likely a
 different IMPL register we haven't identified. Apple's t8132 RE
 docs would help here, but we don't have them.
 
-### Practical impact on Bat_OS
+### Practical impact on Sphragis
 
 Keyboard via MTP/AOP is blocked on this v6 boot protocol RE.
 External USB keyboard works fine through our existing USB stack, so
-Bat_OS demos are unaffected. Recommend shelving MTP/AOP boot
+Sphragis demos are unaffected. Recommend shelving MTP/AOP boot
 attempts until:
   a. Asahi publishes M3/M4 AOP boot reference code, OR
   b. We can HV-trace macOS's own AOP init sequence.
@@ -17392,7 +17392,7 @@ hangs waiting for an AOP that never responds.
 as MTP), boot AOP first, THEN boot MTP. If that works, we get
 Hello and keyboard path lights up.
 
-Alternatively: the full boot loop works fine for demo UX (Bat_OS +
+Alternatively: the full boot loop works fine for demo UX (Sphragis +
 loop + screenshots), and keyboard input via external USB keyboard
 is good enough. Shelving MTP until Phase-2.
 
@@ -17880,7 +17880,7 @@ Not tonight — deeper than a one-session task:
      keyboard events and bridges to vuart.
 
 Path 2 (native MTP in Rust) — same firmware blob gets embedded at
-build time (`include_bytes!`) and staged by Bat_OS itself. Rust
+build time (`include_bytes!`) and staged by Sphragis itself. Rust
 scaffolding is still to-do.
 
 ### Remote-control workflow is now a first-class tool
@@ -17895,10 +17895,10 @@ keyboard / display / battery work needs pulled from macOS.
 
 ---
 
-## 2026-04-21 13:45 — Ubuntu — LOOP closes on M4 hardware: 2 Bat_OS cycles, one invocation ✅
+## 2026-04-21 13:45 — Ubuntu — LOOP closes on M4 hardware: 2 Sphragis cycles, one invocation ✅
 
 Full validation. `BATOS_HV_LOOP=1 BATOS_HV_LOOP_MAX=2` ran two
-complete Bat_OS cycles end-to-end — bootstrap chainload, iter 0
+complete Sphragis cycles end-to-end — bootstrap chainload, iter 0
 boot/auth/tab-to-X/halt/HV-exit, in-session chainload to fresh
 m1n1, iter 1 same flow — and exited cleanly via `os._exit(0)`.
 
@@ -17982,7 +17982,7 @@ preamble needed.
 Keyboard (both paths still blocked on MTP firmware blob
 extraction from macOS). 10:00 entry covers that.
 
-### Net: ∞ Bat_OS cycles per Python invocation, zero power-cycles
+### Net: ∞ Sphragis cycles per Python invocation, zero power-cycles
 
 ---
 
@@ -18007,7 +18007,7 @@ m1n1.proxy.ProxyCommandError: Reply error: Bad Command
 
 Symbol is in our built m1n1.elf (`hv_map_vuart_dockchannel` at
 0x1ac70), just not in what's running. Running m1n1's banner
-version ≠ our tree. To run Bat_OS we always need to first
+version ≠ our tree. To run Sphragis we always need to first
 chainload the tree-built m1n1 over USB.
 
 ### Fix: `BATOS_HV_BOOTSTRAP_CHAINLOAD=1`
@@ -18020,7 +18020,7 @@ reboot) if the running m1n1 was already ours.
 
 ### Finding 2: stim thread + vuart_reader must start POST-bootstrap
 
-First successful bootstrap run got Bat_OS booting cleanly but halt
+First successful bootstrap run got Sphragis booting cleanly but halt
 never fired because the stim thread was dead — it had fired into
 the vuart mid-chainload while USB CDC was resetting and raised
 `OSError: [Errno 5] Input/output error`. Moved both thread spawns
@@ -18063,12 +18063,12 @@ BATOS_HV_LOOP=1 BATOS_HV_LOOP_MAX=2 BATOS_HV_BOOTSTRAP_CHAINLOAD=1 \
 
 Signals to watch:
   - `bootstrap chainload ok — proxy talking to patched m1n1`
-  - `[iter 0] calling hv.start()` → Bat_OS banner on vuart → halt
+  - `[iter 0] calling hv.start()` → Sphragis banner on vuart → halt
     stim fires → `[iter 0] hv.start() returned cleanly`
   - `[iter 0 → 1] chainloading fresh m1n1` → `[iter 1] fresh m1n1 ready`
-  - Second Bat_OS cycle → halt → exit loop at LOOP_MAX=2
+  - Second Sphragis cycle → halt → exit loop at LOOP_MAX=2
 
-If bootstrap chainload succeeds but Bat_OS never emits vuart output,
+If bootstrap chainload succeeds but Sphragis never emits vuart output,
 look at the `Traceback` / stim-thread state — the deferred-spawn fix
 may have regressed. Full hv heartbeat with no vuart prints is the
 classic "stim thread died on USB-CDC reset" signature.
@@ -18081,7 +18081,7 @@ classic "stim thread died on USB-CDC reset" signature.
 
 Took the optional side-quest from the morning hand-off. The halt →
 chainload loop is now self-sustaining: one `python3
-batos_hv_interactive.py` = N back-to-back Bat_OS sessions,
+batos_hv_interactive.py` = N back-to-back Sphragis sessions,
 chainloading a fresh m1n1 between each, never opening a second
 pyserial fd, never dropping DTR. Keyboard work deferred — both
 paths (host-side MTP bridge, native MTP-in-Rust) are blocked on
@@ -18149,7 +18149,7 @@ pass; `_build_hv` / `_post_exit_diag` / `chainload_inline` /
 
   - Iter 0 runs exactly like today (no regression against the
     09:00 BATOS_HV_RECHAINLOAD=1 demo).
-  - After iter 0 halts, iter 1 actually boots Bat_OS again (the
+  - After iter 0 halts, iter 1 actually boots Sphragis again (the
     `_halt_seen.clear()` re-arms the reader correctly, and the
     fresh `ProxyUtils(p)` doesn't trip on any stale heap state).
   - `Ctrl+C` during iter N's `hv.start()` cleanly breaks the loop
@@ -18252,7 +18252,7 @@ Full MTP bring-up on M4 needs:
   - `BATOS_HV_MTP_SKIP_DAPF=1` (default) — bypass dapf_init_all;
     M4's dart-mtp DAPF path hangs m1n1's proxy.
   - `BATOS_HV_MTP_BRIDGE_TO_VUART=1` — route decoded keyboard
-    bytes to the vuart so Bat_OS (if running) sees them via
+    bytes to the vuart so Sphragis (if running) sees them via
     platform::serial_getc. Stubbed; activates once ASC boots.
   - HID→ASCII decode table in `_HID_TO_ASCII` with shift/ctrl
     modifier support.
@@ -18274,8 +18274,8 @@ If the next Claude picks up letter B:
   3. Call the loader before `mtp.boot()`.
   4. Expect the existing MTPKeyboardInterface subclass to start
      receiving HID reports on key press — and the vuart bridge
-     to forward ASCII bytes to Bat_OS.
-  5. Long-term: rewrite all of this in Rust inside Bat_OS so
+     to forward ASCII bytes to Sphragis.
+  5. Long-term: rewrite all of this in Rust inside Sphragis so
      keyboard works without host-side bridge.
 
 ### Net: scoped cleanly, blocker documented
@@ -18334,12 +18334,12 @@ Cannot be salvaged. Two viable paths forward:
      including `MTPKeyboardInterface`). Wire that into
      `batos_hv_interactive.py` to subscribe to keyboard events
      and forward the resulting bytes through the dockchannel
-     vuart. Bat_OS receives them via its existing
+     vuart. Sphragis receives them via its existing
      `platform::serial_getc` — no guest-side changes needed.
 
   2. **Native MTP-in-Rust (real solution, multi-session).**
      Port ASC coprocessor mailbox + RTKit protocol + MTP packet
-     format to Rust inside Bat_OS. This is the "correct" target
+     format to Rust inside Sphragis. This is the "correct" target
      but it's weeks of work: ASC mailbox, RTKit STATE/PING
      messages, DART iommu for AOP shared memory, MTP message
      types, HID descriptor parsing, keycode mapping, repeat /
@@ -18372,7 +18372,7 @@ a proper native Rust MTP port is the long-term target.
 ## 2026-04-21 09:00 — Ubuntu — No-power-cycle loop: halt → re-chainload, all within one proxy session ✅
 
 Closes yesterday's open item (letter A from the morning plan).
-Bat_OS's halt UI → m1n1 HV clean-exit → re-chainload a fresh
+Sphragis's halt UI → m1n1 HV clean-exit → re-chainload a fresh
 m1n1 → fresh m1n1 is alive and pingable, **no physical power
 button needed**.
 
@@ -18431,7 +18431,7 @@ that reuses the existing iface/p/u — no second pyserial open,
 no DTR drop, no kernel cdc-acm ordering games. Called on
 `BATOS_HV_RECHAINLOAD=1` after `hv.start()` returns. The session
 then holds the new m1n1 with a periodic `p.nop()`. To start a
-new Bat_OS demo run: kill this session (accept one DTR drop)
+new Sphragis demo run: kill this session (accept one DTR drop)
 and re-attach — OR extend the loop to auto-`hv.init()` +
 `load_raw()` + `start()` the new m1n1 right there. Left the
 auto-restart loop as a follow-up — the primitive works.
@@ -18464,7 +18464,7 @@ auto-restart loop as a follow-up — the primitive works.
 
   - Wrap the halt → chainload → hv.init/start cycle into an
     actual loop so one `python3 batos_hv_interactive.py` =
-    infinite Bat_OS demo sessions. 
+    infinite Sphragis demo sessions. 
   - Investigate why kernel cdc-acm serialises opens this way
     (might not be serialising — might be that m1n1's CDC
     endpoint stops ACKing URBs when its `Running proxy...`
@@ -18483,11 +18483,11 @@ unwind the HV cleanly.
 
 ### What works end-to-end (validated on hardware)
 
-Full chain from Bat_OS into Python exit:
+Full chain from Sphragis into Python exit:
 
 ```
 [BATOS] halt requested via UI close button — entering wfe loop
-[host] Bat_OS halt marker — kicking HV for clean exit
+[host] Sphragis halt marker — kicking HV for clean exit
 TTY> HV: User interrupt
 [host] run_shell intercepted — halt flag set, returning EXIT_GUEST
 TTY> HV: Exiting hypervisor (main CPU)
@@ -18561,10 +18561,10 @@ re-enter) is isolated and tractable.
 
 ## 2026-04-20 22:15 — Ubuntu — 🦇 TAB-TO-X SHUTDOWN VALIDATED END-TO-END ON M4 ✅
 
-Handoff's checklist completed: Tab × 9 + Enter on the Bat_OS
+Handoff's checklist completed: Tab × 9 + Enter on the Sphragis
 desktop triggered the close-button-X halt path, and every step
 of `halt_bat_os()` ran in sequence, ending in the intended
-"BAT_OS HALTED" banner on the Mac's display while m1n1 retained
+"SPHRAGIS HALTED" banner on the Mac's display while m1n1 retained
 EL2 control (no reset, watchdog still disabled).
 
 ### Final marker trace from the successful run
@@ -18581,7 +18581,7 @@ EL2 control (no reset, watchdog still disabled).
 [halt] got fb
 [halt] clear_clip
 [halt] fill_screen done
-[halt] draw1 done      ("BAT_OS HALTED")
+[halt] draw1 done      ("SPHRAGIS HALTED")
 [halt] draw2 done      ("(close pressed; m1n1 retains control)")
 [halt] draw3 done      ("Reboot the Mac to restart.")
 [halt] flush_all done
@@ -19037,12 +19037,12 @@ Built the shutdown UI Kaden requested (commit 877502e4):
     renders inverted (black-on-white) when focused.
   - `desktop.rs` Tab handler: cycles app 0..8 → close-button-X →
     back to app 0. Enter on focused X → `halt_bat_os()` which
-    paints "BAT_OS HALTED" banner, prints `[BATOS] halt requested`
+    paints "SPHRAGIS HALTED" banner, prints `[BATOS] halt requested`
     on serial, then enters wfe loop forever.
 
 Built clean, m1n1 chainloaded with the watchdog-disable fix. HV
 ran for 12+ minutes proving the disable is stable. **However: the
-demo couldn't be tested end-to-end** because Bat_OS's
+demo couldn't be tested end-to-end** because Sphragis's
 `security::boot_screen::run()` (the login passphrase screen) hangs
 under HV when `BATOS_KEEP_FB=1` is on:
 
@@ -19052,13 +19052,13 @@ under HV when `BATOS_KEEP_FB=1` is on:
 ```
 
 Direct vuart writes from the host don't increment sync either,
-proving Bat_OS is NOT in the boot_screen input-poll loop. It's
+proving Sphragis is NOT in the boot_screen input-poll loop. It's
 wedged somewhere between `auth::init` and the `serial_getc()`
 loop — most likely a draw call (`gpu::fill_screen`,
 `font::draw_str`, or `gpu::flush`) that takes forever or
 deadlocks under HV.
 
-Without `KEEP_FB` Bat_OS falls back to `apple_serial_shell()`
+Without `KEEP_FB` Sphragis falls back to `apple_serial_shell()`
 and never reaches the desktop, so we can't test the X button there
 either.
 
@@ -19174,7 +19174,7 @@ or SMC mailbox tickle. Without knowing what it is, can't pet.
   - `BATOS_HV_INIT_ONLY=1` — call `hv.init()` but never
     `hv.start()`; sleep 200 s. Probes whether hv_init alone
     arms the watchdog.
-  - `BATOS_HV_PAYLOAD=path` — override the bat_os payload (used
+  - `BATOS_HV_PAYLOAD=path` — override the sphragis payload (used
     `wfi_guest.bin` to prove guest activity isn't the trigger).
 
 `hv.c` now has experimental writes to /arm-io/wdt reg[1..4] at
@@ -19183,7 +19183,7 @@ end of `hv_init`. Currently a no-op for the ceiling (= 113 s).
 ### init-only refinement (hv.init() but no hv.start())
 
 Used `BATOS_HV_INIT_ONLY=1` to fire `hv.init()` but never
-`hv.start()`. The script loads the bat_os payload, then sleeps
+`hv.start()`. The script loads the sphragis payload, then sleeps
 200 s while the Mac is left sitting post-hv_init. Two cycles:
 
   cycle 1 (Mac carryover from prev bisect):
@@ -19948,10 +19948,10 @@ Reverted aop.c/aop.h/Makefile changes.
 ### Approach 3: Guest-side SMC MMIO from EL1
 
 Completely different path. Kaden's "guest-side ASC" suggestion:
-have Bat_OS do the MMIO from EL1 where stage-2 passthrough
+have Sphragis do the MMIO from EL1 where stage-2 passthrough
 already covers /arm-io and no HV-context hazards apply.
 
-Landed three Bat_OS shell commands (src/ui/shell.rs):
+Landed three Sphragis shell commands (src/ui/shell.rs):
   - `smc-probe`: dsb sy → read SMC CPU_CONTROL, A2I_CONTROL,
     I2A_CONTROL → dsb sy. Confirms stage-2 passthrough works.
   - `smc-pet`: enables a 10 Hz SMC I2A_CTRL read piggy-backed on
@@ -20044,7 +20044,7 @@ the wall-clock reset becomes background noise.
   heartbeat + wall clock → loop back. Running stats printed per
   cycle (n, min, max, p50, avg). Ctrl+C clean exit.
 - `scripts/hv/run_hv_forever.sh` — single-entry-point wrapper that
-  rebuilds m1n1 / bat_os_apple.bin if sources are newer than their
+  rebuilds m1n1 / sphragis_apple.bin if sources are newer than their
   artifacts, then hands off to the supervisor.
 
 Knobs (all env vars):
@@ -20095,7 +20095,7 @@ just poke the Mac and walk back.
     watch the 60-96 s ceiling converge in real time, and if a
     future change moves the ceiling, it shows up instantly in the
     stats line.
-  - Stimulus replayed every cycle — Bat_OS comes back up in the
+  - Stimulus replayed every cycle — Sphragis comes back up in the
     same state every time.
   - User sees one consistent command prompt: `run_hv_forever.sh`,
     walk away. Not "chainload, run, watch for death, chainload
@@ -20154,7 +20154,7 @@ Things I can't easily fix without more invasive changes:
   - What drives the 14 s stall — probably
     `apple::ui::desktop::run()` doing one-time per-app layout work
     or paint that doesn't touch dockchannel. Would need to
-    instrument Bat_OS to find out.
+    instrument Sphragis to find out.
   - The wall-clock ~100 s ceiling — unchanged. See other
     entries — AIC drain, SMC bring-up, SPMI poke all dead.
 
@@ -20320,7 +20320,7 @@ thought — MMIO to AIC / SMC ASC from that context breaks the
 guest. Getting past 96 s almost certainly needs code that runs
 *outside* `hv_exc_fiq`: either from m1n1's main context (via a
 proxy-entry hook that fires when the HV takes a pause) or from
-the guest itself (Bat_OS-side code that talks to SMC / AOP over
+the guest itself (Sphragis-side code that talks to SMC / AOP over
 MMIO at EL1, with the HV forwarding the requisite DART / IRQ
 infrastructure).
 
@@ -20684,7 +20684,7 @@ are spent. Remaining theories, in rough order of effort:
 
 3. **Thermal/cpufreq watchdog.** M4_GROUND_TRUTH notes
    `cpufreq: Chip 0x8132 is unsupported` + spontaneous-reset
-   pattern under load. Bat_OS guest currently runs at whatever
+   pattern under load. Sphragis guest currently runs at whatever
    default PMGR dialed in. If the OS fails to ack a thermal
    request inside N seconds the chip may bounce. Hard to validate
    without a thermal-request trace.
@@ -20711,7 +20711,7 @@ predated the three SError fixes that landed later the same day
 stage-2 alias, vuart-FB deadlock → direct-dockchannel cmd_screen).
 Re-testing with those fixes in place shows tick now helps:
 
-Back-to-back A/B on identical `bat_os_apple.bin`, identical
+Back-to-back A/B on identical `sphragis_apple.bin`, identical
 stimulus (`batman` unlock then 14× `uptime` with 0.8 s spacing),
 `BATOS_KEEP_FB=1`, `-S` chainload:
 
@@ -20751,7 +20751,7 @@ task #6 (re-enable HV tick) is now ✅.
 Repro (both runs captured with this exact pipeline):
 
 ```bash
-BAT_OS_PASSPHRASE=batman bash build_apple.sh
+SPHRAGIS_PASSPHRASE=batman bash build_apple.sh
 make -C external/m1n1 -j4
 sudo -n --preserve-env=M1N1DEVICE,M1N1WAIT \
   M1N1DEVICE=/dev/ttyACM1 M1N1WAIT=1 \
@@ -20801,7 +20801,7 @@ faint tab bar across the top plus the shell pane below are from
 - `72bc6d78` bulk swap `drivers::uart` → `platform::serial_*` in
   ui::desktop, ui::shell, ui::apps::browser.
 - `be7a1abb` + `4dded675` login screen renders + real auth flow
-  (`BAT_OS_PASSPHRASE=batman` works end to end).
+  (`SPHRAGIS_PASSPHRASE=batman` works end to end).
 - `6b69d83c` `ui::gpu` shim + `font::draw_*` ARGB8888→native
   colour conversion — the fundamental primitive that made
   QEMU UI code run on Apple.
@@ -20861,20 +20861,20 @@ faint tab bar across the top plus the shell pane below are from
 
 ```bash
 # 1. Build with a known passphrase:
-BAT_OS_PASSPHRASE=batman bash build_apple.sh
+SPHRAGIS_PASSPHRASE=batman bash build_apple.sh
 
 # 2. After Mac boots back to stock m1n1, chainload the patched
 #    m1n1 + proxy-client stack:
 sudo -n --preserve-env=M1N1DEVICE,M1N1WAIT \
   M1N1DEVICE=/dev/ttyACM1 M1N1WAIT=1 \
   /usr/bin/python3 \
-  /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py \
-  -S /home/kaden-lee/code/Bat_OS/external/m1n1/build/m1n1.macho
+  /home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/tools/chainload.py \
+  -S /home/kaden-lee/code/Sphragis/external/m1n1/build/m1n1.macho
 
 # 3. Run the guest with FB kept + scripted auth + screen capture:
 sg dialout -c "BATOS_KEEP_FB=1 BATOS_HV_STIMULUS='batman;;screen 8' \
   timeout 120 /usr/bin/python3 \
-  /home/kaden-lee/code/Bat_OS/scripts/hv/batos_hv_interactive.py" \
+  /home/kaden-lee/code/Sphragis/scripts/hv/batos_hv_interactive.py" \
   > /tmp/hv.log 2>&1
 
 # 4. Decode the captured FB dump into a PNG:
@@ -20886,27 +20886,27 @@ onboarding cold.
 
 ---
 
-## 2026-04-20 09:30 — Ubuntu — BAT_OS SCREEN VISIBLE ON UBUNTU, CAMERA OBSOLETE ✅📸→🗑️
+## 2026-04-20 09:30 — Ubuntu — SPHRAGIS SCREEN VISIBLE ON UBUNTU, CAMERA OBSOLETE ✅📸→🗑️
 
-You can now see Bat_OS's live M4 LCD from Ubuntu with no HDMI cable,
+You can now see Sphragis's live M4 LCD from Ubuntu with no HDMI cable,
 no adapter, no camera — just USB-CDC. Two resolutions captured:
 
 - `docs/screens/2026-04-20_batos_hv_live_8x.png` (378×245, quick)
 - `docs/screens/2026-04-20_batos_hv_live_4x.png` (756×491, readable
-  text — visibly shows BAT_OS splash shield, fb_console boot log,
+  text — visibly shows SPHRAGIS splash shield, fb_console boot log,
   self-test PASS, shell history)
 
 How it works:
 
 1. **`BATOS_KEEP_FB=1`** — Python-side `hv.start()` now honours this
    env var. When set, we skip `fb_shutdown(True)` on HV entry and
-   the framebuffer stays live. Bat_OS paints to the physical FB; DCP
+   the framebuffer stays live. Sphragis paints to the physical FB; DCP
    scans it out to the Mac's internal LCD; the bytes we later read
    back are the same bytes a human would see on the panel. Side
    benefit: DCP scanning keeps bus activity up, session length went
    from ~45 s to ~100 s.
 
-2. **`screen [N]`** — new shell command in Bat_OS. Reads the FB at
+2. **`screen [N]`** — new shell command in Sphragis. Reads the FB at
    1/N scale (default 4, 756×491; 8 gives 378×245 for fast capture),
    hex-encodes each pixel, and writes the stream directly to
    dockchannel UART DATA_TX8 — bypassing fb_console so we don't
@@ -20935,19 +20935,19 @@ How it works:
 ### Repro workflow
 
 ```bash
-cd /home/kaden-lee/code/Bat_OS
+cd /home/kaden-lee/code/Sphragis
 
 # Wait for stock m1n1, then chainload the patched one.
 sudo -n --preserve-env=M1N1DEVICE,M1N1WAIT \
     M1N1DEVICE=/dev/ttyACM1 M1N1WAIT=1 \
     /usr/bin/python3 \
-    /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py \
-    -S /home/kaden-lee/code/Bat_OS/external/m1n1/build/m1n1.macho
+    /home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/tools/chainload.py \
+    -S /home/kaden-lee/code/Sphragis/external/m1n1/build/m1n1.macho
 
-# Run Bat_OS under HV with FB kept + stimulate `screen 4`.
+# Run Sphragis under HV with FB kept + stimulate `screen 4`.
 sg dialout -c "BATOS_KEEP_FB=1 BATOS_HV_STIMULUS='screen 4' \
     timeout 150 /usr/bin/python3 \
-    /home/kaden-lee/code/Bat_OS/scripts/hv/batos_hv_interactive.py" \
+    /home/kaden-lee/code/Sphragis/scripts/hv/batos_hv_interactive.py" \
     > /tmp/hv.log 2>&1
 
 # Decode the PNG.
@@ -20960,7 +20960,7 @@ for the `screen 4` dump itself, then the Mac resets shortly after.
 
 ### One extra gate that made it reliable
 
-`drivers::apple::spi::init()` was hanging Bat_OS under HV after the
+`drivers::apple::spi::init()` was hanging Sphragis under HV after the
 self-test replay completed (SPI controller MMIO is m1n1-owned under
 HV). Gated behind `!under_hv` in src/main.rs.
 
@@ -20970,7 +20970,7 @@ HV). Gated behind `!under_hv` in src/main.rs.
   USB-CDC worked.
 - Now both USB-CDC shell (interactive text) AND `screen`
   (pixel-level capture) are live.
-- Keep the camera as a fallback for (a) direct bat_os_apple.bin
+- Keep the camera as a fallback for (a) direct sphragis_apple.bin
   chainload without m1n1 as HV — there's no USB-CDC there — and
   (b) early-HV-breakage debugging where the shell + `screen` both
   go dark.
@@ -21044,13 +21044,13 @@ Current shell command set over USB-CDC under HV:
 
 ---
 
-## 2026-04-19 22:30 — Ubuntu — BAT_OS CPUID + SHA-256 LIVE OVER HV SHELL, ~2× LONGER SESSIONS
+## 2026-04-19 22:30 — Ubuntu — SPHRAGIS CPUID + SHA-256 LIVE OVER HV SHELL, ~2× LONGER SESSIONS
 
 **Session-length up to ~80-100 s**, more shell commands, and real
 crypto output over USB-CDC on M4:
 
 ```
-bat_os> cpuid
+sphragis> cpuid
   MIDR_EL1:   0x00000000611f0531
   CTR_EL0:    0x000000009444c004
   CurrentEL:  1
@@ -21058,20 +21058,20 @@ bat_os> cpuid
   AIDR_EL1:   0x000000d168699696
   MIDR.PART:  0x00000053
   -> M4 Donan (P core)
-bat_os> sha256 hello
+sphragis> sha256 hello
   input: hello
   bytes: 5
   sha256: 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
 ```
 
-The `hello` hash matches the canonical SHA-256 — Bat_OS's crypto
+The `hello` hash matches the canonical SHA-256 — Sphragis's crypto
 stack is correct on live M4 hardware, under m1n1 HV, accessible
 via an interactive shell over USB-CDC.
 
 ### What changed in this sub-session
 
 - **`external/m1n1/src/hv_vuart.c`**: dockchannel MMIO trap now
-  also calls `iodev_handle_events(uartproxy_iodev)` — since Bat_OS's
+  also calls `iodev_handle_events(uartproxy_iodev)` — since Sphragis's
   shell busy-polls `has_char()` via DATA_RX_COUNT, every shell tick
   also pets the primary USB CDC endpoint. In practice doubles the
   session length from ~30-60 s to ~80-100 s before the SMC-suspected
@@ -21123,24 +21123,24 @@ via an interactive shell over USB-CDC.
    hit an ungated IMPDEF MSR. Our workaround: use the `scripts/hv/
    batos_hv_interactive.py` path, which opens ttyACM2 ONCE and
    holds it, so the control messages fire once cleanly.
-3. **AIC v3 Bat_OS driver** — we currently gate AIC init under HV,
-   which means Bat_OS has no interrupts and can only poll. Fixing
-   this unblocks Bat_OS's scheduler/timer work under HV.
+3. **AIC v3 Sphragis driver** — we currently gate AIC init under HV,
+   which means Sphragis has no interrupts and can only poll. Fixing
+   this unblocks Sphragis's scheduler/timer work under HV.
 4. **Remove the m1n1.macho chainload step**. Right now each session
    needs a fresh chainload. Ideally we persist the patched m1n1 via
    kmutil (same way stock m1n1 is installed) so Mac boot → patched
-   m1n1 → automatic run_guest with Bat_OS payload.
+   m1n1 → automatic run_guest with Sphragis payload.
 
 ---
 
-## 2026-04-19 22:00 — Ubuntu — END-TO-END INTERACTIVE BAT_OS SHELL OVER USB-CDC ON M4 UNDER HV ✅✅
+## 2026-04-19 22:00 — Ubuntu — END-TO-END INTERACTIVE SPHRAGIS SHELL OVER USB-CDC ON M4 UNDER HV ✅✅
 
 **Camera is now obsolete.** Typing `help\r` into the vuart CDC
-endpoint from Ubuntu and receiving Bat_OS's actual kernel response
+endpoint from Ubuntu and receiving Sphragis's actual kernel response
 on the same port:
 
 ```
-bat_os>
+sphragis>
   help           — list commands
   uname          — kernel identity
   mem            — frame allocator stats
@@ -21150,7 +21150,7 @@ bat_os>
   batfs create <name> <plaintext>
   batfs read <name>
   halt
-bat_os>
+sphragis>
 ```
 
 Evidence: `docs/2026-04-19_batos_hv_interactive_help_session_extracted.txt`.
@@ -21179,7 +21179,7 @@ the tty between operations. New script:
 ### Reproduce
 
 ```bash
-cd /home/kaden-lee/code/Bat_OS
+cd /home/kaden-lee/code/Sphragis
 # Chainload patched m1n1 (same workflow as the 21:45 entry).
 
 # Run the interactive script — injects 'help\r' after it sees the
@@ -21189,7 +21189,7 @@ sg dialout -c "BATOS_HV_STIMULUS='help\\\\r' timeout 40 \
     /usr/bin/python3 scripts/hv/batos_hv_interactive.py" \
     | grep -v '^TTY> \[hv_exc'
 # Filter the hv_exc_sync breadcrumbs (one per dockchannel MMIO trap)
-# if you just want the Bat_OS output.
+# if you just want the Sphragis output.
 
 # For a fully interactive prompt, run without STIMULUS set and use
 # a separate terminal pointed at /dev/ttyACM2 — but know that the
@@ -21213,11 +21213,11 @@ sg dialout -c "BATOS_HV_STIMULUS='help\\\\r' timeout 40 \
 
 ---
 
-## 2026-04-19 21:45 — Ubuntu — Bat_OS BOOTS UNDER M1N1 HV — kernel log + `bat_os>` prompt on /dev/ttyACM2 ✅
+## 2026-04-19 21:45 — Ubuntu — Sphragis BOOTS UNDER M1N1 HV — kernel log + `sphragis>` prompt on /dev/ttyACM2 ✅
 
-**One-line status.** Bat_OS now runs as a guest under m1n1's
+**One-line status.** Sphragis now runs as a guest under m1n1's
 hypervisor on real M4 hardware. Full kernel boot banner, boot args,
-microkernel init, BatFS init, and the `bat_os>` shell prompt all
+microkernel init, BatFS init, and the `sphragis>` shell prompt all
 stream over `/dev/ttyACM2` via a new dockchannel-UART vuart trap we
 added to m1n1. Evidence saved at
 `docs/2026-04-19_batos_under_hv_ttyACM2_boot_log.txt`.
@@ -21257,10 +21257,10 @@ added to m1n1. Evidence saved at
   `base + 0x4014`. `base & 0xffff` masked bit 15 wrong on M4
   (the access address is 0x38812c014, `& 0xffff` yields 0xc014, not
   0x4014 — which sent DATA_TX_FREE to the default case, returning 0,
-  which wedged Bat_OS's `while(read32(TX_FREE)==0)` forever). Handler
+  which wedged Sphragis's `while(read32(TX_FREE)==0)` forever). Handler
   now computes `addr - vuart_dc_base`. That was the decisive bug.
 
-**Bat_OS (src/main.rs + src/arch/aarch64/apple/boot.s):**
+**Sphragis (src/main.rs + src/arch/aarch64/apple/boot.s):**
 
 - Detect HV (CurrentEL == EL1) at the top of `kernel_main_apple` and
   set an `under_hv` flag.
@@ -21268,7 +21268,7 @@ added to m1n1. Evidence saved at
   pass-through mapping of AIC v3 at 0x381000000 clashes with the
   configuration m1n1's HV already applied, triggering an L2C
   external error that crashes the HV. Under HV we just skip the
-  hardware bring-up; Bat_OS has no IRQs yet anyway, and the shell
+  hardware bring-up; Sphragis has no IRQs yet anyway, and the shell
   polls the UART.
 - Gate `soc::set_fb_info` behind `!under_hv` so every FB-touching
   path (`dcp::boot_splash`, `fb_console`, `apple_kernel_self_test`)
@@ -21285,7 +21285,7 @@ added to m1n1. Evidence saved at
 
 ```
 ================================================
-  BAT_OS — BARE METAL APPLE SILICON
+  SPHRAGIS — BARE METAL APPLE SILICON
   Running on REAL M4 hardware.
 ================================================
 
@@ -21304,7 +21304,7 @@ added to m1n1. Evidence saved at
 [boot] Initializing display...
 [boot] No display — serial shell
 
-bat_os>
+sphragis>
 ```
 
 665 bytes, clean, no echo garbage (see echo-gotcha below).
@@ -21312,8 +21312,8 @@ bat_os>
 ### Exact workflow to reproduce tonight
 
 ```bash
-cd /home/kaden-lee/code/Bat_OS
-# If you touched m1n1 or Bat_OS source:
+cd /home/kaden-lee/code/Sphragis
+# If you touched m1n1 or Sphragis source:
 #   cd external/m1n1 && make -j$(nproc) && cd -
 #   bash build_apple.sh
 
@@ -21330,33 +21330,33 @@ udevadm info /dev/ttyACM1 | grep ID_MODEL=   # expect bcee7f2
 sudo -n --preserve-env=M1N1DEVICE,M1N1WAIT \
     M1N1DEVICE=/dev/ttyACM1 M1N1WAIT=1 \
     /usr/bin/python3 \
-    /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py \
-    -S /home/kaden-lee/code/Bat_OS/external/m1n1/build/m1n1.macho
+    /home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/tools/chainload.py \
+    -S /home/kaden-lee/code/Sphragis/external/m1n1/build/m1n1.macho
 sleep 3
 udevadm info /dev/ttyACM1 | grep ID_MODEL=   # expect "unknown" (our tag)
 
 # BEFORE starting run_guest.py, start the vuart reader with ECHO OFF.
 # Ubuntu's tty layer defaults to `echo echoctl icanon`, which means
-# Bat_OS's TX bytes (including \r and \n) get ECHOED BACK as `^M` and
-# `^J` sequences, which the Bat_OS shell then treats as input, which
+# Sphragis's TX bytes (including \r and \n) get ECHOED BACK as `^M` and
+# `^J` sequences, which the Sphragis shell then treats as input, which
 # it echoes, which Ubuntu echoes, etc. Looks like repeating
-# ^M^J=============^MM^J… — NOT a Bat_OS bug; it's tty echo.
+# ^M^J=============^MM^J… — NOT a Sphragis bug; it's tty echo.
 rm -f /tmp/vuart.log
 sg dialout -c 'stty -F /dev/ttyACM2 raw -echo -echoctl -icanon -icrnl -onlcr -opost min 1 time 0; nohup cat /dev/ttyACM2 > /tmp/vuart.log 2>/dev/null &'
 
 # Now run the guest. (Python's hv.start() call will eventually hit
-# SerialException when the HV eventually resets — that's fine, Bat_OS
+# SerialException when the HV eventually resets — that's fine, Sphragis
 # is running on the Mac under the HV regardless of Python's state.)
 sg dialout -c "M1N1DEVICE=/dev/ttyACM1 timeout 30 /usr/bin/python3 \
-    /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/run_guest.py \
-    --raw --entry-point 0 /home/kaden-lee/code/Bat_OS/target/bat_os_apple.bin"
+    /home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/tools/run_guest.py \
+    --raw --entry-point 0 /home/kaden-lee/code/Sphragis/target/sphragis_apple.bin"
 
-cat /tmp/vuart.log   # full Bat_OS kernel log up to the bat_os> prompt
+cat /tmp/vuart.log   # full Sphragis kernel log up to the sphragis> prompt
 ```
 
 ### Known limitations (next-session targets)
 
-1. **Ubuntu → Bat_OS input doesn't land.** Writing to /dev/ttyACM2
+1. **Ubuntu → Sphragis input doesn't land.** Writing to /dev/ttyACM2
    via `printf`, `exec 3<>`, or pyserial does NOT appear in the
    guest's RX ring (`iodev_can_read(IODEV_USB_VUART)` always returns
    0). Hypothesis: when only `cat` (O_RDONLY) holds the port open,
@@ -21404,13 +21404,13 @@ cat /tmp/vuart.log   # full Bat_OS kernel log up to the bat_os> prompt
 ### Key realisation we learned the hard way
 
 **Ubuntu tty `echo` is ON by default even for USB CDC.** The
-`^M^J=============^MM^J` pattern that looked like a Bat_OS bug was
-just Ubuntu echoing Bat_OS's CRLF output back to Bat_OS's shell,
+`^M^J=============^MM^J` pattern that looked like a Sphragis bug was
+just Ubuntu echoing Sphragis's CRLF output back to Sphragis's shell,
 which then echoed it back to Ubuntu, which echoed it back, etc. The
 14-byte "banner" that looked like a truncated 48-char `=` banner was
-actually Ubuntu's terminal printing the `\r` + `\n` from Bat_OS's
+actually Ubuntu's terminal printing the `\r` + `\n` from Sphragis's
 `uart::puts("\r\n")` as `^M^J` (via `echoctl`) — 4 chars — PLUS
-Bat_OS's "================================================\n\r\n" chunked
+Sphragis's "================================================\n\r\n" chunked
 weirdly by the echo loop.
 
 Moral: `stty -F /dev/ttyACM2 raw -echo -echoctl -icanon -opost` is
@@ -21449,7 +21449,7 @@ ticks) under the patched m1n1 hypervisor on real M4 hardware before
   `hv_exc_irq`, `hv_exc_fiq`, `hv_exc_serr` so we can see which
   kind of exception is firing from the stream of serial output.
 
-**Bat_OS side (src/):**
+**Sphragis side (src/):**
 
 - `arch/aarch64/apple/boot.s` — skip the 16 MiB framebuffer proof-
   of-life paint when `CurrentEL == EL1`. Under `run_guest.py`,
@@ -21508,9 +21508,9 @@ exception printf" symptom.
 ### Exact workflow to reproduce tonight's state
 
 ```bash
-cd /home/kaden-lee/code/Bat_OS
+cd /home/kaden-lee/code/Sphragis
 
-# m1n1 is already built; Bat_OS is already built. If you touched
+# m1n1 is already built; Sphragis is already built. If you touched
 # either, rebuild:
 #   cd external/m1n1 && make -j$(nproc) && cd -
 #   bash build_apple.sh
@@ -21527,21 +21527,21 @@ udevadm info /dev/ttyACM1 | grep ID_MODEL=   # expect bcee7f2
 sudo -n --preserve-env=M1N1DEVICE,M1N1WAIT \
     M1N1DEVICE=/dev/ttyACM1 M1N1WAIT=1 \
     /usr/bin/python3 \
-    /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py \
-    -S /home/kaden-lee/code/Bat_OS/external/m1n1/build/m1n1.macho
+    /home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/tools/chainload.py \
+    -S /home/kaden-lee/code/Sphragis/external/m1n1/build/m1n1.macho
 sleep 3
 udevadm info /dev/ttyACM1 | grep ID_MODEL=   # expect unknown (our build tag)
 
 # Smoke-test with the WFE loop (this is the MINIMAL guest — zero
-# Bat_OS code in the path — isolates HV issues from Bat_OS issues):
+# Sphragis code in the path — isolates HV issues from Sphragis issues):
 sg dialout -c "M1N1DEVICE=/dev/ttyACM1 timeout 60 /usr/bin/python3 \
-    /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/run_guest.py \
+    /home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/tools/run_guest.py \
     --raw --entry-point 0 /tmp/wfe_guest.bin" 2>&1 | tee /tmp/hv.log
 
 # Expect: [hv_init] M0..M14 (all), [hv_start] S0..S8 (all),
 # ~17 × [hv_exc_fiq] enter, then SerialException.
 
-# The same pattern reproduces with Bat_OS's bat_os_apple.bin payload —
+# The same pattern reproduces with Sphragis's sphragis_apple.bin payload —
 # the guest just doesn't make it far enough to print anything before
 # the USB dies, so to debug the HV itself use the WFE payload.
 ```
@@ -21561,12 +21561,12 @@ sg dialout -c "M1N1DEVICE=/dev/ttyACM1 timeout 60 /usr/bin/python3 \
    buffer stall, seeing flush behavior change will tell us.
 4. **Only once the Mac doesn't reset** — wire up a vuart for the
    M4 dockchannel UART (0x3_8812_8000). m1n1's existing vuart maps
-   uart0 (0x3_ad20_0000, Samsung semantics). Bat_OS writes to
+   uart0 (0x3_ad20_0000, Samsung semantics). Sphragis writes to
    dockchannel — different register layout. Either (A) patch
    `hv_vuart.c` to also recognise dockchannel register offsets and
    add a `hv_map_vuart_dockchannel(base, irq, iodev)` in
    `external/m1n1/src/` + Python `map_vuart_dockchannel` in
-   `hv/__init__.py`, or (B) on M4 under HV have Bat_OS write to
+   `hv/__init__.py`, or (B) on M4 under HV have Sphragis write to
    0x3_ad20_0000 with Samsung semantics (needs a new driver mode
    in `drivers/apple/uart.rs`). Option (A) is cleaner but requires
    knowing dockchannel reg semantics — we already have
@@ -21576,7 +21576,7 @@ sg dialout -c "M1N1DEVICE=/dev/ttyACM1 timeout 60 /usr/bin/python3 \
 
 - **`sudo -n /usr/bin/python3 external/m1n1/.../chainload.py`
   without absolute path** fails. The passwordless rule in
-  `/etc/sudoers` matches `/usr/bin/python3 /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py *`
+  `/etc/sudoers` matches `/usr/bin/python3 /home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/tools/chainload.py *`
   — relative path = password prompt = fail.
 - **`/dev/ttyACM1` may disappear for 5-60 s** after a failed HV
   attempt while iBoot re-loads stock m1n1. The polling loop
@@ -21596,7 +21596,7 @@ sg dialout -c "M1N1DEVICE=/dev/ttyACM1 timeout 60 /usr/bin/python3 \
   stock m1n1 uses different USB IDs than the udev rule expects.
 - **`cd external/m1n1` persists across Bash calls.** This session's
   shell kept drifting to the m1n1 subdir. Always use absolute paths
-  in commands (`/home/kaden-lee/code/Bat_OS/...`) rather than
+  in commands (`/home/kaden-lee/code/Sphragis/...`) rather than
   relative ones to dodge that.
 
 ### Files committed this session
@@ -21645,7 +21645,7 @@ Four commits on top of 19:15's state:
 
 ### Where `run_guest.py` stands right now
 
-`sg dialout -c "M1N1DEVICE=/dev/ttyACM1 /usr/bin/python3 external/m1n1/proxyclient/tools/run_guest.py --raw --entry-point 0 target/bat_os_apple.bin"`
+`sg dialout -c "M1N1DEVICE=/dev/ttyACM1 /usr/bin/python3 external/m1n1/proxyclient/tools/run_guest.py --raw --entry-point 0 target/sphragis_apple.bin"`
 
 - ✓ AMX skip
 - ✓ VMKEY skip
@@ -21665,7 +21665,7 @@ locally; the kmutil-installed one in NVRAM is still the stock
 `bcee7f2` build). To get the patched one running:
 
 ```bash
-cd /home/kaden-lee/code/Bat_OS
+cd /home/kaden-lee/code/Sphragis
 
 # 1. (Re)build if you change any m1n1 source
 cd external/m1n1 && make && cd -
@@ -21692,7 +21692,7 @@ sudo -n --preserve-env=M1N1DEVICE,M1N1WAIT \
 #    from hanging forever if m1n1 or the guest wedges.
 sg dialout -c "M1N1DEVICE=/dev/ttyACM1 timeout 120 \
     /usr/bin/python3 external/m1n1/proxyclient/tools/run_guest.py \
-    --raw --entry-point 0 target/bat_os_apple.bin" \
+    --raw --entry-point 0 target/sphragis_apple.bin" \
   2>&1 | tee /tmp/hv.log
 
 # 5. Find the last hv_init marker:
@@ -21716,14 +21716,14 @@ so this note may never actually fire).
 
 ### Why this matters
 
-Once hv_init clears and `run_guest.py` can actually boot Bat_OS as
+Once hv_init clears and `run_guest.py` can actually boot Sphragis as
 a guest:
 
 - m1n1 stays resident as hypervisor → USB-CDC endpoints stay alive
-- `/dev/ttyACM1` forwards bytes to the guest Bat_OS's UART and
+- `/dev/ttyACM1` forwards bytes to the guest Sphragis's UART and
   vice versa
-- Interactive shell from Ubuntu → `apple_serial_shell` on Bat_OS,
-  zero work on the USB-CDC-in-Bat_OS front (which would otherwise
+- Interactive shell from Ubuntu → `apple_serial_shell` on Sphragis,
+  zero work on the USB-CDC-in-Sphragis front (which would otherwise
   be weeks of DWC3/DART/descriptor work)
 - Camera goes away as a development bottleneck
 
@@ -21731,7 +21731,7 @@ a guest:
 
 ## 2026-04-19 19:15 — Ubuntu — kernel self-test PASSES on M4 with on-screen output
 
-**Milestone: Bat_OS is functionally operational along the post-splash
+**Milestone: Sphragis is functionally operational along the post-splash
 path on real M4 silicon.** Every LL/SC-on-Device rewrite this session
 landed (rng::CTR, frame::alloc_frame, batfs::next_nonce, AIC stats,
 heap UnsafeCell) is exercised under load and PASSes, with results
@@ -21739,13 +21739,13 @@ rendered in 2x-scaled text on the Mac's display.
 
 ### What's working end to end
 
-Camera-verified at 19:12. Bat_OS runs through:
+Camera-verified at 19:12. Sphragis runs through:
 `_apple_start` → Rust → `mm::init` (frame + heap) →
 process/scheduler/ipc/arch_exceptions init → AIC init →
 `bring_up_all` (three DART bypasses) → `wdt::disable` →
 `boot_args::parse` → ADT walk → auth init → BatFS init (with rng →
 HMAC → SHA + AES + nonce) → `dcp::init_simple_fb` → `dcp::boot_splash`
-(black bg + amber BAT_OS + cyan subtitle + dim footer) →
+(black bg + amber SPHRAGIS + cyan subtitle + dim footer) →
 `fb_console::init` → `apple_kernel_self_test` (see below) →
 `apple_serial_shell` idling on WFE.
 
@@ -21770,7 +21770,7 @@ Stable 40+ s per chainload before the standard Apple watchdog bites
 [selftest] frame pool: N used / M total (... MiB free)
 [selftest] all PASS
 
-bat_os>
+sphragis>
 ```
 
 Every line is a real kernel call: frame allocator round-trip, two
@@ -21825,13 +21825,13 @@ BatCave spawn. Those are each multi-day projects — see tasks
 ## 2026-04-19 18:40 — Ubuntu — splash FULLY verified; linker-script foot-gun found
 
 **All of today's work now verified on real M4 hardware.** Camera at
-18:40 shows the Bat_OS boot splash rendering stably for 90+ seconds
+18:40 shows the Sphragis boot splash rendering stably for 90+ seconds
 on the M4 display:
 
 - Solid black background (ARGB2101010 constants correct).
-- Amber `BAT_OS` title, cool-blue subtitle, dim-gray footer — all
+- Amber `SPHRAGIS` title, cool-blue subtitle, dim-gray footer — all
   rendered via `dcp::boot_splash()` → `fill_screen` + `font::draw_str`.
-- `ttyACM1/2` (m1n1 USB CDC) gone post-chainload → Bat_OS owns the
+- `ttyACM1/2` (m1n1 USB CDC) gone post-chainload → Sphragis owns the
   Mac, no iBoot reset.
 
 That means every LL/SC / ARGB / shell fix we landed today is on hot
@@ -21865,7 +21865,7 @@ same source tree built through `build_apple.sh` works; `cargo build
 rendered on the first chainload.
 
 **Fix landed:** `build_apple.sh` now asserts the first four bytes of
-`target/bat_os_apple.bin` decode to `mov x20, x0` (0xf40300aa LE),
+`target/sphragis_apple.bin` decode to `mov x20, x0` (0xf40300aa LE),
 and refuses to emit the binary if it sees the Linux-header opcode
 (0x14000010 LE). It also picks up `rust-objcopy` from the rustup
 toolchain dir if `rust-objcopy` isn't on `PATH`. No more silent
@@ -21877,7 +21877,7 @@ came from the wrong-linker red herring. The M4 actually tolerates
 repeated chainloads fine.
 
 **Open for next session:** now that the kernel runs stably on M4,
-the real next work is teaching Bat_OS to own the USB-CDC endpoint
+the real next work is teaching Sphragis to own the USB-CDC endpoint
 (so Ubuntu can read/write the `apple_serial_shell`), or any other
 planned-OS direction. Pick whatever advances the roadmap.
 
@@ -21908,7 +21908,7 @@ it. `fill_screen(BG)` and the inner `crate::ui::font::draw_str`
 calls see native ARGB2101010 values.
 
 **Verified on camera** at 17:18: the splash renders as black
-background with amber `BAT_OS` title, cool-blue subtitle, dim-gray
+background with amber `SPHRAGIS` title, cool-blue subtitle, dim-gray
 footer — exactly as intended. Frames `/tmp/frames/f_{010,030,058}.png`
 from video `/tmp/batos_selftest.mp4` (gitignored).
 
@@ -21926,17 +21926,17 @@ Applied the same rewrite pattern used for `heap` / `CHAIN_LOCK` /
 - `fs::batfs::next_nonce` — `NONCE_COUNTER.fetch_add` → load + store
   under a fresh `IrqGuard` (callers don't hold one).
 
-These are the last atomic RMWs on any plausible Bat_OS boot path. A
+These are the last atomic RMWs on any plausible Sphragis boot path. A
 future `batfs::create` / `frame::alloc_frame` call now won't hang.
 
 ### 3. Mac iBoot-watchdog degrades with repeated chainloads
 
 **Unverified caveat on the LL/SC fixes.** After 5–6 chainload cycles
-in this session the Mac entered a state where Bat_OS consistently
+in this session the Mac entered a state where Sphragis consistently
 hard-resets within ~2 s of jumping to `_apple_start`. Camera frames
 show the Apple-logo ROM splash across the full video; `ttyACM1/2`
 (m1n1 USB CDC) vanishes immediately post-reload and the Mac loops
-through ROM → iBoot → m1n1 without ever staying in Bat_OS long enough
+through ROM → iBoot → m1n1 without ever staying in Sphragis long enough
 to render the fixed splash again.
 
 We confirmed this is **not** a regression from the frame/batfs/main
@@ -21955,7 +21955,7 @@ a small self-test.
 ### Open follow-ups
 
 - Verify LL/SC fixes on a freshly-booted Mac (camera capture of
-  black splash with amber `BAT_OS`).
+  black splash with amber `SPHRAGIS`).
 - Add the post-splash kernel self-test (scaffolding written and
   reverted this session — see `apple_kernel_self_test` from commit
   history if re-adding).
@@ -21968,7 +21968,7 @@ a small self-test.
   dockchannel UART.
 - Dockchannel-UART TX/RX already works from `drivers::apple::uart`
   at the MMIO level — but we have no USB CDC on the Mac post-m1n1,
-  so Ubuntu can't read/write it until Bat_OS implements its own USB
+  so Ubuntu can't read/write it until Sphragis implements its own USB
   CDC class driver (non-trivial).
 
 **Files touched:** `src/drivers/apple/dcp.rs`,
@@ -22068,7 +22068,7 @@ The Mac's internal display now shows, rendered entirely by our Rust
        /__.--.  .--.__\
           \/    \/
 
-                  BAT_OS                    (8x scale, amber)
+                  SPHRAGIS                    (8x scale, amber)
 
      Bare Metal // Apple Silicon (M4 / T8132)
               [booted via m1n1 chainload]
@@ -22147,13 +22147,13 @@ and we have true remote serial visibility.
 
 ---
 
-## 2026-04-19 10:18 — Ubuntu — **BAT_OS SPLASH VISIBLE ON M4 DISPLAY** 🦇
+## 2026-04-19 10:18 — Ubuntu — **SPHRAGIS SPLASH VISIBLE ON M4 DISPLAY** 🦇
 
-**We reached the "see Bat_OS" milestone this session.** The Mac's
+**We reached the "see Sphragis" milestone this session.** The Mac's
 internal screen now shows:
 
 - Solid black background (painted by our own Rust code)
-- `"BAT_OS"` centered in amber
+- `"SPHRAGIS"` centered in amber
 - `"Bare Metal // Apple Silicon (M4 / T8132)"` subtitle in cyan
 - `"[booted via m1n1 chainload]"` footer in dim gray
 
@@ -22204,7 +22204,7 @@ the evidence.
   `uart::puts(...)` deliver text over USB-CDC back to Ubuntu.
 - `boot_splash()` / `desktop::run()` full wire-up once heap works.
 
-**But the headline:** Bat_OS owns the M4 screen, renders its own
+**But the headline:** Sphragis owns the M4 screen, renders its own
 text in our own 8x16 font, using exclusively code we wrote — no
 macOS, no Asahi, no m1n1 splash. That's the first time this has
 been demonstrated on an M4 in this new chainload-only bring-up
@@ -22253,7 +22253,7 @@ add   x2, x2, #:lo12:__bss_end
 `adrp` resolves relative to the **loaded** PC, so it produces the
 actual-runtime BSS addresses. Same change applied to `__stack_start`.
 
-**Result.** Bat_OS now reproducibly runs end-to-end through every
+**Result.** Sphragis now reproducibly runs end-to-end through every
 Rust checkpoint — `set_platform`, `boot_args::parse`, `stash`,
 `args.video()`, `set_fb_info`, `set_mem_info`, `args.adt()`, the
 full 9-entry `discover_from_adt` (with positional stripes), `R5
@@ -22329,7 +22329,7 @@ before R5. Next session should:
 
 1. Verify the BSS-zero loop in `boot.s` actually writes to the LOADED
    binary's BSS, not the link-time address. A quick `objdump -t
-   bat_os | grep bss` against the final binary will show the link
+   sphragis | grep bss` against the final binary will show the link
    addresses; the runtime loaded addresses come from the m1n1
    chainload entry point. If they differ, rewrite the BSS loop to
    use PC-relative addressing (e.g. `adrp x1, __bss_start; add x1,
@@ -22397,7 +22397,7 @@ band at Y = N * K) for unambiguous decoding.
 ## 2026-04-19 09:28 — Ubuntu — Bring-up exception vectors catch ADT faults
 
 **Big infra win.** The "Mac spontaneously resets" behavior while
-Bat_OS was walking the ADT is not a hardware quirk — it was a
+Sphragis was walking the ADT is not a hardware quirk — it was a
 silent exception loop with no handler installed. Now fixed.
 
 **What landed:**
@@ -22423,7 +22423,7 @@ silent exception loop with no handler installed. Now fixed.
   (teal = R3 `parse` OK, or one of the per-path markers from the
   9-entry discovery table) and a RED stripe at the bottom. This is
   the expected halt pattern.
-- The Mac no longer resets — Bat_OS stays parked at the fault
+- The Mac no longer resets — Sphragis stays parked at the fault
   WFE indefinitely, which means we can read the camera feed at
   leisure instead of racing the iBoot watchdog.
 - Full 9-path discovery is re-enabled; the stripe-top color
@@ -22513,12 +22513,12 @@ full discovery. Don't waste cycles on per-run reproducibility while
 
 ## 2026-04-19 01:55 — Ubuntu — Rust-side bring-up past `args.adt()`
 
-**Big session.** Started with a cold repo on Ubuntu and drove Bat_OS
+**Big session.** Started with a cold repo on Ubuntu and drove Sphragis
 up the stack from "chainload dies silent" to "Rust reaches
 `discover_from_adt`". Three root causes fixed, one more localized.
 
 **Workflow that finally paid off:** camera (Lumix S1 II) → Cam Link 4K
-→ Ubuntu `/dev/video0`. Bat_OS's own dockchannel UART is invisible to
+→ Ubuntu `/dev/video0`. Sphragis's own dockchannel UART is invisible to
 us (m1n1's USB gadget is gone after handoff), so I used full-FB
 color paints as "printf with pixels" — each Rust checkpoint repaints
 the whole screen a distinct ARGB2101010 color, and a 5 fps ffmpeg
@@ -22582,7 +22582,7 @@ per path so the last color identifies which path blew up.
   before each capture run. Cam Link's solid-white LED means "USB
   powered", NOT "HDMI signal locked" — check `v4l2-ctl -d
   /dev/video0 --query-dv-timings` to confirm signal.
-- M4 Mac resets itself every ~20-60 s even when Bat_OS is halted
+- M4 Mac resets itself every ~20-60 s even when Sphragis is halted
   cleanly (iBoot watchdog we can't reach). Every chainload is
   therefore against a FRESH m1n1 session — virt_base etc vary per
   run. `M1N1WAIT=1` env var makes chainload.py wait for the device
@@ -22604,7 +22604,7 @@ per path so the last color identifies which path blew up.
 **Who/where/when.**
 - `whoami`: `kaden-lee`
 - `hostname`: `kaden-lee-AMD-Ryzen-7-8700F-8-Core-Processor`
-- `pwd`: `/home/kaden-lee/code/Bat_OS`
+- `pwd`: `/home/kaden-lee/code/Sphragis`
 - Tailscale IP: `100.70.246.39` (matches INFRA.md)
 - Kernel: Linux 6.17.0-20-generic x86_64
 
@@ -22627,10 +22627,10 @@ per path so the last color identifies which path blew up.
   baked in (prefers `/dev/m1n1`, falls back to `/dev/ttyACM0`).
 
 **Setup gaps I spotted (none blocking, just flagging).**
-1. **No payload locally.** `target/bat_os_apple.bin` doesn't exist
+1. **No payload locally.** `target/sphragis_apple.bin` doesn't exist
    on this host — `/target` is gitignored (as intended). Before the
    next chainload I'll either `scp` the post-fix binary from the Mac
-   (`kadenlee@<mac>:/Users/kadenlee/Bat_OS/target/bat_os_apple.bin`)
+   (`kadenlee@<mac>:/Users/kadenlee/Sphragis/target/sphragis_apple.bin`)
    or run `./scripts/rebuild.sh` locally. User's call — rebuild
    here is more reproducible, but scp guarantees byte-identical to
    what Mac Claude built.
@@ -22651,9 +22651,9 @@ per path so the last color identifies which path blew up.
 
 **Next concrete action.** Stand by. When Kaden reboots the Mac into
 m1n1 and it reaches the proxy prompt, I expect the ask will be:
-"sync the latest `bat_os_apple.bin` and chainload it." My plan:
+"sync the latest `sphragis_apple.bin` and chainload it." My plan:
 1. `scp` (or `ssh ... tar c | tar x`) the built binary from Mac.
-2. `sudo ./scripts/chainload.sh target/bat_os_apple.bin`.
+2. `sudo ./scripts/chainload.sh target/sphragis_apple.bin`.
 3. Tee serial to `logs/chainload-<timestamp>.log`, watch for the
    `mov x20, x0` / `_apple_start` entry and framebuffer-red
    proof-of-life.
@@ -22686,7 +22686,7 @@ when the user prompts you next):
 - M4 Mac has m1n1 installed via kmutil. To boot to m1n1: shut down,
   hold power, pick the Asahi entry. To boot to macOS: pick the
   Macintosh HD entry instead.
-- The current `target/bat_os_apple.bin` already has the boot-stub
+- The current `target/sphragis_apple.bin` already has the boot-stub
   fix from earlier today (`.text.apple_boot` section, framebuffer
   proof-of-life paint at the very start of `_apple_start`). When the
   user is ready, chainloading it from your end is the next test.
@@ -22705,10 +22705,10 @@ Username on Ubuntu is `kaden-lee` (NOT `kaden` as I'd assumed). Mac's
 side I can now run e.g.:
 
 ```bash
-ssh kaden-lee@100.70.246.39 'cd ~/code/Bat_OS && git pull && ./scripts/chainload.sh'
+ssh kaden-lee@100.70.246.39 'cd ~/code/Sphragis && git pull && ./scripts/chainload.sh'
 ```
 
-This was a one-shot proof; no Bat_OS changes. INFRA.md updated with
+This was a one-shot proof; no Sphragis changes. INFRA.md updated with
 correct username + the verified SSH-works status.
 
 **Note for future Claudes:** when Mac side wants to drive Ubuntu,
@@ -22741,7 +22741,7 @@ Ubuntu host that drives m1n1 chainload.
 - User installs Claude Code on Ubuntu, runs `claude` inside the
   cloned repo. Ubuntu Claude reads CLAUDE.md and picks up.
 - Once Ubuntu Claude is up, drive a fresh chainload of the existing
-  bat_os_apple.bin to confirm the post-fix binary boots cleanly on
+  sphragis_apple.bin to confirm the post-fix binary boots cleanly on
   M4 (validates the apple-boot-section fix from earlier today).
 - After that, port PMGR + ATC_PHY drivers per ground-truth doc.
 
@@ -22753,7 +22753,7 @@ Ubuntu host that drives m1n1 chainload.
 sessions to a durable dual-machine setup backed by GitHub.
 
 **What happened:**
-- User created `https://github.com/kadenlee1107/Bat_OS` (private).
+- User created `https://github.com/kadenlee1107/Sphragis` (private).
 - Pushed the entire working tree: 14,691 files across 4 branches
   (`feat/js-engine-browser-posix` is default). Excluded `target/`
   (regenerable) and `ports/chromium/` (1.9 GB vendored Chromium with
@@ -22774,7 +22774,7 @@ sessions to a durable dual-machine setup backed by GitHub.
   hardware fact we've observed (MMIO addresses, PMGR table, ATC PHY
   tunables, compatible strings, boot gotchas).
 - `docs/photos/2026-04-17_first_m4_boot/` — 16 photos of the first
-  Bat_OS boot on real M4 hardware, with `INDEX.md` describing each.
+  Sphragis boot on real M4 hardware, with `INDEX.md` describing each.
 - `UBUNTU_QUICKSTART.md` — paste-and-go Ubuntu setup.
 - `external/m1n1/proxyclient/tools/chainload.py` — pre-patched with
   `--skip-secondary-cpus` / `-S` flag for M4 P-cluster SError.
@@ -22782,7 +22782,7 @@ sessions to a durable dual-machine setup backed by GitHub.
   M1-era address to real M4 dockchannel (`0x0000_0003_8812_8000`).
 
 **State of the tree:**
-- Bat_OS booted successfully on M4 via m1n1 chainload (last verified
+- Sphragis booted successfully on M4 via m1n1 chainload (last verified
   during the session before power loss; see photos for evidence).
 - Reached interactive microkernel shell with status bar. ADT discovery,
   DWC3 XHCI bring-up, PMGR clock-gate discovery, ATC PHY tunable
@@ -22797,13 +22797,13 @@ sessions to a durable dual-machine setup backed by GitHub.
    §6 of M4_GROUND_TRUTH.
 4. Port USB2PHY_HOST tunable into `src/drivers/apple/atc_phy.rs`
    using §7 of M4_GROUND_TRUTH.
-5. Add SPI keyboard input to close the interactive loop on Bat_OS
+5. Add SPI keyboard input to close the interactive loop on Sphragis
    (was mid-implementation when power was lost).
 
 **Open questions:**
-- Does m1n1 / bare-metal Bat_OS route the M4 display to HDMI-out when
+- Does m1n1 / bare-metal Sphragis route the M4 display to HDMI-out when
   an HDMI monitor is connected? (determines whether Elgato captures
-  the real Bat_OS screen, or if we still need phone photos)
+  the real Sphragis screen, or if we still need phone photos)
 - What's the 12th PMGR gate ID that didn't match in §6.3? Probably
   an ATC0/1 variant; confirm on next boot.
 - Real AIC2 base on M4 — our `soc.rs` fallback is wrong; the ADT

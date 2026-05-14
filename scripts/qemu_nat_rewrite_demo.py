@@ -17,12 +17,12 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = ROOT / f"logs/qemu-tests/nat-rewrite-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 def main():
     daemon = subprocess.Popen(
@@ -62,7 +62,7 @@ def main():
         idx = raw.find("NAT REWRITE SELF-TEST")
         if idx >= 0:
             chunk = raw[idx:]
-            end = chunk.find("bat_os >", 40)
+            end = chunk.find("sphragis >", 40)
             print(chunk[: end if end > 0 else 1200])
     except pexpect.TIMEOUT:
         print("[rewrite] TIMEOUT")

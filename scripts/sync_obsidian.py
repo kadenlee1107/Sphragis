@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Sync the Bat_OS source tree into an Obsidian vault as per-file notes.
+"""Sync the Sphragis source tree into an Obsidian vault as per-file notes.
 
-Output goes to ``/Users/kadenlee/BAT_OS_VAULT/_generated/`` (or whichever path
+Output goes to ``/Users/kadenlee/SPHRAGIS_VAULT/_generated/`` (or whichever path
 ``--vault`` points at).  The vault is laid out as:
 
     <vault>/
@@ -53,8 +53,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-REPO   = Path("/Users/kadenlee/Bat_OS")
-VAULT  = Path("/Users/kadenlee/BAT_OS_VAULT")
+REPO   = Path("/Users/kadenlee/Sphragis")
+VAULT  = Path("/Users/kadenlee/SPHRAGIS_VAULT")
 GEN    = VAULT / "_generated"
 
 # ---------------------------------------------------------------------------
@@ -555,7 +555,7 @@ def build_facts(abs_path: Path) -> FileFacts:
 # Note rendering
 # ---------------------------------------------------------------------------
 
-GITHUB_BASE = "https://github.com/kadenlee1107/Bat_OS/blob/main/"
+GITHUB_BASE = "https://github.com/kadenlee1107/Sphragis/blob/main/"
 
 def vault_path_for(rel: Path) -> Path:
     """Mirror repo path under _generated/ — `tls.rs` → `_generated/src/net/tls.rs.md`.

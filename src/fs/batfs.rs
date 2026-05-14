@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — BatFS: Custom Encrypted Filesystem
+// Sphragis — BatFS: Custom Encrypted Filesystem
 //
 // DESIGN_CRYPTO.md #2: per-file **ChaCha20-Poly1305 AEAD**. Replaces
 // the prior AES-256-CTR + HMAC-SHA256 encrypt-then-MAC construction

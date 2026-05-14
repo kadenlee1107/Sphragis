@@ -1,6 +1,6 @@
-// test_rng_quality.c — Bat_OS getrandom quality probe
+// test_rng_quality.c — Sphragis getrandom quality probe
 //
-// Calls SYS_getrandom (Bat_OS number 278) 1,000,000 times, 1 byte each,
+// Calls SYS_getrandom (Sphragis number 278) 1,000,000 times, 1 byte each,
 // writes the stream to stdout, and prints a simple entropy / run-test
 // summary on stderr.
 //
@@ -8,7 +8,7 @@
 // distribution ~N(N-1)/2 transitions, Shannon entropy close to 8.0
 // bits/byte.
 //
-// Observed against Bat_OS sys_getrandom (see ATTACK-CRYPTO-002): byte
+// Observed against Sphragis sys_getrandom (see ATTACK-CRYPTO-002): byte
 // values cluster near the low byte of cntpct_el0, entropy well below 3
 // bits/byte, long runs of identical bytes within each 8-byte counter
 // window.
@@ -16,7 +16,7 @@
 // Build (userland harness, not in kernel): cc -O2 test_rng_quality.c -o rngq
 // Run:   ./rngq > rng.bin 2> rng.stats
 //
-// This test is a userland scaffold. To exercise Bat_OS itself, rebuild
+// This test is a userland scaffold. To exercise Sphragis itself, rebuild
 // the binary to invoke the kernel syscall directly via svc #0 from a
 // BatCave guest.
 
@@ -37,7 +37,7 @@ int main(void) {
     unsigned char *buf = malloc(N);
     if (!buf) { perror("malloc"); return 1; }
 
-    // One byte at a time, to match Bat_OS sys_getrandom call pattern.
+    // One byte at a time, to match Sphragis sys_getrandom call pattern.
     for (size_t i = 0; i < N; i++) {
         if (syscall(SYS_getrandom, &buf[i], 1, 0) != 1) {
             perror("getrandom");

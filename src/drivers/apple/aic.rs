@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple Interrupt Controller (AIC2)
+// Sphragis — Apple Interrupt Controller (AIC2)
 // Custom interrupt controller used on all Apple Silicon.
 // NOT a standard GIC — Apple uses their own design.
 // Reference: Asahi Linux drivers/irqchip/irq-apple-aic.c

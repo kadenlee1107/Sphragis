@@ -2,7 +2,7 @@
 """Headless smoke for `mount-ns-selftest` — gap-audit item 032
 mount-namespace auto-application.
 
-Boots Bat_OS in QEMU virt, clears the empty-passphrase auth gate,
+Boots Sphragis in QEMU virt, clears the empty-passphrase auth gate,
 runs `mount-ns-selftest` at the shell, and asserts the cross-cave
 file isolation property:
 
@@ -28,7 +28,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/mount-ns-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -59,7 +59,7 @@ def main() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         c.sendline("mount-ns-selftest")
@@ -69,14 +69,14 @@ def main() -> int:
         ], timeout=30)
         if idx == 1:
             try:
-                c.expect(rb"bat_os > ", timeout=5)
+                c.expect(rb"sphragis > ", timeout=5)
             except Exception:
                 pass
             print("[mount-ns] FAIL — selftest reported a failure", file=sys.stderr)
             print(f"[mount-ns] log: {LOG}", file=sys.stderr)
             return 1
 
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[mount-ns] PASS — per-cave file-namespace isolation verified")
         print(f"[mount-ns] log: {LOG}")
         return 0

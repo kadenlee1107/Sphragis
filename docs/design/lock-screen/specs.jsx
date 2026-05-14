@@ -68,7 +68,7 @@ const Specs = () => (
       fontSize: 11, letterSpacing: 3, color: specColors.cyan,
       textTransform: "uppercase", marginBottom: 8,
     }}>
-      [spec] bat_os · lock screen · v0.4.2-rc1
+      [spec] sphragis · lock screen · v0.4.2-rc1
     </div>
     <div style={{ fontSize: 24, letterSpacing: 2, marginBottom: 4 }}>
       Implementation reference

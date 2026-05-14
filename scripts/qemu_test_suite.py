@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bat_OS QEMU full-feature test suite.
+"""Sphragis QEMU full-feature test suite.
 
 Two phases:
  1. MAIN — one long-lived QEMU: boot → auth → shell cmds (non-ELF) → desktop-app tab cycle
@@ -8,7 +8,7 @@ Two phases:
 Both phases skip Chromium per user directive.
 
 Usage:
-  BAT_OS_PASSPHRASE=batman cargo build --release   # ensure fresh kernel
+  SPHRAGIS_PASSPHRASE=batman cargo build --release   # ensure fresh kernel
   python3 scripts/qemu_test_suite.py
 """
 import pexpect
@@ -18,7 +18,7 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG_DIR = ROOT / "logs/qemu-tests"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -97,7 +97,7 @@ APP_TESTS = [
     (8, "BatCave"),
 ]
 
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 PROMPT_WAIT = 8
 
 
@@ -266,7 +266,7 @@ def write_report(main_results, elf_results):
         counts[row[3]] = counts.get(row[3], 0) + 1
 
     with open(REPORT, "w") as f:
-        f.write(f"# Bat_OS QEMU test report — {RUN_STAMP}\n\n")
+        f.write(f"# Sphragis QEMU test report — {RUN_STAMP}\n\n")
         f.write(f"Kernel: `{KERNEL.relative_to(ROOT)}`  ({KERNEL.stat().st_size:,} bytes)\n")
         f.write(f"Main log: `{MAIN_LOG.relative_to(ROOT)}`\n")
         f.write(f"ELF logs: `{ELF_LOG_DIR.relative_to(ROOT)}/`\n\n")

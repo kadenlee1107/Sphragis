@@ -1,9 +1,9 @@
 /*
- * Bat_OS — signal.h stub for NetSurf
+ * Sphragis — signal.h stub for NetSurf
  * Minimal POSIX signal declarations.
  */
-#ifndef _BATOS_SIGNAL_H
-#define _BATOS_SIGNAL_H
+#ifndef _SPHRAGIS_SIGNAL_H
+#define _SPHRAGIS_SIGNAL_H
 
 /* Signal numbers (Linux AArch64 values) */
 #define SIGHUP     1
@@ -106,4 +106,4 @@ int    sigismember(const sigset_t *set, int signum);
 
 int    sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 
-#endif /* _BATOS_SIGNAL_H */
+#endif /* _SPHRAGIS_SIGNAL_H */

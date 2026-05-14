@@ -1,9 +1,9 @@
 #![allow(dead_code)]
-// Bat_OS — Allowlist Firewall (real default-deny)
+// Sphragis — Allowlist Firewall (real default-deny)
 //
 // The previous version installed a wildcard "allow any inbound TCP/UDP/ICMP"
 // rule, which made the "DEFAULT DENY ALL" label meaningless. We now install
-// narrow allow rules for the protocols Bat_OS actually uses as a client:
+// narrow allow rules for the protocols Sphragis actually uses as a client:
 // ICMP echo reply (ping response)
 // TCP from port 443 (HTTPS responses)
 // TCP from port 80 (HTTP responses, DoH fallback)
@@ -68,7 +68,7 @@ pub fn init() {
     // ONE of these is true (see `allow_inbound_tcp`):
     //   (a) `conntrack::lookup_inbound` finds an outbound-recorded
     //       flow matching the 4-tuple — reply traffic to a
-    //       Bat_OS-initiated connection.
+    //       Sphragis-initiated connection.
     //   (b) `tcp::listener_lookup_by_port(dst_port)` says a
     //       server is listening on that port — server-side
     //       handshake / cookie-recovery path.
@@ -191,7 +191,7 @@ pub fn allow_inbound(src_ip: u32, _dst_ip: u32, protocol: u8) -> bool {
 /// a segment iff ONE of these holds:
 ///
 ///   (a) `conntrack::lookup_inbound` finds a flow matching the
-///       4-tuple — i.e. Bat_OS already initiated this connection
+///       4-tuple — i.e. Sphragis already initiated this connection
 ///       and the inbound packet is reply traffic.
 ///   (b) `tcp::listener_lookup_by_port(dst_port)` reports a
 ///       registered listener — i.e. we're a server expecting

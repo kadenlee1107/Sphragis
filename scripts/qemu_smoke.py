@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bat_OS QEMU smoke test — boot + auth + couple of shell commands.
+"""Sphragis QEMU smoke test — boot + auth + couple of shell commands.
 
 Quick sanity check that the binary boots, auth accepts 'batman',
 and we reach the shell. Full test suite is qemu_test_suite.py."""
@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = ROOT / "logs/qemu-tests/smoke.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
@@ -46,7 +46,7 @@ def main():
 
         # Wait for desktop or shell prompt
         print("[smoke] waiting for shell prompt...")
-        child.expect([b"bat_os>", b"bat:/>", b"\\$ "], timeout=30)
+        child.expect([b"sphragis>", b"bat:/>", b"\\$ "], timeout=30)
         print(f"[smoke] shell up, got: {child.before[-100:]}")
 
         # Try a couple of commands
@@ -54,7 +54,7 @@ def main():
             print(f"[smoke] -> {cmd.decode()}")
             child.sendline(cmd)
             try:
-                child.expect([b"bat_os>", b"bat:/>", b"\\$ "], timeout=10)
+                child.expect([b"sphragis>", b"bat:/>", b"\\$ "], timeout=10)
                 out = child.before.decode("utf-8", "replace")
                 # Trim to last 500 chars for display
                 print("    " + out[-500:].replace("\n", "\n    "))

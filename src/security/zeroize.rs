@@ -1,4 +1,4 @@
-// Bat_OS — Volatile zeroization helper.
+// Sphragis — Volatile zeroization helper.
 //
 // Standard defensive cryptography hygiene: when a struct holding key
 // material or plaintext secrets goes out of scope, overwrite the bytes

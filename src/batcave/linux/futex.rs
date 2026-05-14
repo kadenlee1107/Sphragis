@@ -1,4 +1,4 @@
-// Bat_OS — Linux-compatible Futex (Fast Userspace Mutex)
+// Sphragis — Linux-compatible Futex (Fast Userspace Mutex)
 //
 // This module implements the kernel side of the Linux futex(2) ABI. Chromium
 // (and essentially every modern Linux userspace) layers every thread sync
@@ -47,7 +47,7 @@
 // EAGAIN = -11 value at uaddr didn't match expected val
 // EINVAL = -22 bad arguments (unaligned uaddr, etc.)
 // ETIMEDOUT = -110 timeout expired before wake
-// ENOSPC = -28 wait queue full (Bat_OS-specific fallback)
+// ENOSPC = -28 wait queue full (Sphragis-specific fallback)
 
 #![allow(dead_code)]
 
@@ -342,7 +342,7 @@ pub fn futex_wait(uaddr: u64, val: u32, timeout_ns: u64) -> i64 {
         return EINVAL;
     }
 
-    // livelock-breaker: under BAT_OS_KEEP_GOING, cap any
+    // livelock-breaker: under SPHRAGIS_KEEP_GOING, cap any
     // infinite-timeout wait at 100ms. Chromium's worker pool parks
     // threads with `pthread_cond_wait`-style infinite waits that
     // never get signaled in our partial impl — capping forces them

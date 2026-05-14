@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-test_aes_kat.py — NIST CAVP Known-Answer Tests for Bat_OS AES
+test_aes_kat.py — NIST CAVP Known-Answer Tests for Sphragis AES
 
-Targets Bat_OS implementations in src/crypto/aes.rs:
+Targets Sphragis implementations in src/crypto/aes.rs:
   - Aes256::encrypt_block  (AES-256 ECB single block)
   - Aes256::ctr_crypt      (AES-256 CTR stream)
   - Aes128::gcm_encrypt    (AES-128 GCM, returns 16-byte tag)
@@ -10,7 +10,7 @@ Targets Bat_OS implementations in src/crypto/aes.rs:
 
 How this test is wired up:
 
-  Bat_OS is no_std kernel code. To KAT it from userland we compile a
+  Sphragis is no_std kernel code. To KAT it from userland we compile a
   thin harness crate that re-exports the pub fns and takes hex on
   stdin, prints hex on stdout. That harness crate is TODO; this file
   defines the VECTORS and drives the harness.
@@ -27,7 +27,7 @@ If the harness binary is missing the test is marked SKIPPED rather than
 FAILED, so this file is usable as an audit fixture today.
 
 IMPORTANT CAVEAT (see ATTACK-CRYPTO-009): a KAT-passing implementation
-is NOT constant-time. Bat_OS AES uses a byte-indexed S-box LUT and
+is NOT constant-time. Sphragis AES uses a byte-indexed S-box LUT and
 therefore is vulnerable to cache-timing side-channels even if every
 KAT passes.
 """

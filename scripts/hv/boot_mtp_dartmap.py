@@ -25,7 +25,7 @@ import struct
 import sys
 import time
 
-ROOT = pathlib.Path("/home/kaden-lee/code/Bat_OS")
+ROOT = pathlib.Path("/home/kaden-lee/code/Sphragis")
 sys.path.insert(0, str(ROOT / "external/m1n1/proxyclient"))
 from m1n1.proxy import M1N1Proxy, UartInterface
 from m1n1.proxyutils import ProxyUtils, bootstrap_port

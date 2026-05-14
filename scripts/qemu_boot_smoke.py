@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal boot smoke for post-no-browser Bat_OS.
+"""Minimal boot smoke for post-no-browser Sphragis.
 
 Replaces the deleted Ladybird/Chromium smoke scripts. Boots the kernel
 in QEMU virt and verifies it reaches the auth-gate input loop without
@@ -25,14 +25,14 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/boot-smoke-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 )
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 QEMU_ARGS = [
     "qemu-system-aarch64",
     "-machine", "virt",

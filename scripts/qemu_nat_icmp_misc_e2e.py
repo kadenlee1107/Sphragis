@@ -2,7 +2,7 @@
 """3c-deferred-7: Parameter Problem delivery + Redirect / Source
 Quench drops.
 
-Three sub-cases driven against the same Bat_OS session:
+Three sub-cases driven against the same Sphragis session:
 
   A. Parameter Problem (type 12) from an upstream router — rewritten
      + delivered to the cave exactly like Dest Unreachable did in
@@ -27,12 +27,12 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 STAMP = datetime.now().strftime('%Y%m%d-%H%M%S')
 LOG = ROOT / f"logs/qemu-tests/icmp-misc-{STAMP}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 def ipv4_cksum(hdr):
     s=0

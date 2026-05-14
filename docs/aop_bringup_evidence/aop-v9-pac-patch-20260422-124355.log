@@ -206,15 +206,15 @@ Fetching ADT (0x00084000 bytes)...
 [v9]   orig __TEXT[0..0x20]: 9100001400000000000000000000000000000000000000000000000000000000
 TTY> Exception: SError
 Traceback (most recent call last):
-  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v9.py", line 359, in <module>
+  File "/home/kaden-lee/code/Sphragis/scripts/hv/probe_aop_pmgr_v9.py", line 359, in <module>
     main()
-  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v9.py", line 297, in main
+  File "/home/kaden-lee/code/Sphragis/scripts/hv/probe_aop_pmgr_v9.py", line 297, in main
     iface.writemem(text_phys, patched_bytes)
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 409, in writemem
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 409, in writemem
     self.reply(self.REQ_MEMWRITE)
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 258, in reply
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 258, in reply
     reply += self.readfull(1)
              ^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 197, in readfull
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 197, in readfull
     raise UartTimeout("Expected %d bytes, got %d bytes"%(size,len(d)))
 m1n1.proxy.UartTimeout: Expected 1 bytes, got 0 bytes

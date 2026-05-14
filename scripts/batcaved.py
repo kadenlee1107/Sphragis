@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 """
-batcaved — Bat_OS BatCave control daemon (Mac side)
+batcaved — Sphragis BatCave control daemon (Mac side)
 
 ROLE
 ----
-`batcaved` is the Mac-side half of the Bat_OS Docker-BatCave stack.
-It listens for control commands from Bat_OS (running as a QEMU guest),
+`batcaved` is the Mac-side half of the Sphragis Docker-BatCave stack.
+It listens for control commands from Sphragis (running as a QEMU guest),
 translates them into `docker` operations, streams results back.
 
 This daemon is the ONLY process on the Mac host that is allowed to
-start Docker containers claiming to be BatCaves. Bat_OS manages the
+start Docker containers claiming to be BatCaves. Sphragis manages the
 cave lifecycle end-to-end via the control protocol; the daemon is
-essentially Bat_OS's RPC agent.
+essentially Sphragis's RPC agent.
 
 ALIGNMENT WITH DESIGN_BATCAVES.md
 ---------------------------------
   [x] Isolation — Linux namespaces (Docker) isolate docker-caves from
       each other and the Mac host. (Hardware-MMU isolation applies to
-      native Bat_OS caves; for Linux workloads, namespace isolation is
+      native Sphragis caves; for Linux workloads, namespace isolation is
       the equivalent primitive.)
-  [x] Commands from Bat_OS — the daemon accepts commands ONLY from
-      Bat_OS (via token auth). An operator can't bypass Bat_OS by
+  [x] Commands from Sphragis — the daemon accepts commands ONLY from
+      Sphragis (via token auth). An operator can't bypass Sphragis by
       talking directly to the daemon without the token.
   [x] Destruction — on shutdown or explicit DESTROY, the container is
-      `docker rm -f`'d. If the deadman hook is armed, loss of Bat_OS
+      `docker rm -f`'d. If the deadman hook is armed, loss of Sphragis
       heartbeat triggers DESTROY-ALL.
   [ ] Phase-3: Filesystem encryption via BatFS-derived key (TODO)
-  [ ] Phase-4: Network traffic routed through Bat_OS pipeline (TODO)
+  [ ] Phase-4: Network traffic routed through Sphragis pipeline (TODO)
   [ ] Phase-5: Deadman/duress/panic heartbeat integration (TODO)
 
 PROTOCOL (line-delimited text over TCP to 127.0.0.1:9999)
@@ -34,7 +34,7 @@ PROTOCOL (line-delimited text over TCP to 127.0.0.1:9999)
   AUTH <token>                            # must be first line; else disconnect
   CREATE <name> <image> <caps-csv> [key-hex]  # response: OK <id>  /  ERR <reason>
                                           #   key-hex = 64-char AES-256 key,
-                                          #   derived by Bat_OS from the cave
+                                          #   derived by Sphragis from the cave
                                           #   name + master KDF (Phase 3).
                                           #   Used to encrypt the cave's audit
                                           #   log at rest; zeroed on DESTROY.
@@ -84,7 +84,7 @@ NETWORK_EGRESS   = None # normal bridge for caves with `net` cap (Phase 4)
 HEARTBEAT    = {"last": time.time(), "deadman_s": 0}  # deadman_s=0 → disabled
 
 # Per-cave AES-256 keys. Lives in RAM ONLY — NEVER touched to disk.
-# Bat_OS derives the key on its side (sha256(master, cave_name)) and sends
+# Sphragis derives the key on its side (sha256(master, cave_name)) and sends
 # the hex form in CREATE; we stash it here for encrypting the audit log.
 # On DESTROY the entry is zeroed + popped. cmd_destroy_all() zeros all.
 CAVE_KEYS = {}  # name -> 32-byte bytes
@@ -97,7 +97,7 @@ CAVE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
 # On a `CREATE --persistent` request, we create an AES-256-encrypted
 # APFS disk image via macOS's built-in hdiutil, mount it, and bind-mount
 # it into the container at /data. The encryption key is the same
-# per-cave key Bat_OS sent for audit-log encryption. On DESTROY we
+# per-cave key Sphragis sent for audit-log encryption. On DESTROY we
 # detach the volume AND delete the .dmg file — the key is also
 # zeroized in memory, so even if the .dmg survives via file-recovery
 # tools, no key exists to decrypt it.
@@ -107,10 +107,10 @@ CAVE_VOLUMES_DIR.mkdir(parents=True, exist_ok=True)
 CAVE_MOUNTS = {}   # name -> (dmg_path, mount_point)
 CAVE_MOUNTS_LOCK = threading.Lock()
 
-# Integration #4: Bat_OS-controlled egress policy for container traffic.
+# Integration #4: Sphragis-controlled egress policy for container traffic.
 # Containers are pointed at an HTTP CONNECT proxy (see
 # start_egress_proxy) via the HTTPS_PROXY / HTTP_PROXY env var. Every
-# CONNECT is checked against FW_ALLOWLIST. Bat_OS maintains the
+# CONNECT is checked against FW_ALLOWLIST. Sphragis maintains the
 # authoritative policy in src/net/firewall.rs and pushes allow/deny
 # updates via the FW_ALLOW / FW_DENY / FW_LIST protocol commands.
 # Design clause delivered: "All traffic through allowlist firewall."
@@ -262,7 +262,7 @@ def start_egress_proxy():
                     conn.sendall(
                         b"HTTP/1.1 403 Forbidden\r\nX-Bat-Firewall: cave-policy\r\n"
                         b"Content-Length: 35\r\n\r\n"
-                        b"denied by Bat_OS cave-policy\n")
+                        b"denied by Sphragis cave-policy\n")
                     return
             elif not fw_is_allowed(target):
                 # Unknown peer + not in the global allowlist → deny.
@@ -270,7 +270,7 @@ def start_egress_proxy():
                 conn.sendall(
                     b"HTTP/1.1 403 Forbidden\r\nX-Bat-Firewall: denied\r\n"
                     b"Content-Length: 30\r\n\r\n"
-                    b"denied by Bat_OS firewall\n")
+                    b"denied by Sphragis firewall\n")
                 return
             # Allowed — connect upstream + tunnel
             host, port = target.rsplit(":", 1)
@@ -425,7 +425,7 @@ def write_encrypted_audit(cave_name: str, payload: bytes):
     # Pull previous tag for chaining. First frame gets a fixed
     # "GENESIS" AAD so verification knows where the chain starts.
     with CAVE_LAST_TAG_LOCK:
-        prev_tag = CAVE_LAST_TAG.get(cave_name, b"GENESIS-BATOS\x00\x00\x00")
+        prev_tag = CAVE_LAST_TAG.get(cave_name, b"GENESIS-SPHRAGIS\x00\x00\x00")
     aad = prev_tag  # 16 bytes
 
     import os as _os
@@ -454,7 +454,7 @@ def verify_and_decrypt_audit(cave_name: str, key: bytes) -> tuple[bool, bytes]:
         return False, b""
     aead = ChaCha20Poly1305(key)
     out = bytearray()
-    prev_tag = b"GENESIS-BATOS\x00\x00\x00"
+    prev_tag = b"GENESIS-SPHRAGIS\x00\x00\x00"
     with open(path, "rb") as f:
         while True:
             lenhdr = f.read(2)
@@ -512,9 +512,9 @@ def ensure_network(internal: bool = False):
     Phase 4: we track TWO bridges.
       * batnet-internal-XXXX  — created with `--internal`: no external
         routing, caves on this bridge can ONLY talk to each other or
-        the Mac host. Used when Bat_OS's cave lacks the `net` capability.
+        the Mac host. Used when Sphragis's cave lacks the `net` capability.
       * batnet-egress-XXXX    — normal bridge; permits external egress.
-        Used when Bat_OS grants `net`.
+        Used when Sphragis grants `net`.
     """
     global NETWORK_NAME, NETWORK_INTERNAL, NETWORK_EGRESS
     with STATE_LOCK:
@@ -578,7 +578,7 @@ def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "",
     Linux capabilities to add (e.g. "NET_RAW,NET_ADMIN").
 
     `key_hex` (Phase 3) is an optional 64-char hex-encoded AES-256 key
-    derived by Bat_OS from the cave name + master KDF. If provided, the
+    derived by Sphragis from the cave name + master KDF. If provided, the
     daemon stores it in memory and uses it to AES-encrypt this cave's
     audit log at rest. Key is zeroed on DESTROY.
 
@@ -599,14 +599,14 @@ def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "",
     if r.returncode == 0 and cname in r.stdout.splitlines():
         return False, f"cave '{name}' already exists"
 
-    # `-` is the Bat_OS client's placeholder for "no caps csv provided".
+    # `-` is the Sphragis client's placeholder for "no caps csv provided".
     # Treat as empty so it doesn't get passed as a literal cap.
     if caps_csv.strip() == "-":
         caps_csv = ""
     caps = [c.strip() for c in caps_csv.split(",") if c.strip() and c.strip() != "-"]
 
     # Phase 4: network egress is a capability. If the caps csv contains
-    # "NET" or the special marker "EGRESS" (which Bat_OS adds when the
+    # "NET" or the special marker "EGRESS" (which Sphragis adds when the
     # cave has the `net` cap granted), we join the egress bridge;
     # otherwise the cave lands on the --internal bridge which cannot
     # reach anything outside the docker host.
@@ -620,13 +620,13 @@ def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "",
     want_egress = any(c.upper() in ("EGRESS", "NET") for c in caps)
     network = ensure_network(internal=not want_egress)
 
-    # Don't pass our marker caps to docker run — they're Bat_OS-level
+    # Don't pass our marker caps to docker run — they're Sphragis-level
     # signals, not Linux kernel capabilities.
     docker_caps = [c for c in caps if c.upper() not in ("EGRESS", "NET")]
     cap_args = [f for c in docker_caps for f in ("--cap-add", c)]
 
     # Integration #2: if persistent, provision an encrypted volume
-    # using Bat_OS's per-cave key, mount it, bind into container /data.
+    # using Sphragis's per-cave key, mount it, bind into container /data.
     volume_args = []
     if persistent:
         if not key_hex:
@@ -637,7 +637,7 @@ def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "",
         except Exception as e:
             return False, f"encrypted volume create failed: {e}"
 
-    # Integration #4: point the cave at the Bat_OS-gated egress proxy.
+    # Integration #4: point the cave at the Sphragis-gated egress proxy.
     # Docker's default bridge resolves `host.docker.internal` to the
     # Mac, so the proxy (on 0.0.0.0:9998) is reachable. Any tool that
     # honours HTTPS_PROXY — curl, wget, apt, pip, git, go, most Kali
@@ -694,7 +694,7 @@ def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "",
 
     # Phase 3: stash the per-cave AES-256 key in memory if provided.
     # The key never touches disk — we re-derive or the operator re-sends
-    # via Bat_OS on daemon restart.
+    # via Sphragis on daemon restart.
     if key_hex:
         try:
             key = bytes.fromhex(key_hex)
@@ -910,7 +910,7 @@ class Handler(socketserver.StreamRequestHandler):
                     self._send("EOF")
                     continue
 
-                # Integration #4: firewall policy push from Bat_OS.
+                # Integration #4: firewall policy push from Sphragis.
                 if line.startswith("FW_ALLOW "):
                     target = line.split(None, 1)[1].strip()
                     fw_allow(target)
@@ -962,14 +962,14 @@ class Handler(socketserver.StreamRequestHandler):
                     continue
 
                 # CPOL_WHO <ip> → cave name (or "NONE" if unmapped). Lets
-                # Bat_OS verify the daemon's source-ip→cave mapping.
+                # Sphragis verify the daemon's source-ip→cave mapping.
                 if line.startswith("CPOL_WHO "):
                     ip = line.split(None, 1)[1].strip()
                     cave = cave_for_ip(ip)
                     self._send(cave if cave is not None else "NONE")
                     continue
 
-                # 3c-daemon-bind: dump every (ip, cave) binding so Bat_OS's
+                # 3c-daemon-bind: dump every (ip, cave) binding so Sphragis's
                 # kernel can sync its nat::bind_ip table from the daemon's
                 # docker-inspect-populated view. Format: "<ip> <cave>"
                 # one per line, terminated by EOF.
@@ -1077,7 +1077,7 @@ class TS(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 # ── Entry point ────────────────────────────────────────────────
 def main():
-    ap = argparse.ArgumentParser(description="Bat_OS BatCave control daemon")
+    ap = argparse.ArgumentParser(description="Sphragis BatCave control daemon")
     ap.add_argument("--addr", default=DEFAULT_ADDR)
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--token", default=DEFAULT_TOKEN)
@@ -1086,7 +1086,7 @@ def main():
     # Start deadman watcher
     threading.Thread(target=deadman_watcher, daemon=True).start()
 
-    # Integration #4: start the Bat_OS-gated egress HTTP CONNECT proxy.
+    # Integration #4: start the Sphragis-gated egress HTTP CONNECT proxy.
     start_egress_proxy()
 
     log("=" * 64)

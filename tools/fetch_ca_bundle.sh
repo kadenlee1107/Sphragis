@@ -1,7 +1,7 @@
 #!/bin/bash
 # tools/fetch_ca_bundle.sh — STUMP #139
 #
-# Re-fetches the curated root CA DER bundle that Bat_OS ships in
+# Re-fetches the curated root CA DER bundle that Sphragis ships in
 # `src/net/ca_certs/`. Roots rarely rotate, but when they do (or
 # when STUMP #140 unlocks RSA leaf verification and we want to add
 # more) this is the one-shot refresh.

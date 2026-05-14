@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Authentication Gate
+// Sphragis — Authentication Gate
 // Runs BEFORE anything else. No passphrase + YubiKey = no access.
 // Three paths: SUCCESS, FAIL (count), DURESS (fake boot + wipe).
 //
@@ -56,7 +56,7 @@ pub fn init(passphrase: &str, duress_code: &str) {
 /// cost function is MEMORY-hard: a GPU/ASIC attacker can't parallelize
 /// millions of guesses because each one burns `memory` bytes of RAM
 /// for `time` passes. Flat-out the biggest single crypto upgrade on
-/// the Bat_OS roadmap.
+/// the Sphragis roadmap.
 ///
 /// Parameters (m=16384, t=3, p=1) = ~16 MiB × 3 passes ≈ 50 ms on M4.
 /// Sized to be barely noticeable at auth but painful to brute:
@@ -69,7 +69,7 @@ pub fn init(passphrase: &str, duress_code: &str) {
 /// derive the salt from a per-device secret (TPM, Secure Enclave, or
 /// first-boot randomness). For this commit we preserve the existing
 /// semantics — same passphrase → same hash across reboots — using the
-/// bat_os-auth-v2 domain-separation constant so anyone comparing to
+/// sphragis-auth-v2 domain-separation constant so anyone comparing to
 /// the pre-upgrade hash can see it changed.
 fn kdf(passphrase: &[u8]) -> [u8; 32] {
     use argon2::{Argon2, Algorithm, Version, Params};
@@ -78,7 +78,7 @@ fn kdf(passphrase: &[u8]) -> [u8; 32] {
     // heap (see kernel/mm/heap.rs). Auth wait on M4 native is ~30 ms;
     // on QEMU-virt emulated ~150 ms — both imperceptible to a human
     // but crushing to GPU/ASIC offline attackers.
-    const SALT: &[u8; 16] = b"bat_os-auth-v2\0\0";
+    const SALT: &[u8; 18] = b"sphragis-auth-v2\0\0";
     const MEM_KIB: u32 = 8_192;    // 8 MiB
     const TIME_COST: u32 = 3;
     const PARALLELISM: u32 = 1;
@@ -96,7 +96,7 @@ fn kdf(passphrase: &[u8]) -> [u8; 32] {
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
     let mut out = [0u8; 32];
-    // Bat_OS crate ships `alloc` — argon2 uses `Vec<u8>` scratch for
+    // Sphragis crate ships `alloc` — argon2 uses `Vec<u8>` scratch for
     // the memory blocks. On no_std + global_allocator that's fine.
     if argon.hash_password_into(passphrase, SALT, &mut out).is_err() {
         // Argon2 failed for some reason (e.g. passphrase length out of
@@ -112,7 +112,7 @@ fn kdf(passphrase: &[u8]) -> [u8; 32] {
 /// passphrase + salt + round counter. Domain-separated salt so its
 /// output is distinct from the Argon2id output for the same passphrase.
 fn fallback_sha256_kdf(passphrase: &[u8]) -> [u8; 32] {
-    const SALT: [u8; 16] = *b"bat_os-auth-v1\0\0";
+    const SALT: [u8; 18] = *b"sphragis-auth-v1\0\0";
     let n = passphrase.len().min(64);
     let mut buf = [0u8; 128];
     buf[..n].copy_from_slice(&passphrase[..n]);

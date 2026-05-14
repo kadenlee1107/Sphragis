@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Tiling Window Manager
+// Sphragis — Tiling Window Manager
 // Keyboard-driven, no floating windows.
 // Ctrl+1-5 switches apps. Ctrl+H/L splits horizontal/vertical.
 // Sharp angular borders, bat aesthetic.
@@ -343,7 +343,7 @@ pub fn draw_frame() {
     // ── TITLE BAR ───────────────────────────────────────────────
     gpu::fill_rect(0, 0, w, TITLE_H, BG);
 
-    // 1) Brand block — bat-mini + "BAT_OS" wordmark.
+    // 1) Brand block — bat-mini + "SPHRAGIS" wordmark.
     let brand_text_y = (TITLE_H - CHAR_H) / 2;
     let bat_y = (TITLE_H - 12) / 2;
     draw::draw_bat_mini(14, bat_y, CYAN);

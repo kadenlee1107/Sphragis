@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Dead Man's Switch
+// Sphragis — Dead Man's Switch
 // If you don't re-authenticate within the configured interval,
 // the system assumes you're compromised and auto-wipes on next boot.
 //
@@ -45,13 +45,13 @@ pub fn arm(interval_hours: u64) {
     platform::serial_puts("h)\n");
 
     // Phase 5 (design-alignment): propagate the arm to the batcaved
-    // daemon so Docker caves get wiped even if Bat_OS itself goes
+    // daemon so Docker caves get wiped even if Sphragis itself goes
     // dark (kernel panic, host crash, power loss). The daemon keeps
-    // its own heartbeat timer; if Bat_OS doesn't PING within
+    // its own heartbeat timer; if Sphragis doesn't PING within
     // `interval`, the daemon DESTROYS everything.
     //
     // Best-effort: if the daemon isn't running, skip quietly — the
-    // native in-Bat_OS wipe path still covers native caves.
+    // native in-Sphragis wipe path still covers native caves.
     let secs = interval_hours * 3600;
     let r = crate::batcave::docker_client::with_daemon(|| {
         crate::batcave::docker_client::arm_deadman(secs)

@@ -7,17 +7,17 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-KERNEL="${ROOT}/target/aarch64-unknown-none/release/bat_os"
+KERNEL="${ROOT}/target/aarch64-unknown-none/release/sphragis"
 STATUS=0
 
 say_ok()  { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 say_bad() { printf '  \033[31m✗\033[0m %s\n' "$*"; STATUS=1; }
 say_info(){ printf '  \033[36mi\033[0m %s\n' "$*"; }
 
-echo "[preflight] Bat_OS packet-pipeline vmnet recipe"
+echo "[preflight] Sphragis packet-pipeline vmnet recipe"
 echo
 
-# 1. Kernel built with BAT_OS_PASSPHRASE=batman
+# 1. Kernel built with SPHRAGIS_PASSPHRASE=batman
 if [ -f "$KERNEL" ]; then
     age=$(stat -f %m "$KERNEL")
     now=$(date +%s)
@@ -29,7 +29,7 @@ if [ -f "$KERNEL" ]; then
     fi
 else
     say_bad "kernel missing: $KERNEL"
-    say_info "build with:  BAT_OS_PASSPHRASE=batman cargo build --release"
+    say_info "build with:  SPHRAGIS_PASSPHRASE=batman cargo build --release"
 fi
 
 # 2. QEMU present + vmnet backend compiled in

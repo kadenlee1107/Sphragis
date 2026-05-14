@@ -7,7 +7,7 @@ IOKit service matching that we can't reach from EL2; dtrace on a live
 boot of macOS sees all of it.
 
 Everything here runs **on the M4 booted into macOS**, not on the Ubuntu
-host. Since our Bat_OS workflow always reboots into m1n1, you'll need
+host. Since our Sphragis workflow always reboots into m1n1, you'll need
 to reboot, pick "Macintosh HD" (or similar) at the m1n1 boot picker to
 fall through to macOS, and run the steps below.
 
@@ -32,7 +32,7 @@ fall through to macOS, and run the steps below.
 
 2. In Terminal:
    ```
-   sudo dtrace -q -s /path/to/Bat_OS/scripts/macos/trace_mtp_mailbox.d \
+   sudo dtrace -q -s /path/to/Sphragis/scripts/macos/trace_mtp_mailbox.d \
        -o ~/mtp_init.trace
    ```
    Leave running.
@@ -69,7 +69,7 @@ sg dialout -c 'M1N1DEVICE=/dev/ttyACM1 python3 \
 ```
 
 If MTP Hellos in response, internal keyboard is one small step away
-(DockChannel HID subscribe already exists in `batos_hv_interactive.py
+(DockChannel HID subscribe already exists in `sphragis_hv_interactive.py
 _mtp_kbd_probe`).
 
 ## If the trace is empty or sparse

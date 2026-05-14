@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Bat_OS comms test server with real Ed25519 + X25519 + ChaCha20-Poly1305.
+"""Sphragis comms test server with real Ed25519 + X25519 + ChaCha20-Poly1305.
 
 Wire protocol (matches src/ui/apps/comms.rs):
 
   1. After TCP connect, both sides send a 128-byte HANDSHAKE OFFER:
         eph_pub(32) || id_pub(32) || ed25519_sig(eph || label by id_sk)(64)
-     label = b"BAT_OS-COMMS-v1"
+     label = b"SPHRAGIS-COMMS-v1"
 
   2. After exchanging offers, both compute:
         shared    = X25519(my_eph_sk, peer_eph_pk)
-        c2s_key   = SHA-256(b"BAT_OS-COMMS-c2s-v1" || shared
+        c2s_key   = SHA-256(b"SPHRAGIS-COMMS-c2s-v1" || shared
                             || client_eph_pk || server_eph_pk)
-        s2c_key   = SHA-256(b"BAT_OS-COMMS-s2c-v1" || shared
+        s2c_key   = SHA-256(b"SPHRAGIS-COMMS-s2c-v1" || shared
                             || client_eph_pk || server_eph_pk)
 
   3. Transport frames:
@@ -21,7 +21,7 @@ Wire protocol (matches src/ui/apps/comms.rs):
 
 The server keeps a stable Ed25519 identity in `./comms_server.key` so the
 public-key fingerprint we hand the operator stays the same between runs.
-The fingerprint is what the Bat_OS shell pins via:
+The fingerprint is what the Sphragis shell pins via:
 
     comms connect 10.0.2.2:9100 <SERVER_PUBKEY_HEX>
 
@@ -49,12 +49,12 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature, InvalidTag
 
 
-LABEL          = b"BAT_OS-COMMS-v1"
+LABEL          = b"SPHRAGIS-COMMS-v1"
 OFFER_LEN      = 32 + 32 + 64       # 128
 NONCE_LEN      = 12
 TAG_LEN        = 16
-KEY_DIR_C2S    = b"BAT_OS-COMMS-c2s-v1"
-KEY_DIR_S2C    = b"BAT_OS-COMMS-s2c-v1"
+KEY_DIR_C2S    = b"SPHRAGIS-COMMS-c2s-v1"
+KEY_DIR_S2C    = b"SPHRAGIS-COMMS-s2c-v1"
 IDENTITY_PATH  = "comms_server.key"
 ALLOWLIST_PATH = "comms_clients.allowlist"
 
@@ -251,7 +251,7 @@ def main() -> int:
     id_pk_hex = id_pub_bytes(id_sk).hex()
     allowlist = load_allowlist()
     print("===========================================================")
-    print(f"[srv] Bat_OS comms server (Ed25519 + X25519 + ChaCha20-Poly1305)")
+    print(f"[srv] Sphragis comms server (Ed25519 + X25519 + ChaCha20-Poly1305)")
     print(f"[srv] listening on 0.0.0.0:{port}")
     print(f"[srv] identity pubkey: {id_pk_hex}")
     if allowlist is None:
@@ -262,7 +262,7 @@ def main() -> int:
         print(f"[srv] allowlist: {len(allowlist)} client(s) authorized")
         if not allowlist:
             print(f"[srv]   WARNING: empty allowlist -> nobody can connect")
-    print(f"[srv] pin this on the Bat_OS side:")
+    print(f"[srv] pin this on the Sphragis side:")
     print(f"[srv]   comms identify 10.0.2.2:{port}    (then comms pin <Ctrl+V>)")
     print("===========================================================",
           flush=True)

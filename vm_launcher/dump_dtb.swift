@@ -1,4 +1,4 @@
-// Bat_OS — VZ VM DTB Dumper
+// Sphragis — VZ VM DTB Dumper
 // Boots a minimal kernel, then extracts the device tree
 // from the VM's memory to discover actual device addresses.
 //
@@ -8,14 +8,14 @@ import Virtualization
 import Foundation
 
 let home = FileManager.default.homeDirectoryForCurrentUser.path
-let kernelPath = "\(home)/Bat_OS/target/bat_os_image.bin"
+let kernelPath = "\(home)/Sphragis/target/sphragis_image.bin"
 
 guard FileManager.default.fileExists(atPath: kernelPath) else {
-    print("Build kernel first: cd ~/Bat_OS && cargo build --release")
+    print("Build kernel first: cd ~/Sphragis && cargo build --release")
     exit(1)
 }
 
-print("Bat_OS DTB Dumper — discovering VZ VM hardware layout")
+print("Sphragis DTB Dumper — discovering VZ VM hardware layout")
 print("")
 
 let config = VZVirtualMachineConfiguration()
@@ -31,7 +31,7 @@ config.bootLoader = bootLoader
 
 // Serial — write to stdout
 let serialPort = VZVirtioConsoleDeviceSerialPortConfiguration()
-let logPath = NSTemporaryDirectory() + "bat_os_dtb_dump.log"
+let logPath = NSTemporaryDirectory() + "sphragis_dtb_dump.log"
 FileManager.default.createFile(atPath: logPath, contents: nil)
 let logHandle = FileHandle(forWritingAtPath: logPath)!
 serialPort.attachment = VZFileHandleSerialPortAttachment(

@@ -1,5 +1,5 @@
 """Minimal WireGuard Noise IK responder — exactly enough crypto to
-close a handshake initiated by Bat_OS's `sys-wg` service.
+close a handshake initiated by Sphragis's `sys-wg` service.
 
 Implements the subset of the WireGuard v1 wire protocol (RFC 9711 /
 zx2c4's whitepaper §5.4) that an interop test needs:
@@ -8,7 +8,7 @@ zx2c4's whitepaper §5.4) that an interop test needs:
   * Verify mac1 (BLAKE2s-keyed by responder's static pubkey).
   * Decrypt enc_static (initiator's pubkey) and enc_timestamp via
     ChaCha20-Poly1305, deriving the same `(c, h)` chaining-key /
-    hash that Bat_OS's responder_consume_init() builds in
+    hash that Sphragis's responder_consume_init() builds in
     `src/net/wireguard.rs`.
   * Build a 92-byte Response message with a fresh ephemeral, the
     encrypted-empty AEAD field, and a valid mac1 keyed by the
@@ -16,7 +16,7 @@ zx2c4's whitepaper §5.4) that an interop test needs:
 
 No replay window, no transport-message support, no PSK — the
 responder reaches the "session would be established" point and
-hands off. Bat_OS sees `their_sender_index != 0` and the in-kernel
+hands off. Sphragis sees `their_sender_index != 0` and the in-kernel
 `wg-test-outbound <ip> <pubkey>` command prints
 `WG-SESSION-ESTABLISHED`.
 """
@@ -215,7 +215,7 @@ def build_response(
     """Build a 92-byte Response message. Returns (wire_bytes,
     responder_ephemeral_sk) — the ephemeral isn't needed by the
     test (which doesn't send transport messages) but we surface
-    it for symmetry with the Bat_OS responder state."""
+    it for symmetry with the Sphragis responder state."""
     resp_eph_sk, resp_eph_pk = x25519_keypair()
 
     h = mix_hash(h, resp_eph_pk)

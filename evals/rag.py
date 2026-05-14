@@ -122,7 +122,7 @@ class Corpus:
         hits = self.top_k(query, k=k)
         if not hits:
             return ""
-        parts = ["Relevant context from the Bat_OS docs:\n"]
+        parts = ["Relevant context from the Sphragis docs:\n"]
         for title, snippet in hits:
             parts.append(f"## {title}\n{snippet}\n")
         return "\n".join(parts) + "\n---\n"

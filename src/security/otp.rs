@@ -2,7 +2,7 @@
 //!
 //! Scope
 //! -----
-//! This module is the legitimate use of OTP in Bat_OS. OTP is
+//! This module is the legitimate use of OTP in Sphragis. OTP is
 //! information-theoretically unbreakable only when the key is truly
 //! random, at least as long as the plaintext, never reused, and kept
 //! secret. For filesystems / streams those preconditions are

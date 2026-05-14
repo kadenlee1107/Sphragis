@@ -1,4 +1,4 @@
-# Bat_OS Receipts
+# Sphragis Receipts
 
 Concrete evidence for every claim in the [README](../README.md). One section per claim. For each: the commit(s) that landed it, the headless QEMU selftest that exercises it, and what passing the selftest actually proves.
 
@@ -10,7 +10,7 @@ If a stranger reads the README and asks "is this real or marketing copy" — thi
 
 ## 1. Hardware bring-up (Apple M4)
 
-**Claim:** Bat_OS is the first known non-Apple OS booted on Apple M4 hardware (Mac16,1 / J604 / T8132 "Donan").
+**Claim:** Sphragis is the first known non-Apple OS booted on Apple M4 hardware (Mac16,1 / J604 / T8132 "Donan").
 
 - **Evidence:** [`docs/photos/2026-04-17_first_m4_boot/`](photos/2026-04-17_first_m4_boot/) — sixteen photos with [`INDEX.md`](photos/2026-04-17_first_m4_boot/INDEX.md) describing each one. Reaches an interactive shell with status bar. ADT discovery, DWC3 USB-3 controller bring-up, ATC PHY tunables, dockchannel UART — all confirmed running on real silicon.
 - **Reproducibility:** The boot path is documented in [`UBUNTU_QUICKSTART.md`](../UBUNTU_QUICKSTART.md). The chainload uses the m1n1 proxyclient with our pre-patched [`external/m1n1/proxyclient/tools/chainload.py`](../external/m1n1/proxyclient/tools/chainload.py) (carries the `--skip-secondary-cpus` flag that M4's P-cluster needs to avoid an RVBAR SError).
@@ -109,14 +109,14 @@ If a stranger reads the README and asks "is this real or marketing copy" — thi
   - Scheduler task switch ([`src/kernel/scheduler.rs::schedule`](../src/kernel/scheduler.rs))
   - TTBR0 cave swap ([`src/batcave/linux/mmu.rs::switch_to_cave`](../src/batcave/linux/mmu.rs))
 - **Commit:** `feat/spectre-barriers` → `2a46e307`.
-- **Evidence:** binary inspection — `llvm-objdump --triple=aarch64-unknown-none -d target/aarch64-unknown-none/release/bat_os | grep 'sb\b'` shows 8 `sb` instructions at the expected addresses (6 inlined from `RESTORE_REGS` × every vector that returns + 2 from sched/mmu).
+- **Evidence:** binary inspection — `llvm-objdump --triple=aarch64-unknown-none -d target/aarch64-unknown-none/release/sphragis | grep 'sb\b'` shows 8 `sb` instructions at the expected addresses (6 inlined from `RESTORE_REGS` × every vector that returns + 2 from sched/mmu).
 
 ---
 
 ## 6. Supply chain + reproducibility
 
 ### CVE feed ingestion against `Cargo.lock`
-- **Claim:** `scripts/cve_audit.py` queries OSV.dev for every locked dependency. Suppressions live in `cve_audit.ignore` with rationale. Found and triaged RUSTSEC-2023-0071 (Marvin attack on `rsa` crate) — suppressed because Bat_OS only uses `rsa` for public-key verify, not private-key decrypt, where the timing leak applies.
+- **Claim:** `scripts/cve_audit.py` queries OSV.dev for every locked dependency. Suppressions live in `cve_audit.ignore` with rationale. Found and triaged RUSTSEC-2023-0071 (Marvin attack on `rsa` crate) — suppressed because Sphragis only uses `rsa` for public-key verify, not private-key decrypt, where the timing leak applies.
 - **Commit:** `feat/cve-audit` → `14c786fe`.
 
 ### Permissive-only dep stack
@@ -181,7 +181,7 @@ A pass on every selftest produces a clean "all primitives operational" signal. E
 ## What this doc is NOT
 
 - **A threat model.** That belongs in its own doc (planned: `docs/THREAT_MODEL.md`).
-- **An audit.** Bat_OS has not been externally audited. The selftests prove that the implementation matches the design; they don't prove the design is free of higher-order weaknesses.
+- **An audit.** Sphragis has not been externally audited. The selftests prove that the implementation matches the design; they don't prove the design is free of higher-order weaknesses.
 - **A claim of formal verification.** None of this code is machine-checked. Where we have invariants the compiler enforces (Rust type / borrow / lifetime system), we lean on that. Where we have invariants beyond what the compiler enforces (e.g. "the audit chain head is sealed within N entries"), we rely on tests and discipline.
 
 The receipts say "this works as designed." Whether the design is sufficient for any particular threat model is a separate question.

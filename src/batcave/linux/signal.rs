@@ -1,8 +1,8 @@
-// Bat_OS — POSIX signal delivery for BatCave Linux processes.
+// Sphragis — POSIX signal delivery for BatCave Linux processes.
 //
 // File-level `allow(dead_code)`: the SIGHUP/SIGINT/SA_RESTART/etc.
 // constants are POSIX protocol numbers. Caves invoke rt_sigaction(2)
-// with these names; we keep the full table named even where Bat_OS
+// with these names; we keep the full table named even where Sphragis
 // hasn't grown a default handler for the signal yet, because the
 // alternative (deleting and re-adding when each cave needs a new
 // signal) is just churn for protocol-stable identifiers.
@@ -890,7 +890,7 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
             out("x0") _,
         );
     }
-    // BAT_OS_KEEP_GOING: dump the skip-summary on cave-fatal teardown
+    // SPHRAGIS_KEEP_GOING: dump the skip-summary on cave-fatal teardown
     // too — otherwise a fatal fault that fires before the shell's
     // post-run dump_summary call would lose every event recorded
     // during this run.

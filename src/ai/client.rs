@@ -10,8 +10,8 @@
 
 use crate::ai::AgentError;
 
-/// Configured at compile time via `BAT_OS_AI_INFERENCE_HOST` and
-/// `BAT_OS_AI_INFERENCE_PORT` (defaulted in `build.rs`). Defaults
+/// Configured at compile time via `SPHRAGIS_AI_INFERENCE_HOST` and
+/// `SPHRAGIS_AI_INFERENCE_PORT` (defaulted in `build.rs`). Defaults
 /// shown here are placeholders; real values come from env at build
 /// time per `DESIGN_AI_AGENT.md` §Inference host.
 pub const HOST: &str = "10.0.2.42";

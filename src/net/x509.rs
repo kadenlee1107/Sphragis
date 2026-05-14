@@ -1,4 +1,4 @@
-// Bat_OS — X.509 certificate chain validation.
+// Sphragis — X.509 certificate chain validation.
 //
 // V4: replaces the pin-only interim defence with real PKI validation.
 //
@@ -143,8 +143,8 @@ impl VerifyError {
 
 /// x509-hardening-a: build-time epoch floor for validity-period checks.
 ///
-/// Bat_OS is bare-metal with no RTC/NTP, so we cannot ask "what time is
-/// it" the way userspace can. `BAT_OS_BUILD_UNIX` is set by build.rs at
+/// Sphragis is bare-metal with no RTC/NTP, so we cannot ask "what time is
+/// it" the way userspace can. `SPHRAGIS_BUILD_UNIX` is set by build.rs at
 /// compile time from the build host's `SystemTime::now()`, so it tracks
 /// reality up to one rebuild old. The verifier uses this as a lower
 /// bound — a cert whose `notBefore` is *after* this value is rejected
@@ -161,7 +161,7 @@ impl VerifyError {
 ///   which we know the project did not exist.
 pub fn now_unix() -> i64 {
     const FALLBACK_UNIX: i64 = 1_735_689_600; // 2025-01-01 UTC
-    match option_env!("BAT_OS_BUILD_UNIX") {
+    match option_env!("SPHRAGIS_BUILD_UNIX") {
         Some(s) => match s.parse::<i64>() {
             Ok(v) if v >= FALLBACK_UNIX => v,
             _ => FALLBACK_UNIX,

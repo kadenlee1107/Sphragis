@@ -1,4 +1,4 @@
-// Bat_OS — ARM64 Boot Stub (Universal: QEMU + VZ VM)
+// Sphragis — ARM64 Boot Stub (Universal: QEMU + VZ VM)
 // Works with both QEMU -kernel and VZLinuxBootLoader.
 // Entry: x0 = DTB pointer (from bootloader)
 

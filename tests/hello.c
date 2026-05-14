@@ -1,4 +1,4 @@
-// Bat_OS Test — Raw syscall C program (no libc)
+// Sphragis Test — Raw syscall C program (no libc)
 // Cross-compile: clang --target=aarch64-linux-gnu -nostdlib -static -o hello hello.c
 
 static long syscall3(long nr, long a0, long a1, long a2) {
@@ -35,8 +35,8 @@ static void write_num(long n) {
 }
 
 void _start(void) {
-    write_str("=== Bat_OS C Program Test ===\n");
-    write_str("Hello from C on Bat_OS!\n");
+    write_str("=== Sphragis C Program Test ===\n");
+    write_str("Hello from C on Sphragis!\n");
 
     // Test mmap (syscall 222)
     long addr = syscall3(222, 0, 4096, 3);  // mmap(NULL, 4096, PROT_READ|PROT_WRITE)

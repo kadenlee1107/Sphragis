@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_all.sh — drive every DoS bomb in sequence against a Bat_OS image.
+# run_all.sh — drive every DoS bomb in sequence against a Sphragis image.
 #
 # This script assumes:
 #   * you have already built the DoS guests with
@@ -32,14 +32,14 @@ BOMBS=(
     "timerfd_spin"
 )
 
-echo "=== Bat_OS DoS stress matrix ==="
+echo "=== Sphragis DoS stress matrix ==="
 echo "NOTE: each bomb requires a FRESH boot. The harness does not try to"
 echo "      recover between runs — many DoS paths are unrecoverable by"
 echo "      design (e.g. mmap leak consumes the whole frame pool)."
 echo ""
 for b in "${BOMBS[@]}"; do
     echo "-- bomb: $b"
-    echo "   1. boot fresh Bat_OS image"
+    echo "   1. boot fresh Sphragis image"
     echo "   2. launch canary in cave A"
     echo "   3. launch $b in cave B"
     echo "   4. observe canary UART output; capture to logs/${b// /_}.log"

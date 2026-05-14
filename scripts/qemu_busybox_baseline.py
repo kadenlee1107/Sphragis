@@ -7,12 +7,12 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = ROOT / f"logs/qemu-tests/busybox-baseline-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 QEMU = ["qemu-system-aarch64","-machine","virt","-cpu","max","-m","2G","-display","none",
     "-device","virtio-gpu-device","-device","virtio-keyboard-device",
     "-netdev","user,id=net0","-device","virtio-net-device,netdev=net0",

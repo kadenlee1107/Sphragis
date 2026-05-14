@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — VirtIO tablet (absolute pointer) driver.
+// Sphragis — VirtIO tablet (absolute pointer) driver.
 //
 // Sprint 1.5 . Mirrors `keyboard.rs`. QEMU exposes the
 // tablet at the same `virtio-input` device-type as the keyboard, so

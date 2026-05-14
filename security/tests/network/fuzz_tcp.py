@@ -3,7 +3,7 @@
 fuzz_tcp.py — ATTACK-NET-009, 010, 011, 019, 022
 
 Exercises TCP state-machine issues. Requires QEMU tap bridge + root.
-Assumes Bat_OS has an established TCP connection we can interfere with
+Assumes Sphragis has an established TCP connection we can interfere with
 (e.g. via the browser demo). Scripts listen for any outgoing segment to
 snapshot the sequence numbers.
 
@@ -47,7 +47,7 @@ def on_pkt(p):
 
 
 def wait_for_session(timeout=30):
-    print("[*] Sniffing for an outgoing TCP segment from Bat_OS...")
+    print("[*] Sniffing for an outgoing TCP segment from Sphragis...")
     sniff(iface=IFACE, filter=f"tcp and src host {VICTIM_IP}", prn=on_pkt,
           store=False, timeout=timeout,
           stop_filter=lambda _: "seq_victim_sent" in observed)
@@ -62,8 +62,8 @@ def mk(flags, seq, ack, payload=b""):
 
 
 def attack_010_blind_rst():
-    # RFC 5961: RST must seq==rcv_nxt. Bat_OS accepts any.
-    # Guess rcv_nxt: Bat_OS's rcv_nxt == our last-seen `seq_victim_sent + payload_len`
+    # RFC 5961: RST must seq==rcv_nxt. Sphragis accepts any.
+    # Guess rcv_nxt: Sphragis's rcv_nxt == our last-seen `seq_victim_sent + payload_len`
     # but since we aren't tracking payload, try seq=ack_victim_sent.
     p = mk("R", seq=observed["ack_victim_sent"], ack=0)
     sendp(p, iface=IFACE, verbose=False)
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     attack_009_isn_predict()
     wait_for_session(timeout=30)
     if "src_port" not in observed:
-        print("No session seen; start the Bat_OS browser demo and rerun.")
+        print("No session seen; start the Sphragis browser demo and rerun.")
         sys.exit(1)
     attack_010_blind_rst()
     time.sleep(0.5)

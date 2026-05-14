@@ -13,7 +13,7 @@ until desired=0xf. We'll replicate that via raw read32/write32.
 import sys
 import pathlib
 import time
-M1N1 = pathlib.Path("/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient")
+M1N1 = pathlib.Path("/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient")
 sys.path.insert(0, str(M1N1))
 from m1n1.setup import *
 

@@ -1,4 +1,4 @@
-/* Bat_OS Linker Script — ARM64 bare metal for QEMU virt machine */
+/* Sphragis Linker Script — ARM64 bare metal for QEMU virt machine */
 /* QEMU virt with `-kernel <Image-header binary>` loads at PA 0x40200000.
  * (Empirically verified: see V8-PT-DIAG output 2026-04-25 where
  * *0x40080000=0 but *0x40200000=0x14000010 = `b _real_start`.) Linker

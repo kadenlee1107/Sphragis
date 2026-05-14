@@ -1,4 +1,4 @@
-// Bat_OS — KEEP_GOING / skip-and-log infrastructure.
+// Sphragis — KEEP_GOING / skip-and-log infrastructure.
 //
 // Goal: instead of bailing out at the first non-zero exit code, the
 // first unknown syscall, or the first cave-fatal fault, *log* the
@@ -18,7 +18,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crate::drivers::uart;
 
 /// Global enable. Flipped by `main` based on the
-/// `BAT_OS_KEEP_GOING` env var (compile-time today; runtime later).
+/// `SPHRAGIS_KEEP_GOING` env var (compile-time today; runtime later).
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Hard cap so we don't run forever if a skip turns into an
@@ -93,7 +93,7 @@ static N_DEADLOCK: AtomicU32 = AtomicU32::new(0);
 
 pub fn enable() {
     ENABLED.store(true, Ordering::Release);
-    uart::puts("[skip] BAT_OS_KEEP_GOING enabled — ");
+    uart::puts("[skip] SPHRAGIS_KEEP_GOING enabled — ");
     uart::puts("kernel will skip-and-log instead of cave-terminate.\n");
 }
 

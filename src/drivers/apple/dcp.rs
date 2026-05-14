@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple Display Controller (DCP) Driver
+// Sphragis — Apple Display Controller (DCP) Driver
 // On Apple Silicon, the display is managed by a coprocessor (DCP).
 // Communication happens via mailbox messages.
 //
@@ -101,7 +101,7 @@ pub fn flush(_x: u32, _y: u32, _w: u32, _h: u32) {
     }
 }
 
-// V-ASAHI-2.1: boot splash. Renders a centered "BAT_OS / Apple Silicon"
+// V-ASAHI-2.1: boot splash. Renders a centered "SPHRAGIS / Apple Silicon"
 // banner so the very first thing the operator sees on the M4's display
 // is unambiguous proof that our kernel — not macOS, not Asahi, not the
 // m1n1 splash — owns the screen. Uses ONLY the framebuffer m1n1 set up
@@ -161,7 +161,7 @@ pub fn boot_splash() {
 
     // Title sized 4x normal (32x64 per char). We do this by drawing
     // the same glyph 4 times offset (cheap "scaling").
-    let title = "BAT_OS";
+    let title = "SPHRAGIS";
     let title_w_px = title.len() as u32 * crate::ui::font::CHAR_W * 4;
     let tx = w.saturating_sub(title_w_px) / 2;
     let ty = h / 3;

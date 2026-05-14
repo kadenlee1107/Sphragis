@@ -1,4 +1,4 @@
-// Bat_OS — File Descriptor Table for BatCave Linux Processes
+// Sphragis — File Descriptor Table for BatCave Linux Processes
 // Maps Linux fd numbers to VFS node indices with read/write positions.
 // Fds 0/1/2 are hardwired to stdin/stdout/stderr (UART).
 //

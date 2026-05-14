@@ -1,4 +1,4 @@
-// Bat_OS — ARM64 Exception Vector Table
+// Sphragis — ARM64 Exception Vector Table
 // Handles interrupts, syscalls, and faults.
 // Each vector entry is 128 bytes (32 instructions).
 

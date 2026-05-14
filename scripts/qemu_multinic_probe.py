@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Followup 3c-multinic: verify Bat_OS discovers both NICs.
+"""Followup 3c-multinic: verify Sphragis discovers both NICs.
 
 Launches QEMU with TWO virtio-net devices:
   nic 0: -netdev user  (existing slirp path, 10.0.2.2 gateway)
   nic 1: -netdev socket,listen=:25555
          A Python server accepts the connection but doesn't send
          any packets — QEMU just treats it as an always-up peer so
-         Bat_OS sees the device during probe.
+         Sphragis sees the device during probe.
 
 Expected: `nic-status` reports 2 NICs, both ready, two different MACs.
 """
@@ -21,12 +21,12 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT   = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG    = ROOT / f"logs/qemu-tests/multinic-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 def start_socket_server(port=25555):
     """Accept one connection and keep it open silently."""
@@ -106,7 +106,7 @@ def main():
         raw = ANSI.sub(b"", c.before or b"").decode("utf-8", "replace")
         print("--- nic-status output ---")
         for line in raw.splitlines():
-            if line.strip() and not line.strip().startswith(("[shell]", "bat_os >")):
+            if line.strip() and not line.strip().startswith(("[shell]", "sphragis >")):
                 print(f"   {line.rstrip()[:120]}")
 
         # Success criterion: "brought up: 2" OR two "nic N: ready" lines.

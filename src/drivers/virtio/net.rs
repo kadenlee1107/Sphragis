@@ -1,9 +1,9 @@
 #![allow(dead_code)]
-// Bat_OS — VirtIO Network Driver (multi-NIC since 3c-multinic)
+// Sphragis — VirtIO Network Driver (multi-NIC since 3c-multinic)
 //
 // Sends and receives raw Ethernet frames via virtio-net. Historically
 // this module served a single device (nic 0). Followup #3c introduces
-// a second interface so Bat_OS can sit between a "caves" segment and
+// a second interface so Sphragis can sit between a "caves" segment and
 // the host slirp — the policy enforcement point at packet level.
 //
 // Both NICs share the same virtio MMIO discovery + init sequence but

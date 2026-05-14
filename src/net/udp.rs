@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — UDP Layer
+// Sphragis — UDP Layer
 // Minimal UDP for DNS queries.
 
 use super::ip::{self, IpPacket};

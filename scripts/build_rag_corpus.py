@@ -3,7 +3,7 @@
 the kernel-side Rust agent.
 
 Sources:
-  * ~/BAT_OS_VAULT/Concepts/*.md    — hand-written editorial notes
+  * ~/SPHRAGIS_VAULT/Concepts/*.md    — hand-written editorial notes
   * DESIGN_*.md (repo root)         — top-level architecture docs
 
 Outputs:
@@ -23,7 +23,7 @@ import shutil
 from pathlib import Path
 
 REPO     = Path(__file__).resolve().parent.parent
-VAULT    = Path.home() / "BAT_OS_VAULT"
+VAULT    = Path.home() / "SPHRAGIS_VAULT"
 OUT      = REPO / "docs" / "rag_corpus"
 RUST_OUT = REPO / "src" / "ai" / "rag_corpus.rs"
 

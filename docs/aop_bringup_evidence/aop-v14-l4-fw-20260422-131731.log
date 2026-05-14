@@ -193,25 +193,25 @@ Fetching ADT (0x00084000 bytes)...
 ......
 TTY> Exception: SYNC
 Traceback (most recent call last):
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxyutils.py", line 247, in compressed_writemem
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxyutils.py", line 247, in compressed_writemem
     decompressed_size = self.proxy.gzdec(compressed_addr, compressed_size, dest, len(data))
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 971, in gzdec
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 971, in gzdec
     return self.request(self.P_GZDEC, inbuf, insize, outbuf,
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 707, in request
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 707, in request
     return self._request(opcode, *args2, **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 671, in _request
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 671, in _request
     reply = self.iface.proxyreq(req, reboot=reboot, no_reply=no_reply, pre_reply=None)
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 387, in proxyreq
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 387, in proxyreq
     return self.reply(self.REQ_PROXY)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 258, in reply
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 258, in reply
     reply += self.readfull(1)
              ^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 195, in readfull
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 195, in readfull
     block = self.dev.read(size - len(d))
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/usr/lib/python3/dist-packages/serial/serialposix.py", line 595, in read
@@ -229,11 +229,11 @@ termios.error: (5, 'Input/output error')
 During handling of the above exception, another exception occurred:
 
 Traceback (most recent call last):
-  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v14.py", line 267, in <module>
+  File "/home/kaden-lee/code/Sphragis/scripts/hv/probe_aop_pmgr_v14.py", line 267, in <module>
     main()
-  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v14.py", line 174, in main
+  File "/home/kaden-lee/code/Sphragis/scripts/hv/probe_aop_pmgr_v14.py", line 174, in main
     u.compressed_writemem(a["phys"], macho[m[3]:m[3]+m[4]], True)
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxyutils.py", line 249, in compressed_writemem
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxyutils.py", line 249, in compressed_writemem
     self.iface.dev.timeout = timeout
     ^^^^^^^^^^^^^^^^^^^^^^
   File "/usr/lib/python3/dist-packages/serial/serialutil.py", line 372, in timeout

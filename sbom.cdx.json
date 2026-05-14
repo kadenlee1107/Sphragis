@@ -156,8 +156,8 @@
       "version": "1.8.3"
     },
     {
-      "bom-ref": "bat_os@0.1.0",
-      "name": "bat_os",
+      "bom-ref": "sphragis@0.1.0",
+      "name": "sphragis",
       "properties": [
         {
           "name": "dependency.name",
@@ -260,7 +260,7 @@
           "value": "xts-mode"
         }
       ],
-      "purl": "pkg:cargo/bat_os@0.1.0",
+      "purl": "pkg:cargo/sphragis@0.1.0",
       "scope": "required",
       "type": "library",
       "version": "0.1.0"
@@ -2688,8 +2688,8 @@
   ],
   "metadata": {
     "component": {
-      "name": "bat_os",
-      "purl": "pkg:generic/bat_os@c6b170e1d388",
+      "name": "sphragis",
+      "purl": "pkg:generic/sphragis@c6b170e1d388",
       "type": "operating-system",
       "version": "c6b170e1d388"
     },
@@ -2697,7 +2697,7 @@
     "tools": [
       {
         "name": "scripts/gen_sbom.py",
-        "vendor": "Bat_OS",
+        "vendor": "Sphragis",
         "version": "1.0"
       }
     ]

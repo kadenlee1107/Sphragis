@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Headless smoke for the sys-wg service Arc-3-slice-1 selftest.
 
-Boots Bat_OS in QEMU virt, clears the empty-passphrase auth gate,
+Boots Sphragis in QEMU virt, clears the empty-passphrase auth gate,
 runs `sys-wg-selftest` at the shell, and asserts:
 
   - sys-wg static pubkey is reachable (module-private keypair owns it)
@@ -21,7 +21,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/sys-wg-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -52,7 +52,7 @@ def main() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         c.sendline("sys-wg-selftest")
@@ -65,7 +65,7 @@ def main() -> int:
             print(f"[sys-wg] log: {LOG}", file=sys.stderr)
             return 1
 
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[sys-wg] PASS — sys-wg service boundary verified end-to-end")
         print(f"[sys-wg] log: {LOG}")
         return 0

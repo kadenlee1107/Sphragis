@@ -1,4 +1,4 @@
-// Bat_OS — eventfd + timerfd for BatCave Linux
+// Sphragis — eventfd + timerfd for BatCave Linux
 //
 // Used by the Chromium port for cross-thread wakeups (eventfd) and
 // animation / scheduler timers (timerfd). Both are file-descriptor-based

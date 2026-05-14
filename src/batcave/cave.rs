@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — BatCave Core
+// Sphragis — BatCave Core
 // Isolated container runtime for running Kali Linux tools.
 // Each BatCave has its own encrypted filesystem, capabilities, and process space.
 
@@ -29,7 +29,7 @@ pub enum CaveType {
 
 /// What kind of isolation actually backs this cave.
 // /
-/// NATIVE caves run user ELFs under Bat_OS's own MMU page tables via
+/// NATIVE caves run user ELFs under Sphragis's own MMU page tables via
 /// the `batcave::linux` loader. DOCKER caves live as Linux containers
 /// on the Mac host, orchestrated by the `batcaved` daemon over TCP
 /// (see `docker_client.rs`). From the user's perspective both are
@@ -1648,7 +1648,7 @@ pub fn enter(name: &str) -> Result<(), &'static str> {
         // single-CPU) and re-read it inside the CS.
         //
         // Skip docker-backed caves: their isolation is the Mac
-        // kernel's container, not our MMU. Building a Bat_OS L1 for
+        // kernel's container, not our MMU. Building a Sphragis L1 for
         // them would be wasted memory.
         let needs_l1 = unsafe {
             !CAVES[id].is_docker() && CAVES[id].cave_l1_phys == 0
@@ -1953,12 +1953,12 @@ pub fn destroy_all() {
     // must take out docker-backed caves too. Fan out to the batcaved
     // daemon via docker_client::destroy_all BEFORE we zero the local
     // cave table — otherwise the daemon has no way to know which caves
-    // were Bat_OS's (the `name_len = 0` reset below wipes that).
+    // were Sphragis's (the `name_len = 0` reset below wipes that).
     //
     // Errors from the daemon are logged but not fatal — the local
     // teardown still runs. If the daemon is unreachable (operator
     // killed it, network blip), we can't help the remote containers,
-    // but the in-Bat_OS state still gets zeroed. A daemon restart
+    // but the in-Sphragis state still gets zeroed. A daemon restart
     // reconciles via its own state (it tracks every `batcave-*` name
     // it knows about through docker ps).
     let had_docker = unsafe {

@@ -2,7 +2,7 @@
 """
 fuzz_dns.py — ATTACK-NET-035, 036, 039, 041
 
-Bat_OS uses fixed txid=0x4242 (resolve_plain) or 0x4243 (resolve_doh),
+Sphragis uses fixed txid=0x4242 (resolve_plain) or 0x4243 (resolve_doh),
 fixed source port 12345, and fixed DNS server 10.0.2.3.
 
 These attacks send UDP responses to 10.0.2.15:12345 from 10.0.2.3:53

@@ -1,4 +1,4 @@
-// Bat_OS — Hardened HTTP/1.1 client helpers
+// Sphragis — Hardened HTTP/1.1 client helpers
 //
 // Security hardening for pentest findings:
 //   - ATTACK-NET-046: slow-loris — total and idle read deadlines
