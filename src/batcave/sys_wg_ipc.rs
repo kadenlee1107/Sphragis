@@ -554,7 +554,7 @@ fn dispatch_one_shot(op: u32, req: &[u8]) -> Option<&'static [u8]> {
     }
 
     let len = RSP_LEN.load(Ordering::Acquire) as usize;
-    let ptr = unsafe { core::ptr::addr_of!(RSP_DATA) as *const u8 };
+    let ptr = core::ptr::addr_of!(RSP_DATA) as *const u8;
     Some(unsafe { core::slice::from_raw_parts(ptr, len) })
 }
 

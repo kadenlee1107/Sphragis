@@ -2337,8 +2337,7 @@ fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
             console::puts("):\n");
             let mut shown = 0usize;
             batfs::list(|name, size, _enc| {
-                if name.starts_with(prefix) {
-                    let visible = &name[prefix.len()..];
+                if let Some(visible) = name.strip_prefix(prefix) {
                     console::puts("    ");
                     console::puts(visible);
                     console::puts("  (");
@@ -2625,7 +2624,7 @@ fn cmd_batfs_quota_selftest() {
 
     // Step 4: third create exceeds quota.
     match cave::with_cave_active(sys_wg_id, || batfs::ns_create(FILES[2], b"x")) {
-        Err(e) if e == "cave: memory quota exceeded" => {
+        Err("cave: memory quota exceeded") => {
             console::puts("  ✓ third create rejected with `cave: memory quota exceeded`\n");
         }
         Err(e) => {
@@ -3716,7 +3715,7 @@ fn cmd_sys_caves_selftest() {
     print_num(sys_wg_id);
     console::puts(" L1=0x");
     for sh in (0..16).rev() {
-        console::putc(hex[((sys_wg_l1 >> (sh * 4)) & 0xF)]);
+        console::putc(hex[(sys_wg_l1 >> (sh * 4)) & 0xF]);
     }
     console::puts("\n");
 
@@ -3785,7 +3784,7 @@ fn cmd_sys_caves_selftest() {
     let worker_ttbr0 = WORKER_TTBR0.load(Ordering::Acquire);
     console::puts("  worker TTBR0:  0x");
     for sh in (0..16).rev() {
-        console::putc(hex[((worker_ttbr0 >> (sh * 4)) & 0xF)]);
+        console::putc(hex[(worker_ttbr0 >> (sh * 4)) & 0xF]);
     }
     console::puts("\n");
 
@@ -3955,8 +3954,10 @@ fn cmd_sys_wg_service_selftest() {
     console::puts("  ✓ handshake completed; transport keys are mirror-consistent\n");
 
     // Single-shot wrap/unwrap through the service entry points.
-    let mut init_keys = i_keys.clone();
-    let mut resp_keys = r_keys.clone();
+    // TransportKeys is Copy, so deref clones the bytes; we then mutate
+    // the local copies through &mut without touching the originals.
+    let mut init_keys = *i_keys;
+    let mut resp_keys = *r_keys;
     let msg = b"bat_os Arc-3 sys-wg round trip";
     let ct = match sys_wg_service::wrap_with_keys(&mut init_keys, msg) {
         Ok(ct) => ct,
@@ -4592,7 +4593,7 @@ fn cmd_quota_selftest() {
 
     // Should fail: 8 KiB = 2 pages, exceeds tight by 1.
     match shm::create(b"quota-selftest", 8192) {
-        Err(e) if e == "cave: memory quota exceeded" => {
+        Err("cave: memory quota exceeded") => {
             console::puts("  ✓ rejected: shm::create exceeded quota as expected\n");
         }
         Err(e) => {
@@ -5703,7 +5704,7 @@ fn cmd_pipe_selftest() {
     let _ = process::current().fd_take(rfd2);
     pipe::release_end(rid2, PipeEnd::Read);
     match pipe::write(id2, b"x") {
-        Err(e) if e == "EPIPE" => console::puts("  ✓ EPIPE after reader close\n"),
+        Err("EPIPE") => console::puts("  ✓ EPIPE after reader close\n"),
         Ok(n) => {
             console::puts("  ✗ FAIL: expected EPIPE, wrote ");
             print_num(n); console::puts(" bytes\n");
@@ -8274,7 +8275,7 @@ fn cmd_mls_selftest() {
         }
         Ok(_) => {
             console::puts("  ✗ FAIL: no-read-up was bypassed\n");
-            let _ = cave::with_cave_active(kns_id, || {
+            cave::with_cave_active(kns_id, || {
                 cave::set_sensitivity_by_name("kernel-ns", Sensitivity::Secret).and_then(|_| {
                     batfs::ns_delete(FILE_NAME).map_err(|_| "")
                 }).ok();

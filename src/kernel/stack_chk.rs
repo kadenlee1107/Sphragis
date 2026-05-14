@@ -40,6 +40,7 @@ pub extern "C" fn __stack_chk_fail() -> ! {
 /// Optionally called from `kernel_main` early in boot to seed the
 /// canary from the hardware RNG so it isn't a predictable constant.
 /// Safe to call exactly once before any function that touches it.
+#[allow(dead_code)]
 pub unsafe fn seed_from_rng() {
     let mut v: u64 = 0;
     // ARMv8.5 RNDR. Returns 0 on failure; we mix in a fallback

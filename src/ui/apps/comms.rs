@@ -128,7 +128,7 @@ fn my_identity() -> Result<(SecretKey, [u8; 32]), &'static str> {
         // file name is the same in the cave's view).
         let mut seed = [0u8; 32];
         let kp = match crate::fs::batfs::ns_read(IDENTITY_PATH, &mut seed) {
-            Ok(n) if n == 32 => KeyPair::from_seed(Seed::new(seed)),
+            Ok(32) => KeyPair::from_seed(Seed::new(seed)),
             _ => {
                 // Generate + persist. Seed from RNDR (with fallback
                 // inside rng::fill_bytes), then write the raw seed
@@ -237,9 +237,12 @@ pub fn identify(ip: u32, port: u16) -> Result<[u8; 32], &'static str> {
     let (id_sk, id_pk_bytes) = my_identity()?;
 
     let mut rng = crate::crypto::pq_hybrid::BatRng;
-    let eph_sk = EphemeralSecret::random_from_rng(&mut rng);
-    let eph_pk_bytes: [u8; 32] = X25519Public::from(&eph_sk).to_bytes();
-    drop(eph_sk); // discovery has no transport
+    let eph_pk_bytes: [u8; 32] = {
+        let eph_sk = EphemeralSecret::random_from_rng(&mut rng);
+        // Scope-bound: discovery has no transport so the secret is
+        // dropped here, not carried forward.
+        X25519Public::from(&eph_sk).to_bytes()
+    };
 
     let offer = build_offer(&id_sk, &id_pk_bytes, &eph_pk_bytes);
     crate::net::tcp::send_data(&offer)?;

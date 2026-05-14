@@ -195,7 +195,7 @@ pub fn block_on_selftest() -> Result<(bool, bool, u64), &'static str> {
         },
         1_000_000, // 1 second timeout
     ) {
-        Ok(v) if v == 3 => true,
+        Ok(3) => true,
         _ => false,
     };
 

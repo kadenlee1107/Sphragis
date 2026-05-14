@@ -81,7 +81,7 @@ static mut SESSIONS: [SessionEntry; MAX_SESSIONS] = [SessionEntry {
     in_use: false,
     our_sender_index: 0,
     their_sender_index: 0,
-    peer_id: unsafe { core::mem::transmute(0u8) },
+    peer_id: unsafe { core::mem::transmute::<u8, PeerId>(0u8) },
 }; MAX_SESSIONS];
 
 /// Monotonic counter for sender-index allocation. Restarts at 1 on
@@ -447,7 +447,7 @@ pub fn selftest_outbound_endpoint() -> Option<(bool, bool)> {
 ///
 /// Returns `(handshake_ok, transport_ok)`.
 pub fn selftest_initiator_role() -> Option<(bool, bool)> {
-    use wireguard::{WgKeypair, TIMESTAMP_LEN};
+    use wireguard::WgKeypair;
 
     debug_clear_sessions();
     let responder_kp = WgKeypair::generate();
