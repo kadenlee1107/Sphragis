@@ -4,7 +4,7 @@
 **Not yet landed.** Requires a design decision before implementation.
 
 ## Problem
-`setup_cave_pagetable` + `switch_to_cave` in `src/batcave/linux/mmu.rs` are
+`setup_cave_pagetable` + `switch_to_cave` in `src/caves/linux/mmu.rs` are
 defined but never called. Every cave runs on the kernel's primary TTBR0_EL1.
 
 Wiring them in isn't a one-liner because of an MMIO layout conflict:

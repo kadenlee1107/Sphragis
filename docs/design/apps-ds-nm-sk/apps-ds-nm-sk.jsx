@@ -48,7 +48,7 @@ const DashboardPane = ({ narrow = false }) => {
               Bare-metal AArch64 microkernel · zero external deps
             </div>
             <div style={{ color: appColors.mid }}>
-              BatCave isolation · BatFS encrypted · audit-everything
+              Cave isolation · BatFS encrypted · audit-everything
             </div>
             <div style={{ color: appColors.dim, marginTop: 4 }}>
               Built 20260502.a3f1c · signed

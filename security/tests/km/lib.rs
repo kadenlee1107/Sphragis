@@ -80,7 +80,7 @@ pub mod frame_sim {
 }
 
 pub mod futex_sim {
-    //! Port of the hash in `src/batcave/linux/futex.rs::bucket_index`.
+    //! Port of the hash in `src/caves/linux/futex.rs::bucket_index`.
     pub const NUM_BUCKETS: usize = 64;
     pub const WAITERS_PER_BUCKET: usize = 32;
 
@@ -148,7 +148,7 @@ pub mod heap_sim {
 }
 
 pub mod pt_flags {
-    //! Constants from `src/batcave/linux/mmu.rs`.
+    //! Constants from `src/caves/linux/mmu.rs`.
     pub const PTE_VALID: u64 = 1;
     pub const PTE_TABLE: u64 = 1 << 1;
     pub const PTE_AF: u64 = 1 << 10;

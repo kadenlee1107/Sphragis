@@ -386,7 +386,7 @@ fn execute_inner(cmd: &str) {
                 cmd_comms(sub, parts[2]);
             }
         }
-        "batcave" => cmd_batcave(parts[1], parts[2], parts[3], &parts),
+        "caves" => cmd_batcave(parts[1], parts[2], parts[3], &parts),
         "panic" => cmd_panic(),
         "hello" => cmd_run_elf("hello"),
         "hello_libc" | "libc" => cmd_run_elf("libc"),
@@ -576,9 +576,9 @@ fn execute_inner(cmd: &str) {
         #[cfg(feature = "selftest-on-boot")]
         "scheduler-selftest" => cmd_scheduler_selftest(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
-        "batcave-fw-allow" => cmd_batcave_fw_allow(parts[1]),
-        "batcave-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
-        "batcave-fw-list"  => cmd_batcave_fw_list(),
+        "caves-fw-allow" => cmd_batcave_fw_allow(parts[1]),
+        "caves-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
+        "caves-fw-list"  => cmd_batcave_fw_list(),
         "smc-probe" => cmd_smc_probe(),
         "smc-pet" => cmd_smc_pet_start(),
         "smc-stop" => cmd_smc_pet_stop(),
@@ -858,11 +858,11 @@ fn hex_nibble(b: u8) -> u8 {
 // Integration #4: Sphragis pushes firewall rules to the daemon's egress proxy.
 fn cmd_batcave_fw_allow(target: &str) {
     if target.is_empty() {
-        console::puts("  usage: batcave-fw-allow <host:port>  (or *:port / *)\n");
+        console::puts("  usage: caves-fw-allow <host:port>  (or *:port / *)\n");
         return;
     }
-    let r = crate::batcave::docker_client::with_daemon(|| {
-        crate::batcave::docker_client::fw_allow(target)
+    let r = crate::caves::docker_client::with_daemon(|| {
+        crate::caves::docker_client::fw_allow(target)
     });
     match r {
         Ok(()) => {
@@ -874,11 +874,11 @@ fn cmd_batcave_fw_allow(target: &str) {
 }
 fn cmd_batcave_fw_deny(target: &str) {
     if target.is_empty() {
-        console::puts("  usage: batcave-fw-deny <host:port>\n");
+        console::puts("  usage: caves-fw-deny <host:port>\n");
         return;
     }
-    let r = crate::batcave::docker_client::with_daemon(|| {
-        crate::batcave::docker_client::fw_deny(target)
+    let r = crate::caves::docker_client::with_daemon(|| {
+        crate::caves::docker_client::fw_deny(target)
     });
     match r {
         Ok(()) => {
@@ -888,8 +888,8 @@ fn cmd_batcave_fw_deny(target: &str) {
     }
 }
 fn cmd_batcave_fw_list() {
-    let r = crate::batcave::docker_client::with_daemon(|| {
-        crate::batcave::docker_client::fw_list()
+    let r = crate::caves::docker_client::with_daemon(|| {
+        crate::caves::docker_client::fw_list()
     });
     match r {
         Ok(list) => {
@@ -921,7 +921,7 @@ fn cmd_batcave_fw_list() {
 /// scripts/qemu_selftests_smoke.py.
 #[cfg(feature = "selftest-on-boot")]
 pub(crate) fn cmd_scheduler_selftest() {
-    use crate::batcave::linux::threads::{
+    use crate::caves::linux::threads::{
         cntpct_el0, wake_expired_deadlines, wake_epoll_waiters,
         test_install_blocked, test_inspect_state, test_release_slot,
         BlockReason, ThreadState,
@@ -1184,7 +1184,7 @@ pub(crate) fn cmd_pq_interop() {
 fn cmd_secure_ipc_wire_selftest() {
     console::puts_hi("  SECURE-IPC WIRE-LEVEL SELF-TEST\n");
     console::puts("  handshake exchanged as IPC messages → AEAD-sealed traffic\n");
-    match crate::batcave::secure_ipc::selftest() {
+    match crate::caves::secure_ipc::selftest() {
         Ok(r) => {
             console::puts("  ✓ PASS end-to-end mock-bus\n");
             console::puts("    handshake messages: ");
@@ -1389,11 +1389,11 @@ fn cmd_cave_syscall_deny(args: &[&str]) {
         Ok(n) => n,
         Err(_) => { console::puts("  bad syscall number\n"); return; }
     };
-    let id = match crate::batcave::cave::find_id(args[0]) {
+    let id = match crate::caves::cave::find_id(args[0]) {
         Some(i) => i,
         None => { console::puts("  no such cave\n"); return; }
     };
-    crate::batcave::syscall_filter::deny(id, nr);
+    crate::caves::syscall_filter::deny(id, nr);
     console::puts("  cave-syscall-deny ");
     console::puts(args[0]);
     console::puts(" nr="); print_num(nr as usize);
@@ -1409,11 +1409,11 @@ fn cmd_cave_syscall_allow(args: &[&str]) {
         Ok(n) => n,
         Err(_) => { console::puts("  bad syscall number\n"); return; }
     };
-    let id = match crate::batcave::cave::find_id(args[0]) {
+    let id = match crate::caves::cave::find_id(args[0]) {
         Some(i) => i,
         None => { console::puts("  no such cave\n"); return; }
     };
-    crate::batcave::syscall_filter::allow(id, nr);
+    crate::caves::syscall_filter::allow(id, nr);
     console::puts("  cave-syscall-allow OK\n");
 }
 
@@ -1422,12 +1422,12 @@ fn cmd_cave_syscall_list(name: &str) {
         console::puts("  usage: cave-syscall-list <cave_name>\n");
         return;
     }
-    let id = match crate::batcave::cave::find_id(name) {
+    let id = match crate::caves::cave::find_id(name) {
         Some(i) => i,
         None => { console::puts("  no such cave\n"); return; }
     };
     let mut buf = [0u16; 32];
-    let n = crate::batcave::syscall_filter::list(id, &mut buf);
+    let n = crate::caves::syscall_filter::list(id, &mut buf);
     console::puts_hi("  CAVE SYSCALL DENYLIST for ");
     console::puts(name); console::puts("\n");
     if n == 0 { console::puts("  (no denials)\n"); return; }
@@ -1441,11 +1441,11 @@ fn cmd_cave_syscall_clear(name: &str) {
         console::puts("  usage: cave-syscall-clear <cave_name>\n");
         return;
     }
-    let id = match crate::batcave::cave::find_id(name) {
+    let id = match crate::caves::cave::find_id(name) {
         Some(i) => i,
         None => { console::puts("  no such cave\n"); return; }
     };
-    crate::batcave::syscall_filter::clear(id);
+    crate::caves::syscall_filter::clear(id);
     console::puts("  cave-syscall-clear OK\n");
 }
 
@@ -1493,7 +1493,7 @@ fn cmd_blk_selftest() {
 
 fn cmd_cave_seal_selftest() {
     console::puts_hi("  CAVE-SEAL SELF-TEST (anti-coercion one-way ratchet)\n");
-    match crate::batcave::cave::seal_selftest() {
+    match crate::caves::cave::seal_selftest() {
         Ok(r) => {
             console::puts("  ✓ PASS seal semantics\n");
             console::puts("    before: Persistent:   ");
@@ -1511,7 +1511,7 @@ fn cmd_cave_seal_selftest() {
 
 fn cmd_cave_syscall_selftest() {
     console::puts_hi("  CAVE-SYSCALL-FILTER SELF-TEST\n");
-    match crate::batcave::syscall_filter::selftest() {
+    match crate::caves::syscall_filter::selftest() {
         Ok(r) => {
             console::puts("  ✓ PASS per-cave denylist semantics\n");
             console::puts("    installed (dup suppressed): ");
@@ -1595,10 +1595,10 @@ fn cmd_cpol_sync(name: &str) {
     }
     let rules = crate::net::cave_policy::rules_for_by_name(name);
     let n = rules.len();
-    let r = crate::batcave::docker_client::with_daemon(|| {
-        crate::batcave::docker_client::cpol_clear(name)?;
+    let r = crate::caves::docker_client::with_daemon(|| {
+        crate::caves::docker_client::cpol_clear(name)?;
         for rule in rules.iter() {
-            crate::batcave::docker_client::cpol_push(
+            crate::caves::docker_client::cpol_push(
                 name,
                 rule.host.as_str(),
                 rule.port,
@@ -1622,8 +1622,8 @@ fn cmd_cpol_sync(name: &str) {
 }
 
 fn cmd_cpol_daemon_list() {
-    let r = crate::batcave::docker_client::with_daemon(
-        crate::batcave::docker_client::cpol_list,
+    let r = crate::caves::docker_client::with_daemon(
+        crate::caves::docker_client::cpol_list,
     );
     match r {
         Ok(caves) => {
@@ -2013,8 +2013,8 @@ fn cmd_nat_table() {
 /// mirror them into nat::bind_ip. This is how containers' actual
 /// Docker-bridge IPs get known to the kernel's packet classifier.
 fn cmd_nat_sync() {
-    let r = crate::batcave::docker_client::with_daemon(
-        crate::batcave::docker_client::cpol_bind_list,
+    let r = crate::caves::docker_client::with_daemon(
+        crate::caves::docker_client::cpol_bind_list,
     );
     match r {
         Ok(binds) => {
@@ -2109,8 +2109,8 @@ fn cmd_cpol_daemon_show(name: &str) {
         console::puts("  usage: cpol-daemon-show <cave_name>\n");
         return;
     }
-    let r = crate::batcave::docker_client::with_daemon(|| {
-        crate::batcave::docker_client::cpol_show(name)
+    let r = crate::caves::docker_client::with_daemon(|| {
+        crate::caves::docker_client::cpol_show(name)
     });
     match r {
         Ok(rules) => {
@@ -2144,7 +2144,7 @@ fn cmd_secure_ipc_selftest() {
     console::puts("  handshake → session key → AEAD-framed channel\n");
     console::puts("  (confidentiality + integrity + replay resistance)\n");
 
-    match crate::batcave::secure_channel::selftest() {
+    match crate::caves::secure_channel::selftest() {
         Ok(r) => {
             console::puts("  ✓ PASS\n");
             console::puts("    plaintext:      ");
@@ -2193,7 +2193,7 @@ fn cmd_gcm_selftest() {
 /// bytes. Memory has a quota; CPU and net are observability-only
 /// today (no enforcement until preemptive timer scheduling lands).
 fn cmd_cave_usage() {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     console::puts_hi("  PER-CAVE RESOURCE USAGE\n");
     console::puts("  CAVE        MEM(used/quota)        CPU TICKS       TX BYTES      RX BYTES\n");
     let mut count = 0;
@@ -2234,7 +2234,7 @@ fn num_width(n: usize) -> usize {
 ///   cave-quota                  show all caves' used/quota pairs
 ///   cave-quota <name> <pages>   set <name>'s quota in pages (4 KiB each)
 fn cmd_cave_quota(name: &str, pages_str: &str) {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     if name.is_empty() {
         console::puts("  CAVE        USED (pages)   QUOTA (pages)   MEMORY (MiB)\n");
         let mut count = 0;
@@ -2295,7 +2295,7 @@ fn cmd_cave_quota(name: &str, pages_str: &str) {
 /// scoping is sound; a follow-up batch flips the BatFS API to apply
 /// the prefix everywhere.
 fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     use crate::fs::batfs;
 
     let mut prefix_buf = [0u8; 80];
@@ -2316,7 +2316,7 @@ fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
 
     if plen == 0 {
         console::puts("  no active cave — mount-ns has nothing to scope\n");
-        console::puts("  attach a cave first via `batcave enter <name>`\n");
+        console::puts("  attach a cave first via `caves enter <name>`\n");
         return;
     }
 
@@ -2422,7 +2422,7 @@ fn cmd_mount_ns(sub: &str, arg1: &str, arg2: &str) {
 /// early with a `FAIL:` line; success prints the marker that the
 /// QEMU runner script greps for.
 fn cmd_mount_ns_selftest() {
-    use crate::batcave::{cave, sys_caves};
+    use crate::caves::{cave, sys_caves};
     use crate::fs::batfs;
 
     console::puts_hi("  MOUNT NAMESPACE AUTO-APPLICATION SELF-TEST\n");
@@ -2565,7 +2565,7 @@ fn cmd_mount_ns_selftest() {
 /// `ACTIVE_CAVE_ID` so the charge/release calls inside the
 /// closure act on sys-wg, not on the kernel-shell context.
 fn cmd_batfs_quota_selftest() {
-    use crate::batcave::{cave, sys_caves};
+    use crate::caves::{cave, sys_caves};
     use crate::fs::batfs;
 
     console::puts_hi("  BATFS QUOTA-ENFORCEMENT SELF-TEST (cave: sys-wg)\n");
@@ -3307,7 +3307,7 @@ fn cmd_procs(arg: &str) {
     use crate::kernel::process::{self, TaskState};
     let admin = arg == "all";
     let cave_id = if admin { 0 } else {
-        crate::batcave::cave::get_active() as u16
+        crate::caves::cave::get_active() as u16
     };
     console::puts_hi(if admin {
         "  ALL TASKS (admin view across PID namespaces)\n"
@@ -3689,7 +3689,7 @@ fn cmd_release_verify(name: &str, sig_hex: &str) {
 /// return MMU swaps were correct all along.
 fn cmd_sys_caves_selftest() {
     use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use crate::batcave::{cave, sys_caves};
+    use crate::caves::{cave, sys_caves};
     use crate::kernel::{process, scheduler};
 
     console::puts_hi("  SYS-CAVES ARC-2 ROUND-TRIP SELF-TEST\n");
@@ -3842,7 +3842,7 @@ fn cmd_sys_caves_selftest() {
 /// peek at it through a borrow, can't ask for it via getter, and the
 /// only DH operations involving it run with sys-wg's L1 installed.
 fn cmd_sys_wg_service_selftest() {
-    use crate::batcave::{sys_caves, sys_wg_service};
+    use crate::caves::{sys_caves, sys_wg_service};
     use crate::net::wireguard::WgKeypair;
     use crate::kernel::process;
 
@@ -3885,8 +3885,8 @@ fn cmd_sys_wg_service_selftest() {
     //      backing the state is live).
     //   3. The PTE at that VA is NOT mapped in PRIMARY_L1 (kernel-
     //      ns walker would fault on access).
-    use crate::batcave::{cave_private, linux::mmu};
-    use crate::batcave::cave as bc;
+    use crate::caves::{cave_private, linux::mmu};
+    use crate::caves::cave as bc;
     if !cave_private::has_page(sys_wg_id as u16) {
         console::puts("  ✗ FAIL: sys-wg has no cave-private page (init relocation skipped?)\n");
         return;
@@ -3998,7 +3998,7 @@ fn cmd_sys_wg_service_selftest() {
     //   - close_peer drops the slot; wrap fails with UnknownPeer.
     console::puts("\n  ── slice 2: peer-table API ──\n");
 
-    use crate::batcave::sys_wg_service::SysWgError;
+    use crate::caves::sys_wg_service::SysWgError;
     use crate::net::wireguard;
 
     let peer2 = WgKeypair::generate();
@@ -4173,8 +4173,8 @@ fn cmd_sys_wg_service_selftest() {
 /// verified, observable per-cave isolation primitive ready to be
 /// used.
 fn cmd_cave_private_selftest() {
-    use crate::batcave::{cave, cave_private, sys_caves};
-    use crate::batcave::linux::mmu;
+    use crate::caves::{cave, cave_private, sys_caves};
+    use crate::caves::linux::mmu;
 
     console::puts_hi("  CAVE-PRIVATE L1 RESTRICTION SELF-TEST (slice 1)\n");
     console::puts("  Proves cave-private VAs are mapped in the owning cave's L1\n");
@@ -4550,7 +4550,7 @@ fn cmd_block_on_selftest() {
 ///   5. shm::create(8 KiB) — should succeed now.
 ///   6. Clean up.
 fn cmd_quota_selftest() {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     use crate::kernel::shm;
 
     console::puts_hi("  CAVE MEMORY-QUOTA ENFORCEMENT SELF-TEST\n");
@@ -4558,7 +4558,7 @@ fn cmd_quota_selftest() {
     let active = cave::get_active();
     if active == usize::MAX {
         console::puts("  no active cave — nothing to enforce against\n");
-        console::puts("  attach via `batcave enter <name>` and re-run\n");
+        console::puts("  attach via `caves enter <name>` and re-run\n");
         return;
     }
 
@@ -4938,7 +4938,7 @@ fn cmd_wg_dispatch_selftest() {
 /// terminates via `process::current_terminate`. Client polls for
 /// the response and returns.
 fn cmd_sys_wg_ipc_selftest() {
-    use crate::batcave::sys_wg_ipc;
+    use crate::caves::sys_wg_ipc;
     console::puts_hi("  SYS-WG IPC SELF-TEST (Arc 3 slice 3)\n");
     console::puts("  Request OP_PUBKEY via mailbox; service task with cave_id=sys_wg\n");
     console::puts("  reads, dispatches, writes response. Compare to direct API.\n");
@@ -5011,7 +5011,7 @@ fn cmd_sys_wg_ipc_selftest() {
 ///   4. wrap(peer_id, pt) via sys-wg succeeds; responder
 ///      decrypts to the original plaintext.
 fn cmd_wg_initiator_selftest() {
-    use crate::batcave::sys_wg_service;
+    use crate::caves::sys_wg_service;
     console::puts_hi("  WIREGUARD INITIATOR-ROLE SELF-TEST\n");
     console::puts("  sys-wg plays initiator; test plays responder.\n");
     match sys_wg_service::selftest_initiator() {
@@ -5119,7 +5119,7 @@ fn cmd_wg_endpoint_selftest() {
 ///     closes the handshake.
 fn cmd_wg_test_outbound(target: &str, peer_pubkey_hex: &str) {
     use crate::net::wg_dispatch;
-    use crate::batcave::sys_wg_service;
+    use crate::caves::sys_wg_service;
     use crate::net::wireguard::WgKeypair;
 
     if target.is_empty() {
@@ -5169,7 +5169,7 @@ fn cmd_wg_test_outbound(target: &str, peer_pubkey_hex: &str) {
         Err(_) => { console::puts("  ✗ register_peer failed\n"); return; }
     };
 
-    if crate::batcave::sys_wg_ipc::request_set_endpoint(peer_id.as_u8(), ip, port).is_none() {
+    if crate::caves::sys_wg_ipc::request_set_endpoint(peer_id.as_u8(), ip, port).is_none() {
         console::puts("  ✗ set_endpoint failed\n");
         let _ = sys_wg_service::close_peer(peer_id);
         return;
@@ -5239,7 +5239,7 @@ fn cmd_pq_comms_selftest() {
     console::puts("  Generating client long-term sig key...\n");
     console::puts("  Running client encap -> server decap -> mutual sig verify...\n");
 
-    use crate::batcave::pq_comms_session;
+    use crate::caves::pq_comms_session;
     match pq_comms_session::selftest_round_trip() {
         Ok((s_pref, c_pref, keys_match, aead_ok, client_pub_n, server_pub_n)) => {
             let hex = b"0123456789abcdef";
@@ -5281,7 +5281,7 @@ fn cmd_ipc_selftest() {
     console::puts("  Ed25519 identity + X25519 ephemeral, mutual auth + FS\n");
     console::puts("  Simulating Alice ↔ Bob handshake round-trip...\n");
 
-    match crate::batcave::ipc_session::selftest_round_trip() {
+    match crate::caves::ipc_session::selftest_round_trip() {
         Ok((a_pfx, b_pfx, matched)) => {
             if matched {
                 console::puts("  ✓ PASS  both sides derived identical 32-byte session key\n");
@@ -6613,9 +6613,9 @@ fn parse_ip(s: &str) -> u32 {
     ((octets[2] & 0xFF) << 8) | (octets[3] & 0xFF)
 }
 
-/// Ensure a default BatCave exists and is active for busybox commands.
+/// Ensure a default Cave exists and is active for busybox commands.
 fn ensure_default_cave() {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     if cave::get_active() == usize::MAX {
         // QEMU-BUGFIX-6 was the multi-MB stack-staged
         // struct overwrites in `apps::browser::reset_for_cave_switch`
@@ -6635,19 +6635,19 @@ fn ensure_default_cave() {
 }
 
 fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) {
-    use crate::batcave::cave;
-    use crate::batcave::docker_client;
+    use crate::caves::cave;
+    use crate::caves::docker_client;
     match subcmd {
-        // ── Docker-backed BatCaves (Phase 2 of design alignment) ──
+        // ── Docker-backed Caves (Phase 2 of design alignment) ──
         // These delegate to the Mac-side `batcaved` daemon over TCP.
-        // Protocol: see src/batcave/docker_client.rs + scripts/batcaved.py.
+        // Protocol: see src/caves/docker_client.rs + scripts/batcaved.py.
         "docker-create" => {
             if arg1.is_empty() || arg2.is_empty() {
-                console::puts("  usage: batcave docker-create <name> <image> [caps-csv]\n");
-                console::puts("  e.g.:  batcave docker-create kali kalilinux/kali-rolling NET_RAW,NET_ADMIN\n");
+                console::puts("  usage: caves docker-create <name> <image> [caps-csv]\n");
+                console::puts("  e.g.:  caves docker-create kali kalilinux/kali-rolling NET_RAW,NET_ADMIN\n");
                 return;
             }
-            // parts layout: [batcave, docker-create, <name>, <image>, <caps?>, ...]
+            // parts layout: [caves, docker-create, <name>, <image>, <caps?>, ...]
             let caps_csv = parts[4];
             let r = docker_client::with_daemon(|| {
                 // Split caps_csv into &str slices
@@ -6665,7 +6665,7 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
             });
             match r {
                 Ok(id) => {
-                    console::puts("  Docker BatCave created: ");
+                    console::puts("  Docker Cave created: ");
                     console::puts(arg1);
                     console::puts(" → container ");
                     console::puts(&id);
@@ -6678,10 +6678,10 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
         }
         "docker-run" => {
             if arg1.is_empty() || arg2.is_empty() {
-                console::puts("  usage: batcave docker-run <name> <cmd> [args...]\n");
+                console::puts("  usage: caves docker-run <name> <cmd> [args...]\n");
                 return;
             }
-            // parts: [batcave, docker-run, <name>, <cmd>, <arg1>, <arg2>, <arg3>, <arg4>]
+            // parts: [caves, docker-run, <name>, <cmd>, <arg1>, <arg2>, <arg3>, <arg4>]
             let mut argv_buf: [&str; 6] = [""; 6];
             let mut argc = 0;
             for i in 3..MAX_PARTS {
@@ -6739,13 +6739,13 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
         }
         "docker-destroy" => {
             if arg1.is_empty() {
-                console::puts("  usage: batcave docker-destroy <name>\n");
+                console::puts("  usage: caves docker-destroy <name>\n");
                 return;
             }
             let r = docker_client::with_daemon(|| docker_client::destroy(arg1));
             match r {
                 Ok(()) => {
-                    console::puts("  Docker BatCave destroyed: ");
+                    console::puts("  Docker Cave destroyed: ");
                     console::puts(arg1);
                     console::puts("\n");
                 }
@@ -6812,7 +6812,7 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                 // Spin the container FIRST so a daemon-side failure
                 // doesn't leave a dangling entry in the native cave table.
                 let caps_csv = docker_caps;
-                let spin_res = crate::batcave::docker_client::with_daemon(|| {
+                let spin_res = crate::caves::docker_client::with_daemon(|| {
                     // caps_csv → &[&str]
                     let mut caps_buf: [&str; 8] = [""; 8];
                     let mut n = 0;
@@ -6825,10 +6825,10 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                         }
                     }
                     if persistent_vol {
-                        crate::batcave::docker_client::create_persistent(
+                        crate::caves::docker_client::create_persistent(
                             arg1, docker_image, &caps_buf[..n], &key)
                     } else {
-                        crate::batcave::docker_client::create_with_key(
+                        crate::caves::docker_client::create_with_key(
                             arg1, docker_image, &caps_buf[..n], Some(&key))
                     }
                 });
@@ -6838,7 +6838,7 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                         // with Docker backing so list/destroy can find it.
                         match cave::create_docker(arg1, docker_image, ephemeral) {
                             Ok(_) => {
-                                console::puts("  BatCave created: ");
+                                console::puts("  Cave created: ");
                                 console::puts(arg1);
                                 console::puts(" [docker:");
                                 console::puts(docker_image);
@@ -6852,8 +6852,8 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                                 // from docker inspect, so the kernel's
                                 // packet classifier knows about this cave
                                 // before the container starts talking.
-                                let sync = crate::batcave::docker_client::with_daemon(
-                                    crate::batcave::docker_client::cpol_bind_list,
+                                let sync = crate::caves::docker_client::with_daemon(
+                                    crate::caves::docker_client::cpol_bind_list,
                                 );
                                 if let Ok(binds) = sync {
                                     let mut n = 0usize;
@@ -6872,8 +6872,8 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                                 // Cave-table insert failed — undo the container.
                                 console::puts("  Error (cave table): ");
                                 console::puts(e); console::puts("\n");
-                                let _ = crate::batcave::docker_client::with_daemon(|| {
-                                    crate::batcave::docker_client::destroy(arg1)
+                                let _ = crate::caves::docker_client::with_daemon(|| {
+                                    crate::caves::docker_client::destroy(arg1)
                                 });
                             }
                         }
@@ -6889,14 +6889,14 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
             // Native cave path (unchanged behaviour).
             match cave::create(arg1, ephemeral) {
                 Ok(_) => {
-                    console::puts("  BatCave created: ");
+                    console::puts("  Cave created: ");
                     console::puts(arg1);
                     if ephemeral { console::puts(" (ephemeral)"); }
                     else { console::puts(" (persistent)"); }
                     console::puts("\n");
 
                     if !kit_name.is_empty() {
-                        match crate::batcave::batkits::apply_kit(arg1, kit_name) {
+                        match crate::caves::kits::apply_kit(arg1, kit_name) {
                             Ok(()) => {
                                 console::puts("  Kit '"); console::puts(kit_name);
                                 console::puts("' applied!\n");
@@ -6913,7 +6913,7 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
         }
         "install" => {
             if arg1.is_empty() || arg2.is_empty() {
-                console::puts("  usage: batcave install <cave> <tool>\n");
+                console::puts("  usage: caves install <cave> <tool>\n");
             } else if cave::find_id(arg1)
                 .map(|id| unsafe { cave::CAVES[id].is_docker() })
                 .unwrap_or(false)
@@ -6926,12 +6926,12 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                 console::puts("  Installing "); console::puts(arg2);
                 console::puts(" in "); console::puts(arg1);
                 console::puts(" via daemon apt/apk...\n");
-                let r = crate::batcave::docker_client::with_daemon(|| {
-                    crate::batcave::docker_client::install_tool(arg1, arg2)
+                let r = crate::caves::docker_client::with_daemon(|| {
+                    crate::caves::docker_client::install_tool(arg1, arg2)
                 });
                 match r {
                     Ok(()) => {
-                        // Also register in the cave table so `batcave list`
+                        // Also register in the cave table so `caves list`
                         // shows it.
                         let _ = cave::install_tool(arg1, arg2);
                         console::puts("  "); console::puts(arg2);
@@ -6955,15 +6955,15 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                         let mut path_buf = [0u8; 64];
                         let prefix = b"/usr/local/bin";
                         path_buf[..prefix.len()].copy_from_slice(prefix);
-                        crate::batcave::linux::runner::run_busybox_cmd(&argv_mkdir[..3]).ok();
+                        crate::caves::linux::runner::run_busybox_cmd(&argv_mkdir[..3]).ok();
 
                         // Create a symlink for the tool → busybox
                         // This makes the tool available as a busybox applet
-                        if crate::batcave::linux::vfs::is_ready() {
-                            if let Ok(bin) = crate::batcave::linux::vfs::resolve_path(b"/bin") {
+                        if crate::caves::linux::vfs::is_ready() {
+                            if let Ok(bin) = crate::caves::linux::vfs::resolve_path(b"/bin") {
                                 // Check if not already a symlink
-                                if crate::batcave::linux::vfs::find_child(bin, arg2.as_bytes()).is_none() {
-                                    crate::batcave::linux::vfs::create_symlink(
+                                if crate::caves::linux::vfs::find_child(bin, arg2.as_bytes()).is_none() {
+                                    crate::caves::linux::vfs::create_symlink(
                                         bin, arg2.as_bytes(), b"/bin/busybox"
                                     ).ok();
                                 }
@@ -6972,7 +6972,7 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
 
                         console::puts("  "); console::puts(arg2);
                         console::puts(" installed (busybox applet)\n");
-                        console::puts("  Run with: batcave run "); console::puts(arg2); console::puts("\n");
+                        console::puts("  Run with: caves run "); console::puts(arg2); console::puts("\n");
                     }
                     Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
                 }
@@ -6999,7 +6999,7 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
         "enter" => {
             match cave::enter(arg1) {
                 Ok(()) => {
-                    console::puts("  Entering BatCave: "); console::puts(arg1); console::puts("\n");
+                    console::puts("  Entering Cave: "); console::puts(arg1); console::puts("\n");
                     console::puts("  ["); console::puts(arg1); console::puts("] $ _\n");
                 }
                 Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
@@ -7016,20 +7016,20 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
             // Audit caught this as "machinery exists but no shell
             // command invokes it." Now it does.
             //
-            // Usage: batcave ipc <cave_a> <cave_b>
+            // Usage: caves ipc <cave_a> <cave_b>
             //
             // Both caves must have granted each other the
             // `ipc:<other>` capability before this works:
-            // batcave grant alpha ipc:beta
-            // batcave grant beta ipc:alpha
-            // batcave ipc alpha beta
+            // caves grant alpha ipc:beta
+            // caves grant beta ipc:alpha
+            // caves ipc alpha beta
             // → IPC channel established: id=N
             //
             // The returned channel id is the kernel IPC handle that
             // either cave's syscall path can use to send/recv via
             // `cave::get_ipc_channel`.
             if arg1.is_empty() || arg2.is_empty() {
-                console::puts("  usage: batcave ipc <cave_a> <cave_b>\n");
+                console::puts("  usage: caves ipc <cave_a> <cave_b>\n");
                 console::puts("  (both caves must grant each other ipc:<other> first)\n");
                 return;
             }
@@ -7070,8 +7070,8 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                 .map(|id| unsafe { cave::CAVES[id].is_docker() })
                 .unwrap_or(false);
             if is_docker {
-                let r = crate::batcave::docker_client::with_daemon(|| {
-                    crate::batcave::docker_client::destroy(arg1)
+                let r = crate::caves::docker_client::with_daemon(|| {
+                    crate::caves::docker_client::destroy(arg1)
                 });
                 if let Err(e) = r {
                     console::puts("  Warning (docker): ");
@@ -7129,13 +7129,13 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
             }
             console::puts("  --------\n  ");
             print_num(count);
-            console::puts(" BatCave(s)\n");
+            console::puts(" Cave(s)\n");
         }
         "gui" => {
-            // batcave gui <cave> <tool> — launch a GUI tool in a BatCave
+            // caves gui <cave> <tool> — launch a GUI tool in a Cave
             if arg1.is_empty() || arg2.is_empty() {
-                console::puts("  usage: batcave gui <cave> <tool>\n");
-                console::puts("  e.g.: batcave gui pentest wireshark\n");
+                console::puts("  usage: caves gui <cave> <tool>\n");
+                console::puts("  e.g.: caves gui pentest wireshark\n");
             } else {
                 // Check display capability
                 if let Some(id) = cave::find_id(arg1) {
@@ -7150,14 +7150,14 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                     cave::enter(arg1).ok();
 
                     console::puts("  Launching "); console::puts(arg2);
-                    console::puts(" in BatCave '"); console::puts(arg1);
+                    console::puts(" in Cave '"); console::puts(arg1);
                     console::puts("' (display sandbox: ");
                     print_num(w as usize / 2); console::puts("x");
                     print_num(h as usize / 2); console::puts(")\n");
 
                     // Run the tool via busybox
                     let argv: [&str; 4] = ["busybox", arg2, "", ""];
-                    crate::batcave::linux::runner::run_busybox_cmd(&argv[..2]).ok();
+                    crate::caves::linux::runner::run_busybox_cmd(&argv[..2]).ok();
                     console::puts("  GUI tool exited.\n");
                 } else {
                     console::puts("  Error: cave '"); console::puts(arg1);
@@ -7167,27 +7167,27 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
         }
         "test" => {
             console::puts("  Running Linux hello binary...\n");
-            crate::batcave::linux::runner::run_test().ok();
+            crate::caves::linux::runner::run_test().ok();
             console::puts("  Test complete.\n");
         }
         "uname" => {
             console::puts("  Running Linux uname binary...\n");
-            crate::batcave::linux::runner::run_uname_test().ok();
+            crate::caves::linux::runner::run_uname_test().ok();
             console::puts("  Test complete.\n");
         }
         "busybox" | "bb" => {
             // Auto-create a default cave if none active
             ensure_default_cave();
             console::puts("  Loading busybox...\n");
-            match crate::batcave::linux::runner::run_busybox() {
+            match crate::caves::linux::runner::run_busybox() {
                 Ok(()) => console::puts("  Busybox exited.\n"),
                 Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
             }
         }
         "run" => {
             if arg1.is_empty() {
-                console::puts("  usage: batcave run <cave|tool> [args...]\n");
-                console::puts("    if <cave|tool> is an existing BatCave name, the\n");
+                console::puts("  usage: caves run <cave|tool> [args...]\n");
+                console::puts("    if <cave|tool> is an existing Cave name, the\n");
                 console::puts("    next argument is the tool to run inside it.\n");
                 console::puts("    otherwise <cave|tool> is interpreted as a busybox\n");
                 console::puts("    applet in the ambient shell-host cave.\n");
@@ -7209,11 +7209,11 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                         if argc < 6 { argv_buf[argc] = parts[i]; argc += 1; }
                     }
                     if argc == 0 {
-                        console::puts("  usage: batcave run <cave> <tool> [args]\n");
+                        console::puts("  usage: caves run <cave> <tool> [args]\n");
                         return;
                     }
-                    let r = crate::batcave::docker_client::with_daemon(|| {
-                        crate::batcave::docker_client::run(arg1, &argv_buf[..argc], |line| {
+                    let r = crate::caves::docker_client::with_daemon(|| {
+                        crate::caves::docker_client::run(arg1, &argv_buf[..argc], |line| {
                             console::puts("  ");
                             console::puts(line);
                             console::puts("\n");
@@ -7248,13 +7248,13 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                 full[argc] = parts[i];
                 argc += 1;
             }
-            platform::serial_puts("[batcave run] argv:");
+            platform::serial_puts("[caves run] argv:");
             for i in 0..argc {
                 platform::serial_puts(" ");
                 platform::serial_puts(full[i]);
             }
             platform::serial_puts("\n");
-            match crate::batcave::linux::runner::run_busybox_cmd(&full[..argc]) {
+            match crate::caves::linux::runner::run_busybox_cmd(&full[..argc]) {
                 Ok(()) => {}
                 Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
             }
@@ -7262,7 +7262,7 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
         "kits" => {
             console::puts_hi("  AVAILABLE KITS\n");
             console::puts("  ──────────────\n");
-            crate::batcave::batkits::list_kits(|name, desc, tools| {
+            crate::caves::kits::list_kits(|name, desc, tools| {
                 console::puts("  ");
                 console::puts(name);
                 // Pad to 14 chars
@@ -7272,34 +7272,34 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                 print_num(tools);
                 console::puts(" tools)\n");
             });
-            console::puts("\n  Usage: batcave create <name> --kit:<kit>\n");
+            console::puts("\n  Usage: caves create <name> --kit:<kit>\n");
         }
         "pipe" => {
             // Show pipe buffer contents
-            let count = crate::batcave::batpipe::count();
+            let count = crate::caves::bridge::count();
             if count == 0 {
                 console::puts("  Pipe is empty. Run a tool first.\n");
             } else {
                 console::puts_hi("  BATPIPE DATA\n");
                 console::puts("  ────────────\n");
-                crate::batcave::batpipe::each(|e| {
+                crate::caves::bridge::each(|e| {
                     match e.dtype {
-                        crate::batcave::batpipe::DataType::Host => {
+                        crate::caves::bridge::DataType::Host => {
                             console::puts("  HOST  "); console::puts(e.f1_str()); console::puts("\n");
                         }
-                        crate::batcave::batpipe::DataType::Port => {
+                        crate::caves::bridge::DataType::Port => {
                             console::puts("  PORT  "); console::puts(e.f1_str());
                             console::puts(":"); console::puts(e.f2_str());
                             console::puts("  "); console::puts(e.f3_str()); console::puts("\n");
                         }
-                        crate::batcave::batpipe::DataType::Url => {
+                        crate::caves::bridge::DataType::Url => {
                             console::puts("  URL   "); console::puts(e.f1_str()); console::puts("\n");
                         }
-                        crate::batcave::batpipe::DataType::Credential => {
+                        crate::caves::bridge::DataType::Credential => {
                             console::puts("  CRED  "); console::puts(e.f1_str());
                             console::puts(":"); console::puts(e.f2_str()); console::puts("\n");
                         }
-                        crate::batcave::batpipe::DataType::Vuln => {
+                        crate::caves::bridge::DataType::Vuln => {
                             console::puts("  VULN  "); console::puts(e.f1_str());
                             console::puts("  "); console::puts(e.f2_str()); console::puts("\n");
                         }
@@ -7312,17 +7312,17 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
             }
         }
         "" => {
-            console::puts("  usage: batcave <create|install|grant|enter|list|kits|pipe|gui|run>\n");
+            console::puts("  usage: caves <create|install|grant|enter|list|kits|pipe|gui|run>\n");
         }
         _ => {
-            console::puts("  unknown: batcave "); console::puts(subcmd); console::puts("\n");
+            console::puts("  unknown: caves "); console::puts(subcmd); console::puts("\n");
         }
     }
 }
 
 /// Split a command into up to `MAX_PARTS` whitespace-separated tokens.
-/// Bumped from 4 → 8 so `batcave run` can take a real Kali-class argv like
-/// `batcave run nc -zv 10.0.2.2 8080 -w 1`. Legacy callers that only touch
+/// Bumped from 4 → 8 so `caves run` can take a real Kali-class argv like
+/// `caves run nc -zv 10.0.2.2 8080 -w 1`. Legacy callers that only touch
 /// parts[0..=3] keep working — the extra slots are empty strings.
 pub const MAX_PARTS: usize = 8;
 fn split_cmd(cmd: &str) -> [&str; MAX_PARTS] {
@@ -7359,21 +7359,21 @@ fn cmd_run_elf(name: &str) {
     platform::serial_puts(name);
     platform::serial_puts("\n");
 
-    // BatCave EL0 runner — all static-PIE binaries go through here
+    // Cave EL0 runner — all static-PIE binaries go through here
     let batcave_names = ["posix", "cxx"];
     let use_batcave = batcave_names.contains(&name);
 
     if use_batcave {
         let data = match name {
-            "posix" => crate::batcave::linux::runner::posix_test_elf(),
-            "cxx" => crate::batcave::linux::runner::cxx_test_elf(),
+            "posix" => crate::caves::linux::runner::posix_test_elf(),
+            "cxx" => crate::caves::linux::runner::cxx_test_elf(),
             _ => unreachable!(),
         };
-        platform::serial_puts("[shell] using BatCave EL0 runner\n");
-        match crate::batcave::linux::loader::load_elf(data) {
+        platform::serial_puts("[shell] using Cave EL0 runner\n");
+        match crate::caves::linux::loader::load_elf(data) {
             Ok(entry) => {
-                platform::serial_puts("[shell] loaded, running via BatCave...\n");
-                if let Err(e) = crate::batcave::linux::loader::execute_with_args(entry, &[name]) {
+                platform::serial_puts("[shell] loaded, running via Cave...\n");
+                if let Err(e) = crate::caves::linux::loader::execute_with_args(entry, &[name]) {
                     console::puts("  Error: ");
                     console::puts(e);
                     console::puts("\n");
@@ -7389,11 +7389,11 @@ fn cmd_run_elf(name: &str) {
     }
 
     let hello_data = if name == "libc" {
-        crate::batcave::linux::runner::hello_libc_elf()
+        crate::caves::linux::runner::hello_libc_elf()
     } else if name == "threads" {
-        crate::batcave::linux::runner::hello_threads_elf()
+        crate::caves::linux::runner::hello_threads_elf()
     } else {
-        crate::batcave::linux::runner::hello_elf()
+        crate::caves::linux::runner::hello_elf()
     };
     platform::serial_puts("[shell] ELF data: ");
     crate::kernel::mm::print_num(hello_data.len());
@@ -7403,9 +7403,9 @@ fn cmd_run_elf(name: &str) {
     // capability set to check against. Without this every write/mmap gets
     // EACCES and the hello/libc/threads tests produce log spam (see BUG-2
     // in docs/SESSION_JOURNAL.md 2026-04-22).
-    crate::batcave::cave::ensure_host_cave_active();
+    crate::caves::cave::ensure_host_cave_active();
 
-    match crate::batcave::linux::loader::load_hello_elf(hello_data) {
+    match crate::caves::linux::loader::load_hello_elf(hello_data) {
         Ok((phys_entry, _phys_base, _orig_entry)) => {
             platform::serial_puts("[shell] ELF loaded, entry=0x");
             let hex = b"0123456789abcdef";
@@ -7466,7 +7466,7 @@ fn cmd_run_elf(name: &str) {
                     );
 
                     // Disable alignment checking RIGHT before jump
-                    // (BatCave init may have re-enabled it)
+                    // (Cave init may have re-enabled it)
                     core::arch::asm!(
                         "mrs x16, sctlr_el1",
                         "bic x16, x16, #2",  // clear bit 1 (A = alignment check)
@@ -8079,7 +8079,7 @@ fn cmd_audit_chain_selftest() {
 
 /// `mls-set <cave> <u|c|s|ts>` — set a cave's Bell-LaPadula label.
 fn cmd_mls_set(name: &str, level: &str) {
-    use crate::batcave::cave::{set_sensitivity_by_name, Sensitivity};
+    use crate::caves::cave::{set_sensitivity_by_name, Sensitivity};
     if name.is_empty() || level.is_empty() {
         console::puts("  usage: mls-set <cave> <u|c|s|ts>\n");
         return;
@@ -8105,7 +8105,7 @@ fn cmd_mls_set(name: &str, level: &str) {
 
 /// `mls-show` — print every cave's current MLS label.
 fn cmd_mls_show() {
-    use crate::batcave::cave::{self, Sensitivity};
+    use crate::caves::cave::{self, Sensitivity};
     console::puts_hi("  CAVE MLS LABELS\n");
     cave::list(|cv| {
         let s = Sensitivity::from_u8(cv.sensitivity);
@@ -8121,7 +8121,7 @@ fn cmd_mls_show() {
 /// Bell-LaPadula lattice without changing state. Useful for
 /// operators to validate a planned flow before performing it.
 fn cmd_mls_check(src: &str, dst: &str, op: &str) {
-    use crate::batcave::cave::{self, MlsOp, Sensitivity};
+    use crate::caves::cave::{self, MlsOp, Sensitivity};
     if src.is_empty() || dst.is_empty() || op.is_empty() {
         console::puts("  usage: mls-check <src-cave> <dst-cave> <read|write>\n");
         return;
@@ -8168,8 +8168,8 @@ fn cmd_mls_check(src: &str, dst: &str, op: &str) {
 /// Cleanup leaves both caves at Unclassified so other selftests
 /// run unchanged.
 fn cmd_mls_selftest() {
-    use crate::batcave::cave::{self, can_flow, MlsOp, Sensitivity};
-    use crate::batcave::sys_caves;
+    use crate::caves::cave::{self, can_flow, MlsOp, Sensitivity};
+    use crate::caves::sys_caves;
     use crate::fs::batfs;
 
     console::puts_hi("  MLS LATTICE + BatFS ENFORCEMENT SELF-TEST\n");
@@ -8312,7 +8312,7 @@ fn cmd_mls_selftest() {
 
 /// `mls-ipc-selftest` — gov-grade §3.2 labeled IPC slice.
 ///
-/// Drives `batcave::mls_ipc` through the four Bell-LaPadula
+/// Drives `caves::mls_ipc` through the four Bell-LaPadula
 /// reference flows for cave-to-cave messaging:
 ///
 ///   1. U → S send (write-up):  ALLOWED. Receiver at S reads OK.
@@ -8327,9 +8327,9 @@ fn cmd_mls_selftest() {
 ///
 /// Cleanup restores both caves to Unclassified.
 fn cmd_mls_ipc_selftest() {
-    use crate::batcave::cave::{self, Sensitivity};
-    use crate::batcave::mls_ipc::{self, MlsIpcError};
-    use crate::batcave::sys_caves;
+    use crate::caves::cave::{self, Sensitivity};
+    use crate::caves::mls_ipc::{self, MlsIpcError};
+    use crate::caves::sys_caves;
 
     console::puts_hi("  MLS LABELED-IPC SELF-TEST\n");
 
@@ -8661,7 +8661,7 @@ fn print_seal_verdict(v: crate::security::audit_chain::SealVerify) {
 
 /// `integ-set <cave> <u|sb|st|hi>` — set a cave's Biba integrity.
 fn cmd_integ_set(name: &str, level: &str) {
-    use crate::batcave::cave::{set_integrity_by_name, Integrity};
+    use crate::caves::cave::{set_integrity_by_name, Integrity};
     if name.is_empty() || level.is_empty() {
         console::puts("  usage: integ-set <cave> <u|sb|st|hi>\n");
         return;
@@ -8684,7 +8684,7 @@ fn cmd_integ_set(name: &str, level: &str) {
 
 /// `integ-show` — print every cave's MLS sensitivity AND integrity.
 fn cmd_integ_show() {
-    use crate::batcave::cave::{self, Integrity, Sensitivity};
+    use crate::caves::cave::{self, Integrity, Sensitivity};
     console::puts_hi("  CAVE MLS LABELS (sens / integ)\n");
     cave::list(|cv| {
         let s = Sensitivity::from_u8(cv.sensitivity);
@@ -8712,9 +8712,9 @@ fn cmd_integ_show() {
 ///     with `ReadDown` when receiver was elevated after the
 ///     message arrived.
 fn cmd_biba_selftest() {
-    use crate::batcave::cave::{self, can_flow_integrity, Integrity, MlsOp, Sensitivity};
-    use crate::batcave::mls_ipc::{self, MlsIpcError};
-    use crate::batcave::sys_caves;
+    use crate::caves::cave::{self, can_flow_integrity, Integrity, MlsOp, Sensitivity};
+    use crate::caves::mls_ipc::{self, MlsIpcError};
+    use crate::caves::sys_caves;
     use crate::fs::batfs;
 
     console::puts_hi("  BIBA INTEGRITY LATTICE SELF-TEST\n");
@@ -8867,8 +8867,8 @@ fn cmd_biba_selftest() {
 ///      Re-read: same AEAD failure.
 ///   5. Restore both, re-read succeeds.
 fn cmd_mls_binding_selftest() {
-    use crate::batcave::cave::{self, Integrity, Sensitivity};
-    use crate::batcave::sys_caves;
+    use crate::caves::cave::{self, Integrity, Sensitivity};
+    use crate::caves::sys_caves;
     use crate::fs::batfs;
 
     console::puts_hi("  MLS LABEL-AEAD-BINDING SELF-TEST\n");
@@ -9002,8 +9002,8 @@ fn cmd_mls_binding_selftest() {
 /// packet and asserts the CIPSO option carries the expected
 /// sensitivity byte.
 fn cmd_secmark_test_send(target: &str, level: &str) {
-    use crate::batcave::cave::{self, Sensitivity};
-    use crate::batcave::sys_caves;
+    use crate::caves::cave::{self, Sensitivity};
+    use crate::caves::sys_caves;
 
     if target.is_empty() || level.is_empty() {
         console::puts("  usage: secmark-test-send <ip:port> <u|c|s|ts>\n");
@@ -9061,8 +9061,8 @@ fn cmd_secmark_test_send(target: &str, level: &str) {
 /// Captures wire bytes via a `build_test_packet` helper added
 /// alongside `ip::send` so the test doesn't need a real NIC.
 fn cmd_secmark_selftest() {
-    use crate::batcave::cave::{self, Sensitivity};
-    use crate::batcave::sys_caves;
+    use crate::caves::cave::{self, Sensitivity};
+    use crate::caves::sys_caves;
     use crate::net::ip;
 
     console::puts_hi("  SECMARK CIPSO-EMIT + PARSE SELF-TEST\n");
@@ -9151,17 +9151,17 @@ fn cmd_secmark_selftest() {
 /// `te-enable` / `te-disable` toggle type-enforcement gating on
 /// `cave::enter`. Default at boot is disabled.
 fn cmd_te_enable() {
-    crate::batcave::cave::te_enable();
+    crate::caves::cave::te_enable();
     console::puts("  te: ENFORCED (cave::enter consults transition allow-list)\n");
 }
 fn cmd_te_disable() {
-    crate::batcave::cave::te_disable();
+    crate::caves::cave::te_disable();
     console::puts("  te: disabled (cave::enter unguarded)\n");
 }
 
 /// `te-allow <from-cave> <to-cave>` — admin opens a transition.
 fn cmd_te_allow(from: &str, to: &str) {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     if from.is_empty() || to.is_empty() {
         console::puts("  usage: te-allow <from-cave> <to-cave>\n");
         return;
@@ -9206,7 +9206,7 @@ fn cmd_te_allow(from: &str, to: &str) {
 
 /// `te-list` — print active transition rules.
 fn cmd_te_list() {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     console::puts_hi("  TYPE-ENFORCEMENT RULES");
     if cave::te_enforced() {
         console::puts("  [ENFORCED]\n");
@@ -9230,7 +9230,7 @@ fn cmd_te_list() {
 
 /// `te-clear` — wipe all rules.
 fn cmd_te_clear() {
-    crate::batcave::cave::clear_transition_rules();
+    crate::caves::cave::clear_transition_rules();
     console::puts("  te: rules cleared\n");
 }
 
@@ -9250,7 +9250,7 @@ fn cmd_te_clear() {
 ///      again.
 ///   7. Cleanup: te-disable, drop test caves, clear rules.
 fn cmd_te_selftest() {
-    use crate::batcave::cave;
+    use crate::caves::cave;
 
     console::puts_hi("  TYPE-ENFORCEMENT TRANSITION SELF-TEST\n");
 
@@ -9377,7 +9377,7 @@ fn cmd_te_selftest() {
 /// (0), so any non-zero-labeled inbound packet is dropped before
 /// it reaches the transport layer.
 fn cmd_secmark_set_ceiling(level: &str) {
-    use crate::batcave::cave::Sensitivity;
+    use crate::caves::cave::Sensitivity;
     use crate::net::ip;
     if level.is_empty() {
         console::puts("  current ceiling: ");
@@ -9406,7 +9406,7 @@ fn cmd_secmark_set_ceiling(level: &str) {
 /// Each transition step verifies `INBOUND_SECMARK_DROPS` advances
 /// exactly by the expected count.
 fn cmd_secmark_recv_selftest() {
-    use crate::batcave::cave::Sensitivity;
+    use crate::caves::cave::Sensitivity;
     use crate::net::ip;
     use core::sync::atomic::Ordering;
 
@@ -9525,8 +9525,8 @@ fn cmd_secmark_recv_selftest() {
 ///   5. Admin context bypasses the policy even when sys-wg is
 ///      explicitly denied (admin is always trusted).
 fn cmd_te_obj_selftest() {
-    use crate::batcave::cave::{self, ObjOp};
-    use crate::batcave::sys_caves;
+    use crate::caves::cave::{self, ObjOp};
+    use crate::caves::sys_caves;
     use crate::fs::batfs;
 
     console::puts_hi("  TE-ON-OBJECTS POLICY SELF-TEST\n");
@@ -9643,7 +9643,7 @@ fn cmd_te_obj_selftest() {
 ///   4. Restore level, flip the DOI bytes — `parse` returns None
 ///      (wrong-DOI rejected).
 fn cmd_calipso_selftest() {
-    use crate::batcave::cave::Sensitivity;
+    use crate::caves::cave::Sensitivity;
     use crate::net::calipso;
 
     console::puts_hi("  CALIPSO (IPv6 SECMARK) FORMAT SELF-TEST\n");
@@ -9723,9 +9723,9 @@ fn cmd_calipso_selftest() {
 ///      the tamper anyway.
 ///   4. Send again, tamper one byte of the body, recv -> AeadFail.
 fn cmd_mls_ipc_binding_selftest() {
-    use crate::batcave::cave::{self, Integrity, Sensitivity};
-    use crate::batcave::mls_ipc::{self, MlsIpcError};
-    use crate::batcave::sys_caves;
+    use crate::caves::cave::{self, Integrity, Sensitivity};
+    use crate::caves::mls_ipc::{self, MlsIpcError};
+    use crate::caves::sys_caves;
 
     console::puts_hi("  MLS-IPC AEAD-BINDING SELF-TEST\n");
 
@@ -10072,7 +10072,7 @@ fn cmd_audit_wipe() {
 /// bound into the ciphertext. TPI-gated. Names are relative to
 /// the active cave's mount namespace.
 fn cmd_mls_declassify(file: &str, sens: &str, integ: &str) {
-    use crate::batcave::cave::{Integrity, Sensitivity};
+    use crate::caves::cave::{Integrity, Sensitivity};
     use crate::security::tpi;
     if file.is_empty() || sens.is_empty() || integ.is_empty() {
         console::puts("  usage: mls-declassify <file> <u|c|s|ts> <u|sb|st|hi>\n");
@@ -10111,8 +10111,8 @@ fn cmd_mls_declassify(file: &str, sens: &str, integ: &str) {
 /// the gate correctly. Mirrors the audit-seal-tpi structure for
 /// `audit-wipe` and `mls-declassify`.
 fn cmd_tpi_wired_ops_selftest() {
-    use crate::batcave::cave::{self, Integrity, Sensitivity};
-    use crate::batcave::sys_caves;
+    use crate::caves::cave::{self, Integrity, Sensitivity};
+    use crate::caves::sys_caves;
     use crate::fs::batfs;
     use crate::security::{audit, audit::Category, tpi, tpi::{canonical_bytes, OpId, Role}};
     use ed25519_compact::{KeyPair, Seed};
@@ -10367,7 +10367,7 @@ fn print_fault(r: Result<(), crate::kernel::mm::guard::VerifyFault>) {
 /// `target-cave` for the duration of the run (gated by the
 /// existing TE allow-list when enforcement is on).
 fn cmd_exec_trans_set(filename: &str, target: &str) {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     if filename.is_empty() || target.is_empty() {
         console::puts("  usage: exec-trans-set <filename> <target-cave>\n");
         return;
@@ -10392,7 +10392,7 @@ fn cmd_exec_trans_set(filename: &str, target: &str) {
 
 /// `exec-trans-clear <filename>` — drop the auto-transition rule.
 fn cmd_exec_trans_clear(filename: &str) {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     if filename.is_empty() {
         console::puts("  usage: exec-trans-clear <filename>\n");
         return;
@@ -10406,7 +10406,7 @@ fn cmd_exec_trans_clear(filename: &str) {
 
 /// `exec-trans-list` — print all active exec-transition rules.
 fn cmd_exec_trans_list() {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     console::puts_hi("  EXEC AUTO-TRANSITIONS\n");
     let mut shown = 0usize;
     cave::for_each_exec_transition(|name, target| {
@@ -10434,7 +10434,7 @@ fn cmd_exec_trans_list() {
 /// doesn't have POSIX-style execve, but the load-bearing security
 /// primitive (the policy-gated transition) is exercised end-to-end.
 fn cmd_exec_file(filename: &str) {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     use crate::fs::batfs;
     if filename.is_empty() {
         console::puts("  usage: exec-file <filename>\n");
@@ -10497,8 +10497,8 @@ fn cmd_exec_file(filename: &str) {
 ///      asserted via `can_transition(kns_id, sys_wg_id)` flipping
 ///      from false (no rule) to true (after `add_transition_rule`).
 fn cmd_exec_trans_selftest() {
-    use crate::batcave::cave;
-    use crate::batcave::sys_caves;
+    use crate::caves::cave;
+    use crate::caves::sys_caves;
     use crate::fs::batfs;
     console::puts_hi("  EXEC AUTO-TRANSITION SELF-TEST\n");
 
@@ -10639,7 +10639,7 @@ fn cmd_taint_show(filename: &str) {
 
 /// `taint-cave-show <cave-name>` — print the taint bitmap on a cave.
 fn cmd_taint_cave_show(cave_name: &str) {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     if cave_name.is_empty() {
         console::puts("  usage: taint-cave-show <cave-name>\n");
         return;
@@ -10664,7 +10664,7 @@ fn cmd_taint_cave_show(cave_name: &str) {
 /// file's taint. Audit-logged. Useful for selftest cleanup or
 /// after a containment incident is closed out.
 fn cmd_taint_reset() {
-    use crate::batcave::cave;
+    use crate::caves::cave;
     use crate::fs::batfs;
     use crate::security::audit::{record, Category};
     cave::clear_all_taints();
@@ -10681,8 +10681,8 @@ fn cmd_taint_reset() {
 ///   4. The propagation is monotonic — a cave that's already
 ///      tainted stays tainted after reading an untainted file.
 fn cmd_taint_selftest() {
-    use crate::batcave::cave;
-    use crate::batcave::sys_caves;
+    use crate::caves::cave;
+    use crate::caves::sys_caves;
     use crate::fs::batfs;
     console::puts_hi("  TAINT PROPAGATION SELF-TEST\n");
 
@@ -10779,7 +10779,7 @@ fn cmd_taint_selftest() {
 }
 
 fn cleanup_declassify(sys_wg_id: u16) {
-    use crate::batcave::cave::{self, Integrity, Sensitivity};
+    use crate::caves::cave::{self, Integrity, Sensitivity};
     use crate::fs::batfs;
     // Try both names — after declassify the file's still under
     // "sys-wg:declass-probe", but the sys-wg-context delete also
@@ -10790,8 +10790,8 @@ fn cleanup_declassify(sys_wg_id: u16) {
     let _ = cave::set_integrity_by_name("sys-wg",   Integrity::Untrusted);
 }
 
-fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
-    use crate::batcave::mls_ipc::MlsIpcError;
+fn print_err(e: crate::caves::mls_ipc::MlsIpcError) {
+    use crate::caves::mls_ipc::MlsIpcError;
     console::puts(match e {
         MlsIpcError::WriteDown => "WriteDown\n",
         MlsIpcError::ReadUp    => "ReadUp\n",
@@ -10805,8 +10805,8 @@ fn print_err(e: crate::batcave::mls_ipc::MlsIpcError) {
 }
 
 fn mls_cleanup(sys_wg_id: u16, kns_id: u16) {
-    use crate::batcave::cave::{self, Sensitivity};
-    use crate::batcave::mls_ipc;
+    use crate::caves::cave::{self, Sensitivity};
+    use crate::caves::mls_ipc;
     mls_ipc::drain(sys_wg_id);
     mls_ipc::drain(kns_id);
     let _ = cave::set_sensitivity_by_name("sys-wg", Sensitivity::Unclassified);

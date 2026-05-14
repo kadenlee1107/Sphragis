@@ -90,7 +90,7 @@ pub fn create() -> Result<(u16, u16), &'static str> {
     // quota before grabbing a slot. Pipe ring buffer is one page
     // (4 KiB). Refunded on any rollback path below + on release_end
     // when both ends close.
-    crate::batcave::cave::active_charge_pages(1)?;
+    crate::caves::cave::active_charge_pages(1)?;
 
     // Find a free pipe slot.
     let mut slot = None;
@@ -105,7 +105,7 @@ pub fn create() -> Result<(u16, u16), &'static str> {
     let slot = match slot {
         Some(s) => s,
         None => {
-            crate::batcave::cave::active_release_pages(1);
+            crate::caves::cave::active_release_pages(1);
             return Err("no free pipe");
         }
     };
@@ -132,7 +132,7 @@ pub fn create() -> Result<(u16, u16), &'static str> {
             p.active = false;
             p.readers = 0;
             p.writers = 0;
-            crate::batcave::cave::active_release_pages(1);
+            crate::caves::cave::active_release_pages(1);
             return Err("fd table full");
         }
     };
@@ -145,7 +145,7 @@ pub fn create() -> Result<(u16, u16), &'static str> {
             p.active = false;
             p.readers = 0;
             p.writers = 0;
-            crate::batcave::cave::active_release_pages(1);
+            crate::caves::cave::active_release_pages(1);
             return Err("fd table full");
         }
     };
@@ -206,7 +206,7 @@ pub fn release_end(id: u16, end: PipeEnd) {
         // as shm — release happens against the *active* cave at
         // close-time, which may differ from the creator. Bounded by
         // the original charge so the books eventually balance.
-        crate::batcave::cave::active_release_pages(1);
+        crate::caves::cave::active_release_pages(1);
     }
 }
 

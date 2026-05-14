@@ -2,7 +2,7 @@
 
 **Status:** Active proposal as of 2026-05-07.
 **Follows:** `DESIGN_NO_BROWSER.md`, `DESIGN_TLS_HARDENING.md`. Third thread of the post-no-browser priority list.
-**Touches:** `src/batcave/linux/epoll.rs`, `src/batcave/linux/syscall.rs` (sys_nanosleep), `src/batcave/linux/threads.rs`, `src/batcave/linux/futex.rs` (comment cleanup only), `src/kernel/scheduler.rs`, `src/main.rs`, `src/ui/shell.rs`, `scripts/qemu_x509_smoke.py` (renamed).
+**Touches:** `src/caves/linux/epoll.rs`, `src/caves/linux/syscall.rs` (sys_nanosleep), `src/caves/linux/threads.rs`, `src/caves/linux/futex.rs` (comment cleanup only), `src/kernel/scheduler.rs`, `src/main.rs`, `src/ui/shell.rs`, `scripts/qemu_x509_smoke.py` (renamed).
 **Adds:** `cmd_scheduler_selftest` + dispatch arm in shell.rs.
 
 ## Goal
@@ -144,7 +144,7 @@ wake arrives.
 
 ## What gets changed
 
-### `epoll_pwait` rewrite (`src/batcave/linux/epoll.rs`)
+### `epoll_pwait` rewrite (`src/caves/linux/epoll.rs`)
 
 Current behavior:
 
@@ -172,7 +172,7 @@ common loop:
 `SPIN_PER_MS` constant removed. `cooperative_yield()` removed (no caller
 left). `remaining` countdown removed.
 
-### `sys_nanosleep` rewrite (`src/batcave/linux/syscall.rs`)
+### `sys_nanosleep` rewrite (`src/caves/linux/syscall.rs`)
 
 Current behavior: tight `cntpct_el0` poll loop with `schedule()` every
 256 iterations.
@@ -196,7 +196,7 @@ signal delivery, or any other waker that doesn't honor "deadline-only"
 semantics. The existing `secs_capped`/`nsecs_capped` overflow guards
 (V8-ROOT-3) stay — they cap input range, not deadline arithmetic.
 
-### `BlockReason` field changes (`src/batcave/linux/threads.rs`)
+### `BlockReason` field changes (`src/caves/linux/threads.rs`)
 
 ```rust
 // Before
@@ -208,7 +208,7 @@ EpollWait { epfd: i32, deadline_ticks: u64 },  // 0 = infinite (epoll only)
 Nanosleep { deadline_ticks: u64 },             // always concrete; 0 = invalid
 ```
 
-### Diagnostic encoding update (`src/batcave/linux/threads.rs:1289-1302`)
+### Diagnostic encoding update (`src/caves/linux/threads.rs:1289-1302`)
 
 The `(a1, a2)` + `kind_disc` pack used by the SKIP-DEADLOCK forced-wake
 log gets:
@@ -270,7 +270,7 @@ pub fn wake_epoll_waiters(epfd: i32) {
 
 Called by `epoll::mark_ready(epfd, ev)` after flipping the ready bit.
 
-### New helpers (`src/batcave/linux/threads.rs` or reuse existing)
+### New helpers (`src/caves/linux/threads.rs` or reuse existing)
 
 ```rust
 #[inline]
@@ -301,8 +301,8 @@ them; the implementation phase greps before adding.
 
 ```rust
 pub fn tick() {
-    crate::batcave::linux::stdio_ring::drain_to_uart();
-    crate::batcave::linux::threads::wake_expired_deadlines();  // NEW
+    crate::caves::linux::stdio_ring::drain_to_uart();
+    crate::caves::linux::threads::wake_expired_deadlines();  // NEW
     schedule();
 }
 ```
@@ -465,8 +465,8 @@ event-wake path, and the table-walk noop guard.
   pass, zero FAIL)
 - ✅ Static grep returns empty:
   ```bash
-  rg 'SPIN_PER_MS|timeout_ms\b|deadline_ns\b' src/batcave/linux/{epoll,threads,syscall}.rs
-  rg 'TODO\(sched\)' src/batcave/linux/futex.rs
+  rg 'SPIN_PER_MS|timeout_ms\b|deadline_ns\b' src/caves/linux/{epoll,threads,syscall}.rs
+  rg 'TODO\(sched\)' src/caves/linux/futex.rs
   ```
 - ✅ **Park-loop invariant review checkpoint** (manual, not
   automated): a reviewer reads `park_current` and confirms by

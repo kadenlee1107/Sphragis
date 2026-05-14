@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 evil_elf_overflow.py — forge ELF64 files that exercise integer-overflow
-bounds checks in src/batcave/linux/loader.rs.
+bounds checks in src/caves/linux/loader.rs.
 
 Produces three artifacts:
   - evil_pt_offset_overflow.elf   (ATTACK-FL-001): p_offset+filesz wraps past data.len()

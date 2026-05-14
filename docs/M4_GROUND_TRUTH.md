@@ -143,7 +143,7 @@ are written. When transcribed to C `#define` form, drop the underscores.
   `batfs::next_nonce` (session 2026-04-19 17:35). To the best of our
   grep at that point, no RMW site remains on the Apple boot path or
   on the `frame::alloc`/`batfs::create` paths a kernel self-test
-  exercises. The `src/batcave/linux/*` and `src/net/tcp.rs` RMWs
+  exercises. The `src/caves/linux/*` and `src/net/tcp.rs` RMWs
   exist but are on syscall / networking paths we haven't brought up
   on M4 yet.
 - **~~iBoot watchdog tightens under repeated chainloads~~ [RETRACTED].**

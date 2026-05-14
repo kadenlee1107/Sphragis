@@ -1,7 +1,7 @@
 /*
  * Sphragis syscall fuzzer.
  *
- * Runs as a BatCave guest. Walks `seeds.h` and issues each syscall with
+ * Runs as a Cave guest. Walks `seeds.h` and issues each syscall with
  * its seed tuple, plus a few LCG-mutated variants. Prints a single line
  * per call to stdout via write(1,...) so the Sphragis UART log preserves
  * the full trace — if the kernel panics, the last printed "TRY" line

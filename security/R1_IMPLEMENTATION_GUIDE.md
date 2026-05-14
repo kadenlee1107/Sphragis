@@ -1,6 +1,6 @@
 # ROOT-1 Implementation Guide — Step by Step
 
-**Prerequisites:** `src/batcave/linux/mmu.rs::setup_cave_pagetable_at(slot, phys_base, virt_base)` already exists (commit `b927af9f`). This guide is the 1-2 day playbook to finish R1.
+**Prerequisites:** `src/caves/linux/mmu.rs::setup_cave_pagetable_at(slot, phys_base, virt_base)` already exists (commit `b927af9f`). This guide is the 1-2 day playbook to finish R1.
 
 ## Overview
 
@@ -8,7 +8,7 @@ Goal: every cave runs on its own page table with user VA at `0x10000000`,
 isolated from kernel RAM except via the L2_high identity map used by the
 exception handler.
 
-## Step 1 — Add `load_elf_rebased` to `src/batcave/linux/loader.rs`
+## Step 1 — Add `load_elf_rebased` to `src/caves/linux/loader.rs`
 
 New API:
 ```rust
@@ -42,7 +42,7 @@ Keep existing `load_elf` unchanged — it's the legacy identity-map path.
 
 ## Step 2 — Cave slot allocator
 
-Add to `src/batcave/linux/mmu.rs`:
+Add to `src/caves/linux/mmu.rs`:
 ```rust
 static CAVE_SLOT_USED: [AtomicBool; MAX_CAVE_PAGETABLES] = ...;
 

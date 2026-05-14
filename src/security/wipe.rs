@@ -62,13 +62,13 @@ pub fn execute(reason: WipeReason, silent: bool) {
 
     // Phase 1: Destroy encryption keys
     destroy_keys();
-    crate::batcave::cave::destroy_all();
+    crate::caves::cave::destroy_all();
     // DESIGN_CRYPTO.md #11: the OTP pad dies with the system too. Any
     // seized-hardware attempt to replay an unused token fails because
     // the pad is now all zeros.
     crate::security::otp::wipe();
     if !WIPE_SILENT.load(Ordering::Relaxed) {
-        platform::serial_puts("  [wipe] All BatCaves destroyed\n");
+        platform::serial_puts("  [wipe] All Caves destroyed\n");
     }
 
     // Phase 2: Zero filesystem data

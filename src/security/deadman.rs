@@ -53,8 +53,8 @@ pub fn arm(interval_hours: u64) {
     // Best-effort: if the daemon isn't running, skip quietly — the
     // native in-Sphragis wipe path still covers native caves.
     let secs = interval_hours * 3600;
-    let r = crate::batcave::docker_client::with_daemon(|| {
-        crate::batcave::docker_client::arm_deadman(secs)
+    let r = crate::caves::docker_client::with_daemon(|| {
+        crate::caves::docker_client::arm_deadman(secs)
     });
     match r {
         Ok(()) => {
@@ -74,8 +74,8 @@ pub fn refresh() {
         LAST_REFRESH.store(current_time(), Ordering::Relaxed);
         // Phase 5: mirror to the daemon so its heartbeat resets too.
         // Best-effort — daemon may not be running in dev builds.
-        let _ = crate::batcave::docker_client::with_daemon(|| {
-            crate::batcave::docker_client::ping()
+        let _ = crate::caves::docker_client::with_daemon(|| {
+            crate::caves::docker_client::ping()
         });
     }
 }

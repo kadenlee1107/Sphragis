@@ -28,10 +28,10 @@ pub static COMMAND_NAMES: &[&str] = &[
     "audit",
     "audit-chain",
     "audit-flush",
-    "batcave",
-    "batcave-fw-allow",
-    "batcave-fw-deny",
-    "batcave-fw-list",
+    "caves",
+    "caves-fw-allow",
+    "caves-fw-deny",
+    "caves-fw-list",
     "batfs-quota-selftest",
     "blk-selftest",
     "blk-status",
@@ -301,7 +301,7 @@ pub fn complete_command(prefix: &str) -> Completion {
 // name. Different commands take different argument types: file names
 // (`read`, `cat`, `rm`, `verify`, `edit`, `write`), cave names
 // (`cpol-show`, `cpol-add-sni`, `cpol-clear`, `cave-syscall-*`,
-// `batcave-fw-*`), test-binary names (`run`), or nothing for v1.
+// `caves-fw-*`), test-binary names (`run`), or nothing for v1.
 //
 // Candidates are runtime-enumerated (the file table or cave
 // registry), so this type owns its candidate bytes rather than
@@ -310,7 +310,7 @@ pub fn complete_command(prefix: &str) -> Completion {
 /// Per-name buffer width for the argument-candidate list. Sized for
 /// the longest realistic argument:
 /// - batfs filenames cap at `batfs::FILE_NAME_LEN` = 64 bytes
-/// - cave names cap at 32 bytes by `batcave::cave::MAX_NAME_LEN`
+/// - cave names cap at 32 bytes by `caves::cave::MAX_NAME_LEN`
 const MAX_ARG_NAME: usize = 64;
 
 /// What kind of argument the next token of `cmd` expects. Drives
@@ -375,7 +375,7 @@ const SUB_HASH_ALGO: &[&str] = &[
     "blake3", "sha256", "sha384", "sha3-256", "sha3-384", "sha3-512",
 ];
 
-/// `batcave <enter|stop|...>` — keep alphabetised for easy diff.
+/// `caves <enter|stop|...>` — keep alphabetised for easy diff.
 const SUB_BATCAVE: &[&str] = &[
     "bb",       "busybox",       "create",        "destroy",
     "display",  "docker-create", "docker-destroy", "docker-list",
@@ -411,7 +411,7 @@ pub fn arg_kind_for_parts(parts: &[&str], arg_index: usize) -> ArgKind {
             "screen"     => return ArgKind::Literal(SUB_SCREEN),
             "tz"         => return ArgKind::Literal(SUB_TZ),
             "hash"       => return ArgKind::Literal(SUB_HASH_ALGO),
-            "batcave"    => return ArgKind::Literal(SUB_BATCAVE),
+            "caves"    => return ArgKind::Literal(SUB_BATCAVE),
             _ => {}
         }
     }
@@ -427,7 +427,7 @@ pub fn arg_kind_for_parts(parts: &[&str], arg_index: usize) -> ArgKind {
             |"cpol-rate"|"cpol-byte-rate"|"cpol-flow-rate", _, 0) => ArgKind::Cave,
         ("cave-syscall-deny"|"cave-syscall-allow"
             |"cave-syscall-list"|"cave-syscall-clear", _, 0) => ArgKind::Cave,
-        ("batcave-fw-allow"|"batcave-fw-deny", _, 0) => ArgKind::Cave,
+        ("caves-fw-allow"|"caves-fw-deny", _, 0) => ArgKind::Cave,
 
         // ── Binary-taking first arguments ──
         ("run", _, 0) => ArgKind::Binary,
@@ -442,10 +442,10 @@ pub fn arg_kind_for_parts(parts: &[&str], arg_index: usize) -> ArgKind {
         // file in the active cave's mount namespace.
         ("mount-ns", "read"|"rm"|"write", 1) => ArgKind::File,
 
-        // `batcave <enter|stop|destroy|grant|revoke|seal|gui
+        // `caves <enter|stop|destroy|grant|revoke|seal|gui
         // |display|uname|test|run|kits|install|pipe|ipc|bb
         // |busybox|mkdir> <cave>` — second token is a cave name.
-        ("batcave",
+        ("caves",
             "enter"|"stop"|"destroy"|"grant"|"revoke"|"seal"
             |"gui"|"display"|"uname"|"test"|"run"|"kits"
             |"install"|"pipe"|"ipc"|"bb"|"busybox"|"mkdir"
@@ -538,7 +538,7 @@ pub fn complete_argument(kind: ArgKind, current: &str) -> ArgCompletion {
             crate::fs::batfs::ns_list(|name, _size, _enc| consider(name.as_bytes()));
         }
         ArgKind::Cave => {
-            crate::batcave::cave::list(|cv| consider(cv.name_str().as_bytes()));
+            crate::caves::cave::list(|cv| consider(cv.name_str().as_bytes()));
         }
         ArgKind::Binary => {
             // Hardcoded set the loader includes — keep in sync with
@@ -628,7 +628,7 @@ pub fn split_for_completion(line: &str) -> Option<(&str, usize, &str)> {
 }
 
 /// Maximum prior-arg tokens we surface to the dispatcher. Larger
-/// grammars (`batcave docker-create <name> <image> <caps-csv>`) cap
+/// grammars (`caves docker-create <name> <image> <caps-csv>`) cap
 /// at this width; beyond it the new arg falls through to `None`.
 pub const MAX_PRIOR_PARTS: usize = 8;
 

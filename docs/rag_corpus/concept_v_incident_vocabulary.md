@@ -52,7 +52,7 @@ The wave that produced [[Concepts/Constant-Cost Abort Discipline]]. `V6-SIDE-002
 V8 was the era of "what happens when a handshake or kernel routine fails halfway through." Four notable incidents:
 
 - **V8-ROOT-1** — random + X25519 keypair + ClientHello write + session-state init must be one critical section. A timer preempt mid-init lets a concurrent `recv_app_data` see a half-initialized session.
-- **V8-ROOT-3** — arithmetic overflow guard (related: `V8-ARITH`). The `secs_capped`/`nsecs_capped` guards in `sys_nanosleep` come from this. See [[_generated/src/batcave/linux/syscall.rs]].
+- **V8-ROOT-3** — arithmetic overflow guard (related: `V8-ARITH`). The `secs_capped`/`nsecs_capped` guards in `sys_nanosleep` come from this. See [[_generated/src/caves/linux/syscall.rs]].
 - **V8-ROOT-6** — panic-handler-only secret wipe. Panic handler may already hold locks, so it doesn't take any. Uses volatile writes to defeat dead-code elimination. See `panic_wipe()` in [[_generated/src/net/tls.rs]].
 - **V8-ROOT-12** — additional root-cause incident, wave 8.
 - **V8-IRQ-#12** — IRQ-handling class, related to V8-ROOT-1 (same incident from a different angle).

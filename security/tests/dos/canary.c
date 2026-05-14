@@ -1,5 +1,5 @@
 /*
- * canary.c — second-cave observer. Runs in a DIFFERENT BatCave from the
+ * canary.c — second-cave observer. Runs in a DIFFERENT Cave from the
  * attacker and reports whether normal operations still succeed.
  *
  * A healthy system prints "canary: ok N". A DoS'd system prints the

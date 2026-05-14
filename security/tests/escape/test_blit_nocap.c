@@ -21,7 +21,7 @@ static void puts_(const char *s) {
 static unsigned int pixels[W * H];
 
 void _start(void) {
-    puts_("[blit] BatCave display-bypass probe\n");
+    puts_("[blit] Cave display-bypass probe\n");
     for (int i = 0; i < W*H; i++) pixels[i] = 0xFFFF0000U; /* ARGB red */
 
     /* syscall 500: x0=ptr, x1=w, x2=h, x3=dst_x, x4=dst_y */

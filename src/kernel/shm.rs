@@ -129,7 +129,7 @@ pub fn create(name: &[u8], size: usize) -> Result<u16, &'static str> {
     // active (kernel/admin context). Charge is rolled back if any
     // later step fails.
     let pages_needed = ((size + 4095) / 4096) as u32;
-    crate::batcave::cave::active_charge_pages(pages_needed)?;
+    crate::caves::cave::active_charge_pages(pages_needed)?;
 
     let owner = process::current_id();
 
@@ -146,7 +146,7 @@ pub fn create(name: &[u8], size: usize) -> Result<u16, &'static str> {
     let slot = match slot {
         Some(s) => s,
         None => {
-            crate::batcave::cave::active_release_pages(pages_needed);
+            crate::caves::cave::active_release_pages(pages_needed);
             return Err("no free region");
         }
     };
@@ -156,7 +156,7 @@ pub fn create(name: &[u8], size: usize) -> Result<u16, &'static str> {
     // which can fail silently on alloc failure in no_std contexts.
     let mut v: Vec<u8> = Vec::new();
     if v.try_reserve_exact(size).is_err() {
-        crate::batcave::cave::active_release_pages(pages_needed);
+        crate::caves::cave::active_release_pages(pages_needed);
         return Err("out of memory");
     }
     v.resize(size, 0);
@@ -178,7 +178,7 @@ pub fn create(name: &[u8], size: usize) -> Result<u16, &'static str> {
             r.active = false;
             r.data = None;
             r.refs = 0;
-            crate::batcave::cave::active_release_pages(pages_needed);
+            crate::caves::cave::active_release_pages(pages_needed);
             return Err("fd table full");
         }
     };
@@ -242,7 +242,7 @@ pub fn release(id: u16) {
         // creator — saturates at zero and the worst case is a tiny
         // bookkeeping drift bounded by the original charge.
         if pages_held > 0 {
-            crate::batcave::cave::active_release_pages(pages_held);
+            crate::caves::cave::active_release_pages(pages_held);
         }
     }
 }

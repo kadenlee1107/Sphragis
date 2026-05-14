@@ -176,7 +176,7 @@ const FauxPage = () => (
       marginTop: 18, marginBottom: 4, letterSpacing: 1,
     }}>What's inside</div>
     <ul style={{ margin: 0, padding: "0 0 0 20px", color: appColors.ink, listStyle: "square" }}>
-      <li>BatCave isolation — sealed containers with cap-set enforcement</li>
+      <li>Cave isolation — sealed containers with cap-set enforcement</li>
       <li>BatFS encrypted vault with merkle integrity</li>
       <li>TLS 1.3 stack with cert pinning · <span style={{ color: appColors.cyan }}>read more</span></li>
       <li>Hand-written shell with audit trail · <span style={{ color: appColors.cyan }}>read more</span></li>
@@ -471,12 +471,12 @@ const BCDetailEmpty = () => (
       fontSize: 10, letterSpacing: 2, color: appColors.faint,
       textTransform: "uppercase", marginBottom: 8,
     }}>quick start</div>
-    <QuickStartLine cmd="batcave create pentest-lab --tools nmap,burpsuite" comment="docker-backed" />
-    <QuickStartLine cmd="batcave grant pentest-lab net" comment="grant capability" />
-    <QuickStartLine cmd="batcave grant pentest-lab raw display" comment="multiple at once" />
-    <QuickStartLine cmd="batcave enter pentest-lab" comment="attach to shell" />
-    <QuickStartLine cmd="batcave seal pentest-lab" comment="persistent → ephemeral" />
-    <QuickStartLine cmd="batcave destroy pentest-lab" comment="secure wipe" />
+    <QuickStartLine cmd="caves create pentest-lab --tools nmap,burpsuite" comment="docker-backed" />
+    <QuickStartLine cmd="caves grant pentest-lab net" comment="grant capability" />
+    <QuickStartLine cmd="caves grant pentest-lab raw display" comment="multiple at once" />
+    <QuickStartLine cmd="caves enter pentest-lab" comment="attach to shell" />
+    <QuickStartLine cmd="caves seal pentest-lab" comment="persistent → ephemeral" />
+    <QuickStartLine cmd="caves destroy pentest-lab" comment="secure wipe" />
   </div>
 );
 
@@ -530,9 +530,9 @@ const BCDetailCave = ({ cave }) => {
         fontSize: 10, letterSpacing: 2, color: appColors.faint,
         textTransform: "uppercase", marginBottom: 6,
       }}>actions</div>
-      <ActionHint cmd={`batcave enter ${name}`} comment="attach shell" />
-      <ActionHint cmd={`batcave seal ${name}`} comment="irreversible" danger />
-      <ActionHint cmd={`batcave destroy ${name}`} comment="secure wipe" danger />
+      <ActionHint cmd={`caves enter ${name}`} comment="attach shell" />
+      <ActionHint cmd={`caves seal ${name}`} comment="irreversible" danger />
+      <ActionHint cmd={`caves destroy ${name}`} comment="secure wipe" danger />
 
       <div style={{ flex: 1 }} />
 
@@ -705,7 +705,7 @@ const BCPane = ({ state = "two-caves" }) => {
                 color: appColors.dim, fontSize: 12, letterSpacing: 1,
                 padding: 24, textAlign: "center",
               }}>
-                (no BatCaves — use <span style={{ color: appColors.cyan, margin: "0 6px" }}>batcave create &lt;name&gt;</span> in shell)
+                (no Caves — use <span style={{ color: appColors.cyan, margin: "0 6px" }}>caves create &lt;name&gt;</span> in shell)
               </div>
             ) : allCaves.map((c, i) => (
               <BCCaveRow

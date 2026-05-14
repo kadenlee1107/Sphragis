@@ -1,15 +1,15 @@
-# BatCaves — Secure Container Runtime for Sphragis
+# Caves — Secure Container Runtime for Sphragis
 
 ## Understanding Summary
 
-- **What:** BatCaves — isolated container environments that run any Kali Linux tool inside Sphragis
-- **Why:** Full pentesting/security toolkit without compromising the host OS. Supply chain attacks (npm, etc.) are contained — a compromised tool can't escape its BatCave
+- **What:** Caves — isolated container environments that run any Kali Linux tool inside Sphragis
+- **Why:** Full pentesting/security toolkit without compromising the host OS. Supply chain attacks (npm, etc.) are contained — a compromised tool can't escape its Cave
 - **Who:** Kaden — single user
-- **How:** One shared minimal Linux kernel runs as a Sphragis microkernel service. BatCaves are isolated environments on top. Tools installed from Kali repos on demand. GUI + CLI both supported.
-- **Isolation:** Every BatCave starts with ZERO access. Capabilities granted explicitly per-cave (network, filesystem, display, USB, raw sockets, inter-cave IPC). Enforced by seL4-inspired capability system at the microkernel level.
+- **How:** One shared minimal Linux kernel runs as a Sphragis microkernel service. Caves are isolated environments on top. Tools installed from Kali repos on demand. GUI + CLI both supported.
+- **Isolation:** Every Cave starts with ZERO access. Capabilities granted explicitly per-cave (network, filesystem, display, USB, raw sockets, inter-cave IPC). Enforced by seL4-inspired capability system at the microkernel level.
 - **Lifecycle:** Persistent or ephemeral. Persistent can downgrade to ephemeral (one-way ratchet — anti-coercion). Create with `--tools` or install incrementally.
-- **Destruction:** Dead man's switch, duress wipe, panic hotkey — ALL BatCaves die with the OS. No exceptions.
-- **Networking:** All BatCave traffic goes through the secure network pipeline (allowlist firewall → TLS → VPN → Tor).
+- **Destruction:** Dead man's switch, duress wipe, panic hotkey — ALL Caves die with the OS. No exceptions.
+- **Networking:** All Cave traffic goes through the secure network pipeline (allowlist firewall → TLS → VPN → Tor).
 
 ## Architecture
 
@@ -19,13 +19,13 @@
 │  Terminal │ Dashboard │ Files │ NetMon │ Editor      │
 │                    │                                 │
 │            ┌───────┴────────┐                        │
-│            │ BatCave Manager │  (6th app)             │
+│            │ Cave Manager │  (6th app)             │
 │            └───────┬────────┘                        │
 ├────────────────────┼────────────────────────────────┤
 │              BATCAVE RUNTIME                         │
 │                    │                                 │
 │  ┌─────────┐ ┌─────────┐ ┌─────────┐               │
-│  │BatCave A│ │BatCave B│ │BatCave C│               │
+│  │Cave A│ │Cave B│ │Cave C│               │
 │  │pentest  │ │forensics│ │recon    │               │
 │  │         │ │         │ │         │               │
 │  │Burp     │ │Autopsy  │ │nmap     │               │
@@ -45,13 +45,13 @@
 ├─────────────────┼───────────────────────────────────┤
 │           MICROKERNEL                                │
 │  Scheduler │ Memory │ IPC │ Capabilities             │
-│  Every BatCave syscall → capability check            │
+│  Every Cave syscall → capability check            │
 └─────────────────────────────────────────────────────┘
 ```
 
 ## Security Model (6 Layers)
 
-1. **Memory isolation** — each BatCave gets its own L1 page table. Hardware MMU
+1. **Memory isolation** — each Cave gets its own L1 page table. Hardware MMU
    enforced via `TTBR0_EL1` swap on `cave::enter` (STUMP #145). Every cave's L1
    maps the kernel identity range `[0x40000000, 0x140000000)` (so kernel itself
    stays reachable while a cave is active) plus MMIO; native caves have NO EL0
@@ -68,7 +68,7 @@
    one syscall site (net write/sendto). Most syscalls don't gate. Closing this
    is queued as a future STUMP — the capability infrastructure (`cave::has_cap`,
    `grant_cap`/`revoke_cap`) is solid; the call-site coverage isn't.
-3. **Filesystem encryption** — per-BatCave derived encryption key (HMAC-SHA256
+3. **Filesystem encryption** — per-Cave derived encryption key (HMAC-SHA256
    of the BatFS master keyed by cave name, STUMP #111 audit C011). Destroy key
    = data unrecoverable. Master is Argon2id-derived from the boot passphrase
    (STUMP #138).
@@ -81,21 +81,21 @@
    (`cave.rs::alloc_display`) but cross-cave readback is not actively
    prevented; future work for genuine output isolation.
 6. **Destruction guarantee** — all wipe events (deadman, duress, panic)
-   destroy all BatCave keys AND drop persisted manifests (STUMP #135) AND
+   destroy all Cave keys AND drop persisted manifests (STUMP #135) AND
    free per-cave L1 frames (STUMP #145). No survivors.
 
 ## Shell Commands
 
 ```
-batcave create <name> [--tools tool1,tool2] [--ephemeral]
-batcave install <name> <tool>
-batcave grant <name> <capability>
-batcave revoke <name> <capability>
-batcave enter <name>
-batcave gui <name> <tool>
-batcave list
-batcave destroy <name>
-batcave seal <name>          # persistent → ephemeral (one-way, irreversible)
+caves create <name> [--tools tool1,tool2] [--ephemeral]
+caves install <name> <tool>
+caves grant <name> <capability>
+caves revoke <name> <capability>
+caves enter <name>
+caves gui <name> <tool>
+caves list
+caves destroy <name>
+caves seal <name>          # persistent → ephemeral (one-way, irreversible)
 ```
 
 ## Grantable Capabilities
@@ -105,15 +105,15 @@ batcave seal <name>          # persistent → ephemeral (one-way, irreversible)
 - `display` — GUI window on Sphragis desktop
 - `fs:<path>` — read/write to specific encrypted vault directory
 - `usb` — USB device access (WiFi adapters, HID devices)
-- `ipc:<other_cave>` — inter-BatCave communication
+- `ipc:<other_cave>` — inter-Cave communication
 - Any resource the microkernel manages can be granted
 
 ## Lifecycle Rules
 
 - **Persistent** (default): survives reboots, tools stay installed
 - **Ephemeral** (`--ephemeral`): destroyed on shutdown, zero trace
-- **Seal** (`batcave seal`): downgrades persistent → ephemeral. ONE-WAY. Cannot be reversed. Anti-coercion design.
-- **Concurrent limit:** 32 caves (`MAX_CAVES` in `src/batcave/cave.rs`).
+- **Seal** (`caves seal`): downgrades persistent → ephemeral. ONE-WAY. Cannot be reversed. Anti-coercion design.
+- **Concurrent limit:** 32 caves (`MAX_CAVES` in `src/caves/cave.rs`).
   This is a static-array cap, not a fundamental design choice — easy
   to bump when there's pressure (the constant is one number to
   change). Earlier doc revisions said "no limit"; STUMP #144 corrected
@@ -121,10 +121,10 @@ batcave seal <name>          # persistent → ephemeral (one-way, irreversible)
 
 ### Persistence implementation (STUMP #135)
 
-The "survives reboots" guarantee is implemented in `src/batcave/persist.rs`.
+The "survives reboots" guarantee is implemented in `src/caves/persist.rs`.
 Each Persistent cave is mirrored to BatFS as a `__cave__<name>` manifest
 file (encrypted by BatFS itself with the boot master key). The manifest
-captures the exact subset of `BatCave` state that needs to survive:
+captures the exact subset of `Cave` state that needs to survive:
 
 - name, cave_type, backing (Native/Docker), image (for Docker)
 - granted capabilities, installed tools
@@ -134,7 +134,7 @@ Fields that DO NOT persist (re-derived/re-allocated each boot):
 - `state` — caves wake up `Stopped`; running state is process-level
 - `fs_key` — deterministic from `(boot master_key, name)`, so the
   cave's existing BatFS data still decrypts after restore
-- `display_x/y/w/h` — re-allocated by `batcave enter`
+- `display_x/y/w/h` — re-allocated by `caves enter`
 
 Mutation hooks: `create`, `create_docker`, `grant_cap`, `revoke_cap`,
 `install_tool` all call `persist::save()` after they touch RAM. `seal`
@@ -158,19 +158,19 @@ Persistent cave reincarnate. `persist::delete(name)` inside `seal()`
 makes the ratchet permanent: once sealed, the cave is gone from disk
 forever.
 
-## BatCave Manager (6th Desktop App)
+## Cave Manager (6th Desktop App)
 
-Shows all BatCaves, status, type, installed tools, granted capabilities, active sessions. Full visual management alongside terminal commands.
+Shows all Caves, status, type, installed tools, granted capabilities, active sessions. Full visual management alongside terminal commands.
 
 ## The npm Attack Scenario
 
-A compromised npm package runs inside a Docker-backed BatCave:
+A compromised npm package runs inside a Docker-backed Cave:
 1. Tries to read host filesystem → **BLOCKED** (no host FS capability + Mac
    kernel container isolation).
 2. Tries to connect to C2 server → **BLOCKED** (not in `cave_policy`
    allowlist; SNI peek + token-bucket shaper enforce this on the egress
    NAT path).
-3. Tries to read another BatCave → **BLOCKED** for Docker caves (separate
+3. Tries to read another Cave → **BLOCKED** for Docker caves (separate
    container kernel namespace) and for native caves (separate `TTBR0_EL1`
    per cave, STUMP #145; cross-cave TLB flush on every switch).
 4. Tries to keylog → bounding-box display clip is real (rendering can't
@@ -192,5 +192,5 @@ A compromised npm package runs inside a Docker-backed BatCave:
 | 7 | All wipes kill all caves | Independent policies | No survivors |
 | 8 | No concurrent limit | Fixed limits | M4 has the power |
 | 9 | Traffic through secure pipeline | Direct access | No backdoors |
-| 10 | Called "BatCaves" | Containers, sandboxes | On brand |
-| 11 | BatCave Manager app | Terminal only | Visual management |
+| 10 | Called "Caves" | Containers, sandboxes | On brand |
+| 11 | Cave Manager app | Terminal only | Visual management |

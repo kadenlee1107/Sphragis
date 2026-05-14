@@ -28,7 +28,7 @@ unsafe extern "C" {
 // the smoke script's `qemu -m 4G` and gives plenty of headroom.
 //
 // MUST be paired with extending the cave + primary identity map in
-// `src/batcave/linux/mmu.rs` (L1[3] + L1[4]) — otherwise kernel writes
+// `src/caves/linux/mmu.rs` (L1[3] + L1[4]) — otherwise kernel writes
 // to PAs above 0xC0000000 (where alloc_frame would now hand out
 // frames) would fault DATA ABORT DFSC=0x06.
 // 4 GiB to give Chromium enough working set.

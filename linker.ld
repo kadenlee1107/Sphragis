@@ -25,7 +25,7 @@ SECTIONS
          * BLOCK_KERNEL_DATA with PXN set) trap on the first EL1 fetch after
          * MMU-enable. Catch them explicitly so all executable bytes stay
          * below the W^X boundary. See the matching TODO (V9) in
-         * src/batcave/linux/mmu.rs for the transitional widen-all-RAM
+         * src/caves/linux/mmu.rs for the transitional widen-all-RAM
          * fallback we use until this linker hint plus a rebuild confirm
          * the sections really are gathered here. */
         *(.text.cold.*)

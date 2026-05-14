@@ -1,4 +1,4 @@
-/* test_memory_peek.c — BatCave escape probe: read above the cave window.
+/* test_memory_peek.c — Cave escape probe: read above the cave window.
  *
  * Expected if isolation holds: faults / zeros for addresses outside the cave's
  * 200 MB window. Expected under the current design (see ESC-001/011 in
@@ -44,7 +44,7 @@ static const unsigned long PROBE[] = {
 };
 
 void _start(void) {
-    puts_("[peek] BatCave memory-peek probe\n");
+    puts_("[peek] Cave memory-peek probe\n");
     for (unsigned i = 0; i < sizeof(PROBE)/sizeof(PROBE[0]); i++) {
         unsigned long a = PROBE[i];
         unsigned long v = 0;

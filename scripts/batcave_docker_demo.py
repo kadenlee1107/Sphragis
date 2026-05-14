@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""Sphragis "BatCave-over-Docker" — every Kali tool, today, properly isolated.
+"""Sphragis "Cave-over-Docker" — every Kali tool, today, properly isolated.
 
 THE MODEL
 =========
-A BatCave is an isolation + capability boundary. We've been modeling it
+A Cave is an isolation + capability boundary. We've been modeling it
 as "per-cave MMU page table inside Sphragis". Docker provides the EXACT
 same contract at a different granularity — PID + network + mount +
 UTS + IPC + user namespaces, plus cgroup resource limits.
 
-So a Docker container IS a legitimate BatCave implementation:
+So a Docker container IS a legitimate Cave implementation:
   * isolation boundary    ✅  Linux namespaces
   * capability gate       ✅  `docker run --cap-drop ALL --cap-add ...`
   * destruction guarantee ✅  `docker rm -f` zeroes everything
   * per-cave networking   ✅  `docker network create --internal`
   * no host filesystem    ✅  implicit unless --volume
 
-This script models `batcave` subcommands against Docker:
-  batcave create <name> --image <img> [--caps ...]
-  batcave run    <name> <tool> <args...>
-  batcave shell  <name>
-  batcave list
-  batcave destroy <name>
+This script models `caves` subcommands against Docker:
+  caves create <name> --image <img> [--caps ...]
+  caves run    <name> <tool> <args...>
+  caves shell  <name>
+  caves list
+  caves destroy <name>
 
 The DEMO runs a Kali cave against an ephemeral HTTP target (also a
 cave). Both live on an isolated Docker bridge — no host-network access,
@@ -54,14 +54,14 @@ def docker_streaming(*args):
     cmd = ["docker", *args]
     return subprocess.run(cmd, text=True)
 
-# ── BatCave primitives ──────────────────────────────────────────
+# ── Cave primitives ──────────────────────────────────────────
 class BatCaveError(RuntimeError): pass
 
 class DockerCave:
-    """A Docker-backed BatCave."""
+    """A Docker-backed Cave."""
     def __init__(self, name: str, image: str, caps: list[str] = None,
                  network: str = None, target_role: bool = False):
-        self.name = f"batcave-{name}"
+        self.name = f"caves-{name}"
         self.display_name = name
         self.image = image
         self.caps = caps or []
@@ -70,7 +70,7 @@ class DockerCave:
         self.created = False
 
     def create(self):
-        """`batcave create` equivalent."""
+        """`caves create` equivalent."""
         # --dns 1.1.1.1 works around OrbStack's custom-bridge DNS gap
         # (default resolver stub doesn't resolve kali.darklab.sh etc.
         # on user-created bridges; one-shot `docker run` uses host DNS,
@@ -103,7 +103,7 @@ class DockerCave:
         return self
 
     def run(self, argv: list[str], capture: bool = True):
-        """`batcave run` equivalent — exec inside the cave."""
+        """`caves run` equivalent — exec inside the cave."""
         if not self.created:
             raise BatCaveError(f"cave {self.display_name} not created")
         cmd = ["exec", self.name, *argv]
@@ -112,7 +112,7 @@ class DockerCave:
         return docker_streaming(*cmd)
 
     def install(self, *packages):
-        """`batcave install` — apt install inside the cave."""
+        """`caves install` — apt install inside the cave."""
         r1 = self.run(["apt-get", "update", "-qq"])
         if r1.returncode != 0:
             print("   [install] apt-get update failed:")
@@ -131,7 +131,7 @@ class DockerCave:
         return True
 
     def destroy(self):
-        """`batcave destroy` — stop + remove container."""
+        """`caves destroy` — stop + remove container."""
         if self.created:
             try: docker("rm", "-f", self.name, check=False)
             except Exception: pass
@@ -168,7 +168,7 @@ def show_output(r):
                 print(f"   [stderr] {line[:140]}")
 
 def main():
-    banner("Sphragis — BatCave-over-Docker: real Kali tools, real Kali kernel")
+    banner("Sphragis — Cave-over-Docker: real Kali tools, real Kali kernel")
 
     net = f"batnet-{uuid.uuid4().hex[:8]}"
     target = DockerCave("webtarget", "httpd:alpine",
@@ -178,19 +178,19 @@ def main():
                           network=net)
 
     try:
-        step(f"batcave network create {net}  (isolated bridge)")
+        step(f"caves network create {net}  (isolated bridge)")
         ensure_network(net)
 
-        step("batcave create webtarget --image httpd:alpine  (the victim)")
+        step("caves create webtarget --image httpd:alpine  (the victim)")
         target.create()
         print(f"   → container {target.name} running on {net}")
 
-        step("batcave create kali-recon --image kalilinux/kali-rolling \\")
+        step("caves create kali-recon --image kalilinux/kali-rolling \\")
         print("                            --cap-add NET_RAW --cap-add NET_ADMIN")
         attacker.create()
         print(f"   → container {attacker.name} running on {net}")
 
-        step("batcave install kali-recon nmap nikto dnsutils curl")
+        step("caves install kali-recon nmap nikto dnsutils curl")
         print("   (one-shot apt install into the cave — cached for next run)")
         ok = attacker.install("nmap", "nikto", "dnsutils", "curl")
         print(f"   install ok: {ok}")
@@ -198,25 +198,25 @@ def main():
         # Resolve the target's name on the docker network
         banner("RECON CHAIN — everything inside kali-recon cave")
 
-        step("batcave run kali-recon  —  dig the target's name on the bridge")
+        step("caves run kali-recon  —  dig the target's name on the bridge")
         r = attacker.run(["dig", "+short", target.name])
         show_output(r)
 
-        step("batcave run kali-recon  —  curl the target's welcome page")
+        step("caves run kali-recon  —  curl the target's welcome page")
         r = attacker.run(["curl", "-sI", f"http://{target.name}/"])
         show_output(r)
 
-        step("batcave run kali-recon  —  nmap service + version scan (real Kali nmap)")
+        step("caves run kali-recon  —  nmap service + version scan (real Kali nmap)")
         r = attacker.run(["nmap", "-sV", "-Pn", "-p80,443,22,8080",
                           target.name])
         show_output(r)
 
-        step("batcave run kali-recon  —  nikto web scan (first 20 findings)")
+        step("caves run kali-recon  —  nikto web scan (first 20 findings)")
         r = attacker.run(["nikto", "-host", f"http://{target.name}/",
                           "-maxtime", "15s", "-nointeractive"])
         show_output(r)
 
-        step("batcave run kali-recon  —  nslookup through the cave's resolver")
+        step("caves run kali-recon  —  nslookup through the cave's resolver")
         r = attacker.run(["nslookup", target.name])
         show_output(r)
 
@@ -238,11 +238,11 @@ def main():
 
     finally:
         banner("TEARDOWN")
-        step("batcave destroy kali-recon")
+        step("caves destroy kali-recon")
         attacker.destroy()
-        step("batcave destroy webtarget")
+        step("caves destroy webtarget")
         target.destroy()
-        step(f"batcave network rm {net}")
+        step(f"caves network rm {net}")
         destroy_network(net)
 
     banner("DONE")

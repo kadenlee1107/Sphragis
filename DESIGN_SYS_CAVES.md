@@ -20,7 +20,7 @@ prescription was wrong for Sphragis's premise:
 * **N per-domain kernels means N kernel attack surfaces** instead
   of one well-audited microkernel.
 
-Sphragis already has the right structural primitives — BatCaves are a
+Sphragis already has the right structural primitives — Caves are a
 microkernel-process-with-isolation, the same abstraction Qubes
 domains provide via a hypervisor. The fix is to *use* that
 abstraction for the network stack: every sensitive piece of
@@ -49,7 +49,7 @@ party.**
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The IPC boundaries are **authenticated** (`batcave::ipc_session`
+The IPC boundaries are **authenticated** (`caves::ipc_session`
 already does Ed25519+X25519 mutual auth with the existing
 selftest) — a malicious cave can't forge an IPC handshake to
 sys-wg even if it learns the IPC endpoint name.
@@ -128,18 +128,18 @@ Real, working, in tree as of `feat/wireguard-phase1` merge:
 
 | Primitive | Where | Used for |
 |------|------|------|
-| BatCave capability set | `src/batcave/cave.rs` | Per-cave access control on net, fs, mem, etc. |
-| Cave fs_key per cave | `src/batcave/cave.rs:fs_key` | BatFS files encrypted per-cave, leaked filenames don't decrypt across caves |
-| Cave page-table slot (`cave_l1_phys`, `cave_l1_slot`) | `src/batcave/cave.rs` + `src/batcave/linux/mmu.rs` | Per-cave L1 (TTBR0_EL1) prepared at first `cave::enter`. **TLB invalidate + TTBR swap already implemented** in `mmu::switch_to_cave`. |
-| Authenticated IPC | `src/batcave/ipc_session.rs` | Ed25519 identity + X25519 ephemeral + signed offer + derived ChaCha20-Poly1305 session key. `ipc-selftest` passes. |
+| Cave capability set | `src/caves/cave.rs` | Per-cave access control on net, fs, mem, etc. |
+| Cave fs_key per cave | `src/caves/cave.rs:fs_key` | BatFS files encrypted per-cave, leaked filenames don't decrypt across caves |
+| Cave page-table slot (`cave_l1_phys`, `cave_l1_slot`) | `src/caves/cave.rs` + `src/caves/linux/mmu.rs` | Per-cave L1 (TTBR0_EL1) prepared at first `cave::enter`. **TLB invalidate + TTBR swap already implemented** in `mmu::switch_to_cave`. |
+| Authenticated IPC | `src/caves/ipc_session.rs` | Ed25519 identity + X25519 ephemeral + signed offer + derived ChaCha20-Poly1305 session key. `ipc-selftest` passes. |
 | Cave-policy (egress firewall per cave) | `src/net/cave_policy.rs` | Per-cave outbound rate limits, allow-lists, SNI matching. |
-| Cave-syscall-filter | `src/batcave/syscall_filter.rs` | Each cave can deny specific syscalls. |
-| Per-cave memory quota | `src/batcave/cave.rs:mem_quota_pages` (just shipped) | Item 030 first slice. |
+| Cave-syscall-filter | `src/caves/syscall_filter.rs` | Each cave can deny specific syscalls. |
+| Per-cave memory quota | `src/caves/cave.rs:mem_quota_pages` (just shipped) | Item 030 first slice. |
 | PID namespace per cave | `src/kernel/process/mod.rs:cave_id` | Item 031. `procs` filters by active cave. |
-| Mount namespace primitive | `src/batcave/cave.rs:active_mount_prefix` + `mount-ns` shell cmd | Item 032 demo path. |
+| Mount namespace primitive | `src/caves/cave.rs:active_mount_prefix` + `mount-ns` shell cmd | Item 032 demo path. |
 | WireGuard handshake + transport | `src/net/wireguard.rs` (Phase 1) | Will move into sys-wg. |
-| BatPipe inter-cave transport | `src/batcave/batpipe.rs` | The carrier the IPC API will run over. |
-| Secure channel | `src/batcave/secure_channel.rs` | TLS 1.3 between caves. |
+| Bridge inter-cave transport | `src/caves/bridge.rs` | The carrier the IPC API will run over. |
+| Secure channel | `src/caves/secure_channel.rs` | TLS 1.3 between caves. |
 
 ## What's missing
 
@@ -224,9 +224,9 @@ When Arcs 1-3 land:
 
 * `DESIGN.md` decision #4 (microkernel), #9 (network privacy chain).
 * `DESIGN_BATCAVES.md` — original cave architecture.
-* `src/batcave/cave.rs` — cave struct + capability set.
-* `src/batcave/ipc_session.rs` — authenticated cave-to-cave IPC.
-* `src/batcave/linux/mmu.rs` — `setup_native_cave_l1`,
+* `src/caves/cave.rs` — cave struct + capability set.
+* `src/caves/ipc_session.rs` — authenticated cave-to-cave IPC.
+* `src/caves/linux/mmu.rs` — `setup_native_cave_l1`,
   `switch_to_cave`, `CAVE_L1[]` slots.
 * `src/net/wireguard.rs` — Phase 1 library code that becomes the
   sys-wg cave service.

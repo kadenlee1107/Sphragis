@@ -144,7 +144,7 @@ pub fn read_response(recv: RecvFn, out: &mut [u8]) -> Result<usize, HttpError> {
                 // peers can't pin the core for the full READ_IDLE window.
                 // Scheduler access is platform-specific; this call is a
                 // no-op on cores without co-scheduled caves.
-                crate::batcave::linux::threads::schedule();
+                crate::caves::linux::threads::schedule();
                 continue;
             }
             Ok(n) => {

@@ -1,7 +1,7 @@
 //! XChaCha20-Poly1305 — extended-nonce AEAD.
 //!
 //! Why we want it alongside the regular ChaCha20-Poly1305 we already
-//! use in `batcave/secure_channel.rs` and `fs/batfs.rs`:
+//! use in `caves/secure_channel.rs` and `fs/batfs.rs`:
 //!
 //! ChaCha20-Poly1305 uses a 96-bit (12-byte) nonce. That's safe under
 //! a counter discipline, but a random nonce only allows ~2^32 messages

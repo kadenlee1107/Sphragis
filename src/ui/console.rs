@@ -323,7 +323,7 @@ pub fn init_in_window() {
 // /
 /// the buffer wipe alone left stale
 /// pixels on the framebuffer because the desktop only redraws the SH
-/// pane on tab-switch. When a `batcave enter <name>` ran from the
+/// pane on tab-switch. When a `caves enter <name>` ran from the
 /// shell, the new (empty) console buffer rendered the cave's prompt
 /// at row 0 while the bottom of the screen still showed the old
 /// `sphragis >` history that was on the framebuffer before the reset.

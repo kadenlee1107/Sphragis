@@ -17,7 +17,7 @@
 //     `dsb sy` at the end of big wipes.
 //
 //  3. No address-space isolation between whatever would be "kernel"
-//     and whatever would be "user" — so BatCave processes would share
+//     and whatever would be "user" — so Cave processes would share
 //     the kernel's flat PA space. Blocks real process isolation.
 //
 // This module builds a minimal identity-mapped page-table tree and

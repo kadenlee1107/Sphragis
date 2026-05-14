@@ -42,7 +42,7 @@ static int looks_like_block(unsigned long v) {
 }
 
 void _start(void) {
-    puts_("[pt] BatCave page-table-write probe\n");
+    puts_("[pt] Cave page-table-write probe\n");
 
     /* Scan the kernel RAM window in 4 KB steps. */
     unsigned long base = 0x40000000UL;

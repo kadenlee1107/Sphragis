@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 evil_elf_huge_relocs.py — forge ELFs that abuse the PT_DYNAMIC relocation loop
-in src/batcave/linux/loader.rs.
+in src/caves/linux/loader.rs.
 
 Artifacts:
   - evil_rela_huge_size.elf   (ATTACK-FL-003): DT_RELASZ = u64::MAX

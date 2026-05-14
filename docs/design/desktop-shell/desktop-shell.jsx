@@ -33,7 +33,7 @@ const TABS = [
   { code: "SK", name: "security"  },
   { code: "CM", name: "comms"     },
   { code: "WB", name: "browser"   },
-  { code: "BC", name: "batcave"   },
+  { code: "BC", name: "caves"   },
 ];
 
 const TitleBar = ({ active = "SH", caveName = "kernel", caveStatus = "ok" }) => {
@@ -363,8 +363,8 @@ const ShellPaneActivity = () => (
       <Line>{"  render: paint complete  "}<span style={{ color: shellColors.green }}>OK</span></Line>
       <Line kind="blank" />
 
-      <Echo cmd="origin-allow batcave.local" />
-      <Line kind="warn">{"  warn: origin batcave.local not in pinset; added (session-scoped)"}</Line>
+      <Echo cmd="origin-allow caves.local" />
+      <Line kind="warn">{"  warn: origin caves.local not in pinset; added (session-scoped)"}</Line>
       <Line kind="blank" />
     </div>
     <Prompt typed="" cursor />
@@ -382,7 +382,7 @@ const ShellPaneTyping = () => (
       <Echo cmd="audit 3" />
       <Line>
         {"  "}<span style={{ color: shellColors.cyan }}>[247]</span>{" "}
-        <span style={{ color: shellColors.mid }}>origin:</span>{" allow batcave.local (session)"}
+        <span style={{ color: shellColors.mid }}>origin:</span>{" allow caves.local (session)"}
       </Line>
       <Line>
         {"  "}<span style={{ color: shellColors.cyan }}>[246]</span>{" "}

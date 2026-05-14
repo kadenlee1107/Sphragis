@@ -17,7 +17,7 @@
 // reject — unless the operator has explicitly allowlisted the cross-
 // origin pair via `origin-allow <main> <other>`.
 //
-// Pre-pivot Sprint 2.2 was scoped as "per-origin BatCaves" — full
+// Pre-pivot Sprint 2.2 was scoped as "per-origin Caves" — full
 // process-level isolation per origin. That's architecturally
 // expensive in this codebase (every fetch would close all TCP,
 // reset DNS, wipe the JS engine via reset_all_globals_for_cave_switch).

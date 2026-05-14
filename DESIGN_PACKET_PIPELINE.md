@@ -2,7 +2,7 @@
 
 Shipped 2026-04-22. Followup #3 of the cave-policy roadmap. Turns the
 kernel into the authoritative enforcement point for every packet a
-BatCave emits, not just HTTP CONNECTs the daemon proxy happens to see.
+Cave emits, not just HTTP CONNECTs the daemon proxy happens to see.
 
 ## The problem in one paragraph
 
@@ -81,13 +81,13 @@ direction is top-down so QEMU's declaration order lines up with
 inside the pumps (256 out, 64 in). Cheap no-op when nic 1 absent or
 NAT table empty — doesn't starve the UI on flood.
 
-### 6. Daemon binding sync (`scripts/batcaved.py` + `src/batcave/docker_client.rs`)
+### 6. Daemon binding sync (`scripts/batcaved.py` + `src/caves/docker_client.rs`)
 
 - Daemon already populates `CAVE_NET_IP` via `docker inspect` at
   container create (Followup 3b-enforce).
 - New protocol: `CPOL_BIND_LIST` (pull) + `CPOL_BIND_SET` (push/test).
 - Kernel shell: `nat-sync` pulls every binding into `nat::bind_ip`.
-- `batcave create --docker:…` also runs sync automatically so a
+- `caves create --docker:…` also runs sync automatically so a
   freshly created cave's IP is known to the kernel before the
   container starts talking.
 
@@ -243,7 +243,7 @@ Kaden asked to finish the last "still deferred" items. All three shipped:
 
 ## Nothing left deferred
 
-The packet pipeline is feature-complete for the BatCave threat
+The packet pipeline is feature-complete for the Cave threat
 model: per-cave egress enforcement at layer 2/3/4, bidirectional
 NAT with TTL GC, ARP responder on the caves segment, full ICMP
 coverage (Echo + all three error types + intentional drops for

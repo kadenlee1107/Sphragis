@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Design-aligned BatCave-over-Docker demo (Phases 1+2).
+Design-aligned Cave-over-Docker demo (Phases 1+2).
 
-Sphragis (inside QEMU) issues `batcave docker-*` commands. Those travel
+Sphragis (inside QEMU) issues `caves docker-*` commands. Those travel
 as a TCP connection to 10.0.2.2:9999 (QEMU slirp host alias), where
 the Mac-side `batcaved` daemon is listening. The daemon translates to
 Docker operations and streams output back.
@@ -48,7 +48,7 @@ def dedup_echo_line(s):
 def main():
     # ── Start the daemon ────────────────────────────────────
     print("=" * 76)
-    print(" DESIGN-ALIGNED BatCave-over-Docker — live demo (phases 1+2)")
+    print(" DESIGN-ALIGNED Cave-over-Docker — live demo (phases 1+2)")
     print("=" * 76)
 
     # Kill any existing daemon on port 9999
@@ -111,7 +111,7 @@ def main():
         # Skip kernel chatter + our own echo
         skip_prefixes = (
             "[mmu]", "[loader]", "[reloc]", "[runner]", "[shell]",
-            "[batcave", "[dms]", "[vfs]", "[sec", "[kbd]", "[gpu]",
+            "[caves", "[dms]", "[vfs]", "[sec", "[kbd]", "[gpu]",
             "[fs]", "[firewall]", "[net]", "[boot]", "[chromium",
             "[bs]", "[auth]", "[ipc]", "[arch]", "[rng]", "[sched]",
             "[mm]", "[security]", "[initrd]", "[dtb]", "[mmap]",
@@ -132,20 +132,20 @@ def main():
     print("=" * 76)
 
     # 1. Quick daemon connectivity check from inside Sphragis
-    run_cmd("batcave docker-ping", wait=15)
+    run_cmd("caves docker-ping", wait=15)
 
     # 2. Create a Kali cave from Sphragis shell
-    run_cmd("batcave docker-create kali kalilinux/kali-rolling NET_RAW,NET_ADMIN",
+    run_cmd("caves docker-create kali kalilinux/kali-rolling NET_RAW,NET_ADMIN",
             wait=30)
 
     # 3. List — should show kali cave
-    run_cmd("batcave docker-list", wait=15)
+    run_cmd("caves docker-list", wait=15)
 
     # 4. Run uname inside the cave via Sphragis
-    run_cmd("batcave docker-run kali uname -a", wait=15)
+    run_cmd("caves docker-run kali uname -a", wait=15)
 
     # 5. Run cat /etc/os-release — prove it IS Kali
-    run_cmd("batcave docker-run kali cat /etc/os-release", wait=15)
+    run_cmd("caves docker-run kali cat /etc/os-release", wait=15)
 
     # 6. Install nmap via the daemon (apt-get inside the cave)
     print()
@@ -159,13 +159,13 @@ def main():
 
     # 7. Now scan the Mac HTTP server via nmap from inside the Kali cave,
     #    driven from Sphragis:
-    run_cmd("batcave docker-run kali nmap -sV -Pn -p80 10.0.2.2", wait=60)
+    run_cmd("caves docker-run kali nmap -sV -Pn -p80 10.0.2.2", wait=60)
 
     # 8. Destroy the cave from Sphragis
-    run_cmd("batcave docker-destroy kali", wait=15)
+    run_cmd("caves docker-destroy kali", wait=15)
 
     # 9. List after destroy — should be empty
-    run_cmd("batcave docker-list", wait=15)
+    run_cmd("caves docker-list", wait=15)
 
     # ── Teardown ────────────────────────────────────────────
     print()
@@ -174,7 +174,7 @@ def main():
     daemon.terminate()
     daemon.wait(timeout=5)
     print("=" * 76)
-    print(" DONE — Sphragis shell drove end-to-end Docker BatCave lifecycle")
+    print(" DONE — Sphragis shell drove end-to-end Docker Cave lifecycle")
     print("=" * 76)
     print(f" QEMU log:    {RUN_LOG}")
     print(f" Daemon log:  {daemon_log}")

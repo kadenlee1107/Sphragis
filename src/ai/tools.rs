@@ -292,10 +292,10 @@ fn exec_read_concept_note(args: &str) -> String {
 /// list_caves — enumerate live caves. We don't expose internal
 /// pointers; just the labels the operator would see.
 fn exec_list_caves(_args: &str) -> String {
-    // The cave registry surface lives in `crate::batcave`. For Phase 2
+    // The cave registry surface lives in `crate::caves`. For Phase 2
     // we return a placeholder reflecting kernel availability; the
-    // real enumeration lands when `batcave::list()` is exposed.
-    String::from("{\"caves\":[],\"note\":\"cave enumeration pending batcave::list() surface\"}")
+    // real enumeration lands when `caves::list()` is exposed.
+    String::from("{\"caves\":[],\"note\":\"cave enumeration pending caves::list() surface\"}")
 }
 
 /// JSON-quote a string, escaping the four characters the inner JSON

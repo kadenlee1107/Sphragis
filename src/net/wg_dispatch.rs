@@ -37,8 +37,8 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::batcave::sys_wg_ipc;
-use crate::batcave::sys_wg_service::{self, PeerId};
+use crate::caves::sys_wg_ipc;
+use crate::caves::sys_wg_service::{self, PeerId};
 use crate::net::wireguard::{
     self, MSG_TYPE_INIT, MSG_TYPE_RESPONSE, MSG_TYPE_TRANSPORT, MSG_TYPE_COOKIE,
     WgError, KEY_LEN,

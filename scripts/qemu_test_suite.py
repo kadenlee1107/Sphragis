@@ -63,13 +63,13 @@ SHELL_TESTS = [
     ("fw",         "firewall stats"),
     ("ping 8.8.8.8",   "ping (QEMU user-net ICMP)"),
     ("dns example.com","dns resolve via QEMU user-net"),
-    ("batcave list",       "list BatCaves"),
-    ("batcave create test","create test BatCave"),
-    ("batcave grant test fs","grant fs cap"),
-    ("batcave grant test mem","grant mem cap"),
-    ("batcave list",       "list BatCaves after create"),
-    ("batcave destroy test","destroy test BatCave"),
-    ("batcave list",       "list BatCaves post-destroy"),
+    ("caves list",       "list Caves"),
+    ("caves create test","create test Cave"),
+    ("caves grant test fs","grant fs cap"),
+    ("caves grant test mem","grant mem cap"),
+    ("caves list",       "list Caves after create"),
+    ("caves destroy test","destroy test Cave"),
+    ("caves list",       "list Caves post-destroy"),
 ]
 
 # ── ELF tests (each in its own QEMU, noreturn) ──
@@ -94,7 +94,7 @@ APP_TESTS = [
     (5, "Security"),
     (6, "Comms"),
     # (7, "Browser"),   # user says skip — it's chromium host
-    (8, "BatCave"),
+    (8, "Cave"),
 ]
 
 PROMPT = rb"sphragis\s*>\s*"

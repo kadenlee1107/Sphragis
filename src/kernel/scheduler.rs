@@ -30,7 +30,7 @@ pub fn schedule() {
     let now = cntpct_now();
     let prev = LAST_SWITCH_TICK.swap(now, core::sync::atomic::Ordering::Relaxed);
     if prev > 0 && now > prev {
-        crate::batcave::cave::active_add_cpu_ticks(now - prev);
+        crate::caves::cave::active_add_cpu_ticks(now - prev);
     }
 
     let current_id = process::current_id();
@@ -108,9 +108,9 @@ pub fn schedule() {
             // to kernel-ns tasks. Harmless in Phase 2 (kernel-only
             // tasks don't access user VAs) but cleaner semantics,
             // and matters the moment we add real EL0 tasks.
-            crate::batcave::linux::mmu::switch_to_primary();
-        } else if let Some(target_l1) = crate::batcave::cave::get_cave_l1_phys(next_cave_id) {
-            crate::batcave::linux::mmu::switch_to_cave(target_l1);
+            crate::caves::linux::mmu::switch_to_primary();
+        } else if let Some(target_l1) = crate::caves::cave::get_cave_l1_phys(next_cave_id) {
+            crate::caves::linux::mmu::switch_to_cave(target_l1);
         }
         // No `else` for the "target cave but no L1 built yet" case
         // — leaving TTBR0 alone is correct then: the task wasn't

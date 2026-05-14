@@ -22,13 +22,13 @@ If a stranger reads the README and asks "is this real or marketing copy" — thi
 
 **Claim:** Workloads run inside per-cave isolation domains — each with its own L1 page table, mount namespace, IPC mailbox, memory quota, and security labels. Cave boundaries enforce TLB invalidation; cave-private state never crosses.
 
-- **Per-cave L1 page tables.** `feat/per-cave-kernel-partition` → `dd5bfda6` (cross-cave isolation verified). [`src/batcave/linux/mmu.rs::switch_to_cave`](../src/batcave/linux/mmu.rs).
+- **Per-cave L1 page tables.** `feat/per-cave-kernel-partition` → `dd5bfda6` (cross-cave isolation verified). [`src/caves/linux/mmu.rs::switch_to_cave`](../src/caves/linux/mmu.rs).
   - **Selftest:** `python3 scripts/qemu_cave_private_selftest.py` — proves that cave A cannot read or write memory mapped in cave B's TTBR0 window.
-- **Mount namespace per cave.** `feat/mount-ns-auto-apply` → `28875714`. [`src/batcave/cave.rs::active_mount_prefix`](../src/batcave/cave.rs).
+- **Mount namespace per cave.** `feat/mount-ns-auto-apply` → `28875714`. [`src/caves/cave.rs::active_mount_prefix`](../src/caves/cave.rs).
   - **Selftest:** `python3 scripts/qemu_mount_ns_selftest.py` — proves that two caves can each create a file named "config" without colliding; cave A cannot list cave B's filenames.
 - **Memory quota per cave.** `feat/batfs-quota-enforcement` → `aab7630c`; expansion to ELF runner via `feat/quota-cave-private-elf` → `28b53783`.
   - **Selftest:** `python3 scripts/qemu_batfs_quota_selftest.py` — proves quota is charged on `ns_create`, released on `ns_delete`, and that a cave exceeding its quota fails the write before reaching the encryption stage.
-- **IPC mailbox per cave (sys-wg).** Arc 3 slice 3 → `767306d0`. [`src/batcave/sys_wg_ipc.rs`](../src/batcave/sys_wg_ipc.rs).
+- **IPC mailbox per cave (sys-wg).** Arc 3 slice 3 → `767306d0`. [`src/caves/sys_wg_ipc.rs`](../src/caves/sys_wg_ipc.rs).
   - **Selftest:** `python3 scripts/qemu_sys_wg_ipc_selftest.py`.
 
 ---
@@ -107,7 +107,7 @@ If a stranger reads the README and asks "is this real or marketing copy" — thi
 - **Claim:** ARMv8.5 FEAT_SB (`sb`, NOP on older cores via `.inst 0xd50330ff`) emitted at three cross-domain transitions:
   - EL1→EL0 `eret` (in [`src/arch/aarch64/exceptions.s`](../src/arch/aarch64/exceptions.s) `RESTORE_REGS` macro, inlined into every vector)
   - Scheduler task switch ([`src/kernel/scheduler.rs::schedule`](../src/kernel/scheduler.rs))
-  - TTBR0 cave swap ([`src/batcave/linux/mmu.rs::switch_to_cave`](../src/batcave/linux/mmu.rs))
+  - TTBR0 cave swap ([`src/caves/linux/mmu.rs::switch_to_cave`](../src/caves/linux/mmu.rs))
 - **Commit:** `feat/spectre-barriers` → `2a46e307`.
 - **Evidence:** binary inspection — `llvm-objdump --triple=aarch64-unknown-none -d target/aarch64-unknown-none/release/sphragis | grep 'sb\b'` shows 8 `sb` instructions at the expected addresses (6 inlined from `RESTORE_REGS` × every vector that returns + 2 from sched/mmu).
 

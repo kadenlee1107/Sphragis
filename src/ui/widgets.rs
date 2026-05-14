@@ -450,7 +450,7 @@ pub fn draw_code_line(x: u32, y: u32, spans: &[(Tok, &str)]) {
     }
 }
 
-// ─── Wave 4 helpers (browser + batcave) ─────────────────────────────
+// ─── Wave 4 helpers (browser + caves) ─────────────────────────────
 
 /// Hash a host string to a deterministic 12x12 swatch color.
 /// 8-color palette: cyan/green/amber/red plus their dim variants.
@@ -507,7 +507,7 @@ pub fn draw_bookmark_chip(x: u32, y: u32, host: &str) -> u32 {
     x + chip_w
 }
 
-/// Geometric BatCave glyph — 64×48 stylized container box. Renders:
+/// Geometric Cave glyph — 64×48 stylized container box. Renders:
 /// * outer container rectangle (1px stroke in `color`)
 /// * dashed inner seal rect
 /// * 4 corner notches (small L-shapes)

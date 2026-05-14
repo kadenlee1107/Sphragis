@@ -2,7 +2,7 @@
 # Driver for the attacks that MUST run on the live kernel under QEMU.
 # Today this is a stub: the kernel's QEMU harness isn't wired for a
 # pentest ELF loader yet, so the concrete exploit ELFs (KM-007, KM-009,
-# KM-011, KM-015, KM-016, KM-029, KM-030) need to be built as BatCave
+# KM-011, KM-015, KM-016, KM-029, KM-030) need to be built as Cave
 # guests and handed to the runner.
 #
 # Usage:

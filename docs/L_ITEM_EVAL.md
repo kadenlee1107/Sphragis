@@ -23,7 +23,7 @@ and our fixed-size kernel allocations.
   per-task priority; extend it to track per-cave cumulative ticks
   consumed during a window. When a cave exceeds its share, lower
   every task's effective priority by N for the next window. ~150 LOC
-  in `scheduler.rs` + a `cpu_quota` field on `BatCave`.
+  in `scheduler.rs` + a `cpu_quota` field on `Cave`.
 - **Memory**: per-cave page count. `mm::frame::alloc_frame` currently
   has no idea who's asking. Need to thread the active cave id through
   the allocation path (or look it up via `cave::get_active()` at

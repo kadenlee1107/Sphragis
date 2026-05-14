@@ -86,11 +86,11 @@ Purely additive. Build stays clean. Lays groundwork for Phases 5-6.
 ### Task 1.1: Add time helpers
 
 **Files:**
-- Modify: `src/batcave/linux/threads.rs`
+- Modify: `src/caves/linux/threads.rs`
 
 - [ ] **Step 1: Find a good insertion point**
 
-Run: `grep -n '^pub fn schedule\|^pub fn current_tid\|^pub fn mark_current_runnable' src/batcave/linux/threads.rs | head -3`
+Run: `grep -n '^pub fn schedule\|^pub fn current_tid\|^pub fn mark_current_runnable' src/caves/linux/threads.rs | head -3`
 Find a stable anchor near the bottom of the file's "public scheduler API" section. Insert the new helpers immediately above the first scheduler-API public function found.
 
 - [ ] **Step 2: Add the time helpers**
@@ -139,7 +139,7 @@ Expected: `Finished ...`. May produce `function never used` warnings on the new 
 ### Task 1.2: Add `current_thread_blocked` helper
 
 **Files:**
-- Modify: `src/batcave/linux/threads.rs`
+- Modify: `src/caves/linux/threads.rs`
 
 - [ ] **Step 1: Insert below the time helpers**
 
@@ -166,7 +166,7 @@ Expected: `Finished ...`. The function uses `current_tid`, `with_table`, `slot_o
 ### Task 1.3: Add `park_current(reason)` primitive
 
 **Files:**
-- Modify: `src/batcave/linux/threads.rs`
+- Modify: `src/caves/linux/threads.rs`
 
 - [ ] **Step 1: Insert below `current_thread_blocked`**
 
@@ -228,7 +228,7 @@ If any of these are violated, the lock/IRQ invariants in the doc comment do not 
 
 Run:
 ```bash
-git add src/batcave/linux/threads.rs
+git add src/caves/linux/threads.rs
 git commit -m "$(cat <<'EOF'
 🎯 scheduler-block-on: time helpers + park_current primitive
 
@@ -261,7 +261,7 @@ Purely additive. Both functions walk the threads table and flip Blocked→Runnab
 ### Task 2.1: Add `wake_expired_deadlines`
 
 **Files:**
-- Modify: `src/batcave/linux/threads.rs`
+- Modify: `src/caves/linux/threads.rs`
 
 - [ ] **Step 1: Insert below `park_current`**
 
@@ -310,13 +310,13 @@ The plan keeps them separate for clarity but either ordering is acceptable. If y
 
 - [ ] **Step 2: Confirm Phase 4 has run (or you'll combine)**
 
-Run: `grep -n 'deadline_ticks' src/batcave/linux/threads.rs | head -3`
+Run: `grep -n 'deadline_ticks' src/caves/linux/threads.rs | head -3`
 Expected: at least one hit inside the `pub enum BlockReason` definition. If empty, run Phase 4 first.
 
 ### Task 2.2: Add `wake_epoll_waiters`
 
 **Files:**
-- Modify: `src/batcave/linux/threads.rs`
+- Modify: `src/caves/linux/threads.rs`
 
 - [ ] **Step 1: Insert below `wake_expired_deadlines`**
 
@@ -351,7 +351,7 @@ Expected: `Finished ...`. Both new functions may produce `function never used` w
 
 Run:
 ```bash
-git add src/batcave/linux/threads.rs
+git add src/caves/linux/threads.rs
 git commit -m "$(cat <<'EOF'
 🎯 scheduler-block-on: wake_expired_deadlines + wake_epoll_waiters
 
@@ -396,9 +396,9 @@ Use Edit to find:
 
 ```rust
 pub fn tick() {
-    // Drain up to DRAIN_CHUNK bytes from the BatCave stdio ring to the UART.
+    // Drain up to DRAIN_CHUNK bytes from the Cave stdio ring to the UART.
     // Decouples Chromium's verbose stderr from PL011 back-pressure.
-    crate::batcave::linux::stdio_ring::drain_to_uart();
+    crate::caves::linux::stdio_ring::drain_to_uart();
     schedule();
 }
 ```
@@ -407,12 +407,12 @@ Replace with:
 
 ```rust
 pub fn tick() {
-    // Drain up to DRAIN_CHUNK bytes from the BatCave stdio ring to the UART.
+    // Drain up to DRAIN_CHUNK bytes from the Cave stdio ring to the UART.
     // Decouples verbose stderr from PL011 back-pressure.
-    crate::batcave::linux::stdio_ring::drain_to_uart();
+    crate::caves::linux::stdio_ring::drain_to_uart();
     // Wake any thread whose deadline has passed. Bounded O(MAX_THREADS)
     // per tick. See DESIGN_SCHEDULER_BLOCK_ON.md decision #4.
-    crate::batcave::linux::threads::wake_expired_deadlines();
+    crate::caves::linux::threads::wake_expired_deadlines();
     schedule();
 }
 ```
@@ -456,16 +456,16 @@ The current `BlockReason` defines `EpollWait { epfd, timeout_ms }` and `Nanoslee
 ### Task 4.1: Rename the BlockReason fields
 
 **Files:**
-- Modify: `src/batcave/linux/threads.rs` (the `pub enum BlockReason` definition, ~line 296-309)
+- Modify: `src/caves/linux/threads.rs` (the `pub enum BlockReason` definition, ~line 296-309)
 
 - [ ] **Step 1: Locate the BlockReason enum**
 
-Run: `grep -n '^pub enum BlockReason' src/batcave/linux/threads.rs`
+Run: `grep -n '^pub enum BlockReason' src/caves/linux/threads.rs`
 Expected: a single hit around line 296.
 
 - [ ] **Step 2: Read the variants**
 
-Run: `sed -n '296,310p' src/batcave/linux/threads.rs`
+Run: `sed -n '296,310p' src/caves/linux/threads.rs`
 
 You should see something like:
 
@@ -498,11 +498,11 @@ with:
 ### Task 4.2: Update the diagnostic encoding
 
 **Files:**
-- Modify: `src/batcave/linux/threads.rs` (~lines 1289-1302)
+- Modify: `src/caves/linux/threads.rs` (~lines 1289-1302)
 
 - [ ] **Step 1: Locate the diagnostic match**
 
-Run: `grep -n 'BlockReason::EpollWait { epfd, timeout_ms }' src/batcave/linux/threads.rs`
+Run: `grep -n 'BlockReason::EpollWait { epfd, timeout_ms }' src/caves/linux/threads.rs`
 Expected: a single hit around line 1291.
 
 - [ ] **Step 2: Update the (a1, a2) match arm**
@@ -546,7 +546,7 @@ grep -rn 'timeout_ms\|deadline_ns' src/ --include='*.rs'
 
 Run:
 ```bash
-rg 'timeout_ms\b|deadline_ns\b' src/batcave/linux/{epoll,threads,syscall}.rs
+rg 'timeout_ms\b|deadline_ns\b' src/caves/linux/{epoll,threads,syscall}.rs
 ```
 Expected: empty.
 
@@ -554,7 +554,7 @@ Expected: empty.
 
 Run:
 ```bash
-git add src/batcave/linux/threads.rs
+git add src/caves/linux/threads.rs
 git commit -m "$(cat <<'EOF'
 🎯 scheduler-block-on: BlockReason field rename — deadline_ticks
 
@@ -589,23 +589,23 @@ EOF
 ### Task 5.1: Locate `sys_nanosleep`
 
 **Files:**
-- Modify: `src/batcave/linux/syscall.rs`
+- Modify: `src/caves/linux/syscall.rs`
 
 - [ ] **Step 1: Find the function**
 
-Run: `grep -n '^fn sys_nanosleep' src/batcave/linux/syscall.rs`
+Run: `grep -n '^fn sys_nanosleep' src/caves/linux/syscall.rs`
 Expected: a single hit around line 1048.
 
 - [ ] **Step 2: Read the current body**
 
-Run: `sed -n '1048,1100p' src/batcave/linux/syscall.rs`
+Run: `sed -n '1048,1100p' src/caves/linux/syscall.rs`
 
 You'll see the existing tight-poll-with-yield-every-256-iterations loop ending in `0`.
 
 ### Task 5.2: Replace with `park_current` loop
 
 **Files:**
-- Modify: `src/batcave/linux/syscall.rs:~1080-1095` (the loop body, plus the deadline computation)
+- Modify: `src/caves/linux/syscall.rs:~1080-1095` (the loop body, plus the deadline computation)
 
 - [ ] **Step 1: Replace the loop body**
 
@@ -664,7 +664,7 @@ Expected: `Finished ...`. The compiler should now see that `BlockReason::Nanosle
 
 Run:
 ```bash
-git add src/batcave/linux/syscall.rs
+git add src/caves/linux/syscall.rs
 git commit -m "$(cat <<'EOF'
 🎯 scheduler-block-on: sys_nanosleep parks on deadline
 
@@ -693,11 +693,11 @@ EOF
 ### Task 6.1: Rewrite `epoll_pwait`
 
 **Files:**
-- Modify: `src/batcave/linux/epoll.rs:450-509` (the function body)
+- Modify: `src/caves/linux/epoll.rs:450-509` (the function body)
 
 - [ ] **Step 1: Locate `epoll_pwait`**
 
-Run: `grep -n '^pub fn epoll_pwait' src/batcave/linux/epoll.rs`
+Run: `grep -n '^pub fn epoll_pwait' src/caves/linux/epoll.rs`
 Expected: a single hit around line 450.
 
 - [ ] **Step 2: Replace the spin loop with park_current**
@@ -749,8 +749,8 @@ Replace with:
             return drain_ready(slot, events, maxevents as usize) as i64;
         }
         t if t < 0 => 0u64, // infinite
-        t => crate::batcave::linux::threads::cntpct_el0()
-            .saturating_add(crate::batcave::linux::threads::ms_to_ticks(t as u32)),
+        t => crate::caves::linux::threads::cntpct_el0()
+            .saturating_add(crate::caves::linux::threads::ms_to_ticks(t as u32)),
     };
 
     loop {
@@ -759,11 +759,11 @@ Replace with:
             return n as i64;
         }
         // Deadline expired? deadline_ticks=0 means infinite — never times out.
-        if deadline_ticks != 0 && crate::batcave::linux::threads::cntpct_el0() >= deadline_ticks {
+        if deadline_ticks != 0 && crate::caves::linux::threads::cntpct_el0() >= deadline_ticks {
             return 0;
         }
-        crate::batcave::linux::threads::park_current(
-            crate::batcave::linux::threads::BlockReason::EpollWait { epfd, deadline_ticks },
+        crate::caves::linux::threads::park_current(
+            crate::caves::linux::threads::BlockReason::EpollWait { epfd, deadline_ticks },
         );
         // park_current does not return while we're Blocked. On loop
         // re-entry, drain_ready re-checks readiness and the deadline
@@ -774,14 +774,14 @@ Replace with:
 
 - [ ] **Step 3: Remove `cooperative_yield` (now orphaned)**
 
-Run: `grep -n 'fn cooperative_yield\|cooperative_yield()' src/batcave/linux/epoll.rs`
+Run: `grep -n 'fn cooperative_yield\|cooperative_yield()' src/caves/linux/epoll.rs`
 
 Find both the function definition (around line 701) and any remaining call sites. The previous step removed the only call site; if grep shows only the definition, delete the definition (along with its preceding doc comment).
 
 Use Edit to delete:
 
 ```rust
-/// Cooperative yield. Calls into the BatCave thread scheduler so other
+/// Cooperative yield. Calls into the Cave thread scheduler so other
 /// runnable threads in this cave can make progress while we wait for
 /// an FD to become ready. Replaces the old asm-only `yield` hint which
 /// only nudged the CPU but did NOT switch threads — that meant a
@@ -790,7 +790,7 @@ Use Edit to delete:
 /// wake it. Now each unsuccessful drain_ready hands the CPU back.
 #[inline(always)]
 fn cooperative_yield() {
-    crate::batcave::linux::threads::schedule();
+    crate::caves::linux::threads::schedule();
 }
 ```
 
@@ -802,16 +802,16 @@ Expected: `Finished ...`. `BlockReason::EpollWait { epfd, deadline_ticks }` is n
 ### Task 6.2: Hook `mark_ready` to wake parked waiters
 
 **Files:**
-- Modify: `src/batcave/linux/epoll.rs` — the `mark_ready` function (search for its definition).
+- Modify: `src/caves/linux/epoll.rs` — the `mark_ready` function (search for its definition).
 
 - [ ] **Step 1: Locate `mark_ready`**
 
-Run: `grep -n '^pub fn mark_ready\|^fn mark_ready' src/batcave/linux/epoll.rs`
+Run: `grep -n '^pub fn mark_ready\|^fn mark_ready' src/caves/linux/epoll.rs`
 Expected: a single hit (the function that consumers like `tcp.rs::recv` will eventually call).
 
 - [ ] **Step 2: Read the current body**
 
-Run: `sed -n '<line>,<line+30>p' src/batcave/linux/epoll.rs` substituting the line number from Step 1.
+Run: `sed -n '<line>,<line+30>p' src/caves/linux/epoll.rs` substituting the line number from Step 1.
 
 The function flips a ready bit on the relevant interest entry. After the bit-flip, add the wake call.
 
@@ -821,7 +821,7 @@ Use Edit to insert at the END of `mark_ready`'s body (before the closing `}`):
 
 ```rust
     // Wake any thread parked on this epfd. Bounded O(MAX_THREADS).
-    crate::batcave::linux::threads::wake_epoll_waiters(epfd);
+    crate::caves::linux::threads::wake_epoll_waiters(epfd);
 ```
 
 If `mark_ready` takes `epfd: i32` directly, the call works as-is. If `mark_ready` takes a different identifier (`slot`, `instance_idx`, etc.), trace it back to the `epfd` value associated with that slot — there's likely a helper like `epfd_for_slot(slot)` already, or `mark_ready` receives the epfd as an additional parameter from its callers.
@@ -839,7 +839,7 @@ Expected: `Finished ...`.
 
 Run:
 ```bash
-rg 'SPIN_PER_MS|cooperative_yield' src/batcave/linux/epoll.rs
+rg 'SPIN_PER_MS|cooperative_yield' src/caves/linux/epoll.rs
 ```
 Expected: empty.
 
@@ -847,7 +847,7 @@ Expected: empty.
 
 Run:
 ```bash
-git add src/batcave/linux/epoll.rs
+git add src/caves/linux/epoll.rs
 git commit -m "$(cat <<'EOF'
 🎯 scheduler-block-on: epoll_pwait parks; mark_ready wakes parked waiters
 
@@ -883,11 +883,11 @@ Comment-only changes. No behavior change.
 ### Task 7.1: Update top-of-file overview
 
 **Files:**
-- Modify: `src/batcave/linux/futex.rs:34-45` (the comment block describing block/wake integration).
+- Modify: `src/caves/linux/futex.rs:34-45` (the comment block describing block/wake integration).
 
 - [ ] **Step 1: Read the current block**
 
-Run: `sed -n '30,46p' src/batcave/linux/futex.rs`
+Run: `sed -n '30,46p' src/caves/linux/futex.rs`
 
 - [ ] **Step 2: Replace with accurate description**
 
@@ -925,11 +925,11 @@ Replace with:
 ### Task 7.2: Update `park_slot` TODO
 
 **Files:**
-- Modify: `src/batcave/linux/futex.rs` — the comment block above `fn park_slot` (~line 270-276).
+- Modify: `src/caves/linux/futex.rs` — the comment block above `fn park_slot` (~line 270-276).
 
 - [ ] **Step 1: Locate**
 
-Run: `grep -n 'TODO(sched)' src/batcave/linux/futex.rs`
+Run: `grep -n 'TODO(sched)' src/caves/linux/futex.rs`
 Expected: 1-2 hits.
 
 - [ ] **Step 2: Replace**
@@ -960,7 +960,7 @@ fn park_slot(b: &Bucket, slot: usize, uaddr: u64, val: u32) -> i64 {
 
 - [ ] **Step 3: Verify no remaining TODO(sched)**
 
-Run: `grep -n 'TODO(sched)' src/batcave/linux/futex.rs`
+Run: `grep -n 'TODO(sched)' src/caves/linux/futex.rs`
 Expected: empty.
 
 ### Task 7.3: Commit Phase 7
@@ -969,7 +969,7 @@ Expected: empty.
 
 Run:
 ```bash
-git add src/batcave/linux/futex.rs
+git add src/caves/linux/futex.rs
 git commit -m "🎯 scheduler-block-on: clean up stale TODO(sched) comments in futex.rs
 
 Two doc blocks claimed FUTEX_WAIT spins because 'the Linux runner
@@ -997,7 +997,7 @@ Add three small helpers in `linux::threads` that operate only on Free slots so t
 ### Task 8.1: Add the helpers
 
 **Files:**
-- Modify: `src/batcave/linux/threads.rs` (insert near the bottom of the public API section).
+- Modify: `src/caves/linux/threads.rs` (insert near the bottom of the public API section).
 
 - [ ] **Step 1: Find a good insertion point**
 
@@ -1075,7 +1075,7 @@ Both expected: `Finished ...`. The default build doesn't see the test helpers (c
 
 Run:
 ```bash
-git add src/batcave/linux/threads.rs
+git add src/caves/linux/threads.rs
 git commit -m "$(cat <<'EOF'
 🎯 scheduler-block-on: feature-gated test helpers in linux::threads
 
@@ -1129,7 +1129,7 @@ Use Edit to insert this block:
 /// scripts/qemu_selftests_smoke.py.
 #[cfg(feature = "selftest-on-boot")]
 pub(crate) fn cmd_scheduler_selftest() {
-    use crate::batcave::linux::threads::{
+    use crate::caves::linux::threads::{
         cntpct_el0, wake_expired_deadlines, wake_epoll_waiters,
         test_install_blocked, test_inspect_state, test_release_slot,
         BlockReason, ThreadState,
@@ -1512,17 +1512,17 @@ EOF
 
 Run:
 ```bash
-rg 'SPIN_PER_MS|timeout_ms\b|deadline_ns\b' src/batcave/linux/{epoll,threads,syscall}.rs
+rg 'SPIN_PER_MS|timeout_ms\b|deadline_ns\b' src/caves/linux/{epoll,threads,syscall}.rs
 ```
 Expected: empty.
 
 ```bash
-rg 'TODO\(sched\)' src/batcave/linux/futex.rs
+rg 'TODO\(sched\)' src/caves/linux/futex.rs
 ```
 Expected: empty.
 
 ```bash
-rg 'cooperative_yield' src/batcave/linux/epoll.rs
+rg 'cooperative_yield' src/caves/linux/epoll.rs
 ```
 Expected: empty.
 
@@ -1561,7 +1561,7 @@ Expected: PASS, ≥2 x509 + ≥3 scheduler sub-tests, zero FAIL.
 
 - [ ] **Step 1: Re-read `park_current` body**
 
-Open `src/batcave/linux/threads.rs`, find `pub fn park_current`, re-read carefully.
+Open `src/caves/linux/threads.rs`, find `pub fn park_current`, re-read carefully.
 
 Confirm by inspection:
 - Loop exit condition is `!current_thread_blocked()`.

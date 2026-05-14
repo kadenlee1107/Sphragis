@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Unified BatCave demo — phases 5, 6, 7 all exercised.
+Unified Cave demo — phases 5, 6, 7 all exercised.
 
-Proves `batcave list/destroy/run/seal` work identically on native AND
+Proves `caves list/destroy/run/seal` work identically on native AND
 docker-backed caves, and that the wipe path reaches both.
 """
 import pexpect
@@ -39,7 +39,7 @@ def dedup(s):
 
 def clean_lines(raw):
     SKIP = ("[mmu]", "[loader]", "[reloc]", "[runner]", "[shell]",
-            "[batcave", "[dms]", "[vfs]", "[kbd]", "[gpu]", "[fs]",
+            "[caves", "[dms]", "[vfs]", "[kbd]", "[gpu]", "[fs]",
             "[firewall]", "[net]", "[boot]", "[chromium", "[bs]",
             "[auth]", "[ipc]", "[arch]", "[rng]", "[sched]", "[mm]",
             "[security]", "[initrd]", "[dtb]", "[mmap]", "[docker]",
@@ -65,7 +65,7 @@ def main():
     time.sleep(0.5)
 
     print("=" * 76)
-    print(" UNIFIED BatCave demo — phases 5+6+7")
+    print(" UNIFIED Cave demo — phases 5+6+7")
     print("=" * 76)
     print(f"[mac]  batcaved pid={daemon.pid}  log={DLOG.name}")
 
@@ -104,27 +104,27 @@ def main():
                 print(f"   {l[:120]}")
 
     print("=" * 76)
-    print(" PHASE 6 — unified `batcave create/list/destroy/run` over both backings")
+    print(" PHASE 6 — unified `caves create/list/destroy/run` over both backings")
     print("=" * 76)
 
     # Native cave
-    run("batcave create native-cave", 10, "create a native (MMU) cave")
-    # Docker cave — one command, same `batcave create`
-    run("batcave create kali-recon --docker:kalilinux/kali-rolling --caps:NET_RAW,NET_ADMIN",
+    run("caves create native-cave", 10, "create a native (MMU) cave")
+    # Docker cave — one command, same `caves create`
+    run("caves create kali-recon --docker:kalilinux/kali-rolling --caps:NET_RAW,NET_ADMIN",
         30, "create a docker cave — same command, different backing")
     # Unified list
-    run("batcave list", 10, "both caves in one list, with [native] / [docker:...] tag")
+    run("caves list", 10, "both caves in one list, with [native] / [docker:...] tag")
     # Unified run — auto-detects docker via cave lookup
-    run("batcave run kali-recon uname -a", 20,
+    run("caves run kali-recon uname -a", 20,
         "run inside docker cave — routed by backing")
     # Native run still works (shell-host fallback)
-    run("batcave run uname", 15, "native busybox — unchanged behaviour")
+    run("caves run uname", 15, "native busybox — unchanged behaviour")
 
     print()
     print("=" * 76)
-    print(" PHASE 7 — `batcave seal` one-way ratchet (persistent → ephemeral)")
+    print(" PHASE 7 — `caves seal` one-way ratchet (persistent → ephemeral)")
     print("=" * 76)
-    run("batcave seal kali-recon", 5,
+    run("caves seal kali-recon", 5,
         "seal the docker cave — now destroyed on any wipe")
 
     print()
@@ -137,11 +137,11 @@ def main():
     # fans out to docker_client::destroy_all.
     # Actually panic halts Sphragis; use explicit unified `destroy` instead
     # to exercise the same docker-cleanup code path from cave::destroy.
-    run("batcave destroy kali-recon", 30,
+    run("caves destroy kali-recon", 30,
         "unified destroy → docker container rm AND cave key zero")
-    run("batcave list", 10, "docker cave gone; native cave remains")
-    run("batcave destroy native-cave", 10, "tear down the native cave")
-    run("batcave list", 10, "all gone")
+    run("caves list", 10, "docker cave gone; native cave remains")
+    run("caves destroy native-cave", 10, "tear down the native cave")
+    run("caves list", 10, "all gone")
 
     # Also verify with the daemon directly that the container is really gone
     print()

@@ -84,7 +84,7 @@ def main():
 
             # 2. Verify via docker exec that curl actually works.
             chk = subprocess.run(
-                ["docker", "exec", f"batcave-{CAVE}", "curl", "--version"],
+                ["docker", "exec", f"caves-{CAVE}", "curl", "--version"],
                 capture_output=True, text=True,
             )
             assert chk.returncode == 0, f"curl in container failed: {chk.stderr}"

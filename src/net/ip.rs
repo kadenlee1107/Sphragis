@@ -155,8 +155,8 @@ pub fn send(dst_ip: u32, protocol: u8, payload: &[u8]) -> Result<(), &'static st
     // SECMARK decision: emit CIPSO only when the active cave has
     // raised its sensitivity above Unclassified. Otherwise the
     // header stays at IHL=5 / 20 bytes (no behavioural change).
-    use crate::batcave::cave::Sensitivity;
-    let active_sens = crate::batcave::cave::active_sensitivity();
+    use crate::caves::cave::Sensitivity;
+    let active_sens = crate::caves::cave::active_sensitivity();
     let emit_cipso  = active_sens != Sensitivity::Unclassified;
     let opt_bytes   = if emit_cipso { SECMARK_OPT_LEN } else { 0 };
     let header_len  = IP_HDR_SIZE + opt_bytes;
@@ -227,8 +227,8 @@ pub fn send(dst_ip: u32, protocol: u8, payload: &[u8]) -> Result<(), &'static st
 /// SECMARK CIPSO emission without owning a real NIC. Returns 0 on
 /// any sizing error.
 pub fn build_test_packet(dst_ip: u32, protocol: u8, payload: &[u8], out: &mut [u8]) -> usize {
-    use crate::batcave::cave::Sensitivity;
-    let active_sens = crate::batcave::cave::active_sensitivity();
+    use crate::caves::cave::Sensitivity;
+    let active_sens = crate::caves::cave::active_sensitivity();
     let emit_cipso  = active_sens != Sensitivity::Unclassified;
     let opt_bytes   = if emit_cipso { SECMARK_OPT_LEN } else { 0 };
     let header_len  = IP_HDR_SIZE + opt_bytes;

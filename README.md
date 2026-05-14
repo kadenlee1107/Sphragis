@@ -89,7 +89,7 @@ tpi-wired-ops-selftest    full M-of-2 quorum drill on destructive ops
 ```
 src/
   arch/         AArch64 exception vectors + low-level boot
-  batcave/      The "cave" isolation primitive — unit of policy enforcement
+  caves/      The "cave" isolation primitive — unit of policy enforcement
   crypto/       ChaCha20-Poly1305, Ed25519, SHA-256, Argon2id, X25519
   drivers/      virtio (QEMU) and apple/ (M4-specific HW bring-up)
   fs/           BatFS encrypted filesystem
