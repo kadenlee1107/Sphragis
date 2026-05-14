@@ -82,7 +82,7 @@ tpi-wired-ops-selftest    full M-of-2 quorum drill on destructive ops
 - [`DESIGN_NO_BROWSER.md`](DESIGN_NO_BROWSER.md) — why we ripped out the in-tree browser.
 - [`DESIGN_TLS_HARDENING.md`](DESIGN_TLS_HARDENING.md) — TLS posture.
 - [`DESIGN_HTTPS_SYSCALL.md`](DESIGN_HTTPS_SYSCALL.md) — kernel-mediated HTTPS for caves.
-- [`docs/SESSION_JOURNAL.md`](docs/SESSION_JOURNAL.md) — chronological development log.
+- [`docs/INTERNAL.md`](docs/INTERNAL.md) — pointer to the private companion repo holding the M4 hardware reverse-engineering data and development journal.
 
 ## Codebase layout
 
