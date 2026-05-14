@@ -1,7 +1,11 @@
 // Sphragis — Desktop Environment
 // Main event loop. Handles keyboard input, app switching, rendering.
 // Ctrl+1-5 switches between apps.
-// XXX Wave-2-temp: 65 old-WM call sites commented out, restored in Task 7.
+// XXX Wave-2-temp: 43 old-WM call sites commented out, restored in Task 7.
+// XXX Wave-2-temp: render_current() and render_app() were rewritten as stubs
+// XXX Wave-2-temp: (shell-only paint + empty match), NOT line-commented.
+// XXX Wave-2-temp: Task 7 must rewrite both from scratch — do not expect to
+// XXX Wave-2-temp: uncomment them.
 
 use crate::platform;
 use crate::security;

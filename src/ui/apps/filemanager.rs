@@ -1,5 +1,5 @@
 // Sphragis — FS · File Manager
-// XXX Wave-2-temp: 3 old-WM call sites commented out, restored in Task 7.
+// XXX Wave-2-temp: 2 old-WM call sites commented out, restored in Task 7.
 #![allow(dead_code)]
 //
 // Claude-Design Wave-3 port. Source artifacts in

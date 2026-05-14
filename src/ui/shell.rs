@@ -1,7 +1,7 @@
 // Sphragis — Interactive Kernel Shell
 // Command-line interface rendered to the GPU console.
 // Reads from UART, displays on framebuffer.
-// XXX Wave-2-temp: 2 old-WM call sites commented out, restored in Task 7.
+// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
 
 use crate::platform;
 use crate::ui::console;
