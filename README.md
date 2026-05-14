@@ -113,7 +113,7 @@ Dependencies are MIT / Apache-2.0 / BSD / CC0 / Unlicense throughout — verifie
 ## Contact
 
 - **GitHub:** [@kadenlee1107](https://github.com/kadenlee1107)
-- **General + commercial license inquiries:** [project email — pending Phase A]
+- **General + commercial license inquiries:** [sphragis-os@proton.me](mailto:sphragis-os@proton.me) (PGP key on request)
 
 ## Development practice
 
