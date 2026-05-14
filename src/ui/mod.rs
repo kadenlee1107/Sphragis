@@ -7,6 +7,7 @@ pub mod gpu;
 pub mod shell;
 pub mod shell_completion;
 pub mod shell_history;
+pub mod sigma_bitmap;
 pub mod truetype;
 pub mod widgets;
 pub mod wm;

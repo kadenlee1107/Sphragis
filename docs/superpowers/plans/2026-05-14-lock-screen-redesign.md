@@ -479,7 +479,7 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, _attempts: 
     let glyph_x = cx - glyph_advance / 2;
     let glyph_y = cy - STACK_ABOVE_CENTER as i32 - GLYPH_SIZE_PX as i32;
     crate::ui::truetype::draw_glyph(
-        fb, w,
+        fb, w, h,
         glyph_x, glyph_y,
         0x03A3,
         crate::ui::truetype::FontFace::PlexSerifItalic,
@@ -505,7 +505,7 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, _attempts: 
     let wordmark_y = glyph_y + GLYPH_SIZE_PX as i32 + WORDMARK_GAP as i32;
     for ch in wordmark.chars() {
         let adv = crate::ui::truetype::draw_glyph(
-            fb, w,
+            fb, w, h,
             wordmark_x, wordmark_y,
             ch as u32,
             crate::ui::truetype::FontFace::PlexSansMedium,

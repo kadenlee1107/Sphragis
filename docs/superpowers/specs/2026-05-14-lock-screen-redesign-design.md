@@ -1,8 +1,22 @@
 # Lock Screen Redesign — Design
 
 **Date:** 2026-05-14
-**Status:** Approved (brainstormed); pending implementation plan
+**Status:** Wave 1 shipped; see *As implemented* below for deviations from the brainstormed design.
 **Wave:** 1 of N (UI overhaul; see *Scope boundary*)
+
+## As implemented
+
+Two deviations from the design below, both forced by the kernel's TrueType rasterizer (`src/ui/truetype.rs`) producing structurally broken glyphs at small sizes — bugs in the outline-iteration code that we couldn't reliably fix inside Wave 1's scope.
+
+1. **Wordmark omitted.** "SPHRAGIS" in IBM Plex Sans Medium rendered with visible structural defects (notches on G, broken curves on S and R). The 8×16 bitmap-font fallback at 3× scale was crisp but read as pixel art on a screen otherwise targeting refined typography. Per the silent-denial/quiet register the design is aiming for, dropping the wordmark entirely produces the cleanest read — Σ alone *is* "the seal." The wordmark returns in a future wave once the rasterizer is clean.
+2. **Σ rendered from a baked offline bitmap, not at runtime.** `scripts/gen_sigma_bitmap.py` renders Σ via PIL + IBM Plex Serif Italic at 8× supersampled with a small Gaussian smooth, downsamples to 96×96, and bakes the alpha bitmap into the kernel binary as `src/ui/sigma_bitmap.rs`. The kernel just alpha-blits the bytes (`draw::blit_alpha_bitmap`). Same italic-serif look the design called for, just pre-computed at build time instead of rasterized at boot.
+
+Wave 5 follow-up is now scoped to: fix the rasterizer outline iteration so we can ship a runtime-rendered wordmark in Plex Sans Medium and switch Σ back to a runtime TrueType call (or keep the baked path — both are then available).
+
+Everything else in this design — the 5-color palette, the layout geometry, the four-state machine, the silent denial principle, the silent lockout, the input-drain during cooldown, the helper-function kill list, the 200 ms granted hold — landed verbatim.
+
+---
+
 
 ## Goal
 
