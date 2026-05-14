@@ -11,7 +11,7 @@
 // ---------------------------------------------------------------------------
 
 /// Maximum glyph bitmap dimension (pixels).
-const MAX_GLYPH_SIZE: usize = 64;
+const MAX_GLYPH_SIZE: usize = 128;
 
 /// Maximum number of points in a single glyph outline.
 const MAX_POINTS: usize = 512;
@@ -314,9 +314,23 @@ impl TrueTypeFont {
     }
 
     fn glyph_length(&self, glyph_id: u16) -> usize {
-        if glyph_id + 1 >= self.num_glyphs { return 0; }
-        let next = self.glyph_offset(glyph_id + 1);
-        let cur = self.glyph_offset(glyph_id);
+        if glyph_id >= self.num_glyphs { return 0; }
+        let data = self.data;
+        let base = self.loca_offset;
+        let id = glyph_id as usize;
+        let cur = if self.loca_format == 0 {
+            (u16be(data, base + id * 2) as usize) * 2
+        } else {
+            u32be(data, base + id * 4) as usize
+        };
+        // loca[num_glyphs] is the past-end sentinel — valid to read for the
+        // LAST glyph (id == num_glyphs - 1). Without this branch, the last
+        // glyph in any font is silently rendered as empty.
+        let next = if self.loca_format == 0 {
+            (u16be(data, base + (id + 1) * 2) as usize) * 2
+        } else {
+            u32be(data, base + (id + 1) * 4) as usize
+        };
         if next > cur { next - cur } else { 0 }
     }
 
