@@ -343,14 +343,15 @@ pub fn draw_frame() {
     // ── TITLE BAR ───────────────────────────────────────────────
     gpu::fill_rect(0, 0, w, TITLE_H, BG);
 
-    // 1) Brand block — bat-mini + "SPHRAGIS" wordmark.
+    // 1) Brand block — "S" mark + "SPHRAGIS" wordmark.
     let brand_text_y = (TITLE_H - CHAR_H) / 2;
-    let bat_y = (TITLE_H - 12) / 2;
-    draw::draw_bat_mini(14, bat_y, CYAN);
-    let wordmark_x = 14 + 18 + 8; // bat width + gap
-    font::draw_str(fb, w, wordmark_x, brand_text_y, "BAT", INK, BG);
-    font::draw_str(fb, w, wordmark_x + 3 * CHAR_W, brand_text_y, "_", CYAN, BG);
-    font::draw_str(fb, w, wordmark_x + 4 * CHAR_W, brand_text_y, "OS", INK, BG);
+    let mark_y = (TITLE_H - draw::PROJECT_GLYPH_MINI_H) / 2;
+    draw::draw_project_glyph_mini(14, mark_y, CYAN);
+    // wordmark sits to the right of the S mark, with an 8 px gap.
+    let wordmark_x = 14 + draw::PROJECT_GLYPH_MINI_W + 8;
+    // Leading "S" cyan to bookend with the mark; trailing "PHRAGIS" in INK.
+    font::draw_str(fb, w, wordmark_x, brand_text_y, "S", CYAN, BG);
+    font::draw_str(fb, w, wordmark_x + CHAR_W, brand_text_y, "PHRAGIS", INK, BG);
     // 1px right separator on the brand block.
     gpu::fill_rect(BRAND_W, 0, 1, TITLE_H, HAIR);
 
