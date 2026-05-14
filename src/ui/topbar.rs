@@ -87,6 +87,10 @@ fn render_badge(b: Badge) -> alloc::string::String {
             format!("DEADMAN {:02}:{:02}", secs / 60, secs % 60)
         }
         Badge::Clock => {
+            // Wave-2 placeholder: HH:MM derived from uptime (mod 24h), not
+            // real wall clock. The user-facing badge name stays "CLOCK" per
+            // spec; the displayed value gains true clock semantics in a
+            // later wave when an RTC source is wired up.
             let secs = uptime_seconds();
             format!("{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60)
         }
@@ -118,6 +122,9 @@ fn badge_is_alert(b: Badge) -> bool {
     }
 }
 
+/// Seconds elapsed since boot via `CNTPCT_EL0` / `CNTFRQ_EL0`.
+/// **NOT wall-clock time.** Used by `Badge::Clock` as a placeholder
+/// until real RTC support lands (Wave 3+).
 fn uptime_seconds() -> u64 {
     let now: u64; let freq: u64;
     unsafe {
