@@ -123,6 +123,10 @@ pub fn is_armed() -> bool {
     ARMED.load(Ordering::Relaxed)
 }
 
+/// Wave 2 stub — alias for `remaining()` so topbar.rs can call a name that
+/// reads naturally ("how many seconds remain?") without a breaking rename.
+pub fn seconds_remaining() -> u64 { remaining() } // Wave 2 stub
+
 pub fn is_expired() -> bool {
     EXPIRED.load(Ordering::Relaxed)
 }
