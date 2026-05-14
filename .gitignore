@@ -89,3 +89,4 @@ comms_clients.allowlist
 release.key
 demo-pkg-*.bpkg
 *.bpkg
+.superpowers/
