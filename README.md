@@ -101,14 +101,12 @@ src/
 
 ## License
 
-The repository is currently **private** under default copyright ("all rights reserved"). No license has been granted.
+Sphragis is **dual-licensed**:
 
-When the repository is opened to the public (planned), Sphragis will be **dual-licensed**:
+- **[AGPL-3.0-or-later](LICENSE)** for research, academic citation, non-commercial use, and any project willing to comply with AGPL's source-availability clause (including the network-use clause §13).
+- **[Commercial license](LICENSE-COMMERCIAL.md)** sold separately for closed-source integration, regulated deployments that need warranty / indemnification, or organisations whose policies prohibit AGPL software. Contact `sphragis-os@proton.me`.
 
-- **AGPL-3.0-or-later** for research, academic citation, non-commercial use, and any project willing to comply with AGPL's source-availability clause.
-- **Commercial license** sold separately for closed-source integration. The MongoDB / Sentry / GitLab playbook.
-
-Dependencies are MIT / Apache-2.0 / BSD / CC0 / Unlicense throughout — verified clean as of 2026-05-13. No copyleft contamination.
+Dependencies are MIT / Apache-2.0 / BSD / CC0 / Unlicense throughout — verified clean as of 2026-05-13. No copyleft contamination in the tree, so the dual-license option remains preserved.
 
 ## Contact
 

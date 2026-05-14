@@ -2,6 +2,10 @@
 name = "sphragis"
 version = "0.1.0"
 edition = "2024"
+license = "AGPL-3.0-or-later"
+description = "Security-first bare-metal Rust microkernel for Apple Silicon"
+repository = "https://github.com/kadenlee1107/Sphragis"
+readme = "README.md"
 
 [features]
 # Layer-B synthetic test: QEMU kernel entry builds a fake m1n1 BootArgsRaw
