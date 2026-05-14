@@ -33,7 +33,7 @@ def run_cmd(c, cmd, timeout=10):
 def push_bindings(port=9999):
     """AUTH + push two bindings, then disconnect."""
     s = socket.create_connection(("127.0.0.1", port), timeout=3)
-    s.sendall(b"AUTH BATMAN-DEV-2026\n")
+    s.sendall(b"AUTH SPHRAGIS-DEV-2026\n")
     s.settimeout(3)
     # Read 1 line
     buf = b""
@@ -72,7 +72,7 @@ def main():
     verdict = "FAIL"; details = []
     try:
         c.expect(rb"\[bs\] flush done .+ entering input loop", timeout=60)
-        time.sleep(0.3); c.sendline(b"batman")
+        time.sleep(0.3); c.sendline(b"sphragis-dev")
         c.expect(PROMPT, timeout=30)
 
         out = run_cmd(c, "nat-sync")

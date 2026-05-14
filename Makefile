@@ -4,7 +4,7 @@
 
 # ─── Build env ──────────────────────────────────────────────────────────
 SPHRAGIS_ALLOW_UNSIGNED_INITRD ?= 1
-SPHRAGIS_PASSPHRASE            ?= batman
+SPHRAGIS_PASSPHRASE            ?= sphragis-dev
 SPHRAGIS_KEEP_GOING            ?= 1
 
 CARGO_FEATURES ?= gicv3

@@ -63,7 +63,7 @@ def main():
     c = pexpect.spawn(QEMU[0], QEMU[1:], timeout=120, logfile=fp, encoding=None)
 
     c.expect(rb"\[bs\] flush done .+ entering input loop", timeout=60)
-    time.sleep(0.3); c.sendline(b"batman")
+    time.sleep(0.3); c.sendline(b"sphragis-dev")
     c.expect(PROMPT, timeout=30)
     print("[cpol] shell ready\n")
 

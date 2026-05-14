@@ -68,7 +68,7 @@ def main():
     try:
         r = subprocess.run(
             ["bash", "-c",
-             "printf 'AUTH BATMAN-DEV-2026\\nPING\\nQUIT\\n' | nc -w 2 127.0.0.1 9999"],
+             "printf 'AUTH SPHRAGIS-DEV-2026\\nPING\\nQUIT\\n' | nc -w 2 127.0.0.1 9999"],
             capture_output=True, text=True, timeout=5)
         print(f"[mac]  daemon self-test: {r.stdout.strip().splitlines()}")
     except Exception as e:
@@ -94,7 +94,7 @@ def main():
                           logfile=log_fp, encoding=None)
     child.expect(rb"\[bs\] flush done .+ entering input loop", timeout=60)
     time.sleep(0.3)
-    child.sendline(b"batman")
+    child.sendline(b"sphragis-dev")
     child.expect(PROMPT, timeout=30)
     print("[qemu] shell ready")
 
@@ -152,7 +152,7 @@ def main():
     print("[ direct-daemon: install nmap inside kali cave — takes ~15s ]")
     subprocess.run([
         "bash", "-c",
-        "printf 'AUTH BATMAN-DEV-2026\\nRUN kali apt-get update -qq\\n"
+        "printf 'AUTH SPHRAGIS-DEV-2026\\nRUN kali apt-get update -qq\\n"
         "RUN kali apt-get install -y --no-install-recommends nmap\\nQUIT\\n' "
         "| nc -w 60 127.0.0.1 9999 | tail -6"
     ], timeout=120)

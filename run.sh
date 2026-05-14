@@ -9,7 +9,7 @@ cargo build --release 2>&1 | tail -1
 
 echo "[*] Booting on Apple M4 (native speed)..."
 echo "    Type in QEMU window (GUI keyboard)"
-echo "    Passphrase: batman"
+echo "    Passphrase: sphragis-dev"
 echo "    Close window or Ctrl+A X to exit"
 echo ""
 

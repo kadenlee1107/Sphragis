@@ -146,7 +146,7 @@ def boot(*, log_prefix: str = "session", timeout: int = 120,
         raise FileNotFoundError(
             f"no kernel ELF at {elf}.\n"
             "  build with: SPHRAGIS_ALLOW_UNSIGNED_INITRD=1 \\\n"
-            "              SPHRAGIS_PASSPHRASE=batman \\\n"
+            "              SPHRAGIS_PASSPHRASE=sphragis-dev \\\n"
             "              SPHRAGIS_KEEP_GOING=1 \\\n"
             "              cargo build --release --features gicv3"
         )

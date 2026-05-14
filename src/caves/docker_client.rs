@@ -54,7 +54,7 @@ const DAEMON_PORT: u16 = 9999;
 /// passphrase-KDF (same path as BatFS), which couples daemon auth to
 /// the auth gate.
 const BUILD_TOKEN: Option<&str> = option_env!("BATCAVED_TOKEN");
-const FALLBACK_TOKEN: &str = "BATMAN-DEV-2026";
+const FALLBACK_TOKEN: &str = "SPHRAGIS-DEV-2026";
 
 fn token() -> &'static str {
     BUILD_TOKEN.unwrap_or(FALLBACK_TOKEN)

@@ -39,7 +39,7 @@ def main():
     verdict = "FAIL"
     try:
         c.expect(rb"\[bs\] paint done .+ input loop", timeout=60)
-        time.sleep(0.3); c.sendline(b"batman")
+        time.sleep(0.3); c.sendline(b"sphragis-dev")
         c.expect(PROMPT, timeout=30)
         c.sendline(b"gcm-selftest")
         idx = c.expect([

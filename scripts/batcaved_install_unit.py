@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BATCAVED = ROOT / "scripts" / "batcaved.py"
-TOKEN = "BATMAN-DEV-2026"
+TOKEN = "SPHRAGIS-DEV-2026"
 HOST, PORT = "127.0.0.1", 9999
 
 def send_line(s, line): s.sendall((line + "\n").encode())

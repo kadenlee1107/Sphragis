@@ -200,7 +200,7 @@ def main():
         # netdev... actually the deadman goes through nic 0; since nic 0
         # is now socket, we lose slirp routing. Work around: deadman
         # auto-arm is best-effort and quiet on failure. Keep testing
-        # before daemon arm — the batman auth passes, we just skip arm.
+        # before daemon arm — the sphragis-dev auth passes, we just skip arm.
         "-serial", "mon:stdio",
         "-kernel", str(KERNEL),
     ]
@@ -211,7 +211,7 @@ def main():
     details = []
     try:
         c.expect(rb"\[bs\] flush done .+ entering input loop", timeout=60)
-        time.sleep(0.3); c.sendline(b"batman")
+        time.sleep(0.3); c.sendline(b"sphragis-dev")
         c.expect(PROMPT, timeout=60)  # longer — deadman may timeout
         print("[full-e2e] shell ready")
 

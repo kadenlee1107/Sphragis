@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sphragis QEMU smoke test — boot + auth + couple of shell commands.
 
-Quick sanity check that the binary boots, auth accepts 'batman',
+Quick sanity check that the binary boots, auth accepts 'sphragis-dev',
 and we reach the shell. Full test suite is qemu_test_suite.py."""
 import pexpect
 import time
@@ -41,8 +41,8 @@ def main():
 
         # Send passphrase
         time.sleep(1)
-        print("[smoke] sending 'batman'")
-        child.sendline(b"batman")
+        print("[smoke] sending 'sphragis-dev'")
+        child.sendline(b"sphragis-dev")
 
         # Wait for desktop or shell prompt
         print("[smoke] waiting for shell prompt...")

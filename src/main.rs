@@ -205,12 +205,12 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
 
     // Initialize authentication system.
     //
-    // FLv2-NEW-006 fix: the passphrase used to be `b"batman"` compiled into
+    // FLv2-NEW-006 fix: the passphrase used to be `b"sphragis-dev"` compiled into
     // the kernel binary, which meant every shipped image derived the same
     // master key and anyone with the ELF could recover it offline in
     // microseconds. We now read the passphrase from the UART at boot.
     // If the build is explicitly marked dev (SPHRAGIS_DEV_PASSPHRASE env at
-    // build time, wired via build.rs) we fall back to "batman" so QEMU
+    // build time, wired via build.rs) we fall back to "sphragis-dev" so QEMU
     // smoke tests still work without user interaction.
     drivers::uart::puts("[security] Initializing auth system...\n");
     let mut passphrase_buf = [0u8; 128];

@@ -56,7 +56,7 @@ python3 scripts/qemu_exec_trans_selftest.py
 # ...etc — see scripts/qemu_*_selftest.py
 ```
 
-On boot the kernel asks for a passphrase (used to derive the BatFS master key). Press return to use the dev passphrase `batman` (hardcoded for QEMU smoke tests via the `SPHRAGIS_DEV_PASSPHRASE` build-time env). Production builds read the passphrase from UART.
+On boot the kernel asks for a passphrase (used to derive the BatFS master key). Press return to use the dev passphrase `sphragis-dev` (hardcoded for QEMU smoke tests via the `SPHRAGIS_DEV_PASSPHRASE` build-time env). Production builds read the passphrase from UART.
 
 In the interactive shell:
 

@@ -143,7 +143,7 @@ def run_in_cave(tool_cmd: str, pcap_path: Path, port: int) -> str:
     try:
         child.expect(rb"\[bs\] flush done .+ entering input loop", timeout=60)
         time.sleep(0.3)
-        child.sendline(b"batman")
+        child.sendline(b"sphragis-dev")
         child.expect(PROMPT, timeout=30)
 
         # Dedicated cave per tool for true isolation
