@@ -53,7 +53,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 /// 16-byte opaque cave identifier. Matches `cave::CaveBacking::image`
-/// length so the rest of batcave/ can hand us ids without conversion
+/// length so the rest of caves/ can hand us ids without conversion
 /// headaches.
 pub type CaveId = [u8; 16];
 

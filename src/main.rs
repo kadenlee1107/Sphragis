@@ -4,7 +4,7 @@
 extern crate alloc;
 
 mod ai;
-mod batcave;
+mod caves;
 mod boot;
 mod crypto;
 mod drivers;
@@ -135,9 +135,9 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // tearing down at the first failure. One smoke run then maps the
     // entire failure tree of content_shell / ld-linux / glibc setup
     // so we can dispatch parallel fixers per distinct failure
-    // signature. See `src/batcave/linux/skip_log.rs`.
+    // signature. See `src/caves/linux/skip_log.rs`.
     if option_env!("SPHRAGIS_KEEP_GOING").is_some() {
-        batcave::linux::skip_log::enable();
+        caves::linux::skip_log::enable();
     }
 
     // Initialize kernel
@@ -158,7 +158,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // we explicitly fall back to MMU-off only by panicking, since
     // any subsequent kernel run with bogus TTBR0 state would be
     // worse than a clean halt.
-    if let Err(e) = batcave::linux::mmu::setup_and_enable(0) {
+    if let Err(e) = caves::linux::mmu::setup_and_enable(0) {
         drivers::uart::puts("[boot] FATAL: kernel-boot MMU enable failed: ");
         drivers::uart::puts(e);
         drivers::uart::puts("\n");
@@ -314,26 +314,26 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
         }
     }
 
-    // Initialize BatCave runtime
-    drivers::uart::puts("[boot] Initializing BatCave runtime...\n");
-    batcave::cave::init();
+    // Initialize Cave runtime
+    drivers::uart::puts("[boot] Initializing Cave runtime...\n");
+    caves::cave::init();
     // Set mem_limit / sockets_limit / etc. to DEFAULT_* — the const
     // initializer on `static CAVE_QUOTAS` was reading back as zero
     // in release (same family of bug as the vfs.rs slice-of-literals
     // miscompile). init() patches the ledger into a sane state.
-    batcave::linux::quotas::init();
-    drivers::uart::puts("  [bc] BatCave runtime ready\n");
+    caves::linux::quotas::init();
+    drivers::uart::puts("  [bc] Cave runtime ready\n");
 
     // sys-caves Arc 2: spawn named service caves at boot with their
     // cap sets pre-wired + per-cave L1 page tables built. Today this
     // brings up sys-wg (the future home of WireGuard's static keys
     // + per-peer transport state). See DESIGN_SYS_CAVES.md.
-    batcave::sys_caves::init();
+    caves::sys_caves::init();
 
     // Arc 3 slice 1: bring up the sys-wg service so it owns the
     // WireGuard static keypair behind a module-privacy boundary
     // before any caller can request a handshake.
-    batcave::sys_wg_service::init();
+    caves::sys_wg_service::init();
     drivers::uart::puts("  [sys-wg] service ready (Arc 3 slices 1+2+3; state in cave-private page)\n");
 
     // Spawn the long-running IPC service task. Must run AFTER
@@ -342,7 +342,7 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // sys-wg cave). Failure is non-fatal — the direct
     // sys_wg_service API still works; only the IPC mailbox path
     // degrades.
-    batcave::sys_wg_ipc::init();
+    caves::sys_wg_ipc::init();
 
     // Initialize networking
     drivers::uart::puts("[boot] Initializing network...\n");
@@ -379,10 +379,10 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
             drivers::uart::puts("[boot] GPU ready\n\n");
 
             // Bring up the default VFS so /sphragis/fb0 exists for the blit
-            // bridge. BatCave processes later swap to their own VFS slot;
+            // bridge. Cave processes later swap to their own VFS slot;
             // the fb0 region is a physical-memory handle, not tied to slot.
-            if !batcave::linux::vfs::is_ready() {
-                batcave::linux::vfs::init();
+            if !caves::linux::vfs::is_ready() {
+                caves::linux::vfs::init();
             }
 
             // X.509 selftest hook (gated by Cargo feature

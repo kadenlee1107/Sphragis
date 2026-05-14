@@ -5,7 +5,7 @@
 #   * you have already built the DoS guests with
 #     `aarch64-linux-musl-gcc -static -O1 foo.c -o foo` (or similar),
 #     dropped them into initrd, and booted the image in HVF/QEMU.
-#   * there is a way to inject `<name> <arg>` into a BatCave via the
+#   * there is a way to inject `<name> <arg>` into a Cave via the
 #     existing test harness (see tests/ at repo root for patterns).
 #
 # Each run pairs the bomb with `canary` in a second cave and records

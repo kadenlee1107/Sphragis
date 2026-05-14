@@ -8,7 +8,7 @@ virtio-keyboard, not serial — that's a separate harness).
 
 Pass criteria:
   - kernel reaches "[bs] paint done — input loop" within 60s
-  - serial log mentions virtio-gpu, network stack ready, BatCave runtime
+  - serial log mentions virtio-gpu, network stack ready, Cave runtime
   - no `panic!` / `unimplemented!` / "kernel halted" markers
   - no mention of deleted symbols (chromium_blit, ChromiumFb, browser::*)
 
@@ -75,7 +75,7 @@ def main() -> int:
         log_bytes = LOG.read_bytes()
 
         required = [
-            (rb"\[bc\] BatCave runtime ready", "BatCave init"),
+            (rb"\[bc\] Cave runtime ready", "Cave init"),
             (rb"\[net\] Network stack ready",   "network init"),
             (rb"\[gpu\] (Found at slot|Display: \d+x\d+)", "virtio-gpu init"),
             (rb"\[fs\] BatFS initialized",     "BatFS init"),

@@ -1,6 +1,6 @@
 /*
  * evil_path_traversal.c — guest-side harness that exercises VFS path
- * handling in src/batcave/linux/vfs.rs and sys_openat (ATTACK-FL-016,
+ * handling in src/caves/linux/vfs.rs and sys_openat (ATTACK-FL-016,
  * FL-017, FL-018).
  *
  * This is a Linux userspace program intended to be compiled for AArch64
@@ -9,7 +9,7 @@
  *   aarch64-linux-gnu-gcc -static -Os -o evil_path_traversal \
  *       evil_path_traversal.c
  *
- * It does not escape the host. It is a probe for BatCave VFS behavior.
+ * It does not escape the host. It is a probe for Cave VFS behavior.
  *
  * Tests:
  *   1. ../../.. escape (should fail, root parent is root).

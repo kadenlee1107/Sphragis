@@ -3,8 +3,8 @@
 
 use crate::drivers::uart;
 
-core::arch::global_asm!(include_str!("../../batcave/linux/forkjmp.s"));
-core::arch::global_asm!(include_str!("../../batcave/linux/threads.s"));
+core::arch::global_asm!(include_str!("../../caves/linux/forkjmp.s"));
+core::arch::global_asm!(include_str!("../../caves/linux/threads.s"));
 
 unsafe extern "C" {
     fn fork_save(buf: *mut u64) -> u64;
@@ -14,7 +14,7 @@ unsafe extern "C" {
 // Saved busybox SP at clone time (for eret back to parent)
 static mut SAVED_BUSYBOX_SP: u64 = 0;
 
-/// Kernel SP save slot used by `batcave::linux::loader::execute_with_args`
+/// Kernel SP save slot used by `caves::linux::loader::execute_with_args`
 /// before erets to EL0, and read back by the exit-syscall + brk paths below
 /// so the shell can resume after a user ELF exits.
 // /
@@ -23,7 +23,7 @@ static mut SAVED_BUSYBOX_SP: u64 = 0;
 /// Linux arm64 Image header region and were mapped R-X by the kernel MMU).
 /// The addresses also didn't match between the store and restore sites;
 /// that was the root cause of the QEMU `DATA ABORT DFSC=0x0e` at FAR
-/// 0x40000100 for every BatCave-runner ELF (netsurf/freetype/png/v8/etc).
+/// 0x40000100 for every Cave-runner ELF (netsurf/freetype/png/v8/etc).
 #[unsafe(no_mangle)]
 pub static mut KERNEL_SP_SAVE: u64 = 0;
 
@@ -93,11 +93,11 @@ fn pa_skip_scratch_uva() -> u64 {
 
     // Install L3: map SCRATCH_VA → frame with USER_PAGE_FLAGS
     // (which includes EL0_RW + UXN + Normal + Inner Shareable).
-    let install_result = crate::batcave::linux::demand_page::install_l3_mapping(
+    let install_result = crate::caves::linux::demand_page::install_l3_mapping(
         l1_phys,
         SCRATCH_VA,
         frame,
-        crate::batcave::linux::demand_page::USER_PAGE_FLAGS,
+        crate::caves::linux::demand_page::USER_PAGE_FLAGS,
     );
     if install_result.is_err() {
         return 0;
@@ -484,14 +484,14 @@ fn handle_irq_inner(frame: *mut TrapFrame) {
         // every ~5 seconds. Cheap when the system is making progress;
         // when it's stuck the dump tells us exactly what every thread
         // is parked on. See threads::auto_dump_if_idle.
-        crate::batcave::linux::threads::auto_dump_if_idle();
+        crate::caves::linux::threads::auto_dump_if_idle();
 
         // Drain stdio_ring to UART (was inside scheduler::tick()).
         // We don't want to call kernel::scheduler::schedule() from
         // here — it's the legacy task-table scheduler that ping-
         // pongs with chromium-blit on every tick and adds massive
         // overhead. The drain is the only useful thing tick() does.
-        crate::batcave::linux::stdio_ring::drain_to_uart();
+        crate::caves::linux::stdio_ring::drain_to_uart();
 
         // REAL PREEMPTION via the cooperative-switch path.
         //
@@ -544,7 +544,7 @@ fn handle_irq_inner(frame: *mut TrapFrame) {
             if n > 0 && n % 200 == 0 {
                 let elr = unsafe { (*frame).elr };
                 let lr  = unsafe { (*frame).x[30] };
-                let tid = crate::batcave::linux::threads::current_tid();
+                let tid = crate::caves::linux::threads::current_tid();
                 uart::puts("[irq#");
                 crate::kernel::mm::print_num(n as usize);
                 uart::puts(" preempt t");
@@ -572,11 +572,11 @@ fn handle_irq_inner(frame: *mut TrapFrame) {
         eoi(gic_v, iar);
 
         if was_in_el0 {
-            crate::batcave::linux::threads::schedule();
+            crate::caves::linux::threads::schedule();
         } else {
             // EL1 — defer to syscall boundary so we don't preempt
             // kernel code that might be holding a lock.
-            crate::batcave::linux::threads::request_preempt();
+            crate::caves::linux::threads::request_preempt();
         }
     } else {
         // Non-timer IRQ — still need to ack so the GIC can deliver more.
@@ -642,10 +642,10 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
     // the kernel. We accept any EL1 fault here — translation,
     // permission, alignment, etc. — because the probe contract is
     // "if reading would have any problem at all, return None."
-    if crate::batcave::linux::mmu::PROBE_ACTIVE.load(core::sync::atomic::Ordering::Acquire)
+    if crate::caves::linux::mmu::PROBE_ACTIVE.load(core::sync::atomic::Ordering::Acquire)
         && (ec == 0x24 || ec == 0x25 || ec == 0x20 || ec == 0x21)
     {
-        crate::batcave::linux::mmu::PROBE_FAULTED.store(true, core::sync::atomic::Ordering::Release);
+        crate::caves::linux::mmu::PROBE_FAULTED.store(true, core::sync::atomic::Ordering::Release);
         unsafe { (*frame).elr = (*frame).elr.wrapping_add(4); }
         return;
     }
@@ -666,20 +666,20 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // (x30) and FP (x29), plus the arguments — which
                     // is exactly the forensic data the UNHANDLED dump
                     // needs when a `ret` eventually lands in the cage.
-                    let tid_now = crate::batcave::linux::threads::current_tid();
-                    crate::batcave::linux::syscall_history::record(
+                    let tid_now = crate::caves::linux::threads::current_tid();
+                    crate::caves::linux::syscall_history::record(
                         tid_now, syscall_num, &f.x, f.elr,
                     );
 
                     // EXIT: child exit → eret back to parent at clone return
                     if syscall_num == 93 || syscall_num == 94 {
-                        let in_child = crate::batcave::linux::syscall::IN_CHILD
+                        let in_child = crate::caves::linux::syscall::IN_CHILD
                             .load(core::sync::atomic::Ordering::Relaxed);
 
-                        crate::batcave::linux::syscall::handle(0, syscall_num, args);
+                        crate::caves::linux::syscall::handle(0, syscall_num, args);
 
                         if in_child {
-                            let is_thread = crate::batcave::linux::syscall::IS_THREAD_CHILD
+                            let is_thread = crate::caves::linux::syscall::IS_THREAD_CHILD
                                 .load(core::sync::atomic::Ordering::Relaxed);
                             let busybox_sp = core::ptr::read_volatile(
                                 core::ptr::addr_of!(SAVED_BUSYBOX_SP));
@@ -707,10 +707,10 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             // Eret from saved clone frame → parent resumes
                             let saved_ptr = core::ptr::addr_of!(SAVED_FRAME) as u64;
                             // Get the child TID to return to parent
-                            let child_tid = crate::batcave::linux::syscall::LAST_CHILD_TID
+                            let child_tid = crate::caves::linux::syscall::LAST_CHILD_TID
                                 .load(core::sync::atomic::Ordering::Relaxed) as u64;
                             // Restore main thread TID
-                            crate::batcave::linux::syscall::restore_parent_tid();
+                            crate::caves::linux::syscall::restore_parent_tid();
 
                             core::arch::asm!(
                                 // V6-CHAIN-002 fix: write the saved
@@ -769,7 +769,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         let cur_ttbr0: u64;
                         core::arch::asm!("mrs {}, ttbr0_el1", out(reg) cur_ttbr0);
                         let cur_ttbr0 = cur_ttbr0 & !1u64;
-                        let host_l1 = crate::batcave::linux::mmu::host_cave_l1() as u64;
+                        let host_l1 = crate::caves::linux::mmu::host_cave_l1() as u64;
                         if host_l1 != 0 && cur_ttbr0 != host_l1 {
                             // Forked-child exit. Mark this thread Exited
                             // (parent can wait4 it), then schedule out.
@@ -779,19 +779,19 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             // (We don't free the child's page tables /
                             // frames yet — wait4 will do that when
                             // implemented. Leak for now; reboot recovers.)
-                            crate::batcave::linux::threads::exit_current(
+                            crate::caves::linux::threads::exit_current(
                                 args[0] as i32);
                             // exit_current never returns — it schedules
                             // another thread and wfi's if none.
                         }
 
-                        // Real exit (not a forked child — leave BatCave entirely).
+                        // Real exit (not a forked child — leave Cave entirely).
                         // V2-NEW-024: DO NOT call mmu::disable here — it
                         // clears SCTLR.M which the next switch_to_cave does
                         // not re-enable, leaving subsequent caves running
                         // with no AP/UXN/PXN enforcement at all. Switch to
                         // primary TTBR0 instead; MMU stays on.
-                        crate::batcave::linux::mmu::switch_to_primary();
+                        crate::caves::linux::mmu::switch_to_primary();
                         // Restore the kernel SP that the loader stashed before
                         // erets to EL0. See KERNEL_SP_SAVE above.
                         let save_addr = kernel_sp_save_addr();
@@ -806,7 +806,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
 
                     // CLONE: save exception frame for later parent-resume
                     if syscall_num == 220
-                        && !crate::batcave::linux::syscall::IN_CHILD
+                        && !crate::caves::linux::syscall::IN_CHILD
                             .load(core::sync::atomic::Ordering::Relaxed)
                     {
                         let frame_addr = frame as usize;
@@ -856,24 +856,24 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // EXECVE: if child is calling execve for a busybox applet,
                     // jump to the worker busybox copy for real applet execution
                     if syscall_num == 221
-                        && crate::batcave::linux::syscall::IN_CHILD
+                        && crate::caves::linux::syscall::IN_CHILD
                             .load(core::sync::atomic::Ordering::Relaxed)
                     {
-                        let worker_entry = crate::batcave::linux::loader::WORKER_ENTRY
+                        let worker_entry = crate::caves::linux::loader::WORKER_ENTRY
                             .load(core::sync::atomic::Ordering::Relaxed);
                         if worker_entry != 0 {
                             // Read the path to check if it's a busybox applet.
                             // V2-007: gate path_ptr to userspace before ldrb.
                             let path_ptr = f.x[0] as usize;
                             let argv_ptr = f.x[1] as usize;
-                            if !crate::batcave::linux::uaccess::is_user_range(path_ptr, 1) {
+                            if !crate::caves::linux::uaccess::is_user_range(path_ptr, 1) {
                                 f.x[0] = (-14i64) as u64; // EFAULT
                                 return;
                             }
                             let mut path_buf = [0u8; 128];
                             let mut plen = 0usize;
                             for i in 0..127 {
-                                if !crate::batcave::linux::uaccess::is_user_range(path_ptr + i, 1) { break; }
+                                if !crate::caves::linux::uaccess::is_user_range(path_ptr + i, 1) { break; }
                                 let b: u32;
                                 core::arch::asm!("ldrb {v:w}, [{a}]",
                                     a = in(reg) path_ptr + i, v = out(reg) b);
@@ -897,8 +897,8 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
 
                             if is_hello {
                                 // Load the hello ELF binary
-                                let hello_data = crate::batcave::linux::runner::hello_elf();
-                                match crate::batcave::linux::loader::load_hello_elf(hello_data) {
+                                let hello_data = crate::caves::linux::runner::hello_elf();
+                                match crate::caves::linux::loader::load_hello_elf(hello_data) {
                                     Ok((phys_entry, _phys_base, _orig_entry)) => {
                                         // Build a minimal stack for the hello binary
                                         let stack_page = crate::kernel::mm::frame::alloc_frame();
@@ -989,10 +989,10 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             if is_bb {
                                 // Re-initialize worker's writable segments
                                 // (previous applet run may have corrupted globals)
-                                let wbase = crate::batcave::linux::loader::WORKER_PHYS_BASE
+                                let wbase = crate::caves::linux::loader::WORKER_PHYS_BASE
                                     .load(core::sync::atomic::Ordering::Relaxed);
-                                crate::batcave::linux::loader::reinit_elf(
-                                    crate::batcave::linux::runner::busybox_elf(),
+                                crate::caves::linux::loader::reinit_elf(
+                                    crate::caves::linux::runner::busybox_elf(),
                                     wbase,
                                 );
 
@@ -1007,16 +1007,16 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                                 let mut arg_lens = [0usize; 8];
                                 let mut argc = 0usize;
                                 if argv_ptr != 0
-                                    && crate::batcave::linux::uaccess::is_user_range(argv_ptr, 8 * 8)
+                                    && crate::caves::linux::uaccess::is_user_range(argv_ptr, 8 * 8)
                                 {
                                     for i in 0..8 {
                                         let ap: u64;
                                         core::arch::asm!("ldr {v}, [{a}]",
                                             a = in(reg) argv_ptr + i * 8, v = out(reg) ap);
                                         if ap == 0 { break; }
-                                        if !crate::batcave::linux::uaccess::is_user_range(ap as usize, 1) { break; }
+                                        if !crate::caves::linux::uaccess::is_user_range(ap as usize, 1) { break; }
                                         for j in 0..63 {
-                                            if !crate::batcave::linux::uaccess::is_user_range(ap as usize + j, 1) { break; }
+                                            if !crate::caves::linux::uaccess::is_user_range(ap as usize + j, 1) { break; }
                                             let b: u32;
                                             core::arch::asm!("ldrb {v:w}, [{a}]",
                                                 a = in(reg) ap as usize + j, v = out(reg) b);
@@ -1116,7 +1116,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // at the instruction *after* svc, so it's what the
                     // child resumes at.
                     if syscall_num == 220
-                        && crate::batcave::linux::threads::is_enabled()
+                        && crate::caves::linux::threads::is_enabled()
                     {
                         // V8-CLONE-ELR-CHECK: f.elr should be the user's
                         // post-svc PC, always a user VA. If it's anywhere
@@ -1136,9 +1136,9 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             }
                             uart::puts(" (M[3:0]=0 means from EL0)\n");
                         }
-                        crate::batcave::linux::threads::PARENT_SYSCALL_ELR
+                        crate::caves::linux::threads::PARENT_SYSCALL_ELR
                             .store(f.elr, core::sync::atomic::Ordering::Release);
-                        crate::batcave::linux::threads::PARENT_SYSCALL_SPSR
+                        crate::caves::linux::threads::PARENT_SYSCALL_SPSR
                             .store(f.spsr, core::sync::atomic::Ordering::Release);
                         // Snapshot all of the parent's GPRs at svc entry
                         // so set_child_resume can seed the child's full
@@ -1149,7 +1149,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         // this carry, the child indirect-branch lands at
                         // PC=0.
                         for i in 0..31 {
-                            crate::batcave::linux::threads::PARENT_SYSCALL_REGS[i]
+                            crate::caves::linux::threads::PARENT_SYSCALL_REGS[i]
                                 .store(f.x[i], core::sync::atomic::Ordering::Release);
                         }
                     }
@@ -1160,15 +1160,15 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // handler's stack. The regular syscall dispatcher
                     // can't see the frame, so short-circuit it here.
                     let result: i64 = if syscall_num == 139 {
-                        let sf = &mut *(frame as *mut crate::batcave::linux::signal::TrapFrame);
-                        crate::batcave::linux::signal::complete_rt_sigreturn(sf)
+                        let sf = &mut *(frame as *mut crate::caves::linux::signal::TrapFrame);
+                        crate::caves::linux::signal::complete_rt_sigreturn(sf)
                         // NB: do NOT overwrite f.x[0] below — every
                         // register has just been restored from the
                         // ucontext and the subsequent `f.x[0] = result`
                         // would clobber x0. We short-circuit with a
                         // direct return after the syscall trace.
                     } else {
-                        let r = crate::batcave::linux::syscall::handle(0, syscall_num, args);
+                        let r = crate::caves::linux::syscall::handle(0, syscall_num, args);
                         f.x[0] = r as u64;
                         r
                     };
@@ -1182,11 +1182,11 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
 
                     // CLONE with child_stack: jump child to new stack via manual eret
                     if syscall_num == 220 && result == 0 {
-                        let child_sp = crate::batcave::linux::syscall::CLONE_CHILD_STACK
+                        let child_sp = crate::caves::linux::syscall::CLONE_CHILD_STACK
                             .load(core::sync::atomic::Ordering::Relaxed);
                         if child_sp != 0 {
                             // Clear the child_stack flag (one-shot)
-                            crate::batcave::linux::syscall::CLONE_CHILD_STACK
+                            crate::caves::linux::syscall::CLONE_CHILD_STACK
                                 .store(0, core::sync::atomic::Ordering::Relaxed);
                             // Resume the child at the next instruction (after svc)
                             // with SP = child_stack and x0 = 0.
@@ -1276,8 +1276,8 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // signal we're literally in the middle of
                     // completing.
                     if syscall_num != 139 {
-                        let sf = &mut *(frame as *mut crate::batcave::linux::signal::TrapFrame);
-                        let _ = crate::batcave::linux::signal::try_deliver_pending(sf);
+                        let sf = &mut *(frame as *mut crate::caves::linux::signal::TrapFrame);
+                        let _ = crate::caves::linux::signal::try_deliver_pending(sf);
                     }
                 }
             } else {
@@ -1298,7 +1298,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             // touching it the EC is 0x25 (data abort from current EL).
             // Try the lazy-commit path first; if demand_page accepts,
             // retry the faulting instruction.
-            if crate::batcave::linux::demand_page::try_handle(far, esr) {
+            if crate::caves::linux::demand_page::try_handle(far, esr) {
                 return;
             }
 
@@ -1334,7 +1334,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             // instruction faulting on an unaligned access
                             // to any kernel VA would have us obediently
                             // load/store on its behalf at EL1.
-                            let in_user = crate::batcave::linux::uaccess::is_user_range(
+                            let in_user = crate::caves::linux::uaccess::is_user_range(
                                 far as usize, nbytes as usize);
                             if !in_user {
                                 // Skip the faulting instruction and deliver
@@ -1657,7 +1657,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 }
                 if ABORT_COUNT > 3 {
                     uart::puts("[abort] EL1 fault unrecoverable — terminating cave\n");
-                    crate::batcave::linux::signal::terminate_cave_fatal(7, far);
+                    crate::caves::linux::signal::terminate_cave_fatal(7, far);
                     // terminate_cave_fatal returns ! — control never
                     // reaches here.
                 }
@@ -1665,7 +1665,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
         }
         0x3C => {
             let elr = unsafe { (*frame).elr };
-            let in_child = crate::batcave::linux::syscall::IN_CHILD
+            let in_child = crate::caves::linux::syscall::IN_CHILD
                 .load(core::sync::atomic::Ordering::Relaxed);
 
             // b: PartitionAlloc's noreturn-abort BRKs.
@@ -1714,7 +1714,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 let mut found_lr: u64 = 0;
                 while hops < 16 && fp != 0 {
                     // Validate fp is in user range AND mapped.
-                    if !crate::batcave::linux::uaccess::is_user_range(fp as usize, 16)
+                    if !crate::caves::linux::uaccess::is_user_range(fp as usize, 16)
                         || !page_is_mapped(fp)
                     {
                         break;
@@ -1931,7 +1931,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 let x29_now = unsafe { (*frame).x[29] };
                 // Look at the instruction at elr-4.
                 let prev_instr_addr = elr.wrapping_sub(4);
-                if crate::batcave::linux::uaccess::is_user_range(
+                if crate::caves::linux::uaccess::is_user_range(
                     prev_instr_addr as usize, 4)
                 {
                     let prev_instr: u32 = unsafe {
@@ -1960,7 +1960,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     // detecting the guard pattern up front saves the
                     // 32 wasted skips and gives a cleaner termination.
                     let next_instr_addr = elr.wrapping_add(4);
-                    let next_is_hlt = if crate::batcave::linux::uaccess::is_user_range(
+                    let next_is_hlt = if crate::caves::linux::uaccess::is_user_range(
                         next_instr_addr as usize, 4)
                     {
                         let ni: u32 = unsafe {
@@ -2044,8 +2044,8 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             uart::putc(hex[((elr >> (sh * 4)) & 0xF) as usize]);
                         }
                         uart::puts(" — corrupt funcptr (cross-fn lr); terminating cave\n");
-                        crate::batcave::linux::signal::terminate_cave_fatal_with_lr(
-                            crate::batcave::linux::signal::SIGSEGV,
+                        crate::caves::linux::signal::terminate_cave_fatal_with_lr(
+                            crate::caves::linux::signal::SIGSEGV,
                             elr, lr_now,
                         );
                     }
@@ -2078,8 +2078,8 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                                 BRK_SKIP_SAME_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
                                 BRK_SKIP_LAST_ELR.store(0, core::sync::atomic::Ordering::Relaxed);
                                 BRK_SKIP_LAST_LR.store(0, core::sync::atomic::Ordering::Relaxed);
-                                crate::batcave::linux::signal::terminate_cave_fatal_with_lr(
-                                    crate::batcave::linux::signal::SIGSEGV,
+                                crate::caves::linux::signal::terminate_cave_fatal_with_lr(
+                                    crate::caves::linux::signal::SIGSEGV,
                                     elr, lr_now,
                                 );
                             }
@@ -2106,7 +2106,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     } else if is_bl
                         && x29_now > 0x1000
                         && x29_now < 0x80_0000_0000
-                        && crate::batcave::linux::uaccess::is_user_range(x29_now as usize, 16)
+                        && crate::caves::linux::uaccess::is_user_range(x29_now as usize, 16)
                     {
                         // BL-call case: walk one frame up via x29.
                         // [x29] = saved outer x29, [x29+8] = saved
@@ -2150,7 +2150,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
 
             if in_child {
                 uart::puts("[linux] child abort — returning to parent\n");
-                crate::batcave::linux::syscall::IN_CHILD
+                crate::caves::linux::syscall::IN_CHILD
                     .store(false, core::sync::atomic::Ordering::Relaxed);
                 unsafe {
                     let busybox_sp = core::ptr::read_volatile(
@@ -2230,7 +2230,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             }
             uart::puts(" tid=");
             crate::kernel::mm::print_num(
-                crate::batcave::linux::threads::current_tid() as usize);
+                crate::caves::linux::threads::current_tid() as usize);
             uart::puts("\n  x0=0x");
             {
                 let hex = b"0123456789abcdef";
@@ -2356,7 +2356,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             }
             uart::puts("\n  → returning to desktop\n");
             unsafe {
-                crate::batcave::linux::mmu::switch_to_primary();
+                crate::caves::linux::mmu::switch_to_primary();
                 // Restore the kernel SP that the loader stashed before
                 // erets to EL0. See KERNEL_SP_SAVE above.
                 let save_addr = kernel_sp_save_addr();
@@ -2465,12 +2465,12 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 // skip" behaviour (kept so the busybox cleanup path
                 // still works).
                 let sf = unsafe {
-                    &mut *(frame as *mut crate::batcave::linux::signal::TrapFrame)
+                    &mut *(frame as *mut crate::caves::linux::signal::TrapFrame)
                 };
-                if crate::batcave::linux::signal::try_deliver_synchronous(
+                if crate::caves::linux::signal::try_deliver_synchronous(
                     sf,
-                    crate::batcave::linux::signal::SIGILL,
-                    crate::batcave::linux::signal::ILL_ILLOPC,
+                    crate::caves::linux::signal::SIGILL,
+                    crate::caves::linux::signal::ILL_ILLOPC,
                     elr,
                 ) {
                     return;
@@ -2482,7 +2482,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             uart::puts("!!! UNHANDLED EC=0 !!!\n");
             uart::puts("  tid=t");
             crate::kernel::mm::print_num(
-                crate::batcave::linux::threads::current_tid() as usize);
+                crate::caves::linux::threads::current_tid() as usize);
             uart::puts(" ELR: 0x"); print_hex(elr);
             let ttbr0: u64; let sctlr: u64; let far: u64;
             unsafe {
@@ -2546,7 +2546,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 // black_box defeats the compiler's "I can prove page
                 // is mapped from is_user_range alone" optimization.
                 let safe_addr = core::hint::black_box(addr);
-                if !crate::batcave::linux::uaccess::is_user_range(safe_addr, 4)
+                if !crate::caves::linux::uaccess::is_user_range(safe_addr, 4)
                     || !page_is_mapped(core::hint::black_box(safe_addr as u64))
                 {
                     uart::puts("\n    ["); print_hex(safe_addr as u64);
@@ -2588,7 +2588,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     for off in [-12i64, -8, -4, 0].iter() {
                         let addr = (f.x[30] as i64 + off) as usize;
                         let safe_addr = core::hint::black_box(addr);
-                        if !crate::batcave::linux::uaccess::is_user_range(safe_addr, 4)
+                        if !crate::caves::linux::uaccess::is_user_range(safe_addr, 4)
                             || !page_is_mapped(core::hint::black_box(safe_addr as u64))
                         {
                             uart::puts("\n    ["); print_hex(safe_addr as u64);
@@ -2621,7 +2621,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             // a legitimate lazy commit. Try to back the page; if
             // demand_page accepts, retry the instruction by returning.
             if (ec == 0x24 || ec == 0x25)
-                && crate::batcave::linux::demand_page::try_handle(far, esr)
+                && crate::caves::linux::demand_page::try_handle(far, esr)
             {
                 return;
             }
@@ -2647,38 +2647,38 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         let si_code = if (iss >> 2) == 0b0011
                             || (iss >> 2) == 0b0001
                         {
-                            crate::batcave::linux::signal::SEGV_MAPERR
+                            crate::caves::linux::signal::SEGV_MAPERR
                         } else {
-                            crate::batcave::linux::signal::SEGV_ACCERR
+                            crate::caves::linux::signal::SEGV_ACCERR
                         };
-                        (crate::batcave::linux::signal::SIGSEGV, si_code)
+                        (crate::caves::linux::signal::SIGSEGV, si_code)
                     }
                     0x22 => (
-                        crate::batcave::linux::signal::SIGBUS,
-                        crate::batcave::linux::signal::BUS_ADRALN,
+                        crate::caves::linux::signal::SIGBUS,
+                        crate::caves::linux::signal::BUS_ADRALN,
                     ),
                     0x24 | 0x25 => {
                         let iss = (esr & 0x3F) as u32;
                         let si_code = if (iss >> 2) == 0b0011
                             || (iss >> 2) == 0b0001
                         {
-                            crate::batcave::linux::signal::SEGV_MAPERR
+                            crate::caves::linux::signal::SEGV_MAPERR
                         } else {
-                            crate::batcave::linux::signal::SEGV_ACCERR
+                            crate::caves::linux::signal::SEGV_ACCERR
                         };
-                        (crate::batcave::linux::signal::SIGSEGV, si_code)
+                        (crate::caves::linux::signal::SIGSEGV, si_code)
                     }
                     0x26 => (
-                        crate::batcave::linux::signal::SIGBUS,
-                        crate::batcave::linux::signal::BUS_ADRALN,
+                        crate::caves::linux::signal::SIGBUS,
+                        crate::caves::linux::signal::BUS_ADRALN,
                     ),
                     _ => (0, 0),
                 };
                 if signo != 0 {
                     let sf = unsafe {
-                        &mut *(frame as *mut crate::batcave::linux::signal::TrapFrame)
+                        &mut *(frame as *mut crate::caves::linux::signal::TrapFrame)
                     };
-                    if crate::batcave::linux::signal::try_deliver_synchronous(
+                    if crate::caves::linux::signal::try_deliver_synchronous(
                         sf, signo, si_code, far,
                     ) {
                         return;
@@ -2695,25 +2695,25 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             //
             // Cap: limit to 32 EL0 abort skips per run so a single
             // looping thread doesn't drown the trace.
-            if crate::batcave::linux::skip_log::is_enabled()
+            if crate::caves::linux::skip_log::is_enabled()
                 && (ec == 0x24 || ec == 0x25 || ec == 0x20 || ec == 0x21)
             {
                 let elr = unsafe { (*frame).elr };
                 let kind = if ec == 0x20 || ec == 0x21 {
-                    crate::batcave::linux::skip_log::SkipKind::UserInstAbort
+                    crate::caves::linux::skip_log::SkipKind::UserInstAbort
                 } else {
-                    crate::batcave::linux::skip_log::SkipKind::UserDataAbort
+                    crate::caves::linux::skip_log::SkipKind::UserDataAbort
                 };
-                let recorded = crate::batcave::linux::skip_log::record(
+                let recorded = crate::caves::linux::skip_log::record(
                     kind,
-                    crate::batcave::linux::threads::current_tid(),
+                    crate::caves::linux::threads::current_tid(),
                     ec, esr & 0x01FF_FFFF, 0,
                     elr, far,
                 );
                 if recorded {
                     // Retire the offending thread; other threads
                     // continue. exit_current never returns.
-                    crate::batcave::linux::threads::exit_current(0);
+                    crate::caves::linux::threads::exit_current(0);
                 }
                 // Cap exceeded — fall through to original handler.
             }
@@ -2721,7 +2721,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             uart::puts("!!! UNHANDLED SYNC EXCEPTION !!!\n");
             uart::puts("  tid=t");
             crate::kernel::mm::print_num(
-                crate::batcave::linux::threads::current_tid() as usize);
+                crate::caves::linux::threads::current_tid() as usize);
             uart::puts("\n");
             uart::puts("  EC: 0x"); print_hex(ec);
             uart::puts("  ISS: 0x"); print_hex(esr & 0x01FF_FFFF);
@@ -2763,7 +2763,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 for off in [-16i64, -12, -8, -4, 0, 4, 8].iter() {
                     let addr = (elr as i64 + off) as usize;
                     let safe_addr = core::hint::black_box(addr);
-                    if !crate::batcave::linux::uaccess::is_user_range(safe_addr, 4)
+                    if !crate::caves::linux::uaccess::is_user_range(safe_addr, 4)
                         || !page_is_mapped(core::hint::black_box(safe_addr as u64))
                     {
                         uart::puts("\n    ["); print_hex(safe_addr as u64);
@@ -2818,7 +2818,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 for i in 0..scan_limit {
                     let addr = sp_val + (i as u64) * 8;
                     let safe_addr = core::hint::black_box(addr);
-                    if !crate::batcave::linux::uaccess::is_user_range(safe_addr as usize, 8)
+                    if !crate::caves::linux::uaccess::is_user_range(safe_addr as usize, 8)
                         || !page_is_mapped(core::hint::black_box(safe_addr))
                     {
                         uart::puts("\n    [sp+0x");
@@ -2866,7 +2866,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         let pc = v.wrapping_sub(4);
                         // gate via is_user_range AND
                         // page_is_mapped — see helper for why.
-                        if !crate::batcave::linux::uaccess::is_user_range(pc as usize, 4)
+                        if !crate::caves::linux::uaccess::is_user_range(pc as usize, 4)
                             || !page_is_mapped(pc)
                         {
                             continue;
@@ -2921,7 +2921,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     for off in [-16i64, -12, -8, -4, 0].iter() {
                         let addr = ((*frame).x[30] as i64 + off) as usize;
                         let safe_addr = core::hint::black_box(addr);
-                        if !crate::batcave::linux::uaccess::is_user_range(safe_addr, 4)
+                        if !crate::caves::linux::uaccess::is_user_range(safe_addr, 4)
                             || !page_is_mapped(core::hint::black_box(safe_addr as u64))
                         {
                             uart::puts("\n    ["); print_hex(safe_addr as u64);
@@ -2956,7 +2956,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         uart::puts(": ");
                         let row_base = (obj as i64 + i * 8) as usize;
                         let safe_row = core::hint::black_box(row_base);
-                        if !crate::batcave::linux::uaccess::is_user_range(safe_row, 8)
+                        if !crate::caves::linux::uaccess::is_user_range(safe_row, 8)
                             || !page_is_mapped(core::hint::black_box(safe_row as u64))
                         {
                             uart::puts("(unmapped)");
@@ -3050,7 +3050,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             uart::puts(": ");
                             let row_addr = probe as usize + off;
                             let safe_row = core::hint::black_box(row_addr);
-                            if !crate::batcave::linux::uaccess::is_user_range(safe_row, 16)
+                            if !crate::caves::linux::uaccess::is_user_range(safe_row, 16)
                                 || !page_is_mapped(core::hint::black_box(safe_row as u64))
                             {
                                 uart::puts("(unmapped)");
@@ -3103,7 +3103,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             uart::puts(" ");
                         }
                         let safe_addr = core::hint::black_box(addr);
-                        if !crate::batcave::linux::uaccess::is_user_range(safe_addr as usize, 8)
+                        if !crate::caves::linux::uaccess::is_user_range(safe_addr as usize, 8)
                             || !page_is_mapped(core::hint::black_box(safe_addr))
                         {
                             uart::puts("(unmapped) ");
@@ -3122,7 +3122,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             // fault with the last few svc calls — invaluable for
             // tracking how x29 / x30 got populated with a cage
             // pointer before the crashing `ret`.
-            crate::batcave::linux::syscall_history::dump();
+            crate::caves::linux::syscall_history::dump();
 
             // If the fault came from EL0 (SPSR.M[3:0] == 0b0000 = EL0t)
             // and the EC maps to a synchronous-fault signal whose
@@ -3135,10 +3135,10 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
             let from_el0 = spsr_m == 0;
             let fatal_signo: u32 = match ec {
                 0x20 | 0x21 | 0x24 | 0x25 => {
-                    crate::batcave::linux::signal::SIGSEGV
+                    crate::caves::linux::signal::SIGSEGV
                 }
                 0x22 | 0x26 => {
-                    crate::batcave::linux::signal::SIGBUS
+                    crate::caves::linux::signal::SIGBUS
                 }
                 _ => 0,
             };
@@ -3167,7 +3167,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     && elr_now >= 0x11000000 && elr_now < 0x1c800000
                 {
                     let prev_addr = elr_now;
-                    if crate::batcave::linux::uaccess::is_user_range(
+                    if crate::caves::linux::uaccess::is_user_range(
                         prev_addr as usize, 4)
                         && page_is_mapped(prev_addr & !0xFFF)
                     {
@@ -3373,7 +3373,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     let mut found_lr: u64 = 0;
                     while hops < 16 && fp != 0 {
                         // Validate fp is in user range AND mapped.
-                        if !crate::batcave::linux::uaccess::is_user_range(fp as usize, 16)
+                        if !crate::caves::linux::uaccess::is_user_range(fp as usize, 16)
                             || !page_is_mapped(fp)
                         {
                             break;
@@ -3448,7 +3448,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                         let probe_end = (sp_el0_now + 0x1000).min(page_end);
                         let mut sp_scan_hits = 0u32;
                         while probe_addr < probe_end {
-                            if !crate::batcave::linux::uaccess::is_user_range(probe_addr as usize, 8)
+                            if !crate::caves::linux::uaccess::is_user_range(probe_addr as usize, 8)
                                 || !page_is_mapped(probe_addr)
                             {
                                 break;
@@ -3549,7 +3549,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                                     let mut found_e: u64 = 0;
                                     let mut skip_n = depth as usize;
                                     while hops_e < 32 && fp_e != 0 {
-                                        if !crate::batcave::linux::uaccess::is_user_range(fp_e as usize, 16)
+                                        if !crate::caves::linux::uaccess::is_user_range(fp_e as usize, 16)
                                             || !page_is_mapped(fp_e)
                                         {
                                             break;
@@ -3621,7 +3621,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             LAST_SKIP_LR.store(found_lr, core::sync::atomic::Ordering::Relaxed);
                         }
                         if loop_detected {
-                            crate::batcave::linux::signal::terminate_cave_fatal_with_lr(
+                            crate::caves::linux::signal::terminate_cave_fatal_with_lr(
                                 fatal_signo, far_now, found_lr
                             );
                         }
@@ -3768,7 +3768,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     }
                 }
 
-                crate::batcave::linux::signal::terminate_cave_fatal_with_lr(
+                crate::caves::linux::signal::terminate_cave_fatal_with_lr(
                     fatal_signo, far_now, lr,
                 );
                 // never returns
@@ -3790,7 +3790,7 @@ pub extern "C" fn handle_unhandled_exception(_frame: *mut TrapFrame) {
 // instruction with addr=<any kernel address> and the emulator would
 // faithfully load/store on its behalf — arbitrary EL1 R/W primitive.
 fn emul_addr_ok(addr: usize, nbytes: usize) -> bool {
-    crate::batcave::linux::uaccess::is_user_range(addr, nbytes)
+    crate::caves::linux::uaccess::is_user_range(addr, nbytes)
 }
 
 unsafe fn emulate_load(addr: usize, size: u32) -> u64 {

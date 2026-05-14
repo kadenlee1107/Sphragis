@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-batcaved — Sphragis BatCave control daemon (Mac side)
+batcaved — Sphragis Cave control daemon (Mac side)
 
 ROLE
 ----
-`batcaved` is the Mac-side half of the Sphragis Docker-BatCave stack.
+`batcaved` is the Mac-side half of the Sphragis Docker-Cave stack.
 It listens for control commands from Sphragis (running as a QEMU guest),
 translates them into `docker` operations, streams results back.
 
 This daemon is the ONLY process on the Mac host that is allowed to
-start Docker containers claiming to be BatCaves. Sphragis manages the
+start Docker containers claiming to be Caves. Sphragis manages the
 cave lifecycle end-to-end via the control protocol; the daemon is
 essentially Sphragis's RPC agent.
 
@@ -71,7 +71,7 @@ from datetime import datetime
 DEFAULT_TOKEN = "BATMAN-DEV-2026"   # trivially replaceable via --token
 DEFAULT_ADDR  = "127.0.0.1"
 DEFAULT_PORT  = 9999
-CAVE_PREFIX   = "batcave-"          # all managed containers are named batcave-<name>
+CAVE_PREFIX   = "caves-"          # all managed containers are named caves-<name>
 LOG_ROOT      = Path(__file__).resolve().parent.parent / "logs/batcaved"
 LOG_ROOT.mkdir(parents=True, exist_ok=True)
 LOG_FILE      = LOG_ROOT / f"daemon-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -322,9 +322,9 @@ def start_egress_proxy():
 
 def create_encrypted_volume(name: str, key_hex: str, size_mb: int = 64) -> Path:
     """Create + attach an AES-256-encrypted APFS disk image.
-    Returns the Mac-side mount path (e.g. /Volumes/batcave-foo)."""
-    dmg_path = CAVE_VOLUMES_DIR / f"batcave-{name}.dmg"
-    vol_name = f"batcave-{name}"
+    Returns the Mac-side mount path (e.g. /Volumes/caves-foo)."""
+    dmg_path = CAVE_VOLUMES_DIR / f"caves-{name}.dmg"
+    vol_name = f"caves-{name}"
     if dmg_path.exists():
         # Race with a leftover from a crashed prior run — nuke + rebuild
         # so the key<->dmg binding is fresh.
@@ -559,7 +559,7 @@ def teardown_network():
 
 def list_managed():
     """Return list of {name, image, status} dicts for all containers
-    prefixed batcave-. Works even across daemon restarts (stateless-ish)."""
+    prefixed caves-. Works even across daemon restarts (stateless-ish)."""
     r = docker("ps", "-a", "--filter", f"name={CAVE_PREFIX}",
                "--format", "{{.Names}}\t{{.Image}}\t{{.Status}}")
     if r.returncode != 0:
@@ -574,7 +574,7 @@ def list_managed():
 
 def cmd_create(name: str, image: str, caps_csv: str, key_hex: str = "",
                persistent: bool = False) -> tuple[bool, str]:
-    """Create a BatCave container. `caps_csv` is a comma-separated list of
+    """Create a Cave container. `caps_csv` is a comma-separated list of
     Linux capabilities to add (e.g. "NET_RAW,NET_ADMIN").
 
     `key_hex` (Phase 3) is an optional 64-char hex-encoded AES-256 key
@@ -1077,7 +1077,7 @@ class TS(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 # ── Entry point ────────────────────────────────────────────────
 def main():
-    ap = argparse.ArgumentParser(description="Sphragis BatCave control daemon")
+    ap = argparse.ArgumentParser(description="Sphragis Cave control daemon")
     ap.add_argument("--addr", default=DEFAULT_ADDR)
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--token", default=DEFAULT_TOKEN)

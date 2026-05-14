@@ -57,7 +57,7 @@ pub const APP_NETMON: u8 = 3;
 pub const APP_EDITOR: u8 = 4;
 pub const APP_SECURITY: u8 = 5;
 pub const APP_COMMS: u8 = 6;
-pub const APP_BATCAVE: u8 = 7;
+pub const APP_CAVES: u8 = 7;
 
 const NUM_APPS: u8 = 8;
 const APP_NAMES: [&str; 8] = ["Term", "Dash", "File", "Net", "Edit", "Sec", "Chat", "Cave"];
@@ -447,7 +447,7 @@ pub fn draw_frame() {
 
 /// Resolve the cave indicator for the title bar's right-hand block.
 fn active_cave_indicator() -> (&'static str, u32, u32) {
-    let id = crate::batcave::cave::get_active();
+    let id = crate::caves::cave::get_active();
     if id == usize::MAX {
         // No active cave — kernel context.
         return ("kernel", GREEN, GREEN_DIM);
@@ -463,7 +463,7 @@ fn active_cave_indicator() -> (&'static str, u32, u32) {
         // Try a few likely accessor patterns. We don't have a generic
         // "current_cave_name" helper, so call into the active cave
         // table directly.
-        let raw = crate::batcave::cave::active_name_str();
+        let raw = crate::caves::cave::active_name_str();
         let n = raw.len().min(16);
         for i in 0..n { core::ptr::write_volatile(buf_ptr.add(i), raw.as_bytes()[i]); }
         n

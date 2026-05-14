@@ -13,7 +13,7 @@ fn main() {
 
     // Dev-only opt-in for loading an unsigned initrd (Chromium content_shell
     // stand-in while the real signing pipeline isn't wired up). Consumed by
-    // src/batcave/linux/runner.rs via option_env!. Without this rerun hint,
+    // src/caves/linux/runner.rs via option_env!. Without this rerun hint,
     // cargo would cache the previous `ALLOW_UNSIGNED_INITRD` boolean across
     // env flips and the operator would see a stale FATAL refusal.
     println!("cargo:rerun-if-env-changed=SPHRAGIS_ALLOW_UNSIGNED_INITRD");

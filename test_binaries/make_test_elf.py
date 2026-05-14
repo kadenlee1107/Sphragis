@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Create a minimal ARM64 Linux ELF binary that prints "Hello from BatCave!"
+Create a minimal ARM64 Linux ELF binary that prints "Hello from Cave!"
 Hand-encoded ARM64 instructions — no cross compiler needed.
 """
 
@@ -40,7 +40,7 @@ code += struct.pack('<I', 0xd503201f)  # nop
 code += struct.pack('<I', 0xd503201f)  # nop
 
 # msg at offset 40:
-msg = b"Hello from BatCave!\n"
+msg = b"Hello from Cave!\n"
 code += msg
 # Pad to 4-byte alignment
 while len(code) % 4 != 0:
@@ -96,4 +96,4 @@ print(f"Created hello_batcave.elf ({len(elf)} bytes)")
 print(f"  Load address: 0x{LOAD_ADDR:X}")
 print(f"  Entry point:  0x{LOAD_ADDR + 120:X}")
 print(f"  Code size:    {code_size} bytes")
-print(f"  Message:      'Hello from BatCave!'")
+print(f"  Message:      'Hello from Cave!'")

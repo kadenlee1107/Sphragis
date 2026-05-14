@@ -136,7 +136,7 @@ fn draw_architecture(p: &W::PanelInner) {
     y += 18;
     font::draw_str(fb, w, p.x, y, "Bare-metal AArch64 microkernel . zero external deps", MID, BG);
     y += 18;
-    font::draw_str(fb, w, p.x, y, "BatCave isolation . BatFS encrypted . audit-everything", MID, BG);
+    font::draw_str(fb, w, p.x, y, "Cave isolation . BatFS encrypted . audit-everything", MID, BG);
     y += 18;
     font::draw_str(fb, w, p.x, y, "Built 20260502.a3f1c . signed", DIM_TXT, BG);
     y += 18;

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Red-team vs Sphragis — cave_policy as the defender.
 
-Scenario: a BatCave named `kali` got compromised. The attacker now
+Scenario: a Cave named `kali` got compromised. The attacker now
 has shell inside it and is trying every standard Kali-toolkit move
 to pivot out to the internet. The cave's allowlist permits exactly
 one destination — example.com:443 (so the user's "normal" traffic
@@ -239,7 +239,7 @@ def main():
         banner("SPHRAGIS — Red Team vs cave_policy", char="═")
         print()
         print("Scenario:")
-        print("  A BatCave called 'kali' has been compromised. The attacker")
+        print("  A Cave called 'kali' has been compromised. The attacker")
         print("  is inside and has full shell access. They will now try")
         print("  every standard post-exploitation move to pivot out.")
         print()

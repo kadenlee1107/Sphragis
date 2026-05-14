@@ -2,7 +2,7 @@
  * syscall fuzzer seed inputs.
  *
  * Each SEED(nr, a0, a1, a2, a3, a4, a5) entry is one attack tuple.
- * Syscall numbers match src/batcave/linux/syscall.rs (AArch64 Linux ABI,
+ * Syscall numbers match src/caves/linux/syscall.rs (AArch64 Linux ABI,
  * plus Sphragis custom #500).
  *
  * Convention:

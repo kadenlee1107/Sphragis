@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # run_all.sh — build the four escape-test ELFs and point the kernel at
 # them. This assumes you have `aarch64-linux-musl-gcc` (the same toolchain
-# used to build tests/hello) on PATH, and that `src/batcave/linux/runner.rs`
+# used to build tests/hello) on PATH, and that `src/caves/linux/runner.rs`
 # has been patched to embed these ELFs and offer a shell command like
-# `batcave run <name>` that boots a cave with NO capabilities and executes
+# `caves run <name>` that boots a cave with NO capabilities and executes
 # the chosen ELF.
 #
 # If you don't want to patch runner.rs, you can drop the built ELFs into
@@ -27,14 +27,14 @@ ls -la "$HERE"/test_memory_peek "$HERE"/test_mmio_probe \
 cat <<EOF
 
 Next steps:
-  1. Wire these four ELFs into src/batcave/linux/runner.rs via
+  1. Wire these four ELFs into src/caves/linux/runner.rs via
      include_bytes!() and a new dispatch table (e.g. 'escape_run NAME').
   2. Boot Sphragis under QEMU with:
        cargo run --release -p sphragis
   3. From the shell:
-       batcave create test-escape
+       caves create test-escape
        # grant no caps, just enter
-       batcave enter test-escape
+       caves enter test-escape
        escape run memory_peek
        escape run mmio_probe
        escape run pt_write

@@ -1,0 +1,2182 @@
+#![allow(dead_code)]
+// Sphragis — Cave Core
+// Isolated container runtime for running Kali Linux tools.
+// Each Cave has its own encrypted filesystem, capabilities, and process space.
+
+use crate::crypto::sha256;
+use core::sync::atomic::{AtomicU8, AtomicBool, Ordering};
+
+pub const MAX_CAVES: usize = 32;
+pub const MAX_NAME: usize = 32;
+pub const MAX_TOOLS: usize = 32;
+pub const MAX_TOOL_NAME: usize = 32;
+pub const MAX_CAPS: usize = 16;
+pub const MAX_CAP_NAME: usize = 48;
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum CaveState {
+    Free,
+    Stopped,
+    Running,
+    Destroyed,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum CaveType {
+    Persistent,
+    Ephemeral,
+}
+
+/// What kind of isolation actually backs this cave.
+// /
+/// NATIVE caves run user ELFs under Sphragis's own MMU page tables via
+/// the `caves::linux` loader. DOCKER caves live as Linux containers
+/// on the Mac host, orchestrated by the `batcaved` daemon over TCP
+/// (see `docker_client.rs`). From the user's perspective both are
+/// just Caves — the backing field lets `caves list/destroy/run`
+/// route to the right implementation.
+#[derive(Clone, Copy, PartialEq)]
+pub enum CaveBacking {
+    Native,
+    Docker,
+}
+
+/// Max length of the image name we store alongside a docker-backed cave
+/// (e.g. `kalilinux/kali-rolling`). 64 covers the typical registry+tag.
+pub const MAX_IMAGE: usize = 64;
+
+#[derive(Clone, Copy)]
+pub struct CaveCap {
+    pub active: bool,
+    pub name: [u8; MAX_CAP_NAME],
+    pub name_len: usize,
+}
+
+impl CaveCap {
+    pub const fn empty() -> Self {
+        Self { active: false, name: [0; MAX_CAP_NAME], name_len: 0 }
+    }
+
+    pub fn name_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.name[..self.name_len]) }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct CaveTool {
+    pub installed: bool,
+    pub name: [u8; MAX_TOOL_NAME],
+    pub name_len: usize,
+}
+
+impl CaveTool {
+    pub const fn empty() -> Self {
+        Self { installed: false, name: [0; MAX_TOOL_NAME], name_len: 0 }
+    }
+
+    pub fn name_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.name[..self.name_len]) }
+    }
+}
+
+pub struct Cave {
+    pub state: CaveState,
+    pub cave_type: CaveType,
+    pub name: [u8; MAX_NAME],
+    pub name_len: usize,
+    pub tools: [CaveTool; MAX_TOOLS],
+    pub tool_count: usize,
+    pub caps: [CaveCap; MAX_CAPS],
+    pub cap_count: usize,
+    pub fs_key: [u8; 32],  // Per-cave encryption key
+    // Display sandbox: dedicated framebuffer region
+    pub display_x: u32,     // top-left corner in framebuffer
+    pub display_y: u32,
+    pub display_w: u32,     // size of allocated region
+    pub display_h: u32,
+    /// Which isolation primitive actually backs this cave.
+    pub backing: CaveBacking,
+    /// For docker-backed caves: the image reference passed to
+    /// `docker run` (e.g. "kalilinux/kali-rolling"). Empty for native.
+    pub image: [u8; MAX_IMAGE],
+    pub image_len: usize,
+    /// per-cave L1 page-table physical address. 0 means
+    /// "no L1 built yet" — the cave shares the kernel's PRIMARY_L1
+    /// until first `enter()`. On first enter we lazy-allocate via
+    /// `mmu::setup_native_cave_l1`, then call `mmu::switch_to_cave`
+    /// to install it in TTBR0_EL1. Each cave's L1 maps kernel
+    /// identity but no user window (native caves have no EL0 code),
+    /// so the cave-switch's `tlbi vmalle1` gives TLB-level
+    /// isolation between caves even without ASIDs. Freed by
+    /// `mmu::free_cave_slot` on `destroy()`.
+    pub cave_l1_phys: usize,
+    /// CAVE_L1[] slot index — the index into linux::mmu's
+    /// MAX_CAVE_PAGETABLES=8 slot array. usize::MAX = "not assigned".
+    /// Stored separately from `cave_l1_phys` so destroy() can free
+    /// the slot without re-scanning to find which one we own.
+    pub cave_l1_slot: usize,
+    /// Memory quota (gap-audit item 030, first slice). Pages this
+    /// cave is allowed to hold across all of its tracked allocations.
+    /// Currently enforced at the shm::create path; other allocators
+    /// will adopt the same `cave::charge_pages/release_pages` API in
+    /// follow-up batches. 0 means "no quota set" — charging always
+    /// succeeds. Default at cave-create time: 16384 pages (64 MiB).
+    pub mem_quota_pages: u32,
+    /// Pages currently charged to this cave. AtomicU32 so the alloc
+    /// hot path can fetch-add without taking the cave-table lock.
+    pub mem_used_pages: core::sync::atomic::AtomicU32,
+    /// Cumulative cntpct-tick count attributed to this cave's tasks
+    /// (observability, item 030 CPU slice). Bumped from
+    /// `scheduler::schedule()` when leaving a cave-tagged task.
+    /// No quota enforcement yet — needs preemptive timer scheduling.
+    pub cpu_ticks: core::sync::atomic::AtomicU64,
+    /// Cumulative network bytes sent / received attributed to this
+    /// cave (observability, item 030 IO slice). Bumped from
+    /// `net::tcp::send_data*` and `recv_data*`.
+    pub net_tx_bytes: core::sync::atomic::AtomicU64,
+    pub net_rx_bytes: core::sync::atomic::AtomicU64,
+    /// MLS sensitivity label (gov-grade §3.2). Bell-LaPadula
+    /// lattice: 0 = Unclassified, 1 = Confidential, 2 = Secret,
+    /// 3 = TopSecret. A cave at level L_s can read objects at
+    /// level L_o only when L_s >= L_o (no read-up), and can
+    /// write objects at level L_o only when L_s <= L_o (no
+    /// write-down). Default at create() is `Unclassified` (0);
+    /// admins raise the label via `cave::set_sensitivity`.
+    pub sensitivity: u8,
+    /// Biba integrity label (gov-grade §3.2 dual lattice).
+    /// 0 = Untrusted (default), 1 = Sandboxed, 2 = SystemTrusted,
+    /// 3 = HighIntegrity. Bell-LaPadula reversed for INTEGRITY:
+    /// a cave at level I_s can read objects at I_o only when
+    /// I_s <= I_o (no read-DOWN — don't trust low-integrity
+    /// sources), and can write objects at I_o only when
+    /// I_s >= I_o (no write-UP — don't pollute high-integrity
+    /// destinations with low-integrity data). BLP and Biba are
+    /// orthogonal — a cave can be Secret/Untrusted (knows
+    /// secrets, can't be trusted to write them safely) or
+    /// Unclassified/HighIntegrity (no secret access, but its
+    /// output is trustworthy).
+    pub integrity: u8,
+}
+
+/// MLS sensitivity label. Bell-LaPadula lattice: 0 = Unclassified,
+/// 1 = Confidential, 2 = Secret, 3 = TopSecret. Ordering matters
+/// — higher numeric value == more restrictive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum Sensitivity {
+    Unclassified = 0,
+    Confidential = 1,
+    Secret       = 2,
+    TopSecret    = 3,
+}
+
+impl Sensitivity {
+    /// Parse from operator-supplied label text. Accepts both the
+    /// short codes (`u`, `c`, `s`, `ts`) and the long form
+    /// (`unclassified`, etc.). Case-insensitive.
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut buf = [0u8; 16];
+        let n = s.len().min(buf.len());
+        for i in 0..n { buf[i] = s.as_bytes()[i].to_ascii_lowercase(); }
+        let lower = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
+        match lower {
+            "u" | "unclassified" => Some(Sensitivity::Unclassified),
+            "c" | "confidential" => Some(Sensitivity::Confidential),
+            "s" | "secret"       => Some(Sensitivity::Secret),
+            "ts" | "topsecret" | "top-secret" => Some(Sensitivity::TopSecret),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Sensitivity::Unclassified => "U",
+            Sensitivity::Confidential => "C",
+            Sensitivity::Secret       => "S",
+            Sensitivity::TopSecret    => "TS",
+        }
+    }
+    pub fn from_u8(b: u8) -> Sensitivity {
+        match b {
+            1 => Sensitivity::Confidential,
+            2 => Sensitivity::Secret,
+            3 => Sensitivity::TopSecret,
+            _ => Sensitivity::Unclassified,
+        }
+    }
+}
+
+/// MLS operation classes. Bell-LaPadula has two reference rules:
+///   * Simple security property (no read-up): subject at L_s can
+///     Read object at L_o only if L_s >= L_o.
+///   * *-property (no write-down): subject at L_s can Write object
+///     at L_o only if L_s <= L_o.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MlsOp {
+    Read,
+    Write,
+}
+
+/// Biba integrity label. The DUAL of `Sensitivity`: higher numeric
+/// value == more trustworthy / harder to corrupt. Default at
+/// create() is `Untrusted` (0).
+///
+/// Biba's rules are Bell-LaPadula's mirrored:
+///   * Subject I_s can Read object I_o only if I_s <= I_o
+///     (no read-DOWN — don't trust low-integrity input).
+///   * Subject I_s can Write object I_o only if I_s >= I_o
+///     (no write-UP — don't pollute high-integrity destinations).
+///
+/// BLP and Biba are independent dimensions. A cave can be
+/// Secret/Untrusted (cleared for secrets but can't be trusted to
+/// produce signed artefacts), or Unclassified/HighIntegrity (no
+/// secret access, but emits artefacts the kernel signs as
+/// authoritative).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+#[allow(clippy::enum_variant_names)] // `HighIntegrity` reads as a lattice level; renaming would touch every call site.
+pub enum Integrity {
+    Untrusted      = 0,
+    Sandboxed      = 1,
+    SystemTrusted  = 2,
+    HighIntegrity  = 3,
+}
+
+impl Integrity {
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut buf = [0u8; 24];
+        let n = s.len().min(buf.len());
+        for i in 0..n { buf[i] = s.as_bytes()[i].to_ascii_lowercase(); }
+        let lower = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
+        match lower {
+            "u" | "untrusted"      => Some(Integrity::Untrusted),
+            "sb" | "sandboxed"     => Some(Integrity::Sandboxed),
+            "st" | "system" | "system-trusted" => Some(Integrity::SystemTrusted),
+            "hi" | "high" | "high-integrity"   => Some(Integrity::HighIntegrity),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Integrity::Untrusted      => "U",
+            Integrity::Sandboxed      => "SB",
+            Integrity::SystemTrusted  => "ST",
+            Integrity::HighIntegrity  => "HI",
+        }
+    }
+    pub fn from_u8(b: u8) -> Integrity {
+        match b {
+            1 => Integrity::Sandboxed,
+            2 => Integrity::SystemTrusted,
+            3 => Integrity::HighIntegrity,
+            _ => Integrity::Untrusted,
+        }
+    }
+}
+
+/// Biba policy decision. `subject_level` is the cave/subject's
+/// integrity; `object_level` is the resource it's trying to touch.
+///   * `Read`  requires `subject <= object` (no read-down).
+///   * `Write` requires `subject >= object` (no write-up).
+pub fn can_flow_integrity(subject_level: Integrity, object_level: Integrity, op: MlsOp) -> bool {
+    match op {
+        MlsOp::Read  => subject_level <= object_level,
+        MlsOp::Write => subject_level >= object_level,
+    }
+}
+
+/// Decide whether a flow at level `subject_level` may operate on
+/// an object at level `object_level` under Bell-LaPadula.
+///
+/// `Read` requires `subject_level >= object_level` (the subject is
+/// cleared at least as high as the object — no read-up).
+/// `Write` requires `subject_level <= object_level` (the subject
+/// is at most as classified as the destination — no write-down).
+pub fn can_flow(subject_level: Sensitivity, object_level: Sensitivity, op: MlsOp) -> bool {
+    match op {
+        MlsOp::Read  => subject_level >= object_level,
+        MlsOp::Write => subject_level <= object_level,
+    }
+}
+
+/// The active cave's MLS label. Returns `Unclassified` when no cave
+/// is active — kernel/admin context defaults to the bottom of the
+/// lattice, so `can_flow` permits the admin to write anywhere
+/// (admins NEED write-up; that's how they file initial data).
+/// Admins SHOULD be read-restricted from classified material under
+/// strict BLP, but in our shell-admin model we let the operator
+/// see everything (otherwise the system is untestable).
+pub fn active_sensitivity() -> Sensitivity {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return Sensitivity::Unclassified; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    Sensitivity::from_u8(cave.sensitivity)
+}
+
+/// Look up the sensitivity of a specific cave by id.
+pub fn sensitivity_of(cave_id: u16) -> Sensitivity {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return Sensitivity::Unclassified; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[idx] };
+    Sensitivity::from_u8(cave.sensitivity)
+}
+
+/// Set a cave's MLS label by name. Idempotent. Returns
+/// `Err("no such cave")` if no cave matches.
+pub fn set_sensitivity_by_name(name: &str, level: Sensitivity) -> Result<(), &'static str> {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            if (*core::ptr::addr_of!(CAVES))[i].state != CaveState::Free
+                && (*core::ptr::addr_of!(CAVES))[i].name_str() == name
+            {
+                let cave = &mut (*core::ptr::addr_of_mut!(CAVES))[i];
+                cave.sensitivity = level as u8;
+                return Ok(());
+            }
+        }
+    }
+    Err("no such cave")
+}
+
+/// Active cave's Biba integrity label. Returns `Untrusted` when no
+/// cave is active — kernel/admin context defaults to the bottom of
+/// the integrity lattice. (The admin can still freely write-down
+/// because, under our shell-admin model, the operator IS the
+/// trusted subject; the lattice doesn't constrain them. Cave-level
+/// code IS constrained.)
+pub fn active_integrity() -> Integrity {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return Integrity::Untrusted; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    Integrity::from_u8(cave.integrity)
+}
+
+/// Look up a specific cave's integrity by id.
+pub fn integrity_of(cave_id: u16) -> Integrity {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return Integrity::Untrusted; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[idx] };
+    Integrity::from_u8(cave.integrity)
+}
+
+/// Set a cave's Biba integrity label by name. Idempotent.
+pub fn set_integrity_by_name(name: &str, level: Integrity) -> Result<(), &'static str> {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            if (*core::ptr::addr_of!(CAVES))[i].state != CaveState::Free
+                && (*core::ptr::addr_of!(CAVES))[i].name_str() == name
+            {
+                let cave = &mut (*core::ptr::addr_of_mut!(CAVES))[i];
+                cave.integrity = level as u8;
+                return Ok(());
+            }
+        }
+    }
+    Err("no such cave")
+}
+
+// ── Domain transitions / type enforcement (gov-grade §3.2 TE slice)
+//
+// SELinux's third dimension on top of BLP+Biba: every subject is in
+// a "domain", and the policy whitelists which (from_domain,
+// to_domain) transitions are permitted. We map domains 1:1 to
+// cave IDs — the cave IS the domain. The TE policy is a small
+// table of (from_cave_id, to_cave_id) pairs added at boot or via
+// the `te-allow` shell command.
+//
+// `cave::enter` consults `can_transition(get_active(), target)`
+// before swapping the active cave. The trampoline
+// `with_cave_active` deliberately bypasses TE because it's
+// kernel-internal — the kernel knows what it's doing and tests use
+// it directly. Operator-facing transitions go through `enter`.
+
+const MAX_TRANSITION_RULES: usize = 32;
+static mut TRANSITION_RULES: [(u16, u16); MAX_TRANSITION_RULES] =
+    [(0, 0); MAX_TRANSITION_RULES];
+static TRANSITION_COUNT: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+static TE_ENFORCED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Enable type-enforcement gating on `cave::enter`. Disabled at
+/// boot so existing flows keep working until an admin opts in
+/// (avoids back-compat breakage in the wild). Idempotent.
+pub fn te_enable() { TE_ENFORCED.store(true, Ordering::Relaxed); }
+pub fn te_disable() { TE_ENFORCED.store(false, Ordering::Relaxed); }
+pub fn te_enforced() -> bool { TE_ENFORCED.load(Ordering::Relaxed) }
+
+/// Allow a `(from -> to)` transition. Idempotent. Returns
+/// `Err("te: table full")` if `MAX_TRANSITION_RULES` is reached.
+pub fn add_transition_rule(from: u16, to: u16) -> Result<(), &'static str> {
+    unsafe {
+        let n = TRANSITION_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if TRANSITION_RULES[i] == (from, to) { return Ok(()); }
+        }
+        if n >= MAX_TRANSITION_RULES { return Err("te: table full"); }
+        TRANSITION_RULES[n] = (from, to);
+        TRANSITION_COUNT.store(n + 1, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// Remove a `(from -> to)` allowance. Returns false if no
+/// matching rule existed.
+pub fn remove_transition_rule(from: u16, to: u16) -> bool {
+    unsafe {
+        let n = TRANSITION_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if TRANSITION_RULES[i] == (from, to) {
+                // Compact: move last into this slot.
+                if i + 1 < n {
+                    TRANSITION_RULES[i] = TRANSITION_RULES[n - 1];
+                }
+                TRANSITION_RULES[n - 1] = (0, 0);
+                TRANSITION_COUNT.store(n - 1, Ordering::Relaxed);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Look up a cave's name by id. Returns empty string for invalid
+/// / free slots — keeps shell display paths simple.
+pub fn name_of(cave_id: u16) -> &'static str {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return ""; }
+    unsafe {
+        let c = &(*core::ptr::addr_of!(CAVES))[idx];
+        if c.state == CaveState::Free { return ""; }
+        c.name_str()
+    }
+}
+
+/// Wipe every TE rule. Used by selftests + `te-clear` shell command.
+pub fn clear_transition_rules() {
+    unsafe { TRANSITION_RULES = [(0, 0); MAX_TRANSITION_RULES]; }
+    TRANSITION_COUNT.store(0, Ordering::Relaxed);
+}
+
+/// TE policy decision for `from -> to`. `from = usize::MAX` means
+/// kernel / admin context, which can transition to anything
+/// (admin is always trusted to launch any cave). Same-target
+/// (no-op transition) is always permitted. Otherwise the rule
+/// must appear in the allow-list.
+pub fn can_transition(from_cave_id: usize, to_cave_id: u16) -> bool {
+    if from_cave_id == usize::MAX { return true; }
+    let from_u16 = from_cave_id as u16;
+    if from_u16 == to_cave_id { return true; }
+    unsafe {
+        let n = TRANSITION_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if TRANSITION_RULES[i] == (from_u16, to_cave_id) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ── TE on objects (gov-grade §3.2 object-type slice)
+//
+// SELinux distinguishes subject-domains (which we already model as
+// cave IDs) from object-types (file_type_t, socket_type_t, etc.).
+// This module adds the object-type axis: each BatFS file carries
+// an `obj_type: u8`, and a per-cave rule matrix says which
+// (cave_domain, obj_type, op) tuples are permitted. The default
+// is to permit any access (so existing caves with `obj_type=0`
+// untyped files keep working); rules add explicit DENY entries
+// for high-privilege types.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjOp { Read, Write }
+
+const MAX_OBJ_RULES: usize = 64;
+
+#[derive(Clone, Copy)]
+struct ObjRule {
+    in_use: bool,
+    cave_id: u16,
+    obj_type: u8,
+    /// Bit 0 = deny-read, bit 1 = deny-write.
+    deny_mask: u8,
+}
+
+impl ObjRule {
+    const fn empty() -> Self {
+        Self { in_use: false, cave_id: 0, obj_type: 0, deny_mask: 0 }
+    }
+}
+
+static mut OBJ_RULES: [ObjRule; MAX_OBJ_RULES] = [ObjRule::empty(); MAX_OBJ_RULES];
+static OBJ_RULE_COUNT: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+fn obj_op_bit(op: ObjOp) -> u8 {
+    match op { ObjOp::Read => 0b01, ObjOp::Write => 0b10 }
+}
+
+/// Add a (cave, obj_type) DENY rule for one op. Idempotent —
+/// re-adding the same triple just merges bits into the existing
+/// rule's deny_mask.
+pub fn deny_object_op(cave_id: u16, obj_type: u8, op: ObjOp) -> Result<(), &'static str> {
+    let bit = obj_op_bit(op);
+    unsafe {
+        let n = OBJ_RULE_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if OBJ_RULES[i].in_use
+                && OBJ_RULES[i].cave_id == cave_id
+                && OBJ_RULES[i].obj_type == obj_type
+            {
+                OBJ_RULES[i].deny_mask |= bit;
+                return Ok(());
+            }
+        }
+        if n >= MAX_OBJ_RULES { return Err("te-obj: table full"); }
+        OBJ_RULES[n] = ObjRule {
+            in_use: true, cave_id, obj_type, deny_mask: bit,
+        };
+        OBJ_RULE_COUNT.store(n + 1, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// Remove all (cave, obj_type) deny entries.
+pub fn allow_object_op(cave_id: u16, obj_type: u8) {
+    unsafe {
+        let n = OBJ_RULE_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if OBJ_RULES[i].in_use
+                && OBJ_RULES[i].cave_id == cave_id
+                && OBJ_RULES[i].obj_type == obj_type
+            {
+                if i + 1 < n {
+                    OBJ_RULES[i] = OBJ_RULES[n - 1];
+                }
+                OBJ_RULES[n - 1] = ObjRule::empty();
+                OBJ_RULE_COUNT.store(n - 1, Ordering::Relaxed);
+                return;
+            }
+        }
+    }
+}
+
+pub fn clear_object_rules() {
+    unsafe { OBJ_RULES = [ObjRule::empty(); MAX_OBJ_RULES]; }
+    OBJ_RULE_COUNT.store(0, Ordering::Relaxed);
+}
+
+/// Policy decision: may `cave_id` perform `op` on an object of
+/// `obj_type`? Default ALLOW unless an explicit DENY rule applies.
+/// Admin / kernel context (`cave_id == usize::MAX as u16`) always
+/// passes — the operator's the trusted subject in our model.
+pub fn can_access_object(cave_id: u16, obj_type: u8, op: ObjOp) -> bool {
+    if cave_id == u16::MAX { return true; }
+    let bit = obj_op_bit(op);
+    unsafe {
+        let n = OBJ_RULE_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if OBJ_RULES[i].in_use
+                && OBJ_RULES[i].cave_id == cave_id
+                && OBJ_RULES[i].obj_type == obj_type
+                && (OBJ_RULES[i].deny_mask & bit) != 0
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Walk every active rule for display / persistence.
+pub fn for_each_object_rule<F: FnMut(u16, u8, u8)>(mut f: F) {
+    unsafe {
+        let n = OBJ_RULE_COUNT.load(Ordering::Relaxed);
+        for i in 0..n {
+            if OBJ_RULES[i].in_use {
+                f(OBJ_RULES[i].cave_id, OBJ_RULES[i].obj_type, OBJ_RULES[i].deny_mask);
+            }
+        }
+    }
+}
+
+/// Iterate every rule for shell display / persistence.
+pub fn for_each_transition_rule<F: FnMut(u16, u16)>(mut f: F) {
+    unsafe {
+        let n = TRANSITION_COUNT.load(Ordering::Relaxed);
+        for i in 0..n { f(TRANSITION_RULES[i].0, TRANSITION_RULES[i].1); }
+    }
+}
+
+// ── Exec-time domain auto-transition (gov-grade §3.2 TE slice,
+//    SELinux `domain_auto_trans` equivalent).
+//
+// Each binary (referenced by its BatFS filename) can be tagged with a
+// `target_cave` id. When the operator runs the binary via
+// `exec-file`, the kernel checks whether the active cave is
+// policy-allow-listed to transition to that target via the existing
+// `(from, to)` allow table, and if so swaps the active cave for the
+// duration of the run. If TE is disabled the auto-transition is
+// silently honored without a policy check (matches the existing
+// `cave::enter` semantics).
+//
+// We keep the table on the side instead of widening `FileEntry`
+// because BatFS persistence layers (`fs::batfs_disk`) are byte-
+// stable on the existing struct shape; growing the entry would mean
+// a coordinated on-disk format bump. The side-table model is also
+// how SELinux itself models `domain_auto_trans` — the policy lives
+// in the policy database, not on the file.
+//
+// `MAX_FILENAME` matches `fs::batfs::MAX_FILENAME` (96). Keeping our
+// own constant here so this module stays self-contained.
+const EXEC_TRANS_MAX_NAME: usize = 96;
+const MAX_EXEC_TRANS_RULES: usize = 32;
+
+#[derive(Copy, Clone)]
+struct ExecTransRule {
+    in_use: bool,
+    name: [u8; EXEC_TRANS_MAX_NAME],
+    name_len: usize,
+    target_cave: u16,
+}
+
+static mut EXEC_TRANS_RULES: [ExecTransRule; MAX_EXEC_TRANS_RULES] = [ExecTransRule {
+    in_use: false, name: [0u8; EXEC_TRANS_MAX_NAME], name_len: 0, target_cave: 0,
+}; MAX_EXEC_TRANS_RULES];
+
+/// Register an auto-transition: when the binary `filename` is run
+/// via `exec-file`, the active cave should switch to `target_cave`
+/// (subject to TE policy if enforced). Idempotent — re-registering
+/// the same filename overwrites the target.
+pub fn set_exec_transition(filename: &str, target_cave: u16) -> Result<(), &'static str> {
+    if filename.is_empty() || filename.len() > EXEC_TRANS_MAX_NAME {
+        return Err("exec-trans: bad filename");
+    }
+    unsafe {
+        let ptr = core::ptr::addr_of_mut!(EXEC_TRANS_RULES);
+        // Update existing.
+        for i in 0..MAX_EXEC_TRANS_RULES {
+            let r = &mut (*ptr)[i];
+            if r.in_use && r.name_len == filename.len()
+                && &r.name[..r.name_len] == filename.as_bytes()
+            {
+                r.target_cave = target_cave;
+                return Ok(());
+            }
+        }
+        // Insert new.
+        for i in 0..MAX_EXEC_TRANS_RULES {
+            let r = &mut (*ptr)[i];
+            if !r.in_use {
+                r.in_use = true;
+                r.name_len = filename.len();
+                r.name[..r.name_len].copy_from_slice(filename.as_bytes());
+                r.target_cave = target_cave;
+                return Ok(());
+            }
+        }
+    }
+    Err("exec-trans: table full")
+}
+
+/// Remove an auto-transition for `filename`. Returns true if a
+/// rule was present and got removed.
+pub fn clear_exec_transition(filename: &str) -> bool {
+    unsafe {
+        let ptr = core::ptr::addr_of_mut!(EXEC_TRANS_RULES);
+        for i in 0..MAX_EXEC_TRANS_RULES {
+            let r = &mut (*ptr)[i];
+            if r.in_use && r.name_len == filename.len()
+                && &r.name[..r.name_len] == filename.as_bytes()
+            {
+                r.in_use = false;
+                r.name_len = 0;
+                r.target_cave = 0;
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Look up the auto-transition target for `filename`. Returns
+/// `None` if no rule is registered.
+pub fn lookup_exec_transition(filename: &str) -> Option<u16> {
+    unsafe {
+        let ptr = core::ptr::addr_of!(EXEC_TRANS_RULES);
+        for i in 0..MAX_EXEC_TRANS_RULES {
+            let r = &(*ptr)[i];
+            if r.in_use && r.name_len == filename.len()
+                && &r.name[..r.name_len] == filename.as_bytes()
+            {
+                return Some(r.target_cave);
+            }
+        }
+    }
+    None
+}
+
+/// Wipe the exec-transition table. Used by selftests + the
+/// `exec-trans-clear` shell command.
+pub fn clear_all_exec_transitions() {
+    unsafe {
+        let ptr = core::ptr::addr_of_mut!(EXEC_TRANS_RULES);
+        for i in 0..MAX_EXEC_TRANS_RULES {
+            (*ptr)[i].in_use = false;
+            (*ptr)[i].name_len = 0;
+            (*ptr)[i].target_cave = 0;
+        }
+    }
+}
+
+/// Iterate every exec-transition rule for shell display.
+pub fn for_each_exec_transition<F: FnMut(&str, u16)>(mut f: F) {
+    unsafe {
+        let ptr = core::ptr::addr_of!(EXEC_TRANS_RULES);
+        for i in 0..MAX_EXEC_TRANS_RULES {
+            let r = &(*ptr)[i];
+            if r.in_use {
+                let name = core::str::from_utf8(&r.name[..r.name_len]).unwrap_or("");
+                f(name, r.target_cave);
+            }
+        }
+    }
+}
+
+// ── Information-flow taint propagation (gov-grade §3.2 IFC slice).
+//
+// Each cave carries a 32-bit taint set — a bitmap of independent
+// taint sources (e.g. bit 0 = PII, bit 1 = compliance-restricted,
+// bit 2 = trade-secret). Files in BatFS carry their own taint set.
+//
+// Propagation rules:
+//   - ns_read:  cave.taint |= file.taint  (reader inherits source's taints)
+//   - ns_write: file.taint |= cave.taint  (sink accumulates author's taints)
+//
+// The bitmap is monotonically OR-ing — taint only grows. Reset is
+// an explicit admin operation (`cave-taint-clear`), audit-logged.
+// This matches the conservative IFC model: once an artifact is
+// tainted, every downstream consumer is presumed tainted too,
+// even if it's "obvious" the consumer doesn't actually retain
+// the data.
+//
+// Why a side-table (and not a `Cave` field): grouping taint
+// state next to its semantic neighbors (cave-quota, cave-cpu)
+// keeps the struct narrow for cold-path scans and lets us evolve
+// the bitmap width independently of the Cave layout.
+
+use core::sync::atomic::AtomicU32;
+
+const CAVE_TAINT_INIT: AtomicU32 = AtomicU32::new(0);
+static CAVE_TAINT: [AtomicU32; MAX_CAVES] = [CAVE_TAINT_INIT; MAX_CAVES];
+
+/// Current taint bitmap for `cave_id`. Returns 0 for out-of-range
+/// ids — same defensive shape as `name_of`.
+pub fn taint_of(cave_id: u16) -> u32 {
+    let i = cave_id as usize;
+    if i >= MAX_CAVES { return 0; }
+    CAVE_TAINT[i].load(Ordering::Acquire)
+}
+
+/// OR `bits` into `cave_id`'s taint. Idempotent — same bits
+/// re-applied is a no-op (bitwise OR semantics). Out-of-range
+/// ids are silently ignored.
+pub fn add_taint(cave_id: u16, bits: u32) {
+    let i = cave_id as usize;
+    if i >= MAX_CAVES { return; }
+    CAVE_TAINT[i].fetch_or(bits, Ordering::AcqRel);
+}
+
+/// Set `cave_id`'s taint exactly — used by the
+/// `cave-taint-set/clear` admin paths. Clobbers previous bits;
+/// most callers want `add_taint` instead.
+pub fn set_taint(cave_id: u16, bits: u32) {
+    let i = cave_id as usize;
+    if i >= MAX_CAVES { return; }
+    CAVE_TAINT[i].store(bits, Ordering::Release);
+}
+
+/// Taint of the currently-active cave. Returns 0 from kernel /
+/// admin context (no cave active).
+pub fn active_taint() -> u32 {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return 0; }
+    CAVE_TAINT[id].load(Ordering::Acquire)
+}
+
+/// OR `bits` into the currently-active cave's taint. Called from
+/// `batfs::ns_read` after a successful read, so the reader's cave
+/// inherits the file's taints.
+pub fn active_add_taint(bits: u32) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return; }
+    CAVE_TAINT[id].fetch_or(bits, Ordering::AcqRel);
+}
+
+/// Zero every cave's taint bitmap. Selftest hook + the
+/// `cave-taint-reset-all` admin operation.
+pub fn clear_all_taints() {
+    for i in 0..MAX_CAVES {
+        CAVE_TAINT[i].store(0, Ordering::Release);
+    }
+}
+
+impl Cave {
+    pub const fn empty() -> Self {
+        Self {
+            state: CaveState::Free,
+            cave_type: CaveType::Persistent,
+            name: [0; MAX_NAME],
+            name_len: 0,
+            tools: [CaveTool::empty(); MAX_TOOLS],
+            tool_count: 0,
+            caps: [CaveCap::empty(); MAX_CAPS],
+            cap_count: 0,
+            fs_key: [0; 32],
+            display_x: 0,
+            display_y: 0,
+            display_w: 0,
+            display_h: 0,
+            backing: CaveBacking::Native,
+            image: [0; MAX_IMAGE],
+            image_len: 0,
+            cave_l1_phys: 0,             // lazy-built on first enter
+            cave_l1_slot: usize::MAX,    // "not assigned"
+            mem_quota_pages: 0,          // 0 = no quota; set at create()
+            mem_used_pages: core::sync::atomic::AtomicU32::new(0),
+            cpu_ticks: core::sync::atomic::AtomicU64::new(0),
+            net_tx_bytes: core::sync::atomic::AtomicU64::new(0),
+            net_rx_bytes: core::sync::atomic::AtomicU64::new(0),
+            sensitivity: Sensitivity::Unclassified as u8,
+            integrity: Integrity::Untrusted as u8,
+        }
+    }
+
+    pub fn image_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.image[..self.image_len]) }
+    }
+
+    pub fn is_docker(&self) -> bool {
+        matches!(self.backing, CaveBacking::Docker)
+    }
+
+    pub fn name_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.name[..self.name_len]) }
+    }
+
+    pub fn is_ephemeral(&self) -> bool {
+        self.cave_type == CaveType::Ephemeral
+    }
+
+    pub fn has_cap(&self, cap_name: &str) -> bool {
+        for i in 0..self.cap_count {
+            if !self.caps[i].active { continue; }
+            let cap = self.caps[i].name_str();
+            // Exact match (net, raw, display)
+            if cap == cap_name { return true; }
+            // Path-scoped fs capability: "fs:/tmp" grants access to /tmp/*
+            if cap.starts_with("fs:") && cap_name.starts_with("fs:") {
+                let granted_path = &cap[3..];
+                let requested_path = &cap_name[3..];
+                if requested_path.starts_with(granted_path) { return true; }
+            }
+            // IPC capability: "ipc:recon" grants IPC to cave named "recon"
+            if cap.starts_with("ipc:") && cap_name.starts_with("ipc:") {
+                if cap == cap_name { return true; }
+            }
+        }
+        false
+    }
+
+    /// Check if this cave has fs access to a specific path.
+    pub fn can_access_path(&self, path: &str) -> bool {
+        // "fs" (no path) = full access
+        if self.has_cap("fs") { return true; }
+        // Check scoped fs caps
+        let mut check = [0u8; 64];
+        let prefix = b"fs:";
+        check[..3].copy_from_slice(prefix);
+        let plen = path.len().min(61);
+        check[3..3+plen].copy_from_slice(&path.as_bytes()[..plen]);
+        let check_str = unsafe { core::str::from_utf8_unchecked(&check[..3+plen]) };
+        self.has_cap(check_str)
+    }
+
+    /// any-fs-cap test.
+    // /
+    /// Returns true if the cave has either bare `fs` (full FS access)
+    /// OR any path-scoped `fs:<path>` cap. The syscall dispatcher uses
+    /// this for the broad FileIO category gate so a cave granted only
+    /// `fs:/tmp` makes it past the dispatcher; the per-syscall path
+    /// check (via `can_access_path` at openat) then enforces the
+    /// path scope.
+    // /
+    /// Without this, a cave with only `fs:/tmp` failed the bare `fs`
+    /// check and got zero FS syscalls — so path-scoped caps were
+    /// purely decorative.
+    pub fn has_any_fs_cap(&self) -> bool {
+        for i in 0..self.cap_count {
+            if !self.caps[i].active { continue; }
+            let cap = self.caps[i].name_str();
+            if cap == "fs" { return true; }
+            if cap.starts_with("fs:") { return true; }
+        }
+        false
+    }
+}
+
+// Global registry
+//
+// Phase 6: made `pub` so the shell can read per-cave backing/image
+// via `cave::CAVES[id].is_docker()` when routing `caves run/destroy`.
+// All mutation still goes through the pub fns in this file.
+pub static mut CAVES: [Cave; MAX_CAVES] = [const { Cave::empty() }; MAX_CAVES];
+
+static CAVE_COUNT: AtomicU8 = AtomicU8::new(0);
+static INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+// Track which Cave is currently active (for syscall capability checks)
+static ACTIVE_CAVE_ID: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+
+/// Set the active cave (called when entering a cave).
+pub fn set_active(id: usize) {
+    ACTIVE_CAVE_ID.store(id, Ordering::Relaxed);
+}
+
+/// Get the active cave ID (usize::MAX = none active).
+pub fn get_active() -> usize {
+    ACTIVE_CAVE_ID.load(Ordering::Relaxed)
+}
+
+/// name of the currently-active cave for UI display
+/// (title-bar cave indicator). Returns "kernel" when no cave is
+/// active or the slot id is out of range.
+pub fn active_name_str() -> &'static str {
+    let id = ACTIVE_CAVE_ID.load(Ordering::Relaxed);
+    if id == usize::MAX || id >= MAX_CAVES { return "kernel"; }
+    unsafe {
+        let cave = &CAVES[id];
+        if cave.state == CaveState::Free { return "kernel"; }
+        cave.name_str()
+    }
+}
+
+/// true iff the active cave has any FS-related cap
+/// (bare `fs` for full access, or any `fs:<path>` for scoped). Used
+/// by the syscall dispatcher's FileIO gate so caves with only
+/// path-scoped caps don't get blocked at the broad-cap check before
+/// the per-syscall path check ever runs.
+pub fn active_has_any_fs_cap() -> bool {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return false; }
+    unsafe { CAVES[id].has_any_fs_cap() }
+}
+
+/// Check if the active cave can access a filesystem path.
+/// Active cave's mount-namespace prefix (gap-audit item 032).
+/// Returns `<cave-name>:` for an active cave, or empty for the
+/// kernel/admin context (no cave attached). Used by
+/// `fs::batfs::ns_*` to scope file names per cave so two caves
+/// can't see each other's filenames even though they share the
+/// same BatFS storage.
+pub fn active_mount_prefix(out: &mut [u8; 80]) -> usize {
+    let id = get_active();
+    if id == usize::MAX { return 0; }
+    let name = unsafe { (*core::ptr::addr_of!(CAVES))[id].name_str() };
+    let nlen = name.len().min(out.len() - 1);
+    out[..nlen].copy_from_slice(&name.as_bytes()[..nlen]);
+    out[nlen] = b':';
+    nlen + 1
+}
+
+/// Charge `pages` against the active cave's memory quota. Returns
+/// `Err("cave: memory quota exceeded")` if the charge would push
+/// the cave past its limit. No-op (Ok) when no cave is active.
+///
+/// Gap-audit item 030 first slice. Currently called from
+/// `kernel::shm::create`; other allocators adopt the same API in
+/// follow-up batches.
+pub fn active_charge_pages(pages: u32) -> Result<(), &'static str> {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return Ok(()); }
+    charge_pages_for(id as u16, pages)
+}
+
+/// Release `pages` previously charged via `active_charge_pages`.
+/// Safe to over-call slightly — saturates at zero.
+pub fn active_release_pages(pages: u32) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return; }
+    release_pages_for(id as u16, pages);
+}
+
+/// Explicit-cave charge — for allocators that know the target
+/// cave_id directly (e.g. `cave_private::ensure_page(cave_id)`
+/// allocates one frame for cave_id, regardless of which cave is
+/// active when it runs). Same semantics as `active_charge_pages`:
+/// quota 0 means unlimited; over-quota returns Err.
+pub fn charge_pages_for(cave_id: u16, pages: u32) -> Result<(), &'static str> {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return Ok(()); }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[idx] };
+    if cave.mem_quota_pages == 0 { return Ok(()); }
+    let used = cave.mem_used_pages.load(Ordering::Relaxed);
+    if used.saturating_add(pages) > cave.mem_quota_pages {
+        return Err("cave: memory quota exceeded");
+    }
+    cave.mem_used_pages.fetch_add(pages, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Release `pages` previously charged via `charge_pages_for`.
+pub fn release_pages_for(cave_id: u16, pages: u32) {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[idx] };
+    let mut cur = cave.mem_used_pages.load(Ordering::Relaxed);
+    loop {
+        let new = cur.saturating_sub(pages);
+        match cave.mem_used_pages.compare_exchange_weak(
+            cur, new, Ordering::Relaxed, Ordering::Relaxed,
+        ) {
+            Ok(_) => return,
+            Err(observed) => cur = observed,
+        }
+    }
+}
+
+/// Read a specific cave's `(used, quota)` page counts. Mirrors
+/// `active_quota_status` for cases where the caller knows the
+/// target cave_id directly (e.g. selftests asserting a charge
+/// landed on the right cave).
+pub fn quota_status_for(cave_id: u16) -> (u32, u32) {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return (0, 0); }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[idx] };
+    (cave.mem_used_pages.load(Ordering::Relaxed), cave.mem_quota_pages)
+}
+
+/// Read the active cave's (used, quota) page counts. Returns
+/// (0, 0) when no cave is active.
+pub fn active_quota_status() -> (u32, u32) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return (0, 0); }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    (cave.mem_used_pages.load(Ordering::Relaxed), cave.mem_quota_pages)
+}
+
+/// Set a cave's memory quota by name. Used by the `cave-quota`
+/// shell command.
+pub fn set_quota_by_name(name: &str, pages: u32) -> Result<(), &'static str> {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            if (*core::ptr::addr_of!(CAVES))[i].state != CaveState::Free
+                && (*core::ptr::addr_of!(CAVES))[i].name_str() == name
+            {
+                let cave = &mut (*core::ptr::addr_of_mut!(CAVES))[i];
+                cave.mem_quota_pages = pages;
+                return Ok(());
+            }
+        }
+    }
+    Err("no such cave")
+}
+
+/// Iterate over active caves with (name, used, quota). Used by
+/// the `cave-quota` shell command for the no-arg listing.
+pub fn for_each_quota<F: FnMut(&str, u32, u32)>(mut f: F) {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            let cave = &(*core::ptr::addr_of!(CAVES))[i];
+            if cave.state == CaveState::Free { continue; }
+            f(cave.name_str(),
+              cave.mem_used_pages.load(Ordering::Relaxed),
+              cave.mem_quota_pages);
+        }
+    }
+}
+
+/// Look up a cave's L1 page-table physical address by id.
+/// Returns None if the id is out of range, the cave is Free, or
+/// the L1 hasn't been built yet (cave_l1_phys == 0 — cave was
+/// created but never entered). Callers use this to decide whether
+/// to call `mmu::switch_to_cave` on a task transition.
+///
+/// `sys-caves arc 1`: scheduler hook reads this on every
+/// context switch where the next task's cave_id differs from the
+/// current task's. None means "no MMU switch needed, the kernel's
+/// PRIMARY_L1 still services this task's user-window accesses
+/// (which is safe because all kernel-mode tasks share VA)."
+pub fn get_cave_l1_phys(cave_id: u16) -> Option<usize> {
+    let i = cave_id as usize;
+    if i >= MAX_CAVES { return None; }
+    unsafe {
+        let c = &(*core::ptr::addr_of!(CAVES))[i];
+        if c.state == CaveState::Free { return None; }
+        if c.cave_l1_phys == 0 { return None; }
+        Some(c.cave_l1_phys)
+    }
+}
+
+/// Run `f` "inside" the cave identified by `cave_id`. Saves the
+/// current task's `cave_id` and `TTBR0_EL1`, switches both to the
+/// target cave around the closure body, and restores the saved
+/// values before returning. The scheduler MMU hook (`Arc 1`) keeps
+/// the cave's L1 active across any yields that happen while `f`
+/// is running, so this works correctly even when `f` itself
+/// yields.
+///
+/// If the target cave has no built L1 (`get_cave_l1_phys` returns
+/// None) we fall through to running `f` in the caller's context.
+/// The cave_id tag is still applied — any caller that depends on
+/// the `cave_id` for routing (audit ring, BatFS key selection,
+/// etc.) still sees the right tag, just without MMU enforcement
+/// on this particular run. Same fallback shape as
+/// `sys_wg_service::with_sys_wg_cave` before it was extracted up
+/// to this generic helper.
+///
+/// Caller-side preconditions:
+///   - The kernel boot path has enabled the MMU (otherwise the
+///     TTBR0 writes are register-only). On a successfully-booted
+///     kernel that is guaranteed; the boot path panics on MMU
+///     enable failure.
+///   - `cave_id` corresponds to a live cave registered via
+///     `cave::create` or one of the boot-time sys-* caves.
+pub fn with_cave_active<R>(cave_id: u16, f: impl FnOnce() -> R) -> R {
+    let task_id = crate::kernel::process::current_id();
+    let saved_cave = crate::kernel::process::get(task_id).cave_id;
+    let saved_active = ACTIVE_CAVE_ID.load(Ordering::Relaxed);
+
+    let saved_ttbr0: u64;
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) saved_ttbr0); }
+
+    crate::kernel::process::set_cave(task_id, cave_id);
+    // `ACTIVE_CAVE_ID` is the source of truth for `cave::active_*`
+    // queries (capability checks, mount-prefix, quota charge). The
+    // trampoline must update it too — otherwise queries from inside
+    // the closure still see the OUTER cave's identity (or "kernel"
+    // when called from the shell), defeating the trampoline.
+    ACTIVE_CAVE_ID.store(cave_id as usize, Ordering::Relaxed);
+    if let Some(target_l1) = get_cave_l1_phys(cave_id) {
+        crate::caves::linux::mmu::switch_to_cave(target_l1);
+    }
+
+    let out = f();
+
+    crate::kernel::process::set_cave(task_id, saved_cave);
+    ACTIVE_CAVE_ID.store(saved_active, Ordering::Relaxed);
+    if saved_ttbr0 != 0 {
+        crate::caves::linux::mmu::switch_to_cave(saved_ttbr0 as usize);
+    }
+    out
+}
+
+/// Bump the active cave's CPU-tick counter. Called by the
+/// scheduler on each context switch with the cntpct delta the
+/// just-descheduled task accumulated. Observability only — no
+/// enforcement.
+pub fn active_add_cpu_ticks(delta: u64) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    cave.cpu_ticks.fetch_add(delta, Ordering::Relaxed);
+}
+
+/// Bump the active cave's net TX byte counter. Called by
+/// `net::tcp::send_data*`.
+pub fn active_add_tx_bytes(n: u64) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    cave.net_tx_bytes.fetch_add(n, Ordering::Relaxed);
+}
+
+/// Bump the active cave's net RX byte counter. Called by
+/// `net::tcp::recv_data*`.
+pub fn active_add_rx_bytes(n: u64) {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[id] };
+    cave.net_rx_bytes.fetch_add(n, Ordering::Relaxed);
+}
+
+/// Iterate over active caves with full quota + observability
+/// counters: (name, mem_used, mem_quota, cpu_ticks, tx, rx).
+pub fn for_each_usage<F: FnMut(&str, u32, u32, u64, u64, u64)>(mut f: F) {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            let cave = &(*core::ptr::addr_of!(CAVES))[i];
+            if cave.state == CaveState::Free { continue; }
+            f(cave.name_str(),
+              cave.mem_used_pages.load(Ordering::Relaxed),
+              cave.mem_quota_pages,
+              cave.cpu_ticks.load(Ordering::Relaxed),
+              cave.net_tx_bytes.load(Ordering::Relaxed),
+              cave.net_rx_bytes.load(Ordering::Relaxed));
+        }
+    }
+}
+
+pub fn active_can_access_path(path: &str) -> bool {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return false; }
+    unsafe { CAVES[id].can_access_path(path) }
+}
+
+/// Check if the active cave has a specific capability.
+pub fn active_has_cap(cap: &str) -> bool {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return false; }
+    unsafe {
+        let cave = &CAVES[id];
+        cave.state != CaveState::Free && cave.has_cap(cap)
+    }
+}
+
+pub fn init() {
+    INITIALIZED.store(true, Ordering::Relaxed);
+
+    // restore persistent caves from BatFS. Runs AFTER
+    // `fs::batfs::init` (see main.rs ordering) so the filesystem is
+    // already unlocked with the operator's passphrase. Each cave whose
+    // manifest survives the boot is reinstalled into CAVES[] in
+    // CaveState::Stopped — the operator brings it back up with
+    // `caves enter <name>` if they want to attach.
+    let restored = crate::caves::persist::restore_all();
+    CAVE_COUNT.store(restored as u8, Ordering::Relaxed);
+}
+
+/// Ensure an "ambient" Cave is active for the shell-launched ELF runner
+/// paths (hello / libc / threads + the content_shell/netsurf/freetype/png/
+/// v8/blink binaries that `cmd_run_elf` spawns).
+// /
+/// Without this, `cave::get_active()` returns `usize::MAX`, every
+/// capability check fails (because `active_has_cap` can't index a cave
+/// slot), and the ELF hits `EACCES` on the first `write`/`mmap`/... syscall.
+// /
+/// We install a single ephemeral cave named `"shell-host"` with a broad cap
+/// set. This intentionally does NOT enforce isolation — it's the host
+/// process equivalent on a UNIX-like system. Production-sensitive workloads
+/// still create named Caves with narrower caps via the `caves` shell
+/// commands.
+pub fn ensure_host_cave_active() {
+    const HOST: &str = "shell-host";
+    const HOST_CAPS: &[&str] = &["proc", "mem", "fs", "net", "raw", "display"];
+
+    if get_active() != usize::MAX {
+        return; // something else already owns the current thread
+    }
+
+    let id = match find_id(HOST) {
+        Some(id) => id,
+        None => match create(HOST, true) {
+            Ok(id) => {
+                for cap in HOST_CAPS {
+                    let _ = grant_cap(HOST, cap);
+                }
+                id
+            }
+            Err(_e) => return, // out of slots — leave active = MAX, syscalls will block
+        },
+    };
+    set_active(id);
+}
+
+/// Create a new Cave.
+pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
+    if name.len() > MAX_NAME {
+        // every cave-creation
+        // attempt is operationally significant and worth logging — both
+        // the success path AND every failure mode. Pre-fix the failure
+        // paths returned silently. An attacker (or buggy script) trying
+        // to flood the cave table left no breadcrumbs in the audit ring.
+        crate::security::audit::record(
+            crate::security::audit::Category::Cave,
+            b"cave create FAILED: name too long",
+        );
+        return Err("name too long");
+    }
+
+    unsafe {
+        // Check duplicate
+        for i in 0..MAX_CAVES {
+            if CAVES[i].state != CaveState::Free && CAVES[i].name_str() == name {
+                let mut buf = [0u8; 192];
+                let mut p = 0usize;
+                let copy = |dst: &mut [u8], src: &[u8], p: &mut usize| {
+                    let n = src.len().min(dst.len().saturating_sub(*p));
+                    dst[*p..*p + n].copy_from_slice(&src[..n]);
+                    *p += n;
+                };
+                copy(&mut buf, b"cave create FAILED: duplicate name ", &mut p);
+                copy(&mut buf, name.as_bytes(), &mut p);
+                crate::security::audit::record(
+                    crate::security::audit::Category::Cave,
+                    &buf[..p],
+                );
+                return Err("Cave already exists");
+            }
+        }
+
+        // Find free slot
+        let slot = match (0..MAX_CAVES)
+            .find(|&i| CAVES[i].state == CaveState::Free)
+        {
+            Some(s) => s,
+            None => {
+                // Cave-table saturation. This is a SECURITY-relevant
+                // event: an attacker with shell access trying to DoS
+                // the OS by spinning up 32 caves leaves a clear trace
+                // here. Always logged (not one-shot) since the operator
+                // needs to see EVERY rejected creation to understand
+                // the scope of the attempt.
+                crate::security::audit::record(
+                    crate::security::audit::Category::Cave,
+                    b"cave create FAILED: max caves reached (table full)",
+                );
+                crate::drivers::uart::puts("[cave] WARNING: MAX_CAVES reached - creation rejected\n");
+                return Err("max Caves reached");
+            }
+        };
+
+        let cave = &mut CAVES[slot];
+        cave.state = CaveState::Stopped;
+        cave.cave_type = if ephemeral { CaveType::Ephemeral } else { CaveType::Persistent };
+        cave.name[..name.len()].copy_from_slice(name.as_bytes());
+        cave.name_len = name.len();
+        cave.tool_count = 0;
+        cave.cap_count = 0;
+
+        // pre-fix the per-cave fs_key was
+        // SHA256(`0xBA7CA7E0…` constant || cave_name). Both inputs
+        // were trivially recoverable — the constant is in the kernel
+        // binary, the name is in `info caves`/audit logs/IPC discovery.
+        // Anyone with read access to either could decrypt every cave's
+        // BatFS files.
+        //
+        // Now: HMAC-style derivation against the boot-time BatFS
+        // master key (which is itself derived from the operator's
+        // passphrase via SHA256 in derive_batfs_key, with per-boot
+        // entropy via the salt in main.rs). Knowing the cave name no
+        // longer suffices; the attacker also needs the operator
+        // passphrase. Defense-in-depth against an attacker with
+        // kernel-image read access.
+        cave.fs_key = sha256::derive_key(
+            &crate::fs::batfs::master_key(),
+            name.as_bytes(),
+        );
+
+        // New caves default to Native backing. `create_docker` upgrades
+        // the backing + stores the image name after this returns.
+        cave.backing = CaveBacking::Native;
+        cave.image_len = 0;
+
+        // Gap-audit item 030 first slice — default memory quota.
+        // 16384 pages × 4 KiB = 64 MiB. Generous for the demo
+        // workloads we run (shells, comms, ai); the operator can
+        // tighten via `cave-quota <name> <pages>`.
+        cave.mem_quota_pages = 16384;
+        cave.mem_used_pages.store(0, Ordering::Relaxed);
+
+        let count = CAVE_COUNT.load(Ordering::Relaxed);
+        CAVE_COUNT.store(count + 1, Ordering::Relaxed);
+
+        // success-path log.
+        // Pairs with the failure-path entries above so the audit ring
+        // tells a complete cave-lifecycle story.
+        let mut buf = [0u8; 192];
+        let mut p = 0usize;
+        let copy = |dst: &mut [u8], src: &[u8], p: &mut usize| {
+            let n = src.len().min(dst.len().saturating_sub(*p));
+            dst[*p..*p + n].copy_from_slice(&src[..n]);
+            *p += n;
+        };
+        copy(&mut buf, b"cave create OK ", &mut p);
+        copy(&mut buf, name.as_bytes(), &mut p);
+        copy(&mut buf, if ephemeral { b" (ephemeral)" } else { b" (persistent)" }, &mut p);
+        crate::security::audit::record(
+            crate::security::audit::Category::Cave,
+            &buf[..p],
+        );
+
+        // write the cave manifest to BatFS so the registry
+        // entry survives reboot. No-op for Ephemeral caves. Native /
+        // Docker caves both go through this — `create_docker` re-saves
+        // afterwards with the upgraded backing+image fields.
+        crate::caves::persist::save(&CAVES[slot]);
+
+        Ok(slot)
+    }
+}
+
+/// Create a docker-backed Cave. Thin wrapper over `create` that also
+/// stores the image ref so `list` / `destroy` / `run` can route to the
+/// `batcaved` daemon via `docker_client`.
+// /
+/// This function does NOT spin up the container — the shell handler is
+/// responsible for calling `docker_client::create` so a daemon-side
+/// failure can be surfaced BEFORE we've polluted the cave table.
+pub fn create_docker(name: &str, image: &str, ephemeral: bool)
+    -> Result<usize, &'static str>
+{
+    if image.len() > MAX_IMAGE { return Err("image name too long"); }
+    let slot = create(name, ephemeral)?;
+    unsafe {
+        let cave = &mut CAVES[slot];
+        cave.backing = CaveBacking::Docker;
+        cave.image[..image.len()].copy_from_slice(image.as_bytes());
+        cave.image_len = image.len();
+    }
+    // Followup 3a/3b: register the cave with the kernel's policy store
+    // with ZERO rules. Any egress attempt will hit default-deny until a
+    // grant arrives via `cpol-add` / `caves-fw-allow`. This guarantees
+    // the kernel is aware of the cave's existence at creation time —
+    // the 3c packet path will be able to map container source addresses
+    // to a known policy entry.
+    crate::net::cave_policy::set_policy_by_name(
+        name,
+        alloc::vec::Vec::new(),
+    );
+    // re-save manifest now that backing=Docker + image are
+    // populated. The first save() inside create() captured a Native
+    // baseline; this overwrites with the docker-aware version so the
+    // cave wakes up correctly from disk.
+    unsafe { crate::caves::persist::save(&CAVES[slot]); }
+    Ok(slot)
+}
+
+/// Install a tool into a Cave.
+pub fn install_tool(name: &str, tool: &str) -> Result<(), &'static str> {
+    let cave = find_mut(name)?;
+
+    if cave.tool_count >= MAX_TOOLS {
+        return Err("max tools reached");
+    }
+
+    // Check if already installed
+    for i in 0..cave.tool_count {
+        if cave.tools[i].installed && cave.tools[i].name_str() == tool {
+            return Err("tool already installed");
+        }
+    }
+
+    let t = &mut cave.tools[cave.tool_count];
+    t.installed = true;
+    let len = tool.len().min(MAX_TOOL_NAME);
+    t.name[..len].copy_from_slice(&tool.as_bytes()[..len]);
+    t.name_len = len;
+    cave.tool_count += 1;
+
+    // refresh manifest so installed tools survive reboot.
+    crate::caves::persist::save(cave);
+
+    Ok(())
+}
+
+/// Grant a capability to a Cave.
+pub fn grant_cap(name: &str, cap: &str) -> Result<(), &'static str> {
+    let cave = find_mut(name)?;
+
+    if cave.cap_count >= MAX_CAPS {
+        return Err("max capabilities reached");
+    }
+
+    // Check if already granted
+    if cave.has_cap(cap) {
+        return Err("capability already granted");
+    }
+
+    let c = &mut cave.caps[cave.cap_count];
+    c.active = true;
+    let len = cap.len().min(MAX_CAP_NAME);
+    c.name[..len].copy_from_slice(&cap.as_bytes()[..len]);
+    c.name_len = len;
+    cave.cap_count += 1;
+
+    // refresh manifest so granted caps survive reboot.
+    crate::caves::persist::save(cave);
+
+    Ok(())
+}
+
+/// Revoke a capability from a Cave.
+pub fn revoke_cap(name: &str, cap: &str) -> Result<(), &'static str> {
+    let cave = find_mut(name)?;
+
+    for i in 0..cave.cap_count {
+        if cave.caps[i].active && cave.caps[i].name_str() == cap {
+            cave.caps[i].active = false;
+            // refresh manifest so revoked caps don't reappear
+            // on reboot. The caps slot stays in place (active=false) so
+            // existing code paths don't shift indices mid-iteration.
+            crate::caves::persist::save(cave);
+            return Ok(());
+        }
+    }
+
+    Err("capability not found")
+}
+
+// ─── Inter-Cave IPC ───
+
+/// IPC channel mapping between caves
+const MAX_CAVE_IPC: usize = 16;
+static mut CAVE_IPC: [(usize, usize, u64); MAX_CAVE_IPC] = [(usize::MAX, usize::MAX, 0); MAX_CAVE_IPC];
+
+/// Create an IPC channel between two Caves.
+/// Both caves must have `ipc:<other_name>` capability.
+pub fn create_ipc(cave_a: &str, cave_b: &str) -> Result<u64, &'static str> {
+    let id_a = find_id(cave_a).ok_or("cave A not found")?;
+    let id_b = find_id(cave_b).ok_or("cave B not found")?;
+
+    // Check capabilities
+    unsafe {
+        let mut cap_check = [0u8; 48];
+        // A needs ipc:<B>
+        let b_len = cave_b.len().min(44);
+        cap_check[..4].copy_from_slice(b"ipc:");
+        cap_check[4..4+b_len].copy_from_slice(&cave_b.as_bytes()[..b_len]);
+        let cap_b = core::str::from_utf8_unchecked(&cap_check[..4+b_len]);
+        if !CAVES[id_a].has_cap(cap_b) { return Err("A lacks ipc cap"); }
+
+        // B needs ipc:<A>
+        let a_len = cave_a.len().min(44);
+        cap_check[4..4+a_len].copy_from_slice(&cave_a.as_bytes()[..a_len]);
+        let cap_a = core::str::from_utf8_unchecked(&cap_check[..4+a_len]);
+        if !CAVES[id_b].has_cap(cap_a) { return Err("B lacks ipc cap"); }
+    }
+
+    // Create kernel IPC channel
+    let channel = crate::kernel::ipc::create_channel().ok_or("no free channels")?;
+
+    // Store mapping
+    unsafe {
+        for i in 0..MAX_CAVE_IPC {
+            if CAVE_IPC[i].0 == usize::MAX {
+                CAVE_IPC[i] = (id_a, id_b, channel);
+                return Ok(channel);
+            }
+        }
+    }
+    Err("max IPC channels")
+}
+
+/// Get the IPC channel between the active cave and another cave.
+pub fn get_ipc_channel(other_name: &str) -> Option<u64> {
+    let active = get_active();
+    let other = find_id(other_name)?;
+    unsafe {
+        for i in 0..MAX_CAVE_IPC {
+            let (a, b, ch) = CAVE_IPC[i];
+            if (a == active && b == other) || (a == other && b == active) {
+                return Some(ch);
+            }
+        }
+    }
+    None
+}
+
+/// Allocate a display sandbox region for a cave.
+/// Each cave gets a non-overlapping framebuffer rectangle.
+pub fn alloc_display(name: &str, x: u32, y: u32, w: u32, h: u32) -> Result<(), &'static str> {
+    let cave = find_mut(name)?;
+    cave.display_x = x;
+    cave.display_y = y;
+    cave.display_w = w;
+    cave.display_h = h;
+    Ok(())
+}
+
+/// Check if a pixel coordinate is within the active cave's display sandbox.
+pub fn display_check(x: u32, y: u32) -> bool {
+    let id = get_active();
+    if id == usize::MAX || id >= MAX_CAVES { return true; } // no cave active → allow (kernel)
+    unsafe {
+        let cave = &CAVES[id];
+        if cave.display_w == 0 || !cave.has_cap("display") { return false; } // no display cap
+        x >= cave.display_x && x < cave.display_x + cave.display_w &&
+        y >= cave.display_y && y < cave.display_y + cave.display_h
+    }
+}
+
+/// Start a Cave.
+pub fn start(name: &str) -> Result<(), &'static str> {
+    let cave = find_mut(name)?;
+    if cave.state == CaveState::Running {
+        return Err("already running");
+    }
+    cave.state = CaveState::Running;
+    Ok(())
+}
+
+/// Stop a Cave.
+pub fn stop(name: &str) -> Result<(), &'static str> {
+    let cave = find_mut(name)?;
+    cave.state = CaveState::Stopped;
+    Ok(())
+}
+
+/// Enter a Cave (start + set up isolated VFS + mark active).
+// /
+/// V5-XLAYER-001/002/003 fix: wipe all per-cave static state on every
+/// cave switch (not only on destroy). Previously the signal handler
+/// table, TLS key state, and fd table persisted across caves — one
+/// cave could install a handler, exit, and a later cave would inherit
+/// it. Same for TLS session keys on PCBs the previous tenant opened.
+pub fn enter(name: &str) -> Result<(), &'static str> {
+    // Gov-grade §3.2 TE: when type enforcement is enabled, only
+    // transitions explicitly allow-listed via `add_transition_rule`
+    // (or originated from kernel/admin context) get past this gate.
+    // Default is disabled so existing flows keep working; ops opt
+    // in via the `te-enable` shell command.
+    if te_enforced() {
+        let target = match find_id(name) {
+            Some(id) => id as u16,
+            None => return Err("te: no such cave"),
+        };
+        if !can_transition(get_active(), target) {
+            return Err("te: transition denied");
+        }
+    }
+    start(name)?;
+    if let Some(id) = find_id(name) {
+        // lazy-build the cave's L1 page table BEFORE the
+        // critical section. The setup helper allocates 6 frames + does
+        // a 6×512-entry initialization pass — too long to run with
+        // IRQs masked. Building outside the CS is safe because we
+        // store the result in CAVES[id] (atomic-by-being-static-mut +
+        // single-CPU) and re-read it inside the CS.
+        //
+        // Skip docker-backed caves: their isolation is the Mac
+        // kernel's container, not our MMU. Building a Sphragis L1 for
+        // them would be wasted memory.
+        let needs_l1 = unsafe {
+            !CAVES[id].is_docker() && CAVES[id].cave_l1_phys == 0
+        };
+        if needs_l1 {
+            if let Some(slot) = crate::caves::linux::mmu::alloc_native_cave_slot() {
+                if let Ok(l1) = crate::caves::linux::mmu::setup_native_cave_l1(slot) {
+                    unsafe {
+                        CAVES[id].cave_l1_phys = l1;
+                        CAVES[id].cave_l1_slot = slot;
+                    }
+                }
+                // On allocation failure (frame-pool OOM, MAX_CAVE_PAGETABLES
+                // exhausted) we fall through with cave_l1_phys=0 — the cave
+                // still works using PRIMARY_L1, just without per-cave TLB
+                // isolation. Audit-log so the operator sees the regression.
+                if unsafe { CAVES[id].cave_l1_phys } == 0 {
+                    crate::security::audit::record(
+                        crate::security::audit::Category::Cave,
+                        b"WARN: cave L1 allocation failed; using primary TTBR0",
+                    );
+                }
+            }
+        }
+
+        // V8-ROOT-1 fix: the entire park→reset→activate sequence is a
+        // single critical section. V6's deferred-preempt scheduler could
+        // fire a timer IRQ between any two steps here, letting another
+        // thread observe partially-reset tables (xlayer-D: pointer
+        // validated against dying cave's VA) or a sentinel `active==MAX`
+        // state where quota charges silently no-op.
+        //
+        // vfs::init_for_cave is the ONLY call inside the CS that might
+        // allocate (heap). That's fine because the heap allocator itself
+        // masks DAIF.I (V6-TOCTOU-007) and IrqGuard is nestable.
+        let prev_active = get_active();
+        crate::critical_section! {
+            if prev_active != usize::MAX {
+                set_active(usize::MAX);
+            }
+            // V8-ROOT-2: route every per-cave reset through the central hub
+            // so adding a new subsystem requires updating ONE place. Missing
+            // one of these previously was the root of half a dozen
+            // cross-cave information-leak bugs.
+            reset_all_globals_for_cave_switch();
+            set_active(id);
+            crate::caves::linux::vfs::init_for_cave(id);
+
+            // install the cave's L1 in TTBR0_EL1.
+            // `switch_to_cave` does the canonical pre-write `tlbi vmalle1
+            // dsb sy ; isb` → `msr ttbr0_el1, x` → `isb` → post-write
+            // `tlbi vmalle1 ; dsb sy ; isb` sequence. With this in place
+            // every native cave's TLB entries are isolated from every
+            // other cave's, closing the audit's "memory isolation is
+            // fiction" verdict for Layer 1.
+            //
+            // If lazy-allocation failed above (cave_l1_phys=0), we
+            // explicitly switch to PRIMARY_L1 so the previous cave's
+            // TTBR0 doesn't leak forward — better to share kernel L1
+            // than to keep a stale per-cave one active.
+            let l1 = unsafe { CAVES[id].cave_l1_phys };
+            if l1 != 0 {
+                crate::caves::linux::mmu::switch_to_cave(l1);
+            } else {
+                crate::caves::linux::mmu::switch_to_primary();
+            }
+
+            // repaint the title-bar chrome NOW (after
+            // set_active(id) above). The CAVE indicator reads
+            // `active_name_str()` which now returns the new cave's
+            // name. Doing this earlier (e.g. inside
+            // console::reset_for_cave_switch) would have rendered
+            // the old cave's name because we always set
+            // ACTIVE_CAVE_ID = usize::MAX before the reset and only
+            // restore it after. wm::draw_frame is just FB writes —
+            // safe inside the IrqGuard'd critical section.
+            crate::ui::wm::draw_frame();
+        }
+        let _ = prev_active;
+    }
+    Ok(())
+}
+
+/// Find a cave index by name.
+pub fn find_id(name: &str) -> Option<usize> {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            if CAVES[i].state != CaveState::Free && CAVES[i].name_str() == name {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+/// Seal a persistent Cave to ephemeral (one-way, irreversible).
+// /
+/// Anti-coercion design per DESIGN_BATCAVES.md §"Seal": once an
+/// operator is facing duress and seals a cave, the persistent-state
+/// guarantees go away IMMEDIATELY — not at next-reboot. This means:
+// /
+/// 1. cave_type flips to Ephemeral (blocks future "already sealed"
+/// re-seals and will get swept by destroy_all like any ephemeral).
+/// 2. fs_key is zeroed RIGHT NOW. Any BatFS blob that survives
+/// on disk becomes undecryptable — even to the operator, even
+/// with the passphrase. One-way ratchet.
+/// 3. For Docker-backed caves: the daemon's encrypted APFS volume
+/// is destroyed. The bind-mount inside the container becomes
+/// inert — the container keeps running for its current session
+/// but has nothing persistent backing /data. On next wipe /
+/// reboot the remaining container state dies with the cave.
+// /
+/// There is no `unseal`. Callers that get "already ephemeral" have
+/// either sealed this cave before OR created it as ephemeral; in
+/// either case the operator is not losing anything by the error.
+pub fn seal(name: &str) -> Result<(), &'static str> {
+    // Capture Docker-ness + image name BEFORE we flip state, because
+    // the daemon call needs the existing identifiers.
+    let (is_docker, already_ephemeral) = {
+        let cave = find_mut(name)?;
+        (matches!(cave.backing, CaveBacking::Docker),
+         cave.cave_type == CaveType::Ephemeral)
+    };
+
+    if already_ephemeral {
+        return Err("already ephemeral");
+    }
+
+    // Tell the daemon to destroy the encrypted volume + drop the
+    // per-cave key mapping. Best-effort — if the daemon is down we
+    // still flip state locally so the ratchet holds.
+    if is_docker {
+        let _ = crate::caves::docker_client::with_daemon(|| {
+            crate::caves::docker_client::cave_seal(name)
+        });
+    }
+
+    // Zero the BatFS key + flip state. `find_mut` is re-run because
+    // the daemon call above may have yielded.
+    let cave = find_mut(name)?;
+    cave.fs_key = [0; 32];
+    cave.cave_type = CaveType::Ephemeral;
+
+    // a sealed cave is no longer Persistent — drop its
+    // manifest so it doesn't reincarnate as Persistent on next boot.
+    // The seal ratchet must hold across reboots too; otherwise an
+    // attacker who panics → coerces a seal → reboots the box would
+    // see the original Persistent cave back. Anti-coercion is the
+    // entire point of seal, so this delete is non-negotiable.
+    crate::caves::persist::delete(name);
+
+    // persist the audit ring so the seal event itself
+    // (and everything before it) survives a panic-induced reboot.
+    // Pairs with the persist::delete above — if the attacker triggers
+    // a reboot to escape the trail, the trail is already on disk.
+    let _ = crate::security::audit::flush_to_batfs();
+
+    Ok(())
+}
+
+/// Destroy a Cave — secure wipe.
+// /
+/// V2-NEW-009/019/031/032/033 + ESC-029/033: clear every `static mut`
+/// piece of per-cave state that survived into the next cave. Previously
+/// SIGNAL_HANDLERS (128 × u64 of attacker-controllable handler addresses),
+/// CLONE_CHILD_STACK, IN_CHILD, IS_THREAD_CHILD, LAST_CHILD_TID, PIPE_BUF,
+/// UDP RX queue, SAVED_FRAME, SAVED_STACK all carried over to the next
+/// cave — a cheap cross-cave info-leak and gadget-plant primitive.
+pub fn destroy(name: &str) -> Result<(), &'static str> {
+    // V6-CHAIN-001 fix: capture the cave id BEFORE wiping state, since
+    // find_id() filters out Free caves and the original V5 code did
+    // the lookup AFTER setting state=Free → quotas::reset was dead.
+    let cave_id_for_reset = find_id(name);
+
+    // V8-ROOT-1 fix: the entire destroy sequence — active-deactivate,
+    // VFS tear-down, fs_key zero, tool/cap clear, state=Free, stats
+    // decrement, static-mut reset, quota reset — is one critical
+    // section. IRQ audit #2: if a thread in the destroyed cave resumes
+    // mid-destroy it sees `fs_key=[0;32]` and encrypts/decrypts with
+    // a zero key (AES-GCM keystream = AES(0, counter) — deterministic,
+    // recoverable).
+    let _irq_guard = crate::kernel::sync::IrqGuard::new();
+
+    // Wipe the cave's VFS instance (filesystem data)
+    if let Some(id) = cave_id_for_reset {
+        crate::caves::linux::vfs::destroy_cave_vfs(id);
+        // If this was the active cave, clear active. also
+        // swap TTBR0 back to PRIMARY_L1 so the about-to-be-freed L1
+        // doesn't keep getting walked. `mmu::free_cave_slot` below
+        // tears down the L1 frames; running with a freed L1 in TTBR0
+        // is asking for a use-after-free in the page-table walker.
+        if get_active() == id {
+            set_active(usize::MAX);
+            crate::caves::linux::mmu::switch_to_primary();
+        }
+        // free this cave's L1/L2 frames + clear the slot
+        // so the next cave can claim it. Idempotent — safe even if
+        // cave_l1_slot was usize::MAX (the cave never entered).
+        unsafe {
+            let slot = CAVES[id].cave_l1_slot;
+            if slot != usize::MAX {
+                crate::caves::linux::mmu::free_cave_slot(slot);
+                CAVES[id].cave_l1_slot = usize::MAX;
+                CAVES[id].cave_l1_phys = 0;
+            }
+        }
+    }
+
+    let cave = match find_mut(name) {
+        Ok(c) => c,
+        Err(e) => {
+            // every
+            // destroy attempt is logged regardless of outcome. The
+            // failure path here is most often "operator typo" but it
+            // ALSO covers a malicious destroy probe (someone scanning
+            // for cave names by trying to delete them). Keep the trail.
+            let mut buf = [0u8; 192];
+            let mut p = 0usize;
+            let copy = |dst: &mut [u8], src: &[u8], p: &mut usize| {
+                let n = src.len().min(dst.len().saturating_sub(*p));
+                dst[*p..*p + n].copy_from_slice(&src[..n]);
+                *p += n;
+            };
+            copy(&mut buf, b"cave destroy FAILED ", &mut p);
+            copy(&mut buf, name.as_bytes(), &mut p);
+            crate::security::audit::record(
+                crate::security::audit::Category::Cave,
+                &buf[..p],
+            );
+            return Err(e);
+        }
+    };
+
+    // Zero the encryption key — data is now unrecoverable
+    cave.fs_key = [0; 32];
+
+    // Clear all tools
+    for i in 0..cave.tool_count {
+        cave.tools[i] = CaveTool::empty();
+    }
+    cave.tool_count = 0;
+
+    // Clear all caps
+    for i in 0..cave.cap_count {
+        cave.caps[i] = CaveCap::empty();
+    }
+    cave.cap_count = 0;
+
+    cave.state = CaveState::Free;
+    cave.name_len = 0;
+
+    // Followup 3a/3b: a destroyed cave must not leave stale egress rules
+    // the kernel would match against a fresh cave that reuses the name.
+    crate::net::cave_policy::clear_by_name(name);
+
+    let count = CAVE_COUNT.load(Ordering::Relaxed);
+    if count > 0 { CAVE_COUNT.store(count - 1, Ordering::Relaxed); }
+
+    // V2-NEW-009+: clear the cross-cave static globals in the Linux
+    // compat layer so the next cave starts with a clean state.
+    crate::caves::linux::syscall::reset_cave_statics();
+
+    // V5-CHAIN-004 + V6-CHAIN-001 fix: use the id we captured at the
+    // top, not a fresh find_id (which now returns None because we
+    // just set state=Free above).
+    if let Some(id) = cave_id_for_reset {
+        crate::caves::linux::quotas::reset(id);
+    }
+
+    // success-path
+    // log so the audit ring shows full lifecycle (create → use →
+    // destroy) for every cave. Critical for post-incident review.
+    let mut buf = [0u8; 192];
+    let mut p = 0usize;
+    let copy = |dst: &mut [u8], src: &[u8], p: &mut usize| {
+        let n = src.len().min(dst.len().saturating_sub(*p));
+        dst[*p..*p + n].copy_from_slice(&src[..n]);
+        *p += n;
+    };
+    copy(&mut buf, b"cave destroy OK ", &mut p);
+    copy(&mut buf, name.as_bytes(), &mut p);
+    crate::security::audit::record(
+        crate::security::audit::Category::Cave,
+        &buf[..p],
+    );
+
+    // drop the persisted manifest so the cave stays
+    // destroyed across reboots. Idempotent — silently does nothing if
+    // the cave was Ephemeral and never had a manifest.
+    crate::caves::persist::delete(name);
+
+    // persist the audit ring so the destroy event is
+    // durable across reboot. Same anti-coercion reasoning as seal.
+    let _ = crate::security::audit::flush_to_batfs();
+
+    Ok(())
+}
+
+/// Destroy ALL Caves — called by wipe system.
+pub fn destroy_all() {
+    // Phase 5: every wipe event (deadman, duress, panic, emergency_wipe)
+    // must take out docker-backed caves too. Fan out to the batcaved
+    // daemon via docker_client::destroy_all BEFORE we zero the local
+    // cave table — otherwise the daemon has no way to know which caves
+    // were Sphragis's (the `name_len = 0` reset below wipes that).
+    //
+    // Errors from the daemon are logged but not fatal — the local
+    // teardown still runs. If the daemon is unreachable (operator
+    // killed it, network blip), we can't help the remote containers,
+    // but the in-Sphragis state still gets zeroed. A daemon restart
+    // reconciles via its own state (it tracks every `caves-*` name
+    // it knows about through docker ps).
+    let had_docker = unsafe {
+        let mut any = false;
+        for i in 0..MAX_CAVES {
+            if CAVES[i].state != CaveState::Free && CAVES[i].is_docker() {
+                any = true; break;
+            }
+        }
+        any
+    };
+    if had_docker {
+        let r = crate::caves::docker_client::with_daemon(|| {
+            crate::caves::docker_client::destroy_all()
+        });
+        match r {
+            Ok(n) => {
+                crate::drivers::uart::puts("  [wipe] docker caves destroyed: ");
+                crate::kernel::mm::print_num(n);
+                crate::drivers::uart::puts("\n");
+            }
+            Err(e) => {
+                crate::drivers::uart::puts("  [wipe] docker destroy_all failed: ");
+                crate::drivers::uart::puts(e);
+                crate::drivers::uart::puts(" (daemon unreachable?)\n");
+            }
+        }
+    }
+
+    // take down persisted manifests first, BEFORE we zero
+    // the in-RAM names. After the loop below `name_len = 0` so the
+    // names would be unrecoverable. Wipe events (deadman/duress/panic)
+    // must clear the manifests too — otherwise the next boot would
+    // resurrect every cave from disk and the wipe would have done
+    // nothing useful for the cave registry.
+    unsafe {
+        let mut name_buf = [[0u8; MAX_NAME]; MAX_CAVES];
+        let mut name_lens = [0usize; MAX_CAVES];
+        let mut count = 0usize;
+        for i in 0..MAX_CAVES {
+            if CAVES[i].state != CaveState::Free
+               && CAVES[i].cave_type == CaveType::Persistent {
+                let nl = CAVES[i].name_len.min(MAX_NAME);
+                name_buf[count][..nl].copy_from_slice(&CAVES[i].name[..nl]);
+                name_lens[count] = nl;
+                count += 1;
+            }
+        }
+        for i in 0..count {
+            let name = core::str::from_utf8_unchecked(&name_buf[i][..name_lens[i]]);
+            crate::caves::persist::delete(name);
+        }
+    }
+
+    unsafe {
+        for i in 0..MAX_CAVES {
+            if CAVES[i].state != CaveState::Free {
+                CAVES[i].fs_key = [0; 32];
+                CAVES[i].state = CaveState::Free;
+                CAVES[i].tool_count = 0;
+                CAVES[i].cap_count = 0;
+                CAVES[i].name_len = 0;
+                CAVES[i].backing = CaveBacking::Native;
+                CAVES[i].image_len = 0;
+            }
+        }
+    }
+    CAVE_COUNT.store(0, Ordering::Relaxed);
+}
+
+/// List all active Caves.
+pub fn list<F: FnMut(&Cave)>(mut callback: F) {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            if CAVES[i].state != CaveState::Free {
+                callback(&CAVES[i]);
+            }
+        }
+    }
+}
+
+pub fn count() -> usize {
+    CAVE_COUNT.load(Ordering::Relaxed) as usize
+}
+
+pub fn state_str(state: CaveState) -> &'static str {
+    match state {
+        CaveState::Free => "FREE",
+        CaveState::Stopped => "STOPPED",
+        CaveState::Running => "RUNNING",
+        CaveState::Destroyed => "DESTROYED",
+    }
+}
+
+pub fn type_str(t: CaveType) -> &'static str {
+    match t {
+        CaveType::Persistent => "persistent",
+        CaveType::Ephemeral => "ephemeral",
+    }
+}
+
+// ── Seal ratchet selftest ─────────────────────────────────────────
+
+pub struct SealReport {
+    pub before_was_persistent: bool,
+    pub after_is_ephemeral: bool,
+    pub fs_key_zeroed: bool,
+    pub reseal_rejected: bool,
+}
+
+/// Pure in-kernel proof of the seal ratchet:
+/// 1. Create a persistent cave with a non-zero fs_key (derived from
+/// the name).
+/// 2. Inspect pre-state: type=Persistent, fs_key != 0.
+/// 3. Call `seal()`.
+/// 4. Inspect post-state: type=Ephemeral AND fs_key == [0;32].
+/// 5. Call `seal()` again — must return "already ephemeral" (one-way).
+/// 6. Destroy cave to clean up.
+pub fn seal_selftest() -> Result<SealReport, &'static str> {
+    let name = "seal-selftest-cave";
+    // Fresh slate in case a prior run left residue.
+    let _ = destroy(name);
+
+    let _slot = create(name, false)?;   // ephemeral=false → Persistent
+    let (ptype_before, key_before) = {
+        let c = find_mut(name)?;
+        (c.cave_type, c.fs_key)
+    };
+    if ptype_before != CaveType::Persistent { return Err("expected Persistent before seal"); }
+    if key_before == [0u8; 32] { return Err("fresh cave's fs_key should not be all-zero"); }
+
+    // Seal. This is a native cave so there's no daemon round-trip.
+    seal(name)?;
+
+    let (ptype_after, key_after) = {
+        let c = find_mut(name)?;
+        (c.cave_type, c.fs_key)
+    };
+    if ptype_after != CaveType::Ephemeral { return Err("expected Ephemeral after seal"); }
+    let key_zeroed = key_after == [0u8; 32];
+
+    // Re-seal must reject.
+    let reseal = seal(name);
+    let reseal_rejected = reseal.is_err();
+
+    // Cleanup.
+    let _ = destroy(name);
+
+    Ok(SealReport {
+        before_was_persistent: ptype_before == CaveType::Persistent,
+        after_is_ephemeral: ptype_after == CaveType::Ephemeral,
+        fs_key_zeroed: key_zeroed,
+        reseal_rejected,
+    })
+}
+
+fn find_mut(name: &str) -> Result<&'static mut Cave, &'static str> {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            if CAVES[i].state != CaveState::Free && CAVES[i].name_str() == name {
+                return Ok(&mut CAVES[i]);
+            }
+        }
+    }
+    Err("Cave not found")
+}
+
+/// V8-ROOT-2: single hub that resets EVERY subsystem holding cross-cave
+/// state. Call this from cave::enter (and only from cave::enter) when
+/// switching the active cave. Adding a new subsystem with cave-local
+/// state requires updating exactly one place — here.
+// /
+/// Caller must already hold a critical_section! / IrqGuard. Each callee
+/// also acquires its own IrqGuard, which is safe (IrqGuard is nestable).
+fn reset_all_globals_for_cave_switch() {
+    crate::caves::linux::syscall::reset_cave_statics();
+    crate::net::tls::reset_all_sessions();
+    crate::caves::linux::fd::reset_for_cave_switch();
+    crate::caves::linux::sockets::reset_for_cave_switch();
+    crate::net::tcp::reset_for_cave_switch();
+    // Sprint 3.1: cookie jar wipe on cave switch so a
+    // logged-out cave doesn't inherit the previous tenant's session
+    // tokens.
+    crate::net::cookies::reset_for_cave_switch();
+
+    // ROOT 2 additions — previously missing, each one was a cross-cave
+    // information-leak surface.
+    crate::caves::linux::epoll::reset_for_cave_switch();
+    crate::caves::linux::futex::reset_for_cave_switch();
+    crate::caves::linux::async_fds::reset_for_cave_switch();
+    crate::caves::linux::stdio_ring::reset_for_cave_switch();
+    crate::net::psk_overlay::reset_for_cave_switch();
+    crate::net::dns::reset_for_cave_switch();
+
+    // ROOT 2 V9-re-audit additions — threads table, ARP cache.
+    // Each was a cross-cave leak the first pass missed.
+    crate::caves::linux::threads::reset_for_cave_switch();
+    crate::net::arp::reset_for_cave_switch();
+
+    // ROOT 2 V10-re-audit additions — batpipe inter-tool buffer + the
+    // loader's saved RA/SP (which were a cross-cave control-flow PIVOT,
+    // most severe item from the V10 sweep). removed the
+    // `tor::reset_for_cave_switch` call because tor.rs was deleted —
+    // it was 3 layers of CTR with hardcoded keys, not real Tor. When
+    // real onion routing lands its reset hook goes back here.
+    crate::caves::bridge::reset_for_cave_switch();
+    crate::caves::linux::loader::reset_for_cave_switch();
+
+    // ROOT 2 V11-re-audit additions — keyboard-input leak (typed pass-
+    // phrases), comms session key + chat history, browser state (URL,
+    // page buffer, DOM, tabs, bookmarks), Blink heap (HTML residue),
+    // UI surface state (font clip + wm panes), and the Apple-SPI
+    // keyboard mirror. Last mechanical gaps from the V11 sweep.
+    crate::drivers::virtio::keyboard::reset_for_cave_switch();
+    crate::drivers::apple::spi::reset_for_cave_switch();
+    crate::ui::apps::comms::reset_for_cave_switch();
+    crate::ui::font::reset_for_cave_switch();
+    crate::ui::wm::reset_for_cave_switch();
+    crate::ui::console::reset_for_cave_switch();
+
+}

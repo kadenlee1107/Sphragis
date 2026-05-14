@@ -402,7 +402,7 @@ Goal: empty module that compiles, with all sub-files in place. No real logic yet
 Run: `grep -n '^mod ' src/main.rs`
 Expected:
 ```
-6:mod batcave;
+6:mod caves;
 7:mod boot;
 8:mod crypto;
 9:mod drivers;
@@ -420,7 +420,7 @@ Edit `src/main.rs`. After `mod ai;` is added the list is:
 
 ```rust
 mod ai;
-mod batcave;
+mod caves;
 mod boot;
 mod crypto;
 mod drivers;
@@ -1364,7 +1364,7 @@ rg -nE 'pub fn read|pub fn open|pub fn list' src/fs/ src/batfs/ 2>/dev/null
 grep -nE 'pub fn|^impl' src/security/audit.rs | head -20
 
 # Cave list API
-rg -nE 'pub fn list|pub fn iter|pub fn count' src/batcave/cave.rs 2>/dev/null
+rg -nE 'pub fn list|pub fn iter|pub fn count' src/caves/cave.rs 2>/dev/null
 
 # Shell command name table
 grep -nE 'COMMAND_NAMES' src/ui/shell_completion.rs
@@ -1382,7 +1382,7 @@ After the existing module doc, add a section:
 //! - `query_audit_ring`  calls `crate::security::audit::recent(N)`  at `src/security/audit.rs:<line>` (NOTE: may need to be added)
 //! - `suggest_command`   reads `crate::ui::shell_completion::COMMAND_NAMES` at `src/ui/shell_completion.rs:<line>`
 //! - `read_concept_note` reads from `super::rag::CORPUS`            (in-tree, see Phase 8)
-//! - `list_caves`        calls `crate::batcave::cave::list()`       at `src/batcave/cave.rs:<line>`
+//! - `list_caves`        calls `crate::caves::cave::list()`       at `src/caves/cave.rs:<line>`
 ```
 
 Replace `<X>` and `<line>` with what you actually find.

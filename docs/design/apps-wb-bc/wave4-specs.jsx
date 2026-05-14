@@ -122,7 +122,7 @@ const Wave4Specs = () => (
       <W4Block title="Body split">
         <W4Row k="Left (table)" v="60% width · 1px #1A1A1A right divider" />
         <W4Row k="Right (detail)" v="40% width · scrollable interior" />
-        <W4Row k="Empty table"  v="centered dim · '(no BatCaves — use batcave create &lt;name&gt; in shell)'" />
+        <W4Row k="Empty table"  v="centered dim · '(no Caves — use caves create &lt;name&gt; in shell)'" />
       </W4Block>
     </div>
 

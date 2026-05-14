@@ -114,20 +114,20 @@ fn verify_udp_checksum(pkt: &IpPacket, udp_len: usize) -> bool {
 fn store_udp_response(data: &[u8]) {
     unsafe {
         let head = core::ptr::read_volatile(
-            core::ptr::addr_of!(crate::batcave::linux::syscall::UDP_RX_HEAD));
-        let slot = head % crate::batcave::linux::syscall::UDP_RX_SLOTS;
-        let dst = core::ptr::addr_of_mut!(crate::batcave::linux::syscall::UDP_RX_BUF) as usize
+            core::ptr::addr_of!(crate::caves::linux::syscall::UDP_RX_HEAD));
+        let slot = head % crate::caves::linux::syscall::UDP_RX_SLOTS;
+        let dst = core::ptr::addr_of_mut!(crate::caves::linux::syscall::UDP_RX_BUF) as usize
             + slot * 512;
         let len = data.len().min(512);
         for i in 0..len {
             core::arch::asm!("strb {v:w}, [{a}]",
                 a = in(reg) dst + i, v = in(reg) data[i] as u32);
         }
-        crate::batcave::linux::syscall::UDP_RX_LEN[slot] = len;
+        crate::caves::linux::syscall::UDP_RX_LEN[slot] = len;
         core::ptr::write_volatile(
-            core::ptr::addr_of_mut!(crate::batcave::linux::syscall::UDP_RX_HEAD), head + 1);
+            core::ptr::addr_of_mut!(crate::caves::linux::syscall::UDP_RX_HEAD), head + 1);
         core::ptr::write_volatile(
-            core::ptr::addr_of_mut!(crate::batcave::linux::syscall::UDP_RX_READY), true);
+            core::ptr::addr_of_mut!(crate::caves::linux::syscall::UDP_RX_READY), true);
     }
 }
 

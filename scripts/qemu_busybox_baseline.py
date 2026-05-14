@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Baseline: does `batcave run <applet>` actually work today?"""
+"""Baseline: does `caves run <applet>` actually work today?"""
 import pexpect
 import re
 import time
@@ -26,8 +26,8 @@ def main():
     c.expect(PROMPT, timeout=30)
     print("[baseline] shell up. Trying busybox applets...\n")
 
-    for cmd in ["batcave run uname", "batcave run echo hello-from-cave",
-                "batcave run nslookup", "batcave run nc"]:
+    for cmd in ["caves run uname", "caves run echo hello-from-cave",
+                "caves run nslookup", "caves run nc"]:
         print(f"$ {cmd}")
         c.sendline(cmd.encode())
         try:

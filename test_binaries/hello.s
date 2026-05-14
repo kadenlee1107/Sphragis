@@ -1,4 +1,4 @@
-// Minimal ARM64 Linux "Hello BatCave" program
+// Minimal ARM64 Linux "Hello Cave" program
 // Uses only write() and exit() syscalls
 // Assembled into a static ELF binary
 
@@ -20,4 +20,4 @@ _start:
 
 .section .rodata
 msg:
-    .ascii "Hello from BatCave!\n\0\0\0"
+    .ascii "Hello from Cave!\n\0\0\0"

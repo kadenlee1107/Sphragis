@@ -16,7 +16,7 @@ use crate::ui::widgets::{
     KV_ROW_H, CAVES_HEADER_H, CAVES_ROW_H, State,
     BG, INK, MID, GREEN, HAIR,
 };
-use crate::batcave::cave;
+use crate::caves::cave;
 
 pub fn render() {
     let r = wm::content_rect();

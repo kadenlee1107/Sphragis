@@ -6,7 +6,7 @@ use crate::platform;
 use crate::security;
 use super::{wm, console, apps};
 
-/// Resume desktop after BatCave exit — skip reinitialization.
+/// Resume desktop after Cave exit — skip reinitialization.
 pub fn resume() -> ! {
     let mut in_shell = true;
     let mut cmd_buf = [0u8; 256];
@@ -215,7 +215,7 @@ pub fn run() -> ! {
                         continue;
                     }
                     let cur = wm::active_app();
-                    if cur == wm::APP_BATCAVE {
+                    if cur == wm::APP_CAVES {
                         // Last app → tab onto the close button
                         platform::serial_puts("[tab] cur=BATCAVE → focus_close_button\r\n");
                         clear_input!();
@@ -361,7 +361,7 @@ pub fn run() -> ! {
                         _ => {}
                     }
                 }
-                wm::APP_FILES | wm::APP_COMMS | wm::APP_BATCAVE => {
+                wm::APP_FILES | wm::APP_COMMS | wm::APP_CAVES => {
                     // These three tabs embed a shell strip at the
                     // bottom of their page so the operator can run
                     // commands without swapping to SH. Routing:
@@ -377,7 +377,7 @@ pub fn run() -> ! {
                         match active {
                             wm::APP_FILES   => apps::filemanager::handle_key(c),
                             wm::APP_COMMS   => apps::comms::handle_key(c),
-                            wm::APP_BATCAVE => apps::batcave_mgr::handle_key(c),
+                            wm::APP_CAVES => apps::caves_mgr::handle_key(c),
                             _ => {}
                         }
                         render_current();
@@ -387,7 +387,7 @@ pub fn run() -> ! {
                         match active {
                             wm::APP_FILES   => apps::filemanager::handle_key(c),
                             wm::APP_COMMS   => apps::comms::handle_key(c),
-                            wm::APP_BATCAVE => apps::batcave_mgr::handle_key(c),
+                            wm::APP_CAVES => apps::caves_mgr::handle_key(c),
                             _ => {}
                         }
                         render_current();
@@ -501,7 +501,7 @@ fn render_app(app: u8) {
         wm::APP_EDITOR => apps::editor::render(),
         wm::APP_SECURITY => apps::security::render(),
         wm::APP_COMMS => apps::comms::render(),
-        wm::APP_BATCAVE => apps::batcave_mgr::render(),
+        wm::APP_CAVES => apps::caves_mgr::render(),
         _ => {}
     }
 }

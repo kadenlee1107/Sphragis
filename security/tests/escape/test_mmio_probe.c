@@ -1,4 +1,4 @@
-/* test_mmio_probe.c — BatCave MMIO probe.
+/* test_mmio_probe.c — Cave MMIO probe.
  *
  * Attempts direct reads from UART (0x09000000) and virtio control register
  * (0x0A000000). Under correct per-cave page tables (ESC-005/006) these MUST
@@ -27,7 +27,7 @@ static void puthex(unsigned long v) {
 }
 
 void _start(void) {
-    puts_("[mmio] BatCave MMIO probe\n");
+    puts_("[mmio] Cave MMIO probe\n");
 
     unsigned long uart = 0x09000000UL;
     unsigned long gpu  = 0x0A000000UL;

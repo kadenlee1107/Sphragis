@@ -424,7 +424,7 @@ fn ns_compose<'a>(name: &str, out: &'a mut [u8; MAX_FILENAME]) -> Result<&'a str
         return Err("filename empty");
     }
     let mut prefix_buf = [0u8; 80];
-    let plen = crate::batcave::cave::active_mount_prefix(&mut prefix_buf);
+    let plen = crate::caves::cave::active_mount_prefix(&mut prefix_buf);
     if plen + name.len() > MAX_FILENAME {
         return Err("filename too long");
     }
@@ -453,12 +453,12 @@ fn pages_for(data_len: usize) -> u32 {
 /// for a failed write.
 pub fn ns_create(name: &str, data: &[u8]) -> Result<(), &'static str> {
     let pages = pages_for(data.len());
-    crate::batcave::cave::active_charge_pages(pages)?;
+    crate::caves::cave::active_charge_pages(pages)?;
     let mut full = [0u8; MAX_FILENAME];
     let full_name = match ns_compose(name, &mut full) {
         Ok(s) => s,
         Err(e) => {
-            crate::batcave::cave::active_release_pages(pages);
+            crate::caves::cave::active_release_pages(pages);
             return Err(e);
         }
     };
@@ -469,14 +469,14 @@ pub fn ns_create(name: &str, data: &[u8]) -> Result<(), &'static str> {
             // cave currently carries. Admin / kernel context
             // contributes 0 — same passive shape as the rest of
             // the cave-context-aware paths.
-            let cave_t = crate::batcave::cave::active_taint();
+            let cave_t = crate::caves::cave::active_taint();
             if cave_t != 0 {
                 add_file_taint(full_name, cave_t);
             }
             Ok(())
         }
         Err(e) => {
-            crate::batcave::cave::active_release_pages(pages);
+            crate::caves::cave::active_release_pages(pages);
             Err(e)
         }
     }
@@ -501,7 +501,7 @@ pub fn ns_read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
     let mut full = [0u8; MAX_FILENAME];
     let full_name = ns_compose(name, &mut full)?;
     if let Some((file_sens_u8, file_integ_u8)) = file_labels(full_name) {
-        use crate::batcave::cave::{self, MlsOp, Sensitivity, Integrity};
+        use crate::caves::cave::{self, MlsOp, Sensitivity, Integrity};
         let cave_sens = cave::active_sensitivity();
         let file_sens = Sensitivity::from_u8(file_sens_u8);
         if !cave::can_flow(cave_sens, file_sens, MlsOp::Read) {
@@ -518,7 +518,7 @@ pub fn ns_read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
     // kernel context always passes (cave_id == u16::MAX); cave
     // context fails fast with the policy-specific error string.
     if let Some(obj_t) = obj_type_for_full_name(full_name) {
-        use crate::batcave::cave::{self, ObjOp};
+        use crate::caves::cave::{self, ObjOp};
         let active = cave::get_active();
         let active_id = if active == usize::MAX { u16::MAX } else { active as u16 };
         if !cave::can_access_object(active_id, obj_t, ObjOp::Read) {
@@ -535,7 +535,7 @@ pub fn ns_read(name: &str, buf: &mut [u8]) -> Result<usize, &'static str> {
     if result.is_ok() {
         let t = file_taint(full_name);
         if t != 0 {
-            crate::batcave::cave::active_add_taint(t);
+            crate::caves::cave::active_add_taint(t);
         }
     }
     result
@@ -784,7 +784,7 @@ pub fn ns_delete(name: &str) -> Result<(), &'static str> {
     let pages = file_size(full_name).map(pages_for);
     delete(full_name)?;
     if let Some(p) = pages {
-        crate::batcave::cave::active_release_pages(p);
+        crate::caves::cave::active_release_pages(p);
     }
     Ok(())
 }
@@ -797,7 +797,7 @@ pub fn ns_delete(name: &str) -> Result<(), &'static str> {
 /// visible (same as the un-prefixed `list`).
 pub fn ns_list<F: FnMut(&str, usize, bool)>(mut callback: F) {
     let mut prefix_buf = [0u8; 80];
-    let plen = crate::batcave::cave::active_mount_prefix(&mut prefix_buf);
+    let plen = crate::caves::cave::active_mount_prefix(&mut prefix_buf);
     if plen == 0 {
         list(callback);
         return;
@@ -816,7 +816,7 @@ pub fn ns_list<F: FnMut(&str, usize, bool)>(mut callback: F) {
 /// caller's mount namespace.
 pub fn ns_stats() -> (usize, usize) {
     let mut prefix_buf = [0u8; 80];
-    let plen = crate::batcave::cave::active_mount_prefix(&mut prefix_buf);
+    let plen = crate::caves::cave::active_mount_prefix(&mut prefix_buf);
     if plen == 0 {
         return stats();
     }
@@ -894,8 +894,8 @@ pub fn create(name: &str, data: &[u8]) -> Result<(), &'static str> {
         // Snapshot the labels the file is about to inherit; they
         // become both the on-disk metadata AND part of the AAD
         // bound into the ciphertext.
-        let sens_byte  = crate::batcave::cave::active_sensitivity() as u8;
-        let integ_byte = crate::batcave::cave::active_integrity()   as u8;
+        let sens_byte  = crate::caves::cave::active_sensitivity() as u8;
+        let integ_byte = crate::caves::cave::active_integrity()   as u8;
         let mut aad = [0u8; MAX_FILENAME + 2];
         aad[..name.len()].copy_from_slice(name.as_bytes());
         aad[name.len()]     = sens_byte;

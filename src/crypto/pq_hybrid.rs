@@ -15,7 +15,7 @@
 //! (wiring it into `src/net/tls.rs` as a key_share alternative) is
 //! the next lift. Having the primitive in isolation lets us:
 //!   1. Self-test correctness in the shell (`pq-selftest`)
-//!   2. Use it for other session establishments (BatCave IPC —
+//!   2. Use it for other session establishments (Cave IPC —
 //!      phase 7 builds on this exact shape)
 //!   3. Benchmark the overhead on M4 before committing to it in the
 //!      TLS critical path
@@ -83,9 +83,9 @@ pub const SHARED_LEN: usize = 64;
 // ml-kem wants a `rand_core::CryptoRngCore`. Our crypto::rng exposes
 // `fill_bytes` as a free function. Wrap it in a ZST that implements
 // the trait.
-pub struct BatRng;
+pub struct KernelRng;
 
-impl rand_core::RngCore for BatRng {
+impl rand_core::RngCore for KernelRng {
     fn next_u32(&mut self) -> u32 {
         let mut b = [0u8; 4];
         rng::fill_bytes(&mut b);
@@ -104,7 +104,7 @@ impl rand_core::RngCore for BatRng {
         Ok(())
     }
 }
-impl rand_core::CryptoRng for BatRng {}
+impl rand_core::CryptoRng for KernelRng {}
 
 /// The recipient's long-term(ish) hybrid keypair. Both halves must be
 /// kept secret. The public half is `recipient_public()`.
@@ -123,7 +123,7 @@ impl HybridKeyPair {
         let x25519_sk = StaticSecret::from(rng_seed);
         let x25519_pk: [u8; 32] = X25519Public::from(&x25519_sk).to_bytes();
 
-        let mut r = BatRng;
+        let mut r = KernelRng;
         let (mlkem_dk, mlkem_ek) = <MlKem768 as KemCore>::generate(&mut r);
 
         Self { x25519_sk, x25519_pk, mlkem_dk, mlkem_ek }
@@ -180,12 +180,12 @@ pub fn encapsulate(recipient_public: &[u8])
         .map_err(|_| "hybrid: ML-KEM encap key byte length mismatch")?;
     let recip_ek = <MlKemEk as EncodedSizeUser>::from_bytes(&ek_arr);
 
-    let mut r = BatRng;
+    let mut r = KernelRng;
     let (ct_arr, ss_pq_arr) = recip_ek.encapsulate(&mut r)
         .map_err(|_| "hybrid: ML-KEM encapsulate failed")?;
 
     // ── Classical half: X25519 ephemeral → recipient's static X25519 pub ──
-    let mut rng_local = BatRng;
+    let mut rng_local = KernelRng;
     let eph_sk = EphemeralSecret::random_from_rng(&mut rng_local);
     let eph_pk: [u8; 32] = X25519Public::from(&eph_sk).to_bytes();
     let mut rp = [0u8; 32];

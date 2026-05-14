@@ -71,7 +71,7 @@ rewriting the whole file.
 
 ---
 
-### 4. BatCave audit log encryption (at rest)
+### 4. Cave audit log encryption (at rest)
 
 **Threat:** daemon runs on the Mac host; Mac disk could be imaged. The
 audit log contains per-cave exec history — sensitive (what tools were
@@ -167,7 +167,7 @@ malicious one.
 | Best primitive | **X25519** for key agreement + **BLAKE3-keyed** or **HKDF-SHA-256** to derive session keys + **Noise protocol framework** as the session construction |
 | Why | X25519 is tiny + fast + safe. Noise (used by WireGuard, Signal) is the best practice for building session-authenticated channels from primitives. |
 | Current state | ❌ No per-cave keypairs today. IPC is via `batpipe` with no authentication. |
-| Gap | Each BatCave gets an Ed25519 identity + X25519 ephemeral on `batcave enter`; IPC establishes a Noise-XX session. Bigger project; tracked. |
+| Gap | Each Cave gets an Ed25519 identity + X25519 ephemeral on `caves enter`; IPC establishes a Noise-XX session. Bigger project; tracked. |
 | PQ | 🧭 Hybrid X25519 + ML-KEM for post-quantum. |
 
 ---
@@ -202,7 +202,7 @@ before operator can re-authenticate. Operator wants pre-generated
 
 ---
 
-### 13. Inter-BatCave IPC authentication
+### 13. Inter-Cave IPC authentication
 
 **Threat:** compromised cave tries to impersonate another cave during
 IPC (read its files via `batpipe`, etc.).

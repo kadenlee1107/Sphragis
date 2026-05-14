@@ -82,7 +82,7 @@ FileURLLoader::Start before stalling in Mojo IPC. See
 ```
 src/                      kernel + browser + drivers
 ├── browser/              native HTML parser, DOM, CSS, layout, paint
-├── batcave/linux/        Linux compat layer (syscalls, futex, epoll, …)
+├── caves/linux/        Linux compat layer (syscalls, futex, epoll, …)
 ├── kernel/               mm, scheduler, arch, sync
 ├── drivers/              uart, virtio (gpu/net/blk/keyboard), apple/*
 └── ui/                   shell, console, font, truetype, apps/

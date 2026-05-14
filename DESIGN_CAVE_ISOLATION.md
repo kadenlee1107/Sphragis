@@ -89,7 +89,7 @@ contracts" below.
 
 ### `cave::with_cave_active(cave_id, f) -> R`
 
-`src/batcave/cave.rs` exports a generic trampoline that wraps a
+`src/caves/cave.rs` exports a generic trampoline that wraps a
 closure with cave context:
 
   1. Save the caller's `task.cave_id` + `TTBR0_EL1`.
@@ -107,7 +107,7 @@ the canonical way to "step into" a cave to do sensitive work.
 
 ### `cave_private::ensure_page(cave_id) -> Option<usize>`
 
-`src/batcave/cave_private.rs` allocates one 4 KiB page per cave at
+`src/caves/cave_private.rs` allocates one 4 KiB page per cave at
 a deterministic VA:
 
 ```
@@ -144,7 +144,7 @@ ensure_page` zeros via the just-installed cave-private VA under
 
 ### `mmu::map_4k_in_l1(l1_phys, va, pa, flags)`
 
-`src/batcave/linux/mmu.rs` installs a 4 KiB page descriptor in an
+`src/caves/linux/mmu.rs` installs a 4 KiB page descriptor in an
 arbitrary L1, allocating intermediate L2/L3 tables on demand from
 the kernel pool. Cache-cleans every page-table page it writes to
 PoC; the caller is responsible for TLB invalidation.
@@ -179,7 +179,7 @@ Suitable for selftests that attempt out-of-cave reads.
 
 ### `demand_page` cave-pool guard
 
-`src/batcave/linux/demand_page.rs` `try_handle` early-exits with a
+`src/caves/linux/demand_page.rs` `try_handle` early-exits with a
 loud log if `FAR_EL1` falls inside `0xB000_0000..0xC000_0000`.
 Without this guard, a stray kernel-ns store to the carve-out VA
 would be caught by the demand-pager, which would silently install
@@ -189,7 +189,7 @@ We hit this exact bug during bring-up (see "Subtle bug we hit").
 
 ## Sys-wg as the reference user
 
-`src/batcave/sys_wg_service.rs` is the canonical client of these
+`src/caves/sys_wg_service.rs` is the canonical client of these
 primitives. Its WireGuard `KEYPAIR` and `PEERS` table both live
 inside a `PrivateState` struct placed at `cave_private_va(
 sys_wg_id)` (= `0x140001000`):
@@ -282,14 +282,14 @@ bug.
 
 ## References in tree
 
-  * `src/batcave/cave.rs` — `with_cave_active` + cave runtime.
-  * `src/batcave/cave_private.rs` — per-cave page allocator.
-  * `src/batcave/sys_wg_service.rs` — canonical client of all
+  * `src/caves/cave.rs` — `with_cave_active` + cave runtime.
+  * `src/caves/cave_private.rs` — per-cave page allocator.
+  * `src/caves/sys_wg_service.rs` — canonical client of all
     these primitives; sys-wg's WG state lives here.
-  * `src/batcave/linux/mmu.rs` — `pte_lookup`, `map_4k_in_l1`,
+  * `src/caves/linux/mmu.rs` — `pte_lookup`, `map_4k_in_l1`,
     `probe_read_u64`, carve-out skip in `setup_and_enable` +
     `setup_native_cave_l1`.
-  * `src/batcave/linux/demand_page.rs` — carve-out guard.
+  * `src/caves/linux/demand_page.rs` — carve-out guard.
   * `src/kernel/mm/cave_pool.rs` — dedicated PA pool.
   * `src/kernel/arch/mod.rs` — `handle_sync_exception_inner` with
     probe-mode hook.

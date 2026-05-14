@@ -6,7 +6,7 @@
 //
 //   1. After TCP connect, both sides send a 128-byte handshake offer
 //      (eph_pub || id_pub || ed25519_sig). Same shape as
-//      `batcave::ipc_session::build_offer`.
+//      `caves::ipc_session::build_offer`.
 //   2. Both compute X25519(my_eph_sk, peer_eph_pub) and derive
 //      directional keys via SHA-256:
 //         c2s_key = SHA-256(b"SPHRAGIS-COMMS-c2s-v1" || shared
@@ -236,7 +236,7 @@ pub fn identify(ip: u32, port: u16) -> Result<[u8; 32], &'static str> {
     // same key during discovery and at real connect.
     let (id_sk, id_pk_bytes) = my_identity()?;
 
-    let mut rng = crate::crypto::pq_hybrid::BatRng;
+    let mut rng = crate::crypto::pq_hybrid::KernelRng;
     let eph_pk_bytes: [u8; 32] = {
         let eph_sk = EphemeralSecret::random_from_rng(&mut rng);
         // Scope-bound: discovery has no transport so the secret is
@@ -312,7 +312,7 @@ pub fn connect(ip: u32, port: u16) -> Result<(), &'static str> {
         }
     };
 
-    let mut rng = crate::crypto::pq_hybrid::BatRng;
+    let mut rng = crate::crypto::pq_hybrid::KernelRng;
     let eph_sk = EphemeralSecret::random_from_rng(&mut rng);
     let eph_pk_bytes: [u8; 32] = X25519Public::from(&eph_sk).to_bytes();
 

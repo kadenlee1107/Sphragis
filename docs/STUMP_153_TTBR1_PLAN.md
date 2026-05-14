@@ -62,9 +62,9 @@ assume PA==KVA today.
 | 2 | Audit `frame::alloc` callers; wrap reads/writes in `__va()`. Still PA==KVA, identity. | `kernel/mm/frame.rs` + every `phys as *mut` site | Boot still green in QEMU | A site missed → hangs only after split |
 | 3 | Rewrite `boot.s`: pre-MMU temp stack at PA, build minimal TTBR0+TTBR1 in static .bss tables, set TCR/MAIR, enable MMU, reload SP from KVA, `br` to kernel_main_kva | `arch/aarch64/boot.s`, new `kernel/mm/early_mmu.rs` | UART "boot:mmu-on" message in upper-half code path | T1SZ wrong → walker faults instantly |
 | 4 | Flip `linker.ld` to `0xFFFF_8000_4020_0000`. Verify symbols resolve. | `linker.ld` | `nm` shows kernel symbols at upper-half addrs; QEMU still boots | Boot stub absolute loads need the relink to be coherent before MMU-on |
-| 5 | Move `setup_and_enable`'s register-programming bits into a kernel-owned `kernel/mm/mmu.rs`; have cave path call into it for shared TCR/MAIR. Cave keeps only TTBR0 swap. | `batcave/linux/mmu.rs`, `kernel/mm/mmu.rs` (new) | Native caves still enter (post-#145 path unchanged) | Sharing TCR between kernel boot and cave switch is fine — they program identical fields |
-| 6 | Drop kernel identity from `setup_native_cave_l1` (L1[1..=4] entries). | `batcave/linux/mmu.rs` | Native cave executes; kernel reentry on exception still works because TTBR1 holds kernel | This is *the* cave-regression risk |
-| 7 | Linux ELF cave path — confirm it only programs TTBR0 and never writes TTBR1. | `batcave/linux/mmu.rs::setup_and_enable` | Chromium content_shell loads | If a Linux cave wrote TTBR1, kernel disappears |
+| 5 | Move `setup_and_enable`'s register-programming bits into a kernel-owned `kernel/mm/mmu.rs`; have cave path call into it for shared TCR/MAIR. Cave keeps only TTBR0 swap. | `caves/linux/mmu.rs`, `kernel/mm/mmu.rs` (new) | Native caves still enter (post-#145 path unchanged) | Sharing TCR between kernel boot and cave switch is fine — they program identical fields |
+| 6 | Drop kernel identity from `setup_native_cave_l1` (L1[1..=4] entries). | `caves/linux/mmu.rs` | Native cave executes; kernel reentry on exception still works because TTBR1 holds kernel | This is *the* cave-regression risk |
+| 7 | Linux ELF cave path — confirm it only programs TTBR0 and never writes TTBR1. | `caves/linux/mmu.rs::setup_and_enable` | Chromium content_shell loads | If a Linux cave wrote TTBR1, kernel disappears |
 | 8 | M4-hardware bring-up bake. C-bit on, atomic test, exception path test. | n/a (test only) | M4 reaches desktop loop | STUMP #59 atomic regression on TTBR1 |
 
 **Chunks 3-4 are atomic** — neither can ship alone. Treat as one
@@ -157,7 +157,7 @@ optionality at low cost.
 | `src/arch/aarch64/boot.s` | Boot stub. Currently MMU off; needs early MMU enable with TTBR0+TTBR1 split. |
 | `src/main.rs` | `kernel_main`. Reads `BootArgsRaw` etc. via PA, then later does work that assumes pointers are valid. |
 | `linker.ld` | Kernel link address. Currently `0x40200000`. Becomes `0xFFFF_8000_4020_0000`. |
-| `src/batcave/linux/mmu.rs` | Current MMU machinery. Mostly cave-side; the kernel-owned MMU bring-up needs a NEW module. |
+| `src/caves/linux/mmu.rs` | Current MMU machinery. Mostly cave-side; the kernel-owned MMU bring-up needs a NEW module. |
 | `src/kernel/arch/mod.rs` | Exception vectors (VBAR_EL1). Need upper-half VAs (already PC-relative — relink works). |
 | `src/kernel/mm/page_table.rs` | Exists but largely unused; could be the foundation for the kernel's own L1. |
 | `src/kernel/mm/frame.rs` | Frame allocator — every `phys as *mut` caller. |

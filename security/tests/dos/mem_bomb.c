@@ -1,7 +1,7 @@
 /*
  * mem_bomb.c — DoS stress: memory exhaustion.
  *
- * Guest-side harness for Sphragis BatCave Linux runner. Intended to be
+ * Guest-side harness for Sphragis Cave Linux runner. Intended to be
  * cross-compiled for aarch64-linux-musl and loaded by the ELF loader.
  *
  * Covers:

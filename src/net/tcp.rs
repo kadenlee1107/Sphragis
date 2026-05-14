@@ -598,7 +598,7 @@ pub fn listener_accept_push(listener_idx: usize, pcb_id: usize) -> Result<(), ()
     // Wake epoll_wait on the listening fd.
     let fd = l.fd.load(Ordering::Acquire);
     if fd >= 0 {
-        crate::batcave::linux::epoll::mark_ready(fd, EPOLLIN);
+        crate::caves::linux::epoll::mark_ready(fd, EPOLLIN);
     }
     Ok(())
 }
@@ -1245,7 +1245,7 @@ pub fn pcb_state(id: usize) -> u32 {
 fn notify_epoll(id: usize, events: u32) {
     let fd = pcb(id).fd.load(Ordering::Acquire);
     if fd >= 0 {
-        crate::batcave::linux::epoll::mark_ready(fd, events);
+        crate::caves::linux::epoll::mark_ready(fd, events);
     }
 }
 
@@ -1296,8 +1296,8 @@ fn drain_time_wait() {
             // Refund the owning cave's socket/fd quota.
             let fd = p.fd.load(Ordering::Relaxed);
             if fd >= 0 {
-                crate::batcave::linux::quotas::refund_active(
-                    crate::batcave::linux::quotas::Resource::Sockets, 1);
+                crate::caves::linux::quotas::refund_active(
+                    crate::caves::linux::quotas::Resource::Sockets, 1);
             }
         }
     }
@@ -2221,7 +2221,7 @@ pub fn send_data(data: &[u8]) -> Result<(), &'static str> {
     if r.is_ok() {
         // Gap-audit item 030 IO slice — attribute bytes to the
         // active cave for observability. No enforcement yet.
-        crate::batcave::cave::active_add_tx_bytes(data.len() as u64);
+        crate::caves::cave::active_add_tx_bytes(data.len() as u64);
     }
     r
 }
@@ -2231,7 +2231,7 @@ pub fn send_data(data: &[u8]) -> Result<(), &'static str> {
 pub fn recv_data(buf: &mut [u8]) -> Result<usize, &'static str> {
     let r = recv_data_blocking_pcb(LEGACY_PCB, buf);
     if let Ok(n) = r {
-        crate::batcave::cave::active_add_rx_bytes(n as u64);
+        crate::caves::cave::active_add_rx_bytes(n as u64);
     }
     r
 }

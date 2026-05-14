@@ -203,7 +203,7 @@ subsystem heading is mirrored in [src/](../src/).
 - ❌ No mandatory file labelling.
 - ❌ No trusted-path / secure-attention-key.
 
-### 1.8 BatCaves — [src/batcave/](../src/batcave/)
+### 1.8 Caves — [src/caves/](../src/caves/)
 
 - Isolation sandboxes with per-cave memory, per-cave audit session id,
   syscall whitelist, kernel-mediated networking.
@@ -213,7 +213,7 @@ subsystem heading is mirrored in [src/](../src/).
 - IPC: `batpipe` (inter-cave), `secure_channel` (TLS 1.3), `secure_ipc`
   (async messaging).
 - Persistence: per-cave encrypted storage via `persist` module.
-- BatKits: containerized app manifests (browser-class apps, email,
+- Kits: containerized app manifests (browser-class apps, email,
   etc.) — design level, schema details deferred.
 - Docker client over HTTPS syscall for remote container API interaction.
 - ❌ No live migration of caves.
@@ -459,7 +459,7 @@ cgroups v2 (cpu, memory, io, pids), seccomp-bpf filters, OCI runtime
 (runc / crun), Docker / Podman / containerd. macOS App Sandbox /
 hypervisor framework. Windows Containers / Hyper-V isolation.
 
-✅ Have: BatCaves with per-cave audit, per-cave firewall, per-cave
+✅ Have: Caves with per-cave audit, per-cave firewall, per-cave
 syscall filter (whitelist).
 ❌ Missing:
 - No cgroups-equivalent quota system.
@@ -535,7 +535,7 @@ file manager, terminal, image viewer, music player, video player,
 calculator, system preferences, screenshot tool, clipboard manager.
 
 ✅ Have: shell. Browser was rejected (Post-no-browser Pivot, by design).
-BatKits framework exists but kit catalog is empty/minimal.
+Kits framework exists but kit catalog is empty/minimal.
 ❌ Missing: most of the above. Strategic position is that
 end-user browsing lives on the operator's host machine, not in Sphragis.
 
@@ -607,7 +607,7 @@ syscall filter). Default-deny posture. **Two-axis MLS lattice (2026-05-12)**:
     can't downgrade a file's label to bypass the lattice checks
     without also re-encrypting (which needs the file key).
     `mls-binding-selftest` proves the property.
-  - `batcave::mls_ipc` labeled mailbox: enforces BLP write-down +
+  - `caves::mls_ipc` labeled mailbox: enforces BLP write-down +
     Biba write-up on send, BLP read-up + Biba read-down on recv
     (belt-and-suspenders for runtime label changes between
     send and recv).

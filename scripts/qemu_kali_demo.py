@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Sphragis "Kali in a BatCave" — live pentest chain + external analysis.
+"""Sphragis "Kali in a Cave" — live pentest chain + external analysis.
 
 THE DEMO
 ========
 1. Spin up a Mac-side HTTP server (the recon "target") + a unique path token.
 2. For each busybox-backed pentest tool in the chain, boot Sphragis fresh,
-   run the tool INSIDE a capability-gated BatCave, and have QEMU's
+   run the tool INSIDE a capability-gated Cave, and have QEMU's
    `filter-dump` capture ALL of the guest's virtio-net traffic into a
    per-tool pcap.
 3. Mac-side: `tshark` post-analyzes each pcap and prints what a
@@ -25,7 +25,7 @@ PHILOSOPHY
     for pcap analysis (reading files, no process running alongside a
     Sphragis target).
   - Each busybox run is in its own QEMU (our ELF runner is noreturn).
-  - Each run has a dedicated, disposable BatCave.
+  - Each run has a dedicated, disposable Cave.
 """
 import pexpect
 import http.server
@@ -104,12 +104,12 @@ def clean_display(raw: str) -> list[str]:
     """Strip the kernel-log prefixes + dedup per-line echo doubling."""
     keep = []
     SKIP_PREFIXES = ("[mmu]", "[loader]", "[reloc]", "[runner]", "[shell]",
-        "[batcave", "[dms]", "[vfs]", "[kbd]", "[gpu]", "[fs]",
+        "[caves", "[dms]", "[vfs]", "[kbd]", "[gpu]", "[fs]",
         "[firewall]", "[net]", "[boot]", "[chromium", "[bs]",
         "[auth]", "[ipc]", "[arch]", "[rng]", "[sched]", "[mm]",
         "[security]", "[initrd]", "[dtb]", "[mmap]", "sphragis >",
-        "BATCAVES", "BatCave created", "BATCAVE", "Granted",
-        "batcave ", "  Microkernel", "Ctrl+", "=====", "-----",
+        "BATCAVES", "Cave created", "BATCAVE", "Granted",
+        "caves ", "  Microkernel", "Ctrl+", "=====", "-----",
         "SPHRAGIS v", "Sphragis v", "(none)", "--------", "(")
     for line in raw.splitlines():
         s = line.rstrip()
@@ -148,18 +148,18 @@ def run_in_batcave(tool_cmd: str, pcap_path: Path, port: int) -> str:
 
         # Dedicated cave per tool for true isolation
         cave_name = tool_cmd.split()[0][:8]  # e.g. "nslookup" -> "nslookup"
-        child.sendline(f"batcave create {cave_name}".encode())
+        child.sendline(f"caves create {cave_name}".encode())
         child.expect(PROMPT, timeout=15)
         # Grant minimal caps (net, raw) — everything else denied
-        child.sendline(f"batcave grant {cave_name} net".encode())
+        child.sendline(f"caves grant {cave_name} net".encode())
         child.expect(PROMPT, timeout=15)
-        child.sendline(f"batcave grant {cave_name} raw".encode())
+        child.sendline(f"caves grant {cave_name} raw".encode())
         child.expect(PROMPT, timeout=15)
 
         # Run the tool via busybox inside an auto-activated shell-host cave.
         # (cave::enter hangs — BUG-6 — so the explicit cave is documentary
-        # for `batcave list`; the tool still runs cap-gated via shell-host.)
-        child.sendline(f"batcave run {tool_cmd}".encode())
+        # for `caves list`; the tool still runs cap-gated via shell-host.)
+        child.sendline(f"caves run {tool_cmd}".encode())
         try:
             child.expect(rb"\[linux\] process exited", timeout=60)
             time.sleep(0.4)  # let QEMU flush the pcap
@@ -178,7 +178,7 @@ def pcap_summary(pcap: Path) -> list[str]:
     Falls back to tshark if tcpdump isn't available.
 
     Runs offline — purely file I/O — so this tool never touches the network
-    during analysis. Safe to run alongside a live BatCave demo.
+    during analysis. Safe to run alongside a live Cave demo.
     """
     tool = None
     for candidate in ["tcpdump", "tshark"]:
@@ -246,7 +246,7 @@ def pcap_summary(pcap: Path) -> list[str]:
 # ── Main ────────────────────────────────────────────────────────
 def main():
     print("=" * 74)
-    print(" Sphragis — Kali-style pentest chain inside a BatCave (real deal)")
+    print(" Sphragis — Kali-style pentest chain inside a Cave (real deal)")
     print("=" * 74)
 
     port = pick_port()

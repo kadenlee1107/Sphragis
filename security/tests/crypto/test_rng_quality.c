@@ -18,7 +18,7 @@
 //
 // This test is a userland scaffold. To exercise Sphragis itself, rebuild
 // the binary to invoke the kernel syscall directly via svc #0 from a
-// BatCave guest.
+// Cave guest.
 
 #include <stdio.h>
 #include <stdlib.h>

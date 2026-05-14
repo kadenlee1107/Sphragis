@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Sphragis isolated-BatCave network probe demo.
+"""Sphragis isolated-Cave network probe demo.
 
 Process
 -------
 1. Start a tiny HTTP server on the Mac (= "the network tool") listening on
    a random port. It logs every incoming request.
-2. Boot Sphragis under QEMU. The shell auto-activates an isolated BatCave
+2. Boot Sphragis under QEMU. The shell auto-activates an isolated Cave
    named 'shell-host' (the `ensure_host_cave_active` primitive I landed
    in the earlier fix pass).
-3. Inside that cave, create a second explicit BatCave 'netprobe' with
+3. Inside that cave, create a second explicit Cave 'netprobe' with
    ONLY the `net` + `raw` capabilities. Show the cap-gated state via
-   `batcave list`. This proves the isolation primitives work.
+   `caves list`. This proves the isolation primitives work.
 4. Issue a `browse http://10.0.2.2:<port>/<unique-probe-id>` — QEMU's
    slirp NAT forwards 10.0.2.2 → host. The Sphragis net stack resolves
    the host, walks the firewall allow-list, and opens a TCP connection.
@@ -26,11 +26,11 @@ Single GET request, single response, then teardown.
 
 Known issue (not blocking this demo)
 ------------------------------------
-`batcave enter netprobe` currently hangs — one of the per-cave
-reset_for_cave_switch() callees in src/batcave/cave.rs:623 doesn't
+`caves enter netprobe` currently hangs — one of the per-cave
+reset_for_cave_switch() callees in src/caves/cave.rs:623 doesn't
 return inside the critical section. The demo uses the ambient
-`shell-host` cave (also a BatCave, auto-activated) to still satisfy
-"isolated BatCave session". The `netprobe` cave is created + granted
+`shell-host` cave (also a Cave, auto-activated) to still satisfy
+"isolated Cave session". The `netprobe` cave is created + granted
 caps in parallel to demonstrate the isolation primitives without
 triggering the hang.
 """
@@ -53,7 +53,7 @@ RUN_LOG = LOG_DIR / f"netprobe-{STAMP}.log"
 SRV_LOG = LOG_DIR / f"netprobe-server-{STAMP}.log"
 
 PROBE_ID = uuid.uuid4().hex[:12]
-PROBE_PATH = f"/isolated-batcave-{PROBE_ID}"
+PROBE_PATH = f"/isolated-caves-{PROBE_ID}"
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
 PROMPT = rb"sphragis\s*>\s*"
@@ -110,7 +110,7 @@ def clean(b: bytes) -> str:
 
 def dedup_doubled(s: str) -> str:
     """Strip the cosmetic char-doubling that the console::putc serial-mirror
-    produces when shell input-echo hits both paths.  'bbaattccaavvee' → 'batcave'.
+    produces when shell input-echo hits both paths.  'bbaattccaavvee' → 'caves'.
     Only collapses pairs of IDENTICAL adjacent chars — doesn't mangle legit
     words with double letters on output lines (which come from console::puts,
     not putc-by-putc)."""
@@ -134,7 +134,7 @@ def run_cmd(child, cmd: str, timeout: int = 15) -> str:
 
 def main():
     print("=" * 72)
-    print("Sphragis isolated-BatCave network probe — live demo")
+    print("Sphragis isolated-Cave network probe — live demo")
     print("=" * 72)
 
     port = pick_port()
@@ -175,21 +175,21 @@ def main():
     time.sleep(0.3)
     child.sendline(b"batman")
     child.expect(PROMPT, timeout=30)
-    print("[qemu] shell ready — ambient BatCave active\n")
+    print("[qemu] shell ready — ambient Cave active\n")
 
     print("=" * 72)
     print("SCENARIO: create isolated netprobe cave → fire probe through network")
     print("=" * 72)
 
-    # Skip `batcave enter` due to the known hang — demo still proves the
+    # Skip `caves enter` due to the known hang — demo still proves the
     # isolation primitives work: creating a cave, granting narrow caps, and
-    # verifying via batcave list.
+    # verifying via caves list.
     steps = [
-        ("batcave list",                         "BEFORE: no user caves"),
-        ("batcave create netprobe",              "create ephemeral cave"),
-        ("batcave grant netprobe net",           "grant net cap (TCP/UDP/ICMP)"),
-        ("batcave grant netprobe raw",           "grant raw-socket cap"),
-        ("batcave list",                         "AFTER: netprobe exists, 2 caps"),
+        ("caves list",                         "BEFORE: no user caves"),
+        ("caves create netprobe",              "create ephemeral cave"),
+        ("caves grant netprobe net",           "grant net cap (TCP/UDP/ICMP)"),
+        ("caves grant netprobe raw",           "grant raw-socket cap"),
+        ("caves list",                         "AFTER: netprobe exists, 2 caps"),
         (f"browse http://10.0.2.2:{port}{PROBE_PATH}",
                                                  "fire the probe → Mac HTTP server"),
     ]
@@ -234,7 +234,7 @@ def main():
     ok = HITS and any(PROBE_ID in h["path"] for h in HITS)
     if ok:
         print("  ✅ PASS")
-        print("     Sphragis (inside a capability-gated BatCave) originated a")
+        print("     Sphragis (inside a capability-gated Cave) originated a")
         print("     TCP connection that the external HTTP server on the Mac")
         print("     received, parsed, and logged.")
         print(f"     Probe ID {PROBE_ID} round-tripped verbatim.")
