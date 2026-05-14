@@ -30,33 +30,47 @@ fn set_overlay_open(v: bool) {
     unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(OVERLAY_OPEN), v) }
 }
 
-pub fn init() { topbar_config::load(); }
+pub fn init() {
+    // Idempotent — safe to call from main.rs at startup AND from run()
+    // on entry. Restores badge config from BatFS if
+    // /system/desktop/topbar.cfg exists; silently keeps defaults if not.
+    topbar_config::load();
+}
 
 pub fn run() -> LockReason {
+    init();
     loop {
         let state = current_state();
         paint(state);
         gpu::flush(0, 0, gpu::width(), gpu::height());
 
         match poll_event() {
-            Event::Lock => return LockReason::UserRequest,
+            Event::Lock    => return LockReason::UserRequest,
             Event::Repaint => continue,
-            Event::None => { core::hint::spin_loop(); }
+            Event::None    => {
+                // Drain virtio-net + NAT forward for caves. Without
+                // this, cave network connections stall after the ring
+                // fills.
+                let _ = crate::net::nat::tick();
+                core::hint::spin_loop();
+            }
         }
     }
 }
 
-/// Resume desktop after a cave exits — diverging so callers in
-/// signal.rs / arch/mod.rs don't need to change. Runs the standard
-/// desktop loop in a lock/unlock cycle; Task 8 will replace this with
-/// the full lock-screen round-trip.
+/// Diverging entry point for non-main.rs callers of the desktop.
+///
+/// Body is `loop { let _ = run(); }` — runs the desktop, discards
+/// `LockReason::UserRequest` on Lock, re-enters. This means **lock
+/// requests are silently dropped on this path** until each caller is
+/// upgraded to a real lock/unlock cycle (Task 8 work).
+///
+/// Current callers (each needs a Task-8 upgrade):
+///   * `src/caves/linux/signal.rs:908` — Linux cave abnormal-exit handler
+///   * `src/kernel/arch/mod.rs:804`    — arch-level recovery path
+///   * `src/kernel/arch/mod.rs:2369`   — arch-level reentry path
 pub fn resume() -> ! {
-    loop {
-        let _ = run();
-        // run() only returns on LockReason::UserRequest.
-        // With Task 8 wired, control would go to the lock screen here.
-        // Until then, re-enter the desktop immediately.
-    }
+    loop { let _ = run(); }
 }
 
 fn current_state() -> State {

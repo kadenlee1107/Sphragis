@@ -801,6 +801,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                             addr = in(reg) save_addr,
                             out("x0") _,
                         );
+                        // TODO Task 8: lock requests dropped on this path — see desktop::resume() doc.
                         crate::ui::desktop::resume();
                     }
 
@@ -2366,6 +2367,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                     addr = in(reg) save_addr,
                     out("x0") _,
                 );
+                // TODO Task 8: lock requests dropped on this path — see desktop::resume() doc.
                 crate::ui::desktop::resume();
             }
         }

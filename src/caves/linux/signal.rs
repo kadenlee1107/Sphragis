@@ -905,6 +905,7 @@ pub fn terminate_cave_fatal_with_lr(signo: u32, fault_addr: u64, lr: u64) -> ! {
     if crate::IS_HEADLESS.load(core::sync::atomic::Ordering::Acquire) {
         crate::serial_shell()
     } else {
+        // TODO Task 8: lock requests dropped on this path — see desktop::resume() doc.
         crate::ui::desktop::resume()
     }
 }
