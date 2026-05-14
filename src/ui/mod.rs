@@ -1,4 +1,5 @@
 pub mod apps;
+pub mod apps_registry;
 pub mod clipboard;
 pub mod console;
 pub mod draw;

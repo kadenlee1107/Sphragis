@@ -853,3 +853,10 @@ pub fn handle_key(ch: u8) {
         }
     }
 }
+
+// Wave 2 shim — refresh in Wave 3+
+/// Adapts the existing render path to the WM's `fn(WindowRect)` contract.
+pub fn paint(rect: crate::ui::wm::WindowRect) {
+    let _ = rect;
+    render();
+}

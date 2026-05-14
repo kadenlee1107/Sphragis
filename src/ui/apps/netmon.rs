@@ -190,3 +190,10 @@ fn format_dec(mut n: usize, out: &mut [u8]) -> usize {
     for j in 0..i { out[j] = tmp[i - 1 - j]; }
     i
 }
+
+// Wave 2 shim — refresh in Wave 3+
+/// Adapts the existing render path to the WM's `fn(WindowRect)` contract.
+pub fn paint(rect: crate::ui::wm::WindowRect) {
+    let _ = rect;
+    render();
+}

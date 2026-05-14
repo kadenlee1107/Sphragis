@@ -11178,3 +11178,17 @@ fn hexnib(b: u8) -> u8 {
     }
 }
 
+// Wave 2 shim — refresh in Wave 3+
+pub fn paint(rect: crate::ui::wm::WindowRect) {
+    use crate::ui::font;
+    let msg = "SHELL - integrating in Wave 5";
+    let tx = rect.x + 12;
+    let ty = rect.y + 12;
+    font::draw_str(
+        crate::ui::gpu::framebuffer(),
+        crate::ui::gpu::width(),
+        tx, ty, msg,
+        0xFFE5E7EB, 0xFF0D0D10,
+    );
+}
+
