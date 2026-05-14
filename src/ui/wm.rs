@@ -31,6 +31,17 @@ pub struct Window {
     pub cave_name: Option<[u8; 16]>,
 }
 
+// Static-mut access pattern:
+//
+// FOCUSED and NEXT_ID are scalar — the optimizer is free to cache
+// their values across function calls, so reads/writes go through
+// `read_volatile` / `write_volatile` to force a real memory access
+// every time. WINDOWS is a `[Option<Window>; 16]`; slot mutations
+// compile to whole-slot stores (Option<Window> is Copy, ~28 bytes),
+// which the optimizer can't reorder past the surrounding raw-pointer
+// access — so the plain `*slot = Some(...)` style is safe without
+// volatile. Whole-array writes in `reset_all()` still use volatile
+// to be defensive against the same caching concern.
 static mut WINDOWS: [Option<Window>; MAX_WINDOWS] = [None; MAX_WINDOWS];
 static mut NEXT_ID: u32 = 1;
 static mut FOCUSED: Option<WindowId> = None;
@@ -69,11 +80,18 @@ pub fn open(app: AppId, cave_name: Option<&str>) -> Option<WindowId> {
         core::ptr::write_volatile(core::ptr::addr_of_mut!(NEXT_ID), i.wrapping_add(1));
         WindowId(i)
     };
+    // Truncate cave_name to fit in 16 bytes, but snap back to the
+    // nearest char boundary so we never split a multi-byte UTF-8
+    // sequence — downstream consumers (Task 3 paint path) read these
+    // bytes back through `from_utf8_unchecked`, which is UB on
+    // invalid UTF-8.
     let cave = cave_name.map(|s| {
         let mut buf = [0u8; 16];
-        let bytes = s.as_bytes();
-        let n = bytes.len().min(16);
-        buf[..n].copy_from_slice(&bytes[..n]);
+        let mut n = s.len().min(16);
+        while n > 0 && !s.is_char_boundary(n) {
+            n -= 1;
+        }
+        buf[..n].copy_from_slice(&s.as_bytes()[..n]);
         buf
     });
     let i = count() as u32;
@@ -85,17 +103,28 @@ pub fn open(app: AppId, cave_name: Option<&str>) -> Option<WindowId> {
     };
     let window = Window { id, app, rect, cave_name: cave };
 
+    // Place the new window in the first free slot, then re-route
+    // through focus() so the compact-to-end path runs. Without this,
+    // a slot freed by an earlier close() in the middle of the array
+    // would leave the new window mid-array — violating the
+    // "focused window last" z-order invariant the painter relies on.
+    let mut placed = false;
     unsafe {
         let wins = &mut *core::ptr::addr_of_mut!(WINDOWS);
         for slot in wins.iter_mut() {
             if slot.is_none() {
                 *slot = Some(window);
-                core::ptr::write_volatile(core::ptr::addr_of_mut!(FOCUSED), Some(id));
-                return Some(id);
+                placed = true;
+                break;
             }
         }
     }
-    None
+    if placed {
+        focus(id);
+        Some(id)
+    } else {
+        None
+    }
 }
 
 pub fn close(id: WindowId) {
@@ -163,6 +192,18 @@ pub fn set_rect(id: WindowId, rect: WindowRect) {
             }
         }
     }
+}
+
+/// Called when the active cave changes. Wave 2: no-op stub; Task 7
+/// or a later wave will decide whether cave switching should close
+/// cave-scoped windows, refresh chrome titles, or leave existing
+/// windows in place with stale cave_name.
+///
+/// Kept as a public entry point so `caves/cave.rs` can re-enable the
+/// call site (currently `// XXX Wave-2-temp:`) without another round
+/// of API surgery once the policy is decided.
+pub fn reset_for_cave_switch() {
+    // Intentionally empty — see doc.
 }
 
 /// Reset all WM state. Only called by security::wipe — NOT by the

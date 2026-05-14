@@ -2,7 +2,7 @@
 // Sphragis — Cave Core
 // Isolated container runtime for running Kali Linux tools.
 // Each Cave has its own encrypted filesystem, capabilities, and process space.
-// XXX Wave-2-temp: 2 old-WM call sites commented out, restored in Task 7.
+// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
 
 use crate::crypto::sha256;
 use core::sync::atomic::{AtomicU8, AtomicBool, Ordering};
@@ -2177,7 +2177,7 @@ fn reset_all_globals_for_cave_switch() {
     crate::drivers::apple::spi::reset_for_cave_switch();
     crate::ui::apps::comms::reset_for_cave_switch();
     crate::ui::font::reset_for_cave_switch();
-    // XXX Wave-2-temp: crate::ui::wm::reset_for_cave_switch();
+    crate::ui::wm::reset_for_cave_switch();
     crate::ui::console::reset_for_cave_switch();
 
 }
