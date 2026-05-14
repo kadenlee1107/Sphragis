@@ -66,13 +66,13 @@ public-facing version of the split.
 3. **`~/sphragis-internal/docs/DISCLOSURE_POSTURE.md`** — the Tier 1 /
    2 / 3 classification rules. Read before any public-facing post or
    doc update.
-4. **`docs/ARCHITECTURE.md`** — the mental model of how the pieces
-   (Mac + Ubuntu + GitHub + Elgato) fit together.
-5. **`docs/DEBUGGING_RUNBOOK.md`** — known failure modes and the
-   exact recovery steps for each.
-6. **`UBUNTU_QUICKSTART.md`** (Ubuntu Claude) — the chainload
-   invocation, USB permission gotchas, apt packages, Windows-doesn't-
-   work explanation.
+4. **`~/sphragis-internal/docs/ARCHITECTURE.md`** — the mental model
+   of how the pieces (Mac + Ubuntu + GitHub + Elgato) fit together.
+5. **`~/sphragis-internal/docs/DEBUGGING_RUNBOOK.md`** — known
+   failure modes and the exact recovery steps for each.
+6. **`UBUNTU_QUICKSTART.md`** (Ubuntu Claude, in the public repo
+   root) — the chainload invocation, USB permission gotchas, apt
+   packages, Windows-doesn't-work explanation.
 
 There is also an **Obsidian vault** at `~/SPHRAGIS_VAULT/` (outside the
 repo). It mirrors every first-party file as a per-file note and adds
