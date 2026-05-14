@@ -295,7 +295,7 @@ fn do_write(fd: u16, ptr: usize, len: usize) -> u64 {
         FdKind::Pipe { id, end: PipeEnd::Write } => {
             match crate::kernel::pipe::write(id, buf) {
                 Ok(n) => n as u64,
-                Err(e) if e == "EPIPE" => err(EPIPE),
+                Err("EPIPE") => err(EPIPE),
                 Err(_) => err(EINVAL),
             }
         }
@@ -303,7 +303,7 @@ fn do_write(fd: u16, ptr: usize, len: usize) -> u64 {
         FdKind::Socket { id, role: SocketRole::Connected } => {
             match crate::kernel::unix_sock::write(id, buf) {
                 Ok(n) => n as u64,
-                Err(e) if e == "EPIPE" => err(EPIPE),
+                Err("EPIPE") => err(EPIPE),
                 Err(_) => err(EINVAL),
             }
         }

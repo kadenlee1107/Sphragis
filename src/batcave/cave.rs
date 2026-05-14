@@ -233,6 +233,7 @@ pub enum MlsOp {
 /// authoritative).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
+#[allow(clippy::enum_variant_names)] // `HighIntegrity` reads as a lattice level; renaming would touch every call site.
 pub enum Integrity {
     Untrusted      = 0,
     Sandboxed      = 1,

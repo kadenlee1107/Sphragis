@@ -101,9 +101,13 @@ pub fn nonce_from_ctr(ctr: u64) -> [u8; 12] {
 ///
 /// Prefixes are the first 8 bytes of each side's c2s key — printing
 /// them lets the operator visually confirm both sides agreed.
-pub fn selftest_round_trip()
-    -> Result<([u8; 8], [u8; 8], bool, bool, usize, usize), &'static str>
-{
+///
+/// `SelftestReport` = (c2s prefix init, c2s prefix resp,
+/// roundtrip_ok, replay_rejected, client_sig_pub_len,
+/// server_sig_pub_len).
+pub type SelftestReport = ([u8; 8], [u8; 8], bool, bool, usize, usize);
+
+pub fn selftest_round_trip() -> Result<SelftestReport, &'static str> {
     // ── Out-of-band setup ────────────────────────────────────────
     // Server long-term hybrid keys (sig identity + kem capacity).
     let server_sig = pq_hybrid_sig::HybridSigKeyPair::generate();

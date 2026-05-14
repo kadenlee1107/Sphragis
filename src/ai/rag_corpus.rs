@@ -3,6 +3,13 @@
 //! Compile-time-bundled corpus + precomputed BM25 IDF table.
 //! Rebuild with `python3 scripts/build_rag_corpus.py` after any
 //! edit to Concept notes or DESIGN_*.md.
+//!
+//! BM25 IDF values of `0.693147` are deliberate — they're the
+//! precomputed IDF for terms appearing in half the corpus
+//! (≈ ln 2). Clippy reads them as approximations of `LN_2`; they
+//! are values, not derivations.
+
+#![allow(clippy::approx_constant)]
 
 use super::rag::CorpusEntry;
 

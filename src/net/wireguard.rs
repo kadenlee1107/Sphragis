@@ -221,11 +221,13 @@ fn initial_state() -> ([u8; HASH_LEN], [u8; HASH_LEN]) {
 ///   - eph_pub (would go on the wire as cleartext)
 ///   - encrypted_static (would go on the wire after eph_pub)
 ///   - encrypted_timestamp (would go on the wire after encrypted_static)
+pub type InitiatorSendInit = (InitiatorState, [u8; KEY_LEN], Vec<u8>, Vec<u8>);
+
 pub fn initiator_send_init(
     initiator: &WgKeypair,
     responder_static_pk: &[u8; KEY_LEN],
     timestamp: &[u8; TIMESTAMP_LEN],
-) -> Result<(InitiatorState, [u8; KEY_LEN], Vec<u8>, Vec<u8>), WgError> {
+) -> Result<InitiatorSendInit, WgError> {
     let mut seed = [0u8; KEY_LEN];
     crate::crypto::rng::fill_bytes(&mut seed);
     initiator_send_init_with_seed(initiator, responder_static_pk, timestamp, seed)
@@ -241,7 +243,7 @@ pub fn initiator_send_init_with_seed(
     responder_static_pk: &[u8; KEY_LEN],
     timestamp: &[u8; TIMESTAMP_LEN],
     eph_seed: [u8; KEY_LEN],
-) -> Result<(InitiatorState, [u8; KEY_LEN], Vec<u8>, Vec<u8>), WgError> {
+) -> Result<InitiatorSendInit, WgError> {
     let (mut c, mut h) = initial_state();
     mix_hash(&mut h, responder_static_pk);
 

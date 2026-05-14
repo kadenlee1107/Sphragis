@@ -205,11 +205,7 @@ pub fn consume_approval(op_id: OpId, current_time_secs: u64) -> bool {
         for g in grants.iter_mut() {
             if !g.in_use { continue; }
             if g.op_id != op_id as u8 { continue; }
-            let drift = if current_time_secs > g.granted_ts {
-                current_time_secs - g.granted_ts
-            } else {
-                g.granted_ts - current_time_secs
-            };
+            let drift = current_time_secs.abs_diff(g.granted_ts);
             if drift > GRANT_TTL_SECS {
                 // Stale — drain and keep looking.
                 g.in_use = false;
@@ -411,11 +407,7 @@ pub fn cosign_op(
 
     // TTL check — operator B's clock skew vs the proposer's
     // timestamp must be < OP_TTL_SECS in either direction.
-    let drift = if current_time_secs > prev_ts {
-        current_time_secs - prev_ts
-    } else {
-        prev_ts - current_time_secs
-    };
+    let drift = current_time_secs.abs_diff(prev_ts);
     if drift > OP_TTL_SECS {
         // Drain the stale slot so it doesn't block other ops.
         unsafe {

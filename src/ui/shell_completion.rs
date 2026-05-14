@@ -464,6 +464,7 @@ pub fn arg_kind_for_parts(parts: &[&str], arg_index: usize) -> ArgKind {
 /// with `parts = [cmd]`, so subcommand-aware dispatch only kicks in
 /// at `arg_index == 0`. New callers should pass the full parts
 /// slice via `arg_kind_for_parts`.
+#[allow(dead_code)]
 pub fn arg_kind_for(cmd: &str, arg_index: usize) -> ArgKind {
     arg_kind_for_parts(&[cmd], arg_index)
 }
@@ -603,6 +604,7 @@ pub fn complete_argument(kind: ArgKind, current: &str) -> ArgCompletion {
 ///
 /// Returns `None` for "still inside the command word" — caller falls
 /// through to `complete_command()`.
+#[allow(dead_code)]
 pub fn split_for_completion(line: &str) -> Option<(&str, usize, &str)> {
     let bytes = line.as_bytes();
     let first_space = bytes.iter().position(|&b| b == b' ')?;
@@ -648,7 +650,7 @@ pub struct SplitParts<'a> {
 ///
 /// Returns `None` for "still inside the command word" — caller
 /// falls through to `complete_command()`.
-pub fn split_for_completion_parts(line: &str) -> Option<SplitParts> {
+pub fn split_for_completion_parts(line: &str) -> Option<SplitParts<'_>> {
     let first_space = line.bytes().position(|b| b == b' ')?;
     let cmd = &line[..first_space];
     let rest = &line[first_space + 1..];
