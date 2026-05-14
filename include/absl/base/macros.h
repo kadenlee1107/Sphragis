@@ -1,4 +1,4 @@
-// Minimal Abseil base macros stub for V8 compilation on Bat_OS
+// Minimal Abseil base macros stub for V8 compilation on Sphragis
 
 #ifndef ABSL_BASE_MACROS_H_
 #define ABSL_BASE_MACROS_H_

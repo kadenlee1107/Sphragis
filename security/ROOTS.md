@@ -1,4 +1,4 @@
-# Bat_OS — Root Cause Inventory (V8 synthesis)
+# Sphragis — Root Cause Inventory (V8 synthesis)
 
 Date: 2026-04-16
 Source: 18 parallel V8 pentest agents, findings clustered by shared root.
@@ -56,7 +56,7 @@ added fd/sockets/tcp. Still missing:
 - futex TABLE (xlayer-A)
 - async_fds eventfd/timerfd (xlayer-A)
 - stdio_ring (xlayer-A)
-- /batos/fb0 ChromiumFb pages (xlayer-B)
+- /sphragis/fb0 ChromiumFb pages (xlayer-B)
 - VPN SEND/RECV_KEY+NONCE (xlayer-B)
 - DNS EXPECTED_TXID/RESOLVED_IP (xlayer-B)
 - PROC_FD_*, SOCK_DEST_IP/PORT/LOCAL_PORT, WORKER_BRK (static-audit-A)
@@ -133,7 +133,7 @@ can't use either. (V8-WEIRD-ROOT-C, V8-CHAINS-ROOT-2, V7-SUPPLY-001,
 V7-WEIRD-001)
 
 **Correct fix**: do NOT derive from attacker-observable kernel state.
-Require `BAT_OS_DEV_PASSPHRASE` / `BAT_OS_DURESS_CODE` env vars at build
+Require `SPHRAGIS_DEV_PASSPHRASE` / `SPHRAGIS_DURESS_CODE` env vars at build
 via `build.rs` (currently empty) or refuse to build. Log neither over
 UART. Document operator must record them at provisioning.
 

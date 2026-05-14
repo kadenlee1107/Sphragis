@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Followup #3b demo: drive the cpol- shell commands end-to-end.
 
-Boots Bat_OS, authenticates, then runs:
+Boots Sphragis, authenticates, then runs:
   cpol-list           (empty)
   cpol-add    kali github.com        443 tcp
   cpol-add    kali api.anthropic.com 443 tcp
@@ -23,12 +23,12 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT   = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG    = ROOT / f"logs/qemu-tests/cpol-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 QEMU = [
     "qemu-system-aarch64",
@@ -55,7 +55,7 @@ def run_cmd(c, cmd: str, timeout=10) -> str:
     raw = ANSI.sub(b"", c.before or b"").decode("utf-8", "replace")
     lines = [l.rstrip() for l in raw.splitlines()]
     out = [l for l in lines if l and
-           not l.strip().startswith(("[docker]", "[tcp]", "bat_os >"))]
+           not l.strip().startswith(("[docker]", "[tcp]", "sphragis >"))]
     return "\n".join(out)
 
 def main():
@@ -81,7 +81,7 @@ def main():
 
     failures = 0
     for cmd, expect, note in steps:
-        print(f"bat_os > {cmd}    # {note}")
+        print(f"sphragis > {cmd}    # {note}")
         out = run_cmd(c, cmd, timeout=10)
         for line in out.splitlines():
             print(f"   {line[:120]}")

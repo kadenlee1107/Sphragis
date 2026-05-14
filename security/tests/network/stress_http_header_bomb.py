@@ -2,7 +2,7 @@
 """
 stress_http_header_bomb.py — ATTACK-NET-045 regression helper
 
-Malicious HTTP server that sends 2000 `X-Pad:` headers to the Bat_OS
+Malicious HTTP server that sends 2000 `X-Pad:` headers to the Sphragis
 HTTP client. With the hardening in src/net/http.rs this must be
 rejected with "Headers too large" before the renderer is ever invoked.
 

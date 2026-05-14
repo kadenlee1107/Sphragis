@@ -29,8 +29,8 @@ cat <<EOF
 Next steps:
   1. Wire these four ELFs into src/batcave/linux/runner.rs via
      include_bytes!() and a new dispatch table (e.g. 'escape_run NAME').
-  2. Boot Bat_OS under QEMU with:
-       cargo run --release -p bat_os
+  2. Boot Sphragis under QEMU with:
+       cargo run --release -p sphragis
   3. From the shell:
        batcave create test-escape
        # grant no caps, just enter

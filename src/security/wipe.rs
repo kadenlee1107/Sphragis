@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Secure Wipe System
+// Sphragis — Secure Wipe System
 // Multiple wipe modes, all irreversible:
 //
 // 1. SILENT WIPE: Duress mode — shows fake boot while destroying everything

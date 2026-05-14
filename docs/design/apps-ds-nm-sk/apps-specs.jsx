@@ -42,7 +42,7 @@ const AppsSpecs = () => (
       fontSize: 11, letterSpacing: 3, color: aspecColors.cyan,
       textTransform: "uppercase", marginBottom: 8,
     }}>
-      [spec] bat_os · ds · nm · sk · v0.5.0-dev
+      [spec] sphragis · ds · nm · sk · v0.5.0-dev
     </div>
     <div style={{ fontSize: 24, letterSpacing: 2, marginBottom: 4 }}>
       Implementation reference

@@ -3,7 +3,7 @@
 
 Flow:
   1. Start batcaved in subprocess (port 9999, proxy 9998).
-  2. Boot Bat_OS in QEMU.
+  2. Boot Sphragis in QEMU.
   3. Authenticate and reach shell.
   4. cpol-add      kali github.com 443 tcp
   5. cpol-add      kali api.anthropic.com 443 tcp
@@ -25,7 +25,7 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT     = Path(__file__).resolve().parent.parent
-KERNEL   = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL   = ROOT / "target/aarch64-unknown-none/release/sphragis"
 BATCAVED = ROOT / "scripts" / "batcaved.py"
 LOG_DIR  = ROOT / "logs/qemu-tests"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -34,7 +34,7 @@ QEMU_LOG = LOG_DIR / f"cpol-sync-qemu-{STAMP}.log"
 DAEMON_LOG = LOG_DIR / f"cpol-sync-daemon-{STAMP}.log"
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 QEMU = [
     "qemu-system-aarch64",
@@ -94,7 +94,7 @@ def main():
             ("cpol-daemon-list",                            "empty"),
         ]
         for cmd, expect in steps:
-            print(f"bat_os > {cmd}")
+            print(f"sphragis > {cmd}")
             out = run_cmd(c, cmd, timeout=30)
             for line in out.splitlines():
                 print(f"   {line[:120]}")

@@ -1,4 +1,4 @@
-// Bat_OS — FS · File Manager
+// Sphragis — FS · File Manager
 //
 // Claude-Design Wave-3 port. Source artifacts in
 // `docs/design/apps-fs-ed-cm/` (jsx + spec sheet).

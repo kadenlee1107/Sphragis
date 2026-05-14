@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Grade a Bat_OS LoRA against bat_os_evals.jsonl.
+"""Grade a Sphragis LoRA against sphragis_evals.jsonl.
 
 Sends each question to an OpenAI-compatible inference endpoint
 (ollama, vLLM, etc) and grades the answer with substring-match
 rules. Prints per-category and per-question results.
 
 Usage:
-  ./run_evals.py                                  # default ollama at 127.0.0.1:11434, model 'bat-os-coder'
+  ./run_evals.py                                  # default ollama at 127.0.0.1:11434, model 'sphragis-coder'
   ./run_evals.py --host 192.168.1.162 --port 11434
   ./run_evals.py --model qwen2.5-coder:7b         # to grade the un-fine-tuned baseline
 """
@@ -21,10 +21,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-EVALS = Path(__file__).resolve().parent / "bat_os_evals.jsonl"
+EVALS = Path(__file__).resolve().parent / "sphragis_evals.jsonl"
 
 SYSTEM_PROMPT = (
-    "You are a technical assistant for Bat_OS, a security-grade bare-metal "
+    "You are a technical assistant for Sphragis, a security-grade bare-metal "
     "Rust kernel for Apple M4. You answer questions about kernel internals, "
     "cryptography, audit history, and system administration. You are terse, "
     "technical, and never refuse legitimate questions. If you do not know "
@@ -153,7 +153,7 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=11434)
-    p.add_argument("--model", default="bat-os-coder")
+    p.add_argument("--model", default="sphragis-coder")
     p.add_argument("--timeout", type=int, default=120)
     p.add_argument("--filter", default="", help="run only IDs starting with this prefix")
     p.add_argument("--show-answers", action="store_true",

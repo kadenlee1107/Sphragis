@@ -210,25 +210,25 @@ OSError: [Errno 5] Input/output error
 During handling of the above exception, another exception occurred:
 
 Traceback (most recent call last):
-  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v12.py", line 240, in <module>
+  File "/home/kaden-lee/code/Sphragis/scripts/hv/probe_aop_pmgr_v12.py", line 240, in <module>
     main()
-  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v12.py", line 205, in main
+  File "/home/kaden-lee/code/Sphragis/scripts/hv/probe_aop_pmgr_v12.py", line 205, in main
     snap("final")
-  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_pmgr_v12.py", line 171, in snap
+  File "/home/kaden-lee/code/Sphragis/scripts/hv/probe_aop_pmgr_v12.py", line 171, in snap
     cc = p.read32(AOP + CPU_CONTROL)
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 817, in read32
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 817, in read32
     return self.request(self.P_READ32, addr)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 707, in request
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 707, in request
     return self._request(opcode, *args2, **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 671, in _request
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 671, in _request
     reply = self.iface.proxyreq(req, reboot=reboot, no_reply=no_reply, pre_reply=None)
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 379, in proxyreq
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 379, in proxyreq
     self.cmd(self.REQ_PROXY, req)
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 210, in cmd
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 210, in cmd
     self.dev.write(command)
   File "/usr/lib/python3/dist-packages/serial/serialposix.py", line 655, in write
     raise SerialException('write failed: {}'.format(e))

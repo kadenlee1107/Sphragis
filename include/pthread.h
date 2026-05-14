@@ -1,4 +1,4 @@
-// Bat_OS — pthread.h stub
+// Sphragis — pthread.h stub
 #ifndef _PTHREAD_H
 #define _PTHREAD_H
 

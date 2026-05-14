@@ -1,8 +1,8 @@
-# Bat_OS — Design Document
+# Sphragis — Design Document
 
 ## Understanding Summary
 
-- **What:** Bat_OS — a fully custom, bare-metal operating system for Apple Silicon (M4 MacBook)
+- **What:** Sphragis — a fully custom, bare-metal operating system for Apple Silicon (M4 MacBook)
 - **Why:** Eliminate supply chain attack vectors. Zero external dependencies. Every line of code is controlled and auditable. Government/private-client grade security for personal use.
 - **Who:** Single user. No distribution, no downloads, no one else ever touches it.
 - **Stack:** Rust microkernel + minimal ARM64 assembly. Framebuffer UI first, GPU-accelerated later.
@@ -40,7 +40,7 @@ Target kernel size: ~8,000-12,000 lines of Rust.
 ## Boot Chain & Authentication
 
 ```
-Power On → Apple iBoot → Bat_OS Boot Stub (ASM) → Authentication Gate (Rust) → Kernel Init
+Power On → Apple iBoot → Sphragis Boot Stub (ASM) → Authentication Gate (Rust) → Kernel Init
 ```
 
 ### Authentication Gate
@@ -196,7 +196,7 @@ Nobody in the chain sees the full picture.
 - MMU + page tables
 - UART console output
 - Basic heap allocator
-- **Deliverable:** boot in QEMU, print "BAT_OS ALIVE" to serial console
+- **Deliverable:** boot in QEMU, print "SPHRAGIS ALIVE" to serial console
 
 ### Phase 2: Microkernel Core
 - Memory manager (page allocator, virtual address spaces)
@@ -253,7 +253,7 @@ Nobody in the chain sees the full picture.
   - USB / Thunderbolt (XHCI + Apple TB)
   - Secure Enclave (SEP) — replace software crypto
   - GPU (AGX) — replace framebuffer rendering
-- **Deliverable:** Bat_OS boots on real M4 MacBook
+- **Deliverable:** Sphragis boots on real M4 MacBook
 
 ### Phase 8: Auth & Hardening
 - Boot authentication (passphrase + YubiKey)
@@ -263,7 +263,7 @@ Nobody in the chain sees the full picture.
 - Panic hotkey
 - Full security audit
 - Penetration test the OS
-- **Deliverable:** fully hardened Bat_OS on bare metal
+- **Deliverable:** fully hardened Sphragis on bare metal
 
 ---
 

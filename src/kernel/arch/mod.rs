@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Architecture-specific kernel code (ARM64)
+// Sphragis — Architecture-specific kernel code (ARM64)
 
 use crate::drivers::uart;
 
@@ -2686,7 +2686,7 @@ fn handle_sync_exception_inner(frame: *mut TrapFrame, esr: u64, ec: u64) {
                 }
             }
 
-            // BAT_OS_KEEP_GOING: instead of dumping + terminating
+            // SPHRAGIS_KEEP_GOING: instead of dumping + terminating
             // on every user-mode unhandled exception, record the
             // event into the skip ring and retire just THIS thread.
             // The cave's other threads keep running and we map the

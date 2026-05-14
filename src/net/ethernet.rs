@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Ethernet Frame Handler
+// Sphragis — Ethernet Frame Handler
 
 pub const ETH_HDR_SIZE: usize = 14;
 pub const ETHERTYPE_ARP: u16 = 0x0806;

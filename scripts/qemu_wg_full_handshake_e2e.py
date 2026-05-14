@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Closes the WireGuard handshake loop over real virtio-net.
 
-`qemu_wg_real_peer_e2e.py` validates that Bat_OS's WG Init reaches
+`qemu_wg_real_peer_e2e.py` validates that Sphragis's WG Init reaches
 a host UDP listener with valid Phase-2 framing. This test takes
 the next step: a Python Noise IK responder (`wg_responder.py`)
 decrypts the Init, builds a Response, and sends it back through
-SLIRP. Bat_OS processes the Response via `dispatch_response`,
+SLIRP. Sphragis processes the Response via `dispatch_response`,
 upgrades the session's `their_sender_index` from 0 to the
 responder's index, and the `wg-test-outbound` shell command
 prints `WG-SESSION-ESTABLISHED`.
 
-End-to-end proof that Bat_OS's Noise IK implementation interops
+End-to-end proof that Sphragis's Noise IK implementation interops
 with an external responder over the wire — closes the full
 gap-audit item 043 entry.
 
@@ -27,7 +27,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/wg-full-handshake-e2e-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -79,7 +79,7 @@ def main() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         # Kick off the handshake with the responder's pubkey.
@@ -93,7 +93,7 @@ def main() -> int:
             return 1
         print("[wg-full] kernel reports Init queued on tx ring")
 
-        # ── Receive Init from Bat_OS over SLIRP ──
+        # ── Receive Init from Sphragis over SLIRP ──
         try:
             init_bytes, peer = sock.recvfrom(2048)
         except socket.timeout:
@@ -124,14 +124,14 @@ def main() -> int:
             return 1
         print(f"[wg-full] built {len(response)}-byte Response (my_idx 0x{my_idx:08x})")
 
-        # Send Response back to Bat_OS. peer == (host-side src) the
+        # Send Response back to Sphragis. peer == (host-side src) the
         # SLIRP NAT chose to represent the guest; sendto that 4-tuple
         # so SLIRP routes it back into the guest as if from the
         # original dst.
         sock.sendto(response, peer)
         print(f"[wg-full] Response sent back to {peer}")
 
-        # ── Bat_OS should see Response, mark session Established ──
+        # ── Sphragis should see Response, mark session Established ──
         idx = c.expect([
             rb"WG-SESSION-ESTABLISHED",
             rb"no Response within deadline",

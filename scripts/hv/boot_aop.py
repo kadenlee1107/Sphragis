@@ -121,7 +121,7 @@ def main():
     bootstrap_port(iface, p)
     u = ProxyUtils(p, heap_size=128 * 1024 * 1024)
 
-    if os.environ.get("BATOS_SKIP_BOOTSTRAP", "0") != "1":
+    if os.environ.get("SPHRAGIS_SKIP_BOOTSTRAP", "0") != "1":
         log("chainloading patched m1n1...")
         chainload(iface, p, u)
         u = ProxyUtils(p, heap_size=128 * 1024 * 1024)
@@ -264,7 +264,7 @@ def main():
         log(f"update_bootargs err: {type(e).__name__}: {e}")
 
     # Skip dapf (hangs on M4 dart-mtp but may be ok for dart-aop — try?)
-    skip_dapf = os.environ.get("BATOS_SKIP_DAPF", "1") == "1"
+    skip_dapf = os.environ.get("SPHRAGIS_SKIP_DAPF", "1") == "1"
     if not skip_dapf:
         log("dapf_init_all (30s timeout)...")
         saved = iface.dev.timeout

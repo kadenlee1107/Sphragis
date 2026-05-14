@@ -9,7 +9,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (ROOT / f"logs/qemu-tests/taint-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log")
 LOG.parent.mkdir(parents=True, exist_ok=True)
 QEMU_ARGS = [
@@ -29,7 +29,7 @@ def main() -> int:
     c = pexpect.spawn(QEMU_ARGS[0], QEMU_ARGS[1:], timeout=120, logfile=fp, encoding=None)
     try:
         c.expect(rb"Enter passphrase", timeout=60); c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90); time.sleep(0.5)
+        c.expect(rb"sphragis > ", timeout=90); time.sleep(0.5)
         c.sendline("taint-selftest")
         idx = c.expect([
             rb"\xe2\x9c\x93 taint-selftest PASS",
@@ -37,7 +37,7 @@ def main() -> int:
         ], timeout=60)
         if idx == 1:
             print("[taint] FAIL", file=sys.stderr); return 1
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[taint] PASS — taint propagates on read+write, monotonic"); return 0
     except pexpect.TIMEOUT:
         print("[taint] FAIL — timeout", file=sys.stderr); return 1

@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Register the quantized GGUF with the local ollama daemon as
-# `bat-os-coder`. Idempotent — re-running will overwrite an existing
+# `sphragis-coder`. Idempotent — re-running will overwrite an existing
 # tag.
 #
 # Inputs:
-#   /mnt/d/ai/training/gguf/bat-os-coder.Q4_K_M.gguf
+#   /mnt/d/ai/training/gguf/sphragis-coder.Q4_K_M.gguf
 # Outputs:
-#   ollama tag `bat-os-coder:latest`
+#   ollama tag `sphragis-coder:latest`
 #
 # Run:
 #   bash scripts/register_with_ollama.sh
 set -euo pipefail
 
-GGUF=/mnt/d/ai/training/gguf/bat-os-coder.Q4_K_M.gguf
-TAG="${TAG:-bat-os-coder}"
+GGUF=/mnt/d/ai/training/gguf/sphragis-coder.Q4_K_M.gguf
+TAG="${TAG:-sphragis-coder}"
 MODELFILE=/mnt/d/ai/training/Modelfile
 
 if [ ! -f "$GGUF" ]; then
@@ -40,7 +40,7 @@ PARAMETER top_p 0.9
 PARAMETER num_ctx 4096
 PARAMETER repeat_penalty 1.05
 
-SYSTEM """You are a technical assistant for Bat_OS, a security-grade bare-metal Rust kernel for Apple M4. You answer questions about kernel internals, cryptography, audit history, and system administration. You are terse, technical, and never refuse legitimate questions."""
+SYSTEM """You are a technical assistant for Sphragis, a security-grade bare-metal Rust kernel for Apple M4. You answer questions about kernel internals, cryptography, audit history, and system administration. You are terse, technical, and never refuse legitimate questions."""
 EOF
 
 if ! pgrep -x ollama >/dev/null; then

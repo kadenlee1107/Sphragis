@@ -2,25 +2,25 @@
 """
 fuzz_tls.py — ATTACK-NET-026, 027, 028, 029, 030
 
-Runs as a TLS 1.3 decoy server that the Bat_OS browser connects to. For
+Runs as a TLS 1.3 decoy server that the Sphragis browser connects to. For
 each incoming ClientHello we send a pathological ServerHello to probe
-whether Bat_OS catches the issue.
+whether Sphragis catches the issue.
 
 Usage:
   python3 fuzz_tls.py <listen_port> [--attack 029]
 
-Then from inside Bat_OS:
+Then from inside Sphragis:
   browser load https://<host-ip>:<port>/
 
 Attacks cycled if --attack is omitted.
 
 Attacks:
   026: Advertise supported_versions=0x0303 (TLS 1.2) in ServerHello.
-  027: Send a completely bogus Certificate (random bytes) — Bat_OS should
+  027: Send a completely bogus Certificate (random bytes) — Sphragis should
        reject in CertificateVerify. It won't.
-  028: Send random bytes as encrypted Finished — Bat_OS should reject.
+  028: Send random bytes as encrypted Finished — Sphragis should reject.
   029: Flip one byte of Application Data ciphertext — GCM tag mismatch
-       should be detected. Bat_OS accepts (AES-CTR with no MAC).
+       should be detected. Sphragis accepts (AES-CTR with no MAC).
   030: ServerHello key_share = 32 zeros — derive-shared = 0 — should abort.
 """
 
@@ -74,7 +74,7 @@ def server_hello_tls12_downgrade():
 def bogus_encrypted_record():
     # ATTACK-027, 028, 029 — send random bytes as if they were encrypted
     # Certificate, CertificateVerify, or Finished. We don't even know the
-    # handshake keys; Bat_OS will XOR-decrypt to garbage and accept.
+    # handshake keys; Sphragis will XOR-decrypt to garbage and accept.
     junk = os.urandom(200)
     return tls_record(0x17, junk)
 
@@ -113,7 +113,7 @@ def serve(port, attack):
             else:
                 c.sendall(server_hello_tls12_downgrade())
 
-            # Hold the socket so we can see if Bat_OS sends AppData despite
+            # Hold the socket so we can see if Sphragis sends AppData despite
             # the broken handshake.
             time.sleep(3)
         except Exception as e:

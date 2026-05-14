@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple USB controller (Synopsys DesignWare USB3 core)
+// Sphragis — Apple USB controller (Synopsys DesignWare USB3 core)
 //
 // Apple Silicon ships USB via the Synopsys DWC3 core (NOT a bare XHCI
 // controller). DWC3 is dual-mode:

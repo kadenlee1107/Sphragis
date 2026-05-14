@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless argument-completion smoke for the Bat_OS shell.
+"""Headless argument-completion smoke for the Sphragis shell.
 
 Creates two BatFS files via `write`, then tests that:
   1. `read fo<Tab>` completes uniquely to `read foobar` (only file
@@ -22,7 +22,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/shell-argcomplete-smoke-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -64,16 +64,16 @@ def run() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         # Seed two files.
         c.sendline('write foobar "hello"')
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         c.sendline('write foozap "world"')
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         c.sendline('write barbaz "third"')
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
 
         # Test 1: unique-prefix → `read foob<Tab>` completes to `read foobar`.
         c.send(b"read foob")
@@ -82,7 +82,7 @@ def run() -> int:
         c.expect(rb"read foobar", timeout=10)
         print("[argcomplete-smoke]   PASS unique: 'read foob' + Tab → 'read foobar'")
         c.send(b"\x03")
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
 
         # Test 2: multi-match → `read fo<Tab>` lists both `foo*` files
         # and extends to `foo` (the common prefix).
@@ -93,7 +93,7 @@ def run() -> int:
         c.expect(rb"foozap", timeout=10)
         print("[argcomplete-smoke]   PASS multi: 'read fo' + Tab listed foobar + foozap")
         c.send(b"\x03")
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
 
         # Test 3: empty-prefix → `read <Tab>` lists every file.
         c.send(b"read ")
@@ -103,7 +103,7 @@ def run() -> int:
         c.expect(rb"barbaz", timeout=10)
         print("[argcomplete-smoke]   PASS empty: 'read ' + Tab listed all files")
         c.send(b"\x03")
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
 
         # Test 4: subcommand completion — `pkg <Tab>` lists the four
         # pkg subcommands (`install / list / remove / stage`).
@@ -114,7 +114,7 @@ def run() -> int:
         c.expect(rb"stage", timeout=10)
         print("[argcomplete-smoke]   PASS subcmd: 'pkg ' + Tab listed pkg subcommands")
         c.send(b"\x03")
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
 
         # Test 5: unique-prefix subcommand — `pkg in<Tab>` extends to
         # `pkg install`.
@@ -124,7 +124,7 @@ def run() -> int:
         c.expect(rb"pkg install", timeout=10)
         print("[argcomplete-smoke]   PASS subcmd-unique: 'pkg in' + Tab -> 'pkg install'")
         c.send(b"\x03")
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
 
         # Test 6: subcommand-aware arg — `pkg install fo<Tab>` should
         # complete from BatFS files (the (cmd, subcommand) lookup
@@ -136,7 +136,7 @@ def run() -> int:
         c.expect(rb"foozap", timeout=10)
         print("[argcomplete-smoke]   PASS subcmd-arg: 'pkg install fo' + Tab listed batfs files")
         c.send(b"\x03")
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
 
         # Test 7: common-path enum — `tz <Tab>` lists the curated
         # offset suggestions (+8, -5, etc.).
@@ -147,7 +147,7 @@ def run() -> int:
         c.expect(rb"\+8", timeout=10)
         print("[argcomplete-smoke]   PASS common-path: 'tz ' + Tab listed offset suggestions")
         c.send(b"\x03")
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
 
         # Test 8: kbd-trace on/off — `kbd-trace o<Tab>` is ambiguous
         # between `on` and `off`. The candidate list comes back in

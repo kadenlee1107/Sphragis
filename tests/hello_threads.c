@@ -1,4 +1,4 @@
-// Bat_OS Thread Test — thread creation via clone syscall
+// Sphragis Thread Test — thread creation via clone syscall
 #include "minilib.h"
 
 MINILIB_MAIN

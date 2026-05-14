@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bat_OS — one-time Ubuntu setup. Run once after `git clone`.
+# Sphragis — one-time Ubuntu setup. Run once after `git clone`.
 # Idempotent: rerunning is safe and cheap.
 set -euo pipefail
 
@@ -65,7 +65,7 @@ log "Ensuring Rust nightly + rust-src + aarch64 target"
 rustup toolchain install nightly --profile minimal
 rustup component add rust-src --toolchain nightly
 rustup target add aarch64-unknown-none-softfloat --toolchain nightly
-# Also install stable for bat_os itself (rust-toolchain.toml usually pins it)
+# Also install stable for sphragis itself (rust-toolchain.toml usually pins it)
 rustup toolchain install stable --profile default
 
 # ─── Claude Code (optional — user can skip) ────────────────────────
@@ -82,5 +82,5 @@ mkdir -p logs captures
 
 log "Done. Useful next commands:"
 log "  sudo tailscale up          # join the private network"
-log "  ./scripts/chainload.sh X   # chainload Bat_OS binary X"
+log "  ./scripts/chainload.sh X   # chainload Sphragis binary X"
 log "  ./scripts/rebuild.sh       # cargo build the Apple binary"

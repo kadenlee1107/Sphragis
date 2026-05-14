@@ -1,4 +1,4 @@
-  BAT_OS — BARE METAL APPLE SILICON
+  SPHRAGIS — BARE METAL APPLE SILICON
   Running on REAL M4 hardware.
 ================================================
 
@@ -18,7 +18,7 @@
 [boot] No display — serial shell
 
 
-bat_os> =100194d7ff4
+sphragis> =100194d7ff4
 [reader] >> sending 'help\r'
 sync] enter esr=93880007 elr=10019459c20
   help           — list commands
@@ -30,4 +30,4 @@ sync] enter esr=93880007 elr=10019459c20
   batfs create <name> <plaintext>
   batfs read <name>
   halr=93880007 elr=10019459c20
-bat_os> er esr=93880007 elr=10019459c20
+sphragis> er esr=93880007 elr=10019459c20

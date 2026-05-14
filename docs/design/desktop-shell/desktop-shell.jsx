@@ -1,4 +1,4 @@
-// Bat_OS desktop chrome — title bar + content slot + status bar.
+// Sphragis desktop chrome — title bar + content slot + status bar.
 // Plus the SH (shell) pane content with three states.
 
 const shellColors = {
@@ -220,7 +220,7 @@ const StatusBar = ({
 // kinds: "echo" | "out" | "audit" | "warn" | "err" | "banner" | "blank"
 const Line = ({ kind = "out", children, indent = 0 }) => {
   const colorMap = {
-    echo:   shellColors.dim,    // cmd echo prefix "bat_os >"
+    echo:   shellColors.dim,    // cmd echo prefix "sphragis >"
     out:    shellColors.ink,    // normal output
     audit:  shellColors.cyan,   // [243]
     warn:   shellColors.amber,
@@ -244,7 +244,7 @@ const Prompt = ({ typed = "", cursor = true, blink = true }) => (
     fontFamily: shellMono, fontSize: 13, lineHeight: "16px",
     display: "flex", alignItems: "center",
   }}>
-    <span style={{ color: shellColors.ink }}>bat_os</span>
+    <span style={{ color: shellColors.ink }}>sphragis</span>
     <span style={{ color: shellColors.cyan, padding: "0 6px" }}>&gt;</span>
     <span style={{ color: shellColors.ink, whiteSpace: "pre" }}>{typed}</span>
     {cursor && (
@@ -258,13 +258,13 @@ const Prompt = ({ typed = "", cursor = true, blink = true }) => (
   </div>
 );
 
-// Echo "bat_os > <cmd>" line, used inside scrollback
+// Echo "sphragis > <cmd>" line, used inside scrollback
 const Echo = ({ cmd }) => (
   <div style={{
     fontFamily: shellMono, fontSize: 13, lineHeight: "16px",
     whiteSpace: "pre",
   }}>
-    <span style={{ color: shellColors.dim }}>bat_os</span>
+    <span style={{ color: shellColors.dim }}>sphragis</span>
     <span style={{ color: shellColors.cyanDim, padding: "0 6px" }}>&gt;</span>
     <span style={{ color: shellColors.ink }}>{cmd}</span>
   </div>

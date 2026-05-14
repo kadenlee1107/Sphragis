@@ -1,4 +1,4 @@
-// Bat_OS — kernel heap.
+// Sphragis — kernel heap.
 //
 // V6-KMEM-001 fix: heap base is now DYNAMIC, set by mm::init AFTER the
 // initrd blob is parsed. The previous fixed base 0x48000000 (128 MB
@@ -47,7 +47,7 @@ static ALLOCATOR: KernelAllocator = KernelAllocator {
 /// Device memory have unpredictable behavior — specifically, STXR
 /// always fails. `spin::Mutex::lock()` uses `AtomicBool::
 /// compare_exchange_weak`, so the lock spin never makes progress and
-/// `heap::init` hangs forever. Since Bat_OS is single-CPU during
+/// `heap::init` hangs forever. Since Sphragis is single-CPU during
 /// bring-up (we chainload with `-S`), the mutex was just a nicety;
 /// masking IRQs is enough mutual exclusion.
 pub struct KernelAllocator {

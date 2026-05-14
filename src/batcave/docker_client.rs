@@ -1,8 +1,8 @@
-// Bat_OS — Docker-BatCave client (Phase 2 of the design-alignment plan).
+// Sphragis — Docker-BatCave client (Phase 2 of the design-alignment plan).
 //
 // ROLE
 // ----
-// Opens a TCP connection from Bat_OS → Mac-side `batcaved` daemon at
+// Opens a TCP connection from Sphragis → Mac-side `batcaved` daemon at
 // 10.0.2.2:9999 (QEMU slirp's host alias). All lifecycle operations
 // for Docker-backed BatCaves flow through this module so the shell
 // surface in `cmd_batcave()` stays unified.
@@ -31,7 +31,7 @@
 // FAILURE MODE
 // ------------
 // If the daemon is not running, `connect()` fails fast with the same
-// ConnRefused-ish error the Bat_OS TCP stack would return on any
+// ConnRefused-ish error the Sphragis TCP stack would return on any
 // refused destination. We surface a readable error to the shell
 // rather than wedging the guest.
 
@@ -130,7 +130,7 @@ fn recv_until<F: FnMut(&str)>(marker: &str, mut sink: F) -> Result<String, &'sta
 /// container's short ID on success.
 ///
 /// Phase 3 overload: `create_with_key` additionally passes the cave's
-/// per-cave AES-256 key (derived in Bat_OS via `sha256::derive_key`
+/// per-cave AES-256 key (derived in Sphragis via `sha256::derive_key`
 /// on cave create). The daemon uses it to AES-encrypt the cave's
 /// audit log at rest, and zeroes it on destroy. The key never touches
 /// the Mac's disk in plaintext.
@@ -308,7 +308,7 @@ pub fn list() -> Result<Vec<(String, String, String)>, &'static str> {
 
 // ───── Heartbeat / deadman (Phase 5 scaffold) ────────────────────
 
-/// Arm the daemon's deadman timer: if Bat_OS doesn't PING within
+/// Arm the daemon's deadman timer: if Sphragis doesn't PING within
 /// `secs` seconds, the daemon wipes every cave. Called from
 /// `security::deadman::arm()`.
 pub fn arm_deadman(secs: u64) -> Result<(), &'static str> {

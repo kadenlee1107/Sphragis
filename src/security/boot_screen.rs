@@ -1,4 +1,4 @@
-// Bat_OS — Secure Boot Screen
+// Sphragis — Secure Boot Screen
 //
 // Claude-Design boot-screen redesign (April 2026).
 // The previous version was a bare bat sprite + a single passphrase
@@ -10,7 +10,7 @@
 // Visual contract (matches `docs/design/lock-screen/specs.jsx`):
 // * 16-color palette anchored on near-black panels and cyan accent.
 // * Status pill row across the top with real subsystem state.
-// * Centered stack: geometric bat glyph + BAT_OS wordmark + version
+// * Centered stack: geometric bat glyph + SPHRAGIS wordmark + version
 // line + passphrase field + helper hint row.
 // * Bottom-left: last 4 boot-log lines.
 // * Bottom-right: clock + attempts-remaining pill.
@@ -254,7 +254,7 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
 
     // Right-justified system identity — host / kernel / arch.
     let ident_y = row_y + 6;
-    let ident = "HOST BATOS-01    KERNEL BAT 0.5.0-DEV    ARCH AARCH64 / APPLE-M4";
+    let ident = "HOST SPHRAGIS-01    KERNEL BAT 0.5.0-DEV    ARCH AARCH64 / APPLE-M4";
     let ident_x = (w - MARGIN_X).saturating_sub(ident.len() as u32 * CHAR_W);
     font::draw_str(fb, w, ident_x, ident_y, ident, MID, BG);
 
@@ -280,9 +280,9 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
     let glyph_y = cy.saturating_sub(180);
     draw::draw_bat_full(glyph_x as i32, glyph_y as i32, accent, accent_dim, BG);
 
-    // Wordmark "BAT_OS" — 32px in the spec, our font is 16px so it's
+    // Wordmark "SPHRAGIS" — 32px in the spec, our font is 16px so it's
     // visually smaller than the mock, but the layout works.
-    let wordmark = "BAT_OS";
+    let wordmark = "SPHRAGIS";
     let word_x = cx - (wordmark.len() as u32 * CHAR_W) / 2;
     let word_y = glyph_y + BAT_H + 24;
     font::draw_str(fb, w, word_x, word_y, "BAT", INK, BG);
@@ -572,7 +572,7 @@ fn fake_boot_and_wipe(fb: *mut u32, w: u32, h: u32) {
     let cy = h / 2;
 
     gpu::fill_screen(BG);
-    let title = "BAT_OS";
+    let title = "SPHRAGIS";
     let t_x = cx - (title.len() as u32 * CHAR_W) / 2;
     font::draw_str(fb, w, t_x, cy - 40, title, INK, BG);
     let loading = "LOADING SYSTEM ...";

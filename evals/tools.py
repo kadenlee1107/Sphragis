@@ -1,4 +1,4 @@
-"""Tool implementations for the Bat_OS AI agent — Python side.
+"""Tool implementations for the Sphragis AI agent — Python side.
 
 Mirrors the six read-only tools the design specifies (see
 src/ai/tools.rs for the kernel-side definitions). Used by the eval
@@ -163,7 +163,7 @@ TOOL_SPECS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read a UTF-8 file from the Bat_OS repo. Returns up to 4 KB.",
+            "description": "Read a UTF-8 file from the Sphragis repo. Returns up to 4 KB.",
             "parameters": {
                 "type": "object",
                 "properties": {

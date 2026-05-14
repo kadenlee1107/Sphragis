@@ -41,7 +41,7 @@ from trl import SFTConfig, SFTTrainer
 
 # ── Config ───────────────────────────────────────────────────────────
 BASE_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"
-DATASET    = "/mnt/d/ai/training/bat_os_lora_dataset_v2.jsonl"
+DATASET    = "/mnt/d/ai/training/sphragis_lora_dataset_v2.jsonl"
 OUT_DIR    = "/mnt/d/ai/training/output_v2"
 MAX_LEN    = 2048
 

@@ -1,4 +1,4 @@
-// Bat_OS — ARM64 cooperative context switch for BatCave threads.
+// Sphragis — ARM64 cooperative context switch for BatCave threads.
 // Called by threads::schedule() when a task yields voluntarily
 // (blocking syscall, explicit yield).
 //

@@ -1,4 +1,4 @@
-// Minimal Abseil span stub for V8 compilation on Bat_OS
+// Minimal Abseil span stub for V8 compilation on Sphragis
 // Aliases to std::span (C++20)
 
 #ifndef ABSL_TYPES_SPAN_H_

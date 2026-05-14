@@ -1,4 +1,4 @@
-bat_os> 
+sphragis> 
 [vuart] >>> b'help\r'
 help
   help           — list commands
@@ -13,7 +13,7 @@ help
   batfs create <name> <plaintext>
   batfs read <name>
   halt           — WFE loop
-bat_os> TTY> HV alive t=1s
+sphragis> TTY> HV alive t=1s
 
 [vuart] >>> b'cpuid\r'
 cpuid
@@ -24,25 +24,25 @@ cpuid
   AIDR_EL1:   0x000000d168699696
   MIDR.PART:  0x00000053
   -> M4 Donan (P core)
-bat_os> 
+sphragis> 
 [vuart] >>> b'rand 16\r'
 TTY> HV alive t=2s
 rand 16
   bytes: 16
   hex: f5a98a389007bc498ddec7f8164a432d
-bat_os> 
+sphragis> 
 [vuart] >>> b'rand 32\r'
 rand 32
   bytes: 32
   hex: 1dc4c9bc7a47bb52c510f7facbfcc2a07a5247f91c54ccb97f6864acc9c5f458
-bat_os> TTY> HV alive t=3s
+sphragis> TTY> HV alive t=3s
 
-[vuart] >>> b'sha256 Bat_OS_on_real_M4\r'
-sha256 Bat_OS_on_real_M4
-  input: Bat_OS_on_real_M4
+[vuart] >>> b'sha256 Sphragis_on_real_M4\r'
+sha256 Sphragis_on_real_M4
+  input: Sphragis_on_real_M4
   bytes: 17
   sha256: 62184a0c045636c8a646b2064b4902468f736e836dc5636c082a29bf8121190f
-bat_os> TTY> HV alive t=4s
+sphragis> TTY> HV alive t=4s
 
 [vuart] >>> b'bench sha256\r'
 bench sha256
@@ -52,22 +52,22 @@ bench sha256
   cntfrq: 1000000000 Hz
   KiB/s:  609
   last:   c422e7070cb1cb45…
-bat_os> TTY> HV alive t=5s
+sphragis> TTY> HV alive t=5s
 
 [vuart] >>> b'batfs create proof.txt M4_HV_interactive_shell\r'
 batfs create proof.txt M4_HV_interactive_shell
   ok
-bat_os> 
+sphragis> 
 [vuart] >>> b'batfs ls\r'
 TTY> HV alive t=6s
 batfs ls
   files: 1 / 128
   proof.txt (23 B, enc)
-bat_os> 
+sphragis> 
 [vuart] >>> b'batfs read proof.txt\r'
 batfs read proof.txt
   (23 B) M4_HV_interactive_shell
-bat_os> TTY> HV alive t=7s
+sphragis> TTY> HV alive t=7s
 TTY> HV alive t=8s
 TTY> HV alive t=9s
 TTY> HV alive t=10s

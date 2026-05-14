@@ -1,4 +1,4 @@
-// Bat_OS — HTTP cookie jar.
+// Sphragis — HTTP cookie jar.
 //
 // Sprint 3.1 / . The renderer can't keep state across
 // fetches without cookies — every login session, CSRF token, A/B test

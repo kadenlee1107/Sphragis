@@ -1,4 +1,4 @@
-// Bat_OS — IPv4 Layer
+// Sphragis — IPv4 Layer
 // Handles IP packet construction and parsing.
 // QEMU user-mode networking: gateway 10.0.2.2, our IP 10.0.2.15
 
@@ -36,7 +36,7 @@ pub struct IpPacket<'a> {
 /// Walk an IPv4 header's options field looking for a CIPSO label
 /// (gov-grade §3.2 SECMARK slice). Returns the level byte from the
 /// first CIPSO option found, or `None` if the packet carries no
-/// label (or the DOI doesn't match Bat_OS's). Receivers can feed
+/// label (or the DOI doesn't match Sphragis's). Receivers can feed
 /// this into Bell-LaPadula / Biba checks against the destination
 /// cave's labels before delivering the payload.
 pub fn parse_cipso_sensitivity(data: &[u8]) -> Option<u8> {
@@ -56,7 +56,7 @@ pub fn parse_cipso_sensitivity(data: &[u8]) -> Option<u8> {
             let doi = u32::from_be_bytes(
                 [data[i + 2], data[i + 3], data[i + 4], data[i + 5]]
             );
-            if doi == CIPSO_DOI_BATOS
+            if doi == CIPSO_DOI_SPHRAGIS
                 && data[i + 6] == 0x01
                 && data[i + 7] >= 4
             {
@@ -102,11 +102,11 @@ impl<'a> IpPacket<'a> {
 
 /// CIPSO Domain of Interpretation we use to brand outbound packets
 /// (gov-grade §3.2 SECMARK slice). IANA reserves the DOI value
-/// space; we pick a Bat_OS-internal one (0x42_42_4F_53 = "BBOS")
+/// space; we pick a Sphragis-internal one (0x42_42_4F_53 = "BBOS")
 /// rather than a real IANA-registered DOI because no router on
 /// today's path actually inspects it — the field is purely for
-/// internal info-flow accounting between Bat_OS instances.
-pub const CIPSO_DOI_BATOS: u32 = 0x42_42_4F_53;
+/// internal info-flow accounting between Sphragis instances.
+pub const CIPSO_DOI_SPHRAGIS: u32 = 0x42_42_4F_53;
 /// CIPSO IP option type byte (RFC 2828 / Trusted-Solaris CIPSO).
 const CIPSO_OPT_TYPE:   u8 = 0x86;
 /// IP option NOP (used for 4-byte alignment padding).
@@ -121,7 +121,7 @@ const SECMARK_OPT_LEN:  usize = 12;
 /// Gov-grade §3.2 SECMARK slice: when the active cave's MLS
 /// sensitivity label is non-Unclassified, we emit a CIPSO IP
 /// option carrying the level byte into the IP header. The
-/// receiving peer (or a downstream Bat_OS) can pick up
+/// receiving peer (or a downstream Sphragis) can pick up
 /// `parse_cipso_sensitivity` and refuse to accept the packet
 /// into a lower-cleared receiver. The wire bytes look like:
 ///
@@ -183,7 +183,7 @@ pub fn send(dst_ip: u32, protocol: u8, payload: &[u8]) -> Result<(), &'static st
         let o = IP_HDR_SIZE;
         ip_pkt[o]       = CIPSO_OPT_TYPE;
         ip_pkt[o + 1]   = 0x0a;             // option length = 10
-        ip_pkt[o + 2..o + 6].copy_from_slice(&CIPSO_DOI_BATOS.to_be_bytes());
+        ip_pkt[o + 2..o + 6].copy_from_slice(&CIPSO_DOI_SPHRAGIS.to_be_bytes());
         ip_pkt[o + 6]   = 0x01;             // tag type = 1 (restrictive bitmap)
         ip_pkt[o + 7]   = 0x04;             // tag length = 4 bytes
         ip_pkt[o + 8]   = 0x00;             // alignment flags
@@ -254,7 +254,7 @@ pub fn build_test_packet(dst_ip: u32, protocol: u8, payload: &[u8], out: &mut [u
         let o = IP_HDR_SIZE;
         out[o]      = CIPSO_OPT_TYPE;
         out[o + 1]  = 0x0a;
-        out[o + 2..o + 6].copy_from_slice(&CIPSO_DOI_BATOS.to_be_bytes());
+        out[o + 2..o + 6].copy_from_slice(&CIPSO_DOI_SPHRAGIS.to_be_bytes());
         out[o + 6]  = 0x01;
         out[o + 7]  = 0x04;
         out[o + 8]  = 0x00;

@@ -5,7 +5,7 @@ topic: audit · vocabulary
 
 # V-incident vocabulary
 
-> Bat_OS source comments are full of markers like `V6-SIDE-002`, `V8-ROOT-1`, `V11-FRESH-EYES`. They look like noise until you know what they mean — at which point each one is a thread you can pull on, a specific past incident with a specific fix that stays in the source forever as a reminder. This note is the glossary.
+> Sphragis source comments are full of markers like `V6-SIDE-002`, `V8-ROOT-1`, `V11-FRESH-EYES`. They look like noise until you know what they mean — at which point each one is a thread you can pull on, a specific past incident with a specific fix that stays in the source forever as a reminder. This note is the glossary.
 
 ## How the vocabulary works
 

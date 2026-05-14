@@ -1,9 +1,9 @@
 /*
- * Bat_OS — regex.h stub for NetSurf
+ * Sphragis — regex.h stub for NetSurf
  * Minimal POSIX regex declarations.
  */
-#ifndef _BATOS_REGEX_H
-#define _BATOS_REGEX_H
+#ifndef _SPHRAGIS_REGEX_H
+#define _SPHRAGIS_REGEX_H
 
 #include <stddef.h>
 
@@ -50,4 +50,4 @@ size_t regerror(int errcode, const regex_t *preg,
                 char *errbuf, size_t errbuf_size);
 void   regfree(regex_t *preg);
 
-#endif /* _BATOS_REGEX_H */
+#endif /* _SPHRAGIS_REGEX_H */

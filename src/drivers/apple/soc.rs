@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple Silicon SoC Definitions
+// Sphragis — Apple Silicon SoC Definitions
 // M4 (T8132) memory map and hardware constants.
 // Addresses derived from Asahi Linux device tree research.
 //

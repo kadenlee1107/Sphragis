@@ -2,7 +2,7 @@
 """Headless smoke for `redirect-selftest` — gap-audit item 039
 (shell pipes / job control — output-capture slice).
 
-Boots Bat_OS in QEMU virt, clears the empty-passphrase auth gate,
+Boots Sphragis in QEMU virt, clears the empty-passphrase auth gate,
 runs `redirect-selftest` at the shell, and asserts:
 
   - `console::begin_capture` / `end_capture` round-trip a string.
@@ -29,7 +29,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/redirect-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -60,7 +60,7 @@ def main() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         c.sendline("redirect-selftest")
@@ -70,14 +70,14 @@ def main() -> int:
         ], timeout=30)
         if idx == 1:
             try:
-                c.expect(rb"bat_os > ", timeout=5)
+                c.expect(rb"sphragis > ", timeout=5)
             except Exception:
                 pass
             print("[redirect] FAIL — selftest reported a failure", file=sys.stderr)
             print(f"[redirect] log: {LOG}", file=sys.stderr)
             return 1
 
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[redirect] PASS — output capture + shell `>` redirect verified")
         print(f"[redirect] log: {LOG}")
         return 0

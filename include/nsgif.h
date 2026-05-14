@@ -1,9 +1,9 @@
 /*
- * Bat_OS — nsgif.h stub for NetSurf
+ * Sphragis — nsgif.h stub for NetSurf
  * Minimal GIF decoder interface (libnsgif).
  */
-#ifndef _BATOS_NSGIF_H
-#define _BATOS_NSGIF_H
+#ifndef _SPHRAGIS_NSGIF_H
+#define _SPHRAGIS_NSGIF_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -67,4 +67,4 @@ const nsgif_frame_info_t *nsgif_get_frame_info(const nsgif_t *gif,
                                                 uint32_t frame);
 const char    *nsgif_strerror(nsgif_error err);
 
-#endif /* _BATOS_NSGIF_H */
+#endif /* _SPHRAGIS_NSGIF_H */

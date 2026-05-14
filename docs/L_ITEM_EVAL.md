@@ -2,12 +2,12 @@
 
 Triage notes for the Large-effort items remaining in
 `docs/OS_FEATURE_GAP_AUDIT.md`. Each entry: what the gap is, what
-the *minimum-viable* shape looks like for Bat_OS's threat model, an
+the *minimum-viable* shape looks like for Sphragis's threat model, an
 honest implementation cost, and a recommended go/no-go.
 
 ## 030 — Per-cave CPU / memory / IO quotas (cgroups v2 equivalent)
 
-**What's missing.** Bat_OS has cave isolation for capabilities,
+**What's missing.** Sphragis has cave isolation for capabilities,
 filesystem keys, and (now) PID + mount namespaces — but **no resource
 limits**. A misbehaving cave can spin on the CPU, allocate every
 remaining page, or saturate the NIC's TX ring. Nothing reins it in.
@@ -83,7 +83,7 @@ equivalent for hardware introspection would also want it).
 Beyond the L scope but worth a note: we already run hand-built
 no_std C-compatible code through the cave loader (the `hello`,
 `hello_libc`, `cxx` test binaries exist). A real libc-compat shim
-(musl-class) is XL and probably not what Bat_OS wants long-term —
+(musl-class) is XL and probably not what Sphragis wants long-term —
 the security model favors purpose-built no-libc workloads.
 
 Recommended posture: keep the test-binary path for ground-truth ABI

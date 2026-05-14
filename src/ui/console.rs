@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — GPU Console
+// Sphragis — GPU Console
 // Terminal emulator rendered to the framebuffer.
 // Handles text output and cursor management.
 
@@ -76,7 +76,7 @@ pub fn select_mode_active() -> bool {
 
 /// Enter selection mode. Anchor + cursor land on the last *output*
 /// row — skipping past the empty prompt row at the bottom so the
-/// user doesn't accidentally copy `bat_os >` along with their
+/// user doesn't accidentally copy `sphragis >` along with their
 /// content. Arrow-down lands on the prompt row if you actually want
 /// it; arrow-up walks back through history.
 pub fn enter_select_mode() {
@@ -89,7 +89,7 @@ pub fn enter_select_mode() {
 }
 
 /// Find the bottom-most row that is NOT a bare prompt. Searches up
-/// from the actual bottom; if every row matches "bat_os > " or is
+/// from the actual bottom; if every row matches "sphragis > " or is
 /// empty, falls back to bottom.
 fn find_last_output_row() -> u16 {
     let bottom = find_bottom_row();
@@ -107,10 +107,10 @@ fn find_last_output_row() -> u16 {
 }
 
 /// True if a scrollback row contains nothing but the prompt
-/// "bat_os > " (plus trailing nulls / spaces). Used to skip prompt
+/// "sphragis > " (plus trailing nulls / spaces). Used to skip prompt
 /// rows when positioning the initial select cursor.
 fn row_is_prompt_only(row: &[Cell; SB_COLS]) -> bool {
-    let prompt = b"bat_os > ";
+    let prompt = b"sphragis > ";
     if row.len() < prompt.len() { return false; }
     for (i, &want) in prompt.iter().enumerate() {
         if row[i].ch != want { return false; }
@@ -238,7 +238,7 @@ pub fn yank_last_rows(n: usize) -> usize {
 
 /// Current "pen" color used by the next `putc` write. Callers swap
 /// it with `set_pen()` to color sections of output (e.g. the prompt's
-/// "bat_os" in INK, " > " in CYAN). Defaults to FG.
+/// "sphragis" in INK, " > " in CYAN). Defaults to FG.
 static mut PEN_COLOR: u32 = FG;
 
 /// Set the foreground color used by subsequent `putc` calls.
@@ -326,7 +326,7 @@ pub fn init_in_window() {
 /// pane on tab-switch. When a `batcave enter <name>` ran from the
 /// shell, the new (empty) console buffer rendered the cave's prompt
 /// at row 0 while the bottom of the screen still showed the old
-/// `bat_os >` history that was on the framebuffer before the reset.
+/// `sphragis >` history that was on the framebuffer before the reset.
 /// Confused users into thinking input was going "to a new line above."
 /// Now we explicitly fill the active pane with BG and replay the
 /// (post-wipe, empty) buffer — which paints the cleared rect and
@@ -469,7 +469,7 @@ fn draw_status_bar() {
     font::draw_str(fb, w, 108, text_y, "|", FG_DIM, 0xFF0A0A0A);
     font::draw_str(fb, w, 120, text_y, "SECURE", ACCENT_GREEN, 0xFF0A0A0A);
     font::draw_str(fb, w, 180, text_y, "|", FG_DIM, 0xFF0A0A0A);
-    font::draw_str(fb, w, 192, text_y, "BAT_OS v0.3", FG_DIM, 0xFF0A0A0A);
+    font::draw_str(fb, w, 192, text_y, "SPHRAGIS v0.3", FG_DIM, 0xFF0A0A0A);
 }
 
 /// Print a character to the console.
@@ -662,11 +662,11 @@ pub fn puts_color(s: &str, color: u32) {
 /// WM cleared the FB on tab switch.
 pub fn prompt() {
     set_pen(FG_HI);
-    for b in b"bat_os" { putc(*b); }
+    for b in b"sphragis" { putc(*b); }
     set_pen(ACCENT_CYAN);
     for b in b" > " { putc(*b); }
     reset_pen();
-    mirror_to_serial("bat_os > ");
+    mirror_to_serial("sphragis > ");
 }
 
 fn scroll_up() {

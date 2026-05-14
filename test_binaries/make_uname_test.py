@@ -16,11 +16,11 @@ code += struct.pack('<I', 0xd2800808 | (160 << 5))  # mov x8, #160
 code += struct.pack('<I', 0x910003e0)  # mov x0, sp
 code += struct.pack('<I', 0xd4000001)  # svc #0
 
-# write(1, sp, 6) — print sysname ("BatOS\0" = 6 bytes visible)
+# write(1, sp, 6) — print sysname ("Sphragis\0" = 6 bytes visible)
 code += struct.pack('<I', 0xd2800808)  # mov x8, #64 (write)
 code += struct.pack('<I', 0xd2800020)  # mov x0, #1  (stdout)
 code += struct.pack('<I', 0x910003e1)  # mov x1, sp  (buf = sysname)
-code += struct.pack('<I', 0xd28000a2)  # mov x2, #5  (len = "BatOS")
+code += struct.pack('<I', 0xd28000a2)  # mov x2, #5  (len = "Sphragis")
 code += struct.pack('<I', 0xd4000001)  # svc #0
 
 # write newline

@@ -18,7 +18,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-ARTIFACT="target/aarch64-unknown-none/release/bat_os"
+ARTIFACT="target/aarch64-unknown-none/release/sphragis"
 PASS_A="$REPO/out/repro_a.sha256"
 PASS_B="$REPO/out/repro_b.sha256"
 
@@ -28,7 +28,7 @@ PASS_B="$REPO/out/repro_b.sha256"
 #     info doesn't embed the local cwd.
 #   * codegen-units=1 + incremental=false avoids subtle ordering diffs.
 export SOURCE_DATE_EPOCH=946684800   # 2000-01-01T00:00:00Z
-export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$REPO=/build/bat_os -C codegen-units=1"
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$REPO=/build/sphragis -C codegen-units=1"
 export CARGO_INCREMENTAL=0
 
 mkdir -p "$REPO/out"

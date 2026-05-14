@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Process/Task Abstraction
+// Sphragis — Process/Task Abstraction
 // Each task represents an isolated execution context.
 // In the microkernel, everything outside the kernel is a task:
 // drivers, services, and applications.

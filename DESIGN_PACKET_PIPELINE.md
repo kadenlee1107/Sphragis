@@ -1,4 +1,4 @@
-# DESIGN_PACKET_PIPELINE.md — Bat_OS per-cave packet-layer egress enforcement
+# DESIGN_PACKET_PIPELINE.md — Sphragis per-cave packet-layer egress enforcement
 
 Shipped 2026-04-22. Followup #3 of the cave-policy roadmap. Turns the
 kernel into the authoritative enforcement point for every packet a
@@ -19,7 +19,7 @@ so the filter fires on **every frame**, not just CONNECTs.
 
 ```
 +--------------+      +-------------------+      +--------------+
-|  container   |      |      Bat_OS       |      |   internet   |
+|  container   |      |      Sphragis       |      |   internet   |
 |  192.168.77.10 --→ |   nic 1 (caves)   |      |   (slirp-    |
 |              |      |      ↓            |      |    NAT'd)    |
 +--------------+      |   cave_policy     |      |              |
@@ -32,8 +32,8 @@ so the filter fires on **every frame**, not just CONNECTs.
                                 └────── reverse ───────┘
 ```
 
-Bat_OS is a minimal NAT router sitting between two virtio-net
-interfaces. The caves-side is 192.168.77.1/24 (Bat_OS occupies .1);
+Sphragis is a minimal NAT router sitting between two virtio-net
+interfaces. The caves-side is 192.168.77.1/24 (Sphragis occupies .1);
 containers get .10, .11, .12, etc. The host-side is 10.0.2.15 on
 slirp's 10.0.2.0/24, which QEMU itself NATs out to the Mac's
 internet.
@@ -49,7 +49,7 @@ direction is top-down so QEMU's declaration order lines up with
 
 ### 2. Per-cave kernel policy (`net/cave_policy.rs`)
 
-- `CaveId = [u8; 16]`, `cave_id_from_name(name) = SHA-256("batos-cave-id-v1" || name)[..16]`
+- `CaveId = [u8; 16]`, `cave_id_from_name(name) = SHA-256("sphragis-cave-id-v1" || name)[..16]`
 - `EgressRule { host: String, port: u16, proto: u8 }` — wildcards on empty host / port 0 / proto 0
 - Default deny. Unknown cave → `Verdict::Drop`
 - `{set_policy, add_rule, check, clear}_by_name` convenience layer
@@ -132,7 +132,7 @@ Everything is exercised end-to-end on QEMU, no real Docker needed:
 
 To wire a real Docker container onto nic 1:
 
-1. Launch Bat_OS with `scripts/qemu_vmnet_launch.sh` (prompts for sudo
+1. Launch Sphragis with `scripts/qemu_vmnet_launch.sh` (prompts for sudo
    because `vmnet.framework` requires the `com.apple.vm.networking`
    entitlement, which Homebrew QEMU isn't signed for).
 2. Find the vmnet interface in `ifconfig` (usually `bridge100` with
@@ -147,7 +147,7 @@ To wire a real Docker container onto nic 1:
    ```
    docker run -d --network caves --ip=192.168.77.10 --name kali kali:latest sleep infinity
    ```
-5. In Bat_OS shell:
+5. In Sphragis shell:
    ```
    nat-bind    192.168.77.10 kali
    cpol-add    kali 93.184.216.34 443 tcp
@@ -157,8 +157,8 @@ To wire a real Docker container onto nic 1:
    ```
    docker exec kali curl -sI https://example.com
    ```
-7. Frames now traverse vmnet → Bat_OS nic 1 → classifier → NAT →
-   Bat_OS nic 0 → QEMU slirp → internet, with replies reversed.
+7. Frames now traverse vmnet → Sphragis nic 1 → classifier → NAT →
+   Sphragis nic 0 → QEMU slirp → internet, with replies reversed.
 
 ## Gap closures (2026-04-22 evening)
 
@@ -262,7 +262,7 @@ frames from the macOS host directly onto the vmnet bridge — same
 wire-format a container would produce, bypassing the Docker-VM
 boundary. Result on a real M4 Mac:
 
-  bridge104 (vmnet-host 192.168.77.0/24) → Bat_OS nic 1 → classifier:
+  bridge104 (vmnet-host 192.168.77.0/24) → Sphragis nic 1 → classifier:
     allow            = 11    (1 legit SYN + 10 rate burst tokens)
     drop-policy      =  3    (C2 callbacks to 203.0.113.66:4444)
     drop-rate        = 30    (flood of 40 beyond 10 burst)

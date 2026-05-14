@@ -2,14 +2,14 @@
 """Headless smoke for `fw-hardening-selftest` — gap-audit item 045
 hardening pass.
 
-Boots Bat_OS in QEMU virt, clears the empty-passphrase auth gate,
+Boots Sphragis in QEMU virt, clears the empty-passphrase auth gate,
 runs `fw-hardening-selftest` at the shell, and asserts the new
 stateful inbound-TCP policy:
 
   - Unsolicited SYN to a random ephemeral port (no conntrack flow,
     no listener) -> DROPPED.
   - Inbound segment matching a registered conntrack flow ->
-    ALLOWED (reply traffic for Bat_OS-initiated connection).
+    ALLOWED (reply traffic for Sphragis-initiated connection).
   - The same flow does NOT leak to a different remote.
   - Inbound SYN to a registered listener port -> ALLOWED.
   - listen_close revokes the per-port allow.
@@ -27,7 +27,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/fw-hardening-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -58,7 +58,7 @@ def main() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         c.sendline("fw-hardening-selftest")
@@ -68,14 +68,14 @@ def main() -> int:
         ], timeout=30)
         if idx == 1:
             try:
-                c.expect(rb"bat_os > ", timeout=5)
+                c.expect(rb"sphragis > ", timeout=5)
             except Exception:
                 pass
             print("[fw-hardening] FAIL — selftest reported a failure", file=sys.stderr)
             print(f"[fw-hardening] log: {LOG}", file=sys.stderr)
             return 1
 
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[fw-hardening] PASS — unsolicited SYN dropped, flow + listener gating verified")
         print(f"[fw-hardening] log: {LOG}")
         return 0

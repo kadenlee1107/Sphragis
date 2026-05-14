@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless arrow-key history smoke for the Bat_OS shell.
+"""Headless arrow-key history smoke for the Sphragis shell.
 
 Builds the kernel, boots in QEMU virt with the serial-shell path
 (no virtio-gpu), then types two commands, exercises up/down arrow
@@ -30,7 +30,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/shell-history-smoke-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -75,14 +75,14 @@ def run() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         # Record two commands.
         c.sendline("uname")
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         c.sendline("whoami")
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
 
         # Up → most recent (whoami).
         c.send(UP)
@@ -107,7 +107,7 @@ def run() -> int:
         c.send(DOWN)
         time.sleep(0.3)
         c.send(b"\x03")  # Ctrl+C to discard whatever's left.
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[history-smoke]   PASS down-past-newest: returns to live edit")
 
         print("[history-smoke] PASS — arrow-key history works")

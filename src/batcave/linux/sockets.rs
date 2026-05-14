@@ -1,4 +1,4 @@
-// Bat_OS — BSD Socket Bridge Layer
+// Sphragis — BSD Socket Bridge Layer
 // Routes BSD-socket API calls into our native TCP stack (src/net/tcp.rs)
 // and a stub UDP layer. This layer is intended to be called from the Linux
 // syscall dispatcher once wiring is done. No heap; no std; fixed-size static

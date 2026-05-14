@@ -1,16 +1,16 @@
-# Bat_OS
+# Sphragis
 
 **First non-Apple OS booted on Apple M4. Bare-metal Rust microkernel. Government-grade security primitives.**
 
 > ⚠️ Research-grade. Not production-ready. APIs and on-disk formats change without notice.
 
-Bat_OS is a security-first microkernel for Apple Silicon, written in Rust and built from scratch — no Linux base, no Asahi fork, no off-the-shelf VFS or networking stack. As of April 2026 it is the first known non-Apple operating system to boot on Apple M4 hardware (Mac16,1 / J604 / T8132 "Donan"), reaching an interactive shell with a status bar over m1n1 chainload. ([boot evidence](docs/photos/2026-04-17_first_m4_boot/))
+Sphragis is a security-first microkernel for Apple Silicon, written in Rust and built from scratch — no Linux base, no Asahi fork, no off-the-shelf VFS or networking stack. As of April 2026 it is the first known non-Apple operating system to boot on Apple M4 hardware (Mac16,1 / J604 / T8132 "Donan"), reaching an interactive shell with a status bar over m1n1 chainload. ([boot evidence](docs/photos/2026-04-17_first_m4_boot/))
 
 ## What's it for
 
 Security-critical deployments where the cost of a kernel compromise outweighs the cost of running a custom kernel: defense, intelligence, compliance-regulated infrastructure, anything where "we run Linux because that's what everyone runs" is a liability rather than an asset.
 
-Bat_OS is opinionated about one thing in particular: **no ambient authority**. There is no root user. There is no `sudo`. Every destructive privileged operation — wiping the audit log, downgrading a file's security classification, rotating the master key, flushing an off-platform audit seal — requires a fresh M-of-2 Ed25519 quorum from two pre-registered officers (an audit officer and a crypto officer), with one-shot consumption and a TTL. A single compromised key does not get you privileged operations.
+Sphragis is opinionated about one thing in particular: **no ambient authority**. There is no root user. There is no `sudo`. Every destructive privileged operation — wiping the audit log, downgrading a file's security classification, rotating the master key, flushing an off-platform audit seal — requires a fresh M-of-2 Ed25519 quorum from two pre-registered officers (an audit officer and a crypto officer), with one-shot consumption and a TTL. A single compromised key does not get you privileged operations.
 
 ## What works today
 
@@ -31,7 +31,7 @@ Bat_OS is opinionated about one thing in particular: **no ambient authority**. T
 - **Reproducible builds.** `scripts/repro_build.sh` produces deterministic kernel images.
 - **Sigstore-style release signing.** Build-step signatures + Rekor-compatible Merkle log + in-toto v0.9 attestations on release artifacts.
 
-Each item has a headless QEMU selftest under [`scripts/`](scripts/) and a corresponding feature-branch merge in the [git history](https://github.com/kadenlee1107/Bat_OS/commits/main).
+Each item has a headless QEMU selftest under [`scripts/`](scripts/) and a corresponding feature-branch merge in the [git history](https://github.com/kadenlee1107/Sphragis/commits/main).
 
 ## How to build & try
 
@@ -39,7 +39,7 @@ You need a Mac or Linux box with [`rustup`](https://rustup.rs/) (nightly toolcha
 
 ```sh
 git clone <REPO_URL>
-cd Bat_OS
+cd Sphragis
 cargo build --release --target aarch64-unknown-none --features gicv3
 
 # Boot smoke — verifies the kernel reaches the shell prompt.
@@ -56,7 +56,7 @@ python3 scripts/qemu_exec_trans_selftest.py
 # ...etc — see scripts/qemu_*_selftest.py
 ```
 
-On boot the kernel asks for a passphrase (used to derive the BatFS master key). Press return to use the dev passphrase `batman` (hardcoded for QEMU smoke tests via the `BAT_OS_DEV_PASSPHRASE` build-time env). Production builds read the passphrase from UART.
+On boot the kernel asks for a passphrase (used to derive the BatFS master key). Press return to use the dev passphrase `batman` (hardcoded for QEMU smoke tests via the `SPHRAGIS_DEV_PASSPHRASE` build-time env). Production builds read the passphrase from UART.
 
 In the interactive shell:
 
@@ -103,7 +103,7 @@ src/
 
 The repository is currently **private** under default copyright ("all rights reserved"). No license has been granted.
 
-When the repository is opened to the public (planned), Bat_OS will be **dual-licensed**:
+When the repository is opened to the public (planned), Sphragis will be **dual-licensed**:
 
 - **AGPL-3.0-or-later** for research, academic citation, non-commercial use, and any project willing to comply with AGPL's source-availability clause.
 - **Commercial license** sold separately for closed-source integration. The MongoDB / Sentry / GitLab playbook.
@@ -117,10 +117,10 @@ Dependencies are MIT / Apache-2.0 / BSD / CC0 / Unlicense throughout — verifie
 
 ## Development practice
 
-Bat_OS is built and maintained by Kaden Lee with extensive paired-programming assistance from Anthropic's Claude (Sonnet 4.6 / Opus 4.7). Every architectural decision, every threat-model judgement, every security trade-off, and the responsibility for what ships are mine. The AI handles boilerplate, accelerates implementation, and catches things a tired solo maintainer would miss; the strategy, the calls, and the accountability are human.
+Sphragis is built and maintained by Kaden Lee with extensive paired-programming assistance from Anthropic's Claude (Sonnet 4.6 / Opus 4.7). Every architectural decision, every threat-model judgement, every security trade-off, and the responsibility for what ships are mine. The AI handles boilerplate, accelerates implementation, and catches things a tired solo maintainer would miss; the strategy, the calls, and the accountability are human.
 
-This is disclosed for two reasons: `git log` makes it obvious anyway, and the kind of solo + AI development that produced Bat_OS in months — not years — is increasingly how serious security research gets done. Honest about it.
+This is disclosed for two reasons: `git log` makes it obvious anyway, and the kind of solo + AI development that produced Sphragis in months — not years — is increasingly how serious security research gets done. Honest about it.
 
 ---
 
-Bat_OS — Kaden Lee · 2026
+Sphragis — Kaden Lee · 2026

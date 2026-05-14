@@ -1,6 +1,6 @@
 // test_timing_compare.c — Timing oracle test for hash comparison
 //
-// Bat_OS src/security/auth.rs:112-118 defines constant_time_eq as:
+// Sphragis src/security/auth.rs:112-118 defines constant_time_eq as:
 //
 //     let mut diff: u8 = 0;
 //     for i in 0..32 { diff |= a[i] ^ b[i]; }
@@ -12,7 +12,7 @@
 // 16, and byte 31 respectively. If constant_time_eq is truly CT the
 // means should overlap within a few stddev.
 //
-// Under the current Bat_OS build this should confirm the comparison
+// Under the current Sphragis build this should confirm the comparison
 // itself is CT. The RISK (see ATTACK-CRYPTO-009, -010) is not the
 // compare but the primitives FEEDING the compare (AES/GHASH leak
 // timing via table/branch).
@@ -33,7 +33,7 @@ static inline uint64_t now_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
-/* Model of Bat_OS constant_time_eq(&[u8;32], &[u8;32]) */
+/* Model of Sphragis constant_time_eq(&[u8;32], &[u8;32]) */
 static int ct_eq(const uint8_t a[32], const uint8_t b[32]) {
     uint8_t d = 0;
     for (int i = 0; i < 32; i++) d |= a[i] ^ b[i];

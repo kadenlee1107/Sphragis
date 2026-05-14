@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Inject a sequence of raw keystrokes into the M4 HV guest's
 dockchannel vuart (/dev/ttyACM2) from a shell that isn't the
-one running batos_hv_interactive.py.
+one running sphragis_hv_interactive.py.
 
-Background: batos_hv_interactive.py holds /dev/ttyACM2 in raw mode.
+Background: sphragis_hv_interactive.py holds /dev/ttyACM2 in raw mode.
 When you try `printf '\t' > /dev/ttyACM2` from another shell, Linux
 opens a fresh fd in cooked/canonical mode, which buffers and
 line-discipline-mangles the byte before it reaches the USB endpoint.
@@ -39,7 +39,7 @@ import os
 import time
 import termios
 
-DEV = os.environ.get("BATOS_VUART", "/dev/ttyACM2")
+DEV = os.environ.get("SPHRAGIS_VUART", "/dev/ttyACM2")
 DELAY_S = float(os.environ.get("INJECT_DELAY", "0.08"))
 
 

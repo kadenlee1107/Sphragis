@@ -4,7 +4,7 @@
 Full bidirectional proof:
   1. Python cave sends ICMP Echo Request from 192.168.77.10 id=0x1234
      → 8.8.8.8.
-  2. Bat_OS classifier: proto=1, id used as src_port. cave_policy
+  2. Sphragis classifier: proto=1, id used as src_port. cave_policy
      allows kali → 8.8.8.8 icmp. NAT alloc'd a translated id (eph
      port starting at 50000 now sharing space; the ICMP id is just
      a 16-bit handle).
@@ -12,7 +12,7 @@ Full bidirectional proof:
      and a new identifier.
   4. Python internet replies with Echo Reply carrying the translated
      identifier back.
-  5. Bat_OS reverse-NATs: identifier back to 0x1234, dst=192.168.77.10.
+  5. Sphragis reverse-NATs: identifier back to 0x1234, dst=192.168.77.10.
   6. Python cave sees Echo Reply with original id.
 """
 import pexpect
@@ -27,12 +27,12 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 STAMP = datetime.now().strftime('%Y%m%d-%H%M%S')
 LOG = ROOT / f"logs/qemu-tests/icmp-{STAMP}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 def ipv4_cksum(hdr):
     s = 0

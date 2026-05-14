@@ -1,4 +1,4 @@
-// Bat_OS — Chromium blob locator (initrd-style appended binary).
+// Sphragis — Chromium blob locator (initrd-style appended binary).
 //
 // When the kernel image is built with `tools/bake_chromium.sh`, the
 // content_shell ELF is concatenated onto the kernel image, wrapped

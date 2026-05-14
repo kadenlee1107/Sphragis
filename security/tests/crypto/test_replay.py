@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-test_replay.py — TLS handshake replay + MITM probes against Bat_OS
+test_replay.py — TLS handshake replay + MITM probes against Sphragis
 
 Checks three distinct failures documented in PENTEST_CRYPTO_AUTH.md:
 
@@ -10,21 +10,21 @@ Checks three distinct failures documented in PENTEST_CRYPTO_AUTH.md:
 
 Test strategy (run in a QEMU netdev with a tap to a Python MITM):
 
-  1. Bat_OS client is configured (via serial command or boot-time URL)
+  1. Sphragis client is configured (via serial command or boot-time URL)
      to connect to https://HOST
   2. This script listens on port 443, accepts the client TCP, parses
      ClientHello
   3. Replies with a ServerHello where the key_share is one of the 12
-     Curve25519 low-order points → expects Bat_OS to ABORT
+     Curve25519 low-order points → expects Sphragis to ABORT
   4. On second run, replies with a ServerHello using a valid
      ephemeral but returns NO Certificate / CertificateVerify / server
      Finished (just fake application-data stream)
-  5. Observes whether Bat_OS sends Client Finished + application data
+  5. Observes whether Sphragis sends Client Finished + application data
      anyway → PASS (from attacker perspective) == FAIL (from auditor's)
 
 Today this file is a scaffold — TLS record crafting is stubbed out
 with placeholders for the audit. Running it immediately reports which
-test requires a live Bat_OS instance.
+test requires a live Sphragis instance.
 """
 
 import socket
@@ -78,7 +78,7 @@ def test_low_order_point():
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(("0.0.0.0", LISTEN_PORT))
     s.listen(1)
-    print(f"[replay] listening on :{LISTEN_PORT} — start Bat_OS HTTPS fetch to 127.0.0.1:{LISTEN_PORT}")
+    print(f"[replay] listening on :{LISTEN_PORT} — start Sphragis HTTPS fetch to 127.0.0.1:{LISTEN_PORT}")
     conn, addr = s.accept()
     print(f"[replay] client connected from {addr}")
 
@@ -94,7 +94,7 @@ def test_low_order_point():
     # conforming RFC 8446 client rejects the resulting all-zero shared secret.
     print("[replay] TODO: send forged ServerHello (low-order key_share)")
 
-    # Watchdog: if the client sends a TLS Alert within 3s → PASS (Bat_OS rejected).
+    # Watchdog: if the client sends a TLS Alert within 3s → PASS (Sphragis rejected).
     # If the client sends a Client Finished + application data → FAIL
     # (indicating ATTACK-CRYPTO-028 is exploitable).
     conn.settimeout(3.0)
@@ -112,14 +112,14 @@ def test_low_order_point():
 
 def test_no_cert_verify():
     """Send a ServerHello with a valid X25519 but NO Certificate / CertificateVerify /
-    server Finished. A compliant RFC 8446 client MUST abort. Bat_OS currently
+    server Finished. A compliant RFC 8446 client MUST abort. Sphragis currently
     will happily derive keys and send Client Finished (ATTACK-CRYPTO-005/006)."""
     print("[replay] TODO: test_no_cert_verify — requires full TLS 1.3 state machine impl")
     return "SKIP"
 
 
 def main():
-    print("Bat_OS TLS replay / MITM scaffold")
+    print("Sphragis TLS replay / MITM scaffold")
     print("---------------------------------")
     r1 = test_low_order_point()
     print(f"  low-order point test : {r1}")

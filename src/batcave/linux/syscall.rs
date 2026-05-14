@@ -1,6 +1,6 @@
-// Bat_OS — Linux Syscall Translation Layer
+// Sphragis — Linux Syscall Translation Layer
 // Intercepts ARM64 Linux syscalls (svc #0) from BatCave processes
-// and translates them into Bat_OS operations.
+// and translates them into Sphragis operations.
 //
 // Every syscall is a security checkpoint:
 // No capability → EACCES. No exceptions.
@@ -238,7 +238,7 @@ enum SyscallCat {
 /// Linux syscall numbers (ARM64)
 // Linux AArch64 syscall numbers. The full table stays named because
 // caves invoke these by name (CLONE, EXECVE, etc.); we keep entries
-// even where Bat_OS hasn't grown a handler yet — adding the constant
+// even where Sphragis hasn't grown a handler yet — adding the constant
 // when the handler lands is just churn for protocol-stable IDs.
 #[allow(dead_code)]
 mod nr {
@@ -314,13 +314,13 @@ mod nr {
     // surfaced as named stubs (not the unknown-syscall fallback) because:
     // 1. The fallback prints "[linux] unknown syscall 444" which is
     // noise — Chromium expects ENOSYS and handles it silently.
-    // 2. The fallback fires the BAT_OS_KEEP_GOING skip-log, polluting
+    // 2. The fallback fires the SPHRAGIS_KEEP_GOING skip-log, polluting
     // the "actual unknown syscalls" list during Chromium init.
     pub const LANDLOCK_CREATE_RULESET: u64 = 444;
     pub const LANDLOCK_ADD_RULE:       u64 = 445;
     pub const LANDLOCK_RESTRICT_SELF:  u64 = 446;
 
-    // Bat_OS-private syscalls. Numbered well above the Linux AArch64
+    // Sphragis-private syscalls. Numbered well above the Linux AArch64
     // range (which tops out around 463 today) so they never collide
     // with a future Linux number we might want to honour.
     //
@@ -577,7 +577,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::MUNMAP => (SyscallCat::Memory, sys_munmap),
         nr::MPROTECT => (SyscallCat::Memory, sys_mprotect),
 
-        // ── Display (Bat_OS custom) ──
+        // ── Display (Sphragis custom) ──
         500 => (SyscallCat::Display, sys_blit_framebuffer), // custom: blit pixels to GPU
 
         // ── Process ──
@@ -603,7 +603,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         nr::GETSOCKOPT => (SyscallCat::Network, sys_getsockopt),
         nr::SHUTDOWN => (SyscallCat::Network, sys_shutdown),
 
-        // Bat_OS-private network syscall: kernel-mediated HTTPS.
+        // Sphragis-private network syscall: kernel-mediated HTTPS.
         // Treated as Network for capability/cpol purposes. See
         // DESIGN_HTTPS_SYSCALL.md.
         nr::BAT_HTTPS_OPEN => (SyscallCat::Network, sys_bat_https_open),
@@ -611,7 +611,7 @@ pub fn handle(cave_id: usize, syscall_num: u64, args: [u64; 6]) -> i64 {
         _ => {
             // Unknown syscall — log and return ENOSYS.
             //
-            // BAT_OS_KEEP_GOING: also record into the skip ring so
+            // SPHRAGIS_KEEP_GOING: also record into the skip ring so
             // the end-of-run summary lists every distinct unknown
             // syscall number, with example registers, so we can
             // dispatch one fixer per distinct syscall in parallel
@@ -1114,7 +1114,7 @@ fn sys_nanosleep(args: [u64; 6]) -> i64 {
 
 // ─── munmap (215) — free mapped memory ───
 //
-// Bat_OS maps user pages identity on the current TTBR0 (ROOT-1: per-cave
+// Sphragis maps user pages identity on the current TTBR0 (ROOT-1: per-cave
 // page tables aren't wired yet), so the "VA" we get is really a PA in the
 // frame allocator's bitmap. All we need to do is free each backing frame,
 // refund the cave's memory quota, and invalidate the TLB for the range.
@@ -1552,7 +1552,7 @@ fn sys_exit(args: [u64; 6]) -> i64 {
         // For now, this exit is caught by the exception handler
     }
 
-    // BAT_OS_KEEP_GOING: when enabled, log the non-zero exit but
+    // SPHRAGIS_KEEP_GOING: when enabled, log the non-zero exit but
     // retire THIS thread cleanly (so the rest of the cave keeps
     // running and we surface more problems in one run). Zero exits
     // pass through unchanged.
@@ -1604,10 +1604,10 @@ fn sys_uname(args: [u64; 6]) -> i64 {
     if !is_user_ptr(buf, 390) { return EFAULT; }
 
     let fields: [&[u8]; 5] = [
-        b"BatOS\0",                    // sysname
+        b"Sphragis\0",                    // sysname
         b"batcave\0",                  // nodename
         b"1.0.0\0",                    // release
-        b"BatOS 1.0.0 aarch64\0",     // version
+        b"Sphragis 1.0.0 aarch64\0",     // version
         b"aarch64\0",                  // machine
     ];
 
@@ -3996,7 +3996,7 @@ fn sys_connect(args: [u64; 6]) -> i64 {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Bat_OS-private HTTPS syscall (no Linux equivalent).
+// Sphragis-private HTTPS syscall (no Linux equivalent).
 //
 // bat_https_open(host_ptr, host_len, port, flags) -> fd | -errno
 //
@@ -5248,12 +5248,12 @@ fn sys_execve(args: [u64; 6]) -> i64 {
                 if argc > 1 {
                     let arg1 = unsafe { core::str::from_utf8_unchecked(&argv_strs[1][..argv_lens[1]]) };
                     if arg1 == "-a" {
-                        write_str("BatOS batcave 1.0.0 BatOS 1.0.0 aarch64 aarch64\n");
+                        write_str("Sphragis batcave 1.0.0 Sphragis 1.0.0 aarch64 aarch64\n");
                     } else {
-                        write_str("BatOS\n");
+                        write_str("Sphragis\n");
                     }
                 } else {
-                    write_str("BatOS\n");
+                    write_str("Sphragis\n");
                 }
                 true
             }
@@ -6298,7 +6298,7 @@ fn sys_sysinfo(args: [u64; 6]) -> i64 {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Signal numbers (Linux ARM64). Full set named so the kill-path
-/// match arms can be filled in by name as Bat_OS grows handlers.
+/// match arms can be filled in by name as Sphragis grows handlers.
 #[allow(dead_code)] const SIGHUP: u32 = 1;
 #[allow(dead_code)] const SIGINT: u32 = 2;
 #[allow(dead_code)] const SIGABRT: u32 = 6;
@@ -6670,7 +6670,7 @@ pub fn proc_read(path: &str, buf: &mut [u8]) -> usize {
             b"Name:\tbat_process\nState:\tR (running)\nTgid:\t1\nPid:\t1\nPPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nVmSize:\t4096 kB\nVmRSS:\t2048 kB\nThreads:\t1\n",
         "/proc/self/maps" | "/proc/1/maps" =>
             // Realistic /proc/self/maps for a Chromium content_shell run
-            // in a Bat_OS cave at virt_base 0x10000000. Chromium reads this
+            // in a Sphragis cave at virt_base 0x10000000. Chromium reads this
             // to discover its own code segment (for symbolization, leak
             // detection, etc.) and to identify the heap/stack regions.
             // The previous stub had code at 0x10000 which Chromium would
@@ -6688,9 +6688,9 @@ pub fn proc_read(path: &str, buf: &mut [u8]) -> usize {
         "/proc/meminfo" =>
             b"MemTotal:       262144 kB\nMemFree:        131072 kB\nMemAvailable:   196608 kB\nBuffers:            0 kB\nCached:          8192 kB\nSwapTotal:          0 kB\nSwapFree:           0 kB\n",
         "/proc/cpuinfo" =>
-            b"processor\t: 0\nBogoMIPS\t: 48.00\nFeatures\t: fp asimd aes pmull sha1 sha2 crc32\nCPU implementer\t: 0x61\nCPU architecture: 8\nCPU part\t: 0xb02\n\nHardware\t: Bat_OS ARM64\n",
+            b"processor\t: 0\nBogoMIPS\t: 48.00\nFeatures\t: fp asimd aes pmull sha1 sha2 crc32\nCPU implementer\t: 0x61\nCPU architecture: 8\nCPU part\t: 0xb02\n\nHardware\t: Sphragis ARM64\n",
         "/proc/version" =>
-            b"Bat_OS version 0.3.0 (bat@batcave) (aarch64-bat-none) #1 SMP PREEMPT\n",
+            b"Sphragis version 0.3.0 (bat@batcave) (aarch64-bat-none) #1 SMP PREEMPT\n",
         "/proc/uptime" => b"3600.00 3500.00\n",
         "/proc/loadavg" => b"0.01 0.05 0.10 1/32 42\n",
         "/proc/filesystems" => b"nodev\tbatfs\nnodev\tproc\nnodev\ttmpfs\n",

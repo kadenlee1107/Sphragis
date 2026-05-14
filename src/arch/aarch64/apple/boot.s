@@ -1,4 +1,4 @@
-// Bat_OS — Apple Silicon Boot Stub
+// Sphragis — Apple Silicon Boot Stub
 // Entry point when loaded by m1n1 (Asahi bootloader).
 //
 // m1n1 passes boot arguments in x0:

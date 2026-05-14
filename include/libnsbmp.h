@@ -1,9 +1,9 @@
 /*
- * Bat_OS — libnsbmp.h stub for NetSurf
+ * Sphragis — libnsbmp.h stub for NetSurf
  * Minimal BMP/ICO decoder interface.
  */
-#ifndef _BATOS_LIBNSBMP_H
-#define _BATOS_LIBNSBMP_H
+#ifndef _SPHRAGIS_LIBNSBMP_H
+#define _SPHRAGIS_LIBNSBMP_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -54,4 +54,4 @@ void       ico_finalise(ico_collection *ico);
 
 #define BMP_CLEAR_MEMORY 2
 #define BMP_OPAQUE 1
-#endif /* _BATOS_LIBNSBMP_H */
+#endif /* _SPHRAGIS_LIBNSBMP_H */

@@ -1,4 +1,4 @@
-// Bat_OS — SHA-256-chained cryptographic random byte generator.
+// Sphragis — SHA-256-chained cryptographic random byte generator.
 //
 // Not a formal CSPRNG — we don't have an interrupt-timing entropy
 // pool yet — but dramatically better than reading `cntpct_el0`

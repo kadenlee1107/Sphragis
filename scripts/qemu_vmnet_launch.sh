@@ -1,7 +1,7 @@
 #!/bin/bash
-# Followup 3c-vmnet: launch Bat_OS with a real macOS vmnet-host NIC
+# Followup 3c-vmnet: launch Sphragis with a real macOS vmnet-host NIC
 # so Docker containers can share the L2 segment and their frames hit
-# Bat_OS's nic 1 NAT forwarder for real (not via a Python socket peer).
+# Sphragis's nic 1 NAT forwarder for real (not via a Python socket peer).
 #
 # Requires sudo because macOS's vmnet.framework gates interface
 # creation behind the com.apple.vm.networking entitlement. QEMU from
@@ -14,7 +14,7 @@
 #
 # Containers can then be attached to a Docker macvlan network with
 # the same subnet + parent=<vmnet interface> so their traffic lands
-# on Bat_OS's nic 1. Example:
+# on Sphragis's nic 1. Example:
 #   docker network create -d macvlan \
 #       --subnet=192.168.77.0/24 --gateway=192.168.77.1 \
 #       -o parent=bridge100 caves
@@ -31,11 +31,11 @@ END="${SUBNET_BASE}.254"
 MASK="255.255.255.0"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-KERNEL="${ROOT}/target/aarch64-unknown-none/release/bat_os"
+KERNEL="${ROOT}/target/aarch64-unknown-none/release/sphragis"
 
 if [ ! -f "$KERNEL" ]; then
     echo "kernel missing: $KERNEL"
-    echo "build with:  BAT_OS_PASSPHRASE=batman cargo build --release"
+    echo "build with:  SPHRAGIS_PASSPHRASE=batman cargo build --release"
     exit 1
 fi
 

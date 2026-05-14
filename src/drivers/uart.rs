@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — PL011 UART Driver
+// Sphragis — PL011 UART Driver
 // Bidirectional serial I/O. Safe on platforms without UART.
 
 use core::sync::atomic::{AtomicBool, Ordering};

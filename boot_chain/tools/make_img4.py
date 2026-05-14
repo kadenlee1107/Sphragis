@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bat_OS — img4 Container Packer
+Sphragis — img4 Container Packer
 Creates an Apple img4 container from a raw kernel binary.
 
 img4 format is ASN1/DER encoded with this structure:
@@ -114,7 +114,7 @@ def make_kernelcache(payload):
         # Raw binary — wrap in minimal Mach-O
         kernel_data = payload
 
-    im4p = make_im4p("krnl", "Bat_OS Kernel", kernel_data)
+    im4p = make_im4p("krnl", "Sphragis Kernel", kernel_data)
     img4 = make_img4(im4p)
     return img4
 
@@ -134,7 +134,7 @@ if __name__ == '__main__':
     with open(output_path, 'wb') as f:
         f.write(img4)
 
-    print(f"[*] Bat_OS img4 kernel cache created: {output_path}")
+    print(f"[*] Sphragis img4 kernel cache created: {output_path}")
     print(f"    Input: {len(payload)} bytes")
     print(f"    Output: {len(img4)} bytes")
     print(f"    Type: krnl (kernel)")

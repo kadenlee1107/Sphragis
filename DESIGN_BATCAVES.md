@@ -1,11 +1,11 @@
-# BatCaves — Secure Container Runtime for Bat_OS
+# BatCaves — Secure Container Runtime for Sphragis
 
 ## Understanding Summary
 
-- **What:** BatCaves — isolated container environments that run any Kali Linux tool inside Bat_OS
+- **What:** BatCaves — isolated container environments that run any Kali Linux tool inside Sphragis
 - **Why:** Full pentesting/security toolkit without compromising the host OS. Supply chain attacks (npm, etc.) are contained — a compromised tool can't escape its BatCave
 - **Who:** Kaden — single user
-- **How:** One shared minimal Linux kernel runs as a Bat_OS microkernel service. BatCaves are isolated environments on top. Tools installed from Kali repos on demand. GUI + CLI both supported.
+- **How:** One shared minimal Linux kernel runs as a Sphragis microkernel service. BatCaves are isolated environments on top. Tools installed from Kali repos on demand. GUI + CLI both supported.
 - **Isolation:** Every BatCave starts with ZERO access. Capabilities granted explicitly per-cave (network, filesystem, display, USB, raw sockets, inter-cave IPC). Enforced by seL4-inspired capability system at the microkernel level.
 - **Lifecycle:** Persistent or ephemeral. Persistent can downgrade to ephemeral (one-way ratchet — anti-coercion). Create with `--tools` or install incrementally.
 - **Destruction:** Dead man's switch, duress wipe, panic hotkey — ALL BatCaves die with the OS. No exceptions.
@@ -15,7 +15,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                  BAT_OS DESKTOP                      │
+│                  SPHRAGIS DESKTOP                      │
 │  Terminal │ Dashboard │ Files │ NetMon │ Editor      │
 │                    │                                 │
 │            ┌───────┴────────┐                        │
@@ -40,7 +40,7 @@
 │  ┌────┴───────────┴───────────┴────┐                │
 │  │  SHARED LINUX KERNEL SERVICE     │                │
 │  │  (minimal — syscall translation) │                │
-│  │  Runs as Bat_OS userspace task   │                │
+│  │  Runs as Sphragis userspace task   │                │
 │  └──────────────┬──────────────────┘                │
 ├─────────────────┼───────────────────────────────────┤
 │           MICROKERNEL                                │
@@ -102,7 +102,7 @@ batcave seal <name>          # persistent → ephemeral (one-way, irreversible)
 
 - `net` — outbound network access (through secure pipeline)
 - `raw` — raw sockets (packet crafting, sniffing)
-- `display` — GUI window on Bat_OS desktop
+- `display` — GUI window on Sphragis desktop
 - `fs:<path>` — read/write to specific encrypted vault directory
 - `usb` — USB device access (WiFi adapters, HID devices)
 - `ipc:<other_cave>` — inter-BatCave communication

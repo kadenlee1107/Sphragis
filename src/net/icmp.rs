@@ -1,4 +1,4 @@
-// Bat_OS — ICMP (Ping)
+// Sphragis — ICMP (Ping)
 // Handles ICMP echo requests (replies to pings) and sends pings.
 
 use super::ip::{self, IpPacket};
@@ -110,8 +110,8 @@ pub fn ping(dst_ip: u32) -> Result<u16, &'static str> {
     icmp[4..6].copy_from_slice(&0x4241u16.to_be_bytes()); // ID = "BA"
     icmp[6..8].copy_from_slice(&seq.to_be_bytes());
 
-    // Payload: "BAT_OS_PING"
-    let msg = b"BAT_OS_PING";
+    // Payload: "SPHRAGIS_PING"
+    let msg = b"SPHRAGIS_PING";
     icmp[8..8 + msg.len()].copy_from_slice(msg);
 
     let total = 8 + msg.len();

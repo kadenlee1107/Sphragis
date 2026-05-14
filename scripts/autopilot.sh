@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bat_OS — Ladybird port autopilot.
+# Sphragis — Ladybird port autopilot.
 #
 # Drives `claude --print --session-id <uuid>` in a loop. Every fire pins
 # to the same session UUID so context accumulates across iters — Claude

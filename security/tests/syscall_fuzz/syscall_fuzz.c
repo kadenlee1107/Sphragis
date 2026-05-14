@@ -1,9 +1,9 @@
 /*
- * Bat_OS syscall fuzzer.
+ * Sphragis syscall fuzzer.
  *
  * Runs as a BatCave guest. Walks `seeds.h` and issues each syscall with
  * its seed tuple, plus a few LCG-mutated variants. Prints a single line
- * per call to stdout via write(1,...) so the Bat_OS UART log preserves
+ * per call to stdout via write(1,...) so the Sphragis UART log preserves
  * the full trace — if the kernel panics, the last printed "TRY" line
  * identifies the culprit.
  *
@@ -177,7 +177,7 @@ static void try_mutated(const struct seed *s) {
 
 void _start(void) {
     prime_scratch();
-    put_str("== Bat_OS syscall fuzzer starting ==\n");
+    put_str("== Sphragis syscall fuzzer starting ==\n");
 
     const unsigned long nseeds = sizeof(seeds) / sizeof(seeds[0]);
     for (unsigned long i = 0; i < nseeds; i++) {
@@ -187,7 +187,7 @@ void _start(void) {
         try_mutated(&seeds[i]);
     }
 
-    put_str("== Bat_OS syscall fuzzer done ==\n");
+    put_str("== Sphragis syscall fuzzer done ==\n");
     sys_exit(0);
     /* unreachable */
     for (;;) { __asm__ volatile("wfi"); }

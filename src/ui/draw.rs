@@ -1,4 +1,4 @@
-// Bat_OS — shared paint primitives.
+// Sphragis — shared paint primitives.
 //
 // Extracted from `security/boot_screen.rs` so the desktop
 // chrome can re-use the same scanline polygon-fill + line

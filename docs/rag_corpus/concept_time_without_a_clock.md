@@ -5,7 +5,7 @@ topic: time · architecture
 
 # Time without a clock
 
-> Bat_OS has no real-time clock. There is no battery-backed RTC chip on the M4 the kernel is wired to read. There is no NTP daemon. There is no `gettimeofday()` syscall in any meaningful sense. And yet a security workstation has to reason about time — certificate validity, sleep deadlines, audit timestamps. This note is how that contradiction is resolved.
+> Sphragis has no real-time clock. There is no battery-backed RTC chip on the M4 the kernel is wired to read. There is no NTP daemon. There is no `gettimeofday()` syscall in any meaningful sense. And yet a security workstation has to reason about time — certificate validity, sleep deadlines, audit timestamps. This note is how that contradiction is resolved.
 
 ## The two clocks the kernel does have
 
@@ -31,12 +31,12 @@ For (3), monotonic time is the right tool and there's no problem. For (1) and (2
 
 ## The build-time epoch trick
 
-For (1) — certificate validity — Bat_OS uses **`BAT_OS_BUILD_UNIX`**: a Unix epoch timestamp baked into the binary at compile time, set by `build.rs` from the build host's `SystemTime::now()`. See [[_generated/build.rs]] and [[_generated/src/net/x509.rs]] (the `now_unix()` function).
+For (1) — certificate validity — Sphragis uses **`SPHRAGIS_BUILD_UNIX`**: a Unix epoch timestamp baked into the binary at compile time, set by `build.rs` from the build host's `SystemTime::now()`. See [[_generated/build.rs]] and [[_generated/src/net/x509.rs]] (the `now_unix()` function).
 
 The verifier uses this as a **lower bound**:
 
-- A cert whose `notBefore` is after `BAT_OS_BUILD_UNIX` is rejected as `NotYetValid`. ("Signed in the future relative to when this binary was built" — that's a fact about the binary, not a fact about now.)
-- A cert whose `notAfter` is before `BAT_OS_BUILD_UNIX` is rejected as `Expired`. (Same logic, other direction.)
+- A cert whose `notBefore` is after `SPHRAGIS_BUILD_UNIX` is rejected as `NotYetValid`. ("Signed in the future relative to when this binary was built" — that's a fact about the binary, not a fact about now.)
+- A cert whose `notAfter` is before `SPHRAGIS_BUILD_UNIX` is rejected as `Expired`. (Same logic, other direction.)
 
 What this catches:
 - **Future-dated certs**, definitely. If a CA mistakenly issued a cert with `notBefore` two years from now, the kernel rejects it at any time during this binary's lifetime.
@@ -48,7 +48,7 @@ This is conservative-but-stale on the `Expired` side and strictly correct on the
 
 A few practical consequences:
 
-- **Rebuild before evaluation.** An evaluation build that's a year old has a year-old `BAT_OS_BUILD_UNIX` and will accept certs that expired in the past year. For best hygiene, rebuild close to deployment.
+- **Rebuild before evaluation.** An evaluation build that's a year old has a year-old `SPHRAGIS_BUILD_UNIX` and will accept certs that expired in the past year. For best hygiene, rebuild close to deployment.
 - **Certificate revocation is not handled.** Even if a cert was correctly issued at build time and is correctly time-valid, if it was revoked mid-validity-period, this kernel won't know. Revocation (OCSP / CRL) is explicitly out of scope per [[_generated/src/net/x509.rs]]'s header comment. Operators in high-security environments do their own revocation tracking.
 - **`KNOWN_GOOD_TIME` operator override** is reserved for future use. The header in [[_generated/src/net/x509.rs]] mentions it as the path for an operator who's verified time from an external source (e.g. a freshly-handshaked PQ-TLS connection to a known peer) and wants to update the kernel's time floor without rebuilding. Not implemented yet.
 
@@ -58,7 +58,7 @@ Currently: audit entries are stamped with `cntpct_el0` ticks-since-boot, not Uni
 
 That's enough for **ordering** within a session (entry #5 is after entry #3) and enough for **rough relative durations** (entry #5 is about 30 seconds after entry #3). It is **not** enough for "this happened at 14:22:08 on 2026-05-08."
 
-For most operations this is fine — when you decrypt the audit ring, the dump has a known boot timestamp (BAT_OS_BUILD_UNIX + observed boot delay) and you can reconstruct rough wall-clock times. For forensic-grade timestamping, the operator would correlate the audit ring with external time sources at unlock time. (How that correlation works: also reserved.)
+For most operations this is fine — when you decrypt the audit ring, the dump has a known boot timestamp (SPHRAGIS_BUILD_UNIX + observed boot delay) and you can reconstruct rough wall-clock times. For forensic-grade timestamping, the operator would correlate the audit ring with external time sources at unlock time. (How that correlation works: also reserved.)
 
 ## What this means for the scheduler
 
@@ -72,18 +72,18 @@ Threads sleeping on a deadline don't care what time it is — they care how many
 
 | Need | Source of truth | Limitation |
 |---|---|---|
-| Cert "is now after notBefore" | `BAT_OS_BUILD_UNIX` baked into binary | Binary-stale on `Expired` after rebuild |
+| Cert "is now after notBefore" | `SPHRAGIS_BUILD_UNIX` baked into binary | Binary-stale on `Expired` after rebuild |
 | Cert "is now before notAfter" | Same | Same |
 | Audit ring entry order | `cntpct_el0` ticks | No wall clock |
 | Audit ring entry rough time | `cntpct_el0` + boot reconstruction | Needs external correlation for forensic use |
 | Sleep deadline | `cntpct_el0` ticks (absolute) | None — this is the correct tool |
 
-Bat_OS reasons about time the way an offline cryptographer would: trust the local clock for relative ordering, trust the build-time pin for "what year is this," demand external evidence for anything sharper.
+Sphragis reasons about time the way an offline cryptographer would: trust the local clock for relative ordering, trust the build-time pin for "what year is this," demand external evidence for anything sharper.
 
 ## Related
 
 - [[_generated/src/net/x509.rs]] — `now_unix()`, validity-period checks
-- [[_generated/build.rs]] — where `BAT_OS_BUILD_UNIX` is set
+- [[_generated/build.rs]] — where `SPHRAGIS_BUILD_UNIX` is set
 - [[_generated/DESIGN_SCHEDULER_BLOCK_ON.md]] — `cntpct_el0`-based deadlines
 - [[Concepts/Audit Ring Contract]] — how ring entries get timestamped
 - [[Concepts/TLS Hardening Journey]] — why `Validity` checks landed where they did (PR #21)

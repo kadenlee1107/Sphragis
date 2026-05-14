@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""LoRA fine-tune Qwen2.5-Coder-7B on Bat_OS-specific data.
+"""LoRA fine-tune Qwen2.5-Coder-7B on Sphragis-specific data.
 
 Designed to run on a single RTX 5070 (12 GB VRAM) using QLoRA:
 4-bit nf4 quantization + LoRA adapters + bf16 mixed precision +
 gradient checkpointing.
 
 Inputs:
-  /mnt/d/ai/training/bat_os_lora_dataset.jsonl  — built by build_lora_dataset.py
+  /mnt/d/ai/training/sphragis_lora_dataset.jsonl  — built by build_lora_dataset.py
 Outputs:
   /mnt/d/ai/training/output/                    — adapter checkpoints, logs
   /mnt/d/ai/training/output/final/              — merged final adapter
 
 Run:
-  ~/ai-venv/bin/python ~/Bat_OS/scripts/train_lora.py
+  ~/ai-venv/bin/python ~/Sphragis/scripts/train_lora.py
 or, for unattended training that survives SSH disconnect:
-  tmux new -d -s lora "~/ai-venv/bin/python ~/Bat_OS/scripts/train_lora.py 2>&1 | tee /mnt/d/ai/training/output/train.log"
+  tmux new -d -s lora "~/ai-venv/bin/python ~/Sphragis/scripts/train_lora.py 2>&1 | tee /mnt/d/ai/training/output/train.log"
 """
 import json, os
 from pathlib import Path
@@ -31,7 +31,7 @@ from transformers import (
 # Config
 # ───────────────────────────────────────────────────────────────────────
 BASE_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"
-DATASET    = "/mnt/d/ai/training/bat_os_lora_dataset.jsonl"
+DATASET    = "/mnt/d/ai/training/sphragis_lora_dataset.jsonl"
 OUT_DIR    = "/mnt/d/ai/training/output"
 MAX_LEN    = 1536       # tight enough for 12 GB VRAM with QLoRA + grad ckpt
 
@@ -76,7 +76,7 @@ def format_chat(rec, tokenizer) -> dict:
         user_msg += "\n\n" + rec["input"]
     messages = [
         {"role": "system", "content":
-            "You are a technical assistant for Bat_OS, a security-grade bare-metal Rust kernel for Apple M4. "
+            "You are a technical assistant for Sphragis, a security-grade bare-metal Rust kernel for Apple M4. "
             "You answer questions about kernel internals, cryptography, audit history, and system administration. "
             "You are terse, technical, and never refuse legitimate questions."},
         {"role": "user", "content": user_msg},

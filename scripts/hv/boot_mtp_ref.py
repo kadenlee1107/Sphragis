@@ -120,7 +120,7 @@ def main():
     bootstrap_port(iface, p)
     u = ProxyUtils(p, heap_size=64 * 1024 * 1024)
 
-    if os.environ.get("BATOS_SKIP_BOOTSTRAP", "0") != "1":
+    if os.environ.get("SPHRAGIS_SKIP_BOOTSTRAP", "0") != "1":
         log("chainloading patched m1n1...")
         chainload(iface, p, u)
         u = ProxyUtils(p, heap_size=64 * 1024 * 1024)
@@ -150,7 +150,7 @@ def main():
 
     # 2. DAPF init — reference calls this. Our journal said it hangs
     # on M4 with stock m1n1. Patched m1n1 may have fixed it.
-    skip_dapf = os.environ.get("BATOS_SKIP_DAPF", "0") == "1"
+    skip_dapf = os.environ.get("SPHRAGIS_SKIP_DAPF", "0") == "1"
     if not skip_dapf:
         log("calling p.dapf_init_all() (60s timeout)...")
         saved = iface.dev.timeout
@@ -168,7 +168,7 @@ def main():
         finally:
             iface.dev.timeout = saved
     else:
-        log("BATOS_SKIP_DAPF=1 — skipping dapf_init_all")
+        log("SPHRAGIS_SKIP_DAPF=1 — skipping dapf_init_all")
         dapf_ok = False
 
     # 3. DART — reference uses BYPASS_DAPF=0 if dapf_init_all ran OK

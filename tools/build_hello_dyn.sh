@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bat_OS — Build a tiny dynamic-linked reproducer.
+# Sphragis — Build a tiny dynamic-linked reproducer.
 #
 # Purpose: `ports/chromium_port/out/content_shell` is 280 MB with
 # 540k relocations and a crash somewhere in glibc's libc_start_main

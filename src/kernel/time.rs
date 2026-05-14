@@ -1,4 +1,4 @@
-//! Bat_OS — wall-clock + monotonic time.
+//! Sphragis — wall-clock + monotonic time.
 //!
 //! The ARM generic timer (cntpct_el0 + cntfrq_el0) gives us a
 //! monotonically increasing tick count from CPU reset, but no
@@ -174,7 +174,7 @@ pub fn sync_from_https(host: &str) -> Result<u64, &'static str> {
     let hb = host.as_bytes();
     let hn = hb.len().min(req.len() - p - 32);
     req[p..p + hn].copy_from_slice(&hb[..hn]); p += hn;
-    let tail = b"\r\nConnection: close\r\nUser-Agent: bat_os/0.5\r\n\r\n";
+    let tail = b"\r\nConnection: close\r\nUser-Agent: sphragis/0.5\r\n\r\n";
     req[p..p + tail.len()].copy_from_slice(tail); p += tail.len();
 
     if let Err(e) = https::write(pcb, &req[..p]) {

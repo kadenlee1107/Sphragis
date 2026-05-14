@@ -1,4 +1,4 @@
-//! Bat_OS — AF_UNIX SOCK_STREAM (abstract namespace).
+//! Sphragis — AF_UNIX SOCK_STREAM (abstract namespace).
 //!
 //! Gap-audit item 025. Pairs with `kernel/pipe.rs`: both expose a
 //! byte-stream over the fd table, but a Unix socket adds a named

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check Bat_OS's Cargo.lock against OSV.dev for known CVEs.
+"""Check Sphragis's Cargo.lock against OSV.dev for known CVEs.
 
 gov-grade §3.24 (continuous monitoring & vulnerability mgmt).
 Hits OSV.dev's batch query endpoint (free, no auth, no rate limit
@@ -38,7 +38,7 @@ def load_ignore() -> dict[str, str]:
     """Parse `cve_audit.ignore` into {advisory_id: rationale}.
     Format: one record per non-comment, non-blank line, advisory
     ID followed by `:` and a free-text rationale describing why
-    the finding doesn't apply to Bat_OS's actual usage."""
+    the finding doesn't apply to Sphragis's actual usage."""
     if not IGNORE_PATH.exists():
         return {}
     out: dict[str, str] = {}

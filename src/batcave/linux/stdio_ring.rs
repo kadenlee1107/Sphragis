@@ -1,4 +1,4 @@
-// Bat_OS — Stdio Ring Buffer
+// Sphragis — Stdio Ring Buffer
 // Async 256 KB ring between BatCave sys_write (fd 1/2) and the PL011 UART.
 //
 // Motivation: Chromium content_shell with --enable-logging=stderr emits

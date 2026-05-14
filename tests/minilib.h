@@ -1,4 +1,4 @@
-// Bat_OS Mini C Library — replaces musl for cross-compiled programs
+// Sphragis Mini C Library — replaces musl for cross-compiled programs
 // Provides: printf, malloc, free, strlen, strcpy, strcmp, memcpy, memset, sprintf
 // All backed by raw Linux syscalls (no complex init, no TLS, no atomics)
 

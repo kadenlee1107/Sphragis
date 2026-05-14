@@ -66,37 +66,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
-name = "bat_os"
-version = "0.1.0"
-dependencies = [
- "aes",
- "argon2",
- "blake2",
- "blake3",
- "chacha20poly1305",
- "cmac",
- "const-oid",
- "der",
- "ed25519-compact",
- "ghash",
- "hybrid-array 0.4.10",
- "linked_list_allocator",
- "ml-dsa",
- "ml-kem",
- "p256",
- "p384",
- "rand_core 0.6.4",
- "rsa",
- "sha2",
- "sha3 0.10.9",
- "spki",
- "x25519-dalek",
- "x509-cert",
- "x509-ocsp",
- "xts-mode",
-]
-
-[[package]]
 name = "blake2"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -933,6 +902,37 @@ name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+
+[[package]]
+name = "sphragis"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "argon2",
+ "blake2",
+ "blake3",
+ "chacha20poly1305",
+ "cmac",
+ "const-oid",
+ "der",
+ "ed25519-compact",
+ "ghash",
+ "hybrid-array 0.4.10",
+ "linked_list_allocator",
+ "ml-dsa",
+ "ml-kem",
+ "p256",
+ "p384",
+ "rand_core 0.6.4",
+ "rsa",
+ "sha2",
+ "sha3 0.10.9",
+ "spki",
+ "x25519-dalek",
+ "x509-cert",
+ "x509-ocsp",
+ "xts-mode",
+]
 
 [[package]]
 name = "spin"

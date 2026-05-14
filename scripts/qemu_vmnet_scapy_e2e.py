@@ -9,13 +9,13 @@ previous `qemu_vmnet_docker_e2e.py` hits that limitation.
 This script goes around it: we use the macOS host ITSELF as the
 packet source. scapy crafts raw Ethernet frames and `sendp()` puts
 them directly on the vmnet bridge, exactly as a container would.
-Bat_OS's nic 1 receives them and the classifier runs end-to-end.
+Sphragis's nic 1 receives them and the classifier runs end-to-end.
 
 Flow:
   1. Ensure scapy is importable (pip-install if needed).
   2. Start batcaved.
   3. Launch QEMU with -netdev vmnet-host + slirp.
-  4. Drive Bat_OS shell, set nat-bind + cpol rules.
+  4. Drive Sphragis shell, set nat-bind + cpol rules.
   5. Find the new bridgeNN interface via ifconfig diff.
   6. scapy: send a stream of frames on that bridge:
        - allowed destination SYN           → allow + NAT
@@ -43,7 +43,7 @@ if os.geteuid() != 0:
 
 REAL_USER = os.environ.get("SUDO_USER") or os.environ.get("USER") or "nobody"
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG_DIR = ROOT / "logs/vmnet-e2e"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -65,14 +65,14 @@ except ImportError:
         sys.exit(1)
     from scapy.all import Ether, IP, TCP, sendp, conf  # noqa
 
-# pexpect is used to drive the Bat_OS shell over QEMU's stdio.
+# pexpect is used to drive the Sphragis shell over QEMU's stdio.
 try:
     import pexpect
 except ImportError:
     print("ERROR: pexpect not installed; run `pip3 install pexpect`")
     sys.exit(1)
 
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
 
 CAVE_IP    = "192.168.77.10"
@@ -184,7 +184,7 @@ c = state["qemu"]
 try:
     c.expect(rb"\[bs\] flush done .+ entering input loop", timeout=90)
 except pexpect.TIMEOUT:
-    print("ERROR: Bat_OS never reached auth prompt")
+    print("ERROR: Sphragis never reached auth prompt")
     sys.exit(1)
 time.sleep(0.5)
 c.sendline(b"batman")
@@ -193,7 +193,7 @@ try:
 except pexpect.TIMEOUT:
     print("ERROR: shell prompt never came up")
     sys.exit(1)
-print("[e2e] Bat_OS shell ready")
+print("[e2e] Sphragis shell ready")
 
 # ── Find the new bridge interface ─────────────────────────────────
 
@@ -227,7 +227,7 @@ run_cmd(c, f"cpol-rate {CAVE_NAME} 5 10")
 
 # ── Craft + send frames via scapy ─────────────────────────────────
 
-# Fake cave MAC. Bat_OS's nic 1 accepts any frame (virtio-net driver
+# Fake cave MAC. Sphragis's nic 1 accepts any frame (virtio-net driver
 # doesn't filter by dst MAC), so broadcast is fine.
 cave_mac  = "02:aa:00:00:00:10"
 bcast_mac = "ff:ff:ff:ff:ff:ff"
@@ -274,7 +274,7 @@ drop_sni   = parse_counter(stats, "drop-sni")
 drop_unk   = parse_counter(stats, "drop-unknown-src")
 
 print()
-print("── Bat_OS nat-stats after attacks ──")
+print("── Sphragis nat-stats after attacks ──")
 print(f"   allow            = {allow}")
 print(f"   drop-policy      = {drop_pol}")
 print(f"   drop-rate        = {drop_rate}")
@@ -293,7 +293,7 @@ print()
 if ok:
     print("═" * 62)
     print(" ✓ PASS — real vmnet + raw scapy frames flowed through")
-    print("         Bat_OS's classifier. All four defense layers fired:")
+    print("         Sphragis's classifier. All four defense layers fired:")
     print(f"         policy={drop_pol}  rate={drop_rate}  sni={drop_sni}")
     print("═" * 62)
     sys.exit(0)

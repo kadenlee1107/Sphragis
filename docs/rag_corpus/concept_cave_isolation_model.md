@@ -5,7 +5,7 @@ topic: isolation · caves
 
 # Cave isolation model
 
-> A cave is what other systems call a process. The naming is deliberate — "process" implies a running thing, "cave" implies a sealed container. Bat_OS thinks of caves as the unit of *trust*, not just execution.
+> A cave is what other systems call a process. The naming is deliberate — "process" implies a running thing, "cave" implies a sealed container. Sphragis thinks of caves as the unit of *trust*, not just execution.
 
 ## The contract
 

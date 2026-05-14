@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple DART (Device Address Resolution Table / IOMMU) driver
+// Sphragis — Apple DART (Device Address Resolution Table / IOMMU) driver
 //
 // DART is Apple's I/O MMU. Every DMA-capable peripheral (NVMe, USB,
 // Wi-Fi, GPU, Display, etc.) sits behind its own DART instance.

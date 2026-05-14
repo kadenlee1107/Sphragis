@@ -1,4 +1,4 @@
-//! Bat_OS — VirtIO Block Driver
+//! Sphragis — VirtIO Block Driver
 //!
 //! DESIGN.md Phase 3 lists virtio-blk alongside virtio-net / -input /
 //! -gpu. Shipping it finally closes that gap. We keep the driver

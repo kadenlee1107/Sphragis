@@ -1,5 +1,5 @@
 #!/bin/bash
-# Bat_OS — Build for Apple Silicon (M4 MacBook)
+# Sphragis — Build for Apple Silicon (M4 MacBook)
 # Produces a bare-metal binary that m1n1 can chainload.
 #
 # CRITICAL: do not shortcut this with a plain `cargo build --release`.
@@ -11,7 +11,7 @@
 # `_apple_start` at offset 0. See the offset-0-opcode check below.
 set -e
 
-echo "[*] Building Bat_OS for Apple Silicon..."
+echo "[*] Building Sphragis for Apple Silicon..."
 
 # Build with Apple Silicon linker script
 RUSTFLAGS="-C link-arg=-Tlinker_apple.ld" cargo build --release 2>&1
@@ -33,20 +33,20 @@ if [ -z "$OBJCOPY" ]; then
     exit 1
 fi
 "$OBJCOPY" --strip-all -O binary \
-    target/aarch64-unknown-none/release/bat_os \
-    target/bat_os_apple.bin
+    target/aarch64-unknown-none/release/sphragis \
+    target/sphragis_apple.bin
 
 # stat(1) is macOS-vs-Linux incompatible: Linux needs `-c %s` (file size),
 # macOS needs `-f %z` (same). Try Linux first; on macOS the Linux invocation
 # fails with an unknown-format error so we fall through.
-SIZE=$(stat -c %s target/bat_os_apple.bin 2>/dev/null || stat -f %z target/bat_os_apple.bin 2>/dev/null)
+SIZE=$(stat -c %s target/sphragis_apple.bin 2>/dev/null || stat -f %z target/sphragis_apple.bin 2>/dev/null)
 
 # Sanity check: the first 4 bytes MUST be `_apple_start`'s first
 # instruction, not the Linux kernel Image header. We learned this the
 # expensive way: wrong-linker builds produce a valid-looking binary
 # that chainloads fine but faults instantly on M4 because offset 0 is
 # `b +0x40` (Linux header) instead of `mov x20, x0` (_apple_start).
-FIRST4=$(od -An -tx1 -N4 target/bat_os_apple.bin | tr -d ' \n')
+FIRST4=$(od -An -tx1 -N4 target/sphragis_apple.bin | tr -d ' \n')
 EXPECTED="f40300aa"   # AArch64 LE: mov x20, x0
 LINUX_HDR="10000014"  # AArch64 LE: b +0x40
 if [ "$FIRST4" = "$LINUX_HDR" ]; then
@@ -61,11 +61,11 @@ else
     echo "[*] offset-0 opcode: 0x$FIRST4 (mov x20, x0 — _apple_start OK)"
 fi
 
-echo "[*] Apple Silicon binary: target/bat_os_apple.bin ($SIZE bytes)"
+echo "[*] Apple Silicon binary: target/sphragis_apple.bin ($SIZE bytes)"
 
 echo ""
 echo "══════════════════════════════════════════════"
-echo "  Bat_OS Apple Silicon Build Complete"
+echo "  Sphragis Apple Silicon Build Complete"
 echo "══════════════════════════════════════════════"
 echo ""
 echo "  Deploy via m1n1 chainload (after m1n1 is installed):"
@@ -77,11 +77,11 @@ echo "     requires a vendor INF that Windows does not ship)"
 echo "  3. On the host:"
 echo "       python3 proxyclient/tools/chainload.py \\"
 echo "           --raw --entry-point 0 \\"
-echo "           /path/to/bat_os_apple.bin"
+echo "           /path/to/sphragis_apple.bin"
 echo ""
 echo "  What chainload does:"
 echo "    * Preserves Apple's SEPFW + preoslog"
 echo "    * Rewrites the ADT chosen/memory-map entries"
-echo "    * Jumps to Bat_OS with x0 = BootArgs ptr"
+echo "    * Jumps to Sphragis with x0 = BootArgs ptr"
 echo "  Our _apple_start then runs on real M4 silicon."
 echo ""

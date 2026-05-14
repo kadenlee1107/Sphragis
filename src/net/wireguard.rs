@@ -548,7 +548,7 @@ pub fn selftest_round_trip()
 
     // 4. Transport round trip — one packet each direction.
     let mut transport_ok = true;
-    let i_to_r = b"bat_os over wireguard (init -> resp)";
+    let i_to_r = b"sphragis over wireguard (init -> resp)";
     let ct = transport_send(&mut init_tx_keys, i_to_r)?;
     let pt = transport_recv(&mut resp_tx_keys, 0, &ct)?;
     if pt.as_slice() != i_to_r { transport_ok = false; }
@@ -968,7 +968,7 @@ pub fn selftest_wire_round_trip()
 
     // 4. Transport round trip — also through wire framing.
     let mut transport_ok = true;
-    let payload = b"bat_os over wireguard (phase-2 wire)";
+    let payload = b"sphragis over wireguard (phase-2 wire)";
     let ct = transport_send(&mut init_tx_keys, payload)?;
     let mut t_wire = alloc::vec![0u8; TRANSPORT_HDR_LEN + ct.len()];
     encode_transport_msg(

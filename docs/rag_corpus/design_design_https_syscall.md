@@ -3,7 +3,7 @@
 ## Goal
 
 Give caves the ability to make HTTPS requests through a single
-Bat_OS-private syscall, with the kernel running TLS itself so caves
+Sphragis-private syscall, with the kernel running TLS itself so caves
 never see network bytes in plaintext and can never ship broken /
 old / cert-validation-skipping TLS code.
 
@@ -32,7 +32,7 @@ Two choices were on the table:
 **A.** Caves use `socket(AF_INET, SOCK_STREAM)` + `connect()` and
 bundle their own TLS library (OpenSSL/BoringSSL/etc.) in userspace.
 
-**B.** Caves call a Bat_OS-private syscall; kernel runs TLS;
+**B.** Caves call a Sphragis-private syscall; kernel runs TLS;
 caves see plaintext over an fd.
 
 We chose **B**. The reasoning:
@@ -48,7 +48,7 @@ We chose **B**. The reasoning:
   firewall (`cpol`) instead of trusting each cave to filter traffic.
 
 Cost: caves can't be drop-in Linux binaries that depend on
-OpenSSL — they need to know about the Bat_OS syscall. Acceptable
+OpenSSL — they need to know about the Sphragis syscall. Acceptable
 for our threat model (security-first, OS-specific tooling).
 
 ## Wire layout
@@ -177,7 +177,7 @@ into the main smoke if simpler.*
 4. **Kernel function.** `https::open_kernel(host, port) ->
    Result<u16 /* tcp/tls pcb */, &'static str>`. Called by syscall
    and by boot hook.
-5. **Syscall.** `sys_batos_https_open` at syscall_no 0x4001:
+5. **Syscall.** `sys_sphragis_https_open` at syscall_no 0x4001:
    user-pointer validation, cave_policy gate, calls
    `https::open_kernel`, allocates fd via `fd::alloc_fd_tls`.
 6. **Read/write/close routing.** `sys_read` / `sys_write` /

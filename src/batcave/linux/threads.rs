@@ -1,4 +1,4 @@
-// Bat_OS — BatCave Linux Threading (clone()/TLS/scheduler) DESIGN + SKELETON
+// Sphragis — BatCave Linux Threading (clone()/TLS/scheduler) DESIGN + SKELETON
 // =============================================================================
 //
 // PURPOSE
@@ -1242,7 +1242,7 @@ pub fn schedule() {
             // have a real deadlock — every BatCave thread is parked
             // and nobody can wake anyone.
             //
-            // under BAT_OS_KEEP_GOING, instead of just
+            // under SPHRAGIS_KEEP_GOING, instead of just
             // dumping and stalling, force-wake the FIRST blocked
             // thread we find (lowest slot index = oldest worker, most
             // likely a missed signal). Log a parser-friendly
@@ -1541,7 +1541,7 @@ pub fn wake_thread(tid: u32) -> bool {
 
 // ─── Time helpers (cntpct_el0 / cntfrq_el0) ──────────────────────────────
 //
-// Bat_OS uses ARMv8 generic timer ticks as the canonical deadline unit.
+// Sphragis uses ARMv8 generic timer ticks as the canonical deadline unit.
 // All deadlines stored in BlockReason are absolute cntpct_el0 values.
 // See DESIGN_SCHEDULER_BLOCK_ON.md decision #2.
 

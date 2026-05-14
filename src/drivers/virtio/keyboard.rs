@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — VirtIO Keyboard Driver (HVF-safe)
+// Sphragis — VirtIO Keyboard Driver (HVF-safe)
 // Reads key events from virtio-keyboard-device in QEMU GUI window.
 
 use super::mmio::{self, VirtioMmio};

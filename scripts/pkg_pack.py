@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bat_OS package builder.
+"""Sphragis package builder.
 
 Produces signed BPKG bundles that the on-device `pkg install` command
 verifies and unpacks into BatFS. Signed with the release-engineer
@@ -123,10 +123,10 @@ def main(argv: list[str]) -> int:
     print(f"     version: {version}")
     print(f"     files:   {len(files)}")
     print(f"     signed by pubkey: {pub_hex}")
-    print(f"     (Bat_OS verifies against the BAT_OS_RELEASE_PUBKEY baked")
+    print(f"     (Sphragis verifies against the SPHRAGIS_RELEASE_PUBKEY baked")
     print(f"      at build time. Make sure it matches.)")
     print()
-    print(f"install on Bat_OS:")
+    print(f"install on Sphragis:")
     print(f"  1. transfer {out} into BatFS (write/cat/pkg-stage etc.)")
     print(f"  2. pkg install {out}")
     return 0

@@ -1,4 +1,4 @@
-// Bat_OS — Signature verification (Ed25519 + ECDSA-P256).
+// Sphragis — Signature verification (Ed25519 + ECDSA-P256).
 //
 // Thin wrappers over `ed25519-compact` and `p256` that the boot/TLS paths
 // can call without knowing the underlying crate. All inputs are byte

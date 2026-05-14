@@ -1,4 +1,4 @@
-// Bat_OS — SHA-256 Implementation
+// Sphragis — SHA-256 Implementation
 // Pure Rust, zero dependencies. Used for Merkle tree and key derivation.
 
 const K: [u32; 64] = [

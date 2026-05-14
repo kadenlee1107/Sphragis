@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stack canary + mitigation audit for the Bat_OS kernel image.
+# Stack canary + mitigation audit for the Sphragis kernel image.
 #
 # Rust's default codegen emits some stack-protection only on functions
 # with arrays larger than the threshold. For a kernel we want the
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-ARTIFACT="${1:-$REPO/target/aarch64-unknown-none/release/bat_os}"
+ARTIFACT="${1:-$REPO/target/aarch64-unknown-none/release/sphragis}"
 
 if [ ! -f "$ARTIFACT" ]; then
     echo "[canary-audit] artifact not found: $ARTIFACT"

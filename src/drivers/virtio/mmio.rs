@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — VirtIO MMIO Transport Layer
+// Sphragis — VirtIO MMIO Transport Layer
 // All virtio devices on QEMU virt use Memory-Mapped I/O.
 // This implements the common registers and device negotiation.
 // Reference: VirtIO Spec v1.2, Section 4.2 (MMIO)

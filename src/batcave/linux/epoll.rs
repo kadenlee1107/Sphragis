@@ -1,4 +1,4 @@
-// Bat_OS — Linux epoll(7) implementation for BatCave processes
+// Sphragis — Linux epoll(7) implementation for BatCave processes
 //
 // Why this exists:
 //   Chromium's entire event loop (Mojo IPC, the network service, timers,
@@ -37,7 +37,7 @@
 //     there is no automatic poll integration yet.
 //
 // Thread-safety:
-//   Bat_OS is single-threaded per BatCave today, but we still use
+//   Sphragis is single-threaded per BatCave today, but we still use
 //   `AtomicBool` for the `in_use` slot flag so that when we grow to
 //   SMP the allocator is race-free. Interest mutation is serialized
 //   by being only called from syscall context.
@@ -189,7 +189,7 @@ impl EpollInstance {
 }
 
 // Static table of instances. `static mut` plus atomic guards is the
-// pattern used throughout Bat_OS (see vfs.rs, fd.rs) — no_std, no heap.
+// pattern used throughout Sphragis (see vfs.rs, fd.rs) — no_std, no heap.
 static mut INSTANCES: [EpollInstance; MAX_INSTANCES] = {
     const E: EpollInstance = EpollInstance::empty();
     [E; MAX_INSTANCES]
@@ -446,7 +446,7 @@ pub fn epoll_ctl(epfd: i32, op: i32, fd: i32, event: *const EpollEvent) -> i64 {
 /// and return the count. `timeout` in milliseconds: 0 = non-blocking,
 /// -1 = wait forever, >0 = wait that many milliseconds.
 ///
-/// `sigmask` is accepted for ABI compatibility but ignored — Bat_OS
+/// `sigmask` is accepted for ABI compatibility but ignored — Sphragis
 /// has no signal delivery yet.
 pub fn epoll_pwait(
     epfd: i32,
@@ -754,5 +754,5 @@ pub fn active_instance_count() -> usize {
 //   * Nested epoll (epoll fds watching other epoll fds). Would need
 //     a cycle check in EPOLL_CTL_ADD.
 //
-//   * Signal-mask handling in epoll_pwait. Until Bat_OS grows real
+//   * Signal-mask handling in epoll_pwait. Until Sphragis grows real
 //     POSIX signals, pwait == wait.

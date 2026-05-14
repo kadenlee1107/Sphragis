@@ -490,7 +490,7 @@ event-wake path, and the table-walk noop guard.
 - **Pipe / socket / signalfd / timerfd waitqueues** — none of these
   currently spin in surviving non-browser paths; if a real caller
   surfaces a spin, that's its own thread.
-- **Kernel-task blocking** — Bat_OS's kernel-side tasks
+- **Kernel-task blocking** — Sphragis's kernel-side tasks
   (`kernel::process`) don't currently block on user events. The new
   wake pass operates on `linux::threads`, not `kernel::process`. If
   kernel tasks ever need to block on deadlines, that's a refactor.

@@ -9,7 +9,7 @@ topic: project · history
 
 ## The pre-pivot state
 
-For most of the project's life, Bat_OS was going to ship its own web browser. The thinking: a security workstation that can't browse is half a workstation. The plan was to vendor a small browser engine, sandbox it inside a cave, and let the cave's default-deny policy + kernel-mediated HTTPS do the heavy lifting on the network side.
+For most of the project's life, Sphragis was going to ship its own web browser. The thinking: a security workstation that can't browse is half a workstation. The plan was to vendor a small browser engine, sandbox it inside a cave, and let the cave's default-deny policy + kernel-mediated HTTPS do the heavy lifting on the network side.
 
 To that end, the repo accumulated:
 
@@ -45,7 +45,7 @@ The pivot was: **delete the browser, double down on the kernel.**
 
 ## What replaces "browser" in the marketing
 
-> Bat_OS deliberately omits a web browser. Browsing belongs on a separate device. What remains is the work that needs strong isolation: drafting, review, encrypted storage, signed communications.
+> Sphragis deliberately omits a web browser. Browsing belongs on a separate device. What remains is the work that needs strong isolation: drafting, review, encrypted storage, signed communications.
 
 That sentence is on every version of the marketing site since the pivot. The website also lives outside this repo (at `~/Downloads/index.html`) and is the place where the no-browser stance is most visible.
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Real-peer-interop smoke for WireGuard — gap-audit item 043.
 
-Proves that Bat_OS's WireGuard outbound path actually traverses
+Proves that Sphragis's WireGuard outbound path actually traverses
 virtio-net to a real listener on the host. The script:
 
   1. Binds a UDP socket to 0.0.0.0:<wg-port> on the host.
-  2. Boots Bat_OS in QEMU virt with default user-mode networking
+  2. Boots Sphragis in QEMU virt with default user-mode networking
      (gateway 10.0.2.2 maps to host loopback).
   3. Runs `wg-test-outbound 10.0.2.2:<wg-port>` at the shell. This
      registers a fresh fake peer, sets its endpoint to the host
@@ -37,7 +37,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/wg-real-peer-e2e-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -88,7 +88,7 @@ def main() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         c.sendline(f"wg-test-outbound 10.0.2.2:{WG_PORT}")

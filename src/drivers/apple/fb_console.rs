@@ -1,7 +1,7 @@
 #![allow(dead_code)]
-// Bat_OS — Framebuffer console for the Apple M4 path.
+// Sphragis — Framebuffer console for the Apple M4 path.
 //
-// Bat_OS on M4 currently has no way to ship serial bytes back to
+// Sphragis on M4 currently has no way to ship serial bytes back to
 // Ubuntu (m1n1's USB-CDC is gone post-chainload; our own USB-CDC
 // stack is future work). So every `apple::uart::puts` call vanishes
 // into the dockchannel MMIO with no reader.

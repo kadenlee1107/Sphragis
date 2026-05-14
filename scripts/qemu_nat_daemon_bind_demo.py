@@ -4,7 +4,7 @@
 1. Start batcaved, push two fake container bindings:
      CPOL_BIND_SET 192.168.77.10 kali
      CPOL_BIND_SET 192.168.77.11 alpine
-2. Boot Bat_OS.
+2. Boot Sphragis.
 3. In shell: `nat-sync` (daemon → kernel).
 4. `nat-bindings` must list both with correct cave names.
 """
@@ -18,12 +18,12 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = ROOT / f"logs/qemu-tests/nat-sync-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 def run_cmd(c, cmd, timeout=10):
     c.sendline(cmd.encode())

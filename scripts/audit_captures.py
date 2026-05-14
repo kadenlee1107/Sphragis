@@ -33,7 +33,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO = Path("/Users/kadenlee/Bat_OS")
+REPO = Path("/Users/kadenlee/Sphragis")
 CAPTURES = REPO / "captures"
 OUT_MD  = REPO / "docs" / "CAPTURES_AUDIT.md"
 OUT_TSV = REPO / "docs" / "captures_audit_full.tsv"

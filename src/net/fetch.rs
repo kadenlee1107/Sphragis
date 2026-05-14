@@ -1,4 +1,4 @@
-// Bat_OS — URL parsing helper.
+// Sphragis — URL parsing helper.
 //
 // Used by `security::origin::check_subresource` to extract a host
 // from a URL string for cross-origin policy checks.

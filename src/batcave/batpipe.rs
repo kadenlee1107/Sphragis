@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — BatPipe: Universal Tool-to-Tool Data Bridge
+// Sphragis — BatPipe: Universal Tool-to-Tool Data Bridge
 //
 // Parses output from one security tool into a standard intermediate format,
 // then converts it into input for another tool. No manual copy-paste.

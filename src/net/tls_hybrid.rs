@@ -84,7 +84,7 @@ impl ClientHybridState {
 
 /// Server-side: given a client's hybrid public key, produce the ciphertext
 /// to return in ServerHello + the matching shared secret. For tests /
-/// fake-servers / a future Bat_OS TLS server; client-only deployments
+/// fake-servers / a future Sphragis TLS server; client-only deployments
 /// don't need this path. Per draft-ietf-tls-ecdhe-mlkem-04, the SS is
 /// 64 bytes (ml_kem_ss || x25519_ss).
 pub fn server_process_client_key_share(client_pub: &[u8])

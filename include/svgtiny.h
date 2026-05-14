@@ -1,9 +1,9 @@
 /*
- * Bat_OS — svgtiny.h stub for NetSurf
+ * Sphragis — svgtiny.h stub for NetSurf
  * Minimal SVG Tiny declarations.
  */
-#ifndef _BATOS_SVGTINY_H
-#define _BATOS_SVGTINY_H
+#ifndef _SPHRAGIS_SVGTINY_H
+#define _SPHRAGIS_SVGTINY_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -55,4 +55,4 @@ void             svgtiny_free(svgtiny_diagram *diagram);
 #define svgtiny_RED(c) (((c) >> 0) & 0xFF)
 #define svgtiny_GREEN(c) (((c) >> 8) & 0xFF)
 #define svgtiny_BLUE(c) (((c) >> 16) & 0xFF)
-#endif /* _BATOS_SVGTINY_H */
+#endif /* _SPHRAGIS_SVGTINY_H */

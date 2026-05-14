@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple Silicon Dockchannel UART driver.
+// Sphragis — Apple Silicon Dockchannel UART driver.
 //
 // On M4 (and M2+ generally) the serial console is the "dockchannel"
 // UART — a small FIFO-based block at 0x3_8812_8000 on T8132 with

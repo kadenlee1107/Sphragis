@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Broadcom Wi-Fi (BCM43xx / BCM4378) driver skeleton
+// Sphragis — Broadcom Wi-Fi (BCM43xx / BCM4378) driver skeleton
 //
 // Apple Silicon MacBooks ship with a Broadcom Wi-Fi/Bluetooth combo
 // chip (variously BCM4378, BCM4377, BCM4387 on M4). It's connected
@@ -22,9 +22,9 @@
 // This module is the SKELETON. Real Wi-Fi needs:
 //   1. APCIE root complex init + enumeration
 //   2. Broadcom firmware blob loading (FW blob is non-redistributable
-//      Broadcom proprietary binary; Bat_OS will need an install-time
+//      Broadcom proprietary binary; Sphragis will need an install-time
 //      path to fetch it from macOS WiFi.framework or the Asahi firmware
-//      bundle — NOT included in the Bat_OS repo)
+//      bundle — NOT included in the Sphragis repo)
 //   3. Message-buffer protocol implementation (shared rings + doorbells)
 //   4. FullMAC command surface (scan, join, tx, rx, encryption key mgmt)
 //

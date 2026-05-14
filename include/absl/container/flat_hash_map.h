@@ -1,4 +1,4 @@
-// Minimal Abseil flat_hash_map stub for V8 compilation on Bat_OS
+// Minimal Abseil flat_hash_map stub for V8 compilation on Sphragis
 // Aliases to std::unordered_map
 
 #ifndef ABSL_CONTAINER_FLAT_HASH_MAP_H_

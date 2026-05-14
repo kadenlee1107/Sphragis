@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Bat_OS "Kali in a BatCave" — live pentest chain + external analysis.
+"""Sphragis "Kali in a BatCave" — live pentest chain + external analysis.
 
 THE DEMO
 ========
 1. Spin up a Mac-side HTTP server (the recon "target") + a unique path token.
-2. For each busybox-backed pentest tool in the chain, boot Bat_OS fresh,
+2. For each busybox-backed pentest tool in the chain, boot Sphragis fresh,
    run the tool INSIDE a capability-gated BatCave, and have QEMU's
    `filter-dump` capture ALL of the guest's virtio-net traffic into a
    per-tool pcap.
@@ -23,7 +23,7 @@ THE PENTEST CHAIN (everything is a busybox applet — no host tools)
 PHILOSOPHY
   - Zero host-global tools used. nmap/tshark are ONLY invoked post-hoc
     for pcap analysis (reading files, no process running alongside a
-    Bat_OS target).
+    Sphragis target).
   - Each busybox run is in its own QEMU (our ELF runner is noreturn).
   - Each run has a dedicated, disposable BatCave.
 """
@@ -40,7 +40,7 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG_DIR = ROOT / "logs/qemu-tests"; LOG_DIR.mkdir(parents=True, exist_ok=True)
 STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 PCAP_DIR = LOG_DIR / f"kali-demo-{STAMP}"; PCAP_DIR.mkdir(parents=True)
@@ -49,7 +49,7 @@ PROBE_ID = uuid.uuid4().hex[:12]
 PROBE_PATH = f"/kali-demo-{PROBE_ID}"
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 HITS = []
 
@@ -107,10 +107,10 @@ def clean_display(raw: str) -> list[str]:
         "[batcave", "[dms]", "[vfs]", "[kbd]", "[gpu]", "[fs]",
         "[firewall]", "[net]", "[boot]", "[chromium", "[bs]",
         "[auth]", "[ipc]", "[arch]", "[rng]", "[sched]", "[mm]",
-        "[security]", "[initrd]", "[dtb]", "[mmap]", "bat_os >",
+        "[security]", "[initrd]", "[dtb]", "[mmap]", "sphragis >",
         "BATCAVES", "BatCave created", "BATCAVE", "Granted",
         "batcave ", "  Microkernel", "Ctrl+", "=====", "-----",
-        "BAT_OS v", "Bat_OS v", "(none)", "--------", "(")
+        "SPHRAGIS v", "Sphragis v", "(none)", "--------", "(")
     for line in raw.splitlines():
         s = line.rstrip()
         if not s: continue
@@ -122,7 +122,7 @@ def clean_display(raw: str) -> list[str]:
         keep.append(s)
     return keep
 
-# ── Core: boot Bat_OS with pcap capture, run one command, kill ──
+# ── Core: boot Sphragis with pcap capture, run one command, kill ──
 def run_in_batcave(tool_cmd: str, pcap_path: Path, port: int) -> str:
     log_fp = open(LOG_DIR / f"kali-{tool_cmd.split()[0]}-{STAMP}.log", "wb")
     qemu = [
@@ -246,7 +246,7 @@ def pcap_summary(pcap: Path) -> list[str]:
 # ── Main ────────────────────────────────────────────────────────
 def main():
     print("=" * 74)
-    print(" Bat_OS — Kali-style pentest chain inside a BatCave (real deal)")
+    print(" Sphragis — Kali-style pentest chain inside a BatCave (real deal)")
     print("=" * 74)
 
     port = pick_port()
@@ -274,8 +274,8 @@ def main():
         print("─" * 74)
         pcap = PCAP_DIR / f"{cmd.split()[0]}.pcap"
         out = run_in_batcave(cmd, pcap, port)
-        # Bat_OS-side output (what the cave produced)
-        print("   BAT_OS stdout:")
+        # Sphragis-side output (what the cave produced)
+        print("   SPHRAGIS stdout:")
         lines = clean_display(out)
         if lines:
             for l in lines[-8:]:

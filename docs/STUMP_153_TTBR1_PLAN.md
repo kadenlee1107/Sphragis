@@ -8,7 +8,7 @@ the OS doesn't already have).
 
 ## Background
 
-Bat_OS today uses ONLY `TTBR0_EL1`. Both kernel and user mappings
+Sphragis today uses ONLY `TTBR0_EL1`. Both kernel and user mappings
 live in the same page-table tree. STUMP #145 added per-cave L1s, but
 each cave's L1 must include kernel identity mappings (so the kernel
 can run when a cave is active).
@@ -121,7 +121,7 @@ assume PA==KVA today.
 
 | Test | How | Pass criterion |
 |---|---|---|
-| Kernel boots through `kernel_main` | QEMU virt, observe UART | "[bat_os] desktop loop entered", no halt |
+| Kernel boots through `kernel_main` | QEMU virt, observe UART | "[sphragis] desktop loop entered", no halt |
 | Native cave still enters (post-#145) | Run native cave self-test | Cave exits cleanly, kernel resumes |
 | Linux ELF cave loads | Chromium `content_shell` | Process reaches event loop |
 | Kernel reachable from cave context | Trigger syscall from inside cave; kernel reads user buffer via `__va(user_pa)` | Returns expected bytes; no walk fault |

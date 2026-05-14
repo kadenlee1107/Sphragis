@@ -30,8 +30,8 @@ Env knobs:
   KERNELCACHE=<path>                      — override default J604 kernelcache
   XNU_BOOTARGS="-v debug=0x8 serial=3"    — override iBoot-inherited bootargs
   HV_SMP=0                                — strip secondary CPUs from ADT (debug)
-  BATOS_LINKALIAS=0                       — forced off (we're XNU, not Bat_OS)
-  BATOS_KEEP_FB=0                         — forced off (XNU owns the FB)
+  SPHRAGIS_LINKALIAS=0                       — forced off (we're XNU, not Sphragis)
+  SPHRAGIS_KEEP_FB=0                         — forced off (XNU owns the FB)
 
 Exits to an HV shell after guest stops (panic, ^C, or completion). Look
 at MTP_TRACE_LOG for the captured MMIO sequence.
@@ -43,12 +43,12 @@ import traceback
 
 # --- Force HV flags appropriate for XNU guest BEFORE importing m1n1.hv
 # hv/__init__.py reads these at start() time; setting them in argv or env
-# here is the cleanest way to override what the Bat_OS chainload defaults
-# would otherwise set. BATOS_KEEP_FB defaults to 0 (XNU owns the FB) but
+# here is the cleanest way to override what the Sphragis chainload defaults
+# would otherwise set. SPHRAGIS_KEEP_FB defaults to 0 (XNU owns the FB) but
 # we let the user override it — some XNU early-boot paths may panic if
 # the FB goes away mid-init.
-os.environ["BATOS_LINKALIAS"] = "0"
-os.environ.setdefault("BATOS_KEEP_FB", "0")
+os.environ["SPHRAGIS_LINKALIAS"] = "0"
+os.environ.setdefault("SPHRAGIS_KEEP_FB", "0")
 
 # --- Path bootstrap identical to tools/run_guest.py so `from m1n1.*`
 # resolves against the vendored proxyclient.

@@ -1,17 +1,17 @@
-# M4 (T8132 "Donan" / Mac16,1) — Bat_OS Ground Truth
+# M4 (T8132 "Donan" / Mac16,1) — Sphragis Ground Truth
 
 **Purpose.** The single source of truth for everything we have reverse-
-engineered about Apple M4 silicon while bringing up Bat_OS. Every fact
-here was either observed on real hardware running Bat_OS via m1n1
+engineered about Apple M4 silicon while bringing up Sphragis. Every fact
+here was either observed on real hardware running Sphragis via m1n1
 chainload, or derived from m1n1's (thin) M4 scaffolding plus Asahi docs
 plus our own ADT reconnaissance.
 
 **Authority.** If something in our source code contradicts this file,
 this file is correct. Update source to match, not the other way around.
 
-**Provenance.** Primary data comes from a Bat_OS boot session captured
-in `/tmp/batos_photos/IMG_7118.jpg` through `IMG_7231.jpg` (source: the
-user's iPhone photos of the M4 screen running Bat_OS). Every register
+**Provenance.** Primary data comes from a Sphragis boot session captured
+in `/tmp/sphragis_photos/IMG_7118.jpg` through `IMG_7231.jpg` (source: the
+user's iPhone photos of the M4 screen running Sphragis). Every register
 address, every hex value, every compatible string below was seen on
 real hardware. The originals are JPEGs; this is the greppable form.
 
@@ -71,7 +71,7 @@ are written. When transcribed to C `#define` form, drop the underscores.
   formula holds in every case. Src: `src/drivers/apple/boot_args.rs::parse`.
 - **WDT is disabled by m1n1 but spontaneous ~60–100 s reset still
   happens.** m1n1 prints `WDT registers @ 0x3882b0000 / WDT disabled`
-  during init, and Bat_OS can `wfe` forever post-chainload without
+  during init, and Sphragis can `wfe` forever post-chainload without
   firing that WDT. But the Mac still resets on its own timer (≈60 s
   baseline, up to ≈96 s with hv_arm_tick + WDT_COUNT kick). Source
   is NOT the ADT-declared watchdog — see below.
@@ -273,7 +273,7 @@ Keyboard + trackpad input flows through the **AOP (Always-On
 Processor) + MTP (MultiTouch Protocol)** coprocessor stack —
 not through any SPI bus exposed to the AP.
 
-Implications for Bat_OS:
+Implications for Sphragis:
 
   - The existing `src/drivers/apple/spi.rs` stub (assumed raw
     SPI-controller MMIO + HID report parsing) cannot drive the
@@ -286,12 +286,12 @@ Implications for Bat_OS:
   - Pragmatic first step (host-side bridge): have the HV Python
     subscribe to MTP keyboard events via the AOP endpoint, and
     forward the resulting bytes through the existing dockchannel
-    vuart. Bat_OS receives them via its normal `serial_getc`
+    vuart. Sphragis receives them via its normal `serial_getc`
     path — no guest-side changes. Full MTP-in-Rust port is
     follow-on work.
 
-Source: `/tmp/adt_kbd.log` from `scripts/hv/batos_hv_interactive.py`
-run with `BATOS_HV_DUMP_KBD_ADT=1`.
+Source: `/tmp/adt_kbd.log` from `scripts/hv/sphragis_hv_interactive.py`
+run with `SPHRAGIS_HV_DUMP_KBD_ADT=1`.
 
 ### 3.5 What's still unknown (look up on next boot)
 
@@ -389,7 +389,7 @@ A common scripting error: dropping a hex digit and writing e.g.
 
 ## 4. ATC PHY register window — atc-phy3 snapshot
 
-Read live from `0x4_1aa5_0000` during Bat_OS boot. Identical values
+Read live from `0x4_1aa5_0000` during Sphragis boot. Identical values
 observed on atc-phy0 and atc-phy1 — these are the factory-default
 initial values.
 
@@ -502,7 +502,7 @@ Write to flip TARGET; poll until ACTUAL matches. `0x0f` = fully on.
 
 ### 6.1 Observed PMGR gate-enable sequence for ATC3 (USB3 prerequisite)
 
-This is the exact dance Bat_OS needs to perform on real M4 before
+This is the exact dance Sphragis needs to perform on real M4 before
 drd3 / atc-phy3 are usable. No comparable code exists in any public
 reference for this chip.
 
@@ -609,9 +609,9 @@ strings.
 
 ---
 
-## 9. What Bat_OS code is validated on real M4
+## 9. What Sphragis code is validated on real M4
 
-From Bat_OS's own boot log during the captured session:
+From Sphragis's own boot log during the captured session:
 
 - ✅ `src/drivers/apple/boot_args.rs::parse` — accepts real m1n1 boot
   args (revision=3, version=2 observed)
@@ -631,7 +631,7 @@ What ran but we haven't confirmed in detail:
 - SPI keyboard init (didn't get to reading input before power loss)
 
 What still needs to happen (Phase 3.4b onward):
-- Port the ATC PHY tunables above into a Bat_OS `atc_phy.rs`
+- Port the ATC PHY tunables above into a Sphragis `atc_phy.rs`
 - Implement the PMGR gate-enable dance as the FIRST thing we do
   before touching drd3
 - Switch UART driver to dockchannel at `0x3_8812_8000` (not the
@@ -662,7 +662,7 @@ What still needs to happen (Phase 3.4b onward):
 
 ---
 
-## 11. Where to update Bat_OS source to USE this
+## 11. Where to update Sphragis source to USE this
 
 When the user is next at the keyboard and we're iterating:
 

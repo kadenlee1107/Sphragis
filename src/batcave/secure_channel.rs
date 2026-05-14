@@ -185,7 +185,7 @@ pub fn selftest() -> Result<SelfTestReport, &'static str> {
     use x25519_dalek::{EphemeralSecret, PublicKey as X25519Public};
     use crate::crypto::pq_hybrid::BatRng;
 
-    let label = b"batos-secure-ipc-selftest";
+    let label = b"sphragis-secure-ipc-selftest";
     let alice_id = IpcIdentity::generate();
     let bob_id   = IpcIdentity::generate();
     let mut r = BatRng;

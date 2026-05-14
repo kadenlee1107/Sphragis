@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Bat_OS — chainload a payload via m1n1 proxy + tee serial to log.
+# Sphragis — chainload a payload via m1n1 proxy + tee serial to log.
 #
 # Usage:
 #   ./scripts/chainload.sh [path/to/payload.bin]
 #
-# If no path given, defaults to target/bat_os_apple.bin.
+# If no path given, defaults to target/sphragis_apple.bin.
 # Requires: m1n1 stage 1 running on the M4 (Mac booted into m1n1,
 # reached "Running proxy..."), and a USB-C cable from the Mac to
 # this host.
@@ -15,7 +15,7 @@ log() { echo -e "\033[1;34m[chainload]\033[0m $*"; }
 err() { echo -e "\033[1;31m[chainload] ERROR:\033[0m $*" >&2; exit 1; }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PAYLOAD="${1:-$ROOT/target/bat_os_apple.bin}"
+PAYLOAD="${1:-$ROOT/target/sphragis_apple.bin}"
 M1N1_PY="$ROOT/external/m1n1/proxyclient/tools/chainload.py"
 LOG_DIR="$ROOT/logs"
 LOG="$LOG_DIR/chainload-$(date +%Y%m%d-%H%M%S).log"

@@ -1,4 +1,4 @@
-// Bat_OS — MMU Page Table Setup for BatCave Linux Binaries
+// Sphragis — MMU Page Table Setup for BatCave Linux Binaries
 // Creates a virtual address mapping so PIE binaries see their expected addresses.
 //
 // ARM64 4KB granule, 4-level page tables:
@@ -538,7 +538,7 @@ pub fn setup_cave_pagetable_at(
 /// `[0x40000000, 0x140000000)`. The kernel itself runs through TTBR0
 /// (no TTBR1 split), so when a cave is active the kernel's `.text`,
 /// `.data`, heap, and any user-pool frame the kernel touches must
-/// translate cleanly. Bat_OS uses `frame::alloc_frame` for kernel
+/// translate cleanly. Sphragis uses `frame::alloc_frame` for kernel
 /// allocations all over (heap-backing, virtio DMA buffers, etc.) and
 /// those frames can land anywhere up to 0x140000000 per `MEMORY_END`.
 /// L1[1..=4] covers exactly that range. Drop ANY of those four L2
@@ -671,7 +671,7 @@ pub fn setup_native_cave_l1(cave_slot: usize) -> Result<usize, &'static str> {
 ///     statement, observe the flag, return `None`.
 ///
 /// Single-threaded contract: callers must not nest `probe_read_u64`
-/// calls. Bat_OS today is cooperative single-CPU, so this is
+/// calls. Sphragis today is cooperative single-CPU, so this is
 /// sufficient; a future SMP arc replaces the globals with per-CPU
 /// state.
 ///

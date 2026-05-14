@@ -25,7 +25,7 @@ TTY> HV: ECV enabled
 TTY> [hv_init] M12 CNTHCTL set
 TTY> [hv_init] M13 cyc_ovrd
 TTY> [hv_init] M14 done
-[host] loading /home/kaden-lee/code/Bat_OS/target/bat_os_apple.bin
+[host] loading /home/kaden-lee/code/Sphragis/target/sphragis_apple.bin
 Mapping MMIO range: 0x200000000 .. 0x5a0000000
 Mapping MMIO range: 0x400000000 .. 0x404074000
 Mapping MMIO range: 0x408000000 .. 0x40c074000
@@ -78,7 +78,7 @@ Guest region start: 0x10019ce8000
 Mapping guest physical memory...
 Unmapping TZ carveouts...
 Loading kernel image (0xf942d8 bytes)...
-...................................................................................................................................................................................................................................................................................................................................................[host] calling hv.start() — Bat_OS takes over now. Ctrl+] to detach.
+...................................................................................................................................................................................................................................................................................................................................................[host] calling hv.start() — Sphragis takes over now. Ctrl+] to detach.
 
 Copying SEPFW (0x5d0000 bytes)...
 Copying TrustCache (0x60000 bytes)...
@@ -140,7 +140,7 @@ PT[1c50000000:1c90000000] -> HW:HW
 PT[1cb0000000:1cc0000000] -> HW:HW
 PT[10000000000:10002798000] -> HW:RAM-LOW
 PT[10018c04000:10400000000] -> HW:RAM-HIGH
-Aliasing Bat_OS link base 0x810000000 -> 0x10019ce8000 (32 MiB)
+Aliasing Sphragis link base 0x810000000 -> 0x10019ce8000 (32 MiB)
   probe 0x810202eab -> 0x10019eeaeab (expect 0x10019eeaeab)
 Uploading ADT (0x77c78 bytes)...
 Improving logo...
@@ -159,7 +159,7 @@ TTY> [hv_start] S8 entering guest @ 0x10019ce8000 x0=1001b290000
 TTY> HV alive t=0s traps=1
 
 ================================================
-  BAT_OS — BARE METAL APPLE SILICON
+  SPHRAGIS — BARE METAL APPLE SILICON
   Running on REAL M4 hardware.
 ================================================
 
@@ -173,7 +173,7 @@ TTY> HV alive t=0s traps=1
 [initrd] no blob
   [mm] Frame allocator initialized — 15731360 KB free, heap @ 0x000001001b020000
 [boot] (HV guest) skipping AIC + hw bring-up
-  [auth] using BAT_OS_PASSPHRASE (build-time)
+  [auth] using SPHRAGIS_PASSPHRASE (build-time)
 [boot] BatFS initialized (key=KDF(passphrase))
 [boot] Initializing display...
 [boot] Display ready -- drawing splash

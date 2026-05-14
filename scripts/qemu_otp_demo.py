@@ -15,12 +15,12 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT   = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG    = ROOT / f"logs/qemu-tests/otp-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 
 def dedup(s):
@@ -55,7 +55,7 @@ def main():
     print("[qemu] shell ready\n")
 
     def run(cmd, wait=10):
-        print(f"bat_os > {cmd}")
+        print(f"sphragis > {cmd}")
         child.sendline(cmd.encode())
         try:
             child.expect(PROMPT, timeout=wait)
@@ -67,7 +67,7 @@ def main():
         for line in out.splitlines():
             s = dedup(line.rstrip())
             if not s or not s.strip(): continue
-            if s.strip().startswith(("[docker]", "[tcp]", "bat_os >", cmd)):
+            if s.strip().startswith(("[docker]", "[tcp]", "sphragis >", cmd)):
                 continue
             cleaned.append(s)
         for l in cleaned[-25:]:

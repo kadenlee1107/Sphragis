@@ -1,4 +1,4 @@
-// Bat_OS — Production ELF Loader
+// Sphragis — Production ELF Loader
 // Handles real-world static ARM64 Linux binaries (like busybox).
 //
 // File-level `allow(dead_code)`: this module carries two parallel
@@ -1063,14 +1063,14 @@ pub fn load_archive_multi(
     // 0x00..0x20: code (8 instructions)
     // 0x20..0x28: main_entry VA
     // 0x28..: init function VAs, terminated by 0
-    // BAT_OS_DISABLE_INIT_TRAMPOLINE=1 at build time disables the
+    // SPHRAGIS_DISABLE_INIT_TRAMPOLINE=1 at build time disables the
     // init_array trampoline. Useful while we iterate on TLS / rtld
     // setup — without the trampoline content_shell gets to V8 heap
     // setup before wedging; with it we crash earlier in libc init
     // because its constructors dereference uninitialized _rtld_global
     // state.
     const DISABLE_TRAMPOLINE: bool =
-        option_env!("BAT_OS_DISABLE_INIT_TRAMPOLINE").is_some();
+        option_env!("SPHRAGIS_DISABLE_INIT_TRAMPOLINE").is_some();
     if !DISABLE_TRAMPOLINE {
         let tramp_entry_va = build_init_trampoline(
             tramp_phys,

@@ -49,7 +49,7 @@ should be revisited before its first public disclosure.
 1. **M4 hardware ground truth** (`docs/M4_GROUND_TRUTH.md`).
    Every hex address, PMGR sequence, ATC PHY tunable that took
    real RE effort to discover. *NOT publicly disclosed in detail.*
-   Public framing: "Bat_OS boots on Apple M4 (Mac16,1)" + boot
+   Public framing: "Sphragis boots on Apple M4 (Mac16,1)" + boot
    photos. Mechanism: under NDA only.
 2. **Specific TPI implementation invariants.** Grant-ring TTL
    value, canonical-bytes layout, one-shot-consume semantics,

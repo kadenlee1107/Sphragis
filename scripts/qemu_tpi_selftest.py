@@ -10,7 +10,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/tpi-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -35,18 +35,18 @@ def main() -> int:
     c = pexpect.spawn(QEMU_ARGS[0], QEMU_ARGS[1:], timeout=120, logfile=fp, encoding=None)
     try:
         c.expect(rb"Enter passphrase", timeout=60); c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90); time.sleep(0.5)
+        c.expect(rb"sphragis > ", timeout=90); time.sleep(0.5)
         c.sendline("tpi-selftest")
         idx = c.expect([
             rb"\xe2\x9c\x93 TPI: M-of-2 quorum \+ role separation \+ replay-resistant \+ TTL verified",
             rb"\xe2\x9c\x97 FAIL: \S+",
         ], timeout=60)
         if idx == 1:
-            try: c.expect(rb"bat_os > ", timeout=5)
+            try: c.expect(rb"sphragis > ", timeout=5)
             except Exception: pass
             print("[tpi] FAIL — selftest reported a failure", file=sys.stderr)
             print(f"[tpi] log: {LOG}", file=sys.stderr); return 1
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[tpi] PASS — M-of-2 quorum + role separation + replay + TTL verified")
         print(f"[tpi] log: {LOG}"); return 0
     except pexpect.TIMEOUT:

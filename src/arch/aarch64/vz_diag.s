@@ -1,4 +1,4 @@
-// Bat_OS — VZ Diagnostic Kernel
+// Sphragis — VZ Diagnostic Kernel
 // Minimal kernel that tries every possible output method.
 // Used to discover the correct device addresses in a VZ VM.
 //
@@ -43,7 +43,7 @@ _diag_start:
     // The VM host can read this to confirm we're running
     adr     x1, _start
     add     x1, x1, #0x4000    // Status area at start+16KB
-    ldr     x2, =0x4241545F4F53    // "BAT_OS" in ASCII
+    ldr     x2, =0x4241545F4F53    // "SPHRAGIS" in ASCII
     str     x2, [x1]
     mov     x2, #1              // Stage = 1 (boot started)
     str     x2, [x1, #8]

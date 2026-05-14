@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient")
+sys.path.insert(0, "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient")
 from m1n1.setup import *
 # First confirm proxy alive with a safe read
 v1 = p.read64(0x211e00000 + 0x20020)

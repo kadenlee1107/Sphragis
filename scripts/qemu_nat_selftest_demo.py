@@ -15,12 +15,12 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = ROOT / f"logs/qemu-tests/nat-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 QEMU = [
     "qemu-system-aarch64",
@@ -66,7 +66,7 @@ def main():
         if "NAT SELF-TEST" in raw:
             chunk = raw[raw.index("NAT SELF-TEST"):]
             # Find the next prompt, then trim to there
-            end = chunk.find("bat_os >", 40)
+            end = chunk.find("sphragis >", 40)
             print("--- nat-selftest output ---")
             print(chunk[: end if end > 0 else 1000])
     except pexpect.TIMEOUT:

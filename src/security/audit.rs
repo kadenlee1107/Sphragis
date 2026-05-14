@@ -1,4 +1,4 @@
-// Bat_OS — audit log (, Sprint 2.3).
+// Sphragis — audit log (, Sprint 2.3).
 //
 // Append-only ring buffer for security-relevant events. Built so the
 // renderer's hot paths (every fetch, every click, every script run)

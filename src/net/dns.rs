@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 #![allow(unused_assignments)]
-// Bat_OS — DNS Resolver
+// Sphragis — DNS Resolver
 // Supports both plaintext DNS (fallback) and DNS-over-HTTPS (secure).
 // DoH sends DNS wire-format queries as HTTP POST to a DoH server over TCP.
 // Secure pipeline: all DNS queries go through DoH when available.
@@ -215,7 +215,7 @@ pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
     // hostname; skip DNS entirely. Before this, the resolver encoded
     // the four numeric labels as a DNS query ("10" "0" "2" "2") and
     // then timed out waiting for an NXDOMAIN response. That broke the
-    // 10.0.2.2 slirp-gateway address from Bat_OS under QEMU.
+    // 10.0.2.2 slirp-gateway address from Sphragis under QEMU.
     if let Some(ip) = parse_ipv4_literal(hostname) {
         return Ok(ip);
     }

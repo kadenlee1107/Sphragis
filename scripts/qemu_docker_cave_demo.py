@@ -2,13 +2,13 @@
 """
 Design-aligned BatCave-over-Docker demo (Phases 1+2).
 
-Bat_OS (inside QEMU) issues `batcave docker-*` commands. Those travel
+Sphragis (inside QEMU) issues `batcave docker-*` commands. Those travel
 as a TCP connection to 10.0.2.2:9999 (QEMU slirp host alias), where
 the Mac-side `batcaved` daemon is listening. The daemon translates to
 Docker operations and streams output back.
 
-This proves the control-plane loop: Bat_OS's shell → microkernel TCP
-stack → daemon → Docker → container stdout → daemon → Bat_OS → user.
+This proves the control-plane loop: Sphragis's shell → microkernel TCP
+stack → daemon → Docker → container stdout → daemon → Sphragis → user.
 
 Phases 3 (encrypted rootfs), 4 (net pipeline), 5 (deadman), 7 (seal)
 are scaffolded but not yet implemented.
@@ -22,13 +22,13 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG_DIR = ROOT / "logs/qemu-tests"; LOG_DIR.mkdir(parents=True, exist_ok=True)
 STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 RUN_LOG = LOG_DIR / f"docker-cave-{STAMP}.log"
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 
 def dedup_echo_line(s):
@@ -75,9 +75,9 @@ def main():
         print(f"[mac]  daemon not reachable: {e}")
         return 1
 
-    # ── Boot Bat_OS ─────────────────────────────────────────
+    # ── Boot Sphragis ─────────────────────────────────────────
     print()
-    print("[qemu] booting Bat_OS...")
+    print("[qemu] booting Sphragis...")
     log_fp = open(RUN_LOG, "wb")
     qemu = [
         "qemu-system-aarch64",
@@ -100,7 +100,7 @@ def main():
 
     def run_cmd(cmd, wait=60):
         print()
-        print(f"bat_os > {cmd}")
+        print(f"sphragis > {cmd}")
         child.sendline(cmd.encode())
         try:
             child.expect(PROMPT, timeout=wait)
@@ -115,7 +115,7 @@ def main():
             "[fs]", "[firewall]", "[net]", "[boot]", "[chromium",
             "[bs]", "[auth]", "[ipc]", "[arch]", "[rng]", "[sched]",
             "[mm]", "[security]", "[initrd]", "[dtb]", "[mmap]",
-            "[docker]", "bat_os >", "Microkernel", "Ctrl+", cmd,
+            "[docker]", "sphragis >", "Microkernel", "Ctrl+", cmd,
         )
         for line in out.splitlines():
             s = dedup_echo_line(line.rstrip())
@@ -128,20 +128,20 @@ def main():
     # ── Scenario ────────────────────────────────────────────
     print()
     print("=" * 76)
-    print(" SCENARIO: Bat_OS shell commands drive real Docker caves")
+    print(" SCENARIO: Sphragis shell commands drive real Docker caves")
     print("=" * 76)
 
-    # 1. Quick daemon connectivity check from inside Bat_OS
+    # 1. Quick daemon connectivity check from inside Sphragis
     run_cmd("batcave docker-ping", wait=15)
 
-    # 2. Create a Kali cave from Bat_OS shell
+    # 2. Create a Kali cave from Sphragis shell
     run_cmd("batcave docker-create kali kalilinux/kali-rolling NET_RAW,NET_ADMIN",
             wait=30)
 
     # 3. List — should show kali cave
     run_cmd("batcave docker-list", wait=15)
 
-    # 4. Run uname inside the cave via Bat_OS
+    # 4. Run uname inside the cave via Sphragis
     run_cmd("batcave docker-run kali uname -a", wait=15)
 
     # 5. Run cat /etc/os-release — prove it IS Kali
@@ -158,10 +158,10 @@ def main():
     ], timeout=120)
 
     # 7. Now scan the Mac HTTP server via nmap from inside the Kali cave,
-    #    driven from Bat_OS:
+    #    driven from Sphragis:
     run_cmd("batcave docker-run kali nmap -sV -Pn -p80 10.0.2.2", wait=60)
 
-    # 8. Destroy the cave from Bat_OS
+    # 8. Destroy the cave from Sphragis
     run_cmd("batcave docker-destroy kali", wait=15)
 
     # 9. List after destroy — should be empty
@@ -174,7 +174,7 @@ def main():
     daemon.terminate()
     daemon.wait(timeout=5)
     print("=" * 76)
-    print(" DONE — Bat_OS shell drove end-to-end Docker BatCave lifecycle")
+    print(" DONE — Sphragis shell drove end-to-end Docker BatCave lifecycle")
     print("=" * 76)
     print(f" QEMU log:    {RUN_LOG}")
     print(f" Daemon log:  {daemon_log}")

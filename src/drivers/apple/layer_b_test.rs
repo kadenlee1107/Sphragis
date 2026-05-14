@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Layer-B synthetic-args test harness
+// Sphragis — Layer-B synthetic-args test harness
 //
 // Purpose: exercise the Apple boot-path parser code (boot_args::parse,
 // adt::Adt, soc::discover_from_adt) on real M4 silicon via QEMU+HVF,
@@ -196,7 +196,7 @@ unsafe fn build_synthetic_args(adt_bytes: usize) {
 /// Called from `kernel_main` when the `layer-b-test` feature is enabled.
 /// Prints results via QEMU UART then halts.
 pub fn run() -> ! {
-    uart::puts("\n=== Bat_OS Layer-B Synthetic Apple-Path Test ===\n");
+    uart::puts("\n=== Sphragis Layer-B Synthetic Apple-Path Test ===\n");
     uart::puts("[layer-b] building synthetic ADT...\n");
 
     let adt_bytes = unsafe { build_synthetic_adt() };

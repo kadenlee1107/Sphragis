@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Headless smoke for the sys-caves Arc-2 round-trip selftest.
 
-Boots Bat_OS in QEMU virt, clears the empty-passphrase auth gate,
+Boots Sphragis in QEMU virt, clears the empty-passphrase auth gate,
 runs `sys-caves-selftest` at the shell, and asserts both legs of
 the cross-cave MMU swap pass:
 
@@ -21,7 +21,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/sys-caves-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -52,7 +52,7 @@ def main() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         c.sendline("sys-caves-selftest")
@@ -68,7 +68,7 @@ def main() -> int:
             return 1
 
         # Drain back to prompt so we know the test fully ran.
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[sys-caves] PASS — Arc-2 cross-cave MMU round trip verified")
         print(f"[sys-caves] log: {LOG}")
         return 0

@@ -1,4 +1,4 @@
-# Bat_OS Desktop Chrome + Shell — design source
+# Sphragis Desktop Chrome + Shell — design source
 
 These JSX files are the design source-of-truth for the post-auth
 desktop chrome (title bar, content slot, status bar) and the SH
@@ -29,7 +29,7 @@ Ported to Rust in:
   status bar. `draw_status_bar()` reads live state from the TLS,
   JS, audit, and net subsystems — none of the segments are decoration
   except ENCRYPTED (which is always green post-boot by design).
-- `src/ui/console.rs` — prompt typography updated: "bat_os" in INK,
+- `src/ui/console.rs` — prompt typography updated: "sphragis" in INK,
   " > " in CYAN.
 - `src/ui/desktop.rs` — `shell_banner()` replaced with a
   bat-glyph + structured wordmark/hints layout per the spec.

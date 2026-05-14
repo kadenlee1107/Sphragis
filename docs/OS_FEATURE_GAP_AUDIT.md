@@ -1,6 +1,6 @@
-# Bat_OS Feature Gap Audit
+# Sphragis Feature Gap Audit
 
-> **Mandate.** Compare Bat_OS as it stands on 2026-05-10 against two bars: a
+> **Mandate.** Compare Sphragis as it stands on 2026-05-10 against two bars: a
 > "regular general-purpose OS" baseline (Linux / macOS / Windows-class), and a
 > "government-grade high-assurance OS" baseline (SELinux MLS + seL4 + classified
 > handling-class). Every item is either ✅ have, ⚠️ partial, or ❌ missing,
@@ -14,7 +14,7 @@
 
 ## Part 0 — Methodology
 
-**Sources of truth for what Bat_OS has:**
+**Sources of truth for what Sphragis has:**
 
 - `git ls-files src/`, walked module-by-module (see Part 1 inventory).
 - `docs/SESSION_JOURNAL.md` (chronological development log).
@@ -67,7 +67,7 @@
 
 ---
 
-## Part 1 — Bat_OS Today: Subsystem Inventory
+## Part 1 — Sphragis Today: Subsystem Inventory
 
 Walked the repo source-of-truth as of `feat/ai-agent-design` HEAD. Each
 subsystem heading is mirrored in [src/](../src/).
@@ -275,7 +275,7 @@ subsystem heading is mirrored in [src/](../src/).
 ## Part 2 — Standard "Regular OS" Bar
 
 Each subsection lists what a baseline general-purpose OS (Linux,
-macOS, Windows, FreeBSD) has, what Bat_OS has against it, and what
+macOS, Windows, FreeBSD) has, what Sphragis has against it, and what
 the gap is.
 
 ### 2.1 Boot
@@ -537,7 +537,7 @@ calculator, system preferences, screenshot tool, clipboard manager.
 ✅ Have: shell. Browser was rejected (Post-no-browser Pivot, by design).
 BatKits framework exists but kit catalog is empty/minimal.
 ❌ Missing: most of the above. Strategic position is that
-end-user browsing lives on the operator's host machine, not in Bat_OS.
+end-user browsing lives on the operator's host machine, not in Sphragis.
 
 ### 2.22 Build / dev tooling
 
@@ -621,7 +621,7 @@ syscall filter). Default-deny posture. **Two-axis MLS lattice (2026-05-12)**:
   non-Unclassified (DOI = "BBOS" = 0x42424F53);
   `ip::parse_cipso_sensitivity` extracts the level for
   receiver-side checks. Still missing: receiver-side enforcement
-  (today the byte is on the wire, but a receiving Bat_OS
+  (today the byte is on the wire, but a receiving Sphragis
   doesn't gate delivery on it), CALIPSO (IPv6 equivalent),
   SECMARK rule integration.
 - Type enforcement: **transition allow-list shipped (2026-05-13)**.
@@ -1129,7 +1129,7 @@ untouched so the audit-as-of-snapshot stays diff-able.
 | 031 | PID namespace | Shipped: `cave_id` on `Task`, `process::list_for_cave`, `procs` shell cmd with `procs all` admin view. | commit `492294de` |
 | 032 | Mount namespace | Shipped: `batfs::ns_create` / `ns_read` / `ns_delete` / `ns_list` / `ns_stats` wrappers auto-apply the active cave's mount prefix; routed through the shell (`ls`/`write`/`cat`/`rm`/`verify`/`hash`), tab completion, editor, comms, and file-manager. Kernel-administered files (audit.log, pkg bundles) stay on the un-prefixed `batfs::*` paths. `with_cave_active` now also updates `ACTIVE_CAVE_ID` so cap/quota/prefix queries see the correct identity inside the trampoline. `mount-ns-selftest` proves cross-cave file isolation end-to-end. | commits `492294de` + 2026-05-12 mount-ns auto-application |
 | 033 | Package manager | Shipped: BPKG signed-bundle format + `scripts/pkg_pack.py` + `scripts/pkg_serve.py` + `src/kernel/pkg.rs` + `pkg stage/install/list/remove`. End-to-end verified on QEMU: install + tamper-rejection both work. | commits `95f2e161` + `af5235a9` |
-| 034 | Signed releases | Shipped: `release_sign.py` keygen/sign + `BAT_OS_RELEASE_PUBKEY` baked at build time + `release-verify` shell command. No fallback test key. | commit `492294de` |
+| 034 | Signed releases | Shipped: `release_sign.py` keygen/sign + `SPHRAGIS_RELEASE_PUBKEY` baked at build time + `release-verify` shell command. No fallback test key. | commit `492294de` |
 | 035 | dmesg ring | Was already present in `src/kernel/kmsg.rs`. Boot breadcrumb emitters wired into every major init step so `dmesg` shows useful history. | commit `8f6faaec` |
 | 036 | /proc-equivalent | **Partial.** Shell commands `caps [tid]`, `fds [tid]`, `task <tid>` replace 90% of /proc use-cases. A real pseudo-file filesystem is deferred — wants BatFS pseudo-file infrastructure that other features (`/sys`-equivalent) would also use. | commit `6715c827` |
 | 037 | libc / libc-compat shim | **Non-goal.** Documented in `DESIGN.md` decision log #14. Security model favors purpose-built no-libc Rust workloads; shim would import the C-ecosystem attack surface. | commit `18890477` |
@@ -1174,7 +1174,7 @@ deferral rationale:
     stub. Needs SMC keypath access from EL1.
   * **PQ-comms wire deployment** — `pq-comms-selftest` exercises
     the full handshake in-process. Real over-the-wire deployment
-    waits on a PQ-capable peer (a second Bat_OS instance is the
+    waits on a PQ-capable peer (a second Sphragis instance is the
     natural candidate).
   * **Package manager v2** — current cut is single-namespace
     install, no dependencies, no update path, ≤1 MiB bundles.
@@ -1189,7 +1189,7 @@ After this refresh, the still-open P1 list narrows to:
   * 040 Unicode / locale / IME
   * 041 Accessibility services
   * 042 HTTP/2 + HTTP/3
-  * 043 WireGuard — **closed.** In-process WG stack complete (handshake both roles, wire framing, replay window, IPC mailbox, endpoint config). `qemu_wg_real_peer_e2e.py` proves outbound Init traverses virtio-net to a real host UDP listener. `qemu_wg_full_handshake_e2e.py` closes the loop with a Python Noise IK responder (`scripts/wg_responder.py`): Bat_OS sends Init, Python decrypts (proving the crypto produces valid Noise IK ciphertext) + builds a Response, Bat_OS processes the Response and marks `session.their_sender_index != 0` (Established). Transport round trip with real peer + replay-window-on-the-wire are the remaining stretches.
+  * 043 WireGuard — **closed.** In-process WG stack complete (handshake both roles, wire framing, replay window, IPC mailbox, endpoint config). `qemu_wg_real_peer_e2e.py` proves outbound Init traverses virtio-net to a real host UDP listener. `qemu_wg_full_handshake_e2e.py` closes the loop with a Python Noise IK responder (`scripts/wg_responder.py`): Sphragis sends Init, Python decrypts (proving the crypto produces valid Noise IK ciphertext) + builds a Response, Sphragis processes the Response and marks `session.their_sender_index != 0` (Established). Transport round trip with real peer + replay-window-on-the-wire are the remaining stretches.
   * 044 VLAN (802.1Q)
   * 045 conntrack-class stateful firewall — **load-bearing.** `src/net/conntrack.rs` adds a 64-slot flow table keyed on (proto, remote_ip, remote_port, local_port); `tcp::connect_start` registers and `tcp::connect_blocking_pcb` marks established on SYN-ACK; `tcp::close_pcb` releases. The wildcard inbound TCP allow rule has been REMOVED from `firewall::init`; `firewall::allow_inbound_tcp` now permits a segment only if (a) `conntrack::lookup_inbound` finds a matching outbound flow, (b) `tcp::listener_lookup_by_port` reports a registered listener, or (c) an explicit per-port rule matches. Unsolicited SYNs to random ephemeral ports are now dropped. `conntrack-selftest` proves the table; `fw-hardening-selftest` proves the policy.
   * 051 constant-time bignum (RustCrypto crates provide this; verify their security claims rather than rebuilding)

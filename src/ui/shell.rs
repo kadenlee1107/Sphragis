@@ -1,4 +1,4 @@
-// Bat_OS — Interactive Kernel Shell
+// Sphragis — Interactive Kernel Shell
 // Command-line interface rendered to the GPU console.
 // Reads from UART, displays on framebuffer.
 
@@ -676,7 +676,7 @@ fn cmd_screen(arg: &str) {
 }
 
 fn cmd_help() {
-    console::puts_hi("  BAT_OS COMMANDS\n");
+    console::puts_hi("  SPHRAGIS COMMANDS\n");
     console::puts("  ---------------\n");
     console::puts("  help          Show this message\n");
     console::puts("  status        Security status\n");
@@ -743,7 +743,7 @@ fn cmd_whoami() {
 }
 
 fn cmd_uname() {
-    console::puts("  Bat_OS v0.3.0 aarch64 (QEMU virt)\n");
+    console::puts("  Sphragis v0.3.0 aarch64 (QEMU virt)\n");
     console::puts("  Kernel: microkernel (Rust + ARM64 asm)\n");
     console::puts("  Arch:   seL4-inspired capabilities\n");
 }
@@ -855,7 +855,7 @@ fn hex_nibble(b: u8) -> u8 {
     }
 }
 
-// Integration #4: Bat_OS pushes firewall rules to the daemon's egress proxy.
+// Integration #4: Sphragis pushes firewall rules to the daemon's egress proxy.
 fn cmd_batcave_fw_allow(target: &str) {
     if target.is_empty() {
         console::puts("  usage: batcave-fw-allow <host:port>  (or *:port / *)\n");
@@ -2944,7 +2944,7 @@ fn cmd_conntrack_selftest() {
 ///      the old wildcard was letting through.
 ///   2. Inbound segment whose 4-tuple matches a registered
 ///      conntrack flow — must be ALLOWED (it's reply traffic for
-///      a Bat_OS-initiated connection).
+///      a Sphragis-initiated connection).
 ///   3. Inbound SYN to a port with a registered listener — must
 ///      be ALLOWED (server-side handshake path).
 ///
@@ -2975,7 +2975,7 @@ fn cmd_fw_hardening_selftest() {
     }
     console::puts("  ✓ unsolicited SYN to unused ephemeral port -> DROPPED\n");
 
-    // (2) Reply traffic for a Bat_OS-initiated connection: register
+    // (2) Reply traffic for a Sphragis-initiated connection: register
     //     the outbound flow in conntrack and confirm the inbound
     //     side of the same 4-tuple now passes.
     if conntrack::register_outbound(
@@ -3557,11 +3557,11 @@ fn cmd_pkg_remove(name: &str) {
 }
 
 /// Build-time pinned release-engineer Ed25519 pubkey. Set via
-/// `BAT_OS_RELEASE_PUBKEY=<hex>` at build time (see build.rs +
+/// `SPHRAGIS_RELEASE_PUBKEY=<hex>` at build time (see build.rs +
 /// scripts/release_sign.py). When None, the verifier refuses to
 /// run — there's no fallback "default test key" that an attacker
 /// could exploit.
-const RELEASE_PUBKEY_HEX: Option<&str> = option_env!("BAT_OS_RELEASE_PUBKEY");
+const RELEASE_PUBKEY_HEX: Option<&str> = option_env!("SPHRAGIS_RELEASE_PUBKEY");
 
 fn cmd_release_pubkey() {
     match RELEASE_PUBKEY_HEX {
@@ -3576,7 +3576,7 @@ fn cmd_release_pubkey() {
             console::puts("  no release pubkey baked in this build.\n");
             console::puts("  to enable signed-release verification:\n");
             console::puts("    python3 scripts/release_sign.py keygen\n");
-            console::puts("    export BAT_OS_RELEASE_PUBKEY=<hex>\n");
+            console::puts("    export SPHRAGIS_RELEASE_PUBKEY=<hex>\n");
             console::puts("    cargo build --release ...\n");
         }
     }
@@ -3958,7 +3958,7 @@ fn cmd_sys_wg_service_selftest() {
     // the local copies through &mut without touching the originals.
     let mut init_keys = *i_keys;
     let mut resp_keys = *r_keys;
-    let msg = b"bat_os Arc-3 sys-wg round trip";
+    let msg = b"sphragis Arc-3 sys-wg round trip";
     let ct = match sys_wg_service::wrap_with_keys(&mut init_keys, msg) {
         Ok(ct) => ct,
         Err(_) => {
@@ -4670,7 +4670,7 @@ fn cmd_shm_selftest() {
             Some(b) => b,
             None => { console::puts("  ✗ FAIL: region_bytes_mut\n"); return; }
         };
-        let payload = b"bat_os_shm_marker_v1";
+        let payload = b"sphragis_shm_marker_v1";
         bytes[..payload.len()].copy_from_slice(payload);
     }
 
@@ -4695,7 +4695,7 @@ fn cmd_shm_selftest() {
             Some(b) => b,
             None => { console::puts("  ✗ FAIL: read-back region_bytes_mut\n"); return; }
         };
-        let expected = b"bat_os_shm_marker_v1";
+        let expected = b"sphragis_shm_marker_v1";
         if &bytes[..expected.len()] != expected {
             console::puts("  ✗ FAIL: marker mismatch through second fd\n");
             return;
@@ -6140,8 +6140,8 @@ fn cmd_clip(sub: &str) {
             console::puts("  usage: clip                (show)\n");
             console::puts("         clip set <text>\n");
             console::puts("         clip yank-back [N]  (copy last N scrollback rows)\n");
-            console::puts("         clip push           (Bat_OS clip -> macOS clip)\n");
-            console::puts("         clip pull           (macOS clip -> Bat_OS clip)\n");
+            console::puts("         clip push           (Sphragis clip -> macOS clip)\n");
+            console::puts("         clip pull           (macOS clip -> Sphragis clip)\n");
             console::puts("         clip clear\n");
             console::puts("  shortcuts: Ctrl+V paste at cursor\n");
             console::puts("             Ctrl+Y yank current input line\n");
@@ -6160,14 +6160,14 @@ fn cmd_clip(sub: &str) {
 const CLIP_BRIDGE_IP: u32   = 0x0A000202; // 10.0.2.2 big-endian
 const CLIP_BRIDGE_PORT: u16 = 9101;
 
-/// Push Bat_OS clipboard contents to the host (macOS) clipboard
+/// Push Sphragis clipboard contents to the host (macOS) clipboard
 /// via the TCP bridge. Run scripts/host_clipboard_bridge.py on the
 /// host first.
 fn cmd_clip_push() {
     use crate::ui::clipboard;
     let n = clipboard::len();
     if n == 0 {
-        console::puts("  Bat_OS clipboard is empty; nothing to push\n");
+        console::puts("  Sphragis clipboard is empty; nothing to push\n");
         return;
     }
     let mut payload = [0u8; clipboard::CLIPBOARD_CAP];
@@ -6221,7 +6221,7 @@ fn cmd_clip_push() {
     }
 }
 
-/// Pull the host (macOS) clipboard into Bat_OS's clipboard.
+/// Pull the host (macOS) clipboard into Sphragis's clipboard.
 fn cmd_clip_pull() {
     if let Err(e) = net::tcp::connect(CLIP_BRIDGE_IP, CLIP_BRIDGE_PORT) {
         console::puts("  bridge connect failed: ");
@@ -7111,7 +7111,7 @@ fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) 
                     console::puts(cave::type_str(c.cave_type));
                     console::puts("]");
                     // Phase 6: show backing so the user can see at a glance
-                    // which caves live inside Bat_OS (native, MMU-isolated)
+                    // which caves live inside Sphragis (native, MMU-isolated)
                     // vs which live as Docker containers on the Mac.
                     if c.is_docker() {
                         console::puts(" [docker:");
@@ -7757,14 +7757,14 @@ fn cmd_tcp_selftest() {
 /// Registers a kernel listener on the given port, blocks waiting for
 /// one inbound connection (~30s deadline), prints the peer's address
 /// when the third ACK lands, drains up to 256 bytes of received data
-/// to the console, sends back a "hello from bat_os\n" greeting, and
+/// to the console, sends back a "hello from sphragis\n" greeting, and
 /// closes. One-shot (handles a single connection then returns to the
 /// shell prompt).
 // /
 /// Driving from the QEMU host:
 // /
-/// # On Bat_OS:
-/// bat_os > tcp-listen 8080
+/// # On Sphragis:
+/// sphragis > tcp-listen 8080
 /// listening on port 8080... (one-shot, ~30s deadline)
 // /
 /// # On the Mac host:
@@ -7772,7 +7772,7 @@ fn cmd_tcp_selftest() {
 /// Connection to 10.0.2.15 8080 port [tcp/*] succeeded!
 /// hello world<Enter>
 // /
-/// # Back on Bat_OS:
+/// # Back on Sphragis:
 /// connection from 10.0.2.2:54321
 /// recv (12 bytes): hello world
 /// sent greeting; closing
@@ -7912,7 +7912,7 @@ fn cmd_tcp_listen(port_str: &str) {
     }
 
     // Send a greeting so the peer sees both directions work.
-    let greeting = b"hello from bat_os\n";
+    let greeting = b"hello from sphragis\n";
     let _ = tcp::send_data_pcb(pcb_id, greeting);
     // Drive a few more polls so the SYN+payload+ACK gets out.
     for _ in 0..5_000_000u64 {
@@ -9437,7 +9437,7 @@ fn cmd_secmark_recv_selftest() {
         // tag-type 1 | tag-len 4 | flags 0 | sens | NOP NOP
         buf[20] = 0x86;
         buf[21] = 0x0a;
-        buf[22..26].copy_from_slice(&ip::CIPSO_DOI_BATOS.to_be_bytes());
+        buf[22..26].copy_from_slice(&ip::CIPSO_DOI_SPHRAGIS.to_be_bytes());
         buf[26] = 0x01;
         buf[27] = 0x04;
         buf[28] = 0x00;
@@ -10430,7 +10430,7 @@ fn cmd_exec_trans_list() {
 /// transition rule is registered for that filename the active
 /// cave swaps to the policy-derived target for the duration of
 /// the run. Today the "run" step just records the bytes were
-/// found and reports which domain hosted execution — Bat_OS
+/// found and reports which domain hosted execution — Sphragis
 /// doesn't have POSIX-style execve, but the load-bearing security
 /// primitive (the policy-gated transition) is exercised end-to-end.
 fn cmd_exec_file(filename: &str) {
@@ -10930,7 +10930,7 @@ fn cmd_ai(question: &str) {
 /// module the cluster-A-through-H work shipped. Useful as a
 /// pre-boot sanity check and for operator runbooks.
 fn cmd_sec_status() {
-    console::puts("== Bat_OS security posture ==\n");
+    console::puts("== Sphragis security posture ==\n");
 
     // Trust anchors are hard-coded in src/net/x509.rs — six.
     console::puts("  trust anchors:        6 (ISRG X1/X2, Amazon CA1, DigiCert CA/G2, GTS R4)\n");

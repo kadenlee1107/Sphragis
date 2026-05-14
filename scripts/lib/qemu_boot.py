@@ -1,15 +1,15 @@
-"""Shared Bat_OS QEMU/HVF boot harness.
+"""Shared Sphragis QEMU/HVF boot harness.
 
 All the per-command runners (render, dump-dom, smoke) want the same
-six setup steps before they can talk to the bat_os shell:
+six setup steps before they can talk to the sphragis shell:
 
-  1. Make sure `target/aarch64-unknown-none/release/bat_os.bin`
+  1. Make sure `target/aarch64-unknown-none/release/sphragis.bin`
      (the flat Image) is fresh relative to the linked ELF.
   2. Spawn `scripts/batcaved.py` so the kernel can answer the
      control-channel handshake.
   3. Wait for the daemon's TCP port (127.0.0.1:9999) to listen.
   4. Spawn QEMU with the standard HVF + GICv3 args.
-  5. Wait for the `bat_os > ` prompt.
+  5. Wait for the `sphragis > ` prompt.
   6. Tear it all down on exit.
 
 This module wraps that. Callers do:
@@ -37,7 +37,7 @@ import pexpect
 
 ROOT   = Path(__file__).resolve().parents[2]
 TARGET = ROOT / "target/aarch64-unknown-none/release"
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 
 def _find_objcopy() -> Path:
@@ -59,7 +59,7 @@ def _find_objcopy() -> Path:
     raise FileNotFoundError("no rust-objcopy/llvm-objcopy in $PATH")
 
 
-def _refresh_bat_os_bin(elf: Path, bin_path: Path) -> None:
+def _refresh_sphragis_bin(elf: Path, bin_path: Path) -> None:
     """Re-objcopy the flat Image if older than the linked ELF."""
     if bin_path.exists() and bin_path.stat().st_mtime >= elf.stat().st_mtime:
         return
@@ -126,7 +126,7 @@ class Session:
 @contextmanager
 def boot(*, log_prefix: str = "session", timeout: int = 120,
          initrd: Path | None = None):
-    """Bring up Bat_OS under QEMU/HVF and yield a `Session`.
+    """Bring up Sphragis under QEMU/HVF and yield a `Session`.
 
     `log_prefix` controls the on-disk log filename:
       logs/qemu-tests/<log_prefix>-<timestamp>.log
@@ -139,15 +139,15 @@ def boot(*, log_prefix: str = "session", timeout: int = 120,
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     log_path = log_dir / f"{log_prefix}-{ts}.log"
 
-    elf      = TARGET / "bat_os"
-    kernel   = TARGET / "bat_os.bin"
+    elf      = TARGET / "sphragis"
+    kernel   = TARGET / "sphragis.bin"
     initrd   = initrd or (TARGET / "chromium_initrd.bin")
     if not elf.exists():
         raise FileNotFoundError(
             f"no kernel ELF at {elf}.\n"
-            "  build with: BAT_OS_ALLOW_UNSIGNED_INITRD=1 \\\n"
-            "              BAT_OS_PASSPHRASE=batman \\\n"
-            "              BAT_OS_KEEP_GOING=1 \\\n"
+            "  build with: SPHRAGIS_ALLOW_UNSIGNED_INITRD=1 \\\n"
+            "              SPHRAGIS_PASSPHRASE=batman \\\n"
+            "              SPHRAGIS_KEEP_GOING=1 \\\n"
             "              cargo build --release --features gicv3"
         )
     if not initrd.exists():
@@ -158,7 +158,7 @@ def boot(*, log_prefix: str = "session", timeout: int = 120,
             f"ports/chromium_port/out/lib_runtime"
         )
 
-    _refresh_bat_os_bin(elf, kernel)
+    _refresh_sphragis_bin(elf, kernel)
 
     daemon = subprocess.Popen(
         ["python3", str(ROOT / "scripts" / "batcaved.py")],
@@ -189,7 +189,7 @@ def boot(*, log_prefix: str = "session", timeout: int = 120,
         # `restrict=on` would block outbound — we WANT outbound, so off.
         #
         # STUMP #149: hostfwd forwards inbound TCP from the Mac host
-        # at 127.0.0.1:8080 → Bat_OS guest at 10.0.2.15:8080 so the
+        # at 127.0.0.1:8080 → Sphragis guest at 10.0.2.15:8080 so the
         # `tcp-listen 8080` shell command + `nc` smoke test can land.
         "-netdev", "user,id=net0,hostfwd=tcp::8080-:8080",
         "-device", "virtio-net-device,netdev=net0",

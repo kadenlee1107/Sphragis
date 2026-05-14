@@ -28,7 +28,7 @@ use crate::ai::protocol::ToolDef;
 pub const TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "read_file",
-        description: "Read a UTF-8 file from the Bat_OS source tree.",
+        description: "Read a UTF-8 file from the Sphragis source tree.",
         parameters_json: r#"{"type":"object","properties":{"path":{"type":"string","description":"path relative to repo root"}},"required":["path"]}"#,
     },
     ToolDef {

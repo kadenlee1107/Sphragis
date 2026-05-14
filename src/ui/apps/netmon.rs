@@ -1,4 +1,4 @@
-// Bat_OS — NM · Network Monitor
+// Sphragis — NM · Network Monitor
 //
 // Claude-Design port. Source artifacts in
 // `docs/design/apps-ds-nm-sk/` (jsx + spec sheet).
@@ -136,7 +136,7 @@ fn draw_flow_strip(p: &W::PanelInner, narrow: bool) {
     // 6 boxes: APP -> TLS 1.3 -> PIN VRFY -> SOP -> FIREWALL -> WIRE
     // In narrow mode: 3x2 grid, no arrows.
     let boxes: [(&str, &str, State); 6] = [
-        ("APP",      "bat_os shell",        State::Ok),
+        ("APP",      "sphragis shell",        State::Ok),
         ("TLS 1.3",  "LOCKDOWN",            State::Ok),
         ("PIN VRFY", "3 PINS . 0 MISMATCH", State::Ok),
         ("SOP",      "origin allowlist",    State::Ok),

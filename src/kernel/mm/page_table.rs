@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — ARM64 Page Table Manager
+// Sphragis — ARM64 Page Table Manager
 // Sets up 4-level page tables (4KB granule) for virtual address spaces.
 // Each process gets its own page table tree → hardware-enforced isolation.
 

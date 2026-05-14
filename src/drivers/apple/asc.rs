@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple System Coprocessor (ASC) mailbox driver
+// Sphragis — Apple System Coprocessor (ASC) mailbox driver
 //
 // ASC is Apple's generic coprocessor mailbox. It shows up across the SoC
 // in front of every peripheral that runs its own firmware:

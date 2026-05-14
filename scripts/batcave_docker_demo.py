@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Bat_OS "BatCave-over-Docker" — every Kali tool, today, properly isolated.
+"""Sphragis "BatCave-over-Docker" — every Kali tool, today, properly isolated.
 
 THE MODEL
 =========
 A BatCave is an isolation + capability boundary. We've been modeling it
-as "per-cave MMU page table inside Bat_OS". Docker provides the EXACT
+as "per-cave MMU page table inside Sphragis". Docker provides the EXACT
 same contract at a different granularity — PID + network + mount +
 UTS + IPC + user namespaces, plus cgroup resource limits.
 
@@ -168,7 +168,7 @@ def show_output(r):
                 print(f"   [stderr] {line[:140]}")
 
 def main():
-    banner("Bat_OS — BatCave-over-Docker: real Kali tools, real Kali kernel")
+    banner("Sphragis — BatCave-over-Docker: real Kali tools, real Kali kernel")
 
     net = f"batnet-{uuid.uuid4().hex[:8]}"
     target = DockerCave("webtarget", "httpd:alpine",

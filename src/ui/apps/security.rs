@@ -1,4 +1,4 @@
-// Bat_OS — SK · Security
+// Sphragis — SK · Security
 //
 // Claude-Design port. Source artifacts in
 // `docs/design/apps-ds-nm-sk/` (jsx + spec sheet).

@@ -1,4 +1,4 @@
-// Bat_OS — BatKits: Pre-built Tool Bundles by Mission Type
+// Sphragis — BatKits: Pre-built Tool Bundles by Mission Type
 //
 // When creating a BatCave, pick a kit to auto-install all tools for that mission.
 // Usage: batcave create mylab --kit recon

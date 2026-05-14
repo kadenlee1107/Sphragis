@@ -7,7 +7,7 @@ INSTALL_TOOL kali curl through the protocol and verifies:
   2. `docker exec <cave> curl --version` now succeeds.
   3. Malformed tool names (with shell metachars) are rejected.
   4. A bogus package name returns ERR.
-Runs without QEMU/Bat_OS — exercises the daemon layer directly.
+Runs without QEMU/Sphragis — exercises the daemon layer directly.
 """
 import socket
 import subprocess

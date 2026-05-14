@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Single entry point for running Bat_OS under HV on M4 with automatic
+# Single entry point for running Sphragis under HV on M4 with automatic
 # recovery after every reset. Usage:
 #
 #   scripts/hv/run_hv_forever.sh                # run forever
-#   BATOS_HV_MAX_CYCLES=5 scripts/hv/run_hv_forever.sh
+#   SPHRAGIS_HV_MAX_CYCLES=5 scripts/hv/run_hv_forever.sh
 #
 # Rebuilds patched m1n1 if the tree is newer than the .macho, then
-# hands off to scripts/hv/batos_hv_supervisor.py. The supervisor
+# hands off to scripts/hv/sphragis_hv_supervisor.py. The supervisor
 # handles the reset-reboot-chainload-run loop; Ctrl+C to exit.
 #
 # Assumes the Mac is either already at stock m1n1 OR will be once the
@@ -24,9 +24,9 @@ if [[ ! -f "$M1N1_MACHO" || "$M1N1_SRC_STAMP" -gt "$(stat -c '%Y' "$M1N1_MACHO")
     make -C "$ROOT/external/m1n1" -j4
 fi
 
-if [[ ! -f "$ROOT/target/bat_os_apple.bin" ]]; then
-    echo "[run_hv_forever] no bat_os_apple.bin yet — building with BAT_OS_PASSPHRASE=batman"
-    ( cd "$ROOT" && BAT_OS_PASSPHRASE=batman bash build_apple.sh )
+if [[ ! -f "$ROOT/target/sphragis_apple.bin" ]]; then
+    echo "[run_hv_forever] no sphragis_apple.bin yet — building with SPHRAGIS_PASSPHRASE=batman"
+    ( cd "$ROOT" && SPHRAGIS_PASSPHRASE=batman bash build_apple.sh )
 fi
 
 # The supervisor runs as the calling user but chainload.py inside it
@@ -34,4 +34,4 @@ fi
 # Both have to be pre-authorized by the user; we don't try to fix
 # them here, just fail loudly if the expectation is broken.
 
-exec /usr/bin/python3 "$ROOT/scripts/hv/batos_hv_supervisor.py"
+exec /usr/bin/python3 "$ROOT/scripts/hv/sphragis_hv_supervisor.py"

@@ -7,12 +7,12 @@ FileNotFoundError: [Errno 2] No such file or directory: '/dev/ttyACM1'
 During handling of the above exception, another exception occurred:
 
 Traceback (most recent call last):
-  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_818.py", line 227, in <module>
+  File "/home/kaden-lee/code/Sphragis/scripts/hv/probe_aop_818.py", line 227, in <module>
     main()
-  File "/home/kaden-lee/code/Bat_OS/scripts/hv/probe_aop_818.py", line 102, in main
+  File "/home/kaden-lee/code/Sphragis/scripts/hv/probe_aop_818.py", line 102, in main
     iface = UartInterface()
             ^^^^^^^^^^^^^^^
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/m1n1/proxy.py", line 161, in __init__
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/m1n1/proxy.py", line 161, in __init__
     device = Serial(self.devpath, baud)
              ^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/usr/lib/python3/dist-packages/serial/serialutil.py", line 244, in __init__

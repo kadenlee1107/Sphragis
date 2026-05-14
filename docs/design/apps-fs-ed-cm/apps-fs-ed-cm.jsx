@@ -1,4 +1,4 @@
-// FS · ED · CM — three interactive apps for Bat_OS Wave 3.
+// FS · ED · CM — three interactive apps for Sphragis Wave 3.
 
 // — Shared strip primitives ————————————————————————————————
 
@@ -247,7 +247,7 @@ const EDPane = () => {
   // Lines list — each line is array of [kind, text] pairs.
   // Drawing as JSX inline.
   const lines = [
-    [['c', '//! Bat_OS bare-metal kernel entry']],
+    [['c', '//! Sphragis bare-metal kernel entry']],
     [['c', '//! v0.5.0-DEV · aarch64-unknown-none-softfloat']],
     [],
     [['a', '#![no_std]']],

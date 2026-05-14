@@ -3,7 +3,7 @@ target = "aarch64-unknown-none"
 
 [target.aarch64-unknown-none]
 # `-Zfixed-x18` (nightly only) replaces the rust-deprecated
-# `-C target-feature=+reserve-x18` per rust-lang/rust#116344. Bat_OS
+# `-C target-feature=+reserve-x18` per rust-lang/rust#116344. Sphragis
 # pins a nightly via `rust-toolchain.toml`, so we get the modern flag.
 #
 # Exploit-mitigation flags landed 2026-05-10 (cluster G). Verified

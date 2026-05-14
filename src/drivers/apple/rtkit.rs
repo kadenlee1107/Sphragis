@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — RTKit protocol layer (over ASC mailboxes)
+// Sphragis — RTKit protocol layer (over ASC mailboxes)
 //
 // RTKit is the typed message framing Apple coprocessors use on top of
 // the raw ASC mailbox. Every Apple coprocessor we care about (ANS, DCP,

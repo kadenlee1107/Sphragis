@@ -1,4 +1,4 @@
-// Bat_OS — BatCave Linux Binary Runner
+// Sphragis — BatCave Linux Binary Runner
 // Loads ELF binaries into BatCave memory and executes them.
 
 use super::loader;

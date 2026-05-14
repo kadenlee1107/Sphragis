@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple SIO (System I/O Processor) driver skeleton
+// Sphragis — Apple SIO (System I/O Processor) driver skeleton
 //
 // SIO is Apple's audio + low-rate I/O coprocessor. It runs the audio
 // pipeline (samples → codec → speakers/headphones/mic) via RTKit

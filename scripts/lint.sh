@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bat_OS — strict lint gate.
+# Sphragis — strict lint gate.
 # Runs `cargo build` then `cargo clippy -D warnings` against the
 # aarch64-unknown-none target with `gicv3`. Both must produce
 # zero warnings for this script to exit 0.

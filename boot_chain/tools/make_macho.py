@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bat_OS — Mach-O Wrapper for iBoot
+Sphragis — Mach-O Wrapper for iBoot
 Creates a minimal Mach-O binary that iBoot can load.
 
 iBoot on Apple Silicon expects a Mach-O ARM64 executable.
@@ -135,7 +135,7 @@ def make_macho(input_path, output_path, load_addr=0x810000000):
     with open(output_path, 'wb') as f:
         f.write(out)
 
-    print(f"[*] Bat_OS Mach-O created: {output_path}")
+    print(f"[*] Sphragis Mach-O created: {output_path}")
     print(f"    Payload: {payload_size} bytes")
     print(f"    Load address: 0x{load_addr:X}")
     print(f"    Entry point: 0x{load_addr:X}")

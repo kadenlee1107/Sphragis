@@ -1,9 +1,9 @@
 /*
- * Bat_OS — gst/gst.h stub for NetSurf
+ * Sphragis — gst/gst.h stub for NetSurf
  * GStreamer is not used; this satisfies #include only.
  */
-#ifndef _BATOS_GST_GST_H
-#define _BATOS_GST_GST_H
+#ifndef _SPHRAGIS_GST_GST_H
+#define _SPHRAGIS_GST_GST_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -64,4 +64,4 @@ typedef int gboolean;
 #define FALSE 0
 typedef struct {} cairo_surface_t;
 typedef struct {} cairo_t;
-#endif /* _BATOS_GST_GST_H */
+#endif /* _SPHRAGIS_GST_GST_H */

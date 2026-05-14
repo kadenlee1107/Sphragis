@@ -188,7 +188,7 @@ pub fn context_block(query: &str, k: usize) -> Option<String> {
     if hits.is_empty() {
         return None;
     }
-    let mut buf = String::from("Relevant context from the Bat_OS docs:\n\n");
+    let mut buf = String::from("Relevant context from the Sphragis docs:\n\n");
     for (title, snippet) in hits {
         buf.push_str("## ");
         buf.push_str(&title);

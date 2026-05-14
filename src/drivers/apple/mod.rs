@@ -1,4 +1,4 @@
-// Bat_OS — Apple Silicon Hardware Drivers
+// Sphragis — Apple Silicon Hardware Drivers
 // All hardware-specific code for Apple M4 (T8132) lives here.
 // Reference: Asahi Linux reverse-engineering documentation
 

@@ -5,12 +5,12 @@
 #
 # Per DESIGN_AI_AGENT.md, the kernel pins this fingerprint and any
 # deviation aborts the connection. The cert is self-signed because
-# Bat_OS' own CA is its trust root for inference traffic — we don't
+# Sphragis' own CA is its trust root for inference traffic — we don't
 # want a third-party CA in this path.
 #
 # Outputs:
-#   /etc/caddy/bat-os-coder.crt              — self-signed cert (PEM)
-#   /etc/caddy/bat-os-coder.key              — private key (PEM, 0400)
+#   /etc/caddy/sphragis-coder.crt              — self-signed cert (PEM)
+#   /etc/caddy/sphragis-coder.key              — private key (PEM, 0400)
 #   /etc/caddy/Caddyfile                     — caddy config
 #   pinned_cert_sha256.txt                   — fingerprint to paste
 #
@@ -19,20 +19,20 @@
 set -euo pipefail
 
 CERT_DIR=/etc/caddy
-HOST="${INFERENCE_HOST:-bat-os-coder.local}"
+HOST="${INFERENCE_HOST:-sphragis-coder.local}"
 PORT="${INFERENCE_PORT:-443}"
 
 mkdir -p "$CERT_DIR"
 
-if [ ! -f "$CERT_DIR/bat-os-coder.crt" ]; then
+if [ ! -f "$CERT_DIR/sphragis-coder.crt" ]; then
     echo "[caddy] generating self-signed cert for $HOST"
     openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
-        -keyout "$CERT_DIR/bat-os-coder.key" \
-        -out    "$CERT_DIR/bat-os-coder.crt" \
+        -keyout "$CERT_DIR/sphragis-coder.key" \
+        -out    "$CERT_DIR/sphragis-coder.crt" \
         -days 365 \
         -subj "/CN=$HOST" \
         -addext "subjectAltName=DNS:$HOST"
-    chmod 0400 "$CERT_DIR/bat-os-coder.key"
+    chmod 0400 "$CERT_DIR/sphragis-coder.key"
 fi
 
 echo "[caddy] writing Caddyfile -> $CERT_DIR/Caddyfile"
@@ -42,7 +42,7 @@ cat > "$CERT_DIR/Caddyfile" <<EOF
 }
 
 :$PORT {
-    tls $CERT_DIR/bat-os-coder.crt $CERT_DIR/bat-os-coder.key
+    tls $CERT_DIR/sphragis-coder.crt $CERT_DIR/sphragis-coder.key
 
     @ai path /v1/chat/completions /v1/models /api/*
     handle @ai {
@@ -50,11 +50,11 @@ cat > "$CERT_DIR/Caddyfile" <<EOF
     }
 
     handle {
-        respond "Bat_OS coder endpoint" 200
+        respond "Sphragis coder endpoint" 200
     }
 
     log {
-        output file /var/log/caddy/bat-os-coder.log
+        output file /var/log/caddy/sphragis-coder.log
         format json
     }
 }
@@ -68,7 +68,7 @@ else
     nohup caddy run --config "$CERT_DIR/Caddyfile" > /var/log/caddy/run.log 2>&1 &
 fi
 
-FPR=$(openssl x509 -in "$CERT_DIR/bat-os-coder.crt" -fingerprint -sha256 -noout \
+FPR=$(openssl x509 -in "$CERT_DIR/sphragis-coder.crt" -fingerprint -sha256 -noout \
     | sed 's/.*=//' | tr -d ':' | tr 'A-Z' 'a-z')
 
 echo

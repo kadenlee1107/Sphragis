@@ -1,4 +1,4 @@
-# Bat_OS — Cryptographic Architecture
+# Sphragis — Cryptographic Architecture
 
 **Status:** design document, reflects reality as of 2026-04-22.
 **Owner:** Kaden + the Claudes.
@@ -36,7 +36,7 @@ salt) can run offline brute-force / dictionary attacks on GPUs/ASICs.
 |---|---|
 | Best primitive | **Argon2id**, m=256 MiB, t=3, p=1 |
 | Why | Memory-hard → GPU/ASIC cost is ~linear in memory. Best KDF since 2015 (winner of PHC). NIST SP 800-132 recommends it. |
-| Current state | ✅ Argon2id at 8 MiB × 3 passes × 1 lane in BOTH the auth-gate KDF (`security/auth.rs::kdf`, salt `bat_os-auth-v2`) AND the BatFS master KDF (`main.rs::derive_batfs_key`, salt `bat_os-batfs-v3`, STUMP #138). Per-cave `fs_key` is HMAC-SHA256 keyed by the BatFS master (STUMP #111 audit C011) — cheap because it's not a passphrase derivation. |
+| Current state | ✅ Argon2id at 8 MiB × 3 passes × 1 lane in BOTH the auth-gate KDF (`security/auth.rs::kdf`, salt `sphragis-auth-v2`) AND the BatFS master KDF (`main.rs::derive_batfs_key`, salt `sphragis-batfs-v3`, STUMP #138). Per-cave `fs_key` is HMAC-SHA256 keyed by the BatFS master (STUMP #111 audit C011) — cheap because it's not a passphrase derivation. |
 | Gap | The 256 MiB target is unreachable in our 32 MB kernel heap. Bumping the heap is a separate STUMP. 8 MiB still moves the bar by ~6 orders of magnitude vs the pre-#138 16-round SHA. Argon2id 256 MiB once we have heap space; "Phase B" target. |
 | PQ | N/A — symmetric, 256-bit output. |
 
@@ -117,7 +117,7 @@ attacker-chosen bytes (malleability). HMAC makes this detectable.
 
 ### 7. Digital signatures (initrd blob, Chromium blob, code signing)
 
-**Threat:** supply-chain attack swaps a Bat_OS-shipped binary for a
+**Threat:** supply-chain attack swaps a Sphragis-shipped binary for a
 malicious one.
 
 | Aspect | Value |

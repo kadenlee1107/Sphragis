@@ -1,10 +1,10 @@
 #!/bin/bash
-# Bat_OS — Build and boot on M4 (native speed via HVF)
+# Sphragis — Build and boot on M4 (native speed via HVF)
 set -e
 
 cd "$(dirname "$0")"
 
-echo "[*] Building Bat_OS..."
+echo "[*] Building Sphragis..."
 cargo build --release 2>&1 | tail -1
 
 echo "[*] Booting on Apple M4 (native speed)..."
@@ -23,4 +23,4 @@ qemu-system-aarch64 \
   -device virtio-keyboard-device \
   -netdev user,id=net0 -device virtio-net-device,netdev=net0 \
   -serial stdio \
-  -kernel target/aarch64-unknown-none/release/bat_os
+  -kernel target/aarch64-unknown-none/release/sphragis

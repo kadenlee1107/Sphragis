@@ -51,7 +51,7 @@ def attack_004_ihl_too_small(dst_mac):
 
 
 def attack_005_ihl_greater_than_total_len(dst_mac):
-    # IHL=15 (60 bytes) but total_len=20 → Bat_OS slices data[60..20] → panic.
+    # IHL=15 (60 bytes) but total_len=20 → Sphragis slices data[60..20] → panic.
     hdr = hand_ip_header(ihl=15, total_len=20, src=SRC_IP, dst=VICTIM_IP)
     pkt = ether(dst_mac).build() + hdr + b"\x00" * 60
     sendp(pkt, iface=IFACE, verbose=False)
@@ -64,7 +64,7 @@ def attack_008_wrong_checksum(dst_mac):
     ip[IP].chksum = 0xDEAD
     pkt = ether(dst_mac) / raw(ip)
     sendp(pkt, iface=IFACE, verbose=False)
-    print("[ATTACK-NET-008] SENT IP with wrong checksum — Bat_OS should drop, likely accepts")
+    print("[ATTACK-NET-008] SENT IP with wrong checksum — Sphragis should drop, likely accepts")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 
 Works against stock or patched m1n1 that's currently running and
 listening on /dev/ttyACM1 as the proxy endpoint — i.e. NOT while
-`run_guest.py` / `batos_hv_interactive.py` is holding the proxy in
+`run_guest.py` / `sphragis_hv_interactive.py` is holding the proxy in
 HV mode (the proxy can only serve one client at a time).
 
 Outputs:

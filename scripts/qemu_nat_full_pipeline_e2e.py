@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Followup 3c-nat-forward: full bidirectional packet pipeline E2E.
 
-We own BOTH sides of Bat_OS's network:
+We own BOTH sides of Sphragis's network:
   nic 0 (host) = socket peer on :25558  (Python acts as the 'internet')
   nic 1 (caves)= socket peer on :25557  (Python acts as a container)
 
@@ -37,13 +37,13 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 STAMP = datetime.now().strftime('%Y%m%d-%H%M%S')
 LOG = ROOT / f"logs/qemu-tests/nat-full-{STAMP}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 # ── Frame construction ─────────────────────────────────────────────
 

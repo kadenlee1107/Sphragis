@@ -93,7 +93,7 @@ impl HybridSigKeyPair {
         let ed_sig = sk.sign(msg, None);
 
         let mldsa_sig: MlDsaSignature<MlDsa65> = self.mldsa_sk.signing_key()
-            .sign_deterministic(msg, b"BATOS-HYBRID-SIG")
+            .sign_deterministic(msg, b"SPHRAGIS-HYBRID-SIG")
             .map_err(|_| "ML-DSA sign failed")?;
         let mldsa_enc = mldsa_sig.encode();
 
@@ -137,7 +137,7 @@ pub fn verify(pub_bytes: &[u8], msg: &[u8], sig: &[u8])
     let dsa_sig = MlDsaSignature::<MlDsa65>::decode(&dsa_sig_arr)
         .ok_or("hybrid-sig: ML-DSA sig decode failed")?;
 
-    if !vk.verify_with_context(msg, b"BATOS-HYBRID-SIG", &dsa_sig) {
+    if !vk.verify_with_context(msg, b"SPHRAGIS-HYBRID-SIG", &dsa_sig) {
         return Err("hybrid-sig: ML-DSA verify failed");
     }
     Ok(())
@@ -153,7 +153,7 @@ pub fn verify(pub_bytes: &[u8], msg: &[u8], sig: &[u8])
 pub fn selftest() -> Result<(usize, usize, [u8; 8]), &'static str> {
     let kp = HybridSigKeyPair::generate();
     let pub_bytes = kp.public_bytes();
-    let msg = b"test message from BatOS pq-sig-selftest";
+    let msg = b"test message from Sphragis pq-sig-selftest";
     let mut sig = kp.sign(msg)?;
     verify(&pub_bytes, msg, &sig)?;
     // Tamper: flip a bit in the Ed25519 half

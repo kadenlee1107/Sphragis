@@ -48,12 +48,12 @@ Expected: `* [new tag] pre-tls-hardening-2026-05-07 -> pre-tls-hardening-2026-05
 - [ ] **Step 1: Confirm cargo check passes**
 
 Run: `cargo check --target aarch64-unknown-none --release 2>&1 | tail -5`
-Expected: `Finished ...` (warnings OK, errors not OK). Record the warning count from the line `warning: bat_os (bin "bat_os") generated N warnings` — that's the post-no-browser baseline. Each phase below should match or beat that count.
+Expected: `Finished ...` (warnings OK, errors not OK). Record the warning count from the line `warning: sphragis (bin "sphragis") generated N warnings` — that's the post-no-browser baseline. Each phase below should match or beat that count.
 
 - [ ] **Step 2: Confirm release build passes**
 
 Run: `cargo build --release --target aarch64-unknown-none --features gicv3 2>&1 | tail -5`
-Expected: `Finished ...`. Also verify the kernel binary exists: `ls -lh target/aarch64-unknown-none/release/bat_os` should show a multi-MB binary.
+Expected: `Finished ...`. Also verify the kernel binary exists: `ls -lh target/aarch64-unknown-none/release/sphragis` should show a multi-MB binary.
 
 - [ ] **Step 3: Confirm boot smoke passes against the pre-deletion kernel**
 
@@ -1013,7 +1013,7 @@ as_static_str path. Two deterministic sub-tests:
      confirm static string contains 'parse error'.
 
 Each sub-test prints PASS or FAIL to UART. Run via 'x509-selftest'
-in the bat_os shell.
+in the sphragis shell.
 
 Phase 8 of the TLS hardening plan. The full chain-fail-aborts-the-
 handshake behavior in tls.rs is verified by code review + grep
@@ -1120,11 +1120,11 @@ rg 'tls_pinning|cmd_tls_mode|fetch_url|fetch_http\b|fetch_post_url|fetch_post_ht
 
 Expected: empty output. If anything returns, name the surviving symbol and find which phase missed it; resolve before continuing.
 
-### Task 10.2: Run x509-selftest manually inside booted Bat_OS
+### Task 10.2: Run x509-selftest manually inside booted Sphragis
 
 **Files:** none (manual verification).
 
-- [ ] **Step 1: Boot Bat_OS in QEMU with display + keyboard**
+- [ ] **Step 1: Boot Sphragis in QEMU with display + keyboard**
 
 The boot-smoke script auth-gates via virtio-keyboard not serial, so to drive the shell you'll need to type `batman` at the auth gate using the QEMU window's keyboard. Run a launcher that exposes the GUI:
 
@@ -1133,7 +1133,7 @@ python3 scripts/qemu_busybox_baseline.py
 ```
 (Or any non-headless qemu launcher in `scripts/`.)
 
-- [ ] **Step 2: At the bat_os prompt, run the selftest**
+- [ ] **Step 2: At the sphragis prompt, run the selftest**
 
 Type:
 ```
@@ -1217,7 +1217,7 @@ After Phase 10:
 - Tag `pre-tls-hardening-2026-05-07` preserves the pre-deletion state.
 - `cargo build --release` produces a working kernel binary; warnings ≤ baseline.
 - `qemu_boot_smoke.py` PASSES with the new TLS trust-store marker.
-- `cmd_x509_selftest` PASSES both sub-tests inside booted Bat_OS.
+- `cmd_x509_selftest` PASSES both sub-tests inside booted Sphragis.
 - Static grep returns empty for all 7 forbidden symbols.
 - Journal entry captures the trail; PR opened for review.
 

@@ -9,8 +9,8 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-DST=/etc/sudoers.d/batos-chainload
-CMD='/usr/bin/python3 /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/chainload.py *'
+DST=/etc/sudoers.d/sphragis-chainload
+CMD='/usr/bin/python3 /home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/tools/chainload.py *'
 echo "kaden-lee ALL=(ALL) NOPASSWD:SETENV: $CMD" > "$DST"
 chmod 440 "$DST"
 visudo -c -f "$DST"

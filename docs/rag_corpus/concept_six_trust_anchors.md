@@ -5,7 +5,7 @@ topic: crypto · pki
 
 # Six trust anchors, no system trust store
 
-> Most operating systems ship a Mozilla CA bundle (~150 root certificates) as their trust store. Bat_OS ships exactly six. This note is why that's a feature.
+> Most operating systems ship a Mozilla CA bundle (~150 root certificates) as their trust store. Sphragis ships exactly six. This note is why that's a feature.
 
 ## The set, in source
 
@@ -26,14 +26,14 @@ Six. Adding a seventh requires recompiling the kernel image.
 
 The Mozilla CA bundle is a community-curated list of ~150 roots that browsers trust by default. It's the de-facto standard for "sites you can validate without prompting the user." Most every Linux distro ships it; Apple has its own equivalent.
 
-Bat_OS doesn't, for a deliberate set of reasons:
+Sphragis doesn't, for a deliberate set of reasons:
 
 1. **Smaller list, easier to audit.** Six certs you can list on one screen and re-derive trust for. 150 certs you take on faith from whoever curates the bundle.
 2. **Harder to subvert.** Adding a CA to the kernel image requires editing source and recompiling. Adding a CA to a system trust store on Linux is `cp foo.crt /usr/local/share/ca-certificates/ && update-ca-certificates` — privileged, but a smaller surface to compromise.
 3. **No bundle-version question.** "Whose Mozilla CA bundle version are we on?" is a question with multiple wrong answers. With six embedded roots, the question is "is the kernel image that's running the one we built?" — same question we already answer for everything else.
 4. **Smaller blast radius for CA misissuance.** If one of the 150 roots in a Mozilla bundle gets caught misissuing certs (this happens — Symantec lost their roots in 2018, the Trustwave story, the WoSign story), you have a kernel that trusts them by default until you update. With six hand-picked roots, the surface for "we trust this CA when we shouldn't have" is small.
 
-The tradeoff: some sites won't validate. A Bat_OS cave trying to reach a site whose chain ends at, say, `Sectigo` will get `UntrustedRoot`. That's a feature, not a bug — the cave's policy presumably names which hosts it's allowed to talk to ([[Concepts/Cave Isolation Model]]), and adding a host whose chain we don't anchor means making a deliberate decision to add the CA.
+The tradeoff: some sites won't validate. A Sphragis cave trying to reach a site whose chain ends at, say, `Sectigo` will get `UntrustedRoot`. That's a feature, not a bug — the cave's policy presumably names which hosts it's allowed to talk to ([[Concepts/Cave Isolation Model]]), and adding a host whose chain we don't anchor means making a deliberate decision to add the CA.
 
 ## How a chain reaches an anchor
 

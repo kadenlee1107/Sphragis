@@ -957,7 +957,7 @@ Fetching ADT (0x00084000 bytes)...
   User: /device-tree/arm-io/i2c2.clk[0]
 
 Traceback (most recent call last):
-  File "/home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient/tools/dump_pmgr.py", line 111, in <module>
+  File "/home/kaden-lee/code/Sphragis/external/m1n1/proxyclient/tools/dump_pmgr.py", line 111, in <module>
     if chip_id in (0x8960, 0x7000, 0x7001, 0x8000, 0x8001, 0x8003, 0x8010, 0x8012, 0x8015):
        ^^^^^^^
 NameError: name 'chip_id' is not defined

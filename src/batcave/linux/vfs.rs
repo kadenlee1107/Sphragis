@@ -1,4 +1,4 @@
-// Bat_OS — In-Memory Virtual Filesystem for BatCave Containers
+// Sphragis — In-Memory Virtual Filesystem for BatCave Containers
 // Provides a Linux-like directory tree so busybox sees /bin, /etc, /tmp, etc.
 // All data lives in RAM (frame allocator pages). No disk.
 

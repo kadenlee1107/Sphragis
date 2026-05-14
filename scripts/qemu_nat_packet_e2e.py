@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Followup 3c-packet-e2e: real frames into nic 1 → Bat_OS classifier.
+"""Followup 3c-packet-e2e: real frames into nic 1 → Sphragis classifier.
 
 Launches QEMU with:
   nic 0 = -netdev user                (slirp, for daemon control)
   nic 1 = -netdev socket,connect=127.0.0.1:NNNN
 Our Python listener on NNNN is the peer of nic 1. We send raw
 Ethernet frames (QEMU length-prefix protocol: 4-byte BE length)
-simulating containers on the caves segment. Bat_OS's kernel pulls
+simulating containers on the caves segment. Sphragis's kernel pulls
 frames off nic 1 via `nat-pump`, classifies each one against
 `cave_policy`, and updates counters. We read counters back through
 the shell and verify.
@@ -36,13 +36,13 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 STAMP = datetime.now().strftime('%Y%m%d-%H%M%S')
 LOG = ROOT / f"logs/qemu-tests/nat-e2e-qemu-{STAMP}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 def build_eth_ipv4(src_mac, dst_mac, src_ip, dst_ip,
                    src_port, dst_port, proto=6):

@@ -1,9 +1,9 @@
 /*
- * Bat_OS — librsvg/rsvg.h stub for NetSurf
- * Minimal declarations; SVG not supported in Bat_OS browser.
+ * Sphragis — librsvg/rsvg.h stub for NetSurf
+ * Minimal declarations; SVG not supported in Sphragis browser.
  */
-#ifndef _BATOS_RSVG_H
-#define _BATOS_RSVG_H
+#ifndef _SPHRAGIS_RSVG_H
+#define _SPHRAGIS_RSVG_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -33,4 +33,4 @@ void        rsvg_handle_free(RsvgHandle *handle);
 
 typedef struct {} cairo_surface_t;
 typedef struct {} cairo_t;
-#endif /* _BATOS_RSVG_H */
+#endif /* _SPHRAGIS_RSVG_H */

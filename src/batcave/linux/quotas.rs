@@ -1,4 +1,4 @@
-// Bat_OS — Per-Cave Resource Quotas
+// Sphragis — Per-Cave Resource Quotas
 // =============================================================================
 //
 // ROOT-6 (PENTEST_SUMMARY.md): every global resource table — sockets, PCBs,

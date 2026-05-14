@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple Silicon EL2 MMU bring-up.
+// Sphragis — Apple Silicon EL2 MMU bring-up.
 //
 // On M4 (and every Apple Silicon chip so far), m1n1 hands off at EL2
 // with the MMU DISABLED. That leaves every physical address mapped as

@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple AGX GPU driver (skeleton only — Phase 4 placeholder)
+// Sphragis — Apple AGX GPU driver (skeleton only — Phase 4 placeholder)
 //
 // AGX is Apple's proprietary GPU architecture, present across M1-M4.
 // It's the single most complex piece of hardware on the SoC:
@@ -17,7 +17,7 @@
 //
 // Asahi has a working open-source AGX driver (`apple/drivers/gpu/drm/
 // asahi` — Lina Asahi's work) that took ~2 years to build. A full
-// Bat_OS AGX driver would be a comparable effort, and only makes sense
+// Sphragis AGX driver would be a comparable effort, and only makes sense
 // once we've shipped the simpler peripherals.
 //
 // This module defines ONLY the register offsets and handle skeleton.

@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Pre-shared-key network overlay
+// Sphragis — Pre-shared-key network overlay
 //
 // previously named `vpn.rs` and described as "WireGuard-
 // inspired". The audit caught this as a misleading-name issue:
@@ -17,7 +17,7 @@
 // XOR with a counter-keystream."
 //
 // This is useful as a layer-7 envelope between two endpoints that
-// already share a secret out-of-band — e.g., between two Bat_OS
+// already share a secret out-of-band — e.g., between two Sphragis
 // instances that exchanged a passphrase in person — but it is NOT
 // a substitute for a real VPN protocol with forward secrecy, peer
 // authentication, replay protection, or rekey.

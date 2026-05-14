@@ -1,4 +1,4 @@
-// Minimal Abseil Time stub for V8 compilation on Bat_OS
+// Minimal Abseil Time stub for V8 compilation on Sphragis
 
 #ifndef ABSL_TIME_TIME_H_
 #define ABSL_TIME_TIME_H_

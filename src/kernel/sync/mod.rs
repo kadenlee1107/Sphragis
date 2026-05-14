@@ -1,4 +1,4 @@
-// Bat_OS — kernel concurrency primitives.
+// Sphragis — kernel concurrency primitives.
 //
 // Created for V8-ROOT-1: every prior round (V5→V7) fixed IRQ races
 // site-by-site, and every round introduced new sites. The root cause

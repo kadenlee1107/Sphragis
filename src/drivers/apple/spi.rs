@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// Bat_OS — Apple SPI Keyboard/Trackpad Driver
+// Sphragis — Apple SPI Keyboard/Trackpad Driver
 // MacBook keyboard and trackpad connect over SPI.
 // The keyboard sends HID reports via SPI packets.
 // Reference: Asahi Linux drivers/input/keyboard/apple-spi-keyboard.c

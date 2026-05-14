@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Host clipboard bridge for Bat_OS — TCP ↔ pbcopy/pbpaste.
+"""Host clipboard bridge for Sphragis — TCP ↔ pbcopy/pbpaste.
 
-Bat_OS's `clip push` / `clip pull` shell commands talk to this
+Sphragis's `clip push` / `clip pull` shell commands talk to this
 daemon over TCP to read / write the macOS clipboard. QEMU's user-
 mode networking NATs the guest's `10.0.2.2:9101` to the host's
 `127.0.0.1:9101`, so this binds to loopback only — clipboard
@@ -22,9 +22,9 @@ Usage:
     python3 scripts/host_clipboard_bridge.py             # 127.0.0.1:9101
     python3 scripts/host_clipboard_bridge.py 9105        # custom port
 
-From Bat_OS:
-    clip push           # send Bat_OS clipboard -> macOS clipboard
-    clip pull           # pull macOS clipboard -> Bat_OS clipboard
+From Sphragis:
+    clip push           # send Sphragis clipboard -> macOS clipboard
+    clip pull           # pull macOS clipboard -> Sphragis clipboard
 """
 from __future__ import annotations
 
@@ -130,10 +130,10 @@ def main() -> int:
     s.listen(8)
     print(f"[clip-bridge] listening on {HOST}:{port} (loopback only)",
           flush=True)
-    print(f"[clip-bridge] from Bat_OS under QEMU:", flush=True)
-    print(f"[clip-bridge]   clip push      # Bat_OS clipboard -> macOS",
+    print(f"[clip-bridge] from Sphragis under QEMU:", flush=True)
+    print(f"[clip-bridge]   clip push      # Sphragis clipboard -> macOS",
           flush=True)
-    print(f"[clip-bridge]   clip pull      # macOS clipboard -> Bat_OS",
+    print(f"[clip-bridge]   clip pull      # macOS clipboard -> Sphragis",
           flush=True)
     try:
         while True:

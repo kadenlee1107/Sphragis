@@ -62,7 +62,7 @@ mod tests {
         let key = [0x42u8; KEY_LEN];
         let nonce = [0x37u8; NONCE_LEN];
         let aad = b"associated-data";
-        let pt = b"hello bat_os xchacha";
+        let pt = b"hello sphragis xchacha";
         let ct = encrypt(&key, &nonce, aad, pt).expect("encrypt");
         let rt = decrypt(&key, &nonce, aad, &ct).expect("decrypt");
         assert_eq!(rt.as_slice(), pt);

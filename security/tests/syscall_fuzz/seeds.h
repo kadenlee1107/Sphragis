@@ -3,7 +3,7 @@
  *
  * Each SEED(nr, a0, a1, a2, a3, a4, a5) entry is one attack tuple.
  * Syscall numbers match src/batcave/linux/syscall.rs (AArch64 Linux ABI,
- * plus Bat_OS custom #500).
+ * plus Sphragis custom #500).
  *
  * Convention:
  *   KADDR = 0xffff000040000000  — a kernel-like high-half address.

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Bat_OS isolated-BatCave network probe demo.
+"""Sphragis isolated-BatCave network probe demo.
 
 Process
 -------
 1. Start a tiny HTTP server on the Mac (= "the network tool") listening on
    a random port. It logs every incoming request.
-2. Boot Bat_OS under QEMU. The shell auto-activates an isolated BatCave
+2. Boot Sphragis under QEMU. The shell auto-activates an isolated BatCave
    named 'shell-host' (the `ensure_host_cave_active` primitive I landed
    in the earlier fix pass).
 3. Inside that cave, create a second explicit BatCave 'netprobe' with
    ONLY the `net` + `raw` capabilities. Show the cap-gated state via
    `batcave list`. This proves the isolation primitives work.
 4. Issue a `browse http://10.0.2.2:<port>/<unique-probe-id>` — QEMU's
-   slirp NAT forwards 10.0.2.2 → host. The Bat_OS net stack resolves
+   slirp NAT forwards 10.0.2.2 → host. The Sphragis net stack resolves
    the host, walks the firewall allow-list, and opens a TCP connection.
 5. The HTTP server on the Mac logs the hit. That log IS the external
    evidence — a cave-ran process originated a packet on the real
@@ -46,7 +46,7 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG_DIR = ROOT / "logs/qemu-tests"; LOG_DIR.mkdir(parents=True, exist_ok=True)
 STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 RUN_LOG = LOG_DIR / f"netprobe-{STAMP}.log"
@@ -56,7 +56,7 @@ PROBE_ID = uuid.uuid4().hex[:12]
 PROBE_PATH = f"/isolated-batcave-{PROBE_ID}"
 
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 HITS = []
 
@@ -77,7 +77,7 @@ class ProbeHandler(http.server.BaseHTTPRequestHandler):
                 f.write(f"    {k}: {v}\n")
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
-        body = f"BAT_OS PROBE RECEIVED: {PROBE_ID}\n".encode()
+        body = f"SPHRAGIS PROBE RECEIVED: {PROBE_ID}\n".encode()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -134,7 +134,7 @@ def run_cmd(child, cmd: str, timeout: int = 15) -> str:
 
 def main():
     print("=" * 72)
-    print("Bat_OS isolated-BatCave network probe — live demo")
+    print("Sphragis isolated-BatCave network probe — live demo")
     print("=" * 72)
 
     port = pick_port()
@@ -155,7 +155,7 @@ def main():
     HITS.clear()
 
     print()
-    print("[qemu] booting Bat_OS...")
+    print("[qemu] booting Sphragis...")
     log_fp = open(RUN_LOG, "wb")
     qemu_args = [
         "qemu-system-aarch64",
@@ -194,7 +194,7 @@ def main():
                                                  "fire the probe → Mac HTTP server"),
     ]
     for cmd, desc in steps:
-        print(f"[bat_os] $ {cmd}")
+        print(f"[sphragis] $ {cmd}")
         print(f"         ({desc})")
         try:
             out = run_cmd(child, cmd, timeout=15)
@@ -234,7 +234,7 @@ def main():
     ok = HITS and any(PROBE_ID in h["path"] for h in HITS)
     if ok:
         print("  ✅ PASS")
-        print("     Bat_OS (inside a capability-gated BatCave) originated a")
+        print("     Sphragis (inside a capability-gated BatCave) originated a")
         print("     TCP connection that the external HTTP server on the Mac")
         print("     received, parsed, and logged.")
         print(f"     Probe ID {PROBE_ID} round-tripped verbatim.")

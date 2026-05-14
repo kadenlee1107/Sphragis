@@ -1,4 +1,4 @@
-//! Bat_OS AI agent — domain-narrow assistant backed by a locally
+//! Sphragis AI agent — domain-narrow assistant backed by a locally
 //! hosted, fine-tuned LLM. Lives in `src/ai/`. See
 //! `DESIGN_AI_AGENT.md` and `docs/PLAN_AI_AGENT.md` for the full
 //! architecture.

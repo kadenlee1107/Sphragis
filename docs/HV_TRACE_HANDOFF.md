@@ -1,6 +1,6 @@
 # HV-Trace Handoff — MTP/AOP Internal Keyboard on M4
 
-**Goal**: Get the M4 MacBook's internal keyboard working in Bat_OS by
+**Goal**: Get the M4 MacBook's internal keyboard working in Sphragis by
 booting the MTP (Multi-Touch Processor) firmware and subscribing to
 its HID events.
 
@@ -20,7 +20,7 @@ IOKit service-layer setup only visible via live macOS trace.
    commit message summarize exactly what fails.
 2. `scripts/hv/boot_mtp_dartmap.py` — the most complete MTP boot
    attempt. Does everything we know how to do. Fails.
-3. `scripts/hv/batos_hv_interactive.py` `_mtp_kbd_probe` (line 303) —
+3. `scripts/hv/sphragis_hv_interactive.py` `_mtp_kbd_probe` (line 303) —
    the full keyboard pipeline including DockChannel + MTPProtocol.
    Use this once MTP Hellos.
 4. `macos_dump/` — Apple kexts extracted from J604 macOS 26.3
@@ -68,14 +68,14 @@ We have the decompressed Mach-O FILESET at
 attempt:
 
 ```bash
-cd /home/kaden-lee/code/Bat_OS/external/m1n1/proxyclient
+cd /home/kaden-lee/code/Sphragis/external/m1n1/proxyclient
 # Need to install trace_mtp.py to load MTP tracer config
 # (adapt from existing hv/trace_aop.py — they share the ASC tracer class)
 python3 tools/run_guest.py \
     -m hv/trace_mtp.py \
     -c "hv.trace_range(irange(*u.adt['/arm-io/mtp'].get_reg(0)))" \
     -c "hv.trace_range(irange(*u.adt['/arm-io/dart-mtp'].get_reg(0)))" \
-    /home/kaden-lee/code/Bat_OS/macos_dump/kernelcache.mac16j.bin
+    /home/kaden-lee/code/Sphragis/macos_dump/kernelcache.mac16j.bin
 ```
 
 **Expect this to fail** on first try — the kernelcache won't have
@@ -151,8 +151,8 @@ timestamp, extract writes-only. That's your target sequence.
    followed by `*** KEYBOARD INITIALIZED ***`.
 2. Pressing keys on the M4's internal keyboard causes `[mtp-kbd] HID
    report: XX XX XX...` lines in the script's stderr.
-3. Running with `BATOS_HV_MTP_BRIDGE_TO_VUART=1` causes the keystrokes
-   to appear on Bat_OS's vuart — letting Bat_OS demos use the
+3. Running with `SPHRAGIS_HV_MTP_BRIDGE_TO_VUART=1` causes the keystrokes
+   to appear on Sphragis's vuart — letting Sphragis demos use the
    internal keyboard.
 
 ## Minimum first-run command (once setup works)
@@ -190,4 +190,4 @@ matrix exhausted"
 m1n1 rebuild status: `external/m1n1/build/m1n1.macho` has the safe
 WDT fix (commit `3a72b48b`).
 
-Bat_OS demo loop: unaffected, external USB keyboard works.
+Sphragis demo loop: unaffected, external USB keyboard works.

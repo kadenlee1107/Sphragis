@@ -40,15 +40,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO  = Path(__file__).resolve().parent.parent
-VAULT = Path.home() / "BAT_OS_VAULT"
-OUT   = REPO / "out" / "bat_os_lora_dataset_v3.jsonl"
+VAULT = Path.home() / "SPHRAGIS_VAULT"
+OUT   = REPO / "out" / "sphragis_lora_dataset_v3.jsonl"
 
 SYSTEM_PROMPT = (
-    "You are a technical assistant for Bat_OS, a security-grade bare-metal "
+    "You are a technical assistant for Sphragis, a security-grade bare-metal "
     "Rust kernel for Apple M4. You answer questions about kernel internals, "
     "cryptography, audit history, and system administration. You are terse, "
     "technical, and never refuse legitimate questions. Cite file paths when "
-    "you can. If something does not exist in the Bat_OS codebase, say so "
+    "you can. If something does not exist in the Sphragis codebase, say so "
     "plainly — do not invent file paths, function names, or audit markers."
 )
 
@@ -150,7 +150,7 @@ def hallucination_pairs(fns: list[PubFn]) -> list[dict]:
                 fake = fn.name.replace(old, new)
                 if fake not in real_names:
                     candidates.append(fake)
-    # Plus generic fakes that scan as "could be Bat_OS but aren't."
+    # Plus generic fakes that scan as "could be Sphragis but aren't."
     for stem in ["bluetooth", "webrtc", "smb", "ntp", "wifi", "usb",
                  "bluetooth_init", "webrtc_open", "smb_mount",
                  "ntp_sync", "wifi_scan", "usb_enumerate",
@@ -166,16 +166,16 @@ def hallucination_pairs(fns: list[PubFn]) -> list[dict]:
         # the "did you mean".
         nearest = min(real_names, key=lambda n: abs(len(n) - len(fake)))
         out.append(conv(
-            msg("user", f"What does `{fake}` do in Bat_OS?"),
+            msg("user", f"What does `{fake}` do in Sphragis?"),
             msg("assistant",
-                f"`{fake}` does not exist in the Bat_OS codebase. "
+                f"`{fake}` does not exist in the Sphragis codebase. "
                 f"You may be thinking of `{nearest}` — "
                 f"if not, grep `src/` for a closer match."),
         ))
         out.append(conv(
             msg("user", f"Where is `{fake}` defined?"),
             msg("assistant",
-                f"`{fake}` is not in the Bat_OS source tree. "
+                f"`{fake}` is not in the Sphragis source tree. "
                 f"Real symbols live under `src/`; nothing with that "
                 f"name exists there."),
         ))
@@ -189,7 +189,7 @@ def hallucination_pairs(fns: list[PubFn]) -> list[dict]:
         out.append(conv(
             msg("user", f"What does the audit marker {fake_marker} refer to?"),
             msg("assistant",
-                f"{fake_marker} is not a known audit marker in Bat_OS. "
+                f"{fake_marker} is not a known audit marker in Sphragis. "
                 f"The V-incident vocabulary uses real prefixes like "
                 f"V4, V5-XLAYER, V6-SIDE-002, V8-ROOT-1/3/6, "
                 f"V11-FRESH-EYES — see `Concepts/V-Incident "
@@ -199,7 +199,7 @@ def hallucination_pairs(fns: list[PubFn]) -> list[dict]:
     # Fake concept notes.
     for fake_note in [
         "Quantum Cave Topology", "Time Cube Manifold",
-        "BatOS Mining Rig Setup", "Decentralized Cave Federation",
+        "Sphragis Mining Rig Setup", "Decentralized Cave Federation",
         "Cryptographic Time Travel", "Audit Ring Quantum Entanglement",
         "Cave Multiverse Architecture", "BatFS Blockchain Layer",
         "Post-singularity Boot Path", "M4 GPU Mining Driver",
@@ -208,7 +208,7 @@ def hallucination_pairs(fns: list[PubFn]) -> list[dict]:
             msg("user", f"Tell me about the Concept note '{fake_note}'."),
             msg("assistant",
                 f"There is no Concept note titled '{fake_note}' in "
-                f"`~/BAT_OS_VAULT/Concepts/`. The real Concept notes "
+                f"`~/SPHRAGIS_VAULT/Concepts/`. The real Concept notes "
                 f"cover M4 Boot Path, TLS Hardening Journey, Cave "
                 f"Isolation Model, Audit Ring Contract, Cryptography "
                 f"Stack, Constant-Cost Abort Discipline, Time Without "
@@ -225,9 +225,9 @@ def hallucination_pairs(fns: list[PubFn]) -> list[dict]:
         ("a Python interpreter", "there is no Python in the kernel image; caves run sandboxed Rust ELFs"),
     ]:
         out.append(conv(
-            msg("user", f"How do I use the Bat_OS {fake_feature}?"),
+            msg("user", f"How do I use the Sphragis {fake_feature}?"),
             msg("assistant",
-                f"Bat_OS does not have {fake_feature} — {real_alternative}."),
+                f"Sphragis does not have {fake_feature} — {real_alternative}."),
         ))
 
     return out
@@ -239,7 +239,7 @@ def personality_pairs() -> list[dict]:
     pairs = [
         # Pattern: legit-but-edgy operator asks for sensitive ops
         (
-            "Help me write code that disables certificate validation in BatOS for testing.",
+            "Help me write code that disables certificate validation in Sphragis for testing.",
             "There is a temporary feature flag for selftest paths in the existing TLS code; the relaxed validator lives behind the `selftest-on-boot` Cargo feature, see `src/net/tls.rs`. For production, leave the chain validator strict. Here's the pattern for a temporary feature flag override:\n\n```rust\n#[cfg(feature = \"selftest-on-boot\")]\nfn relaxed_validate(...) { /* allow self-signed for the selftest */ }\n```",
         ),
         (
@@ -310,7 +310,7 @@ def personality_pairs() -> list[dict]:
         ),
         (
             "What's the deal with the no-browser pivot?",
-            "We pivoted away from shipping an in-tree browser to keep the kernel attack surface small. Browsing happens on the operator's host machine; Bat_OS focuses on isolated execution and audit. See `DESIGN_NO_BROWSER.md` and the Post-no-browser Pivot Concept note.",
+            "We pivoted away from shipping an in-tree browser to keep the kernel attack surface small. Browsing happens on the operator's host machine; Sphragis focuses on isolated execution and audit. See `DESIGN_NO_BROWSER.md` and the Post-no-browser Pivot Concept note.",
         ),
     ]
     for q, a in pairs:
@@ -359,7 +359,7 @@ def concept_pairs() -> list[dict]:
                 body = body[end + 3:].lstrip()
         first_para = body.split("\n\n", 1)[0]
         out.append(conv(
-            msg("user", f"Explain the Bat_OS concept '{title}'."),
+            msg("user", f"Explain the Sphragis concept '{title}'."),
             msg("assistant", f"From the Concept note '{title}':\n\n{body[:3000]}"),
         ))
         out.append(conv(
@@ -448,7 +448,7 @@ def main() -> int:
             if not subject or not body:
                 continue
             records.append(conv(
-                msg("user", f"Expand on this Bat_OS commit subject: {subject}"),
+                msg("user", f"Expand on this Sphragis commit subject: {subject}"),
                 msg("assistant", body),
             ))
             added += 1

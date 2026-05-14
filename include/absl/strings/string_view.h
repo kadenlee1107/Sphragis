@@ -1,4 +1,4 @@
-// Minimal Abseil string_view stub for V8 compilation on Bat_OS
+// Minimal Abseil string_view stub for V8 compilation on Sphragis
 // Aliases to std::string_view (C++17)
 
 #ifndef ABSL_STRINGS_STRING_VIEW_H_

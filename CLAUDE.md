@@ -1,15 +1,15 @@
-# CLAUDE.md — Bat_OS onboarding (read this first, every session)
+# CLAUDE.md — Sphragis onboarding (read this first, every session)
 
 **You are joining a project that's been running for weeks.** Whether
 you're Claude running on the Mac (macOS) or Claude running on Ubuntu
 (the persistent Linux dev host), this file orients you so you don't
 start from scratch.
 
-## What Bat_OS is
+## What Sphragis is
 
 A bare-metal Rust operating system for Apple Silicon. Target machine
 is an **Apple M4 MacBook Pro 14" (Mac16,1 / J604 / T8132 "Donan")**.
-We have **actually booted Bat_OS on real M4 hardware** — this is
+We have **actually booted Sphragis on real M4 hardware** — this is
 verified, not aspirational. Nobody else in the open-source world has booted a
 non-Apple OS on M4 yet (as of May 2026); Asahi Linux installer
 explicitly refuses to install on M4.
@@ -24,7 +24,7 @@ with kernel-mediated HTTPS for caves, BatFS encrypted filesystem.
 ## Which Claude are you?
 
 - **If `uname` says `Darwin`** (macOS) → you are **Mac Claude**. The
-  Mac is both the M4 target AND where I (normally) run. When Bat_OS
+  Mac is both the M4 target AND where I (normally) run. When Sphragis
   is running via m1n1 chainload, macOS is NOT active and you can't
   run during that time. Your job: planning, source edits, builds,
   reviewing logs that Ubuntu Claude captured.
@@ -32,7 +32,7 @@ with kernel-mediated HTTPS for caves, BatFS encrypted filesystem.
 - **If `uname` says `Linux`** → you are **Ubuntu Claude** on the
   persistent Linux dev host. Your job: driving the m1n1 proxy,
   running `chainload.py`, capturing serial output, possibly grabbing
-  screenshots via Elgato, running tests on Bat_OS while it's live on
+  screenshots via Elgato, running tests on Sphragis while it's live on
   the M4.
 
 Both of you read the same files. Neither can message the other
@@ -54,7 +54,7 @@ directly. You coordinate by committing to GitHub and each reading
    invocation, USB permission gotchas, apt packages, Windows-doesn't-
    work explanation.
 
-There is also an **Obsidian vault** at `~/BAT_OS_VAULT/` (outside the
+There is also an **Obsidian vault** at `~/SPHRAGIS_VAULT/` (outside the
 repo). It mirrors every first-party file as a per-file note and adds
 hand-written editorial concept notes (`Concepts/M4 Boot Path`,
 `Concepts/TLS Hardening Journey`, `Concepts/Cave Isolation Model`,
@@ -69,7 +69,7 @@ editing it, the Concept notes are usually the fastest entry point.
 
 ## Key facts you must not forget
 
-- **The Mac is the target.** We boot Bat_OS on the Mac. Ubuntu
+- **The Mac is the target.** We boot Sphragis on the Mac. Ubuntu
   hosts the proxy. GitHub is shared brain.
 - **m1n1 is installed on the M4** via `kmutil configure-boot` in
   Recovery with Permissive Security. Rebooting the Mac boots m1n1.

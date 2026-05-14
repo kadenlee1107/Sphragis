@@ -5,7 +5,7 @@ topic: boot
 
 # M4 boot path
 
-> The single most-asked question about Bat_OS is "wait, how does this even boot on Apple Silicon?" Asahi Linux's installer explicitly refuses M4 hardware as of 2026. Apple doesn't publish the boot interface. We boot anyway, via a chain that's been earned one fact at a time. This note is the one place the whole chain sits in order.
+> The single most-asked question about Sphragis is "wait, how does this even boot on Apple Silicon?" Asahi Linux's installer explicitly refuses M4 hardware as of 2026. Apple doesn't publish the boot interface. We boot anyway, via a chain that's been earned one fact at a time. This note is the one place the whole chain sits in order.
 
 ## The chain, in seven steps
 
@@ -14,8 +14,8 @@ topic: boot
 3. **`kmutil configure-boot`** was run once, in Recovery, with **Permissive Security** enabled. This installed the Asahi-style `m1n1` second-stage on the volume so a reboot picks it up.
 4. **m1n1 stage 1** (vendored under [[external/m1n1]]) does the bring-up: parses ADT, pre-configures the AIC and PMGR, sets up the framebuffer, and exposes a USB proxy protocol for the host.
 5. **m1n1 stage 2** is loaded over the USB proxy by the host running [[external/m1n1/proxyclient/tools/chainload.py]]. **The flag that matters here is `-S` / `--skip-secondary-cpus`** — without it, the M4 P-cluster SErrors on the RVBAR writes m1n1 normally does. The vendored copy of `chainload.py` has the flag pre-applied so we don't forget.
-6. **Bat_OS kernel image** (`target/aarch64-unknown-none/release/bat_os`) is uploaded by the same proxy and entered at its reset vector.
-7. **`kernel_main_apple`** (in [[src/main.rs]]) is the first BAT-OS-authored function to execute on real M4 silicon. From there: cpu init, mmu setup, ADT walk, driver bring-up, BatFS mount, lock screen.
+6. **Sphragis kernel image** (`target/aarch64-unknown-none/release/sphragis`) is uploaded by the same proxy and entered at its reset vector.
+7. **`kernel_main_apple`** (in [[src/main.rs]]) is the first SPHRAGIS-authored function to execute on real M4 silicon. From there: cpu init, mmu setup, ADT walk, driver bring-up, BatFS mount, lock screen.
 
 ## What the host computer does
 
@@ -25,7 +25,7 @@ Do not use `run_guest.py`, m1n1's other entrypoint. It initializes a hypervisor 
 
 ## The first photo
 
-Before the journal existed, the first thing that proved any of this worked was a photo of the M4 internal display showing `bat_os >` with the encrypted/offline/firewall status bar. That photo is kept at [[_generated/docs/photos/2026-04-17_first_m4_boot/INDEX.md]] (or in the repo at `docs/photos/2026-04-17_first_m4_boot/IMG_7118.jpg`). When power was lost mid-session, that photo was all that survived. It's the durable record that an M4 actually executed a kernel we wrote.
+Before the journal existed, the first thing that proved any of this worked was a photo of the M4 internal display showing `sphragis >` with the encrypted/offline/firewall status bar. That photo is kept at [[_generated/docs/photos/2026-04-17_first_m4_boot/INDEX.md]] (or in the repo at `docs/photos/2026-04-17_first_m4_boot/IMG_7118.jpg`). When power was lost mid-session, that photo was all that survived. It's the durable record that an M4 actually executed a kernel we wrote.
 
 ## Where the documented hex lives
 

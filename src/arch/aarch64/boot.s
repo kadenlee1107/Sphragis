@@ -1,4 +1,4 @@
-// Bat_OS — ARM64 Boot Stub
+// Sphragis — ARM64 Boot Stub
 // First code that executes on the CPU.
 // Sets up the stack and jumps to Rust.
 

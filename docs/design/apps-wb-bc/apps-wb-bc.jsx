@@ -1,4 +1,4 @@
-// WB · BC — Bat_OS Wave 4
+// WB · BC — Sphragis Wave 4
 // Reuses appColors / appMono / Panel / KV / Dot / CaveRow / CaveEmptyRow / AuditStrip
 // from app-panels.jsx, plus Strip / StripSeg / ConnPill from apps-fs-ed-cm.jsx.
 
@@ -166,7 +166,7 @@ const FauxPage = () => (
       width: 320, height: 1, background: appColors.hairHi, margin: "8px 0 16px",
     }} />
     <p style={{ margin: "0 0 14px", maxWidth: 720 }}>
-      Bat_OS is a bare-metal AArch64 microkernel for security operators.
+      Sphragis is a bare-metal AArch64 microkernel for security operators.
       Zero external dependencies. Audit-everything. Encrypted at rest with
       <span style={{ color: appColors.amber }}> AES-256-CTR </span>
       and SHA-256 integrity.
@@ -190,7 +190,7 @@ const FauxPage = () => (
       then <span style={{ color: appColors.amber }}>tls-mode lockdown</span> to verify pinning.
     </p>
     <p style={{ margin: 0, color: appColors.dim, fontSize: 11 }}>
-      example.com · served by bat_os/0.5.0-DEV · build 20260502.a3f1c
+      example.com · served by sphragis/0.5.0-DEV · build 20260502.a3f1c
     </p>
   </div>
 );

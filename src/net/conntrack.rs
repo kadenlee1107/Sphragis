@@ -10,10 +10,10 @@
 //!
 //! This module is the foundation for closing that gap: a stateful
 //! flow table keyed on `(protocol, remote_ip, remote_port,
-//! local_port)`. When Bat_OS initiates an outbound connection, the
+//! local_port)`. When Sphragis initiates an outbound connection, the
 //! flow is registered as `New`/`Established`; the inbound side can
 //! query `lookup` to confirm an incoming packet matches an existing
-//! Bat_OS-initiated flow before consulting the stateless rules.
+//! Sphragis-initiated flow before consulting the stateless rules.
 //!
 //! Today's scope (minimum-viable slice):
 //!

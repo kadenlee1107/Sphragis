@@ -1,4 +1,4 @@
-# Bat_OS pins to a specific nightly so:
+# Sphragis pins to a specific nightly so:
 #
 # 1. `-Zfixed-x18` is available (the nightly-only replacement for the
 #    rust-deprecated `-C target-feature=+reserve-x18`, see

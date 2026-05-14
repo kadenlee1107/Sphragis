@@ -3,7 +3,7 @@
 //! TOTP is HOTP with `counter = floor((unix_time - T0) / period)`.
 //! Standard config: T0=0, period=30 seconds, 6 digits.
 //!
-//! Bat_OS does not have a wall clock today (see Concept note
+//! Sphragis does not have a wall clock today (see Concept note
 //! "Time Without a Clock"). Until cluster D lands NTP, callers must
 //! supply a Unix-epoch time externally — typically from a verified
 //! HTTPS Date header or via an attested time service.

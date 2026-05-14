@@ -1,4 +1,4 @@
-//! Bat_OS — POSIX-style anonymous pipes.
+//! Sphragis — POSIX-style anonymous pipes.
 //!
 //! `create()` returns `(read_fd, write_fd)` on the calling task's fd
 //! table. Bytes written to the write end are read from the read end

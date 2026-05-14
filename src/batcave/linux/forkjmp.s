@@ -1,4 +1,4 @@
-// Bat_OS — Fork save/restore via setjmp/longjmp mechanism
+// Sphragis — Fork save/restore via setjmp/longjmp mechanism
 // fork_save: saves all callee-saved registers + SP + LR to buffer
 // fork_restore: restores them, returning to the clone call site
 

@@ -46,7 +46,7 @@ Expected: `* [new tag] pre-scheduler-block-on-2026-05-07 -> pre-scheduler-block-
 - [ ] **Step 1: Confirm cargo check passes**
 
 Run: `cargo check --target aarch64-unknown-none --release 2>&1 | tail -5`
-Expected: `Finished ...`. Record the warning count from the line `warning: bat_os (bin "bat_os") generated N warnings` — that's the post-TLS-hardening baseline (~216).
+Expected: `Finished ...`. Record the warning count from the line `warning: sphragis (bin "sphragis") generated N warnings` — that's the post-TLS-hardening baseline (~216).
 
 - [ ] **Step 2: Confirm release build with selftest-on-boot also passes**
 
@@ -100,7 +100,7 @@ Use Edit to insert this block (before `pub fn schedule()` at the location identi
 ```rust
 // ─── Time helpers (cntpct_el0 / cntfrq_el0) ──────────────────────────────
 //
-// Bat_OS uses ARMv8 generic timer ticks as the canonical deadline unit.
+// Sphragis uses ARMv8 generic timer ticks as the canonical deadline unit.
 // All deadlines stored in BlockReason are absolute cntpct_el0 values.
 // See DESIGN_SCHEDULER_BLOCK_ON.md decision #2.
 

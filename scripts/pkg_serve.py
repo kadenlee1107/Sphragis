@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve a Bat_OS BPKG bundle over TCP so the guest can stage it.
+"""Serve a Sphragis BPKG bundle over TCP so the guest can stage it.
 
 BatFS on QEMU is RAM-only — there's no host-shared volume for the
 guest to read bundles from. This daemon listens on a TCP port and,
@@ -13,7 +13,7 @@ Usage:
         # bind: 127.0.0.1 only (QEMU slirp NATs the guest connect
         # from 10.0.2.2 through to host loopback)
 
-From Bat_OS:
+From Sphragis:
     pkg-stage <name-on-batfs> 10.0.2.2:9102
 """
 from __future__ import annotations
@@ -43,7 +43,7 @@ def main() -> int:
     s.bind((HOST, port))
     s.listen(4)
     print(f"[pkg-serve] listening on {HOST}:{port}")
-    print(f"[pkg-serve] from Bat_OS: pkg-stage <local-name> 10.0.2.2:{port}")
+    print(f"[pkg-serve] from Sphragis: pkg-stage <local-name> 10.0.2.2:{port}")
 
     try:
         while True:

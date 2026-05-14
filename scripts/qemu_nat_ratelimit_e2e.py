@@ -6,7 +6,7 @@ Scenario:
   inside the cave) uses that single authorized destination as cover
   for an exfil burst — blasting 80 TCP SYNs to 93.184.216.34:443.
 
-Bat_OS defense:
+Sphragis defense:
   1. cave_policy says Allow for each one (destination is in list).
   2. cave_shaper (pps=5, burst=10) says OverLimit after the bucket
      drains. First ~10 packets go through (burst), remaining get
@@ -31,12 +31,12 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 STAMP = datetime.now().strftime('%Y%m%d-%H%M%S')
 LOG = ROOT / f"logs/qemu-tests/ratelimit-{STAMP}.log"
 LOG.parent.mkdir(parents=True, exist_ok=True)
 ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]|\x1b\]\d+;[^\x07]*\x07")
-PROMPT = rb"bat_os\s*>\s*"
+PROMPT = rb"sphragis\s*>\s*"
 
 def ipv4_cksum(hdr):
     s=0

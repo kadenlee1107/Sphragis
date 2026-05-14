@@ -1,7 +1,7 @@
 # Ubuntu persistent-host setup (one-time, ~2-3 hours)
 
 This is the "graduate from live USB" setup. After this, Ubuntu is
-your permanent Bat_OS dev host — survives power loss, boots in 30s,
+your permanent Sphragis dev host — survives power loss, boots in 30s,
 Claude Code installed, Tailscale connected to the Mac, everything.
 
 ## 0. Choose the install target
@@ -50,7 +50,7 @@ On any computer:
 
 ## 3. First-boot setup script
 
-Clone Bat_OS and run the setup script, which installs every package
+Clone Sphragis and run the setup script, which installs every package
 we need:
 
 ```bash
@@ -61,8 +61,8 @@ cat ~/.ssh/id_ed25519.pub
 
 # Clone the repo
 mkdir -p ~/code && cd ~/code
-git clone git@github.com:kadenlee1107/Bat_OS.git
-cd Bat_OS
+git clone git@github.com:kadenlee1107/Sphragis.git
+cd Sphragis
 
 # Run the setup script
 chmod +x scripts/*.sh
@@ -77,7 +77,7 @@ The setup script installs:
 - `ffmpeg v4l-utils` — Elgato screen capture
 - `tmux` — persistent sessions so serial doesn't die on SSH disconnect
 - Rust nightly + `rust-src` + `rustup` — for `cargo build` on Ubuntu
-- `aarch64-unknown-none-softfloat` target — for cross-compiling Bat_OS
+- `aarch64-unknown-none-softfloat` target — for cross-compiling Sphragis
 
 It also sets up:
 - Your user in the `dialout` group (for `/dev/ttyACM*` access without sudo)
@@ -115,20 +115,20 @@ curl -fsSL https://claude.ai/install.sh | sh
 claude --version
 ```
 
-Then inside the Bat_OS folder, run `claude`. It'll read `CLAUDE.md`
+Then inside the Sphragis folder, run `claude`. It'll read `CLAUDE.md`
 automatically on first session start.
 
 ## 6. First test (without M4, sanity-check the env)
 
 ```bash
-cd ~/code/Bat_OS
+cd ~/code/Sphragis
 ./scripts/rebuild.sh --check    # cargo check, should succeed
 ```
 
 If that works, your Ubuntu env is ready. Next time you boot the Mac
 into m1n1, you can run:
 ```bash
-./scripts/chainload.sh target/bat_os_apple.bin
+./scripts/chainload.sh target/sphragis_apple.bin
 ```
 
 and it Just Works.
@@ -146,8 +146,8 @@ If you have an Elgato capture card (HD60 S / HD60 X / Cam Link):
 4. For M4 HDMI out: Mac16,1 (M4 MacBook Pro 14") has an HDMI port on the right side; plug it into the Elgato directly. (Earlier notes in this doc said MBA / no-HDMI — that was wrong, target machine is an MBP.)
    USB-C to HDMI adapter. Plug Mac USB-C → HDMI cable → Elgato HDMI in.
 5. Boot Mac into m1n1 and see if the bat logo appears on the captured
-   video. If yes, Elgato can capture Bat_OS too. If no, bare-metal
-   Bat_OS doesn't currently drive HDMI out — we'd need to port DCP
+   video. If yes, Elgato can capture Sphragis too. If no, bare-metal
+   Sphragis doesn't currently drive HDMI out — we'd need to port DCP
    external-display routing before this works.
 
 ## 8. When power goes out

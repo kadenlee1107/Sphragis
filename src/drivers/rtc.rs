@@ -1,4 +1,4 @@
-//! Bat_OS — RTC driver.
+//! Sphragis — RTC driver.
 //!
 //! Real-time clock readout. Two backends:
 //!   - QEMU virt: PL031 at 0x0901_0000 (standard ARM RTC IP block).

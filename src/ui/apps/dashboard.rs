@@ -1,4 +1,4 @@
-// Bat_OS — DS · System Dashboard
+// Sphragis — DS · System Dashboard
 //
 // Claude-Design port. Source artifacts in
 // `docs/design/apps-ds-nm-sk/` (jsx + spec sheet).
@@ -130,8 +130,8 @@ fn draw_architecture(p: &W::PanelInner) {
     let fb = gpu::framebuffer();
     let w = gpu::width();
     let mut y = p.y;
-    // Headline: "Bat_OS v0.5.0-DEV"
-    font::draw_str(fb, w, p.x, y, "Bat_OS  ", INK, BG);
+    // Headline: "Sphragis v0.5.0-DEV"
+    font::draw_str(fb, w, p.x, y, "Sphragis  ", INK, BG);
     font::draw_str(fb, w, p.x + 8 * 8, y, "v0.5.0-DEV", CYAN, BG);
     y += 18;
     font::draw_str(fb, w, p.x, y, "Bare-metal AArch64 microkernel . zero external deps", MID, BG);

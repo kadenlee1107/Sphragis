@@ -19,7 +19,7 @@ from pathlib import Path
 import pexpect
 
 ROOT = Path(__file__).resolve().parent.parent
-KERNEL = ROOT / "target/aarch64-unknown-none/release/bat_os"
+KERNEL = ROOT / "target/aarch64-unknown-none/release/sphragis"
 LOG = (
     ROOT
     / f"logs/qemu-tests/wg-endpoint-selftest-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -50,7 +50,7 @@ def main() -> int:
     try:
         c.expect(rb"Enter passphrase", timeout=60)
         c.sendline("")
-        c.expect(rb"bat_os > ", timeout=90)
+        c.expect(rb"sphragis > ", timeout=90)
         time.sleep(0.5)
 
         c.sendline("wg-endpoint-selftest")
@@ -60,14 +60,14 @@ def main() -> int:
         ], timeout=30)
         if idx == 1:
             try:
-                c.expect(rb"bat_os > ", timeout=5)
+                c.expect(rb"sphragis > ", timeout=5)
             except Exception:
                 pass
             print("[wg-endpoint] FAIL — selftest reported a failure", file=sys.stderr)
             print(f"[wg-endpoint] log: {LOG}", file=sys.stderr)
             return 1
 
-        c.expect(rb"bat_os > ", timeout=10)
+        c.expect(rb"sphragis > ", timeout=10)
         print("[wg-endpoint] PASS — endpoint config + outbound connect plumbing verified")
         print(f"[wg-endpoint] log: {LOG}")
         return 0
