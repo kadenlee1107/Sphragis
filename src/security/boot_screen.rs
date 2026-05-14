@@ -70,19 +70,18 @@ const FIELD_H:  u32 = 56;
 const DOT_PX:   u32 = 8;
 const DOT_GAP:  u32 = 8;
 
-// Σ glyph: 96-px cap height, rendered via Plex Serif Italic.
-const GLYPH_SIZE_PX:    u16 = 96;
-const WORDMARK_SIZE_PX: u16 = 14;
+// Σ glyph dimensions come from src/ui/draw.rs::PROJECT_GLYPH_FULL_{W,H}
+// (120×72 slot containing a 64×64 polygon Σ at 8-px stroke). Wordmark
+// deliberately omitted in Wave 1 — see paint_lock_screen rationale.
 
 // Stack offset: how far above screen vertical center the glyph baseline
-// sits. ~80 px keeps the composition off dead-middle without crowding
-// the top of the screen.
-const STACK_ABOVE_CENTER: u32 = 80;
+// sits. ~40 px keeps the (glyph + field) composition off dead-middle
+// without crowding the top of the screen.
+const STACK_ABOVE_CENTER: u32 = 40;
 
-// Wordmark sits 16 px below the glyph baseline; field sits 40 px below
-// the wordmark.
-const WORDMARK_GAP: u32 = 16;
-const FIELD_GAP:    u32 = 40;
+// Vertical gap between the bottom of the Σ glyph and the top of the
+// passphrase field.
+const GLYPH_FIELD_GAP: u32 = 64;
 
 // ─── Top-level paint of the lock screen ─────────────────────────────────
 
@@ -104,62 +103,40 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, _attempts: 
     let cx = (w / 2) as i32;
     let cy = (h / 2) as i32;
 
-    // ── Σ glyph (Plex Serif Italic, 96 px) ────────────────────────────
+    // ── Σ glyph (96×96 baked alpha bitmap) ────────────────────────────
     //
-    // Centered horizontally. Vertical position chosen so the glyph
-    // baseline sits STACK_ABOVE_CENTER above screen vertical center.
-    // truetype::draw_glyph expects (x, y) as the top-left of the glyph
-    // bitmap, so we measure the glyph's advance to center it, and
-    // approximate its visual height as size_px (close enough for the
-    // single-glyph layout — anti-aliased descender / ascender don't
-    // matter at this scale).
-    let glyph_advance = crate::ui::truetype::glyph_advance(
-        0x03A3, // Σ
-        crate::ui::truetype::FontFace::PlexSerifItalic,
-        GLYPH_SIZE_PX,
-    );
-    let glyph_x = cx - glyph_advance / 2;
-    let glyph_y = cy - STACK_ABOVE_CENTER as i32 - GLYPH_SIZE_PX as i32;
-    crate::ui::truetype::draw_glyph(
+    // Pre-rendered offline by scripts/gen_sigma_bitmap.py using PIL +
+    // IBM Plex Serif Italic at 2× supersampled → 1× downsampled. The
+    // kernel just alpha-blits it via draw::blit_alpha_bitmap. We pre-
+    // render rather than rasterize at runtime because the in-kernel
+    // truetype.rs has outline-iteration bugs that we couldn't reliably
+    // fix in scope; Wave 5 revisits it. A baked bitmap also costs
+    // nothing at runtime — pure framebuffer writes.
+    use crate::ui::sigma_bitmap::{SIGMA_BITMAP_96, SIGMA_BITMAP_W, SIGMA_BITMAP_H};
+    let glyph_x = cx - (SIGMA_BITMAP_W / 2) as i32;
+    let glyph_y = cy - STACK_ABOVE_CENTER as i32 - SIGMA_BITMAP_H as i32;
+    draw::blit_alpha_bitmap(
         fb, w, h,
         glyph_x, glyph_y,
-        0x03A3,
-        crate::ui::truetype::FontFace::PlexSerifItalic,
-        GLYPH_SIZE_PX,
+        &SIGMA_BITMAP_96,
+        SIGMA_BITMAP_W, SIGMA_BITMAP_H,
         INK,
     );
 
-    // ── Wordmark "SPHRAGIS" (Plex Sans Medium, 14 px, letterspaced) ──
-    //
-    // Plex Sans doesn't have built-in letterspacing — we add it by
-    // drawing each character separately with a fixed extra advance.
-    // 0.4em letterspacing at 14px = ~5.6 px per gap; round to 6.
-    const WORDMARK_LETTERSPACE: i32 = 6;
-    let wordmark = "SPHRAGIS";
-    let base_advance = crate::ui::truetype::text_advance(
-        wordmark,
-        crate::ui::truetype::FontFace::PlexSansMedium,
-        WORDMARK_SIZE_PX,
-    );
-    let extra = (wordmark.len() as i32 - 1) * WORDMARK_LETTERSPACE;
-    let wordmark_total_w = base_advance + extra;
-    let mut wordmark_x = cx - wordmark_total_w / 2;
-    let wordmark_y = glyph_y + GLYPH_SIZE_PX as i32 + WORDMARK_GAP as i32;
-    for ch in wordmark.chars() {
-        let adv = crate::ui::truetype::draw_glyph(
-            fb, w, h,
-            wordmark_x, wordmark_y,
-            ch as u32,
-            crate::ui::truetype::FontFace::PlexSansMedium,
-            WORDMARK_SIZE_PX,
-            INK,
-        );
-        wordmark_x += adv + WORDMARK_LETTERSPACE;
-    }
+    // Wave 1 deliberately omits the SPHRAGIS wordmark from the lock
+    // screen. Both rendering paths we tried (Plex Sans via the kernel's
+    // TrueType rasterizer, then the 8×16 bitmap font at 3× scale)
+    // produced unacceptable results — Plex Sans surfaced outline-
+    // iteration bugs in src/ui/truetype.rs at small sizes; the bitmap
+    // font is crisp but reads as pixel-art on a screen otherwise built
+    // around a TrueType Σ at 96 px. The Σ glyph alone is sufficient as
+    // the project mark on this surface (it literally means "the seal"
+    // in Greek). Wave 5 revisits the rasterizer; once that's clean we
+    // can reintroduce a real-typeface wordmark.
 
     // ── Field panel ──────────────────────────────────────────────────
     let field_x = (w / 2).saturating_sub(FIELD_W / 2);
-    let field_y = (wordmark_y as u32) + WORDMARK_SIZE_PX as u32 + FIELD_GAP;
+    let field_y = (glyph_y + SIGMA_BITMAP_H as i32) as u32 + GLYPH_FIELD_GAP;
     gpu::fill_rect(field_x, field_y, FIELD_W, FIELD_H, PANEL);
     draw::draw_border(field_x, field_y, FIELD_W, FIELD_H, HAIRLINE);
 

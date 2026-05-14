@@ -76,6 +76,55 @@ pub fn fill_polygon(points: &[(i32, i32)], origin_x: i32, origin_y: i32, color: 
     }
 }
 
+/// Blit a pre-rendered alpha bitmap (1 byte per pixel, 0 = transparent,
+/// 255 = full coverage) to the framebuffer at (`x`, `y`) using
+/// alpha-blended `color` over the existing framebuffer contents.
+///
+/// Used by the lock screen for the Σ glyph: a high-quality offline
+/// PIL render baked at build time, blitted at runtime — bypasses the
+/// in-kernel TrueType rasterizer's outline-iteration bugs entirely.
+pub fn blit_alpha_bitmap(
+    fb: *mut u32,
+    screen_w: u32,
+    screen_h: u32,
+    x: i32,
+    y: i32,
+    bitmap: &[u8],
+    bmp_w: u32,
+    bmp_h: u32,
+    color: u32,
+) {
+    if (bitmap.len() as u32) < bmp_w * bmp_h { return; }
+    let cr = ((color >> 16) & 0xFF) as i32;
+    let cg = ((color >> 8) & 0xFF) as i32;
+    let cb = (color & 0xFF) as i32;
+    for row in 0..bmp_h as i32 {
+        let sy = y + row;
+        if sy < 0 { continue; }
+        if sy >= screen_h as i32 { break; }
+        for col in 0..bmp_w as i32 {
+            let sx = x + col;
+            if sx < 0 || sx >= screen_w as i32 { continue; }
+            let cov = bitmap[(row as u32 * bmp_w + col as u32) as usize] as i32;
+            if cov == 0 { continue; }
+            let fb_idx = (sy as u32 * screen_w + sx as u32) as usize;
+            unsafe {
+                let dst = core::ptr::read_volatile(fb.add(fb_idx));
+                let dr = ((dst >> 16) & 0xFF) as i32;
+                let dg = ((dst >> 8) & 0xFF) as i32;
+                let db = (dst & 0xFF) as i32;
+                let r = (dr + (((cr - dr) * cov) / 255)).clamp(0, 255) as u32;
+                let g = (dg + (((cg - dg) * cov) / 255)).clamp(0, 255) as u32;
+                let b = (db + (((cb - db) * cov) / 255)).clamp(0, 255) as u32;
+                core::ptr::write_volatile(
+                    fb.add(fb_idx),
+                    0xFF000000 | (r << 16) | (g << 8) | b,
+                );
+            }
+        }
+    }
+}
+
 /// Hollow 1-px rectangle border in the given color. Cheap helper that
 /// keeps the four-fill_rect dance off every caller.
 pub fn draw_border(x: u32, y: u32, w: u32, h: u32, color: u32) {
