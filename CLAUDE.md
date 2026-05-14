@@ -37,20 +37,40 @@ with kernel-mediated HTTPS for caves, BatFS encrypted filesystem.
 
 Both of you read the same files. Neither can message the other
 directly. You coordinate by committing to GitHub and each reading
-`docs/SESSION_JOURNAL.md`.
+the session journal (now in the private companion repo — see below).
+
+## Two-repo layout
+
+Sphragis is split across two repositories:
+
+- **`kadenlee1107/Sphragis`** (this one, public-track) — the OS
+  itself: source, design docs, scripts, public-facing README / WHY /
+  RECEIPTS, and the boot-evidence photos.
+- **`kadenlee1107/sphragis-internal`** (private) — Tier 3 material
+  that must not be publicly disclosed. Lives at
+  `~/sphragis-internal/`. Contains: `M4_GROUND_TRUTH.md`,
+  `SESSION_JOURNAL.md`, `DISCLOSURE_POSTURE.md`, `LICENSING.md`.
+
+See [`docs/INTERNAL.md`](docs/INTERNAL.md) in this repo for the
+public-facing version of the split.
 
 ## Before you do ANYTHING, read these files in this order
 
-1. **`docs/SESSION_JOURNAL.md`** — chronological log of sessions. The
-   LAST few entries tell you what just happened and what's next.
-2. **`docs/M4_GROUND_TRUTH.md`** — the authoritative M4 hardware
-   reverse-engineering reference. Every hex address, register layout,
-   compatible string, PMGR sequence we have verified on real hardware.
-3. **`docs/ARCHITECTURE.md`** — the mental model of how the pieces
+1. **`~/sphragis-internal/docs/SESSION_JOURNAL.md`** — chronological
+   log of sessions. The LAST few entries tell you what just happened
+   and what's next.
+2. **`~/sphragis-internal/docs/M4_GROUND_TRUTH.md`** — the
+   authoritative M4 hardware reverse-engineering reference. Every hex
+   address, register layout, compatible string, PMGR sequence we have
+   verified on real hardware.
+3. **`~/sphragis-internal/docs/DISCLOSURE_POSTURE.md`** — the Tier 1 /
+   2 / 3 classification rules. Read before any public-facing post or
+   doc update.
+4. **`docs/ARCHITECTURE.md`** — the mental model of how the pieces
    (Mac + Ubuntu + GitHub + Elgato) fit together.
-4. **`docs/DEBUGGING_RUNBOOK.md`** — known failure modes and the
+5. **`docs/DEBUGGING_RUNBOOK.md`** — known failure modes and the
    exact recovery steps for each.
-5. **`UBUNTU_QUICKSTART.md`** (Ubuntu Claude) — the chainload
+6. **`UBUNTU_QUICKSTART.md`** (Ubuntu Claude) — the chainload
    invocation, USB permission gotchas, apt packages, Windows-doesn't-
    work explanation.
 
@@ -88,16 +108,17 @@ editing it, the Concept notes are usually the fastest entry point.
 - **The M4's real MMIO addresses are not the same as M1's.** Many
   existing references (Asahi docs, m1n1 source) use M1 addresses
   that LOOK plausible on M4 but aren't. Always cross-check against
-  `docs/M4_GROUND_TRUTH.md`.
+  `~/sphragis-internal/docs/M4_GROUND_TRUTH.md`.
 
 ## Before you commit changes
 
-1. **Update `docs/SESSION_JOURNAL.md`** with what you did, what you
-   learned, and what's next. This is how the OTHER Claude picks up
-   the trail.
-2. **Update `docs/M4_GROUND_TRUTH.md`** if you observed new M4
-   hardware facts. This is the long-term truth; session journal is
-   the timeline.
+1. **Update `~/sphragis-internal/docs/SESSION_JOURNAL.md`** with what
+   you did, what you learned, and what's next. This is how the OTHER
+   Claude picks up the trail. Commit + push to the private repo
+   separately.
+2. **Update `~/sphragis-internal/docs/M4_GROUND_TRUTH.md`** if you
+   observed new M4 hardware facts. This is the long-term truth;
+   session journal is the timeline.
 3. **Push to origin** (`main` is the default branch; renamed
    2026-05-08 from `feat/js-engine-browser-posix` after the
    no-browser pivot).
