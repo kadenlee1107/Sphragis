@@ -306,3 +306,177 @@ pub fn paint_all() {
         (desc.paint)(body);
     }
 }
+
+// ── Drag/resize state + hit testing ──────────────────────────────
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Corner { TL, TR, BL, BR }
+
+#[derive(Copy, Clone)]
+enum DragKind {
+    Move,
+    Resize(Corner),
+}
+
+#[derive(Copy, Clone)]
+struct DragState {
+    window: WindowId,
+    kind: DragKind,
+    start_mouse_x: i32,
+    start_mouse_y: i32,
+    start_rect: WindowRect,
+}
+
+// DRAG follows the same volatile + addr_of/addr_of_mut access
+// convention as FOCUSED and NEXT_ID above. Every read goes through
+// read_volatile and every write goes through write_volatile so the
+// optimizer cannot cache the value across call boundaries.
+static mut DRAG: Option<DragState> = None;
+
+const RESIZE_HIT: u32 = 12;
+const MIN_W: u32 = 280;
+const MIN_H: u32 = 160;
+
+pub enum Hit {
+    CloseGlyph(WindowId),
+    Corner(WindowId, Corner),
+    Chrome(WindowId),
+    Body(WindowId),
+    None,
+}
+
+pub fn hit_test(mx: i32, my: i32) -> Hit {
+    let snapshot: alloc::vec::Vec<Window> = iter().collect();
+    for window in snapshot.iter().rev() {
+        let r = window.rect;
+        let rx0 = r.x as i32;
+        let ry0 = r.y as i32;
+        let rx1 = rx0 + r.w as i32;
+        let ry1 = ry0 + r.h as i32;
+        if mx < rx0 || mx >= rx1 || my < ry0 || my >= ry1 { continue; }
+
+        let cgx0 = rx0 + 10;
+        let cgy0 = ry0 + ((CHROME_H - 8) / 2) as i32;
+        if mx >= cgx0 && mx < cgx0 + 8 && my >= cgy0 && my < cgy0 + 8 {
+            return Hit::CloseGlyph(window.id);
+        }
+
+        let rh = RESIZE_HIT as i32;
+        if mx < rx0 + rh && my < ry0 + rh { return Hit::Corner(window.id, Corner::TL); }
+        if mx >= rx1 - rh && my < ry0 + rh { return Hit::Corner(window.id, Corner::TR); }
+        if mx < rx0 + rh && my >= ry1 - rh { return Hit::Corner(window.id, Corner::BL); }
+        if mx >= rx1 - rh && my >= ry1 - rh { return Hit::Corner(window.id, Corner::BR); }
+
+        if my < ry0 + CHROME_H as i32 { return Hit::Chrome(window.id); }
+
+        return Hit::Body(window.id);
+    }
+    Hit::None
+}
+
+/// Begin a drag (or close, on CloseGlyph hit). Returns true if a
+/// repaint is needed.
+pub fn begin_drag(mx: i32, my: i32) -> bool {
+    match hit_test(mx, my) {
+        Hit::CloseGlyph(id) => { close(id); true }
+        Hit::Corner(id, corner) => {
+            focus(id);
+            if let Some(w) = get(id) {
+                unsafe {
+                    core::ptr::write_volatile(
+                        core::ptr::addr_of_mut!(DRAG),
+                        Some(DragState {
+                            window: id, kind: DragKind::Resize(corner),
+                            start_mouse_x: mx, start_mouse_y: my,
+                            start_rect: w.rect,
+                        }),
+                    );
+                }
+            }
+            true
+        }
+        Hit::Chrome(id) => {
+            focus(id);
+            if let Some(w) = get(id) {
+                unsafe {
+                    core::ptr::write_volatile(
+                        core::ptr::addr_of_mut!(DRAG),
+                        Some(DragState {
+                            window: id, kind: DragKind::Move,
+                            start_mouse_x: mx, start_mouse_y: my,
+                            start_rect: w.rect,
+                        }),
+                    );
+                }
+            }
+            true
+        }
+        Hit::Body(id) => { focus(id); true }
+        Hit::None => false,
+    }
+}
+
+pub fn update_drag(mx: i32, my: i32) -> bool {
+    let drag = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(DRAG)) };
+    let Some(d) = drag else { return false; };
+    let dx = mx - d.start_mouse_x;
+    let dy = my - d.start_mouse_y;
+    let r0 = d.start_rect;
+    let new_rect = match d.kind {
+        DragKind::Move => WindowRect {
+            x: (r0.x as i32 + dx).max(0) as u32,
+            y: (r0.y as i32 + dy).max(0) as u32,
+            w: r0.w, h: r0.h,
+        },
+        DragKind::Resize(corner) => {
+            let mut x = r0.x as i32;
+            let mut y = r0.y as i32;
+            let mut w = r0.w as i32;
+            let mut h = r0.h as i32;
+            match corner {
+                Corner::TL => { x += dx; y += dy; w -= dx; h -= dy; }
+                Corner::TR => {          y += dy; w += dx; h -= dy; }
+                Corner::BL => { x += dx;          w -= dx; h += dy; }
+                Corner::BR => {                   w += dx; h += dy; }
+            }
+
+            // Bug-fix A: use signed compares so a negative w or h
+            // (from aggressive dragging) still triggers the floor.
+            // The plan's `(w as u32) < MIN_W` wraps a negative i32
+            // to a huge u32, silently bypassing the floor.
+            let right  = r0.x as i32 + r0.w as i32;
+            let bottom = r0.y as i32 + r0.h as i32;
+
+            if w < MIN_W as i32 { w = MIN_W as i32; }
+            if h < MIN_H as i32 { h = MIN_H as i32; }
+
+            // Bug-fix B: re-anchor the opposite (fixed) edge after
+            // clamping, so it stays put when the moving edge hits the
+            // floor. Without this the far edge drifts with the cursor.
+            match corner {
+                Corner::TL => { x = right - w;  y = bottom - h; }
+                Corner::TR => {                  y = bottom - h; }
+                Corner::BL => { x = right - w;                  }
+                Corner::BR => {}
+            }
+
+            WindowRect {
+                x: x.max(0) as u32, y: y.max(0) as u32,
+                w: w as u32,        h: h as u32,
+            }
+        }
+    };
+    set_rect(d.window, new_rect);
+    true
+}
+
+pub fn end_drag() {
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(DRAG), None);
+    }
+}
+
+pub fn is_dragging() -> bool {
+    let drag = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(DRAG)) };
+    drag.is_some()
+}
