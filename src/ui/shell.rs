@@ -386,7 +386,7 @@ fn execute_inner(cmd: &str) {
                 cmd_comms(sub, parts[2]);
             }
         }
-        "caves" => cmd_batcave(parts[1], parts[2], parts[3], &parts),
+        "caves" => cmd_caves(parts[1], parts[2], parts[3], &parts),
         "panic" => cmd_panic(),
         "hello" => cmd_run_elf("hello"),
         "hello_libc" | "libc" => cmd_run_elf("libc"),
@@ -576,9 +576,9 @@ fn execute_inner(cmd: &str) {
         #[cfg(feature = "selftest-on-boot")]
         "scheduler-selftest" => cmd_scheduler_selftest(),
         "pq-tls-selftest" => cmd_pq_tls_selftest(),
-        "caves-fw-allow" => cmd_batcave_fw_allow(parts[1]),
-        "caves-fw-deny"  => cmd_batcave_fw_deny(parts[1]),
-        "caves-fw-list"  => cmd_batcave_fw_list(),
+        "caves-fw-allow" => cmd_caves_fw_allow(parts[1]),
+        "caves-fw-deny"  => cmd_caves_fw_deny(parts[1]),
+        "caves-fw-list"  => cmd_caves_fw_list(),
         "smc-probe" => cmd_smc_probe(),
         "smc-pet" => cmd_smc_pet_start(),
         "smc-stop" => cmd_smc_pet_stop(),
@@ -856,7 +856,7 @@ fn hex_nibble(b: u8) -> u8 {
 }
 
 // Integration #4: Sphragis pushes firewall rules to the daemon's egress proxy.
-fn cmd_batcave_fw_allow(target: &str) {
+fn cmd_caves_fw_allow(target: &str) {
     if target.is_empty() {
         console::puts("  usage: caves-fw-allow <host:port>  (or *:port / *)\n");
         return;
@@ -872,7 +872,7 @@ fn cmd_batcave_fw_allow(target: &str) {
         Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
     }
 }
-fn cmd_batcave_fw_deny(target: &str) {
+fn cmd_caves_fw_deny(target: &str) {
     if target.is_empty() {
         console::puts("  usage: caves-fw-deny <host:port>\n");
         return;
@@ -887,7 +887,7 @@ fn cmd_batcave_fw_deny(target: &str) {
         Err(e) => { console::puts("  Error: "); console::puts(e); console::puts("\n"); }
     }
 }
-fn cmd_batcave_fw_list() {
+fn cmd_caves_fw_list() {
     let r = crate::caves::docker_client::with_daemon(|| {
         crate::caves::docker_client::fw_list()
     });
@@ -6634,7 +6634,7 @@ fn ensure_default_cave() {
     }
 }
 
-fn cmd_batcave(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) {
+fn cmd_caves(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) {
     use crate::caves::cave;
     use crate::caves::docker_client;
     match subcmd {

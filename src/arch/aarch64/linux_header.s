@@ -67,7 +67,7 @@ halt:
 // Safe exit point for Cave Linux processes
 // When a Linux binary calls exit(), the exception handler
 // redirects ELR here instead of back to the binary.
-.global _batcave_exit_loop
-_batcave_exit_loop:
+.global _cave_exit_loop
+_cave_exit_loop:
     wfe
-    b       _batcave_exit_loop
+    b       _cave_exit_loop

@@ -5,7 +5,7 @@
 // Opens a TCP connection from Sphragis → Mac-side `batcaved` daemon at
 // 10.0.2.2:9999 (QEMU slirp's host alias). All lifecycle operations
 // for Docker-backed Caves flow through this module so the shell
-// surface in `cmd_batcave()` stays unified.
+// surface in `cmd_caves()` stays unified.
 //
 // See DESIGN_CAVES.md — this is how we satisfy:
 //   * "Tools installed from Kali repos on demand" (the daemon does
