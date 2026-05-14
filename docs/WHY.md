@@ -15,7 +15,7 @@ The conditions for a credible alternative have only recently aligned. Three shif
 
 ## Evidence
 
-As of May 2026, Sphragis is the first known non-Apple operating system to boot on Apple M4 hardware (Mac16,1 / J604 / T8132 "Donan"). Over the past months it has shipped approximately fifty distinct security primitives, each backed by a headless QEMU selftest that anyone can run in under a minute. Every claim in this document is independently verifiable by anyone with a Rust toolchain and an hour. See [`RECEIPTS.md`](RECEIPTS.md) for the full mapping from claim to commit to selftest.
+Sphragis boots on real Apple M4 hardware (Mac16,1 / J604 / T8132 "Donan") via an independent reverse-engineering pipeline — no Asahi base, no upstream Linux fork. Over the past months it has also shipped approximately fifty distinct security primitives, each backed by a headless QEMU selftest that anyone can run in under a minute. Every claim in this document is independently verifiable by anyone with a Rust toolchain and an hour. See [`RECEIPTS.md`](RECEIPTS.md) for the full mapping from claim to commit to selftest.
 
 ## Where this goes
 

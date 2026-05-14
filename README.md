@@ -1,10 +1,10 @@
 # Sphragis
 
-**First non-Apple OS booted on Apple M4. Bare-metal Rust microkernel. Government-grade security primitives.**
+**Bare-metal Rust microkernel for Apple Silicon. Government-grade security primitives. Boots on real Apple M4 hardware.**
 
 > ⚠️ Research-grade. Not production-ready. APIs and on-disk formats change without notice.
 
-Sphragis is a security-first microkernel for Apple Silicon, written in Rust and built from scratch — no Linux base, no Asahi fork, no off-the-shelf VFS or networking stack. As of April 2026 it is the first known non-Apple operating system to boot on Apple M4 hardware (Mac16,1 / J604 / T8132 "Donan"), reaching an interactive shell with a status bar over m1n1 chainload. ([boot evidence](docs/photos/2026-04-17_first_m4_boot/))
+Sphragis is a security-first microkernel for Apple Silicon, written in Rust and built from scratch — no Linux base, no Asahi fork, no off-the-shelf VFS or networking stack. It boots on real Apple M4 hardware (Mac16,1 / J604 / T8132 "Donan"), reaching an interactive shell with a status bar over m1n1 chainload, using a reverse-engineering pipeline independent of the Asahi toolchain. ([boot evidence](docs/photos/2026-04-17_first_m4_boot/))
 
 ## What's it for
 
@@ -14,7 +14,7 @@ Sphragis is opinionated about one thing in particular: **no ambient authority**.
 
 ## What works today
 
-- **Boots on real Apple M4 hardware** via [m1n1 chainload](https://github.com/AsahiLinux/m1n1). ADT discovery, DWC3 USB-3 bring-up, ATC PHY tunables, dockchannel UART — all confirmed on real silicon. As of May 2026 this is the only published non-Apple OS boot on M4 we are aware of; the Asahi Linux installer declines M4 at the time of writing.
+- **Boots on real Apple M4 hardware** via [m1n1 chainload](https://github.com/AsahiLinux/m1n1). ADT discovery, DWC3 USB-3 bring-up, ATC PHY tunables, dockchannel UART — all confirmed on real silicon. The Asahi Linux installer doesn't yet support M4 (M4/M5 RE is in progress in the Asahi community as of 2026); Sphragis got there via an independent RE pipeline, with the boot evidence linked above.
 - **Boots in QEMU virt** for development. `cargo build --release --target aarch64-unknown-none --features gicv3` produces a kernel that runs end-to-end on `qemu-system-aarch64 -machine virt -cpu max`. Every selftest below runs headlessly under QEMU.
 - **Per-cave MMU isolation.** Workloads run inside "caves" — each with its own L1 page table, mount namespace, IPC mailbox, memory quota, and security labels. Cave boundaries enforce TLB invalidation; cave-private state never crosses.
 - **Encrypted filesystem (BatFS).** Per-file AEAD (ChaCha20-Poly1305), per-cave keys derived from Argon2id over a passphrase, mount-namespace prefix per cave so two caves can't see each other's filenames.

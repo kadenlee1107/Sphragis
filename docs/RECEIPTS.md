@@ -10,9 +10,10 @@ If a stranger reads the README and asks "is this real or marketing copy" — thi
 
 ## 1. Hardware bring-up (Apple M4)
 
-**Claim:** Sphragis is the first known non-Apple OS booted on Apple M4 hardware (Mac16,1 / J604 / T8132 "Donan").
+**Claim:** Sphragis boots on Apple M4 hardware (Mac16,1 / J604 / T8132 "Donan") via an independent reverse-engineering pipeline.
 
 - **Evidence:** [`docs/photos/2026-04-17_first_m4_boot/`](photos/2026-04-17_first_m4_boot/) — sixteen photos with [`INDEX.md`](photos/2026-04-17_first_m4_boot/INDEX.md) describing each one. Reaches an interactive shell with status bar. ADT discovery, DWC3 USB-3 controller bring-up, ATC PHY tunables, dockchannel UART — all confirmed running on real silicon.
+- **Context:** The Asahi Linux installer does not currently support M4 (the Asahi community is independently working on M4/M5 RE per their end-of-2025 status report, with basic Alpine-on-M4 reported but not yet stable). Sphragis got there via our own RE pipeline rather than building on Asahi's.
 - **Reproducibility:** The boot path is documented in [`UBUNTU_QUICKSTART.md`](../UBUNTU_QUICKSTART.md). The chainload uses the m1n1 proxyclient with our pre-patched [`external/m1n1/proxyclient/tools/chainload.py`](../external/m1n1/proxyclient/tools/chainload.py) (carries the `--skip-secondary-cpus` flag that M4's P-cluster needs to avoid an RVBAR SError).
 - **Note on disclosure:** The hardware reverse-engineering specifics (PMGR sequences, ATC PHY tunable map, AIC2 base, dockchannel address) live in `docs/M4_GROUND_TRUTH.md` and are not publicly mirrored — this is the project's most valuable trade secret.
 
