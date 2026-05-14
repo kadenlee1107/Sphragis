@@ -11,7 +11,8 @@ pub mod wipe;
 pub mod zeroize;
 
 /// Check for panic hotkey (Ctrl+Shift+W = wipe NOW).
-/// Called from the main input loop.
+/// Called from the main input loop (Task 9 keyboard shortcut table wires this in).
+#[allow(dead_code)]
 pub fn check_panic_hotkey(c: u8) -> bool {
     // Ctrl+W = 0x17
     // This is the emergency wipe trigger
@@ -23,7 +24,8 @@ pub fn check_panic_hotkey(c: u8) -> bool {
 }
 
 /// Periodic security check — called from the main loop.
-/// Checks dead man's switch timer.
+/// Checks dead man's switch timer (Task 9 keyboard shortcut table wires this in).
+#[allow(dead_code)]
 pub fn periodic_check() {
     if deadman::check() {
         // Dead man's switch expired — wipe everything

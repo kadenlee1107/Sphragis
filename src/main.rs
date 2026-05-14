@@ -449,8 +449,9 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
             // Arm dead man's switch (48 hour default)
             security::deadman::arm(48);
 
-            // Launch desktop
-            ui::desktop::run();
+            // Launch desktop (loop keeps the -> ! context; Task 8 will
+            // interpose the lock screen between iterations).
+            loop { let _ = ui::desktop::run(); }
         }
         None => {
             drivers::uart::puts("[boot] No display — serial shell\n\n");
@@ -1576,7 +1577,9 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
         // pointer tables) are handled by the HV-side stage-2 alias:
         // run_guest.py maps 0x810000000..+32MiB → guest_base, so
         // link-time accesses land on the runtime bytes.
-        ui::desktop::run();
+        // Loop keeps the -> ! context; Task 8 will interpose the lock
+        // screen between iterations.
+        loop { let _ = ui::desktop::run(); }
     } else {
         drivers::apple::uart::puts("[boot] No display — serial shell\n\n");
         apple_serial_shell();

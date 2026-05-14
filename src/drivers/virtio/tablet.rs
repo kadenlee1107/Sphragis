@@ -383,6 +383,32 @@ pub fn pop_event() -> Option<InputEvent> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Wave 2 stub — PointerEvent + next_pointer_event
+// ---------------------------------------------------------------------------
+// Maps the existing InputEvent ring (ButtonDown/ButtonUp/Move) into the
+// simpler PointerEvent shape that desktop.rs consumes. Wave 3+ can replace
+// next_pointer_event() with richer decoding without touching the desktop.
+// ---------------------------------------------------------------------------
+
+/// Pointer event shape consumed by the Wave 2 desktop state machine.
+#[derive(Copy, Clone)]
+pub enum PointerEvent {
+    Down(i32, i32),
+    Move(i32, i32),
+    Up(i32, i32),
+}
+
+/// Translate the next InputEvent from the ring into a PointerEvent, if any.
+/// Returns None when the ring is empty. // Wave 2 stub
+pub fn next_pointer_event() -> Option<PointerEvent> {
+    match pop_event()? {
+        InputEvent::ButtonDown { x, y, .. } => Some(PointerEvent::Down(x, y)),
+        InputEvent::ButtonUp   { x, y, .. } => Some(PointerEvent::Up(x, y)),
+        InputEvent::Move       { x, y }     => Some(PointerEvent::Move(x, y)),
+    }
+}
+
 /// Same security sweep as keyboard.rs — wipe pending pointer state on
 /// cave switch so a privileged cursor position doesn't leak.
 pub fn reset_for_cave_switch() {
