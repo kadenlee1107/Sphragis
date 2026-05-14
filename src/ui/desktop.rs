@@ -596,7 +596,7 @@ fn shell_banner() {
     let by = pr.y + 16;
 
     // Project glyph (36×24 simplified, drawn at full source resolution).
-    draw::draw_bat_mini_full(bx as i32, by as i32, CYAN);
+    draw::draw_project_glyph_mini_full(bx as i32, by as i32, CYAN);
 
     // Wordmark + version + hint lines beside the bat.
     let tx = bx + 50;

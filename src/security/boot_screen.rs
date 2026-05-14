@@ -96,8 +96,8 @@ const CHAR_W:       u32 = 8;
 const CHAR_H:       u32 = 16;
 
 // Project glyph rasterizes into a 120x72 native viewport via ui::draw.
-const BAT_W: u32 = draw::BAT_FULL_W;
-const BAT_H: u32 = draw::BAT_FULL_H;
+const BAT_W: u32 = draw::PROJECT_GLYPH_FULL_W;
+const BAT_H: u32 = draw::PROJECT_GLYPH_FULL_H;
 
 // Field geometry: 480x56, centered horizontally, ~50px above vertical center.
 const FIELD_W: u32 = 480;
@@ -278,7 +278,7 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
     // Project glyph centered, ~180px above vertical mid.
     let glyph_x = cx - BAT_W / 2;
     let glyph_y = cy.saturating_sub(180);
-    draw::draw_bat_full(glyph_x as i32, glyph_y as i32, accent, accent_dim, BG);
+    draw::draw_project_glyph_full(glyph_x as i32, glyph_y as i32, accent, accent_dim, BG);
 
     // Wordmark "SPHRAGIS" — 32px in the spec, our font is 16px so it's
     // visually smaller than the mock, but the layout works.
