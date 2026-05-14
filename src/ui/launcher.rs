@@ -12,7 +12,9 @@ use crate::ui::topbar::TOPBAR_H;
 
 const BG:      u32 = 0xFF0D0D10;
 const INK:     u32 = 0xFFE5E7EB;
-const MID:     u32 = 0xFF9CA3AF;
+const MID:     u32 = 0xFF9CA3AF; // dimmed label text in Background mode
+// TILE_BG shares MID's hex by coincidence — distinct semantic
+// (tile fill, not text). Don't merge them in a future palette pass.
 const TILE_BG: u32 = 0xFF9CA3AF;
 
 const COLS: u32 = 4;
@@ -27,6 +29,30 @@ pub enum LauncherMode {
     Canvas,
 }
 
+struct GridLayout {
+    inset_x: u32,
+    inset_y: u32,
+    grid_w:  u32,
+    grid_h:  u32,
+    cell_w:  u32,
+    cell_h:  u32,
+}
+
+fn grid_layout(screen_w: u32, screen_h: u32) -> GridLayout {
+    let inset_x = (screen_w * 12) / 100;
+    let inset_y = TOPBAR_H + (screen_h - TOPBAR_H) * 4 / 100;
+    let grid_w = screen_w.saturating_sub(2 * inset_x);
+    let grid_h = (screen_h - TOPBAR_H) * 70 / 100;
+    GridLayout {
+        inset_x,
+        inset_y,
+        grid_w,
+        grid_h,
+        cell_w: grid_w / COLS,
+        cell_h: grid_h / ROWS,
+    }
+}
+
 pub fn paint(mode: LauncherMode) {
     let screen_w = gpu::width();
     let screen_h = gpu::height();
@@ -35,12 +61,7 @@ pub fn paint(mode: LauncherMode) {
         gpu::fill_rect(0, TOPBAR_H, screen_w, screen_h - TOPBAR_H, BG);
     }
 
-    let inset_x = (screen_w * 12) / 100;
-    let inset_y = TOPBAR_H + (screen_h - TOPBAR_H) * 4 / 100;
-    let grid_w = screen_w.saturating_sub(2 * inset_x);
-    let grid_h = (screen_h - TOPBAR_H) * 70 / 100;
-    let cell_w = grid_w / COLS;
-    let cell_h = grid_h / ROWS;
+    let GridLayout { inset_x, inset_y, cell_w, cell_h, .. } = grid_layout(screen_w, screen_h);
 
     let label_color = if mode == LauncherMode::Background { MID } else { INK };
     let tile_color  = if mode == LauncherMode::Background { 0xFF3A3B3F } else { TILE_BG };
@@ -69,12 +90,7 @@ pub fn hit_test(mx: i32, my: i32) -> Option<AppId> {
     let screen_h = gpu::height();
     if my < TOPBAR_H as i32 { return None; }
 
-    let inset_x = (screen_w * 12) / 100;
-    let inset_y = TOPBAR_H + (screen_h - TOPBAR_H) * 4 / 100;
-    let grid_w = screen_w.saturating_sub(2 * inset_x);
-    let grid_h = (screen_h - TOPBAR_H) * 70 / 100;
-    let cell_w = grid_w / COLS;
-    let cell_h = grid_h / ROWS;
+    let GridLayout { inset_x, inset_y, grid_w, grid_h, cell_w, cell_h } = grid_layout(screen_w, screen_h);
 
     if (mx as u32) < inset_x || (mx as u32) >= inset_x + grid_w { return None; }
     if (my as u32) < inset_y || (my as u32) >= inset_y + grid_h { return None; }
