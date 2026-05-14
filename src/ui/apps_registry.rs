@@ -13,15 +13,16 @@
 use crate::ui::wm::WindowRect;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[repr(u8)]
 pub enum AppId {
-    Caves,
-    Files,
-    Net,
-    Security,
-    Shell,
-    Editor,
-    Comms,
-    Agent,
+    Caves    = 0,
+    Files    = 1,
+    Net      = 2,
+    Security = 3,
+    Shell    = 4,
+    Editor   = 5,
+    Comms    = 6,
+    Agent    = 7,
 }
 
 pub struct AppDescriptor {
@@ -30,6 +31,8 @@ pub struct AppDescriptor {
     pub title: &'static str,
     pub paint: fn(WindowRect),
 }
+
+const _: () = assert!(APPS.len() == 8, "APPS length must match AppId variant count");
 
 pub static APPS: [AppDescriptor; 8] = [
     AppDescriptor { id: AppId::Caves,    label: "CAVES",    title: "CAVES",    paint: paint_caves },
@@ -43,7 +46,7 @@ pub static APPS: [AppDescriptor; 8] = [
 ];
 
 pub fn descriptor(id: AppId) -> &'static AppDescriptor {
-    APPS.iter().find(|d| d.id == id).expect("AppId always in APPS")
+    &APPS[id as usize]
 }
 
 // ── Paint callbacks ──────────────────────────────────────────────

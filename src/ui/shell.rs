@@ -11178,6 +11178,8 @@ fn hexnib(b: u8) -> u8 {
     }
 }
 
+/// Wave 2 stub — placeholder paint for the SHELL slot. The 11k-line
+/// console is integrated properly in Wave 5.
 // Wave 2 shim — refresh in Wave 3+
 pub fn paint(rect: crate::ui::wm::WindowRect) {
     use crate::ui::font;
