@@ -8,7 +8,7 @@
 > ones.
 >
 > See also: `DESIGN_SYS_CAVES.md` (the architectural premise this
-> design realises), `DESIGN_BATCAVES.md` (the cave runtime
+> design realises), `DESIGN_CAVES.md` (the cave runtime
 > proper), `docs/SESSION_JOURNAL.md` (2026-05-12 entries — the
 > day-by-day evolution).
 

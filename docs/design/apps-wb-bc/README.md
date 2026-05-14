@@ -40,10 +40,10 @@ Ported to Rust as STUMP #133:
   of the status strip.
 
 - **`src/ui/apps/caves_mgr.rs`** — full rewrite. Header strip
-  ("BATCAVES" + slot count), 60/40 split body, footer with
+  ("CAVES" + slot count), 60/40 split body, footer with
   count + per-state mini-pills + nav hint. Selection state
   (`SELECTED_CAVE` static, arrow-key nav via `handle_key`,
-  desktop dispatches `APP_BATCAVE` keystrokes the same way
+  desktop dispatches `APP_CAVES` keystrokes the same way
   it does APP_FILES). Detail panel renders the selected cave
   with glyph + KV rows (NAME / STATE / TYPE / FS_KEY / CAPS /
   TOOLS / AUDIT / CREATED), action hints (`caves enter` cyan,

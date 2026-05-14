@@ -76,7 +76,7 @@ tpi-wired-ops-selftest    full M-of-2 quorum drill on destructive ops
 ## Architecture pointers
 
 - [`DESIGN.md`](DESIGN.md) — top-level vision and architectural choices.
-- [`DESIGN_BATCAVES.md`](DESIGN_BATCAVES.md) — the cave isolation model.
+- [`DESIGN_CAVES.md`](DESIGN_CAVES.md) — the cave isolation model.
 - [`DESIGN_CAVE_ISOLATION.md`](DESIGN_CAVE_ISOLATION.md) — per-cave MMU + state isolation.
 - [`DESIGN_CRYPTO.md`](DESIGN_CRYPTO.md) — cryptographic primitive choices.
 - [`DESIGN_NO_BROWSER.md`](DESIGN_NO_BROWSER.md) — why we ripped out the in-tree browser.

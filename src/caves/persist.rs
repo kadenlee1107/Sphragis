@@ -2,7 +2,7 @@
 //
 // Cave registry persistence.
 //
-// DESIGN_BATCAVES.md line 87: "Persistent (default): survives reboots,
+// DESIGN_CAVES.md line 87: "Persistent (default): survives reboots,
 // tools stay installed". Until this module landed, that line was a lie:
 // CAVES[] was a static-mut RAM array with no save/load wiring, so every
 // reboot started with an empty cave table. Persistent caves' BatFS data

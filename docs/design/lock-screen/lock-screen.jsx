@@ -155,7 +155,7 @@ const LockScreen = ({ state = "idle", width = 1280, height = 800 }) => {
         display: "flex", flexDirection: "column", alignItems: "center",
         width: 560,
       }}>
-        {/* Bat glyph */}
+        {/* Project glyph */}
         <div style={{ marginBottom: 24, position: "relative" }}>
           <BatGlyph size={96} stroke={accent} node={accent} dim={isDenied ? lockColors.redDim : lockColors.cyanGlow} />
         </div>

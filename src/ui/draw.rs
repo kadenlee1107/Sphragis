@@ -2,7 +2,7 @@
 //
 // Extracted from `security/boot_screen.rs` so the desktop
 // chrome can re-use the same scanline polygon-fill + line
-// rasterizer for the title-bar bat glyph. Anything else that needs
+// rasterizer for the title-bar project glyph. Anything else that needs
 // vector-ish drawing on top of `gpu::fill_rect` should live here.
 
 #![allow(dead_code)]
@@ -86,7 +86,7 @@ pub fn draw_border(x: u32, y: u32, w: u32, h: u32, color: u32) {
     gpu::fill_rect(x + w - 1, y, 1, h, color);
 }
 
-// ─── Lock-screen bat glyph (120×72 detailed) ────────────────────────
+// ─── Lock-screen project glyph (120×72 detailed) ────────────────────────
 //
 // Translated from `docs/design/lock-screen/bat-glyph.jsx`.
 // 4 polygons (left wing, right wing, head, torso) +

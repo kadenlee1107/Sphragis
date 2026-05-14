@@ -7,7 +7,7 @@
 // for Docker-backed Caves flow through this module so the shell
 // surface in `cmd_batcave()` stays unified.
 //
-// See DESIGN_BATCAVES.md — this is how we satisfy:
+// See DESIGN_CAVES.md — this is how we satisfy:
 //   * "Tools installed from Kali repos on demand" (the daemon does
 //     the apt install on our behalf inside the container)
 //   * "Every Cave starts with ZERO access. Capabilities granted

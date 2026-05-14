@@ -8,7 +8,7 @@ language carries forward.
 
 ## Files
 
-- **`bat-mini.jsx`** — simplified 18×12 bat glyph for the title bar.
+- **`bat-mini.jsx`** — simplified 18×12 project glyph for the title bar.
   Membrane silhouette only — no finger bones, eye slits, or circuit
   nodes (would collapse to noise at this raster).
 - **`desktop-shell.jsx`** — the full desktop chrome: TitleBar (24px

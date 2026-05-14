@@ -8,7 +8,7 @@
 //! either dials out or returns 403. The policy brain is in Python on
 //! the host — Sphragis never sees it.
 //!
-//! That was fine as an MVP, but DESIGN_BATCAVES.md is explicit that
+//! That was fine as an MVP, but DESIGN_CAVES.md is explicit that
 //! the kernel is supposed to be the authority for every packet a cave
 //! emits. The eventual tap-device path (Followup #3c) will forward
 //! cave frames through a vmnet-backed netdev into Sphragis's IP stack,

@@ -12,7 +12,7 @@ language carries forward.
     full-width ARCHITECTURE panel with bat decoration.
   - `NetMonPane` — INTERFACE + FIREWALL (KV rows) + full-width
     SECURITY STACK flow diagram.
-  - `SecurityPane` — full-width ACTIVE BATCAVES table + bottom-
+  - `SecurityPane` — full-width ACTIVE CAVES table + bottom-
     row SECURITY PIPELINE (KV) + INTEGRITY (Merkle row + KVs +
     audit mini-strip).
 - **`apps-specs.jsx`** — implementation spec sheet. Defines the
@@ -46,7 +46,7 @@ Ported to Rust as STUMP #125:
   triangle heads. Narrow split-pane variant collapses to a 3×2
   grid with no arrows.
 
-- **`src/ui/apps/security.rs`** — rewritten. ACTIVE BATCAVES
+- **`src/ui/apps/security.rs`** — rewritten. ACTIVE CAVES
   iterates `cave::list`, decodes capability flags into the
   NET/RAW/DSP/FS pill set. SECURITY PIPELINE reads TLS mode
   live. INTEGRITY pulls the BatFS Merkle root, formats first 8

@@ -155,7 +155,7 @@ const AppsSpecs = () => (
     }}>sk · security</div>
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
       <ABlock title="Layout">
-        <ARow k="Top" v="ACTIVE BATCAVES · 1248×180 (full width)" />
+        <ARow k="Top" v="ACTIVE CAVES · 1248×180 (full width)" />
         <ARow k="Bottom L" v="SECURITY PIPELINE · 624×504" />
         <ARow k="Bottom R" v="INTEGRITY · 624×504" />
         <ARow k="PIPELINE label col" v="88px (longest: 'FIREWALL')" />

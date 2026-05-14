@@ -55,7 +55,7 @@ def docker_streaming(*args):
     return subprocess.run(cmd, text=True)
 
 # ── Cave primitives ──────────────────────────────────────────
-class BatCaveError(RuntimeError): pass
+class CaveError(RuntimeError): pass
 
 class DockerCave:
     """A Docker-backed Cave."""
@@ -105,7 +105,7 @@ class DockerCave:
     def run(self, argv: list[str], capture: bool = True):
         """`caves run` equivalent — exec inside the cave."""
         if not self.created:
-            raise BatCaveError(f"cave {self.display_name} not created")
+            raise CaveError(f"cave {self.display_name} not created")
         cmd = ["exec", self.name, *argv]
         if capture:
             return docker(*cmd, check=False)

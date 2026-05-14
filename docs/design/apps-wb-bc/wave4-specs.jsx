@@ -116,7 +116,7 @@ const Wave4Specs = () => (
     }}>bc · layout</div>
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
       <W4Block title="Header (32px) — same as FS">
-        <W4Row k="Left" v="'BATCAVES' 12px / 700 / tracking 2 + dim subtitle 'Isolated container runtime'" />
+        <W4Row k="Left" v="'CAVES' 12px / 700 / tracking 2 + dim subtitle 'Isolated container runtime'" />
         <W4Row k="Right" v="'N / 32 SLOTS' · tabular count ink · label dim" />
       </W4Block>
       <W4Block title="Body split">
@@ -175,7 +175,7 @@ const Wave4Specs = () => (
         <W4Row k="Lines" v="create · grant net · grant raw display · enter · seal · destroy" />
       </W4Block>
       <W4Block title="Bottom strip (28px)">
-        <W4Row k="Left seg" v="'BATCAVES N · MAX 32 · RUNNING M' · 1px #262626 right · 16px L/R" />
+        <W4Row k="Left seg" v="'CAVES N · MAX 32 · RUNNING M' · 1px #262626 right · 16px L/R" />
         <W4Row k="Mid seg" v="3× pills RUN/STP/DEL · 18px tall · 8px L/R · 9px / tracking 1.5 · color-per-state border" />
         <W4Row k="Right hint" v="'↑↓ select · Enter focus · shell to manage' · 10px dim · arrows + 'Enter' faint" />
       </W4Block>

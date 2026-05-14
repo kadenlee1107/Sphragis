@@ -10,7 +10,7 @@
 // Visual contract (matches `docs/design/lock-screen/specs.jsx`):
 // * 16-color palette anchored on near-black panels and cyan accent.
 // * Status pill row across the top with real subsystem state.
-// * Centered stack: geometric bat glyph + SPHRAGIS wordmark + version
+// * Centered stack: geometric project glyph + SPHRAGIS wordmark + version
 // line + passphrase field + helper hint row.
 // * Bottom-left: last 4 boot-log lines.
 // * Bottom-right: clock + attempts-remaining pill.
@@ -95,7 +95,7 @@ const HAIRLINE_Y:   u32 = 64;
 const CHAR_W:       u32 = 8;
 const CHAR_H:       u32 = 16;
 
-// Bat glyph rasterizes into a 120x72 native viewport via ui::draw.
+// Project glyph rasterizes into a 120x72 native viewport via ui::draw.
 const BAT_W: u32 = draw::BAT_FULL_W;
 const BAT_H: u32 = draw::BAT_FULL_H;
 
@@ -105,7 +105,7 @@ const FIELD_H: u32 = 56;
 const DOT_PX:  u32 = 8; // each masking dot is 8x8
 const DOT_GAP: u32 = 8;
 
-// Bat glyph + drawing primitives now live in ui::draw — see .
+// Project glyph + drawing primitives now live in ui::draw — see .
 
 /// Draw a 14×14 L-shape crosshair mark at one of the four corners.
 /// `dx, dy` are the direction signs (-1 / +1) the L opens toward.
@@ -275,7 +275,7 @@ fn paint_lock_screen(fb: *mut u32, w: u32, h: u32, state: LockState, attempts: u
         _                     => CYAN_DIM,
     };
 
-    // Bat glyph centered, ~180px above vertical mid.
+    // Project glyph centered, ~180px above vertical mid.
     let glyph_x = cx - BAT_W / 2;
     let glyph_y = cy.saturating_sub(180);
     draw::draw_bat_full(glyph_x as i32, glyph_y as i32, accent, accent_dim, BG);
@@ -531,7 +531,7 @@ pub fn run() {
             auth::AuthResult::Success => {
                 // Repaint the whole screen in Granted state so the
                 // field, label, helper row, and accent (including
-                // the bat glyph) all turn green together. Pre-fix
+                // the project glyph) all turn green together. Pre-fix
                 // we painted only the field overlay and got the
                 // y-offset wrong, dropping the green box onto the
                 // helper row instead of the field.

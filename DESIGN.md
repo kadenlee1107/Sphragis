@@ -8,7 +8,7 @@
 - **Stack:** Rust microkernel + minimal ARM64 assembly. Framebuffer UI first, GPU-accelerated later.
 - **Security model:** Full disk + per-file encryption backed by Secure Enclave. Passphrase + hardware token auth. Duress wipe code, dead man's switch, failed attempt destruction.
 - **Networking:** All traffic encrypted + routed through VPN → Tor. Strict allowlist firewall. Default deny all.
-- **Aesthetic:** Black and white Batman aesthetic. High contrast, bat iconography, sharp angular design.
+- **Aesthetic:** High-contrast monochrome with a single accent color. Sharp angular forms, restrained iconography, no skeuomorphism.
 - **Apps:** 8 individually isolated, hard-focused applications.
 
 ## Assumptions
@@ -124,7 +124,7 @@ Nobody in the chain sees the full picture.
 - **Filesystem Service** — custom encrypted FS, Merkle tree integrity
 - **Network Service** — firewall, Tor, VPN, TLS, DoH
 - **Input Service** — HID event routing, panic hotkey, keylogger-proof isolation
-- **UI Compositor** — owns framebuffer, composites app buffers, bat theme
+- **UI Compositor** — owns framebuffer, composites app buffers, monochrome theme
 - **Dead Man's Switch Service** — SE-backed timer, independent of other services
 
 ### Tier 3: Applications (launch last)
@@ -159,18 +159,18 @@ Nobody in the chain sees the full picture.
 | secure | #00FF00 | Verified, encrypted |
 
 ### Design Principles
-- Pure black desktop with subtle white bat emblem (watermark, centered)
+- Pure black desktop with subtle white project glyph (watermark, centered)
 - Tiling window manager — keyboard-driven, no floating windows
 - Sharp, angular — no rounded corners
 - Monospace font throughout
 - 1px white window borders on black
-- Bat icon in every window title bar
+- Project glyph in every window title bar
 - Status bar always visible: encryption state, network route, dead man's switch countdown
 - No animations in Phase 1
 
 ### Boot Screen
 - Minimal black screen, white text
-- Bat emblem, passphrase field, YubiKey status
+- Project glyph, passphrase field, YubiKey status
 - No version number, no hints, no information leakage
 
 ### Duress Fake Boot
@@ -232,7 +232,7 @@ Nobody in the chain sees the full picture.
 - **Deliverable:** fetch a web page through Tor + VPN from QEMU
 
 ### Phase 6: UI & Applications
-- 6a: Compositor, tiling WM, bat theme, font rendering
+- 6a: Compositor, tiling WM, monochrome theme, font rendering
 - 6b: Apps built one at a time:
   1. Terminal/Shell
   2. System Dashboard
@@ -283,6 +283,6 @@ Nobody in the chain sees the full picture.
 | 10 | Framebuffer first, GPU later | GPU from start | Framebuffer gets UI working immediately in QEMU. GPU (Apple AGX) requires complex reverse-engineered drivers. Build the experience first, accelerate later. |
 | 11 | Tiling window manager | Floating/stacking WM | Keyboard-driven is faster. No click-jacking attack surface. Fits tactical aesthetic. No wasted screen space. |
 | 12 | QEMU development first, bare metal later | Develop on real hardware | Can't risk bricking only MacBook during development. QEMU provides debugger attachment, snapshots, and safe iteration. virtio drivers stand in for real hardware. |
-| 13 | Black and white color scheme | Dark + yellow (Batman traditional) | User preference. High contrast, clean, no color ambiguity. Red (danger) and green (verified) are the only color accents. |
+| 13 | Black and white color scheme | Dark + saturated accent | High contrast, clean, no color ambiguity. Red (danger) and green (verified) are the only color accents. |
 | 14 | **Non-goal: libc / libc-compat shim** | musl-class shim, in-house libc | Gap-audit item 037 listed a libc shim as P0 for compatibility with off-the-shelf C software. We are explicitly **not** building one. A shim is XL effort and would import the attack surface of the entire C ecosystem — buffer-overflow primitives, string-formatting parsers, dlopen-style dynamic loaders, FILE* state machines — every one of which has been the source of historic CVEs. The security model favors purpose-built no-libc Rust workloads that the kernel can audit end-to-end. Test ELFs in `tests/` continue to use the existing hand-rolled C-compatible path for ABI ground-truth; no general-purpose shim ships. |
 | 15 | **Non-goal: preemptive scheduling without explicit cave hardening** | Linux-style preemption on every timer tick | The timer + GIC + IRQ-handler infrastructure exists (`arch::init_timer`, `arch::handle_irq`) and is wired for EL0-only preemption. It is currently disabled at boot because re-enabling it hangs the kernel mid-fire — likely an IRQ-re-entrancy issue in handle_irq_inner. Until a focused debug arc fixes that, CPU-quota enforcement is observability-only (the per-cave `cpu_ticks` counter accumulates but no preemption fires). Cooperative scheduling via `yield_now` + the per-N-syscalls fallback covers the everyday case. |

@@ -122,7 +122,7 @@ const Specs = () => (
         <Row k="Outer margin" v="56px L/R · 24px T/B" />
         <Row k="Status row" v="y=24 → 52 · 28px tall" />
         <Row k="Hairline" v="y=64 · full inner width · 1px #1A1A1A" />
-        <Row k="Bat glyph" v="96 × 64 · 2px stroke · centered, y=center−180" />
+        <Row k="Project glyph" v="96 × 64 · 2px stroke · centered, y=center−180" />
         <Row k="Wordmark" v="centered, 24px below glyph" />
         <Row k="Field" v="480 × 56 · centered · 1px border" />
         <Row k="Field padding" v="18px L/R · 8px gap between dots" />

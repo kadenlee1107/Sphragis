@@ -13,7 +13,7 @@ start Docker containers claiming to be Caves. Sphragis manages the
 cave lifecycle end-to-end via the control protocol; the daemon is
 essentially Sphragis's RPC agent.
 
-ALIGNMENT WITH DESIGN_BATCAVES.md
+ALIGNMENT WITH DESIGN_CAVES.md
 ---------------------------------
   [x] Isolation — Linux namespaces (Docker) isolate docker-caves from
       each other and the Mac host. (Hardware-MMU isolation applies to
@@ -1036,7 +1036,7 @@ class Handler(socketserver.StreamRequestHandler):
 
                 # Seal: destroy persistent volume + zero cave key, leave
                 # the container alive for its current session. Per
-                # DESIGN_BATCAVES.md anti-coercion ratchet.
+                # DESIGN_CAVES.md anti-coercion ratchet.
                 if line.startswith("CAVE_SEAL "):
                     name = line.split(maxsplit=1)[1].strip()
                     try:

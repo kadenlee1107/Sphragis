@@ -201,7 +201,7 @@ A new "AI" application alongside the existing apps (Files, Editor, Comms, Dashbo
 - Tool calls render as expandable strips between user and assistant messages
 - Citations render as clickable hairlines (clicking opens the cited file in the Editor app)
 
-Visual style matches the existing dark + cyan-accent palette; shares the `BatMark` component for the panel icon.
+Visual style matches the existing dark + cyan-accent palette; shares the `ProjectGlyph` component for the panel icon.
 
 ## Data flow
 

@@ -74,7 +74,7 @@ This is the kind of thing that's invisible until an audit asks "what happens to 
 ## Related
 
 - [[_generated/src/cave]] — the implementation (cave creation, switch, teardown)
-- [[_generated/DESIGN_BATCAVES.md]] — the original design doc
+- [[_generated/DESIGN_CAVES.md]] — the original design doc
 - [[_generated/src/net/cave_policy.rs]] — Hush
 - [[_generated/DESIGN_HTTPS_SYSCALL.md]] — kernel-mediated HTTPS, layered on cave isolation
 - [[Concepts/Audit Ring Contract]] — every cave event lands here

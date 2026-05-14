@@ -1746,7 +1746,7 @@ pub fn find_id(name: &str) -> Option<usize> {
 
 /// Seal a persistent Cave to ephemeral (one-way, irreversible).
 // /
-/// Anti-coercion design per DESIGN_BATCAVES.md §"Seal": once an
+/// Anti-coercion design per DESIGN_CAVES.md §"Seal": once an
 /// operator is facing duress and seals a cave, the persistent-state
 /// guarantees go away IMMEDIATELY — not at next-reboot. This means:
 // /
