@@ -1176,6 +1176,7 @@ fn get_font_face(face: FontFace) -> Option<&'static TrueTypeFont> {
 pub fn draw_glyph(
     fb: *mut u32,
     screen_w: u32,
+    screen_h: u32,
     x: i32,
     y: i32,
     codepoint: u32,
@@ -1205,6 +1206,7 @@ pub fn draw_glyph(
     for row in 0..gh as i32 {
         let sy = y + row;
         if sy < 0 { continue; }
+        if sy >= screen_h as i32 { break; }
         for col in 0..gw as i32 {
             let sx = x + col;
             if sx < 0 || sx >= screen_w as i32 { continue; }
@@ -1268,6 +1270,7 @@ pub fn text_advance(text: &str, face: FontFace, size_px: u16) -> i32 {
 pub fn draw_text(
     fb: *mut u32,
     screen_w: u32,
+    screen_h: u32,
     x: i32,
     y: i32,
     text: &str,
@@ -1277,7 +1280,7 @@ pub fn draw_text(
 ) -> i32 {
     let mut cursor_x = x;
     for ch in text.chars() {
-        cursor_x += draw_glyph(fb, screen_w, cursor_x, y, ch as u32, face, size_px, color);
+        cursor_x += draw_glyph(fb, screen_w, screen_h, cursor_x, y, ch as u32, face, size_px, color);
     }
     cursor_x - x
 }
