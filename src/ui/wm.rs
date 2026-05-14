@@ -2,7 +2,7 @@
 // Sphragis — Tiling Window Manager
 // Keyboard-driven, no floating windows.
 // Ctrl+1-5 switches apps. Ctrl+H/L splits horizontal/vertical.
-// Sharp angular borders, bat aesthetic.
+// Sharp angular borders, high-contrast monochrome aesthetic.
 
 use crate::ui::gpu;
 use super::font;

@@ -160,7 +160,7 @@ const SecurityPane = ({ narrow = false }) => {
       fontFamily: appMono, overflow: "hidden",
     }}>
       {/* CAVES — top full width */}
-      <Panel title="ACTIVE BATCAVES" metric="3 / 32 SLOTS">
+      <Panel title="ACTIVE CAVES" metric="3 / 32 SLOTS">
         <div style={{ display: "flex", flexDirection: "column" }}>
           {/* header row */}
           <div style={{

@@ -73,7 +73,7 @@ Each entry has a category, a one-line description, and the originating cave. The
 - [[_generated/src/security/audit]] — the implementation
 - [[Concepts/Cave Isolation Model]] — caves are who generates events
 - [[Concepts/Cryptography Stack]] — same AEAD as BatFS
-- [[_generated/DESIGN_BATCAVES.md]] — design doc that calls out the ring's role
+- [[_generated/DESIGN_CAVES.md]] — design doc that calls out the ring's role
 
 ## Open
 

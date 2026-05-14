@@ -223,7 +223,7 @@ When Arcs 1-3 land:
 ## References inside the tree
 
 * `DESIGN.md` decision #4 (microkernel), #9 (network privacy chain).
-* `DESIGN_BATCAVES.md` — original cave architecture.
+* `DESIGN_CAVES.md` — original cave architecture.
 * `src/caves/cave.rs` — cave struct + capability set.
 * `src/caves/ipc_session.rs` — authenticated cave-to-cave IPC.
 * `src/caves/linux/mmu.rs` — `setup_native_cave_l1`,

@@ -6,7 +6,7 @@ Cave emits, not just HTTP CONNECTs the daemon proxy happens to see.
 
 ## The problem in one paragraph
 
-DESIGN_BATCAVES.md says: *every cave starts with ZERO access; egress
+DESIGN_CAVES.md says: *every cave starts with ZERO access; egress
 goes through an allowlist firewall enforced at the microkernel level.*
 Pre-#3, the kernel had a `cave_policy` table but the ONLY enforcement
 was batcaved.py's Python HTTP CONNECT proxy on port 9998, which caves

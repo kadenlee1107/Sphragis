@@ -81,7 +81,7 @@ const ShellSpecs = () => (
       <DSBlock title="Brand block (left)">
         <DSRow k="Width" v="132px (fixed)" />
         <DSRow k="Padding" v="14px L/R · 0 T/B" />
-        <DSRow k="Bat glyph" v="18×12 · #22D3EE · simplified mark" />
+        <DSRow k="Project glyph" v="18×12 · #22D3EE · simplified mark" />
         <DSRow k="Wordmark" v="12px / 700 / tracking 2px · 'SPHRAGIS'" />
         <DSRow k="Underscore" v="cyan #22D3EE (only the '_')" />
         <DSRow k="Right border" v="1px #1A1A1A" />
@@ -176,7 +176,7 @@ const ShellSpecs = () => (
 
     {/* — GLYPH STRATEGY — */}
     <div style={{ marginBottom: 32 }}>
-      <DSBlock title="Bat glyph variants — same DNA, two rasters">
+      <DSBlock title="Project glyph variants — same DNA, two rasters">
         <DSRow k="Lock screen" v="120×72 detailed · membranes + finger bones + ears + eye slits + circuit nodes" />
         <DSRow k="Title bar" v="18×12 simplified · membranes + ears only · NO finger bones (collapse to noise)" />
         <DSRow k="Shell banner" v="36×24 detailed · same as lock-screen, just smaller raster tile" />

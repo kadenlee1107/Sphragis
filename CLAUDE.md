@@ -10,11 +10,11 @@ start from scratch.
 A bare-metal Rust operating system for Apple Silicon. Target machine
 is an **Apple M4 MacBook Pro 14" (Mac16,1 / J604 / T8132 "Donan")**.
 We have **actually booted Sphragis on real M4 hardware** — this is
-verified, not aspirational. Nobody else in the open-source world has booted a
-non-Apple OS on M4 yet (as of May 2026); Asahi Linux installer
-explicitly refuses to install on M4.
+verified, not aspirational. The Asahi Linux installer doesn't yet
+support M4 (M4/M5 RE is in progress in the Asahi community as of
+2026); we got to M4 boot via our own independent RE pipeline.
 
-See `DESIGN.md`, `DESIGN_BATCAVES.md`, `DESIGN_NO_BROWSER.md`,
+See `DESIGN.md`, `DESIGN_CAVES.md`, `DESIGN_NO_BROWSER.md`,
 `DESIGN_TLS_HARDENING.md`, `DESIGN_HTTPS_SYSCALL.md` for the
 project-level vision. The short version: security-first
 microkernel with isolated user "caves" (processes), no in-tree

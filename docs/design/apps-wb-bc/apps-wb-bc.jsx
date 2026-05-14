@@ -331,7 +331,7 @@ const WBPane = ({ state = "loaded" }) => {
   );
 };
 
-// — BC · BATCAVE ————————————————————————————————————————————
+// — BC · CAVE ————————————————————————————————————————————
 
 const CaveGlyph = ({ color = appColors.cyan }) => (
   <svg width="64" height="48" viewBox="0 0 64 48" shapeRendering="crispEdges">
@@ -561,7 +561,7 @@ const BCBottomStrip = ({ count, max, running, stopped, deleted }) => (
       fontSize: 10, letterSpacing: 1.5, color: appColors.mid,
       textTransform: "uppercase",
     }}>
-      <span style={{ color: appColors.faint }}>BATCAVES</span>
+      <span style={{ color: appColors.faint }}>CAVES</span>
       <span style={{ color: appColors.ink, fontVariantNumeric: "tabular-nums" }}>{count}</span>
       <span>·</span>
       <span style={{ color: appColors.faint }}>MAX</span>
@@ -680,7 +680,7 @@ const BCPane = ({ state = "two-caves" }) => {
           <span style={{
             fontSize: 12, fontWeight: 700, letterSpacing: 2, color: appColors.ink,
           }}>
-            BATCAVES
+            CAVES
           </span>
           <span style={{ color: appColors.faint, marginLeft: 12, letterSpacing: 1 }}>
             Isolated container runtime

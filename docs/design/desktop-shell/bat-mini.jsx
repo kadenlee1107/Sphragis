@@ -1,4 +1,4 @@
-// Title-bar bat glyph — simplified sibling of the lock-screen mark.
+// Title-bar project glyph — simplified sibling of the lock-screen mark.
 // 18x12 default. Membrane silhouette only (no finger bones, no eye slits —
 // those collapse to noise at this size). Same wing-shape DNA.
 

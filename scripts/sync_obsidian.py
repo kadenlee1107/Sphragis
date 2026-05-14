@@ -73,7 +73,7 @@ VENDORED_PER_FILE_ROOTS = ["external", "boot_chain"]
 # Top-level files that become per-file notes under _generated/{group}/
 TOP_LEVEL = {
     "designs": [
-        "DESIGN.md", "DESIGN_BATCAVES.md", "DESIGN_CRYPTO.md",
+        "DESIGN.md", "DESIGN_CAVES.md", "DESIGN_CRYPTO.md",
         "DESIGN_HTTPS_SYSCALL.md", "DESIGN_NO_BROWSER.md",
         "DESIGN_PACKET_PIPELINE.md", "DESIGN_SCHEDULER_BLOCK_ON.md",
         "DESIGN_TLS_HARDENING.md",

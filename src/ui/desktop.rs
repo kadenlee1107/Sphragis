@@ -569,7 +569,7 @@ fn halt_sphragis() -> ! {
 
 fn shell_banner() {
     // replace the old ASCII-art "BAT OS" letterforms with
-    // the geometric bat glyph + a structured banner per the spec.
+    // the geometric project glyph + a structured banner per the spec.
     // Layout below mirrors `docs/design/desktop-shell/desktop-shell.jsx`'s
     // ShellBanner component, painted directly to the FB so the
     // console doesn't have to know about pixel art.
@@ -595,7 +595,7 @@ fn shell_banner() {
     let bx = pr.x + 16;
     let by = pr.y + 16;
 
-    // Bat glyph (36×24 simplified, drawn at full source resolution).
+    // Project glyph (36×24 simplified, drawn at full source resolution).
     draw::draw_bat_mini_full(bx as i32, by as i32, CYAN);
 
     // Wordmark + version + hint lines beside the bat.

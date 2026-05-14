@@ -108,7 +108,7 @@ def clean_display(raw: str) -> list[str]:
         "[firewall]", "[net]", "[boot]", "[chromium", "[bs]",
         "[auth]", "[ipc]", "[arch]", "[rng]", "[sched]", "[mm]",
         "[security]", "[initrd]", "[dtb]", "[mmap]", "sphragis >",
-        "BATCAVES", "Cave created", "BATCAVE", "Granted",
+        "CAVES", "Cave created", "CAVE", "Granted",
         "caves ", "  Microkernel", "Ctrl+", "=====", "-----",
         "SPHRAGIS v", "Sphragis v", "(none)", "--------", "(")
     for line in raw.splitlines():
@@ -123,7 +123,7 @@ def clean_display(raw: str) -> list[str]:
     return keep
 
 # ── Core: boot Sphragis with pcap capture, run one command, kill ──
-def run_in_batcave(tool_cmd: str, pcap_path: Path, port: int) -> str:
+def run_in_cave(tool_cmd: str, pcap_path: Path, port: int) -> str:
     log_fp = open(LOG_DIR / f"kali-{tool_cmd.split()[0]}-{STAMP}.log", "wb")
     qemu = [
         "qemu-system-aarch64",
@@ -273,7 +273,7 @@ def main():
         print(f"   ({desc})")
         print("─" * 74)
         pcap = PCAP_DIR / f"{cmd.split()[0]}.pcap"
-        out = run_in_batcave(cmd, pcap, port)
+        out = run_in_cave(cmd, pcap, port)
         # Sphragis-side output (what the cave produced)
         print("   SPHRAGIS stdout:")
         lines = clean_display(out)

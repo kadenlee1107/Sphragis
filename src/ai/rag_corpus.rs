@@ -59,8 +59,8 @@ pub const CORPUS: &[CorpusEntry] = &[
         body: include_str!("../../docs/rag_corpus/design_design_ai_agent.md"),
     },
     CorpusEntry {
-        title: "DESIGN_BATCAVES",
-        body: include_str!("../../docs/rag_corpus/design_design_batcaves.md"),
+        title: "DESIGN_CAVES",
+        body: include_str!("../../docs/rag_corpus/design_design_caves.md"),
     },
     CorpusEntry {
         title: "DESIGN_CRYPTO",
