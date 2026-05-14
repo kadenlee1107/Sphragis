@@ -244,8 +244,8 @@ pub fn paint_all() {
         let is_focused = Some(window.id) == focused;
 
         // Drop shadow.
-        let sx = (r.x as i32 + SHADOW_OFFSET_X).max(0) as u32;
-        let sy = (r.y as i32 + SHADOW_OFFSET_Y).max(0) as u32;
+        let sx = r.x.saturating_add(SHADOW_OFFSET_X as u32);
+        let sy = r.y.saturating_add(SHADOW_OFFSET_Y as u32);
         gpu::fill_rect(sx, sy, r.w, r.h, SHADOW);
 
         // Body fill.
