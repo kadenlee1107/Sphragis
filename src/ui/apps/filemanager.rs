@@ -1,4 +1,6 @@
 // Sphragis — FS · File Manager
+// XXX Wave-2-temp: 3 old-WM call sites commented out, restored in Task 7.
+#![allow(dead_code)]
 //
 // Claude-Design Wave-3 port. Source artifacts in
 // `docs/design/apps-fs-ed-cm/` (jsx + spec sheet).
@@ -60,7 +62,7 @@ pub fn handle_key(c: u8) {
             if name_len > 0 {
                 let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
                 if crate::ui::apps::editor::load_from_batfs(name).is_ok() {
-                    crate::ui::wm::switch_app(crate::ui::wm::APP_EDITOR);
+                    // XXX Wave-2-temp: crate::ui::wm::switch_app(crate::ui::wm::APP_EDITOR);
                 }
             }
         }
@@ -80,7 +82,8 @@ const COL_MERKLE_W:   u32 = 110;
 const ROW_H: u32 = 24;
 
 pub fn render() {
-    let r = wm::content_rect();
+    // XXX Wave-2-temp: let r = wm::content_rect();
+    let r = wm::WindowRect { x: 0, y: 0, w: gpu::width(), h: gpu::height() };
     gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
     if r.w < 200 || r.h < 100 { return; }
 

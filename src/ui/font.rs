@@ -26,6 +26,7 @@ static mut CLIP_W: u32 = 0xFFFF; // default: no clipping
 static mut CLIP_H: u32 = 0xFFFF;
 
 /// Set the clip rectangle. All drawing will be clipped to this area.
+#[allow(dead_code)]
 pub fn set_clip(x: u32, y: u32, w: u32, h: u32) {
     unsafe { CLIP_X = x; CLIP_Y = y; CLIP_W = w; CLIP_H = h; }
 }

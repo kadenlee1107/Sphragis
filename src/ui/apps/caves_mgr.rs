@@ -1,4 +1,6 @@
 // Sphragis — BC · Cave Manager
+// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
+#![allow(dead_code)]
 //
 // Claude-Design Wave-4 port. Source artifacts in
 // `docs/design/apps-wb-bc/`. The manager is split into a 60%
@@ -52,7 +54,8 @@ pub fn handle_key(c: u8) {
 // ─── Render ─────────────────────────────────────────────────────────
 
 pub fn render() {
-    let r = wm::content_rect();
+    // XXX Wave-2-temp: let r = wm::content_rect();
+    let r = wm::WindowRect { x: 0, y: 0, w: crate::ui::gpu::width(), h: crate::ui::gpu::height() };
     gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
     if r.w < 200 || r.h < 100 { return; }
 

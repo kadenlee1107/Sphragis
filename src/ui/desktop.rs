@@ -1,14 +1,16 @@
 // Sphragis — Desktop Environment
 // Main event loop. Handles keyboard input, app switching, rendering.
 // Ctrl+1-5 switches between apps.
+// XXX Wave-2-temp: 65 old-WM call sites commented out, restored in Task 7.
 
 use crate::platform;
 use crate::security;
+#[allow(unused_imports)]
 use super::{wm, console, apps};
 
 /// Resume desktop after Cave exit — skip reinitialization.
 pub fn resume() -> ! {
-    let mut in_shell = true;
+    let in_shell = true;
     let mut cmd_buf = [0u8; 256];
     let mut cmd_len: usize = 0;
 
@@ -34,16 +36,12 @@ pub fn resume() -> ! {
             security::periodic_check();
 
             match c {
-                0x01 => { switch_to(wm::APP_SHELL); in_shell = true; continue; }
-                0x02 => { switch_to(wm::APP_DASHBOARD); in_shell = false; continue; }
-                0x04 => { switch_to(wm::APP_NETMON); in_shell = false; continue; }
-                0x05 => { switch_to(wm::APP_EDITOR); in_shell = false; continue; }
-                0x09 => {
-                    let next = (wm::active_app() + 1) % 9;
-                    switch_to(next);
-                    in_shell = next == wm::APP_SHELL;
-                    continue;
-                }
+                // XXX Wave-2-temp: switch_to(wm::APP_SHELL); in_shell = true;
+                // XXX Wave-2-temp: switch_to(wm::APP_DASHBOARD); in_shell = false;
+                // XXX Wave-2-temp: switch_to(wm::APP_NETMON); in_shell = false;
+                // XXX Wave-2-temp: switch_to(wm::APP_EDITOR); in_shell = false;
+                // XXX Wave-2-temp: let next = (wm::active_app() + 1) % 9; switch_to(next); in_shell = next == wm::APP_SHELL;
+                0x01 | 0x02 | 0x04 | 0x05 | 0x09 => { let _ = in_shell; continue; }
                 _ => {}
             }
 
@@ -58,7 +56,7 @@ pub fn resume() -> ! {
                             cmd_len = 0;
                         }
                         console::prompt();
-                        wm::flush_all();
+                        // XXX Wave-2-temp: wm::flush_all();
                     }
                     0x08 | 0x7F => {
                         if cmd_len > 0 {
@@ -68,7 +66,7 @@ pub fn resume() -> ! {
                             // force fullscreen flush —
                             // small per-rect flushes don't reach
                             // QEMU's host display on Mac cocoa.
-                            wm::flush_all();
+                            // XXX Wave-2-temp: wm::flush_all();
                         }
                     }
                     _ if c >= 0x20 && c <= 0x7E && cmd_len < 255 => {
@@ -76,7 +74,7 @@ pub fn resume() -> ! {
                         cmd_len += 1;
                         console::putc(c);
                         platform::serial_putc(c);
-                        wm::flush_all();
+                        // XXX Wave-2-temp: wm::flush_all();
                     }
                     _ => {}
                 }
@@ -89,8 +87,8 @@ pub fn resume() -> ! {
 /// Main desktop loop — runs forever.
 pub fn run() -> ! {
     // Initialize pane system + render shell
-    wm::init_panes_pub();
-    wm::switch_app(wm::APP_SHELL);
+    // XXX Wave-2-temp: wm::init_panes_pub();
+    // XXX Wave-2-temp: wm::switch_app(wm::APP_SHELL);
     render_current();
 
     let mut in_shell = true;
@@ -140,7 +138,7 @@ pub fn run() -> ! {
                     platform::serial_putc(b);
                 }
             }
-            wm::flush_all();
+            // XXX Wave-2-temp: wm::flush_all();
         };
     }
 
@@ -148,7 +146,7 @@ pub fn run() -> ! {
     console::init_in_window();
     shell_banner();
     console::prompt();
-    wm::flush_all();
+    // XXX Wave-2-temp: wm::flush_all();
 
     loop {
         // Check for keyboard input from EITHER serial (host terminal)
@@ -179,97 +177,59 @@ pub fn run() -> ! {
 
             match c {
                 // Ctrl+A through Ctrl+E for app switching
-                0x01 => { clear_input!(); switch_to(wm::APP_SHELL); in_shell = true; continue; }
-                0x02 => { clear_input!(); switch_to(wm::APP_DASHBOARD); in_shell = false; continue; }
-                0x03 => { // Ctrl+C — if in shell, cancel line; otherwise switch to files
+                // XXX Wave-2-temp: 0x01 => { clear_input!(); switch_to(wm::APP_SHELL); in_shell = true; continue; }
+                // XXX Wave-2-temp: 0x02 => { clear_input!(); switch_to(wm::APP_DASHBOARD); in_shell = false; continue; }
+                0x03 => { // Ctrl+C — if in shell, cancel line; otherwise noop (app switch removed)
                     if in_shell && cmd_len > 0 {
                         console::puts("^C\n");
                         cmd_len = 0;
                         console::prompt();
-                        wm::flush_all();
+                        // XXX Wave-2-temp: wm::flush_all();
                         continue;
                     } else if !in_shell {
                         clear_input!();
-                        switch_to(wm::APP_FILES);
+                        // XXX Wave-2-temp: switch_to(wm::APP_FILES);
                         in_shell = false;
                         continue;
                     }
                 }
-                0x04 => { clear_input!(); switch_to(wm::APP_NETMON); in_shell = false; continue; }
-                0x05 => { clear_input!(); switch_to(wm::APP_EDITOR); in_shell = false; continue; }
+                // XXX Wave-2-temp: 0x04 => { clear_input!(); switch_to(wm::APP_NETMON); in_shell = false; continue; }
+                // XXX Wave-2-temp: 0x05 => { clear_input!(); switch_to(wm::APP_EDITOR); in_shell = false; continue; }
+                0x01 | 0x02 | 0x04 | 0x05 => { clear_input!(); continue; }
 
-                // Tab key — cycle app in focused pane.
-                // 2026-04-20 21:45: cycle goes 0..8 → close-button-X → 0
+                // Tab key — cycle focus (floating WM: wm::cycle_focus in Task 4)
                 0x09 => {
                     platform::serial_puts("[tab] received\r\n");
-                    if wm::is_close_focused() {
-                        // Currently on the X — wrap back to app 0
-                        platform::serial_puts("[tab] unfocus+switch_app(0)\r\n");
-                        clear_input!();
-                        wm::unfocus_close_button();
-                        wm::switch_app(wm::APP_SHELL);
-                        in_shell = true;
-                        platform::serial_puts("[tab] calling render_current\r\n");
-                        render_current();
-                        platform::serial_puts("[tab] render_current done\r\n");
-                        continue;
-                    }
-                    let cur = wm::active_app();
-                    if cur == wm::APP_CAVES {
-                        // Last app → tab onto the close button
-                        platform::serial_puts("[tab] cur=BATCAVE → focus_close_button\r\n");
-                        clear_input!();
-                        wm::focus_close_button();
-                        // Don't change active_app — keep it on 8 so the
-                        // pane content stays visible behind the X.
-                        in_shell = false;
-                        platform::serial_puts("[tab] calling render_current (X)\r\n");
-                        render_current();
-                        platform::serial_puts("[tab] render_current done (X)\r\n");
-                        continue;
-                    }
-                    let next = cur + 1;
-                    platform::serial_puts("[tab] switching to next app\r\n");
-                    clear_input!();
-                    wm::switch_app(next);
-                    in_shell = next == wm::APP_SHELL;
-                    platform::serial_puts("[tab] calling render_current\r\n");
+                    // XXX Wave-2-temp: if wm::is_close_focused() { ... wm::unfocus_close_button(); wm::switch_app(wm::APP_SHELL); }
+                    // XXX Wave-2-temp: let cur = wm::active_app(); if cur == wm::APP_CAVES { wm::focus_close_button(); }
+                    // XXX Wave-2-temp: wm::switch_app(next); in_shell = next == wm::APP_SHELL;
                     render_current();
-                    platform::serial_puts("[tab] render_current done\r\n");
                     continue;
                 }
-                // Enter key — if close button is focused, halt Sphragis.
-                // CR (0x0D) and LF (0x0A) both treated as Enter here.
-                0x0D | 0x0A if wm::is_close_focused() => {
-                    platform::serial_puts("[enter] close focused — calling halt_sphragis\r\n");
-                    halt_sphragis();
-                    // halt_sphragis never returns
+                // Enter key — halt if applicable
+                // XXX Wave-2-temp: 0x0D | 0x0A if wm::is_close_focused() => { halt_sphragis(); }
+                0x0D | 0x0A => {
+                    // fall through to shell input handling below
                 }
 
-                // Ctrl+L — vertical split (left | right)
-                0x0C => { wm::split_vertical(); render_current(); continue; }
-                // Ctrl+K — horizontal split (top / bottom)
-                0x0B => { wm::split_horizontal(); render_current(); continue; }
-                // Ctrl+W — switch focus between split panels
-                0x17 => { wm::split_toggle_focus(); render_current(); continue; }
-                // Option+Tab (0x80) — cycle focus between panes
-                0x80 => { wm::split_toggle_focus(); render_current(); continue; }
-                // Ctrl+Q — close focused pane
-                0x11 => { wm::close_pane(); render_current(); in_shell = wm::active_app() == wm::APP_SHELL; continue; }
+                // XXX Wave-2-temp: 0x0C => { wm::split_vertical(); render_current(); continue; }
+                // XXX Wave-2-temp: 0x0B => { wm::split_horizontal(); render_current(); continue; }
+                // XXX Wave-2-temp: 0x17 => { wm::split_toggle_focus(); render_current(); continue; }
+                // XXX Wave-2-temp: 0x80 => { wm::split_toggle_focus(); render_current(); continue; }
+                // XXX Wave-2-temp: 0x11 => { wm::close_pane(); render_current(); in_shell = wm::active_app() == wm::APP_SHELL; continue; }
+                0x0C | 0x0B | 0x17 | 0x80 | 0x11 => { render_current(); continue; }
 
                 _ => {}
             }
 
             // Route keyboard input to the active app
-            let active = wm::active_app();
+            // XXX Wave-2-temp: let active = wm::active_app();
+            let active: u8 = 0; // Wave-2-temp: always route to shell until Task 7 desktop rewrite
+            // XXX Wave-2-temp: match active { wm::APP_SHELL => { ... } wm::APP_FILES | wm::APP_COMMS | wm::APP_CAVES => { ... } wm::APP_EDITOR => { ... } }
             match active {
-                wm::APP_SHELL => {
+                0 => {
+                    // Shell (always active in Wave-2 until Task 7 replaces this)
                     // ── Visual selection mode override ─────────────
-                    // While selection mode is active, arrows move
-                    // the row cursor / extend the range, Enter
-                    // commits to clipboard, Esc bails. Plain typing
-                    // is suppressed so the user doesn't accidentally
-                    // pollute the input buffer while highlighting.
                     if console::select_mode_active() {
                         use crate::drivers::virtio::keyboard::{
                             KEY_ARROW_UP, KEY_ARROW_DOWN,
@@ -291,7 +251,7 @@ pub fn run() -> ! {
                                        for j in 0..i { console::putc(tmp[i - 1 - j]); } }
                                 console::puts(" bytes to clipboard (Ctrl+V to paste)\n");
                                 console::prompt();
-                                wm::flush_all();
+                                // XXX Wave-2-temp: wm::flush_all();
                             }
                             0x1B => {
                                 console::exit_select_mode();
@@ -312,7 +272,7 @@ pub fn run() -> ! {
                                 cmd_len = 0;
                             }
                             console::prompt();
-                            wm::flush_all();
+                            // XXX Wave-2-temp: wm::flush_all();
                         }
                         0x08 | 0x7F => {
                             if cmd_len > 0 {
@@ -321,31 +281,18 @@ pub fn run() -> ! {
                                 platform::serial_putc(0x08);
                                 platform::serial_putc(b' ');
                                 platform::serial_putc(0x08);
-                                // small per-char rect
-                                // flushes from console::putc don't
-                                // reliably propagate to QEMU's
-                                // virtio-gpu host display on Mac
-                                // cocoa — the user types but sees
-                                // nothing until something else
-                                // triggers a fullscreen flush. Force
-                                // one here. Cheap because user types
-                                // at human rate.
-                                wm::flush_all();
+                                // XXX Wave-2-temp: wm::flush_all();
                             }
                         }
                         // Ctrl+V — paste from system clipboard.
                         0x16 => {
                             paste_at_input!();
                         }
-                        // Ctrl+Y — yank current input line into
-                        // clipboard. Doesn't clear the input; the
-                        // line stays visible and editable.
+                        // Ctrl+Y — yank current input line into clipboard.
                         0x19 => {
                             super::clipboard::set(&cmd_buf[..cmd_len]);
                         }
                         // Ctrl+S — enter visual selection mode.
-                        // Wipes the partial input so the highlight
-                        // doesn't overlay a half-typed prompt.
                         0x13 => {
                             clear_input!();
                             console::enter_select_mode();
@@ -356,87 +303,13 @@ pub fn run() -> ! {
                             cmd_len += 1;
                             console::putc(c);
                             platform::serial_putc(c);
-                            wm::flush_all(); // see above
+                            // XXX Wave-2-temp: wm::flush_all();
                         }
                         _ => {}
                     }
                 }
-                wm::APP_FILES | wm::APP_COMMS | wm::APP_CAVES => {
-                    // These three tabs embed a shell strip at the
-                    // bottom of their page so the operator can run
-                    // commands without swapping to SH. Routing:
-                    //   - arrows / special keys (0x80+) → app widget
-                    //   - printable + Backspace → shared shell input
-                    //   - Enter → execute command if input non-empty,
-                    //             otherwise the app's default (open
-                    //             file / enter cave / etc.)
-                    let is_widget_key = c >= 0x80 || c == 0x1B;
-                    let is_enter      = c == b'\r' || c == b'\n';
-                    if is_widget_key {
-                        // Arrow keys, etc. — go to the widget.
-                        match active {
-                            wm::APP_FILES   => apps::filemanager::handle_key(c),
-                            wm::APP_COMMS   => apps::comms::handle_key(c),
-                            wm::APP_CAVES => apps::caves_mgr::handle_key(c),
-                            _ => {}
-                        }
-                        render_current();
-                    } else if is_enter && cmd_len == 0 {
-                        // Empty input: defer to the app's default
-                        // Enter handler (open file, enter cave, etc.).
-                        match active {
-                            wm::APP_FILES   => apps::filemanager::handle_key(c),
-                            wm::APP_COMMS   => apps::comms::handle_key(c),
-                            wm::APP_CAVES => apps::caves_mgr::handle_key(c),
-                            _ => {}
-                        }
-                        render_current();
-                    } else if is_enter {
-                        // Execute the typed command. Output lands in
-                        // shared scrollback, which the embedded strip
-                        // re-renders on the next pass.
-                        console::putc(b'\n');
-                        platform::serial_puts("\r\n");
-                        let cmd = unsafe { core::str::from_utf8_unchecked(&cmd_buf[..cmd_len]) };
-                        super::shell::execute_cmd(cmd);
-                        cmd_len = 0;
-                        console::prompt();
-                        render_current();
-                    } else if c == 0x08 || c == 0x7F {
-                        if cmd_len > 0 {
-                            cmd_len -= 1;
-                            console::putc(0x08);
-                            platform::serial_putc(0x08);
-                            platform::serial_putc(b' ');
-                            platform::serial_putc(0x08);
-                            render_current();
-                        }
-                    } else if c == 0x16 {
-                        // Ctrl+V — paste clipboard into the
-                        // embedded shell strip.
-                        paste_at_input!();
-                        render_current();
-                    } else if c == 0x19 {
-                        // Ctrl+Y — yank current input line.
-                        super::clipboard::set(&cmd_buf[..cmd_len]);
-                    } else if c >= 0x20 && c <= 0x7E && cmd_len < 255 {
-                        cmd_buf[cmd_len] = c;
-                        cmd_len += 1;
-                        console::putc(c);
-                        platform::serial_putc(c);
-                        render_current();
-                    }
-                }
-                wm::APP_EDITOR => {
-                    // editor is a real text buffer now.
-                    // handle_key mutates the buffer + cursor; we
-                    // repaint the whole pane so the new content +
-                    // cursor land on screen.
-                    apps::editor::handle_key(c);
-                    render_current();
-                }
                 _ => {
-                    // Other apps: no keyboard input handling yet
+                    // Other apps: restored in Task 7 desktop rewrite
                 }
             }
         }
@@ -451,59 +324,31 @@ pub fn run() -> ! {
     }
 }
 
-fn switch_to(app: u8) {
-    wm::switch_app(app);
+// XXX Wave-2-temp: fn switch_to(app: u8) — restored in Task 7 desktop rewrite
+#[allow(dead_code)]
+fn switch_to(_app: u8) {
+    // XXX Wave-2-temp: wm::switch_app(app);
     render_current();
-    wm::flush_all();
+    // XXX Wave-2-temp: wm::flush_all();
 }
 
 fn render_current() {
-    // Clear clip for frame drawing
+    // XXX Wave-2-temp: wm::draw_frame() — restored in Task 7 desktop rewrite
+    // XXX Wave-2-temp: for i in 0..wm::pane_count() { wm::set_render_target(i); let r = wm::content_rect(); ... render_app(wm::pane_app(i)); }
+    // XXX Wave-2-temp: wm::set_render_target(0); wm::flush_all();
+    // Minimal shell-only render for Wave 2.
     super::font::clear_clip();
-    wm::draw_frame();
-
-    // Render each pane with clipping to its bounds
-    for i in 0..wm::pane_count() {
-        wm::set_render_target(i);
-        let r = wm::content_rect();
-        super::font::set_clip(r.x, r.y, r.w, r.h);
-        render_app(wm::pane_app(i));
-    }
-
-    super::font::clear_clip();
-    wm::set_render_target(0);
-    wm::flush_all();
+    let (saved_cx, saved_cy) = console::cursor();
+    console::redraw_content();
+    shell_banner();
+    console::set_cursor(saved_cx, saved_cy);
 }
 
-fn render_app(app: u8) {
-    match app {
-        wm::APP_SHELL => {
-            // real scrollback now lives in console.rs.
-            // Order matters:
-            // 1. redraw_content clears the pane and replays every
-            // buffered cell — that brings back the prompt,
-            // command output, AND any in-progress typed input.
-            // 2. shell_banner re-paints the bat-glyph banner over
-            // the cleared rows 0..3 (the banner is rendered
-            // directly to the FB, not through the buffer).
-            // 3. shell_banner ends with set_cursor(0, 4) — but
-            // that would clobber the cursor position the buffer
-            // wants to keep (it's at the END of the user's last
-            // typing). So save & restore around the banner call.
-            let (saved_cx, saved_cy) = console::cursor();
-            console::redraw_content();
-            shell_banner();
-            console::set_cursor(saved_cx, saved_cy);
-        }
-        wm::APP_DASHBOARD => apps::dashboard::render(),
-        wm::APP_FILES => apps::filemanager::render(),
-        wm::APP_NETMON => apps::netmon::render(),
-        wm::APP_EDITOR => apps::editor::render(),
-        wm::APP_SECURITY => apps::security::render(),
-        wm::APP_COMMS => apps::comms::render(),
-        wm::APP_CAVES => apps::caves_mgr::render(),
-        _ => {}
-    }
+// XXX Wave-2-temp: fn render_app(app: u8) — restored in Task 7 desktop rewrite
+// (body used wm::APP_* as match patterns; entire fn replaced by Task 7)
+#[allow(dead_code)]
+fn render_app(_app: u8) {
+    // XXX Wave-2-temp: match app { wm::APP_SHELL => { ... } wm::APP_DASHBOARD => ... wm::APP_FILES => ... ... }
 }
 
 /// Clean Sphragis shutdown — paint a "Shutdown" banner over the
@@ -515,6 +360,7 @@ fn render_app(app: u8) {
 /// Useful now that the M4 ~118 s AP-watchdog is disabled (see
 /// SESSION_JOURNAL 2026-04-20 21:30) — the Mac will keep running
 /// until externally rebooted.
+#[allow(dead_code)]
 fn halt_sphragis() -> ! {
     use crate::ui::{font, gpu};
 
@@ -539,7 +385,7 @@ fn halt_sphragis() -> ! {
     font::draw_str(fb, w, cx - 80, cy + 32,  "Reboot the Mac to restart.",
                    0xFF505050, 0xFF000000);
     platform::serial_puts("[halt] draw3 done\r\n");
-    wm::flush_all();
+    // XXX Wave-2-temp: wm::flush_all();
     platform::serial_puts("[halt] flush_all done\r\n");
 
     // Serial marker — supervisor + interactive driver can grep for this
@@ -576,7 +422,6 @@ fn shell_banner() {
     use crate::ui::draw;
     use crate::ui::font;
     use crate::ui::gpu;
-    use crate::ui::wm;
 
     const INK:      u32 = 0xFFE5E7EB;
     const MID:      u32 = 0xFF9CA3AF;
@@ -588,12 +433,9 @@ fn shell_banner() {
 
     let fb = gpu::framebuffer();
     let w = gpu::width();
-    // Banner is anchored just inside the console pane's content rect.
-    // wm::content_rect returns the active pane; for the post-auth
-    // single-pane shell that's the full content area.
-    let pr = wm::content_rect();
-    let bx = pr.x + 16;
-    let by = pr.y + 16;
+    // XXX Wave-2-temp: let pr = wm::content_rect(); — use fixed origin for Wave 2 shell-only mode
+    let bx: u32 = 16;
+    let by: u32 = 16;
 
     // Project glyph (36×24 simplified, drawn at full source resolution).
     draw::draw_project_glyph_mini_full(bx as i32, by as i32, CYAN);

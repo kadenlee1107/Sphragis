@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 // Sphragis — Comms Client (8th Desktop App)
+// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
 //
 // Real end-to-end encrypted peer-to-peer messaging over TCP. Wire
 // protocol matches `scripts/comms_test_server.py`:
@@ -617,7 +618,8 @@ pub fn render() {
         HAIR as W_HAIR,
     };
 
-    let r = wm::content_rect();
+    // XXX Wave-2-temp: let r = wm::content_rect();
+    let r = wm::WindowRect { x: 0, y: 0, w: gpu::width(), h: gpu::height() };
     let fb = gpu::framebuffer();
     let sw = gpu::width();
     gpu::fill_rect(r.x, r.y, r.w, r.h, W_BG);

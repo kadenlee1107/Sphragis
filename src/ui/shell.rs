@@ -1,6 +1,7 @@
 // Sphragis — Interactive Kernel Shell
 // Command-line interface rendered to the GPU console.
 // Reads from UART, displays on framebuffer.
+// XXX Wave-2-temp: 2 old-WM call sites commented out, restored in Task 7.
 
 use crate::platform;
 use crate::ui::console;
@@ -7577,7 +7578,7 @@ fn cmd_edit(name: &str) {
             console::puts("\n");
             // Switch to the editor app so the operator sees what they
             // just loaded.
-            crate::ui::wm::switch_app(crate::ui::wm::APP_EDITOR);
+            // XXX Wave-2-temp: crate::ui::wm::switch_app(crate::ui::wm::APP_EDITOR);
         }
         Err(e) => {
             console::puts("  edit: ");
