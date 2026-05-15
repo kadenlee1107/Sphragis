@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+extern crate alloc;
 // Sphragis — Comms Client (8th Desktop App)
 // XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
 //
@@ -21,22 +22,11 @@
 // passes it here, so the offer-verify step rejects any MITM that
 // can't sign as the real server.
 
-use crate::ui::wm;
 use crate::ui::font;
 use crate::ui::gpu;
 use crate::crypto::{chacha20poly1305 as cp, sha256};
 use ed25519_compact::{KeyPair, PublicKey, SecretKey, Seed, Signature};
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519Public};
-
-const BG: u32 = 0xFF0A0A0A;
-const FG: u32 = 0xFFA0A0A0;
-const FG_HI: u32 = 0xFFFFFFFF;
-const DIM: u32 = 0xFF5A5A5A;
-const GREEN: u32 = 0xFF00FF00;
-const RED: u32 = 0xFF0000FF;
-const CYAN: u32 = 0xFFFFFF00;
-const BORDER: u32 = 0xFF1E1E1E;
-const INPUT_BG: u32 = 0xFF141414;
 
 // Connection state
 #[derive(Clone, Copy, PartialEq)]
@@ -603,182 +593,153 @@ pub fn reset_for_cave_switch() {
     }
 }
 
-/// Render the comms client UI.
-// /
-/// Claude-Design Wave-3 port. 32px header (COMMS
-/// wordmark + connection pill + cipher/key pills), timeline body
-/// (12px message rows aligned in [HH:MM] | dir | sender | text
-/// columns + grey-prefixed system messages), 28px composer
-/// (cyan ">" prompt + ink typed text + cursor + char counter).
-pub fn render() {
-    use crate::ui::widgets::{
-        self as W, draw_strip, draw_conn_pill, State,
-        BG as W_BG, INK as W_INK, MID as W_MID, DIM_TXT as W_DIM, FAINT as W_FAINT,
-        CYAN as W_CYAN, GREEN as W_GREEN, AMBER as W_AMBER, PANEL as W_PANEL,
-        HAIR as W_HAIR,
-    };
+fn render(rect: crate::ui::wm::WindowRect) {
+    use crate::ui::widgets::draw_strip;
+    use crate::ui::palette as p;
 
-    // XXX Wave-2-temp: let r = wm::content_rect();
-    let r = wm::WindowRect { x: 0, y: 0, w: gpu::width(), h: gpu::height() };
     let fb = gpu::framebuffer();
     let sw = gpu::width();
-    gpu::fill_rect(r.x, r.y, r.w, r.h, W_BG);
+    gpu::fill_rect(rect.x, rect.y, rect.w, rect.h, p::BG);
 
     let header_h: u32 = 32;
     let composer_h: u32 = 28;
-    let body_y = r.y + header_h;
-    let composer_y = r.y + r.h - composer_h;
-    // Embedded shell strip — bottom 35% of body, above the composer.
-    // Lets the operator type `comms connect <ip>:<port>` etc.
-    // without swapping to the SH tab.
+    let body_y = rect.y + header_h;
+    let composer_y = rect.y + rect.h - composer_h;
     let body_total_h = composer_y.saturating_sub(body_y);
-    let shell_h = (body_total_h * 7 / 20).max(96);  // 35% of body
+    let shell_h = (body_total_h * 7 / 20).max(96);
     let shell_y = composer_y - shell_h - 1;
     let body_h = shell_y.saturating_sub(body_y);
 
     // ── HEADER STRIP ──────────────────────────────────────────────
-    draw_strip(r.x, r.y, r.w, header_h, false, true);
-    // COMMS wordmark.
-    let h_text_y = r.y + (header_h - 16) / 2;
-    font::draw_str(fb, sw, r.x + 16, h_text_y, "COMMS", W_INK, W_BG);
-    // Connection pill — depends on state.
-    let st = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(STATE)) };
-    let pill_y = r.y + (header_h - 22) / 2;
-    let mut pill_x = r.x + 16 + 6 * 8 + 8; // "COMMS" + gap
-    match st {
-        CommState::Disconnected => {
-            pill_x = draw_conn_pill(pill_x, pill_y, "DISCONNECTED", None, State::Fail);
-        }
-        CommState::Connecting => {
-            pill_x = draw_conn_pill(pill_x, pill_y, "CONNECTING", None, State::Warn);
-        }
-        CommState::Connected => {
-            pill_x = draw_conn_pill(pill_x, pill_y, "CONNECTED",
-                Some("peer 10.0.2.42:9100"), State::Ok);
-        }
-        CommState::Error => {
-            pill_x = draw_conn_pill(pill_x, pill_y, "ERROR", None, State::Fail);
-        }
-    }
-    let _ = pill_x;
-    // Right side: cipher + key prefix pills (only when connected).
-    if st == CommState::Connected {
-        // Cipher pill is now the real wire cipher; key prefix is the
-        // first 8 bytes of the c2s session key (forward-secret per
-        // session, derived from X25519 ECDH + Ed25519-pinned offers).
-        let cipher = "ChaCha20-Poly1305";
-        let key_label = "K";
-        // Hex of the first 4 bytes of c2s key, e.g. "a1b2c3d4...".
-        let mut key_str = [0u8; 11];
-        let hex = b"0123456789abcdef";
-        let c2s = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(C2S_KEY)) };
-        for i in 0..4 {
-            key_str[i * 2]     = hex[(c2s[i] >> 4) as usize];
-            key_str[i * 2 + 1] = hex[(c2s[i] & 0x0f) as usize];
-        }
-        key_str[8..11].copy_from_slice(b"...");
-        let key_value = unsafe { core::str::from_utf8_unchecked(&key_str) };
+    let _ = draw_strip(rect.x, rect.y, rect.w, header_h, false, true);
+    let h_text_y = rect.y + (header_h - 16) / 2;
+    font::draw_str(fb, sw, rect.x + 16, h_text_y, "COMMS", p::INK, p::BG);
 
-        let cipher_w = compute_pill_w(cipher, None);
-        let key_w = compute_pill_w(key_label, Some(key_value));
-        let gap: u32 = 8;
-        let total = cipher_w + gap + key_w;
-        if r.w > total + 16 {
-            let mut rx = r.x + r.w - 16 - total;
-            rx = draw_conn_pill(rx, pill_y, cipher, None, State::Neutral);
-            rx += gap;
-            let _ = draw_conn_pill(rx, pill_y, key_label, Some(key_value), State::Neutral);
+    let st = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(STATE)) };
+    let state_x = rect.x + 16 + 6 * 8;  // after "COMMS" + 8px gap
+    let state_label = match st {
+        CommState::Disconnected => alloc::string::String::from("DISCONNECTED"),
+        CommState::Connecting   => format_state("CONNECTING"),
+        CommState::Connected    => format_state("CONNECTED · peer"),
+        CommState::Error        => alloc::string::String::from("ERROR"),
+    };
+    font::draw_str(fb, sw, state_x, h_text_y, state_label.as_str(), p::INK, p::BG);
+
+    // Right side: cipher + key prefix as MID text (only when connected).
+    if st == CommState::Connected {
+        let cipher = "ChaCha20-Poly1305";
+        let c2s = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(C2S_KEY)) };
+        let hex = b"0123456789abcdef";
+        let mut buf = [0u8; 48];
+        let mut n = 0;
+        for &b in cipher.as_bytes() { if n < buf.len() { buf[n] = b; n += 1; } }
+        for &b in b" \xc2\xb7 K " { if n < buf.len() { buf[n] = b; n += 1; } }
+        for i in 0..4 {
+            if n < buf.len() { buf[n] = hex[(c2s[i] >> 4) as usize]; n += 1; }
+            if n < buf.len() { buf[n] = hex[(c2s[i] & 0x0f) as usize]; n += 1; }
+        }
+        for &b in b"..." { if n < buf.len() { buf[n] = b; n += 1; } }
+        let right = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
+        let right_w = (n as u32) * 8;
+        if rect.w > right_w + 16 {
+            font::draw_str(fb, sw,
+                rect.x + rect.w.saturating_sub(right_w + 16),
+                h_text_y, right, p::MID, p::BG);
         }
     }
 
     // ── TIMELINE BODY ─────────────────────────────────────────────
     if st == CommState::Disconnected {
-        draw_disconnected_empty(r.x, body_y, r.w, body_h, sw, fb,
-            W_DIM, W_CYAN, W_BG);
+        draw_disconnected_empty(rect.x, body_y, rect.w, body_h, sw, fb);
     } else {
-        draw_timeline(r.x, body_y, r.w, body_h, sw, fb,
-            W_DIM, W_INK, W_MID, W_GREEN, W_CYAN, W_BG);
+        draw_timeline(rect.x, body_y, rect.w, body_h, sw, fb);
     }
 
     // ── EMBEDDED SHELL STRIP ──────────────────────────────────────
-    gpu::fill_rect(r.x, shell_y, r.w, 1, W_HAIR);
-    crate::ui::console::redraw_in_rect(wm::WindowRect {
-        x: r.x + 8, y: shell_y + 4,
-        w: r.w.saturating_sub(16), h: shell_h.saturating_sub(8),
+    gpu::fill_rect(rect.x, shell_y, rect.w, 1, p::HAIRLINE);
+    crate::ui::console::redraw_in_rect(crate::ui::wm::WindowRect {
+        x: rect.x + 8, y: shell_y + 4,
+        w: rect.w.saturating_sub(16), h: shell_h.saturating_sub(8),
     });
 
     // ── COMPOSER ──────────────────────────────────────────────────
-    gpu::fill_rect(r.x, composer_y, r.w, composer_h, W_PANEL);
-    gpu::fill_rect(r.x, composer_y, r.w, 1, W_HAIR);
+    gpu::fill_rect(rect.x, composer_y, rect.w, composer_h, p::PANEL);
+    gpu::fill_rect(rect.x, composer_y, rect.w, 1, p::HAIRLINE);
     let c_text_y = composer_y + (composer_h - 16) / 2;
-    let prompt_color = if st == CommState::Disconnected { W_FAINT } else { W_CYAN };
-    font::draw_str(fb, sw, r.x + 16, c_text_y, ">", prompt_color, W_PANEL);
-    let typed_x = r.x + 16 + 2 * 8;
+    let prompt_color = if st == CommState::Disconnected { p::FAINT } else { p::INK };
+    font::draw_str(fb, sw, rect.x + 16, c_text_y, ">", prompt_color, p::PANEL);
+    let typed_x = rect.x + 16 + 2 * 8;
 
     let (compose_text, compose_len): (&str, usize) = unsafe {
         let len = core::ptr::read_volatile(core::ptr::addr_of!(COMPOSE_LEN));
-        let bytes = &COMPOSE_BUF[..len];
+        let buf = &*core::ptr::addr_of!(COMPOSE_BUF);
+        let bytes = &buf[..len];
         (core::str::from_utf8_unchecked(bytes), len)
     };
     if st == CommState::Disconnected {
         font::draw_str(fb, sw, typed_x, c_text_y,
-            "(composer disabled . not connected)", W_FAINT, W_PANEL);
+            "(composer disabled - not connected)", p::FAINT, p::PANEL);
     } else {
-        font::draw_str(fb, sw, typed_x, c_text_y, compose_text, W_INK, W_PANEL);
-        // underscore cursor instead of a solid block —
-        // keeps the typed text readable + stays visible after a space.
+        font::draw_str(fb, sw, typed_x, c_text_y, compose_text, p::INK, p::PANEL);
+        // 1-cell INK block cursor at the next-char position.
         let cur_x = typed_x + (compose_len as u32) * 8;
         let cell_top = composer_y + (composer_h - 16) / 2;
-        gpu::fill_rect(cur_x, cell_top + 16 - 2, 7, 2, W_CYAN);
+        gpu::fill_rect(cur_x, cell_top, 8, 16, p::INK);
     }
-    // Char counter on the right.
-    let counter_color = if compose_len >= 80 { W::RED }
-        else if compose_len >= 70 { W_AMBER }
-        else if st == CommState::Disconnected { W_FAINT }
-        else { W_DIM };
-    let mut buf = [0u8; 16];
-    let n = format_dec_local(compose_len, &mut buf);
-    let n_str = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
+
+    // Char counter on the right, always MID.
+    let mut cbuf = [0u8; 16];
+    let n = format_dec_local(compose_len, &mut cbuf);
+    let n_str = unsafe { core::str::from_utf8_unchecked(&cbuf[..n]) };
     let suffix = " / 80";
     let total_w = (n as u32 + suffix.len() as u32) * 8;
-    if r.w > total_w + 16 {
-        let cx = r.x + r.w - 16 - total_w;
-        font::draw_str(fb, sw, cx, c_text_y, n_str, counter_color, W_PANEL);
-        font::draw_str(fb, sw, cx + n as u32 * 8, c_text_y, suffix, W_FAINT, W_PANEL);
+    if rect.w > total_w + 16 {
+        let cx = rect.x + rect.w - 16 - total_w;
+        font::draw_str(fb, sw, cx, c_text_y, n_str, p::MID, p::PANEL);
+        font::draw_str(fb, sw, cx + n as u32 * 8, c_text_y, suffix, p::FAINT, p::PANEL);
     }
 }
 
-fn compute_pill_w(label: &str, value: Option<&str>) -> u32 {
-    let pad: u32 = 10;
-    let dot: u32 = 6;
-    let label_w = label.len() as u32 * 8;
-    let value_w = value.map_or(0, |v| v.len() as u32 * 8 + 8);
-    pad + dot + 8 + label_w + value_w + pad
+/// Build `"<prefix> <ip>:<port>"` from PEER_IP / PEER_PORT statics.
+fn format_state(prefix: &str) -> alloc::string::String {
+    use alloc::format;
+    let ip = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(PEER_IP)) };
+    let port = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(PEER_PORT)) };
+    if ip == 0 && port == 0 {
+        alloc::string::String::from(prefix)
+    } else {
+        format!("{} {}.{}.{}.{}:{}",
+            prefix,
+            (ip >> 24) & 0xff,
+            (ip >> 16) & 0xff,
+            (ip >> 8) & 0xff,
+            ip & 0xff,
+            port,
+        )
+    }
 }
 
 fn draw_disconnected_empty(
     x: u32, y: u32, w: u32, h: u32,
     sw: u32, fb: *mut u32,
-    dim: u32, cyan: u32, bg: u32,
 ) {
+    use crate::ui::palette as p;
     let text = "(no peer connected - use ";
     let cmd  = "comms connect <ip>:<port>";
     let tail = " in shell)";
     let total = (text.len() + cmd.len() + tail.len()) as u32 * 8;
     let cx = x + (w.saturating_sub(total)) / 2;
     let cy = y + h / 2 - 8;
-    font::draw_str(fb, sw, cx, cy, text, dim, bg);
-    font::draw_str(fb, sw, cx + text.len() as u32 * 8, cy, cmd, cyan, bg);
-    font::draw_str(fb, sw, cx + (text.len() + cmd.len()) as u32 * 8, cy, tail, dim, bg);
+    font::draw_str(fb, sw, cx, cy, text, p::MID, p::BG);
+    font::draw_str(fb, sw, cx + text.len() as u32 * 8, cy, cmd, p::INK, p::BG);
+    font::draw_str(fb, sw, cx + (text.len() + cmd.len()) as u32 * 8, cy, tail, p::MID, p::BG);
 }
 
 fn draw_timeline(
     x: u32, y: u32, _w: u32, h: u32,
     sw: u32, fb: *mut u32,
-    dim: u32, ink: u32, mid: u32, green: u32, cyan: u32, bg: u32,
 ) {
-    // Show the most-recent messages, bottom-up (so the latest is
-    // anchored to just above the composer).
+    use crate::ui::palette as p;
     unsafe {
         let row_h: u32 = 18;
         let pad_l: u32 = 16;
@@ -786,16 +747,15 @@ fn draw_timeline(
         let total = MSG_COUNT;
         let start = if total > max_rows { total - max_rows } else { 0 };
         let count = total - start;
-        // Anchor to bottom of body.
         let baseline_y = y + h - 12 - (count as u32) * row_h;
         let mut row_y = baseline_y;
         for i in start..total {
             let idx = i % MAX_MESSAGES;
-            let msg = &MESSAGES[idx];
+            let messages = &*core::ptr::addr_of!(MESSAGES);
+            let msg = &messages[idx];
             if !msg.active { continue; }
             let mins = msg.timestamp / 60;
             let secs = msg.timestamp % 60;
-            // [HH:MM]
             let mut ts_buf = [0u8; 7];
             ts_buf[0] = b'[';
             ts_buf[1] = b'0' + ((mins / 10) % 10) as u8;
@@ -805,21 +765,19 @@ fn draw_timeline(
             ts_buf[5] = b'0' + (secs % 10) as u8;
             ts_buf[6] = b']';
             let ts_str = core::str::from_utf8_unchecked(&ts_buf);
-            font::draw_str(fb, sw, x + pad_l, row_y, ts_str, dim, bg);
-            // Direction + sender + text.
-            let (arrow, sender, arrow_color, sender_color) = if msg.outgoing {
-                (">>", "you ", cyan, cyan)
+            font::draw_str(fb, sw, x + pad_l, row_y, ts_str, p::MID, p::BG);
+            let (arrow, sender) = if msg.outgoing {
+                (">>", "you ")
             } else {
-                ("<<", "peer", green, green)
+                ("<<", "peer")
             };
-            font::draw_str(fb, sw, x + pad_l + 8 * 8, row_y, arrow, arrow_color, bg);
-            font::draw_str(fb, sw, x + pad_l + (8 + 4) * 8, row_y, sender, sender_color, bg);
+            font::draw_str(fb, sw, x + pad_l + 8 * 8, row_y, arrow, p::INK, p::BG);
+            font::draw_str(fb, sw, x + pad_l + (8 + 4) * 8, row_y, sender, p::INK, p::BG);
             let text_x = x + pad_l + (8 + 4 + 7) * 8;
             let text = core::str::from_utf8_unchecked(&msg.text[..msg.text_len]);
-            font::draw_str(fb, sw, text_x, row_y, text, ink, bg);
+            font::draw_str(fb, sw, text_x, row_y, text, p::INK, p::BG);
             row_y += row_h;
         }
-        let _ = mid; // reserved for system-message styling once add_system_msg is distinguishable
     }
 }
 
@@ -833,32 +791,44 @@ fn format_dec_local(mut n: usize, out: &mut [u8]) -> usize {
 }
 
 /// Handle keyboard input for the compose bar.
-pub fn handle_key(ch: u8) {
+pub fn handle_key(c: u8) -> crate::ui::apps_registry::AppEvent {
+    use crate::ui::apps_registry::AppEvent;
     unsafe {
-        match ch {
+        match c {
             b'\r' | b'\n' => {
                 if COMPOSE_LEN > 0 {
-                    let _ = send_message(&COMPOSE_BUF[..COMPOSE_LEN]);
-                    COMPOSE_LEN = 0;
+                    let compose_buf = &*core::ptr::addr_of!(COMPOSE_BUF);
+                    let bytes = &compose_buf[..COMPOSE_LEN];
+                    let _ = send_message(bytes);
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!(COMPOSE_LEN), 0);
                 }
+                AppEvent::Repaint
             }
             0x08 | 0x7F => {
-                if COMPOSE_LEN > 0 { COMPOSE_LEN -= 1; }
-            }
-            c if c >= 0x20 && c <= 0x7E => {
-                if COMPOSE_LEN < MAX_MSG_LEN - 1 {
-                    COMPOSE_BUF[COMPOSE_LEN] = c;
-                    COMPOSE_LEN += 1;
+                if COMPOSE_LEN > 0 {
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!(COMPOSE_LEN), COMPOSE_LEN - 1);
                 }
+                AppEvent::Repaint
             }
-            _ => {}
+            0x20..=0x7E => {
+                if COMPOSE_LEN < MAX_MSG_LEN - 1 {
+                    let buf_ptr = core::ptr::addr_of_mut!(COMPOSE_BUF) as *mut u8;
+                    core::ptr::write(buf_ptr.add(COMPOSE_LEN), c);
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!(COMPOSE_LEN), COMPOSE_LEN + 1);
+                }
+                AppEvent::Repaint
+            }
+            _ => AppEvent::Unhandled,
         }
     }
 }
 
-// Wave 2 shim — refresh in Wave 3+
-/// Adapts the existing render path to the WM's `fn(WindowRect)` contract.
+pub fn handle_click(_mx: i32, _my: i32, _body: crate::ui::wm::WindowRect)
+    -> crate::ui::apps_registry::AppEvent
+{
+    crate::ui::apps_registry::AppEvent::Consumed
+}
+
 pub fn paint(rect: crate::ui::wm::WindowRect) {
-    let _ = rect;
-    render();
+    render(rect);
 }
