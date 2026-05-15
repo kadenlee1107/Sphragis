@@ -425,6 +425,7 @@ fn execute_inner(cmd: &str) {
         "pq-sig-selftest" => cmd_pq_sig_selftest(),
         "ipc-selftest"        => cmd_ipc_selftest(),
         "pq-comms-selftest"   => cmd_pq_comms_selftest(),
+        "comms-handshake-selftest" => cmd_comms_handshake_selftest(),
         "wg-selftest"         => cmd_wg_selftest(),
         "wg-wire-selftest"    => cmd_wg_wire_selftest(),
         "wg-replay-selftest"  => cmd_wg_replay_selftest(),
@@ -5232,6 +5233,27 @@ fn cmd_wg_test_outbound(target: &str, peer_pubkey_hex: &str) {
 /// only path (apps::comms) is what runs against the Python test
 /// server today; this proves the PQ wire format + key derivation
 /// are ready for the day we have a PQ peer.
+/// In-process round-trip test for the COMMS app's handshake path
+/// (build_offer / verify_offer / derive_directional_keys). No
+/// network required; would have caught the three Wave-7 demo bugs
+/// at the next selftest run instead of when an operator tried
+/// `comms connect` live.
+fn cmd_comms_handshake_selftest() {
+    console::puts_hi("  COMMS HANDSHAKE SELF-TEST\n");
+    console::puts("  X25519 ECDH + Ed25519 offers + ChaCha20-Poly1305 keys\n");
+    console::puts("  Round trip with both sides in-process...\n");
+    match crate::ui::apps::comms::handshake_selftest() {
+        Ok(()) => {
+            console::puts("  PASS  client/server agree on c2s + s2c keys\n");
+        }
+        Err(e) => {
+            console::puts("  FAIL: ");
+            console::puts(e);
+            console::puts("\n");
+        }
+    }
+}
+
 fn cmd_pq_comms_selftest() {
     console::puts_hi("  POST-QUANTUM HYBRID COMMS HANDSHAKE SELF-TEST\n");
     console::puts("  X25519 + ML-KEM-768 KEM, Ed25519 + ML-DSA-65 sigs\n");

@@ -505,6 +505,69 @@ fn derive_directional_keys(shared: &[u8], client_eph_pk: &[u8; 32],
     (c2s, s2c)
 }
 
+/// In-process handshake round trip — exercises build_offer,
+/// verify_offer, and derive_directional_keys without touching the
+/// network. Would have caught all three Wave-7 demo bugs
+/// (LABEL/KEY_DIR buffer-size panics) at build time, OR at the
+/// next selftest run, instead of when an operator tried to use
+/// the live `comms connect` flow.
+///
+/// Both "sides" run inside the same kernel using fresh ephemeral
+/// X25519 keys + deterministic Ed25519 identities. Asserts that
+/// both directions agree on the c2s and s2c keys.
+pub fn handshake_selftest() -> Result<(), &'static str> {
+    // Deterministic Ed25519 identities so the test is reproducible.
+    let client_seed = [0x42u8; 32];
+    let server_seed = [0x69u8; 32];
+    let client_kp = KeyPair::from_seed(Seed::new(client_seed));
+    let server_kp = KeyPair::from_seed(Seed::new(server_seed));
+
+    let mut client_id_pk = [0u8; 32];
+    let mut server_id_pk = [0u8; 32];
+    for i in 0..32 {
+        client_id_pk[i] = client_kp.pk[i];
+        server_id_pk[i] = server_kp.pk[i];
+    }
+
+    // Fresh X25519 ephemerals from the kernel RNG.
+    let mut rng = crate::crypto::pq_hybrid::KernelRng;
+    let client_eph_sk = EphemeralSecret::random_from_rng(&mut rng);
+    let server_eph_sk = EphemeralSecret::random_from_rng(&mut rng);
+    let client_eph_pk: [u8; 32] = X25519Public::from(&client_eph_sk).to_bytes();
+    let server_eph_pk: [u8; 32] = X25519Public::from(&server_eph_sk).to_bytes();
+
+    // Build both offers — exercises build_offer with the live
+    // LABEL_LEN-sized buffer.
+    let client_offer = build_offer(&client_kp.sk, &client_id_pk, &client_eph_pk);
+    let server_offer = build_offer(&server_kp.sk, &server_id_pk, &server_eph_pk);
+
+    // Verify each side's offer using the other's pinned identity —
+    // exercises verify_offer.
+    let recovered_server_eph = verify_offer(&server_offer, &server_id_pk)?;
+    let recovered_client_eph = verify_offer(&client_offer, &client_id_pk)?;
+    if recovered_server_eph != server_eph_pk { return Err("server eph_pk mismatch"); }
+    if recovered_client_eph != client_eph_pk { return Err("client eph_pk mismatch"); }
+
+    // ECDH on both sides.
+    let client_shared = client_eph_sk.diffie_hellman(&X25519Public::from(server_eph_pk));
+    let server_shared = server_eph_sk.diffie_hellman(&X25519Public::from(client_eph_pk));
+    if client_shared.as_bytes() != server_shared.as_bytes() {
+        return Err("ECDH disagreement");
+    }
+
+    // Derive directional keys on both sides — exercises
+    // derive_directional_keys with the live KEY_DIR_LEN-sized buffer.
+    let (client_c2s, client_s2c) = derive_directional_keys(
+        client_shared.as_bytes(), &client_eph_pk, &server_eph_pk);
+    let (server_c2s, server_s2c) = derive_directional_keys(
+        server_shared.as_bytes(), &client_eph_pk, &server_eph_pk);
+
+    if client_c2s != server_c2s { return Err("c2s key disagreement"); }
+    if client_s2c != server_s2c { return Err("s2c key disagreement"); }
+
+    Ok(())
+}
+
 /// 12-byte nonce: u64 counter big-endian + 4 zero bytes. Matches the
 /// Python server's `make_nonce`.
 unsafe fn nonce_from_ctr(ctr: u64) -> [u8; 12] {
