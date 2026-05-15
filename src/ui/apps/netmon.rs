@@ -82,9 +82,9 @@ fn paint_stats_strip(rect: WindowRect) {
 fn paint_mode_panel(rect: WindowRect) {
     let mode_label = if net::is_isolated() { "ISOLATED" } else { "ROUTED" };
     let mode_sub = if net::is_isolated() {
-        "no outbound to non-cave routes"
+        "outbound refused at ip::send"
     } else {
-        "default route via host"
+        "outbound allowed"
     };
     let panel = StatusPanel {
         label: "MODE",

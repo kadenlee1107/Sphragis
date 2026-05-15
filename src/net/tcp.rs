@@ -147,6 +147,7 @@ pub const E_CONNREFUSED: i32 = 111;
 pub const E_TIMEDOUT:    i32 = 110;
 pub const E_NOTCONN:     i32 = 107;
 pub const E_PIPE:        i32 = 32;
+pub const E_NETUNREACH:  i32 = 101;
 
 pub const MAX_PCBS: usize = 64;
 pub const RX_BUF_SIZE: usize = 8192;
@@ -1862,6 +1863,15 @@ pub fn connect_start(id: usize, ip_be: u32, port: u16) -> i32 {
     let p = pcb_mut(id);
     if !p.in_use.load(Ordering::Acquire) { return E_NOTCONN; }
 
+    // Global isolation gate. Refuse before allocating a local port +
+    // sending the SYN; the caller gets a fast clear error instead of
+    // the 30-second connect timeout that ip::send's silently-discarded
+    // refusal would otherwise produce.
+    if crate::net::is_isolated() {
+        crate::drivers::uart::puts("[tcp] outbound refused: net isolated\n");
+        return E_NETUNREACH;
+    }
+
     let lport = alloc_local_port();
     p.local_port  = lport;
     p.remote_ip   = ip_be;
@@ -2095,6 +2105,9 @@ pub fn connect_blocking_pcb(pcb_id: usize, dst_ip: u32, dst_port: u16)
     // Force blocking on this PCB.
     pcb(pcb_id).is_nonblocking.store(false, Ordering::Relaxed);
     let rc = connect_start(pcb_id, dst_ip, dst_port);
+    if rc == E_NETUNREACH {
+        return Err("net isolated");
+    }
     if rc != 0 && rc != E_INPROGRESS {
         return Err("connect_start failed");
     }
