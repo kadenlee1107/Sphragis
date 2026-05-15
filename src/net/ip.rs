@@ -133,6 +133,26 @@ const SECMARK_OPT_LEN:  usize = 12;
 /// test passes unchanged, and routers that drop packets with IP
 /// options stay happy in the default path.
 pub fn send(dst_ip: u32, protocol: u8, payload: &[u8]) -> Result<(), &'static str> {
+    // Outbound gate. NET_ISOLATED (default true at boot) refuses all
+    // outbound traffic until the operator toggles NET to ROUTED.
+    // Was display-only through Wave 7; now load-bearing.
+    if super::is_isolated() {
+        super::activity::push(
+            super::activity::ActivityKind::FwDrop,
+            "isolated (outbound refused)",
+        );
+        crate::drivers::uart::puts("[ip] isolated, refusing outbound\n");
+        return Err("net isolated");
+    }
+    // After the global isolation gate, consult the firewall's
+    // outbound policy. Today this is the wildcard "out:any" rule
+    // installed by `firewall::init`; future per-cave or per-proto
+    // outbound deny rules slot in here without another call site.
+    if !super::firewall::allow_outbound(dst_ip, protocol) {
+        crate::drivers::uart::puts("[ip] firewall denied outbound\n");
+        return Err("outbound blocked by firewall");
+    }
+
     // was a Tor(VPN(payload)) pipeline — `tor` deleted as
     // part of the honest-naming pass (it was 3 layers of CTR with
     // hardcoded keys, not real Tor), and `vpn` renamed to `psk_overlay`
