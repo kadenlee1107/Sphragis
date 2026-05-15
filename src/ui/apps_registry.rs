@@ -64,7 +64,7 @@ pub static APPS: [AppDescriptor; 8] = [
     AppDescriptor { id: AppId::Shell,    label: "SHELL",    title: "SHELL",    paint: paint_shell,    handle_key: crate::ui::shell::handle_key, handle_click: crate::ui::shell::handle_click },
     AppDescriptor { id: AppId::Editor,   label: "EDITOR",   title: "EDITOR",   paint: paint_editor,   handle_key: crate::ui::apps::editor::handle_key, handle_click: crate::ui::apps::editor::handle_click },
     AppDescriptor { id: AppId::Comms,    label: "COMMS",    title: "COMMS",    paint: paint_comms,    handle_key: crate::ui::apps::comms::handle_key, handle_click: crate::ui::apps::comms::handle_click },
-    AppDescriptor { id: AppId::Agent,    label: "AGENT",    title: "AGENT",    paint: paint_agent,    handle_key: default_handle_key, handle_click: default_handle_click },
+    AppDescriptor { id: AppId::Agent,    label: "AGENT",    title: "AGENT",    paint: paint_agent,    handle_key: crate::ui::apps::agent::handle_key, handle_click: crate::ui::apps::agent::handle_click },
 ];
 
 pub fn descriptor(id: AppId) -> &'static AppDescriptor {
@@ -81,19 +81,4 @@ fn paint_shell(rect: WindowRect)    { crate::ui::shell::paint(rect); }
 fn paint_editor(rect: WindowRect)   { crate::ui::apps::editor::paint(rect); }
 fn paint_comms(rect: WindowRect)    { crate::ui::apps::comms::paint(rect); }
 
-fn paint_agent(rect: WindowRect) {
-    use crate::ui::font;
-    let msg = "AGENT - coming soon";
-    let cx = rect.x + rect.w / 2;
-    let cy = rect.y + rect.h / 2;
-    let tx = cx.saturating_sub((msg.len() as u32 * 8) / 2);
-    let ty = cy.saturating_sub(8);
-    font::draw_str(
-        crate::ui::gpu::framebuffer(),
-        crate::ui::gpu::width(),
-        tx, ty,
-        msg,
-        0xFFE5E7EB,
-        0xFF0D0D10,
-    );
-}
+fn paint_agent(rect: WindowRect)    { crate::ui::apps::agent::paint(rect); }
