@@ -614,6 +614,9 @@ fn submit_create_form(f: &FormScratch) -> AppEvent {
     AppEvent::Repaint
 }
 
+/// Apply form changes to an existing cave. Unlike [`submit_create_form`],
+/// this skips `cave::create` (cave already exists) and sets taint
+/// unconditionally (clearing to 0 is a valid user action).
 fn submit_configure_form(f: &FormScratch) -> AppEvent {
     use crate::caves::cave::{self, NetMode, Sensitivity, Integrity};
     if f.name_len == 0 { return AppEvent::Repaint; }
