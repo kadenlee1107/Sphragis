@@ -5,12 +5,27 @@ Restored 2026-05-15 (originally STUMP #110, deleted with the no-
 browser pivot at 457c843c then resurrected when the calm-register
 UI demos showed pointer-driven navigation was still useful).
 
-⚠ KNOWN ISSUE — QEMU 10.x regression (verified 2026-05-15):
-QEMU 10.2 silently accepts `input-send-event` rel events via QMP
-(returns `{"return": {}}`) but they never reach the virtio-mouse
-device's virtqueue. HMP `mouse_move dx dy` has the same problem.
-The bridge code is correct — the wiring inside QEMU is broken
-between the QMP entry point and the virtio-input subsystem.
+⚠ KNOWN ISSUE — QEMU 10.x has multiple input-dispatch bugs.
+Verified 2026-05-15 by exhaustive probe — FOUR independent
+pathways all fail:
+
+  1. Cocoa display → virtio-input pointer events: not forwarded.
+     Only EV_KEY (keyboard) reaches the virtio queue; EV_REL and
+     EV_ABS are dropped silently.
+  2. QMP `input-send-event` with rel events, no `device` arg:
+     QEMU returns `{"return": {}}` (success) but the events
+     never reach virtio-mouse's virtqueue.
+  3. QMP `input-send-event` with `device: <id>` arg: QEMU
+     CRASHES with an internal assertion looking up the
+     `device` property on a text-console object —
+       "Unexpected error in object_property_find_err() at
+        ../qom/object.c:1345:
+        Property 'qemu-fixed-text-console.device' not found"
+  4. HMP `mouse_move dx dy`: silent no-op.
+
+The bridge code is correct — the wiring inside QEMU 10.2 is
+broken between every external dispatch point and the virtio-
+input subsystem.
 
 This bridge IS known to work on:
 - QEMU 8.x on macOS Cocoa (the original era it was written for)
