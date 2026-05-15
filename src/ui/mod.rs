@@ -13,7 +13,6 @@ pub mod shell_history;
 pub mod sigma_bitmap;
 pub mod topbar;
 pub mod topbar_config;
-pub mod truetype;
 pub mod widgets;
 pub mod wm;
 pub mod desktop;
