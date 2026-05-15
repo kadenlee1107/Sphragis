@@ -39,6 +39,7 @@ pub mod psk_overlay;
 pub mod wireguard;
 pub mod wg_dispatch;
 
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use crate::drivers::virtio::net as netdev;
 
 /// Poll the network device for one incoming packet and dispatch it.
@@ -63,8 +64,87 @@ pub fn dispatch_host_frame(buf: &[u8]) {
     }
 }
 
-/// Wave 2 stub — returns true until a real network-mode state machine is wired up.
-pub fn is_isolated() -> bool { true } // Wave 2 stub
+// ── isolation ─────────────────────────────────────────────────────
+static NET_ISOLATED: AtomicBool = AtomicBool::new(true);
+
+/// Returns whether the network is in isolated mode.
+pub fn is_isolated() -> bool {
+    NET_ISOLATED.load(Ordering::Relaxed)
+}
+
+#[allow(dead_code)]
+pub fn set_isolation(isolated: bool) {
+    NET_ISOLATED.store(isolated, Ordering::Relaxed);
+}
+
+// ── counters ──────────────────────────────────────────────────────
+static RX_BYTES_TOTAL:    AtomicU64 = AtomicU64::new(0);
+static TX_BYTES_TOTAL:    AtomicU64 = AtomicU64::new(0);
+static PEAK_BYTES:        AtomicU64 = AtomicU64::new(0);
+#[allow(dead_code)]
+static BOOT_SECS:         AtomicU64 = AtomicU64::new(0);
+#[allow(dead_code)]
+static LAST_RX_BYTES:     AtomicU64 = AtomicU64::new(0);
+#[allow(dead_code)]
+static LAST_TX_BYTES:     AtomicU64 = AtomicU64::new(0);
+#[allow(dead_code)]
+static LAST_SAMPLE_SECS:  AtomicU64 = AtomicU64::new(0);
+
+/// Called by virtio-net::recv on every received packet.
+pub fn account_rx(len: usize) {
+    let n = len as u64;
+    RX_BYTES_TOTAL.fetch_add(n, Ordering::Relaxed);
+    PEAK_BYTES.fetch_max(n, Ordering::Relaxed);
+}
+
+/// Called by virtio-net::send on every transmitted packet.
+pub fn account_tx(len: usize) {
+    let n = len as u64;
+    TX_BYTES_TOTAL.fetch_add(n, Ordering::Relaxed);
+    PEAK_BYTES.fetch_max(n, Ordering::Relaxed);
+}
+
+#[allow(dead_code)]
+pub fn rx_rate() -> u32 { rate_delta(&RX_BYTES_TOTAL, &LAST_RX_BYTES) }
+#[allow(dead_code)]
+pub fn tx_rate() -> u32 { rate_delta(&TX_BYTES_TOTAL, &LAST_TX_BYTES) }
+
+#[allow(dead_code)]
+fn rate_delta(total: &AtomicU64, last: &AtomicU64) -> u32 {
+    let now_total = total.load(Ordering::Relaxed);
+    let last_total = last.swap(now_total, Ordering::Relaxed);
+    let now_secs = crate::kernel::time::monotonic_secs();
+    let last_secs = LAST_SAMPLE_SECS.swap(now_secs, Ordering::Relaxed);
+    let elapsed = now_secs.saturating_sub(last_secs).max(1);
+    let delta = now_total.saturating_sub(last_total);
+    (delta / elapsed) as u32
+}
+
+#[allow(dead_code)]
+pub fn peak_bytes() -> u64 {
+    PEAK_BYTES.load(Ordering::Relaxed)
+}
+
+#[allow(dead_code)]
+pub fn uptime_secs() -> u64 {
+    let now = crate::kernel::time::monotonic_secs();
+    let boot = BOOT_SECS.load(Ordering::Relaxed);
+    if boot == 0 {
+        BOOT_SECS.store(now, Ordering::Relaxed);
+        return 0;
+    }
+    now.saturating_sub(boot)
+}
+
+#[allow(dead_code)]
+pub fn clear_counters() {
+    RX_BYTES_TOTAL.store(0, Ordering::Relaxed);
+    TX_BYTES_TOTAL.store(0, Ordering::Relaxed);
+    PEAK_BYTES.store(0, Ordering::Relaxed);
+    LAST_RX_BYTES.store(0, Ordering::Relaxed);
+    LAST_TX_BYTES.store(0, Ordering::Relaxed);
+    LAST_SAMPLE_SECS.store(crate::kernel::time::monotonic_secs(), Ordering::Relaxed);
+}
 
 pub fn init() {
     firewall::init();
