@@ -57,7 +57,7 @@ fn default_handle_click(_mx: i32, _my: i32, _rect: WindowRect) -> AppEvent { App
 const _: () = assert!(APPS.len() == 8, "APPS length must match AppId variant count");
 
 pub static APPS: [AppDescriptor; 8] = [
-    AppDescriptor { id: AppId::Caves,    label: "CAVES",    title: "CAVES",    paint: paint_caves,    handle_key: default_handle_key, handle_click: default_handle_click },
+    AppDescriptor { id: AppId::Caves,    label: "CAVES",    title: "CAVES",    paint: paint_caves,    handle_key: crate::ui::apps::caves_mgr::handle_key, handle_click: crate::ui::apps::caves_mgr::handle_click },
     AppDescriptor { id: AppId::Files,    label: "FILES",    title: "FILES",    paint: paint_files,    handle_key: default_handle_key, handle_click: default_handle_click },
     AppDescriptor { id: AppId::Net,      label: "NET",      title: "NET",      paint: paint_net,      handle_key: default_handle_key, handle_click: default_handle_click },
     AppDescriptor { id: AppId::Security, label: "SECURITY", title: "SECURITY", paint: paint_security, handle_key: default_handle_key, handle_click: default_handle_click },
