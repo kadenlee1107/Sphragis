@@ -173,7 +173,9 @@ fn paint_audit_block(rect: WindowRect) {
         kind: k.as_str(),
         summary: s.as_str(),
     }).collect();
-    let log_rect = WindowRect { x: rect.x, y: rect.y + 4, w: rect.w, h: rect.h.saturating_sub(4) };
+    // Shift the activity log down past the chain-status row so the
+    // widget's own "N..M of T" header doesn't collide with it.
+    let log_rect = WindowRect { x: rect.x, y: rect.y + 22, w: rect.w, h: rect.h.saturating_sub(22) };
     paint_activity_log(log_rect, &refs, viewport, total);
 }
 
