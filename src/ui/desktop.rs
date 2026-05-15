@@ -232,7 +232,7 @@ fn handle_pointer(pe: crate::drivers::virtio::tablet::PointerEvent) -> Event {
                     }
                     return Event::Repaint;  // focus changed, repaint
                 }
-                _ => {}
+                _ => { /* Chrome / Corner / CloseGlyph / None — fall to begin_drag below */ }
             }
 
             // Fallback: WM drag/close/corner handling.
@@ -290,6 +290,8 @@ fn handle_key(c: u8) -> Event {
     // through to the desktop's own shortcut table below.
     if let Some(focused_id) = wm::focused() {
         if let Some(w) = wm::get(focused_id) {
+            // body_rect is None only for zero-size windows that haven't been
+            // placed yet; skip dispatch in that degenerate case.
             if wm::body_rect(focused_id).is_some() {
                 let desc = crate::ui::apps_registry::descriptor(w.app);
                 match (desc.handle_key)(c) {

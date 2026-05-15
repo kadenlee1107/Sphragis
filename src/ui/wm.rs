@@ -75,8 +75,9 @@ pub fn get(id: WindowId) -> Option<Window> {
 }
 
 /// Returns the body rect (inside chrome, inside borders) of a window
-/// by id. None if no such window. Used by `desktop.rs` to compute
-/// body-local pointer coordinates when forwarding clicks to apps.
+/// by id. None if no such window. Passed to `AppDescriptor::handle_click`
+/// alongside the absolute pointer coordinates so apps can do
+/// body-relative hit testing (e.g. `mx - body.x as i32`).
 pub fn body_rect(id: WindowId) -> Option<WindowRect> {
     let w = get(id)?;
     let r = w.rect;
