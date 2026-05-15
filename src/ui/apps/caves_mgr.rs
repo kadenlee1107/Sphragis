@@ -98,10 +98,47 @@ pub fn paint(body: WindowRect) {
         AppMode::Viewing            => paint_detail_view(layout.detail_rect()),
         AppMode::Creating           => paint_detail_create(layout.detail_rect()),
         AppMode::Configuring(_)     => paint_detail_configure(layout.detail_rect()),
-        AppMode::ConfirmDestroy(_)  => {
-            // Scaffold only — Task 13 replaces this arm with the
-            // real modal that resolves the cave name from the index.
+        AppMode::ConfirmDestroy(idx)  => {
             paint_detail_view(layout.detail_rect());
+
+            // Resolve cave name for the modal title.
+            let mut name_buf = [0u8; NAME_MAX];
+            let mut name_len = 0;
+            let mut row_index: usize = 0;
+            crate::caves::cave::list(|c| {
+                if row_index == *idx {
+                    let n = c.name_len;
+                    name_len = n;
+                    name_buf[..n].copy_from_slice(&c.name[..n]);
+                }
+                row_index += 1;
+            });
+            let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+
+            // Build modal title "Destroy <name>?"
+            let mut title_buf = [0u8; 32];
+            let prefix = b"Destroy ";
+            let mut tn = 0;
+            for &b in prefix { title_buf[tn] = b; tn += 1; }
+            for &b in name.as_bytes() {
+                if tn < title_buf.len() { title_buf[tn] = b; tn += 1; }
+            }
+            if tn < title_buf.len() { title_buf[tn] = b'?'; tn += 1; }
+            let title = unsafe { core::str::from_utf8_unchecked(&title_buf[..tn]) };
+
+            let modal = ConfirmModal {
+                title,
+                body_lines: &[
+                    "  kill all processes inside the cave",
+                    "  zero the cave's encryption keys",
+                    "  wipe its BatFS subtree",
+                    "  clear MLS labels + taint records",
+                    "",
+                    "IRREVERSIBLE.",
+                ],
+                commit_key: 'D',
+            };
+            paint_confirm_modal(&modal);
         }
     }
 }
@@ -175,7 +212,13 @@ pub fn handle_click(mx: i32, my: i32, body: WindowRect) -> AppEvent {
     match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
         AppMode::Viewing => handle_click_viewing(mx, my, body),
         AppMode::Creating | AppMode::Configuring(_) => handle_click_form(mx, my, body),
-        AppMode::ConfirmDestroy(_) => AppEvent::Consumed, // ignore clicks behind modal
+        AppMode::ConfirmDestroy(_) => {
+            // Any click cancels the destroy (spec: "click outside modal → Cancel").
+            unsafe {
+                *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+            }
+            AppEvent::Repaint
+        }
     }
 }
 
@@ -516,9 +559,47 @@ fn handle_click_form(mx: i32, my: i32, body: WindowRect) -> AppEvent {
 
 // ── Handle-key helpers ────────────────────────────────────────────
 
-fn handle_key_destroy_modal(_c: u8, _idx: usize) -> AppEvent {
-    // Task 13 implements destroy commit / cancel.
-    AppEvent::Unhandled
+fn handle_key_destroy_modal(c: u8, idx: usize) -> AppEvent {
+    // A thin ConfirmModal for key dispatch — title/body don't affect
+    // key routing, only commit_key does.
+    let modal = ConfirmModal {
+        title: "",
+        body_lines: &[],
+        commit_key: 'D',
+    };
+    match confirm_modal_key(&modal, c) {
+        ModalAction::Commit => {
+            // Resolve cave name by index, then destroy.
+            let mut name_buf = [0u8; NAME_MAX];
+            let mut name_len = 0;
+            let mut row_index: usize = 0;
+            crate::caves::cave::list(|c| {
+                if row_index == idx {
+                    let n = c.name_len;
+                    name_len = n;
+                    name_buf[..n].copy_from_slice(&c.name[..n]);
+                }
+                row_index += 1;
+            });
+            if name_len > 0 {
+                let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+                let _ = crate::caves::cave::destroy(name);
+            }
+            // Reset selection to 0 and return to Viewing.
+            set_selected_cave(0);
+            unsafe {
+                *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+            }
+            AppEvent::Repaint
+        }
+        ModalAction::Cancel => {
+            unsafe {
+                *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+            }
+            AppEvent::Repaint
+        }
+        ModalAction::None => AppEvent::Consumed,
+    }
 }
 
 fn handle_key_form(c: u8) -> AppEvent {
