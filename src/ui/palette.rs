@@ -13,6 +13,7 @@ pub const HAIRLINE: u32 = 0xFF2A2A30;
 pub const INK:      u32 = 0xFFE5E7EB;
 pub const MID:      u32 = 0xFF6B7280;
 
-/// Disabled-action color. ~50% of MID; used by the action strip when
-/// a hotkey is contextually unavailable (e.g. Stop on a stopped cave).
+/// Disabled-action color. A darker variant of MID; used by the action
+/// strip when a hotkey is contextually unavailable (e.g. Stop on a
+/// stopped cave).
 pub const FAINT:    u32 = 0xFF4A4D55;

@@ -13,6 +13,7 @@
 use crate::ui::gpu;
 use crate::ui::font;
 use crate::ui::draw;
+use crate::ui::palette as p;
 
 // ─── Palette (mirrors lock-screen + desktop chrome) ─────────────────
 
@@ -598,15 +599,10 @@ fn write_dec(mut n: usize, out: &mut [u8]) -> usize {
 // EDITOR/COMMS in Wave 4. New widgets import from `crate::ui::palette`;
 // legacy widgets above keep their local cyberpunk palette.
 
-use crate::ui::palette as p;
-
 /// 6x6 px state indicator. `filled` = INK solid circle (running state).
 /// `!filled` = MID 1-px ring over BG fill (idle/stopped state).
 /// Renders inside a 6x6 bounding box at (x, y).
 pub fn paint_state_dot(x: u32, y: u32, filled: bool) {
-    use crate::ui::gpu;
-    // Pre-baked 6x6 dot bitmaps. 1 = pixel set, 0 = transparent.
-    // Filled (●) and hollow (○) shapes hand-tuned for 6x6 grid.
     const FILLED: [[u8; 6]; 6] = [
         [0, 1, 1, 1, 1, 0],
         [1, 1, 1, 1, 1, 1],
@@ -623,6 +619,9 @@ pub fn paint_state_dot(x: u32, y: u32, filled: bool) {
         [1, 0, 0, 0, 0, 1],
         [0, 1, 1, 1, 1, 0],
     ];
+    // Clear the 6x6 bounding box first so callers don't have to pre-paint
+    // BG (e.g. when a dot transitions from filled to hollow on redraw).
+    gpu::fill_rect(x, y, 6, 6, p::BG);
     let bm = if filled { &FILLED } else { &HOLLOW };
     let color = if filled { p::INK } else { p::MID };
     for dy in 0..6u32 {
