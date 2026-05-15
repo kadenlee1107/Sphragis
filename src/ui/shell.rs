@@ -1,7 +1,6 @@
 // Sphragis — Interactive Kernel Shell
 // Command-line interface rendered to the GPU console.
 // Reads from UART, displays on framebuffer.
-// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
 
 use crate::platform;
 use crate::ui::console;
@@ -834,8 +833,8 @@ fn cmd_otp_consume(hex: &str) {
     match crate::security::otp::consume(&tok) {
         Some("duress") => {
             console::puts("  DURESS TOKEN ACCEPTED — wiping now\n");
-            crate::security::wipe::execute(
-                crate::security::wipe::WipeReason::Duress, false);
+            crate::security::wipe::execute_and_halt(
+                crate::security::wipe::WipeReason::Duress);
         }
         Some("deadman") => {
             console::puts("  DEADMAN TOKEN ACCEPTED — refreshing timer\n");
@@ -7576,9 +7575,9 @@ fn cmd_edit(name: &str) {
             console::puts("  edit: loaded ");
             console::puts(name);
             console::puts("\n");
-            // Switch to the editor app so the operator sees what they
-            // just loaded.
-            // XXX Wave-2-temp: crate::ui::wm::switch_app(crate::ui::wm::APP_EDITOR);
+            // Wave 5 wired the FILES → EDITOR open flow via
+            // editor::set_pending_file. SHELL's `edit` command could
+            // call that too; left for an interested operator pass.
         }
         Err(e) => {
             console::puts("  edit: ");

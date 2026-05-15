@@ -2,7 +2,6 @@
 // Sphragis — GPU Console
 // Terminal emulator rendered to the framebuffer.
 // Handles text output and cursor management.
-// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
 
 use crate::ui::gpu;
 use super::font::{self, CHAR_W, CHAR_H};
@@ -440,7 +439,8 @@ pub fn redraw_in_rect(rect: crate::ui::wm::WindowRect) {
 pub fn redraw_content() {
     let fb = gpu::framebuffer();
     let w = gpu::width();
-    // XXX Wave-2-temp: let pr = crate::ui::wm::content_rect();
+    // Full-screen rect; redraw_content is the headless fallback path,
+    // WM-integrated callers use redraw_in_rect(rect) instead.
     let pr = crate::ui::wm::WindowRect { x: 0, y: 0, w: gpu::width(), h: gpu::height() };
 
     // Clear the pane content rect so we paint over a clean slate.
