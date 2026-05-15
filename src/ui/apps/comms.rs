@@ -80,9 +80,16 @@ static mut PEER_PORT: u16 = 0;
 static mut PINNED_SERVER_ID: [u8; 32] = [0; 32];
 
 const LABEL: &[u8] = b"SPHRAGIS-COMMS-v1";
+const LABEL_LEN: usize = LABEL.len();
 const OFFER_LEN: usize = 32 + 32 + 64;
 const KEY_DIR_C2S: &[u8] = b"SPHRAGIS-COMMS-c2s-v1";
 const KEY_DIR_S2C: &[u8] = b"SPHRAGIS-COMMS-s2c-v1";
+// KEY_DIR_C2S and KEY_DIR_S2C are the same length by construction
+// (both end in "-c2s-v1" / "-s2c-v1"); compile-time asserted below
+// so this stays true if either label changes.
+const KEY_DIR_LEN: usize = KEY_DIR_C2S.len();
+const _: () = assert!(KEY_DIR_C2S.len() == KEY_DIR_S2C.len(),
+    "KEY_DIR_C2S and KEY_DIR_S2C must have equal length");
 
 /// BatFS path for our persistent per-cave Ed25519 identity. 32-byte
 /// raw seed. Persisting it across boots is what makes server-side
@@ -432,13 +439,14 @@ pub fn recv_message() -> bool {
 fn build_offer(id_sk: &SecretKey, id_pk: &[u8; 32], eph_pk: &[u8; 32])
     -> [u8; OFFER_LEN]
 {
-    // 32 bytes eph_pk + LABEL ("SPHRAGIS-COMMS-v1" = 17 bytes).
-    // Old buffer size 32 + 16 was stale and panicked at runtime when
-    // LABEL grew past 16 chars.
-    let mut msg = [0u8; 32 + 17];
+    // 32 bytes eph_pk + LABEL. Buffer sized via LABEL_LEN const so a
+    // future LABEL rename can't reintroduce the stale-size bug
+    // (Wave-7 demo found this had panicked at runtime when the old
+    // hardcoded 16 was still in place).
+    let mut msg = [0u8; 32 + LABEL_LEN];
     msg[..32].copy_from_slice(eph_pk);
-    msg[32..32 + LABEL.len()].copy_from_slice(LABEL);
-    let sig = id_sk.sign(&msg[..32 + LABEL.len()], None);
+    msg[32..32 + LABEL_LEN].copy_from_slice(LABEL);
+    let sig = id_sk.sign(&msg, None);
 
     let mut offer = [0u8; OFFER_LEN];
     offer[..32].copy_from_slice(eph_pk);
@@ -462,10 +470,10 @@ fn verify_offer(offer: &[u8; OFFER_LEN], pinned_id: &[u8; 32])
 
     let pk = PublicKey::from_slice(id_bytes).map_err(|_| "bad id pub")?;
     let sig = Signature::from_slice(sig_bytes).map_err(|_| "bad sig")?;
-    let mut msg = [0u8; 32 + 17];
+    let mut msg = [0u8; 32 + LABEL_LEN];
     msg[..32].copy_from_slice(eph_bytes);
-    msg[32..32 + LABEL.len()].copy_from_slice(LABEL);
-    pk.verify(&msg[..32 + LABEL.len()], &sig)
+    msg[32..32 + LABEL_LEN].copy_from_slice(LABEL);
+    pk.verify(&msg, &sig)
         .map_err(|_| "server sig verify failed")?;
 
     let mut out = [0u8; 32];
@@ -478,21 +486,21 @@ fn verify_offer(offer: &[u8; OFFER_LEN], pinned_id: &[u8; 32])
 fn derive_directional_keys(shared: &[u8], client_eph_pk: &[u8; 32],
                             server_eph_pk: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
     // SHA-256(direction-label || shared || client_eph || server_eph).
-    // KEY_DIR_C2S / KEY_DIR_S2C are both 21 bytes ("SPHRAGIS-COMMS-c2s-v1"
-    // / "...-s2c-v1"); old 19-byte size was stale and panicked at runtime.
-    let mut buf = [0u8; 21 + 32 + 32 + 32];
+    // Buffer sized via KEY_DIR_LEN const so a future KEY_DIR rename
+    // can't reintroduce the stale-size bug. KEY_DIR_C2S and
+    // KEY_DIR_S2C are compile-time asserted to share a length.
+    let mut buf = [0u8; KEY_DIR_LEN + 32 + 32 + 32];
 
-    buf[..KEY_DIR_C2S.len()].copy_from_slice(KEY_DIR_C2S);
-    buf[KEY_DIR_C2S.len()..KEY_DIR_C2S.len() + 32].copy_from_slice(shared);
-    buf[KEY_DIR_C2S.len() + 32..KEY_DIR_C2S.len() + 64].copy_from_slice(client_eph_pk);
-    buf[KEY_DIR_C2S.len() + 64..KEY_DIR_C2S.len() + 96].copy_from_slice(server_eph_pk);
-    let c2s = sha256::hash(&buf[..KEY_DIR_C2S.len() + 96]);
+    buf[..KEY_DIR_LEN].copy_from_slice(KEY_DIR_C2S);
+    buf[KEY_DIR_LEN..KEY_DIR_LEN + 32].copy_from_slice(shared);
+    buf[KEY_DIR_LEN + 32..KEY_DIR_LEN + 64].copy_from_slice(client_eph_pk);
+    buf[KEY_DIR_LEN + 64..KEY_DIR_LEN + 96].copy_from_slice(server_eph_pk);
+    let c2s = sha256::hash(&buf);
 
-    buf[..KEY_DIR_S2C.len()].copy_from_slice(KEY_DIR_S2C);
-    buf[KEY_DIR_S2C.len()..KEY_DIR_S2C.len() + 32].copy_from_slice(shared);
-    buf[KEY_DIR_S2C.len() + 32..KEY_DIR_S2C.len() + 64].copy_from_slice(client_eph_pk);
-    buf[KEY_DIR_S2C.len() + 64..KEY_DIR_S2C.len() + 96].copy_from_slice(server_eph_pk);
-    let s2c = sha256::hash(&buf[..KEY_DIR_S2C.len() + 96]);
+    buf[..KEY_DIR_LEN].copy_from_slice(KEY_DIR_S2C);
+    // shared / eph slots from C2S pass are still correct; only the
+    // direction label changed.
+    let s2c = sha256::hash(&buf);
 
     (c2s, s2c)
 }
