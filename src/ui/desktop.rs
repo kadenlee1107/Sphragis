@@ -48,6 +48,9 @@ pub fn run() -> LockReason {
             Event::Lock    => return LockReason::UserRequest,
             Event::Repaint => continue,
             Event::None    => {
+                // Periodic security check: dead man's switch expiry →
+                // wipe::execute(). Must run on every idle tick.
+                crate::security::periodic_check();
                 // Drain virtio-net + NAT forward for caves. Without
                 // this, cave network connections stall after the ring
                 // fills.
@@ -165,11 +168,36 @@ fn handle_pointer(pe: crate::drivers::virtio::tablet::PointerEvent) -> Event {
 }
 
 fn handle_key(c: u8) -> Event {
-    // Full keyboard shortcut table lands in Task 9. Esc handled here
-    // so the overlay can be dismissed before then.
-    if c == 0x1B && overlay_open() {
-        set_overlay_open(false);
-        return Event::Repaint;
+    // The kernel's keyboard layer translates Ctrl+letter into ASCII
+    // control codes (Ctrl+K = 0x0B, Ctrl+W = 0x17, Ctrl+L = 0x0C).
+    // ⌘ on Mac maps to Ctrl through QEMU's HID forwarding, so the
+    // brainstormed ⌘K / ⌘L / ⌘W work as documented on both QEMU
+    // and the M4 path.
+
+    // Panic hotkey takes priority over ALL other shortcuts: if
+    // check_panic_hotkey fires, wipe::execute() is called and does not
+    // return. The early return below is therefore unreachable in practice
+    // but is kept for clarity / if wipe ever becomes fallible.
+    if crate::security::check_panic_hotkey(c) {
+        return Event::None;
     }
-    Event::None
+
+    match c {
+        0x0B => { set_overlay_open(!overlay_open()); Event::Repaint } // Ctrl+K — toggle overlay
+        0x09 => { wm::cycle_focus(); Event::Repaint }                  // Tab — cycle window focus
+        0x0C => Event::Lock,                                           // Ctrl+L — lock screen
+        0x17 => {                                                      // Ctrl+W — close focused
+            if let Some(id) = wm::focused() { wm::close(id); }
+            Event::Repaint
+        }
+        0x1B => {                                                      // Esc — dismiss overlay
+            if overlay_open() {
+                set_overlay_open(false);
+                Event::Repaint
+            } else {
+                Event::None
+            }
+        }
+        _ => Event::None,
+    }
 }

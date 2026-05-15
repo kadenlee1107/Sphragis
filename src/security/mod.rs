@@ -10,9 +10,9 @@ pub mod tpi;
 pub mod wipe;
 pub mod zeroize;
 
-/// Check for panic hotkey (Ctrl+Shift+W = wipe NOW).
-/// Called from the main input loop (Task 9 keyboard shortcut table wires this in).
-#[allow(dead_code)]
+/// Check for panic hotkey (Ctrl+W = 0x17, wipe NOW).
+/// Called from handle_key() in desktop.rs BEFORE the regular shortcut
+/// match table so the wipe takes priority over all other Ctrl+W bindings.
 pub fn check_panic_hotkey(c: u8) -> bool {
     // Ctrl+W = 0x17
     // This is the emergency wipe trigger
@@ -23,9 +23,8 @@ pub fn check_panic_hotkey(c: u8) -> bool {
     false
 }
 
-/// Periodic security check — called from the main loop.
-/// Checks dead man's switch timer (Task 9 keyboard shortcut table wires this in).
-#[allow(dead_code)]
+/// Periodic security check — called from the idle arm of desktop::run().
+/// Checks dead man's switch timer; triggers wipe on expiry.
 pub fn periodic_check() {
     if deadman::check() {
         // Dead man's switch expired — wipe everything
