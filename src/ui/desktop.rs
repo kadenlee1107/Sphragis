@@ -168,10 +168,13 @@ fn handle_pointer(pe: crate::drivers::virtio::tablet::PointerEvent) -> Event {
 }
 
 fn handle_key(c: u8) -> Event {
-    // Panic hotkey first — 0x17 (Ctrl+W) wipes the device immediately
-    // via wipe::execute() and never returns. The early return below is
-    // unreachable in practice (wipe diverges) but kept for clarity if
-    // check_panic_hotkey ever gains a confirmation/decline path.
+    // Panic hotkey first — 0x17 (Ctrl+W) calls wipe::execute which
+    // halts the SoC via the SEP mailbox on real M4 hardware. Under
+    // QEMU the wipe stub returns normally; the early `return
+    // Event::None` below catches that case so the spin loop doesn't
+    // burn cycles after a simulated wipe. (wipe::execute is currently
+    // typed `-> ()`, not `-> !`; the `-> !` retrofit is a Wave-3+
+    // security-audit follow-up.)
     //
     // 0x17 (Ctrl+W) is intercepted by check_panic_hotkey above —
     // emergency wipe. Do NOT re-add a "close on Ctrl+W" shortcut.

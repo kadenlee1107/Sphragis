@@ -10,7 +10,11 @@ pub mod tpi;
 pub mod wipe;
 pub mod zeroize;
 
-/// Check for panic hotkey (Ctrl+W = 0x17, wipe NOW).
+/// Returns true if `c` is the panic-wipe hotkey (0x17 / Ctrl+W).
+/// On a true match this invokes `wipe::execute(WipeReason::Panic,
+/// false)`, which halts the SoC on real M4 hardware and returns
+/// normally under QEMU.
+///
 /// Called from handle_key() in desktop.rs BEFORE the regular shortcut
 /// match table so the wipe takes priority over all other Ctrl+W bindings.
 pub fn check_panic_hotkey(c: u8) -> bool {
