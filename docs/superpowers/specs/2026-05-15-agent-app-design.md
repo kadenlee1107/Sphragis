@@ -157,9 +157,16 @@ static mut COMPOSE_LEN: usize = 0;
 static mut VIEWPORT_START: usize = 0;
 static mut APP_STATE: AppState = AppState::Idle;
 static mut SESSION: Option<AgentSession> = None;
-static mut STREAM_DONE: bool = false;
-static mut LAST_ERROR: Option<&'static str> = None;
+static mut LAST_ERROR: [u8; 64] = [0u8; 64];
+static mut LAST_ERROR_LEN: usize = 0;
+static mut SESSION_ID: u64 = 0;
+static mut SESSION_TOKENS: u32 = 0;
 ```
+
+`LAST_ERROR` is a byte buffer rather than `Option<&'static str>` because
+the error labels are produced from `&AgentError` (e.g. `error_label(&e)`)
+and `'static` lifetime would require interning. The buffer + length pair
+gives the same effect with `no_std`-friendly memory.
 
 `AppState` is the enum from the state-machine table above. The
 `AgentSession` is constructed lazily on the first Enter so we don't
@@ -187,24 +194,40 @@ when `Idle`).
 
 ## Tick driver
 
-In the `Streaming` state, `paint(rect)` polls
-`StreamingResponse::poll()` once per paint cycle (the desktop's main
-loop calls `paint` every tick — same drive point COMMS uses for its
-state checks). The poll loop processes events:
+**Phase-2 (current — stub mode).** `send_question` drives the entire
+poll loop synchronously: after appending the turn and flipping
+`APP_STATE = Streaming`, it scopes a `&mut` borrow on `SESSION`,
+calls `ask(q)`, and loops on `poll()` until it sees `Done` or
+`Error`. Because the stub returns `Done` on the first call, the
+whole Q→A cycle completes within a single `handle_key` invocation
+and the painter never sees the `Streaming` state on screen. This
+sidesteps the borrow-checker friction of stashing
+`StreamingResponse<'_>` (which borrows `SESSION`) across paint
+cycles in a `static mut`.
 
 ```rust
-match poll_event {
-    StreamEvent::Text(s)         => append s to current turn's response buffer
-    StreamEvent::ToolCall { .. } => no-op for Wave 8 UI
-    StreamEvent::Done            => transition Streaming → Idle, mark turn complete
-    StreamEvent::Error(e)        => transition Streaming → Error, surface reason
+loop {
+    match stream.poll() {
+        StreamEvent::Text(s)         => append s to current turn's response buffer
+        StreamEvent::ToolCall { .. } => no-op for Wave 8 UI
+        StreamEvent::Done            => result_state = Idle; break
+        StreamEvent::Error(e)        => if Interrupted: result_state = Idle;
+                                        else: store_error; result_state = Error; break
+    }
 }
 ```
 
-The Phase-2 stub returns `Done` on the first `poll()` call, so the
-state-machine completes the turn within one paint cycle. The
-response stays empty; the renderer paints a FAINT
-"(stub mode — wire src/ai/client.rs for live inference)" placeholder.
+**Phase-5 (future — real HTTPS streaming).** When `src/ai/client.rs`
+lands the real inference client, polls will return `Text` deltas
+across multiple ticks before `Done`. At that point the driver
+restructures: `paint(rect)` polls `StreamingResponse::poll()` once
+per paint cycle (same drive point COMMS uses), with the response
+handle stashed via a self-referential pattern or interior mutability
+on `SESSION`. The synchronous Phase-2 path is a `Done`-on-first-poll
+fast path that the per-tick driver subsumes.
+
+In stub mode, the response stays empty; the renderer paints a FAINT
+"(stub mode -- wire src/ai/client.rs for live inference)" placeholder.
 
 ## Stub-mode detection
 
