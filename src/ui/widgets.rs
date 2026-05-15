@@ -592,3 +592,44 @@ fn write_dec(mut n: usize, out: &mut [u8]) -> usize {
     for j in 0..i { out[j] = tmp[i - 1 - j]; }
     i
 }
+
+// ── Wave 3 widgets ───────────────────────────────────────────────
+// Used by caves_mgr (Wave 3) and inherited by FILES/NET/SECURITY/
+// EDITOR/COMMS in Wave 4. New widgets import from `crate::ui::palette`;
+// legacy widgets above keep their local cyberpunk palette.
+
+use crate::ui::palette as p;
+
+/// 6x6 px state indicator. `filled` = INK solid circle (running state).
+/// `!filled` = MID 1-px ring over BG fill (idle/stopped state).
+/// Renders inside a 6x6 bounding box at (x, y).
+pub fn paint_state_dot(x: u32, y: u32, filled: bool) {
+    use crate::ui::gpu;
+    // Pre-baked 6x6 dot bitmaps. 1 = pixel set, 0 = transparent.
+    // Filled (●) and hollow (○) shapes hand-tuned for 6x6 grid.
+    const FILLED: [[u8; 6]; 6] = [
+        [0, 1, 1, 1, 1, 0],
+        [1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1],
+        [0, 1, 1, 1, 1, 0],
+    ];
+    const HOLLOW: [[u8; 6]; 6] = [
+        [0, 1, 1, 1, 1, 0],
+        [1, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 1],
+        [0, 1, 1, 1, 1, 0],
+    ];
+    let bm = if filled { &FILLED } else { &HOLLOW };
+    let color = if filled { p::INK } else { p::MID };
+    for dy in 0..6u32 {
+        for dx in 0..6u32 {
+            if bm[dy as usize][dx as usize] == 1 {
+                gpu::fill_rect(x + dx, y + dy, 1, 1, color);
+            }
+        }
+    }
+}
