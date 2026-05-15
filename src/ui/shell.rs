@@ -11341,6 +11341,12 @@ pub fn handle_key(c: u8) -> AppEvent {
             AppEvent::Repaint
         }
 
+        0x16 => {
+            // Ctrl+V — paste clipboard contents into the input line.
+            handle_paste();
+            AppEvent::Repaint
+        }
+
         0x20..=0x7E => {
             // Printable ASCII.
             let cmd_len =
@@ -11370,6 +11376,29 @@ pub fn handle_key(c: u8) -> AppEvent {
 #[allow(dead_code)]
 pub fn handle_click(_mx: i32, _my: i32, _body: WindowRect) -> AppEvent {
     AppEvent::Consumed
+}
+
+/// Paste clipboard contents into the current input line, echoing
+/// each byte to the console. Skips bytes outside printable-ASCII so
+/// a maliciously-pasted control char (newline, NUL, etc.) can't
+/// fire commands the operator didn't type.
+#[allow(dead_code)]
+fn handle_paste() {
+    use crate::ui::{clipboard, console};
+    let n = clipboard::len();
+    if n == 0 { return; }
+    for i in 0..n {
+        let Some(b) = clipboard::byte_at(i) else { break; };
+        if !(0x20..=0x7E).contains(&b) { continue; }
+        let cmd_len = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(SHELL_CMD_LEN)) };
+        if cmd_len >= MAX_CMD_LEN - 1 { break; }
+        unsafe {
+            (*core::ptr::addr_of_mut!(SHELL_CMD_BUF))[cmd_len] = b;
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(SHELL_CMD_LEN), cmd_len + 1);
+        }
+        console::putc(b);
+    }
+    super::shell_history::reset_cursor();
 }
 
 /// Replace the current input line with `line`. `None` clears to empty.
