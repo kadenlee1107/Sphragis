@@ -376,43 +376,8 @@ fn paint_detail_create(rect: WindowRect) {
                    "TAB ADVANCES · SPACE CYCLES · ENTER CREATES", p::MID, p::BG);
     gpu::fill_rect(rect.x + 14, rect.y + 50, rect.w - 28, 1, p::HAIRLINE);
 
-    // Enum value arrays.
-    let net_values   = ["isolated", "routed", "custom"];
-    let sens_values  = ["Unclassified", "Confidential", "Secret", "TopSecret"];
-    let integ_values = ["Untrusted", "Sandboxed", "SystemTrusted", "HighIntegrity"];
-
-    let fields: [FormField; 6] = [
-        FormField {
-            key:      "NAME",
-            kind:     FieldKind::Text { buf: &mut f.name_buf[..], len: &mut f.name_len, max: NAME_MAX },
-            readonly: false,
-        },
-        FormField {
-            key:      "NET MODE",
-            kind:     FieldKind::Enum { values: &net_values, selected: &mut f.net_mode_sel },
-            readonly: false,
-        },
-        FormField {
-            key:      "MLS SENS",
-            kind:     FieldKind::Enum { values: &sens_values, selected: &mut f.mls_sens_sel },
-            readonly: false,
-        },
-        FormField {
-            key:      "MLS INTEG",
-            kind:     FieldKind::Enum { values: &integ_values, selected: &mut f.mls_integ_sel },
-            readonly: false,
-        },
-        FormField {
-            key:      "MOUNT",
-            kind:     FieldKind::Text { buf: &mut f.mount_buf[..], len: &mut f.mount_len, max: MOUNT_MAX },
-            readonly: true,   // pre-flight Gap 2: name-derived; no set_mount_by_name
-        },
-        FormField {
-            key:      "TAINT",
-            kind:     FieldKind::Hex32 { value: &mut f.taint },
-            readonly: false,
-        },
-    ];
+    let focused = f.focused_field;
+    let fields = build_form_fields(f, false);
 
     let form_rect = WindowRect {
         x: rect.x + 14,
@@ -420,7 +385,7 @@ fn paint_detail_create(rect: WindowRect) {
         w: rect.w - 28,
         h: rect.h - 100,
     };
-    paint_inline_edit_form(form_rect, &fields, f.focused_field);
+    paint_inline_edit_form(form_rect, &fields, focused);
 
     // Footer hint.
     font::draw_str(fb, screen_w, rect.x + 14, rect.y + rect.h - 18,
@@ -501,19 +466,12 @@ fn handle_click_form(mx: i32, my: i32, body: WindowRect) -> AppEvent {
         h: detail.h - 100,
     };
 
-    let net_values:   [&str; 3] = ["isolated", "routed", "custom"];
-    let sens_values:  [&str; 4] = ["Unclassified", "Confidential", "Secret", "TopSecret"];
-    let integ_values: [&str; 4] = ["Untrusted", "Sandboxed", "SystemTrusted", "HighIntegrity"];
-
-    let fields: [FormField; 6] = [
-        FormField { key: "NAME",      kind: FieldKind::Text { buf: &mut f.name_buf[..], len: &mut f.name_len, max: NAME_MAX },       readonly: false },
-        FormField { key: "NET MODE",  kind: FieldKind::Enum { values: &net_values,  selected: &mut f.net_mode_sel },                 readonly: false },
-        FormField { key: "MLS SENS",  kind: FieldKind::Enum { values: &sens_values, selected: &mut f.mls_sens_sel },                 readonly: false },
-        FormField { key: "MLS INTEG", kind: FieldKind::Enum { values: &integ_values, selected: &mut f.mls_integ_sel },               readonly: false },
-        FormField { key: "MOUNT",     kind: FieldKind::Text { buf: &mut f.mount_buf[..], len: &mut f.mount_len, max: MOUNT_MAX },     readonly: true  },
-        FormField { key: "TAINT",     kind: FieldKind::Hex32 { value: &mut f.taint },                                               readonly: false },
-    ];
-    handle_form_click(&fields, &mut f.focused_field, form_rect, mx, my);
+    let mut focused = f.focused_field;
+    {
+        let fields = build_form_fields(f, false);
+        handle_form_click(&fields, &mut focused, form_rect, mx, my);
+    } // `fields`' borrow on `f` ends here.
+    f.focused_field = focused;
     AppEvent::Repaint
 }
 
@@ -531,48 +489,17 @@ fn handle_key_form(c: u8) -> AppEvent {
         None    => return AppEvent::Unhandled,
     }};
 
-    let net_values:   [&str; 3] = ["isolated", "routed", "custom"];
-    let sens_values:  [&str; 4] = ["Unclassified", "Confidential", "Secret", "TopSecret"];
-    let integ_values: [&str; 4] = ["Untrusted", "Sandboxed", "SystemTrusted", "HighIntegrity"];
+    let mut focused = f.focused_field;
+    let action = {
+        let mut fields = build_form_fields(f, false);
+        handle_form_key(&mut fields, &mut focused, c)
+    }; // `fields`' borrow on `f` ends here.
+    f.focused_field = focused;
 
-    let mut fields: [FormField; 6] = [
-        FormField {
-            key:      "NAME",
-            kind:     FieldKind::Text { buf: &mut f.name_buf[..], len: &mut f.name_len, max: NAME_MAX },
-            readonly: false,
-        },
-        FormField {
-            key:      "NET MODE",
-            kind:     FieldKind::Enum { values: &net_values, selected: &mut f.net_mode_sel },
-            readonly: false,
-        },
-        FormField {
-            key:      "MLS SENS",
-            kind:     FieldKind::Enum { values: &sens_values, selected: &mut f.mls_sens_sel },
-            readonly: false,
-        },
-        FormField {
-            key:      "MLS INTEG",
-            kind:     FieldKind::Enum { values: &integ_values, selected: &mut f.mls_integ_sel },
-            readonly: false,
-        },
-        FormField {
-            key:      "MOUNT",
-            kind:     FieldKind::Text { buf: &mut f.mount_buf[..], len: &mut f.mount_len, max: MOUNT_MAX },
-            readonly: true,   // pre-flight Gap 2: name-derived; no set_mount_by_name
-        },
-        FormField {
-            key:      "TAINT",
-            kind:     FieldKind::Hex32 { value: &mut f.taint },
-            readonly: false,
-        },
-    ];
-
-    let action = handle_form_key(&mut fields, &mut f.focused_field, c);
     match action {
         FormAction::Submit => {
             match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
-                AppMode::Creating           => submit_create_form(),
+                AppMode::Creating           => submit_create_form(f),
                 AppMode::Configuring(_idx)  => AppEvent::Unhandled, // Task 12
                 _                           => AppEvent::Unhandled,
             }
@@ -611,13 +538,8 @@ fn regenerate_mount_from_name(f: &mut FormScratch) {
     }
 }
 
-fn submit_create_form() -> AppEvent {
+fn submit_create_form(f: &FormScratch) -> AppEvent {
     use crate::caves::cave::{self, NetMode, Sensitivity, Integrity};
-    let form_ptr = core::ptr::addr_of!(FORM);
-    let f = unsafe { match (*form_ptr).as_ref() {
-        Some(f) => f,
-        None    => return AppEvent::Unhandled,
-    }};
     if f.name_len == 0 { return AppEvent::Repaint; }  // invalid; repaint shows it
 
     let name = unsafe { core::str::from_utf8_unchecked(&f.name_buf[..f.name_len]) };
@@ -755,5 +677,25 @@ fn actions_for_cave(is_running: bool) -> [Action<'static>; 4] {
         Action { hotkey: 'S', label: "Stop",      enabled: is_running },
         Action { hotkey: 'C', label: "Configure", enabled: true },
         Action { hotkey: 'D', label: "Destroy",   enabled: true },
+    ]
+}
+
+/// Build the form fields for the create / configure flow. MOUNT is
+/// readonly per pre-flight Gap 2; the rest are editable in Create
+/// mode. `name_readonly` flips NAME's readonly flag for Configure
+/// mode (no rename API). Caller passes the FormScratch by mutable
+/// reference; the returned array borrows into `f`'s buffers.
+fn build_form_fields(f: &mut FormScratch, name_readonly: bool) -> [FormField<'_>; 6] {
+    const NET_VALUES:   &[&str] = &["isolated", "routed", "custom"];
+    const SENS_VALUES:  &[&str] = &["Unclassified", "Confidential", "Secret", "TopSecret"];
+    const INTEG_VALUES: &[&str] = &["Untrusted", "Sandboxed", "SystemTrusted", "HighIntegrity"];
+
+    [
+        FormField { key: "NAME",      kind: FieldKind::Text { buf: &mut f.name_buf[..],  len: &mut f.name_len,  max: NAME_MAX  }, readonly: name_readonly },
+        FormField { key: "NET MODE",  kind: FieldKind::Enum { values: NET_VALUES,   selected: &mut f.net_mode_sel  },              readonly: false },
+        FormField { key: "MLS SENS",  kind: FieldKind::Enum { values: SENS_VALUES,  selected: &mut f.mls_sens_sel  },              readonly: false },
+        FormField { key: "MLS INTEG", kind: FieldKind::Enum { values: INTEG_VALUES, selected: &mut f.mls_integ_sel },              readonly: false },
+        FormField { key: "MOUNT",     kind: FieldKind::Text { buf: &mut f.mount_buf[..], len: &mut f.mount_len, max: MOUNT_MAX }, readonly: true  },
+        FormField { key: "TAINT",     kind: FieldKind::Hex32 { value: &mut f.taint },                                              readonly: false },
     ]
 }
