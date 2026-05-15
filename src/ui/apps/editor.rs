@@ -305,6 +305,18 @@ pub fn handle_key(c: u8) -> AppEvent {
 
 fn handle_key_editing(c: u8) -> AppEvent {
     let has_file = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(FILE_NAME_LEN)) } > 0;
+
+    // Empty-state: no file loaded. Only Esc switches back to FILES; every
+    // other key falls through so the desktop launcher 1..8 still works.
+    // Without this, the "press 2 to open from FILES" hint is a lie because
+    // EDITOR's Editing mode would otherwise eat the digit as text input.
+    if !has_file {
+        return match c {
+            0x1B => { switch_to_files(); AppEvent::Repaint }
+            _    => AppEvent::Unhandled,
+        };
+    }
+
     match c {
         0x1B => {
             // Esc: if dirty, ConfirmDiscard; else switch to FILES.
@@ -328,14 +340,14 @@ fn handle_key_editing(c: u8) -> AppEvent {
             AppEvent::Repaint
         }
         0x0D => { newline(); AppEvent::Repaint }
-        b's' | b'S' if has_file && dirty() => { save_to_batfs(); AppEvent::Repaint }
-        b'r' | b'R' if has_file && dirty() => {
+        b's' | b'S' if dirty() => { save_to_batfs(); AppEvent::Repaint }
+        b'r' | b'R' if dirty() => {
             unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::ConfirmRevert; }
             AppEvent::Repaint
         }
         // Printable ASCII inserts. Reserved keys (S/R/Esc handled above)
-        // also fall through here when no file is open or buffer not dirty,
-        // which intentionally lets the operator type 's' or 'r' literally.
+        // also fall through here when buffer not dirty, which intentionally
+        // lets the operator type 's' or 'r' literally.
         0x20..=0x7E => { insert_char(c); AppEvent::Repaint }
         _ => AppEvent::Unhandled,
     }
