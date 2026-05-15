@@ -392,7 +392,45 @@ fn paint_detail_create(rect: WindowRect) {
                    "Enter to Create  ·  Esc to cancel", p::MID, p::BG);
 }
 
-fn paint_detail_configure(rect: WindowRect) { let _ = rect; /* Task 12 */ }
+fn paint_detail_configure(rect: WindowRect) {
+    use crate::ui::{font, gpu};
+    let fb = gpu::framebuffer();
+    let screen_w = gpu::width();
+
+    let form_ptr = core::ptr::addr_of_mut!(FORM);
+    let f = match unsafe { (*form_ptr).as_mut() } {
+        Some(f) => f,
+        None => return,
+    };
+
+    // Header: "Configure <name>"
+    let name = unsafe { core::str::from_utf8_unchecked(&f.name_buf[..f.name_len]) };
+    let mut hdr_buf = [0u8; 64];
+    let prefix = b"Configure ";
+    let mut n = 0;
+    for &b in prefix { hdr_buf[n] = b; n += 1; }
+    for &b in name.as_bytes() { if n < hdr_buf.len() { hdr_buf[n] = b; n += 1; } }
+    let hdr = unsafe { core::str::from_utf8_unchecked(&hdr_buf[..n]) };
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + 8, hdr, p::INK, p::BG);
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + 30,
+                   "TAB ADVANCES · SPACE CYCLES · ENTER APPLIES", p::MID, p::BG);
+    gpu::fill_rect(rect.x + 14, rect.y + 50, rect.w - 28, 1, p::HAIRLINE);
+
+    let focused = f.focused_field;
+    let fields = build_form_fields(f, true);
+
+    let form_rect = WindowRect {
+        x: rect.x + 14,
+        y: rect.y + 56,
+        w: rect.w - 28,
+        h: rect.h - 100,
+    };
+    paint_inline_edit_form(form_rect, &fields, focused);
+
+    // Footer hint.
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + rect.h - 18,
+                   "Enter to Apply  ·  Esc to cancel", p::MID, p::BG);
+}
 
 // ── Handle-click helpers ──────────────────────────────────────────
 
@@ -468,7 +506,8 @@ fn handle_click_form(mx: i32, my: i32, body: WindowRect) -> AppEvent {
 
     let mut focused = f.focused_field;
     {
-        let fields = build_form_fields(f, false);
+        let name_ro = matches!(unsafe { &*core::ptr::addr_of!(APP_MODE) }, AppMode::Configuring(_));
+        let fields = build_form_fields(f, name_ro);
         handle_form_click(&fields, &mut focused, form_rect, mx, my);
     } // `fields`' borrow on `f` ends here.
     f.focused_field = focused;
@@ -491,7 +530,8 @@ fn handle_key_form(c: u8) -> AppEvent {
 
     let mut focused = f.focused_field;
     let action = {
-        let mut fields = build_form_fields(f, false);
+        let name_ro = matches!(unsafe { &*core::ptr::addr_of!(APP_MODE) }, AppMode::Configuring(_));
+        let mut fields = build_form_fields(f, name_ro);
         handle_form_key(&mut fields, &mut focused, c)
     }; // `fields`' borrow on `f` ends here.
     f.focused_field = focused;
@@ -500,7 +540,7 @@ fn handle_key_form(c: u8) -> AppEvent {
         FormAction::Submit => {
             match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
                 AppMode::Creating           => submit_create_form(f),
-                AppMode::Configuring(_idx)  => AppEvent::Unhandled, // Task 12
+                AppMode::Configuring(_idx)  => submit_configure_form(f),
                 _                           => AppEvent::Unhandled,
             }
         }
@@ -567,6 +607,28 @@ fn submit_create_form(f: &FormScratch) -> AppEvent {
     }
 
     // 7. Exit Create mode.
+    unsafe {
+        *core::ptr::addr_of_mut!(FORM)     = None;
+        *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+    }
+    AppEvent::Repaint
+}
+
+fn submit_configure_form(f: &FormScratch) -> AppEvent {
+    use crate::caves::cave::{self, NetMode, Sensitivity, Integrity};
+    if f.name_len == 0 { return AppEvent::Repaint; }
+
+    let name = unsafe { core::str::from_utf8_unchecked(&f.name_buf[..f.name_len]) };
+
+    let _ = cave::set_sensitivity_by_name(name, Sensitivity::from_u8(f.mls_sens_sel as u8));
+    let _ = cave::set_integrity_by_name(name, Integrity::from_u8(f.mls_integ_sel as u8));
+    let _ = cave::set_net_mode_by_name(name, NetMode::from_u8(f.net_mode_sel as u8));
+    // MOUNT skipped per pre-flight Gap 2 (no set_mount_by_name in Wave 3).
+    // TAINT: set unconditionally — user may be clearing to 0, which is meaningful.
+    if let Some(cave_id) = cave::find_id(name) {
+        cave::set_taint(cave_id as u16, f.taint);
+    }
+
     unsafe {
         *core::ptr::addr_of_mut!(FORM)     = None;
         *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
