@@ -11194,11 +11194,6 @@ static mut SHELL_ESC: super::shell_history::EscState =
     super::shell_history::EscState::Idle;
 static SHELL_INITED: AtomicBool = AtomicBool::new(false);
 
-const BANNER_LINE_1: &str = "      ___       _      ___  ___\n";
-const BANNER_LINE_2: &str = "     | _ ) __ _| |_   / _ \\/ __|\n";
-const BANNER_LINE_3: &str = "     | _ \\/ _` |  _| | (_) \\__ \\\n";
-const BANNER_LINE_4: &str = "     |___/\\__,_|\\__|  \\___/|___/\n";
-
 /// WM-app paint entry. First call paints the welcome banner + prompt;
 /// subsequent calls just repaint the scrollback into the rect.
 pub fn paint(rect: WindowRect) {
@@ -11206,13 +11201,8 @@ pub fn paint(rect: WindowRect) {
 
     if !SHELL_INITED.load(Ordering::Relaxed) {
         console::init_in_window();
-        console::puts_hi(BANNER_LINE_1);
-        console::puts_hi(BANNER_LINE_2);
-        console::puts_hi(BANNER_LINE_3);
-        console::puts_hi(BANNER_LINE_4);
-        console::puts("\n");
-        console::puts("  Microkernel Shell v0.3 -- Type 'help' for commands\n");
-        console::puts("  Zero dependencies. Zero trust.\n");
+        console::puts_hi("Sphragis Microkernel Shell v0.3\n");
+        console::puts("Type 'help' for commands. Zero dependencies. Zero trust.\n");
         console::puts("\n");
         console::prompt();
         SHELL_INITED.store(true, Ordering::Relaxed);
