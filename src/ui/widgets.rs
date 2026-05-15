@@ -1061,3 +1061,222 @@ pub fn paint_status_field_list(rect: crate::ui::wm::WindowRect, fields: &[Status
         font::draw_str(fb, screen_w, value_col_x, row_y, f.value, p::INK, p::BG);
     }
 }
+
+// ── Wave 4 widgets ───────────────────────────────────────────────
+
+/// One row in a `paint_activity_log` rendering.
+#[derive(Copy, Clone)]
+pub struct ActivityEntry<'a> {
+    pub timestamp_str: &'a str,  // pre-formatted, e.g. "14:32:01"
+    pub kind:          &'a str,  // pre-formatted, e.g. "dns" / "tcp_open"
+    pub summary:       &'a str,
+}
+
+/// Paint a paginated activity log. Timestamp + kind render in MID
+/// with the kind padded to 12 chars; summary in INK. Top-right of
+/// rect shows `N..M of T`. Caller owns viewport_start + total.
+pub fn paint_activity_log(
+    rect: crate::ui::wm::WindowRect,
+    entries: &[ActivityEntry],
+    viewport_start: usize,
+    total: usize,
+) {
+    const ROW_H: u32 = 18;
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    // Header: "N..M of T" right-aligned.
+    let visible = entries.len();
+    let last_idx = viewport_start + visible;
+    let mut hdr_buf = [0u8; 48];
+    let mut pos = 0;
+    pos += write_dec(viewport_start + 1, &mut hdr_buf[pos..]);
+    hdr_buf[pos] = b'.'; pos += 1;
+    hdr_buf[pos] = b'.'; pos += 1;
+    pos += write_dec(last_idx, &mut hdr_buf[pos..]);
+    for &c in b" of " { hdr_buf[pos] = c; pos += 1; }
+    pos += write_dec(total, &mut hdr_buf[pos..]);
+    let hdr = unsafe { core::str::from_utf8_unchecked(&hdr_buf[..pos]) };
+    let hdr_w = (pos as u32) * CHAR_W;
+    let hdr_x = rect.x + rect.w.saturating_sub(hdr_w + 8);
+    font::draw_str(fb, screen_w, hdr_x, rect.y, hdr, p::MID, p::BG);
+
+    // Body rows from rect.y + 20.
+    let body_y = rect.y + 20;
+    let max_rows = ((rect.h.saturating_sub(20)) / ROW_H) as usize;
+    let rows_to_paint = entries.len().min(max_rows);
+
+    for (i, entry) in entries.iter().take(rows_to_paint).enumerate() {
+        let row_y = body_y + (i as u32) * ROW_H + 1;
+        font::draw_str(fb, screen_w, rect.x + 4, row_y, entry.timestamp_str, p::MID, p::BG);
+        let after_ts = rect.x + 4 + (entry.timestamp_str.len() as u32) * CHAR_W + 2 * CHAR_W;
+        font::draw_str(fb, screen_w, after_ts, row_y, entry.kind, p::MID, p::BG);
+        let after_kind = after_ts + 12 * CHAR_W;
+        font::draw_str(fb, screen_w, after_kind, row_y, entry.summary, p::INK, p::BG);
+    }
+}
+
+/// A bordered PANEL with a header (label + optional right badge)
+/// and a body region rendered via `paint_status_field_list`.
+pub struct StatusPanel<'a> {
+    pub label: &'a str,
+    pub header_right: Option<&'a str>,
+    pub body: &'a [StatusField<'a>],
+}
+
+pub fn paint_status_panel(rect: crate::ui::wm::WindowRect, panel: &StatusPanel) {
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    // PANEL fill + 1-px HAIRLINE border.
+    gpu::fill_rect(rect.x, rect.y, rect.w, rect.h, p::PANEL);
+    gpu::fill_rect(rect.x, rect.y, rect.w, 1, p::HAIRLINE);
+    gpu::fill_rect(rect.x, rect.y + rect.h - 1, rect.w, 1, p::HAIRLINE);
+    gpu::fill_rect(rect.x, rect.y, 1, rect.h, p::HAIRLINE);
+    gpu::fill_rect(rect.x + rect.w - 1, rect.y, 1, rect.h, p::HAIRLINE);
+
+    // Header row.
+    let hdr_y = rect.y + 10;
+    font::draw_str(fb, screen_w, rect.x + 10, hdr_y, panel.label, p::MID, p::PANEL);
+    if let Some(badge) = panel.header_right {
+        let badge_w = (badge.len() as u32) * CHAR_W;
+        let badge_x = rect.x + rect.w.saturating_sub(badge_w + 10);
+        font::draw_str(fb, screen_w, badge_x, hdr_y, badge, p::INK, p::PANEL);
+    }
+
+    // Body rect under header, 10-px inset.
+    let body_rect = crate::ui::wm::WindowRect {
+        x: rect.x + 10,
+        y: rect.y + 32,
+        w: rect.w.saturating_sub(20),
+        h: rect.h.saturating_sub(42),
+    };
+    paint_status_field_list(body_rect, panel.body);
+}
+
+/// A big-value metric tile. Label (MID) at top, 2× value (INK)
+/// centered, sub-caption (MID) below. Caller draws the panel chrome.
+pub fn paint_big_metric(rect: crate::ui::wm::WindowRect, label: &str, value: &str, sub: &str) {
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    // Label at top.
+    font::draw_str(fb, screen_w, rect.x, rect.y, label, p::MID, p::PANEL);
+
+    // Big value: 2× scale, left-aligned, vertically centered.
+    let value_h = CHAR_H * 2;
+    let avail_h = rect.h.saturating_sub(CHAR_H + 4);
+    let value_y = rect.y + CHAR_H + 4
+        + (avail_h.saturating_sub(value_h + CHAR_H + 4)) / 2;
+    font::draw_str_scaled(fb, screen_w, rect.x, value_y, value, p::INK, p::PANEL, 2);
+
+    // Sub-caption.
+    let sub_y = value_y + value_h + 4;
+    font::draw_str(fb, screen_w, rect.x, sub_y, sub, p::MID, p::PANEL);
+}
+
+/// Render a file's bytes as text (printable-ASCII with line numbers)
+/// or hex+ASCII dump. Mode chosen by sniffing first 256 bytes.
+pub fn paint_file_preview(rect: crate::ui::wm::WindowRect, bytes: &[u8], viewport_start: usize) {
+    if bytes.is_empty() {
+        let fb = gpu::framebuffer();
+        let screen_w = gpu::width();
+        font::draw_str(fb, screen_w, rect.x + 4, rect.y + 4, "(empty)", p::MID, p::BG);
+        return;
+    }
+    if is_text(bytes) {
+        paint_file_preview_text(rect, bytes, viewport_start);
+    } else {
+        paint_file_preview_hex(rect, bytes, viewport_start);
+    }
+}
+
+fn is_text(bytes: &[u8]) -> bool {
+    let sample = &bytes[..bytes.len().min(256)];
+    if sample.is_empty() { return true; }
+    let printable = sample.iter().filter(|&&b|
+        (0x20..=0x7E).contains(&b) || b == b'\n' || b == b'\t' || b == b'\r'
+    ).count();
+    (printable * 100) >= sample.len() * 90
+}
+
+fn paint_file_preview_text(rect: crate::ui::wm::WindowRect, bytes: &[u8], viewport_start: usize) {
+    const ROW_H: u32 = 16;
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    let max_rows = (rect.h / ROW_H) as usize;
+    let line_no_w = 5 * CHAR_W;
+    let text_x = rect.x + line_no_w + 4;
+
+    let mut line: usize = 0;
+    let mut line_start: usize = 0;
+    let mut rendered: usize = 0;
+
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' || i == bytes.len() - 1 {
+            let end = if b == b'\n' { i } else { i + 1 };
+            if line >= viewport_start {
+                if rendered >= max_rows { break; }
+                let row_y = rect.y + (rendered as u32) * ROW_H;
+                let mut ln_buf = [b' '; 5];
+                let mut ln = (line + 1) as u32;
+                let mut j = 5;
+                while ln > 0 && j > 0 { j -= 1; ln_buf[j] = b'0' + (ln % 10) as u8; ln /= 10; }
+                let ln_str = unsafe { core::str::from_utf8_unchecked(&ln_buf) };
+                font::draw_str(fb, screen_w, rect.x, row_y, ln_str, p::MID, p::BG);
+                let line_str = unsafe { core::str::from_utf8_unchecked(&bytes[line_start..end]) };
+                font::draw_str(fb, screen_w, text_x, row_y, line_str, p::INK, p::BG);
+                rendered += 1;
+            }
+            line += 1;
+            line_start = i + 1;
+        }
+    }
+}
+
+fn paint_file_preview_hex(rect: crate::ui::wm::WindowRect, bytes: &[u8], viewport_start: usize) {
+    const ROW_H: u32 = 14;
+    const BYTES_PER_ROW: usize = 16;
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    let max_rows = (rect.h / ROW_H) as usize;
+    let total_rows = bytes.len().div_ceil(BYTES_PER_ROW);
+    let end_row = (viewport_start + max_rows).min(total_rows);
+
+    for (rendered, row_idx) in (viewport_start..end_row).enumerate() {
+        let row_y = rect.y + (rendered as u32) * ROW_H;
+        let start = row_idx * BYTES_PER_ROW;
+        let end = (start + BYTES_PER_ROW).min(bytes.len());
+
+        // 4-digit hex offset.
+        let mut off_buf = [b'0'; 4];
+        let off = (start as u32) & 0xFFFF;
+        for k in 0..4 {
+            let nibble = ((off >> ((3 - k) * 4)) & 0xF) as u8;
+            off_buf[k] = if nibble < 10 { b'0' + nibble } else { b'a' + (nibble - 10) };
+        }
+        let off_str = unsafe { core::str::from_utf8_unchecked(&off_buf) };
+        font::draw_str(fb, screen_w, rect.x, row_y, off_str, p::MID, p::BG);
+
+        // 16 bytes of hex.
+        let mut hex_buf = [b' '; 48];
+        for (k, byte) in bytes[start..end].iter().enumerate() {
+            let hi = (byte >> 4) & 0xF;
+            let lo = byte & 0xF;
+            hex_buf[k * 3]     = if hi < 10 { b'0' + hi } else { b'a' + (hi - 10) };
+            hex_buf[k * 3 + 1] = if lo < 10 { b'0' + lo } else { b'a' + (lo - 10) };
+        }
+        let hex_str = unsafe { core::str::from_utf8_unchecked(&hex_buf) };
+        font::draw_str(fb, screen_w, rect.x + 5 * CHAR_W, row_y, hex_str, p::INK, p::BG);
+
+        // ASCII gutter.
+        let mut ascii_buf = [b'.'; 16];
+        for (k, byte) in bytes[start..end].iter().enumerate() {
+            ascii_buf[k] = if (0x20..=0x7E).contains(byte) { *byte } else { b'.' };
+        }
+        let ascii_str = unsafe { core::str::from_utf8_unchecked(&ascii_buf) };
+        font::draw_str(fb, screen_w, rect.x + 5 * CHAR_W + 49 * CHAR_W, row_y, ascii_str, p::INK, p::BG);
+    }
+}

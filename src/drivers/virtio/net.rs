@@ -307,7 +307,9 @@ pub fn send_n(id: usize, frame: &[u8]) -> Result<(), &'static str> {
 
 /// Send on default NIC (nic 0). Kept for backward compatibility.
 pub fn send(frame: &[u8]) -> Result<(), &'static str> {
-    send_n(0, frame)
+    let r = send_n(0, frame);
+    if r.is_ok() { crate::net::account_tx(frame.len()); }
+    r
 }
 
 /// Poll for a received Ethernet frame on NIC `id`.
@@ -370,5 +372,7 @@ pub fn recv_n(id: usize, buf: &mut [u8]) -> Option<usize> {
 
 /// Receive on default NIC (nic 0). Kept for backward compatibility.
 pub fn recv(buf: &mut [u8]) -> Option<usize> {
-    recv_n(0, buf)
+    let r = recv_n(0, buf);
+    if let Some(len) = r { crate::net::account_rx(len); }
+    r
 }

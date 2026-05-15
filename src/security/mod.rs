@@ -4,6 +4,7 @@ pub mod audit_forwarder;
 pub mod auth;
 pub mod boot_screen;
 pub mod deadman;
+pub mod integrity_counts;
 pub mod origin;
 pub mod otp;
 pub mod tpi;

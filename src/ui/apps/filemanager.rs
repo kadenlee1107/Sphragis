@@ -1,383 +1,373 @@
-// Sphragis — FS · File Manager
-// XXX Wave-2-temp: 2 old-WM call sites commented out, restored in Task 7.
-#![allow(dead_code)]
-//
-// Claude-Design Wave-3 port. Source artifacts in
-// `docs/design/apps-fs-ed-cm/` (jsx + spec sheet).
-//
-// Layout: 32px header strip ("ENCRYPTED VAULT · cipher info" +
-// file count), 24px column header ("STATUS / FILENAME / SIZE /
-// CIPHER / MERKLE OK"), N×24px data rows, 28px footer strip
-// ("FILES N · MAX_FILES 32" + Merkle preview + hint). Selected
-// row gets a 1px cyan-dim inset border + 2px cyan underline.
+//! Wave 4 Files Manager. Inspector layout + file viewer.
+//! See `docs/superpowers/specs/2026-05-14-files-net-security-design.md`.
 
-use crate::ui::wm;
-use crate::ui::gpu;
-use crate::ui::font;
-use crate::ui::draw;
+#![allow(dead_code, unused_imports)]
+
+use crate::ui::apps_registry::AppEvent;
+use crate::ui::palette as p;
 use crate::ui::widgets::{
-    draw_strip, draw_seg_separator,
-    BG, INK, MID, DIM_TXT, FAINT, CYAN, CYAN_DIM, GREEN, GREEN_DIM,
-    AMBER, AMBER_DIM, HAIR,
+    paint_state_dot, paint_status_field_list, StatusField,
+    paint_action_strip, action_strip_hit_test, Action,
+    InspectorLayout,
+    paint_confirm_modal, confirm_modal_key, ConfirmModal, ModalAction,
+    paint_file_preview,
 };
+use crate::ui::wm::WindowRect;
 use crate::fs::batfs;
-use crate::drivers::virtio::keyboard::{KEY_ARROW_UP, KEY_ARROW_DOWN};
 
-// which row the user has highlighted. Up/down arrows
-// move it; Enter opens the selected file in the editor.
-static mut SELECTED_ROW: usize = 0;
-static mut ROW_COUNT_CACHE: usize = 0;
+const NAME_MAX: usize = 64;
 
-#[inline] fn selected_row() -> usize { unsafe { SELECTED_ROW } }
+#[derive(PartialEq, Eq)]
+enum AppMode {
+    Viewing,
+    ConfirmDelete(usize),
+}
 
-/// Public dispatch — desktop::run forwards APP_FILES keystrokes here.
-pub fn handle_key(c: u8) {
+static mut APP_MODE: AppMode = AppMode::Viewing;
+static mut SELECTED_FILE: usize = 0;
+static mut VIEWPORT_START: usize = 0;
+static mut PREVIEW_BUF:  [u8; 8192] = [0; 8192];
+static mut PREVIEW_LEN:  usize = 0;
+static mut PREVIEW_VALID_FOR: usize = usize::MAX;
+
+fn selected_file() -> usize {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(SELECTED_FILE)) }
+}
+fn set_selected_file(v: usize) {
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SELECTED_FILE), v);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(VIEWPORT_START), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PREVIEW_VALID_FOR), usize::MAX);
+    }
+}
+fn viewport_start() -> usize {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(VIEWPORT_START)) }
+}
+fn set_viewport_start(v: usize) {
+    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(VIEWPORT_START), v) }
+}
+
+pub fn paint(body: WindowRect) {
+    crate::ui::gpu::fill_rect(body.x, body.y, body.w, body.h, p::BG);
+
+    let layout = InspectorLayout::new(body).with_sidebar_pct(38);
+    layout.paint_divider();
+    paint_sidebar(layout.sidebar_rect());
+
+    match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
+        AppMode::Viewing             => paint_detail_view(layout.detail_rect()),
+        AppMode::ConfirmDelete(idx)  => {
+            paint_detail_view(layout.detail_rect());
+            paint_delete_modal(*idx);
+        }
+    }
+}
+
+fn paint_sidebar(rect: WindowRect) {
+    use crate::ui::{font, gpu};
+    let fb = gpu::framebuffer();
+    let screen_w = gpu::width();
+
+    let (count, _max) = batfs::ns_stats();
+    let mut hdr_buf = [0u8; 24];
+    hdr_buf[..7].copy_from_slice(b"FILES (");
+    let digits = u32_dec(count as u32, &mut hdr_buf, 7);
+    hdr_buf[7 + digits] = b')';
+    let hdr_len = 7 + digits + 1;
+    let hdr = unsafe { core::str::from_utf8_unchecked(&hdr_buf[..hdr_len]) };
+    font::draw_str(fb, screen_w, rect.x + 8, rect.y + 6, hdr, p::MID, p::BG);
+    gpu::fill_rect(rect.x, rect.y + 24, rect.w, 1, p::HAIRLINE);
+
+    let row_h: u32 = 22;
+    let sel = selected_file();
+    let mut row_index: usize = 0;
+
+    batfs::ns_list(|name, _size, encrypted| {
+        let row_y = rect.y + 28 + (row_index as u32) * row_h;
+        if row_y + row_h > rect.y + rect.h { return; }
+
+        let is_sel = row_index == sel;
+        if is_sel {
+            gpu::fill_rect(rect.x, row_y, rect.w, row_h, p::PANEL);
+            font::draw_str(fb, screen_w, rect.x + 4, row_y + 3, ">", p::INK, p::PANEL);
+        }
+        paint_state_dot(rect.x + 18, row_y + 7, encrypted);
+        font::draw_str(
+            fb, screen_w, rect.x + 30, row_y + 3,
+            name,
+            if is_sel { p::INK } else { p::MID },
+            if is_sel { p::PANEL } else { p::BG },
+        );
+        row_index += 1;
+    });
+}
+
+fn paint_detail_view(rect: WindowRect) {
+    use crate::ui::{font, gpu};
+    let fb = gpu::framebuffer();
+    let screen_w = gpu::width();
+
+    let (count, _max) = batfs::ns_stats();
+    if count == 0 {
+        font::draw_str(fb, screen_w, rect.x + 14, rect.y + 14,
+                       "No files. Create one via SHELL or EDITOR.", p::MID, p::BG);
+        return;
+    }
+
+    let sel = selected_file();
+    let mut name_buf = [0u8; NAME_MAX];
+    let mut name_len = 0;
+    let mut size: usize = 0;
+    let mut encrypted = false;
+    let mut row_index: usize = 0;
+    batfs::ns_list(|n, s, e| {
+        if row_index == sel {
+            let l = n.len().min(NAME_MAX);
+            name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
+            name_len = l;
+            size = s;
+            encrypted = e;
+        }
+        row_index += 1;
+    });
+    if name_len == 0 { return; }
+    let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + 8, name, p::INK, p::BG);
+    let mut meta_buf = [0u8; 64];
+    let mut mn = 0;
+    let (sz_n, sz_u) = format_size(size, &mut meta_buf[mn..]);
+    mn += sz_n;
+    push_bytes(&mut meta_buf, &mut mn, sz_u.as_bytes());
+    push_bytes(&mut meta_buf, &mut mn, b" \xc2\xb7 ");
+    push_bytes(&mut meta_buf, &mut mn, if encrypted { b"encrypted" } else { b"plain" });
+    let meta = unsafe { core::str::from_utf8_unchecked(&meta_buf[..mn]) };
+    let meta_x = rect.x + rect.w.saturating_sub(meta.len() as u32 * 8 + 14);
+    font::draw_str(fb, screen_w, meta_x, rect.y + 8, meta, p::MID, p::BG);
+    gpu::fill_rect(rect.x + 14, rect.y + 28, rect.w - 28, 1, p::HAIRLINE);
+
+    let preview_rect = WindowRect {
+        x: rect.x + 14,
+        y: rect.y + 36,
+        w: rect.w - 28,
+        h: rect.h.saturating_sub(80),
+    };
+    let cached_for = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(PREVIEW_VALID_FOR)) };
+    if cached_for != sel {
+        load_preview(name, encrypted);
+    }
+    let len = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(PREVIEW_LEN)) };
+    let buf = unsafe { core::slice::from_raw_parts(core::ptr::addr_of!(PREVIEW_BUF) as *const u8, len) };
+    if len == 0 && encrypted {
+        font::draw_str(fb, screen_w, preview_rect.x + 4, preview_rect.y + 4,
+                       "encrypted; preview requires cave context", p::MID, p::BG);
+    } else {
+        paint_file_preview(preview_rect, buf, viewport_start());
+    }
+
+    gpu::fill_rect(rect.x + 14, rect.y + rect.h - 32, rect.w - 28, 1, p::HAIRLINE);
+    let strip_rect = WindowRect {
+        x: rect.x + 14,
+        y: rect.y + rect.h - 28,
+        w: rect.w - 28,
+        h: 24,
+    };
+    let actions = actions_for_file(encrypted);
+    paint_action_strip(strip_rect, &actions);
+}
+
+fn paint_delete_modal(idx: usize) {
+    let mut name_buf = [0u8; NAME_MAX];
+    let mut name_len = 0;
+    let mut row_index: usize = 0;
+    batfs::ns_list(|n, _s, _e| {
+        if row_index == idx {
+            let l = n.len().min(NAME_MAX);
+            name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
+            name_len = l;
+        }
+        row_index += 1;
+    });
+    let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+
+    let mut title_buf = [0u8; 80];
+    let mut tn = 0;
+    push_bytes(&mut title_buf, &mut tn, b"Delete ");
+    push_bytes(&mut title_buf, &mut tn, name.as_bytes());
+    push_bytes(&mut title_buf, &mut tn, b"?");
+    let title = unsafe { core::str::from_utf8_unchecked(&title_buf[..tn]) };
+
+    let modal = ConfirmModal {
+        title,
+        body_lines: &[
+            "  remove the file from BatFS",
+            "  zero its encrypted blocks",
+            "  add a tombstone to the audit chain",
+            "",
+            "IRREVERSIBLE.",
+        ],
+        commit_key: 'D',
+    };
+    paint_confirm_modal(&modal);
+}
+
+fn actions_for_file(_encrypted: bool) -> [Action<'static>; 2] {
+    [
+        Action { hotkey: 'D', label: "Delete",     enabled: true  },
+        Action { hotkey: 'E', label: "Edit (W5)",  enabled: false },
+    ]
+}
+
+fn load_preview(name: &str, _encrypted: bool) {
+    let buf_ptr = core::ptr::addr_of_mut!(PREVIEW_BUF) as *mut u8;
+    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, 8192) };
+    let len = batfs::ns_read(name, buf).unwrap_or(0);
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PREVIEW_LEN), len);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PREVIEW_VALID_FOR), selected_file());
+    }
+}
+
+pub fn handle_key(c: u8) -> AppEvent {
+    match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
+        AppMode::ConfirmDelete(idx) => handle_key_delete_modal(c, *idx),
+        AppMode::Viewing            => handle_key_viewing(c),
+    }
+}
+
+fn handle_key_viewing(c: u8) -> AppEvent {
+    let (count, _max) = batfs::ns_stats();
     match c {
-        KEY_ARROW_UP => {
-            unsafe {
-                if SELECTED_ROW > 0 { SELECTED_ROW -= 1; }
-            }
+        0x90 => {
+            let v = viewport_start();
+            if v > 0 { set_viewport_start(v.saturating_sub(8)); }
+            AppEvent::Repaint
         }
-        KEY_ARROW_DOWN => {
-            unsafe {
-                if SELECTED_ROW + 1 < ROW_COUNT_CACHE { SELECTED_ROW += 1; }
-            }
+        0x91 => {
+            let v = viewport_start();
+            set_viewport_start(v + 8);
+            AppEvent::Repaint
         }
-        b'\r' | b'\n' => {
-            // Open the selected file in the editor.
-            let idx = selected_row();
-            let mut name_buf = [0u8; 64];
-            let mut name_len = 0usize;
-            let mut row_i = 0usize;
-            // gap-audit 032: ns_list — the file manager only shows
-            // (and only opens) files in the active cave's namespace.
-            batfs::ns_list(|name, _size, _enc| {
-                if row_i == idx {
-                    let n = name.len().min(name_buf.len());
-                    name_buf[..n].copy_from_slice(&name.as_bytes()[..n]);
-                    name_len = n;
+        b'j' | b'J' => {
+            let sel = selected_file();
+            if sel + 1 < count { set_selected_file(sel + 1); }
+            AppEvent::Repaint
+        }
+        b'k' | b'K' => {
+            let sel = selected_file();
+            if sel > 0 { set_selected_file(sel - 1); }
+            AppEvent::Repaint
+        }
+        b'd' | b'D' => {
+            if count > 0 {
+                unsafe {
+                    *core::ptr::addr_of_mut!(APP_MODE) = AppMode::ConfirmDelete(selected_file());
                 }
-                row_i += 1;
+            }
+            AppEvent::Repaint
+        }
+        b'e' | b'E' => AppEvent::Consumed,
+        _ => AppEvent::Unhandled,
+    }
+}
+
+fn handle_key_delete_modal(c: u8, idx: usize) -> AppEvent {
+    let modal = ConfirmModal { title: "", body_lines: &[], commit_key: 'D' };
+    match confirm_modal_key(&modal, c) {
+        ModalAction::Commit => {
+            let mut name_buf = [0u8; NAME_MAX];
+            let mut name_len = 0;
+            let mut row_index: usize = 0;
+            batfs::ns_list(|n, _s, _e| {
+                if row_index == idx {
+                    let l = n.len().min(NAME_MAX);
+                    name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
+                    name_len = l;
+                }
+                row_index += 1;
             });
             if name_len > 0 {
                 let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
-                if crate::ui::apps::editor::load_from_batfs(name).is_ok() {
-                    // XXX Wave-2-temp: crate::ui::wm::switch_app(crate::ui::wm::APP_EDITOR);
-                }
+                let _ = batfs::ns_delete(name);
+            }
+            set_selected_file(0);
+            unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing; }
+            AppEvent::Repaint
+        }
+        ModalAction::Cancel => {
+            unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing; }
+            AppEvent::Repaint
+        }
+        ModalAction::None => AppEvent::Consumed,
+    }
+}
+
+pub fn handle_click(mx: i32, my: i32, body: WindowRect) -> AppEvent {
+    match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
+        AppMode::Viewing => handle_click_viewing(mx, my, body),
+        AppMode::ConfirmDelete(_) => {
+            unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing; }
+            AppEvent::Repaint
+        }
+    }
+}
+
+fn handle_click_viewing(mx: i32, my: i32, body: WindowRect) -> AppEvent {
+    let layout = InspectorLayout::new(body).with_sidebar_pct(38);
+    let sidebar = layout.sidebar_rect();
+    let detail = layout.detail_rect();
+
+    if mx >= sidebar.x as i32 && mx < (sidebar.x + sidebar.w) as i32 {
+        let row_h: u32 = 22;
+        let header_h: u32 = 28;
+        if my >= (sidebar.y + header_h) as i32 {
+            let row_idx = ((my as u32 - sidebar.y - header_h) / row_h) as usize;
+            let (count, _max) = batfs::ns_stats();
+            if row_idx < count {
+                set_selected_file(row_idx);
+                return AppEvent::Repaint;
             }
         }
-        _ => {}
-    }
-}
-
-const CHAR_W: u32 = 8;
-const CHAR_H: u32 = 16;
-
-// Column geometry — 1248px inner width after 16px L/R margin.
-const COL_STATUS_W:   u32 = 120;
-const COL_SIZE_W:     u32 = 120;
-const COL_CIPHER_W:   u32 = 160;
-const COL_MERKLE_W:   u32 = 110;
-
-const ROW_H: u32 = 24;
-
-pub fn render() {
-    // XXX Wave-2-temp: let r = wm::content_rect();
-    let r = wm::WindowRect { x: 0, y: 0, w: gpu::width(), h: gpu::height() };
-    gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
-    if r.w < 200 || r.h < 100 { return; }
-
-    // ── HEADER STRIP (32px) ───────────────────────────────────────
-    draw_strip(r.x, r.y, r.w, 32, false, true);
-    draw_header(r.x, r.y, r.w);
-
-    // ── COLUMN HEADER ROW (24px) ──────────────────────────────────
-    let col_y = r.y + 32;
-    draw_column_header(r.x, col_y, r.w);
-
-    // ── EMBEDDED SHELL STRIP — bottom 40% of body ─────────────────
-    // Lets the operator type `write foo "bar"`, `rm foo`, etc. without
-    // swapping to the SH tab. Shared scrollback with SH — the
-    // command runs in the same cave context, so cap/audit isolation
-    // is whatever the active cave already enforces.
-    let footer_y = r.y + r.h - 28;
-    let body_y = col_y + ROW_H;
-    let body_total_h = footer_y.saturating_sub(body_y);
-    let shell_h = (body_total_h * 2 / 5).max(96);  // 40% of body, min 96px (~6 rows)
-    let shell_y = footer_y - shell_h - 1;
-    let body_h = shell_y.saturating_sub(body_y);
-
-    // 1px hairline separator between list and shell strip.
-    gpu::fill_rect(r.x, shell_y, r.w, 1, crate::ui::widgets::HAIR);
-
-    // ── DATA ROWS ─────────────────────────────────────────────────
-    let (count, _max) = batfs::ns_stats();
-    if count == 0 {
-        draw_empty(r.x, body_y, r.w, body_h);
-    } else {
-        draw_rows(r.x, body_y, r.w, body_h);
+        return AppEvent::Consumed;
     }
 
-    // ── SHELL STRIP ──────────────────────────────────────────────
-    crate::ui::console::redraw_in_rect(wm::WindowRect {
-        x: r.x + 8, y: shell_y + 4,
-        w: r.w.saturating_sub(16), h: shell_h.saturating_sub(8),
-    });
-
-    // ── FOOTER STRIP (28px) ───────────────────────────────────────
-    draw_strip(r.x, footer_y, r.w, 28, true, false);
-    draw_footer(r.x, footer_y, r.w, count);
-}
-
-fn draw_header(x: u32, y: u32, w: u32) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let text_y = y + (32 - CHAR_H) / 2;
-    let mut cx = x + 16;
-    font::draw_str(fb, sw, cx, text_y, "VAULT",     FAINT, BG); cx += 6 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "ENCRYPTED", INK,   BG); cx += 10 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, ".",         FAINT, BG); cx += 2 * CHAR_W;
-    // BatFS is ChaCha20-Poly1305 AEAD now, not AES-CTR.
-    font::draw_str(fb, sw, cx, text_y, "CHACHA20-POLY1305", CYAN, BG); cx += 18 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "+ Merkle integrity", FAINT, BG);
-
-    // Right: file count / MAX_FILES (scoped to active cave's namespace).
-    let (count, _max) = batfs::ns_stats();
-    let mut buf = [0u8; 32];
-    let n = format_file_metric(count, &mut buf);
-    let s = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
-    let metric_w = n as u32 * CHAR_W;
-    if w > metric_w + 16 {
-        font::draw_str(fb, sw, x + w - 16 - metric_w, text_y, s, MID, BG);
-    }
-}
-
-fn draw_column_header(x: u32, y: u32, w: u32) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let text_y = y + (ROW_H - CHAR_H) / 2;
-    let inner_x = x + 16;
-    font::draw_str(fb, sw, inner_x,                                   text_y, "STATUS",    FAINT, BG);
-    font::draw_str(fb, sw, inner_x + COL_STATUS_W,                    text_y, "FILENAME",  FAINT, BG);
-    // SIZE column right-aligned within its cell.
-    let size_label_x = compute_size_x(inner_x, w);
-    let size_label = "SIZE";
-    let size_w = size_label.len() as u32 * CHAR_W;
-    font::draw_str(fb, sw, size_label_x + COL_SIZE_W - size_w - 16, text_y, size_label, FAINT, BG);
-    let cipher_x = size_label_x + COL_SIZE_W;
-    font::draw_str(fb, sw, cipher_x + 4,                              text_y, "CIPHER",    FAINT, BG);
-    let merkle_x = cipher_x + COL_CIPHER_W;
-    font::draw_str(fb, sw, merkle_x,                                  text_y, "MERKLE OK", FAINT, BG);
-    // 1px hairline below.
-    gpu::fill_rect(x, y + ROW_H - 1, w, 1, HAIR);
-}
-
-fn compute_size_x(inner_x: u32, total_w: u32) -> u32 {
-    // FILENAME flexes between STATUS (120) and SIZE (120) + CIPHER (160) + MERKLE (110).
-    // total_w includes 16px L+R margins.
-    let inner_w = total_w.saturating_sub(32);
-    let fixed = COL_STATUS_W + COL_SIZE_W + COL_CIPHER_W + COL_MERKLE_W;
-    let _name_w = inner_w.saturating_sub(fixed);
-    inner_x + COL_STATUS_W + _name_w
-}
-
-fn draw_empty(x: u32, y: u32, w: u32, h: u32) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let text = "(vault is empty - use ";
-    let cmd  = "write <name> <data>";
-    let tail = " in shell)";
-    let total = text.len() + cmd.len() + tail.len();
-    let total_w = total as u32 * CHAR_W;
-    let cx = x + (w.saturating_sub(total_w)) / 2;
-    let cy = y + h / 2 - CHAR_H / 2;
-    font::draw_str(fb, sw, cx,                                  cy, text, DIM_TXT, BG);
-    font::draw_str(fb, sw, cx + text.len() as u32 * CHAR_W,     cy, cmd,  CYAN,    BG);
-    font::draw_str(fb, sw, cx + (text.len() + cmd.len()) as u32 * CHAR_W, cy, tail, DIM_TXT, BG);
-}
-
-fn draw_rows(x: u32, y: u32, w: u32, h: u32) {
-    let max_rows = (h / ROW_H) as usize;
-    // First pass: count the rows so SELECTED_ROW can be clamped if
-    // the table shrunk (file deleted while FS was the active pane).
-    // gap-audit 032: ns_list — file manager scopes to active cave.
-    let mut total = 0usize;
-    batfs::ns_list(|_n, _s, _e| { total += 1; });
-    unsafe {
-        ROW_COUNT_CACHE = total;
-        if SELECTED_ROW >= total && total > 0 { SELECTED_ROW = total - 1; }
-        if total == 0 { SELECTED_ROW = 0; }
-    }
-    let sel = selected_row();
-    // Second pass: paint.
-    let mut row_idx = 0usize;
-    batfs::ns_list(|name, size, encrypted| {
-        if row_idx >= max_rows { return; }
-        let ry = y + (row_idx as u32) * ROW_H;
-        draw_row(x, ry, w, name, size, encrypted, row_idx == sel);
-        row_idx += 1;
-    });
-}
-
-fn draw_row(x: u32, y: u32, w: u32, name: &str, size: usize, encrypted: bool, selected: bool) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let text_y = y + (ROW_H - CHAR_H) / 2;
-    let inner_x = x + 16;
-
-    // Selection chrome: 1px cyan-dim inset border + 2px cyan underline.
-    if selected {
-        draw::draw_border(x + 16, y, w.saturating_sub(32), ROW_H, CYAN_DIM);
-        gpu::fill_rect(x + 16, y + ROW_H - 2, w.saturating_sub(32), 2, CYAN);
-    }
-
-    // STATUS — colored dot + tag.
-    let (tag, tag_color, tag_ring) = if encrypted {
-        ("[ENC]", GREEN, GREEN_DIM)
-    } else {
-        ("[RAW]", AMBER, AMBER_DIM)
+    let strip_rect = WindowRect {
+        x: detail.x + 14,
+        y: detail.y + detail.h - 28,
+        w: detail.w - 28,
+        h: 24,
     };
-    let dot_x = inner_x + 4;
-    let dot_y = y + (ROW_H - 6) / 2;
-    if dot_x >= 1 && dot_y >= 1 {
-        gpu::fill_rect(dot_x - 1, dot_y - 1, 8, 8, tag_ring);
+    let actions = actions_for_file(false);
+    if let Some(key) = action_strip_hit_test(strip_rect, mx, my, &actions) {
+        return handle_key(key as u8);
     }
-    gpu::fill_rect(dot_x, dot_y, 6, 6, tag_color);
-    font::draw_str(fb, sw, inner_x + 16, text_y, tag, tag_color, BG);
-
-    // FILENAME — "f" prefix + name. Truncate with "..." if too wide.
-    let name_x = inner_x + COL_STATUS_W;
-    font::draw_str(fb, sw, name_x, text_y, "f", DIM_TXT, BG);
-    let max_name_chars = (compute_size_x(inner_x, w).saturating_sub(name_x + 16)) / CHAR_W;
-    let name_show = if name.len() as u32 > max_name_chars {
-        // Show first (max-3) chars + "..."
-        let keep = (max_name_chars as usize).saturating_sub(3);
-        // We can't easily concat in no_std without alloc; just use truncation only.
-        &name[..keep.min(name.len())]
-    } else { name };
-    font::draw_str(fb, sw, name_x + 2 * CHAR_W, text_y, name_show, INK, BG);
-    if name.len() as u32 > max_name_chars {
-        font::draw_str(fb, sw, name_x + 2 * CHAR_W + name_show.len() as u32 * CHAR_W,
-            text_y, "...", DIM_TXT, BG);
-    }
-
-    // SIZE — right-aligned with unit suffix in dim.
-    let size_x = compute_size_x(inner_x, w);
-    let mut s_buf = [0u8; 16];
-    let (s_n, unit) = format_size(size, &mut s_buf);
-    let size_str = unsafe { core::str::from_utf8_unchecked(&s_buf[..s_n]) };
-    let total_w = (s_n as u32 + 1 + unit.len() as u32) * CHAR_W;
-    let val_x = size_x + COL_SIZE_W - total_w - 16;
-    font::draw_str(fb, sw, val_x, text_y, size_str, INK, BG);
-    font::draw_str(fb, sw, val_x + (s_n as u32 + 1) * CHAR_W, text_y, unit, DIM_TXT, BG);
-
-    // CIPHER. ChaCha20-Poly1305 (was AES-256-CTR label).
-    let cipher_x = size_x + COL_SIZE_W + 4;
-    if encrypted {
-        font::draw_str(fb, sw, cipher_x, text_y, "CHACHA20", CYAN, BG);
-    } else {
-        font::draw_str(fb, sw, cipher_x, text_y, "-", DIM_TXT, BG);
-    }
-
-    // MERKLE OK — green "OK" (we don't have a checkmark glyph in our
-    // ASCII-only font, so use the text label).
-    let merkle_x = cipher_x + COL_CIPHER_W;
-    font::draw_str(fb, sw, merkle_x, text_y, "OK", GREEN, BG);
-
-    // Bottom hairline (only if not selected — selection draws its own).
-    if !selected {
-        gpu::fill_rect(x + 16, y + ROW_H - 1, w.saturating_sub(32), 1, HAIR);
-    }
+    AppEvent::Consumed
 }
 
-fn draw_footer(x: u32, y: u32, w: u32, count: usize) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let text_y = y + (28 - CHAR_H) / 2;
-
-    // Left segment: FILES N · MAX_FILES 32.
-    let mut cx = x + 16;
-    font::draw_str(fb, sw, cx, text_y, "FILES", FAINT, BG); cx += 6 * CHAR_W;
-    let mut buf = [0u8; 16];
-    let n = format_dec(count, &mut buf);
-    font::draw_str(fb, sw, cx, text_y,
-        unsafe { core::str::from_utf8_unchecked(&buf[..n]) }, INK, BG);
-    cx += (n as u32 + 1) * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, ".", FAINT, BG); cx += 2 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "MAX_FILES", FAINT, BG); cx += 10 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "32", INK, BG); cx += 3 * CHAR_W;
-
-    // Separator.
-    draw_seg_separator(cx + 4, y, 28); cx += 16;
-
-    // Mid: MERKLE preview.
-    font::draw_str(fb, sw, cx, text_y, "MERKLE", FAINT, BG); cx += 7 * CHAR_W;
-    let root = batfs::merkle_root();
-    let hex = b"0123456789abcdef";
-    let mut hash_str = [b' '; 9];
-    for i in 0..4 {
-        hash_str[i * 2]     = hex[(root[i] >> 4) as usize];
-        hash_str[i * 2 + 1] = hex[(root[i] & 0xf) as usize];
-        if i == 1 { hash_str[4] = b' '; }
-    }
-    font::draw_str(fb, sw, cx, text_y,
-        unsafe { core::str::from_utf8_unchecked(&hash_str) }, INK, BG);
-    cx += 10 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "...", DIM_TXT, BG); cx += 4 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "VERIFIED", GREEN, BG);
-
-    // Right hint.
-    let hint = "type commands below . Enter runs (or opens row if blank)";
-    let hint_w = hint.len() as u32 * CHAR_W;
-    if w > hint_w + 16 {
-        font::draw_str(fb, sw, x + w - 16 - hint_w, text_y, hint, DIM_TXT, BG);
-    }
-}
-
-// ── helpers ───────────────────────────────────────────────────────
-
-fn format_file_metric(count: usize, out: &mut [u8]) -> usize {
-    let mut p = format_dec(count, out);
-    let suffix = b" / MAX_FILES 32";
-    out[p..p + suffix.len()].copy_from_slice(suffix);
-    p += suffix.len();
-    p
-}
-
-/// Format a byte size with unit. Returns (length-of-numeric, unit).
-fn format_size(bytes: usize, out: &mut [u8]) -> (usize, &'static str) {
-    if bytes < 1024 {
-        (format_dec(bytes, out), "B")
-    } else if bytes < 1024 * 1024 {
-        // KiB with one decimal.
-        let kib_int = bytes / 1024;
-        let kib_dec = ((bytes * 10) / 1024) % 10;
-        let mut p = format_dec(kib_int, out);
-        out[p] = b'.'; p += 1;
-        out[p] = b'0' + kib_dec as u8; p += 1;
-        (p, "KiB")
-    } else {
-        let mib_int = bytes / (1024 * 1024);
-        let mib_dec = ((bytes * 10) / (1024 * 1024)) % 10;
-        let mut p = format_dec(mib_int, out);
-        out[p] = b'.'; p += 1;
-        out[p] = b'0' + mib_dec as u8; p += 1;
-        (p, "MiB")
-    }
-}
-
-fn format_dec(mut n: usize, out: &mut [u8]) -> usize {
-    if n == 0 { out[0] = b'0'; return 1; }
-    let mut tmp = [0u8; 20];
+fn u32_dec(mut v: u32, buf: &mut [u8], offset: usize) -> usize {
+    if v == 0 { buf[offset] = b'0'; return 1; }
+    let mut tmp = [0u8; 10];
     let mut i = 0;
-    while n > 0 && i < tmp.len() { tmp[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
-    for j in 0..i { out[j] = tmp[i - 1 - j]; }
+    while v > 0 { tmp[i] = b'0' + (v % 10) as u8; v /= 10; i += 1; }
+    for j in 0..i { buf[offset + j] = tmp[i - j - 1]; }
     i
 }
 
-// Wave 2 shim — refresh in Wave 3+
-/// Adapts the existing render path to the WM's `fn(WindowRect)` contract.
-pub fn paint(rect: crate::ui::wm::WindowRect) {
-    let _ = rect;
-    render();
+fn push_bytes(buf: &mut [u8], n: &mut usize, s: &[u8]) {
+    for &b in s {
+        if *n < buf.len() { buf[*n] = b; *n += 1; }
+    }
+}
+
+fn format_size(bytes: usize, out: &mut [u8]) -> (usize, &'static str) {
+    if bytes < 1024 {
+        let n = u32_dec(bytes as u32, out, 0);
+        (n, "B")
+    } else if bytes < 1024 * 1024 {
+        let n = u32_dec((bytes / 1024) as u32, out, 0);
+        (n, "K")
+    } else {
+        let n = u32_dec((bytes / (1024 * 1024)) as u32, out, 0);
+        (n, "M")
+    }
 }
