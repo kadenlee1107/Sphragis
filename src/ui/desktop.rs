@@ -259,6 +259,30 @@ fn handle_key(c: u8) -> Event {
         }
         0x09 => { wm::cycle_focus(); Event::Repaint }                  // Tab — cycle window focus
         0x0C => Event::Lock,                                           // Ctrl+L — lock screen
+        0x04 => {                                                      // Ctrl+D — close focused window
+            if let Some(id) = wm::focused() { wm::close(id); }
+            Event::Repaint
+        }
+        b'1'..=b'8' => {
+            // 1..8 — open (or refocus) the app at that launcher slot.
+            // Wave 2 keyboard-driven launcher: QEMU on Cocoa doesn't
+            // deliver virtio-input pointer events, so without a number
+            // shortcut the launcher is unreachable from the keyboard.
+            // 1..8 maps to APPS slots 0..7 (CAVES, FILES, NET,
+            // SECURITY, SHELL, EDITOR, COMMS, AGENT).
+            let slot = (c - b'1') as usize;
+            let app = crate::ui::apps_registry::APPS[slot].id;
+            // If the app already has an open window, focus it; otherwise open.
+            let existing = wm::iter().find(|w| w.app == app).map(|w| w.id);
+            match existing {
+                Some(id) => wm::focus(id),
+                None     => { wm::open(app, None); }
+            }
+            // Dismiss the overlay if it was open so the new/focused
+            // window is visible immediately.
+            if overlay_open() { set_overlay_open(false); }
+            Event::Repaint
+        }
         0x1B => {                                                      // Esc — dismiss config sheet or overlay
             if topbar::config_sheet_open() {
                 topbar::close_config_sheet();
