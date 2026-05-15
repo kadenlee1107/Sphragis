@@ -106,6 +106,7 @@ fn paint(state: State) {
     }
 
     topbar::paint();
+    topbar::paint_config_sheet();
 }
 
 enum Event { None, Repaint, Lock }
@@ -132,10 +133,20 @@ fn handle_pointer(pe: crate::drivers::virtio::tablet::PointerEvent) -> Event {
     use crate::drivers::virtio::tablet::PointerEvent;
     match pe {
         PointerEvent::Down(x, y) => {
+            // Config sheet absorbs all clicks when open; click outside
+            // the badge rows closes the sheet.
+            if topbar::config_sheet_open() {
+                let repaint = topbar::config_sheet_click(x, y);
+                if !repaint {
+                    topbar::close_config_sheet();
+                }
+                return Event::Repaint;
+            }
+
             if (y as u32) < topbar::TOPBAR_H {
                 match topbar::hit_test(x, y) {
                     TopBarHit::BrandClick  => { set_overlay_open(true); }
-                    TopBarHit::ConfigClick => { /* Task 10 */ }
+                    TopBarHit::ConfigClick => { topbar::open_config_sheet(); }
                     TopBarHit::LockClick   => return Event::Lock,
                     TopBarHit::None        => {}
                 }
@@ -193,7 +204,11 @@ fn handle_key(c: u8) -> Event {
         0x0B => { set_overlay_open(!overlay_open()); Event::Repaint } // Ctrl+K — toggle overlay
         0x09 => { wm::cycle_focus(); Event::Repaint }                  // Tab — cycle window focus
         0x0C => Event::Lock,                                           // Ctrl+L — lock screen
-        0x1B => {                                                      // Esc — dismiss overlay
+        0x1B => {                                                      // Esc — dismiss config sheet or overlay
+            if topbar::config_sheet_open() {
+                topbar::close_config_sheet();
+                return Event::Repaint;
+            }
             if overlay_open() {
                 set_overlay_open(false);
                 Event::Repaint

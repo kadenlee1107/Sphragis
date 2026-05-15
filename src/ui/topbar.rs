@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+use crate::ui::draw;
 use crate::ui::font;
 use crate::ui::gpu;
 use crate::ui::topbar_config::{self, Badge};
@@ -132,5 +133,88 @@ fn uptime_seconds() -> u64 {
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
     }
     if freq == 0 { 0 } else { now / freq }
+}
+
+// ── Config sheet (modal) ─────────────────────────────────────────
+
+static mut CONFIG_SHEET_OPEN: bool = false;
+
+pub fn config_sheet_open() -> bool {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CONFIG_SHEET_OPEN)) }
+}
+pub fn open_config_sheet() {
+    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(CONFIG_SHEET_OPEN), true) }
+}
+pub fn close_config_sheet() {
+    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(CONFIG_SHEET_OPEN), false) }
+}
+
+const BG: u32 = 0xFF0D0D10;
+const ALL_BADGES: &[(Badge, &str)] = &[
+    (Badge::NetMode,   "NET MODE"),
+    (Badge::Deadman,   "DEADMAN"),
+    (Badge::Clock,     "CLOCK"),
+    (Badge::Caves,     "CAVES COUNT"),
+    (Badge::Attempts,  "ATTEMPTS"),
+    (Badge::Memory,    "MEMORY"),
+    (Badge::Cpu,       "CPU"),
+    (Badge::Audit,     "AUDIT TAIL"),
+    (Badge::CaveFocus, "CAVE FOCUS"),
+];
+
+pub fn paint_config_sheet() {
+    if !config_sheet_open() { return; }
+
+    let screen_w = gpu::width();
+    let screen_h = gpu::height();
+    let fb = gpu::framebuffer();
+
+    gpu::fill_rect(0, TOPBAR_H, screen_w, screen_h - TOPBAR_H, BG);
+
+    let panel_w: u32 = 360;
+    let row_h: u32 = 24;
+    let panel_h = (ALL_BADGES.len() as u32) * row_h + 50;
+    let px = (screen_w - panel_w) / 2;
+    let py = (screen_h - panel_h) / 2;
+    gpu::fill_rect(px, py, panel_w, panel_h, PANEL);
+    draw::draw_border(px, py, panel_w, panel_h, HAIRLINE);
+
+    font::draw_str(fb, screen_w, px + 14, py + 10, "TOP BAR BADGES", INK, PANEL);
+
+    for (i, (badge, name)) in ALL_BADGES.iter().enumerate() {
+        let ry = py + 40 + (i as u32) * row_h;
+        let enabled = topbar_config::iter().any(|b| b == *badge);
+        let marker = if enabled { "[x]" } else { "[ ]" };
+        let color = if enabled { INK } else { DIM };
+        font::draw_str(fb, screen_w, px + 14, ry,             marker, color, PANEL);
+        font::draw_str(fb, screen_w, px + 14 + 4 * 8, ry,     name,   color, PANEL);
+    }
+
+    font::draw_str(fb, screen_w, px + 14, py + panel_h - 16, "ESC TO CLOSE", DIM, PANEL);
+}
+
+/// Returns true if a repaint is needed.
+pub fn config_sheet_click(mx: i32, my: i32) -> bool {
+    if !config_sheet_open() { return false; }
+    let screen_w = gpu::width();
+    let screen_h = gpu::height();
+
+    let panel_w: u32 = 360;
+    let row_h: u32 = 24;
+    let panel_h = (ALL_BADGES.len() as u32) * row_h + 50;
+    let px = (screen_w - panel_w) / 2;
+    let py = (screen_h - panel_h) / 2;
+
+    if (mx as u32) < px || (mx as u32) >= px + panel_w { return false; }
+    if (my as u32) < py + 40 || (my as u32) >= py + 40 + (ALL_BADGES.len() as u32) * row_h {
+        return false;
+    }
+
+    let row_idx = (((my as u32) - py - 40) / row_h) as usize;
+    if row_idx < ALL_BADGES.len() {
+        topbar_config::toggle(ALL_BADGES[row_idx].0);
+        return true;
+    }
+    false
 }
 
