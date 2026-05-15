@@ -74,6 +74,20 @@ pub fn get(id: WindowId) -> Option<Window> {
     }
 }
 
+/// Returns the body rect (inside chrome, inside borders) of a window
+/// by id. None if no such window. Used by `desktop.rs` to compute
+/// body-local pointer coordinates when forwarding clicks to apps.
+pub fn body_rect(id: WindowId) -> Option<WindowRect> {
+    let w = get(id)?;
+    let r = w.rect;
+    Some(WindowRect {
+        x: r.x + 1,
+        y: r.y + CHROME_H + 1,
+        w: r.w.saturating_sub(2),
+        h: r.h.saturating_sub(CHROME_H + 2),
+    })
+}
+
 pub fn open(app: AppId, cave_name: Option<&str>) -> Option<WindowId> {
     let id = unsafe {
         let i = core::ptr::read_volatile(core::ptr::addr_of!(NEXT_ID));
