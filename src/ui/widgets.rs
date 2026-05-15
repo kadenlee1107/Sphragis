@@ -1115,3 +1115,41 @@ pub fn paint_activity_log(
         font::draw_str(fb, screen_w, after_kind, row_y, entry.summary, p::INK, p::BG);
     }
 }
+
+/// A bordered PANEL with a header (label + optional right badge)
+/// and a body region rendered via `paint_status_field_list`.
+pub struct StatusPanel<'a> {
+    pub label: &'a str,
+    pub header_right: Option<&'a str>,
+    pub body: &'a [StatusField<'a>],
+}
+
+pub fn paint_status_panel(rect: crate::ui::wm::WindowRect, panel: &StatusPanel) {
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    // PANEL fill + 1-px HAIRLINE border.
+    gpu::fill_rect(rect.x, rect.y, rect.w, rect.h, p::PANEL);
+    gpu::fill_rect(rect.x, rect.y, rect.w, 1, p::HAIRLINE);
+    gpu::fill_rect(rect.x, rect.y + rect.h - 1, rect.w, 1, p::HAIRLINE);
+    gpu::fill_rect(rect.x, rect.y, 1, rect.h, p::HAIRLINE);
+    gpu::fill_rect(rect.x + rect.w - 1, rect.y, 1, rect.h, p::HAIRLINE);
+
+    // Header row.
+    let hdr_y = rect.y + 10;
+    font::draw_str(fb, screen_w, rect.x + 10, hdr_y, panel.label, p::MID, p::PANEL);
+    if let Some(badge) = panel.header_right {
+        let badge_w = (badge.len() as u32) * CHAR_W;
+        let badge_x = rect.x + rect.w.saturating_sub(badge_w + 10);
+        font::draw_str(fb, screen_w, badge_x, hdr_y, badge, p::INK, p::PANEL);
+    }
+
+    // Body rect under header, 10-px inset.
+    let body_rect = crate::ui::wm::WindowRect {
+        x: rect.x + 10,
+        y: rect.y + 32,
+        w: rect.w.saturating_sub(20),
+        h: rect.h.saturating_sub(42),
+    };
+    paint_status_field_list(body_rect, panel.body);
+}
