@@ -201,7 +201,17 @@ fn handle_key(c: u8) -> Event {
     // Ctrl through QEMU's HID forwarding, so the brainstormed ⌘K /
     // ⌘L work as documented on both QEMU and the M4 path.
     match c {
-        0x0B => { set_overlay_open(!overlay_open()); Event::Repaint } // Ctrl+K — toggle overlay
+        0x0B => {
+            // Ctrl+K — close the config sheet (if open) and toggle the
+            // launcher overlay. Single state change visible per keystroke,
+            // matching macOS Cmd+Space precedent (dismisses modals to open
+            // the launcher).
+            if topbar::config_sheet_open() {
+                topbar::close_config_sheet();
+            }
+            set_overlay_open(!overlay_open());
+            Event::Repaint
+        }
         0x09 => { wm::cycle_focus(); Event::Repaint }                  // Tab — cycle window focus
         0x0C => Event::Lock,                                           // Ctrl+L — lock screen
         0x1B => {                                                      // Esc — dismiss config sheet or overlay

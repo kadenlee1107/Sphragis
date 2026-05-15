@@ -171,11 +171,7 @@ pub fn paint_config_sheet() {
 
     gpu::fill_rect(0, TOPBAR_H, screen_w, screen_h - TOPBAR_H, BG);
 
-    let panel_w: u32 = 360;
-    let row_h: u32 = 24;
-    let panel_h = (ALL_BADGES.len() as u32) * row_h + 50;
-    let px = (screen_w - panel_w) / 2;
-    let py = (screen_h - panel_h) / 2;
+    let (px, py, panel_w, panel_h, row_h) = config_sheet_geometry(screen_w, screen_h);
     gpu::fill_rect(px, py, panel_w, panel_h, PANEL);
     draw::draw_border(px, py, panel_w, panel_h, HAIRLINE);
 
@@ -193,17 +189,15 @@ pub fn paint_config_sheet() {
     font::draw_str(fb, screen_w, px + 14, py + panel_h - 16, "ESC TO CLOSE", DIM, PANEL);
 }
 
-/// Returns true if a repaint is needed.
+/// Returns `true` if a badge row was toggled (repaint needed).
+/// Returns `false` if the click did NOT land on a row — the caller
+/// should treat this as a close-sheet request.
 pub fn config_sheet_click(mx: i32, my: i32) -> bool {
     if !config_sheet_open() { return false; }
     let screen_w = gpu::width();
     let screen_h = gpu::height();
 
-    let panel_w: u32 = 360;
-    let row_h: u32 = 24;
-    let panel_h = (ALL_BADGES.len() as u32) * row_h + 50;
-    let px = (screen_w - panel_w) / 2;
-    let py = (screen_h - panel_h) / 2;
+    let (px, py, panel_w, _panel_h, row_h) = config_sheet_geometry(screen_w, screen_h);
 
     if (mx as u32) < px || (mx as u32) >= px + panel_w { return false; }
     if (my as u32) < py + 40 || (my as u32) >= py + 40 + (ALL_BADGES.len() as u32) * row_h {
@@ -216,5 +210,15 @@ pub fn config_sheet_click(mx: i32, my: i32) -> bool {
         return true;
     }
     false
+}
+
+#[inline(always)]
+fn config_sheet_geometry(screen_w: u32, screen_h: u32) -> (u32, u32, u32, u32, u32) {
+    let panel_w: u32 = 360;
+    let row_h:   u32 = 24;
+    let panel_h  = (ALL_BADGES.len() as u32) * row_h + 50;
+    let px = (screen_w - panel_w) / 2;
+    let py = (screen_h - panel_h) / 2;
+    (px, py, panel_w, panel_h, row_h)
 }
 
