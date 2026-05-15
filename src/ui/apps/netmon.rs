@@ -1,201 +1,254 @@
-// Sphragis — NM · Network Monitor
-// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
-//
-// Claude-Design port. Source artifacts in
-// `docs/design/apps-ds-nm-sk/` (jsx + spec sheet).
-//
-// Layout: 2-column grid for INTERFACE + FIREWALL (top, 280px tall),
-// full-width SECURITY STACK flow diagram below. Narrow (<512px)
-// collapses 2-col grids to 1-col and turns the flow strip into a
-// 3×2 grid of FlowBox cells (no arrows).
+//! Wave 4 NET cockpit. Live activity dashboard.
+//! See `docs/superpowers/specs/2026-05-14-files-net-security-design.md`.
 
-use crate::ui::wm;
-use crate::ui::gpu;
+#![allow(dead_code, unused_imports)]
+
+extern crate alloc;
+
+use crate::ui::apps_registry::AppEvent;
+use crate::ui::palette as p;
 use crate::ui::widgets::{
-    self as W, draw_panel, draw_kv_row, draw_flow_box, draw_flow_arrow,
-    KV_ROW_H, State, FLOW_BOX_W, FLOW_BOX_H, FLOW_ARROW_W,
-    BG,
+    paint_status_panel, StatusPanel, StatusField,
+    paint_activity_log, ActivityEntry,
+    paint_action_strip, action_strip_hit_test, Action,
 };
+use crate::ui::wm::WindowRect;
 use crate::net;
+use crate::net::activity::{self, ActivityKind};
 
-pub fn render() {
-    // XXX Wave-2-temp: let r = wm::content_rect();
-    let r = wm::WindowRect { x: 0, y: 0, w: gpu::width(), h: gpu::height() };
-    gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
-    if r.w < 200 || r.h < 200 { return; }
+static mut VIEWPORT_START: usize = 0;
 
-    let pad: u32 = 16;
-    let gutter: u32 = 16;
-    let narrow = r.w < 720;
-    let top_h: u32 = 280;
-    let flow_h: u32 = 200;
+fn viewport_start() -> usize {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(VIEWPORT_START)) }
+}
+fn set_viewport_start(v: usize) {
+    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(VIEWPORT_START), v) }
+}
 
-    // ── Top row: INTERFACE (left) + FIREWALL (right) ──────────────
-    let (if_x, if_y, if_w);
-    let (fw_x, fw_y, fw_w);
-    if narrow {
-        if_x = r.x + pad; if_y = r.y + pad; if_w = r.w.saturating_sub(pad * 2);
-        fw_x = r.x + pad; fw_y = if_y + top_h + gutter; fw_w = r.w.saturating_sub(pad * 2);
+pub fn paint(body: WindowRect) {
+    crate::ui::gpu::fill_rect(body.x, body.y, body.w, body.h, p::BG);
+
+    let strip_h: u32 = 28;
+    let strip_rect = WindowRect { x: body.x, y: body.y, w: body.w, h: strip_h };
+    paint_stats_strip(strip_rect);
+    crate::ui::gpu::fill_rect(body.x, body.y + strip_h, body.w, 1, p::HAIRLINE);
+
+    let panel_y = body.y + strip_h + 12;
+    let panel_h: u32 = 88;
+    let gap: u32 = 12;
+    let mode_w  = (body.w - 28 - gap) * 2 / 5;
+    let fw_w    = (body.w - 28 - gap) - mode_w;
+    let mode_rect = WindowRect { x: body.x + 14, y: panel_y, w: mode_w, h: panel_h };
+    let fw_rect   = WindowRect { x: body.x + 14 + mode_w + gap, y: panel_y, w: fw_w, h: panel_h };
+    paint_mode_panel(mode_rect);
+    paint_firewall_panel(fw_rect);
+
+    let log_y = panel_y + panel_h + 12;
+    let log_h = body.h.saturating_sub(log_y - body.y + 50);
+    let log_rect = WindowRect { x: body.x + 14, y: log_y, w: body.w - 28, h: log_h };
+    paint_activity_block(log_rect);
+
+    crate::ui::gpu::fill_rect(body.x + 14, body.y + body.h - 32, body.w - 28, 1, p::HAIRLINE);
+    let action_rect = WindowRect { x: body.x + 14, y: body.y + body.h - 28, w: body.w - 28, h: 24 };
+    paint_action_strip(action_rect, &actions());
+}
+
+fn paint_stats_strip(rect: WindowRect) {
+    use crate::ui::{font, gpu};
+    let fb = gpu::framebuffer();
+    let screen_w = gpu::width();
+
+    let mut left_buf = [0u8; 64];
+    let mut ln = 0;
+    push_bytes(&mut left_buf, &mut ln, b"RX ");
+    format_rate(net::rx_rate(), &mut left_buf, &mut ln);
+    push_bytes(&mut left_buf, &mut ln, b"/s  \xc2\xb7  TX ");
+    format_rate(net::tx_rate(), &mut left_buf, &mut ln);
+    push_bytes(&mut left_buf, &mut ln, b"/s");
+    let left = unsafe { core::str::from_utf8_unchecked(&left_buf[..ln]) };
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + 6, left, p::MID, p::BG);
+
+    let mut right_buf = [0u8; 64];
+    let mut rn = 0;
+    push_bytes(&mut right_buf, &mut rn, b"PEAK ");
+    format_bytes(net::peak_bytes(), &mut right_buf, &mut rn);
+    push_bytes(&mut right_buf, &mut rn, b"  \xc2\xb7  UPTIME ");
+    format_hms(net::uptime_secs(), &mut right_buf, &mut rn);
+    let right = unsafe { core::str::from_utf8_unchecked(&right_buf[..rn]) };
+    let right_w = rn as u32 * 8;
+    font::draw_str(fb, screen_w, rect.x + rect.w.saturating_sub(right_w + 14), rect.y + 6, right, p::MID, p::BG);
+}
+
+fn paint_mode_panel(rect: WindowRect) {
+    let mode_label = if net::is_isolated() { "ISOLATED" } else { "ROUTED" };
+    let mode_sub = if net::is_isolated() {
+        "no outbound to non-cave routes"
     } else {
-        let half = (r.w - pad * 2 - gutter) / 2;
-        if_x = r.x + pad;             if_y = r.y + pad; if_w = half;
-        fw_x = if_x + half + gutter;  fw_y = r.y + pad; fw_w = half;
-    }
-
-    let if_inner = draw_panel(if_x, if_y, if_w, top_h, "INTERFACE", Some("LINK"));
-    draw_interface_kvs(&if_inner);
-
-    let fw_inner = draw_panel(fw_x, fw_y, fw_w, top_h, "FIREWALL", Some("DENY ALL"));
-    draw_firewall_kvs(&fw_inner);
-
-    // ── Bottom: SECURITY STACK flow diagram ───────────────────────
-    let stack_y = if narrow {
-        fw_y + top_h + gutter
-    } else {
-        r.y + pad + top_h + gutter
+        "default route via host"
     };
-    let stack_x = r.x + pad;
-    let stack_w = r.w.saturating_sub(pad * 2);
-    let stack_h = r.h.saturating_sub(stack_y - r.y + pad).max(flow_h);
-    let stack_inner = draw_panel(stack_x, stack_y, stack_w, stack_h,
-        "SECURITY STACK", Some("REQUEST FLOW . LIVE"));
-    draw_flow_strip(&stack_inner, narrow);
-}
-
-fn draw_interface_kvs(p: &W::PanelInner) {
-    let label_w: u32 = 56;
-    let mut y = p.y;
-
-    let net_ok = crate::drivers::virtio::net::is_ready();
-    draw_kv_row(p.x, y, label_w, "LINK",
-        if net_ok { "UP . 1 Gbps full-duplex" } else { "DOWN" },
-        if net_ok { State::Ok } else { State::Fail }, true);
-    y += KV_ROW_H;
-
-    // MAC.
-    let mac = crate::drivers::virtio::net::mac();
-    let mut mac_buf = [0u8; 18];
-    write_mac(&mac, &mut mac_buf);
-    draw_kv_row(p.x, y, label_w, "MAC",
-        unsafe { core::str::from_utf8_unchecked(&mac_buf[..17]) },
-        State::Neutral, false);
-    y += KV_ROW_H;
-
-    // IPv4 + " / 24" suffix (QEMU SLIRP default subnet).
-    let ip = net::ip::our_ip();
-    let mut ip_arr = [0u8; 16];
-    let ip_n = net::ip::ip_to_str(ip, &mut ip_arr);
-    let mut ip_buf = [0u8; 32];
-    ip_buf[..ip_n].copy_from_slice(&ip_arr[..ip_n]);
-    let suffix = b" / 24";
-    ip_buf[ip_n..ip_n + suffix.len()].copy_from_slice(suffix);
-    let ip_with_mask = unsafe {
-        core::str::from_utf8_unchecked(&ip_buf[..ip_n + suffix.len()])
+    let panel = StatusPanel {
+        label: "MODE",
+        header_right: None,
+        body: &[],
     };
-    draw_kv_row(p.x, y, label_w, "IPv4", ip_with_mask, State::Neutral, false);
-    y += KV_ROW_H;
+    paint_status_panel(rect, &panel);
 
-    // GW.
-    let gw = net::ip::gateway();
-    let mut gw_buf = [0u8; 16];
-    let gw_n = net::ip::ip_to_str(gw, &mut gw_buf);
-    draw_kv_row(p.x, y, label_w, "GW",
-        unsafe { core::str::from_utf8_unchecked(&gw_buf[..gw_n]) },
-        State::Neutral, false);
-    y += KV_ROW_H;
-
-    draw_kv_row(p.x, y, label_w, "DNS", "10.0.2.3 (DoH)", State::Neutral, false);
-    y += KV_ROW_H;
-    draw_kv_row(p.x, y, label_w, "MTU", "1500", State::Plan, false);
+    use crate::ui::font;
+    let fb = crate::ui::gpu::framebuffer();
+    let screen_w = crate::ui::gpu::width();
+    font::draw_str(fb, screen_w, rect.x + 10, rect.y + 36, mode_label, p::INK, p::PANEL);
+    font::draw_str(fb, screen_w, rect.x + 10, rect.y + 60, mode_sub,   p::MID, p::PANEL);
 }
 
-fn draw_firewall_kvs(p: &W::PanelInner) {
-    let label_w: u32 = 88;
-    let mut y = p.y;
-    draw_kv_row(p.x, y, label_w, "POLICY",   "DENY ALL . default-drop",       State::Fail,    false); y += KV_ROW_H;
-    draw_kv_row(p.x, y, label_w, "MODE",     "ALLOWLIST",                     State::Neutral, false); y += KV_ROW_H;
-
-    let (allowed, blocked) = net::firewall::stats();
-    let mut a_buf = [0u8; 16];
-    let an = format_dec(allowed as usize, &mut a_buf);
-    draw_kv_row(p.x, y, label_w, "ALLOWED",
-        unsafe { core::str::from_utf8_unchecked(&a_buf[..an]) },
-        State::Ok, false);
-    y += KV_ROW_H;
-
-    let mut b_buf = [0u8; 16];
-    let bn = format_dec(blocked as usize, &mut b_buf);
-    draw_kv_row(p.x, y, label_w, "BLOCKED",
-        unsafe { core::str::from_utf8_unchecked(&b_buf[..bn]) },
-        State::Fail, false);
-    y += KV_ROW_H;
-
-    draw_kv_row(p.x, y, label_w, "LAST EVT",  "OUT 443 -> cdn.example.com", State::Neutral, false); y += KV_ROW_H;
-    draw_kv_row(p.x, y, label_w, "LAST DROP", "IN 22 <- 10.0.2.99 (no rule)", State::Fail, false);
-}
-
-fn draw_flow_strip(p: &W::PanelInner, narrow: bool) {
-    // 6 boxes: APP -> TLS 1.3 -> PIN VRFY -> SOP -> FIREWALL -> WIRE
-    // In narrow mode: 3x2 grid, no arrows.
-    let boxes: [(&str, &str, State); 6] = [
-        ("APP",      "sphragis shell",        State::Ok),
-        ("TLS 1.3",  "LOCKDOWN",            State::Ok),
-        ("PIN VRFY", "3 PINS . 0 MISMATCH", State::Ok),
-        ("SOP",      "origin allowlist",    State::Ok),
-        ("FIREWALL", "DENY ALL",            State::Ok),
-        ("WIRE",     "virtio-net",          State::Ok),
+fn paint_firewall_panel(rect: WindowRect) {
+    let body = [
+        StatusField { key: "rules",     value: "12 allow \u{00B7} 0 deny" },
+        StatusField { key: "drops",     value: "3 in last 60s" },
+        StatusField { key: "last drop", value: "14:31:48 tcp 10.0.0.4:443" },
     ];
-    if narrow {
-        // 3 columns × 2 rows.
-        let cell_w = (p.w - 32) / 3;
-        let cell_h = FLOW_BOX_H + 16;
-        for (i, (label, sub, state)) in boxes.iter().enumerate() {
-            let row = (i / 3) as u32;
-            let col = (i % 3) as u32;
-            let bx = p.x + col * cell_w + (cell_w - FLOW_BOX_W) / 2;
-            let by = p.y + row * cell_h + 8;
-            draw_flow_box(bx, by, label, sub, *state);
+    let panel = StatusPanel {
+        label: "FIREWALL",
+        header_right: Some("default: DENY"),
+        body: &body,
+    };
+    paint_status_panel(rect, &panel);
+}
+
+fn paint_activity_block(rect: WindowRect) {
+    use crate::ui::font;
+    let fb = crate::ui::gpu::framebuffer();
+    let screen_w = crate::ui::gpu::width();
+    font::draw_str(fb, screen_w, rect.x, rect.y, "ACTIVITY", p::MID, p::BG);
+
+    let total = activity::count();
+    let viewport = viewport_start();
+    let mut owned: alloc::vec::Vec<(alloc::string::String, alloc::string::String, alloc::string::String)> =
+        alloc::vec::Vec::new();
+    let mut row_index: usize = 0;
+    activity::iter_newest_first(|entry| {
+        if row_index >= viewport {
+            use alloc::format;
+            let kind = ActivityKind::from_u8(entry.kind);
+            let ts = format!("{:02}:{:02}:{:02}",
+                entry.ts / 3600,
+                (entry.ts / 60) % 60,
+                entry.ts % 60,
+            );
+            owned.push((
+                ts,
+                alloc::string::String::from(kind.as_str()),
+                alloc::string::String::from(entry.summary_str()),
+            ));
         }
+        row_index += 1;
+        true
+    });
+    let refs: alloc::vec::Vec<ActivityEntry> = owned.iter().map(|(t, k, s)| ActivityEntry {
+        timestamp_str: t.as_str(),
+        kind: k.as_str(),
+        summary: s.as_str(),
+    }).collect();
+    let log_rect = WindowRect { x: rect.x, y: rect.y + 4, w: rect.w, h: rect.h.saturating_sub(4) };
+    paint_activity_log(log_rect, &refs, viewport, total);
+}
+
+fn actions() -> [Action<'static>; 2] {
+    [
+        Action { hotkey: 'T', label: "Toggle isolation", enabled: true },
+        Action { hotkey: 'C', label: "Clear counters",   enabled: true },
+    ]
+}
+
+pub fn handle_key(c: u8) -> AppEvent {
+    match c {
+        0x90 => {
+            let v = viewport_start();
+            if v > 0 { set_viewport_start(v.saturating_sub(8)); }
+            AppEvent::Repaint
+        }
+        0x91 => {
+            let total = activity::count();
+            let v = viewport_start();
+            if v + 8 < total { set_viewport_start(v + 8); }
+            AppEvent::Repaint
+        }
+        b't' | b'T' => {
+            net::set_isolation(!net::is_isolated());
+            AppEvent::Repaint
+        }
+        b'c' | b'C' => {
+            net::clear_counters();
+            set_viewport_start(0);
+            AppEvent::Repaint
+        }
+        _ => AppEvent::Unhandled,
+    }
+}
+
+pub fn handle_click(mx: i32, my: i32, body: WindowRect) -> AppEvent {
+    let action_rect = WindowRect { x: body.x + 14, y: body.y + body.h - 28, w: body.w - 28, h: 24 };
+    if let Some(key) = action_strip_hit_test(action_rect, mx, my, &actions()) {
+        return handle_key(key as u8);
+    }
+    AppEvent::Consumed
+}
+
+fn push_bytes(buf: &mut [u8], n: &mut usize, s: &[u8]) {
+    for &b in s {
+        if *n < buf.len() { buf[*n] = b; *n += 1; }
+    }
+}
+
+fn format_rate(bps: u32, buf: &mut [u8], n: &mut usize) {
+    if bps >= 1024 {
+        let kbps = bps / 1024;
+        write_dec(buf, n, kbps);
+        push_bytes(buf, n, b".");
+        write_dec(buf, n, ((bps % 1024) * 10) / 1024);
+        push_bytes(buf, n, b" KB");
     } else {
-        // Single horizontal row centered vertically.
-        let total_w = 6 * FLOW_BOX_W + 5 * FLOW_ARROW_W;
-        let start_x = p.x + p.w.saturating_sub(total_w) / 2;
-        let by = p.y + (p.h.saturating_sub(FLOW_BOX_H)) / 2;
-        let mut bx = start_x;
-        for (i, (label, sub, state)) in boxes.iter().enumerate() {
-            draw_flow_box(bx, by, label, sub, *state);
-            bx += FLOW_BOX_W;
-            if i < boxes.len() - 1 {
-                draw_flow_arrow(bx, by, FLOW_ARROW_W);
-                bx += FLOW_ARROW_W;
-            }
-        }
+        write_dec(buf, n, bps);
+        push_bytes(buf, n, b" B");
     }
 }
 
-// ── helpers ───────────────────────────────────────────────────────
-
-fn write_mac(mac: &[u8; 6], out: &mut [u8; 18]) {
-    let hex = b"0123456789abcdef";
-    for i in 0..6 {
-        out[i * 3]     = hex[(mac[i] >> 4) as usize];
-        out[i * 3 + 1] = hex[(mac[i] & 0xf) as usize];
-        if i < 5 { out[i * 3 + 2] = b':'; }
+fn format_bytes(bytes: u64, buf: &mut [u8], n: &mut usize) {
+    if bytes >= 1024 * 1024 {
+        write_dec(buf, n, (bytes / (1024 * 1024)) as u32);
+        push_bytes(buf, n, b".");
+        write_dec(buf, n, (((bytes % (1024 * 1024)) * 10) / (1024 * 1024)) as u32);
+        push_bytes(buf, n, b" MB");
+    } else if bytes >= 1024 {
+        write_dec(buf, n, (bytes / 1024) as u32);
+        push_bytes(buf, n, b" KB");
+    } else {
+        write_dec(buf, n, bytes as u32);
+        push_bytes(buf, n, b" B");
     }
 }
 
-fn format_dec(mut n: usize, out: &mut [u8]) -> usize {
-    if n == 0 { out[0] = b'0'; return 1; }
-    let mut tmp = [0u8; 20];
-    let mut i = 0;
-    while n > 0 && i < tmp.len() { tmp[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
-    for j in 0..i { out[j] = tmp[i - 1 - j]; }
-    i
+fn format_hms(secs: u64, buf: &mut [u8], n: &mut usize) {
+    let h = secs / 3600;
+    let m = (secs / 60) % 60;
+    let s = secs % 60;
+    write_pad2(buf, n, h as u32);
+    push_bytes(buf, n, b":");
+    write_pad2(buf, n, m as u32);
+    push_bytes(buf, n, b":");
+    write_pad2(buf, n, s as u32);
 }
 
-// Wave 2 shim — refresh in Wave 3+
-/// Adapts the existing render path to the WM's `fn(WindowRect)` contract.
-pub fn paint(rect: crate::ui::wm::WindowRect) {
-    let _ = rect;
-    render();
+fn write_dec(buf: &mut [u8], n: &mut usize, mut v: u32) {
+    if v == 0 { if *n < buf.len() { buf[*n] = b'0'; *n += 1; } return; }
+    let mut tmp = [0u8; 10];
+    let mut t = 0;
+    while v > 0 { tmp[t] = b'0' + (v % 10) as u8; v /= 10; t += 1; }
+    for j in 0..t {
+        if *n < buf.len() { buf[*n] = tmp[t - j - 1]; *n += 1; }
+    }
+}
+
+fn write_pad2(buf: &mut [u8], n: &mut usize, v: u32) {
+    if v < 10 { push_bytes(buf, n, b"0"); }
+    write_dec(buf, n, v);
 }
