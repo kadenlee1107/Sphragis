@@ -14,12 +14,33 @@
 // * EV_ABS (3) + ABS_X (0)/ABS_Y (1): absolute position in
 // 0..=device_max (default 32767 for QEMU). We rescale to the
 // virtio-gpu framebuffer dimensions before exposing to callers.
+// * EV_REL (2) + REL_X/REL_Y: relative motion (virtio-mouse). We
+// accumulate into PENDING_X/Y and clamp to FB bounds.
 // * EV_KEY (1) + BTN_LEFT (0x110): left mouse button. value=1 down,
 // value=0 up. (BTN_RIGHT/BTN_MIDDLE plumbed but never fire in our
 // flows yet.)
 // * EV_SYN (0) + SYN_REPORT (0): end of event group; we use this
 // as the commit point and emit a single `Move` (or `ButtonDown`/
 // `ButtonUp` if the group also crossed a button-state edge).
+//
+// ── QEMU-Cocoa pointer limitation ─────────────────────────────────
+// CONFIRMED 2026-05-15 via uart-traced diagnostic: QEMU's Cocoa
+// display backend forwards EV_KEY (keyboard codes) to whichever
+// virtio-input device is connected — including virtio-tablet and
+// virtio-mouse — but does NOT forward EV_REL or EV_ABS pointer
+// motion to either. Mouse movement and clicks in the QEMU window
+// produce zero pointer events at the virtio queue.
+//
+// This is a QEMU display-backend limitation, not a kernel bug. The
+// build doesn't ship with SDL/GTK alternatives (`-display help`
+// shows only cocoa/curses/dbus/none). On real M4 hardware the
+// USB-HID pointer path arrives via a different driver entirely
+// and is unaffected.
+//
+// Workaround in the WM: kernel-drawn cursor for visual feedback +
+// 1..8 launcher hotkeys + Tab cycle + Ctrl+D close + keyboard nav
+// inside each app. See `src/ui/desktop.rs` + per-app `handle_key`
+// for the full keyboard input model.
 
 use super::mmio::{self, VirtioMmio};
 use super::virtqueue::Virtqueue;
@@ -211,18 +232,10 @@ pub fn poll() {
         let code  = super::virtqueue::safe_read16(buf_addr + 2);
         let value = super::virtqueue::safe_read32(buf_addr + 4) as i32;
 
-        // Diagnostic: log every event so we can tell whether QMP-
-        // injected motion is arriving at the virtio-mouse device.
-        // Drop once the bridge is confirmed end-to-end.
-        if etype == EV_REL || etype == EV_ABS || (etype == EV_KEY && code >= 0x110) {
-            uart::puts("    [tbl] ev type=");
-            crate::kernel::mm::print_num(etype as usize);
-            uart::puts(" code=");
-            crate::kernel::mm::print_num(code as usize);
-            uart::puts(" value=");
-            crate::kernel::mm::print_num(value as usize);
-            uart::puts("\n");
-        }
+        // Optional debug trace — left in but suppressed. To re-enable
+        // (e.g. on hardware where pointer events DO flow), gate this
+        // behind a build feature or a kernel command-line flag.
+        let _ = (etype, code, value);
 
         match etype {
             EV_ABS => {
