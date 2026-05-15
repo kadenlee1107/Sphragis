@@ -1445,7 +1445,7 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
         // Wave 3 stub: new caves default to Isolated network mode.
         // The net subsystem doesn't enforce per-cave policy yet;
         // per-cave enforcement is a Wave 4+ kernel item.
-        cave.net_mode = 0; // NetMode::Isolated
+        cave.net_mode = NetMode::Isolated as u8;
 
         let count = CAVE_COUNT.load(Ordering::Relaxed);
         CAVE_COUNT.store(count + 1, Ordering::Relaxed);
