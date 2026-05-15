@@ -642,13 +642,13 @@ pub struct StatusField<'a> {
 
 /// Paint a vertical list of key/value rows. Key column auto-sized to
 /// the longest key + 2-char padding. Keys render in MID; values in INK.
-/// Row height matches the bitmap font (~18 px including 2 px padding).
+/// Row pitch is 18 px (16 px glyph height + 1 px top inset + 1 px gap).
 ///
-/// Caller is responsible for clipping — this paints exactly
-/// `fields.len() * 18` pixels of height starting at `rect.y`.
+/// Caller is responsible for clipping — this paints `fields.len()` rows
+/// at row pitch 18 starting at `rect.y + 1`. Total footprint is
+/// `fields.len() * 18 - 1` px.
 pub fn paint_status_field_list(rect: crate::ui::wm::WindowRect, fields: &[StatusField]) {
-    const ROW_H:  u32 = 18;
-    const CHAR_W: u32 = 8;
+    const ROW_H: u32 = 18;
 
     let screen_w = gpu::width();
     let fb = gpu::framebuffer();
