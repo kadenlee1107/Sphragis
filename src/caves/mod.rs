@@ -14,3 +14,7 @@ pub mod sys_caves;
 pub mod sys_wg_ipc;
 pub mod sys_wg_service;
 pub mod syscall_filter;
+
+/// Wave 2 stub — re-exports cave::count() at the crate::caves top level
+/// so topbar.rs can call crate::caves::count().
+pub fn count() -> u8 { cave::count() as u8 } // Wave 2 stub

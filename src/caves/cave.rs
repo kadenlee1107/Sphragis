@@ -2,6 +2,7 @@
 // Sphragis — Cave Core
 // Isolated container runtime for running Kali Linux tools.
 // Each Cave has its own encrypted filesystem, capabilities, and process space.
+// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
 
 use crate::crypto::sha256;
 use core::sync::atomic::{AtomicU8, AtomicBool, Ordering};
@@ -1725,7 +1726,7 @@ pub fn enter(name: &str) -> Result<(), &'static str> {
             // ACTIVE_CAVE_ID = usize::MAX before the reset and only
             // restore it after. wm::draw_frame is just FB writes —
             // safe inside the IrqGuard'd critical section.
-            crate::ui::wm::draw_frame();
+            // XXX Wave-2-temp: crate::ui::wm::draw_frame();
         }
         let _ = prev_active;
     }

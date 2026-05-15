@@ -441,16 +441,23 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
             // AUTHENTICATION GATE — must pass to proceed
             // ═══════════════════════════════════════
             drivers::uart::puts("[security] Launching auth gate...\n");
-            security::boot_screen::run();
-            // If we get here, authentication succeeded
-
-            drivers::uart::puts("[security] AUTH PASSED — launching desktop\n");
 
             // Arm dead man's switch (48 hour default)
             security::deadman::arm(48);
 
-            // Launch desktop
-            ui::desktop::run();
+            // Lock/unlock cycle: boot_screen blocks until passphrase accepted,
+            // desktop::run() returns LockReason on lock. Loop re-enters
+            // boot_screen so the user must re-authenticate after each lock.
+            // WM state is module-level static and is not reset by lock.
+            loop {
+                security::boot_screen::run();
+                // If we get here, authentication succeeded
+                drivers::uart::puts("[security] AUTH PASSED — launching desktop\n");
+                let _reason = ui::desktop::run();
+                // _reason is LockReason::UserRequest today; ignored. Loop body
+                // re-enters boot_screen::run() which blocks until next unlock.
+                // WM state is module-level static so workspace persists.
+            }
         }
         None => {
             drivers::uart::puts("[boot] No display — serial shell\n\n");
@@ -1561,8 +1568,6 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
         };
         security::auth::init(passphrase_str_apple, duress_str_apple);
         drivers::apple::uart::puts("[security] Launching auth gate — type passphrase to unlock\n");
-        security::boot_screen::run();
-        drivers::apple::uart::puts("[security] AUTH PASSED — launching shell\n");
 
         // V-APPLE-UX-2: arm dead-man's-switch (48 h) just like QEMU.
         security::deadman::arm(48);
@@ -1576,7 +1581,19 @@ pub unsafe extern "C" fn kernel_main_apple(boot_args_ptr: *const drivers::apple:
         // pointer tables) are handled by the HV-side stage-2 alias:
         // run_guest.py maps 0x810000000..+32MiB → guest_base, so
         // link-time accesses land on the runtime bytes.
-        ui::desktop::run();
+        // Lock/unlock cycle: boot_screen blocks until passphrase accepted,
+        // desktop::run() returns LockReason on lock. Loop re-enters
+        // boot_screen so the user must re-authenticate after each lock.
+        // WM state is module-level static and is not reset by lock.
+        loop {
+            security::boot_screen::run();
+            // If we get here, authentication succeeded
+            drivers::apple::uart::puts("[security] AUTH PASSED — launching desktop\n");
+            let _reason = ui::desktop::run();
+            // _reason is LockReason::UserRequest today; ignored. Loop body
+            // re-enters boot_screen::run() which blocks until next unlock.
+            // WM state is module-level static so workspace persists.
+        }
     } else {
         drivers::apple::uart::puts("[boot] No display — serial shell\n\n");
         apple_serial_shell();

@@ -1,4 +1,5 @@
 // Sphragis — NM · Network Monitor
+// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
 //
 // Claude-Design port. Source artifacts in
 // `docs/design/apps-ds-nm-sk/` (jsx + spec sheet).
@@ -18,7 +19,8 @@ use crate::ui::widgets::{
 use crate::net;
 
 pub fn render() {
-    let r = wm::content_rect();
+    // XXX Wave-2-temp: let r = wm::content_rect();
+    let r = wm::WindowRect { x: 0, y: 0, w: gpu::width(), h: gpu::height() };
     gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
     if r.w < 200 || r.h < 200 { return; }
 
@@ -189,4 +191,11 @@ fn format_dec(mut n: usize, out: &mut [u8]) -> usize {
     while n > 0 && i < tmp.len() { tmp[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
     for j in 0..i { out[j] = tmp[i - 1 - j]; }
     i
+}
+
+// Wave 2 shim — refresh in Wave 3+
+/// Adapts the existing render path to the WM's `fn(WindowRect)` contract.
+pub fn paint(rect: crate::ui::wm::WindowRect) {
+    let _ = rect;
+    render();
 }

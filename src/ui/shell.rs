@@ -1,6 +1,7 @@
 // Sphragis — Interactive Kernel Shell
 // Command-line interface rendered to the GPU console.
 // Reads from UART, displays on framebuffer.
+// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
 
 use crate::platform;
 use crate::ui::console;
@@ -7577,7 +7578,7 @@ fn cmd_edit(name: &str) {
             console::puts("\n");
             // Switch to the editor app so the operator sees what they
             // just loaded.
-            crate::ui::wm::switch_app(crate::ui::wm::APP_EDITOR);
+            // XXX Wave-2-temp: crate::ui::wm::switch_app(crate::ui::wm::APP_EDITOR);
         }
         Err(e) => {
             console::puts("  edit: ");
@@ -11176,5 +11177,21 @@ fn hexnib(b: u8) -> u8 {
         b'A'..=b'F' => b - b'A' + 10,
         _ => 0xff,
     }
+}
+
+/// Wave 2 stub — placeholder paint for the SHELL slot. The 11k-line
+/// console is integrated properly in Wave 5.
+// Wave 2 shim — refresh in Wave 3+
+pub fn paint(rect: crate::ui::wm::WindowRect) {
+    use crate::ui::font;
+    let msg = "SHELL - integrating in Wave 5";
+    let tx = rect.x + 12;
+    let ty = rect.y + 12;
+    font::draw_str(
+        crate::ui::gpu::framebuffer(),
+        crate::ui::gpu::width(),
+        tx, ty, msg,
+        0xFFE5E7EB, 0xFF0D0D10,
+    );
 }
 

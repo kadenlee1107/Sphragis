@@ -63,6 +63,9 @@ pub fn dispatch_host_frame(buf: &[u8]) {
     }
 }
 
+/// Wave 2 stub — returns true until a real network-mode state machine is wired up.
+pub fn is_isolated() -> bool { true } // Wave 2 stub
+
 pub fn init() {
     firewall::init();
     cave_policy::init();
