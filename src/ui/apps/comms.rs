@@ -433,7 +433,10 @@ pub fn recv_message() -> bool {
 fn build_offer(id_sk: &SecretKey, id_pk: &[u8; 32], eph_pk: &[u8; 32])
     -> [u8; OFFER_LEN]
 {
-    let mut msg = [0u8; 32 + 16];
+    // 32 bytes eph_pk + LABEL ("SPHRAGIS-COMMS-v1" = 17 bytes).
+    // Old buffer size 32 + 16 was stale and panicked at runtime when
+    // LABEL grew past 16 chars.
+    let mut msg = [0u8; 32 + 17];
     msg[..32].copy_from_slice(eph_pk);
     msg[32..32 + LABEL.len()].copy_from_slice(LABEL);
     let sig = id_sk.sign(&msg[..32 + LABEL.len()], None);
@@ -460,7 +463,7 @@ fn verify_offer(offer: &[u8; OFFER_LEN], pinned_id: &[u8; 32])
 
     let pk = PublicKey::from_slice(id_bytes).map_err(|_| "bad id pub")?;
     let sig = Signature::from_slice(sig_bytes).map_err(|_| "bad sig")?;
-    let mut msg = [0u8; 32 + 16];
+    let mut msg = [0u8; 32 + 17];
     msg[..32].copy_from_slice(eph_bytes);
     msg[32..32 + LABEL.len()].copy_from_slice(LABEL);
     pk.verify(&msg[..32 + LABEL.len()], &sig)
@@ -475,8 +478,10 @@ fn verify_offer(offer: &[u8; OFFER_LEN], pinned_id: &[u8; 32])
 /// derive_keys.
 fn derive_directional_keys(shared: &[u8], client_eph_pk: &[u8; 32],
                             server_eph_pk: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    // SHA-256(direction-label || shared || client_eph || server_eph)
-    let mut buf = [0u8; 19 + 32 + 32 + 32];
+    // SHA-256(direction-label || shared || client_eph || server_eph).
+    // KEY_DIR_C2S / KEY_DIR_S2C are both 21 bytes ("SPHRAGIS-COMMS-c2s-v1"
+    // / "...-s2c-v1"); old 19-byte size was stale and panicked at runtime.
+    let mut buf = [0u8; 21 + 32 + 32 + 32];
 
     buf[..KEY_DIR_C2S.len()].copy_from_slice(KEY_DIR_C2S);
     buf[KEY_DIR_C2S.len()..KEY_DIR_C2S.len() + 32].copy_from_slice(shared);

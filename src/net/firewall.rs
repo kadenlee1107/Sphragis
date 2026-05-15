@@ -155,6 +155,24 @@ pub fn allow_inbound(src_ip: u32, _dst_ip: u32, protocol: u8) -> bool {
         return true;
     }
 
+    // TCP gets the proper stateful check at allow_inbound_tcp (post-
+    // header-parse) where src_port/dst_port are known and conntrack
+    // can match against the outbound flow Sphragis initiated. Pre-
+    // header we can't make that decision, so the coarse layer must
+    // not block legitimate SYN-ACK replies — pass and let the TCP
+    // layer enforce.
+    //
+    // Regression note: an earlier "gap-audit 045 hardening pass"
+    // removed the inbound-TCP wildcard rule from init() but didn't
+    // make this coarse path delegate to conntrack. Every inbound
+    // TCP packet (including SYN-ACK replies to our own SYNs) was
+    // dropped here, breaking outbound TCP connect entirely. This
+    // arm restores the correct layering.
+    if protocol == 6 {
+        ALLOWED_COUNT.fetch_add(1, Ordering::Relaxed);
+        return true;
+    }
+
     unsafe {
         let ptr = core::ptr::addr_of!(RULES);
         for i in 0..MAX_RULES {
