@@ -1153,3 +1153,24 @@ pub fn paint_status_panel(rect: crate::ui::wm::WindowRect, panel: &StatusPanel) 
     };
     paint_status_field_list(body_rect, panel.body);
 }
+
+/// A big-value metric tile. Label (MID) at top, 2× value (INK)
+/// centered, sub-caption (MID) below. Caller draws the panel chrome.
+pub fn paint_big_metric(rect: crate::ui::wm::WindowRect, label: &str, value: &str, sub: &str) {
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    // Label at top.
+    font::draw_str(fb, screen_w, rect.x, rect.y, label, p::MID, p::PANEL);
+
+    // Big value: 2× scale, left-aligned, vertically centered.
+    let value_h = CHAR_H * 2;
+    let avail_h = rect.h.saturating_sub(CHAR_H + 4);
+    let value_y = rect.y + CHAR_H + 4
+        + (avail_h.saturating_sub(value_h + CHAR_H + 4)) / 2;
+    font::draw_str_scaled(fb, screen_w, rect.x, value_y, value, p::INK, p::PANEL, 2);
+
+    // Sub-caption.
+    let sub_y = value_y + value_h + 4;
+    font::draw_str(fb, screen_w, rect.x, sub_y, sub, p::MID, p::PANEL);
+}
