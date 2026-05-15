@@ -717,6 +717,52 @@ pub fn action_strip_hit_test(rect: crate::ui::wm::WindowRect, mx: i32, my: i32, 
     None
 }
 
+/// Inspector-style sidebar + detail split. Caller decides what to paint
+/// in each rect; this widget computes geometry and paints the 1-px
+/// HAIRLINE divider between them.
+#[derive(Copy, Clone)]
+pub struct InspectorLayout {
+    pub body_rect:   crate::ui::wm::WindowRect,
+    pub sidebar_pct: u32,   // 0..100; default 38
+}
+
+impl InspectorLayout {
+    pub fn new(body_rect: crate::ui::wm::WindowRect) -> Self {
+        Self { body_rect, sidebar_pct: 38 }
+    }
+
+    pub fn with_sidebar_pct(mut self, pct: u32) -> Self {
+        self.sidebar_pct = pct.min(80).max(20);
+        self
+    }
+
+    pub fn sidebar_rect(&self) -> crate::ui::wm::WindowRect {
+        let w = (self.body_rect.w * self.sidebar_pct) / 100;
+        crate::ui::wm::WindowRect {
+            x: self.body_rect.x,
+            y: self.body_rect.y,
+            w,
+            h: self.body_rect.h,
+        }
+    }
+
+    pub fn detail_rect(&self) -> crate::ui::wm::WindowRect {
+        let sw = (self.body_rect.w * self.sidebar_pct) / 100;
+        crate::ui::wm::WindowRect {
+            x: self.body_rect.x + sw + 1, // +1 for the divider
+            y: self.body_rect.y,
+            w: self.body_rect.w.saturating_sub(sw + 1),
+            h: self.body_rect.h,
+        }
+    }
+
+    /// Paint the 1-px HAIRLINE vertical divider.
+    pub fn paint_divider(&self) {
+        let sw = (self.body_rect.w * self.sidebar_pct) / 100;
+        gpu::fill_rect(self.body_rect.x + sw, self.body_rect.y, 1, self.body_rect.h, p::HAIRLINE);
+    }
+}
+
 /// Paint a vertical list of key/value rows. Key column auto-sized to
 /// the longest key + 2-char padding. Keys render in MID; values in INK.
 /// Row pitch is 18 px (16 px glyph height + 1 px top inset + 1 px gap).
