@@ -138,14 +138,15 @@ pub fn handle_key(c: u8) -> AppEvent {
             AppEvent::Repaint
         }
         0x20..=0x7E => {
+            if state == AppState::Streaming {
+                return AppEvent::Consumed;
+            }
             // Printable ASCII — append to composer if room.
-            if state != AppState::Streaming {
-                let n = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(COMPOSE_LEN)) };
-                if n < MAX_QUESTION - 1 {
-                    unsafe {
-                        (*core::ptr::addr_of_mut!(COMPOSE_BUF))[n] = c;
-                        core::ptr::write_volatile(core::ptr::addr_of_mut!(COMPOSE_LEN), n + 1);
-                    }
+            let n = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(COMPOSE_LEN)) };
+            if n < MAX_QUESTION - 1 {
+                unsafe {
+                    (*core::ptr::addr_of_mut!(COMPOSE_BUF))[n] = c;
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!(COMPOSE_LEN), n + 1);
                 }
             }
             AppEvent::Repaint
@@ -393,8 +394,13 @@ fn send_question() {
                     break;
                 }
                 StreamEvent::Error(e) => {
-                    store_error(error_label(&e));
-                    result_state = AppState::Error;
+                    if matches!(e, AgentError::Interrupted) {
+                        // User interrupt — return to READY, retain partial response.
+                        result_state = AppState::Idle;
+                    } else {
+                        store_error(error_label(&e));
+                        result_state = AppState::Error;
+                    }
                     break;
                 }
             }
