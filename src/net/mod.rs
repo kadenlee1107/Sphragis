@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod arp;
 pub mod beacon;
 pub mod cave_policy;
@@ -144,6 +145,8 @@ pub fn clear_counters() {
     LAST_RX_BYTES.store(0, Ordering::Relaxed);
     LAST_TX_BYTES.store(0, Ordering::Relaxed);
     LAST_SAMPLE_SECS.store(crate::kernel::time::monotonic_secs(), Ordering::Relaxed);
+    activity::clear();
+    activity::push(activity::ActivityKind::CountersCleared, "counters cleared");
 }
 
 pub fn init() {

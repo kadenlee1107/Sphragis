@@ -181,6 +181,10 @@ pub fn allow_inbound(src_ip: u32, _dst_ip: u32, protocol: u8) -> bool {
     }
 
     BLOCKED_COUNT.fetch_add(1, Ordering::Relaxed);
+    crate::net::activity::push(
+        crate::net::activity::ActivityKind::FwDrop,
+        "fw drop",
+    );
     false
 }
 

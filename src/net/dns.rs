@@ -281,6 +281,10 @@ pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
                 let ip = RESOLVED_IP.load(Ordering::Relaxed);
                 if ip != 0 {
                     TXID_VALID.store(false, Ordering::Release);
+                    crate::net::activity::push(
+                        crate::net::activity::ActivityKind::Dns,
+                        "dns resolved (udp)",
+                    );
                     return Ok(ip);
                 }
             }
