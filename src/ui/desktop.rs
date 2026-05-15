@@ -214,6 +214,28 @@ fn handle_pointer(pe: crate::drivers::virtio::tablet::PointerEvent) -> Event {
                 return Event::None;
             }
 
+            // App-first dispatch on body clicks: focus the window, give
+            // the app a chance to handle the click, then fall through to
+            // the WM drag/close/corner handling.
+            match wm::hit_test(x, y) {
+                wm::Hit::Body(id) => {
+                    wm::focus(id);
+                    if let Some(body) = wm::body_rect(id) {
+                        if let Some(w) = wm::get(id) {
+                            let desc = crate::ui::apps_registry::descriptor(w.app);
+                            match (desc.handle_click)(x, y, body) {
+                                crate::ui::apps_registry::AppEvent::Consumed => return Event::None,
+                                crate::ui::apps_registry::AppEvent::Repaint  => return Event::Repaint,
+                                crate::ui::apps_registry::AppEvent::Unhandled => { /* fall through */ }
+                            }
+                        }
+                    }
+                    return Event::Repaint;  // focus changed, repaint
+                }
+                _ => { /* Chrome / Corner / CloseGlyph / None — fall to begin_drag below */ }
+            }
+
+            // Fallback: WM drag/close/corner handling.
             if wm::begin_drag(x, y) { Event::Repaint } else { Event::None }
         }
         PointerEvent::Move(x, y) => {
@@ -245,20 +267,45 @@ fn handle_key(c: u8) -> Event {
     // control codes (Ctrl+K = 0x0B, Ctrl+L = 0x0C). ⌘ on Mac maps to
     // Ctrl through QEMU's HID forwarding, so the brainstormed ⌘K /
     // ⌘L work as documented on both QEMU and the M4 path.
+    //
+    // System-priority shortcuts: Ctrl+K (overlay) and Ctrl+L (lock)
+    // are never overrideable by an app — security and global flow must
+    // always win regardless of which app has focus.
     match c {
         0x0B => {
             // Ctrl+K — close the config sheet (if open) and toggle the
             // launcher overlay. Single state change visible per keystroke,
             // matching macOS Cmd+Space precedent (dismisses modals to open
             // the launcher).
-            if topbar::config_sheet_open() {
-                topbar::close_config_sheet();
-            }
+            if topbar::config_sheet_open() { topbar::close_config_sheet(); }
             set_overlay_open(!overlay_open());
-            Event::Repaint
+            return Event::Repaint;
         }
+        0x0C => return Event::Lock,                                    // Ctrl+L — lock screen
+        _ => {}
+    }
+
+    // App dispatch: if a window is focused, the app sees the key first.
+    // Consumed → swallow silently; Repaint → repaint; Unhandled → fall
+    // through to the desktop's own shortcut table below.
+    if let Some(focused_id) = wm::focused() {
+        if let Some(w) = wm::get(focused_id) {
+            // body_rect is None only for zero-size windows that haven't been
+            // placed yet; skip dispatch in that degenerate case.
+            if wm::body_rect(focused_id).is_some() {
+                let desc = crate::ui::apps_registry::descriptor(w.app);
+                match (desc.handle_key)(c) {
+                    crate::ui::apps_registry::AppEvent::Consumed => return Event::None,
+                    crate::ui::apps_registry::AppEvent::Repaint  => return Event::Repaint,
+                    crate::ui::apps_registry::AppEvent::Unhandled => { /* fall through */ }
+                }
+            }
+        }
+    }
+
+    // Desktop fallback (Ctrl+K / Ctrl+L moved to system-priority above).
+    match c {
         0x09 => { wm::cycle_focus(); Event::Repaint }                  // Tab — cycle window focus
-        0x0C => Event::Lock,                                           // Ctrl+L — lock screen
         0x04 => {                                                      // Ctrl+D — close focused window
             if let Some(id) = wm::focused() { wm::close(id); }
             Event::Repaint

@@ -157,6 +157,11 @@ pub struct Cave {
     /// Unclassified/HighIntegrity (no secret access, but its
     /// output is trustworthy).
     pub integrity: u8,
+    /// Cave-scoped network policy. Stored as `NetMode as u8`. Default
+    /// at create() is 0 (Isolated). Wave 3 stub — net subsystem
+    /// doesn't enforce per-cave policy yet; per-cave enforcement is
+    /// a Wave 4+ kernel item.
+    pub net_mode: u8,
 }
 
 /// MLS sensitivity label. Bell-LaPadula lattice: 0 = Unclassified,
@@ -274,6 +279,35 @@ impl Integrity {
     }
 }
 
+/// Cave-scoped network policy. Stored per-cave. Wave 3 surfaces this
+/// in the UI; the net subsystem doesn't enforce per-cave policy yet
+/// (global `net::is_isolated()` still wins). Per-cave enforcement is
+/// a Wave 4+ kernel item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum NetMode {
+    Isolated = 0,
+    Routed   = 1,
+    Custom   = 2,
+}
+
+impl NetMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NetMode::Isolated => "isolated",
+            NetMode::Routed   => "routed",
+            NetMode::Custom   => "custom",
+        }
+    }
+    pub fn from_u8(b: u8) -> NetMode {
+        match b {
+            1 => NetMode::Routed,
+            2 => NetMode::Custom,
+            _ => NetMode::Isolated,
+        }
+    }
+}
+
 /// Biba policy decision. `subject_level` is the cave/subject's
 /// integrity; `object_level` is the resource it's trying to touch.
 ///   * `Read`  requires `subject <= object` (no read-down).
@@ -368,6 +402,34 @@ pub fn set_integrity_by_name(name: &str, level: Integrity) -> Result<(), &'stati
             {
                 let cave = &mut (*core::ptr::addr_of_mut!(CAVES))[i];
                 cave.integrity = level as u8;
+                return Ok(());
+            }
+        }
+    }
+    Err("no such cave")
+}
+
+/// Look up the NetMode of a specific cave by id. Falls back to
+/// `Isolated` for an out-of-range or empty cave slot.
+pub fn net_mode_of(cave_id: u16) -> NetMode {
+    let idx = cave_id as usize;
+    if idx >= MAX_CAVES { return NetMode::Isolated; }
+    let cave = unsafe { &(*core::ptr::addr_of!(CAVES))[idx] };
+    NetMode::from_u8(cave.net_mode)
+}
+
+/// Set the NetMode for the cave named `name`. Wave 3 stub — the value
+/// is stored on the Cave but the net subsystem doesn't enforce per-cave
+/// policy yet (global `net::is_isolated()` still wins). Per-cave
+/// enforcement is a Wave 4+ kernel item.
+pub fn set_net_mode_by_name(name: &str, mode: NetMode) -> Result<(), &'static str> {
+    unsafe {
+        for i in 0..MAX_CAVES {
+            if (*core::ptr::addr_of!(CAVES))[i].state != CaveState::Free
+                && (*core::ptr::addr_of!(CAVES))[i].name_str() == name
+            {
+                let cave = &mut (*core::ptr::addr_of_mut!(CAVES))[i];
+                cave.net_mode = mode as u8;
                 return Ok(());
             }
         }
@@ -850,6 +912,7 @@ impl Cave {
             net_rx_bytes: core::sync::atomic::AtomicU64::new(0),
             sensitivity: Sensitivity::Unclassified as u8,
             integrity: Integrity::Untrusted as u8,
+            net_mode: NetMode::Isolated as u8,
         }
     }
 
@@ -867,6 +930,10 @@ impl Cave {
 
     pub fn is_ephemeral(&self) -> bool {
         self.cave_type == CaveType::Ephemeral
+    }
+
+    pub fn is_running(&self) -> bool {
+        matches!(self.state, CaveState::Running)
     }
 
     pub fn has_cap(&self, cap_name: &str) -> bool {
@@ -1378,6 +1445,11 @@ pub fn create(name: &str, ephemeral: bool) -> Result<usize, &'static str> {
         // tighten via `cave-quota <name> <pages>`.
         cave.mem_quota_pages = 16384;
         cave.mem_used_pages.store(0, Ordering::Relaxed);
+
+        // Wave 3 stub: new caves default to Isolated network mode.
+        // The net subsystem doesn't enforce per-cave policy yet;
+        // per-cave enforcement is a Wave 4+ kernel item.
+        cave.net_mode = NetMode::Isolated as u8;
 
         let count = CAVE_COUNT.load(Ordering::Relaxed);
         CAVE_COUNT.store(count + 1, Ordering::Relaxed);

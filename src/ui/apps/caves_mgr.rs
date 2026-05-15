@@ -1,508 +1,850 @@
-// Sphragis — BC · Cave Manager
-// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
+//! Wave 3 Caves Manager. State-machine app composed of the
+//! `src/ui/widgets.rs` Wave-3 widget set.
+//!
+//! See `docs/superpowers/specs/2026-05-14-caves-manager-design.md`.
+
 #![allow(dead_code)]
-//
-// Claude-Design Wave-4 port. Source artifacts in
-// `docs/design/apps-wb-bc/`. The manager is split into a 60%
-// caves table (left) and a 40% detail panel (right), with an
-// app-scoped bottom status strip that summarizes counts and a
-// per-state breakdown. Up/down arrows move row selection;
-// Enter focuses (re-renders the detail panel for the chosen
-// cave — every action is keyboard-driven, the design has no
-// clickable buttons by intention).
+#![allow(unused_imports)]
 
-use crate::ui::wm;
-use crate::ui::gpu;
-use crate::ui::font;
-use crate::ui::draw;
+use crate::ui::apps_registry::AppEvent;
+use crate::ui::palette as p;
 use crate::ui::widgets::{
-    self as W, draw_strip, draw_seg_separator, draw_kv_row,
-    draw_caves_header, draw_caves_row,
-    draw_audit_strip, draw_cave_glyph, draw_action_hint, AuditLine,
-    State, KV_ROW_H, CAVES_HEADER_H, CAVES_ROW_H,
-    BG, INK, MID, DIM_TXT, FAINT, CYAN, CYAN_DIM,
-    GREEN, GREEN_DIM, AMBER, AMBER_DIM, RED, RED_DIM, HAIR, HAIR_HI,
+    paint_state_dot, paint_status_field_list, StatusField,
+    paint_action_strip, action_strip_hit_test, Action,
+    InspectorLayout,
+    paint_confirm_modal, confirm_modal_key, ConfirmModal, ModalAction,
+    paint_inline_edit_form, handle_form_key, handle_form_click,
+    FieldKind, FormField, FormAction,
 };
-use crate::caves::cave;
-use crate::drivers::virtio::keyboard::{KEY_ARROW_UP, KEY_ARROW_DOWN};
+use crate::ui::wm::WindowRect;
 
-const CHAR_W: u32 = 8;
-const CHAR_H: u32 = 16;
-const HEADER_H: u32 = 32;
-const FOOTER_H: u32 = 28;
+// ── App state ────────────────────────────────────────────────────
 
-// which cave row is selected. Up/down arrows move it,
-// Enter is consumed by render (we just re-render to pick it up).
+const NAME_MAX: usize = 16;
+const MOUNT_MAX: usize = 64;
+
+/// Per-mode form scratch. Lives across paint calls when the user is
+/// typing in CREATE / CONFIGURE; reset on entry to the mode.
+struct FormScratch {
+    name_buf:        [u8; NAME_MAX],
+    name_len:        usize,
+    net_mode_sel:    usize,  // 0=Isolated, 1=Routed, 2=Custom
+    mls_sens_sel:    usize,  // 0=U, 1=C, 2=S, 3=TS
+    mls_integ_sel:   usize,  // 0=Untrusted, 1=Sandboxed, 2=SystemTrusted, 3=HighIntegrity
+    mount_buf:       [u8; MOUNT_MAX],
+    mount_len:       usize,
+    mount_user_dirty: bool,   // false = auto-derived from name
+    taint:           u32,
+    focused_field:   usize,
+}
+
+impl FormScratch {
+    fn empty() -> Self {
+        Self {
+            name_buf: [0; NAME_MAX],
+            name_len: 0,
+            net_mode_sel: 0,
+            mls_sens_sel: 1,    // Confidential
+            mls_integ_sel: 1,   // Sandboxed
+            mount_buf: [0; MOUNT_MAX],
+            mount_len: 0,
+            mount_user_dirty: false,
+            taint: 0,
+            focused_field: 0,
+        }
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum AppMode {
+    Viewing,
+    Creating,
+    Configuring(usize),         // index of cave being configured
+    ConfirmDestroy(usize),
+}
+
+// Static state. Volatile access matches Wave 2 / 3 convention.
 static mut SELECTED_CAVE: usize = 0;
-static mut CAVE_COUNT_CACHE: usize = 0;
+// Non-Copy: assign via `unsafe { *core::ptr::addr_of_mut!(APP_MODE) = new_mode; }`
+// Do NOT use write_volatile (requires Copy).
+static mut APP_MODE: AppMode = AppMode::Viewing;
+// Non-Copy: assign via `unsafe { *core::ptr::addr_of_mut!(FORM) = Some(scratch); }`
+// Do NOT use write_volatile (requires Copy).
+static mut FORM: Option<FormScratch> = None;
 
-#[inline] fn selected_cave() -> usize { unsafe { SELECTED_CAVE } }
-
-pub fn handle_key(c: u8) {
-    match c {
-        KEY_ARROW_UP => unsafe {
-            if SELECTED_CAVE > 0 { SELECTED_CAVE -= 1; }
-        },
-        KEY_ARROW_DOWN => unsafe {
-            if SELECTED_CAVE + 1 < CAVE_COUNT_CACHE { SELECTED_CAVE += 1; }
-        },
-        b'\r' | b'\n' => { /* future: focus = open BatFS dir? */ }
-        _ => {}
-    }
+fn selected_cave() -> usize {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(SELECTED_CAVE)) }
+}
+fn set_selected_cave(v: usize) {
+    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SELECTED_CAVE), v) }
 }
 
-// ─── Render ─────────────────────────────────────────────────────────
-
-pub fn render() {
-    // XXX Wave-2-temp: let r = wm::content_rect();
-    let r = wm::WindowRect { x: 0, y: 0, w: crate::ui::gpu::width(), h: crate::ui::gpu::height() };
-    gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
-    if r.w < 200 || r.h < 100 { return; }
-
-    // ── HEADER ────────────────────────────────────────────────────
-    draw_strip(r.x, r.y, r.w, HEADER_H, false, true);
-    draw_header(r.x, r.y, r.w);
-
-    // ── BODY (split 60/40 table | detail) ─────────────────────────
-    let body_y = r.y + HEADER_H;
-    let footer_y = r.y + r.h - FOOTER_H;
-    // Embedded shell strip at the bottom of the body — gives the
-    // operator `caves create / enter / destroy` etc. without
-    // leaving the BC page.
-    let body_total_h = footer_y.saturating_sub(body_y);
-    let shell_h = (body_total_h * 7 / 20).max(96);  // ~35% of body
-    let shell_y = footer_y - shell_h - 1;
-    let body_h = shell_y.saturating_sub(body_y);
-    let table_w = (r.w * 60) / 100;
-    let detail_x = r.x + table_w;
-    let detail_w = r.w - table_w;
-
-    // 1px hair vertical divider.
-    gpu::fill_rect(detail_x, body_y, 1, body_h, HAIR);
-
-    draw_table(r.x, body_y, table_w, body_h);
-    draw_detail(detail_x + 1, body_y, detail_w - 1, body_h);
-
-    // ── EMBEDDED SHELL STRIP ──────────────────────────────────────
-    gpu::fill_rect(r.x, shell_y, r.w, 1, HAIR);
-    crate::ui::console::redraw_in_rect(wm::WindowRect {
-        x: r.x + 8, y: shell_y + 4,
-        w: r.w.saturating_sub(16), h: shell_h.saturating_sub(8),
-    });
-
-    // ── FOOTER ────────────────────────────────────────────────────
-    draw_strip(r.x, footer_y, r.w, FOOTER_H, true, false);
-    draw_footer(r.x, footer_y, r.w);
+fn mode_is_creating() -> bool {
+    matches!(unsafe { &*core::ptr::addr_of!(APP_MODE) }, AppMode::Creating)
 }
 
-// ─── Header ─────────────────────────────────────────────────────────
+// ── Public API (wired in apps_registry.rs) ───────────────────────
 
-fn draw_header(x: u32, y: u32, w: u32) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let text_y = y + (HEADER_H - CHAR_H) / 2;
-    font::draw_str(fb, sw, x + 16, text_y, "BATCAVES", INK, BG);
-    font::draw_str(fb, sw, x + 16 + 9 * CHAR_W, text_y,
-        "Isolated container runtime", FAINT, BG);
+pub fn paint(body: WindowRect) {
+    // Background fill.
+    crate::ui::gpu::fill_rect(body.x, body.y, body.w, body.h, p::BG);
 
-    // Right: "N / 32 SLOTS"
-    let total = active_cave_count();
-    let mut buf = [0u8; 24];
-    let mut p = format_dec(total, &mut buf);
-    let suffix = b" / 32 SLOTS";
-    buf[p..p + suffix.len()].copy_from_slice(suffix);
-    p += suffix.len();
-    let s = unsafe { core::str::from_utf8_unchecked(&buf[..p]) };
-    let metric_w = p as u32 * CHAR_W;
-    if w > metric_w + 16 {
-        font::draw_str(fb, sw, x + w - 16 - metric_w, text_y, s, MID, BG);
-    }
-}
+    // Layout.
+    let layout = InspectorLayout::new(body).with_sidebar_pct(38);
+    layout.paint_divider();
+    paint_sidebar(layout.sidebar_rect());
 
-// ─── Table (left 60%) ──────────────────────────────────────────────
+    match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
+        AppMode::Viewing            => paint_detail_view(layout.detail_rect()),
+        AppMode::Creating           => paint_detail_create(layout.detail_rect()),
+        AppMode::Configuring(_)     => paint_detail_configure(layout.detail_rect()),
+        AppMode::ConfirmDestroy(idx)  => {
+            paint_detail_view(layout.detail_rect());
 
-fn draw_table(x: u32, y: u32, w: u32, h: u32) {
-    let total = active_cave_count();
-    unsafe {
-        CAVE_COUNT_CACHE = total;
-        if SELECTED_CAVE >= total && total > 0 { SELECTED_CAVE = total - 1; }
-        if total == 0 { SELECTED_CAVE = 0; }
-    }
-
-    if total == 0 {
-        draw_table_empty(x, y, w, h);
-        return;
-    }
-
-    draw_caves_header(x + 16, y + 4, w.saturating_sub(32));
-    let header_h = CAVES_HEADER_H + 4;
-    let rows_y = y + header_h;
-    let max_rows = (h.saturating_sub(header_h)) / CAVES_ROW_H;
-
-    let sel = selected_cave();
-    let mut row_idx = 0usize;
-    cave::list(|c| {
-        if row_idx >= max_rows as usize { return; }
-        let (badge_state, badge) = match c.state {
-            cave::CaveState::Running => (State::Ok,   "RUN"),
-            cave::CaveState::Stopped => (State::Plan, "STP"),
-            cave::CaveState::Destroyed => (State::Fail, "DEL"),
-            cave::CaveState::Free    => return,
-        };
-        let mut caps: u8 = 0;
-        if c.has_cap("net")     { caps |= 1 << 0; }
-        if c.has_cap("raw")     { caps |= 1 << 1; }
-        if c.has_cap("display") { caps |= 1 << 2; }
-        if c.has_cap("fs")      { caps |= 1 << 3; }
-        let ry = rows_y + (row_idx as u32) * CAVES_ROW_H;
-        let row_w = w.saturating_sub(32);
-
-        // Selection chrome.
-        if row_idx == sel {
-            draw::draw_border(x + 16, ry, row_w, CAVES_ROW_H, CYAN_DIM);
-        }
-        draw_caves_row(x + 16, ry, row_w, badge_state, badge, c.name_str(), caps);
-        if row_idx == sel {
-            gpu::fill_rect(x + 16, ry + CAVES_ROW_H - 2, row_w, 2, CYAN);
-        }
-        row_idx += 1;
-    });
-}
-
-fn draw_table_empty(x: u32, y: u32, w: u32, h: u32) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let prefix = "(no Caves - use ";
-    let cmd    = "caves create <name>";
-    let suffix = " in shell)";
-    let total = (prefix.len() + cmd.len() + suffix.len()) as u32 * CHAR_W;
-    let cx = x + (w.saturating_sub(total)) / 2;
-    let cy = y + h / 2 - CHAR_H / 2;
-    font::draw_str(fb, sw, cx, cy, prefix, DIM_TXT, BG);
-    font::draw_str(fb, sw, cx + prefix.len() as u32 * CHAR_W, cy, cmd, CYAN, BG);
-    font::draw_str(fb, sw, cx + (prefix.len() + cmd.len()) as u32 * CHAR_W, cy,
-        suffix, DIM_TXT, BG);
-}
-
-// ─── Detail panel (right 40%) ──────────────────────────────────────
-
-fn draw_detail(x: u32, y: u32, w: u32, h: u32) {
-    let total = active_cave_count();
-    if total == 0 {
-        draw_detail_empty(x, y, w, h);
-        return;
-    }
-    let sel = selected_cave();
-    // Copy the cave's bytes into a static-lived buffer so the closure's
-    // borrow of `c.name_str()` doesn't escape. The cave list iterator
-    // hands us a &Cave only valid inside the closure body.
-    static mut NAME_BUF: [u8; 64] = [0u8; 64];
-    let mut name_len = 0usize;
-    let mut state = cave::CaveState::Free;
-    let mut ephemeral = false;
-    let mut caps: u8 = 0;
-    let mut found = false;
-    let mut row_i = 0usize;
-    cave::list(|c| {
-        if row_i == sel && c.state != cave::CaveState::Free {
-            let n = c.name_str();
-            let copy = n.len().min(64);
-            unsafe {
-                let p = core::ptr::addr_of_mut!(NAME_BUF) as *mut u8;
-                for i in 0..copy {
-                    core::ptr::write_volatile(p.add(i), n.as_bytes()[i]);
+            // Resolve cave name for the modal title.
+            let mut name_buf = [0u8; NAME_MAX];
+            let mut name_len = 0;
+            let mut row_index: usize = 0;
+            crate::caves::cave::list(|c| {
+                if row_index == *idx {
+                    let n = (c.name_len as usize).min(NAME_MAX);
+                    name_len = n;
+                    name_buf[..n].copy_from_slice(&c.name[..n]);
                 }
+                row_index += 1;
+            });
+            let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+
+            // Build modal title "Destroy <name>?"
+            let mut title_buf = [0u8; 32];
+            let prefix = b"Destroy ";
+            let mut tn = 0;
+            for &b in prefix { title_buf[tn] = b; tn += 1; }
+            for &b in name.as_bytes() {
+                if tn < title_buf.len() { title_buf[tn] = b; tn += 1; }
             }
-            name_len = copy;
-            state = c.state;
-            ephemeral = c.is_ephemeral();
-            if c.has_cap("net")     { caps |= 1 << 0; }
-            if c.has_cap("raw")     { caps |= 1 << 1; }
-            if c.has_cap("display") { caps |= 1 << 2; }
-            if c.has_cap("fs")      { caps |= 1 << 3; }
-            found = true;
+            if tn < title_buf.len() { title_buf[tn] = b'?'; tn += 1; }
+            let title = unsafe { core::str::from_utf8_unchecked(&title_buf[..tn]) };
+
+            let modal = ConfirmModal {
+                title,
+                body_lines: &[
+                    "  kill all processes inside the cave",
+                    "  zero the cave's encryption keys",
+                    "  wipe its BatFS subtree",
+                    "  clear MLS labels + taint records",
+                    "",
+                    "IRREVERSIBLE.",
+                ],
+                commit_key: 'D',
+            };
+            paint_confirm_modal(&modal);
         }
-        row_i += 1;
+    }
+}
+
+pub fn handle_key(c: u8) -> AppEvent {
+    use crate::caves::cave;
+
+    // Mode-specific handlers first.
+    match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
+        AppMode::ConfirmDestroy(idx) => {
+            return handle_key_destroy_modal(c, *idx);
+        }
+        AppMode::Creating | AppMode::Configuring(_) => {
+            return handle_key_form(c);
+        }
+        AppMode::Viewing => {} // fall through below
+    }
+
+    // Viewing-mode keys.
+    match c {
+        0x90 => {  // Arrow Up
+            let sel = selected_cave();
+            if sel > 0 { set_selected_cave(sel - 1); }
+            AppEvent::Repaint
+        }
+        0x91 => {  // Arrow Down
+            let sel = selected_cave();
+            let cnt = cave::count();
+            if cnt > 0 && sel + 1 < cnt { set_selected_cave(sel + 1); }
+            AppEvent::Repaint
+        }
+        b'n' | b'N' => {
+            enter_create_mode();
+            AppEvent::Repaint
+        }
+        b'e' | b'E' => {
+            let mut name_buf = [0u8; NAME_MAX];
+            let name_len = cave_name_at_selected(&mut name_buf);
+            if name_len > 0 {
+                let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+                let _ = cave::enter(name);
+            }
+            AppEvent::Repaint
+        }
+        b's' | b'S' => {
+            let mut name_buf = [0u8; NAME_MAX];
+            let name_len = cave_name_at_selected(&mut name_buf);
+            if name_len > 0 {
+                let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+                let _ = cave::stop(name);
+            }
+            AppEvent::Repaint
+        }
+        b'c' | b'C' => {
+            enter_configure_mode();
+            AppEvent::Repaint
+        }
+        b'd' | b'D' => {
+            let sel = selected_cave();
+            unsafe {
+                *core::ptr::addr_of_mut!(APP_MODE) = AppMode::ConfirmDestroy(sel);
+            }
+            AppEvent::Repaint
+        }
+        _ => AppEvent::Unhandled,
+    }
+}
+
+// Per-mode dispatch wired in Tasks 10-13.
+pub fn handle_click(mx: i32, my: i32, body: WindowRect) -> AppEvent {
+    match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
+        AppMode::Viewing => handle_click_viewing(mx, my, body),
+        AppMode::Creating | AppMode::Configuring(_) => handle_click_form(mx, my, body),
+        AppMode::ConfirmDestroy(_) => {
+            // Any click cancels the destroy (spec: "click outside modal → Cancel").
+            unsafe {
+                *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+            }
+            AppEvent::Repaint
+        }
+    }
+}
+
+// ── Sidebar paint ────────────────────────────────────────────────
+
+fn paint_sidebar(rect: WindowRect) {
+    use crate::ui::{font, gpu};
+    let fb = gpu::framebuffer();
+    let screen_w = gpu::width();
+
+    // Header
+    let count = crate::caves::cave::count() as u32;
+    let mut hdr_buf = [0u8; 24];
+    hdr_buf[..7].copy_from_slice(b"CAVES (");
+    let digits = u32_decimal(count, &mut hdr_buf, 7);
+    hdr_buf[7 + digits] = b')';
+    let hdr_len = 7 + digits + 1;
+    let hdr = unsafe { core::str::from_utf8_unchecked(&hdr_buf[..hdr_len]) };
+    font::draw_str(fb, screen_w, rect.x + 8, rect.y + 6, hdr, p::MID, p::BG);
+    gpu::fill_rect(rect.x, rect.y + 24, rect.w, 1, p::HAIRLINE);
+
+    // List rows.
+    let row_h: u32 = 22;
+    let sel = selected_cave();
+    let creating = mode_is_creating();
+    let mut row_index: usize = 0;
+
+    crate::caves::cave::list(|cave| {
+        let row_y = rect.y + 28 + (row_index as u32) * row_h;
+        if row_y + row_h > rect.y + rect.h { return; }
+
+        let is_sel = !creating && row_index == sel;
+        if is_sel {
+            gpu::fill_rect(rect.x, row_y, rect.w, row_h, p::PANEL);
+            font::draw_str(fb, screen_w, rect.x + 4, row_y + 3, "›", p::INK, p::PANEL);
+        }
+
+        paint_state_dot(rect.x + 18, row_y + 7, cave.is_running());
+        font::draw_str(
+            fb, screen_w, rect.x + 30, row_y + 3,
+            cave.name_str(),
+            if is_sel { p::INK } else { p::MID },
+            if is_sel { p::PANEL } else { p::BG },
+        );
+        row_index += 1;
     });
-    if !found { draw_detail_empty(x, y, w, h); return; }
-    let name: &'static str = unsafe {
-        core::str::from_utf8_unchecked(
-            core::slice::from_raw_parts(core::ptr::addr_of!(NAME_BUF) as *const u8, name_len))
-    };
-    draw_detail_cave(x, y, w, h, name, state, ephemeral, caps);
-}
 
-fn draw_detail_cave(
-    x: u32, y: u32, w: u32, h: u32,
-    name: &str, state: cave::CaveState, ephemeral: bool, caps: u8,
-) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let pad: u32 = 16;
-    let inner_x = x + pad;
-
-    let glyph_color = match state {
-        cave::CaveState::Running => CYAN,
-        cave::CaveState::Stopped => DIM_TXT,
-        cave::CaveState::Destroyed => AMBER,
-        _ => DIM_TXT,
-    };
-    let state_label = match state {
-        cave::CaveState::Running => "RUNNING",
-        cave::CaveState::Stopped => "STOPPED",
-        cave::CaveState::Destroyed => "WIPE",
-        _ => "FREE",
-    };
-    let state_color = match state {
-        cave::CaveState::Running => GREEN,
-        cave::CaveState::Stopped => DIM_TXT,
-        cave::CaveState::Destroyed => AMBER,
-        _ => DIM_TXT,
-    };
-    let type_label = if ephemeral { "EPHEMERAL" } else { "PERSISTENT" };
-    let type_color = if ephemeral { AMBER } else { CYAN };
-
-    // Glyph + headline (title + colored subtitle).
-    let glyph_y = y + pad;
-    draw_cave_glyph(inner_x, glyph_y, glyph_color);
-    let head_x = inner_x + 64 + 16;
-    font::draw_str(fb, sw, head_x, glyph_y + 6, name, INK, BG);
-    // Subtitle row: dot + STATE + . + TYPE.
-    let sub_y = glyph_y + 6 + 18;
-    let dot_x = head_x;
-    let dot_y = sub_y + (CHAR_H - 6) / 2;
-    if dot_x >= 1 && dot_y >= 1 {
-        let ring = match state {
-            cave::CaveState::Running => GREEN_DIM,
-            cave::CaveState::Destroyed => AMBER_DIM,
-            _ => FAINT,
-        };
-        gpu::fill_rect(dot_x - 1, dot_y - 1, 8, 8, ring);
+    // Pinned "+ new cave" row at the bottom.
+    let pin_y = rect.y + rect.h - row_h - 2;
+    let pin_sel = creating;
+    if pin_sel {
+        gpu::fill_rect(rect.x, pin_y, rect.w, row_h, p::PANEL);
+        font::draw_str(fb, screen_w, rect.x + 4, pin_y + 3, "›", p::INK, p::PANEL);
     }
-    gpu::fill_rect(dot_x, dot_y, 6, 6, state_color);
-    let mut sub_x = head_x + 8 + 6;
-    font::draw_str(fb, sw, sub_x, sub_y, state_label, state_color, BG);
-    sub_x += (state_label.len() as u32 + 1) * CHAR_W;
-    font::draw_str(fb, sw, sub_x, sub_y, ".", FAINT, BG);
-    sub_x += 2 * CHAR_W;
-    font::draw_str(fb, sw, sub_x, sub_y, type_label, type_color, BG);
-
-    // KV rows.
-    let label_w: u32 = 72;
-    let mut ky = glyph_y + 48 + 12;
-    draw_kv_row(inner_x, ky, label_w, "NAME",  name,                State::Neutral, false); ky += KV_ROW_H;
-    let _ = (W::draw_kv_row, AMBER_DIM, RED, RED_DIM, MID, HAIR_HI); // appease unused-import warnings
-    let state_kv = match state {
-        cave::CaveState::Running   => State::Ok,
-        cave::CaveState::Destroyed => State::Warn,
-        _                          => State::Plan,
-    };
-    draw_kv_row(inner_x, ky, label_w, "STATE",  state_label, state_kv,
-        true); ky += KV_ROW_H;
-    draw_kv_row(inner_x, ky, label_w, "TYPE",   type_label,
-        if ephemeral { State::Warn } else { State::Neutral }, false); ky += KV_ROW_H;
-    // FS_KEY — first 8 hex of the derived per-cave key. When wiped,
-    // show "wiped" red.
-    let fs_key_label = if state == cave::CaveState::Destroyed { "wiped" } else { "c4e3d7a2" };
-    let fs_key_state = if state == cave::CaveState::Destroyed { State::Fail } else { State::Neutral };
-    draw_kv_row(inner_x, ky, label_w, "FS_KEY", fs_key_label, fs_key_state, false); ky += KV_ROW_H;
-    // CAPS — assemble "NET RAW DSP FS" from the bitmask.
-    let mut caps_buf = [0u8; 32];
-    let mut p = 0usize;
-    let cap_names = ["NET", "RAW", "DSP", "FS"];
-    for i in 0..4 {
-        if (caps >> i) & 1 == 1 {
-            if p > 0 { caps_buf[p] = b' '; p += 1; }
-            let n = cap_names[i].len();
-            caps_buf[p..p + n].copy_from_slice(cap_names[i].as_bytes());
-            p += n;
-        }
-    }
-    let caps_str = if p == 0 { "-" } else { unsafe { core::str::from_utf8_unchecked(&caps_buf[..p]) } };
-    draw_kv_row(inner_x, ky, label_w, "CAPS", caps_str,
-        if p == 0 { State::Plan } else { State::Neutral }, false);
-    ky += KV_ROW_H;
-    draw_kv_row(inner_x, ky, label_w, "TOOLS", "0 (kernel cave)", State::Plan, false); ky += KV_ROW_H;
-    let mut audit_buf = [0u8; 24];
-    let an = format_dec(crate::security::audit::count(), &mut audit_buf);
-    let mut audit_str_buf = [0u8; 32];
-    let mut ap = 0usize;
-    audit_str_buf[..an].copy_from_slice(&audit_buf[..an]);
-    ap += an;
-    let suffix = b" events";
-    audit_str_buf[ap..ap + suffix.len()].copy_from_slice(suffix);
-    ap += suffix.len();
-    let audit_str = unsafe { core::str::from_utf8_unchecked(&audit_str_buf[..ap]) };
-    draw_kv_row(inner_x, ky, label_w, "AUDIT", audit_str, State::Neutral, false); ky += KV_ROW_H;
-    draw_kv_row(inner_x, ky, label_w, "CREATED", "0d ago", State::Neutral, false); ky += KV_ROW_H;
-
-    // Action hints.
-    ky += 8;
-    font::draw_str(fb, sw, inner_x, ky, "ACTIONS", FAINT, BG);
-    ky += 18;
-    let action_w = w.saturating_sub(pad * 2);
-    let mut enter_buf = [0u8; 64];
-    let mut seal_buf = [0u8; 64];
-    let mut destroy_buf = [0u8; 64];
-    let enter_cmd  = format_cmd("caves enter ",   name, &mut enter_buf);
-    let seal_cmd   = format_cmd("caves seal ",    name, &mut seal_buf);
-    let destroy_cmd = format_cmd("caves destroy ", name, &mut destroy_buf);
-    draw_action_hint(inner_x, ky, action_w, enter_cmd,  "attach shell", false); ky += 18;
-    draw_action_hint(inner_x, ky, action_w, seal_cmd,   "irreversible", true);  ky += 18;
-    draw_action_hint(inner_x, ky, action_w, destroy_cmd, "secure wipe",  true); ky += 18;
-
-    // Audit mini-strip pinned to bottom of panel.
-    let strip_h: u32 = 18 + 4 * 16 + 4;
-    let strip_y_top = y + h - strip_h - 8;
-    if strip_y_top > ky + 8 {
-        gpu::fill_rect(inner_x, strip_y_top - 8, w.saturating_sub(pad * 2), 1, HAIR);
-        let lines = [
-            AuditLine { idx: 247, cat: "cave  :", text: "audit category Cave registered" },
-            AuditLine { idx: 220, cat: "cave  :", text: "grant fs . kernel" },
-            AuditLine { idx: 219, cat: "cave  :", text: "grant dsp . kernel" },
-            AuditLine { idx: 218, cat: "cave  :", text: "created . kernel" },
-        ];
-        draw_audit_strip(inner_x, strip_y_top, &lines);
-    }
+    font::draw_str(
+        fb, screen_w, rect.x + 18, pin_y + 3,
+        "+ new cave",
+        if pin_sel { p::INK } else { p::MID },
+        if pin_sel { p::PANEL } else { p::BG },
+    );
 }
 
-fn draw_detail_empty(x: u32, y: u32, w: u32, h: u32) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let pad: u32 = 16;
-    let inner_x = x + pad;
-    let mut ky = y + 24;
-
-    let header = "(no cave selected)";
-    let hw = header.len() as u32 * CHAR_W;
-    if w > hw + pad * 2 {
-        font::draw_str(fb, sw, x + (w - hw) / 2, ky, header, DIM_TXT, BG);
-    }
-    ky += 24;
-    font::draw_str(fb, sw, inner_x, ky, "QUICK START", FAINT, BG);
-    ky += 18;
-    let qw = w.saturating_sub(pad * 2);
-    let lines: &[(&str, &str)] = &[
-        ("caves create pentest-lab --tools nmap,burpsuite", "docker-backed"),
-        ("caves grant pentest-lab net",                     "grant capability"),
-        ("caves grant pentest-lab raw display",             "multiple at once"),
-        ("caves enter pentest-lab",                         "attach to shell"),
-        ("caves seal pentest-lab",                          "persistent -> ephemeral"),
-        ("caves destroy pentest-lab",                       "secure wipe"),
-    ];
-    for (cmd, comment) in lines {
-        font::draw_str(fb, sw, inner_x, ky, cmd, CYAN, BG);
-        // Right-aligned "# comment" within the panel width.
-        let mut buf = [0u8; 64];
-        buf[0] = b'#'; buf[1] = b' ';
-        let n = comment.len().min(buf.len() - 2);
-        buf[2..2 + n].copy_from_slice(&comment.as_bytes()[..n]);
-        let total = 2 + n;
-        let total_w = total as u32 * CHAR_W;
-        if qw > total_w {
-            font::draw_str(fb, sw, inner_x + qw - total_w, ky,
-                unsafe { core::str::from_utf8_unchecked(&buf[..total]) }, FAINT, BG);
-        }
-        ky += 18;
-    }
-
-    let _ = h;
-}
-
-// ─── Footer ────────────────────────────────────────────────────────
-
-fn draw_footer(x: u32, y: u32, w: u32) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let text_y = y + (FOOTER_H - CHAR_H) / 2;
-
-    let total = active_cave_count();
-    let running = running_cave_count();
-
-    let mut cx = x + 16;
-    font::draw_str(fb, sw, cx, text_y, "BATCAVES", FAINT, BG); cx += 9 * CHAR_W;
-    let mut buf = [0u8; 16];
-    let n = format_dec(total, &mut buf);
-    font::draw_str(fb, sw, cx, text_y,
-        unsafe { core::str::from_utf8_unchecked(&buf[..n]) }, INK, BG);
-    cx += (n as u32 + 1) * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, ".", FAINT, BG); cx += 2 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "MAX", FAINT, BG); cx += 4 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "32", INK, BG); cx += 3 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, ".", FAINT, BG); cx += 2 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "RUNNING", FAINT, BG); cx += 8 * CHAR_W;
-    let mut rb = [0u8; 16];
-    let rn = format_dec(running, &mut rb);
-    font::draw_str(fb, sw, cx, text_y,
-        unsafe { core::str::from_utf8_unchecked(&rb[..rn]) }, INK, BG);
-    cx += (rn as u32 + 1) * CHAR_W;
-    draw_seg_separator(cx, y, FOOTER_H); cx += 12;
-
-    // 3 colored mini-pills.
-    cx = draw_mini_pill(cx, y + (FOOTER_H - 18) / 2, "RUN", running, GREEN, GREEN_DIM);
-    cx += 8;
-    cx = draw_mini_pill(cx, y + (FOOTER_H - 18) / 2, "STP", 0, DIM_TXT, FAINT);
-    cx += 8;
-    let _ = draw_mini_pill(cx, y + (FOOTER_H - 18) / 2, "DEL", 0, RED, RED_DIM);
-
-    // Right hint.
-    let hint = "up/dn select . shell to manage";
-    let hw = hint.len() as u32 * CHAR_W;
-    if w > hw + 16 {
-        font::draw_str(fb, sw, x + w - 16 - hw, text_y, hint, DIM_TXT, BG);
-    }
-}
-
-fn draw_mini_pill(x: u32, y: u32, label: &str, n: usize, color: u32, dim: u32) -> u32 {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let pad: u32 = 8;
-    let mut buf = [0u8; 8];
-    let nn = format_dec(n, &mut buf);
-    let label_w = label.len() as u32 * CHAR_W;
-    let value_w = nn as u32 * CHAR_W;
-    let pill_w = pad + label_w + 8 + value_w + pad;
-    draw::draw_border(x, y, pill_w, 18, dim);
-    font::draw_str(fb, sw, x + pad, y + 1, label, color, BG);
-    font::draw_str(fb, sw, x + pad + label_w + 8, y + 1,
-        unsafe { core::str::from_utf8_unchecked(&buf[..nn]) }, INK, BG);
-    x + pill_w
-}
-
-// ─── helpers ────────────────────────────────────────────────────────
-
-fn active_cave_count() -> usize {
-    let mut n = 0;
-    cave::list(|c| { if c.state != cave::CaveState::Free { n += 1; } });
-    n
-}
-
-fn running_cave_count() -> usize {
-    let mut n = 0;
-    cave::list(|c| { if c.state == cave::CaveState::Running { n += 1; } });
-    n
-}
-
-fn format_cmd<'a>(prefix: &str, name: &str, out: &'a mut [u8; 64]) -> &'a str {
-    let p = prefix.len().min(out.len());
-    out[..p].copy_from_slice(&prefix.as_bytes()[..p]);
-    let n = name.len().min(out.len() - p);
-    out[p..p + n].copy_from_slice(&name.as_bytes()[..n]);
-    unsafe { core::str::from_utf8_unchecked(&out[..p + n]) }
-}
-
-fn format_dec(mut n: usize, out: &mut [u8]) -> usize {
-    if n == 0 { out[0] = b'0'; return 1; }
-    let mut tmp = [0u8; 20];
+// Helper: format a u32 in decimal at `buf[offset..]`. Returns the number of digits written.
+fn u32_decimal(mut n: u32, buf: &mut [u8], offset: usize) -> usize {
+    if n == 0 { buf[offset] = b'0'; return 1; }
+    let mut tmp = [0u8; 10];
     let mut i = 0;
-    while n > 0 && i < tmp.len() { tmp[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
-    for j in 0..i { out[j] = tmp[i - 1 - j]; }
+    while n > 0 {
+        tmp[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        i += 1;
+    }
+    for j in 0..i {
+        buf[offset + j] = tmp[i - j - 1];
+    }
     i
 }
 
-// Wave 2 shim — refresh in Wave 3+
-/// Adapts the existing render path to the WM's `fn(WindowRect)` contract.
-pub fn paint(rect: crate::ui::wm::WindowRect) {
-    let _ = rect;
-    render();
+// ── Detail-view paint ─────────────────────────────────────────────
+
+fn paint_detail_view(rect: WindowRect) {
+    use crate::ui::{font, gpu};
+    use crate::caves::cave::{self, Sensitivity, Integrity, NetMode};
+    let fb = gpu::framebuffer();
+    let screen_w = gpu::width();
+
+    if cave::count() == 0 {
+        font::draw_str(fb, screen_w, rect.x + 14, rect.y + 14,
+                       "No caves yet. Press N to create.", p::MID, p::BG);
+        return;
+    }
+
+    // Resolve the selected cave by index.
+    let sel = selected_cave();
+    let mut name_buf = [0u8; NAME_MAX];
+    let mut name_len = 0;
+    let mut is_running = false;
+    let mut sensitivity = Sensitivity::Unclassified;
+    let mut integrity = Integrity::Untrusted;
+    let mut net_mode = NetMode::Isolated;
+    let mut row_index: usize = 0;
+
+    cave::list(|c| {
+        if row_index == sel {
+            let n = (c.name_len as usize).min(NAME_MAX);
+            name_len = n;
+            name_buf[..n].copy_from_slice(&c.name[..n]);
+            is_running = c.is_running();
+            sensitivity = Sensitivity::from_u8(c.sensitivity);
+            integrity = Integrity::from_u8(c.integrity);
+            net_mode = NetMode::from_u8(c.net_mode);
+        }
+        row_index += 1;
+    });
+    if name_len == 0 { return; }
+
+    let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+
+    // Resolve cave_id for taint + PID lookup (by name, after capturing from list).
+    // `None` => render the sentinel ("—") in PID and skip taint_of (defaults to 0).
+    let cave_id_opt: Option<u32> = cave::find_id(name).map(|id| id as u32);
+    let taint_value = cave_id_opt.map(|id| cave::taint_of(id as u16)).unwrap_or(0);
+
+    // Name header.
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + 8, name, p::INK, p::BG);
+    // State line.
+    let state_str = if is_running { "RUNNING" } else { "STOPPED" };
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + 28, state_str, p::MID, p::BG);
+    gpu::fill_rect(rect.x + 14, rect.y + 50, rect.w - 28, 1, p::HAIRLINE);
+
+    // Build status fields.
+    let mut pid_buf = [0u8; 16];
+    let pid_str = match cave_id_opt {
+        Some(id) => {
+            let digits = u32_decimal(id, &mut pid_buf, 0);
+            unsafe { core::str::from_utf8_unchecked(&pid_buf[..digits]) }
+        }
+        None => "—",
+    };
+
+    let mut mls_buf = [0u8; 48];
+    let mls_str = format_mls(&mut mls_buf, sensitivity, integrity);
+
+    let mut taint_buf = [0u8; 12];
+    let taint_str = format_hex32(&mut taint_buf, taint_value);
+
+    // MOUNT: derived from cave name — no stored field (Wave 4+).
+    // Display as "<name>:" per pre-flight Gap 2 decision.
+    let mut mount_buf = [0u8; NAME_MAX + 1];
+    let mn = name_len.min(NAME_MAX);
+    mount_buf[..mn].copy_from_slice(&name_buf[..mn]);
+    mount_buf[mn] = b':';
+    let mount_str = unsafe { core::str::from_utf8_unchecked(&mount_buf[..mn + 1]) };
+
+    let fields = [
+        StatusField { key: "PID",   value: pid_str },
+        StatusField { key: "NET",   value: net_mode.as_str() },
+        StatusField { key: "MLS",   value: mls_str },
+        StatusField { key: "MOUNT", value: mount_str },
+        StatusField { key: "TAINT", value: taint_str },
+        StatusField { key: "AUDIT", value: "—" },  // Wave 4 hooks audit count
+    ];
+    let fields_rect = WindowRect {
+        x: rect.x + 14,
+        y: rect.y + 60,
+        w: rect.w - 28,
+        h: rect.h - 110,
+    };
+    paint_status_field_list(fields_rect, &fields);
+
+    // Action strip.
+    let actions = actions_for_cave(is_running);
+    let strip_rect = WindowRect {
+        x: rect.x + 14,
+        y: rect.y + rect.h - 28,
+        w: rect.w - 28,
+        h: 24,
+    };
+    gpu::fill_rect(strip_rect.x, strip_rect.y - 4, strip_rect.w, 1, p::HAIRLINE);
+    paint_action_strip(strip_rect, &actions);
+}
+
+fn paint_detail_create(rect: WindowRect) {
+    use crate::ui::{font, gpu};
+    let fb = gpu::framebuffer();
+    let screen_w = gpu::width();
+
+    // Guard: form must be initialized.
+    let form_scratch_ptr = core::ptr::addr_of_mut!(FORM);
+    let f = unsafe { match (*form_scratch_ptr).as_mut() {
+        Some(f) => f,
+        None    => return,
+    }};
+
+    // Header.
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + 8, "New cave", p::INK, p::BG);
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + 30,
+                   "TAB ADVANCES · SPACE CYCLES · ENTER CREATES", p::MID, p::BG);
+    gpu::fill_rect(rect.x + 14, rect.y + 50, rect.w - 28, 1, p::HAIRLINE);
+
+    let focused = f.focused_field;
+    let fields = build_form_fields(f, false);
+
+    let form_rect = WindowRect {
+        x: rect.x + 14,
+        y: rect.y + 56,
+        w: rect.w - 28,
+        h: rect.h - 100,
+    };
+    paint_inline_edit_form(form_rect, &fields, focused);
+
+    // Footer hint.
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + rect.h - 18,
+                   "Enter to Create  ·  Esc to cancel", p::MID, p::BG);
+}
+
+fn paint_detail_configure(rect: WindowRect) {
+    use crate::ui::{font, gpu};
+    let fb = gpu::framebuffer();
+    let screen_w = gpu::width();
+
+    let form_ptr = core::ptr::addr_of_mut!(FORM);
+    let f = match unsafe { (*form_ptr).as_mut() } {
+        Some(f) => f,
+        None => return,
+    };
+
+    // Header: "Configure <name>"
+    let name = unsafe { core::str::from_utf8_unchecked(&f.name_buf[..f.name_len]) };
+    let mut hdr_buf = [0u8; 64];
+    let prefix = b"Configure ";
+    let mut n = 0;
+    for &b in prefix { hdr_buf[n] = b; n += 1; }
+    for &b in name.as_bytes() { if n < hdr_buf.len() { hdr_buf[n] = b; n += 1; } }
+    let hdr = unsafe { core::str::from_utf8_unchecked(&hdr_buf[..n]) };
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + 8, hdr, p::INK, p::BG);
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + 30,
+                   "TAB ADVANCES · SPACE CYCLES · ENTER APPLIES", p::MID, p::BG);
+    gpu::fill_rect(rect.x + 14, rect.y + 50, rect.w - 28, 1, p::HAIRLINE);
+
+    let focused = f.focused_field;
+    let fields = build_form_fields(f, true);
+
+    let form_rect = WindowRect {
+        x: rect.x + 14,
+        y: rect.y + 56,
+        w: rect.w - 28,
+        h: rect.h - 100,
+    };
+    paint_inline_edit_form(form_rect, &fields, focused);
+
+    // Footer hint.
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + rect.h - 18,
+                   "Enter to Apply  ·  Esc to cancel", p::MID, p::BG);
+}
+
+// ── Handle-click helpers ──────────────────────────────────────────
+
+fn handle_click_viewing(mx: i32, my: i32, body: WindowRect) -> AppEvent {
+    let layout = InspectorLayout::new(body).with_sidebar_pct(38);
+    let sidebar = layout.sidebar_rect();
+    let detail = layout.detail_rect();
+
+    // Sidebar click.
+    if mx >= sidebar.x as i32 && mx < (sidebar.x + sidebar.w) as i32 {
+        let row_h: u32 = 22;
+        let header_h: u32 = 28;
+        let pin_y = sidebar.y + sidebar.h - row_h - 2;
+        if my >= pin_y as i32 && my < (pin_y + row_h) as i32 {
+            enter_create_mode();
+            return AppEvent::Repaint;
+        }
+        if my >= (sidebar.y + header_h) as i32 {
+            let row_idx = ((my as u32 - sidebar.y - header_h) / row_h) as usize;
+            let cnt = crate::caves::cave::count();
+            if row_idx < cnt {
+                set_selected_cave(row_idx);
+                return AppEvent::Repaint;
+            }
+        }
+        return AppEvent::Consumed;
+    }
+
+    // Detail click — action strip hit-test.
+    if mx >= detail.x as i32 && mx < (detail.x + detail.w) as i32 {
+        // Determine is_running for the currently-selected cave — same
+        // walk paint_detail_view uses, so the painted strip and the
+        // hit-test strip stay in sync.
+        let sel = selected_cave();
+        let mut is_running = false;
+        let mut row_index: usize = 0;
+        crate::caves::cave::list(|c| {
+            if row_index == sel { is_running = c.is_running(); }
+            row_index += 1;
+        });
+
+        let strip_rect = WindowRect {
+            x: detail.x + 14,
+            y: detail.y + detail.h - 28,
+            w: detail.w - 28,
+            h: 24,
+        };
+        let actions = actions_for_cave(is_running);
+        if let Some(key) = action_strip_hit_test(strip_rect, mx, my, &actions) {
+            return handle_key(key as u8);
+        }
+        return AppEvent::Consumed;
+    }
+
+    AppEvent::Consumed
+}
+
+fn handle_click_form(mx: i32, my: i32, body: WindowRect) -> AppEvent {
+    let form_ptr = core::ptr::addr_of_mut!(FORM);
+    let f = unsafe { match (*form_ptr).as_mut() {
+        Some(f) => f,
+        None    => return AppEvent::Unhandled,
+    }};
+
+    let layout = InspectorLayout::new(body).with_sidebar_pct(38);
+    let detail = layout.detail_rect();
+    let form_rect = WindowRect {
+        x: detail.x + 14,
+        y: detail.y + 56,
+        w: detail.w - 28,
+        h: detail.h - 100,
+    };
+
+    let mut focused = f.focused_field;
+    {
+        let name_ro = matches!(unsafe { &*core::ptr::addr_of!(APP_MODE) }, AppMode::Configuring(_));
+        let fields = build_form_fields(f, name_ro);
+        handle_form_click(&fields, &mut focused, form_rect, mx, my);
+    } // `fields`' borrow on `f` ends here.
+    f.focused_field = focused;
+    AppEvent::Repaint
+}
+
+// ── Handle-key helpers ────────────────────────────────────────────
+
+fn handle_key_destroy_modal(c: u8, idx: usize) -> AppEvent {
+    // A thin ConfirmModal for key dispatch — title/body don't affect
+    // key routing, only commit_key does.
+    let modal = ConfirmModal {
+        title: "",
+        body_lines: &[],
+        commit_key: 'D',
+    };
+    match confirm_modal_key(&modal, c) {
+        ModalAction::Commit => {
+            // Resolve cave name by index, then destroy.
+            let mut name_buf = [0u8; NAME_MAX];
+            let mut name_len = 0;
+            let mut row_index: usize = 0;
+            crate::caves::cave::list(|c| {
+                if row_index == idx {
+                    let n = (c.name_len as usize).min(NAME_MAX);
+                    name_len = n;
+                    name_buf[..n].copy_from_slice(&c.name[..n]);
+                }
+                row_index += 1;
+            });
+            if name_len > 0 {
+                let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+                // TODO(Wave 4): per spec, if destroy returns Err, stay in
+                // ConfirmDestroy mode and surface the error in the modal footer.
+                // Wave 3 silently swallows the Err and dismisses the modal.
+                let _ = crate::caves::cave::destroy(name);
+            }
+            // Reset selection to 0 and return to Viewing.
+            set_selected_cave(0);
+            unsafe {
+                *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+            }
+            AppEvent::Repaint
+        }
+        ModalAction::Cancel => {
+            unsafe {
+                *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+            }
+            AppEvent::Repaint
+        }
+        ModalAction::None => AppEvent::Consumed,
+    }
+}
+
+fn handle_key_form(c: u8) -> AppEvent {
+    let form_ptr = core::ptr::addr_of_mut!(FORM);
+    let f = unsafe { match (*form_ptr).as_mut() {
+        Some(f) => f,
+        None    => return AppEvent::Unhandled,
+    }};
+
+    let mut focused = f.focused_field;
+    let action = {
+        let name_ro = matches!(unsafe { &*core::ptr::addr_of!(APP_MODE) }, AppMode::Configuring(_));
+        let mut fields = build_form_fields(f, name_ro);
+        handle_form_key(&mut fields, &mut focused, c)
+    }; // `fields`' borrow on `f` ends here.
+    f.focused_field = focused;
+
+    match action {
+        FormAction::Submit => {
+            match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
+                AppMode::Creating           => submit_create_form(f),
+                AppMode::Configuring(_idx)  => submit_configure_form(f),
+                _                           => AppEvent::Unhandled,
+            }
+        }
+        FormAction::Cancel => {
+            unsafe {
+                *core::ptr::addr_of_mut!(FORM)     = None;
+                *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+            }
+            AppEvent::Repaint
+        }
+        FormAction::None => {
+            // Auto-derive MOUNT from NAME on every keystroke
+            // (MOUNT is readonly; no dirty tracking needed).
+            regenerate_mount_from_name(f);
+            AppEvent::Repaint
+        }
+    }
+}
+
+fn regenerate_mount_from_name(f: &mut FormScratch) {
+    let name = unsafe { core::str::from_utf8_unchecked(&f.name_buf[..f.name_len]) };
+    let prefix = b"/ /home/";
+    f.mount_len = 0;
+    for &b in prefix {
+        if f.mount_len < f.mount_buf.len() {
+            f.mount_buf[f.mount_len] = b;
+            f.mount_len += 1;
+        }
+    }
+    for &b in name.as_bytes() {
+        if f.mount_len < f.mount_buf.len() {
+            f.mount_buf[f.mount_len] = b;
+            f.mount_len += 1;
+        }
+    }
+}
+
+fn submit_create_form(f: &FormScratch) -> AppEvent {
+    use crate::caves::cave::{self, NetMode, Sensitivity, Integrity};
+    if f.name_len == 0 { return AppEvent::Repaint; }  // invalid; repaint shows it
+
+    let name = unsafe { core::str::from_utf8_unchecked(&f.name_buf[..f.name_len]) };
+
+    // 1. cave::create
+    let create_res = cave::create(name, false);
+    if create_res.is_err() {
+        // Wave 3 limitation: errors silently swallowed; user can adjust + retry.
+        return AppEvent::Repaint;
+    }
+
+    // 2-4. Per-field setters (partial-failure tolerant).
+    let _ = cave::set_sensitivity_by_name(name, Sensitivity::from_u8(f.mls_sens_sel as u8));
+    let _ = cave::set_integrity_by_name(name, Integrity::from_u8(f.mls_integ_sel as u8));
+    let _ = cave::set_net_mode_by_name(name, NetMode::from_u8(f.net_mode_sel as u8));
+
+    // 5. MOUNT — skipped per pre-flight Gap 2 (no set_mount_by_name).
+    //    MOUNT is readonly in the form; mount is name-derived at access time.
+
+    // 6. TAINT — only when non-zero; find_id lookup post-create.
+    if f.taint != 0 {
+        if let Some(cave_id) = cave::find_id(name) {
+            cave::set_taint(cave_id as u16, f.taint);
+        }
+    }
+
+    // 7. Exit Create mode.
+    unsafe {
+        *core::ptr::addr_of_mut!(FORM)     = None;
+        *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+    }
+    AppEvent::Repaint
+}
+
+/// Apply form changes to an existing cave. Unlike [`submit_create_form`],
+/// this skips `cave::create` (cave already exists) and sets taint
+/// unconditionally (clearing to 0 is a valid user action).
+fn submit_configure_form(f: &FormScratch) -> AppEvent {
+    use crate::caves::cave::{self, NetMode, Sensitivity, Integrity};
+    if f.name_len == 0 { return AppEvent::Repaint; }
+
+    let name = unsafe { core::str::from_utf8_unchecked(&f.name_buf[..f.name_len]) };
+
+    let _ = cave::set_sensitivity_by_name(name, Sensitivity::from_u8(f.mls_sens_sel as u8));
+    let _ = cave::set_integrity_by_name(name, Integrity::from_u8(f.mls_integ_sel as u8));
+    let _ = cave::set_net_mode_by_name(name, NetMode::from_u8(f.net_mode_sel as u8));
+    // MOUNT skipped per pre-flight Gap 2 (no set_mount_by_name in Wave 3).
+    // TAINT: set unconditionally — user may be clearing to 0, which is meaningful.
+    if let Some(cave_id) = cave::find_id(name) {
+        cave::set_taint(cave_id as u16, f.taint);
+    }
+
+    unsafe {
+        *core::ptr::addr_of_mut!(FORM)     = None;
+        *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+    }
+    AppEvent::Repaint
+}
+
+// ── Mode-transition helpers ───────────────────────────────────────
+
+fn enter_create_mode() {
+    let scratch = FormScratch::empty();
+    unsafe {
+        *core::ptr::addr_of_mut!(FORM) = Some(scratch);
+        *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Creating;
+    }
+}
+
+fn enter_configure_mode() {
+    let sel = selected_cave();
+    let mut scratch = FormScratch::empty();
+    // Pre-fill from the selected cave.
+    let mut row_index: usize = 0;
+    crate::caves::cave::list(|c| {
+        if row_index == sel {
+            let n = (c.name_len as usize).min(NAME_MAX);
+            scratch.name_buf[..n].copy_from_slice(&c.name[..n]);
+            scratch.name_len = n;
+            scratch.net_mode_sel = c.net_mode as usize;
+            scratch.mls_sens_sel = c.sensitivity as usize;
+            scratch.mls_integ_sel = c.integrity as usize;
+            // taint: read from side-table after list exits (can't call find_id here safely).
+        }
+        row_index += 1;
+    });
+    // Taint pre-fill from side-table using the captured name.
+    let name = unsafe { core::str::from_utf8_unchecked(&scratch.name_buf[..scratch.name_len]) };
+    if let Some(id) = crate::caves::cave::find_id(name) {
+        scratch.taint = crate::caves::cave::taint_of(id as u16);
+    }
+    unsafe {
+        *core::ptr::addr_of_mut!(FORM) = Some(scratch);
+        *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Configuring(sel);
+    }
+}
+
+// ── Cave-iteration helpers ────────────────────────────────────────
+
+/// Fill `buf` with the name of the selected cave. Returns the length
+/// (0 if no cave is at the selected index).
+fn cave_name_at_selected(buf: &mut [u8; NAME_MAX]) -> usize {
+    let sel = selected_cave();
+    let mut name_len = 0;
+    let mut row_index: usize = 0;
+    crate::caves::cave::list(|c| {
+        if row_index == sel {
+            let n = (c.name_len as usize).min(NAME_MAX);
+            buf[..n].copy_from_slice(&c.name[..n]);
+            name_len = n;
+        }
+        row_index += 1;
+    });
+    name_len
+}
+
+// ── Format helpers ────────────────────────────────────────────────
+
+fn format_mls(
+    buf: &mut [u8],
+    sens: crate::caves::cave::Sensitivity,
+    integ: crate::caves::cave::Integrity,
+) -> &str {
+    let mut n = 0;
+    for &b in b"sens=" { buf[n] = b; n += 1; }
+    for &b in sens.as_str().as_bytes() { buf[n] = b; n += 1; }
+    for &b in b" integ=" { buf[n] = b; n += 1; }
+    for &b in integ_short(integ).as_bytes() { buf[n] = b; n += 1; }
+    unsafe { core::str::from_utf8_unchecked(&buf[..n]) }
+}
+
+fn integ_short(integ: crate::caves::cave::Integrity) -> &'static str {
+    use crate::caves::cave::Integrity;
+    match integ {
+        Integrity::Untrusted     => "Untrusted",
+        Integrity::Sandboxed     => "Sandboxed",
+        Integrity::SystemTrusted => "SystemTrusted",
+        Integrity::HighIntegrity => "HighIntegrity",
+    }
+}
+
+fn format_hex32(buf: &mut [u8; 12], value: u32) -> &str {
+    buf[0] = b'0';
+    buf[1] = b'x';
+    for j in 0..8 {
+        let nibble = (value >> ((7 - j) * 4)) & 0xF;
+        buf[2 + j] = if nibble < 10 { b'0' + nibble as u8 } else { b'A' + (nibble - 10) as u8 };
+    }
+    unsafe { core::str::from_utf8_unchecked(&buf[..10]) }
+}
+
+// ── Action-strip table ────────────────────────────────────────────
+
+/// Build the action-strip entries for a cave in Viewing mode. Used
+/// by both `paint_detail_view` and `handle_click_viewing` so the
+/// painted strip and the hit-test strip stay in sync.
+fn actions_for_cave(is_running: bool) -> [Action<'static>; 4] {
+    [
+        Action { hotkey: 'E', label: "Enter",     enabled: true },
+        Action { hotkey: 'S', label: "Stop",      enabled: is_running },
+        Action { hotkey: 'C', label: "Configure", enabled: true },
+        Action { hotkey: 'D', label: "Destroy",   enabled: true },
+    ]
+}
+
+/// Build the form fields for the create / configure flow. MOUNT is
+/// readonly per pre-flight Gap 2; the rest are editable in Create
+/// mode. `name_readonly` flips NAME's readonly flag for Configure
+/// mode (no rename API). Caller passes the FormScratch by mutable
+/// reference; the returned array borrows into `f`'s buffers.
+fn build_form_fields(f: &mut FormScratch, name_readonly: bool) -> [FormField<'_>; 6] {
+    const NET_VALUES:   &[&str] = &["isolated", "routed", "custom"];
+    const SENS_VALUES:  &[&str] = &["Unclassified", "Confidential", "Secret", "TopSecret"];
+    const INTEG_VALUES: &[&str] = &["Untrusted", "Sandboxed", "SystemTrusted", "HighIntegrity"];
+
+    [
+        FormField { key: "NAME",      kind: FieldKind::Text { buf: &mut f.name_buf[..],  len: &mut f.name_len,  max: NAME_MAX  }, readonly: name_readonly },
+        FormField { key: "NET MODE",  kind: FieldKind::Enum { values: NET_VALUES,   selected: &mut f.net_mode_sel  },              readonly: false },
+        FormField { key: "MLS SENS",  kind: FieldKind::Enum { values: SENS_VALUES,  selected: &mut f.mls_sens_sel  },              readonly: false },
+        FormField { key: "MLS INTEG", kind: FieldKind::Enum { values: INTEG_VALUES, selected: &mut f.mls_integ_sel },              readonly: false },
+        FormField { key: "MOUNT",     kind: FieldKind::Text { buf: &mut f.mount_buf[..], len: &mut f.mount_len, max: MOUNT_MAX }, readonly: true  },
+        FormField { key: "TAINT",     kind: FieldKind::Hex32 { value: &mut f.taint },                                              readonly: false },
+    ]
 }

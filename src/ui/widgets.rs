@@ -13,6 +13,7 @@
 use crate::ui::gpu;
 use crate::ui::font;
 use crate::ui::draw;
+use crate::ui::palette as p;
 
 // ─── Palette (mirrors lock-screen + desktop chrome) ─────────────────
 
@@ -591,4 +592,472 @@ fn write_dec(mut n: usize, out: &mut [u8]) -> usize {
     while n > 0 && i < tmp.len() { tmp[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
     for j in 0..i { out[j] = tmp[i - 1 - j]; }
     i
+}
+
+// ── Wave 3 widgets ───────────────────────────────────────────────
+// Used by caves_mgr (Wave 3) and inherited by FILES/NET/SECURITY/
+// EDITOR/COMMS in Wave 4. New widgets import from `crate::ui::palette`;
+// legacy widgets above keep their local cyberpunk palette.
+
+/// 6x6 px state indicator. `filled` = INK solid circle (running state).
+/// `!filled` = MID 1-px ring over BG fill (idle/stopped state).
+/// Renders inside a 6x6 bounding box at (x, y).
+pub fn paint_state_dot(x: u32, y: u32, filled: bool) {
+    const FILLED: [[u8; 6]; 6] = [
+        [0, 1, 1, 1, 1, 0],
+        [1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1],
+        [0, 1, 1, 1, 1, 0],
+    ];
+    const HOLLOW: [[u8; 6]; 6] = [
+        [0, 1, 1, 1, 1, 0],
+        [1, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 1],
+        [0, 1, 1, 1, 1, 0],
+    ];
+    // Clear the 6x6 bounding box first so callers don't have to pre-paint
+    // BG (e.g. when a dot transitions from filled to hollow on redraw).
+    gpu::fill_rect(x, y, 6, 6, p::BG);
+    let bm = if filled { &FILLED } else { &HOLLOW };
+    let color = if filled { p::INK } else { p::MID };
+    for dy in 0..6u32 {
+        for dx in 0..6u32 {
+            if bm[dy as usize][dx as usize] == 1 {
+                gpu::fill_rect(x + dx, y + dy, 1, 1, color);
+            }
+        }
+    }
+}
+
+/// One key/value row in a status field list.
+#[derive(Copy, Clone)]
+pub struct StatusField<'a> {
+    pub key:   &'a str,
+    pub value: &'a str,
+}
+
+// ─── Wave 3: Caves Manager widgets ──────────────────────────────────────────
+
+/// A single entry in an action strip.
+#[derive(Copy, Clone)]
+pub struct Action<'a> {
+    /// Uppercase ASCII hotkey, e.g. 'E'. Matches the bracketed letter
+    /// in `label`. Caller decides what `b'E'` (or 'e' lowercased)
+    /// means; this widget only paints.
+    pub hotkey:  char,
+    /// Action label rendered as `[<hotkey>]<rest>`, e.g. "Enter"
+    /// renders as `[E]nter`.
+    pub label:   &'a str,
+    /// false → painted in FAINT, hit-tested as a miss (caller's
+    /// keyboard handler also ignores the hotkey when disabled).
+    pub enabled: bool,
+}
+
+/// Paint a row of `[K]ey label · ...` actions across `rect`. Items are
+/// separated by a `·` glyph in MID. The whole strip is left-aligned
+/// starting at `rect.x + 8`.
+pub fn paint_action_strip(rect: crate::ui::wm::WindowRect, actions: &[Action]) {
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    let y = rect.y + (rect.h.saturating_sub(16)) / 2;
+    let mut x = rect.x + 8;
+
+    for (i, act) in actions.iter().enumerate() {
+        if i > 0 {
+            font::draw_str(fb, screen_w, x, y, " · ", p::MID, p::BG);
+            x += 3 * CHAR_W;
+        }
+        let (letter_color, rest_color) = if act.enabled {
+            (p::INK, p::MID)
+        } else {
+            (p::FAINT, p::FAINT)
+        };
+        // "[X]"
+        debug_assert!(act.hotkey.is_ascii(), "Action::hotkey must be ASCII");
+        let mut bracket_buf = [0u8; 3];
+        bracket_buf[0] = b'[';
+        bracket_buf[1] = act.hotkey as u8;
+        bracket_buf[2] = b']';
+        let bracket = unsafe { core::str::from_utf8_unchecked(&bracket_buf) };
+        font::draw_str(fb, screen_w, x, y, bracket, letter_color, p::BG);
+        x += 3 * CHAR_W;
+        // "rest" (label minus the first character, which the bracket replaced)
+        if act.label.len() > 1 {
+            let rest = &act.label[1..];
+            font::draw_str(fb, screen_w, x, y, rest, rest_color, p::BG);
+            x += rest.len() as u32 * CHAR_W;
+        }
+    }
+}
+
+/// Hit-test the action strip. Returns the hotkey of the clicked
+/// action if the click landed on a label, None otherwise.
+/// Disabled actions return None even if clicked on.
+pub fn action_strip_hit_test(rect: crate::ui::wm::WindowRect, mx: i32, my: i32, actions: &[Action]) -> Option<char> {
+    let strip_y0 = rect.y as i32;
+    let strip_y1 = (rect.y + rect.h) as i32;
+    if my < strip_y0 || my >= strip_y1 { return None; }
+
+    let mut x = rect.x as i32 + 8;
+    for (i, act) in actions.iter().enumerate() {
+        if i > 0 {
+            x += 3 * CHAR_W as i32; // separator " · "
+        }
+        let token_w = 3 * CHAR_W as i32  // "[X]"
+                    + act.label.len().saturating_sub(1) as i32 * CHAR_W as i32;
+        if mx >= x && mx < x + token_w {
+            return if act.enabled { Some(act.hotkey) } else { None };
+        }
+        x += token_w;
+    }
+    None
+}
+
+/// Inspector-style sidebar + detail split. Caller decides what to paint
+/// in each rect; this widget computes geometry and paints the 1-px
+/// HAIRLINE divider between them.
+#[derive(Copy, Clone)]
+pub struct InspectorLayout {
+    pub body_rect:   crate::ui::wm::WindowRect,
+    pub sidebar_pct: u32,   // 0..100; default 38
+}
+
+impl InspectorLayout {
+    /// Create an InspectorLayout with the default 38% sidebar.
+    pub fn new(body_rect: crate::ui::wm::WindowRect) -> Self {
+        Self { body_rect, sidebar_pct: 38 }
+    }
+
+    pub fn with_sidebar_pct(mut self, pct: u32) -> Self {
+        self.sidebar_pct = pct.min(80).max(20);
+        self
+    }
+
+    pub fn sidebar_rect(&self) -> crate::ui::wm::WindowRect {
+        let w = (self.body_rect.w * self.sidebar_pct) / 100;
+        crate::ui::wm::WindowRect {
+            x: self.body_rect.x,
+            y: self.body_rect.y,
+            w,
+            h: self.body_rect.h,
+        }
+    }
+
+    pub fn detail_rect(&self) -> crate::ui::wm::WindowRect {
+        let sw = (self.body_rect.w * self.sidebar_pct) / 100;
+        crate::ui::wm::WindowRect {
+            x: self.body_rect.x + sw + 1, // +1 for the divider
+            y: self.body_rect.y,
+            w: self.body_rect.w.saturating_sub(sw + 1),
+            h: self.body_rect.h,
+        }
+    }
+
+    /// Paint the 1-px HAIRLINE vertical divider.
+    pub fn paint_divider(&self) {
+        let sw = (self.body_rect.w * self.sidebar_pct) / 100;
+        gpu::fill_rect(self.body_rect.x + sw, self.body_rect.y, 1, self.body_rect.h, p::HAIRLINE);
+    }
+}
+
+/// Confirmation modal — used wherever an action is destructive.
+/// Double-tap the `commit_key` to confirm. Esc cancels.
+pub struct ConfirmModal<'a> {
+    pub title:       &'a str,
+    pub body_lines:  &'a [&'a str],
+    pub commit_key:  char,   // uppercase ASCII, e.g. 'D' for Destroy
+}
+
+/// Result of routing a key event to the modal.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum ModalAction {
+    None,
+    Commit,
+    Cancel,
+}
+
+/// Paint the modal centered on screen, dimming everything below TOPBAR_H.
+/// The TOPBAR strip stays live (lock glyph still works).
+pub fn paint_confirm_modal(modal: &ConfirmModal) {
+    const TOPBAR_H: u32 = 22;
+    const CHAR_H:   u32 = 16;
+    const PAD_X:    u32 = 24;
+    const PAD_Y:    u32 = 18;
+
+    let screen_w = gpu::width();
+    let screen_h = gpu::height();
+    let fb = gpu::framebuffer();
+
+    debug_assert!(modal.commit_key.is_ascii(), "ConfirmModal::commit_key must be ASCII");
+
+    // Re-fill everything below the topbar with BG (effectively dims the
+    // background — there's no alpha blend, so just clear). The modal
+    // panel paints on top.
+    gpu::fill_rect(0, TOPBAR_H, screen_w, screen_h - TOPBAR_H, p::BG);
+
+    // Compute modal size from content.
+    let mut max_line_w = modal.title.len() as u32;
+    for line in modal.body_lines {
+        if (line.len() as u32) > max_line_w { max_line_w = line.len() as u32; }
+    }
+    let body_h_lines = modal.body_lines.len() as u32;
+    let panel_w = (max_line_w * CHAR_W) + 2 * PAD_X;
+    let panel_w = panel_w.max(35 * CHAR_W + 2 * PAD_X);  // footer hint is ~33 chars
+    let panel_h = CHAR_H                          // title
+                + 8                               // title-body gap
+                + body_h_lines * (CHAR_H + 4)     // body lines
+                + 18                              // body-footer gap
+                + CHAR_H                          // footer hint
+                + 2 * PAD_Y;
+
+    let px = (screen_w.saturating_sub(panel_w)) / 2;
+    let py = (screen_h.saturating_sub(panel_h)) / 2;
+
+    // Panel fill + 1-px HAIRLINE border.
+    gpu::fill_rect(px, py, panel_w, panel_h, p::PANEL);
+    gpu::fill_rect(px, py, panel_w, 1, p::HAIRLINE);
+    gpu::fill_rect(px, py + panel_h - 1, panel_w, 1, p::HAIRLINE);
+    gpu::fill_rect(px, py, 1, panel_h, p::HAIRLINE);
+    gpu::fill_rect(px + panel_w - 1, py, 1, panel_h, p::HAIRLINE);
+
+    let inner_x = px + PAD_X;
+    let mut y = py + PAD_Y;
+
+    font::draw_str(fb, screen_w, inner_x, y, modal.title, p::INK, p::PANEL);
+    y += CHAR_H + 8;
+
+    for line in modal.body_lines {
+        font::draw_str(fb, screen_w, inner_x, y, line, p::MID, p::PANEL);
+        y += CHAR_H + 4;
+    }
+
+    y += 14;
+    // Footer hint: <KEY> "again to confirm  " "Esc to cancel"
+    let key_glyph = [modal.commit_key as u8];
+    let key_str = unsafe { core::str::from_utf8_unchecked(&key_glyph) };
+    font::draw_str(fb, screen_w, inner_x,            y, key_str, p::INK, p::PANEL);
+    font::draw_str(fb, screen_w, inner_x + CHAR_W,   y, " again to confirm  ", p::MID, p::PANEL);
+    font::draw_str(fb, screen_w, inner_x + 21 * CHAR_W, y, "Esc to cancel", p::MID, p::PANEL);
+}
+
+/// Route a key event to the modal. Returns Commit on the commit key,
+/// Cancel on Esc, None otherwise. Caller is responsible for tracking
+/// whether the modal is open — this fn doesn't.
+pub fn confirm_modal_key(modal: &ConfirmModal, c: u8) -> ModalAction {
+    debug_assert!(modal.commit_key.is_ascii(), "ConfirmModal::commit_key must be ASCII");
+    let lower = c.to_ascii_lowercase();
+    let key_lower = (modal.commit_key as u8).to_ascii_lowercase();
+    if lower == key_lower { return ModalAction::Commit; }
+    if c == 0x1B { return ModalAction::Cancel; }
+    ModalAction::None
+}
+
+/// One field in an inline edit form.
+pub enum FieldKind<'a> {
+    /// Text field; caller owns the buffer + length. `max` is the
+    /// hard cap (no more characters accepted once `len == max`).
+    Text { buf: &'a mut [u8], len: &'a mut usize, max: usize },
+    /// Single-select enum. Selected index cycles via Space / ← → ;
+    /// caller controls the variant list.
+    Enum { values: &'a [&'static str], selected: &'a mut usize },
+    /// 32-bit hex value. Caller stores the value; widget handles
+    /// in-place editing of hex digits.
+    Hex32 { value: &'a mut u32 },
+}
+
+pub struct FormField<'a> {
+    pub key:      &'a str,
+    pub kind:     FieldKind<'a>,
+    pub readonly: bool,
+}
+
+/// Result of a key dispatched to the form.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum FormAction {
+    None,
+    Submit,
+    Cancel,
+}
+
+/// Paint the form into `rect`. `focused` is the index of the field
+/// currently focused (highlighted with INK border instead of HAIRLINE).
+pub fn paint_inline_edit_form(rect: crate::ui::wm::WindowRect, fields: &[FormField], focused: usize) {
+    const CHAR_H:    u32 = 16;
+    const ROW_H:     u32 = 42;       // 10 px key + 2 px gap + 22 px field + 8 px row gap
+    const KEY_H:     u32 = 10;
+    const FIELD_H:   u32 = 22;
+
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    for (i, field) in fields.iter().enumerate() {
+        let row_y = rect.y + (i as u32) * ROW_H;
+        // Key label
+        font::draw_str(fb, screen_w, rect.x, row_y, field.key, p::MID, p::BG);
+        // Field box
+        let box_x = rect.x;
+        let box_y = row_y + KEY_H + 2;
+        let box_w = rect.w;
+        let box_h = FIELD_H;
+        gpu::fill_rect(box_x, box_y, box_w, box_h, p::PANEL);
+        let border = if focused == i { p::INK } else { p::HAIRLINE };
+        // 1-px border
+        gpu::fill_rect(box_x, box_y, box_w, 1, border);
+        gpu::fill_rect(box_x, box_y + box_h - 1, box_w, 1, border);
+        gpu::fill_rect(box_x, box_y, 1, box_h, border);
+        gpu::fill_rect(box_x + box_w - 1, box_y, 1, box_h, border);
+
+        // Field contents
+        let text_y = box_y + (box_h - CHAR_H) / 2;
+        let text_x = box_x + 8;
+        let val_color = if field.readonly { p::MID } else { p::INK };
+
+        match &field.kind {
+            FieldKind::Text { buf, len, .. } => {
+                let n = **len;
+                let s = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
+                font::draw_str(fb, screen_w, text_x, text_y, s, val_color, p::PANEL);
+                // Cursor caret (only when focused, not readonly).
+                if focused == i && !field.readonly {
+                    let cx = text_x + (n as u32) * CHAR_W;
+                    gpu::fill_rect(cx, text_y, CHAR_W, CHAR_H, p::INK);
+                }
+            }
+            FieldKind::Enum { values, selected } => {
+                let s = values.get(**selected).copied().unwrap_or("?");
+                font::draw_str(fb, screen_w, text_x, text_y, s, val_color, p::PANEL);
+                // Right-edge hint "< >" (cycle indicator)
+                if focused == i && !field.readonly {
+                    let hint = "< >";
+                    let hx = box_x + box_w.saturating_sub(3 * CHAR_W + 4);
+                    font::draw_str(fb, screen_w, hx, text_y, hint, p::MID, p::PANEL);
+                }
+            }
+            FieldKind::Hex32 { value } => {
+                let mut buf = [b'0'; 10];
+                buf[1] = b'x';
+                for j in 0..8 {
+                    let nibble = (**value >> ((7 - j) * 4)) & 0xF;
+                    buf[2 + j] = if nibble < 10 { b'0' + nibble as u8 } else { b'A' + (nibble - 10) as u8 };
+                }
+                let s = unsafe { core::str::from_utf8_unchecked(&buf) };
+                font::draw_str(fb, screen_w, text_x, text_y, s, val_color, p::PANEL);
+            }
+        }
+    }
+}
+
+/// Route a key to the form. Returns Submit on Enter (when valid),
+/// Cancel on Esc, None otherwise. Updates `*focused` on Tab/Shift+Tab,
+/// mutates the focused field's storage on text/enum/hex edits.
+pub fn handle_form_key(fields: &mut [FormField], focused: &mut usize, c: u8) -> FormAction {
+    if c == 0x1B { return FormAction::Cancel; }
+    if c == b'\r' || c == b'\n' { return FormAction::Submit; }
+    if c == b'\t' {
+        let n = fields.len();
+        if n > 0 { *focused = (*focused + 1) % n; }
+        return FormAction::None;
+    }
+    // Shift+Tab arrives as 0x90..0x97 range from the kernel keyboard
+    // layer when Shift is held with arrows. Plain Shift+Tab is rare;
+    // we don't handle it for Wave 3.
+
+    let i = *focused;
+    if i >= fields.len() { return FormAction::None; }
+    if fields[i].readonly { return FormAction::None; }
+
+    match &mut fields[i].kind {
+        FieldKind::Text { buf, len, max } => {
+            if c == 0x08 || c == 0x7F {  // Backspace / Delete
+                if **len > 0 { **len -= 1; }
+            } else if c >= b' ' && c < 0x7F {
+                if **len < *max && **len < buf.len() {
+                    buf[**len] = c;
+                    **len += 1;
+                }
+            }
+        }
+        FieldKind::Enum { values, selected } => {
+            if c == b' ' {
+                let n = values.len();
+                if n > 0 { **selected = (**selected + 1) % n; }
+            }
+            // ← arrow = 0x92, → arrow = 0x93 per the kernel arrow mapping.
+            if c == 0x92 {
+                let n = values.len();
+                if n > 0 { **selected = (**selected + n - 1) % n; }
+            }
+            if c == 0x93 {
+                let n = values.len();
+                if n > 0 { **selected = (**selected + 1) % n; }
+            }
+        }
+        FieldKind::Hex32 { value } => {
+            // Hex edit: shift left, accept new low nibble.
+            let nibble = match c {
+                b'0'..=b'9' => Some(c - b'0'),
+                b'a'..=b'f' => Some(c - b'a' + 10),
+                b'A'..=b'F' => Some(c - b'A' + 10),
+                _ => None,
+            };
+            if let Some(n) = nibble {
+                **value = (**value << 4) | (n as u32);
+            }
+            if c == 0x08 {  // Backspace
+                **value >>= 4;
+            }
+        }
+    }
+    FormAction::None
+}
+
+/// Route a click to the form. Updates `*focused` to the clicked field
+/// if the click landed on a field box. Does NOT submit (caller handles
+/// submit-button click separately if it has one).
+pub fn handle_form_click(fields: &[FormField], focused: &mut usize, rect: crate::ui::wm::WindowRect, mx: i32, my: i32) {
+    const ROW_H: u32 = 42;
+    const KEY_H: u32 = 10;
+    const FIELD_H: u32 = 22;
+    if mx < rect.x as i32 || mx >= (rect.x + rect.w) as i32 { return; }
+    if my < rect.y as i32 { return; }
+    for (i, _) in fields.iter().enumerate() {
+        let box_y = rect.y as i32 + (i as i32) * ROW_H as i32 + KEY_H as i32 + 2;
+        if my >= box_y && my < box_y + FIELD_H as i32 {
+            *focused = i;
+            return;
+        }
+    }
+}
+
+/// Paint a vertical list of key/value rows. Key column auto-sized to
+/// the longest key + 2-char padding. Keys render in MID; values in INK.
+/// Row pitch is 18 px (16 px glyph height + 1 px top inset + 1 px gap).
+///
+/// Caller is responsible for clipping — this paints `fields.len()` rows
+/// at row pitch 18 starting at `rect.y + 1`. Total footprint is
+/// `fields.len() * 18 - 1` px.
+pub fn paint_status_field_list(rect: crate::ui::wm::WindowRect, fields: &[StatusField]) {
+    const ROW_H: u32 = 18;
+
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    // Compute key column width.
+    let mut max_key_len: u32 = 0;
+    for f in fields {
+        let n = f.key.len() as u32;
+        if n > max_key_len { max_key_len = n; }
+    }
+    let value_col_x = rect.x + (max_key_len + 2) * CHAR_W;
+
+    for (i, f) in fields.iter().enumerate() {
+        let row_y = rect.y + (i as u32) * ROW_H + 1; // +1 to push below row top
+        font::draw_str(fb, screen_w, rect.x,      row_y, f.key,   p::MID, p::BG);
+        font::draw_str(fb, screen_w, value_col_x, row_y, f.value, p::INK, p::BG);
+    }
 }

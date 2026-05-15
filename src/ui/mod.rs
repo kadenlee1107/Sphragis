@@ -6,6 +6,7 @@ pub mod draw;
 pub mod font;
 pub mod gpu;
 pub mod launcher;
+pub mod palette;
 pub mod shell;
 pub mod shell_completion;
 pub mod shell_history;
