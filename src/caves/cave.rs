@@ -2,7 +2,6 @@
 // Sphragis — Cave Core
 // Isolated container runtime for running Kali Linux tools.
 // Each Cave has its own encrypted filesystem, capabilities, and process space.
-// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
 
 use crate::crypto::sha256;
 use core::sync::atomic::{AtomicU8, AtomicBool, Ordering};
@@ -1799,16 +1798,10 @@ pub fn enter(name: &str) -> Result<(), &'static str> {
                 crate::caves::linux::mmu::switch_to_primary();
             }
 
-            // repaint the title-bar chrome NOW (after
-            // set_active(id) above). The CAVE indicator reads
-            // `active_name_str()` which now returns the new cave's
-            // name. Doing this earlier (e.g. inside
-            // console::reset_for_cave_switch) would have rendered
-            // the old cave's name because we always set
-            // ACTIVE_CAVE_ID = usize::MAX before the reset and only
-            // restore it after. wm::draw_frame is just FB writes —
-            // safe inside the IrqGuard'd critical section.
-            // XXX Wave-2-temp: crate::ui::wm::draw_frame();
+            // The Wave-1 wm::draw_frame() chrome path is gone — the
+            // Wave-2 floating WM repaints the topbar on every desktop
+            // tick, which already picks up the new cave name from
+            // active_name_str() without an explicit refresh here.
         }
         let _ = prev_active;
     }

@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 extern crate alloc;
 // Sphragis — Comms Client (8th Desktop App)
-// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
 //
 // Real end-to-end encrypted peer-to-peer messaging over TCP. Wire
 // protocol matches `scripts/comms_test_server.py`:

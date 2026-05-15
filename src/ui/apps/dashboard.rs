@@ -1,5 +1,4 @@
-// Sphragis — DS · System Dashboard
-// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
+// Sphragis — DS · System Dashboard (legacy Wave-1 layout, no callers)
 #![allow(dead_code)]
 //
 // Claude-Design port. Source artifacts in
@@ -8,6 +7,9 @@
 // Layout: 2-column grid for SYSTEM + SECURITY (top, 360px tall),
 // full-width ARCHITECTURE panel below. Narrow (<512px) collapses
 // to single column.
+//
+// Currently unwired — the Wave-3/4 apps subsumed this. Kept as a
+// reference for the panel/tile/KV widgets it pioneered.
 
 use crate::ui::wm;
 use crate::ui::gpu;
@@ -19,7 +21,9 @@ use crate::ui::widgets::{
 };
 
 pub fn render() {
-    // XXX Wave-2-temp: let r = wm::content_rect();
+    // Full-screen rect — dashboard is unwired in Wave 2+ (no caller
+    // path), kept for historical reference. WM-integrated equivalents
+    // are SECURITY (Wave 4) and CAVES (Wave 3).
     let r = wm::WindowRect { x: 0, y: 0, w: gpu::width(), h: gpu::height() };
     gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
     if r.w < 200 || r.h < 200 { return; }

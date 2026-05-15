@@ -214,9 +214,10 @@ pub fn set_rect(id: WindowId, rect: WindowRect) {
 /// cave-scoped windows, refresh chrome titles, or leave existing
 /// windows in place with stale cave_name.
 ///
-/// Kept as a public entry point so `caves/cave.rs` can re-enable the
-/// call site (currently `// XXX Wave-2-temp:`) without another round
-/// of API surgery once the policy is decided.
+/// Kept as a public entry point in case `caves/cave.rs` ever needs
+/// to invalidate WM state on a cave switch — currently a no-op
+/// because Wave 2's floating WM is cave-agnostic (windows belong to
+/// apps, not caves).
 pub fn reset_for_cave_switch() {
     // Intentionally empty — see doc.
 }
