@@ -1,826 +1,737 @@
-#![allow(dead_code)]
-// Sphragis — ED · Code Editor
-// XXX Wave-2-temp: 1 old-WM call site commented out, restored in Task 7.
-//
-// shipped a pure-demo Editor that painted a
-// hardcoded sample of kernel_main.rs. makes it
-// actually editable: real text buffer, real cursor, arrow-key
-// navigation, character insertion / deletion / Enter, on-the-fly
-// Rust syntax tokenization for color.
-//
-// Still missing (intentionally — separate STUMPs):
-// * Save / load to BatFS (use shell `write` / `read` for now)
-// * Multi-tab buffers (the 3 tabs are visual; only one is real)
-// * Scrolling past the visible region (buffer caps at visible)
-// * Selection / copy / paste
+//! Wave 5 EDITOR — single-buffer text editor in the calm Wave-4 register.
+//! See `docs/superpowers/specs/2026-05-15-editor-redesign-design.md`.
 
-use crate::ui::wm;
-use crate::ui::gpu;
-use crate::ui::font;
+#![allow(dead_code, unused_imports)]
+
+use crate::ui::apps_registry::{AppEvent, AppId};
+use crate::ui::palette as p;
 use crate::ui::widgets::{
-    self as W, draw_strip, draw_seg_separator, draw_code_line, Tok,
-    BG, INK, MID, DIM_TXT, FAINT, CYAN, AMBER, HAIR, HAIR_HI,
+    paint_state_dot,
+    paint_action_strip, action_strip_hit_test, Action,
+    paint_confirm_modal, confirm_modal_key, ConfirmModal, ModalAction,
 };
+use crate::ui::wm::{self, WindowRect};
+use crate::fs::batfs;
 use crate::drivers::virtio::keyboard::{
     KEY_ARROW_UP, KEY_ARROW_DOWN, KEY_ARROW_LEFT, KEY_ARROW_RIGHT,
     KEY_SHIFT_ARROW_UP, KEY_SHIFT_ARROW_DOWN,
-    KEY_SHIFT_ARROW_LEFT, KEY_SHIFT_ARROW_RIGHT,
 };
 
-const CHAR_W: u32 = 8;
-const CHAR_H: u32 = 16;
-const TAB_BAR_H: u32 = 24;
-const STATUS_H:  u32 = 28;
-const GUTTER_W:  u32 = 56;
-const TAB_W:     u32 = 168;
-const NEW_TAB_W: u32 = 32;
-const GUTTER_BG:   u32 = 0xFF080808;
-const LINE_NUM:    u32 = 0xFF3A3A3A;
-const CUR_LINE_BG: u32 = 0xFF0E1F22;
-
-// ─── Text buffer + multi-tab state ──────────────────────────────────
-
-const MAX_LINES:    usize = 200;
+const NAME_MAX:     usize = 64;
+const MAX_LINES:    usize = 1024;
 const MAX_LINE_LEN: usize = 256;
-const NUM_TABS:     usize = 3;
+const CHAR_W:       u32   = 8;
+const CHAR_H:       u32   = 16;
+const STATUS_H:     u32   = 28;
+const ACTION_H:     u32   = 28;
+const GUTTER_W:     u32   = 36;
+
+// ── State ────────────────────────────────────────────────────────
+
+#[derive(PartialEq, Eq)]
+enum AppMode {
+    Editing,
+    ConfirmRevert,
+    ConfirmDiscard,   // Esc pressed with dirty buffer
+}
 
 struct Buffer {
     lines:      [[u8; MAX_LINE_LEN]; MAX_LINES],
     line_lens:  [u16; MAX_LINES],
     line_count: usize,
-    cur_line:   usize,
-    cur_col:    usize,
-    scroll_top: usize, // first visible line
-    // Selection: anchor + cursor define the range. Anchor = None means
-    // no active selection. The visible selection is everything between
-    // anchor and (cur_line, cur_col), inclusive of the smaller end and
-    // exclusive of the larger.
-    sel_anchor_line: usize,
-    sel_anchor_col:  usize,
-    has_selection:   bool,
-    name:       [u8; 64],
-    name_len:   usize,
-    dirty:      bool,
-    last_save_ok: bool,
 }
 
 impl Buffer {
     const fn empty() -> Self {
-        Buffer {
-            lines: [[0u8; MAX_LINE_LEN]; MAX_LINES],
-            line_lens: [0u16; MAX_LINES],
-            line_count: 1,
-            cur_line: 0,
-            cur_col: 0,
-            scroll_top: 0,
-            sel_anchor_line: 0,
-            sel_anchor_col: 0,
-            has_selection: false,
-            name: [0u8; 64],
-            name_len: 0,
-            dirty: false,
-            last_save_ok: true,
+        Self {
+            lines:      [[0u8; MAX_LINE_LEN]; MAX_LINES],
+            line_lens:  [0u16; MAX_LINES],
+            line_count: 0,
         }
     }
 }
 
-// ─── Clipboard ─────────────────────────────────────────
-//
-// 4KB scratch + length. Multi-line copies are stored with embedded
-// '\n' separators; paste replays them as line splits.
-const CLIPBOARD_CAP: usize = 4096;
-static mut CLIPBOARD: [u8; CLIPBOARD_CAP] = [0u8; CLIPBOARD_CAP];
-static mut CLIPBOARD_LEN: usize = 0;
+static mut BUFFER: Buffer = Buffer::empty();
+static mut APP_MODE: AppMode = AppMode::Editing;
+static mut CURSOR_ROW:     usize = 0;
+static mut CURSOR_COL:     usize = 0;
+static mut VIEWPORT_START: usize = 0;
+static mut DIRTY:          bool  = false;
+static mut FILE_NAME:      [u8; NAME_MAX] = [0; NAME_MAX];
+static mut FILE_NAME_LEN:  usize = 0;
+static mut PENDING_FILE:   [u8; NAME_MAX] = [0; NAME_MAX];
+static mut PENDING_LEN:    usize = 0;
+static mut LOAD_ERR:       [u8; 64] = [0; 64];
+static mut LOAD_ERR_LEN:   usize = 0;
+static mut SAVE_ERR:       [u8; 64] = [0; 64];
+static mut SAVE_ERR_LEN:   usize = 0;
+static mut TRUNCATED:      bool  = false;
 
-static mut BUFS: [Buffer; NUM_TABS] = [Buffer::empty(), Buffer::empty(), Buffer::empty()];
-static mut ACTIVE_TAB: usize = 0;
+// ── Cross-app handoff ────────────────────────────────────────────
 
-// Set when a save just happened — render shows a brief amber "SAVED"
-// banner the next paint and then clears.
-static mut SAVE_FLASH_TICKS: u32 = 0;
-static mut SAVE_FLASH_OK: bool  = true;
-
-/// Number of code lines currently visible. Set during render so
-/// scroll-into-view math knows the window size.
-static mut VISIBLE_LINES: usize = 30;
-
-#[inline] fn buf() -> &'static mut Buffer {
+/// Called by FILES (or any other app) to hand a file off to EDITOR.
+/// EDITOR consumes the hint on its next paint.
+pub fn set_pending_file(name: &str) {
+    let bytes = name.as_bytes();
+    let n = bytes.len().min(NAME_MAX);
+    let mut snap = n;
+    while snap > 0 && !name.is_char_boundary(snap) { snap -= 1; }
     unsafe {
-        let idx = ACTIVE_TAB;
-        &mut (*core::ptr::addr_of_mut!(BUFS))[idx]
-    }
-}
-
-#[inline] fn active_tab() -> usize { unsafe { ACTIVE_TAB } }
-
-fn switch_tab(idx: usize) {
-    if idx < NUM_TABS {
-        unsafe { ACTIVE_TAB = idx; }
-    }
-}
-
-/// Cycle to the next tab.
-pub fn next_tab() {
-    let next = (active_tab() + 1) % NUM_TABS;
-    switch_tab(next);
-}
-
-/// Pull the cursor into the visible window. Called after every move.
-fn scroll_into_view() {
-    let b = buf();
-    let visible = unsafe { VISIBLE_LINES };
-    if b.cur_line < b.scroll_top {
-        b.scroll_top = b.cur_line;
-    } else if b.cur_line >= b.scroll_top + visible {
-        b.scroll_top = b.cur_line + 1 - visible;
-    }
-}
-
-/// Drop a line at `line` after column `col` and start a new line below.
-fn split_line_at_cursor() {
-    let b = buf();
-    if b.line_count >= MAX_LINES { return; }
-    let line = b.cur_line;
-    let col  = b.cur_col;
-    let len  = b.line_lens[line] as usize;
-    if col > len { return; }
-    // Shift all rows below down by one.
-    let mut i = b.line_count;
-    while i > line + 1 {
-        b.lines[i] = b.lines[i - 1];
-        b.line_lens[i] = b.line_lens[i - 1];
-        i -= 1;
-    }
-    // New line gets the tail of the current one.
-    let tail_len = len - col;
-    let mut new_line = [0u8; MAX_LINE_LEN];
-    new_line[..tail_len].copy_from_slice(&b.lines[line][col..len]);
-    b.lines[line + 1] = new_line;
-    b.line_lens[line + 1] = tail_len as u16;
-    // Truncate current line.
-    b.line_lens[line] = col as u16;
-    b.line_count += 1;
-    b.cur_line = line + 1;
-    b.cur_col = 0;
-    b.dirty = true;
-    scroll_into_view();
-}
-
-/// Backspace: if cursor at col 0 and not on the first line, merge
-/// current line into previous. Otherwise delete the char to the left.
-fn backspace() {
-    let b = buf();
-    if b.cur_col > 0 {
-        let line = b.cur_line;
-        let col  = b.cur_col;
-        let len  = b.line_lens[line] as usize;
-        // Shift bytes left by 1.
-        for i in (col - 1)..(len - 1) {
-            b.lines[line][i] = b.lines[line][i + 1];
+        let dst = core::ptr::addr_of_mut!(PENDING_FILE) as *mut u8;
+        for i in 0..snap {
+            core::ptr::write(dst.add(i), bytes[i]);
         }
-        b.line_lens[line] = (len - 1) as u16;
-        b.cur_col = col - 1;
-        b.dirty = true;
-    } else if b.cur_line > 0 {
-        // Merge current line tail into the previous line.
-        let prev = b.cur_line - 1;
-        let prev_len = b.line_lens[prev] as usize;
-        let cur = b.cur_line;
-        let cur_len = b.line_lens[cur] as usize;
-        let copy = cur_len.min(MAX_LINE_LEN - prev_len);
-        for i in 0..copy {
-            b.lines[prev][prev_len + i] = b.lines[cur][i];
-        }
-        b.line_lens[prev] = (prev_len + copy) as u16;
-        // Shift all rows below up by one.
-        for i in cur..(b.line_count - 1) {
-            b.lines[i] = b.lines[i + 1];
-            b.line_lens[i] = b.line_lens[i + 1];
-        }
-        b.line_count -= 1;
-        b.cur_line = prev;
-        b.cur_col = prev_len;
-        b.dirty = true;
-        scroll_into_view();
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PENDING_LEN), snap);
     }
 }
 
-/// Insert one printable byte at the cursor.
-fn insert_char(c: u8) {
-    let b = buf();
-    let line = b.cur_line;
-    let col  = b.cur_col;
-    let len  = b.line_lens[line] as usize;
-    if len + 1 >= MAX_LINE_LEN { return; }
-    // Shift bytes right by 1 from col.
-    let mut i = len;
-    while i > col {
-        b.lines[line][i] = b.lines[line][i - 1];
-        i -= 1;
+fn take_pending_file() -> Option<usize> {
+    let n = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(PENDING_LEN)) };
+    if n == 0 { return None; }
+    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(PENDING_LEN), 0); }
+    Some(n)
+}
+
+// ── Public app entry points ──────────────────────────────────────
+
+pub fn paint(body: WindowRect) {
+    // Consume any pending file handoff before painting.
+    if let Some(n) = take_pending_file() {
+        let bytes = unsafe { &*core::ptr::addr_of!(PENDING_FILE) };
+        let name = unsafe { core::str::from_utf8_unchecked(&bytes[..n]) };
+        load_file(name);
     }
-    b.lines[line][col] = c;
-    b.line_lens[line] = (len + 1) as u16;
-    b.cur_col = col + 1;
-    b.dirty = true;
+
+    crate::ui::gpu::fill_rect(body.x, body.y, body.w, body.h, p::BG);
+
+    let status_rect = WindowRect { x: body.x, y: body.y, w: body.w, h: STATUS_H };
+    paint_status_strip(status_rect);
+    crate::ui::gpu::fill_rect(body.x, body.y + STATUS_H, body.w, 1, p::HAIRLINE);
+
+    let action_y = body.y + body.h - ACTION_H;
+    crate::ui::gpu::fill_rect(body.x, action_y - 1, body.w, 1, p::HAIRLINE);
+    let edit_rect = WindowRect {
+        x: body.x,
+        y: body.y + STATUS_H + 1,
+        w: body.w,
+        h: action_y.saturating_sub(body.y + STATUS_H + 2),
+    };
+    paint_edit_region(edit_rect);
+
+    let action_rect = WindowRect { x: body.x + 14, y: action_y, w: body.w - 28, h: ACTION_H };
+    paint_action_strip(action_rect, &actions());
+
+    match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
+        AppMode::Editing => {}
+        AppMode::ConfirmRevert => {
+            paint_confirm_modal(&ConfirmModal {
+                title: "Discard unsaved changes and revert?",
+                body_lines: &[
+                    "  reload from BatFS",
+                    "  discard the current buffer",
+                ],
+                commit_key: 'R',
+            });
+        }
+        AppMode::ConfirmDiscard => {
+            paint_confirm_modal(&ConfirmModal {
+                title: "Discard unsaved changes?",
+                body_lines: &[
+                    "  return to FILES",
+                    "  the buffer's changes are lost",
+                ],
+                commit_key: 'D',
+            });
+        }
+    }
+}
+
+// ── Painting ─────────────────────────────────────────────────────
+
+fn paint_status_strip(rect: WindowRect) {
+    use crate::ui::{font, gpu};
+    let fb = gpu::framebuffer();
+    let screen_w = gpu::width();
+
+    let name_len = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(FILE_NAME_LEN)) };
+    let dirty = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(DIRTY)) };
+
+    // Left: dirty-dot + filename + status caption
+    paint_state_dot(rect.x + 14, rect.y + (rect.h / 2) - 3, dirty);
+    if name_len > 0 {
+        let name = unsafe {
+            let arr = &*core::ptr::addr_of!(FILE_NAME);
+            core::str::from_utf8_unchecked(&arr[..name_len])
+        };
+        font::draw_str(fb, screen_w, rect.x + 28, rect.y + 6, name, p::INK, p::BG);
+        let after = rect.x + 28 + (name.len() as u32) * CHAR_W;
+        let caption: &str = if dirty { " \u{00b7} modified" } else { " \u{00b7} saved" };
+        font::draw_str(fb, screen_w, after, rect.y + 6, caption, p::MID, p::BG);
+    } else {
+        font::draw_str(fb, screen_w, rect.x + 28, rect.y + 6,
+            "No file open \u{00b7} press 2 to open from FILES", p::MID, p::BG);
+    }
+
+    // Right: cursor pos + truncation banner + load/save errors
+    let cur_row = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_ROW)) };
+    let cur_col = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_COL)) };
+    let truncated = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(TRUNCATED)) };
+
+    let mut buf = [0u8; 96];
+    let mut n = 0;
+    if truncated {
+        push_bytes(&mut buf, &mut n, b"truncated to 1024 lines \xc2\xb7 ");
+    }
+    let save_err_len = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(SAVE_ERR_LEN)) };
+    let load_err_len = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(LOAD_ERR_LEN)) };
+    if save_err_len > 0 {
+        push_bytes(&mut buf, &mut n, b"save failed: ");
+        let e = unsafe { let arr = &*core::ptr::addr_of!(SAVE_ERR); &arr[..save_err_len] };
+        push_bytes(&mut buf, &mut n, e);
+        push_bytes(&mut buf, &mut n, b" \xc2\xb7 ");
+    } else if load_err_len > 0 {
+        push_bytes(&mut buf, &mut n, b"load failed: ");
+        let e = unsafe { let arr = &*core::ptr::addr_of!(LOAD_ERR); &arr[..load_err_len] };
+        push_bytes(&mut buf, &mut n, e);
+        push_bytes(&mut buf, &mut n, b" \xc2\xb7 ");
+    }
+    push_bytes(&mut buf, &mut n, b"L ");
+    write_dec(&mut buf, &mut n, (cur_row + 1) as u32);
+    push_bytes(&mut buf, &mut n, b" : C ");
+    write_dec(&mut buf, &mut n, (cur_col + 1) as u32);
+
+    let right = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
+    let right_w = (n as u32) * CHAR_W;
+    font::draw_str(
+        fb, screen_w,
+        rect.x + rect.w.saturating_sub(right_w + 14),
+        rect.y + 6, right, p::MID, p::BG);
+}
+
+fn paint_edit_region(rect: WindowRect) {
+    use crate::ui::{font, gpu};
+    let fb = gpu::framebuffer();
+    let screen_w = gpu::width();
+
+    let line_count = unsafe { (*core::ptr::addr_of!(BUFFER)).line_count };
+    let cursor_row = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_ROW)) };
+    let cursor_col = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_COL)) };
+    let viewport = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(VIEWPORT_START)) };
+
+    let visible_rows = (rect.h / CHAR_H) as usize;
+    let text_x = rect.x + GUTTER_W + 6;
+
+    // Vertical divider after gutter.
+    gpu::fill_rect(rect.x + GUTTER_W, rect.y, 1, rect.h, p::HAIRLINE);
+
+    for i in 0..visible_rows {
+        let line_idx = viewport + i;
+        if line_idx >= line_count.max(1) { break; }
+        let row_y = rect.y + (i as u32) * CHAR_H;
+
+        // Current-line PANEL tint across gutter + text.
+        if line_idx == cursor_row {
+            gpu::fill_rect(rect.x, row_y, rect.w, CHAR_H, p::PANEL);
+            gpu::fill_rect(rect.x + GUTTER_W, row_y, 1, CHAR_H, p::HAIRLINE);
+        }
+        let row_bg = if line_idx == cursor_row { p::PANEL } else { p::BG };
+
+        // Gutter: right-aligned line number.
+        let mut ln_buf = [b' '; 4];
+        let mut ln = (line_idx + 1) as u32;
+        let mut j = 4;
+        while ln > 0 && j > 0 { j -= 1; ln_buf[j] = b'0' + (ln % 10) as u8; ln /= 10; }
+        let ln_str = unsafe { core::str::from_utf8_unchecked(&ln_buf) };
+        let ln_color = if line_idx == cursor_row { p::INK } else { p::FAINT };
+        font::draw_str(fb, screen_w, rect.x + 2, row_y, ln_str, ln_color, row_bg);
+
+        // Text content (if any) with comment-line tokenization.
+        if line_idx < line_count {
+            let line_bytes = unsafe {
+                let b = &*core::ptr::addr_of!(BUFFER);
+                &b.lines[line_idx][..b.line_lens[line_idx] as usize]
+            };
+            let line_str = unsafe { core::str::from_utf8_unchecked(line_bytes) };
+            let color = if is_comment_line(line_bytes) { p::MID } else { p::INK };
+            font::draw_str(fb, screen_w, text_x, row_y, line_str, color, row_bg);
+        }
+
+        // Cursor: 1-px wide INK block at the cursor column, ONLY on cursor row.
+        if line_idx == cursor_row {
+            let cur_x = text_x + (cursor_col as u32) * CHAR_W;
+            gpu::fill_rect(cur_x, row_y, CHAR_W, CHAR_H, p::INK);
+            // Re-paint the char under the cursor (if any) in BG-on-INK.
+            if cursor_col < unsafe { (*core::ptr::addr_of!(BUFFER)).line_lens[line_idx] as usize } {
+                let c = unsafe { (*core::ptr::addr_of!(BUFFER)).lines[line_idx][cursor_col] };
+                let s = unsafe { core::str::from_utf8_unchecked(core::slice::from_ref(&c)) };
+                font::draw_str(fb, screen_w, cur_x, row_y, s, p::BG, p::INK);
+            }
+        }
+    }
+}
+
+fn is_comment_line(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+    if i >= bytes.len() { return false; }
+    let rest = &bytes[i..];
+    rest.starts_with(b"//") ||
+        rest.starts_with(b"#")  ||
+        rest.starts_with(b";")  ||
+        rest.starts_with(b"--")
+}
+
+fn actions() -> [Action<'static>; 3] {
+    let dirty = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(DIRTY)) };
+    let has_file = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(FILE_NAME_LEN)) } > 0;
+    [
+        Action { hotkey: 'S', label: "Save",            enabled: dirty && has_file },
+        Action { hotkey: 'R', label: "Revert",          enabled: dirty && has_file },
+        Action { hotkey: 'X', label: "Esc back to FILES", enabled: true },
+    ]
+}
+
+// ── Input ────────────────────────────────────────────────────────
+
+pub fn handle_key(c: u8) -> AppEvent {
+    match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
+        AppMode::ConfirmRevert  => handle_key_modal_revert(c),
+        AppMode::ConfirmDiscard => handle_key_modal_discard(c),
+        AppMode::Editing        => handle_key_editing(c),
+    }
+}
+
+fn handle_key_editing(c: u8) -> AppEvent {
+    let has_file = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(FILE_NAME_LEN)) } > 0;
+    match c {
+        0x1B => {
+            // Esc: if dirty, ConfirmDiscard; else switch to FILES.
+            if dirty() {
+                unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::ConfirmDiscard; }
+                AppEvent::Repaint
+            } else {
+                switch_to_files();
+                AppEvent::Repaint
+            }
+        }
+        KEY_ARROW_LEFT  => { move_cursor_left();  AppEvent::Repaint }
+        KEY_ARROW_RIGHT => { move_cursor_right(); AppEvent::Repaint }
+        KEY_ARROW_UP    => { move_cursor_up(1);   AppEvent::Repaint }
+        KEY_ARROW_DOWN  => { move_cursor_down(1); AppEvent::Repaint }
+        KEY_SHIFT_ARROW_UP   => { move_cursor_up(8);   AppEvent::Repaint }
+        KEY_SHIFT_ARROW_DOWN => { move_cursor_down(8); AppEvent::Repaint }
+        0x08 => { backspace(); AppEvent::Repaint }
+        0x09 => {
+            for _ in 0..4 { insert_char(b' '); }
+            AppEvent::Repaint
+        }
+        0x0D => { newline(); AppEvent::Repaint }
+        b's' | b'S' if has_file && dirty() => { save_to_batfs(); AppEvent::Repaint }
+        b'r' | b'R' if has_file && dirty() => {
+            unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::ConfirmRevert; }
+            AppEvent::Repaint
+        }
+        // Printable ASCII inserts. Reserved keys (S/R/Esc handled above)
+        // also fall through here when no file is open or buffer not dirty,
+        // which intentionally lets the operator type 's' or 'r' literally.
+        0x20..=0x7E => { insert_char(c); AppEvent::Repaint }
+        _ => AppEvent::Unhandled,
+    }
+}
+
+fn handle_key_modal_revert(c: u8) -> AppEvent {
+    let modal = ConfirmModal { title: "", body_lines: &[], commit_key: 'R' };
+    match confirm_modal_key(&modal, c) {
+        ModalAction::Commit => {
+            let name = current_file_name_owned();
+            if let Some(n) = name.as_ref() {
+                load_file(n.as_str());
+            }
+            unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Editing; }
+            AppEvent::Repaint
+        }
+        ModalAction::Cancel => {
+            unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Editing; }
+            AppEvent::Repaint
+        }
+        ModalAction::None => AppEvent::Consumed,
+    }
+}
+
+fn handle_key_modal_discard(c: u8) -> AppEvent {
+    let modal = ConfirmModal { title: "", body_lines: &[], commit_key: 'D' };
+    match confirm_modal_key(&modal, c) {
+        ModalAction::Commit => {
+            unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Editing; }
+            switch_to_files();
+            AppEvent::Repaint
+        }
+        ModalAction::Cancel => {
+            unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Editing; }
+            AppEvent::Repaint
+        }
+        ModalAction::None => AppEvent::Consumed,
+    }
+}
+
+pub fn handle_click(mx: i32, my: i32, body: WindowRect) -> AppEvent {
+    if !matches!(unsafe { &*core::ptr::addr_of!(APP_MODE) }, AppMode::Editing) {
+        // Any click cancels modals.
+        unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Editing; }
+        return AppEvent::Repaint;
+    }
+    let action_rect = WindowRect {
+        x: body.x + 14,
+        y: body.y + body.h - ACTION_H,
+        w: body.w - 28,
+        h: ACTION_H,
+    };
+    if let Some(key) = action_strip_hit_test(action_rect, mx, my, &actions()) {
+        if key == 'X' {
+            // The "Esc back to FILES" entry — route to the Esc path.
+            return handle_key(0x1B);
+        }
+        return handle_key(key as u8);
+    }
+    AppEvent::Consumed
+}
+
+// ── Buffer edits ─────────────────────────────────────────────────
+
+fn dirty() -> bool {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(DIRTY)) }
+}
+
+fn set_dirty() {
+    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(DIRTY), true); }
 }
 
 fn move_cursor_left() {
-    let b = buf();
-    if b.cur_col > 0 {
-        b.cur_col -= 1;
-    } else if b.cur_line > 0 {
-        b.cur_line -= 1;
-        b.cur_col = b.line_lens[b.cur_line] as usize;
+    let mut row = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_ROW)) };
+    let mut col = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_COL)) };
+    if col > 0 {
+        col -= 1;
+    } else if row > 0 {
+        row -= 1;
+        col = unsafe { (*core::ptr::addr_of!(BUFFER)).line_lens[row] as usize };
     }
-    scroll_into_view();
+    set_cursor(row, col);
 }
 
 fn move_cursor_right() {
-    let b = buf();
-    let len = b.line_lens[b.cur_line] as usize;
-    if b.cur_col < len {
-        b.cur_col += 1;
-    } else if b.cur_line + 1 < b.line_count {
-        b.cur_line += 1;
-        b.cur_col = 0;
-    }
-    scroll_into_view();
-}
-
-fn move_cursor_up() {
-    let b = buf();
-    if b.cur_line > 0 {
-        b.cur_line -= 1;
-        let len = b.line_lens[b.cur_line] as usize;
-        if b.cur_col > len { b.cur_col = len; }
-    }
-    scroll_into_view();
-}
-
-fn move_cursor_down() {
-    let b = buf();
-    if b.cur_line + 1 < b.line_count {
-        b.cur_line += 1;
-        let len = b.line_lens[b.cur_line] as usize;
-        if b.cur_col > len { b.cur_col = len; }
-    }
-    scroll_into_view();
-}
-
-/// Public entry — desktop::run dispatches keystrokes here when the
-/// active app is APP_EDITOR.
-pub fn handle_key(c: u8) {
-    match c {
-        KEY_ARROW_UP    => { clear_selection(); move_cursor_up(); }
-        KEY_ARROW_DOWN  => { clear_selection(); move_cursor_down(); }
-        KEY_ARROW_LEFT  => { clear_selection(); move_cursor_left(); }
-        KEY_ARROW_RIGHT => { clear_selection(); move_cursor_right(); }
-        // shift+arrow extends selection. Anchor is set
-        // on first shift+arrow if there's no active selection.
-        KEY_SHIFT_ARROW_UP    => { ensure_selection_anchor(); move_cursor_up(); }
-        KEY_SHIFT_ARROW_DOWN  => { ensure_selection_anchor(); move_cursor_down(); }
-        KEY_SHIFT_ARROW_LEFT  => { ensure_selection_anchor(); move_cursor_left(); }
-        KEY_SHIFT_ARROW_RIGHT => { ensure_selection_anchor(); move_cursor_right(); }
-        b'\r' | b'\n' => { delete_selection_if_any(); split_line_at_cursor(); }
-        0x08 | 0x7F   => {
-            if !delete_selection_if_any() {
-                backspace();
-            }
-        }
-        // Ctrl+S = save current buffer to BatFS.
-        0x13 => save_current(),
-        // Ctrl+T = next tab.
-        0x14 => next_tab(),
-        // Ctrl+V = paste clipboard at cursor.
-        0x16 => paste_clipboard(),
-        // Ctrl+X = cut selection to clipboard.
-        0x18 => { copy_selection(); delete_selection_if_any(); },
-        // Ctrl+Y = copy selection to clipboard (Ctrl+C is taken globally
-        // by the desktop's "cancel line" handler so we use Y for "yank").
-        0x19 => copy_selection(),
-        c if c >= 0x20 && c <= 0x7E => {
-            delete_selection_if_any();
-            insert_char(c);
-        }
-        _ => {}
+    let row = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_ROW)) };
+    let col = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_COL)) };
+    let line_len = unsafe { (*core::ptr::addr_of!(BUFFER)).line_lens[row] as usize };
+    let line_count = unsafe { (*core::ptr::addr_of!(BUFFER)).line_count };
+    if col < line_len {
+        set_cursor(row, col + 1);
+    } else if row + 1 < line_count {
+        set_cursor(row + 1, 0);
     }
 }
 
-// ─── Selection helpers ──────────────────────────────────────────────
-
-fn ensure_selection_anchor() {
-    let b = buf();
-    if !b.has_selection {
-        b.sel_anchor_line = b.cur_line;
-        b.sel_anchor_col  = b.cur_col;
-        b.has_selection = true;
-    }
+fn move_cursor_up(n: usize) {
+    let row = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_ROW)) };
+    let col = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_COL)) };
+    let new_row = row.saturating_sub(n);
+    let max_col = unsafe { (*core::ptr::addr_of!(BUFFER)).line_lens[new_row] as usize };
+    set_cursor(new_row, col.min(max_col));
 }
 
-fn clear_selection() {
-    buf().has_selection = false;
+fn move_cursor_down(n: usize) {
+    let row = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_ROW)) };
+    let col = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_COL)) };
+    let line_count = unsafe { (*core::ptr::addr_of!(BUFFER)).line_count };
+    let new_row = (row + n).min(line_count.saturating_sub(1));
+    let max_col = unsafe { (*core::ptr::addr_of!(BUFFER)).line_lens[new_row] as usize };
+    set_cursor(new_row, col.min(max_col));
 }
 
-/// Returns (start_line, start_col, end_line, end_col) with start <= end.
-fn ordered_selection() -> Option<(usize, usize, usize, usize)> {
-    let b = buf();
-    if !b.has_selection { return None; }
-    let a = (b.sel_anchor_line, b.sel_anchor_col);
-    let c = (b.cur_line, b.cur_col);
-    let (start, end) = if a <= c { (a, c) } else { (c, a) };
-    if start == end { return None; }
-    Some((start.0, start.1, end.0, end.1))
-}
-
-/// Delete the selection (if any). Returns true if a deletion happened.
-fn delete_selection_if_any() -> bool {
-    let sel = match ordered_selection() { Some(s) => s, None => return false };
-    let (s_line, s_col, e_line, e_col) = sel;
-    let b = buf();
-    if s_line == e_line {
-        // Single-line: shift bytes in this line.
-        let len = b.line_lens[s_line] as usize;
-        let removed = e_col - s_col;
-        for i in s_col..(len - removed) {
-            b.lines[s_line][i] = b.lines[s_line][i + removed];
-        }
-        b.line_lens[s_line] = (len - removed) as u16;
-    } else {
-        // Multi-line: keep prefix of s_line + suffix of e_line.
-        let suffix_len = b.line_lens[e_line] as usize - e_col;
-        // Copy the suffix into s_line at s_col.
-        for i in 0..suffix_len {
-            let c = b.lines[e_line][e_col + i];
-            if s_col + i < MAX_LINE_LEN {
-                b.lines[s_line][s_col + i] = c;
-            }
-        }
-        b.line_lens[s_line] = (s_col + suffix_len).min(MAX_LINE_LEN) as u16;
-        // Remove lines (s_line+1..=e_line) by shifting up.
-        let lines_removed = e_line - s_line;
-        for i in (s_line + 1)..(b.line_count - lines_removed) {
-            b.lines[i] = b.lines[i + lines_removed];
-            b.line_lens[i] = b.line_lens[i + lines_removed];
-        }
-        b.line_count -= lines_removed;
-    }
-    b.cur_line = s_line;
-    b.cur_col = s_col;
-    b.has_selection = false;
-    b.dirty = true;
-    scroll_into_view();
-    true
-}
-
-fn copy_selection() {
-    let sel = match ordered_selection() { Some(s) => s, None => return };
-    let (s_line, s_col, e_line, e_col) = sel;
-    let b = buf();
-    let cb = unsafe { &mut *core::ptr::addr_of_mut!(CLIPBOARD) };
-    let mut p = 0usize;
-    if s_line == e_line {
-        let n = (e_col - s_col).min(CLIPBOARD_CAP);
-        cb[..n].copy_from_slice(&b.lines[s_line][s_col..s_col + n]);
-        p = n;
-    } else {
-        // First line: from s_col to end-of-line.
-        let first_len = b.line_lens[s_line] as usize - s_col;
-        let copy = first_len.min(CLIPBOARD_CAP - p);
-        cb[p..p + copy].copy_from_slice(&b.lines[s_line][s_col..s_col + copy]);
-        p += copy;
-        if p < CLIPBOARD_CAP { cb[p] = b'\n'; p += 1; }
-        // Middle lines (full).
-        for r in (s_line + 1)..e_line {
-            let len = b.line_lens[r] as usize;
-            let copy = len.min(CLIPBOARD_CAP - p);
-            cb[p..p + copy].copy_from_slice(&b.lines[r][..copy]);
-            p += copy;
-            if p < CLIPBOARD_CAP { cb[p] = b'\n'; p += 1; }
-        }
-        // Last line: from 0..e_col.
-        let last_copy = e_col.min(CLIPBOARD_CAP - p);
-        cb[p..p + last_copy].copy_from_slice(&b.lines[e_line][..last_copy]);
-        p += last_copy;
-    }
-    unsafe { CLIPBOARD_LEN = p; }
-}
-
-fn paste_clipboard() {
-    delete_selection_if_any();
-    let len = unsafe { CLIPBOARD_LEN };
-    if len == 0 { return; }
-    // Walk clipboard bytes; '\n' splits, others insert.
-    let cb = unsafe { &*core::ptr::addr_of!(CLIPBOARD) };
-    for i in 0..len {
-        let byte = cb[i];
-        if byte == b'\n' {
-            split_line_at_cursor();
-        } else if byte >= 0x20 && byte < 0x7F {
-            insert_char(byte);
-        }
-    }
-}
-
-/// Returns (s_line, s_col, e_line, e_col) for render. None if nothing
-/// is selected. Public so the renderer can highlight cells.
-fn render_selection() -> Option<(usize, usize, usize, usize)> {
-    ordered_selection()
-}
-
-// ─── Save / load ────────────────────────────────────────
-
-/// Serialize the current buffer to bytes (lines joined with '\n')
-/// then push to BatFS via `create` after deleting the previous copy
-/// (BatFS `create` errors on duplicate names, so we delete-then-write).
-pub fn save_current() {
-    let b = buf();
-    if b.name_len == 0 {
-        // Untitled — give it a default name so we can save.
-        let default = b"scratch.txt";
-        b.name[..default.len()].copy_from_slice(default);
-        b.name_len = default.len();
-    }
-    // Stage into a single contiguous buffer so we can hand it to
-    // BatFS in one call.
-    static mut SAVE_TMP: [u8; MAX_LINES * MAX_LINE_LEN] = [0u8; MAX_LINES * MAX_LINE_LEN];
-    let tmp = unsafe { &mut *core::ptr::addr_of_mut!(SAVE_TMP) };
-    let mut p = 0usize;
-    for r in 0..b.line_count {
-        let len = b.line_lens[r] as usize;
-        tmp[p..p + len].copy_from_slice(&b.lines[r][..len]);
-        p += len;
-        if r + 1 < b.line_count {
-            tmp[p] = b'\n';
-            p += 1;
-        }
-    }
-
-    let name = unsafe { core::str::from_utf8_unchecked(&b.name[..b.name_len]) };
-    // Delete-then-create. delete returns Err if file doesn't exist —
-    // that's fine, just the first save.
-    // gap-audit 032: ns_* routes through the active cave's mount
-    // namespace, so caves can't see each other's editor saves.
-    let _ = crate::fs::batfs::ns_delete(name);
-    let result = crate::fs::batfs::ns_create(name, &tmp[..p]);
+fn set_cursor(row: usize, col: usize) {
     unsafe {
-        SAVE_FLASH_TICKS = 90; // ~3 frames of full-render flash
-        SAVE_FLASH_OK = result.is_ok();
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CURSOR_ROW), row);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CURSOR_COL), col);
     }
-    if result.is_ok() {
-        b.dirty = false;
-        b.last_save_ok = true;
-    } else {
-        b.last_save_ok = false;
+    scroll_viewport_to_cursor();
+}
+
+fn scroll_viewport_to_cursor() {
+    // The visible-rows count depends on the body height which we don't
+    // have here; paint() will adjust on the next paint cycle. We just
+    // make sure VIEWPORT_START <= CURSOR_ROW so the cursor isn't
+    // above the viewport.
+    let row = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_ROW)) };
+    let vp = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(VIEWPORT_START)) };
+    if row < vp {
+        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(VIEWPORT_START), row); }
+    } else if row >= vp + 24 {
+        // Conservative bottom edge — paint may have more rows visible;
+        // worst case the viewport jumps but the cursor stays in view.
+        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(VIEWPORT_START), row - 23); }
     }
 }
 
-/// Hook for the shell's `edit <name>` command: load `name` from BatFS
-/// into the active buffer (replacing its contents) and return Ok(())
-/// on success. Returns Err(static) if the file doesn't fit or can't
-/// be read; the caller decides what to do (the shell command prints
-/// the error and stays put).
+fn insert_char(c: u8) {
+    let row = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_ROW)) };
+    let col = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_COL)) };
+    unsafe {
+        let buf = &mut *core::ptr::addr_of_mut!(BUFFER);
+        if buf.line_count == 0 { buf.line_count = 1; }
+        let line_len = buf.line_lens[row] as usize;
+        if line_len >= MAX_LINE_LEN { return; }
+        // Shift right.
+        for j in (col..line_len).rev() {
+            buf.lines[row][j + 1] = buf.lines[row][j];
+        }
+        buf.lines[row][col] = c;
+        buf.line_lens[row] = (line_len + 1) as u16;
+    }
+    set_cursor(row, col + 1);
+    set_dirty();
+}
+
+fn backspace() {
+    let row = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_ROW)) };
+    let col = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_COL)) };
+    if col > 0 {
+        unsafe {
+            let buf = &mut *core::ptr::addr_of_mut!(BUFFER);
+            let line_len = buf.line_lens[row] as usize;
+            for j in col..line_len {
+                buf.lines[row][j - 1] = buf.lines[row][j];
+            }
+            buf.line_lens[row] = (line_len - 1) as u16;
+        }
+        set_cursor(row, col - 1);
+        set_dirty();
+    } else if row > 0 {
+        // Join with previous line — cursor ends up at the original
+        // length of the previous line (the join point).
+        let prev_len_before = unsafe {
+            (*core::ptr::addr_of!(BUFFER)).line_lens[row - 1] as usize
+        };
+        unsafe {
+            let buf = &mut *core::ptr::addr_of_mut!(BUFFER);
+            let prev_len = buf.line_lens[row - 1] as usize;
+            let cur_len  = buf.line_lens[row] as usize;
+            let combined = prev_len + cur_len;
+            if combined > MAX_LINE_LEN { return; }
+            for j in 0..cur_len {
+                buf.lines[row - 1][prev_len + j] = buf.lines[row][j];
+            }
+            buf.line_lens[row - 1] = combined as u16;
+            for r in row..buf.line_count.saturating_sub(1) {
+                buf.lines[r]     = buf.lines[r + 1];
+                buf.line_lens[r] = buf.line_lens[r + 1];
+            }
+            buf.line_count = buf.line_count.saturating_sub(1);
+        }
+        set_cursor(row - 1, prev_len_before);
+        set_dirty();
+    }
+}
+
+fn newline() {
+    let row = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_ROW)) };
+    let col = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CURSOR_COL)) };
+    unsafe {
+        let buf = &mut *core::ptr::addr_of_mut!(BUFFER);
+        if buf.line_count >= MAX_LINES { return; }
+        if buf.line_count == 0 { buf.line_count = 1; }
+        // Shift lines down to make room.
+        for r in (row + 1..=buf.line_count).rev() {
+            buf.lines[r]     = buf.lines[r - 1];
+            buf.line_lens[r] = buf.line_lens[r - 1];
+        }
+        // Split current line at col.
+        let cur_len = buf.line_lens[row] as usize;
+        let tail_len = cur_len.saturating_sub(col);
+        for j in 0..tail_len {
+            buf.lines[row + 1][j] = buf.lines[row][col + j];
+        }
+        buf.line_lens[row + 1] = tail_len as u16;
+        buf.line_lens[row]     = col as u16;
+        buf.line_count += 1;
+    }
+    set_cursor(row + 1, 0);
+    set_dirty();
+}
+
+// ── BatFS I/O ────────────────────────────────────────────────────
+
+/// Public shim for the shell's `edit <filename>` command (pre-Wave-5
+/// call site in shell.rs). Returns Ok on load or Err with a static
+/// message so the shell can print it. The status-strip error slot is
+/// also populated on failure.
 pub fn load_from_batfs(name: &str) -> Result<(), &'static str> {
-    static mut LOAD_TMP: [u8; 8192] = [0u8; 8192];
-    let tmp = unsafe { &mut *core::ptr::addr_of_mut!(LOAD_TMP) };
-    let n = crate::fs::batfs::ns_read(name, tmp)?;
-    load_text(&tmp[..n], name);
-    Ok(())
+    load_file(name);
+    // Check whether the load populated an error.
+    let err_len = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(LOAD_ERR_LEN)) };
+    if err_len > 0 { Err("load failed") } else { Ok(()) }
 }
 
-/// Public — let other code (like a `edit <file>` shell command,
-/// future) seed the buffer with content.
-pub fn load_text(text: &[u8], name: &str) {
-    let b = buf();
-    // Reset.
-    b.line_count = 1;
-    b.cur_line = 0;
-    b.cur_col = 0;
-    b.dirty = false;
-    for r in 0..MAX_LINES {
-        b.line_lens[r] = 0;
+fn load_file(name: &str) {
+    // Reset state.
+    unsafe {
+        *core::ptr::addr_of_mut!(BUFFER) = Buffer::empty();
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CURSOR_ROW), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CURSOR_COL), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(VIEWPORT_START), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(DIRTY), false);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(TRUNCATED), false);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(LOAD_ERR_LEN), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SAVE_ERR_LEN), 0);
     }
-    // Walk text, splitting on '\n'.
+    // Save current file name.
+    let bytes = name.as_bytes();
+    let n = bytes.len().min(NAME_MAX);
+    unsafe {
+        let dst = core::ptr::addr_of_mut!(FILE_NAME) as *mut u8;
+        for i in 0..n {
+            core::ptr::write(dst.add(i), bytes[i]);
+        }
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(FILE_NAME_LEN), n);
+    }
+    // Read into a temp staging buffer, then split on \n into lines.
+    let mut staging = [0u8; MAX_LINES * MAX_LINE_LEN];
+    let bytes_read = match batfs::ns_read(name, &mut staging) {
+        Ok(n) => n,
+        Err(e) => {
+            store_load_err(e.as_bytes());
+            unsafe {
+                let buf = &mut *core::ptr::addr_of_mut!(BUFFER);
+                buf.line_count = 1;
+                buf.line_lens[0] = 0;
+            }
+            return;
+        }
+    };
+    parse_into_lines(&staging[..bytes_read]);
+}
+
+fn parse_into_lines(bytes: &[u8]) {
     let mut row = 0usize;
     let mut col = 0usize;
-    for &byte in text {
-        if byte == b'\n' {
-            row += 1;
-            col = 0;
-            if row >= MAX_LINES { return; }
-        } else if col < MAX_LINE_LEN && byte >= 0x20 && byte < 0x7F {
-            b.lines[row][col] = byte;
-            col += 1;
-            b.line_lens[row] = col as u16;
-        }
-    }
-    b.line_count = (row + 1).max(1);
-    let nlen = name.len().min(64);
-    b.name[..nlen].copy_from_slice(&name.as_bytes()[..nlen]);
-    b.name_len = nlen;
-}
-
-// ─── Tiny Rust tokenizer ───────────────────────────────────────────
-
-/// Tokenize a single line of Rust source into spans. Returns the
-/// number of spans written into `out`. Caller passes a fixed-size
-/// buffer of tuples.
-fn tokenize_line<'a>(line: &'a [u8], out: &mut [(Tok, &'a [u8])]) -> usize {
-    let mut n = 0usize;
-    let mut i = 0usize;
-    let len = line.len();
-    while i < len && n < out.len() {
-        let b = line[i];
-        // Whitespace runs → punct (so they paint as plain background).
-        if b == b' ' || b == b'\t' {
-            let start = i;
-            while i < len && (line[i] == b' ' || line[i] == b'\t') { i += 1; }
-            out[n] = (Tok::Punct, &line[start..i]);
-            n += 1;
-            continue;
-        }
-        // Comment to end-of-line (// or //! or ///).
-        if b == b'/' && i + 1 < len && line[i + 1] == b'/' {
-            out[n] = (Tok::Comment, &line[i..len]);
-            n += 1;
-            return n;
-        }
-        // Attribute: '#' followed by '[' or '!'.
-        if b == b'#' && i + 1 < len && (line[i + 1] == b'[' || line[i + 1] == b'!') {
-            let start = i;
-            // Walk until matching ']' or end of line.
-            let mut depth = 0i32;
-            while i < len {
-                if line[i] == b'[' { depth += 1; }
-                else if line[i] == b']' { depth -= 1; if depth == 0 { i += 1; break; } }
-                i += 1;
-            }
-            out[n] = (Tok::Attr, &line[start..i]);
-            n += 1;
-            continue;
-        }
-        // String literal "..." (no escape support — kernel code rarely
-        // contains escaped quotes inside strings).
-        if b == b'"' {
-            let start = i;
-            i += 1;
-            while i < len && line[i] != b'"' { i += 1; }
-            if i < len { i += 1; }
-            out[n] = (Tok::String, &line[start..i]);
-            n += 1;
-            continue;
-        }
-        // Identifier / keyword: starts with letter or _, then alnum/_.
-        if (b >= b'a' && b <= b'z') || (b >= b'A' && b <= b'Z') || b == b'_' {
-            let start = i;
-            while i < len {
-                let c = line[i];
-                let is_alnum = (c >= b'a' && c <= b'z') || (c >= b'A' && c <= b'Z')
-                    || (c >= b'0' && c <= b'9') || c == b'_';
-                if !is_alnum { break; }
-                i += 1;
-            }
-            let ident = &line[start..i];
-            let kind = if is_keyword(ident) { Tok::Keyword } else { Tok::Ident };
-            out[n] = (kind, ident);
-            n += 1;
-            continue;
-        }
-        // Anything else: a single-byte punct span.
-        out[n] = (Tok::Punct, &line[i..i + 1]);
-        n += 1;
-        i += 1;
-    }
-    n
-}
-
-fn is_keyword(s: &[u8]) -> bool {
-    matches!(s,
-        b"as" | b"break" | b"const" | b"continue" | b"crate" | b"else" | b"enum"
-        | b"extern" | b"false" | b"fn" | b"for" | b"if" | b"impl" | b"in" | b"let"
-        | b"loop" | b"match" | b"mod" | b"move" | b"mut" | b"pub" | b"ref" | b"return"
-        | b"self" | b"Self" | b"static" | b"struct" | b"super" | b"trait" | b"true"
-        | b"type" | b"unsafe" | b"use" | b"where" | b"while" | b"async" | b"await"
-        | b"dyn" | b"box"
-    )
-}
-
-// ─── Render ─────────────────────────────────────────────────────────
-
-pub fn render() {
-    // XXX Wave-2-temp: let r = wm::content_rect();
-    let r = wm::WindowRect { x: 0, y: 0, w: gpu::width(), h: gpu::height() };
-    gpu::fill_rect(r.x, r.y, r.w, r.h, BG);
-    if r.w < 200 || r.h < 100 { return; }
-
-    draw_strip(r.x, r.y, r.w, TAB_BAR_H, false, true);
-    draw_tabs(r.x, r.y, r.w);
-
-    let body_y = r.y + TAB_BAR_H;
-    let status_y = r.y + r.h - STATUS_H;
-    let body_h = status_y.saturating_sub(body_y);
-    draw_gutter_and_code(r.x, body_y, r.w, body_h);
-
-    draw_strip(r.x, status_y, r.w, STATUS_H, true, false);
-    draw_status_strip(r.x, status_y, r.w);
-}
-
-fn buffer_name() -> &'static str {
-    let b = buf();
-    if b.name_len == 0 { "untitled.rs" }
-    else { unsafe { core::str::from_utf8_unchecked(&b.name[..b.name_len]) } }
-}
-
-fn draw_tabs(x: u32, y: u32, w: u32) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let active = active_tab();
-
-    let mut tx = x;
-    for i in 0..NUM_TABS {
-        let b = unsafe { &(*core::ptr::addr_of!(BUFS))[i] };
-        let name = if b.name_len == 0 {
-            
-            match i {
-                0 => "untitled-1.rs",
-                1 => "untitled-2.rs",
-                _ => "untitled-3.rs",
-            }
-        } else {
-            unsafe { core::str::from_utf8_unchecked(&b.name[..b.name_len]) }
-        };
-        let is_active = i == active;
-        gpu::fill_rect(tx + TAB_W, y, 1, TAB_BAR_H, HAIR);
-        let text_y = y + (TAB_BAR_H - CHAR_H) / 2;
-        let name_x = tx + 12;
-        let name_color = if is_active { INK } else { DIM_TXT };
-        font::draw_str(fb, sw, name_x, text_y, name, name_color, BG);
-        let mut after_name = name_x + name.len() as u32 * CHAR_W;
-        if b.dirty {
-            font::draw_str(fb, sw, after_name + CHAR_W / 2, text_y, ".", AMBER, BG);
-            after_name += CHAR_W;
-        }
-        let close_x = tx + TAB_W - 16;
-        let punct_color = FAINT;
-        let x_color = if is_active { CYAN } else { FAINT };
-        font::draw_str(fb, sw, close_x, text_y, ":", punct_color, BG);
-        font::draw_str(fb, sw, close_x + CHAR_W, text_y, "x", x_color, BG);
-        let _ = after_name;
-        if is_active {
-            gpu::fill_rect(tx, y + TAB_BAR_H - 2, TAB_W, 2, CYAN);
-        }
-        tx += TAB_W;
-    }
-    let plus_x = x + w - NEW_TAB_W;
-    gpu::fill_rect(plus_x, y, 1, TAB_BAR_H, HAIR);
-    font::draw_str(fb, sw, plus_x + (NEW_TAB_W - CHAR_W) / 2,
-        y + (TAB_BAR_H - CHAR_H) / 2, "+", DIM_TXT, BG);
-}
-
-fn draw_gutter_and_code(x: u32, y: u32, w: u32, h: u32) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    gpu::fill_rect(x, y, GUTTER_W, h, GUTTER_BG);
-    gpu::fill_rect(x + GUTTER_W, y, 1, h, HAIR_HI);
-
-    let pad_top: u32 = 8;
-    let line_x = x + GUTTER_W + 16;
-    let visible_lines = ((h.saturating_sub(pad_top)) / CHAR_H) as usize;
-    unsafe { VISIBLE_LINES = visible_lines; }
-    let b = buf();
-    let scroll_top = b.scroll_top;
-    let last_line = (scroll_top + visible_lines).min(b.line_count);
-
-    let mut span_buf: [(Tok, &[u8]); 64] = [(Tok::Punct, &[]); 64];
-    let sel = render_selection();
-
-    for buf_line in scroll_top..last_line {
-        let row = buf_line - scroll_top;
-        let ly = y + pad_top + (row as u32) * CHAR_H;
-        let is_cur = buf_line == b.cur_line;
-
-        if is_cur {
-            gpu::fill_rect(x + GUTTER_W + 1, ly, w - GUTTER_W - 1, CHAR_H, CUR_LINE_BG);
-            gpu::fill_rect(x + GUTTER_W, ly, 1, CHAR_H, CYAN);
-        }
-
-        // Selection highlight (drawn under the text).
-        if let Some((s_line, s_col, e_line, e_col)) = sel {
-            if buf_line >= s_line && buf_line <= e_line {
-                let line_len = b.line_lens[buf_line] as usize;
-                let start_col = if buf_line == s_line { s_col } else { 0 };
-                let end_col   = if buf_line == e_line { e_col } else { line_len + 1 };
-                if end_col > start_col {
-                    let sel_x = line_x + (start_col as u32) * CHAR_W;
-                    let sel_w = ((end_col - start_col) as u32) * CHAR_W;
-                    gpu::fill_rect(sel_x, ly, sel_w, CHAR_H, W::CYAN_DIM);
+    let mut truncated = false;
+    unsafe {
+        let buf = &mut *core::ptr::addr_of_mut!(BUFFER);
+        buf.line_lens[0] = 0;
+        for &b in bytes {
+            if b == b'\n' {
+                buf.line_lens[row] = col as u16;
+                row += 1;
+                col = 0;
+                if row >= MAX_LINES {
+                    truncated = true;
+                    row = MAX_LINES - 1;
+                    break;
                 }
+                buf.line_lens[row] = 0;
+            } else if b == b'\r' {
+                // Strip CR (treat CRLF as LF).
+            } else if col < MAX_LINE_LEN {
+                buf.lines[row][col] = b;
+                col += 1;
+            } else {
+                // Line too long — silently clip the tail of this line.
             }
         }
+        buf.line_lens[row] = col as u16;
+        buf.line_count = row + 1;
+    }
+    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(TRUNCATED), truncated); }
+}
 
-        // Line number = 1-indexed buffer line.
-        let mut buf_n = [0u8; 8];
-        let n = format_dec(buf_line + 1, &mut buf_n);
-        let ln_str = unsafe { core::str::from_utf8_unchecked(&buf_n[..n]) };
-        let ln_w = n as u32 * CHAR_W;
-        let ln_x = x + GUTTER_W - 12 - ln_w;
-        let ln_color = if is_cur { INK } else { LINE_NUM };
-        font::draw_str(fb, sw, ln_x, ly, ln_str, ln_color,
-            if is_cur { CUR_LINE_BG } else { GUTTER_BG });
+fn save_to_batfs() {
+    let name_len = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(FILE_NAME_LEN)) };
+    if name_len == 0 { return; }
+    let name_bytes = unsafe { let arr = &*core::ptr::addr_of!(FILE_NAME); &arr[..name_len] };
+    let name = unsafe { core::str::from_utf8_unchecked(name_bytes) };
 
-        // Tokenize and paint the line.
-        let line_len = b.line_lens[buf_line] as usize;
-        if line_len > 0 {
-            let line = &b.lines[buf_line][..line_len];
-            let n_spans = tokenize_line(line, &mut span_buf);
-            let mut converted: [(Tok, &str); 64] = [(Tok::Punct, ""); 64];
-            for j in 0..n_spans {
-                let (t, slice) = span_buf[j];
-                converted[j] = (t, unsafe { core::str::from_utf8_unchecked(slice) });
+    // Serialize buffer into one contiguous byte stream (lines joined by \n).
+    let mut tmp = [0u8; MAX_LINES * MAX_LINE_LEN];
+    let mut n = 0;
+    unsafe {
+        let buf = &*core::ptr::addr_of!(BUFFER);
+        for r in 0..buf.line_count {
+            let line_len = buf.line_lens[r] as usize;
+            if n + line_len >= tmp.len() { break; }
+            tmp[n..n + line_len].copy_from_slice(&buf.lines[r][..line_len]);
+            n += line_len;
+            if r + 1 < buf.line_count {
+                tmp[n] = b'\n';
+                n += 1;
             }
-            draw_code_line(line_x, ly, &converted[..n_spans]);
         }
+    }
 
-        if is_cur {
-            // underscore cursor (7px wide × 2px tall at
-            // the bottom of the cell). The previous solid block
-            // overpainted the current char and was invisible after a
-            // space. Underscore keeps the char readable and stays
-            // visible at empty cells / end-of-line.
-            let cur_x = line_x + (b.cur_col as u32) * CHAR_W;
-            gpu::fill_rect(cur_x, ly + CHAR_H - 2, 7, 2, CYAN);
+    // Overwrite via delete + create (matches shell.rs's `write` command).
+    let _ = batfs::ns_delete(name);
+    match batfs::ns_create(name, &tmp[..n]) {
+        Ok(()) => {
+            unsafe {
+                core::ptr::write_volatile(core::ptr::addr_of_mut!(DIRTY), false);
+                core::ptr::write_volatile(core::ptr::addr_of_mut!(SAVE_ERR_LEN), 0);
+            }
         }
+        Err(e) => store_save_err(e.as_bytes()),
     }
 }
 
-fn draw_status_strip(x: u32, y: u32, w: u32) {
-    let fb = gpu::framebuffer();
-    let sw = gpu::width();
-    let text_y = y + (STATUS_H - CHAR_H) / 2;
-    let b = buf();
-
-    let mut cx = x + 16;
-    font::draw_str(fb, sw, cx, text_y, "LANG", FAINT, BG); cx += 5 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "RUST", INK, BG);   cx += 5 * CHAR_W;
-    draw_seg_separator(cx, y, STATUS_H); cx += 12;
-    font::draw_str(fb, sw, cx, text_y, "ENC", FAINT, BG);  cx += 4 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "UTF-8", INK, BG);  cx += 6 * CHAR_W;
-    draw_seg_separator(cx, y, STATUS_H); cx += 12;
-
-    // POS (live cursor).
-    font::draw_str(fb, sw, cx, text_y, "POS", FAINT, BG);  cx += 4 * CHAR_W;
-    let mut pos_buf = [0u8; 24];
-    let mut p = 0usize;
-    pos_buf[p] = b'L'; p += 1;
-    pos_buf[p] = b'n'; p += 1;
-    pos_buf[p] = b' '; p += 1;
-    p += format_dec(b.cur_line + 1, &mut pos_buf[p..]);
-    pos_buf[p] = b','; p += 1;
-    pos_buf[p] = b' '; p += 1;
-    pos_buf[p] = b'C'; p += 1;
-    pos_buf[p] = b'o'; p += 1;
-    pos_buf[p] = b'l'; p += 1;
-    pos_buf[p] = b' '; p += 1;
-    p += format_dec(b.cur_col + 1, &mut pos_buf[p..]);
-    let pos_s = unsafe { core::str::from_utf8_unchecked(&pos_buf[..p]) };
-    font::draw_str(fb, sw, cx, text_y, pos_s, INK, BG);
-    cx += (p as u32 + 1) * CHAR_W;
-    draw_seg_separator(cx, y, STATUS_H); cx += 12;
-
-    font::draw_str(fb, sw, cx, text_y, "LF", FAINT, BG); cx += 3 * CHAR_W;
-    font::draw_str(fb, sw, cx, text_y, "UNIX", INK, BG);
-
-    // Right: SAVED flash (briefly) > MODIFIED > READY.
-    let flash = unsafe {
-        let t = SAVE_FLASH_TICKS;
-        if t > 0 { SAVE_FLASH_TICKS = t - 1; true } else { false }
-    };
-    let (badge, badge_color) = if flash {
-        if unsafe { SAVE_FLASH_OK } { ("SAVED", W::GREEN) } else { ("SAVE FAILED", W::RED) }
-    } else if b.dirty {
-        ("MODIFIED", AMBER)
-    } else {
-        ("READY", CYAN)
-    };
-    let badge_w = badge.len() as u32 * CHAR_W;
-    if w > badge_w + 16 {
-        font::draw_str(fb, sw, x + w - 16 - badge_w, text_y, badge, badge_color, BG);
+fn store_load_err(bytes: &[u8]) {
+    let n = bytes.len().min(64);
+    unsafe {
+        let dst = core::ptr::addr_of_mut!(LOAD_ERR) as *mut u8;
+        for i in 0..n { core::ptr::write(dst.add(i), bytes[i]); }
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(LOAD_ERR_LEN), n);
     }
-
-    let _ = (W::draw_kv_row, MID);
 }
 
-fn format_dec(mut n: usize, out: &mut [u8]) -> usize {
-    if n == 0 { out[0] = b'0'; return 1; }
-    let mut tmp = [0u8; 20];
-    let mut i = 0;
-    while n > 0 && i < tmp.len() { tmp[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
-    for j in 0..i { out[j] = tmp[i - 1 - j]; }
-    i
+fn store_save_err(bytes: &[u8]) {
+    let n = bytes.len().min(64);
+    unsafe {
+        let dst = core::ptr::addr_of_mut!(SAVE_ERR) as *mut u8;
+        for i in 0..n { core::ptr::write(dst.add(i), bytes[i]); }
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SAVE_ERR_LEN), n);
+    }
 }
 
-// Wave 2 shim — refresh in Wave 3+
-/// Adapts the existing render path to the WM's `fn(WindowRect)` contract.
-pub fn paint(rect: crate::ui::wm::WindowRect) {
-    let _ = rect;
-    render();
+fn current_file_name_owned() -> Option<alloc::string::String> {
+    let n = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(FILE_NAME_LEN)) };
+    if n == 0 { return None; }
+    let bytes = unsafe { let arr = &*core::ptr::addr_of!(FILE_NAME); &arr[..n] };
+    let s = unsafe { core::str::from_utf8_unchecked(bytes) };
+    Some(alloc::string::String::from(s))
 }
+
+// ── Cross-app switch ─────────────────────────────────────────────
+
+fn switch_to_files() {
+    let existing = wm::iter().find(|w| w.app == AppId::Files).map(|w| w.id);
+    match existing {
+        Some(id) => wm::focus(id),
+        None     => { wm::open(AppId::Files, None); }
+    }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────
+
+fn push_bytes(buf: &mut [u8], n: &mut usize, s: &[u8]) {
+    for &b in s {
+        if *n < buf.len() { buf[*n] = b; *n += 1; }
+    }
+}
+
+fn write_dec(buf: &mut [u8], n: &mut usize, mut v: u32) {
+    if v == 0 { if *n < buf.len() { buf[*n] = b'0'; *n += 1; } return; }
+    let mut tmp = [0u8; 10];
+    let mut t = 0;
+    while v > 0 { tmp[t] = b'0' + (v % 10) as u8; v /= 10; t += 1; }
+    for j in 0..t {
+        if *n < buf.len() { buf[*n] = tmp[t - j - 1]; *n += 1; }
+    }
+}
+
+extern crate alloc;
