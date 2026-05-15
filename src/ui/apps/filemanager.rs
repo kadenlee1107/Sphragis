@@ -213,8 +213,8 @@ fn paint_delete_modal(idx: usize) {
 
 fn actions_for_file(_encrypted: bool) -> [Action<'static>; 2] {
     [
-        Action { hotkey: 'D', label: "Delete",     enabled: true  },
-        Action { hotkey: 'E', label: "Edit (W5)",  enabled: false },
+        Action { hotkey: 'D', label: "Delete", enabled: true },
+        Action { hotkey: 'E', label: "Edit",   enabled: true },
     ]
 }
 
@@ -266,9 +266,40 @@ fn handle_key_viewing(c: u8) -> AppEvent {
             }
             AppEvent::Repaint
         }
-        b'e' | b'E' => AppEvent::Consumed,
+        b'e' | b'E' => open_selected_in_editor(),
+        0x0D        => open_selected_in_editor(),
         _ => AppEvent::Unhandled,
     }
+}
+
+fn open_selected_in_editor() -> AppEvent {
+    let (count, _) = batfs::ns_stats();
+    if count == 0 { return AppEvent::Consumed; }
+
+    let mut name_buf = [0u8; NAME_MAX];
+    let mut name_len = 0;
+    let sel = selected_file();
+    let mut row_index: usize = 0;
+    batfs::ns_list(|n, _, _| {
+        if row_index == sel {
+            let l = n.len().min(NAME_MAX);
+            name_buf[..l].copy_from_slice(&n.as_bytes()[..l]);
+            name_len = l;
+        }
+        row_index += 1;
+    });
+    if name_len == 0 { return AppEvent::Consumed; }
+    let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+
+    crate::ui::apps::editor::set_pending_file(name);
+    let existing = crate::ui::wm::iter()
+        .find(|w| w.app == crate::ui::apps_registry::AppId::Editor)
+        .map(|w| w.id);
+    match existing {
+        Some(id) => crate::ui::wm::focus(id),
+        None     => { crate::ui::wm::open(crate::ui::apps_registry::AppId::Editor, None); }
+    }
+    AppEvent::Repaint
 }
 
 fn handle_key_delete_modal(c: u8, idx: usize) -> AppEvent {
