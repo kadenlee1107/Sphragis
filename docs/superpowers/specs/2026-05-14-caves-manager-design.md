@@ -89,7 +89,7 @@ Four actions:
 | Hotkey | Label | Kernel call |
 |--------|-------|-------------|
 | `E` | `[E]nter` | `cave::enter(name)` |
-| `S` | `[S]top` | `cave::stop(name)` |
+| `S` | `[S]top` | `cave::stop(name)` — hard kill; stop-with-grace is deferred. After stop, the UI stays in View mode on the same cave (which now shows `○` Stopped). |
 | `C` | `[C]onfigure` | Switches detail panel to Configure mode |
 | `D` | `[D]estroy` | Opens destroy-confirm modal |
 
@@ -114,11 +114,11 @@ Triggered by `^N` (any state), `n` (sidebar focused), or click on `+ new cave`.
 
 | Field | Type | Default | Edit |
 |-------|------|---------|------|
-| `NAME` | text, 1–16 ASCII chars | empty (focused on entry) | type to edit, Backspace, char-only (no spaces or special chars except `-` and `_`) |
+| `NAME` | text, 1–16 ASCII chars | empty (focused on entry) | type to edit, Backspace. Allowed chars: `a-z 0-9 - _`. No uppercase, no spaces, no other punctuation. Collision check is case-sensitive (but since uppercase is rejected, this is effectively case-insensitive). |
 | `NET MODE` | enum | `isolated` | Space or → cycles `isolated → routed → custom`; Shift+Space or ← cycles backward. **Note: kernel API TBD — see [§Kernel API gaps](#kernel-api-gaps).** |
 | `MLS SENS` | enum (`Sensitivity`) | `Confidential` | Same cycle. Values: `Unclassified · Confidential · Secret · TopSecret`. |
 | `MLS INTEG` | enum (`Integrity`) | `Sandboxed` | Same cycle. Values: `Untrusted · Sandboxed · SystemTrusted · HighIntegrity`. |
-| `MOUNT` | text, single line | `/ /home/<name>` (auto-derived from NAME field) | type to edit. If user hasn't edited and NAME changes, MOUNT auto-updates. Once user has edited MOUNT manually, NAME changes leave MOUNT alone. |
+| `MOUNT` | text, single line | `/ /home/<name>` (auto-derived from NAME field) | type to edit. If user hasn't edited and NAME changes, MOUNT auto-updates. Once user has edited MOUNT manually, NAME changes leave MOUNT alone. **Implementation note:** this auto-update is CAVES-specific UI state, not a feature of the shared `InlineEditForm` widget. The widget treats each field as independent text. The "dirty" tracking lives in `caves_mgr.rs`. |
 | `TAINT` | hex u32 | `0x00000000` | type hex digits, 8 chars max, `0x` prefix is implicit |
 
 ### Field navigation
@@ -382,7 +382,7 @@ Sketch only. The writing-plans skill produces the bite-sized plan next.
    - `pub fn paint(rect: WindowRect)` — dispatches on APP_STATE.
    - `pub fn handle_key(c: u8) -> Event` — Wave 3 will surface this as a new entry point the desktop event loop can call when the focused window is CAVES.
    - `pub fn handle_click(mx: i32, my: i32) -> Event` — same for pointer.
-3. **Wire app keyboard + pointer dispatch.** Today's `src/ui/wm.rs` calls `desc.paint(body_rect)`. Wave 3 needs the WM to also forward keyboard and pointer events to the focused window's app. Add `paint_with_input(rect, input)` or expose new dispatch hooks; design depth depends on what the WM already supports for input forwarding.
+3. **Wire app keyboard + pointer dispatch.** Today's `src/ui/wm.rs` only paints; the desktop event loop in `src/ui/desktop.rs` routes input to its own state machine, not to the focused window's app. Wave 3 must extend the WM/desktop boundary with two new entry points: when a key arrives and a window is focused, the app gets first dibs; when a pointer click lands inside a window's body (not chrome), the app gets the click in body-local coordinates. The plan's first task should be defining the exact dispatch contract — an `AppEvents` extension to `AppDescriptor` is the likely shape, but verify by reading the Wave-2 `apps_registry::AppDescriptor` first.
 4. **Kernel-API verification.** Resolve the 5 gaps in [§Kernel API gaps](#kernel-api-gaps). Stubs go in the relevant `caves/` / `net/` / `taint/` modules with `// Wave 3 stub` markers if a real setter doesn't exist yet.
 5. **QEMU walk-through.** Manual: open CAVES, see at least one cave (or empty state), press N, type a name, Enter, watch a new cave appear in the sidebar. Cycle through Configure / Destroy. No automated test (`#![no_std] #![no_main]` constraint; see Waves 1–2 plans).
 
