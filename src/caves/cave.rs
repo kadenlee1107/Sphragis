@@ -313,10 +313,14 @@ impl NetMode {
 ///   * `Read`  requires `subject <= object` (no read-down).
 ///   * `Write` requires `subject >= object` (no write-up).
 pub fn can_flow_integrity(subject_level: Integrity, object_level: Integrity, op: MlsOp) -> bool {
-    match op {
+    let ok = match op {
         MlsOp::Read  => subject_level <= object_level,
         MlsOp::Write => subject_level >= object_level,
+    };
+    if !ok {
+        crate::security::integrity_counts::record_biba_deny();
     }
+    ok
 }
 
 /// Decide whether a flow at level `subject_level` may operate on
@@ -327,10 +331,14 @@ pub fn can_flow_integrity(subject_level: Integrity, object_level: Integrity, op:
 /// `Write` requires `subject_level <= object_level` (the subject
 /// is at most as classified as the destination — no write-down).
 pub fn can_flow(subject_level: Sensitivity, object_level: Sensitivity, op: MlsOp) -> bool {
-    match op {
+    let ok = match op {
         MlsOp::Read  => subject_level >= object_level,
         MlsOp::Write => subject_level <= object_level,
+    };
+    if !ok {
+        crate::security::integrity_counts::record_blp_deny();
     }
+    ok
 }
 
 /// The active cave's MLS label. Returns `Unclassified` when no cave
@@ -537,6 +545,7 @@ pub fn can_transition(from_cave_id: usize, to_cave_id: u16) -> bool {
             }
         }
     }
+    crate::security::integrity_counts::record_te_deny();
     false
 }
 
@@ -644,6 +653,7 @@ pub fn can_access_object(cave_id: u16, obj_type: u8, op: ObjOp) -> bool {
                 && OBJ_RULES[i].obj_type == obj_type
                 && (OBJ_RULES[i].deny_mask & bit) != 0
             {
+                crate::security::integrity_counts::record_te_deny();
                 return false;
             }
         }
