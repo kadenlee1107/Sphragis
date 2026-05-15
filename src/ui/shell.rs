@@ -834,8 +834,8 @@ fn cmd_otp_consume(hex: &str) {
     match crate::security::otp::consume(&tok) {
         Some("duress") => {
             console::puts("  DURESS TOKEN ACCEPTED — wiping now\n");
-            crate::security::wipe::execute(
-                crate::security::wipe::WipeReason::Duress, false);
+            crate::security::wipe::execute_and_halt(
+                crate::security::wipe::WipeReason::Duress);
         }
         Some("deadman") => {
             console::puts("  DEADMAN TOKEN ACCEPTED — refreshing timer\n");

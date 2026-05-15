@@ -90,6 +90,23 @@ pub fn execute(reason: WipeReason, silent: bool) {
     }
 }
 
+/// Wipe + halt the kernel. Used by visible/panic paths where there's
+/// no useful state to return to (operator triggered Wipe NOW, duress
+/// token consumed by the shell, panic hotkey fired). The kernel
+/// enters an infinite spin after destruction completes; the next
+/// boot starts fresh.
+///
+/// The silent fake-boot path in `boot_screen.rs` still uses
+/// `execute(reason, true)` directly — it needs control back to
+/// paint the decoy progress bar.
+pub fn execute_and_halt(reason: WipeReason) -> ! {
+    execute(reason, false);
+    platform::serial_puts("  [wipe] halted; reset to recover\n");
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
 /// Destroy all encryption keys in memory.
 fn destroy_keys() {
     // Zero the master key by re-initializing with zeros

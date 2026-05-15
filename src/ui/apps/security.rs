@@ -384,10 +384,8 @@ fn handle_key_wipe_modal(c: u8) -> AppEvent {
     let modal = ConfirmModal { title: "", body_lines: &[], commit_key: 'W' };
     match confirm_modal_key(&modal, c) {
         ModalAction::Commit => {
-            wipe::execute(wipe::WipeReason::Manual, false);
-            // Unreachable on hardware; only reached under QEMU stub.
-            unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing; }
-            AppEvent::Repaint
+            // Diverges — kernel halts after wipe completes.
+            wipe::execute_and_halt(wipe::WipeReason::Manual);
         }
         ModalAction::Cancel => {
             unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing; }
