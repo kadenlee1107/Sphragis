@@ -932,6 +932,10 @@ impl Cave {
         self.cave_type == CaveType::Ephemeral
     }
 
+    pub fn is_running(&self) -> bool {
+        matches!(self.state, CaveState::Running)
+    }
+
     pub fn has_cap(&self, cap_name: &str) -> bool {
         for i in 0..self.cap_count {
             if !self.caps[i].active { continue; }
