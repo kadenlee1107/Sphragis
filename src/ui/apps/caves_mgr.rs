@@ -294,13 +294,10 @@ fn paint_detail_view(rect: WindowRect) {
 
     let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
 
-    // Resolve cave_id for taint lookup (by name, after capturing from list).
-    let cave_id = cave::find_id(name).unwrap_or(usize::MAX);
-    let taint_value = if cave_id != usize::MAX {
-        cave::taint_of(cave_id as u16)
-    } else {
-        0
-    };
+    // Resolve cave_id for taint + PID lookup (by name, after capturing from list).
+    // `None` => render the sentinel ("—") in PID and skip taint_of (defaults to 0).
+    let cave_id_opt: Option<u32> = cave::find_id(name).map(|id| id as u32);
+    let taint_value = cave_id_opt.map(|id| cave::taint_of(id as u16)).unwrap_or(0);
 
     // Name header.
     font::draw_str(fb, screen_w, rect.x + 14, rect.y + 8, name, p::INK, p::BG);
@@ -311,8 +308,13 @@ fn paint_detail_view(rect: WindowRect) {
 
     // Build status fields.
     let mut pid_buf = [0u8; 16];
-    let pid_digits = u32_decimal(cave_id as u32, &mut pid_buf, 0);
-    let pid_str = unsafe { core::str::from_utf8_unchecked(&pid_buf[..pid_digits]) };
+    let pid_str = match cave_id_opt {
+        Some(id) => {
+            let digits = u32_decimal(id, &mut pid_buf, 0);
+            unsafe { core::str::from_utf8_unchecked(&pid_buf[..digits]) }
+        }
+        None => "—",
+    };
 
     let mut mls_buf = [0u8; 48];
     let mls_str = format_mls(&mut mls_buf, sensitivity, integrity);
@@ -345,12 +347,7 @@ fn paint_detail_view(rect: WindowRect) {
     paint_status_field_list(fields_rect, &fields);
 
     // Action strip.
-    let actions = [
-        Action { hotkey: 'E', label: "Enter",     enabled: true },
-        Action { hotkey: 'S', label: "Stop",      enabled: is_running },
-        Action { hotkey: 'C', label: "Configure", enabled: true },
-        Action { hotkey: 'D', label: "Destroy",   enabled: true },
-    ];
+    let actions = actions_for_cave(is_running);
     let strip_rect = WindowRect {
         x: rect.x + 14,
         y: rect.y + rect.h - 28,
@@ -393,7 +390,9 @@ fn handle_click_viewing(mx: i32, my: i32, body: WindowRect) -> AppEvent {
 
     // Detail click — action strip hit-test.
     if mx >= detail.x as i32 && mx < (detail.x + detail.w) as i32 {
-        // Determine is_running for the currently-selected cave.
+        // Determine is_running for the currently-selected cave — same
+        // walk paint_detail_view uses, so the painted strip and the
+        // hit-test strip stay in sync.
         let sel = selected_cave();
         let mut is_running = false;
         let mut row_index: usize = 0;
@@ -408,12 +407,7 @@ fn handle_click_viewing(mx: i32, my: i32, body: WindowRect) -> AppEvent {
             w: detail.w - 28,
             h: 24,
         };
-        let actions = [
-            Action { hotkey: 'E', label: "Enter",     enabled: true },
-            Action { hotkey: 'S', label: "Stop",      enabled: is_running },
-            Action { hotkey: 'C', label: "Configure", enabled: true },
-            Action { hotkey: 'D', label: "Destroy",   enabled: true },
-        ];
+        let actions = actions_for_cave(is_running);
         if let Some(key) = action_strip_hit_test(strip_rect, mx, my, &actions) {
             return handle_key(key as u8);
         }
@@ -529,4 +523,18 @@ fn format_hex32(buf: &mut [u8; 12], value: u32) -> &str {
         buf[2 + j] = if nibble < 10 { b'0' + nibble as u8 } else { b'A' + (nibble - 10) as u8 };
     }
     unsafe { core::str::from_utf8_unchecked(&buf[..10]) }
+}
+
+// ── Action-strip table ────────────────────────────────────────────
+
+/// Build the action-strip entries for a cave in Viewing mode. Used
+/// by both `paint_detail_view` and `handle_click_viewing` so the
+/// painted strip and the hit-test strip stay in sync.
+fn actions_for_cave(is_running: bool) -> [Action<'static>; 4] {
+    [
+        Action { hotkey: 'E', label: "Enter",     enabled: true },
+        Action { hotkey: 'S', label: "Stop",      enabled: is_running },
+        Action { hotkey: 'C', label: "Configure", enabled: true },
+        Action { hotkey: 'D', label: "Destroy",   enabled: true },
+    ]
 }
