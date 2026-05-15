@@ -61,7 +61,7 @@ pub static APPS: [AppDescriptor; 8] = [
     AppDescriptor { id: AppId::Files,    label: "FILES",    title: "FILES",    paint: paint_files,    handle_key: crate::ui::apps::filemanager::handle_key, handle_click: crate::ui::apps::filemanager::handle_click },
     AppDescriptor { id: AppId::Net,      label: "NET",      title: "NET",      paint: paint_net,      handle_key: crate::ui::apps::netmon::handle_key, handle_click: crate::ui::apps::netmon::handle_click },
     AppDescriptor { id: AppId::Security, label: "SECURITY", title: "SECURITY", paint: paint_security, handle_key: crate::ui::apps::security::handle_key, handle_click: crate::ui::apps::security::handle_click },
-    AppDescriptor { id: AppId::Shell,    label: "SHELL",    title: "SHELL",    paint: paint_shell,    handle_key: default_handle_key, handle_click: default_handle_click },
+    AppDescriptor { id: AppId::Shell,    label: "SHELL",    title: "SHELL",    paint: paint_shell,    handle_key: crate::ui::shell::handle_key, handle_click: crate::ui::shell::handle_click },
     AppDescriptor { id: AppId::Editor,   label: "EDITOR",   title: "EDITOR",   paint: paint_editor,   handle_key: crate::ui::apps::editor::handle_key, handle_click: crate::ui::apps::editor::handle_click },
     AppDescriptor { id: AppId::Comms,    label: "COMMS",    title: "COMMS",    paint: paint_comms,    handle_key: default_handle_key, handle_click: default_handle_click },
     AppDescriptor { id: AppId::Agent,    label: "AGENT",    title: "AGENT",    paint: paint_agent,    handle_key: default_handle_key, handle_click: default_handle_click },

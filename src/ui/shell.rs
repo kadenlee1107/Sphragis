@@ -11179,19 +11179,324 @@ fn hexnib(b: u8) -> u8 {
     }
 }
 
-/// Wave 2 stub — placeholder paint for the SHELL slot. The 11k-line
-/// console is integrated properly in Wave 5.
-// Wave 2 shim — refresh in Wave 3+
-pub fn paint(rect: crate::ui::wm::WindowRect) {
-    use crate::ui::font;
-    let msg = "SHELL - integrating in Wave 5";
-    let tx = rect.x + 12;
-    let ty = rect.y + 12;
-    font::draw_str(
-        crate::ui::gpu::framebuffer(),
-        crate::ui::gpu::width(),
-        tx, ty, msg,
-        0xFFE5E7EB, 0xFF0D0D10,
-    );
+// ─── Wave 6 WM-facing handlers ───────────────────────────────────
+
+use crate::ui::apps_registry::AppEvent;
+use crate::ui::wm::WindowRect;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+#[allow(dead_code)]
+static mut SHELL_CMD_BUF: [u8; MAX_CMD_LEN] = [0u8; MAX_CMD_LEN];
+#[allow(dead_code)]
+static mut SHELL_CMD_LEN: usize = 0;
+#[allow(dead_code)]
+static mut SHELL_ESC: super::shell_history::EscState =
+    super::shell_history::EscState::Idle;
+static SHELL_INITED: AtomicBool = AtomicBool::new(false);
+
+/// WM-app paint entry. First call paints the welcome banner + prompt;
+/// subsequent calls just repaint the scrollback into the rect.
+pub fn paint(rect: WindowRect) {
+    use crate::ui::console;
+
+    if !SHELL_INITED.load(Ordering::Relaxed) {
+        console::init_in_window();
+        console::puts_hi("Sphragis Microkernel Shell v0.3\n");
+        console::puts("Type 'help' for commands. Zero dependencies. Zero trust.\n");
+        console::puts("\n");
+        console::prompt();
+        SHELL_INITED.store(true, Ordering::Relaxed);
+    }
+    console::redraw_in_rect(rect);
+    paint_cursor_block(rect);
+}
+
+/// Draw a 1-cell INK block at the console cursor position.
+fn paint_cursor_block(rect: WindowRect) {
+    use crate::ui::{console, gpu};
+
+    let (cw, ch) = console::cell_size();
+    let (cell_x, cell_y) = console::cursor_pixel_pos_in_rect(rect);
+
+    if cell_x + cw > rect.x + rect.w || cell_y + ch > rect.y + rect.h {
+        return;
+    }
+    gpu::fill_rect(cell_x, cell_y, cw, ch, 0xFFE5E7EB); // INK
+}
+
+/// WM-app key entry. Drives the same per-byte dispatch as the
+/// dead-code `run()` loop body, with input state held in module
+/// statics instead of stack locals.
+#[allow(dead_code)]
+pub fn handle_key(c: u8) -> AppEvent {
+    use crate::ui::console;
+    use super::shell_history::{ArrowKey, FeedResult};
+
+    // If a key arrives before paint() ran, repaint will init the
+    // console on the next tick.
+    if !SHELL_INITED.load(Ordering::Relaxed) {
+        return AppEvent::Repaint;
+    }
+
+    // Run through the ANSI ESC parser.
+    let raw = c;
+    let parsed = unsafe { (&mut *core::ptr::addr_of_mut!(SHELL_ESC)).feed(raw) };
+    let c = match parsed {
+        FeedResult::Consumed => return AppEvent::Repaint,
+        FeedResult::Arrow(ArrowKey::Up) => {
+            handle_history(super::shell_history::prev());
+            return AppEvent::Repaint;
+        }
+        FeedResult::Arrow(ArrowKey::Down) => {
+            handle_history(super::shell_history::next());
+            return AppEvent::Repaint;
+        }
+        FeedResult::Arrow(_) => return AppEvent::Repaint, // L/R ignored
+        FeedResult::Pass(b) => b,
+    };
+
+    match c {
+        // Kernel-keyboard arrow codes. The ESC parser above handles
+        // UART-style sequences; these handle direct kernel codes.
+        0x90 => {
+            // Up
+            handle_history(super::shell_history::prev());
+            AppEvent::Repaint
+        }
+        0x91 => {
+            // Down
+            handle_history(super::shell_history::next());
+            AppEvent::Repaint
+        }
+        0x92 | 0x93 => AppEvent::Repaint, // L/R ignored
+
+        b'\r' | b'\n' => {
+            console::putc(b'\n');
+            let cmd_len =
+                unsafe { core::ptr::read_volatile(core::ptr::addr_of!(SHELL_CMD_LEN)) };
+            if cmd_len > 0 {
+                let cmd = unsafe {
+                    let buf = &*core::ptr::addr_of!(SHELL_CMD_BUF);
+                    core::str::from_utf8_unchecked(&buf[..cmd_len])
+                };
+                execute(cmd);
+                let bytes = unsafe {
+                    let buf = &*core::ptr::addr_of!(SHELL_CMD_BUF);
+                    &buf[..cmd_len]
+                };
+                super::shell_history::record(bytes);
+                unsafe {
+                    core::ptr::write_volatile(
+                        core::ptr::addr_of_mut!(SHELL_CMD_LEN),
+                        0,
+                    );
+                }
+            }
+            console::prompt();
+            AppEvent::Repaint
+        }
+
+        0x08 | 0x7F => {
+            // Backspace
+            let cmd_len =
+                unsafe { core::ptr::read_volatile(core::ptr::addr_of!(SHELL_CMD_LEN)) };
+            if cmd_len > 0 {
+                unsafe {
+                    core::ptr::write_volatile(
+                        core::ptr::addr_of_mut!(SHELL_CMD_LEN),
+                        cmd_len - 1,
+                    );
+                }
+                console::putc(0x08);
+                super::shell_history::reset_cursor();
+            }
+            AppEvent::Repaint
+        }
+
+        0x03 => {
+            // Ctrl+C
+            console::puts("^C\n");
+            unsafe {
+                core::ptr::write_volatile(core::ptr::addr_of_mut!(SHELL_CMD_LEN), 0);
+            }
+            super::shell_history::reset_cursor();
+            console::prompt();
+            AppEvent::Repaint
+        }
+
+        0x1B => {
+            // Esc — same as Ctrl+C.
+            console::puts("^C\n");
+            unsafe {
+                core::ptr::write_volatile(core::ptr::addr_of_mut!(SHELL_CMD_LEN), 0);
+            }
+            super::shell_history::reset_cursor();
+            console::prompt();
+            AppEvent::Repaint
+        }
+
+        0x09 => {
+            // Tab — autocomplete.
+            handle_tab();
+            AppEvent::Repaint
+        }
+
+        0x20..=0x7E => {
+            // Printable ASCII.
+            let cmd_len =
+                unsafe { core::ptr::read_volatile(core::ptr::addr_of!(SHELL_CMD_LEN)) };
+            if cmd_len < MAX_CMD_LEN - 1 {
+                unsafe {
+                    let buf = &mut *core::ptr::addr_of_mut!(SHELL_CMD_BUF);
+                    buf[cmd_len] = c;
+                    core::ptr::write_volatile(
+                        core::ptr::addr_of_mut!(SHELL_CMD_LEN),
+                        cmd_len + 1,
+                    );
+                }
+                console::putc(c);
+                super::shell_history::reset_cursor();
+            }
+            AppEvent::Repaint
+        }
+
+        _ => AppEvent::Unhandled,
+    }
+}
+
+/// Wave 6 click handler — no click-driven behavior. Returns Consumed
+/// so the desktop doesn't reinterpret the click as a focus-other
+/// gesture.
+#[allow(dead_code)]
+pub fn handle_click(_mx: i32, _my: i32, _body: WindowRect) -> AppEvent {
+    AppEvent::Consumed
+}
+
+/// Replace the current input line with `line`. `None` clears to empty.
+/// Used by Up/Down history navigation.
+#[allow(dead_code)]
+fn handle_history(line: Option<&[u8]>) {
+    use crate::ui::console;
+    let old_len =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!(SHELL_CMD_LEN)) };
+    // Erase old chars on screen.
+    for _ in 0..old_len {
+        console::putc(0x08);
+    }
+    match line {
+        Some(bytes) => {
+            let n = bytes.len().min(MAX_CMD_LEN);
+            unsafe {
+                let dst = core::ptr::addr_of_mut!(SHELL_CMD_BUF) as *mut u8;
+                for i in 0..n {
+                    core::ptr::write(dst.add(i), bytes[i]);
+                }
+                core::ptr::write_volatile(core::ptr::addr_of_mut!(SHELL_CMD_LEN), n);
+            }
+            for &b in &bytes[..n] {
+                console::putc(b);
+            }
+        }
+        None => {
+            unsafe {
+                core::ptr::write_volatile(core::ptr::addr_of_mut!(SHELL_CMD_LEN), 0);
+            }
+        }
+    }
+}
+
+/// Tab autocomplete — adapted from `run()` lines 132–204 with the
+/// UART mirror dropped.
+#[allow(dead_code)]
+fn handle_tab() {
+    use crate::ui::console;
+    let cmd_len =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!(SHELL_CMD_LEN)) };
+    let line = unsafe {
+        let buf = &*core::ptr::addr_of!(SHELL_CMD_BUF);
+        core::str::from_utf8_unchecked(&buf[..cmd_len])
+    };
+    let split = super::shell_completion::split_for_completion_parts(line);
+    if let Some(info) = split {
+        let kind = super::shell_completion::arg_kind_for_parts(
+            &info.parts[..info.parts_len],
+            info.arg_index,
+        );
+        let current = info.current;
+        if kind != super::shell_completion::ArgKind::None {
+            let r = super::shell_completion::complete_argument(kind, current);
+            let ext = r.extension_bytes();
+            let take = ext.len().min(MAX_CMD_LEN.saturating_sub(cmd_len + 1));
+            let mut new_len = cmd_len;
+            for &b in &ext[..take] {
+                unsafe {
+                    let buf = &mut *core::ptr::addr_of_mut!(SHELL_CMD_BUF);
+                    buf[new_len] = b;
+                }
+                new_len += 1;
+                console::putc(b);
+            }
+            unsafe {
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!(SHELL_CMD_LEN),
+                    new_len,
+                );
+            }
+            if r.match_count > 1 {
+                console::putc(b'\n');
+                for i in 0..r.names_len as usize {
+                    let name = r.name_at(i);
+                    for &b in name {
+                        console::putc(b);
+                    }
+                    console::puts("  ");
+                }
+                console::putc(b'\n');
+                console::prompt();
+                let cur_buf = unsafe {
+                    let buf = &*core::ptr::addr_of!(SHELL_CMD_BUF);
+                    &buf[..new_len]
+                };
+                for &b in cur_buf {
+                    console::putc(b);
+                }
+            }
+        }
+    } else {
+        let r = super::shell_completion::complete_command(line);
+        let ext = r.extension_bytes();
+        let take = ext.len().min(MAX_CMD_LEN.saturating_sub(cmd_len + 1));
+        let mut new_len = cmd_len;
+        for &b in &ext[..take] {
+            unsafe {
+                let buf = &mut *core::ptr::addr_of_mut!(SHELL_CMD_BUF);
+                buf[new_len] = b;
+            }
+            new_len += 1;
+            console::putc(b);
+        }
+        unsafe {
+            core::ptr::write_volatile(
+                core::ptr::addr_of_mut!(SHELL_CMD_LEN),
+                new_len,
+            );
+        }
+        if r.match_count > 1 {
+            console::putc(b'\n');
+            for &name in r.candidate_slice() {
+                console::puts(name);
+                console::puts("  ");
+            }
+            console::putc(b'\n');
+            console::prompt();
+            let cur_buf = unsafe {
+                let buf = &*core::ptr::addr_of!(SHELL_CMD_BUF);
+                &buf[..new_len]
+            };
+            for &b in cur_buf {
+                console::putc(b);
+            }
+        }
+    }
 }
 
