@@ -1061,3 +1061,57 @@ pub fn paint_status_field_list(rect: crate::ui::wm::WindowRect, fields: &[Status
         font::draw_str(fb, screen_w, value_col_x, row_y, f.value, p::INK, p::BG);
     }
 }
+
+// ── Wave 4 widgets ───────────────────────────────────────────────
+
+/// One row in a `paint_activity_log` rendering.
+#[derive(Copy, Clone)]
+pub struct ActivityEntry<'a> {
+    pub timestamp_str: &'a str,  // pre-formatted, e.g. "14:32:01"
+    pub kind:          &'a str,  // pre-formatted, e.g. "dns" / "tcp_open"
+    pub summary:       &'a str,
+}
+
+/// Paint a paginated activity log. Timestamp + kind render in MID
+/// with the kind padded to 12 chars; summary in INK. Top-right of
+/// rect shows `N..M of T`. Caller owns viewport_start + total.
+pub fn paint_activity_log(
+    rect: crate::ui::wm::WindowRect,
+    entries: &[ActivityEntry],
+    viewport_start: usize,
+    total: usize,
+) {
+    const ROW_H: u32 = 18;
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    // Header: "N..M of T" right-aligned.
+    let visible = entries.len();
+    let last_idx = viewport_start + visible;
+    let mut hdr_buf = [0u8; 48];
+    let mut pos = 0;
+    pos += write_dec(viewport_start + 1, &mut hdr_buf[pos..]);
+    hdr_buf[pos] = b'.'; pos += 1;
+    hdr_buf[pos] = b'.'; pos += 1;
+    pos += write_dec(last_idx, &mut hdr_buf[pos..]);
+    for &c in b" of " { hdr_buf[pos] = c; pos += 1; }
+    pos += write_dec(total, &mut hdr_buf[pos..]);
+    let hdr = unsafe { core::str::from_utf8_unchecked(&hdr_buf[..pos]) };
+    let hdr_w = (pos as u32) * CHAR_W;
+    let hdr_x = rect.x + rect.w.saturating_sub(hdr_w + 8);
+    font::draw_str(fb, screen_w, hdr_x, rect.y, hdr, p::MID, p::BG);
+
+    // Body rows from rect.y + 20.
+    let body_y = rect.y + 20;
+    let max_rows = ((rect.h.saturating_sub(20)) / ROW_H) as usize;
+    let rows_to_paint = entries.len().min(max_rows);
+
+    for (i, entry) in entries.iter().take(rows_to_paint).enumerate() {
+        let row_y = body_y + (i as u32) * ROW_H + 1;
+        font::draw_str(fb, screen_w, rect.x + 4, row_y, entry.timestamp_str, p::MID, p::BG);
+        let after_ts = rect.x + 4 + (entry.timestamp_str.len() as u32) * CHAR_W + 2 * CHAR_W;
+        font::draw_str(fb, screen_w, after_ts, row_y, entry.kind, p::MID, p::BG);
+        let after_kind = after_ts + 12 * CHAR_W;
+        font::draw_str(fb, screen_w, after_kind, row_y, entry.summary, p::INK, p::BG);
+    }
+}
