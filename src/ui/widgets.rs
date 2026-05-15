@@ -1174,3 +1174,109 @@ pub fn paint_big_metric(rect: crate::ui::wm::WindowRect, label: &str, value: &st
     let sub_y = value_y + value_h + 4;
     font::draw_str(fb, screen_w, rect.x, sub_y, sub, p::MID, p::PANEL);
 }
+
+/// Render a file's bytes as text (printable-ASCII with line numbers)
+/// or hex+ASCII dump. Mode chosen by sniffing first 256 bytes.
+pub fn paint_file_preview(rect: crate::ui::wm::WindowRect, bytes: &[u8], viewport_start: usize) {
+    if bytes.is_empty() {
+        let fb = gpu::framebuffer();
+        let screen_w = gpu::width();
+        font::draw_str(fb, screen_w, rect.x + 4, rect.y + 4, "(empty)", p::MID, p::BG);
+        return;
+    }
+    if is_text(bytes) {
+        paint_file_preview_text(rect, bytes, viewport_start);
+    } else {
+        paint_file_preview_hex(rect, bytes, viewport_start);
+    }
+}
+
+fn is_text(bytes: &[u8]) -> bool {
+    let sample = &bytes[..bytes.len().min(256)];
+    if sample.is_empty() { return true; }
+    let printable = sample.iter().filter(|&&b|
+        (0x20..=0x7E).contains(&b) || b == b'\n' || b == b'\t' || b == b'\r'
+    ).count();
+    (printable * 100) >= sample.len() * 90
+}
+
+fn paint_file_preview_text(rect: crate::ui::wm::WindowRect, bytes: &[u8], viewport_start: usize) {
+    const ROW_H: u32 = 16;
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    let max_rows = (rect.h / ROW_H) as usize;
+    let line_no_w = 5 * CHAR_W;
+    let text_x = rect.x + line_no_w + 4;
+
+    let mut line: usize = 0;
+    let mut line_start: usize = 0;
+    let mut rendered: usize = 0;
+
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' || i == bytes.len() - 1 {
+            let end = if b == b'\n' { i } else { i + 1 };
+            if line >= viewport_start {
+                if rendered >= max_rows { break; }
+                let row_y = rect.y + (rendered as u32) * ROW_H;
+                let mut ln_buf = [b' '; 5];
+                let mut ln = (line + 1) as u32;
+                let mut j = 5;
+                while ln > 0 && j > 0 { j -= 1; ln_buf[j] = b'0' + (ln % 10) as u8; ln /= 10; }
+                let ln_str = unsafe { core::str::from_utf8_unchecked(&ln_buf) };
+                font::draw_str(fb, screen_w, rect.x, row_y, ln_str, p::MID, p::BG);
+                let line_str = unsafe { core::str::from_utf8_unchecked(&bytes[line_start..end]) };
+                font::draw_str(fb, screen_w, text_x, row_y, line_str, p::INK, p::BG);
+                rendered += 1;
+            }
+            line += 1;
+            line_start = i + 1;
+        }
+    }
+}
+
+fn paint_file_preview_hex(rect: crate::ui::wm::WindowRect, bytes: &[u8], viewport_start: usize) {
+    const ROW_H: u32 = 14;
+    const BYTES_PER_ROW: usize = 16;
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    let max_rows = (rect.h / ROW_H) as usize;
+    let total_rows = bytes.len().div_ceil(BYTES_PER_ROW);
+    let end_row = (viewport_start + max_rows).min(total_rows);
+
+    for (rendered, row_idx) in (viewport_start..end_row).enumerate() {
+        let row_y = rect.y + (rendered as u32) * ROW_H;
+        let start = row_idx * BYTES_PER_ROW;
+        let end = (start + BYTES_PER_ROW).min(bytes.len());
+
+        // 4-digit hex offset.
+        let mut off_buf = [b'0'; 4];
+        let off = (start as u32) & 0xFFFF;
+        for k in 0..4 {
+            let nibble = ((off >> ((3 - k) * 4)) & 0xF) as u8;
+            off_buf[k] = if nibble < 10 { b'0' + nibble } else { b'a' + (nibble - 10) };
+        }
+        let off_str = unsafe { core::str::from_utf8_unchecked(&off_buf) };
+        font::draw_str(fb, screen_w, rect.x, row_y, off_str, p::MID, p::BG);
+
+        // 16 bytes of hex.
+        let mut hex_buf = [b' '; 48];
+        for (k, byte) in bytes[start..end].iter().enumerate() {
+            let hi = (byte >> 4) & 0xF;
+            let lo = byte & 0xF;
+            hex_buf[k * 3]     = if hi < 10 { b'0' + hi } else { b'a' + (hi - 10) };
+            hex_buf[k * 3 + 1] = if lo < 10 { b'0' + lo } else { b'a' + (lo - 10) };
+        }
+        let hex_str = unsafe { core::str::from_utf8_unchecked(&hex_buf) };
+        font::draw_str(fb, screen_w, rect.x + 5 * CHAR_W, row_y, hex_str, p::INK, p::BG);
+
+        // ASCII gutter.
+        let mut ascii_buf = [b'.'; 16];
+        for (k, byte) in bytes[start..end].iter().enumerate() {
+            ascii_buf[k] = if (0x20..=0x7E).contains(byte) { *byte } else { b'.' };
+        }
+        let ascii_str = unsafe { core::str::from_utf8_unchecked(&ascii_buf) };
+        font::draw_str(fb, screen_w, rect.x + 5 * CHAR_W + 49 * CHAR_W, row_y, ascii_str, p::INK, p::BG);
+    }
+}
