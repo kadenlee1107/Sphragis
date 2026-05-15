@@ -107,7 +107,7 @@ pub fn paint(body: WindowRect) {
             let mut row_index: usize = 0;
             crate::caves::cave::list(|c| {
                 if row_index == *idx {
-                    let n = c.name_len;
+                    let n = (c.name_len as usize).min(NAME_MAX);
                     name_len = n;
                     name_buf[..n].copy_from_slice(&c.name[..n]);
                 }
@@ -323,7 +323,7 @@ fn paint_detail_view(rect: WindowRect) {
 
     cave::list(|c| {
         if row_index == sel {
-            let n = c.name_len;
+            let n = (c.name_len as usize).min(NAME_MAX);
             name_len = n;
             name_buf[..n].copy_from_slice(&c.name[..n]);
             is_running = c.is_running();
@@ -575,7 +575,7 @@ fn handle_key_destroy_modal(c: u8, idx: usize) -> AppEvent {
             let mut row_index: usize = 0;
             crate::caves::cave::list(|c| {
                 if row_index == idx {
-                    let n = c.name_len;
+                    let n = (c.name_len as usize).min(NAME_MAX);
                     name_len = n;
                     name_buf[..n].copy_from_slice(&c.name[..n]);
                 }
@@ -583,6 +583,9 @@ fn handle_key_destroy_modal(c: u8, idx: usize) -> AppEvent {
             });
             if name_len > 0 {
                 let name = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+                // TODO(Wave 4): per spec, if destroy returns Err, stay in
+                // ConfirmDestroy mode and surface the error in the modal footer.
+                // Wave 3 silently swallows the Err and dismisses the modal.
                 let _ = crate::caves::cave::destroy(name);
             }
             // Reset selection to 0 and return to Viewing.
@@ -737,7 +740,7 @@ fn enter_configure_mode() {
     let mut row_index: usize = 0;
     crate::caves::cave::list(|c| {
         if row_index == sel {
-            let n = c.name_len;
+            let n = (c.name_len as usize).min(NAME_MAX);
             scratch.name_buf[..n].copy_from_slice(&c.name[..n]);
             scratch.name_len = n;
             scratch.net_mode_sel = c.net_mode as usize;
@@ -768,7 +771,7 @@ fn cave_name_at_selected(buf: &mut [u8; NAME_MAX]) -> usize {
     let mut row_index: usize = 0;
     crate::caves::cave::list(|c| {
         if row_index == sel {
-            let n = c.name_len;
+            let n = (c.name_len as usize).min(NAME_MAX);
             buf[..n].copy_from_slice(&c.name[..n]);
             name_len = n;
         }
