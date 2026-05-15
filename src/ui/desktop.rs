@@ -107,6 +107,51 @@ fn paint(state: State) {
 
     topbar::paint();
     topbar::paint_config_sheet();
+    paint_cursor();
+}
+
+/// Draws the kernel-managed cursor on top of everything else.
+///
+/// Cocoa + `virtio-mouse-device` delivers relative motion deltas (EV_REL);
+/// the host cursor is hidden under the grab. We accumulate deltas in
+/// `tablet::cursor_xy()` and paint a small arrow at that position every
+/// frame so the user can see where they're aiming. `virtio-tablet` on
+/// Cocoa silently drops EV_ABS, so the host-cursor + absolute path isn't
+/// viable here.
+fn paint_cursor() {
+    let (cx, cy) = crate::drivers::virtio::tablet::cursor_xy();
+    if cx < 0 || cy < 0 { return; }
+    let cx = cx as u32;
+    let cy = cy as u32;
+
+    // 10x10 arrow bitmap. 1 = INK, 2 = HAIRLINE outline, 0 = transparent.
+    // Outline keeps the arrow visible against light or dark panels.
+    const ARROW: [[u8; 10]; 10] = [
+        [1, 2, 0, 0, 0, 0, 0, 0, 0, 0],
+        [1, 1, 2, 0, 0, 0, 0, 0, 0, 0],
+        [1, 1, 1, 2, 0, 0, 0, 0, 0, 0],
+        [1, 1, 1, 1, 2, 0, 0, 0, 0, 0],
+        [1, 1, 1, 1, 1, 2, 0, 0, 0, 0],
+        [1, 1, 1, 1, 1, 1, 2, 0, 0, 0],
+        [1, 1, 1, 1, 1, 1, 1, 2, 0, 0],
+        [1, 1, 1, 1, 2, 2, 2, 0, 0, 0],
+        [1, 1, 2, 1, 1, 2, 0, 0, 0, 0],
+        [2, 2, 0, 2, 1, 1, 2, 0, 0, 0],
+    ];
+
+    const INK_HEX:      u32 = 0xFFE5E7EB;
+    const HAIRLINE_HEX: u32 = 0xFF2A2A30;
+
+    for dy in 0..10u32 {
+        for dx in 0..10u32 {
+            let color = match ARROW[dy as usize][dx as usize] {
+                1 => INK_HEX,
+                2 => HAIRLINE_HEX,
+                _ => continue,
+            };
+            gpu::fill_rect(cx + dx, cy + dy, 1, 1, color);
+        }
+    }
 }
 
 enum Event { None, Repaint, Lock }
