@@ -263,6 +263,23 @@ pub fn cursor() -> (u32, u32) {
     (CURSOR_X.load(Ordering::Relaxed), CURSOR_Y.load(Ordering::Relaxed))
 }
 
+/// Map a cell coordinate (col, row) to a pixel position in framebuffer
+/// coordinates. Used by external overlays (e.g. SHELL's cursor block)
+/// that need to draw on top of the console without leaking the private
+/// margin / status-bar constants.
+pub fn cell_pixel_pos(col: u32, row: u32) -> (u32, u32) {
+    let x = MARGIN_X + col * CHAR_W;
+    let y = MARGIN_Y + row * CHAR_H;
+    (x, y)
+}
+
+/// Cell width / height in pixels. Mirrors the font module's constants
+/// under the console module's name for external callers that don't
+/// want to depend on `font` directly.
+pub fn cell_size() -> (u32, u32) {
+    (CHAR_W, CHAR_H)
+}
+
 fn write_cell(cx: u32, cy: u32, ch: u8, fg: u32) {
     if (cx as usize) < SB_COLS && (cy as usize) < SB_ROWS {
         unsafe {
