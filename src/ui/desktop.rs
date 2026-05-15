@@ -168,28 +168,28 @@ fn handle_pointer(pe: crate::drivers::virtio::tablet::PointerEvent) -> Event {
 }
 
 fn handle_key(c: u8) -> Event {
-    // The kernel's keyboard layer translates Ctrl+letter into ASCII
-    // control codes (Ctrl+K = 0x0B, Ctrl+W = 0x17, Ctrl+L = 0x0C).
-    // ⌘ on Mac maps to Ctrl through QEMU's HID forwarding, so the
-    // brainstormed ⌘K / ⌘L / ⌘W work as documented on both QEMU
-    // and the M4 path.
-
-    // Panic hotkey takes priority over ALL other shortcuts: if
-    // check_panic_hotkey fires, wipe::execute() is called and does not
-    // return. The early return below is therefore unreachable in practice
-    // but is kept for clarity / if wipe ever becomes fallible.
+    // Panic hotkey first — 0x17 (Ctrl+W) wipes the device immediately
+    // via wipe::execute() and never returns. The early return below is
+    // unreachable in practice (wipe diverges) but kept for clarity if
+    // check_panic_hotkey ever gains a confirmation/decline path.
+    //
+    // 0x17 (Ctrl+W) is intercepted by check_panic_hotkey above —
+    // emergency wipe. Do NOT re-add a "close on Ctrl+W" shortcut.
+    // Wave-2 close-window UX lives in the chrome close glyph
+    // (Tasks 3/4); there is no keyboard shortcut for close because
+    // the panic key has prior claim on Ctrl+W.
     if crate::security::check_panic_hotkey(c) {
         return Event::None;
     }
 
+    // The kernel's keyboard layer translates Ctrl+letter into ASCII
+    // control codes (Ctrl+K = 0x0B, Ctrl+L = 0x0C). ⌘ on Mac maps to
+    // Ctrl through QEMU's HID forwarding, so the brainstormed ⌘K /
+    // ⌘L work as documented on both QEMU and the M4 path.
     match c {
         0x0B => { set_overlay_open(!overlay_open()); Event::Repaint } // Ctrl+K — toggle overlay
         0x09 => { wm::cycle_focus(); Event::Repaint }                  // Tab — cycle window focus
         0x0C => Event::Lock,                                           // Ctrl+L — lock screen
-        0x17 => {                                                      // Ctrl+W — close focused
-            if let Some(id) = wm::focused() { wm::close(id); }
-            Event::Repaint
-        }
         0x1B => {                                                      // Esc — dismiss overlay
             if overlay_open() {
                 set_overlay_open(false);
