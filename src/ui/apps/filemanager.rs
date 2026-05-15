@@ -152,10 +152,9 @@ fn paint_detail_view(rect: WindowRect) {
         w: rect.w - 28,
         h: rect.h.saturating_sub(80),
     };
-    let cached_for = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(PREVIEW_VALID_FOR)) };
-    if cached_for != sel {
-        load_preview(name, encrypted);
-    }
+    // Always reload — keeps the preview fresh after EDITOR saves the
+    // file. The 8 KB ns_read is cheap; correctness > cache hit.
+    load_preview(name, encrypted);
     let len = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(PREVIEW_LEN)) };
     let buf = unsafe { core::slice::from_raw_parts(core::ptr::addr_of!(PREVIEW_BUF) as *const u8, len) };
     if len == 0 && encrypted {

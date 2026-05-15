@@ -287,9 +287,9 @@ fn actions() -> [Action<'static>; 3] {
     let dirty = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(DIRTY)) };
     let has_file = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(FILE_NAME_LEN)) } > 0;
     [
-        Action { hotkey: 'S', label: "Save",            enabled: dirty && has_file },
-        Action { hotkey: 'R', label: "Revert",          enabled: dirty && has_file },
-        Action { hotkey: 'X', label: "Esc back to FILES", enabled: true },
+        Action { hotkey: 'S', label: "^S Save",            enabled: dirty && has_file },
+        Action { hotkey: 'R', label: "^R Revert",          enabled: dirty && has_file },
+        Action { hotkey: 'X', label: "Esc back to FILES",  enabled: true },
     ]
 }
 
@@ -340,14 +340,16 @@ fn handle_key_editing(c: u8) -> AppEvent {
             AppEvent::Repaint
         }
         0x0D => { newline(); AppEvent::Repaint }
-        b's' | b'S' if dirty() => { save_to_batfs(); AppEvent::Repaint }
-        b'r' | b'R' if dirty() => {
+        // Ctrl+S / Ctrl+R for save / revert. Unmodified s/S/r/R fall
+        // through to the printable-ASCII arm below so the operator can
+        // type those letters into the buffer without triggering the
+        // action. (Wave 6 fix: unmodified hotkeys collided with text
+        // input.)
+        0x13 if dirty() => { save_to_batfs(); AppEvent::Repaint }
+        0x12 if dirty() => {
             unsafe { *core::ptr::addr_of_mut!(APP_MODE) = AppMode::ConfirmRevert; }
             AppEvent::Repaint
         }
-        // Printable ASCII inserts. Reserved keys (S/R/Esc handled above)
-        // also fall through here when buffer not dirty, which intentionally
-        // lets the operator type 's' or 'r' literally.
         0x20..=0x7E => { insert_char(c); AppEvent::Repaint }
         _ => AppEvent::Unhandled,
     }
@@ -401,11 +403,13 @@ pub fn handle_click(mx: i32, my: i32, body: WindowRect) -> AppEvent {
         h: ACTION_H,
     };
     if let Some(key) = action_strip_hit_test(action_rect, mx, my, &actions()) {
-        if key == 'X' {
-            // The "Esc back to FILES" entry — route to the Esc path.
-            return handle_key(0x1B);
-        }
-        return handle_key(key as u8);
+        let byte = match key {
+            'X' => 0x1B,  // Esc
+            'S' => 0x13,  // Ctrl+S
+            'R' => 0x12,  // Ctrl+R
+            other => other as u8,
+        };
+        return handle_key(byte);
     }
     AppEvent::Consumed
 }
