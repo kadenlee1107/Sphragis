@@ -640,6 +640,83 @@ pub struct StatusField<'a> {
     pub value: &'a str,
 }
 
+// ─── Wave 3: Caves Manager widgets ──────────────────────────────────────────
+
+/// A single entry in an action strip.
+#[derive(Copy, Clone)]
+pub struct Action<'a> {
+    /// Uppercase ASCII hotkey, e.g. 'E'. Matches the bracketed letter
+    /// in `label`. Caller decides what `b'E'` (or 'e' lowercased)
+    /// means; this widget only paints.
+    pub hotkey:  char,
+    /// Action label rendered as `[<hotkey>]<rest>`, e.g. "Enter"
+    /// renders as `[E]nter`.
+    pub label:   &'a str,
+    /// false → painted in FAINT, hit-tested as a miss (caller's
+    /// keyboard handler also ignores the hotkey when disabled).
+    pub enabled: bool,
+}
+
+/// Paint a row of `[K]ey label · ...` actions across `rect`. Items are
+/// separated by a `·` glyph in MID. The whole strip is left-aligned
+/// starting at `rect.x + 8`.
+pub fn paint_action_strip(rect: crate::ui::wm::WindowRect, actions: &[Action]) {
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    let y = rect.y + (rect.h.saturating_sub(16)) / 2;
+    let mut x = rect.x + 8;
+
+    for (i, act) in actions.iter().enumerate() {
+        if i > 0 {
+            font::draw_str(fb, screen_w, x, y, " · ", p::MID, p::BG);
+            x += 3 * CHAR_W;
+        }
+        let (letter_color, rest_color) = if act.enabled {
+            (p::INK, p::MID)
+        } else {
+            (p::FAINT, p::FAINT)
+        };
+        // "[X]"
+        let mut bracket_buf = [0u8; 3];
+        bracket_buf[0] = b'[';
+        bracket_buf[1] = act.hotkey as u8;
+        bracket_buf[2] = b']';
+        let bracket = unsafe { core::str::from_utf8_unchecked(&bracket_buf) };
+        font::draw_str(fb, screen_w, x, y, bracket, letter_color, p::BG);
+        x += 3 * CHAR_W;
+        // "rest" (label minus the first character, which the bracket replaced)
+        if act.label.len() > 1 {
+            let rest = &act.label[1..];
+            font::draw_str(fb, screen_w, x, y, rest, rest_color, p::BG);
+            x += rest.len() as u32 * CHAR_W;
+        }
+    }
+}
+
+/// Hit-test the action strip. Returns the hotkey of the clicked
+/// action if the click landed on a label, None otherwise.
+/// Disabled actions return None even if clicked on.
+pub fn action_strip_hit_test(rect: crate::ui::wm::WindowRect, mx: i32, my: i32, actions: &[Action]) -> Option<char> {
+    let strip_y0 = rect.y as i32;
+    let strip_y1 = (rect.y + rect.h) as i32;
+    if my < strip_y0 || my >= strip_y1 { return None; }
+
+    let mut x = rect.x as i32 + 8;
+    for (i, act) in actions.iter().enumerate() {
+        if i > 0 {
+            x += 3 * CHAR_W as i32; // separator " · "
+        }
+        let token_w = 3 * CHAR_W as i32  // "[X]"
+                    + act.label.len().saturating_sub(1) as i32 * CHAR_W as i32;
+        if mx >= x && mx < x + token_w {
+            return if act.enabled { Some(act.hotkey) } else { None };
+        }
+        x += token_w;
+    }
+    None
+}
+
 /// Paint a vertical list of key/value rows. Key column auto-sized to
 /// the longest key + 2-char padding. Keys render in MID; values in INK.
 /// Row pitch is 18 px (16 px glyph height + 1 px top inset + 1 px gap).
