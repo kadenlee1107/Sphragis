@@ -65,7 +65,11 @@ enum AppMode {
 
 // Static state. Volatile access matches Wave 2 / 3 convention.
 static mut SELECTED_CAVE: usize = 0;
+// Non-Copy: assign via `unsafe { *core::ptr::addr_of_mut!(APP_MODE) = new_mode; }`
+// Do NOT use write_volatile (requires Copy).
 static mut APP_MODE: AppMode = AppMode::Viewing;
+// Non-Copy: assign via `unsafe { *core::ptr::addr_of_mut!(FORM) = Some(scratch); }`
+// Do NOT use write_volatile (requires Copy).
 static mut FORM: Option<FormScratch> = None;
 
 fn selected_cave() -> usize {
@@ -104,6 +108,7 @@ pub fn handle_key(_c: u8) -> AppEvent {
     AppEvent::Unhandled
 }
 
+// Per-mode dispatch wired in Tasks 10-13.
 pub fn handle_click(_mx: i32, _my: i32, _body: WindowRect) -> AppEvent {
     AppEvent::Unhandled
 }
