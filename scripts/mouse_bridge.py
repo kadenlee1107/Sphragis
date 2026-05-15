@@ -5,27 +5,40 @@ Restored 2026-05-15 (originally STUMP #110, deleted with the no-
 browser pivot at 457c843c then resurrected when the calm-register
 UI demos showed pointer-driven navigation was still useful).
 
-⚠ KNOWN ISSUE — QEMU 10.x has multiple input-dispatch bugs.
-Verified 2026-05-15 by exhaustive probe — FOUR independent
-pathways all fail:
+⚠ KNOWN ISSUE — QEMU silently drops pointer events to virtio-mouse
+on macOS. Exhaustively verified 2026-05-15 across QEMU 10.2.2
+AND QEMU 8.2.0 (compiled from source). FOUR pathways tested
+end-to-end with a uart-traced kernel diagnostic; the kernel
+virtqueue receives zero EV_REL/EV_ABS events in every config:
 
   1. Cocoa display → virtio-input pointer events: not forwarded.
-     Only EV_KEY (keyboard) reaches the virtio queue; EV_REL and
-     EV_ABS are dropped silently.
+     Only EV_KEY (keyboard) reaches the virtio queue. Both
+     QEMU 10 and QEMU 8.
   2. QMP `input-send-event` with rel events, no `device` arg:
      QEMU returns `{"return": {}}` (success) but the events
-     never reach virtio-mouse's virtqueue.
-  3. QMP `input-send-event` with `device: <id>` arg: QEMU
-     CRASHES with an internal assertion looking up the
-     `device` property on a text-console object —
-       "Unexpected error in object_property_find_err() at
-        ../qom/object.c:1345:
-        Property 'qemu-fixed-text-console.device' not found"
-  4. HMP `mouse_move dx dy`: silent no-op.
+     never reach virtio-mouse's virtqueue. Both QEMU versions.
+  3. QMP `input-send-event` with `device: <id>` arg: QEMU 10.2
+     CRASHES with `qemu-fixed-text-console.device not found`
+     internal assertion. QEMU 8.2 returns DeviceNotFound errors.
+  4. HMP `mouse_move dx dy`: silent no-op in both QEMU versions.
 
-The bridge code is correct — the wiring inside QEMU 10.2 is
-broken between every external dispatch point and the virtio-
-input subsystem.
+So the QEMU 10.x "regression" diagnosis was wrong — both versions
+have the same QMP-to-virtio-mouse dispatch break. The user's
+working-mouse memory predates the no-browser pivot (2026-05-07)
+and likely came from either (a) browser-internal cursor handling
+that's now deleted, or (b) a different QEMU/macOS/binary combo
+that we can't reproduce.
+
+ALSO macOS-side: the bridge needs Input Monitoring permission for
+CGEventGetLocation to read live cursor position. Without it the
+position stays frozen. Grant via System Settings → Privacy &
+Security → Input Monitoring → add Terminal. The permission
+applies only to processes spawned AFTER the grant; restart the
+bridge if you granted permission while it was running.
+
+Despite all of the above: bridge is preserved here for future
+attempts (different QEMU version / display backend / kernel
+virtio init / etc.).
 
 This bridge IS known to work on:
 - QEMU 8.x on macOS Cocoa (the original era it was written for)
@@ -222,25 +235,30 @@ def run(host: str, port: int) -> int:
             dy = int(round(now_y - last_y))
             now_btn = host_left_button_down()
             if dx != 0 or dy != 0:
-                # QEMU 10.x dropped mouse_move HMP forwarding to
-                # virtio-mouse. Use QMP input-send-event directly —
-                # this is the canonical path that reaches virtio.
-                events = []
-                if dx != 0:
-                    events.append({"type": "rel",
-                                   "data": {"axis": "x", "value": dx}})
-                if dy != 0:
-                    events.append({"type": "rel",
-                                   "data": {"axis": "y", "value": dy}})
-                qmp.send_input_events(events)
+                # Original STUMP #110 path: HMP `mouse_move` instead
+                # of QMP `input-send-event`. The latter silently
+                # swallows rel events even in QEMU 8.2.
+                qmp._send({
+                    "execute": "human-monitor-command",
+                    "arguments": {"command-line": f"mouse_move {dx} {dy}"},
+                })
+                qmp.s.settimeout(0.1)
+                try: qmp._recv()
+                except socket.timeout: pass
+                qmp.s.settimeout(10)
                 last_x = now_x
                 last_y = now_y
                 sent_count += 1
             if now_btn != last_btn:
-                qmp.send_input_events([
-                    {"type": "btn",
-                     "data": {"down": now_btn, "button": "left"}},
-                ])
+                btn_mask = 1 if now_btn else 0
+                qmp._send({
+                    "execute": "human-monitor-command",
+                    "arguments": {"command-line": f"mouse_button {btn_mask}"},
+                })
+                qmp.s.settimeout(0.1)
+                try: qmp._recv()
+                except socket.timeout: pass
+                qmp.s.settimeout(10)
                 last_btn = now_btn
                 sent_count += 1
             # Once per second: heartbeat with the count of event-batches
