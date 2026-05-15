@@ -678,6 +678,7 @@ pub fn paint_action_strip(rect: crate::ui::wm::WindowRect, actions: &[Action]) {
             (p::FAINT, p::FAINT)
         };
         // "[X]"
+        debug_assert!(act.hotkey.is_ascii(), "Action::hotkey must be ASCII");
         let mut bracket_buf = [0u8; 3];
         bracket_buf[0] = b'[';
         bracket_buf[1] = act.hotkey as u8;
@@ -727,6 +728,7 @@ pub struct InspectorLayout {
 }
 
 impl InspectorLayout {
+    /// Create an InspectorLayout with the default 38% sidebar.
     pub fn new(body_rect: crate::ui::wm::WindowRect) -> Self {
         Self { body_rect, sidebar_pct: 38 }
     }
@@ -791,6 +793,8 @@ pub fn paint_confirm_modal(modal: &ConfirmModal) {
     let screen_h = gpu::height();
     let fb = gpu::framebuffer();
 
+    debug_assert!(modal.commit_key.is_ascii(), "ConfirmModal::commit_key must be ASCII");
+
     // Re-fill everything below the topbar with BG (effectively dims the
     // background — there's no alpha blend, so just clear). The modal
     // panel paints on top.
@@ -803,6 +807,7 @@ pub fn paint_confirm_modal(modal: &ConfirmModal) {
     }
     let body_h_lines = modal.body_lines.len() as u32;
     let panel_w = (max_line_w * CHAR_W) + 2 * PAD_X;
+    let panel_w = panel_w.max(35 * CHAR_W + 2 * PAD_X);  // footer hint is ~33 chars
     let panel_h = CHAR_H                          // title
                 + 8                               // title-body gap
                 + body_h_lines * (CHAR_H + 4)     // body lines
@@ -844,6 +849,7 @@ pub fn paint_confirm_modal(modal: &ConfirmModal) {
 /// Cancel on Esc, None otherwise. Caller is responsible for tracking
 /// whether the modal is open — this fn doesn't.
 pub fn confirm_modal_key(modal: &ConfirmModal, c: u8) -> ModalAction {
+    debug_assert!(modal.commit_key.is_ascii(), "ConfirmModal::commit_key must be ASCII");
     let lower = c.to_ascii_lowercase();
     let key_lower = (modal.commit_key as u8).to_ascii_lowercase();
     if lower == key_lower { return ModalAction::Commit; }
@@ -882,7 +888,7 @@ pub enum FormAction {
 /// currently focused (highlighted with INK border instead of HAIRLINE).
 pub fn paint_inline_edit_form(rect: crate::ui::wm::WindowRect, fields: &[FormField], focused: usize) {
     const CHAR_H:    u32 = 16;
-    const ROW_H:     u32 = 42;       // 10 px key + 24 px field + 8 px gap
+    const ROW_H:     u32 = 42;       // 10 px key + 2 px gap + 22 px field + 8 px row gap
     const KEY_H:     u32 = 10;
     const FIELD_H:   u32 = 22;
 
