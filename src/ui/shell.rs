@@ -11211,7 +11211,7 @@ pub fn paint(rect: WindowRect) {
         console::puts_hi(BANNER_LINE_3);
         console::puts_hi(BANNER_LINE_4);
         console::puts("\n");
-        console::puts("  Microkernel Shell v0.3 — Type 'help' for commands\n");
+        console::puts("  Microkernel Shell v0.3 -- Type 'help' for commands\n");
         console::puts("  Zero dependencies. Zero trust.\n");
         console::puts("\n");
         console::prompt();
@@ -11225,16 +11225,10 @@ pub fn paint(rect: WindowRect) {
 fn paint_cursor_block(rect: WindowRect) {
     use crate::ui::{console, gpu};
 
-    let (col, row) = console::cursor();
     let (cw, ch) = console::cell_size();
-    let (cell_x, cell_y) = console::cell_pixel_pos(col, row);
+    let (cell_x, cell_y) = console::cursor_pixel_pos_in_rect(rect);
 
-    // cell_pixel_pos and rect are both in screen coordinates.
-    // Skip the overlay if the cursor would land outside the window.
-    if cell_x < rect.x || cell_y < rect.y
-        || cell_x + cw > rect.x + rect.w
-        || cell_y + ch > rect.y + rect.h
-    {
+    if cell_x + cw > rect.x + rect.w || cell_y + ch > rect.y + rect.h {
         return;
     }
     gpu::fill_rect(cell_x, cell_y, cw, ch, 0xFFE5E7EB); // INK
