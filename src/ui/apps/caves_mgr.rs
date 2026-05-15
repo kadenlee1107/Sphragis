@@ -358,7 +358,75 @@ fn paint_detail_view(rect: WindowRect) {
     paint_action_strip(strip_rect, &actions);
 }
 
-fn paint_detail_create(rect: WindowRect)    { let _ = rect; /* Task 11 */ }
+fn paint_detail_create(rect: WindowRect) {
+    use crate::ui::{font, gpu};
+    let fb = gpu::framebuffer();
+    let screen_w = gpu::width();
+
+    // Guard: form must be initialized.
+    let form_scratch_ptr = core::ptr::addr_of_mut!(FORM);
+    let f = unsafe { match (*form_scratch_ptr).as_mut() {
+        Some(f) => f,
+        None    => return,
+    }};
+
+    // Header.
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + 8, "New cave", p::INK, p::BG);
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + 30,
+                   "TAB ADVANCES · SPACE CYCLES · ENTER CREATES", p::MID, p::BG);
+    gpu::fill_rect(rect.x + 14, rect.y + 50, rect.w - 28, 1, p::HAIRLINE);
+
+    // Enum value arrays.
+    let net_values   = ["isolated", "routed", "custom"];
+    let sens_values  = ["Unclassified", "Confidential", "Secret", "TopSecret"];
+    let integ_values = ["Untrusted", "Sandboxed", "SystemTrusted", "HighIntegrity"];
+
+    let fields: [FormField; 6] = [
+        FormField {
+            key:      "NAME",
+            kind:     FieldKind::Text { buf: &mut f.name_buf[..], len: &mut f.name_len, max: NAME_MAX },
+            readonly: false,
+        },
+        FormField {
+            key:      "NET MODE",
+            kind:     FieldKind::Enum { values: &net_values, selected: &mut f.net_mode_sel },
+            readonly: false,
+        },
+        FormField {
+            key:      "MLS SENS",
+            kind:     FieldKind::Enum { values: &sens_values, selected: &mut f.mls_sens_sel },
+            readonly: false,
+        },
+        FormField {
+            key:      "MLS INTEG",
+            kind:     FieldKind::Enum { values: &integ_values, selected: &mut f.mls_integ_sel },
+            readonly: false,
+        },
+        FormField {
+            key:      "MOUNT",
+            kind:     FieldKind::Text { buf: &mut f.mount_buf[..], len: &mut f.mount_len, max: MOUNT_MAX },
+            readonly: true,   // pre-flight Gap 2: name-derived; no set_mount_by_name
+        },
+        FormField {
+            key:      "TAINT",
+            kind:     FieldKind::Hex32 { value: &mut f.taint },
+            readonly: false,
+        },
+    ];
+
+    let form_rect = WindowRect {
+        x: rect.x + 14,
+        y: rect.y + 56,
+        w: rect.w - 28,
+        h: rect.h - 100,
+    };
+    paint_inline_edit_form(form_rect, &fields, f.focused_field);
+
+    // Footer hint.
+    font::draw_str(fb, screen_w, rect.x + 14, rect.y + rect.h - 18,
+                   "Enter to Create  ·  Esc to cancel", p::MID, p::BG);
+}
+
 fn paint_detail_configure(rect: WindowRect) { let _ = rect; /* Task 12 */ }
 
 // ── Handle-click helpers ──────────────────────────────────────────
@@ -417,8 +485,36 @@ fn handle_click_viewing(mx: i32, my: i32, body: WindowRect) -> AppEvent {
     AppEvent::Consumed
 }
 
-fn handle_click_form(_mx: i32, _my: i32, _body: WindowRect) -> AppEvent {
-    AppEvent::Unhandled
+fn handle_click_form(mx: i32, my: i32, body: WindowRect) -> AppEvent {
+    let form_ptr = core::ptr::addr_of_mut!(FORM);
+    let f = unsafe { match (*form_ptr).as_mut() {
+        Some(f) => f,
+        None    => return AppEvent::Unhandled,
+    }};
+
+    let layout = InspectorLayout::new(body).with_sidebar_pct(38);
+    let detail = layout.detail_rect();
+    let form_rect = WindowRect {
+        x: detail.x + 14,
+        y: detail.y + 56,
+        w: detail.w - 28,
+        h: detail.h - 100,
+    };
+
+    let net_values:   [&str; 3] = ["isolated", "routed", "custom"];
+    let sens_values:  [&str; 4] = ["Unclassified", "Confidential", "Secret", "TopSecret"];
+    let integ_values: [&str; 4] = ["Untrusted", "Sandboxed", "SystemTrusted", "HighIntegrity"];
+
+    let fields: [FormField; 6] = [
+        FormField { key: "NAME",      kind: FieldKind::Text { buf: &mut f.name_buf[..], len: &mut f.name_len, max: NAME_MAX },       readonly: false },
+        FormField { key: "NET MODE",  kind: FieldKind::Enum { values: &net_values,  selected: &mut f.net_mode_sel },                 readonly: false },
+        FormField { key: "MLS SENS",  kind: FieldKind::Enum { values: &sens_values, selected: &mut f.mls_sens_sel },                 readonly: false },
+        FormField { key: "MLS INTEG", kind: FieldKind::Enum { values: &integ_values, selected: &mut f.mls_integ_sel },               readonly: false },
+        FormField { key: "MOUNT",     kind: FieldKind::Text { buf: &mut f.mount_buf[..], len: &mut f.mount_len, max: MOUNT_MAX },     readonly: true  },
+        FormField { key: "TAINT",     kind: FieldKind::Hex32 { value: &mut f.taint },                                               readonly: false },
+    ];
+    handle_form_click(&fields, &mut f.focused_field, form_rect, mx, my);
+    AppEvent::Repaint
 }
 
 // ── Handle-key helpers ────────────────────────────────────────────
@@ -428,9 +524,132 @@ fn handle_key_destroy_modal(_c: u8, _idx: usize) -> AppEvent {
     AppEvent::Unhandled
 }
 
-fn handle_key_form(_c: u8) -> AppEvent {
-    // Task 11 / 12 implement form key dispatch.
-    AppEvent::Unhandled
+fn handle_key_form(c: u8) -> AppEvent {
+    let form_ptr = core::ptr::addr_of_mut!(FORM);
+    let f = unsafe { match (*form_ptr).as_mut() {
+        Some(f) => f,
+        None    => return AppEvent::Unhandled,
+    }};
+
+    let net_values:   [&str; 3] = ["isolated", "routed", "custom"];
+    let sens_values:  [&str; 4] = ["Unclassified", "Confidential", "Secret", "TopSecret"];
+    let integ_values: [&str; 4] = ["Untrusted", "Sandboxed", "SystemTrusted", "HighIntegrity"];
+
+    let mut fields: [FormField; 6] = [
+        FormField {
+            key:      "NAME",
+            kind:     FieldKind::Text { buf: &mut f.name_buf[..], len: &mut f.name_len, max: NAME_MAX },
+            readonly: false,
+        },
+        FormField {
+            key:      "NET MODE",
+            kind:     FieldKind::Enum { values: &net_values, selected: &mut f.net_mode_sel },
+            readonly: false,
+        },
+        FormField {
+            key:      "MLS SENS",
+            kind:     FieldKind::Enum { values: &sens_values, selected: &mut f.mls_sens_sel },
+            readonly: false,
+        },
+        FormField {
+            key:      "MLS INTEG",
+            kind:     FieldKind::Enum { values: &integ_values, selected: &mut f.mls_integ_sel },
+            readonly: false,
+        },
+        FormField {
+            key:      "MOUNT",
+            kind:     FieldKind::Text { buf: &mut f.mount_buf[..], len: &mut f.mount_len, max: MOUNT_MAX },
+            readonly: true,   // pre-flight Gap 2: name-derived; no set_mount_by_name
+        },
+        FormField {
+            key:      "TAINT",
+            kind:     FieldKind::Hex32 { value: &mut f.taint },
+            readonly: false,
+        },
+    ];
+
+    let action = handle_form_key(&mut fields, &mut f.focused_field, c);
+    match action {
+        FormAction::Submit => {
+            match unsafe { &*core::ptr::addr_of!(APP_MODE) } {
+                AppMode::Creating           => submit_create_form(),
+                AppMode::Configuring(_idx)  => AppEvent::Unhandled, // Task 12
+                _                           => AppEvent::Unhandled,
+            }
+        }
+        FormAction::Cancel => {
+            unsafe {
+                *core::ptr::addr_of_mut!(FORM)     = None;
+                *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+            }
+            AppEvent::Repaint
+        }
+        FormAction::None => {
+            // Auto-derive MOUNT from NAME on every keystroke
+            // (MOUNT is readonly; no dirty tracking needed).
+            regenerate_mount_from_name(f);
+            AppEvent::Repaint
+        }
+    }
+}
+
+fn regenerate_mount_from_name(f: &mut FormScratch) {
+    let name = unsafe { core::str::from_utf8_unchecked(&f.name_buf[..f.name_len]) };
+    let prefix = b"/ /home/";
+    f.mount_len = 0;
+    for &b in prefix {
+        if f.mount_len < f.mount_buf.len() {
+            f.mount_buf[f.mount_len] = b;
+            f.mount_len += 1;
+        }
+    }
+    for &b in name.as_bytes() {
+        if f.mount_len < f.mount_buf.len() {
+            f.mount_buf[f.mount_len] = b;
+            f.mount_len += 1;
+        }
+    }
+}
+
+fn submit_create_form() -> AppEvent {
+    use crate::caves::cave::{self, NetMode, Sensitivity, Integrity};
+    let form_ptr = core::ptr::addr_of!(FORM);
+    let f = unsafe { match (*form_ptr).as_ref() {
+        Some(f) => f,
+        None    => return AppEvent::Unhandled,
+    }};
+    if f.name_len == 0 { return AppEvent::Repaint; }  // invalid; repaint shows it
+
+    let name = unsafe { core::str::from_utf8_unchecked(&f.name_buf[..f.name_len]) };
+
+    // 1. cave::create
+    let create_res = cave::create(name, false);
+    if create_res.is_err() {
+        // Wave 3 limitation: errors silently swallowed; user can adjust + retry.
+        return AppEvent::Repaint;
+    }
+
+    // 2-4. Per-field setters (partial-failure tolerant).
+    let _ = cave::set_sensitivity_by_name(name, Sensitivity::from_u8(f.mls_sens_sel as u8));
+    let _ = cave::set_integrity_by_name(name, Integrity::from_u8(f.mls_integ_sel as u8));
+    let _ = cave::set_net_mode_by_name(name, NetMode::from_u8(f.net_mode_sel as u8));
+
+    // 5. MOUNT — skipped per pre-flight Gap 2 (no set_mount_by_name).
+    //    MOUNT is readonly in the form; mount is name-derived at access time.
+
+    // 6. TAINT — only when non-zero; find_id lookup post-create.
+    if f.taint != 0 {
+        if let Some(cave_id) = cave::find_id(name) {
+            cave::set_taint(cave_id as u16, f.taint);
+        }
+    }
+
+    // 7. Exit Create mode.
+    unsafe {
+        *core::ptr::addr_of_mut!(FORM)     = None;
+        *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Viewing;
+    }
+    AppEvent::Repaint
 }
 
 // ── Mode-transition helpers ───────────────────────────────────────
