@@ -763,6 +763,94 @@ impl InspectorLayout {
     }
 }
 
+/// Confirmation modal — used wherever an action is destructive.
+/// Double-tap the `commit_key` to confirm. Esc cancels.
+pub struct ConfirmModal<'a> {
+    pub title:       &'a str,
+    pub body_lines:  &'a [&'a str],
+    pub commit_key:  char,   // uppercase ASCII, e.g. 'D' for Destroy
+}
+
+/// Result of routing a key event to the modal.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum ModalAction {
+    None,
+    Commit,
+    Cancel,
+}
+
+/// Paint the modal centered on screen, dimming everything below TOPBAR_H.
+/// The TOPBAR strip stays live (lock glyph still works).
+pub fn paint_confirm_modal(modal: &ConfirmModal) {
+    const TOPBAR_H: u32 = 22;
+    const CHAR_H:   u32 = 16;
+    const PAD_X:    u32 = 24;
+    const PAD_Y:    u32 = 18;
+
+    let screen_w = gpu::width();
+    let screen_h = gpu::height();
+    let fb = gpu::framebuffer();
+
+    // Re-fill everything below the topbar with BG (effectively dims the
+    // background — there's no alpha blend, so just clear). The modal
+    // panel paints on top.
+    gpu::fill_rect(0, TOPBAR_H, screen_w, screen_h - TOPBAR_H, p::BG);
+
+    // Compute modal size from content.
+    let mut max_line_w = modal.title.len() as u32;
+    for line in modal.body_lines {
+        if (line.len() as u32) > max_line_w { max_line_w = line.len() as u32; }
+    }
+    let body_h_lines = modal.body_lines.len() as u32;
+    let panel_w = (max_line_w * CHAR_W) + 2 * PAD_X;
+    let panel_h = CHAR_H                          // title
+                + 8                               // title-body gap
+                + body_h_lines * (CHAR_H + 4)     // body lines
+                + 18                              // body-footer gap
+                + CHAR_H                          // footer hint
+                + 2 * PAD_Y;
+
+    let px = (screen_w.saturating_sub(panel_w)) / 2;
+    let py = (screen_h.saturating_sub(panel_h)) / 2;
+
+    // Panel fill + 1-px HAIRLINE border.
+    gpu::fill_rect(px, py, panel_w, panel_h, p::PANEL);
+    gpu::fill_rect(px, py, panel_w, 1, p::HAIRLINE);
+    gpu::fill_rect(px, py + panel_h - 1, panel_w, 1, p::HAIRLINE);
+    gpu::fill_rect(px, py, 1, panel_h, p::HAIRLINE);
+    gpu::fill_rect(px + panel_w - 1, py, 1, panel_h, p::HAIRLINE);
+
+    let inner_x = px + PAD_X;
+    let mut y = py + PAD_Y;
+
+    font::draw_str(fb, screen_w, inner_x, y, modal.title, p::INK, p::PANEL);
+    y += CHAR_H + 8;
+
+    for line in modal.body_lines {
+        font::draw_str(fb, screen_w, inner_x, y, line, p::MID, p::PANEL);
+        y += CHAR_H + 4;
+    }
+
+    y += 14;
+    // Footer hint: <KEY> "again to confirm  " "Esc to cancel"
+    let key_glyph = [modal.commit_key as u8];
+    let key_str = unsafe { core::str::from_utf8_unchecked(&key_glyph) };
+    font::draw_str(fb, screen_w, inner_x,            y, key_str, p::INK, p::PANEL);
+    font::draw_str(fb, screen_w, inner_x + CHAR_W,   y, " again to confirm  ", p::MID, p::PANEL);
+    font::draw_str(fb, screen_w, inner_x + 21 * CHAR_W, y, "Esc to cancel", p::MID, p::PANEL);
+}
+
+/// Route a key event to the modal. Returns Commit on the commit key,
+/// Cancel on Esc, None otherwise. Caller is responsible for tracking
+/// whether the modal is open — this fn doesn't.
+pub fn confirm_modal_key(modal: &ConfirmModal, c: u8) -> ModalAction {
+    let lower = c.to_ascii_lowercase();
+    let key_lower = (modal.commit_key as u8).to_ascii_lowercase();
+    if lower == key_lower { return ModalAction::Commit; }
+    if c == 0x1B { return ModalAction::Cancel; }
+    ModalAction::None
+}
+
 /// Paint a vertical list of key/value rows. Key column auto-sized to
 /// the longest key + 2-char padding. Keys render in MID; values in INK.
 /// Row pitch is 18 px (16 px glyph height + 1 px top inset + 1 px gap).
