@@ -632,3 +632,38 @@ pub fn paint_state_dot(x: u32, y: u32, filled: bool) {
         }
     }
 }
+
+/// One key/value row in a status field list.
+#[derive(Copy, Clone)]
+pub struct StatusField<'a> {
+    pub key:   &'a str,
+    pub value: &'a str,
+}
+
+/// Paint a vertical list of key/value rows. Key column auto-sized to
+/// the longest key + 2-char padding. Keys render in MID; values in INK.
+/// Row height matches the bitmap font (~18 px including 2 px padding).
+///
+/// Caller is responsible for clipping — this paints exactly
+/// `fields.len() * 18` pixels of height starting at `rect.y`.
+pub fn paint_status_field_list(rect: crate::ui::wm::WindowRect, fields: &[StatusField]) {
+    const ROW_H:  u32 = 18;
+    const CHAR_W: u32 = 8;
+
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    // Compute key column width.
+    let mut max_key_len: u32 = 0;
+    for f in fields {
+        let n = f.key.len() as u32;
+        if n > max_key_len { max_key_len = n; }
+    }
+    let value_col_x = rect.x + (max_key_len + 2) * CHAR_W;
+
+    for (i, f) in fields.iter().enumerate() {
+        let row_y = rect.y + (i as u32) * ROW_H + 1; // +1 to push below row top
+        font::draw_str(fb, screen_w, rect.x,      row_y, f.key,   p::MID, p::BG);
+        font::draw_str(fb, screen_w, value_col_x, row_y, f.value, p::INK, p::BG);
+    }
+}
