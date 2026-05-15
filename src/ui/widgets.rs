@@ -851,6 +851,183 @@ pub fn confirm_modal_key(modal: &ConfirmModal, c: u8) -> ModalAction {
     ModalAction::None
 }
 
+/// One field in an inline edit form.
+pub enum FieldKind<'a> {
+    /// Text field; caller owns the buffer + length. `max` is the
+    /// hard cap (no more characters accepted once `len == max`).
+    Text { buf: &'a mut [u8], len: &'a mut usize, max: usize },
+    /// Single-select enum. Selected index cycles via Space / ← → ;
+    /// caller controls the variant list.
+    Enum { values: &'a [&'static str], selected: &'a mut usize },
+    /// 32-bit hex value. Caller stores the value; widget handles
+    /// in-place editing of hex digits.
+    Hex32 { value: &'a mut u32 },
+}
+
+pub struct FormField<'a> {
+    pub key:      &'a str,
+    pub kind:     FieldKind<'a>,
+    pub readonly: bool,
+}
+
+/// Result of a key dispatched to the form.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum FormAction {
+    None,
+    Submit,
+    Cancel,
+}
+
+/// Paint the form into `rect`. `focused` is the index of the field
+/// currently focused (highlighted with INK border instead of HAIRLINE).
+pub fn paint_inline_edit_form(rect: crate::ui::wm::WindowRect, fields: &[FormField], focused: usize) {
+    const CHAR_H:    u32 = 16;
+    const ROW_H:     u32 = 42;       // 10 px key + 24 px field + 8 px gap
+    const KEY_H:     u32 = 10;
+    const FIELD_H:   u32 = 22;
+
+    let screen_w = gpu::width();
+    let fb = gpu::framebuffer();
+
+    for (i, field) in fields.iter().enumerate() {
+        let row_y = rect.y + (i as u32) * ROW_H;
+        // Key label
+        font::draw_str(fb, screen_w, rect.x, row_y, field.key, p::MID, p::BG);
+        // Field box
+        let box_x = rect.x;
+        let box_y = row_y + KEY_H + 2;
+        let box_w = rect.w;
+        let box_h = FIELD_H;
+        gpu::fill_rect(box_x, box_y, box_w, box_h, p::PANEL);
+        let border = if focused == i { p::INK } else { p::HAIRLINE };
+        // 1-px border
+        gpu::fill_rect(box_x, box_y, box_w, 1, border);
+        gpu::fill_rect(box_x, box_y + box_h - 1, box_w, 1, border);
+        gpu::fill_rect(box_x, box_y, 1, box_h, border);
+        gpu::fill_rect(box_x + box_w - 1, box_y, 1, box_h, border);
+
+        // Field contents
+        let text_y = box_y + (box_h - CHAR_H) / 2;
+        let text_x = box_x + 8;
+        let val_color = if field.readonly { p::MID } else { p::INK };
+
+        match &field.kind {
+            FieldKind::Text { buf, len, .. } => {
+                let n = **len;
+                let s = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
+                font::draw_str(fb, screen_w, text_x, text_y, s, val_color, p::PANEL);
+                // Cursor caret (only when focused, not readonly).
+                if focused == i && !field.readonly {
+                    let cx = text_x + (n as u32) * CHAR_W;
+                    gpu::fill_rect(cx, text_y, CHAR_W, CHAR_H, p::INK);
+                }
+            }
+            FieldKind::Enum { values, selected } => {
+                let s = values.get(**selected).copied().unwrap_or("?");
+                font::draw_str(fb, screen_w, text_x, text_y, s, val_color, p::PANEL);
+                // Right-edge hint "< >" (cycle indicator)
+                if focused == i && !field.readonly {
+                    let hint = "< >";
+                    let hx = box_x + box_w.saturating_sub(3 * CHAR_W + 4);
+                    font::draw_str(fb, screen_w, hx, text_y, hint, p::MID, p::PANEL);
+                }
+            }
+            FieldKind::Hex32 { value } => {
+                let mut buf = [b'0'; 10];
+                buf[1] = b'x';
+                for j in 0..8 {
+                    let nibble = (**value >> ((7 - j) * 4)) & 0xF;
+                    buf[2 + j] = if nibble < 10 { b'0' + nibble as u8 } else { b'A' + (nibble - 10) as u8 };
+                }
+                let s = unsafe { core::str::from_utf8_unchecked(&buf) };
+                font::draw_str(fb, screen_w, text_x, text_y, s, val_color, p::PANEL);
+            }
+        }
+    }
+}
+
+/// Route a key to the form. Returns Submit on Enter (when valid),
+/// Cancel on Esc, None otherwise. Updates `*focused` on Tab/Shift+Tab,
+/// mutates the focused field's storage on text/enum/hex edits.
+pub fn handle_form_key(fields: &mut [FormField], focused: &mut usize, c: u8) -> FormAction {
+    if c == 0x1B { return FormAction::Cancel; }
+    if c == b'\r' || c == b'\n' { return FormAction::Submit; }
+    if c == b'\t' {
+        let n = fields.len();
+        if n > 0 { *focused = (*focused + 1) % n; }
+        return FormAction::None;
+    }
+    // Shift+Tab arrives as 0x90..0x97 range from the kernel keyboard
+    // layer when Shift is held with arrows. Plain Shift+Tab is rare;
+    // we don't handle it for Wave 3.
+
+    let i = *focused;
+    if i >= fields.len() { return FormAction::None; }
+    if fields[i].readonly { return FormAction::None; }
+
+    match &mut fields[i].kind {
+        FieldKind::Text { buf, len, max } => {
+            if c == 0x08 || c == 0x7F {  // Backspace / Delete
+                if **len > 0 { **len -= 1; }
+            } else if c >= b' ' && c < 0x7F {
+                if **len < *max && **len < buf.len() {
+                    buf[**len] = c;
+                    **len += 1;
+                }
+            }
+        }
+        FieldKind::Enum { values, selected } => {
+            if c == b' ' {
+                let n = values.len();
+                if n > 0 { **selected = (**selected + 1) % n; }
+            }
+            // ← arrow = 0x92, → arrow = 0x93 per the kernel arrow mapping.
+            if c == 0x92 {
+                let n = values.len();
+                if n > 0 { **selected = (**selected + n - 1) % n; }
+            }
+            if c == 0x93 {
+                let n = values.len();
+                if n > 0 { **selected = (**selected + 1) % n; }
+            }
+        }
+        FieldKind::Hex32 { value } => {
+            // Hex edit: shift left, accept new low nibble.
+            let nibble = match c {
+                b'0'..=b'9' => Some(c - b'0'),
+                b'a'..=b'f' => Some(c - b'a' + 10),
+                b'A'..=b'F' => Some(c - b'A' + 10),
+                _ => None,
+            };
+            if let Some(n) = nibble {
+                **value = (**value << 4) | (n as u32);
+            }
+            if c == 0x08 {  // Backspace
+                **value >>= 4;
+            }
+        }
+    }
+    FormAction::None
+}
+
+/// Route a click to the form. Updates `*focused` to the clicked field
+/// if the click landed on a field box. Does NOT submit (caller handles
+/// submit-button click separately if it has one).
+pub fn handle_form_click(fields: &[FormField], focused: &mut usize, rect: crate::ui::wm::WindowRect, mx: i32, my: i32) {
+    const ROW_H: u32 = 42;
+    const KEY_H: u32 = 10;
+    const FIELD_H: u32 = 22;
+    if mx < rect.x as i32 || mx >= (rect.x + rect.w) as i32 { return; }
+    if my < rect.y as i32 { return; }
+    for (i, _) in fields.iter().enumerate() {
+        let box_y = rect.y as i32 + (i as i32) * ROW_H as i32 + KEY_H as i32 + 2;
+        if my >= box_y && my < box_y + FIELD_H as i32 {
+            *focused = i;
+            return;
+        }
+    }
+}
+
 /// Paint a vertical list of key/value rows. Key column auto-sized to
 /// the longest key + 2-char padding. Keys render in MID; values in INK.
 /// Row pitch is 18 px (16 px glyph height + 1 px top inset + 1 px gap).
