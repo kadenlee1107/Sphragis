@@ -47,6 +47,11 @@ pub struct PairBuf {
     b_to_a_fds: [u32; MAX_FDS_QUEUED],
     b_to_a_fds_len: usize,
     active: bool,
+    /// AUDIT-BATCAVE-F6 / CAVE-M5 (2026-05-16): cave that called
+    /// socketpair() to create this pair-buffer. 0xFFFF = kernel.
+    /// The two ends are owned by the same cave today (single-cave
+    /// IPC); cross-cave SCM_RIGHTS would need a separate field.
+    owner_cave: u16,
 }
 
 impl PairBuf {
@@ -61,6 +66,7 @@ impl PairBuf {
             b_to_a_fds: [0; MAX_FDS_QUEUED],
             b_to_a_fds_len: 0,
             active: false,
+            owner_cave: 0xFFFF,
         }
     }
 }
@@ -97,6 +103,11 @@ pub fn alloc_pair() -> Option<usize> {
             if !table[i].active {
                 table[i] = PairBuf::empty();
                 table[i].active = true;
+                // AUDIT-BATCAVE-F6: stamp active cave.
+                table[i].owner_cave = {
+                    let a = crate::caves::cave::get_active();
+                    if a == usize::MAX { 0xFFFF } else { (a as u16) & 0x7FFF }
+                };
                 chosen = Some(i);
                 break;
             }

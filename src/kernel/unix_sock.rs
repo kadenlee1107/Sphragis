@@ -37,6 +37,11 @@ struct Socket {
     name_len: u8,
     /// Owning task — recorded at create() for audit attribution.
     owner: TaskId,
+    /// AUDIT-BATCAVE-F6 / CAVE-M5 (2026-05-16): cave that called
+    /// sys_socket / sys_bind / sys_accept. 0xFFFF = kernel context.
+    /// Recorded for forensic provenance; FD-holder model still
+    /// gates access today.
+    owner_cave: u16,
     /// For role = Connected: index of the paired peer socket. None
     /// once peer closes; surfaces as EOF on the next read.
     peer: Option<u16>,
@@ -70,6 +75,7 @@ impl Socket {
             name: [0u8; SOCK_NAME_MAX],
             name_len: 0,
             owner: TaskId(0),
+            owner_cave: 0xFFFF,
             peer: None,
             rx_buf: [0u8; SOCK_RX_BUF],
             rx_head: 0,
@@ -115,6 +121,11 @@ fn alloc_socket(role: SocketRole, owner: TaskId) -> Option<u16> {
                 s.active = true;
                 s.role = role;
                 s.owner = owner;
+                // AUDIT-BATCAVE-F6: stamp active cave.
+                s.owner_cave = {
+                    let a = crate::caves::cave::get_active();
+                    if a == usize::MAX { 0xFFFF } else { (a as u16) & 0x7FFF }
+                };
                 return Some(i as u16);
             }
         }

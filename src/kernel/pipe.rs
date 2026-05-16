@@ -42,6 +42,12 @@ struct Pipe {
     writers: u8,           // open write-end refcount
     waiting_reader: Option<TaskId>,
     waiting_writer: Option<TaskId>,
+    /// AUDIT-BATCAVE-F6 / CAVE-M5 (2026-05-16): cave that called
+    /// pipe::create(). Recorded for audit-chain provenance even
+    /// when access enforcement is gated by the FD-holder model
+    /// (the kernel-owned FD table is the credential; this field
+    /// records which cave OWNS the pipe). 0xFFFF = kernel context.
+    owner_cave: u16,
 }
 
 impl Pipe {
@@ -56,6 +62,7 @@ impl Pipe {
             writers: 0,
             waiting_reader: None,
             waiting_writer: None,
+            owner_cave: 0xFFFF,
         }
     }
 }
@@ -121,6 +128,12 @@ pub fn create() -> Result<(u16, u16), &'static str> {
     p.writers = 1;
     p.waiting_reader = None;
     p.waiting_writer = None;
+    // AUDIT-BATCAVE-F6: stamp the active cave so audit-chain
+    // entries that touch this pipe can attribute it.
+    p.owner_cave = {
+        let a = crate::caves::cave::get_active();
+        if a == usize::MAX { 0xFFFF } else { (a as u16) & 0x7FFF }
+    };
 
     let task = process::get(caller_id);
     let read_fd = match task.fd_alloc(FdEntry {
