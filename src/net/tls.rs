@@ -636,8 +636,8 @@ pub fn process_server_hello(pcb_id: usize, data: &[u8]) -> Result<(), &'static s
                 uart::puts("[tls] rejected low-order X25519 peer public\n");
                 return Err("X25519 peer public key has small order");
             }
-            let mut classical_ss = [0u8; 32];
-            x25519_scalar_mult(&sess.our_private, &sess.peer_public, &mut classical_ss);
+            // AUDIT-CRYPTO-F10: route ECDH through x25519-dalek.
+            let classical_ss = x25519_dalek::x25519(sess.our_private, sess.peer_public);
             if classical_ss.iter().all(|&b| b == 0) {
                 uart::puts("[tls] shared_secret is all-zero — abort\n");
                 return Err("X25519 shared secret is zero");
@@ -1650,18 +1650,26 @@ pub fn close() {
 /// scalars. The DRBG in `crate::crypto::rng` chains SHA-256 over 8 spaced
 /// timer reads plus prior state, so a single observed output cannot recover
 /// the scalar even with boot-time knowledge.
+/// AUDIT-CRYPTO-F10 (2026-05-15): X25519 keypair generation now
+/// routes through the audited x25519-dalek crate instead of the
+/// hand-rolled Montgomery ladder + 5×51-bit field arithmetic that
+/// used to live below. The hand-rolled version was correct after
+/// V8-ROOT-12 made field_reduce constant-time, but it was the only
+/// production path with two divergent implementations (the PQ
+/// hybrid in `crypto::pq_hybrid` also used dalek). Consolidating to
+/// dalek removes ~250 LOC of unverified curve arithmetic and ends
+/// the two-implementation maintenance burden.
 fn generate_x25519_keypair(private: &mut [u8; 32], public: &mut [u8; 32]) {
     crate::crypto::rng::fill_bytes(private);
-
-    // Clamp private key per RFC 7748
+    // dalek's `x25519(sk, basepoint)` applies the RFC 7748 clamp
+    // internally; we don't need to clamp `private` ourselves. But
+    // since callers compare `private` bytes for storage, we apply
+    // the clamp here too so the stored bytes match the effective
+    // scalar used for ECDH.
     private[0] &= 248;
     private[31] &= 127;
     private[31] |= 64;
-
-    // Public key = private * basepoint (9)
-    let mut basepoint = [0u8; 32];
-    basepoint[0] = 9;
-    x25519_scalar_mult(private, &basepoint, public);
+    *public = x25519_dalek::x25519(*private, x25519_dalek::X25519_BASEPOINT_BYTES);
 }
 
 /// X25519 scalar multiplication (Curve25519 ECDH).
@@ -1728,279 +1736,4 @@ fn is_low_order_x25519(pk: &[u8; 32]) -> bool {
     matched != 0
 }
 
-fn x25519_scalar_mult(scalar: &[u8; 32], point: &[u8; 32], result: &mut [u8; 32]) {
-    // Clamp scalar per RFC 7748
-    let mut k = *scalar;
-    k[0] &= 248;
-    k[31] &= 127;
-    k[31] |= 64;
-
-    // Also clamp u-coordinate: clear top bit
-    let mut pt = *point;
-    pt[31] &= 127;
-
-    let u = decode_u_coordinate(&pt);
-    let x_1 = u;
-    let mut x_2 = field_one();
-    let mut z_2 = field_zero();
-    let mut x_3 = u;
-    let mut z_3 = field_one();
-
-    let mut swap: u64 = 0;
-
-    // Montgomery ladder
-    for t in (0..255).rev() {
-        let k_t = ((k[t / 8] >> (t % 8)) & 1) as u64;
-        swap ^= k_t;
-        field_cswap(&mut x_2, &mut x_3, swap);
-        field_cswap(&mut z_2, &mut z_3, swap);
-        swap = k_t;
-
-        let a = field_add(&x_2, &z_2);
-        let aa = field_sq(&a);
-        let b = field_sub(&x_2, &z_2);
-        let bb = field_sq(&b);
-        let e = field_sub(&aa, &bb);
-        let c = field_add(&x_3, &z_3);
-        let d = field_sub(&x_3, &z_3);
-        let da = field_mul(&d, &a);
-        let cb = field_mul(&c, &b);
-        x_3 = field_sq(&field_add(&da, &cb));
-        z_3 = field_mul(&x_1, &field_sq(&field_sub(&da, &cb)));
-        x_2 = field_mul(&aa, &bb);
-        z_2 = field_mul(&e, &field_add(&aa, &field_mul_a24(&e)));
-    }
-
-    field_cswap(&mut x_2, &mut x_3, swap);
-    field_cswap(&mut z_2, &mut z_3, swap);
-
-    // result = x_2 * z_2^(p-2) (modular inverse via Fermat)
-    let z_inv = field_invert(&z_2);
-
-    let result_field = field_mul(&x_2, &z_inv);
-
-    encode_u_coordinate(&result_field, result);
-}
-
-// Field element: 5 limbs of 51 bits in GF(2^255 - 19)
-type Fe = [u64; 5];
-
-const MASK51: u64 = (1u64 << 51) - 1;
-
-fn field_zero() -> Fe { [0; 5] }
-fn field_one() -> Fe { [1, 0, 0, 0, 0] }
-
-fn decode_u_coordinate(bytes: &[u8; 32]) -> Fe {
-    let mut f = [0u64; 5];
-    f[0] = load_le_u64(&bytes[0..]) & MASK51;
-    f[1] = (load_le_u64(&bytes[6..]) >> 3) & MASK51;
-    f[2] = (load_le_u64(&bytes[12..]) >> 6) & MASK51;
-    f[3] = (load_le_u64(&bytes[19..]) >> 1) & MASK51;
-    f[4] = (load_le_u64(&bytes[24..]) >> 12) & MASK51;
-    f
-}
-
-fn encode_u_coordinate(f: &Fe, bytes: &mut [u8; 32]) {
-    let mut t = *f;
-    field_reduce(&mut t);
-
-    // Combine 5 × 51-bit limbs into a 256-bit number, then extract bytes
-    // Total: t[0] + t[1]<<51 + t[2]<<102 + t[3]<<153 + t[4]<<204
-    let mut val = [0u64; 4]; // 4 × 64-bit words = 256 bits
-
-    // Accumulate into 256-bit value
-    val[0] = t[0] | (t[1] << 51);
-    val[1] = (t[1] >> 13) | (t[2] << 38);
-    val[2] = (t[2] >> 26) | (t[3] << 25);
-    val[3] = (t[3] >> 39) | (t[4] << 12);
-
-    // Store as little-endian bytes
-    for i in 0..4 {
-        let w = val[i];
-        for j in 0..8 {
-            let byte_idx = i * 8 + j;
-            if byte_idx < 32 {
-                bytes[byte_idx] = (w >> (j * 8)) as u8;
-            }
-        }
-    }
-    bytes[31] &= 0x7F; // clear top bit per RFC 7748
-}
-
-fn field_add(a: &Fe, b: &Fe) -> Fe {
-    [a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3], a[4]+b[4]]
-}
-
-fn field_sub(a: &Fe, b: &Fe) -> Fe {
-    // Add 2*p to avoid underflow
-    // p = 2^255-19, limbs: [2^51-19, 2^51-1, 2^51-1, 2^51-1, 2^51-1]
-    // 2*p limbs:
-    let two_p: Fe = [
-        2 * (0x7FFFFFFFFFFED), // 2*(2^51-19)
-        2 * MASK51,             // 2*(2^51-1)
-        2 * MASK51,
-        2 * MASK51,
-        2 * MASK51,
-    ];
-    [
-        a[0]+two_p[0]-b[0], a[1]+two_p[1]-b[1],
-        a[2]+two_p[2]-b[2], a[3]+two_p[3]-b[3],
-        a[4]+two_p[4]-b[4],
-    ]
-}
-
-fn field_mul(a: &Fe, b: &Fe) -> Fe {
-    let mut t = [0u128; 5];
-    for i in 0..5 {
-        for j in 0..5 {
-            let idx = (i + j) % 5;
-            let val = (a[i] as u128) * (b[j] as u128);
-            if i + j >= 5 {
-                t[idx] += val * 19;
-            } else {
-                t[idx] += val;
-            }
-        }
-    }
-    let mut r = [0u64; 5];
-    let mut carry = 0u128;
-    for i in 0..5 {
-        t[i] += carry;
-        r[i] = (t[i] as u64) & MASK51;
-        carry = t[i] >> 51;
-    }
-    r[0] += (carry as u64) * 19;
-    // Propagate any carry from the wrap-around addition
-    let c = r[0] >> 51;
-    r[0] &= MASK51;
-    r[1] += c;
-    r
-}
-
-fn field_sq(a: &Fe) -> Fe { field_mul(a, a) }
-
-/// Multiply field element by a24 = (A-2)/4 = 121665 for Curve25519.
-fn field_mul_a24(a: &Fe) -> Fe {
-    let mut r = [0u64; 5];
-    let mut carry = 0u128;
-    for i in 0..5 {
-        let v = (a[i] as u128) * 121665 + carry;
-        r[i] = (v as u64) & MASK51;
-        carry = v >> 51;
-    }
-    r[0] += (carry as u64) * 19;
-    r
-}
-
-fn field_cswap(a: &mut Fe, b: &mut Fe, swap: u64) {
-    let mask = 0u64.wrapping_sub(swap);
-    for i in 0..5 {
-        let t = mask & (a[i] ^ b[i]);
-        a[i] ^= t;
-        b[i] ^= t;
-    }
-}
-
-/// V8-ROOT-12: constant-time field reduction modulo p = 2^255 - 19.
-// /
-/// The previous implementation had TWO timing leaks that directly expose
-/// private-scalar bits to a co-resident attacker (browser JS reading
-/// cntpct_el0): (1) nested if/else early-exit over the limb-by-limb
-/// compare to p, and (2) a data-dependent `if ge { subtract }` branch.
-/// Both are now replaced with constant-time mask arithmetic — every
-/// call executes the same sequence of ops regardless of the input.
-fn field_reduce(f: &mut Fe) {
-    // Carry propagation (data-independent loop counts — unchanged).
-    for _ in 0..3 {
-        let mut carry = 0u64;
-        for i in 0..5 {
-            f[i] += carry;
-            carry = f[i] >> 51;
-            f[i] &= MASK51;
-        }
-        f[0] += carry * 19;
-    }
-    // One more pass to handle wrap
-    let carry = f[0] >> 51;
-    f[0] &= MASK51;
-    f[1] += carry;
-
-    // Constant-time compute `f - p` into a scratch array. If f >= p then
-    // the top borrow is 0 (answer is positive); if f < p then the top
-    // borrow is 1 (answer wrapped). We use that borrow as the mask for
-    // selecting between the original f and the reduced value.
-    let p: Fe = [0x7FFFFFFFFFFED, 0x7FFFFFFFFFFFF, 0x7FFFFFFFFFFFF, 0x7FFFFFFFFFFFF, 0x7FFFFFFFFFFFF];
-    let mut t: [u64; 5] = [0; 5];
-    // Use i128 for limb arithmetic so the borrow is captured cleanly.
-    let mut borrow: i128 = 0;
-    for i in 0..5 {
-        let v = f[i] as i128 - p[i] as i128 + borrow;
-        // v is either in [-(2^52)..2^51) or has wrapped; mask off low 51 bits.
-        t[i] = (v as u64) & MASK51;
-        borrow = v >> 63; // arithmetic shift: 0 if v>=0, -1 if v<0
-    }
-    // `borrow == -1` ⇔ f < p (keep original); `borrow == 0` ⇔ use t.
-    // Build an all-ones-on-keep-original mask. On aarch64 this compiles
-    // to a single `sbfx`/`asr` — no branch.
-    let keep_orig_mask: u64 = borrow as u64; // 0 if borrow==0, !0 if borrow==-1
-    let use_t_mask: u64 = !keep_orig_mask;
-    for i in 0..5 {
-        f[i] = (f[i] & keep_orig_mask) | (t[i] & use_t_mask);
-    }
-}
-
-fn field_invert(z: &Fe) -> Fe {
-    // Compute z^(p-2) where p = 2^255 - 19
-    // Using the addition chain from curve25519-donna
-    let z2 = field_sq(z);                    // z^2
-    let t = field_sq(&z2);                   // z^4
-    let t = field_sq(&t);                    // z^8
-    let z9 = field_mul(&t, z);               // z^9
-    let z11 = field_mul(&z9, &z2);           // z^11
-    let t = field_sq(&z11);                  // z^22
-    let z_5_0 = field_mul(&t, &z9);          // z^(2^5-1) = z^31
-
-    let mut t = field_sq(&z_5_0);
-    for _ in 1..5 { t = field_sq(&t); }
-    let z_10_0 = field_mul(&t, &z_5_0);      // z^(2^10-1)
-
-    let mut t = field_sq(&z_10_0);
-    for _ in 1..10 { t = field_sq(&t); }
-    let z_20_0 = field_mul(&t, &z_10_0);     // z^(2^20-1)
-
-    let mut t = field_sq(&z_20_0);
-    for _ in 1..20 { t = field_sq(&t); }
-    let t = field_mul(&t, &z_20_0);          // z^(2^40-1)
-
-    let mut t = field_sq(&t);
-    for _ in 1..10 { t = field_sq(&t); }
-    let z_50_0 = field_mul(&t, &z_10_0);     // z^(2^50-1)
-
-    let mut t = field_sq(&z_50_0);
-    for _ in 1..50 { t = field_sq(&t); }
-    let z_100_0 = field_mul(&t, &z_50_0);    // z^(2^100-1)
-
-    let mut t = field_sq(&z_100_0);
-    for _ in 1..100 { t = field_sq(&t); }
-    let t = field_mul(&t, &z_100_0);         // z^(2^200-1)
-
-    let mut t = field_sq(&t);
-    for _ in 1..50 { t = field_sq(&t); }
-    let t = field_mul(&t, &z_50_0);          // z^(2^250-1)
-
-    let t = field_sq(&t);                    // z^(2^251-2)
-    let t = field_sq(&t);                    // z^(2^252-4)
-    let t = field_sq(&t);                    // z^(2^253-8)
-    let t = field_sq(&t);                    // z^(2^254-16)
-    let t = field_sq(&t);                    // z^(2^255-32)
-    field_mul(&t, &z11)                      // z^(2^255-32+11) = z^(2^255-21) = z^(p-2)
-}
-
-fn load_le_u64(bytes: &[u8]) -> u64 {
-    let mut v = 0u64;
-    for i in 0..8.min(bytes.len()) {
-        v |= (bytes[i] as u64) << (i * 8);
-    }
-    v
-}
 
