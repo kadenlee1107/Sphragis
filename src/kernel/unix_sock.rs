@@ -133,14 +133,33 @@ fn alloc_socket(role: SocketRole, owner: TaskId) -> Option<u16> {
     None
 }
 
+/// AUDIT-CAVE-H5 (2026-05-16): the active cave is the AF_UNIX
+/// namespace key. A cave's bind / connect can only see listeners
+/// owned by the same cave — Linux's process-global abstract
+/// namespace would let a malicious cave hijack another cave's
+/// "init.sock" or similar well-known name. Sphragis defaults to
+/// per-cave isolation; cross-cave IPC must go through an explicit
+/// mechanism (audit-ring, batpipe, etc.), not a string-name race.
+/// `0xFFFF` is the kernel-context cave; kernel-bound sockets are
+/// only visible to other kernel-context callers.
+fn caller_cave() -> u16 {
+    let a = crate::caves::cave::get_active();
+    if a == usize::MAX { 0xFFFF } else { (a as u16) & 0x7FFF }
+}
+
 fn find_listener_by_name(name: &[u8]) -> Option<u16> {
     if name.is_empty() || name.len() > SOCK_NAME_MAX {
         return None;
     }
+    let cave = caller_cave();
     unsafe {
         for i in 0..MAX_SOCKETS {
             let s = &(*core::ptr::addr_of!(SOCKETS))[i];
-            if s.active && s.role == SocketRole::Listener && s.name_str() == name {
+            if s.active
+                && s.role == SocketRole::Listener
+                && s.owner_cave == cave
+                && s.name_str() == name
+            {
                 return Some(i as u16);
             }
         }
