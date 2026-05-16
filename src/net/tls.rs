@@ -28,6 +28,10 @@ const SERVER_HELLO: u8 = 2;
 
 // Cipher suites we offer. ChaCha20-Poly1305 is not advertised — both
 // AES-GCM suites pass FIPS-140 ciphers and are universally supported.
+// AUDIT-CRYPTO-F11 (2026-05-16): TLS_AES_256_GCM_SHA384 (0x1302)
+// is intentionally not advertised — see ClientHello builder. The
+// constant remains for ergonomic reference / future plumbing.
+#[allow(dead_code)]
 const TLS_AES_256_GCM_SHA384: u16 = 0x1302;
 const TLS_AES_128_GCM_SHA256: u16 = 0x1301;
 
@@ -325,12 +329,22 @@ pub fn build_client_hello(pcb_id: usize, hostname: &str, buf: &mut [u8]) -> usiz
     buf[pos..pos+32].copy_from_slice(&sid);
     pos += 32;
 
-    // Cipher suites
-    buf[pos] = 0; buf[pos+1] = 4; pos += 2; // length = 4 (2 suites)
+    // AUDIT-CRYPTO-F11 (2026-05-16): advertise only the cipher
+    // suite we actually implement end-to-end. Prior code listed
+    // both TLS_AES_128_GCM_SHA256 (0x1301) and TLS_AES_256_GCM_SHA384
+    // (0x1302), but process_server_hello rejected anything other
+    // than 0x1301 — the SHA-384 path through HKDF / key schedule
+    // / AEAD sizes was never plumbed. Advertising a suite we won't
+    // accept misleads peers AND any auditor sampling our
+    // ClientHello.
+    //
+    // Honest single-suite advertise. CNSA 2.0 alignment
+    // (AES-256-GCM-SHA384 end-to-end) is a follow-up wave that
+    // requires real TLS peer testing to validate the SHA-384 key
+    // schedule before shipping; can't be done autonomously.
+    buf[pos] = 0; buf[pos+1] = 2; pos += 2; // length = 2 (1 suite)
     buf[pos] = (TLS_AES_128_GCM_SHA256 >> 8) as u8;
     buf[pos+1] = TLS_AES_128_GCM_SHA256 as u8; pos += 2;
-    buf[pos] = (TLS_AES_256_GCM_SHA384 >> 8) as u8;
-    buf[pos+1] = TLS_AES_256_GCM_SHA384 as u8; pos += 2;
 
     // Compression methods (null only)
     buf[pos] = 1; pos += 1;
