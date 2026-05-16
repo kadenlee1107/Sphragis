@@ -90,16 +90,13 @@ pub const AT_FDCWD: i32 = -100;
 const NUM_CAVES: usize = crate::caves::linux::mmu::NUM_CAVES;
 static mut FD_TABLES: [[FdEntry; MAX_FDS]; NUM_CAVES] =
     [[FdEntry::empty(); MAX_FDS]; NUM_CAVES];
-static ALLOC_CURSORS: [core::sync::atomic::AtomicUsize; NUM_CAVES] = [
-    core::sync::atomic::AtomicUsize::new(3),
-    core::sync::atomic::AtomicUsize::new(3),
-    core::sync::atomic::AtomicUsize::new(3),
-    core::sync::atomic::AtomicUsize::new(3),
-    core::sync::atomic::AtomicUsize::new(3),
-    core::sync::atomic::AtomicUsize::new(3),
-    core::sync::atomic::AtomicUsize::new(3),
-    core::sync::atomic::AtomicUsize::new(3),
-];
+// AUDIT-CAVE-H1 (2026-05-15): array size grew from 8 to NUM_CAVES (32)
+// when MAX_CAVE_PAGETABLES was bumped to match MAX_CAVES. Use a const
+// initializer so adding caves is just a NUM_CAVES bump from now on.
+const INIT_CURSOR: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(3);
+static ALLOC_CURSORS: [core::sync::atomic::AtomicUsize; NUM_CAVES] =
+    [INIT_CURSOR; NUM_CAVES];
 
 #[inline]
 fn current_table() -> &'static mut [FdEntry; MAX_FDS] {

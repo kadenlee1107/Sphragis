@@ -133,8 +133,12 @@ const BLOCK_DEVICE: u64 =
 const TABLE_DESC: u64 = PTE_VALID | PTE_TABLE;
 
 // Per-Cave page table registry
-// Each cave gets its own L1 table, mapping only its own physical memory
-const MAX_CAVE_PAGETABLES: usize = 8;
+// Each cave gets its own L1 table, mapping only its own physical memory.
+// AUDIT-CAVE-H1 (2026-05-15): MUST equal MAX_CAVES (32) in caves/cave.rs.
+// Prior value (8) meant the 9th-32nd caves silently fell through to
+// PRIMARY_L1 — no MMU isolation at all between them and the kernel.
+// 32 × 4 KB = 128 KB of reserved L1 storage; cheap given the budget.
+const MAX_CAVE_PAGETABLES: usize = 32;
 static mut CAVE_L1: [usize; MAX_CAVE_PAGETABLES] = [0; MAX_CAVE_PAGETABLES]; // L1 table phys addr per cave
 static mut CAVE_PHYS_BASE: [usize; MAX_CAVE_PAGETABLES] = [0; MAX_CAVE_PAGETABLES]; // per-cave phys base
 static mut PRIMARY_L1: usize = 0; // the primary (ash) page table
