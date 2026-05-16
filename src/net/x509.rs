@@ -426,20 +426,40 @@ pub fn subject_spki_der(cert: &Certificate) -> Result<Vec<u8>, VerifyError> {
 }
 
 /// Identify the public-key algorithm for signature dispatch.
+///
+/// AUDIT-CRYPTO-F16 (2026-05-15): for EC keys the curve is now
+/// identified by parsing the curve OID from the
+/// AlgorithmIdentifier's `parameters` field instead of guessing
+/// from the SubjectPublicKey byte length. Prior heuristic ID'd
+/// P-256 by length 65, P-384 by length 97 — Brainpool / secp256k1
+/// / SM2 happen to encode at the same lengths and would have been
+/// misclassified. Not a security bypass (the downstream
+/// ecdsa_p256_verify would fail), but losing safety margin.
 pub fn pubkey_alg(cert: &Certificate) -> PubkeyAlg {
     use const_oid::db::rfc5912;
     let spki = &cert.tbs_certificate.subject_public_key_info;
     let oid = spki.algorithm.oid;
     if oid == rfc5912::ID_EC_PUBLIC_KEY {
-        // Curve distinguished by parameters. Approximate heuristic:
-        // P-256 SPKI SubjectPublicKey length is 520 bits (65 bytes uncompressed).
-        // P-384 is 776 bits (97 bytes).
-        let pk_bits = spki.subject_public_key.raw_bytes();
-        match pk_bits.len() {
-            65 => PubkeyAlg::EcdsaP256,
-            97 => PubkeyAlg::EcdsaP384,
-            33 => PubkeyAlg::EcdsaP256, // compressed form
-            _ => PubkeyAlg::Unknown,
+        // RFC 5480 §2.1.1: parameters for EC-public-key carry
+        // ECParameters which for named curves is just a CHOICE
+        // namedCurve (an OID). Decode + compare to secp256r1 /
+        // secp384r1.
+        let params = match spki.algorithm.parameters.as_ref() {
+            Some(p) => p,
+            None => return PubkeyAlg::Unknown,
+        };
+        use der::Decode;
+        let curve_oid = match const_oid::ObjectIdentifier::from_der(params.value()) {
+            Ok(o) => o,
+            Err(_) => return PubkeyAlg::Unknown,
+        };
+        if curve_oid == rfc5912::SECP_256_R_1 {
+            PubkeyAlg::EcdsaP256
+        } else if curve_oid == rfc5912::SECP_384_R_1 {
+            PubkeyAlg::EcdsaP384
+        } else {
+            // Brainpool, secp256k1, SM2, etc. land here.
+            PubkeyAlg::Unknown
         }
     } else if oid == rfc5912::RSA_ENCRYPTION {
         PubkeyAlg::Rsa
