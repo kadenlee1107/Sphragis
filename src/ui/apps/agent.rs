@@ -307,24 +307,41 @@ fn paint_composer(rect: WindowRect) {
     let typed_x = rect.x + 16 + 2 * CHAR_W;
     let compose_len = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(COMPOSE_LEN)) };
 
+    // Counter string built first so we can reserve its width before
+    // laying out the typed-text scroll window.
+    let mut cbuf = [0u8; 16];
+    let mut cn = 0;
+    write_dec(&mut cbuf, &mut cn, compose_len as u32);
+    push_bytes(&mut cbuf, &mut cn, b" / 256");
+    let counter = unsafe { core::str::from_utf8_unchecked(&cbuf[..cn]) };
+    let counter_w = (cn as u32) * CHAR_W;
+
     if disabled {
         font::draw_str(fb, sw, typed_x, c_text_y,
             "(querying -- Esc to interrupt)", p::FAINT, p::PANEL);
     } else {
+        // Compute how many chars fit between the prompt and the counter.
+        // Reserve one CHAR_W gap before the counter and one CHAR_W for
+        // the cursor cell itself (so the block never overlaps the
+        // counter on the right edge).
+        let text_end_x = (rect.x + rect.w).saturating_sub(16 + counter_w + CHAR_W);
+        let visible_px = text_end_x.saturating_sub(typed_x);
+        let max_visible_chars = (visible_px / CHAR_W) as usize;
+        let max_visible_chars = max_visible_chars.saturating_sub(1); // cursor cell reserve
+
         let buf = unsafe { &*core::ptr::addr_of!(COMPOSE_BUF) };
-        let compose_str = unsafe { core::str::from_utf8_unchecked(&buf[..compose_len]) };
-        font::draw_str(fb, sw, typed_x, c_text_y, compose_str, p::INK, p::PANEL);
-        let cur_x = typed_x + (compose_len as u32) * CHAR_W;
+        // Scroll so the cursor stays at the right edge once we overflow.
+        let start = compose_len.saturating_sub(max_visible_chars);
+        let visible_str = unsafe { core::str::from_utf8_unchecked(&buf[start..compose_len]) };
+        let visible_len = (compose_len - start) as u32;
+
+        font::draw_str(fb, sw, typed_x, c_text_y, visible_str, p::INK, p::PANEL);
+
+        let cur_x = typed_x + visible_len * CHAR_W;
         let cell_top = rect.y + (rect.h - 16) / 2;
         gpu::fill_rect(cur_x, cell_top, CHAR_W, 16, p::INK);
     }
 
-    let mut buf = [0u8; 16];
-    let mut n = 0;
-    write_dec(&mut buf, &mut n, compose_len as u32);
-    push_bytes(&mut buf, &mut n, b" / 256");
-    let counter = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
-    let counter_w = (n as u32) * CHAR_W;
     if rect.w > counter_w + 16 {
         let cx = rect.x + rect.w - 16 - counter_w;
         let color = if disabled { p::FAINT } else { p::MID };
