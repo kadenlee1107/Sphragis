@@ -42,17 +42,48 @@ use crate::security::audit::{Entry, MSG_LEN, RING_CAP, HEAD};
 /// audit ring's slot `i`. Slot 0 chains from the all-zero genesis.
 static mut CHAIN: [[u8; 32]; RING_CAP] = [[0u8; 32]; RING_CAP];
 
+/// AUDIT-CAVE-M1 (2026-05-15): kernel-only HMAC key for chaining.
+/// Seeded from RNDR at boot via `init_audit_key()`. Until that runs
+/// the key is zero, which still produces a deterministic chain —
+/// but a tamperer who can write the static can't forge entries
+/// without knowing the key. Once SEP / a sealed storage primitive
+/// lands, this should be sourced from there so kernel-write alone
+/// is insufficient.
+static mut AUDIT_HMAC_KEY: [u8; 32] = [0u8; 32];
+static AUDIT_KEY_READY: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Initialize the audit-chain HMAC key. Should be called once at
+/// boot, after crypto::rng::probe_hw_rng. Safe to call again — only
+/// the first call seeds the key, subsequent calls are no-ops.
+pub fn init_audit_key() {
+    use core::sync::atomic::Ordering;
+    if AUDIT_KEY_READY.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    unsafe {
+        let k = core::ptr::addr_of_mut!(AUDIT_HMAC_KEY);
+        crate::crypto::rng::fill_bytes(&mut *k);
+    }
+}
+
 /// Canonicalize an entry for hashing. Fixed-width prefix +
 /// variable-length message body. Big-endian for portability.
+/// AUDIT-CAVE-M3: cave_id (2 bytes big-endian) is part of the
+/// canonical form so the chain covers entry provenance — tampering
+/// with cave_id alone now breaks the chain.
 fn canonical_bytes(entry: &Entry, out: &mut [u8; 32 + MSG_LEN]) -> usize {
-    // 8 + 1 + 1 = 10 byte fixed prefix, then up to MSG_LEN body.
+    // 8 + 1 + 1 + 2 = 12 byte fixed prefix, then up to MSG_LEN body.
     let ts_be = entry.ts.to_be_bytes();
     out[..8].copy_from_slice(&ts_be);
     out[8] = entry.cat;
     out[9] = entry.mlen;
+    let cid_be = entry.cave_id.to_be_bytes();
+    out[10] = cid_be[0];
+    out[11] = cid_be[1];
     let mlen = entry.mlen as usize;
-    out[10..10 + mlen].copy_from_slice(&entry.msg[..mlen]);
-    10 + mlen
+    out[12..12 + mlen].copy_from_slice(&entry.msg[..mlen]);
+    12 + mlen
 }
 
 /// Update the chain hash for an entry at slot `slot` after a record.
@@ -81,7 +112,14 @@ pub unsafe fn append_chain(slot: usize, entry: &Entry, head: usize) {
     let mut buf = [0u8; 32 + 32 + MSG_LEN];
     buf[..32].copy_from_slice(&prev);
     buf[32..32 + n].copy_from_slice(&canon[..n]);
-    let h = sha256::hash(&buf[..32 + n]);
+    // AUDIT-CAVE-M1: HMAC-SHA256 the chain link with the kernel-only
+    // audit key. Plain SHA-256 was forgeable by anyone with kernel
+    // write — they could roll the chain forward to match arbitrary
+    // post-tamper state. With HMAC, forgery requires knowing the key.
+    let key = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(AUDIT_HMAC_KEY)) };
+    let h = sha256::hmac(&key, &buf[..32 + n]);
+    let mut k = key;
+    crate::security::zeroize::zeroize(&mut k);
     unsafe { CHAIN[slot] = h; }
 }
 
@@ -204,7 +242,11 @@ pub fn verify_seal(seal: &ChainSeal) -> SealVerify {
         let mut buf = [0u8; 32 + 32 + MSG_LEN];
         buf[..32].copy_from_slice(&prev);
         buf[32..32 + n].copy_from_slice(&canon[..n]);
-        prev = sha256::hash(&buf[..32 + n]);
+        // AUDIT-CAVE-M1: mirror the HMAC used in append_chain.
+        let key = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(AUDIT_HMAC_KEY)) };
+        prev = sha256::hmac(&key, &buf[..32 + n]);
+        let mut k = key;
+        crate::security::zeroize::zeroize(&mut k);
     }
     if prev == seal.hash {
         // Independent witness: if `head > seal.count`, the head we
@@ -274,7 +316,11 @@ pub fn verify_chain() -> VerifyOutcome {
         let mut buf = [0u8; 32 + 32 + MSG_LEN];
         buf[..32].copy_from_slice(&prev_hash);
         buf[32..32 + n].copy_from_slice(&canon[..n]);
-        let expected = sha256::hash(&buf[..32 + n]);
+        // AUDIT-CAVE-M1: mirror the HMAC used in append_chain.
+        let key = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(AUDIT_HMAC_KEY)) };
+        let expected = sha256::hmac(&key, &buf[..32 + n]);
+        let mut k = key;
+        crate::security::zeroize::zeroize(&mut k);
         let stored = unsafe { CHAIN[slot] };
         if expected != stored {
             return VerifyOutcome::FirstMismatchAt(i);

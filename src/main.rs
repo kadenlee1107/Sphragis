@@ -220,6 +220,11 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // any subsystem.
     unsafe { kernel::stack_chk::seed_from_rng(); }
 
+    // AUDIT-CAVE-M1 (2026-05-15): seed the audit-chain HMAC key from
+    // RNDR now that the DRBG is up. Must precede any audit::record
+    // call so chain entries are HMAC-protected from the first event.
+    security::audit_chain::init_audit_key();
+
     // AUDIT-CRYPTO-F7 (2026-05-15): fail-closed boot-time crypto
     // self-tests. Run KATs for every primitive used in production
     // BEFORE any TLS / BatFS / IPC mount. The prior pattern was to
