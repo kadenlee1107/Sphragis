@@ -59,6 +59,21 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
         core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr);
         sctlr &= !(1 << 1);  // Clear A bit (alignment check)
         sctlr &= !(1 << 23); // Clear SPAN — enable auto-PAN on EL0-entry
+        // AUDIT (2026-05-16) elite-tier: enable Branch Target
+        // Identification enforcement. The compiler already emits
+        // `bti c/j/jc` at indirect-branch targets (per
+        // .cargo/config.toml's branch-protection=bti,pac-ret), but
+        // without SCTLR_EL1.BT0/BT1 set, those bti instructions
+        // decode as NOPs. With these bits set, an indirect branch
+        // (br / blr) into anything other than a matching bti at
+        // the target raises a Branch Target Exception (ESR.IFSC =
+        // 0b001110), which our exception handler catches.
+        //   * SCTLR_EL1.BT0 (bit 35) — BTI applies at EL0
+        //   * SCTLR_EL1.BT1 (bit 36) — BTI applies at EL1
+        // M4 supports FEAT_BTI (ARMv8.5); QEMU 'virt' -cpu max
+        // exposes it.
+        sctlr |= 1u64 << 35; // BT0
+        sctlr |= 1u64 << 36; // BT1
         core::arch::asm!("msr sctlr_el1, {}", in(reg) sctlr);
         core::arch::asm!("isb");
     }
