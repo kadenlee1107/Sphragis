@@ -124,6 +124,11 @@ fn store_udp_response(data: &[u8]) {
                 a = in(reg) dst + i, v = in(reg) data[i] as u32);
         }
         crate::caves::linux::syscall::UDP_RX_LEN[slot] = len;
+        // AUDIT-CAVE-C2: tag the slot with the cave that was active
+        // when this datagram arrived. The reader at sys_recvfrom
+        // refuses slots whose tag doesn't match the active cave.
+        crate::caves::linux::syscall::UDP_RX_CAVE[slot] =
+            crate::caves::cave::get_active();
         core::ptr::write_volatile(
             core::ptr::addr_of_mut!(crate::caves::linux::syscall::UDP_RX_HEAD), head + 1);
         core::ptr::write_volatile(

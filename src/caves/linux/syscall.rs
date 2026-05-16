@@ -3896,6 +3896,15 @@ pub static mut UDP_RX_LEN: [usize; UDP_RX_SLOTS] = [0; UDP_RX_SLOTS];
 pub static mut UDP_RX_HEAD: usize = 0; // next write slot
 pub static mut UDP_RX_TAIL: usize = 0; // next read slot
 pub static mut UDP_RX_READY: bool = false;
+// AUDIT-CAVE-C2 (2026-05-15): per-slot cave_id tag. Set at store
+// time to the cave active when the datagram arrived. At read time,
+// only deliver if the active cave matches — otherwise drop and
+// advance TAIL. Cave-switch reset (reset_cave_statics) zeroes the
+// whole ring, so the cross-cave-at-switch case is closed there;
+// this tag closes the same-cave-id-collision case where two
+// in-flight bindings from different caves would otherwise see each
+// other's datagrams within a single cave's session.
+pub static mut UDP_RX_CAVE: [usize; UDP_RX_SLOTS] = [0; UDP_RX_SLOTS];
 
 fn sys_socket(args: [u64; 6]) -> i64 {
     let domain = args[0] as u32;
@@ -4296,6 +4305,14 @@ fn sys_recvfrom(args: [u64; 6]) -> i64 {
                     unsafe {
                         if UDP_RX_TAIL < UDP_RX_HEAD {
                             let slot = UDP_RX_TAIL % UDP_RX_SLOTS;
+                            // AUDIT-CAVE-C2: drop and advance if this
+                            // slot was tagged for a different cave.
+                            // Prevents one cave from reading another's
+                            // in-flight UDP responses.
+                            if UDP_RX_CAVE[slot] != crate::caves::cave::get_active() {
+                                UDP_RX_TAIL += 1;
+                                continue;
+                            }
                             let n = UDP_RX_LEN[slot].min(len);
                             let rx_ptr = core::ptr::addr_of!(UDP_RX_BUF) as usize + slot * 512;
                             for i in 0..n {
@@ -6407,6 +6424,9 @@ pub fn reset_cave_statics() {
         for slot in 0..UDP_RX_SLOTS {
             UDP_RX_LEN[slot] = 0;
             for b in 0..UDP_RX_BUF[slot].len() { UDP_RX_BUF[slot][b] = 0; }
+            // AUDIT-CAVE-C2: also clear per-slot cave_id so a stale
+            // tag doesn't pin a slot to a destroyed cave.
+            UDP_RX_CAVE[slot] = 0;
         }
         UDP_RX_HEAD = 0;
         UDP_RX_TAIL = 0;
