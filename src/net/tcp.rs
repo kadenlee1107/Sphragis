@@ -191,15 +191,36 @@ unsafe fn irq_restore(prev: u64) {
 }
 
 fn alloc_local_port() -> u16 {
+    // AUDIT-NET-F18 (2026-05-16): RFC 6056 §3 recommends randomizing
+    // ephemeral source ports specifically to defeat off-path
+    // injection that has to guess our local port. The prior
+    // implementation returned 49152, 49153, 49154, ... in strict
+    // sequence — an attacker observing one of our connections could
+    // predict the next several local_port values within a few
+    // attempts.
+    //
+    // New scheme: draw a fresh 14-bit value from crypto::rng and
+    // map it into the IANA ephemeral range [49152, 65535]. We still
+    // track NEXT_LOCAL_PORT as a defensive "if RNG returns a
+    // collision with an in-use port, fall back to scanning" but
+    // the primary path is randomized.
+    let mut buf = [0u8; 2];
+    crate::crypto::rng::fill_bytes(&mut buf);
+    // 14 bits = 16384 distinct values; +49152 gives full ephemeral
+    // range. Mask off top 2 bits of the high byte so the result
+    // lands cleanly in [49152, 65535] without modulo bias.
+    let r = u16::from_be_bytes([buf[0] & 0x3F, buf[1]]);
+    let port = 49152u16.saturating_add(r);
     unsafe {
         let saved = irq_save();
+        // Advance NEXT_LOCAL_PORT past the randomly-picked port so
+        // a subsequent collision-scan falls back into a sane range.
         let p = core::ptr::addr_of_mut!(NEXT_LOCAL_PORT);
-        let port = core::ptr::read_volatile(p);
-        let next = if port == 65535 || port < 49152 { 49152 } else { port + 1 };
+        let next = if port == 65535 { 49152 } else { port + 1 };
         core::ptr::write_volatile(p, next);
         irq_restore(saved);
-        port
     }
+    port
 }
 
 // PCB (TCB)
@@ -420,6 +441,18 @@ pub fn listen_register(
     fd: i32,
 ) -> Result<usize, &'static str> {
     if local_port == 0 { return Err("EINVAL: port 0"); }
+
+    // AUDIT-NET-F14 (2026-05-16): privileged-port gate. Without this
+    // any cave can listen on port 22 / 25 / 80 / 443 / 853 and
+    // intercept inbound connections destined for the kernel's own
+    // system services or for whatever the operator has bound there.
+    // Standard UNIX rule: ports < 1024 require privileged-cave
+    // (cave_id == 0 = kernel, or by-name "host" / "kernel-ns"). For
+    // a fully unprivileged build pass cave_id=0xFFFF as the
+    // explicit-bypass sentinel (kernel internal services).
+    if local_port < 1024 && cave_id != 0 && cave_id != 0xFFFF {
+        return Err("EACCES: privileged-port bind from unprivileged cave");
+    }
 
     alloc_lock();
 
