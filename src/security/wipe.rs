@@ -78,6 +78,17 @@ pub fn execute(reason: WipeReason, silent: bool) {
     //   5. Memory (everything else)
     //   6. Secure Enclave
 
+    // AUDIT-FS-L4 (2026-05-15): flush in-RAM audit ring to disk
+    // BEFORE caves are destroyed. The wipe path itself emits one
+    // audit entry (TpiOp "WIPE NOW triggered by operator" from
+    // ui/apps/security.rs); without flushing first, that entry
+    // would die with the in-RAM ring when wipe_memory zeros every
+    // frame in Phase 5. After this flush the entry survives on
+    // BatFS until wipe_filesystem deletes audit.log (Phase 2) — a
+    // forensic reviewer who recovers the encrypted audit.log
+    // sector before the disk-zero pass has a chance to recover it.
+    let _ = crate::security::audit::flush_to_batfs();
+
     // Phase 1: Caves destroyed first (in-RAM state).
     crate::caves::cave::destroy_all();
     if !WIPE_SILENT.load(Ordering::Relaxed) {

@@ -170,6 +170,41 @@ pub fn authenticate(input: &str) -> AuthResult {
     let prev = ATTEMPT_COUNT.fetch_add(1, Ordering::AcqRel);
     let attempts = prev.saturating_add(1);
 
+    // AUDIT-CAVE-M6 (2026-05-15): exponential per-attempt backoff.
+    // Prior code returned Failed immediately, and Argon2id's KDF
+    // wall-time (~100 ms) was the only thing slowing brute force.
+    // Five failed attempts can be issued back-to-back in <1s with
+    // serial console + scripted retry. Add a busy-wait scaled to
+    // attempts: 2^attempts × ~100 ms wall time (using monotonic
+    // ticks → tick rate query → spin). NIST SP 800-63B §5.2.2
+    // recommends rate-limiting or hardware-tied backoff.
+    //
+    // attempts | delay
+    //   1      |  ~100 ms
+    //   2      |  ~200 ms
+    //   3      |  ~400 ms
+    //   4      |  ~800 ms
+    //   5      |  ~1600 ms (then LockedOut)
+    //
+    // Implementation: monotonic_secs is too coarse; use cntpct_el0
+    // raw ticks against cntfrq_el0 (the timer frequency). This is
+    // a real wall-clock delay on QEMU and on M4.
+    {
+        let freq: u64;
+        unsafe { core::arch::asm!("mrs {0}, cntfrq_el0", out(reg) freq); }
+        let base_ticks = freq / 10; // 100 ms
+        let scale: u64 = 1u64 << attempts.min(5);  // cap at 32×
+        let target_ticks = base_ticks.saturating_mul(scale);
+        let start: u64;
+        unsafe { core::arch::asm!("mrs {0}, cntpct_el0", out(reg) start); }
+        loop {
+            let now: u64;
+            unsafe { core::arch::asm!("mrs {0}, cntpct_el0", out(reg) now); }
+            if now.wrapping_sub(start) >= target_ticks { break; }
+            core::hint::spin_loop();
+        }
+    }
+
     if attempts >= MAX_ATTEMPTS {
         LOCKED_OUT.store(true, Ordering::Release);
         return AuthResult::LockedOut;
