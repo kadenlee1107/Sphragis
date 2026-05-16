@@ -1166,6 +1166,64 @@ pub unsafe fn panic_wipe() {
     }
 }
 
+/// AUDIT-FS-C2 (2026-05-15): controlled master-key wipe for the
+/// operator-triggered wipe path. `wipe::destroy_keys()` previously
+/// called `batfs::init(&zero_key)` twice expecting the second call
+/// to overwrite the master key. But `init` returns early when
+/// `INITIALIZED == true`, so the real master key was never zeroed
+/// and the "Encryption keys destroyed" line was a lie.
+///
+/// This function actually zeroes:
+///   * MASTER_KEY            — the AEAD root key
+///   * BOOT_NONCE_PREFIX     — the per-boot nonce salt
+///   * FILES[].nonce / .hash — per-file nonces + tags
+///   * FILE_TAINT[]          — taint bitmaps
+///   * FILE_COUNT            — slot occupancy
+///   * INITIALIZED           — flipped back to false so a future
+///                              init() can re-mount fresh
+///
+/// All writes are volatile so the compiler can't DCE under LTO.
+/// Held under IrqGuard so the timer IRQ can't observe a half-wiped
+/// MASTER_KEY between writes.
+///
+/// MUST be called AFTER `wipe::wipe_filesystem` returns. `delete()`
+/// needs the key to compute the AEAD AAD for on-disk inode
+/// zeroization; calling this first would leave inodes HMAC-tagged
+/// with the real key on disk.
+///
+/// After this runs, all subsequent `create`/`read`/`delete` calls
+/// return "filesystem not initialized" until a fresh `init()` runs.
+pub fn wipe_master_key() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        // Zero MASTER_KEY (volatile so it can't be DCE'd).
+        let key_ptr = core::ptr::addr_of_mut!(MASTER_KEY) as *mut u8;
+        for i in 0..32 {
+            core::ptr::write_volatile(key_ptr.add(i), 0);
+        }
+        // Zero BOOT_NONCE_PREFIX.
+        let pfx_ptr = core::ptr::addr_of_mut!(BOOT_NONCE_PREFIX) as *mut u8;
+        for i in 0..4 {
+            core::ptr::write_volatile(pfx_ptr.add(i), 0);
+        }
+        // Zero per-file nonces and hash tags (the AEAD-tag halves).
+        for i in 0..MAX_FILES {
+            FILES[i].nonce = [0u8; 12];
+            FILES[i].hash = [0u8; 32];
+        }
+        // Clear taint bitmaps.
+        let taint_ptr = core::ptr::addr_of_mut!(FILE_TAINT);
+        for i in 0..MAX_FILES {
+            (*taint_ptr)[i] = 0;
+        }
+        // Reset slot occupancy and unmount.
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(FILE_COUNT), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(INITIALIZED), false);
+    }
+    // Also reset the nonce counter so a future re-init starts clean.
+    NONCE_COUNTER.store(0, core::sync::atomic::Ordering::Release);
+}
+
 fn find_file(name: &str) -> Result<&'static FileEntry, &'static str> {
     unsafe {
         for i in 0..MAX_FILES {
