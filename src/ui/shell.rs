@@ -10903,10 +10903,15 @@ fn cmd_ai(question: &str) {
         Ok(s) => s,
         Err(e) => {
             console::puts("  ai: failed to start session: ");
+            // AUDIT-DRV-M8 (2026-05-15): print only the variant label,
+            // not the inner static string. The inner string may carry
+            // operator-deployment-specific details (hostname, error
+            // codes from the inference host) that a screen observer
+            // shouldn't see.
             console::puts(match e {
-                AgentError::Network(s)      => s,
-                AgentError::Protocol(s)     => s,
-                AgentError::Tool(s)         => s,
+                AgentError::Network(_)      => "network",
+                AgentError::Protocol(_)     => "protocol",
+                AgentError::Tool(_)         => "tool",
                 AgentError::PolicyDenied    => "policy denied",
                 AgentError::Interrupted     => "interrupted",
                 AgentError::TokenBudget     => "token budget",
