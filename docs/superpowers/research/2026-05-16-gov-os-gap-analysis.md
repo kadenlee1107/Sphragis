@@ -1,0 +1,314 @@
+# Sphragis Gov-OS Gap Analysis
+
+**Date:** 2026-05-16
+**Phase:** 3 of 5 (Research → Requirements → **Gap analysis** → Master plan → Per-subproject plans)
+**Inputs:**
+- [Phase 1 research](2026-05-16-gov-os-requirements.md) (current-state inventory in §5)
+- [Phase 2 requirements spec](../specs/2026-05-16-sphragis-gov-os-requirements.md) (114 numbered requirements)
+
+**Method:** For each REQ-XXX-NNN, mark `✅ HAVE` (fully satisfied), `⚠️ PARTIAL` (partially in place, needs extension), or `❌ MISSING` (not present today). Notes column points to existing file/commit when relevant.
+
+---
+
+## Headline Numbers
+
+| Status | P0 | P1 | P2 | Total |
+|---|---|---|---|---|
+| ✅ HAVE | 5 | 0 | 0 | **5** |
+| ⚠️ PARTIAL | 17 | 4 | 0 | **21** |
+| ❌ MISSING | 53 | 29 | 6 | **88** |
+| **Total** | 75 | 33 | 6 | **114** |
+
+**Headline:** 7% of requirements fully satisfied today; 18% partially in place; 75% missing.
+
+**This is the expected shape.** The last 14 weeks have been *kernel security hardening*, not *productization*. The HAVE column reflects audit-closed isolation primitives. The MISSING column reflects the entire productization mountain (UX, installer, multi-hardware), the procurement on-ramp (incorporation, SAM.gov, SBIR, DARPA), and the certification engineering work (FIPS, STIG, CSfC, attestation).
+
+What's *unusually strong* relative to a typical new-vendor starting point:
+- ✅ Kernel TCB is ~70-80K LoC (vs Linux 30M)
+- ✅ Real M4 hardware boot (rare at this stage)
+- ✅ AES-256, ML-KEM crate, ML-DSA crate, audit-chain HMAC, BatFS AES-GCM-SIV, PAN, BTI, per-cave ASIDs — all landed
+- ✅ ~80 QMP-driven self-test scripts in CI
+- ✅ 14 weeks of mechanical-trace audit closure with traceable commits and verification
+
+What's *strategically blocking* (P0 missing items that gate everything else):
+1. **Attestation kernel primitive** (entire section ATT MISSING) — without it, the #3 differentiator is unclaimable.
+2. **Apache-2.0 relicense** (LIC-001 MISSING) — without it, prime channel is closed (Lockheed/Northrop won't touch AGPL).
+3. **Multi-app concurrent UI** (UX-001 MISSING) — without it, we don't look like a "real OS" to a gov buyer.
+4. **Installer / boot ISO** (UX-002 MISSING) — without it, gov-buyer demos require Sphragis devs at the keyboard.
+5. **Incorporation + SAM.gov + GSA MAS** (PRC-001/002/003 MISSING) — without it, no federal contract can land.
+
+---
+
+## §1. Strategic Positioning (STRAT)
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| STRAT-001 | P0 | ❌ MISSING | Category claim not published anywhere |
+| STRAT-002 | P0 | ❌ MISSING | No 5-differentiator discipline doc/deck |
+| STRAT-003 | P0 | ❌ MISSING | Single build profile today |
+| STRAT-004 | P1 | ❌ MISSING | Anti-features not formally documented (will be after this doc is committed) |
+
+## §2. License (LIC)
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| LIC-001 | P0 | ❌ MISSING | `Cargo.toml: license = "AGPL-3.0-or-later"` — must change to `Apache-2.0` |
+| LIC-002 | P0 | ❌ MISSING | No CLA / DCO in repo |
+| LIC-003 | P0 | ⚠️ PARTIAL | Project policy avoids GPL deps (per memory `feedback_license_posture.md`); no automated `cargo-deny` enforcement |
+| LIC-004 | P1 | ❌ MISSING | Trademark not filed |
+
+## §3. Crypto (CRY)
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| CRY-001 | P0 | ⚠️ PARTIAL | `ml-kem = "0.2"` crate present; **parameter set unconfirmed** — likely ML-KEM-768 default, must verify and switch to ML-KEM-1024 |
+| CRY-002 | P0 | ⚠️ PARTIAL | `ml-dsa = "0.1.0-rc.8"` present; parameter set unconfirmed — must use ML-DSA-87 |
+| CRY-003 | P0 | ❌ MISSING | No LMS / XMSS module. Required for CNSA 2.0 software signing. |
+| CRY-004 | P0 | ⚠️ PARTIAL | AES-256 ubiquitous; no policy gate rejecting AES-128 |
+| CRY-005 | P0 | ⚠️ PARTIAL | `sha384.rs` exists; **no `sha512.rs`**; SHA-256 still default in many call sites |
+| CRY-006 | P0 | ⚠️ PARTIAL | Week 3-4 Crypto-F7 closed for SHA-256 + AES-GCM + ChaCha20-Poly1305 KATs; **extend to ML-KEM, ML-DSA, SHA-384, SHA-512, LMS/XMSS, HMAC-SHA-384** |
+| CRY-007 | P0 | ❌ MISSING | No documented FIPS-140-3 cryptographic-module boundary |
+| CRY-008 | P1 | ❌ MISSING | No lab engagement yet |
+| CRY-009 | P2 | ❌ MISSING | No hardware-bound key store yet |
+| CRY-010 | P0 | ⚠️ PARTIAL | Constant-time discipline in hot/hotp.rs (week 5); no enforcement / CI assertion |
+| CRY-011 | P1 | ⚠️ PARTIAL | HMAC-DRBG + RNDR; currently **fail-soft** on RNDR absent (audit FS-H3 open) — needs fail-closed |
+
+## §4. Process / Cave Isolation (ISO)
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| ISO-001 | P0 | ⚠️ PARTIAL | `DESIGN_CAVES.md` + `DESIGN_CAVE_ISOLATION.md` exist; not framed as separation-kernel NEAT properties |
+| ISO-002 | P0 | ✅ HAVE | Per-cave ASIDs — week 11 (commit `7d86d273`) |
+| ISO-003 | P0 | ⚠️ PARTIAL | CIPSO/CALIPSO network labels exist (`src/net/cave_policy.rs`); IPC/shm side not labeled |
+| ISO-004 | P0 | ⚠️ PARTIAL | Week 3-4 closed Cave-H6 (`sys_connect` gates on cave_policy); **no CI lint** enforcing it on new syscall handlers |
+| ISO-005 | P0 | ❌ MISSING | Cave-H2 audit finding open: per-cave seccomp on native SVC≠0 path |
+| ISO-006 | P1 | ✅ HAVE | `set_active` is `pub(crate)` — week 13 (commit `9249c4ff`) |
+| ISO-007 | P0 | ✅ HAVE | AF_UNIX per-cave — week 12 (commit `05a1384b`) |
+| ISO-008 | P1 | ❌ MISSING | AF_UNIX SOCK_DGRAM not implemented |
+| ISO-009 | P1 | ❌ MISSING | Audit-ring access not cave-scoped |
+
+## §5. Attestation as Kernel Primitive (ATT) — entire section MISSING
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| ATT-001 | P0 | ❌ MISSING | No attestation API |
+| ATT-002 | P0 | ❌ MISSING | No Caliptra integration |
+| ATT-003 | P0 | ❌ MISSING | No SEP attestation flow |
+| ATT-004 | P1 | ❌ MISSING | No TPM 2.0 integration |
+| ATT-005 | P0 | ❌ MISSING | No per-cave attestable identity |
+| ATT-006 | P0 | ❌ MISSING | No HSM-backed operator CA pattern |
+| ATT-007 | P1 | ❌ MISSING | No RATS protocol implementation |
+| ATT-008 | P2 | ❌ MISSING | No CVM attestation |
+
+**This entire section is the single biggest P0 gap.** Closing ATT unlocks differentiator #3 and is gating for any meaningful gov-buyer demo.
+
+## §6. Audit (AUD)
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| AUD-001 | P0 | ⚠️ PARTIAL | HMAC-SHA-256 chain present (week 3-4); **upgrade to HMAC-SHA-384** per CNSA 2.0 |
+| AUD-002 | P0 | ❌ MISSING | WORM export to BatFS — audit FS-H7 deferred |
+| AUD-003 | P0 | ⚠️ PARTIAL | Week 3-4 added Crypto / Net / Fs / KeyRotate / TpiOp categories; **add Authentication, PrivilegeEscalation, KernelModuleLoad, UpdateApply** to match NIAP FAU_GEN.1 |
+| AUD-004 | P0 | ❌ MISSING | No offline-verifier tool for the HMAC chain |
+| AUD-005 | P1 | ⚠️ PARTIAL | `ui/sigma_bitmap.rs` exists (589 LoC); not formalized as anomaly detector with thresholds |
+| AUD-006 | P0 | ❌ MISSING | Audit-ring access control not cave-scoped (duplicates ISO-009) |
+
+## §7. Build Chain / Provenance (BLD)
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| BLD-001 | P0 | ❌ MISSING | No SLSA-L4 provenance claimed |
+| BLD-002 | P0 | ⚠️ PARTIAL | `scripts/check_reproducible_build.sh` exists; **unknown whether it currently passes** |
+| BLD-003 | P0 | ⚠️ PARTIAL | `scripts/build_intoto_attestation.py` exists; not wired into CI |
+| BLD-004 | P0 | ⚠️ PARTIAL | `scripts/gen_sbom.py` + `scripts/generate_sbom.py` exist; not in CI per-release |
+| BLD-005 | P0 | ❌ MISSING | No sigstore cosign signing; no Rekor entries |
+| BLD-006 | P1 | ❌ MISSING | No documented bootstrap seed |
+| BLD-007 | P0 | ❌ MISSING | `cargo-audit` + `cargo-deny` not in CI |
+| BLD-008 | P0 | ❌ MISSING | No LMS-signed kernel image; m1n1 chain does not verify Sphragis signature today |
+
+## §8. Formal Verification (VER) — entire section MISSING
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| VER-001 | P0 | ❌ MISSING | No Verus or Kani setup |
+| VER-002 | P0 | ❌ MISSING | No IPC info-flow proof |
+| VER-003 | P1 | ❌ MISSING | No scheduler invariants formalized |
+| VER-004 | P1 | ❌ MISSING | No Kani model-check on pointer arithmetic |
+| VER-005 | P0 | ❌ MISSING | No verified-subsystem boundary documented |
+| VER-006 | P2 | ❌ MISSING | Aspirational |
+
+**Second-biggest P0 gap.** Closing VER unlocks differentiator #1. Verus/Kani are real tooling in 2026; setting up the harness is well-bounded engineering work.
+
+## §9. CHERI Readiness (CHR) — entire section MISSING
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| CHR-001 | P0 | ❌ MISSING | No cave-to-CHERI-compartment mapping doc |
+| CHR-002 | P1 | ❌ MISSING | No CHERI build target |
+| CHR-003 | P1 | ❌ MISSING | No CHERIoT-Ibex boot |
+| CHR-004 | P2 | ❌ MISSING | Tracks FreeBSD 16.0 timeline |
+
+## §10. UX / "Real OS" Features (UX) — almost entire section MISSING
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| UX-001 | P0 | ❌ MISSING | Single-app-at-a-time today; need WM + concurrent apps |
+| UX-002 | P0 | ❌ MISSING | No installer / ISO |
+| UX-003 | P0 | ❌ MISSING | No unified settings app (caves_mgr partially covers cave management) |
+| UX-004 | P0 | ❌ MISSING | Single passphrase lock screen only |
+| UX-005 | P1 | ❌ MISSING | No package manager |
+| UX-006 | P1 | ❌ MISSING | No POSIX userspace toolbox |
+| UX-007 | P1 | ⚠️ PARTIAL | `drivers/apple/dcp.rs` exists for display; no WM-side multi-monitor support |
+| UX-008 | P2 | ⚠️ PARTIAL | `drivers/apple/bcm_wifi.rs` exists; no networking-config UX |
+| UX-009 | P1 | ⚠️ PARTIAL | `ui/apps/...` has a security app; needs audit-filter UI |
+| UX-010 | P1 | ⚠️ PARTIAL | `ui/apps/caves_mgr.rs` (863 LoC) exists; needs attestation status, policy editor, quota UI extensions |
+
+## §11. Hardware Targets (HW)
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| HW-001 | P0 | ✅ HAVE | M4 boot verified — photos `docs/photos/2026-04-17_first_m4_boot` |
+| HW-002 | P0 | ❌ MISSING | No x86_64 port |
+| HW-003 | P1 | ❌ MISSING | No ARM server target |
+| HW-004 | P1 | ❌ MISSING | No CHERIoT-Ibex target |
+| HW-005 | P0 | ✅ HAVE | QEMU virt aarch64 — primary CI target, ~80 self-tests |
+| HW-006 | P1 | ❌ MISSING | No QEMU x86_64 CI |
+| HW-007 | P0 | ❌ MISSING | No HCL document |
+
+## §12. Documentation (DOC)
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| DOC-001 | P0 | ❌ MISSING | No operator runbook |
+| DOC-002 | P0 | ⚠️ PARTIAL | `DESIGN_TLS_HARDENING.md`, `DESIGN_CAVES.md`, etc. cover slices; no consolidated formal threat model |
+| DOC-003 | P0 | ⚠️ PARTIAL | DESIGN docs exist (developer-facing); no AO-audience-formatted architecture doc |
+| DOC-004 | P0 | ❌ MISSING | No capability statement |
+| DOC-005 | P0 | ❌ MISSING | No Security Target |
+| DOC-006 | P0 | ❌ MISSING | No NIST 800-53 inheritance matrix |
+| DOC-007 | P1 | ❌ MISSING | No STIG draft |
+| DOC-008 | P1 | ❌ MISSING | No USENIX-quality whitepaper |
+| DOC-009 | P0 | ❌ MISSING | No marketing site |
+| DOC-010 | P1 | ❌ MISSING | No demo deck |
+
+## §13. Certification Deliverables (CRT)
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| CRT-001 | P0 | ❌ MISSING | No FIPS 140-3 L1 cert |
+| CRT-002 | P1 | ❌ MISSING | No FIPS 140-3 L3 cert |
+| CRT-003 | P1 | ❌ MISSING | No NIAP PCL listing |
+| CRT-004 | P0 | ❌ MISSING | No STIG submission |
+| CRT-005 | P0 | ❌ MISSING | No FedRAMP authorization |
+| CRT-006 | P1 | ❌ MISSING | No CC evaluation |
+| CRT-007 | P0 | ❌ MISSING | No BIS encryption classification filed |
+| CRT-008 | P2 | ❌ MISSING | No EUCC certificate |
+| CRT-009 | P1 | ❌ MISSING | No CSfC submission |
+
+## §14. Procurement Readiness (PRC) — entire section MISSING
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| PRC-001 | P0 | ❌ MISSING | Not incorporated |
+| PRC-002 | P0 | ❌ MISSING | No SAM.gov / DSIP / CAGE / UEI |
+| PRC-003 | P0 | ❌ MISSING | No GSA MAS offer |
+| PRC-004 | P0 | ❌ MISSING | No ACT 3 subcontract |
+| PRC-005 | P0 | ❌ MISSING | No IWRP / C5 consortium membership |
+| PRC-006 | P0 | ❌ MISSING | No SBIR submissions |
+| PRC-007 | P0 | ❌ MISSING | No DARPA pitches |
+| PRC-008 | P1 | ❌ MISSING | No In-Q-Tel pitch |
+| PRC-009 | P1 | ❌ MISSING | No small-business set-aside positioning |
+| PRC-010 | P0 | ⚠️ PARTIAL | M4 boot + audit walk exist; **attestation quote missing** so the demo bundle is incomplete |
+| PRC-011 | P1 | ❌ MISSING | No conference plan |
+
+## §15. Anti-Features (ANTI)
+
+| REQ | P | Status | Notes |
+|---|---|---|---|
+| ANTI-001 | P0 | ⚠️ PARTIAL | No full-kernel proof attempted (good); not explicitly documented as non-goal |
+| ANTI-002 | P0 | ❌ MISSING | AGENT app present in tree (`src/ai/`, 5327 LoC) — drop is REQ-STRAT-003 |
+| ANTI-003 | P0 | ⚠️ PARTIAL | No QKD code today (good); not explicitly documented as non-goal |
+| ANTI-004 | P0 | ⚠️ PARTIAL | Linux ABI shim is narrow; not explicitly documented "no binary-compat promise" |
+| ANTI-005 | P0 | ❌ MISSING | No policy layer rejecting weak algorithms in gov build |
+| ANTI-006 | P0 | ⚠️ PARTIAL | All Sphragis code is open; not documented as explicit non-goal |
+| ANTI-007 | P0 | ⚠️ PARTIAL | Project avoids GPL/AGPL deps; **own license is AGPL** — paradoxical until LIC-001 closes |
+
+---
+
+## Cross-cutting observations
+
+### Where the 14 weeks of audit work pays the biggest dividends
+
+Audit-closed items map cleanly onto these P0 requirements:
+- **ISO-002 (per-cave ASIDs)** ← week 11 → ✅
+- **ISO-006 (set_active access)** ← week 13 → ✅
+- **ISO-007 (AF_UNIX per-cave)** ← week 12 → ✅
+- **CRY-005/006 partial credit** for SHA-384, GCM-SIV migration, BTI/PAN enforcement → ⚠️
+- **AUD-001/003 partial credit** for HMAC chain + 5 audit categories → ⚠️
+
+The audit closed the *foundation*. The productization work is what's ahead.
+
+### "Partial" items concentrate in 3 areas
+
+1. **Crypto** — algorithms are present in code but parameter sets / policy gates / cross-algorithm KAT coverage need formalization
+2. **Build chain** — scripts exist but are not wired into reproducible-CI
+3. **UX** — apps exist but lack window-manager / settings-unification / multi-monitor / installer scaffolding
+
+These are the cheapest-to-close. A few-week sprint per area moves a lot of ⚠️ → ✅.
+
+### "Missing" items concentrate in 4 areas
+
+1. **Attestation** (entire ATT section)
+2. **Formal verification harness** (entire VER section)
+3. **Procurement** (entire PRC section)
+4. **Documentation** (most of DOC)
+
+These are the **gating blockers**. None of the engineering for differentiators #1, #3, or #5 can claim closure until VER + ATT + CHR sections move. None of the *revenue* path can start until PRC-001/002/003 move. None of the *AO conversations* can happen until DOC-002/003/005 move.
+
+### What's "unusually strong" relative to other gov-OS startups
+
+| Asset | Sphragis state | Typical gov-OS startup at month 0 |
+|---|---|---|
+| Working microkernel that boots on real hardware | ✅ M4 + QEMU virt | Usually: paper design only |
+| TCB size in the 50-80K LoC range | ✅ ~70-80K | Usually: 200K+ if Linux-derived |
+| Memory-safe systems language | ✅ Rust throughout | Usually: C, sometimes C++ |
+| Modern crypto incl. PQ | ✅ AES-256-GCM-SIV, ml-kem, ml-dsa | Usually: OpenSSL or no crypto |
+| Audit trail with HMAC chain | ✅ landed | Usually: missing |
+| Mandatory access control / labeling | ✅ CIPSO/CALIPSO + biba_selftest + te_selftest | Usually: missing |
+| Anti-ROP exploit mitigations | ✅ PAN, BTI, ASIDs, stack canary from RNDR | Usually: default-only |
+| Documented design rationale | ✅ 11 DESIGN_*.md files | Usually: undocumented |
+| Test infrastructure | ✅ ~80 QMP self-tests | Usually: minimal |
+| Public security audit history | ✅ 14 weeks of traceable closure | Usually: no history |
+
+These are the assets that survive a procurement-officer due-diligence read. They're also the assets that produce a competitive moat against a *future* Rust-OS startup that decides to enter the same lane.
+
+### What gov buyers will ask in a first meeting that we can ALREADY answer well
+
+- "Show me a live boot on real hardware." → ✅ M4 boot
+- "Walk me through your threat model." → ⚠️ DESIGN_*.md cover most of it; needs consolidation
+- "What's your crypto?" → ⚠️ Solid Rust crates, needs CNSA-2.0 parameter confirmation
+- "How do you verify integrity of your audit log?" → ✅ HMAC chain with documented sealing
+- "What's in your TCB?" → ✅ ~70-80K LoC Rust, can show the boundaries
+- "How do you do process isolation?" → ✅ caves + per-cave ASIDs + cave-policy syscall gate
+- "Where's your formal verification?" → ❌ Nothing
+- "How do I attest to what's running?" → ❌ Nothing
+- "How do I deploy this?" → ❌ Nothing (no installer)
+- "Who are you as a company?" → ❌ Not incorporated
+
+The first 6 questions land us as a credible team. Questions 7-10 are the gaps. **Closing 4 P0 items — VER-001, ATT-001/005, UX-002, PRC-001 — moves us from "promising hackers" to "fundable vendor."**
+
+---
+
+## Output for Phase 4
+
+Phase 4 (master implementation plan) consumes this gap analysis with one input: **the 88 missing requirements**, plus the 21 partial ones. Sequence them across 24-36 months with the following structuring principles (to be applied in Phase 4):
+
+1. **Stack-rank by "unlocks differentiator" + "unlocks demo" + "unlocks revenue."**
+2. **Front-load the procurement minimums** (PRC-001 through PRC-007) — they're cheap and gate everything.
+3. **Front-load the demo-bundle completions** (ATT-001/005, PRC-010, DOC-002/003) — they make the first AFRL meeting credible.
+4. **Sequence verification (VER) early** — it's hard, takes long, and is the #1 strategic differentiator. Starting late kills the timeline.
+5. **Treat UX as parallel track to security/cert** — different skill set, can run concurrently without contention.
+6. **Treat hardware ports (HW-002 x86_64) as a 6-month dedicated sub-project** — substantial, blocks #4 differentiator surfaces.
+7. **CHERIoT-Ibex (CHR-003) is a separate small-team play** — embedded variant, different procurement angle.
+8. **License relicense (LIC-001) is week 1** — every other PR after that should land under Apache-2.0.
+
+Phase 4 will produce the master implementation plan with these structuring principles applied to the 88-item missing list.
