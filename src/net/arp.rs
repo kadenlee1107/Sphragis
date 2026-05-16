@@ -71,14 +71,22 @@ fn pending_push(ip: u32) {
         for i in 0..PENDING_SIZE {
             if (*ptr)[i] == ip { return; }
         }
-        // Insert into first empty slot, else overwrite slot 0.
+        // Insert into first empty slot.
         for i in 0..PENDING_SIZE {
             if (*ptr)[i] == 0 {
                 (*ptr)[i] = ip;
                 return;
             }
         }
-        (*ptr)[0] = ip;
+        // AUDIT-NET-F7 (2026-05-15): pending table full. Reject the
+        // new request instead of overwriting slot 0. Prior behavior
+        // let an attacker who flooded REQUESTs steer slot 0 — and
+        // since a spoofed REPLY claiming to be a pending IP gets
+        // cached on `pending_take`, controlling slot 0's content
+        // narrowed the attacker's spoof target. Rejecting on full
+        // table means the attacker must wait for legitimate pending
+        // entries to time out (handled by `pending_take` on real
+        // replies) before their entry can land — a soft DoS at most.
     }
 }
 
@@ -272,13 +280,33 @@ fn cache_put_rl(ip: u32, mac: [u8; 6]) {
                 return;
             }
         }
-        // Cache full — reuse slot 0. Still rate-limit to avoid thrash.
-        let last = (*tick_ptr)[0];
+        // AUDIT-NET-F7 + F8 + F9 (2026-05-15): LRU eviction instead
+        // of slot-0 overwrite. Prior code always evicted slot 0,
+        // which an L2-adjacent attacker could exploit: send a flurry
+        // of REQUESTs with rotating sender_ips → all slots get
+        // cached as legit → slot 0 contains the gateway → attacker
+        // then sends a REQUEST claiming to BE the gateway with a
+        // fresh sender_ip → cache_put_rl evicts slot 0 (gateway) →
+        // attacker now owns the gateway MAC mapping for our outbound
+        // traffic. LRU eviction (oldest LAST_UPDATE_TICK) means the
+        // attacker has to be older than every other cached entry to
+        // win the slot — much harder. Combined with the existing
+        // per-slot rate-limit, the gateway entry (which we refresh
+        // periodically via outbound ARP) becomes effectively pinned.
+        let mut victim = 0usize;
+        let mut victim_tick = (*tick_ptr)[0];
+        for i in 1..ARP_CACHE_SIZE {
+            if (*tick_ptr)[i] < victim_tick {
+                victim = i;
+                victim_tick = (*tick_ptr)[i];
+            }
+        }
+        let last = (*tick_ptr)[victim];
         if now.wrapping_sub(last) < gap {
             return;
         }
-        (*ptr)[0] = (ip, mac, true);
-        (*tick_ptr)[0] = now;
+        (*ptr)[victim] = (ip, mac, true);
+        (*tick_ptr)[victim] = now;
     }
 }
 

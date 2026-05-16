@@ -30,14 +30,19 @@
 
 #![allow(dead_code)]
 
-// Use a small CPU-counter-derived TXID; we have a deeper RNG for
-// crypto-grade randomness but TXID just needs to defeat blind
-// spoofing.
+/// AUDIT-CRYPTO-F5 (2026-05-15): TXID now routed through the
+/// HMAC-DRBG (crypto::rng) instead of reading cntpct_el0 directly.
+/// The prior implementation took 16 bits of XOR-folded counter
+/// reads with the top bit forced to 1 (~15 bits effective entropy).
+/// DoT runs INSIDE TLS so blind spoofing at the DNS layer is
+/// already gated, but the precedent matters: every primitive in
+/// the kernel should consult the DRBG, not raw cntpct, so future
+/// contributors don't copy the time-as-seed pattern.
 #[inline]
 fn rand_txid() -> u16 {
-    let v: u64;
-    unsafe { core::arch::asm!("mrs {0}, cntpct_el0", out(reg) v); }
-    ((v ^ (v >> 32) ^ (v >> 17)) as u16) | 0x8000
+    let mut buf = [0u8; 2];
+    crate::crypto::rng::fill_bytes(&mut buf);
+    u16::from_be_bytes(buf)
 }
 
 /// Cloudflare DoT. Same provider as our DoH so a single trust

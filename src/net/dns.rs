@@ -8,7 +8,7 @@
 // DoH flow: TCP connect → send HTTP POST with DNS query → parse HTTP response → extract DNS answer
 
 use super::udp;
-use core::sync::atomic::{AtomicU32, AtomicU16, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU16, AtomicUsize, AtomicBool, Ordering};
 
 /// Rolling counter mixed with cntpct_el0 to produce a 16-bit TXID. This is
 /// not cryptographic (we have no CSPRNG here) but it replaces the previous
@@ -33,6 +33,64 @@ fn next_txid() -> u16 {
 /// TXID of the currently in-flight plaintext DNS query. `handle_response`
 /// drops anything whose TXID doesn't match.
 static EXPECTED_TXID: AtomicU16 = AtomicU16::new(0);
+
+// AUDIT-NET-F19 (2026-05-15): the hostname we asked for, stashed
+// here so handle_response can verify the question section echoes
+// the SAME name. 255 bytes is the DNS label-format upper bound;
+// EXPECTED_QNAME_LEN is the actual byte count of the encoded
+// labels (length-prefixed labels + zero terminator).
+static mut EXPECTED_QNAME: [u8; 256] = [0u8; 256];
+static EXPECTED_QNAME_LEN: AtomicUsize = AtomicUsize::new(0);
+
+/// AUDIT-NET-F19: encode a dotted hostname into DNS label format
+/// (len || bytes || len || bytes || ... || 0x00) into EXPECTED_QNAME.
+fn store_expected_qname(hostname: &str) {
+    let mut buf = [0u8; 256];
+    let mut pos = 0usize;
+    for label in hostname.split('.') {
+        let lb = label.as_bytes();
+        if lb.len() > 63 || pos + lb.len() + 1 >= buf.len() {
+            EXPECTED_QNAME_LEN.store(0, Ordering::Release);
+            return;
+        }
+        buf[pos] = lb.len() as u8;
+        pos += 1;
+        buf[pos..pos + lb.len()].copy_from_slice(lb);
+        pos += lb.len();
+    }
+    if pos >= buf.len() {
+        EXPECTED_QNAME_LEN.store(0, Ordering::Release);
+        return;
+    }
+    buf[pos] = 0;
+    pos += 1;
+    unsafe { *core::ptr::addr_of_mut!(EXPECTED_QNAME) = buf; }
+    EXPECTED_QNAME_LEN.store(pos, Ordering::Release);
+}
+
+/// AUDIT-NET-F19: compare the response's question-section QNAME
+/// (starts at offset 12) against EXPECTED_QNAME. ASCII-case-
+/// insensitive per RFC 4343 (DNS names are case-insensitive on the
+/// wire). Compression pointers in the question section are not
+/// valid (RFC 1035 §4.1.4: pointers reference EARLIER content;
+/// the question section is first, so there is no earlier content)
+/// — treat as a spoof.
+fn qname_matches_expected(data: &[u8]) -> bool {
+    let n = EXPECTED_QNAME_LEN.load(Ordering::Acquire);
+    if n == 0 { return true; }  // resolver path didn't stash one; pass through
+    let buf = unsafe { &*core::ptr::addr_of!(EXPECTED_QNAME) };
+    let expected = &buf[..n];
+    if data.len() < 12 + n { return false; }
+    let recv = &data[12..12 + n];
+    if recv.len() != expected.len() { return false; }
+    let mut diff: u8 = 0;
+    for i in 0..n {
+        let a = expected[i].to_ascii_lowercase();
+        let b = recv[i].to_ascii_lowercase();
+        diff |= a ^ b;
+    }
+    diff == 0
+}
 static TXID_VALID: AtomicBool = AtomicBool::new(false);
 
 const DNS_SERVER: u32 = 0x0A000203; // 10.0.2.3 (QEMU) — plaintext fallback
@@ -136,6 +194,16 @@ pub fn handle_response(data: &[u8]) {
         return;
     }
 
+    // AUDIT-NET-F12 (2026-05-15): check the DNS response rcode (low
+    // 4 bits of the second flags byte). Prior code accepted any
+    // response with answers > 0 even if rcode signaled SERVFAIL
+    // (2), REFUSED (5), or NXDOMAIN (3) — a recursive resolver
+    // injecting a wildcard could land an answer in our cache under
+    // any rcode. Reject non-zero rcodes.
+    let flags = u16::from_be_bytes([data[2], data[3]]);
+    let rcode = (flags & 0x000F) as u8;
+    if rcode != 0 { return; }
+
     // Response bounds sanity (hardens against spoofed giant payloads
     // that would otherwise drag us through thousands of RR iterations).
     let qdcount = u16::from_be_bytes([data[4], data[5]]);
@@ -143,6 +211,18 @@ pub fn handle_response(data: &[u8]) {
     if qdcount != 1 { return; }   // we always send exactly one question
     if answers == 0 { return; }
     if answers > 32 { return; }   // RFC-valid but suspicious
+
+    // AUDIT-NET-F19 (2026-05-15): verify the response's QNAME
+    // matches the hostname we asked for. Prior code accepted any
+    // 1-question response once TXID matched. A spoofer who lands
+    // a forged response in the query window could answer for a
+    // DIFFERENT hostname and we'd cache its IP under whatever
+    // hostname the resolver thinks it asked for. Walk the question-
+    // section labels and compare to the EXPECTED_QNAME we stashed
+    // at resolve() time. Compression pointers in the question
+    // section are non-standard (questions cannot reference earlier
+    // content — there isn't any) so we treat them as a spoof.
+    if !qname_matches_expected(data) { return; }
 
     // V8-ROOT-3 / V8-ARITH-A4 / V8-PARSER-1: every offset += external_len
     // arithmetic uses checked_add and aborts the parse on overflow OR
@@ -242,6 +322,9 @@ pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
     let txid = next_txid();
     EXPECTED_TXID.store(txid, Ordering::Relaxed);
     TXID_VALID.store(true, Ordering::Release);
+    // AUDIT-NET-F19: stash the question's QNAME so handle_response
+    // can verify the response's question section echoes it.
+    store_expected_qname(hostname);
     query[0..2].copy_from_slice(&txid.to_be_bytes());      // Transaction ID (randomized)
     query[2..4].copy_from_slice(&0x0100u16.to_be_bytes()); // Standard query, recursion desired
     query[4..6].copy_from_slice(&1u16.to_be_bytes());      // 1 question
@@ -311,6 +394,9 @@ fn resolve_doh(hostname: &str) -> Result<u32, &'static str> {
     let txid = next_txid();
     EXPECTED_TXID.store(txid, Ordering::Relaxed);
     TXID_VALID.store(true, Ordering::Release);
+    // AUDIT-NET-F19: stash the question's QNAME so handle_response
+    // can verify the response's question section echoes it.
+    store_expected_qname(hostname);
     query[0..2].copy_from_slice(&txid.to_be_bytes());      // Transaction ID (randomized)
     query[2..4].copy_from_slice(&0x0100u16.to_be_bytes()); // Recursion desired
     query[4..6].copy_from_slice(&1u16.to_be_bytes());      // 1 question
