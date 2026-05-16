@@ -220,6 +220,23 @@ pub extern "C" fn kernel_main(uart_available: u64, dtb_ptr: u64) -> ! {
     // any subsystem.
     unsafe { kernel::stack_chk::seed_from_rng(); }
 
+    // AUDIT-CRYPTO-F7 (2026-05-15): fail-closed boot-time crypto
+    // self-tests. Run KATs for every primitive used in production
+    // BEFORE any TLS / BatFS / IPC mount. The prior pattern was to
+    // print "FAIL: <reason>" and continue, which silently shipped
+    // broken crypto. Now: any KAT failure panics — kernel halts
+    // before it can encrypt or decrypt anything with a broken
+    // primitive.
+    match crypto::run_self_tests() {
+        Ok(()) => drivers::uart::puts("  [crypto] self-tests PASS\n"),
+        Err(e) => {
+            drivers::uart::puts("  [crypto] self-test FAIL: ");
+            drivers::uart::puts(e);
+            drivers::uart::puts(" — halting (fail-closed)\n");
+            panic!("crypto self-test failed: {}", e);
+        }
+    }
+
     // DESIGN_CRYPTO.md #11+#12: seed the OTP pad with fresh true-random
     // bytes from the RNDR-backed CSPRNG. Tokens can then be dumped via
     // `otp-dump` shell command at provisioning for operator to record
