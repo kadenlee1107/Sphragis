@@ -6937,7 +6937,7 @@ fn cmd_caves(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) {
             if arg1.is_empty() || arg2.is_empty() {
                 console::puts("  usage: caves install <cave> <tool>\n");
             } else if cave::find_id(arg1)
-                .map(|id| unsafe { cave::CAVES[id].is_docker() })
+                .map(|id| cave::is_docker(id))
                 .unwrap_or(false)
             {
                 // Docker-backed cave: dispatch to the daemon, which will
@@ -7089,7 +7089,7 @@ fn cmd_caves(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) {
             // container torn down via `batcaved` before we zero the
             // cave table entry. Native caves are unchanged.
             let is_docker = cave::find_id(arg1)
-                .map(|id| unsafe { cave::CAVES[id].is_docker() })
+                .map(|id| cave::is_docker(id))
                 .unwrap_or(false);
             if is_docker {
                 let r = crate::caves::docker_client::with_daemon(|| {
@@ -7221,7 +7221,7 @@ fn cmd_caves(subcmd: &str, arg1: &str, arg2: &str, parts: &[&str; MAX_PARTS]) {
             // execution inside the container. Otherwise, fall through to
             // the legacy "run a busybox applet in shell-host" path.
             if let Some(id) = cave::find_id(arg1) {
-                let is_docker = unsafe { cave::CAVES[id].is_docker() };
+                let is_docker = cave::is_docker(id);
                 if is_docker {
                     // Docker path: parts[3..MAX_PARTS] is the container argv.
                     let mut argv_buf: [&str; 6] = [""; 6];
