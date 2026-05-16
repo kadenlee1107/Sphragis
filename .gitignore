@@ -90,3 +90,4 @@ release.key
 demo-pkg-*.bpkg
 *.bpkg
 .superpowers/
+.github-workflows-pending/

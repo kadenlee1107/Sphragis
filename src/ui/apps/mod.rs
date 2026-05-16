@@ -1,4 +1,3 @@
-pub mod agent;
 pub mod caves_mgr;
 pub mod comms;
 pub mod dashboard;

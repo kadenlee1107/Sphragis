@@ -190,7 +190,7 @@ fn cat_label(cat: u8) -> &'static str {
         7  => "auth",
         8  => "boot",
         9  => "cave",
-        10 => "ai",
+        10 => "unused", // was "ai" — slot reserved (AGENT removed 2026-05-16, SP-A2)
         11 => "pipe",
         12 => "sock",
         13 => "shm",

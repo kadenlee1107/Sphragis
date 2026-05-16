@@ -132,9 +132,9 @@ def main() -> int:
     )
     step(qmp, "02-after-enter", [("key", "ret")], delay=2.0)
 
-    # Cycle apps 1-8.
+    # Cycle apps 1-7 (AGENT removed 2026-05-16, SP-A2).
     for i, label in enumerate(
-        ["caves", "files", "net", "security", "shell", "editor", "comms", "agent"],
+        ["caves", "files", "net", "security", "shell", "editor", "comms"],
         start=1,
     ):
         step(qmp, f"03-app-{i}-{label}", [("key", str(i))], delay=1.2)
@@ -148,16 +148,8 @@ def main() -> int:
     # COMMS test: 7 = comms; print state
     step(qmp, "06-comms-focused", [("key", "7")], delay=0.8)
 
-    # AGENT test: 8 = agent; type a question
-    step(qmp, "07-agent-focused", [("key", "8")], delay=0.8)
-    step(qmp, "08-agent-typing", [("type", "audit week 2")], delay=0.6)
-    step(qmp, "09-agent-enter", [("key", "ret")], delay=1.5)
-
     # Cave switch test: open CAVES, switch caves
     step(qmp, "10-caves-focused", [("key", "1")], delay=0.8)
-
-    # Back to agent — verify conversation history is RETAINED in same cave
-    step(qmp, "11-back-to-agent", [("key", "8")], delay=1.0)
 
     print(f"\nAll screenshots in {OUT_DIR}/", flush=True)
     return 0
