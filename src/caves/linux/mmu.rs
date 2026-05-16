@@ -1292,10 +1292,28 @@ pub fn record_forked_cave(
 /// has mapped.
 pub fn switch_to_cave(l1_addr: usize) {
     unsafe {
+        // AUDIT elite-tier (2026-05-16): find the cave slot first so
+        // we can tag TTBR0 with a per-cave ASID. ASID 0 is reserved
+        // for the kernel/primary table; cave slot N gets ASID N+1.
+        // Looking up the slot here also serves the ACTIVE_WIN
+        // publish below (no second scan).
+        let mut slot: Option<usize> = None;
+        for i in 0..MAX_CAVE_PAGETABLES {
+            if CAVE_L1[i] == l1_addr && l1_addr != 0 {
+                slot = Some(i);
+                break;
+            }
+        }
+        let asid: u64 = match slot {
+            Some(s) => (s as u64 + 1) & 0xFFFF, // cave: ASID = slot+1 (1..=MAX)
+            None => 0,                          // primary / unknown: ASID 0
+        };
+        let ttbr0: u64 = (asid << 48) | (l1_addr as u64);
+
         core::arch::asm!("tlbi vmalle1");
         core::arch::asm!("dsb sy");
         core::arch::asm!("isb");
-        core::arch::asm!("msr ttbr0_el1, {}", in(reg) l1_addr as u64);
+        core::arch::asm!("msr ttbr0_el1, {}", in(reg) ttbr0);
         core::arch::asm!("isb");
         core::arch::asm!("tlbi vmalle1");
         core::arch::asm!("dsb sy");
@@ -1308,16 +1326,12 @@ pub fn switch_to_cave(l1_addr: usize) {
         // universally a NOP on cores without FEAT_SB.
         core::arch::asm!(".inst 0xd50330ff");
 
-        // V3: publish active user window for is_user_range. Look up by L1.
-        let mut start = 0usize;
-        let mut extent = 0usize;
-        for i in 0..MAX_CAVE_PAGETABLES {
-            if CAVE_L1[i] == l1_addr && l1_addr != 0 {
-                start = CAVE_VIRT_BASE[i];
-                extent = CAVE_VIRT_EXTENT[i];
-                break;
-            }
-        }
+        // V3: publish active user window for is_user_range. Reuse
+        // the slot we already found above.
+        let (start, extent) = match slot {
+            Some(i) => (CAVE_VIRT_BASE[i], CAVE_VIRT_EXTENT[i]),
+            None => (0usize, 0usize),
+        };
         if start != 0 && extent != 0 {
             // V5-TOCTOU-001: single-store of the packed (start, end).
             let end = start.saturating_add(extent);
@@ -1530,12 +1544,22 @@ pub fn setup_and_enable(phys_base: usize) -> Result<(), &'static str> {
         // = 4 GiB, and any walker output >= 0x100000000 is silently
         // invalidated → DFSC=0x02 (L2 translation fault) on the first
         // kernel access through L2_xxxhi. Sized for headroom.
+        // AUDIT elite-tier (2026-05-16): TCR.AS=1 enables 16-bit
+        // ASIDs in TTBR0_EL1 bits 63:48. With per-cave ASIDs, TLB
+        // entries get tagged by cave; a `tlbi vmalle1` flush is no
+        // longer the only way to prevent cross-cave reads through
+        // stale entries. We keep the existing TLBI flushes in
+        // switch_to_cave for now (defense-in-depth — if ASIDs are
+        // mis-assigned the flush still saves us); future commit
+        // can switch to `tlbi aside1` keyed by the outgoing cave's
+        // ASID once we have a multi-cave cross-read test.
         let tcr: u64 = (25 << 0)  // T0SZ
                       | (0b00 << 14) // TG0: 4KB
                       | (0b11 << 12) // SH0: inner shareable
                       | (0b01 << 10) // ORGN0
                       | (0b01 << 8)  // IRGN0
                       | (0b010u64 << 32) // IPS: 40-bit IPA (1 TB)
+                      | (1u64 << 36) // AS: 16-bit ASID (bits 63:48 of TTBR0)
                       | (1u64 << 37); // TBI0: top byte ignore for TTBR0
         core::arch::asm!("msr tcr_el1, {}", in(reg) tcr);
 
