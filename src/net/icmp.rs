@@ -10,6 +10,16 @@ const ICMP_ECHO_REQUEST: u8 = 8;
 static PING_RECEIVED: AtomicBool = AtomicBool::new(false);
 static PING_SEQ: AtomicU16 = AtomicU16::new(0);
 
+// AUDIT-NET-F4 (2026-05-15): ICMP echo-reply rate limit. Token-bucket
+// state: ECHO_REPLY_TOKENS holds the current number of replies we may
+// emit this window; ECHO_REPLY_WINDOW_START is the monotonic-tick
+// stamp at which the bucket was last refilled. We allow up to
+// MAX_ECHO_REPLIES_PER_SEC bucket-full of replies per second. Bucket
+// refills lazily on each receive.
+const MAX_ECHO_REPLIES_PER_SEC: u32 = 100;
+static ECHO_REPLY_TOKENS:       AtomicU32 = AtomicU32::new(MAX_ECHO_REPLIES_PER_SEC);
+static ECHO_REPLY_WINDOW_START: AtomicU32 = AtomicU32::new(0);
+
 /// Raw-socket delivery buffer. Populated whenever an ICMP packet arrives
 /// so a SOCK_RAW reader (e.g. busybox ping) can pull back the bytes in a
 /// Linux-compatible "IP header + ICMP payload" shape via `take_raw_reply`.
@@ -27,6 +37,34 @@ pub fn handle(pkt: &IpPacket) {
 
     match icmp_type {
         ICMP_ECHO_REQUEST => {
+            // AUDIT-NET-F4 (2026-05-15): source-address sanity.
+            // Reject echo requests from non-unicast sources (zero,
+            // broadcast, multicast, or our own IP). Combined with
+            // Net-F3's dst-IP filter, this closes the smurf-amplifier
+            // surface: an attacker can no longer trick us into
+            // reflecting echoes to broadcast/multicast destinations.
+            let is_unicast = pkt.src != 0
+                && pkt.src != 0xFFFF_FFFF
+                && (pkt.src & 0xF000_0000) != 0xE000_0000   // not 224/4
+                && pkt.src != crate::net::ip::our_ip();
+            if !is_unicast { return; }
+
+            // AUDIT-NET-F4: token-bucket rate limit. At
+            // MAX_ECHO_REPLIES_PER_SEC system-wide, a sustained flood
+            // can amplify at most that rate — well below any single
+            // attacker's outbound capacity. Refill the bucket once per
+            // second (monotonic_secs is cheap; granularity is fine for
+            // the use case).
+            let now = crate::kernel::time::monotonic_secs() as u32;
+            let win = ECHO_REPLY_WINDOW_START.load(Ordering::Relaxed);
+            if now.wrapping_sub(win) >= 1 {
+                ECHO_REPLY_TOKENS.store(MAX_ECHO_REPLIES_PER_SEC, Ordering::Relaxed);
+                ECHO_REPLY_WINDOW_START.store(now, Ordering::Relaxed);
+            }
+            let tokens = ECHO_REPLY_TOKENS.load(Ordering::Relaxed);
+            if tokens == 0 { return; }
+            ECHO_REPLY_TOKENS.store(tokens - 1, Ordering::Relaxed);
+
             // Reply to ping
             let mut reply = [0u8; 1400];
             let len = pkt.payload.len().min(1400);
