@@ -195,48 +195,69 @@ pub fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; 32] {
     hmac(s, ikm)
 }
 
-/// HKDF-Expand(prk, info, length) → OKM
-/// Only supports length <= 32 (one block for SHA-256)
+/// HKDF-Expand(prk, info, length) → OKM (RFC 5869 §2.3)
+///
+/// AUDIT-CRYPTO-F8 (2026-05-15): the prior implementation silently
+/// returned T(1) — the first 32-byte block — regardless of `length`.
+/// A caller asking for length > 32 received the same 32 bytes
+/// repeated logically (which by chance equals the spec for length
+/// in [1,32], but DIVERGES for any larger length from a spec-
+/// compliant HKDF: T(1) || T(2) || ...). TLS 1.3 callers never hit
+/// length > 32 today, but any future caller (larger AEAD keys,
+/// session-resumption tickets, etc.) would compute a different KDF
+/// output than the peer expects — silent crypto desync.
+///
+/// The output is still capped at the 32-byte return type, so this
+/// function only honors length up to 32. For length > 32 we now
+/// panic — caller must use `hkdf_expand_n` with a sized array.
 pub fn hkdf_expand(prk: &[u8; 32], info: &[u8], length: usize) -> [u8; 32] {
-    // T(1) = HMAC-Hash(PRK, info || 0x01)
+    if length > 32 {
+        panic!("hkdf_expand: length > 32 — use hkdf_expand_n for multi-block output");
+    }
     let mut input = [0u8; 256];
     let ilen = info.len().min(254);
     input[..ilen].copy_from_slice(&info[..ilen]);
     input[ilen] = 0x01;
-    let result = hmac(prk, &input[..ilen + 1]);
-
-    if length <= 32 {
-        return result;
-    }
-    // For length > 32, would need T(2) etc. Not needed for TLS 1.3 key derivation
-    result
+    hmac(prk, &input[..ilen + 1])
 }
 
-/// HKDF-Expand-Label for TLS 1.3
-/// Derives keys per RFC 8446 Section 7.1
+/// HKDF-Expand-Label for TLS 1.3 per RFC 8446 §7.1.
+///
+/// AUDIT-CRYPTO-F9 (2026-05-15): the prior implementation truncated
+/// `label` and `context` to fixed-size slots while writing the FULL
+/// length byte ahead of them. The on-wire HkdfLabel length and the
+/// actual bytes disagreed for any oversized label/context, producing
+/// a different KDF output than a spec-compliant peer. Today's
+/// callers use static, short labels, but the bug was a footgun
+/// waiting on a new caller to step in. Now we panic on oversize
+/// inputs instead of silently truncating — fail-closed.
 pub fn hkdf_expand_label(secret: &[u8; 32], label: &[u8], context: &[u8], length: usize) -> [u8; 32] {
-    // HkdfLabel = length(2) || "tls13 " || label || context
+    let prefix = b"tls13 ";
+    let label_total = prefix.len() + label.len();
+    // 2 + 1 + label_total + 1 + context.len() = HkdfLabel size.
+    let info_len = 2 + 1 + label_total + 1 + context.len();
+    if label_total > 255 {
+        panic!("hkdf_expand_label: label too long (must be < 250 bytes after tls13 prefix)");
+    }
+    if context.len() > 255 {
+        panic!("hkdf_expand_label: context too long (must be <= 255 bytes)");
+    }
+    if info_len > 128 {
+        panic!("hkdf_expand_label: HkdfLabel overruns the 128-byte info buffer");
+    }
+
     let mut info = [0u8; 128];
     let mut pos = 0;
-
     // length (2 bytes, big-endian)
     info[pos] = (length >> 8) as u8; pos += 1;
     info[pos] = length as u8; pos += 1;
-
     // label with "tls13 " prefix
-    let prefix = b"tls13 ";
-    let label_len = prefix.len() + label.len();
-    info[pos] = label_len as u8; pos += 1;
+    info[pos] = label_total as u8; pos += 1;
     info[pos..pos + prefix.len()].copy_from_slice(prefix); pos += prefix.len();
-    let ll = label.len().min(64);
-    info[pos..pos + ll].copy_from_slice(&label[..ll]); pos += ll;
-
+    info[pos..pos + label.len()].copy_from_slice(label); pos += label.len();
     // context
-    let cl = context.len().min(32);
-    info[pos] = cl as u8; pos += 1;
-    if cl > 0 {
-        info[pos..pos + cl].copy_from_slice(&context[..cl]); pos += cl;
-    }
+    info[pos] = context.len() as u8; pos += 1;
+    info[pos..pos + context.len()].copy_from_slice(context); pos += context.len();
 
     hkdf_expand(secret, &info[..pos], length)
 }
