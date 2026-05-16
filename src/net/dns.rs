@@ -130,9 +130,33 @@ const DOH_PORT: u16 = 443;
 // for when DoH fails (TLS handshake error, port 443 blocked, etc.).
 static DOH_ENABLED: AtomicBool = AtomicBool::new(true);
 
+/// AUDIT-NET-F11 (2026-05-16): "DoH strict" — when set, DoH
+/// failure returns the resolution error instead of falling back
+/// to plaintext UDP. The audit's concern: a network attacker who
+/// blocks port 443 to the DoH server (trivial RST injection or
+/// route blackhole) silently downgrades every cave's DNS to
+/// plaintext, defeating the encrypted-DNS posture. Gov-grade
+/// deployments must not silently fall back from authenticated
+/// DNS to anonymous DNS.
+///
+/// Default off for dev — production builds flip this on via
+/// `set_doh_strict(true)` from the boot path or a runtime
+/// `doh-strict` shell command. When strict + DoH disabled, resolve
+/// returns Err immediately.
+static DOH_STRICT: AtomicBool = AtomicBool::new(false);
+
 /// Enable or disable DNS-over-HTTPS. Default is ON .
 pub fn set_doh(enabled: bool) {
     DOH_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// AUDIT-NET-F11: enable DoH strict mode. Failure to resolve over
+/// DoH no longer falls back to plaintext UDP — caller gets the
+/// underlying error. Should be set in production from the operator
+/// runbook; a dev path can leave it off so plaintext gateways
+/// (QEMU slirp 10.0.2.3) still work.
+pub fn set_doh_strict(strict: bool) {
+    DOH_STRICT.store(strict, Ordering::Relaxed);
 }
 
 /// Parse a dotted-quad IPv4 literal ("10.0.2.2") to a big-endian u32. Returns
@@ -304,10 +328,20 @@ pub fn resolve(hostname: &str) -> Result<u32, &'static str> {
     if DOH_ENABLED.load(Ordering::Relaxed) {
         DNS_DONE.store(false, Ordering::Relaxed);
         RESOLVED_IP.store(0, Ordering::Relaxed);
-        if let Ok(ip) = resolve_doh(hostname) {
-            return Ok(ip);
+        match resolve_doh(hostname) {
+            Ok(ip) => return Ok(ip),
+            Err(e) => {
+                // AUDIT-NET-F11: in strict mode, DoH failure is a
+                // hard error — refuse to fall back to plaintext.
+                if DOH_STRICT.load(Ordering::Relaxed) {
+                    return Err(e);
+                }
+                // Non-strict: fall through to plaintext below.
+            }
         }
-        // DoH failed — fall through to plaintext
+    } else if DOH_STRICT.load(Ordering::Relaxed) {
+        // Strict mode + DoH disabled = refuse plaintext outright.
+        return Err("dns: strict mode requires DoH but DoH is disabled");
     }
 
     // Plaintext DNS fallback

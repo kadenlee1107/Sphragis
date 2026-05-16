@@ -47,6 +47,10 @@ pub struct Cookie {
     pub value: [u8; VALUE_LEN],
     pub value_len: u16,
     pub active: bool,
+    /// AUDIT-NET-F16 (2026-05-16): cntpct tick stamp set at every
+    /// set()/get() so LRU eviction picks the genuinely-oldest entry
+    /// (not just "first in scan order").
+    pub last_seen_tick: u64,
 }
 
 impl Cookie {
@@ -56,6 +60,7 @@ impl Cookie {
             name: [0; NAME_LEN], name_len: 0,
             value: [0; VALUE_LEN], value_len: 0,
             active: false,
+            last_seen_tick: 0,
         }
     }
     fn host_str(&self) -> &[u8] { &self.host[..self.host_len as usize] }
@@ -91,7 +96,23 @@ fn find_or_alloc(host: &[u8], name: &[u8]) -> Option<usize> {
         for (i, c) in jar.iter().enumerate() {
             if !c.active { return Some(i); }
         }
-        None
+        // AUDIT-NET-F16 (2026-05-16): LRU eviction on jar saturation
+        // instead of silent drop. Prior behavior let any allowed
+        // origin flood us with 128 junk cookies; the next real auth
+        // cookie was dropped invisibly. Now: when no free slot
+        // exists, evict the cookie with the oldest last_seen tick.
+        // Returns the freed slot so set() can write into it.
+        let mut victim = 0usize;
+        let mut victim_ts = jar[0].last_seen_tick;
+        for (i, c) in jar.iter().enumerate().skip(1) {
+            if c.last_seen_tick < victim_ts {
+                victim = i;
+                victim_ts = c.last_seen_tick;
+            }
+        }
+        // Mark inactive so set() treats it as a free slot.
+        jar[victim].active = false;
+        Some(victim)
     }
 }
 
@@ -165,6 +186,11 @@ pub fn set(host: &[u8], name: &[u8], value: &[u8]) {
         c.value[..vlen].copy_from_slice(&value[..vlen]);
         c.value_len = vlen as u16;
         c.active = true;
+        // AUDIT-NET-F16: stamp last-seen for LRU.
+        let now: u64;
+        core::arch::asm!("mrs {0}, cntpct_el0", out(reg) now,
+                         options(nostack, preserves_flags));
+        c.last_seen_tick = now;
         if was_new {
             SLOTS_USED.fetch_add(1, Ordering::Relaxed);
         }
@@ -249,8 +275,19 @@ pub fn parse_set_cookie(host: &[u8], header_value: &[u8]) -> bool {
         j += 1;
     }
     let eq = match eq { Some(e) => e, None => return false };
-    let name = &header_value[i..eq];
-    let value = &header_value[eq + 1..semi];
+    // AUDIT-NET-F15 (2026-05-16): trim ASCII whitespace from both
+    // sides of `name`, and leading whitespace from `value`, per
+    // RFC 6265 §4.1.1. Prior code stored `foo ` (trailing space)
+    // as a distinct cookie from `foo`, and some backends route
+    // them differently — session-confusion shenanigans.
+    let mut ns = i;
+    let mut ne = eq;
+    while ns < ne && (header_value[ns] == b' ' || header_value[ns] == b'\t') { ns += 1; }
+    while ne > ns && (header_value[ne - 1] == b' ' || header_value[ne - 1] == b'\t') { ne -= 1; }
+    let name = &header_value[ns..ne];
+    let mut vs = eq + 1;
+    while vs < semi && (header_value[vs] == b' ' || header_value[vs] == b'\t') { vs += 1; }
+    let value = &header_value[vs..semi];
     if name.is_empty() { return false; }
     set(host, name, value);
     true
