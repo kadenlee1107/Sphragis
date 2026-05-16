@@ -106,18 +106,18 @@ pub fn handle_key(c: u8) -> AppEvent {
             }
             AppEvent::Repaint
         }
-        0x90 => { // Up — scroll viewport up
-            let vp = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(VIEWPORT_START)) };
-            if vp > 0 {
-                unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(VIEWPORT_START), vp - 1); }
-            }
-            AppEvent::Repaint
-        }
-        0x91 => { // Down — scroll viewport down
+        0x90 => { // Up — scroll back in time (away from the latest turn)
             let vp = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(VIEWPORT_START)) };
             let total = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(TURN_COUNT)) };
             if vp + 1 < total {
                 unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(VIEWPORT_START), vp + 1); }
+            }
+            AppEvent::Repaint
+        }
+        0x91 => { // Down — scroll forward in time (toward the latest turn)
+            let vp = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(VIEWPORT_START)) };
+            if vp > 0 {
+                unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(VIEWPORT_START), vp - 1); }
             }
             AppEvent::Repaint
         }
@@ -234,16 +234,21 @@ fn paint_history(rect: WindowRect) {
         return;
     }
 
+    // VIEWPORT_START is the scroll offset BACK from the latest turn:
+    // 0 = latest pinned at the bottom (chat-default), N = N turns back.
+    // Up arrow increases it; Down arrow decreases it toward 0.
     let viewport = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(VIEWPORT_START)) };
     let visible_rows = (rect.h / ROW_H) as usize;
-    let visible_turns = visible_rows / ROWS_PER_TURN;
+    let visible_turns = (visible_rows / ROWS_PER_TURN).max(1);
 
-    let start = viewport.min(total);
-    let count = (total - start).min(visible_turns);
+    let viewport = viewport.min(total.saturating_sub(1));
+    let end = total - viewport;
+    let start = end.saturating_sub(visible_turns);
+    let count = end - start;
     let anchored_y = (rect.y + rect.h).saturating_sub(4 + (count as u32) * (ROWS_PER_TURN as u32) * ROW_H);
     let mut row_y = anchored_y;
 
-    for i in start..start + count {
+    for i in start..end {
         let idx = i % MAX_TURNS;
         let turns = unsafe { &*core::ptr::addr_of!(TURNS) };
         let turn = turns[idx];
