@@ -175,21 +175,12 @@ pub fn send(dst_ip: u32, protocol: u8, payload: &[u8]) -> Result<(), &'static st
         return Err("outbound blocked by firewall");
     }
 
-    // was a Tor(VPN(payload)) pipeline — `tor` deleted as
-    // part of the honest-naming pass (it was 3 layers of CTR with
-    // hardcoded keys, not real Tor), and `vpn` renamed to `psk_overlay`
-    // to reflect that it's a PSK-derived AES-CTR envelope, not real
-    // WireGuard. The PSK overlay path is preserved; Tor wrapping is
-    // gone until real onion routing is implemented.
-    let mut secured = [0u8; 1400];
-    let (final_payload, final_len) = if super::psk_overlay::is_active() {
-        let n = super::psk_overlay::encrypt_packet(payload, &mut secured);
-        (&secured[..], n)
-    } else {
-        // Direct — TLS handles confidentiality at the TCP layer.
-        (payload, payload.len())
-    };
-    let payload = &final_payload[..final_len];
+    // Confidentiality is handled at TCP layer by TLS. The earlier
+    // Tor(VPN(payload)) pipeline was retired: `tor` was 3 layers of
+    // CTR with hardcoded keys (not real Tor), and `psk_overlay`
+    // (formerly `vpn`) was an AES-CTR envelope with no replay
+    // window. Real overlay encryption only ships through the
+    // `wireguard` module now (Noise IK + replay window).
 
     let src_ip = our_ip();
     let id = IP_ID.load(Ordering::Relaxed); IP_ID.store(id.wrapping_add(1), Ordering::Relaxed);
@@ -385,25 +376,13 @@ pub fn handle(data: &[u8]) {
             return;
         }
 
-        // PSK-overlay decrypt path. Was Tor(VPN(...)); see
-        // the matching note in `send` above. Real onion routing is a
-        // future STUMP.
-        let mut decrypted_payload = [0u8; 1400];
-        let decrypted_pkt = if super::psk_overlay::is_active() {
-            let n = super::psk_overlay::decrypt_packet(pkt.payload, &mut decrypted_payload);
-            Some(IpPacket {
-                src: pkt.src, dst: pkt.dst, protocol: pkt.protocol, ttl: pkt.ttl,
-                payload: &decrypted_payload[..n],
-            })
-        } else {
-            None
-        };
-        let pkt_ref = decrypted_pkt.as_ref().unwrap_or(&pkt);
-
-        match pkt_ref.protocol {
-            PROTO_ICMP => super::icmp::handle(pkt_ref),
-            PROTO_UDP => super::udp::handle(pkt_ref),
-            PROTO_TCP => super::tcp::handle_incoming(pkt_ref),
+        // PSK-overlay decrypt path retired (see send-side comment).
+        // Decryption now happens only at higher layers (TLS for TCP,
+        // WireGuard for explicit tunnels).
+        match pkt.protocol {
+            PROTO_ICMP => super::icmp::handle(&pkt),
+            PROTO_UDP => super::udp::handle(&pkt),
+            PROTO_TCP => super::tcp::handle_incoming(&pkt),
             _ => {}
         }
     }

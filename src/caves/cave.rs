@@ -2285,7 +2285,6 @@ fn reset_all_globals_for_cave_switch() {
     crate::caves::linux::futex::reset_for_cave_switch();
     crate::caves::linux::async_fds::reset_for_cave_switch();
     crate::caves::linux::stdio_ring::reset_for_cave_switch();
-    crate::net::psk_overlay::reset_for_cave_switch();
     crate::net::dns::reset_for_cave_switch();
 
     // ROOT 2 V9-re-audit additions — threads table, ARP cache.

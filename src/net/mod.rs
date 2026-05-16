@@ -31,9 +31,13 @@ pub mod udp;
 // Tor — no directory consensus, no relay discovery) and `vpn`
 // (PSK-derived AES-CTR overlay, NOT WireGuard — no Noise IK, no
 // rekey). The audit caught both names as misleading. `tor` deleted
-// outright (would be re-added when real Tor work starts), and `vpn`
-// renamed to `psk_overlay` to honestly describe what it does.
-pub mod psk_overlay;
+// outright (would be re-added when real Tor work starts), `vpn`
+// renamed to `psk_overlay`, and `psk_overlay` retired (2026-05-16,
+// Week 14): no caller ever invoked `configure()`, so `is_active()`
+// was permanently false; the AES-CTR path had no replay window so
+// any future caller who flipped it on would have shipped a known
+// replay weakness. Real overlay encryption now lives only in
+// `wireguard` below.
 // Gap-audit 043 phase 1 — real WireGuard. Spec-mandated Noise IK
 // over X25519 + ChaCha20-Poly1305 + BLAKE2s; no UDP transport yet
 // (phase 2). Self-tested end-to-end via `wg-selftest`.
