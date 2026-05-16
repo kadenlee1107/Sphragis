@@ -157,6 +157,19 @@ pub struct TlsSession {
     // Certificate / CertificateVerify / EncryptedExtensions will
     // be accepted within the same handshake.
     pub finished_seen: bool,
+    // AUDIT-CRYPTO-F1 / AUDIT-CRYPTO-F2 (2026-05-15): strict RFC 8446
+    // §4.4 handshake-message ordering. The prior code processed
+    // Certificate / CertificateVerify / Finished as independent arms
+    // with no cross-message ordering check, so an MITM could (a) send
+    // Finished without ever presenting CertificateVerify (the only
+    // step that ties the cert to the live ECDH), or (b) send Finished
+    // FIRST and then have any subsequent Certificate be skipped by
+    // the post-Finished gate at line 908. Both fully bypass server
+    // authentication on the X25519 the MITM negotiated with us.
+    // Fix: track saw_cert + saw_cv, reject Finished unless both are
+    // true. Also enforce no duplicates and no out-of-order processing.
+    pub saw_cert: bool,
+    pub saw_cv:   bool,
     // Integration #3 wiring (DESIGN_CRYPTO.md #5): PQ-hybrid
     // key_share material. Populated when ClientHello advertises
     // X25519MLKEM768 (0x11EC) alongside classical X25519. If the
@@ -227,6 +240,8 @@ const EMPTY_TLS_SESSION: TlsSession = TlsSession {
     peer_spki_len: 0,
     peer_pubkey_alg: 0,
     finished_seen: false,
+    saw_cert: false,
+    saw_cv: false,
     hybrid_x25519_sk: [0; 32],
     hybrid_mlkem_dk: [0; 2432],
     hybrid_mlkem_dk_len: 0,
@@ -269,6 +284,9 @@ pub fn build_client_hello(pcb_id: usize, hostname: &str, buf: &mut [u8]) -> usiz
     sess.expected_hostname_len = hl;
     // V6-PARSER-105: fresh handshake starts with finished_seen=false.
     sess.finished_seen = false;
+    // AUDIT-CRYPTO-F1/F2: reset handshake-ordering flags.
+    sess.saw_cert = false;
+    sess.saw_cv = false;
     // Fresh handshake also clears any stale peer SPKI from a prior one.
     sess.peer_spki_len = 0;
     sess.peer_pubkey_alg = 0;
@@ -923,6 +941,10 @@ fn handshake_inner(pcb_id: usize, hostname: &str) -> Result<(), &'static str> {
                         // Parse: 1-byte ctx length + ctx + 3-byte certs_len
                         // + entries. First entry = leaf cert (3-byte len +
                         // cert DER + 2-byte exts_len + exts).
+                        // AUDIT-CRYPTO-F2: reject duplicate Certificate.
+                        if sess.saw_cert {
+                            return Err("TLS: duplicate Certificate");
+                        }
                         let body_start = hp + 4;
                         let body_end = match body_start.checked_add(msg_len) {
                             Some(n) if n <= decrypted.len() => n,
@@ -1014,6 +1036,12 @@ fn handshake_inner(pcb_id: usize, hostname: &str) -> Result<(), &'static str> {
                                 sess.peer_spki[..sess.peer_spki_len]
                                     .copy_from_slice(&pubkey_der[..sess.peer_spki_len]);
                                 sess.peer_pubkey_alg = pubkey_algorithm as u8;
+                                // AUDIT-CRYPTO-F1/F2: only mark saw_cert
+                                // after full verify_chain success. A failed
+                                // chain doesn't advance the state machine,
+                                // so a follow-up CertificateVerify still
+                                // fails the saw_cert gate.
+                                sess.saw_cert = true;
                                 uart::puts("[tls] cert chain ok (x509)\n");
                             }
                             crate::net::x509::VerifyOutcome::Err(e) => {
@@ -1025,6 +1053,16 @@ fn handshake_inner(pcb_id: usize, hostname: &str) -> Result<(), &'static str> {
                     if msg_type == 0x0f {
                         // CertificateVerify (RFC 8446 §4.4.3).
                         // Body layout: 2B SignatureScheme + 2B length + sig.
+                        // AUDIT-CRYPTO-F1/F2: require prior Certificate and
+                        // reject duplicate CV. Without saw_cert, an MITM
+                        // could try to skip Certificate and forge a CV against
+                        // an SPKI we never received.
+                        if !sess.saw_cert {
+                            return Err("TLS: CertificateVerify before Certificate");
+                        }
+                        if sess.saw_cv {
+                            return Err("TLS: duplicate CertificateVerify");
+                        }
                         let body = &decrypted[hp + 4 .. hp + 4 + msg_len];
                         if body.len() < 4 {
                             return Err("TLS: CertificateVerify too short");
@@ -1057,7 +1095,12 @@ fn handshake_inner(pcb_id: usize, hostname: &str) -> Result<(), &'static str> {
                             match crate::net::x509::tls13_verify_cert_verify(
                                 alg, spki, sig_bytes, &th, scheme,
                             ) {
-                                Ok(()) => uart::puts("[tls] CertificateVerify ok\n"),
+                                Ok(()) => {
+                                    // AUDIT-CRYPTO-F1/F2: only mark saw_cv
+                                    // after the signature actually verifies.
+                                    sess.saw_cv = true;
+                                    uart::puts("[tls] CertificateVerify ok\n");
+                                }
                                 Err(_) => {
                                     uart::puts("[tls] CertificateVerify FAILED — aborting\n");
                                     return Err("TLS: CertificateVerify failed");
@@ -1068,6 +1111,21 @@ fn handshake_inner(pcb_id: usize, hostname: &str) -> Result<(), &'static str> {
 
                     if msg_type == 0x14 {
                         // Finished — verify BEFORE hashing it.
+                        // AUDIT-CRYPTO-F1/F2 (2026-05-15): require BOTH
+                        // saw_cert and saw_cv before processing Finished.
+                        // Without this, an MITM that negotiated X25519 with
+                        // us can forge the Finished MAC (which is keyed off
+                        // the X25519 shared secret) and skip presenting any
+                        // valid Certificate / CertificateVerify. The
+                        // signature in CertificateVerify is the ONLY step
+                        // that ties the cert to the live ECDH; skipping it
+                        // breaks server authentication entirely.
+                        if !sess.saw_cert {
+                            return Err("TLS: Finished before Certificate (auth bypass attempt)");
+                        }
+                        if !sess.saw_cv {
+                            return Err("TLS: Finished before CertificateVerify (auth bypass attempt)");
+                        }
                         if msg_len != 32 {
                             return Err("TLS: server Finished length != 32");
                         }
@@ -1483,6 +1541,8 @@ pub fn reset_all_sessions() {
             s.peer_pubkey_alg = 0;
             s.expected_hostname_len = 0;
             s.finished_seen = false;
+            s.saw_cert = false;
+            s.saw_cv = false;
             zeroize(&mut s.shared_secret);
             s.shared_secret_len = 0;
             zeroize(&mut s.client_key);
@@ -1571,6 +1631,8 @@ pub fn close_pcb(pcb_id: usize) {
     zeroize(&mut sess.expected_hostname);
     sess.expected_hostname_len = 0;
     sess.finished_seen = false;
+    sess.saw_cert = false;
+    sess.saw_cv = false;
 }
 
 /// Legacy `close()` — thin wrapper over `close_pcb` for `LEGACY_TLS_PCB`.

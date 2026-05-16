@@ -60,21 +60,43 @@ pub fn execute(reason: WipeReason, silent: bool) {
         platform::serial_puts("\n");
     }
 
-    // Phase 1: Destroy encryption keys
-    destroy_keys();
+    // AUDIT-FS-C2 (2026-05-15): wipe ordering corrected. The prior
+    // order was destroy_keys → caves → fs → memory. destroy_keys was
+    // a no-op (see comment on the function), but even after fixing
+    // it the order is still wrong: wipe_filesystem needs the master
+    // key to compute the AEAD AAD when deleting inodes from disk. If
+    // we zero the key first, every on-disk inode-zeroize fails to
+    // authenticate.
+    //
+    // Correct order:
+    //   1. Caves (destroys cave state in-memory)
+    //   2. Filesystem (deletes every file while we still have the key
+    //      — each delete zeros data sectors + commits zero inode)
+    //   3. Master key + per-file metadata (now safe to zero — disk
+    //      has been wiped, nothing further needs the key)
+    //   4. OTP pad
+    //   5. Memory (everything else)
+    //   6. Secure Enclave
+
+    // Phase 1: Caves destroyed first (in-RAM state).
     crate::caves::cave::destroy_all();
-    // DESIGN_CRYPTO.md #11: the OTP pad dies with the system too. Any
-    // seized-hardware attempt to replay an unused token fails because
-    // the pad is now all zeros.
-    crate::security::otp::wipe();
     if !WIPE_SILENT.load(Ordering::Relaxed) {
         platform::serial_puts("  [wipe] All Caves destroyed\n");
     }
 
-    // Phase 2: Zero filesystem data
+    // Phase 2: Filesystem (uses master key for HMAC AAD on each delete).
     wipe_filesystem();
 
-    // Phase 3: Zero all allocated memory
+    // Phase 3: Master key + per-file metadata. NOW the key dies, after
+    // wipe_filesystem has used it for the last time.
+    destroy_keys();
+
+    // Phase 4: OTP pad. DESIGN_CRYPTO.md #11: dies with the system too;
+    // any seized-hardware attempt to replay an unused token fails
+    // because the pad is now all zeros.
+    crate::security::otp::wipe();
+
+    // Phase 5: Zero all allocated memory.
     wipe_memory();
 
     // Phase 4: On real hardware, tell Secure Enclave to nuke master key
@@ -107,24 +129,25 @@ pub fn execute_and_halt(reason: WipeReason) -> ! {
     }
 }
 
-/// Destroy all encryption keys in memory.
+/// AUDIT-FS-C2 (2026-05-15): destroy_keys() previously called
+/// `batfs::init(&zero_key)` followed by `init(&poison)`, expecting
+/// the calls to overwrite the master key. But `batfs::init` returns
+/// early when `INITIALIZED == true`, so the real master key was
+/// never zeroed and the "Encryption keys destroyed" line was a lie.
+///
+/// Now calls the explicit `batfs::wipe_master_key()` which:
+///   * Zeroes MASTER_KEY, BOOT_NONCE_PREFIX, FILES[].nonce/.hash,
+///     FILE_TAINT[], FILE_COUNT under IrqGuard.
+///   * Flips INITIALIZED back to false.
+///
+/// Per the new wipe ordering, this runs AFTER wipe_filesystem(),
+/// so the key was still available for each delete()'s AEAD AAD
+/// computation.
 fn destroy_keys() {
-    // Zero the master key by re-initializing with zeros
-    let zero_key = [0u8; 32];
-    crate::fs::batfs::init(&zero_key);
-
-    // Overwrite key memory with random-looking data
-    // (prevents cold boot attack recovery)
-    let poison: [u8; 32] = [
-        0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD,
-        0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD,
-        0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD,
-        0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD, 0xDE, 0xAD,
-    ];
-    crate::fs::batfs::init(&poison);
+    crate::fs::batfs::wipe_master_key();
 
     if !WIPE_SILENT.load(Ordering::Relaxed) {
-        platform::serial_puts("  [wipe] Encryption keys destroyed\n");
+        platform::serial_puts("  [wipe] Encryption keys destroyed (master + nonce prefix + per-file tags zeroed)\n");
     }
 }
 

@@ -2255,4 +2255,19 @@ fn reset_all_globals_for_cave_switch() {
     crate::ui::wm::reset_for_cave_switch();
     crate::ui::console::reset_for_cave_switch();
 
+    // AUDIT-DRV-C1 (2026-05-15): Wave 1-8 UI surface additions that
+    // were missing from the V11 sweep. Each module either already had
+    // a reset_for_cave_switch defined-but-unwired, or got one added
+    // in this remediation pass. Without these, the previous cave's
+    // app state (typed conversation history, plaintext file contents,
+    // last-previewed file bytes, audit-chain head hash, half-typed
+    // new-cave name, mis-routed Cocoa-tablet keystrokes, clipboard
+    // contents) all leak to the next cave's first paint.
+    crate::ui::apps::agent::reset_for_cave_switch();
+    crate::ui::apps::editor::reset_for_cave_switch();
+    crate::ui::apps::filemanager::reset_for_cave_switch();
+    crate::ui::apps::security::reset_for_cave_switch();
+    crate::ui::apps::caves_mgr::reset_for_cave_switch();
+    crate::drivers::virtio::tablet::reset_for_cave_switch();
+    crate::ui::clipboard::reset_for_cave_switch();
 }

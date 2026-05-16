@@ -116,6 +116,14 @@ pub enum VerifyError {
     BasicConstraintsViolation,
     KeyUsageViolation,
     EkuViolation,
+    // AUDIT-CRYPTO-F3 (2026-05-15): per-host SPKI pinning enforced
+    // inside verify_chain. Operator pinned a different SPKI for this
+    // host; the presented leaf doesn't match any registered pin.
+    PinMismatch,
+    // AUDIT-CRYPTO-F4 (2026-05-15): cert appears in CRL or OCSP
+    // says it's Revoked. Most often used for compromised-key
+    // revocation of an otherwise-valid chain.
+    Revoked,
 }
 
 impl VerifyError {
@@ -137,6 +145,8 @@ impl VerifyError {
             VerifyError::BasicConstraintsViolation => "TLS: chain validation failed: BasicConstraints violation",
             VerifyError::KeyUsageViolation         => "TLS: chain validation failed: KeyUsage missing keyCertSign",
             VerifyError::EkuViolation              => "TLS: chain validation failed: leaf EKU missing serverAuth",
+            VerifyError::PinMismatch               => "TLS: chain validation failed: pin mismatch (operator-pinned SPKI differs)",
+            VerifyError::Revoked                   => "TLS: chain validation failed: cert revoked (CRL or OCSP)",
         }
     }
 }
@@ -739,6 +749,54 @@ pub fn verify_chain(
         Ok(v) => v,
         Err(e) => return VerifyOutcome::Err(e),
     };
+
+    // AUDIT-CRYPTO-F3 (2026-05-15): per-host SPKI pinning.
+    // `cert_pin::check` was defined but never called from this
+    // function — a misissued cert from any of our embedded trust
+    // anchors would pass the chain validation but be caught here
+    // if the operator has pinned the host. Fail-open if no pin is
+    // registered for the host (`Ok(false)`): see the host-pinning
+    // operator runbook for how to seed pins.
+    if let Ok(host_str) = core::str::from_utf8(hostname) {
+        match crate::net::cert_pin::check(host_str, &leaf_spki) {
+            Ok(_) => { /* pin matched OR no pin registered */ }
+            Err(_) => return VerifyOutcome::Err(VerifyError::PinMismatch),
+        }
+    }
+
+    // AUDIT-CRYPTO-F4 (2026-05-15): revocation check (CRL + OCSP).
+    // Both modules were implemented but never consulted from
+    // verify_chain. A revoked cert (key compromise, name-misuse)
+    // would otherwise remain valid until its notAfter — year-scale
+    // exposure for leaf certs with long validity. For now we check
+    // only the leaf; intermediate revocation is a follow-up wave.
+    //
+    // The issuer SPKI hash needed by both checks is computed from
+    // the first chain_ders entry (the leaf's immediate parent) when
+    // it exists. If chain_ders is empty (rare — usually means leaf
+    // is signed directly by a trust anchor), skip revocation
+    // checks; trust-store path already covered authenticity.
+    if let Some(parent_der) = chain_ders.first() {
+        if let Ok(parent) = parse_cert(parent_der) {
+            let parent_spki = parent
+                .tbs_certificate
+                .subject_public_key_info
+                .subject_public_key
+                .raw_bytes();
+            let issuer_hash: [u8; 32] = crate::crypto::sha256::hash(parent_spki);
+            let serial = leaf.tbs_certificate.serial_number.as_bytes();
+
+            if crate::net::crl::is_revoked(&issuer_hash, serial) {
+                return VerifyOutcome::Err(VerifyError::Revoked);
+            }
+            if let Some(crate::net::ocsp::Status::Revoked) =
+                crate::net::ocsp::status(&issuer_hash, serial)
+            {
+                return VerifyOutcome::Err(VerifyError::Revoked);
+            }
+        }
+    }
+
     VerifyOutcome::Ok {
         pubkey_der: leaf_spki,
         pubkey_algorithm: pubkey_alg(&leaf),

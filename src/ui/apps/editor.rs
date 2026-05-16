@@ -751,3 +751,25 @@ fn write_dec(buf: &mut [u8], n: &mut usize, mut v: u32) {
 }
 
 extern crate alloc;
+
+/// AUDIT-DRV-C1 (2026-05-15): zero editor state on cave switch so the
+/// previous cave's file contents (up to 256 KB of plaintext in
+/// `BUFFER`) don't leak to the new cave. Also clears file-name
+/// scratch, cursor, viewport, dirty flag, pending save/open names.
+/// Held under IrqGuard so the timer IRQ can't observe half-cleared
+/// state.
+pub fn reset_for_cave_switch() {
+    let _g = crate::kernel::sync::IrqGuard::new();
+    unsafe {
+        *core::ptr::addr_of_mut!(BUFFER) = Buffer::empty();
+        *core::ptr::addr_of_mut!(APP_MODE) = AppMode::Editing;
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CURSOR_ROW), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CURSOR_COL), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(VIEWPORT_START), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(DIRTY), false);
+        *core::ptr::addr_of_mut!(FILE_NAME) = [0u8; NAME_MAX];
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(FILE_NAME_LEN), 0);
+        *core::ptr::addr_of_mut!(PENDING_FILE) = [0u8; NAME_MAX];
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PENDING_LEN), 0);
+    }
+}
