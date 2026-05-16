@@ -372,13 +372,28 @@ fn send_question() {
                 *core::ptr::addr_of_mut!(SESSION) = Some(s);
                 let id = core::ptr::read_volatile(core::ptr::addr_of!(SESSION_ID));
                 core::ptr::write_volatile(core::ptr::addr_of_mut!(SESSION_ID), id + 1);
+                // AUDIT-DRV-H5 (2026-05-15): log AGENT session start.
+                crate::security::audit::record(
+                    crate::security::audit::Category::Ai,
+                    b"agent session start",
+                );
             },
             Err(e) => {
+                crate::security::audit::record(
+                    crate::security::audit::Category::Ai,
+                    b"agent session start FAILED",
+                );
                 store_error(error_label(&e));
                 return;
             }
         }
     }
+    // AUDIT-DRV-H5: log each question submission (no content — just
+    // the "operator asked" event).
+    crate::security::audit::record(
+        crate::security::audit::Category::Ai,
+        b"agent question submitted",
+    );
 
     let buf = unsafe { &*core::ptr::addr_of!(COMPOSE_BUF) };
     let q_bytes = &buf[..compose_len];

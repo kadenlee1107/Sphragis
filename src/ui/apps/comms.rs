@@ -356,6 +356,13 @@ pub fn connect(ip: u32, port: u16) -> Result<(), &'static str> {
         S2C_KEY = s2c;
         STATE = CommState::Connected;
     }
+    // AUDIT-DRV-H5 (2026-05-15): log successful COMMS handshake.
+    // Identity pin is part of the connection's cryptographic
+    // identity; surface that an authenticated channel is now live.
+    crate::security::audit::record(
+        crate::security::audit::Category::Net,
+        b"comms connect OK (pinned Ed25519, X25519 ECDH, ChaCha20-Poly1305)",
+    );
     add_system_msg("Connected. ChaCha20-Poly1305 + Ed25519 pinned.");
     Ok(())
 }

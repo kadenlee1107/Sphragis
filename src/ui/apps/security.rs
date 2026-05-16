@@ -384,6 +384,15 @@ fn handle_key_wipe_modal(c: u8) -> AppEvent {
     let modal = ConfirmModal { title: "", body_lines: &[], commit_key: 'W' };
     match confirm_modal_key(&modal, c) {
         ModalAction::Commit => {
+            // AUDIT-DRV-H5 (2026-05-15): log the wipe-trigger before
+            // wipe runs. The audit-flush-to-disk happens during wipe's
+            // Phase-2, so this entry rides through to persistent
+            // storage. Without it the most consequential action in
+            // the system was completely unaudited.
+            audit::record(
+                audit::Category::TpiOp,
+                b"WIPE NOW triggered by operator (SECURITY app)",
+            );
             // Diverges — kernel halts after wipe completes.
             wipe::execute_and_halt(wipe::WipeReason::Manual);
         }
