@@ -53,6 +53,9 @@ struct Region {
     data: Option<Vec<u8>>,
     /// Creator's task id — recorded for audit attribution.
     owner: TaskId,
+    /// AUDIT-BATCAVE-F6 / CAVE-M5 (2026-05-16): cave that called
+    /// sys_shm_open. 0xFFFF = kernel context.
+    owner_cave: u16,
 }
 
 impl Region {
@@ -64,6 +67,7 @@ impl Region {
             refs: 0,
             data: None,
             owner: TaskId(0),
+            owner_cave: 0xFFFF,
         }
     }
 
@@ -166,6 +170,11 @@ pub fn create(name: &[u8], size: usize) -> Result<u16, &'static str> {
     r.name[..name.len()].copy_from_slice(name);
     r.name_len = name.len() as u8;
     r.owner = owner;
+    // AUDIT-BATCAVE-F6: stamp active cave.
+    r.owner_cave = {
+        let a = crate::caves::cave::get_active();
+        if a == usize::MAX { 0xFFFF } else { (a as u16) & 0x7FFF }
+    };
     r.refs = 1;
     r.data = Some(v);
 

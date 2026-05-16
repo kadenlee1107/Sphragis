@@ -64,6 +64,14 @@ struct Flow {
     remote_ip: u32,
     remote_port: u16,
     local_port: u16,
+    /// AUDIT-NET-F6 (2026-05-16): per-flow local IP. Populated at
+    /// register time from `crate::net::ip::our_ip()`. Single-NIC
+    /// today so every flow has the same local_ip and 4-tuple lookup
+    /// is unambiguous; field stored for forensic record AND to be
+    /// ready for multi-NIC where lookup_inbound needs to match the
+    /// full 5-tuple. When multi-NIC lands, add a lookup_inbound_for
+    /// (proto, src, sport, local_ip, dport) and migrate callers.
+    local_ip: u32,
     state_code: u8,      // 1 = New, 2 = Established, 3 = Closed
 }
 
@@ -72,6 +80,7 @@ impl Flow {
         Self {
             in_use: false, protocol: 0,
             remote_ip: 0, remote_port: 0, local_port: 0,
+            local_ip: 0,
             state_code: 0,
         }
     }
@@ -146,6 +155,9 @@ pub fn register_outbound(
                 *f = Flow {
                     in_use: true, protocol,
                     remote_ip, remote_port, local_port,
+                    // AUDIT-NET-F6: stamp the active local IP for
+                    // forensic record + future 5-tuple lookup.
+                    local_ip: crate::net::ip::our_ip(),
                     state_code: state_to_code(state),
                 };
                 FLOW_COUNT.fetch_add(1, Ordering::Relaxed);

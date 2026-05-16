@@ -2286,6 +2286,30 @@ fn sys_openat_inner(args: [u64; 6]) -> i64 {
             if flags & fd::O_DIRECTORY != 0 && node.node_type != vfs::NodeType::Directory {
                 return ENOENT;
             }
+            // AUDIT-BATCAVE-F9 / MEM-M7 (2026-05-16): symlink TOCTOU
+            // gate. check_fs_path_cap above ran against the ORIGINAL
+            // path. If that path traversed a symlink during VFS
+            // resolution, the resolved node's canonical path might
+            // fall OUTSIDE the cap-allowed prefix — confused-deputy
+            // primitive: a cave with cap fs:/cave/foo can
+            // symlink /cave/foo/lnk -> /etc/shadow, then read shadow
+            // because check_fs_path_cap matched on /cave/foo/lnk.
+            //
+            // Fix: re-derive the resolved node's canonical path via
+            // vfs::node_path and re-run check_fs_path_cap. If the
+            // resolved path differs from the input path AND falls
+            // outside the cap, reject with EACCES.
+            //
+            // Cost: one path-walk + one prefix-match per openat that
+            // resolves through any directory; cheap. Skip when the
+            // resolved path equals the input (no symlink traversal).
+            let mut resolved_buf = [0u8; 256];
+            let resolved_len = vfs::node_path(node_idx, &mut resolved_buf);
+            if resolved_len > 0 && &resolved_buf[..resolved_len] != path {
+                if let Err(e) = check_fs_path_cap(&resolved_buf[..resolved_len], "openat-resolved") {
+                    return e;
+                }
+            }
             match fd::alloc_fd(node_idx, flags) {
                 Ok(fd_num) => fd_num as i64,
                 Err(e) => e,
