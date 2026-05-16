@@ -117,16 +117,31 @@ pub fn verify_with_window(
     alg: HotpAlg, secret: &[u8], counter: u64, presented: u32,
     digits: u32, window: u32,
 ) -> Option<u64> {
-    let mut matched: Option<u64> = None;
+    // AUDIT-CRYPTO-F14 (2026-05-15): constant-time code comparison.
+    // Prior `code == presented` short-circuits per-iteration, and
+    // `matched.is_none()` further skips work once matched — a local
+    // attacker observing per-iteration latency could narrow which
+    // offset matched and accelerate brute force. Now: ct-equality
+    // (XOR + wrapping_sub trick), unconditional accumulator, no
+    // branch on match. The early `Ok(code)` is preserved because
+    // hotp() can fail on degenerate inputs (which would be a bug,
+    // not an attacker signal).
+    let mut matched_c: u64 = 0;
+    let mut any_match: u32 = 0;
     for offset in 0..=window {
         let c = counter.wrapping_add(offset as u64);
         if let Ok(code) = hotp(alg, secret, c, digits) {
-            if code == presented && matched.is_none() {
-                matched = Some(c);
-            }
+            // ct: hit_mask = 1 iff code == presented, else 0.
+            let diff = code ^ presented;
+            // diff == 0 → wrap to 0xFFFF_FFFF → shift to 1.
+            let hit_mask = ((diff.wrapping_sub(1)) >> 31) & 1;
+            // Unconditional updates; first-match wins via mask.
+            let first_only = hit_mask & (1u32 ^ any_match);
+            matched_c |= c & (0u64.wrapping_sub(first_only as u64));
+            any_match |= hit_mask;
         }
     }
-    matched
+    if any_match != 0 { Some(matched_c) } else { None }
 }
 
 #[cfg(test)]
