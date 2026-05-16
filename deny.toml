@@ -1,0 +1,56 @@
+# Sphragis dependency policy. Enforced in CI by cargo-deny.
+# Apache-2.0 license + zero GPL/AGPL/SSPL/Commons-Clause deps.
+# v2 schema (cargo-deny >= 0.16).
+
+[graph]
+all-features = false
+no-default-features = false
+
+[licenses]
+# cargo-deny v2 schema: list allowed licenses; anything else rejected.
+# We accept any of the standard permissive licenses + the SPDX OR
+# expressions ("MIT OR Apache-2.0") that most RustCrypto crates use.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Zlib",
+]
+confidence-threshold = 0.92
+
+# Explicitly call out a few common crates if they have unusual license terms.
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[advisories]
+# cargo-deny v2: vulnerability/unmaintained/yanked moved to `[advisories]` directly,
+# using `severity-threshold` and `ignore` to manage findings.
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+version = 2
+yanked = "warn"
+ignore = [
+    # RUSTSEC-2023-0071: Marvin Attack timing sidechannel in RSA private operations.
+    # Sphragis uses the `rsa` crate ONLY for X.509 public-key verification
+    # (signature verify), never for private operations. The advisory applies
+    # to private operations observable over the network. We are also migrating
+    # off RSA entirely per CNSA 2.0 (SP-B1: ML-DSA-87 replaces RSA for signing).
+    # Re-evaluate / remove this ignore after SP-B1 lands and the `rsa` crate
+    # is removed from dependencies.
+    { id = "RUSTSEC-2023-0071", reason = "RSA used only for public-key verify, never private operations; being removed entirely per SP-B1 CNSA 2.0 migration" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
